@@ -14,23 +14,74 @@ use crate::IntervalLogger;
 use super::cache::{SpeculativeCacheAccess, SpeculativeCacheGuard, SpeculativeCacheOutcome};
 use super::proposer::{
     SpeculativeCommitRow, SpeculativeProposalBatch, SpeculativeProposalDistribution,
-    SpeculativeProposeBatchCtx,
+    SpeculativeProposeBatchCtx, SpeculativeProposePreparation, SpeculativeProposePrepareCtx,
+    SpeculativeTokens,
 };
 use super::staging::{staged_batch_state, StagedBatchState};
-use super::verifier::{
-    finish_verified_step, DeviceVerification, VerificationInput, VerificationOutcome,
-};
 #[cfg(feature = "cuda")]
 use super::verifier::{
-    greedy_device_verify_batch, sparse_rejection_device_verify_batch, GreedyDeviceVerifyInput,
-    SparseRejectionVerifyInput,
+    complete_sparse_rejection_device_verify_batch, greedy_device_verify_batch,
+    sparse_rejection_device_verify_batch, try_submit_sparse_rejection_device_verify_batch,
+    GreedyDeviceVerifyInput, SparseRejectionVerifyInput,
+};
+use super::verifier::{
+    finish_verified_step, DeviceVerification, VerificationInput, VerificationOutcome,
 };
 use super::{SpeculativeBatchObservation, SpeculativeBatchPlan};
 
 struct PreparedVerification {
     base_len: usize,
-    proposal: Vec<u32>,
+    proposal: SpeculativeTokens,
     proposal_distribution: Option<SpeculativeProposalDistribution>,
+}
+
+#[cfg(any(feature = "cuda", test))]
+fn materialize_prepared_proposals(prepared: &mut [Option<PreparedVerification>]) -> Result<()> {
+    let device_rows = prepared
+        .iter()
+        .enumerate()
+        .filter_map(|(idx, prepared)| {
+            prepared
+                .as_ref()?
+                .proposal
+                .as_device()
+                .map(|tokens| (idx, tokens.clone()))
+        })
+        .collect::<Vec<_>>();
+    if device_rows.is_empty() {
+        return Ok(());
+    }
+    let device = device_rows[0].1.device();
+    if device_rows
+        .iter()
+        .any(|(_, tokens)| !tokens.device().same_device(device))
+    {
+        candle_core::bail!("one speculative verification batch cannot span devices");
+    }
+    let tensors = device_rows
+        .iter()
+        .map(|(_, tokens)| tokens)
+        .collect::<Vec<_>>();
+    let rows = Tensor::stack(&tensors, 0)?.to_vec2::<u32>()?;
+    for ((idx, _), tokens) in device_rows.into_iter().zip(rows) {
+        prepared[idx]
+            .as_mut()
+            .expect("device proposal row disappeared")
+            .proposal = SpeculativeTokens::Host(tokens);
+    }
+    Ok(())
+}
+
+#[cfg(any(feature = "cuda", test))]
+fn complete_after_preparation<T, U>(
+    preparation: Result<T>,
+    complete: impl FnOnce() -> Result<U>,
+) -> Result<(T, U)> {
+    let completion = complete();
+    match preparation {
+        Ok(preparation) => Ok((preparation, completion?)),
+        Err(error) => Err(error),
+    }
 }
 
 pub trait SpeculativePipelineExt: Pipeline {
@@ -49,9 +100,19 @@ pub trait SpeculativePipelineExt: Pipeline {
         ctx: SpeculativeProposeBatchCtx<'_>,
     ) -> Result<Option<SpeculativeProposalBatch>>;
 
+    fn speculative_prepare_propose(
+        &mut self,
+        ctx: SpeculativeProposePrepareCtx<'_>,
+    ) -> Result<Option<Box<dyn SpeculativeProposePreparation>>>;
+
     fn speculative_commit(&mut self, rows: &[SpeculativeCommitRow]) -> Result<()>;
 
     fn build_speculative_verify_inputs(&self, input_meta: InputMetadata) -> Result<Box<dyn Any>>;
+
+    #[cfg(feature = "cuda")]
+    fn cuda_sparse_rejection_workspace(
+        &self,
+    ) -> &std::sync::Mutex<Option<crate::speculative::CudaSparseRejectionWorkspace>>;
 }
 
 /// Drop staged speculative proposals when the next step cannot verify them.
@@ -235,6 +296,7 @@ where
         &hidden_rows,
         rng,
         cache,
+        None,
         Some(plan),
     )
 }
@@ -258,6 +320,10 @@ where
 {
     #[cfg(not(feature = "cuda"))]
     let _ = batched_logits;
+    #[cfg(feature = "cuda")]
+    let mut proposer_preparation: Option<Box<dyn SpeculativeProposePreparation>> = None;
+    #[cfg(not(feature = "cuda"))]
+    let proposer_preparation: Option<Box<dyn SpeculativeProposePreparation>> = None;
 
     let mut prepared = Vec::with_capacity(seqs.len());
     let mut cache_guards: Vec<Option<C::Guard>> = Vec::with_capacity(seqs.len());
@@ -321,25 +387,100 @@ where
             let Some(prepared) = prepared[idx].as_ref() else {
                 continue;
             };
-            let Some(distribution) = prepared.proposal_distribution.as_ref() else {
-                continue;
-            };
             sparse_indices.push(idx);
             sparse_inputs.push(SparseRejectionVerifyInput {
                 seq: seqs[idx],
                 logits: &logits[idx],
                 proposal: &prepared.proposal,
-                distribution,
+                distribution: prepared.proposal_distribution.as_ref(),
             });
         }
         let batched_target_logits = batched_logits.filter(|_| {
             sparse_indices.len() == seqs.len() && sparse_indices.iter().copied().eq(0..seqs.len())
         });
-        let sparse_verified =
-            sparse_rejection_device_verify_batch(&sparse_inputs, batched_target_logits, &rng)?;
-        for (idx, verification) in sparse_indices.into_iter().zip(sparse_verified) {
+        let pending_sparse = {
+            let mut workspace = target
+                .cuda_sparse_rejection_workspace()
+                .lock()
+                .expect("CUDA sparse rejection workspace mutex poisoned");
+            try_submit_sparse_rejection_device_verify_batch(
+                &sparse_inputs,
+                batched_target_logits,
+                &rng,
+                &mut workspace,
+            )?
+        };
+        let sparse_output = if let Some(pending_sparse) = pending_sparse {
+            drop(sparse_inputs);
+            let preparation = if sparse_indices.len() == active_indices.len()
+                && sparse_indices.iter().eq(active_indices.iter())
+                && active_indices.len() == seqs.len()
+                && active_indices.iter().copied().eq(0..seqs.len())
+            {
+                let seq_ids = active_indices
+                    .iter()
+                    .map(|idx| *seqs[*idx].id())
+                    .collect::<Vec<_>>();
+                let base_lens = active_indices
+                    .iter()
+                    .map(|idx| {
+                        prepared[*idx]
+                            .as_ref()
+                            .expect("active speculative row disappeared")
+                            .base_len
+                    })
+                    .collect::<Vec<_>>();
+                let target_rows = active_indices
+                    .iter()
+                    .map(|idx| (*idx, staged_len + 1))
+                    .collect::<Vec<_>>();
+                target.speculative_prepare_propose(SpeculativeProposePrepareCtx {
+                    seq_ids: &seq_ids,
+                    base_lens: &base_lens,
+                    target_rows: &target_rows,
+                })
+            } else {
+                Ok(None)
+            };
+            let (preparation, output) = complete_after_preparation(preparation, || {
+                let mut workspace = target
+                    .cuda_sparse_rejection_workspace()
+                    .lock()
+                    .expect("CUDA sparse rejection workspace mutex poisoned");
+                complete_sparse_rejection_device_verify_batch(pending_sparse, &mut workspace)
+            })?;
+            proposer_preparation = preparation;
+            output
+        } else {
+            let output = {
+                let mut workspace = target
+                    .cuda_sparse_rejection_workspace()
+                    .lock()
+                    .expect("CUDA sparse rejection workspace mutex poisoned");
+                sparse_rejection_device_verify_batch(
+                    &sparse_inputs,
+                    batched_target_logits,
+                    &rng,
+                    &mut workspace,
+                )?
+            };
+            drop(sparse_inputs);
+            output
+        };
+        for ((idx, verification), proposal) in sparse_indices
+            .into_iter()
+            .zip(sparse_output.verifications)
+            .zip(sparse_output.materialized_proposals)
+        {
             aligned[idx] = verification;
+            if let Some(proposal) = proposal {
+                prepared[idx]
+                    .as_mut()
+                    .expect("sparse proposal disappeared during verification")
+                    .proposal = SpeculativeTokens::Host(proposal);
+            }
         }
+        materialize_prepared_proposals(&mut prepared)?;
         aligned
     };
     #[cfg(not(feature = "cuda"))]
@@ -360,7 +501,7 @@ where
             seq,
             VerificationInput {
                 verify_logits: logits.clone(),
-                proposal: prepared.proposal,
+                proposal: prepared.proposal.into_vec()?,
                 proposal_distribution: prepared.proposal_distribution,
                 base_len: prepared.base_len,
                 anchor_to_emit: None,
@@ -454,6 +595,7 @@ where
         &hidden_rows,
         rng,
         cache,
+        proposer_preparation.as_deref(),
         None,
     )
 }
@@ -468,6 +610,7 @@ fn propose_and_stage_batch<P, C>(
     hidden_rows: &[(usize, usize)],
     rng: Arc<std::sync::Mutex<Isaac64Rng>>,
     cache: &C,
+    preparation: Option<&dyn SpeculativeProposePreparation>,
     plan: Option<SpeculativeBatchPlan>,
 ) -> Result<()>
 where
@@ -553,6 +696,7 @@ where
             cache: cache.proposer_cache(&sequences)?,
             target_hiddens,
             target_rows: &target_rows,
+            preparation,
             rng: rng.clone(),
         })?
     };
@@ -591,5 +735,64 @@ where
 fn clear_active_staged(seqs: &mut [&mut Sequence], active_indices: &[usize]) {
     for idx in active_indices {
         seqs[*idx].clear_staged_speculative_tokens();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::cell::Cell;
+
+    use candle_core::{Device, Tensor};
+
+    use super::{complete_after_preparation, materialize_prepared_proposals, PreparedVerification};
+    use crate::speculative::SpeculativeTokens;
+
+    #[test]
+    fn materializes_device_proposals_as_one_batch() -> candle_core::Result<()> {
+        let device = Device::Cpu;
+        let mut prepared = vec![
+            Some(PreparedVerification {
+                base_len: 0,
+                proposal: SpeculativeTokens::from_device(Tensor::new(&[1u32, 2], &device)?)?,
+                proposal_distribution: None,
+            }),
+            Some(PreparedVerification {
+                base_len: 0,
+                proposal: SpeculativeTokens::Host(vec![3, 4]),
+                proposal_distribution: None,
+            }),
+            Some(PreparedVerification {
+                base_len: 0,
+                proposal: SpeculativeTokens::from_device(Tensor::new(&[5u32, 6], &device)?)?,
+                proposal_distribution: None,
+            }),
+        ];
+        materialize_prepared_proposals(&mut prepared)?;
+        let rows = prepared
+            .iter()
+            .map(|prepared| {
+                prepared
+                    .as_ref()
+                    .expect("prepared row")
+                    .proposal
+                    .as_host()
+                    .expect("host proposal")
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(rows, [&[1, 2][..], &[3, 4][..], &[5, 6][..]]);
+        Ok(())
+    }
+
+    #[test]
+    fn completion_runs_after_preparation_error() {
+        let completed = Cell::new(false);
+        let preparation = Err::<(), _>(candle_core::Error::msg("preparation failed"));
+        let error = complete_after_preparation(preparation, || {
+            completed.set(true);
+            Ok(())
+        })
+        .expect_err("preparation must remain the primary error");
+        assert!(completed.get());
+        assert!(error.to_string().contains("preparation failed"));
     }
 }

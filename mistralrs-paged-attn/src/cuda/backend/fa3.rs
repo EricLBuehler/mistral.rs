@@ -1,11 +1,14 @@
 use candle_core::{DType, Result, Tensor};
 
 pub const USE_FA3_FP8_PAGED: bool = cfg!(has_fa3_fp8_paged);
+pub const FA3_DECODE_MAX_QUERY_LEN: usize = 128;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Fa3DecodeSchedule {
     pub batch_size: usize,
+    pub query_len: usize,
     pub total_q: usize,
+    pub causal: bool,
     pub q_heads: usize,
     pub kv_heads: usize,
     pub head_dim: usize,
@@ -68,8 +71,10 @@ pub fn fa3_prepare_decode_metadata(
     use candle_core::Storage;
 
     if schedule.batch_size == 0
+        || schedule.query_len == 0
+        || schedule.query_len > FA3_DECODE_MAX_QUERY_LEN
         || schedule.total_q == 0
-        || schedule.total_q > schedule.batch_size
+        || schedule.batch_size.checked_mul(schedule.query_len) != Some(schedule.total_q)
         || schedule.q_heads == 0
         || schedule.kv_heads == 0
         || !schedule.q_heads.is_multiple_of(schedule.kv_heads)
@@ -109,9 +114,10 @@ pub fn fa3_prepare_decode_metadata(
         }
     }
     let max_pages_per_sequence = page_table.dims2()?.1;
-    let scheduler_len = 2 * schedule.batch_size.div_ceil(4) * 4 + 1;
-    if paged_kv_indptr.dims1()? != schedule.batch_size + 1
-        || paged_kv_last_page_len.dims1()? != schedule.batch_size
+    let scheduler_vectors = 2 + usize::from(schedule.causal);
+    let scheduler_len = scheduler_vectors * schedule.batch_size.div_ceil(4) * 4 + 1;
+    if paged_kv_indptr.dims1()? != schedule.total_q + 1
+        || paged_kv_last_page_len.dims1()? != schedule.total_q
         || page_table.dims2()?.0 != schedule.batch_size
         || seqused_k.dims1()? != schedule.batch_size
         || cu_seqlens_q.dims1()? != schedule.batch_size + 1
@@ -200,6 +206,7 @@ pub fn fa3_prepare_decode_metadata(
             page_table_ptr as *mut i32,
             seqused_ptr as *mut i32,
             as_i32(schedule.batch_size, "batch size")?,
+            as_i32(schedule.query_len, "query length")?,
             as_i32(max_pages_per_sequence, "page table stride")?,
             as_i32(schedule.page_size, "page size")?,
             stream.cu_stream(),
@@ -214,7 +221,9 @@ pub fn fa3_prepare_decode_metadata(
         seqused_k: seqused_ptr as *const i32,
         scheduler_metadata: scheduler_ptr as *mut i32,
         batch_size: as_i32(schedule.batch_size, "batch size")?,
+        query_len: as_i32(schedule.query_len, "query length")?,
         total_q: as_i32(schedule.total_q, "query count")?,
+        causal: i32::from(schedule.causal),
         num_q_heads: as_i32(schedule.q_heads, "query head count")?,
         num_kv_heads: as_i32(schedule.kv_heads, "KV head count")?,
         head_dim: as_i32(schedule.head_dim, "head dimension")?,
@@ -288,10 +297,10 @@ pub fn fa3_fp8_decode(params: Fa3DecodeParams<'_>) -> Result<Tensor> {
         candle_core::bail!("FA3 decode tensor dtypes do not match the FP8/BF16 contract");
     }
     let (num_pages, kv_heads, page_size, head_dim) = key_cache.dims4()?;
-    let (batch_size, q_heads, query_head_dim) = query.dims3()?;
+    let (total_q, q_heads, query_head_dim) = query.dims3()?;
     let max_pages_per_sequence = page_table.dims2()?.1;
-    if schedule.batch_size != batch_size
-        || schedule.total_q != batch_size
+    if schedule.total_q != total_q
+        || schedule.batch_size.checked_mul(schedule.query_len) != Some(total_q)
         || schedule.q_heads != q_heads
         || schedule.kv_heads != kv_heads
         || schedule.head_dim != head_dim
@@ -300,12 +309,12 @@ pub fn fa3_fp8_decode(params: Fa3DecodeParams<'_>) -> Result<Tensor> {
         || head_dim != 256
         || value_cache.dims4()? != key_cache.dims4()?
         || quantized_query.dims3()? != query.dims3()?
-        || page_table.dims2()?.0 != batch_size
-        || seqused_k.dims1()? != batch_size
-        || cu_seqlens_q.dims1()? != batch_size + 1
-        || output_accum.dims4()? != (schedule.num_splits, q_heads, batch_size, head_dim)
-        || lse_accum.dims3()? != (schedule.num_splits, q_heads, batch_size)
-        || output_lse.dims2()? != (q_heads, batch_size)
+        || page_table.dims2()?.0 != schedule.batch_size
+        || seqused_k.dims1()? != schedule.batch_size
+        || cu_seqlens_q.dims1()? != schedule.batch_size + 1
+        || output_accum.dims4()? != (schedule.num_splits, q_heads, total_q, head_dim)
+        || lse_accum.dims3()? != (schedule.num_splits, q_heads, total_q)
+        || output_lse.dims2()? != (q_heads, total_q)
         || q_descale.elem_count() != 1
         || k_descale.elem_count() != 1
         || v_descale.elem_count() != 1
@@ -460,7 +469,7 @@ pub fn fa3_fp8_decode(params: Fa3DecodeParams<'_>) -> Result<Tensor> {
             fa3_bf16_to_e4m3_static(
                 query_ptr as *const core::ffi::c_void,
                 quantized_ptr as *mut core::ffi::c_void,
-                as_i32(batch_size, "batch size")?,
+                as_i32(total_q, "query count")?,
                 as_i32(q_heads.saturating_mul(head_dim), "query row width")?,
                 i64::try_from(query_layout.stride()[0]).map_err(candle_core::Error::wrap)?,
                 i64::try_from(quantized_layout.stride()[0]).map_err(candle_core::Error::wrap)?,
@@ -477,7 +486,9 @@ pub fn fa3_fp8_decode(params: Fa3DecodeParams<'_>) -> Result<Tensor> {
             seqused_k: seqused_ptr as *const i32,
             scheduler_metadata: scheduler_ptr as *mut i32,
             batch_size: as_i32(schedule.batch_size, "batch size")?,
+            query_len: as_i32(schedule.query_len, "query length")?,
             total_q: as_i32(schedule.total_q, "query count")?,
+            causal: i32::from(schedule.causal),
             num_q_heads: as_i32(schedule.q_heads, "query head count")?,
             num_kv_heads: as_i32(schedule.kv_heads, "KV head count")?,
             head_dim: as_i32(schedule.head_dim, "head dimension")?,

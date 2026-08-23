@@ -122,6 +122,8 @@ pub struct MultimodalPipeline {
     mapper: Box<dyn DeviceMapper + Send + Sync>,
     #[cfg(feature = "cuda")]
     cuda_decode_graph: StdMutex<CudaDecodeGraphState>,
+    #[cfg(feature = "cuda")]
+    cuda_sparse_rejection: StdMutex<Option<crate::speculative::CudaSparseRejectionWorkspace>>,
     // Attention inputs of the last prompt-chunk forward, so a built-in drafter can prefill with them
     last_prompt_attention: StdMutex<Option<(PagedAttentionInputMetadata, FlashParams)>>,
 
@@ -1371,6 +1373,8 @@ impl Loader for MultimodalLoader {
             preprocessor_config: Arc::new(preprocessor_config),
             #[cfg(feature = "cuda")]
             cuda_decode_graph: StdMutex::new(CudaDecodeGraphState::default()),
+            #[cfg(feature = "cuda")]
+            cuda_sparse_rejection: StdMutex::new(None),
             last_prompt_attention: StdMutex::new(None),
             generation_defaults,
             tracked_modules,
@@ -1534,12 +1538,17 @@ impl MetadataMixin for MultimodalPipeline {
     }
     fn precapture_cuda_decode_graphs(&self, ctx: &DecodeGraphPrecaptureCtx) {
         #[cfg(feature = "cuda")]
-        if let Err(err) = self.precapture_cuda_decode_graphs_impl(ctx) {
-            self.cuda_decode_graph
-                .lock()
-                .expect("CUDA graph mutex poisoned")
-                .clear();
-            warn!("CUDA decode graph precapture failed, graphs will be captured lazily: {err}");
+        {
+            if let Err(err) = self.precapture_cuda_decode_graphs_impl(ctx) {
+                self.cuda_decode_graph
+                    .lock()
+                    .expect("CUDA graph mutex poisoned")
+                    .clear();
+                warn!("CUDA decode graph precapture failed, graphs will be captured lazily: {err}");
+            }
+            if let Err(err) = self.model.precapture_speculative_cuda_graphs() {
+                warn!("Speculative CUDA graph precapture failed, graphs will be captured lazily: {err}");
+            }
         }
         #[cfg(not(feature = "cuda"))]
         let _ = ctx;
@@ -1589,6 +1598,14 @@ impl crate::speculative::driver::SpeculativePipelineExt for MultimodalPipeline {
         self.model.speculative_propose(ctx)
     }
 
+    fn speculative_prepare_propose(
+        &mut self,
+        ctx: crate::speculative::SpeculativeProposePrepareCtx<'_>,
+    ) -> candle_core::Result<Option<Box<dyn crate::speculative::SpeculativeProposePreparation>>>
+    {
+        self.model.speculative_prepare_propose(ctx)
+    }
+
     fn speculative_commit(
         &mut self,
         rows: &[crate::speculative::SpeculativeCommitRow],
@@ -1614,6 +1631,13 @@ impl crate::speculative::driver::SpeculativePipelineExt for MultimodalPipeline {
             recurrent_batch_kind: RecurrentBatchKind::SpeculativeDecode,
             adapter_leases,
         }))
+    }
+
+    #[cfg(feature = "cuda")]
+    fn cuda_sparse_rejection_workspace(
+        &self,
+    ) -> &StdMutex<Option<crate::speculative::CudaSparseRejectionWorkspace>> {
+        &self.cuda_sparse_rejection
     }
 }
 
@@ -1841,7 +1865,7 @@ impl MultimodalPipeline {
             .model
             .speculative_graph_plans()
             .into_iter()
-            .filter(|plan| cuda_graph_startup_capture_allowed(speculative, 1 + plan.proposal_len))
+            .filter(|plan| cuda_graph_startup_capture_allowed(1 + plan.proposal_len))
             .collect::<Vec<_>>();
         let mut widths = vec![(1usize, usize::MAX)];
         for plan in graph_plans {
@@ -2192,6 +2216,10 @@ impl Pipeline for MultimodalPipeline {
 
     fn supports_speculative_prompt_bootstrap(&self) -> bool {
         self.model.supports_speculative_prompt_bootstrap()
+    }
+
+    fn speculative_prefix_replay(&self) -> crate::speculative::SpeculativePrefixReplay {
+        self.model.speculative_prefix_replay()
     }
 
     fn adapter_runtime(&self) -> Option<Arc<DynamicLoraRuntime>> {

@@ -1462,6 +1462,10 @@ pub trait Pipeline:
         false
     }
 
+    fn speculative_prefix_replay(&self) -> crate::speculative::SpeculativePrefixReplay {
+        crate::speculative::SpeculativePrefixReplay::NotRequired
+    }
+
     /// Called after a prompt chunk forward so a speculative proposer with its own KV cache can
     /// process the chunk. Default: nothing to do.
     fn speculative_prompt_chunk(

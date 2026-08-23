@@ -1029,7 +1029,7 @@ impl Qwen3_5TextModel {
                     key_dim: cfg.linear_key_head_dim,
                     value_dim: cfg.linear_value_head_dim,
                 },
-                recurrent_dtype: Some(DType::F32),
+                recurrent_dtype: Some(cfg.mamba_ssm_dtype.dtype()),
             },
         };
         let layer_devices = (0..hybrid_cache_config.layer_types.len())
@@ -1635,14 +1635,22 @@ impl Qwen3_5TextModel {
         };
         let store_spec = self.store_spec_hidden.load(Ordering::Relaxed);
         if store_spec {
+            let full_capture = if recurrent_metadata
+                .as_ref()
+                .is_some_and(|metadata| metadata.batch_kind() == RecurrentBatchKind::Prefill)
+            {
+                Some(SpecCapture {
+                    hidden: xs.clone(),
+                    positions: position_ids.to_device(&self.device)?,
+                    taps: taps_all.clone(),
+                })
+            } else {
+                None
+            };
             *self
                 .last_full_capture
                 .lock()
-                .expect("spec capture poisoned") = Some(SpecCapture {
-                hidden: xs.clone(),
-                positions: position_ids.to_device(&self.device)?,
-                taps: taps_all.clone(),
-            });
+                .expect("spec capture poisoned") = full_capture;
         }
         let xs = ctx.logits(&xs)?;
         if store_spec {

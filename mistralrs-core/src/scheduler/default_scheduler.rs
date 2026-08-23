@@ -423,6 +423,7 @@ mod tests {
             false,
             false,
             vec![],
+            None,
         );
         seq.set_state(SequenceState::RunningCompletion);
         seq

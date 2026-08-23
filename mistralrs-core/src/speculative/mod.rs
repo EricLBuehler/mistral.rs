@@ -10,13 +10,19 @@ pub(crate) mod staging;
 pub mod target;
 pub mod verifier;
 
-pub use config::{reserve_external_mtp_memory, MtpConfig, SpeculativeConfig};
+#[cfg(feature = "cuda")]
+#[doc(hidden)]
+pub use crate::cuda::speculative_rejection::CudaSparseRejectionWorkspace;
+pub use config::{
+    reserve_external_mtp_memory, MtpConfig, MtpDraftSamplingMethod, SpeculativeConfig,
+};
 pub use dflash::DFlashDraftModel;
 pub use logging::{SpeculativeAttachInfo, SpeculativeAttachKind};
 pub use policy::{SpeculativeBatchObservation, SpeculativeBatchPlan, SpeculativeGraphPlan};
 pub use proposer::{
     SparseSpeculativeProbs, SpeculativeCommitRow, SpeculativeKvCache, SpeculativePrefillCtx,
     SpeculativeProposal, SpeculativeProposalBatch, SpeculativeProposalDistribution,
-    SpeculativeProposeBatchCtx, SpeculativeProposer, TargetAttentionInputs, TargetTokenEmbedder,
+    SpeculativeProposeBatchCtx, SpeculativeProposePreparation, SpeculativeProposePrepareCtx,
+    SpeculativeProposer, SpeculativeTokens, TargetAttentionInputs, TargetTokenEmbedder,
 };
-pub use target::{SpeculativeGraphState, SpeculativeTargetMixin};
+pub use target::{SpeculativeGraphState, SpeculativePrefixReplay, SpeculativeTargetMixin};

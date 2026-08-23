@@ -100,6 +100,8 @@ pub struct NormalPipeline {
     metadata: Arc<GeneralMetadata>,
     #[cfg(feature = "cuda")]
     cuda_decode_graph: StdMutex<CudaDecodeGraphState>,
+    #[cfg(feature = "cuda")]
+    cuda_sparse_rejection: StdMutex<Option<crate::speculative::CudaSparseRejectionWorkspace>>,
     generation_defaults: Option<crate::ModelGenerationDefaults>,
     mapper: Box<dyn DeviceMapper + Send + Sync>,
     tracked_modules: Vec<mistralrs_quant::TrackedModule>,
@@ -254,6 +256,8 @@ pub(crate) fn build_normal_pipeline(
         }),
         #[cfg(feature = "cuda")]
         cuda_decode_graph: StdMutex::new(CudaDecodeGraphState::default()),
+        #[cfg(feature = "cuda")]
+        cuda_sparse_rejection: StdMutex::new(None),
         generation_defaults,
         mapper,
         tracked_modules,
@@ -1577,12 +1581,17 @@ impl MetadataMixin for NormalPipeline {
     }
     fn precapture_cuda_decode_graphs(&self, ctx: &DecodeGraphPrecaptureCtx) {
         #[cfg(feature = "cuda")]
-        if let Err(err) = self.precapture_cuda_decode_graphs_impl(ctx) {
-            self.cuda_decode_graph
-                .lock()
-                .expect("CUDA graph mutex poisoned")
-                .clear();
-            warn!("CUDA decode graph precapture failed, graphs will be captured lazily: {err}");
+        {
+            if let Err(err) = self.precapture_cuda_decode_graphs_impl(ctx) {
+                self.cuda_decode_graph
+                    .lock()
+                    .expect("CUDA graph mutex poisoned")
+                    .clear();
+                warn!("CUDA decode graph precapture failed, graphs will be captured lazily: {err}");
+            }
+            if let Err(err) = self.model.precapture_speculative_cuda_graphs() {
+                warn!("Speculative CUDA graph precapture failed, graphs will be captured lazily: {err}");
+            }
         }
         #[cfg(not(feature = "cuda"))]
         let _ = ctx;
@@ -1632,6 +1641,14 @@ impl crate::speculative::driver::SpeculativePipelineExt for NormalPipeline {
         self.model.speculative_propose(ctx)
     }
 
+    fn speculative_prepare_propose(
+        &mut self,
+        ctx: crate::speculative::SpeculativeProposePrepareCtx<'_>,
+    ) -> candle_core::Result<Option<Box<dyn crate::speculative::SpeculativeProposePreparation>>>
+    {
+        self.model.speculative_prepare_propose(ctx)
+    }
+
     fn speculative_commit(
         &mut self,
         rows: &[crate::speculative::SpeculativeCommitRow],
@@ -1656,6 +1673,13 @@ impl crate::speculative::driver::SpeculativePipelineExt for NormalPipeline {
             recurrent_batch_kind: RecurrentBatchKind::SpeculativeDecode,
             adapter_leases: Arc::from([]),
         }))
+    }
+
+    #[cfg(feature = "cuda")]
+    fn cuda_sparse_rejection_workspace(
+        &self,
+    ) -> &StdMutex<Option<crate::speculative::CudaSparseRejectionWorkspace>> {
+        &self.cuda_sparse_rejection
     }
 }
 
@@ -2050,6 +2074,10 @@ impl Pipeline for NormalPipeline {
 
     fn supports_speculative_prompt_bootstrap(&self) -> bool {
         self.model.supports_speculative_prompt_bootstrap()
+    }
+
+    fn speculative_prefix_replay(&self) -> crate::speculative::SpeculativePrefixReplay {
+        self.model.speculative_prefix_replay()
     }
 
     fn supports_packed_prefill(&self) -> bool {

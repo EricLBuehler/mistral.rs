@@ -259,6 +259,7 @@ pub fn parse_request(
                 n_choices: oairequest.n_choices,
                 dry_params,
             },
+            seed: oairequest.seed,
             response: tx,
             return_logprobs: oairequest.logprobs.is_some(),
             is_streaming,

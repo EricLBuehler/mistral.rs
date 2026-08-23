@@ -19,8 +19,9 @@ use super::{
 };
 
 const DENSE_SERVING_MAX_M: usize = 16;
-const SERVING_M_VALUES: [usize; 19] = [
-    1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 32, 64, 128,
+const SERVING_M_VALUES: [usize; 30] = [
+    1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 24, 32, 40, 48, 56, 64, 72, 80, 88, 96,
+    104, 112, 120, 128,
 ];
 const JIT_SOURCE_HASH: &str = env!("MISTRALRS_DEEPGEMM_SOURCE_HASH");
 
@@ -501,8 +502,11 @@ mod tests {
     fn direct_decode_route_covers_decode_and_verification_buckets() {
         assert!(serving_shape_supported(DType::BF16, 1));
         assert!(serving_shape_supported(DType::BF16, DENSE_SERVING_MAX_M));
+        assert!(serving_shape_supported(DType::BF16, 24));
         assert!(serving_shape_supported(DType::BF16, 32));
+        assert!(serving_shape_supported(DType::BF16, 56));
         assert!(serving_shape_supported(DType::BF16, 64));
+        assert!(serving_shape_supported(DType::BF16, 120));
         assert!(serving_shape_supported(DType::BF16, 128));
         assert!(!serving_shape_supported(DType::BF16, 0));
         assert!(!serving_shape_supported(

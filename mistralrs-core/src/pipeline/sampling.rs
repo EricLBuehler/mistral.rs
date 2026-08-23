@@ -998,12 +998,14 @@ fn try_sample_batch_cuda(
 
     if categorical {
         let uniform = Uniform::new(0.0f32, 1.0f32).expect("valid unit uniform distribution");
-        let uniforms = {
-            let mut rng = rng.lock().expect("could not lock rng mutex");
-            (0..samplers_and_plans.len())
-                .map(|_| uniform.sample(&mut *rng))
-                .collect::<Vec<_>>()
-        };
+        let uniforms = seqs
+            .iter()
+            .map(|seq| {
+                let rng = seq.sampling_rng(rng);
+                let mut rng = rng.lock().expect("could not lock rng mutex");
+                uniform.sample(&mut *rng)
+            })
+            .collect::<Vec<_>>();
         let uniforms = Tensor::from_vec(uniforms, samplers_and_plans.len(), logits.device())?;
         let output = crate::ops::cuda_categorical_logits_f32_packed_batched(
             &logits,
@@ -1029,10 +1031,11 @@ fn try_sample_batch_cuda(
     let output =
         crate::ops::cuda_topk_logits_f32_packed_batched(&logits, common_k, &inverse_temperatures)?;
     let packed = output.packed.to_vec2::<f32>()?;
-    let mut rng = rng.lock().expect("could not lock rng mutex");
     Ok(Some(
-        std::iter::zip(packed, samplers_and_plans)
-            .map(|(row, (sampler, plan))| {
+        std::iter::zip(std::iter::zip(packed, samplers_and_plans), seqs.iter())
+            .map(|((row, (sampler, plan)), seq)| {
+                let rng = seq.sampling_rng(rng);
+                let mut rng = rng.lock().expect("could not lock rng mutex");
                 sampler.sample_cuda_topk_packed_row(&row, output.k, plan, &mut rng)
             })
             .collect(),
@@ -1063,6 +1066,7 @@ pub async fn sample_sequence(
     multiple_sequences: bool,
 ) -> Result<Logprobs> {
     activate_required_tool_call_grammar(seq, llg_factory.as_ref(), max_model_len, false);
+    let rng = seq.sampling_rng(&rng);
 
     let logits = logits.squeeze(0)?.squeeze(0)?.to_dtype(DType::F32)?;
 
@@ -1209,6 +1213,7 @@ pub async fn sample_sequence(
 #[cfg(test)]
 mod tests {
     use mistralrs_mcp::{Function, Tool, ToolType};
+    use rand::SeedableRng;
     use std::{collections::HashMap, sync::Arc};
     use tokio::sync::{mpsc::channel, Mutex};
 
@@ -1273,7 +1278,98 @@ mod tests {
             false,
             ignore_eos,
             vec![],
+            None,
         )
+    }
+
+    fn stochastic_test_sequence(seed: u64) -> Sequence {
+        let (tx, _rx) = channel(1);
+        let sampler = Sampler::new(
+            Some(1.0),
+            0,
+            None,
+            None,
+            None,
+            None,
+            None,
+            -1,
+            1.0,
+            0.0,
+            HashMap::new(),
+            vec![],
+        )
+        .unwrap();
+        let group = Arc::new(Mutex::new(SequenceGroup::new(1, false, true, None)));
+        Sequence::new_waiting(
+            vec![1, 2, 3],
+            "prompt".to_string(),
+            0,
+            0,
+            0,
+            tx,
+            sampler,
+            vec![],
+            vec![],
+            None,
+            false,
+            false,
+            group,
+            0,
+            0,
+            SequenceRecognizer::None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            SeqStepType::PromptAndDecode,
+            None,
+            None,
+            None,
+            false,
+            false,
+            vec![],
+            Some(seed),
+        )
+    }
+
+    async fn sample_test_token(
+        seq: &mut Sequence,
+        fallback: Arc<std::sync::Mutex<Isaac64Rng>>,
+    ) -> u32 {
+        let logits = Tensor::from_vec(
+            vec![0.1f32, 0.2, 0.3, 0.4],
+            (1, 1, 4),
+            &candle_core::Device::Cpu,
+        )
+        .unwrap();
+        sample_sequence(
+            logits, seq, false, None, None, 1024, fallback, false, false, false,
+        )
+        .await
+        .unwrap()
+        .token
+    }
+
+    #[tokio::test]
+    async fn seeded_sampling_is_independent_of_sequence_order() {
+        let fallback = || Arc::new(std::sync::Mutex::new(Isaac64Rng::seed_from_u64(999)));
+        let (mut first_a, mut first_b) =
+            (stochastic_test_sequence(42), stochastic_test_sequence(43));
+        let a_then_b = (
+            sample_test_token(&mut first_a, fallback()).await,
+            sample_test_token(&mut first_b, fallback()).await,
+        );
+
+        let (mut second_a, mut second_b) =
+            (stochastic_test_sequence(42), stochastic_test_sequence(43));
+        let b = sample_test_token(&mut second_b, fallback()).await;
+        let a = sample_test_token(&mut second_a, fallback()).await;
+
+        assert_eq!(a_then_b, (a, b));
     }
 
     fn weather_tool() -> Tool {

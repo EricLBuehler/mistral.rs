@@ -3,8 +3,30 @@ use candle_core::{Result, Tensor};
 use super::{
     logging::log_attach, SpeculativeAttachInfo, SpeculativeBatchObservation, SpeculativeBatchPlan,
     SpeculativeCommitRow, SpeculativeConfig, SpeculativeGraphPlan, SpeculativePrefillCtx,
-    SpeculativeProposalBatch, SpeculativeProposeBatchCtx,
+    SpeculativeProposalBatch, SpeculativeProposeBatchCtx, SpeculativeProposePreparation,
+    SpeculativeProposePrepareCtx,
 };
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum SpeculativePrefixReplay {
+    #[default]
+    NotRequired,
+    Suffix(usize),
+    Full,
+}
+
+pub(crate) fn clamp_speculative_prefix_cache_hit(
+    cached_tokens: usize,
+    block_size: usize,
+    replay: SpeculativePrefixReplay,
+) -> usize {
+    let retained = match replay {
+        SpeculativePrefixReplay::NotRequired => return cached_tokens,
+        SpeculativePrefixReplay::Suffix(tokens) => cached_tokens.saturating_sub(tokens),
+        SpeculativePrefixReplay::Full => 0,
+    };
+    retained - retained % block_size
+}
 
 /// Everything a target forward leaves behind for the proposer/commit (captured hidden states, rollback
 /// stashes). A CUDA graph replay never runs the forward, so the pipeline copies these into persistent
@@ -45,6 +67,10 @@ pub trait SpeculativeTargetMixin {
         false
     }
 
+    fn speculative_prefix_replay(&self) -> SpeculativePrefixReplay {
+        SpeculativePrefixReplay::NotRequired
+    }
+
     fn speculative_plan(&self, _batch_size: usize) -> Option<SpeculativeBatchPlan> {
         None
     }
@@ -54,6 +80,10 @@ pub trait SpeculativeTargetMixin {
             .map(|plan| SpeculativeGraphPlan::new(plan.proposal_len, None))
             .into_iter()
             .collect()
+    }
+
+    fn precapture_speculative_cuda_graphs(&self) -> Result<()> {
+        Ok(())
     }
 
     fn speculative_observe(&self, _observation: SpeculativeBatchObservation) {}
@@ -68,6 +98,13 @@ pub trait SpeculativeTargetMixin {
         &mut self,
         _ctx: SpeculativeProposeBatchCtx<'_>,
     ) -> Result<Option<SpeculativeProposalBatch>> {
+        Ok(None)
+    }
+
+    fn speculative_prepare_propose(
+        &mut self,
+        _ctx: SpeculativeProposePrepareCtx<'_>,
+    ) -> Result<Option<Box<dyn SpeculativeProposePreparation>>> {
         Ok(None)
     }
 
@@ -96,5 +133,34 @@ pub trait SpeculativeTargetMixin {
 
     fn install_speculative_graph_state(&self, _state: &dyn SpeculativeGraphState) -> Result<()> {
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{clamp_speculative_prefix_cache_hit, SpeculativePrefixReplay};
+
+    #[test]
+    fn prefix_replay_clamp_preserves_block_alignment() {
+        assert_eq!(
+            clamp_speculative_prefix_cache_hit(4096, 32, SpeculativePrefixReplay::NotRequired),
+            4096
+        );
+        assert_eq!(
+            clamp_speculative_prefix_cache_hit(4096, 32, SpeculativePrefixReplay::Suffix(2048)),
+            2048
+        );
+        assert_eq!(
+            clamp_speculative_prefix_cache_hit(4096, 32, SpeculativePrefixReplay::Suffix(2049)),
+            2016
+        );
+        assert_eq!(
+            clamp_speculative_prefix_cache_hit(1024, 32, SpeculativePrefixReplay::Suffix(2048)),
+            0
+        );
+        assert_eq!(
+            clamp_speculative_prefix_cache_hit(4096, 32, SpeculativePrefixReplay::Full),
+            0
+        );
     }
 }

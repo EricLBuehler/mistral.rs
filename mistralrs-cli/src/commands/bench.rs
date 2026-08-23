@@ -389,6 +389,7 @@ async fn run_single_bench(
         id: mistralrs.next_request_id(),
         messages: RequestMessage::CompletionTokens(tokens),
         sampling_params,
+        seed: None,
         response: tx,
         return_logprobs: false,
         is_streaming: true,

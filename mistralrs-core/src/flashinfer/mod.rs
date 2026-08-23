@@ -30,6 +30,8 @@ pub type DeviceTensorMap = HashMap<DeviceLocation, Tensor>;
 pub(crate) const FA3_DECODE_NUM_SPLITS: usize = 32;
 #[cfg(all(feature = "cuda", target_family = "unix"))]
 const FA3_DECODE_HEAD_DIM: usize = 256;
+#[cfg(all(feature = "cuda", target_family = "unix"))]
+pub(crate) const FA3_DECODE_MAX_QUERY_LEN: usize = mistralrs_paged_attn::FA3_DECODE_MAX_QUERY_LEN;
 
 #[cfg(all(feature = "cuda", target_family = "unix"))]
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
@@ -43,6 +45,8 @@ pub(crate) struct Fa3DecodeScheduleKey {
     pub device: DeviceLocation,
     pub view: Fa3DecodeView,
     pub batch: usize,
+    pub query_len: usize,
+    pub causal: bool,
     pub q_heads: usize,
     pub kv_heads: usize,
     pub head_dim: usize,
@@ -52,8 +56,15 @@ pub(crate) struct Fa3DecodeScheduleKey {
 
 #[cfg(all(feature = "cuda", target_family = "unix"))]
 impl Fa3DecodeScheduleKey {
+    pub(crate) fn total_q(&self) -> Option<usize> {
+        self.batch.checked_mul(self.query_len)
+    }
+
     pub(crate) fn supported(&self) -> bool {
         self.batch > 0
+            && self.query_len > 0
+            && self.query_len <= FA3_DECODE_MAX_QUERY_LEN
+            && self.total_q().is_some()
             && self.q_heads > 0
             && self.kv_heads > 0
             && self.q_heads.is_multiple_of(self.kv_heads)
@@ -93,7 +104,11 @@ impl Fa3DecodeBuffers {
             .ok_or_else(|| candle_core::Error::msg("FA3 maximum KV length overflow"))?;
         Ok(mistralrs_paged_attn::Fa3DecodeSchedule {
             batch_size: key.batch,
-            total_q: key.batch,
+            query_len: key.query_len,
+            total_q: key
+                .total_q()
+                .ok_or_else(|| candle_core::Error::msg("FA3 query count overflow"))?,
+            causal: key.causal,
             q_heads: key.q_heads,
             kv_heads: key.kv_heads,
             head_dim: key.head_dim,
@@ -409,7 +424,9 @@ fn metadata_tensor<'a>(
 mod tests {
     use super::supports_flashinfer_group_size;
     #[cfg(all(feature = "cuda", target_family = "unix"))]
-    use super::{Fa3DecodeScheduleKey, Fa3DecodeView, FA3_DECODE_NUM_SPLITS};
+    use super::{
+        Fa3DecodeScheduleKey, Fa3DecodeView, FA3_DECODE_MAX_QUERY_LEN, FA3_DECODE_NUM_SPLITS,
+    };
     #[cfg(all(feature = "cuda", target_family = "unix"))]
     use candle_core::DeviceLocation;
 
@@ -433,6 +450,8 @@ mod tests {
             device: DeviceLocation::Cuda { gpu_id: 0 },
             view: Fa3DecodeView::Logical,
             batch: 16,
+            query_len: 1,
+            causal: false,
             q_heads: 32,
             kv_heads: 4,
             head_dim: 256,
@@ -440,11 +459,23 @@ mod tests {
             num_splits: FA3_DECODE_NUM_SPLITS,
         };
         assert!(key.supported());
+        assert_eq!(key.total_q(), Some(16));
         assert!(!Fa3DecodeScheduleKey {
             head_dim: 128,
             ..key
         }
         .supported());
         assert!(!Fa3DecodeScheduleKey { q_heads: 30, ..key }.supported());
+        assert!(Fa3DecodeScheduleKey {
+            query_len: 8,
+            causal: true,
+            ..key
+        }
+        .supported());
+        assert!(!Fa3DecodeScheduleKey {
+            query_len: FA3_DECODE_MAX_QUERY_LEN + 1,
+            ..key
+        }
+        .supported());
     }
 }

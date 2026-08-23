@@ -1,6 +1,8 @@
 #include "cuda_bf16.h"
 #include "cuda_fp16.h"
+#include "radix_topk.cuh"
 #include <algorithm>
+#include <cub/block/block_radix_sort.cuh>
 #include <limits>
 #include <stdint.h>
 #include <type_traits>
@@ -1617,6 +1619,96 @@ __global__ void topk_large_stage1(
   }
 }
 
+constexpr int RANKED_TOPK_RADIX_THREADS = 256;
+constexpr int RANKED_TOPK_RADIX_ITEMS_PER_THREAD = 8;
+constexpr int RANKED_TOPK_RADIX_CAPACITY =
+    RANKED_TOPK_RADIX_THREADS * RANKED_TOPK_RADIX_ITEMS_PER_THREAD;
+constexpr int RANKED_TOPK_RADIX_MIN_K = 8;
+constexpr int RANKED_TOPK_RADIX_MAX_K = 16;
+
+template <typename T>
+__global__ void topk_large_ranked_stage1_radix(
+    const T *__restrict__ input, float *__restrict__ block_values,
+    uint32_t *__restrict__ block_indices, const int ncols, const int k) {
+  using BlockSort =
+      cub::BlockRadixSort<float, RANKED_TOPK_RADIX_THREADS,
+                          RANKED_TOPK_RADIX_ITEMS_PER_THREAD, uint32_t>;
+  __shared__ typename BlockSort::TempStorage sort_storage;
+
+  const size_t row = blockIdx.y;
+  const int chunk = blockIdx.x;
+  const int start = chunk * RANKED_TOPK_RADIX_CAPACITY;
+  const int thread_start = start + threadIdx.x * RANKED_TOPK_RADIX_ITEMS_PER_THREAD;
+  input += row * static_cast<size_t>(ncols);
+  const size_t candidate_stride = static_cast<size_t>(gridDim.x) * k;
+  block_values += row * candidate_stride + static_cast<size_t>(chunk) * k;
+  block_indices += row * candidate_stride + static_cast<size_t>(chunk) * k;
+
+  float keys[RANKED_TOPK_RADIX_ITEMS_PER_THREAD];
+  uint32_t indices[RANKED_TOPK_RADIX_ITEMS_PER_THREAD];
+#pragma unroll
+  for (int item = 0; item < RANKED_TOPK_RADIX_ITEMS_PER_THREAD; ++item) {
+    const int index = thread_start + item;
+    float value = index < ncols ? topk_to_float(input[index]) : -INFINITY;
+    if (value != value) {
+      value = -INFINITY;
+    }
+    keys[item] = value;
+    indices[item] = static_cast<uint32_t>(index);
+  }
+
+  BlockSort(sort_storage).SortDescending(keys, indices);
+
+#pragma unroll
+  for (int item = 0; item < RANKED_TOPK_RADIX_ITEMS_PER_THREAD; ++item) {
+    const int rank = threadIdx.x * RANKED_TOPK_RADIX_ITEMS_PER_THREAD + item;
+    if (rank < k) {
+      block_values[rank] = keys[item];
+      block_indices[rank] =
+          keys[item] > -INFINITY ? indices[item] : static_cast<uint32_t>(0);
+    }
+  }
+}
+
+__global__ void topk_large_ranked_stage2_radix(
+    const float *__restrict__ block_values,
+    const uint32_t *__restrict__ block_indices, float *__restrict__ packed_out,
+    const int nblocks, const int k) {
+  using BlockSort =
+      cub::BlockRadixSort<float, RANKED_TOPK_RADIX_THREADS,
+                          RANKED_TOPK_RADIX_ITEMS_PER_THREAD, uint32_t>;
+  __shared__ typename BlockSort::TempStorage sort_storage;
+
+  const size_t row = blockIdx.x;
+  const int n_candidates = nblocks * k;
+  const int thread_start = threadIdx.x * RANKED_TOPK_RADIX_ITEMS_PER_THREAD;
+  block_values += row * static_cast<size_t>(n_candidates);
+  block_indices += row * static_cast<size_t>(n_candidates);
+  packed_out += row * static_cast<size_t>(2 * k);
+
+  float keys[RANKED_TOPK_RADIX_ITEMS_PER_THREAD];
+  uint32_t indices[RANKED_TOPK_RADIX_ITEMS_PER_THREAD];
+#pragma unroll
+  for (int item = 0; item < RANKED_TOPK_RADIX_ITEMS_PER_THREAD; ++item) {
+    const int candidate = thread_start + item;
+    keys[item] = candidate < n_candidates ? block_values[candidate] : -INFINITY;
+    indices[item] = candidate < n_candidates ? block_indices[candidate] : 0;
+  }
+
+  BlockSort(sort_storage).SortDescending(keys, indices);
+
+#pragma unroll
+  for (int item = 0; item < RANKED_TOPK_RADIX_ITEMS_PER_THREAD; ++item) {
+    const int rank = threadIdx.x * RANKED_TOPK_RADIX_ITEMS_PER_THREAD + item;
+    if (rank < k) {
+      packed_out[rank] = keys[item];
+      packed_out[k + rank] = keys[item] > -INFINITY
+                                 ? static_cast<float>(indices[item])
+                                 : 0.0f;
+    }
+  }
+}
+
 __global__ void topk_large_stage2_f32(
     const float *__restrict__ block_values,
     const uint32_t *__restrict__ block_indices,
@@ -1845,9 +1937,9 @@ __global__ void topk_large_stage2_f32_packed(
   }
 }
 
-template <bool BATCHED, bool COMPUTE_SUMS>
-__global__ void top1_large_stage1_f32(
-    const float *__restrict__ input, float *__restrict__ block_values,
+template <typename T, bool BATCHED, bool COMPUTE_SUMS>
+__global__ void top1_large_stage1(
+    const T *__restrict__ input, float *__restrict__ block_values,
     uint32_t *__restrict__ block_indices, float *__restrict__ block_sums,
     const int ncols, const int chunk_size,
     const float *__restrict__ inv_temperatures) {
@@ -1873,7 +1965,7 @@ __global__ void top1_large_stage1_f32(
   int local_idx = -1;
   bool local_has_nan = false;
   for (int idx = start + tid; idx < end; idx += block_size) {
-    const float candidate = input[idx];
+    const float candidate = topk_to_float(input[idx]);
     if (candidate != candidate) {
       local_has_nan = true;
     } else if (candidate > local_max) {
@@ -1920,7 +2012,7 @@ __global__ void top1_large_stage1_f32(
     const float block_max = block_values[chunk] * inv_temperature;
     float local_sum = 0.0f;
     for (int idx = start + tid; idx < end; idx += block_size) {
-      const float candidate = input[idx];
+      const float candidate = topk_to_float(input[idx]);
       if (candidate != candidate) {
         local_sum = NAN;
       } else if (block_max != -INFINITY) {
@@ -2265,51 +2357,102 @@ topk_large_f16_packed_batched(const __half *input,
 }
 
 template <typename T>
-void launch_topk_large_ranked_packed_batched(
+cudaError_t launch_topk_large_ranked_packed_batched(
     const T *input, float *block_values, uint32_t *block_indices,
     float *packed_out, int nrows, int ncols, int k, int chunk_size, int nblocks,
     int64_t stream) {
   const cudaStream_t custream = (cudaStream_t)stream;
+  bool radix_launched = false;
+  cudaError_t status = mistralrs_radix_topk::launch(
+      input, packed_out, block_values, nrows, ncols, k, custream,
+      &radix_launched);
+  if (status != cudaSuccess || radix_launched) {
+    return status;
+  }
+  const dim3 stage1_grid(nblocks, nrows);
+  const bool use_radix =
+      chunk_size == RANKED_TOPK_RADIX_CAPACITY &&
+      k >= RANKED_TOPK_RADIX_MIN_K && k <= RANKED_TOPK_RADIX_MAX_K &&
+      nblocks * k <= RANKED_TOPK_RADIX_CAPACITY;
+  if (use_radix) {
+    topk_large_ranked_stage1_radix<T>
+        <<<stage1_grid, RANKED_TOPK_RADIX_THREADS, 0, custream>>>(
+            input, block_values, block_indices, ncols, k);
+    status = cudaGetLastError();
+    if (status != cudaSuccess) {
+      return status;
+    }
+    topk_large_ranked_stage2_radix
+        <<<nrows, RANKED_TOPK_RADIX_THREADS, 0, custream>>>(
+            block_values, block_indices, packed_out, nblocks, k);
+    return cudaGetLastError();
+  }
+
   constexpr int block_size = 256;
   const size_t stage1_smem = static_cast<size_t>(chunk_size) * sizeof(bool);
   const size_t stage2_smem =
       static_cast<size_t>(nblocks) * static_cast<size_t>(k) * sizeof(bool);
-  const dim3 stage1_grid(nblocks, nrows);
 
   topk_large_stage1<T, true, false>
       <<<stage1_grid, block_size, stage1_smem, custream>>>(
           input, block_values, block_indices, nullptr, nullptr, ncols, k,
           chunk_size, nullptr, 0.0f);
+  status = cudaGetLastError();
+  if (status != cudaSuccess) {
+    return status;
+  }
   topk_large_stage2_f32_packed<true, false>
       <<<nrows, block_size, stage2_smem, custream>>>(
           block_values, block_indices, nullptr, nullptr, packed_out, nblocks, k);
+  return cudaGetLastError();
 }
 
-extern "C" void topk_large_ranked_f32_packed_batched(
+extern "C" size_t topk_large_ranked_state_words_per_row() {
+  return mistralrs_radix_topk::workspace_words_per_row();
+}
+
+extern "C" int topk_large_ranked_f32_packed_batched(
     const float *input, float *block_values, uint32_t *block_indices,
     float *packed_out, int nrows, int ncols, int k, int chunk_size, int nblocks,
     int64_t stream) {
-  launch_topk_large_ranked_packed_batched(
+  return static_cast<int>(launch_topk_large_ranked_packed_batched(
       input, block_values, block_indices, packed_out, nrows, ncols, k,
-      chunk_size, nblocks, stream);
+      chunk_size, nblocks, stream));
 }
 
-extern "C" void topk_large_ranked_bf16_packed_batched(
+extern "C" int topk_large_ranked_bf16_packed_batched(
     const __nv_bfloat16 *input, float *block_values, uint32_t *block_indices,
     float *packed_out, int nrows, int ncols, int k, int chunk_size, int nblocks,
     int64_t stream) {
-  launch_topk_large_ranked_packed_batched(
+  return static_cast<int>(launch_topk_large_ranked_packed_batched(
       input, block_values, block_indices, packed_out, nrows, ncols, k,
-      chunk_size, nblocks, stream);
+      chunk_size, nblocks, stream));
 }
 
-extern "C" void topk_large_ranked_f16_packed_batched(
+extern "C" int topk_large_ranked_f16_packed_batched(
     const __half *input, float *block_values, uint32_t *block_indices,
     float *packed_out, int nrows, int ncols, int k, int chunk_size, int nblocks,
     int64_t stream) {
-  launch_topk_large_ranked_packed_batched(
+  return static_cast<int>(launch_topk_large_ranked_packed_batched(
       input, block_values, block_indices, packed_out, nrows, ncols, k,
-      chunk_size, nblocks, stream);
+      chunk_size, nblocks, stream));
+}
+
+template <typename T, bool BATCHED>
+void launch_top1_large_packed(const T *input, float *block_values,
+                              uint32_t *block_indices, float *packed_out,
+                              uint32_t *token_ids_out, int nrows, int ncols,
+                              int chunk_size, int nblocks, int64_t stream) {
+  const cudaStream_t custream = (cudaStream_t)stream;
+  constexpr int block_size = 256;
+  const dim3 stage1_grid(nblocks, BATCHED ? nrows : 1);
+
+  top1_large_stage1<T, BATCHED, false>
+      <<<stage1_grid, block_size, 0, custream>>>(
+      input, block_values, block_indices, nullptr, ncols, chunk_size, nullptr);
+  top1_large_stage2_f32_packed<BATCHED>
+      <<<BATCHED ? nrows : 1, block_size, 0, custream>>>(
+      block_values, block_indices, packed_out, token_ids_out, nblocks);
 }
 
 extern "C" void top1_large_f32_packed(const float *input, float *block_values,
@@ -2317,13 +2460,27 @@ extern "C" void top1_large_f32_packed(const float *input, float *block_values,
                                       float *packed_out,
                                       uint32_t *token_ids_out, int ncols,
                                       int chunk_size, int nblocks, int64_t stream) {
-  const cudaStream_t custream = (cudaStream_t)stream;
-  constexpr int block_size = 256;
+  launch_top1_large_packed<float, false>(
+      input, block_values, block_indices, packed_out, token_ids_out, 1, ncols,
+      chunk_size, nblocks, stream);
+}
 
-  top1_large_stage1_f32<false, false><<<nblocks, block_size, 0, custream>>>(
-      input, block_values, block_indices, nullptr, ncols, chunk_size, nullptr);
-  top1_large_stage2_f32_packed<false><<<1, block_size, 0, custream>>>(
-      block_values, block_indices, packed_out, token_ids_out, nblocks);
+extern "C" void top1_large_bf16_packed(
+    const __nv_bfloat16 *input, float *block_values, uint32_t *block_indices,
+    float *packed_out, uint32_t *token_ids_out, int ncols, int chunk_size,
+    int nblocks, int64_t stream) {
+  launch_top1_large_packed<__nv_bfloat16, false>(
+      input, block_values, block_indices, packed_out, token_ids_out, 1, ncols,
+      chunk_size, nblocks, stream);
+}
+
+extern "C" void top1_large_f16_packed(
+    const __half *input, float *block_values, uint32_t *block_indices,
+    float *packed_out, uint32_t *token_ids_out, int ncols, int chunk_size,
+    int nblocks, int64_t stream) {
+  launch_top1_large_packed<__half, false>(
+      input, block_values, block_indices, packed_out, token_ids_out, 1, ncols,
+      chunk_size, nblocks, stream);
 }
 
 extern "C" void top1_large_f32_packed_batched(const float *input,
@@ -2334,14 +2491,27 @@ extern "C" void top1_large_f32_packed_batched(const float *input,
                                               int nrows, int ncols,
                                               int chunk_size, int nblocks,
                                               int64_t stream) {
-  const cudaStream_t custream = (cudaStream_t)stream;
-  constexpr int block_size = 256;
-  const dim3 stage1_grid(nblocks, nrows);
+  launch_top1_large_packed<float, true>(
+      input, block_values, block_indices, packed_out, token_ids_out, nrows,
+      ncols, chunk_size, nblocks, stream);
+}
 
-  top1_large_stage1_f32<true, false><<<stage1_grid, block_size, 0, custream>>>(
-      input, block_values, block_indices, nullptr, ncols, chunk_size, nullptr);
-  top1_large_stage2_f32_packed<true><<<nrows, block_size, 0, custream>>>(
-      block_values, block_indices, packed_out, token_ids_out, nblocks);
+extern "C" void top1_large_bf16_packed_batched(
+    const __nv_bfloat16 *input, float *block_values, uint32_t *block_indices,
+    float *packed_out, uint32_t *token_ids_out, int nrows, int ncols,
+    int chunk_size, int nblocks, int64_t stream) {
+  launch_top1_large_packed<__nv_bfloat16, true>(
+      input, block_values, block_indices, packed_out, token_ids_out, nrows,
+      ncols, chunk_size, nblocks, stream);
+}
+
+extern "C" void top1_large_f16_packed_batched(
+    const __half *input, float *block_values, uint32_t *block_indices,
+    float *packed_out, uint32_t *token_ids_out, int nrows, int ncols,
+    int chunk_size, int nblocks, int64_t stream) {
+  launch_top1_large_packed<__half, true>(
+      input, block_values, block_indices, packed_out, token_ids_out, nrows,
+      ncols, chunk_size, nblocks, stream);
 }
 
 extern "C" void categorical_large_f32_packed_batched(
@@ -2354,7 +2524,8 @@ extern "C" void categorical_large_f32_packed_batched(
   const size_t stage2_smem =
       static_cast<size_t>(chunk_size) * 2 * sizeof(float);
 
-  top1_large_stage1_f32<true, true><<<stage1_grid, block_size, 0, custream>>>(
+  top1_large_stage1<float, true, true>
+      <<<stage1_grid, block_size, 0, custream>>>(
       input, block_values, nullptr, block_sums, ncols, chunk_size,
       inv_temperatures);
   categorical_large_stage2_f32_packed<<<nrows, block_size, stage2_smem,

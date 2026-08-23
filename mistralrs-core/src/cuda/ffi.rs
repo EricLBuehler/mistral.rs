@@ -42,6 +42,69 @@ extern "C" {
         row_elements: i64,
         stream: i64,
     ) -> i32;
+    pub(crate) fn dynamic_conv_bf16(
+        hidden: *const c_void,
+        dynamic: *const c_void,
+        base: *const c_void,
+        output: *mut c_void,
+        batch: i32,
+        sequence_length: i32,
+        hidden_size: i32,
+        group_size: i32,
+        kernel_size: i32,
+        hidden_stride_b: i64,
+        hidden_stride_s: i64,
+        hidden_stride_h: i64,
+        dynamic_stride_b: i64,
+        dynamic_stride_s: i64,
+        dynamic_stride_k: i64,
+        dynamic_stride_g: i64,
+        base_stride_k: i64,
+        base_stride_h: i64,
+        stream: i64,
+    ) -> i32;
+    pub(crate) fn dynamic_conv_f16(
+        hidden: *const c_void,
+        dynamic: *const c_void,
+        base: *const c_void,
+        output: *mut c_void,
+        batch: i32,
+        sequence_length: i32,
+        hidden_size: i32,
+        group_size: i32,
+        kernel_size: i32,
+        hidden_stride_b: i64,
+        hidden_stride_s: i64,
+        hidden_stride_h: i64,
+        dynamic_stride_b: i64,
+        dynamic_stride_s: i64,
+        dynamic_stride_k: i64,
+        dynamic_stride_g: i64,
+        base_stride_k: i64,
+        base_stride_h: i64,
+        stream: i64,
+    ) -> i32;
+    pub(crate) fn dynamic_conv_f32(
+        hidden: *const c_void,
+        dynamic: *const c_void,
+        base: *const c_void,
+        output: *mut c_void,
+        batch: i32,
+        sequence_length: i32,
+        hidden_size: i32,
+        group_size: i32,
+        kernel_size: i32,
+        hidden_stride_b: i64,
+        hidden_stride_s: i64,
+        hidden_stride_h: i64,
+        dynamic_stride_b: i64,
+        dynamic_stride_s: i64,
+        dynamic_stride_k: i64,
+        dynamic_stride_g: i64,
+        base_stride_k: i64,
+        base_stride_h: i64,
+        stream: i64,
+    ) -> i32;
     pub(crate) fn apply_sparse_penalties_f32(
         x: *const c_void,
         dst: *mut c_void,
@@ -253,6 +316,7 @@ extern "C" {
         k_eps: f32,
         is_neox: i32,
         dtype: i32,
+        output_token_major: i32,
         stream: i64,
     );
 
@@ -664,7 +728,8 @@ extern "C" {
         chunk_size: i32,
         nblocks: i32,
         stream: i64,
-    );
+    ) -> i32;
+    pub(crate) fn topk_large_ranked_state_words_per_row() -> usize;
     pub(crate) fn topk_large_ranked_bf16_packed_batched(
         input: *const c_void,
         block_values: *mut f32,
@@ -676,7 +741,7 @@ extern "C" {
         chunk_size: i32,
         nblocks: i32,
         stream: i64,
-    );
+    ) -> i32;
     pub(crate) fn topk_large_ranked_f16_packed_batched(
         input: *const c_void,
         block_values: *mut f32,
@@ -688,7 +753,7 @@ extern "C" {
         chunk_size: i32,
         nblocks: i32,
         stream: i64,
-    );
+    ) -> i32;
     pub(crate) fn dflash_greedy_select(
         packed_topk: *const f32,
         projected_hidden: *const c_void,
@@ -777,8 +842,54 @@ extern "C" {
         nblocks: i32,
         stream: i64,
     );
+    pub(crate) fn top1_large_bf16_packed(
+        input: *const c_void,
+        block_values: *mut f32,
+        block_indices: *mut u32,
+        packed_out: *mut f32,
+        token_ids_out: *mut u32,
+        ncols: i32,
+        chunk_size: i32,
+        nblocks: i32,
+        stream: i64,
+    );
+    pub(crate) fn top1_large_f16_packed(
+        input: *const c_void,
+        block_values: *mut f32,
+        block_indices: *mut u32,
+        packed_out: *mut f32,
+        token_ids_out: *mut u32,
+        ncols: i32,
+        chunk_size: i32,
+        nblocks: i32,
+        stream: i64,
+    );
     pub(crate) fn top1_large_f32_packed_batched(
         input: *const f32,
+        block_values: *mut f32,
+        block_indices: *mut u32,
+        packed_out: *mut f32,
+        token_ids_out: *mut u32,
+        nrows: i32,
+        ncols: i32,
+        chunk_size: i32,
+        nblocks: i32,
+        stream: i64,
+    );
+    pub(crate) fn top1_large_bf16_packed_batched(
+        input: *const c_void,
+        block_values: *mut f32,
+        block_indices: *mut u32,
+        packed_out: *mut f32,
+        token_ids_out: *mut u32,
+        nrows: i32,
+        ncols: i32,
+        chunk_size: i32,
+        nblocks: i32,
+        stream: i64,
+    );
+    pub(crate) fn top1_large_f16_packed_batched(
+        input: *const c_void,
         block_values: *mut f32,
         block_indices: *mut u32,
         packed_out: *mut f32,
@@ -830,7 +941,7 @@ extern "C" {
         v: *const f32,
         g: *const f32,
         beta: *const f32,
-        state: *mut f32,
+        state: *mut c_void,
         output: *mut f32,
         bh: i32,
         seq_len: i32,
@@ -838,6 +949,7 @@ extern "C" {
         v_dim: i32,
         slot_indices: *const i32,
         num_heads: i32,
+        state_dtype: i32,
         stream: i64,
     );
     pub(crate) fn warp_gated_delta_rule_recurrence(
@@ -846,7 +958,7 @@ extern "C" {
         v: *const f32,
         g: *const f32,
         beta: *const f32,
-        state: *mut f32,
+        state: *mut c_void,
         output: *mut f32,
         bh: i32,
         seq_len: i32,
@@ -854,6 +966,7 @@ extern "C" {
         v_dim: i32,
         slot_indices: *const i32,
         num_heads: i32,
+        state_dtype: i32,
         stream: i64,
     );
     pub(crate) fn vmajor_warp_gated_delta_rule_recurrence(
@@ -862,7 +975,7 @@ extern "C" {
         v: *const f32,
         g: *const f32,
         beta: *const f32,
-        state: *mut f32,
+        state: *mut c_void,
         output: *mut f32,
         bh: i32,
         seq_len: i32,
@@ -870,6 +983,7 @@ extern "C" {
         v_dim: i32,
         slot_indices: *const i32,
         num_heads: i32,
+        state_dtype: i32,
         stream: i64,
     );
     // Chunked GDN recurrence for prefill (processes tokens in BT=64 chunks)
@@ -879,7 +993,7 @@ extern "C" {
         v: *const f32,
         g: *const f32,
         beta: *const f32,
-        state: *mut f32,
+        state: *mut c_void,
         output: *mut f32,
         bh: i32,
         seq_len: i32,
@@ -887,6 +1001,7 @@ extern "C" {
         v_dim: i32,
         slot_indices: *const i32,
         num_heads: i32,
+        state_dtype: i32,
         stream: i64,
     );
     pub(crate) fn causal_conv1d_update(
@@ -982,7 +1097,7 @@ extern "C" {
         a: *const c_void,
         a_log: *const f32,
         dt_bias: *const f32,
-        state: *mut f32,
+        state: *mut c_void,
         output: *mut c_void,
         batch_size: i32,
         num_k_heads: i32,
@@ -997,6 +1112,7 @@ extern "C" {
         slot_indices: *const i32,
         kernel_kind: i32,
         dtype: i32,
+        state_dtype: i32,
         stream: i64,
     );
     pub(crate) fn gdn_speculative_state_commit(
@@ -1005,11 +1121,11 @@ extern "C" {
         b: *const c_void,
         a: *const c_void,
         initial_conv_state: *const c_void,
-        initial_recurrent_state: *const f32,
+        initial_recurrent_state: *const c_void,
         a_log: *const f32,
         dt_bias: *const f32,
         conv_state_pool: *mut c_void,
-        recurrent_state_pool: *mut f32,
+        recurrent_state_pool: *mut c_void,
         keep_rows: *const u32,
         slot_indices: *const u32,
         batch_size: i32,
@@ -1022,6 +1138,7 @@ extern "C" {
         tiled_v_heads: i32,
         value_major: i32,
         dtype: i32,
+        state_dtype: i32,
         stream: i64,
     );
     pub(crate) fn gdn_speculative_conv_checkpoints(
@@ -1047,9 +1164,21 @@ extern "C" {
         a: *const c_void,
         a_log: *const f32,
         dt_bias: *const f32,
-        state_pool: *mut f32,
+        state_pool: *mut c_void,
         output: *mut c_void,
         active_slots: *const u32,
+        gate: *const c_void,
+        norm_weight: *const c_void,
+        b_stride_b: i64,
+        b_stride_s: i64,
+        b_stride_h: i64,
+        a_stride_b: i64,
+        a_stride_s: i64,
+        a_stride_h: i64,
+        gate_stride_b: i64,
+        gate_stride_s: i64,
+        gate_stride_h: i64,
+        gate_stride_v: i64,
         batch_size: i32,
         seq_len: i32,
         num_k_heads: i32,
@@ -1059,7 +1188,9 @@ extern "C" {
         checkpoint_lanes: i32,
         tiled_v_heads: i32,
         value_major: i32,
+        norm_eps: f32,
         dtype: i32,
+        state_dtype: i32,
         stream: i64,
     );
 }

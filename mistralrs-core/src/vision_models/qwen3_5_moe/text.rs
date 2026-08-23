@@ -681,7 +681,7 @@ impl Qwen3_5MoeTextModel {
                     key_dim: cfg.linear_key_head_dim,
                     value_dim: cfg.linear_value_head_dim,
                 },
-                recurrent_dtype: Some(DType::F32),
+                recurrent_dtype: Some(cfg.mamba_ssm_dtype.dtype()),
             },
         };
         let layer_devices = (0..hybrid_cache_config.layer_types.len())

@@ -630,6 +630,11 @@ pub struct RuntimeOptions {
     #[serde(default)]
     pub mtp_n_predict: Option<usize>,
 
+    /// MTP draft sampling policy. Auto uses probabilistic DFlash2 drafting when supported.
+    #[arg(long, value_enum, default_value_t)]
+    #[serde(default)]
+    pub mtp_draft_sampling: MtpDraftSamplingArg,
+
     /// Path to an MCP client configuration JSON. Also reads `MCP_CONFIG_PATH` if unset.
     #[arg(long)]
     #[serde(default)]
@@ -811,6 +816,10 @@ pub struct BenchRuntimeOptions {
     /// Number of MTP draft tokens to propose per target step.
     #[arg(long)]
     pub mtp_n_predict: Option<usize>,
+
+    /// MTP draft sampling policy. Auto uses probabilistic DFlash2 drafting when supported.
+    #[arg(long, value_enum, default_value_t)]
+    pub mtp_draft_sampling: MtpDraftSamplingArg,
 }
 
 impl BenchRuntimeOptions {
@@ -823,11 +832,15 @@ impl BenchRuntimeOptions {
 
     pub fn mtp_config(&self) -> Option<mistralrs_core::MtpConfig> {
         if self.mtp {
-            return Some(mistralrs_core::MtpConfig::builtin(self.mtp_n_predict));
+            return Some(
+                mistralrs_core::MtpConfig::builtin(self.mtp_n_predict)
+                    .with_draft_sampling_method(self.mtp_draft_sampling.into()),
+            );
         }
-        self.mtp_model
-            .clone()
-            .map(|model| mistralrs_core::MtpConfig::new(model, self.mtp_n_predict))
+        self.mtp_model.clone().map(|model| {
+            mistralrs_core::MtpConfig::new(model, self.mtp_n_predict)
+                .with_draft_sampling_method(self.mtp_draft_sampling.into())
+        })
     }
 }
 
@@ -836,6 +849,25 @@ impl BenchRuntimeOptions {
 #[serde(rename_all = "kebab-case")]
 pub enum SearchEmbeddingModelArg {
     EmbeddingGemma,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, ValueEnum, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum MtpDraftSamplingArg {
+    #[default]
+    Auto,
+    Greedy,
+    Probabilistic,
+}
+
+impl From<MtpDraftSamplingArg> for mistralrs_core::MtpDraftSamplingMethod {
+    fn from(value: MtpDraftSamplingArg) -> Self {
+        match value {
+            MtpDraftSamplingArg::Auto => Self::Auto,
+            MtpDraftSamplingArg::Greedy => Self::Greedy,
+            MtpDraftSamplingArg::Probabilistic => Self::Probabilistic,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, ValueEnum, Deserialize)]
@@ -873,11 +905,15 @@ impl RuntimeOptions {
 
     pub fn mtp_config(&self) -> Option<mistralrs_core::MtpConfig> {
         if self.mtp {
-            return Some(mistralrs_core::MtpConfig::builtin(self.mtp_n_predict));
+            return Some(
+                mistralrs_core::MtpConfig::builtin(self.mtp_n_predict)
+                    .with_draft_sampling_method(self.mtp_draft_sampling.into()),
+            );
         }
-        self.mtp_model
-            .clone()
-            .map(|model| mistralrs_core::MtpConfig::new(model, self.mtp_n_predict))
+        self.mtp_model.clone().map(|model| {
+            mistralrs_core::MtpConfig::new(model, self.mtp_n_predict)
+                .with_draft_sampling_method(self.mtp_draft_sampling.into())
+        })
     }
 }
 
@@ -947,6 +983,7 @@ impl Default for RuntimeOptions {
             mtp: false,
             mtp_model: None,
             mtp_n_predict: None,
+            mtp_draft_sampling: MtpDraftSamplingArg::default(),
             mcp_config: None,
             agent: false,
             enable_search: false,
@@ -1450,5 +1487,76 @@ mod tests {
         assert!(help.contains("--enable-lora"));
         assert!(!help.contains("--legacy-lora"));
         assert!(!help.contains("--xlora"));
+    }
+
+    #[test]
+    fn mtp_draft_sampling_defaults_to_auto_and_accepts_explicit_modes() {
+        let cli = Cli::try_parse_from([
+            "mistralrs",
+            "serve",
+            "-m",
+            "org/target",
+            "--mtp-model",
+            "org/draft",
+        ])
+        .unwrap();
+        let Command::Serve { runtime, .. } = cli.command else {
+            panic!("expected serve command");
+        };
+        assert_eq!(
+            runtime
+                .mtp_config()
+                .expect("missing MTP config")
+                .draft_sampling_method,
+            mistralrs_core::MtpDraftSamplingMethod::Auto
+        );
+
+        let cli = Cli::try_parse_from([
+            "mistralrs",
+            "serve",
+            "-m",
+            "org/target",
+            "--mtp-model",
+            "org/draft",
+            "--mtp-draft-sampling",
+            "probabilistic",
+        ])
+        .unwrap();
+        let Command::Serve { runtime, .. } = cli.command else {
+            panic!("expected serve command");
+        };
+        assert_eq!(
+            runtime
+                .mtp_config()
+                .expect("missing MTP config")
+                .draft_sampling_method,
+            mistralrs_core::MtpDraftSamplingMethod::Probabilistic
+        );
+
+        let cli = Cli::try_parse_from([
+            "mistralrs",
+            "serve",
+            "-m",
+            "org/target",
+            "--mtp-model",
+            "org/draft",
+            "--mtp-draft-sampling",
+            "greedy",
+        ])
+        .unwrap();
+        let Command::Serve { runtime, .. } = cli.command else {
+            panic!("expected serve command");
+        };
+        assert_eq!(
+            runtime
+                .mtp_config()
+                .expect("missing MTP config")
+                .draft_sampling_method,
+            mistralrs_core::MtpDraftSamplingMethod::Greedy
+        );
+        assert_eq!(
+            RuntimeOptions::default().mtp_draft_sampling,
+            MtpDraftSamplingArg::Auto
+        );
     }
 }

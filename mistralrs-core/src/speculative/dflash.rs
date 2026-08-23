@@ -20,7 +20,7 @@ use mistralrs_quant::{
 use serde::Deserialize;
 
 use crate::layers::RmsNorm;
-use crate::speculative::MtpConfig;
+use crate::speculative::{MtpConfig, MtpDraftSamplingMethod, SpeculativePrefixReplay};
 use crate::utils::varbuilder_utils::{from_mmaped_safetensors, DeviceForLoadTensor};
 
 #[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
@@ -34,7 +34,7 @@ pub const DEFAULT_MAX_DRAFTS: usize = 7;
 const ROPE_TABLE_LEN: usize = 65536;
 const MASK_CACHE_CAP: usize = 64;
 #[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
-const DFLASH_CUDA_GRAPH_CACHE_CAPACITY: usize = 8;
+const DFLASH_CUDA_GRAPH_CACHE_CAPACITY: usize = 32;
 const ADAPT_FULL_DEPTH_MAX_BATCH: usize = 2;
 const ADAPT_MIN_DEPTH: usize = 1;
 const DFLASH_ADAPTIVE_ENV: &str = "MISTRALRS_DFLASH_ADAPTIVE";
@@ -69,6 +69,48 @@ fn dflash_graph_plans(adaptive: bool, max_n: usize) -> Vec<super::SpeculativeGra
         super::SpeculativeGraphPlan::new(max_n, Some(ADAPT_FULL_DEPTH_MAX_BATCH)),
         super::SpeculativeGraphPlan::new(ADAPT_MIN_DEPTH, None),
     ]
+}
+
+#[cfg(any(
+    all(feature = "cuda", feature = "flash-attn", target_family = "unix"),
+    test
+))]
+fn dflash_graph_precapture_shapes(
+    plans: &[super::SpeculativeGraphPlan],
+    batches: impl IntoIterator<Item = usize>,
+    sequence_capacity: usize,
+) -> Vec<(usize, usize)> {
+    let batches = batches.into_iter().collect::<Vec<_>>();
+    let mut shapes = Vec::new();
+    for plan in plans {
+        let max_batch = plan
+            .max_batch_size
+            .unwrap_or(sequence_capacity)
+            .min(sequence_capacity);
+        for batch in batches.iter().copied().filter(|batch| *batch <= max_batch) {
+            shapes.push((batch, plan.proposal_len + 1));
+        }
+    }
+    shapes.sort_unstable();
+    shapes.dedup();
+    shapes
+}
+
+fn dflash_prefix_replay(
+    layer_windows: impl IntoIterator<Item = Option<usize>>,
+) -> SpeculativePrefixReplay {
+    let mut required = 0;
+    for window in layer_windows {
+        let Some(window) = window else {
+            return SpeculativePrefixReplay::Full;
+        };
+        required = required.max(window);
+    }
+    if required == 0 {
+        SpeculativePrefixReplay::NotRequired
+    } else {
+        SpeculativePrefixReplay::Suffix(required)
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -215,6 +257,18 @@ impl DynamicConv {
     // channels: out_t = sum_o (base[o] + dyn[t, o]) * x_{t-o}
     fn convolve(&self, hidden: &Tensor, dynamic: &Tensor, base: &Tensor) -> Result<Tensor> {
         let (b, len, h) = hidden.dims3()?;
+        #[cfg(feature = "cuda")]
+        if hidden.device().is_cuda()
+            && self.kernel_size <= crate::cuda::dynamic_conv::MAX_DYNAMIC_CONV_KERNEL_SIZE
+        {
+            return crate::cuda::dynamic_conv::dynamic_conv(
+                hidden,
+                dynamic,
+                base,
+                self.kernel_size,
+                self.group_size,
+            );
+        }
         let groups = h / self.group_size;
         let blocks = hidden.reshape((b, len, groups, self.group_size))?;
         // dynamic: [b, len, kernel_size, groups] -> broadcast over group_size
@@ -256,12 +310,8 @@ impl DynamicConv {
         let dynamic = hidden
             .broadcast_matmul(&self.kernel_projection.t()?.to_dtype(hidden.dtype())?)?
             .reshape((b, len, 2, self.kernel_size, groups))?;
-        let pre = self.convolve(
-            hidden,
-            &dynamic.i((.., .., 0))?.contiguous()?,
-            &self.base_kernel.i(0)?,
-        )?;
-        Ok((pre, dynamic.i((.., .., 1))?.contiguous()?))
+        let pre = self.convolve(hidden, &dynamic.i((.., .., 0))?, &self.base_kernel.i(0)?)?;
+        Ok((pre, dynamic.i((.., .., 1))?))
     }
 
     fn finish(&self, hidden: &Tensor, dynamic: &Tensor) -> Result<Tensor> {
@@ -275,6 +325,98 @@ struct CandidateSelector {
     successor_codebook: Tensor,
     hidden_projection: Tensor,
     top_k: usize,
+    #[cfg(feature = "cuda")]
+    vocab_size: usize,
+}
+
+fn resolve_dflash_sampling_policy(
+    method: MtpDraftSamplingMethod,
+    capability: std::result::Result<(), String>,
+) -> Result<MtpDraftSamplingMethod> {
+    match method {
+        MtpDraftSamplingMethod::Auto => Ok(if capability.is_ok() {
+            MtpDraftSamplingMethod::Probabilistic
+        } else {
+            MtpDraftSamplingMethod::Greedy
+        }),
+        MtpDraftSamplingMethod::Greedy => Ok(MtpDraftSamplingMethod::Greedy),
+        MtpDraftSamplingMethod::Probabilistic => capability
+            .map(|()| MtpDraftSamplingMethod::Probabilistic)
+            .map_err(|reason| {
+                candle_core::Error::msg(format!(
+                    "probabilistic DFlash drafting is unavailable: {reason}"
+                ))
+            }),
+    }
+}
+
+#[cfg(feature = "cuda")]
+struct CandidateSelectorCudaSpec {
+    device_is_cuda: bool,
+    logits_dtype: DType,
+    hidden_projection_dtype: DType,
+    predecessor_dtype: DType,
+    successor_dtype: DType,
+    top_k: usize,
+    vocab_size: usize,
+    predecessor_vocab_size: Option<usize>,
+    successor_vocab_size: Option<usize>,
+}
+
+#[cfg(feature = "cuda")]
+fn validate_candidate_selector_cuda(
+    spec: CandidateSelectorCudaSpec,
+) -> std::result::Result<(), String> {
+    if !spec.device_is_cuda {
+        return Err("the draft model is not on CUDA".to_string());
+    }
+    if !matches!(spec.logits_dtype, DType::BF16 | DType::F16 | DType::F32) {
+        return Err(format!(
+            "CUDA ranked top-k does not support {:?} logits",
+            spec.logits_dtype
+        ));
+    }
+    for (name, dtype) in [
+        ("hidden projection", spec.hidden_projection_dtype),
+        ("predecessor codebook", spec.predecessor_dtype),
+        ("successor codebook", spec.successor_dtype),
+    ] {
+        if !matches!(dtype, DType::BF16 | DType::F32) {
+            return Err(format!(
+                "CUDA candidate selection does not support {dtype:?} {name}"
+            ));
+        }
+    }
+    if spec.vocab_size == 0 {
+        return Err("the vocabulary is empty".to_string());
+    }
+    if spec.vocab_size > crate::ops::CUDA_TOPK_MAX_EXACT_PACKED_VOCAB {
+        return Err(format!(
+            "vocabulary size {} cannot be represented exactly by packed F32 indices",
+            spec.vocab_size
+        ));
+    }
+    for (name, codebook_vocab_size) in [
+        ("predecessor", spec.predecessor_vocab_size),
+        ("successor", spec.successor_vocab_size),
+    ] {
+        if codebook_vocab_size != Some(spec.vocab_size) {
+            return Err(format!(
+                "{name} codebook vocabulary {codebook_vocab_size:?} does not match logits vocabulary {}",
+                spec.vocab_size
+            ));
+        }
+    }
+    let max_top_k = crate::ops::cuda_topk_ranked_packed_max_k(spec.vocab_size)
+        .expect("nonempty representable vocabulary checked above")
+        .min(crate::ops::CUDA_DFLASH_SELECTOR_MAX_K);
+    if spec.top_k == 0 || spec.top_k > max_top_k {
+        return Err(format!(
+            "selector top_k={} must be in [1, {max_top_k}] for vocabulary {}",
+            spec.top_k, spec.vocab_size
+        ));
+    }
+    Ok(())
 }
 
 impl CandidateSelector {
@@ -294,14 +436,44 @@ impl CandidateSelector {
                 .pp("hidden_projection")
                 .get((rank, cfg.hidden_size), "weight")?,
             top_k,
+            #[cfg(feature = "cuda")]
+            vocab_size: cfg.vocab_size,
         })
     }
 
     #[cfg(feature = "cuda")]
-    fn supports_cuda(&self) -> bool {
-        matches!(self.hidden_projection.dtype(), DType::BF16 | DType::F32)
-            && matches!(self.predecessor_codebook.dtype(), DType::BF16 | DType::F32)
-            && matches!(self.successor_codebook.dtype(), DType::BF16 | DType::F32)
+    fn cuda_capability(
+        &self,
+        device_is_cuda: bool,
+        logits_dtype: DType,
+        vocab_size: usize,
+    ) -> std::result::Result<(), String> {
+        if vocab_size != self.vocab_size {
+            return Err(format!(
+                "logits vocabulary {vocab_size} does not match configured vocabulary {}",
+                self.vocab_size
+            ));
+        }
+        validate_candidate_selector_cuda(CandidateSelectorCudaSpec {
+            device_is_cuda,
+            logits_dtype,
+            hidden_projection_dtype: self.hidden_projection.dtype(),
+            predecessor_dtype: self.predecessor_codebook.dtype(),
+            successor_dtype: self.successor_codebook.dtype(),
+            top_k: self.top_k,
+            vocab_size,
+            predecessor_vocab_size: self.predecessor_codebook.dims().first().copied(),
+            successor_vocab_size: self.successor_codebook.dims().first().copied(),
+        })
+    }
+
+    #[cfg(feature = "cuda")]
+    fn configured_cuda_capability(
+        &self,
+        device_is_cuda: bool,
+        logits_dtype: DType,
+    ) -> std::result::Result<(), String> {
+        self.cuda_capability(device_is_cuda, logits_dtype, self.vocab_size)
     }
 
     #[cfg(feature = "cuda")]
@@ -312,10 +484,9 @@ impl CandidateSelector {
     ) -> Result<(crate::ops::RankedTopKPackedOutput, Tensor)> {
         let (batch, positions, vocab) = logits.dims3()?;
         let rows = batch * positions;
+        self.cuda_capability(logits.device().is_cuda(), logits.dtype(), vocab)
+            .map_err(candle_core::Error::msg)?;
         let logits = logits.reshape((rows, vocab))?.contiguous()?;
-        if !logits.device().is_cuda() || !self.supports_cuda() {
-            candle_core::bail!("DFlash CUDA selector does not support these tensors");
-        }
         let topk = crate::ops::cuda_topk_ranked_packed_batched(&logits, self.top_k)?;
         let projection_dtype = self.hidden_projection.dtype();
         let projected = hidden
@@ -379,10 +550,9 @@ impl CandidateSelector {
         let rows = batch * positions;
 
         #[cfg(feature = "cuda")]
-        if logits.device().is_cuda()
-            && matches!(self.hidden_projection.dtype(), DType::BF16 | DType::F32)
-            && matches!(self.predecessor_codebook.dtype(), DType::BF16 | DType::F32)
-            && matches!(self.successor_codebook.dtype(), DType::BF16 | DType::F32)
+        if self
+            .cuda_capability(logits.device().is_cuda(), logits.dtype(), vocab)
+            .is_ok()
         {
             let anchors = Tensor::from_vec(anchors.to_vec(), (batch,), logits.device())?;
             return self
@@ -508,6 +678,13 @@ struct DFlashLayer {
     sliding_window: Option<usize>,
 }
 
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum DraftAttentionLayout {
+    HeadsFirst,
+    #[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
+    TokensFirst,
+}
+
 /// Per-sequence accumulated context keys/values stacked over layers,
 /// `[layers, kv_heads, len, head_dim]` with rotary already applied to the keys. `next_pos` is the
 /// absolute position of the next token to append; `start_pos` the absolute position of the first
@@ -519,12 +696,89 @@ struct SeqCtxCache {
     next_pos: usize,
 }
 
-/// One sequence's context rows to append: `taps` `[1, rows, taps*hidden]` at absolute positions
-/// `start_pos..start_pos + rows`.
+/// One sequence's context rows to append at absolute positions `start_pos..start_pos + rows`.
 pub struct CtxAppend {
     pub seq_id: usize,
-    pub taps: Tensor,
+    pub rows: usize,
     pub start_pos: usize,
+}
+
+pub struct DFlashPreparedContext {
+    k: Tensor,
+    v: Tensor,
+    rows: usize,
+}
+
+fn contiguous_row_range(indices: &[u32]) -> Option<(usize, usize)> {
+    let start = usize::try_from(*indices.first()?).ok()?;
+    indices
+        .iter()
+        .enumerate()
+        .all(|(offset, index)| usize::try_from(*index).ok() == start.checked_add(offset))
+        .then_some((start, indices.len()))
+}
+
+fn select_ctx_kv_rows(k: &Tensor, v: &Tensor, row_indices: &[u32]) -> Result<(Tensor, Tensor)> {
+    if row_indices.is_empty() {
+        return Ok((k.narrow(2, 0, 0)?, v.narrow(2, 0, 0)?));
+    }
+    if let Some((start, len)) = contiguous_row_range(row_indices) {
+        return Ok((k.narrow(2, start, len)?, v.narrow(2, start, len)?));
+    }
+    let row_indices = Tensor::from_vec(row_indices.to_vec(), (row_indices.len(),), k.device())?;
+    Ok((
+        k.contiguous()?.index_select(&row_indices, 2)?,
+        v.contiguous()?.index_select(&row_indices, 2)?,
+    ))
+}
+
+fn gather_ctx_taps(taps: &[Tensor], flat_row_indices: Vec<u32>, device: &Device) -> Result<Tensor> {
+    let Some(first) = taps.first() else {
+        candle_core::bail!("DFlash context append has no taps");
+    };
+    let (source_batch, source_rows, _) = first.dims3()?;
+    let source_len = source_batch
+        .checked_mul(source_rows)
+        .ok_or_else(|| candle_core::Error::msg("DFlash context tap row count overflow"))?;
+    if flat_row_indices
+        .iter()
+        .any(|index| usize::try_from(*index).map_or(true, |index| index >= source_len))
+    {
+        candle_core::bail!("DFlash context tap row index is out of range");
+    }
+    let contiguous_range = contiguous_row_range(&flat_row_indices);
+    let indices = if contiguous_range.is_none() {
+        let len = flat_row_indices.len();
+        Some(Tensor::from_vec(flat_row_indices, (len,), device)?)
+    } else {
+        None
+    };
+    let mut gathered = Vec::with_capacity(taps.len());
+    for tap in taps {
+        let (batch, rows, hidden) = tap.dims3()?;
+        if (batch, rows) != (source_batch, source_rows) {
+            candle_core::bail!("DFlash context tap row shapes changed");
+        }
+        if !tap.device().same_device(device) {
+            candle_core::bail!("DFlash context taps must be on the draft device");
+        }
+        let tap = if tap.is_contiguous() {
+            tap.clone()
+        } else {
+            tap.contiguous()?
+        };
+        let flat = tap.reshape((source_len, hidden))?;
+        gathered.push(match contiguous_range {
+            Some((start, len)) => flat.narrow(0, start, len)?,
+            None => flat.index_select(indices.as_ref().expect("non-contiguous row indices"), 0)?,
+        });
+    }
+    let packed = if gathered.len() == 1 {
+        gathered.pop().expect("one DFlash tap")
+    } else {
+        Tensor::cat(&gathered.iter().collect::<Vec<_>>(), D::Minus1)?
+    };
+    packed.unsqueeze(0)
 }
 
 struct AdaptiveState {
@@ -546,8 +800,10 @@ pub(crate) struct DFlashSamplingInputs<'a> {
 pub(crate) enum DFlashProposalBatch {
     Tokens(Vec<Vec<u32>>),
     #[cfg(feature = "cuda")]
-    Sparse {
-        tokens: Vec<Vec<u32>>,
+    DeviceTokens(Tensor),
+    #[cfg(feature = "cuda")]
+    DeviceSparse {
+        tokens: Tensor,
         candidate_ids: Tensor,
         candidate_probs: Tensor,
     },
@@ -584,66 +840,114 @@ struct DFlashGraphHostRows {
     all(feature = "cuda", feature = "flash-attn", target_family = "unix"),
     test
 ))]
-fn dflash_graph_host_rows(
-    anchors: &[u32],
-    start_positions: &[usize],
+#[derive(Clone, Copy)]
+struct DFlashGraphHostInput<'a> {
+    anchors: &'a [u32],
+    start_positions: &'a [usize],
     mask_token_id: u32,
     block: usize,
     batch_bucket: usize,
-    sampling: Option<DFlashSamplingInputs<'_>>,
-) -> Result<DFlashGraphHostRows> {
-    if anchors.is_empty() || anchors.len() != start_positions.len() {
-        candle_core::bail!("DFlash graph inputs must contain matching non-empty rows");
-    }
-    if block == 0 || batch_bucket < anchors.len() {
-        candle_core::bail!("DFlash graph input shape is invalid");
-    }
-    if let Some(sampling) = sampling {
-        let expected_uniforms = anchors
-            .len()
-            .checked_mul(block - 1)
-            .ok_or_else(|| candle_core::Error::msg("DFlash sampling input size overflow"))?;
-        if sampling.inverse_temperatures.len() != anchors.len()
-            || sampling.uniforms.len() != expected_uniforms
-        {
-            candle_core::bail!("DFlash sampling inputs do not match the graph rows");
+    sampling: Option<DFlashSamplingInputs<'a>>,
+}
+
+#[cfg(any(
+    all(feature = "cuda", feature = "flash-attn", target_family = "unix"),
+    test
+))]
+impl DFlashGraphHostRows {
+    fn update(&mut self, input: DFlashGraphHostInput<'_>) -> Result<()> {
+        let DFlashGraphHostInput {
+            anchors,
+            start_positions,
+            mask_token_id,
+            block,
+            batch_bucket,
+            sampling,
+        } = input;
+        if anchors.is_empty() || anchors.len() != start_positions.len() {
+            candle_core::bail!("DFlash graph inputs must contain matching non-empty rows");
         }
-    }
-    let mut token_ids = Vec::with_capacity(batch_bucket * block);
-    let mut rope_indices = Vec::with_capacity(batch_bucket * block);
-    let mut padded_anchors = Vec::with_capacity(batch_bucket);
-    for row in 0..batch_bucket {
-        let source = row.min(anchors.len() - 1);
-        let anchor = anchors[source];
-        let start = start_positions[source];
-        padded_anchors.push(anchor);
-        token_ids.push(anchor);
-        token_ids.extend(std::iter::repeat_n(mask_token_id, block - 1));
-        for offset in 0..block {
-            let position = start
-                .checked_add(offset)
-                .ok_or_else(|| candle_core::Error::msg("DFlash graph position overflow"))?;
-            rope_indices.push(u32::try_from(position).map_err(candle_core::Error::wrap)?);
+        if block == 0 || batch_bucket < anchors.len() {
+            candle_core::bail!("DFlash graph input shape is invalid");
         }
-    }
-    let (selector_inverse_temperatures, selector_uniforms) = match sampling {
-        Some(sampling) => {
-            let positions = block - 1;
-            let mut inverse_temperatures = vec![0.0f32; batch_bucket];
-            inverse_temperatures[..anchors.len()].copy_from_slice(sampling.inverse_temperatures);
-            let mut uniforms = vec![0.0f32; batch_bucket * positions];
-            uniforms[..sampling.uniforms.len()].copy_from_slice(sampling.uniforms);
-            (Some(inverse_temperatures), Some(uniforms))
+        if let Some(sampling) = sampling {
+            let expected_uniforms = anchors
+                .len()
+                .checked_mul(block - 1)
+                .ok_or_else(|| candle_core::Error::msg("DFlash sampling input size overflow"))?;
+            if sampling.inverse_temperatures.len() != anchors.len()
+                || sampling.uniforms.len() != expected_uniforms
+            {
+                candle_core::bail!("DFlash sampling inputs do not match the graph rows");
+            }
         }
-        None => (None, None),
+
+        self.token_ids.clear();
+        self.rope_indices.clear();
+        self.anchors.clear();
+        self.token_ids.reserve(batch_bucket * block);
+        self.rope_indices.reserve(batch_bucket * block);
+        self.anchors.reserve(batch_bucket);
+        for row in 0..batch_bucket {
+            let source = row.min(anchors.len() - 1);
+            let anchor = anchors[source];
+            let start = start_positions[source];
+            self.anchors.push(anchor);
+            self.token_ids.push(anchor);
+            self.token_ids
+                .extend(std::iter::repeat_n(mask_token_id, block - 1));
+            for offset in 0..block {
+                let position = start
+                    .checked_add(offset)
+                    .ok_or_else(|| candle_core::Error::msg("DFlash graph position overflow"))?;
+                self.rope_indices
+                    .push(u32::try_from(position).map_err(candle_core::Error::wrap)?);
+            }
+        }
+
+        match sampling {
+            Some(sampling) => {
+                let inverse_temperatures = self
+                    .selector_inverse_temperatures
+                    .get_or_insert_with(Vec::new);
+                inverse_temperatures.clear();
+                inverse_temperatures.resize(batch_bucket, 0.0);
+                inverse_temperatures[..anchors.len()]
+                    .copy_from_slice(sampling.inverse_temperatures);
+                let uniforms = self.selector_uniforms.get_or_insert_with(Vec::new);
+                uniforms.clear();
+                uniforms.resize(batch_bucket * (block - 1), 0.0);
+                uniforms[..sampling.uniforms.len()].copy_from_slice(sampling.uniforms);
+            }
+            None => {
+                self.selector_inverse_temperatures = None;
+                self.selector_uniforms = None;
+            }
+        }
+        Ok(())
+    }
+}
+
+#[cfg(any(
+    all(feature = "cuda", feature = "flash-attn", target_family = "unix"),
+    test
+))]
+fn dflash_graph_host_rows(input: DFlashGraphHostInput<'_>) -> Result<DFlashGraphHostRows> {
+    let DFlashGraphHostInput {
+        block,
+        batch_bucket,
+        sampling,
+        ..
+    } = input;
+    let mut rows = DFlashGraphHostRows {
+        token_ids: Vec::with_capacity(batch_bucket * block),
+        rope_indices: Vec::with_capacity(batch_bucket * block),
+        anchors: Vec::with_capacity(batch_bucket),
+        selector_inverse_temperatures: sampling.map(|_| Vec::with_capacity(batch_bucket)),
+        selector_uniforms: sampling.map(|_| Vec::with_capacity(batch_bucket * (block - 1))),
     };
-    Ok(DFlashGraphHostRows {
-        token_ids,
-        rope_indices,
-        anchors: padded_anchors,
-        selector_inverse_temperatures,
-        selector_uniforms,
-    })
+    rows.update(input)?;
+    Ok(rows)
 }
 
 #[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
@@ -685,6 +989,8 @@ struct DFlashCudaGraphEntry {
     buffers: DFlashCudaGraphBuffers,
     token_embedding: Arc<dyn QuantMethod>,
     lm_head: Arc<dyn QuantMethod>,
+    mask_token_id: u32,
+    host_rows: DFlashGraphHostRows,
     graph: crate::pipeline::cuda_graph::CudaGraphHandle,
 }
 
@@ -700,11 +1006,67 @@ struct DFlashCudaGraphState {
 struct DFlashCudaGraphRun<'a> {
     model: &'a DFlashDraftModel,
     key: DFlashCudaGraphKey,
-    rows: &'a DFlashGraphHostRows,
+    anchors: &'a [u32],
+    start_positions: &'a [usize],
+    sampling: Option<DFlashSamplingInputs<'a>>,
     attention_batch: &'a WindowedKvBatch,
     token_embedding: &'a Arc<dyn QuantMethod>,
     lm_head: &'a Arc<dyn QuantMethod>,
     real_batch: usize,
+}
+
+#[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
+struct DFlashGraphTemporarySequences<'a> {
+    pool: &'a Mutex<WindowedKvPool>,
+    seq_ids: Vec<usize>,
+}
+
+#[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
+impl<'a> DFlashGraphTemporarySequences<'a> {
+    fn acquire(pool: &'a Mutex<WindowedKvPool>, count: usize) -> Result<Self> {
+        let mut locked = pool.lock().expect("dflash windowed pool poisoned");
+        let mut seq_ids = Vec::with_capacity(count);
+        let mut candidate = usize::MAX;
+        while seq_ids.len() < count {
+            if locked.sequence(candidate).is_none() {
+                if let Err(err) = locked.acquire_at(candidate, 0) {
+                    for seq_id in &seq_ids {
+                        locked.release(*seq_id);
+                    }
+                    return Err(err);
+                }
+                seq_ids.push(candidate);
+            }
+            candidate = candidate.checked_sub(1).ok_or_else(|| {
+                candle_core::Error::msg("DFlash graph temporary sequence id space exhausted")
+            })?;
+        }
+        Ok(Self { pool, seq_ids })
+    }
+
+    fn attention_batch(&self, batch: usize, block: usize) -> Result<WindowedKvBatch> {
+        let queries = self.seq_ids[..batch]
+            .iter()
+            .map(|seq_id| WindowedKvQuery {
+                seq_id: *seq_id,
+                query_len: block,
+            })
+            .collect::<Vec<_>>();
+        self.pool
+            .lock()
+            .expect("dflash windowed pool poisoned")
+            .scratch_graph_batch(&queries, batch)
+    }
+}
+
+#[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
+impl Drop for DFlashGraphTemporarySequences<'_> {
+    fn drop(&mut self) {
+        let mut pool = self.pool.lock().expect("dflash windowed pool poisoned");
+        for seq_id in &self.seq_ids {
+            pool.release(*seq_id);
+        }
+    }
 }
 
 #[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
@@ -717,15 +1079,14 @@ struct DFlashCudaGraphOutput {
 #[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
 impl DFlashCudaGraphOutput {
     fn finish(self, real_batch: usize) -> Result<DFlashProposalBatch> {
-        let mut tokens = self.tokens.to_vec2::<u32>()?;
-        tokens.truncate(real_batch);
+        let tokens = self.tokens.narrow(0, 0, real_batch)?.copy()?;
         match (self.candidate_ids, self.candidate_probs) {
-            (Some(candidate_ids), Some(candidate_probs)) => Ok(DFlashProposalBatch::Sparse {
+            (Some(candidate_ids), Some(candidate_probs)) => Ok(DFlashProposalBatch::DeviceSparse {
                 tokens,
                 candidate_ids: candidate_ids.narrow(0, 0, real_batch)?.copy()?,
                 candidate_probs: candidate_probs.narrow(0, 0, real_batch)?.copy()?,
             }),
-            (None, None) => Ok(DFlashProposalBatch::Tokens(tokens)),
+            (None, None) => Ok(DFlashProposalBatch::DeviceTokens(tokens)),
             _ => candle_core::bail!("DFlash selector returned incomplete sparse probabilities"),
         }
     }
@@ -751,6 +1112,7 @@ pub struct DFlashDraftModel {
     hidden_norm: RmsNorm,
     norm: RmsNorm,
     selector: Option<CandidateSelector>,
+    draft_sampling_method: MtpDraftSamplingMethod,
     inv_freq: Tensor,
     pub target_layer_ids: Vec<usize>,
     mask_token_id: u32,
@@ -993,11 +1355,22 @@ impl DFlashCudaGraphEntry {
 
     fn replay(
         &mut self,
-        rows: &DFlashGraphHostRows,
+        anchors: &[u32],
+        start_positions: &[usize],
+        sampling: Option<DFlashSamplingInputs<'_>>,
         batch: &WindowedKvBatch,
         real_batch: usize,
     ) -> Result<DFlashProposalBatch> {
-        self.buffers.update(rows, batch, &mut self.staging)?;
+        self.host_rows.update(DFlashGraphHostInput {
+            anchors,
+            start_positions,
+            mask_token_id: self.mask_token_id,
+            block: self.key.block,
+            batch_bucket: self.key.batch_bucket,
+            sampling,
+        })?;
+        self.buffers
+            .update(&self.host_rows, batch, &mut self.staging)?;
         self.staging.order_before_graph()?;
         self.launch(real_batch)
     }
@@ -1023,6 +1396,15 @@ impl Drop for DFlashCudaGraphState {
 
 #[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
 impl DFlashCudaGraphState {
+    fn store(&mut self, entry: DFlashCudaGraphEntry) {
+        if self.entries.len() >= DFLASH_CUDA_GRAPH_CACHE_CAPACITY {
+            release_dflash_cuda_graph(self.entries.remove(0));
+        }
+        self.warmed.remove(&entry.key);
+        self.failed.remove(&entry.key);
+        self.entries.push(entry);
+    }
+
     fn retire_failed_entry(
         &mut self,
         entry: DFlashCudaGraphEntry,
@@ -1075,12 +1457,12 @@ impl DFlashCudaGraphState {
     fn capture(
         model: &DFlashDraftModel,
         key: DFlashCudaGraphKey,
-        rows: &DFlashGraphHostRows,
+        host_rows: DFlashGraphHostRows,
         attention_batch: &WindowedKvBatch,
         token_embedding: &Arc<dyn QuantMethod>,
         lm_head: &Arc<dyn QuantMethod>,
     ) -> Result<DFlashCudaGraphEntry> {
-        let buffers = DFlashCudaGraphBuffers::new(key, rows, attention_batch, model)?;
+        let buffers = DFlashCudaGraphBuffers::new(key, &host_rows, attention_batch, model)?;
         model.device.synchronize()?;
         let Device::Cuda(cuda_device) = &model.device else {
             candle_core::bail!("DFlash CUDA graph expected a CUDA device");
@@ -1175,6 +1557,8 @@ impl DFlashCudaGraphState {
             buffers,
             token_embedding: token_embedding.clone(),
             lm_head: lm_head.clone(),
+            mask_token_id: model.mask_token_id,
+            host_rows,
             graph,
         })
     }
@@ -1183,7 +1567,9 @@ impl DFlashCudaGraphState {
         let DFlashCudaGraphRun {
             model,
             key,
-            rows,
+            anchors,
+            start_positions,
+            sampling,
             attention_batch,
             token_embedding,
             lm_head,
@@ -1193,7 +1579,13 @@ impl DFlashCudaGraphState {
             entry.key == key && entry.matches_dependencies(token_embedding, lm_head)
         }) {
             let mut entry = self.entries.remove(position);
-            match entry.replay(rows, attention_batch, real_batch) {
+            match entry.replay(
+                anchors,
+                start_positions,
+                sampling,
+                attention_batch,
+                real_batch,
+            ) {
                 Ok(tokens) => {
                     self.entries.push(entry);
                     return Ok(Some(tokens));
@@ -1203,7 +1595,14 @@ impl DFlashCudaGraphState {
                     return Self::eager(
                         model,
                         key,
-                        rows,
+                        &dflash_graph_host_rows(DFlashGraphHostInput {
+                            anchors,
+                            start_positions,
+                            mask_token_id: model.mask_token_id,
+                            block: key.block,
+                            batch_bucket: key.batch_bucket,
+                            sampling,
+                        })?,
                         attention_batch,
                         token_embedding,
                         lm_head,
@@ -1226,10 +1625,18 @@ impl DFlashCudaGraphState {
             return Ok(None);
         }
         if self.warmed.insert(key) {
+            let rows = dflash_graph_host_rows(DFlashGraphHostInput {
+                anchors,
+                start_positions,
+                mask_token_id: model.mask_token_id,
+                block: key.block,
+                batch_bucket: key.batch_bucket,
+                sampling,
+            })?;
             return Self::eager(
                 model,
                 key,
-                rows,
+                &rows,
                 attention_batch,
                 token_embedding,
                 lm_head,
@@ -1238,6 +1645,14 @@ impl DFlashCudaGraphState {
             .map(Some);
         }
 
+        let rows = dflash_graph_host_rows(DFlashGraphHostInput {
+            anchors,
+            start_positions,
+            mask_token_id: model.mask_token_id,
+            block: key.block,
+            batch_bucket: key.batch_bucket,
+            sampling,
+        })?;
         let mut entry =
             match Self::capture(model, key, rows, attention_batch, token_embedding, lm_head) {
                 Ok(entry) => entry,
@@ -1258,7 +1673,14 @@ impl DFlashCudaGraphState {
                 return Self::eager(
                     model,
                     key,
-                    rows,
+                    &dflash_graph_host_rows(DFlashGraphHostInput {
+                        anchors,
+                        start_positions,
+                        mask_token_id: model.mask_token_id,
+                        block: key.block,
+                        batch_bucket: key.batch_bucket,
+                        sampling,
+                    })?,
                     attention_batch,
                     token_embedding,
                     lm_head,
@@ -1270,15 +1692,12 @@ impl DFlashCudaGraphState {
                 });
             }
         };
-        if self.entries.len() >= DFLASH_CUDA_GRAPH_CACHE_CAPACITY {
-            release_dflash_cuda_graph(self.entries.remove(0));
-        }
         tracing::debug!(
             batch_bucket = key.batch_bucket,
             block = key.block,
             "Captured DFlash CUDA graph"
         );
-        self.entries.push(entry);
+        self.store(entry);
         Ok(Some(tokens))
     }
 }
@@ -1542,6 +1961,15 @@ impl DFlashDraftModel {
             .is_v2()
             .then(|| CandidateSelector::load(vb.pp("candidate_selector"), &cfg))
             .transpose()?;
+        let selector_capability = match selector.as_ref() {
+            None => Err("a DFlash2 checkpoint with a candidate selector is required".to_string()),
+            #[cfg(feature = "cuda")]
+            Some(selector) => selector.configured_cuda_capability(device.is_cuda(), dtype),
+            #[cfg(not(feature = "cuda"))]
+            Some(_) => Err("this build has no CUDA candidate selector support".to_string()),
+        };
+        let draft_sampling_method =
+            resolve_dflash_sampling_policy(config.draft_sampling_method, selector_capability)?;
 
         #[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
         let inv_freq: Vec<f32> = (0..head_dim)
@@ -1566,6 +1994,7 @@ impl DFlashDraftModel {
             hidden_norm: RmsNorm::new(hidden, eps, vb.pp("hidden_norm"))?,
             norm: RmsNorm::new(hidden, eps, vb.pp("norm"))?,
             selector,
+            draft_sampling_method,
             inv_freq,
             target_layer_ids,
             mask_token_id: cfg.mask_token_id()?,
@@ -1626,6 +2055,130 @@ impl DFlashDraftModel {
         }
     }
 
+    #[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
+    pub(crate) fn precapture_cuda_graphs(
+        &self,
+        max_n: usize,
+        token_embedding: &Arc<dyn QuantMethod>,
+        lm_head: &Arc<dyn QuantMethod>,
+    ) -> Result<()> {
+        if !crate::pipeline::cuda_graph::cuda_decode_graphs_enabled() || max_n == 0 {
+            return Ok(());
+        }
+        let Some(pool) = &self.windowed_pool else {
+            return Ok(());
+        };
+        let use_selector = self.selector.is_some();
+        if use_selector
+            && self
+                .selector
+                .as_ref()
+                .expect("selector checked above")
+                .configured_cuda_capability(self.device.is_cuda(), self.dtype)
+                .is_err()
+        {
+            return Ok(());
+        }
+        let selector_modes = match (use_selector, self.draft_sampling_method) {
+            (false, _) => vec![DFlashSelectorMode::Disabled],
+            (true, MtpDraftSamplingMethod::Auto) => {
+                unreachable!("DFlash draft sampling is resolved during loading")
+            }
+            (true, MtpDraftSamplingMethod::Greedy) => vec![DFlashSelectorMode::Greedy],
+            (true, MtpDraftSamplingMethod::Probabilistic) => {
+                vec![DFlashSelectorMode::Sampling, DFlashSelectorMode::Greedy]
+            }
+        };
+        let sequence_capacity = pool
+            .lock()
+            .expect("dflash windowed pool poisoned")
+            .config()
+            .sequence_capacity();
+        let shapes = dflash_graph_precapture_shapes(
+            &self.graph_plans(max_n),
+            crate::pipeline::cuda_graph::cuda_graph_precapture_batches(),
+            sequence_capacity,
+        );
+        let Some(max_batch) = shapes.iter().map(|(batch, _)| *batch).max() else {
+            return Ok(());
+        };
+        let temporary = DFlashGraphTemporarySequences::acquire(pool, max_batch)?;
+        let started = std::time::Instant::now();
+        let mut captured = 0usize;
+        let mut state = self
+            .cuda_graphs
+            .lock()
+            .expect("dflash CUDA graph cache poisoned");
+        for selector_mode in selector_modes {
+            for &(batch_bucket, block) in &shapes {
+                let key = DFlashCudaGraphKey {
+                    batch_bucket,
+                    block,
+                    selector_mode,
+                };
+                if state.entries.iter().any(|entry| {
+                    entry.key == key && entry.matches_dependencies(token_embedding, lm_head)
+                }) || state.failed.contains(&key)
+                {
+                    continue;
+                }
+                if let Some(position) = state.entries.iter().position(|entry| entry.key == key) {
+                    release_dflash_cuda_graph(state.entries.remove(position));
+                }
+                let attention_batch = temporary.attention_batch(batch_bucket, block)?;
+                let anchors = vec![0u32; batch_bucket];
+                let start_positions = vec![0usize; batch_bucket];
+                let sampling_values = (selector_mode == DFlashSelectorMode::Sampling).then(|| {
+                    (
+                        vec![1.0f32; batch_bucket],
+                        vec![0.5f32; batch_bucket * (block - 1)],
+                    )
+                });
+                let sampling = sampling_values
+                    .as_ref()
+                    .map(|(inverse_temperatures, uniforms)| DFlashSamplingInputs {
+                        inverse_temperatures,
+                        uniforms,
+                    });
+                let rows = dflash_graph_host_rows(DFlashGraphHostInput {
+                    anchors: &anchors,
+                    start_positions: &start_positions,
+                    mask_token_id: self.mask_token_id,
+                    block,
+                    batch_bucket,
+                    sampling,
+                })?;
+                DFlashCudaGraphState::eager(
+                    self,
+                    key,
+                    &rows,
+                    &attention_batch,
+                    token_embedding,
+                    lm_head,
+                    batch_bucket,
+                )?;
+                state.warmed.insert(key);
+                let entry = DFlashCudaGraphState::capture(
+                    self,
+                    key,
+                    rows,
+                    &attention_batch,
+                    token_embedding,
+                    lm_head,
+                )?;
+                state.store(entry);
+                captured += 1;
+            }
+        }
+        if captured > 0 {
+            tracing::info!(
+                "Captured {captured} DFlash CUDA graphs through batch bucket {max_batch} in {:.2?}",
+                started.elapsed()
+            );
+        }
+        Ok(())
+    }
+
     pub(crate) fn proposals_cuda_graph(
         &self,
         seq_ids: &[usize],
@@ -1660,14 +2213,14 @@ impl DFlashDraftModel {
             else {
                 return Ok(None);
             };
-            let use_selector =
-                self.selector.is_some() && std::env::var("MISTRALRS_DFLASH_NO_SELECTOR").is_err();
+            let use_selector = self.selector.is_some();
             if use_selector
-                && !self
+                && self
                     .selector
                     .as_ref()
                     .expect("selector checked above")
-                    .supports_cuda()
+                    .configured_cuda_capability(self.device.is_cuda(), self.dtype)
+                    .is_err()
             {
                 return Ok(None);
             }
@@ -1681,15 +2234,7 @@ impl DFlashDraftModel {
                 block,
                 selector_mode,
             };
-            let rows = dflash_graph_host_rows(
-                anchors,
-                start_positions,
-                self.mask_token_id,
-                block,
-                batch_bucket,
-                (selector_mode == DFlashSelectorMode::Sampling)
-                    .then_some(sampling.expect("sampling selector mode requires inputs")),
-            )?;
+            let sampling = sampling.filter(|_| selector_mode == DFlashSelectorMode::Sampling);
             let attention_batch = {
                 let pool = self
                     .windowed_pool
@@ -1726,7 +2271,9 @@ impl DFlashDraftModel {
                 .run(DFlashCudaGraphRun {
                     model: self,
                     key,
-                    rows: &rows,
+                    anchors,
+                    start_positions,
+                    sampling,
                     attention_batch: &attention_batch,
                     token_embedding,
                     lm_head,
@@ -1776,8 +2323,16 @@ impl DFlashDraftModel {
         self.block_size
     }
 
+    pub fn prefix_replay(&self) -> SpeculativePrefixReplay {
+        dflash_prefix_replay(self.layers.iter().map(|layer| layer.sliding_window))
+    }
+
     pub fn has_selector(&self) -> bool {
         self.selector.is_some()
+    }
+
+    pub fn draft_sampling_method(&self) -> MtpDraftSamplingMethod {
+        self.draft_sampling_method
     }
 
     pub fn mask_token_id(&self) -> u32 {
@@ -1901,51 +2456,57 @@ impl DFlashDraftModel {
         candle_nn::rotary_emb::rope(&x.contiguous()?, cos, sin)
     }
 
-    // [1, len, hidden] -> [1, heads, len, head_dim]
-    fn split_heads(&self, x: &Tensor, heads: usize) -> Result<Tensor> {
-        let (b, len, _) = x.dims3()?;
-        x.reshape((b, len, heads, self.head_dim))?
-            .transpose(1, 2)?
-            .contiguous()
-    }
-
-    // [1, len, heads, head_dim] -> [1, heads, len, head_dim]
-    fn heads_first(x: &Tensor) -> Result<Tensor> {
-        x.transpose(1, 2)?.contiguous()
-    }
-
     /// Projects tap features and appends context keys/values for every entry at once: the fc and
     /// per-layer k/v projections read their weights once over all sequences' rows packed together.
-    pub fn append_ctx_batch(&self, entries: &[CtxAppend]) -> Result<()> {
-        let rows = entries
-            .iter()
-            .map(|e| e.taps.dim(1))
-            .collect::<Result<Vec<_>>>()?;
-        let total: usize = rows.iter().sum();
+    pub fn append_ctx_batch(
+        &self,
+        taps: &[Tensor],
+        flat_row_indices: Vec<u32>,
+        entries: &[CtxAppend],
+    ) -> Result<()> {
+        let total = entries.iter().map(|entry| entry.rows).sum::<usize>();
         if total == 0 {
             return Ok(());
         }
-        let packed = if entries.len() == 1 {
-            entries[0].taps.clone()
-        } else {
-            Tensor::cat(&entries.iter().map(|e| &e.taps).collect::<Vec<_>>(), 1)?
-        };
+        let prepared = self.prepare_ctx_batch(taps, flat_row_indices, entries)?;
+        let row_indices = (0..total)
+            .map(|row| u32::try_from(row).map_err(candle_core::Error::wrap))
+            .collect::<Result<Vec<_>>>()?;
+        self.commit_prepared_ctx_batch(&prepared, row_indices, entries)
+    }
+
+    pub fn prepare_ctx_batch(
+        &self,
+        taps: &[Tensor],
+        flat_row_indices: Vec<u32>,
+        entries: &[CtxAppend],
+    ) -> Result<DFlashPreparedContext> {
+        let rows = entries.iter().map(|entry| entry.rows).collect::<Vec<_>>();
+        let total: usize = rows.iter().sum();
+        if total == 0 {
+            candle_core::bail!("DFlash context preparation requires at least one row");
+        }
+        if taps.len() != self.target_layer_ids.len() {
+            candle_core::bail!("DFlash context append tap count changed");
+        }
+        if flat_row_indices.len() != total {
+            candle_core::bail!("DFlash context append row count changed");
+        }
+        let packed = gather_ctx_taps(taps, flat_row_indices, &self.device)?;
         let ctx_hidden = self
             .hidden_norm
             .forward(&self.fc.forward(&packed.to_dtype(self.dtype)?)?)?;
-        let (cos, sin) = {
-            let mut coss = Vec::with_capacity(entries.len());
-            let mut sins = Vec::with_capacity(entries.len());
-            for (e, r) in entries.iter().zip(rows.iter()) {
-                if *r == 0 {
-                    continue;
-                }
-                let (c, s) = self.cos_sin(e.start_pos, *r)?;
-                coss.push(c);
-                sins.push(s);
+        let mut coss = Vec::with_capacity(entries.len());
+        let mut sins = Vec::with_capacity(entries.len());
+        for (entry, rows) in entries.iter().zip(&rows) {
+            if *rows == 0 {
+                continue;
             }
-            (Tensor::cat(&coss, 0)?, Tensor::cat(&sins, 0)?)
-        };
+            let (cos, sin) = self.cos_sin(entry.start_pos, *rows)?;
+            coss.push(cos);
+            sins.push(sin);
+        }
+        let (cos, sin) = (Tensor::cat(&coss, 0)?, Tensor::cat(&sins, 0)?);
 
         let all_kv = self
             .context_kv_proj
@@ -1971,9 +2532,45 @@ impl DFlashDraftModel {
         // [layers, kv_heads, total, head_dim]
         let k_all = Tensor::stack(&ks, 0)?;
 
+        Ok(DFlashPreparedContext {
+            k: k_all,
+            v: v_all,
+            rows: total,
+        })
+    }
+
+    pub fn commit_prepared_ctx_batch(
+        &self,
+        prepared: &DFlashPreparedContext,
+        row_indices: Vec<u32>,
+        entries: &[CtxAppend],
+    ) -> Result<()> {
+        let rows = entries.iter().map(|entry| entry.rows).collect::<Vec<_>>();
+        let total = rows.iter().sum::<usize>();
+        if total == 0 {
+            return Ok(());
+        }
+        if row_indices.len() != total
+            || row_indices
+                .iter()
+                .any(|row| usize::try_from(*row).map_or(true, |row| row >= prepared.rows))
+        {
+            candle_core::bail!("DFlash prepared context row selection is invalid");
+        }
+        let (k_all, v_all) = select_ctx_kv_rows(&prepared.k, &prepared.v, &row_indices)?;
+        self.append_projected_ctx_batch(entries, &rows, &k_all, &v_all)
+    }
+
+    fn append_projected_ctx_batch(
+        &self,
+        entries: &[CtxAppend],
+        rows: &[usize],
+        k_all: &Tensor,
+        v_all: &Tensor,
+    ) -> Result<()> {
         #[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
         if self.windowed_pool.is_some() {
-            return self.append_ctx_windowed(entries, &rows, &k_all, &v_all);
+            return self.append_ctx_windowed(entries, rows, k_all, v_all);
         }
 
         // Sliding layers never look further back than their window; trim by the widest window plus
@@ -2057,50 +2654,39 @@ impl DFlashDraftModel {
             writes.push(pool.plan_context_write(entry.seq_id, *row_count)?);
         }
 
-        for layer_idx in 0..self.layers.len() {
-            let mut k_rows = Vec::with_capacity(entries.len());
-            let mut v_rows = Vec::with_capacity(entries.len());
-            let mut slot_mapping = Vec::new();
-            let mut offset = 0;
-            for (write, row_count) in writes.iter().zip(rows) {
-                let retained = write.retained_input_range();
-                let retained_len = retained.end - retained.start;
-                k_rows.push(
-                    k_all
-                        .i(layer_idx)?
-                        .narrow(1, offset + retained.start, retained_len)?
-                        .transpose(0, 1)?
-                        .force_contiguous()?,
-                );
-                v_rows.push(
-                    v_all
-                        .i(layer_idx)?
-                        .narrow(1, offset + retained.start, retained_len)?
-                        .transpose(0, 1)?
-                        .force_contiguous()?,
-                );
-                slot_mapping.extend_from_slice(write.slot_mapping());
-                offset += *row_count;
+        let retained_total = writes
+            .iter()
+            .map(|write| write.retained_input_range().len())
+            .sum();
+        if retained_total == 0 {
+            for write in &writes {
+                pool.commit_context(write)?;
             }
-            let k = if k_rows.len() == 1 {
-                k_rows.pop().expect("one context K tensor")
-            } else {
-                Tensor::cat(&k_rows.iter().collect::<Vec<_>>(), 0)?
-            };
-            let v = if v_rows.len() == 1 {
-                v_rows.pop().expect("one context V tensor")
-            } else {
-                Tensor::cat(&v_rows.iter().collect::<Vec<_>>(), 0)?
-            };
-            let slot_count = slot_mapping.len();
-            let slots = Tensor::from_vec(slot_mapping, (slot_count,), &self.device)?;
+            return Ok(());
+        }
+        let mut retained_indices = Vec::with_capacity(retained_total);
+        let mut slot_mapping = Vec::with_capacity(retained_total);
+        let mut offset = 0;
+        for (write, row_count) in writes.iter().zip(rows) {
+            for row in write.retained_input_range() {
+                retained_indices
+                    .push(u32::try_from(offset + row).map_err(candle_core::Error::wrap)?);
+            }
+            slot_mapping.extend_from_slice(write.slot_mapping());
+            offset += *row_count;
+        }
+        let slot_mapping = Tensor::from_vec(slot_mapping, (retained_total,), &self.device)?;
+        let (k_retained, v_retained) = select_ctx_kv_rows(k_all, v_all, &retained_indices)?;
+        let k_packed = k_retained.permute((0, 2, 1, 3))?.contiguous()?;
+        let v_packed = v_retained.permute((0, 2, 1, 3))?.contiguous()?;
+        for layer_idx in 0..self.layers.len() {
             let (key_cache, value_cache) = pool.layer_cache(layer_idx)?;
             mistralrs_paged_attn::reshape_and_cache_flashinfer(
-                &k,
-                &v,
+                &k_packed.narrow(0, layer_idx, 1)?,
+                &v_packed.narrow(0, layer_idx, 1)?,
                 &key_cache,
                 &value_cache,
-                &slots,
+                &slot_mapping,
                 mistralrs_paged_attn::DEFAULT_FP8_KV_CACHE_SCALES,
             )?;
         }
@@ -2212,6 +2798,7 @@ impl DFlashDraftModel {
             noise_embedding,
             &q_cos,
             &q_sin,
+            DraftAttentionLayout::HeadsFirst,
             |i, layer, q, k_noise, v_noise| {
                 let ctx_k = ctx_k.narrow(0, i, 1)?.squeeze(0)?;
                 let ctx_v = ctx_v.narrow(0, i, 1)?.squeeze(0)?;
@@ -2238,6 +2825,7 @@ impl DFlashDraftModel {
         noise_embedding: &Tensor,
         q_cos: &Tensor,
         q_sin: &Tensor,
+        attention_layout: DraftAttentionLayout,
         mut attention: F,
     ) -> Result<Tensor>
     where
@@ -2259,28 +2847,79 @@ impl DFlashDraftModel {
                 None => None,
             };
             let qkv = layer.qkv_proj.forward(&x)?;
-            let q = Self::heads_first(&layer.q_norm.forward(
-                &qkv.narrow(D::Minus1, 0, q_size)?.reshape((
-                    batch,
-                    block,
-                    self.num_heads,
-                    self.head_dim,
-                ))?,
-            )?)?;
-            let k_noise = Self::heads_first(&layer.k_norm.forward(
-                &qkv.narrow(D::Minus1, q_size, kv_size)?.reshape((
-                    batch,
-                    block,
-                    self.num_kv_heads,
-                    self.head_dim,
-                ))?,
-            )?)?;
-            let q = candle_nn::rotary_emb::rope(&q, q_cos, q_sin)?;
-            let k_noise = candle_nn::rotary_emb::rope(&k_noise, q_cos, q_sin)?;
-            let v_noise = self.split_heads(
-                &qkv.narrow(D::Minus1, q_size + kv_size, kv_size)?,
+            let q_input = qkv
+                .narrow(D::Minus1, 0, q_size)?
+                .reshape((batch, block, self.num_heads, self.head_dim))?
+                .transpose(1, 2)?;
+            let k_input = qkv
+                .narrow(D::Minus1, q_size, kv_size)?
+                .reshape((batch, block, self.num_kv_heads, self.head_dim))?
+                .transpose(1, 2)?;
+            #[cfg(feature = "cuda")]
+            let fused_qk = {
+                let cos = q_cos.reshape((batch * block, ()))?;
+                let sin = q_sin.reshape((batch * block, ()))?;
+                let output_layout = match attention_layout {
+                    DraftAttentionLayout::HeadsFirst => crate::ops::QkRopeOutputLayout::HeadsFirst,
+                    #[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
+                    DraftAttentionLayout::TokensFirst => {
+                        crate::ops::QkRopeOutputLayout::TokensFirst
+                    }
+                };
+                crate::ops::try_cuda_qk_rms_norm_rope(
+                    &q_input,
+                    Some(&k_input),
+                    layer.q_norm.weight(),
+                    Some(layer.k_norm.weight()),
+                    layer.q_norm.eps() as f32,
+                    layer.k_norm.eps() as f32,
+                    &cos,
+                    &sin,
+                    true,
+                    output_layout,
+                )?
+            };
+            #[cfg(not(feature = "cuda"))]
+            let fused_qk: Option<(Tensor, Option<Tensor>)> = None;
+            let (q, k_noise) = match fused_qk {
+                Some((q, Some(k))) => (q, k),
+                Some((_, None)) => unreachable!("DFlash fused Q/K omitted K output"),
+                None => {
+                    let q = candle_nn::rotary_emb::rope(
+                        &layer.q_norm.forward(&q_input)?,
+                        q_cos,
+                        q_sin,
+                    )?;
+                    let k = candle_nn::rotary_emb::rope(
+                        &layer.k_norm.forward(&k_input)?,
+                        q_cos,
+                        q_sin,
+                    )?;
+                    match attention_layout {
+                        DraftAttentionLayout::HeadsFirst => (q, k),
+                        #[cfg(all(
+                            feature = "cuda",
+                            feature = "flash-attn",
+                            target_family = "unix"
+                        ))]
+                        DraftAttentionLayout::TokensFirst => (
+                            q.transpose(1, 2)?.contiguous()?,
+                            k.transpose(1, 2)?.contiguous()?,
+                        ),
+                    }
+                }
+            };
+            let v_tokens = qkv.narrow(D::Minus1, q_size + kv_size, kv_size)?.reshape((
+                batch,
+                block,
                 self.num_kv_heads,
-            )?;
+                self.head_dim,
+            ))?;
+            let v_noise = match attention_layout {
+                DraftAttentionLayout::HeadsFirst => v_tokens.transpose(1, 2)?.contiguous()?,
+                #[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
+                DraftAttentionLayout::TokensFirst => v_tokens,
+            };
             let out = attention(layer_idx, layer, &q, &k_noise, &v_noise)?;
             let mut out = layer.o_proj.forward(&out)?;
             if let (Some(conv), Some(kernel)) = (&layer.attention_conv, attn_kernel) {
@@ -2396,13 +3035,12 @@ impl DFlashDraftModel {
             noise_embedding,
             q_cos,
             q_sin,
+            DraftAttentionLayout::TokensFirst,
             |layer_idx, layer, q, k_noise, v_noise| {
-                let k_write = k_noise.transpose(1, 2)?.contiguous()?;
-                let v_write = v_noise.transpose(1, 2)?.contiguous()?;
                 let (key_cache, value_cache) = pool.layer_cache(layer_idx)?;
                 mistralrs_paged_attn::reshape_and_cache_flashinfer(
-                    &k_write,
-                    &v_write,
+                    k_noise,
+                    v_noise,
                     &key_cache,
                     &value_cache,
                     &metadata.slot_mapping,
@@ -2417,11 +3055,7 @@ impl DFlashDraftModel {
                 } else {
                     Some(window - 1)
                 };
-                let q = q.transpose(1, 2)?.contiguous()?.reshape((
-                    batch * block,
-                    self.num_heads,
-                    self.head_dim,
-                ))?;
+                let q = q.reshape((batch * block, self.num_heads, self.head_dim))?;
                 let out = mistralrs_flash_attn::flash_attn_varlen_paged_windowed(
                     &q,
                     &key_paged,
@@ -2552,11 +3186,22 @@ impl DFlashDraftModel {
         if (self.output_multiplier - 1.0).abs() > f64::EPSILON {
             logits = (logits * self.output_multiplier)?;
         }
-        let use_selector = std::env::var("MISTRALRS_DFLASH_NO_SELECTOR").is_err();
-
-        #[cfg(feature = "cuda")]
-        if let (Some(selector), Some(sampling)) = (&self.selector, sampling) {
-            if use_selector && logits.device().is_cuda() && selector.supports_cuda() {
+        if let Some(sampling) = sampling {
+            let selector = self.selector.as_ref().ok_or_else(|| {
+                candle_core::Error::msg(
+                    "probabilistic DFlash drafting requires a DFlash2 candidate selector",
+                )
+            })?;
+            #[cfg(feature = "cuda")]
+            {
+                let vocab = logits.dim(D::Minus1)?;
+                selector
+                    .cuda_capability(logits.device().is_cuda(), logits.dtype(), vocab)
+                    .map_err(|reason| {
+                        candle_core::Error::msg(format!(
+                            "probabilistic DFlash drafting is unavailable: {reason}"
+                        ))
+                    })?;
                 let anchors = Tensor::from_vec(anchors.to_vec(), (batch,), logits.device())?;
                 let inverse_temperatures = Tensor::from_vec(
                     sampling.inverse_temperatures.to_vec(),
@@ -2575,17 +3220,24 @@ impl DFlashDraftModel {
                     &inverse_temperatures,
                     &uniforms,
                 )?;
-                return Ok(DFlashProposalBatch::Sparse {
-                    tokens: selected.tokens.to_vec2::<u32>()?,
+                return Ok(DFlashProposalBatch::DeviceSparse {
+                    tokens: selected.tokens,
                     candidate_ids: selected.candidate_ids,
                     candidate_probs: selected.candidate_probs,
                 });
             }
+            #[cfg(not(feature = "cuda"))]
+            {
+                let _ = (selector, sampling);
+                candle_core::bail!(
+                    "probabilistic DFlash drafting is unavailable: this build has no CUDA candidate selector support"
+                );
+            }
         }
 
-        let tokens_per_seq = match (&self.selector, use_selector) {
-            (Some(selector), true) => selector.select_greedy_batch(hidden, &logits, anchors)?,
-            _ => logits.argmax(D::Minus1)?.to_vec2::<u32>()?,
+        let tokens_per_seq = match &self.selector {
+            Some(selector) => selector.select_greedy_batch(hidden, &logits, anchors)?,
+            None => logits.argmax(D::Minus1)?.to_vec2::<u32>()?,
         };
         Ok(DFlashProposalBatch::Tokens(tokens_per_seq))
     }
@@ -2662,11 +3314,99 @@ mod tests {
     use mistralrs_quant::QuantMethod;
 
     use super::{
-        dflash_adaptive_env_value, dflash_graph_host_rows, dflash_graph_plans, linear_from_weight,
-        select_dflash_depth, update_dormant_sequences, DFlashSamplingInputs,
+        contiguous_row_range, dflash_adaptive_env_value, dflash_graph_host_rows,
+        dflash_graph_plans, dflash_graph_precapture_shapes, dflash_prefix_replay, gather_ctx_taps,
+        linear_from_weight, resolve_dflash_sampling_policy, select_ctx_kv_rows,
+        select_dflash_depth, update_dormant_sequences, DFlashGraphHostInput, DFlashSamplingInputs,
         DFlashSequenceEviction, ADAPT_FULL_DEPTH_MAX_BATCH,
     };
-    use crate::speculative::SpeculativeGraphPlan;
+    #[cfg(feature = "cuda")]
+    use super::{validate_candidate_selector_cuda, CandidateSelectorCudaSpec};
+    use crate::speculative::MtpDraftSamplingMethod;
+    use crate::speculative::{SpeculativeGraphPlan, SpeculativePrefixReplay};
+
+    #[cfg(feature = "cuda")]
+    fn selector_cuda_spec(vocab_size: usize, top_k: usize) -> CandidateSelectorCudaSpec {
+        CandidateSelectorCudaSpec {
+            device_is_cuda: true,
+            logits_dtype: candle_core::DType::BF16,
+            hidden_projection_dtype: candle_core::DType::BF16,
+            predecessor_dtype: candle_core::DType::BF16,
+            successor_dtype: candle_core::DType::BF16,
+            top_k,
+            vocab_size,
+            predecessor_vocab_size: Some(vocab_size),
+            successor_vocab_size: Some(vocab_size),
+        }
+    }
+
+    #[test]
+    fn dflash_draft_sampling_resolves_once_at_load() {
+        assert_eq!(
+            resolve_dflash_sampling_policy(MtpDraftSamplingMethod::Auto, Ok(())).unwrap(),
+            MtpDraftSamplingMethod::Probabilistic
+        );
+        assert_eq!(
+            resolve_dflash_sampling_policy(
+                MtpDraftSamplingMethod::Auto,
+                Err("missing selector".to_string()),
+            )
+            .unwrap(),
+            MtpDraftSamplingMethod::Greedy
+        );
+        assert_eq!(
+            resolve_dflash_sampling_policy(
+                MtpDraftSamplingMethod::Greedy,
+                Err("unsupported dtype".to_string()),
+            )
+            .unwrap(),
+            MtpDraftSamplingMethod::Greedy
+        );
+        assert_eq!(
+            resolve_dflash_sampling_policy(MtpDraftSamplingMethod::Probabilistic, Ok(())).unwrap(),
+            MtpDraftSamplingMethod::Probabilistic
+        );
+
+        let missing = resolve_dflash_sampling_policy(
+            MtpDraftSamplingMethod::Probabilistic,
+            Err("a DFlash2 checkpoint with a candidate selector is required".to_string()),
+        )
+        .expect_err("probabilistic drafting must not silently use greedy selection");
+        assert!(missing
+            .to_string()
+            .contains("DFlash2 checkpoint with a candidate selector is required"));
+
+        let unsupported = resolve_dflash_sampling_policy(
+            MtpDraftSamplingMethod::Probabilistic,
+            Err("unsupported dtype".to_string()),
+        )
+        .expect_err("probabilistic drafting must reject an unsupported CUDA selector");
+        assert!(unsupported.to_string().contains("unsupported dtype"));
+    }
+
+    #[cfg(feature = "cuda")]
+    #[test]
+    fn cuda_selector_top_k_respects_the_ranked_workspace_bound() {
+        let vocab_size = 1_000_000;
+        let max_top_k = crate::ops::cuda_topk_ranked_packed_max_k(vocab_size)
+            .expect("test vocabulary is representable")
+            .min(crate::ops::CUDA_DFLASH_SELECTOR_MAX_K);
+        assert!(
+            validate_candidate_selector_cuda(selector_cuda_spec(vocab_size, max_top_k)).is_ok()
+        );
+        let error = validate_candidate_selector_cuda(selector_cuda_spec(vocab_size, max_top_k + 1))
+            .expect_err("top_k above the ranked workspace bound must be rejected");
+        assert!(error.contains(&format!("[1, {max_top_k}]")));
+    }
+
+    #[cfg(feature = "cuda")]
+    #[test]
+    fn cuda_selector_rejects_unrepresentable_vocabularies() {
+        let vocab_size = crate::ops::CUDA_TOPK_MAX_EXACT_PACKED_VOCAB + 1;
+        let error = validate_candidate_selector_cuda(selector_cuda_spec(vocab_size, 1))
+            .expect_err("packed F32 indices must represent every vocabulary id exactly");
+        assert!(error.contains("cannot be represented exactly"));
+    }
 
     #[test]
     fn final_sequence_release_does_not_leave_dormant_ids() {
@@ -2708,6 +3448,84 @@ mod tests {
     }
 
     #[test]
+    fn context_tap_gather_preserves_flat_row_order() -> Result<()> {
+        let device = Device::Cpu;
+        let tap_a = Tensor::from_vec(
+            (0..12)
+                .flat_map(|row| [row as f32, 100.0 + row as f32])
+                .collect::<Vec<_>>(),
+            (3, 4, 2),
+            &device,
+        )?;
+        let tap_b = Tensor::from_vec(
+            (0..12).map(|row| -(row as f32)).collect::<Vec<_>>(),
+            (3, 4, 1),
+            &device,
+        )?;
+        let packed = gather_ctx_taps(&[tap_a, tap_b], vec![9, 10, 1, 6, 7], &device)?;
+        assert_eq!(
+            packed.to_vec3::<f32>()?,
+            [vec![
+                vec![9.0, 109.0, -9.0],
+                vec![10.0, 110.0, -10.0],
+                vec![1.0, 101.0, -1.0],
+                vec![6.0, 106.0, -6.0],
+                vec![7.0, 107.0, -7.0],
+            ]]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn context_tap_gather_handles_contiguous_rows_without_reordering() -> Result<()> {
+        let device = Device::Cpu;
+        let tap = Tensor::from_vec((0..12).map(|row| row as f32).collect(), (3, 4, 1), &device)?;
+        let packed = gather_ctx_taps(&[tap], vec![4, 5, 6, 7], &device)?;
+        assert_eq!(
+            packed.to_vec3::<f32>()?,
+            [vec![vec![4.0], vec![5.0], vec![6.0], vec![7.0]]]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn prepared_context_row_selection_detects_only_ordered_ranges() {
+        assert_eq!(contiguous_row_range(&[4, 5, 6, 7]), Some((4, 4)));
+        assert_eq!(contiguous_row_range(&[4, 6, 7]), None);
+        assert_eq!(contiguous_row_range(&[7, 6, 5]), None);
+        assert_eq!(contiguous_row_range(&[]), None);
+    }
+
+    #[test]
+    fn context_kv_row_selection_handles_narrowed_sources() -> Result<()> {
+        let device = Device::Cpu;
+        let source = Tensor::from_vec(
+            (0..32).map(|value| value as f32).collect(),
+            (2, 2, 4, 2),
+            &device,
+        )?;
+        let narrowed = source.narrow(2, 1, 3)?;
+        assert!(!narrowed.is_contiguous());
+        let (k, v) = select_ctx_kv_rows(&narrowed, &narrowed, &[0, 2])?;
+        assert_eq!(
+            k.flatten_all()?.to_vec1::<f32>()?,
+            v.flatten_all()?.to_vec1::<f32>()?
+        );
+        assert_eq!(
+            k.flatten_all()?.to_vec1::<f32>()?,
+            [
+                2.0, 3.0, 6.0, 7.0, 10.0, 11.0, 14.0, 15.0, 18.0, 19.0, 22.0, 23.0, 26.0, 27.0,
+                30.0, 31.0,
+            ]
+        );
+        assert_eq!(k.dims(), &[2, 2, 2, 2]);
+        let (empty_k, empty_v) = select_ctx_kv_rows(&narrowed, &narrowed, &[])?;
+        assert_eq!(empty_k.dims(), &[2, 2, 0, 2]);
+        assert_eq!(empty_v.dims(), &[2, 2, 0, 2]);
+        Ok(())
+    }
+
+    #[test]
     fn adaptive_depth_is_full_for_small_batches() {
         assert_eq!(select_dflash_depth(true, 7, 1), 7);
         assert_eq!(select_dflash_depth(true, 7, ADAPT_FULL_DEPTH_MAX_BATCH), 7);
@@ -2727,6 +3545,18 @@ mod tests {
     fn fixed_depth_ignores_batch_size() {
         assert_eq!(select_dflash_depth(false, 7, 1), 7);
         assert_eq!(select_dflash_depth(false, 7, 16), 7);
+    }
+
+    #[test]
+    fn prefix_replay_covers_every_dflash_attention_window() {
+        assert_eq!(
+            dflash_prefix_replay([Some(1024), Some(2048), Some(512)]),
+            SpeculativePrefixReplay::Suffix(2048)
+        );
+        assert_eq!(
+            dflash_prefix_replay([Some(2048), None, Some(1024)]),
+            SpeculativePrefixReplay::Full
+        );
     }
 
     #[test]
@@ -2759,8 +3589,49 @@ mod tests {
     }
 
     #[test]
+    fn graph_precapture_shapes_follow_depth_batch_limits_and_pool_capacity() {
+        let batches = (1..=8).chain(std::iter::once(16)).collect::<Vec<_>>();
+        assert_eq!(
+            dflash_graph_precapture_shapes(&dflash_graph_plans(false, 7), batches.clone(), 16),
+            vec![
+                (1, 8),
+                (2, 8),
+                (3, 8),
+                (4, 8),
+                (5, 8),
+                (6, 8),
+                (7, 8),
+                (8, 8),
+                (16, 8),
+            ]
+        );
+        assert_eq!(
+            dflash_graph_precapture_shapes(&dflash_graph_plans(true, 7), batches, 8),
+            vec![
+                (1, 2),
+                (1, 8),
+                (2, 2),
+                (2, 8),
+                (3, 2),
+                (4, 2),
+                (5, 2),
+                (6, 2),
+                (7, 2),
+                (8, 2),
+            ]
+        );
+    }
+
+    #[test]
     fn graph_rows_pad_with_a_valid_alias() -> Result<()> {
-        let rows = dflash_graph_host_rows(&[5, 7], &[100, 200], 9, 4, 4, None)?;
+        let rows = dflash_graph_host_rows(DFlashGraphHostInput {
+            anchors: &[5, 7],
+            start_positions: &[100, 200],
+            mask_token_id: 9,
+            block: 4,
+            batch_bucket: 4,
+            sampling: None,
+        })?;
         assert_eq!(
             rows.token_ids,
             [5, 9, 9, 9, 7, 9, 9, 9, 7, 9, 9, 9, 7, 9, 9, 9]
@@ -2777,17 +3648,17 @@ mod tests {
 
     #[test]
     fn graph_rows_pad_selector_sampling_inputs_with_inert_rows() -> Result<()> {
-        let rows = dflash_graph_host_rows(
-            &[5, 7],
-            &[100, 200],
-            9,
-            4,
-            4,
-            Some(DFlashSamplingInputs {
+        let rows = dflash_graph_host_rows(DFlashGraphHostInput {
+            anchors: &[5, 7],
+            start_positions: &[100, 200],
+            mask_token_id: 9,
+            block: 4,
+            batch_bucket: 4,
+            sampling: Some(DFlashSamplingInputs {
                 inverse_temperatures: &[1.0, 0.5],
                 uniforms: &[0.1, 0.2, 0.3, 0.4, 0.5, 0.6],
             }),
-        )?;
+        })?;
         assert_eq!(
             rows.selector_inverse_temperatures.as_deref(),
             Some(&[1.0, 0.5, 0.0, 0.0][..])
@@ -2795,6 +3666,66 @@ mod tests {
         assert_eq!(
             rows.selector_uniforms.as_deref(),
             Some(&[0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0][..])
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn graph_rows_reuse_bucket_storage() -> Result<()> {
+        let mut rows = dflash_graph_host_rows(DFlashGraphHostInput {
+            anchors: &[5, 7],
+            start_positions: &[100, 200],
+            mask_token_id: 9,
+            block: 4,
+            batch_bucket: 4,
+            sampling: Some(DFlashSamplingInputs {
+                inverse_temperatures: &[1.0, 0.5],
+                uniforms: &[0.1; 6],
+            }),
+        })?;
+        let capacities = (
+            rows.token_ids.capacity(),
+            rows.rope_indices.capacity(),
+            rows.anchors.capacity(),
+            rows.selector_inverse_temperatures
+                .as_ref()
+                .expect("sampling temperatures")
+                .capacity(),
+            rows.selector_uniforms
+                .as_ref()
+                .expect("sampling uniforms")
+                .capacity(),
+        );
+        rows.update(DFlashGraphHostInput {
+            anchors: &[11, 13],
+            start_positions: &[300, 400],
+            mask_token_id: 17,
+            block: 4,
+            batch_bucket: 4,
+            sampling: Some(DFlashSamplingInputs {
+                inverse_temperatures: &[0.25, 0.75],
+                uniforms: &[0.2; 6],
+            }),
+        })?;
+        assert_eq!(rows.token_ids[0], 11);
+        assert_eq!(rows.token_ids[4], 13);
+        assert_eq!(rows.rope_indices[0], 300);
+        assert_eq!(rows.rope_indices[4], 400);
+        assert_eq!(
+            capacities,
+            (
+                rows.token_ids.capacity(),
+                rows.rope_indices.capacity(),
+                rows.anchors.capacity(),
+                rows.selector_inverse_temperatures
+                    .as_ref()
+                    .expect("sampling temperatures")
+                    .capacity(),
+                rows.selector_uniforms
+                    .as_ref()
+                    .expect("sampling uniforms")
+                    .capacity(),
+            )
         );
         Ok(())
     }

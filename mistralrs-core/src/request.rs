@@ -415,6 +415,9 @@ impl WebSearchOptions {
 pub struct NormalRequest {
     pub messages: RequestMessage,
     pub sampling_params: SamplingParams,
+    /// Initializes an independent sampling stream for every generated choice.
+    #[serde(default)]
+    pub seed: Option<u64>,
     #[serde(default = "default_responder")]
     #[serde(skip)]
     pub response: Sender<Response>,
@@ -478,6 +481,7 @@ impl NormalRequest {
         Self {
             messages,
             sampling_params,
+            seed: None,
             response,
             id,
             tools,

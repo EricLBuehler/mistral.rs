@@ -316,6 +316,10 @@ impl Pipeline for AnyMoePipeline {
         get_mut_arcmutex!(self.target).supports_speculative_prompt_bootstrap()
     }
 
+    fn speculative_prefix_replay(&self) -> crate::speculative::SpeculativePrefixReplay {
+        get_mut_arcmutex!(self.target).speculative_prefix_replay()
+    }
+
     fn speculative_prompt_chunk(
         &mut self,
         seqs: &[&mut Sequence],
@@ -704,5 +708,6 @@ fn new_dummy_seq(
         false,
         false,
         eos_toks,
+        None,
     )
 }

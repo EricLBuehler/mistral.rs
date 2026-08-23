@@ -1,3 +1,4 @@
+use std::any::Any;
 use std::sync::{Arc, Mutex};
 
 use candle_core::{Result, Tensor};
@@ -9,6 +10,22 @@ use crate::pipeline::text_models_inputs_processor::{
 use crate::sequence::Sequence;
 
 pub type TargetTokenEmbedder<'a> = dyn Fn(&Tensor) -> Result<Tensor> + 'a;
+
+pub trait SpeculativeProposePreparation: Any + Send {
+    fn as_any(&self) -> &dyn Any;
+}
+
+impl<T: Any + Send> SpeculativeProposePreparation for T {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+}
+
+pub struct SpeculativeProposePrepareCtx<'a> {
+    pub seq_ids: &'a [usize],
+    pub base_lens: &'a [usize],
+    pub target_rows: &'a [(usize, usize)],
+}
 
 pub enum SpeculativeKvCache<'a> {
     Paged {
@@ -29,6 +46,7 @@ pub struct SpeculativeProposeBatchCtx<'a> {
     /// Per active sequence: its row in the last target forward's batch and how many leading rows of
     /// that forward (the sampled anchor plus accepted drafts) the proposer must consume.
     pub target_rows: &'a [(usize, usize)],
+    pub preparation: Option<&'a dyn SpeculativeProposePreparation>,
     pub rng: Arc<Mutex<Isaac64Rng>>,
 }
 
@@ -61,8 +79,84 @@ pub struct TargetAttentionInputs<'a> {
 }
 
 #[derive(Clone, Debug)]
+pub enum SpeculativeTokens {
+    Host(Vec<u32>),
+    Device(Tensor),
+}
+
+impl Default for SpeculativeTokens {
+    fn default() -> Self {
+        Self::Host(Vec::new())
+    }
+}
+
+impl From<Vec<u32>> for SpeculativeTokens {
+    fn from(tokens: Vec<u32>) -> Self {
+        Self::Host(tokens)
+    }
+}
+
+impl SpeculativeTokens {
+    pub fn from_device(tokens: Tensor) -> Result<Self> {
+        if tokens.rank() != 1 {
+            candle_core::bail!(
+                "device speculative tokens must have rank 1, got {:?}",
+                tokens.dims()
+            );
+        }
+        Ok(Self::Device(
+            tokens.to_dtype(candle_core::DType::U32)?.contiguous()?,
+        ))
+    }
+
+    pub fn len(&self) -> usize {
+        match self {
+            Self::Host(tokens) => tokens.len(),
+            Self::Device(tokens) => tokens
+                .dim(0)
+                .expect("device speculative token shape was validated"),
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    pub fn as_host(&self) -> Option<&[u32]> {
+        match self {
+            Self::Host(tokens) => Some(tokens),
+            Self::Device(_) => None,
+        }
+    }
+
+    pub fn as_device(&self) -> Option<&Tensor> {
+        match self {
+            Self::Host(_) => None,
+            Self::Device(tokens) => Some(tokens),
+        }
+    }
+
+    pub fn materialize(&mut self) -> Result<&[u32]> {
+        if let Self::Device(tokens) = self {
+            let tokens = tokens.to_vec1::<u32>()?;
+            *self = Self::Host(tokens);
+        }
+        Ok(self
+            .as_host()
+            .expect("materialized speculative tokens are host-backed"))
+    }
+
+    pub fn into_vec(self) -> Result<Vec<u32>> {
+        match self {
+            Self::Host(tokens) => Ok(tokens),
+            Self::Device(tokens) => tokens.to_vec1::<u32>(),
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
 pub struct SpeculativeProposal {
-    pub tokens: Vec<u32>,
+    pub tokens: SpeculativeTokens,
     pub distribution: Option<SpeculativeProposalDistribution>,
 }
 
@@ -120,19 +214,46 @@ impl SparseSpeculativeProbs {
 impl SpeculativeProposal {
     pub fn new(tokens: Vec<u32>) -> Self {
         Self {
-            tokens,
+            tokens: tokens.into(),
             distribution: None,
         }
     }
 
+    pub fn from_device(tokens: Tensor) -> Result<Self> {
+        Ok(Self {
+            tokens: SpeculativeTokens::from_device(tokens)?,
+            distribution: None,
+        })
+    }
+
     pub fn with_logits(tokens: Vec<u32>, logits: Tensor) -> Self {
         Self {
-            tokens,
+            tokens: tokens.into(),
             distribution: Some(SpeculativeProposalDistribution::Logits(logits)),
         }
     }
 
     pub fn with_sparse_probs(tokens: Vec<u32>, token_ids: Tensor, probs: Tensor) -> Result<Self> {
+        let sparse = SparseSpeculativeProbs::new(token_ids, probs)?;
+        if sparse.positions() != tokens.len() {
+            candle_core::bail!(
+                "sparse speculative probabilities have {} positions for {} tokens",
+                sparse.positions(),
+                tokens.len()
+            );
+        }
+        Ok(Self {
+            tokens: tokens.into(),
+            distribution: Some(SpeculativeProposalDistribution::SparseProbs(sparse)),
+        })
+    }
+
+    pub fn with_device_sparse_probs(
+        tokens: Tensor,
+        token_ids: Tensor,
+        probs: Tensor,
+    ) -> Result<Self> {
+        let tokens = SpeculativeTokens::from_device(tokens)?;
         let sparse = SparseSpeculativeProbs::new(token_ids, probs)?;
         if sparse.positions() != tokens.len() {
             candle_core::bail!(
@@ -190,12 +311,13 @@ pub fn sample_draft_rows(
     let mut tokens = Vec::with_capacity(batch);
     for (row, seq) in sequences.iter().enumerate() {
         let row_logits = logits.get(row)?.to_dtype(candle_core::DType::F32)?;
+        let sequence_rng = seq.sampling_rng(rng);
         let sampled = seq.sampler().sample(
             row_logits,
             &contexts[row],
             seq.prompt_tokens(),
             false,
-            rng.clone(),
+            sequence_rng,
             false,
             batch > 1,
         )?;
@@ -209,7 +331,7 @@ pub fn sample_draft_rows(
 mod tests {
     use candle_core::{Device, Tensor};
 
-    use super::{SparseSpeculativeProbs, SpeculativeProposal};
+    use super::{SparseSpeculativeProbs, SpeculativeProposal, SpeculativeTokens};
 
     #[test]
     fn sparse_probabilities_validate_shape_and_proposal_length() {
@@ -232,5 +354,22 @@ mod tests {
             Tensor::zeros((2, 0), candle_core::DType::F32, &Device::Cpu).unwrap(),
         )
         .is_err());
+    }
+
+    #[test]
+    fn device_tokens_materialize_without_changing_length() {
+        let tensor = Tensor::from_vec(vec![7u32, 8, 9], 3, &Device::Cpu).unwrap();
+        let mut tokens = SpeculativeTokens::from_device(tensor).unwrap();
+        assert_eq!(tokens.len(), 3);
+        assert!(tokens.as_host().is_none());
+        assert_eq!(tokens.materialize().unwrap(), &[7, 8, 9]);
+        assert!(tokens.as_device().is_none());
+        assert_eq!(tokens.len(), 3);
+    }
+
+    #[test]
+    fn device_tokens_require_one_row() {
+        let tensor = Tensor::zeros((1, 3), candle_core::DType::U32, &Device::Cpu).unwrap();
+        assert!(SpeculativeTokens::from_device(tensor).is_err());
     }
 }

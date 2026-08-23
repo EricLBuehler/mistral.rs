@@ -37,6 +37,13 @@ fn tools_for_chat_template(
     }
 }
 
+fn choice_seed(seed: Option<u64>, response_index: usize) -> Option<u64> {
+    seed.map(|seed| {
+        let stream = u64::try_from(response_index).expect("choice index must fit into u64");
+        seed.wrapping_add(stream)
+    })
+}
+
 impl Engine {
     pub async fn handle_request(self: Arc<Self>, request: Request) {
         match request {
@@ -737,6 +744,7 @@ impl Engine {
                 request.return_raw_logits,
                 request.sampling_params.ignore_eos,
                 eos_toks,
+                choice_seed(request.seed, response_index),
             );
             if let Some(adapter_lease) = &adapter_lease {
                 seq.bind_adapter(adapter_lease.clone());
@@ -1028,6 +1036,14 @@ mod tests {
     use crate::pipeline::chat_template::{apply_chat_template_to, ChatTemplateValue};
     use crate::{Function, Tool, ToolType};
     use indexmap::IndexMap;
+
+    #[test]
+    fn choice_seeds_are_stable_and_distinct() {
+        assert_eq!(choice_seed(None, 0), None);
+        assert_eq!(choice_seed(Some(42), 0), Some(42));
+        assert_eq!(choice_seed(Some(42), 1), Some(43));
+        assert_eq!(choice_seed(Some(u64::MAX), 1), Some(0));
+    }
 
     fn tool() -> Tool {
         Tool {

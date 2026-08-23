@@ -301,11 +301,16 @@ pub(crate) fn flashinfer_metadata(
 pub(crate) fn make_fa3_decode_state(
     metadata: &FlashInferMetadata,
     batch: usize,
+    query_len: usize,
     kv_cache: &[(Tensor, Tensor)],
     model_metadata: Option<&(dyn ModelConfigLike + Send + Sync)>,
     activation_dtype: DType,
 ) -> candle_core::Result<Option<Fa3DecodeState>> {
-    if !mistralrs_paged_attn::USE_FA3_FP8_PAGED || activation_dtype != DType::BF16 || batch == 0 {
+    if !mistralrs_paged_attn::USE_FA3_FP8_PAGED
+        || activation_dtype != DType::BF16
+        || batch == 0
+        || query_len == 0
+    {
         return Ok(None);
     }
     let Some(model_metadata) = model_metadata else {
@@ -338,6 +343,8 @@ pub(crate) fn make_fa3_decode_state(
             device: key_cache.device().location(),
             view: Fa3DecodeView::Logical,
             batch,
+            query_len,
+            causal: query_len > 1,
             q_heads,
             kv_heads,
             head_dim,
@@ -363,6 +370,7 @@ pub(crate) fn make_fa3_decode_state(
 pub(crate) fn make_fa3_decode_state(
     _metadata: &FlashInferMetadata,
     _batch: usize,
+    _query_len: usize,
     _kv_cache: &[(Tensor, Tensor)],
     _model_metadata: Option<&(dyn ModelConfigLike + Send + Sync)>,
     _activation_dtype: DType,
@@ -406,20 +414,23 @@ fn fa3_view_capacity(
     let Some(last_page_len) = view.paged_kv.last_page_len.get(&key.device) else {
         return Ok(None);
     };
+    let Some(source_rows) = key.total_q() else {
+        return Ok(None);
+    };
     if indptr.dtype() != DType::I32
         || indices.dtype() != DType::I32
         || last_page_len.dtype() != DType::I32
-        || indptr.elem_count() != key.batch + 1
-        || last_page_len.elem_count() != key.batch
-        || indices.elem_count() < key.batch
-        || !indices.elem_count().is_multiple_of(key.batch)
+        || indptr.elem_count() != source_rows + 1
+        || last_page_len.elem_count() != source_rows
+        || indices.elem_count() < source_rows
+        || !indices.elem_count().is_multiple_of(source_rows)
         || indptr.device().location() != key.device
         || indices.device().location() != key.device
         || last_page_len.device().location() != key.device
     {
         return Ok(None);
     }
-    Ok(Some(indices.elem_count() / key.batch))
+    Ok(Some(indices.elem_count() / source_rows))
 }
 
 #[cfg(all(feature = "cuda", target_family = "unix"))]
@@ -429,9 +440,13 @@ fn allocate_fa3_decode_buffers(
     max_pages_per_sequence: usize,
     num_sm: usize,
 ) -> candle_core::Result<Fa3DecodeBuffers> {
-    let scheduler_len = fa3_scheduler_metadata_len(key.batch);
+    let total_q = key
+        .total_q()
+        .ok_or_else(|| candle_core::Error::msg("FA3 query count overflow"))?;
+    let scheduler_len = fa3_scheduler_metadata_len(key.batch, key.causal);
     let cu_seqlens_q = Tensor::from_vec(
         (0..=key.batch)
+            .map(|row| row.saturating_mul(key.query_len))
             .map(i32::try_from)
             .collect::<std::result::Result<Vec<_>, _>>()?,
         (key.batch + 1,),
@@ -439,24 +454,20 @@ fn allocate_fa3_decode_buffers(
     )?;
     Ok(Fa3DecodeBuffers {
         query: unsafe {
-            Tensor::empty(
-                (key.batch, key.q_heads, key.head_dim),
-                DType::F8E4M3,
-                device,
-            )?
+            Tensor::empty((total_q, key.q_heads, key.head_dim), DType::F8E4M3, device)?
         },
         scheduler_metadata: unsafe { Tensor::empty((scheduler_len,), DType::I32, device)? },
         output_accum: unsafe {
             Tensor::empty(
-                (key.num_splits, key.q_heads, key.batch, key.head_dim),
+                (key.num_splits, key.q_heads, total_q, key.head_dim),
                 DType::F32,
                 device,
             )?
         },
         lse_accum: unsafe {
-            Tensor::empty((key.num_splits, key.q_heads, key.batch), DType::F32, device)?
+            Tensor::empty((key.num_splits, key.q_heads, total_q), DType::F32, device)?
         },
-        output_lse: unsafe { Tensor::empty((key.q_heads, key.batch), DType::F32, device)? },
+        output_lse: unsafe { Tensor::empty((key.q_heads, total_q), DType::F32, device)? },
         cu_seqlens_q,
         page_table: unsafe {
             Tensor::empty((key.batch, max_pages_per_sequence), DType::I32, device)?
@@ -468,8 +479,8 @@ fn allocate_fa3_decode_buffers(
 }
 
 #[cfg(all(feature = "cuda", target_family = "unix"))]
-fn fa3_scheduler_metadata_len(batch: usize) -> usize {
-    2 * batch.div_ceil(4) * 4 + 1
+fn fa3_scheduler_metadata_len(batch: usize, causal: bool) -> usize {
+    (2 + usize::from(causal)) * batch.div_ceil(4) * 4 + 1
 }
 
 #[cfg(test)]
@@ -494,9 +505,12 @@ mod tests {
     #[cfg(all(feature = "cuda", target_family = "unix"))]
     #[test]
     fn fa3_scheduler_metadata_covers_rounded_batch_rows_and_semaphore() {
-        assert_eq!(fa3_scheduler_metadata_len(1), 9);
-        assert_eq!(fa3_scheduler_metadata_len(4), 9);
-        assert_eq!(fa3_scheduler_metadata_len(8), 17);
-        assert_eq!(fa3_scheduler_metadata_len(16), 33);
+        assert_eq!(fa3_scheduler_metadata_len(1, false), 9);
+        assert_eq!(fa3_scheduler_metadata_len(4, false), 9);
+        assert_eq!(fa3_scheduler_metadata_len(8, false), 17);
+        assert_eq!(fa3_scheduler_metadata_len(16, false), 33);
+        assert_eq!(fa3_scheduler_metadata_len(1, true), 13);
+        assert_eq!(fa3_scheduler_metadata_len(8, true), 25);
+        assert_eq!(fa3_scheduler_metadata_len(16, true), 49);
     }
 }

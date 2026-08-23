@@ -75,6 +75,7 @@ pub fn parse_request(
             save_file: None,
         },
         sampling_params: SamplingParams::deterministic(),
+        seed: None,
         response: tx,
         return_logprobs: false,
         is_streaming: false,

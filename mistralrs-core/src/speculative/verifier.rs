@@ -12,6 +12,8 @@ use crate::sampler::CudaSpeculativeSamplingPlan;
 use crate::sampler::{Logprobs, Sampler};
 use crate::sequence::{Sequence, SequenceRecognizer, SequenceState};
 
+#[cfg(feature = "cuda")]
+use super::proposer::SpeculativeTokens;
 use super::proposer::{SparseSpeculativeProbs, SpeculativeProposalDistribution};
 
 pub(crate) fn can_greedy_device_verify(seq: &Sequence) -> bool {
@@ -42,8 +44,7 @@ pub(crate) fn can_batch_greedy_device_verify(seqs: &[&mut Sequence]) -> bool {
 fn sparse_rejection_plan(seq: &Sequence) -> Option<CudaSpeculativeSamplingPlan> {
     if seq.return_logprobs()
         || seq.sampling_logprob_required()
-        || !matches!(seq.recognizer, SequenceRecognizer::None)
-        || seq.tool_call_state.is_some()
+        || !stochastic_verification_allowed_for_sequence(seq)
     {
         return None;
     }
@@ -75,16 +76,22 @@ pub(crate) fn can_batch_device_verify(seqs: &[&mut Sequence]) -> bool {
     {
         crate::speculative::staging::staged_batch_width(seqs).is_some()
             && seqs.iter().all(|seq| {
-                can_greedy_device_verify(seq)
-                    || seq
-                        .staged_sparse_speculative_distribution()
-                        .is_some_and(|sparse| {
-                            sparse_rejection_plan(seq).is_some()
-                                && sparse_distribution_is_cuda_eligible(
-                                    sparse,
-                                    seq.active_staged_speculative_len(),
-                                )
-                        })
+                if can_greedy_device_verify(seq) {
+                    return true;
+                }
+                let Some(_) = sparse_rejection_plan(seq) else {
+                    return false;
+                };
+                match seq.staged_speculative_distribution() {
+                    None => true,
+                    Some(SpeculativeProposalDistribution::SparseProbs(sparse)) => {
+                        sparse_distribution_is_cuda_eligible(
+                            sparse,
+                            seq.active_staged_speculative_len(),
+                        )
+                    }
+                    Some(SpeculativeProposalDistribution::Logits(_)) => false,
+                }
             })
     }
     #[cfg(not(feature = "cuda"))]
@@ -159,7 +166,6 @@ pub(crate) fn greedy_device_verify_batch(
     } else {
         Tensor::cat(&selected_logits.iter().collect::<Vec<_>>(), 0)?
     }
-    .to_dtype(DType::F32)?
     .contiguous()?;
     let token_ids = inputs[first_idx]
         .seq
@@ -178,21 +184,69 @@ pub(crate) fn greedy_device_verify_batch(
 pub(crate) struct SparseRejectionVerifyInput<'a> {
     pub(crate) seq: &'a Sequence,
     pub(crate) logits: &'a Tensor,
-    pub(crate) proposal: &'a [u32],
-    pub(crate) distribution: &'a SpeculativeProposalDistribution,
+    pub(crate) proposal: &'a SpeculativeTokens,
+    pub(crate) distribution: Option<&'a SpeculativeProposalDistribution>,
+}
+
+#[cfg(feature = "cuda")]
+enum SparseRejectionCandidateDistribution {
+    Deterministic,
+    Sparse {
+        token_ids: Tensor,
+        probs: Tensor,
+        width: usize,
+    },
+}
+
+#[cfg(feature = "cuda")]
+impl SparseRejectionCandidateDistribution {
+    fn width(&self) -> usize {
+        match self {
+            Self::Deterministic => 1,
+            Self::Sparse { width, .. } => *width,
+        }
+    }
+
+    fn is_deterministic(&self) -> bool {
+        matches!(self, Self::Deterministic)
+    }
 }
 
 #[cfg(feature = "cuda")]
 struct SparseRejectionCandidate<'a> {
     input_idx: usize,
     logits: Tensor,
-    proposal: &'a [u32],
-    q_token_ids: Tensor,
-    q_probs: Tensor,
+    proposal: &'a SpeculativeTokens,
+    distribution: SparseRejectionCandidateDistribution,
     plan: CudaSpeculativeSamplingPlan,
     drafts: usize,
     vocab: usize,
-    q_width: usize,
+}
+
+#[cfg(feature = "cuda")]
+enum SparseRejectionDraftTokens {
+    Host(Vec<u32>),
+    Device(Tensor),
+}
+
+#[cfg(feature = "cuda")]
+impl SparseRejectionDraftTokens {
+    fn as_input(&self) -> crate::cuda::speculative_rejection::SparseRejectionDraftInput<'_> {
+        match self {
+            Self::Host(tokens) => {
+                crate::cuda::speculative_rejection::SparseRejectionDraftInput::Host(tokens)
+            }
+            Self::Device(tokens) => {
+                crate::cuda::speculative_rejection::SparseRejectionDraftInput::Device(tokens)
+            }
+        }
+    }
+}
+
+#[cfg(feature = "cuda")]
+pub(crate) struct SparseRejectionDeviceVerifyOutput {
+    pub(crate) verifications: Vec<Option<DeviceVerification>>,
+    pub(crate) materialized_proposals: Vec<Option<Vec<u32>>>,
 }
 
 #[cfg(any(feature = "cuda", test))]
@@ -227,13 +281,21 @@ fn sparse_rejection_candidate<'a>(
     let Some(plan) = sparse_rejection_plan(input.seq) else {
         return Ok(None);
     };
-    let SpeculativeProposalDistribution::SparseProbs(sparse) = input.distribution else {
-        return Ok(None);
-    };
     let drafts = input.proposal.len();
-    if !sparse_distribution_is_cuda_eligible(sparse, drafts) {
-        return Ok(None);
-    }
+    let distribution = match input.distribution {
+        None => SparseRejectionCandidateDistribution::Deterministic,
+        Some(SpeculativeProposalDistribution::SparseProbs(sparse)) => {
+            if !sparse_distribution_is_cuda_eligible(sparse, drafts) {
+                return Ok(None);
+            }
+            SparseRejectionCandidateDistribution::Sparse {
+                token_ids: sparse.token_ids().contiguous()?,
+                probs: sparse.probs().contiguous()?,
+                width: sparse.token_ids().dim(1)?,
+            }
+        }
+        Some(SpeculativeProposalDistribution::Logits(_)) => return Ok(None),
+    };
     let logits = match input.logits.dims() {
         [1, rows, _] if *rows == drafts + 1 => input.logits.clone(),
         [rows, _] if *rows == drafts + 1 => input.logits.unsqueeze(0)?,
@@ -245,197 +307,340 @@ fn sparse_rejection_candidate<'a>(
     if plan.top_k > 0 && !matches!(logits.dtype(), DType::BF16 | DType::F16 | DType::F32) {
         return Ok(None);
     }
-    let q_width = sparse.token_ids().dim(1)?;
-    if !logits.device().is_cuda() || !logits.device().same_device(sparse.token_ids().device()) {
+    if !logits.device().is_cuda()
+        || matches!(
+            input.proposal.as_device(),
+            Some(tokens)
+                if tokens.dtype() != DType::U32
+                    || tokens.dims() != [drafts]
+                    || !tokens.is_contiguous()
+                    || !logits.device().same_device(tokens.device())
+        )
+        || matches!(
+            &distribution,
+            SparseRejectionCandidateDistribution::Sparse { token_ids, .. }
+                if !logits.device().same_device(token_ids.device())
+        )
+    {
         return Ok(None);
     }
     Ok(Some(SparseRejectionCandidate {
         input_idx,
         logits,
         proposal: input.proposal,
-        q_token_ids: sparse.token_ids().contiguous()?,
-        q_probs: sparse.probs().contiguous()?,
+        distribution,
         plan,
         drafts,
         vocab,
-        q_width,
     }))
 }
 
 #[cfg(feature = "cuda")]
-pub(crate) fn sparse_rejection_device_verify_batch(
-    inputs: &[SparseRejectionVerifyInput<'_>],
-    batched_target_logits: Option<&Tensor>,
-    rng: &Arc<std::sync::Mutex<Isaac64Rng>>,
-) -> Result<Vec<Option<DeviceVerification>>> {
+struct SparseRejectionPendingCandidate {
+    input_idx: usize,
+    drafts: usize,
+    vocab: usize,
+    accept_uniforms: Vec<f32>,
+    sample_uniform: f32,
+}
+
+#[cfg(feature = "cuda")]
+pub(crate) struct SparseRejectionDeviceBatchSubmission {
+    input_count: usize,
+    candidates: Vec<SparseRejectionPendingCandidate>,
+    submission: crate::cuda::speculative_rejection::CudaSparseRejectionSubmission,
+}
+
+#[cfg(feature = "cuda")]
+fn decode_sparse_rejection_row(
+    candidate: SparseRejectionPendingCandidate,
+    row: crate::cuda::speculative_rejection::SparseRejectionRow,
+) -> Result<DeviceVerification> {
     use crate::cuda::speculative_rejection::{
-        sparse_rejection_cuda, SparseRejectionInput, SparseRejectionMode,
         SPARSE_REJECTION_INVALID_VALUE, SPARSE_REJECTION_STATUS_INVALID_Q,
         SPARSE_REJECTION_STATUS_INVALID_RNG, SPARSE_REJECTION_STATUS_INVALID_TARGET,
         SPARSE_REJECTION_STATUS_NEEDS_CPU, SPARSE_REJECTION_STATUS_OK,
     };
 
-    let mut outputs = std::iter::repeat_with(|| None)
-        .take(inputs.len())
-        .collect::<Vec<_>>();
-    let mut candidates = Vec::new();
-    for (input_idx, input) in inputs.iter().enumerate() {
-        if let Some(candidate) = sparse_rejection_candidate(input_idx, input)? {
-            candidates.push(candidate);
+    match row.status {
+        SPARSE_REJECTION_STATUS_OK => {
+            let accepted_drafts =
+                usize::try_from(row.accepted_count).map_err(candle_core::Error::wrap)?;
+            if row.accepted_count == SPARSE_REJECTION_INVALID_VALUE
+                || row.continuation == SPARSE_REJECTION_INVALID_VALUE
+                || accepted_drafts > candidate.drafts
+                || usize::try_from(row.continuation).map_err(candle_core::Error::wrap)?
+                    >= candidate.vocab
+            {
+                candle_core::bail!(
+                    "sparse CUDA verification returned an invalid outcome: accepted={}, continuation={}, drafts={}, vocab={}",
+                    row.accepted_count,
+                    row.continuation,
+                    candidate.drafts,
+                    candidate.vocab
+                );
+            }
+            metrics::counter!("mistralrs_speculative_sparse_gpu_verify_total").increment(1);
+            Ok(DeviceVerification::SparseRejection {
+                accepted_drafts,
+                continuation_token: row.continuation,
+            })
         }
+        SPARSE_REJECTION_STATUS_NEEDS_CPU => {
+            metrics::counter!("mistralrs_speculative_sparse_gpu_fallback_total").increment(1);
+            Ok(DeviceVerification::SparseRejectionCpuFallback(
+                SparseRejectionFallbackUniforms {
+                    accept: candidate.accept_uniforms,
+                    sample: candidate.sample_uniform,
+                },
+            ))
+        }
+        SPARSE_REJECTION_STATUS_INVALID_Q => {
+            candle_core::bail!("sparse CUDA verification rejected invalid proposal probabilities");
+        }
+        SPARSE_REJECTION_STATUS_INVALID_TARGET => {
+            candle_core::bail!(
+                "sparse CUDA verification rejected invalid target logits or sampling parameters"
+            );
+        }
+        SPARSE_REJECTION_STATUS_INVALID_RNG => {
+            candle_core::bail!("sparse CUDA verification received an invalid random draw");
+        }
+        status => candle_core::bail!("sparse CUDA verification returned unknown status {status}"),
     }
-    let candidate_uniforms = {
-        let mut rng = rng.lock().expect("could not lock rng mutex");
-        candidates
-            .iter()
-            .map(|candidate| {
-                (
-                    (0..candidate.drafts)
-                        .map(|_| rng.random::<f32>())
-                        .collect::<Vec<_>>(),
-                    rng.random::<f32>(),
-                )
-            })
-            .collect::<Vec<_>>()
-    };
-    let mut pending = vec![true; candidates.len()];
-    while let Some(seed_idx) = pending.iter().position(|pending| *pending) {
-        let seed = &candidates[seed_idx];
-        let top_k_mode = seed.plan.top_k > 0;
-        let group_indices = candidates
-            .iter()
-            .enumerate()
-            .filter_map(|(idx, candidate)| {
-                (pending[idx]
-                    && candidate.drafts == seed.drafts
-                    && candidate.vocab == seed.vocab
-                    && candidate.q_width == seed.q_width
-                    && (candidate.plan.top_k > 0) == top_k_mode
-                    && (!top_k_mode || candidate.logits.dtype() == seed.logits.dtype())
-                    && candidate.logits.device().same_device(seed.logits.device()))
-                .then_some(idx)
-            })
-            .collect::<Vec<_>>();
-        for &idx in &group_indices {
-            pending[idx] = false;
-        }
+}
 
-        let group = group_indices
-            .iter()
-            .map(|&idx| &candidates[idx])
-            .collect::<Vec<_>>();
-        let batch = group.len();
-        let drafts = seed.drafts;
-        let device = seed.logits.device();
-        let mode = if top_k_mode {
-            SparseRejectionMode::BoundedTopK {
-                max_top_k: group
-                    .iter()
-                    .map(|row| row.plan.top_k)
-                    .max()
-                    .expect("sparse rejection group is non-empty"),
-            }
-        } else {
-            SparseRejectionMode::Categorical
-        };
-        let batched_target_logits = batched_target_logits.filter(|batched| {
-            is_complete_ordered_sparse_group(
-                inputs.len(),
-                candidates.iter().map(|candidate| candidate.input_idx),
-                group_indices.iter().copied(),
-            ) && packed_target_shape_matches(batched.dims(), batch, drafts, seed.vocab)
-                && batched.device().is_cuda()
-                && batched.device().same_device(device)
-                && group.iter().all(|candidate| {
-                    candidate.logits.dtype() == batched.dtype()
-                        && candidate.logits.device().same_device(batched.device())
-                })
-        });
-        let target_logits = match (mode, batched_target_logits) {
-            (SparseRejectionMode::BoundedTopK { .. }, Some(batched)) => batched.contiguous()?,
-            (SparseRejectionMode::BoundedTopK { .. }, None) => {
-                let logits = group
-                    .iter()
-                    .map(|row| row.logits.contiguous())
-                    .collect::<Result<Vec<_>>>()?;
-                batch_sparse_rejection_logits(logits)?
-            }
-            (SparseRejectionMode::Categorical, Some(batched)) => {
-                batched.to_dtype(DType::F32)?.contiguous()?
-            }
-            (SparseRejectionMode::Categorical, None) => {
-                let logits = group
-                    .iter()
-                    .map(|row| row.logits.to_dtype(DType::F32)?.contiguous())
-                    .collect::<Result<Vec<_>>>()?;
-                batch_sparse_rejection_logits(logits)?
-            }
-        };
+#[cfg(feature = "cuda")]
+fn decode_sparse_rejection_completion(
+    input_count: usize,
+    candidates: Vec<SparseRejectionPendingCandidate>,
+    completion: crate::cuda::speculative_rejection::SparseRejectionCompletion,
+) -> Result<SparseRejectionDeviceVerifyOutput> {
+    if completion.rows.len() != candidates.len()
+        || completion.draft_tokens.len() != candidates.len()
+    {
+        candle_core::bail!("sparse CUDA verification returned the wrong batch size");
+    }
+    let mut outputs = std::iter::repeat_with(|| None)
+        .take(input_count)
+        .collect::<Vec<_>>();
+    let mut materialized_proposals = std::iter::repeat_with(|| None)
+        .take(input_count)
+        .collect::<Vec<_>>();
+    for ((candidate, row), proposal) in candidates
+        .into_iter()
+        .zip(completion.rows)
+        .zip(completion.draft_tokens)
+    {
+        let input_idx = candidate.input_idx;
+        materialized_proposals[input_idx] = Some(proposal);
+        outputs[input_idx] = Some(decode_sparse_rejection_row(candidate, row)?);
+    }
+    Ok(SparseRejectionDeviceVerifyOutput {
+        verifications: outputs,
+        materialized_proposals,
+    })
+}
+
+#[cfg(feature = "cuda")]
+fn sparse_rejection_candidates<'a>(
+    inputs: &'a [SparseRejectionVerifyInput<'a>],
+) -> Result<Vec<SparseRejectionCandidate<'a>>> {
+    inputs
+        .iter()
+        .enumerate()
+        .filter_map(|(input_idx, input)| sparse_rejection_candidate(input_idx, input).transpose())
+        .collect()
+}
+
+#[cfg(feature = "cuda")]
+fn sparse_rejection_same_group(
+    candidate: &SparseRejectionCandidate<'_>,
+    seed: &SparseRejectionCandidate<'_>,
+) -> bool {
+    let top_k_mode = seed.plan.top_k > 0;
+    candidate.drafts == seed.drafts
+        && candidate.vocab == seed.vocab
+        && candidate.distribution.width() == seed.distribution.width()
+        && candidate.distribution.is_deterministic() == seed.distribution.is_deterministic()
+        && (candidate.plan.top_k > 0) == top_k_mode
+        && (!top_k_mode || candidate.logits.dtype() == seed.logits.dtype())
+        && candidate.logits.device().same_device(seed.logits.device())
+        && match (candidate.proposal.as_device(), seed.proposal.as_device()) {
+            (Some(candidate), Some(seed)) => candidate.device().same_device(seed.device()),
+            (None, None) => true,
+            _ => false,
+        }
+}
+
+#[cfg(feature = "cuda")]
+fn sparse_rejection_uniforms(
+    candidates: &[SparseRejectionCandidate<'_>],
+    inputs: &[SparseRejectionVerifyInput<'_>],
+    rng: &Arc<std::sync::Mutex<Isaac64Rng>>,
+) -> Vec<(Vec<f32>, f32)> {
+    candidates
+        .iter()
+        .map(|candidate| {
+            let rng = inputs[candidate.input_idx].seq.sampling_rng(rng);
+            let mut rng = rng.lock().expect("could not lock rng mutex");
+            (
+                (0..candidate.drafts).map(|_| rng.random::<f32>()).collect(),
+                rng.random::<f32>(),
+            )
+        })
+        .collect()
+}
+
+#[cfg(feature = "cuda")]
+fn submit_sparse_rejection_group(
+    input_count: usize,
+    candidates: &[SparseRejectionCandidate<'_>],
+    group_indices: &[usize],
+    candidate_uniforms: &[(Vec<f32>, f32)],
+    batched_target_logits: Option<&Tensor>,
+    workspace: &mut Option<crate::cuda::speculative_rejection::CudaSparseRejectionWorkspace>,
+) -> Result<SparseRejectionDeviceBatchSubmission> {
+    use crate::cuda::speculative_rejection::{
+        sparse_rejection_cuda_submit, SparseRejectionMode, SparseRejectionProposalInput,
+        SparseRejectionWorkspaceInput,
+    };
+
+    let seed = &candidates[group_indices[0]];
+    let group = group_indices
+        .iter()
+        .map(|&idx| &candidates[idx])
+        .collect::<Vec<_>>();
+    let batch = group.len();
+    let drafts = seed.drafts;
+    let device = seed.logits.device();
+    let mode = if seed.plan.top_k > 0 {
+        SparseRejectionMode::BoundedTopK {
+            max_top_k: group
+                .iter()
+                .map(|row| row.plan.top_k)
+                .max()
+                .expect("sparse rejection group is non-empty"),
+        }
+    } else {
+        SparseRejectionMode::Categorical
+    };
+    let batched_target_logits = batched_target_logits.filter(|batched| {
+        is_complete_ordered_sparse_group(
+            input_count,
+            candidates.iter().map(|candidate| candidate.input_idx),
+            group_indices.iter().copied(),
+        ) && packed_target_shape_matches(batched.dims(), batch, drafts, seed.vocab)
+            && batched.device().is_cuda()
+            && batched.device().same_device(device)
+            && group.iter().all(|candidate| {
+                candidate.logits.dtype() == batched.dtype()
+                    && candidate.logits.device().same_device(batched.device())
+            })
+    });
+    let target_logits = match (mode, batched_target_logits) {
+        (SparseRejectionMode::BoundedTopK { .. }, Some(batched)) => batched.contiguous()?,
+        (SparseRejectionMode::BoundedTopK { .. }, None) => {
+            let logits = group
+                .iter()
+                .map(|row| row.logits.contiguous())
+                .collect::<Result<Vec<_>>>()?;
+            batch_sparse_rejection_logits(logits)?
+        }
+        (SparseRejectionMode::Categorical, Some(batched)) => {
+            batched.to_dtype(DType::F32)?.contiguous()?
+        }
+        (SparseRejectionMode::Categorical, None) => {
+            let logits = group
+                .iter()
+                .map(|row| row.logits.to_dtype(DType::F32)?.contiguous())
+                .collect::<Result<Vec<_>>>()?;
+            batch_sparse_rejection_logits(logits)?
+        }
+    };
+    let sparse_q = if seed.distribution.is_deterministic() {
+        None
+    } else {
         let q_token_rows = group
             .iter()
-            .map(|row| row.q_token_ids.unsqueeze(0))
+            .map(|row| match &row.distribution {
+                SparseRejectionCandidateDistribution::Sparse { token_ids, .. } => {
+                    token_ids.unsqueeze(0)
+                }
+                SparseRejectionCandidateDistribution::Deterministic => {
+                    unreachable!("sparse rejection groups have one proposal distribution kind")
+                }
+            })
             .collect::<Result<Vec<_>>>()?;
         let q_prob_rows = group
             .iter()
-            .map(|row| row.q_probs.unsqueeze(0))
+            .map(|row| match &row.distribution {
+                SparseRejectionCandidateDistribution::Sparse { probs, .. } => probs.unsqueeze(0),
+                SparseRejectionCandidateDistribution::Deterministic => {
+                    unreachable!("sparse rejection groups have one proposal distribution kind")
+                }
+            })
             .collect::<Result<Vec<_>>>()?;
-        let q_token_ids = Tensor::cat(&q_token_rows.iter().collect::<Vec<_>>(), 0)?;
-        let q_probs = Tensor::cat(&q_prob_rows.iter().collect::<Vec<_>>(), 0)?;
-        let draft_tokens = Tensor::from_vec(
+        Some((
+            Tensor::cat(&q_token_rows.iter().collect::<Vec<_>>(), 0)?,
+            Tensor::cat(&q_prob_rows.iter().collect::<Vec<_>>(), 0)?,
+        ))
+    };
+    let proposal = sparse_q.as_ref().map_or(
+        SparseRejectionProposalInput::Deterministic,
+        |(token_ids, probs)| SparseRejectionProposalInput::Sparse { token_ids, probs },
+    );
+    let draft_tokens = if seed.proposal.as_device().is_some() {
+        let rows = group
+            .iter()
+            .map(|row| {
+                row.proposal
+                    .as_device()
+                    .expect("sparse rejection group has one proposal storage kind")
+            })
+            .collect::<Vec<_>>();
+        let tokens = match rows.as_slice() {
+            [row] => row.unsqueeze(0)?.contiguous()?,
+            _ => Tensor::stack(&rows, 0)?.contiguous()?,
+        };
+        SparseRejectionDraftTokens::Device(tokens)
+    } else {
+        SparseRejectionDraftTokens::Host(
             group
                 .iter()
-                .flat_map(|row| row.proposal.iter().copied())
-                .collect::<Vec<_>>(),
-            (batch, drafts),
-            device,
-        )?;
-        let inverse_temperatures = Tensor::from_vec(
-            group
-                .iter()
-                .map(|row| row.plan.inverse_temperature)
-                .collect::<Vec<_>>(),
-            (batch,),
-            device,
-        )?;
-        let target_top_k = Tensor::from_vec(
-            group
-                .iter()
-                .map(|row| u32::try_from(row.plan.top_k).map_err(candle_core::Error::wrap))
-                .collect::<Result<Vec<_>>>()?,
-            (batch,),
-            device,
-        )?;
-        let top_p = Tensor::from_vec(
-            group.iter().map(|row| row.plan.top_p).collect::<Vec<_>>(),
-            (batch,),
-            device,
-        )?;
-        let min_p = Tensor::from_vec(
-            group.iter().map(|row| row.plan.min_p).collect::<Vec<_>>(),
-            (batch,),
-            device,
-        )?;
-        let accept_uniforms = Tensor::from_vec(
-            group_indices
-                .iter()
-                .flat_map(|&idx| candidate_uniforms[idx].0.iter().copied())
-                .collect::<Vec<_>>(),
-            (batch, drafts),
-            device,
-        )?;
-        let sample_uniforms = Tensor::from_vec(
-            group_indices
-                .iter()
-                .map(|&idx| candidate_uniforms[idx].1)
-                .collect::<Vec<_>>(),
-            (batch,),
-            device,
-        )?;
-        let rows = sparse_rejection_cuda(SparseRejectionInput {
+                .flat_map(|row| {
+                    row.proposal
+                        .as_host()
+                        .expect("sparse rejection group has one proposal storage kind")
+                        .iter()
+                        .copied()
+                })
+                .collect(),
+        )
+    };
+    let inverse_temperatures = group
+        .iter()
+        .map(|row| row.plan.inverse_temperature)
+        .collect::<Vec<_>>();
+    let target_top_k = group
+        .iter()
+        .map(|row| u32::try_from(row.plan.top_k).map_err(candle_core::Error::wrap))
+        .collect::<Result<Vec<_>>>()?;
+    let top_p = group.iter().map(|row| row.plan.top_p).collect::<Vec<_>>();
+    let min_p = group.iter().map(|row| row.plan.min_p).collect::<Vec<_>>();
+    let accept_uniforms = group_indices
+        .iter()
+        .flat_map(|&idx| candidate_uniforms[idx].0.iter().copied())
+        .collect::<Vec<_>>();
+    let sample_uniforms = group_indices
+        .iter()
+        .map(|&idx| candidate_uniforms[idx].1)
+        .collect::<Vec<_>>();
+    let submission = sparse_rejection_cuda_submit(
+        SparseRejectionWorkspaceInput {
             target_logits: &target_logits,
-            draft_tokens: &draft_tokens,
-            q_token_ids: &q_token_ids,
-            q_probs: &q_probs,
+            proposal,
+            draft_tokens: draft_tokens.as_input(),
             inverse_temperatures: &inverse_temperatures,
             target_top_k: &target_top_k,
             top_p: &top_p,
@@ -443,58 +648,119 @@ pub(crate) fn sparse_rejection_device_verify_batch(
             accept_uniforms: &accept_uniforms,
             sample_uniforms: &sample_uniforms,
             mode,
-        })?
-        .to_rows()?;
-        if rows.len() != group.len() {
-            candle_core::bail!("sparse CUDA verification returned the wrong batch size");
+        },
+        workspace,
+    )?;
+    Ok(SparseRejectionDeviceBatchSubmission {
+        input_count,
+        candidates: group_indices
+            .iter()
+            .map(|&idx| SparseRejectionPendingCandidate {
+                input_idx: candidates[idx].input_idx,
+                drafts: candidates[idx].drafts,
+                vocab: candidates[idx].vocab,
+                accept_uniforms: candidate_uniforms[idx].0.clone(),
+                sample_uniform: candidate_uniforms[idx].1,
+            })
+            .collect(),
+        submission,
+    })
+}
+
+#[cfg(feature = "cuda")]
+pub(crate) fn complete_sparse_rejection_device_verify_batch(
+    pending: SparseRejectionDeviceBatchSubmission,
+    workspace: &mut Option<crate::cuda::speculative_rejection::CudaSparseRejectionWorkspace>,
+) -> Result<SparseRejectionDeviceVerifyOutput> {
+    use crate::cuda::speculative_rejection::sparse_rejection_cuda_complete;
+
+    let completion = sparse_rejection_cuda_complete(workspace, &pending.submission)?;
+    decode_sparse_rejection_completion(pending.input_count, pending.candidates, completion)
+}
+
+#[cfg(feature = "cuda")]
+pub(crate) fn try_submit_sparse_rejection_device_verify_batch(
+    inputs: &[SparseRejectionVerifyInput<'_>],
+    batched_target_logits: Option<&Tensor>,
+    rng: &Arc<std::sync::Mutex<Isaac64Rng>>,
+    workspace: &mut Option<crate::cuda::speculative_rejection::CudaSparseRejectionWorkspace>,
+) -> Result<Option<SparseRejectionDeviceBatchSubmission>> {
+    let candidates = sparse_rejection_candidates(inputs)?;
+    let Some(seed) = candidates.first() else {
+        return Ok(None);
+    };
+    if candidates.len() != inputs.len()
+        || !candidates
+            .iter()
+            .all(|candidate| sparse_rejection_same_group(candidate, seed))
+    {
+        return Ok(None);
+    }
+    let candidate_uniforms = sparse_rejection_uniforms(&candidates, inputs, rng);
+    let group_indices = (0..candidates.len()).collect::<Vec<_>>();
+    submit_sparse_rejection_group(
+        inputs.len(),
+        &candidates,
+        &group_indices,
+        &candidate_uniforms,
+        batched_target_logits,
+        workspace,
+    )
+    .map(Some)
+}
+
+#[cfg(feature = "cuda")]
+pub(crate) fn sparse_rejection_device_verify_batch(
+    inputs: &[SparseRejectionVerifyInput<'_>],
+    batched_target_logits: Option<&Tensor>,
+    rng: &Arc<std::sync::Mutex<Isaac64Rng>>,
+    workspace: &mut Option<crate::cuda::speculative_rejection::CudaSparseRejectionWorkspace>,
+) -> Result<SparseRejectionDeviceVerifyOutput> {
+    let candidates = sparse_rejection_candidates(inputs)?;
+    let candidate_uniforms = sparse_rejection_uniforms(&candidates, inputs, rng);
+    let mut outputs = std::iter::repeat_with(|| None)
+        .take(inputs.len())
+        .collect::<Vec<_>>();
+    let mut materialized_proposals = std::iter::repeat_with(|| None)
+        .take(inputs.len())
+        .collect::<Vec<_>>();
+    let mut remaining = vec![true; candidates.len()];
+    while let Some(seed_idx) = remaining.iter().position(|pending| *pending) {
+        let seed = &candidates[seed_idx];
+        let group_indices = candidates
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, candidate)| {
+                (remaining[idx] && sparse_rejection_same_group(candidate, seed)).then_some(idx)
+            })
+            .collect::<Vec<_>>();
+        for &idx in &group_indices {
+            remaining[idx] = false;
         }
-        for (candidate, row) in group.into_iter().zip(rows) {
-            match row.status {
-                SPARSE_REJECTION_STATUS_OK => {
-                    let accepted_drafts =
-                        usize::try_from(row.accepted_count).map_err(candle_core::Error::wrap)?;
-                    if row.accepted_count == SPARSE_REJECTION_INVALID_VALUE
-                        || row.continuation == SPARSE_REJECTION_INVALID_VALUE
-                        || accepted_drafts > candidate.drafts
-                        || usize::try_from(row.continuation).map_err(candle_core::Error::wrap)?
-                            >= candidate.vocab
-                    {
-                        candle_core::bail!(
-                            "sparse CUDA verification returned an invalid outcome: accepted={}, continuation={}, drafts={}, vocab={}",
-                            row.accepted_count,
-                            row.continuation,
-                            candidate.drafts,
-                            candidate.vocab
-                        );
-                    }
-                    outputs[candidate.input_idx] = Some(DeviceVerification::SparseRejection {
-                        accepted_drafts,
-                        continuation_token: row.continuation,
-                    });
-                    metrics::counter!("mistralrs_speculative_sparse_gpu_verify_total").increment(1);
-                }
-                SPARSE_REJECTION_STATUS_NEEDS_CPU => {
-                    metrics::counter!("mistralrs_speculative_sparse_gpu_fallback_total")
-                        .increment(1);
-                }
-                SPARSE_REJECTION_STATUS_INVALID_Q => {
-                    candle_core::bail!(
-                        "sparse CUDA verification rejected invalid proposal probabilities"
-                    );
-                }
-                SPARSE_REJECTION_STATUS_INVALID_TARGET => {
-                    candle_core::bail!("sparse CUDA verification rejected invalid target logits or sampling parameters");
-                }
-                SPARSE_REJECTION_STATUS_INVALID_RNG => {
-                    candle_core::bail!("sparse CUDA verification received an invalid random draw");
-                }
-                status => {
-                    candle_core::bail!("sparse CUDA verification returned unknown status {status}");
-                }
+        let pending = submit_sparse_rejection_group(
+            inputs.len(),
+            &candidates,
+            &group_indices,
+            &candidate_uniforms,
+            batched_target_logits,
+            workspace,
+        )?;
+        let completed = complete_sparse_rejection_device_verify_batch(pending, workspace)?;
+        for (idx, verification) in completed.verifications.into_iter().enumerate() {
+            if verification.is_some() {
+                outputs[idx] = verification;
+            }
+        }
+        for (idx, proposal) in completed.materialized_proposals.into_iter().enumerate() {
+            if proposal.is_some() {
+                materialized_proposals[idx] = proposal;
             }
         }
     }
-    Ok(outputs)
+    Ok(SparseRejectionDeviceVerifyOutput {
+        verifications: outputs,
+        materialized_proposals,
+    })
 }
 
 fn device_token_logprobs(token: u32) -> Logprobs {
@@ -520,6 +786,12 @@ pub(crate) enum DeviceVerification {
         accepted_drafts: usize,
         continuation_token: u32,
     },
+    SparseRejectionCpuFallback(SparseRejectionFallbackUniforms),
+}
+
+pub(crate) struct SparseRejectionFallbackUniforms {
+    accept: Vec<f32>,
+    sample: f32,
 }
 
 pub(crate) struct VerificationInput {
@@ -539,6 +811,7 @@ pub(crate) async fn finish_verified_step<P: Pipeline>(
     disable_eos_stop: bool,
     rng: Arc<std::sync::Mutex<Isaac64Rng>>,
 ) -> Result<VerificationOutcome> {
+    let rng = seq.sampling_rng(&rng);
     let VerificationInput {
         verify_logits,
         proposal,
@@ -567,28 +840,30 @@ pub(crate) async fn finish_verified_step<P: Pipeline>(
 
     validate_device_verification(device_verification.as_ref(), proposal.len())?;
 
-    if device_verification.is_none() {
-        if let Some(proposal_distribution) = proposal_distribution {
-            if stochastic_verification_allowed(
-                seq.sampler().is_argmax(),
-                !matches!(seq.recognizer, SequenceRecognizer::None),
-                seq.tool_call_state.is_some(),
-            ) {
-                return finish_verified_step_stochastic(
-                    pipeline,
-                    seq,
-                    verify_logits,
-                    proposal,
-                    proposal_distribution,
-                    base_len,
-                    prefix_cacher,
-                    eos_tok,
-                    return_logprobs,
-                    rng,
-                )
-                .await;
-            }
-        }
+    let fallback_uniforms = match &device_verification {
+        Some(DeviceVerification::SparseRejectionCpuFallback(uniforms)) => Some(uniforms),
+        _ => None,
+    };
+    let stochastic = fallback_uniforms.is_some()
+        || (device_verification.is_none() && proposal_distribution.is_some());
+    if stochastic && stochastic_verification_allowed_for_sequence(seq) {
+        return finish_verified_step_stochastic(
+            pipeline,
+            seq,
+            verify_logits,
+            proposal,
+            proposal_distribution,
+            base_len,
+            prefix_cacher,
+            eos_tok,
+            return_logprobs,
+            rng,
+            fallback_uniforms,
+        )
+        .await;
+    }
+    if fallback_uniforms.is_some() {
+        candle_core::bail!("sparse CUDA verification cannot fall back under constrained sampling");
     }
 
     let mut accepted = 0usize;
@@ -606,6 +881,9 @@ pub(crate) async fn finish_verified_step<P: Pipeline>(
                 } else {
                     (device_token_logprobs(*continuation_token), Some(false))
                 }
+            }
+            Some(DeviceVerification::SparseRejectionCpuFallback(_)) => {
+                unreachable!("sparse CPU fallback returned before token verification")
             }
             None => {
                 let row = logit_row(&verify_logits, idx)?;
@@ -667,6 +945,9 @@ pub(crate) async fn finish_verified_step<P: Pipeline>(
         Some(DeviceVerification::SparseRejection {
             continuation_token, ..
         }) => device_token_logprobs(*continuation_token),
+        Some(DeviceVerification::SparseRejectionCpuFallback(_)) => {
+            unreachable!("sparse CPU fallback returned before continuation sampling")
+        }
         None => {
             let row = logit_row(&verify_logits, accepted)?;
             sample_sequence(
@@ -722,6 +1003,13 @@ fn validate_device_verification(
                 "speculative CUDA verification accepted {accepted_drafts} of {proposal_len} drafts"
             );
         }
+        Some(DeviceVerification::SparseRejectionCpuFallback(uniforms))
+            if uniforms.accept.len() != proposal_len
+                || uniforms.accept.iter().any(|draw| !valid_uniform(*draw))
+                || !valid_uniform(uniforms.sample) =>
+        {
+            candle_core::bail!("sparse CUDA verification returned invalid fallback uniforms");
+        }
         _ => {}
     }
     Ok(())
@@ -760,7 +1048,16 @@ fn stochastic_verification_allowed(
     !is_argmax && !has_constraint && !has_tool_call_state
 }
 
+pub(crate) fn stochastic_verification_allowed_for_sequence(seq: &Sequence) -> bool {
+    stochastic_verification_allowed(
+        seq.sampler().is_argmax(),
+        !matches!(seq.recognizer, SequenceRecognizer::None),
+        seq.tool_call_state.is_some(),
+    )
+}
+
 enum PreparedProposalDistribution {
+    Deterministic,
     Logits(Tensor),
     Sparse {
         token_ids: Vec<Vec<u32>>,
@@ -785,12 +1082,14 @@ impl PreparedProposalDistribution {
     fn probability_row(
         &self,
         row: usize,
+        draft: u32,
         sampler: &Sampler,
         context: &[u32],
         prompt_len: usize,
         vocab: usize,
     ) -> Result<ProposalProbabilityRow> {
         match self {
+            Self::Deterministic => Ok(ProposalProbabilityRow::Sparse(vec![(draft as usize, 1.0)])),
             Self::Logits(logits) => {
                 let candidate_row = logit_row(logits, row)?;
                 let probs = sampler.speculative_candidate_probs(
@@ -936,15 +1235,18 @@ async fn finish_verified_step_stochastic<P: Pipeline>(
     seq: &mut Sequence,
     verify_logits: Tensor,
     proposal: Vec<u32>,
-    proposal_distribution: SpeculativeProposalDistribution,
+    proposal_distribution: Option<SpeculativeProposalDistribution>,
     base_len: usize,
     prefix_cacher: &mut PrefixCacheManagerV2,
     eos_tok: Option<&[u32]>,
     return_logprobs: bool,
     rng: Arc<std::sync::Mutex<Isaac64Rng>>,
+    fallback_uniforms: Option<&SparseRejectionFallbackUniforms>,
 ) -> Result<VerificationOutcome> {
-    let proposal_distribution =
-        PreparedProposalDistribution::new(proposal_distribution, proposal.len())?;
+    let proposal_distribution = match proposal_distribution {
+        Some(distribution) => PreparedProposalDistribution::new(distribution, proposal.len())?,
+        None => PreparedProposalDistribution::Deterministic,
+    };
     let mut accepted = 0usize;
     for (idx, draft) in proposal.iter().copied().enumerate() {
         let target_row = logit_row(&verify_logits, idx)?;
@@ -956,6 +1258,7 @@ async fn finish_verified_step_stochastic<P: Pipeline>(
         )?;
         let candidate_probs = proposal_distribution.probability_row(
             idx,
+            draft,
             &sampler,
             seq.get_toks(),
             seq.prompt_tokens(),
@@ -978,9 +1281,12 @@ async fn finish_verified_step_stochastic<P: Pipeline>(
         } else {
             (p_i / q_i).min(1.0)
         };
-        let draw = {
-            let mut rng = rng.lock().expect("could not lock rng mutex");
-            rng.random::<f32>()
+        let draw = match fallback_uniforms {
+            Some(uniforms) => uniforms.accept[idx],
+            None => {
+                let mut rng = rng.lock().expect("could not lock rng mutex");
+                rng.random::<f32>()
+            }
         };
 
         if accepts_draft(draw, accept_prob) {
@@ -1009,12 +1315,21 @@ async fn finish_verified_step_stochastic<P: Pipeline>(
         if normalize_probs(&mut adjusted_probs).is_err() {
             adjusted_probs = target_probs.sampling;
         }
-        let sampled = sampler.sample_from_probs(
-            &adjusted_probs,
-            &target_probs.reporting,
-            return_logprobs,
-            rng.clone(),
-        )?;
+        let sampled = match fallback_uniforms {
+            Some(uniforms) => sample_from_probs_with_uniform(
+                &sampler,
+                &adjusted_probs,
+                &target_probs.reporting,
+                return_logprobs,
+                uniforms.sample,
+            )?,
+            None => sampler.sample_from_probs(
+                &adjusted_probs,
+                &target_probs.reporting,
+                return_logprobs,
+                rng.clone(),
+            )?,
+        };
         let sampled_token = sampled.token;
         let keep_len = base_len + 1 + accepted;
         finish_or_add_toks_to_seq(pipeline, prefix_cacher, seq, sampled, eos_tok, true).await?;
@@ -1042,12 +1357,21 @@ async fn finish_verified_step_stochastic<P: Pipeline>(
         seq.get_toks(),
         seq.prompt_tokens(),
     )?;
-    let continuation = sampler.sample_from_probs(
-        &target_probs.sampling,
-        &target_probs.reporting,
-        return_logprobs,
-        rng,
-    )?;
+    let continuation = match fallback_uniforms {
+        Some(uniforms) => sample_from_probs_with_uniform(
+            &sampler,
+            &target_probs.sampling,
+            &target_probs.reporting,
+            return_logprobs,
+            uniforms.sample,
+        )?,
+        None => sampler.sample_from_probs(
+            &target_probs.sampling,
+            &target_probs.reporting,
+            return_logprobs,
+            rng,
+        )?,
+    };
     let continuation_token = continuation.token;
     finish_or_add_toks_to_seq(pipeline, prefix_cacher, seq, continuation, eos_tok, true).await?;
 
@@ -1113,6 +1437,51 @@ fn normalize_probs(probs: &mut [f32]) -> Result<()> {
     Ok(())
 }
 
+fn sample_from_probs_with_uniform(
+    sampler: &Sampler,
+    sampling_probs: &[f32],
+    reporting_probs: &[f32],
+    return_logprobs: bool,
+    uniform: f32,
+) -> Result<Logprobs> {
+    if !valid_uniform(uniform) {
+        candle_core::bail!("invalid speculative fallback sampling uniform {uniform}");
+    }
+    let mut total = 0.0f32;
+    let mut last_positive = None;
+    for (token, probability) in sampling_probs.iter().copied().enumerate() {
+        if !probability.is_finite() || probability < 0.0 {
+            candle_core::bail!(
+                "invalid speculative fallback sampling probability {probability} at token {token}"
+            );
+        }
+        if probability > 0.0 {
+            last_positive = Some(token);
+        }
+        total += probability;
+    }
+    if !total.is_finite() || total <= 0.0 {
+        candle_core::bail!("all speculative fallback sampling probabilities are zero");
+    }
+    let target = uniform * total;
+    let mut cumulative = 0.0f32;
+    let token = sampling_probs
+        .iter()
+        .copied()
+        .enumerate()
+        .find_map(|(token, probability)| {
+            cumulative += probability;
+            (target < cumulative).then_some(token)
+        })
+        .or(last_positive)
+        .expect("positive fallback probability was validated");
+    sampler.logprobs_from_probs(token as u32, reporting_probs, return_logprobs)
+}
+
+fn valid_uniform(uniform: f32) -> bool {
+    uniform.is_finite() && (0.0..1.0).contains(&uniform)
+}
+
 fn accepts_draft(draw: f32, accept_prob: f32) -> bool {
     draw < accept_prob
 }
@@ -1122,7 +1491,7 @@ mod tests {
     use super::{
         accepts_draft, normalize_probs, normalize_sparse_row, packed_target_shape_matches,
         partition_device_tokens, stochastic_verification_allowed, validate_device_verification,
-        DeviceVerification, ProposalProbabilityRow,
+        DeviceVerification, ProposalProbabilityRow, SparseRejectionFallbackUniforms,
     };
 
     #[test]
@@ -1181,7 +1550,7 @@ mod tests {
     }
 
     #[test]
-    fn tool_sequences_use_per_row_target_sampling() {
+    fn stochastic_verification_excludes_argmax_constraints_and_tools() {
         assert!(stochastic_verification_allowed(false, false, false));
         assert!(!stochastic_verification_allowed(false, false, true));
         assert!(!stochastic_verification_allowed(false, true, false));
@@ -1200,6 +1569,91 @@ mod tests {
         let tokens = partition_device_tokens(vec![1, 2, 3, 4, 5, 6], &[2, 1, 3]).unwrap();
         assert_eq!(tokens, vec![vec![1, 2], vec![3], vec![4, 5, 6]]);
         assert!(partition_device_tokens(vec![1, 2], &[1, 2]).is_err());
+    }
+
+    #[cfg(feature = "cuda")]
+    #[test]
+    fn sparse_cuda_fallback_reuses_uniforms_in_input_order() -> candle_core::Result<()> {
+        use super::{decode_sparse_rejection_completion, SparseRejectionPendingCandidate};
+        use crate::cuda::speculative_rejection::{
+            SparseRejectionCompletion, SparseRejectionRow, SPARSE_REJECTION_INVALID_VALUE,
+            SPARSE_REJECTION_STATUS_NEEDS_CPU, SPARSE_REJECTION_STATUS_OK,
+        };
+
+        let completion = SparseRejectionCompletion {
+            rows: vec![
+                SparseRejectionRow {
+                    accepted_count: 1,
+                    continuation: 8,
+                    status: SPARSE_REJECTION_STATUS_OK,
+                },
+                SparseRejectionRow {
+                    accepted_count: SPARSE_REJECTION_INVALID_VALUE,
+                    continuation: SPARSE_REJECTION_INVALID_VALUE,
+                    status: SPARSE_REJECTION_STATUS_NEEDS_CPU,
+                },
+                SparseRejectionRow {
+                    accepted_count: 2,
+                    continuation: 9,
+                    status: SPARSE_REJECTION_STATUS_OK,
+                },
+            ],
+            draft_tokens: vec![vec![21, 22], vec![1, 2], vec![11, 12]],
+        };
+        let output = decode_sparse_rejection_completion(
+            3,
+            vec![
+                SparseRejectionPendingCandidate {
+                    input_idx: 2,
+                    drafts: 2,
+                    vocab: 10,
+                    accept_uniforms: vec![0.21, 0.22],
+                    sample_uniform: 0.23,
+                },
+                SparseRejectionPendingCandidate {
+                    input_idx: 0,
+                    drafts: 2,
+                    vocab: 10,
+                    accept_uniforms: vec![0.01, 0.02],
+                    sample_uniform: 0.03,
+                },
+                SparseRejectionPendingCandidate {
+                    input_idx: 1,
+                    drafts: 2,
+                    vocab: 10,
+                    accept_uniforms: vec![0.11, 0.12],
+                    sample_uniform: 0.13,
+                },
+            ],
+            completion,
+        )?;
+
+        let Some(DeviceVerification::SparseRejectionCpuFallback(uniforms)) =
+            output.verifications[0].as_ref()
+        else {
+            panic!("input zero must retain its CPU fallback draws")
+        };
+        assert_eq!(uniforms.accept, [0.01, 0.02]);
+        assert_eq!(uniforms.sample, 0.03);
+        assert!(matches!(
+            output.verifications[1],
+            Some(DeviceVerification::SparseRejection {
+                accepted_drafts: 2,
+                continuation_token: 9,
+            })
+        ));
+        assert!(matches!(
+            output.verifications[2],
+            Some(DeviceVerification::SparseRejection {
+                accepted_drafts: 1,
+                continuation_token: 8,
+            })
+        ));
+        assert_eq!(
+            output.materialized_proposals,
+            vec![Some(vec![1, 2]), Some(vec![11, 12]), Some(vec![21, 22])]
+        );
+        Ok(())
     }
 
     #[cfg(feature = "cuda")]
@@ -1281,6 +1735,36 @@ mod tests {
                 continuation_token: 0,
             }),
             7
+        )
+        .is_err());
+        assert!(validate_device_verification(
+            Some(&DeviceVerification::SparseRejectionCpuFallback(
+                SparseRejectionFallbackUniforms {
+                    accept: vec![0.25; 7],
+                    sample: 0.5,
+                },
+            )),
+            7,
+        )
+        .is_ok());
+        assert!(validate_device_verification(
+            Some(&DeviceVerification::SparseRejectionCpuFallback(
+                SparseRejectionFallbackUniforms {
+                    accept: vec![0.25; 6],
+                    sample: 0.5,
+                },
+            )),
+            7,
+        )
+        .is_err());
+        assert!(validate_device_verification(
+            Some(&DeviceVerification::SparseRejectionCpuFallback(
+                SparseRejectionFallbackUniforms {
+                    accept: vec![0.25; 7],
+                    sample: 1.0,
+                },
+            )),
+            7,
         )
         .is_err());
     }

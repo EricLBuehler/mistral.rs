@@ -72,11 +72,8 @@ pub(crate) fn cuda_graph_precapture_batches() -> impl Iterator<Item = usize> {
     (1..=CUDA_GRAPH_EXACT_BATCH_BUCKETS).chain(std::iter::once(CUDA_GRAPH_PRECAPTURE_MAX_BATCH))
 }
 
-pub(crate) fn cuda_graph_startup_capture_allowed(
-    has_speculative_proposer: bool,
-    q_len: usize,
-) -> bool {
-    q_len > 0 && (q_len == 1 || !has_speculative_proposer)
+pub(crate) fn cuda_graph_startup_capture_allowed(q_len: usize) -> bool {
+    q_len > 0
 }
 
 pub(crate) fn prepare_fa3_decode_schedules(
@@ -762,6 +759,7 @@ impl CudaDecodeGraphMetadataBuffers {
                 make_fa3_decode_state(
                     flashinfer,
                     seqlen_offsets.len(),
+                    seq_len,
                     kv_cache,
                     model_metadata,
                     activation_dtype,
@@ -3041,11 +3039,11 @@ mod tests {
     }
 
     #[test]
-    fn startup_precapture_defers_speculative_multi_token_widths() {
-        assert!(cuda_graph_startup_capture_allowed(true, 1));
-        assert!(!cuda_graph_startup_capture_allowed(true, 4));
-        assert!(!cuda_graph_startup_capture_allowed(true, 8));
-        assert!(cuda_graph_startup_capture_allowed(false, 8));
+    fn startup_precapture_accepts_decode_and_verification_widths() {
+        assert!(!cuda_graph_startup_capture_allowed(0));
+        assert!(cuda_graph_startup_capture_allowed(1));
+        assert!(cuda_graph_startup_capture_allowed(4));
+        assert!(cuda_graph_startup_capture_allowed(8));
     }
 
     #[test]

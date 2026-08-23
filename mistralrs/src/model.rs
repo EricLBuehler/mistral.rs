@@ -292,6 +292,7 @@ impl Model {
         let request = Request::Normal(Box::new(NormalRequest {
             messages,
             sampling_params: request.take_sampling_params(),
+            seed: None,
             response: tx,
             return_logprobs: request.return_logprobs(),
             is_streaming: true,
@@ -359,6 +360,7 @@ impl Model {
         let request = Request::Normal(Box::new(NormalRequest {
             messages,
             sampling_params: request.take_sampling_params(),
+            seed: None,
             response: tx,
             return_logprobs: request.return_logprobs(),
             is_streaming: false,
@@ -444,6 +446,7 @@ impl Model {
         let request = Request::Normal(Box::new(NormalRequest {
             messages,
             sampling_params: request.take_sampling_params(),
+            seed: None,
             response: tx,
             return_logprobs: request.return_logprobs(),
             is_streaming: false,
@@ -620,6 +623,7 @@ impl Model {
                 save_file,
             },
             sampling_params: SamplingParams::deterministic(),
+            seed: None,
             response: tx,
             return_logprobs: false,
             is_streaming: false,
@@ -695,6 +699,7 @@ impl Model {
                 prompt: prompt.to_string(),
             },
             sampling_params: SamplingParams::deterministic(),
+            seed: None,
             response: tx,
             return_logprobs: false,
             is_streaming: false,
@@ -783,6 +788,7 @@ impl Model {
                     id: 0,
                     messages: message,
                     sampling_params: SamplingParams::deterministic(),
+                    seed: None,
                     response: tx,
                     return_logprobs: false,
                     is_streaming: false,

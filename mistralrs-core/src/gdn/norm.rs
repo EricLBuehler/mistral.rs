@@ -20,6 +20,11 @@ impl RmsNormGated {
         Ok(Self { weight, eps })
     }
 
+    #[cfg(feature = "cuda")]
+    pub(crate) fn eps(&self) -> f64 {
+        self.eps
+    }
+
     pub fn forward(&self, x: &Tensor, gate: &Tensor) -> Result<Tensor> {
         #[cfg(feature = "cuda")]
         if x.device().is_cuda()

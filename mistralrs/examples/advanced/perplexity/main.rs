@@ -43,6 +43,7 @@ async fn process_chunk(runner: &MistralRs, chunk: Vec<u32>) -> anyhow::Result<(T
             max_len: Some(0),
             ..SamplingParams::deterministic()
         },
+        seed: None,
         response: tx,
         return_logprobs: false,
         is_streaming: false,

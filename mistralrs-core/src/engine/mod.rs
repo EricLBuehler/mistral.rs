@@ -263,6 +263,16 @@ impl PagedPrefixCacheValidator for HybridPagedPrefixValidator {
             return 0;
         };
 
+        let replay = {
+            let pipeline = get_mut_arcmutex!(self.pipeline);
+            pipeline.speculative_prefix_replay()
+        };
+        let cached_tokens = crate::speculative::target::clamp_speculative_prefix_cache_hit(
+            cached_tokens,
+            block_size,
+            replay,
+        );
+
         if cached_tokens == 0 || !cached_tokens.is_multiple_of(block_size) {
             self.reset_recurrent_state(slot_idx);
             return 0;

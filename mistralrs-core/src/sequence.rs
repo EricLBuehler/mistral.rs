@@ -5,7 +5,7 @@ use crate::{
     reasoning_parsers::{ReasoningMode, ReasoningParser},
     response::{ChatCompletionChunkResponse, Choice, ChunkChoice, Response, SYSTEM_FINGERPRINT},
     sampler::{Logprobs, Sampler},
-    speculative::SpeculativeProposalDistribution,
+    speculative::{SpeculativeProposalDistribution, SpeculativeTokens},
     AdapterGenerationId, AdapterLease, AudioInput, ChatCompletionResponse, Usage, VideoInput,
 };
 use crate::{
@@ -16,6 +16,8 @@ use crate::{
     ImageGenerationResponse, ImageGenerationResponseFormat,
 };
 use candle_core::Tensor;
+use rand::SeedableRng;
+use rand_isaac::Isaac64Rng;
 use std::{
     fmt::Display,
     hash::{DefaultHasher, Hash, Hasher},
@@ -687,6 +689,7 @@ pub struct Sequence {
     max_len: Option<usize>,
     timestamp: u128,
     sampler: Arc<Sampler>,
+    sampling_rng: Option<Arc<std::sync::Mutex<Isaac64Rng>>>,
     stop_tokens: Vec<u32>,
     stop_strings: Vec<String>,
     ignore_eos: bool,
@@ -709,7 +712,7 @@ pub struct Sequence {
     prefix: Option<String>,
 
     // Speculative
-    staged_speculative_tokens: Vec<u32>,
+    staged_speculative_tokens: SpeculativeTokens,
     staged_speculative_distribution: Option<SpeculativeProposalDistribution>,
 
     // Prefix caching
@@ -812,6 +815,7 @@ impl Sequence {
         return_raw_logits: bool,
         ignore_eos: bool,
         eos_tokens: Vec<u32>,
+        sampling_seed: Option<u64>,
     ) -> Self {
         let prompt_len = tokens.len();
         let _ = block_size; // Block management handled by KVCacheManager
@@ -836,6 +840,8 @@ impl Sequence {
             seq_preallocated_cache,
             responder,
             sampler: sampler.into(),
+            sampling_rng: sampling_seed
+                .map(|seed| Arc::new(std::sync::Mutex::new(Isaac64Rng::seed_from_u64(seed)))),
             stop_tokens,
             stop_strings,
             ignore_eos,
@@ -862,7 +868,7 @@ impl Sequence {
             last_completion_bytes_len: 0,
             last_logprob: 0.0,
             last_is_done: None,
-            staged_speculative_tokens: Vec::new(),
+            staged_speculative_tokens: SpeculativeTokens::default(),
             staged_speculative_distribution: None,
             scheduling_urgency: 0,
             // Multimodal data
@@ -1115,24 +1121,24 @@ impl Sequence {
         })
     }
 
-    pub(crate) fn active_staged_speculative_tokens(&self) -> &[u32] {
+    pub(crate) fn active_staged_speculative_tokens(&self) -> &SpeculativeTokens {
         &self.staged_speculative_tokens
     }
 
     pub(crate) fn active_staged_speculative_len(&self) -> usize {
-        self.active_staged_speculative_tokens().len()
+        self.staged_speculative_tokens.len()
     }
 
     pub(crate) fn set_staged_speculative(
         &mut self,
-        tokens: Vec<u32>,
+        tokens: impl Into<SpeculativeTokens>,
         distribution: Option<SpeculativeProposalDistribution>,
     ) {
-        self.staged_speculative_tokens = tokens;
+        self.staged_speculative_tokens = tokens.into();
         self.staged_speculative_distribution = distribution;
     }
 
-    pub(crate) fn take_staged_speculative_tokens(&mut self) -> Vec<u32> {
+    pub(crate) fn take_staged_speculative_tokens(&mut self) -> SpeculativeTokens {
         std::mem::take(&mut self.staged_speculative_tokens)
     }
 
@@ -1143,17 +1149,14 @@ impl Sequence {
     }
 
     #[cfg(feature = "cuda")]
-    pub(crate) fn staged_sparse_speculative_distribution(
+    pub(crate) fn staged_speculative_distribution(
         &self,
-    ) -> Option<&crate::speculative::SparseSpeculativeProbs> {
-        match self.staged_speculative_distribution.as_ref() {
-            Some(SpeculativeProposalDistribution::SparseProbs(sparse)) => Some(sparse),
-            Some(SpeculativeProposalDistribution::Logits(_)) | None => None,
-        }
+    ) -> Option<&SpeculativeProposalDistribution> {
+        self.staged_speculative_distribution.as_ref()
     }
 
     pub(crate) fn clear_staged_speculative_tokens(&mut self) {
-        self.staged_speculative_tokens.clear();
+        self.staged_speculative_tokens = SpeculativeTokens::default();
         self.staged_speculative_distribution = None;
     }
 
@@ -1348,6 +1351,13 @@ impl Sequence {
 
     pub fn sampler(&self) -> Arc<Sampler> {
         self.sampler.clone()
+    }
+
+    pub(crate) fn sampling_rng(
+        &self,
+        fallback: &Arc<std::sync::Mutex<Isaac64Rng>>,
+    ) -> Arc<std::sync::Mutex<Isaac64Rng>> {
+        self.sampling_rng.as_ref().unwrap_or(fallback).clone()
     }
 
     /// Add a some prefill tokens. Only meant for internal speculative decoding usage.
@@ -2256,10 +2266,15 @@ mod tests {
     use super::*;
     use crate::tools::{state::required_tool_call_deadline_tokens, ToolCallState, ToolChoice};
     use crate::{Function, Tool, ToolType};
+    use rand::RngCore;
     use std::collections::HashMap;
     use tokio::sync::mpsc::channel;
 
     fn make_test_sequence() -> Sequence {
+        make_test_sequence_with_seed(None)
+    }
+
+    fn make_test_sequence_with_seed(seed: Option<u64>) -> Sequence {
         let (tx, _rx) = channel(1);
         let sampler = Sampler::new(
             None,
@@ -2310,7 +2325,24 @@ mod tests {
             false,
             false,
             vec![],
+            seed,
         )
+    }
+
+    #[test]
+    fn seeded_sequence_owns_its_sampling_stream() {
+        let fallback = Arc::new(std::sync::Mutex::new(Isaac64Rng::seed_from_u64(7)));
+        let first = make_test_sequence_with_seed(Some(42));
+        let second = make_test_sequence_with_seed(Some(42));
+
+        assert!(!Arc::ptr_eq(&first.sampling_rng(&fallback), &fallback));
+        assert_eq!(
+            first.sampling_rng(&fallback).lock().unwrap().next_u64(),
+            second.sampling_rng(&fallback).lock().unwrap().next_u64()
+        );
+
+        let unseeded = make_test_sequence();
+        assert!(Arc::ptr_eq(&unseeded.sampling_rng(&fallback), &fallback));
     }
 
     #[test]

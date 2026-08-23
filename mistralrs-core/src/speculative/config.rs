@@ -21,11 +21,20 @@ pub enum SpeculativeConfig {
     Mtp(MtpConfig),
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum MtpDraftSamplingMethod {
+    #[default]
+    Auto,
+    Greedy,
+    Probabilistic,
+}
+
 /// MTP proposer configuration; `model: None` uses the head built into the target checkpoint.
 #[derive(Clone, Debug)]
 pub struct MtpConfig {
     pub model: Option<String>,
     pub n_predict: Option<usize>,
+    pub draft_sampling_method: MtpDraftSamplingMethod,
     /// ISQ type for a draft-only copy of `lm_head`, so drafting skips the promoted (wider)
     /// sensitive-tensor type; the target still verifies with the promoted head.
     pub draft_lm_head_isq: Option<crate::IsqType>,
@@ -36,6 +45,7 @@ impl MtpConfig {
         Self {
             model: Some(model.into()),
             n_predict,
+            draft_sampling_method: MtpDraftSamplingMethod::default(),
             draft_lm_head_isq: None,
         }
     }
@@ -44,8 +54,14 @@ impl MtpConfig {
         Self {
             model: None,
             n_predict,
+            draft_sampling_method: MtpDraftSamplingMethod::default(),
             draft_lm_head_isq: None,
         }
+    }
+
+    pub fn with_draft_sampling_method(mut self, method: MtpDraftSamplingMethod) -> Self {
+        self.draft_sampling_method = method;
+        self
     }
 
     pub fn with_draft_lm_head_isq(mut self, isq: Option<crate::IsqType>) -> Self {

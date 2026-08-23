@@ -14,7 +14,9 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use crate::gdn::{GatedDeltaNet, GdnConfig, GdnInputProjectionKind, GdnLayerCache, GdnVHeadLayout};
+use crate::gdn::{
+    GatedDeltaNet, GdnConfig, GdnInputProjectionKind, GdnLayerCache, GdnStateDType, GdnVHeadLayout,
+};
 use crate::{
     amoe::AnyMoeBaseModelMixin,
     attention::{AttentionMask, SdpaParams},
@@ -71,6 +73,8 @@ pub struct Config {
     pub linear_value_head_dim: usize,
     pub linear_num_key_heads: usize,
     pub linear_num_value_heads: usize,
+    #[serde(default)]
+    pub mamba_ssm_dtype: GdnStateDType,
     // MoE config
     #[serde(default = "default_decoder_sparse_step")]
     pub decoder_sparse_step: usize,
@@ -896,7 +900,7 @@ impl Model {
                     key_dim: cfg.linear_key_head_dim,
                     value_dim: cfg.linear_value_head_dim,
                 },
-                recurrent_dtype: Some(DType::F32),
+                recurrent_dtype: Some(cfg.mamba_ssm_dtype.dtype()),
             },
         };
         let layer_devices = (0..hybrid_cache_config.layer_types.len())

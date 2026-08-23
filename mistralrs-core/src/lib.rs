@@ -202,7 +202,9 @@ pub use scheduler::{
 };
 pub use search::{SearchCallback, SearchFunctionParameters, SearchResult};
 use serde::Serialize;
-pub use speculative::{reserve_external_mtp_memory, MtpConfig, SpeculativeConfig};
+pub use speculative::{
+    reserve_external_mtp_memory, MtpConfig, MtpDraftSamplingMethod, SpeculativeConfig,
+};
 pub use speech_models::{utils as speech_utils, SpeechGenerationConfig, SpeechLoaderType};
 use tokio::runtime::Runtime;
 use toml_selector::{TomlLoaderArgs, TomlSelector};
@@ -1631,6 +1633,7 @@ impl MistralRs {
                         max_len: Some(1),
                         ..SamplingParams::deterministic()
                     },
+                    seed: None,
                     response: tx,
                     return_logprobs: false,
                     is_streaming: false,

@@ -1,3 +1,5 @@
+#[cfg(feature = "cuda")]
+pub(crate) mod dynamic_conv;
 pub mod ffi;
 pub mod gdn;
 #[cfg(feature = "cuda")]

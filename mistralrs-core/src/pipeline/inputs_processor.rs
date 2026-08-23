@@ -1435,6 +1435,25 @@ pub mod text_models_inputs_processor {
         })
     }
 
+    fn completion_input_tensor<T: WithDType>(
+        host_tokens: Vec<T>,
+        batch: usize,
+        host_width: usize,
+        staged_device_rows: &[Tensor],
+        device: &Device,
+    ) -> Result<Tensor> {
+        let host = Tensor::from_vec(host_tokens, (batch, host_width), device)?;
+        if staged_device_rows.is_empty() {
+            return Ok(host);
+        }
+        let staged_device_rows = staged_device_rows
+            .iter()
+            .map(|tokens| tokens.to_device(device)?.to_dtype(T::DTYPE))
+            .collect::<candle_core::Result<Vec<_>>>()?;
+        let staged = Tensor::stack(&staged_device_rows, 0)?;
+        Ok(Tensor::cat(&[&host, &staged], 1)?)
+    }
+
     fn make_completion_chunk<T: WithDType + From<u32> + Clone + std::fmt::Debug>(
         toks: Vec<&[T]>,
         input_seqs: &[&mut Sequence],
@@ -1466,16 +1485,29 @@ pub mod text_models_inputs_processor {
         // one-token decode and the driver clears the stale staged proposals.
         let use_staged_speculative =
             crate::speculative::staging::staged_batch_width(input_seqs).is_some();
+        let use_device_staged = use_staged_speculative
+            && input_seqs
+                .iter()
+                .any(|seq| seq.active_staged_speculative_tokens().as_device().is_some());
+        let mut host_input_width = None;
         for (seq, ctxt) in input_seqs.iter().zip(toks) {
-            let staged_speculative = if use_staged_speculative {
+            let staged_speculative = if use_staged_speculative && !use_device_staged {
                 seq.active_staged_speculative_tokens()
+                    .as_host()
+                    .expect("host-backed speculative batch changed storage kind")
             } else {
                 &[]
             };
             let start_pos = ctxt.len().saturating_sub(decode_window);
             let mut ctxt = ctxt[start_pos..].to_vec();
             ctxt.extend(staged_speculative.iter().copied().map(T::from));
-            let query_len = ctxt.len();
+            let host_width = ctxt.len();
+            let query_len = host_width
+                + if use_device_staged {
+                    seq.active_staged_speculative_len()
+                } else {
+                    0
+                };
             let effective_context_len = start_pos + query_len;
             seqlen_offsets.push(start_pos);
             context_lens.push((0, query_len));
@@ -1491,6 +1523,13 @@ pub mod text_models_inputs_processor {
                     anyhow::bail!("completion input rows must have one query width")
                 }
                 None => input_width = Some(query_len),
+                Some(_) => {}
+            }
+            match host_input_width {
+                Some(width) if width != host_width => {
+                    anyhow::bail!("completion input host rows must have one query width")
+                }
+                None => host_input_width = Some(host_width),
                 Some(_) => {}
             }
             input_tokens.extend(ctxt);
@@ -1598,12 +1637,32 @@ pub mod text_models_inputs_processor {
             None
         };
 
+        let staged_device_rows = if use_device_staged {
+            input_seqs
+                .iter()
+                .map(|seq| match seq.active_staged_speculative_tokens() {
+                    crate::speculative::SpeculativeTokens::Host(tokens) => {
+                        Tensor::new(tokens.as_slice(), device)
+                    }
+                    crate::speculative::SpeculativeTokens::Device(tokens) => Ok(tokens.clone()),
+                })
+                .collect::<candle_core::Result<Vec<_>>>()?
+        } else {
+            Vec::new()
+        };
+        let input = completion_input_tensor(
+            input_tokens,
+            input_seqs.len(),
+            host_input_width.unwrap_or_default(),
+            &staged_device_rows,
+            device,
+        )?;
+        if input.dims() != [input_seqs.len(), input_width.unwrap_or_default()] {
+            anyhow::bail!("completion input tensor shape changed while staging proposals");
+        }
+
         Ok(InputMetadata {
-            input: Tensor::from_vec(
-                input_tokens,
-                (input_seqs.len(), input_width.unwrap_or_default()),
-                device,
-            )?,
+            input,
             positions: seqlen_offsets,
             context_lens,
             position_ids,
@@ -2648,6 +2707,20 @@ pub mod text_models_inputs_processor {
     #[cfg(test)]
     mod tests {
         use super::*;
+
+        #[test]
+        fn completion_input_keeps_staged_rows_device_backed() {
+            let staged = vec![
+                Tensor::from_vec(vec![10u32, 11], 2, &Device::Cpu).unwrap(),
+                Tensor::from_vec(vec![20u32, 21], 2, &Device::Cpu).unwrap(),
+            ];
+            let input =
+                completion_input_tensor(vec![7u32, 8], 2, 1, &staged, &Device::Cpu).unwrap();
+            assert_eq!(
+                input.to_vec2::<u32>().unwrap(),
+                vec![vec![7, 10, 11], vec![8, 20, 21]]
+            );
+        }
 
         #[test]
         fn cuda_graph_context_buckets_track_live_rows() {

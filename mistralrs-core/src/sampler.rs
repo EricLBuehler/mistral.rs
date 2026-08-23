@@ -836,9 +836,9 @@ impl Sampler {
         let submission = {
             let mut cache = self.top1_cache.lock().unwrap();
             if packed {
-                crate::ops::cuda_top1_logits_f32_submit_batched_packed(logits, &mut cache)?
+                crate::ops::cuda_top1_logits_submit_batched_packed(logits, &mut cache)?
             } else {
-                crate::ops::cuda_top1_logits_f32_submit_batched(logits, &mut cache)?
+                crate::ops::cuda_top1_logits_submit_batched(logits, &mut cache)?
             }
         };
         Ok(CudaTop1BatchSubmission {
@@ -863,7 +863,7 @@ impl Sampler {
     ) -> Result<CudaTop1BatchSubmission> {
         let submission = {
             let mut cache = self.top1_cache.lock().unwrap();
-            crate::ops::cuda_top1_logits_f32_submit_batched_into(logits, token_ids_dst, &mut cache)?
+            crate::ops::cuda_top1_logits_submit_batched_into(logits, token_ids_dst, &mut cache)?
         };
         Ok(CudaTop1BatchSubmission {
             cache: self.top1_cache.clone(),

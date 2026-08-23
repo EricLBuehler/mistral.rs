@@ -32,7 +32,6 @@ static UNCALIBRATED_FP8_ATTENTION_WARNING: Once = Once::new();
 #[derive(Clone, Copy)]
 struct Fa3DecodeCandidate {
     key: Fa3DecodeScheduleKey,
-    sequence_length: usize,
     query_dtype: DType,
     query_contiguous: bool,
     key_cache_dtype: DType,
@@ -49,8 +48,7 @@ struct Fa3DecodeCandidate {
 #[cfg(all(feature = "cuda", target_family = "unix"))]
 impl Fa3DecodeCandidate {
     fn schedule_key(self) -> Option<Fa3DecodeScheduleKey> {
-        (self.sequence_length == 1
-            && self.query_dtype == DType::BF16
+        (self.query_dtype == DType::BF16
             && self.query_contiguous
             && self.key_cache_dtype == DType::F8E4M3
             && self.value_cache_dtype == DType::F8E4M3
@@ -1699,6 +1697,8 @@ impl PagedAttention {
             device: *dev,
             view: Fa3DecodeView::Logical,
             batch: ctx.dims.batch_size,
+            query_len: ctx.dims.seq_len,
+            causal: ctx.dims.seq_len > 1,
             q_heads: ctx.dims.attention_heads,
             kv_heads,
             head_dim,
@@ -1707,14 +1707,18 @@ impl PagedAttention {
         };
         let Some(key) = (Fa3DecodeCandidate {
             key,
-            sequence_length: ctx.dims.seq_len,
             query_dtype: query.dtype(),
             query_contiguous: query.is_contiguous(),
             key_cache_dtype: key_cache.dtype(),
             value_cache_dtype: value_cache.dtype(),
             mask_is_none: attention_mask.is_none(),
             shapes_match: value_cache.dims4()? == key_cache.dims4()?
-                && query.dims3()? == (ctx.dims.batch_size, ctx.dims.attention_heads, head_dim),
+                && query.dims3()?
+                    == (
+                        ctx.dims.batch_size.saturating_mul(ctx.dims.seq_len),
+                        ctx.dims.attention_heads,
+                        head_dim,
+                    ),
             has_alibi: ctx.alibi_slopes.is_some(),
             has_sinks: ctx.sdpa_params.sinks.is_some(),
             has_softcap: ctx.sdpa_params.softcap.is_some(),
@@ -1752,8 +1756,13 @@ impl PagedAttention {
         })
         .map_err(|err| {
             err.context(format!(
-                "FA3 FP8 decode failed: batch={} qo_heads={} kv_heads={} head_size={} page_size={}",
-                ctx.dims.batch_size, ctx.dims.attention_heads, kv_heads, head_dim, page_size,
+                "FA3 FP8 decode failed: batch={} query_len={} qo_heads={} kv_heads={} head_size={} page_size={}",
+                ctx.dims.batch_size,
+                ctx.dims.seq_len,
+                ctx.dims.attention_heads,
+                kv_heads,
+                head_dim,
+                page_size,
             ))
         })?;
         Ok(Some(output))
@@ -2025,13 +2034,14 @@ mod tests {
                 device: DeviceLocation::Cuda { gpu_id: 0 },
                 view: Fa3DecodeView::Logical,
                 batch: 8,
+                query_len: 1,
+                causal: false,
                 q_heads: 16,
                 kv_heads: 4,
                 head_dim: 256,
                 page_size: 32,
                 num_splits: FA3_DECODE_NUM_SPLITS,
             },
-            sequence_length: 1,
             query_dtype: DType::BF16,
             query_contiguous: true,
             key_cache_dtype: DType::F8E4M3,
@@ -2060,7 +2070,6 @@ mod tests {
             }};
         }
 
-        reject!(sequence_length, 2);
         reject!(query_dtype, DType::F16);
         reject!(query_contiguous, false);
         reject!(key_cache_dtype, DType::BF16);
@@ -2076,6 +2085,11 @@ mod tests {
         let mut unsupported_shape = supported;
         unsupported_shape.key.head_dim = 128;
         assert!(unsupported_shape.schedule_key().is_none());
+
+        let mut speculative = supported;
+        speculative.key.query_len = 8;
+        speculative.key.causal = true;
+        assert_eq!(speculative.schedule_key(), Some(speculative.key));
     }
 
     #[cfg(all(feature = "cuda", target_family = "unix"))]
@@ -2095,6 +2109,13 @@ mod tests {
         different_heads.key.q_heads /= 2;
         assert!(schedules
             .get(&different_heads.schedule_key().unwrap())
+            .is_none());
+
+        let mut different_query = candidate;
+        different_query.key.query_len = 8;
+        different_query.key.causal = true;
+        assert!(schedules
+            .get(&different_query.schedule_key().unwrap())
             .is_none());
     }
 

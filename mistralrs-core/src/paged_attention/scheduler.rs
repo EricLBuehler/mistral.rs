@@ -1280,6 +1280,7 @@ mod tests {
             false,
             false,
             vec![],
+            None,
         );
         seq.set_state(SequenceState::RunningCompletion);
         (Arc::new(Mutex::new(seq)), rx)

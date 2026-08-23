@@ -70,6 +70,7 @@ pub fn parse_request(
             prompt: oairequest.input,
         },
         sampling_params: SamplingParams::deterministic(),
+        seed: None,
         response: tx,
         return_logprobs: false,
         is_streaming: false,

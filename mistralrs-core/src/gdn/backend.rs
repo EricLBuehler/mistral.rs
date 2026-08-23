@@ -692,8 +692,10 @@ fn prepare_state_for_backend(
         );
     }
     if cache.slots.is_some() {
-        if cache.recurrent_state.dtype() != DType::F32 || !cache.recurrent_state.is_contiguous() {
-            candle_core::bail!("pooled GDN recurrent state must be contiguous f32");
+        if !crate::cuda::gdn::recurrent_state_dtype_supported(cache.recurrent_state.dtype())
+            || !cache.recurrent_state.is_contiguous()
+        {
+            candle_core::bail!("pooled GDN recurrent state must be contiguous f16/bf16/f32");
         }
         return Ok(cache.recurrent_state.clone());
     }
