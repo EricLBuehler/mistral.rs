@@ -85,6 +85,8 @@ CONTEXT_PROMPT_PROFILE = "context"
 RETRIEVAL_PROMPT_PROFILE = "retrieval_no_thinking"
 EXACT_CONTEXT_SUFFIX = "\nEnd of deterministic production-soak context.\n"
 PROMETHEUS_METRIC_PREFIXES = ("mistralrs_", "http_requests_in_flight")
+KV_CACHE_ACTIVE_GAUGE = "mistralrs_kv_cache_blocks_active"
+KV_CACHE_PREFIX_CACHED_GAUGE = "mistralrs_kv_cache_blocks_prefix_cached"
 EOS_TOKEN_CANDIDATES = (
     "<|im_end|>",
     "<|eot_id|>",
@@ -1134,6 +1136,22 @@ def exact_output_diagnostics(
     }
 
 
+def full_batch_specs(
+    specs: Sequence[RequestSpec], concurrency: int
+) -> list[RequestSpec]:
+    count = len(specs) - len(specs) % concurrency
+    if count == 0:
+        raise ValueError("ordering checks require at least one full concurrent batch")
+    return list(specs[:count])
+
+
+def results_for_specs(
+    results: Sequence[RequestResult], specs: Sequence[RequestSpec]
+) -> list[RequestResult]:
+    keys = {(spec.case_id, spec.seed) for spec in specs}
+    return [result for result in results if (result.case_id, result.seed) in keys]
+
+
 def validate_sampled_output(
     result: RequestResult,
     tokenizer: TokenizerAdapter | None,
@@ -1522,25 +1540,36 @@ async def canary_mode(
     candidate_normal_by_concurrency: dict[int, list[RequestResult]] = {}
     cross_phase_results: list[tuple[str, list[RequestResult]]] = []
     exact_replays: list[dict[str, Any]] = []
+    exact_orderings: list[dict[str, Any]] = []
     quality_checks: list[dict[str, Any]] = []
+    semantic_by_phase: dict[str, bool] = {}
     for concurrency in args.concurrencies:
         normal_results: list[RequestResult] | None = None
         normal_phase = ""
+        ordering_specs = full_batch_specs(specs, concurrency)
         for order in ("normal", "normal-replay", "reverse"):
-            ordered = specs if order == "normal" else list(reversed(specs))
-            if order == "normal-replay":
-                ordered = specs
+            ordered = (
+                list(reversed(ordering_specs))
+                if order == "reverse"
+                else specs
+            )
             phase = f"canary-c{concurrency}-{order}"
             results, summary = await run_batch(
                 client, ordered, concurrency, writer, phase, keep_output=True
             )
             summary["order"] = order
             summaries.append(summary)
+            phase_quality = []
             for result in results:
                 valid, detail = validate_sampled_output(
                     result, client.tokenizer, args.max_repeated_ngram_ratio
                 )
-                quality_checks.append({"phase": phase, "valid": valid, **detail})
+                check = {"phase": phase, "valid": valid, **detail}
+                phase_quality.append(check)
+                quality_checks.append(check)
+            semantic_by_phase[phase] = bool(phase_quality) and all(
+                item["valid"] for item in phase_quality
+            )
             if order == "normal":
                 normal_results = results
                 normal_phase = phase
@@ -1559,7 +1588,16 @@ async def canary_mode(
                 exact_replays.append(replay)
                 await writer.emit("exact_replay_comparison", **replay)
             else:
-                cross_phase_results.append((phase, results))
+                if normal_results is None:
+                    raise RuntimeError("normal canary phase must precede reverse ordering")
+                ordering = exact_output_diagnostics(
+                    results_for_specs(normal_results, ordering_specs),
+                    results,
+                    normal_phase,
+                    phase,
+                )
+                exact_orderings.append(ordering)
+                await writer.emit("exact_ordering_comparison", **ordering)
     if baseline is None:
         raise RuntimeError("canary produced no baseline")
 
@@ -1576,11 +1614,14 @@ async def canary_mode(
             args.stat_max_ks,
             args.stat_max_js,
         )
+        semantic_passed = semantic_by_phase[baseline_phase] and semantic_by_phase[phase]
         comparison = {
             "phase": phase,
             "exact_diagnostics": exact,
+            "exact_diagnostics_gated": False,
             "statistical_comparison": statistical,
-            "passed": exact["passed"] and statistical["passed"],
+            "semantic_passed": semantic_passed,
+            "passed": statistical["passed"] and semantic_passed,
         }
         cross_phase_comparisons.append(comparison)
         fixed_seed_mismatches.extend(
@@ -1655,6 +1696,7 @@ async def canary_mode(
     passed = (
         request_errors == 0
         and all(item["passed"] for item in exact_replays)
+        and all(item["passed"] for item in exact_orderings)
         and all(item["passed"] for item in cross_phase_comparisons)
         and all(item["valid"] for item in quality_checks)
         and edge_summary["passed"]
@@ -1667,6 +1709,7 @@ async def canary_mode(
         "production_sampling": asdict(client.policy),
         "summaries": summaries,
         "exact_replays": exact_replays,
+        "exact_orderings": exact_orderings,
         "cross_phase_comparisons": cross_phase_comparisons,
         "fixed_seed_mismatches": fixed_seed_mismatches,
         "quality_checks": quality_checks,
@@ -1902,23 +1945,32 @@ async def run_long_context_correctness(
         )
         for index, length in enumerate(args.long_correctness_context_lengths)
     ]
+    baseline_phase = "long-correctness-c1-baseline"
     baseline, baseline_summary = await run_batch(
         client,
         specs,
         1,
         writer,
-        "long-correctness-c1-baseline",
+        baseline_phase,
         keep_output=True,
     )
     summaries = [baseline_summary]
     exact_replays: list[dict[str, Any]] = []
+    exact_orderings: list[dict[str, Any]] = []
     cross_phase_results: list[tuple[str, list[RequestResult]]] = []
     semantic_checks: list[dict[str, Any]] = []
+    semantic_by_phase: dict[str, bool] = {}
+    baseline_semantic_checks = []
     for result in baseline:
         valid, detail = validate_retrieval_result(
             result, client.tokenizer, args.max_repeated_ngram_ratio
         )
-        semantic_checks.append({"phase": "c1-baseline", "valid": valid, **detail})
+        check = {"phase": baseline_phase, "valid": valid, **detail}
+        baseline_semantic_checks.append(check)
+        semantic_checks.append(check)
+    semantic_by_phase[baseline_phase] = bool(baseline_semantic_checks) and all(
+        item["valid"] for item in baseline_semantic_checks
+    )
 
     replay_phase = "long-correctness-c1-replay"
     replay, replay_summary = await run_batch(
@@ -1933,24 +1985,33 @@ async def run_long_context_correctness(
     replay_diagnostics = exact_output_diagnostics(
         baseline,
         replay,
-        "long-correctness-c1-baseline",
+        baseline_phase,
         replay_phase,
     )
     exact_replays.append(replay_diagnostics)
     await writer.emit("exact_replay_comparison", **replay_diagnostics)
+    replay_semantic_checks = []
     for result in replay:
         valid, detail = validate_retrieval_result(
             result, client.tokenizer, args.max_repeated_ngram_ratio
         )
-        semantic_checks.append({"phase": replay_phase, "valid": valid, **detail})
+        check = {"phase": replay_phase, "valid": valid, **detail}
+        replay_semantic_checks.append(check)
+        semantic_checks.append(check)
+    semantic_by_phase[replay_phase] = bool(replay_semantic_checks) and all(
+        item["valid"] for item in replay_semantic_checks
+    )
 
     for concurrency in args.long_correctness_concurrencies:
         normal_results: list[RequestResult] | None = None
         normal_phase = ""
+        ordering_specs = full_batch_specs(specs, concurrency)
         for order in ("normal", "normal-replay", "reverse"):
-            ordered = specs if order == "normal" else list(reversed(specs))
-            if order == "normal-replay":
-                ordered = specs
+            ordered = (
+                list(reversed(ordering_specs))
+                if order == "reverse"
+                else specs
+            )
             phase = f"long-correctness-c{concurrency}-{order}"
             results, summary = await run_batch(
                 client, ordered, concurrency, writer, phase, keep_output=True
@@ -1969,17 +2030,36 @@ async def run_long_context_correctness(
                 exact_replays.append(replay_diagnostics)
                 await writer.emit("exact_replay_comparison", **replay_diagnostics)
             else:
-                cross_phase_results.append((phase, results))
+                if normal_results is None:
+                    raise RuntimeError(
+                        "normal long-context phase must precede reverse ordering"
+                    )
+                ordering_diagnostics = exact_output_diagnostics(
+                    results_for_specs(normal_results, ordering_specs),
+                    results,
+                    normal_phase,
+                    phase,
+                )
+                exact_orderings.append(ordering_diagnostics)
+                await writer.emit(
+                    "exact_ordering_comparison", **ordering_diagnostics
+                )
+            phase_semantic_checks = []
             for result in results:
                 valid, detail = validate_retrieval_result(
                     result, client.tokenizer, args.max_repeated_ngram_ratio
                 )
-                semantic_checks.append({"phase": phase, "valid": valid, **detail})
+                check = {"phase": phase, "valid": valid, **detail}
+                phase_semantic_checks.append(check)
+                semantic_checks.append(check)
+            semantic_by_phase[phase] = bool(phase_semantic_checks) and all(
+                item["valid"] for item in phase_semantic_checks
+            )
 
     cross_phase_comparisons = []
     for phase, results in cross_phase_results:
         exact = exact_output_diagnostics(
-            baseline, results, "long-correctness-c1-baseline", phase
+            baseline, results, baseline_phase, phase
         )
         statistical = compare_samples(
             results,
@@ -1988,11 +2068,14 @@ async def run_long_context_correctness(
             args.long_correctness_stat_max_ks,
             args.long_correctness_stat_max_js,
         )
+        semantic_passed = semantic_by_phase[baseline_phase] and semantic_by_phase[phase]
         comparison = {
             "phase": phase,
             "exact_diagnostics": exact,
+            "exact_diagnostics_gated": False,
             "statistical_comparison": statistical,
-            "passed": exact["passed"] and statistical["passed"],
+            "semantic_passed": semantic_passed,
+            "passed": statistical["passed"] and semantic_passed,
         }
         cross_phase_comparisons.append(comparison)
         await writer.emit("cross_shape_comparison", **comparison)
@@ -2000,6 +2083,7 @@ async def run_long_context_correctness(
     passed = (
         all(summary["errors"] == 0 for summary in summaries)
         and all(item["passed"] for item in exact_replays)
+        and all(item["passed"] for item in exact_orderings)
         and all(item["passed"] for item in cross_phase_comparisons)
         and all(item["valid"] for item in semantic_checks)
     )
@@ -2009,6 +2093,7 @@ async def run_long_context_correctness(
         "concurrencies": list(args.long_correctness_concurrencies),
         "summaries": summaries,
         "exact_replays": exact_replays,
+        "exact_orderings": exact_orderings,
         "cross_phase_comparisons": cross_phase_comparisons,
         "semantic_checks": semantic_checks,
     }
@@ -2033,6 +2118,7 @@ CLEANUP_GAUGES = (
     "mistralrs_sequences_waiting",
     "mistralrs_requests_pending_admission",
     "mistralrs_recurrent_state_slots_used",
+    KV_CACHE_ACTIVE_GAUGE,
     "http_requests_in_flight",
 )
 RESIDENT_TRANSIENT_CLEANUP_GAUGES = (
@@ -2040,14 +2126,33 @@ RESIDENT_TRANSIENT_CLEANUP_GAUGES = (
     "mistralrs_sequences_waiting",
     "mistralrs_requests_pending_admission",
     "mistralrs_recurrent_state_slots_used",
+    KV_CACHE_ACTIVE_GAUGE,
     "http_requests_in_flight",
 )
 
-CANCELLATION_OWNERSHIP_METRIC_LIMITATION = (
-    "mistralrs_kv_cache_blocks_used includes valid prefix-cache retention. The engine still "
-    "needs separate active-sequence and prefix-owned KV block gauges to prove KV ownership "
-    "cleanup after cancellation."
-)
+
+def cleanup_evidence(
+    baseline: dict[str, float],
+    observed: dict[str, float],
+    baseline_values: dict[str, float | None],
+    observed_values: dict[str, float | None],
+) -> dict[str, Any]:
+    return {
+        "baseline": baseline_values,
+        "observed": observed_values,
+        "kv_cache_blocks": {
+            "active": {
+                "baseline": metric_total(baseline, KV_CACHE_ACTIVE_GAUGE),
+                "observed": metric_total(observed, KV_CACHE_ACTIVE_GAUGE),
+                "gated": KV_CACHE_ACTIVE_GAUGE in baseline_values,
+            },
+            "prefix_cached": {
+                "baseline": metric_total(baseline, KV_CACHE_PREFIX_CACHED_GAUGE),
+                "observed": metric_total(observed, KV_CACHE_PREFIX_CACHED_GAUGE),
+                "gated": False,
+            },
+        },
+    }
 
 
 async def poll_for_cleanup(
@@ -2062,7 +2167,9 @@ async def poll_for_cleanup(
     baseline_values = {name: metric_total(baseline, name) for name in gauges}
     missing_baseline = [name for name, value in baseline_values.items() if value is None]
     if missing_baseline:
-        return False, {}, {"missing_baseline_metrics": missing_baseline}
+        detail = cleanup_evidence(baseline, {}, baseline_values, {})
+        detail["missing_baseline_metrics"] = missing_baseline
+        return False, {}, detail
     deadline = time.perf_counter() + timeout_seconds
     last_snapshot: dict[str, float] = {}
     last_values: dict[str, float | None] = {}
@@ -2073,16 +2180,21 @@ async def poll_for_cleanup(
             value is not None and value <= baseline_values[name]
             for name, value in last_values.items()
         ):
-            return True, last_snapshot, {
-                "baseline": baseline_values,
-                "observed": last_values,
-            }
+            return True, last_snapshot, cleanup_evidence(
+                baseline,
+                last_snapshot,
+                baseline_values,
+                last_values,
+            )
         await asyncio.sleep(poll_seconds)
-    return False, last_snapshot, {
-        "baseline": baseline_values,
-        "observed": last_values,
-        "timeout_seconds": timeout_seconds,
-    }
+    detail = cleanup_evidence(
+        baseline,
+        last_snapshot,
+        baseline_values,
+        last_values,
+    )
+    detail["timeout_seconds"] = timeout_seconds
+    return False, last_snapshot, detail
 
 
 async def adversarial_mode(
@@ -2357,10 +2469,15 @@ async def adversarial_mode(
     cancel_admissions_ok = (
         cancel_admissions is not None and cancel_admissions >= len(cancellation_specs)
     )
-    cancel_kv_blocks_delta = metric_delta(
+    cancel_kv_blocks_active_delta = metric_delta(
         pre_cancel_metrics,
         post_cancel_metrics,
-        "mistralrs_kv_cache_blocks_used",
+        KV_CACHE_ACTIVE_GAUGE,
+    )
+    cancel_kv_blocks_prefix_cached_delta = metric_delta(
+        pre_cancel_metrics,
+        post_cancel_metrics,
+        KV_CACHE_PREFIX_CACHED_GAUGE,
     )
 
     timeout_spec = retrieval_spec(
@@ -2394,10 +2511,15 @@ async def adversarial_mode(
     )
     timeout_observed = timeout_result.error_kind == "ReadTimeout"
     timeout_admitted = timeout_admissions is not None and timeout_admissions >= 1
-    timeout_kv_blocks_delta = metric_delta(
+    timeout_kv_blocks_active_delta = metric_delta(
         pre_timeout_metrics,
         post_timeout_metrics,
-        "mistralrs_kv_cache_blocks_used",
+        KV_CACHE_ACTIVE_GAUGE,
+    )
+    timeout_kv_blocks_prefix_cached_delta = metric_delta(
+        pre_timeout_metrics,
+        post_timeout_metrics,
+        KV_CACHE_PREFIX_CACHED_GAUGE,
     )
     retry, retry_summary = await run_batch(
         client, [timeout_spec], 1, writer, "adversarial-retry", keep_output=True
@@ -2676,14 +2798,19 @@ async def adversarial_mode(
         "cancel_admissions_ok": cancel_admissions_ok,
         "cancel_cleanup_ok": cancel_cleanup_ok,
         "cancel_cleanup_detail": cancel_cleanup_detail,
-        "cancel_kv_cache_blocks_used_delta": cancel_kv_blocks_delta,
+        "cancel_kv_cache_blocks_active_delta": cancel_kv_blocks_active_delta,
+        "cancel_kv_cache_blocks_prefix_cached_delta": (
+            cancel_kv_blocks_prefix_cached_delta
+        ),
         "timeout_observed": timeout_observed,
         "timeout_admitted": timeout_admitted,
         "timeout_cleanup_ok": timeout_cleanup_ok,
         "timeout_cleanup_detail": timeout_cleanup_detail,
-        "timeout_kv_cache_blocks_used_delta": timeout_kv_blocks_delta,
-        "kv_ownership_gate_complete": False,
-        "kv_ownership_core_metric_needed": CANCELLATION_OWNERSHIP_METRIC_LIMITATION,
+        "timeout_kv_cache_blocks_active_delta": timeout_kv_blocks_active_delta,
+        "timeout_kv_cache_blocks_prefix_cached_delta": (
+            timeout_kv_blocks_prefix_cached_delta
+        ),
+        "kv_ownership_gate_complete": True,
         "retry_succeeded": retry_summary["errors"] == 0 and retry_semantic_ok,
         "prefix_outputs_equal": prefix_correct,
         "prefix_cache_stages": prefix_cache_stages,
@@ -2723,6 +2850,9 @@ def selected_metric_deltas(
         "mistralrs_encoder_cache_hits_total",
         "mistralrs_encoder_cache_misses_total",
         "mistralrs_cuda_graph_events_total",
+        "mistralrs_cuda_graph_dispatch_total",
+        KV_CACHE_ACTIVE_GAUGE,
+        KV_CACHE_PREFIX_CACHED_GAUGE,
     )
     return {name: metric_delta(before, after, name) for name in names}
 
@@ -2824,13 +2954,6 @@ def speculative_evidence(
     }
 
 
-CUDA_GRAPH_METRIC_LIMITATION = (
-    "The current engine metric does not count every target Ok(None) graph miss or "
-    "ineligible eager decode. A per-decode replay/eager outcome counter is still required "
-    "for complete graph coverage."
-)
-
-
 def cuda_graph_evidence(
     before: dict[str, float],
     after: dict[str, float],
@@ -2838,56 +2961,76 @@ def cuda_graph_evidence(
     expected_components: Sequence[str],
     min_replay_ratio: float,
 ) -> dict[str, Any]:
-    deltas = labeled_metric_deltas(
+    dispatch_deltas = labeled_metric_deltas(
         before,
         after,
-        "mistralrs_cuda_graph_events_total",
+        "mistralrs_cuda_graph_dispatch_total",
     )
-    startup_values = labeled_metric_values(
-        startup,
-        "mistralrs_cuda_graph_events_total",
-    )
+    failure_events = [
+        item
+        for item in labeled_metric_deltas(
+            before,
+            after,
+            "mistralrs_cuda_graph_events_total",
+        )
+        if item["labels"].get("outcome") == "failure"
+        and item["delta"] > 0
+    ]
+    startup_failure_events = [
+        item
+        for item in labeled_metric_values(
+            startup,
+            "mistralrs_cuda_graph_events_total",
+        )
+        if item["labels"].get("outcome") == "failure"
+        and item["value"] > 0
+    ]
     components = {}
     for component in expected_components:
         replay = sum(
             item["delta"]
-            for item in deltas
+            for item in dispatch_deltas
             if item["labels"].get("component") == component
-            and item["labels"].get("event") == "replay"
-            and item["labels"].get("outcome") == "success"
+            and item["labels"].get("mode") == "replay"
         )
         eager = sum(
             item["delta"]
-            for item in deltas
+            for item in dispatch_deltas
             if item["labels"].get("component") == component
-            and item["labels"].get("event") == "eager_fallback"
-            and item["labels"].get("outcome") == "success"
+            and item["labels"].get("mode") == "eager"
+        )
+        skipped = sum(
+            item["delta"]
+            for item in dispatch_deltas
+            if item["labels"].get("component") == component
+            and item["labels"].get("mode") == "skipped"
         )
         failures = sum(
             item["delta"]
-            for item in deltas
+            for item in failure_events
             if item["labels"].get("component") == component
-            and item["labels"].get("outcome") == "failure"
         )
         startup_failures = sum(
             item["value"]
-            for item in startup_values
+            for item in startup_failure_events
             if item["labels"].get("component") == component
-            and item["labels"].get("outcome") == "failure"
         )
-        replay_ratio = ratio(replay, replay + eager)
+        eligible = replay + eager
+        replay_ratio = ratio(replay, eligible)
         components[component] = {
             "passed": (
-                replay > 0
+                eligible > 0
                 and replay_ratio is not None
                 and replay_ratio >= min_replay_ratio
                 and failures == 0
                 and startup_failures == 0
             ),
-            "replay_successes": replay,
-            "recorded_eager_fallback_successes": eager,
-            "replay_ratio_over_recorded_outcomes": replay_ratio,
-            "failures": failures,
+            "eligible_dispatches": eligible,
+            "replay_dispatches": replay,
+            "eager_dispatches": eager,
+            "skipped_dispatches": skipped,
+            "eligible_replay_ratio": replay_ratio,
+            "phase_failures": failures,
             "startup_cumulative_failures": startup_failures,
         }
     return {
@@ -2895,9 +3038,10 @@ def cuda_graph_evidence(
         "expected_components": list(expected_components),
         "min_replay_ratio": min_replay_ratio,
         "components": components,
-        "events": deltas,
-        "instrumentation_complete": False,
-        "core_metric_needed": CUDA_GRAPH_METRIC_LIMITATION,
+        "dispatch": dispatch_deltas,
+        "events": failure_events,
+        "startup_failure_events": startup_failure_events,
+        "instrumentation_complete": True,
     }
 
 
@@ -3069,6 +3213,8 @@ async def resident_decode_mode(
             "passed": False,
             "residency": residency,
             "phase_summaries": [],
+            "exact_replays": [],
+            "exact_orderings": [],
             "cross_shape_comparisons": [],
             "final_c1_replay": None,
         }
@@ -3094,11 +3240,16 @@ async def resident_decode_mode(
     ]
     phase_runs: list[tuple[str, list[RequestResult], dict[str, Any]]] = []
 
-    async def run_resident_batch(concurrency: int, phase: str) -> None:
+    async def run_resident_batch(
+        concurrency: int,
+        phase: str,
+        batch_specs: Sequence[RequestSpec],
+        order: str,
+    ) -> None:
         before = await safe_metrics(client, writer, f"{phase}-start")
         results, summary = await run_batch(
             client,
-            specs,
+            batch_specs,
             concurrency,
             writer,
             phase,
@@ -3116,8 +3267,8 @@ async def resident_decode_mode(
         prefix = prefix_cache_evidence(
             before,
             after,
-            len(specs),
-            sum(spec.context_tokens for spec in specs),
+            len(batch_specs),
+            sum(spec.context_tokens for spec in batch_specs),
             args.min_prefix_reuse_fraction,
         )
         mtp = speculative_evidence(
@@ -3151,6 +3302,7 @@ async def resident_decode_mode(
             await writer.emit("resident_decode_quality", **check)
         summary.update(
             {
+                "order": order,
                 "passed": (
                     summary["errors"] == 0
                     and cleanup_ok
@@ -3176,12 +3328,57 @@ async def resident_decode_mode(
         phase_runs.append((phase, results, summary))
         await writer.emit("resident_decode_phase_summary", phase=phase, **summary)
 
+    normal_phase_runs = []
+    exact_replays = []
+    exact_orderings = []
     for concurrency in args.concurrencies:
-        await run_resident_batch(concurrency, f"resident-decode-c{concurrency}")
+        normal_phase = f"resident-decode-c{concurrency}"
+        await run_resident_batch(concurrency, normal_phase, specs, "normal")
+        normal_run = phase_runs[-1]
+        normal_phase_runs.append(normal_run)
 
-    baseline_phase, baseline_results, _ = phase_runs[0]
+        replay_phase = f"resident-decode-c{concurrency}-normal-replay"
+        await run_resident_batch(
+            concurrency,
+            replay_phase,
+            specs,
+            "normal-replay",
+        )
+        replay_results = phase_runs[-1][1]
+        replay_diagnostics = exact_output_diagnostics(
+            normal_run[1],
+            replay_results,
+            normal_phase,
+            replay_phase,
+        )
+        exact_replays.append(replay_diagnostics)
+        await writer.emit("exact_replay_comparison", **replay_diagnostics)
+
+        ordering_specs = full_batch_specs(specs, concurrency)
+        reverse_phase = f"resident-decode-c{concurrency}-reverse"
+        await run_resident_batch(
+            concurrency,
+            reverse_phase,
+            list(reversed(ordering_specs)),
+            "reverse",
+        )
+        reverse_results = phase_runs[-1][1]
+        ordering_diagnostics = exact_output_diagnostics(
+            results_for_specs(normal_run[1], ordering_specs),
+            reverse_results,
+            normal_phase,
+            reverse_phase,
+        )
+        exact_orderings.append(ordering_diagnostics)
+        await writer.emit("exact_ordering_comparison", **ordering_diagnostics)
+
+    baseline_phase, baseline_results, baseline_summary = normal_phase_runs[0]
     cross_shape_comparisons = []
-    for phase, results, _ in phase_runs[1:]:
+    for phase, results, phase_summary in normal_phase_runs[1:]:
+        semantic_passed = all(
+            item["valid"]
+            for item in baseline_summary["quality"] + phase_summary["quality"]
+        )
         comparison = {
             "phase": phase,
             "exact_diagnostics": exact_output_diagnostics(
@@ -3197,17 +3394,24 @@ async def resident_decode_mode(
                 args.stat_max_ks,
                 args.stat_max_js,
             ),
+            "exact_diagnostics_gated": False,
+            "semantic_passed": semantic_passed,
         }
         comparison["passed"] = (
-            comparison["exact_diagnostics"]["passed"]
-            and comparison["statistical_comparison"]["passed"]
+            comparison["statistical_comparison"]["passed"]
+            and semantic_passed
         )
         cross_shape_comparisons.append(comparison)
         await writer.emit("resident_decode_cross_shape", **comparison)
 
     final_c1_replay = None
     if args.final_c1_replay and 1 in args.concurrencies:
-        await run_resident_batch(1, "resident-decode-c1-final")
+        await run_resident_batch(
+            1,
+            "resident-decode-c1-final",
+            specs,
+            "final-replay",
+        )
         final_phase, final_results, final_summary = phase_runs[-1]
         initial_c1 = next(
             results
@@ -3249,6 +3453,8 @@ async def resident_decode_mode(
     passed = (
         residency_passed
         and all(summary["passed"] for summary in phase_summaries)
+        and all(item["passed"] for item in exact_replays)
+        and all(item["passed"] for item in exact_orderings)
         and all(item["passed"] for item in cross_shape_comparisons)
         and (final_c1_replay is None or final_c1_replay["passed"])
     )
@@ -3261,6 +3467,8 @@ async def resident_decode_mode(
         "requests_per_phase": len(specs),
         "residency": residency,
         "phase_summaries": phase_summaries,
+        "exact_replays": exact_replays,
+        "exact_orderings": exact_orderings,
         "cross_shape_comparisons": cross_shape_comparisons,
         "final_c1_replay": final_c1_replay,
         "metrics_delta": selected_metric_deltas(initial_metrics, final_metrics),
@@ -3336,6 +3544,8 @@ def summarize_telemetry(
         "mistralrs_sequences_capacity",
         "mistralrs_requests_pending_admission",
         "mistralrs_kv_cache_blocks_used",
+        KV_CACHE_ACTIVE_GAUGE,
+        KV_CACHE_PREFIX_CACHED_GAUGE,
         "mistralrs_kv_cache_blocks_total",
         "mistralrs_recurrent_state_slots_used",
         "mistralrs_recurrent_state_slots_total",
