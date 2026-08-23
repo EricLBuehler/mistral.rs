@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import base64
+import csv
 import hashlib
 import json
 import math
@@ -13,6 +14,7 @@ import mimetypes
 import os
 import random
 import re
+import shlex
 import statistics
 import sys
 import time
@@ -43,6 +45,7 @@ DEFAULT_RESIDENT_CONTEXT_LENGTHS = (60_000, 65_536, 100_000)
 DEFAULT_RESIDENT_CONCURRENCIES = (1, 3, 8, 16)
 DEFAULT_RESIDENT_REQUESTS = 16
 DEFAULT_CONTEXT_MIX = ((1_024, 45), (8_192, 30), (32_768, 20), (100_000, 5))
+DEFAULT_PRODUCTION_DURATION_SECONDS = 14_400.0
 DEFAULT_TELEMETRY_INTERVAL_SECONDS = 5.0
 DEFAULT_PROBE_INTERVAL_SECONDS = 30.0
 DEFAULT_COMPARISON_WINDOW_SECONDS = 3_600.0
@@ -89,6 +92,17 @@ DEFAULT_MAX_PROBE_LATENCY_SLOWDOWN = 3.0
 DEFAULT_MAX_FINAL_C1_LATENCY_SLOWDOWN = 1.20
 DEFAULT_MIN_FINAL_C1_DECODE_RATIO = 0.95
 DEFAULT_MAX_SCHEDULE_LATENESS_SECONDS = 1.0
+SCHEDULE_TIME_EPSILON_SECONDS = 1e-6
+PROCESS_CPU_CLOCK_TICKS_PER_SECOND = int(os.sysconf("SC_CLK_TCK"))
+PART1_PRODUCTION_SAMPLING_POLICY = "production"
+PART1_CUSTOM_SAMPLING_POLICY = "custom"
+PART1_SAMPLING_POLICIES = (
+    PART1_PRODUCTION_SAMPLING_POLICY,
+    PART1_CUSTOM_SAMPLING_POLICY,
+)
+CHURN_NEAR_CAPACITY_HEADROOM = 1
+MIN_CHURN_NEAR_CAPACITY_SAMPLES = 3
+MIN_CHURN_NEAR_CAPACITY_SAMPLE_FRACTION = 0.10
 PRODUCTION_SENTINEL_STAGES = (("early", 0.10), ("middle", 0.50), ("late", 0.90))
 RETRIEVAL_PADDING_SLACK_TOKENS = 64
 RETRIEVAL_SOURCE_MARGIN_TOKENS = 256
@@ -125,6 +139,14 @@ SPARSE_VERIFIER_GPU_COUNTER = "mistralrs_speculative_sparse_gpu_verify_total"
 SPARSE_VERIFIER_FALLBACK_COUNTER = "mistralrs_speculative_sparse_gpu_fallback_total"
 CUDA_GRAPH_DISPATCH_COUNTER = "mistralrs_cuda_graph_dispatch_total"
 CUDA_GRAPH_EVENTS_COUNTER = "mistralrs_cuda_graph_events_total"
+CUDA_GRAPH_EVICTIONS_COUNTER = "mistralrs_cuda_graph_evictions_total"
+CUDA_MEMORY_PENDING_GAUGE = "mistralrs_cuda_memory_maintenance_pending"
+CUDA_MEMORY_MAINTENANCE_COUNTER = "mistralrs_cuda_memory_maintenance_total"
+CUDA_MEMORY_PRESSURE_COUNTER = "mistralrs_cuda_memory_pressure_total"
+CUDA_MEMORY_RECLAIMED_BYTES_COUNTER = "mistralrs_cuda_memory_reclaimed_bytes_total"
+CUDA_PROMPT_BATCH_REDUCTIONS_COUNTER = "mistralrs_cuda_prompt_batch_reductions_total"
+CUDA_PROMPT_SEQUENCES_DEFERRED_COUNTER = "mistralrs_cuda_prompt_sequences_deferred_total"
+CUDA_PROMPT_MEMORY_REJECTIONS_COUNTER = "mistralrs_cuda_prompt_memory_rejections_total"
 WINDOWED_KV_SLOTS_USED_GAUGE = "mistralrs_windowed_kv_slots_used"
 WINDOWED_KV_SLOTS_TOTAL_GAUGE = "mistralrs_windowed_kv_slots_total"
 DFLASH_WINDOWED_KV_LIVE_SLOTS_USED_GAUGE = (
@@ -185,6 +207,28 @@ CANARY_PROMPTS = (
     "Describe what a long-running serving soak should measure.",
     "Explain why fixed seeds should survive request reordering.",
     "Give a concise definition of starvation-free scheduling.",
+)
+
+SERVER_COMMAND_SECRET_FLAGS = frozenset(
+    {
+        "--api-key",
+        "--hf-token",
+        "--token",
+        "--token-source",
+    }
+)
+SERVE_CONFIGURATION_FLAGS = (
+    "--paged-attn",
+    "--pa-context-len",
+    "--pa-memory-mb",
+    "--pa-memory-fraction",
+    "--pa-block-size",
+    "--pa-cache-type",
+    "--max-seqs",
+    "--max-num-batched-tokens",
+    "--max-prefill-chunk-tokens",
+    "--max-decode-steps-before-prefill",
+    "--mtp-model",
 )
 
 
@@ -586,6 +630,28 @@ class SamplingPolicy:
             "min_p": self.min_p,
             "repetition_penalty": self.repetition_penalty,
         }
+
+
+def production_sampling_policy_evidence(
+    name: str | None,
+    policy: SamplingPolicy | dict[str, Any],
+) -> dict[str, Any]:
+    actual = asdict(policy) if isinstance(policy, SamplingPolicy) else dict(policy)
+    expected = asdict(SamplingPolicy())
+    matches = {
+        field: actual.get(field) == expected_value
+        for field, expected_value in expected.items()
+    }
+    named = name == PART1_PRODUCTION_SAMPLING_POLICY
+    return {
+        "passed": named and all(matches.values()),
+        "name": name,
+        "required_name": PART1_PRODUCTION_SAMPLING_POLICY,
+        "named": named,
+        "actual": {field: actual.get(field) for field in expected},
+        "expected": expected,
+        "matches": matches,
+    }
 
 
 @dataclass(frozen=True, slots=True)
@@ -1019,6 +1085,14 @@ class SoakClient:
         response.raise_for_status()
         return parse_prometheus(response.text)
 
+    async def system_info(self) -> dict[str, Any]:
+        response = await self.http.get(f"{self.api_base}/system/info", timeout=30.0)
+        response.raise_for_status()
+        value = response.json()
+        if not isinstance(value, dict):
+            raise RuntimeError("system info endpoint returned a non-object response")
+        return value
+
 
 def parse_prometheus(text: str) -> dict[str, float]:
     result: dict[str, float] = {}
@@ -1069,6 +1143,246 @@ def metric_delta(before: dict[str, float], after: dict[str, float], metric: str)
     if end is None:
         return None
     return end - (start or 0.0)
+
+
+def command_option_value(argv: Sequence[str], *names: str) -> str | None:
+    value = None
+    for index, argument in enumerate(argv):
+        for name in names:
+            if argument == name and index + 1 < len(argv):
+                value = argv[index + 1]
+            elif argument.startswith(f"{name}="):
+                value = argument.split("=", maxsplit=1)[1]
+    return value
+
+
+def redact_server_argv(argv: Sequence[str]) -> list[str]:
+    redacted: list[str] = []
+    redact_next = False
+    for argument in argv:
+        if redact_next:
+            redacted.append("<redacted>")
+            redact_next = False
+            continue
+        name = argument.split("=", maxsplit=1)[0]
+        if name not in SERVER_COMMAND_SECRET_FLAGS:
+            redacted.append(argument)
+            continue
+        if "=" in argument:
+            redacted.append(f"{name}=<redacted>")
+        else:
+            redacted.append(argument)
+            redact_next = True
+    return redacted
+
+
+def parse_serve_configuration(argv: Sequence[str]) -> dict[str, Any]:
+    values = {
+        flag.removeprefix("--").replace("-", "_"): command_option_value(argv, flag)
+        for flag in SERVE_CONFIGURATION_FLAGS
+    }
+    values["model"] = command_option_value(argv, "-m", "--model")
+    values["subcommand"] = "serve" if "serve" in argv else None
+    values["paged_attn"] = values["paged_attn"] or "auto"
+    values["pa_cache_type"] = values["pa_cache_type"] or "auto"
+    return values
+
+
+def hash_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        while chunk := handle.read(1024 * 1024):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def read_server_process_provenance(server_pid: int) -> dict[str, Any]:
+    proc = Path("/proc") / str(server_pid)
+    cmdline_bytes = (proc / "cmdline").read_bytes()
+    argv = [os.fsdecode(value) for value in cmdline_bytes.split(b"\0") if value]
+    executable = Path(os.readlink(proc / "exe"))
+    stat = executable.stat()
+    redacted_argv = redact_server_argv(argv)
+    redacted_cmdline = b"\0".join(os.fsencode(value) for value in redacted_argv) + b"\0"
+    return {
+        "pid": server_pid,
+        "executable": str(executable),
+        "executable_sha256": hash_file(executable),
+        "executable_size_bytes": stat.st_size,
+        "executable_mtime_ns": stat.st_mtime_ns,
+        "working_directory": os.readlink(proc / "cwd"),
+        "argv_redacted": redacted_argv,
+        "command_redacted": shlex.join(redacted_argv),
+        "command_sha256": hashlib.sha256(redacted_cmdline).hexdigest(),
+        "command_hash_scope": "redacted_nul_delimited_argv",
+        "serve_configuration": parse_serve_configuration(argv),
+        "process_is_mistralrs": (
+            "mistralrs" in executable.name
+            or any("mistralrs" in value for value in argv[:1])
+        ),
+    }
+
+
+async def gpu_driver_provenance(server_pid: int | None) -> dict[str, Any]:
+    try:
+        process = await asyncio.create_subprocess_exec(
+            "nvidia-smi",
+            "--query-gpu=index,uuid,name,driver_version,memory.total",
+            "--format=csv,noheader,nounits",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, stderr = await process.communicate()
+        if process.returncode != 0:
+            raise RuntimeError(
+                f"nvidia-smi exited with status {process.returncode}: "
+                f"{stderr.decode(errors='replace').strip()}"
+            )
+        rows = []
+        for fields in csv.reader(stdout.decode().splitlines(), skipinitialspace=True):
+            if len(fields) != 5:
+                continue
+            rows.append(
+                {
+                    "index": int(fields[0]),
+                    "uuid": fields[1].strip(),
+                    "name": fields[2].strip(),
+                    "driver_version": fields[3].strip(),
+                    "memory_total_mib": float(fields[4]),
+                }
+            )
+        server_process_gpus: list[dict[str, Any]] = []
+        server_process_query_error = None
+        if server_pid is not None:
+            process = await asyncio.create_subprocess_exec(
+                "nvidia-smi",
+                "--query-compute-apps=pid,gpu_uuid",
+                "--format=csv,noheader,nounits",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            process_stdout, process_stderr = await process.communicate()
+            if process.returncode != 0:
+                server_process_query_error = (
+                    f"nvidia-smi exited with status {process.returncode}: "
+                    f"{process_stderr.decode(errors='replace').strip()}"
+                )
+            else:
+                for fields in csv.reader(
+                    process_stdout.decode().splitlines(),
+                    skipinitialspace=True,
+                ):
+                    if len(fields) != 2:
+                        continue
+                    try:
+                        pid = int(fields[0])
+                    except ValueError:
+                        continue
+                    if pid == server_pid:
+                        server_process_gpus.append(
+                            {"pid": pid, "gpu_uuid": fields[1].strip()}
+                        )
+        return {
+            "available": bool(rows),
+            "gpus": rows,
+            "server_process_gpus": server_process_gpus,
+            "server_process_query_error": server_process_query_error,
+        }
+    except (OSError, RuntimeError, ValueError) as exc:
+        return {
+            "available": False,
+            "gpus": [],
+            "server_process_gpus": [],
+            "error": f"{type(exc).__name__}: {exc}",
+        }
+
+
+def realized_kv_configuration(metrics: dict[str, float]) -> dict[str, Any]:
+    return {
+        "blocks_total": metric_total(metrics, "mistralrs_kv_cache_blocks_total"),
+        "blocks_total_series": labeled_metric_values(
+            metrics, "mistralrs_kv_cache_blocks_total"
+        ),
+        "blocks_active": metric_total(metrics, KV_CACHE_ACTIVE_GAUGE),
+        "blocks_active_series": labeled_metric_values(metrics, KV_CACHE_ACTIVE_GAUGE),
+        "blocks_prefix_cached": metric_total(metrics, KV_CACHE_PREFIX_CACHED_GAUGE),
+        "sequence_capacity": metric_total(metrics, "mistralrs_sequences_capacity"),
+        "recurrent_slots_total": metric_total(
+            metrics, "mistralrs_recurrent_state_slots_total"
+        ),
+    }
+
+
+def server_provenance_evidence(provenance: dict[str, Any]) -> dict[str, Any]:
+    build = (provenance.get("system_info") or {}).get("build") or {}
+    process = provenance.get("process") or {}
+    gpu = provenance.get("gpu_driver") or {}
+    serve = process.get("serve_configuration") or {}
+    kv = provenance.get("realized_kv_configuration") or {}
+    git_revision = str(build.get("git_revision") or "")
+    inventory_uuids = {item.get("uuid") for item in gpu.get("gpus") or []}
+    process_gpu_uuids = {
+        item.get("gpu_uuid") for item in gpu.get("server_process_gpus") or []
+    }
+    server_gpus_mapped = bool(process_gpu_uuids) and process_gpu_uuids.issubset(
+        inventory_uuids
+    )
+    checks = {
+        "git_revision": bool(re.fullmatch(r"[0-9a-fA-F]{40,64}", git_revision)),
+        "binary": bool(
+            process.get("process_is_mistralrs")
+            and process.get("executable")
+            and process.get("executable_sha256")
+        ),
+        "serve_command": bool(
+            process.get("command_sha256") and serve.get("subcommand") == "serve"
+        ),
+        "gpu_driver": bool(
+            gpu.get("available")
+            and (
+                provenance.get("server_pid") is None
+                or server_gpus_mapped
+            )
+        ),
+        "kv_configuration": bool(
+            serve.get("pa_cache_type") not in (None, "auto")
+            and serve.get("paged_attn")
+            and kv.get("blocks_total") is not None
+            and kv.get("sequence_capacity") is not None
+        ),
+    }
+    return {"complete": all(checks.values()), "checks": checks}
+
+
+async def collect_server_provenance(
+    client: SoakClient, server_pid: int | None
+) -> dict[str, Any]:
+    provenance: dict[str, Any] = {"server_pid": server_pid, "errors": {}}
+    try:
+        provenance["system_info"] = await client.system_info()
+    except Exception as exc:
+        provenance["system_info"] = None
+        provenance["errors"]["system_info"] = f"{type(exc).__name__}: {exc}"
+    if server_pid is not None:
+        try:
+            provenance["process"] = await asyncio.to_thread(
+                read_server_process_provenance, server_pid
+            )
+        except (OSError, ValueError) as exc:
+            provenance["process"] = None
+            provenance["errors"]["process"] = f"{type(exc).__name__}: {exc}"
+    else:
+        provenance["process"] = None
+        provenance["errors"]["process"] = "server PID was not provided"
+    provenance["gpu_driver"] = await gpu_driver_provenance(server_pid)
+    try:
+        metrics = await client.metrics()
+        provenance["realized_kv_configuration"] = realized_kv_configuration(metrics)
+    except Exception as exc:
+        provenance["realized_kv_configuration"] = {}
+        provenance["errors"]["metrics"] = f"{type(exc).__name__}: {exc}"
+    provenance["evidence"] = server_provenance_evidence(provenance)
+    return provenance
 
 
 def prefix_pressure_plan(
@@ -1545,6 +1859,57 @@ def exact_output_diagnostics(
     }
 
 
+def fixed_seed_comparison_evidence(
+    exact: dict[str, Any],
+    statistical: dict[str, Any],
+    semantic_passed: bool,
+) -> dict[str, Any]:
+    return {
+        "exact_diagnostics": exact,
+        "exact_diagnostics_gated": True,
+        "statistical_comparison": statistical,
+        "semantic_passed": semantic_passed,
+        "passed": exact["passed"] and statistical["passed"] and semantic_passed,
+    }
+
+
+def fixed_seed_invariance_evidence(
+    exact_replays: Sequence[dict[str, Any]],
+    exact_orderings: Sequence[dict[str, Any]],
+    cross_phase_comparisons: Sequence[dict[str, Any]],
+    phase_count: int,
+) -> dict[str, Any]:
+    expected_cross_phase_comparisons = max(0, phase_count - 1)
+    expected_counts = {
+        "exact_replays": phase_count,
+        "exact_orderings": phase_count,
+        "cross_phase_comparisons": expected_cross_phase_comparisons,
+    }
+    observed_counts = {
+        "exact_replays": len(exact_replays),
+        "exact_orderings": len(exact_orderings),
+        "cross_phase_comparisons": len(cross_phase_comparisons),
+    }
+    comparisons = [*exact_replays, *exact_orderings, *cross_phase_comparisons]
+    exact_diagnostics = [item.get("exact_diagnostics") or {} for item in comparisons]
+    counts_complete = observed_counts == expected_counts
+    exact_complete = bool(comparisons) and all(
+        item.get("passed") is True for item in exact_diagnostics
+    )
+    all_gated = bool(comparisons) and all(
+        item.get("exact_diagnostics_gated") is True for item in comparisons
+    )
+    return {
+        "passed": counts_complete and exact_complete and all_gated,
+        "phase_count": phase_count,
+        "expected_counts": expected_counts,
+        "observed_counts": observed_counts,
+        "counts_complete": counts_complete,
+        "exact_complete": exact_complete,
+        "all_gated": all_gated,
+    }
+
+
 def full_batch_specs(
     specs: Sequence[RequestSpec], concurrency: int
 ) -> list[RequestSpec]:
@@ -1688,6 +2053,7 @@ def artifact_compatibility(
     candidate_args = candidate_start.get("arguments") or {}
     reference_args = reference_start.get("arguments") or {}
     fields = (
+        "sampling_policy",
         "seed",
         "temperature",
         "top_p",
@@ -1767,8 +2133,10 @@ async def compare_mode(
     reference_canary_passed = (reference_metadata.get("run_summary") or {}).get("passed")
     candidate_summary = candidate_metadata.get("run_summary") or {}
     reference_summary = reference_metadata.get("run_summary") or {}
-    candidate_args = (candidate_metadata.get("run_start") or {}).get("arguments") or {}
-    reference_args = (reference_metadata.get("run_start") or {}).get("arguments") or {}
+    candidate_start = candidate_metadata.get("run_start") or {}
+    reference_start = reference_metadata.get("run_start") or {}
+    candidate_args = candidate_start.get("arguments") or {}
+    reference_args = reference_start.get("arguments") or {}
     candidate_concurrencies = set(candidate_args.get("concurrencies") or ())
     reference_concurrencies = set(reference_args.get("concurrencies") or ())
     candidate_mtp = candidate_summary.get("candidate_mtp") or {}
@@ -1776,12 +2144,30 @@ async def compare_mode(
     candidate_graph = candidate_summary.get("candidate_cuda_graph") or {}
     reference_graph = reference_summary.get("candidate_cuda_graph") or {}
     candidate_edges = candidate_summary.get("edge_cases") or {}
+    candidate_sampling = production_sampling_policy_evidence(
+        candidate_args.get("sampling_policy"),
+        candidate_start.get("policy") or candidate_args,
+    )
+    reference_sampling = production_sampling_policy_evidence(
+        reference_args.get("sampling_policy"),
+        reference_start.get("policy") or reference_args,
+    )
+    candidate_fixed_seed = candidate_summary.get("fixed_seed_exact_invariance") or {}
+    reference_fixed_seed = reference_summary.get("fixed_seed_exact_invariance") or {}
     part1_coverage = {
         "candidate_c1_c8_c16": set(DEFAULT_CONCURRENCIES).issubset(
             candidate_concurrencies
         ),
         "reference_c1_c8_c16": set(DEFAULT_CONCURRENCIES).issubset(
             reference_concurrencies
+        ),
+        "candidate_production_sampling_policy": candidate_sampling["passed"],
+        "reference_production_sampling_policy": reference_sampling["passed"],
+        "candidate_fixed_seed_exact_invariance": (
+            candidate_fixed_seed.get("passed") is True
+        ),
+        "reference_fixed_seed_exact_invariance": (
+            reference_fixed_seed.get("passed") is True
         ),
         "candidate_edge_cases": (
             candidate_edges.get("passed") is True
@@ -1826,6 +2212,8 @@ async def compare_mode(
         "comparison_passed": comparison_passed,
         "coverage_complete": coverage_complete,
         "part1_coverage": part1_coverage,
+        "candidate_sampling_policy": candidate_sampling,
+        "reference_sampling_policy": reference_sampling,
         "require_part1_complete": args.require_part1_complete,
         "candidate": str(args.candidate),
         "reference": str(args.reference),
@@ -2136,21 +2524,14 @@ async def canary_mode(
                     args.stat_max_ks,
                     args.stat_max_js,
                 )
-                exact_gated = concurrency == 1
                 replay = {
                     "concurrency": concurrency,
-                    "exact_diagnostics": exact,
-                    "exact_diagnostics_gated": exact_gated,
-                    "statistical_comparison": statistical_replay,
-                    "semantic_passed": (
+                    **fixed_seed_comparison_evidence(
+                        exact,
+                        statistical_replay,
                         semantic_by_phase[normal_phase] and semantic_by_phase[phase]
                     ),
                 }
-                replay["passed"] = (
-                    replay["semantic_passed"]
-                    and statistical_replay["passed"]
-                    and (not exact_gated or exact["passed"])
-                )
                 exact_replays.append(replay)
                 await writer.emit("exact_replay_comparison", **replay)
             else:
@@ -2174,17 +2555,12 @@ async def canary_mode(
                 )
                 ordering = {
                     "concurrency": concurrency,
-                    "exact_diagnostics": exact,
-                    "exact_diagnostics_gated": False,
-                    "statistical_comparison": statistical_ordering,
-                    "semantic_passed": (
+                    **fixed_seed_comparison_evidence(
+                        exact,
+                        statistical_ordering,
                         semantic_by_phase[normal_phase] and semantic_by_phase[phase]
                     ),
                 }
-                ordering["passed"] = (
-                    ordering["semantic_passed"]
-                    and statistical_ordering["passed"]
-                )
                 exact_orderings.append(ordering)
                 await writer.emit("exact_ordering_comparison", **ordering)
     if baseline is None:
@@ -2206,11 +2582,11 @@ async def canary_mode(
         semantic_passed = semantic_by_phase[baseline_phase] and semantic_by_phase[phase]
         comparison = {
             "phase": phase,
-            "exact_diagnostics": exact,
-            "exact_diagnostics_gated": False,
-            "statistical_comparison": statistical,
-            "semantic_passed": semantic_passed,
-            "passed": statistical["passed"] and semantic_passed,
+            **fixed_seed_comparison_evidence(
+                exact,
+                statistical,
+                semantic_passed,
+            ),
         }
         cross_phase_comparisons.append(comparison)
         fixed_seed_mismatches.extend(
@@ -2314,6 +2690,16 @@ async def canary_mode(
         args.expected_graph_components,
         args.min_cuda_graph_replay_ratio,
     )
+    sampling_policy = production_sampling_policy_evidence(
+        args.sampling_policy,
+        client.policy,
+    )
+    fixed_seed_invariance = fixed_seed_invariance_evidence(
+        exact_replays,
+        exact_orderings,
+        cross_phase_comparisons,
+        len(args.concurrencies),
+    )
     edge_names = {"stop_sequence", "max_length", "regex", "json_schema", "required_tool", "eos"}
     edge_coverage_complete = (
         not args.skip_edge_cases
@@ -2322,6 +2708,8 @@ async def canary_mode(
     )
     part1_coverage = {
         "c1_c8_c16": set(DEFAULT_CONCURRENCIES).issubset(args.concurrencies),
+        "production_sampling_policy": sampling_policy["passed"],
+        "fixed_seed_exact_invariance": fixed_seed_invariance["passed"],
         "edge_cases": edge_coverage_complete,
         "target_reference": args.reference_url is not None,
         "statistical_comparison": (
@@ -2361,6 +2749,8 @@ async def canary_mode(
         "part1_coverage": part1_coverage,
         "require_part1_complete": args.require_part1_complete,
         "production_sampling": asdict(client.policy),
+        "sampling_policy": sampling_policy,
+        "fixed_seed_exact_invariance": fixed_seed_invariance,
         "summaries": summaries,
         "exact_replays": exact_replays,
         "exact_orderings": exact_orderings,
@@ -2823,16 +3213,12 @@ async def run_long_context_correctness(
                 )
                 ordering_diagnostics = {
                     "concurrency": concurrency,
-                    "exact_diagnostics": exact,
-                    "exact_diagnostics_gated": False,
-                    "statistical_comparison": statistical,
-                    "semantic_passed": (
+                    **fixed_seed_comparison_evidence(
+                        exact,
+                        statistical,
                         semantic_by_phase[normal_phase] and semantic_by_phase[phase]
                     ),
                 }
-                ordering_diagnostics["passed"] = (
-                    ordering_diagnostics["semantic_passed"] and statistical["passed"]
-                )
                 exact_orderings.append(ordering_diagnostics)
                 await writer.emit(
                     "exact_ordering_comparison", **ordering_diagnostics
@@ -2853,11 +3239,11 @@ async def run_long_context_correctness(
         semantic_passed = semantic_by_phase[baseline_phase] and semantic_by_phase[phase]
         comparison = {
             "phase": phase,
-            "exact_diagnostics": exact,
-            "exact_diagnostics_gated": False,
-            "statistical_comparison": statistical,
-            "semantic_passed": semantic_passed,
-            "passed": statistical["passed"] and semantic_passed,
+            **fixed_seed_comparison_evidence(
+                exact,
+                statistical,
+                semantic_passed,
+            ),
         }
         cross_phase_comparisons.append(comparison)
         await writer.emit("cross_shape_comparison", **comparison)
@@ -2915,10 +3301,19 @@ RESIDENT_TRANSIENT_CLEANUP_GAUGES = (
     KV_CACHE_ACTIVE_GAUGE,
     "http_requests_in_flight",
 )
-OPTIONAL_CLEANUP_GAUGES = (DFLASH_WINDOWED_KV_LIVE_SLOTS_USED_GAUGE,)
+OPTIONAL_CLEANUP_GAUGES = (
+    DFLASH_WINDOWED_KV_LIVE_SLOTS_USED_GAUGE,
+    CUDA_MEMORY_PENDING_GAUGE,
+)
 DFLASH_TRANSIENT_CLEANUP_GAUGES = (
     DFLASH_WINDOWED_KV_LIVE_SLOTS_USED_GAUGE,
     DFLASH_WINDOWED_KV_CHECKPOINT_SLOTS_USED_GAUGE,
+)
+CHURN_REQUIRED_GAUGES = (
+    "mistralrs_sequences_capacity",
+    "mistralrs_sequences_running",
+    "mistralrs_sequences_waiting",
+    "mistralrs_requests_pending_admission",
 )
 
 
@@ -2957,6 +3352,127 @@ def cleanup_evidence(
                 ),
             )
         },
+    }
+
+
+def prefix_cached_ownership_evidence(
+    cancel_delta: float | None,
+    retry_delta: float | None,
+    timeout_delta: float | None,
+) -> dict[str, Any]:
+    stages = {
+        "cancellation_cleanup": {
+            "delta": cancel_delta,
+            "expectation": "non_increasing",
+            "passed": cancel_delta is not None and cancel_delta <= 0,
+        },
+        "successful_retry": {
+            "delta": retry_delta,
+            "expectation": "increasing",
+            "passed": retry_delta is not None and retry_delta > 0,
+        },
+        "timeout_cleanup": {
+            "delta": timeout_delta,
+            "expectation": "non_increasing",
+            "passed": timeout_delta is not None and timeout_delta <= 0,
+        },
+    }
+    instrumentation_complete = all(item["delta"] is not None for item in stages.values())
+    return {
+        "passed": instrumentation_complete and all(item["passed"] for item in stages.values()),
+        "instrumentation_complete": instrumentation_complete,
+        "metric": KV_CACHE_PREFIX_CACHED_GAUGE,
+        "stages": stages,
+    }
+
+
+def churn_capacity_evidence(
+    queue_samples: Sequence[dict[str, float | None]],
+    width: int,
+    max_sequences: int,
+    server_sequence_capacity: float | None,
+    cleanup_ok: bool,
+    errors: int,
+) -> dict[str, Any]:
+    instrumentation_complete = bool(queue_samples) and all(
+        sample.get(name) is not None
+        for sample in queue_samples
+        for name in CHURN_REQUIRED_GAUGES
+    )
+    running_values = [
+        value
+        for sample in queue_samples
+        if (value := sample.get("mistralrs_sequences_running")) is not None
+    ]
+    waiting_values = [
+        value
+        for sample in queue_samples
+        if (value := sample.get("mistralrs_sequences_waiting")) is not None
+    ]
+    pending_values = [
+        value
+        for sample in queue_samples
+        if (value := sample.get("mistralrs_requests_pending_admission")) is not None
+    ]
+    peak_running = max(running_values, default=None)
+    peak_waiting = max(waiting_values, default=None)
+    peak_pending = max(pending_values, default=None)
+    near_capacity_threshold = min(
+        width,
+        max_sequences - CHURN_NEAR_CAPACITY_HEADROOM,
+    )
+    near_capacity_samples = sum(
+        value >= near_capacity_threshold for value in running_values
+    )
+    near_capacity_sample_fraction = ratio(
+        near_capacity_samples,
+        len(running_values),
+    )
+    near_capacity_sustained = (
+        near_capacity_threshold > 0
+        and near_capacity_samples >= MIN_CHURN_NEAR_CAPACITY_SAMPLES
+        and near_capacity_sample_fraction is not None
+        and near_capacity_sample_fraction >= MIN_CHURN_NEAR_CAPACITY_SAMPLE_FRACTION
+    )
+    queue_required = width > max_sequences
+    queue_observed = bool(
+        (peak_waiting is not None and peak_waiting > 0)
+        or (peak_pending is not None and peak_pending > 0)
+    )
+    capacity_matches = server_sequence_capacity == max_sequences
+    capacity_respected = peak_running is not None and peak_running <= max_sequences
+    return {
+        "passed": (
+            instrumentation_complete
+            and capacity_matches
+            and capacity_respected
+            and near_capacity_sustained
+            and (not queue_required or queue_observed)
+            and cleanup_ok
+            and errors == 0
+        ),
+        "width": width,
+        "configured_max_seqs": max_sequences,
+        "server_sequence_capacity": server_sequence_capacity,
+        "capacity_matches": capacity_matches,
+        "instrumentation_complete": instrumentation_complete,
+        "queue_required": queue_required,
+        "queue_observed": queue_observed,
+        "peak_running": peak_running,
+        "peak_waiting": peak_waiting,
+        "peak_pending_admission": peak_pending,
+        "capacity_respected": capacity_respected,
+        "near_capacity_threshold": near_capacity_threshold,
+        "near_capacity_samples": near_capacity_samples,
+        "near_capacity_total_samples": len(running_values),
+        "near_capacity_sample_fraction": near_capacity_sample_fraction,
+        "minimum_near_capacity_samples": MIN_CHURN_NEAR_CAPACITY_SAMPLES,
+        "minimum_near_capacity_sample_fraction": (
+            MIN_CHURN_NEAR_CAPACITY_SAMPLE_FRACTION
+        ),
+        "near_capacity_sustained": near_capacity_sustained,
+        "cleanup_ok": cleanup_ok,
+        "errors": errors,
     }
 
 
@@ -3013,6 +3529,281 @@ async def poll_for_cleanup(
     )
     detail["timeout_seconds"] = timeout_seconds
     return False, last_snapshot, detail
+
+
+async def run_prefix_pressure_workflow(
+    args: argparse.Namespace,
+    client: SoakClient,
+    writer: JsonlWriter,
+) -> dict[str, Any]:
+    summaries: list[dict[str, Any]] = []
+    quality_checks: list[dict[str, Any]] = []
+
+    async def record_quality(phase: str, results: Sequence[RequestResult]) -> None:
+        for result in results:
+            valid, detail = validate_sampled_output(
+                result,
+                client.tokenizer,
+                args.max_repeated_ngram_ratio,
+            )
+            check = {"phase": phase, "valid": valid, **detail}
+            quality_checks.append(check)
+            await writer.emit("prefix_pressure_quality", **check)
+
+    prefix_prompt = exact_context(
+        client,
+        args.prefix_context_tokens,
+        f"{args.prefix_pressure_namespace}-target",
+    )
+    prefix_seed = args.seed + 60_000
+    pre_prefix_metrics = await safe_metrics(client, writer, "prefix-before-cold")
+    sequence_capacity = metric_total(
+        pre_prefix_metrics,
+        "mistralrs_sequences_capacity",
+    )
+    capacity_matches = sequence_capacity == args.max_seqs
+    prefix_spec = RequestSpec(
+        case_id="prefix-cold",
+        seed=prefix_seed,
+        max_tokens=args.max_tokens,
+        prompt=prefix_prompt,
+        context_tokens=args.prefix_context_tokens,
+        tags={"scenario": "prefix", "stage": "cold"},
+    )
+    cold, cold_summary = await run_batch(
+        client,
+        [prefix_spec],
+        1,
+        writer,
+        "prefix-cold",
+        keep_output=True,
+    )
+    summaries.append(cold_summary)
+    await record_quality("prefix-cold", cold)
+    post_cold_metrics = await safe_metrics(client, writer, "prefix-after-cold")
+    hit_spec = RequestSpec(
+        case_id="prefix-hit",
+        seed=prefix_seed,
+        max_tokens=args.max_tokens,
+        prompt=prefix_prompt,
+        context_tokens=args.prefix_context_tokens,
+        tags={"scenario": "prefix", "stage": "hit"},
+    )
+    hit, hit_summary = await run_batch(
+        client,
+        [hit_spec],
+        1,
+        writer,
+        "prefix-hit",
+        keep_output=True,
+    )
+    summaries.append(hit_summary)
+    await record_quality("prefix-hit", hit)
+    post_hit_metrics = await safe_metrics(client, writer, "prefix-after-hit")
+    hit_evidence = prefix_cache_evidence(
+        post_cold_metrics,
+        post_hit_metrics,
+        [args.prefix_context_tokens],
+        args.min_prefix_reuse_fraction,
+        args.kv_block_size_tokens,
+        args.speculative_prefix_replay_tokens,
+    )
+    cold_reused_tokens = metric_delta(
+        pre_prefix_metrics,
+        post_cold_metrics,
+        "mistralrs_prefix_cache_tokens_reused_total",
+    )
+    cold_reuse_fraction = ratio(cold_reused_tokens, args.prefix_context_tokens)
+    cold_miss_observed = (
+        cold_reuse_fraction is not None
+        and cold_reuse_fraction <= 1.0 - args.min_prefix_reuse_fraction
+    )
+
+    total_kv_blocks = metric_total(
+        post_hit_metrics,
+        "mistralrs_kv_cache_blocks_total",
+    )
+    if total_kv_blocks is None or total_kv_blocks <= 0:
+        raise RuntimeError("prefix pressure requires mistralrs_kv_cache_blocks_total")
+    pressure_blocks_per_request = math.ceil(
+        args.prefix_pressure_context_tokens / args.kv_block_size_tokens
+    )
+    capacity_pressure_entries = math.ceil(
+        total_kv_blocks
+        * args.prefix_pressure_capacity_fraction
+        / pressure_blocks_per_request
+    )
+    pressure_entries = max(args.prefix_pressure_entries, capacity_pressure_entries)
+    if pressure_entries > args.prefix_pressure_max_entries:
+        raise RuntimeError(
+            "capacity-derived prefix pressure requires "
+            f"{pressure_entries} entries, above --prefix-pressure-max-entries "
+            f"{args.prefix_pressure_max_entries}; increase the pressure context length or cap"
+        )
+    pressure_plan = prefix_pressure_plan(
+        post_hit_metrics,
+        PrefixPressureConfig(
+            entries=pressure_entries,
+            max_sequences=args.max_seqs,
+            context_tokens=args.prefix_pressure_context_tokens,
+            max_completion_tokens=args.prefix_pressure_max_tokens,
+            block_size_tokens=args.kv_block_size_tokens,
+            kv_headroom_fraction=args.prefix_pressure_kv_headroom_fraction,
+        ),
+    )
+    await writer.emit("prefix_pressure_plan", **pressure_plan)
+    eviction_specs = [
+        RequestSpec(
+            case_id=f"prefix-pressure-{index:04d}",
+            seed=args.seed + 61_000 + index,
+            max_tokens=args.prefix_pressure_max_tokens,
+            prompt=exact_context(
+                client,
+                args.prefix_pressure_context_tokens,
+                f"{args.prefix_pressure_namespace}-pressure-{index}",
+            ),
+            context_tokens=args.prefix_pressure_context_tokens,
+            tags={"scenario": "prefix", "stage": "pressure"},
+            extra={"ignore_eos": True},
+        )
+        for index in range(pressure_entries)
+    ]
+    pressure_results, pressure_summary = await run_batch(
+        client,
+        eviction_specs,
+        int(pressure_plan["concurrency"]),
+        writer,
+        "prefix-pressure",
+        keep_output=False,
+    )
+    summaries.append(pressure_summary)
+    await record_quality("prefix-pressure", pressure_results)
+    post_pressure_metrics = await safe_metrics(
+        client,
+        writer,
+        "prefix-after-pressure-load",
+    )
+    pressure_evictions = metric_delta(
+        post_hit_metrics,
+        post_pressure_metrics,
+        "mistralrs_prefix_cache_evictions_total",
+    )
+    pressure_reached_eviction = pressure_evictions is not None and pressure_evictions > 0
+    after_spec = RequestSpec(
+        case_id="prefix-after-pressure",
+        seed=prefix_seed,
+        max_tokens=args.max_tokens,
+        prompt=prefix_prompt,
+        context_tokens=args.prefix_context_tokens,
+        tags={"scenario": "prefix", "stage": "after_pressure"},
+    )
+    after, after_summary = await run_batch(
+        client,
+        [after_spec],
+        1,
+        writer,
+        "prefix-after-pressure",
+        keep_output=True,
+    )
+    summaries.append(after_summary)
+    await record_quality("prefix-after-pressure", after)
+    post_after_metrics = await safe_metrics(
+        client,
+        writer,
+        "prefix-after-evicted-retry",
+    )
+    after_reused_tokens = metric_delta(
+        post_pressure_metrics,
+        post_after_metrics,
+        "mistralrs_prefix_cache_tokens_reused_total",
+    )
+    after_reuse_fraction = ratio(after_reused_tokens, args.prefix_context_tokens)
+    target_was_evicted = (
+        after_reuse_fraction is not None
+        and after_reuse_fraction <= 1.0 - args.min_prefix_reuse_fraction
+    )
+    prefix_correct = (
+        cold[0].output_transcript
+        == hit[0].output_transcript
+        == after[0].output_transcript
+    )
+    cleanup_ok, cleanup_metrics, cleanup = await poll_for_cleanup(
+        client,
+        writer,
+        pre_prefix_metrics,
+        args.cleanup_timeout_seconds,
+        args.cleanup_poll_seconds,
+        "prefix-pressure-cleanup",
+        RESIDENT_TRANSIENT_CLEANUP_GAUGES,
+        (*OPTIONAL_CLEANUP_GAUGES, *DFLASH_TRANSIENT_CLEANUP_GAUGES),
+    )
+    memory_pressure = cuda_memory_pressure_evidence(
+        post_hit_metrics,
+        cleanup_metrics,
+        require_instrumentation=True,
+    )
+    await writer.emit("cuda_memory_pressure_summary", **memory_pressure)
+    prefix_cache_stages = {
+        "cold_miss_observed": cold_miss_observed,
+        "cold_reused_tokens": cold_reused_tokens,
+        "cold_reuse_fraction": cold_reuse_fraction,
+        "hit": hit_evidence,
+        "kv_blocks_total": total_kv_blocks,
+        "kv_block_size_tokens": args.kv_block_size_tokens,
+        "pressure_context_tokens": args.prefix_pressure_context_tokens,
+        "pressure_capacity_fraction": args.prefix_pressure_capacity_fraction,
+        "pressure_entries_configured_minimum": args.prefix_pressure_entries,
+        "pressure_entries_capacity_derived": capacity_pressure_entries,
+        "pressure_entries_executed": pressure_entries,
+        "pressure_plan": pressure_plan,
+        "pressure_evictions": pressure_evictions,
+        "pressure_reached_eviction": pressure_reached_eviction,
+        "target_retry_reused_tokens": after_reused_tokens,
+        "target_retry_reuse_fraction": after_reuse_fraction,
+        "target_was_evicted": target_was_evicted,
+        "outputs_equal": prefix_correct,
+    }
+    passed = (
+        capacity_matches
+        and all(summary["errors"] == 0 for summary in summaries)
+        and all(item["valid"] for item in quality_checks)
+        and prefix_correct
+        and cold_miss_observed
+        and hit_evidence["passed"]
+        and pressure_reached_eviction
+        and target_was_evicted
+        and cleanup_ok
+        and memory_pressure["passed"]
+    )
+    prefix_cache_stages["passed"] = passed
+    result = {
+        "mode": "prefix-pressure",
+        "passed": passed,
+        "summaries": summaries,
+        "quality_checks": quality_checks,
+        "configured_max_seqs": args.max_seqs,
+        "server_sequence_capacity": sequence_capacity,
+        "capacity_matches": capacity_matches,
+        "prefix_cache": prefix_cache_stages,
+        "cleanup_ok": cleanup_ok,
+        "cleanup": cleanup,
+        "memory_pressure": memory_pressure,
+        "metric_deltas": selected_metric_deltas(
+            pre_prefix_metrics,
+            cleanup_metrics,
+        ),
+    }
+    await writer.emit("prefix_cache_stage_summary", **result)
+    return result
+
+
+async def prefix_pressure_mode(
+    args: argparse.Namespace,
+    client: SoakClient,
+    writer: JsonlWriter,
+) -> dict[str, Any]:
+    await calibrate_prompt_profiles(client, writer, (CONTEXT_PROMPT_PROFILE,))
+    return await run_prefix_pressure_workflow(args, client, writer)
 
 
 async def adversarial_mode(
@@ -3079,6 +3870,11 @@ async def adversarial_mode(
                 args.expected_graph_components,
                 args.min_cuda_graph_replay_ratio,
             ),
+            "cuda_memory": cuda_memory_pressure_evidence(
+                runtime_cursor,
+                after,
+                require_instrumentation=gated,
+            ),
             "queue_latency_histograms": queue_histogram_summaries(
                 runtime_cursor,
                 after,
@@ -3090,6 +3886,7 @@ async def adversarial_mode(
             or (
                 evidence["mtp"]["passed"]
                 and evidence["cuda_graph"]["passed"]
+                and evidence["cuda_memory"]["passed"]
             )
         )
         runtime_evidence.append(evidence)
@@ -3767,179 +4564,12 @@ async def adversarial_mode(
     await record_quality("adversarial-burst", burst_results)
     await record_runtime("adversarial-burst", True)
 
-    prefix_prompt = contexts[args.prefix_context_tokens]
-    prefix_seed = args.seed + 60_000
-    pre_prefix_metrics = await safe_metrics(client, writer, "prefix-before-cold")
-    prefix_spec = RequestSpec(
-        case_id="prefix-cold",
-        seed=prefix_seed,
-        max_tokens=args.max_tokens,
-        prompt=prefix_prompt,
-        context_tokens=args.prefix_context_tokens,
-        tags={"scenario": "prefix", "stage": "cold"},
-    )
-    cold, cold_summary = await run_batch(
-        client, [prefix_spec], 1, writer, "prefix-cold", keep_output=True
-    )
-    summaries.append(cold_summary)
-    await record_quality("prefix-cold", cold)
-    post_cold_metrics = await safe_metrics(client, writer, "prefix-after-cold")
-    hit_spec = RequestSpec(
-        case_id="prefix-hit",
-        seed=prefix_seed,
-        max_tokens=args.max_tokens,
-        prompt=prefix_prompt,
-        context_tokens=args.prefix_context_tokens,
-        tags={"scenario": "prefix", "stage": "hit"},
-    )
-    hit, hit_summary = await run_batch(
-        client, [hit_spec], 1, writer, "prefix-hit", keep_output=True
-    )
-    summaries.append(hit_summary)
-    await record_quality("prefix-hit", hit)
-    post_hit_metrics = await safe_metrics(client, writer, "prefix-after-hit")
-    hit_evidence = prefix_cache_evidence(
-        post_cold_metrics,
-        post_hit_metrics,
-        [args.prefix_context_tokens],
-        args.min_prefix_reuse_fraction,
-        args.kv_block_size_tokens,
-        args.speculative_prefix_replay_tokens,
-    )
-    cold_reused_tokens = metric_delta(
-        pre_prefix_metrics,
-        post_cold_metrics,
-        "mistralrs_prefix_cache_tokens_reused_total",
-    )
-    cold_reuse_fraction = ratio(cold_reused_tokens, args.prefix_context_tokens)
-    cold_miss_observed = (
-        cold_reuse_fraction is not None
-        and cold_reuse_fraction <= 1.0 - args.min_prefix_reuse_fraction
-    )
-
-    total_kv_blocks = metric_total(
-        post_hit_metrics,
-        "mistralrs_kv_cache_blocks_total",
-    )
-    if total_kv_blocks is None or total_kv_blocks <= 0:
-        raise RuntimeError("prefix pressure requires mistralrs_kv_cache_blocks_total")
-    pressure_blocks_per_request = math.ceil(
-        args.prefix_pressure_context_tokens / args.kv_block_size_tokens
-    )
-    capacity_pressure_entries = math.ceil(
-        total_kv_blocks
-        * args.prefix_pressure_capacity_fraction
-        / pressure_blocks_per_request
-    )
-    pressure_entries = max(args.prefix_pressure_entries, capacity_pressure_entries)
-    if pressure_entries > args.prefix_pressure_max_entries:
-        raise RuntimeError(
-            "capacity-derived prefix pressure requires "
-            f"{pressure_entries} entries, above --prefix-pressure-max-entries "
-            f"{args.prefix_pressure_max_entries}; increase the pressure context length or cap"
-        )
-    pressure_plan = prefix_pressure_plan(
-        post_hit_metrics,
-        PrefixPressureConfig(
-            entries=pressure_entries,
-            max_sequences=args.max_seqs,
-            context_tokens=args.prefix_pressure_context_tokens,
-            max_completion_tokens=args.prefix_pressure_max_tokens,
-            block_size_tokens=args.kv_block_size_tokens,
-            kv_headroom_fraction=args.prefix_pressure_kv_headroom_fraction,
-        ),
-    )
-    await writer.emit("prefix_pressure_plan", **pressure_plan)
-    eviction_specs = [
-        RequestSpec(
-            case_id=f"prefix-pressure-{index:04d}",
-            seed=args.seed + 61_000 + index,
-            max_tokens=args.prefix_pressure_max_tokens,
-            prompt=exact_context(
-                client,
-                args.prefix_pressure_context_tokens,
-                f"prefix-pressure-{index}",
-            ),
-            context_tokens=args.prefix_pressure_context_tokens,
-            tags={"scenario": "prefix", "stage": "pressure"},
-        )
-        for index in range(pressure_entries)
-    ]
-    pressure_results, pressure_summary = await run_batch(
-        client,
-        eviction_specs,
-        int(pressure_plan["concurrency"]),
-        writer,
-        "prefix-pressure",
-        keep_output=False,
-    )
-    summaries.append(pressure_summary)
-    await record_quality("prefix-pressure", pressure_results)
-    post_pressure_metrics = await safe_metrics(client, writer, "prefix-after-pressure-load")
-    pressure_evictions = metric_delta(
-        post_hit_metrics,
-        post_pressure_metrics,
-        "mistralrs_prefix_cache_evictions_total",
-    )
-    pressure_reached_eviction = pressure_evictions is not None and pressure_evictions > 0
-    after_spec = RequestSpec(
-        case_id="prefix-after-pressure",
-        seed=prefix_seed,
-        max_tokens=args.max_tokens,
-        prompt=prefix_prompt,
-        context_tokens=args.prefix_context_tokens,
-        tags={"scenario": "prefix", "stage": "after_pressure"},
-    )
-    after, after_summary = await run_batch(
-        client, [after_spec], 1, writer, "prefix-after-pressure", keep_output=True
-    )
-    summaries.append(after_summary)
-    await record_quality("prefix-after-pressure", after)
-    post_after_metrics = await safe_metrics(client, writer, "prefix-after-evicted-retry")
-    after_reused_tokens = metric_delta(
-        post_pressure_metrics,
-        post_after_metrics,
-        "mistralrs_prefix_cache_tokens_reused_total",
-    )
-    after_reuse_fraction = ratio(after_reused_tokens, args.prefix_context_tokens)
-    target_was_evicted = (
-        after_reuse_fraction is not None
-        and after_reuse_fraction <= 1.0 - args.min_prefix_reuse_fraction
-    )
-    prefix_correct = (
-        cold[0].output_transcript
-        == hit[0].output_transcript
-        == after[0].output_transcript
-    )
-    prefix_cache_stage_passed = (
-        prefix_correct
-        and cold_miss_observed
-        and hit_evidence["passed"]
-        and pressure_reached_eviction
-        and target_was_evicted
-    )
-    prefix_cache_stages = {
-        "passed": prefix_cache_stage_passed,
-        "cold_miss_observed": cold_miss_observed,
-        "cold_reused_tokens": cold_reused_tokens,
-        "cold_reuse_fraction": cold_reuse_fraction,
-        "hit": hit_evidence,
-        "kv_blocks_total": total_kv_blocks,
-        "kv_block_size_tokens": args.kv_block_size_tokens,
-        "pressure_context_tokens": args.prefix_pressure_context_tokens,
-        "pressure_capacity_fraction": args.prefix_pressure_capacity_fraction,
-        "pressure_entries_configured_minimum": args.prefix_pressure_entries,
-        "pressure_entries_capacity_derived": capacity_pressure_entries,
-        "pressure_entries_executed": pressure_entries,
-        "pressure_plan": pressure_plan,
-        "pressure_evictions": pressure_evictions,
-        "pressure_reached_eviction": pressure_reached_eviction,
-        "target_retry_reused_tokens": after_reused_tokens,
-        "target_retry_reuse_fraction": after_reuse_fraction,
-        "target_was_evicted": target_was_evicted,
-        "outputs_equal": prefix_correct,
-    }
-    await writer.emit("prefix_cache_stage_summary", **prefix_cache_stages)
+    prefix_pressure = await run_prefix_pressure_workflow(args, client, writer)
+    summaries.extend(prefix_pressure["summaries"])
+    quality_checks.extend(prefix_pressure["quality_checks"])
+    prefix_cache_stages = prefix_pressure["prefix_cache"]
+    prefix_cache_stage_passed = prefix_pressure["passed"]
+    prefix_correct = prefix_cache_stages["outputs_equal"]
     await record_runtime("adversarial-prefix-cache", False)
 
     churn_summaries = []
@@ -4002,69 +4632,16 @@ async def adversarial_mode(
                 args.cleanup_poll_seconds,
                 f"{phase}-cleanup",
             )
-            required_gauges = (
-                "mistralrs_sequences_capacity",
-                "mistralrs_sequences_running",
-                "mistralrs_sequences_waiting",
-                "mistralrs_requests_pending_admission",
-            )
-            instrumentation_complete = bool(queue_samples) and all(
-                sample[name] is not None
-                for sample in queue_samples
-                for name in required_gauges
-            )
-            peak_running = max(
-                (
-                    sample["mistralrs_sequences_running"]
-                    for sample in queue_samples
-                    if sample["mistralrs_sequences_running"] is not None
-                ),
-                default=None,
-            )
-            peak_waiting = max(
-                (
-                    sample["mistralrs_sequences_waiting"]
-                    for sample in queue_samples
-                    if sample["mistralrs_sequences_waiting"] is not None
-                ),
-                default=None,
-            )
-            peak_pending = max(
-                (
-                    sample["mistralrs_requests_pending_admission"]
-                    for sample in queue_samples
-                    if sample["mistralrs_requests_pending_admission"] is not None
-                ),
-                default=None,
-            )
-            queue_required = width == args.max_seqs + 1
-            queue_observed = bool(
-                (peak_waiting is not None and peak_waiting > 0)
-                or (peak_pending is not None and peak_pending > 0)
-            )
-            capacity_respected = (
-                peak_running is not None and peak_running <= args.max_seqs
-            )
             evidence = {
-                "passed": (
-                    instrumentation_complete
-                    and capacity_respected
-                    and (not queue_required or queue_observed)
-                    and churn_cleanup_ok
-                    and churn_summary["errors"] == 0
+                **churn_capacity_evidence(
+                    queue_samples,
+                    width,
+                    args.max_seqs,
+                    sequence_capacity,
+                    churn_cleanup_ok,
+                    churn_summary["errors"],
                 ),
                 "round": round_index,
-                "width": width,
-                "configured_max_seqs": args.max_seqs,
-                "server_sequence_capacity": sequence_capacity,
-                "instrumentation_complete": instrumentation_complete,
-                "queue_required": queue_required,
-                "queue_observed": queue_observed,
-                "peak_running": peak_running,
-                "peak_waiting": peak_waiting,
-                "peak_pending_admission": peak_pending,
-                "capacity_respected": capacity_respected,
-                "cleanup_ok": churn_cleanup_ok,
                 "cleanup": churn_cleanup,
                 "samples": queue_samples,
             }
@@ -4102,6 +4679,21 @@ async def adversarial_mode(
         args.expected_graph_components,
         args.min_cuda_graph_replay_ratio,
     )
+    adversarial_memory = cuda_memory_pressure_evidence(
+        initial_metrics,
+        final_metrics,
+        require_instrumentation=True,
+    )
+    kv_ownership = prefix_cached_ownership_evidence(
+        cancel_kv_blocks_prefix_cached_delta,
+        cancel_retry_prefix_cached_delta,
+        timeout_kv_blocks_prefix_cached_delta,
+    )
+    acceptance_grade = acceptance_grade_evidence(
+        args.acceptance_grade,
+        args.require_mtp,
+        args.expected_graph_components,
+    )
     passed = (
         all(summary["errors"] == 0 for summary in summaries)
         and long_correctness["passed"]
@@ -4121,12 +4713,15 @@ async def adversarial_mode(
         and timeout_server_evidence["passed"]
         and timeout_cleanup_ok
         and retry_semantic_ok
+        and kv_ownership["passed"]
         and prefix_cache_stage_passed
         and max_seqs_queue_evidence["passed"]
         and all(item["valid"] for item in quality_checks)
         and all(item["passed"] for item in runtime_evidence)
         and adversarial_mtp["passed"]
         and adversarial_graph["passed"]
+        and adversarial_memory["passed"]
+        and acceptance_grade["passed"]
     )
     return {
         "mode": "adversarial",
@@ -4161,13 +4756,18 @@ async def adversarial_mode(
         "timeout_kv_cache_blocks_prefix_cached_delta": (
             timeout_kv_blocks_prefix_cached_delta
         ),
-        "kv_ownership_gate_complete": True,
+        "kv_ownership_gate_complete": kv_ownership["passed"],
+        "kv_ownership": kv_ownership,
         "retry_succeeded": retry_summary["errors"] == 0 and retry_semantic_ok,
         "prefix_outputs_equal": prefix_correct,
+        "prefix_pressure": prefix_pressure,
         "prefix_cache_stages": prefix_cache_stages,
         "quality_checks": quality_checks,
         "cleanup_ok": (
-            cancel_cleanup_ok and cancel_retry_cleanup_ok and timeout_cleanup_ok
+            cancel_cleanup_ok
+            and cancel_retry_cleanup_ok
+            and timeout_cleanup_ok
+            and prefix_pressure["cleanup_ok"]
         ),
         "post_cancel_sequences_running": running_after_cancel,
         "post_cancel_sequences_waiting": waiting_after_cancel,
@@ -4175,6 +4775,9 @@ async def adversarial_mode(
         "runtime_evidence": runtime_evidence,
         "mtp": adversarial_mtp,
         "cuda_graph": adversarial_graph,
+        "cuda_memory": adversarial_memory,
+        "acceptance_grade": args.acceptance_grade,
+        "acceptance_grade_evidence": acceptance_grade,
         "churn_batches": len(churn_summaries),
         "max_seqs_queue_evidence": max_seqs_queue_evidence,
     }
@@ -4184,6 +4787,134 @@ def ratio(numerator: float | None, denominator: float | None) -> float | None:
     if numerator is None or denominator is None or denominator == 0:
         return None
     return numerator / denominator
+
+
+def periodic_schedule(
+    started: float,
+    ended: float,
+    interval_seconds: float,
+    include_start: bool = False,
+) -> list[float]:
+    scheduled = []
+    timestamp = started if include_start else started + interval_seconds
+    while timestamp < ended - SCHEDULE_TIME_EPSILON_SECONDS:
+        scheduled.append(timestamp)
+        timestamp += interval_seconds
+    return scheduled
+
+
+def scheduled_observation_evidence(
+    scheduled: Sequence[float],
+    observed: Sequence[float],
+    max_lateness_seconds: float,
+) -> dict[str, Any]:
+    paired_count = min(len(scheduled), len(observed))
+    raw_lateness = [
+        observed[index] - scheduled[index] for index in range(paired_count)
+    ]
+    lateness = [max(0.0, value) for value in raw_lateness]
+    premature_observations = sum(
+        value < -SCHEDULE_TIME_EPSILON_SECONDS for value in raw_lateness
+    )
+    observed_monotonic = all(
+        current >= previous
+        for previous, current in zip(observed, observed[1:])
+    )
+    exact_count = len(scheduled) == len(observed)
+    lateness_summary = distribution(lateness)
+    return {
+        "passed": (
+            bool(scheduled)
+            and exact_count
+            and premature_observations == 0
+            and observed_monotonic
+            and lateness_summary["max"] is not None
+            and lateness_summary["max"] <= max_lateness_seconds
+        ),
+        "scheduled_count": len(scheduled),
+        "observed_count": len(observed),
+        "paired_count": paired_count,
+        "missing_observations": max(0, len(scheduled) - len(observed)),
+        "unexpected_observations": max(0, len(observed) - len(scheduled)),
+        "exact_count": exact_count,
+        "premature_observations": premature_observations,
+        "observed_monotonic": observed_monotonic,
+        "max_lateness_seconds": max_lateness_seconds,
+        "lateness_seconds": lateness_summary,
+        "first_scheduled": scheduled[0] if scheduled else None,
+        "last_scheduled": scheduled[-1] if scheduled else None,
+        "first_observed": observed[0] if observed else None,
+        "last_observed": observed[-1] if observed else None,
+    }
+
+
+def comparison_window_coverage_evidence(
+    started: float,
+    planned_ended: float,
+    actual_ended: float,
+    window_seconds: float,
+) -> dict[str, Any]:
+    first_window = (started, started + window_seconds)
+    final_window = (planned_ended - window_seconds, planned_ended)
+    phase_seconds = planned_ended - started
+    windows_non_overlapping = first_window[1] <= (
+        final_window[0] + SCHEDULE_TIME_EPSILON_SECONDS
+    )
+    first_covered_seconds = max(
+        0.0,
+        min(actual_ended, first_window[1]) - first_window[0],
+    )
+    final_covered_seconds = max(
+        0.0,
+        min(actual_ended, final_window[1]) - final_window[0],
+    )
+    full_window_coverage = (
+        first_covered_seconds + SCHEDULE_TIME_EPSILON_SECONDS >= window_seconds
+        and final_covered_seconds + SCHEDULE_TIME_EPSILON_SECONDS >= window_seconds
+    )
+    return {
+        "passed": (
+            phase_seconds + SCHEDULE_TIME_EPSILON_SECONDS >= 2 * window_seconds
+            and windows_non_overlapping
+            and actual_ended + SCHEDULE_TIME_EPSILON_SECONDS >= planned_ended
+            and full_window_coverage
+        ),
+        "requested_window_seconds": window_seconds,
+        "planned_phase_seconds": phase_seconds,
+        "actual_phase_seconds": actual_ended - started,
+        "first_window": list(first_window),
+        "final_window": list(final_window),
+        "first_covered_seconds": first_covered_seconds,
+        "final_covered_seconds": final_covered_seconds,
+        "windows_non_overlapping": windows_non_overlapping,
+        "full_window_coverage": full_window_coverage,
+        "phase_reached_planned_end": (
+            actual_ended + SCHEDULE_TIME_EPSILON_SECONDS >= planned_ended
+        ),
+    }
+
+
+def acceptance_grade_evidence(
+    enabled: bool,
+    require_mtp: bool,
+    expected_graph_components: Sequence[str],
+) -> dict[str, Any]:
+    required_components = {"target", "dflash"}
+    configured_components = set(expected_graph_components)
+    requirements_met = require_mtp and required_components.issubset(
+        configured_components
+    )
+    return {
+        "passed": not enabled or requirements_met,
+        "enabled": enabled,
+        "certification_complete": enabled and requirements_met,
+        "require_mtp": require_mtp,
+        "required_graph_components": sorted(required_components),
+        "configured_graph_components": sorted(configured_components),
+        "graph_components_complete": required_components.issubset(
+            configured_components
+        ),
+    }
 
 
 def request_decode_tok_s(result: RequestResult) -> float | None:
@@ -4655,6 +5386,13 @@ def selected_metric_deltas(
         "mistralrs_encoder_cache_misses_total",
         CUDA_GRAPH_EVENTS_COUNTER,
         CUDA_GRAPH_DISPATCH_COUNTER,
+        CUDA_GRAPH_EVICTIONS_COUNTER,
+        CUDA_MEMORY_MAINTENANCE_COUNTER,
+        CUDA_MEMORY_PRESSURE_COUNTER,
+        CUDA_MEMORY_RECLAIMED_BYTES_COUNTER,
+        CUDA_PROMPT_BATCH_REDUCTIONS_COUNTER,
+        CUDA_PROMPT_SEQUENCES_DEFERRED_COUNTER,
+        CUDA_PROMPT_MEMORY_REJECTIONS_COUNTER,
         REQUEST_OUTCOMES_COUNTER,
         "mistralrs_sequences_completed_total",
         KV_CACHE_ACTIVE_GAUGE,
@@ -4696,6 +5434,116 @@ def labeled_metric_values(
         for key, value in sorted(snapshot.items())
         if key.split("{", 1)[0] == metric
     ]
+
+
+def metric_family_present(snapshot: dict[str, float], metric: str) -> bool:
+    return any(
+        key.split("{", 1)[0] == metric
+        for key in snapshot
+    )
+
+
+def cuda_memory_pressure_evidence(
+    before: dict[str, float],
+    after: dict[str, float],
+    require_instrumentation: bool,
+) -> dict[str, Any]:
+    maintenance = labeled_metric_deltas(
+        before,
+        after,
+        CUDA_MEMORY_MAINTENANCE_COUNTER,
+    )
+    pressure = labeled_metric_deltas(
+        before,
+        after,
+        CUDA_MEMORY_PRESSURE_COUNTER,
+    )
+    maintenance_errors = sum(
+        item["delta"]
+        for item in maintenance
+        if item["labels"].get("outcome") == "error"
+    )
+    counter_series = {
+        CUDA_MEMORY_MAINTENANCE_COUNTER: maintenance,
+        CUDA_MEMORY_PRESSURE_COUNTER: pressure,
+    }
+    negative_deltas = [
+        {"metric": metric, **item}
+        for metric, series in counter_series.items()
+        for item in series
+        if item["delta"] < 0
+    ]
+    scalar_deltas = {
+        "reclaimed_bytes": metric_delta(
+            before,
+            after,
+            CUDA_MEMORY_RECLAIMED_BYTES_COUNTER,
+        ),
+        "prompt_batch_reductions": metric_delta(
+            before,
+            after,
+            CUDA_PROMPT_BATCH_REDUCTIONS_COUNTER,
+        ),
+        "prompt_sequences_deferred": metric_delta(
+            before,
+            after,
+            CUDA_PROMPT_SEQUENCES_DEFERRED_COUNTER,
+        ),
+        "prompt_memory_rejections": metric_delta(
+            before,
+            after,
+            CUDA_PROMPT_MEMORY_REJECTIONS_COUNTER,
+        ),
+        "graph_evictions": metric_delta(
+            before,
+            after,
+            CUDA_GRAPH_EVICTIONS_COUNTER,
+        ),
+    }
+    negative_deltas.extend(
+        {"metric": name, "delta": value}
+        for name, value in scalar_deltas.items()
+        if value is not None and value < 0
+    )
+    reductions = scalar_deltas["prompt_batch_reductions"] or 0.0
+    deferred = scalar_deltas["prompt_sequences_deferred"] or 0.0
+    rejections = scalar_deltas["prompt_memory_rejections"] or 0.0
+    pending = metric_total(after, CUDA_MEMORY_PENDING_GAUGE)
+    instrumentation = {
+        "maintenance_counter": metric_family_present(
+            before, CUDA_MEMORY_MAINTENANCE_COUNTER
+        )
+        or metric_family_present(after, CUDA_MEMORY_MAINTENANCE_COUNTER),
+        "pending_gauge": metric_family_present(after, CUDA_MEMORY_PENDING_GAUGE),
+    }
+    gates = {
+        "instrumentation": (
+            not require_instrumentation or all(instrumentation.values())
+        ),
+        "counter_monotonicity": not negative_deltas,
+        "maintenance_errors": maintenance_errors == 0,
+        "prompt_memory_rejections": rejections == 0,
+        "maintenance_pending_clear": (
+            pending == 0
+            if instrumentation["pending_gauge"]
+            else not require_instrumentation
+        ),
+        "deferred_sequence_accounting": deferred >= reductions,
+    }
+    return {
+        "passed": all(gates.values()),
+        "require_instrumentation": require_instrumentation,
+        "instrumentation": instrumentation,
+        "gates": gates,
+        "maintenance_events": sum(item["delta"] for item in maintenance),
+        "maintenance_errors": maintenance_errors,
+        "maintenance": maintenance,
+        "pressure_events": sum(item["delta"] for item in pressure),
+        "pressure": pressure,
+        "maintenance_pending": pending,
+        "negative_counter_deltas": negative_deltas,
+        **scalar_deltas,
+    }
 
 
 def sparse_verifier_evidence(
@@ -5679,12 +6527,13 @@ def histogram_quantile_delta(
 def queue_histogram_summaries(
     before: dict[str, float], after: dict[str, float]
 ) -> dict[str, dict[str, float | None]]:
-    histograms = {
-        key.split("{", 1)[0][:-7]
-        for key in after
-        if key.split("{", 1)[0].endswith("_bucket")
-        and any(term in key.lower() for term in ("queue", "admission", "waiting"))
-    }
+    histograms = set()
+    for key in after:
+        base_name = key.split("{", 1)[0]
+        if base_name.endswith("_bucket") and any(
+            term in base_name.lower() for term in ("queue", "admission", "waiting")
+        ):
+            histograms.add(base_name[:-7])
     return {
         name: {
             "p50": histogram_quantile_delta(before, after, name, 0.50),
@@ -5693,6 +6542,117 @@ def queue_histogram_summaries(
         }
         for name in sorted(histograms)
     }
+
+
+def histogram_observation_delta(
+    before: dict[str, float],
+    after: dict[str, float],
+    histogram: str,
+) -> float | None:
+    count_name = f"{histogram}_count"
+    end_count = metric_total(after, count_name)
+    if end_count is not None:
+        return end_count - (metric_total(before, count_name) or 0.0)
+    for bound in ("+Inf", "Inf"):
+        bucket = f'{histogram}_bucket{{le="{bound}"}}'
+        end_bucket = metric_total(after, bucket)
+        if end_bucket is not None:
+            return end_bucket - (metric_total(before, bucket) or 0.0)
+    return None
+
+
+def queue_histogram_evidence(
+    before: dict[str, float], after: dict[str, float]
+) -> dict[str, Any]:
+    histograms = {}
+    for name, quantiles in queue_histogram_summaries(before, after).items():
+        observation_delta = histogram_observation_delta(before, after, name)
+        quantiles_complete = all(
+            value is not None and math.isfinite(value) and value >= 0
+            for value in quantiles.values()
+        )
+        histograms[name] = {
+            **quantiles,
+            "observation_delta": observation_delta,
+            "positive_observation_delta": (
+                observation_delta is not None and observation_delta > 0
+            ),
+            "quantiles_complete": quantiles_complete,
+            "passed": (
+                observation_delta is not None
+                and observation_delta > 0
+                and quantiles_complete
+            ),
+        }
+    return {
+        "passed": bool(histograms) and all(
+            item["passed"] for item in histograms.values()
+        ),
+        "histogram_count": len(histograms),
+        "histograms": histograms,
+    }
+
+
+def parse_host_cpu_ticks(value: str) -> tuple[int, int]:
+    row = next(
+        (line for line in value.splitlines() if line.startswith("cpu ")),
+        None,
+    )
+    if row is None:
+        raise ValueError("/proc/stat does not contain an aggregate cpu row")
+    fields = [int(field) for field in row.split()[1:]]
+    if len(fields) < 4:
+        raise ValueError("/proc/stat aggregate cpu row is incomplete")
+    idle_ticks = fields[3] + (fields[4] if len(fields) > 4 else 0)
+    return sum(fields[:8]), idle_ticks
+
+
+def parse_process_cpu_ticks(value: str) -> int:
+    command_end = value.rfind(")")
+    if command_end < 0:
+        raise ValueError("/proc process stat does not contain a command field")
+    fields = value[command_end + 1 :].split()
+    if len(fields) <= 12:
+        raise ValueError("/proc process stat is incomplete")
+    return int(fields[11]) + int(fields[12])
+
+
+def cpu_utilization_samples(
+    snapshots: Sequence[tuple[float, dict[str, float], dict[str, Any]]],
+) -> tuple[list[float], list[float]]:
+    host_samples = []
+    process_samples = []
+    for (previous_time, _, previous), (current_time, _, current) in zip(
+        snapshots,
+        snapshots[1:],
+    ):
+        elapsed = current_time - previous_time
+        previous_total = previous.get("host_cpu_total_ticks")
+        current_total = current.get("host_cpu_total_ticks")
+        previous_idle = previous.get("host_cpu_idle_ticks")
+        current_idle = current.get("host_cpu_idle_ticks")
+        if None not in (previous_total, current_total, previous_idle, current_idle):
+            total_delta = current_total - previous_total
+            idle_delta = current_idle - previous_idle
+            if total_delta > 0 and 0 <= idle_delta <= total_delta:
+                host_samples.append(100.0 * (total_delta - idle_delta) / total_delta)
+        previous_ticks = previous.get("process_cpu_ticks")
+        current_ticks = current.get("process_cpu_ticks")
+        ticks_per_second = current.get("process_cpu_clock_ticks_per_second")
+        if (
+            elapsed > 0
+            and previous_ticks is not None
+            and current_ticks is not None
+            and ticks_per_second is not None
+            and ticks_per_second > 0
+            and current_ticks >= previous_ticks
+        ):
+            process_samples.append(
+                100.0
+                * (current_ticks - previous_ticks)
+                / (ticks_per_second * elapsed)
+            )
+    return host_samples, process_samples
 
 
 def summarize_telemetry(
@@ -5742,8 +6702,11 @@ def summarize_telemetry(
             process_vmswap.append(process["process_vmswap_kib"])
         if process.get("process_gpu_memory_used_mib") is not None:
             process_gpu_memory.append(process["process_gpu_memory_used_mib"])
+    host_cpu, process_cpu = cpu_utilization_samples(snapshots)
     return {
         "gauges": gauges,
+        "host_cpu_utilization_percent": distribution(host_cpu),
+        "process_cpu_utilization_percent": distribution(process_cpu),
         "gpu_utilization_percent": distribution(gpu_utilization),
         "gpu_memory_used_mib": distribution(gpu_memory),
         "gpu_power_watts": distribution(gpu_power),
@@ -5760,6 +6723,7 @@ def telemetry_evidence(
     min_samples: int,
     min_coverage: float,
     required_gauges: Sequence[str],
+    cadence: dict[str, Any],
 ) -> dict[str, Any]:
     sample_count = len(snapshots)
 
@@ -5780,6 +6744,18 @@ def telemetry_evidence(
         process.get("process_is_mistralrs") is True
         for _, _, process in snapshots
     )
+    host_cpu_samples = sum(
+        process.get("host_cpu_total_ticks") is not None
+        and process.get("host_cpu_idle_ticks") is not None
+        for _, _, process in snapshots
+    )
+    process_cpu_samples = sum(
+        process.get("process_cpu_ticks") is not None
+        and process.get("process_cpu_clock_ticks_per_second") is not None
+        for _, _, process in snapshots
+    )
+    host_cpu_utilization, process_cpu_utilization = cpu_utilization_samples(snapshots)
+    cpu_interval_count = max(0, sample_count - 1)
     gauge_coverage = {}
     for gauge in required_gauges:
         present = sum(
@@ -5796,6 +6772,14 @@ def telemetry_evidence(
     rss_coverage = coverage(rss_samples)
     process_gpu_coverage = coverage(process_gpu_samples)
     server_process_coverage = coverage(server_process_samples)
+    host_cpu_coverage = coverage(host_cpu_samples)
+    process_cpu_coverage = coverage(process_cpu_samples)
+    host_cpu_utilization_coverage = ratio(
+        len(host_cpu_utilization), cpu_interval_count
+    )
+    process_cpu_utilization_coverage = ratio(
+        len(process_cpu_utilization), cpu_interval_count
+    )
     return {
         "passed": (
             server_pid is not None
@@ -5808,6 +6792,15 @@ def telemetry_evidence(
             and rss_coverage >= min_coverage
             and server_process_coverage is not None
             and server_process_coverage >= min_coverage
+            and host_cpu_coverage is not None
+            and host_cpu_coverage >= min_coverage
+            and process_cpu_coverage is not None
+            and process_cpu_coverage >= min_coverage
+            and host_cpu_utilization_coverage is not None
+            and host_cpu_utilization_coverage >= min_coverage
+            and process_cpu_utilization_coverage is not None
+            and process_cpu_utilization_coverage >= min_coverage
+            and cadence.get("passed") is True
             and all(item["passed"] for item in gauge_coverage.values())
         ),
         "server_pid": server_pid,
@@ -5824,6 +6817,16 @@ def telemetry_evidence(
         "process_gpu_memory_coverage": process_gpu_coverage,
         "mistralrs_process_samples": server_process_samples,
         "mistralrs_process_coverage": server_process_coverage,
+        "host_cpu_samples": host_cpu_samples,
+        "host_cpu_coverage": host_cpu_coverage,
+        "process_cpu_samples": process_cpu_samples,
+        "process_cpu_coverage": process_cpu_coverage,
+        "cpu_interval_count": cpu_interval_count,
+        "host_cpu_utilization_samples": len(host_cpu_utilization),
+        "host_cpu_utilization_coverage": host_cpu_utilization_coverage,
+        "process_cpu_utilization_samples": len(process_cpu_utilization),
+        "process_cpu_utilization_coverage": process_cpu_utilization_coverage,
+        "cadence": cadence,
         "gauge_coverage": gauge_coverage,
     }
 
@@ -6154,6 +7157,7 @@ async def process_telemetry(server_pid: int | None) -> dict[str, Any]:
             telemetry["nvidia_smi_process_error"] = f"{type(exc).__name__}: {exc}"
         status_path = Path(f"/proc/{server_pid}/status")
         cmdline_path = Path(f"/proc/{server_pid}/cmdline")
+        stat_path = Path(f"/proc/{server_pid}/stat")
         try:
             status = status_path.read_text(encoding="utf-8")
             cmdline = cmdline_path.read_bytes()
@@ -6163,6 +7167,23 @@ async def process_telemetry(server_pid: int | None) -> dict[str, Any]:
                 telemetry[f"process_{key.lower()}_kib"] = int(match.group(1)) if match else None
         except OSError as exc:
             telemetry["process_error"] = f"{type(exc).__name__}: {exc}"
+        try:
+            telemetry["process_cpu_ticks"] = parse_process_cpu_ticks(
+                stat_path.read_text(encoding="utf-8")
+            )
+            telemetry["process_cpu_clock_ticks_per_second"] = (
+                PROCESS_CPU_CLOCK_TICKS_PER_SECOND
+            )
+        except (OSError, ValueError) as exc:
+            telemetry["process_cpu_error"] = f"{type(exc).__name__}: {exc}"
+    try:
+        host_total, host_idle = parse_host_cpu_ticks(
+            Path("/proc/stat").read_text(encoding="utf-8")
+        )
+        telemetry["host_cpu_total_ticks"] = host_total
+        telemetry["host_cpu_idle_ticks"] = host_idle
+    except (OSError, ValueError) as exc:
+        telemetry["host_cpu_error"] = f"{type(exc).__name__}: {exc}"
     return telemetry
 
 
@@ -6170,27 +7191,37 @@ async def telemetry_loop(
     client: SoakClient,
     writer: JsonlWriter,
     stop: asyncio.Event,
-    interval_seconds: float,
     server_pid: int | None,
     snapshots: list[tuple[float, dict[str, float], dict[str, Any]]],
+    scheduled_times: Sequence[float],
+    observed_times: list[float],
 ) -> None:
-    while not stop.is_set():
-        timestamp = time.perf_counter()
+    for scheduled_at in scheduled_times:
+        delay = scheduled_at - time.perf_counter()
+        if delay > 0:
+            try:
+                await asyncio.wait_for(stop.wait(), timeout=delay)
+            except asyncio.TimeoutError:
+                pass
+        if stop.is_set():
+            break
+        observation_started = time.perf_counter()
+        observed_times.append(observation_started)
         metrics, process = await asyncio.gather(
             safe_metrics(client, writer, "production-telemetry"),
             process_telemetry(server_pid),
         )
-        snapshots.append((timestamp, metrics, process))
+        collected_at = time.perf_counter()
+        snapshots.append((collected_at, metrics, process))
         await writer.emit(
             "telemetry",
-            monotonic_seconds=timestamp,
+            monotonic_seconds=collected_at,
+            observation_started_monotonic_seconds=observation_started,
+            scheduled_monotonic_seconds=scheduled_at,
+            schedule_lateness_seconds=max(0.0, observation_started - scheduled_at),
             metrics=metrics,
             process=process,
         )
-        try:
-            await asyncio.wait_for(stop.wait(), timeout=interval_seconds)
-        except asyncio.TimeoutError:
-            pass
 
 
 def choose_context(
@@ -6252,6 +7283,9 @@ async def production_mode(
             not missing_gauges
             and preflight_process.get("process_is_mistralrs") is True
             and preflight_process.get("process_vmrss_kib") is not None
+            and preflight_process.get("host_cpu_total_ticks") is not None
+            and preflight_process.get("host_cpu_idle_ticks") is not None
+            and preflight_process.get("process_cpu_ticks") is not None
             and bool(preflight_process.get("gpus"))
         ),
         "server_pid": args.server_pid,
@@ -6262,7 +7296,7 @@ async def production_mode(
     if not preflight["passed"]:
         raise RuntimeError(
             "production telemetry preflight requires a live mistralrs --server-pid, "
-            "readable process RSS, and nvidia-smi GPU data"
+            "readable host/process CPU and process RSS, and nvidia-smi GPU data"
         )
     resident_prompt_budget = args.resident_prompt_budget
     if resident_prompt_budget is None:
@@ -6396,12 +7430,18 @@ async def production_mode(
         args.kv_block_size_tokens,
         args.speculative_prefix_replay_tokens,
     )
+    prewarm_memory = cuda_memory_pressure_evidence(
+        prewarm_metrics,
+        verified_metrics,
+        require_instrumentation=True,
+    )
     prewarm_passed = (
         prewarm_summary["errors"] == 0
         and verification_summary["errors"] == 0
         and prewarm_cleanup_ok
         and verification_cleanup_ok
         and residency_evidence["passed"]
+        and prewarm_memory["passed"]
     )
     prewarm = {
         "passed": prewarm_passed,
@@ -6411,6 +7451,7 @@ async def production_mode(
         "prewarm": prewarm_summary,
         "verification": verification_summary,
         "prefix_cache": residency_evidence,
+        "cuda_memory": prewarm_memory,
         "prewarm_cleanup": prewarm_cleanup,
         "verification_cleanup": verification_cleanup,
     }
@@ -6460,14 +7501,22 @@ async def production_mode(
     )
     run_started = time.perf_counter()
     snapshots.append((run_started, initial_metrics, initial_process))
+    telemetry_schedule = periodic_schedule(
+        run_started,
+        run_started + args.duration_seconds,
+        args.telemetry_interval_seconds,
+        include_start=True,
+    )
+    telemetry_observed = [run_started]
     telemetry_task = asyncio.create_task(
         telemetry_loop(
             client,
             writer,
             stop,
-            args.telemetry_interval_seconds,
             args.server_pid,
             snapshots,
+            telemetry_schedule[1:],
+            telemetry_observed,
         )
     )
     all_results: list[RequestResult] = []
@@ -6479,7 +7528,12 @@ async def production_mode(
         phase_metrics_before = await safe_metrics(client, writer, f"{phase}-metrics-start")
         phase_start = time.perf_counter()
         phase_end = phase_start + phase_duration
-        comparison_window = min(args.comparison_window_seconds, phase_duration / 2.0)
+        comparison_window = args.comparison_window_seconds
+        probe_schedule = periodic_schedule(
+            phase_start,
+            phase_end,
+            args.probe_interval_seconds,
+        )
         retained_output_event_windows = (
             (phase_start, phase_start + comparison_window),
             (phase_end - comparison_window, phase_end),
@@ -6516,12 +7570,8 @@ async def production_mode(
                 request_index += 1
 
         async def probes() -> None:
-            probe_index = 0
-            next_probe = phase_start + args.probe_interval_seconds
-            while next_probe < phase_end:
-                await asyncio.sleep(max(0.0, next_probe - time.perf_counter()))
-                if time.perf_counter() >= phase_end:
-                    break
+            for probe_index, scheduled_at in enumerate(probe_schedule):
+                await asyncio.sleep(max(0.0, scheduled_at - time.perf_counter()))
                 spec = RequestSpec(
                     case_id=f"probe-c{concurrency}-{probe_index:04d}",
                     seed=probe_template.seed,
@@ -6531,7 +7581,7 @@ async def production_mode(
                     tags={**probe_template.tags, "load": concurrency},
                     extra=dict(probe_template.extra),
                 )
-                result = await client.stream_request(spec, scheduled_at=next_probe)
+                result = await client.stream_request(spec, scheduled_at=scheduled_at)
                 phase_results.append(result)
                 await writer.emit(
                     "request",
@@ -6539,11 +7589,6 @@ async def production_mode(
                     concurrency=concurrency,
                     **result.record(True),
                 )
-                probe_index += 1
-                next_probe += args.probe_interval_seconds
-                now = time.perf_counter()
-                while next_probe <= now:
-                    next_probe += args.probe_interval_seconds
 
         async def semantic_sentinels() -> None:
             for stage, fraction in PRODUCTION_SENTINEL_STAGES:
@@ -6593,8 +7638,9 @@ async def production_mode(
         probe_task = asyncio.create_task(probes())
         semantic_task = asyncio.create_task(semantic_sentinels())
         await asyncio.gather(*workers, probe_task, semantic_task)
+        phase_completed = time.perf_counter()
         phase_metrics_after = await safe_metrics(client, writer, f"{phase}-metrics-end")
-        wall = time.perf_counter() - phase_start
+        wall = phase_completed - phase_start
         summary = summarize_batch(phase_results, wall, concurrency, phase)
         traffic = [result for result in phase_results if result.tags.get("role") == "traffic"]
         probes_only = [result for result in phase_results if result.tags.get("role") == "c1_probe"]
@@ -6633,13 +7679,22 @@ async def production_mode(
         )
         summary["quality_checked"] = len(quality)
         summary["quality_failures"] = [item for item in quality if not item["valid"]]
+        probe_cadence = scheduled_observation_evidence(
+            probe_schedule,
+            [
+                result.started
+                for result in sorted(probes_only, key=lambda item: item.case_id)
+            ],
+            args.max_schedule_lateness_seconds,
+        )
+        summary["probe_cadence"] = probe_cadence
         probe_evidence = production_probe_evidence(
             probes_only,
             isolated_before,
             client.tokenizer,
             args.max_repeated_ngram_ratio,
             args.min_output_event_coverage,
-            MIN_PRODUCTION_PROBES_PER_PHASE,
+            len(probe_schedule),
             args.max_probe_ttft_seconds,
             args.max_probe_tpot_seconds,
             args.max_probe_latency_slowdown,
@@ -6685,11 +7740,20 @@ async def production_mode(
             comparison_window,
             args.min_output_event_coverage,
         )
+        summary["comparison_window_coverage"] = (
+            comparison_window_coverage_evidence(
+                phase_start,
+                phase_end,
+                phase_completed,
+                comparison_window,
+            )
+        )
         degradation = summary["first_vs_last_window"]["throughput_degradation_fraction"]
         summary["degradation_ok"] = (
             degradation is not None
             and degradation <= args.max_throughput_degradation_fraction
             and summary["first_vs_last_window"]["output_event_coverage_ok"]
+            and summary["comparison_window_coverage"]["passed"]
         )
         summary["latency_degradation_ok"] = all(
             value is not None
@@ -6726,13 +7790,24 @@ async def production_mode(
             args.expected_graph_components,
             args.min_cuda_graph_replay_ratio,
         )
-        summary["queue_latency_histograms"] = queue_histogram_summaries(
+        summary["cuda_memory"] = cuda_memory_pressure_evidence(
+            phase_metrics_before,
+            phase_metrics_after,
+            require_instrumentation=True,
+        )
+        summary["queue_latency_evidence"] = queue_histogram_evidence(
             phase_metrics_before,
             phase_metrics_after,
         )
-        summary["queue_latency_instrumentation_complete"] = bool(
-            summary["queue_latency_histograms"]
-        )
+        summary["queue_latency_histograms"] = summary["queue_latency_evidence"][
+            "histograms"
+        ]
+        summary["queue_latency_instrumentation_complete"] = summary[
+            "queue_latency_evidence"
+        ]["passed"]
+        summary["probe_cadence_complete"] = summary["probe_cadence"][
+            "passed"
+        ]
         summary["metric_deltas"] = selected_metric_deltas(
             phase_metrics_before,
             phase_metrics_after,
@@ -6741,6 +7816,7 @@ async def production_mode(
             summary["prefix_cache"]["passed"]
             and summary["mtp"]["passed"]
             and summary["cuda_graph"]["passed"]
+            and summary["cuda_memory"]["passed"]
         )
         phase_summaries.append(summary)
         all_results.extend(phase_results)
@@ -6752,6 +7828,12 @@ async def production_mode(
     finally:
         stop.set()
         await telemetry_task
+    telemetry_cadence = scheduled_observation_evidence(
+        telemetry_schedule,
+        telemetry_observed,
+        args.max_schedule_lateness_seconds,
+    )
+    await writer.emit("production_telemetry_cadence", **telemetry_cadence)
     pre_final_c1_cleanup_ok, _, pre_final_c1_cleanup = await poll_for_cleanup(
         client,
         writer,
@@ -6822,9 +7904,10 @@ async def production_mode(
         RESIDENT_TRANSIENT_CLEANUP_GAUGES,
     )
     final_process = await process_telemetry(args.server_pid)
-    snapshots.append((run_ended, final_metrics, final_process))
+    final_telemetry_timestamp = time.perf_counter()
+    snapshots.append((final_telemetry_timestamp, final_metrics, final_process))
     metrics_delta = selected_metric_deltas(initial_metrics, final_metrics)
-    queue_latency = queue_histogram_summaries(initial_metrics, final_metrics)
+    queue_latency_evidence = queue_histogram_evidence(initial_metrics, final_metrics)
     mtp = configured_speculative_evidence(
         initial_metrics,
         final_metrics,
@@ -6838,6 +7921,11 @@ async def production_mode(
         args.expected_graph_components,
         args.min_cuda_graph_replay_ratio,
     )
+    cuda_memory = cuda_memory_pressure_evidence(
+        initial_metrics,
+        final_metrics,
+        require_instrumentation=True,
+    )
     all_probes = [
         result for result in all_results if result.tags.get("role") == "c1_probe"
     ]
@@ -6847,7 +7935,10 @@ async def production_mode(
         client.tokenizer,
         args.max_repeated_ngram_ratio,
         args.min_output_event_coverage,
-        MIN_PRODUCTION_PROBES_PER_PHASE * len(args.concurrencies),
+        sum(
+            summary["probe_cadence"]["scheduled_count"]
+            for summary in phase_summaries
+        ),
         args.max_probe_ttft_seconds,
         args.max_probe_tpot_seconds,
         args.max_probe_latency_slowdown,
@@ -6877,10 +7968,16 @@ async def production_mode(
         args.min_telemetry_samples,
         args.min_telemetry_coverage,
         required_gauges,
+        telemetry_cadence,
     )
     memory_gate = production_memory_evidence(
         snapshots,
         ProductionMemoryLimits.from_args(args),
+    )
+    acceptance_grade = acceptance_grade_evidence(
+        args.acceptance_grade,
+        args.require_mtp,
+        args.expected_graph_components,
     )
     passed = (
         prewarm_passed
@@ -6895,6 +7992,8 @@ async def production_mode(
             and summary["probe_performance"]["passed"]
             and summary["semantic_sentinel_evidence"]["passed"]
             and summary["queue_latency_instrumentation_complete"]
+            and summary["probe_cadence_complete"]
+            and summary["comparison_window_coverage"]["passed"]
             and summary["phase_metrics_ok"]
             for summary in phase_summaries
         )
@@ -6902,8 +8001,11 @@ async def production_mode(
         and bool(final_metrics)
         and mtp["passed"]
         and graph["passed"]
+        and cuda_memory["passed"]
         and all_probe_evidence["passed"]
         and isolated_c1_evidence["passed"]
+        and queue_latency_evidence["passed"]
+        and acceptance_grade["passed"]
         and cleanup_ok
     )
     return {
@@ -6914,7 +8016,8 @@ async def production_mode(
         "phase_summaries": phase_summaries,
         "throughput": throughput,
         "metrics_delta": metrics_delta,
-        "queue_latency_histograms": queue_latency,
+        "queue_latency_histograms": queue_latency_evidence["histograms"],
+        "queue_latency_evidence": queue_latency_evidence,
         "mtp": mtp,
         "mtp_acceptance_rate": mtp["acceptance_rate"],
         "mtp_mean_accepted_draft_tokens_per_draft": (
@@ -6926,7 +8029,9 @@ async def production_mode(
         "telemetry_samples": len(snapshots),
         "telemetry": summarize_telemetry(snapshots),
         "telemetry_evidence": telemetry_gate,
+        "telemetry_cadence": telemetry_cadence,
         "memory_evidence": memory_gate,
+        "cuda_memory": cuda_memory,
         "cuda_graph": graph,
         "cuda_graph_events": graph["events"],
         "cuda_graph_ok": graph["passed"],
@@ -6936,6 +8041,8 @@ async def production_mode(
         "c1_probes_semantic_across_load": probes_semantic_across_load,
         "c1_loaded_probe_evidence": all_probe_evidence,
         "isolated_c1_evidence": isolated_c1_evidence,
+        "acceptance_grade": args.acceptance_grade,
+        "acceptance_grade_evidence": acceptance_grade,
         "cleanup_ok": cleanup_ok,
         "cleanup_detail": cleanup_detail,
     }
@@ -7208,16 +8315,23 @@ def text_prerequisite_evidence(paths: Sequence[Path]) -> dict[str, Any]:
         mode = summary.get("mode")
         stage = "part1" if mode in ("canary", "compare") else mode
         observed_stages.add(stage)
+        acceptance_evidence = summary.get("acceptance_grade_evidence") or {}
+        acceptance_complete = (
+            summary.get("acceptance_grade") is True
+            and acceptance_evidence.get("certification_complete") is True
+        )
         mode_specific_complete = True
         if mode in ("canary", "compare"):
             mode_specific_complete = summary.get("coverage_complete") is True
         elif mode == "adversarial":
             mode_specific_complete = (
                 (summary.get("max_seqs_queue_evidence") or {}).get("passed") is True
+                and acceptance_complete
             )
         elif mode == "production":
             mode_specific_complete = (
                 (summary.get("telemetry_evidence") or {}).get("passed") is True
+                and acceptance_complete
             )
         artifact = {
             "path": str(path),
@@ -7491,6 +8605,20 @@ def common_parser() -> argparse.ArgumentParser:
     parser.add_argument("--top-k", type=int, default=DEFAULT_TOP_K)
     parser.add_argument("--min-p", type=float, default=DEFAULT_MIN_P)
     parser.add_argument("--repetition-penalty", type=float, default=DEFAULT_REPETITION_PENALTY)
+    parser.add_argument(
+        "--server-pid",
+        type=int,
+        help="PID of the exact server process, used for binary and command provenance",
+    )
+    parser.add_argument(
+        "--require-server-provenance",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help=(
+            "fail unless git SHA, binary, serve command, GPU driver, and KV configuration "
+            "are captured; production and prefix-pressure always require this"
+        ),
+    )
     parser.add_argument("--output", type=Path, help="JSONL evidence path")
     return parser
 
@@ -7531,6 +8659,47 @@ def add_speculative_evidence_args(parser: argparse.ArgumentParser) -> None:
     )
 
 
+def add_prefix_pressure_args(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--prefix-pressure-namespace",
+        help="unique prompt namespace; defaults to the non-overwritable evidence artifact identity",
+    )
+    parser.add_argument("--prefix-context-tokens", type=int, default=8_192)
+    parser.add_argument(
+        "--min-prefix-reuse-fraction",
+        type=float,
+        default=DEFAULT_MIN_PREFIX_REUSE_FRACTION,
+    )
+    parser.add_argument("--prefix-pressure-entries", type=int, default=24)
+    parser.add_argument(
+        "--prefix-pressure-context-tokens", type=int, default=100_000
+    )
+    parser.add_argument(
+        "--prefix-pressure-capacity-fraction",
+        type=float,
+        default=DEFAULT_PREFIX_PRESSURE_CAPACITY_FRACTION,
+    )
+    parser.add_argument(
+        "--prefix-pressure-kv-headroom-fraction",
+        type=float,
+        default=DEFAULT_PREFIX_PRESSURE_KV_HEADROOM_FRACTION,
+    )
+    parser.add_argument(
+        "--prefix-pressure-max-entries",
+        type=int,
+        default=DEFAULT_PREFIX_PRESSURE_MAX_ENTRIES,
+    )
+    parser.add_argument(
+        "--kv-block-size-tokens", type=int, default=DEFAULT_KV_BLOCK_SIZE_TOKENS
+    )
+    parser.add_argument(
+        "--speculative-prefix-replay-tokens",
+        type=int,
+        default=DEFAULT_SPECULATIVE_PREFIX_REPLAY_TOKENS,
+    )
+    parser.add_argument("--prefix-pressure-max-tokens", type=int, default=8)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Production soak testing for mistral.rs and other OpenAI-compatible servers"
@@ -7540,6 +8709,15 @@ def build_parser() -> argparse.ArgumentParser:
 
     canary = subparsers.add_parser("canary", parents=[common])
     add_speculative_evidence_args(canary)
+    canary.add_argument(
+        "--sampling-policy",
+        choices=PART1_SAMPLING_POLICIES,
+        default=PART1_PRODUCTION_SAMPLING_POLICY,
+        help=(
+            "named Part 1 sampling contract; production requires the default "
+            "temperature/top-p/top-k/min-p/repetition-penalty values"
+        ),
+    )
     canary.add_argument("--concurrencies", type=parse_int_list, default=DEFAULT_CONCURRENCIES)
     canary.add_argument("--requests", type=int, default=16)
     canary.add_argument("--max-tokens", type=int, default=128)
@@ -7742,49 +8920,16 @@ def build_parser() -> argparse.ArgumentParser:
     )
     adversarial.add_argument("--burst-requests", type=int, default=32)
     adversarial.add_argument("--burst-max-tokens", type=int, default=64)
-    adversarial.add_argument("--prefix-context-tokens", type=int, default=8_192)
-    adversarial.add_argument(
-        "--min-prefix-reuse-fraction",
-        type=float,
-        default=DEFAULT_MIN_PREFIX_REUSE_FRACTION,
-    )
-    adversarial.add_argument("--prefix-pressure-entries", type=int, default=24)
-    adversarial.add_argument(
-        "--prefix-pressure-context-tokens", type=int, default=100_000
-    )
-    adversarial.add_argument(
-        "--prefix-pressure-capacity-fraction",
-        type=float,
-        default=DEFAULT_PREFIX_PRESSURE_CAPACITY_FRACTION,
-    )
-    adversarial.add_argument(
-        "--prefix-pressure-kv-headroom-fraction",
-        type=float,
-        default=DEFAULT_PREFIX_PRESSURE_KV_HEADROOM_FRACTION,
-    )
-    adversarial.add_argument(
-        "--prefix-pressure-max-entries",
-        type=int,
-        default=DEFAULT_PREFIX_PRESSURE_MAX_ENTRIES,
-    )
-    adversarial.add_argument(
-        "--kv-block-size-tokens", type=int, default=DEFAULT_KV_BLOCK_SIZE_TOKENS
-    )
-    adversarial.add_argument(
-        "--speculative-prefix-replay-tokens",
-        type=int,
-        default=DEFAULT_SPECULATIVE_PREFIX_REPLAY_TOKENS,
-    )
+    add_prefix_pressure_args(adversarial)
     adversarial.add_argument(
         "--min-overlap-baseline-events",
         type=int,
         default=DEFAULT_MIN_OVERLAP_BASELINE_EVENTS,
     )
-    adversarial.add_argument("--prefix-pressure-max-tokens", type=int, default=8)
     adversarial.add_argument(
         "--expected-graph-components",
         type=parse_graph_components,
-        default=("target",),
+        default=("target", "dflash"),
     )
     adversarial.add_argument(
         "--min-cuda-graph-replay-ratio",
@@ -7793,11 +8938,48 @@ def build_parser() -> argparse.ArgumentParser:
     )
     adversarial.add_argument("--churn-rounds", type=int, default=3)
     adversarial.add_argument("--churn-max-tokens", type=int, default=64)
-    adversarial.add_argument("--require-mtp", action="store_true")
+    adversarial.add_argument(
+        "--acceptance-grade",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+    )
+    adversarial.add_argument(
+        "--require-mtp",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+    )
+
+    prefix_pressure = subparsers.add_parser(
+        "prefix-pressure",
+        parents=[common],
+        help="run only the cold-hit-capacity-eviction-retry memory-pressure gate",
+    )
+    prefix_pressure.add_argument("--max-seqs", type=int, default=16)
+    prefix_pressure.add_argument("--max-tokens", type=int, default=128)
+    prefix_pressure.add_argument(
+        "--max-repeated-ngram-ratio",
+        type=float,
+        default=DEFAULT_MAX_REPEATED_NGRAM_RATIO,
+    )
+    prefix_pressure.add_argument(
+        "--cleanup-timeout-seconds",
+        type=float,
+        default=DEFAULT_CLEANUP_TIMEOUT_SECONDS,
+    )
+    prefix_pressure.add_argument(
+        "--cleanup-poll-seconds",
+        type=float,
+        default=DEFAULT_CLEANUP_POLL_SECONDS,
+    )
+    add_prefix_pressure_args(prefix_pressure)
 
     production = subparsers.add_parser("production", parents=[common])
     add_speculative_evidence_args(production)
-    production.add_argument("--duration-seconds", type=float, default=3_600.0)
+    production.add_argument(
+        "--duration-seconds",
+        type=float,
+        default=DEFAULT_PRODUCTION_DURATION_SECONDS,
+    )
     production.add_argument("--concurrencies", type=parse_int_list, default=(8, 16))
     production.add_argument(
         "--min-output-tok-s-by-concurrency",
@@ -7908,7 +9090,6 @@ def build_parser() -> argparse.ArgumentParser:
         type=float,
         default=DEFAULT_CLEANUP_POLL_SECONDS,
     )
-    production.add_argument("--server-pid", type=int, required=True)
     production.add_argument(
         "--min-telemetry-samples",
         type=int,
@@ -7961,7 +9142,16 @@ def build_parser() -> argparse.ArgumentParser:
         default=DEFAULT_MAX_RECURRENT_SLOT_UTILIZATION,
         help="maximum sampled used/total recurrent-state slot ratio",
     )
-    production.add_argument("--require-mtp", action="store_true")
+    production.add_argument(
+        "--acceptance-grade",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+    )
+    production.add_argument(
+        "--require-mtp",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+    )
 
     multimodal = subparsers.add_parser("multimodal", parents=[common])
     multimodal.add_argument("--image", required=True, help="image URL, data URL, or local path")
@@ -8016,11 +9206,46 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def validate_prefix_pressure_args(args: argparse.Namespace) -> None:
+    for name in (
+        "max_seqs",
+        "max_tokens",
+        "prefix_context_tokens",
+        "prefix_pressure_entries",
+        "prefix_pressure_context_tokens",
+        "prefix_pressure_max_entries",
+        "prefix_pressure_max_tokens",
+        "kv_block_size_tokens",
+        "cleanup_timeout_seconds",
+        "cleanup_poll_seconds",
+    ):
+        if getattr(args, name) <= 0:
+            raise ValueError(f"--{name.replace('_', '-')} must be positive")
+    if args.speculative_prefix_replay_tokens < 0:
+        raise ValueError("--speculative-prefix-replay-tokens cannot be negative")
+    if args.prefix_pressure_max_entries < args.prefix_pressure_entries:
+        raise ValueError(
+            "--prefix-pressure-max-entries must be at least --prefix-pressure-entries"
+        )
+    if args.prefix_pressure_capacity_fraction <= 1:
+        raise ValueError("--prefix-pressure-capacity-fraction must be greater than 1")
+    if not 0 < args.prefix_pressure_kv_headroom_fraction < 1:
+        raise ValueError(
+            "--prefix-pressure-kv-headroom-fraction must be greater than 0 and less than 1"
+        )
+    if not 0 < args.min_prefix_reuse_fraction <= 1:
+        raise ValueError(
+            "--min-prefix-reuse-fraction must be greater than 0 and at most 1"
+        )
+
+
 def validate_args(args: argparse.Namespace) -> None:
     if args.mode == "compare":
         if args.stat_max_ks <= 0 or args.stat_max_js <= 0:
             raise ValueError("statistical thresholds must be positive")
         return
+    if args.mode in ("adversarial", "production") and args.require_mtp is None:
+        args.require_mtp = args.acceptance_grade
     positive_fields = (
         "timeout",
         "temperature",
@@ -8031,6 +9256,10 @@ def validate_args(args: argparse.Namespace) -> None:
     for name in positive_fields:
         if getattr(args, name) <= 0:
             raise ValueError(f"--{name.replace('_', '-')} must be positive")
+    if args.server_pid is not None and args.server_pid <= 0:
+        raise ValueError("--server-pid must be positive")
+    if args.require_server_provenance and args.server_pid is None:
+        raise ValueError("--require-server-provenance requires --server-pid")
     if not 0 <= args.min_p <= 1:
         raise ValueError("--min-p must be between 0 and 1")
     if not 0 < args.top_p <= 1:
@@ -8065,6 +9294,36 @@ def validate_args(args: argparse.Namespace) -> None:
     if args.mode == "canary":
         if args.max_length_tokens <= 0:
             raise ValueError("--max-length-tokens must be positive")
+        sampling_policy = production_sampling_policy_evidence(
+            args.sampling_policy,
+            SamplingPolicy(
+                temperature=args.temperature,
+                top_p=args.top_p,
+                top_k=args.top_k,
+                min_p=args.min_p,
+                repetition_penalty=args.repetition_penalty,
+            ),
+        )
+        if (
+            args.sampling_policy == PART1_PRODUCTION_SAMPLING_POLICY
+            and not sampling_policy["passed"]
+        ):
+            mismatches = ", ".join(
+                field
+                for field, matches in sampling_policy["matches"].items()
+                if not matches
+            )
+            raise ValueError(
+                "--sampling-policy production requires the production sampling values; "
+                f"mismatched fields: {mismatches}"
+            )
+        if (
+            args.require_part1_complete
+            and args.sampling_policy != PART1_PRODUCTION_SAMPLING_POLICY
+        ):
+            raise ValueError(
+                "--require-part1-complete requires --sampling-policy production"
+            )
         if not 0 < args.min_cuda_graph_replay_ratio <= 1:
             raise ValueError(
                 "--min-cuda-graph-replay-ratio must be greater than 0 and at most 1"
@@ -8073,8 +9332,17 @@ def validate_args(args: argparse.Namespace) -> None:
             raise ValueError(
                 "--require-mtp requires --expected-graph-components target,dflash"
             )
-    if args.mode in ("adversarial", "production", "resident-decode") and not args.tokenizer:
+    if args.mode in (
+        "adversarial",
+        "prefix-pressure",
+        "production",
+        "resident-decode",
+    ) and not args.tokenizer:
         raise ValueError(f"{args.mode} mode requires --tokenizer")
+    if args.mode == "prefix-pressure":
+        validate_prefix_pressure_args(args)
+        if args.server_pid is None:
+            raise ValueError("prefix-pressure mode requires --server-pid")
     if args.mode == "resident-decode":
         for name in (
             "requests",
@@ -8119,6 +9387,7 @@ def validate_args(args: argparse.Namespace) -> None:
                 "--require-mtp requires --expected-graph-components target,dflash"
             )
     if args.mode == "adversarial":
+        validate_prefix_pressure_args(args)
         required_contexts = set(DEFAULT_CONTEXT_LENGTHS)
         if not required_contexts.issubset(args.context_lengths):
             raise ValueError(
@@ -8152,11 +9421,6 @@ def validate_args(args: argparse.Namespace) -> None:
             "overlap_short_requests",
             "cancel_requests",
             "burst_requests",
-            "prefix_pressure_entries",
-            "prefix_pressure_context_tokens",
-            "prefix_pressure_max_entries",
-            "prefix_pressure_max_tokens",
-            "kv_block_size_tokens",
             "churn_rounds",
             "churn_max_tokens",
             "burst_max_tokens",
@@ -8166,23 +9430,6 @@ def validate_args(args: argparse.Namespace) -> None:
         ):
             if getattr(args, name) <= 0:
                 raise ValueError(f"--{name.replace('_', '-')} must be positive")
-        if args.speculative_prefix_replay_tokens < 0:
-            raise ValueError("--speculative-prefix-replay-tokens cannot be negative")
-        if args.prefix_pressure_max_entries < args.prefix_pressure_entries:
-            raise ValueError(
-                "--prefix-pressure-max-entries must be at least --prefix-pressure-entries"
-            )
-        if args.prefix_pressure_capacity_fraction <= 1:
-            raise ValueError("--prefix-pressure-capacity-fraction must be greater than 1")
-        if not 0 < args.prefix_pressure_kv_headroom_fraction < 1:
-            raise ValueError(
-                "--prefix-pressure-kv-headroom-fraction must be greater than 0 "
-                "and less than 1"
-            )
-        if not 0 < args.min_prefix_reuse_fraction <= 1:
-            raise ValueError(
-                "--min-prefix-reuse-fraction must be greater than 0 and at most 1"
-            )
         if not 0 < args.min_cuda_graph_replay_ratio <= 1:
             raise ValueError(
                 "--min-cuda-graph-replay-ratio must be greater than 0 and at most 1"
@@ -8229,6 +9476,15 @@ def validate_args(args: argparse.Namespace) -> None:
         if args.require_mtp and set(args.expected_graph_components) != {"target", "dflash"}:
             raise ValueError(
                 "--require-mtp requires --expected-graph-components target,dflash"
+            )
+        if not acceptance_grade_evidence(
+            args.acceptance_grade,
+            args.require_mtp,
+            args.expected_graph_components,
+        )["passed"]:
+            raise ValueError(
+                "--acceptance-grade adversarial runs require MTP and "
+                "--expected-graph-components target,dflash"
             )
     if args.mode == "production":
         for name in (
@@ -8301,8 +9557,8 @@ def validate_args(args: argparse.Namespace) -> None:
             )
         if not {8, 16}.issubset(args.concurrencies):
             raise ValueError("--concurrencies must include 8 and 16")
-        if args.server_pid <= 0:
-            raise ValueError("--server-pid must be positive")
+        if args.server_pid is None:
+            raise ValueError("production mode requires --server-pid")
         minimum_phase_seconds = (
             args.probe_interval_seconds * MIN_PRODUCTION_PROBES_PER_PHASE
         )
@@ -8312,6 +9568,14 @@ def validate_args(args: argparse.Namespace) -> None:
                 "each production concurrency phase must be longer than "
                 f"{MIN_PRODUCTION_PROBES_PER_PHASE} probe intervals; increase "
                 "--duration-seconds or decrease --probe-interval-seconds"
+            )
+        if (
+            phase_seconds + SCHEDULE_TIME_EPSILON_SECONDS
+            < 2 * args.comparison_window_seconds
+        ):
+            raise ValueError(
+                "each production concurrency phase must cover complete, "
+                "non-overlapping first and final comparison windows"
             )
         if set(args.min_output_tok_s_by_concurrency) != set(args.concurrencies):
             raise ValueError(
@@ -8323,6 +9587,15 @@ def validate_args(args: argparse.Namespace) -> None:
         if args.require_mtp and set(args.expected_graph_components) != {"target", "dflash"}:
             raise ValueError(
                 "--require-mtp requires --expected-graph-components target,dflash"
+            )
+        if not acceptance_grade_evidence(
+            args.acceptance_grade,
+            args.require_mtp,
+            args.expected_graph_components,
+        )["passed"]:
+            raise ValueError(
+                "--acceptance-grade production runs require MTP and "
+                "--expected-graph-components target,dflash"
             )
     if args.mode == "multimodal":
         if args.concurrency <= 0:
@@ -8361,7 +9634,10 @@ def json_compatible(value: Any) -> Any:
 
 
 def serialized_arguments(args: argparse.Namespace) -> dict[str, Any]:
-    return {key: json_compatible(value) for key, value in vars(args).items()}
+    values = {key: json_compatible(value) for key, value in vars(args).items()}
+    if "api_key" in values:
+        values["api_key"] = "<redacted>"
+    return values
 
 
 async def async_main(args: argparse.Namespace) -> int:
@@ -8408,6 +9684,12 @@ async def async_main(args: argparse.Namespace) -> int:
         repetition_penalty=args.repetition_penalty,
     )
     jsonl_path, summary_path = output_paths(args)
+    if (
+        hasattr(args, "prefix_pressure_namespace")
+        and args.prefix_pressure_namespace is None
+    ):
+        path_hash = stable_hash(str(jsonl_path.resolve()))[:12]
+        args.prefix_pressure_namespace = f"{jsonl_path.stem}-{path_hash}"
     writer = JsonlWriter(jsonl_path)
     client = SoakClient(
         args.base_url,
@@ -8417,15 +9699,34 @@ async def async_main(args: argparse.Namespace) -> int:
         policy,
         tokenizer,
     )
+    server_provenance = await collect_server_provenance(client, args.server_pid)
+    provenance_required = args.require_server_provenance or args.mode in (
+        "prefix-pressure",
+        "production",
+    )
+    server_provenance["required"] = provenance_required
     await writer.emit(
         "run_start",
         mode=args.mode,
         arguments=serialized_arguments(args),
         policy=asdict(policy),
+        server_provenance=server_provenance,
     )
     started = time.perf_counter()
     summary: dict[str, Any]
     try:
+        if (
+            provenance_required
+            and not server_provenance["evidence"]["complete"]
+        ):
+            failed = [
+                name
+                for name, passed in server_provenance["evidence"]["checks"].items()
+                if not passed
+            ]
+            raise RuntimeError(
+                "required server provenance is incomplete: " + ", ".join(failed)
+            )
         if args.mode == "canary":
             summary = await canary_mode(args, client, writer)
         elif args.mode == "sweep":
@@ -8434,6 +9735,8 @@ async def async_main(args: argparse.Namespace) -> int:
             summary = await resident_decode_mode(args, client, writer)
         elif args.mode == "adversarial":
             summary = await adversarial_mode(args, client, writer)
+        elif args.mode == "prefix-pressure":
+            summary = await prefix_pressure_mode(args, client, writer)
         elif args.mode == "production":
             summary = await production_mode(args, client, writer)
         elif args.mode == "multimodal":
@@ -8442,6 +9745,7 @@ async def async_main(args: argparse.Namespace) -> int:
             raise RuntimeError(f"unsupported mode {args.mode}")
         summary["elapsed_seconds"] = time.perf_counter() - started
         summary["evidence_jsonl"] = str(jsonl_path)
+        summary["server_provenance"] = server_provenance
         await writer.emit("run_summary", **summary)
     except Exception as exc:
         summary = {
@@ -8450,6 +9754,7 @@ async def async_main(args: argparse.Namespace) -> int:
             "elapsed_seconds": time.perf_counter() - started,
             "error": f"{type(exc).__name__}: {exc}",
             "evidence_jsonl": str(jsonl_path),
+            "server_provenance": server_provenance,
         }
         await writer.emit("run_error", **summary)
     finally:

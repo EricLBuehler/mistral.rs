@@ -1,4 +1,5 @@
 import json
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -667,6 +668,348 @@ class MetricSelectorTests(unittest.TestCase):
         )
 
 
+class QueueLatencyEvidenceTests(unittest.TestCase):
+    @staticmethod
+    def histogram(count: float, bucket_deltas: tuple[float, float, float]) -> dict[str, float]:
+        return {
+            'mistralrs_scheduler_queue_seconds_bucket{le="0.1"}': bucket_deltas[0],
+            'mistralrs_scheduler_queue_seconds_bucket{le="1"}': bucket_deltas[1],
+            'mistralrs_scheduler_queue_seconds_bucket{le="+Inf"}': bucket_deltas[2],
+            "mistralrs_scheduler_queue_seconds_count": count,
+        }
+
+    def test_positive_observations_and_complete_quantiles_pass(self) -> None:
+        before = self.histogram(25.0, (10.0, 20.0, 25.0))
+        after = self.histogram(30.0, (12.0, 24.0, 30.0))
+
+        evidence = soak.queue_histogram_evidence(before, after)
+        histogram = evidence["histograms"]["mistralrs_scheduler_queue_seconds"]
+
+        self.assertTrue(evidence["passed"])
+        self.assertEqual(histogram["observation_delta"], 5.0)
+        self.assertTrue(histogram["quantiles_complete"])
+        self.assertIsNotNone(histogram["p99"])
+
+    def test_stale_or_incomplete_histograms_fail(self) -> None:
+        before = self.histogram(25.0, (10.0, 20.0, 25.0))
+        stale = soak.queue_histogram_evidence(before, dict(before))
+        missing_observation_counter = {
+            key: value + 1.0
+            for key, value in before.items()
+            if not key.endswith("_count") and 'le="+Inf"' not in key
+        }
+
+        self.assertFalse(stale["passed"])
+        self.assertEqual(
+            stale["histograms"]["mistralrs_scheduler_queue_seconds"][
+                "observation_delta"
+            ],
+            0.0,
+        )
+        self.assertFalse(
+            soak.queue_histogram_evidence({}, missing_observation_counter)["passed"]
+        )
+
+
+class CpuTelemetryTests(unittest.TestCase):
+    @staticmethod
+    def process(
+        host_total: int,
+        host_idle: int,
+        process_ticks: int,
+    ) -> dict:
+        return {
+            "host_cpu_total_ticks": host_total,
+            "host_cpu_idle_ticks": host_idle,
+            "process_cpu_ticks": process_ticks,
+            "process_cpu_clock_ticks_per_second": 100,
+            "process_is_mistralrs": True,
+            "process_vmrss_kib": 1_024,
+            "gpus": [
+                {
+                    "utilization_percent": 50.0,
+                    "memory_used_mib": 100.0,
+                    "power_watts": 200.0,
+                }
+            ],
+        }
+
+    def test_proc_cpu_parsers_handle_aggregate_and_spaced_command(self) -> None:
+        self.assertEqual(
+            soak.parse_host_cpu_ticks(
+                "cpu  100 10 20 30 5 2 3 4 90 9\ncpu0 1 2 3 4"
+            ),
+            (174, 35),
+        )
+        fields = ["S", *(["0"] * 12)]
+        fields[11] = "120"
+        fields[12] = "30"
+        self.assertEqual(
+            soak.parse_process_cpu_ticks(
+                f"123 (mistralrs worker) {' '.join(fields)}"
+            ),
+            150,
+        )
+
+    def test_summary_reports_host_and_server_process_cpu(self) -> None:
+        snapshots = [
+            (0.0, {"mistralrs_sequences_running": 1.0}, self.process(1_000, 400, 100)),
+            (1.0, {"mistralrs_sequences_running": 2.0}, self.process(1_100, 420, 150)),
+        ]
+        cadence = soak.scheduled_observation_evidence(
+            [0.0, 1.0],
+            [0.0, 1.0],
+            0.1,
+        )
+
+        summary = soak.summarize_telemetry(snapshots)
+        evidence = soak.telemetry_evidence(
+            snapshots,
+            42,
+            2,
+            1.0,
+            ("mistralrs_sequences_running",),
+            cadence,
+        )
+
+        self.assertEqual(summary["host_cpu_utilization_percent"]["mean"], 80.0)
+        self.assertEqual(summary["process_cpu_utilization_percent"]["mean"], 50.0)
+        self.assertTrue(evidence["passed"])
+
+        missed_cadence = soak.scheduled_observation_evidence(
+            [0.0, 1.0],
+            [0.0],
+            0.1,
+        )
+        self.assertFalse(
+            soak.telemetry_evidence(
+                snapshots,
+                42,
+                2,
+                1.0,
+                ("mistralrs_sequences_running",),
+                missed_cadence,
+            )["passed"]
+        )
+
+        snapshots[-1][2].pop("process_cpu_ticks")
+        self.assertFalse(
+            soak.telemetry_evidence(
+                snapshots,
+                42,
+                2,
+                1.0,
+                ("mistralrs_sequences_running",),
+                cadence,
+            )["passed"]
+        )
+
+
+class CadenceAndWindowEvidenceTests(unittest.TestCase):
+    def test_periodic_schedule_and_observations_are_exactly_accounted(self) -> None:
+        scheduled = soak.periodic_schedule(0.0, 12.0, 5.0, include_start=True)
+
+        self.assertEqual(scheduled, [0.0, 5.0, 10.0])
+        self.assertTrue(
+            soak.scheduled_observation_evidence(
+                scheduled,
+                [0.0, 5.1, 10.2],
+                0.25,
+            )["passed"]
+        )
+        self.assertFalse(
+            soak.scheduled_observation_evidence(
+                scheduled,
+                [0.0, 5.1],
+                0.25,
+            )["passed"]
+        )
+        self.assertFalse(
+            soak.scheduled_observation_evidence(
+                scheduled,
+                [0.0, 5.1, 10.5],
+                0.25,
+            )["passed"]
+        )
+
+    def test_comparison_windows_require_real_full_non_overlapping_coverage(self) -> None:
+        complete = soak.comparison_window_coverage_evidence(
+            0.0,
+            7_200.0,
+            7_200.0,
+            3_600.0,
+        )
+        ended_early = soak.comparison_window_coverage_evidence(
+            0.0,
+            7_200.0,
+            7_199.0,
+            3_600.0,
+        )
+        overlapping = soak.comparison_window_coverage_evidence(
+            0.0,
+            3_600.0,
+            3_600.0,
+            3_600.0,
+        )
+
+        self.assertTrue(complete["passed"])
+        self.assertFalse(ended_early["passed"])
+        self.assertFalse(overlapping["passed"])
+
+
+class ServerProvenanceTests(unittest.TestCase):
+    def test_command_capture_redacts_secrets_and_extracts_serving_config(self) -> None:
+        argv = [
+            "/srv/mistralrs",
+            "serve",
+            "-m",
+            "Qwen/Qwen3.8-27B-FP8",
+            "--mtp-model=incoai/Qwen3.8-27B-DFlash2",
+            "--pa-cache-type",
+            "f8e4m3",
+            "--paged-attn=on",
+            "--max-seqs",
+            "16",
+            "--api-key",
+            "secret-value",
+            "--token-source=also-secret",
+        ]
+
+        redacted = soak.redact_server_argv(argv)
+        config = soak.parse_serve_configuration(argv)
+
+        self.assertNotIn("secret-value", redacted)
+        self.assertNotIn("also-secret", " ".join(redacted))
+        self.assertEqual(config["subcommand"], "serve")
+        self.assertEqual(config["model"], "Qwen/Qwen3.8-27B-FP8")
+        self.assertEqual(config["mtp_model"], "incoai/Qwen3.8-27B-DFlash2")
+        self.assertEqual(config["pa_cache_type"], "f8e4m3")
+        self.assertEqual(config["paged_attn"], "on")
+        self.assertEqual(config["max_seqs"], "16")
+
+    def test_complete_provenance_requires_exact_git_binary_gpu_and_kv(self) -> None:
+        provenance = {
+            "server_pid": 42,
+            "system_info": {"build": {"git_revision": "a" * 40}},
+            "process": {
+                "process_is_mistralrs": True,
+                "executable": "/srv/mistralrs",
+                "executable_sha256": "b" * 64,
+                "command_sha256": "c" * 64,
+                "serve_configuration": {
+                    "subcommand": "serve",
+                    "paged_attn": "auto",
+                    "pa_cache_type": "f8e4m3",
+                },
+            },
+            "gpu_driver": {
+                "available": True,
+                "gpus": [
+                    {
+                        "uuid": "GPU-00000000-0000-0000-0000-000000000000",
+                        "driver_version": "580.105.08",
+                    }
+                ],
+                "server_process_gpus": [
+                    {"pid": 42, "gpu_uuid": "GPU-00000000-0000-0000-0000-000000000000"}
+                ],
+            },
+            "realized_kv_configuration": {
+                "blocks_total": 1_024.0,
+                "sequence_capacity": 16.0,
+            },
+        }
+
+        evidence = soak.server_provenance_evidence(provenance)
+
+        self.assertTrue(evidence["complete"])
+        provenance["system_info"]["build"]["git_revision"] = "unknown"
+        self.assertFalse(soak.server_provenance_evidence(provenance)["complete"])
+        provenance["system_info"]["build"]["git_revision"] = "a" * 40
+        provenance["process"]["serve_configuration"]["pa_cache_type"] = "auto"
+        self.assertFalse(soak.server_provenance_evidence(provenance)["complete"])
+
+    def test_serialized_arguments_never_persist_api_key(self) -> None:
+        args = soak.build_parser().parse_args(
+            ["canary", "--api-key", "top-secret"]
+        )
+
+        self.assertEqual(soak.serialized_arguments(args)["api_key"], "<redacted>")
+
+
+class CudaMemoryPressureEvidenceTests(unittest.TestCase):
+    @staticmethod
+    def metrics(
+        *,
+        maintenance: float,
+        pending: float,
+        pressure: float = 0.0,
+        reclaimed: float = 0.0,
+        reductions: float = 0.0,
+        deferred: float = 0.0,
+        rejections: float = 0.0,
+        errors: float = 0.0,
+    ) -> dict[str, float]:
+        return {
+            (
+                'mistralrs_cuda_memory_maintenance_total{device="cuda[0]",'
+                'reason="prompt_boundary",action="maintain",outcome="ok"}'
+            ): maintenance,
+            (
+                'mistralrs_cuda_memory_maintenance_total{device="cuda[0]",'
+                'reason="prompt_boundary",action="maintain",outcome="error"}'
+            ): errors,
+            'mistralrs_cuda_memory_pressure_total{device="cuda[0]",level="graph"}': pressure,
+            'mistralrs_cuda_memory_maintenance_pending{device="cuda[0]"}': pending,
+            soak.CUDA_MEMORY_RECLAIMED_BYTES_COUNTER: reclaimed,
+            soak.CUDA_PROMPT_BATCH_REDUCTIONS_COUNTER: reductions,
+            soak.CUDA_PROMPT_SEQUENCES_DEFERRED_COUNTER: deferred,
+            soak.CUDA_PROMPT_MEMORY_REJECTIONS_COUNTER: rejections,
+            soak.CUDA_GRAPH_EVICTIONS_COUNTER: 0.0,
+        }
+
+    def test_recovery_activity_is_reported_without_failing(self) -> None:
+        before = self.metrics(maintenance=10.0, pending=0.0)
+        after = self.metrics(
+            maintenance=16.0,
+            pending=0.0,
+            pressure=2.0,
+            reclaimed=1024.0,
+            reductions=2.0,
+            deferred=3.0,
+        )
+        after[soak.CUDA_GRAPH_EVICTIONS_COUNTER] = 4.0
+
+        evidence = soak.cuda_memory_pressure_evidence(before, after, True)
+
+        self.assertTrue(evidence["passed"])
+        self.assertEqual(evidence["pressure_events"], 2.0)
+        self.assertEqual(evidence["prompt_batch_reductions"], 2.0)
+        self.assertEqual(evidence["prompt_sequences_deferred"], 3.0)
+        self.assertEqual(evidence["graph_evictions"], 4.0)
+
+    def test_errors_rejections_pending_and_bad_accounting_are_gated(self) -> None:
+        before = self.metrics(maintenance=10.0, pending=0.0)
+        cases = (
+            self.metrics(maintenance=11.0, pending=0.0, errors=1.0),
+            self.metrics(maintenance=11.0, pending=0.0, rejections=1.0),
+            self.metrics(maintenance=11.0, pending=1.0),
+            self.metrics(maintenance=11.0, pending=0.0, reductions=2.0, deferred=1.0),
+        )
+
+        for after in cases:
+            with self.subTest(after=after):
+                self.assertFalse(
+                    soak.cuda_memory_pressure_evidence(before, after, True)["passed"]
+                )
+
+    def test_required_instrumentation_cannot_be_missing(self) -> None:
+        evidence = soak.cuda_memory_pressure_evidence({}, {}, True)
+
+        self.assertFalse(evidence["passed"])
+        self.assertFalse(evidence["gates"]["instrumentation"])
+
+
 class ProductionMemoryEvidenceTests(unittest.TestCase):
     @staticmethod
     def metrics(
@@ -954,6 +1297,98 @@ class BatchMeasurementTests(unittest.TestCase):
         self.assertFalse(evidence["passed"])
 
 
+class FixedSeedGateTests(unittest.TestCase):
+    @staticmethod
+    def comparison(exact_passed: bool = True) -> dict:
+        return soak.fixed_seed_comparison_evidence(
+            {"passed": exact_passed, "mismatches": [] if exact_passed else [{}]},
+            {"passed": True},
+            True,
+        )
+
+    def test_statistical_similarity_cannot_hide_exact_divergence(self) -> None:
+        evidence = self.comparison(False)
+
+        self.assertTrue(evidence["statistical_comparison"]["passed"])
+        self.assertTrue(evidence["semantic_passed"])
+        self.assertTrue(evidence["exact_diagnostics_gated"])
+        self.assertFalse(evidence["passed"])
+
+    def test_invariance_requires_every_replay_ordering_and_cross_phase(self) -> None:
+        evidence = soak.fixed_seed_invariance_evidence(
+            [self.comparison() for _ in range(3)],
+            [self.comparison() for _ in range(3)],
+            [self.comparison() for _ in range(2)],
+            3,
+        )
+
+        self.assertTrue(evidence["passed"])
+        self.assertFalse(
+            soak.fixed_seed_invariance_evidence(
+                [self.comparison() for _ in range(3)],
+                [self.comparison() for _ in range(3)],
+                [self.comparison()],
+                3,
+            )["passed"]
+        )
+
+
+class PrefixOwnershipGateTests(unittest.TestCase):
+    def test_aborts_must_not_cache_and_successful_retry_must_take_ownership(self) -> None:
+        evidence = soak.prefix_cached_ownership_evidence(0.0, 128.0, 0.0)
+
+        self.assertTrue(evidence["passed"])
+        self.assertFalse(soak.prefix_cached_ownership_evidence(1.0, 128.0, 0.0)["passed"])
+        self.assertFalse(soak.prefix_cached_ownership_evidence(0.0, 0.0, 0.0)["passed"])
+        self.assertFalse(soak.prefix_cached_ownership_evidence(0.0, 128.0, 1.0)["passed"])
+        self.assertFalse(soak.prefix_cached_ownership_evidence(None, 128.0, 0.0)["passed"])
+
+
+class ChurnCapacityGateTests(unittest.TestCase):
+    @staticmethod
+    def sample(running: float, waiting: float = 0.0, pending: float = 0.0) -> dict:
+        return {
+            "mistralrs_sequences_capacity": 16.0,
+            "mistralrs_sequences_running": running,
+            "mistralrs_sequences_waiting": waiting,
+            "mistralrs_requests_pending_admission": pending,
+        }
+
+    def test_near_capacity_must_be_reached_and_sustained(self) -> None:
+        sustained = soak.churn_capacity_evidence(
+            [self.sample(15.0, waiting=1.0) for _ in range(4)],
+            17,
+            16,
+            16.0,
+            True,
+            0,
+        )
+        serialized = soak.churn_capacity_evidence(
+            [self.sample(1.0, waiting=1.0) for _ in range(4)],
+            17,
+            16,
+            16.0,
+            True,
+            0,
+        )
+        transient = soak.churn_capacity_evidence(
+            [self.sample(15.0, waiting=1.0), *[self.sample(1.0, waiting=1.0) for _ in range(9)]],
+            17,
+            16,
+            16.0,
+            True,
+            0,
+        )
+
+        self.assertTrue(sustained["near_capacity_sustained"])
+        self.assertTrue(sustained["passed"])
+        self.assertFalse(serialized["near_capacity_sustained"])
+        self.assertFalse(serialized["passed"])
+        self.assertEqual(transient["peak_running"], 15.0)
+        self.assertFalse(transient["near_capacity_sustained"])
+        self.assertFalse(transient["passed"])
+
+
 class ArgumentValidationTests(unittest.TestCase):
     @staticmethod
     def adversarial_args(cancel_requests: int):
@@ -997,7 +1432,11 @@ class ArgumentValidationTests(unittest.TestCase):
         )
 
     def test_post_admission_cancellations_fit_sequence_capacity(self) -> None:
-        soak.validate_args(self.adversarial_args(16))
+        valid = self.adversarial_args(16)
+        soak.validate_args(valid)
+        self.assertTrue(valid.acceptance_grade)
+        self.assertTrue(valid.require_mtp)
+        self.assertEqual(set(valid.expected_graph_components), {"target", "dflash"})
         with self.assertRaisesRegex(ValueError, "cannot exceed --max-seqs"):
             soak.validate_args(self.adversarial_args(17))
 
@@ -1009,6 +1448,27 @@ class ArgumentValidationTests(unittest.TestCase):
             args.prefix_pressure_kv_headroom_fraction,
             soak.DEFAULT_PREFIX_PRESSURE_KV_HEADROOM_FRACTION,
         )
+
+    def test_focused_prefix_pressure_requires_pid_and_validates(self) -> None:
+        parser = soak.build_parser()
+        missing_pid = parser.parse_args(
+            ["prefix-pressure", "--tokenizer", "tokenizer.json"]
+        )
+        with self.assertRaisesRegex(ValueError, "requires --server-pid"):
+            soak.validate_args(missing_pid)
+
+        args = parser.parse_args(
+            [
+                "prefix-pressure",
+                "--tokenizer",
+                "tokenizer.json",
+                "--server-pid",
+                "1",
+            ]
+        )
+        soak.validate_args(args)
+        self.assertEqual(args.max_seqs, 16)
+        self.assertEqual(args.prefix_pressure_context_tokens, 100_000)
 
     def test_invalid_prefix_pressure_headroom_is_rejected(self) -> None:
         args = self.adversarial_args(16)
@@ -1033,6 +1493,55 @@ class ArgumentValidationTests(unittest.TestCase):
         )
         soak.validate_args(args)
 
+    def test_named_production_sampling_policy_is_exact(self) -> None:
+        args = soak.build_parser().parse_args(["canary"])
+
+        soak.validate_args(args)
+        self.assertEqual(args.sampling_policy, soak.PART1_PRODUCTION_SAMPLING_POLICY)
+        self.assertTrue(
+            soak.production_sampling_policy_evidence(
+                args.sampling_policy,
+                soak.SamplingPolicy(
+                    args.temperature,
+                    args.top_p,
+                    args.top_k,
+                    args.min_p,
+                    args.repetition_penalty,
+                ),
+            )["passed"]
+        )
+
+        mismatched = soak.build_parser().parse_args(
+            ["canary", "--temperature", "0.7"]
+        )
+        with self.assertRaisesRegex(ValueError, "production sampling values"):
+            soak.validate_args(mismatched)
+
+    def test_custom_sampling_cannot_claim_part1_complete(self) -> None:
+        custom = soak.build_parser().parse_args(
+            [
+                "canary",
+                "--sampling-policy",
+                "custom",
+                "--temperature",
+                "0.7",
+            ]
+        )
+        soak.validate_args(custom)
+
+        complete = soak.build_parser().parse_args(
+            [
+                "canary",
+                "--sampling-policy",
+                "custom",
+                "--temperature",
+                "0.7",
+                "--require-part1-complete",
+            ]
+        )
+        with self.assertRaisesRegex(ValueError, "requires --sampling-policy production"):
+            soak.validate_args(complete)
+
     def test_invalid_sparse_fallback_ratio_is_rejected(self) -> None:
         args = soak.build_parser().parse_args(
             ["canary", "--max-sparse-verifier-fallback-ratio", "1.1"]
@@ -1053,6 +1562,9 @@ class ArgumentValidationTests(unittest.TestCase):
         args = self.production_args()
 
         soak.validate_args(args)
+        self.assertTrue(args.acceptance_grade)
+        self.assertTrue(args.require_mtp)
+        self.assertEqual(set(args.expected_graph_components), {"target", "dflash"})
         self.assertEqual(
             args.max_process_rss_drift_mib,
             soak.DEFAULT_MAX_PROCESS_RSS_DRIFT_MIB,
@@ -1067,6 +1579,50 @@ class ArgumentValidationTests(unittest.TestCase):
         args = self.production_args("--max-kv-block-utilization", "1.1")
 
         with self.assertRaisesRegex(ValueError, "max-kv-block-utilization"):
+            soak.validate_args(args)
+
+    def test_acceptance_grade_requires_mtp_and_both_graph_components(self) -> None:
+        production_without_mtp = self.production_args("--no-require-mtp")
+        adversarial_target_only = self.adversarial_args(16)
+        adversarial_target_only.expected_graph_components = ("target",)
+
+        with self.assertRaisesRegex(ValueError, "acceptance-grade"):
+            soak.validate_args(production_without_mtp)
+        with self.assertRaisesRegex(ValueError, "target,dflash"):
+            soak.validate_args(adversarial_target_only)
+
+    def test_non_acceptance_calibration_can_disable_mtp_and_dflash(self) -> None:
+        production = self.production_args(
+            "--no-acceptance-grade",
+            "--no-require-mtp",
+            "--expected-graph-components",
+            "target",
+        )
+        adversarial = self.adversarial_args(16)
+        adversarial.acceptance_grade = False
+        adversarial.require_mtp = False
+        adversarial.expected_graph_components = ("target",)
+
+        soak.validate_args(production)
+        soak.validate_args(adversarial)
+
+        self.assertFalse(production.acceptance_grade)
+        self.assertFalse(production.require_mtp)
+        self.assertFalse(
+            soak.acceptance_grade_evidence(False, False, ("target",))[
+                "certification_complete"
+            ]
+        )
+
+    def test_production_requires_complete_first_and_final_windows(self) -> None:
+        args = self.production_args(
+            "--duration-seconds",
+            "3600",
+            "--comparison-window-seconds",
+            "3600",
+        )
+
+        with self.assertRaisesRegex(ValueError, "comparison windows"):
             soak.validate_args(args)
 
 
@@ -1282,6 +1838,43 @@ class ProductionGateTests(unittest.TestCase):
 
 
 class MultimodalOracleTests(unittest.TestCase):
+    def test_text_prerequisites_require_acceptance_grade_soak_artifacts(self) -> None:
+        canary = {
+            "mode": "canary",
+            "passed": True,
+            "coverage_complete": True,
+        }
+        adversarial = {
+            "mode": "adversarial",
+            "passed": True,
+            "max_seqs_queue_evidence": {"passed": True},
+        }
+        production = {
+            "mode": "production",
+            "passed": True,
+            "telemetry_evidence": {"passed": True},
+            "acceptance_grade": True,
+            "acceptance_grade_evidence": {"certification_complete": True},
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            paths = []
+            for name, summary in (
+                ("canary", canary),
+                ("adversarial", adversarial),
+                ("production", production),
+            ):
+                path = Path(directory) / f"{name}.json"
+                path.write_text(json.dumps(summary), encoding="utf-8")
+                paths.append(path)
+
+            self.assertFalse(soak.text_prerequisite_evidence(paths)["passed"])
+            adversarial["acceptance_grade"] = True
+            adversarial["acceptance_grade_evidence"] = {
+                "certification_complete": True
+            }
+            paths[1].write_text(json.dumps(adversarial), encoding="utf-8")
+            self.assertTrue(soak.text_prerequisite_evidence(paths)["passed"])
+
     def test_image_oracle_accepts_phrase_and_attribute_alternative(self) -> None:
         valid, evidence = soak.validate_image_output(
             request_result(
