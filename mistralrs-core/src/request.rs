@@ -470,6 +470,10 @@ pub struct NormalRequest {
 }
 
 impl NormalRequest {
+    pub(crate) fn response_is_closed(&self) -> bool {
+        self.response.is_closed()
+    }
+
     pub fn new_simple(
         messages: RequestMessage,
         sampling_params: SamplingParams,

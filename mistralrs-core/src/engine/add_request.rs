@@ -124,6 +124,9 @@ impl Engine {
     }
 
     pub(super) async fn add_request(&self, mut request: NormalRequest) {
+        if request.response.is_closed() {
+            return;
+        }
         let adapter_lease = match request.adapter.as_ref() {
             Some(selection) => match selection.lease() {
                 Some(lease) => Some(lease.clone()),
@@ -376,6 +379,9 @@ impl Engine {
                 .unwrap_or_else(|_| warn!("Receiver disconnected"));
             return;
         }
+        if request.response.is_closed() {
+            return;
+        }
 
         if matches!(
             get_mut_arcmutex!(self.pipeline).category(),
@@ -554,6 +560,9 @@ impl Engine {
 
         // Add sequences
         for response_index in 0..request.sampling_params.n_choices {
+            if request.response.is_closed() {
+                return;
+            }
             let factory = get_mut_arcmutex!(self.pipeline)
                 .get_metadata()
                 .llg_factory
@@ -814,6 +823,9 @@ impl Engine {
                     request.response
                 );
             }
+            if request.response.is_closed() {
+                return;
+            }
 
             let prefill_cache = if seq.return_raw_logits {
                 None
@@ -916,6 +928,17 @@ impl Engine {
                 }
                 None => seq,
             };
+
+            if request.response.is_closed() {
+                if let Some(slot_idx) = seq.recurrent_state_idx() {
+                    let pipeline = get_mut_arcmutex!(self.pipeline);
+                    if pipeline.cache().is_hybrid() {
+                        pipeline.cache().hybrid().free_seq(slot_idx);
+                    }
+                    seq.set_recurrent_state_idx(None);
+                }
+                return;
+            }
 
             *get_mut_arcmutex!(self.id) += 1;
             get_mut_arcmutex!(self.scheduler).add_seq(seq);

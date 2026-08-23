@@ -135,6 +135,7 @@ pub trait Scheduler: Send + Sync {
     fn waiting_len(&self) -> usize;
     fn running_len(&self) -> usize;
     fn add_seq(&mut self, seq: Sequence);
+    fn cancel_closed_response_groups(&mut self);
     /// This may do nothing. It depends on the implementation
     fn free_finished_sequence_groups(&mut self);
     /// Get recurrent state pool indices of finished sequences for freeing.

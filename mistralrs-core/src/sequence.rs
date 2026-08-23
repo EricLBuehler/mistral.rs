@@ -1421,6 +1421,10 @@ impl Sequence {
         self.responder.clone()
     }
 
+    pub(crate) fn response_is_closed(&self) -> bool {
+        self.responder.is_closed()
+    }
+
     pub fn creation_time(&self) -> u64 {
         self.creation_time
     }

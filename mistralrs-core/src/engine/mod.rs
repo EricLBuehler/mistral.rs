@@ -516,6 +516,7 @@ impl Engine {
     }
 
     fn free_finished_scheduler_sequences(&self, scheduler: &mut dyn Scheduler) {
+        scheduler.cancel_closed_response_groups();
         let finished_sequence_ids = scheduler.get_finished_sequence_ids();
         let recurrent_indices = scheduler.get_finished_recurrent_indices();
         if !finished_sequence_ids.is_empty() || !recurrent_indices.is_empty() {
@@ -529,6 +530,8 @@ impl Engine {
             }
         }
         scheduler.free_finished_sequence_groups();
+        self.logger.set_num_running(scheduler.running_len());
+        self.logger.set_num_waiting(scheduler.waiting_len());
     }
 
     fn resolve_adapter_generation(&self, request: &mut Request) -> Result<(), String> {
@@ -552,6 +555,9 @@ impl Engine {
     }
 
     async fn prepare_request_for_dispatch(&self, mut request: Request) -> Option<Request> {
+        if Self::request_is_abandoned(&request) {
+            return None;
+        }
         if let Err(error) = self.resolve_adapter_generation(&mut request) {
             if let Request::Normal(request) = request {
                 request
@@ -563,6 +569,10 @@ impl Engine {
             return None;
         }
         Some(request)
+    }
+
+    fn request_is_abandoned(request: &Request) -> bool {
+        matches!(request, Request::Normal(request) if request.response_is_closed())
     }
 
     fn admission_class(request: &Request) -> admission::AdmissionClass {
@@ -824,10 +834,19 @@ impl Engine {
             }
 
             let channel_disconnected = self.collect_pending_requests(&mut pending).await;
+            pending.retain(|request| !Self::request_is_abandoned(request));
             #[cfg(feature = "cuda")]
             let decode_batch_leased = cuda_decode_lease.is_some();
             #[cfg(not(feature = "cuda"))]
             let decode_batch_leased = false;
+            {
+                let mut scheduler = get_mut_arcmutex!(self.scheduler);
+                if decode_batch_leased {
+                    scheduler.cancel_closed_response_groups();
+                } else {
+                    self.free_finished_scheduler_sequences(&mut *scheduler);
+                }
+            }
             if let Some(request) = pending.take_shutdown() {
                 #[cfg(feature = "cuda")]
                 if let Some(lease) = cuda_decode_lease.take() {

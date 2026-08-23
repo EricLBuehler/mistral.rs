@@ -355,6 +355,20 @@ async fn forward_passthrough(
     }
 }
 
+#[derive(Debug, PartialEq, Eq)]
+struct ClientDisconnected;
+
+async fn recv_or_client_disconnect<T>(
+    receiver: &mut tokio::sync::mpsc::Receiver<T>,
+    user_sender: &tokio::sync::mpsc::Sender<Response>,
+) -> Result<Option<T>, ClientDisconnected> {
+    tokio::select! {
+        biased;
+        _ = user_sender.closed() => Err(ClientDisconnected),
+        response = receiver.recv() => Ok(response),
+    }
+}
+
 #[derive(Default)]
 struct AgenticUsageAccumulator {
     prompt_tokens: usize,
@@ -1293,9 +1307,13 @@ pub(super) async fn agentic_loop(this: Arc<Engine>, mut request: NormalRequest) 
                 .await;
 
             if !is_streaming {
-                let Some(resp) = receiver.recv().await else {
-                    tracing::warn!("Engine closed without sending a response.");
-                    return;
+                let resp = match recv_or_client_disconnect(&mut receiver, &user_sender).await {
+                    Ok(Some(resp)) => resp,
+                    Ok(None) => {
+                        tracing::warn!("Engine closed without sending a response.");
+                        return;
+                    }
+                    Err(_) => return,
                 };
                 let Some(resp) = forward_passthrough(resp, &user_sender).await else {
                     return;
@@ -1392,7 +1410,12 @@ pub(super) async fn agentic_loop(this: Arc<Engine>, mut request: NormalRequest) 
                 let mut held_final_chunk: Option<crate::ChatCompletionChunkResponse> = None;
                 let mut round_reasoning_content = String::new();
 
-                while let Some(resp) = receiver.recv().await {
+                loop {
+                    let resp = match recv_or_client_disconnect(&mut receiver, &user_sender).await {
+                        Ok(Some(resp)) => resp,
+                        Ok(None) => break,
+                        Err(_) => return,
+                    };
                     let Some(resp) = forward_passthrough(resp, &user_sender).await else {
                         return;
                     };
@@ -1518,6 +1541,22 @@ pub(super) async fn agentic_loop(this: Arc<Engine>, mut request: NormalRequest) 
 mod tests {
     use super::*;
     use crate::{tools::ToolCallType, CalledFunction};
+
+    #[tokio::test]
+    async fn client_disconnect_drops_the_internal_response_bridge() {
+        let (user_sender, user_receiver) = tokio::sync::mpsc::channel(1);
+        let (internal_sender, mut internal_receiver) = tokio::sync::mpsc::channel::<usize>(1);
+
+        let task = tokio::spawn(async move {
+            recv_or_client_disconnect(&mut internal_receiver, &user_sender).await
+        });
+        tokio::task::yield_now().await;
+        assert!(!internal_sender.is_closed());
+
+        drop(user_receiver);
+        assert_eq!(task.await.unwrap(), Err(ClientDisconnected));
+        assert!(internal_sender.is_closed());
+    }
 
     #[test]
     fn assistant_tool_call_history_preserves_reasoning() {

@@ -959,10 +959,9 @@ impl PagedAttentionScheduler {
     }
 
     pub fn free_finished_sequence_groups(&mut self) {
-        // Collect finished sequence info before modifying self.running
         let mut finished: Vec<SeqCacheInfo> = Vec::new();
         let mut cacheable_finished: Vec<SeqCacheInfo> = Vec::new();
-        for seq in self.running.iter() {
+        for seq in self.running.iter().chain(self.waiting.iter()) {
             let seq_guard = get_mut_arcmutex!(seq);
             if seq_guard.is_finished_paged_attn() {
                 let id = *seq_guard.id();
@@ -979,15 +978,18 @@ impl PagedAttentionScheduler {
                     block_hash_revision,
                     num_computed_tokens,
                 );
-                if !matches!(seq_guard.getstate(), SequenceState::Error) {
+                if !matches!(seq_guard.getstate(), SequenceState::Error)
+                    && num_computed_tokens >= self.block_size
+                {
                     cacheable_finished.push(info.clone());
                 }
                 finished.push(info);
             }
         }
 
-        // Remove finished sequences from running
         self.running
+            .retain(|seq| !get_mut_arcmutex!(seq).is_finished_paged_attn());
+        self.waiting
             .retain(|seq| !get_mut_arcmutex!(seq).is_finished_paged_attn());
 
         // Cache and free blocks for finished sequences
@@ -1086,6 +1088,17 @@ impl Scheduler for PagedAttentionScheduler {
     fn add_seq(&mut self, seq: Sequence) {
         self.waiting.push_back(Arc::new(Mutex::new(seq)));
     }
+    fn cancel_closed_response_groups(&mut self) {
+        self.running
+            .iter()
+            .chain(self.waiting.iter())
+            .for_each(|seq| {
+                let seq = get_mut_arcmutex!(seq);
+                if seq.response_is_closed() && !seq.is_finished_paged_attn() {
+                    seq.set_state(SequenceState::Done(StopReason::Canceled));
+                }
+            });
+    }
     fn schedule(
         &mut self,
         logger: &IntervalLogger,
@@ -1114,6 +1127,7 @@ impl Scheduler for PagedAttentionScheduler {
         indices.extend(
             self.running
                 .iter()
+                .chain(self.waiting.iter())
                 .filter(|seq| get_mut_arcmutex!(seq).is_finished_paged_attn())
                 .filter_map(|seq| get_mut_arcmutex!(seq).recurrent_state_idx()),
         );
@@ -1122,6 +1136,7 @@ impl Scheduler for PagedAttentionScheduler {
     fn get_finished_sequence_ids(&self) -> Vec<usize> {
         self.running
             .iter()
+            .chain(self.waiting.iter())
             .filter(|seq| get_mut_arcmutex!(seq).is_finished_paged_attn())
             .map(|seq| *get_mut_arcmutex!(seq).id())
             .collect()
@@ -1224,14 +1239,18 @@ mod tests {
         }
     }
 
-    fn test_sequence_with_media_and_receiver(
+    fn test_sequence_with_media_sender_and_group(
         id: usize,
         len: usize,
-        input_images: Option<Vec<image::DynamicImage>>,
-        input_audios: Option<Vec<AudioInput>>,
-        input_videos: Option<Vec<VideoInput>>,
-    ) -> (Arc<Mutex<Sequence>>, tokio::sync::mpsc::Receiver<Response>) {
-        let (tx, rx) = channel(1);
+        input_media: (
+            Option<Vec<image::DynamicImage>>,
+            Option<Vec<AudioInput>>,
+            Option<Vec<VideoInput>>,
+        ),
+        tx: tokio::sync::mpsc::Sender<Response>,
+        group: Arc<TokioMutex<SequenceGroup>>,
+    ) -> Arc<Mutex<Sequence>> {
+        let (input_images, input_audios, input_videos) = input_media;
         let sampler = Sampler::new(
             None,
             0,
@@ -1247,7 +1266,6 @@ mod tests {
             vec![],
         )
         .unwrap();
-        let group = Arc::new(TokioMutex::new(SequenceGroup::new(1, false, true, None)));
         let seq = Sequence::new_waiting(
             vec![1; len],
             "prompt".to_string(),
@@ -1283,7 +1301,45 @@ mod tests {
             None,
         );
         seq.set_state(SequenceState::RunningCompletion);
-        (Arc::new(Mutex::new(seq)), rx)
+        Arc::new(Mutex::new(seq))
+    }
+
+    fn test_sequence_with_media_and_sender(
+        id: usize,
+        len: usize,
+        input_images: Option<Vec<image::DynamicImage>>,
+        input_audios: Option<Vec<AudioInput>>,
+        input_videos: Option<Vec<VideoInput>>,
+        tx: tokio::sync::mpsc::Sender<Response>,
+    ) -> Arc<Mutex<Sequence>> {
+        test_sequence_with_media_sender_and_group(
+            id,
+            len,
+            (input_images, input_audios, input_videos),
+            tx,
+            Arc::new(TokioMutex::new(SequenceGroup::new(1, false, true, None))),
+        )
+    }
+
+    fn test_sequence_with_media_and_receiver(
+        id: usize,
+        len: usize,
+        input_images: Option<Vec<image::DynamicImage>>,
+        input_audios: Option<Vec<AudioInput>>,
+        input_videos: Option<Vec<VideoInput>>,
+    ) -> (Arc<Mutex<Sequence>>, tokio::sync::mpsc::Receiver<Response>) {
+        let (tx, rx) = channel(1);
+        (
+            test_sequence_with_media_and_sender(
+                id,
+                len,
+                input_images,
+                input_audios,
+                input_videos,
+                tx,
+            ),
+            rx,
+        )
     }
 
     fn test_sequence_with_media(
@@ -1397,6 +1453,87 @@ mod tests {
         assert_eq!(Scheduler::get_finished_sequence_ids(&scheduler), vec![20]);
         scheduler.free_finished_sequence_groups();
         assert!(Scheduler::get_finished_sequence_ids(&scheduler).is_empty());
+    }
+
+    #[test]
+    fn closed_response_group_cancels_waiting_prefill_and_decode() {
+        let mut scheduler = test_scheduler();
+        let initial_free_blocks = get_mut_arcmutex!(scheduler.kv_cache_manager).num_free_blocks();
+        let (tx, rx) = channel(1);
+        let group = Arc::new(TokioMutex::new(SequenceGroup::new(3, false, true, None)));
+
+        let waiting = test_sequence_with_media_sender_and_group(
+            10,
+            4,
+            (None, None, None),
+            tx.clone(),
+            group.clone(),
+        );
+        get_mut_arcmutex!(waiting).set_state(SequenceState::Waiting);
+        get_mut_arcmutex!(waiting).set_recurrent_state_idx(Some(10));
+        scheduler.waiting.push_back(waiting.clone());
+
+        let prefill = test_sequence_with_media_sender_and_group(
+            20,
+            4,
+            (None, None, None),
+            tx.clone(),
+            group.clone(),
+        );
+        get_mut_arcmutex!(prefill).set_state(SequenceState::RunningPrompt);
+        get_mut_arcmutex!(prefill).set_recurrent_state_idx(Some(20));
+        assert!(get_mut_arcmutex!(scheduler.kv_cache_manager)
+            .allocate_slots(20, 4, &[])
+            .is_some());
+        scheduler.running.push_back(prefill.clone());
+
+        let decode =
+            test_sequence_with_media_sender_and_group(30, 4, (None, None, None), tx, group);
+        get_mut_arcmutex!(decode).set_recurrent_state_idx(Some(30));
+        assert!(get_mut_arcmutex!(scheduler.kv_cache_manager)
+            .allocate_slots(30, 4, &[])
+            .is_some());
+        scheduler.running.push_back(decode.clone());
+
+        drop(rx);
+        Scheduler::cancel_closed_response_groups(&mut scheduler);
+
+        for seq in [&waiting, &prefill, &decode] {
+            assert_eq!(
+                get_mut_arcmutex!(seq).getstate(),
+                SequenceState::Done(StopReason::Canceled)
+            );
+        }
+        assert_eq!(
+            Scheduler::get_finished_sequence_ids(&scheduler),
+            vec![20, 30, 10]
+        );
+        assert_eq!(
+            Scheduler::get_finished_recurrent_indices(&scheduler),
+            vec![20, 30, 10]
+        );
+        assert!(!scheduler.can_continue_decode_batch(&[30]));
+
+        scheduler.free_finished_sequence_groups();
+        assert!(scheduler.waiting.is_empty());
+        assert!(scheduler.running.is_empty());
+        assert_eq!(
+            get_mut_arcmutex!(scheduler.kv_cache_manager).num_free_blocks(),
+            initial_free_blocks
+        );
+    }
+
+    #[test]
+    fn closed_response_stops_resident_decode_continuation() {
+        let mut scheduler = test_scheduler();
+        let (seq, rx) = test_sequence_with_media_and_receiver(10, 4, None, None, None);
+        scheduler.running.push_back(seq);
+        assert!(scheduler.can_continue_decode_batch(&[10]));
+
+        drop(rx);
+        Scheduler::cancel_closed_response_groups(&mut scheduler);
+
+        assert!(!scheduler.can_continue_decode_batch(&[10]));
     }
 
     #[test]
