@@ -12,6 +12,14 @@ use crate::{
     AdapterGenerationId,
 };
 
+const PAGED_RECURRENT_PREFIX_OWNERS_CAPACITY_METRIC: &str =
+    "mistralrs_paged_recurrent_prefix_owners_capacity";
+const PAGED_RECURRENT_PREFIX_OWNERS_USED_METRIC: &str =
+    "mistralrs_paged_recurrent_prefix_owners_used";
+const PAGED_RECURRENT_PREFIX_OWNER_EVICTIONS_METRIC: &str =
+    "mistralrs_paged_recurrent_prefix_owner_evictions_total";
+const CAPACITY_EVICTION_REASON: &str = "capacity";
+
 #[derive(PartialEq, Eq, Debug, Hash)]
 struct Tokens(Vec<u32>);
 
@@ -205,7 +213,7 @@ impl PrefixCacheManagerV2 {
         if !no_prefix_cache && !has_paged_attention {
             info!("Prefix caching enabled (sequence-level, non-paged attention). Expect higher multi-turn throughput for both text and multimodal.");
         }
-        PrefixCacheManagerV2 {
+        let manager = PrefixCacheManagerV2 {
             caches: IndexMap::new(),
             paged_recurrent_caches: IndexMap::new(),
             paged_recurrent_sequence_keys: IndexMap::new(),
@@ -214,7 +222,14 @@ impl PrefixCacheManagerV2 {
             n_on_device,
             no_prefix_cache,
             has_paged_attention,
-        }
+        };
+        manager.publish_paged_recurrent_owner_metrics();
+        metrics::counter!(
+            PAGED_RECURRENT_PREFIX_OWNER_EVICTIONS_METRIC,
+            "reason" => CAPACITY_EVICTION_REASON
+        )
+        .increment(0);
+        manager
     }
 
     /// Whether recurrent prefix snapshots would be kept; callers skip the device copy otherwise.
@@ -224,6 +239,24 @@ impl PrefixCacheManagerV2 {
 
     fn paged_recurrent_capacity(&self) -> usize {
         self.n_on_device
+    }
+
+    fn paged_recurrent_owner_metric_values(&self) -> (u32, u32) {
+        let used = u32::try_from(self.paged_recurrent_sequence_keys.len())
+            .expect("paged recurrent prefix owner usage exceeds u32");
+        let capacity = if self.no_prefix_cache || !self.has_paged_attention {
+            0
+        } else {
+            u32::try_from(self.paged_recurrent_capacity())
+                .expect("paged recurrent prefix owner capacity exceeds u32")
+        };
+        (used, capacity)
+    }
+
+    fn publish_paged_recurrent_owner_metrics(&self) {
+        let (used, capacity) = self.paged_recurrent_owner_metric_values();
+        metrics::gauge!(PAGED_RECURRENT_PREFIX_OWNERS_USED_METRIC).set(f64::from(used));
+        metrics::gauge!(PAGED_RECURRENT_PREFIX_OWNERS_CAPACITY_METRIC).set(f64::from(capacity));
     }
 
     fn checkpoint_bytes(
@@ -356,6 +389,7 @@ impl PrefixCacheManagerV2 {
         self.paged_recurrent_caches.clear();
         self.paged_recurrent_sequence_keys.clear();
         self.paged_recurrent_bytes = 0;
+        self.publish_paged_recurrent_owner_metrics();
         if len > 0 {
             metrics::counter!("mistralrs_prefix_cache_evictions_total").increment(len as u64);
         }
@@ -412,6 +446,7 @@ impl PrefixCacheManagerV2 {
         );
         self.paged_recurrent_sequence_keys.insert(owner, key);
 
+        let mut capacity_evictions = 0;
         while self.paged_recurrent_sequence_keys.len() > self.paged_recurrent_capacity() {
             let Some((evicted_owner, evicted_key)) =
                 self.paged_recurrent_sequence_keys.shift_remove_index(0)
@@ -419,7 +454,18 @@ impl PrefixCacheManagerV2 {
                 break;
             };
             self.remove_paged_recurrent_owner(evicted_owner, &evicted_key);
+            capacity_evictions += 1;
         }
+        if capacity_evictions > 0 {
+            metrics::counter!("mistralrs_prefix_cache_evictions_total")
+                .increment(capacity_evictions as u64);
+            metrics::counter!(
+                PAGED_RECURRENT_PREFIX_OWNER_EVICTIONS_METRIC,
+                "reason" => CAPACITY_EVICTION_REASON
+            )
+            .increment(capacity_evictions as u64);
+        }
+        self.publish_paged_recurrent_owner_metrics();
 
         debug_assert!(
             self.paged_recurrent_caches.len() <= self.paged_recurrent_sequence_keys.len()
@@ -889,6 +935,67 @@ mod tests {
         assert!(prefix_cacher
             .get_paged_recurrent_prefix(&hashes_b, owner_b)
             .is_some());
+
+        Ok(())
+    }
+
+    #[test]
+    fn paged_recurrent_owner_metrics_track_logical_occupancy() -> candle_core::Result<()> {
+        let mut prefix_cacher = PrefixCacheManagerV2::new(2, false, true);
+        let hashes_a = compute_block_hashes(&[10, 11, 12, 13], 1, &[], &[]);
+        let hashes_b = compute_block_hashes(&[10, 11, 20, 21], 1, &[], &[]);
+        let hashes_c = block_hashes(30, 2);
+        let owner_a = *hashes_a.last().unwrap();
+        let owner_b = *hashes_b.last().unwrap();
+        let owner_c = *hashes_c.last().unwrap();
+
+        assert_eq!(prefix_cacher.paged_recurrent_owner_metric_values(), (0, 2));
+        prefix_cacher.add_paged_recurrent_prefix(
+            owner_a,
+            hashes_a[..2].to_vec(),
+            vec![make_recurrent_snapshot()?],
+            None,
+        );
+        prefix_cacher.add_paged_recurrent_prefix(
+            owner_b,
+            hashes_b[..2].to_vec(),
+            vec![make_recurrent_snapshot()?],
+            None,
+        );
+
+        assert_eq!(prefix_cacher.paged_recurrent_owner_metric_values(), (2, 2));
+        assert_eq!(prefix_cacher.paged_recurrent_caches.len(), 1);
+
+        prefix_cacher.add_paged_recurrent_prefix(
+            owner_c,
+            hashes_c,
+            vec![make_recurrent_snapshot()?],
+            None,
+        );
+
+        assert_eq!(prefix_cacher.paged_recurrent_owner_metric_values(), (2, 2));
+        assert!(!prefix_cacher.has_paged_recurrent_owner(owner_a));
+        assert!(prefix_cacher.has_paged_recurrent_owner(owner_b));
+        assert!(prefix_cacher.has_paged_recurrent_owner(owner_c));
+
+        prefix_cacher.add_paged_recurrent_prefix(
+            owner_b,
+            hashes_b,
+            vec![make_recurrent_snapshot()?],
+            None,
+        );
+        assert_eq!(prefix_cacher.paged_recurrent_owner_metric_values(), (2, 2));
+
+        assert_eq!(prefix_cacher.evict_all_caches()?, 2);
+        assert_eq!(prefix_cacher.paged_recurrent_owner_metric_values(), (0, 2));
+        assert_eq!(
+            PrefixCacheManagerV2::new(2, true, true).paged_recurrent_owner_metric_values(),
+            (0, 0)
+        );
+        assert_eq!(
+            PrefixCacheManagerV2::new(2, false, false).paged_recurrent_owner_metric_values(),
+            (0, 0)
+        );
 
         Ok(())
     }
