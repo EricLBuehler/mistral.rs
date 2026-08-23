@@ -19,7 +19,7 @@ use super::{
     FlashInferPagedAttentionViews, FlashInferPagedKv, FlashInferTilePlan,
 };
 #[cfg(all(feature = "cuda", target_family = "unix"))]
-use super::{Fa3DecodeBuffers, Fa3DecodeScheduleKey, Fa3DecodeView, FA3_DECODE_NUM_SPLITS};
+use super::{Fa3DecodeBuffers, Fa3DecodeScheduleKey, Fa3DecodeView, Fa3PagedScheduleShape};
 #[cfg(all(feature = "cuda", target_family = "unix"))]
 use crate::paged_attention::AttentionBackendKind;
 #[cfg(feature = "cuda")]
@@ -350,7 +350,7 @@ pub(crate) fn make_fa3_decode_state(
             continue;
         }
         let q_heads = model_metadata.num_attn_heads_for_layer(layer_idx);
-        let key = Fa3DecodeScheduleKey {
+        let Some(key) = (Fa3PagedScheduleShape {
             device: key_cache.device().location(),
             view: Fa3DecodeView::Logical,
             batch,
@@ -360,9 +360,11 @@ pub(crate) fn make_fa3_decode_state(
             kv_heads,
             head_dim,
             page_size,
-            num_splits: FA3_DECODE_NUM_SPLITS,
+        })
+        .decode_schedule_key() else {
+            continue;
         };
-        if !key.supported() || state.get(&key).is_some() {
+        if state.get(&key).is_some() {
             continue;
         }
         let Some(max_pages_per_sequence) = fa3_view_capacity(&metadata.views.logical, &key)? else {

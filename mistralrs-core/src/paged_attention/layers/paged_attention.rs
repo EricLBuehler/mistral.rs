@@ -13,8 +13,8 @@ use mistralrs_paged_attn::{paged_attention, reshape_and_cache};
 use crate::attention::sliding_window_left;
 #[cfg(all(feature = "cuda", target_family = "unix"))]
 use crate::flashinfer::{
-    fa3_device_num_sm, fa3_prefill_cache_num_sm, fa3_prefill_num_splits,
-    with_fa3_prefill_workspace, Fa3DecodeScheduleKey, Fa3DecodeView, FA3_DECODE_NUM_SPLITS,
+    fa3_device_num_sm, fa3_prefill_cache_num_sm, with_fa3_prefill_workspace, Fa3DecodeScheduleKey,
+    Fa3DecodeView, Fa3PagedScheduleShape,
 };
 use crate::{
     attention::{AttentionMask, SdpaParams},
@@ -1437,15 +1437,7 @@ impl PagedAttention {
         {
             candle_core::bail!("FA3 prefill cache/query shape invariant failed");
         }
-        let num_splits = fa3_prefill_num_splits(
-            ctx.dims.batch_size,
-            ctx.dims.seq_len,
-            ctx.dims.attention_heads,
-            kv_heads,
-            num_sm,
-        )
-        .ok_or_else(|| candle_core::Error::msg("FA3 prefill schedule invariant failed"))?;
-        let key = Fa3DecodeScheduleKey {
+        let key = (Fa3PagedScheduleShape {
             device: query.device().location(),
             view: Fa3DecodeView::Logical,
             batch: ctx.dims.batch_size,
@@ -1455,8 +1447,9 @@ impl PagedAttention {
             kv_heads,
             head_dim,
             page_size,
-            num_splits,
-        };
+        })
+        .prefill_schedule_key(num_sm)
+        .ok_or_else(|| candle_core::Error::msg("FA3 prefill schedule invariant failed"))?;
         let query = query
             .transpose(1, 2)?
             .reshape((
@@ -1839,7 +1832,7 @@ impl PagedAttention {
             attention_mask,
         } = call;
         let (_, kv_heads, page_size, head_dim) = key_cache.dims4()?;
-        let key = Fa3DecodeScheduleKey {
+        let Some(key) = (Fa3PagedScheduleShape {
             device: *dev,
             view: Fa3DecodeView::Logical,
             batch: ctx.dims.batch_size,
@@ -1849,7 +1842,9 @@ impl PagedAttention {
             kv_heads,
             head_dim,
             page_size,
-            num_splits: FA3_DECODE_NUM_SPLITS,
+        })
+        .decode_schedule_key() else {
+            return Ok(None);
         };
         let Some(key) = (Fa3DecodeCandidate {
             key,
@@ -2176,7 +2171,7 @@ mod tests {
     #[cfg(all(feature = "cuda", target_family = "unix"))]
     fn supported_fa3_decode_candidate() -> Fa3DecodeCandidate {
         Fa3DecodeCandidate {
-            key: Fa3DecodeScheduleKey {
+            key: Fa3PagedScheduleShape {
                 device: DeviceLocation::Cuda { gpu_id: 0 },
                 view: Fa3DecodeView::Logical,
                 batch: 8,
@@ -2186,8 +2181,9 @@ mod tests {
                 kv_heads: 4,
                 head_dim: 256,
                 page_size: 32,
-                num_splits: FA3_DECODE_NUM_SPLITS,
-            },
+            }
+            .decode_schedule_key()
+            .expect("supported FA3 decode schedule"),
             query_dtype: DType::BF16,
             query_contiguous: true,
             key_cache_dtype: DType::F8E4M3,

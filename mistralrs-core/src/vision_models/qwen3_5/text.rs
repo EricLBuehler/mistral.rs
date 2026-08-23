@@ -615,6 +615,20 @@ fn recurrent_checkpoint_devices_supported(devices: &[Device]) -> bool {
     cfg!(feature = "cuda") && !devices.is_empty() && devices.iter().all(Device::is_cuda)
 }
 
+fn should_stash_gdn_replay(
+    checkpoint_gdn: bool,
+    store_spec_hidden: bool,
+    query_len: usize,
+    batch_kind: Option<RecurrentBatchKind>,
+    continuation_without_cache: bool,
+) -> bool {
+    !checkpoint_gdn
+        && store_spec_hidden
+        && query_len > 1
+        && batch_kind == Some(RecurrentBatchKind::SpeculativeDecode)
+        && continuation_without_cache
+}
+
 fn narrow_spec_graph_tensor(
     tensor: &Tensor,
     batch_dim: usize,
@@ -1443,7 +1457,7 @@ impl Qwen3_5TextModel {
 
         let attention_mask = DeviceMappedMask::new(attention_mask.clone(), &*self.mapper)?;
 
-        // Checkpointed CUDA verification rolls back by lane; other paths retain replay inputs.
+        // Checkpointed CUDA verification rolls back by lane; fallback verification retains replay inputs.
         let checkpoint_gdn = checkpoint_lanes > 1
             && (1..=checkpoint_lanes).contains(&query_len)
             && self.supports_recurrent_speculative_checkpoints_with_cache(&hybrid_cache)
@@ -1451,12 +1465,17 @@ impl Qwen3_5TextModel {
                 metadata.batch_kind() == RecurrentBatchKind::SpeculativeDecode
             });
         let gdn_checkpoint_lanes = if checkpoint_gdn { checkpoint_lanes } else { 1 };
-        let stash_gdn = !checkpoint_gdn
-            && self.store_spec_hidden.load(Ordering::Relaxed)
-            && query_len > 1
-            && ctx.paged_input_metadata().is_some_and(|meta| {
+        let stash_gdn = should_stash_gdn_replay(
+            checkpoint_gdn,
+            self.store_spec_hidden.load(Ordering::Relaxed),
+            query_len,
+            recurrent_metadata
+                .as_ref()
+                .map(|metadata| metadata.batch_kind()),
+            ctx.paged_input_metadata().is_some_and(|meta| {
                 !meta.is_first_prompt_chunk && meta.num_cached_tokens.is_none()
-            });
+            }),
+        );
         let mut gdn_stash = stash_gdn.then(|| GdnReplayStash {
             slots: recurrent_metadata
                 .as_ref()
@@ -1858,11 +1877,12 @@ mod tests {
     use candle_core::{DType, Device, Tensor};
 
     use super::{
-        group_gdn_replay_batches, recurrent_checkpoint_devices_supported, GdnLayerStash,
-        GdnReplayBatch, GdnReplayStash, SpecCapture, SpecGraphState,
+        group_gdn_replay_batches, recurrent_checkpoint_devices_supported, should_stash_gdn_replay,
+        GdnLayerStash, GdnReplayBatch, GdnReplayStash, SpecCapture, SpecGraphState,
     };
     use crate::{
-        gdn::GdnForwardStash, kv_cache::RecurrentStateLayout, speculative::SpeculativeGraphState,
+        gdn::GdnForwardStash, kv_cache::RecurrentStateLayout, pipeline::RecurrentBatchKind,
+        speculative::SpeculativeGraphState,
     };
 
     #[cfg(feature = "cuda")]
@@ -1902,6 +1922,64 @@ mod tests {
     #[test]
     fn recurrent_checkpoint_device_gate_rejects_cpu_placement() {
         assert!(!recurrent_checkpoint_devices_supported(&[Device::Cpu]));
+    }
+
+    #[test]
+    fn gdn_replay_stash_is_only_created_for_fallback_speculative_decode() {
+        assert!(should_stash_gdn_replay(
+            false,
+            true,
+            8,
+            Some(RecurrentBatchKind::SpeculativeDecode),
+            true,
+        ));
+        for (
+            checkpoint_gdn,
+            store_spec_hidden,
+            query_len,
+            batch_kind,
+            continuation_without_cache,
+        ) in [
+            (
+                true,
+                true,
+                8,
+                Some(RecurrentBatchKind::SpeculativeDecode),
+                true,
+            ),
+            (
+                false,
+                false,
+                8,
+                Some(RecurrentBatchKind::SpeculativeDecode),
+                true,
+            ),
+            (
+                false,
+                true,
+                1,
+                Some(RecurrentBatchKind::SpeculativeDecode),
+                true,
+            ),
+            (false, true, 512, Some(RecurrentBatchKind::Prefill), true),
+            (false, true, 8, Some(RecurrentBatchKind::Decode), true),
+            (false, true, 8, None, true),
+            (
+                false,
+                true,
+                8,
+                Some(RecurrentBatchKind::SpeculativeDecode),
+                false,
+            ),
+        ] {
+            assert!(!should_stash_gdn_replay(
+                checkpoint_gdn,
+                store_spec_hidden,
+                query_len,
+                batch_kind,
+                continuation_without_cache,
+            ));
+        }
     }
 
     #[cfg(feature = "cuda")]

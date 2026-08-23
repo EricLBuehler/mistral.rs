@@ -64,6 +64,54 @@ pub(crate) struct Fa3DecodeScheduleKey {
 }
 
 #[cfg(all(feature = "cuda", target_family = "unix"))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Fa3PagedScheduleShape {
+    pub device: DeviceLocation,
+    pub view: Fa3DecodeView,
+    pub batch: usize,
+    pub query_len: usize,
+    pub causal: bool,
+    pub q_heads: usize,
+    pub kv_heads: usize,
+    pub head_dim: usize,
+    pub page_size: usize,
+}
+
+#[cfg(all(feature = "cuda", target_family = "unix"))]
+impl Fa3PagedScheduleShape {
+    pub(crate) fn prefill_schedule_key(self, num_sm: usize) -> Option<Fa3DecodeScheduleKey> {
+        let num_splits = fa3_prefill_num_splits(
+            self.batch,
+            self.query_len,
+            self.q_heads,
+            self.kv_heads,
+            num_sm,
+        )?;
+        self.schedule_key(num_splits)
+    }
+
+    pub(crate) fn decode_schedule_key(self) -> Option<Fa3DecodeScheduleKey> {
+        self.schedule_key(FA3_DECODE_NUM_SPLITS)
+    }
+
+    fn schedule_key(self, num_splits: usize) -> Option<Fa3DecodeScheduleKey> {
+        let key = Fa3DecodeScheduleKey {
+            device: self.device,
+            view: self.view,
+            batch: self.batch,
+            query_len: self.query_len,
+            causal: self.causal,
+            q_heads: self.q_heads,
+            kv_heads: self.kv_heads,
+            head_dim: self.head_dim,
+            page_size: self.page_size,
+            num_splits,
+        };
+        key.supported().then_some(key)
+    }
+}
+
+#[cfg(all(feature = "cuda", target_family = "unix"))]
 impl Fa3DecodeScheduleKey {
     pub(crate) fn total_q(&self) -> Option<usize> {
         self.batch.checked_mul(self.query_len)
@@ -641,8 +689,8 @@ mod tests {
     #[cfg(all(feature = "cuda", target_family = "unix"))]
     use super::{
         fa3_prefill_num_splits, fa3_prefill_workspace_bytes, fa3_prefill_workspace_components,
-        Fa3DecodeScheduleKey, Fa3DecodeView, Fa3PrefillPoolBytes, Fa3PrefillWorkspaceBytes,
-        FA3_DECODE_MAX_QUERY_LEN, FA3_DECODE_NUM_SPLITS,
+        Fa3DecodeScheduleKey, Fa3DecodeView, Fa3PagedScheduleShape, Fa3PrefillPoolBytes,
+        Fa3PrefillWorkspaceBytes, FA3_DECODE_MAX_QUERY_LEN, FA3_DECODE_NUM_SPLITS,
     };
     #[cfg(all(feature = "cuda", target_family = "unix"))]
     use candle_core::DeviceLocation;
@@ -699,7 +747,10 @@ mod tests {
     #[cfg(all(feature = "cuda", target_family = "unix"))]
     #[test]
     fn fa3_prefill_split_cap_tracks_query_occupancy() {
-        assert_eq!(fa3_prefill_num_splits(1, 1, 24, 4, 132), Some(32));
+        assert_eq!(fa3_prefill_num_splits(1, 8, 24, 4, 132), Some(32));
+        assert_eq!(fa3_prefill_num_splits(3, 8, 24, 4, 132), Some(11));
+        assert_eq!(fa3_prefill_num_splits(8, 8, 24, 4, 132), Some(5));
+        assert_eq!(fa3_prefill_num_splits(16, 8, 24, 4, 132), Some(3));
         assert_eq!(fa3_prefill_num_splits(1, 128, 24, 4, 132), Some(6));
         assert_eq!(fa3_prefill_num_splits(8, 128, 24, 4, 132), Some(2));
         assert_eq!(fa3_prefill_num_splits(16, 128, 24, 4, 132), Some(2));
@@ -710,6 +761,34 @@ mod tests {
             None
         );
         assert_eq!(fa3_prefill_num_splits(usize::MAX, 128, 24, 4, 132), None);
+    }
+
+    #[cfg(all(feature = "cuda", target_family = "unix"))]
+    #[test]
+    fn fa3_decode_schedule_preserves_long_row_split_capacity() {
+        for (batch, prefill_splits) in [(3, 11), (16, 3)] {
+            let shape = Fa3PagedScheduleShape {
+                device: DeviceLocation::Cuda { gpu_id: 0 },
+                view: Fa3DecodeView::Logical,
+                batch,
+                query_len: 8,
+                causal: true,
+                q_heads: 24,
+                kv_heads: 4,
+                head_dim: 256,
+                page_size: 32,
+            };
+            let prefill = shape
+                .prefill_schedule_key(132)
+                .expect("supported FA3 prefill schedule");
+            let decode = shape
+                .decode_schedule_key()
+                .expect("supported FA3 decode schedule");
+            assert_eq!(prefill.num_splits, prefill_splits);
+            assert_eq!(decode.num_splits, FA3_DECODE_NUM_SPLITS);
+            assert!(prefill.supported());
+            assert!(decode.supported());
+        }
     }
 
     #[cfg(all(feature = "cuda", target_family = "unix"))]
