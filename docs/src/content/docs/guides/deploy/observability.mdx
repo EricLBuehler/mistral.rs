@@ -67,7 +67,9 @@ Timing is measured at the engine's token steps, not at SSE frames, so keep-alive
 
 | Metric | Type | Labels | Meaning |
 |---|---|---|---|
-| `mistralrs_tokens_processed_total` | counter | - | Tokens processed (prefill plus decode). |
+| `mistralrs_tokens_processed_total` | counter | - | Tokens processed (prefill plus decode). Always equals the sum of the two phase counters below. |
+| `mistralrs_prefill_tokens_processed_total` | counter | - | Prompt (prefill) tokens processed. |
+| `mistralrs_decode_tokens_processed_total` | counter | - | Generated (decode) tokens processed. With speculative decoding only verified tokens count. |
 | `mistralrs_prefix_cache_lookups_total` | counter | - | New sequences that requested a prefix cache lookup. |
 | `mistralrs_prefix_cache_hits_total` | counter | - | New sequences that found a cached KV prefix. |
 | `mistralrs_prefix_cache_evictions_total` | counter | - | Prefix cache entries, logical recurrent owners, or paged KV hash keys evicted from cache. |
