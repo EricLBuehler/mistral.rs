@@ -74,6 +74,18 @@ mod file_tools;
 mod logger;
 mod tool_dispatch;
 
+const PAGED_RECURRENT_PREFIX_VALIDATION_METRIC: &str =
+    "mistralrs_paged_recurrent_prefix_validation_total";
+
+fn record_paged_recurrent_prefix_validation(outcome: &'static str, reason: &'static str) {
+    metrics::counter!(
+        PAGED_RECURRENT_PREFIX_VALIDATION_METRIC,
+        "outcome" => outcome,
+        "reason" => reason
+    )
+    .increment(1);
+}
+
 #[cfg(feature = "cuda")]
 use self::cuda_decode::CudaDecodeCompletionWorker;
 #[cfg(feature = "cuda")]
@@ -343,6 +355,14 @@ impl HybridPagedPrefixValidator {
             drop(pipeline);
             get_mut_arcmutex!(prefix_cacher)
                 .promote_paged_recurrent_prefix(&restore.prefix_key, restore.current_owner);
+            let validation_reason = if restore.restore_auxiliary {
+                "recurrent_and_auxiliary"
+            } else if restore.record_auxiliary_miss {
+                "recurrent_without_auxiliary"
+            } else {
+                "recurrent"
+            };
+            record_paged_recurrent_prefix_validation("hit", validation_reason);
             if restore.restore_auxiliary {
                 metrics::counter!("mistralrs_speculative_prefix_cache_hits_total").increment(1);
                 metrics::counter!("mistralrs_speculative_prefix_replay_tokens_avoided_total")
@@ -364,6 +384,7 @@ impl PagedPrefixCacheValidator for HybridPagedPrefixValidator {
         block_size: usize,
     ) -> candle_core::Result<PagedPrefixCacheValidation> {
         let Some(slot_idx) = seq.recurrent_state_idx() else {
+            record_paged_recurrent_prefix_validation("miss", "missing_slot");
             return Ok(PagedPrefixCacheValidation::ready(0));
         };
         let sequence_id = *seq.id();
@@ -422,10 +443,12 @@ impl PagedPrefixCacheValidator for HybridPagedPrefixValidator {
             replay,
             seq.mm_features(),
         ) else {
+            record_paged_recurrent_prefix_validation("miss", "no_replay_boundary");
             return Ok(self.stage_recurrent_reset(sequence_id, slot_idx, record_auxiliary_miss));
         };
 
         if !cached_tokens.is_multiple_of(block_size) {
+            record_paged_recurrent_prefix_validation("miss", "unaligned_boundary");
             return Ok(self.stage_recurrent_reset(sequence_id, slot_idx, record_auxiliary_miss));
         }
 
@@ -433,11 +456,13 @@ impl PagedPrefixCacheValidator for HybridPagedPrefixValidator {
         let Some((n_blocks, checkpoint)) = get_mut_arcmutex!(self.prefix_cacher)
             .peek_longest_paged_recurrent_prefix(block_hashes, max_blocks)
         else {
+            record_paged_recurrent_prefix_validation("miss", "checkpoint_unavailable");
             return Ok(self.stage_recurrent_reset(sequence_id, slot_idx, record_auxiliary_miss));
         };
 
         let pipeline = get_mut_arcmutex!(self.pipeline);
         if !pipeline.cache().is_hybrid() {
+            record_paged_recurrent_prefix_validation("hit", "attention_only");
             if record_auxiliary_miss {
                 return Ok(PagedPrefixCacheValidation::staged(cached_tokens, |_| {
                     metrics::counter!("mistralrs_speculative_prefix_cache_misses_total")
