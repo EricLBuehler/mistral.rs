@@ -6,7 +6,8 @@ use crate::{
     response::{ChatCompletionChunkResponse, Choice, ChunkChoice, Response, SYSTEM_FINGERPRINT},
     sampler::{Logprobs, Sampler},
     speculative::{SpeculativeProposalDistribution, SpeculativeTokens},
-    AdapterGenerationId, AdapterLease, AudioInput, ChatCompletionResponse, Usage, VideoInput,
+    AdapterGenerationId, AdapterLease, AudioInput, ChatCompletionResponse, PromptTokensDetails,
+    Usage, VideoInput,
 };
 use crate::{
     pipeline::{DiffusionGenerationParams, KvCache},
@@ -1880,6 +1881,7 @@ impl Sequence {
         group.total_completion_time = completion_time_ms;
         group.total_time = prompt_time_ms.saturating_add(completion_time_ms);
         group.total_prompt_toks = self.prompt_len;
+        group.total_cached_toks = self.prefix_cache_len();
         group.total_toks = self.len();
     }
 
@@ -2232,6 +2234,7 @@ pub struct SequenceGroup {
     n_choices: usize, // The target number of choices to return. Can be decreased if an error is thrown.
     best_of: Option<usize>, // Top n seqs based on cumulative logprobs.
     pub total_prompt_toks: usize,
+    pub total_cached_toks: usize,
     pub total_toks: usize,
     pub total_prompt_time: u128,
     pub total_time: u128,
@@ -2266,6 +2269,7 @@ impl SequenceGroup {
             completion_choices: Vec::new(),
             n_choices,
             total_prompt_toks: 0,
+            total_cached_toks: 0,
             total_toks: 0,
             total_prompt_time: 0,
             total_time: 0,
@@ -2319,6 +2323,13 @@ impl SequenceGroup {
             completion_tokens: self.total_toks.saturating_sub(self.total_prompt_toks),
             prompt_tokens: self.total_prompt_toks,
             total_tokens: self.total_toks,
+            prompt_tokens_details: if self.total_cached_toks > 0 {
+                Some(PromptTokensDetails {
+                    cached_tokens: self.total_cached_toks,
+                })
+            } else {
+                None
+            },
             avg_tok_per_sec: if self.total_time > 0 {
                 (self.total_toks as f32 / self.total_time as f32) * 1000.
             } else {
@@ -2574,6 +2585,7 @@ mod tests {
             completion_tokens: 0,
             prompt_tokens: 0,
             total_tokens: 0,
+            prompt_tokens_details: None,
             avg_tok_per_sec: 0.0,
             avg_prompt_tok_per_sec: 0.0,
             avg_compl_tok_per_sec: 0.0,
@@ -3189,6 +3201,30 @@ mod tests {
             0
         );
         assert_eq!(seq.count_prefix_cached_mm_items(), 0);
+    }
+
+    #[test]
+    fn usage_reports_cached_prompt_tokens() {
+        let seq = make_test_sequence();
+        let seq = seq.prefill_v2_normal(vec![], vec![7, 8], 4);
+        seq.update_time_info();
+        let usage = seq.get_mut_group().get_usage();
+        assert_eq!(
+            usage.prompt_tokens_details.map(|d| d.cached_tokens),
+            Some(4)
+        );
+    }
+
+    #[test]
+    fn usage_omits_prompt_details_without_prefix_cache() {
+        let seq = make_test_sequence();
+        let seq = seq.prefill_v2_normal(vec![], vec![7, 8], 0);
+        seq.update_time_info();
+        assert!(seq
+            .get_mut_group()
+            .get_usage()
+            .prompt_tokens_details
+            .is_none());
     }
 
     #[test]
