@@ -1321,10 +1321,17 @@ pub struct ModelObjects {
 }
 
 #[derive(Debug, ToSchema)]
+pub struct PromptTokensDetailsResponse {
+    /// Prompt tokens served from the prefix cache, not recomputed.
+    pub cached_tokens: usize,
+}
+
+#[derive(Debug, ToSchema)]
 pub struct CompletionUsageResponse {
     pub completion_tokens: usize,
     pub prompt_tokens: usize,
     pub total_tokens: usize,
+    pub prompt_tokens_details: Option<PromptTokensDetailsResponse>,
     pub avg_tok_per_sec: f32,
     pub avg_prompt_tok_per_sec: f32,
     pub avg_compl_tok_per_sec: f32,

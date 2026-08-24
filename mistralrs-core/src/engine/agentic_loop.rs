@@ -397,6 +397,7 @@ impl AgenticUsageAccumulator {
                 completion_tokens: self.completion_tokens,
                 prompt_tokens: self.prompt_tokens,
                 total_tokens,
+                prompt_tokens_details: None,
                 avg_tok_per_sec: tps(total_tokens, total_time_sec),
                 avg_prompt_tok_per_sec: tps(self.prompt_tokens, self.total_prompt_time_sec),
                 avg_compl_tok_per_sec: tps(self.completion_tokens, self.total_completion_time_sec),

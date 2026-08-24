@@ -122,11 +122,25 @@ generate_repr!(CompletionChunkChoice);
 #[cfg_attr(feature = "pyo3_macros", pyclass)]
 #[cfg_attr(feature = "pyo3_macros", pyo3(get_all))]
 #[derive(Debug, Clone, Serialize)]
+/// OpenAI compatible prompt token breakdown.
+pub struct PromptTokensDetails {
+    /// Prompt tokens served from the prefix cache, not recomputed.
+    pub cached_tokens: usize,
+}
+
+generate_repr!(PromptTokensDetails);
+
+#[cfg_attr(feature = "pyo3_macros", pyclass)]
+#[cfg_attr(feature = "pyo3_macros", pyo3(get_all))]
+#[derive(Debug, Clone, Serialize)]
 /// OpenAI compatible (superset) usage during a request.
 pub struct Usage {
     pub completion_tokens: usize,
     pub prompt_tokens: usize,
     pub total_tokens: usize,
+    /// Present when some prompt tokens were served from the prefix cache.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prompt_tokens_details: Option<PromptTokensDetails>,
     pub avg_tok_per_sec: f32,
     pub avg_prompt_tok_per_sec: f32,
     pub avg_compl_tok_per_sec: f32,
