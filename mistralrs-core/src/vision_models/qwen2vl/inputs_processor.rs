@@ -24,7 +24,8 @@ use crate::{
         text_models_inputs_processor::{
             self, get_completion_input, get_prompt_input, PagedAttentionMeta,
         },
-        InputProcessorOutput, InputsProcessor, InputsProcessorType, MessagesAction, Processor,
+        InputProcessorOutput, InputsProcessor, InputsProcessorType, InputsProcessorValidationError,
+        MessagesAction, Processor,
     },
     sequence::{build_mm_features_from_ranges, find_placeholder_delimited_ranges, Sequence},
     vision_models::{
@@ -40,6 +41,8 @@ use crate::{
 };
 
 use super::Qwen2VLVisionSpecificArgs;
+
+const MAX_MEDIA_ASPECT_RATIO: f64 = 200.0;
 
 // Input processor
 struct Qwen2VLImageProcessor {
@@ -102,10 +105,14 @@ pub(crate) fn expand_media_placeholders(
     }
     let placeholder_count = text.match_indices(pad).count();
     let grid_rows = grid.map(|grid| grid.dim(0)).transpose()?.unwrap_or(0);
-    if placeholder_count != grid_rows || grid_rows != media_rows {
-        anyhow::bail!(
-            "Qwen {kind:?} has {placeholder_count} placeholders, {grid_rows} grid rows, and {media_rows} media rows"
-        );
+    if placeholder_count != media_rows {
+        return Err(InputsProcessorValidationError(format!(
+            "Qwen {kind:?} has {placeholder_count} placeholders but {media_rows} media inputs"
+        ))
+        .into());
+    }
+    if grid_rows != media_rows {
+        anyhow::bail!("Qwen {kind:?} has {grid_rows} grid rows but {media_rows} media inputs");
     }
     let mut repetitions = Vec::with_capacity(grid_rows);
     if let Some(grid) = grid {
@@ -131,6 +138,38 @@ pub(crate) fn expand_media_placeholders(
         *text = replace_first_occurrence(text, pad, &placeholder.repeat(repetition));
     }
     *text = text.replace(placeholder, pad);
+    Ok(())
+}
+
+pub(crate) fn validate_qwen_media_dimensions(
+    images: &[DynamicImage],
+    resize_factor: Option<usize>,
+) -> Result<()> {
+    for image in images {
+        let (width, height) = image.dimensions();
+        if width == 0 || height == 0 {
+            return Err(InputsProcessorValidationError(
+                "Qwen media dimensions must be nonzero".to_string(),
+            )
+            .into());
+        }
+        let Some(factor) = resize_factor else {
+            continue;
+        };
+        if (height as usize) < factor || (width as usize) < factor {
+            return Err(InputsProcessorValidationError(format!(
+                "Qwen media height {height} or width {width} must be at least {factor}"
+            ))
+            .into());
+        }
+        let aspect_ratio = f64::from(height.max(width)) / f64::from(height.min(width));
+        if aspect_ratio > MAX_MEDIA_ASPECT_RATIO {
+            return Err(InputsProcessorValidationError(format!(
+                "Qwen media absolute aspect ratio must be smaller than {MAX_MEDIA_ASPECT_RATIO}, got {aspect_ratio:.2}"
+            ))
+            .into());
+        }
+    }
     Ok(())
 }
 
@@ -614,6 +653,35 @@ impl InputsProcessor for Qwen2VLImageProcessor {
             .any(|seq| seq.has_images() || seq.has_videos())
         {
             return Ok(());
+        }
+
+        let resize_factor = if config.do_resize.is_none_or(|resize| resize) {
+            config
+                .patch_size
+                .zip(config.merge_size)
+                .and_then(|(patch_size, merge_size)| patch_size.checked_mul(merge_size))
+                .filter(|factor| *factor > 0)
+        } else {
+            None
+        };
+        for seq in input_seqs.iter() {
+            if let Some(images) = seq.images() {
+                validate_qwen_media_dimensions(
+                    images,
+                    resize_factor.filter(|_| self.max_edge.is_none()),
+                )?;
+            }
+            if let Some(videos) = seq.videos() {
+                for video in videos {
+                    if video.frames.is_empty() {
+                        return Err(InputsProcessorValidationError(
+                            "Qwen video inputs must contain at least one frame".to_string(),
+                        )
+                        .into());
+                    }
+                    validate_qwen_media_dimensions(&video.frames, resize_factor)?;
+                }
+            }
         }
 
         let mut detok_seqs = tokenizer
@@ -1629,7 +1697,8 @@ mod tests {
             4,
             MultimodalKind::Image,
         )
-        .is_err());
+        .unwrap_err()
+        .is::<InputsProcessorValidationError>());
         assert_eq!(excess, original);
 
         let mut missing = Qwen2VLProcessor::IMAGE_PAD.to_string();
@@ -1642,9 +1711,16 @@ mod tests {
             4,
             MultimodalKind::Image,
         )
-        .is_err());
-        assert!(expand_media_placeholders(
-            &mut missing,
+        .unwrap_err()
+        .is::<InputsProcessorValidationError>());
+
+        let mut grid_mismatch = format!(
+            "{}{}",
+            Qwen2VLProcessor::IMAGE_PAD,
+            Qwen2VLProcessor::IMAGE_PAD
+        );
+        assert!(!expand_media_placeholders(
+            &mut grid_mismatch,
             Qwen2VLProcessor::IMAGE_PAD,
             Qwen2VLProcessor::PLACEHOLDER,
             Some(&one_grid),
@@ -1652,7 +1728,8 @@ mod tests {
             4,
             MultimodalKind::Image,
         )
-        .is_err());
+        .unwrap_err()
+        .is::<InputsProcessorValidationError>());
         Ok(())
     }
 
@@ -1673,6 +1750,24 @@ mod tests {
         assert!(validated_mm_features(&[(1, 2), (5, 2)], &[11], MultimodalKind::Image).is_err());
         assert!(validated_mm_features(&[(1, 2)], &[11, 12], MultimodalKind::Image).is_err());
         Ok(())
+    }
+
+    #[test]
+    fn invalid_media_dimensions_are_validation_errors() {
+        let too_small = DynamicImage::new_rgb8(14, 28);
+        let error = validate_qwen_media_dimensions(&[too_small], Some(28)).unwrap_err();
+        assert!(error.is::<InputsProcessorValidationError>());
+
+        let extreme = DynamicImage::new_rgb8(201, 1);
+        let error = validate_qwen_media_dimensions(&[extreme], Some(1)).unwrap_err();
+        assert!(error.is::<InputsProcessorValidationError>());
+
+        let frames = [
+            DynamicImage::new_rgb8(28, 28),
+            DynamicImage::new_rgb8(14, 28),
+        ];
+        let error = validate_qwen_media_dimensions(&frames, Some(28)).unwrap_err();
+        assert!(error.is::<InputsProcessorValidationError>());
     }
 
     #[test]

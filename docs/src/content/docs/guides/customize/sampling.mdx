@@ -139,4 +139,4 @@ let request = RequestBuilder::new()
 
 ## Seeds
 
-The random seed is set at engine startup, not per request: `--seed` on the CLI, `seed=` on the Python `Runner`. With the same seed, prompt, and parameters, output is reproducible.
+The engine-wide random seed is set with `--seed` on the CLI or `seed=` on the Python `Runner`. OpenAI-compatible generation requests can instead provide `seed` for a deterministic request-scoped stream. Each choice in an `n > 1` request receives a distinct deterministic stream.

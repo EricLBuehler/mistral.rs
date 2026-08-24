@@ -6,7 +6,7 @@ use tracing::info;
 
 use mistralrs_core::initialize_logging;
 use mistralrs_server_core::{
-    metrics::{observe_http, ObservabilityState},
+    metrics::{install_prometheus_recorder, observe_http, ObservabilityState},
     mistralrs_for_server_builder::{MistralRsForServerBuilder, ModelConfig},
     mistralrs_server_router_builder::{MistralRsServerRouterBuilder, DEFAULT_MAX_BODY_LIMIT},
 };
@@ -46,6 +46,9 @@ async fn run_serve_config(cfg: crate::config::ServeConfig) -> Result<()> {
         default_model_id,
     } = cfg;
 
+    if server.observability_config().metrics {
+        install_prometheus_recorder();
+    }
     let global = global.to_global_options()?;
     apply_agent_mode(&mut runtime);
     validate_agent_options(&runtime)?;
@@ -65,6 +68,7 @@ async fn run_serve_config(cfg: crate::config::ServeConfig) -> Result<()> {
     let mut builder = MistralRsForServerBuilder::new()
         .with_max_seqs(runtime.max_seqs)
         .with_max_num_batched_tokens(runtime.max_num_batched_tokens)
+        .with_max_prefill_chunk_tokens(runtime.max_prefill_chunk_tokens)
         .with_max_decode_steps_before_prefill(runtime.max_decode_steps_before_prefill)
         .with_no_kv_cache(runtime.no_kv_cache)
         .with_token_source(global.token_source)
@@ -236,6 +240,7 @@ async fn run_run_config(cfg: crate::config::RunConfig) -> Result<()> {
     let mut builder = MistralRsForServerBuilder::new()
         .with_max_seqs(runtime.max_seqs)
         .with_max_num_batched_tokens(runtime.max_num_batched_tokens)
+        .with_max_prefill_chunk_tokens(runtime.max_prefill_chunk_tokens)
         .with_max_decode_steps_before_prefill(runtime.max_decode_steps_before_prefill)
         .with_no_kv_cache(runtime.no_kv_cache)
         .with_token_source(global.token_source)

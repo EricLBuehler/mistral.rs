@@ -43,7 +43,7 @@ pub(crate) fn handle_completion_validation_error<R, S>(
     let error = ApiError::from_error(e.as_ref(), ApiErrorKind::InvalidRequest);
     if matches!(
         error.kind,
-        ApiErrorKind::Internal | ApiErrorKind::Unavailable
+        ApiErrorKind::Internal | ApiErrorKind::Unavailable | ApiErrorKind::Overloaded
     ) {
         MistralRs::maybe_log_error(state, e.as_ref());
     }

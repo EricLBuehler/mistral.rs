@@ -29,8 +29,8 @@ use crate::{
         text_models_inputs_processor::{
             self, get_completion_input, get_prompt_input, PagedAttentionMeta,
         },
-        InputProcessorOutput, InputsProcessor, InputsProcessorType, MessagesAction, Processor,
-        ProcessorCreator,
+        InputProcessorOutput, InputsProcessor, InputsProcessorType, InputsProcessorValidationError,
+        MessagesAction, Processor, ProcessorCreator,
     },
     sequence::{build_mm_features_from_ranges, Sequence},
 };
@@ -91,7 +91,7 @@ fn expand_phi4_placeholders(
     input_ids: &[u32],
     image_token_counts: &[usize],
     audio_token_counts: &[usize],
-) -> Result<Phi4PromptPlan> {
+) -> anyhow::Result<Phi4PromptPlan> {
     let mut tokens = Vec::new();
     let mut image_ranges = Vec::with_capacity(image_token_counts.len());
     let mut audio_ranges = Vec::with_capacity(audio_token_counts.len());
@@ -101,10 +101,15 @@ fn expand_phi4_placeholders(
     for &token in input_ids {
         if token == IMAGE_SPECIAL_TOKEN_ID as u32 {
             let count = *image_token_counts.get(image_index).ok_or_else(|| {
-                candle_core::Error::msg("Phi4MM has more image placeholders than image inputs")
+                InputsProcessorValidationError(
+                    "Phi4MM has more image placeholders than image inputs".to_string(),
+                )
             })?;
             if count == 0 {
-                candle_core::bail!("Phi4MM image placeholder cannot be empty");
+                return Err(InputsProcessorValidationError(
+                    "Phi4MM image placeholder cannot be empty".to_string(),
+                )
+                .into());
             }
             let start = tokens.len();
             tokens.extend(std::iter::repeat_n(token, count));
@@ -112,10 +117,15 @@ fn expand_phi4_placeholders(
             image_index += 1;
         } else if token == AUDIO_SPECIAL_TOKEN_ID as u32 {
             let count = *audio_token_counts.get(audio_index).ok_or_else(|| {
-                candle_core::Error::msg("Phi4MM has more audio placeholders than audio inputs")
+                InputsProcessorValidationError(
+                    "Phi4MM has more audio placeholders than audio inputs".to_string(),
+                )
             })?;
             if count == 0 {
-                candle_core::bail!("Phi4MM audio placeholder cannot be empty");
+                return Err(InputsProcessorValidationError(
+                    "Phi4MM audio placeholder cannot be empty".to_string(),
+                )
+                .into());
             }
             let start = tokens.len();
             tokens.extend(std::iter::repeat_n(token, count));
@@ -127,16 +137,18 @@ fn expand_phi4_placeholders(
     }
 
     if image_index != image_token_counts.len() {
-        candle_core::bail!(
+        return Err(InputsProcessorValidationError(format!(
             "Phi4MM has {image_index} image placeholders but {} image inputs",
             image_token_counts.len()
-        );
+        ))
+        .into());
     }
     if audio_index != audio_token_counts.len() {
-        candle_core::bail!(
+        return Err(InputsProcessorValidationError(format!(
             "Phi4MM has {audio_index} audio placeholders but {} audio inputs",
             audio_token_counts.len()
-        );
+        ))
+        .into());
     }
 
     Ok(Phi4PromptPlan {
@@ -312,7 +324,6 @@ impl InputsProcessor for Phi4MMInputsProcessor {
         let config = other_config.expect("Need a PreProcessorConfig config.");
         let config: &PreProcessorConfig = config.downcast_ref().expect("Downcast failed.");
         self.prepare_prompt_plans(&tokenizer, input_seqs, device, config, paged_attn_metadata)
-            .map_err(anyhow::Error::new)
     }
 
     fn process_inputs(
@@ -351,8 +362,7 @@ impl InputsProcessor for Phi4MMInputsProcessor {
                 device,
                 config,
                 paged_attn_metadata.as_mut(),
-            )
-            .map_err(anyhow::Error::new)?;
+            )?;
         }
 
         let has_media = is_prompt
@@ -570,7 +580,7 @@ impl Phi4MMInputsProcessor {
         device: &Device,
         config: &PreProcessorConfig,
         mut paged_attn_metadata: Option<&mut PagedAttentionMeta>,
-    ) -> Result<()> {
+    ) -> anyhow::Result<()> {
         let image_pattern =
             Regex::new(COMPATIBLE_IMAGE_SPECIAL_TOKEN_PATTERN).map_err(candle_core::Error::wrap)?;
         let audio_pattern =
@@ -643,7 +653,7 @@ impl Phi4MMInputsProcessor {
                     || image_sizes.len() != image_hashes.len()
                     || token_counts.len() != image_hashes.len()
                 {
-                    candle_core::bail!("Phi4MM image preprocessing metadata length mismatch");
+                    anyhow::bail!("Phi4MM image preprocessing metadata length mismatch");
                 }
                 let flattened_sizes = image_sizes
                     .iter()
@@ -662,7 +672,7 @@ impl Phi4MMInputsProcessor {
             let audio_token_counts = audios
                 .iter()
                 .map(|audio| self.audio_token_count(audio))
-                .collect::<Result<Vec<_>>>()?;
+                .collect::<anyhow::Result<Vec<_>>>()?;
 
             let mut prompt = tokenizer
                 .decode(seq.get_toks(), false)
@@ -696,7 +706,7 @@ impl Phi4MMInputsProcessor {
             ));
             features.sort_by_key(|feature| feature.offset);
             if features.len() != image_hashes.len() + audio_hashes.len() {
-                candle_core::bail!("Phi4MM multimodal item metadata length mismatch");
+                anyhow::bail!("Phi4MM multimodal item metadata length mismatch");
             }
 
             let expanded_prompt = tokenizer
@@ -710,20 +720,28 @@ impl Phi4MMInputsProcessor {
         Ok(())
     }
 
-    fn audio_token_count(&self, audio: &crate::AudioInput) -> Result<usize> {
+    fn audio_token_count(&self, audio: &crate::AudioInput) -> anyhow::Result<usize> {
+        if audio.sample_rate < 8000 {
+            return Err(InputsProcessorValidationError(format!(
+                "Unsupported sample rate: {}",
+                audio.sample_rate
+            ))
+            .into());
+        }
         let samples = audio.to_mono();
         let (samples, sample_rate) =
             self.resample_audio_with_rubato(&samples, audio.sample_rate)?;
         let (window, hop) = match sample_rate {
             8000 => (200, 80),
             16000 => (400, 160),
-            _ => candle_core::bail!("Unsupported sample rate: {sample_rate}"),
+            _ => anyhow::bail!("Unsupported sample rate: {sample_rate}"),
         };
         if samples.len() < window {
-            candle_core::bail!(
+            return Err(InputsProcessorValidationError(format!(
                 "Phi4MM audio has {} samples but needs at least {window}",
                 samples.len()
-            );
+            ))
+            .into());
         }
         let feature_len = (samples.len() - window) / hop + 1;
         Ok(self.compute_audio_embed_size(
@@ -1710,8 +1728,8 @@ mod tests {
 
     use super::{
         expand_phi4_placeholders, pad_phi4_image_mask, phi4_audio_hash, phi4_image_hash,
-        phi4_request_layout, MultiModalFeature, Phi4MMInputsProcessor, AUDIO_SPECIAL_TOKEN_ID,
-        IMAGE_SPECIAL_TOKEN_ID,
+        phi4_request_layout, InputsProcessorValidationError, MultiModalFeature,
+        Phi4MMInputsProcessor, AUDIO_SPECIAL_TOKEN_ID, IMAGE_SPECIAL_TOKEN_ID,
     };
 
     fn feature(
@@ -1773,9 +1791,31 @@ mod tests {
     #[test]
     fn rejects_placeholder_and_media_count_mismatches() {
         let image = IMAGE_SPECIAL_TOKEN_ID as u32;
-        assert!(expand_phi4_placeholders(&[image], &[], &[]).is_err());
+        let error = expand_phi4_placeholders(&[image], &[], &[]).err().unwrap();
+        assert!(error
+            .downcast_ref::<InputsProcessorValidationError>()
+            .is_some());
         assert!(expand_phi4_placeholders(&[1], &[2], &[]).is_err());
         assert!(expand_phi4_placeholders(&[image], &[0], &[]).is_err());
+    }
+
+    #[test]
+    fn rejects_short_audio_as_validation() {
+        let processor = Phi4MMInputsProcessor {
+            audio_compression_rate: 8,
+            audio_downsample_rate: 1,
+            audio_feat_stride: 1,
+            eightk_method: "fillzero".to_string(),
+        };
+        let audio = crate::AudioInput {
+            samples: vec![0.; 399],
+            sample_rate: 16000,
+            channels: 1,
+        };
+        let error = processor.audio_token_count(&audio).unwrap_err();
+        assert!(error
+            .downcast_ref::<InputsProcessorValidationError>()
+            .is_some());
     }
 
     #[test]

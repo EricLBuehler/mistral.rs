@@ -357,10 +357,12 @@ pub(crate) fn default_scheduler_config(max_num_seqs: usize) -> anyhow::Result<Sc
 fn paged_attn_with_serving_capacity(
     config: Option<PagedAttentionConfig>,
     max_num_seqs: usize,
+    recurrent_prefix_capacity: usize,
 ) -> anyhow::Result<Option<PagedAttentionConfig>> {
-    config
+    Ok(config
         .map(|config| config.with_serving_capacity(max_num_seqs))
-        .transpose()
+        .transpose()?
+        .map(|config| config.with_recurrent_prefix_capacity(recurrent_prefix_capacity)))
 }
 
 pub(crate) async fn scheduler_config_from_pipeline<P>(
@@ -383,6 +385,7 @@ where
             return Ok(SchedulerConfig::PagedAttentionMeta {
                 max_num_seqs,
                 max_num_batched_tokens: mistralrs_core::DEFAULT_MAX_NUM_BATCHED_TOKENS,
+                max_prefill_chunk_tokens: mistralrs_core::DEFAULT_MAX_PREFILL_CHUNK_TOKENS,
                 max_decode_steps_before_prefill:
                     mistralrs_core::DEFAULT_MAX_DECODE_STEPS_BEFORE_PREFILL,
                 config,
@@ -429,8 +432,13 @@ pub(crate) async fn build_pipeline_from_text_loader(
 ) -> anyhow::Result<(Arc<Mutex<dyn Pipeline>>, SchedulerConfig, AddModelConfig)> {
     use mistralrs_core::*;
 
-    builder.paged_attn_cfg =
-        paged_attn_with_serving_capacity(builder.paged_attn_cfg, builder.max_num_seqs)?;
+    let mtp_runtime = MtpRuntimeConfig::new(builder.prefix_cache_n.unwrap_or(0));
+
+    builder.paged_attn_cfg = paged_attn_with_serving_capacity(
+        builder.paged_attn_cfg,
+        builder.max_num_seqs,
+        builder.prefix_cache_n.unwrap_or(0),
+    )?;
 
     let engine_config = build_engine_config(
         builder.throughput_logging,
@@ -442,9 +450,10 @@ pub(crate) async fn build_pipeline_from_text_loader(
     );
     let mcp_client_config = builder.mcp_client_config.clone();
     let device = resolve_device(builder.force_cpu, builder.device.clone())?;
-    builder.paged_attn_cfg = reserve_external_mtp_memory(
+    builder.paged_attn_cfg = reserve_external_mtp_memory_with_runtime(
         builder.paged_attn_cfg,
         builder.mtp_config.as_ref(),
+        mtp_runtime,
         &builder.dtype,
         &device,
     )?;
@@ -472,7 +481,7 @@ pub(crate) async fn build_pipeline_from_text_loader(
         pipeline
             .lock()
             .await
-            .attach_speculative(SpeculativeConfig::Mtp(mtp_config))?;
+            .attach_speculative_with_runtime(SpeculativeConfig::Mtp(mtp_config), mtp_runtime)?;
     }
 
     let scheduler_config =
@@ -496,8 +505,13 @@ pub(crate) async fn build_pipeline_from_gguf_loader(
 ) -> anyhow::Result<(Arc<Mutex<dyn Pipeline>>, SchedulerConfig, AddModelConfig)> {
     use mistralrs_core::*;
 
-    builder.paged_attn_cfg =
-        paged_attn_with_serving_capacity(builder.paged_attn_cfg, builder.max_num_seqs)?;
+    let mtp_runtime = MtpRuntimeConfig::new(builder.prefix_cache_n.unwrap_or(0));
+
+    builder.paged_attn_cfg = paged_attn_with_serving_capacity(
+        builder.paged_attn_cfg,
+        builder.max_num_seqs,
+        builder.prefix_cache_n.unwrap_or(0),
+    )?;
 
     let engine_config = build_engine_config(
         builder.throughput_logging,
@@ -508,9 +522,10 @@ pub(crate) async fn build_pipeline_from_gguf_loader(
         builder.prefix_cache_n,
     );
     let device = resolve_device(builder.force_cpu, builder.device.clone())?;
-    builder.paged_attn_cfg = reserve_external_mtp_memory(
+    builder.paged_attn_cfg = reserve_external_mtp_memory_with_runtime(
         builder.paged_attn_cfg,
         builder.mtp_config.as_ref(),
+        mtp_runtime,
         &builder.dtype,
         &device,
     )?;
@@ -540,7 +555,7 @@ pub(crate) async fn build_pipeline_from_gguf_loader(
         pipeline
             .lock()
             .await
-            .attach_speculative(SpeculativeConfig::Mtp(mtp_config))?;
+            .attach_speculative_with_runtime(SpeculativeConfig::Mtp(mtp_config), mtp_runtime)?;
     }
 
     let scheduler_config =
@@ -611,8 +626,13 @@ pub async fn build_text_pipeline(
 ) -> anyhow::Result<(Arc<Mutex<dyn Pipeline>>, SchedulerConfig, AddModelConfig)> {
     use mistralrs_core::*;
 
-    builder.paged_attn_cfg =
-        paged_attn_with_serving_capacity(builder.paged_attn_cfg, builder.max_num_seqs)?;
+    let mtp_runtime = MtpRuntimeConfig::new(builder.prefix_cache_n.unwrap_or(0));
+
+    builder.paged_attn_cfg = paged_attn_with_serving_capacity(
+        builder.paged_attn_cfg,
+        builder.max_num_seqs,
+        builder.prefix_cache_n.unwrap_or(0),
+    )?;
 
     let config = NormalSpecificConfig {
         topology: builder.topology.clone(),
@@ -645,9 +665,10 @@ pub async fn build_text_pipeline(
     .build(builder.loader_type.clone())?;
 
     let device = resolve_device(builder.force_cpu, None)?;
-    builder.paged_attn_cfg = reserve_external_mtp_memory(
+    builder.paged_attn_cfg = reserve_external_mtp_memory_with_runtime(
         builder.paged_attn_cfg,
         builder.mtp_config.as_ref(),
+        mtp_runtime,
         &builder.dtype,
         &device,
     )?;
@@ -670,7 +691,7 @@ pub async fn build_text_pipeline(
         pipeline
             .lock()
             .await
-            .attach_speculative(SpeculativeConfig::Mtp(mtp_config))?;
+            .attach_speculative_with_runtime(SpeculativeConfig::Mtp(mtp_config), mtp_runtime)?;
     }
 
     let scheduler_config = scheduler_config_from_pipeline(
@@ -748,8 +769,13 @@ pub async fn build_multimodal_pipeline(
 ) -> anyhow::Result<(Arc<Mutex<dyn Pipeline>>, SchedulerConfig, AddModelConfig)> {
     use mistralrs_core::*;
 
-    builder.paged_attn_cfg =
-        paged_attn_with_serving_capacity(builder.paged_attn_cfg, builder.max_num_seqs)?;
+    let mtp_runtime = MtpRuntimeConfig::new(builder.prefix_cache_n.unwrap_or(0));
+
+    builder.paged_attn_cfg = paged_attn_with_serving_capacity(
+        builder.paged_attn_cfg,
+        builder.max_num_seqs,
+        builder.prefix_cache_n.unwrap_or(0),
+    )?;
 
     let config = MultimodalSpecificConfig {
         topology: builder.topology.clone(),
@@ -783,9 +809,10 @@ pub async fn build_multimodal_pipeline(
     .build(builder.loader_type.clone());
 
     let device = resolve_device(builder.force_cpu, None)?;
-    builder.paged_attn_cfg = reserve_external_mtp_memory(
+    builder.paged_attn_cfg = reserve_external_mtp_memory_with_runtime(
         builder.paged_attn_cfg,
         builder.mtp_config.as_ref(),
+        mtp_runtime,
         &builder.dtype,
         &device,
     )?;
@@ -810,7 +837,7 @@ pub async fn build_multimodal_pipeline(
         pipeline
             .lock()
             .await
-            .attach_speculative(SpeculativeConfig::Mtp(mtp_config))?;
+            .attach_speculative_with_runtime(SpeculativeConfig::Mtp(mtp_config), mtp_runtime)?;
     }
 
     let scheduler_config = scheduler_config_from_pipeline(
@@ -893,8 +920,13 @@ pub async fn build_gguf_pipeline(
 ) -> anyhow::Result<(Arc<Mutex<dyn Pipeline>>, SchedulerConfig, AddModelConfig)> {
     use mistralrs_core::*;
 
-    builder.paged_attn_cfg =
-        paged_attn_with_serving_capacity(builder.paged_attn_cfg, builder.max_num_seqs)?;
+    let mtp_runtime = MtpRuntimeConfig::new(builder.prefix_cache_n.unwrap_or(0));
+
+    builder.paged_attn_cfg = paged_attn_with_serving_capacity(
+        builder.paged_attn_cfg,
+        builder.max_num_seqs,
+        builder.prefix_cache_n.unwrap_or(0),
+    )?;
 
     let config = GGUFSpecificConfig {
         topology: builder.topology.clone(),
@@ -932,9 +964,10 @@ pub async fn build_gguf_pipeline(
     let loader = loader_builder.build();
 
     let device = resolve_device(builder.force_cpu, builder.device.clone())?;
-    builder.paged_attn_cfg = reserve_external_mtp_memory(
+    builder.paged_attn_cfg = reserve_external_mtp_memory_with_runtime(
         builder.paged_attn_cfg,
         builder.mtp_config.as_ref(),
+        mtp_runtime,
         &builder.dtype,
         &device,
     )?;
@@ -962,7 +995,7 @@ pub async fn build_gguf_pipeline(
         pipeline
             .lock()
             .await
-            .attach_speculative(SpeculativeConfig::Mtp(mtp_config))?;
+            .attach_speculative_with_runtime(SpeculativeConfig::Mtp(mtp_config), mtp_runtime)?;
     }
 
     let scheduler_config = scheduler_config_from_pipeline(
@@ -1298,8 +1331,13 @@ pub async fn build_auto_pipeline(
 ) -> anyhow::Result<(Arc<Mutex<dyn Pipeline>>, SchedulerConfig, AddModelConfig)> {
     use mistralrs_core::*;
 
-    builder.paged_attn_cfg =
-        paged_attn_with_serving_capacity(builder.paged_attn_cfg, builder.max_num_seqs)?;
+    let mtp_runtime = MtpRuntimeConfig::new(builder.prefix_cache_n.unwrap_or(0));
+
+    builder.paged_attn_cfg = paged_attn_with_serving_capacity(
+        builder.paged_attn_cfg,
+        builder.max_num_seqs,
+        builder.prefix_cache_n.unwrap_or(0),
+    )?;
 
     let normal_config = NormalSpecificConfig {
         topology: builder.topology.clone(),
@@ -1363,9 +1401,10 @@ pub async fn build_auto_pipeline(
         .build();
 
     let device = resolve_device(builder.force_cpu, builder.device.clone())?;
-    builder.paged_attn_cfg = reserve_external_mtp_memory(
+    builder.paged_attn_cfg = reserve_external_mtp_memory_with_runtime(
         builder.paged_attn_cfg,
         builder.mtp_config.as_ref(),
+        mtp_runtime,
         &builder.dtype,
         &device,
     )?;
@@ -1388,7 +1427,7 @@ pub async fn build_auto_pipeline(
         pipeline
             .lock()
             .await
-            .attach_speculative(SpeculativeConfig::Mtp(mtp_config))?;
+            .attach_speculative_with_runtime(SpeculativeConfig::Mtp(mtp_config), mtp_runtime)?;
     }
 
     let scheduler_config = scheduler_config_from_pipeline(

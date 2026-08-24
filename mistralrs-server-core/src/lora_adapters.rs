@@ -357,10 +357,7 @@ fn adapter_filesystem_error(description: &str, error: std::io::Error) -> LoraAda
         std::io::ErrorKind::InvalidData | std::io::ErrorKind::InvalidInput => {
             (StatusCode::BAD_REQUEST, "invalid_adapter_path")
         }
-        _ => (
-            StatusCode::SERVICE_UNAVAILABLE,
-            "adapter_storage_unavailable",
-        ),
+        _ => (StatusCode::INTERNAL_SERVER_ERROR, "internal_error"),
     };
     LoraAdapterApiError::new(
         status,
@@ -594,8 +591,12 @@ impl LoraAdapterApiError {
                 "invalid_model_operation",
                 error.to_string(),
             ),
+            error @ MistralRsError::SenderPoisoned => Self::new(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "service_unavailable",
+                error.to_string(),
+            ),
             error @ MistralRsError::EnginePoisoned
-            | error @ MistralRsError::SenderPoisoned
             | error @ MistralRsError::ReloadFailed(_)
             | error @ MistralRsError::Other(_) => Self::new(
                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -687,15 +688,11 @@ impl LoraAdapterApiError {
             {
                 (StatusCode::BAD_REQUEST, "invalid_lora_adapter")
             }
-            LoraAdapterError::Io { .. } => {
-                (StatusCode::SERVICE_UNAVAILABLE, "lora_storage_unavailable")
-            }
+            LoraAdapterError::Io { .. } => (StatusCode::INTERNAL_SERVER_ERROR, "internal_error"),
             LoraAdapterError::Config { .. } | LoraAdapterError::Format(_) => {
                 (StatusCode::BAD_REQUEST, "invalid_lora_adapter")
             }
-            LoraAdapterError::Load(_) => {
-                (StatusCode::SERVICE_UNAVAILABLE, "lora_device_load_failed")
-            }
+            LoraAdapterError::Load(_) => (StatusCode::INTERNAL_SERVER_ERROR, "internal_error"),
             LoraAdapterError::Task(_) => {
                 (StatusCode::INTERNAL_SERVER_ERROR, "lora_load_task_failed")
             }
@@ -1272,7 +1269,7 @@ mod tests {
                 std::io::Error::other("disk failure"),
             )
             .status,
-            StatusCode::SERVICE_UNAVAILABLE
+            StatusCode::INTERNAL_SERVER_ERROR
         );
         assert_eq!(
             adapter_filesystem_error(

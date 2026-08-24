@@ -103,6 +103,12 @@ impl<T> AdmissionQueue<T> {
         self.bypass_controls.pop_front()
     }
 
+    pub(super) fn retain(&mut self, mut keep: impl FnMut(&T) -> bool) {
+        self.ordered.retain(|pending| keep(&pending.request));
+        self.bypass_controls.retain(&mut keep);
+        self.shutdown.retain(keep);
+    }
+
     pub(super) fn pop_admissible(&mut self, active_sequences: usize) -> Option<T> {
         let pending = self.ordered.front()?;
         let admissible = match pending.class {
@@ -265,5 +271,19 @@ mod tests {
         assert!(queue.blocks_decode_continuation());
         assert_eq!(queue.pop_admissible_workload(0), Some(0));
         assert_eq!(queue.pop_admissible_workload(0), None);
+    }
+
+    #[test]
+    fn retain_removes_abandoned_work_without_reordering() {
+        let mut queue = AdmissionQueue::new(AdmissionPolicy::new(4, 8));
+        for id in 0..4 {
+            let (request, class) = workload(id);
+            queue.push(request, class).unwrap();
+        }
+        queue.retain(|id| id % 2 == 0);
+
+        assert_eq!(queue.pop_admissible(0), Some(0));
+        assert_eq!(queue.pop_admissible(1), Some(2));
+        assert!(queue.is_empty());
     }
 }

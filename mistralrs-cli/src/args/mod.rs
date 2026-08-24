@@ -19,7 +19,7 @@ use clap::{Parser, Subcommand, ValueEnum};
 use clap_complete::Shell;
 use mistralrs_core::{
     ReasoningEffort, TokenSource, DEFAULT_MAX_DECODE_STEPS_BEFORE_PREFILL,
-    DEFAULT_MAX_NUM_BATCHED_TOKENS,
+    DEFAULT_MAX_NUM_BATCHED_TOKENS, DEFAULT_MAX_PREFILL_CHUNK_TOKENS,
 };
 use serde::Deserialize;
 use std::{num::NonZeroUsize, path::PathBuf};
@@ -580,6 +580,11 @@ pub struct RuntimeOptions {
     #[serde(default = "default_max_num_batched_tokens")]
     pub max_num_batched_tokens: NonZeroUsize,
 
+    /// Maximum chunkable CUDA text-prompt tokens in one paged-attention scheduler step
+    #[arg(long, default_value_t = default_max_prefill_chunk_tokens())]
+    #[serde(default = "default_max_prefill_chunk_tokens")]
+    pub max_prefill_chunk_tokens: NonZeroUsize,
+
     /// Maximum decode steps before a waiting prefill batch is admitted
     #[arg(long, default_value_t = default_max_decode_steps_before_prefill())]
     #[serde(default = "default_max_decode_steps_before_prefill")]
@@ -629,6 +634,11 @@ pub struct RuntimeOptions {
     #[arg(long)]
     #[serde(default)]
     pub mtp_n_predict: Option<usize>,
+
+    /// MTP draft sampling policy. Auto uses probabilistic DFlash2 drafting when supported.
+    #[arg(long, value_enum, default_value_t)]
+    #[serde(default)]
+    pub mtp_draft_sampling: MtpDraftSamplingArg,
 
     /// Path to an MCP client configuration JSON. Also reads `MCP_CONFIG_PATH` if unset.
     #[arg(long)]
@@ -811,6 +821,10 @@ pub struct BenchRuntimeOptions {
     /// Number of MTP draft tokens to propose per target step.
     #[arg(long)]
     pub mtp_n_predict: Option<usize>,
+
+    /// MTP draft sampling policy. Auto uses probabilistic DFlash2 drafting when supported.
+    #[arg(long, value_enum, default_value_t)]
+    pub mtp_draft_sampling: MtpDraftSamplingArg,
 }
 
 impl BenchRuntimeOptions {
@@ -823,11 +837,15 @@ impl BenchRuntimeOptions {
 
     pub fn mtp_config(&self) -> Option<mistralrs_core::MtpConfig> {
         if self.mtp {
-            return Some(mistralrs_core::MtpConfig::builtin(self.mtp_n_predict));
+            return Some(
+                mistralrs_core::MtpConfig::builtin(self.mtp_n_predict)
+                    .with_draft_sampling_method(self.mtp_draft_sampling.into()),
+            );
         }
-        self.mtp_model
-            .clone()
-            .map(|model| mistralrs_core::MtpConfig::new(model, self.mtp_n_predict))
+        self.mtp_model.clone().map(|model| {
+            mistralrs_core::MtpConfig::new(model, self.mtp_n_predict)
+                .with_draft_sampling_method(self.mtp_draft_sampling.into())
+        })
     }
 }
 
@@ -836,6 +854,25 @@ impl BenchRuntimeOptions {
 #[serde(rename_all = "kebab-case")]
 pub enum SearchEmbeddingModelArg {
     EmbeddingGemma,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, ValueEnum, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum MtpDraftSamplingArg {
+    #[default]
+    Auto,
+    Greedy,
+    Probabilistic,
+}
+
+impl From<MtpDraftSamplingArg> for mistralrs_core::MtpDraftSamplingMethod {
+    fn from(value: MtpDraftSamplingArg) -> Self {
+        match value {
+            MtpDraftSamplingArg::Auto => Self::Auto,
+            MtpDraftSamplingArg::Greedy => Self::Greedy,
+            MtpDraftSamplingArg::Probabilistic => Self::Probabilistic,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, ValueEnum, Deserialize)]
@@ -873,11 +910,15 @@ impl RuntimeOptions {
 
     pub fn mtp_config(&self) -> Option<mistralrs_core::MtpConfig> {
         if self.mtp {
-            return Some(mistralrs_core::MtpConfig::builtin(self.mtp_n_predict));
+            return Some(
+                mistralrs_core::MtpConfig::builtin(self.mtp_n_predict)
+                    .with_draft_sampling_method(self.mtp_draft_sampling.into()),
+            );
         }
-        self.mtp_model
-            .clone()
-            .map(|model| mistralrs_core::MtpConfig::new(model, self.mtp_n_predict))
+        self.mtp_model.clone().map(|model| {
+            mistralrs_core::MtpConfig::new(model, self.mtp_n_predict)
+                .with_draft_sampling_method(self.mtp_draft_sampling.into())
+        })
     }
 }
 
@@ -937,6 +978,7 @@ impl Default for RuntimeOptions {
         Self {
             max_seqs: 32,
             max_num_batched_tokens: default_max_num_batched_tokens(),
+            max_prefill_chunk_tokens: default_max_prefill_chunk_tokens(),
             max_decode_steps_before_prefill: default_max_decode_steps_before_prefill(),
             no_kv_cache: false,
             prefix_cache_n: 16,
@@ -947,6 +989,7 @@ impl Default for RuntimeOptions {
             mtp: false,
             mtp_model: None,
             mtp_n_predict: None,
+            mtp_draft_sampling: MtpDraftSamplingArg::default(),
             mcp_config: None,
             agent: false,
             enable_search: false,
@@ -988,6 +1031,10 @@ fn default_max_seqs() -> usize {
 
 fn default_max_num_batched_tokens() -> NonZeroUsize {
     NonZeroUsize::new(DEFAULT_MAX_NUM_BATCHED_TOKENS).unwrap()
+}
+
+fn default_max_prefill_chunk_tokens() -> NonZeroUsize {
+    NonZeroUsize::new(DEFAULT_MAX_PREFILL_CHUNK_TOKENS).unwrap()
 }
 
 fn default_max_decode_steps_before_prefill() -> NonZeroUsize {
@@ -1450,5 +1497,76 @@ mod tests {
         assert!(help.contains("--enable-lora"));
         assert!(!help.contains("--legacy-lora"));
         assert!(!help.contains("--xlora"));
+    }
+
+    #[test]
+    fn mtp_draft_sampling_defaults_to_auto_and_accepts_explicit_modes() {
+        let cli = Cli::try_parse_from([
+            "mistralrs",
+            "serve",
+            "-m",
+            "org/target",
+            "--mtp-model",
+            "org/draft",
+        ])
+        .unwrap();
+        let Command::Serve { runtime, .. } = cli.command else {
+            panic!("expected serve command");
+        };
+        assert_eq!(
+            runtime
+                .mtp_config()
+                .expect("missing MTP config")
+                .draft_sampling_method,
+            mistralrs_core::MtpDraftSamplingMethod::Auto
+        );
+
+        let cli = Cli::try_parse_from([
+            "mistralrs",
+            "serve",
+            "-m",
+            "org/target",
+            "--mtp-model",
+            "org/draft",
+            "--mtp-draft-sampling",
+            "probabilistic",
+        ])
+        .unwrap();
+        let Command::Serve { runtime, .. } = cli.command else {
+            panic!("expected serve command");
+        };
+        assert_eq!(
+            runtime
+                .mtp_config()
+                .expect("missing MTP config")
+                .draft_sampling_method,
+            mistralrs_core::MtpDraftSamplingMethod::Probabilistic
+        );
+
+        let cli = Cli::try_parse_from([
+            "mistralrs",
+            "serve",
+            "-m",
+            "org/target",
+            "--mtp-model",
+            "org/draft",
+            "--mtp-draft-sampling",
+            "greedy",
+        ])
+        .unwrap();
+        let Command::Serve { runtime, .. } = cli.command else {
+            panic!("expected serve command");
+        };
+        assert_eq!(
+            runtime
+                .mtp_config()
+                .expect("missing MTP config")
+                .draft_sampling_method,
+            mistralrs_core::MtpDraftSamplingMethod::Greedy
+        );
+        assert_eq!(
+            RuntimeOptions::default().mtp_draft_sampling,
+            MtpDraftSamplingArg::Auto
+        );
     }
 }

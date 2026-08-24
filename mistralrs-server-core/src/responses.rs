@@ -544,6 +544,10 @@ pub struct OpenResponsesCreateRequest {
     #[serde(default)]
     pub ignore_eos: bool,
 
+    /// Seed for deterministic request-scoped sampling
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub seed: Option<u64>,
+
     /// Presence penalty (-2.0 to 2.0)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub presence_penalty: Option<f32>,
@@ -788,7 +792,7 @@ fn api_error_code(error: &ApiError) -> String {
         ApiErrorKind::PayloadTooLarge => "request_body_too_large".to_string(),
         ApiErrorKind::UnsupportedMediaType => "invalid_content_type".to_string(),
         ApiErrorKind::RateLimited => "rate_limit_exceeded".to_string(),
-        ApiErrorKind::Unavailable => "service_unavailable".to_string(),
+        ApiErrorKind::Unavailable | ApiErrorKind::Overloaded => "service_unavailable".to_string(),
         ApiErrorKind::Internal => "internal_error".to_string(),
     })
 }
@@ -824,7 +828,7 @@ fn classify_api_error(
     let api_error = ApiError::from_error(error, fallback);
     if matches!(
         api_error.kind,
-        ApiErrorKind::Internal | ApiErrorKind::Unavailable
+        ApiErrorKind::Internal | ApiErrorKind::Unavailable | ApiErrorKind::Overloaded
     ) {
         MistralRs::maybe_log_error(state.clone(), error);
     }
@@ -1969,6 +1973,7 @@ async fn parse_openresponses_request(
         repetition_penalty: oairequest.repetition_penalty,
         stop_seqs: oairequest.stop_seqs,
         ignore_eos: oairequest.ignore_eos,
+        seed: oairequest.seed,
         temperature: oairequest.temperature,
         top_p: oairequest.top_p,
         stream: oairequest.stream,
@@ -2551,6 +2556,14 @@ mod tests {
 
         assert!(!default.ignore_eos);
         assert!(enabled.ignore_eos);
+    }
+
+    #[test]
+    fn request_accepts_sampling_seed() {
+        let request: OpenResponsesCreateRequest =
+            serde_json::from_value(json!({"input": "hello", "seed": 42})).unwrap();
+
+        assert_eq!(request.seed, Some(42));
     }
 
     #[test]

@@ -715,29 +715,25 @@ fn anthropic_skill_error_response(error: ApiError) -> axum::response::Response {
             StatusCode::BAD_REQUEST
         }
         ApiErrorKind::NotFound => StatusCode::NOT_FOUND,
-        ApiErrorKind::Conflict => StatusCode::from_u16(ANTHROPIC_OVERLOADED_STATUS)
-            .expect("Anthropic overloaded status must be valid"),
+        ApiErrorKind::Conflict => StatusCode::CONFLICT,
         ApiErrorKind::PayloadTooLarge => StatusCode::PAYLOAD_TOO_LARGE,
         ApiErrorKind::RateLimited => StatusCode::TOO_MANY_REQUESTS,
-        ApiErrorKind::Unavailable => StatusCode::from_u16(ANTHROPIC_OVERLOADED_STATUS)
+        ApiErrorKind::Unavailable | ApiErrorKind::Internal => StatusCode::INTERNAL_SERVER_ERROR,
+        ApiErrorKind::Overloaded => StatusCode::from_u16(ANTHROPIC_OVERLOADED_STATUS)
             .expect("Anthropic overloaded status must be valid"),
-        ApiErrorKind::Internal => StatusCode::INTERNAL_SERVER_ERROR,
     };
     let error_type = match error.kind {
         ApiErrorKind::InvalidRequest | ApiErrorKind::UnsupportedMediaType => {
             "invalid_request_error"
         }
         ApiErrorKind::NotFound => "not_found_error",
-        ApiErrorKind::Conflict => "overloaded_error",
+        ApiErrorKind::Conflict => "conflict_error",
         ApiErrorKind::PayloadTooLarge => "request_too_large",
         ApiErrorKind::RateLimited => "rate_limit_error",
-        ApiErrorKind::Unavailable => "overloaded_error",
-        ApiErrorKind::Internal => "api_error",
+        ApiErrorKind::Unavailable | ApiErrorKind::Internal => "api_error",
+        ApiErrorKind::Overloaded => "overloaded_error",
     };
-    let message = if matches!(
-        error.kind,
-        ApiErrorKind::Conflict | ApiErrorKind::Unavailable
-    ) {
+    let message = if error.kind == ApiErrorKind::Overloaded {
         SERVICE_UNAVAILABLE_MESSAGE.to_string()
     } else {
         error.message
@@ -771,7 +767,7 @@ fn skill_error(error: anyhow::Error, anthropic: bool) -> axum::response::Respons
     let api_error = ApiError::from_error(error.as_ref(), ApiErrorKind::Internal);
     if matches!(
         api_error.kind,
-        ApiErrorKind::Internal | ApiErrorKind::Unavailable
+        ApiErrorKind::Internal | ApiErrorKind::Unavailable | ApiErrorKind::Overloaded
     ) {
         tracing::error!(%error, "skill request failed");
     }
@@ -1145,21 +1141,17 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn anthropic_conflicts_use_a_stable_overloaded_error() {
+    async fn anthropic_conflicts_preserve_the_conflict() {
         let response = anthropic_skill_error_response(ApiError::new(
             ApiErrorKind::Conflict,
             "private conflict detail",
             None,
             None,
         ));
-        assert_eq!(
-            response.status(),
-            StatusCode::from_u16(ANTHROPIC_OVERLOADED_STATUS).unwrap()
-        );
+        assert_eq!(response.status(), StatusCode::CONFLICT);
         let body = response_json(response).await;
-        assert_eq!(body["error"]["type"], "overloaded_error");
-        assert_eq!(body["error"]["message"], SERVICE_UNAVAILABLE_MESSAGE);
-        assert!(!body.to_string().contains("private conflict detail"));
+        assert_eq!(body["error"]["type"], "conflict_error");
+        assert_eq!(body["error"]["message"], "private conflict detail");
     }
 
     #[tokio::test]

@@ -45,6 +45,7 @@ pub const MISTRALRS_GIT_REVISION: &str = match option_env!("MISTRALRS_GIT_REVISI
 };
 pub const MISTRALRS_VERSION: &str = env!("CARGO_PKG_VERSION");
 pub const DEFAULT_ENGINE_REQUEST_QUEUE_CAPACITY: usize = 10_000;
+pub const REQUEST_QUEUE_DURATION_METRIC: &str = "mistralrs_request_queue_duration_seconds";
 
 mod adapter;
 mod agent_approval;
@@ -165,19 +166,20 @@ pub use pipeline::hf::{
     HF_HUB_OFFLINE_ENV,
 };
 pub use pipeline::{
-    chat_template::ChatTemplate, expand_isq_value, expand_uqff_shards, parse_isq_value,
-    parse_uqff_shard, resolve_uqff_report_output, resolve_uqff_shorthand, AdapterPaths,
-    AnyMoeLoader, AnyMoePipeline, AutoDeviceMapParams, AutoLoader, AutoLoaderBuilder,
-    DiffusionGenerationParams, DiffusionLoader, DiffusionLoaderBuilder, DiffusionLoaderType,
-    EmbeddingLoader, EmbeddingLoaderBuilder, EmbeddingLoaderType, EmbeddingModelPaths,
-    EmbeddingSpecificConfig, GGMLLoader, GGMLLoaderBuilder, GGMLSpecificConfig, GGUFLoader,
-    GGUFLoaderBuilder, GGUFSpecificConfig, GemmaLoader, Idefics2Loader, IsqOrganization,
-    LLaVALoader, LLaVANextLoader, LlamaLoader, Loader, LocalModelPaths, MistralLoader,
-    MixtralLoader, Modalities, ModelKind, ModelPaths, MultimodalLoader, MultimodalLoaderBuilder,
-    MultimodalLoaderType, MultimodalPromptPrefixer, MultimodalSpecificConfig, NormalLoader,
-    NormalLoaderBuilder, NormalLoaderType, NormalSpecificConfig, Phi2Loader, Phi3Loader,
-    Phi3VLoader, Qwen2Loader, ResolvedLoraAdapter, SpeechLoader, SpeechPipeline, Starcoder2Loader,
-    SupportedModality, TokenSource, UqffWriteConfig, UQFF_MULTI_FILE_DELIMITER,
+    chat_template::{is_chat_template_request_error, ChatTemplate},
+    expand_isq_value, expand_uqff_shards, parse_isq_value, parse_uqff_shard,
+    resolve_uqff_report_output, resolve_uqff_shorthand, AdapterPaths, AnyMoeLoader, AnyMoePipeline,
+    AutoDeviceMapParams, AutoLoader, AutoLoaderBuilder, DiffusionGenerationParams, DiffusionLoader,
+    DiffusionLoaderBuilder, DiffusionLoaderType, EmbeddingLoader, EmbeddingLoaderBuilder,
+    EmbeddingLoaderType, EmbeddingModelPaths, EmbeddingSpecificConfig, GGMLLoader,
+    GGMLLoaderBuilder, GGMLSpecificConfig, GGUFLoader, GGUFLoaderBuilder, GGUFSpecificConfig,
+    GemmaLoader, Idefics2Loader, IsqOrganization, LLaVALoader, LLaVANextLoader, LlamaLoader,
+    Loader, LocalModelPaths, MistralLoader, MixtralLoader, Modalities, ModelKind, ModelPaths,
+    MultimodalLoader, MultimodalLoaderBuilder, MultimodalLoaderType, MultimodalPromptPrefixer,
+    MultimodalSpecificConfig, NormalLoader, NormalLoaderBuilder, NormalLoaderType,
+    NormalSpecificConfig, Phi2Loader, Phi3Loader, Phi3VLoader, Qwen2Loader, ResolvedLoraAdapter,
+    SpeechLoader, SpeechPipeline, Starcoder2Loader, SupportedModality, TokenSource,
+    UqffWriteConfig, UQFF_MULTI_FILE_DELIMITER,
 };
 pub use request::{
     resolve_reasoning_controls, ApproximateUserLocation, CalibrationAction, CalibrationRequest,
@@ -198,11 +200,14 @@ pub use sampler::{
 };
 pub use scheduler::{
     DefaultSchedulerMethod, SchedulerConfig, DEFAULT_MAX_DECODE_STEPS_BEFORE_PREFILL,
-    DEFAULT_MAX_NUM_BATCHED_TOKENS,
+    DEFAULT_MAX_NUM_BATCHED_TOKENS, DEFAULT_MAX_PREFILL_CHUNK_TOKENS,
 };
 pub use search::{SearchCallback, SearchFunctionParameters, SearchResult};
 use serde::Serialize;
-pub use speculative::{reserve_external_mtp_memory, MtpConfig, SpeculativeConfig};
+pub use speculative::{
+    reserve_external_mtp_memory, reserve_external_mtp_memory_with_runtime, MtpConfig,
+    MtpDraftSamplingMethod, MtpRuntimeConfig, SpeculativeConfig,
+};
 pub use speech_models::{utils as speech_utils, SpeechGenerationConfig, SpeechLoaderType};
 use tokio::runtime::Runtime;
 use toml_selector::{TomlLoaderArgs, TomlSelector};
@@ -480,7 +485,7 @@ impl std::fmt::Display for ModelStatus {
 pub enum MistralRsError {
     #[error("engine state lock is poisoned")]
     EnginePoisoned,
-    #[error("request sender lock is poisoned")]
+    #[error("request engine is unavailable")]
     SenderPoisoned,
     /// The requested model was not found (neither loaded nor unloaded)
     #[error("model `{0}` was not found")]
@@ -1100,6 +1105,9 @@ impl MistralRs {
         &self,
         request: &mut Request,
     ) -> Result<Sender<Request>, MistralRsError> {
+        if let Request::Normal(request) = &mut *request {
+            request.mark_enqueued();
+        }
         let requested_model = match &*request {
             Request::Normal(request) => request.model_id.clone(),
             _ => None,
@@ -1622,6 +1630,7 @@ impl MistralRs {
                 let (tx, mut rx) = channel(1);
                 let req = Request::Normal(Box::new(NormalRequest {
                     id: 0,
+                    queued_at: None,
                     messages: RequestMessage::Completion {
                         text: "hello".to_string(),
                         echo_prompt: false,
@@ -1631,6 +1640,7 @@ impl MistralRs {
                         max_len: Some(1),
                         ..SamplingParams::deterministic()
                     },
+                    seed: None,
                     response: tx,
                     return_logprobs: false,
                     is_streaming: false,
@@ -1769,7 +1779,7 @@ impl MistralRs {
             let engines = self
                 .engines
                 .read()
-                .map_err(|_| MistralRsError::SenderPoisoned)?;
+                .map_err(|_| MistralRsError::EnginePoisoned)?;
             engines.contains_key(&resolved_model_id)
         };
 
@@ -1783,7 +1793,7 @@ impl MistralRs {
             let engines = self
                 .engines
                 .read()
-                .map_err(|_| MistralRsError::SenderPoisoned)?;
+                .map_err(|_| MistralRsError::EnginePoisoned)?;
             if let Some(engine_instance) = engines.get(&resolved_model_id) {
                 return Ok(engine_instance.sender.clone());
             }
@@ -1809,7 +1819,7 @@ impl MistralRs {
             let engines = self
                 .engines
                 .read()
-                .map_err(|_| MistralRsError::SenderPoisoned)?;
+                .map_err(|_| MistralRsError::EnginePoisoned)?;
             if let Some(engine_instance) = engines.get(&resolved_model_id) {
                 return Ok(engine_instance.sender.clone());
             }
@@ -1914,7 +1924,7 @@ impl MistralRs {
         let engines = self
             .engines
             .read()
-            .map_err(|_| MistralRsError::SenderPoisoned)?;
+            .map_err(|_| MistralRsError::EnginePoisoned)?;
         engines
             .get(&resolved_model_id)
             .map(|e| Arc::clone(&e.session_store))
@@ -1926,7 +1936,7 @@ impl MistralRs {
         let engines = self
             .engines
             .read()
-            .map_err(|_| MistralRsError::SenderPoisoned)?;
+            .map_err(|_| MistralRsError::EnginePoisoned)?;
         engines
             .get(&resolved_model_id)
             .map(|e| e.file_store.clone())
@@ -1941,7 +1951,7 @@ impl MistralRs {
     ) -> Result<Option<engine::agentic_session::SerializedSession>, MistralRsError> {
         let store = self.get_session_store(model_id)?;
         let exported = {
-            let mut guard = store.lock().map_err(|_| MistralRsError::SenderPoisoned)?;
+            let mut guard = store.lock().map_err(|_| MistralRsError::EnginePoisoned)?;
             guard
                 .export(session_id)
                 .map_err(|e| MistralRsError::Other(e.to_string()))?
@@ -1968,7 +1978,7 @@ impl MistralRs {
         let files = session.files.clone();
         let store = self.get_session_store(model_id)?;
         {
-            let mut guard = store.lock().map_err(|_| MistralRsError::SenderPoisoned)?;
+            let mut guard = store.lock().map_err(|_| MistralRsError::EnginePoisoned)?;
             guard
                 .import(session_id.clone(), session)
                 .map_err(|e| MistralRsError::Other(e.to_string()))?;
@@ -1991,7 +2001,7 @@ impl MistralRs {
         num_turns: usize,
     ) -> Result<(), MistralRsError> {
         let store = self.get_session_store(model_id)?;
-        let mut guard = store.lock().map_err(|_| MistralRsError::SenderPoisoned)?;
+        let mut guard = store.lock().map_err(|_| MistralRsError::EnginePoisoned)?;
         guard
             .fork(src_session_id, dest_session_id, num_turns)
             .map_err(|e| MistralRsError::Other(e.to_string()))
@@ -2004,14 +2014,14 @@ impl MistralRs {
         session_id: &str,
     ) -> Result<bool, MistralRsError> {
         let store = self.get_session_store(model_id)?;
-        let mut guard = store.lock().map_err(|_| MistralRsError::SenderPoisoned)?;
+        let mut guard = store.lock().map_err(|_| MistralRsError::EnginePoisoned)?;
         Ok(guard.delete(session_id))
     }
 
     /// All stored session IDs. SDK-only, not exposed via HTTP.
     pub fn list_session_ids(&self, model_id: Option<&str>) -> Result<Vec<String>, MistralRsError> {
         let store = self.get_session_store(model_id)?;
-        let guard = store.lock().map_err(|_| MistralRsError::SenderPoisoned)?;
+        let guard = store.lock().map_err(|_| MistralRsError::EnginePoisoned)?;
         Ok(guard.list_ids())
     }
 
@@ -2027,7 +2037,7 @@ impl MistralRs {
         let aliases = self
             .model_aliases
             .read()
-            .map_err(|_| MistralRsError::SenderPoisoned)?;
+            .map_err(|_| MistralRsError::EnginePoisoned)?;
         if let Some(primary_id) = aliases.get(model_id) {
             Ok(primary_id.clone())
         } else {
@@ -2042,7 +2052,7 @@ impl MistralRs {
                 let default_lock = self
                     .default_engine_id
                     .read()
-                    .map_err(|_| MistralRsError::SenderPoisoned)?;
+                    .map_err(|_| MistralRsError::EnginePoisoned)?;
                 Ok(default_lock
                     .as_ref()
                     .ok_or_else(|| MistralRsError::ModelNotFound("default".to_string()))?
@@ -2159,7 +2169,7 @@ impl MistralRs {
         let engines = self
             .engines
             .read()
-            .map_err(|_| MistralRsError::SenderPoisoned)?;
+            .map_err(|_| MistralRsError::EnginePoisoned)?;
         if let Some(engine_instance) = engines.get(&resolved_model_id) {
             Ok(engine_instance.logger.clone())
         } else {
@@ -2177,7 +2187,7 @@ impl MistralRs {
         let engines = self
             .engines
             .read()
-            .map_err(|_| MistralRsError::SenderPoisoned)?;
+            .map_err(|_| MistralRsError::EnginePoisoned)?;
         if let Some(engine_instance) = engines.get(&resolved_model_id) {
             Ok(engine_instance.category.clone())
         } else {
@@ -2195,7 +2205,7 @@ impl MistralRs {
         let engines = self
             .engines
             .read()
-            .map_err(|_| MistralRsError::SenderPoisoned)?;
+            .map_err(|_| MistralRsError::EnginePoisoned)?;
         if let Some(engine_instance) = engines.get(&resolved_model_id) {
             Ok(engine_instance.config.max_seq_len)
         } else {
@@ -2747,10 +2757,18 @@ impl MistralRs {
         let realized_cache_config = {
             let mut pipeline = pipeline.lock().await;
             if let Some(mtp_config) = loader_config.mtp_config.clone() {
+                let prefix_cache_capacity = if unloaded_state.engine_config.no_prefix_cache {
+                    0
+                } else {
+                    unloaded_state.engine_config.prefix_cache_n
+                };
                 pipeline
-                    .attach_speculative(SpeculativeConfig::Mtp(
-                        mtp_config.with_draft_lm_head_isq(loader_config.isq),
-                    ))
+                    .attach_speculative_with_runtime(
+                        SpeculativeConfig::Mtp(
+                            mtp_config.with_draft_lm_head_isq(loader_config.isq),
+                        ),
+                        MtpRuntimeConfig::new(prefix_cache_capacity),
+                    )
                     .map_err(|e| {
                         MistralRsError::ReloadFailed(format!(
                             "Failed to attach MTP speculative decoding: {e}"

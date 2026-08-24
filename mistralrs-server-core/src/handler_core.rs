@@ -38,6 +38,7 @@ pub(crate) enum ApiErrorKind {
     UnsupportedMediaType,
     RateLimited,
     Unavailable,
+    Overloaded,
     Internal,
 }
 
@@ -139,7 +140,7 @@ impl ApiError {
         }
         if find_error::<ServiceUnavailableError>(error).is_some() {
             return Self::new(
-                ApiErrorKind::Unavailable,
+                ApiErrorKind::Overloaded,
                 SERVICE_UNAVAILABLE_MESSAGE,
                 Some("service_unavailable"),
                 None,
@@ -150,6 +151,12 @@ impl ApiError {
             ApiErrorKind::Internal => Self::internal(),
             ApiErrorKind::Unavailable => Self::new(
                 ApiErrorKind::Unavailable,
+                SERVICE_UNAVAILABLE_MESSAGE,
+                Some("service_unavailable"),
+                None,
+            ),
+            ApiErrorKind::Overloaded => Self::new(
+                ApiErrorKind::Overloaded,
                 SERVICE_UNAVAILABLE_MESSAGE,
                 Some("service_unavailable"),
                 None,
@@ -198,9 +205,14 @@ impl ApiError {
             ),
             MistralRsError::LoraAdapter(error) => Self::from_lora_error(error),
             MistralRsError::EnginePoisoned
-            | MistralRsError::SenderPoisoned
             | MistralRsError::ReloadFailed(_)
             | MistralRsError::Other(_) => Self::internal(),
+            MistralRsError::SenderPoisoned => Self::new(
+                ApiErrorKind::Unavailable,
+                SERVICE_UNAVAILABLE_MESSAGE,
+                Some("service_unavailable"),
+                None,
+            ),
         }
     }
 
@@ -226,8 +238,18 @@ impl ApiError {
             {
                 (ApiErrorKind::NotFound, "adapter_file_not_found")
             }
+            LoraAdapterError::Io { source, .. }
+                if matches!(
+                    source.kind(),
+                    std::io::ErrorKind::InvalidData
+                        | std::io::ErrorKind::InvalidInput
+                        | std::io::ErrorKind::UnexpectedEof
+                ) =>
+            {
+                (ApiErrorKind::InvalidRequest, "invalid_lora_adapter")
+            }
             LoraAdapterError::Io { .. } | LoraAdapterError::Load(_) => {
-                (ApiErrorKind::Unavailable, "lora_service_unavailable")
+                (ApiErrorKind::Internal, "internal_error")
             }
             LoraAdapterError::Config { .. } | LoraAdapterError::Format(_) => {
                 (ApiErrorKind::InvalidRequest, "invalid_lora_adapter")
@@ -240,14 +262,17 @@ impl ApiError {
             | LoraAdapterError::AdapterLimit { .. }
             | LoraAdapterError::ByteLimit { .. }
             | LoraAdapterError::SlotExhausted => (ApiErrorKind::Conflict, "lora_state_conflict"),
-            LoraAdapterError::InvalidRuntimeConfig(_)
-            | LoraAdapterError::SizeOverflow
-            | LoraAdapterError::Task(_) => (ApiErrorKind::Internal, "internal_error"),
+            LoraAdapterError::SizeOverflow => {
+                (ApiErrorKind::InvalidRequest, "invalid_lora_adapter")
+            }
+            LoraAdapterError::InvalidRuntimeConfig(_) | LoraAdapterError::Task(_) => {
+                (ApiErrorKind::Internal, "internal_error")
+            }
             _ => (ApiErrorKind::Internal, "internal_error"),
         };
         let message = if kind == ApiErrorKind::Internal {
             INTERNAL_ERROR_MESSAGE.to_string()
-        } else if kind == ApiErrorKind::Unavailable {
+        } else if matches!(kind, ApiErrorKind::Unavailable | ApiErrorKind::Overloaded) {
             SERVICE_UNAVAILABLE_MESSAGE.to_string()
         } else {
             error.to_string()
@@ -263,7 +288,7 @@ impl ApiError {
             ApiErrorKind::PayloadTooLarge => StatusCode::PAYLOAD_TOO_LARGE,
             ApiErrorKind::UnsupportedMediaType => StatusCode::UNSUPPORTED_MEDIA_TYPE,
             ApiErrorKind::RateLimited => StatusCode::TOO_MANY_REQUESTS,
-            ApiErrorKind::Unavailable => StatusCode::SERVICE_UNAVAILABLE,
+            ApiErrorKind::Unavailable | ApiErrorKind::Overloaded => StatusCode::SERVICE_UNAVAILABLE,
             ApiErrorKind::Internal => StatusCode::INTERNAL_SERVER_ERROR,
         }
     }
@@ -305,7 +330,9 @@ struct OpenAiErrorResponse {
 pub(crate) fn openai_error_response(error: ApiError) -> axum::response::Response {
     let error_type = match error.kind {
         ApiErrorKind::RateLimited => "rate_limit_error",
-        ApiErrorKind::Unavailable | ApiErrorKind::Internal => "server_error",
+        ApiErrorKind::Unavailable | ApiErrorKind::Overloaded | ApiErrorKind::Internal => {
+            "server_error"
+        }
         _ => "invalid_request_error",
     };
     let status = error.status();
@@ -390,8 +417,16 @@ pub async fn send_request_with_model(
     mut request: Request,
     model_id: Option<&str>,
 ) -> Result<(), MistralRsError> {
-    if let (Request::Normal(request), Some(model_id)) = (&mut request, model_id) {
-        request.model_id = Some(model_id.to_string());
+    if let Some(model_id) = model_id {
+        if let Request::Normal(request) = &mut request {
+            request.model_id = Some(model_id.to_string());
+        } else {
+            return state
+                .get_sender(Some(model_id))?
+                .send(request)
+                .await
+                .map_err(|_| MistralRsError::SenderPoisoned);
+        }
     }
     state.send_request_async(request).await
 }
@@ -470,12 +505,24 @@ mod tests {
         assert_eq!(classified.kind, ApiErrorKind::Conflict);
         assert_eq!(classified.status(), StatusCode::CONFLICT);
 
+        let classified =
+            ApiError::from_error(&MistralRsError::SenderPoisoned, ApiErrorKind::Internal);
+        assert_eq!(classified.kind, ApiErrorKind::Unavailable);
+        assert_eq!(classified.status(), StatusCode::SERVICE_UNAVAILABLE);
+
         let error = anyhow::Error::new(ServiceUnavailableError("private detail".to_string()))
             .context("allocation failed");
         let classified = ApiError::from_error(error.as_ref(), ApiErrorKind::Internal);
-        assert_eq!(classified.kind, ApiErrorKind::Unavailable);
+        assert_eq!(classified.kind, ApiErrorKind::Overloaded);
         assert_eq!(classified.status(), StatusCode::SERVICE_UNAVAILABLE);
         assert_eq!(classified.message, SERVICE_UNAVAILABLE_MESSAGE);
+
+        let classified = ApiError::from_error(
+            &MistralRsError::LoraAdapter(LoraAdapterError::SizeOverflow),
+            ApiErrorKind::Internal,
+        );
+        assert_eq!(classified.kind, ApiErrorKind::InvalidRequest);
+        assert_eq!(classified.status(), StatusCode::BAD_REQUEST);
     }
 
     #[test]

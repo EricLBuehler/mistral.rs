@@ -1,8 +1,9 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::mpsc::{self, RecvTimeoutError, Sender};
 use std::sync::{Arc, Mutex};
-use std::thread;
+use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
 use tracing::info;
@@ -19,11 +20,16 @@ pub struct IntervalLogger {
     tokens_processed: Arc<AtomicUsize>,
     num_running: Arc<AtomicUsize>,
     num_waiting: Arc<AtomicUsize>,
+    sequence_capacity: Arc<AtomicUsize>,
     encoder_cache_hits: Option<Arc<AtomicUsize>>,
     encoder_cache_misses: Option<Arc<AtomicUsize>>,
     spec_drafts: Arc<AtomicUsize>,
     spec_draft_tokens: Arc<AtomicUsize>,
     spec_accepted_tokens: Arc<AtomicUsize>,
+    shutdown_tx: Sender<()>,
+    worker: Option<JoinHandle<()>>,
+    #[cfg(test)]
+    worker_exited: Arc<AtomicBool>,
 }
 
 impl IntervalLogger {
@@ -37,6 +43,7 @@ impl IntervalLogger {
         let enable_logging = Arc::new(AtomicBool::new(false));
         let num_running = Arc::new(AtomicUsize::new(0));
         let num_waiting = Arc::new(AtomicUsize::new(0));
+        let sequence_capacity = Arc::new(AtomicUsize::new(0));
         let spec_drafts = Arc::new(AtomicUsize::new(0));
         let spec_draft_tokens = Arc::new(AtomicUsize::new(0));
         let spec_accepted_tokens = Arc::new(AtomicUsize::new(0));
@@ -46,6 +53,7 @@ impl IntervalLogger {
         let t_enable_logging = enable_logging.clone();
         let t_num_running = num_running.clone();
         let t_num_waiting = num_waiting.clone();
+        let t_sequence_capacity = sequence_capacity.clone();
         let t_spec_drafts = spec_drafts.clone();
         let t_spec_draft_tokens = spec_draft_tokens.clone();
         let t_spec_accepted_tokens = spec_accepted_tokens.clone();
@@ -55,10 +63,25 @@ impl IntervalLogger {
         };
         let t_enc_hits = encoder_cache_hits.clone();
         let t_enc_misses = encoder_cache_misses.clone();
-        thread::spawn(move || {
+        #[cfg(test)]
+        let worker_exited = Arc::new(AtomicBool::new(false));
+        #[cfg(test)]
+        let t_worker_exited = worker_exited.clone();
+        let (shutdown_tx, shutdown_rx) = mpsc::channel();
+        let worker = thread::spawn(move || {
             // Start the actual logging
             loop {
-                thread::sleep(interval);
+                match shutdown_rx.recv_timeout(interval) {
+                    Err(RecvTimeoutError::Timeout) => {}
+                    Ok(()) | Err(RecvTimeoutError::Disconnected) => break,
+                }
+                let num_running = t_num_running.load(Ordering::Relaxed);
+                let num_waiting = t_num_waiting.load(Ordering::Relaxed);
+                metrics::gauge!("mistralrs_sequences_running").set(num_running as f64);
+                metrics::gauge!("mistralrs_sequences_waiting").set(num_waiting as f64);
+                metrics::gauge!("mistralrs_sequences_capacity")
+                    .set(t_sequence_capacity.load(Ordering::Relaxed) as f64);
+
                 if !t_enable_logging.load(Ordering::Relaxed) {
                     continue;
                 }
@@ -74,8 +97,6 @@ impl IntervalLogger {
                         .absolute(misses.load(Ordering::Relaxed) as u64);
                 }
                 let tokens_processed = t_tokens_processed.swap(0, Ordering::Relaxed);
-                let num_running = t_num_running.load(Ordering::Relaxed);
-                let num_waiting = t_num_waiting.load(Ordering::Relaxed);
                 let spec_drafts = t_spec_drafts.swap(0, Ordering::Relaxed);
                 let spec_draft_tokens = t_spec_draft_tokens.swap(0, Ordering::Relaxed);
                 let spec_accepted_tokens = t_spec_accepted_tokens.swap(0, Ordering::Relaxed);
@@ -119,6 +140,8 @@ impl IntervalLogger {
                     );
                 }
             }
+            #[cfg(test)]
+            t_worker_exited.store(true, Ordering::Release);
         });
 
         Self {
@@ -127,11 +150,16 @@ impl IntervalLogger {
             enable_logging,
             num_running,
             num_waiting,
+            sequence_capacity,
             encoder_cache_hits,
             encoder_cache_misses,
             spec_drafts,
             spec_draft_tokens,
             spec_accepted_tokens,
+            shutdown_tx,
+            worker: Some(worker),
+            #[cfg(test)]
+            worker_exited,
         }
     }
 
@@ -214,6 +242,11 @@ impl IntervalLogger {
         metrics::gauge!("mistralrs_sequences_waiting").set(waiting as f64);
     }
 
+    pub fn set_sequence_capacity(&self, capacity: usize) {
+        self.sequence_capacity.store(capacity, Ordering::Relaxed);
+        metrics::gauge!("mistralrs_sequences_capacity").set(capacity as f64);
+    }
+
     /// Return cumulative prefix cache (hits, total_sequences).
     pub fn prefix_cache_stats(&self) -> (usize, usize) {
         let stats = self.prefix_cache_stats.lock().unwrap();
@@ -226,5 +259,44 @@ impl IntervalLogger {
             (Some(h), Some(m)) => Some((h.load(Ordering::Relaxed), m.load(Ordering::Relaxed))),
             _ => None,
         }
+    }
+}
+
+impl Drop for IntervalLogger {
+    fn drop(&mut self) {
+        let _ = self.shutdown_tx.send(());
+        if let Some(worker) = self.worker.take() {
+            let _ = worker.join();
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const INACTIVE_LOGGER_INTERVAL: Duration = Duration::from_secs(3600);
+    const TEST_SEQUENCE_CAPACITY: usize = 16;
+
+    #[test]
+    fn sequence_capacity_is_retained_for_recurring_publication() {
+        let logger = IntervalLogger::new(INACTIVE_LOGGER_INTERVAL, None);
+
+        logger.set_sequence_capacity(TEST_SEQUENCE_CAPACITY);
+
+        assert_eq!(
+            logger.sequence_capacity.load(Ordering::Relaxed),
+            TEST_SEQUENCE_CAPACITY
+        );
+    }
+
+    #[test]
+    fn drop_wakes_and_joins_worker() {
+        let logger = IntervalLogger::new(INACTIVE_LOGGER_INTERVAL, None);
+        let worker_exited = logger.worker_exited.clone();
+
+        drop(logger);
+
+        assert!(worker_exited.load(Ordering::Acquire));
     }
 }

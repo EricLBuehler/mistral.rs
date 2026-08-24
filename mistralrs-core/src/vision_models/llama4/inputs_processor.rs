@@ -24,7 +24,8 @@ use crate::{
         text_models_inputs_processor::{
             self, get_completion_input, get_prompt_input, PagedAttentionMeta,
         },
-        InputProcessorOutput, InputsProcessor, InputsProcessorType, MessagesAction, Processor,
+        InputProcessorOutput, InputsProcessor, InputsProcessorType, InputsProcessorValidationError,
+        MessagesAction, Processor,
     },
     sequence::{build_mm_features_from_ranges, find_image_delimited_ranges, Sequence},
     vision_models::{
@@ -696,9 +697,10 @@ impl Llama4ImageProcessor {
 
         let placeholder_count = seq.get_initial_prompt().matches(IMAGE_TOKEN).count();
         if placeholder_count != image_count {
-            anyhow::bail!(
+            return Err(InputsProcessorValidationError(format!(
                 "Llama4 prompt has {placeholder_count} image placeholders but {image_count} images"
-            );
+            ))
+            .into());
         }
         let image_h = pixel_values.dim(D::Minus2)?;
         let image_w = pixel_values.dim(D::Minus1)?;

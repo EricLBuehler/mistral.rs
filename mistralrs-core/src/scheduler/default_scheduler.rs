@@ -329,23 +329,32 @@ impl Scheduler for DefaultScheduler<VecDeque<Sequence>> {
             self.waiting.add(seq);
         }
     }
+    fn cancel_closed_response_groups(&mut self) {
+        self.running
+            .iter()
+            .chain(self.waiting.iter())
+            .filter(|seq| seq.response_is_closed() && !seq.is_finished_paged_attn())
+            .for_each(|seq| seq.set_state(SequenceState::Done(StopReason::Canceled)));
+    }
     fn block_size(&self) -> Option<usize> {
         None
     }
     fn free_finished_sequence_groups(&mut self) {
-        // Remove finished sequences
         self.running.retain(|seq| !seq.is_finished_paged_attn());
+        self.waiting.retain(|seq| !seq.is_finished_paged_attn());
     }
-    fn get_finished_recurrent_indices(&self) -> Vec<usize> {
+    fn get_finished_recurrent_slots(&self) -> Vec<(usize, usize)> {
         self.running
             .iter()
+            .chain(self.waiting.iter())
             .filter(|seq| seq.is_finished_paged_attn())
-            .filter_map(|seq| seq.recurrent_state_idx())
+            .filter_map(|seq| seq.recurrent_state_idx().map(|slot| (*seq.id(), slot)))
             .collect()
     }
     fn get_finished_sequence_ids(&self) -> Vec<usize> {
         self.running
             .iter()
+            .chain(self.waiting.iter())
             .filter(|seq| seq.is_finished_paged_attn())
             .map(|seq| *seq.id())
             .collect()
@@ -423,6 +432,7 @@ mod tests {
             false,
             false,
             vec![],
+            None,
         );
         seq.set_state(SequenceState::RunningCompletion);
         seq
@@ -506,5 +516,26 @@ mod tests {
 
         assert_eq!(bucketed.running.len(), 1);
         assert_eq!(bucketed.waiting.len(), 1);
+    }
+
+    #[test]
+    fn closed_responses_are_removed_from_both_default_queues() {
+        let mut scheduler =
+            DefaultScheduler::new(DefaultSchedulerMethod::Fixed(NonZeroUsize::new(2).unwrap()));
+        let running = test_sequence(10, None);
+        let waiting = test_sequence(20, None);
+        waiting.set_state(SequenceState::Waiting);
+        scheduler.add_seq(running);
+        scheduler.add_seq(waiting);
+
+        Scheduler::cancel_closed_response_groups(&mut scheduler);
+        assert_eq!(
+            Scheduler::get_finished_sequence_ids(&scheduler),
+            vec![10, 20]
+        );
+
+        scheduler.free_finished_sequence_groups();
+        assert!(scheduler.running.is_empty());
+        assert!(scheduler.waiting.is_empty());
     }
 }

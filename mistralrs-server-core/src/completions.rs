@@ -236,6 +236,7 @@ pub fn parse_request(
     Ok((
         Request::Normal(Box::new(NormalRequest {
             id: state.next_request_id(),
+            queued_at: None,
             messages: RequestMessage::Completion {
                 text: oairequest.prompt,
                 echo_prompt: oairequest.echo_prompt,
@@ -257,6 +258,7 @@ pub fn parse_request(
                 n_choices: oairequest.n_choices,
                 dry_params,
             },
+            seed: oairequest.seed,
             response: tx,
             return_logprobs: oairequest.logprobs.is_some(),
             is_streaming,

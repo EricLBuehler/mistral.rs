@@ -19,5 +19,5 @@ E4M3 weights, FP32 128x128 weight scales, and BF16 output on SM90.
 To update the vendor snapshot, copy only the headers reachable from
 `fp8_gemm.cuh` at the new pinned FlashInfer revision, preserve upstream headers,
 reapply and mark integration changes, update `NOTICE` and this revision, then
-run the provider smoke test, randomized M=1/8/16 parity and graph test, and the
+run the provider smoke test, dense serving-shape parity and graph test, and the
 matched CUTLASS/DeepGEMM production-shape benchmark.

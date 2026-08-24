@@ -21,10 +21,11 @@ use axum::{
 };
 use either::Either;
 use mistralrs_core::{
-    AgentPermission, AgentToolApprovalHandler, ApproximateUserLocation,
-    ChatCompletionChunkResponse, ChatCompletionResponse, CodeExecutionPermission, Function,
-    MistralRs, ReasoningEffort, Request, RequestMessage, Response, TokenizationRequest, Tool,
-    ToolChoice, ToolType, Usage, WebSearchOptions, WebSearchUserLocation,
+    is_chat_template_request_error, AgentPermission, AgentToolApprovalHandler,
+    ApproximateUserLocation, ChatCompletionChunkResponse, ChatCompletionResponse,
+    CodeExecutionPermission, Function, MistralRs, ReasoningEffort, Request, RequestMessage,
+    Response, TokenizationRequest, Tool, ToolChoice, ToolType, Usage, WebSearchOptions,
+    WebSearchUserLocation,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
@@ -38,7 +39,7 @@ use crate::{
     chat_completion::{parse_request, ChatCompletionParseContext},
     handler_core::{
         create_response_channel, send_request_with_model, ApiError, ApiErrorKind,
-        ResponseErrorMessage, INTERNAL_ERROR_MESSAGE, SERVICE_UNAVAILABLE_MESSAGE,
+        ResponseErrorMessage, INTERNAL_ERROR_MESSAGE,
     },
     mistralrs_server_router_builder::AgenticDefaults,
     openai::{
@@ -517,6 +518,7 @@ impl AnthropicMessagesRequest {
             repetition_penalty: self.repetition_penalty,
             stop_seqs: self.stop_sequences.map(StopTokens::Multi),
             ignore_eos: false,
+            seed: None,
             temperature: self.temperature,
             top_p: self.top_p,
             stream: self.stream,
@@ -1289,7 +1291,7 @@ impl AnthropicStreamer {
     }
 
     fn handle_error_event(&mut self, error: ApiError) {
-        let message = anthropic_error_message(&error);
+        let message = error.message.clone();
         self.enqueue_json(
             "error",
             json!({
@@ -1336,7 +1338,9 @@ impl futures::Stream for AnthropicStreamer {
                                 ApiError::from_error(e.as_ref(), ApiErrorKind::InvalidRequest);
                             if matches!(
                                 error.kind,
-                                ApiErrorKind::Internal | ApiErrorKind::Unavailable
+                                ApiErrorKind::Internal
+                                    | ApiErrorKind::Unavailable
+                                    | ApiErrorKind::Overloaded
                             ) {
                                 MistralRs::maybe_log_error(self.state.clone(), e.as_ref());
                             }
@@ -1468,13 +1472,14 @@ fn anthropic_error_status(kind: ApiErrorKind) -> http::StatusCode {
             http::StatusCode::BAD_REQUEST
         }
         ApiErrorKind::NotFound => http::StatusCode::NOT_FOUND,
-        ApiErrorKind::Conflict => http::StatusCode::from_u16(ANTHROPIC_OVERLOADED_STATUS)
-            .expect("Anthropic overloaded status must be valid"),
+        ApiErrorKind::Conflict => http::StatusCode::CONFLICT,
         ApiErrorKind::PayloadTooLarge => http::StatusCode::PAYLOAD_TOO_LARGE,
         ApiErrorKind::RateLimited => http::StatusCode::TOO_MANY_REQUESTS,
-        ApiErrorKind::Unavailable => http::StatusCode::from_u16(ANTHROPIC_OVERLOADED_STATUS)
+        ApiErrorKind::Unavailable | ApiErrorKind::Internal => {
+            http::StatusCode::INTERNAL_SERVER_ERROR
+        }
+        ApiErrorKind::Overloaded => http::StatusCode::from_u16(ANTHROPIC_OVERLOADED_STATUS)
             .expect("Anthropic overloaded status must be valid"),
-        ApiErrorKind::Internal => http::StatusCode::INTERNAL_SERVER_ERROR,
     }
 }
 
@@ -1484,11 +1489,11 @@ fn anthropic_error_type(kind: ApiErrorKind) -> &'static str {
             "invalid_request_error"
         }
         ApiErrorKind::NotFound => "not_found_error",
-        ApiErrorKind::Conflict => "overloaded_error",
+        ApiErrorKind::Conflict => "conflict_error",
         ApiErrorKind::PayloadTooLarge => "request_too_large",
         ApiErrorKind::RateLimited => "rate_limit_error",
-        ApiErrorKind::Unavailable => "overloaded_error",
-        ApiErrorKind::Internal => "api_error",
+        ApiErrorKind::Unavailable | ApiErrorKind::Internal => "api_error",
+        ApiErrorKind::Overloaded => "overloaded_error",
     }
 }
 
@@ -1503,7 +1508,7 @@ fn anthropic_json_rejection(error: JsonRejection) -> ApiError {
 pub(crate) fn anthropic_error_response(error: ApiError) -> axum::response::Response {
     let status = anthropic_error_status(error.kind);
     let error_type = anthropic_error_type(error.kind);
-    let message = anthropic_error_message(&error);
+    let message = error.message;
     let mut response = (
         status,
         Json(AnthropicError {
@@ -1519,14 +1524,6 @@ pub(crate) fn anthropic_error_response(error: ApiError) -> axum::response::Respo
         .extensions_mut()
         .insert(ResponseErrorMessage(message));
     response
-}
-
-fn anthropic_error_message(error: &ApiError) -> String {
-    if error.kind == ApiErrorKind::Conflict {
-        SERVICE_UNAVAILABLE_MESSAGE.to_string()
-    } else {
-        error.message.clone()
-    }
 }
 
 fn handle_validation_error(e: anyhow::Error) -> AnthropicMessagesResponder {
@@ -1785,7 +1782,10 @@ pub async fn anthropic_count_tokens(
         Some(Ok(tokens)) => AnthropicCountTokensResponder::Json(AnthropicCountTokensResponse {
             input_tokens: tokens.len(),
         }),
-        Some(Err(e)) => AnthropicCountTokensResponder::ValidationError(e.into()),
+        Some(Err(e)) if is_chat_template_request_error(&e) => {
+            AnthropicCountTokensResponder::ValidationError(e.into())
+        }
+        Some(Err(e)) => AnthropicCountTokensResponder::InternalError(e.into()),
         None => AnthropicCountTokensResponder::InternalError(Box::new(std::io::Error::new(
             std::io::ErrorKind::UnexpectedEof,
             "No token count received from the model.",
@@ -1861,8 +1861,8 @@ mod tests {
             ),
             (
                 ApiErrorKind::Conflict,
-                http::StatusCode::from_u16(ANTHROPIC_OVERLOADED_STATUS).unwrap(),
-                "overloaded_error",
+                http::StatusCode::CONFLICT,
+                "conflict_error",
             ),
             (
                 ApiErrorKind::PayloadTooLarge,
@@ -1876,6 +1876,11 @@ mod tests {
             ),
             (
                 ApiErrorKind::Unavailable,
+                http::StatusCode::INTERNAL_SERVER_ERROR,
+                "api_error",
+            ),
+            (
+                ApiErrorKind::Overloaded,
                 http::StatusCode::from_u16(ANTHROPIC_OVERLOADED_STATUS).unwrap(),
                 "overloaded_error",
             ),
@@ -1916,19 +1921,16 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn reloading_model_uses_anthropic_overloaded_error() {
+    async fn reloading_model_uses_anthropic_conflict_error() {
         let response = AnthropicMessagesResponder::ValidationError(Box::new(
             MistralRsError::ModelReloading("model".to_string()),
         ))
         .into_response();
 
-        assert_eq!(
-            response.status(),
-            http::StatusCode::from_u16(ANTHROPIC_OVERLOADED_STATUS).unwrap()
-        );
+        assert_eq!(response.status(), http::StatusCode::CONFLICT);
         let body = error_body(response).await;
-        assert_eq!(body["error"]["type"], "overloaded_error");
-        assert_eq!(body["error"]["message"], SERVICE_UNAVAILABLE_MESSAGE);
+        assert_eq!(body["error"]["type"], "conflict_error");
+        assert_eq!(body["error"]["message"], "model `model` is being reloaded");
     }
 
     #[tokio::test]

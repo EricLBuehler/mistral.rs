@@ -16,7 +16,7 @@ use crate::pipeline::text_models_inputs_processor::{
 };
 use crate::pipeline::{
     text_models_inputs_processor, InputProcessorOutput, InputsProcessor, InputsProcessorType,
-    MessagesAction, Processor,
+    InputsProcessorValidationError, MessagesAction, Processor,
 };
 use crate::sequence::{build_mm_features_from_ranges, Sequence};
 use crate::vision_models::image_processor::{self, ImagePreProcessor, PreprocessedImages};
@@ -96,10 +96,11 @@ fn llava_next_prompt_tokens(
         .collect::<Vec<_>>();
     let tag_count = splits.len().saturating_sub(1);
     if tag_count != image_token_counts.len() {
-        anyhow::bail!(
+        return Err(InputsProcessorValidationError(format!(
             "LLaVA-Next prompt has {tag_count} image tags but {} images",
             image_token_counts.len()
-        );
+        ))
+        .into());
     }
     let prompt_chunks = splits
         .into_iter()
@@ -121,7 +122,10 @@ fn llava_next_prompt_tokens(
         .enumerate()
         .map(|(index, &token_count)| {
             if token_count == 0 {
-                anyhow::bail!("LLaVA-Next image placeholder cannot be empty");
+                return Err(InputsProcessorValidationError(
+                    "LLaVA-Next image placeholder cannot be empty".to_string(),
+                )
+                .into());
             }
             let mut pad = vec![0; token_count];
             pad[0] = -(index as i64 + 1);

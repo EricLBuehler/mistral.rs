@@ -3006,6 +3006,16 @@
               }
             ]
           },
+          "seed": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Seed for deterministic request-scoped sampling.",
+            "example": null,
+            "minimum": 0
+          },
           "session_id": {
             "type": [
               "string",
@@ -3462,6 +3472,16 @@
             "format": "float",
             "description": "Multiplicative repetition penalty; 1.0 disables it.",
             "example": null
+          },
+          "seed": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Seed for deterministic request-scoped sampling.",
+            "example": null,
+            "minimum": 0
           },
           "stop": {
             "oneOf": [
@@ -5369,6 +5389,15 @@
                 "description": "Response format (legacy, prefer `text` field)"
               }
             ]
+          },
+          "seed": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Seed for deterministic request-scoped sampling",
+            "minimum": 0
           },
           "stop": {
             "oneOf": [
@@ -7515,6 +7544,16 @@
                 "description": "Force plain text or JSON-schema constrained output."
               }
             ]
+          },
+          "seed": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Seed for deterministic request-scoped sampling.",
+            "example": null,
+            "minimum": 0
           },
           "stop": {
             "oneOf": [

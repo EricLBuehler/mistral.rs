@@ -14,7 +14,8 @@ use crate::{
         text_models_inputs_processor::{
             self, get_completion_input, get_prompt_input, PagedAttentionMeta,
         },
-        InputProcessorOutput, InputsProcessor, InputsProcessorType, MessagesAction, Processor,
+        InputProcessorOutput, InputsProcessor, InputsProcessorType, InputsProcessorValidationError,
+        MessagesAction, Processor,
     },
     sequence::Sequence,
     vision_models::{
@@ -128,7 +129,10 @@ fn parse_prompt_items(
             Some(OpenSpan::Image(start)) => {
                 if token == token_ids.image_end {
                     if position == start + 1 {
-                        anyhow::bail!("MiniCPMO image placeholder is empty");
+                        return Err(InputsProcessorValidationError(
+                            "MiniCPMO image placeholder is empty".to_string(),
+                        )
+                        .into());
                     }
                     current = Some(MiniCpmOPromptItem {
                         placeholder: start..position + 1,
@@ -139,16 +143,24 @@ fn parse_prompt_items(
                     || token == token_ids.slice_start
                     || token == token_ids.slice_end
                 {
-                    anyhow::bail!("MiniCPMO image placeholder delimiters are malformed");
+                    return Err(InputsProcessorValidationError(
+                        "MiniCPMO image placeholder delimiters are malformed".to_string(),
+                    )
+                    .into());
                 }
             }
             Some(OpenSpan::Slice(start)) => {
                 if token == token_ids.slice_end {
                     if position == start + 1 {
-                        anyhow::bail!("MiniCPMO slice placeholder is empty");
+                        return Err(InputsProcessorValidationError(
+                            "MiniCPMO slice placeholder is empty".to_string(),
+                        )
+                        .into());
                     }
                     let item = current.as_mut().ok_or_else(|| {
-                        anyhow::Error::msg("MiniCPMO slice appears before an image placeholder")
+                        InputsProcessorValidationError(
+                            "MiniCPMO slice appears before an image placeholder".to_string(),
+                        )
                     })?;
                     item.embedding_spans.push(start + 1..position);
                     item.placeholder.end = position + 1;
@@ -157,7 +169,10 @@ fn parse_prompt_items(
                     || token == token_ids.image_end
                     || token == token_ids.slice_start
                 {
-                    anyhow::bail!("MiniCPMO slice placeholder delimiters are malformed");
+                    return Err(InputsProcessorValidationError(
+                        "MiniCPMO slice placeholder delimiters are malformed".to_string(),
+                    )
+                    .into());
                 }
             }
             None if token == token_ids.image_start => {
@@ -168,18 +183,27 @@ fn parse_prompt_items(
             }
             None if token == token_ids.slice_start => {
                 if current.is_none() {
-                    anyhow::bail!("MiniCPMO slice appears before an image placeholder");
+                    return Err(InputsProcessorValidationError(
+                        "MiniCPMO slice appears before an image placeholder".to_string(),
+                    )
+                    .into());
                 }
                 open = Some(OpenSpan::Slice(position));
             }
             None if token == token_ids.image_end || token == token_ids.slice_end => {
-                anyhow::bail!("MiniCPMO placeholder has an unmatched closing delimiter");
+                return Err(InputsProcessorValidationError(
+                    "MiniCPMO placeholder has an unmatched closing delimiter".to_string(),
+                )
+                .into());
             }
             None => {}
         }
     }
     if open.is_some() {
-        anyhow::bail!("MiniCPMO placeholder has an unmatched opening delimiter");
+        return Err(InputsProcessorValidationError(
+            "MiniCPMO placeholder has an unmatched opening delimiter".to_string(),
+        )
+        .into());
     }
     if let Some(item) = current {
         items.push(item);
@@ -192,11 +216,12 @@ fn prompt_features(
     hashes: &[u64],
 ) -> anyhow::Result<Vec<MultiModalFeature>> {
     if items.len() != hashes.len() {
-        anyhow::bail!(
+        return Err(InputsProcessorValidationError(format!(
             "MiniCPMO has {} image placeholders but {} image inputs",
             items.len(),
             hashes.len()
-        );
+        ))
+        .into());
     }
     Ok(items
         .iter()
@@ -612,10 +637,11 @@ impl MiniCpmOImageProcessor {
             prompt
         } else {
             if raw_placeholder_count != images.len() {
-                anyhow::bail!(
+                return Err(InputsProcessorValidationError(format!(
                     "MiniCPMO has {raw_placeholder_count} raw image placeholders but {} image inputs",
                     images.len()
-                );
+                ))
+                .into());
             }
             let mut expanded = String::with_capacity(prompt.len());
             for (image_index, fragment) in fragments[..raw_placeholder_count].iter().enumerate() {
@@ -1064,7 +1090,10 @@ mod tests {
 
     #[test]
     fn prompt_parser_rejects_malformed_delimiters() {
-        assert!(parse_prompt_items(&[3, 7, 4], TOKEN_IDS).is_err());
+        let error = parse_prompt_items(&[3, 7, 4], TOKEN_IDS).unwrap_err();
+        assert!(error
+            .downcast_ref::<InputsProcessorValidationError>()
+            .is_some());
         assert!(parse_prompt_items(&[1, 7, 3, 2], TOKEN_IDS).is_err());
         assert!(parse_prompt_items(&[1, 7], TOKEN_IDS).is_err());
         assert!(parse_prompt_items(&[1, 2, 4], TOKEN_IDS).is_err());
@@ -1082,7 +1111,10 @@ mod tests {
         assert_eq!(features[1].offset, 7);
         assert_eq!(features[1].length, 3);
         assert_eq!(features[1].item_range, 1..2);
-        assert!(prompt_features(&items, &[11]).is_err());
+        let error = prompt_features(&items, &[11]).unwrap_err();
+        assert!(error
+            .downcast_ref::<InputsProcessorValidationError>()
+            .is_some());
     }
 
     #[test]

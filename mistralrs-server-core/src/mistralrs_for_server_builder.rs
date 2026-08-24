@@ -6,11 +6,11 @@ use anyhow::{Context, Result};
 use candle_core::Device;
 use mistralrs_core::{
     get_auto_device_map_params, get_model_dtype, get_tgt_non_granular_index, paged_attn_supported,
-    parse_isq_value, plan_paged_kv, reserve_external_mtp_memory, AutoDeviceMapParams,
+    parse_isq_value, plan_paged_kv, reserve_external_mtp_memory_with_runtime, AutoDeviceMapParams,
     DefaultSchedulerMethod, DeviceLayerMapMetadata, DeviceMapMetadata, DeviceMapSetting, Loader,
     LoaderBuilder, McpClientConfig, MemoryGpuConfig, MistralRsBuilder, ModelLoaderConfig,
-    ModelSelected, MtpConfig, PagedAttentionConfig, PagedCacheType, PagedKvModelRequest,
-    SchedulerConfig, SearchCallback, SearchEmbeddingModel, TokenSource,
+    ModelSelected, MtpConfig, MtpRuntimeConfig, PagedAttentionConfig, PagedCacheType,
+    PagedKvModelRequest, SchedulerConfig, SearchCallback, SearchEmbeddingModel, TokenSource,
 };
 use tracing::{debug, info, warn};
 
@@ -84,6 +84,7 @@ pub mod defaults {
 
     use mistralrs_core::{
         PagedCacheType, DEFAULT_MAX_DECODE_STEPS_BEFORE_PREFILL, DEFAULT_MAX_NUM_BATCHED_TOKENS,
+        DEFAULT_MAX_PREFILL_CHUNK_TOKENS,
     };
 
     pub const DEVICE: Option<candle_core::Device> = None;
@@ -92,6 +93,7 @@ pub mod defaults {
     pub const MODEL: Option<mistralrs_core::ModelSelected> = None;
     pub const MAX_SEQS: usize = 16;
     pub const MAX_NUM_BATCHED_TOKENS: usize = DEFAULT_MAX_NUM_BATCHED_TOKENS;
+    pub const MAX_PREFILL_CHUNK_TOKENS: usize = DEFAULT_MAX_PREFILL_CHUNK_TOKENS;
     pub const MAX_DECODE_STEPS_BEFORE_PREFILL: usize = DEFAULT_MAX_DECODE_STEPS_BEFORE_PREFILL;
     pub const NO_KV_CACHE: bool = false;
     pub const CHAT_TEMPLATE: Option<String> = None;
@@ -177,6 +179,9 @@ pub struct MistralRsForServerBuilder {
 
     /// Maximum tokens processed by one paged-attention scheduler step.
     max_num_batched_tokens: NonZeroUsize,
+
+    /// Maximum chunkable CUDA text-prompt tokens in one paged-attention scheduler step.
+    max_prefill_chunk_tokens: NonZeroUsize,
 
     /// Maximum decode steps before a waiting prefill batch is admitted.
     max_decode_steps_before_prefill: NonZeroUsize,
@@ -278,6 +283,8 @@ impl Default for MistralRsForServerBuilder {
             default_model_id: None,
             max_seqs: defaults::MAX_SEQS,
             max_num_batched_tokens: NonZeroUsize::new(defaults::MAX_NUM_BATCHED_TOKENS).unwrap(),
+            max_prefill_chunk_tokens: NonZeroUsize::new(defaults::MAX_PREFILL_CHUNK_TOKENS)
+                .unwrap(),
             max_decode_steps_before_prefill: NonZeroUsize::new(
                 defaults::MAX_DECODE_STEPS_BEFORE_PREFILL,
             )
@@ -430,6 +437,12 @@ impl MistralRsForServerBuilder {
     /// Sets the maximum number of tokens processed by one paged-attention scheduler step.
     pub fn with_max_num_batched_tokens(mut self, max_num_batched_tokens: NonZeroUsize) -> Self {
         self.max_num_batched_tokens = max_num_batched_tokens;
+        self
+    }
+
+    /// Sets the maximum chunkable CUDA text-prompt tokens in one scheduler step.
+    pub fn with_max_prefill_chunk_tokens(mut self, max_prefill_chunk_tokens: NonZeroUsize) -> Self {
+        self.max_prefill_chunk_tokens = max_prefill_chunk_tokens;
         self
     }
 
@@ -722,6 +735,7 @@ impl MistralRsForServerBuilder {
 
     /// Build a single-model instance (legacy mode)
     async fn build_single_model(mut self) -> Result<SharedMistralRsState> {
+        let mtp_runtime = MtpRuntimeConfig::new(self.prefix_cache_n);
         let model = self.model.context("Model was None")?;
 
         let tgt_non_granular_index = get_tgt_non_granular_index(&model);
@@ -741,7 +755,7 @@ impl MistralRsForServerBuilder {
         let mapper = init_mapper(&self.num_device_layers, &auto_device_map_params);
         let paged_attn = configure_paged_attn(&device, self.paged_attn);
 
-        let cache_config = reserve_external_mtp_memory(
+        let cache_config = reserve_external_mtp_memory_with_runtime(
             init_cache_config(
                 self.paged_attn_block_size,
                 self.paged_attn_gpu_mem,
@@ -751,8 +765,10 @@ impl MistralRsForServerBuilder {
                 !paged_attn,
             )?
             .map(|config| config.with_serving_capacity(self.max_seqs))
-            .transpose()?,
+            .transpose()?
+            .map(|config| config.with_recurrent_prefix_capacity(self.prefix_cache_n)),
             self.mtp_config.as_ref(),
+            mtp_runtime,
             &dtype,
             &device,
         )?;
@@ -793,12 +809,10 @@ impl MistralRsForServerBuilder {
         info!("Model loaded.");
 
         if let Some(mtp_config) = self.mtp_config.clone() {
-            pipeline
-                .lock()
-                .await
-                .attach_speculative(mistralrs_core::SpeculativeConfig::Mtp(
-                    mtp_config.with_draft_lm_head_isq(isq),
-                ))?;
+            pipeline.lock().await.attach_speculative_with_runtime(
+                mistralrs_core::SpeculativeConfig::Mtp(mtp_config.with_draft_lm_head_isq(isq)),
+                mtp_runtime,
+            )?;
         }
 
         let scheduler_config = init_scheduler_config(
@@ -806,6 +820,7 @@ impl MistralRsForServerBuilder {
             &pipeline,
             self.max_seqs,
             self.max_num_batched_tokens.get(),
+            self.max_prefill_chunk_tokens.get(),
             self.max_decode_steps_before_prefill.get(),
         )
         .await;
@@ -865,6 +880,7 @@ impl MistralRsForServerBuilder {
 
     /// Build a multi-model instance
     pub async fn build_multi_model(mut self) -> Result<SharedMistralRsState> {
+        let mtp_runtime = MtpRuntimeConfig::new(self.prefix_cache_n);
         if self.models.is_empty() {
             anyhow::bail!("No models configured for multi-model mode");
         }
@@ -927,7 +943,8 @@ impl MistralRsForServerBuilder {
             !paged_attn,
         )?
         .map(|config| config.with_serving_capacity(self.max_seqs))
-        .transpose()?;
+        .transpose()?
+        .map(|config| config.with_recurrent_prefix_capacity(self.prefix_cache_n));
         let mut paged_kv_plan = plan_paged_kv(
             &self
                 .models
@@ -940,8 +957,13 @@ impl MistralRsForServerBuilder {
             Default::default(),
         )?;
         if let Some(first) = paged_kv_plan.paged_attn.first_mut() {
-            *first =
-                reserve_external_mtp_memory(*first, self.mtp_config.as_ref(), &dtype, &device)?;
+            *first = reserve_external_mtp_memory_with_runtime(
+                *first,
+                self.mtp_config.as_ref(),
+                mtp_runtime,
+                &dtype,
+                &device,
+            )?;
         }
         let first_cache_config = paged_kv_plan.paged_attn[0];
 
@@ -966,12 +988,10 @@ impl MistralRsForServerBuilder {
             first_cache_config,
         )?;
         if let Some(mtp_config) = self.mtp_config.clone() {
-            pipeline
-                .lock()
-                .await
-                .attach_speculative(mistralrs_core::SpeculativeConfig::Mtp(
-                    mtp_config.with_draft_lm_head_isq(isq),
-                ))?;
+            pipeline.lock().await.attach_speculative_with_runtime(
+                mistralrs_core::SpeculativeConfig::Mtp(mtp_config.with_draft_lm_head_isq(isq)),
+                mtp_runtime,
+            )?;
         }
         let first_pipeline_name = pipeline.lock().await.name();
         let first_primary_id = first_model
@@ -1005,6 +1025,7 @@ impl MistralRsForServerBuilder {
             &pipeline,
             self.max_seqs,
             self.max_num_batched_tokens.get(),
+            self.max_prefill_chunk_tokens.get(),
             self.max_decode_steps_before_prefill.get(),
         )
         .await;
@@ -1125,6 +1146,7 @@ impl MistralRsForServerBuilder {
                 &pipeline,
                 self.max_seqs,
                 self.max_num_batched_tokens.get(),
+                self.max_prefill_chunk_tokens.get(),
                 self.max_decode_steps_before_prefill.get(),
             )
             .await;
@@ -1417,6 +1439,7 @@ async fn init_scheduler_config(
     pipeline: &LoadedPipeline,
     args_max_seqs: usize,
     max_num_batched_tokens: usize,
+    max_prefill_chunk_tokens: usize,
     max_decode_steps_before_prefill: usize,
 ) -> SchedulerConfig {
     if cache_config.is_some() {
@@ -1425,6 +1448,7 @@ async fn init_scheduler_config(
             SchedulerConfig::PagedAttentionMeta {
                 max_num_seqs: args_max_seqs,
                 max_num_batched_tokens,
+                max_prefill_chunk_tokens,
                 max_decode_steps_before_prefill,
                 config: cache_config.clone(),
             }

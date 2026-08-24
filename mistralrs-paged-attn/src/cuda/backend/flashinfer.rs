@@ -96,9 +96,9 @@ pub fn reshape_and_cache_flashinfer(
     let (key_s, key_l) = key.storage_and_layout();
     let (value_s, value_l) = value.storage_and_layout();
     let (num_tokens, num_heads, head_size, key_stride) =
-        cache_input_layout(&key_l, "key", "reshape_and_cache_flashinfer")?;
+        cache_input_layout(key_l, "key", "reshape_and_cache_flashinfer")?;
     let (value_tokens, value_heads, value_head_size, value_stride) =
-        cache_input_layout(&value_l, "value", "reshape_and_cache_flashinfer")?;
+        cache_input_layout(value_l, "value", "reshape_and_cache_flashinfer")?;
     if (value_tokens, value_heads, value_head_size) != (num_tokens, num_heads, head_size) {
         candle_core::bail!(
             "reshape_and_cache_flashinfer key/value shape mismatch: {:?} vs {:?}",

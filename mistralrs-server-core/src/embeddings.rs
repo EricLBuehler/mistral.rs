@@ -259,8 +259,10 @@ async fn fetch_embedding(
 
     let request = Request::Normal(Box::new(NormalRequest {
         id: state.next_request_id(),
+        queued_at: None,
         messages: RequestMessage::Embedding { prompt },
         sampling_params: SamplingParams::deterministic(),
+        seed: None,
         response: tx,
         return_logprobs: false,
         is_streaming: false,
@@ -306,8 +308,10 @@ async fn fetch_embedding_tokens(
 
     let request = Request::Normal(Box::new(NormalRequest {
         id: state.next_request_id(),
+        queued_at: None,
         messages: RequestMessage::EmbeddingTokens { prompt: tokens },
         sampling_params: SamplingParams::deterministic(),
+        seed: None,
         response: tx,
         return_logprobs: false,
         is_streaming: false,

@@ -245,9 +245,10 @@ impl McpCallError {
             | ApiErrorKind::Conflict
             | ApiErrorKind::PayloadTooLarge
             | ApiErrorKind::UnsupportedMediaType => Self::InvalidParams(error.message),
-            ApiErrorKind::RateLimited | ApiErrorKind::Unavailable | ApiErrorKind::Internal => {
-                Self::Internal
-            }
+            ApiErrorKind::RateLimited
+            | ApiErrorKind::Unavailable
+            | ApiErrorKind::Overloaded
+            | ApiErrorKind::Internal => Self::Internal,
         }
     }
 }

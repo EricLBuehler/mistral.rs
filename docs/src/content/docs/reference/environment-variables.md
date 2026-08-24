@@ -67,7 +67,7 @@ See [CPU threads and affinity](/guides/perf/throughput-tuning/#cpu-threads-and-a
 | Variable | Purpose |
 |---|---|
 | `MISTRALRS_CUDA_GRAPHS` | CUDA graph acceleration is enabled by default when supported. Set to `0`, `false`, `no`, or `off` to disable. See [CUDA graphs](/guides/perf/paged-attention/#cuda-graphs). |
-| `MISTRALRS_DFLASH_ADAPTIVE` | Adaptive DFlash draft depth is on by default (off when `--mtp-n-predict` is set). Set to `0` to always draft at full depth, or `1` to adapt below an explicit `--mtp-n-predict`. |
+| `MISTRALRS_DFLASH_ADAPTIVE` | Set to `1` or `true` to use full DFlash draft depth for batches up to 2 and depth 1 above that. Only applies when `--mtp-n-predict` is not set. |
 | `MISTRALRS_DFLASH_ISQ` | ISQ type for DFlash drafter weights (`q4k`, `q6k`, ... or `none` for bf16); defaults to the target's in-situ quantization type. |
 | `MISTRALRS_FLASHINFER_DECODE` | Disables FlashInfer decode acceleration when set to `0`, `false`, `no`, or `off`. Use only for compatibility troubleshooting. |
 | `MISTRALRS_GDN_DECODE_KERNEL` | Overrides the SM90 GDN decode kernel for benchmarking or troubleshooting. Accepted values are `auto` (default), `baseline`, `cooperative`, and `pipelined`; an incompatible forced kernel returns an error. |

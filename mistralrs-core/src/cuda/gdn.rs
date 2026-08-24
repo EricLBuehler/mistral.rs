@@ -11,8 +11,10 @@ pub(crate) const GDN_PAD_SLOT: u32 = u32::MAX;
 const GDN_DECODE_MIN_COMPUTE_MAJOR: i32 = 9;
 #[cfg_attr(not(any(feature = "cuda", test)), allow(dead_code))]
 const GDN_DECODE_TUNED_COMPUTE_MAJOR: i32 = 9;
-const GDN_DECODE_K_DIM: usize = 128;
-const GDN_DECODE_V_DIM: usize = 128;
+pub(crate) const GDN_DECODE_K_DIM: usize = 128;
+pub(crate) const GDN_DECODE_V_DIM: usize = 128;
+#[cfg(feature = "cuda")]
+const GDN_DECODE_FALLBACK_MAX_K: usize = 256;
 #[cfg(any(feature = "cuda", test))]
 const GDN_DECODE_V_MAJOR_LARGE_TILE: usize = 32;
 #[cfg(any(feature = "cuda", test))]
@@ -27,6 +29,7 @@ const GDN_DECODE_COOPERATIVE_STATE_WAVES: usize = 2;
 const GDN_DECODE_PIPELINED_OCCUPANCY_WAVES: usize = 4;
 #[cfg(any(feature = "cuda", test))]
 const GDN_DECODE_PIPELINED_AMORTIZED_WAVES: usize = 8;
+#[cfg(feature = "cuda")]
 const GDN_DECODE_VECTOR_ALIGNMENT: usize = 16;
 #[cfg(feature = "cuda")]
 const GDN_DECODE_INPUT_ALIGNMENT: usize = 8;
@@ -34,7 +37,19 @@ pub(crate) const GDN_SPEC_COMMIT_MAX_K: usize = 256;
 pub(crate) const GDN_SPEC_CHECKPOINT_MAX_CONV_WIDTH: usize = 16;
 pub(crate) const GDN_SPEC_CHECKPOINT_MAX_K: usize = 256;
 #[cfg(feature = "cuda")]
+pub(crate) const GDN_SPEC_FUSED_MAX_TOKENS: usize = 8;
+#[cfg(feature = "cuda")]
 const GDN_DECODE_KERNEL_ENV: &str = "MISTRALRS_GDN_DECODE_KERNEL";
+#[cfg(feature = "cuda")]
+const GDN_STATE_DTYPE_F16: i32 = 0;
+#[cfg(feature = "cuda")]
+const GDN_STATE_DTYPE_BF16: i32 = 1;
+#[cfg(feature = "cuda")]
+const GDN_STATE_DTYPE_F32: i32 = 2;
+
+pub(crate) fn recurrent_state_dtype_supported(dtype: DType) -> bool {
+    matches!(dtype, DType::F16 | DType::BF16 | DType::F32)
+}
 
 #[cfg(any(feature = "cuda", test))]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -241,11 +256,7 @@ pub(crate) fn v_major_state_supported(
     key_dim: usize,
     value_dim: usize,
 ) -> Result<bool> {
-    if input_dtype != DType::BF16
-        || key_dim != GDN_DECODE_K_DIM
-        || value_dim != GDN_DECODE_V_DIM
-        || !(key_dim * std::mem::size_of::<f32>()).is_multiple_of(GDN_DECODE_VECTOR_ALIGNMENT)
-    {
+    if input_dtype != DType::BF16 || key_dim != GDN_DECODE_K_DIM || value_dim != GDN_DECODE_V_DIM {
         return Ok(false);
     }
     #[cfg(feature = "cuda")]
@@ -261,6 +272,49 @@ pub(crate) fn v_major_state_supported(
         let _ = device;
         Ok(false)
     }
+}
+
+#[cfg(feature = "cuda")]
+fn cuda_recurrent_state_ptr(tensor: &Tensor, name: &str) -> Result<(*mut core::ffi::c_void, i32)> {
+    use candle::cuda_backend::cudarc::driver::DevicePtr;
+    use candle_core as candle;
+
+    let (storage, layout) = tensor.storage_and_layout();
+    let offset = layout.start_offset();
+    let (pointer, dtype) = match tensor.dtype() {
+        DType::F16 => {
+            let storage = match &*storage {
+                candle::Storage::Cuda(storage) => storage.as_cuda_slice::<half::f16>()?,
+                _ => candle::bail!("{name} must be a CUDA tensor"),
+            };
+            (
+                storage.slice(offset..).device_ptr(storage.stream()).0,
+                GDN_STATE_DTYPE_F16,
+            )
+        }
+        DType::BF16 => {
+            let storage = match &*storage {
+                candle::Storage::Cuda(storage) => storage.as_cuda_slice::<half::bf16>()?,
+                _ => candle::bail!("{name} must be a CUDA tensor"),
+            };
+            (
+                storage.slice(offset..).device_ptr(storage.stream()).0,
+                GDN_STATE_DTYPE_BF16,
+            )
+        }
+        DType::F32 => {
+            let storage = match &*storage {
+                candle::Storage::Cuda(storage) => storage.as_cuda_slice::<f32>()?,
+                _ => candle::bail!("{name} must be a CUDA tensor"),
+            };
+            (
+                storage.slice(offset..).device_ptr(storage.stream()).0,
+                GDN_STATE_DTYPE_F32,
+            )
+        }
+        dtype => candle::bail!("{name} has unsupported recurrent state dtype {dtype:?}"),
+    };
+    Ok((pointer as *mut core::ffi::c_void, dtype))
 }
 
 /// Which rows of the recurrent state a GDN kernel reads and writes. `Gathered` means the state is a
@@ -317,7 +371,7 @@ pub struct RecurrenceInputs<'a> {
 }
 
 #[cfg(feature = "cuda")]
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 enum RecurrenceKernel {
     Scalar,
     Warp,
@@ -359,7 +413,7 @@ fn launch_recurrence(
     let v_ptr = f32_ptr!(v, "v");
     let g_ptr = f32_ptr!(g, "g");
     let beta_ptr = f32_ptr!(beta, "beta");
-    let state_ptr = f32_ptr!(state, "state");
+    let (state_ptr, state_dtype) = cuda_recurrent_state_ptr(state, "state")?;
 
     let output_buf = unsafe { dev.alloc::<f32>(bh * seq_len * v_dim) }?;
     let stream = dev.cuda_stream().cu_stream() as i64;
@@ -389,6 +443,7 @@ fn launch_recurrence(
                 v_dim as i32,
                 slot_ptr,
                 num_heads as i32,
+                state_dtype,
                 stream,
             );
         }
@@ -943,6 +998,11 @@ fn fused_decode_recurrence_cuda_impl(launch: GdnDecodeLaunch<'_>) -> Result<Tens
             slots,
             requested_kernel,
         } = launch;
+        if head_k_dim > GDN_DECODE_FALLBACK_MAX_K {
+            candle::bail!(
+                "GDN decode key dimension {head_k_dim} exceeds the CUDA fallback limit {GDN_DECODE_FALLBACK_MAX_K}"
+            );
+        }
         let dev = mixed_qkv.device().as_cuda_device()?;
         let device_properties = gdn_cuda_device_properties(dev)?;
 
@@ -989,13 +1049,7 @@ fn fused_decode_recurrence_cuda_impl(launch: GdnDecodeLaunch<'_>) -> Result<Tens
         };
         let dtb_offset = dtb_l.start_offset();
 
-        let (state_s, state_l) = state.storage_and_layout();
-        let state_s = match &*state_s {
-            candle::Storage::Cuda(c) => c.as_cuda_slice::<f32>()?,
-            _ => candle::bail!("state must be a cuda tensor"),
-        };
-        let state_offset = state_l.start_offset();
-        let state_ptr = state_s.slice(state_offset..).device_ptr(state_s.stream()).0 as *mut f32;
+        let (state_ptr, state_dtype) = cuda_recurrent_state_ptr(state, "state")?;
         let policy = GdnDecodePolicy {
             compute_major: device_properties.compute_major,
             multiprocessor_count: device_properties.multiprocessor_count,
@@ -1046,6 +1100,7 @@ fn fused_decode_recurrence_cuda_impl(launch: GdnDecodeLaunch<'_>) -> Result<Tens
                     slot_ptr,
                     decode_kernel as i32,
                     dtype_code,
+                    state_dtype,
                     stream,
                 );
             }
@@ -1173,10 +1228,10 @@ pub fn speculative_state_commit_cuda(commit: GdnSpeculativeStateCommit<'_>) -> R
         if initial_recurrent_state.elem_count() != expected_state_elements {
             candle::bail!("GDN speculative commit recurrent state has an incompatible shape");
         }
-        if initial_recurrent_state.dtype() != DType::F32
-            || recurrent_state_pool.dtype() != DType::F32
+        if !recurrent_state_dtype_supported(initial_recurrent_state.dtype())
+            || initial_recurrent_state.dtype() != recurrent_state_pool.dtype()
         {
-            candle::bail!("GDN speculative commit requires f32 recurrent state");
+            candle::bail!("GDN speculative commit recurrent states must share a supported dtype");
         }
         let value_major = match state_layout {
             RecurrentStateLayout::GdnKeyMajor => false,
@@ -1219,13 +1274,16 @@ pub fn speculative_state_commit_cuda(commit: GdnSpeculativeStateCommit<'_>) -> R
         let a_ptr = typed_ptr!(a, T, "a") as *const c_void;
         let initial_conv_ptr =
             typed_ptr!(initial_conv_state, T, "initial_conv_state") as *const c_void;
-        let initial_recurrent_ptr =
-            typed_ptr!(initial_recurrent_state, f32, "initial_recurrent_state") as *const f32;
+        let (initial_recurrent_ptr, state_dtype) =
+            cuda_recurrent_state_ptr(&initial_recurrent_state, "initial_recurrent_state")?;
         let a_log_ptr = typed_ptr!(a_log, f32, "a_log") as *const f32;
         let dt_bias_ptr = typed_ptr!(dt_bias, f32, "dt_bias") as *const f32;
         let conv_pool_ptr = typed_ptr!(conv_state_pool, T, "conv_state_pool") as *mut c_void;
-        let recurrent_pool_ptr =
-            typed_ptr!(recurrent_state_pool, f32, "recurrent_state_pool") as *mut f32;
+        let (recurrent_pool_ptr, pool_state_dtype) =
+            cuda_recurrent_state_ptr(recurrent_state_pool, "recurrent_state_pool")?;
+        if state_dtype != pool_state_dtype {
+            candle::bail!("GDN speculative commit recurrent state dtype mismatch");
+        }
         let keep_rows_ptr = typed_ptr!(keep_rows, u32, "keep_rows") as *const u32;
         let slot_indices_ptr = typed_ptr!(slot_indices, u32, "slot_indices") as *const u32;
         let dev = mixed_qkv.device().as_cuda_device()?;
@@ -1238,7 +1296,7 @@ pub fn speculative_state_commit_cuda(commit: GdnSpeculativeStateCommit<'_>) -> R
                 b_ptr,
                 a_ptr,
                 initial_conv_ptr,
-                initial_recurrent_ptr,
+                initial_recurrent_ptr as *const c_void,
                 a_log_ptr,
                 dt_bias_ptr,
                 conv_pool_ptr,
@@ -1255,6 +1313,7 @@ pub fn speculative_state_commit_cuda(commit: GdnSpeculativeStateCommit<'_>) -> R
                 i32::from(tiled_v_heads),
                 i32::from(value_major),
                 dtype_code,
+                state_dtype,
                 stream,
             );
         }
@@ -1438,6 +1497,13 @@ pub fn speculative_conv_checkpoints_cuda(
 }
 
 #[allow(dead_code)]
+pub struct GdnSpeculativeRmsNormGate<'a> {
+    pub gate: &'a Tensor,
+    pub weight: &'a Tensor,
+    pub eps: f64,
+}
+
+#[allow(dead_code)]
 pub struct GdnSpeculativeRecurrenceCheckpoints<'a> {
     pub mixed_qkv: &'a Tensor,
     pub b: &'a Tensor,
@@ -1453,6 +1519,7 @@ pub struct GdnSpeculativeRecurrenceCheckpoints<'a> {
     pub head_v_dim: usize,
     pub tiled_v_heads: bool,
     pub state_layout: RecurrentStateLayout,
+    pub post_op: Option<GdnSpeculativeRmsNormGate<'a>>,
 }
 
 #[cfg(feature = "cuda")]
@@ -1485,6 +1552,7 @@ pub fn speculative_recurrence_checkpoints_cuda(
             head_v_dim,
             tiled_v_heads,
             state_layout,
+            post_op,
         } = context;
         let (batch_size, seq_len, conv_dim) = mixed_qkv.dims3()?;
         if batch_size == 0 || seq_len == 0 || num_k_heads == 0 || num_v_heads == 0 {
@@ -1545,8 +1613,8 @@ pub fn speculative_recurrence_checkpoints_cuda(
         if b.dtype() != mixed_qkv.dtype() || a.dtype() != mixed_qkv.dtype() {
             candle::bail!("GDN speculative recurrence activations must share one dtype");
         }
-        if state_pool.dtype() != DType::F32 {
-            candle::bail!("GDN speculative recurrence state must be f32");
+        if !recurrent_state_dtype_supported(state_pool.dtype()) {
+            candle::bail!("GDN speculative recurrence state has unsupported dtype");
         }
         for tensor in [b, a, a_log, dt_bias, state_pool, active_slots] {
             if !tensor.device().same_device(mixed_qkv.device()) {
@@ -1557,9 +1625,69 @@ pub fn speculative_recurrence_checkpoints_cuda(
             candle::bail!("GDN speculative recurrence state and slots must be contiguous");
         }
 
+        let fused_post_op = post_op.is_some();
+        let post_op = post_op
+            .map(|post_op| {
+                if state_layout != RecurrentStateLayout::GdnValueMajor
+                    || head_k_dim != GDN_DECODE_K_DIM
+                    || head_v_dim != GDN_DECODE_V_DIM
+                    || seq_len > GDN_SPEC_FUSED_MAX_TOKENS
+                {
+                    candle::bail!(
+                        "fused GDN speculative normalization requires value-major 128x128 state and at most 8 tokens"
+                    );
+                }
+                if post_op.gate.dtype() != mixed_qkv.dtype()
+                    || post_op.weight.dtype() != mixed_qkv.dtype()
+                {
+                    candle::bail!("fused GDN speculative normalization tensors must share the activation dtype");
+                }
+                if !post_op.gate.device().same_device(mixed_qkv.device())
+                    || !post_op.weight.device().same_device(mixed_qkv.device())
+                {
+                    candle::bail!("fused GDN speculative normalization tensors must share one device");
+                }
+                if post_op.weight.dims() != [head_v_dim] {
+                    candle::bail!("fused GDN speculative normalization weight must match the value head width");
+                }
+                if !post_op.eps.is_finite() || post_op.eps < 0.0 {
+                    candle::bail!("fused GDN speculative normalization epsilon must be finite and non-negative");
+                }
+                let (_storage, layout) = post_op.gate.storage_and_layout();
+                let strides = layout.stride();
+                let gate_strides = match post_op.gate.dims() {
+                    [gate_batch, gate_seq, gate_heads, gate_width]
+                        if (*gate_batch, *gate_seq, *gate_heads, *gate_width)
+                            == (batch_size, seq_len, num_v_heads, head_v_dim) =>
+                    {
+                        [strides[0], strides[1], strides[2], strides[3]]
+                    }
+                    [gate_batch, gate_seq, gate_width]
+                        if (*gate_batch, *gate_seq, *gate_width)
+                            == (batch_size, seq_len, num_v_heads * head_v_dim) =>
+                    {
+                        [strides[0], strides[1], head_v_dim * strides[2], strides[2]]
+                    }
+                    _ => candle::bail!(
+                        "fused GDN speculative normalization gate has incompatible shape {:?}",
+                        post_op.gate.dims()
+                    ),
+                };
+                Ok((post_op, gate_strides))
+            })
+            .transpose()?;
+
         let mixed_qkv = mixed_qkv.contiguous()?;
-        let b = b.contiguous()?;
-        let a = a.contiguous()?;
+        let b_strides = {
+            let (_storage, layout) = b.storage_and_layout();
+            let strides = layout.stride();
+            [strides[0] as i64, strides[1] as i64, strides[2] as i64]
+        };
+        let a_strides = {
+            let (_storage, layout) = a.storage_and_layout();
+            let strides = layout.stride();
+            [strides[0] as i64, strides[1] as i64, strides[2] as i64]
+        };
         let a_log = a_log.to_dtype(DType::F32)?.contiguous()?;
         let dt_bias = dt_bias.to_dtype(DType::F32)?.contiguous()?;
         let dev = mixed_qkv.device().as_cuda_device()?;
@@ -1584,8 +1712,26 @@ pub fn speculative_recurrence_checkpoints_cuda(
         let a_ptr = cuda_ptr!(a, T, "a") as *const c_void;
         let a_log_ptr = cuda_ptr!(a_log, f32, "a_log") as *const f32;
         let dt_bias_ptr = cuda_ptr!(dt_bias, f32, "dt_bias") as *const f32;
-        let state_ptr = cuda_ptr!(state_pool, f32, "state_pool") as *mut f32;
+        let (state_ptr, state_dtype) = cuda_recurrent_state_ptr(state_pool, "state_pool")?;
         let slots_ptr = cuda_ptr!(active_slots, u32, "active_slots") as *const u32;
+        let (gate_ptr, norm_weight, gate_strides, norm_eps) =
+            if let Some((post_op, gate_strides)) = post_op {
+                let gate_ptr = cuda_ptr!(post_op.gate, T, "gate") as *const c_void;
+                let norm_weight = post_op.weight.contiguous()?;
+                (
+                    gate_ptr,
+                    Some(norm_weight),
+                    gate_strides,
+                    post_op.eps as f32,
+                )
+            } else {
+                (std::ptr::null(), None, [0; 4], 0.0)
+            };
+        let norm_weight_ptr = if let Some(norm_weight) = norm_weight.as_ref() {
+            cuda_ptr!(norm_weight, T, "norm_weight") as *const c_void
+        } else {
+            std::ptr::null()
+        };
         let output = unsafe { dev.alloc::<T>(batch_size * num_v_heads * seq_len * head_v_dim) }?;
         let stream = dev.cuda_stream().cu_stream() as i64;
 
@@ -1599,6 +1745,18 @@ pub fn speculative_recurrence_checkpoints_cuda(
                 state_ptr,
                 output.device_ptr(output.stream()).0 as *mut c_void,
                 slots_ptr,
+                gate_ptr,
+                norm_weight_ptr,
+                b_strides[0],
+                b_strides[1],
+                b_strides[2],
+                a_strides[0],
+                a_strides[1],
+                a_strides[2],
+                gate_strides[0] as i64,
+                gate_strides[1] as i64,
+                gate_strides[2] as i64,
+                gate_strides[3] as i64,
                 batch_size as i32,
                 seq_len as i32,
                 num_k_heads as i32,
@@ -1608,15 +1766,26 @@ pub fn speculative_recurrence_checkpoints_cuda(
                 checkpoint_lanes as i32,
                 i32::from(tiled_v_heads),
                 i32::from(value_major),
+                norm_eps,
                 dtype_code,
+                state_dtype,
                 stream,
             );
         }
 
-        Ok(Tensor::from((
-            candle::Storage::Cuda(candle::CudaStorage::wrap_cuda_slice(output, dev.clone())),
-            (batch_size * num_v_heads, seq_len, head_v_dim),
-        )))
+        let output =
+            candle::Storage::Cuda(candle::CudaStorage::wrap_cuda_slice(output, dev.clone()));
+        if fused_post_op {
+            Ok(Tensor::from((
+                output,
+                (batch_size, seq_len, num_v_heads, head_v_dim),
+            )))
+        } else {
+            Ok(Tensor::from((
+                output,
+                (batch_size * num_v_heads, seq_len, head_v_dim),
+            )))
+        }
     }
 
     match context.mixed_qkv.dtype() {
@@ -2257,6 +2426,100 @@ mod tests {
         Ok(())
     }
 
+    fn run_low_dtype_sequential_recurrence_case(
+        dev: &Device,
+        state_dtype: DType,
+        kernel: RecurrenceKernel,
+        head_dim: usize,
+    ) -> Result<()> {
+        const BATCH_SIZE: usize = 2;
+        const NUM_HEADS: usize = 2;
+        const CAPACITY: usize = 4;
+        const SEQ_LEN: usize = 5;
+        const STEPS: usize = 3;
+
+        let bh = BATCH_SIZE * NUM_HEADS;
+        let q = tensor3(
+            patterned(bh * SEQ_LEN * head_dim, 8, 0.02, 0.0),
+            (bh, SEQ_LEN, head_dim),
+            dev,
+        )?;
+        let k = tensor3(
+            patterned(bh * SEQ_LEN * head_dim, 9, 0.02, 0.0),
+            (bh, SEQ_LEN, head_dim),
+            dev,
+        )?;
+        let v = tensor3(
+            patterned(bh * SEQ_LEN * head_dim, 10, 0.05, 0.0),
+            (bh, SEQ_LEN, head_dim),
+            dev,
+        )?;
+        let g = tensor2(patterned(bh * SEQ_LEN, 11, 0.03, -0.08), (bh, SEQ_LEN), dev)?;
+        let beta = tensor2(patterned(bh * SEQ_LEN, 12, 0.15, 0.5), (bh, SEQ_LEN), dev)?;
+        let state_shape = (CAPACITY, NUM_HEADS, head_dim, head_dim);
+        let initial = Tensor::from_vec(
+            patterned(CAPACITY * NUM_HEADS * head_dim * head_dim, 13, 0.01, 0.0),
+            state_shape,
+            dev,
+        )?
+        .to_dtype(state_dtype)?;
+        let mut low_state = initial.copy()?;
+        let mut reference_state = initial.to_dtype(DType::F32)?;
+        let slot_indices =
+            Tensor::from_vec(vec![CAPACITY as u32 - 1, GDN_PAD_SLOT], (BATCH_SIZE,), dev)?;
+        let slots = GdnStateSlots::Pooled(&slot_indices);
+        let inputs = RecurrenceInputs {
+            q: &q,
+            k: &k,
+            v: &v,
+            g: &g,
+            beta: &beta,
+        };
+
+        for step in 0..STEPS {
+            let low_output = launch_recurrence(kernel, inputs, &mut low_state, slots)?;
+            let reference_output = launch_recurrence(kernel, inputs, &mut reference_state, slots)?;
+            assert_close(
+                &format!("{kernel:?} {state_dtype:?} output step {step}"),
+                &flat(&low_output)?,
+                &flat(&reference_output)?,
+                3.0e-5,
+            );
+            reference_state = reference_state
+                .to_dtype(state_dtype)?
+                .to_dtype(DType::F32)?;
+            assert_close(
+                &format!("{kernel:?} {state_dtype:?} state step {step}"),
+                &flat(&low_state.to_dtype(DType::F32)?)?,
+                &flat(&reference_state)?,
+                0.0,
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    #[ignore = "requires a CUDA device"]
+    fn low_dtype_recurrence_matches_sequential_rounding_cuda() -> Result<()> {
+        let dev = Device::new_cuda(0)?;
+        for state_dtype in [DType::BF16, DType::F16] {
+            for kernel in [
+                RecurrenceKernel::Scalar,
+                RecurrenceKernel::Warp,
+                RecurrenceKernel::Chunked,
+            ] {
+                run_low_dtype_sequential_recurrence_case(&dev, state_dtype, kernel, 64)?;
+            }
+            run_low_dtype_sequential_recurrence_case(
+                &dev,
+                state_dtype,
+                RecurrenceKernel::ValueMajorWarp,
+                128,
+            )?;
+        }
+        Ok(())
+    }
+
     #[test]
     #[ignore = "requires a CUDA device"]
     fn value_major_warp_prefill_matches_scalar_with_shuffled_slots() -> Result<()> {
@@ -2467,7 +2730,7 @@ mod tests {
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn run_fused_decode_case(
+    fn run_fused_decode_state_case(
         dev: &Device,
         batch_size: usize,
         num_k_heads: usize,
@@ -2476,6 +2739,7 @@ mod tests {
         head_v_dim: usize,
         tiled_v_heads: bool,
         dtype: DType,
+        state_dtype: DType,
         pooled: bool,
         strided_gates: bool,
         requested_kernel: Option<GdnDecodeKernel>,
@@ -2528,7 +2792,8 @@ mod tests {
             ),
             (capacity, num_v_heads, head_k_dim, head_v_dim),
             dev,
-        )?;
+        )?
+        .to_dtype(state_dtype)?;
         let slots = if pooled {
             Some(Tensor::from_vec(
                 (0..batch_size)
@@ -2596,9 +2861,9 @@ mod tests {
         );
         assert_close(
             "fused decode state",
-            &flat(&fused_state)?,
-            &flat(&reference_state)?,
-            2.0e-5,
+            &flat(&fused_state.to_dtype(DType::F32)?)?,
+            &flat(&reference_state.to_dtype(DType::F32)?)?,
+            2.0e-3,
         );
 
         let fused_second = fused_decode_recurrence_cuda_impl(GdnDecodeLaunch {
@@ -2637,17 +2902,63 @@ mod tests {
         );
         assert_close(
             "fused decode second state",
-            &flat(&fused_state)?,
-            &flat(&reference_state)?,
-            4.0e-5,
+            &flat(&fused_state.to_dtype(DType::F32)?)?,
+            &flat(&reference_state.to_dtype(DType::F32)?)?,
+            2.0e-3,
         );
         Ok(())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn run_fused_decode_case(
+        dev: &Device,
+        batch_size: usize,
+        num_k_heads: usize,
+        num_v_heads: usize,
+        head_k_dim: usize,
+        head_v_dim: usize,
+        tiled_v_heads: bool,
+        dtype: DType,
+        pooled: bool,
+        strided_gates: bool,
+        requested_kernel: Option<GdnDecodeKernel>,
+    ) -> Result<()> {
+        run_fused_decode_state_case(
+            dev,
+            batch_size,
+            num_k_heads,
+            num_v_heads,
+            head_k_dim,
+            head_v_dim,
+            tiled_v_heads,
+            dtype,
+            DType::F32,
+            pooled,
+            strided_gates,
+            requested_kernel,
+        )
     }
 
     #[test]
     #[ignore = "requires a CUDA device"]
     fn fused_decode_recurrence_matches_decomposed_cuda() -> Result<()> {
         let dev = Device::new_cuda(0)?;
+        for state_dtype in [DType::BF16, DType::F16] {
+            run_fused_decode_state_case(
+                &dev,
+                3,
+                2,
+                4,
+                128,
+                128,
+                true,
+                DType::BF16,
+                state_dtype,
+                true,
+                true,
+                Some(GdnDecodeKernel::Baseline),
+            )?;
+        }
         run_fused_decode_case(
             &dev,
             1,
@@ -2695,6 +3006,7 @@ mod tests {
     fn run_speculative_state_commit_case(
         dev: &Device,
         state_layout: RecurrentStateLayout,
+        state_dtype: DType,
     ) -> Result<()> {
         let batch_size = 3;
         let seq_len = 4;
@@ -2774,7 +3086,8 @@ mod tests {
             patterned(batch_size * row_state_elements, 117, 0.02, 0.0),
             state_shape,
             dev,
-        )?;
+        )?
+        .to_dtype(state_dtype)?;
         let conv_state_pool = Tensor::from_vec(
             patterned(capacity * row_conv_elements, 118, 0.04, 0.0),
             (capacity, conv_dim, kernel_size),
@@ -2785,9 +3098,10 @@ mod tests {
             patterned(capacity * row_state_elements, 119, 0.02, 0.0),
             pool_shape,
             dev,
-        )?;
+        )?
+        .to_dtype(state_dtype)?;
         let mut expected_conv = flat(&conv_state_pool.to_dtype(DType::F32)?)?;
-        let mut expected_recurrent = flat(&recurrent_state_pool)?;
+        let mut expected_recurrent = flat(&recurrent_state_pool.to_dtype(DType::F32)?)?;
 
         for batch_idx in 0..batch_size {
             let rows = keep_rows_host[batch_idx] as usize;
@@ -2843,7 +3157,7 @@ mod tests {
             } else {
                 gated_delta_rule_recurrence_cuda(inputs, &mut state, GdnStateSlots::Gathered)?;
             }
-            let state = flat(&state)?;
+            let state = flat(&state.to_dtype(DType::F32)?)?;
             let state_destination = slots_host[batch_idx] as usize * row_state_elements;
             expected_recurrent[state_destination..state_destination + row_state_elements]
                 .copy_from_slice(&state);
@@ -2877,9 +3191,9 @@ mod tests {
         );
         assert_close(
             "speculative recurrent state",
-            &flat(&recurrent_state_pool)?,
+            &flat(&recurrent_state_pool.to_dtype(DType::F32)?)?,
             &expected_recurrent,
-            2.0e-5,
+            2.0e-4,
         );
         Ok(())
     }
@@ -2888,19 +3202,30 @@ mod tests {
     #[ignore = "requires a CUDA device"]
     fn speculative_state_commit_matches_prefix_replay_cuda() -> Result<()> {
         let dev = Device::new_cuda(0)?;
-        run_speculative_state_commit_case(&dev, RecurrentStateLayout::GdnKeyMajor)?;
-        run_speculative_state_commit_case(&dev, RecurrentStateLayout::GdnValueMajor)
+        for state_dtype in [DType::F32, DType::BF16, DType::F16] {
+            run_speculative_state_commit_case(
+                &dev,
+                RecurrentStateLayout::GdnKeyMajor,
+                state_dtype,
+            )?;
+            run_speculative_state_commit_case(
+                &dev,
+                RecurrentStateLayout::GdnValueMajor,
+                state_dtype,
+            )?;
+        }
+        Ok(())
     }
 
     #[test]
     #[ignore = "requires an SM90 CUDA device"]
     fn speculative_checkpoint_kernels_match_serial_cuda() -> Result<()> {
         let dev = Device::new_cuda(0)?;
-        let batch_size = 2;
-        let seq_len = 4;
-        let checkpoint_lanes = 4;
+        let batch_size = 3;
+        let seq_len = 8;
+        let checkpoint_lanes = 8;
         let capacity = batch_size * checkpoint_lanes;
-        let active_slots_host = vec![3u32, 6];
+        let active_slots_host = vec![7u32, 14, GDN_PAD_SLOT];
         let active_slots = Tensor::from_vec(active_slots_host.clone(), (batch_size,), &dev)?;
 
         let conv_dim = 37;
@@ -2926,6 +3251,14 @@ mod tests {
         let mut expected_conv_pool = flat(&conv_pool.to_dtype(DType::F32)?)?;
         let mut expected_conv_outputs = Vec::with_capacity(batch_size);
         for (batch_idx, &active_slot) in active_slots_host.iter().enumerate() {
+            if active_slot == GDN_PAD_SLOT {
+                expected_conv_outputs.push(Tensor::zeros(
+                    (1, seq_len, conv_dim),
+                    DType::BF16,
+                    &dev,
+                )?);
+                continue;
+            }
             let input = x.narrow(0, batch_idx, 1)?;
             let initial = conv_pool.narrow(0, active_slot as usize, 1)?.copy()?;
             let (output, _) = causal_conv1d_cuda(
@@ -2987,18 +3320,22 @@ mod tests {
             &dev,
         )?
         .to_dtype(DType::BF16)?;
+        let b_storage_width = num_v_heads + 3;
         let b = tensor3(
-            patterned(batch_size * seq_len * num_v_heads, 134, 0.2, 0.1),
-            (batch_size, seq_len, num_v_heads),
+            patterned(batch_size * seq_len * b_storage_width, 134, 0.2, 0.1),
+            (batch_size, seq_len, b_storage_width),
             &dev,
         )?
-        .to_dtype(DType::BF16)?;
+        .to_dtype(DType::BF16)?
+        .narrow(2, 2, num_v_heads)?;
+        let a_storage_width = num_v_heads + 5;
         let a = tensor3(
-            patterned(batch_size * seq_len * num_v_heads, 135, 0.18, -0.04),
-            (batch_size, seq_len, num_v_heads),
+            patterned(batch_size * seq_len * a_storage_width, 135, 0.18, -0.04),
+            (batch_size, seq_len, a_storage_width),
             &dev,
         )?
-        .to_dtype(DType::BF16)?;
+        .to_dtype(DType::BF16)?
+        .narrow(2, 3, num_v_heads)?;
         let a_log = Tensor::from_vec(
             patterned(num_v_heads, 136, 0.05, -0.2),
             (num_v_heads,),
@@ -3006,90 +3343,199 @@ mod tests {
         )?;
         let dt_bias =
             Tensor::from_vec(patterned(num_v_heads, 137, 0.1, 0.3), (num_v_heads,), &dev)?;
-        let state_elements = num_v_heads * head_v_dim * head_k_dim;
-        let recurrent_pool = Tensor::from_vec(
-            patterned(capacity * state_elements, 138, 0.02, 0.0),
-            (capacity, num_v_heads, head_v_dim, head_k_dim),
+        let norm_eps = 1.0e-6;
+        let norm_weight =
+            Tensor::from_vec(patterned(head_v_dim, 139, 0.1, 1.0), (head_v_dim,), &dev)?
+                .to_dtype(DType::BF16)?;
+        let gate = Tensor::from_vec(
+            patterned(
+                batch_size * seq_len * num_v_heads * head_v_dim,
+                140,
+                0.2,
+                0.0,
+            ),
+            (batch_size, seq_len, num_v_heads, head_v_dim),
             &dev,
-        )?;
-        let mut expected_recurrent_pool = flat(&recurrent_pool)?;
-        let mut expected_recurrent_outputs = Vec::with_capacity(batch_size);
-        for (batch_idx, &active_slot) in active_slots_host.iter().enumerate() {
-            let mixed_row = mixed_qkv.narrow(0, batch_idx, 1)?;
-            let b_row = b.narrow(0, batch_idx, 1)?;
-            let a_row = a.narrow(0, batch_idx, 1)?;
-            let (q, k, v, g, beta) = prepare_recurrence_inputs_cuda(
-                &mixed_row,
-                &b_row,
-                &a_row,
-                &a_log,
-                &dt_bias,
-                1,
-                seq_len,
-                num_k_heads,
-                num_v_heads,
-                head_k_dim,
-                head_v_dim,
-                true,
-            )?;
-            let mut state = recurrent_pool.narrow(0, active_slot as usize, 1)?.copy()?;
-            let base_slot = active_slot as usize / checkpoint_lanes * checkpoint_lanes;
-            let mut row_outputs = Vec::with_capacity(seq_len);
-            for position in 0..seq_len {
-                let q = q.narrow(1, position, 1)?.contiguous()?;
-                let k = k.narrow(1, position, 1)?.contiguous()?;
-                let v = v.narrow(1, position, 1)?.contiguous()?;
-                let g = g.narrow(1, position, 1)?.contiguous()?;
-                let beta = beta.narrow(1, position, 1)?.contiguous()?;
-                let output = vmajor_warp_gated_delta_rule_recurrence_cuda(
-                    RecurrenceInputs {
+        )?
+        .to_dtype(DType::BF16)?;
+        let state_elements = num_v_heads * head_v_dim * head_k_dim;
+        for state_layout in [
+            RecurrentStateLayout::GdnKeyMajor,
+            RecurrentStateLayout::GdnValueMajor,
+        ] {
+            for state_dtype in [DType::F32, DType::BF16, DType::F16] {
+                let recurrent_pool = Tensor::from_vec(
+                    patterned(capacity * state_elements, 138, 0.02, 0.0),
+                    (capacity, num_v_heads, head_v_dim, head_k_dim),
+                    &dev,
+                )?
+                .to_dtype(state_dtype)?;
+                let mut expected_recurrent_pool = flat(&recurrent_pool.to_dtype(DType::F32)?)?;
+                let mut expected_recurrent_outputs = Vec::with_capacity(batch_size);
+                for (batch_idx, &active_slot) in active_slots_host.iter().enumerate() {
+                    if active_slot == GDN_PAD_SLOT {
+                        expected_recurrent_outputs.push(Tensor::zeros(
+                            (num_v_heads, seq_len, head_v_dim),
+                            DType::F32,
+                            &dev,
+                        )?);
+                        continue;
+                    }
+                    let mixed_row = mixed_qkv.narrow(0, batch_idx, 1)?;
+                    let b_row = b.narrow(0, batch_idx, 1)?;
+                    let a_row = a.narrow(0, batch_idx, 1)?;
+                    let (q, k, v, g, beta) = prepare_recurrence_inputs_cuda(
+                        &mixed_row,
+                        &b_row,
+                        &a_row,
+                        &a_log,
+                        &dt_bias,
+                        1,
+                        seq_len,
+                        num_k_heads,
+                        num_v_heads,
+                        head_k_dim,
+                        head_v_dim,
+                        true,
+                    )?;
+                    let initial = recurrent_pool.narrow(0, active_slot as usize, 1)?.copy()?;
+                    let mut final_state = initial.copy()?;
+                    let inputs = RecurrenceInputs {
                         q: &q,
                         k: &k,
                         v: &v,
                         g: &g,
                         beta: &beta,
-                    },
-                    &mut state,
-                    GdnStateSlots::Gathered,
-                )?;
-                row_outputs.push(output);
-                let state = flat(&state)?;
-                let destination = (base_slot + position) * state_elements;
-                expected_recurrent_pool[destination..destination + state.len()]
-                    .copy_from_slice(&state);
+                    };
+                    let output = if state_layout == RecurrentStateLayout::GdnValueMajor {
+                        vmajor_warp_gated_delta_rule_recurrence_cuda(
+                            inputs,
+                            &mut final_state,
+                            GdnStateSlots::Gathered,
+                        )?
+                    } else {
+                        gated_delta_rule_recurrence_cuda(
+                            inputs,
+                            &mut final_state,
+                            GdnStateSlots::Gathered,
+                        )?
+                    };
+                    expected_recurrent_outputs.push(output);
+
+                    let base_slot = active_slot as usize / checkpoint_lanes * checkpoint_lanes;
+                    for position in 0..seq_len {
+                        let prefix_len = position + 1;
+                        let q_prefix = q.narrow(1, 0, prefix_len)?.contiguous()?;
+                        let k_prefix = k.narrow(1, 0, prefix_len)?.contiguous()?;
+                        let v_prefix = v.narrow(1, 0, prefix_len)?.contiguous()?;
+                        let g_prefix = g.narrow(1, 0, prefix_len)?.contiguous()?;
+                        let beta_prefix = beta.narrow(1, 0, prefix_len)?.contiguous()?;
+                        let mut checkpoint_state = initial.copy()?;
+                        let prefix_inputs = RecurrenceInputs {
+                            q: &q_prefix,
+                            k: &k_prefix,
+                            v: &v_prefix,
+                            g: &g_prefix,
+                            beta: &beta_prefix,
+                        };
+                        if state_layout == RecurrentStateLayout::GdnValueMajor {
+                            vmajor_warp_gated_delta_rule_recurrence_cuda(
+                                prefix_inputs,
+                                &mut checkpoint_state,
+                                GdnStateSlots::Gathered,
+                            )?;
+                        } else {
+                            gated_delta_rule_recurrence_cuda(
+                                prefix_inputs,
+                                &mut checkpoint_state,
+                                GdnStateSlots::Gathered,
+                            )?;
+                        }
+                        let checkpoint_state = flat(&checkpoint_state.to_dtype(DType::F32)?)?;
+                        let destination = (base_slot + position) * state_elements;
+                        expected_recurrent_pool[destination..destination + checkpoint_state.len()]
+                            .copy_from_slice(&checkpoint_state);
+                    }
+                }
+                let expected_recurrent_output = Tensor::cat(&expected_recurrent_outputs, 0)?;
+                let fused_pool = recurrent_pool.copy()?;
+                let actual_recurrent_output =
+                    speculative_recurrence_checkpoints_cuda(GdnSpeculativeRecurrenceCheckpoints {
+                        mixed_qkv: &mixed_qkv,
+                        b: &b,
+                        a: &a,
+                        a_log: &a_log,
+                        dt_bias: &dt_bias,
+                        state_pool: &recurrent_pool,
+                        active_slots: &active_slots,
+                        checkpoint_lanes,
+                        num_k_heads,
+                        num_v_heads,
+                        head_k_dim,
+                        head_v_dim,
+                        tiled_v_heads: true,
+                        state_layout,
+                        post_op: None,
+                    })?;
+                let label = format!("{state_layout:?} {state_dtype:?}");
+                assert_close(
+                    &format!("{label} speculative checkpoint recurrence output"),
+                    &flat(&actual_recurrent_output.to_dtype(DType::F32)?)?,
+                    &flat(&expected_recurrent_output)?,
+                    3.0e-3,
+                );
+                assert_close(
+                    &format!("{label} speculative checkpoint recurrence state"),
+                    &flat(&recurrent_pool.to_dtype(DType::F32)?)?,
+                    &expected_recurrent_pool,
+                    2.0e-3,
+                );
+                if state_layout == RecurrentStateLayout::GdnValueMajor {
+                    let expected_normalized = expected_recurrent_output
+                        .reshape((batch_size, num_v_heads, seq_len, head_v_dim))?
+                        .transpose(1, 2)?
+                        .to_dtype(DType::BF16)?;
+                    let expected_normalized =
+                        rmsnorm_gated_cuda(&expected_normalized, &gate, &norm_weight, norm_eps)?;
+                    let actual_normalized = speculative_recurrence_checkpoints_cuda(
+                        GdnSpeculativeRecurrenceCheckpoints {
+                            mixed_qkv: &mixed_qkv,
+                            b: &b,
+                            a: &a,
+                            a_log: &a_log,
+                            dt_bias: &dt_bias,
+                            state_pool: &fused_pool,
+                            active_slots: &active_slots,
+                            checkpoint_lanes,
+                            num_k_heads,
+                            num_v_heads,
+                            head_k_dim,
+                            head_v_dim,
+                            tiled_v_heads: true,
+                            state_layout,
+                            post_op: Some(GdnSpeculativeRmsNormGate {
+                                gate: &gate,
+                                weight: &norm_weight,
+                                eps: norm_eps,
+                            }),
+                        },
+                    )?;
+                    assert_close(
+                        &format!("{label} fused speculative normalization state"),
+                        &flat(&fused_pool.to_dtype(DType::F32)?)?,
+                        &expected_recurrent_pool,
+                        2.0e-3,
+                    );
+                    assert_close(
+                        &format!("{label} fused speculative normalization output"),
+                        &flat(&actual_normalized.to_dtype(DType::F32)?)?,
+                        &flat(&expected_normalized.to_dtype(DType::F32)?)?,
+                        3.0e-2,
+                    );
+                }
             }
-            expected_recurrent_outputs.push(Tensor::cat(&row_outputs, 1)?);
         }
-        let expected_recurrent_output = Tensor::cat(&expected_recurrent_outputs, 0)?;
-        let actual_recurrent_output =
-            speculative_recurrence_checkpoints_cuda(GdnSpeculativeRecurrenceCheckpoints {
-                mixed_qkv: &mixed_qkv,
-                b: &b,
-                a: &a,
-                a_log: &a_log,
-                dt_bias: &dt_bias,
-                state_pool: &recurrent_pool,
-                active_slots: &active_slots,
-                checkpoint_lanes,
-                num_k_heads,
-                num_v_heads,
-                head_k_dim,
-                head_v_dim,
-                tiled_v_heads: true,
-                state_layout: RecurrentStateLayout::GdnValueMajor,
-            })?;
-        assert_close(
-            "speculative checkpoint recurrence output",
-            &flat(&actual_recurrent_output.to_dtype(DType::F32)?)?,
-            &flat(&expected_recurrent_output)?,
-            3.0e-3,
-        );
-        assert_close(
-            "speculative checkpoint recurrence state",
-            &flat(&recurrent_pool)?,
-            &expected_recurrent_pool,
-            2.0e-4,
-        );
+
         Ok(())
     }
 

@@ -106,7 +106,9 @@ pub(crate) fn observe_response(handle: &Option<StreamOutcomeHandle>, response: &
 pub(crate) fn openai_error_event(error: ApiError) -> axum::response::sse::Event {
     let error_type = match error.kind {
         ApiErrorKind::RateLimited => "rate_limit_error",
-        ApiErrorKind::Unavailable | ApiErrorKind::Internal => "server_error",
+        ApiErrorKind::Unavailable | ApiErrorKind::Overloaded | ApiErrorKind::Internal => {
+            "server_error"
+        }
         _ => "invalid_request_error",
     };
     let payload = serde_json::json!({

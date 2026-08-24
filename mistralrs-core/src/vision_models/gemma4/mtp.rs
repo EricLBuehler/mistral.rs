@@ -286,12 +286,13 @@ fn sample_draft_tokens(
     let mut tokens = Vec::with_capacity(batch);
     for (row, seq) in sequences.iter().enumerate() {
         let row_logits = logits.get(row)?.squeeze(0)?.to_dtype(DType::F32)?;
+        let sequence_rng = seq.sampling_rng(rng);
         let sampled = seq.sampler().sample(
             row_logits,
             &contexts[row],
             seq.prompt_tokens(),
             false,
-            rng.clone(),
+            sequence_rng,
             false,
             batch > 1,
         )?;

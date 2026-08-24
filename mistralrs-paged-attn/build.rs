@@ -179,7 +179,6 @@ fn main() -> Result<()> {
             .arg("-DCUTLASS_DEBUG_TRACE_LEVEL=0")
             .arg("-DNDEBUG")
             .arg("-DFLASHATTENTION_DISABLE_BACKWARD")
-            .arg("-DFLASHATTENTION_DISABLE_CAUSAL")
             .arg("-DFLASHATTENTION_DISABLE_CLUSTER")
             .arg("-DFLASHATTENTION_DISABLE_SM8x")
             .arg("-DFLASHATTENTION_DISABLE_LOCAL")

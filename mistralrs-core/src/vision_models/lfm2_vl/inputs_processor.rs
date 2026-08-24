@@ -14,7 +14,8 @@ use crate::{
         text_models_inputs_processor::{
             self, get_completion_input, get_prompt_input, PagedAttentionMeta,
         },
-        InputProcessorOutput, InputsProcessor, InputsProcessorType, MessagesAction, Processor,
+        InputProcessorOutput, InputsProcessor, InputsProcessorType, InputsProcessorValidationError,
+        MessagesAction, Processor,
     },
     sequence::{build_mm_features_from_ranges, find_image_delimited_ranges, Sequence},
     vision_models::{
@@ -436,10 +437,11 @@ impl Lfm2VlImageProcessor {
         }
         let placeholder_count = prompt.matches(IMAGE_TOKEN).count();
         if placeholder_count != rows.len() {
-            anyhow::bail!(
+            return Err(InputsProcessorValidationError(format!(
                 "The number of `<image>` tokens ({placeholder_count}) must match the number of images ({})",
                 rows.len()
-            );
+            ))
+            .into());
         }
         let mut result = String::new();
         let mut splits = prompt.split(IMAGE_TOKEN);
@@ -888,6 +890,12 @@ mod tests {
             .expand_prompt(IMAGE_TOKEN, &[1], &[], &[(28, 28)])
             .unwrap_err();
         assert!(error.to_string().contains("image metadata"));
+        assert!(!error.is::<InputsProcessorValidationError>());
+
+        let error = processor()
+            .expand_prompt("", &[1], &[1], &[(28, 28)])
+            .unwrap_err();
+        assert!(error.is::<InputsProcessorValidationError>());
     }
 
     #[test]

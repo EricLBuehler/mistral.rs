@@ -7202,10 +7202,10 @@ impl DeviceMappedModelLoader for Qwen3_5Loader {
             kv_cache_layout: crate::paged_attention::KvCacheLayout::Standard,
         };
 
-        Ok(Box::new(HybridPagedKvCacheConfig::new(
-            base,
-            cfg.paged_kv_layers(mtp),
-        )))
+        Ok(Box::new(
+            HybridPagedKvCacheConfig::new(base, cfg.paged_kv_layers(mtp))
+                .with_uniform_prefix_prefill_attention_features(Default::default()),
+        ))
     }
 
     fn non_mapped_sub_models(&self) -> Option<Vec<NonMappedSubModel>> {
@@ -7671,7 +7671,10 @@ impl DeviceMappedModelLoader for Qwen3_5MoeLoader {
             })
             .collect();
 
-        Ok(Box::new(HybridPagedKvCacheConfig::new(base, paged_layers)))
+        Ok(Box::new(
+            HybridPagedKvCacheConfig::new(base, paged_layers)
+                .with_uniform_prefix_prefill_attention_features(Default::default()),
+        ))
     }
 
     fn non_mapped_sub_models(&self) -> Option<Vec<NonMappedSubModel>> {

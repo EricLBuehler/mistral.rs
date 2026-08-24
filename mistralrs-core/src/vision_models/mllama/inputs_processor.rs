@@ -22,7 +22,8 @@ use crate::{
         text_models_inputs_processor::{
             self, get_completion_input, get_prompt_input, PagedAttentionMeta,
         },
-        InputProcessorOutput, InputsProcessor, InputsProcessorType, MessagesAction, Processor,
+        InputProcessorOutput, InputsProcessor, InputsProcessorType, InputsProcessorValidationError,
+        MessagesAction, Processor,
     },
     sequence::{build_mm_features_from_ranges, find_image_placeholder_ranges, Sequence},
     vision_models::{
@@ -298,11 +299,12 @@ impl InputsProcessor for MLlamaImageProcessor {
                         img_tok_id,
                     );
                     if ranges.len() != hashes.len() {
-                        anyhow::bail!(
+                        return Err(InputsProcessorValidationError(format!(
                             "Mllama prompt contains {} image tokens but has {} images",
                             ranges.len(),
                             hashes.len()
-                        );
+                        ))
+                        .into());
                     }
                     seq.set_mm_features(build_mm_features_from_ranges(
                         &ranges,

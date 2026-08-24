@@ -1,6 +1,6 @@
 use mistralrs_quant::QuantizedConfig;
 
-use crate::gdn::GdnVHeadLayout;
+use crate::gdn::{GdnStateDType, GdnVHeadLayout};
 use crate::layers::Activation;
 use crate::serde_default_fn;
 
@@ -63,6 +63,8 @@ pub struct TextConfig {
     pub linear_value_head_dim: usize,
     pub linear_num_key_heads: usize,
     pub linear_num_value_heads: usize,
+    #[serde(default)]
+    pub mamba_ssm_dtype: GdnStateDType,
     // Other
     #[serde(default = "default_mlp_only_layers")]
     pub mlp_only_layers: Vec<usize>,
