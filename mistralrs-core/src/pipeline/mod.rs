@@ -2342,7 +2342,6 @@ pub trait Pipeline:
                             )?;
                         }
                         for (seq_idx, end) in computed_updates {
-                            input_seqs[seq_idx].set_prefix_cache_len(end);
                             input_seqs[seq_idx].set_num_computed_tokens(end);
                         }
                         let end = Instant::now();

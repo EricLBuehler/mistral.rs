@@ -3402,8 +3402,8 @@ mod tests {
 
         {
             let mut seq = get_mut_arcmutex!(seq);
-            seq.set_prefix_cache_len(first_chunk.end);
             seq.set_num_computed_tokens(first_chunk.end);
+            assert_eq!(seq.prefix_cache_len(), 0);
         }
         let second = scheduler.schedule(&logger, None);
         let second_chunk = second.scheduled_prompt_chunks.unwrap()[0];
@@ -3481,8 +3481,8 @@ mod tests {
         let chunk_end = output.scheduled_prompt_chunks.unwrap()[0].end;
         {
             let mut seq = get_mut_arcmutex!(seq);
-            seq.set_prefix_cache_len(chunk_end);
             seq.set_num_computed_tokens(chunk_end);
+            assert_eq!(seq.prefix_cache_len(), 0);
         }
         assert_eq!(
             get_mut_arcmutex!(scheduler.kv_cache_manager).num_reserved_blocks(),
@@ -3516,7 +3516,7 @@ mod tests {
 
         let seq = test_sequence(0, tokens.len());
         get_mut_arcmutex!(seq).set_state(SequenceState::Waiting);
-        scheduler.waiting.push_back(seq);
+        scheduler.waiting.push_back(seq.clone());
         let logger = IntervalLogger::new(std::time::Duration::from_secs(3600), None);
         let mut validator = RecordingPrefixValidator::default();
         let committed_ids = Arc::clone(&validator.committed_ids);
@@ -3532,6 +3532,18 @@ mod tests {
         assert_eq!(kv_mgr.num_blocks_for_request(0), 2);
         assert_eq!(kv_mgr.num_reserved_blocks(), 1);
         assert_eq!(kv_mgr.num_cached_blocks(0), 1);
+        drop(kv_mgr);
+
+        {
+            let mut seq = get_mut_arcmutex!(seq);
+            seq.set_num_computed_tokens(chunk.end);
+            assert_eq!(seq.prefix_cache_len(), 8);
+        }
+        let output = scheduler.schedule(&logger, Some(&mut validator));
+        assert_eq!(output.num_cached_tokens, vec![8]);
+        let chunk = output.scheduled_prompt_chunks.unwrap()[0];
+        assert_eq!((chunk.start, chunk.end), (12, 16));
+        assert_eq!(get_mut_arcmutex!(seq).prefix_cache_len(), 8);
     }
 
     #[test]
@@ -3589,8 +3601,8 @@ mod tests {
             assert_eq!((chunks[0].start, chunks[0].end), expected);
             assert_eq!(chunks[0].end - chunks[0].start, expected.1 - expected.0);
             let mut seq = get_mut_arcmutex!(seq);
-            seq.set_prefix_cache_len(chunks[0].end);
             seq.set_num_computed_tokens(chunks[0].end);
+            assert_eq!(seq.prefix_cache_len(), 0);
         }
     }
 
@@ -3611,8 +3623,8 @@ mod tests {
             assert_eq!(output.scheduled.len(), 1);
             assert_eq!((chunks[0].start, chunks[0].end), expected);
             let mut seq = get_mut_arcmutex!(seq);
-            seq.set_prefix_cache_len(chunks[0].end);
             seq.set_num_computed_tokens(chunks[0].end);
+            assert_eq!(seq.prefix_cache_len(), 0);
         }
     }
 
@@ -3635,8 +3647,8 @@ mod tests {
             assert_eq!(output.scheduled.len(), 1);
             assert_eq!((chunks[0].start, chunks[0].end), expected);
             let mut seq = get_mut_arcmutex!(seq);
-            seq.set_prefix_cache_len(chunks[0].end);
             seq.set_num_computed_tokens(chunks[0].end);
+            assert_eq!(seq.prefix_cache_len(), 0);
         }
     }
 

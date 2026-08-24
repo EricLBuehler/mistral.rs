@@ -3253,13 +3253,30 @@ mod tests {
     #[test]
     fn usage_omits_prompt_details_without_prefix_cache() {
         let seq = make_test_sequence();
-        let seq = seq.prefill_v2_normal(vec![], vec![7, 8], 0);
+        let mut seq = seq.prefill_v2_normal(vec![], vec![7, 8], 0);
+        seq.set_num_computed_tokens(seq.len());
         seq.update_time_info();
         assert!(seq
             .get_mut_group()
             .get_usage()
             .prompt_tokens_details
             .is_none());
+    }
+
+    #[test]
+    fn usage_does_not_treat_prefill_progress_as_cached_tokens() {
+        let seq = make_test_sequence();
+        let mut seq = seq.prefill_v2_normal(vec![], vec![1, 2, 3, 4, 5, 6, 7, 8], 4);
+        seq.set_num_computed_tokens(seq.len());
+        seq.update_time_info();
+
+        let usage = seq.get_mut_group().get_usage();
+        assert_eq!(
+            usage
+                .prompt_tokens_details
+                .map(|details| details.cached_tokens),
+            Some(4)
+        );
     }
 
     #[test]

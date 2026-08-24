@@ -87,6 +87,10 @@ impl KVCacheManager {
 
     /// Get a mutable reference to the block pool.
     pub fn block_pool_mut(&mut self) -> &mut BlockPool {
+        assert_eq!(
+            self.total_reserved_blocks, 0,
+            "cannot mutate the block pool while prompt reservations are active"
+        );
         &mut self.block_pool
     }
 
@@ -646,6 +650,14 @@ mod tests {
         mgr.free(1);
         assert!(mgr.reset_prefix_cache());
         assert_eq!(mgr.num_reserved_blocks(), 0);
+    }
+
+    #[test]
+    #[should_panic(expected = "cannot mutate the block pool while prompt reservations are active")]
+    fn mutable_block_pool_refuses_active_prompt_reservation() {
+        let mut mgr = KVCacheManager::new(8, 4, true, vec![0]);
+        mgr.reserve_prompt(1, 20, &[]).unwrap();
+        let _ = mgr.block_pool_mut();
     }
 
     #[test]

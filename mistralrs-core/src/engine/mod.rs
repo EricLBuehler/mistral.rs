@@ -310,6 +310,7 @@ impl HybridPagedPrefixValidator {
         sequence_id: usize,
         slot_idx: usize,
         record_auxiliary_miss: bool,
+        validation_reason: &'static str,
     ) -> PagedPrefixCacheValidation {
         let pipeline = Arc::clone(&self.pipeline);
         PagedPrefixCacheValidation::staged(0, move |seq| {
@@ -322,6 +323,7 @@ impl HybridPagedPrefixValidator {
             if record_auxiliary_miss {
                 metrics::counter!("mistralrs_speculative_prefix_cache_misses_total").increment(1);
             }
+            record_paged_recurrent_prefix_validation("miss", validation_reason);
             Ok(())
         })
     }
@@ -384,8 +386,10 @@ impl PagedPrefixCacheValidator for HybridPagedPrefixValidator {
         block_size: usize,
     ) -> candle_core::Result<PagedPrefixCacheValidation> {
         let Some(slot_idx) = seq.recurrent_state_idx() else {
-            record_paged_recurrent_prefix_validation("miss", "missing_slot");
-            return Ok(PagedPrefixCacheValidation::ready(0));
+            return Ok(PagedPrefixCacheValidation::staged(0, |_| {
+                record_paged_recurrent_prefix_validation("miss", "missing_slot");
+                Ok(())
+            }));
         };
         let sequence_id = *seq.id();
 
@@ -443,34 +447,48 @@ impl PagedPrefixCacheValidator for HybridPagedPrefixValidator {
             replay,
             seq.mm_features(),
         ) else {
-            record_paged_recurrent_prefix_validation("miss", "no_replay_boundary");
-            return Ok(self.stage_recurrent_reset(sequence_id, slot_idx, record_auxiliary_miss));
+            return Ok(self.stage_recurrent_reset(
+                sequence_id,
+                slot_idx,
+                record_auxiliary_miss,
+                "no_replay_boundary",
+            ));
         };
 
         if !cached_tokens.is_multiple_of(block_size) {
-            record_paged_recurrent_prefix_validation("miss", "unaligned_boundary");
-            return Ok(self.stage_recurrent_reset(sequence_id, slot_idx, record_auxiliary_miss));
+            return Ok(self.stage_recurrent_reset(
+                sequence_id,
+                slot_idx,
+                record_auxiliary_miss,
+                "unaligned_boundary",
+            ));
         }
 
         let max_blocks = cached_tokens / block_size;
         let Some((n_blocks, checkpoint)) = get_mut_arcmutex!(self.prefix_cacher)
             .peek_longest_paged_recurrent_prefix(block_hashes, max_blocks)
         else {
-            record_paged_recurrent_prefix_validation("miss", "checkpoint_unavailable");
-            return Ok(self.stage_recurrent_reset(sequence_id, slot_idx, record_auxiliary_miss));
+            return Ok(self.stage_recurrent_reset(
+                sequence_id,
+                slot_idx,
+                record_auxiliary_miss,
+                "checkpoint_unavailable",
+            ));
         };
 
         let pipeline = get_mut_arcmutex!(self.pipeline);
         if !pipeline.cache().is_hybrid() {
-            record_paged_recurrent_prefix_validation("hit", "attention_only");
-            if record_auxiliary_miss {
-                return Ok(PagedPrefixCacheValidation::staged(cached_tokens, |_| {
-                    metrics::counter!("mistralrs_speculative_prefix_cache_misses_total")
-                        .increment(1);
+            return Ok(PagedPrefixCacheValidation::staged(
+                cached_tokens,
+                move |_| {
+                    record_paged_recurrent_prefix_validation("hit", "attention_only");
+                    if record_auxiliary_miss {
+                        metrics::counter!("mistralrs_speculative_prefix_cache_misses_total")
+                            .increment(1);
+                    }
                     Ok(())
-                }));
-            }
-            return Ok(PagedPrefixCacheValidation::ready(cached_tokens));
+                },
+            ));
         }
         drop(pipeline);
         Ok(self.stage_recurrent_restore(HybridPrefixRestore {
