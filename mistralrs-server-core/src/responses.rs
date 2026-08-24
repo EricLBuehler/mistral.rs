@@ -55,7 +55,7 @@ use crate::{
         enums::{ItemStatus, ResponseStatus},
         events::StreamingState,
         items::{InputItem, MessageContentParam, OutputItem, ShellCallOutputPart},
-        resource::{ResponseError, ResponseResource, ResponseUsage},
+        resource::{InputTokensDetails, ResponseError, ResponseResource, ResponseUsage},
     },
     skills::SkillStore,
     streaming::{get_keep_alive_interval, observe_response, DoneState, StreamOutcomeHandle},
@@ -1481,10 +1481,17 @@ impl futures::Stream for OpenResponsesStreamer {
 
                             // Add usage from chunk if available
                             if let Some(usage) = &chat_chunk.usage {
-                                response.usage = Some(ResponseUsage::new(
+                                let mut resp_usage = ResponseUsage::new(
                                     usage.prompt_tokens,
                                     usage.completion_tokens,
-                                ));
+                                );
+                                if let Some(details) = &usage.prompt_tokens_details {
+                                    resp_usage.input_tokens_details = Some(InputTokensDetails {
+                                        cached_tokens: Some(details.cached_tokens),
+                                        ..Default::default()
+                                    });
+                                }
+                                response.usage = Some(resp_usage);
                             }
 
                             events_to_emit.push(OpenResponsesStreamEvent::ResponseCompleted {
@@ -1791,10 +1798,17 @@ fn chat_response_to_response_resource(
     } else {
         Some(reasoning_parts.join(""))
     };
-    resource.usage = Some(ResponseUsage::new(
+    let mut resp_usage = ResponseUsage::new(
         chat_resp.usage.prompt_tokens,
         chat_resp.usage.completion_tokens,
-    ));
+    );
+    if let Some(details) = &chat_resp.usage.prompt_tokens_details {
+        resp_usage.input_tokens_details = Some(InputTokensDetails {
+            cached_tokens: Some(details.cached_tokens),
+            ..Default::default()
+        });
+    }
+    resource.usage = Some(resp_usage);
     resource.metadata = metadata;
     resource.completed_at = Some(
         SystemTime::now()
@@ -2681,6 +2695,7 @@ mod tests {
                 completion_tokens: 0,
                 prompt_tokens: 0,
                 total_tokens: 0,
+                prompt_tokens_details: None,
                 avg_tok_per_sec: 0.0,
                 avg_prompt_tok_per_sec: 0.0,
                 avg_compl_tok_per_sec: 0.0,

@@ -3675,6 +3675,16 @@
             "type": "integer",
             "minimum": 0
           },
+          "prompt_tokens_details": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/PromptTokensDetailsResponse"
+              }
+            ]
+          },
           "total_completion_time_sec": {
             "type": "number",
             "format": "float"
@@ -6739,6 +6749,19 @@
               "null"
             ],
             "description": "Text tokens",
+            "minimum": 0
+          }
+        }
+      },
+      "PromptTokensDetailsResponse": {
+        "type": "object",
+        "required": [
+          "cached_tokens"
+        ],
+        "properties": {
+          "cached_tokens": {
+            "type": "integer",
+            "description": "Prompt tokens served from the prefix cache, not recomputed.",
             "minimum": 0
           }
         }
