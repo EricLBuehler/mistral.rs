@@ -1,15 +1,22 @@
 use crate::{
     distributed,
-    paged_attention::block_hash::{adapter_generation_key, compute_block_hashes, BlockHash},
+    paged_attention::{
+        block_hash::{adapter_generation_key, compute_block_hashes, BlockHash},
+        block_pool::PrefixBlockRetentionRevocationMonitor,
+    },
     pipeline::{
         execution::StepSubmissionKind,
         llg::{constraint_from_llg_grammar, llg_grammar_from_constraint},
+        prompt_chunks::effective_recurrent_prefix_boundary,
         text_models_inputs_processor::PagedAttentionMeta,
         CacheBackendMetadata, CacheInstruction, DecodeGraphPrecaptureCtx, StepLookahead,
         StepSubmission, RECURRENT_GRAPH_PAD_SLOTS,
     },
-    prefix_cacher::PrefixCacheManagerV2,
-    scheduler::{DefaultSchedulerMethod, PagedPrefixCacheValidator, Scheduler, SchedulerOutput},
+    prefix_cacher::{PagedPrefixCheckpoint, PrefixCacheManagerV2},
+    scheduler::{
+        modality_signature, DefaultSchedulerMethod, PagedPrefixCacheValidation,
+        PagedPrefixCacheValidator, Scheduler, SchedulerOutput,
+    },
     search::{self, rag::SearchPipeline},
     sequence::{SeqStepType, StopReason},
     tools, SchedulerConfig, DEBUG,
@@ -59,6 +66,8 @@ mod admission;
 pub(crate) mod agentic_loop;
 #[cfg(any(feature = "cuda", test))]
 mod cuda_decode;
+#[cfg(feature = "cuda")]
+mod cuda_memory;
 pub use agentic_loop::DEFAULT_MAX_TOOL_ROUNDS;
 pub(crate) mod agentic_session;
 mod file_tools;
@@ -68,9 +77,13 @@ mod tool_dispatch;
 #[cfg(feature = "cuda")]
 use self::cuda_decode::CudaDecodeCompletionWorker;
 #[cfg(feature = "cuda")]
+use crate::paged_attention::block_hash::MultimodalAttentionPolicy;
+#[cfg(feature = "cuda")]
 use crate::pipeline::execution::{
     submit_decode_tail, CudaDecodeTail, CudaStepCompletion, CudaStepSubmission, CudaTailSubmission,
 };
+#[cfg(feature = "cuda")]
+use crate::response::Response;
 #[cfg(feature = "cuda")]
 use crate::sequence::Sequence;
 
@@ -184,6 +197,7 @@ pub struct Engine {
     id: Arc<Mutex<usize>>,
     no_kv_cache: bool,
     prefix_cacher: Arc<Mutex<PrefixCacheManagerV2>>,
+    paged_block_retention_monitor: Option<PrefixBlockRetentionRevocationMonitor>,
     is_debug: bool,
     disable_eos_stop: bool,
     throughput_logging_enabled: bool,
@@ -238,69 +252,202 @@ struct HybridPagedPrefixValidator {
     prefix_cacher: Arc<Mutex<PrefixCacheManagerV2>>,
 }
 
+struct HybridPrefixRestore {
+    sequence_id: usize,
+    slot_idx: usize,
+    cached_tokens: usize,
+    checkpoint: PagedPrefixCheckpoint,
+    prefix_key: Vec<BlockHash>,
+    current_owner: BlockHash,
+    restore_auxiliary: bool,
+    replay_tokens_avoided: usize,
+    record_auxiliary_miss: bool,
+}
+
 impl HybridPagedPrefixValidator {
-    fn reset_recurrent_state(&self, slot_idx: usize) {
-        let pipeline = get_mut_arcmutex!(self.pipeline);
-        if !pipeline.cache().is_hybrid() {
-            return;
-        }
-        let mut hybrid_cache = pipeline.cache().hybrid();
-        if let Err(e) = hybrid_cache.reset_seq(slot_idx) {
-            tracing::warn!("Failed to reset recurrent state slot {slot_idx}: {e}");
-        }
+    fn stage_recurrent_reset(
+        &self,
+        sequence_id: usize,
+        slot_idx: usize,
+        record_auxiliary_miss: bool,
+    ) -> PagedPrefixCacheValidation {
+        let pipeline = Arc::clone(&self.pipeline);
+        PagedPrefixCacheValidation::staged(0, move |seq| {
+            debug_assert_eq!(*seq.id(), sequence_id);
+            let mut pipeline = get_mut_arcmutex!(pipeline);
+            if pipeline.cache().is_hybrid() {
+                pipeline.cache().hybrid().reset_seq(sequence_id, slot_idx)?;
+            }
+            pipeline.release_speculative_sequences(&[sequence_id]);
+            if record_auxiliary_miss {
+                metrics::counter!("mistralrs_speculative_prefix_cache_misses_total").increment(1);
+            }
+            Ok(())
+        })
+    }
+
+    fn stage_recurrent_restore(&self, restore: HybridPrefixRestore) -> PagedPrefixCacheValidation {
+        let pipeline = Arc::clone(&self.pipeline);
+        let prefix_cacher = Arc::clone(&self.prefix_cacher);
+        PagedPrefixCacheValidation::staged(restore.cached_tokens, move |seq| {
+            debug_assert_eq!(*seq.id(), restore.sequence_id);
+            let mut pipeline = get_mut_arcmutex!(pipeline);
+            pipeline.release_speculative_sequences(&[restore.sequence_id]);
+            if restore.restore_auxiliary {
+                let auxiliary = restore
+                    .checkpoint
+                    .auxiliary
+                    .as_deref()
+                    .expect("auxiliary prefix restore requires captured state");
+                pipeline.restore_paged_auxiliary_prefix_state(
+                    restore.sequence_id,
+                    restore.cached_tokens,
+                    auxiliary,
+                )?;
+            }
+            if pipeline.cache().is_hybrid() {
+                pipeline.cache().hybrid().restore_recurrent_state(
+                    restore.sequence_id,
+                    restore.slot_idx,
+                    &restore.checkpoint.recurrent_snapshots,
+                )?;
+            }
+            drop(pipeline);
+            get_mut_arcmutex!(prefix_cacher)
+                .promote_paged_recurrent_prefix(&restore.prefix_key, restore.current_owner);
+            if restore.restore_auxiliary {
+                metrics::counter!("mistralrs_speculative_prefix_cache_hits_total").increment(1);
+                metrics::counter!("mistralrs_speculative_prefix_replay_tokens_avoided_total")
+                    .increment(u64::try_from(restore.replay_tokens_avoided).unwrap_or(u64::MAX));
+            } else if restore.record_auxiliary_miss {
+                metrics::counter!("mistralrs_speculative_prefix_cache_misses_total").increment(1);
+            }
+            Ok(())
+        })
     }
 }
 
 impl PagedPrefixCacheValidator for HybridPagedPrefixValidator {
     fn validate_prefix_cache_hit(
         &mut self,
-        seq: &mut crate::sequence::Sequence,
+        seq: &crate::sequence::Sequence,
         block_hashes: &[BlockHash],
         cached_tokens: usize,
         block_size: usize,
-    ) -> usize {
+    ) -> candle_core::Result<PagedPrefixCacheValidation> {
         let Some(slot_idx) = seq.recurrent_state_idx() else {
-            return 0;
+            return Ok(PagedPrefixCacheValidation::ready(0));
+        };
+        let sequence_id = *seq.id();
+
+        let prefix_policy = {
+            let pipeline = get_mut_arcmutex!(self.pipeline);
+            pipeline.speculative_prefix_checkpoint_policy()
+        };
+        let uses_auxiliary_state = prefix_policy.uses_auxiliary_state(modality_signature(seq));
+        if uses_auxiliary_state {
+            if let Some(boundary) = effective_recurrent_prefix_boundary(
+                cached_tokens,
+                0,
+                block_size,
+                prefix_policy.replay_for(modality_signature(seq)),
+                seq.mm_features(),
+            ) {
+                let n_blocks = boundary / block_size;
+                let current_owner = block_hashes.last().copied();
+                let checkpoint = current_owner.and_then(|_| {
+                    get_mut_arcmutex!(self.prefix_cacher)
+                        .peek_paged_recurrent_prefix(&block_hashes[..n_blocks])
+                });
+                if let Some(checkpoint) = checkpoint {
+                    if checkpoint.auxiliary.is_some() {
+                        let replay_tokens = get_mut_arcmutex!(self.pipeline)
+                            .speculative_prefix_replay()
+                            .replay_tokens(boundary);
+                        return Ok(self.stage_recurrent_restore(HybridPrefixRestore {
+                            sequence_id,
+                            slot_idx,
+                            cached_tokens: boundary,
+                            checkpoint,
+                            prefix_key: block_hashes[..n_blocks].to_vec(),
+                            current_owner: current_owner
+                                .expect("recurrent prefix owner requires a full block"),
+                            restore_auxiliary: true,
+                            replay_tokens_avoided: replay_tokens,
+                            record_auxiliary_miss: false,
+                        }));
+                    }
+                }
+            }
+        }
+        let record_auxiliary_miss = uses_auxiliary_state;
+
+        let replay = if record_auxiliary_miss {
+            prefix_policy.fallback_replay()
+        } else {
+            prefix_policy.replay_for(modality_signature(seq))
+        };
+        let Some(cached_tokens) = effective_recurrent_prefix_boundary(
+            cached_tokens,
+            0,
+            block_size,
+            replay,
+            seq.mm_features(),
+        ) else {
+            return Ok(self.stage_recurrent_reset(sequence_id, slot_idx, record_auxiliary_miss));
         };
 
-        if cached_tokens == 0 || !cached_tokens.is_multiple_of(block_size) {
-            self.reset_recurrent_state(slot_idx);
-            return 0;
+        if !cached_tokens.is_multiple_of(block_size) {
+            return Ok(self.stage_recurrent_reset(sequence_id, slot_idx, record_auxiliary_miss));
         }
 
         let max_blocks = cached_tokens / block_size;
-        let Some((n_blocks, snapshots)) = get_mut_arcmutex!(self.prefix_cacher)
-            .get_longest_paged_recurrent_prefix(block_hashes, max_blocks)
+        let Some((n_blocks, checkpoint)) = get_mut_arcmutex!(self.prefix_cacher)
+            .peek_longest_paged_recurrent_prefix(block_hashes, max_blocks)
         else {
-            self.reset_recurrent_state(slot_idx);
-            return 0;
+            return Ok(self.stage_recurrent_reset(sequence_id, slot_idx, record_auxiliary_miss));
         };
 
         let pipeline = get_mut_arcmutex!(self.pipeline);
         if !pipeline.cache().is_hybrid() {
-            return cached_tokens;
-        }
-        let mut hybrid_cache = pipeline.cache().hybrid();
-        if hybrid_cache
-            .restore_recurrent_state(slot_idx, &snapshots)
-            .is_ok()
-        {
-            n_blocks * block_size
-        } else {
-            if let Err(e) = hybrid_cache.reset_seq(slot_idx) {
-                tracing::warn!("Failed to reset recurrent state slot {slot_idx}: {e}");
+            if record_auxiliary_miss {
+                return Ok(PagedPrefixCacheValidation::staged(cached_tokens, |_| {
+                    metrics::counter!("mistralrs_speculative_prefix_cache_misses_total")
+                        .increment(1);
+                    Ok(())
+                }));
             }
-            0
+            return Ok(PagedPrefixCacheValidation::ready(cached_tokens));
         }
+        drop(pipeline);
+        Ok(self.stage_recurrent_restore(HybridPrefixRestore {
+            sequence_id,
+            slot_idx,
+            cached_tokens: n_blocks * block_size,
+            checkpoint,
+            prefix_key: block_hashes[..n_blocks].to_vec(),
+            current_owner: *block_hashes
+                .last()
+                .expect("recurrent prefix owner requires a full block"),
+            restore_auxiliary: false,
+            replay_tokens_avoided: 0,
+            record_auxiliary_miss,
+        }))
     }
 
-    fn release_recurrent_state(&mut self, slot_idx: usize) -> bool {
-        let pipeline = get_mut_arcmutex!(self.pipeline);
-        if !pipeline.cache().is_hybrid() {
-            return false;
-        }
-        pipeline.cache().hybrid().free_seq(slot_idx);
-        true
+    fn release_recurrent_state(
+        &mut self,
+        sequence_id: usize,
+        slot_idx: usize,
+    ) -> candle_core::Result<bool> {
+        let mut pipeline = get_mut_arcmutex!(self.pipeline);
+        let recurrent_result = if pipeline.cache().is_hybrid() {
+            pipeline.cache().hybrid().release_seq(sequence_id, slot_idx)
+        } else {
+            Ok(false)
+        };
+        pipeline.release_speculative_sequences(&[sequence_id]);
+        recurrent_result
     }
 }
 
@@ -364,8 +511,7 @@ impl Engine {
             } => max_num_seqs.get(),
             SchedulerConfig::PagedAttentionMeta { max_num_seqs, .. } => *max_num_seqs,
         };
-        let capacity_metric = u32::try_from(max_active_sequences).unwrap_or(u32::MAX);
-        metrics::gauge!("mistralrs_sequences_capacity").set(f64::from(capacity_metric));
+        logger.set_sequence_capacity(max_active_sequences);
 
         let (
             requires_uniform_prompt_batch,
@@ -374,6 +520,7 @@ impl Engine {
             supports_packed_prefill,
             scheduler_visible_prompt_chunks,
             prompt_chunks_require_block_alignment,
+            prefix_policy,
         ) = {
             let pipeline = get_mut_arcmutex!(pipeline);
             let pipeline_metadata = pipeline.get_metadata();
@@ -384,6 +531,7 @@ impl Engine {
                 pipeline.supports_packed_prefill(),
                 pipeline.device().is_cuda() && !pipeline_metadata.is_xlora,
                 pipeline.cache().is_hybrid(),
+                pipeline.speculative_prefix_checkpoint_policy(),
             )
         };
         let recurrent_capacity = match &config {
@@ -413,6 +561,7 @@ impl Engine {
         get_mut_arcmutex!(scheduler).set_scheduler_visible_prompt_chunks(
             scheduler_visible_prompt_chunks,
             prompt_chunks_require_block_alignment,
+            prefix_policy,
         );
 
         // Configure prefix caching on the scheduler based on the global no_prefix_cache flag
@@ -420,6 +569,22 @@ impl Engine {
         get_mut_arcmutex!(scheduler).set_prefix_caching_enabled(!no_prefix_cache);
 
         let has_paged_attention = get_mut_arcmutex!(scheduler).kv_cache_manager().is_some();
+        let paged_block_retention = if has_paged_attention
+            && prompt_chunks_require_block_alignment
+            && !no_prefix_cache
+            && prefix_cache_n > 0
+        {
+            get_mut_arcmutex!(scheduler)
+                .kv_cache_manager()
+                .map(|kv_cache_manager| {
+                    get_mut_arcmutex!(kv_cache_manager).prefix_block_retention()
+                })
+        } else {
+            None
+        };
+        let paged_block_retention_monitor = paged_block_retention
+            .as_ref()
+            .map(|retention| retention.revocation_monitor());
         #[cfg(feature = "cuda")]
         let cuda_decode_enabled =
             has_paged_attention && get_mut_arcmutex!(pipeline).device().is_cuda();
@@ -462,6 +627,12 @@ impl Engine {
             ctx
         };
 
+        let mut prefix_cacher =
+            PrefixCacheManagerV2::new(prefix_cache_n, no_prefix_cache, has_paged_attention);
+        if let Some(retention) = paged_block_retention {
+            prefix_cacher.attach_paged_block_retention(retention);
+        }
+
         Ok(Self {
             tx,
             rx: Arc::new(Mutex::new(rx)),
@@ -473,11 +644,8 @@ impl Engine {
             max_active_sequences,
             id: Arc::new(Mutex::new(0)),
             no_kv_cache,
-            prefix_cacher: Arc::new(Mutex::new(PrefixCacheManagerV2::new(
-                prefix_cache_n,
-                no_prefix_cache,
-                has_paged_attention,
-            ))),
+            prefix_cacher: Arc::new(Mutex::new(prefix_cacher)),
+            paged_block_retention_monitor,
             is_debug: DEBUG.load(Ordering::Relaxed),
             disable_eos_stop,
             throughput_logging_enabled,
@@ -506,19 +674,42 @@ impl Engine {
     }
 
     fn free_finished_scheduler_sequences(&self, scheduler: &mut dyn Scheduler) {
+        scheduler.cancel_closed_response_groups();
         let finished_sequence_ids = scheduler.get_finished_sequence_ids();
-        let recurrent_indices = scheduler.get_finished_recurrent_indices();
-        if !finished_sequence_ids.is_empty() || !recurrent_indices.is_empty() {
+        let recurrent_slots = scheduler.get_finished_recurrent_slots();
+        if !finished_sequence_ids.is_empty() || !recurrent_slots.is_empty() {
             let mut pipeline = get_mut_arcmutex!(self.pipeline);
-            pipeline.release_speculative_sequences(&finished_sequence_ids);
+            let mut recurrent_release_errors = Vec::new();
             if !pipeline.get_metadata().no_kv_cache && pipeline.cache().is_hybrid() {
                 let mut hybrid_cache = pipeline.cache().hybrid();
-                for idx in recurrent_indices {
-                    hybrid_cache.free_seq(idx);
+                for (sequence_id, slot_idx) in recurrent_slots {
+                    if let Err(err) = hybrid_cache.release_seq(sequence_id, slot_idx) {
+                        recurrent_release_errors
+                            .push(format!("sequence {sequence_id}, slot {slot_idx}: {err}"));
+                    }
                 }
+            }
+            pipeline.release_speculative_sequences(&finished_sequence_ids);
+            if !recurrent_release_errors.is_empty() {
+                tracing::error!(
+                    "Failed to release recurrent state for finished sequences: {}",
+                    recurrent_release_errors.join("; ")
+                );
             }
         }
         scheduler.free_finished_sequence_groups();
+        self.logger.set_num_running(scheduler.running_len());
+        self.logger.set_num_waiting(scheduler.waiting_len());
+    }
+
+    fn prune_revoked_paged_recurrent_prefixes(&self) {
+        if self
+            .paged_block_retention_monitor
+            .as_ref()
+            .is_some_and(PrefixBlockRetentionRevocationMonitor::take_pending)
+        {
+            get_mut_arcmutex!(self.prefix_cacher).prune_revoked_paged_recurrent_entries();
+        }
     }
 
     fn resolve_adapter_generation(&self, request: &mut Request) -> Result<(), String> {
@@ -542,6 +733,12 @@ impl Engine {
     }
 
     async fn prepare_request_for_dispatch(&self, mut request: Request) -> Option<Request> {
+        if Self::request_is_abandoned(&request) {
+            return None;
+        }
+        if let Request::Normal(request) = &mut request {
+            request.mark_enqueued();
+        }
         if let Err(error) = self.resolve_adapter_generation(&mut request) {
             if let Request::Normal(request) = request {
                 request
@@ -553,6 +750,10 @@ impl Engine {
             return None;
         }
         Some(request)
+    }
+
+    fn request_is_abandoned(request: &Request) -> bool {
+        matches!(request, Request::Normal(request) if request.response_is_closed())
     }
 
     fn admission_class(request: &Request) -> admission::AdmissionClass {
@@ -605,7 +806,13 @@ impl Engine {
         disconnected
     }
 
-    async fn dispatch_prepared_request(self: &Arc<Self>, request: Request) -> bool {
+    async fn dispatch_prepared_request(self: &Arc<Self>, mut request: Request) -> bool {
+        if let Request::Normal(request) = &mut request {
+            if let Some(duration) = request.take_queue_duration() {
+                metrics::histogram!(crate::REQUEST_QUEUE_DURATION_METRIC)
+                    .record(duration.as_secs_f64());
+            }
+        }
         self.replicate_request_to_daemons(&request);
         if matches!(request, Request::Terminate) {
             return false;
@@ -639,6 +846,31 @@ impl Engine {
         tail.drain()?;
         self.account_cuda_decode_rows(&rows);
         Ok(())
+    }
+
+    #[cfg(feature = "cuda")]
+    async fn reject_prompt_for_cuda_memory(
+        &self,
+        rows: &[Arc<std::sync::Mutex<Sequence>>],
+        reason: String,
+    ) {
+        tracing::warn!("{reason}");
+        metrics::counter!("mistralrs_cuda_prompt_memory_rejections_total")
+            .increment(u64::try_from(rows.len()).unwrap_or(u64::MAX));
+        for row in rows {
+            let (sequence_id, responder) = {
+                let row = get_mut_arcmutex!(row);
+                row.set_state(SequenceState::Error);
+                (*row.id(), row.responder())
+            };
+            if responder
+                .send(Response::InternalError(reason.clone().into()))
+                .await
+                .is_err()
+            {
+                tracing::warn!("Failed to deliver CUDA memory error for sequence {sequence_id}");
+            }
+        }
     }
 
     #[cfg(feature = "cuda")]
@@ -791,6 +1023,22 @@ impl Engine {
         };
         #[cfg(feature = "cuda")]
         let mut cuda_decode_lease: Option<CudaDecodeBatchLease> = None;
+        #[cfg(feature = "cuda")]
+        let mut cuda_memory_pool = {
+            let pipeline = get_mut_arcmutex!(self.pipeline);
+            let devices = pipeline.execution_devices();
+            let mut unique_devices = Vec::new();
+            for device in devices {
+                if device.is_cuda()
+                    && unique_devices
+                        .iter()
+                        .all(|existing: &candle_core::Device| !existing.same_device(&device))
+                {
+                    unique_devices.push(device);
+                }
+            }
+            cuda_memory::CudaMemoryPoolMaintenance::new(unique_devices)
+        };
         'lp: loop {
             let should_terminate = || {
                 matches!(
@@ -814,10 +1062,19 @@ impl Engine {
             }
 
             let channel_disconnected = self.collect_pending_requests(&mut pending).await;
+            pending.retain(|request| !Self::request_is_abandoned(request));
             #[cfg(feature = "cuda")]
             let decode_batch_leased = cuda_decode_lease.is_some();
             #[cfg(not(feature = "cuda"))]
             let decode_batch_leased = false;
+            {
+                let mut scheduler = get_mut_arcmutex!(self.scheduler);
+                if decode_batch_leased {
+                    scheduler.cancel_closed_response_groups();
+                } else {
+                    self.free_finished_scheduler_sequences(&mut *scheduler);
+                }
+            }
             if let Some(request) = pending.take_shutdown() {
                 #[cfg(feature = "cuda")]
                 if let Some(lease) = cuda_decode_lease.take() {
@@ -870,6 +1127,18 @@ impl Engine {
             if scheduler_idle {
                 if !pending.is_empty() {
                     continue;
+                }
+                #[cfg(feature = "cuda")]
+                if cuda_memory_pool.when_idle() {
+                    debug_assert!(cuda_decode_lease.is_none());
+                    loop {
+                        let reclaimed = get_mut_arcmutex!(self.pipeline)
+                            .reclaim_cuda_graph_memory(cuda_memory::GRAPH_RECLAIM_BATCH_SIZE);
+                        if reclaimed == 0 || !cuda_memory_pool.after_graph_reclaim(0).graph_pressure
+                        {
+                            break;
+                        }
+                    }
                 }
                 if channel_disconnected {
                     break 'lp;
@@ -992,6 +1261,7 @@ impl Engine {
             let mut scheduler = get_mut_arcmutex!(self.scheduler);
             self.free_finished_scheduler_sequences(&mut *scheduler);
             let scheduled = scheduler.schedule(&self.logger, prefix_validator);
+            self.prune_revoked_paged_recurrent_prefixes();
 
             match scheduled {
                 SchedulerOutput::DefaultScheduler {
@@ -1203,6 +1473,181 @@ impl Engine {
                         get_mut_arcmutex!(self.pipeline)
                             .release_speculative_sequences(&preempted_sequence_ids);
                     }
+                    #[cfg(feature = "cuda")]
+                    let mut prefix_gather_workspace_limit = None;
+                    #[cfg(not(feature = "cuda"))]
+                    let prefix_gather_workspace_limit = None;
+                    #[cfg(feature = "cuda")]
+                    if is_prompt && !output.scheduled.is_empty() {
+                        let (
+                            model_metadata,
+                            activation_dtype,
+                            cache_dtype,
+                            device_is_cuda,
+                            has_sliding_window,
+                            fa3_num_sm_by_layer,
+                        ) = {
+                            let pipeline = get_mut_arcmutex!(self.pipeline);
+                            let metadata = pipeline.get_metadata();
+                            let cache_dtype = metadata
+                                .cache_config
+                                .as_ref()
+                                .map(|config| config.cache_type.to_dtype(metadata.activation_dtype))
+                                .unwrap_or(metadata.activation_dtype);
+                            (
+                                metadata.model_metadata.clone(),
+                                metadata.activation_dtype,
+                                cache_dtype,
+                                pipeline
+                                    .execution_devices()
+                                    .iter()
+                                    .all(candle_core::Device::is_cuda),
+                                metadata.sliding_window.is_some(),
+                                metadata
+                                    .cache_engine
+                                    .as_ref()
+                                    .map(|engine| engine.fa3_prefill_num_sm_by_layer().to_vec())
+                                    .unwrap_or_default(),
+                            )
+                        };
+                        let mut rejected_reason = None;
+                        loop {
+                            let query_lens = output
+                                .scheduled
+                                .iter()
+                                .enumerate()
+                                .map(|(seq_idx, seq)| {
+                                    let seq = get_mut_arcmutex!(seq);
+                                    output
+                                        .scheduled_prompt_chunks
+                                        .as_ref()
+                                        .and_then(|chunks| chunks.get(seq_idx))
+                                        .map(|chunk| chunk.end.saturating_sub(chunk.start))
+                                        .unwrap_or_else(|| seq.num_uncomputed_tokens())
+                                })
+                                .collect::<Vec<_>>();
+                            let full_context_lens = output
+                                .scheduled
+                                .iter()
+                                .zip(&query_lens)
+                                .map(|(seq, query_len)| {
+                                    get_mut_arcmutex!(seq)
+                                        .num_computed_tokens()
+                                        .saturating_add(*query_len)
+                                })
+                                .collect::<Vec<_>>();
+                            let max_pages_per_sequence = {
+                                let sequence_ids = output
+                                    .scheduled
+                                    .iter()
+                                    .map(|seq| *get_mut_arcmutex!(seq).id())
+                                    .collect::<Vec<_>>();
+                                let manager = get_mut_arcmutex!(kv_cache_manager);
+                                sequence_ids
+                                    .iter()
+                                    .map(|seq_id| manager.num_blocks_for_request(*seq_id))
+                                    .max()
+                                    .unwrap_or_default()
+                            };
+                            let has_noncausal_mm_context = output
+                                .scheduled_prompt_chunks
+                                .as_ref()
+                                .and_then(|chunks| chunks.first())
+                                .is_some_and(|chunk| {
+                                    chunk.attention_policy == MultimodalAttentionPolicy::NonCausal
+                                })
+                                || output.scheduled.iter().any(|seq| {
+                                    get_mut_arcmutex!(seq).mm_features().iter().any(|feature| {
+                                        feature.attention_policy
+                                            == MultimodalAttentionPolicy::NonCausal
+                                    })
+                                });
+                            let has_donor_cache_layers = model_metadata.as_deref().is_some_and(
+                                crate::paged_attention::plan::model_has_donor_paged_cache_layers,
+                            );
+                            let requires_prefix_attention = has_noncausal_mm_context
+                                || has_donor_cache_layers
+                                || query_lens
+                                    .iter()
+                                    .zip(&full_context_lens)
+                                    .any(|(query, full)| full > query);
+                            let workspace =
+                                match crate::paged_attention::plan::prompt_prefill_workspace(
+                                    model_metadata.as_deref(),
+                                    crate::paged_attention::plan::PromptPrefillWorkspaceInput {
+                                        activation_dtype,
+                                        cache_dtype,
+                                        device_is_cuda,
+                                        block_size,
+                                        query_lens: &query_lens,
+                                        full_context_lens: &full_context_lens,
+                                        max_pages_per_sequence,
+                                        requires_prefix_attention,
+                                        is_causal: !has_noncausal_mm_context,
+                                        causality_known: true,
+                                        has_custom_mask: has_noncausal_mm_context,
+                                        has_noncausal_mm_context,
+                                        has_sliding_window,
+                                        fa3_num_sm_by_layer: &fa3_num_sm_by_layer,
+                                    },
+                                ) {
+                                    Ok(workspace) => workspace,
+                                    Err(err) => {
+                                        rejected_reason = Some(format!(
+                                        "CUDA prompt memory preflight could not establish a safe attention plan: {err}"
+                                    ));
+                                        break;
+                                    }
+                                };
+                            let workspace_bytes = workspace.bytes;
+                            let mut memory_status =
+                                cuda_memory_pool.before_prompt_step(workspace_bytes);
+                            if memory_status.graph_pressure {
+                                debug_assert!(cuda_decode_lease.is_none());
+                                let pipeline = get_mut_arcmutex!(self.pipeline);
+                                while memory_status.graph_pressure {
+                                    let reclaimed = pipeline.reclaim_cuda_graph_memory(
+                                        cuda_memory::GRAPH_RECLAIM_BATCH_SIZE,
+                                    );
+                                    if reclaimed == 0 {
+                                        break;
+                                    }
+                                    memory_status =
+                                        cuda_memory_pool.after_graph_reclaim(workspace_bytes);
+                                }
+                            }
+                            let previous = output.scheduled.len();
+                            match cuda_memory::prompt_batch_memory_action(
+                                previous,
+                                memory_status.transient_pressure,
+                            ) {
+                                cuda_memory::PromptBatchMemoryAction::Proceed => {
+                                    prefix_gather_workspace_limit =
+                                        Some(workspace.gather_workspace_bytes);
+                                    break;
+                                }
+                                cuda_memory::PromptBatchMemoryAction::Retain(retained) => {
+                                    let first_omitted_id = output
+                                        .retain_prompt_prefix(retained)
+                                        .expect("reduced prompt batch must omit a tail");
+                                    get_mut_arcmutex!(self.scheduler)
+                                        .defer_prompt_tail(first_omitted_id);
+                                    cuda_memory::record_prompt_batch_reduction(previous, retained);
+                                }
+                                cuda_memory::PromptBatchMemoryAction::Reject => {
+                                    rejected_reason = Some(format!(
+                                        "CUDA memory pressure prevented prompt admission requiring {workspace_bytes} bytes of transient workspace"
+                                    ));
+                                    break;
+                                }
+                            }
+                        }
+                        if let Some(reason) = rejected_reason {
+                            self.reject_prompt_for_cuda_memory(&output.scheduled, reason)
+                                .await;
+                            continue 'lp;
+                        }
+                    }
                     if !output.scheduled.is_empty() {
                         for seq in output.scheduled.iter() {
                             let mut seq_guard = get_mut_arcmutex!(seq);
@@ -1310,6 +1755,7 @@ impl Engine {
                                     scheduled_prompt_chunks,
                                     prompt_chunk_attention_policy,
                                     has_noncausal_mm_context: false,
+                                    prefix_gather_workspace_limit,
                                     mm_prefix_ranges_by_seq_id: HashMap::new(),
                                     full_mm_prefix_ranges_by_seq_id: HashMap::new(),
                                     enable_packed_prefill: pipeline.supports_packed_prefill(),
@@ -1535,38 +1981,23 @@ impl Engine {
                         // end of a prompt. Chunked prefill snapshots inline instead, in
                         // `snapshot_paged_recurrent_prefix`.
                         {
-                            let pipeline = get_mut_arcmutex!(self.pipeline);
+                            let mut pipeline = get_mut_arcmutex!(self.pipeline);
                             let mut prefix_cacher = get_mut_arcmutex!(self.prefix_cacher);
+                            let prefix_policy = pipeline.speculative_prefix_checkpoint_policy();
                             if is_prompt
                                 && !scheduler_visible_prompt_step
                                 && pipeline.cache().is_hybrid()
                                 && prefix_cacher.accepts_paged_recurrent_prefix()
                             {
-                                let hybrid_cache = pipeline.cache().hybrid();
-
                                 for seq in guards_mut.iter() {
-                                    let encoded_len = seq.num_computed_tokens();
-                                    if encoded_len == 0 || encoded_len % block_size != 0 {
+                                    if matches!(
+                                        prefix_policy.replay_for(modality_signature(seq)),
+                                        crate::speculative::SpeculativePrefixReplay::Full
+                                    ) {
                                         continue;
                                     }
-
-                                    let Some(slot_idx) = seq.recurrent_state_idx() else {
-                                        continue;
-                                    };
-
-                                    let snapshots = match hybrid_cache
-                                        .snapshot_recurrent_state(slot_idx)
-                                    {
-                                        Ok(snapshots) => snapshots,
-                                        Err(e) => {
-                                            tracing::warn!(
-                                                    "Failed snapshotting recurrent state for sequence {}: {e}",
-                                                    seq.id()
-                                                );
-                                            continue;
-                                        }
-                                    };
-                                    if snapshots.is_empty() {
+                                    let encoded_len = seq.num_computed_tokens();
+                                    if encoded_len == 0 || encoded_len % block_size != 0 {
                                         continue;
                                     }
 
@@ -1582,10 +2013,21 @@ impl Engine {
                                     if block_hashes.len() < num_blocks {
                                         continue;
                                     }
-                                    prefix_cacher.add_paged_recurrent_prefix(
-                                        block_hashes[..num_blocks].to_vec(),
-                                        snapshots,
-                                    );
+                                    let owner = block_hashes[num_blocks - 1];
+                                    if prefix_cacher.has_paged_recurrent_owner(owner) {
+                                        continue;
+                                    }
+                                    if let Err(e) = pipeline.snapshot_paged_recurrent_prefix(
+                                        seq,
+                                        &mut prefix_cacher,
+                                        block_size,
+                                        encoded_len,
+                                    ) {
+                                        tracing::warn!(
+                                            "Failed snapshotting recurrent prefix for sequence {}: {e}",
+                                            seq.id()
+                                        );
+                                    }
                                 }
                             }
                         }
@@ -1612,6 +2054,19 @@ impl Engine {
                                     completion_lengths,
                                     ms_from_last_run * 1000.,
                                 );
+                            }
+                        }
+                    }
+                    #[cfg(feature = "cuda")]
+                    if is_prompt && cuda_memory_pool.after_prompt_step() {
+                        debug_assert!(cuda_decode_lease.is_none());
+                        loop {
+                            let reclaimed = get_mut_arcmutex!(self.pipeline)
+                                .reclaim_cuda_graph_memory(cuda_memory::GRAPH_RECLAIM_BATCH_SIZE);
+                            if reclaimed == 0
+                                || !cuda_memory_pool.after_graph_reclaim(0).graph_pressure
+                            {
+                                break;
                             }
                         }
                     }

@@ -13,3 +13,11 @@ The adapted implementation preserves the K-major state tiling, cooperative K-lan
 The large-workload variant also preserves the upstream 32-value tile, 256-thread block, two-stage
 pipeline, and one-block-per-state traversal. Both are AOT CUDA kernels with no runtime dependency
 on FlashInfer or CuTe DSL.
+
+The fused speculative value-major GDN recurrence, RMSNorm, and SiLU gate kernel is adapted from:
+
+- Repository: https://github.com/vllm-project/vllm
+- Revision: `c8438a3d40168ce1d9eade0dc15ccbe5d27adb68`
+- Source: `csrc/libtorch_stable/gdn/fused_gdn_decode_kernel.cu`
+- Upstream copyright: Copyright contributors to the vLLM project
+- License: Apache License 2.0, reproduced in `LICENSE-APACHE`

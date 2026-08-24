@@ -27,11 +27,12 @@ use crate::device_map::DeviceMapper;
 use crate::kv_cache::HybridCache;
 use crate::paged_attention::_PAD_SLOT_ID;
 use crate::pipeline::{
+    decode_positions_tensor,
     text_models_inputs_processor::{
         make_flash_params, DecodePagedRows, DecodePagedRowsGraphKey, FlashParams,
         PagedAttentionInputMetadata, PagedDecodeMetadataRequirements,
     },
-    text_positions_tensor, DecodeGraphPrecaptureCtx,
+    DecodeGraphPrecaptureCtx, RecurrentBatchKind,
 };
 use crate::speculative::SpeculativeGraphState;
 
@@ -39,16 +40,290 @@ const CUDA_GRAPH_INSTANTIATE_FLAGS: u64 =
     sys::CUgraphInstantiate_flags_enum::CUDA_GRAPH_INSTANTIATE_FLAG_AUTO_FREE_ON_LAUNCH as u64;
 // Matches the standard CUDA paged-attention V2 partition size.
 const PAGED_ATTENTION_PARTITION_SIZE: usize = 512;
-pub(crate) const CUDA_DECODE_GRAPH_CACHE_CAPACITY: usize = 32;
+const TARGET_CUDA_DECODE_GRAPH_CACHE_CAPACITY: usize = 64;
 // Batches up to this size get their own graph; larger ones pad up to the next power of two.
 pub(crate) const CUDA_GRAPH_EXACT_BATCH_BUCKETS: usize = 8;
 pub(crate) const CUDA_GRAPH_MAX_BATCH_BUCKET: usize = 64;
 pub(crate) const CUDA_GRAPH_PRECAPTURE_MAX_BATCH: usize = 16;
 const CUDA_GRAPH_SPEC_STATE_BUDGET_PERCENT: usize = 4;
 const CUDA_GRAPH_SPEC_STATE_BUDGET_BYTES_ENV: &str = "MISTRALRS_CUDA_GRAPH_SPEC_STATE_BUDGET_BYTES";
+const CUDA_GRAPH_EVENTS_METRIC: &str = "mistralrs_cuda_graph_events_total";
+const CUDA_GRAPH_DISPATCH_METRIC: &str = "mistralrs_cuda_graph_dispatch_total";
+const CUDA_GRAPH_EVICTIONS_METRIC: &str = "mistralrs_cuda_graph_evictions_total";
+const CUDA_GRAPH_RESIDENT_ENTRIES_METRIC: &str = "mistralrs_cuda_graph_resident_entries";
 static NEXT_CUDA_DECODE_GRAPH_GENERATION: AtomicU64 = AtomicU64::new(1);
 static CUDA_GRAPH_MEMORY_POOL_SCOPES: OnceLock<Mutex<HashMap<usize, MemoryPoolScopeState>>> =
     OnceLock::new();
+
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub(crate) enum CudaGraphComponent {
+    Target,
+    DFlash,
+}
+
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub(crate) enum CudaGraphEvictionReason {
+    Capacity,
+    MemoryPressure,
+    SpecStateBudget,
+}
+
+impl CudaGraphEvictionReason {
+    const fn label(self) -> &'static str {
+        match self {
+            Self::Capacity => "capacity",
+            Self::MemoryPressure => "memory_pressure",
+            Self::SpecStateBudget => "spec_state_budget",
+        }
+    }
+}
+
+impl CudaGraphComponent {
+    const fn label(self) -> &'static str {
+        match self {
+            Self::Target => "target",
+            Self::DFlash => "dflash",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub(crate) enum CudaGraphEvent {
+    Capture,
+    Replay,
+    EagerFallback,
+}
+
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub(crate) enum CudaGraphDispatchMode {
+    Replay,
+    Eager,
+    Skipped,
+}
+
+impl CudaGraphDispatchMode {
+    const fn label(self) -> &'static str {
+        match self {
+            Self::Replay => "replay",
+            Self::Eager => "eager",
+            Self::Skipped => "skipped",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub(crate) enum CudaGraphDispatchReason {
+    CacheHit,
+    Disabled,
+    ModelUnsupported,
+    SpeculativeConflict,
+    PagedAttentionUnavailable,
+    Prefill,
+    IncompatibleShape,
+    BatchUnsupported,
+    CacheConfigUnavailable,
+    RuntimeDisabled,
+    PaddingUnavailable,
+    CachePopulation,
+    Fallback,
+}
+
+impl CudaGraphDispatchReason {
+    const fn label(self) -> &'static str {
+        match self {
+            Self::CacheHit => "cache_hit",
+            Self::Disabled => "disabled",
+            Self::ModelUnsupported => "model_unsupported",
+            Self::SpeculativeConflict => "speculative_conflict",
+            Self::PagedAttentionUnavailable => "paged_attention_unavailable",
+            Self::Prefill => "prefill",
+            Self::IncompatibleShape => "incompatible_shape",
+            Self::BatchUnsupported => "batch_unsupported",
+            Self::CacheConfigUnavailable => "cache_config_unavailable",
+            Self::RuntimeDisabled => "runtime_disabled",
+            Self::PaddingUnavailable => "padding_unavailable",
+            Self::CachePopulation => "cache_population",
+            Self::Fallback => "fallback",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+struct CudaGraphDispatchLabels {
+    component: &'static str,
+    mode: &'static str,
+    reason: &'static str,
+}
+
+const fn cuda_graph_dispatch_labels(
+    component: CudaGraphComponent,
+    mode: CudaGraphDispatchMode,
+    reason: CudaGraphDispatchReason,
+) -> CudaGraphDispatchLabels {
+    CudaGraphDispatchLabels {
+        component: component.label(),
+        mode: mode.label(),
+        reason: reason.label(),
+    }
+}
+
+pub(crate) fn record_cuda_graph_dispatch(
+    component: CudaGraphComponent,
+    mode: CudaGraphDispatchMode,
+    reason: CudaGraphDispatchReason,
+) {
+    let labels = cuda_graph_dispatch_labels(component, mode, reason);
+    metrics::counter!(
+        CUDA_GRAPH_DISPATCH_METRIC,
+        "component" => labels.component,
+        "mode" => labels.mode,
+        "reason" => labels.reason,
+    )
+    .increment(1);
+}
+
+impl CudaGraphEvent {
+    const fn label(self) -> &'static str {
+        match self {
+            Self::Capture => "capture",
+            Self::Replay => "replay",
+            Self::EagerFallback => "eager_fallback",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+enum CudaGraphOutcome {
+    Success,
+    Failure,
+}
+
+impl CudaGraphOutcome {
+    const fn label(self) -> &'static str {
+        match self {
+            Self::Success => "success",
+            Self::Failure => "failure",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+struct CudaGraphEventLabels {
+    component: &'static str,
+    event: &'static str,
+    outcome: &'static str,
+}
+
+const fn cuda_graph_event_labels(
+    component: CudaGraphComponent,
+    event: CudaGraphEvent,
+    outcome: CudaGraphOutcome,
+) -> CudaGraphEventLabels {
+    CudaGraphEventLabels {
+        component: component.label(),
+        event: event.label(),
+        outcome: outcome.label(),
+    }
+}
+
+fn record_cuda_graph_event(
+    component: CudaGraphComponent,
+    event: CudaGraphEvent,
+    outcome: CudaGraphOutcome,
+) {
+    let labels = cuda_graph_event_labels(component, event, outcome);
+    metrics::counter!(
+        CUDA_GRAPH_EVENTS_METRIC,
+        "component" => labels.component,
+        "event" => labels.event,
+        "outcome" => labels.outcome,
+    )
+    .increment(1);
+}
+
+pub(crate) fn record_cuda_graph_evictions(
+    component: CudaGraphComponent,
+    reason: CudaGraphEvictionReason,
+    count: usize,
+) {
+    metrics::counter!(
+        CUDA_GRAPH_EVICTIONS_METRIC,
+        "component" => component.label(),
+        "reason" => reason.label()
+    )
+    .increment(u64::try_from(count).unwrap_or(u64::MAX));
+}
+
+pub(crate) fn record_cuda_graph_resident_entries(component: CudaGraphComponent, count: usize) {
+    let count = u32::try_from(count).unwrap_or(u32::MAX);
+    metrics::gauge!(
+        CUDA_GRAPH_RESIDENT_ENTRIES_METRIC,
+        "component" => component.label()
+    )
+    .set(f64::from(count));
+}
+
+pub(crate) fn take_cuda_graph_capacity_eviction<T>(
+    entries: &mut Vec<T>,
+    capacity: usize,
+) -> Option<T> {
+    assert!(capacity > 0, "CUDA graph cache capacity must be nonzero");
+    (entries.len() >= capacity).then(|| entries.remove(0))
+}
+
+pub(crate) fn reclaim_cuda_graph_entries(
+    max_entries: usize,
+    reclaim_target: impl FnOnce(usize) -> usize,
+    reclaim_speculative: impl FnOnce(usize) -> usize,
+) -> usize {
+    if max_entries == 0 {
+        return 0;
+    }
+    let target = reclaim_target(max_entries);
+    debug_assert!(target <= max_entries);
+    let remaining = max_entries - target;
+    if remaining == 0 {
+        return target;
+    }
+    let speculative = reclaim_speculative(remaining);
+    debug_assert!(speculative <= remaining);
+    target + speculative
+}
+
+#[must_use]
+pub(crate) struct CudaGraphEventGuard {
+    component: CudaGraphComponent,
+    event: CudaGraphEvent,
+    outcome: CudaGraphOutcome,
+}
+
+impl CudaGraphEventGuard {
+    pub(crate) const fn new(component: CudaGraphComponent, event: CudaGraphEvent) -> Self {
+        Self {
+            component,
+            event,
+            outcome: CudaGraphOutcome::Failure,
+        }
+    }
+
+    pub(crate) fn success(mut self) {
+        self.outcome = CudaGraphOutcome::Success;
+    }
+}
+
+impl Drop for CudaGraphEventGuard {
+    fn drop(&mut self) {
+        record_cuda_graph_event(self.component, self.event, self.outcome);
+        if self.outcome == CudaGraphOutcome::Success && self.event == CudaGraphEvent::EagerFallback
+        {
+            record_cuda_graph_dispatch(
+                self.component,
+                CudaGraphDispatchMode::Eager,
+                CudaGraphDispatchReason::Fallback,
+            );
+        }
+    }
+}
 
 struct MemoryPoolScopeState {
     guards: usize,
@@ -72,11 +347,8 @@ pub(crate) fn cuda_graph_precapture_batches() -> impl Iterator<Item = usize> {
     (1..=CUDA_GRAPH_EXACT_BATCH_BUCKETS).chain(std::iter::once(CUDA_GRAPH_PRECAPTURE_MAX_BATCH))
 }
 
-pub(crate) fn cuda_graph_startup_capture_allowed(
-    has_speculative_proposer: bool,
-    q_len: usize,
-) -> bool {
-    q_len > 0 && (q_len == 1 || !has_speculative_proposer)
+pub(crate) fn cuda_graph_startup_capture_allowed(q_len: usize) -> bool {
+    q_len > 0
 }
 
 pub(crate) fn prepare_fa3_decode_schedules(
@@ -417,19 +689,21 @@ impl CudaGraphPrecaptureInputs {
 
 pub(crate) struct HybridGraphSlots {
     pub(crate) real: Vec<u32>,
-    // Reserving graph capacity may reallocate the pools, invalidating every captured graph.
-    pub(crate) grew: bool,
+    pub(crate) storage_generation: u64,
 }
 
 /// The batch's live recurrent slots after reserving graph capacity.
-pub(crate) fn hybrid_graph_slots(cache: &mut HybridCache) -> Option<HybridGraphSlots> {
-    let real = cache.state_indices_host()?.to_vec();
-    let capacity = cache.recurrent_capacity();
+pub(crate) fn hybrid_graph_slots(
+    cache: &mut HybridCache,
+) -> candle_core::Result<Option<HybridGraphSlots>> {
+    let Some(real) = cache.state_indices_host().map(<[u32]>::to_vec) else {
+        return Ok(None);
+    };
     cache.graph_pad_slot()?;
-    Some(HybridGraphSlots {
+    Ok(Some(HybridGraphSlots {
         real,
-        grew: cache.recurrent_capacity() != capacity,
-    })
+        storage_generation: cache.recurrent_storage_generation(),
+    }))
 }
 
 /// Points the hybrid cache's state indices at fresh `Var` buffers holding `host`, one per recurrent
@@ -544,6 +818,7 @@ pub(crate) struct CudaDecodeGraphKey {
     device: DeviceLocation,
     input_shape: Vec<usize>,
     input_dtype: DType,
+    recurrent_batch_kind: RecurrentBatchKind,
     max_context_len: Option<usize>,
     full_max_context_len: Option<usize>,
     tensors: Vec<CudaGraphTensorKey>,
@@ -587,6 +862,7 @@ enum CudaGraphPinnedData {
     U32(CudaGraphPinnedAllocation<u32>),
     I32(CudaGraphPinnedAllocation<i32>),
     I64(CudaGraphPinnedAllocation<i64>),
+    F32(CudaGraphPinnedAllocation<f32>),
 }
 
 struct CudaGraphPinnedBuffer {
@@ -630,6 +906,7 @@ pub(crate) struct CudaDecodeGraphCaptureCtx<'a> {
     pub(crate) key: CudaDecodeGraphKey,
     pub(crate) input_ids: &'a Tensor,
     pub(crate) seqlen_offsets: &'a [usize],
+    pub(crate) position_ids: &'a [usize],
     pub(crate) block_size: usize,
     pub(crate) kv_cache: &'a [(Tensor, Tensor)],
     pub(crate) metadata: &'a PagedAttentionInputMetadata,
@@ -675,6 +952,7 @@ impl CudaDecodeGraphKey {
         input_ids: &Tensor,
         metadata: &PagedAttentionInputMetadata,
         block_size: usize,
+        recurrent_batch_kind: RecurrentBatchKind,
     ) -> candle_core::Result<Self> {
         let decode_rows = metadata.decode_rows.as_ref().map(|rows| rows.graph_key());
         let mut tensors = Vec::new();
@@ -707,6 +985,7 @@ impl CudaDecodeGraphKey {
             device: input_ids.device().location(),
             input_shape: input_ids.dims().to_vec(),
             input_dtype: input_ids.dtype(),
+            recurrent_batch_kind,
             max_context_len: decode_rows
                 .is_none()
                 .then(|| {
@@ -735,6 +1014,7 @@ impl CudaDecodeGraphMetadataBuffers {
     pub(crate) fn new(
         metadata: &PagedAttentionInputMetadata,
         seqlen_offsets: &[usize],
+        position_ids: &[usize],
         seq_len: usize,
         block_size: usize,
         kv_cache: &[(Tensor, Tensor)],
@@ -742,8 +1022,15 @@ impl CudaDecodeGraphMetadataBuffers {
         activation_dtype: DType,
     ) -> candle_core::Result<(Self, PagedAttentionInputMetadata)> {
         let slot_mappings = var_map_from_tensor_map(&metadata.slot_mappings)?;
+        if seqlen_offsets.len() != position_ids.len() {
+            candle_core::bail!(
+                "CUDA graph decode has {} KV offsets but {} position ends",
+                seqlen_offsets.len(),
+                position_ids.len()
+            );
+        }
         let rope_positions =
-            rope_positions_var_map(&metadata.slot_mappings, seqlen_offsets, seq_len)?;
+            rope_positions_var_map(&metadata.slot_mappings, position_ids, seq_len)?;
         let (flashinfer_decode_tmp_v, flashinfer_decode_tmp_s) = flashinfer_decode_scratch_maps(
             metadata,
             seqlen_offsets.len(),
@@ -758,6 +1045,7 @@ impl CudaDecodeGraphMetadataBuffers {
                 make_fa3_decode_state(
                     flashinfer,
                     seqlen_offsets.len(),
+                    seq_len,
                     kv_cache,
                     model_metadata,
                     activation_dtype,
@@ -879,7 +1167,7 @@ impl CudaDecodeGraphMetadataBuffers {
     fn copy_from(
         &mut self,
         metadata: &PagedAttentionInputMetadata,
-        seqlen_offsets: &[usize],
+        position_ids: &[usize],
         seq_len: usize,
         host_staging: &mut CudaGraphHostStaging,
     ) -> candle_core::Result<()> {
@@ -1002,7 +1290,7 @@ impl CudaDecodeGraphMetadataBuffers {
                 )?;
             }
         }
-        copy_rope_positions(&self.rope_positions, seqlen_offsets, seq_len, host_staging)?;
+        copy_rope_positions(&self.rope_positions, position_ids, seq_len, host_staging)?;
         Ok(())
     }
 
@@ -1095,6 +1383,7 @@ impl CudaDecodeGraphMetadataBuffers {
             is_final_prompt_chunk: metadata.is_final_prompt_chunk,
             prompt_chunk_attention_policy: metadata.prompt_chunk_attention_policy,
             has_noncausal_mm_context: metadata.has_noncausal_mm_context,
+            prefix_gather_workspace_limit: metadata.prefix_gather_workspace_limit,
             mm_prefix_ranges: metadata.mm_prefix_ranges.clone(),
             full_mm_prefix_ranges: metadata.full_mm_prefix_ranges.clone(),
             prefill_attention_heads: metadata.prefill_attention_heads,
@@ -1269,15 +1558,28 @@ impl CudaDecodeGraphLaunch {
                 .as_ref()
                 .expect("continuation must retain decode rows")
                 .block_size,
+            self.key.recurrent_batch_kind,
         )?;
         Ok((key == self.key).then_some(continuation))
     }
 
     fn matches(&self, entry: &CudaDecodeGraphEntry) -> bool {
-        self.generation == entry.generation
-            && self.replay_epoch == entry.replay_epoch
-            && self.key == entry.key
+        cuda_graph_replay_version_matches(
+            entry.generation,
+            entry.replay_epoch,
+            self.generation,
+            self.replay_epoch,
+        ) && self.key == entry.key
     }
+}
+
+fn cuda_graph_replay_version_matches(
+    entry_generation: u64,
+    entry_replay_epoch: u64,
+    launch_generation: u64,
+    launch_replay_epoch: u64,
+) -> bool {
+    entry_generation == launch_generation && entry_replay_epoch == launch_replay_epoch
 }
 
 impl fmt::Debug for CudaDecodeGraphLaunch {
@@ -1448,6 +1750,13 @@ pub(crate) struct CudaDecodeGraphState {
     disabled: bool,
     suspended: bool,
     eager_retry_blocked: bool,
+    recurrent_storage_generation: Option<u64>,
+}
+
+impl Drop for CudaDecodeGraphState {
+    fn drop(&mut self) {
+        record_cuda_graph_resident_entries(CudaGraphComponent::Target, 0);
+    }
 }
 
 impl CudaDecodeGraphState {
@@ -1470,7 +1779,32 @@ impl CudaDecodeGraphState {
 
     pub(crate) fn clear(&mut self) {
         self.eager_retry_blocked = false;
-        release_cuda_graph_entries(std::mem::take(&mut self.entries));
+        let entries = std::mem::take(&mut self.entries);
+        record_cuda_graph_resident_entries(CudaGraphComponent::Target, 0);
+        release_cuda_graph_entries(entries);
+    }
+
+    pub(crate) fn evict_lru_for_memory_pressure(&mut self, max_entries: usize) -> usize {
+        let entries = drain_lru_entries(&mut self.entries, max_entries);
+        let evicted = entries.len();
+        if evicted == 0 {
+            return 0;
+        }
+        record_cuda_graph_resident_entries(CudaGraphComponent::Target, self.entries.len());
+        release_cuda_graph_entries(entries);
+        record_cuda_graph_evictions(
+            CudaGraphComponent::Target,
+            CudaGraphEvictionReason::MemoryPressure,
+            evicted,
+        );
+        evicted
+    }
+
+    pub(crate) fn observe_recurrent_storage_generation(&mut self, generation: u64) {
+        let previous = self.recurrent_storage_generation.replace(generation);
+        if previous.is_some_and(|previous| previous != generation) {
+            self.clear();
+        }
     }
 
     pub(crate) fn suspend(&mut self) {
@@ -1497,6 +1831,14 @@ impl CudaDecodeGraphState {
             return Ok(None);
         };
         let mut entry = self.entries.remove(pos);
+        if let CudaDecodeGraphReplayInput::Resident(launch) = input {
+            if !launch.matches(&entry) || launch.real_batch != step.real_batch {
+                self.entries.push(entry);
+                return Ok(None);
+            }
+        }
+        let graph_event =
+            CudaGraphEventGuard::new(CudaGraphComponent::Target, CudaGraphEvent::Replay);
         let prelaunch = (|| -> candle_core::Result<_> {
             match input {
                 CudaDecodeGraphReplayInput::Host => {
@@ -1507,11 +1849,7 @@ impl CudaDecodeGraphState {
                         ))
                     })?
                 }
-                CudaDecodeGraphReplayInput::Resident(launch) => {
-                    if !launch.matches(&entry) || launch.real_batch != step.real_batch {
-                        return Ok(None);
-                    }
-                }
+                CudaDecodeGraphReplayInput::Resident(_) => {}
             }
             let replay_epoch = entry
                 .replay_epoch
@@ -1536,7 +1874,7 @@ impl CudaDecodeGraphState {
                 .update(|host_staging| {
                     metadata_buffers.copy_from(
                         &step.metadata,
-                        &step.seqlen_offsets,
+                        &step.position_ids,
                         seq_len,
                         host_staging,
                     )?;
@@ -1606,6 +1944,11 @@ impl CudaDecodeGraphState {
                     tracing::warn!(
                         "CUDA decode graphs retired after completion recording error: {record_err:?}"
                     );
+                    record_cuda_graph_dispatch(
+                        CudaGraphComponent::Target,
+                        CudaGraphDispatchMode::Replay,
+                        CudaGraphDispatchReason::CacheHit,
+                    );
                     Ok(Some(replay))
                 }
                 Err(synchronize_err) => {
@@ -1620,6 +1963,12 @@ impl CudaDecodeGraphState {
         }
         entry.replay_epoch = replay_epoch;
         self.entries.push(entry);
+        graph_event.success();
+        record_cuda_graph_dispatch(
+            CudaGraphComponent::Target,
+            CudaGraphDispatchMode::Replay,
+            CudaGraphDispatchReason::CacheHit,
+        );
         Ok(Some(replay))
     }
 
@@ -1648,11 +1997,20 @@ impl CudaDecodeGraphState {
 
     pub(crate) fn insert(&mut self, mut entry: CudaDecodeGraphEntry) {
         self.evict_for_spec_state(&entry.spec_state_usage);
-        if self.entries.len() >= CUDA_DECODE_GRAPH_CACHE_CAPACITY {
-            release_cuda_graph_entries(vec![self.entries.remove(0)]);
+        if let Some(evicted) = take_cuda_graph_capacity_eviction(
+            &mut self.entries,
+            TARGET_CUDA_DECODE_GRAPH_CACHE_CAPACITY,
+        ) {
+            record_cuda_graph_evictions(
+                CudaGraphComponent::Target,
+                CudaGraphEvictionReason::Capacity,
+                1,
+            );
+            release_cuda_graph_entries(vec![evicted]);
         }
         entry.generation = self.allocate_generation();
         self.entries.push(entry);
+        record_cuda_graph_resident_entries(CudaGraphComponent::Target, self.entries.len());
     }
 
     fn evict_for_spec_state(&mut self, incoming: &CudaGraphSpecStateUsage) {
@@ -1668,8 +2026,9 @@ impl CudaDecodeGraphState {
             .collect::<Vec<_>>();
         let mut evictions = spec_state_eviction_plan(&usages, incoming, &self.spec_state_budgets);
         if !evictions.is_empty() {
+            let evicted = evictions.len();
             tracing::debug!(
-                entries = evictions.len(),
+                entries = evicted,
                 incoming_bytes = incoming.total_bytes(),
                 "Evicting CUDA graphs to stay within the speculative state budget"
             );
@@ -1678,7 +2037,13 @@ impl CudaDecodeGraphState {
             for idx in evictions.into_iter().rev() {
                 entries.push(self.entries.remove(idx));
             }
+            record_cuda_graph_resident_entries(CudaGraphComponent::Target, self.entries.len());
             release_cuda_graph_entries(entries);
+            record_cuda_graph_evictions(
+                CudaGraphComponent::Target,
+                CudaGraphEvictionReason::SpecStateBudget,
+                evicted,
+            );
         }
     }
 
@@ -1689,6 +2054,11 @@ impl CudaDecodeGraphState {
             })
             .expect("CUDA decode graph generation overflow")
     }
+}
+
+fn drain_lru_entries<T>(entries: &mut Vec<T>, max_entries: usize) -> Vec<T> {
+    let count = max_entries.min(entries.len());
+    entries.drain(..count).collect()
 }
 
 fn release_cuda_graph_entries(entries: Vec<CudaDecodeGraphEntry>) {
@@ -1722,6 +2092,7 @@ where
         key,
         input_ids,
         seqlen_offsets,
+        position_ids,
         block_size,
         kv_cache,
         metadata,
@@ -1740,6 +2111,7 @@ where
     let (mut metadata_buffers, metadata) = CudaDecodeGraphMetadataBuffers::new(
         metadata,
         seqlen_offsets,
+        position_ids,
         seq_len,
         block_size,
         kv_cache,
@@ -1830,6 +2202,13 @@ where
 
 pub(crate) fn cuda_decode_graphs_enabled() -> bool {
     crate::perf_flags::cuda_graphs_enabled()
+}
+
+pub(crate) fn cuda_decode_graph_batch_kind_supported(kind: RecurrentBatchKind) -> bool {
+    matches!(
+        kind,
+        RecurrentBatchKind::Decode | RecurrentBatchKind::SpeculativeDecode
+    )
 }
 
 pub(crate) fn cuda_decode_graph_supported_for_model(
@@ -1944,6 +2323,22 @@ fn cuda_memory_pool(stream: &Arc<CudaStream>) -> candle_core::Result<sys::CUmemo
             .context("CUDA graph mempool lookup failed"));
     }
     Ok(pool)
+}
+
+pub(crate) fn cuda_graph_memory_pool_scope_active(device: &Device) -> candle_core::Result<bool> {
+    let Device::Cuda(device) = device else {
+        return Ok(false);
+    };
+    let stream = device.cuda_stream();
+    if !stream.context().has_async_alloc() {
+        return Ok(false);
+    }
+    let pool = cuda_memory_pool(&stream)? as usize;
+    let scopes = CUDA_GRAPH_MEMORY_POOL_SCOPES.get_or_init(Default::default);
+    let scopes = scopes
+        .lock()
+        .expect("CUDA graph memory pool scopes poisoned");
+    Ok(scopes.contains_key(&pool))
 }
 
 fn trim_cuda_graph_memory_bound(stream: &Arc<CudaStream>) -> candle_core::Result<()> {
@@ -2440,6 +2835,7 @@ impl CudaGraphPinnedBuffer {
             DType::U32 => allocate!(U32, u32),
             DType::I32 => allocate!(I32, i32),
             DType::I64 => allocate!(I64, i64),
+            DType::F32 => allocate!(F32, f32),
             dtype => candle_core::bail!(
                 "CUDA graph host staging does not support metadata dtype {dtype:?}"
             ),
@@ -2513,6 +2909,7 @@ impl CudaGraphPinnedBuffer {
             DType::U32 => stage_and_copy!(U32, u32),
             DType::I32 => stage_and_copy!(I32, i32),
             DType::I64 => stage_and_copy!(I64, i64),
+            DType::F32 => stage_and_copy!(F32, f32),
             dtype => candle_core::bail!(
                 "CUDA graph host staging does not support metadata dtype {dtype:?}"
             ),
@@ -2560,6 +2957,50 @@ impl CudaGraphPinnedBuffer {
         if result != sys::CUresult::CUDA_SUCCESS {
             return Err(candle_core::Error::msg(format!("{result:?}"))
                 .context("CUDA graph state index H2D copy failed"));
+        }
+        Ok(())
+    }
+
+    fn copy_from_f32_slice(
+        &mut self,
+        src: &[f32],
+        dst: &Var,
+        stream: &Arc<CudaStream>,
+    ) -> candle_core::Result<()> {
+        if dst.dtype() != DType::F32 || dst.elem_count() != src.len() {
+            candle_core::bail!("CUDA graph host staging expected matching f32 metadata");
+        }
+        let (dst_storage, dst_layout) = dst.storage_and_layout();
+        let Storage::Cuda(dst_storage) = &*dst_storage else {
+            candle_core::bail!("CUDA graph host staging expected CUDA f32 metadata");
+        };
+        if !dst_layout.is_contiguous() {
+            candle_core::bail!("CUDA graph host staging expected contiguous f32 metadata");
+        }
+        let CudaGraphPinnedData::F32(host) = &mut self.data else {
+            candle_core::bail!("CUDA graph host staging f32 metadata dtype changed");
+        };
+        let host_slice = host.as_mut_slice();
+        if self.initialized && host_slice == src {
+            return Ok(());
+        }
+        host_slice.copy_from_slice(src);
+        self.initialized = true;
+        let dst = dst_storage.as_cuda_slice::<f32>()?;
+        let dst_offset = dst_layout.start_offset();
+        let dst = dst.slice(dst_offset..dst_offset + src.len());
+        let (dst_ptr, _dst_guard) = dst.device_ptr(stream);
+        let result = unsafe {
+            sys::cuMemcpyHtoDAsync_v2(
+                dst_ptr,
+                host.as_ptr().cast(),
+                std::mem::size_of_val(src),
+                stream.cu_stream(),
+            )
+        };
+        if result != sys::CUresult::CUDA_SUCCESS {
+            return Err(candle_core::Error::msg(format!("{result:?}"))
+                .context("CUDA graph f32 metadata H2D copy failed"));
         }
         Ok(())
     }
@@ -2773,6 +3214,24 @@ impl CudaGraphHostStaging {
         buffer.copy_from_u32_slice(src, dst, &stream)
     }
 
+    pub(crate) fn copy_from_f32_slice(
+        &mut self,
+        name: &'static str,
+        location: DeviceLocation,
+        src: &[f32],
+        dst: &Var,
+    ) -> candle_core::Result<()> {
+        let stream = dst.device().as_cuda_device()?.cuda_stream();
+        self.prepare_copy(location, &stream)?;
+        let buffer = match self.buffers.entry((name, location)) {
+            std::collections::hash_map::Entry::Occupied(entry) => entry.into_mut(),
+            std::collections::hash_map::Entry::Vacant(entry) => {
+                entry.insert(CudaGraphPinnedBuffer::new(dst)?)
+            }
+        };
+        buffer.copy_from_f32_slice(src, dst, &stream)
+    }
+
     #[cfg(all(feature = "flash-attn", target_family = "unix"))]
     pub(crate) fn copy_from_i64_slice(
         &mut self,
@@ -2901,13 +3360,13 @@ fn copy_flashinfer_tile_plan(
 
 fn rope_positions_var_map(
     slot_mappings: &HashMap<DeviceLocation, Tensor>,
-    seqlen_offsets: &[usize],
+    position_ids: &[usize],
     seq_len: usize,
 ) -> candle_core::Result<CudaGraphVarMap> {
     slot_mappings
         .iter()
         .map(|(location, tensor)| {
-            let positions = text_positions_tensor(seqlen_offsets, seq_len, tensor.device())?;
+            let positions = decode_positions_tensor(position_ids, seq_len, tensor.device())?;
             Ok((*location, Var::from_tensor(&positions)?))
         })
         .collect()
@@ -2915,11 +3374,11 @@ fn rope_positions_var_map(
 
 fn copy_rope_positions(
     dst: &CudaGraphVarMap,
-    seqlen_offsets: &[usize],
+    position_ids: &[usize],
     seq_len: usize,
     host_staging: &mut CudaGraphHostStaging,
 ) -> candle_core::Result<()> {
-    let positions = text_positions_tensor(seqlen_offsets, seq_len, &Device::Cpu)?;
+    let positions = decode_positions_tensor(position_ids, seq_len, &Device::Cpu)?;
     for (location, dst) in dst {
         if dst.device().is_cuda() {
             host_staging.copy_from("rope_positions", *location, &positions, dst)?;
@@ -2942,6 +3401,186 @@ mod tests {
                 .collect(),
             device_totals: HashMap::new(),
         }
+    }
+
+    #[test]
+    fn graph_event_labels_have_fixed_cardinality() {
+        use std::collections::HashSet;
+
+        let mut labels = HashSet::new();
+        for component in [CudaGraphComponent::Target, CudaGraphComponent::DFlash] {
+            for event in [
+                CudaGraphEvent::Capture,
+                CudaGraphEvent::Replay,
+                CudaGraphEvent::EagerFallback,
+            ] {
+                for outcome in [CudaGraphOutcome::Success, CudaGraphOutcome::Failure] {
+                    assert!(labels.insert(cuda_graph_event_labels(component, event, outcome)));
+                }
+            }
+        }
+
+        assert_eq!(
+            CUDA_GRAPH_EVENTS_METRIC,
+            "mistralrs_cuda_graph_events_total"
+        );
+        assert_eq!(labels.len(), 12);
+        assert_eq!(
+            labels
+                .iter()
+                .map(|labels| labels.component)
+                .collect::<HashSet<_>>(),
+            HashSet::from(["target", "dflash"])
+        );
+        assert_eq!(
+            labels
+                .iter()
+                .map(|labels| labels.event)
+                .collect::<HashSet<_>>(),
+            HashSet::from(["capture", "replay", "eager_fallback"])
+        );
+        assert_eq!(
+            labels
+                .iter()
+                .map(|labels| labels.outcome)
+                .collect::<HashSet<_>>(),
+            HashSet::from(["success", "failure"])
+        );
+    }
+
+    #[test]
+    fn graph_dispatch_labels_have_fixed_cardinality() {
+        use std::collections::HashSet;
+
+        let reasons = [
+            CudaGraphDispatchReason::CacheHit,
+            CudaGraphDispatchReason::Disabled,
+            CudaGraphDispatchReason::ModelUnsupported,
+            CudaGraphDispatchReason::SpeculativeConflict,
+            CudaGraphDispatchReason::PagedAttentionUnavailable,
+            CudaGraphDispatchReason::Prefill,
+            CudaGraphDispatchReason::IncompatibleShape,
+            CudaGraphDispatchReason::BatchUnsupported,
+            CudaGraphDispatchReason::CacheConfigUnavailable,
+            CudaGraphDispatchReason::RuntimeDisabled,
+            CudaGraphDispatchReason::PaddingUnavailable,
+            CudaGraphDispatchReason::CachePopulation,
+            CudaGraphDispatchReason::Fallback,
+        ];
+        let mut labels = HashSet::new();
+        for component in [CudaGraphComponent::Target, CudaGraphComponent::DFlash] {
+            for mode in [
+                CudaGraphDispatchMode::Replay,
+                CudaGraphDispatchMode::Eager,
+                CudaGraphDispatchMode::Skipped,
+            ] {
+                for reason in reasons {
+                    assert!(labels.insert(cuda_graph_dispatch_labels(component, mode, reason)));
+                }
+            }
+        }
+
+        assert_eq!(
+            CUDA_GRAPH_DISPATCH_METRIC,
+            "mistralrs_cuda_graph_dispatch_total"
+        );
+        assert_eq!(labels.len(), 78);
+        assert_eq!(
+            labels
+                .iter()
+                .map(|labels| labels.mode)
+                .collect::<HashSet<_>>(),
+            HashSet::from(["replay", "eager", "skipped"])
+        );
+        assert_eq!(
+            labels
+                .iter()
+                .map(|labels| labels.reason)
+                .collect::<HashSet<_>>()
+                .len(),
+            reasons.len()
+        );
+    }
+
+    #[test]
+    fn graph_eviction_labels_have_fixed_cardinality() {
+        use std::collections::HashSet;
+
+        let labels = [
+            (
+                CudaGraphComponent::Target,
+                CudaGraphEvictionReason::Capacity,
+            ),
+            (
+                CudaGraphComponent::Target,
+                CudaGraphEvictionReason::MemoryPressure,
+            ),
+            (
+                CudaGraphComponent::Target,
+                CudaGraphEvictionReason::SpecStateBudget,
+            ),
+            (
+                CudaGraphComponent::DFlash,
+                CudaGraphEvictionReason::Capacity,
+            ),
+            (
+                CudaGraphComponent::DFlash,
+                CudaGraphEvictionReason::MemoryPressure,
+            ),
+        ]
+        .into_iter()
+        .map(|(component, reason)| (component.label(), reason.label()))
+        .collect::<HashSet<_>>();
+
+        assert_eq!(
+            CUDA_GRAPH_EVICTIONS_METRIC,
+            "mistralrs_cuda_graph_evictions_total"
+        );
+        assert_eq!(
+            CUDA_GRAPH_RESIDENT_ENTRIES_METRIC,
+            "mistralrs_cuda_graph_resident_entries"
+        );
+        assert_eq!(labels.len(), 5);
+        assert!(labels.contains(&("target", "capacity")));
+        assert!(labels.contains(&("dflash", "capacity")));
+        assert!(labels.contains(&("target", "memory_pressure")));
+        assert!(labels.contains(&("dflash", "memory_pressure")));
+        assert!(labels.contains(&("target", "spec_state_budget")));
+    }
+
+    #[test]
+    fn capacity_eviction_removes_one_lru_entry_and_preserves_the_bound() {
+        let mut entries = vec![10, 20, 30];
+        assert_eq!(take_cuda_graph_capacity_eviction(&mut entries, 4), None);
+        entries.push(40);
+        assert_eq!(take_cuda_graph_capacity_eviction(&mut entries, 4), Some(10));
+        entries.push(50);
+        assert_eq!(entries, vec![20, 30, 40, 50]);
+        assert_eq!(entries.len(), 4);
+    }
+
+    #[test]
+    fn target_cache_retains_64_entries_before_lru_eviction() {
+        let capacity = TARGET_CUDA_DECODE_GRAPH_CACHE_CAPACITY;
+        assert_eq!(capacity, 64);
+
+        let mut entries = (0..capacity - 1).collect::<Vec<_>>();
+        assert_eq!(
+            take_cuda_graph_capacity_eviction(&mut entries, capacity),
+            None
+        );
+        entries.push(capacity - 1);
+        assert_eq!(entries.len(), capacity);
+
+        assert_eq!(
+            take_cuda_graph_capacity_eviction(&mut entries, capacity),
+            Some(0),
+        );
+        entries.push(capacity);
+
+        assert_eq!(entries.len(), capacity);
+        assert_eq!(entries.first(), Some(&1));
+        assert_eq!(entries.last(), Some(&capacity));
     }
 
     #[test]
@@ -2972,11 +3611,24 @@ mod tests {
     }
 
     #[test]
-    fn startup_precapture_defers_speculative_multi_token_widths() {
-        assert!(cuda_graph_startup_capture_allowed(true, 1));
-        assert!(!cuda_graph_startup_capture_allowed(true, 4));
-        assert!(!cuda_graph_startup_capture_allowed(true, 8));
-        assert!(cuda_graph_startup_capture_allowed(false, 8));
+    fn startup_precapture_accepts_decode_and_verification_widths() {
+        assert!(!cuda_graph_startup_capture_allowed(0));
+        assert!(cuda_graph_startup_capture_allowed(1));
+        assert!(cuda_graph_startup_capture_allowed(4));
+        assert!(cuda_graph_startup_capture_allowed(8));
+    }
+
+    #[test]
+    fn decode_graph_batch_kind_rejects_every_prefill_chunk() {
+        assert!(!cuda_decode_graph_batch_kind_supported(
+            RecurrentBatchKind::Prefill
+        ));
+        assert!(cuda_decode_graph_batch_kind_supported(
+            RecurrentBatchKind::Decode
+        ));
+        assert!(cuda_decode_graph_batch_kind_supported(
+            RecurrentBatchKind::SpeculativeDecode
+        ));
     }
 
     #[test]
@@ -3015,11 +3667,22 @@ mod tests {
         let staged = rows.build_graph_staged().unwrap();
         let materialized = rows.build_materialized().unwrap();
         let input_ids = Tensor::zeros((1, 1), DType::U32, &Device::Cpu).unwrap();
-        let staged_key = CudaDecodeGraphKey::new(&input_ids, &staged, 32).unwrap();
-        let materialized_key = CudaDecodeGraphKey::new(&input_ids, &materialized, 32).unwrap();
+        let staged_key =
+            CudaDecodeGraphKey::new(&input_ids, &staged, 32, RecurrentBatchKind::Decode).unwrap();
+        let materialized_key =
+            CudaDecodeGraphKey::new(&input_ids, &materialized, 32, RecurrentBatchKind::Decode)
+                .unwrap();
         assert_eq!(staged_key, materialized_key);
         assert!(staged_key.tensors.is_empty());
         assert!(staged_key.decode_rows.is_some());
+        let speculative_key = CudaDecodeGraphKey::new(
+            &input_ids,
+            &materialized,
+            32,
+            RecurrentBatchKind::SpeculativeDecode,
+        )
+        .unwrap();
+        assert_ne!(staged_key, speculative_key);
 
         let mut next_bucket_rows = (*rows).clone();
         next_bucket_rows.block_tables = vec![(1..=17).collect()];
@@ -3027,7 +3690,9 @@ mod tests {
         next_bucket_rows.context_lens = vec![513];
         next_bucket_rows.full_context_lens = vec![513];
         let next_bucket = Arc::new(next_bucket_rows).build_graph_staged().unwrap();
-        let next_bucket_key = CudaDecodeGraphKey::new(&input_ids, &next_bucket, 32).unwrap();
+        let next_bucket_key =
+            CudaDecodeGraphKey::new(&input_ids, &next_bucket, 32, RecurrentBatchKind::Decode)
+                .unwrap();
         assert_ne!(staged_key, next_bucket_key);
     }
 
@@ -3052,15 +3717,24 @@ mod tests {
         .build()
         .unwrap();
         let input_ids = Tensor::zeros((1, 1), DType::U32, &Device::Cpu).unwrap();
-        let key = CudaDecodeGraphKey::new(&input_ids, &metadata, 32).unwrap();
+        let key =
+            CudaDecodeGraphKey::new(&input_ids, &metadata, 32, RecurrentBatchKind::Decode).unwrap();
         assert!(key
             .tensors
             .iter()
             .all(|tensor| !tensor.name.starts_with("full_")));
 
-        let (buffers, _) =
-            CudaDecodeGraphMetadataBuffers::new(&metadata, &[127], 1, 32, &[], None, DType::F32)
-                .unwrap();
+        let (buffers, _) = CudaDecodeGraphMetadataBuffers::new(
+            &metadata,
+            &[127],
+            &[128],
+            1,
+            32,
+            &[],
+            None,
+            DType::F32,
+        )
+        .unwrap();
         assert!(buffers.flashinfer_views_alias);
         let location = Device::Cpu.location();
         assert_eq!(
@@ -3071,6 +3745,46 @@ mod tests {
             buffers.paged_kv_request_indices.as_ref().unwrap()[&location].id(),
             buffers.full_paged_kv_request_indices.as_ref().unwrap()[&location].id()
         );
+    }
+
+    #[test]
+    fn graph_rope_positions_expand_adjusted_ends_for_verification() {
+        let table = vec![1, 2];
+        let metadata = Arc::new(DecodePagedRows {
+            slot_mappings: vec![vec![37, 38, 39], vec![37, 38, 39]],
+            block_tables: vec![table.clone(); 6],
+            context_lens: vec![38, 39, 40, 38, 39, 40],
+            full_block_tables: vec![table; 6],
+            full_context_lens: vec![38, 39, 40, 38, 39, 40],
+            query_len: 3,
+            block_size: 32,
+            use_standard_metadata: false,
+            max_paged_context_len: 128,
+            sliding_window: None,
+            decode_window: 1,
+            devices: vec![Device::Cpu],
+            num_kv_heads: 4,
+        })
+        .build_materialized()
+        .unwrap();
+
+        let (buffers, _) = CudaDecodeGraphMetadataBuffers::new(
+            &metadata,
+            &[97, 97],
+            &[100, 52],
+            3,
+            32,
+            &[],
+            None,
+            DType::F32,
+        )
+        .unwrap();
+        let positions = buffers.rope_positions[&Device::Cpu.location()]
+            .as_detached_tensor()
+            .to_vec1::<u32>()
+            .unwrap();
+
+        assert_eq!(positions, vec![97, 98, 99, 49, 50, 51]);
     }
 
     #[test]
@@ -3098,18 +3812,26 @@ mod tests {
         let updated = rows(vec![5, 6, 7, 8, 9, 10, 11, 12], 256)?.build()?;
         assert!(updated.has_host_staged_decode_tensors());
 
-        let (mut buffers, _) =
-            CudaDecodeGraphMetadataBuffers::new(&initial, &[127], 1, 32, &[], None, DType::F32)?;
+        let (mut buffers, _) = CudaDecodeGraphMetadataBuffers::new(
+            &initial,
+            &[127],
+            &[128],
+            1,
+            32,
+            &[],
+            None,
+            DType::F32,
+        )?;
         let location = device.location();
         let state_indices = Var::from_tensor(&Tensor::zeros((3,), DType::U32, &device)?)?;
         let mut state_indices_map = HashMap::from([(location, state_indices)]);
         let mut host_staging = CudaGraphHostStaging::new(device.as_cuda_device()?.cuda_stream())?;
         host_staging.update(|host_staging| {
-            buffers.copy_from(&updated, &[255], 1, host_staging)?;
+            buffers.copy_from(&updated, &[256], 1, host_staging)?;
             copy_state_indices(&state_indices_map, &[3, 5, 7], host_staging)
         })?;
         host_staging.update(|host_staging| {
-            buffers.copy_from(&updated, &[255], 1, host_staging)?;
+            buffers.copy_from(&updated, &[256], 1, host_staging)?;
             copy_state_indices(&state_indices_map, &[11, 13, 17], host_staging)
         })?;
         device.synchronize()?;
@@ -3378,6 +4100,69 @@ mod tests {
         state.resume();
         let third = state.allocate_generation();
         assert!(first < second && second < third);
+        assert!(!cuda_graph_replay_version_matches(second, 0, first, 1));
+        assert!(!cuda_graph_replay_version_matches(third, 0, second, 1));
+        assert!(cuda_graph_replay_version_matches(third, 7, third, 7));
+    }
+
+    #[test]
+    fn memory_pressure_eviction_drains_lru_entries_in_one_batch() {
+        let mut entries = vec![10, 20, 30, 40];
+        assert!(drain_lru_entries(&mut entries, 0).is_empty());
+        assert_eq!(drain_lru_entries(&mut entries, 2), vec![10, 20]);
+        assert_eq!(entries, vec![30, 40]);
+        assert_eq!(drain_lru_entries(&mut entries, usize::MAX), vec![30, 40]);
+        assert!(entries.is_empty());
+    }
+
+    #[test]
+    fn graph_reclaim_quota_is_shared_between_target_and_dflash() {
+        let mut target_entries = 2usize;
+        let mut dflash_entries = 4usize;
+        let reclaimed = reclaim_cuda_graph_entries(
+            3,
+            |limit| {
+                let reclaimed = target_entries.min(limit);
+                target_entries -= reclaimed;
+                reclaimed
+            },
+            |limit| {
+                let reclaimed = dflash_entries.min(limit);
+                dflash_entries -= reclaimed;
+                reclaimed
+            },
+        );
+        assert_eq!(reclaimed, 3);
+        assert_eq!(target_entries, 0);
+        assert_eq!(dflash_entries, 3);
+
+        let mut dflash_called = false;
+        assert_eq!(
+            reclaim_cuda_graph_entries(
+                2,
+                |_| 2,
+                |_| {
+                    dflash_called = true;
+                    0
+                }
+            ),
+            2
+        );
+        assert!(!dflash_called);
+
+        let mut target_called = false;
+        assert_eq!(
+            reclaim_cuda_graph_entries(
+                0,
+                |_| {
+                    target_called = true;
+                    0
+                },
+                |_| 0,
+            ),
+            0
+        );
+        assert!(!target_called);
     }
 
     #[test]
@@ -3438,9 +4223,9 @@ mod tests {
         );
         let step = CudaGraphDecodeStep {
             input_ids: Tensor::zeros((2, 1), DType::U32, &Device::Cpu)?,
-            seqlen_offsets: vec![3, 3],
+            seqlen_offsets: vec![100, 100],
             context_lens: vec![(0, 1), (0, 1)],
-            position_ids: vec![4, 4],
+            position_ids: vec![43, 43],
             metadata: rows.build_graph_staged()?,
             state_indices: Some(vec![2, 5]),
             real_batch: 1,
@@ -3453,9 +4238,9 @@ mod tests {
         assert_eq!(rows.block_tables, vec![vec![9, 17], vec![9, 17]]);
         assert_eq!(rows.context_lens, vec![5, 5]);
         assert_eq!(rows.full_context_lens, vec![5, 5]);
-        assert_eq!(continuation.seqlen_offsets, vec![4, 4]);
+        assert_eq!(continuation.seqlen_offsets, vec![101, 101]);
         assert_eq!(continuation.context_lens, vec![(0, 1), (0, 1)]);
-        assert_eq!(continuation.position_ids, vec![5, 5]);
+        assert_eq!(continuation.position_ids, vec![44, 44]);
         assert_eq!(continuation.state_indices, Some(vec![2, 5]));
         Ok(())
     }
@@ -3513,13 +4298,14 @@ mod tests {
         })
         .build_materialized()?;
         let initial_ids = Tensor::from_vec(vec![1u32], (1, 1), &device)?;
-        let key = CudaDecodeGraphKey::new(&initial_ids, &metadata, 32)?;
+        let key = CudaDecodeGraphKey::new(&initial_ids, &metadata, 32, RecurrentBatchKind::Decode)?;
         let warmup_logits = initial_ids.to_dtype(DType::F32)?;
         let entry = capture_cuda_decode_graph(
             CudaDecodeGraphCaptureCtx {
                 key: key.clone(),
                 input_ids: &initial_ids,
                 seqlen_offsets: &[0],
+                position_ids: &[1],
                 block_size: 32,
                 kv_cache: &[],
                 metadata: &metadata,

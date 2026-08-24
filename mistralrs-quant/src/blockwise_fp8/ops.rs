@@ -2150,7 +2150,7 @@ mod tests {
             .wait(&live_event)
             .map_err(|error| candle_core::Error::msg(error.to_string()))?;
         dev.synchronize()?;
-        for rows in [1usize, 8, 16] {
+        for rows in [1usize, 8, 16, 21, 24, 28, 35, 42, 49] {
             let input_values = (0..rows * K)
                 .map(|index| {
                     let row = index / K;
@@ -2181,7 +2181,7 @@ mod tests {
             assert_close(rows, &reference, &output)?;
             dev.synchronize()?;
 
-            if rows != 8 {
+            if rows != 21 {
                 continue;
             }
 
@@ -2610,7 +2610,7 @@ mod tests {
         const DEFAULT_WARMUP: usize = 10;
         const DEFAULT_ITERATIONS: usize = 100;
         const OUTPUT_TOLERANCE: f32 = 0.02;
-        const M_VALUES: [usize; 6] = [1, 8, 16, 32, 64, 128];
+        const M_VALUES: [usize; 8] = [1, 8, 16, 21, 24, 32, 64, 128];
         const SHAPES: [BlockwiseFp8BenchShape; 5] = [
             BlockwiseFp8BenchShape {
                 name: "gdn_qkvz",
@@ -2701,7 +2701,7 @@ mod tests {
         const DEFAULT_WARMUP: usize = 10;
         const DEFAULT_ITERATIONS: usize = 100;
         const SAMPLES: usize = 7;
-        const M_VALUES: [usize; 6] = [1, 8, 16, 32, 64, 128];
+        const M_VALUES: [usize; 8] = [1, 8, 16, 21, 24, 32, 64, 128];
         const SHAPES: [BlockwiseFp8BenchShape; 5] = [
             BlockwiseFp8BenchShape {
                 name: "gdn_qkvz",

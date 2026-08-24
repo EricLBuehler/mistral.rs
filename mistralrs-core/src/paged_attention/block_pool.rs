@@ -10,12 +10,268 @@
 //! - Freed blocks retain their hash for potential future reuse
 //! - Blocks are only truly evicted (hash cleared) when reallocated
 
-use std::collections::HashMap;
+use std::{
+    collections::{HashMap, HashSet},
+    sync::{
+        atomic::{AtomicBool, AtomicU64, Ordering},
+        Arc, Mutex, Weak,
+    },
+};
+
+use indexmap::IndexMap;
 
 use super::block_hash::{BlockHash, BlockHashWithGroupId};
 
 /// Sentinel value for "no link" in the doubly-linked free list.
 const NO_LINK: usize = usize::MAX;
+const RETAINED_PREFIX_ENTRIES_METRIC: &str = "mistralrs_paged_prefix_retention_entries";
+const RETAINED_PREFIX_HASHES_METRIC: &str = "mistralrs_paged_prefix_retention_hashes";
+const RETAINED_PREFIX_PRESSURE_EVICTIONS_METRIC: &str =
+    "mistralrs_paged_prefix_retention_pressure_evictions_total";
+const RETAINED_PREFIX_PHYSICAL_BLOCKS_METRIC: &str = "mistralrs_kv_cache_blocks_prefix_retained";
+const RETAINED_PREFIX_FREE_BLOCKS_METRIC: &str = "mistralrs_paged_prefix_retention_free_blocks";
+const ALLOCATION_PRESSURE_REASON: &str = "allocation_pressure";
+const RESET_REASON: &str = "reset";
+
+#[derive(Clone)]
+pub(crate) struct PrefixBlockRetention {
+    inner: Arc<Mutex<PrefixBlockRetentionState>>,
+    published_revision: Arc<AtomicU64>,
+    published_revocation_epoch: Arc<AtomicU64>,
+    enabled: Arc<AtomicBool>,
+}
+
+pub(crate) struct PrefixBlockRetentionRevocationMonitor {
+    published_epoch: Arc<AtomicU64>,
+    observed_epoch: AtomicU64,
+}
+
+#[derive(Default)]
+struct PrefixBlockRetentionState {
+    entries: IndexMap<u64, RetainedPrefixEntry>,
+    hash_ref_counts: HashMap<BlockHash, usize>,
+    next_id: u64,
+    revision: u64,
+}
+
+struct RetainedPrefixEntry {
+    hashes: Vec<BlockHash>,
+    active: Arc<AtomicBool>,
+}
+
+impl Default for PrefixBlockRetention {
+    fn default() -> Self {
+        let state = PrefixBlockRetentionState::default();
+        state.publish_metrics();
+        metrics::counter!(
+            RETAINED_PREFIX_PRESSURE_EVICTIONS_METRIC,
+            "reason" => ALLOCATION_PRESSURE_REASON
+        )
+        .increment(0);
+        metrics::counter!(
+            RETAINED_PREFIX_PRESSURE_EVICTIONS_METRIC,
+            "reason" => RESET_REASON
+        )
+        .increment(0);
+        Self {
+            inner: Arc::new(Mutex::new(state)),
+            published_revision: Arc::new(AtomicU64::new(0)),
+            published_revocation_epoch: Arc::new(AtomicU64::new(0)),
+            enabled: Arc::new(AtomicBool::new(false)),
+        }
+    }
+}
+
+pub(crate) struct PrefixBlockRetentionLease {
+    id: u64,
+    active: Arc<AtomicBool>,
+    retention: Weak<Mutex<PrefixBlockRetentionState>>,
+    published_revision: Weak<AtomicU64>,
+}
+
+impl PrefixBlockRetentionRevocationMonitor {
+    pub(crate) fn take_pending(&self) -> bool {
+        let published = self.published_epoch.load(Ordering::Acquire);
+        self.observed_epoch.swap(published, Ordering::AcqRel) != published
+    }
+}
+
+impl PrefixBlockRetentionState {
+    #[allow(clippy::cast_precision_loss)]
+    fn publish_metrics(&self) {
+        metrics::gauge!(RETAINED_PREFIX_ENTRIES_METRIC).set(self.entries.len() as f64);
+        metrics::gauge!(RETAINED_PREFIX_HASHES_METRIC).set(self.hash_ref_counts.len() as f64);
+    }
+
+    fn bump_revision(&mut self, published_revision: &AtomicU64) {
+        self.revision = self
+            .revision
+            .checked_add(1)
+            .expect("prefix block retention revision overflow");
+        published_revision.store(self.revision, Ordering::Release);
+    }
+
+    fn remove_entry(&mut self, id: u64, published_revision: &AtomicU64) -> Option<Vec<BlockHash>> {
+        let Some(entry) = self.entries.shift_remove(&id) else {
+            return None;
+        };
+        entry.active.store(false, Ordering::Release);
+        let mut released_hashes = Vec::new();
+        for hash in entry.hashes.into_iter().rev() {
+            let remove_hash = {
+                let count = self
+                    .hash_ref_counts
+                    .get_mut(&hash)
+                    .expect("retained prefix hash refcount disappeared");
+                *count = count
+                    .checked_sub(1)
+                    .expect("retained prefix hash refcount underflow");
+                *count == 0
+            };
+            if remove_hash {
+                self.hash_ref_counts.remove(&hash);
+                released_hashes.push(hash);
+            }
+        }
+        self.bump_revision(published_revision);
+        self.publish_metrics();
+        Some(released_hashes)
+    }
+
+    fn revoke_oldest(&mut self, published_revision: &AtomicU64) -> Option<Vec<BlockHash>> {
+        let Some(id) = self.entries.first().map(|(id, _)| *id) else {
+            return None;
+        };
+        self.remove_entry(id, published_revision)
+    }
+
+    fn revoke_all(&mut self, published_revision: &AtomicU64) -> (usize, Vec<BlockHash>) {
+        let ids = self.entries.keys().copied().collect::<Vec<_>>();
+        let len = ids.len();
+        let mut released_hashes = Vec::new();
+        for id in ids {
+            if let Some(hashes) = self.remove_entry(id, published_revision) {
+                released_hashes.extend(hashes);
+            }
+        }
+        (len, released_hashes)
+    }
+}
+
+impl PrefixBlockRetention {
+    pub(crate) fn enable(&self) {
+        self.enabled.store(true, Ordering::Release);
+    }
+
+    pub(crate) fn revocation_monitor(&self) -> PrefixBlockRetentionRevocationMonitor {
+        let observed_epoch = self.published_revocation_epoch.load(Ordering::Acquire);
+        PrefixBlockRetentionRevocationMonitor {
+            published_epoch: Arc::clone(&self.published_revocation_epoch),
+            observed_epoch: AtomicU64::new(observed_epoch),
+        }
+    }
+
+    fn publish_revocation(&self) {
+        self.published_revocation_epoch
+            .fetch_add(1, Ordering::Release);
+    }
+
+    pub(crate) fn retain(&self, hashes: &[BlockHash]) -> PrefixBlockRetentionLease {
+        assert!(
+            self.enabled.load(Ordering::Acquire),
+            "prefix block retention must be enabled before use"
+        );
+        let mut unique_hashes = Vec::with_capacity(hashes.len());
+        let mut seen = HashSet::with_capacity(hashes.len());
+        for &hash in hashes {
+            if seen.insert(hash) {
+                unique_hashes.push(hash);
+            }
+        }
+
+        let active = Arc::new(AtomicBool::new(true));
+        let mut state = self.inner.lock().expect("prefix block retention poisoned");
+        let id = state.next_id;
+        state.next_id = state
+            .next_id
+            .checked_add(1)
+            .expect("prefix block retention lease ID overflow");
+        for &hash in &unique_hashes {
+            let count = state.hash_ref_counts.entry(hash).or_default();
+            *count = count
+                .checked_add(1)
+                .expect("retained prefix hash refcount overflow");
+        }
+        state.entries.insert(
+            id,
+            RetainedPrefixEntry {
+                hashes: unique_hashes,
+                active: Arc::clone(&active),
+            },
+        );
+        state.bump_revision(&self.published_revision);
+        state.publish_metrics();
+        PrefixBlockRetentionLease {
+            id,
+            active,
+            retention: Arc::downgrade(&self.inner),
+            published_revision: Arc::downgrade(&self.published_revision),
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn num_entries(&self) -> usize {
+        self.inner
+            .lock()
+            .expect("prefix block retention poisoned")
+            .entries
+            .len()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn num_hashes(&self) -> usize {
+        self.inner
+            .lock()
+            .expect("prefix block retention poisoned")
+            .hash_ref_counts
+            .len()
+    }
+}
+
+impl PrefixBlockRetentionLease {
+    pub(crate) fn is_active(&self) -> bool {
+        self.active.load(Ordering::Acquire)
+    }
+
+    pub(crate) fn touch(&self) {
+        if !self.is_active() {
+            return;
+        }
+        let Some(retention) = self.retention.upgrade() else {
+            return;
+        };
+        let mut state = retention.lock().expect("prefix block retention poisoned");
+        let Some(entry) = state.entries.shift_remove(&self.id) else {
+            return;
+        };
+        state.entries.insert(self.id, entry);
+    }
+}
+
+impl Drop for PrefixBlockRetentionLease {
+    fn drop(&mut self) {
+        let Some(retention) = self.retention.upgrade() else {
+            return;
+        };
+        let Some(published_revision) = self.published_revision.upgrade() else {
+            return;
+        };
+        retention
+            .lock()
+            .expect("prefix block retention poisoned")
+            .remove_entry(self.id, &published_revision);
+    }
+}
 
 /// Metadata for a single KV cache block.
 ///
@@ -195,11 +451,35 @@ impl BlockHashToBlockMap {
         }
     }
 
-    /// Get any cached block ID for the given hash, or None.
-    fn get_one(&self, key: &BlockHashWithGroupId) -> Option<usize> {
-        match self.cache.get(key)? {
-            CachedBlocks::Single(id) => Some(*id),
-            CachedBlocks::Multiple(map) => map.values().next().copied(),
+    fn contains(&self, key: &BlockHashWithGroupId, block_id: usize) -> bool {
+        match self.cache.get(key) {
+            Some(CachedBlocks::Single(id)) => *id == block_id,
+            Some(CachedBlocks::Multiple(map)) => map.contains_key(&block_id),
+            None => false,
+        }
+    }
+
+    fn get_common(&self, block_hash: BlockHash, kv_cache_group_ids: &[u32]) -> Option<usize> {
+        let (&first_group_id, remaining_group_ids) = kv_cache_group_ids.split_first()?;
+        let first_key = BlockHashWithGroupId {
+            block_hash,
+            group_id: first_group_id,
+        };
+        let is_common = |block_id| {
+            remaining_group_ids.iter().all(|&group_id| {
+                self.contains(
+                    &BlockHashWithGroupId {
+                        block_hash,
+                        group_id,
+                    },
+                    block_id,
+                )
+            })
+        };
+
+        match self.cache.get(&first_key)? {
+            CachedBlocks::Single(id) => is_common(*id).then_some(*id),
+            CachedBlocks::Multiple(map) => map.keys().copied().find(|id| is_common(*id)),
         }
     }
 
@@ -271,6 +551,15 @@ pub struct BlockPool {
     free_queue: FreeKVCacheBlockQueue,
     /// Hash-to-block map for prefix cache lookups.
     cached_block_hash_to_block: BlockHashToBlockMap,
+    num_prefix_cached_physical_blocks: usize,
+    prefix_block_retention: PrefixBlockRetention,
+    applied_retention_revision: u64,
+    retained_hashes: HashSet<BlockHash>,
+    retained_hash_to_block: HashMap<BlockHash, usize>,
+    retention_group_ids: Vec<u32>,
+    block_retention_counts: Vec<u32>,
+    num_retained_physical_blocks: usize,
+    num_retained_free_blocks: usize,
     /// Whether prefix caching is enabled.
     enable_caching: bool,
     /// Total number of real GPU blocks (excludes sentinels and null block).
@@ -306,6 +595,15 @@ impl BlockPool {
             blocks,
             free_queue,
             cached_block_hash_to_block: BlockHashToBlockMap::new(),
+            num_prefix_cached_physical_blocks: 0,
+            prefix_block_retention: PrefixBlockRetention::default(),
+            applied_retention_revision: 0,
+            retained_hashes: HashSet::new(),
+            retained_hash_to_block: HashMap::new(),
+            retention_group_ids: vec![0],
+            block_retention_counts: vec![0; total],
+            num_retained_physical_blocks: 0,
+            num_retained_free_blocks: 0,
             enable_caching,
             num_gpu_blocks,
             null_block_id: 0, // Will be set below
@@ -330,7 +628,19 @@ impl BlockPool {
 
     /// Get the number of free blocks available for allocation.
     pub fn num_free_blocks(&self) -> usize {
-        self.free_queue.num_free_blocks
+        self.free_queue.num_free_blocks + self.num_retained_free_blocks
+    }
+
+    pub(crate) fn prefix_block_retention(&self) -> PrefixBlockRetention {
+        self.prefix_block_retention.clone()
+    }
+
+    pub(crate) fn set_retention_group_ids(&mut self, group_ids: Vec<u32>) {
+        assert!(
+            self.cached_block_hash_to_block.len() == 0,
+            "retention groups must be configured before caching blocks"
+        );
+        self.retention_group_ids = group_ids;
     }
 
     /// Get total number of GPU blocks (excluding sentinels, including null block).
@@ -348,79 +658,120 @@ impl BlockPool {
         1.0 - (self.num_free_blocks() as f64 / total as f64)
     }
 
-    /// Look up cached blocks for a given hash across the specified group IDs.
-    ///
-    /// Returns `Some(vec_of_block_ids)` if ALL groups have a cached block for
-    /// this hash, or `None` if any group misses.
-    pub fn get_cached_block(
-        &self,
-        block_hash: BlockHash,
-        kv_cache_group_ids: &[u32],
-    ) -> Option<Vec<usize>> {
-        let mut cached_ids = Vec::with_capacity(kv_cache_group_ids.len());
-        for &group_id in kv_cache_group_ids {
-            let key = BlockHashWithGroupId {
-                block_hash,
-                group_id,
-            };
-            cached_ids.push(self.cached_block_hash_to_block.get_one(&key)?);
-        }
-        Some(cached_ids)
+    #[allow(clippy::cast_precision_loss)]
+    fn publish_retained_block_metrics(&self) {
+        metrics::gauge!(RETAINED_PREFIX_PHYSICAL_BLOCKS_METRIC)
+            .set(self.num_retained_physical_blocks as f64);
+        metrics::gauge!(RETAINED_PREFIX_FREE_BLOCKS_METRIC)
+            .set(self.num_retained_free_blocks as f64);
     }
 
-    /// Touch blocks, increment ref_cnt and remove from free list if ref_cnt was 0.
-    ///
-    /// Called when cached blocks are reused by a new request (prefix cache hit).
-    pub fn touch(&mut self, block_ids: &[usize]) {
-        for &block_id in block_ids {
-            let block = &mut self.blocks[block_id];
-            if block.ref_cnt == 0 && !block.is_null {
-                // Remove from free list since it's being actively used again
-                self.free_queue.remove(&mut self.blocks, block_id);
-            } else {
-                // For blocks already removed, just update ref_cnt below
-            }
-            self.blocks[block_id].ref_cnt += 1;
-        }
-    }
-
-    /// Free blocks, decrement ref_cnt, append to free list tail if it hits 0.
-    ///
-    /// Blocks retain their hash when freed! They stay in the cache for potential
-    /// future reuse. They are only evicted (hash cleared) when reallocated.
-    ///
-    /// `ordered_block_ids`: blocks ordered by eviction priority (first = evict first).
-    /// For a request being freed, pass blocks in REVERSE order so the tail of the
-    /// sequence (most specific) is evicted first.
-    pub fn free_blocks(&mut self, ordered_block_ids: &[usize]) {
-        // First pass: decrement ref_cnt
-        for &block_id in ordered_block_ids {
-            debug_assert!(
-                self.blocks[block_id].ref_cnt > 0,
-                "Block {block_id} ref_cnt underflow: attempting to free block with ref_cnt=0"
-            );
-            self.blocks[block_id].ref_cnt = self.blocks[block_id].ref_cnt.saturating_sub(1);
-        }
-
-        // Second pass: add newly-free blocks to the free list
-        for &block_id in ordered_block_ids {
+    fn retain_physical_block(&mut self, block_id: usize) {
+        let count = &mut self.block_retention_counts[block_id];
+        if *count == 0 {
+            self.num_retained_physical_blocks += 1;
             if self.blocks[block_id].ref_cnt == 0 && !self.blocks[block_id].is_null {
+                self.free_queue.remove(&mut self.blocks, block_id);
+                self.num_retained_free_blocks += 1;
+            }
+        }
+        *count = count
+            .checked_add(1)
+            .expect("physical block retention count overflow");
+    }
+
+    fn release_physical_block(&mut self, block_id: usize) {
+        let count = &mut self.block_retention_counts[block_id];
+        *count = count
+            .checked_sub(1)
+            .expect("physical block retention count underflow");
+        if *count == 0 {
+            self.num_retained_physical_blocks = self
+                .num_retained_physical_blocks
+                .checked_sub(1)
+                .expect("retained physical block count underflow");
+            if self.blocks[block_id].ref_cnt == 0 && !self.blocks[block_id].is_null {
+                self.num_retained_free_blocks = self
+                    .num_retained_free_blocks
+                    .checked_sub(1)
+                    .expect("retained free block count underflow");
                 self.free_queue.append(&mut self.blocks, block_id);
             }
         }
     }
 
-    /// Allocate `num_blocks` new blocks from the free pool.
-    ///
-    /// Blocks are popped from the head of the free list (LRU eviction).
-    /// If a popped block has a cached hash, it is evicted from the cache.
-    ///
-    /// Returns `None` if not enough free blocks are available.
-    pub fn get_new_blocks(&mut self, num_blocks: usize) -> Option<Vec<usize>> {
-        if num_blocks > self.free_queue.num_free_blocks {
-            return None;
+    fn retained_block_candidate(&self, hash: BlockHash) -> Option<usize> {
+        self.cached_block_hash_to_block
+            .get_common(hash, &self.retention_group_ids)
+    }
+
+    fn reconcile_retained_hash_block(&mut self, hash: BlockHash) {
+        if self.retained_hash_to_block.contains_key(&hash) {
+            return;
+        }
+        if let Some(block_id) = self.retained_block_candidate(hash) {
+            self.retain_physical_block(block_id);
+            self.retained_hash_to_block.insert(hash, block_id);
+        }
+    }
+
+    fn sync_retention_locked(&mut self, retention: &PrefixBlockRetentionState) {
+        if self.applied_retention_revision == retention.revision {
+            return;
         }
 
+        let next_hashes = retention
+            .hash_ref_counts
+            .keys()
+            .copied()
+            .collect::<HashSet<_>>();
+        let removed = self
+            .retained_hashes
+            .difference(&next_hashes)
+            .copied()
+            .collect::<Vec<_>>();
+        let added = next_hashes
+            .difference(&self.retained_hashes)
+            .copied()
+            .collect::<Vec<_>>();
+
+        for hash in removed {
+            if let Some(block_id) = self.retained_hash_to_block.remove(&hash) {
+                self.release_physical_block(block_id);
+            }
+        }
+        for hash in added {
+            self.reconcile_retained_hash_block(hash);
+        }
+
+        self.retained_hashes = next_hashes;
+        self.applied_retention_revision = retention.revision;
+        self.publish_retained_block_metrics();
+    }
+
+    fn sync_retention_if_changed(&mut self) {
+        let revision = self
+            .prefix_block_retention
+            .published_revision
+            .load(Ordering::Acquire);
+        if revision == self.applied_retention_revision {
+            return;
+        }
+        let retention = Arc::clone(&self.prefix_block_retention.inner);
+        let retention = retention.lock().expect("prefix block retention poisoned");
+        self.sync_retention_locked(&retention);
+    }
+
+    fn release_retained_hashes(&mut self, hashes: &[BlockHash]) {
+        for hash in hashes {
+            debug_assert!(self.retained_hashes.remove(hash));
+            if let Some(block_id) = self.retained_hash_to_block.remove(hash) {
+                self.release_physical_block(block_id);
+            }
+        }
+    }
+
+    fn allocate_free_blocks(&mut self, num_blocks: usize) -> Vec<usize> {
         let mut result = Vec::with_capacity(num_blocks);
         for _ in 0..num_blocks {
             let block_id = self
@@ -428,7 +779,6 @@ impl BlockPool {
                 .popleft(&mut self.blocks)
                 .expect("Should have enough free blocks");
 
-            // Evict from cache if this block was cached
             if self.enable_caching {
                 self.maybe_evict_cached_block(block_id);
             }
@@ -437,8 +787,146 @@ impl BlockPool {
             self.blocks[block_id].ref_cnt = 1;
             result.push(block_id);
         }
+        result
+    }
 
-        Some(result)
+    /// Look up cached blocks for a given hash across the specified group IDs.
+    ///
+    /// Returns the same physical block ID for every group if one block retains
+    /// all requested group keys, or `None` if no common block exists.
+    pub fn get_cached_block(
+        &self,
+        block_hash: BlockHash,
+        kv_cache_group_ids: &[u32],
+    ) -> Option<Vec<usize>> {
+        if kv_cache_group_ids.is_empty() {
+            return Some(Vec::new());
+        }
+        if let Some(&block_id) = self.retained_hash_to_block.get(&block_hash) {
+            let has_all_groups = kv_cache_group_ids.iter().all(|&group_id| {
+                self.blocks[block_id]
+                    .block_hashes
+                    .contains(&BlockHashWithGroupId {
+                        block_hash,
+                        group_id,
+                    })
+            });
+            if has_all_groups {
+                return Some(vec![block_id; kv_cache_group_ids.len()]);
+            }
+        }
+        let block_id = self
+            .cached_block_hash_to_block
+            .get_common(block_hash, kv_cache_group_ids)?;
+        Some(vec![block_id; kv_cache_group_ids.len()])
+    }
+
+    /// Touch blocks, increment ref_cnt and remove from free list if ref_cnt was 0.
+    ///
+    /// Called when cached blocks are reused by a new request (prefix cache hit).
+    pub fn touch(&mut self, block_ids: &[usize]) {
+        self.sync_retention_if_changed();
+        for &block_id in block_ids {
+            let block = &mut self.blocks[block_id];
+            if block.ref_cnt == 0 && !block.is_null {
+                if self.block_retention_counts[block_id] == 0 {
+                    self.free_queue.remove(&mut self.blocks, block_id);
+                } else {
+                    self.num_retained_free_blocks = self
+                        .num_retained_free_blocks
+                        .checked_sub(1)
+                        .expect("retained free block count underflow");
+                }
+            }
+            self.blocks[block_id].ref_cnt += 1;
+        }
+        self.publish_retained_block_metrics();
+    }
+
+    /// Free blocks, decrement ref_cnt, and make zero-reference blocks evictable.
+    ///
+    /// Blocks retain their hash when freed! They stay in the cache for potential
+    /// future reuse. They are only evicted (hash cleared) when reallocated.
+    ///
+    /// `ordered_block_ids`: blocks ordered by eviction priority (first = evict first).
+    /// For a request being freed, pass blocks in REVERSE order so the tail of the
+    /// sequence (most specific) is evicted first.
+    pub fn free_blocks(&mut self, ordered_block_ids: &[usize]) {
+        self.sync_retention_if_changed();
+        let mut release_counts = HashMap::<usize, u32>::new();
+        for &block_id in ordered_block_ids {
+            let count = release_counts.entry(block_id).or_default();
+            *count = count.checked_add(1).expect("block release count overflow");
+        }
+
+        for (&block_id, &release_count) in &release_counts {
+            assert!(
+                self.blocks[block_id].ref_cnt >= release_count,
+                "Block {block_id} ref_cnt underflow: releasing {release_count} references from {}",
+                self.blocks[block_id].ref_cnt
+            );
+        }
+
+        for &block_id in ordered_block_ids {
+            let Some(release_count) = release_counts.remove(&block_id) else {
+                continue;
+            };
+            self.blocks[block_id].ref_cnt -= release_count;
+            if self.blocks[block_id].ref_cnt == 0 && !self.blocks[block_id].is_null {
+                if self.block_retention_counts[block_id] == 0 {
+                    self.free_queue.append(&mut self.blocks, block_id);
+                } else {
+                    self.num_retained_free_blocks += 1;
+                }
+            }
+        }
+        self.publish_retained_block_metrics();
+    }
+
+    /// Allocate `num_blocks` new blocks from the free pool.
+    ///
+    /// Blocks are popped from the head of the free list (LRU eviction).
+    /// If ordinary free blocks are insufficient, retained prefixes are revoked
+    /// oldest-first. If a popped block has a cached hash, it is evicted.
+    ///
+    /// Returns `None` if not enough free blocks are available.
+    pub fn get_new_blocks(&mut self, num_blocks: usize) -> Option<Vec<usize>> {
+        if num_blocks > self.num_free_blocks() {
+            return None;
+        }
+
+        if !self.prefix_block_retention.enabled.load(Ordering::Acquire) {
+            return Some(self.allocate_free_blocks(num_blocks));
+        }
+
+        let retention_handle = Arc::clone(&self.prefix_block_retention.inner);
+        let published_revision = Arc::clone(&self.prefix_block_retention.published_revision);
+        let mut retention = retention_handle
+            .lock()
+            .expect("prefix block retention poisoned");
+        self.sync_retention_locked(&retention);
+        let mut pressure_evictions = 0;
+        while num_blocks > self.free_queue.num_free_blocks {
+            let Some(released_hashes) = retention.revoke_oldest(&published_revision) else {
+                break;
+            };
+            self.release_retained_hashes(&released_hashes);
+            pressure_evictions += 1;
+        }
+        self.applied_retention_revision = retention.revision;
+        self.publish_retained_block_metrics();
+        if pressure_evictions > 0 {
+            self.prefix_block_retention.publish_revocation();
+            metrics::counter!(
+                RETAINED_PREFIX_PRESSURE_EVICTIONS_METRIC,
+                "reason" => ALLOCATION_PRESSURE_REASON
+            )
+            .increment(pressure_evictions);
+        }
+        if num_blocks > self.free_queue.num_free_blocks {
+            return None;
+        }
+        Some(self.allocate_free_blocks(num_blocks))
     }
 
     /// Cache full blocks by assigning hashes and inserting into the hash map.
@@ -463,6 +951,8 @@ impl BlockPool {
             return;
         }
 
+        self.sync_retention_if_changed();
+
         assert!(
             block_hashes.len() >= num_full_blocks,
             "Not enough block hashes ({}) for {} full blocks",
@@ -472,9 +962,7 @@ impl BlockPool {
 
         for idx in num_cached_blocks..num_full_blocks {
             let block_id = block_ids[idx];
-            let block = &mut self.blocks[block_id];
-
-            if block.is_null {
+            if self.blocks[block_id].is_null {
                 continue;
             }
 
@@ -483,19 +971,36 @@ impl BlockPool {
                 group_id: kv_cache_group_id,
             };
 
-            if block.block_hashes.contains(&hash_with_group) {
+            if self.blocks[block_id]
+                .block_hashes
+                .contains(&hash_with_group)
+            {
                 continue;
             }
 
-            block.block_hashes.push(hash_with_group);
+            if self.blocks[block_id].block_hashes.is_empty() {
+                self.num_prefix_cached_physical_blocks += 1;
+            }
+            self.blocks[block_id].block_hashes.push(hash_with_group);
             self.cached_block_hash_to_block
                 .insert(hash_with_group, block_id);
+            if self.retained_hashes.contains(&hash_with_group.block_hash) {
+                self.reconcile_retained_hash_block(hash_with_group.block_hash);
+            }
         }
+        self.publish_retained_block_metrics();
     }
 
     /// Evict a cached block's hash from the cache map and reset its hash.
     fn maybe_evict_cached_block(&mut self, block_id: usize) {
+        debug_assert_eq!(self.block_retention_counts[block_id], 0);
         let block_hashes = std::mem::take(&mut self.blocks[block_id].block_hashes);
+        if !block_hashes.is_empty() {
+            self.num_prefix_cached_physical_blocks = self
+                .num_prefix_cached_physical_blocks
+                .checked_sub(1)
+                .expect("prefix-cached physical block count underflow");
+        }
         for hash in &block_hashes {
             self.cached_block_hash_to_block.pop(hash, block_id);
         }
@@ -513,8 +1018,28 @@ impl BlockPool {
             return false;
         }
 
+        let retention = Arc::clone(&self.prefix_block_retention.inner);
+        let published_revision = Arc::clone(&self.prefix_block_retention.published_revision);
+        let mut retention = retention.lock().expect("prefix block retention poisoned");
+        self.sync_retention_locked(&retention);
+        let (retention_evictions, released_hashes) = retention.revoke_all(&published_revision);
+        self.release_retained_hashes(&released_hashes);
+        self.applied_retention_revision = retention.revision;
+        self.publish_retained_block_metrics();
+        if retention_evictions > 0 {
+            self.prefix_block_retention.publish_revocation();
+            metrics::counter!(
+                RETAINED_PREFIX_PRESSURE_EVICTIONS_METRIC,
+                "reason" => RESET_REASON
+            )
+            .increment(retention_evictions as u64);
+        }
+
         let evicted = self.cached_block_hash_to_block.len();
         self.cached_block_hash_to_block.clear();
+        debug_assert!(self.retained_hash_to_block.is_empty());
+        self.retained_hash_to_block.clear();
+        self.num_prefix_cached_physical_blocks = 0;
         for block in &mut self.blocks {
             block.reset_hash();
         }
@@ -528,6 +1053,15 @@ impl BlockPool {
     /// Get the number of cached blocks in the hash map.
     pub fn num_cached_blocks(&self) -> usize {
         self.cached_block_hash_to_block.len()
+    }
+
+    /// Get the number of physical blocks that retain at least one prefix-cache key.
+    pub fn num_prefix_cached_physical_blocks(&self) -> usize {
+        self.num_prefix_cached_physical_blocks
+    }
+
+    pub fn num_retained_physical_blocks(&self) -> usize {
+        self.num_retained_physical_blocks
     }
 
     /// Get the block size used for hash computation.
@@ -592,6 +1126,29 @@ mod tests {
     }
 
     #[test]
+    fn test_duplicate_block_release_appends_once() {
+        let mut pool = BlockPool::new(4, true, 4);
+        let block_id = pool.get_new_blocks(1).unwrap()[0];
+        pool.touch(&[block_id]);
+
+        pool.free_blocks(&[block_id, block_id]);
+
+        assert_eq!(pool.block_ref_cnt(block_id), 0);
+        assert_eq!(pool.num_free_blocks(), 3);
+        assert_eq!(pool.get_new_blocks(3).unwrap().len(), 3);
+        assert_eq!(pool.num_free_blocks(), 0);
+    }
+
+    #[test]
+    #[should_panic(expected = "ref_cnt underflow")]
+    fn test_block_release_underflow_fails_before_queue_mutation() {
+        let mut pool = BlockPool::new(4, true, 4);
+        let block_id = pool.get_new_blocks(1).unwrap()[0];
+        pool.free_blocks(&[block_id]);
+        pool.free_blocks(&[block_id]);
+    }
+
+    #[test]
     fn test_allocation_fails_when_exhausted() {
         let mut pool = BlockPool::new(2, false, 16);
         // 2 blocks, 1 null -> 1 free
@@ -621,6 +1178,7 @@ mod tests {
 
         // Verify they're cached
         assert_eq!(pool.num_cached_blocks(), 3);
+        assert_eq!(pool.num_prefix_cached_physical_blocks(), 3);
 
         // Look up by hash
         let cached = pool.get_cached_block(h0, &[0]);
@@ -721,7 +1279,7 @@ mod tests {
     }
 
     #[test]
-    fn test_get_cached_block_multiple_groups() {
+    fn test_get_cached_block_requires_a_common_physical_block() {
         let mut pool = BlockPool::new(8, true, 4);
 
         // Allocate blocks for two groups
@@ -734,13 +1292,7 @@ mod tests {
         pool.cache_full_blocks(&ids_g0, &[h0], 0, 1, 0);
         pool.cache_full_blocks(&ids_g1, &[h0], 0, 1, 1);
 
-        // Should find both groups
-        let cached = pool.get_cached_block(h0, &[0, 1]);
-        assert!(cached.is_some());
-        let cached = cached.unwrap();
-        assert_eq!(cached.len(), 2);
-        assert_eq!(cached[0], ids_g0[0]);
-        assert_eq!(cached[1], ids_g1[0]);
+        assert!(pool.get_cached_block(h0, &[0, 1]).is_none());
 
         // Should fail if one group is missing
         let cached = pool.get_cached_block(h0, &[0, 2]);
@@ -768,20 +1320,159 @@ mod tests {
     }
 
     #[test]
+    fn test_duplicate_group_aliases_select_a_common_physical_block() {
+        let mut pool = BlockPool::new(8, true, 4);
+        let first = pool.get_new_blocks(1).unwrap();
+        let second = pool.get_new_blocks(1).unwrap();
+        let h0 = hash_block_tokens(None, &[1, 2, 3, 4], None);
+
+        for ids in [&first, &second] {
+            pool.cache_full_blocks(ids, &[h0], 0, 1, 0);
+            pool.cache_full_blocks(ids, &[h0], 0, 1, 1);
+        }
+
+        let cached = pool.get_cached_block(h0, &[0, 1]).unwrap();
+        assert_eq!(cached[0], cached[1]);
+        assert!(cached[0] == first[0] || cached[0] == second[0]);
+    }
+
+    #[test]
+    fn retained_base_blocks_outlive_evictable_completion_suffixes() {
+        let mut pool = BlockPool::new(6, true, 4);
+        pool.set_retention_group_ids(vec![0, 1]);
+        let retention = pool.prefix_block_retention();
+        retention.enable();
+        let block_ids = pool.get_new_blocks(4).unwrap();
+        let h0 = hash_block_tokens(None, &[1, 2, 3, 4], None);
+        let h1 = hash_block_tokens(Some(h0), &[5, 6, 7, 8], None);
+        let h2 = hash_block_tokens(Some(h1), &[9, 10, 11, 12], None);
+        let h3 = hash_block_tokens(Some(h2), &[13, 14, 15, 16], None);
+        let hashes = [h0, h1, h2, h3];
+        for group_id in [0, 1] {
+            pool.cache_full_blocks(&block_ids, &hashes, 0, hashes.len(), group_id);
+        }
+
+        let lease = retention.retain(&hashes[..2]);
+        pool.free_blocks(&block_ids.iter().rev().copied().collect::<Vec<_>>());
+
+        assert_eq!(pool.num_retained_physical_blocks(), 2);
+        assert_eq!(retention.num_entries(), 1);
+        assert_eq!(retention.num_hashes(), 2);
+        let reused = pool.get_cached_block(h0, &[0, 1]).unwrap()[0];
+        pool.touch(&[reused]);
+        assert_eq!(pool.block_ref_cnt(reused), 1);
+        pool.free_blocks(&[reused]);
+        assert_eq!(pool.block_ref_cnt(reused), 0);
+        assert_eq!(pool.get_new_blocks(3).unwrap().len(), 3);
+        assert!(lease.is_active());
+        assert!(pool.get_cached_block(h0, &[0, 1]).is_some());
+        assert!(pool.get_cached_block(h1, &[0, 1]).is_some());
+        assert!(pool.get_cached_block(h2, &[0, 1]).is_none());
+        assert!(pool.get_cached_block(h3, &[0, 1]).is_none());
+
+        assert_eq!(pool.get_new_blocks(1).unwrap().len(), 1);
+        assert!(!lease.is_active());
+        assert_eq!(retention.num_entries(), 0);
+        assert_eq!(pool.num_retained_physical_blocks(), 0);
+        assert!(pool.get_cached_block(h0, &[0, 1]).is_some());
+        assert!(pool.get_cached_block(h1, &[0, 1]).is_none());
+    }
+
+    #[test]
+    fn retention_uses_one_complete_group_qualified_duplicate() {
+        let mut pool = BlockPool::new(4, true, 4);
+        pool.set_retention_group_ids(vec![0, 1]);
+        let retention = pool.prefix_block_retention();
+        retention.enable();
+        let block_ids = pool.get_new_blocks(2).unwrap();
+        let low = *block_ids.iter().min().unwrap();
+        let high = *block_ids.iter().max().unwrap();
+        let hash = hash_block_tokens(None, &[1, 2, 3, 4], None);
+        let lease = retention.retain(&[hash]);
+
+        pool.cache_full_blocks(&[high], &[hash], 0, 1, 0);
+        assert_eq!(pool.num_retained_physical_blocks(), 0);
+        pool.cache_full_blocks(&[high], &[hash], 0, 1, 1);
+        assert_eq!(pool.retained_hash_to_block[&hash], high);
+        pool.cache_full_blocks(&[low], &[hash], 0, 1, 0);
+        assert_eq!(pool.retained_hash_to_block[&hash], high);
+        pool.cache_full_blocks(&[low], &[hash], 0, 1, 1);
+        assert_eq!(pool.retained_hash_to_block[&hash], high);
+        assert_eq!(pool.num_retained_physical_blocks(), 1);
+
+        pool.free_blocks(&[high, low]);
+        assert_eq!(pool.get_new_blocks(2).unwrap().len(), 2);
+        assert!(lease.is_active());
+        assert_eq!(pool.get_cached_block(hash, &[0, 1]), Some(vec![high, high]));
+        assert_eq!(pool.get_new_blocks(1).unwrap().len(), 1);
+        assert!(!lease.is_active());
+    }
+
+    #[test]
+    fn overlapping_retention_leases_release_hashes_by_reference_count() {
+        let retention = PrefixBlockRetention::default();
+        retention.enable();
+        let h0 = hash_block_tokens(None, &[1, 2, 3, 4], None);
+        let h1 = hash_block_tokens(Some(h0), &[5, 6, 7, 8], None);
+        let first = retention.retain(&[h0, h1]);
+        let second = retention.retain(&[h0]);
+
+        assert_eq!(retention.num_entries(), 2);
+        assert_eq!(retention.num_hashes(), 2);
+        drop(first);
+        assert_eq!(retention.num_entries(), 1);
+        assert_eq!(retention.num_hashes(), 1);
+        assert!(second.is_active());
+        drop(second);
+        assert_eq!(retention.num_entries(), 0);
+        assert_eq!(retention.num_hashes(), 0);
+    }
+
+    #[test]
+    fn retention_touch_updates_pressure_eviction_order() {
+        let retention = PrefixBlockRetention::default();
+        retention.enable();
+        let h0 = hash_block_tokens(None, &[1, 2, 3, 4], None);
+        let h1 = hash_block_tokens(Some(h0), &[5, 6, 7, 8], None);
+        let first = retention.retain(&[h0]);
+        let second = retention.retain(&[h1]);
+        first.touch();
+
+        assert!(retention
+            .inner
+            .lock()
+            .expect("prefix block retention poisoned")
+            .revoke_oldest(&retention.published_revision)
+            .is_some());
+
+        assert!(first.is_active());
+        assert!(!second.is_active());
+    }
+
+    #[test]
     fn test_reset_prefix_cache() {
         let mut pool = BlockPool::new(4, true, 4);
+        let retention = pool.prefix_block_retention();
+        retention.enable();
+        let revocations = retention.revocation_monitor();
         let ids = pool.get_new_blocks(2).unwrap();
         let h0 = hash_block_tokens(None, &[1, 2, 3, 4], None);
         pool.cache_full_blocks(&ids, &[h0, h0], 0, 1, 0);
+        let lease = retention.retain(&[h0]);
 
         // Can't reset while blocks are in use
         assert!(!pool.reset_prefix_cache());
 
         // Free blocks
         pool.free_blocks(&ids);
+        assert_eq!(pool.num_retained_physical_blocks(), 1);
 
         // Now reset should succeed
         assert!(pool.reset_prefix_cache());
         assert_eq!(pool.num_cached_blocks(), 0);
+        assert_eq!(pool.num_retained_physical_blocks(), 0);
+        assert!(!lease.is_active());
+        assert!(revocations.take_pending());
+        assert!(!revocations.take_pending());
     }
 }

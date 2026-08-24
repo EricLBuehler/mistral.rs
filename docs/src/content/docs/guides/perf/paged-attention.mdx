@@ -82,10 +82,14 @@ Two more flags tune the cache itself:
 
 Scheduler memory and latency are controlled independently:
 
-- `--max-num-batched-tokens <n>`: batch-wide prompt-token budget (default 4096).
+- `--max-num-batched-tokens <n>`: total scheduler-step token budget (default 4096).
+- `--max-prefill-chunk-tokens <n>`: batch-wide chunkable CUDA text-prompt quantum (default 512).
 - `--max-decode-steps-before-prefill <n>`: maximum decode turns before a waiting prompt receives service (default 8).
 
 See the [serve flag reference](/reference/cli/serve/) for all `--pa-*` flags.
+
+Raw-logit, adapter, and multimodal prompt paths that cannot be split remain atomic. The prefill
+chunk limit does not change CPU or Metal scheduling.
 
 ## How it works
 

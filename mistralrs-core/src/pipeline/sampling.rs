@@ -10,7 +10,7 @@ use crate::sampler::{CudaBatchSamplingKind, CudaTop1BatchSubmission};
 use crate::{
     prefix_cacher::PrefixCacheManagerV2,
     sampler::Logprobs,
-    sequence::{Sequence, SequenceRecognizer, SequenceState, StopReason},
+    sequence::{Sequence, SequenceRecognizer, SequenceState, StopReason, StreamingEmission},
     tools::ToolCallState,
 };
 
@@ -36,7 +36,7 @@ fn parse_text_and_tool_calls(
     let Some(state) = state else {
         return Ok((Some(raw_text.to_string()), Vec::new()));
     };
-    let parsed = state.finalize_for_response(raw_text, None, None)?;
+    let parsed = state.finalize_for_response(raw_text, None, None, None)?;
     Ok((parsed.content, parsed.tool_calls))
 }
 
@@ -53,7 +53,8 @@ fn parse_streaming_text_and_tool_calls(
             Vec::new(),
         ));
     };
-    let parsed = state.parse_streaming(content_delta, raw_delta, has_reasoning_parser, false)?;
+    let parsed =
+        state.parse_streaming(content_delta, raw_delta, None, has_reasoning_parser, false)?;
     Ok((parsed.content, parsed.tool_calls))
 }
 
@@ -100,13 +101,74 @@ fn activate_required_tool_call_grammar(
     }
 }
 
-// Text a tool call is detected in: with a think-tag parser only the content outside the think block counts
-fn tool_detection_text(seq: &Sequence) -> Option<String> {
-    if seq.reasoning_mode().is_some() {
+fn append_hidden_stop(mut text: Option<String>, hidden_stop: Option<&str>) -> Option<String> {
+    if let (Some(text), Some(hidden_stop)) = (&mut text, hidden_stop) {
+        text.push_str(hidden_stop);
+    }
+    text
+}
+
+// With a think-tag parser, only content outside the think block counts as tool text.
+fn tool_detection_text(seq: &Sequence, hidden_stop: Option<&str>) -> Option<String> {
+    let text = if seq.reasoning_mode().is_some() {
         seq.get_response_content()
     } else {
         seq.peek_delta().ok().flatten()
+    };
+    append_hidden_stop(text, hidden_stop)
+}
+
+fn streaming_response_logprob(emission: &StreamingEmission) -> crate::ResponseLogprob {
+    crate::ResponseLogprob {
+        token: emission
+            .logprobs
+            .bytes
+            .clone()
+            .unwrap_or_else(|| String::from_utf8_lossy(&emission.bytes).to_string()),
+        bytes: Some(emission.bytes.clone()),
+        logprob: emission.logprobs.logprob,
+        top_logprobs: emission
+            .logprobs
+            .top_logprobs
+            .clone()
+            .expect("requested logprobs must include top logprobs"),
     }
+}
+
+fn cache_finished_sequence(
+    this: &dyn Pipeline,
+    prefix_cacher: &mut PrefixCacheManagerV2,
+    seq: &mut Sequence,
+) -> Result<()> {
+    let recurrent_snapshots = if this.cache().is_hybrid() {
+        let Some(idx) = seq.recurrent_state_idx() else {
+            tracing::warn!(
+                sequence_id = seq.id(),
+                "Skipping hybrid prefix cache entry without recurrent state"
+            );
+            return Ok(());
+        };
+        match this
+            .cache()
+            .hybrid()
+            .snapshot_recurrent_state(*seq.id(), idx)
+        {
+            Ok(snapshots) => Some(snapshots),
+            Err(error) => {
+                tracing::warn!(
+                    sequence_id = seq.id(),
+                    %error,
+                    "Skipping hybrid prefix cache entry after recurrent snapshot failure"
+                );
+                return Ok(());
+            }
+        }
+    } else {
+        None
+    };
+    prefix_cacher.add_sequence(seq, recurrent_snapshots);
+    prefix_cacher.evict_caches()?;
+    Ok(())
 }
 
 pub(crate) async fn finish_or_add_toks_to_seq(
@@ -117,7 +179,7 @@ pub(crate) async fn finish_or_add_toks_to_seq(
     eos_tok: Option<&[u32]>,
     use_prefix_cacher: bool,
 ) -> Result<()> {
-    let mut is_done = seq.is_done(logprobs.token, eos_tok, this.get_metadata().max_seq_len);
+    let is_done = seq.is_done(logprobs.token, eos_tok, this.get_metadata().max_seq_len);
     let metadata = this.get_metadata();
     let tok_env = metadata.tok_env().ok_or(candle_core::Error::Msg(
         "`finish_or_add_toks_to_seq` requires the pipeline to have a token trie".to_string(),
@@ -129,11 +191,17 @@ pub(crate) async fn finish_or_add_toks_to_seq(
     let completion_bytes = tok_env
         .tok_trie()
         .decode_ext(&[logprobs.token], include_special);
-    seq.add_token(logprobs.clone(), completion_bytes, &is_done);
+    let mut is_done = seq.add_token(logprobs.clone(), completion_bytes, is_done);
+    let hidden_stop = match is_done {
+        Some(StopReason::StopString {
+            stop_string_idx, ..
+        }) => Some(seq.stop_strings()[stop_string_idx].clone()),
+        _ => None,
+    };
 
     // If we can have a tool and we got a tool, stop the sequence early.
     // Doesn't conflict with the logic below because it does the same thing anyway.
-    if let Some(d) = tool_detection_text(seq) {
+    if let Some(d) = tool_detection_text(seq, hidden_stop.as_deref()) {
         if let Some(ref mut state) = seq.tool_call_state {
             let (_tool_use_still_possible, tool_use_is_done) = state.prefix_status(d.as_str())?;
 
@@ -156,7 +224,7 @@ pub(crate) async fn finish_or_add_toks_to_seq(
     // the tool call prefix from earlier generation, which would spuriously
     // re-activate the grammar on a completed sequence.
     if matches!(seq.recognizer, SequenceRecognizer::None) && is_done.is_none() {
-        let text = tool_detection_text(seq);
+        let text = tool_detection_text(seq, None);
         let grm = seq
             .tool_call_state
             .as_mut()
@@ -183,11 +251,15 @@ pub(crate) async fn finish_or_add_toks_to_seq(
         }
     }
 
+    if is_done.is_some() {
+        seq.flush_stop_pending_bytes();
+    }
+
     // Handle streaming requests
     if seq.get_mut_group().is_streaming {
         let mut tool_use_still_possible = false;
         let mut tool_use_is_done = false;
-        if let Some(d) = tool_detection_text(seq) {
+        if let Some(d) = tool_detection_text(seq, hidden_stop.as_deref()) {
             if let Some(ref state) = seq.tool_call_state {
                 (tool_use_still_possible, tool_use_is_done) = state.prefix_status(d.as_str())?;
             }
@@ -201,12 +273,28 @@ pub(crate) async fn finish_or_add_toks_to_seq(
             if is_done.is_some() && seq.has_reasoning_state() {
                 seq.finalize_reasoning();
             }
-            let delta_result = if is_done.is_some() {
+            let mut streaming_emissions = if seq.return_logprobs() {
+                seq.take_ready_streaming_emissions(is_done.is_some())
+            } else {
+                Vec::new()
+            };
+            let delta_result = if seq.return_logprobs() {
+                if streaming_emissions.is_empty() && is_done.is_none() {
+                    Ok(None)
+                } else {
+                    Ok(Some(
+                        streaming_emissions
+                            .iter()
+                            .map(|emission| emission.text.as_str())
+                            .collect::<String>(),
+                    ))
+                }
+            } else if is_done.is_some() {
                 Ok(Some(seq.get_final_delta()))
             } else {
                 seq.get_delta()
             };
-            if let Some(delta) = crate::handle_seq_error_stateaware_ok!(delta_result, seq) {
+            if let Some(mut delta) = crate::handle_seq_error_stateaware_ok!(delta_result, seq) {
                 if seq.get_mut_group().is_chat {
                     let has_external_reasoning_parser = seq.reasoning_mode().is_some();
                     let has_reasoning_parser = seq.has_reasoning_state();
@@ -222,9 +310,18 @@ pub(crate) async fn finish_or_add_toks_to_seq(
                     };
 
                     let tool_calls = if let Some(state) = seq.tool_call_state.as_mut() {
+                        let parser_text = hidden_stop.as_deref().and_then(|hidden_stop| {
+                            append_hidden_stop(
+                                content_delta.clone().or_else(|| {
+                                    (!has_external_reasoning_parser).then(|| delta.clone())
+                                }),
+                                Some(hidden_stop),
+                            )
+                        });
                         let parsed = state.parse_streaming(
                             content_delta.take(),
                             delta.as_str(),
+                            parser_text.as_deref(),
                             has_external_reasoning_parser,
                             is_done.is_some(),
                         )?;
@@ -239,44 +336,106 @@ pub(crate) async fn finish_or_add_toks_to_seq(
                         Vec::new()
                     };
 
-                    seq.add_streaming_chunk_choice_to_group(crate::ChunkChoice {
-                        delta: crate::Delta {
-                            content: fixup_sentencepiece!(Option content_delta),
-                            role: "assistant".to_string(),
-                            tool_calls: Some(tool_calls).filter(|v| !v.is_empty()),
-                            reasoning_content: reasoning_delta,
-                        },
-                        index: seq.get_response_index(),
-                        finish_reason: is_done.map(|x| x.to_string()),
-                        logprobs: if seq.return_logprobs() {
-                            Some(crate::ResponseLogprob {
-                                token: delta,
-                                bytes: logprobs.bytes.clone().map(|b| b.into_bytes()),
-                                logprob: logprobs.logprob,
-                                top_logprobs: logprobs.top_logprobs.unwrap().clone(),
-                            })
+                    if is_done.is_some() && !seq.stop_strings().is_empty() {
+                        seq.flush_stop_pending_bytes();
+                        if seq.return_logprobs() {
+                            let tail = seq.take_ready_streaming_emissions(true);
+                            for emission in &tail {
+                                delta.push_str(&emission.text);
+                            }
+                            streaming_emissions.extend(tail);
                         } else {
-                            None
-                        },
-                    });
-                } else {
-                    seq.add_streaming_completion_chunk_choice_to_group(
-                        crate::CompletionChunkChoice {
-                            text: fixup_sentencepiece!(delta),
-                            index: seq.get_response_index(),
-                            finish_reason: is_done.map(|x| x.to_string()),
-                            logprobs: if seq.return_logprobs() {
-                                Some(crate::ResponseLogprob {
-                                    token: delta,
-                                    bytes: logprobs.bytes.clone().map(|b| b.into_bytes()),
-                                    logprob: logprobs.logprob,
-                                    top_logprobs: logprobs.top_logprobs.unwrap().clone(),
-                                })
-                            } else {
-                                None
+                            delta.push_str(&seq.get_final_delta());
+                        }
+                    }
+
+                    let aligned_content = reasoning_delta.is_none()
+                        && tool_calls.is_empty()
+                        && content_delta.as_deref() == Some(delta.as_str());
+                    if seq.return_logprobs() && aligned_content && !streaming_emissions.is_empty() {
+                        let emission_count = streaming_emissions.len();
+                        for (idx, emission) in streaming_emissions.iter().enumerate() {
+                            seq.add_streaming_chunk_choice_to_group(crate::ChunkChoice {
+                                delta: crate::Delta {
+                                    content: Some(fixup_sentencepiece!(emission.text)),
+                                    role: "assistant".to_string(),
+                                    tool_calls: None,
+                                    reasoning_content: None,
+                                },
+                                index: seq.get_response_index(),
+                                finish_reason: if idx + 1 == emission_count {
+                                    is_done.map(|reason| reason.to_string())
+                                } else {
+                                    None
+                                },
+                                logprobs: Some(streaming_response_logprob(emission)),
+                            });
+                        }
+                    } else {
+                        if seq.return_logprobs() {
+                            for emission in &streaming_emissions {
+                                seq.add_streaming_chunk_choice_to_group(crate::ChunkChoice {
+                                    delta: crate::Delta {
+                                        content: None,
+                                        role: "assistant".to_string(),
+                                        tool_calls: None,
+                                        reasoning_content: None,
+                                    },
+                                    index: seq.get_response_index(),
+                                    finish_reason: None,
+                                    logprobs: Some(streaming_response_logprob(emission)),
+                                });
+                            }
+                        }
+                        seq.add_streaming_chunk_choice_to_group(crate::ChunkChoice {
+                            delta: crate::Delta {
+                                content: fixup_sentencepiece!(Option content_delta),
+                                role: "assistant".to_string(),
+                                tool_calls: Some(tool_calls).filter(|v| !v.is_empty()),
+                                reasoning_content: reasoning_delta,
                             },
-                        },
-                    );
+                            index: seq.get_response_index(),
+                            finish_reason: is_done.map(|reason| reason.to_string()),
+                            logprobs: None,
+                        });
+                    }
+                } else {
+                    if seq.return_logprobs() {
+                        let emission_count = streaming_emissions.len();
+                        for (idx, emission) in streaming_emissions.iter().enumerate() {
+                            seq.add_streaming_completion_chunk_choice_to_group(
+                                crate::CompletionChunkChoice {
+                                    text: fixup_sentencepiece!(emission.text),
+                                    index: seq.get_response_index(),
+                                    finish_reason: if idx + 1 == emission_count {
+                                        is_done.map(|reason| reason.to_string())
+                                    } else {
+                                        None
+                                    },
+                                    logprobs: Some(streaming_response_logprob(emission)),
+                                },
+                            );
+                        }
+                        if streaming_emissions.is_empty() && is_done.is_some() {
+                            seq.add_streaming_completion_chunk_choice_to_group(
+                                crate::CompletionChunkChoice {
+                                    text: String::new(),
+                                    index: seq.get_response_index(),
+                                    finish_reason: is_done.map(|reason| reason.to_string()),
+                                    logprobs: None,
+                                },
+                            );
+                        }
+                    } else {
+                        seq.add_streaming_completion_chunk_choice_to_group(
+                            crate::CompletionChunkChoice {
+                                text: fixup_sentencepiece!(delta),
+                                index: seq.get_response_index(),
+                                finish_reason: is_done.map(|x| x.to_string()),
+                                logprobs: None,
+                            },
+                        );
+                    }
                 }
             }
 
@@ -309,14 +468,7 @@ pub(crate) async fn finish_or_add_toks_to_seq(
         // to ensure sequence completes even when tool detection thinks output might be a tool call
         if let Some(reason) = is_done {
             if use_prefix_cacher {
-                let recurrent_snapshots = if this.cache().is_hybrid() {
-                    seq.recurrent_state_idx()
-                        .and_then(|idx| this.cache().hybrid().snapshot_recurrent_state(idx).ok())
-                } else {
-                    None
-                };
-                prefix_cacher.add_sequence(seq, recurrent_snapshots);
-                prefix_cacher.evict_caches()?;
+                cache_finished_sequence(this, prefix_cacher, seq)?;
             }
             seq.set_state(crate::sequence::SequenceState::Done(reason));
             this.reset_non_granular_state();
@@ -368,18 +520,12 @@ pub(crate) async fn finish_or_add_toks_to_seq(
                 | crate::sequence::StopReason::ModelLength(_)
                 | crate::sequence::StopReason::Eos
                 | crate::sequence::StopReason::StopTok(_)
+                | crate::sequence::StopReason::StopString { .. }
                 | crate::sequence::StopReason::Canceled
                 | crate::sequence::StopReason::ToolCalls => {
                     String::from_utf8_lossy(seq.completion_bytes())
                         .trim_start()
                         .to_string()
-                }
-                crate::sequence::StopReason::StopString {
-                    completion_bytes_pos,
-                    ..
-                } => {
-                    let txt = String::from_utf8_lossy(seq.completion_bytes());
-                    txt[..completion_bytes_pos].trim_start().to_string()
                 }
                 crate::sequence::StopReason::GeneratedImage
                 | crate::sequence::StopReason::GeneratedSpeech => {
@@ -401,7 +547,20 @@ pub(crate) async fn finish_or_add_toks_to_seq(
                     None
                 };
                 let parsed = if let Some(state) = seq.tool_call_state.as_mut() {
-                    state.finalize_for_response(text.as_str(), parsed_content, reasoning_content)?
+                    let parser_text = hidden_stop.as_deref().map(|hidden_stop| {
+                        let mut parser_text = parsed_content
+                            .as_ref()
+                            .cloned()
+                            .unwrap_or_else(|| text.clone());
+                        parser_text.push_str(hidden_stop);
+                        parser_text
+                    });
+                    state.finalize_for_response(
+                        text.as_str(),
+                        parsed_content,
+                        reasoning_content,
+                        parser_text.as_deref(),
+                    )?
                 } else {
                     crate::tools::state::ToolCallParse {
                         content: parsed_content.or_else(|| Some(text.clone())),
@@ -442,14 +601,7 @@ pub(crate) async fn finish_or_add_toks_to_seq(
             }
 
             if use_prefix_cacher {
-                let recurrent_snapshots = if this.cache().is_hybrid() {
-                    seq.recurrent_state_idx()
-                        .and_then(|idx| this.cache().hybrid().snapshot_recurrent_state(idx).ok())
-                } else {
-                    None
-                };
-                prefix_cacher.add_sequence(seq, recurrent_snapshots);
-                prefix_cacher.evict_caches()?;
+                cache_finished_sequence(this, prefix_cacher, seq)?;
             }
 
             // Ensure timing info is synced to group before sending response
@@ -998,12 +1150,14 @@ fn try_sample_batch_cuda(
 
     if categorical {
         let uniform = Uniform::new(0.0f32, 1.0f32).expect("valid unit uniform distribution");
-        let uniforms = {
-            let mut rng = rng.lock().expect("could not lock rng mutex");
-            (0..samplers_and_plans.len())
-                .map(|_| uniform.sample(&mut *rng))
-                .collect::<Vec<_>>()
-        };
+        let uniforms = seqs
+            .iter()
+            .map(|seq| {
+                let rng = seq.sampling_rng(rng);
+                let mut rng = rng.lock().expect("could not lock rng mutex");
+                uniform.sample(&mut *rng)
+            })
+            .collect::<Vec<_>>();
         let uniforms = Tensor::from_vec(uniforms, samplers_and_plans.len(), logits.device())?;
         let output = crate::ops::cuda_categorical_logits_f32_packed_batched(
             &logits,
@@ -1029,10 +1183,11 @@ fn try_sample_batch_cuda(
     let output =
         crate::ops::cuda_topk_logits_f32_packed_batched(&logits, common_k, &inverse_temperatures)?;
     let packed = output.packed.to_vec2::<f32>()?;
-    let mut rng = rng.lock().expect("could not lock rng mutex");
     Ok(Some(
-        std::iter::zip(packed, samplers_and_plans)
-            .map(|(row, (sampler, plan))| {
+        std::iter::zip(std::iter::zip(packed, samplers_and_plans), seqs.iter())
+            .map(|((row, (sampler, plan)), seq)| {
+                let rng = seq.sampling_rng(rng);
+                let mut rng = rng.lock().expect("could not lock rng mutex");
                 sampler.sample_cuda_topk_packed_row(&row, output.k, plan, &mut rng)
             })
             .collect(),
@@ -1063,6 +1218,7 @@ pub async fn sample_sequence(
     multiple_sequences: bool,
 ) -> Result<Logprobs> {
     activate_required_tool_call_grammar(seq, llg_factory.as_ref(), max_model_len, false);
+    let rng = seq.sampling_rng(&rng);
 
     let logits = logits.squeeze(0)?.squeeze(0)?.to_dtype(DType::F32)?;
 
@@ -1209,6 +1365,7 @@ pub async fn sample_sequence(
 #[cfg(test)]
 mod tests {
     use mistralrs_mcp::{Function, Tool, ToolType};
+    use rand::SeedableRng;
     use std::{collections::HashMap, sync::Arc};
     use tokio::sync::{mpsc::channel, Mutex};
 
@@ -1273,7 +1430,98 @@ mod tests {
             false,
             ignore_eos,
             vec![],
+            None,
         )
+    }
+
+    fn stochastic_test_sequence(seed: u64) -> Sequence {
+        let (tx, _rx) = channel(1);
+        let sampler = Sampler::new(
+            Some(1.0),
+            0,
+            None,
+            None,
+            None,
+            None,
+            None,
+            -1,
+            1.0,
+            0.0,
+            HashMap::new(),
+            vec![],
+        )
+        .unwrap();
+        let group = Arc::new(Mutex::new(SequenceGroup::new(1, false, true, None)));
+        Sequence::new_waiting(
+            vec![1, 2, 3],
+            "prompt".to_string(),
+            0,
+            0,
+            0,
+            tx,
+            sampler,
+            vec![],
+            vec![],
+            None,
+            false,
+            false,
+            group,
+            0,
+            0,
+            SequenceRecognizer::None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            SeqStepType::PromptAndDecode,
+            None,
+            None,
+            None,
+            false,
+            false,
+            vec![],
+            Some(seed),
+        )
+    }
+
+    async fn sample_test_token(
+        seq: &mut Sequence,
+        fallback: Arc<std::sync::Mutex<Isaac64Rng>>,
+    ) -> u32 {
+        let logits = Tensor::from_vec(
+            vec![0.1f32, 0.2, 0.3, 0.4],
+            (1, 1, 4),
+            &candle_core::Device::Cpu,
+        )
+        .unwrap();
+        sample_sequence(
+            logits, seq, false, None, None, 1024, fallback, false, false, false,
+        )
+        .await
+        .unwrap()
+        .token
+    }
+
+    #[tokio::test]
+    async fn seeded_sampling_is_independent_of_sequence_order() {
+        let fallback = || Arc::new(std::sync::Mutex::new(Isaac64Rng::seed_from_u64(999)));
+        let (mut first_a, mut first_b) =
+            (stochastic_test_sequence(42), stochastic_test_sequence(43));
+        let a_then_b = (
+            sample_test_token(&mut first_a, fallback()).await,
+            sample_test_token(&mut first_b, fallback()).await,
+        );
+
+        let (mut second_a, mut second_b) =
+            (stochastic_test_sequence(42), stochastic_test_sequence(43));
+        let b = sample_test_token(&mut second_b, fallback()).await;
+        let a = sample_test_token(&mut second_a, fallback()).await;
+
+        assert_eq!(a_then_b, (a, b));
     }
 
     fn weather_tool() -> Tool {

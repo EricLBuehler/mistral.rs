@@ -28,6 +28,51 @@ constexpr int GDN_DECODE_KERNEL_VALUE_MAJOR_32 = 4;
 constexpr int GDN_DECODE_VALUE_MAJOR_K = 128;
 constexpr int GDN_DECODE_VALUE_MAJOR_V = 128;
 constexpr int GDN_PACKED_CONV_WIDTH = 4;
+constexpr int GDN_STATE_DTYPE_F16 = 0;
+constexpr int GDN_STATE_DTYPE_BF16 = 1;
+constexpr int GDN_STATE_DTYPE_F32 = 2;
+
+__device__ __forceinline__ float4 gdn_load_state_x4(const float *source) {
+  return *reinterpret_cast<const float4 *>(source);
+}
+
+__device__ __forceinline__ float4
+gdn_load_state_x4(const __half *source) {
+  const float2 lo = __half22float2(*reinterpret_cast<const __half2 *>(source));
+  const float2 hi =
+      __half22float2(*reinterpret_cast<const __half2 *>(source + 2));
+  return make_float4(lo.x, lo.y, hi.x, hi.y);
+}
+
+__device__ __forceinline__ float4
+gdn_load_state_x4(const __nv_bfloat16 *source) {
+  const float2 lo =
+      __bfloat1622float2(*reinterpret_cast<const __nv_bfloat162 *>(source));
+  const float2 hi = __bfloat1622float2(
+      *reinterpret_cast<const __nv_bfloat162 *>(source + 2));
+  return make_float4(lo.x, lo.y, hi.x, hi.y);
+}
+
+__device__ __forceinline__ void gdn_store_state_x4(float *destination,
+                                                   float4 value) {
+  *reinterpret_cast<float4 *>(destination) = value;
+}
+
+__device__ __forceinline__ void gdn_store_state_x4(__half *destination,
+                                                   float4 value) {
+  *reinterpret_cast<__half2 *>(destination) =
+      __floats2half2_rn(value.x, value.y);
+  *reinterpret_cast<__half2 *>(destination + 2) =
+      __floats2half2_rn(value.z, value.w);
+}
+
+__device__ __forceinline__ void
+gdn_store_state_x4(__nv_bfloat16 *destination, float4 value) {
+  *reinterpret_cast<__nv_bfloat162 *>(destination) =
+      __floats2bfloat162_rn(value.x, value.y);
+  *reinterpret_cast<__nv_bfloat162 *>(destination + 2) =
+      __floats2bfloat162_rn(value.z, value.w);
+}
 
 __device__ __forceinline__ bool
 gdn_is_padding_row(const int32_t *__restrict__ slot_indices, int bidx) {
@@ -61,14 +106,14 @@ __device__ __forceinline__ size_t gdn_state_row(const int32_t *__restrict__ slot
 // ============================================================================
 
 // Optimized kernel: BK known at compile time -> registers + full unrolling
-template <int BK, int BV>
+template <typename StateT, int BK, int BV>
 __global__ void gated_delta_rule_recurrence_kernel_tiled(
     const float *__restrict__ q,    // [BH, S, K]
     const float *__restrict__ k,    // [BH, S, K]
     const float *__restrict__ v,    // [BH, S, V]
     const float *__restrict__ g,    // [BH, S]
     const float *__restrict__ beta, // [BH, S]
-    float *__restrict__ state,      // [BH, K, V] or the pool with slot_indices
+    StateT *__restrict__ state,     // [BH, K, V] or the pool with slot_indices
     float *__restrict__ output,     // [BH, S, V]
     int seq_len, int v_dim, const int32_t *__restrict__ slot_indices,
     int num_heads) {
@@ -95,7 +140,7 @@ __global__ void gated_delta_rule_recurrence_kernel_tiled(
   const float *v_bh = v + (size_t)bh * seq_len * v_dim;
   const float *g_bh = g + (size_t)bh * seq_len;
   const float *beta_bh = beta + (size_t)bh * seq_len;
-  float *state_bh =
+  StateT *state_bh =
       state + gdn_state_row(slot_indices, bh / num_heads, bh % num_heads, num_heads) * BK * v_dim;
 
   // Shared memory: k_buf[BK] + q_buf[BK]
@@ -163,11 +208,11 @@ __global__ void gated_delta_rule_recurrence_kernel_tiled(
 }
 
 // Fallback kernel: runtime k_dim, still V-tiled for occupancy
-template <int BV, int MAX_K>
+template <typename StateT, int BV, int MAX_K>
 __global__ void gated_delta_rule_recurrence_kernel_fallback(
     const float *__restrict__ q, const float *__restrict__ k,
     const float *__restrict__ v, const float *__restrict__ g,
-    const float *__restrict__ beta, float *__restrict__ state,
+    const float *__restrict__ beta, StateT *__restrict__ state,
     float *__restrict__ output, int seq_len, int k_dim, int v_dim,
     const int32_t *__restrict__ slot_indices, int num_heads) {
 
@@ -192,7 +237,7 @@ __global__ void gated_delta_rule_recurrence_kernel_fallback(
   const float *v_bh = v + (size_t)bh * seq_len * v_dim;
   const float *g_bh = g + (size_t)bh * seq_len;
   const float *beta_bh = beta + (size_t)bh * seq_len;
-  float *state_bh =
+  StateT *state_bh =
       state + gdn_state_row(slot_indices, bh / num_heads, bh % num_heads, num_heads) * k_dim * v_dim;
 
   extern __shared__ float shared[];
@@ -243,34 +288,30 @@ __global__ void gated_delta_rule_recurrence_kernel_fallback(
   }
 }
 
-extern "C" void gated_delta_rule_recurrence(const float *q, const float *k,
-                                            const float *v, const float *g,
-                                            const float *beta, float *state,
-                                            float *output, int bh, int seq_len,
-                                            int k_dim, int v_dim,
-                                            const int32_t *slot_indices,
-                                            int num_heads, int64_t stream) {
-
-  const cudaStream_t custream = (cudaStream_t)stream;
-
+template <typename StateT>
+void launch_gated_delta_rule_recurrence(
+    const float *q, const float *k, const float *v, const float *g,
+    const float *beta, StateT *state, float *output, int bh, int seq_len,
+    int k_dim, int v_dim, const int32_t *slot_indices, int num_heads,
+    cudaStream_t stream) {
   if (k_dim == 128) {
     // Fast path for Qwen3-Next (k_dim=128)
     constexpr int BK = 128;
     constexpr int BV = 64;
     dim3 grid((v_dim + BV - 1) / BV, bh);
     dim3 block(BV);
-    gated_delta_rule_recurrence_kernel_tiled<BK, BV>
-        <<<grid, block, 0, custream>>>(q, k, v, g, beta, state, output, seq_len,
-                                       v_dim, slot_indices, num_heads);
+    gated_delta_rule_recurrence_kernel_tiled<StateT, BK, BV>
+        <<<grid, block, 0, stream>>>(q, k, v, g, beta, state, output, seq_len,
+                                    v_dim, slot_indices, num_heads);
   } else if (k_dim == 64) {
     // Fast path for models with k_dim=64
     constexpr int BK = 64;
     constexpr int BV = 64;
     dim3 grid((v_dim + BV - 1) / BV, bh);
     dim3 block(BV);
-    gated_delta_rule_recurrence_kernel_tiled<BK, BV>
-        <<<grid, block, 0, custream>>>(q, k, v, g, beta, state, output, seq_len,
-                                       v_dim, slot_indices, num_heads);
+    gated_delta_rule_recurrence_kernel_tiled<StateT, BK, BV>
+        <<<grid, block, 0, stream>>>(q, k, v, g, beta, state, output, seq_len,
+                                    v_dim, slot_indices, num_heads);
   } else {
     // Fallback for other k_dim values (runtime loop, still V-tiled)
     constexpr int BV = 64;
@@ -278,10 +319,31 @@ extern "C" void gated_delta_rule_recurrence(const float *q, const float *k,
     dim3 grid((v_dim + BV - 1) / BV, bh);
     dim3 block(BV);
     size_t smem = 2 * k_dim * sizeof(float);
-    gated_delta_rule_recurrence_kernel_fallback<BV, MAX_K>
-        <<<grid, block, smem, custream>>>(q, k, v, g, beta, state, output,
-                                          seq_len, k_dim, v_dim, slot_indices,
-                                          num_heads);
+    gated_delta_rule_recurrence_kernel_fallback<StateT, BV, MAX_K>
+        <<<grid, block, smem, stream>>>(q, k, v, g, beta, state, output,
+                                        seq_len, k_dim, v_dim, slot_indices,
+                                        num_heads);
+  }
+}
+
+extern "C" void gated_delta_rule_recurrence(
+    const float *q, const float *k, const float *v, const float *g,
+    const float *beta, void *state, float *output, int bh, int seq_len,
+    int k_dim, int v_dim, const int32_t *slot_indices, int num_heads,
+    int state_dtype, int64_t stream) {
+  const cudaStream_t custream = (cudaStream_t)stream;
+  if (state_dtype == GDN_STATE_DTYPE_F16) {
+    launch_gated_delta_rule_recurrence(
+        q, k, v, g, beta, (__half *)state, output, bh, seq_len, k_dim, v_dim,
+        slot_indices, num_heads, custream);
+  } else if (state_dtype == GDN_STATE_DTYPE_BF16) {
+    launch_gated_delta_rule_recurrence(
+        q, k, v, g, beta, (__nv_bfloat16 *)state, output, bh, seq_len, k_dim,
+        v_dim, slot_indices, num_heads, custream);
+  } else {
+    launch_gated_delta_rule_recurrence(
+        q, k, v, g, beta, (float *)state, output, bh, seq_len, k_dim, v_dim,
+        slot_indices, num_heads, custream);
   }
 }
 
@@ -294,7 +356,7 @@ __device__ __forceinline__ float gdn_warp_sum(float x) {
   return __shfl_sync(0xffffffff, x, 0, WARP_SIZE);
 }
 
-template <int BK, int NUM_WARPS, bool VALUE_MAJOR = false>
+template <typename StateT, int BK, int NUM_WARPS, bool VALUE_MAJOR = false>
 __global__ __launch_bounds__(
     32 * NUM_WARPS,
     2) void gated_delta_rule_recurrence_kernel_warp(const float *__restrict__ q,
@@ -303,7 +365,7 @@ __global__ __launch_bounds__(
                                                     const float *__restrict__ g,
                                                     const float
                                                         *__restrict__ beta,
-                                                    float *__restrict__ state,
+                                                    StateT *__restrict__ state,
                                                     float *__restrict__ output,
                                                     int seq_len, int v_dim,
                                                     const int32_t *__restrict__ slot_indices,
@@ -337,7 +399,7 @@ __global__ __launch_bounds__(
   const float *v_bh = v + (size_t)bh * seq_len * v_dim;
   const float *g_bh = g + (size_t)bh * seq_len;
   const float *beta_bh = beta + (size_t)bh * seq_len;
-  float *state_bh =
+  StateT *state_bh =
       state + gdn_state_row(slot_indices, bh / num_heads, bh % num_heads, num_heads) * BK * v_dim;
 
   float s[ROWS_PER_LANE];
@@ -395,50 +457,89 @@ __global__ __launch_bounds__(
   }
 }
 
-extern "C" void warp_gated_delta_rule_recurrence(const float *q, const float *k,
-                                                 const float *v, const float *g,
-                                                 const float *beta,
-                                                 float *state, float *output,
-                                                 int bh, int seq_len, int k_dim,
-                                                 int v_dim,
-                                                 const int32_t *slot_indices,
-                                                 int num_heads, int64_t stream) {
-
-  const cudaStream_t custream = (cudaStream_t)stream;
+template <typename StateT>
+void launch_warp_gated_delta_rule_recurrence(
+    const float *q, const float *k, const float *v, const float *g,
+    const float *beta, StateT *state, float *output, int bh, int seq_len,
+    int k_dim, int v_dim, const int32_t *slot_indices, int num_heads,
+    cudaStream_t stream) {
   constexpr int NUM_WARPS = 4;
   dim3 grid((v_dim + NUM_WARPS - 1) / NUM_WARPS, bh);
   dim3 block(32, NUM_WARPS);
 
   if (k_dim == 128) {
-    gated_delta_rule_recurrence_kernel_warp<128, NUM_WARPS>
-        <<<grid, block, 0, custream>>>(q, k, v, g, beta, state, output, seq_len,
-                                       v_dim, slot_indices, num_heads);
+    gated_delta_rule_recurrence_kernel_warp<StateT, 128, NUM_WARPS>
+        <<<grid, block, 0, stream>>>(q, k, v, g, beta, state, output, seq_len,
+                                    v_dim, slot_indices, num_heads);
   } else if (k_dim == 64) {
-    gated_delta_rule_recurrence_kernel_warp<64, NUM_WARPS>
-        <<<grid, block, 0, custream>>>(q, k, v, g, beta, state, output, seq_len,
-                                       v_dim, slot_indices, num_heads);
+    gated_delta_rule_recurrence_kernel_warp<StateT, 64, NUM_WARPS>
+        <<<grid, block, 0, stream>>>(q, k, v, g, beta, state, output, seq_len,
+                                    v_dim, slot_indices, num_heads);
   } else {
-    gated_delta_rule_recurrence(q, k, v, g, beta, state, output, bh, seq_len,
-                                k_dim, v_dim, slot_indices, num_heads, stream);
+    launch_gated_delta_rule_recurrence(q, k, v, g, beta, state, output, bh,
+                                       seq_len, k_dim, v_dim, slot_indices,
+                                       num_heads, stream);
   }
 }
 
-extern "C" void vmajor_warp_gated_delta_rule_recurrence(
+extern "C" void warp_gated_delta_rule_recurrence(
     const float *q, const float *k, const float *v, const float *g,
-    const float *beta, float *state, float *output, int bh, int seq_len,
+    const float *beta, void *state, float *output, int bh, int seq_len,
     int k_dim, int v_dim, const int32_t *slot_indices, int num_heads,
-    int64_t stream) {
+    int state_dtype, int64_t stream) {
+  const cudaStream_t custream = (cudaStream_t)stream;
+  if (state_dtype == GDN_STATE_DTYPE_F16) {
+    launch_warp_gated_delta_rule_recurrence(
+        q, k, v, g, beta, (__half *)state, output, bh, seq_len, k_dim, v_dim,
+        slot_indices, num_heads, custream);
+  } else if (state_dtype == GDN_STATE_DTYPE_BF16) {
+    launch_warp_gated_delta_rule_recurrence(
+        q, k, v, g, beta, (__nv_bfloat16 *)state, output, bh, seq_len, k_dim,
+        v_dim, slot_indices, num_heads, custream);
+  } else {
+    launch_warp_gated_delta_rule_recurrence(
+        q, k, v, g, beta, (float *)state, output, bh, seq_len, k_dim, v_dim,
+        slot_indices, num_heads, custream);
+  }
+}
+
+template <typename StateT>
+void launch_vmajor_warp_gated_delta_rule_recurrence(
+    const float *q, const float *k, const float *v, const float *g,
+    const float *beta, StateT *state, float *output, int bh, int seq_len,
+    int k_dim, int v_dim, const int32_t *slot_indices, int num_heads,
+    cudaStream_t stream) {
   if (k_dim != 128 || v_dim != 128) {
     return;
   }
 
-  const cudaStream_t custream = (cudaStream_t)stream;
   constexpr int NUM_WARPS = 4;
   dim3 grid((v_dim + NUM_WARPS - 1) / NUM_WARPS, bh);
   dim3 block(32, NUM_WARPS);
-  gated_delta_rule_recurrence_kernel_warp<128, NUM_WARPS, true>
-      <<<grid, block, 0, custream>>>(q, k, v, g, beta, state, output, seq_len,
-                                     v_dim, slot_indices, num_heads);
+  gated_delta_rule_recurrence_kernel_warp<StateT, 128, NUM_WARPS, true>
+      <<<grid, block, 0, stream>>>(q, k, v, g, beta, state, output, seq_len,
+                                   v_dim, slot_indices, num_heads);
+}
+
+extern "C" void vmajor_warp_gated_delta_rule_recurrence(
+    const float *q, const float *k, const float *v, const float *g,
+    const float *beta, void *state, float *output, int bh, int seq_len,
+    int k_dim, int v_dim, const int32_t *slot_indices, int num_heads,
+    int state_dtype, int64_t stream) {
+  const cudaStream_t custream = (cudaStream_t)stream;
+  if (state_dtype == GDN_STATE_DTYPE_F16) {
+    launch_vmajor_warp_gated_delta_rule_recurrence(
+        q, k, v, g, beta, (__half *)state, output, bh, seq_len, k_dim, v_dim,
+        slot_indices, num_heads, custream);
+  } else if (state_dtype == GDN_STATE_DTYPE_BF16) {
+    launch_vmajor_warp_gated_delta_rule_recurrence(
+        q, k, v, g, beta, (__nv_bfloat16 *)state, output, bh, seq_len, k_dim,
+        v_dim, slot_indices, num_heads, custream);
+  } else {
+    launch_vmajor_warp_gated_delta_rule_recurrence(
+        q, k, v, g, beta, (float *)state, output, bh, seq_len, k_dim, v_dim,
+        slot_indices, num_heads, custream);
+  }
 }
 
 // ============================================================================
@@ -463,14 +564,14 @@ extern "C" void vmajor_warp_gated_delta_rule_recurrence(
 // state: [BH, K, V] (in/out)  output: [BH, S, V]
 // ============================================================================
 
-template <int BT, int BK, int BV>
+template <typename StateT, int BT, int BK, int BV>
 __global__ void
 chunked_gated_delta_rule_kernel(const float *__restrict__ q,    // [BH, S, K]
                                 const float *__restrict__ k,    // [BH, S, K]
                                 const float *__restrict__ v,    // [BH, S, V]
                                 const float *__restrict__ g,    // [BH, S]
                                 const float *__restrict__ beta, // [BH, S]
-                                float *__restrict__ state,      // [BH, K, V] or pool
+                                StateT *__restrict__ state,     // [BH, K, V] or pool
                                 float *__restrict__ output,     // [BH, S, V]
                                 int seq_len, int v_dim,
                                 const int32_t *__restrict__ slot_indices,
@@ -500,7 +601,7 @@ chunked_gated_delta_rule_kernel(const float *__restrict__ q,    // [BH, S, K]
   const float *v_bh = v + (size_t)bh * seq_len * v_dim;
   const float *g_bh = g + (size_t)bh * seq_len;
   const float *beta_bh = beta + (size_t)bh * seq_len;
-  float *state_bh =
+  StateT *state_bh =
       state + gdn_state_row(slot_indices, bh / num_heads, bh % num_heads, num_heads) * BK * v_dim;
 
   // Dynamic shared memory layout
@@ -639,14 +740,12 @@ chunked_gated_delta_rule_kernel(const float *__restrict__ q,    // [BH, S, K]
   }
 }
 
-extern "C" void chunked_gated_delta_rule_recurrence(
+template <typename StateT>
+void launch_chunked_gated_delta_rule_recurrence(
     const float *q, const float *k, const float *v, const float *g,
-    const float *beta, float *state, float *output, int bh, int seq_len,
+    const float *beta, StateT *state, float *output, int bh, int seq_len,
     int k_dim, int v_dim, const int32_t *slot_indices, int num_heads,
-    int64_t stream) {
-
-  const cudaStream_t custream = (cudaStream_t)stream;
-
+    cudaStream_t stream) {
   if (k_dim == 128) {
     constexpr int BT = 64;
     constexpr int BK = 128;
@@ -655,34 +754,55 @@ extern "C" void chunked_gated_delta_rule_recurrence(
     size_t smem = (BT * BK + BT * BT + 2 * BT + BK) * sizeof(float);
 
     // Request extended shared memory
-    auto kernel = chunked_gated_delta_rule_kernel<BT, BK, BV>;
+    auto kernel = chunked_gated_delta_rule_kernel<StateT, BT, BK, BV>;
     cudaFuncSetAttribute(kernel, cudaFuncAttributeMaxDynamicSharedMemorySize,
                          smem);
 
     dim3 grid((v_dim + BV - 1) / BV, bh);
     dim3 block(BV);
-    kernel<<<grid, block, smem, custream>>>(q, k, v, g, beta, state, output,
-                                            seq_len, v_dim, slot_indices,
-                                            num_heads);
+    kernel<<<grid, block, smem, stream>>>(q, k, v, g, beta, state, output,
+                                          seq_len, v_dim, slot_indices,
+                                          num_heads);
   } else if (k_dim == 64) {
     constexpr int BT = 64;
     constexpr int BK = 64;
     constexpr int BV = 64;
     size_t smem = (BT * BK + BT * BT + 2 * BT + BK) * sizeof(float);
 
-    auto kernel = chunked_gated_delta_rule_kernel<BT, BK, BV>;
+    auto kernel = chunked_gated_delta_rule_kernel<StateT, BT, BK, BV>;
     cudaFuncSetAttribute(kernel, cudaFuncAttributeMaxDynamicSharedMemorySize,
                          smem);
 
     dim3 grid((v_dim + BV - 1) / BV, bh);
     dim3 block(BV);
-    kernel<<<grid, block, smem, custream>>>(q, k, v, g, beta, state, output,
-                                            seq_len, v_dim, slot_indices,
-                                            num_heads);
+    kernel<<<grid, block, smem, stream>>>(q, k, v, g, beta, state, output,
+                                          seq_len, v_dim, slot_indices,
+                                          num_heads);
   } else {
-    // Fallback: use the sequential kernel for unsupported k_dim
-    gated_delta_rule_recurrence(q, k, v, g, beta, state, output, bh, seq_len,
-                                k_dim, v_dim, slot_indices, num_heads, stream);
+    launch_gated_delta_rule_recurrence(q, k, v, g, beta, state, output, bh,
+                                       seq_len, k_dim, v_dim, slot_indices,
+                                       num_heads, stream);
+  }
+}
+
+extern "C" void chunked_gated_delta_rule_recurrence(
+    const float *q, const float *k, const float *v, const float *g,
+    const float *beta, void *state, float *output, int bh, int seq_len,
+    int k_dim, int v_dim, const int32_t *slot_indices, int num_heads,
+    int state_dtype, int64_t stream) {
+  const cudaStream_t custream = (cudaStream_t)stream;
+  if (state_dtype == GDN_STATE_DTYPE_F16) {
+    launch_chunked_gated_delta_rule_recurrence(
+        q, k, v, g, beta, (__half *)state, output, bh, seq_len, k_dim, v_dim,
+        slot_indices, num_heads, custream);
+  } else if (state_dtype == GDN_STATE_DTYPE_BF16) {
+    launch_chunked_gated_delta_rule_recurrence(
+        q, k, v, g, beta, (__nv_bfloat16 *)state, output, bh, seq_len, k_dim,
+        v_dim, slot_indices, num_heads, custream);
+  } else {
+    launch_chunked_gated_delta_rule_recurrence(
+        q, k, v, g, beta, (float *)state, output, bh, seq_len, k_dim, v_dim,
+        slot_indices, num_heads, custream);
   }
 }
 
@@ -1082,27 +1202,15 @@ __device__ __forceinline__ float gdn_warp_sum(float value) {
   return value;
 }
 
-__device__ __forceinline__ float4
-gdn_load_bf16x4(const __nv_bfloat16 *__restrict__ src) {
-  const uint2 packed = *reinterpret_cast<const uint2 *>(src);
-  const __nv_bfloat162 lo =
-      *reinterpret_cast<const __nv_bfloat162 *>(&packed.x);
-  const __nv_bfloat162 hi =
-      *reinterpret_cast<const __nv_bfloat162 *>(&packed.y);
-  const float2 lo_f = __bfloat1622float2(lo);
-  const float2 hi_f = __bfloat1622float2(hi);
-  return make_float4(lo_f.x, lo_f.y, hi_f.x, hi_f.y);
-}
-
-template <int BV>
+template <typename T, typename StateT, int BV>
 __global__ __launch_bounds__(32) void gdn_decode_recurrence_kernel_value_major(
-    const __nv_bfloat16 *__restrict__ mixed_qkv,
-    const __nv_bfloat16 *__restrict__ b,
-    const __nv_bfloat16 *__restrict__ a,
+    const T *__restrict__ mixed_qkv,
+    const T *__restrict__ b,
+    const T *__restrict__ a,
     const float *__restrict__ a_log,
     const float *__restrict__ dt_bias,
-    float *__restrict__ state,
-    __nv_bfloat16 *__restrict__ output,
+    StateT *__restrict__ state,
+    T *__restrict__ output,
     int batch_size,
     int num_k_heads,
     int num_v_heads,
@@ -1126,10 +1234,10 @@ __global__ __launch_bounds__(32) void gdn_decode_recurrence_kernel_value_major(
   const int bh = linear_tile / NUM_V_TILES;
   const int bidx = bh / num_v_heads;
   const int hv = bh - bidx * num_v_heads;
-  __nv_bfloat16 *out_bh = output + (size_t)bh * GDN_DECODE_VALUE_MAJOR_V;
+  T *out_bh = output + (size_t)bh * GDN_DECODE_VALUE_MAJOR_V;
   if (gdn_is_padding_row(slot_indices, bidx)) {
     if (lane < BV) {
-      out_bh[v_tile * BV + lane] = (__nv_bfloat16)0.0f;
+      out_bh[v_tile * BV + lane] = (T)0.0f;
     }
     return;
   }
@@ -1139,14 +1247,14 @@ __global__ __launch_bounds__(32) void gdn_decode_recurrence_kernel_value_major(
   const int value_dim = num_v_heads * GDN_DECODE_VALUE_MAJOR_V;
   const int conv_dim = 2 * key_dim + value_dim;
   const int v_base = v_tile * BV;
-  const __nv_bfloat16 *row = mixed_qkv + (size_t)bidx * conv_dim;
-  float *state_bh =
+  const T *row = mixed_qkv + (size_t)bidx * conv_dim;
+  StateT *state_bh =
       state + gdn_state_row(slot_indices, bidx, hv, num_v_heads) *
                   GDN_DECODE_VALUE_MAJOR_V * GDN_DECODE_VALUE_MAJOR_K;
 
-  float4 qv = gdn_load_bf16x4(
+  float4 qv = gdn_load_state_x4(
       row + hk * GDN_DECODE_VALUE_MAJOR_K + lane * 4);
-  float4 kv = gdn_load_bf16x4(
+  float4 kv = gdn_load_state_x4(
       row + key_dim + hk * GDN_DECODE_VALUE_MAJOR_K + lane * 4);
   float q_norm = qv.x * qv.x + qv.y * qv.y + qv.z * qv.z + qv.w * qv.w;
   float k_norm = kv.x * kv.x + kv.y * kv.y + kv.z * kv.z + kv.w * kv.w;
@@ -1180,8 +1288,8 @@ __global__ __launch_bounds__(32) void gdn_decode_recurrence_kernel_value_major(
   float4 h[BV];
 #pragma unroll
   for (int vi = 0; vi < BV; vi++) {
-    const float4 raw = reinterpret_cast<const float4 *>(
-        state_bh + (v_base + vi) * GDN_DECODE_VALUE_MAJOR_K)[lane];
+    const float4 raw = gdn_load_state_x4(
+        state_bh + (v_base + vi) * GDN_DECODE_VALUE_MAJOR_K + lane * 4);
     h[vi] = make_float4(raw.x * decay_t, raw.y * decay_t,
                         raw.z * decay_t, raw.w * decay_t);
   }
@@ -1218,11 +1326,12 @@ __global__ __launch_bounds__(32) void gdn_decode_recurrence_kernel_value_major(
 
 #pragma unroll
   for (int vi = 0; vi < BV; vi++) {
-    reinterpret_cast<float4 *>(
-        state_bh + (v_base + vi) * GDN_DECODE_VALUE_MAJOR_K)[lane] = h[vi];
+    gdn_store_state_x4(
+        state_bh + (v_base + vi) * GDN_DECODE_VALUE_MAJOR_K + lane * 4,
+        h[vi]);
   }
   if (lane < BV) {
-    out_bh[v_base + lane] = (__nv_bfloat16)out_owned;
+    out_bh[v_base + lane] = (T)out_owned;
   }
 }
 
@@ -1260,11 +1369,11 @@ __device__ __forceinline__ void gdn_cp_async_wait() {
 
 // Adapted from FlashInfer's Apache-2.0 nontranspose GDN kernel, Copyright (c) 2025 FlashInfer team.
 // Exact source revision and license notices are in third_party/flashinfer_gdn.
-template <typename T>
+template <typename T, typename StateT>
 __global__ void gdn_decode_recurrence_kernel_cooperative(
     const T *__restrict__ mixed_qkv, const T *__restrict__ b,
     const T *__restrict__ a, const float *__restrict__ a_log,
-    const float *__restrict__ dt_bias, float *__restrict__ state,
+    const float *__restrict__ dt_bias, StateT *__restrict__ state,
     T *__restrict__ output, int batch_size, int num_k_heads,
     int num_v_heads, int head_v_dim, int tiled_v_heads,
     int64_t b_batch_stride, int64_t b_head_stride,
@@ -1307,7 +1416,7 @@ __global__ void gdn_decode_recurrence_kernel_cooperative(
   const int value_dim = num_v_heads * head_v_dim;
   const int conv_dim = 2 * key_dim + value_dim;
   const T *row = mixed_qkv + bidx * conv_dim;
-  float *state_bh =
+  StateT *state_bh =
       state + gdn_state_row(slot_indices, bidx, hv, num_v_heads) * BK * head_v_dim;
 
   __shared__ __align__(16) float
@@ -1326,10 +1435,14 @@ __global__ void gdn_decode_recurrence_kernel_cooperative(
        vector_idx += GDN_DECODE_COOPERATIVE_THREADS) {
     const int k_idx = vector_idx / VECTORS_PER_ROW;
     const int v_vector = vector_idx % VECTORS_PER_ROW;
-    const float *src =
+    const StateT *src =
         state_bh + k_idx * head_v_dim + v_tile * BV + v_vector * 4;
     float *dst = state_buf + k_idx * GDN_DECODE_COOPERATIVE_V_PADDED + v_vector * 4;
-    __pipeline_memcpy_async(dst, src, sizeof(float4));
+    if constexpr (sizeof(StateT) == sizeof(float)) {
+      __pipeline_memcpy_async(dst, src, sizeof(float4));
+    } else {
+      *reinterpret_cast<float4 *>(dst) = gdn_load_state_x4(src);
+    }
   }
   __pipeline_commit();
 
@@ -1415,18 +1528,18 @@ __global__ void gdn_decode_recurrence_kernel_cooperative(
     const int v_vector = vector_idx % VECTORS_PER_ROW;
     const float *src =
         state_buf + k_idx * GDN_DECODE_COOPERATIVE_V_PADDED + v_vector * 4;
-    float *dst = state_bh + k_idx * head_v_dim + v_tile * BV + v_vector * 4;
-    *reinterpret_cast<float4 *>(dst) = *reinterpret_cast<const float4 *>(src);
+    StateT *dst = state_bh + k_idx * head_v_dim + v_tile * BV + v_vector * 4;
+    gdn_store_state_x4(dst, *reinterpret_cast<const float4 *>(src));
   }
 }
 
 // Adapted from FlashInfer's Apache-2.0 large-batch nontranspose GDN kernel.
 // Exact source revision and license notices are in third_party/flashinfer_gdn.
-template <typename T>
+template <typename T, typename StateT>
 __global__ void gdn_decode_recurrence_kernel_pipelined(
     const T *__restrict__ mixed_qkv, const T *__restrict__ b,
     const T *__restrict__ a, const float *__restrict__ a_log,
-    const float *__restrict__ dt_bias, float *__restrict__ state,
+    const float *__restrict__ dt_bias, StateT *__restrict__ state,
     T *__restrict__ output, int batch_size, int num_k_heads,
     int num_v_heads, int head_v_dim, int tiled_v_heads,
     int64_t b_batch_stride, int64_t b_head_stride,
@@ -1478,7 +1591,7 @@ __global__ void gdn_decode_recurrence_kernel_pipelined(
   const int conv_dim = 2 * key_dim + value_dim;
   const int num_v_tiles = head_v_dim / BV;
   const T *row = mixed_qkv + bidx * conv_dim;
-  float *state_bh =
+  StateT *state_bh =
       state + gdn_state_row(slot_indices, bidx, hv, num_v_heads) * BK * head_v_dim;
 
   __shared__ __align__(16)
@@ -1548,10 +1661,14 @@ __global__ void gdn_decode_recurrence_kernel_pipelined(
          vector_idx += GDN_DECODE_PIPELINED_THREADS) {
       const int k_idx = vector_idx / VECTORS_PER_ROW;
       const int v_vector = vector_idx % VECTORS_PER_ROW;
-      const float *src = state_bh + k_idx * head_v_dim + v_vector * 4;
+      const StateT *src = state_bh + k_idx * head_v_dim + v_vector * 4;
       float *dst = state_buf[0] +
                    k_idx * GDN_DECODE_PIPELINED_V_PADDED + v_vector * 4;
-      gdn_cp_async_cg_16(dst, src);
+      if constexpr (sizeof(StateT) == sizeof(float)) {
+        gdn_cp_async_cg_16(dst, src);
+      } else {
+        *reinterpret_cast<float4 *>(dst) = gdn_load_state_x4(src);
+      }
     }
     gdn_cp_async_commit();
   }
@@ -1570,11 +1687,15 @@ __global__ void gdn_decode_recurrence_kernel_pipelined(
            vector_idx += GDN_DECODE_PIPELINED_THREADS) {
         const int k_idx = vector_idx / VECTORS_PER_ROW;
         const int v_vector = vector_idx % VECTORS_PER_ROW;
-        const float *src = state_bh + k_idx * head_v_dim +
-                           next_v_tile * BV + v_vector * 4;
+        const StateT *src = state_bh + k_idx * head_v_dim +
+                            next_v_tile * BV + v_vector * 4;
         float *dst = state_buf[next_stage] +
                      k_idx * GDN_DECODE_PIPELINED_V_PADDED + v_vector * 4;
-        gdn_cp_async_cg_16(dst, src);
+        if constexpr (sizeof(StateT) == sizeof(float)) {
+          gdn_cp_async_cg_16(dst, src);
+        } else {
+          *reinterpret_cast<float4 *>(dst) = gdn_load_state_x4(src);
+        }
       }
       gdn_cp_async_commit();
     }
@@ -1624,18 +1745,19 @@ __global__ void gdn_decode_recurrence_kernel_pipelined(
       const int v_vector = vector_idx % VECTORS_PER_ROW;
       const float *src = state_buf[stage] +
                          k_idx * GDN_DECODE_PIPELINED_V_PADDED + v_vector * 4;
-      float *dst = state_bh + k_idx * head_v_dim + v_tile * BV + v_vector * 4;
-      *reinterpret_cast<float4 *>(dst) = *reinterpret_cast<const float4 *>(src);
+      StateT *dst =
+          state_bh + k_idx * head_v_dim + v_tile * BV + v_vector * 4;
+      gdn_store_state_x4(dst, *reinterpret_cast<const float4 *>(src));
     }
     __syncthreads();
   }
 }
 
-template <typename T, int BK, int BV>
+template <typename T, typename StateT, int BK, int BV>
 __global__ void gdn_decode_recurrence_kernel(
     const T *__restrict__ mixed_qkv, const T *__restrict__ b,
     const T *__restrict__ a, const float *__restrict__ a_log,
-    const float *__restrict__ dt_bias, float *__restrict__ state,
+    const float *__restrict__ dt_bias, StateT *__restrict__ state,
     T *__restrict__ output, int batch_size, int num_k_heads,
     int num_v_heads, int head_v_dim, int tiled_v_heads,
     int64_t b_batch_stride, int64_t b_head_stride,
@@ -1666,7 +1788,8 @@ __global__ void gdn_decode_recurrence_kernel(
   const int conv_dim = 2 * key_dim + value_dim;
 
   const T *row = mixed_qkv + bidx * conv_dim;
-  float *state_bh = state + gdn_state_row(slot_indices, bidx, hv, num_v_heads) * BK * head_v_dim;
+  StateT *state_bh =
+      state + gdn_state_row(slot_indices, bidx, hv, num_v_heads) * BK * head_v_dim;
 
   __shared__ float red_q[BV];
   __shared__ float red_k[BV];
@@ -1727,7 +1850,7 @@ __global__ void gdn_decode_recurrence_kernel(
   float kv_mem = 0.0f;
 #pragma unroll GDN_DECODE_STATE_LOAD_UNROLL
   for (int j = 0; j < BK; j++) {
-    const float s = state_bh[j * head_v_dim + v_idx] * decay_t;
+      const float s = (float)state_bh[j * head_v_dim + v_idx] * decay_t;
     state_buf[j * BV + tid] = s;
     kv_mem = __fmaf_rn(s, k_buf[j], kv_mem);
   }
@@ -1749,11 +1872,11 @@ __global__ void gdn_decode_recurrence_kernel(
   out_bh[v_idx] = (T)y_t;
 }
 
-template <typename T, int BV, int MAX_K>
+template <typename T, typename StateT, int BV, int MAX_K>
 __global__ void gdn_decode_recurrence_kernel_fallback(
     const T *__restrict__ mixed_qkv, const T *__restrict__ b,
     const T *__restrict__ a, const float *__restrict__ a_log,
-    const float *__restrict__ dt_bias, float *__restrict__ state,
+    const float *__restrict__ dt_bias, StateT *__restrict__ state,
     T *__restrict__ output, int batch_size, int num_k_heads,
     int num_v_heads, int head_k_dim, int head_v_dim, int tiled_v_heads,
     int64_t b_batch_stride, int64_t b_head_stride,
@@ -1784,7 +1907,7 @@ __global__ void gdn_decode_recurrence_kernel_fallback(
   const int conv_dim = 2 * key_dim + value_dim;
 
   const T *row = mixed_qkv + bidx * conv_dim;
-  float *state_bh =
+  StateT *state_bh =
       state + gdn_state_row(slot_indices, bidx, hv, num_v_heads) * head_k_dim * head_v_dim;
 
   extern __shared__ float shared[];
@@ -1845,7 +1968,7 @@ __global__ void gdn_decode_recurrence_kernel_fallback(
 
   float s[MAX_K];
   for (int j = 0; j < head_k_dim; j++) {
-    s[j] = state_bh[j * head_v_dim + v_idx] * decay_t;
+    s[j] = (float)state_bh[j * head_v_dim + v_idx] * decay_t;
   }
 
   float v_t = (float)row[2 * key_dim + hv * head_v_dim + v_idx];
@@ -1867,35 +1990,29 @@ __global__ void gdn_decode_recurrence_kernel_fallback(
   out_bh[v_idx] = (T)y_t;
 }
 
-extern "C" void
-gdn_decode_recurrence(const void *mixed_qkv, const void *b, const void *a,
-                      const float *a_log, const float *dt_bias, float *state,
-                      void *output, int batch_size, int num_k_heads,
-                      int num_v_heads, int head_k_dim, int head_v_dim,
-                      int tiled_v_heads, int64_t b_batch_stride,
-                      int64_t b_head_stride, int64_t a_batch_stride,
-                      int64_t a_head_stride, const int32_t *slot_indices,
-                      int kernel_kind, int dtype, int64_t stream) {
-  const cudaStream_t custream = (cudaStream_t)stream;
+template <typename T, typename StateT>
+void launch_gdn_decode_recurrence(
+    const T *mixed_qkv, const T *b, const T *a, const float *a_log,
+    const float *dt_bias, StateT *state, T *output, int batch_size,
+    int num_k_heads, int num_v_heads, int head_k_dim, int head_v_dim,
+    int tiled_v_heads, int64_t b_batch_stride, int64_t b_head_stride,
+    int64_t a_batch_stride, int64_t a_head_stride,
+    const int32_t *slot_indices, int kernel_kind, cudaStream_t stream) {
   if (kernel_kind == GDN_DECODE_KERNEL_VALUE_MAJOR_4 ||
       kernel_kind == GDN_DECODE_KERNEL_VALUE_MAJOR_32) {
-    if (dtype == 1 && head_k_dim == GDN_DECODE_VALUE_MAJOR_K &&
+    if (head_k_dim == GDN_DECODE_VALUE_MAJOR_K &&
         head_v_dim == GDN_DECODE_VALUE_MAJOR_V) {
       const int bh = batch_size * num_v_heads;
       if (kernel_kind == GDN_DECODE_KERNEL_VALUE_MAJOR_4) {
-        gdn_decode_recurrence_kernel_value_major<4>
-            <<<bh * (GDN_DECODE_VALUE_MAJOR_V / 4), 32, 0, custream>>>(
-                (const __nv_bfloat16 *)mixed_qkv,
-                (const __nv_bfloat16 *)b, (const __nv_bfloat16 *)a, a_log,
-                dt_bias, state, (__nv_bfloat16 *)output, batch_size,
+        gdn_decode_recurrence_kernel_value_major<T, StateT, 4>
+            <<<bh * (GDN_DECODE_VALUE_MAJOR_V / 4), 32, 0, stream>>>(
+                mixed_qkv, b, a, a_log, dt_bias, state, output, batch_size,
                 num_k_heads, num_v_heads, tiled_v_heads, b_batch_stride,
                 b_head_stride, a_batch_stride, a_head_stride, slot_indices);
       } else {
-        gdn_decode_recurrence_kernel_value_major<32>
-            <<<bh * (GDN_DECODE_VALUE_MAJOR_V / 32), 32, 0, custream>>>(
-                (const __nv_bfloat16 *)mixed_qkv,
-                (const __nv_bfloat16 *)b, (const __nv_bfloat16 *)a, a_log,
-                dt_bias, state, (__nv_bfloat16 *)output, batch_size,
+        gdn_decode_recurrence_kernel_value_major<T, StateT, 32>
+            <<<bh * (GDN_DECODE_VALUE_MAJOR_V / 32), 32, 0, stream>>>(
+                mixed_qkv, b, a, a_log, dt_bias, state, output, batch_size,
                 num_k_heads, num_v_heads, tiled_v_heads, b_batch_stride,
                 b_head_stride, a_batch_stride, a_head_stride, slot_indices);
       }
@@ -1911,22 +2028,12 @@ gdn_decode_recurrence(const void *mixed_qkv, const void *b, const void *a,
       head_v_dim % GDN_DECODE_PIPELINED_V == 0) {
     dim3 pipelined_grid(batch_size * num_v_heads);
     dim3 pipelined_block(GDN_DECODE_PIPELINED_THREADS);
-    if (dtype == 0) {
-      gdn_decode_recurrence_kernel_pipelined<__half>
-          <<<pipelined_grid, pipelined_block, 0, custream>>>(
-              (const __half *)mixed_qkv, (const __half *)b, (const __half *)a,
-              a_log, dt_bias, state, (__half *)output, batch_size, num_k_heads,
-              num_v_heads, head_v_dim, tiled_v_heads, b_batch_stride,
-              b_head_stride, a_batch_stride, a_head_stride, slot_indices);
-    } else {
-      gdn_decode_recurrence_kernel_pipelined<__nv_bfloat16>
-          <<<pipelined_grid, pipelined_block, 0, custream>>>(
-              (const __nv_bfloat16 *)mixed_qkv, (const __nv_bfloat16 *)b,
-              (const __nv_bfloat16 *)a, a_log, dt_bias, state,
-              (__nv_bfloat16 *)output, batch_size, num_k_heads, num_v_heads,
-              head_v_dim, tiled_v_heads, b_batch_stride, b_head_stride,
-              a_batch_stride, a_head_stride, slot_indices);
-    }
+    gdn_decode_recurrence_kernel_pipelined<T, StateT>
+        <<<pipelined_grid, pipelined_block, 0, stream>>>(
+            mixed_qkv, b, a, a_log, dt_bias, state, output, batch_size,
+            num_k_heads, num_v_heads, head_v_dim, tiled_v_heads,
+            b_batch_stride, b_head_stride, a_batch_stride, a_head_stride,
+            slot_indices);
   } else if (kernel_kind == GDN_DECODE_KERNEL_COOPERATIVE &&
              head_k_dim == GDN_DECODE_COOPERATIVE_K &&
              head_v_dim % GDN_DECODE_COOPERATIVE_V == 0) {
@@ -1934,75 +2041,92 @@ gdn_decode_recurrence(const void *mixed_qkv, const void *b, const void *a,
     dim3 cooperative_grid(head_v_dim / COOPERATIVE_BV,
                           batch_size * num_v_heads);
     dim3 cooperative_block(GDN_DECODE_COOPERATIVE_THREADS);
-    if (dtype == 0) {
-      gdn_decode_recurrence_kernel_cooperative<__half>
-          <<<cooperative_grid, cooperative_block, 0, custream>>>(
-              (const __half *)mixed_qkv, (const __half *)b, (const __half *)a,
-              a_log, dt_bias, state, (__half *)output, batch_size, num_k_heads,
-              num_v_heads, head_v_dim, tiled_v_heads, b_batch_stride,
-              b_head_stride, a_batch_stride, a_head_stride, slot_indices);
-    } else {
-      gdn_decode_recurrence_kernel_cooperative<__nv_bfloat16>
-          <<<cooperative_grid, cooperative_block, 0, custream>>>(
-              (const __nv_bfloat16 *)mixed_qkv, (const __nv_bfloat16 *)b,
-              (const __nv_bfloat16 *)a, a_log, dt_bias, state,
-              (__nv_bfloat16 *)output, batch_size, num_k_heads, num_v_heads,
-              head_v_dim, tiled_v_heads, b_batch_stride, b_head_stride,
-              a_batch_stride, a_head_stride, slot_indices);
-    }
+    gdn_decode_recurrence_kernel_cooperative<T, StateT>
+        <<<cooperative_grid, cooperative_block, 0, stream>>>(
+            mixed_qkv, b, a, a_log, dt_bias, state, output, batch_size,
+            num_k_heads, num_v_heads, head_v_dim, tiled_v_heads,
+            b_batch_stride, b_head_stride, a_batch_stride, a_head_stride,
+            slot_indices);
   } else if (head_k_dim == 128) {
-    if (dtype == 0) {
-      gdn_decode_recurrence_kernel<__half, 128, BV>
-          <<<grid, block, 0, custream>>>(
-              (const __half *)mixed_qkv, (const __half *)b, (const __half *)a,
-              a_log, dt_bias, state, (__half *)output, batch_size, num_k_heads,
-              num_v_heads, head_v_dim, tiled_v_heads, b_batch_stride,
-              b_head_stride, a_batch_stride, a_head_stride, slot_indices);
-    } else {
-      gdn_decode_recurrence_kernel<__nv_bfloat16, 128, BV>
-          <<<grid, block, 0, custream>>>(
-              (const __nv_bfloat16 *)mixed_qkv, (const __nv_bfloat16 *)b,
-              (const __nv_bfloat16 *)a, a_log, dt_bias, state, (__nv_bfloat16 *)output,
-              batch_size, num_k_heads, num_v_heads, head_v_dim, tiled_v_heads,
-              b_batch_stride, b_head_stride, a_batch_stride, a_head_stride,
-              slot_indices);
-    }
+    gdn_decode_recurrence_kernel<T, StateT, 128, BV>
+        <<<grid, block, 0, stream>>>(
+            mixed_qkv, b, a, a_log, dt_bias, state, output, batch_size,
+            num_k_heads, num_v_heads, head_v_dim, tiled_v_heads,
+            b_batch_stride, b_head_stride, a_batch_stride, a_head_stride,
+            slot_indices);
   } else if (head_k_dim == 64) {
-    if (dtype == 0) {
-      gdn_decode_recurrence_kernel<__half, 64, BV>
-          <<<grid, block, 0, custream>>>(
-              (const __half *)mixed_qkv, (const __half *)b, (const __half *)a,
-              a_log, dt_bias, state, (__half *)output, batch_size, num_k_heads,
-              num_v_heads, head_v_dim, tiled_v_heads, b_batch_stride,
-              b_head_stride, a_batch_stride, a_head_stride, slot_indices);
-    } else {
-      gdn_decode_recurrence_kernel<__nv_bfloat16, 64, BV>
-          <<<grid, block, 0, custream>>>(
-              (const __nv_bfloat16 *)mixed_qkv, (const __nv_bfloat16 *)b,
-              (const __nv_bfloat16 *)a, a_log, dt_bias, state, (__nv_bfloat16 *)output,
-              batch_size, num_k_heads, num_v_heads, head_v_dim, tiled_v_heads,
-              b_batch_stride, b_head_stride, a_batch_stride, a_head_stride,
-              slot_indices);
-    }
+    gdn_decode_recurrence_kernel<T, StateT, 64, BV>
+        <<<grid, block, 0, stream>>>(
+            mixed_qkv, b, a, a_log, dt_bias, state, output, batch_size,
+            num_k_heads, num_v_heads, head_v_dim, tiled_v_heads,
+            b_batch_stride, b_head_stride, a_batch_stride, a_head_stride,
+            slot_indices);
   } else {
     constexpr int MAX_K = 256;
     size_t smem = (2 * BV + 2 * head_k_dim) * sizeof(float);
-    if (dtype == 0) {
-      gdn_decode_recurrence_kernel_fallback<__half, BV, MAX_K>
-          <<<grid, block, smem, custream>>>(
-              (const __half *)mixed_qkv, (const __half *)b, (const __half *)a,
-              a_log, dt_bias, state, (__half *)output, batch_size, num_k_heads,
-              num_v_heads, head_k_dim, head_v_dim, tiled_v_heads, b_batch_stride,
-              b_head_stride, a_batch_stride, a_head_stride, slot_indices);
-    } else {
-      gdn_decode_recurrence_kernel_fallback<__nv_bfloat16, BV, MAX_K>
-          <<<grid, block, smem, custream>>>(
-              (const __nv_bfloat16 *)mixed_qkv, (const __nv_bfloat16 *)b,
-              (const __nv_bfloat16 *)a, a_log, dt_bias, state, (__nv_bfloat16 *)output,
-              batch_size, num_k_heads, num_v_heads, head_k_dim, head_v_dim,
-              tiled_v_heads, b_batch_stride, b_head_stride, a_batch_stride,
-              a_head_stride, slot_indices);
-    }
+    gdn_decode_recurrence_kernel_fallback<T, StateT, BV, MAX_K>
+        <<<grid, block, smem, stream>>>(
+            mixed_qkv, b, a, a_log, dt_bias, state, output, batch_size,
+            num_k_heads, num_v_heads, head_k_dim, head_v_dim, tiled_v_heads,
+            b_batch_stride, b_head_stride, a_batch_stride, a_head_stride,
+            slot_indices);
+  }
+}
+
+template <typename T>
+void dispatch_gdn_decode_recurrence(
+    const T *mixed_qkv, const T *b, const T *a, const float *a_log,
+    const float *dt_bias, void *state, T *output, int batch_size,
+    int num_k_heads, int num_v_heads, int head_k_dim, int head_v_dim,
+    int tiled_v_heads, int64_t b_batch_stride, int64_t b_head_stride,
+    int64_t a_batch_stride, int64_t a_head_stride,
+    const int32_t *slot_indices, int kernel_kind, int state_dtype,
+    cudaStream_t stream) {
+  if (state_dtype == GDN_STATE_DTYPE_F16) {
+    launch_gdn_decode_recurrence(
+        mixed_qkv, b, a, a_log, dt_bias, (__half *)state, output, batch_size,
+        num_k_heads, num_v_heads, head_k_dim, head_v_dim, tiled_v_heads,
+        b_batch_stride, b_head_stride, a_batch_stride, a_head_stride,
+        slot_indices, kernel_kind, stream);
+  } else if (state_dtype == GDN_STATE_DTYPE_BF16) {
+    launch_gdn_decode_recurrence(
+        mixed_qkv, b, a, a_log, dt_bias, (__nv_bfloat16 *)state, output,
+        batch_size, num_k_heads, num_v_heads, head_k_dim, head_v_dim,
+        tiled_v_heads, b_batch_stride, b_head_stride, a_batch_stride,
+        a_head_stride, slot_indices, kernel_kind, stream);
+  } else {
+    launch_gdn_decode_recurrence(
+        mixed_qkv, b, a, a_log, dt_bias, (float *)state, output, batch_size,
+        num_k_heads, num_v_heads, head_k_dim, head_v_dim, tiled_v_heads,
+        b_batch_stride, b_head_stride, a_batch_stride, a_head_stride,
+        slot_indices, kernel_kind, stream);
+  }
+}
+
+extern "C" void gdn_decode_recurrence(
+    const void *mixed_qkv, const void *b, const void *a, const float *a_log,
+    const float *dt_bias, void *state, void *output, int batch_size,
+    int num_k_heads, int num_v_heads, int head_k_dim, int head_v_dim,
+    int tiled_v_heads, int64_t b_batch_stride, int64_t b_head_stride,
+    int64_t a_batch_stride, int64_t a_head_stride,
+    const int32_t *slot_indices, int kernel_kind, int dtype, int state_dtype,
+    int64_t stream) {
+  const cudaStream_t custream = (cudaStream_t)stream;
+  if (dtype == 0) {
+    dispatch_gdn_decode_recurrence(
+        (const __half *)mixed_qkv, (const __half *)b, (const __half *)a,
+        a_log, dt_bias, state, (__half *)output, batch_size, num_k_heads,
+        num_v_heads, head_k_dim, head_v_dim, tiled_v_heads, b_batch_stride,
+        b_head_stride, a_batch_stride, a_head_stride, slot_indices, kernel_kind,
+        state_dtype, custream);
+  } else {
+    dispatch_gdn_decode_recurrence(
+        (const __nv_bfloat16 *)mixed_qkv, (const __nv_bfloat16 *)b,
+        (const __nv_bfloat16 *)a, a_log, dt_bias, state,
+        (__nv_bfloat16 *)output, batch_size, num_k_heads, num_v_heads,
+        head_k_dim, head_v_dim, tiled_v_heads, b_batch_stride, b_head_stride,
+        a_batch_stride, a_head_stride, slot_indices, kernel_kind, state_dtype,
+        custream);
   }
 }
 
@@ -2208,13 +2332,13 @@ __global__ void gdn_speculative_conv_state_commit_kernel(
   }
 }
 
-template <typename T, bool VALUE_MAJOR>
+template <typename T, typename StateT, bool VALUE_MAJOR>
 __global__ void gdn_speculative_recurrent_state_commit_kernel(
     const T *__restrict__ convolved_qkv, const T *__restrict__ b,
     const T *__restrict__ a,
-    const float *__restrict__ initial_recurrent_state,
+    const StateT *__restrict__ initial_recurrent_state,
     const float *__restrict__ a_log, const float *__restrict__ dt_bias,
-    float *__restrict__ recurrent_state_pool,
+    StateT *__restrict__ recurrent_state_pool,
     const uint32_t *__restrict__ keep_rows,
     const uint32_t *__restrict__ slot_indices, int batch_size, int seq_len,
     int num_k_heads, int num_v_heads, int head_k_dim, int head_v_dim,
@@ -2350,12 +2474,12 @@ __global__ void gdn_speculative_recurrent_state_commit_kernel(
   }
 }
 
-template <typename T>
+template <typename T, typename StateT>
 void launch_gdn_speculative_state_commit(
     const T *mixed_qkv, const T *convolved_qkv, const T *b, const T *a,
-    const T *initial_conv_state, const float *initial_recurrent_state,
+    const T *initial_conv_state, const StateT *initial_recurrent_state,
     const float *a_log, const float *dt_bias, T *conv_state_pool,
-    float *recurrent_state_pool, const uint32_t *keep_rows,
+    StateT *recurrent_state_pool, const uint32_t *keep_rows,
     const uint32_t *slot_indices, int batch_size, int seq_len, int num_k_heads,
     int num_v_heads, int head_k_dim, int head_v_dim, int kernel_size,
     int tiled_v_heads, int value_major, cudaStream_t stream) {
@@ -2375,14 +2499,14 @@ void launch_gdn_speculative_state_commit(
       (head_v_dim + GDN_SPEC_COMMIT_WARPS - 1) / GDN_SPEC_COMMIT_WARPS,
       batch_size * num_v_heads);
   if (value_major) {
-    gdn_speculative_recurrent_state_commit_kernel<T, true>
+    gdn_speculative_recurrent_state_commit_kernel<T, StateT, true>
         <<<recurrence_grid, recurrence_block, 0, stream>>>(
             convolved_qkv, b, a, initial_recurrent_state, a_log, dt_bias,
             recurrent_state_pool, keep_rows, slot_indices, batch_size, seq_len,
             num_k_heads, num_v_heads, head_k_dim, head_v_dim,
             tiled_v_heads);
   } else {
-    gdn_speculative_recurrent_state_commit_kernel<T, false>
+    gdn_speculative_recurrent_state_commit_kernel<T, StateT, false>
         <<<recurrence_grid, recurrence_block, 0, stream>>>(
             convolved_qkv, b, a, initial_recurrent_state, a_log, dt_bias,
             recurrent_state_pool, keep_rows, slot_indices, batch_size, seq_len,
@@ -2391,27 +2515,62 @@ void launch_gdn_speculative_state_commit(
   }
 }
 
+template <typename T>
+void dispatch_gdn_speculative_state_commit(
+    const T *mixed_qkv, const T *convolved_qkv, const T *b, const T *a,
+    const T *initial_conv_state, const void *initial_recurrent_state,
+    const float *a_log, const float *dt_bias, T *conv_state_pool,
+    void *recurrent_state_pool, const uint32_t *keep_rows,
+    const uint32_t *slot_indices, int batch_size, int seq_len, int num_k_heads,
+    int num_v_heads, int head_k_dim, int head_v_dim, int kernel_size,
+    int tiled_v_heads, int value_major, int state_dtype, cudaStream_t stream) {
+  if (state_dtype == GDN_STATE_DTYPE_F16) {
+    launch_gdn_speculative_state_commit(
+        mixed_qkv, convolved_qkv, b, a, initial_conv_state,
+        (const __half *)initial_recurrent_state, a_log, dt_bias,
+        conv_state_pool, (__half *)recurrent_state_pool, keep_rows,
+        slot_indices, batch_size, seq_len, num_k_heads, num_v_heads,
+        head_k_dim, head_v_dim, kernel_size, tiled_v_heads, value_major,
+        stream);
+  } else if (state_dtype == GDN_STATE_DTYPE_BF16) {
+    launch_gdn_speculative_state_commit(
+        mixed_qkv, convolved_qkv, b, a, initial_conv_state,
+        (const __nv_bfloat16 *)initial_recurrent_state, a_log, dt_bias,
+        conv_state_pool, (__nv_bfloat16 *)recurrent_state_pool, keep_rows,
+        slot_indices, batch_size, seq_len, num_k_heads, num_v_heads,
+        head_k_dim, head_v_dim, kernel_size, tiled_v_heads, value_major,
+        stream);
+  } else {
+    launch_gdn_speculative_state_commit(
+        mixed_qkv, convolved_qkv, b, a, initial_conv_state,
+        (const float *)initial_recurrent_state, a_log, dt_bias,
+        conv_state_pool, (float *)recurrent_state_pool, keep_rows, slot_indices,
+        batch_size, seq_len, num_k_heads, num_v_heads, head_k_dim, head_v_dim,
+        kernel_size, tiled_v_heads, value_major, stream);
+  }
+}
+
 extern "C" void gdn_speculative_state_commit(
     const void *mixed_qkv, const void *convolved_qkv, const void *b,
     const void *a, const void *initial_conv_state,
-    const float *initial_recurrent_state, const float *a_log,
-    const float *dt_bias, void *conv_state_pool, float *recurrent_state_pool,
+    const void *initial_recurrent_state, const float *a_log,
+    const float *dt_bias, void *conv_state_pool, void *recurrent_state_pool,
     const uint32_t *keep_rows, const uint32_t *slot_indices, int batch_size,
     int seq_len, int num_k_heads, int num_v_heads, int head_k_dim,
     int head_v_dim, int kernel_size, int tiled_v_heads, int value_major,
-    int dtype, int64_t stream) {
+    int dtype, int state_dtype, int64_t stream) {
   const cudaStream_t custream = (cudaStream_t)stream;
   if (dtype == 0) {
-    launch_gdn_speculative_state_commit(
+    dispatch_gdn_speculative_state_commit(
         (const __half *)mixed_qkv, (const __half *)convolved_qkv,
         (const __half *)b, (const __half *)a,
         (const __half *)initial_conv_state, initial_recurrent_state, a_log,
         dt_bias, (__half *)conv_state_pool, recurrent_state_pool, keep_rows,
         slot_indices, batch_size, seq_len, num_k_heads, num_v_heads,
         head_k_dim, head_v_dim, kernel_size, tiled_v_heads, value_major,
-        custream);
+        state_dtype, custream);
   } else {
-    launch_gdn_speculative_state_commit(
+    dispatch_gdn_speculative_state_commit(
         (const __nv_bfloat16 *)mixed_qkv,
         (const __nv_bfloat16 *)convolved_qkv, (const __nv_bfloat16 *)b,
         (const __nv_bfloat16 *)a,
@@ -2419,7 +2578,7 @@ extern "C" void gdn_speculative_state_commit(
         a_log, dt_bias, (__nv_bfloat16 *)conv_state_pool,
         recurrent_state_pool, keep_rows, slot_indices, batch_size, seq_len,
         num_k_heads, num_v_heads, head_k_dim, head_v_dim, kernel_size,
-        tiled_v_heads, value_major, custream);
+        tiled_v_heads, value_major, state_dtype, custream);
   }
 }
 
@@ -2429,6 +2588,17 @@ constexpr int GDN_SPEC_CHECKPOINT_VALUE_TILE = 32;
 constexpr int GDN_SPEC_CHECKPOINT_WARPS = 4;
 constexpr int GDN_SPEC_CHECKPOINT_VALUES_PER_WARP =
     GDN_SPEC_CHECKPOINT_VALUE_TILE / GDN_SPEC_CHECKPOINT_WARPS;
+constexpr int GDN_SPEC_FUSED_MAX_TOKENS = 8;
+constexpr int GDN_SPEC_FUSED_THREADS = 256;
+constexpr int GDN_SPEC_FUSED_WARPS = GDN_SPEC_FUSED_THREADS / 32;
+constexpr int GDN_SPEC_FUSED_VALUE_CHUNK = 32;
+constexpr int GDN_SPEC_FUSED_VALUE_CHUNKS =
+    GDN_DECODE_VALUE_MAJOR_V / GDN_SPEC_FUSED_VALUE_CHUNK;
+constexpr int GDN_SPEC_FUSED_VALUES_PER_WARP =
+    GDN_SPEC_FUSED_VALUE_CHUNK / GDN_SPEC_FUSED_WARPS;
+// Paired reductions favor 16-bit states and underfilled or saturated F32 grids; serial sustains mid-grid bandwidth.
+constexpr int GDN_SPEC_FUSED_PAIR_LOW_GRID_MAX = 144;
+constexpr int GDN_SPEC_FUSED_PAIR_HIGH_GRID_MIN = 768;
 constexpr uint32_t GDN_SPEC_CHECKPOINT_PAD_SLOT = 0xffffffffu;
 
 __device__ __forceinline__ size_t
@@ -2588,13 +2758,6 @@ extern "C" void gdn_speculative_conv_checkpoints(
   }
 }
 
-template <typename T>
-__device__ __forceinline__ float4
-gdn_spec_load_activation_x4(const T *__restrict__ source) {
-  return make_float4((float)source[0], (float)source[1], (float)source[2],
-                     (float)source[3]);
-}
-
 __device__ __forceinline__ float gdn_spec_softplus(float value) {
   return value > 20.0f
              ? value
@@ -2602,13 +2765,316 @@ __device__ __forceinline__ float gdn_spec_softplus(float value) {
                              : log1pf(expf(value)));
 }
 
-template <typename T>
+__device__ __forceinline__ float2 gdn_spec_warp_sum_pair(float x, float y) {
+#pragma unroll
+  for (int offset = 16; offset > 0; offset >>= 1) {
+    x += __shfl_xor_sync(0xffffffff, x, offset);
+    y += __shfl_xor_sync(0xffffffff, y, offset);
+  }
+  return make_float2(x, y);
+}
+
+template <typename StateT>
+__device__ __forceinline__ void gdn_spec_copy_state_chunk(
+    StateT *shared_state, const StateT *state, int chunk, int thread) {
+  constexpr int ELEMENTS_PER_COPY = 16 / sizeof(StateT);
+  constexpr int ELEMENTS_PER_CHUNK =
+      GDN_SPEC_FUSED_VALUE_CHUNK * GDN_DECODE_VALUE_MAJOR_K;
+  constexpr int COPIES_PER_CHUNK = ELEMENTS_PER_CHUNK / ELEMENTS_PER_COPY;
+  const int stage = chunk % 2;
+  for (int copy = thread; copy < COPIES_PER_CHUNK;
+       copy += GDN_SPEC_FUSED_THREADS) {
+    const int element = copy * ELEMENTS_PER_COPY;
+    gdn_cp_async_cg_16(shared_state + stage * ELEMENTS_PER_CHUNK + element,
+                       state + chunk * ELEMENTS_PER_CHUNK + element);
+  }
+  gdn_cp_async_commit();
+}
+
+// Adapted from vLLM revision c8438a3d40168ce1d9eade0dc15ccbe5d27adb68.
+// Copyright contributors to the vLLM project; Apache-2.0. See third_party/flashinfer_gdn.
+template <typename T, typename StateT, bool PAIRED_REDUCTIONS>
+__global__ __launch_bounds__(GDN_SPEC_FUSED_THREADS, 2)
+    void gdn_speculative_recurrence_rmsnorm_gate_value_major_128_kernel(
+        const T *__restrict__ mixed_qkv, const T *__restrict__ b,
+        const T *__restrict__ a, const float *__restrict__ a_log,
+        const float *__restrict__ dt_bias, StateT *__restrict__ state_pool,
+        T *__restrict__ output, const uint32_t *__restrict__ active_slots,
+        const T *__restrict__ gate, const T *__restrict__ norm_weight,
+        int64_t b_stride_b, int64_t b_stride_s, int64_t b_stride_h,
+        int64_t a_stride_b, int64_t a_stride_s, int64_t a_stride_h,
+        int64_t gate_stride_b, int64_t gate_stride_s,
+        int64_t gate_stride_h, int64_t gate_stride_v, int batch_size,
+        int seq_len, int num_k_heads, int num_v_heads,
+        int checkpoint_lanes, int tiled_v_heads, float norm_eps) {
+  constexpr int K = GDN_DECODE_VALUE_MAJOR_K;
+  constexpr int V = GDN_DECODE_VALUE_MAJOR_V;
+  constexpr int VALUES_PER_WARP = GDN_SPEC_FUSED_VALUES_PER_WARP;
+  const int batch_idx = blockIdx.x;
+  const int value_head = blockIdx.y;
+  const int tid = threadIdx.x;
+  const int lane = tid & 31;
+  const int warp = tid >> 5;
+  if (batch_idx >= batch_size) {
+    return;
+  }
+
+  const uint32_t active_slot = active_slots[batch_idx];
+  if (active_slot == GDN_SPEC_CHECKPOINT_PAD_SLOT) {
+    for (int linear = tid; linear < seq_len * V;
+         linear += GDN_SPEC_FUSED_THREADS) {
+      const int position = linear / V;
+      const int value = linear - position * V;
+      output[(((size_t)batch_idx * seq_len + position) * num_v_heads +
+              value_head) *
+                 V +
+             value] = (T)0.0f;
+    }
+    return;
+  }
+
+  const int values_per_group = num_v_heads / num_k_heads;
+  const int key_head = tiled_v_heads
+                           ? value_head % num_k_heads
+                           : value_head / values_per_group;
+  const int key_dim = num_k_heads * K;
+  const int value_dim = num_v_heads * V;
+  const int conv_dim = 2 * key_dim + value_dim;
+  const size_t state_head_elements = (size_t)V * K;
+  const StateT *source =
+      state_pool + ((size_t)active_slot * num_v_heads + value_head) *
+                       state_head_elements;
+  const size_t base_slot =
+      gdn_spec_checkpoint_base(active_slot, checkpoint_lanes);
+
+  __shared__ __align__(16) StateT shared_state[2][GDN_SPEC_FUSED_VALUE_CHUNK]
+                                                [K];
+  __shared__ float shared_query[GDN_SPEC_FUSED_MAX_TOKENS][K];
+  __shared__ float shared_key[GDN_SPEC_FUSED_MAX_TOKENS][K];
+  __shared__ T shared_value[GDN_SPEC_FUSED_MAX_TOKENS][V];
+  __shared__ T shared_output[GDN_SPEC_FUSED_MAX_TOKENS][V];
+  __shared__ float shared_decay[GDN_SPEC_FUSED_MAX_TOKENS];
+  __shared__ float shared_beta[GDN_SPEC_FUSED_MAX_TOKENS];
+
+  gdn_spec_copy_state_chunk(&shared_state[0][0][0], source, 0, tid);
+
+  if (warp < seq_len) {
+    const int position = warp;
+    const T *row =
+        mixed_qkv + ((size_t)batch_idx * seq_len + position) * conv_dim;
+    float4 query =
+        gdn_load_state_x4(row + key_head * K + lane * 4);
+    float4 key =
+        gdn_load_state_x4(row + key_dim + key_head * K + lane * 4);
+    float query_norm = query.x * query.x + query.y * query.y +
+                       query.z * query.z + query.w * query.w;
+    float key_norm = key.x * key.x + key.y * key.y + key.z * key.z +
+                     key.w * key.w;
+    if constexpr (PAIRED_REDUCTIONS) {
+      const float2 qk_norm = gdn_spec_warp_sum_pair(query_norm, key_norm);
+      query_norm = qk_norm.x;
+      key_norm = qk_norm.y;
+    } else {
+      query_norm = gdn_warp_sum<32>(query_norm);
+      key_norm = gdn_warp_sum<32>(key_norm);
+    }
+    const float query_multiplier =
+        rsqrtf(query_norm + 1.0e-6f) * rsqrtf((float)K);
+    const float key_multiplier = rsqrtf(key_norm + 1.0e-6f);
+    const float query_values[4] = {query.x, query.y, query.z, query.w};
+    const float key_values[4] = {key.x, key.y, key.z, key.w};
+
+#pragma unroll
+    for (int i = 0; i < 4; i++) {
+      const int key = lane * 4 + i;
+      const int value = lane + i * 32;
+      shared_query[position][key] = query_values[i] * query_multiplier;
+      shared_key[position][key] = key_values[i] * key_multiplier;
+      shared_value[position][value] =
+          row[2 * key_dim + value_head * V + value];
+    }
+    if (lane == 0) {
+      const size_t b_offset = (size_t)batch_idx * b_stride_b +
+                              (size_t)position * b_stride_s +
+                              (size_t)value_head * b_stride_h;
+      const size_t a_offset = (size_t)batch_idx * a_stride_b +
+                              (size_t)position * a_stride_s +
+                              (size_t)value_head * a_stride_h;
+      shared_beta[position] =
+          1.0f / (1.0f + expf(-(float)b[b_offset]));
+      const float biased_a = (float)a[a_offset] + dt_bias[value_head];
+      shared_decay[position] =
+          expf(-expf(a_log[value_head]) * gdn_spec_softplus(biased_a));
+    }
+  }
+  __syncthreads();
+
+  const int key_base = lane * 4;
+  int value_rows[VALUES_PER_WARP];
+#pragma unroll
+  for (int row = 0; row < VALUES_PER_WARP; row++) {
+    value_rows[row] = warp + row * GDN_SPEC_FUSED_WARPS;
+  }
+
+#pragma unroll
+  for (int chunk = 0; chunk < GDN_SPEC_FUSED_VALUE_CHUNKS; chunk++) {
+    gdn_cp_async_wait();
+    __syncthreads();
+    if (chunk + 1 < GDN_SPEC_FUSED_VALUE_CHUNKS) {
+      gdn_spec_copy_state_chunk(&shared_state[0][0][0], source, chunk + 1,
+                                tid);
+    }
+
+    float4 state[VALUES_PER_WARP];
+#pragma unroll
+    for (int row = 0; row < VALUES_PER_WARP; row++) {
+      state[row] = gdn_load_state_x4(
+          &shared_state[chunk & 1][value_rows[row]][key_base]);
+    }
+
+    for (int position = 0; position < seq_len; position++) {
+      const float4 query = *reinterpret_cast<const float4 *>(
+          &shared_query[position][key_base]);
+      const float4 key = *reinterpret_cast<const float4 *>(
+          &shared_key[position][key_base]);
+      float state_dot_key[VALUES_PER_WARP];
+#pragma unroll
+      for (int row = 0; row < VALUES_PER_WARP; row++) {
+        state[row].x *= shared_decay[position];
+        state[row].y *= shared_decay[position];
+        state[row].z *= shared_decay[position];
+        state[row].w *= shared_decay[position];
+        float dot = state[row].x * key.x;
+        dot = __fmaf_rn(state[row].y, key.y, dot);
+        dot = __fmaf_rn(state[row].z, key.z, dot);
+        state_dot_key[row] = __fmaf_rn(state[row].w, key.w, dot);
+      }
+      if constexpr (PAIRED_REDUCTIONS) {
+        const float2 state_dot_key01 =
+            gdn_spec_warp_sum_pair(state_dot_key[0], state_dot_key[1]);
+        const float2 state_dot_key23 =
+            gdn_spec_warp_sum_pair(state_dot_key[2], state_dot_key[3]);
+        state_dot_key[0] = state_dot_key01.x;
+        state_dot_key[1] = state_dot_key01.y;
+        state_dot_key[2] = state_dot_key23.x;
+        state_dot_key[3] = state_dot_key23.y;
+
+        float state_dot_query[VALUES_PER_WARP];
+#pragma unroll
+        for (int row = 0; row < VALUES_PER_WARP; row++) {
+          const int value = chunk * GDN_SPEC_FUSED_VALUE_CHUNK +
+                            value_rows[row];
+          const float delta =
+              ((float)shared_value[position][value] - state_dot_key[row]) *
+              shared_beta[position];
+          state[row].x = __fmaf_rn(key.x, delta, state[row].x);
+          state[row].y = __fmaf_rn(key.y, delta, state[row].y);
+          state[row].z = __fmaf_rn(key.z, delta, state[row].z);
+          state[row].w = __fmaf_rn(key.w, delta, state[row].w);
+          float dot = state[row].x * query.x;
+          dot = __fmaf_rn(state[row].y, query.y, dot);
+          dot = __fmaf_rn(state[row].z, query.z, dot);
+          state_dot_query[row] = __fmaf_rn(state[row].w, query.w, dot);
+        }
+        const float2 state_dot_query01 =
+            gdn_spec_warp_sum_pair(state_dot_query[0], state_dot_query[1]);
+        const float2 state_dot_query23 =
+            gdn_spec_warp_sum_pair(state_dot_query[2], state_dot_query[3]);
+        state_dot_query[0] = state_dot_query01.x;
+        state_dot_query[1] = state_dot_query01.y;
+        state_dot_query[2] = state_dot_query23.x;
+        state_dot_query[3] = state_dot_query23.y;
+        if (lane == 0) {
+#pragma unroll
+          for (int row = 0; row < VALUES_PER_WARP; row++) {
+            const int value = chunk * GDN_SPEC_FUSED_VALUE_CHUNK +
+                              value_rows[row];
+            shared_output[position][value] = (T)state_dot_query[row];
+          }
+        }
+      } else {
+#pragma unroll
+        for (int row = 0; row < VALUES_PER_WARP; row++) {
+          state_dot_key[row] = gdn_warp_sum<32>(state_dot_key[row]);
+          const int value = chunk * GDN_SPEC_FUSED_VALUE_CHUNK +
+                            value_rows[row];
+          const float delta =
+              ((float)shared_value[position][value] - state_dot_key[row]) *
+              shared_beta[position];
+          state[row].x = __fmaf_rn(key.x, delta, state[row].x);
+          state[row].y = __fmaf_rn(key.y, delta, state[row].y);
+          state[row].z = __fmaf_rn(key.z, delta, state[row].z);
+          state[row].w = __fmaf_rn(key.w, delta, state[row].w);
+          float dot = state[row].x * query.x;
+          dot = __fmaf_rn(state[row].y, query.y, dot);
+          dot = __fmaf_rn(state[row].z, query.z, dot);
+          const float state_dot_query =
+              gdn_warp_sum<32>(__fmaf_rn(state[row].w, query.w, dot));
+          if (lane == 0) {
+            shared_output[position][value] = (T)state_dot_query;
+          }
+        }
+      }
+
+      StateT *destination =
+          state_pool +
+          (((base_slot + position) * num_v_heads + value_head) *
+           state_head_elements);
+#pragma unroll
+      for (int row = 0; row < VALUES_PER_WARP; row++) {
+        const int value = chunk * GDN_SPEC_FUSED_VALUE_CHUNK +
+                          value_rows[row];
+        gdn_store_state_x4(destination + (size_t)value * K + key_base,
+                           state[row]);
+      }
+    }
+  }
+  __syncthreads();
+
+  if (warp < seq_len) {
+    const int position = warp;
+    float output_values[4];
+    float sum_square = 0.0f;
+#pragma unroll
+    for (int i = 0; i < 4; i++) {
+      const int value = lane + i * 32;
+      output_values[i] = (float)shared_output[position][value];
+      sum_square =
+          __fmaf_rn(output_values[i], output_values[i], sum_square);
+    }
+    sum_square = gdn_warp_sum<32>(sum_square);
+    const float rstd = rsqrtf(sum_square / (float)V + norm_eps);
+#pragma unroll
+    for (int i = 0; i < 4; i++) {
+      const int value = lane + i * 32;
+      const size_t gate_offset =
+          (size_t)batch_idx * gate_stride_b +
+          (size_t)position * gate_stride_s +
+          (size_t)value_head * gate_stride_h +
+          (size_t)value * gate_stride_v;
+      const float gate_value = (float)gate[gate_offset];
+      const float silu_gate = gdn_silu(gate_value);
+      const size_t output_offset =
+          (((size_t)batch_idx * seq_len + position) * num_v_heads +
+           value_head) *
+              V +
+          value;
+      output[output_offset] =
+          (T)(output_values[i] * rstd * (float)norm_weight[value] *
+              silu_gate);
+    }
+  }
+}
+
+template <typename T, typename StateT>
 __global__ __launch_bounds__(32 * GDN_SPEC_CHECKPOINT_WARPS)
     void gdn_speculative_recurrence_checkpoints_value_major_128_kernel(
         const T *__restrict__ mixed_qkv, const T *__restrict__ b,
         const T *__restrict__ a, const float *__restrict__ a_log,
-        const float *__restrict__ dt_bias, float *__restrict__ state_pool,
+        const float *__restrict__ dt_bias, StateT *__restrict__ state_pool,
         T *__restrict__ output, const uint32_t *__restrict__ active_slots,
+        int64_t b_stride_b, int64_t b_stride_s, int64_t b_stride_h,
+        int64_t a_stride_b, int64_t a_stride_s, int64_t a_stride_h,
         int batch_size, int seq_len, int num_k_heads, int num_v_heads,
         int checkpoint_lanes, int tiled_v_heads) {
   constexpr int K = GDN_DECODE_VALUE_MAJOR_K;
@@ -2645,7 +3111,7 @@ __global__ __launch_bounds__(32 * GDN_SPEC_CHECKPOINT_WARPS)
   const int value_dim = num_v_heads * V;
   const int conv_dim = 2 * key_dim + value_dim;
   const size_t state_head_elements = (size_t)V * K;
-  const float *source =
+  const StateT *source =
       state_pool + ((size_t)active_slot * num_v_heads + value_head) *
                        state_head_elements;
   const size_t base_slot =
@@ -2654,17 +3120,17 @@ __global__ __launch_bounds__(32 * GDN_SPEC_CHECKPOINT_WARPS)
   float4 state[VALUES_PER_WARP];
 #pragma unroll
   for (int value = 0; value < VALUES_PER_WARP; value++) {
-    state[value] = reinterpret_cast<const float4 *>(
-        source + (size_t)(value_base + value) * K)[lane];
+    state[value] = gdn_load_state_x4(
+        source + (size_t)(value_base + value) * K + lane * 4);
   }
 
   for (int position = 0; position < seq_len; position++) {
     const T *row =
         mixed_qkv + ((size_t)batch_idx * seq_len + position) * conv_dim;
     float4 query =
-        gdn_spec_load_activation_x4(row + key_head * K + lane * 4);
-    float4 key = gdn_spec_load_activation_x4(
-        row + key_dim + key_head * K + lane * 4);
+        gdn_load_state_x4(row + key_head * K + lane * 4);
+    float4 key =
+        gdn_load_state_x4(row + key_dim + key_head * K + lane * 4);
     float query_norm = query.x * query.x + query.y * query.y +
                        query.z * query.z + query.w * query.w;
     float key_norm =
@@ -2684,11 +3150,14 @@ __global__ __launch_bounds__(32 * GDN_SPEC_CHECKPOINT_WARPS)
     float beta = 0.0f;
     float decay = 0.0f;
     if (lane == 0) {
-      const size_t gate_offset =
-          ((size_t)batch_idx * seq_len + position) * num_v_heads +
-          value_head;
-      beta = 1.0f / (1.0f + expf(-(float)b[gate_offset]));
-      const float biased_a = (float)a[gate_offset] + dt_bias[value_head];
+      const size_t b_offset = (size_t)batch_idx * b_stride_b +
+                              (size_t)position * b_stride_s +
+                              (size_t)value_head * b_stride_h;
+      const size_t a_offset = (size_t)batch_idx * a_stride_b +
+                              (size_t)position * a_stride_s +
+                              (size_t)value_head * a_stride_h;
+      beta = 1.0f / (1.0f + expf(-(float)b[b_offset]));
+      const float biased_a = (float)a[a_offset] + dt_bias[value_head];
       decay = expf(-expf(a_log[value_head]) * gdn_spec_softplus(biased_a));
     }
     beta = __shfl_sync(0xffffffff, beta, 0);
@@ -2728,24 +3197,27 @@ __global__ __launch_bounds__(32 * GDN_SPEC_CHECKPOINT_WARPS)
       }
     }
 
-    float *destination =
+    StateT *destination =
         state_pool +
         (((base_slot + position) * num_v_heads + value_head) *
          state_head_elements);
 #pragma unroll
     for (int value = 0; value < VALUES_PER_WARP; value++) {
-      reinterpret_cast<float4 *>(
-          destination + (size_t)(value_base + value) * K)[lane] = state[value];
+      gdn_store_state_x4(
+          destination + (size_t)(value_base + value) * K + lane * 4,
+          state[value]);
     }
   }
 }
 
-template <typename T, bool VALUE_MAJOR>
+template <typename T, typename StateT, bool VALUE_MAJOR>
 __global__ void gdn_speculative_recurrence_checkpoints_fallback_kernel(
     const T *__restrict__ mixed_qkv, const T *__restrict__ b,
     const T *__restrict__ a, const float *__restrict__ a_log,
-    const float *__restrict__ dt_bias, float *__restrict__ state_pool,
+    const float *__restrict__ dt_bias, StateT *__restrict__ state_pool,
     T *__restrict__ output, const uint32_t *__restrict__ active_slots,
+    int64_t b_stride_b, int64_t b_stride_s, int64_t b_stride_h,
+    int64_t a_stride_b, int64_t a_stride_s, int64_t a_stride_h,
     int batch_size, int seq_len, int num_k_heads, int num_v_heads,
     int head_k_dim, int head_v_dim, int checkpoint_lanes,
     int tiled_v_heads) {
@@ -2801,10 +3273,14 @@ __global__ void gdn_speculative_recurrence_checkpoints_fallback_kernel(
     const float query_multiplier =
         rsqrtf(query_norm + 1.0e-6f) * rsqrtf((float)head_k_dim);
     const float key_multiplier = rsqrtf(key_norm + 1.0e-6f);
-    const size_t gate_offset =
-        ((size_t)batch_idx * seq_len + position) * num_v_heads + value_head;
-    const float beta = 1.0f / (1.0f + expf(-(float)b[gate_offset]));
-    const float biased_a = (float)a[gate_offset] + dt_bias[value_head];
+    const size_t b_offset = (size_t)batch_idx * b_stride_b +
+                            (size_t)position * b_stride_s +
+                            (size_t)value_head * b_stride_h;
+    const size_t a_offset = (size_t)batch_idx * a_stride_b +
+                            (size_t)position * a_stride_s +
+                            (size_t)value_head * a_stride_h;
+    const float beta = 1.0f / (1.0f + expf(-(float)b[b_offset]));
+    const float biased_a = (float)a[a_offset] + dt_bias[value_head];
     const float decay =
         expf(-expf(a_log[value_head]) * gdn_spec_softplus(biased_a));
 
@@ -2841,23 +3317,56 @@ __global__ void gdn_speculative_recurrence_checkpoints_fallback_kernel(
   }
 }
 
-template <typename T>
+template <typename T, typename StateT>
 void launch_gdn_speculative_recurrence_checkpoints(
     const T *mixed_qkv, const T *b, const T *a, const float *a_log,
-    const float *dt_bias, float *state_pool, T *output,
-    const uint32_t *active_slots, int batch_size, int seq_len,
-    int num_k_heads, int num_v_heads, int head_k_dim, int head_v_dim,
-    int checkpoint_lanes, int tiled_v_heads, int value_major,
+    const float *dt_bias, StateT *state_pool, T *output,
+    const uint32_t *active_slots, const T *gate, const T *norm_weight,
+    int64_t b_stride_b, int64_t b_stride_s, int64_t b_stride_h,
+    int64_t a_stride_b, int64_t a_stride_s, int64_t a_stride_h,
+    int64_t gate_stride_b, int64_t gate_stride_s, int64_t gate_stride_h,
+    int64_t gate_stride_v, int batch_size, int seq_len, int num_k_heads,
+    int num_v_heads, int head_k_dim, int head_v_dim, int checkpoint_lanes,
+    int tiled_v_heads, int value_major, float norm_eps,
     cudaStream_t stream) {
+  if (gate != nullptr && norm_weight != nullptr) {
+    dim3 fused_grid(batch_size, num_v_heads);
+    const int grid_blocks = batch_size * num_v_heads;
+    const bool paired_reductions =
+        sizeof(StateT) < sizeof(float) ||
+        grid_blocks <= GDN_SPEC_FUSED_PAIR_LOW_GRID_MAX ||
+        grid_blocks >= GDN_SPEC_FUSED_PAIR_HIGH_GRID_MIN;
+    if (paired_reductions) {
+      gdn_speculative_recurrence_rmsnorm_gate_value_major_128_kernel<
+          T, StateT, true><<<fused_grid, GDN_SPEC_FUSED_THREADS, 0, stream>>>(
+          mixed_qkv, b, a, a_log, dt_bias, state_pool, output, active_slots,
+          gate, norm_weight, b_stride_b, b_stride_s, b_stride_h, a_stride_b,
+          a_stride_s, a_stride_h, gate_stride_b, gate_stride_s, gate_stride_h,
+          gate_stride_v, batch_size, seq_len, num_k_heads, num_v_heads,
+          checkpoint_lanes, tiled_v_heads, norm_eps);
+    } else {
+      gdn_speculative_recurrence_rmsnorm_gate_value_major_128_kernel<
+          T, StateT, false><<<fused_grid, GDN_SPEC_FUSED_THREADS, 0, stream>>>(
+          mixed_qkv, b, a, a_log, dt_bias, state_pool, output, active_slots,
+          gate, norm_weight, b_stride_b, b_stride_s, b_stride_h, a_stride_b,
+          a_stride_s, a_stride_h, gate_stride_b, gate_stride_s, gate_stride_h,
+          gate_stride_v, batch_size, seq_len, num_k_heads, num_v_heads,
+          checkpoint_lanes, tiled_v_heads, norm_eps);
+    }
+    return;
+  }
+
   dim3 grid((head_v_dim + GDN_SPEC_CHECKPOINT_VALUE_TILE - 1) /
                 GDN_SPEC_CHECKPOINT_VALUE_TILE,
             batch_size * num_v_heads);
   if (value_major && head_k_dim == GDN_DECODE_VALUE_MAJOR_K &&
       head_v_dim == GDN_DECODE_VALUE_MAJOR_V) {
     dim3 block(32, GDN_SPEC_CHECKPOINT_WARPS);
-    gdn_speculative_recurrence_checkpoints_value_major_128_kernel<T>
+    gdn_speculative_recurrence_checkpoints_value_major_128_kernel<T, StateT>
         <<<grid, block, 0, stream>>>(
             mixed_qkv, b, a, a_log, dt_bias, state_pool, output, active_slots,
+            b_stride_b, b_stride_s, b_stride_h, a_stride_b, a_stride_s,
+            a_stride_h,
             batch_size, seq_len, num_k_heads, num_v_heads, checkpoint_lanes,
             tiled_v_heads);
     return;
@@ -2865,40 +3374,93 @@ void launch_gdn_speculative_recurrence_checkpoints(
 
   dim3 fallback_block(GDN_SPEC_CHECKPOINT_VALUE_TILE);
   if (value_major) {
-    gdn_speculative_recurrence_checkpoints_fallback_kernel<T, true>
+    gdn_speculative_recurrence_checkpoints_fallback_kernel<T, StateT, true>
         <<<grid, fallback_block, 0, stream>>>(
             mixed_qkv, b, a, a_log, dt_bias, state_pool, output, active_slots,
+            b_stride_b, b_stride_s, b_stride_h, a_stride_b, a_stride_s,
+            a_stride_h,
             batch_size, seq_len, num_k_heads, num_v_heads, head_k_dim,
             head_v_dim, checkpoint_lanes, tiled_v_heads);
   } else {
-    gdn_speculative_recurrence_checkpoints_fallback_kernel<T, false>
+    gdn_speculative_recurrence_checkpoints_fallback_kernel<T, StateT, false>
         <<<grid, fallback_block, 0, stream>>>(
             mixed_qkv, b, a, a_log, dt_bias, state_pool, output, active_slots,
+            b_stride_b, b_stride_s, b_stride_h, a_stride_b, a_stride_s,
+            a_stride_h,
             batch_size, seq_len, num_k_heads, num_v_heads, head_k_dim,
             head_v_dim, checkpoint_lanes, tiled_v_heads);
   }
 }
 
-extern "C" void gdn_speculative_recurrence_checkpoints(
-    const void *mixed_qkv, const void *b, const void *a,
-    const float *a_log, const float *dt_bias, float *state_pool, void *output,
-    const uint32_t *active_slots, int batch_size, int seq_len,
-    int num_k_heads, int num_v_heads, int head_k_dim, int head_v_dim,
-    int checkpoint_lanes, int tiled_v_heads, int value_major, int dtype,
-    int64_t stream) {
-  const cudaStream_t custream = (cudaStream_t)stream;
-  if (dtype == 0) {
+template <typename T>
+void dispatch_gdn_speculative_recurrence_checkpoints(
+    const T *mixed_qkv, const T *b, const T *a, const float *a_log,
+    const float *dt_bias, void *state_pool, T *output,
+    const uint32_t *active_slots, const T *gate, const T *norm_weight,
+    int64_t b_stride_b, int64_t b_stride_s, int64_t b_stride_h,
+    int64_t a_stride_b, int64_t a_stride_s, int64_t a_stride_h,
+    int64_t gate_stride_b, int64_t gate_stride_s, int64_t gate_stride_h,
+    int64_t gate_stride_v, int batch_size, int seq_len, int num_k_heads,
+    int num_v_heads, int head_k_dim, int head_v_dim, int checkpoint_lanes,
+    int tiled_v_heads, int value_major, float norm_eps, int state_dtype,
+    cudaStream_t stream) {
+  if (state_dtype == GDN_STATE_DTYPE_F16) {
     launch_gdn_speculative_recurrence_checkpoints(
-        (const __half *)mixed_qkv, (const __half *)b, (const __half *)a,
-        a_log, dt_bias, state_pool, (__half *)output, active_slots, batch_size,
-        seq_len, num_k_heads, num_v_heads, head_k_dim, head_v_dim,
-        checkpoint_lanes, tiled_v_heads, value_major, custream);
+        mixed_qkv, b, a, a_log, dt_bias, (__half *)state_pool, output,
+        active_slots, gate, norm_weight, b_stride_b, b_stride_s, b_stride_h,
+        a_stride_b, a_stride_s, a_stride_h, gate_stride_b, gate_stride_s,
+        gate_stride_h, gate_stride_v, batch_size, seq_len, num_k_heads,
+        num_v_heads, head_k_dim, head_v_dim, checkpoint_lanes,
+        tiled_v_heads, value_major, norm_eps, stream);
+  } else if (state_dtype == GDN_STATE_DTYPE_BF16) {
+    launch_gdn_speculative_recurrence_checkpoints(
+        mixed_qkv, b, a, a_log, dt_bias, (__nv_bfloat16 *)state_pool, output,
+        active_slots, gate, norm_weight, b_stride_b, b_stride_s, b_stride_h,
+        a_stride_b, a_stride_s, a_stride_h, gate_stride_b, gate_stride_s,
+        gate_stride_h, gate_stride_v, batch_size, seq_len, num_k_heads,
+        num_v_heads, head_k_dim, head_v_dim, checkpoint_lanes,
+        tiled_v_heads, value_major, norm_eps, stream);
   } else {
     launch_gdn_speculative_recurrence_checkpoints(
+        mixed_qkv, b, a, a_log, dt_bias, (float *)state_pool, output,
+        active_slots, gate, norm_weight, b_stride_b, b_stride_s, b_stride_h,
+        a_stride_b, a_stride_s, a_stride_h, gate_stride_b, gate_stride_s,
+        gate_stride_h, gate_stride_v, batch_size, seq_len, num_k_heads,
+        num_v_heads, head_k_dim, head_v_dim, checkpoint_lanes,
+        tiled_v_heads, value_major, norm_eps, stream);
+  }
+}
+
+extern "C" void gdn_speculative_recurrence_checkpoints(
+    const void *mixed_qkv, const void *b, const void *a,
+    const float *a_log, const float *dt_bias, void *state_pool, void *output,
+    const uint32_t *active_slots, const void *gate, const void *norm_weight,
+    int64_t b_stride_b, int64_t b_stride_s, int64_t b_stride_h,
+    int64_t a_stride_b, int64_t a_stride_s, int64_t a_stride_h,
+    int64_t gate_stride_b, int64_t gate_stride_s, int64_t gate_stride_h,
+    int64_t gate_stride_v, int batch_size, int seq_len, int num_k_heads,
+    int num_v_heads, int head_k_dim, int head_v_dim, int checkpoint_lanes,
+    int tiled_v_heads, int value_major, float norm_eps, int dtype,
+    int state_dtype, int64_t stream) {
+  const cudaStream_t custream = (cudaStream_t)stream;
+  if (dtype == 0) {
+    dispatch_gdn_speculative_recurrence_checkpoints(
+        (const __half *)mixed_qkv, (const __half *)b, (const __half *)a,
+        a_log, dt_bias, state_pool, (__half *)output, active_slots,
+        (const __half *)gate, (const __half *)norm_weight, b_stride_b,
+        b_stride_s, b_stride_h, a_stride_b, a_stride_s, a_stride_h, gate_stride_b,
+        gate_stride_s, gate_stride_h, gate_stride_v, batch_size, seq_len,
+        num_k_heads, num_v_heads, head_k_dim, head_v_dim, checkpoint_lanes,
+        tiled_v_heads, value_major, norm_eps, state_dtype, custream);
+  } else {
+    dispatch_gdn_speculative_recurrence_checkpoints(
         (const __nv_bfloat16 *)mixed_qkv, (const __nv_bfloat16 *)b,
         (const __nv_bfloat16 *)a, a_log, dt_bias, state_pool,
-        (__nv_bfloat16 *)output, active_slots, batch_size, seq_len,
+        (__nv_bfloat16 *)output, active_slots, (const __nv_bfloat16 *)gate,
+        (const __nv_bfloat16 *)norm_weight, b_stride_b, b_stride_s,
+        b_stride_h, a_stride_b, a_stride_s, a_stride_h, gate_stride_b,
+        gate_stride_s, gate_stride_h, gate_stride_v, batch_size, seq_len,
         num_k_heads, num_v_heads, head_k_dim, head_v_dim, checkpoint_lanes,
-        tiled_v_heads, value_major, custream);
+        tiled_v_heads, value_major, norm_eps, state_dtype, custream);
   }
 }

@@ -440,6 +440,15 @@ pub(crate) struct CudaBatchSamplingPlan {
     pub(crate) inverse_temperature: f32,
 }
 
+#[cfg(feature = "cuda")]
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct CudaSpeculativeSamplingPlan {
+    pub(crate) inverse_temperature: f32,
+    pub(crate) top_k: usize,
+    pub(crate) top_p: f32,
+    pub(crate) min_p: f32,
+}
+
 #[cfg_attr(feature = "pyo3_macros", pyclass)]
 #[cfg_attr(feature = "pyo3_macros", pyo3(get_all))]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -466,7 +475,9 @@ pub(crate) struct SpeculativeProbs {
 /// Comparator for descending order by probability (second element of tuple).
 #[inline]
 fn cmp_desc_by_prob(a: &(u32, f32), b: &(u32, f32)) -> std::cmp::Ordering {
-    b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal)
+    b.1.partial_cmp(&a.1)
+        .unwrap_or(std::cmp::Ordering::Equal)
+        .then_with(|| a.0.cmp(&b.0))
 }
 
 /// Returns the top-k (index, probability) pairs from `probs`, sorted in descending order.
@@ -609,6 +620,10 @@ impl Sampler {
         self.temperature.is_none()
     }
 
+    pub(crate) fn temperature(&self) -> Option<f64> {
+        self.temperature
+    }
+
     #[cfg(feature = "cuda")]
     pub(crate) fn cuda_batch_sampling_plan(
         &self,
@@ -660,6 +675,30 @@ impl Sampler {
             }
             Some(_) => None,
         }
+    }
+
+    #[cfg(feature = "cuda")]
+    pub(crate) fn cuda_speculative_sampling_plan(
+        &self,
+        return_logprobs: bool,
+    ) -> Option<CudaSpeculativeSamplingPlan> {
+        let plan = self.cuda_batch_sampling_plan(return_logprobs)?;
+        let top_k = match plan.kind {
+            CudaBatchSamplingKind::Greedy => return None,
+            CudaBatchSamplingKind::Categorical => 0,
+            CudaBatchSamplingKind::TopK { k } => k,
+        };
+        let top_p = self.top_p as f32;
+        let min_p = self.min_p as f32;
+        if !top_p.is_finite() || !min_p.is_finite() {
+            return None;
+        }
+        Some(CudaSpeculativeSamplingPlan {
+            inverse_temperature: plan.inverse_temperature,
+            top_k,
+            top_p,
+            min_p,
+        })
     }
 
     #[cfg(feature = "cuda")]
@@ -797,9 +836,9 @@ impl Sampler {
         let submission = {
             let mut cache = self.top1_cache.lock().unwrap();
             if packed {
-                crate::ops::cuda_top1_logits_f32_submit_batched_packed(logits, &mut cache)?
+                crate::ops::cuda_top1_logits_submit_batched_packed(logits, &mut cache)?
             } else {
-                crate::ops::cuda_top1_logits_f32_submit_batched(logits, &mut cache)?
+                crate::ops::cuda_top1_logits_submit_batched(logits, &mut cache)?
             }
         };
         Ok(CudaTop1BatchSubmission {
@@ -824,7 +863,7 @@ impl Sampler {
     ) -> Result<CudaTop1BatchSubmission> {
         let submission = {
             let mut cache = self.top1_cache.lock().unwrap();
-            crate::ops::cuda_top1_logits_f32_submit_batched_into(logits, token_ids_dst, &mut cache)?
+            crate::ops::cuda_top1_logits_submit_batched_into(logits, token_ids_dst, &mut cache)?
         };
         Ok(CudaTop1BatchSubmission {
             cache: self.top1_cache.clone(),
@@ -1940,7 +1979,7 @@ impl Sampler {
 
 #[cfg(test)]
 mod tests {
-    use super::{argmax_f32, ModelGenerationDefaults, SamplingParams};
+    use super::{argmax_f32, partial_sort_top_k, ModelGenerationDefaults, SamplingParams};
     use std::collections::HashMap;
 
     #[test]
@@ -1992,6 +2031,15 @@ mod tests {
         assert!(argmax_f32(&[0.0, f32::INFINITY]).is_err());
         assert!(argmax_f32(&[f32::NEG_INFINITY, f32::NEG_INFINITY]).is_err());
         assert!(argmax_f32(&[]).is_err());
+    }
+
+    #[test]
+    fn top_k_ties_prefer_lower_token_ids_at_the_boundary() {
+        let mut probs = vec![0.1, 0.5, 0.5, 0.5, 0.2];
+        let selected = partial_sort_top_k(&mut probs, 2, true);
+
+        assert_eq!(selected, vec![(1, 0.5), (2, 0.5)]);
+        assert_eq!(probs, vec![0.0, 0.5, 0.5, 0.0, 0.0]);
     }
 
     #[test]
@@ -2281,6 +2329,7 @@ mod tests {
         let greedy_plan = greedy.cuda_batch_sampling_plan(false).unwrap();
         assert!(matches!(greedy_plan.kind, CudaBatchSamplingKind::Greedy));
         assert_eq!(greedy_plan.inverse_temperature, 1.0);
+        assert!(greedy.cuda_speculative_sampling_plan(false).is_none());
 
         let mut penalized = greedy.clone();
         penalized.repetition_penalty = Some(1.1);
@@ -2316,6 +2365,11 @@ mod tests {
         ));
         assert_eq!(top_k_plan.inverse_temperature, 2.0);
         assert!(top_k.cuda_batch_sampling_plan(true).is_none());
+        let speculative_top_k = top_k.cuda_speculative_sampling_plan(false).unwrap();
+        assert_eq!(speculative_top_k.inverse_temperature, 2.0);
+        assert_eq!(speculative_top_k.top_k, 64);
+        assert_eq!(speculative_top_k.top_p, 0.9);
+        assert_eq!(speculative_top_k.min_p, 0.05);
 
         let top_one = Sampler::new(
             Some(1.0),
@@ -2355,6 +2409,10 @@ mod tests {
             unbounded_plan.kind,
             CudaBatchSamplingKind::Categorical
         ));
+        let speculative_unbounded = unbounded.cuda_speculative_sampling_plan(false).unwrap();
+        assert_eq!(speculative_unbounded.top_k, 0);
+        assert_eq!(speculative_unbounded.top_p, 1.0);
+        assert_eq!(speculative_unbounded.min_p, 0.0);
 
         let mut filtered = unbounded;
         filtered.top_p = 0.9;

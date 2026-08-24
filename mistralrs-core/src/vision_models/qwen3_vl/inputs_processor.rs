@@ -6,6 +6,7 @@ use crate::{
 use crate::{
     device_map::DeviceMapper,
     pipeline::{
+        recurrent_batch_kind_for_input,
         text_models_inputs_processor::{
             self, get_completion_input, get_prompt_input, PagedAttentionMeta,
         },
@@ -654,7 +655,7 @@ fn qwen3_mrope_position_source(
 }
 
 fn qwen3_prompt_mrope(
-    input_seqs: &[&mut Sequence],
+    input_seqs: &mut [&mut Sequence],
     query_ranges: &[Range<usize>],
     packed: bool,
     padded_len: usize,
@@ -665,14 +666,16 @@ fn qwen3_prompt_mrope(
         anyhow::bail!("Qwen MRoPE query count does not match sequence count");
     }
     let mut sources = Vec::with_capacity(input_seqs.len());
-    for seq in input_seqs {
-        sources.push(qwen3_mrope_position_source(
+    for seq in input_seqs.iter_mut() {
+        let source = qwen3_mrope_position_source(
             seq.prompt_position_source_toks(),
             seq.multimodal.rope_img_grid_thw.as_ref(),
             seq.multimodal.rope_vid_grid_thw.as_ref(),
             config,
             device,
-        )?);
+        )?;
+        seq.multimodal.mrope_position_delta = Some(source.delta);
+        sources.push(source);
     }
     if packed {
         return Ok(gather_packed_mrope_positions(
@@ -706,6 +709,34 @@ fn qwen3_prompt_mrope(
         rows.push(positions);
     }
     Ok(Tensor::stack(&rows, 1)?)
+}
+
+fn apply_mrope_position_deltas(
+    position_ids: Vec<usize>,
+    input_seqs: &[&mut Sequence],
+) -> Result<Vec<usize>> {
+    if position_ids.len() != input_seqs.len() {
+        anyhow::bail!(
+            "Qwen MRoPE position count {} does not match sequence count {}",
+            position_ids.len(),
+            input_seqs.len()
+        );
+    }
+    position_ids
+        .into_iter()
+        .zip(input_seqs)
+        .map(|(position, seq)| {
+            apply_mrope_position_delta(position, seq.multimodal.mrope_position_delta.unwrap_or(0))
+        })
+        .collect()
+}
+
+fn apply_mrope_position_delta(position: usize, delta: i64) -> Result<usize> {
+    let position = i64::try_from(position)?;
+    let position = position
+        .checked_add(delta)
+        .ok_or_else(|| anyhow::anyhow!("Qwen MRoPE position overflow"))?;
+    usize::try_from(position).map_err(anyhow::Error::from)
 }
 
 impl InputsProcessor for Qwen3VLImageProcessor {
@@ -959,6 +990,15 @@ impl InputsProcessor for Qwen3VLImageProcessor {
         let has_media = input_seqs
             .iter()
             .any(|seq| seq.has_images() || seq.has_videos());
+        if is_prompt {
+            for seq in input_seqs.iter_mut() {
+                if seq.multimodal.rope_img_grid_thw.is_none()
+                    && seq.multimodal.rope_vid_grid_thw.is_none()
+                {
+                    seq.multimodal.mrope_position_delta = None;
+                }
+            }
+        }
         let mut image_item_counts = vec![0usize; input_seqs.len()];
         let mut video_item_counts = vec![0usize; input_seqs.len()];
 
@@ -1475,6 +1515,11 @@ impl InputsProcessor for Qwen3VLImageProcessor {
         } else {
             None
         };
+        let position_ids = if is_prompt {
+            position_ids
+        } else {
+            apply_mrope_position_deltas(position_ids, input_seqs)?
+        };
 
         let inputs: Box<dyn Any> = Box::new(ModelInputs {
             input_ids: input,
@@ -1499,11 +1544,10 @@ impl InputsProcessor for Qwen3VLImageProcessor {
             }),
             paged_attn_meta,
             flash_meta,
-            recurrent_batch_kind: if is_prompt {
-                crate::pipeline::RecurrentBatchKind::Prefill
-            } else {
-                crate::pipeline::RecurrentBatchKind::Decode
-            },
+            recurrent_batch_kind: recurrent_batch_kind_for_input(
+                is_prompt,
+                crate::speculative::staging::staged_batch_width(input_seqs).is_some(),
+            ),
             adapter_leases: crate::vision_models::adapter_leases(input_seqs, &seq_indices),
         });
         Ok(InputProcessorOutput {
@@ -1889,6 +1933,16 @@ mod tests {
             positions.flatten_all()?.to_vec1::<i64>()?,
             vec![0, 1, 0, 1, 2, 0, 1, 0, 1, 2, 0, 1, 0, 1, 2]
         );
+        Ok(())
+    }
+
+    #[test]
+    fn decode_position_ends_apply_per_sequence_mrope_deltas() -> Result<()> {
+        assert_eq!(apply_mrope_position_delta(20, -7)?, 13);
+        assert_eq!(apply_mrope_position_delta(30, 2)?, 32);
+        assert_eq!(apply_mrope_position_delta(100, 0)?, 100);
+        assert_eq!(apply_mrope_position_delta(100, -48)?, 52);
+        assert!(apply_mrope_position_delta(3, -4).is_err());
         Ok(())
     }
 

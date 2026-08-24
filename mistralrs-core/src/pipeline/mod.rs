@@ -32,8 +32,10 @@ pub use super::diffusion_models::DiffusionGenerationParams;
 use crate::amoe::{AnyMoeConfig, AnyMoeExpertType, AnyMoeTrainingInputs, AnyMoeTrainingResult};
 use crate::device_map::DeviceMapper;
 use crate::layers_masker::PastKvLenCache;
-use crate::paged_attention::{AttentionBackendKind, CacheConfig, CacheEngine, ModelConfigLike};
-use crate::prefix_cacher::PrefixCacheManagerV2;
+use crate::paged_attention::{
+    AttentionBackendKind, CacheConfig, CacheEngine, CacheMemoryReservations, ModelConfigLike,
+};
+use crate::prefix_cacher::{PagedAuxiliaryPrefixState, PrefixCacheManagerV2};
 use crate::IntervalLogger;
 use crate::PagedAttentionConfig;
 pub use amoe::{AnyMoeLoader, AnyMoePipeline};
@@ -166,7 +168,9 @@ use crate::paged_attention::block_hash::{
 };
 use crate::sequence::{SeqStepType, Sequence, SequenceState};
 
-use prompt_chunks::{build_prompt_chunk_plan, next_prompt_chunk_group};
+use prompt_chunks::{
+    build_prompt_chunk_plan, next_prompt_chunk_group, recurrent_checkpoint_boundary,
+};
 
 pub use self::inputs_processor::{
     text_models_inputs_processor, InputsProcessor, InputsProcessorType,
@@ -305,8 +309,7 @@ pub(crate) fn validate_lora_loader_config(
 }
 
 pub use crate::kv_cache::{
-    Cache, CacheManager, EitherCache, HybridLayerCache, KvCache, LayerCaches, NormalCache,
-    NormalCacheType,
+    Cache, CacheManager, EitherCache, KvCache, LayerCaches, NormalCache, NormalCacheType,
 };
 
 pub(crate) const RECURRENT_GRAPH_PAD_SLOTS: usize = 1;
@@ -347,6 +350,59 @@ fn reserve_recurrent_serving_capacity(
         .ok_or_else(|| candle_core::Error::msg("recurrent serving capacity overflow"))?;
     grew |= cache.reserve_recurrent_capacity(capacity)?;
     Ok(grew)
+}
+
+fn add_recurrent_prefix_memory_reservations(
+    mut reservations: CacheMemoryReservations,
+    bytes_by_device: HashMap<DeviceLocation, usize>,
+    primary_device: DeviceLocation,
+    prefix_capacity: usize,
+) -> Result<CacheMemoryReservations> {
+    if prefix_capacity == 0 {
+        return Ok(reservations);
+    }
+    let peak_snapshots = prefix_capacity
+        .checked_add(1)
+        .ok_or_else(|| candle_core::Error::msg("recurrent prefix capacity overflow"))?;
+    let mut secondary_prefix_bytes = 0usize;
+    for (device, bytes_per_snapshot) in bytes_by_device {
+        let bytes = bytes_per_snapshot
+            .checked_mul(peak_snapshots)
+            .ok_or_else(|| candle_core::Error::msg("recurrent prefix reservation overflow"))?;
+        if device == primary_device {
+            reservations.primary_device_bytes = reservations
+                .primary_device_bytes
+                .checked_add(bytes)
+                .ok_or_else(|| candle_core::Error::msg("recurrent prefix reservation overflow"))?;
+        } else {
+            secondary_prefix_bytes = secondary_prefix_bytes.max(bytes);
+        }
+    }
+    reservations.secondary_device_bytes = reservations
+        .secondary_device_bytes
+        .checked_add(secondary_prefix_bytes)
+        .ok_or_else(|| candle_core::Error::msg("recurrent prefix reservation overflow"))?;
+    Ok(reservations)
+}
+
+fn paged_attention_memory_reservations(
+    cache: &EitherCache,
+    paged_attn_config: PagedAttentionConfig,
+    primary_device: &Device,
+) -> Result<CacheMemoryReservations> {
+    let reservations = paged_attn_config
+        .memory_reservations()
+        .map_err(candle_core::Error::msg)?;
+    if paged_attn_config.recurrent_prefix_capacity == 0 || !cache.is_hybrid() {
+        return Ok(reservations);
+    }
+    let bytes_by_device = cache.hybrid().recurrent_snapshot_bytes_by_device()?;
+    add_recurrent_prefix_memory_reservations(
+        reservations,
+        bytes_by_device,
+        primary_device.location(),
+        paged_attn_config.recurrent_prefix_capacity,
+    )
 }
 
 pub(crate) type DeviceTensorMap = HashMap<DeviceLocation, Tensor>;
@@ -447,6 +503,19 @@ pub(crate) enum RecurrentBatchKind {
     Prefill,
     Decode,
     SpeculativeDecode,
+}
+
+pub(crate) fn recurrent_batch_kind_for_input(
+    is_prompt: bool,
+    has_staged_speculative_batch: bool,
+) -> RecurrentBatchKind {
+    if is_prompt {
+        RecurrentBatchKind::Prefill
+    } else if has_staged_speculative_batch {
+        RecurrentBatchKind::SpeculativeDecode
+    } else {
+        RecurrentBatchKind::Decode
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -733,6 +802,25 @@ pub(crate) fn text_positions_tensor(
         }
     }
     Tensor::from_vec(positions, (seqlen_offsets.len() * seq_len,), device)
+}
+
+pub(crate) fn decode_positions_tensor(
+    position_ids: &[usize],
+    seq_len: usize,
+    device: &Device,
+) -> candle_core::Result<Tensor> {
+    let mut positions = Vec::with_capacity(position_ids.len() * seq_len);
+    for end in position_ids {
+        let start = end.checked_sub(seq_len).ok_or_else(|| {
+            candle_core::Error::msg(format!(
+                "decode position end {end} is smaller than query length {seq_len}"
+            ))
+        })?;
+        for position in start..*end {
+            positions.push(u32::try_from(position).map_err(candle_core::Error::wrap)?);
+        }
+    }
+    Tensor::from_vec(positions, (position_ids.len() * seq_len,), device)
 }
 
 #[derive(Clone, Debug)]
@@ -1031,7 +1119,7 @@ pub trait IsqPipelineMixin {
 pub trait CacheManagerMixin {
     /// Clone the cache FROM the sequences' cache TO the model cache. Only called for completion seqs.
     /// It is not a guarantee that this will be called for each completion step.
-    fn clone_in_cache(&self, seqs: &mut [&mut Sequence]);
+    fn clone_in_cache(&self, seqs: &mut [&mut Sequence]) -> candle_core::Result<()>;
     /// Clone the cache FROM the model cache TO the sequences. Called for prompt and completion seqs.
     /// It is not a guarantee that this will be called for each step.
     fn clone_out_cache(&self, seqs: &mut [&mut Sequence]);
@@ -1044,7 +1132,7 @@ pub trait CacheManagerMixin {
         reset_non_granular: bool,
         modify_draft_cache: bool,
         load_preallocated_cache: bool,
-    );
+    ) -> candle_core::Result<()>;
     fn cache(&self) -> &EitherCache;
 }
 
@@ -1056,6 +1144,10 @@ pub trait MetadataMixin {
     fn reset_non_granular_state(&self);
     /// Destroy decode graphs at teardown, while the engine thread's cuTile modules are still loaded.
     fn cleanup_cuda_graphs(&self) {}
+    /// Evict least-recently-used decode graphs without disturbing recurrent state.
+    fn reclaim_cuda_graph_memory(&self, _max_entries: usize) -> usize {
+        0
+    }
     /// Capture the decode graphs for the common batch sizes up front, so live requests never pay for
     /// an eager step plus a capture when the batch composition changes.
     fn precapture_cuda_decode_graphs(&self, _ctx: &DecodeGraphPrecaptureCtx) {}
@@ -1064,6 +1156,17 @@ pub trait MetadataMixin {
         None
     }
     fn device_mapper(&self) -> Option<&dyn DeviceMapper>;
+    fn execution_devices(&self) -> Vec<Device> {
+        let primary = self.device();
+        let mut devices = self
+            .device_mapper()
+            .map(DeviceMapper::get_unique_devices)
+            .unwrap_or_default();
+        if !devices.iter().any(|device| device.same_device(&primary)) {
+            devices.push(primary);
+        }
+        devices
+    }
 }
 
 /// Implemented by the base model of an AnyMoe.
@@ -1349,6 +1452,22 @@ fn should_sample_step(
     !is_prompt || !scheduler_visible_prompt_step || is_final_prompt_chunk
 }
 
+fn should_try_speculative_sampling(
+    is_prompt: bool,
+    scheduler_visible_prompt_step: bool,
+    is_final_prompt_chunk: bool,
+    return_raw_logits: bool,
+    supports_prompt_bootstrap: bool,
+) -> bool {
+    !return_raw_logits
+        && (!is_prompt || supports_prompt_bootstrap)
+        && should_sample_step(
+            is_prompt,
+            scheduler_visible_prompt_step,
+            is_final_prompt_chunk,
+        )
+}
+
 fn prompt_chunk_is_final(
     scheduler_visible_prompt_step: bool,
     scheduler_visible_prompt_is_final: bool,
@@ -1427,7 +1546,54 @@ pub trait Pipeline:
         candle_core::bail!("This pipeline does not support speculative decoding attachment.")
     }
 
+    #[doc(hidden)]
+    fn attach_speculative_with_runtime(
+        &mut self,
+        config: crate::speculative::SpeculativeConfig,
+        _runtime: crate::speculative::MtpRuntimeConfig,
+    ) -> Result<(), candle_core::Error> {
+        self.attach_speculative(config)
+    }
+
     fn release_speculative_sequences(&mut self, _seq_ids: &[usize]) {}
+
+    fn supports_speculative_prompt_bootstrap(&self) -> bool {
+        false
+    }
+
+    fn speculative_prefix_replay(&self) -> crate::speculative::SpeculativePrefixReplay {
+        crate::speculative::SpeculativePrefixReplay::NotRequired
+    }
+
+    fn supports_paged_auxiliary_prefix_state(&self) -> bool {
+        false
+    }
+
+    fn speculative_prefix_checkpoint_policy(
+        &self,
+    ) -> crate::speculative::SpeculativePrefixCheckpointPolicy {
+        crate::speculative::SpeculativePrefixCheckpointPolicy::new(
+            self.speculative_prefix_replay(),
+            self.supports_paged_auxiliary_prefix_state(),
+        )
+    }
+
+    fn capture_paged_auxiliary_prefix_state(
+        &mut self,
+        _sequence_id: usize,
+        _cached_tokens: usize,
+    ) -> Result<Option<Arc<dyn PagedAuxiliaryPrefixState>>, candle_core::Error> {
+        Ok(None)
+    }
+
+    fn restore_paged_auxiliary_prefix_state(
+        &mut self,
+        _sequence_id: usize,
+        _cached_tokens: usize,
+        _state: &dyn PagedAuxiliaryPrefixState,
+    ) -> Result<(), candle_core::Error> {
+        candle_core::bail!("This pipeline does not support auxiliary paged prefix state.")
+    }
 
     /// Called after a prompt chunk forward so a speculative proposer with its own KV cache can
     /// process the chunk. Default: nothing to do.
@@ -1459,6 +1625,7 @@ pub trait Pipeline:
         &mut self,
         _input_seqs: &mut [&mut Sequence],
         _logits: &[Tensor],
+        _batched_logits: Option<&Tensor>,
         _prefix_cacher: &mut PrefixCacheManagerV2,
         _disable_eos_stop: bool,
         _rng: Arc<std::sync::Mutex<Isaac64Rng>>,
@@ -1486,10 +1653,21 @@ pub trait Pipeline:
             return Ok(());
         };
 
-        let snapshots = self.cache().hybrid().snapshot_recurrent_state(slot_idx)?;
+        let snapshots = self
+            .cache()
+            .hybrid()
+            .snapshot_recurrent_state(*seq.id(), slot_idx)?;
         if snapshots.is_empty() {
             return Ok(());
         }
+        let auxiliary = if self
+            .speculative_prefix_checkpoint_policy()
+            .uses_auxiliary_state(crate::scheduler::modality_signature(seq))
+        {
+            self.capture_paged_auxiliary_prefix_state(*seq.id(), cached_tokens)?
+        } else {
+            None
+        };
         let adapter_key = adapter_generation_key(seq.adapter_generation());
         let block_hashes = compute_block_hashes(
             seq.get_toks(),
@@ -1499,7 +1677,15 @@ pub trait Pipeline:
         );
         let n_blocks = cached_tokens / block_size;
         if block_hashes.len() >= n_blocks {
-            prefix_cacher.add_paged_recurrent_prefix(block_hashes[..n_blocks].to_vec(), snapshots);
+            let owner = *block_hashes
+                .last()
+                .expect("recurrent prefix owner requires a full block");
+            prefix_cacher.add_paged_recurrent_prefix(
+                owner,
+                block_hashes[..n_blocks].to_vec(),
+                snapshots,
+                auxiliary,
+            );
         }
         Ok(())
     }
@@ -1584,7 +1770,7 @@ pub trait Pipeline:
                     } = inputs.map_err(candle_core::Error::msg)?;
                     if i == 0 {
                         match pre_op {
-                            CacheInstruction::In => self.clone_in_cache(input_seqs),
+                            CacheInstruction::In => self.clone_in_cache(input_seqs)?,
                             CacheInstruction::Nothing => (),
                             CacheInstruction::Reset {
                                 load_preallocated_cache,
@@ -1594,7 +1780,7 @@ pub trait Pipeline:
                                 reset_non_granular,
                                 false,
                                 load_preallocated_cache,
-                            ),
+                            )?,
                             _ => unreachable!("Unreachable PRE cache op."),
                         }
                     }
@@ -1604,9 +1790,7 @@ pub trait Pipeline:
                         && self.device().is_cuda()
                         && ((self.supports_batched_cuda_sampling()
                             && sampling::can_sample_batch_cuda(input_seqs))
-                            || crate::speculative::verifier::can_batch_greedy_device_verify(
-                                input_seqs,
-                            ));
+                            || crate::speculative::verifier::can_batch_device_verify(input_seqs));
                     let start = Instant::now();
                     let raw_logits = self
                         .forward_inputs(inputs, return_raw_logits)?
@@ -1638,7 +1822,7 @@ pub trait Pipeline:
                         reset_non_granular,
                         false,
                         load_preallocated_cache,
-                    ),
+                    )?,
                     _ => unreachable!("Unreachable POST cache op."),
                 }
 
@@ -1708,6 +1892,7 @@ pub trait Pipeline:
                                 .try_sample_speculative_causal_gen(
                                     input_seqs,
                                     &logits,
+                                    None,
                                     prefix_cacher,
                                     disable_eos_stop,
                                     rng.clone(),
@@ -1866,6 +2051,8 @@ pub trait Pipeline:
                 let has_suffix_only_prefill = input_seqs
                     .iter()
                     .any(|seq| seq.has_suffix_only_prefill_toks());
+                let hybrid_recurrent = self.cache().is_hybrid();
+                let prefix_policy = self.speculative_prefix_checkpoint_policy();
                 let keep_complete_packed_candidates = chunk_size.is_some_and(|chunk_size| {
                     input_seqs.len() > 1
                         && self.supports_packed_prefill()
@@ -1880,7 +2067,7 @@ pub trait Pipeline:
                             && !has_suffix_only_prefill
                             && !keep_complete_packed_candidates)
                             .then(|| {
-                                let block_align = self.cache().is_hybrid().then_some(block_size);
+                                let block_align = hybrid_recurrent.then_some(block_size);
                                 chunk_size.map(|chunk_size| {
                                     input_seqs
                                         .iter()
@@ -1890,6 +2077,9 @@ pub trait Pipeline:
                                                 seq.prefix_cache_len(),
                                                 chunk_size,
                                                 block_align,
+                                                prefix_policy.replay_for(
+                                                    crate::scheduler::modality_signature(seq),
+                                                ),
                                                 seq.mm_features(),
                                             )
                                         })
@@ -1927,7 +2117,20 @@ pub trait Pipeline:
                             .iter()
                             .map(|seq| (seq.get_toks().to_vec(), seq.prefix_cache_len()))
                             .collect::<Vec<_>>();
-                        let hybrid_recurrent = self.cache().is_hybrid();
+                        let recurrent_checkpoint_boundaries = input_seqs
+                            .iter()
+                            .zip(&originals)
+                            .map(|(seq, (tokens, prefix_len))| {
+                                recurrent_checkpoint_boundary(
+                                    tokens.len(),
+                                    *prefix_len,
+                                    hybrid_recurrent.then_some(block_size),
+                                    prefix_policy
+                                        .replay_for(crate::scheduler::modality_signature(seq)),
+                                    seq.mm_features(),
+                                )
+                            })
+                            .collect::<Vec<_>>();
                         let mut plan_indices = vec![0usize; chunk_plans.len()];
                         let mut inputs = Vec::new();
                         while plan_indices
@@ -1958,7 +2161,7 @@ pub trait Pipeline:
                                 let seq = &mut input_seqs[seq_idx];
                                 seq.set_prefix_cache_len(chunk.start);
                                 seq.set_prefill_toks(originals[seq_idx].0[..chunk.end].to_vec());
-                                if chunk.end % block_size == 0 {
+                                if recurrent_checkpoint_boundaries[seq_idx] == Some(chunk.end) {
                                     recurrent_boundaries.push((seq_idx, chunk.end));
                                 }
                                 prompt_chunk.rows.push(SpeculativePromptRow {
@@ -2084,47 +2287,30 @@ pub trait Pipeline:
                             && self.device().is_cuda()
                             && ((self.supports_batched_cuda_sampling()
                                 && sampling::can_sample_batch_cuda(input_seqs))
-                                || crate::speculative::verifier::can_batch_greedy_device_verify(
+                                || crate::speculative::verifier::can_batch_device_verify(
                                     input_seqs,
                                 ));
                         if self.cache().is_hybrid() {
                             let mut hybrid_cache = self.cache().hybrid();
-                            let device = hybrid_cache
-                                .caches
-                                .iter()
-                                .find_map(|cache| match cache {
-                                    HybridLayerCache::Recurrent(pool) => {
-                                        Some(pool.device().clone())
-                                    }
-                                    HybridLayerCache::Attention(_) => None,
-                                })
-                                .ok_or_else(|| {
-                                    candle_core::Error::msg(
-                                        "hybrid cache has no recurrent state pool",
-                                    )
-                                })?;
-                            let indices = seq_indices
+                            let sequence_slots = seq_indices
                                 .iter()
                                 .map(|&seq_idx| {
-                                    let state_idx = input_seqs
-                                        .get(seq_idx)
-                                        .and_then(|seq| seq.recurrent_state_idx())
-                                        .ok_or_else(|| {
-                                            candle_core::Error::msg(format!(
-                                                "sequence {seq_idx} has no recurrent state slot"
-                                            ))
-                                        })?;
-                                    u32::try_from(state_idx).map_err(|_| {
+                                    let seq = input_seqs.get(seq_idx).ok_or_else(|| {
                                         candle_core::Error::msg(format!(
-                                            "recurrent state slot {state_idx} exceeds u32"
+                                            "processed sequence index {seq_idx} exceeds batch size {}",
+                                            input_seqs.len()
                                         ))
-                                    })
+                                    })?;
+                                    let slot_idx = seq.recurrent_state_idx().ok_or_else(|| {
+                                        candle_core::Error::msg(format!(
+                                            "sequence {} has no recurrent state slot",
+                                            seq.id()
+                                        ))
+                                    })?;
+                                    Ok((*seq.id(), slot_idx))
                                 })
-                                .collect::<Result<Vec<_>, _>>()?;
-                            let state_indices =
-                                Tensor::from_vec(indices.clone(), (indices.len(),), &device)?;
-                            hybrid_cache
-                                .set_state_indices_with_host(Some(state_indices), Some(indices));
+                                .collect::<candle_core::Result<Vec<_>>>()?;
+                            hybrid_cache.install_sequence_state_indices(&sequence_slots)?;
                         }
                         let start = Instant::now();
                         #[cfg(feature = "cuda")]
@@ -2256,6 +2442,7 @@ pub trait Pipeline:
                 }
 
                 let start = Instant::now();
+                let mut speculative_batched_logits = None;
                 if let Some(batched_causal_logits) = batched_causal_logits {
                     #[cfg(feature = "cuda")]
                     let mut batched_causal_logits = batched_causal_logits;
@@ -2314,6 +2501,7 @@ pub trait Pipeline:
                             logits: batched_causal_logits.i(seq_idx)?,
                         });
                     }
+                    speculative_batched_logits = Some(batched_causal_logits);
                 }
                 let logits = logits
                     .into_iter()
@@ -2334,19 +2522,24 @@ pub trait Pipeline:
                                 logits
                             })
                             .collect::<Vec<_>>();
-                        if is_prompt
-                            || return_raw_logits
-                            || !self
-                                .try_sample_speculative_causal_gen(
-                                    input_seqs,
-                                    &logits,
-                                    prefix_cacher,
-                                    disable_eos_stop,
-                                    rng.clone(),
-                                    Some(speculative_metadata),
-                                    logger,
-                                )
-                                .await?
+                        if !should_try_speculative_sampling(
+                            is_prompt,
+                            scheduler_visible_prompt_step,
+                            scheduler_visible_prompt_is_final,
+                            return_raw_logits,
+                            is_prompt && self.supports_speculative_prompt_bootstrap(),
+                        ) || !self
+                            .try_sample_speculative_causal_gen(
+                                input_seqs,
+                                &logits,
+                                speculative_batched_logits.as_ref(),
+                                prefix_cacher,
+                                disable_eos_stop,
+                                rng.clone(),
+                                Some(speculative_metadata),
+                                logger,
+                            )
+                            .await?
                         {
                             self.sample_causal_gen(
                                 input_seqs,
@@ -2509,12 +2702,18 @@ pub(crate) fn extract_logits(
 
 #[cfg(test)]
 mod tests {
-    use std::sync::{Arc, Mutex};
+    use std::{
+        collections::HashMap,
+        sync::{Arc, Mutex},
+    };
 
     use super::{
-        effective_recurrent_checkpoint_lanes, prompt_chunk_is_final,
-        reserve_recurrent_serving_capacity, resolve_lora_execution, should_sample_step,
-        ForwardCache, LogitsSelection, ModelForwardContext,
+        add_recurrent_prefix_memory_reservations, decode_positions_tensor,
+        effective_recurrent_checkpoint_lanes, paged_attention_memory_reservations,
+        prompt_chunk_is_final, recurrent_batch_kind_for_input, reserve_recurrent_serving_capacity,
+        resolve_lora_execution, should_sample_step, should_try_speculative_sampling,
+        CacheMemoryReservations, ForwardCache, LogitsSelection, ModelForwardContext,
+        RecurrentBatchKind,
     };
     use crate::{
         kv_cache::{
@@ -2524,7 +2723,7 @@ mod tests {
         pipeline::text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
         MemoryGpuConfig, MessageContent, PagedAttentionConfig, PagedCacheType,
     };
-    use candle_core::{Device, Tensor};
+    use candle_core::{Device, DeviceLocation, Tensor};
     use either::Either;
     use indexmap::IndexMap;
 
@@ -2537,10 +2736,48 @@ mod tests {
     }
 
     #[test]
+    fn speculative_sampling_bootstraps_on_the_final_prompt_chunk() {
+        assert!(!should_try_speculative_sampling(
+            true, true, false, false, true
+        ));
+        assert!(should_try_speculative_sampling(
+            true, true, true, false, true
+        ));
+        assert!(should_try_speculative_sampling(
+            true, false, false, false, true
+        ));
+        assert!(!should_try_speculative_sampling(
+            true, true, true, false, false
+        ));
+        assert!(should_try_speculative_sampling(
+            false, true, false, false, false
+        ));
+        assert!(!should_try_speculative_sampling(
+            true, true, true, true, true
+        ));
+    }
+
+    #[test]
     fn scheduler_visible_prefill_preserves_nonfinal_proposer_state() {
         assert!(!prompt_chunk_is_final(true, false, true));
         assert!(prompt_chunk_is_final(true, true, false));
         assert!(prompt_chunk_is_final(false, false, true));
+    }
+
+    #[test]
+    fn recurrent_batch_kind_tracks_staged_speculative_completions() {
+        assert_eq!(
+            recurrent_batch_kind_for_input(false, true),
+            RecurrentBatchKind::SpeculativeDecode
+        );
+        assert_eq!(
+            recurrent_batch_kind_for_input(false, false),
+            RecurrentBatchKind::Decode
+        );
+        assert_eq!(
+            recurrent_batch_kind_for_input(true, true),
+            RecurrentBatchKind::Prefill
+        );
     }
 
     #[test]
@@ -2587,6 +2824,63 @@ mod tests {
         let pool = cache.get(0).unwrap().as_recurrent_pool().unwrap();
         assert_eq!(pool.capacity(), 17);
         assert_eq!(pool.physical_capacity(), 17);
+    }
+
+    #[test]
+    fn recurrent_prefix_reservation_includes_staging_and_device_baselines() {
+        let reservations = add_recurrent_prefix_memory_reservations(
+            CacheMemoryReservations {
+                primary_device_bytes: 100,
+                secondary_device_bytes: 50,
+            },
+            HashMap::from([
+                (DeviceLocation::Cpu, 10),
+                (DeviceLocation::Cuda { gpu_id: 0 }, 20),
+                (DeviceLocation::Cuda { gpu_id: 1 }, 30),
+            ]),
+            DeviceLocation::Cpu,
+            2,
+        )
+        .unwrap();
+
+        assert_eq!(reservations.primary_device_bytes, 130);
+        assert_eq!(reservations.secondary_device_bytes, 140);
+    }
+
+    #[test]
+    fn loaded_hybrid_cache_drives_recurrent_prefix_reservation() {
+        let hybrid = HybridCache::new(
+            HybridCacheConfig {
+                layer_types: vec![HybridLayerType::Recurrent],
+                max_seq_len: 32,
+                recurrent: RecurrentLayerConfig {
+                    conv_dim: 8,
+                    conv_width: 4,
+                    state: RecurrentStateSpec::Gdn {
+                        heads: 2,
+                        key_dim: 4,
+                        value_dim: 4,
+                    },
+                    recurrent_dtype: Some(candle_core::DType::F32),
+                },
+            },
+            candle_core::DType::BF16,
+            &[Device::Cpu],
+        )
+        .unwrap();
+        let cache = EitherCache::Hybrid(Arc::new(Mutex::new(hybrid)));
+        let config =
+            PagedAttentionConfig::new(None, MemoryGpuConfig::MbAmount(1), PagedCacheType::Auto)
+                .unwrap()
+                .with_base_device_memory_reservation(100)
+                .unwrap()
+                .with_recurrent_prefix_capacity(2);
+
+        let reservations =
+            paged_attention_memory_reservations(&cache, config, &Device::Cpu).unwrap();
+
+        assert_eq!(reservations.primary_device_bytes, 676);
+        assert_eq!(reservations.secondary_device_bytes, 0);
     }
     use serde_json::Value;
 
@@ -2713,6 +3007,14 @@ mod tests {
         assert!(error
             .to_string()
             .contains("packed prefill is missing RoPE positions"));
+    }
+
+    #[test]
+    fn decode_positions_expand_exclusive_row_ends() {
+        let positions = decode_positions_tensor(&[4, 10], 3, &Device::Cpu).unwrap();
+
+        assert_eq!(positions.to_vec1::<u32>().unwrap(), vec![1, 2, 3, 7, 8, 9]);
+        assert!(decode_positions_tensor(&[2], 3, &Device::Cpu).is_err());
     }
 
     macro_rules! hashmap {

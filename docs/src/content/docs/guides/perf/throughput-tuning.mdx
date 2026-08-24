@@ -11,6 +11,7 @@ A handful of flags control how many requests run at once and how much repeated w
 mistralrs serve -m Qwen/Qwen3-4B \
   --max-seqs 64 \
   --max-num-batched-tokens 4096 \
+  --max-prefill-chunk-tokens 512 \
   --pa-memory-fraction 0.9
 ```
 
@@ -65,17 +66,19 @@ More running sequences need more KV cache. With paged attention, size the block 
 
 ## Mixed prefill and decode
 
-Two limits control how new prompts share the GPU with active decodes:
+Three limits control how new prompts share the GPU with active decodes:
 
-- `--max-num-batched-tokens` bounds the total prompt tokens in a scheduler batch (default 4096).
-  The budget is divided across the admitted prompt sequences, keeping peak activation memory
-  stable as concurrency grows.
+- `--max-num-batched-tokens` bounds the total token work in a scheduler batch (default 4096).
+- `--max-prefill-chunk-tokens` bounds each chunkable CUDA text-prompt scheduling quantum (default
+  512). The budget is divided across admitted prompt sequences, limiting how long active decodes
+  wait behind one non-preemptible prefill step. Raw-logit, adapter, and multimodal prompt paths that
+  cannot be split remain atomic; the limit does not change CPU or Metal scheduling.
 - `--max-decode-steps-before-prefill` bounds how long a waiting prompt can be deferred while a
   decode batch is active (default 8). Raise it to favor inter-token latency for active requests;
   lower it to reduce time to first token under sustained arrivals.
 
-Measure both output throughput and latency percentiles when changing either value. A larger token
-budget can improve prefill throughput while increasing decode latency, especially for long prompts.
+Measure both output throughput and latency percentiles when changing these values. A larger prefill
+chunk can improve prefill throughput while increasing decode latency, especially for long prompts.
 
 ## When paged attention matters
 

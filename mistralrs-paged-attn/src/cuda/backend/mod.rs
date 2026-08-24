@@ -15,8 +15,9 @@ use candle_core::cuda::cudarc::{
 use candle_core::{Layout, Result};
 pub use context_attention_mla::context_attention_fwd_mla;
 pub use fa3::{
-    fa3_fp8_decode, fa3_prepare_decode_metadata, Fa3DecodeMetadata, Fa3DecodeParams,
-    Fa3DecodeSchedule, USE_FA3_FP8_PAGED,
+    fa3_fp8_decode, fa3_prepare_decode_metadata, fa3_prepare_paged_metadata, Fa3DecodeMetadata,
+    Fa3DecodeParams, Fa3DecodeSchedule, Fa3PagedMetadataLayout, FA3_DECODE_MAX_QUERY_LEN,
+    USE_FA3_FP8_PAGED,
 };
 pub use flash_attn_sinks::{flash_attn_sinks, flash_attn_sinks_varlen};
 pub use flashinfer::{
@@ -33,11 +34,11 @@ fn cache_input_layout(
     name: &str,
     op: &str,
 ) -> Result<(usize, usize, usize, usize)> {
-    let (num_tokens, num_heads, head_size, row_stride) = match layout.dims() {
-        &[num_tokens, num_heads, head_size] => {
+    let (num_tokens, num_heads, head_size, row_stride) = match *layout.dims() {
+        [num_tokens, num_heads, head_size] => {
             (num_tokens, num_heads, head_size, layout.stride()[0])
         }
-        &[batch, seq_len, num_heads, head_size] => {
+        [batch, seq_len, num_heads, head_size] => {
             let num_tokens = batch
                 .checked_mul(seq_len)
                 .ok_or_else(|| candle_core::Error::msg("cache input token count overflow"))?;

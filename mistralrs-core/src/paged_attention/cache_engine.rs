@@ -7,6 +7,8 @@ use candle_core::{DType, Device, Result, Tensor};
 use serde::{Deserialize, Serialize};
 
 use super::config::{KvCacheLayout, ModelConfigLike};
+#[cfg(all(feature = "cuda", target_family = "unix"))]
+use crate::flashinfer::{register_fa3_prefill_caches, Fa3PrefillWorkspaceRegistration};
 
 #[cfg(all(feature = "cuda", target_family = "unix"))]
 fn cuda_supports_fp8(device: &Device) -> bool {
@@ -127,6 +129,9 @@ pub struct CacheConfig {
 pub type KVCache = (Tensor, Tensor);
 
 pub struct CacheEngine {
+    #[cfg(all(feature = "cuda", target_family = "unix"))]
+    _fa3_prefill_workspaces: Fa3PrefillWorkspaceRegistration,
+    fa3_prefill_num_sm_by_layer: Vec<Option<usize>>,
     gpu_cache: Arc<Mutex<Vec<KVCache>>>,
 }
 
@@ -143,15 +148,25 @@ impl CacheEngine {
             .validate(dtype, model_config, device, &layer_devices)
             .map_err(candle_core::Error::msg)?;
         let dtype = cache_config.cache_type.to_dtype(dtype);
+        let gpu_cache =
+            Self::allocate_gpu_cache(model_config, cache_config, dtype, device, layer_devices)?;
+        #[cfg(all(feature = "cuda", target_family = "unix"))]
+        let fa3_prefill_workspaces = register_fa3_prefill_caches(&gpu_cache)?;
+        #[cfg(all(feature = "cuda", target_family = "unix"))]
+        let fa3_prefill_num_sm_by_layer =
+            Self::fa3_prefill_cache_coverage(model_config, cache_config, &gpu_cache)?;
+        #[cfg(not(all(feature = "cuda", target_family = "unix")))]
+        let fa3_prefill_num_sm_by_layer = vec![None; model_config.num_layers()];
         Ok(Self {
-            gpu_cache: Arc::new(Mutex::new(Self::allocate_gpu_cache(
-                model_config,
-                cache_config,
-                dtype,
-                device,
-                layer_devices,
-            )?)),
+            #[cfg(all(feature = "cuda", target_family = "unix"))]
+            _fa3_prefill_workspaces: fa3_prefill_workspaces,
+            fa3_prefill_num_sm_by_layer,
+            gpu_cache: Arc::new(Mutex::new(gpu_cache)),
         })
+    }
+
+    pub fn fa3_prefill_num_sm_by_layer(&self) -> &[Option<usize>] {
+        &self.fa3_prefill_num_sm_by_layer
     }
 
     pub fn get_kv_cache(&self) -> MutexGuard<'_, Vec<KVCache>> {
@@ -455,6 +470,58 @@ impl CacheEngine {
         Ok(gpu_cache)
     }
 
+    #[cfg(all(feature = "cuda", target_family = "unix"))]
+    fn fa3_prefill_cache_coverage(
+        model_config: &dyn ModelConfigLike,
+        cache_config: &CacheConfig,
+        gpu_cache: &[KVCache],
+    ) -> Result<Vec<Option<usize>>> {
+        if !mistralrs_paged_attn::USE_FA3_FP8_PAGED || cache_config.num_gpu_blocks == 0 {
+            return Ok(vec![None; model_config.num_layers()]);
+        }
+        (0..model_config.num_layers())
+            .map(|layer_idx| -> Result<Option<usize>> {
+                if !model_config.layer_has_paged_kv_cache(layer_idx) {
+                    return Ok(None);
+                }
+                let Some((key_cache, value_cache)) = gpu_cache.get(layer_idx) else {
+                    return Ok(None);
+                };
+                let kv_heads = model_config.num_kv_heads_for_layer(layer_idx);
+                let q_heads = model_config.num_attn_heads_for_layer(layer_idx);
+                let k_head_dim = model_config.k_head_dim_for_layer(layer_idx);
+                let v_head_dim = model_config.v_head_dim_for_layer(layer_idx);
+                let expected_shape = (
+                    cache_config.num_gpu_blocks,
+                    kv_heads,
+                    cache_config.block_size,
+                    k_head_dim,
+                );
+                if model_config.kv_cache_layout_for_layer(layer_idx) != KvCacheLayout::FlashInferHnd
+                    || kv_heads == 0
+                    || q_heads == 0
+                    || !q_heads.is_multiple_of(kv_heads)
+                    || k_head_dim != 256
+                    || v_head_dim != k_head_dim
+                    || key_cache.dtype() != DType::F8E4M3
+                    || value_cache.dtype() != DType::F8E4M3
+                    || key_cache.dims4().ok() != Some(expected_shape)
+                    || value_cache.dims4().ok() != Some(expected_shape)
+                {
+                    return Ok(None);
+                }
+                crate::flashinfer::fa3_prefill_cache_num_sm(
+                    key_cache,
+                    value_cache,
+                    q_heads,
+                    kv_heads,
+                    k_head_dim,
+                    cache_config.block_size,
+                )
+            })
+            .collect()
+    }
+
     fn calculate_key_block_shape(
         model_config: &dyn ModelConfigLike,
         dtype: DType,
@@ -542,5 +609,49 @@ mod tests {
             )
             .unwrap_err();
         assert!(err.contains("not supported for MLA layer 0"));
+    }
+
+    #[cfg(all(feature = "cuda", target_family = "unix"))]
+    #[test]
+    fn fa3_prefill_coverage_requires_compatible_registered_caches() -> Result<()> {
+        let Ok(device) = Device::new_cuda(0) else {
+            return Ok(());
+        };
+        let mut model = model_config(KvCacheLayout::FlashInferHnd);
+        model.k_head_dim = 256;
+        model.v_head_dim = 256;
+        let cache = CacheConfig {
+            block_size: 32,
+            num_gpu_blocks: 2,
+            cache_type: PagedCacheType::F8E4M3,
+            kv_cache_group_ids: vec![0],
+        };
+        let engine = CacheEngine::new(
+            &model,
+            &cache,
+            DType::BF16,
+            &device,
+            vec![None; model.num_layers],
+        )?;
+        let expected_num_sm = if mistralrs_paged_attn::USE_FA3_FP8_PAGED {
+            crate::flashinfer::fa3_device_num_sm(&device)
+        } else {
+            None
+        };
+        assert_eq!(
+            engine.fa3_prefill_num_sm_by_layer(),
+            &[expected_num_sm, expected_num_sm]
+        );
+
+        model.v_head_dim = 128;
+        let incompatible = CacheEngine::new(
+            &model,
+            &cache,
+            DType::BF16,
+            &device,
+            vec![None; model.num_layers],
+        )?;
+        assert_eq!(incompatible.fa3_prefill_num_sm_by_layer(), &[None, None]);
+        Ok(())
     }
 }

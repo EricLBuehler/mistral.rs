@@ -185,7 +185,7 @@ impl CacheManagerMixin for AnyMoePipeline {
     fn cache(&self) -> &EitherCache {
         unreachable!()
     }
-    fn clone_in_cache(&self, seqs: &mut [&mut Sequence]) {
+    fn clone_in_cache(&self, seqs: &mut [&mut Sequence]) -> candle_core::Result<()> {
         get_mut_arcmutex!(self.target).clone_in_cache(seqs)
     }
     fn clone_out_cache(&self, seqs: &mut [&mut Sequence]) {
@@ -197,7 +197,7 @@ impl CacheManagerMixin for AnyMoePipeline {
         reset_non_granular: bool,
         modify_draft_cache: bool,
         load_preallocated_cache: bool,
-    ) {
+    ) -> candle_core::Result<()> {
         get_mut_arcmutex!(self.target).set_none_cache(
             seqs,
             reset_non_granular,
@@ -256,6 +256,9 @@ impl MetadataMixin for AnyMoePipeline {
     fn cleanup_cuda_graphs(&self) {
         get_mut_arcmutex!(self.target).cleanup_cuda_graphs()
     }
+    fn reclaim_cuda_graph_memory(&self, max_entries: usize) -> usize {
+        get_mut_arcmutex!(self.target).reclaim_cuda_graph_memory(max_entries)
+    }
     fn generation_defaults(&self) -> Option<crate::ModelGenerationDefaults> {
         get_mut_arcmutex!(self.target).generation_defaults()
     }
@@ -264,6 +267,9 @@ impl MetadataMixin for AnyMoePipeline {
     }
     fn device_mapper(&self) -> Option<&dyn DeviceMapper> {
         None
+    }
+    fn execution_devices(&self) -> Vec<Device> {
+        get_mut_arcmutex!(self.target).execution_devices()
     }
 }
 
@@ -308,10 +314,69 @@ impl Pipeline for AnyMoePipeline {
         get_mut_arcmutex!(self.target).attach_speculative(config)
     }
 
+    fn attach_speculative_with_runtime(
+        &mut self,
+        config: crate::SpeculativeConfig,
+        runtime: crate::MtpRuntimeConfig,
+    ) -> Result<(), candle_core::Error> {
+        get_mut_arcmutex!(self.target).attach_speculative_with_runtime(config, runtime)
+    }
+
+    fn release_speculative_sequences(&mut self, seq_ids: &[usize]) {
+        get_mut_arcmutex!(self.target).release_speculative_sequences(seq_ids);
+    }
+
+    fn supports_speculative_prompt_bootstrap(&self) -> bool {
+        get_mut_arcmutex!(self.target).supports_speculative_prompt_bootstrap()
+    }
+
+    fn speculative_prefix_replay(&self) -> crate::speculative::SpeculativePrefixReplay {
+        get_mut_arcmutex!(self.target).speculative_prefix_replay()
+    }
+
+    fn supports_paged_auxiliary_prefix_state(&self) -> bool {
+        get_mut_arcmutex!(self.target).supports_paged_auxiliary_prefix_state()
+    }
+
+    fn capture_paged_auxiliary_prefix_state(
+        &mut self,
+        sequence_id: usize,
+        cached_tokens: usize,
+    ) -> Result<
+        Option<std::sync::Arc<dyn crate::prefix_cacher::PagedAuxiliaryPrefixState>>,
+        candle_core::Error,
+    > {
+        get_mut_arcmutex!(self.target)
+            .capture_paged_auxiliary_prefix_state(sequence_id, cached_tokens)
+    }
+
+    fn restore_paged_auxiliary_prefix_state(
+        &mut self,
+        sequence_id: usize,
+        cached_tokens: usize,
+        state: &dyn crate::prefix_cacher::PagedAuxiliaryPrefixState,
+    ) -> Result<(), candle_core::Error> {
+        get_mut_arcmutex!(self.target).restore_paged_auxiliary_prefix_state(
+            sequence_id,
+            cached_tokens,
+            state,
+        )
+    }
+
+    fn speculative_prompt_chunk(
+        &mut self,
+        seqs: &[&mut Sequence],
+        chunk: &crate::pipeline::SpeculativePromptChunk,
+        metadata: &crate::pipeline::text_models_inputs_processor::PagedAttentionMeta,
+    ) -> Result<(), candle_core::Error> {
+        get_mut_arcmutex!(self.target).speculative_prompt_chunk(seqs, chunk, metadata)
+    }
+
     async fn try_sample_speculative_causal_gen(
         &mut self,
         input_seqs: &mut [&mut Sequence],
         logits: &[Tensor],
+        batched_logits: Option<&Tensor>,
         prefix_cacher: &mut PrefixCacheManagerV2,
         disable_eos_stop: bool,
         rng: Arc<std::sync::Mutex<Isaac64Rng>>,
@@ -322,6 +387,7 @@ impl Pipeline for AnyMoePipeline {
             .try_sample_speculative_causal_gen(
                 input_seqs,
                 logits,
+                batched_logits,
                 prefix_cacher,
                 disable_eos_stop,
                 rng,
@@ -549,7 +615,7 @@ impl AnyMoePipelineMixin for AnyMoePipeline {
                 let mut input_seqs = seqs.iter_mut().collect::<Vec<_>>();
 
                 // Clear KV cache in prep for training
-                target.set_none_cache(&mut input_seqs, true, true, false);
+                target.set_none_cache(&mut input_seqs, true, true, false)?;
 
                 let inputs = inputs_processor.process_inputs(
                     tokenizer.clone(),
@@ -572,7 +638,7 @@ impl AnyMoePipelineMixin for AnyMoePipeline {
                 let _ = target.forward_inputs(inputs.unwrap().inputs, false)?;
 
                 // Clear the KV cache
-                target.set_none_cache(&mut input_seqs, true, true, false);
+                target.set_none_cache(&mut input_seqs, true, true, false)?;
 
                 // === BACKWARD STEP ==
                 #[allow(clippy::cast_possible_truncation)]
@@ -685,5 +751,6 @@ fn new_dummy_seq(
         false,
         false,
         eos_toks,
+        None,
     )
 }

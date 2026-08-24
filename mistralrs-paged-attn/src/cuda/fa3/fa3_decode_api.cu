@@ -16,6 +16,7 @@ namespace {
 constexpr int kHeadDim = 256;
 constexpr int kBlockM = 128;
 constexpr int kBlockN = 128;
+constexpr int kMaxQueryLen = kBlockM;
 constexpr int kMetadataThreads = 256;
 constexpr int kQuantThreads = 256;
 
@@ -24,7 +25,10 @@ int round_up_4(int value) { return (value + 3) / 4 * 4; }
 int validate_schedule(const Fa3Fp8DecodeScheduleParams *p) {
     if (p == nullptr || p->cu_seqlens_q == nullptr || p->seqused_k == nullptr ||
         p->scheduler_metadata == nullptr || p->batch_size <= 0 || p->total_q <= 0 ||
-        p->total_q > p->batch_size || p->num_q_heads <= 0 || p->num_kv_heads <= 0 ||
+        p->query_len <= 0 || p->query_len > kMaxQueryLen ||
+        int64_t(p->batch_size) * p->query_len != p->total_q ||
+        (p->causal != 0 && p->causal != 1) || p->num_q_heads <= 0 ||
+        p->num_kv_heads <= 0 ||
         p->num_q_heads % p->num_kv_heads != 0 || p->head_dim != kHeadDim ||
         p->page_size <= 0 || p->max_seqlen_k <= 0 || p->num_splits <= 1 ||
         p->num_splits > 256 || p->num_sm <= 0 || p->device_id < 0) {
@@ -63,9 +67,9 @@ void fill_schedule(const Fa3Fp8DecodeScheduleParams &src, Flash_fwd_params &dst)
     dst = {};
     dst.b = src.batch_size;
     dst.b_k = src.batch_size;
-    dst.seqlen_q = 1;
+    dst.seqlen_q = src.query_len;
     dst.seqlen_k = src.max_seqlen_k;
-    dst.seqlen_q_rounded = kBlockM;
+    dst.seqlen_q_rounded = (dst.seqlen_q + kBlockM - 1) / kBlockM * kBlockM;
     dst.seqlen_k_rounded = (dst.seqlen_k + kBlockN - 1) / kBlockN * kBlockN;
     dst.total_q = src.total_q;
     dst.h = src.num_q_heads;
@@ -79,10 +83,10 @@ void fill_schedule(const Fa3Fp8DecodeScheduleParams &src, Flash_fwd_params &dst)
     dst.rp_dropout = 1.0f;
     dst.p_dropout_in_uint8_t = 255;
     dst.window_size_left = -1;
-    dst.window_size_right = -1;
+    dst.window_size_right = src.causal ? 0 : -1;
     dst.is_e4m3 = true;
     dst.is_bf16 = true;
-    dst.is_causal = false;
+    dst.is_causal = src.causal != 0;
     dst.is_local = false;
     dst.arch = 90;
     dst.device_id = src.device_id;
@@ -96,7 +100,7 @@ void fill_schedule(const Fa3Fp8DecodeScheduleParams &src, Flash_fwd_params &dst)
     dst.pack_gqa = true;
     dst.prepare_varlen_pdl = false;
     dst.varlen_sort_batches = false;
-    dst.head_swizzle = false;
+    dst.head_swizzle = dst.is_causal;
     dst.skip_scheduler_metadata_computation = true;
     dst.cp_world_size = 1;
     dst.cp_rank = 0;
@@ -105,8 +109,12 @@ void fill_schedule(const Fa3Fp8DecodeScheduleParams &src, Flash_fwd_params &dst)
     const int batch_rounded = round_up_4(src.batch_size);
     dst.prepare_seqlen_q_ptr = src.scheduler_metadata;
     dst.num_splits_dynamic_ptr = src.scheduler_metadata + batch_rounded;
-    dst.tile_count_semaphore = src.scheduler_metadata + 2 * batch_rounded;
-    dst.tile_count_semaphore_offset = 2 * batch_rounded;
+    dst.num_nheads_in_l2_ptr = dst.head_swizzle
+                                  ? src.scheduler_metadata + 2 * batch_rounded
+                                  : nullptr;
+    const int metadata_vectors = 2 + int(dst.head_swizzle);
+    dst.tile_count_semaphore = src.scheduler_metadata + metadata_vectors * batch_rounded;
+    dst.tile_count_semaphore_offset = metadata_vectors * batch_rounded;
 }
 
 void fill_run(const Fa3Fp8DecodeParams &src, Flash_fwd_params &dst) {
@@ -162,10 +170,12 @@ __global__ void materialize_paged_metadata_kernel(
     const int32_t *__restrict__ paged_kv_indices,
     const int32_t *__restrict__ paged_kv_last_page_len,
     int32_t *__restrict__ page_table, int32_t *__restrict__ seqused_k,
+    int32_t source_rows_per_sequence, int32_t source_row_offset,
     int32_t page_table_batch_stride, int32_t page_size) {
     const int32_t batch = blockIdx.x;
-    const int32_t begin = paged_kv_indptr[batch];
-    const int32_t end = paged_kv_indptr[batch + 1];
+    const int32_t source_row = batch * source_rows_per_sequence + source_row_offset;
+    const int32_t begin = paged_kv_indptr[source_row];
+    const int32_t end = paged_kv_indptr[source_row + 1];
     const int32_t page_count = end - begin;
     int32_t *row = page_table + int64_t(batch) * page_table_batch_stride;
     for (int32_t page = threadIdx.x; page < page_count; page += blockDim.x) {
@@ -175,7 +185,7 @@ __global__ void materialize_paged_metadata_kernel(
         seqused_k[batch] = page_count == 0
                                 ? 0
                                 : (page_count - 1) * page_size +
-                                      paged_kv_last_page_len[batch];
+                                      paged_kv_last_page_len[source_row];
     }
 }
 
@@ -233,11 +243,12 @@ __global__ void bf16_to_e4m3_static_kernel(const __nv_bfloat16 *__restrict__ inp
 } // namespace
 
 extern "C" size_t fa3_fp8_decode_scheduler_metadata_i32(int32_t batch_size,
-                                                          int32_t num_splits) {
-    if (batch_size <= 0 || num_splits <= 1) {
+                                                          int32_t num_splits,
+                                                          int32_t causal) {
+    if (batch_size <= 0 || num_splits <= 1 || (causal != 0 && causal != 1)) {
         return 0;
     }
-    return size_t(2 * round_up_4(batch_size) + 1);
+    return size_t((2 + causal) * round_up_4(batch_size) + 1);
 }
 
 extern "C" size_t fa3_fp8_decode_out_accum_f32(const Fa3Fp8DecodeParams *params) {
@@ -262,17 +273,32 @@ extern "C" size_t fa3_fp8_decode_lse_accum_f32(const Fa3Fp8DecodeParams *params)
 extern "C" int fa3_fp8_decode_materialize_paged_metadata(
     const int32_t *paged_kv_indptr, const int32_t *paged_kv_indices,
     const int32_t *paged_kv_last_page_len, int32_t *page_table,
-    int32_t *seqused_k, int32_t batch_size, int32_t page_table_batch_stride,
-    int32_t page_size, cudaStream_t stream) {
+    int32_t *seqused_k, int32_t batch_size, int32_t query_len,
+    int32_t page_table_batch_stride, int32_t page_size, cudaStream_t stream) {
+    return fa3_fp8_paged_materialize_metadata(
+        paged_kv_indptr, paged_kv_indices, paged_kv_last_page_len, page_table,
+        seqused_k, batch_size, query_len, query_len - 1,
+        page_table_batch_stride, page_size, stream);
+}
+
+extern "C" int fa3_fp8_paged_materialize_metadata(
+    const int32_t *paged_kv_indptr, const int32_t *paged_kv_indices,
+    const int32_t *paged_kv_last_page_len, int32_t *page_table,
+    int32_t *seqused_k, int32_t batch_size, int32_t source_rows_per_sequence,
+    int32_t source_row_offset, int32_t page_table_batch_stride, int32_t page_size,
+    cudaStream_t stream) {
     if (paged_kv_indptr == nullptr || paged_kv_indices == nullptr ||
         paged_kv_last_page_len == nullptr || page_table == nullptr ||
-        seqused_k == nullptr || batch_size <= 0 ||
+        seqused_k == nullptr || batch_size <= 0 || source_rows_per_sequence <= 0 ||
+        source_rows_per_sequence > kMaxQueryLen || source_row_offset < 0 ||
+        source_row_offset >= source_rows_per_sequence ||
         page_table_batch_stride <= 0 || page_size <= 0) {
         return cudaErrorInvalidValue;
     }
     materialize_paged_metadata_kernel<<<batch_size, kMetadataThreads, 0, stream>>>(
         paged_kv_indptr, paged_kv_indices, paged_kv_last_page_len, page_table,
-        seqused_k, page_table_batch_stride, page_size);
+        seqused_k, source_rows_per_sequence, source_row_offset,
+        page_table_batch_stride, page_size);
     return cudaPeekAtLastError();
 }
 

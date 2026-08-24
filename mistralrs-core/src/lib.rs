@@ -45,6 +45,7 @@ pub const MISTRALRS_GIT_REVISION: &str = match option_env!("MISTRALRS_GIT_REVISI
 };
 pub const MISTRALRS_VERSION: &str = env!("CARGO_PKG_VERSION");
 pub const DEFAULT_ENGINE_REQUEST_QUEUE_CAPACITY: usize = 10_000;
+pub const REQUEST_QUEUE_DURATION_METRIC: &str = "mistralrs_request_queue_duration_seconds";
 
 mod adapter;
 mod agent_approval;
@@ -198,11 +199,14 @@ pub use sampler::{
 };
 pub use scheduler::{
     DefaultSchedulerMethod, SchedulerConfig, DEFAULT_MAX_DECODE_STEPS_BEFORE_PREFILL,
-    DEFAULT_MAX_NUM_BATCHED_TOKENS,
+    DEFAULT_MAX_NUM_BATCHED_TOKENS, DEFAULT_MAX_PREFILL_CHUNK_TOKENS,
 };
 pub use search::{SearchCallback, SearchFunctionParameters, SearchResult};
 use serde::Serialize;
-pub use speculative::{reserve_external_mtp_memory, MtpConfig, SpeculativeConfig};
+pub use speculative::{
+    reserve_external_mtp_memory, reserve_external_mtp_memory_with_runtime, MtpConfig,
+    MtpDraftSamplingMethod, MtpRuntimeConfig, SpeculativeConfig,
+};
 pub use speech_models::{utils as speech_utils, SpeechGenerationConfig, SpeechLoaderType};
 use tokio::runtime::Runtime;
 use toml_selector::{TomlLoaderArgs, TomlSelector};
@@ -1100,6 +1104,9 @@ impl MistralRs {
         &self,
         request: &mut Request,
     ) -> Result<Sender<Request>, MistralRsError> {
+        if let Request::Normal(request) = &mut *request {
+            request.mark_enqueued();
+        }
         let requested_model = match &*request {
             Request::Normal(request) => request.model_id.clone(),
             _ => None,
@@ -1622,6 +1629,7 @@ impl MistralRs {
                 let (tx, mut rx) = channel(1);
                 let req = Request::Normal(Box::new(NormalRequest {
                     id: 0,
+                    queued_at: None,
                     messages: RequestMessage::Completion {
                         text: "hello".to_string(),
                         echo_prompt: false,
@@ -1631,6 +1639,7 @@ impl MistralRs {
                         max_len: Some(1),
                         ..SamplingParams::deterministic()
                     },
+                    seed: None,
                     response: tx,
                     return_logprobs: false,
                     is_streaming: false,
@@ -2718,10 +2727,18 @@ impl MistralRs {
         let realized_cache_config = {
             let mut pipeline = pipeline.lock().await;
             if let Some(mtp_config) = loader_config.mtp_config.clone() {
+                let prefix_cache_capacity = if unloaded_state.engine_config.no_prefix_cache {
+                    0
+                } else {
+                    unloaded_state.engine_config.prefix_cache_n
+                };
                 pipeline
-                    .attach_speculative(SpeculativeConfig::Mtp(
-                        mtp_config.with_draft_lm_head_isq(loader_config.isq),
-                    ))
+                    .attach_speculative_with_runtime(
+                        SpeculativeConfig::Mtp(
+                            mtp_config.with_draft_lm_head_isq(loader_config.isq),
+                        ),
+                        MtpRuntimeConfig::new(prefix_cache_capacity),
+                    )
                     .map_err(|e| {
                         MistralRsError::ReloadFailed(format!(
                             "Failed to attach MTP speculative decoding: {e}"

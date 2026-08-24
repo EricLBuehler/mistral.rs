@@ -618,9 +618,9 @@ fn update_cache<
     };
 
     let (num_tokens, num_heads, head_size, key_stride) =
-        cache_input_layout(&k_l, "key", "paged-attention")?;
+        cache_input_layout(k_l, "key", "paged-attention")?;
     let (value_tokens, value_heads, value_head_size, value_stride) =
-        cache_input_layout(&v_l, "value", "paged-attention")?;
+        cache_input_layout(v_l, "value", "paged-attention")?;
     if (num_tokens, num_heads, head_size) != (value_tokens, value_heads, value_head_size) {
         candle::bail!("shape mismatch k {:?} and v {:?}", k_l.shape(), v_l.shape())
     }

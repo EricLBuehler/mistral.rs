@@ -583,22 +583,23 @@ impl MultimodalModel for Qwen3_5MoeModel {
     fn supports_cuda_decode_graphs_for_args(&self, model_specific_args: &dyn Any) -> bool {
         model_specific_args
             .downcast_ref::<Qwen3VLVisionSpecificArgs>()
-            .is_some_and(|args| {
-                args.rope_img_grid_thw.is_none() && args.rope_vid_grid_thw.is_none()
-            })
+            .is_some()
     }
     fn config(&self) -> &ModelConfigMetadata {
         &self.text.cfg
     }
     fn model_config(&self) -> Arc<dyn ModelConfigLike + Send + Sync> {
-        Arc::new(HybridPagedKvCacheConfig::new(
-            self.text.cfg.clone(),
-            self.text
-                .layer_types
-                .iter()
-                .map(|ty| matches!(ty, config::LayerType::FullAttention))
-                .collect(),
-        ))
+        Arc::new(
+            HybridPagedKvCacheConfig::new(
+                self.text.cfg.clone(),
+                self.text
+                    .layer_types
+                    .iter()
+                    .map(|ty| matches!(ty, config::LayerType::FullAttention))
+                    .collect(),
+            )
+            .with_uniform_prefix_prefill_attention_features(Default::default()),
+        )
     }
     fn default_model_specific_args(&self, input_ids: &Tensor) -> Box<dyn Any> {
         let (batch_size, seq_len) = input_ids.dims2().expect("input ids must be rank 2");

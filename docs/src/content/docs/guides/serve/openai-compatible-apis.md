@@ -74,7 +74,7 @@ Every path with full request and response schemas is in the [generated HTTP API 
 :::caution[Compatibility gaps]
 Most OpenAI-compatible fields work, but a few common ones have limitations:
 
-- `seed`, `user`, `stream_options`, `metadata`, `parallel_tool_calls` - accepted but ignored.
+- `user`, `stream_options`, `metadata`, `parallel_tool_calls` - accepted but ignored. `seed` controls deterministic request-scoped sampling.
 - `code_interpreter` supports only `{"container":{"type":"auto"}}`; OpenAI code-interpreter container ids and `container.file_ids` are not supported.
 - Responses `web_search` does not support image search or `external_web_access: false`.
 - Responses `shell` supports `environment.type = "container_auto"` and uploaded `skill_reference` entries; local environments, container references, and inline container-created skills are not implemented. Anthropic Messages uses the same store through `container.skills` with `type = "custom"`.

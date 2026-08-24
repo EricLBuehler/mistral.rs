@@ -65,6 +65,7 @@ pub fn parse_request(
 
     Ok(Request::Normal(Box::new(NormalRequest {
         id: state.next_request_id(),
+        queued_at: None,
         messages: RequestMessage::ImageGeneration {
             prompt: oairequest.prompt,
             format: oairequest.response_format,
@@ -75,6 +76,7 @@ pub fn parse_request(
             save_file: None,
         },
         sampling_params: SamplingParams::deterministic(),
+        seed: None,
         response: tx,
         return_logprobs: false,
         is_streaming: false,

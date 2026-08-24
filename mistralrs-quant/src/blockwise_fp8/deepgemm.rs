@@ -18,10 +18,7 @@ use super::{
     ops::{fp8_tensor_aligned, fp8_workspace, is_sm90, FP8_BLOCK_SIZE},
 };
 
-const DENSE_SERVING_MAX_M: usize = 16;
-const SERVING_M_VALUES: [usize; 19] = [
-    1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 32, 64, 128,
-];
+const SERVING_MAX_M: usize = 128;
 const JIT_SOURCE_HASH: &str = env!("MISTRALRS_DEEPGEMM_SOURCE_HASH");
 
 #[derive(Clone, Copy, Eq, Hash, PartialEq)]
@@ -41,7 +38,7 @@ pub(super) struct Prepared {
     device: candle_core::cuda::DeviceId,
     n: usize,
     k: usize,
-    plans: [ffi::DeepGemmPrepared; SERVING_M_VALUES.len()],
+    plans: Box<[ffi::DeepGemmPrepared]>,
 }
 
 #[cfg(all(feature = "cuda", has_deepgemm_fp8_sm90_provider))]
@@ -298,8 +295,8 @@ pub(super) fn prepare(
                 })?;
             let stream = dev.cuda_stream().cu_stream() as *mut core::ffi::c_void;
             let mut include_dir = None;
-            let mut plans = Vec::with_capacity(SERVING_M_VALUES.len());
-            for m in SERVING_M_VALUES {
+            let mut plans = Vec::with_capacity(SERVING_MAX_M);
+            for m in 1..=SERVING_MAX_M {
                 let plan = deepgemm_plan(m, *n, *k)?;
                 let mut prepared = std::mem::MaybeUninit::uninit();
                 let mut status = unsafe {
@@ -338,7 +335,7 @@ pub(super) fn prepare(
                 device: dev.id(),
                 n: *n,
                 k: *k,
-                plans: plans.try_into().unwrap(),
+                plans: plans.into_boxed_slice(),
             })
         };
         prepare_inner()
@@ -361,11 +358,7 @@ pub(super) fn serving_shape_supported(dtype: DType, rows: usize) -> bool {
 }
 
 fn serving_plan_index(rows: usize) -> Option<usize> {
-    if (1..=DENSE_SERVING_MAX_M).contains(&rows) {
-        Some(rows - 1)
-    } else {
-        SERVING_M_VALUES.binary_search(&rows).ok()
-    }
+    rows.checked_sub(1).filter(|index| *index < SERVING_MAX_M)
 }
 
 #[cfg(all(feature = "cuda", has_deepgemm_fp8_sm90_provider))]
@@ -381,10 +374,7 @@ pub(super) fn matmul(
     use crate::utils::{slice_ptr_mut_on_stream, slice_ptr_on_stream};
 
     if !serving_supported(input) {
-        candle_core::bail!(
-            "DeepGEMM serving requires BF16 rows in {:?}",
-            SERVING_M_VALUES
-        )
+        candle_core::bail!("DeepGEMM serving requires 1..={SERVING_MAX_M} BF16 rows")
     }
     let input = input.contiguous()?;
     let input = if fp8_tensor_aligned(&input) {
@@ -498,18 +488,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn direct_decode_route_covers_decode_and_verification_buckets() {
-        assert!(serving_shape_supported(DType::BF16, 1));
-        assert!(serving_shape_supported(DType::BF16, DENSE_SERVING_MAX_M));
-        assert!(serving_shape_supported(DType::BF16, 32));
-        assert!(serving_shape_supported(DType::BF16, 64));
-        assert!(serving_shape_supported(DType::BF16, 128));
+    fn direct_decode_route_is_dense_through_the_serving_limit() {
+        for rows in 1..=SERVING_MAX_M {
+            assert!(serving_shape_supported(DType::BF16, rows));
+            assert_eq!(serving_plan_index(rows), Some(rows - 1));
+        }
         assert!(!serving_shape_supported(DType::BF16, 0));
-        assert!(!serving_shape_supported(
-            DType::BF16,
-            DENSE_SERVING_MAX_M + 1
-        ));
-        assert!(!serving_shape_supported(DType::BF16, 256));
+        assert!(!serving_shape_supported(DType::BF16, SERVING_MAX_M + 1));
         assert!(!serving_shape_supported(DType::F16, 1));
     }
 }

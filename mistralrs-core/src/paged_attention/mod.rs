@@ -116,6 +116,23 @@ mod tests {
     }
 
     #[test]
+    fn recurrent_prefix_capacity_defaults_to_zero_and_can_be_configured() -> anyhow::Result<()> {
+        let config = PagedAttentionConfig::new(
+            Some(32),
+            MemoryGpuConfig::MbAmount(1),
+            PagedCacheType::Auto,
+        )?;
+        assert_eq!(config.recurrent_prefix_capacity, 0);
+        assert_eq!(
+            config
+                .with_recurrent_prefix_capacity(7)
+                .recurrent_prefix_capacity,
+            7
+        );
+        Ok(())
+    }
+
+    #[test]
     fn activation_reservation_is_idempotent_and_device_specific() -> anyhow::Result<()> {
         let mut config = PagedAttentionConfig::new(
             Some(32),
@@ -183,6 +200,7 @@ pub struct PagedAttentionConfig {
     pub(crate) primary_activation_memory_reservation_bytes: usize,
     pub(crate) mapped_activation_memory_reservation_bytes: usize,
     pub(crate) recurrent_checkpoint_lanes: usize,
+    pub(crate) recurrent_prefix_capacity: usize,
     pub(crate) resolve_memory_utilization_after_load: bool,
 }
 
@@ -207,6 +225,7 @@ impl PagedAttentionConfig {
             primary_activation_memory_reservation_bytes: 0,
             mapped_activation_memory_reservation_bytes: 0,
             recurrent_checkpoint_lanes: 1,
+            recurrent_prefix_capacity: 0,
             resolve_memory_utilization_after_load: true,
         })
     }
@@ -234,6 +253,11 @@ impl PagedAttentionConfig {
         }
         self.recurrent_checkpoint_lanes = lanes;
         Ok(self)
+    }
+
+    pub fn with_recurrent_prefix_capacity(mut self, capacity: usize) -> Self {
+        self.recurrent_prefix_capacity = capacity;
+        self
     }
 
     pub(crate) fn reserve_activation_memory(
@@ -285,19 +309,9 @@ const SUPPORTED_BLOCK_SIZE: &[usize] = &[8, 16, 32];
 // Weight-loading transients freed into the stream-ordered pool are fragmented and cannot back the
 // large contiguous KV tensors; return them to the driver before sizing and allocating the cache.
 #[cfg(feature = "cuda")]
-fn trim_cuda_mempool(device: &Device) {
-    use candle_core::cuda_backend::cudarc::driver::sys;
-    let Device::Cuda(cuda) = device else { return };
-    let stream = cuda.cuda_stream();
-    if !stream.context().has_async_alloc() {
-        return;
-    }
-    let dev = stream.context().cu_device();
-    let mut pool = std::ptr::null_mut();
-    if unsafe { sys::cuDeviceGetMemPool(&mut pool, dev) } != sys::CUresult::CUDA_SUCCESS {
-        return;
-    }
-    unsafe { sys::cuMemPoolTrimTo(pool, 0) };
+fn trim_cuda_mempool(device: &Device) -> candle_core::Result<()> {
+    MemoryUsage.trim_cuda_memory_pool(device, 0)?;
+    Ok(())
 }
 
 const SIZE_IN_MB: usize = 1024 * 1024;
@@ -418,9 +432,13 @@ pub fn calculate_cache_config(
         // Weight loading enqueues stream-ordered frees without draining; sync so the memory
         // reading and the cache allocation right after this see the real free VRAM.
         if device.is_cuda() {
-            device.synchronize()?;
             #[cfg(feature = "cuda")]
-            trim_cuda_mempool(device);
+            {
+                MemoryUsage.synchronize_cuda_context(device)?;
+                trim_cuda_mempool(device)?;
+            }
+            #[cfg(not(feature = "cuda"))]
+            device.synchronize()?;
         }
         let post_load_memory = if model_weight_size_in_bytes.is_none() && device.is_cuda() {
             Some(MemoryUsage.query(device)?)
@@ -489,7 +507,7 @@ pub fn calculate_cache_config(
     }
     if secondary_device_memory_reservation_mb > 0 && !silent && num_devices > 1 {
         info!(
-            "Reserving {secondary_device_memory_reservation_mb} MB on each mapped device for activations."
+            "Reserving {secondary_device_memory_reservation_mb} MB on each mapped device for runtime components and activations."
         );
     }
 
@@ -520,9 +538,10 @@ pub fn calculate_cache_config(
     }
 
     if !silent {
+        let available_context_tokens = num_gpu_blocks.saturating_sub(1) * block_size;
         info!("Allocating {mem_gpu} MB for PagedAttention KV cache per GPU");
         info!("PagedAttention KV cache type is {dtype:?}");
-        info!("Using PagedAttention with block size {block_size} and {num_gpu_blocks} GPU blocks: available context length is {} tokens", num_gpu_blocks*block_size);
+        info!("Using PagedAttention with block size {block_size} and {num_gpu_blocks} GPU blocks: available context length is {available_context_tokens} tokens");
     }
     Ok(CacheConfig {
         block_size,

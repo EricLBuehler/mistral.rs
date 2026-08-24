@@ -9,7 +9,9 @@ pub struct Fa3Fp8DecodeScheduleParams {
     pub seqused_k: *const c_int,
     pub scheduler_metadata: *mut c_int,
     pub batch_size: c_int,
+    pub query_len: c_int,
     pub total_q: c_int,
+    pub causal: c_int,
     pub num_q_heads: c_int,
     pub num_kv_heads: c_int,
     pub head_dim: c_int,
@@ -60,13 +62,15 @@ pub struct Fa3Fp8DecodeParams {
 
 extern "C" {
     #[cfg(has_fa3_fp8_paged)]
-    pub fn fa3_fp8_decode_materialize_paged_metadata(
+    pub fn fa3_fp8_paged_materialize_metadata(
         paged_kv_indptr: *const c_int,
         paged_kv_indices: *const c_int,
         paged_kv_last_page_len: *const c_int,
         page_table: *mut c_int,
         seqused_k: *mut c_int,
         batch_size: c_int,
+        source_rows_per_sequence: c_int,
+        source_row_offset: c_int,
         page_table_batch_stride: c_int,
         page_size: c_int,
         stream: CUstream,

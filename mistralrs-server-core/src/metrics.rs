@@ -15,6 +15,7 @@ use axum::{
 };
 use http_body::{Body as HttpBody, Frame};
 use metrics_exporter_prometheus::{Matcher, PrometheusBuilder, PrometheusHandle};
+use mistralrs_core::REQUEST_QUEUE_DURATION_METRIC;
 use std::pin::Pin;
 use std::sync::OnceLock;
 use std::task::{Context, Poll};
@@ -71,8 +72,13 @@ const ITL_BUCKETS: [f64; 19] = [
     0.01, 0.025, 0.05, 0.075, 0.1, 0.15, 0.2, 0.3, 0.4, 0.5, 0.75, 1.0, 2.5, 5.0, 7.5, 10.0, 20.0,
     40.0, 80.0,
 ];
+const QUEUE_DURATION_BUCKETS: [f64; 22] = [
+    0.001, 0.005, 0.01, 0.02, 0.04, 0.06, 0.08, 0.1, 0.25, 0.5, 0.75, 1.0, 2.5, 5.0, 7.5, 10.0,
+    20.0, 40.0, 80.0, 160.0, 640.0, 2_560.0,
+];
 pub(crate) const TTFT_METRIC: &str = "mistralrs_time_to_first_token_seconds";
 pub(crate) const ITL_METRIC: &str = "mistralrs_inter_token_latency_seconds";
+const REQUEST_OUTCOME_METRIC: &str = "mistralrs_request_outcomes_total";
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, serde::Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -157,6 +163,11 @@ pub fn install_prometheus_recorder() {
         .expect("valid TTFT buckets")
         .set_buckets_for_metric(Matcher::Full(ITL_METRIC.to_string()), &ITL_BUCKETS)
         .expect("valid ITL buckets")
+        .set_buckets_for_metric(
+            Matcher::Full(REQUEST_QUEUE_DURATION_METRIC.to_string()),
+            &QUEUE_DURATION_BUCKETS,
+        )
+        .expect("valid request queue duration buckets")
         .install_recorder()
         .expect("failed to install Prometheus recorder");
     let _ = PROMETHEUS_HANDLE.set(handle);
@@ -388,6 +399,15 @@ impl StreamEnd {
     }
 }
 
+fn request_outcome(status: &str, detail: Option<&RequestError>) -> &'static str {
+    match detail {
+        Some(RequestError::Stream(stats)) => stats.end.as_str(),
+        Some(RequestError::Message(_)) => "error",
+        None if status.starts_with('4') || status.starts_with('5') => "error",
+        None => "completed",
+    }
+}
+
 struct StreamStats {
     end: StreamEnd,
     outcome: StreamOutcome,
@@ -422,6 +442,11 @@ impl RequestCompletion {
             ];
             metrics::counter!("http_requests_total", &labels).increment(1);
             metrics::histogram!("http_request_duration_seconds", &labels).record(latency);
+            metrics::counter!(
+                REQUEST_OUTCOME_METRIC,
+                "outcome" => request_outcome(&self.status, detail.as_ref())
+            )
+            .increment(1);
         }
         drop(self.in_flight);
 
@@ -827,9 +852,10 @@ fn rounded_duration_ms(latency_seconds: f64) -> f64 {
 mod tests {
     use super::{
         adapter_model_label_is_known, body_too_large_response, model_label_field,
-        normalize_model_label_input, query_model, ModelLabelField,
+        normalize_model_label_input, query_model, request_outcome, ModelLabelField, RequestError,
+        StreamEnd, StreamStats,
     };
-    use crate::lora_adapters::LoraAdapterModel;
+    use crate::{lora_adapters::LoraAdapterModel, streaming::StreamOutcome};
     use axum::body::to_bytes;
     use mistralrs_core::{AdapterGenerationId, LoraAdapterInfo};
 
@@ -845,6 +871,27 @@ mod tests {
                 rank: 8,
                 bytes: 16,
             },
+        }
+    }
+
+    #[test]
+    fn request_outcomes_are_bounded_and_distinguish_disconnects() {
+        assert_eq!(request_outcome("200", None), "completed");
+        assert_eq!(request_outcome("503", None), "error");
+        assert_eq!(
+            request_outcome("200", Some(&RequestError::Message("failed".to_string()))),
+            "error"
+        );
+        for (end, expected) in [
+            (StreamEnd::Completed, "completed"),
+            (StreamEnd::Error, "error"),
+            (StreamEnd::ClientDisconnected, "client_disconnected"),
+        ] {
+            let detail = RequestError::Stream(StreamStats {
+                end,
+                outcome: StreamOutcome::default(),
+            });
+            assert_eq!(request_outcome("200", Some(&detail)), expected);
         }
     }
 

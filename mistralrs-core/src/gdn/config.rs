@@ -1,7 +1,29 @@
+use candle_core::DType;
 use mistralrs_quant::QuantizedConfig;
 use serde::{Deserialize, Serialize};
 
 pub const GDN_V_HEAD_LAYOUT_CONFIG_KEY: &str = "_mistralrs_gdn_v_head_layout";
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+pub enum GdnStateDType {
+    #[serde(rename = "float16", alias = "f16", alias = "half")]
+    F16,
+    #[serde(rename = "bfloat16", alias = "bf16")]
+    BF16,
+    #[default]
+    #[serde(rename = "float32", alias = "f32", alias = "float")]
+    F32,
+}
+
+impl GdnStateDType {
+    pub fn dtype(self) -> DType {
+        match self {
+            Self::F16 => DType::F16,
+            Self::BF16 => DType::BF16,
+            Self::F32 => DType::F32,
+        }
+    }
+}
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -107,6 +129,27 @@ impl GdnDims {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[derive(Deserialize)]
+    struct StateDTypeConfig {
+        #[serde(default)]
+        mamba_ssm_dtype: GdnStateDType,
+    }
+
+    #[test]
+    fn recurrent_state_dtype_honors_checkpoint_metadata() {
+        let config: StateDTypeConfig =
+            serde_json::from_str(r#"{"mamba_ssm_dtype":"float32"}"#).unwrap();
+        assert_eq!(config.mamba_ssm_dtype.dtype(), DType::F32);
+        let config: StateDTypeConfig =
+            serde_json::from_str(r#"{"mamba_ssm_dtype":"bfloat16"}"#).unwrap();
+        assert_eq!(config.mamba_ssm_dtype.dtype(), DType::BF16);
+        let config: StateDTypeConfig =
+            serde_json::from_str(r#"{"mamba_ssm_dtype":"float16"}"#).unwrap();
+        assert_eq!(config.mamba_ssm_dtype.dtype(), DType::F16);
+        let config: StateDTypeConfig = serde_json::from_str("{}").unwrap();
+        assert_eq!(config.mamba_ssm_dtype.dtype(), DType::F32);
+    }
 
     #[test]
     fn qwen35_tiled_head_mapping_matches_converter_order() {

@@ -8,3 +8,4 @@ licenses. This product also bundles some third-party components under other open
 See licenses/ for text of these licenses.
 
 The cooperative and pipelined K-major GDN decode kernels in mistralrs-core are adapted from FlashInfer.
+The fused speculative value-major GDN decode kernel in mistralrs-core is adapted from vLLM.

@@ -33,20 +33,20 @@ use util::{
 
 use candle_core::{Device, Result};
 use mistralrs_core::{
-    initialize_logging, paged_attn_supported, parse_isq_value, reserve_external_mtp_memory,
-    AgentToolApprovalHandler, AnyMoeLoader, AutoDeviceMapParams, ChatCompletionResponse,
-    CompletionResponse, Constraint, DefaultSchedulerMethod, DetokenizationRequest,
-    DeviceLayerMapMetadata, DeviceMapMetadata, DeviceMapSetting, DiffusionGenerationParams,
-    DiffusionLoaderBuilder, DrySamplingParams, EmbeddingLoaderBuilder, EmbeddingSpecificConfig,
-    GGMLLoaderBuilder, GGMLSpecificConfig, GGUFLoaderBuilder, GGUFSpecificConfig,
-    ImageGenerationResponse, ImageGenerationResponseFormat, LlguidanceGrammar, Loader,
-    LoraAdapterError as CoreLoraAdapterError, LoraAdapterLoadPolicy, LoraAdapterSpec,
-    LoraRuntimeConfig, MemoryGpuConfig, MistralRs, MistralRsBuilder, MistralRsError, MtpConfig,
-    MultimodalLoaderBuilder, MultimodalSpecificConfig, NormalLoaderBuilder, NormalRequest,
-    NormalSpecificConfig, PagedAttentionConfig, PagedCacheType, Request as _Request,
-    RequestMessage, Response, ResponseOk, SamplingParams, SchedulerConfig, SearchEmbeddingModel,
-    SpeculativeConfig, SpeechLoader, StopTokens, TokenSource, TokenizationRequest, Tool, Topology,
-    UqffWriteConfig,
+    initialize_logging, paged_attn_supported, parse_isq_value,
+    reserve_external_mtp_memory_with_runtime, AgentToolApprovalHandler, AnyMoeLoader,
+    AutoDeviceMapParams, ChatCompletionResponse, CompletionResponse, Constraint,
+    DefaultSchedulerMethod, DetokenizationRequest, DeviceLayerMapMetadata, DeviceMapMetadata,
+    DeviceMapSetting, DiffusionGenerationParams, DiffusionLoaderBuilder, DrySamplingParams,
+    EmbeddingLoaderBuilder, EmbeddingSpecificConfig, GGMLLoaderBuilder, GGMLSpecificConfig,
+    GGUFLoaderBuilder, GGUFSpecificConfig, ImageGenerationResponse, ImageGenerationResponseFormat,
+    LlguidanceGrammar, Loader, LoraAdapterError as CoreLoraAdapterError, LoraAdapterLoadPolicy,
+    LoraAdapterSpec, LoraRuntimeConfig, MemoryGpuConfig, MistralRs, MistralRsBuilder,
+    MistralRsError, MtpConfig, MtpRuntimeConfig, MultimodalLoaderBuilder, MultimodalSpecificConfig,
+    NormalLoaderBuilder, NormalRequest, NormalSpecificConfig, PagedAttentionConfig, PagedCacheType,
+    Request as _Request, RequestMessage, Response, ResponseOk, SamplingParams, SchedulerConfig,
+    SearchEmbeddingModel, SpeculativeConfig, SpeechLoader, StopTokens, TokenSource,
+    TokenizationRequest, Tool, Topology, UqffWriteConfig,
 };
 use mistralrs_core::{
     CalledFunction, SearchCallback, SearchFunctionParameters, SearchResult, ToolCallback,
@@ -1239,11 +1239,18 @@ impl Runner {
         };
         let cache_config = cache_config
             .map(|config| config.with_serving_capacity(max_seqs))
-            .transpose()?;
+            .transpose()?
+            .map(|config| config.with_recurrent_prefix_capacity(prefix_cache_n));
         let mtp_config = mtp_model.map(|model| MtpConfig::new(model, mtp_n_predict));
-        let cache_config =
-            reserve_external_mtp_memory(cache_config, mtp_config.as_ref(), &dtype, device)
-                .map_err(PyApiErr::from)?;
+        let mtp_runtime = MtpRuntimeConfig::new(prefix_cache_n);
+        let cache_config = reserve_external_mtp_memory_with_runtime(
+            cache_config,
+            mtp_config.as_ref(),
+            mtp_runtime,
+            &dtype,
+            device,
+        )
+        .map_err(PyApiErr::from)?;
 
         let pipeline = loader
             .load_model_from_hf(
@@ -1261,7 +1268,7 @@ impl Runner {
         if let Some(mtp_config) = mtp_config {
             pipeline
                 .blocking_lock()
-                .attach_speculative(SpeculativeConfig::Mtp(mtp_config))
+                .attach_speculative_with_runtime(SpeculativeConfig::Mtp(mtp_config), mtp_runtime)
                 .map_err(|e| PyApiErr::from(&e))?;
         }
 
@@ -1271,6 +1278,7 @@ impl Runner {
                 SchedulerConfig::PagedAttentionMeta {
                     max_num_seqs: max_seqs,
                     max_num_batched_tokens: mistralrs_core::DEFAULT_MAX_NUM_BATCHED_TOKENS,
+                    max_prefill_chunk_tokens: mistralrs_core::DEFAULT_MAX_PREFILL_CHUNK_TOKENS,
                     max_decode_steps_before_prefill:
                         mistralrs_core::DEFAULT_MAX_DECODE_STEPS_BEFORE_PREFILL,
                     config: cache_config.clone(),
@@ -1661,6 +1669,7 @@ impl Runner {
 
             let model_request = _Request::Normal(Box::new(NormalRequest {
                 id: next_request_id(),
+                queued_at: None,
                 messages,
                 sampling_params: SamplingParams {
                     temperature: request.temperature,
@@ -1678,6 +1687,7 @@ impl Runner {
                     min_p: request.min_p,
                     dry_params,
                 },
+                seed: None,
                 response: tx,
                 return_logprobs: request.logprobs,
                 is_streaming: request.stream,
@@ -1773,8 +1783,10 @@ impl Runner {
 
                     let model_request = _Request::Normal(Box::new(NormalRequest {
                         id: request_id,
+                        queued_at: None,
                         messages: message,
                         sampling_params: SamplingParams::deterministic(),
+                        seed: None,
                         response: tx,
                         return_logprobs: false,
                         is_streaming: false,
@@ -1884,6 +1896,7 @@ impl Runner {
 
             let model_request = _Request::Normal(Box::new(NormalRequest {
                 id: next_request_id(),
+                queued_at: None,
                 messages: RequestMessage::Completion {
                     text: request.prompt.clone(),
                     echo_prompt: request.echo_prompt,
@@ -1905,6 +1918,7 @@ impl Runner {
                     min_p: request.min_p,
                     dry_params,
                 },
+                seed: None,
                 response: tx,
                 return_logprobs: false,
                 is_streaming: false,
@@ -1970,6 +1984,7 @@ impl Runner {
 
         let request = _Request::Normal(Box::new(NormalRequest {
             id: 0,
+            queued_at: None,
             messages: RequestMessage::ImageGeneration {
                 prompt: prompt.to_string(),
                 format: response_format,
@@ -1977,6 +1992,7 @@ impl Runner {
                 save_file,
             },
             sampling_params: SamplingParams::deterministic(),
+            seed: None,
             response: tx,
             return_logprobs: false,
             is_streaming: false,
@@ -2039,8 +2055,10 @@ impl Runner {
 
         let request = _Request::Normal(Box::new(NormalRequest {
             id: 0,
+            queued_at: None,
             messages: RequestMessage::SpeechGeneration { prompt },
             sampling_params: SamplingParams::deterministic(),
+            seed: None,
             response: tx,
             return_logprobs: false,
             is_streaming: false,
@@ -2612,6 +2630,7 @@ impl Runner {
 
             let model_request = _Request::Normal(Box::new(NormalRequest {
                 id: next_request_id(),
+                queued_at: None,
                 messages,
                 sampling_params: SamplingParams {
                     temperature: request.temperature,
@@ -2629,6 +2648,7 @@ impl Runner {
                     min_p: request.min_p,
                     dry_params,
                 },
+                seed: None,
                 response: tx,
                 return_logprobs: request.logprobs,
                 is_streaming: request.stream,
@@ -2730,6 +2750,7 @@ impl Runner {
 
             let model_request = _Request::Normal(Box::new(NormalRequest {
                 id: next_request_id(),
+                queued_at: None,
                 messages: RequestMessage::Completion {
                     text: request.prompt.clone(),
                     echo_prompt: request.echo_prompt,
@@ -2751,6 +2772,7 @@ impl Runner {
                     min_p: request.min_p,
                     dry_params,
                 },
+                seed: None,
                 response: tx,
                 return_logprobs: false,
                 is_streaming: false,
@@ -3237,6 +3259,7 @@ fn mistralrs(_py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
 mod mtp_reservation_tests {
     use std::collections::HashMap;
 
+    use mistralrs_core::reserve_external_mtp_memory;
     use safetensors::{serialize_to_file, tensor::Dtype as SafeDtype, tensor::TensorView};
     use tempfile::tempdir;
 

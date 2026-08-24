@@ -284,8 +284,10 @@ async fn oneshot_text(mistralrs: Arc<MistralRs>, ctx: OneshotCtx, text: String) 
     let session_id = (do_code_exec || do_shell).then(|| uuid::Uuid::new_v4().to_string());
     let req = Request::Normal(Box::new(NormalRequest {
         id: mistralrs.next_request_id(),
+        queued_at: None,
         messages: request_messages,
         sampling_params: sampling_params.clone(),
+        seed: None,
         response: tx,
         return_logprobs: false,
         is_streaming: true,
@@ -465,8 +467,10 @@ async fn oneshot_multimodal(mistralrs: Arc<MistralRs>, ctx: OneshotCtx, input: O
     let session_id = (do_code_exec || do_shell).then(|| uuid::Uuid::new_v4().to_string());
     let req = Request::Normal(Box::new(NormalRequest {
         id: mistralrs.next_request_id(),
+        queued_at: None,
         messages: request_messages,
         sampling_params: sampling_params.clone(),
+        seed: None,
         response: tx,
         return_logprobs: false,
         is_streaming: true,
@@ -963,8 +967,10 @@ async fn text_interactive_mode(
         let (tx, mut rx) = channel(10_000);
         let req = Request::Normal(Box::new(NormalRequest {
             id: mistralrs.next_request_id(),
+            queued_at: None,
             messages: request_messages,
             sampling_params: sampling_params.clone(),
+            seed: None,
             response: tx,
             return_logprobs: false,
             is_streaming: true,
@@ -1747,8 +1753,10 @@ async fn multimodal_interactive_mode(
         let (tx, mut rx) = channel(10_000);
         let req = Request::Normal(Box::new(NormalRequest {
             id: mistralrs.next_request_id(),
+            queued_at: None,
             messages: request_messages,
             sampling_params: sampling_params.clone(),
+            seed: None,
             response: tx,
             return_logprobs: false,
             is_streaming: true,
@@ -1906,6 +1914,7 @@ async fn diffusion_interactive_mode(
         let (tx, mut rx) = channel(10_000);
         let req = Request::Normal(Box::new(NormalRequest {
             id: 0,
+            queued_at: None,
             messages: RequestMessage::ImageGeneration {
                 prompt: prompt.to_string(),
                 format: ImageGenerationResponseFormat::Url,
@@ -1913,6 +1922,7 @@ async fn diffusion_interactive_mode(
                 save_file: None,
             },
             sampling_params: SamplingParams::deterministic(),
+            seed: None,
             response: tx,
             return_logprobs: false,
             is_streaming: false,
@@ -2029,10 +2039,12 @@ async fn speech_interactive_mode(
         let (tx, mut rx) = channel(10_000);
         let req = Request::Normal(Box::new(NormalRequest {
             id: 0,
+            queued_at: None,
             messages: RequestMessage::SpeechGeneration {
                 prompt: prompt.to_string(),
             },
             sampling_params: SamplingParams::deterministic(),
+            seed: None,
             response: tx,
             return_logprobs: false,
             is_streaming: false,

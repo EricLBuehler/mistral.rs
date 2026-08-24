@@ -25,6 +25,12 @@ pub struct GdnForwardStash {
     pub a: Tensor,
 }
 
+enum GdnCoreOutput {
+    Recurrent(Tensor),
+    #[cfg(feature = "cuda")]
+    Normalized(Tensor),
+}
+
 fn index_select_rows(source: &Tensor, indices: &Tensor) -> Result<Tensor> {
     if source.is_contiguous() {
         source.index_select(indices, 0)
@@ -103,7 +109,7 @@ impl GatedDeltaNet {
             || !pool.device().is_cuda()
             || !matches!(activation_dtype, DType::F16 | DType::BF16)
             || pool.conv_dtype() != activation_dtype
-            || pool.recurrent_dtype() != DType::F32
+            || !crate::cuda::gdn::recurrent_state_dtype_supported(pool.recurrent_dtype())
             || !speculative_checkpoint_dims_supported(&self.dims)
         {
             return false;
@@ -134,7 +140,7 @@ impl GatedDeltaNet {
                     state_dims.1,
                 ]
             || pool.conv_state.dtype() != activation_dtype
-            || pool.recurrent_state.dtype() != DType::F32
+            || pool.recurrent_state.dtype() != pool.recurrent_dtype()
             || !pool.conv_state.is_contiguous()
             || !pool.recurrent_state.is_contiguous()
         {
@@ -209,8 +215,8 @@ impl GatedDeltaNet {
         ]
         .into_iter()
         .any(|tensor| tensor.dtype() != activation_dtype)
-            || initial_recurrent_state.dtype() != DType::F32
-            || pool.recurrent_state.dtype() != DType::F32
+            || !crate::cuda::gdn::recurrent_state_dtype_supported(initial_recurrent_state.dtype())
+            || initial_recurrent_state.dtype() != pool.recurrent_state.dtype()
             || !pool.conv_state.is_contiguous()
             || !pool.recurrent_state.is_contiguous()
         {
@@ -311,8 +317,8 @@ impl GatedDeltaNet {
             None
         };
         #[cfg(not(feature = "cuda"))]
-        let checkpointed: Option<(Tensor, Tensor)> = None;
-        let (convolved_qkv, y) = match checkpointed {
+        let checkpointed: Option<(Tensor, GdnCoreOutput)> = None;
+        let (convolved_qkv, output) = match checkpointed {
             Some(checkpointed) => checkpointed,
             None => {
                 let convolved_qkv = backend::causal_conv1d(
@@ -334,7 +340,7 @@ impl GatedDeltaNet {
                     cache,
                     dtype,
                 )?;
-                (convolved_qkv, y)
+                (convolved_qkv, GdnCoreOutput::Recurrent(y))
             }
         };
         if let Some(stash_out) = stash_out {
@@ -346,7 +352,7 @@ impl GatedDeltaNet {
             });
         }
 
-        self.finish_forward(y, projected.z, batch_size, seq_len, dtype)
+        self.finish_forward(output, projected.z, batch_size, seq_len, dtype)
     }
 
     #[cfg(feature = "cuda")]
@@ -356,7 +362,7 @@ impl GatedDeltaNet {
         projected: &GdnProjection,
         cache: &GdnLayerCache,
         checkpoint_lanes: usize,
-    ) -> Result<(Tensor, Tensor)> {
+    ) -> Result<(Tensor, GdnCoreOutput)> {
         let (batch_size, seq_len, _) = mixed_qkv.dims3()?;
         let active_slots = cache
             .slots
@@ -376,6 +382,17 @@ impl GatedDeltaNet {
                 checkpoint_lanes,
             },
         )?;
+        let fused_norm = cache.state_layout == RecurrentStateLayout::GdnValueMajor
+            && self.dims.head_k_dim == crate::cuda::gdn::GDN_DECODE_K_DIM
+            && self.dims.head_v_dim == crate::cuda::gdn::GDN_DECODE_V_DIM
+            && seq_len <= crate::cuda::gdn::GDN_SPEC_FUSED_MAX_TOKENS
+            && projected.z.dtype() == mixed_qkv.dtype()
+            && self.norm.weight.dtype() == mixed_qkv.dtype();
+        let post_op = fused_norm.then_some(crate::cuda::gdn::GdnSpeculativeRmsNormGate {
+            gate: &projected.z,
+            weight: &self.norm.weight,
+            eps: self.norm.eps(),
+        });
         let output = crate::cuda::gdn::speculative_recurrence_checkpoints_cuda(
             crate::cuda::gdn::GdnSpeculativeRecurrenceCheckpoints {
                 mixed_qkv: &convolved_qkv,
@@ -392,17 +409,22 @@ impl GatedDeltaNet {
                 head_v_dim: self.dims.head_v_dim,
                 tiled_v_heads: self.dims.v_head_layout == GdnVHeadLayout::Tiled,
                 state_layout: cache.state_layout,
+                post_op,
             },
         )?;
-        let output = output
-            .reshape((
-                batch_size,
-                self.dims.num_v_heads,
-                seq_len,
-                self.dims.head_v_dim,
-            ))?
-            .transpose(1, 2)?;
-        Ok((convolved_qkv, output))
+        if fused_norm {
+            Ok((convolved_qkv, GdnCoreOutput::Normalized(output)))
+        } else {
+            let output = output
+                .reshape((
+                    batch_size,
+                    self.dims.num_v_heads,
+                    seq_len,
+                    self.dims.head_v_dim,
+                ))?
+                .transpose(1, 2)?;
+            Ok((convolved_qkv, GdnCoreOutput::Recurrent(output)))
+        }
     }
 
     /// Advance a gathered cache over the selected rows of a stashed forward without rerunning projections.
@@ -492,13 +514,17 @@ impl GatedDeltaNet {
 
     fn finish_forward(
         &self,
-        y: Tensor,
+        output: GdnCoreOutput,
         z: Tensor,
         batch_size: usize,
         seq_len: usize,
         _dtype: DType,
     ) -> Result<Tensor> {
-        let y = self.norm.forward(&y, &z)?;
+        let y = match output {
+            GdnCoreOutput::Recurrent(y) => self.norm.forward(&y, &z)?,
+            #[cfg(feature = "cuda")]
+            GdnCoreOutput::Normalized(y) => y,
+        };
         let y = y.reshape((batch_size, seq_len, self.dims.value_dim))?;
         let y = shard_out_proj_input(y, self.out_proj_input_shard)?;
         self.out_proj.forward(&y)

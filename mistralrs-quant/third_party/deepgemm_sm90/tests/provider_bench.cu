@@ -124,7 +124,7 @@ int main(int argc, char** argv) {
       {"gate_up", 34816, 5120},
       {"down", 5120, 17408},
   };
-  for (uint32_t m : {1U, 8U, 16U}) {
+  for (uint32_t m : {1U, 8U, 16U, 21U, 24U}) {
     for (const auto& shape : shapes) {
       if (!benchmark(shape, m, include_dir, stream)) {
         return 1;

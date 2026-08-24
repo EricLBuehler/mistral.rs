@@ -2812,6 +2812,7 @@ pub fn qk_rms_norm_mrope(
         &cos,
         &sin,
         is_gpt_neox,
+        crate::ops::QkRopeOutputLayout::HeadsFirst,
     )? {
         return Ok((q, k));
     }

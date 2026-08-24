@@ -387,8 +387,10 @@ async fn run_single_bench(
 
     let req = Request::Normal(Box::new(NormalRequest {
         id: mistralrs.next_request_id(),
+        queued_at: None,
         messages: RequestMessage::CompletionTokens(tokens),
         sampling_params,
+        seed: None,
         response: tx,
         return_logprobs: false,
         is_streaming: true,
