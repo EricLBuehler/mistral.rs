@@ -2802,6 +2802,64 @@ class BatchMeasurementTests(unittest.TestCase):
             soak.fairness_short_latency_evidence([failed], 1.0, 0.05)["passed"]
         )
 
+    def test_fairness_relative_slowdown_is_gated(self) -> None:
+        healthy = soak.fairness_relative_slowdown_evidence(
+            [1.2, 2.9],
+            3.0,
+        )
+        regressed = soak.fairness_relative_slowdown_evidence(
+            [1.2, 3.1],
+            3.0,
+        )
+
+        self.assertTrue(healthy["passed"])
+        self.assertTrue(healthy["gated"])
+        self.assertFalse(regressed["passed"])
+        self.assertFalse(
+            soak.fairness_relative_slowdown_evidence([], 3.0)["passed"]
+        )
+
+    def test_fairness_requires_overlapping_decode_progress(self) -> None:
+        long = request_result(
+            case_id="long",
+            completion_tokens=4,
+            output_chunks=4,
+            finish_reason="stop",
+            output_event_times=[1.0, 2.0, 3.0, 4.0],
+        )
+        short = request_result(
+            case_id="short",
+            completion_tokens=3,
+            output_chunks=3,
+            finish_reason="stop",
+            output_event_times=[2.0, 2.5, 3.5],
+        )
+
+        evidence = soak.concurrent_decode_overlap_evidence(long, short)
+
+        self.assertTrue(evidence["passed"])
+        self.assertEqual(evidence["overlap_seconds"], 1.5)
+        short.output_event_times = [5.0, 6.0]
+        self.assertFalse(
+            soak.concurrent_decode_overlap_evidence(long, short)["passed"]
+        )
+
+    def test_overlap_output_gap_includes_window_boundaries(self) -> None:
+        result = request_result(
+            completion_tokens=5,
+            output_chunks=5,
+            finish_reason="stop",
+            output_event_times=[10.1, 10.2, 10.4, 10.6, 10.8],
+        )
+
+        healthy = soak.output_event_gap_evidence([result], 10.0, 11.0, 0.25)
+        stalled = soak.output_event_gap_evidence([result], 10.0, 11.2, 0.25)
+
+        self.assertTrue(healthy["passed"])
+        self.assertAlmostEqual(healthy["maximum_observed_gap_seconds"], 0.2)
+        self.assertFalse(stalled["passed"])
+        self.assertAlmostEqual(stalled["maximum_observed_gap_seconds"], 0.4)
+
     def test_correctness_order_keeps_c3_remainder(self) -> None:
         specs = self.specs()
 
@@ -3324,6 +3382,32 @@ class ArgumentValidationTests(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, "requires --server-pid"):
             soak.validate_args(args)
+
+    def test_acceptance_adversarial_requires_sustained_churn(self) -> None:
+        args = self.adversarial_args(16)
+        args.churn_rounds = soak.DEFAULT_ADVERSARIAL_CHURN_ROUNDS - 1
+
+        with self.assertRaisesRegex(ValueError, "--churn-rounds must be at least"):
+            soak.validate_args(args)
+
+        args.acceptance_grade = False
+        args.require_mtp = False
+        soak.validate_args(args)
+
+    def test_acceptance_adversarial_cannot_weaken_overlap_stall_limits(self) -> None:
+        decode_gap = self.adversarial_args(16)
+        decode_gap.max_overlap_decode_gap_seconds = (
+            soak.DEFAULT_MAX_OVERLAP_DECODE_GAP_SECONDS + 0.01
+        )
+        prefill_ttft = self.adversarial_args(16)
+        prefill_ttft.max_overlap_prefill_ttft_seconds = (
+            soak.DEFAULT_MAX_OVERLAP_PREFILL_TTFT_SECONDS + 1.0
+        )
+
+        with self.assertRaisesRegex(ValueError, "decode-gap-seconds must be at most"):
+            soak.validate_args(decode_gap)
+        with self.assertRaisesRegex(ValueError, "prefill-ttft-seconds must be at most"):
+            soak.validate_args(prefill_ttft)
 
     def test_diagnostic_adversarial_accepts_focused_c4(self) -> None:
         args = self.adversarial_args(16)

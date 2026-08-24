@@ -48,6 +48,7 @@ ADVERSARIAL_LONG_RESIDENT_CONTEXT_TOKENS = 100_000
 ADVERSARIAL_LONG_RESIDENT_REQUESTS = 3
 DEFAULT_ADVERSARIAL_LONG_RESIDENT_MAX_TOKENS = 64
 DEFAULT_ADVERSARIAL_LONG_RESIDENT_MIN_DECODE_TOK_S = {1: 190.0, 3: 300.0}
+DEFAULT_ADVERSARIAL_CHURN_ROUNDS = 3
 DEFAULT_CONTEXT_MIX = ((1_024, 45), (8_192, 30), (32_768, 20), (100_000, 5))
 DEFAULT_PRODUCTION_DURATION_SECONDS = 14_400.0
 DEFAULT_TELEMETRY_INTERVAL_SECONDS = 5.0
@@ -102,6 +103,8 @@ DEFAULT_OVERLAP_BASELINE_SECONDS = 2.0
 DEFAULT_OVERLAP_QUEUE_POLL_SECONDS = 0.01
 DEFAULT_MIN_OVERLAP_BASELINE_COMPLETIONS = 2
 DEFAULT_MIN_OVERLAP_BASELINE_EVENTS = 256
+DEFAULT_MAX_OVERLAP_DECODE_GAP_SECONDS = 0.25
+DEFAULT_MAX_OVERLAP_PREFILL_TTFT_SECONDS = 30.0
 DEFAULT_SPECULATIVE_PREFIX_REPLAY_TOKENS = 0
 DEFAULT_MAX_PROBE_LATENCY_SLOWDOWN = 3.0
 DEFAULT_MAX_FINAL_C1_LATENCY_SLOWDOWN = 1.20
@@ -130,6 +133,9 @@ DEFAULT_MULTIMODAL_EXPECTED_ATTRIBUTES = (
     ("white lettering", "white text", "white letters"),
     ("orange lettering", "orange text", "orange letters"),
 )
+ADVERSARIAL_FAIRNESS_SHORT_CONTEXT_TOKENS = 1_024
+ADVERSARIAL_FAIRNESS_LONG_CONTEXT_TOKENS = 100_000
+ADVERSARIAL_FAIRNESS_MIN_OVERLAP_OUTPUT_EVENTS = 2
 DEFAULT_QUALITY_REPLAY_CONCURRENCY = 16
 DEFAULT_QUALITY_REPLAY_PRESSURE_WAVES = 8
 DEFAULT_QUALITY_REPLAY_PRESSURE_ENTRIES = 16
@@ -1745,6 +1751,99 @@ def overlap_window_evidence(
         else None
     )
     return baseline, overlapped
+
+
+def output_event_gap_evidence(
+    results: Sequence[RequestResult],
+    started: float,
+    ended: float | None,
+    maximum_gap_seconds: float,
+) -> dict[str, Any]:
+    event_times = sorted(
+        timestamp
+        for result in results
+        for timestamp in result.output_event_times
+        if ended is not None
+        and started <= timestamp <= ended
+        and math.isfinite(timestamp)
+    )
+    if ended is None or ended <= started or not event_times:
+        maximum_observed_gap = None
+    else:
+        maximum_observed_gap = max(
+            event_times[0] - started,
+            ended - event_times[-1],
+            *(right - left for left, right in zip(event_times, event_times[1:])),
+        )
+    return {
+        "passed": (
+            maximum_observed_gap is not None
+            and maximum_observed_gap <= maximum_gap_seconds
+        ),
+        "window_started": started,
+        "window_ended": ended,
+        "observed_output_events": len(event_times),
+        "maximum_observed_gap_seconds": maximum_observed_gap,
+        "maximum_allowed_gap_seconds": maximum_gap_seconds,
+    }
+
+
+def concurrent_decode_overlap_evidence(
+    left: RequestResult,
+    right: RequestResult,
+) -> dict[str, Any]:
+    left_events = sorted(
+        timestamp for timestamp in left.output_event_times if math.isfinite(timestamp)
+    )
+    right_events = sorted(
+        timestamp for timestamp in right.output_event_times if math.isfinite(timestamp)
+    )
+    instrumentation_complete = len(left_events) >= 2 and len(right_events) >= 2
+    overlap_started = (
+        max(left_events[0], right_events[0]) if instrumentation_complete else None
+    )
+    overlap_ended = (
+        min(left_events[-1], right_events[-1]) if instrumentation_complete else None
+    )
+    overlap_seconds = (
+        max(0.0, overlap_ended - overlap_started)
+        if overlap_started is not None and overlap_ended is not None
+        else None
+    )
+    left_overlap_events = (
+        sum(overlap_started <= timestamp <= overlap_ended for timestamp in left_events)
+        if overlap_seconds is not None and overlap_seconds > 0
+        else 0
+    )
+    right_overlap_events = (
+        sum(overlap_started <= timestamp <= overlap_ended for timestamp in right_events)
+        if overlap_seconds is not None and overlap_seconds > 0
+        else 0
+    )
+    return {
+        "passed": (
+            left.ok
+            and right.ok
+            and instrumentation_complete
+            and overlap_seconds is not None
+            and overlap_seconds > 0
+            and left_overlap_events >= ADVERSARIAL_FAIRNESS_MIN_OVERLAP_OUTPUT_EVENTS
+            and right_overlap_events >= ADVERSARIAL_FAIRNESS_MIN_OVERLAP_OUTPUT_EVENTS
+        ),
+        "instrumentation_complete": instrumentation_complete,
+        "left_case_id": left.case_id,
+        "right_case_id": right.case_id,
+        "left_output_events": len(left_events),
+        "right_output_events": len(right_events),
+        "left_overlap_events": left_overlap_events,
+        "right_overlap_events": right_overlap_events,
+        "minimum_overlap_events_per_request": (
+            ADVERSARIAL_FAIRNESS_MIN_OVERLAP_OUTPUT_EVENTS
+        ),
+        "overlap_started": overlap_started,
+        "overlap_ended": overlap_ended,
+        "overlap_seconds": overlap_seconds,
+    }
 
 
 def summarize_batch(
@@ -5259,7 +5358,7 @@ async def adversarial_mode(
 
     short_spec = retrieval_spec(
         client,
-        shortest,
+        ADVERSARIAL_FAIRNESS_SHORT_CONTEXT_TOKENS,
         "fairness-short-b",
         args.seed + 10_000,
         args.max_tokens,
@@ -5285,7 +5384,7 @@ async def adversarial_mode(
     long_specs = {
         order: retrieval_spec(
             client,
-            longest,
+            ADVERSARIAL_FAIRNESS_LONG_CONTEXT_TOKENS,
             f"fairness-long-a-{order}",
             args.seed + 10_001 + index,
             args.max_tokens,
@@ -5293,6 +5392,16 @@ async def adversarial_mode(
         )
         for index, order in enumerate(("a_then_b", "b_then_a"))
     }
+    long_warmup, long_warmup_summary = await run_batch(
+        client,
+        list(long_specs.values()),
+        len(long_specs),
+        writer,
+        "fairness-long-warmup",
+        keep_output=True,
+    )
+    summaries.append(long_warmup_summary)
+    await record_retrieval_quality("fairness-long-warmup", long_warmup)
     warmup_short = warmup[0]
     isolated_short = isolated[0]
     fairness_runs: list[dict[str, Any]] = []
@@ -5317,6 +5426,10 @@ async def adversarial_mode(
         long_result = next(result for result in pair if result.case_id == long_spec.case_id)
         concurrent_short_results.append(short_result)
         concurrent_long_results.append(long_result)
+        decode_overlap = concurrent_decode_overlap_evidence(
+            long_result,
+            short_result,
+        )
         fairness_runs.append(
             {
                 "order": order,
@@ -5330,6 +5443,7 @@ async def adversarial_mode(
                 "short_equal_to_isolated": (
                     short_result.output_transcript == isolated_short.output_transcript
                 ),
+                "decode_overlap": decode_overlap,
             }
         )
     fairness_slowdowns = [
@@ -5337,15 +5451,10 @@ async def adversarial_mode(
         for run in fairness_runs
         for value in (run["short_ttft_slowdown"], run["short_tpot_slowdown"])
     ]
-    relative_slowdown = {
-        "gated": False,
-        "maximum": args.fairness_max_slowdown,
-        "values": fairness_slowdowns,
-        "within_threshold": all(
-            value is not None and value <= args.fairness_max_slowdown
-            for value in fairness_slowdowns
-        ),
-    }
+    relative_slowdown = fairness_relative_slowdown_evidence(
+        fairness_slowdowns,
+        args.fairness_max_slowdown,
+    )
     absolute_short_latency = fairness_short_latency_evidence(
         concurrent_short_results,
         args.fairness_max_short_ttft_seconds,
@@ -5354,6 +5463,7 @@ async def adversarial_mode(
     fairness_semantic_results = [
         warmup_short,
         isolated_short,
+        *long_warmup,
         *concurrent_short_results,
         *concurrent_long_results,
     ]
@@ -5366,7 +5476,9 @@ async def adversarial_mode(
     fairness_passed = (
         all(result.ok for result in fairness_semantic_results)
         and warmup_short.output_transcript == isolated_short.output_transcript
+        and relative_slowdown["passed"]
         and absolute_short_latency["passed"]
+        and all(run["decode_overlap"]["passed"] for run in fairness_runs)
         and all(fairness_semantic)
     )
     fairness_result = {
@@ -5375,6 +5487,9 @@ async def adversarial_mode(
         "relative_slowdown": relative_slowdown,
         "absolute_short_latency": absolute_short_latency,
         "stagger_seconds": args.fairness_stagger_seconds,
+        "short_context_tokens": ADVERSARIAL_FAIRNESS_SHORT_CONTEXT_TOKENS,
+        "long_context_tokens": ADVERSARIAL_FAIRNESS_LONG_CONTEXT_TOKENS,
+        "long_prefix_warmup": long_warmup_summary,
         "warmup_equal_to_isolated": (
             warmup_short.output_transcript == isolated_short.output_transcript
         ),
@@ -5539,12 +5654,20 @@ async def adversarial_mode(
         overlap_decode_results,
         args.min_output_event_coverage,
     )
+    overlap_decode_gap = output_event_gap_evidence(
+        overlap_decode_results,
+        prefill_started,
+        prefill_first_token,
+        args.max_overlap_decode_gap_seconds,
+    )
     overlap_evidence = {
         "passed": (
             baseline_completions >= args.min_overlap_baseline_completions
             and baseline_decode_tokens is not None
             and baseline_decode_tokens >= args.min_overlap_baseline_events
             and overlap_prefill.ttft_seconds is not None
+            and overlap_prefill.ttft_seconds
+            <= args.max_overlap_prefill_ttft_seconds
             and baseline_decode_tokens > 0
             and overlapped_decode_tokens is not None
             and overlapped_decode_tokens > 0
@@ -5555,6 +5678,7 @@ async def adversarial_mode(
             and overlap_decode_ratio >= args.min_overlap_decode_throughput_ratio
             and overlap_prefill_semantic_ok
             and overlap_decode_semantic_ok
+            and overlap_decode_gap["passed"]
             and overlap_output_event_coverage["output_event_coverage_ok"]
         ),
         "decode_workers": args.overlap_short_requests,
@@ -5564,6 +5688,7 @@ async def adversarial_mode(
         "prefill_overlap_seconds": overlapped_seconds,
         "prefill_completion_seconds": prefill_completed - prefill_started,
         "prefill_ttft_seconds": overlap_prefill.ttft_seconds,
+        "maximum_prefill_ttft_seconds": args.max_overlap_prefill_ttft_seconds,
         "baseline_completions_before_prefill": baseline_completions,
         "minimum_baseline_completions": args.min_overlap_baseline_completions,
         "minimum_baseline_output_events": args.min_overlap_baseline_events,
@@ -5588,6 +5713,7 @@ async def adversarial_mode(
         ),
         "prefill_semantic_ok": overlap_prefill_semantic_ok,
         "all_decode_semantic_ok": overlap_decode_semantic_ok,
+        "decode_output_gap": overlap_decode_gap,
         **overlap_output_event_coverage,
         "minimum_output_event_coverage": args.min_output_event_coverage,
     }
@@ -5837,6 +5963,7 @@ async def adversarial_mode(
     )[0]
     await record_runtime("adversarial-cancellation-timeout-retry", False)
 
+    pre_burst_metrics = await safe_metrics(client, writer, "adversarial-pre-burst")
     burst_specs = [
         RequestSpec(
             case_id=f"burst-{index:04d}",
@@ -5862,6 +5989,14 @@ async def adversarial_mode(
     )
     summaries.append(burst_summary)
     await record_quality("adversarial-burst", burst_results)
+    burst_cleanup_ok, _, burst_cleanup_detail = await poll_for_cleanup(
+        client,
+        writer,
+        pre_burst_metrics,
+        args.cleanup_timeout_seconds,
+        args.cleanup_poll_seconds,
+        "adversarial-burst-cleanup",
+    )
     await record_runtime("adversarial-burst", True)
 
     prefix_pressure = await run_prefix_pressure_workflow(args, client, writer)
@@ -6015,6 +6150,7 @@ async def adversarial_mode(
         and timeout_server_evidence["passed"]
         and timeout_cleanup_ok
         and retry_semantic_ok
+        and burst_cleanup_ok
         and kv_ownership["passed"]
         and prefix_cache_stage_passed
         and max_seqs_queue_evidence["passed"]
@@ -6064,6 +6200,8 @@ async def adversarial_mode(
         "kv_ownership_gate_complete": kv_ownership["passed"],
         "kv_ownership": kv_ownership,
         "retry_succeeded": retry_summary["errors"] == 0 and retry_semantic_ok,
+        "burst_cleanup_ok": burst_cleanup_ok,
+        "burst_cleanup_detail": burst_cleanup_detail,
         "prefix_outputs_equal": prefix_correct,
         "prefix_pressure": prefix_pressure,
         "prefix_cache_stages": prefix_cache_stages,
@@ -6072,6 +6210,7 @@ async def adversarial_mode(
             cancel_cleanup_ok
             and cancel_retry_cleanup_ok
             and timeout_cleanup_ok
+            and burst_cleanup_ok
             and prefix_pressure["cleanup_ok"]
         ),
         "post_cancel_sequences_running": running_after_cancel,
@@ -6708,6 +6847,23 @@ def exact_throughput_threshold_evidence(
         "summary_counts": {str(key): value for key, value in sorted(counts.items())},
         "exact_concurrency_cohort": exact_cohort,
         "measurements": measurements,
+    }
+
+
+def fairness_relative_slowdown_evidence(
+    slowdowns: Sequence[float | None],
+    maximum: float,
+) -> dict[str, Any]:
+    values = list(slowdowns)
+    within_threshold = bool(values) and all(
+        value is not None and value <= maximum for value in values
+    )
+    return {
+        "passed": within_threshold,
+        "gated": True,
+        "maximum": maximum,
+        "values": values,
+        "within_threshold": within_threshold,
     }
 
 
@@ -12528,6 +12684,16 @@ def build_parser() -> argparse.ArgumentParser:
         required=True,
     )
     adversarial.add_argument(
+        "--max-overlap-decode-gap-seconds",
+        type=float,
+        default=DEFAULT_MAX_OVERLAP_DECODE_GAP_SECONDS,
+    )
+    adversarial.add_argument(
+        "--max-overlap-prefill-ttft-seconds",
+        type=float,
+        default=DEFAULT_MAX_OVERLAP_PREFILL_TTFT_SECONDS,
+    )
+    adversarial.add_argument(
         "--min-output-event-coverage",
         type=float,
         default=DEFAULT_MIN_OUTPUT_EVENT_COVERAGE,
@@ -12576,7 +12742,9 @@ def build_parser() -> argparse.ArgumentParser:
         type=float,
         default=DEFAULT_MIN_CUDA_GRAPH_REPLAY_RATIO,
     )
-    adversarial.add_argument("--churn-rounds", type=int, default=3)
+    adversarial.add_argument(
+        "--churn-rounds", type=int, default=DEFAULT_ADVERSARIAL_CHURN_ROUNDS
+    )
     adversarial.add_argument("--churn-max-tokens", type=int, default=64)
     adversarial.add_argument(
         "--acceptance-grade",
@@ -13417,6 +13585,14 @@ def validate_args(args: argparse.Namespace) -> None:
             raise ValueError("--long-resident-max-tokens must be greater than 1")
         if (
             args.acceptance_grade
+            and args.churn_rounds < DEFAULT_ADVERSARIAL_CHURN_ROUNDS
+        ):
+            raise ValueError(
+                "acceptance-grade --churn-rounds must be at least "
+                f"{DEFAULT_ADVERSARIAL_CHURN_ROUNDS}"
+            )
+        if (
+            args.acceptance_grade
             and args.long_resident_max_tokens
             < DEFAULT_ADVERSARIAL_LONG_RESIDENT_MAX_TOKENS
         ):
@@ -13441,9 +13617,29 @@ def validate_args(args: argparse.Namespace) -> None:
             "overlap_queue_poll_seconds",
             "min_overlap_decode_events_per_second",
             "min_overlap_decode_throughput_ratio",
+            "max_overlap_decode_gap_seconds",
+            "max_overlap_prefill_ttft_seconds",
         ):
             if getattr(args, name) <= 0:
                 raise ValueError(f"--{name.replace('_', '-')} must be positive")
+        if (
+            args.acceptance_grade
+            and args.max_overlap_decode_gap_seconds
+            > DEFAULT_MAX_OVERLAP_DECODE_GAP_SECONDS
+        ):
+            raise ValueError(
+                "acceptance-grade --max-overlap-decode-gap-seconds must be at most "
+                f"{DEFAULT_MAX_OVERLAP_DECODE_GAP_SECONDS}"
+            )
+        if (
+            args.acceptance_grade
+            and args.max_overlap_prefill_ttft_seconds
+            > DEFAULT_MAX_OVERLAP_PREFILL_TTFT_SECONDS
+        ):
+            raise ValueError(
+                "acceptance-grade --max-overlap-prefill-ttft-seconds must be at most "
+                f"{DEFAULT_MAX_OVERLAP_PREFILL_TTFT_SECONDS}"
+            )
         if len(set(args.throughput_concurrencies)) != len(
             args.throughput_concurrencies
         ):
