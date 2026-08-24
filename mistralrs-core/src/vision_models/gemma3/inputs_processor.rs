@@ -22,7 +22,8 @@ use crate::{
         text_models_inputs_processor::{
             self, get_completion_input, get_prompt_input, PagedAttentionMeta,
         },
-        InputProcessorOutput, InputsProcessor, InputsProcessorType, MessagesAction, Processor,
+        InputProcessorOutput, InputsProcessor, InputsProcessorType, InputsProcessorValidationError,
+        MessagesAction, Processor,
     },
     sequence::{find_image_placeholder_ranges, Sequence},
     vision_models::{
@@ -281,9 +282,10 @@ impl InputsProcessor for Gemma3ImageProcessor {
             return Ok(());
         }
         if !self.supports_images {
-            return Err(anyhow::Error::msg(
-                "This image processor does not support images.",
-            ));
+            return Err(InputsProcessorValidationError(
+                "This image processor does not support images.".to_string(),
+            )
+            .into());
         }
 
         let re = Regex::new(BOI_TOKEN).unwrap();
@@ -294,6 +296,10 @@ impl InputsProcessor for Gemma3ImageProcessor {
             if seq.multimodal.has_changed_prompt {
                 continue;
             }
+            let images = seq
+                .clone_images()
+                .expect("Need to have images by this point.");
+            let image_count = images.len();
 
             let PreprocessedImages {
                 pixel_values,
@@ -311,16 +317,7 @@ impl InputsProcessor for Gemma3ImageProcessor {
                 tgt_sizes: _,
                 image_sizes_all: _,
                 num_crops,
-            } = self
-                .preprocess(
-                    seq.clone_images()
-                        .expect("Need to have images by this point."),
-                    vec![],
-                    config,
-                    device,
-                    (usize::MAX, usize::MAX),
-                )
-                .expect("Preprocessing failed");
+            } = self.preprocess(images, vec![], config, device, (usize::MAX, usize::MAX))?;
             let num_crops = num_crops.unwrap();
             seq.multimodal.cached_pixel_values = Some(pixel_values);
             seq.multimodal.cached_num_crops = Some(num_crops.clone());
@@ -332,6 +329,13 @@ impl InputsProcessor for Gemma3ImageProcessor {
                 .find_iter(&prompt)
                 .map(|mat| mat.start())
                 .collect::<Vec<_>>();
+            if image_indexes.len() != image_count {
+                return Err(InputsProcessorValidationError(format!(
+                    "Gemma 3 has {} image placeholders but {image_count} images",
+                    image_indexes.len()
+                ))
+                .into());
+            }
             for (num, idx) in num_crops.iter().copied().zip(image_indexes).rev() {
                 if num != 0 {
                     let formatted_image_text = format!(

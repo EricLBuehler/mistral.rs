@@ -172,6 +172,9 @@ use prompt_chunks::{
     build_prompt_chunk_plan, next_prompt_chunk_group, recurrent_checkpoint_boundary,
 };
 
+pub(crate) use self::inputs_processor::{
+    is_inputs_processor_validation_error, InputsProcessorValidationError,
+};
 pub use self::inputs_processor::{
     text_models_inputs_processor, InputsProcessor, InputsProcessorType,
 };

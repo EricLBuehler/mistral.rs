@@ -17,7 +17,8 @@ use crate::{
             self, get_completion_input, get_completion_input_windowed, get_prompt_input,
             PagedAttentionMeta,
         },
-        InputProcessorOutput, InputsProcessor, InputsProcessorType, MessagesAction, Processor,
+        InputProcessorOutput, InputsProcessor, InputsProcessorType, InputsProcessorValidationError,
+        MessagesAction, Processor,
     },
     sequence::{
         build_mm_features_from_ranges, build_mm_features_from_ranges_with_policy,
@@ -304,11 +305,12 @@ impl Gemma4ImageProcessor {
             return Ok(None);
         }
         if ranges.len() != per_image_dims.len() {
-            anyhow::bail!(
+            return Err(InputsProcessorValidationError(format!(
                 "Gemma 4 has {} image placeholders but {} image inputs",
                 ranges.len(),
                 per_image_dims.len()
-            );
+            ))
+            .into());
         }
         let mut expanded = Vec::with_capacity(tokens.len());
         let mut cursor = 0usize;
@@ -470,11 +472,12 @@ impl Gemma4ImageProcessor {
             return Ok(false);
         }
         if positions.len() != token_counts.len() {
-            anyhow::bail!(
+            return Err(InputsProcessorValidationError(format!(
                 "Gemma 4 has {} audio placeholders but {} audio inputs",
                 positions.len(),
                 token_counts.len()
-            );
+            ))
+            .into());
         }
         for (&position, &token_count) in positions.iter().zip(token_counts).rev() {
             let replacement = self.build_audio_sequence(token_count);
@@ -850,20 +853,57 @@ impl InputsProcessor for Gemma4ImageProcessor {
             if seq.multimodal.has_changed_prompt && !seq.mm_features().is_empty() {
                 continue;
             }
-            let mut changed_prompt = false;
+            if seq.has_images() && !self.supports_images {
+                return Err(InputsProcessorValidationError(
+                    "This Gemma 4 processor does not support image inputs".to_string(),
+                )
+                .into());
+            }
+            if seq.has_audios() && !self.supports_audio {
+                return Err(InputsProcessorValidationError(
+                    "This Gemma 4 processor does not support audio inputs".to_string(),
+                )
+                .into());
+            }
+            let validate_raw_placeholders = !seq.multimodal.has_changed_prompt;
             let raw_audio_placeholder_count =
                 find_image_placeholder_ranges(seq.get_toks(), AUDIO_TOKEN_ID)
                     .iter()
                     .filter(|(_, length)| *length == 1)
                     .count();
-            if raw_audio_placeholder_count > 0 {
-                let audios = seq.audios().unwrap_or_default();
-                if raw_audio_placeholder_count != audios.len() {
-                    anyhow::bail!(
-                        "Gemma 4 has {raw_audio_placeholder_count} audio placeholders but {} audio inputs",
-                        audios.len()
-                    );
+            let raw_image_placeholder_count =
+                Self::raw_image_placeholder_ranges(&tokenizer, seq.get_toks()).len();
+            let raw_video_placeholder_count =
+                find_image_placeholder_ranges(seq.get_toks(), VIDEO_TOKEN_ID)
+                    .iter()
+                    .filter(|(_, length)| *length == 1)
+                    .count();
+            if validate_raw_placeholders {
+                let audio_count = seq.audios().map_or(0, |audios| audios.len());
+                let image_count = seq.images().map_or(0, |images| images.len());
+                let video_count = seq.videos().map_or(0, |videos| videos.len());
+                if raw_audio_placeholder_count != audio_count {
+                    return Err(InputsProcessorValidationError(format!(
+                        "Gemma 4 has {raw_audio_placeholder_count} audio placeholders but {audio_count} audio inputs"
+                    ))
+                    .into());
                 }
+                if raw_image_placeholder_count != image_count {
+                    return Err(InputsProcessorValidationError(format!(
+                        "Gemma 4 has {raw_image_placeholder_count} image placeholders but {image_count} image inputs"
+                    ))
+                    .into());
+                }
+                if raw_video_placeholder_count != video_count {
+                    return Err(InputsProcessorValidationError(format!(
+                        "Gemma 4 has {raw_video_placeholder_count} video placeholders but {video_count} video inputs"
+                    ))
+                    .into());
+                }
+            }
+            let mut changed_prompt = false;
+            let audios = seq.audios().unwrap_or_default();
+            if raw_audio_placeholder_count > 0 {
                 let config = other_config
                     .as_ref()
                     .expect("Need a PreProcessorConfig config.");
@@ -892,39 +932,47 @@ impl InputsProcessor for Gemma4ImageProcessor {
                 )?;
             }
 
-            if self.supports_images {
-                if let Some(images) = seq.images() {
-                    let per_image_dims = images
-                        .iter()
-                        .map(|img| {
-                            let (w, h) = img.dimensions();
-                            self.compute_resize_dims(h as usize, w as usize)
-                        })
-                        .collect::<Result<Vec<_>>>()?;
-                    self.expand_raw_image_placeholders_for_seq(
-                        &tokenizer,
-                        seq,
-                        &per_image_dims,
-                        paged_attn_metadata.as_deref_mut(),
-                    )?;
+            if let Some(images) = seq.images() {
+                if images
+                    .iter()
+                    .any(|image| image.width() == 0 || image.height() == 0)
+                {
+                    return Err(InputsProcessorValidationError(
+                        "Gemma 4 image inputs must have non-zero dimensions".to_string(),
+                    )
+                    .into());
                 }
+                let per_image_dims = images
+                    .iter()
+                    .map(|img| {
+                        let (w, h) = img.dimensions();
+                        self.compute_resize_dims(h as usize, w as usize)
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                self.expand_raw_image_placeholders_for_seq(
+                    &tokenizer,
+                    seq,
+                    &per_image_dims,
+                    paged_attn_metadata.as_deref_mut(),
+                )?;
             }
 
-            let raw_video_placeholder_count =
-                find_image_placeholder_ranges(seq.get_toks(), VIDEO_TOKEN_ID)
-                    .iter()
-                    .filter(|(_, length)| *length == 1)
-                    .count();
+            let videos = seq.videos().unwrap_or_default();
             if raw_video_placeholder_count > 0 {
-                let videos = seq.videos().unwrap_or_default();
-                if raw_video_placeholder_count != videos.len() {
-                    anyhow::bail!(
-                        "Gemma 4 has {raw_video_placeholder_count} video placeholders but {} video inputs",
-                        videos.len()
-                    );
-                }
                 if videos.iter().any(|video| video.frames.is_empty()) {
-                    anyhow::bail!("Gemma 4 video inputs must contain at least one frame");
+                    return Err(InputsProcessorValidationError(
+                        "Gemma 4 video inputs must contain at least one frame".to_string(),
+                    )
+                    .into());
+                }
+                if videos.iter().flat_map(|video| &video.frames).any(|frame| {
+                    let (width, height) = frame.dimensions();
+                    width == 0 || height == 0
+                }) {
+                    return Err(InputsProcessorValidationError(
+                        "Gemma 4 video frames must have non-zero dimensions".to_string(),
+                    )
+                    .into());
                 }
                 let mut prompt = tokenizer
                     .decode(seq.get_toks(), false)

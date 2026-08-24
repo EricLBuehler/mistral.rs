@@ -21,6 +21,34 @@ pub struct InputProcessorOutput {
     pub seq_indices: Vec<usize>,
 }
 
+#[derive(Debug, thiserror::Error)]
+#[error("{0}")]
+pub(crate) struct InputsProcessorValidationError(pub(crate) String);
+
+pub(crate) fn is_inputs_processor_validation_error(error: &anyhow::Error) -> bool {
+    error.chain().any(|source| {
+        source
+            .downcast_ref::<InputsProcessorValidationError>()
+            .is_some()
+    })
+}
+
+#[cfg(test)]
+mod validation_error_tests {
+    use super::*;
+
+    #[test]
+    fn detects_validation_errors_through_context() {
+        let error = anyhow::Error::new(InputsProcessorValidationError("bad input".to_string()))
+            .context("planning failed");
+
+        assert!(is_inputs_processor_validation_error(&error));
+        assert!(!is_inputs_processor_validation_error(&anyhow::anyhow!(
+            "internal failure"
+        )));
+    }
+}
+
 /// Processor: Prepare inputs for the model (potentially preparing the images if applicable)
 pub trait InputsProcessor {
     fn prepare_for_paged_prompt_planning(

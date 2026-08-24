@@ -67,6 +67,8 @@ impl MaintenancePoint {
 struct MaintenanceOutcome {
     graph_pressure: bool,
     transient_pressure: bool,
+    insufficient_total_capacity: bool,
+    maintenance_failed: bool,
     capture_active: bool,
     reclaim_deferred: bool,
 }
@@ -75,6 +77,8 @@ struct MaintenanceOutcome {
 pub(super) struct PromptMemoryStatus {
     pub(super) graph_pressure: bool,
     pub(super) transient_pressure: bool,
+    pub(super) insufficient_total_capacity: bool,
+    pub(super) maintenance_failed: bool,
 }
 
 struct MaintainedDevice {
@@ -137,7 +141,7 @@ impl CudaMemoryPoolMaintenance {
                     )
                     .increment(1);
                     tracing::warn!("CUDA memory maintenance failed on {device}: {err}");
-                    unavailable_outcome()
+                    maintenance_failure_outcome()
                 }
             }
         });
@@ -152,6 +156,8 @@ fn aggregate_outcomes(
     for outcome in outcomes {
         aggregate.graph_pressure |= outcome.graph_pressure;
         aggregate.transient_pressure |= outcome.transient_pressure;
+        aggregate.insufficient_total_capacity |= outcome.insufficient_total_capacity;
+        aggregate.maintenance_failed |= outcome.maintenance_failed;
         aggregate.capture_active |= outcome.capture_active;
         aggregate.reclaim_deferred |= outcome.reclaim_deferred;
     }
@@ -162,9 +168,10 @@ fn aggregate_outcomes(
     aggregate
 }
 
-fn unavailable_outcome() -> MaintenanceOutcome {
+fn maintenance_failure_outcome() -> MaintenanceOutcome {
     MaintenanceOutcome {
         transient_pressure: true,
+        maintenance_failed: true,
         reclaim_deferred: true,
         ..MaintenanceOutcome::default()
     }
@@ -175,6 +182,8 @@ impl From<MaintenanceOutcome> for PromptMemoryStatus {
         Self {
             graph_pressure: value.graph_pressure,
             transient_pressure: value.transient_pressure,
+            insufficient_total_capacity: value.insufficient_total_capacity,
+            maintenance_failed: value.maintenance_failed,
         }
     }
 }
@@ -186,11 +195,12 @@ fn maintain_device(
     transient_bytes: usize,
 ) -> candle_core::Result<MaintenanceOutcome> {
     let Some(mut snapshot) = MemoryUsage.query_cuda_allocator(&maintained.device)? else {
-        return Ok(unavailable_outcome());
+        return Ok(maintenance_failure_outcome());
     };
     record_allocator_metrics(&maintained.device, snapshot);
 
     let thresholds = PressureThresholds::from_snapshot(snapshot);
+    let exceeds_physical_capacity = transient_bytes > snapshot.total;
     let cached = snapshot
         .async_pool
         .map(|pool| pool.current.cached())
@@ -215,6 +225,7 @@ fn maintain_device(
         record_maintenance(&maintained.device, point, "trim", "deferred");
         return Ok(MaintenanceOutcome {
             transient_pressure: preflight_pressure,
+            insufficient_total_capacity: exceeds_physical_capacity,
             capture_active: true,
             reclaim_deferred: true,
             ..MaintenanceOutcome::default()
@@ -301,6 +312,7 @@ fn maintain_device(
     let graph_pressure = snapshot.available < required_free;
     let transient_required = thresholds.transient_required_available(transient_bytes, cached);
     let transient_pressure = transient_required > 0 && snapshot.available < transient_required;
+    let insufficient_total_capacity = exceeds_physical_capacity;
     if graph_pressure && !hard_pressure && !preflight_pressure {
         record_pressure(
             &maintained.device,
@@ -316,6 +328,8 @@ fn maintain_device(
     Ok(MaintenanceOutcome {
         graph_pressure,
         transient_pressure,
+        insufficient_total_capacity,
+        maintenance_failed: false,
         capture_active: false,
         reclaim_deferred: false,
     })
@@ -555,17 +569,31 @@ mod tests {
     }
 
     #[test]
-    fn unavailable_accounting_blocks_transient_work_without_reclaiming_graphs() {
+    fn failed_accounting_blocks_transient_work_without_reclaiming_graphs() {
         let aggregate = aggregate_outcomes([
             MaintenanceOutcome {
                 graph_pressure: true,
                 ..MaintenanceOutcome::default()
             },
-            unavailable_outcome(),
+            maintenance_failure_outcome(),
         ]);
         assert!(!aggregate.graph_pressure);
         assert!(aggregate.transient_pressure);
+        assert!(aggregate.maintenance_failed);
         assert!(aggregate.reclaim_deferred);
+    }
+
+    #[test]
+    fn permanent_capacity_on_any_required_device_rejects_the_prompt() {
+        let insufficient = MaintenanceOutcome {
+            insufficient_total_capacity: true,
+            ..MaintenanceOutcome::default()
+        };
+        assert!(aggregate_outcomes([insufficient, insufficient]).insufficient_total_capacity);
+        assert!(
+            aggregate_outcomes([insufficient, MaintenanceOutcome::default()])
+                .insufficient_total_capacity
+        );
     }
 
     #[test]

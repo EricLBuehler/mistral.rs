@@ -10,12 +10,12 @@ use std::{
 use crate::{
     completion_core::{
         convert_stop_tokens, get_dry_sampling_params, handle_completion_error,
-        BaseCompletionResponder,
+        handle_completion_validation_error, BaseCompletionResponder,
     },
     handler_core::{
         apply_model_override, base_process_non_streaming_response, create_response_channel,
-        request_model_override, send_request_with_model, BaseJsonModelError, ErrorToResponse,
-        JsonError, ModelErrorMessage,
+        openai_error_from_error, openai_error_response, request_model_override,
+        send_request_with_model, ApiError, ApiErrorKind, ModelErrorMessage,
     },
     lora_adapters::resolve_lora_adapter_model,
     openai::{CompletionChunkResponseBody, CompletionRequest, CompletionResponseBody, Grammar},
@@ -24,12 +24,11 @@ use crate::{
         BaseStreamer, DoneState, StreamOutcomeHandle,
     },
     types::{ExtractedMistralRsState, OnChunkCallback, OnDoneCallback, SharedMistralRsState},
-    util::{sanitize_error_message, validate_model_name},
+    util::validate_model_name,
 };
 use anyhow::Result;
 use axum::{
-    extract::{Json, State},
-    http::{self},
+    extract::{rejection::JsonRejection, Json, State},
     response::{
         sse::{Event, KeepAlive, KeepAliveStream},
         IntoResponse, Sse,
@@ -123,19 +122,21 @@ impl futures::Stream for CompletionStreamer {
                         );
                         // Done now, just need to send the [DONE]
                         self.done_state = DoneState::SendingDone;
-                        Poll::Ready(Some(Ok(openai_error_event(msg))))
+                        Poll::Ready(Some(Ok(openai_error_event(ApiError::model_error()))))
                     }
                     Response::ValidationError(e) => {
                         self.done_state = DoneState::SendingDone;
-                        Poll::Ready(Some(Ok(openai_error_event(sanitize_error_message(
+                        Poll::Ready(Some(Ok(openai_error_event(ApiError::from_error(
                             e.as_ref(),
+                            ApiErrorKind::InvalidRequest,
                         )))))
                     }
                     Response::InternalError(e) => {
                         MistralRs::maybe_log_error(self.state.clone(), &*e);
                         self.done_state = DoneState::SendingDone;
-                        Poll::Ready(Some(Ok(openai_error_event(sanitize_error_message(
+                        Poll::Ready(Some(Ok(openai_error_event(ApiError::from_error(
                             e.as_ref(),
+                            ApiErrorKind::Internal,
                         )))))
                     }
                     Response::CompletionChunk(mut response) => {
@@ -172,7 +173,10 @@ impl futures::Stream for CompletionStreamer {
                     Response::Embeddings { .. } => unreachable!(),
                 }
             }
-            Poll::Ready(None) => Poll::Ready(None),
+            Poll::Ready(None) => {
+                self.done_state = DoneState::SendingDone;
+                Poll::Ready(Some(Ok(openai_error_event(ApiError::internal()))))
+            }
             Poll::Pending => Poll::Pending,
         }
     }
@@ -182,9 +186,6 @@ impl futures::Stream for CompletionStreamer {
 pub type CompletionResponder =
     BaseCompletionResponder<CompletionResponse, KeepAliveStream<CompletionStreamer>>;
 
-/// JSON error response structure for model errors.
-type JsonModelError = BaseJsonModelError<CompletionResponse>;
-
 impl IntoResponse for CompletionResponder {
     /// Converts the completion responder into an HTTP response.
     fn into_response(self) -> axum::response::Response {
@@ -192,15 +193,12 @@ impl IntoResponse for CompletionResponder {
             CompletionResponder::Sse(s) => s.into_response(),
             CompletionResponder::Json(s) => Json(s).into_response(),
             CompletionResponder::InternalError(e) => {
-                JsonError::new(sanitize_error_message(e.as_ref()))
-                    .to_response(http::StatusCode::INTERNAL_SERVER_ERROR)
+                openai_error_from_error(e.as_ref(), ApiErrorKind::Internal)
             }
             CompletionResponder::ValidationError(e) => {
-                JsonError::new(sanitize_error_message(e.as_ref()))
-                    .to_response(http::StatusCode::UNPROCESSABLE_ENTITY)
+                openai_error_from_error(e.as_ref(), ApiErrorKind::InvalidRequest)
             }
-            CompletionResponder::ModelError(msg, response) => JsonModelError::new(msg, response)
-                .to_response(http::StatusCode::INTERNAL_SERVER_ERROR),
+            CompletionResponder::ModelError(_, _) => openai_error_response(ApiError::model_error()),
         }
     }
 }
@@ -320,32 +318,33 @@ pub fn parse_request(
 pub async fn completions(
     State(state): ExtractedMistralRsState,
     stream_outcome: Option<Extension<StreamOutcomeHandle>>,
-    Json(mut oairequest): Json<CompletionRequest>,
+    payload: Result<Json<CompletionRequest>, JsonRejection>,
 ) -> CompletionResponder {
+    let mut oairequest = match payload {
+        Ok(Json(request)) => request,
+        Err(error) => {
+            return CompletionResponder::ValidationError(Box::new(ApiError::from_json_rejection(
+                error,
+            )));
+        }
+    };
     let (tx, mut rx) = create_response_channel(None);
     let requested_model = oairequest.model.clone();
 
     if let Err(error) =
         resolve_lora_adapter_model(&state, &mut oairequest.model, &mut oairequest.adapter)
     {
-        return CompletionResponder::ValidationError(Box::new(JsonError::new(error)));
+        return CompletionResponder::ValidationError(Box::new(error));
     }
     let model_override = request_model_override(requested_model, &oairequest.model);
     let model_id = (oairequest.model != "default").then(|| oairequest.model.clone());
 
     let (request, is_streaming) = match parse_request(oairequest, state.clone(), tx) {
         Ok(x) => x,
-        Err(e) => return handle_error(state, e.into()),
+        Err(e) => return handle_completion_validation_error(state, e.into()),
     };
 
     if let Err(e) = send_request_with_model(&state, request, model_id.as_deref()).await {
-        if matches!(
-            &e,
-            mistralrs_core::MistralRsError::LoraAdapter(_)
-                | mistralrs_core::MistralRsError::ModelNotFound(_)
-        ) {
-            return CompletionResponder::ValidationError(Box::new(e));
-        }
         return handle_error(state, e.into());
     }
 

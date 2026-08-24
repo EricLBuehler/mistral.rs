@@ -218,6 +218,8 @@ pub trait Scheduler: Send + Sync {
 
     fn defer_prompt_tail(&mut self, _first_omitted_sequence_id: usize) {}
 
+    fn set_waiting_prompt_preemption_enabled(&mut self, _enabled: bool) {}
+
     fn can_continue_decode_batch(&self, _sequence_ids: &[usize]) -> bool {
         false
     }

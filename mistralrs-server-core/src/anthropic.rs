@@ -11,7 +11,7 @@ use std::{
 
 use anyhow::{Context, Result};
 use axum::{
-    extract::{Json, State},
+    extract::{rejection::JsonRejection, Json, State},
     http,
     response::{
         sse::{Event, KeepAlive, KeepAliveStream},
@@ -21,10 +21,11 @@ use axum::{
 };
 use either::Either;
 use mistralrs_core::{
-    AgentPermission, AgentToolApprovalHandler, ApproximateUserLocation,
-    ChatCompletionChunkResponse, ChatCompletionResponse, CodeExecutionPermission, Function,
-    MistralRs, ReasoningEffort, Request, RequestMessage, Response, TokenizationRequest, Tool,
-    ToolChoice, ToolType, Usage, WebSearchOptions, WebSearchUserLocation,
+    is_chat_template_request_error, AgentPermission, AgentToolApprovalHandler,
+    ApproximateUserLocation, ChatCompletionChunkResponse, ChatCompletionResponse,
+    CodeExecutionPermission, Function, MistralRs, ReasoningEffort, Request, RequestMessage,
+    Response, TokenizationRequest, Tool, ToolChoice, ToolType, Usage, WebSearchOptions,
+    WebSearchUserLocation,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
@@ -36,7 +37,10 @@ use utoipa::ToSchema;
 
 use crate::{
     chat_completion::{parse_request, ChatCompletionParseContext},
-    handler_core::{create_response_channel, send_request_with_model},
+    handler_core::{
+        create_response_channel, send_request_with_model, ApiError, ApiErrorKind,
+        ResponseErrorMessage, INTERNAL_ERROR_MESSAGE,
+    },
     mistralrs_server_router_builder::AgenticDefaults,
     openai::{
         ChatCompletionRequest, FunctionCalled, Grammar, Message, MessageContent,
@@ -48,7 +52,6 @@ use crate::{
     skills::SkillStore,
     streaming::{get_keep_alive_interval, observe_response, StreamOutcomeHandle},
     types::{ExtractedMistralRsState, SharedMistralRsState},
-    util::sanitize_error_message,
 };
 
 type BoxError = Box<dyn Error + Send + Sync + 'static>;
@@ -58,6 +61,7 @@ const ANTHROPIC_DYNAMIC_WEB_SEARCH_TYPE: &str = "web_search_20260209";
 const ANTHROPIC_WEB_SEARCH_NAME: &str = "web_search";
 const ANTHROPIC_CODE_EXECUTION_PREFIX: &str = "code_execution_";
 const ANTHROPIC_CODE_EXECUTION_NAME: &str = "code_execution";
+const ANTHROPIC_OVERLOADED_STATUS: u16 = 529;
 
 fn default_model() -> String {
     "default".to_string()
@@ -417,6 +421,28 @@ fn resolve_anthropic_thinking(
 }
 
 impl AnthropicMessagesRequest {
+    fn validate(&self, require_max_tokens: bool) -> Result<()> {
+        if self.messages.is_empty() {
+            anyhow::bail!("`messages` must contain at least one message.");
+        }
+
+        for (index, message) in self.messages.iter().enumerate() {
+            if !matches!(message.role.as_str(), "user" | "assistant") {
+                anyhow::bail!("`messages.{index}.role` must be either `user` or `assistant`.");
+            }
+        }
+
+        if require_max_tokens {
+            match self.max_tokens {
+                None => anyhow::bail!("`max_tokens` is required."),
+                Some(0) => anyhow::bail!("`max_tokens` must be greater than 0."),
+                Some(_) => {}
+            }
+        }
+
+        Ok(())
+    }
+
     fn into_chat_completion_request(self) -> Result<ChatCompletionRequest> {
         let enable_thinking =
             resolve_anthropic_thinking(self.thinking.as_ref(), self.enable_thinking)?;
@@ -1264,13 +1290,14 @@ impl AnthropicStreamer {
         }
     }
 
-    fn handle_error_event(&mut self, error_type: &'static str, message: String) {
+    fn handle_error_event(&mut self, error: ApiError) {
+        let message = error.message.clone();
         self.enqueue_json(
             "error",
             json!({
                 "type": "error",
                 "error": {
-                    "type": error_type,
+                    "type": anthropic_error_type(error.kind),
                     "message": message,
                 },
             }),
@@ -1304,20 +1331,27 @@ impl futures::Stream for AnthropicStreamer {
                                 self.state.clone(),
                                 &crate::handler_core::ModelErrorMessage(msg.to_string()),
                             );
-                            self.handle_error_event("api_error", msg);
+                            self.handle_error_event(ApiError::model_error());
                         }
                         Response::ValidationError(e) => {
-                            self.handle_error_event(
-                                "invalid_request_error",
-                                sanitize_error_message(e.as_ref()),
-                            );
+                            let error =
+                                ApiError::from_error(e.as_ref(), ApiErrorKind::InvalidRequest);
+                            if matches!(
+                                error.kind,
+                                ApiErrorKind::Internal
+                                    | ApiErrorKind::Unavailable
+                                    | ApiErrorKind::Overloaded
+                            ) {
+                                MistralRs::maybe_log_error(self.state.clone(), e.as_ref());
+                            }
+                            self.handle_error_event(error);
                         }
                         Response::InternalError(e) => {
                             MistralRs::maybe_log_error(self.state.clone(), &*e);
-                            self.handle_error_event(
-                                "api_error",
-                                sanitize_error_message(e.as_ref()),
-                            );
+                            self.handle_error_event(ApiError::from_error(
+                                e.as_ref(),
+                                ApiErrorKind::Internal,
+                            ));
                         }
                         Response::AgenticToolCallProgress {
                             round,
@@ -1364,7 +1398,14 @@ impl futures::Stream for AnthropicStreamer {
                         | Response::Embeddings { .. } => unreachable!(),
                     }
                 }
-                Poll::Ready(None) => return Poll::Ready(None),
+                Poll::Ready(None) => {
+                    self.handle_error_event(ApiError::new(
+                        ApiErrorKind::Internal,
+                        INTERNAL_ERROR_MESSAGE,
+                        Some("internal_error"),
+                        None,
+                    ));
+                }
                 Poll::Pending => {
                     if Pin::new(&mut self.ping).poll_tick(cx).is_ready() {
                         self.enqueue_json("ping", json!({"type": "ping"}));
@@ -1398,18 +1439,14 @@ impl IntoResponse for AnthropicMessagesResponder {
         match self {
             AnthropicMessagesResponder::Sse(s) => s.into_response(),
             AnthropicMessagesResponder::Json(s) => Json(s).into_response(),
-            AnthropicMessagesResponder::InternalError(e) => anthropic_error_response(
-                http::StatusCode::INTERNAL_SERVER_ERROR,
-                "api_error",
-                sanitize_error_message(e.as_ref()),
-            ),
+            AnthropicMessagesResponder::InternalError(e) => {
+                anthropic_error_response(ApiError::from_error(e.as_ref(), ApiErrorKind::Internal))
+            }
             AnthropicMessagesResponder::ValidationError(e) => anthropic_error_response(
-                http::StatusCode::BAD_REQUEST,
-                "invalid_request_error",
-                sanitize_error_message(e.as_ref()),
+                ApiError::from_error(e.as_ref(), ApiErrorKind::InvalidRequest),
             ),
-            AnthropicMessagesResponder::ModelError(msg) => {
-                anthropic_error_response(http::StatusCode::INTERNAL_SERVER_ERROR, "api_error", msg)
+            AnthropicMessagesResponder::ModelError(_) => {
+                anthropic_error_response(ApiError::model_error())
             }
         }
     }
@@ -1419,36 +1456,74 @@ impl IntoResponse for AnthropicCountTokensResponder {
     fn into_response(self) -> axum::response::Response {
         match self {
             AnthropicCountTokensResponder::Json(s) => Json(s).into_response(),
-            AnthropicCountTokensResponder::InternalError(e) => anthropic_error_response(
-                http::StatusCode::INTERNAL_SERVER_ERROR,
-                "api_error",
-                sanitize_error_message(e.as_ref()),
-            ),
+            AnthropicCountTokensResponder::InternalError(e) => {
+                anthropic_error_response(ApiError::from_error(e.as_ref(), ApiErrorKind::Internal))
+            }
             AnthropicCountTokensResponder::ValidationError(e) => anthropic_error_response(
-                http::StatusCode::BAD_REQUEST,
-                "invalid_request_error",
-                sanitize_error_message(e.as_ref()),
+                ApiError::from_error(e.as_ref(), ApiErrorKind::InvalidRequest),
             ),
         }
     }
 }
 
-fn anthropic_error_response(
-    status: http::StatusCode,
-    error_type: &'static str,
-    message: String,
-) -> axum::response::Response {
-    (
+fn anthropic_error_status(kind: ApiErrorKind) -> http::StatusCode {
+    match kind {
+        ApiErrorKind::InvalidRequest | ApiErrorKind::UnsupportedMediaType => {
+            http::StatusCode::BAD_REQUEST
+        }
+        ApiErrorKind::NotFound => http::StatusCode::NOT_FOUND,
+        ApiErrorKind::Conflict => http::StatusCode::CONFLICT,
+        ApiErrorKind::PayloadTooLarge => http::StatusCode::PAYLOAD_TOO_LARGE,
+        ApiErrorKind::RateLimited => http::StatusCode::TOO_MANY_REQUESTS,
+        ApiErrorKind::Unavailable | ApiErrorKind::Internal => {
+            http::StatusCode::INTERNAL_SERVER_ERROR
+        }
+        ApiErrorKind::Overloaded => http::StatusCode::from_u16(ANTHROPIC_OVERLOADED_STATUS)
+            .expect("Anthropic overloaded status must be valid"),
+    }
+}
+
+fn anthropic_error_type(kind: ApiErrorKind) -> &'static str {
+    match kind {
+        ApiErrorKind::InvalidRequest | ApiErrorKind::UnsupportedMediaType => {
+            "invalid_request_error"
+        }
+        ApiErrorKind::NotFound => "not_found_error",
+        ApiErrorKind::Conflict => "conflict_error",
+        ApiErrorKind::PayloadTooLarge => "request_too_large",
+        ApiErrorKind::RateLimited => "rate_limit_error",
+        ApiErrorKind::Unavailable | ApiErrorKind::Internal => "api_error",
+        ApiErrorKind::Overloaded => "overloaded_error",
+    }
+}
+
+fn anthropic_json_rejection(error: JsonRejection) -> ApiError {
+    let mut error = ApiError::from_json_rejection(error);
+    if error.kind == ApiErrorKind::UnsupportedMediaType {
+        error.kind = ApiErrorKind::InvalidRequest;
+    }
+    error
+}
+
+pub(crate) fn anthropic_error_response(error: ApiError) -> axum::response::Response {
+    let status = anthropic_error_status(error.kind);
+    let error_type = anthropic_error_type(error.kind);
+    let message = error.message;
+    let mut response = (
         status,
         Json(AnthropicError {
             tp: default_error_type(),
             error: AnthropicErrorBody {
                 tp: error_type.to_string(),
-                message,
+                message: message.clone(),
             },
         }),
     )
-        .into_response()
+        .into_response();
+    response
+        .extensions_mut()
+        .insert(ResponseErrorMessage(message));
+    response
 }
 
 fn handle_validation_error(e: anyhow::Error) -> AnthropicMessagesResponder {
@@ -1524,8 +1599,20 @@ pub async fn anthropic_messages(
     Extension(agentic_defaults): Extension<AgenticDefaults>,
     Extension(skill_store): Extension<Arc<SkillStore>>,
     stream_outcome: Option<Extension<StreamOutcomeHandle>>,
-    Json(request): Json<AnthropicMessagesRequest>,
+    payload: Result<Json<AnthropicMessagesRequest>, JsonRejection>,
 ) -> AnthropicMessagesResponder {
+    let request = match payload {
+        Ok(Json(request)) => request,
+        Err(error) => {
+            return AnthropicMessagesResponder::ValidationError(Box::new(
+                anthropic_json_rejection(error),
+            ));
+        }
+    };
+    if let Err(error) = request.validate(true) {
+        return handle_validation_error(error);
+    }
+
     let (tx, mut rx) = create_response_channel(None);
     let mut oairequest = match request.into_chat_completion_request() {
         Ok(request) => request,
@@ -1585,7 +1672,7 @@ pub async fn anthropic_messages(
     };
 
     if let Err(e) = send_request_with_model(&state, request, model_id.as_deref()).await {
-        return AnthropicMessagesResponder::InternalError(e.into());
+        return AnthropicMessagesResponder::InternalError(Box::new(e));
     }
 
     if is_streaming {
@@ -1608,8 +1695,20 @@ pub async fn anthropic_messages(
 )]
 pub async fn anthropic_count_tokens(
     State(state): ExtractedMistralRsState,
-    Json(request): Json<AnthropicMessagesRequest>,
+    payload: Result<Json<AnthropicMessagesRequest>, JsonRejection>,
 ) -> AnthropicCountTokensResponder {
+    let request = match payload {
+        Ok(Json(request)) => request,
+        Err(error) => {
+            return AnthropicCountTokensResponder::ValidationError(Box::new(
+                anthropic_json_rejection(error),
+            ));
+        }
+    };
+    if let Err(error) = request.validate(false) {
+        return AnthropicCountTokensResponder::ValidationError(error.into());
+    }
+
     let (tx, _) = create_response_channel(Some(1));
     let mut oairequest = match request.into_chat_completion_request() {
         Ok(request) => request,
@@ -1676,14 +1775,17 @@ pub async fn anthropic_count_tokens(
     });
 
     if let Err(e) = send_request_with_model(&state, tokenize_request, model_id.as_deref()).await {
-        return AnthropicCountTokensResponder::InternalError(e.into());
+        return AnthropicCountTokensResponder::InternalError(Box::new(e));
     }
 
     match rx.recv().await {
         Some(Ok(tokens)) => AnthropicCountTokensResponder::Json(AnthropicCountTokensResponse {
             input_tokens: tokens.len(),
         }),
-        Some(Err(e)) => AnthropicCountTokensResponder::ValidationError(e.into()),
+        Some(Err(e)) if is_chat_template_request_error(&e) => {
+            AnthropicCountTokensResponder::ValidationError(e.into())
+        }
+        Some(Err(e)) => AnthropicCountTokensResponder::InternalError(e.into()),
         None => AnthropicCountTokensResponder::InternalError(Box::new(std::io::Error::new(
             std::io::ErrorKind::UnexpectedEof,
             "No token count received from the model.",
@@ -1694,6 +1796,201 @@ pub async fn anthropic_count_tokens(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use axum::{
+        body::{to_bytes, Body},
+        extract::FromRequest,
+        http::Request as HttpRequest,
+    };
+    use mistralrs_core::MistralRsError;
+
+    async fn error_body(response: axum::response::Response) -> Value {
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        serde_json::from_slice(&body).unwrap()
+    }
+
+    fn basic_request() -> AnthropicMessagesRequest {
+        serde_json::from_value(json!({
+            "model": "default",
+            "max_tokens": 32,
+            "messages": [{"role": "user", "content": "Hello"}]
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn validates_messages_endpoint_fields() {
+        let mut request = basic_request();
+        request.max_tokens = None;
+        assert!(request.validate(true).is_err());
+        assert!(request.validate(false).is_ok());
+
+        request.max_tokens = Some(0);
+        assert!(request.validate(true).is_err());
+
+        request.max_tokens = Some(1);
+        request.messages.clear();
+        assert!(request.validate(true).is_err());
+
+        request.messages.push(AnthropicMessage {
+            role: "system".to_string(),
+            content: AnthropicMessageContent::Text("No".to_string()),
+        });
+        assert!(request.validate(true).is_err());
+
+        request.messages[0].role = "assistant".to_string();
+        assert!(request.validate(true).is_ok());
+    }
+
+    #[tokio::test]
+    async fn maps_anthropic_error_statuses_and_types() {
+        let cases = [
+            (
+                ApiErrorKind::InvalidRequest,
+                http::StatusCode::BAD_REQUEST,
+                "invalid_request_error",
+            ),
+            (
+                ApiErrorKind::UnsupportedMediaType,
+                http::StatusCode::BAD_REQUEST,
+                "invalid_request_error",
+            ),
+            (
+                ApiErrorKind::NotFound,
+                http::StatusCode::NOT_FOUND,
+                "not_found_error",
+            ),
+            (
+                ApiErrorKind::Conflict,
+                http::StatusCode::CONFLICT,
+                "conflict_error",
+            ),
+            (
+                ApiErrorKind::PayloadTooLarge,
+                http::StatusCode::PAYLOAD_TOO_LARGE,
+                "request_too_large",
+            ),
+            (
+                ApiErrorKind::RateLimited,
+                http::StatusCode::TOO_MANY_REQUESTS,
+                "rate_limit_error",
+            ),
+            (
+                ApiErrorKind::Unavailable,
+                http::StatusCode::INTERNAL_SERVER_ERROR,
+                "api_error",
+            ),
+            (
+                ApiErrorKind::Overloaded,
+                http::StatusCode::from_u16(ANTHROPIC_OVERLOADED_STATUS).unwrap(),
+                "overloaded_error",
+            ),
+            (
+                ApiErrorKind::Internal,
+                http::StatusCode::INTERNAL_SERVER_ERROR,
+                "api_error",
+            ),
+        ];
+
+        for (kind, status, error_type) in cases {
+            let response = anthropic_error_response(ApiError::new(kind, "message", None, None));
+            assert_eq!(response.status(), status);
+            let body = error_body(response).await;
+            assert_eq!(body["type"], "error");
+            assert_eq!(body["error"]["type"], error_type);
+        }
+    }
+
+    #[tokio::test]
+    async fn typed_model_not_found_is_a_404_from_any_responder() {
+        let validation =
+            anyhow::Error::new(MistralRsError::ModelNotFound("missing-model".to_string()))
+                .context("request validation failed");
+        let responses = [
+            AnthropicMessagesResponder::ValidationError(validation.into()),
+            AnthropicMessagesResponder::InternalError(Box::new(MistralRsError::ModelNotFound(
+                "missing-model".to_string(),
+            ))),
+        ];
+
+        for response in responses {
+            let response = response.into_response();
+            assert_eq!(response.status(), http::StatusCode::NOT_FOUND);
+            let body = error_body(response).await;
+            assert_eq!(body["error"]["type"], "not_found_error");
+        }
+    }
+
+    #[tokio::test]
+    async fn reloading_model_uses_anthropic_conflict_error() {
+        let response = AnthropicMessagesResponder::ValidationError(Box::new(
+            MistralRsError::ModelReloading("model".to_string()),
+        ))
+        .into_response();
+
+        assert_eq!(response.status(), http::StatusCode::CONFLICT);
+        let body = error_body(response).await;
+        assert_eq!(body["error"]["type"], "conflict_error");
+        assert_eq!(body["error"]["message"], "model `model` is being reloaded");
+    }
+
+    #[tokio::test]
+    async fn internal_and_model_errors_do_not_expose_details() {
+        let response = AnthropicMessagesResponder::InternalError(Box::new(std::io::Error::other(
+            "private internal detail",
+        )))
+        .into_response();
+        assert_eq!(response.status(), http::StatusCode::INTERNAL_SERVER_ERROR);
+        let body = error_body(response).await;
+        assert_eq!(body["error"]["message"], INTERNAL_ERROR_MESSAGE);
+        assert!(!body.to_string().contains("private internal detail"));
+
+        let response = AnthropicMessagesResponder::ModelError("private model detail".to_string())
+            .into_response();
+        let body = error_body(response).await;
+        assert_eq!(
+            body["error"]["message"],
+            crate::handler_core::MODEL_ERROR_MESSAGE
+        );
+        assert!(!body.to_string().contains("private model detail"));
+    }
+
+    #[tokio::test]
+    async fn json_rejections_use_anthropic_errors() {
+        let malformed = HttpRequest::builder()
+            .header(http::header::CONTENT_TYPE, "application/json")
+            .body(Body::from("{"))
+            .unwrap();
+        let rejection = Json::<AnthropicMessagesRequest>::from_request(malformed, &())
+            .await
+            .unwrap_err();
+        let response = anthropic_error_response(anthropic_json_rejection(rejection));
+        assert_eq!(response.status(), http::StatusCode::BAD_REQUEST);
+        let body = error_body(response).await;
+        assert_eq!(body["error"]["type"], "invalid_request_error");
+
+        let wrong_type = HttpRequest::builder()
+            .header(http::header::CONTENT_TYPE, "application/json")
+            .body(Body::from(r#"{"messages":"not-an-array"}"#))
+            .unwrap();
+        let rejection = Json::<AnthropicMessagesRequest>::from_request(wrong_type, &())
+            .await
+            .unwrap_err();
+        let response = anthropic_error_response(anthropic_json_rejection(rejection));
+        assert_eq!(response.status(), http::StatusCode::BAD_REQUEST);
+        let body = error_body(response).await;
+        assert_eq!(body["error"]["type"], "invalid_request_error");
+
+        let missing_content_type = HttpRequest::builder()
+            .body(Body::from(r#"{"messages":[]}"#))
+            .unwrap();
+        let rejection = Json::<AnthropicMessagesRequest>::from_request(missing_content_type, &())
+            .await
+            .unwrap_err();
+        let response = anthropic_error_response(anthropic_json_rejection(rejection));
+        assert_eq!(response.status(), http::StatusCode::BAD_REQUEST);
+        let body = error_body(response).await;
+        assert_eq!(body["error"]["type"], "invalid_request_error");
+    }
 
     #[test]
     fn converts_system_and_user_text() {

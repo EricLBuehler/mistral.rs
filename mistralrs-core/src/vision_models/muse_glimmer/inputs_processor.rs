@@ -13,7 +13,8 @@ use crate::{
         text_models_inputs_processor::{
             self, get_completion_input, get_prompt_input, PagedAttentionMeta,
         },
-        InputProcessorOutput, InputsProcessor, InputsProcessorType, MessagesAction, Processor,
+        InputProcessorOutput, InputsProcessor, InputsProcessorType, InputsProcessorValidationError,
+        MessagesAction, Processor,
     },
     sequence::{
         build_mm_features_from_ranges, find_image_delimited_ranges, find_image_placeholder_ranges,
@@ -121,6 +122,9 @@ impl MuseGlimmerProcessor {
         max_edge: Option<u32>,
         gguf_collapsed_temporal: bool,
     ) -> Result<Self> {
+        if max_edge == Some(0) {
+            anyhow::bail!("Muse-Glimmer maximum image edge must be nonzero");
+        }
         Ok(Self {
             settings: Arc::new(MuseGlimmerProcessorSettings::from_config(
                 config,
@@ -177,10 +181,11 @@ fn replace_occurrences(text: &str, needle: &str, replacements: &[String]) -> Res
     let parts = text.split(needle).collect::<Vec<_>>();
     let count = parts.len().saturating_sub(1);
     if count != replacements.len() {
-        anyhow::bail!(
+        return Err(InputsProcessorValidationError(format!(
             "Muse-Glimmer prompt has {count} `{needle}` placeholders for {} media items",
             replacements.len()
-        );
+        ))
+        .into());
     }
     let extra = replacements.iter().map(String::len).sum::<usize>();
     let mut output = String::with_capacity(text.len() + extra);
@@ -537,6 +542,16 @@ impl MuseGlimmerImageProcessor {
     }
 
     fn transform_image(&self, image: DynamicImage, max_tokens: usize) -> Result<Tensor> {
+        let (width, height) = image.dimensions();
+        if width == 0 || height == 0 {
+            return Err(InputsProcessorValidationError(
+                "Muse-Glimmer image dimensions must be nonzero".to_string(),
+            )
+            .into());
+        }
+        if self.max_edge == Some(0) {
+            anyhow::bail!("Muse-Glimmer maximum image edge must be nonzero");
+        }
         let image = self.maybe_limit_edge(DynamicImage::ImageRgb8(image.to_rgb8()));
         let (width, height) = image.dimensions();
         let image = if self.settings.do_resize {
@@ -623,10 +638,18 @@ impl MuseGlimmerImageProcessor {
         videos: Vec<VideoInput>,
         device: &Device,
     ) -> Result<PreprocessedImages> {
+        if videos.iter().any(|video| video.frames.is_empty()) {
+            return Err(InputsProcessorValidationError(
+                "Muse-Glimmer video input contains no frames".to_string(),
+            )
+            .into());
+        }
         if self.settings.gguf_collapsed_temporal && !videos.is_empty() {
-            anyhow::bail!(
+            return Err(InputsProcessorValidationError(
                 "Muse-Glimmer GGUF projectors collapse temporal patch weights and cannot process video; use the original safetensors model"
-            );
+                    .to_string(),
+            )
+            .into());
         }
         let mut pixels = Vec::with_capacity(videos.len());
         let mut grids = Vec::with_capacity(videos.len());
@@ -1202,6 +1225,30 @@ mod tests {
     }
 
     #[test]
+    fn image_transform_rejects_zero_dimensions_as_validation() {
+        let processor = MuseGlimmerImageProcessor {
+            settings: settings(),
+            max_edge: None,
+        };
+        let error = MuseGlimmerImageProcessor::smart_resize(0, 640, 28, 4096).unwrap_err();
+        assert!(error
+            .downcast_ref::<InputsProcessorValidationError>()
+            .is_none());
+        let error = processor
+            .transform_image(DynamicImage::new_rgb8(0, 640), 4096)
+            .unwrap_err();
+        assert!(error
+            .downcast_ref::<InputsProcessorValidationError>()
+            .is_some());
+        let error = MuseGlimmerProcessor::new(&PreProcessorConfig::default(), Some(0), false)
+            .err()
+            .unwrap();
+        assert!(error
+            .downcast_ref::<InputsProcessorValidationError>()
+            .is_none());
+    }
+
+    #[test]
     fn video_sampling_matches_transformers_linspace() {
         let video = VideoInput {
             frames: vec![DynamicImage::new_rgb8(1, 1); 12],
@@ -1273,9 +1320,13 @@ mod tests {
             max_edge: None,
         };
         let video = VideoInput::from_frames(vec![DynamicImage::new_rgb8(1, 1)], 1.0, None);
-        assert!(processor
+        let error = processor
             .preprocess_videos(vec![video], &Device::Cpu)
-            .is_err());
+            .err()
+            .unwrap();
+        assert!(error
+            .downcast_ref::<InputsProcessorValidationError>()
+            .is_some());
         Ok(())
     }
 

@@ -124,11 +124,11 @@ fn lora_adapter_error_code(error: &MistralRsError) -> &'static str {
             {
                 "invalid_lora_adapter"
             }
-            CoreLoraAdapterError::Io { .. } => "lora_storage_unavailable",
+            CoreLoraAdapterError::Io { .. } => "internal_error",
             CoreLoraAdapterError::Config { .. } | CoreLoraAdapterError::Format(_) => {
                 "invalid_lora_adapter"
             }
-            CoreLoraAdapterError::Load(_) => "lora_device_load_failed",
+            CoreLoraAdapterError::Load(_) => "internal_error",
             CoreLoraAdapterError::Task(_) => "lora_load_task_failed",
             _ => "internal_error",
         },
@@ -137,8 +137,8 @@ fn lora_adapter_error_code(error: &MistralRsError) -> &'static str {
         | MistralRsError::ModelAlreadyLoaded(_)
         | MistralRsError::ModelAlreadyUnloaded(_) => "model_state_conflict",
         MistralRsError::NoLoaderConfig(_) => "invalid_model_operation",
+        MistralRsError::SenderPoisoned => "service_unavailable",
         MistralRsError::EnginePoisoned
-        | MistralRsError::SenderPoisoned
         | MistralRsError::ReloadFailed(_)
         | MistralRsError::Other(_) => "internal_error",
     }
@@ -3364,6 +3364,10 @@ mod lora_adapter_error_tests {
                 source: std::io::Error::from(std::io::ErrorKind::NotFound),
             })),
             "adapter_file_not_found"
+        );
+        assert_eq!(
+            lora_adapter_error_code(&MistralRsError::SenderPoisoned),
+            "service_unavailable"
         );
     }
 

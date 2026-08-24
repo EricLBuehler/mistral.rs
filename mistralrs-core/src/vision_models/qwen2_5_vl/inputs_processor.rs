@@ -5,7 +5,8 @@ use crate::{
         text_models_inputs_processor::{
             self, get_completion_input, get_prompt_input, PagedAttentionMeta,
         },
-        InputProcessorOutput, InputsProcessor, InputsProcessorType, MessagesAction, Processor,
+        InputProcessorOutput, InputsProcessor, InputsProcessorType, InputsProcessorValidationError,
+        MessagesAction, Processor,
     },
     sequence::{find_placeholder_delimited_ranges, Sequence},
     vision_models::{
@@ -14,7 +15,7 @@ use crate::{
         qwen2vl::{
             expand_media_placeholders, media_data_cached_offset, packed_layout, prompt_mrope,
             select_media_batch, select_media_view, shift_media_spans, split_media_pixels,
-            validated_mm_features, video_hashes, PromptMropeConfig,
+            validate_qwen_media_dimensions, validated_mm_features, video_hashes, PromptMropeConfig,
         },
         ModelInputs,
     },
@@ -115,6 +116,35 @@ impl InputsProcessor for Qwen2_5VLImageProcessor {
             .any(|seq| seq.has_images() || seq.has_videos())
         {
             return Ok(());
+        }
+
+        let resize_factor = if config.do_resize.is_none_or(|resize| resize) {
+            config
+                .patch_size
+                .zip(config.merge_size)
+                .and_then(|(patch_size, merge_size)| patch_size.checked_mul(merge_size))
+                .filter(|factor| *factor > 0)
+        } else {
+            None
+        };
+        for seq in input_seqs.iter() {
+            if let Some(images) = seq.images() {
+                validate_qwen_media_dimensions(
+                    images,
+                    resize_factor.filter(|_| self.max_edge.is_none()),
+                )?;
+            }
+            if let Some(videos) = seq.videos() {
+                for video in videos {
+                    if video.frames.is_empty() {
+                        return Err(InputsProcessorValidationError(
+                            "Qwen video inputs must contain at least one frame".to_string(),
+                        )
+                        .into());
+                    }
+                    validate_qwen_media_dimensions(&video.frames, resize_factor)?;
+                }
+            }
         }
 
         let mut detok_seqs = tokenizer

@@ -1,5 +1,8 @@
 use crate::{
-    pipeline::{KvCache, NormalCache},
+    pipeline::{
+        chat_template::is_chat_template_request_error, is_inputs_processor_validation_error,
+        KvCache, NormalCache,
+    },
     prefix_cacher::MatchingCache,
     request::{DetokenizationRequest, NormalRequest, TokenizationRequest},
     sequence::SeqStepType,
@@ -16,7 +19,7 @@ use std::{
 use tracing::warn;
 
 use crate::{
-    get_mut_arcmutex, handle_seq_error,
+    get_mut_arcmutex, handle_request_error, handle_seq_error,
     request::Request,
     sampler::Sampler,
     sequence::{Sequence, SequenceGroup},
@@ -42,6 +45,13 @@ fn choice_seed(seed: Option<u64>, response_index: usize) -> Option<u64> {
         let stream = u64::try_from(response_index).expect("choice index must fit into u64");
         seed.wrapping_add(stream)
     })
+}
+
+fn first_unknown_token_id(tokenizer: &tokenizers::Tokenizer, token_ids: &[u32]) -> Option<u32> {
+    token_ids
+        .iter()
+        .copied()
+        .find(|token_id| tokenizer.id_to_token(*token_id).is_none())
 }
 
 impl Engine {
@@ -133,7 +143,7 @@ impl Engine {
                 None => {
                     request
                         .response
-                        .send(Response::ValidationError(
+                        .send(Response::InternalError(
                             "request adapter selection was not pinned before admission".into(),
                         ))
                         .await
@@ -325,7 +335,22 @@ impl Engine {
                     reasoning_effort,
                     tools,
                 );
-                handle_seq_error!(template, request.response)
+                match template {
+                    Ok(template) => template,
+                    Err(error) => {
+                        let response = if is_chat_template_request_error(&error) {
+                            Response::ValidationError(error.into())
+                        } else {
+                            Response::InternalError(error.into())
+                        };
+                        request
+                            .response
+                            .send(response)
+                            .await
+                            .unwrap_or_else(|_| warn!("Receiver disconnected"));
+                        return;
+                    }
+                }
             }
             RequestMessage::Completion { text, .. }
             | RequestMessage::Embedding { prompt: text } => {
@@ -363,6 +388,19 @@ impl Engine {
                         .unwrap_or_else(|_| warn!("Receiver disconnected"));
                     return;
                 };
+                if let Some(token_id) = first_unknown_token_id(tokenizer, &it) {
+                    request
+                        .response
+                        .send(Response::ValidationError(
+                            format!(
+                                "Token ID {token_id} is not present in the selected model tokenizer."
+                            )
+                            .into(),
+                        ))
+                        .await
+                        .unwrap_or_else(|_| warn!("Receiver disconnected"));
+                    return;
+                }
                 let prompt = tokenizer
                     .decode(&it, false)
                     .map_err(|e| anyhow::Error::msg(e.to_string()));
@@ -545,7 +583,7 @@ impl Engine {
             request.sampling_params.logits_bias.unwrap_or_default(),
             request.logits_processors.unwrap_or_default(),
         );
-        let sampler = handle_seq_error!(sampler, request.response);
+        let sampler = handle_request_error!(sampler, request.response);
 
         if request.sampling_params.n_choices == 0 {
             request
@@ -656,12 +694,11 @@ impl Engine {
 
                     let k_seq_cache = match Tensor::zeros(k_shape, dtype, &device) {
                         Ok(x) => x,
-                        Err(_) => {
+                        Err(err) => {
                             request
                                 .response
                                 .send(Response::InternalError(
-                                    "Failed to allocate preallocated KV cache."
-                                        .to_string()
+                                    err.context("Failed to allocate preallocated KV cache.")
                                         .into(),
                                 ))
                                 .await
@@ -674,12 +711,11 @@ impl Engine {
                     } else {
                         match Tensor::zeros(v_shape, dtype, &device) {
                             Ok(x) => x,
-                            Err(_) => {
+                            Err(err) => {
                                 request
                                     .response
                                     .send(Response::InternalError(
-                                        "Failed to allocate preallocated KV cache."
-                                            .to_string()
+                                        err.context("Failed to allocate preallocated KV cache.")
                                             .into(),
                                     ))
                                     .await
@@ -706,7 +742,7 @@ impl Engine {
                     } else {
                         ToolChoice::None
                     };
-                Some(handle_seq_error!(
+                Some(handle_request_error!(
                     ToolCallState::new(
                         tool_choice,
                         request.tools.as_deref(),
@@ -809,19 +845,29 @@ impl Engine {
             // still get their prompt rewrite and mm-feature setup before cache matching.
             if seq.has_images() || seq.has_audios() || seq.has_videos() {
                 let pipeline = get_mut_arcmutex!(self.pipeline);
-                handle_seq_error!(
-                    pipeline
-                        .get_processor()
-                        .inputs_processor()
-                        .prepare_for_paged_prompt_planning(
-                            pipeline.tokenizer(),
-                            &mut [&mut seq],
-                            &pipeline.device(),
-                            pipeline.get_input_processor_config(),
-                            None,
-                        ),
-                    request.response
-                );
+                let result = pipeline
+                    .get_processor()
+                    .inputs_processor()
+                    .prepare_for_paged_prompt_planning(
+                        pipeline.tokenizer(),
+                        &mut [&mut seq],
+                        &pipeline.device(),
+                        pipeline.get_input_processor_config(),
+                        None,
+                    );
+                if let Err(error) = result {
+                    let response = if is_inputs_processor_validation_error(&error) {
+                        Response::ValidationError(error.into())
+                    } else {
+                        Response::InternalError(error.into())
+                    };
+                    request
+                        .response
+                        .send(response)
+                        .await
+                        .unwrap_or_else(|_| warn!("Receiver disconnected"));
+                    return;
+                }
             }
             if request.response.is_closed() {
                 return;
@@ -1084,7 +1130,9 @@ mod tests {
     use super::*;
     use crate::pipeline::chat_template::{apply_chat_template_to, ChatTemplateValue};
     use crate::{Function, Tool, ToolType};
+    use ahash::AHashMap;
     use indexmap::IndexMap;
+    use tokenizers::{models::wordlevel::WordLevel, Tokenizer};
 
     #[test]
     fn choice_seeds_are_stable_and_distinct() {
@@ -1092,6 +1140,23 @@ mod tests {
         assert_eq!(choice_seed(Some(42), 0), Some(42));
         assert_eq!(choice_seed(Some(42), 1), Some(43));
         assert_eq!(choice_seed(Some(u64::MAX), 1), Some(0));
+    }
+
+    #[test]
+    fn raw_token_ids_must_exist_in_the_selected_tokenizer() {
+        let tokenizer = Tokenizer::new(
+            WordLevel::builder()
+                .vocab(AHashMap::from([
+                    ("<unk>".to_string(), 0),
+                    ("hello".to_string(), 1),
+                ]))
+                .unk_token("<unk>".to_string())
+                .build()
+                .unwrap(),
+        );
+
+        assert_eq!(first_unknown_token_id(&tokenizer, &[0, 1]), None);
+        assert_eq!(first_unknown_token_id(&tokenizer, &[0, 2]), Some(2));
     }
 
     fn tool() -> Tool {

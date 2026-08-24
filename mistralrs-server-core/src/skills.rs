@@ -7,9 +7,13 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result};
 use axum::{
-    extract::{Multipart, Path as AxumPath, Query},
+    extract::{
+        multipart::{MultipartError, MultipartRejection},
+        rejection::QueryRejection,
+        Multipart, Path as AxumPath, Query, RawQuery,
+    },
     http::{HeaderMap, StatusCode},
     response::IntoResponse,
     Extension, Json,
@@ -17,10 +21,16 @@ use axum::{
 use chrono::{DateTime, SecondsFormat, Utc};
 use mistralrs_core::ShellSkillMount;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::Value;
 use utoipa::ToSchema;
 
-use crate::openai::OpenAiShellSkillReference;
+use crate::{
+    handler_core::{
+        openai_error_response, ApiError, ApiErrorKind, ResponseErrorMessage,
+        SERVICE_UNAVAILABLE_MESSAGE,
+    },
+    openai::OpenAiShellSkillReference,
+};
 
 const SKILL_OBJECT: &str = "skill";
 const SKILL_VERSION_OBJECT: &str = "skill.version";
@@ -31,6 +41,7 @@ const SKILL_METADATA_FILE: &str = "skill.json";
 const SKILL_CONTENT_DIR: &str = "content";
 const MAX_SKILL_UPLOAD_BYTES: usize = 50 * 1024 * 1024;
 const MAX_SKILL_FILES: usize = 500;
+const ANTHROPIC_OVERLOADED_STATUS: u16 = 529;
 
 #[derive(Clone)]
 pub struct SkillStore {
@@ -137,6 +148,46 @@ struct SkillUpload {
     staging_path: PathBuf,
 }
 
+fn invalid_skill_upload(message: impl Into<String>) -> anyhow::Error {
+    ApiError::new(
+        ApiErrorKind::InvalidRequest,
+        message,
+        Some("invalid_skill_upload"),
+        Some("files"),
+    )
+    .into()
+}
+
+fn skill_upload_too_large(message: impl Into<String>) -> anyhow::Error {
+    ApiError::new(
+        ApiErrorKind::PayloadTooLarge,
+        message,
+        Some("request_body_too_large"),
+        Some("files"),
+    )
+    .into()
+}
+
+fn skill_not_found(message: impl Into<String>) -> anyhow::Error {
+    ApiError::new(
+        ApiErrorKind::NotFound,
+        message,
+        Some("skill_not_found"),
+        Some("skill_id"),
+    )
+    .into()
+}
+
+fn invalid_skill_reference(message: impl Into<String>) -> anyhow::Error {
+    ApiError::new(
+        ApiErrorKind::InvalidRequest,
+        message,
+        Some("invalid_skill_reference"),
+        Some("tools"),
+    )
+    .into()
+}
+
 impl SkillStore {
     pub fn default_root() -> PathBuf {
         std::env::temp_dir().join("mistralrs-skills")
@@ -167,7 +218,7 @@ impl SkillStore {
             .map_err(|_| anyhow::anyhow!("skill store lock poisoned"))?;
         let metadata = skills
             .get(skill_id)
-            .ok_or_else(|| anyhow::anyhow!("Skill `{skill_id}` was not found."))?;
+            .ok_or_else(|| skill_not_found(format!("Skill `{skill_id}` was not found.")))?;
         metadata
             .versions
             .iter()
@@ -212,7 +263,7 @@ impl SkillStore {
             .map_err(|_| anyhow::anyhow!("skill store lock poisoned"))?;
         let metadata = skills
             .get_mut(skill_id)
-            .ok_or_else(|| anyhow::anyhow!("Skill `{skill_id}` was not found."))?;
+            .ok_or_else(|| skill_not_found(format!("Skill `{skill_id}` was not found.")))?;
         let version = metadata.versions.last().map(|v| v.version + 1).unwrap_or(1);
         let created_at = unix_now();
         let source_path = self.store_version_content(skill_id, version, &upload.source_path)?;
@@ -244,33 +295,42 @@ impl SkillStore {
             .skills
             .read()
             .map_err(|_| anyhow::anyhow!("skill store lock poisoned"))?;
-        let metadata = skills
-            .get(&reference.skill_id)
-            .ok_or_else(|| anyhow::anyhow!("Skill `{}` was not found.", reference.skill_id))?;
+        let metadata = skills.get(&reference.skill_id).ok_or_else(|| {
+            skill_not_found(format!("Skill `{}` was not found.", reference.skill_id))
+        })?;
         let version = match &reference.version {
             None => metadata.versions.last(),
             Some(Value::String(s)) if s == "latest" => metadata.versions.last(),
             Some(Value::String(s)) => {
-                let parsed = s
-                    .parse::<u64>()
-                    .with_context(|| format!("Invalid skill version `{s}`"))?;
+                let parsed = s.parse::<u64>().map_err(|_| {
+                    invalid_skill_reference(format!("Invalid skill version `{s}`."))
+                })?;
                 metadata
                     .versions
                     .iter()
                     .find(|version| version.version == parsed)
             }
             Some(Value::Number(n)) => {
-                let parsed = n
-                    .as_u64()
-                    .ok_or_else(|| anyhow::anyhow!("Invalid skill version `{n}`"))?;
+                let parsed = n.as_u64().ok_or_else(|| {
+                    invalid_skill_reference(format!("Invalid skill version `{n}`."))
+                })?;
                 metadata
                     .versions
                     .iter()
                     .find(|version| version.version == parsed)
             }
-            Some(other) => bail!("Unsupported skill version value `{other}`"),
+            Some(other) => {
+                return Err(invalid_skill_reference(format!(
+                    "Unsupported skill version value `{other}`."
+                )))
+            }
         }
-        .ok_or_else(|| anyhow::anyhow!("Skill `{}` version was not found.", reference.skill_id))?;
+        .ok_or_else(|| {
+            skill_not_found(format!(
+                "Skill `{}` version was not found.",
+                reference.skill_id
+            ))
+        })?;
 
         Ok(ShellSkillMount {
             name: metadata.name.clone(),
@@ -401,28 +461,34 @@ async fn parse_upload(mut multipart: Multipart) -> Result<SkillUpload> {
     let mut files = Vec::new();
     let mut total_bytes = 0usize;
 
-    while let Some(field) = multipart.next_field().await? {
+    while let Some(field) = multipart.next_field().await.map_err(multipart_error)? {
         let field_name = field.name().unwrap_or_default().to_string();
         if field_name != "files" && field_name != "file" && field_name != "files[]" {
             continue;
         }
         let file_name = field
             .file_name()
-            .ok_or_else(|| anyhow::anyhow!("Uploaded skill file is missing a filename."))?
+            .ok_or_else(|| invalid_skill_upload("Uploaded skill file is missing a filename."))?
             .to_string();
-        let bytes = field.bytes().await?;
+        let bytes = field.bytes().await.map_err(multipart_error)?;
         total_bytes = total_bytes.saturating_add(bytes.len());
         if total_bytes > MAX_SKILL_UPLOAD_BYTES {
-            bail!("Skill upload exceeds the {MAX_SKILL_UPLOAD_BYTES} byte limit.");
+            return Err(skill_upload_too_large(format!(
+                "Skill upload exceeds the {MAX_SKILL_UPLOAD_BYTES} byte limit."
+            )));
         }
         files.push((file_name, bytes.to_vec()));
         if files.len() > MAX_SKILL_FILES {
-            bail!("Skill upload may contain at most {MAX_SKILL_FILES} files.");
+            return Err(invalid_skill_upload(format!(
+                "Skill upload may contain at most {MAX_SKILL_FILES} files."
+            )));
         }
     }
 
     if files.is_empty() {
-        bail!("Skill upload requires multipart file field `files`.");
+        return Err(invalid_skill_upload(
+            "Skill upload requires multipart file field `files`.",
+        ));
     }
 
     if files.len() == 1 && looks_like_zip(&files[0].0, &files[0].1) {
@@ -453,18 +519,32 @@ async fn parse_upload(mut multipart: Multipart) -> Result<SkillUpload> {
     })
 }
 
+fn multipart_error(error: MultipartError) -> anyhow::Error {
+    match error.status() {
+        StatusCode::PAYLOAD_TOO_LARGE => skill_upload_too_large(error.body_text()),
+        status if status.is_client_error() => invalid_skill_upload(error.body_text()),
+        _ => error.into(),
+    }
+}
+
 fn looks_like_zip(file_name: &str, bytes: &[u8]) -> bool {
     file_name.ends_with(".zip") || bytes.starts_with(b"PK\x03\x04")
 }
 
 fn extract_zip(bytes: &[u8], dest: &Path) -> Result<()> {
     let reader = Cursor::new(bytes);
-    let mut archive = zip::ZipArchive::new(reader)?;
+    let mut archive = zip::ZipArchive::new(reader)
+        .map_err(|error| invalid_skill_upload(format!("Invalid skill zip: {error}")))?;
     if archive.len() > MAX_SKILL_FILES {
-        bail!("Skill zip may contain at most {MAX_SKILL_FILES} files.");
+        return Err(invalid_skill_upload(format!(
+            "Skill zip may contain at most {MAX_SKILL_FILES} files."
+        )));
     }
+    let mut total_bytes = 0usize;
     for i in 0..archive.len() {
-        let mut file = archive.by_index(i)?;
+        let file = archive
+            .by_index(i)
+            .map_err(|error| invalid_skill_upload(format!("Invalid skill zip: {error}")))?;
         if file.is_dir() {
             continue;
         }
@@ -472,17 +552,26 @@ fn extract_zip(bytes: &[u8], dest: &Path) -> Result<()> {
             .unix_mode()
             .is_some_and(|mode| mode & 0o170000 == 0o120000)
         {
-            bail!("Skill zip may not contain symlinks.");
+            return Err(invalid_skill_upload("Skill zip may not contain symlinks."));
         }
         let rel = file
             .enclosed_name()
-            .ok_or_else(|| anyhow::anyhow!("Skill zip contains an unsafe path."))?;
+            .ok_or_else(|| invalid_skill_upload("Skill zip contains an unsafe path."))?;
         let out = dest.join(rel);
         if let Some(parent) = out.parent() {
             fs::create_dir_all(parent)?;
         }
         let mut buf = Vec::new();
-        file.read_to_end(&mut buf)?;
+        let remaining = MAX_SKILL_UPLOAD_BYTES.saturating_sub(total_bytes);
+        file.take(remaining.saturating_add(1) as u64)
+            .read_to_end(&mut buf)
+            .map_err(|error| invalid_skill_upload(format!("Invalid skill zip: {error}")))?;
+        total_bytes = total_bytes.saturating_add(buf.len());
+        if total_bytes > MAX_SKILL_UPLOAD_BYTES {
+            return Err(skill_upload_too_large(format!(
+                "Skill upload exceeds the {MAX_SKILL_UPLOAD_BYTES} byte limit."
+            )));
+        }
         fs::write(out, buf)?;
     }
     Ok(())
@@ -491,18 +580,23 @@ fn extract_zip(bytes: &[u8], dest: &Path) -> Result<()> {
 fn safe_relative_path(path: &str) -> Result<PathBuf> {
     let path = Path::new(path);
     if path.is_absolute() {
-        bail!("Skill file paths must be relative.");
+        return Err(invalid_skill_upload("Skill file paths must be relative."));
     }
     let mut clean = PathBuf::new();
     for component in path.components() {
         match component {
             Component::Normal(part) => clean.push(part),
             Component::CurDir => {}
-            _ => bail!("Skill file path `{}` is not allowed.", path.display()),
+            _ => {
+                return Err(invalid_skill_upload(format!(
+                    "Skill file path `{}` is not allowed.",
+                    path.display()
+                )))
+            }
         }
     }
     if clean.as_os_str().is_empty() {
-        bail!("Skill file path may not be empty.");
+        return Err(invalid_skill_upload("Skill file path may not be empty."));
     }
     Ok(clean)
 }
@@ -511,31 +605,38 @@ fn find_skill_root(staging: &Path) -> Result<PathBuf> {
     if staging.join("SKILL.md").is_file() {
         return Ok(staging.to_path_buf());
     }
-    let entries = fs::read_dir(staging)?
-        .filter_map(|entry| entry.ok())
-        .collect::<Vec<_>>();
-    let dirs = entries
-        .iter()
-        .filter(|entry| entry.file_type().is_ok_and(|tp| tp.is_dir()))
-        .collect::<Vec<_>>();
+    let entries = fs::read_dir(staging)?.collect::<std::io::Result<Vec<_>>>()?;
+    let mut dirs = Vec::new();
+    for entry in &entries {
+        if entry.file_type()?.is_dir() {
+            dirs.push(entry);
+        }
+    }
     if dirs.len() != 1 {
-        bail!("Skill upload must contain exactly one top-level folder with SKILL.md.");
+        return Err(invalid_skill_upload(
+            "Skill upload must contain exactly one top-level folder with SKILL.md.",
+        ));
     }
     let root = dirs[0].path();
     if !root.join("SKILL.md").is_file() {
-        bail!("Skill upload top-level folder must contain SKILL.md.");
+        return Err(invalid_skill_upload(
+            "Skill upload top-level folder must contain SKILL.md.",
+        ));
     }
     Ok(root)
 }
 
 fn read_skill_metadata(skill_md: &Path) -> Result<(String, String)> {
-    let text =
-        fs::read_to_string(skill_md).with_context(|| format!("read {}", skill_md.display()))?;
+    let bytes = fs::read(skill_md)?;
+    let text = String::from_utf8(bytes)
+        .map_err(|_| invalid_skill_upload("SKILL.md must contain valid UTF-8."))?;
     let Some(frontmatter) = text
         .strip_prefix("---")
         .and_then(|rest| rest.split_once("---").map(|(meta, _)| meta))
     else {
-        bail!("SKILL.md must start with YAML frontmatter containing `name` and `description`.");
+        return Err(invalid_skill_upload(
+            "SKILL.md must start with YAML frontmatter containing `name` and `description`.",
+        ));
     };
     let mut name = None;
     let mut description = None;
@@ -554,11 +655,14 @@ fn read_skill_metadata(skill_md: &Path) -> Result<(String, String)> {
             _ => {}
         }
     }
-    let name = name.ok_or_else(|| anyhow::anyhow!("SKILL.md frontmatter is missing `name`."))?;
+    let name =
+        name.ok_or_else(|| invalid_skill_upload("SKILL.md frontmatter is missing `name`."))?;
     let description = description
-        .ok_or_else(|| anyhow::anyhow!("SKILL.md frontmatter is missing `description`."))?;
+        .ok_or_else(|| invalid_skill_upload("SKILL.md frontmatter is missing `description`."))?;
     if name.trim().is_empty() || description.trim().is_empty() {
-        bail!("SKILL.md `name` and `description` must be non-empty.");
+        return Err(invalid_skill_upload(
+            "SKILL.md `name` and `description` must be non-empty.",
+        ));
     }
     Ok((name, description))
 }
@@ -591,23 +695,119 @@ fn unix_to_rfc3339(timestamp: u64) -> String {
         .to_rfc3339_opts(SecondsFormat::Secs, true)
 }
 
-fn skill_error(status: StatusCode, error: anyhow::Error) -> axum::response::Response {
-    (
-        status,
-        Json(json!({
-            "error": {
-                "message": error.to_string(),
-                "type": "invalid_request_error"
-            }
-        })),
-    )
-        .into_response()
+#[derive(Serialize)]
+struct AnthropicSkillErrorBody {
+    #[serde(rename = "type")]
+    tp: &'static str,
+    message: String,
 }
 
-fn prefers_anthropic_shape(headers: &HeaderMap, query: Option<&SkillListQuery>) -> bool {
+#[derive(Serialize)]
+struct AnthropicSkillError {
+    #[serde(rename = "type")]
+    tp: &'static str,
+    error: AnthropicSkillErrorBody,
+}
+
+fn anthropic_skill_error_response(error: ApiError) -> axum::response::Response {
+    let status = match error.kind {
+        ApiErrorKind::InvalidRequest | ApiErrorKind::UnsupportedMediaType => {
+            StatusCode::BAD_REQUEST
+        }
+        ApiErrorKind::NotFound => StatusCode::NOT_FOUND,
+        ApiErrorKind::Conflict => StatusCode::CONFLICT,
+        ApiErrorKind::PayloadTooLarge => StatusCode::PAYLOAD_TOO_LARGE,
+        ApiErrorKind::RateLimited => StatusCode::TOO_MANY_REQUESTS,
+        ApiErrorKind::Unavailable | ApiErrorKind::Internal => StatusCode::INTERNAL_SERVER_ERROR,
+        ApiErrorKind::Overloaded => StatusCode::from_u16(ANTHROPIC_OVERLOADED_STATUS)
+            .expect("Anthropic overloaded status must be valid"),
+    };
+    let error_type = match error.kind {
+        ApiErrorKind::InvalidRequest | ApiErrorKind::UnsupportedMediaType => {
+            "invalid_request_error"
+        }
+        ApiErrorKind::NotFound => "not_found_error",
+        ApiErrorKind::Conflict => "conflict_error",
+        ApiErrorKind::PayloadTooLarge => "request_too_large",
+        ApiErrorKind::RateLimited => "rate_limit_error",
+        ApiErrorKind::Unavailable | ApiErrorKind::Internal => "api_error",
+        ApiErrorKind::Overloaded => "overloaded_error",
+    };
+    let message = if error.kind == ApiErrorKind::Overloaded {
+        SERVICE_UNAVAILABLE_MESSAGE.to_string()
+    } else {
+        error.message
+    };
+    let mut response = (
+        status,
+        Json(AnthropicSkillError {
+            tp: "error",
+            error: AnthropicSkillErrorBody {
+                tp: error_type,
+                message: message.clone(),
+            },
+        }),
+    )
+        .into_response();
+    response
+        .extensions_mut()
+        .insert(ResponseErrorMessage(message));
+    response
+}
+
+fn protocol_error_response(error: ApiError, anthropic: bool) -> axum::response::Response {
+    if anthropic {
+        anthropic_skill_error_response(error)
+    } else {
+        openai_error_response(error)
+    }
+}
+
+fn skill_error(error: anyhow::Error, anthropic: bool) -> axum::response::Response {
+    let api_error = ApiError::from_error(error.as_ref(), ApiErrorKind::Internal);
+    if matches!(
+        api_error.kind,
+        ApiErrorKind::Internal | ApiErrorKind::Unavailable | ApiErrorKind::Overloaded
+    ) {
+        tracing::error!(%error, "skill request failed");
+    }
+    protocol_error_response(api_error, anthropic)
+}
+
+fn multipart_rejection_error(error: MultipartRejection) -> ApiError {
+    let kind = if error.status() == StatusCode::PAYLOAD_TOO_LARGE {
+        ApiErrorKind::PayloadTooLarge
+    } else {
+        ApiErrorKind::InvalidRequest
+    };
+    let code = if kind == ApiErrorKind::PayloadTooLarge {
+        "request_body_too_large"
+    } else {
+        "invalid_skill_upload"
+    };
+    ApiError::new(kind, error.body_text(), Some(code), Some("files"))
+}
+
+fn query_rejection_error(error: QueryRejection) -> ApiError {
+    ApiError::new(
+        ApiErrorKind::InvalidRequest,
+        error.body_text(),
+        Some("invalid_query"),
+        None,
+    )
+}
+
+fn prefers_anthropic_shape(
+    headers: &HeaderMap,
+    query: Option<&SkillListQuery>,
+    raw_query: Option<&str>,
+) -> bool {
     headers.contains_key("anthropic-version")
         || headers.contains_key("anthropic-beta")
         || query.and_then(|query| query.source.as_deref()).is_some()
+        || raw_query.is_some_and(|raw_query| {
+            url::form_urlencoded::parse(raw_query.as_bytes()).any(|(key, _)| key == "source")
+        })
 }
 
 fn anthropic_list_response(
@@ -644,15 +844,19 @@ fn anthropic_list_response(
 )]
 pub async fn upload_skill(
     headers: HeaderMap,
+    RawQuery(raw_query): RawQuery,
     Extension(store): Extension<Arc<SkillStore>>,
-    multipart: Multipart,
+    payload: std::result::Result<Multipart, MultipartRejection>,
 ) -> axum::response::Response {
+    let anthropic = prefers_anthropic_shape(&headers, None, raw_query.as_deref());
+    let multipart = match payload {
+        Ok(multipart) => multipart,
+        Err(error) => return protocol_error_response(multipart_rejection_error(error), anthropic),
+    };
     match store.create_skill(multipart).await {
-        Ok(skill) if prefers_anthropic_shape(&headers, None) => {
-            Json(AnthropicSkillObject::from(&skill)).into_response()
-        }
+        Ok(skill) if anthropic => Json(AnthropicSkillObject::from(&skill)).into_response(),
         Ok(skill) => Json(skill).into_response(),
-        Err(e) => skill_error(StatusCode::UNPROCESSABLE_ENTITY, e),
+        Err(error) => skill_error(error, anthropic),
     }
 }
 
@@ -664,19 +868,40 @@ pub async fn upload_skill(
 )]
 pub async fn list_skills(
     headers: HeaderMap,
-    Query(query): Query<SkillListQuery>,
+    RawQuery(raw_query): RawQuery,
+    payload: std::result::Result<Query<SkillListQuery>, QueryRejection>,
     Extension(store): Extension<Arc<SkillStore>>,
 ) -> axum::response::Response {
-    match store.list() {
-        Ok(data) if prefers_anthropic_shape(&headers, Some(&query)) => {
-            Json(anthropic_list_response(data, Some(&query))).into_response()
+    let query = match payload {
+        Ok(Query(query)) => query,
+        Err(error) => {
+            let anthropic = prefers_anthropic_shape(&headers, None, raw_query.as_deref());
+            return protocol_error_response(query_rejection_error(error), anthropic);
         }
+    };
+    let anthropic = prefers_anthropic_shape(&headers, Some(&query), raw_query.as_deref());
+    match query.source.as_deref() {
+        Some(source) if source != CUSTOM_SKILL_SOURCE && source != ANTHROPIC_SKILL_SOURCE => {
+            return protocol_error_response(
+                ApiError::new(
+                    ApiErrorKind::InvalidRequest,
+                    format!("Unsupported skill source `{source}`."),
+                    Some("invalid_query"),
+                    Some("source"),
+                ),
+                anthropic,
+            );
+        }
+        _ => {}
+    }
+    match store.list() {
+        Ok(data) if anthropic => Json(anthropic_list_response(data, Some(&query))).into_response(),
         Ok(data) => Json(SkillListObject {
             object: "list",
             data,
         })
         .into_response(),
-        Err(e) => skill_error(StatusCode::INTERNAL_SERVER_ERROR, e),
+        Err(error) => skill_error(error, anthropic),
     }
 }
 
@@ -689,15 +914,21 @@ pub async fn list_skills(
 pub async fn upload_skill_version(
     AxumPath(skill_id): AxumPath<String>,
     headers: HeaderMap,
+    RawQuery(raw_query): RawQuery,
     Extension(store): Extension<Arc<SkillStore>>,
-    multipart: Multipart,
+    payload: std::result::Result<Multipart, MultipartRejection>,
 ) -> axum::response::Response {
+    let anthropic = prefers_anthropic_shape(&headers, None, raw_query.as_deref());
+    let multipart = match payload {
+        Ok(multipart) => multipart,
+        Err(error) => return protocol_error_response(multipart_rejection_error(error), anthropic),
+    };
     match store.create_version(&skill_id, multipart).await {
-        Ok(version) if prefers_anthropic_shape(&headers, None) => {
+        Ok(version) if anthropic => {
             Json(AnthropicSkillVersionObject::from(&version)).into_response()
         }
         Ok(version) => Json(version).into_response(),
-        Err(e) => skill_error(StatusCode::UNPROCESSABLE_ENTITY, e),
+        Err(error) => skill_error(error, anthropic),
     }
 }
 
@@ -709,8 +940,11 @@ pub async fn upload_skill_version(
 )]
 pub async fn list_skill_versions(
     AxumPath(skill_id): AxumPath<String>,
+    headers: HeaderMap,
+    RawQuery(raw_query): RawQuery,
     Extension(store): Extension<Arc<SkillStore>>,
 ) -> axum::response::Response {
+    let anthropic = prefers_anthropic_shape(&headers, None, raw_query.as_deref());
     match store.list_versions(&skill_id) {
         Ok(versions) => Json(AnthropicSkillVersionListObject {
             data: versions
@@ -721,13 +955,58 @@ pub async fn list_skill_versions(
             next_page: None,
         })
         .into_response(),
-        Err(e) => skill_error(StatusCode::NOT_FOUND, e),
+        Err(error) => skill_error(error, anthropic),
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use axum::{
+        body::Body,
+        extract::FromRequest,
+        http::{header, Request, Uri},
+    };
+    use http_body_util::BodyExt;
+
     use super::*;
+
+    fn test_store() -> (tempfile::TempDir, Arc<SkillStore>) {
+        let root = tempfile::tempdir().unwrap();
+        let store = Arc::new(SkillStore::new(root.path().to_path_buf()).unwrap());
+        (root, store)
+    }
+
+    fn anthropic_headers() -> HeaderMap {
+        let mut headers = HeaderMap::new();
+        headers.insert("anthropic-version", "2023-06-01".parse().unwrap());
+        headers
+    }
+
+    async fn response_json(response: axum::response::Response) -> Value {
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        serde_json::from_slice(&body).unwrap()
+    }
+
+    async fn invalid_boundary_multipart() -> std::result::Result<Multipart, MultipartRejection> {
+        let request = Request::builder()
+            .header(header::CONTENT_TYPE, "multipart/form-data")
+            .body(Body::empty())
+            .unwrap();
+        Multipart::from_request(request, &()).await
+    }
+
+    async fn multipart_with_body(
+        body: &'static str,
+    ) -> std::result::Result<Multipart, MultipartRejection> {
+        let request = Request::builder()
+            .header(
+                header::CONTENT_TYPE,
+                "multipart/form-data; boundary=skill-test",
+            )
+            .body(Body::from(body))
+            .unwrap();
+        Multipart::from_request(request, &()).await
+    }
 
     fn test_skill() -> SkillObject {
         SkillObject {
@@ -769,5 +1048,173 @@ mod tests {
         let response = anthropic_list_response(vec![test_skill()], Some(&query));
 
         assert!(response.data.is_empty());
+    }
+
+    #[tokio::test]
+    async fn multipart_rejections_use_protocol_error_envelopes() {
+        let (_root, store) = test_store();
+        let response = upload_skill(
+            HeaderMap::new(),
+            RawQuery(None),
+            Extension(store.clone()),
+            invalid_boundary_multipart().await,
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let body = response_json(response).await;
+        assert_eq!(body["error"]["type"], "invalid_request_error");
+        assert_eq!(body["error"]["code"], "invalid_skill_upload");
+
+        let response = upload_skill(
+            anthropic_headers(),
+            RawQuery(None),
+            Extension(store),
+            invalid_boundary_multipart().await,
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let body = response_json(response).await;
+        assert_eq!(body["type"], "error");
+        assert_eq!(body["error"]["type"], "invalid_request_error");
+    }
+
+    #[tokio::test]
+    async fn upload_validation_is_a_bad_request() {
+        const BODY: &str = "--skill-test\r\nContent-Disposition: form-data; name=\"ignored\"\r\n\r\nvalue\r\n--skill-test--\r\n";
+
+        let (_root, store) = test_store();
+        let response = upload_skill(
+            HeaderMap::new(),
+            RawQuery(None),
+            Extension(store),
+            multipart_with_body(BODY).await,
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let body = response_json(response).await;
+        assert_eq!(body["error"]["code"], "invalid_skill_upload");
+    }
+
+    #[tokio::test]
+    async fn query_rejection_uses_raw_source_to_select_anthropic_shape() {
+        let (_root, store) = test_store();
+        let raw_query = "source=custom&limit=invalid";
+        let uri: Uri = format!("/v1/skills?{raw_query}").parse().unwrap();
+        let payload = Query::<SkillListQuery>::try_from_uri(&uri);
+        assert!(payload.is_err());
+
+        let response = list_skills(
+            HeaderMap::new(),
+            RawQuery(Some(raw_query.to_string())),
+            payload,
+            Extension(store),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let body = response_json(response).await;
+        assert_eq!(body["type"], "error");
+        assert_eq!(body["error"]["type"], "invalid_request_error");
+    }
+
+    #[tokio::test]
+    async fn unsupported_source_is_an_invalid_anthropic_query() {
+        let (_root, store) = test_store();
+        let raw_query = "source=unknown";
+        let uri: Uri = format!("/v1/skills?{raw_query}").parse().unwrap();
+        let payload = Query::<SkillListQuery>::try_from_uri(&uri);
+
+        let response = list_skills(
+            HeaderMap::new(),
+            RawQuery(Some(raw_query.to_string())),
+            payload,
+            Extension(store),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let body = response_json(response).await;
+        assert_eq!(body["type"], "error");
+        assert_eq!(body["error"]["type"], "invalid_request_error");
+        assert!(body["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("unknown"));
+    }
+
+    #[tokio::test]
+    async fn anthropic_conflicts_preserve_the_conflict() {
+        let response = anthropic_skill_error_response(ApiError::new(
+            ApiErrorKind::Conflict,
+            "private conflict detail",
+            None,
+            None,
+        ));
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+        let body = response_json(response).await;
+        assert_eq!(body["error"]["type"], "conflict_error");
+        assert_eq!(body["error"]["message"], "private conflict detail");
+    }
+
+    #[tokio::test]
+    async fn missing_skill_is_not_found_but_store_failure_is_internal() {
+        let (_root, store) = test_store();
+        let response = list_skill_versions(
+            AxumPath("skill_missing".to_string()),
+            HeaderMap::new(),
+            RawQuery(None),
+            Extension(store.clone()),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        let body = response_json(response).await;
+        assert_eq!(body["error"]["code"], "skill_not_found");
+
+        let skills = store.skills.clone();
+        assert!(std::panic::catch_unwind(move || {
+            let _guard = skills.write().unwrap();
+            panic!("poison skill store");
+        })
+        .is_err());
+        let response = list_skill_versions(
+            AxumPath("skill_missing".to_string()),
+            HeaderMap::new(),
+            RawQuery(None),
+            Extension(store),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        let body = response_json(response).await;
+        assert_eq!(body["error"]["message"], "Internal server error.");
+        assert!(!body.to_string().contains("poison"));
+    }
+
+    #[test]
+    fn size_and_missing_version_errors_keep_their_statuses() {
+        let response = skill_error(skill_upload_too_large("Skill upload is too large."), true);
+        assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+
+        let (_root, store) = test_store();
+        store.skills.write().unwrap().insert(
+            "skill_abc".to_string(),
+            SkillMetadata {
+                id: "skill_abc".to_string(),
+                name: "test".to_string(),
+                description: "test".to_string(),
+                created_at: 1,
+                versions: vec![SkillVersionMetadata {
+                    version: 1,
+                    created_at: 1,
+                    source_path: PathBuf::new(),
+                }],
+            },
+        );
+        let error = store
+            .resolve_references(&[OpenAiShellSkillReference {
+                skill_id: "skill_abc".to_string(),
+                version: Some(Value::String("2".to_string())),
+            }])
+            .unwrap_err();
+        let error = ApiError::from_error(error.as_ref(), ApiErrorKind::InvalidRequest);
+        assert_eq!(error.status(), StatusCode::NOT_FOUND);
+        assert_eq!(error.code.as_deref(), Some("skill_not_found"));
     }
 }

@@ -1,17 +1,22 @@
 //! OpenAI-compatible Files endpoints for uploaded request files and agent-produced files.
 
 use axum::{
-    extract::{Multipart, Path, State},
+    extract::{multipart::MultipartRejection, Multipart, Path, State},
     http::{header, StatusCode},
     response::{IntoResponse, Response},
     Json,
 };
 use base64::{engine::general_purpose::STANDARD, Engine};
-use mistralrs_core::{File as CoreFile, FileContent, FileSource, FILE_PURPOSE_USER_DATA};
+use mistralrs_core::{
+    File as CoreFile, FileContent, FileSource, MistralRs, MistralRsError, FILE_PURPOSE_USER_DATA,
+};
 use serde::Serialize;
 use utoipa::ToSchema;
 
-use crate::types::{ExtractedMistralRsState, SharedMistralRsState};
+use crate::{
+    handler_core::{openai_error_response, ApiError, ApiErrorKind},
+    types::{ExtractedMistralRsState, SharedMistralRsState},
+};
 
 const MAX_FILE_UPLOAD_BYTES: usize = 64 * 1024 * 1024;
 
@@ -72,7 +77,16 @@ pub struct SourceMeta {
         (status = 400, description = "Invalid upload"),
     )
 )]
-pub async fn upload_file(State(state): ExtractedMistralRsState, multipart: Multipart) -> Response {
+pub async fn upload_file(
+    State(state): ExtractedMistralRsState,
+    payload: Result<Multipart, MultipartRejection>,
+) -> Response {
+    let multipart = match payload {
+        Ok(multipart) => multipart,
+        Err(error) => {
+            return openai_error_response(ApiError::from_status(error.status(), error.body_text()));
+        }
+    };
     match parse_upload(multipart).await {
         Ok(upload) => {
             let file = CoreFile::from_bytes(
@@ -88,31 +102,24 @@ pub async fn upload_file(State(state): ExtractedMistralRsState, multipart: Multi
                 upload.bytes,
             );
             if let Err(e) = state.insert_file(None, file.clone(), None) {
-                return (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(serde_json::json!({ "error": e.to_string() })),
-                )
-                    .into_response();
+                MistralRs::maybe_log_error(state, &e);
+                return openai_error_response(ApiError::internal());
             }
             Json(metadata(&file)).into_response()
         }
-        Err(e) => (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({ "error": e.to_string() })),
-        )
-            .into_response(),
+        Err(error) => openai_error_response(error),
     }
 }
 
-async fn parse_upload(mut multipart: Multipart) -> anyhow::Result<FileUpload> {
+async fn parse_upload(mut multipart: Multipart) -> Result<FileUpload, ApiError> {
     let mut purpose = None;
     let mut file = None;
 
-    while let Some(field) = multipart.next_field().await? {
+    while let Some(field) = multipart.next_field().await.map_err(multipart_error)? {
         let field_name = field.name().unwrap_or_default().to_string();
         match field_name.as_str() {
             "purpose" => {
-                let value = field.text().await?;
+                let value = field.text().await.map_err(multipart_error)?;
                 if !value.trim().is_empty() {
                     purpose = Some(value);
                 }
@@ -120,12 +127,24 @@ async fn parse_upload(mut multipart: Multipart) -> anyhow::Result<FileUpload> {
             "file" => {
                 let filename = field
                     .file_name()
-                    .ok_or_else(|| anyhow::anyhow!("Uploaded file is missing a filename."))?
+                    .ok_or_else(|| {
+                        ApiError::new(
+                            ApiErrorKind::InvalidRequest,
+                            "Uploaded file is missing a filename.",
+                            Some("invalid_file"),
+                            Some("file"),
+                        )
+                    })?
                     .to_string();
                 let mime_type = field.content_type().map(ToString::to_string);
-                let bytes = field.bytes().await?.to_vec();
+                let bytes = field.bytes().await.map_err(multipart_error)?.to_vec();
                 if bytes.len() > MAX_FILE_UPLOAD_BYTES {
-                    anyhow::bail!("File upload exceeds the {MAX_FILE_UPLOAD_BYTES} byte limit.");
+                    return Err(ApiError::new(
+                        ApiErrorKind::PayloadTooLarge,
+                        format!("File upload exceeds the {MAX_FILE_UPLOAD_BYTES} byte limit."),
+                        Some("file_too_large"),
+                        Some("file"),
+                    ));
                 }
                 file = Some((filename, mime_type, bytes));
             }
@@ -134,13 +153,24 @@ async fn parse_upload(mut multipart: Multipart) -> anyhow::Result<FileUpload> {
     }
 
     let purpose = purpose.ok_or_else(|| {
-        anyhow::anyhow!(
-            "File upload requires multipart field `purpose` such as `{}`.",
-            FILE_PURPOSE_USER_DATA
+        ApiError::new(
+            ApiErrorKind::InvalidRequest,
+            format!(
+                "File upload requires multipart field `purpose` such as `{}`.",
+                FILE_PURPOSE_USER_DATA
+            ),
+            Some("missing_required_parameter"),
+            Some("purpose"),
         )
     })?;
-    let (filename, mime_type, bytes) =
-        file.ok_or_else(|| anyhow::anyhow!("File upload requires multipart field `file`."))?;
+    let (filename, mime_type, bytes) = file.ok_or_else(|| {
+        ApiError::new(
+            ApiErrorKind::InvalidRequest,
+            "File upload requires multipart field `file`.",
+            Some("missing_required_parameter"),
+            Some("file"),
+        )
+    })?;
 
     Ok(FileUpload {
         filename,
@@ -148,6 +178,10 @@ async fn parse_upload(mut multipart: Multipart) -> anyhow::Result<FileUpload> {
         purpose,
         bytes,
     })
+}
+
+fn multipart_error(error: axum::extract::multipart::MultipartError) -> ApiError {
+    ApiError::from_status(error.status(), error.body_text())
 }
 
 #[utoipa::path(
@@ -158,12 +192,14 @@ async fn parse_upload(mut multipart: Multipart) -> anyhow::Result<FileUpload> {
     responses(
         (status = 200, description = "File metadata", body = FileMetadata),
         (status = 404, description = "File not found or expired"),
+        (status = 500, description = "Internal server error"),
     )
 )]
 pub async fn get_file(State(state): ExtractedMistralRsState, Path(id): Path<String>) -> Response {
-    match state.find_file(&id) {
-        Some(f) => Json(metadata(&f)).into_response(),
-        None => not_found(&id),
+    match state.try_find_file(&id) {
+        Ok(Some(f)) => Json(metadata(&f)).into_response(),
+        Ok(None) => not_found(&id),
+        Err(error) => file_store_error(state, &error),
     }
 }
 
@@ -176,25 +212,31 @@ pub async fn get_file(State(state): ExtractedMistralRsState, Path(id): Path<Stri
         (status = 200, description = "Raw file bytes with the file's MIME type"),
         (status = 404, description = "File not found or expired"),
         (status = 410, description = "File body was elided and is no longer fetchable"),
+        (status = 500, description = "Internal server error"),
     )
 )]
 pub async fn get_file_content(
     State(state): ExtractedMistralRsState,
     Path(id): Path<String>,
 ) -> Response {
-    serve_bytes(state, &id).unwrap_or_else(|(code, msg)| {
-        (code, [(header::CONTENT_TYPE, "application/json")], msg).into_response()
-    })
+    serve_bytes(state, &id)
 }
 
 #[utoipa::path(
     get,
     tag = "Mistral.rs",
     path = "/v1/files",
-    responses((status = 200, description = "List of file metadata", body = [FileMetadata]))
+    responses(
+        (status = 200, description = "List of file metadata", body = [FileMetadata]),
+        (status = 500, description = "Internal server error"),
+    )
 )]
 pub async fn list_files(State(state): ExtractedMistralRsState) -> Response {
-    let data: Vec<FileMetadata> = state.list_files().iter().map(|f| metadata(f)).collect();
+    let files = match state.try_list_files() {
+        Ok(files) => files,
+        Err(error) => return file_store_error(state, &error),
+    };
+    let data: Vec<FileMetadata> = files.iter().map(|f| metadata(f)).collect();
     Json(serde_json::json!({ "object": "list", "data": data })).into_response()
 }
 
@@ -206,14 +248,17 @@ pub async fn list_files(State(state): ExtractedMistralRsState) -> Response {
     responses(
         (status = 200, description = "File deleted"),
         (status = 404, description = "File not found or expired"),
+        (status = 500, description = "Internal server error"),
     )
 )]
 pub async fn delete_file(
     State(state): ExtractedMistralRsState,
     Path(id): Path<String>,
 ) -> Response {
-    if !state.remove_file(&id) {
-        return not_found(&id);
+    match state.try_remove_file(&id) {
+        Ok(true) => {}
+        Ok(false) => return not_found(&id),
+        Err(error) => return file_store_error(state, &error),
     }
     Json(serde_json::json!({
         "id": id,
@@ -228,14 +273,20 @@ pub async fn delete_file(
     tag = "Mistral.rs",
     path = "/v1/containers/{container_id}/files",
     params(("container_id" = String, Path, description = "Container ID")),
-    responses((status = 200, description = "List of container file metadata", body = [ContainerFileMetadata]))
+    responses(
+        (status = 200, description = "List of container file metadata", body = [ContainerFileMetadata]),
+        (status = 500, description = "Internal server error"),
+    )
 )]
 pub async fn list_container_files(
     State(state): ExtractedMistralRsState,
     Path(container_id): Path<String>,
 ) -> Response {
-    let data: Vec<ContainerFileMetadata> = state
-        .list_files()
+    let files = match state.try_list_files() {
+        Ok(files) => files,
+        Err(error) => return file_store_error(state, &error),
+    };
+    let data: Vec<ContainerFileMetadata> = files
         .iter()
         .map(|f| container_metadata(&container_id, f))
         .collect();
@@ -253,15 +304,17 @@ pub async fn list_container_files(
     responses(
         (status = 200, description = "Container file metadata", body = ContainerFileMetadata),
         (status = 404, description = "File not found or expired"),
+        (status = 500, description = "Internal server error"),
     )
 )]
 pub async fn get_container_file(
     State(state): ExtractedMistralRsState,
     Path((container_id, file_id)): Path<(String, String)>,
 ) -> Response {
-    match state.find_file(&file_id) {
-        Some(f) => Json(container_metadata(&container_id, &f)).into_response(),
-        None => not_found(&file_id),
+    match state.try_find_file(&file_id) {
+        Ok(Some(f)) => Json(container_metadata(&container_id, &f)).into_response(),
+        Ok(None) => not_found(&file_id),
+        Err(error) => file_store_error(state, &error),
     }
 }
 
@@ -277,15 +330,14 @@ pub async fn get_container_file(
         (status = 200, description = "Raw file bytes with the file's MIME type"),
         (status = 404, description = "File not found or expired"),
         (status = 410, description = "File body was elided and is no longer fetchable"),
+        (status = 500, description = "Internal server error"),
     )
 )]
 pub async fn get_container_file_content(
     State(state): ExtractedMistralRsState,
     Path((_container_id, file_id)): Path<(String, String)>,
 ) -> Response {
-    serve_bytes(state, &file_id).unwrap_or_else(|(code, msg)| {
-        (code, [(header::CONTENT_TYPE, "application/json")], msg).into_response()
-    })
+    serve_bytes(state, &file_id)
 }
 
 fn metadata(f: &CoreFile) -> FileMetadata {
@@ -331,13 +383,12 @@ fn container_metadata(container_id: &str, f: &CoreFile) -> ContainerFileMetadata
     }
 }
 
-fn serve_bytes(state: SharedMistralRsState, id: &str) -> Result<Response, (StatusCode, String)> {
-    let file = state.find_file(id).ok_or_else(|| {
-        (
-            StatusCode::NOT_FOUND,
-            json_error("file not found or expired"),
-        )
-    })?;
+fn serve_bytes(state: SharedMistralRsState, id: &str) -> Response {
+    let file = match state.try_find_file(id) {
+        Ok(Some(file)) => file,
+        Ok(None) => return not_found(id),
+        Err(error) => return file_store_error(state, &error),
+    };
 
     let mime = file
         .mime_type
@@ -347,27 +398,27 @@ fn serve_bytes(state: SharedMistralRsState, id: &str) -> Result<Response, (Statu
     let bytes: Vec<u8> = match &file.content {
         FileContent::Text { text: Some(t), .. } => t.as_bytes().to_vec(),
         FileContent::Text { text: None, .. } => {
-            return Err((
-                StatusCode::GONE,
-                json_error("text body was elided; not available via fetch"),
-            ));
+            return content_gone("Text body was elided and is no longer available.");
         }
         FileContent::Binary {
             data_base64: Some(b),
-        } => STANDARD.decode(b).map_err(|e| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                json_error(&format!("base64 decode failed: {e}")),
-            )
-        })?,
+        } => match STANDARD.decode(b) {
+            Ok(bytes) => bytes,
+            Err(error) => {
+                tracing::error!(%error, file_id = id, "failed to decode stored file content");
+                return openai_error_response(ApiError::internal());
+            }
+        },
         FileContent::Binary { data_base64: None } => {
-            return Err((
-                StatusCode::GONE,
-                json_error("binary body was elided; not available via fetch"),
-            ));
+            return content_gone("Binary body was elided and is no longer available.");
         }
         FileContent::Error { message, .. } => {
-            return Err((StatusCode::UNPROCESSABLE_ENTITY, json_error(message)));
+            return openai_error_response(ApiError::new(
+                ApiErrorKind::InvalidRequest,
+                message,
+                Some("file_content_error"),
+                Some("file_id"),
+            ));
         }
     };
 
@@ -377,7 +428,7 @@ fn serve_bytes(state: SharedMistralRsState, id: &str) -> Result<Response, (Statu
         ascii_safe_filename(&file.name),
         percent_encode_filename(&file.name),
     );
-    Ok((
+    (
         StatusCode::OK,
         [
             (header::CONTENT_TYPE, mime),
@@ -386,22 +437,32 @@ fn serve_bytes(state: SharedMistralRsState, id: &str) -> Result<Response, (Statu
         ],
         bytes,
     )
-        .into_response())
+        .into_response()
+}
+
+fn file_store_error(state: SharedMistralRsState, error: &MistralRsError) -> Response {
+    MistralRs::maybe_log_error(state, error);
+    openai_error_response(ApiError::from_error(error, ApiErrorKind::Internal))
 }
 
 fn not_found(id: &str) -> Response {
-    let body = serde_json::json!({
-        "error": {
-            "message": format!("File '{id}' not found or expired"),
-            "type": "invalid_request_error",
-            "code": "file_not_found",
-        }
-    });
-    (StatusCode::NOT_FOUND, Json(body)).into_response()
+    openai_error_response(ApiError::new(
+        ApiErrorKind::NotFound,
+        format!("File '{id}' not found or expired."),
+        Some("file_not_found"),
+        Some("file_id"),
+    ))
 }
 
-fn json_error(msg: &str) -> String {
-    serde_json::json!({ "error": msg }).to_string()
+fn content_gone(message: &str) -> Response {
+    let mut response = openai_error_response(ApiError::new(
+        ApiErrorKind::NotFound,
+        message,
+        Some("file_content_unavailable"),
+        Some("file_id"),
+    ));
+    *response.status_mut() = StatusCode::GONE;
+    response
 }
 
 fn ascii_safe_filename(name: &str) -> String {

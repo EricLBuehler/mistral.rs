@@ -38,8 +38,22 @@ pub struct AddedTokensDecoder {
     special: Option<bool>,
 }
 
+#[derive(Debug, thiserror::Error)]
+#[error("{0}")]
+pub(crate) struct ChatTemplateRequestError(String);
+
+#[doc(hidden)]
+pub fn is_chat_template_request_error(error: &anyhow::Error) -> bool {
+    error
+        .chain()
+        .any(|source| source.is::<ChatTemplateRequestError>())
+}
+
 fn raise_exception(msg: String) -> Result<String, minijinja::Error> {
-    Err(minijinja::Error::new(ErrorKind::InvalidOperation, msg))
+    Err(
+        minijinja::Error::new(ErrorKind::InvalidOperation, msg.clone())
+            .with_source(ChatTemplateRequestError(msg)),
+    )
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -728,9 +742,11 @@ pub fn apply_chat_template_to(
             let must_use_tool_template = !tools.is_empty();
 
             if must_use_tool_template && !has_tool_use {
-                anyhow::bail!(
+                return Err(ChatTemplateRequestError(
                     "Tools were provided but this chat template does not handle tool usage"
-                );
+                        .to_string(),
+                )
+                .into());
             }
 
             let mut found_template = None;
@@ -884,6 +900,8 @@ pub fn apply_chat_template_to(
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
     use either::Either;
     use indexmap::IndexMap;
     use serde_json::Value;
@@ -893,7 +911,9 @@ mod tests {
         template_tool_call_format, ChatTemplate, ChatTemplateValue, GenerationConfig,
         ReasoningEffort,
     };
-    use crate::{tools::ToolCallFormat, MessageContent, DEFAULT_ENABLE_THINKING};
+    use crate::{
+        tools::ToolCallFormat, Function, MessageContent, Tool, ToolType, DEFAULT_ENABLE_THINKING,
+    };
     use tokenizers::Tokenizer;
 
     fn user_text_message(text: &str) -> IndexMap<String, MessageContent> {
@@ -918,6 +938,58 @@ mod tests {
         }))
         .unwrap();
         assert!(invalid.validate_token_ids(4).is_err());
+    }
+
+    #[test]
+    fn intentional_template_rejections_keep_validation_identity() {
+        let template = ChatTemplateValue(Either::Left(
+            "{{ raise_exception('messages must alternate') }}".to_string(),
+        ));
+        let error = apply_chat_template_to(
+            vec![user_text_message("hello")],
+            false,
+            None,
+            None,
+            &template,
+            None,
+            None,
+            None,
+            Vec::new(),
+        )
+        .unwrap_err();
+
+        assert!(super::is_chat_template_request_error(&error));
+    }
+
+    #[test]
+    fn tools_require_a_compatible_template() {
+        let template = ChatTemplateValue(Either::Right(vec![HashMap::from([
+            ("name".to_string(), "default".to_string()),
+            ("template".to_string(), "{{ messages }}".to_string()),
+        ])]));
+        let tool = Tool {
+            tp: ToolType::Function,
+            function: Function {
+                name: "lookup".to_string(),
+                description: None,
+                parameters: None,
+                strict: None,
+            },
+        };
+        let error = apply_chat_template_to(
+            vec![user_text_message("hello")],
+            false,
+            None,
+            None,
+            &template,
+            None,
+            None,
+            None,
+            vec![tool],
+        )
+        .unwrap_err();
+
+        assert!(super::is_chat_template_request_error(&error));
     }
 
     #[test]

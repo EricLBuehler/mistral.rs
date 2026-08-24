@@ -2,8 +2,7 @@
 
 use anyhow::{anyhow, Context, Error as AnyhowError, Result};
 use axum::{
-    extract::{Json, State},
-    http,
+    extract::{rejection::JsonRejection, Json, State},
     response::IntoResponse,
 };
 use base64::{prelude::BASE64_STANDARD, Engine};
@@ -15,15 +14,15 @@ use tokio::sync::mpsc::Receiver;
 
 use crate::{
     handler_core::{
-        base_process_non_streaming_response, create_response_channel, send_request_with_model,
-        ErrorToResponse, JsonError,
+        base_process_non_streaming_response, create_response_channel, openai_error_from_error,
+        send_request_with_model, ApiError, ApiErrorKind, ModelErrorMessage,
     },
     openai::{
         EmbeddingData, EmbeddingEncodingFormat, EmbeddingInput, EmbeddingRequest,
         EmbeddingResponse, EmbeddingUsage, EmbeddingVector,
     },
     types::{ExtractedMistralRsState, SharedMistralRsState},
-    util::{sanitize_error_message, validate_model_name},
+    util::validate_model_name,
 };
 
 /// Represents different types of embeddings responses.
@@ -44,12 +43,10 @@ impl IntoResponse for EmbeddingResponder {
         match self {
             EmbeddingResponder::Json(s) => Json(s).into_response(),
             EmbeddingResponder::InternalError(e) => {
-                JsonError::new(sanitize_error_message(e.root_cause()))
-                    .to_response(http::StatusCode::INTERNAL_SERVER_ERROR)
+                openai_error_from_error(e.as_ref(), ApiErrorKind::Internal)
             }
             EmbeddingResponder::ValidationError(e) => {
-                JsonError::new(sanitize_error_message(e.root_cause()))
-                    .to_response(http::StatusCode::UNPROCESSABLE_ENTITY)
+                openai_error_from_error(e.as_ref(), ApiErrorKind::InvalidRequest)
             }
         }
     }
@@ -64,8 +61,14 @@ impl IntoResponse for EmbeddingResponder {
 )]
 pub async fn embeddings(
     State(state): ExtractedMistralRsState,
-    Json(oairequest): Json<EmbeddingRequest>,
+    payload: Result<Json<EmbeddingRequest>, JsonRejection>,
 ) -> EmbeddingResponder {
+    let oairequest = match payload {
+        Ok(Json(request)) => request,
+        Err(error) => {
+            return validation_error(AnyhowError::new(ApiError::from_json_rejection(error)));
+        }
+    };
     let repr =
         serde_json::to_string(&oairequest).expect("Serialization of embedding request failed.");
     MistralRs::maybe_log_request(state.clone(), repr);
@@ -75,9 +78,12 @@ pub async fn embeddings(
     }
 
     if let Some(dimensions) = oairequest.dimensions {
-        return validation_error(anyhow!(
-            "Custom embedding dimensions ({dimensions}) are not supported."
-        ));
+        return validation_error(AnyhowError::new(ApiError::new(
+            ApiErrorKind::InvalidRequest,
+            format!("Custom embedding dimensions ({dimensions}) are not supported."),
+            Some("invalid_dimensions"),
+            Some("dimensions"),
+        )));
     }
 
     let inputs = match normalize_inputs(oairequest.input) {
@@ -86,7 +92,12 @@ pub async fn embeddings(
     };
 
     if inputs.is_empty() {
-        return validation_error(anyhow!("input must contain at least one entry."));
+        return validation_error(AnyhowError::new(ApiError::new(
+            ApiErrorKind::InvalidRequest,
+            "input must contain at least one entry.",
+            Some("invalid_input"),
+            Some("input"),
+        )));
     }
 
     let model_override = if oairequest.model == "default" {
@@ -353,8 +364,18 @@ async fn process_embedding_response(
                 prompt_tokens,
                 total_tokens,
             }),
-            Response::ValidationError(e) | Response::InternalError(e) => Err(anyhow!(e)),
-            Response::ModelError(msg, _) => Err(anyhow!(msg)),
+            Response::ValidationError(e) => Err(AnyhowError::new(ApiError::from_error(
+                e.as_ref(),
+                ApiErrorKind::InvalidRequest,
+            ))),
+            Response::InternalError(e) => {
+                MistralRs::maybe_log_error(state.clone(), e.as_ref());
+                Err(anyhow!(e))
+            }
+            Response::ModelError(msg, _) => {
+                MistralRs::maybe_log_error(state.clone(), &ModelErrorMessage(msg));
+                Err(AnyhowError::new(ApiError::model_error()))
+            }
             Response::Done(_)
             | Response::Chunk(_)
             | Response::CompletionDone(_)

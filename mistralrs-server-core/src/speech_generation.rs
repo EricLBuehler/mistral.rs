@@ -5,7 +5,7 @@ use std::{error::Error, sync::Arc};
 use anyhow::Result;
 use axum::{
     body::Bytes,
-    extract::{Json, State},
+    extract::{rejection::JsonRejection, Json, State},
     http::{self, HeaderMap, HeaderValue, StatusCode},
     response::IntoResponse,
 };
@@ -17,12 +17,12 @@ use tokio::sync::mpsc::{Receiver, Sender};
 
 use crate::{
     handler_core::{
-        base_process_non_streaming_response, create_response_channel, send_request,
-        ErrorToResponse, JsonError,
+        base_process_non_streaming_response, create_response_channel, openai_error_from_error,
+        send_request, ApiError, ApiErrorKind, ModelErrorMessage,
     },
     openai::{AudioResponseFormat, SpeechGenerationRequest},
     types::SharedMistralRsState,
-    util::{sanitize_error_message, validate_model_name},
+    util::validate_model_name,
 };
 
 /// Represents different types of speech generation responses.
@@ -37,12 +37,10 @@ impl IntoResponse for SpeechGenerationResponder {
     fn into_response(self) -> axum::response::Response {
         match self {
             SpeechGenerationResponder::InternalError(e) => {
-                JsonError::new(sanitize_error_message(e.as_ref()))
-                    .to_response(http::StatusCode::INTERNAL_SERVER_ERROR)
+                openai_error_from_error(e.as_ref(), ApiErrorKind::Internal)
             }
             SpeechGenerationResponder::ValidationError(e) => {
-                JsonError::new(sanitize_error_message(e.as_ref()))
-                    .to_response(http::StatusCode::UNPROCESSABLE_ENTITY)
+                openai_error_from_error(e.as_ref(), ApiErrorKind::InvalidRequest)
             }
             SpeechGenerationResponder::RawResponse(resp) => resp,
         }
@@ -117,13 +115,21 @@ pub fn parse_request(
 )]
 pub async fn speech_generation(
     State(state): State<Arc<MistralRs>>,
-    Json(oairequest): Json<SpeechGenerationRequest>,
+    payload: Result<Json<SpeechGenerationRequest>, JsonRejection>,
 ) -> SpeechGenerationResponder {
+    let oairequest = match payload {
+        Ok(Json(request)) => request,
+        Err(error) => {
+            return SpeechGenerationResponder::ValidationError(Box::new(
+                ApiError::from_json_rejection(error),
+            ));
+        }
+    };
     let (tx, mut rx) = create_response_channel(None);
 
     let (request, response_format) = match parse_request(oairequest, state.clone(), tx) {
         Ok(x) => x,
-        Err(e) => return handle_error(state, e.into()),
+        Err(e) => return SpeechGenerationResponder::ValidationError(e.into()),
     };
 
     // Validate response format here
@@ -131,8 +137,11 @@ pub async fn speech_generation(
         response_format,
         AudioResponseFormat::Wav | AudioResponseFormat::Pcm
     ) {
-        return SpeechGenerationResponder::ValidationError(Box::new(JsonError::new(
-            "Only support wav/pcm response format.".to_string(),
+        return SpeechGenerationResponder::ValidationError(Box::new(ApiError::new(
+            ApiErrorKind::InvalidRequest,
+            "Only wav and pcm response formats are supported.",
+            Some("invalid_response_format"),
+            Some("response_format"),
         )));
     }
 
@@ -148,10 +157,8 @@ pub fn handle_error(
     state: SharedMistralRsState,
     e: Box<dyn std::error::Error + Send + Sync + 'static>,
 ) -> SpeechGenerationResponder {
-    let sanitized_msg = sanitize_error_message(&*e);
-    let e = anyhow::Error::msg(sanitized_msg);
-    MistralRs::maybe_log_error(state, &*e);
-    SpeechGenerationResponder::InternalError(e.into())
+    MistralRs::maybe_log_error(state, e.as_ref());
+    SpeechGenerationResponder::InternalError(e)
 }
 
 /// Process non-streaming speech generation responses.
@@ -183,9 +190,8 @@ pub fn match_responses(
         Response::ValidationError(e) => SpeechGenerationResponder::ValidationError(e),
         Response::ImageGeneration(_) => unreachable!(),
         Response::CompletionModelError(m, _) => {
-            let e = anyhow::Error::msg(m.to_string());
-            MistralRs::maybe_log_error(state, &*e);
-            SpeechGenerationResponder::InternalError(e.into())
+            MistralRs::maybe_log_error(state, &ModelErrorMessage(m));
+            SpeechGenerationResponder::InternalError(Box::new(ApiError::model_error()))
         }
         Response::CompletionDone(_) => unreachable!(),
         Response::CompletionChunk(_) => unreachable!(),

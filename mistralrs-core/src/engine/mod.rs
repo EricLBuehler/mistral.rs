@@ -221,6 +221,34 @@ struct CudaDecodeBatchLease {
 }
 
 #[cfg(feature = "cuda")]
+enum CudaPromptRejection {
+    InvalidRequest(String),
+    Internal(String),
+    Unavailable(String),
+}
+
+#[cfg(feature = "cuda")]
+impl CudaPromptRejection {
+    fn reason(&self) -> &str {
+        match self {
+            Self::InvalidRequest(reason) | Self::Internal(reason) | Self::Unavailable(reason) => {
+                reason
+            }
+        }
+    }
+
+    fn response(&self) -> Response {
+        match self {
+            Self::InvalidRequest(reason) => Response::ValidationError(reason.clone().into()),
+            Self::Internal(reason) => Response::InternalError(reason.clone().into()),
+            Self::Unavailable(reason) => {
+                Response::InternalError(Box::new(crate::ServiceUnavailableError(reason.clone())))
+            }
+        }
+    }
+}
+
+#[cfg(feature = "cuda")]
 impl CudaDecodeBatchLease {
     fn new(
         rows: Vec<Arc<std::sync::Mutex<Sequence>>>,
@@ -712,7 +740,10 @@ impl Engine {
         }
     }
 
-    fn resolve_adapter_generation(&self, request: &mut Request) -> Result<(), String> {
+    fn resolve_adapter_generation(
+        &self,
+        request: &mut Request,
+    ) -> Result<(), crate::MistralRsError> {
         let Request::Normal(request) = request else {
             return Ok(());
         };
@@ -726,10 +757,14 @@ impl Engine {
         let runtime = get_mut_arcmutex!(self.pipeline)
             .adapter_runtime()
             .ok_or_else(|| {
-                "request selected an adapter, but this pipeline has no dynamic LoRA runtime"
-                    .to_string()
+                crate::MistralRsError::from(crate::LoraAdapterError::RuntimeUnavailable {
+                    model_id: request
+                        .model_id
+                        .clone()
+                        .unwrap_or_else(|| "default".to_string()),
+                })
             })?;
-        selection.pin(&runtime).map_err(|err| err.to_string())
+        selection.pin(&runtime).map_err(crate::MistralRsError::from)
     }
 
     async fn prepare_request_for_dispatch(&self, mut request: Request) -> Option<Request> {
@@ -743,7 +778,7 @@ impl Engine {
             if let Request::Normal(request) = request {
                 request
                     .response
-                    .send(crate::Response::ValidationError(error.into()))
+                    .send(crate::Response::InternalError(error.into()))
                     .await
                     .unwrap_or_else(|_| tracing::warn!("Receiver disconnected"));
             }
@@ -852,9 +887,9 @@ impl Engine {
     async fn reject_prompt_for_cuda_memory(
         &self,
         rows: &[Arc<std::sync::Mutex<Sequence>>],
-        reason: String,
+        rejection: CudaPromptRejection,
     ) {
-        tracing::warn!("{reason}");
+        tracing::warn!("{}", rejection.reason());
         metrics::counter!("mistralrs_cuda_prompt_memory_rejections_total")
             .increment(u64::try_from(rows.len()).unwrap_or(u64::MAX));
         for row in rows {
@@ -863,14 +898,31 @@ impl Engine {
                 row.set_state(SequenceState::Error);
                 (*row.id(), row.responder())
             };
-            if responder
-                .send(Response::InternalError(reason.clone().into()))
-                .await
-                .is_err()
-            {
+            if responder.send(rejection.response()).await.is_err() {
                 tracing::warn!("Failed to deliver CUDA memory error for sequence {sequence_id}");
             }
         }
+    }
+
+    #[cfg(feature = "cuda")]
+    fn maintain_cuda_prompt_memory(
+        &self,
+        cuda_memory_pool: &mut cuda_memory::CudaMemoryPoolMaintenance,
+        workspace_bytes: usize,
+    ) -> cuda_memory::PromptMemoryStatus {
+        let mut memory_status = cuda_memory_pool.before_prompt_step(workspace_bytes);
+        if memory_status.graph_pressure {
+            let pipeline = get_mut_arcmutex!(self.pipeline);
+            while memory_status.graph_pressure {
+                let reclaimed =
+                    pipeline.reclaim_cuda_graph_memory(cuda_memory::GRAPH_RECLAIM_BATCH_SIZE);
+                if reclaimed == 0 {
+                    break;
+                }
+                memory_status = cuda_memory_pool.after_graph_reclaim(workspace_bytes);
+            }
+        }
+        memory_status
     }
 
     #[cfg(feature = "cuda")]
@@ -1039,6 +1091,8 @@ impl Engine {
             }
             cuda_memory::CudaMemoryPoolMaintenance::new(unique_devices)
         };
+        #[cfg(feature = "cuda")]
+        let mut cuda_prompt_preemption_workspace = None;
         'lp: loop {
             let should_terminate = || {
                 matches!(
@@ -1258,8 +1312,28 @@ impl Engine {
             let prefix_validator = hybrid_prefix_validator
                 .as_mut()
                 .map(|v| v as &mut dyn PagedPrefixCacheValidator);
+            #[cfg(feature = "cuda")]
+            let waiting_prompt_preemption_enabled =
+                if let Some(workspace_bytes) = cuda_prompt_preemption_workspace {
+                    debug_assert!(cuda_decode_lease.is_none());
+                    let memory_status =
+                        self.maintain_cuda_prompt_memory(&mut cuda_memory_pool, workspace_bytes);
+                    if memory_status.insufficient_total_capacity {
+                        cuda_prompt_preemption_workspace = None;
+                        true
+                    } else if memory_status.maintenance_failed || memory_status.transient_pressure {
+                        false
+                    } else {
+                        cuda_prompt_preemption_workspace = None;
+                        true
+                    }
+                } else {
+                    true
+                };
             let mut scheduler = get_mut_arcmutex!(self.scheduler);
             self.free_finished_scheduler_sequences(&mut *scheduler);
+            #[cfg(feature = "cuda")]
+            scheduler.set_waiting_prompt_preemption_enabled(waiting_prompt_preemption_enabled);
             let scheduled = scheduler.schedule(&self.logger, prefix_validator);
             self.prune_revoked_paged_recurrent_prefixes();
 
@@ -1510,7 +1584,7 @@ impl Engine {
                                     .unwrap_or_default(),
                             )
                         };
-                        let mut rejected_reason = None;
+                        let mut rejection = None;
                         loop {
                             let query_lens = output
                                 .scheduled
@@ -1593,29 +1667,18 @@ impl Engine {
                                 ) {
                                     Ok(workspace) => workspace,
                                     Err(err) => {
-                                        rejected_reason = Some(format!(
-                                        "CUDA prompt memory preflight could not establish a safe attention plan: {err}"
-                                    ));
+                                        rejection = Some(CudaPromptRejection::Internal(format!(
+                                            "CUDA prompt memory preflight could not establish a safe attention plan: {err}"
+                                        )));
                                         break;
                                     }
                                 };
                             let workspace_bytes = workspace.bytes;
-                            let mut memory_status =
-                                cuda_memory_pool.before_prompt_step(workspace_bytes);
-                            if memory_status.graph_pressure {
-                                debug_assert!(cuda_decode_lease.is_none());
-                                let pipeline = get_mut_arcmutex!(self.pipeline);
-                                while memory_status.graph_pressure {
-                                    let reclaimed = pipeline.reclaim_cuda_graph_memory(
-                                        cuda_memory::GRAPH_RECLAIM_BATCH_SIZE,
-                                    );
-                                    if reclaimed == 0 {
-                                        break;
-                                    }
-                                    memory_status =
-                                        cuda_memory_pool.after_graph_reclaim(workspace_bytes);
-                                }
-                            }
+                            debug_assert!(cuda_decode_lease.is_none());
+                            let memory_status = self.maintain_cuda_prompt_memory(
+                                &mut cuda_memory_pool,
+                                workspace_bytes,
+                            );
                             let previous = output.scheduled.len();
                             match cuda_memory::prompt_batch_memory_action(
                                 previous,
@@ -1635,15 +1698,36 @@ impl Engine {
                                     cuda_memory::record_prompt_batch_reduction(previous, retained);
                                 }
                                 cuda_memory::PromptBatchMemoryAction::Reject => {
-                                    rejected_reason = Some(format!(
-                                        "CUDA memory pressure prevented prompt admission requiring {workspace_bytes} bytes of transient workspace"
-                                    ));
+                                    if !memory_status.insufficient_total_capacity {
+                                        cuda_prompt_preemption_workspace = Some(
+                                            cuda_prompt_preemption_workspace
+                                                .map_or(workspace_bytes, |current: usize| {
+                                                    current.max(workspace_bytes)
+                                                }),
+                                        );
+                                    }
+                                    rejection = Some(
+                                        if memory_status.insufficient_total_capacity {
+                                            CudaPromptRejection::InvalidRequest(format!(
+                                                "CUDA prompt requires {workspace_bytes} bytes of transient workspace and cannot fit after device-memory reclamation"
+                                            ))
+                                        } else if memory_status.maintenance_failed {
+                                            CudaPromptRejection::Internal(
+                                                "CUDA prompt memory preflight could not verify allocator capacity"
+                                                    .to_string(),
+                                            )
+                                        } else {
+                                            CudaPromptRejection::Unavailable(format!(
+                                                "CUDA memory pressure prevented prompt admission requiring {workspace_bytes} bytes of transient workspace"
+                                            ))
+                                        },
+                                    );
                                     break;
                                 }
                             }
                         }
-                        if let Some(reason) = rejected_reason {
-                            self.reject_prompt_for_cuda_memory(&output.scheduled, reason)
+                        if let Some(rejection) = rejection {
+                            self.reject_prompt_for_cuda_memory(&output.scheduled, rejection)
                                 .await;
                             continue 'lp;
                         }

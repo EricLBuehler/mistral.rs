@@ -4,8 +4,7 @@ use std::{error::Error, sync::Arc};
 
 use anyhow::Result;
 use axum::{
-    extract::{Json, State},
-    http::{self},
+    extract::{rejection::JsonRejection, Json, State},
     response::IntoResponse,
 };
 use mistralrs_core::{
@@ -16,12 +15,12 @@ use tokio::sync::mpsc::{Receiver, Sender};
 
 use crate::{
     handler_core::{
-        base_process_non_streaming_response, create_response_channel, send_request,
-        ErrorToResponse, JsonError,
+        base_process_non_streaming_response, create_response_channel, openai_error_from_error,
+        send_request, ApiError, ApiErrorKind,
     },
     openai::ImageGenerationRequest,
     types::{ExtractedMistralRsState, SharedMistralRsState},
-    util::{sanitize_error_message, validate_model_name},
+    util::validate_model_name,
 };
 
 /// Represents different types of image generation responses.
@@ -37,12 +36,10 @@ impl IntoResponse for ImageGenerationResponder {
         match self {
             ImageGenerationResponder::Json(s) => Json(s).into_response(),
             ImageGenerationResponder::InternalError(e) => {
-                JsonError::new(sanitize_error_message(e.as_ref()))
-                    .to_response(http::StatusCode::INTERNAL_SERVER_ERROR)
+                openai_error_from_error(e.as_ref(), ApiErrorKind::Internal)
             }
             ImageGenerationResponder::ValidationError(e) => {
-                JsonError::new(sanitize_error_message(e.as_ref()))
-                    .to_response(http::StatusCode::UNPROCESSABLE_ENTITY)
+                openai_error_from_error(e.as_ref(), ApiErrorKind::InvalidRequest)
             }
         }
     }
@@ -120,13 +117,21 @@ pub fn parse_request(
 )]
 pub async fn image_generation(
     State(state): ExtractedMistralRsState,
-    Json(oairequest): Json<ImageGenerationRequest>,
+    payload: Result<Json<ImageGenerationRequest>, JsonRejection>,
 ) -> ImageGenerationResponder {
+    let oairequest = match payload {
+        Ok(Json(request)) => request,
+        Err(error) => {
+            return ImageGenerationResponder::ValidationError(Box::new(
+                ApiError::from_json_rejection(error),
+            ));
+        }
+    };
     let (tx, mut rx) = create_response_channel(None);
 
     let request = match parse_request(oairequest, state.clone(), tx) {
         Ok(x) => x,
-        Err(e) => return handle_error(state, e.into()),
+        Err(e) => return ImageGenerationResponder::ValidationError(e.into()),
     };
 
     if let Err(e) = send_request(&state, request).await {
@@ -141,10 +146,8 @@ pub fn handle_error(
     state: SharedMistralRsState,
     e: Box<dyn std::error::Error + Send + Sync + 'static>,
 ) -> ImageGenerationResponder {
-    let sanitized_msg = sanitize_error_message(&*e);
-    let e = anyhow::Error::msg(sanitized_msg);
-    MistralRs::maybe_log_error(state, &*e);
-    ImageGenerationResponder::InternalError(e.into())
+    MistralRs::maybe_log_error(state, e.as_ref());
+    ImageGenerationResponder::InternalError(e)
 }
 
 /// Process non-streaming image generation responses.
@@ -171,9 +174,8 @@ pub fn match_responses(
             ImageGenerationResponder::Json(response)
         }
         Response::CompletionModelError(m, _) => {
-            let e = anyhow::Error::msg(m.to_string());
-            MistralRs::maybe_log_error(state, &*e);
-            ImageGenerationResponder::InternalError(e.into())
+            MistralRs::maybe_log_error(state, &crate::handler_core::ModelErrorMessage(m));
+            ImageGenerationResponder::InternalError(Box::new(ApiError::model_error()))
         }
         Response::CompletionDone(_) => unreachable!(),
         Response::CompletionChunk(_) => unreachable!(),

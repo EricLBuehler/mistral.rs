@@ -45,6 +45,27 @@ macro_rules! handle_seq_error {
 
 #[doc(hidden)]
 #[macro_export]
+macro_rules! handle_request_error {
+    ($fallible:expr, $response:expr) => {
+        match $fallible {
+            Ok(v) => v,
+            Err(e) => {
+                use $crate::response::Response;
+                if $response
+                    .send(Response::ValidationError(e.into()))
+                    .await
+                    .is_err()
+                {
+                    tracing::warn!("Receiver disconnected");
+                }
+                return;
+            }
+        }
+    };
+}
+
+#[doc(hidden)]
+#[macro_export]
 macro_rules! handle_seq_error_ok {
     ($fallible:expr, $response:expr) => {
         match $fallible {

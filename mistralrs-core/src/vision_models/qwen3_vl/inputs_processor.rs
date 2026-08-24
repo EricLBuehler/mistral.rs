@@ -10,7 +10,8 @@ use crate::{
         text_models_inputs_processor::{
             self, get_completion_input, get_prompt_input, PagedAttentionMeta,
         },
-        InputProcessorOutput, InputsProcessor, InputsProcessorType, MessagesAction, Processor,
+        InputProcessorOutput, InputsProcessor, InputsProcessorType, InputsProcessorValidationError,
+        MessagesAction, Processor,
     },
     sequence::{find_placeholder_delimited_ranges, Sequence},
     vision_models::{
@@ -21,7 +22,10 @@ use crate::{
             RequestMultimodalLayout,
         },
         preprocessor_config::{PreProcessorConfig, ToFilter},
-        qwen2vl::{expand_media_placeholders, replace_first_occurrence, validated_mm_features},
+        qwen2vl::{
+            expand_media_placeholders, replace_first_occurrence, validate_qwen_media_dimensions,
+            validated_mm_features,
+        },
         ModelInputs,
     },
 };
@@ -230,9 +234,16 @@ fn expand_video_placeholders(
     }
     let placeholder_count = text.match_indices(Qwen3VLProcessor::VIDEO_PAD).count();
     let grid_rows = grid.map(|grid| grid.dim(0)).transpose()?.unwrap_or(0);
-    if placeholder_count != grid_rows || grid_rows != videos.len() {
+    if placeholder_count != videos.len() {
+        return Err(InputsProcessorValidationError(format!(
+            "Qwen video has {placeholder_count} placeholders but {} video inputs",
+            videos.len()
+        ))
+        .into());
+    }
+    if grid_rows != videos.len() {
         anyhow::bail!(
-            "Qwen video has {placeholder_count} placeholders, {grid_rows} grid rows, and {} videos",
+            "Qwen video has {grid_rows} grid rows but {} video inputs",
             videos.len()
         );
     }
@@ -765,6 +776,38 @@ impl InputsProcessor for Qwen3VLImageProcessor {
             .any(|seq| seq.has_images() || seq.has_videos())
         {
             return Ok(());
+        }
+
+        let resize_factor = if config.do_resize.is_none_or(|resize| resize) {
+            Self::patch_size(config)
+                .checked_mul(Self::merge_size(config))
+                .filter(|factor| *factor > 0)
+        } else {
+            None
+        };
+        let video_config = config.video.as_deref().unwrap_or(config);
+        let video_resize_validation = video_config
+            .do_resize
+            .is_none_or(|resize| resize)
+            .then_some(1);
+        for seq in input_seqs.iter() {
+            if let Some(images) = seq.images() {
+                validate_qwen_media_dimensions(
+                    images,
+                    resize_factor.filter(|_| self.max_edge.is_none()),
+                )?;
+            }
+            if let Some(videos) = seq.videos() {
+                if videos.iter().any(|video| video.frames.is_empty()) {
+                    return Err(InputsProcessorValidationError(
+                        "Qwen video inputs must contain at least one frame".to_string(),
+                    )
+                    .into());
+                }
+                for video in videos {
+                    validate_qwen_media_dimensions(&video.frames, video_resize_validation)?;
+                }
+            }
         }
 
         let mut detok_seqs = tokenizer
@@ -1977,6 +2020,21 @@ mod tests {
             Qwen3VLProcessor::VISION_END
         );
         assert_eq!(text, expected);
+        Ok(())
+    }
+
+    #[test]
+    fn video_expansion_marks_placeholder_count_as_validation() -> Result<()> {
+        let mut text = format!(
+            "{}{}",
+            Qwen3VLProcessor::VIDEO_PAD,
+            Qwen3VLProcessor::VIDEO_PAD
+        );
+        let grid = Tensor::new(&[[1u32, 2, 2]], &Device::Cpu)?;
+        let error = expand_video_placeholders(&mut text, Some(&grid), &[test_video(2, 1.0)], 4, 2)
+            .unwrap_err();
+
+        assert!(error.is::<InputsProcessorValidationError>());
         Ok(())
     }
 

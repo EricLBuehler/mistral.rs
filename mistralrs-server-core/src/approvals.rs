@@ -5,7 +5,7 @@ use std::{
 };
 
 use axum::{
-    extract::{Json, Path},
+    extract::{rejection::JsonRejection, Json, Path},
     http::StatusCode,
     response::IntoResponse,
     Extension,
@@ -17,6 +17,8 @@ use mistralrs_core::{
 use serde::{Deserialize, Serialize};
 use tokio::sync::{mpsc::Sender, oneshot};
 use utoipa::ToSchema;
+
+use crate::handler_core::{openai_error_response, ApiError, ApiErrorKind};
 
 const APPROVAL_TIMEOUT: Duration = Duration::from_secs(300);
 
@@ -198,7 +200,7 @@ pub enum ApprovalDecision {
 
 #[derive(Serialize, ToSchema)]
 pub struct ApprovalDecisionResponse {
-    /// "resolved", "queued", or "not_found".
+    /// "resolved" or "queued".
     pub status: &'static str,
 }
 
@@ -210,14 +212,21 @@ pub struct ApprovalDecisionResponse {
     request_body = ApprovalDecisionRequest,
     responses(
         (status = 200, description = "Decision applied or queued", body = ApprovalDecisionResponse),
-        (status = 404, description = "Unknown approval ID", body = ApprovalDecisionResponse),
+        (status = 400, description = "Invalid decision payload"),
+        (status = 404, description = "Unknown approval ID"),
+        (status = 413, description = "Decision payload is too large"),
+        (status = 415, description = "Unsupported content type"),
     )
 )]
 pub async fn resolve_agent_approval(
     Extension(broker): Extension<ApprovalBroker>,
     Path(approval_id): Path<String>,
-    Json(request): Json<ApprovalDecisionRequest>,
-) -> impl IntoResponse {
+    payload: Result<Json<ApprovalDecisionRequest>, JsonRejection>,
+) -> axum::response::Response {
+    let Json(request) = match payload {
+        Ok(request) => request,
+        Err(error) => return openai_error_response(ApiError::from_json_rejection(error)),
+    };
     let approve = matches!(request.decision, ApprovalDecision::Approve);
     let status = broker.resolve(
         &approval_id,
@@ -225,22 +234,54 @@ pub async fn resolve_agent_approval(
         request.remember_for_session,
         request.message,
     );
-    let (status_code, status) = match status {
-        ApprovalResolveStatus::Resolved => (StatusCode::OK, "resolved"),
-        ApprovalResolveStatus::Queued => (StatusCode::OK, "queued"),
-        ApprovalResolveStatus::NotFound => (StatusCode::NOT_FOUND, "not_found"),
+    let status = match status {
+        ApprovalResolveStatus::Resolved => "resolved",
+        ApprovalResolveStatus::Queued => "queued",
+        ApprovalResolveStatus::NotFound => {
+            return openai_error_response(ApiError::new(
+                ApiErrorKind::NotFound,
+                format!("Approval `{approval_id}` was not found."),
+                Some("approval_not_found"),
+                Some("approval_id"),
+            ));
+        }
     };
-    (status_code, Json(ApprovalDecisionResponse { status }))
+    (StatusCode::OK, Json(ApprovalDecisionResponse { status })).into_response()
 }
 
 #[cfg(test)]
 mod tests {
+    use axum::{
+        body::{to_bytes, Body},
+        extract::FromRequest,
+        http::{header::CONTENT_TYPE, Request as HttpRequest},
+    };
     use mistralrs_core::{AgentToolKind, AgentToolMetadata, AgentToolSource};
 
     use super::*;
 
     const TEST_PENDING_WAIT_TIMEOUT: Duration = Duration::from_secs(1);
     const TEST_PENDING_WAIT_RETRY: Duration = Duration::from_millis(1);
+
+    async fn error_body(response: axum::response::Response) -> serde_json::Value {
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        serde_json::from_slice(&body).unwrap()
+    }
+
+    async fn approval_json_rejection(
+        body: &'static str,
+        content_type: Option<&'static str>,
+    ) -> JsonRejection {
+        let mut builder = HttpRequest::builder();
+        if let Some(content_type) = content_type {
+            builder = builder.header(CONTENT_TYPE, content_type);
+        }
+        let request = builder.body(Body::from(body)).unwrap();
+        match Json::<ApprovalDecisionRequest>::from_request(request, &()).await {
+            Ok(_) => panic!("expected JSON rejection"),
+            Err(error) => error,
+        }
+    }
 
     async fn wait_for_pending(broker: &ApprovalBroker, approval_id: &str) {
         tokio::time::timeout(TEST_PENDING_WAIT_TIMEOUT, async {
@@ -269,6 +310,60 @@ mod tests {
             broker.resolve("missing", true, false, None),
             ApprovalResolveStatus::NotFound
         ));
+    }
+
+    #[tokio::test]
+    async fn approval_json_rejections_use_openai_errors() {
+        let cases = [
+            (
+                approval_json_rejection("{", Some("application/json")).await,
+                StatusCode::BAD_REQUEST,
+                "malformed_json",
+            ),
+            (
+                approval_json_rejection("{}", Some("application/json")).await,
+                StatusCode::BAD_REQUEST,
+                "invalid_request_body",
+            ),
+            (
+                approval_json_rejection(r#"{"decision":"approve"}"#, None).await,
+                StatusCode::UNSUPPORTED_MEDIA_TYPE,
+                "invalid_content_type",
+            ),
+        ];
+
+        for (rejection, status, code) in cases {
+            let response = resolve_agent_approval(
+                Extension(ApprovalBroker::default()),
+                Path("approval".to_string()),
+                Err(rejection),
+            )
+            .await;
+            assert_eq!(response.status(), status);
+            let body = error_body(response).await;
+            assert_eq!(body["error"]["type"], "invalid_request_error");
+            assert_eq!(body["error"]["code"], code);
+        }
+    }
+
+    #[tokio::test]
+    async fn unknown_approval_response_uses_openai_error() {
+        let response = resolve_agent_approval(
+            Extension(ApprovalBroker::default()),
+            Path("missing".to_string()),
+            Ok(Json(ApprovalDecisionRequest {
+                decision: ApprovalDecision::Approve,
+                remember_for_session: false,
+                message: None,
+            })),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        let body = error_body(response).await;
+        assert_eq!(body["error"]["type"], "invalid_request_error");
+        assert_eq!(body["error"]["code"], "approval_not_found");
+        assert_eq!(body["error"]["param"], "approval_id");
     }
 
     #[tokio::test]

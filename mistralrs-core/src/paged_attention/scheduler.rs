@@ -116,6 +116,7 @@ pub struct PagedAttentionScheduler {
     prompt_chunks_require_block_alignment: bool,
     prefix_policy: SpeculativePrefixCheckpointPolicy,
     decode_steps_since_prefill: usize,
+    waiting_prompt_preemption_enabled: bool,
     next_prompt_sequence_id: Option<usize>,
     completion_cursor: usize,
     /// Block hashes per sequence for prefix caching.
@@ -161,6 +162,7 @@ impl PagedAttentionScheduler {
             prompt_chunks_require_block_alignment: false,
             prefix_policy: SpeculativePrefixCheckpointPolicy::default(),
             decode_steps_since_prefill: 0,
+            waiting_prompt_preemption_enabled: true,
             next_prompt_sequence_id: None,
             completion_cursor: 0,
             seq_block_hashes: HashMap::new(),
@@ -734,8 +736,7 @@ impl PagedAttentionScheduler {
             let new_seq_modality = modality_signature(&seq_guard);
             drop(seq_guard);
 
-            // A sequence larger than the whole cache can never be scheduled; reject it up front
-            // instead of letting it wait out the starvation timeout.
+            // Reject prompts that can never fit instead of waiting out the starvation timeout.
             let total_token_capacity =
                 get_mut_arcmutex!(self.kv_cache_manager).num_usable_blocks() * self.block_size;
             if num_tokens > total_token_capacity {
@@ -849,8 +850,10 @@ impl PagedAttentionScheduler {
                     *count += 1;
 
                     if *count > WAITING_TIMEOUT {
-                        // Preempt as many running sequences as needed; a feasible sequence waits
-                        // or evicts, it does not error.
+                        if !self.waiting_prompt_preemption_enabled {
+                            break;
+                        }
+                        // A feasible sequence waits or evicts instead of failing on ordinary pressure.
                         let mut allocated = false;
                         loop {
                             let Some(seq_to_preempt) = self.running.pop_back() else {
@@ -877,8 +880,7 @@ impl PagedAttentionScheduler {
                         if allocated {
                             self.waiting_counts.remove(&seq_id);
                         } else {
-                            // Fits in total capacity but not even an empty cache satisfies the
-                            // allocation (reserved blocks/fragmentation); erroring beats spinning.
+                            // This cannot fail after the capacity check and full preemption.
                             ignore_reason = Some(format!(
                                 "Sequence {seq_id} with {num_tokens} tokens cannot be scheduled: \
                                  KV cache exhausted even after preempting all running sequences."
@@ -891,7 +893,7 @@ impl PagedAttentionScheduler {
             }
 
             if let Some(reason) = ignore_reason {
-                self.reject_front_of_waiting(reason, "cache_exhausted", &mut prefix_validator);
+                self.fail_front_of_waiting(reason, "cache_exhausted", &mut prefix_validator);
                 continue;
             }
 
@@ -1358,6 +1360,10 @@ impl Scheduler for PagedAttentionScheduler {
 
     fn defer_prompt_tail(&mut self, first_omitted_sequence_id: usize) {
         self.next_prompt_sequence_id = Some(first_omitted_sequence_id);
+    }
+
+    fn set_waiting_prompt_preemption_enabled(&mut self, enabled: bool) {
+        self.waiting_prompt_preemption_enabled = enabled;
     }
 
     fn can_continue_decode_batch(&self, sequence_ids: &[usize]) -> bool {
@@ -1919,6 +1925,89 @@ mod tests {
         assert_eq!(admitted.scheduled.len(), 1);
         assert_eq!(validator.validated_ids, vec![0, 0]);
         assert_eq!(*get_mut_arcmutex!(validator.committed_ids), vec![0]);
+    }
+
+    #[test]
+    fn disabled_waiting_prompt_preemption_preserves_decode_state() {
+        let mut scheduler = PagedAttentionScheduler::new(
+            PagedAttentionSchedulerConfig {
+                max_num_seqs: 8,
+                max_num_batched_tokens: 4096,
+                max_prefill_chunk_tokens: 4096,
+                max_decode_steps_before_prefill: 8,
+            },
+            CacheConfig {
+                block_size: 8,
+                num_gpu_blocks: 5,
+                cache_type: PagedCacheType::Auto,
+                kv_cache_group_ids: vec![0],
+            },
+        );
+        scheduler.decode_steps_since_prefill = scheduler.config.max_decode_steps_before_prefill;
+
+        let completion = test_sequence(10, 7);
+        get_mut_arcmutex!(completion).set_num_computed_tokens(7);
+        assert!(get_mut_arcmutex!(scheduler.kv_cache_manager)
+            .allocate_slots(10, 7, &[])
+            .is_some());
+        scheduler.running.push_back(completion.clone());
+
+        let waiting = test_sequence(20, 32);
+        get_mut_arcmutex!(waiting).set_state(SequenceState::Waiting);
+        scheduler.waiting.push_back(waiting.clone());
+        scheduler.waiting_counts.insert(20, WAITING_TIMEOUT);
+        Scheduler::set_waiting_prompt_preemption_enabled(&mut scheduler, false);
+
+        let blocks_before = get_mut_arcmutex!(scheduler.kv_cache_manager)
+            .get_block_ids(10)
+            .unwrap()
+            .to_vec();
+        let logger = IntervalLogger::new(std::time::Duration::from_secs(3600), None);
+        let SchedulerOutput::PagedAttention {
+            output,
+            preempted_sequence_ids,
+        } = Scheduler::schedule(&mut scheduler, &logger, None)
+        else {
+            panic!("paged scheduler returned a default scheduler output");
+        };
+
+        assert!(preempted_sequence_ids.is_empty());
+        assert_eq!(output.scheduled.len(), 1);
+        assert_eq!(*get_mut_arcmutex!(output.scheduled[0]).id(), 10);
+        assert_eq!(get_mut_arcmutex!(completion).num_computed_tokens(), 7);
+        assert_eq!(
+            get_mut_arcmutex!(completion).getstate(),
+            SequenceState::RunningCompletion
+        );
+        assert_eq!(
+            get_mut_arcmutex!(waiting).getstate(),
+            SequenceState::Waiting
+        );
+        assert_eq!(scheduler.waiting.len(), 1);
+        assert_eq!(
+            get_mut_arcmutex!(scheduler.kv_cache_manager)
+                .get_block_ids(10)
+                .unwrap(),
+            blocks_before
+        );
+        assert_eq!(
+            scheduler.waiting_counts.get(&20),
+            Some(&(WAITING_TIMEOUT + 1))
+        );
+
+        Scheduler::set_waiting_prompt_preemption_enabled(&mut scheduler, true);
+        let SchedulerOutput::PagedAttention {
+            output,
+            preempted_sequence_ids,
+        } = Scheduler::schedule(&mut scheduler, &logger, None)
+        else {
+            panic!("paged scheduler returned a default scheduler output");
+        };
+
+        assert_eq!(preempted_sequence_ids, vec![10]);
+        assert_eq!(output.scheduled.len(), 1);
+        assert_eq!(*get_mut_arcmutex!(output.scheduled[0]).id(), 20);
+        assert!(scheduler.waiting_counts.get(&20).is_none());
     }
 
     #[test]

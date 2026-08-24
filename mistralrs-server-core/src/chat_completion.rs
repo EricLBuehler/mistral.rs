@@ -6,8 +6,7 @@ use std::{
 
 use anyhow::{Context, Result};
 use axum::{
-    extract::{Json, State},
-    http::{self},
+    extract::{rejection::JsonRejection, Json, State},
     response::{
         sse::{Event, KeepAlive, KeepAliveStream},
         IntoResponse, Sse,
@@ -32,11 +31,12 @@ use tokio::sync::mpsc::{Receiver, Sender};
 use crate::{
     completion_core::{
         convert_stop_tokens, get_dry_sampling_params, handle_completion_error,
-        BaseCompletionResponder,
+        handle_completion_validation_error, BaseCompletionResponder,
     },
     handler_core::{
-        apply_model_override, create_response_channel, request_model_override,
-        send_request_with_model, BaseJsonModelError, ErrorToResponse, JsonError, ModelErrorMessage,
+        apply_model_override, create_response_channel, openai_error_from_error,
+        openai_error_response, request_model_override, send_request_with_model, ApiError,
+        ApiErrorKind, JsonError, ModelErrorMessage,
     },
     input_files::{resolve_input_file, InputFileSpec},
     lora_adapters::resolve_lora_adapter_model,
@@ -53,10 +53,7 @@ use crate::{
         BaseStreamer, DoneState, StreamOutcomeHandle,
     },
     types::{ExtractedMistralRsState, OnChunkCallback, OnDoneCallback, SharedMistralRsState},
-    util::{
-        parse_audio_url_for_server, parse_image_url_for_server, sanitize_error_message,
-        validate_model_name,
-    },
+    util::{parse_audio_url_for_server, parse_image_url_for_server, validate_model_name},
     video::parse_video_url_for_server,
 };
 
@@ -418,19 +415,21 @@ impl futures::Stream for ChatCompletionStreamer {
                         );
                         // Done now, just need to send the [DONE]
                         self.done_state = DoneState::SendingDone;
-                        Poll::Ready(Some(Ok(openai_error_event(msg))))
+                        Poll::Ready(Some(Ok(openai_error_event(ApiError::model_error()))))
                     }
                     Response::ValidationError(e) => {
                         self.done_state = DoneState::SendingDone;
-                        Poll::Ready(Some(Ok(openai_error_event(sanitize_error_message(
+                        Poll::Ready(Some(Ok(openai_error_event(ApiError::from_error(
                             e.as_ref(),
+                            ApiErrorKind::InvalidRequest,
                         )))))
                     }
                     Response::InternalError(e) => {
                         MistralRs::maybe_log_error(self.state.clone(), &*e);
                         self.done_state = DoneState::SendingDone;
-                        Poll::Ready(Some(Ok(openai_error_event(sanitize_error_message(
+                        Poll::Ready(Some(Ok(openai_error_event(ApiError::from_error(
                             e.as_ref(),
+                            ApiErrorKind::Internal,
                         )))))
                     }
                     Response::Chunk(mut response) => {
@@ -500,7 +499,10 @@ impl futures::Stream for ChatCompletionStreamer {
                     Response::Embeddings { .. } => unreachable!(),
                 }
             }
-            Poll::Ready(None) => Poll::Ready(None),
+            Poll::Ready(None) => {
+                self.done_state = DoneState::SendingDone;
+                Poll::Ready(Some(Ok(openai_error_event(ApiError::internal()))))
+            }
             Poll::Pending => Poll::Pending,
         }
     }
@@ -510,8 +512,6 @@ impl futures::Stream for ChatCompletionStreamer {
 pub type ChatCompletionResponder =
     BaseCompletionResponder<ChatCompletionResponse, KeepAliveStream<ChatCompletionStreamer>>;
 
-type JsonModelError = BaseJsonModelError<ChatCompletionResponse>;
-
 impl IntoResponse for ChatCompletionResponder {
     /// Converts the chat completion responder into an HTTP response.
     fn into_response(self) -> axum::response::Response {
@@ -519,16 +519,13 @@ impl IntoResponse for ChatCompletionResponder {
             ChatCompletionResponder::Sse(s) => s.into_response(),
             ChatCompletionResponder::Json(s) => Json(s).into_response(),
             ChatCompletionResponder::InternalError(e) => {
-                JsonError::new(sanitize_error_message(e.as_ref()))
-                    .to_response(http::StatusCode::INTERNAL_SERVER_ERROR)
+                openai_error_from_error(e.as_ref(), ApiErrorKind::Internal)
             }
             ChatCompletionResponder::ValidationError(e) => {
-                JsonError::new(sanitize_error_message(e.as_ref()))
-                    .to_response(http::StatusCode::UNPROCESSABLE_ENTITY)
+                openai_error_from_error(e.as_ref(), ApiErrorKind::InvalidRequest)
             }
-            ChatCompletionResponder::ModelError(msg, response) => {
-                JsonModelError::new(msg, response)
-                    .to_response(http::StatusCode::INTERNAL_SERVER_ERROR)
+            ChatCompletionResponder::ModelError(_, _) => {
+                openai_error_response(ApiError::model_error())
             }
         }
     }
@@ -1125,15 +1122,23 @@ pub async fn chatcompletions(
     Extension(agentic_defaults): Extension<AgenticDefaults>,
     Extension(skill_store): Extension<Arc<SkillStore>>,
     stream_outcome: Option<Extension<StreamOutcomeHandle>>,
-    Json(mut oairequest): Json<ChatCompletionRequest>,
+    payload: Result<Json<ChatCompletionRequest>, JsonRejection>,
 ) -> ChatCompletionResponder {
+    let mut oairequest = match payload {
+        Ok(Json(request)) => request,
+        Err(error) => {
+            return ChatCompletionResponder::ValidationError(Box::new(
+                ApiError::from_json_rejection(error),
+            ));
+        }
+    };
     let (tx, mut rx) = create_response_channel(None);
     let requested_model = oairequest.model.clone();
 
     if let Err(error) =
         resolve_lora_adapter_model(&state, &mut oairequest.model, &mut oairequest.adapter)
     {
-        return ChatCompletionResponder::ValidationError(Box::new(JsonError::new(error)));
+        return ChatCompletionResponder::ValidationError(Box::new(error));
     }
     let model_override = request_model_override(requested_model, &oairequest.model);
 
@@ -1193,17 +1198,10 @@ pub async fn chatcompletions(
     .await
     {
         Ok(x) => x,
-        Err(e) => return handle_error(state, e.into()),
+        Err(e) => return handle_completion_validation_error(state, e.into()),
     };
 
     if let Err(e) = send_request_with_model(&state, request, model_id.as_deref()).await {
-        if matches!(
-            &e,
-            mistralrs_core::MistralRsError::LoraAdapter(_)
-                | mistralrs_core::MistralRsError::ModelNotFound(_)
-        ) {
-            return ChatCompletionResponder::ValidationError(Box::new(e));
-        }
         return handle_error(state, e.into());
     }
 

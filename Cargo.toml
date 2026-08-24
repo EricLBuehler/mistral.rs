@@ -45,6 +45,7 @@ candle-flash-attn-v3 = { git = "https://github.com/huggingface/candle.git", vers
 candle-metal-kernels = { git = "https://github.com/huggingface/candle.git", version = "0.11.0", rev = "35d7ae7ca5c93e17c77359c3617376b8a72e96a4" }
 
 axum = "0.8.8"
+http-body-util = "0.1.3"
 mimalloc = "0.1"
 anyhow = "1.0.100"
 serde = "1.0.228"
