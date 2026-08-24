@@ -750,6 +750,24 @@ fn apply_mrope_position_delta(position: usize, delta: i64) -> Result<usize> {
     usize::try_from(position).map_err(anyhow::Error::from)
 }
 
+fn qwen3_decode_args(input_ids: &Tensor, seqlens: Vec<usize>) -> Qwen3VLVisionSpecificArgs {
+    Qwen3VLVisionSpecificArgs {
+        input_ids_full: input_ids.clone(),
+        pixel_values_videos: None,
+        image_grid_thw: None,
+        video_grid_thw: None,
+        rope_img_grid_thw: None,
+        rope_vid_grid_thw: None,
+        seqlens,
+        continuous_img_pad: Vec::new(),
+        continuous_vid_pad: Vec::new(),
+        image_hashes: Vec::new(),
+        video_hashes: Vec::new(),
+        packed_layout: None,
+        prompt_position_ids: None,
+    }
+}
+
 impl InputsProcessor for Qwen3VLImageProcessor {
     fn get_type(&self) -> InputsProcessorType {
         InputsProcessorType::Vision
@@ -1020,6 +1038,55 @@ impl InputsProcessor for Qwen3VLImageProcessor {
         }
         if no_kv_cache {
             return Err(anyhow::Error::msg("Vision model must have kv cache."));
+        }
+        if !is_prompt {
+            let text_models_inputs_processor::InnerInputProcessorOutput {
+                inputs:
+                    text_models_inputs_processor::InputMetadata {
+                        input,
+                        positions,
+                        context_lens,
+                        position_ids,
+                        paged_attn_meta,
+                        flash_meta,
+                    },
+                seq_indices,
+            } = get_completion_input(
+                input_seqs
+                    .iter()
+                    .map(|seq| seq.get_toks())
+                    .collect::<Vec<_>>(),
+                input_seqs,
+                device,
+                no_kv_cache,
+                last_n_context_len,
+                return_raw_logits,
+                paged_attn_metadata.as_mut(),
+                mapper,
+                sliding_window,
+            )
+            .unwrap();
+            let position_ids = apply_mrope_position_deltas(position_ids, input_seqs)?;
+            let args = qwen3_decode_args(&input, input_seqs.iter().map(|seq| seq.len()).collect());
+            let inputs: Box<dyn Any> = Box::new(ModelInputs {
+                input_ids: input,
+                seqlen_offsets: positions,
+                context_lens,
+                position_ids,
+                pixel_values: None,
+                model_specific_args: Box::new(args),
+                paged_attn_meta,
+                flash_meta,
+                recurrent_batch_kind: recurrent_batch_kind_for_input(
+                    false,
+                    crate::speculative::staging::staged_batch_width(input_seqs).is_some(),
+                ),
+                adapter_leases: crate::vision_models::adapter_leases(input_seqs, &seq_indices),
+            });
+            return Ok(InputProcessorOutput {
+                inputs,
+                seq_indices,
+            });
         }
         let Some(tokenizer) = tokenizer else {
             return Err(anyhow::Error::msg(
@@ -1986,6 +2053,77 @@ mod tests {
         assert_eq!(apply_mrope_position_delta(100, 0)?, 100);
         assert_eq!(apply_mrope_position_delta(100, -48)?, 52);
         assert!(apply_mrope_position_delta(3, -4).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn decode_args_only_retain_current_tokens() -> Result<()> {
+        let input_ids = Tensor::new(&[[7u32], [9]], &Device::Cpu)?;
+        let args = qwen3_decode_args(&input_ids, vec![100, 200]);
+
+        assert_eq!(
+            args.input_ids_full.to_vec2::<u32>()?,
+            vec![vec![7], vec![9]]
+        );
+        assert_eq!(args.seqlens, vec![100, 200]);
+        assert!(args.pixel_values_videos.is_none());
+        assert!(args.image_grid_thw.is_none());
+        assert!(args.video_grid_thw.is_none());
+        assert!(args.rope_img_grid_thw.is_none());
+        assert!(args.rope_vid_grid_thw.is_none());
+        assert!(args.continuous_img_pad.is_empty());
+        assert!(args.continuous_vid_pad.is_empty());
+        assert!(args.image_hashes.is_empty());
+        assert!(args.video_hashes.is_empty());
+        assert!(args.packed_layout.is_none());
+        assert!(args.prompt_position_ids.is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn cached_decode_positions_match_full_history_mrope() -> Result<()> {
+        let config = QwenMropeConfig {
+            spatial_merge_size: 2,
+            image_token_id: 100,
+            video_token_id: 101,
+            vision_start_token_id: 102,
+            vision_end_token_id: 103,
+        };
+        let image_grid = Tensor::new(&[[1u32, 4, 4]], &Device::Cpu)?;
+        let cases = [
+            (
+                vec![10, 102, 100, 100, 100, 100, 103, 11],
+                Some(&image_grid),
+            ),
+            (vec![20, 21, 22, 23, 24], None),
+        ];
+        let deltas = cases
+            .iter()
+            .map(|(prompt, grid)| {
+                qwen3_mrope_position_source(prompt, *grid, None, &config, &Device::Cpu)
+                    .map(|source| source.delta)
+            })
+            .collect::<Result<Vec<_>>>()?;
+
+        assert_ne!(deltas[0], deltas[1]);
+        for query_len in [1, 8] {
+            for ((prompt, grid), delta) in cases.iter().zip(&deltas) {
+                let mut full_history = prompt.clone();
+                full_history.extend((0..query_len).map(|token| 30 + token as u32));
+                let legacy =
+                    qwen3_mrope_position_source(&full_history, *grid, None, &config, &Device::Cpu)?;
+                let actual = legacy
+                    .position_ids
+                    .i((.., 0, prompt.len()..full_history.len()))?
+                    .to_vec2::<i64>()?;
+                let adjusted_end = apply_mrope_position_delta(full_history.len(), *delta)?;
+                let expected_row = (adjusted_end - query_len..adjusted_end)
+                    .map(|position| position as i64)
+                    .collect::<Vec<_>>();
+
+                assert_eq!(actual, vec![expected_row; 3]);
+            }
+        }
         Ok(())
     }
 
