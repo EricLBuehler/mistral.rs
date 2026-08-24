@@ -561,17 +561,17 @@ extern "C" void vmajor_warp_gated_delta_rule_recurrence(
 //   q_buf[BK]          -- q vector (loaded one row at a time)
 //
 // q,k: [BH, S, K]  v: [BH, S, V]  g,beta: [BH, S]
-// state: [BH, K, V] (in/out)  output: [BH, S, V]
+// state: [BH, K, V] or [BH, V, K] (in/out)  output: [BH, S, V]
 // ============================================================================
 
-template <typename StateT, int BT, int BK, int BV>
+template <typename StateT, int BT, int BK, int BV, bool VALUE_MAJOR = false>
 __global__ void
 chunked_gated_delta_rule_kernel(const float *__restrict__ q,    // [BH, S, K]
                                 const float *__restrict__ k,    // [BH, S, K]
                                 const float *__restrict__ v,    // [BH, S, V]
                                 const float *__restrict__ g,    // [BH, S]
                                 const float *__restrict__ beta, // [BH, S]
-                                StateT *__restrict__ state,     // [BH, K, V] or pool
+                                StateT *__restrict__ state,     // key-major/value-major or pool
                                 float *__restrict__ output,     // [BH, S, V]
                                 int seq_len, int v_dim,
                                 const int32_t *__restrict__ slot_indices,
@@ -616,7 +616,11 @@ chunked_gated_delta_rule_kernel(const float *__restrict__ q,    // [BH, S, K]
   float s[BK];
 #pragma unroll
   for (int j = 0; j < BK; j++) {
-    s[j] = state_bh[j * v_dim + v_idx];
+    if constexpr (VALUE_MAJOR) {
+      s[j] = state_bh[v_idx * BK + j];
+    } else {
+      s[j] = state_bh[j * v_dim + v_idx];
+    }
   }
 
   // Per-thread register array for corrected deltas
@@ -736,11 +740,15 @@ chunked_gated_delta_rule_kernel(const float *__restrict__ q,    // [BH, S, K]
   // Write final state back
 #pragma unroll
   for (int j = 0; j < BK; j++) {
-    state_bh[j * v_dim + v_idx] = s[j];
+    if constexpr (VALUE_MAJOR) {
+      state_bh[v_idx * BK + j] = s[j];
+    } else {
+      state_bh[j * v_dim + v_idx] = s[j];
+    }
   }
 }
 
-template <typename StateT>
+template <typename StateT, bool VALUE_MAJOR = false>
 void launch_chunked_gated_delta_rule_recurrence(
     const float *q, const float *k, const float *v, const float *g,
     const float *beta, StateT *state, float *output, int bh, int seq_len,
@@ -754,7 +762,8 @@ void launch_chunked_gated_delta_rule_recurrence(
     size_t smem = (BT * BK + BT * BT + 2 * BT + BK) * sizeof(float);
 
     // Request extended shared memory
-    auto kernel = chunked_gated_delta_rule_kernel<StateT, BT, BK, BV>;
+    auto kernel =
+        chunked_gated_delta_rule_kernel<StateT, BT, BK, BV, VALUE_MAJOR>;
     cudaFuncSetAttribute(kernel, cudaFuncAttributeMaxDynamicSharedMemorySize,
                          smem);
 
@@ -769,7 +778,8 @@ void launch_chunked_gated_delta_rule_recurrence(
     constexpr int BV = 64;
     size_t smem = (BT * BK + BT * BT + 2 * BT + BK) * sizeof(float);
 
-    auto kernel = chunked_gated_delta_rule_kernel<StateT, BT, BK, BV>;
+    auto kernel =
+        chunked_gated_delta_rule_kernel<StateT, BT, BK, BV, VALUE_MAJOR>;
     cudaFuncSetAttribute(kernel, cudaFuncAttributeMaxDynamicSharedMemorySize,
                          smem);
 
@@ -778,7 +788,7 @@ void launch_chunked_gated_delta_rule_recurrence(
     kernel<<<grid, block, smem, stream>>>(q, k, v, g, beta, state, output,
                                           seq_len, v_dim, slot_indices,
                                           num_heads);
-  } else {
+  } else if constexpr (!VALUE_MAJOR) {
     launch_gated_delta_rule_recurrence(q, k, v, g, beta, state, output, bh,
                                        seq_len, k_dim, v_dim, slot_indices,
                                        num_heads, stream);
@@ -801,6 +811,41 @@ extern "C" void chunked_gated_delta_rule_recurrence(
         v_dim, slot_indices, num_heads, custream);
   } else {
     launch_chunked_gated_delta_rule_recurrence(
+        q, k, v, g, beta, (float *)state, output, bh, seq_len, k_dim, v_dim,
+        slot_indices, num_heads, custream);
+  }
+}
+
+template <typename StateT>
+void launch_vmajor_chunked_gated_delta_rule_recurrence(
+    const float *q, const float *k, const float *v, const float *g,
+    const float *beta, StateT *state, float *output, int bh, int seq_len,
+    int k_dim, int v_dim, const int32_t *slot_indices, int num_heads,
+    cudaStream_t stream) {
+  if (k_dim != 128 || v_dim != 128) {
+    return;
+  }
+  launch_chunked_gated_delta_rule_recurrence<StateT, true>(
+      q, k, v, g, beta, state, output, bh, seq_len, k_dim, v_dim,
+      slot_indices, num_heads, stream);
+}
+
+extern "C" void vmajor_chunked_gated_delta_rule_recurrence(
+    const float *q, const float *k, const float *v, const float *g,
+    const float *beta, void *state, float *output, int bh, int seq_len,
+    int k_dim, int v_dim, const int32_t *slot_indices, int num_heads,
+    int state_dtype, int64_t stream) {
+  const cudaStream_t custream = (cudaStream_t)stream;
+  if (state_dtype == GDN_STATE_DTYPE_F16) {
+    launch_vmajor_chunked_gated_delta_rule_recurrence(
+        q, k, v, g, beta, (__half *)state, output, bh, seq_len, k_dim, v_dim,
+        slot_indices, num_heads, custream);
+  } else if (state_dtype == GDN_STATE_DTYPE_BF16) {
+    launch_vmajor_chunked_gated_delta_rule_recurrence(
+        q, k, v, g, beta, (__nv_bfloat16 *)state, output, bh, seq_len, k_dim,
+        v_dim, slot_indices, num_heads, custream);
+  } else {
+    launch_vmajor_chunked_gated_delta_rule_recurrence(
         q, k, v, g, beta, (float *)state, output, bh, seq_len, k_dim, v_dim,
         slot_indices, num_heads, custream);
   }

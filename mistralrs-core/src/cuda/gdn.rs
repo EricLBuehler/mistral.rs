@@ -377,9 +377,11 @@ enum RecurrenceKernel {
     Warp,
     ValueMajorWarp,
     Chunked,
+    #[allow(dead_code)]
+    ValueMajorChunked,
 }
 
-/// `state` is `[BH, K, V]` (gathered) or the `[cap, H, K, V]` pool (pooled), mutated in place.
+/// `state` is `[BH, K, V]` or `[BH, V, K]` (gathered), or the matching pooled layout, mutated in place.
 /// Returns output `[BH, S, V]`.
 #[cfg(feature = "cuda")]
 fn launch_recurrence(
@@ -394,6 +396,13 @@ fn launch_recurrence(
     let RecurrenceInputs { q, k, v, g, beta } = inputs;
     let (bh, seq_len, k_dim) = q.dims3()?;
     let v_dim = v.dim(2)?;
+    if matches!(
+        kernel,
+        RecurrenceKernel::ValueMajorWarp | RecurrenceKernel::ValueMajorChunked
+    ) && (k_dim != GDN_DECODE_K_DIM || v_dim != GDN_DECODE_V_DIM)
+    {
+        candle::bail!("value-major GDN prefill requires K=V=128, got K={k_dim}, V={v_dim}");
+    }
     let dev = q.device().as_cuda_device()?;
 
     macro_rules! f32_ptr {
@@ -427,6 +436,9 @@ fn launch_recurrence(
                 crate::cuda::ffi::vmajor_warp_gated_delta_rule_recurrence
             }
             RecurrenceKernel::Chunked => crate::cuda::ffi::chunked_gated_delta_rule_recurrence,
+            RecurrenceKernel::ValueMajorChunked => {
+                crate::cuda::ffi::vmajor_chunked_gated_delta_rule_recurrence
+            }
         };
         unsafe {
             launcher(
@@ -496,6 +508,17 @@ pub fn vmajor_warp_gated_delta_rule_recurrence_cuda(
     launch_recurrence(RecurrenceKernel::ValueMajorWarp, inputs, state, slots)
 }
 
+/// Runs chunked prefill against value-major K=V=128 state.
+#[cfg(feature = "cuda")]
+#[allow(dead_code)]
+pub fn vmajor_chunked_gated_delta_rule_recurrence_cuda(
+    inputs: RecurrenceInputs<'_>,
+    state: &mut Tensor,
+    slots: GdnStateSlots<'_>,
+) -> Result<Tensor> {
+    launch_recurrence(RecurrenceKernel::ValueMajorChunked, inputs, state, slots)
+}
+
 #[cfg(not(feature = "cuda"))]
 #[allow(unused)]
 pub fn gated_delta_rule_recurrence_cuda(
@@ -534,6 +557,16 @@ pub fn vmajor_warp_gated_delta_rule_recurrence_cuda(
     _slots: GdnStateSlots<'_>,
 ) -> Result<Tensor> {
     candle_core::bail!("vmajor_warp_gated_delta_rule_recurrence_cuda requires the cuda feature")
+}
+
+#[cfg(not(feature = "cuda"))]
+#[allow(unused)]
+pub fn vmajor_chunked_gated_delta_rule_recurrence_cuda(
+    _inputs: RecurrenceInputs<'_>,
+    _state: &mut Tensor,
+    _slots: GdnStateSlots<'_>,
+) -> Result<Tensor> {
+    candle_core::bail!("vmajor_chunked_gated_delta_rule_recurrence_cuda requires the cuda feature")
 }
 
 /// CUDA-accelerated causal conv1d (both update and full paths).
@@ -2216,6 +2249,146 @@ mod dispatch_tests {
             GdnDecodeKernel::Pipelined
         );
     }
+
+    fn state_index(
+        layout: RecurrentStateLayout,
+        key: usize,
+        value: usize,
+        key_dim: usize,
+        value_dim: usize,
+    ) -> usize {
+        match layout {
+            RecurrentStateLayout::GdnKeyMajor => key * value_dim + value,
+            RecurrentStateLayout::GdnValueMajor => value * key_dim + key,
+            RecurrentStateLayout::Opaque => unreachable!(),
+        }
+    }
+
+    struct ReferenceRecurrence<'a> {
+        q: &'a [f32],
+        k: &'a [f32],
+        v: &'a [f32],
+        g: &'a [f32],
+        beta: &'a [f32],
+        key_dim: usize,
+        value_dim: usize,
+    }
+
+    fn reference_recurrence(
+        layout: RecurrentStateLayout,
+        state: &mut [f32],
+        inputs: &ReferenceRecurrence<'_>,
+    ) -> Vec<f32> {
+        let seq_len = inputs.g.len();
+        let mut output = vec![0.0f32; seq_len * inputs.value_dim];
+        for token in 0..seq_len {
+            let decay = inputs.g[token].exp();
+            for value in 0..inputs.value_dim {
+                let mut state_dot_k = 0.0f32;
+                for key in 0..inputs.key_dim {
+                    let index = state_index(layout, key, value, inputs.key_dim, inputs.value_dim);
+                    state[index] *= decay;
+                    state_dot_k += state[index] * inputs.k[token * inputs.key_dim + key];
+                }
+                let delta =
+                    (inputs.v[token * inputs.value_dim + value] - state_dot_k) * inputs.beta[token];
+                let mut state_dot_q = 0.0f32;
+                for key in 0..inputs.key_dim {
+                    let index = state_index(layout, key, value, inputs.key_dim, inputs.value_dim);
+                    state[index] += inputs.k[token * inputs.key_dim + key] * delta;
+                    state_dot_q += state[index] * inputs.q[token * inputs.key_dim + key];
+                }
+                output[token * inputs.value_dim + value] = state_dot_q;
+            }
+        }
+        output
+    }
+
+    #[test]
+    fn recurrence_reference_is_layout_invariant() {
+        const KEY_DIM: usize = 3;
+        const VALUE_DIM: usize = 2;
+        const SEQ_LEN: usize = 5;
+
+        let key_major = vec![0.1, -0.2, 0.3, 0.4, -0.5, 0.6];
+        let mut value_major = vec![0.0f32; KEY_DIM * VALUE_DIM];
+        for key in 0..KEY_DIM {
+            for value in 0..VALUE_DIM {
+                value_major[state_index(
+                    RecurrentStateLayout::GdnValueMajor,
+                    key,
+                    value,
+                    KEY_DIM,
+                    VALUE_DIM,
+                )] = key_major[state_index(
+                    RecurrentStateLayout::GdnKeyMajor,
+                    key,
+                    value,
+                    KEY_DIM,
+                    VALUE_DIM,
+                )];
+            }
+        }
+
+        let q = (0..SEQ_LEN * KEY_DIM)
+            .map(|index| (f32::from(u16::try_from(index).unwrap()) - 5.0) * 0.03)
+            .collect::<Vec<_>>();
+        let k = (0..SEQ_LEN * KEY_DIM)
+            .map(|index| (7.0 - f32::from(u16::try_from(index).unwrap())) * 0.02)
+            .collect::<Vec<_>>();
+        let v = (0..SEQ_LEN * VALUE_DIM)
+            .map(|index| (f32::from(u16::try_from(index).unwrap()) - 3.0) * 0.04)
+            .collect::<Vec<_>>();
+        let g = vec![-0.01, -0.03, -0.02, -0.04, -0.05];
+        let beta = vec![0.2, 0.7, 0.4, 0.9, 0.5];
+        let inputs = ReferenceRecurrence {
+            q: &q,
+            k: &k,
+            v: &v,
+            g: &g,
+            beta: &beta,
+            key_dim: KEY_DIM,
+            value_dim: VALUE_DIM,
+        };
+
+        let mut key_major_result = key_major;
+        let key_major_output = reference_recurrence(
+            RecurrentStateLayout::GdnKeyMajor,
+            &mut key_major_result,
+            &inputs,
+        );
+        let value_major_output = reference_recurrence(
+            RecurrentStateLayout::GdnValueMajor,
+            &mut value_major,
+            &inputs,
+        );
+
+        for (left, right) in key_major_output.iter().zip(&value_major_output) {
+            assert!((left - right).abs() <= 1.0e-6);
+        }
+        for key in 0..KEY_DIM {
+            for value in 0..VALUE_DIM {
+                let key_major_index = state_index(
+                    RecurrentStateLayout::GdnKeyMajor,
+                    key,
+                    value,
+                    KEY_DIM,
+                    VALUE_DIM,
+                );
+                let value_major_index = state_index(
+                    RecurrentStateLayout::GdnValueMajor,
+                    key,
+                    value,
+                    KEY_DIM,
+                    VALUE_DIM,
+                );
+                assert!(
+                    (key_major_result[key_major_index] - value_major[value_major_index]).abs()
+                        <= 1.0e-6
+                );
+            }
+        }
+    }
 }
 
 #[cfg(all(test, feature = "cuda"))]
@@ -2516,16 +2689,22 @@ mod tests {
                 RecurrenceKernel::ValueMajorWarp,
                 128,
             )?;
+            run_low_dtype_sequential_recurrence_case(
+                &dev,
+                state_dtype,
+                RecurrenceKernel::ValueMajorChunked,
+                128,
+            )?;
         }
         Ok(())
     }
 
     #[test]
     #[ignore = "requires a CUDA device"]
-    fn value_major_warp_prefill_matches_scalar_with_shuffled_slots() -> Result<()> {
+    fn value_major_prefill_kernels_match_scalar_with_shuffled_slots() -> Result<()> {
         const BATCH_SIZE: usize = 2;
         const NUM_HEADS: usize = 4;
-        const SEQ_LEN: usize = 17;
+        const SEQ_LEN: usize = 129;
         const HEAD_DIM: usize = 128;
         const CAPACITY: usize = 5;
 
@@ -2558,7 +2737,9 @@ mod tests {
             &dev,
         )?;
         let mut key_major_state = initial_state.clone();
-        let mut value_major_state = initial_state.transpose(2, 3)?.contiguous()?;
+        let value_major_state = initial_state.transpose(2, 3)?.contiguous()?;
+        let mut value_major_warp_state = value_major_state.copy()?;
+        let mut value_major_chunked_state = value_major_state.copy()?;
         let slot_indices = Tensor::from_vec(vec![4u32, 1], (BATCH_SIZE,), &dev)?;
         let slots = GdnStateSlots::Pooled(&slot_indices);
         let inputs = RecurrenceInputs {
@@ -2571,20 +2752,37 @@ mod tests {
 
         for step in 1..=2 {
             let reference = gated_delta_rule_recurrence_cuda(inputs, &mut key_major_state, slots)?;
-            let value_major = vmajor_warp_gated_delta_rule_recurrence_cuda(
+            let value_major_warp = vmajor_warp_gated_delta_rule_recurrence_cuda(
                 inputs,
-                &mut value_major_state,
+                &mut value_major_warp_state,
+                slots,
+            )?;
+            let value_major_chunked = vmajor_chunked_gated_delta_rule_recurrence_cuda(
+                inputs,
+                &mut value_major_chunked_state,
                 slots,
             )?;
             assert_close(
-                &format!("value-major prefill output step {step}"),
-                &flat(&value_major)?,
+                &format!("value-major warp prefill output step {step}"),
+                &flat(&value_major_warp)?,
                 &flat(&reference)?,
                 3.0e-4,
             );
             assert_close(
-                &format!("value-major prefill state step {step}"),
-                &flat(&value_major_state.transpose(2, 3)?.contiguous()?)?,
+                &format!("value-major warp prefill state step {step}"),
+                &flat(&value_major_warp_state.transpose(2, 3)?.contiguous()?)?,
+                &flat(&key_major_state)?,
+                3.0e-4,
+            );
+            assert_close(
+                &format!("value-major chunked prefill output step {step}"),
+                &flat(&value_major_chunked)?,
+                &flat(&reference)?,
+                3.0e-4,
+            );
+            assert_close(
+                &format!("value-major chunked prefill state step {step}"),
+                &flat(&value_major_chunked_state.transpose(2, 3)?.contiguous()?)?,
                 &flat(&key_major_state)?,
                 3.0e-4,
             );
