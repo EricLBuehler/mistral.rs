@@ -1568,9 +1568,11 @@ impl Sequence {
                     .pop_front()
                     .expect("streaming UTF-8 group length must match the queue");
                 emissions.push(StreamingEmission {
-                    text: (idx + 1 == group_len)
-                        .then(|| text.clone())
-                        .unwrap_or_default(),
+                    text: if idx + 1 == group_len {
+                        text.clone()
+                    } else {
+                        String::new()
+                    },
                     bytes: emission.bytes,
                     logprobs: emission.logprobs,
                 });
@@ -2340,6 +2342,7 @@ impl SequenceGroup {
         }
     }
 
+    #[allow(clippy::result_large_err)]
     pub async fn maybe_send_chat_done_response(
         &self,
         response: ChatCompletionResponse,
@@ -2352,6 +2355,7 @@ impl SequenceGroup {
         Ok(())
     }
 
+    #[allow(clippy::result_large_err)]
     pub async fn maybe_send_raw_done_response(
         &self,
         sender: Sender<Response>,
@@ -2370,6 +2374,7 @@ impl SequenceGroup {
         Ok(())
     }
 
+    #[allow(clippy::result_large_err)]
     pub async fn maybe_send_embedding_done_response(
         &self,
         sender: Sender<Response>,
@@ -2391,6 +2396,7 @@ impl SequenceGroup {
         Ok(())
     }
 
+    #[allow(clippy::result_large_err)]
     pub async fn maybe_send_image_gen_response(
         &self,
         response: ImageGenerationResponse,
@@ -2403,6 +2409,7 @@ impl SequenceGroup {
         Ok(())
     }
 
+    #[allow(clippy::result_large_err)]
     pub async fn maybe_send_speech_response(
         &self,
         sender: Sender<Response>,

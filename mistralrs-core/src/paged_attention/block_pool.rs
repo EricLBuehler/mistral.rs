@@ -112,9 +112,7 @@ impl PrefixBlockRetentionState {
     }
 
     fn remove_entry(&mut self, id: u64, published_revision: &AtomicU64) -> Option<Vec<BlockHash>> {
-        let Some(entry) = self.entries.shift_remove(&id) else {
-            return None;
-        };
+        let entry = self.entries.shift_remove(&id)?;
         entry.active.store(false, Ordering::Release);
         let mut released_hashes = Vec::new();
         for hash in entry.hashes.into_iter().rev() {
@@ -139,9 +137,7 @@ impl PrefixBlockRetentionState {
     }
 
     fn revoke_oldest(&mut self, published_revision: &AtomicU64) -> Option<Vec<BlockHash>> {
-        let Some(id) = self.entries.first().map(|(id, _)| *id) else {
-            return None;
-        };
+        let id = self.entries.first().map(|(id, _)| *id)?;
         self.remove_entry(id, published_revision)
     }
 

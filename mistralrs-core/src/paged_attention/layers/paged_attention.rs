@@ -779,6 +779,8 @@ pub struct PagedAttention {
     alibi_slopes: Option<Tensor>,
     fp8_attention_scales: Fp8AttentionScales,
     fp8_attention_scales_calibrated: bool,
+    // read only in the cuda FA3 path
+    #[allow(dead_code)]
     fp8_q_scale: Tensor,
     fp8_k_scale: Tensor,
     fp8_v_scale: Tensor,
@@ -1099,6 +1101,18 @@ impl PagedAttention {
             key_cache.as_ref().unwrap(),
             value_cache.as_ref().unwrap(),
         );
+        #[cfg(all(feature = "cuda", target_family = "unix"))]
+        let fa3_supported = fa3_prefill_cache_num_sm(
+            key_cache.as_ref().unwrap(),
+            value_cache.as_ref().unwrap(),
+            ctx.dims.attention_heads,
+            ctx.dims.key_value_heads,
+            ctx.dims.head_size,
+            block_size,
+        )?
+        .is_some();
+        #[cfg(not(all(feature = "cuda", target_family = "unix")))]
+        let fa3_supported = false;
         let prefill_plan_input = PrefixPrefillPlanInput {
             device_is_cuda: tensors.query.device().is_cuda(),
             dtype: tensors.query.dtype(),
@@ -1117,15 +1131,7 @@ impl PagedAttention {
             writes_cache: write_cache,
             is_causal: prefix_causal,
             has_noncausal_mm_context: mm_prefix_ranges.is_some(),
-            fa3_supported: fa3_prefill_cache_num_sm(
-                key_cache.as_ref().unwrap(),
-                value_cache.as_ref().unwrap(),
-                ctx.dims.attention_heads,
-                ctx.dims.key_value_heads,
-                ctx.dims.head_size,
-                block_size,
-            )?
-            .is_some(),
+            fa3_supported,
             block_size,
             attention_backend,
         };

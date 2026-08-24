@@ -571,6 +571,7 @@ fn request_id(req: &mut Request) -> String {
 #[derive(Clone, Debug)]
 pub struct RequestId(pub String);
 
+#[allow(clippy::result_large_err)]
 async fn extract_model(
     req: Request,
     route: &str,

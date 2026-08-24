@@ -2026,6 +2026,16 @@ pub(crate) fn windowed_kv_cache_size_in_bytes(
         .ok_or_else(|| candle_core::Error::msg("DFlash windowed KV byte size overflow"))
 }
 
+pub(crate) struct DFlashGraphProposalInputs<'a> {
+    pub seq_ids: &'a [usize],
+    pub anchors: &'a [u32],
+    pub start_positions: &'a [usize],
+    pub n_predict: usize,
+    pub sampling: Option<DFlashSamplingInputs<'a>>,
+    pub token_embedding: &'a Arc<dyn QuantMethod>,
+    pub lm_head: &'a Arc<dyn QuantMethod>,
+}
+
 impl DFlashDraftModel {
     pub(crate) fn evict_cuda_graphs_lru(&self, max_entries: usize) -> usize {
         #[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
@@ -2426,14 +2436,17 @@ impl DFlashDraftModel {
 
     pub(crate) fn proposals_cuda_graph(
         &self,
-        seq_ids: &[usize],
-        anchors: &[u32],
-        start_positions: &[usize],
-        n_predict: usize,
-        sampling: Option<DFlashSamplingInputs<'_>>,
-        token_embedding: &Arc<dyn QuantMethod>,
-        lm_head: &Arc<dyn QuantMethod>,
+        inputs: &DFlashGraphProposalInputs<'_>,
     ) -> Result<Option<DFlashProposalBatch>> {
+        let DFlashGraphProposalInputs {
+            seq_ids,
+            anchors,
+            start_positions,
+            n_predict,
+            sampling,
+            token_embedding,
+            lm_head,
+        } = inputs;
         #[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
         {
             if !crate::pipeline::cuda_graph::cuda_decode_graphs_enabled()
@@ -3788,6 +3801,7 @@ mod tests {
         Ok(())
     }
 
+    #[allow(clippy::cast_precision_loss)]
     #[test]
     fn context_tap_gather_preserves_flat_row_order() -> Result<()> {
         let device = Device::Cpu;
@@ -3817,6 +3831,7 @@ mod tests {
         Ok(())
     }
 
+    #[allow(clippy::cast_precision_loss)]
     #[test]
     fn context_tap_gather_handles_contiguous_rows_without_reordering() -> Result<()> {
         let device = Device::Cpu;
@@ -3837,6 +3852,7 @@ mod tests {
         assert_eq!(contiguous_row_range(&[]), None);
     }
 
+    #[allow(clippy::cast_precision_loss)]
     #[test]
     fn context_kv_row_selection_handles_narrowed_sources() -> Result<()> {
         let device = Device::Cpu;
@@ -4046,6 +4062,7 @@ mod tests {
         assert!(!dflash_graph_positions_fit(&[100_000], 0));
     }
 
+    #[allow(clippy::cast_precision_loss)]
     #[test]
     fn graph_rope_uses_each_replayed_long_position() -> Result<()> {
         let device = Device::Cpu;

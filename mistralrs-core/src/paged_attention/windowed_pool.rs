@@ -1186,6 +1186,7 @@ mod tests {
             .to_vec1()
     }
 
+    #[allow(clippy::cast_precision_loss)]
     fn fill_slot(
         pool: &mut WindowedKvPool,
         pool_slot: usize,
