@@ -393,7 +393,14 @@ impl Qwen3VLMoEModel {
             (legacy_visual_pos_masks, legacy_deepstack_visual_embeds)
         };
 
-        let position_ids = if let Some(position_ids) = prompt_position_ids {
+        let decode_position_ids = if rope_img_grid_thw.is_none() && rope_vid_grid_thw.is_none() {
+            crate::vision_models::text_decode_mrope_position_ids_from_context(input_ids, ctx)?
+        } else {
+            None
+        };
+        let position_ids = if let Some(position_ids) = decode_position_ids {
+            position_ids
+        } else if let Some(position_ids) = prompt_position_ids {
             position_ids.clone()
         } else {
             let mut ropeidx_attn_mask_bs = Vec::new();
