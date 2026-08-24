@@ -12,7 +12,7 @@
 use std::collections::HashMap;
 
 use super::block_hash::BlockHash;
-use super::block_pool::BlockPool;
+use super::block_pool::{BlockPool, PrefixBlockRetention};
 
 /// Result of `get_computed_blocks`: cached block IDs and how many tokens they cover.
 #[derive(Debug)]
@@ -65,8 +65,10 @@ impl KVCacheManager {
         enable_caching: bool,
         kv_cache_group_ids: Vec<u32>,
     ) -> Self {
+        let mut block_pool = BlockPool::new(num_gpu_blocks, enable_caching, block_size);
+        block_pool.set_retention_group_ids(kv_cache_group_ids.clone());
         Self {
-            block_pool: BlockPool::new(num_gpu_blocks, enable_caching, block_size),
+            block_pool,
             block_size,
             enable_caching,
             kv_cache_group_ids,
@@ -82,6 +84,10 @@ impl KVCacheManager {
     /// Get a mutable reference to the block pool.
     pub fn block_pool_mut(&mut self) -> &mut BlockPool {
         &mut self.block_pool
+    }
+
+    pub(crate) fn prefix_block_retention(&self) -> PrefixBlockRetention {
+        self.block_pool.prefix_block_retention()
     }
 
     /// Get the null block ID (placeholder for skipped/unused slots).
@@ -111,6 +117,21 @@ impl KVCacheManager {
 
     pub fn num_gpu_blocks(&self) -> usize {
         self.block_pool.num_gpu_blocks()
+    }
+
+    /// Number of distinct physical blocks referenced by active requests.
+    pub fn num_active_blocks(&self) -> usize {
+        self.num_usable_blocks()
+            .saturating_sub(self.num_free_blocks())
+    }
+
+    /// Number of distinct physical blocks retaining prefix-cache keys.
+    pub fn num_prefix_cached_blocks(&self) -> usize {
+        self.block_pool.num_prefix_cached_physical_blocks()
+    }
+
+    pub fn num_retained_prefix_blocks(&self) -> usize {
+        self.block_pool.num_retained_physical_blocks()
     }
 
     /// Whether prefix caching is enabled.
@@ -534,8 +555,31 @@ mod tests {
         let hashes = compute_block_hashes(&tokens, 4, &[], &[]);
 
         mgr.allocate_slots(1, 8, &[]).unwrap();
+        assert_eq!(mgr.num_active_blocks(), 2);
         mgr.cache_blocks(1, &hashes, 8);
+        assert_eq!(mgr.block_pool().num_cached_blocks(), 4);
+        assert_eq!(mgr.num_prefix_cached_blocks(), 2);
         mgr.free(1);
+        assert_eq!(mgr.num_active_blocks(), 0);
+        assert_eq!(mgr.num_prefix_cached_blocks(), 2);
+
+        let computed = mgr.get_computed_blocks(&hashes, 12);
+        assert_eq!(computed.num_computed_tokens, 8);
+        assert_eq!(computed.block_ids.len(), 2);
+    }
+
+    #[test]
+    fn test_prefix_cache_hit_with_duplicate_group_aliases() {
+        let mut mgr = KVCacheManager::new(16, 4, true, vec![0, 1]);
+        let tokens: Vec<u32> = (1..=8).collect();
+        let hashes = compute_block_hashes(&tokens, 4, &[], &[]);
+
+        for request_id in [1, 2] {
+            mgr.allocate_slots(request_id, 8, &[]).unwrap();
+            mgr.cache_blocks(request_id, &hashes, 8);
+        }
+        mgr.free(1);
+        mgr.free(2);
 
         let computed = mgr.get_computed_blocks(&hashes, 12);
         assert_eq!(computed.num_computed_tokens, 8);

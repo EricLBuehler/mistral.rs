@@ -276,6 +276,7 @@ impl<'a> SpeculativeCacheAccess for PagedSpeculativeCacheAccess<'a> {
                 prompt_chunk_attention_policy:
                     crate::paged_attention::block_hash::MultimodalAttentionPolicy::Causal,
                 has_noncausal_mm_context: false,
+                prefix_gather_workspace_limit: None,
                 mm_prefix_ranges: None,
                 full_mm_prefix_ranges: None,
                 prefill_attention_heads: 1,
@@ -287,6 +288,7 @@ impl<'a> SpeculativeCacheAccess for PagedSpeculativeCacheAccess<'a> {
                 query_lens: None,
                 cu_seqlens_q: None,
                 cu_seqlens_kv: None,
+                decode_rows: None,
             }),
             flash_meta: FlashParams::empty(true),
         };

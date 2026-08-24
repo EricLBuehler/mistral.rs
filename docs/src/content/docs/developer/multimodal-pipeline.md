@@ -23,7 +23,7 @@ Multiple images in one request are encoded as a batch.
 
 Video is decoded to frames before model preprocessing. Each selected frame then flows through the image path.
 
-Supported containers and FFmpeg installation are covered in [Set up video input](/mistral.rs/guides/models/video-setup/).
+Supported containers and FFmpeg installation are covered in [Set up video input](/guides/models/video-setup/).
 
 ## Audio path
 
@@ -42,6 +42,6 @@ The cache is LRU (least-recently-used) with a fixed capacity of 32 entries per m
 
 ## See also
 
-- Guide: [multimodal input](/mistral.rs/guides/models/multimodal-input/).
-- Setup: [set up video input](/mistral.rs/guides/models/video-setup/).
-- Reference: [supported models](/mistral.rs/reference/supported-models/).
+- Guide: [multimodal input](/guides/models/multimodal-input/).
+- Setup: [set up video input](/guides/models/video-setup/).
+- Reference: [supported models](/reference/supported-models/).

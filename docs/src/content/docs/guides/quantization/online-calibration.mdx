@@ -6,8 +6,8 @@ description: Calibrate a served ISQ model using activation statistics from live 
 import { Tabs, TabItem } from '@astrojs/starlight/components';
 
 Online calibration observes the activations of a live model quantized with
-[ISQ (in-situ quantization)](/mistral.rs/reference/quantization-types/), builds an
-[importance matrix](/mistral.rs/guides/quantization/quantize-a-model/#imatrix) from that traffic,
+[ISQ (in-situ quantization)](/reference/quantization-types/), builds an
+[importance matrix](/guides/quantization/quantize-a-model/#imatrix) from that traffic,
 and requantizes the tracked layers. The layers are replaced without restarting the server. The
 model continues serving while statistics are collected; requests received during the apply step
 wait until it finishes.
@@ -62,7 +62,7 @@ model.apply_calibration(Some("traffic.cimatrix".into())).await?;
 ```
 
 Each method has a `_with_model` variant for multi-model setups. See the
-[full example](/mistral.rs/examples/rust/quantization/online-calibration/).
+[full example](/examples/rust/quantization/online-calibration/).
 
 </TabItem>
 <TabItem label="Python">
@@ -76,7 +76,7 @@ runner.apply_calibration(save_cimatrix="traffic.cimatrix")
 
 `calibration_status` returns a `CalibrationStatus` with `collecting`, `layers`,
 `layers_tracking`, `total_rows`, `min_rows`, and `max_rows` fields. See the
-[full example](/mistral.rs/examples/python/online-calibration/).
+[full example](/examples/python/online-calibration/).
 
 </TabItem>
 </Tabs>
@@ -87,7 +87,7 @@ Activation collection is inactive until `start` and stops after `apply`.
 
 - The model must have been loaded with `--isq` from a supported safetensors or GGUF source;
   `start` errors otherwise, including models loaded
-  [`--from-uqff`](/mistral.rs/guides/quantization/uqff/).
+  [`--from-uqff`](/guides/quantization/uqff/).
 - Importance weighting applies to the K-quant types (`Q2K`-`Q6K`). Other Q types and AFQ collect
   and requantize without using importance weights. HQQ, FP8, F8Q8, and MXFP4 do not support
   collection, so `start` returns an error.
@@ -99,4 +99,4 @@ Activation collection is inactive until `start` and stops after `apply`.
 
 ## See also
 
-- [imatrix background](/mistral.rs/guides/quantization/quantize-a-model/#imatrix).
+- [imatrix background](/guides/quantization/quantize-a-model/#imatrix).

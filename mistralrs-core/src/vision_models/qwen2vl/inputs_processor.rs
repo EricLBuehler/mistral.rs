@@ -21,10 +21,12 @@ use crate::{
     attention::AttentionMask,
     device_map::DeviceMapper,
     pipeline::{
+        recurrent_batch_kind_for_input,
         text_models_inputs_processor::{
             self, get_completion_input, get_prompt_input, PagedAttentionMeta,
         },
-        InputProcessorOutput, InputsProcessor, InputsProcessorType, MessagesAction, Processor,
+        InputProcessorOutput, InputsProcessor, InputsProcessorType, InputsProcessorValidationError,
+        MessagesAction, Processor,
     },
     sequence::{build_mm_features_from_ranges, find_placeholder_delimited_ranges, Sequence},
     vision_models::{
@@ -40,6 +42,8 @@ use crate::{
 };
 
 use super::Qwen2VLVisionSpecificArgs;
+
+const MAX_MEDIA_ASPECT_RATIO: f64 = 200.0;
 
 // Input processor
 struct Qwen2VLImageProcessor {
@@ -102,10 +106,14 @@ pub(crate) fn expand_media_placeholders(
     }
     let placeholder_count = text.match_indices(pad).count();
     let grid_rows = grid.map(|grid| grid.dim(0)).transpose()?.unwrap_or(0);
-    if placeholder_count != grid_rows || grid_rows != media_rows {
-        anyhow::bail!(
-            "Qwen {kind:?} has {placeholder_count} placeholders, {grid_rows} grid rows, and {media_rows} media rows"
-        );
+    if placeholder_count != media_rows {
+        return Err(InputsProcessorValidationError(format!(
+            "Qwen {kind:?} has {placeholder_count} placeholders but {media_rows} media inputs"
+        ))
+        .into());
+    }
+    if grid_rows != media_rows {
+        anyhow::bail!("Qwen {kind:?} has {grid_rows} grid rows but {media_rows} media inputs");
     }
     let mut repetitions = Vec::with_capacity(grid_rows);
     if let Some(grid) = grid {
@@ -131,6 +139,38 @@ pub(crate) fn expand_media_placeholders(
         *text = replace_first_occurrence(text, pad, &placeholder.repeat(repetition));
     }
     *text = text.replace(placeholder, pad);
+    Ok(())
+}
+
+pub(crate) fn validate_qwen_media_dimensions(
+    images: &[DynamicImage],
+    resize_factor: Option<usize>,
+) -> Result<()> {
+    for image in images {
+        let (width, height) = image.dimensions();
+        if width == 0 || height == 0 {
+            return Err(InputsProcessorValidationError(
+                "Qwen media dimensions must be nonzero".to_string(),
+            )
+            .into());
+        }
+        let Some(factor) = resize_factor else {
+            continue;
+        };
+        if (height as usize) < factor || (width as usize) < factor {
+            return Err(InputsProcessorValidationError(format!(
+                "Qwen media height {height} or width {width} must be at least {factor}"
+            ))
+            .into());
+        }
+        let aspect_ratio = f64::from(height.max(width)) / f64::from(height.min(width));
+        if aspect_ratio > MAX_MEDIA_ASPECT_RATIO {
+            return Err(InputsProcessorValidationError(format!(
+                "Qwen media absolute aspect ratio must be smaller than {MAX_MEDIA_ASPECT_RATIO}, got {aspect_ratio:.2}"
+            ))
+            .into());
+        }
+    }
     Ok(())
 }
 
@@ -435,7 +475,7 @@ impl<'a> PromptMropeConfig<'a> {
 }
 
 pub(crate) fn prompt_mrope(
-    input_seqs: &[&mut Sequence],
+    input_seqs: &mut [&mut Sequence],
     query_ranges: &[Range<usize>],
     config: PromptMropeConfig<'_>,
 ) -> Result<Tensor> {
@@ -451,7 +491,7 @@ pub(crate) fn prompt_mrope(
         anyhow::bail!("Qwen MRoPE query count does not match sequence count");
     }
     let mut sources = Vec::with_capacity(input_seqs.len());
-    for seq in input_seqs {
+    for seq in input_seqs.iter_mut() {
         let image_grid = completed_media_grid(
             seq,
             MultimodalKind::Image,
@@ -472,10 +512,12 @@ pub(crate) fn prompt_mrope(
             image_token_id,
             video_token_id,
         )?;
-        sources.push(MropePositionSource {
+        let source = MropePositionSource {
             position_ids: positions,
             delta: deltas.flatten_all()?.to_vec1::<i64>()?[0],
-        });
+        };
+        seq.multimodal.mrope_position_delta = Some(source.delta);
+        sources.push(source);
     }
     if packed {
         return Ok(gather_packed_mrope_positions(
@@ -509,6 +551,52 @@ pub(crate) fn prompt_mrope(
         rows.push(positions);
     }
     Ok(Tensor::stack(&rows, 1)?)
+}
+
+pub(crate) fn apply_mrope_position_deltas(
+    position_ids: Vec<usize>,
+    input_seqs: &[&mut Sequence],
+) -> Result<Vec<usize>> {
+    if position_ids.len() != input_seqs.len() {
+        anyhow::bail!(
+            "Qwen MRoPE position count {} does not match sequence count {}",
+            position_ids.len(),
+            input_seqs.len()
+        );
+    }
+    position_ids
+        .into_iter()
+        .zip(input_seqs)
+        .map(|(position, seq)| {
+            apply_mrope_position_delta(position, seq.multimodal.mrope_position_delta.unwrap_or(0))
+        })
+        .collect()
+}
+
+fn apply_mrope_position_delta(position: usize, delta: i64) -> Result<usize> {
+    let position = i64::try_from(position)?;
+    let position = position
+        .checked_add(delta)
+        .ok_or_else(|| anyhow::anyhow!("Qwen MRoPE position overflow"))?;
+    usize::try_from(position).map_err(anyhow::Error::from)
+}
+
+fn qwen2_decode_args(input_ids: &Tensor, seqlens: Vec<usize>) -> Qwen2VLVisionSpecificArgs {
+    Qwen2VLVisionSpecificArgs {
+        input_ids_full: input_ids.clone(),
+        pixel_values_videos: None,
+        image_grid_thw: None,
+        video_grid_thw: None,
+        rope_img_grid_thw: None,
+        rope_vid_grid_thw: None,
+        seqlens,
+        continuous_img_pad: Vec::new(),
+        continuous_vid_pad: Vec::new(),
+        image_hashes: Vec::new(),
+        video_hashes: Vec::new(),
+        packed_layout: None,
+        prompt_position_ids: None,
+    }
 }
 
 pub(crate) fn packed_layout(
@@ -614,6 +702,35 @@ impl InputsProcessor for Qwen2VLImageProcessor {
             .any(|seq| seq.has_images() || seq.has_videos())
         {
             return Ok(());
+        }
+
+        let resize_factor = if config.do_resize.is_none_or(|resize| resize) {
+            config
+                .patch_size
+                .zip(config.merge_size)
+                .and_then(|(patch_size, merge_size)| patch_size.checked_mul(merge_size))
+                .filter(|factor| *factor > 0)
+        } else {
+            None
+        };
+        for seq in input_seqs.iter() {
+            if let Some(images) = seq.images() {
+                validate_qwen_media_dimensions(
+                    images,
+                    resize_factor.filter(|_| self.max_edge.is_none()),
+                )?;
+            }
+            if let Some(videos) = seq.videos() {
+                for video in videos {
+                    if video.frames.is_empty() {
+                        return Err(InputsProcessorValidationError(
+                            "Qwen video inputs must contain at least one frame".to_string(),
+                        )
+                        .into());
+                    }
+                    validate_qwen_media_dimensions(&video.frames, resize_factor)?;
+                }
+            }
         }
 
         let mut detok_seqs = tokenizer
@@ -821,6 +938,55 @@ impl InputsProcessor for Qwen2VLImageProcessor {
         if no_kv_cache {
             return Err(anyhow::Error::msg("Vision model must have kv cache."));
         }
+        if !is_prompt {
+            let text_models_inputs_processor::InnerInputProcessorOutput {
+                inputs:
+                    text_models_inputs_processor::InputMetadata {
+                        input,
+                        positions,
+                        context_lens,
+                        position_ids,
+                        paged_attn_meta,
+                        flash_meta,
+                    },
+                seq_indices,
+            } = get_completion_input(
+                input_seqs
+                    .iter()
+                    .map(|seq| seq.get_toks())
+                    .collect::<Vec<_>>(),
+                input_seqs,
+                device,
+                no_kv_cache,
+                last_n_context_len,
+                return_raw_logits,
+                paged_attn_metadata.as_mut(),
+                mapper,
+                sliding_window,
+            )
+            .unwrap();
+            let position_ids = apply_mrope_position_deltas(position_ids, input_seqs)?;
+            let args = qwen2_decode_args(&input, input_seqs.iter().map(|seq| seq.len()).collect());
+            let inputs: Box<dyn Any> = Box::new(ModelInputs {
+                input_ids: input,
+                seqlen_offsets: positions,
+                context_lens,
+                position_ids,
+                pixel_values: None,
+                model_specific_args: Box::new(args),
+                paged_attn_meta,
+                flash_meta,
+                recurrent_batch_kind: recurrent_batch_kind_for_input(
+                    false,
+                    crate::speculative::staging::staged_batch_width(input_seqs).is_some(),
+                ),
+                adapter_leases: crate::vision_models::adapter_leases(input_seqs, &seq_indices),
+            });
+            return Ok(InputProcessorOutput {
+                inputs,
+                seq_indices,
+            });
+        }
         let Some(tokenizer) = tokenizer else {
             return Err(anyhow::Error::msg(
                 "MLlamaInputProcessor requires a specified tokenizer.",
@@ -876,6 +1042,13 @@ impl InputsProcessor for Qwen2VLImageProcessor {
         let has_media = input_seqs
             .iter()
             .any(|seq| seq.has_images() || seq.has_videos());
+        for seq in input_seqs.iter_mut() {
+            if seq.multimodal.rope_img_grid_thw.is_none()
+                && seq.multimodal.rope_vid_grid_thw.is_none()
+            {
+                seq.multimodal.mrope_position_delta = None;
+            }
+        }
         let mut image_item_counts = vec![0usize; input_seqs.len()];
         let mut video_item_counts = vec![0usize; input_seqs.len()];
 
@@ -1328,7 +1501,6 @@ impl InputsProcessor for Qwen2VLImageProcessor {
         } else {
             None
         };
-
         let inputs: Box<dyn Any> = Box::new(ModelInputs {
             input_ids: input,
             seqlen_offsets: positions,
@@ -1595,6 +1767,39 @@ mod tests {
     use super::*;
 
     #[test]
+    fn decode_position_ends_apply_mrope_delta() -> Result<()> {
+        assert_eq!(apply_mrope_position_delta(20, -7)?, 13);
+        assert_eq!(apply_mrope_position_delta(30, 2)?, 32);
+        assert_eq!(apply_mrope_position_delta(100, 0)?, 100);
+        assert!(apply_mrope_position_delta(3, -4).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn decode_args_only_retain_current_tokens() -> Result<()> {
+        let input_ids = Tensor::new(&[[7u32], [9]], &Device::Cpu)?;
+        let args = qwen2_decode_args(&input_ids, vec![100, 200]);
+
+        assert_eq!(
+            args.input_ids_full.to_vec2::<u32>()?,
+            vec![vec![7], vec![9]]
+        );
+        assert_eq!(args.seqlens, vec![100, 200]);
+        assert!(args.pixel_values_videos.is_none());
+        assert!(args.image_grid_thw.is_none());
+        assert!(args.video_grid_thw.is_none());
+        assert!(args.rope_img_grid_thw.is_none());
+        assert!(args.rope_vid_grid_thw.is_none());
+        assert!(args.continuous_img_pad.is_empty());
+        assert!(args.continuous_vid_pad.is_empty());
+        assert!(args.image_hashes.is_empty());
+        assert!(args.video_hashes.is_empty());
+        assert!(args.packed_layout.is_none());
+        assert!(args.prompt_position_ids.is_none());
+        Ok(())
+    }
+
+    #[test]
     fn media_expansion_requires_exact_placeholder_grid_and_media_counts() -> Result<()> {
         let grid = Tensor::new(&[[1u32, 2, 2], [1, 2, 4]], &Device::Cpu)?;
         let mut text = format!(
@@ -1629,7 +1834,8 @@ mod tests {
             4,
             MultimodalKind::Image,
         )
-        .is_err());
+        .unwrap_err()
+        .is::<InputsProcessorValidationError>());
         assert_eq!(excess, original);
 
         let mut missing = Qwen2VLProcessor::IMAGE_PAD.to_string();
@@ -1642,9 +1848,16 @@ mod tests {
             4,
             MultimodalKind::Image,
         )
-        .is_err());
-        assert!(expand_media_placeholders(
-            &mut missing,
+        .unwrap_err()
+        .is::<InputsProcessorValidationError>());
+
+        let mut grid_mismatch = format!(
+            "{}{}",
+            Qwen2VLProcessor::IMAGE_PAD,
+            Qwen2VLProcessor::IMAGE_PAD
+        );
+        assert!(!expand_media_placeholders(
+            &mut grid_mismatch,
             Qwen2VLProcessor::IMAGE_PAD,
             Qwen2VLProcessor::PLACEHOLDER,
             Some(&one_grid),
@@ -1652,7 +1865,8 @@ mod tests {
             4,
             MultimodalKind::Image,
         )
-        .is_err());
+        .unwrap_err()
+        .is::<InputsProcessorValidationError>());
         Ok(())
     }
 
@@ -1673,6 +1887,24 @@ mod tests {
         assert!(validated_mm_features(&[(1, 2), (5, 2)], &[11], MultimodalKind::Image).is_err());
         assert!(validated_mm_features(&[(1, 2)], &[11, 12], MultimodalKind::Image).is_err());
         Ok(())
+    }
+
+    #[test]
+    fn invalid_media_dimensions_are_validation_errors() {
+        let too_small = DynamicImage::new_rgb8(14, 28);
+        let error = validate_qwen_media_dimensions(&[too_small], Some(28)).unwrap_err();
+        assert!(error.is::<InputsProcessorValidationError>());
+
+        let extreme = DynamicImage::new_rgb8(201, 1);
+        let error = validate_qwen_media_dimensions(&[extreme], Some(1)).unwrap_err();
+        assert!(error.is::<InputsProcessorValidationError>());
+
+        let frames = [
+            DynamicImage::new_rgb8(28, 28),
+            DynamicImage::new_rgb8(14, 28),
+        ];
+        let error = validate_qwen_media_dimensions(&frames, Some(28)).unwrap_err();
+        assert!(error.is::<InputsProcessorValidationError>());
     }
 
     #[test]

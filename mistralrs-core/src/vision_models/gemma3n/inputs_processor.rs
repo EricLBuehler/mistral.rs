@@ -14,7 +14,8 @@ use crate::{
         text_models_inputs_processor::{
             self, get_completion_input, get_prompt_input, PagedAttentionMeta,
         },
-        InputProcessorOutput, InputsProcessor, InputsProcessorType, MessagesAction, Processor,
+        InputProcessorOutput, InputsProcessor, InputsProcessorType, InputsProcessorValidationError,
+        MessagesAction, Processor,
     },
     sequence::{build_mm_features_from_ranges, find_image_placeholder_ranges, Sequence},
     vision_models::gemma3n::audio_processing::AudioProcessor,
@@ -303,7 +304,6 @@ impl InputsProcessor for Gemma3nImageProcessor {
             anyhow::Error::msg("Gemma3nImageProcessor requires a specified tokenizer.")
         })?;
         self.prepare_prompt_plans(&tokenizer, input_seqs, paged_attn_metadata)
-            .map_err(anyhow::Error::new)
     }
 
     fn process_inputs(
@@ -336,8 +336,7 @@ impl InputsProcessor for Gemma3nImageProcessor {
             config.downcast_ref().expect("Downcast failed.");
 
         if is_prompt {
-            self.prepare_prompt_plans(&tokenizer, input_seqs, paged_attn_metadata.as_mut())
-                .map_err(anyhow::Error::new)?;
+            self.prepare_prompt_plans(&tokenizer, input_seqs, paged_attn_metadata.as_mut())?;
         }
 
         let audio_batch = is_prompt
@@ -465,7 +464,7 @@ impl Gemma3nImageProcessor {
         tokenizer: &Tokenizer,
         input_seqs: &mut [&mut Sequence],
         mut paged_attn_metadata: Option<&mut PagedAttentionMeta>,
-    ) -> Result<()> {
+    ) -> anyhow::Result<()> {
         for seq in input_seqs {
             if seq.multimodal.has_changed_prompt && !seq.mm_features().is_empty() {
                 continue;
@@ -475,22 +474,28 @@ impl Gemma3nImageProcessor {
             let image_hashes = seq.multimodal.image_hashes().unwrap_or_default().to_vec();
             let audio_hashes = seq.multimodal.audio_hashes().unwrap_or_default().to_vec();
             if image_hashes.len() != image_count {
-                candle_core::bail!(
+                anyhow::bail!(
                     "Gemma 3n has {image_count} images but {} image hashes",
                     image_hashes.len()
                 );
             }
             if audio_hashes.len() != audio_count {
-                candle_core::bail!(
+                anyhow::bail!(
                     "Gemma 3n has {audio_count} audios but {} audio hashes",
                     audio_hashes.len()
                 );
             }
             if image_count > 0 && !self.supports_images {
-                candle_core::bail!("This Gemma 3n processor does not support images");
+                return Err(InputsProcessorValidationError(
+                    "This Gemma 3n processor does not support images".to_string(),
+                )
+                .into());
             }
             if audio_count > 0 && !self.supports_audio {
-                candle_core::bail!("This Gemma 3n processor does not support audio");
+                return Err(InputsProcessorValidationError(
+                    "This Gemma 3n processor does not support audio".to_string(),
+                )
+                .into());
             }
 
             let mut prompt = tokenizer
@@ -499,14 +504,16 @@ impl Gemma3nImageProcessor {
             let raw_image_count = prompt.match_indices(IMAGE_TOKEN).count();
             let raw_audio_count = prompt.match_indices(AUDIO_TOKEN).count();
             if raw_image_count != image_count {
-                candle_core::bail!(
+                return Err(InputsProcessorValidationError(format!(
                     "Gemma 3n has {raw_image_count} image placeholders but {image_count} images"
-                );
+                ))
+                .into());
             }
             if raw_audio_count != audio_count {
-                candle_core::bail!(
+                return Err(InputsProcessorValidationError(format!(
                     "Gemma 3n has {raw_audio_count} audio placeholders but {audio_count} audios"
-                );
+                ))
+                .into());
             }
             if image_count == 0 && audio_count == 0 {
                 continue;
@@ -530,14 +537,14 @@ impl Gemma3nImageProcessor {
                     .iter()
                     .any(|&(_, length)| length != self.image_token_count())
             {
-                candle_core::bail!("Gemma 3n expanded image placeholder metadata is invalid");
+                anyhow::bail!("Gemma 3n expanded image placeholder metadata is invalid");
             }
             if audio_ranges.len() != audio_count
                 || audio_ranges
                     .iter()
                     .any(|&(_, length)| length != self.audio_seq_length)
             {
-                candle_core::bail!("Gemma 3n expanded audio placeholder metadata is invalid");
+                anyhow::bail!("Gemma 3n expanded audio placeholder metadata is invalid");
             }
 
             let mut features =

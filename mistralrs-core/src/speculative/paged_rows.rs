@@ -172,6 +172,9 @@ pub(crate) fn make_paged_rows_metadata(
         },
         decode_tmp_v: None,
         decode_tmp_s: None,
+        fa3_decode: None,
+        #[cfg(feature = "cuda")]
+        decode_tile_plan_used: None,
     });
 
     Ok(PagedAttentionInputMetadata {
@@ -190,6 +193,7 @@ pub(crate) fn make_paged_rows_metadata(
         prompt_chunk_attention_policy:
             crate::paged_attention::block_hash::MultimodalAttentionPolicy::Causal,
         has_noncausal_mm_context: false,
+        prefix_gather_workspace_limit: None,
         mm_prefix_ranges: None,
         full_mm_prefix_ranges: None,
         prefill_attention_heads: 1,
@@ -201,6 +205,7 @@ pub(crate) fn make_paged_rows_metadata(
         query_lens: None,
         cu_seqlens_q: None,
         cu_seqlens_kv: None,
+        decode_rows: None,
     })
 }
 

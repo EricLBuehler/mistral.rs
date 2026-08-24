@@ -247,6 +247,7 @@ impl ToolCallState {
         &mut self,
         content_delta: Option<String>,
         raw_delta: &str,
+        parser_text: Option<&str>,
         has_external_reasoning: bool,
         is_done: bool,
     ) -> Result<ToolCallParse> {
@@ -265,17 +266,25 @@ impl ToolCallState {
             return Ok(ToolCallParse::empty(content_delta));
         }
 
-        let raw_text = match content_delta {
+        let visible_text = match content_delta {
             Some(content_delta) => content_delta,
             None if has_external_reasoning => return Ok(ToolCallParse::empty(None)),
             None => raw_delta.to_string(),
         };
+        let parse_text = parser_text.unwrap_or(&visible_text);
         let (tool_use_still_possible, tool_use_is_done) =
-            self.matcher.prefix_could_be_tool(&raw_text)?;
-        let (content, tool_calls) = self
+            self.matcher.prefix_could_be_tool(parse_text)?;
+        let (mut content, tool_calls) = self
             .matcher
-            .get_call_with_content(&raw_text)
+            .get_call_with_content(parse_text)
             .map_err(candle_core::Error::msg)?;
+        if parser_text.is_some() && tool_calls.is_empty() {
+            content = self
+                .matcher
+                .get_call_with_content(&visible_text)
+                .map_err(candle_core::Error::msg)?
+                .0;
+        }
         if !tool_calls.is_empty() {
             self.obligation
                 .mark_satisfied(self.matcher.requires_tool_call());
@@ -294,6 +303,7 @@ impl ToolCallState {
         raw_text: &str,
         parsed_content: Option<String>,
         reasoning_content: Option<String>,
+        parser_text: Option<&str>,
     ) -> Result<ToolCallParse> {
         if self.strategy.has_reasoning() {
             let tool_calls = self.strategy.finalize_tool_calls();
@@ -310,11 +320,19 @@ impl ToolCallState {
             });
         }
 
-        let text = parsed_content.unwrap_or_else(|| raw_text.to_string());
-        let (content, tool_calls) = self
+        let visible_text = parsed_content.unwrap_or_else(|| raw_text.to_string());
+        let parse_text = parser_text.unwrap_or(&visible_text);
+        let (mut content, tool_calls) = self
             .matcher
-            .get_call_with_content(&text)
+            .get_call_with_content(parse_text)
             .map_err(candle_core::Error::msg)?;
+        if parser_text.is_some() && tool_calls.is_empty() {
+            content = self
+                .matcher
+                .get_call_with_content(&visible_text)
+                .map_err(candle_core::Error::msg)?
+                .0;
+        }
         if !tool_calls.is_empty() {
             self.obligation
                 .mark_satisfied(self.matcher.requires_tool_call());
@@ -392,7 +410,7 @@ mod tests {
             b" to=get_weather<|message|><atem:function_calls><atem:invoke name=\"get_weather\"></atem:invoke></atem:function_calls><|eot|>",
         );
 
-        let parsed = state.parse_streaming(None, "", false, true).unwrap();
+        let parsed = state.parse_streaming(None, "", None, false, true).unwrap();
         assert!(parsed.tool_calls.is_empty());
     }
 
@@ -440,7 +458,7 @@ mod tests {
         state.observe_token(0, output);
 
         assert_eq!(state.reasoning_delta().as_deref(), Some("checking"));
-        let parsed = state.parse_streaming(None, "", false, true).unwrap();
+        let parsed = state.parse_streaming(None, "", None, false, true).unwrap();
         assert_eq!(parsed.tool_calls.len(), 1);
         assert_eq!(parsed.tool_calls[0].function.name, "get_weather");
         assert_eq!(
@@ -491,7 +509,7 @@ mod tests {
             0,
             b"<|eom|><|start|>assistant to=search<|message|><atem:function_calls><atem:invoke name=\"search\"></atem:invoke></atem:function_calls><|eot|>",
         );
-        let parsed = state.finalize_for_response("", None, None).unwrap();
+        let parsed = state.finalize_for_response("", None, None, None).unwrap();
 
         assert_eq!(parsed.tool_calls.len(), 2);
         assert_eq!(parsed.tool_calls[0].function.name, "get_weather");
@@ -559,7 +577,7 @@ mod tests {
         state.observe_token(0, b">");
         assert_eq!(
             state
-                .finalize_for_response("", None, None)
+                .finalize_for_response("", None, None, None)
                 .unwrap()
                 .tool_calls
                 .len(),
@@ -666,6 +684,7 @@ mod tests {
                 r#"Before <tool_call>{"name":"get_weather","arguments":{"city":"Paris"}}</tool_call>"#,
                 None,
                 None,
+                None,
             )
             .unwrap();
 
@@ -675,6 +694,54 @@ mod tests {
             parsed.tool_calls[0].function.arguments,
             json!({"city":"Paris"}).to_string()
         );
+    }
+
+    #[test]
+    fn text_tool_strategy_parses_a_hidden_stop_delimiter_without_exposing_it() {
+        let tools = vec![tool("get_weather")];
+        let visible = r#"<tool_call>{"name":"get_weather","arguments":{"city":"Paris"}}"#;
+        let parser_text = format!("{visible}</tool_call>");
+
+        let mut final_state =
+            ToolCallState::new(ToolChoice::Auto, Some(&tools), Some(ToolCallFormat::Qwen)).unwrap();
+        let parsed = final_state
+            .finalize_for_response(visible, None, None, Some(&parser_text))
+            .unwrap();
+        assert_eq!(parsed.content, None);
+        assert_eq!(parsed.tool_calls.len(), 1);
+        assert_eq!(parsed.tool_calls[0].function.name, "get_weather");
+
+        let mut streaming_state =
+            ToolCallState::new(ToolChoice::Auto, Some(&tools), Some(ToolCallFormat::Qwen)).unwrap();
+        let parsed = streaming_state
+            .parse_streaming(
+                Some(visible.to_string()),
+                visible,
+                Some(&parser_text),
+                false,
+                true,
+            )
+            .unwrap();
+        assert_eq!(parsed.content, None);
+        assert_eq!(parsed.tool_calls.len(), 1);
+    }
+
+    #[test]
+    fn hidden_parser_text_is_not_returned_when_no_tool_call_matches() {
+        let tools = vec![tool("get_weather")];
+        let mut state = ToolCallState::new(ToolChoice::Auto, Some(&tools), None).unwrap();
+
+        let parsed = state
+            .finalize_for_response(
+                "ordinary response",
+                None,
+                None,
+                Some("ordinary response<STOP_BOUNDARY>"),
+            )
+            .unwrap();
+
+        assert_eq!(parsed.content.as_deref(), Some("ordinary response"));
+        assert!(parsed.tool_calls.is_empty());
     }
 
     #[test]

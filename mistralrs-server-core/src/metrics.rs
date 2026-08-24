@@ -4,10 +4,11 @@ use axum::{
     extract::{MatchedPath, Request, State},
     http::{
         header::{HeaderName, CONTENT_LENGTH},
-        HeaderValue,
+        HeaderMap, HeaderValue,
     },
     middleware::Next,
     response::Response,
+    Json,
 };
 use axum::{
     http::{header::CONTENT_TYPE, StatusCode},
@@ -15,6 +16,8 @@ use axum::{
 };
 use http_body::{Body as HttpBody, Frame};
 use metrics_exporter_prometheus::{Matcher, PrometheusBuilder, PrometheusHandle};
+use mistralrs_core::REQUEST_QUEUE_DURATION_METRIC;
+use std::error::Error as _;
 use std::pin::Pin;
 use std::sync::OnceLock;
 use std::task::{Context, Poll};
@@ -22,7 +25,7 @@ use std::time::Instant;
 use tracing::{debug, info};
 
 use crate::{
-    handler_core::ResponseErrorMessage,
+    handler_core::{openai_error_response, ApiError, ApiErrorKind, ResponseErrorMessage},
     lora_adapters::{
         is_resolvable_lora_adapter_model, lifecycle_body_too_large_response,
         list_lora_adapter_models,
@@ -34,6 +37,7 @@ use crate::{
 
 static PROMETHEUS_HANDLE: OnceLock<PrometheusHandle> = OnceLock::new();
 const REQUEST_ID_HEADER: &str = "x-request-id";
+const ANTHROPIC_REQUEST_ID_HEADER: &str = "request-id";
 const UNMATCHED_ROUTE: &str = "<unmatched>";
 const NO_MODEL: &str = "none";
 const UNKNOWN_MODEL: &str = "unknown";
@@ -62,6 +66,22 @@ const HTTP_REQUEST_BODY_BYTE_BUCKETS: [f64; 12] = [
     52_428_800.0,
     104_857_600.0,
 ];
+// Bucket lists taken from vLLM's Prometheus exporter
+const TTFT_BUCKETS: [f64; 22] = [
+    0.001, 0.005, 0.01, 0.02, 0.04, 0.06, 0.08, 0.1, 0.25, 0.5, 0.75, 1.0, 2.5, 5.0, 7.5, 10.0,
+    20.0, 40.0, 80.0, 160.0, 640.0, 2_560.0,
+];
+const ITL_BUCKETS: [f64; 19] = [
+    0.01, 0.025, 0.05, 0.075, 0.1, 0.15, 0.2, 0.3, 0.4, 0.5, 0.75, 1.0, 2.5, 5.0, 7.5, 10.0, 20.0,
+    40.0, 80.0,
+];
+const QUEUE_DURATION_BUCKETS: [f64; 22] = [
+    0.001, 0.005, 0.01, 0.02, 0.04, 0.06, 0.08, 0.1, 0.25, 0.5, 0.75, 1.0, 2.5, 5.0, 7.5, 10.0,
+    20.0, 40.0, 80.0, 160.0, 640.0, 2_560.0,
+];
+pub(crate) const TTFT_METRIC: &str = "mistralrs_time_to_first_token_seconds";
+pub(crate) const ITL_METRIC: &str = "mistralrs_inter_token_latency_seconds";
+const REQUEST_OUTCOME_METRIC: &str = "mistralrs_request_outcomes_total";
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, serde::Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -142,6 +162,15 @@ pub fn install_prometheus_recorder() {
             &HTTP_REQUEST_BODY_BYTE_BUCKETS,
         )
         .expect("valid HTTP request body byte buckets")
+        .set_buckets_for_metric(Matcher::Full(TTFT_METRIC.to_string()), &TTFT_BUCKETS)
+        .expect("valid TTFT buckets")
+        .set_buckets_for_metric(Matcher::Full(ITL_METRIC.to_string()), &ITL_BUCKETS)
+        .expect("valid ITL buckets")
+        .set_buckets_for_metric(
+            Matcher::Full(REQUEST_QUEUE_DURATION_METRIC.to_string()),
+            &QUEUE_DURATION_BUCKETS,
+        )
+        .expect("valid request queue duration buckets")
         .install_recorder()
         .expect("failed to install Prometheus recorder");
     let _ = PROMETHEUS_HANDLE.set(handle);
@@ -196,6 +225,8 @@ pub async fn observe_http(
         .map(|m| m.as_str().to_string())
         .unwrap_or_else(|| UNMATCHED_ROUTE.to_string());
     let uri_path = req.uri().path().to_string();
+    let anthropic_request =
+        is_anthropic_request(&route, &uri_path, req.headers(), req.uri().query());
     let content_length_header = req
         .headers()
         .get(CONTENT_LENGTH)
@@ -203,7 +234,7 @@ pub async fn observe_http(
         .and_then(|value| value.parse::<u64>().ok());
     let request_id = request_id(&mut req);
     let (req, model, body_bytes, early_response) =
-        match extract_model(req, &route, &observability).await {
+        match extract_model(req, &route, &request_id, &observability).await {
             Ok((req, model, body_bytes)) => (Some(req), model, body_bytes, None),
             Err(response) => (None, UNKNOWN_MODEL.to_string(), None, Some(response)),
         };
@@ -247,6 +278,12 @@ pub async fn observe_http(
             next.run(req).await
         }
     };
+    if anthropic_request
+        && (response.status().is_client_error() || response.status().is_server_error())
+        && !is_sse(&response)
+    {
+        response = insert_anthropic_request_id(response, &request_id).await;
+    }
     let status = response.status().as_u16().to_string();
 
     if config.request_id_header {
@@ -254,6 +291,13 @@ pub async fn observe_http(
             response
                 .headers_mut()
                 .insert(HeaderName::from_static(REQUEST_ID_HEADER), value);
+        }
+    }
+    if anthropic_request {
+        if let Ok(value) = HeaderValue::from_str(&request_id) {
+            response
+                .headers_mut()
+                .insert(HeaderName::from_static(ANTHROPIC_REQUEST_ID_HEADER), value);
         }
     }
 
@@ -273,6 +317,18 @@ pub async fn observe_http(
     // SSE bodies keep working long after the handler returns; finish accounting when the body ends
     if is_sse(&response) {
         completion.log_stream_accepted();
+        // Labels and start are fixed here; the streamer is only polled once this body is consumed
+        if completion.config.metrics {
+            outcome_handle.set_latency_labels(
+                [
+                    ("method", completion.method.clone()),
+                    ("path", completion.route.clone()),
+                    ("model", completion.model.clone()),
+                    ("status", completion.status.clone()),
+                ],
+                completion.start,
+            );
+        }
         let (parts, body) = response.into_parts();
         let body = Body::new(ObservedBody {
             inner: body,
@@ -361,6 +417,15 @@ impl StreamEnd {
     }
 }
 
+fn request_outcome(status: &str, detail: Option<&RequestError>) -> &'static str {
+    match detail {
+        Some(RequestError::Stream(stats)) => stats.end.as_str(),
+        Some(RequestError::Message(_)) => "error",
+        None if status.starts_with('4') || status.starts_with('5') => "error",
+        None => "completed",
+    }
+}
+
 struct StreamStats {
     end: StreamEnd,
     outcome: StreamOutcome,
@@ -395,6 +460,11 @@ impl RequestCompletion {
             ];
             metrics::counter!("http_requests_total", &labels).increment(1);
             metrics::histogram!("http_request_duration_seconds", &labels).record(latency);
+            metrics::counter!(
+                REQUEST_OUTCOME_METRIC,
+                "outcome" => request_outcome(&self.status, detail.as_ref())
+            )
+            .increment(1);
         }
         drop(self.in_flight);
 
@@ -504,6 +574,7 @@ pub struct RequestId(pub String);
 async fn extract_model(
     req: Request,
     route: &str,
+    request_id: &str,
     observability: &ObservabilityState,
 ) -> Result<(Request, String, Option<u64>), Response> {
     let Some(field) = model_label_field(route) else {
@@ -522,7 +593,17 @@ async fn extract_model(
     let (parts, body) = req.into_parts();
     let bytes = to_bytes(body, observability.max_body_bytes)
         .await
-        .map_err(|_| body_too_large_response(route))?;
+        .map_err(|error| {
+            if error
+                .source()
+                .is_some_and(|source| source.is::<http_body_util::LengthLimitError>())
+            {
+                body_too_large_response(route, Some(request_id))
+            } else {
+                debug!(%error, route, "failed to read request body");
+                body_read_error_response(route, Some(request_id))
+            }
+        })?;
     let body_bytes = Some(bytes.len() as u64);
     let model = match serde_json::from_slice::<serde_json::Value>(&bytes) {
         Ok(value) => resolve_model_label(&value, field, observability),
@@ -535,12 +616,107 @@ async fn extract_model(
     ))
 }
 
-fn body_too_large_response(route: &str) -> Response {
+fn body_too_large_response(route: &str, request_id: Option<&str>) -> Response {
     if matches!(route, "/v1/load_lora_adapter" | "/v1/unload_lora_adapter") {
         lifecycle_body_too_large_response()
+    } else if is_anthropic_route(route) {
+        let mut response = Json(serde_json::json!({
+            "type": "error",
+            "error": {
+                "type": "request_too_large",
+                "message": "Request body too large.",
+            },
+            "request_id": request_id,
+        }))
+        .into_response();
+        *response.status_mut() = StatusCode::PAYLOAD_TOO_LARGE;
+        response
     } else {
-        (StatusCode::PAYLOAD_TOO_LARGE, "request body too large").into_response()
+        openai_error_response(ApiError::new(
+            ApiErrorKind::PayloadTooLarge,
+            "Request body too large.",
+            Some("request_body_too_large"),
+            None,
+        ))
     }
+}
+
+fn body_read_error_response(route: &str, request_id: Option<&str>) -> Response {
+    if is_anthropic_route(route) {
+        let mut response = Json(serde_json::json!({
+            "type": "error",
+            "error": {
+                "type": "invalid_request_error",
+                "message": "Failed to read request body.",
+            },
+            "request_id": request_id,
+        }))
+        .into_response();
+        *response.status_mut() = StatusCode::BAD_REQUEST;
+        response
+    } else {
+        openai_error_response(ApiError::new(
+            ApiErrorKind::InvalidRequest,
+            "Failed to read request body.",
+            Some("invalid_request_body"),
+            None,
+        ))
+    }
+}
+
+fn is_anthropic_route(route: &str) -> bool {
+    matches!(route, "/v1/messages" | "/v1/messages/count_tokens")
+}
+
+fn is_anthropic_request(
+    route: &str,
+    uri_path: &str,
+    headers: &HeaderMap,
+    query: Option<&str>,
+) -> bool {
+    if is_anthropic_route(route) || path_is_in_namespace(uri_path, "/v1/messages") {
+        return true;
+    }
+    if !path_is_in_namespace(uri_path, "/v1/skills") {
+        return false;
+    }
+    headers.contains_key("anthropic-version")
+        || headers.contains_key("anthropic-beta")
+        || query.is_some_and(|query| {
+            url::form_urlencoded::parse(query.as_bytes()).any(|(key, _)| key == "source")
+        })
+}
+
+fn path_is_in_namespace(path: &str, namespace: &str) -> bool {
+    path == namespace
+        || path
+            .strip_prefix(namespace)
+            .is_some_and(|suffix| suffix.starts_with('/'))
+}
+
+async fn insert_anthropic_request_id(response: Response, request_id: &str) -> Response {
+    let (mut parts, body) = response.into_parts();
+    let bytes = match to_bytes(body, usize::MAX).await {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            debug!(%error, "failed to add request_id to Anthropic error body");
+            return Response::from_parts(parts, Body::empty());
+        }
+    };
+    let mut value = match serde_json::from_slice::<serde_json::Value>(&bytes) {
+        Ok(value) => value,
+        Err(_) => return Response::from_parts(parts, Body::from(bytes)),
+    };
+    let Some(object) = value.as_object_mut() else {
+        return Response::from_parts(parts, Body::from(bytes));
+    };
+    object.insert(
+        "request_id".to_string(),
+        serde_json::Value::String(request_id.to_string()),
+    );
+    let bytes = serde_json::to_vec(&value).expect("JSON value serialization cannot fail");
+    parts.headers.remove(CONTENT_LENGTH);
+    Response::from_parts(parts, Body::from(bytes))
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -799,11 +975,16 @@ fn rounded_duration_ms(latency_seconds: f64) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::{
-        adapter_model_label_is_known, body_too_large_response, model_label_field,
-        normalize_model_label_input, query_model, ModelLabelField,
+        adapter_model_label_is_known, body_too_large_response, is_anthropic_request,
+        model_label_field, normalize_model_label_input, query_model, request_outcome,
+        ModelLabelField, RequestError, StreamEnd, StreamStats,
     };
-    use crate::lora_adapters::LoraAdapterModel;
-    use axum::body::to_bytes;
+    use crate::{lora_adapters::LoraAdapterModel, streaming::StreamOutcome};
+    use axum::{
+        body::to_bytes,
+        http::{HeaderMap, HeaderValue, StatusCode},
+        response::IntoResponse,
+    };
     use mistralrs_core::{AdapterGenerationId, LoraAdapterInfo};
 
     fn adapter_model(id: &str, parent: &str, alias: &str) -> LoraAdapterModel {
@@ -818,6 +999,27 @@ mod tests {
                 rank: 8,
                 bytes: 16,
             },
+        }
+    }
+
+    #[test]
+    fn request_outcomes_are_bounded_and_distinguish_disconnects() {
+        assert_eq!(request_outcome("200", None), "completed");
+        assert_eq!(request_outcome("503", None), "error");
+        assert_eq!(
+            request_outcome("200", Some(&RequestError::Message("failed".to_string()))),
+            "error"
+        );
+        for (end, expected) in [
+            (StreamEnd::Completed, "completed"),
+            (StreamEnd::Error, "error"),
+            (StreamEnd::ClientDisconnected, "client_disconnected"),
+        ] {
+            let detail = RequestError::Stream(StreamStats {
+                end,
+                outcome: StreamOutcome::default(),
+            });
+            assert_eq!(request_outcome("200", Some(&detail)), expected);
         }
     }
 
@@ -863,6 +1065,49 @@ mod tests {
     }
 
     #[test]
+    fn recognizes_anthropic_skill_requests() {
+        let mut headers = HeaderMap::new();
+        assert!(is_anthropic_request(
+            "/v1/messages",
+            "/v1/messages",
+            &headers,
+            None,
+        ));
+        assert!(is_anthropic_request(
+            "<unmatched>",
+            "/v1/messages/unknown",
+            &headers,
+            None,
+        ));
+        assert!(!is_anthropic_request(
+            "/v1/skills",
+            "/v1/skills",
+            &headers,
+            None,
+        ));
+        assert!(is_anthropic_request(
+            "/v1/skills",
+            "/v1/skills",
+            &headers,
+            Some("source=custom"),
+        ));
+
+        headers.insert("anthropic-version", HeaderValue::from_static("2023-06-01"));
+        assert!(is_anthropic_request(
+            "/v1/skills/{skill_id}/versions",
+            "/v1/skills/skill_1/versions",
+            &headers,
+            None,
+        ));
+        assert!(!is_anthropic_request(
+            "<unmatched>",
+            "/v1/skills-extra",
+            &headers,
+            None,
+        ));
+    }
+
+    #[test]
     fn adapter_model_labels_are_bounded_by_resolvable_cards() {
         let models = vec![
             adapter_model("base-a::code", "base-a", "code"),
@@ -881,11 +1126,48 @@ mod tests {
 
     #[tokio::test]
     async fn lifecycle_body_limit_uses_the_lora_error_envelope() {
-        let response = body_too_large_response("/v1/load_lora_adapter");
+        let response = body_too_large_response("/v1/load_lora_adapter", None);
         assert_eq!(response.status(), axum::http::StatusCode::PAYLOAD_TOO_LARGE);
         let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
         let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(value["error"]["code"], "request_body_too_large");
         assert_eq!(value["error"]["type"], "invalid_request_error");
+    }
+
+    #[tokio::test]
+    async fn inference_body_limits_use_protocol_error_envelopes() {
+        let response = body_too_large_response("/v1/chat/completions", None);
+        assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(value["error"]["code"], "request_body_too_large");
+        assert_eq!(value["error"]["type"], "invalid_request_error");
+
+        let response = body_too_large_response("/v1/messages", Some("req_test"));
+        assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(value["type"], "error");
+        assert_eq!(value["error"]["type"], "request_too_large");
+        assert_eq!(value["request_id"], "req_test");
+    }
+
+    #[tokio::test]
+    async fn adds_request_id_to_anthropic_error_bodies() {
+        let response = (
+            StatusCode::BAD_REQUEST,
+            axum::Json(serde_json::json!({
+                "type": "error",
+                "error": {
+                    "type": "invalid_request_error",
+                    "message": "Invalid request.",
+                }
+            })),
+        )
+            .into_response();
+        let response = super::insert_anthropic_request_id(response, "req_test").await;
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(value["request_id"], "req_test");
     }
 }

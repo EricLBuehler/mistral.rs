@@ -1,10 +1,12 @@
 pub(crate) mod auto_device_map;
+mod checkpoint_inventory;
 mod diffusion_loaders;
 mod embedding_loaders;
 mod multimodal_loaders;
 mod normal_loaders;
 pub use auto_device_map::AutoDeviceMapParams;
 use auto_device_map::NonMappedSubModel;
+pub(crate) use checkpoint_inventory::{checkpoint_device_map_sizes, checkpoint_runtime_size};
 
 use std::{
     fmt::{self, Debug},
@@ -710,6 +712,10 @@ pub trait DeviceMappedModelLoader {
     }
     fn num_layers(&self, config: &str) -> Result<usize>;
     fn model_config(&self, config: &str) -> Result<Box<dyn ModelConfigLike>>;
+
+    fn checkpoint_layer_index(&self, _config: &str, tensor_name: &str) -> Option<usize> {
+        checkpoint_inventory::standard_layer_index(tensor_name)
+    }
 
     #[allow(clippy::too_many_arguments)]
     fn get_device_layers(

@@ -38,9 +38,10 @@ mod vision;
 
 pub(crate) use config::Config;
 pub(crate) use inputs_processor::{
-    expand_media_placeholders, media_data_cached_offset, packed_layout, prompt_mrope,
-    replace_first_occurrence, select_media_batch, select_media_view, shift_media_spans,
-    split_media_pixels, validated_mm_features, video_hashes, PromptMropeConfig, Qwen2VLProcessor,
+    apply_mrope_position_deltas, expand_media_placeholders, media_data_cached_offset,
+    packed_layout, prompt_mrope, replace_first_occurrence, select_media_batch, select_media_view,
+    shift_media_spans, split_media_pixels, validate_qwen_media_dimensions, validated_mm_features,
+    video_hashes, PromptMropeConfig, Qwen2VLProcessor,
 };
 
 pub struct Qwen2VLModel {
@@ -462,8 +463,15 @@ impl Qwen2VLModel {
             self.text.embed_tokens(input_ids)?
         };
 
+        let decode_position_ids = if rope_img_grid_thw.is_none() && rope_vid_grid_thw.is_none() {
+            crate::vision_models::text_decode_mrope_position_ids_from_context(input_ids, ctx)?
+        } else {
+            None
+        };
         let position_ids = if let Some(position_ids) = prompt_position_ids {
             position_ids.clone()
+        } else if let Some(position_ids) = decode_position_ids {
+            position_ids
         } else {
             let mut ropeidx_attn_mask_bs = Vec::new();
             let max_seqlens = *seqlens.iter().max().unwrap();

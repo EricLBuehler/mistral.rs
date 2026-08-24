@@ -322,6 +322,111 @@ pub(crate) enum CudaBatchSamplingKind {
 }
 
 #[cfg(feature = "cuda")]
+pub(crate) struct CudaTop1BatchCompletion {
+    pub(crate) token_ids: Vec<u32>,
+    pub(crate) packed: Option<Vec<[f32; crate::ops::CUDA_TOP1_PACKED_WIDTH]>>,
+}
+
+#[cfg(feature = "cuda")]
+pub(crate) struct CudaTop1BatchSubmission {
+    cache: Arc<Mutex<Option<crate::ops::CudaTop1LogitsWorkspace>>>,
+    submission: Option<crate::ops::CudaTop1Submission>,
+}
+
+#[cfg(feature = "cuda")]
+impl CudaTop1BatchSubmission {
+    pub(crate) fn batch_size(&self) -> usize {
+        self.submission
+            .as_ref()
+            .expect("CUDA top-1 submission was already completed")
+            .batch_size()
+    }
+
+    pub(crate) fn wait_on(
+        &self,
+        stream: &Arc<candle_core::cuda_backend::cudarc::driver::CudaStream>,
+    ) -> Result<()> {
+        let mut cache = self.cache.lock().unwrap();
+        crate::ops::cuda_top1_device_tokens_wait_on(
+            cache
+                .as_mut()
+                .expect("CUDA top-1 workspace exists while its submission is active"),
+            self.submission
+                .as_ref()
+                .expect("CUDA top-1 submission was already completed"),
+            stream,
+        )
+    }
+
+    pub(crate) fn release_after(
+        &self,
+        stream: &Arc<candle_core::cuda_backend::cudarc::driver::CudaStream>,
+    ) -> Result<()> {
+        let mut cache = self.cache.lock().unwrap();
+        crate::ops::cuda_top1_device_tokens_release_after(
+            cache
+                .as_mut()
+                .expect("CUDA top-1 workspace exists while its submission is active"),
+            self.submission
+                .as_ref()
+                .expect("CUDA top-1 submission was already completed"),
+            stream,
+        )
+    }
+
+    pub(crate) fn complete(mut self) -> Result<CudaTop1BatchCompletion> {
+        let submission = self
+            .submission
+            .as_ref()
+            .expect("CUDA top-1 submission was already completed");
+        submission.wait()?;
+        let (token_ids, packed) = {
+            let mut cache = self.cache.lock().unwrap();
+            let completion = crate::ops::cuda_top1_submission_complete(
+                cache
+                    .as_mut()
+                    .expect("CUDA top-1 workspace exists while its submission is active"),
+                submission,
+            )?;
+            let token_ids = completion.token_ids().to_vec();
+            let packed = completion.packed().map(|values| {
+                values
+                    .chunks_exact(crate::ops::CUDA_TOP1_PACKED_WIDTH)
+                    .map(|row| [row[0], row[1]])
+                    .collect()
+            });
+            (token_ids, packed)
+        };
+        self.submission = None;
+        if packed.is_none()
+            && token_ids
+                .iter()
+                .any(|&token| token == crate::ops::CUDA_TOP1_INVALID_TOKEN)
+        {
+            candle_core::bail!("invalid CUDA top-1 output");
+        }
+        Ok(CudaTop1BatchCompletion { token_ids, packed })
+    }
+}
+
+#[cfg(feature = "cuda")]
+impl Drop for CudaTop1BatchSubmission {
+    fn drop(&mut self) {
+        let Some(submission) = self.submission.take() else {
+            return;
+        };
+        let _ = submission.wait();
+        let mut cache = self
+            .cache
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(workspace) = cache.as_mut() {
+            let _ = crate::ops::cuda_top1_submission_cancel(workspace, &submission);
+        }
+    }
+}
+
+#[cfg(feature = "cuda")]
 impl CudaBatchSamplingKind {
     pub(crate) fn is_argmax(self) -> bool {
         matches!(self, Self::Greedy | Self::TopK { k: 1 })
@@ -333,6 +438,15 @@ impl CudaBatchSamplingKind {
 pub(crate) struct CudaBatchSamplingPlan {
     pub(crate) kind: CudaBatchSamplingKind,
     pub(crate) inverse_temperature: f32,
+}
+
+#[cfg(feature = "cuda")]
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct CudaSpeculativeSamplingPlan {
+    pub(crate) inverse_temperature: f32,
+    pub(crate) top_k: usize,
+    pub(crate) top_p: f32,
+    pub(crate) min_p: f32,
 }
 
 #[cfg_attr(feature = "pyo3_macros", pyclass)]
@@ -361,7 +475,9 @@ pub(crate) struct SpeculativeProbs {
 /// Comparator for descending order by probability (second element of tuple).
 #[inline]
 fn cmp_desc_by_prob(a: &(u32, f32), b: &(u32, f32)) -> std::cmp::Ordering {
-    b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal)
+    b.1.partial_cmp(&a.1)
+        .unwrap_or(std::cmp::Ordering::Equal)
+        .then_with(|| a.0.cmp(&b.0))
 }
 
 /// Returns the top-k (index, probability) pairs from `probs`, sorted in descending order.
@@ -504,6 +620,10 @@ impl Sampler {
         self.temperature.is_none()
     }
 
+    pub(crate) fn temperature(&self) -> Option<f64> {
+        self.temperature
+    }
+
     #[cfg(feature = "cuda")]
     pub(crate) fn cuda_batch_sampling_plan(
         &self,
@@ -555,6 +675,30 @@ impl Sampler {
             }
             Some(_) => None,
         }
+    }
+
+    #[cfg(feature = "cuda")]
+    pub(crate) fn cuda_speculative_sampling_plan(
+        &self,
+        return_logprobs: bool,
+    ) -> Option<CudaSpeculativeSamplingPlan> {
+        let plan = self.cuda_batch_sampling_plan(return_logprobs)?;
+        let top_k = match plan.kind {
+            CudaBatchSamplingKind::Greedy => return None,
+            CudaBatchSamplingKind::Categorical => 0,
+            CudaBatchSamplingKind::TopK { k } => k,
+        };
+        let top_p = self.top_p as f32;
+        let min_p = self.min_p as f32;
+        if !top_p.is_finite() || !min_p.is_finite() {
+            return None;
+        }
+        Some(CudaSpeculativeSamplingPlan {
+            inverse_temperature: plan.inverse_temperature,
+            top_k,
+            top_p,
+            min_p,
+        })
     }
 
     #[cfg(feature = "cuda")]
@@ -672,6 +816,58 @@ impl Sampler {
             logprob: 0.0,
             top_logprobs: None,
             bytes: None,
+        })
+    }
+
+    #[cfg(feature = "cuda")]
+    pub(crate) fn sample_cuda_top1_batch(&self, logits: &Tensor) -> Result<Vec<[f32; 2]>> {
+        self.submit_cuda_top1_batch(logits, true)?
+            .complete()?
+            .packed
+            .ok_or_else(|| candle_core::Error::Msg("missing CUDA top-1 packed output".to_string()))
+    }
+
+    #[cfg(feature = "cuda")]
+    fn submit_cuda_top1_batch(
+        &self,
+        logits: &Tensor,
+        packed: bool,
+    ) -> Result<CudaTop1BatchSubmission> {
+        let submission = {
+            let mut cache = self.top1_cache.lock().unwrap();
+            if packed {
+                crate::ops::cuda_top1_logits_submit_batched_packed(logits, &mut cache)?
+            } else {
+                crate::ops::cuda_top1_logits_submit_batched(logits, &mut cache)?
+            }
+        };
+        Ok(CudaTop1BatchSubmission {
+            cache: self.top1_cache.clone(),
+            submission: Some(submission),
+        })
+    }
+
+    #[cfg(feature = "cuda")]
+    pub(crate) fn submit_cuda_top1_batch_owned(
+        &self,
+        logits: &Tensor,
+    ) -> Result<CudaTop1BatchSubmission> {
+        self.submit_cuda_top1_batch(logits, false)
+    }
+
+    #[cfg(feature = "cuda")]
+    pub(crate) fn submit_cuda_top1_batch_into(
+        &self,
+        logits: &Tensor,
+        token_ids_dst: &Tensor,
+    ) -> Result<CudaTop1BatchSubmission> {
+        let submission = {
+            let mut cache = self.top1_cache.lock().unwrap();
+            crate::ops::cuda_top1_logits_submit_batched_into(logits, token_ids_dst, &mut cache)?
+        };
+        Ok(CudaTop1BatchSubmission {
+            cache: self.top1_cache.clone(),
+            submission: Some(submission),
         })
     }
 
@@ -1130,7 +1326,11 @@ impl Sampler {
             || packed[1] < 0.0
             || packed[1].fract() != 0.0
         {
-            candle_core::bail!("invalid CUDA top-1 output");
+            candle_core::bail!(
+                "invalid CUDA top-1 output: max_logit={} argmax={}",
+                packed[0],
+                packed[1]
+            );
         }
         Ok(packed[1] as u32)
     }
@@ -1779,7 +1979,7 @@ impl Sampler {
 
 #[cfg(test)]
 mod tests {
-    use super::{argmax_f32, ModelGenerationDefaults, SamplingParams};
+    use super::{argmax_f32, partial_sort_top_k, ModelGenerationDefaults, SamplingParams};
     use std::collections::HashMap;
 
     #[test]
@@ -1831,6 +2031,15 @@ mod tests {
         assert!(argmax_f32(&[0.0, f32::INFINITY]).is_err());
         assert!(argmax_f32(&[f32::NEG_INFINITY, f32::NEG_INFINITY]).is_err());
         assert!(argmax_f32(&[]).is_err());
+    }
+
+    #[test]
+    fn top_k_ties_prefer_lower_token_ids_at_the_boundary() {
+        let mut probs = vec![0.1, 0.5, 0.5, 0.5, 0.2];
+        let selected = partial_sort_top_k(&mut probs, 2, true);
+
+        assert_eq!(selected, vec![(1, 0.5), (2, 0.5)]);
+        assert_eq!(probs, vec![0.0, 0.5, 0.5, 0.0, 0.0]);
     }
 
     #[test]
@@ -2120,6 +2329,7 @@ mod tests {
         let greedy_plan = greedy.cuda_batch_sampling_plan(false).unwrap();
         assert!(matches!(greedy_plan.kind, CudaBatchSamplingKind::Greedy));
         assert_eq!(greedy_plan.inverse_temperature, 1.0);
+        assert!(greedy.cuda_speculative_sampling_plan(false).is_none());
 
         let mut penalized = greedy.clone();
         penalized.repetition_penalty = Some(1.1);
@@ -2155,6 +2365,11 @@ mod tests {
         ));
         assert_eq!(top_k_plan.inverse_temperature, 2.0);
         assert!(top_k.cuda_batch_sampling_plan(true).is_none());
+        let speculative_top_k = top_k.cuda_speculative_sampling_plan(false).unwrap();
+        assert_eq!(speculative_top_k.inverse_temperature, 2.0);
+        assert_eq!(speculative_top_k.top_k, 64);
+        assert_eq!(speculative_top_k.top_p, 0.9);
+        assert_eq!(speculative_top_k.min_p, 0.05);
 
         let top_one = Sampler::new(
             Some(1.0),
@@ -2194,6 +2409,10 @@ mod tests {
             unbounded_plan.kind,
             CudaBatchSamplingKind::Categorical
         ));
+        let speculative_unbounded = unbounded.cuda_speculative_sampling_plan(false).unwrap();
+        assert_eq!(speculative_unbounded.top_k, 0);
+        assert_eq!(speculative_unbounded.top_p, 1.0);
+        assert_eq!(speculative_unbounded.min_p, 0.0);
 
         let mut filtered = unbounded;
         filtered.top_p = 0.9;

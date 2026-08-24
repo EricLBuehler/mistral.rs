@@ -14,7 +14,8 @@ use crate::{
         text_models_inputs_processor::{
             self, get_completion_input, get_prompt_input, PagedAttentionMeta,
         },
-        InputProcessorOutput, InputsProcessor, InputsProcessorType, MessagesAction, Processor,
+        InputProcessorOutput, InputsProcessor, InputsProcessorType, InputsProcessorValidationError,
+        MessagesAction, Processor,
     },
     sequence::{build_mm_features_from_ranges, Sequence},
     vision_models::{
@@ -105,11 +106,12 @@ fn get_image_prompt_string(n_rows: usize, n_cols: usize, image_seq_len: usize) -
 fn expand_image_prompt(prompt: &str, image_prompt_strings: &[String]) -> anyhow::Result<String> {
     let fragments = prompt.split(IMAGE_TOKEN).collect::<Vec<_>>();
     if fragments.len() != image_prompt_strings.len() + 1 {
-        anyhow::bail!(
+        return Err(InputsProcessorValidationError(format!(
             "Idefics3 prompt has {} image tags but {} image inputs",
             fragments.len() - 1,
             image_prompt_strings.len()
-        );
+        ))
+        .into());
     }
     let mut expanded = fragments[0].to_string();
     for (image_prompt, fragment) in image_prompt_strings.iter().zip(&fragments[1..]) {
@@ -283,13 +285,19 @@ impl Idefics3ImageProcessor {
                 .map(|image| {
                     let (width, height) = image.dimensions();
                     if width == 0 || height == 0 {
-                        anyhow::bail!("Idefics3 image dimensions must be non-zero");
+                        return Err(InputsProcessorValidationError(
+                            "Idefics3 image dimensions must be non-zero".to_string(),
+                        )
+                        .into());
                     }
                     let scale = max_edge as f32 / width.max(height) as f32;
                     let width = (width as f32 * scale) as usize;
                     let height = (height as f32 * scale) as usize;
                     if width == 0 || height == 0 {
-                        anyhow::bail!("Idefics3 max-edge resize produced a zero dimension");
+                        return Err(InputsProcessorValidationError(
+                            "Idefics3 max-edge resize produced a zero dimension".to_string(),
+                        )
+                        .into());
                     }
                     Ok((height, width))
                 })
@@ -1043,11 +1051,12 @@ mod tests {
             expand_image_prompt("left<image>middle<image>right", &replacements).unwrap(),
             "leftAmiddleBright"
         );
-        assert!(expand_image_prompt("left<image>right", &replacements).is_err());
-        assert!(
-            expand_image_prompt("left<image>middle<image>right<image>extra", &replacements)
-                .is_err()
-        );
+        let missing = expand_image_prompt("left<image>right", &replacements).unwrap_err();
+        let extra = expand_image_prompt("left<image>middle<image>right<image>extra", &replacements)
+            .unwrap_err();
+
+        assert!(missing.is::<InputsProcessorValidationError>());
+        assert!(extra.is::<InputsProcessorValidationError>());
     }
 
     #[test]

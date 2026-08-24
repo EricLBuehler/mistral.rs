@@ -17,7 +17,7 @@ User-facing environment variables read by `mistralrs` or its build scripts. Stan
 
 If `--token-source env:NAME` is used, mistral.rs reads the environment variable named by `NAME` as the token source.
 
-For the offline workflow (pre-downloading models, local paths), see [run models](/mistral.rs/guides/models/run-any-model/).
+For the offline workflow (pre-downloading models, local paths), see [run models](/guides/models/run-any-model/).
 
 ## Logging
 
@@ -31,7 +31,7 @@ For the offline workflow (pre-downloading models, local paths), see [run models]
 | Variable | Purpose |
 |---|---|
 | `MISTRALRS_NO_MMAP` | `MISTRALRS_NO_MMAP=1` loads safetensors without mmap. |
-| `MISTRALRS_ISQ_SINGLETHREAD` | If set, runs [ISQ (in-situ quantization)](/mistral.rs/reference/quantization-types/) single-threaded. |
+| `MISTRALRS_ISQ_SINGLETHREAD` | If set, runs [ISQ (in-situ quantization)](/reference/quantization-types/) single-threaded. |
 
 ## CPU runtime
 
@@ -43,21 +43,21 @@ For the offline workflow (pre-downloading models, local paths), see [run models]
 | `CANDLE_CPU_AFFINITY` | Linux only. Set to `1` to try Candle's automatic high-capacity CPU affinity mask on heterogeneous CPUs. Default is off. |
 | `CANDLE_BARRIER_POOL_SPIN_LIMIT` | Advanced CPU tuning. Overrides the spin count used by Candle's persistent barrier pool before worker threads park. |
 
-See [CPU threads and affinity](/mistral.rs/guides/perf/throughput-tuning/#cpu-threads-and-affinity) for examples.
+See [CPU threads and affinity](/guides/perf/throughput-tuning/#cpu-threads-and-affinity) for examples.
 
 ## Sandbox
 
 | Variable | Purpose |
 |---|---|
-| `MISTRALRS_SANDBOX` | `auto`, `on`, or `off`. Overrides the sandbox only when the resolved mode is `auto`; `on` and `off` in CLI/TOML win. See [sandbox reference](/mistral.rs/reference/sandbox/). |
+| `MISTRALRS_SANDBOX` | `auto`, `on`, or `off`. Overrides the sandbox only when the resolved mode is `auto`; `on` and `off` in CLI/TOML win. See [sandbox reference](/reference/sandbox/). |
 
 ## Server and UI
 
 | Variable | Purpose |
 |---|---|
-| `MCP_CONFIG_PATH` | [MCP (Model Context Protocol)](/mistral.rs/guides/agents/connect-mcp-server/) client configuration path used when `--mcp-config` is not passed. |
+| `MCP_CONFIG_PATH` | [MCP (Model Context Protocol)](/guides/agents/connect-mcp-server/) client configuration path used when `--mcp-config` is not passed. |
 | `KEEP_ALIVE_INTERVAL` | SSE (Server-Sent Events) keep-alive interval in milliseconds. Falls back to the default if missing or invalid. |
-| `MISTRALRS_ALLOW_RUNTIME_LORA_UPDATING` | Set to `1`, `true`, `yes`, or `on` to enable runtime LoRA load and unload endpoints. Disabled by default; the read-only route remains registered, but the target model must have a dynamic LoRA runtime. See [LoRA adapters](/mistral.rs/guides/customize/lora-adapters/#enable-http-mutation). |
+| `MISTRALRS_ALLOW_RUNTIME_LORA_UPDATING` | Set to `1`, `true`, `yes`, or `on` to enable runtime LoRA load and unload endpoints. Disabled by default; the read-only route remains registered, but the target model must have a dynamic LoRA runtime. See [LoRA adapters](/guides/customize/lora-adapters/#enable-http-mutation). |
 | `MISTRALRS_LORA_ADAPTER_ROOT` | Canonical directory root allowed for runtime LoRA adapter paths. Use this whenever runtime LoRA updating is enabled in production. |
 | `XDG_CACHE_HOME` | Base cache directory for web UI state. The UI uses `$XDG_CACHE_HOME/mistralrs`. |
 | `HOME` | Fallback for web UI cache path when `XDG_CACHE_HOME` is not set. |
@@ -66,8 +66,14 @@ See [CPU threads and affinity](/mistral.rs/guides/perf/throughput-tuning/#cpu-th
 
 | Variable | Purpose |
 |---|---|
-| `MISTRALRS_CUDA_GRAPHS` | CUDA graph acceleration is enabled by default when supported. Set to `0`, `false`, `no`, or `off` to disable. See [CUDA graphs](/mistral.rs/guides/perf/paged-attention/#cuda-graphs). |
+| `MISTRALRS_CUDA_GRAPHS` | CUDA graph acceleration is enabled by default when supported. Set to `0`, `false`, `no`, or `off` to disable. See [CUDA graphs](/guides/perf/paged-attention/#cuda-graphs). |
+| `MISTRALRS_DFLASH_ADAPTIVE` | Set to `1` or `true` to use full DFlash draft depth for batches up to 2 and depth 1 above that. Only applies when `--mtp-n-predict` is not set. |
+| `MISTRALRS_DFLASH_ISQ` | ISQ type for DFlash drafter weights (`q4k`, `q6k`, ... or `none` for bf16); defaults to the target's in-situ quantization type. |
 | `MISTRALRS_FLASHINFER_DECODE` | Disables FlashInfer decode acceleration when set to `0`, `false`, `no`, or `off`. Use only for compatibility troubleshooting. |
+| `MISTRALRS_GDN_DECODE_KERNEL` | Overrides the SM90 GDN decode kernel for benchmarking or troubleshooting. Accepted values are `auto` (default), `baseline`, `cooperative`, and `pipelined`; an incompatible forced kernel returns an error. |
+| `MISTRALRS_FP8_SM90_PROVIDER` | Selects the SM90 provider for compatible 128x128 blockwise FP8 weights. DeepGEMM decode is selected automatically on Linux with CUDA 12.8 or newer; set `cutlass` to disable it, or `deepgemm`/`auto` to select it explicitly. Kernels are prepared before graph capture, with clean CUTLASS fallback when JIT or cache preparation is unavailable. |
+| `MISTRALRS_DEEPGEMM_CACHE_DIR` | Overrides the owner-private, content-versioned DeepGEMM cubin and JIT-header cache. Defaults below `XDG_CACHE_HOME`, then `~/.cache`. |
+| `MISTRALRS_DEEPGEMM_NVCC` | Path to the `nvcc` executable used only when a DeepGEMM kernel is absent from the cache. A populated cache does not require runtime `nvcc`. |
 | `MISTRALRS_NO_MLA` | Disables MLA acceleration for DeepSeek V2/V3 when set to `1`. Use only for compatibility troubleshooting. |
 | `MISTRALRS_GGUF_AFFINE_BACKEND` | Set to `on` to speed up GGUF matmuls at batch sizes of 8 or more. Off by default because it keeps a second copy of the quantized weights, taking that memory from the KV cache. Worth enabling for production serving with high concurrency. |
 | `CUTILE_TILEIRAS_PATH` | Path to `tileiras` when it is not available on `PATH`. |
@@ -85,7 +91,7 @@ See [CPU threads and affinity](/mistral.rs/guides/perf/throughput-tuning/#cpu-th
 | `MISTRALRS_MN_WORKER_ID` | Set on worker nodes: worker index (0-based). |
 | `RING_CONFIG` | Path to the ring backend JSON config. Setting it selects the ring backend when built with the `ring` feature. If the binary also has `nccl`, set `MISTRALRS_NO_NCCL=1` as well. |
 
-See the [distributed inference guide](/mistral.rs/guides/perf/distributed-inference/) for use.
+See the [distributed inference guide](/guides/perf/distributed-inference/) for use.
 
 ## GPU memory
 
@@ -102,7 +108,7 @@ These are read by build scripts, not at runtime.
 | `MISTRALRS_METAL_PRECOMPILE` | `MISTRALRS_METAL_PRECOMPILE=0` skips Metal kernel precompilation at build time; kernels are compiled at runtime on first use. Also accepts `false`, `no`, and `off`. |
 | `MISTRALRS_METAL_PLATFORMS` | Limits which Metal platform metallibs are precompiled. Accepts comma-separated `macos`, `ios`, `tvos`, or `all`; defaults to all platforms. For local macOS development, use `MISTRALRS_METAL_PLATFORMS=macos`. |
 | `CUDA_NVCC_FLAGS` | Extra compiler options passed to CUDA builds. |
-| `MISTRALRS_INSTALL_TAG` | Pins the installers to a specific release tag (e.g. `v0.9.1`): the prebuilt is downloaded from that release, and a source build checks out that git tag. Default is the latest stable release (prebuilt) or latest `master` (source). |
+| `MISTRALRS_INSTALL_TAG` | Pins the installers to a specific release tag (e.g. `v0.9.2`): the prebuilt is downloaded from that release, and a source build checks out that git tag. Default is the latest stable release (prebuilt) or latest `master` (source). |
 | `MISTRALRS_INSTALL_FROM_SOURCE` | `MISTRALRS_INSTALL_FROM_SOURCE=1` makes the shell and PowerShell installers skip the prebuilt download and build from the latest `master` (bleeding edge) instead of the latest stable release. |
 | `MISTRALRS_INSTALL_NCCL` | `MISTRALRS_INSTALL_NCCL=1` forces the shell and PowerShell installers to add the `nccl` feature for CUDA builds even if NCCL is not detected. |
 | `MISTRALRS_INSTALL_NO_NCCL` | `MISTRALRS_INSTALL_NO_NCCL=1` makes the shell and PowerShell installers skip the `nccl` feature. |

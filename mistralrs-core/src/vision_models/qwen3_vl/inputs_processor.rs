@@ -6,10 +6,12 @@ use crate::{
 use crate::{
     device_map::DeviceMapper,
     pipeline::{
+        recurrent_batch_kind_for_input,
         text_models_inputs_processor::{
             self, get_completion_input, get_prompt_input, PagedAttentionMeta,
         },
-        InputProcessorOutput, InputsProcessor, InputsProcessorType, MessagesAction, Processor,
+        InputProcessorOutput, InputsProcessor, InputsProcessorType, InputsProcessorValidationError,
+        MessagesAction, Processor,
     },
     sequence::{find_placeholder_delimited_ranges, Sequence},
     vision_models::{
@@ -20,7 +22,10 @@ use crate::{
             RequestMultimodalLayout,
         },
         preprocessor_config::{PreProcessorConfig, ToFilter},
-        qwen2vl::{expand_media_placeholders, replace_first_occurrence, validated_mm_features},
+        qwen2vl::{
+            expand_media_placeholders, replace_first_occurrence, validate_qwen_media_dimensions,
+            validated_mm_features,
+        },
         ModelInputs,
     },
 };
@@ -229,9 +234,16 @@ fn expand_video_placeholders(
     }
     let placeholder_count = text.match_indices(Qwen3VLProcessor::VIDEO_PAD).count();
     let grid_rows = grid.map(|grid| grid.dim(0)).transpose()?.unwrap_or(0);
-    if placeholder_count != grid_rows || grid_rows != videos.len() {
+    if placeholder_count != videos.len() {
+        return Err(InputsProcessorValidationError(format!(
+            "Qwen video has {placeholder_count} placeholders but {} video inputs",
+            videos.len()
+        ))
+        .into());
+    }
+    if grid_rows != videos.len() {
         anyhow::bail!(
-            "Qwen video has {placeholder_count} placeholders, {grid_rows} grid rows, and {} videos",
+            "Qwen video has {grid_rows} grid rows but {} video inputs",
             videos.len()
         );
     }
@@ -654,7 +666,7 @@ fn qwen3_mrope_position_source(
 }
 
 fn qwen3_prompt_mrope(
-    input_seqs: &[&mut Sequence],
+    input_seqs: &mut [&mut Sequence],
     query_ranges: &[Range<usize>],
     packed: bool,
     padded_len: usize,
@@ -665,14 +677,16 @@ fn qwen3_prompt_mrope(
         anyhow::bail!("Qwen MRoPE query count does not match sequence count");
     }
     let mut sources = Vec::with_capacity(input_seqs.len());
-    for seq in input_seqs {
-        sources.push(qwen3_mrope_position_source(
+    for seq in input_seqs.iter_mut() {
+        let source = qwen3_mrope_position_source(
             seq.prompt_position_source_toks(),
             seq.multimodal.rope_img_grid_thw.as_ref(),
             seq.multimodal.rope_vid_grid_thw.as_ref(),
             config,
             device,
-        )?);
+        )?;
+        seq.multimodal.mrope_position_delta = Some(source.delta);
+        sources.push(source);
     }
     if packed {
         return Ok(gather_packed_mrope_positions(
@@ -708,6 +722,52 @@ fn qwen3_prompt_mrope(
     Ok(Tensor::stack(&rows, 1)?)
 }
 
+fn apply_mrope_position_deltas(
+    position_ids: Vec<usize>,
+    input_seqs: &[&mut Sequence],
+) -> Result<Vec<usize>> {
+    if position_ids.len() != input_seqs.len() {
+        anyhow::bail!(
+            "Qwen MRoPE position count {} does not match sequence count {}",
+            position_ids.len(),
+            input_seqs.len()
+        );
+    }
+    position_ids
+        .into_iter()
+        .zip(input_seqs)
+        .map(|(position, seq)| {
+            apply_mrope_position_delta(position, seq.multimodal.mrope_position_delta.unwrap_or(0))
+        })
+        .collect()
+}
+
+fn apply_mrope_position_delta(position: usize, delta: i64) -> Result<usize> {
+    let position = i64::try_from(position)?;
+    let position = position
+        .checked_add(delta)
+        .ok_or_else(|| anyhow::anyhow!("Qwen MRoPE position overflow"))?;
+    usize::try_from(position).map_err(anyhow::Error::from)
+}
+
+fn qwen3_decode_args(input_ids: &Tensor, seqlens: Vec<usize>) -> Qwen3VLVisionSpecificArgs {
+    Qwen3VLVisionSpecificArgs {
+        input_ids_full: input_ids.clone(),
+        pixel_values_videos: None,
+        image_grid_thw: None,
+        video_grid_thw: None,
+        rope_img_grid_thw: None,
+        rope_vid_grid_thw: None,
+        seqlens,
+        continuous_img_pad: Vec::new(),
+        continuous_vid_pad: Vec::new(),
+        image_hashes: Vec::new(),
+        video_hashes: Vec::new(),
+        packed_layout: None,
+        prompt_position_ids: None,
+    }
+}
+
 impl InputsProcessor for Qwen3VLImageProcessor {
     fn get_type(&self) -> InputsProcessorType {
         InputsProcessorType::Vision
@@ -734,6 +794,38 @@ impl InputsProcessor for Qwen3VLImageProcessor {
             .any(|seq| seq.has_images() || seq.has_videos())
         {
             return Ok(());
+        }
+
+        let resize_factor = if config.do_resize.is_none_or(|resize| resize) {
+            Self::patch_size(config)
+                .checked_mul(Self::merge_size(config))
+                .filter(|factor| *factor > 0)
+        } else {
+            None
+        };
+        let video_config = config.video.as_deref().unwrap_or(config);
+        let video_resize_validation = video_config
+            .do_resize
+            .is_none_or(|resize| resize)
+            .then_some(1);
+        for seq in input_seqs.iter() {
+            if let Some(images) = seq.images() {
+                validate_qwen_media_dimensions(
+                    images,
+                    resize_factor.filter(|_| self.max_edge.is_none()),
+                )?;
+            }
+            if let Some(videos) = seq.videos() {
+                if videos.iter().any(|video| video.frames.is_empty()) {
+                    return Err(InputsProcessorValidationError(
+                        "Qwen video inputs must contain at least one frame".to_string(),
+                    )
+                    .into());
+                }
+                for video in videos {
+                    validate_qwen_media_dimensions(&video.frames, video_resize_validation)?;
+                }
+            }
         }
 
         let mut detok_seqs = tokenizer
@@ -947,6 +1039,55 @@ impl InputsProcessor for Qwen3VLImageProcessor {
         if no_kv_cache {
             return Err(anyhow::Error::msg("Vision model must have kv cache."));
         }
+        if !is_prompt {
+            let text_models_inputs_processor::InnerInputProcessorOutput {
+                inputs:
+                    text_models_inputs_processor::InputMetadata {
+                        input,
+                        positions,
+                        context_lens,
+                        position_ids,
+                        paged_attn_meta,
+                        flash_meta,
+                    },
+                seq_indices,
+            } = get_completion_input(
+                input_seqs
+                    .iter()
+                    .map(|seq| seq.get_toks())
+                    .collect::<Vec<_>>(),
+                input_seqs,
+                device,
+                no_kv_cache,
+                last_n_context_len,
+                return_raw_logits,
+                paged_attn_metadata.as_mut(),
+                mapper,
+                sliding_window,
+            )
+            .unwrap();
+            let position_ids = apply_mrope_position_deltas(position_ids, input_seqs)?;
+            let args = qwen3_decode_args(&input, input_seqs.iter().map(|seq| seq.len()).collect());
+            let inputs: Box<dyn Any> = Box::new(ModelInputs {
+                input_ids: input,
+                seqlen_offsets: positions,
+                context_lens,
+                position_ids,
+                pixel_values: None,
+                model_specific_args: Box::new(args),
+                paged_attn_meta,
+                flash_meta,
+                recurrent_batch_kind: recurrent_batch_kind_for_input(
+                    false,
+                    crate::speculative::staging::staged_batch_width(input_seqs).is_some(),
+                ),
+                adapter_leases: crate::vision_models::adapter_leases(input_seqs, &seq_indices),
+            });
+            return Ok(InputProcessorOutput {
+                inputs,
+                seq_indices,
+            });
+        }
         let Some(tokenizer) = tokenizer else {
             return Err(anyhow::Error::msg(
                 "MLlamaInputProcessor requires a specified tokenizer.",
@@ -959,6 +1100,15 @@ impl InputsProcessor for Qwen3VLImageProcessor {
         let has_media = input_seqs
             .iter()
             .any(|seq| seq.has_images() || seq.has_videos());
+        if is_prompt {
+            for seq in input_seqs.iter_mut() {
+                if seq.multimodal.rope_img_grid_thw.is_none()
+                    && seq.multimodal.rope_vid_grid_thw.is_none()
+                {
+                    seq.multimodal.mrope_position_delta = None;
+                }
+            }
+        }
         let mut image_item_counts = vec![0usize; input_seqs.len()];
         let mut video_item_counts = vec![0usize; input_seqs.len()];
 
@@ -1475,6 +1625,11 @@ impl InputsProcessor for Qwen3VLImageProcessor {
         } else {
             None
         };
+        let position_ids = if is_prompt {
+            position_ids
+        } else {
+            apply_mrope_position_deltas(position_ids, input_seqs)?
+        };
 
         let inputs: Box<dyn Any> = Box::new(ModelInputs {
             input_ids: input,
@@ -1499,11 +1654,10 @@ impl InputsProcessor for Qwen3VLImageProcessor {
             }),
             paged_attn_meta,
             flash_meta,
-            recurrent_batch_kind: if is_prompt {
-                crate::pipeline::RecurrentBatchKind::Prefill
-            } else {
-                crate::pipeline::RecurrentBatchKind::Decode
-            },
+            recurrent_batch_kind: recurrent_batch_kind_for_input(
+                is_prompt,
+                crate::speculative::staging::staged_batch_width(input_seqs).is_some(),
+            ),
             adapter_leases: crate::vision_models::adapter_leases(input_seqs, &seq_indices),
         });
         Ok(InputProcessorOutput {
@@ -1892,6 +2046,87 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    fn decode_position_ends_apply_per_sequence_mrope_deltas() -> Result<()> {
+        assert_eq!(apply_mrope_position_delta(20, -7)?, 13);
+        assert_eq!(apply_mrope_position_delta(30, 2)?, 32);
+        assert_eq!(apply_mrope_position_delta(100, 0)?, 100);
+        assert_eq!(apply_mrope_position_delta(100, -48)?, 52);
+        assert!(apply_mrope_position_delta(3, -4).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn decode_args_only_retain_current_tokens() -> Result<()> {
+        let input_ids = Tensor::new(&[[7u32], [9]], &Device::Cpu)?;
+        let args = qwen3_decode_args(&input_ids, vec![100, 200]);
+
+        assert_eq!(
+            args.input_ids_full.to_vec2::<u32>()?,
+            vec![vec![7], vec![9]]
+        );
+        assert_eq!(args.seqlens, vec![100, 200]);
+        assert!(args.pixel_values_videos.is_none());
+        assert!(args.image_grid_thw.is_none());
+        assert!(args.video_grid_thw.is_none());
+        assert!(args.rope_img_grid_thw.is_none());
+        assert!(args.rope_vid_grid_thw.is_none());
+        assert!(args.continuous_img_pad.is_empty());
+        assert!(args.continuous_vid_pad.is_empty());
+        assert!(args.image_hashes.is_empty());
+        assert!(args.video_hashes.is_empty());
+        assert!(args.packed_layout.is_none());
+        assert!(args.prompt_position_ids.is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn cached_decode_positions_match_full_history_mrope() -> Result<()> {
+        let config = QwenMropeConfig {
+            spatial_merge_size: 2,
+            image_token_id: 100,
+            video_token_id: 101,
+            vision_start_token_id: 102,
+            vision_end_token_id: 103,
+        };
+        let image_grid = Tensor::new(&[[1u32, 4, 4]], &Device::Cpu)?;
+        let cases = [
+            (
+                vec![10, 102, 100, 100, 100, 100, 103, 11],
+                Some(&image_grid),
+            ),
+            (vec![20, 21, 22, 23, 24], None),
+        ];
+        let deltas = cases
+            .iter()
+            .map(|(prompt, grid)| {
+                qwen3_mrope_position_source(prompt, *grid, None, &config, &Device::Cpu)
+                    .map(|source| source.delta)
+            })
+            .collect::<Result<Vec<_>>>()?;
+
+        assert_ne!(deltas[0], deltas[1]);
+        for query_len in [1, 8] {
+            for ((prompt, grid), delta) in cases.iter().zip(&deltas) {
+                let mut full_history = prompt.clone();
+                full_history.extend((0..query_len).map(|token| 30 + token as u32));
+                let legacy =
+                    qwen3_mrope_position_source(&full_history, *grid, None, &config, &Device::Cpu)?;
+                let actual = legacy
+                    .position_ids
+                    .i((.., 0, prompt.len()..full_history.len()))?
+                    .to_vec2::<i64>()?;
+                let adjusted_end = apply_mrope_position_delta(full_history.len(), *delta)?;
+                let expected_row = (adjusted_end - query_len..adjusted_end)
+                    .map(|position| position as i64)
+                    .collect::<Vec<_>>();
+
+                assert_eq!(actual, vec![expected_row; 3]);
+            }
+        }
+        Ok(())
+    }
+
     fn test_video(frames: usize, fps: f64) -> VideoInput {
         VideoInput::from_frames(
             vec![DynamicImage::new_rgb8(1, 1); frames],
@@ -1923,6 +2158,21 @@ mod tests {
             Qwen3VLProcessor::VISION_END
         );
         assert_eq!(text, expected);
+        Ok(())
+    }
+
+    #[test]
+    fn video_expansion_marks_placeholder_count_as_validation() -> Result<()> {
+        let mut text = format!(
+            "{}{}",
+            Qwen3VLProcessor::VIDEO_PAD,
+            Qwen3VLProcessor::VIDEO_PAD
+        );
+        let grid = Tensor::new(&[[1u32, 2, 2]], &Device::Cpu)?;
+        let error = expand_video_placeholders(&mut text, Some(&grid), &[test_video(2, 1.0)], 4, 2)
+            .unwrap_err();
+
+        assert!(error.is::<InputsProcessorValidationError>());
         Ok(())
     }
 

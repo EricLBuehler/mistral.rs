@@ -11,9 +11,9 @@ This is only supported on macOS and Linux environments.
 The CLI and TOML default to sandboxing on Linux and macOS. The Python and Rust SDKs default to **no sandbox** - an embedding application must construct and attach a `SandboxPolicy` itself.
 :::
 
-On by default for the CLI on Linux and macOS. To tune it, use `--sandbox` / the `[sandbox]` TOML table (see [Configuration](#configuration)). To turn it off, see [Disabling](#disabling). For full setup examples, see [enable code execution](/mistral.rs/guides/agents/enable-code-execution/) and [enable shell execution](/mistral.rs/guides/agents/enable-shell/).
+On by default for the CLI on Linux and macOS. To tune it, use `--sandbox` / the `[sandbox]` TOML table (see [Configuration](#configuration)). To turn it off, see [Disabling](#disabling). For full setup examples, see [enable code execution](/guides/agents/enable-code-execution/) and [enable shell execution](/guides/agents/enable-shell/).
 
-The sandbox is not the same as permissioning. `--agent-permission ask` or `deny` decides whether model-requested agent actions are allowed to start. The sandbox controls what the subprocess can access after it starts. See [permissions and approvals](/mistral.rs/guides/agents/permissions-and-approvals/) for the cross-API approval model.
+The sandbox is not the same as permissioning. `--agent-permission ask` or `deny` decides whether model-requested agent actions are allowed to start. The sandbox controls what the subprocess can access after it starts. See [permissions and approvals](/guides/agents/permissions-and-approvals/) for the cross-API approval model.
 
 ## Threat model
 
@@ -60,7 +60,7 @@ On macOS, the resource cap fields are accepted for configuration compatibility b
 
 ## Choosing a profile
 
-The examples below are TOML configuration snippets for `mistralrs from-config -f <path>`. See the full [TOML configuration reference](/mistral.rs/reference/cli-toml-config/) for where these sections fit in a complete config file.
+The examples below are TOML configuration snippets for `mistralrs from-config -f <path>`. See the full [TOML configuration reference](/reference/cli-toml-config/) for where these sections fit in a complete config file.
 
 For local agent use, start with `developer`:
 
@@ -109,7 +109,7 @@ The profile does not change the basic write rule: generated code and shell comma
 
 ## Configuration
 
-CLI flags (`--sandbox`, `--sandbox-profile`, `--sb-max-memory-mb`, `--sb-max-cpu-secs`, `--sb-max-procs`, `--sandbox-network`) and the `[sandbox]` TOML table expose the common controls: mode, profile, memory, CPU, process count, and network. The programmatic `SandboxPolicy` also exposes open-file and written-file-size caps. Schemas: [TOML configuration](/mistral.rs/reference/cli-toml-config/#sandbox-section), [generated CLI reference](/mistral.rs/reference/cli/serve/). Worked `mistralrs serve` examples are in [enable code execution](/mistral.rs/guides/agents/enable-code-execution/) and [enable shell execution](/mistral.rs/guides/agents/enable-shell/).
+CLI flags (`--sandbox`, `--sandbox-profile`, `--sb-max-memory-mb`, `--sb-max-cpu-secs`, `--sb-max-procs`, `--sandbox-network`) and the `[sandbox]` TOML table expose the common controls: mode, profile, memory, CPU, process count, and network. The programmatic `SandboxPolicy` also exposes open-file and written-file-size caps. Schemas: [TOML configuration](/reference/cli-toml-config/#sandbox-section), [generated CLI reference](/reference/cli/serve/). Worked `mistralrs serve` examples are in [enable code execution](/guides/agents/enable-code-execution/) and [enable shell execution](/guides/agents/enable-shell/).
 
 The `MISTRALRS_SANDBOX={auto|on|off}` env var overrides only the mode. It has lower precedence than an explicit CLI/TOML mode and higher precedence than the default `auto`. It does not choose the profile or network policy.
 
@@ -168,4 +168,4 @@ A startup warning is logged. With all sandbox layers off, model-generated code a
 
 ## Programmatic use
 
-For end-to-end setup and the Rust/Python `SandboxPolicy` snippets, see [enable code execution](/mistral.rs/guides/agents/enable-code-execution/) and [enable shell execution](/mistral.rs/guides/agents/enable-shell/). Python types are documented in the [Python API reference](/mistral.rs/reference/python/code-execution/). Remember the default: programmatic use is unsandboxed until a `SandboxPolicy` is attached.
+For end-to-end setup and the Rust/Python `SandboxPolicy` snippets, see [enable code execution](/guides/agents/enable-code-execution/) and [enable shell execution](/guides/agents/enable-shell/). Python types are documented in the [Python API reference](/reference/python/code-execution/). Remember the default: programmatic use is unsandboxed until a `SandboxPolicy` is attached.

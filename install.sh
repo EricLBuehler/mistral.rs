@@ -904,7 +904,7 @@ print_success() {
     echo "  # Run as a local agent (tools, web search, code execution)"
     echo "  mistralrs serve --agent -m google/gemma-4-E4B-it"
     echo ""
-    echo "Docs:     https://ericlbuehler.github.io/mistral.rs/"
+    echo "Docs:     https://docs.mistralrs.dev/"
     echo "Source:   https://github.com/EricLBuehler/mistral.rs"
     echo ""
     if [ -n "$FFMPEG_SKIPPED" ]; then

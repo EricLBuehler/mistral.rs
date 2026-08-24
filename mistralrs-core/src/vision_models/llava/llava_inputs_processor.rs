@@ -20,7 +20,7 @@ use crate::pipeline::text_models_inputs_processor::{
 };
 use crate::pipeline::{
     text_models_inputs_processor, InputProcessorOutput, InputsProcessor, InputsProcessorType,
-    MessagesAction, Processor,
+    InputsProcessorValidationError, MessagesAction, Processor,
 };
 use crate::sequence::{build_mm_features_from_ranges, Sequence};
 use crate::vision_models::image_processor::{self, ImagePreProcessor, PreprocessedImages};
@@ -203,11 +203,12 @@ impl InputsProcessor for LLaVAInputProcessor {
                 .map(|span| &detokenized[span.range()])
                 .collect::<Vec<_>>();
             if splits.len() != n_images + 1 {
-                anyhow::bail!(
+                return Err(InputsProcessorValidationError(format!(
                     "LLaVA prompt has {} image tags but {} images",
                     splits.len().saturating_sub(1),
                     n_images
-                );
+                ))
+                .into());
             }
             let prompt_chunks = splits
                 .iter()

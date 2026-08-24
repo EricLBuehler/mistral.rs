@@ -1,4 +1,7 @@
-use crate::paged_attention::block_hash::{MultiModalFeature, MultimodalAttentionPolicy};
+use crate::{
+    paged_attention::block_hash::{MultiModalFeature, MultimodalAttentionPolicy},
+    speculative::{target::clamp_speculative_prefix_cache_hit, SpeculativePrefixReplay},
+};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct PromptChunkPlan {
@@ -114,6 +117,56 @@ fn causal_unsplittable_component_end(
     }
 }
 
+fn normalize_prefix_boundary(
+    mut boundary: usize,
+    block_size: usize,
+    features: &[&MultiModalFeature],
+) -> usize {
+    for feature in features.iter().rev() {
+        if feature.offset < boundary && boundary < feature.end() {
+            boundary = feature.offset / block_size * block_size;
+        }
+    }
+    boundary
+}
+
+pub(crate) fn effective_recurrent_prefix_boundary(
+    max_cached_tokens: usize,
+    minimum_exclusive: usize,
+    block_size: usize,
+    replay: SpeculativePrefixReplay,
+    features: &[MultiModalFeature],
+) -> Option<usize> {
+    if block_size == 0 || max_cached_tokens == 0 {
+        return None;
+    }
+    let mut features = features.iter().collect::<Vec<_>>();
+    features.sort_by_key(|feature| feature.offset);
+    let max_cached_tokens = normalize_prefix_boundary(max_cached_tokens, block_size, &features);
+    let replay_boundary = clamp_speculative_prefix_cache_hit(max_cached_tokens, block_size, replay);
+    let replay_boundary = normalize_prefix_boundary(replay_boundary, block_size, &features);
+    (minimum_exclusive < replay_boundary).then_some(replay_boundary)
+}
+
+pub(crate) fn recurrent_checkpoint_boundary(
+    total_len: usize,
+    prefix_len: usize,
+    block_size: Option<usize>,
+    replay: SpeculativePrefixReplay,
+    features: &[MultiModalFeature],
+) -> Option<usize> {
+    let block_size = block_size.filter(|size| *size > 0)?;
+    let max_cached_tokens = total_len.saturating_sub(1) / block_size * block_size;
+    effective_recurrent_prefix_boundary(max_cached_tokens, prefix_len, block_size, replay, features)
+        .filter(|boundary| *boundary < total_len)
+}
+
+fn cap_at_reusable_boundary(pos: usize, end: usize, boundary: Option<usize>) -> usize {
+    boundary
+        .filter(|boundary| pos < *boundary && *boundary < end)
+        .unwrap_or(end)
+}
+
 /// `block_align` ends text chunks on paged-attention block boundaries. Hybrid models can only
 /// checkpoint recurrent state between forwards, so without this the boundary a prefix lookup asks
 /// for is never observed.
@@ -122,10 +175,13 @@ pub(crate) fn build_prompt_chunk_plan(
     prefix_len: usize,
     chunk_size: usize,
     block_align: Option<usize>,
+    replay: SpeculativePrefixReplay,
     features: &[MultiModalFeature],
 ) -> Vec<PromptChunkPlan> {
     let mut pos = prefix_len.min(total_len);
     let mut chunks = Vec::new();
+    let reusable_boundary =
+        recurrent_checkpoint_boundary(total_len, pos, block_align, replay, features);
     let mut features = features
         .iter()
         .filter(|feature| feature.offset < total_len && feature.end() > pos)
@@ -134,6 +190,7 @@ pub(crate) fn build_prompt_chunk_plan(
 
     while pos < total_len {
         if let Some(end) = noncausal_component_end(pos, total_len, &features) {
+            let end = cap_at_reusable_boundary(pos, end, reusable_boundary);
             chunks.push(PromptChunkPlan {
                 start: pos,
                 end,
@@ -154,6 +211,7 @@ pub(crate) fn build_prompt_chunk_plan(
                 .map(|feature| feature.offset)
                 .min()
                 .unwrap_or(end);
+            let end = cap_at_reusable_boundary(pos, end, reusable_boundary);
             chunks.push(PromptChunkPlan {
                 start: pos,
                 end,
@@ -191,6 +249,7 @@ pub(crate) fn build_prompt_chunk_plan(
                 .min(next_feature_end)
                 .min(pos.saturating_add(chunk_size))
                 .min(total_len);
+            let end = cap_at_reusable_boundary(pos, end, reusable_boundary);
             chunks.push(PromptChunkPlan {
                 start: pos,
                 end,
@@ -213,6 +272,7 @@ pub(crate) fn build_prompt_chunk_plan(
                 end = aligned;
             }
         }
+        end = cap_at_reusable_boundary(pos, end, reusable_boundary);
         chunks.push(PromptChunkPlan {
             start: pos,
             end,
@@ -330,6 +390,7 @@ mod tests {
             0,
             8,
             None,
+            SpeculativePrefixReplay::NotRequired,
             &[feature(10, 6, MultimodalAttentionPolicy::NonCausal)],
         );
 
@@ -372,7 +433,14 @@ mod tests {
         splittable.splittable = true;
 
         assert_eq!(
-            policies(build_prompt_chunk_plan(16, 0, 4, None, &[unsplittable])),
+            policies(build_prompt_chunk_plan(
+                16,
+                0,
+                4,
+                None,
+                SpeculativePrefixReplay::NotRequired,
+                &[unsplittable],
+            )),
             vec![
                 (0, 2, MultimodalAttentionPolicy::Causal),
                 (2, 12, MultimodalAttentionPolicy::Causal),
@@ -380,7 +448,14 @@ mod tests {
             ]
         );
         assert_eq!(
-            policies(build_prompt_chunk_plan(16, 0, 4, None, &[splittable])),
+            policies(build_prompt_chunk_plan(
+                16,
+                0,
+                4,
+                None,
+                SpeculativePrefixReplay::NotRequired,
+                &[splittable],
+            )),
             vec![
                 (0, 2, MultimodalAttentionPolicy::Causal),
                 (2, 6, MultimodalAttentionPolicy::Causal),
@@ -403,6 +478,7 @@ mod tests {
                 0,
                 4,
                 None,
+                SpeculativePrefixReplay::NotRequired,
                 &[unsplittable, splittable],
             )),
             vec![
@@ -420,6 +496,7 @@ mod tests {
             0,
             8,
             None,
+            SpeculativePrefixReplay::NotRequired,
             &[
                 feature(4, 8, MultimodalAttentionPolicy::NonCausal),
                 feature(8, 4, MultimodalAttentionPolicy::NonCausal),
@@ -443,6 +520,7 @@ mod tests {
             0,
             8,
             None,
+            SpeculativePrefixReplay::NotRequired,
             &[
                 feature(4, 6, MultimodalAttentionPolicy::NonCausal),
                 feature(8, 6, MultimodalAttentionPolicy::NonCausal),
@@ -467,6 +545,7 @@ mod tests {
             0,
             8,
             None,
+            SpeculativePrefixReplay::NotRequired,
             &[
                 feature(2, 8, MultimodalAttentionPolicy::Causal),
                 feature(4, 4, MultimodalAttentionPolicy::NonCausal),
@@ -494,26 +573,178 @@ mod tests {
         };
 
         assert_eq!(
-            spans(build_prompt_chunk_plan(65, 0, 4096, Some(32), &[])),
+            spans(build_prompt_chunk_plan(
+                65,
+                0,
+                4096,
+                Some(32),
+                SpeculativePrefixReplay::NotRequired,
+                &[],
+            )),
             vec![(0, 64), (64, 65)]
         );
-        // Already aligned: no extra chunk, the single boundary is the prompt end.
         assert_eq!(
-            spans(build_prompt_chunk_plan(64, 0, 4096, Some(32), &[])),
-            vec![(0, 64)]
+            spans(build_prompt_chunk_plan(
+                64,
+                0,
+                4096,
+                Some(32),
+                SpeculativePrefixReplay::NotRequired,
+                &[],
+            )),
+            vec![(0, 32), (32, 64)]
         );
         // Shorter than one block: nothing to snapshot, so do not split.
         assert_eq!(
-            spans(build_prompt_chunk_plan(20, 0, 4096, Some(32), &[])),
+            spans(build_prompt_chunk_plan(
+                20,
+                0,
+                4096,
+                Some(32),
+                SpeculativePrefixReplay::NotRequired,
+                &[],
+            )),
             vec![(0, 20)]
         );
         assert_eq!(
-            spans(build_prompt_chunk_plan(6712, 0, 4096, Some(32), &[])),
+            spans(build_prompt_chunk_plan(
+                6712,
+                0,
+                4096,
+                Some(32),
+                SpeculativePrefixReplay::NotRequired,
+                &[],
+            )),
             vec![(0, 4096), (4096, 6688), (6688, 6712)]
         );
         assert_eq!(
-            spans(build_prompt_chunk_plan(65, 0, 4096, None, &[])),
+            spans(build_prompt_chunk_plan(
+                65,
+                0,
+                4096,
+                None,
+                SpeculativePrefixReplay::NotRequired,
+                &[],
+            )),
             vec![(0, 65)]
+        );
+    }
+
+    #[test]
+    fn block_aligned_long_prompt_exposes_the_maximum_reusable_prefix() {
+        let spans = build_prompt_chunk_plan(
+            65_536,
+            0,
+            4096,
+            Some(32),
+            SpeculativePrefixReplay::NotRequired,
+            &[],
+        )
+        .into_iter()
+        .map(|chunk| (chunk.start, chunk.end))
+        .collect::<Vec<_>>();
+
+        assert_eq!(spans.len(), 17);
+        assert_eq!(
+            spans[spans.len() - 2..],
+            [(61_440, 65_504), (65_504, 65_536)]
+        );
+    }
+
+    #[test]
+    fn target_checkpoint_boundary_handles_aligned_and_unaligned_prompts() {
+        assert_eq!(
+            recurrent_checkpoint_boundary(
+                65_536,
+                0,
+                Some(32),
+                SpeculativePrefixReplay::NotRequired,
+                &[],
+            ),
+            Some(65_504)
+        );
+        assert_eq!(
+            recurrent_checkpoint_boundary(
+                65_537,
+                0,
+                Some(32),
+                SpeculativePrefixReplay::NotRequired,
+                &[],
+            ),
+            Some(65_536)
+        );
+    }
+
+    #[test]
+    fn suffix_replay_checkpoint_boundary_handles_aligned_and_unaligned_prompts() {
+        let replay = SpeculativePrefixReplay::Suffix(2048);
+        assert_eq!(
+            recurrent_checkpoint_boundary(65_536, 0, Some(32), replay, &[]),
+            Some(63_456)
+        );
+        assert_eq!(
+            recurrent_checkpoint_boundary(65_537, 0, Some(32), replay, &[]),
+            Some(63_488)
+        );
+
+        let aligned = build_prompt_chunk_plan(65_536, 0, 4096, Some(32), replay, &[]);
+        let unaligned = build_prompt_chunk_plan(65_537, 0, 4096, Some(32), replay, &[]);
+        assert!(aligned.iter().any(|chunk| chunk.end == 63_456));
+        assert!(unaligned.iter().any(|chunk| chunk.end == 63_488));
+    }
+
+    #[test]
+    fn full_replay_has_no_recurrent_checkpoint_boundary() {
+        assert_eq!(
+            recurrent_checkpoint_boundary(65_536, 0, Some(32), SpeculativePrefixReplay::Full, &[],),
+            None
+        );
+    }
+
+    #[test]
+    fn reusable_prefix_boundary_stays_outside_atomic_media() {
+        let chunks = build_prompt_chunk_plan(
+            64,
+            0,
+            32,
+            Some(8),
+            SpeculativePrefixReplay::NotRequired,
+            &[feature(50, 10, MultimodalAttentionPolicy::Causal)],
+        );
+        let spans = chunks
+            .into_iter()
+            .map(|chunk| (chunk.start, chunk.end))
+            .collect::<Vec<_>>();
+
+        assert!(spans.iter().any(|(_, end)| *end == 48));
+        assert!(!spans.iter().any(|(_, end)| 50 < *end && *end < 60));
+    }
+
+    #[test]
+    fn replay_boundary_normalizes_transitive_media_in_one_sorted_pass() {
+        let features = [
+            feature(50, 10, MultimodalAttentionPolicy::Causal),
+            feature(45, 4, MultimodalAttentionPolicy::Causal),
+        ];
+        assert_eq!(
+            effective_recurrent_prefix_boundary(
+                56,
+                0,
+                8,
+                SpeculativePrefixReplay::NotRequired,
+                &features,
+            ),
+            Some(40)
+        );
+        assert_eq!(
+            effective_recurrent_prefix_boundary(
+                56,
+                0,
+                8,
+                SpeculativePrefixReplay::Suffix(8),
+                &features,
+            ),
+            Some(32)
         );
     }
 }

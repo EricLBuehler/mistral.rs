@@ -207,6 +207,21 @@ pub trait ModelConfigLike {
     fn kv_cache_elements_per_token(&self) -> usize {
         2 * self.num_kv_heads() * self.k_head_dim().max(self.v_head_dim())
     }
+
+    fn prefix_prefill_attention_features(
+        &self,
+        _layer_idx: usize,
+    ) -> Option<PrefixPrefillAttentionFeatures> {
+        None
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct PrefixPrefillAttentionFeatures {
+    pub has_alibi: bool,
+    pub has_sinks: bool,
+    pub has_softcap: bool,
+    pub has_sliding_window: bool,
 }
 
 #[derive(Clone)]
@@ -293,11 +308,33 @@ impl ModelConfigLike for ModelConfigMetadata {
 pub struct HybridPagedKvCacheConfig {
     base: ModelConfigMetadata,
     paged_layers: Vec<bool>,
+    prefix_prefill_attention_features: Vec<Option<PrefixPrefillAttentionFeatures>>,
 }
 
 impl HybridPagedKvCacheConfig {
     pub fn new(base: ModelConfigMetadata, paged_layers: Vec<bool>) -> Self {
-        Self { base, paged_layers }
+        let num_layers = base.num_layers();
+        Self {
+            base,
+            paged_layers,
+            prefix_prefill_attention_features: vec![None; num_layers],
+        }
+    }
+
+    pub fn with_uniform_prefix_prefill_attention_features(
+        mut self,
+        features: PrefixPrefillAttentionFeatures,
+    ) -> Self {
+        for (features_slot, has_paged_cache) in self
+            .prefix_prefill_attention_features
+            .iter_mut()
+            .zip(&self.paged_layers)
+        {
+            if *has_paged_cache {
+                *features_slot = Some(features);
+            }
+        }
+        self
     }
 }
 
@@ -358,6 +395,18 @@ impl ModelConfigLike for HybridPagedKvCacheConfig {
     }
     fn layer_has_paged_kv_cache(&self, layer_idx: usize) -> bool {
         self.paged_layers.get(layer_idx).copied().unwrap_or(true)
+    }
+    fn prefix_prefill_attention_features(
+        &self,
+        layer_idx: usize,
+    ) -> Option<PrefixPrefillAttentionFeatures> {
+        if !self.layer_has_paged_kv_cache(layer_idx) {
+            return None;
+        }
+        self.prefix_prefill_attention_features
+            .get(layer_idx)
+            .copied()
+            .flatten()
     }
 }
 

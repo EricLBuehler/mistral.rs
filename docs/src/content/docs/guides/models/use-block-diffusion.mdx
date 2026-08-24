@@ -14,7 +14,7 @@ Block-diffusion models generate text by iteratively *denoising* whole blocks of 
 Because each pass commits many tokens at once, decode throughput is higher than a comparable autoregressive model.
 
 Currently supported:
-- **DiffusionGemma** (`google/diffusiongemma-26B-A4B-it`), a 26B-A4B [MoE (Mixture of Experts)](/mistral.rs/guides/models/model-family-notes/) model with vision input, built on the Gemma 4 architecture.
+- **DiffusionGemma** (`google/diffusiongemma-26B-A4B-it`), a 26B-A4B [MoE (Mixture of Experts)](/guides/models/model-family-notes/) model with vision input, built on the Gemma 4 architecture.
 
 ## Quick start
 
@@ -47,7 +47,7 @@ curl http://localhost:1234/v1/chat/completions \
 </TabItem>
 <TabItem label="Python">
 
-The standard chat-completion API works unchanged. See the [Python example](/mistral.rs/examples/python/diffusion-gemma/) (vision input).
+The standard chat-completion API works unchanged. See the [Python example](/examples/python/diffusion-gemma/) (vision input).
 
 ```python
 from mistralrs import ChatCompletionRequest, MultimodalArchitecture, Runner, Which
@@ -72,7 +72,7 @@ print(response.choices[0].message.content)
 </TabItem>
 <TabItem label="Rust">
 
-The standard chat API works unchanged. See the [Rust example](/mistral.rs/examples/rust/models/diffusion-gemma/) (streaming, shows block-at-a-time output).
+The standard chat API works unchanged. See the [Rust example](/examples/rust/models/diffusion-gemma/) (streaming, shows block-at-a-time output).
 
 ```rust
 use mistralrs::{MultimodalModelBuilder, TextMessageRole, TextMessages};
@@ -98,4 +98,4 @@ println!("{}", response.choices[0].message.content.as_ref().unwrap());
 - **Tool calling** works through the model's native format, including calls spanning block boundaries. Grammar-constrained generation is NOT enforced during denoising, so `tool_choice: required`, named tools, and JSON schema outputs are unconstrained: the model relies on its trained formatting instead. (Per-token grammars are incompatible with parallel token refinement.)
 - **Concurrency batches by context length.** Concurrent requests with equal context lengths batch together and denoise their blocks in lockstep, amortizing the per-block MoE computation across requests. Requests with different prompt lengths run as separate groups.
 
-See also: [model family notes](/mistral.rs/guides/models/model-family-notes/) and the [supported models reference](/mistral.rs/reference/supported-models/).
+See also: [model family notes](/guides/models/model-family-notes/) and the [supported models reference](/reference/supported-models/).

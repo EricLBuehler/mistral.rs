@@ -5,13 +5,13 @@ description: Use Anthropic-compatible clients with the mistralrs HTTP server.
 
 mistral.rs exposes Anthropic-compatible Messages endpoints at `POST /v1/messages`
 and `POST /v1/messages/count_tokens`. They run through the same local model,
-scheduler, chat templates, multimodal handling, tool calling, and [agentic runtime](/mistral.rs/guides/agents/agentic-runtime/)
+scheduler, chat templates, multimodal handling, tool calling, and [agentic runtime](/guides/agents/agentic-runtime/)
 as `/v1/chat/completions`. Anthropic clients use `http://localhost:1234` as the
 base URL (no `/v1` suffix; the client appends `/v1/messages` itself).
 
-Start the server as for the [OpenAI-compatible API](/mistral.rs/guides/serve/openai-compatible-apis/);
+Start the server as for the [OpenAI-compatible API](/guides/serve/openai-compatible-apis/);
 both APIs are always served. For Claude Code configuration, see
-[Use Codex and Claude Code](/mistral.rs/guides/serve/coding-agents/).
+[Use Codex and Claude Code](/guides/serve/coding-agents/).
 
 ## Basic request
 
@@ -241,7 +241,7 @@ request.
 ## Skills
 
 Anthropic-compatible Skills use the same uploaded skill store as
-[OpenAI-compatible Skills](/mistral.rs/guides/agents/skills/). Upload a zip or
+[OpenAI-compatible Skills](/guides/agents/skills/). Upload a zip or
 multipart skill directory to `POST /v1/skills`, then reference the returned
 custom skill id from `container.skills` on `/v1/messages`.
 
@@ -299,8 +299,8 @@ responses emit `file_produced` events. Download bytes from
 
 | Example | What it shows |
 |---|---|
-| [anthropic_chat](/mistral.rs/examples/server/anthropic-chat/) | Plain non-streaming Messages request. |
-| [anthropic_streaming](/mistral.rs/examples/server/anthropic-streaming/) | Anthropic SSE parsing. |
-| [anthropic_tool_calling](/mistral.rs/examples/server/anthropic-tool-calling/) | Client-side tool use with `tool_use` and `tool_result`. |
-| [anthropic_agentic](/mistral.rs/examples/server/anthropic-agentic/) | Anthropic server-tool declarations mapped to mistral.rs web search and code execution. |
-| [anthropic_skills](/mistral.rs/examples/server/anthropic-skills/) | Upload a custom Skill and use it from `container.skills`. |
+| [anthropic_chat](/examples/server/anthropic-chat/) | Plain non-streaming Messages request. |
+| [anthropic_streaming](/examples/server/anthropic-streaming/) | Anthropic SSE parsing. |
+| [anthropic_tool_calling](/examples/server/anthropic-tool-calling/) | Client-side tool use with `tool_use` and `tool_result`. |
+| [anthropic_agentic](/examples/server/anthropic-agentic/) | Anthropic server-tool declarations mapped to mistral.rs web search and code execution. |
+| [anthropic_skills](/examples/server/anthropic-skills/) | Upload a custom Skill and use it from `container.skills`. |

@@ -1175,6 +1175,9 @@ pub struct ChatCompletionRequest {
     #[serde(default)]
     #[schema(example = false)]
     pub ignore_eos: bool,
+    /// Seed for deterministic request-scoped sampling.
+    #[schema(example = json!(Option::None::<u64>))]
+    pub seed: Option<u64>,
     /// Sampling temperature; higher values increase randomness.
     #[schema(example = 0.7)]
     pub temperature: Option<f64>,
@@ -1481,6 +1484,9 @@ pub struct CompletionRequest {
     #[serde(default)]
     #[schema(example = false)]
     pub ignore_eos: bool,
+    /// Seed for deterministic request-scoped sampling.
+    #[schema(example = json!(Option::None::<u64>))]
+    pub seed: Option<u64>,
     /// Stream the response as server-sent events.
     pub stream: Option<bool>,
     /// Sampling temperature; higher values increase randomness.
@@ -1883,6 +1889,9 @@ pub struct ResponsesCreateRequest {
     #[serde(default = "default_false")]
     #[schema(example = false)]
     pub ignore_eos: bool,
+    /// Seed for deterministic request-scoped sampling.
+    #[schema(example = json!(Option::None::<u64>))]
+    pub seed: Option<u64>,
     /// Sampling temperature; higher values increase randomness.
     #[schema(example = 0.7)]
     pub temperature: Option<f64>,
@@ -2117,6 +2126,20 @@ mod tests {
         assert!(chat.ignore_eos);
         assert!(completion.ignore_eos);
         assert!(responses.ignore_eos);
+    }
+
+    #[test]
+    fn generation_requests_accept_sampling_seed() {
+        let chat: ChatCompletionRequest =
+            serde_json::from_value(json!({"messages": "hello", "seed": 42})).unwrap();
+        let completion: CompletionRequest =
+            serde_json::from_value(json!({"prompt": "hello", "seed": 43})).unwrap();
+        let responses: ResponsesCreateRequest =
+            serde_json::from_value(json!({"input": "hello", "seed": 44})).unwrap();
+
+        assert_eq!(chat.seed, Some(42));
+        assert_eq!(completion.seed, Some(43));
+        assert_eq!(responses.seed, Some(44));
     }
 
     #[test]

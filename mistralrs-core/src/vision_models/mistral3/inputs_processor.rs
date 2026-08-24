@@ -14,7 +14,8 @@ use crate::{
         text_models_inputs_processor::{
             self, get_completion_input, get_prompt_input, PagedAttentionMeta,
         },
-        InputProcessorOutput, InputsProcessor, InputsProcessorType, MessagesAction, Processor,
+        InputProcessorOutput, InputsProcessor, InputsProcessorType, InputsProcessorValidationError,
+        MessagesAction, Processor,
     },
     sequence::{build_mm_features_from_ranges, Sequence},
     vision_models::{
@@ -488,68 +489,111 @@ impl Mistral3ImageProcessor {
         max_height: usize,
         max_width: usize,
         patch_size: usize,
-    ) -> (usize, usize) {
+    ) -> Result<(usize, usize)> {
+        if height == 0 || width == 0 {
+            candle_core::bail!("Mistral 3 image dimensions must be nonzero");
+        }
+        if max_height == 0 || max_width == 0 || patch_size == 0 {
+            candle_core::bail!("Mistral 3 resize configuration must be nonzero");
+        }
         let ratio = (height as f64 / max_height as f64).max(width as f64 / max_width as f64);
         if ratio > 1. {
-            height = (height as f64 / ratio).floor() as usize;
-            width = (width as f64 / ratio).floor() as usize;
+            height = ((height as f64 / ratio).floor() as usize).max(1);
+            width = ((width as f64 / ratio).floor() as usize).max(1);
         }
 
-        let num_height_tokens = (height - 1) / patch_size + 1;
-        let num_width_tokens = (width - 1) / patch_size + 1;
-        (
-            num_height_tokens * patch_size,
-            num_width_tokens * patch_size,
-        )
+        let num_height_tokens = height.div_ceil(patch_size);
+        let num_width_tokens = width.div_ceil(patch_size);
+        let height = num_height_tokens
+            .checked_mul(patch_size)
+            .ok_or_else(|| candle_core::Error::msg("Mistral 3 resized height overflow"))?;
+        let width = num_width_tokens
+            .checked_mul(patch_size)
+            .ok_or_else(|| candle_core::Error::msg("Mistral 3 resized width overflow"))?;
+        Ok((height, width))
     }
 
     fn planned_image_sizes(
         &self,
         images: &[DynamicImage],
         config: &PreProcessorConfig,
-    ) -> Result<Vec<(u32, u32)>> {
-        if !config.do_resize.unwrap() {
-            return Ok(images
+    ) -> anyhow::Result<Vec<(u32, u32)>> {
+        let do_resize = config
+            .do_resize
+            .ok_or_else(|| anyhow::Error::msg("Mistral 3 resize configuration is missing"))?;
+        let token_stride = self
+            .patch_size
+            .checked_mul(self.spatial_merge_size)
+            .filter(|stride| *stride > 0)
+            .ok_or_else(|| anyhow::Error::msg("Mistral 3 patch geometry must be nonzero"))?;
+        if !do_resize {
+            return images
                 .iter()
                 .map(|image| {
                     let (width, height) = image.dimensions();
-                    (height, width)
+                    if width == 0 || height == 0 {
+                        return Err(InputsProcessorValidationError(
+                            "Mistral 3 image dimensions must be nonzero".to_string(),
+                        )
+                        .into());
+                    }
+                    if (height as usize) < token_stride || (width as usize) < token_stride {
+                        return Err(InputsProcessorValidationError(format!(
+                            "Mistral 3 image size {height}x{width} is too small for its patch geometry"
+                        ))
+                        .into());
+                    }
+                    Ok((height, width))
                 })
-                .collect());
+                .collect();
         }
 
-        let size = config.size.as_ref().unwrap();
+        let size = config
+            .size
+            .as_ref()
+            .ok_or_else(|| anyhow::Error::msg("Mistral 3 resize dimensions are missing"))?;
         let (max_height, max_width) = if size.contains_key("longest_edge") {
             (size["longest_edge"] as usize, size["longest_edge"] as usize)
         } else if size.contains_key("height") && size.contains_key("width") {
             (size["height"] as usize, size["width"] as usize)
         } else {
-            candle_core::bail!("Size must be a map of `longest_edge` or `height` and `width`.");
+            anyhow::bail!("Size must be a map of `longest_edge` or `height` and `width`.");
         };
-        let patch_size = config.patch_size.unwrap();
+        let patch_size = config
+            .patch_size
+            .ok_or_else(|| anyhow::Error::msg("Mistral 3 resize patch size is missing"))?;
         images
             .iter()
             .map(|image| {
                 let (width, height) = image.dimensions();
+                if width == 0 || height == 0 {
+                    return Err(InputsProcessorValidationError(
+                        "Mistral 3 image dimensions must be nonzero".to_string(),
+                    )
+                    .into());
+                }
                 let (height, width) = self.resized_dimensions(
                     height as usize,
                     width as usize,
                     max_height,
                     max_width,
                     patch_size,
-                );
+                )?;
                 Ok((u32::try_from(height)?, u32::try_from(width)?))
             })
             .collect()
     }
 
     fn image_replacement(&self, height: u32, width: u32) -> anyhow::Result<String> {
-        let num_height_tokens = (height as usize) / (self.patch_size * self.spatial_merge_size);
-        let num_width_tokens = (width as usize) / (self.patch_size * self.spatial_merge_size);
+        let token_stride = self
+            .patch_size
+            .checked_mul(self.spatial_merge_size)
+            .filter(|stride| *stride > 0)
+            .ok_or_else(|| anyhow::Error::msg("Mistral 3 patch geometry must be nonzero"))?;
+        let num_height_tokens = (height as usize) / token_stride;
+        let num_width_tokens = (width as usize) / token_stride;
         if num_height_tokens == 0 || num_width_tokens == 0 {
-            anyhow::bail!(
-                "Mistral 3 image size {height}x{width} is too small for its patch geometry"
-            );
+            anyhow::bail!("Mistral 3 resized image is too small for its patch geometry");
         }
 
         let mut replace_tokens = vec![
@@ -571,10 +615,11 @@ impl Mistral3ImageProcessor {
         let fragments = prompt.split(&self.image_token).collect::<Vec<_>>();
         let placeholder_count = fragments.len() - 1;
         if placeholder_count != image_sizes.len() {
-            anyhow::bail!(
+            return Err(InputsProcessorValidationError(format!(
                 "Mistral 3 has {placeholder_count} image placeholders but {} image inputs",
                 image_sizes.len()
-            );
+            ))
+            .into());
         }
 
         let mut expanded = String::with_capacity(prompt.len());
@@ -697,7 +742,7 @@ impl ImagePreProcessor for Mistral3ImageProcessor {
                     max_height,
                     max_width,
                     patch_size,
-                );
+                )?;
                 *image = image.resize_exact(width as u32, height as u32, resample);
             }
 
@@ -750,7 +795,10 @@ impl ImagePreProcessor for Mistral3ImageProcessor {
 mod tests {
     use candle_core::{DType, Device, Tensor};
 
-    use super::{cat_padded_mistral3_images, find_mistral3_image_ranges, Mistral3ImageProcessor};
+    use super::{
+        cat_padded_mistral3_images, find_mistral3_image_ranges, InputsProcessorValidationError,
+        Mistral3ImageProcessor,
+    };
 
     fn processor() -> Mistral3ImageProcessor {
         Mistral3ImageProcessor {
@@ -789,14 +837,25 @@ mod tests {
         assert!(error
             .to_string()
             .contains("2 image placeholders but 1 image inputs"));
+        assert!(error
+            .downcast_ref::<InputsProcessorValidationError>()
+            .is_some());
     }
 
     #[test]
     fn planned_resize_matches_patch_rounding() {
         assert_eq!(
-            processor().resized_dimensions(100, 200, 100, 100, 16),
+            processor()
+                .resized_dimensions(100, 200, 100, 100, 16)
+                .unwrap(),
             (64, 112)
         );
+        let error = processor()
+            .resized_dimensions(100, 200, 0, 100, 16)
+            .unwrap_err();
+        assert!(!anyhow::Error::from(error).is::<InputsProcessorValidationError>());
+        let error = processor().image_replacement(1, 1).unwrap_err();
+        assert!(!error.is::<InputsProcessorValidationError>());
     }
 
     #[test]

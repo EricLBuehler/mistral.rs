@@ -33,19 +33,20 @@ use util::{
 
 use candle_core::{Device, Result};
 use mistralrs_core::{
-    initialize_logging, paged_attn_supported, parse_isq_value, AgentToolApprovalHandler,
-    AnyMoeLoader, AutoDeviceMapParams, ChatCompletionResponse, CompletionResponse, Constraint,
+    initialize_logging, paged_attn_supported, parse_isq_value,
+    reserve_external_mtp_memory_with_runtime, AgentToolApprovalHandler, AnyMoeLoader,
+    AutoDeviceMapParams, ChatCompletionResponse, CompletionResponse, Constraint,
     DefaultSchedulerMethod, DetokenizationRequest, DeviceLayerMapMetadata, DeviceMapMetadata,
     DeviceMapSetting, DiffusionGenerationParams, DiffusionLoaderBuilder, DrySamplingParams,
     EmbeddingLoaderBuilder, EmbeddingSpecificConfig, GGMLLoaderBuilder, GGMLSpecificConfig,
     GGUFLoaderBuilder, GGUFSpecificConfig, ImageGenerationResponse, ImageGenerationResponseFormat,
     LlguidanceGrammar, Loader, LoraAdapterError as CoreLoraAdapterError, LoraAdapterLoadPolicy,
     LoraAdapterSpec, LoraRuntimeConfig, MemoryGpuConfig, MistralRs, MistralRsBuilder,
-    MistralRsError, MultimodalLoaderBuilder, MultimodalSpecificConfig, NormalLoaderBuilder,
-    NormalRequest, NormalSpecificConfig, PagedAttentionConfig, PagedCacheType, Request as _Request,
-    RequestMessage, Response, ResponseOk, SamplingParams, SchedulerConfig, SearchEmbeddingModel,
-    SpeculativeConfig, SpeechLoader, StopTokens, TokenSource, TokenizationRequest, Tool, Topology,
-    UqffWriteConfig,
+    MistralRsError, MtpConfig, MtpRuntimeConfig, MultimodalLoaderBuilder, MultimodalSpecificConfig,
+    NormalLoaderBuilder, NormalRequest, NormalSpecificConfig, PagedAttentionConfig, PagedCacheType,
+    Request as _Request, RequestMessage, Response, ResponseOk, SamplingParams, SchedulerConfig,
+    SearchEmbeddingModel, SpeculativeConfig, SpeechLoader, StopTokens, TokenSource,
+    TokenizationRequest, Tool, Topology, UqffWriteConfig,
 };
 use mistralrs_core::{
     CalledFunction, SearchCallback, SearchFunctionParameters, SearchResult, ToolCallback,
@@ -123,11 +124,11 @@ fn lora_adapter_error_code(error: &MistralRsError) -> &'static str {
             {
                 "invalid_lora_adapter"
             }
-            CoreLoraAdapterError::Io { .. } => "lora_storage_unavailable",
+            CoreLoraAdapterError::Io { .. } => "internal_error",
             CoreLoraAdapterError::Config { .. } | CoreLoraAdapterError::Format(_) => {
                 "invalid_lora_adapter"
             }
-            CoreLoraAdapterError::Load(_) => "lora_device_load_failed",
+            CoreLoraAdapterError::Load(_) => "internal_error",
             CoreLoraAdapterError::Task(_) => "lora_load_task_failed",
             _ => "internal_error",
         },
@@ -136,8 +137,8 @@ fn lora_adapter_error_code(error: &MistralRsError) -> &'static str {
         | MistralRsError::ModelAlreadyLoaded(_)
         | MistralRsError::ModelAlreadyUnloaded(_) => "model_state_conflict",
         MistralRsError::NoLoaderConfig(_) => "invalid_model_operation",
+        MistralRsError::SenderPoisoned => "service_unavailable",
         MistralRsError::EnginePoisoned
-        | MistralRsError::SenderPoisoned
         | MistralRsError::ReloadFailed(_)
         | MistralRsError::Other(_) => "internal_error",
     }
@@ -905,6 +906,7 @@ fn build_constraint(grammar: Option<&str>, grammar_type: Option<&str>) -> PyApiR
 
     Ok(constraint)
 }
+
 #[pymethods]
 impl Runner {
     #[new]
@@ -1235,6 +1237,20 @@ impl Runner {
             }
             (_, _, _, _, _, _) => None,
         };
+        let cache_config = cache_config
+            .map(|config| config.with_serving_capacity(max_seqs))
+            .transpose()?
+            .map(|config| config.with_recurrent_prefix_capacity(prefix_cache_n));
+        let mtp_config = mtp_model.map(|model| MtpConfig::new(model, mtp_n_predict));
+        let mtp_runtime = MtpRuntimeConfig::new(prefix_cache_n);
+        let cache_config = reserve_external_mtp_memory_with_runtime(
+            cache_config,
+            mtp_config.as_ref(),
+            mtp_runtime,
+            &dtype,
+            device,
+        )
+        .map_err(PyApiErr::from)?;
 
         let pipeline = loader
             .load_model_from_hf(
@@ -1249,13 +1265,10 @@ impl Runner {
             )
             .map_err(PyApiErr::from)?;
 
-        if let Some(mtp_model) = mtp_model {
+        if let Some(mtp_config) = mtp_config {
             pipeline
                 .blocking_lock()
-                .attach_speculative(SpeculativeConfig::Mtp(mistralrs_core::MtpConfig::new(
-                    mtp_model,
-                    mtp_n_predict,
-                )))
+                .attach_speculative_with_runtime(SpeculativeConfig::Mtp(mtp_config), mtp_runtime)
                 .map_err(|e| PyApiErr::from(&e))?;
         }
 
@@ -1264,6 +1277,10 @@ impl Runner {
             if let Some(ref cache_config) = pipeline.blocking_lock().get_metadata().cache_config {
                 SchedulerConfig::PagedAttentionMeta {
                     max_num_seqs: max_seqs,
+                    max_num_batched_tokens: mistralrs_core::DEFAULT_MAX_NUM_BATCHED_TOKENS,
+                    max_prefill_chunk_tokens: mistralrs_core::DEFAULT_MAX_PREFILL_CHUNK_TOKENS,
+                    max_decode_steps_before_prefill:
+                        mistralrs_core::DEFAULT_MAX_DECODE_STEPS_BEFORE_PREFILL,
                     config: cache_config.clone(),
                 }
             } else {
@@ -1652,6 +1669,7 @@ impl Runner {
 
             let model_request = _Request::Normal(Box::new(NormalRequest {
                 id: next_request_id(),
+                queued_at: None,
                 messages,
                 sampling_params: SamplingParams {
                     temperature: request.temperature,
@@ -1669,6 +1687,7 @@ impl Runner {
                     min_p: request.min_p,
                     dry_params,
                 },
+                seed: None,
                 response: tx,
                 return_logprobs: request.logprobs,
                 is_streaming: request.stream,
@@ -1764,8 +1783,10 @@ impl Runner {
 
                     let model_request = _Request::Normal(Box::new(NormalRequest {
                         id: request_id,
+                        queued_at: None,
                         messages: message,
                         sampling_params: SamplingParams::deterministic(),
+                        seed: None,
                         response: tx,
                         return_logprobs: false,
                         is_streaming: false,
@@ -1875,6 +1896,7 @@ impl Runner {
 
             let model_request = _Request::Normal(Box::new(NormalRequest {
                 id: next_request_id(),
+                queued_at: None,
                 messages: RequestMessage::Completion {
                     text: request.prompt.clone(),
                     echo_prompt: request.echo_prompt,
@@ -1896,6 +1918,7 @@ impl Runner {
                     min_p: request.min_p,
                     dry_params,
                 },
+                seed: None,
                 response: tx,
                 return_logprobs: false,
                 is_streaming: false,
@@ -1961,6 +1984,7 @@ impl Runner {
 
         let request = _Request::Normal(Box::new(NormalRequest {
             id: 0,
+            queued_at: None,
             messages: RequestMessage::ImageGeneration {
                 prompt: prompt.to_string(),
                 format: response_format,
@@ -1968,6 +1992,7 @@ impl Runner {
                 save_file,
             },
             sampling_params: SamplingParams::deterministic(),
+            seed: None,
             response: tx,
             return_logprobs: false,
             is_streaming: false,
@@ -2030,8 +2055,10 @@ impl Runner {
 
         let request = _Request::Normal(Box::new(NormalRequest {
             id: 0,
+            queued_at: None,
             messages: RequestMessage::SpeechGeneration { prompt },
             sampling_params: SamplingParams::deterministic(),
+            seed: None,
             response: tx,
             return_logprobs: false,
             is_streaming: false,
@@ -2603,6 +2630,7 @@ impl Runner {
 
             let model_request = _Request::Normal(Box::new(NormalRequest {
                 id: next_request_id(),
+                queued_at: None,
                 messages,
                 sampling_params: SamplingParams {
                     temperature: request.temperature,
@@ -2620,6 +2648,7 @@ impl Runner {
                     min_p: request.min_p,
                     dry_params,
                 },
+                seed: None,
                 response: tx,
                 return_logprobs: request.logprobs,
                 is_streaming: request.stream,
@@ -2721,6 +2750,7 @@ impl Runner {
 
             let model_request = _Request::Normal(Box::new(NormalRequest {
                 id: next_request_id(),
+                queued_at: None,
                 messages: RequestMessage::Completion {
                     text: request.prompt.clone(),
                     echo_prompt: request.echo_prompt,
@@ -2742,6 +2772,7 @@ impl Runner {
                     min_p: request.min_p,
                     dry_params,
                 },
+                seed: None,
                 response: tx,
                 return_logprobs: false,
                 is_streaming: false,
@@ -3225,6 +3256,56 @@ fn mistralrs(_py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
 }
 
 #[cfg(test)]
+mod mtp_reservation_tests {
+    use std::collections::HashMap;
+
+    use mistralrs_core::reserve_external_mtp_memory;
+    use safetensors::{serialize_to_file, tensor::Dtype as SafeDtype, tensor::TensorView};
+    use tempfile::tempdir;
+
+    use super::*;
+
+    #[test]
+    fn external_mtp_checkpoint_bytes_are_added_to_the_cache_reservation() -> anyhow::Result<()> {
+        let dir = tempdir()?;
+        let path = dir.path().join("model.safetensors");
+        let data = [0u8; 2];
+        serialize_to_file(
+            HashMap::from([("weight", TensorView::new(SafeDtype::BF16, vec![1], &data)?)]),
+            None,
+            &path,
+        )?;
+        let mtp_config = MtpConfig::new(dir.path().to_string_lossy().into_owned(), None);
+        let cache_config = PagedAttentionConfig::new(
+            None,
+            MemoryGpuConfig::Utilization(0.9),
+            PagedCacheType::Auto,
+        )?
+        .with_base_device_memory_reservation(usize::MAX - data.len())?;
+
+        let cache_config = reserve_external_mtp_memory(
+            Some(cache_config),
+            Some(&mtp_config),
+            &candle_core::DType::BF16,
+            &Device::Cpu,
+        )?
+        .expect("cache config missing");
+        let error = reserve_external_mtp_memory(
+            Some(cache_config),
+            Some(&mtp_config),
+            &candle_core::DType::BF16,
+            &Device::Cpu,
+        )
+        .expect_err("adding the checkpoint twice should overflow");
+
+        assert!(error
+            .to_string()
+            .contains("paged attention device memory reservation overflow"));
+        Ok(())
+    }
+}
+
+#[cfg(test)]
 mod lora_adapter_error_tests {
     use super::*;
 
@@ -3283,6 +3364,10 @@ mod lora_adapter_error_tests {
                 source: std::io::Error::from(std::io::ErrorKind::NotFound),
             })),
             "adapter_file_not_found"
+        );
+        assert_eq!(
+            lora_adapter_error_code(&MistralRsError::SenderPoisoned),
+            "service_unavailable"
         );
     }
 

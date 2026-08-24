@@ -12,6 +12,7 @@ fn main() {
         use std::path::PathBuf;
         set_cuda_toolkit_version();
         println!("cargo:rerun-if-changed=build.rs");
+        println!("cargo:rerun-if-changed=src/cuda");
         println!("cargo:rerun-if-env-changed=CUDA_NVCC_FLAGS");
         let build_dir = PathBuf::from(std::env::var("OUT_DIR").unwrap());
 

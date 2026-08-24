@@ -3,7 +3,7 @@ title: Hardware support
 description: GPUs, compute capabilities, and accelerators mistral.rs supports, and which prebuilt binaries are published.
 ---
 
-Use this page to check whether a prebuilt binary exists for your accelerator. If you are installing on a normal workstation or server, start with the [quickstart](/mistral.rs/quickstart/) and let the installer choose.
+Use this page to check whether a prebuilt binary exists for your accelerator. If you are installing on a normal workstation or server, start with the [quickstart](/quickstart/) and let the installer choose.
 
 ## Accelerators
 
@@ -64,9 +64,9 @@ The installer chooses the newest published lane that the installed NVIDIA driver
 | `cuda132` | CUDA 13.2.0 | 13.2 | x86_64: 80, 86, 89, 100, 120; aarch64: 100, 121 | sm80, sm86, sm89, sm100, sm120, sm121 |
 | `cuda133` | CUDA 13.3.0 | 13.3 | x86_64: 90; aarch64: 90 | sm90 |
 
-Each artifact bundles the CUDA runtime libraries it needs, so standard acceleration does not require a toolkit at runtime. The installed NVIDIA driver still has to be new enough for that artifact's toolkit lane. cuTile-capable archives do not redistribute NVIDIA's `tileiras` tool; install it separately by following [cuTile setup](/mistral.rs/developer/moe-backends/).
+Each artifact bundles the CUDA runtime libraries it needs, so standard acceleration does not require a toolkit at runtime. The installed NVIDIA driver still has to be new enough for that artifact's toolkit lane. cuTile-capable archives do not redistribute NVIDIA's `tileiras` tool; install it separately by following [cuTile setup](/developer/moe-backends/).
 
-The same compatibility lanes are used by the [Docker images](/mistral.rs/guides/deploy/docker/) and CUDA Python wheels. See [Python getting started](/mistral.rs/guides/python/getting-started/#installing) for wheel install commands.
+The same compatibility lanes are used by the [Docker images](/guides/deploy/docker/) and CUDA Python wheels. See [Python getting started](/guides/python/getting-started/#installing) for wheel install commands.
 
 ## Feature availability by architecture
 
@@ -77,4 +77,4 @@ The same compatibility lanes are used by the [Docker images](/mistral.rs/guides/
 | FP8 matmul | compute capability 8.9+ |
 | cuTile acceleration | Ampere/Ada (8.x) and Blackwell+ (10.x/12.x) with CUDA >= 13.2; Hopper (9.0) with CUDA >= 13.3 |
 
-See [cargo features](/mistral.rs/reference/cargo-features/) for the feature flags and [cuTile setup](/mistral.rs/developer/moe-backends/) for installation.
+See [cargo features](/reference/cargo-features/) for the feature flags and [cuTile setup](/developer/moe-backends/) for installation.

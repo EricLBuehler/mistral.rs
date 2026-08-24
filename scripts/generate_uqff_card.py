@@ -29,7 +29,7 @@ base_model_relation: quantized
 output += f"# `{model_id}`, UQFF quantization\n\n"
 
 output += """
-Run with [mistral.rs](https://github.com/EricLBuehler/mistral.rs). Documentation: [UQFF docs](https://ericlbuehler.github.io/mistral.rs/guides/quantization/uqff/).
+Run with [mistral.rs](https://github.com/EricLBuehler/mistral.rs). Documentation: [UQFF docs](https://docs.mistralrs.dev/guides/quantization/uqff/).
 
 1) **Flexible** 🌀: Multiple quantization formats in *one* file format with *one* framework to run them all.
 2) **Versioned**: Embedded semantic-version metadata lets mistral.rs detect incompatible artifacts before loading.

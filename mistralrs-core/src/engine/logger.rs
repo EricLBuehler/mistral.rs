@@ -1,8 +1,9 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::mpsc::{self, RecvTimeoutError, Sender};
 use std::sync::{Arc, Mutex};
-use std::thread;
+use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
 use tracing::info;
@@ -17,10 +18,20 @@ pub struct IntervalLogger {
     enable_logging: Arc<AtomicBool>,
     prefix_cache_stats: Arc<Mutex<PrefixCacheStats>>,
     tokens_processed: Arc<AtomicUsize>,
+    prefill_tokens_processed: Arc<AtomicUsize>,
+    decode_tokens_processed: Arc<AtomicUsize>,
     num_running: Arc<AtomicUsize>,
     num_waiting: Arc<AtomicUsize>,
+    sequence_capacity: Arc<AtomicUsize>,
     encoder_cache_hits: Option<Arc<AtomicUsize>>,
     encoder_cache_misses: Option<Arc<AtomicUsize>>,
+    spec_drafts: Arc<AtomicUsize>,
+    spec_draft_tokens: Arc<AtomicUsize>,
+    spec_accepted_tokens: Arc<AtomicUsize>,
+    shutdown_tx: Sender<()>,
+    worker: Option<JoinHandle<()>>,
+    #[cfg(test)]
+    worker_exited: Arc<AtomicBool>,
 }
 
 impl IntervalLogger {
@@ -31,25 +42,52 @@ impl IntervalLogger {
     ) -> Self {
         let prefix_cache_stats = Arc::new(Mutex::new(PrefixCacheStats::default()));
         let tokens_processed = Arc::new(AtomicUsize::new(0));
+        let prefill_tokens_processed = Arc::new(AtomicUsize::new(0));
+        let decode_tokens_processed = Arc::new(AtomicUsize::new(0));
         let enable_logging = Arc::new(AtomicBool::new(false));
         let num_running = Arc::new(AtomicUsize::new(0));
         let num_waiting = Arc::new(AtomicUsize::new(0));
+        let sequence_capacity = Arc::new(AtomicUsize::new(0));
+        let spec_drafts = Arc::new(AtomicUsize::new(0));
+        let spec_draft_tokens = Arc::new(AtomicUsize::new(0));
+        let spec_accepted_tokens = Arc::new(AtomicUsize::new(0));
 
         let t_prefix_cache_stats = prefix_cache_stats.clone();
         let t_tokens_processed = tokens_processed.clone();
+        let t_prefill_tokens_processed = prefill_tokens_processed.clone();
+        let t_decode_tokens_processed = decode_tokens_processed.clone();
         let t_enable_logging = enable_logging.clone();
         let t_num_running = num_running.clone();
         let t_num_waiting = num_waiting.clone();
+        let t_sequence_capacity = sequence_capacity.clone();
+        let t_spec_drafts = spec_drafts.clone();
+        let t_spec_draft_tokens = spec_draft_tokens.clone();
+        let t_spec_accepted_tokens = spec_accepted_tokens.clone();
         let (encoder_cache_hits, encoder_cache_misses) = match encoder_cache_counters {
             Some((h, m)) => (Some(h), Some(m)),
             None => (None, None),
         };
         let t_enc_hits = encoder_cache_hits.clone();
         let t_enc_misses = encoder_cache_misses.clone();
-        thread::spawn(move || {
+        #[cfg(test)]
+        let worker_exited = Arc::new(AtomicBool::new(false));
+        #[cfg(test)]
+        let t_worker_exited = worker_exited.clone();
+        let (shutdown_tx, shutdown_rx) = mpsc::channel();
+        let worker = thread::spawn(move || {
             // Start the actual logging
             loop {
-                thread::sleep(interval);
+                match shutdown_rx.recv_timeout(interval) {
+                    Err(RecvTimeoutError::Timeout) => {}
+                    Ok(()) | Err(RecvTimeoutError::Disconnected) => break,
+                }
+                let num_running = t_num_running.load(Ordering::Relaxed);
+                let num_waiting = t_num_waiting.load(Ordering::Relaxed);
+                metrics::gauge!("mistralrs_sequences_running").set(num_running as f64);
+                metrics::gauge!("mistralrs_sequences_waiting").set(num_waiting as f64);
+                metrics::gauge!("mistralrs_sequences_capacity")
+                    .set(t_sequence_capacity.load(Ordering::Relaxed) as f64);
+
                 if !t_enable_logging.load(Ordering::Relaxed) {
                     continue;
                 }
@@ -65,8 +103,11 @@ impl IntervalLogger {
                         .absolute(misses.load(Ordering::Relaxed) as u64);
                 }
                 let tokens_processed = t_tokens_processed.swap(0, Ordering::Relaxed);
-                let num_running = t_num_running.load(Ordering::Relaxed);
-                let num_waiting = t_num_waiting.load(Ordering::Relaxed);
+                let prefill_tokens_processed = t_prefill_tokens_processed.swap(0, Ordering::Relaxed);
+                let decode_tokens_processed = t_decode_tokens_processed.swap(0, Ordering::Relaxed);
+                let spec_drafts = t_spec_drafts.swap(0, Ordering::Relaxed);
+                let spec_draft_tokens = t_spec_draft_tokens.swap(0, Ordering::Relaxed);
+                let spec_accepted_tokens = t_spec_accepted_tokens.swap(0, Ordering::Relaxed);
 
                 if total_new_seqs != 0 && tokens_processed != 0 {
                     let enc_cache_info =
@@ -85,28 +126,51 @@ impl IntervalLogger {
                         } else {
                             String::new()
                         };
+                    let spec_info = if spec_draft_tokens > 0 {
+                        // vLLM-style rates: accept rate over proposed draft tokens,
+                        // mean acceptance length includes the bonus token.
+                        let accept_rate =
+                            100. * spec_accepted_tokens as f64 / spec_draft_tokens as f64;
+                        let mean_len = 1. + spec_accepted_tokens as f64 / spec_drafts.max(1) as f64;
+                        format!(", MTP accept {accept_rate:.1}% (len {mean_len:.2})")
+                    } else {
+                        String::new()
+                    };
 
                     // Throughput = tokens processed during this interval / interval duration.
-                    // Combines both prefill and decode tokens. The counter is atomically
-                    // swapped to 0 each interval, so the metric reflects only the current
-                    // window and is not cumulative.
+                    // The counter is atomically swapped to 0 each interval, so the metric
+                    // reflects only the current window and is not cumulative.
                     info!(
-                        "Throughput (T/s) {:.2}, Prefix cache hitrate {:.2}%{enc_cache_info}, {num_running} running, {num_waiting} waiting",
+                        "Throughput (T/s) {:.2} (prefill {:.2}, decode {:.2}), Prefix cache hitrate {:.2}%{enc_cache_info}{spec_info}, {num_running} running, {num_waiting} waiting",
                         tokens_processed as f64 / interval.as_secs_f64(),
+                        prefill_tokens_processed as f64 / interval.as_secs_f64(),
+                        decode_tokens_processed as f64 / interval.as_secs_f64(),
                         100. * prefix_cache_hits as f64 / total_new_seqs as f64,
                     );
                 }
             }
+            #[cfg(test)]
+            t_worker_exited.store(true, Ordering::Release);
         });
 
         Self {
             prefix_cache_stats,
             tokens_processed,
+            prefill_tokens_processed,
+            decode_tokens_processed,
             enable_logging,
             num_running,
             num_waiting,
+            sequence_capacity,
             encoder_cache_hits,
             encoder_cache_misses,
+            spec_drafts,
+            spec_draft_tokens,
+            spec_accepted_tokens,
+            shutdown_tx,
+            worker: Some(worker),
+            #[cfg(test)]
+            worker_exited,
         }
     }
 
@@ -118,6 +182,8 @@ impl IntervalLogger {
     pub fn reset(&self) {
         *self.prefix_cache_stats.lock().unwrap() = PrefixCacheStats::default();
         self.tokens_processed.store(0, Ordering::Relaxed);
+        self.prefill_tokens_processed.store(0, Ordering::Relaxed);
+        self.decode_tokens_processed.store(0, Ordering::Relaxed);
         self.num_running.store(0, Ordering::Relaxed);
         self.num_waiting.store(0, Ordering::Relaxed);
         if let Some(ref hits) = self.encoder_cache_hits {
@@ -126,12 +192,67 @@ impl IntervalLogger {
         if let Some(ref misses) = self.encoder_cache_misses {
             misses.store(0, Ordering::Relaxed);
         }
+        self.spec_drafts.store(0, Ordering::Relaxed);
+        self.spec_draft_tokens.store(0, Ordering::Relaxed);
+        self.spec_accepted_tokens.store(0, Ordering::Relaxed);
     }
 
-    pub fn add_tokens_processed(&self, num_tokens: usize) {
+    /// Count prompt (prefill) tokens through the pipeline. Also advances the
+    /// combined `mistralrs_tokens_processed_total` counter, which always equals
+    /// prefill plus decode tokens.
+    pub fn add_prefill_tokens_processed(&self, num_tokens: usize) {
         self.tokens_processed
             .fetch_add(num_tokens, Ordering::Relaxed);
+        self.prefill_tokens_processed
+            .fetch_add(num_tokens, Ordering::Relaxed);
         metrics::counter!("mistralrs_tokens_processed_total").increment(num_tokens as u64);
+        metrics::counter!("mistralrs_prefill_tokens_processed_total")
+            .increment(num_tokens as u64);
+    }
+
+    /// Count generated (decode) tokens through the pipeline. With speculative
+    /// decoding only verified tokens are counted. Also advances the combined
+    /// `mistralrs_tokens_processed_total` counter.
+    pub fn add_decode_tokens_processed(&self, num_tokens: usize) {
+        self.tokens_processed
+            .fetch_add(num_tokens, Ordering::Relaxed);
+        self.decode_tokens_processed
+            .fetch_add(num_tokens, Ordering::Relaxed);
+        metrics::counter!("mistralrs_tokens_processed_total").increment(num_tokens as u64);
+        metrics::counter!("mistralrs_decode_tokens_processed_total")
+            .increment(num_tokens as u64);
+    }
+
+    /// Record one speculative verification batch (across all its sequences).
+    pub fn add_speculative_stats(
+        &self,
+        num_drafts: usize,
+        num_draft_tokens: usize,
+        num_accepted_tokens: usize,
+        accepted_per_pos: &[usize],
+    ) {
+        if num_drafts == 0 {
+            return;
+        }
+        self.spec_drafts.fetch_add(num_drafts, Ordering::Relaxed);
+        self.spec_draft_tokens
+            .fetch_add(num_draft_tokens, Ordering::Relaxed);
+        self.spec_accepted_tokens
+            .fetch_add(num_accepted_tokens, Ordering::Relaxed);
+        metrics::counter!("mistralrs_speculative_drafts_total").increment(num_drafts as u64);
+        metrics::counter!("mistralrs_speculative_draft_tokens_proposed_total")
+            .increment(num_draft_tokens as u64);
+        metrics::counter!("mistralrs_speculative_draft_tokens_accepted_total")
+            .increment(num_accepted_tokens as u64);
+        for (position, count) in accepted_per_pos.iter().enumerate() {
+            if *count > 0 {
+                metrics::counter!(
+                    "mistralrs_speculative_draft_tokens_accepted_per_pos_total",
+                    "position" => position.to_string()
+                )
+                .increment(*count as u64);
+            }
+        }
     }
 
     pub fn add_new_sequence(&self) {
@@ -154,6 +275,11 @@ impl IntervalLogger {
         metrics::gauge!("mistralrs_sequences_waiting").set(waiting as f64);
     }
 
+    pub fn set_sequence_capacity(&self, capacity: usize) {
+        self.sequence_capacity.store(capacity, Ordering::Relaxed);
+        metrics::gauge!("mistralrs_sequences_capacity").set(capacity as f64);
+    }
+
     /// Return cumulative prefix cache (hits, total_sequences).
     pub fn prefix_cache_stats(&self) -> (usize, usize) {
         let stats = self.prefix_cache_stats.lock().unwrap();
@@ -166,5 +292,44 @@ impl IntervalLogger {
             (Some(h), Some(m)) => Some((h.load(Ordering::Relaxed), m.load(Ordering::Relaxed))),
             _ => None,
         }
+    }
+}
+
+impl Drop for IntervalLogger {
+    fn drop(&mut self) {
+        let _ = self.shutdown_tx.send(());
+        if let Some(worker) = self.worker.take() {
+            let _ = worker.join();
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const INACTIVE_LOGGER_INTERVAL: Duration = Duration::from_secs(3600);
+    const TEST_SEQUENCE_CAPACITY: usize = 16;
+
+    #[test]
+    fn sequence_capacity_is_retained_for_recurring_publication() {
+        let logger = IntervalLogger::new(INACTIVE_LOGGER_INTERVAL, None);
+
+        logger.set_sequence_capacity(TEST_SEQUENCE_CAPACITY);
+
+        assert_eq!(
+            logger.sequence_capacity.load(Ordering::Relaxed),
+            TEST_SEQUENCE_CAPACITY
+        );
+    }
+
+    #[test]
+    fn drop_wakes_and_joins_worker() {
+        let logger = IntervalLogger::new(INACTIVE_LOGGER_INTERVAL, None);
+        let worker_exited = logger.worker_exited.clone();
+
+        drop(logger);
+
+        assert!(worker_exited.load(Ordering::Acquire));
     }
 }

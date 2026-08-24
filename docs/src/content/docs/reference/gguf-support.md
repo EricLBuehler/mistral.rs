@@ -4,7 +4,7 @@ description: Model families, multimodal projectors, and storage formats supporte
 ---
 
 This page is the compatibility reference for GGUF models. For commands and workflows, see
-[Run GGUF models](/mistral.rs/guides/models/run-gguf/).
+[Run GGUF models](/guides/models/run-gguf/).
 
 ## Text model families
 
@@ -71,7 +71,7 @@ files when the repository and GGUF metadata identify them unambiguously. The dir
 | Qwen3.5 and Qwen3.6 multimodal MoE | `qwen35moe` |
 
 Input modalities depend on the model. A listed family does not imply that every checkpoint accepts
-image, audio, and video. Use the model card and [multimodal input guide](/mistral.rs/guides/models/multimodal-input/)
+image, audio, and video. Use the model card and [multimodal input guide](/guides/models/multimodal-input/)
 for its supported request types.
 
 Multimodal Qwen3.5 and Qwen3.6 accept image and video input, but not audio. Gemma 4 accepts

@@ -37,7 +37,7 @@ res = runner.send_chat_completion_request(
 print(res.choices[0].message.content)
 ```
 
-`arch` is optional; it is detected from the model config. [Full example](/mistral.rs/examples/python/plain/).
+`arch` is optional; it is detected from the model config. [Full example](/examples/python/plain/).
 
 </TabItem>
 <TabItem label="Rust">
@@ -57,7 +57,7 @@ async fn main() -> Result<()> {
 }
 ```
 
-[Full example](/mistral.rs/examples/rust/getting-started/text-generation/).
+[Full example](/examples/rust/getting-started/text-generation/).
 
 </TabItem>
 </Tabs>
@@ -66,12 +66,12 @@ async fn main() -> Result<()> {
 
 Use `--quant <level>` to request a quantization level. Numeric levels (`2`, `3`, `4`, `5`, `6`, `8`)
 can be used with standard and GGUF model sources. Standard model repositories also accept
-[ISQ (in-situ quantization)](/mistral.rs/reference/quantization-types/) names such as `q4k` and
+[ISQ (in-situ quantization)](/reference/quantization-types/) names such as `q4k` and
 `afq8`; GGUF repositories accept supported Q/K artifact names such as `q4k`. See
-[GGUF compatibility](/mistral.rs/reference/gguf-support/) for the available storage formats. For a
+[GGUF compatibility](/reference/gguf-support/) for the available storage formats. For a
 GGUF repository, `--quant` selects a matching file already present in the repository. Other Hugging
 Face repositories load a matching prebuilt
-[UQFF (Universal Quantized File Format)](/mistral.rs/reference/uqff-format/) from
+[UQFF (Universal Quantized File Format)](/reference/uqff-format/) from
 `mistralrs-community/<model-name>-UQFF` when available and otherwise apply ISQ.
 
 ```bash
@@ -86,7 +86,7 @@ For standard model repositories, `--quant auto` probes your hardware (the same a
 supported bit width or artifact name for a GGUF repository. `--quant` conflicts with the explicit knobs `--isq`
 and `--from-uqff`; use those when you want to force ISQ or a specific UQFF file. Choosing a level
 and the full set of quantization options are covered in the
-[quantization guide](/mistral.rs/guides/quantization/quantize-a-model/).
+[quantization guide](/guides/quantization/quantize-a-model/).
 
 ## Local model directories
 
@@ -119,18 +119,18 @@ metadata when present, and discovers external configuration and projector files 
 identifies them unambiguously. Use `--tok-model-id` and `--mmproj` to override those selections. The
 same model flags work with `run`, `serve`, and `bench`.
 
-See [Run GGUF models](/mistral.rs/guides/models/run-gguf/) for exact Hub files, automatic
+See [Run GGUF models](/guides/models/run-gguf/) for exact Hub files, automatic
 quantization selection, multimodal input, LoRA, ISQ, offline loading, and Python and Rust examples.
-The [GGUF support reference](/mistral.rs/reference/gguf-support/) lists compatible architectures,
+The [GGUF support reference](/reference/gguf-support/) lists compatible architectures,
 quantization formats, and feature combinations.
 
 ## Forcing an architecture
 
-Auto-detection covers normal checkpoints. For text models with a non-standard config, `--arch` (Python: `arch=Architecture...`) forces the loader; the accepted names are the lowercase forms in the [supported models reference](/mistral.rs/reference/supported-models/). Multimodal, speech, embedding, and diffusion architectures are always auto-detected on the CLI.
+Auto-detection covers normal checkpoints. For text models with a non-standard config, `--arch` (Python: `arch=Architecture...`) forces the loader; the accepted names are the lowercase forms in the [supported models reference](/reference/supported-models/). Multimodal, speech, embedding, and diffusion architectures are always auto-detected on the CLI.
 
 ## Chat template overrides
 
-Some repos ship a missing or broken chat template. Pass `-c/--chat-template <file>` (a `.json` or `.jinja` file) or `--jinja-explicit <file>` to override it; bundled fixes live in the repo's `chat_templates/` directory. See [chat templates](/mistral.rs/guides/customize/chat-templates/) for symptoms and how to write your own.
+Some repos ship a missing or broken chat template. Pass `-c/--chat-template <file>` (a `.json` or `.jinja` file) or `--jinja-explicit <file>` to override it; bundled fixes live in the repo's `chat_templates/` directory. See [chat templates](/guides/customize/chat-templates/) for symptoms and how to write your own.
 
 ## Running offline
 
@@ -150,8 +150,8 @@ Pre-download with `huggingface-cli download <repo>` or by running mistral.rs onc
 For a local multimodal GGUF whose supporting assets are not stored beside it, cache those assets or
 point `--tok-model-id` at a local asset directory before running offline. Related variables
 (`HF_HOME`, `HF_TOKEN`, ...) are in the
-[environment variables reference](/mistral.rs/reference/environment-variables/).
+[environment variables reference](/reference/environment-variables/).
 
 ## Model-specific behavior
 
-Most models need nothing beyond `-m`. The exceptions (thinking tags, MoE (Mixture of Experts) quantization, template fixes, MatFormer slices) are collected in [model family notes](/mistral.rs/guides/models/model-family-notes/).
+Most models need nothing beyond `-m`. The exceptions (thinking tags, MoE (Mixture of Experts) quantization, template fixes, MatFormer slices) are collected in [model family notes](/guides/models/model-family-notes/).

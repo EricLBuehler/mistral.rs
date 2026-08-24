@@ -3,11 +3,12 @@
 using namespace metal;
 
 // Activation types matching Rust GluActivationType enum
-// Silu = 0, Gelu = 1, Relu = 2, GeluErf = 3
+// Silu = 0, Gelu = 1, Relu = 2, GeluErf = 3, Sigmoid = 4
 constant int GLU_SILU = 0;
 constant int GLU_GELU = 1;
 constant int GLU_RELU = 2;
 constant int GLU_GELU_ERF = 3;
+constant int GLU_SIGMOID = 4;
 
 // SiLU activation: x * sigmoid(x) = x / (1 + exp(-x))
 inline float glu_silu(float x) { return x / (1.0f + exp(-x)); }
@@ -65,6 +66,8 @@ inline float apply_activation(float x, int activation) {
     return glu_relu(x);
   case GLU_GELU_ERF:
     return glu_gelu_erf(x);
+  case GLU_SIGMOID:
+    return 1.0 / (1.0 + exp(-x));
   default:
     return x;
   }

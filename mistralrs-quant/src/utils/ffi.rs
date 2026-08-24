@@ -270,12 +270,15 @@ extern "C" {
     );
 
     // Fused GLU kernel: output = activation(a) * b
-    // activation: 0=SiLU, 1=GELU, 2=ReLU
+    // Activation values match GluActivationType.
     pub fn fused_glu_f16(
         a: *const c_void,
         b: *const c_void,
         output: *mut c_void,
-        N: u32,
+        rows: u32,
+        cols: u32,
+        a_row_stride: u32,
+        b_row_stride: u32,
         activation: i32,
         stream: CUstream,
     );
@@ -283,7 +286,10 @@ extern "C" {
         a: *const c_void,
         b: *const c_void,
         output: *mut c_void,
-        N: u32,
+        rows: u32,
+        cols: u32,
+        a_row_stride: u32,
+        b_row_stride: u32,
         activation: i32,
         stream: CUstream,
     );
@@ -291,7 +297,10 @@ extern "C" {
         a: *const c_void,
         b: *const c_void,
         output: *mut c_void,
-        N: u32,
+        rows: u32,
+        cols: u32,
+        a_row_stride: u32,
+        b_row_stride: u32,
         activation: i32,
         stream: CUstream,
     );

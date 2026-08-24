@@ -3,7 +3,7 @@ title: Stream tokens from Python
 description: Async iteration, FastAPI integration, and mid-stream error handling for Python streaming responses.
 ---
 
-This guide covers consuming a streaming response from async code, from web frameworks, and handling failures mid-stream. The basics (setting `stream=True` to get a synchronous iterator of chunks) are in [getting started](/mistral.rs/guides/python/getting-started/#streaming-tokens).
+This guide covers consuming a streaming response from async code, from web frameworks, and handling failures mid-stream. The basics (setting `stream=True` to get a synchronous iterator of chunks) are in [getting started](/guides/python/getting-started/#streaming-tokens).
 
 ## Async streaming
 
@@ -72,7 +72,7 @@ async def stream(prompt: str):
     return StreamingResponse(iter(), media_type="text/plain")
 ```
 
-For production, run mistralrs as an HTTP server and call it with the OpenAI Python client rather than loading the model in the web app process. The HTTP server's streaming is more robust under load; see the [OpenAI-compatible API guide](/mistral.rs/guides/serve/openai-compatible-apis/).
+For production, run mistralrs as an HTTP server and call it with the OpenAI Python client rather than loading the model in the web app process. The HTTP server's streaming is more robust under load; see the [OpenAI-compatible API guide](/guides/serve/openai-compatible-apis/).
 
 ## Catching errors during streaming
 
@@ -92,4 +92,4 @@ except ValueError as e:
 
 The iterator ends after the chunk whose choices all carry a `finish_reason`.
 
-When server-side tools run during generation (web search, code execution, shell, MCP tools), the chunk iterator skips the engine's tool-progress events transparently; you only receive content chunks. To observe tool progress, use the [agentic runtime](/mistral.rs/guides/agents/agentic-runtime/) event stream instead.
+When server-side tools run during generation (web search, code execution, shell, MCP tools), the chunk iterator skips the engine's tool-progress events transparently; you only receive content chunks. To observe tool progress, use the [agentic runtime](/guides/agents/agentic-runtime/) event stream instead.

@@ -15,7 +15,7 @@ Installer-managed binaries are exposed at `~/.local/bin/mistralrs`, backed by `~
 
 ### Build fails with `flash-attn` feature enabled
 
-Flash attention requires compute capability 8.0+ (see [hardware support](/mistral.rs/reference/hardware-support/)). On older GPUs, drop `flash-attn` and rebuild:
+Flash attention requires compute capability 8.0+ (see [hardware support](/reference/hardware-support/)). On older GPUs, drop `flash-attn` and rebuild:
 
 - `cuda nccl cudnn` on Linux with NCCL installed.
 - `cuda cudnn` otherwise.
@@ -32,7 +32,7 @@ Accept the license on the model's Hugging Face page, then save a token with `mis
 
 ### `Out of memory` on load
 
-Add `--quant 4`. If still too large, try `--quant 2` or split across GPUs with `-n "0:N1;1:N2;..."`. See [quantize a model](/mistral.rs/guides/quantization/quantize-a-model/).
+Add `--quant 4`. If still too large, try `--quant 2` or split across GPUs with `-n "0:N1;1:N2;..."`. See [quantize a model](/guides/quantization/quantize-a-model/).
 
 ## Runtime
 
@@ -40,13 +40,13 @@ Add `--quant 4`. If still too large, try `--quant 2` or split across GPUs with `
 
 Verify accelerator features are compiled in with `mistralrs doctor`. If `cuda` is missing, the binary was built without GPU support.
 
-For CUDA decode throughput, also check whether [paged attention](/mistral.rs/guides/perf/paged-attention/) is active. FlashInfer (a CUDA attention backend) paged decode and CUDA graphs are enabled by default for compatible CUDA paged decode paths.
+For CUDA decode throughput, also check whether [paged attention](/guides/perf/paged-attention/) is active. FlashInfer (a CUDA attention backend) paged decode and CUDA graphs are enabled by default for compatible CUDA paged decode paths.
 
 ### CUDA graphs do not appear to help
 
 CUDA graphs apply to supported single-token decode steps only. They do not speed up prompt prefill. The first time a graph shape is seen, mistral.rs pays warmup and capture overhead; steady-state decode is the part that can improve.
 
-If graph capture or replay fails, mistral.rs logs a warning and disables CUDA graphs for that loaded pipeline. Set `MISTRALRS_CUDA_GRAPHS=0` to compare with the normal CUDA path. See [CUDA graphs](/mistral.rs/guides/perf/paged-attention/#cuda-graphs).
+If graph capture or replay fails, mistral.rs logs a warning and disables CUDA graphs for that loaded pipeline. Set `MISTRALRS_CUDA_GRAPHS=0` to compare with the normal CUDA path. See [CUDA graphs](/guides/perf/paged-attention/#cuda-graphs).
 
 ### Response cut off
 
@@ -77,13 +77,13 @@ The UI is on by default. Check that `--no-ui` was not passed at startup, and tha
 
 ### Sessions disappear between requests
 
-The session expired (30-minute idle TTL) or was evicted (128-session cap, LRU). Long-lived sessions need explicit export/import via `/v1/sessions/{id}`. See [persist sessions](/mistral.rs/guides/agents/persist-sessions/).
+The session expired (30-minute idle TTL) or was evicted (128-session cap, LRU). Long-lived sessions need explicit export/import via `/v1/sessions/{id}`. See [persist sessions](/guides/agents/persist-sessions/).
 
 ## Python SDK
 
 ### `from mistralrs import Runner` fails with `ImportError`
 
-The wrong wheel was installed. `pip install mistralrs` gives the CPU (Linux/Windows) or Metal (macOS) wheel; for NVIDIA, install a CUDA wheel from the release with `--find-links` and the `+cudaNNN.smNN` matching your driver and GPU. See [Python SDK getting started](/mistral.rs/guides/python/getting-started/#installing).
+The wrong wheel was installed. `pip install mistralrs` gives the CPU (Linux/Windows) or Metal (macOS) wheel; for NVIDIA, install a CUDA wheel from the release with `--find-links` and the `+cudaNNN.smNN` matching your driver and GPU. See [Python SDK getting started](/guides/python/getting-started/#installing).
 
 ## Rust SDK
 

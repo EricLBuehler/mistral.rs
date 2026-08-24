@@ -22,7 +22,9 @@ use crate::{
     },
     layers::{self, GemmaRmsNorm, Qwen3VLRotaryEmbedding, Sdpa},
     moe::{MoEExperts, MoEExpertsConfig},
-    paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttention},
+    paged_attention::{
+        load_fp8_attention_scales, AttentionImplementation, ModelConfigMetadata, PagedAttention,
+    },
     pipeline::{
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
         EitherCache, IsqModel, KvCache, ModelForwardContext, NormalLoadingMetadata,
@@ -89,7 +91,7 @@ impl FullAttention {
         layer_idx: usize,
         loading_isq: bool,
         rotary_emb: Arc<Qwen3VLRotaryEmbedding>,
-        paged_attn: Option<PagedAttention>,
+        use_paged_attention: bool,
         comm: &Arc<mistralrs_quant::Comm>,
     ) -> Result<Self> {
         let vb_sa = mapper.set_device(layer_idx, vb.pp("self_attn"), loading_isq);
@@ -135,6 +137,16 @@ impl FullAttention {
         )?;
 
         let vb_sa_norms = mapper.set_device(layer_idx, vb.pp("self_attn"), false);
+        let paged_attn = if use_paged_attention {
+            Some(PagedAttention::new_with_fp8_attention_scales(
+                cfg.head_dim,
+                vb_sa_norms.device(),
+                None,
+                load_fp8_attention_scales(&vb_sa_norms)?,
+            )?)
+        } else {
+            None
+        };
         let q_norm = GemmaRmsNorm::new(head_dim, cfg.rms_norm_eps, vb_sa_norms.pp("q_norm"))?;
         let k_norm = GemmaRmsNorm::new(head_dim, cfg.rms_norm_eps, vb_sa_norms.pp("k_norm"))?;
 
@@ -573,12 +585,6 @@ impl Qwen3_5MoeTextModel {
                         .get(&device.location())
                         .expect("No RoPE for device location!")
                         .clone();
-                    let paged_attn = match &attention_mechanism {
-                        AttentionImplementation::Eager => None,
-                        AttentionImplementation::PagedAttention => {
-                            Some(PagedAttention::new(cfg.head_dim, device, None)?)
-                        }
-                    };
                     LayerImpl::FullAttention(FullAttention::load(
                         vb_l.pp(layer_idx),
                         cfg,
@@ -586,7 +592,7 @@ impl Qwen3_5MoeTextModel {
                         layer_idx,
                         normal_loading_metadata.loading_isq,
                         rotary_emb,
-                        paged_attn,
+                        matches!(attention_mechanism, AttentionImplementation::PagedAttention),
                         &comm,
                     )?)
                 }
@@ -670,12 +676,12 @@ impl Qwen3_5MoeTextModel {
             recurrent: RecurrentLayerConfig {
                 conv_dim: cfg.linear_conv_dim(),
                 conv_width: cfg.linear_conv_kernel_dim,
-                state_dims: vec![
-                    cfg.linear_num_value_heads,
-                    cfg.linear_key_head_dim,
-                    cfg.linear_value_head_dim,
-                ],
-                recurrent_dtype: Some(DType::F32),
+                state: crate::kv_cache::RecurrentStateSpec::Gdn {
+                    heads: cfg.linear_num_value_heads,
+                    key_dim: cfg.linear_key_head_dim,
+                    value_dim: cfg.linear_value_head_dim,
+                },
+                recurrent_dtype: Some(cfg.mamba_ssm_dtype.dtype()),
             },
         };
         let layer_devices = (0..hybrid_cache_config.layer_types.len())
@@ -820,12 +826,15 @@ impl Qwen3_5MoeTextModel {
                         ))
                     })?;
                     if let Some(HybridLayerCache::Recurrent(pool)) = hybrid_cache.get_mut(i) {
-                        let conv_state = pool.gather_conv_state(&indices)?;
-                        let recurrent_state = pool.gather_recurrent_state(&indices)?;
-
-                        let mut gdn_cache = GdnLayerCache {
-                            conv_state,
-                            recurrent_state,
+                        // Packed prefill slices the gathered rows per logical sequence
+                        let mut gdn_cache = if packed_query_lens.is_some() {
+                            GdnLayerCache::gathered(
+                                pool.gather_conv_state(&indices)?,
+                                pool.gather_recurrent_state(&indices)?,
+                                pool.state_layout(),
+                            )
+                        } else {
+                            GdnLayerCache::checkout(pool, &indices)?
                         };
 
                         xs = layer.forward_linear(
@@ -835,15 +844,10 @@ impl Qwen3_5MoeTextModel {
                             packed_query_lens.as_deref(),
                         )?;
 
-                        pool.scatter_conv_state_with_host_indices(
+                        gdn_cache.commit(
+                            pool,
                             &indices,
                             recurrent_metadata.state_indices_host(),
-                            &gdn_cache.conv_state,
-                        )?;
-                        pool.scatter_recurrent_state_with_host_indices(
-                            &indices,
-                            recurrent_metadata.state_indices_host(),
-                            &gdn_cache.recurrent_state,
                         )?;
                     } else {
                         candle_core::bail!(

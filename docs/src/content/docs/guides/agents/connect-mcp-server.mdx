@@ -7,7 +7,7 @@ import { Tabs, TabItem } from '@astrojs/starlight/components';
 
 mistral.rs can act as a Model Context Protocol (MCP) client, connecting to one or more MCP servers at startup and merging their tools into the model's available set.
 
-MCP tools automatically use [strict tool calling](/mistral.rs/guides/agents/tool-calling-basics/#strict-tool-calling) when the MCP server provides an input schema.
+MCP tools automatically use [strict tool calling](/guides/agents/tool-calling-basics/#strict-tool-calling) when the MCP server provides an input schema.
 
 The same connect task is available on the CLI/server (via a config file), the Python SDK, and the Rust SDK.
 
@@ -40,7 +40,7 @@ Minimal `mcp.json`:
 }
 ```
 
-Full schema: [MCP config schema reference](/mistral.rs/reference/mcp-config-schema/).
+Full schema: [MCP config schema reference](/reference/mcp-config-schema/).
 
 </TabItem>
 <TabItem label="Python">
@@ -69,7 +69,7 @@ runner = mistralrs.Runner(
 )
 ```
 
-[Full example](/mistral.rs/examples/python/mcp-client/)
+[Full example](/examples/python/mcp-client/)
 
 </TabItem>
 <TabItem label="Rust">
@@ -101,7 +101,7 @@ let model = ModelBuilder::new("Qwen/Qwen3-4B")
     .await?;
 ```
 
-[Full example](/mistral.rs/examples/rust/advanced/mcp-client/)
+[Full example](/examples/rust/advanced/mcp-client/)
 
 </TabItem>
 </Tabs>
@@ -168,6 +168,6 @@ Failure handling:
 
 ## Observability
 
-MCP tool calls appear in `agentic_tool_calls` records and `agentic_tool_call_progress` streaming events with the prefixed name. They share the [tool-round cap](/mistral.rs/guides/agents/tool-calling-basics/#configuring-the-tool-loop).
+MCP tool calls appear in `agentic_tool_calls` records and `agentic_tool_call_progress` streaming events with the prefixed name. They share the [tool-round cap](/guides/agents/tool-calling-basics/#configuring-the-tool-loop).
 
-Full examples: [Python MCP client](/mistral.rs/examples/python/mcp-client/), [Rust MCP client](/mistral.rs/examples/rust/advanced/mcp-client/), [HTTP chat with MCP tools](/mistral.rs/examples/server/mcp-chat/).
+Full examples: [Python MCP client](/examples/python/mcp-client/), [Rust MCP client](/examples/rust/advanced/mcp-client/), [HTTP chat with MCP tools](/examples/server/mcp-chat/).

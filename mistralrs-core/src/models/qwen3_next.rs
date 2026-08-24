@@ -14,7 +14,9 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use crate::gdn::{GatedDeltaNet, GdnConfig, GdnInputProjectionKind, GdnLayerCache, GdnVHeadLayout};
+use crate::gdn::{
+    GatedDeltaNet, GdnConfig, GdnInputProjectionKind, GdnLayerCache, GdnStateDType, GdnVHeadLayout,
+};
 use crate::{
     amoe::AnyMoeBaseModelMixin,
     attention::{AttentionMask, SdpaParams},
@@ -71,6 +73,8 @@ pub struct Config {
     pub linear_value_head_dim: usize,
     pub linear_num_key_heads: usize,
     pub linear_num_value_heads: usize,
+    #[serde(default)]
+    pub mamba_ssm_dtype: GdnStateDType,
     // MoE config
     #[serde(default = "default_decoder_sparse_step")]
     pub decoder_sparse_step: usize,
@@ -659,6 +663,8 @@ impl DecoderLayer {
                 let mut segment_cache = GdnLayerCache {
                     conv_state: cache.conv_state.narrow(0, segment.state_index, 1)?,
                     recurrent_state: cache.recurrent_state.narrow(0, segment.state_index, 1)?,
+                    state_layout: cache.state_layout,
+                    slots: None,
                 };
                 outputs.push(mistralrs_quant::with_lora_execution_row_range(
                     segment.token_range.clone(),
@@ -889,12 +895,12 @@ impl Model {
             recurrent: RecurrentLayerConfig {
                 conv_dim: cfg.linear_conv_dim(),
                 conv_width: cfg.linear_conv_kernel_dim,
-                state_dims: vec![
-                    cfg.linear_num_value_heads,
-                    cfg.linear_key_head_dim,
-                    cfg.linear_value_head_dim,
-                ],
-                recurrent_dtype: Some(DType::F32),
+                state: crate::kv_cache::RecurrentStateSpec::Gdn {
+                    heads: cfg.linear_num_value_heads,
+                    key_dim: cfg.linear_key_head_dim,
+                    value_dim: cfg.linear_value_head_dim,
+                },
+                recurrent_dtype: Some(cfg.mamba_ssm_dtype.dtype()),
             },
         };
         let layer_devices = (0..hybrid_cache_config.layer_types.len())
@@ -1058,12 +1064,15 @@ impl Model {
                         })?;
                     if let Some(HybridLayerCache::Recurrent(pool)) = hybrid_cache.get_mut(layer_idx)
                     {
-                        let conv_state = pool.gather_conv_state(&indices)?;
-                        let recurrent_state = pool.gather_recurrent_state(&indices)?;
-
-                        let mut gdn_cache = GdnLayerCache {
-                            conv_state,
-                            recurrent_state,
+                        // Packed prefill slices the gathered rows per logical sequence
+                        let mut gdn_cache = if packed_query_lens.is_some() {
+                            GdnLayerCache::gathered(
+                                pool.gather_conv_state(&indices)?,
+                                pool.gather_recurrent_state(&indices)?,
+                                pool.state_layout(),
+                            )
+                        } else {
+                            GdnLayerCache::checkout(pool, &indices)?
                         };
 
                         x = layer.forward_linear(
@@ -1073,15 +1082,10 @@ impl Model {
                             packed_query_lens.as_deref(),
                         )?;
 
-                        pool.scatter_conv_state_with_host_indices(
+                        gdn_cache.commit(
+                            pool,
                             &indices,
                             recurrent_metadata.state_indices_host(),
-                            &gdn_cache.conv_state,
-                        )?;
-                        pool.scatter_recurrent_state_with_host_indices(
-                            &indices,
-                            recurrent_metadata.state_indices_host(),
-                            &gdn_cache.recurrent_state,
                         )?;
                     } else {
                         candle_core::bail!(

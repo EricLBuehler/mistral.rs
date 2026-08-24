@@ -112,18 +112,17 @@ impl Qwen3_5MoeModel {
         ctx: &ModelForwardContext<'_>,
     ) -> Result<Tensor> {
         let seqlen_offsets = ctx.seqlen_offsets();
-        let mut attention_mask = CausalMasker.make_causal_mask(
-            input_ids,
-            &seqlen_offsets as &dyn PastKvLenCache,
-            self.text.dtype,
-            &CausalMaskConfig {
-                sliding_window: self.text.cfg.sliding_window,
-                ..Default::default()
-            },
-        )?;
-        let is_first_chunk = ctx.is_first_prompt_chunk();
-        attention_mask = if is_first_chunk {
-            attention_mask
+        // Later chunks and decode rows attend through the paged cache, so only the first chunk needs a mask
+        let attention_mask = if ctx.is_first_prompt_chunk() {
+            CausalMasker.make_causal_mask(
+                input_ids,
+                &seqlen_offsets as &dyn PastKvLenCache,
+                self.text.dtype,
+                &CausalMaskConfig {
+                    sliding_window: self.text.cfg.sliding_window,
+                    ..Default::default()
+                },
+            )?
         } else {
             AttentionMask::None
         };
@@ -584,22 +583,23 @@ impl MultimodalModel for Qwen3_5MoeModel {
     fn supports_cuda_decode_graphs_for_args(&self, model_specific_args: &dyn Any) -> bool {
         model_specific_args
             .downcast_ref::<Qwen3VLVisionSpecificArgs>()
-            .is_some_and(|args| {
-                args.rope_img_grid_thw.is_none() && args.rope_vid_grid_thw.is_none()
-            })
+            .is_some()
     }
     fn config(&self) -> &ModelConfigMetadata {
         &self.text.cfg
     }
     fn model_config(&self) -> Arc<dyn ModelConfigLike + Send + Sync> {
-        Arc::new(HybridPagedKvCacheConfig::new(
-            self.text.cfg.clone(),
-            self.text
-                .layer_types
-                .iter()
-                .map(|ty| matches!(ty, config::LayerType::FullAttention))
-                .collect(),
-        ))
+        Arc::new(
+            HybridPagedKvCacheConfig::new(
+                self.text.cfg.clone(),
+                self.text
+                    .layer_types
+                    .iter()
+                    .map(|ty| matches!(ty, config::LayerType::FullAttention))
+                    .collect(),
+            )
+            .with_uniform_prefix_prefill_attention_features(Default::default()),
+        )
     }
     fn default_model_specific_args(&self, input_ids: &Tensor) -> Box<dyn Any> {
         let (batch_size, seq_len) = input_ids.dims2().expect("input ids must be rank 2");

@@ -325,6 +325,10 @@ impl RmsNorm {
         self.eps
     }
 
+    pub fn forward_add_rms_norm(&self, x: &Tensor, residual: &Tensor) -> Result<(Tensor, Tensor)> {
+        rms_norm_forward_add(x, residual, &self.weight, self.eps)
+    }
+
     pub fn forward_residual(&self, x: &Tensor, residual: &Tensor) -> Result<Tensor> {
         rms_norm_forward_residual(x, residual, &self.weight, self.eps, None)
     }
@@ -372,6 +376,28 @@ impl RmsNorm {
             next_norm.eps,
         )
     }
+}
+
+fn rms_norm_forward_add(
+    x: &Tensor,
+    residual: &Tensor,
+    weight: &Tensor,
+    eps: f64,
+) -> Result<(Tensor, Tensor)> {
+    #[cfg(feature = "cuda")]
+    if x.device().is_cuda()
+        && residual.device().same_device(x.device())
+        && weight.device().same_device(x.device())
+        && x.dtype() == residual.dtype()
+        && x.dtype() == weight.dtype()
+        && matches!(x.dtype(), DType::BF16 | DType::F16 | DType::F32)
+    {
+        return crate::ops::cuda_add_rms_norm(x, residual, weight, eps as f32);
+    }
+
+    let sum = (x + residual)?;
+    let normed = candle_nn::ops::rms_norm(&sum.contiguous()?, weight, eps as f32)?;
+    Ok((sum, normed))
 }
 
 impl Module for RmsNorm {
@@ -504,6 +530,10 @@ impl GemmaRmsNorm {
 
     pub fn eps(&self) -> f64 {
         self.eps
+    }
+
+    pub fn forward_add_rms_norm(&self, x: &Tensor, residual: &Tensor) -> Result<(Tensor, Tensor)> {
+        rms_norm_forward_add(x, residual, &self.weight, self.eps)
     }
 
     pub fn forward_residual(&self, x: &Tensor, residual: &Tensor) -> Result<Tensor> {
@@ -1708,9 +1738,11 @@ impl Qwen3VLRotaryEmbedding {
         for (idx_tensor, dim_idx) in &self.interleave_indices {
             let freqs_dim = freqs.i(*dim_idx)?.contiguous()?;
             let num_indices = idx_tensor.dim(0)?;
+            // broadcast + one copy; repeat() would launch one copy kernel per (batch, position)
             let idx_expanded = idx_tensor
                 .reshape((1, 1, num_indices))?
-                .repeat((batch, seq_len, 1))?;
+                .broadcast_as((batch, seq_len, num_indices))?
+                .contiguous()?;
             let src_vals = freqs_dim.gather(&idx_expanded, D::Minus1)?;
             freqs_t = freqs_t.scatter(&idx_expanded, &src_vals, D::Minus1)?;
         }
@@ -2780,6 +2812,7 @@ pub fn qk_rms_norm_mrope(
         &cos,
         &sin,
         is_gpt_neox,
+        crate::ops::QkRopeOutputLayout::HeadsFirst,
     )? {
         return Ok((q, k));
     }
@@ -3413,23 +3446,42 @@ impl Mlp {
         bias: bool,
         comm: &Arc<mistralrs_quant::Comm>,
     ) -> Result<Self> {
-        let gate = ColumnParallelLayer::new(
+        let packed = ColumnParallelLayer::new_packed(
             hidden_size,
-            intermediate_size,
+            &[intermediate_size, intermediate_size],
+            &["gate_proj", "up_proj"],
             quantization_config,
             bias,
             comm,
-            vb.pp("gate_proj"),
+            None,
+            vb.clone(),
         )?;
-        let up = ColumnParallelLayer::new(
-            hidden_size,
-            intermediate_size,
-            quantization_config,
-            bias,
-            comm,
-            vb.pp("up_proj"),
-        )?;
-        let merged_gate_up = crate::ops::MergedDenseProjection::new(&[gate.clone(), up.clone()])?;
+        let (gate, up, merged_gate_up) = match &packed {
+            Some(group) => (
+                group.constituents[0].clone(),
+                group.constituents[1].clone(),
+                Some(crate::ops::MergedDenseProjection::from_packed(group)),
+            ),
+            None => (
+                ColumnParallelLayer::new(
+                    hidden_size,
+                    intermediate_size,
+                    quantization_config,
+                    bias,
+                    comm,
+                    vb.pp("gate_proj"),
+                )?,
+                ColumnParallelLayer::new(
+                    hidden_size,
+                    intermediate_size,
+                    quantization_config,
+                    bias,
+                    comm,
+                    vb.pp("up_proj"),
+                )?,
+                None,
+            ),
+        };
 
         Ok(Self {
             gate,
@@ -3458,19 +3510,37 @@ impl Mlp {
         comm: &Arc<mistralrs_quant::Comm>,
     ) -> Result<Self> {
         assert!(chunks == 2, "Only gate_up_proj merge is supported!");
-        let gate_up_projs = ColumnParallelLayer::new_merged(
+        let packed = ColumnParallelLayer::new_packed_from_fused(
             hidden_size,
             intermediate_size * 2,
             2,
             quantization_config,
-            false,
             comm,
             vb.pp("gate_up_proj"),
         )?;
-
-        let gate = gate_up_projs[0].to_owned();
-        let up = gate_up_projs[1].to_owned();
-        let merged_gate_up = crate::ops::MergedDenseProjection::new(&[gate.clone(), up.clone()])?;
+        let (gate, up, merged_gate_up) = match &packed {
+            Some(group) => (
+                group.constituents[0].clone(),
+                group.constituents[1].clone(),
+                Some(crate::ops::MergedDenseProjection::from_packed(group)),
+            ),
+            None => {
+                let gate_up_projs = ColumnParallelLayer::new_merged(
+                    hidden_size,
+                    intermediate_size * 2,
+                    2,
+                    quantization_config,
+                    false,
+                    comm,
+                    vb.pp("gate_up_proj"),
+                )?;
+                (
+                    gate_up_projs[0].to_owned(),
+                    gate_up_projs[1].to_owned(),
+                    None,
+                )
+            }
+        };
 
         Ok(Self {
             gate,
@@ -3499,29 +3569,21 @@ impl Mlp {
     }
 
     pub fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        let res = if let (true, Some(merged_gate_up)) =
-            (self.can_use_merged_gate_up(), &self.merged_gate_up)
-        {
-            let mut gate_up = merged_gate_up.forward(xs)?.into_iter();
-            let gate = gate_up.next().unwrap();
-            let up = gate_up.next().unwrap();
-            let inter = crate::ops::mul_and_act(&gate, &up, self.act)?;
+        let res = if let Some(merged_gate_up) = &self.merged_gate_up {
+            let inter = if let Some(gate_up) = merged_gate_up.forward_packed(xs)? {
+                let split_size = gate_up.dim(D::Minus1)? / 2;
+                crate::ops::split_mul_and_act(&gate_up, split_size, self.act)?
+            } else {
+                let mut gate_up = merged_gate_up.forward(xs)?.into_iter();
+                let gate = gate_up.next().unwrap();
+                let up = gate_up.next().unwrap();
+                crate::ops::mul_and_act(&gate, &up, self.act)?
+            };
             self.down.forward(&inter)?
         } else {
             crate::ops::quantized_ffn(xs, &*self.gate, &*self.up, &*self.down, self.act)?
         };
         Ok(res)
-    }
-
-    fn can_use_merged_gate_up(&self) -> bool {
-        #[cfg(feature = "cuda")]
-        {
-            self.gate.get_qtensor().is_none() && self.up.get_qtensor().is_none()
-        }
-        #[cfg(not(feature = "cuda"))]
-        {
-            true
-        }
     }
 }
 
@@ -3559,13 +3621,12 @@ impl MlpLayer for Mlp {
             self.down.clone()
         };
 
-        let merged_gate_up = crate::ops::MergedDenseProjection::new(&[gate.clone(), up.clone()])?;
-
         Ok(Box::new(Self {
             gate,
             up,
             down,
-            merged_gate_up,
+            // Delta-modified copies no longer alias the packed weight; run the projections separately
+            merged_gate_up: None,
             act: self.act,
             params: self.params.clone(),
         }))

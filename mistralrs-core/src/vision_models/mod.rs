@@ -153,13 +153,22 @@ pub(crate) fn text_decode_mrope_position_ids_from_context(
     ctx: &crate::pipeline::ModelForwardContext<'_>,
 ) -> Result<Option<Tensor>> {
     let (batch, seq_len) = input_ids.dims2()?;
-    if seq_len != 1 {
-        return Ok(None);
-    }
-    let Some(rope_positions) = ctx.cache().rope_positions(input_ids.device()) else {
-        return Ok(None);
+    let rope_positions = match ctx.cache().rope_positions(input_ids.device()) {
+        Some(rope_positions) => rope_positions.clone(),
+        None if matches!(
+            ctx.recurrent_batch_kind(),
+            Some(RecurrentBatchKind::Decode | RecurrentBatchKind::SpeculativeDecode)
+        ) =>
+        {
+            crate::pipeline::decode_positions_tensor(
+                ctx.position_ids(),
+                seq_len,
+                input_ids.device(),
+            )?
+        }
+        None => return Ok(None),
     };
-    if rope_positions.dim(0)? != batch {
+    if rope_positions.dim(0)? != batch * seq_len {
         candle_core::bail!(
             "rope positions shape {:?} is incompatible with input shape {:?}",
             rope_positions.shape(),
@@ -167,6 +176,55 @@ pub(crate) fn text_decode_mrope_position_ids_from_context(
         );
     }
     Ok(Some(
-        rope_positions.reshape((1, batch, 1))?.repeat((3, 1, 1))?,
+        rope_positions
+            .to_dtype(candle_core::DType::I64)?
+            .reshape((1, batch, seq_len))?
+            .repeat((3, 1, 1))?,
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::pipeline::{
+        text_models_inputs_processor::FlashParams, ForwardCache, ModelForwardContext,
+    };
+    use candle_core::IndexOp;
+
+    #[test]
+    fn mrope_position_ends_are_decode_only() -> Result<()> {
+        let input_ids = Tensor::zeros((2, 3), candle_core::DType::U32, &candle_core::Device::Cpu)?;
+        let offsets = [0, 0];
+        let context_lens = [(0, 3), (0, 3)];
+        let position_ids = [1, 10];
+        let flash = FlashParams::empty(true);
+        let prefill = ModelForwardContext::with_cache(
+            ForwardCache::None,
+            &offsets,
+            &context_lens,
+            &position_ids,
+            &flash,
+        )
+        .with_recurrent_batch_kind(RecurrentBatchKind::Prefill);
+
+        assert!(text_decode_mrope_position_ids_from_context(&input_ids, &prefill)?.is_none());
+
+        let position_ids = [5, 10];
+        let decode = ModelForwardContext::with_cache(
+            ForwardCache::None,
+            &offsets,
+            &context_lens,
+            &position_ids,
+            &flash,
+        )
+        .with_recurrent_batch_kind(RecurrentBatchKind::SpeculativeDecode);
+        let positions = text_decode_mrope_position_ids_from_context(&input_ids, &decode)?
+            .expect("decode MRoPE positions missing");
+
+        assert_eq!(
+            positions.i((0, .., ..))?.to_vec2::<i64>()?,
+            vec![vec![2, 3, 4], vec![7, 8, 9]]
+        );
+        Ok(())
+    }
 }

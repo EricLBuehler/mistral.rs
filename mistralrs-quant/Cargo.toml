@@ -9,7 +9,7 @@ description.workspace = true
 repository.workspace = true
 keywords.workspace = true
 categories.workspace = true
-license.workspace = true
+license = "MIT AND Apache-2.0"
 homepage.workspace = true
 
 [dependencies]
