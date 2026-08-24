@@ -786,6 +786,32 @@ impl BlockPool {
         result
     }
 
+    /// Look up the common physical block for a hash across the specified group IDs.
+    pub fn get_common_cached_block(
+        &self,
+        block_hash: BlockHash,
+        kv_cache_group_ids: &[u32],
+    ) -> Option<usize> {
+        if kv_cache_group_ids.is_empty() {
+            return None;
+        }
+        if let Some(&block_id) = self.retained_hash_to_block.get(&block_hash) {
+            let has_all_groups = kv_cache_group_ids.iter().all(|&group_id| {
+                self.blocks[block_id]
+                    .block_hashes
+                    .contains(&BlockHashWithGroupId {
+                        block_hash,
+                        group_id,
+                    })
+            });
+            if has_all_groups {
+                return Some(block_id);
+            }
+        }
+        self.cached_block_hash_to_block
+            .get_common(block_hash, kv_cache_group_ids)
+    }
+
     /// Look up cached blocks for a given hash across the specified group IDs.
     ///
     /// Returns the same physical block ID for every group if one block retains
@@ -798,22 +824,7 @@ impl BlockPool {
         if kv_cache_group_ids.is_empty() {
             return Some(Vec::new());
         }
-        if let Some(&block_id) = self.retained_hash_to_block.get(&block_hash) {
-            let has_all_groups = kv_cache_group_ids.iter().all(|&group_id| {
-                self.blocks[block_id]
-                    .block_hashes
-                    .contains(&BlockHashWithGroupId {
-                        block_hash,
-                        group_id,
-                    })
-            });
-            if has_all_groups {
-                return Some(vec![block_id; kv_cache_group_ids.len()]);
-            }
-        }
-        let block_id = self
-            .cached_block_hash_to_block
-            .get_common(block_hash, kv_cache_group_ids)?;
+        let block_id = self.get_common_cached_block(block_hash, kv_cache_group_ids)?;
         Some(vec![block_id; kv_cache_group_ids.len()])
     }
 
@@ -1288,11 +1299,22 @@ mod tests {
         pool.cache_full_blocks(&ids_g0, &[h0], 0, 1, 0);
         pool.cache_full_blocks(&ids_g1, &[h0], 0, 1, 1);
 
+        assert!(pool.get_common_cached_block(h0, &[0, 1]).is_none());
         assert!(pool.get_cached_block(h0, &[0, 1]).is_none());
 
         // Should fail if one group is missing
+        assert!(pool.get_common_cached_block(h0, &[0, 2]).is_none());
         let cached = pool.get_cached_block(h0, &[0, 2]);
         assert!(cached.is_none());
+    }
+
+    #[test]
+    fn test_empty_cached_block_group_preserves_public_behavior() {
+        let pool = BlockPool::new(4, false, 16);
+        let hash = hash_block_tokens(None, &[1, 2, 3, 4], None);
+
+        assert_eq!(pool.get_common_cached_block(hash, &[]), None);
+        assert_eq!(pool.get_cached_block(hash, &[]), Some(Vec::new()));
     }
 
     #[test]
@@ -1304,6 +1326,7 @@ mod tests {
         pool.cache_full_blocks(&ids, &[h0], 0, 1, 0);
         pool.cache_full_blocks(&ids, &[h0], 0, 1, 1);
 
+        assert_eq!(pool.get_common_cached_block(h0, &[0, 1]), Some(ids[0]));
         let cached = pool.get_cached_block(h0, &[0, 1]).unwrap();
         assert_eq!(cached, vec![ids[0], ids[0]]);
         assert_eq!(pool.block_hashes(ids[0]).len(), 2);
@@ -1327,8 +1350,10 @@ mod tests {
             pool.cache_full_blocks(ids, &[h0], 0, 1, 1);
         }
 
+        let common = pool.get_common_cached_block(h0, &[0, 1]).unwrap();
         let cached = pool.get_cached_block(h0, &[0, 1]).unwrap();
         assert_eq!(cached[0], cached[1]);
+        assert_eq!(cached[0], common);
         assert!(cached[0] == first[0] || cached[0] == second[0]);
     }
 
@@ -1354,7 +1379,7 @@ mod tests {
         assert_eq!(pool.num_retained_physical_blocks(), 2);
         assert_eq!(retention.num_entries(), 1);
         assert_eq!(retention.num_hashes(), 2);
-        let reused = pool.get_cached_block(h0, &[0, 1]).unwrap()[0];
+        let reused = pool.get_common_cached_block(h0, &[0, 1]).unwrap();
         pool.touch(&[reused]);
         assert_eq!(pool.block_ref_cnt(reused), 1);
         pool.free_blocks(&[reused]);

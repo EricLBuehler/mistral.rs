@@ -198,17 +198,11 @@ impl KVCacheManager {
                 break;
             }
 
-            if let Some(ids) = self
+            if let Some(block_id) = self
                 .block_pool
-                .get_cached_block(block_hash, &self.kv_cache_group_ids)
+                .get_common_cached_block(block_hash, &self.kv_cache_group_ids)
             {
-                let Some(first) = ids.first().copied() else {
-                    break;
-                };
-                if ids.iter().any(|&id| id != first) {
-                    break;
-                }
-                cached_block_ids.push(first);
+                cached_block_ids.push(block_id);
             } else {
                 break;
             }
