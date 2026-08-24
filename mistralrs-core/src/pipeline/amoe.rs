@@ -685,7 +685,7 @@ impl AnyMoePipelineMixin for AnyMoePipeline {
 
             let mut writer = csv::Writer::from_path(path).map_err(candle_core::Error::msg)?;
 
-            let mut header = vec![format!("Step")];
+            let mut header = vec!["Step".to_string()];
             header.extend((0..all_losses[0].len()).map(|i| format!("Gating layer {i}")));
             writer
                 .write_record(&header)

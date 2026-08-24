@@ -20,8 +20,8 @@ use crate::{
     pipeline::text_models_inputs_processor::FlashParams,
     speculative::{
         dflash::{
-            CtxAppend, DFlashDraftModel, DFlashPreparedContext, DFlashProposalBatch,
-            DFlashSamplingInputs,
+            CtxAppend, DFlashDraftModel, DFlashGraphProposalInputs, DFlashPreparedContext,
+            DFlashProposalBatch, DFlashSamplingInputs,
         },
         paged_rows::make_paged_rows_metadata,
         proposer::sample_draft_rows,
@@ -560,15 +560,15 @@ impl Qwen3_5Model {
             });
         let draft_head = self.draft_lm_head.lock().expect("draft lm_head poisoned");
         let lm_head = draft_head.as_ref().unwrap_or_else(|| self.text.lm_head());
-        let graph_proposals = drafter.proposals_cuda_graph(
-            ctx.seq_ids,
-            ctx.sampled_tokens,
-            ctx.base_lens,
+        let graph_proposals = drafter.proposals_cuda_graph(&DFlashGraphProposalInputs {
+            seq_ids: ctx.seq_ids,
+            anchors: ctx.sampled_tokens,
+            start_positions: ctx.base_lens,
             n_predict,
             sampling,
-            self.text.token_embedding(),
+            token_embedding: self.text.token_embedding(),
             lm_head,
-        )?;
+        })?;
         if let Some(proposals) = graph_proposals {
             return dflash_speculative_batch(proposals).map(Some);
         }

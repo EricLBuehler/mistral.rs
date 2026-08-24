@@ -1215,6 +1215,7 @@ fn normalize_sparse_row(
         if prob == 0.0 {
             continue;
         }
+        #[allow(clippy::cast_possible_truncation)]
         let normalized = (prob as f64 / sum) as f32;
         let token = token as usize;
         if let Some((_, existing)) = entries
@@ -1475,7 +1476,9 @@ fn sample_from_probs_with_uniform(
         })
         .or(last_positive)
         .expect("positive fallback probability was validated");
-    sampler.logprobs_from_probs(token as u32, reporting_probs, return_logprobs)
+    #[allow(clippy::cast_possible_truncation)]
+    let token_id = token as u32;
+    sampler.logprobs_from_probs(token_id, reporting_probs, return_logprobs)
 }
 
 fn valid_uniform(uniform: f32) -> bool {

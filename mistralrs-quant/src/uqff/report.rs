@@ -1525,8 +1525,10 @@ fn scalar_u32_vec(meta: &TensorMeta) -> Option<Vec<usize>> {
         return None;
     }
     Some(
-        data.chunks_exact(4)
-            .map(|chunk| u32::from_le_bytes(chunk.try_into().expect("chunk is 4 bytes")) as usize)
+        data.as_chunks::<4>()
+            .0
+            .iter()
+            .map(|chunk| u32::from_le_bytes(*chunk) as usize)
             .collect(),
     )
 }

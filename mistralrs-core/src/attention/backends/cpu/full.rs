@@ -46,14 +46,14 @@ fn classify_mask_row(row: &[f32], pivot: usize) -> MaskRowClass {
 
 fn all_zero(values: &[f32]) -> bool {
     let mut mismatch = 0;
-    let mut chunks = values.chunks_exact(4);
-    for chunk in &mut chunks {
+    let (chunks, remainder) = values.as_chunks::<4>();
+    for chunk in chunks {
         mismatch |= chunk[0].to_bits() & F32_MAGNITUDE_BITS;
         mismatch |= chunk[1].to_bits() & F32_MAGNITUDE_BITS;
         mismatch |= chunk[2].to_bits() & F32_MAGNITUDE_BITS;
         mismatch |= chunk[3].to_bits() & F32_MAGNITUDE_BITS;
     }
-    for value in chunks.remainder() {
+    for value in remainder {
         mismatch |= value.to_bits() & F32_MAGNITUDE_BITS;
     }
     mismatch == 0
@@ -61,14 +61,14 @@ fn all_zero(values: &[f32]) -> bool {
 
 fn all_neg_infinity(values: &[f32]) -> bool {
     let mut mismatch = 0;
-    let mut chunks = values.chunks_exact(4);
-    for chunk in &mut chunks {
+    let (chunks, remainder) = values.as_chunks::<4>();
+    for chunk in chunks {
         mismatch |= chunk[0].to_bits() ^ NEG_INFINITY_BITS;
         mismatch |= chunk[1].to_bits() ^ NEG_INFINITY_BITS;
         mismatch |= chunk[2].to_bits() ^ NEG_INFINITY_BITS;
         mismatch |= chunk[3].to_bits() ^ NEG_INFINITY_BITS;
     }
-    for value in chunks.remainder() {
+    for value in remainder {
         mismatch |= value.to_bits() ^ NEG_INFINITY_BITS;
     }
     mismatch == 0
