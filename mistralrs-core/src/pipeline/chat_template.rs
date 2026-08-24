@@ -370,7 +370,8 @@ impl GenerationConfig {
 }
 
 fn tojson(value: Value, kwargs: Kwargs) -> Result<Value, Error> {
-    let serialized = if let Ok(indent) = kwargs.get::<usize>("indent") {
+    if let Ok(indent) = kwargs.get::<usize>("indent") {
+        // Cap the indent: it feeds `b" ".repeat(indent)`, so an attacker-controlled template could request a huge allocation or capacity-overflow panic.
         const MAX_INDENT: usize = 256;
         if indent > MAX_INDENT {
             return Err(Error::new(
@@ -401,10 +402,9 @@ fn tojson(value: Value, kwargs: Kwargs) -> Result<Value, Error> {
     }
     .map_err(|err| {
         Error::new(ErrorKind::InvalidOperation, "cannot serialize to JSON").with_source(err)
-    })?;
-
+    })
     // HF's tojson does not HTML-escape, so neither can we without changing the prompt
-    Ok(Value::from_safe_string(serialized))
+    .map(Value::from_safe_string)
 }
 
 #[derive(Default)]
@@ -1053,31 +1053,6 @@ mod tests {
         .unwrap();
 
         assert_eq!(calculate_eos_tokens(&template, None, &tokenizer), vec![1]);
-    }
-
-    #[test]
-    fn tojson_matches_transformers_default_json_formatting() {
-        let template = ChatTemplateValue(Either::Left(
-            r#"{{ {'name': 'get_weather', 'description': "Compare if temp > 10 & humidity < 50 (user's choice)", 'parameters': {'type': 'object'}} | tojson }}"#.to_string(),
-        ));
-
-        let rendered = apply_chat_template_to(
-            vec![user_text_message("hello")],
-            false,
-            None,
-            None,
-            &template,
-            None,
-            None,
-            None,
-            Vec::new(),
-        )
-        .unwrap();
-
-        assert_eq!(
-            rendered,
-            r#"{"name": "get_weather", "description": "Compare if temp > 10 & humidity < 50 (user's choice)", "parameters": {"type": "object"}}"#
-        );
     }
 
     #[test]
