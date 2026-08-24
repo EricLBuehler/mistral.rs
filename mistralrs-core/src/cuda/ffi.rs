@@ -1031,7 +1031,7 @@ extern "C" {
         num_heads: i32,
         state_dtype: i32,
         stream: i64,
-    );
+    ) -> i32;
     pub(crate) fn causal_conv1d_update(
         x: *const c_void,
         weight: *const c_void,

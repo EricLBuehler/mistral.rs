@@ -817,37 +817,52 @@ extern "C" void chunked_gated_delta_rule_recurrence(
 }
 
 template <typename StateT>
-void launch_vmajor_chunked_gated_delta_rule_recurrence(
+cudaError_t launch_vmajor_chunked_gated_delta_rule_recurrence(
     const float *q, const float *k, const float *v, const float *g,
     const float *beta, StateT *state, float *output, int bh, int seq_len,
     int k_dim, int v_dim, const int32_t *slot_indices, int num_heads,
     cudaStream_t stream) {
   if (k_dim != 128 || v_dim != 128) {
-    return;
+    return cudaErrorInvalidValue;
   }
-  launch_chunked_gated_delta_rule_recurrence<StateT, true>(
-      q, k, v, g, beta, state, output, bh, seq_len, k_dim, v_dim,
-      slot_indices, num_heads, stream);
+
+  constexpr int BT = 64;
+  constexpr int BK = 128;
+  constexpr int BV = 64;
+  const size_t smem = (BT * BK + BT * BT + 2 * BT + BK) * sizeof(float);
+  auto kernel = chunked_gated_delta_rule_kernel<StateT, BT, BK, BV, true>;
+  const cudaError_t attribute_status = cudaFuncSetAttribute(
+      kernel, cudaFuncAttributeMaxDynamicSharedMemorySize, smem);
+  if (attribute_status != cudaSuccess) {
+    return attribute_status;
+  }
+
+  const dim3 grid((v_dim + BV - 1) / BV, bh);
+  const dim3 block(BV);
+  kernel<<<grid, block, smem, stream>>>(q, k, v, g, beta, state, output,
+                                        seq_len, v_dim, slot_indices,
+                                        num_heads);
+  return cudaGetLastError();
 }
 
-extern "C" void vmajor_chunked_gated_delta_rule_recurrence(
+extern "C" int vmajor_chunked_gated_delta_rule_recurrence(
     const float *q, const float *k, const float *v, const float *g,
     const float *beta, void *state, float *output, int bh, int seq_len,
     int k_dim, int v_dim, const int32_t *slot_indices, int num_heads,
     int state_dtype, int64_t stream) {
   const cudaStream_t custream = (cudaStream_t)stream;
   if (state_dtype == GDN_STATE_DTYPE_F16) {
-    launch_vmajor_chunked_gated_delta_rule_recurrence(
+    return static_cast<int>(launch_vmajor_chunked_gated_delta_rule_recurrence(
         q, k, v, g, beta, (__half *)state, output, bh, seq_len, k_dim, v_dim,
-        slot_indices, num_heads, custream);
+        slot_indices, num_heads, custream));
   } else if (state_dtype == GDN_STATE_DTYPE_BF16) {
-    launch_vmajor_chunked_gated_delta_rule_recurrence(
+    return static_cast<int>(launch_vmajor_chunked_gated_delta_rule_recurrence(
         q, k, v, g, beta, (__nv_bfloat16 *)state, output, bh, seq_len, k_dim,
-        v_dim, slot_indices, num_heads, custream);
+        v_dim, slot_indices, num_heads, custream));
   } else {
-    launch_vmajor_chunked_gated_delta_rule_recurrence(
+    return static_cast<int>(launch_vmajor_chunked_gated_delta_rule_recurrence(
         q, k, v, g, beta, (float *)state, output, bh, seq_len, k_dim, v_dim,
-        slot_indices, num_heads, custream);
+        slot_indices, num_heads, custream));
   }
 }
 

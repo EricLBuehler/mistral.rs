@@ -429,6 +429,33 @@ fn launch_recurrence(
 
     with_slot_indices(slots, |slot_ptr, batch| {
         let num_heads = bh.checked_div(batch).unwrap_or(1);
+        if matches!(kernel, RecurrenceKernel::ValueMajorChunked) {
+            let status = unsafe {
+                crate::cuda::ffi::vmajor_chunked_gated_delta_rule_recurrence(
+                    q_ptr,
+                    k_ptr,
+                    v_ptr,
+                    g_ptr,
+                    beta_ptr,
+                    state_ptr,
+                    output_buf.device_ptr(output_buf.stream()).0 as *mut f32,
+                    bh as i32,
+                    seq_len as i32,
+                    k_dim as i32,
+                    v_dim as i32,
+                    slot_ptr,
+                    num_heads as i32,
+                    state_dtype,
+                    stream,
+                )
+            };
+            if status != 0 {
+                candle::bail!(
+                    "vmajor_chunked_gated_delta_rule_recurrence failed with status {status}"
+                );
+            }
+            return Ok(());
+        }
         let launcher = match kernel {
             RecurrenceKernel::Scalar => crate::cuda::ffi::gated_delta_rule_recurrence,
             RecurrenceKernel::Warp => crate::cuda::ffi::warp_gated_delta_rule_recurrence,
@@ -436,9 +463,7 @@ fn launch_recurrence(
                 crate::cuda::ffi::vmajor_warp_gated_delta_rule_recurrence
             }
             RecurrenceKernel::Chunked => crate::cuda::ffi::chunked_gated_delta_rule_recurrence,
-            RecurrenceKernel::ValueMajorChunked => {
-                crate::cuda::ffi::vmajor_chunked_gated_delta_rule_recurrence
-            }
+            RecurrenceKernel::ValueMajorChunked => unreachable!(),
         };
         unsafe {
             launcher(
