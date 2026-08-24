@@ -1815,43 +1815,72 @@ impl MistralRs {
             }
         }
 
+        let is_reloading = self
+            .reloading_models
+            .read()
+            .map_err(|_| MistralRsError::EnginePoisoned)?
+            .contains(&resolved_model_id);
+        if is_reloading {
+            return Err(MistralRsError::ModelReloading(resolved_model_id));
+        }
+
         Err(MistralRsError::ModelNotFound(resolved_model_id))
     }
 
     /// Look up a file across all loaded engines. `None` if missing or expired.
     pub fn find_file(&self, id: &str) -> Option<Arc<files::File>> {
-        let engines = self.engines.read().ok()?;
+        self.try_find_file(id).ok().flatten()
+    }
+
+    /// Fallible variant of [`Self::find_file`].
+    pub fn try_find_file(&self, id: &str) -> Result<Option<Arc<files::File>>, MistralRsError> {
+        let engines = self
+            .engines
+            .read()
+            .map_err(|_| MistralRsError::EnginePoisoned)?;
         for instance in engines.values() {
             if let Some(f) = instance.file_store.get(id) {
-                return Some(f);
+                return Ok(Some(f));
             }
         }
-        None
+        Ok(None)
     }
 
     /// Every non-expired file across all loaded engines, including session-less runs. Order unspecified.
     pub fn list_files(&self) -> Vec<Arc<files::File>> {
+        self.try_list_files().unwrap_or_default()
+    }
+
+    /// Fallible variant of [`Self::list_files`].
+    pub fn try_list_files(&self) -> Result<Vec<Arc<files::File>>, MistralRsError> {
         let mut out = Vec::new();
-        let Ok(engines) = self.engines.read() else {
-            return out;
-        };
+        let engines = self
+            .engines
+            .read()
+            .map_err(|_| MistralRsError::EnginePoisoned)?;
         for instance in engines.values() {
             out.extend(instance.file_store.list_all());
         }
-        out
+        Ok(out)
     }
 
     /// Returns whether the file existed.
     pub fn remove_file(&self, id: &str) -> bool {
-        let Ok(engines) = self.engines.read() else {
-            return false;
-        };
+        self.try_remove_file(id).unwrap_or(false)
+    }
+
+    /// Fallible variant of [`Self::remove_file`].
+    pub fn try_remove_file(&self, id: &str) -> Result<bool, MistralRsError> {
+        let engines = self
+            .engines
+            .read()
+            .map_err(|_| MistralRsError::EnginePoisoned)?;
         for instance in engines.values() {
             if instance.file_store.remove(id) {
-                return true;
+                return Ok(true);
             }
         }
-        false
+        Ok(false)
     }
 
     pub fn insert_file(
@@ -2016,7 +2045,7 @@ impl MistralRs {
                     .map_err(|_| MistralRsError::SenderPoisoned)?;
                 Ok(default_lock
                     .as_ref()
-                    .ok_or(MistralRsError::EnginePoisoned)?
+                    .ok_or_else(|| MistralRsError::ModelNotFound("default".to_string()))?
                     .clone())
             }
         }
@@ -2906,5 +2935,75 @@ impl MistralRs {
         }
 
         Ok(result)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::panic::{catch_unwind, AssertUnwindSafe};
+
+    fn empty_state() -> MistralRs {
+        MistralRs {
+            engines: RwLock::new(HashMap::new()),
+            unloaded_models: RwLock::new(HashMap::new()),
+            reloading_models: RwLock::new(HashSet::new()),
+            default_engine_id: RwLock::new(None),
+            model_aliases: RwLock::new(HashMap::new()),
+            log: None,
+            id: "test".to_string(),
+            creation_time: 0,
+            next_request_id: Mutex::new(RefCell::new(1)),
+        }
+    }
+
+    #[test]
+    fn missing_default_sender_is_model_not_found() {
+        assert!(matches!(
+            empty_state().get_sender(None),
+            Err(MistralRsError::ModelNotFound(model)) if model == "default"
+        ));
+        assert!(matches!(
+            empty_state().get_sender(Some("wrong-model")),
+            Err(MistralRsError::ModelNotFound(model)) if model == "wrong-model"
+        ));
+    }
+
+    #[test]
+    fn reloading_sender_preserves_model_state_error() {
+        let state = empty_state();
+        state
+            .reloading_models
+            .write()
+            .unwrap()
+            .insert("model".to_string());
+        assert!(matches!(
+            state.get_sender(Some("model")),
+            Err(MistralRsError::ModelReloading(model)) if model == "model"
+        ));
+    }
+
+    #[test]
+    fn fallible_file_helpers_preserve_poisoned_engine_error() {
+        let state = empty_state();
+
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            let _guard = state.engines.write().unwrap();
+            panic!("poison engines lock");
+        }));
+        assert!(result.is_err());
+
+        assert!(matches!(
+            state.try_find_file("file-id"),
+            Err(MistralRsError::EnginePoisoned)
+        ));
+        assert!(matches!(
+            state.try_list_files(),
+            Err(MistralRsError::EnginePoisoned)
+        ));
+        assert!(matches!(
+            state.try_remove_file("file-id"),
+            Err(MistralRsError::EnginePoisoned)
+        ));
     }
 }

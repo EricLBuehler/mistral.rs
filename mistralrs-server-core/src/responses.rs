@@ -13,8 +13,8 @@ use std::{
 
 use anyhow::Result;
 use axum::{
-    extract::{Json, Path, State},
-    http::{self, StatusCode},
+    extract::{rejection::JsonRejection, Json, Path, State},
+    http::StatusCode,
     response::{
         sse::{Event, KeepAlive, KeepAliveStream},
         IntoResponse, Sse,
@@ -38,10 +38,12 @@ use crate::{
     background_tasks::get_background_task_manager,
     cached_responses::get_response_cache,
     chat_completion::{parse_request as parse_chat_request, ChatCompletionParseContext},
-    completion_core::{handle_completion_error, BaseCompletionResponder},
+    completion_core::{
+        handle_completion_error, handle_completion_validation_error, BaseCompletionResponder,
+    },
     handler_core::{
-        create_response_channel, send_request_with_model, BaseJsonModelError, ErrorToResponse,
-        JsonError, ModelErrorMessage,
+        create_response_channel, openai_error_from_error, openai_error_response,
+        send_request_with_model, ApiError, ApiErrorKind, ModelErrorMessage,
     },
     lora_adapters::resolve_lora_adapter_model,
     openai::{
@@ -58,7 +60,6 @@ use crate::{
     skills::SkillStore,
     streaming::{get_keep_alive_interval, observe_response, DoneState, StreamOutcomeHandle},
     types::{ExtractedMistralRsState, OnDoneCallback, SharedMistralRsState},
-    util::sanitize_error_message,
 };
 
 /// Input type for OpenResponses API requests
@@ -773,8 +774,61 @@ pub enum OpenResponsesStreamEvent {
     #[serde(rename = "error")]
     Error {
         sequence_number: u64,
-        error: ResponseError,
+        code: String,
+        message: String,
+        param: Option<String>,
     },
+}
+
+fn api_error_code(error: &ApiError) -> String {
+    error.code.clone().unwrap_or_else(|| match error.kind {
+        ApiErrorKind::InvalidRequest => "invalid_request".to_string(),
+        ApiErrorKind::NotFound => "not_found".to_string(),
+        ApiErrorKind::Conflict => "conflict".to_string(),
+        ApiErrorKind::PayloadTooLarge => "request_body_too_large".to_string(),
+        ApiErrorKind::UnsupportedMediaType => "invalid_content_type".to_string(),
+        ApiErrorKind::RateLimited => "rate_limit_exceeded".to_string(),
+        ApiErrorKind::Unavailable => "service_unavailable".to_string(),
+        ApiErrorKind::Internal => "internal_error".to_string(),
+    })
+}
+
+fn response_error_from_api_error(error: ApiError) -> ResponseError {
+    let code = api_error_code(&error);
+    ResponseError::new(code, error.message)
+}
+
+fn unsupported_background_stream_error() -> ApiError {
+    ApiError::new(
+        ApiErrorKind::InvalidRequest,
+        "`background: true` with `stream: true` is not supported by this server.",
+        Some("unsupported_parameter_combination"),
+        Some("background,stream"),
+    )
+}
+
+fn stream_error_from_api_error(sequence_number: u64, error: ApiError) -> OpenResponsesStreamEvent {
+    OpenResponsesStreamEvent::Error {
+        sequence_number,
+        code: api_error_code(&error),
+        message: error.message,
+        param: error.param,
+    }
+}
+
+fn classify_api_error(
+    state: &SharedMistralRsState,
+    error: &(dyn std::error::Error + 'static),
+    fallback: ApiErrorKind,
+) -> ApiError {
+    let api_error = ApiError::from_error(error, fallback);
+    if matches!(
+        api_error.kind,
+        ApiErrorKind::Internal | ApiErrorKind::Unavailable
+    ) {
+        MistralRs::maybe_log_error(state.clone(), error);
+    }
+    api_error
 }
 
 #[derive(Clone)]
@@ -1189,7 +1243,8 @@ impl futures::Stream for OpenResponsesStreamer {
 
                         let seq = self.streaming_state.next_sequence_number();
                         let mut response = self.build_current_response(ResponseStatus::Failed);
-                        response.error = Some(ResponseError::new("model_error", msg.to_string()));
+                        response.error =
+                            Some(response_error_from_api_error(ApiError::model_error()));
 
                         let event = OpenResponsesStreamEvent::ResponseFailed {
                             sequence_number: seq,
@@ -1204,27 +1259,21 @@ impl futures::Stream for OpenResponsesStreamer {
                     }
                     Response::ValidationError(e) => {
                         let seq = self.streaming_state.next_sequence_number();
-                        let event = OpenResponsesStreamEvent::Error {
-                            sequence_number: seq,
-                            error: ResponseError::new(
-                                "validation_error",
-                                sanitize_error_message(e.as_ref()),
-                            ),
-                        };
+                        let error = classify_api_error(
+                            &self.state,
+                            e.as_ref(),
+                            ApiErrorKind::InvalidRequest,
+                        );
+                        let event = stream_error_from_api_error(seq, error);
                         self.done_state = DoneState::SendingDone;
                         self.events.push(event.clone());
                         Poll::Ready(Some(Event::default().event("error").json_data(event)))
                     }
                     Response::InternalError(e) => {
-                        MistralRs::maybe_log_error(self.state.clone(), &*e);
                         let seq = self.streaming_state.next_sequence_number();
-                        let event = OpenResponsesStreamEvent::Error {
-                            sequence_number: seq,
-                            error: ResponseError::new(
-                                "internal_error",
-                                sanitize_error_message(e.as_ref()),
-                            ),
-                        };
+                        let error =
+                            classify_api_error(&self.state, e.as_ref(), ApiErrorKind::Internal);
+                        let event = stream_error_from_api_error(seq, error);
                         self.done_state = DoneState::SendingDone;
                         self.events.push(event.clone());
                         Poll::Ready(Some(Event::default().event("error").json_data(event)))
@@ -1550,7 +1599,16 @@ impl futures::Stream for OpenResponsesStreamer {
                     }
                 }
             }
-            Poll::Ready(None) => Poll::Ready(None),
+            Poll::Ready(None) => {
+                let channel_error = anyhow::anyhow!("Response channel closed before completion.");
+                let api_error =
+                    classify_api_error(&self.state, channel_error.as_ref(), ApiErrorKind::Internal);
+                let seq = self.streaming_state.next_sequence_number();
+                let event = stream_error_from_api_error(seq, api_error);
+                self.done_state = DoneState::SendingDone;
+                self.events.push(event.clone());
+                Poll::Ready(Some(Event::default().event("error").json_data(event)))
+            }
             Poll::Pending => Poll::Pending,
         }
     }
@@ -1585,23 +1643,20 @@ fn get_event_type(event: &OpenResponsesStreamEvent) -> &'static str {
 pub type OpenResponsesResponder =
     BaseCompletionResponder<ResponseResource, KeepAliveStream<OpenResponsesStreamer>>;
 
-type JsonModelError = BaseJsonModelError<ResponseResource>;
-
 impl IntoResponse for OpenResponsesResponder {
     fn into_response(self) -> axum::response::Response {
         match self {
             OpenResponsesResponder::Sse(s) => s.into_response(),
             OpenResponsesResponder::Json(s) => Json(s).into_response(),
             OpenResponsesResponder::InternalError(e) => {
-                JsonError::new(sanitize_error_message(e.as_ref()))
-                    .to_response(http::StatusCode::INTERNAL_SERVER_ERROR)
+                openai_error_from_error(e.as_ref(), ApiErrorKind::Internal)
             }
             OpenResponsesResponder::ValidationError(e) => {
-                JsonError::new(sanitize_error_message(e.as_ref()))
-                    .to_response(http::StatusCode::UNPROCESSABLE_ENTITY)
+                openai_error_from_error(e.as_ref(), ApiErrorKind::InvalidRequest)
             }
-            OpenResponsesResponder::ModelError(msg, response) => JsonModelError::new(msg, response)
-                .to_response(http::StatusCode::INTERNAL_SERVER_ERROR),
+            OpenResponsesResponder::ModelError(_, _) => {
+                openai_error_response(ApiError::model_error())
+            }
         }
     }
 }
@@ -1811,7 +1866,22 @@ async fn parse_openresponses_request(
     // If previous_response_id is provided, get the full conversation history from cache
     let previous_messages = if let Some(prev_id) = &oairequest.previous_response_id {
         let cache = get_response_cache();
-        cache.get_conversation_history(prev_id)?
+        match cache.get_conversation_history(prev_id) {
+            Ok(Some(messages)) => Some(messages),
+            Ok(None) => {
+                return Err(ApiError::new(
+                    ApiErrorKind::NotFound,
+                    format!("Previous response with ID '{prev_id}' was not found."),
+                    Some("previous_response_not_found"),
+                    Some("previous_response_id"),
+                )
+                .into());
+            }
+            Err(error) => {
+                MistralRs::maybe_log_error(state.clone(), error.as_ref());
+                return Err(ApiError::internal().into());
+            }
+        }
     } else {
         None
     };
@@ -1967,14 +2037,28 @@ pub async fn create_response(
     State(state): ExtractedMistralRsState,
     Extension(skill_store): Extension<Arc<SkillStore>>,
     stream_outcome: Option<Extension<StreamOutcomeHandle>>,
-    Json(mut oairequest): Json<OpenResponsesCreateRequest>,
+    payload: std::result::Result<Json<OpenResponsesCreateRequest>, JsonRejection>,
 ) -> OpenResponsesResponder {
+    let Json(mut oairequest) = match payload {
+        Ok(request) => request,
+        Err(error) => {
+            return OpenResponsesResponder::ValidationError(Box::new(
+                ApiError::from_json_rejection(error),
+            ));
+        }
+    };
+    if oairequest.background == Some(true) && oairequest.stream == Some(true) {
+        return OpenResponsesResponder::ValidationError(Box::new(
+            unsupported_background_stream_error(),
+        ));
+    }
+
     let (tx, rx) = create_response_channel(None);
     let requested_model = oairequest.model.clone();
     if let Err(error) =
         resolve_lora_adapter_model(&state, &mut oairequest.model, &mut oairequest.adapter)
     {
-        return OpenResponsesResponder::ValidationError(Box::new(JsonError::new(error)));
+        return OpenResponsesResponder::ValidationError(Box::new(error));
     }
     let request_id = format!("resp_{}", Uuid::new_v4());
     let metadata = oairequest.metadata.clone();
@@ -1989,6 +2073,14 @@ pub async fn create_response(
     };
 
     let model_name = requested_model;
+
+    let (request, is_streaming, conversation_history, _include_config, request_context) =
+        match parse_openresponses_request(oairequest, state.clone(), tx, skill_store).await {
+            Ok(parsed) => parsed,
+            Err(error) => {
+                return handle_completion_validation_error(state, error.into());
+            }
+        };
 
     // Handle background processing
     if background {
@@ -2009,36 +2101,17 @@ pub async fn create_response(
 
         // Spawn background task
         let state_clone = state.clone();
-        let skill_store_clone = Arc::clone(&skill_store);
         let metadata_clone = metadata.clone();
         tokio::spawn(async move {
-            let (bg_tx, mut bg_rx) = create_response_channel(None);
-
-            let (request, _, conversation_history, _include_config, request_context) =
-                match parse_openresponses_request(
-                    oairequest,
-                    state_clone.clone(),
-                    bg_tx,
-                    skill_store_clone,
-                )
-                .await
-                {
-                    Ok(x) => x,
-                    Err(e) => {
-                        task_manager.mark_failed(
-                            &task_id,
-                            ResponseError::new("parse_error", e.to_string()),
-                        );
-                        return;
-                    }
-                };
+            let mut rx = rx;
 
             task_manager.mark_in_progress(&task_id);
 
             if let Err(e) =
                 send_request_with_model(&state_clone, request, model_id.as_deref()).await
             {
-                task_manager.mark_failed(&task_id, ResponseError::new("send_error", e.to_string()));
+                let error = classify_api_error(&state_clone, &e, ApiErrorKind::Internal);
+                task_manager.mark_failed(&task_id, response_error_from_api_error(error));
                 return;
             }
 
@@ -2047,7 +2120,7 @@ pub async fn create_response(
             let mut pending_shell_calls = HashMap::new();
             let mut files = Vec::new();
             let response = loop {
-                match bg_rx.recv().await {
+                match rx.recv().await {
                     Some(Response::AgenticToolCallProgress {
                         round,
                         tool_name,
@@ -2108,25 +2181,26 @@ pub async fn create_response(
                     task_manager.mark_completed(&task_id, response);
                 }
                 Some(Response::ModelError(msg, _partial_resp)) => {
-                    task_manager
-                        .mark_failed(&task_id, ResponseError::new("model_error", msg.to_string()));
+                    MistralRs::maybe_log_error(state_clone, &ModelErrorMessage(msg.to_string()));
+                    task_manager.mark_failed(
+                        &task_id,
+                        response_error_from_api_error(ApiError::model_error()),
+                    );
                 }
                 Some(Response::ValidationError(e)) => {
-                    task_manager.mark_failed(
-                        &task_id,
-                        ResponseError::new("validation_error", e.to_string()),
-                    );
+                    let error =
+                        classify_api_error(&state_clone, e.as_ref(), ApiErrorKind::InvalidRequest);
+                    task_manager.mark_failed(&task_id, response_error_from_api_error(error));
                 }
                 Some(Response::InternalError(e)) => {
-                    task_manager.mark_failed(
-                        &task_id,
-                        ResponseError::new("internal_error", e.to_string()),
-                    );
+                    let error =
+                        classify_api_error(&state_clone, e.as_ref(), ApiErrorKind::Internal);
+                    task_manager.mark_failed(&task_id, response_error_from_api_error(error));
                 }
                 _ => {
                     task_manager.mark_failed(
                         &task_id,
-                        ResponseError::new("unknown_error", "Unexpected response type"),
+                        response_error_from_api_error(ApiError::internal()),
                     );
                 }
             }
@@ -2135,21 +2209,8 @@ pub async fn create_response(
         return OpenResponsesResponder::Json(response);
     }
 
-    let (request, is_streaming, conversation_history, _include_config, request_context) =
-        match parse_openresponses_request(oairequest, state.clone(), tx, skill_store).await {
-            Ok(x) => x,
-            Err(e) => return handle_error(state, e.into()),
-        };
-
     if let Err(e) = send_request_with_model(&state, request, model_id.as_deref()).await {
-        if matches!(
-            &e,
-            mistralrs_core::MistralRsError::LoraAdapter(_)
-                | mistralrs_core::MistralRsError::ModelNotFound(_)
-        ) {
-            return OpenResponsesResponder::ValidationError(Box::new(e));
-        }
-        return handle_error(state, e.into());
+        return handle_completion_validation_error(state, Box::new(e));
     }
 
     if is_streaming {
@@ -2238,6 +2299,7 @@ pub async fn create_response(
                 OpenResponsesResponder::Json(response)
             }
             Some(Response::ModelError(msg, partial_resp)) => {
+                MistralRs::maybe_log_error(state.clone(), &ModelErrorMessage(msg.to_string()));
                 let mut response = chat_response_to_response_resource(
                     &partial_resp,
                     request_id.clone(),
@@ -2247,7 +2309,7 @@ pub async fn create_response(
                     &shell_output_items,
                     &files,
                 );
-                response.error = Some(ResponseError::new("model_error", msg.to_string()));
+                response.error = Some(response_error_from_api_error(ApiError::model_error()));
                 response.status = ResponseStatus::Failed;
 
                 if store {
@@ -2257,13 +2319,20 @@ pub async fn create_response(
 
                 OpenResponsesResponder::ModelError(msg.to_string(), response)
             }
-            Some(Response::ValidationError(e)) => OpenResponsesResponder::ValidationError(e),
-            Some(Response::InternalError(e)) => OpenResponsesResponder::InternalError(e),
-            _ => OpenResponsesResponder::InternalError(
-                anyhow::anyhow!("Unexpected response type").into(),
-            ),
+            Some(Response::ValidationError(e)) => handle_completion_validation_error(state, e),
+            Some(Response::InternalError(e)) => handle_completion_error(state, e),
+            _ => handle_completion_error(state, anyhow::anyhow!("Unexpected response type").into()),
         }
     }
+}
+
+fn response_not_found_error(response_id: &str) -> ApiError {
+    ApiError::new(
+        ApiErrorKind::NotFound,
+        format!("Response with ID '{response_id}' was not found."),
+        Some("response_not_found"),
+        Some("response_id"),
+    )
 }
 
 /// Get response by ID endpoint
@@ -2275,7 +2344,7 @@ pub async fn create_response(
     responses((status = 200, description = "Response object", body = ResponseResource))
 )]
 pub async fn get_response(
-    State(_state): ExtractedMistralRsState,
+    State(state): ExtractedMistralRsState,
     Path(response_id): Path<String>,
 ) -> impl IntoResponse {
     // First check background tasks
@@ -2288,13 +2357,12 @@ pub async fn get_response(
     let cache = get_response_cache();
     match cache.get_response(&response_id) {
         Ok(Some(response)) => (StatusCode::OK, Json(response)).into_response(),
-        Ok(None) => JsonError::new(format!("Response with ID '{response_id}' not found"))
-            .to_response(StatusCode::NOT_FOUND),
-        Err(e) => JsonError::new(format!(
-            "Error retrieving response: {}",
-            sanitize_error_message(&*e)
-        ))
-        .to_response(StatusCode::INTERNAL_SERVER_ERROR),
+        Ok(None) => openai_error_response(response_not_found_error(&response_id)),
+        Err(error) => openai_error_response(classify_api_error(
+            &state,
+            error.as_ref(),
+            ApiErrorKind::Internal,
+        )),
     }
 }
 
@@ -2307,7 +2375,7 @@ pub async fn get_response(
     responses((status = 200, description = "Response deleted"))
 )]
 pub async fn delete_response(
-    State(_state): ExtractedMistralRsState,
+    State(state): ExtractedMistralRsState,
     Path(response_id): Path<String>,
 ) -> impl IntoResponse {
     // Delete from background tasks
@@ -2329,15 +2397,14 @@ pub async fn delete_response(
                 )
                     .into_response()
             } else {
-                JsonError::new(format!("Response with ID '{response_id}' not found"))
-                    .to_response(StatusCode::NOT_FOUND)
+                openai_error_response(response_not_found_error(&response_id))
             }
         }
-        Err(e) => JsonError::new(format!(
-            "Error deleting response: {}",
-            sanitize_error_message(&*e)
-        ))
-        .to_response(StatusCode::INTERNAL_SERVER_ERROR),
+        Err(error) => openai_error_response(classify_api_error(
+            &state,
+            error.as_ref(),
+            ApiErrorKind::Internal,
+        )),
     }
 }
 
@@ -2350,37 +2417,130 @@ pub async fn delete_response(
     responses((status = 200, description = "Response cancelled", body = ResponseResource))
 )]
 pub async fn cancel_response(
-    State(_state): ExtractedMistralRsState,
+    State(state): ExtractedMistralRsState,
     Path(response_id): Path<String>,
 ) -> impl IntoResponse {
     let task_manager = get_background_task_manager();
 
     if task_manager.request_cancel(&response_id) {
         task_manager.mark_cancelled(&response_id);
-
-        if let Some(response) = task_manager.get_response(&response_id) {
-            return (StatusCode::OK, Json(response)).into_response();
-        }
+    }
+    if let Some(response) = task_manager.get_response(&response_id) {
+        return (StatusCode::OK, Json(response)).into_response();
     }
 
-    JsonError::new(format!(
-        "Response with ID '{response_id}' not found or cannot be cancelled"
-    ))
-    .to_response(StatusCode::NOT_FOUND)
-}
-
-/// Handle errors
-fn handle_error(
-    state: SharedMistralRsState,
-    e: Box<dyn std::error::Error + Send + Sync + 'static>,
-) -> OpenResponsesResponder {
-    handle_completion_error(state, e)
+    let cache = get_response_cache();
+    match cache.get_response(&response_id) {
+        Ok(Some(response)) => (StatusCode::OK, Json(response)).into_response(),
+        Ok(None) => openai_error_response(response_not_found_error(&response_id)),
+        Err(error) => openai_error_response(classify_api_error(
+            &state,
+            error.as_ref(),
+            ApiErrorKind::Internal,
+        )),
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn stream_error_matches_openai_shape() {
+        let event = OpenResponsesStreamEvent::Error {
+            sequence_number: 7,
+            code: "invalid_request".to_string(),
+            message: "Invalid model.".to_string(),
+            param: Some("model".to_string()),
+        };
+
+        assert_eq!(
+            serde_json::to_value(event).unwrap(),
+            json!({
+                "type": "error",
+                "sequence_number": 7,
+                "code": "invalid_request",
+                "message": "Invalid model.",
+                "param": "model"
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn unsupported_background_stream_is_a_typed_bad_request() {
+        let responder = OpenResponsesResponder::ValidationError(Box::new(
+            unsupported_background_stream_error(),
+        ));
+
+        let response = responder.into_response();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        assert_eq!(
+            serde_json::from_slice::<Value>(&body).unwrap(),
+            json!({
+                "error": {
+                    "message": "`background: true` with `stream: true` is not supported by this server.",
+                    "type": "invalid_request_error",
+                    "param": "background,stream",
+                    "code": "unsupported_parameter_combination"
+                }
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn validation_responder_preserves_typed_not_found_error() {
+        let responder = OpenResponsesResponder::ValidationError(Box::new(ApiError::new(
+            ApiErrorKind::NotFound,
+            "The requested model does not exist.",
+            Some("model_not_found"),
+            Some("model"),
+        )));
+
+        let response = responder.into_response();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        assert_eq!(
+            serde_json::from_slice::<Value>(&body).unwrap(),
+            json!({
+                "error": {
+                    "message": "The requested model does not exist.",
+                    "type": "invalid_request_error",
+                    "param": "model",
+                    "code": "model_not_found"
+                }
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn model_responder_hides_internal_message_and_partial_response() {
+        let partial = ResponseResource::new("resp_test".to_string(), "model".to_string(), 0);
+        let responder =
+            OpenResponsesResponder::ModelError("private backend failure".to_string(), partial);
+
+        let response = responder.into_response();
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        assert_eq!(
+            serde_json::from_slice::<Value>(&body).unwrap(),
+            json!({
+                "error": {
+                    "message": "The model failed to process the request.",
+                    "type": "server_error",
+                    "param": null,
+                    "code": "model_error"
+                }
+            })
+        );
+    }
 
     #[test]
     fn ignore_eos_defaults_false_and_accepts_true() {

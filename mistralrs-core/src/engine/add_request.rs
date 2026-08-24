@@ -16,7 +16,7 @@ use std::{
 use tracing::warn;
 
 use crate::{
-    get_mut_arcmutex, handle_seq_error,
+    get_mut_arcmutex, handle_request_error, handle_seq_error,
     request::Request,
     sampler::Sampler,
     sequence::{Sequence, SequenceGroup},
@@ -315,7 +315,7 @@ impl Engine {
                     reasoning_effort,
                     tools,
                 );
-                handle_seq_error!(template, request.response)
+                handle_request_error!(template, request.response)
             }
             RequestMessage::Completion { text, .. }
             | RequestMessage::Embedding { prompt: text } => {
@@ -333,7 +333,7 @@ impl Engine {
                     .encode_fast(text.clone(), true)
                     .map_err(anyhow::Error::msg);
                 (
-                    handle_seq_error!(prompt, request.response)
+                    handle_request_error!(prompt, request.response)
                         .get_ids()
                         .to_vec(),
                     text,
@@ -356,7 +356,7 @@ impl Engine {
                 let prompt = tokenizer
                     .decode(&it, false)
                     .map_err(|e| anyhow::Error::msg(e.to_string()));
-                (it, handle_seq_error!(prompt, request.response))
+                (it, handle_request_error!(prompt, request.response))
             }
         };
         if prompt_tokens.is_empty() {
@@ -487,7 +487,7 @@ impl Engine {
                         return;
                     };
                     let encoded = tokenizer.encode_fast(stop_txt.to_string(), true);
-                    let toks = handle_seq_error!(encoded, request.response)
+                    let toks = handle_request_error!(encoded, request.response)
                         .get_ids()
                         .to_vec();
 
@@ -532,7 +532,7 @@ impl Engine {
             request.sampling_params.logits_bias.unwrap_or_default(),
             request.logits_processors.unwrap_or_default(),
         );
-        let sampler = handle_seq_error!(sampler, request.response);
+        let sampler = handle_request_error!(sampler, request.response);
 
         if request.sampling_params.n_choices == 0 {
             request
@@ -643,11 +643,11 @@ impl Engine {
                         Err(_) => {
                             request
                                 .response
-                                .send(Response::InternalError(
-                                    "Failed to allocate preallocated KV cache."
-                                        .to_string()
-                                        .into(),
-                                ))
+                                .send(Response::InternalError(Box::new(
+                                    crate::ServiceUnavailableError(
+                                        "Failed to allocate preallocated KV cache.".to_string(),
+                                    ),
+                                )))
                                 .await
                                 .unwrap_or_else(|_| warn!("Receiver disconnected"));
                             return;
@@ -661,11 +661,11 @@ impl Engine {
                             Err(_) => {
                                 request
                                     .response
-                                    .send(Response::InternalError(
-                                        "Failed to allocate preallocated KV cache."
-                                            .to_string()
-                                            .into(),
-                                    ))
+                                    .send(Response::InternalError(Box::new(
+                                        crate::ServiceUnavailableError(
+                                            "Failed to allocate preallocated KV cache.".to_string(),
+                                        ),
+                                    )))
                                     .await
                                     .unwrap_or_else(|_| warn!("Receiver disconnected"));
                                 return;
@@ -690,7 +690,7 @@ impl Engine {
                     } else {
                         ToolChoice::None
                     };
-                Some(handle_seq_error!(
+                Some(handle_request_error!(
                     ToolCallState::new(
                         tool_choice,
                         request.tools.as_deref(),
@@ -851,11 +851,11 @@ impl Engine {
             if recurrent_slot_allocation_failed {
                 request
                     .response
-                    .send(Response::InternalError(
-                        "Failed to allocate recurrent state for request."
-                            .to_string()
-                            .into(),
-                    ))
+                    .send(Response::InternalError(Box::new(
+                        crate::ServiceUnavailableError(
+                            "Failed to allocate recurrent state for request.".to_string(),
+                        ),
+                    )))
                     .await
                     .unwrap_or_else(|_| warn!("Receiver disconnected"));
                 return;

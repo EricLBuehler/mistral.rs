@@ -384,6 +384,7 @@ impl PagedAttentionScheduler {
         seq: Arc<Mutex<Sequence>>,
         reason: String,
         recurrent_state_released: bool,
+        unavailable: bool,
     ) {
         let (seq_id, responder, recurrent_state_idx) = {
             let mut seq_guard = get_mut_arcmutex!(seq);
@@ -404,10 +405,12 @@ impl PagedAttentionScheduler {
         self.seq_block_hash_revisions.remove(&seq_id);
         get_mut_arcmutex!(self.kv_cache_manager).free(seq_id);
 
-        if responder
-            .try_send(Response::ValidationError(reason.into()))
-            .is_err()
-        {
+        let response = if unavailable {
+            Response::ValidationError(Box::new(crate::ServiceUnavailableError(reason)))
+        } else {
+            Response::ValidationError(reason.into())
+        };
+        if responder.try_send(response).is_err() {
             warn!("Failed to deliver KV cache capacity error for sequence {seq_id}");
         }
     }
@@ -535,6 +538,7 @@ impl PagedAttentionScheduler {
         reason: String,
         metric_reason: &'static str,
         prefix_validator: &mut Option<&mut dyn PagedPrefixCacheValidator>,
+        unavailable: bool,
     ) {
         warn!("{reason}");
         metrics::counter!("mistralrs_sequences_rejected_total", "reason" => metric_reason)
@@ -548,7 +552,7 @@ impl PagedAttentionScheduler {
         } else {
             false
         };
-        self.finish_ignored_sequence(seq, reason, recurrent_state_released);
+        self.finish_ignored_sequence(seq, reason, recurrent_state_released, unavailable);
     }
 
     fn enforce_completion_compatibility(&mut self) {
@@ -614,6 +618,7 @@ impl PagedAttentionScheduler {
                     ),
                     "over_total_capacity",
                     &mut prefix_validator,
+                    false,
                 );
                 continue;
             }
@@ -733,7 +738,12 @@ impl PagedAttentionScheduler {
             }
 
             if let Some(reason) = ignore_reason {
-                self.reject_front_of_waiting(reason, "cache_exhausted", &mut prefix_validator);
+                self.reject_front_of_waiting(
+                    reason,
+                    "cache_exhausted",
+                    &mut prefix_validator,
+                    true,
+                );
                 continue;
             }
 

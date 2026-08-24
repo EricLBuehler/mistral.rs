@@ -330,6 +330,10 @@ pub struct BlockDenoisingProgress {
     pub final_block: bool,
 }
 
+#[derive(Debug, thiserror::Error)]
+#[error("{0}")]
+pub struct ServiceUnavailableError(pub String);
+
 /// The response enum contains 3 types of variants:
 /// - Error (-Error suffix)
 /// - Chat (no prefix)
