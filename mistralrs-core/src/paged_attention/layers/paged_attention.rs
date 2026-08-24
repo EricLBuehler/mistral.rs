@@ -779,6 +779,8 @@ pub struct PagedAttention {
     alibi_slopes: Option<Tensor>,
     fp8_attention_scales: Fp8AttentionScales,
     fp8_attention_scales_calibrated: bool,
+    // read only in the cuda FA3 path
+    #[allow(dead_code)]
     fp8_q_scale: Tensor,
     fp8_k_scale: Tensor,
     fp8_v_scale: Tensor,

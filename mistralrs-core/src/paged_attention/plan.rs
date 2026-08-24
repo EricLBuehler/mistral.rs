@@ -123,6 +123,7 @@ pub(crate) fn fa3_paged_prefill_supported(input: PrefixPrefillPlanInput) -> bool
 }
 
 #[derive(Clone, Copy, Debug)]
+#[allow(dead_code)]
 pub(crate) struct PromptPrefillWorkspaceInput<'a> {
     pub activation_dtype: DType,
     pub cache_dtype: DType,
@@ -141,6 +142,7 @@ pub(crate) struct PromptPrefillWorkspaceInput<'a> {
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[allow(dead_code)]
 pub(crate) struct PromptPrefillWorkspace {
     pub bytes: usize,
     pub gather_workspace_bytes: usize,
@@ -454,6 +456,7 @@ fn checked_sum(values: &[usize], name: &str) -> Result<usize> {
     })
 }
 
+#[allow(dead_code)]
 pub(crate) fn model_has_donor_paged_cache_layers(
     model: &(dyn ModelConfigLike + Send + Sync),
 ) -> bool {
@@ -462,6 +465,7 @@ pub(crate) fn model_has_donor_paged_cache_layers(
     })
 }
 
+#[allow(dead_code)]
 pub(crate) fn prompt_prefill_workspace(
     model: Option<&(dyn ModelConfigLike + Send + Sync)>,
     input: PromptPrefillWorkspaceInput<'_>,
@@ -587,6 +591,7 @@ pub(crate) fn prompt_prefill_workspace(
     })
 }
 
+#[allow(dead_code)]
 fn prompt_plan_input(
     model: &(dyn ModelConfigLike + Send + Sync),
     layer_idx: usize,
