@@ -2446,7 +2446,7 @@ impl DFlashDraftModel {
             sampling,
             token_embedding,
             lm_head,
-        } = inputs;
+        } = *inputs;
         #[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
         {
             if !crate::pipeline::cuda_graph::cuda_decode_graphs_enabled()
