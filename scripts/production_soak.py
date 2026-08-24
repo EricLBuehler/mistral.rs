@@ -326,10 +326,13 @@ SERVE_CONFIGURATION_FLAGS = (
     "--pa-block-size",
     "--pa-cache-type",
     "--max-seqs",
+    "--prefix-cache-n",
     "--max-num-batched-tokens",
     "--max-prefill-chunk-tokens",
     "--max-decode-steps-before-prefill",
     "--mtp-model",
+    "--mtp-n-predict",
+    "--mtp-draft-sampling",
 )
 
 
@@ -2815,6 +2818,8 @@ async def compare_mode(
         "exact_fixed_seed_matches": exact,
         "exact_fixed_seed_match_rate": exact / len(shared) if shared else None,
     }
+    if "server_provenance" in candidate_summary:
+        summary["server_provenance"] = candidate_summary["server_provenance"]
     await writer.emit("offline_comparison", **summary)
     return summary
 
@@ -11180,10 +11185,13 @@ def comparable_server_provenance(provenance: dict[str, Any]) -> dict[str, Any]:
         "pa_block_size",
         "pa_cache_type",
         "max_seqs",
+        "prefix_cache_n",
         "max_num_batched_tokens",
         "max_prefill_chunk_tokens",
         "max_decode_steps_before_prefill",
         "mtp_model",
+        "mtp_n_predict",
+        "mtp_draft_sampling",
     )
     return {
         "git_revision": build.get("git_revision"),

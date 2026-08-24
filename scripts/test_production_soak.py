@@ -3,6 +3,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 import httpx
@@ -2180,6 +2181,11 @@ class ServerProvenanceTests(unittest.TestCase):
             "--paged-attn=on",
             "--max-seqs",
             "16",
+            "--prefix-cache-n",
+            "20",
+            "--mtp-n-predict=7",
+            "--mtp-draft-sampling",
+            "stochastic",
             "--api-key",
             "secret-value",
             "--token-source=also-secret",
@@ -2196,6 +2202,9 @@ class ServerProvenanceTests(unittest.TestCase):
         self.assertEqual(config["pa_cache_type"], "f8e4m3")
         self.assertEqual(config["paged_attn"], "on")
         self.assertEqual(config["max_seqs"], "16")
+        self.assertEqual(config["prefix_cache_n"], "20")
+        self.assertEqual(config["mtp_n_predict"], "7")
+        self.assertEqual(config["mtp_draft_sampling"], "stochastic")
 
     def test_complete_provenance_requires_exact_git_binary_gpu_and_kv(self) -> None:
         provenance = {
@@ -3966,6 +3975,104 @@ class ProductionGateTests(unittest.TestCase):
         self.assertFalse(evidence["passed"])
 
 
+class OfflineComparisonProvenanceTests(unittest.IsolatedAsyncioTestCase):
+    @staticmethod
+    def metadata(provenance: dict | None, include_provenance: bool) -> dict:
+        arguments = {
+            "sampling_policy": "production",
+            "seed": soak.DEFAULT_SEED,
+            "temperature": soak.DEFAULT_TEMPERATURE,
+            "top_p": soak.DEFAULT_TOP_P,
+            "top_k": soak.DEFAULT_TOP_K,
+            "min_p": soak.DEFAULT_MIN_P,
+            "repetition_penalty": soak.DEFAULT_REPETITION_PENALTY,
+            "requests": 1,
+            "max_tokens": 8,
+            "concurrencies": [1],
+        }
+        summary = {"passed": True}
+        if include_provenance:
+            summary["server_provenance"] = provenance
+        return {
+            "run_start": {
+                "arguments": arguments,
+                "policy": {
+                    "temperature": soak.DEFAULT_TEMPERATURE,
+                    "top_p": soak.DEFAULT_TOP_P,
+                    "top_k": soak.DEFAULT_TOP_K,
+                    "min_p": soak.DEFAULT_MIN_P,
+                    "repetition_penalty": soak.DEFAULT_REPETITION_PENALTY,
+                },
+            },
+            "run_summary": summary,
+        }
+
+    async def compare(
+        self,
+        candidate_metadata: dict,
+        reference_metadata: dict,
+    ) -> tuple[dict, AsyncMock]:
+        sample = request_result(
+            completion_tokens=8,
+            output_chunks=8,
+            finish_reason="length",
+            output_text="stable output",
+            output_transcript="stable output",
+        )
+        args = SimpleNamespace(
+            candidate=Path("candidate.jsonl"),
+            reference=Path("reference.jsonl"),
+            candidate_phase="canary-c1-normal",
+            reference_phase="canary-c1-normal",
+            stat_max_ks=0.35,
+            stat_max_js=0.20,
+            require_part1_complete=False,
+        )
+        writer = SimpleNamespace(emit=AsyncMock())
+        with patch.object(
+            soak,
+            "load_canary_artifact",
+            side_effect=[
+                ([sample], candidate_metadata),
+                ([sample], reference_metadata),
+            ],
+        ):
+            result = await soak.compare_mode(args, None, writer)
+        return result, writer.emit
+
+    async def test_compare_propagates_candidate_provenance_verbatim(self) -> None:
+        candidate = {"source": "candidate", "nested": {"value": 1}}
+        reference = {"source": "reference", "nested": {"value": 2}}
+
+        result, emit = await self.compare(
+            self.metadata(candidate, True),
+            self.metadata(reference, True),
+        )
+
+        self.assertIs(result["server_provenance"], candidate)
+        self.assertIs(emit.await_args.kwargs["server_provenance"], candidate)
+
+    async def test_compare_omits_missing_candidate_provenance(self) -> None:
+        result, emit = await self.compare(
+            self.metadata(None, False),
+            self.metadata(None, False),
+        )
+
+        self.assertNotIn("server_provenance", result)
+        self.assertNotIn("server_provenance", emit.await_args.kwargs)
+
+    async def test_reference_provenance_cannot_replace_candidate(self) -> None:
+        reference = {"source": "reference"}
+
+        result, emit = await self.compare(
+            self.metadata(None, False),
+            self.metadata(reference, True),
+        )
+
+        self.assertNotIn("server_provenance", result)
+        self.assertNotIn("server_provenance", emit.await_args.kwargs)
+
+
 class MultimodalOracleTests(unittest.TestCase):
     @staticmethod
     def provenance() -> dict:
@@ -3983,10 +4090,13 @@ class MultimodalOracleTests(unittest.TestCase):
                     "pa_block_size": None,
                     "pa_cache_type": "f8e4m3",
                     "max_seqs": "16",
+                    "prefix_cache_n": "20",
                     "max_num_batched_tokens": None,
                     "max_prefill_chunk_tokens": None,
                     "max_decode_steps_before_prefill": None,
                     "mtp_model": "draft",
+                    "mtp_n_predict": "7",
+                    "mtp_draft_sampling": "auto",
                 },
             },
             "gpu_driver": {
@@ -4006,6 +4116,37 @@ class MultimodalOracleTests(unittest.TestCase):
             },
             "evidence": {"complete": True},
         }
+
+    def test_provenance_rejects_meaningful_serving_knob_mismatches(self) -> None:
+        expected = self.provenance()
+        mismatches = {
+            "prefix_cache_n": "16",
+            "mtp_n_predict": "5",
+            "mtp_draft_sampling": "greedy",
+        }
+
+        for field, value in mismatches.items():
+            with self.subTest(field=field):
+                actual = self.provenance()
+                actual["process"]["serve_configuration"][field] = value
+                evidence = soak.server_provenance_match_evidence(expected, actual)
+                self.assertFalse(evidence["passed"])
+                self.assertFalse(evidence["fields"]["serve_configuration"]["passed"])
+
+    def test_provenance_rejects_missing_meaningful_serving_knobs(self) -> None:
+        expected = self.provenance()
+
+        for field in (
+            "prefix_cache_n",
+            "mtp_n_predict",
+            "mtp_draft_sampling",
+        ):
+            with self.subTest(field=field):
+                actual = self.provenance()
+                del actual["process"]["serve_configuration"][field]
+                evidence = soak.server_provenance_match_evidence(expected, actual)
+                self.assertFalse(evidence["passed"])
+                self.assertFalse(evidence["fields"]["serve_configuration"]["passed"])
 
     def test_text_prerequisites_require_acceptance_grade_soak_artifacts(self) -> None:
         provenance = self.provenance()
