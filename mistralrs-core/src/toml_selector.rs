@@ -687,12 +687,14 @@ struct TomlLoaderInnerParams {
     no_kv_cache: bool,
     tokenizer_json: Option<String>,
     jinja_explicit: Option<String>,
+    encoder_cache_memory_bytes: Option<usize>,
 }
 
 pub struct TomlLoaderArgs {
     pub chat_template: Option<String>,
     pub no_kv_cache: bool,
     pub jinja_explicit: Option<String>,
+    pub encoder_cache_memory_bytes: Option<usize>,
 }
 
 pub fn get_toml_selected_model_dtype(model: &TomlSelector) -> ModelDType {
@@ -966,7 +968,8 @@ fn loader_from_selected(
                 },
                 args.no_kv_cache,
                 args.jinja_explicit,
-            );
+            )
+            .with_encoder_cache_memory_bytes(args.encoder_cache_memory_bytes);
             if let Some(mmproj_filename) = mmproj_filename {
                 builder = builder.with_mmproj_files(
                     mmproj_filename
@@ -1006,6 +1009,7 @@ fn loader_from_selected(
             args.no_kv_cache,
             args.jinja_explicit,
         )
+        .with_encoder_cache_memory_bytes(args.encoder_cache_memory_bytes)
         .with_xlora(
             xlora_model_id,
             serde_json::from_reader(
@@ -1039,6 +1043,7 @@ fn loader_from_selected(
             args.no_kv_cache,
             args.jinja_explicit,
         )
+        .with_encoder_cache_memory_bytes(args.encoder_cache_memory_bytes)
         .with_lora(
             adapters_model_id,
             serde_json::from_reader(
@@ -1177,6 +1182,7 @@ fn loader_from_selected(
             Some(model_id),
             args.jinja_explicit,
         )
+        .with_encoder_cache_memory_bytes(args.encoder_cache_memory_bytes)
         .build(arch),
         TomlModelSelected::Embedding {
             model_id,
@@ -1218,6 +1224,7 @@ impl TryInto<Box<dyn Loader>> for (TomlSelector, TomlLoaderArgs) {
             no_kv_cache: args.no_kv_cache,
             tokenizer_json: selector.tokenizer_json,
             jinja_explicit: args.jinja_explicit,
+            encoder_cache_memory_bytes: args.encoder_cache_memory_bytes,
         };
         if selector.speculative.is_some() {
             anyhow::bail!(
@@ -1567,6 +1574,7 @@ mod tests {
                 chat_template: None,
                 no_kv_cache: false,
                 jinja_explicit: None,
+                encoder_cache_memory_bytes: None,
             },
         )
             .try_into();

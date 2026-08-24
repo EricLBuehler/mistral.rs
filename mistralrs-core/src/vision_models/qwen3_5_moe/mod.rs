@@ -534,6 +534,9 @@ impl MultimodalModel for Qwen3_5MoeModel {
             prompt_position_ids: None,
         })
     }
+    fn encoder_cache(&self) -> Option<&Mutex<EncoderCacheManager>> {
+        Some(&self.encoder_cache)
+    }
     fn encoder_cache_counters(
         &self,
     ) -> Option<(

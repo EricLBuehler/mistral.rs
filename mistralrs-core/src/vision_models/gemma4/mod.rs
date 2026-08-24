@@ -1038,6 +1038,9 @@ impl MultimodalModel for Gemma4Model {
         self.language_model.model_config_like()
     }
 
+    fn encoder_cache(&self) -> Option<&Mutex<EncoderCacheManager>> {
+        Some(&self.encoder_cache)
+    }
     fn encoder_cache_counters(
         &self,
     ) -> Option<(

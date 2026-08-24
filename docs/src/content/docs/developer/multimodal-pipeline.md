@@ -38,7 +38,7 @@ Encoder outputs are cached by content hash and modality. When the same image, vi
 
 The modality is part of the key: identical bytes processed as an image versus as a video frame can yield different token counts, and the cache keeps them separate.
 
-The cache is LRU (least-recently-used) with a fixed capacity of 32 entries per model, not configurable. Hit and miss counters are exposed for observability.
+The cache is LRU (least-recently-used). It retains 32 entries per model by default. Serving commands can instead bound retained logical tensor memory with `--encoder-cache-memory-mb`; matching logical headroom is reserved before PagedAttention sizes the KV cache. Tensor views can share larger backing allocations, so this is not a strict physical-memory cap. Hit, miss, eviction, and resident-memory metrics are exposed for observability.
 
 ## See also
 

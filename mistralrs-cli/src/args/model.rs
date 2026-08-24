@@ -9,6 +9,7 @@ use mistralrs_core::{
 use serde::Deserialize;
 use std::{
     collections::HashSet,
+    num::NonZeroUsize,
     path::{Path, PathBuf},
 };
 
@@ -681,6 +682,10 @@ pub struct DeviceOptions {
 /// Multimodal model specific options
 #[derive(Args, Clone, Default, Deserialize)]
 pub struct MultimodalOptions {
+    /// Maximum logical tensor memory retained by the multimodal encoder cache, in MiB
+    #[arg(long = "encoder-cache-memory-mb")]
+    pub encoder_cache_memory_mb: Option<NonZeroUsize>,
+
     /// Maximum edge length for image resizing (aspect ratio preserved)
     #[arg(long)]
     pub max_edge: Option<u32>,

@@ -30,6 +30,8 @@ use crate::args::{
 };
 use crate::ui::build_ui_router;
 
+const MEBIBYTE_BYTES: usize = 1024 * 1024;
+
 /// Run the HTTP server with the specified model
 #[allow(clippy::too_many_arguments)]
 pub async fn run_server(
@@ -73,6 +75,7 @@ pub async fn run_server(
 
     // Extract quantization settings
     let isq = extract_isq_setting(&model_type);
+    let encoder_cache_memory_bytes = extract_encoder_cache_memory_bytes(&model_type)?;
 
     // Build the MistralRs instance
     let mut builder = MistralRsForServerBuilder::new()
@@ -111,6 +114,10 @@ pub async fn run_server(
         .with_paged_attn_block_size_optional(paged_attn_block_size)
         .with_mtp_config_optional(runtime.mtp_config())
         .with_paged_attn_cache_type(paged_cache_type);
+
+    if let Some(max_bytes) = encoder_cache_memory_bytes {
+        builder = builder.with_encoder_cache_memory_bytes(max_bytes);
+    }
 
     if let Some(model) = runtime.search_embedding_model {
         builder = builder.with_search_embedding_model(model.into());
@@ -842,6 +849,23 @@ pub(crate) fn extract_device_settings(model_type: &ModelType) -> (bool, Option<V
 
 pub(crate) fn extract_isq_setting(model_type: &ModelType) -> Option<String> {
     extract_quantization(model_type).and_then(|q| q.in_situ_quant.clone())
+}
+
+pub(crate) fn extract_encoder_cache_memory_bytes(model_type: &ModelType) -> Result<Option<usize>> {
+    let memory_mb = match model_type {
+        ModelType::Auto { multimodal, .. } | ModelType::Multimodal { multimodal, .. } => {
+            multimodal.encoder_cache_memory_mb
+        }
+        _ => None,
+    };
+    memory_mb
+        .map(|memory_mb| {
+            memory_mb
+                .get()
+                .checked_mul(MEBIBYTE_BYTES)
+                .context("encoder cache memory capacity overflow")
+        })
+        .transpose()
 }
 
 pub(crate) fn extract_quant_flag(model_type: &ModelType) -> Option<String> {
@@ -1961,6 +1985,20 @@ mod tests {
         }
     }
 
+    #[test]
+    fn encoder_cache_memory_converts_mib_to_bytes() {
+        let mut model_type = test_multimodal_model(FormatOptions::default());
+        let ModelType::Multimodal { multimodal, .. } = &mut model_type else {
+            unreachable!()
+        };
+        multimodal.encoder_cache_memory_mb = NonZeroUsize::new(64);
+
+        assert_eq!(
+            extract_encoder_cache_memory_bytes(&model_type).unwrap(),
+            Some(64 * MEBIBYTE_BYTES)
+        );
+    }
+
     #[tokio::test]
     async fn accepted_connections_enable_tcp_nodelay() {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -2046,6 +2084,7 @@ mod tests {
             slice_name: Some("slice".to_string()),
         };
         let multimodal = MultimodalOptions {
+            encoder_cache_memory_mb: None,
             max_edge: Some(2048),
             max_num_images: Some(5),
             max_image_length: Some(1536),
@@ -2122,6 +2161,7 @@ mod tests {
             },
             cache: crate::args::CacheOptions::default(),
             multimodal: MultimodalOptions {
+                encoder_cache_memory_mb: None,
                 max_edge: Some(1280),
                 max_num_images: Some(4),
                 max_image_length: Some(1024),
@@ -2360,6 +2400,7 @@ mod tests {
             },
             cache: crate::args::CacheOptions::default(),
             multimodal: MultimodalOptions {
+                encoder_cache_memory_mb: None,
                 max_edge: Some(1280),
                 max_num_images: Some(4),
                 max_image_length: Some(1152),

@@ -79,6 +79,7 @@ pub struct ModelBuilder {
     pub(crate) mcp_client_config: Option<McpClientConfig>,
     pub(crate) code_exec_config: Option<mistralrs_core::CodeExecutionConfig>,
     pub(crate) shell_config: Option<mistralrs_core::ShellConfig>,
+    pub(crate) encoder_cache_memory_bytes: Option<usize>,
 }
 
 impl ModelBuilder {
@@ -126,6 +127,7 @@ impl ModelBuilder {
             mcp_client_config: None,
             code_exec_config: None,
             shell_config: None,
+            encoder_cache_memory_bytes: None,
         }
     }
 
@@ -161,6 +163,15 @@ impl ModelBuilder {
     /// Only applies to multimodal models that support this (e.g., Qwen2-VL, Idefics 2).
     pub fn with_max_edge(mut self, max_edge: u32) -> Self {
         self.max_edge = Some(max_edge);
+        self
+    }
+
+    pub fn with_encoder_cache_memory_bytes(mut self, max_bytes: usize) -> Self {
+        assert!(
+            max_bytes > 0,
+            "encoder cache memory capacity must be nonzero"
+        );
+        self.encoder_cache_memory_bytes = Some(max_bytes);
         self
     }
 

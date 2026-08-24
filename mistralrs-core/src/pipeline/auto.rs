@@ -54,6 +54,7 @@ pub struct AutoLoaderBuilder {
     lora_runtime_config: Option<LoraRuntimeConfig>,
     hf_cache_path: Option<PathBuf>,
     mtp: bool,
+    encoder_cache_memory_bytes: Option<usize>,
 }
 
 impl AutoLoaderBuilder {
@@ -84,12 +85,21 @@ impl AutoLoaderBuilder {
             lora_runtime_config: None,
             hf_cache_path: None,
             mtp: false,
+            encoder_cache_memory_bytes: None,
         }
     }
 
     /// Load the MTP head built into the checkpoint so it can drive speculative decoding.
     pub fn with_mtp(mut self, mtp: bool) -> Self {
         self.mtp = mtp;
+        self
+    }
+
+    pub fn with_encoder_cache_memory_bytes(mut self, max_bytes: Option<usize>) -> Self {
+        if let Some(max_bytes) = max_bytes {
+            assert!(max_bytes > 0, "encoder cache memory must be nonzero");
+        }
+        self.encoder_cache_memory_bytes = max_bytes;
         self
     }
 
@@ -139,6 +149,7 @@ impl AutoLoaderBuilder {
             lora_runtime_config,
             hf_cache_path,
             mtp,
+            encoder_cache_memory_bytes,
         } = self;
 
         let mut normal_builder = NormalLoaderBuilder::new(
@@ -176,7 +187,9 @@ impl AutoLoaderBuilder {
         if let Some(ref path) = hf_cache_path {
             multimodal_builder = multimodal_builder.hf_cache_path(path.clone());
         }
-        multimodal_builder = multimodal_builder.with_mtp(mtp);
+        multimodal_builder = multimodal_builder
+            .with_mtp(mtp)
+            .with_encoder_cache_memory_bytes(encoder_cache_memory_bytes);
 
         let mut embedding_builder =
             EmbeddingLoaderBuilder::new(embedding_cfg, tokenizer_json, Some(model_id.clone()));

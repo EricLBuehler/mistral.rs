@@ -1448,6 +1448,9 @@ impl MultimodalModel for Model {
     fn default_model_specific_args(&self, _input_ids: &Tensor) -> Box<dyn Any> {
         Box::new(Phi3VisionSpecificArgs::default())
     }
+    fn encoder_cache(&self) -> Option<&Mutex<EncoderCacheManager>> {
+        Some(&self.encoder_cache)
+    }
     fn encoder_cache_counters(
         &self,
     ) -> Option<(

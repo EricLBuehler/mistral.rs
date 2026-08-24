@@ -583,6 +583,7 @@ class Which(Enum):
         hf_cache_path: str | None = field(default=None, kw_only=True)
         matformer_config_path: str | None = field(default=None, kw_only=True)
         matformer_slice_name: str | None = field(default=None, kw_only=True)
+        encoder_cache_memory_bytes: int | None = field(default=None, kw_only=True)
 
     @dataclass
     class XLoraGGUF:
@@ -669,6 +670,7 @@ class Which(Enum):
         matformer_config_path: str | None = None
         matformer_slice_name: str | None = None
         organization: IsqOrganization | None = None
+        encoder_cache_memory_bytes: int | None = None
 
     @dataclass
     class DiffusionPlain:

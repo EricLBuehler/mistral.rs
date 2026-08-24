@@ -392,6 +392,11 @@ async fn build_model_configs(
         if let Some(isq) = crate::commands::serve::extract_isq_setting(&model_type) {
             config = config.with_in_situ_quant(isq);
         }
+        if let Some(max_bytes) =
+            crate::commands::serve::extract_encoder_cache_memory_bytes(&model_type)?
+        {
+            config = config.with_encoder_cache_memory_bytes(max_bytes);
+        }
 
         configs.push(config);
     }

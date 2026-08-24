@@ -86,9 +86,7 @@ fn update_process_residency(
     publish_process_residency_metrics(&residency);
 }
 
-/// Resource used to bound the encoder cache. Zero means unbounded capacity.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[allow(dead_code)]
 enum EncoderCacheCapacityPolicy {
     Entries(usize),
     LogicalBytes(usize),
@@ -150,9 +148,8 @@ impl EncoderCacheManager {
         Self::with_capacity_policy(EncoderCacheCapacityPolicy::Entries(max_entries))
     }
 
-    /// Create a new encoder cache bounded by logical tensor payload bytes.
-    #[allow(dead_code)]
-    pub fn with_max_logical_bytes(max_bytes: usize) -> Self {
+    #[cfg(test)]
+    fn with_max_logical_bytes(max_bytes: usize) -> Self {
         Self::with_capacity_policy(EncoderCacheCapacityPolicy::LogicalBytes(max_bytes))
     }
 
@@ -195,6 +192,45 @@ impl EncoderCacheManager {
         )
         .increment(0);
         manager
+    }
+
+    pub fn set_max_logical_bytes(&mut self, max_bytes: usize) {
+        assert!(max_bytes > 0, "encoder cache byte capacity must be nonzero");
+        self.set_capacity_policy(EncoderCacheCapacityPolicy::LogicalBytes(max_bytes));
+    }
+
+    fn set_capacity_policy(&mut self, capacity_policy: EncoderCacheCapacityPolicy) {
+        let previous_entries = self.cache.len();
+        let previous_logical_bytes = self.cached_logical_bytes;
+        self.capacity_policy = capacity_policy;
+
+        let mut evicted = 0usize;
+        while self.exceeds_current_capacity() {
+            let (_, oldest) = self
+                .cache
+                .shift_remove_index(0)
+                .expect("nonempty encoder cache required for capacity eviction");
+            self.cached_logical_bytes = self
+                .cached_logical_bytes
+                .checked_sub(oldest.logical_bytes)
+                .expect("encoder cache byte accounting underflow");
+            evicted = evicted
+                .checked_add(1)
+                .expect("encoder cache eviction count overflow");
+        }
+        if evicted > 0 {
+            metrics::counter!(
+                ENCODER_CACHE_EVICTIONS_METRIC,
+                "reason" => capacity_policy.eviction_reason()
+            )
+            .increment(u64::try_from(evicted).unwrap_or(u64::MAX));
+        }
+        update_process_residency(
+            previous_entries,
+            self.cache.len(),
+            previous_logical_bytes,
+            self.cached_logical_bytes,
+        );
     }
 
     /// Number of entries currently resident in the cache.
@@ -337,6 +373,17 @@ impl EncoderCacheManager {
                         .checked_add(entry_bytes)
                         .expect("encoder cache byte accounting overflow")
                         > max_bytes
+            }
+        }
+    }
+
+    fn exceeds_current_capacity(&self) -> bool {
+        match self.capacity_policy {
+            EncoderCacheCapacityPolicy::Entries(max_entries) => {
+                max_entries > 0 && self.cache.len() > max_entries
+            }
+            EncoderCacheCapacityPolicy::LogicalBytes(max_bytes) => {
+                max_bytes > 0 && self.cached_logical_bytes > max_bytes
             }
         }
     }
@@ -638,6 +685,25 @@ mod tests {
         assert!(cache.get(CacheModality::Image, 2).is_none());
         assert!(cache.get(CacheModality::Image, 3).is_none());
         assert!(cache.get(CacheModality::Image, 4).is_some());
+    }
+
+    #[test]
+    fn test_reconfigure_capacity_evicts_lru_and_preserves_counters() {
+        let mut cache = EncoderCacheManager::new(4);
+        cache.insert(CacheModality::Image, 1, vec![zeros(4, DType::F32)]);
+        cache.insert(CacheModality::Image, 2, vec![zeros(4, DType::F32)]);
+        let (hits, misses) = cache.counters();
+        let _ = cache.get(CacheModality::Image, 1);
+        let _ = cache.get(CacheModality::Image, 3);
+
+        cache.set_max_logical_bytes(16);
+
+        assert_eq!(cache.resident_entries(), 1);
+        assert_eq!(cache.cached_logical_bytes(), 16);
+        assert!(cache.get(CacheModality::Image, 1).is_some());
+        assert!(cache.get(CacheModality::Image, 2).is_none());
+        assert_eq!(hits.load(Ordering::Relaxed), 2);
+        assert_eq!(misses.load(Ordering::Relaxed), 2);
     }
 
     #[test]

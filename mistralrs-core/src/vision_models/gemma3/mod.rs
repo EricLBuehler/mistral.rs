@@ -281,6 +281,9 @@ impl MultimodalModel for Gemma3Model {
     fn config(&self) -> &ModelConfigMetadata {
         self.language_model.config()
     }
+    fn encoder_cache(&self) -> Option<&Mutex<EncoderCacheManager>> {
+        Some(&self.encoder_cache)
+    }
     fn encoder_cache_counters(
         &self,
     ) -> Option<(

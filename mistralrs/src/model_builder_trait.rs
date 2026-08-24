@@ -749,6 +749,7 @@ pub async fn build_text_pipeline(
         jinja_explicit: builder.jinja_explicit.clone(),
         max_model_len: None,
         mtp_config: builder.mtp_config.clone(),
+        encoder_cache_memory_bytes: None,
     };
 
     let add_model_config = AddModelConfig {
@@ -806,6 +807,7 @@ pub async fn build_multimodal_pipeline(
             .as_ref()
             .is_some_and(MtpConfig::is_builtin),
     )
+    .with_encoder_cache_memory_bytes(builder.encoder_cache_memory_bytes)
     .build(builder.loader_type.clone());
 
     let device = resolve_device(builder.force_cpu, None)?;
@@ -900,6 +902,7 @@ pub async fn build_multimodal_pipeline(
         jinja_explicit: builder.jinja_explicit.clone(),
         max_model_len: builder.max_model_len,
         mtp_config: builder.mtp_config.clone(),
+        encoder_cache_memory_bytes: builder.encoder_cache_memory_bytes,
     };
 
     let add_model_config = AddModelConfig {
@@ -951,7 +954,8 @@ pub async fn build_gguf_pipeline(
         config,
         builder.no_kv_cache,
         builder.jinja_explicit.clone(),
-    );
+    )
+    .with_encoder_cache_memory_bytes(builder.encoder_cache_memory_bytes);
     if let Some(mmproj_files) = builder.mmproj_files.clone() {
         loader_builder = loader_builder.with_mmproj_files(mmproj_files);
     }
@@ -1088,6 +1092,7 @@ pub async fn build_gguf_pipeline(
         jinja_explicit: builder.jinja_explicit.clone(),
         max_model_len: builder.max_model_len,
         mtp_config: builder.mtp_config.clone(),
+        encoder_cache_memory_bytes: builder.encoder_cache_memory_bytes,
     };
 
     let add_model_config = AddModelConfig {
@@ -1149,6 +1154,7 @@ pub async fn build_diffusion_pipeline(
         jinja_explicit: None,
         max_model_len: None,
         mtp_config: None,
+        encoder_cache_memory_bytes: None,
     };
 
     let add_model_config = AddModelConfig {
@@ -1214,6 +1220,7 @@ pub async fn build_speech_pipeline(
         jinja_explicit: None,
         max_model_len: None,
         mtp_config: None,
+        encoder_cache_memory_bytes: None,
     };
 
     let add_model_config = AddModelConfig {
@@ -1310,6 +1317,7 @@ pub async fn build_embedding_pipeline(
         jinja_explicit: None,
         max_model_len: None,
         mtp_config: None,
+        encoder_cache_memory_bytes: None,
     };
 
     let add_model_config = AddModelConfig {
@@ -1385,7 +1393,8 @@ pub async fn build_auto_pipeline(
         builder.model_id.clone(),
         builder.no_kv_cache,
         builder.jinja_explicit.clone(),
-    );
+    )
+    .with_encoder_cache_memory_bytes(builder.encoder_cache_memory_bytes);
     let auto_builder = if let Some(ref path) = builder.hf_cache_path {
         auto_builder.hf_cache_path(path.clone())
     } else {
@@ -1487,6 +1496,7 @@ pub async fn build_auto_pipeline(
         jinja_explicit: builder.jinja_explicit.clone(),
         max_model_len: None,
         mtp_config: builder.mtp_config.clone(),
+        encoder_cache_memory_bytes: builder.encoder_cache_memory_bytes,
     };
 
     let add_model_config = AddModelConfig {

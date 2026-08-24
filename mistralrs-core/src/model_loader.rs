@@ -25,6 +25,7 @@ pub struct LoaderBuilder {
     jinja_explicit: Option<String>,
     max_model_len: Option<usize>,
     mtp: bool,
+    encoder_cache_memory_bytes: Option<usize>,
 }
 
 impl LoaderBuilder {
@@ -36,12 +37,21 @@ impl LoaderBuilder {
             jinja_explicit: None,
             max_model_len: None,
             mtp: false,
+            encoder_cache_memory_bytes: None,
         }
     }
 
     /// Load the MTP head built into the checkpoint so it can drive speculative decoding.
     pub fn with_mtp(mut self, mtp: bool) -> Self {
         self.mtp = mtp;
+        self
+    }
+
+    pub fn with_encoder_cache_memory_bytes(mut self, max_bytes: Option<usize>) -> Self {
+        if let Some(max_bytes) = max_bytes {
+            assert!(max_bytes > 0, "encoder cache memory must be nonzero");
+        }
+        self.encoder_cache_memory_bytes = max_bytes;
         self
     }
 
@@ -281,6 +291,7 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
                 chat_template: args.chat_template,
                 no_kv_cache: args.no_kv_cache,
                 jinja_explicit: args.jinja_explicit,
+                encoder_cache_memory_bytes: args.encoder_cache_memory_bytes,
             };
             (selector, args).try_into()?
         }
@@ -403,7 +414,10 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
             } else {
                 builder
             };
-            builder.with_mtp(args.mtp).build()
+            builder
+                .with_mtp(args.mtp)
+                .with_encoder_cache_memory_bytes(args.encoder_cache_memory_bytes)
+                .build()
         }
         ModelSelected::MultimodalPlain {
             model_id,
@@ -449,6 +463,7 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
             args.jinja_explicit,
         )
         .with_mtp(args.mtp)
+        .with_encoder_cache_memory_bytes(args.encoder_cache_memory_bytes)
         .build(arch),
         ModelSelected::DiffusionPlain {
             model_id,
@@ -646,7 +661,8 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
                 },
                 args.no_kv_cache,
                 args.jinja_explicit,
-            );
+            )
+            .with_encoder_cache_memory_bytes(args.encoder_cache_memory_bytes);
             if let Some(mmproj_filename) = mmproj_filename {
                 builder = builder.with_mmproj_files(
                     mmproj_filename
@@ -687,6 +703,7 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
             args.no_kv_cache,
             args.jinja_explicit,
         )
+        .with_encoder_cache_memory_bytes(args.encoder_cache_memory_bytes)
         .with_xlora(
             xlora_model_id,
             serde_json::from_reader(
@@ -720,6 +737,7 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
             args.no_kv_cache,
             args.jinja_explicit,
         )
+        .with_encoder_cache_memory_bytes(args.encoder_cache_memory_bytes)
         .with_lora(
             adapters_model_id,
             serde_json::from_reader(

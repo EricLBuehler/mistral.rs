@@ -34,6 +34,8 @@ pub struct ModelConfig {
     pub num_device_layers: Option<Vec<String>>,
     /// Model-specific in-situ quantization
     pub in_situ_quant: Option<String>,
+    #[serde(default)]
+    pub encoder_cache_memory_bytes: Option<NonZeroUsize>,
 }
 
 impl ModelConfig {
@@ -46,6 +48,7 @@ impl ModelConfig {
             jinja_explicit: None,
             num_device_layers: None,
             in_situ_quant: None,
+            encoder_cache_memory_bytes: None,
         }
     }
 
@@ -71,6 +74,13 @@ impl ModelConfig {
 
     pub fn with_in_situ_quant(mut self, in_situ_quant: String) -> Self {
         self.in_situ_quant = Some(in_situ_quant);
+        self
+    }
+
+    pub fn with_encoder_cache_memory_bytes(mut self, max_bytes: usize) -> Self {
+        self.encoder_cache_memory_bytes = Some(
+            NonZeroUsize::new(max_bytes).expect("encoder cache memory capacity must be nonzero"),
+        );
         self
     }
 }
@@ -260,6 +270,7 @@ pub struct MistralRsForServerBuilder {
 
     /// Optional MTP assistant configuration.
     mtp_config: Option<MtpConfig>,
+    encoder_cache_memory_bytes: Option<usize>,
 
     /// Disable EOS token stopping (generate until max_len regardless of EOS)
     disable_eos_stop: bool,
@@ -309,6 +320,7 @@ impl Default for MistralRsForServerBuilder {
             mcp_client_config: None,
             paged_cache_type: defaults::PAGED_CACHE_TYPE,
             mtp_config: defaults::MTP_CONFIG,
+            encoder_cache_memory_bytes: None,
             disable_eos_stop: false,
             code_exec_config: None,
             shell_config: None,
@@ -431,6 +443,15 @@ impl MistralRsForServerBuilder {
     /// Sets the maximum number of concurrent sequences.
     pub fn with_max_seqs(mut self, max_seqs: usize) -> Self {
         self.max_seqs = max_seqs;
+        self
+    }
+
+    pub fn with_encoder_cache_memory_bytes(mut self, max_bytes: usize) -> Self {
+        assert!(
+            max_bytes > 0,
+            "encoder cache memory capacity must be nonzero"
+        );
+        self.encoder_cache_memory_bytes = Some(max_bytes);
         self
     }
 
@@ -786,6 +807,7 @@ impl MistralRsForServerBuilder {
             .with_chat_template(self.chat_template)
             .with_jinja_explicit(self.jinja_explicit)
             .with_mtp(self.mtp_config.as_ref().is_some_and(MtpConfig::is_builtin))
+            .with_encoder_cache_memory_bytes(self.encoder_cache_memory_bytes)
             .build()?;
 
         mistralrs_instance_info(&*loader);
@@ -843,6 +865,7 @@ impl MistralRsForServerBuilder {
             jinja_explicit: jinja_explicit_for_config,
             max_model_len: None,
             mtp_config: self.mtp_config.clone(),
+            encoder_cache_memory_bytes: self.encoder_cache_memory_bytes,
         };
 
         let mut builder = MistralRsBuilder::new(
@@ -915,11 +938,16 @@ impl MistralRsForServerBuilder {
         };
 
         // Create the first model's pipeline
+        let first_encoder_cache_memory_bytes = first_model
+            .encoder_cache_memory_bytes
+            .map(NonZeroUsize::get)
+            .or(self.encoder_cache_memory_bytes);
         let loader: Box<dyn Loader> = LoaderBuilder::new(model)
             .with_no_kv_cache(self.no_kv_cache)
             .with_chat_template(first_chat_template.clone())
             .with_jinja_explicit(first_jinja_explicit.clone())
             .with_mtp(self.mtp_config.as_ref().is_some_and(MtpConfig::is_builtin))
+            .with_encoder_cache_memory_bytes(first_encoder_cache_memory_bytes)
             .build()?;
 
         mistralrs_instance_info(&*loader);
@@ -1045,6 +1073,7 @@ impl MistralRsForServerBuilder {
             jinja_explicit: first_jinja_explicit,
             max_model_len: None,
             mtp_config: self.mtp_config.clone(),
+            encoder_cache_memory_bytes: first_encoder_cache_memory_bytes,
         };
 
         // Create the first MistralRs instance with the first model
@@ -1110,6 +1139,12 @@ impl MistralRsForServerBuilder {
                 .with_no_kv_cache(self.no_kv_cache)
                 .with_chat_template(chat_template.clone())
                 .with_jinja_explicit(jinja_explicit.clone())
+                .with_encoder_cache_memory_bytes(
+                    model_config
+                        .encoder_cache_memory_bytes
+                        .map(NonZeroUsize::get)
+                        .or(self.encoder_cache_memory_bytes),
+                )
                 .build()?;
 
             let mapper = init_mapper(
@@ -1192,6 +1227,10 @@ impl MistralRsForServerBuilder {
                 jinja_explicit,
                 max_model_len: None,
                 mtp_config: None,
+                encoder_cache_memory_bytes: model_config
+                    .encoder_cache_memory_bytes
+                    .map(NonZeroUsize::get)
+                    .or(self.encoder_cache_memory_bytes),
             };
             let mut add_model_config = mistralrs_core::AddModelConfig::new(engine_config)
                 .with_loader_config(loader_config);

@@ -154,6 +154,7 @@ pub struct MultimodalLoader {
     loader_type: Option<MultimodalLoaderType>,
     prepared_source: Option<PreparedMultimodalSource>,
     mtp: bool,
+    encoder_cache_memory_bytes: Option<usize>,
 }
 
 #[derive(Clone)]
@@ -185,6 +186,7 @@ pub struct MultimodalLoaderBuilder {
     lora_adapters: Option<Vec<LoraAdapterSpec>>,
     lora_runtime_config: Option<LoraRuntimeConfig>,
     mtp: bool,
+    encoder_cache_memory_bytes: Option<usize>,
 }
 
 #[derive(Clone, Default)]
@@ -223,12 +225,21 @@ impl MultimodalLoaderBuilder {
             lora_adapters: None,
             lora_runtime_config: None,
             mtp: false,
+            encoder_cache_memory_bytes: None,
         }
     }
 
     /// Load the MTP head built into the checkpoint so it can drive speculative decoding.
     pub fn with_mtp(mut self, mtp: bool) -> Self {
         self.mtp = mtp;
+        self
+    }
+
+    pub fn with_encoder_cache_memory_bytes(mut self, max_bytes: Option<usize>) -> Self {
+        if let Some(max_bytes) = max_bytes {
+            assert!(max_bytes > 0, "encoder cache memory must be nonzero");
+        }
+        self.encoder_cache_memory_bytes = max_bytes;
         self
     }
 
@@ -299,6 +310,7 @@ impl MultimodalLoaderBuilder {
             loader_type,
             prepared_source,
             mtp: self.mtp,
+            encoder_cache_memory_bytes: self.encoder_cache_memory_bytes,
         })
     }
 
@@ -447,6 +459,21 @@ impl Loader for MultimodalLoader {
 
         if !self.inner.supports_paged_attention(&config) {
             paged_attn_config = None;
+        }
+        let supports_encoder_cache = self.inner.supports_encoder_cache(&config);
+        if self.encoder_cache_memory_bytes.is_some() && !supports_encoder_cache {
+            mistralrs_quant::log::once_log_warn(
+                "Configured encoder cache capacity ignored because this model has no encoder cache",
+            );
+        }
+        if let (Some(bytes), Some(cache_config)) = (
+            self.encoder_cache_memory_bytes
+                .filter(|_| supports_encoder_cache),
+            paged_attn_config.as_mut(),
+        ) {
+            *cache_config = cache_config
+                .clone()
+                .with_base_device_memory_reservation(bytes)?;
         }
 
         debug!("Prompt chunk size is {ATTENTION_CHUNK_SIZE}.");
@@ -1111,6 +1138,16 @@ impl Loader for MultimodalLoader {
                 _ => unreachable!(),
             }
         };
+
+        if let Some(max_bytes) = self
+            .encoder_cache_memory_bytes
+            .filter(|_| supports_encoder_cache)
+        {
+            assert!(
+                model.configure_encoder_cache_memory_bytes(max_bytes),
+                "multimodal loader advertised an encoder cache but the model did not expose one"
+            );
+        }
 
         // Release Metal loader scratch buffers before constructing the remaining pipeline state.
         for device in &available_devices {

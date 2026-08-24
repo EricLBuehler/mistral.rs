@@ -159,6 +159,7 @@ pub struct GGUFLoader {
     tgt_non_granular_index: Option<usize>,
     config: GGUFSpecificConfig,
     jinja_explicit: Option<String>,
+    encoder_cache_memory_bytes: Option<usize>,
 }
 
 #[derive(Clone, Default)]
@@ -304,6 +305,7 @@ pub struct GGUFLoaderBuilder {
     tgt_non_granular_index: Option<usize>,
     config: GGUFSpecificConfig,
     jinja_explicit: Option<String>,
+    encoder_cache_memory_bytes: Option<usize>,
 }
 
 impl GGUFLoaderBuilder {
@@ -343,6 +345,14 @@ impl GGUFLoaderBuilder {
 
     pub fn with_tokenizer_json(mut self, tokenizer_json: String) -> Self {
         self.tokenizer_json = Some(tokenizer_json);
+        self
+    }
+
+    pub fn with_encoder_cache_memory_bytes(mut self, max_bytes: Option<usize>) -> Self {
+        if let Some(max_bytes) = max_bytes {
+            assert!(max_bytes > 0, "encoder cache memory must be nonzero");
+        }
+        self.encoder_cache_memory_bytes = max_bytes;
         self
     }
 
@@ -422,6 +432,7 @@ impl GGUFLoaderBuilder {
             quantized_model_id: self.quantized_model_id,
             config: self.config,
             jinja_explicit: self.jinja_explicit,
+            encoder_cache_memory_bytes: self.encoder_cache_memory_bytes,
         })
     }
 }
@@ -467,6 +478,7 @@ impl GGUFLoader {
             tgt_non_granular_index,
             config,
             jinja_explicit,
+            encoder_cache_memory_bytes: None,
         }
     }
 
@@ -780,7 +792,8 @@ impl GGUFLoader {
             None,
             Some(self.quantized_model_id.clone()),
             self.jinja_explicit.clone(),
-        );
+        )
+        .with_encoder_cache_memory_bytes(self.encoder_cache_memory_bytes);
         if let Some(dynamic_lora) = self.dynamic_lora.as_ref() {
             loader = loader.with_lora(dynamic_lora.adapters.clone(), dynamic_lora.runtime);
         }
@@ -911,7 +924,8 @@ impl GGUFLoader {
             None,
             Some(self.quantized_model_id.clone()),
             self.jinja_explicit.clone(),
-        );
+        )
+        .with_encoder_cache_memory_bytes(self.encoder_cache_memory_bytes);
         if let Some(dynamic_lora) = self.dynamic_lora.as_ref() {
             loader = loader.with_lora(dynamic_lora.adapters.clone(), dynamic_lora.runtime);
         }

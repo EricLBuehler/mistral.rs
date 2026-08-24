@@ -76,8 +76,8 @@ Timing is measured at the engine's token steps, not at SSE frames, so keep-alive
 | `mistralrs_encoder_cache_hits_total` | counter | - | Multimodal encoder cache hits (multimodal models only). |
 | `mistralrs_encoder_cache_misses_total` | counter | - | Multimodal encoder cache misses (multimodal models only). |
 | `mistralrs_encoder_cache_intra_batch_deduplications_total` | counter | - | Repeated media items coalesced within one encoder batch. |
-| `mistralrs_encoder_cache_evictions_total` | counter | `reason` | Encoder outputs removed because of entry, programmatic logical-byte, or shape constraints. |
-| `mistralrs_encoder_cache_insert_rejections_total` | counter | `reason` | Encoder outputs rejected because one entry exceeds a programmatic logical-byte budget. |
+| `mistralrs_encoder_cache_evictions_total` | counter | `reason` | Encoder outputs removed because of entry, configured logical-byte, or shape constraints. |
+| `mistralrs_encoder_cache_insert_rejections_total` | counter | `reason` | Encoder outputs rejected because one entry exceeds the configured logical-byte budget. |
 | `mistralrs_encoder_cache_resident_entries` | gauge | - | Encoder outputs resident across all encoder caches in the process. |
 | `mistralrs_encoder_cache_resident_logical_bytes` | gauge | - | Logical tensor payload bytes resident across all encoder caches in the process. Tensor views can share physical storage. |
 | `mistralrs_sequences_running` | gauge | - | Sequences currently running. |

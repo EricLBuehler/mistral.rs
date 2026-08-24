@@ -40,6 +40,7 @@ pub struct MultimodalModelBuilder {
     pub(crate) matformer_config_path: Option<PathBuf>,
     pub(crate) matformer_slice_name: Option<String>,
     pub(crate) organization: IsqOrganization,
+    pub(crate) encoder_cache_memory_bytes: Option<usize>,
 
     // Model running
     pub(crate) topology: Option<Topology>,
@@ -98,6 +99,7 @@ impl MultimodalModelBuilder {
             matformer_config_path: None,
             matformer_slice_name: None,
             organization: IsqOrganization::Default,
+            encoder_cache_memory_bytes: None,
             prefix_cache_n: None,
         }
     }
@@ -145,6 +147,15 @@ impl MultimodalModelBuilder {
     /// This is currently supported by the Gemma 4 multimodal loader.
     pub fn with_max_model_len(mut self, max_model_len: usize) -> Self {
         self.max_model_len = Some(max_model_len);
+        self
+    }
+
+    pub fn with_encoder_cache_memory_bytes(mut self, max_bytes: usize) -> Self {
+        assert!(
+            max_bytes > 0,
+            "encoder cache memory capacity must be nonzero"
+        );
+        self.encoder_cache_memory_bytes = Some(max_bytes);
         self
     }
 
