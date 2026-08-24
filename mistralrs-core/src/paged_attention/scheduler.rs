@@ -1508,14 +1508,16 @@ mod tests {
         }
     }
 
+    type TestSequenceMedia = (
+        Option<Vec<image::DynamicImage>>,
+        Option<Vec<AudioInput>>,
+        Option<Vec<VideoInput>>,
+    );
+
     fn test_sequence_with_media_sender_and_group(
         id: usize,
         len: usize,
-        input_media: (
-            Option<Vec<image::DynamicImage>>,
-            Option<Vec<AudioInput>>,
-            Option<Vec<VideoInput>>,
-        ),
+        input_media: TestSequenceMedia,
         tx: tokio::sync::mpsc::Sender<Response>,
         group: Arc<TokioMutex<SequenceGroup>>,
     ) -> Arc<Mutex<Sequence>> {
@@ -2007,7 +2009,7 @@ mod tests {
         assert_eq!(preempted_sequence_ids, vec![10]);
         assert_eq!(output.scheduled.len(), 1);
         assert_eq!(*get_mut_arcmutex!(output.scheduled[0]).id(), 20);
-        assert!(scheduler.waiting_counts.get(&20).is_none());
+        assert!(!scheduler.waiting_counts.contains_key(&20));
     }
 
     #[test]

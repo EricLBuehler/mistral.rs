@@ -1038,11 +1038,7 @@ impl HybridCache {
         initialization: RecurrentSlotInitialization,
     ) -> Result<usize> {
         self.recurrent_storage_locked = true;
-        if self
-            .slot_owners
-            .iter()
-            .any(|existing| *existing == Some(owner))
-        {
+        if self.slot_owners.contains(&Some(owner)) {
             candle_core::bail!("recurrent slot owner {owner:?} already has an allocation");
         }
         if self.recurrent_capacity() == 0 {
@@ -1732,6 +1728,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
     fn checkpoint_batch_maps_logical_slots_and_commits_keep_rows() -> Result<()> {
         let mut cache = HybridCache::new(
             config(vec![HybridLayerType::Recurrent]),
@@ -1783,6 +1780,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
     fn checkpoint_snapshot_uses_active_lane_and_restore_canonicalizes() -> Result<()> {
         let mut cache = HybridCache::new(
             config(vec![HybridLayerType::Recurrent]),
@@ -1878,6 +1876,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
     fn deferred_recurrent_reservation_requires_initialization_without_resetting() -> Result<()> {
         let mut cache = HybridCache::new(
             config(vec![HybridLayerType::Recurrent]),
@@ -1942,6 +1941,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
     fn graph_snapshot_preserves_active_checkpoint_lane() -> Result<()> {
         let mut cache = HybridCache::new(
             config(vec![HybridLayerType::Recurrent]),

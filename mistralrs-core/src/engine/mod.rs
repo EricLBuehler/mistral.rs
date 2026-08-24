@@ -1400,7 +1400,8 @@ impl Engine {
                             seq.finish_completion_timing(completion_exec_time);
                         }
 
-                        self.logger.add_decode_tokens_processed(scheduled.completion.len());
+                        self.logger
+                            .add_decode_tokens_processed(scheduled.completion.len());
 
                         last_completion_ids = current_completion_ids;
                     }
@@ -1471,7 +1472,8 @@ impl Engine {
                             .iter()
                             .map(|seq| seq.get_toks().len())
                             .sum();
-                        self.logger.add_prefill_tokens_processed(total_processed_tokens);
+                        self.logger
+                            .add_prefill_tokens_processed(total_processed_tokens);
 
                         for seq in scheduled.prompt.iter_mut() {
                             if !seq.is_finished_paged_attn() {
@@ -2057,9 +2059,11 @@ impl Engine {
 
                         let total_processed_tokens: usize = scheduled_token_counts.iter().sum();
                         if is_prompt {
-                            self.logger.add_prefill_tokens_processed(total_processed_tokens);
+                            self.logger
+                                .add_prefill_tokens_processed(total_processed_tokens);
                         } else {
-                            self.logger.add_decode_tokens_processed(total_processed_tokens);
+                            self.logger
+                                .add_decode_tokens_processed(total_processed_tokens);
                         }
 
                         // Capture recurrent states at full-block boundaries so hybrid models can

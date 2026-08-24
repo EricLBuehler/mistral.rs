@@ -76,11 +76,7 @@ impl IntervalLogger {
         let (shutdown_tx, shutdown_rx) = mpsc::channel();
         let worker = thread::spawn(move || {
             // Start the actual logging
-            loop {
-                match shutdown_rx.recv_timeout(interval) {
-                    Err(RecvTimeoutError::Timeout) => {}
-                    Ok(()) | Err(RecvTimeoutError::Disconnected) => break,
-                }
+            while let Err(RecvTimeoutError::Timeout) = shutdown_rx.recv_timeout(interval) {
                 let num_running = t_num_running.load(Ordering::Relaxed);
                 let num_waiting = t_num_waiting.load(Ordering::Relaxed);
                 metrics::gauge!("mistralrs_sequences_running").set(num_running as f64);
@@ -103,7 +99,8 @@ impl IntervalLogger {
                         .absolute(misses.load(Ordering::Relaxed) as u64);
                 }
                 let tokens_processed = t_tokens_processed.swap(0, Ordering::Relaxed);
-                let prefill_tokens_processed = t_prefill_tokens_processed.swap(0, Ordering::Relaxed);
+                let prefill_tokens_processed =
+                    t_prefill_tokens_processed.swap(0, Ordering::Relaxed);
                 let decode_tokens_processed = t_decode_tokens_processed.swap(0, Ordering::Relaxed);
                 let spec_drafts = t_spec_drafts.swap(0, Ordering::Relaxed);
                 let spec_draft_tokens = t_spec_draft_tokens.swap(0, Ordering::Relaxed);
@@ -206,8 +203,7 @@ impl IntervalLogger {
         self.prefill_tokens_processed
             .fetch_add(num_tokens, Ordering::Relaxed);
         metrics::counter!("mistralrs_tokens_processed_total").increment(num_tokens as u64);
-        metrics::counter!("mistralrs_prefill_tokens_processed_total")
-            .increment(num_tokens as u64);
+        metrics::counter!("mistralrs_prefill_tokens_processed_total").increment(num_tokens as u64);
     }
 
     /// Count generated (decode) tokens through the pipeline. With speculative
@@ -219,8 +215,7 @@ impl IntervalLogger {
         self.decode_tokens_processed
             .fetch_add(num_tokens, Ordering::Relaxed);
         metrics::counter!("mistralrs_tokens_processed_total").increment(num_tokens as u64);
-        metrics::counter!("mistralrs_decode_tokens_processed_total")
-            .increment(num_tokens as u64);
+        metrics::counter!("mistralrs_decode_tokens_processed_total").increment(num_tokens as u64);
     }
 
     /// Record one speculative verification batch (across all its sequences).

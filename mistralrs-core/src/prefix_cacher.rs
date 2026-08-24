@@ -959,6 +959,7 @@ mod tests {
         AdapterGenerationId::from_bytes([value; 32])
     }
 
+    #[allow(clippy::cast_possible_truncation)]
     fn block_hashes(start: u32, len: usize) -> Vec<BlockHash> {
         let tokens = (start..start + len as u32).collect::<Vec<_>>();
         compute_block_hashes(&tokens, 1, &[], &[])

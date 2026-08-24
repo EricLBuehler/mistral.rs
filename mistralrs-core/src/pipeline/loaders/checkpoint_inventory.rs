@@ -156,7 +156,7 @@ pub(crate) fn checkpoint_device_map_sizes(
         }
     }
 
-    if layer_sizes_in_bytes.iter().any(|size| *size == 0) {
+    if layer_sizes_in_bytes.contains(&0) {
         return Ok(None);
     }
     let mapped_size = layer_sizes_in_bytes

@@ -231,7 +231,7 @@ pub enum Command {
 
     /// Update or migrate an install using the installer
     Update {
-        /// Install a specific release tag instead of the latest (e.g. v0.9.1)
+        /// Install a specific release tag instead of the latest (e.g. v0.9.2)
         #[arg(long)]
         tag: Option<String>,
     },
