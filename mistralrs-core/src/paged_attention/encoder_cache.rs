@@ -38,6 +38,7 @@ const ENTRY_CAPACITY_REASON: &str = "entry_capacity";
 const LOGICAL_BYTE_CAPACITY_REASON: &str = "logical_byte_capacity";
 const INCOMPATIBLE_SHAPE_REASON: &str = "incompatible_shape";
 const ENTRY_EXCEEDS_LOGICAL_BYTE_CAPACITY_REASON: &str = "entry_exceeds_logical_byte_capacity";
+const STORAGE_COMPACTION_FAILED_REASON: &str = "storage_compaction_failed";
 static PROCESS_RESIDENCY: Mutex<ProcessResidency> = Mutex::new(ProcessResidency {
     entries: 0,
     logical_bytes: 0,
@@ -108,7 +109,23 @@ struct EncoderCacheEntry {
 
 impl EncoderCacheEntry {
     fn new(outputs: Vec<Tensor>) -> Self {
-        let logical_bytes = outputs.iter().fold(0usize, |total, tensor| {
+        let logical_bytes = Self::logical_bytes(&outputs);
+        Self {
+            outputs,
+            logical_bytes,
+        }
+    }
+
+    fn compact(outputs: Vec<Tensor>) -> candle_core::Result<Self> {
+        let outputs = outputs
+            .into_iter()
+            .map(|tensor| tensor.force_contiguous().map(|tensor| tensor.detach()))
+            .collect::<candle_core::Result<Vec<_>>>()?;
+        Ok(Self::new(outputs))
+    }
+
+    fn logical_bytes(outputs: &[Tensor]) -> usize {
+        outputs.iter().fold(0usize, |total, tensor| {
             let tensor_bytes = tensor
                 .elem_count()
                 .checked_mul(tensor.dtype().size_in_bytes())
@@ -116,11 +133,7 @@ impl EncoderCacheEntry {
             total
                 .checked_add(tensor_bytes)
                 .expect("encoder cache entry byte size overflow")
-        });
-        Self {
-            outputs,
-            logical_bytes,
-        }
+        })
     }
 }
 
@@ -189,6 +202,11 @@ impl EncoderCacheManager {
         metrics::counter!(
             ENCODER_CACHE_INSERT_REJECTIONS_METRIC,
             "reason" => ENTRY_EXCEEDS_LOGICAL_BYTE_CAPACITY_REASON
+        )
+        .increment(0);
+        metrics::counter!(
+            ENCODER_CACHE_INSERT_REJECTIONS_METRIC,
+            "reason" => STORAGE_COMPACTION_FAILED_REASON
         )
         .increment(0);
         manager
@@ -302,11 +320,11 @@ impl EncoderCacheManager {
     /// evicted first.
     pub fn insert(&mut self, modality: CacheModality, content_hash: u64, outputs: Vec<Tensor>) {
         let key = (modality, content_hash);
-        let entry = EncoderCacheEntry::new(outputs);
+        let entry_bytes = EncoderCacheEntry::logical_bytes(&outputs);
         if matches!(
             self.capacity_policy,
             EncoderCacheCapacityPolicy::LogicalBytes(max_bytes)
-                if max_bytes > 0 && entry.logical_bytes > max_bytes
+                if max_bytes > 0 && entry_bytes > max_bytes
         ) {
             metrics::counter!(
                 ENCODER_CACHE_INSERT_REJECTIONS_METRIC,
@@ -315,6 +333,17 @@ impl EncoderCacheManager {
             .increment(1);
             return;
         }
+        let entry = match EncoderCacheEntry::compact(outputs) {
+            Ok(entry) => entry,
+            Err(_) => {
+                metrics::counter!(
+                    ENCODER_CACHE_INSERT_REJECTIONS_METRIC,
+                    "reason" => STORAGE_COMPACTION_FAILED_REASON
+                )
+                .increment(1);
+                return;
+            }
+        };
 
         let previous_entries = self.cache.len();
         let previous_logical_bytes = self.cached_logical_bytes;
@@ -646,6 +675,21 @@ mod tests {
 
         assert_eq!(cache.resident_entries(), 2);
         assert_eq!(cache.cached_logical_bytes(), 3 * 2 + 2 * 2);
+    }
+
+    #[test]
+    fn test_cache_compacts_tensor_views() {
+        let backing =
+            Tensor::from_slice(&[0f32, 1., 2., 3., 4., 5., 6., 7.], (2, 4), &Device::Cpu).unwrap();
+        let view = backing.get(1).unwrap();
+        assert_eq!(view.storage_and_layout().1.start_offset(), 4);
+
+        let mut cache = EncoderCacheManager::new(4);
+        cache.insert(CacheModality::Image, 1, vec![view]);
+
+        let cached = cache.get(CacheModality::Image, 1).unwrap();
+        assert_eq!(cached[0].storage_and_layout().1.start_offset(), 0);
+        assert_eq!(cached[0].to_vec1::<f32>().unwrap(), vec![4., 5., 6., 7.]);
     }
 
     #[test]

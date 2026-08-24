@@ -4068,8 +4068,12 @@ impl MultimodalModelLoader for Gemma3Loader {
     fn supports_paged_attention(&self, _config: &str) -> bool {
         true
     }
-    fn supports_encoder_cache(&self, _config: &str) -> bool {
-        true
+    fn supports_encoder_cache(&self, config: &str) -> bool {
+        serde_json::from_str::<serde_json::Value>(config).is_ok_and(|config| {
+            config
+                .get("vision_config")
+                .is_some_and(|vision_config| !vision_config.is_null())
+        })
     }
     fn supports_prefix_cacher(&self, _config: &str) -> bool {
         true
@@ -9671,7 +9675,7 @@ mod tests {
             ("MiniCPMO", true),
             ("Phi4MMForCausalLM", true),
             ("Qwen2_5_VLForConditionalGeneration", true),
-            ("Gemma3ForConditionalGeneration", true),
+            ("Gemma3ForConditionalGeneration", false),
             ("Mistral3ForConditionalGeneration", true),
             ("Llama4ForConditionalGeneration", true),
             ("Gemma3nForConditionalGeneration", true),
@@ -9691,6 +9695,19 @@ mod tests {
                 "{architecture}"
             );
         }
+    }
+
+    #[test]
+    fn gemma3_reports_encoder_cache_only_with_vision_config() {
+        let loader = Gemma3Loader;
+        assert!(!loader
+            .supports_encoder_cache(r#"{"architectures":["Gemma3ForConditionalGeneration"]}"#));
+        assert!(!loader.supports_encoder_cache(
+            r#"{"architectures":["Gemma3ForConditionalGeneration"],"vision_config":null}"#
+        ));
+        assert!(loader.supports_encoder_cache(
+            r#"{"architectures":["Gemma3ForConditionalGeneration"],"vision_config":{}}"#
+        ));
     }
 
     fn assert_fused_moe_default_isq_predicates(

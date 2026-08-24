@@ -282,20 +282,11 @@ impl MultimodalModel for Gemma3Model {
         self.language_model.config()
     }
     fn encoder_cache(&self) -> Option<&Mutex<EncoderCacheManager>> {
-        Some(&self.encoder_cache)
-    }
-    fn encoder_cache_counters(
-        &self,
-    ) -> Option<(
-        Arc<std::sync::atomic::AtomicUsize>,
-        Arc<std::sync::atomic::AtomicUsize>,
-    )> {
-        Some(
-            self.encoder_cache
-                .lock()
-                .expect("encoder cache poisoned")
-                .counters(),
-        )
+        if matches!(&self.cfg, Gemma3Config::WithVision { .. }) {
+            Some(&self.encoder_cache)
+        } else {
+            None
+        }
     }
 }
 
