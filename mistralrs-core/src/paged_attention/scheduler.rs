@@ -42,6 +42,12 @@ enum BatchKind {
     Completion,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BlockHashUpdate {
+    Append,
+    Rebuild,
+}
+
 struct PromptBatch {
     scheduled: VecDeque<Arc<Mutex<Sequence>>>,
     chunk_size: Option<usize>,
@@ -195,6 +201,25 @@ impl PagedAttentionScheduler {
             && !seq.has_suffix_only_prefill_toks()
             && !((seq.has_images() || seq.has_audios() || seq.has_videos())
                 && seq.mm_features().is_empty())
+    }
+
+    fn materialize_prompt_chunks(&self, batch: &PromptBatch) {
+        let Some(chunks) = batch.chunks.as_ref() else {
+            return;
+        };
+        assert_eq!(batch.scheduled.len(), chunks.len());
+        let allocations = batch
+            .scheduled
+            .iter()
+            .zip(chunks)
+            .map(|(seq, chunk)| (*get_mut_arcmutex!(seq).id(), chunk.end))
+            .collect::<Vec<_>>();
+        let mut kv_mgr = get_mut_arcmutex!(self.kv_cache_manager);
+        for (seq_id, allocation_end) in allocations {
+            kv_mgr
+                .allocate_slots(seq_id, allocation_end, &[])
+                .expect("reserved prompt chunk must fit in the KV cache");
+        }
     }
 
     fn select_prompt_batch(
@@ -378,7 +403,7 @@ impl PagedAttentionScheduler {
             .filter(|seq| get_mut_arcmutex!(seq).is_completion())
             .count();
         prompt_blocks.saturating_add(decode_reserve)
-            <= get_mut_arcmutex!(self.kv_cache_manager).num_free_blocks()
+            <= get_mut_arcmutex!(self.kv_cache_manager).num_unreserved_blocks()
     }
 
     fn completion_token_cost(seq: &Sequence) -> usize {
@@ -515,6 +540,24 @@ impl PagedAttentionScheduler {
         }
     }
 
+    fn block_hash_update(
+        &self,
+        seq_id: usize,
+        num_tokens: usize,
+        revision: u64,
+    ) -> Option<BlockHashUpdate> {
+        let num_full_blocks = num_tokens / self.block_size;
+        match (
+            self.seq_block_hash_revisions.get(&seq_id),
+            self.seq_block_hashes.get(&seq_id),
+        ) {
+            (Some(known_revision), Some(hashes)) if *known_revision == revision => {
+                (hashes.len() < num_full_blocks).then_some(BlockHashUpdate::Append)
+            }
+            _ => Some(BlockHashUpdate::Rebuild),
+        }
+    }
+
     /// Compute or update block hashes for a sequence.
     ///
     /// `mm_features`: per-item multimodal feature positions. Each feature's content hash
@@ -529,22 +572,37 @@ impl PagedAttentionScheduler {
         adapter_generation: Option<AdapterGenerationId>,
         revision: u64,
     ) {
+        let Some(update) = self.block_hash_update(seq_id, tokens.len(), revision) else {
+            return;
+        };
         let adapter_key = adapter_generation_key(adapter_generation);
-        let known_revision = self.seq_block_hash_revisions.get(&seq_id).copied();
-        let hashes = self.seq_block_hashes.entry(seq_id).or_default();
-        if hashes.is_empty() || known_revision != Some(revision) {
-            *hashes =
-                compute_block_hashes(tokens, self.block_size, mm_features, adapter_key.as_slice());
-            self.seq_block_hash_revisions.insert(seq_id, revision);
-        } else {
-            let new = compute_new_block_hashes(
-                tokens,
-                self.block_size,
-                hashes,
-                mm_features,
-                adapter_key.as_slice(),
-            );
-            hashes.extend(new);
+        match update {
+            BlockHashUpdate::Rebuild => {
+                self.seq_block_hashes.insert(
+                    seq_id,
+                    compute_block_hashes(
+                        tokens,
+                        self.block_size,
+                        mm_features,
+                        adapter_key.as_slice(),
+                    ),
+                );
+                self.seq_block_hash_revisions.insert(seq_id, revision);
+            }
+            BlockHashUpdate::Append => {
+                let hashes = self
+                    .seq_block_hashes
+                    .get_mut(&seq_id)
+                    .expect("append requires existing block hashes");
+                let new_hashes = compute_new_block_hashes(
+                    tokens,
+                    self.block_size,
+                    hashes,
+                    mm_features,
+                    adapter_key.as_slice(),
+                );
+                hashes.extend(new_hashes);
+            }
         }
     }
 
@@ -734,6 +792,7 @@ impl PagedAttentionScheduler {
             let block_hash_revision = seq_guard.block_hash_revision();
             let return_raw_logits = seq_guard.return_raw_logits;
             let new_seq_modality = modality_signature(&seq_guard);
+            let lazy_prompt_allocation = self.supports_scheduler_visible_prompt_chunks(&seq_guard);
             drop(seq_guard);
 
             // Reject prompts that can never fit instead of waiting out the starvation timeout.
@@ -831,12 +890,15 @@ impl PagedAttentionScheduler {
 
             let num_computed = computed.num_computed_tokens;
             let computed_block_count = num_computed / self.block_size;
+            let computed_blocks = &computed.block_ids[..computed_block_count];
             let mut kv_mgr = get_mut_arcmutex!(self.kv_cache_manager);
-            let alloc_result = kv_mgr.allocate_slots(
-                seq_id,
-                num_tokens,
-                &computed.block_ids[..computed_block_count],
-            );
+            let alloc_result = if lazy_prompt_allocation {
+                kv_mgr
+                    .reserve_prompt(seq_id, num_tokens, computed_blocks)
+                    .map(|()| Vec::new())
+            } else {
+                kv_mgr.allocate_slots(seq_id, num_tokens, computed_blocks)
+            };
             drop(kv_mgr);
 
             match alloc_result {
@@ -866,11 +928,13 @@ impl PagedAttentionScheduler {
                             scheduled.retain(|seq| *get_mut_arcmutex!(seq).id() != preempted_id);
 
                             let mut kv_mgr = get_mut_arcmutex!(self.kv_cache_manager);
-                            let retry = kv_mgr.allocate_slots(
-                                seq_id,
-                                num_tokens,
-                                &computed.block_ids[..computed_block_count],
-                            );
+                            let retry = if lazy_prompt_allocation {
+                                kv_mgr
+                                    .reserve_prompt(seq_id, num_tokens, computed_blocks)
+                                    .map(|()| Vec::new())
+                            } else {
+                                kv_mgr.allocate_slots(seq_id, num_tokens, computed_blocks)
+                            };
                             drop(kv_mgr);
                             if retry.is_some() {
                                 allocated = true;
@@ -933,11 +997,14 @@ impl PagedAttentionScheduler {
         self.waiting.extend(for_waiting_again);
 
         if !scheduled.is_empty() {
+            let prompt_batch = self.select_prompt_batch(scheduled);
+            self.materialize_prompt_chunks(&prompt_batch);
+
             let PromptBatch {
                 scheduled,
                 chunk_size: prompt_chunk_size,
                 chunks: scheduled_prompt_chunks,
-            } = self.select_prompt_batch(scheduled);
+            } = prompt_batch;
 
             // Rebuild num_cached_tokens from the bucketed sequences.
             // prefix_cache_len was set per-sequence above, so this stays aligned
@@ -947,17 +1014,19 @@ impl PagedAttentionScheduler {
                 .map(|seq| get_mut_arcmutex!(seq).prefix_cache_len())
                 .collect();
 
-            logger.set_num_running(self.running.len());
-            logger.set_num_waiting(self.waiting.len());
-            self.publish_kv_block_metrics();
-            self.decode_steps_since_prefill = 0;
+            if !scheduled.is_empty() {
+                logger.set_num_running(self.running.len());
+                logger.set_num_waiting(self.waiting.len());
+                self.publish_kv_block_metrics();
+                self.decode_steps_since_prefill = 0;
 
-            return PagedAttentionSchedulerOutput {
-                scheduled: scheduled.into_iter().collect(),
-                num_cached_tokens,
-                prompt_chunk_size,
-                scheduled_prompt_chunks,
-            };
+                return PagedAttentionSchedulerOutput {
+                    scheduled: scheduled.into_iter().collect(),
+                    num_cached_tokens,
+                    prompt_chunk_size,
+                    scheduled_prompt_chunks,
+                };
+            }
         }
 
         // Reserve completion token slots, preempting lowest priority first.
@@ -1051,48 +1120,22 @@ impl PagedAttentionScheduler {
         // Eagerly cache any newly-full blocks so other requests can hit the prefix cache
         // sooner, rather than waiting until finish/preempt. cache_blocks is idempotent.
         if self.prefix_caching_enabled {
-            // Collect sequence info first to avoid borrow conflict with self.ensure_block_hashes
-            let seq_infos: Vec<SeqCacheInfo> = self
-                .running
-                .iter()
-                .map(|seq| {
-                    let seq_guard = get_mut_arcmutex!(seq);
-                    let seq_id = *seq_guard.id();
-                    let tokens = seq_guard.get_toks().to_vec();
-                    let mm_features = seq_guard.mm_features().to_vec();
-                    let adapter_generation = seq_guard.adapter_generation();
-                    let block_hash_revision = seq_guard.block_hash_revision();
-                    let num_computed_tokens = seq_guard.num_computed_tokens();
-                    (
-                        seq_id,
-                        tokens,
-                        mm_features,
-                        adapter_generation,
-                        block_hash_revision,
-                        num_computed_tokens,
-                    )
-                })
-                .collect();
-
-            for (
-                seq_id,
-                tokens,
-                mm_features,
-                adapter_generation,
-                block_hash_revision,
-                num_computed_tokens,
-            ) in &seq_infos
-            {
+            let running = self.running.iter().cloned().collect::<Vec<_>>();
+            for seq in running {
+                let seq_guard = get_mut_arcmutex!(seq);
+                let seq_id = *seq_guard.id();
+                let num_computed_tokens = seq_guard.num_computed_tokens();
                 self.ensure_block_hashes(
-                    *seq_id,
-                    tokens,
-                    mm_features,
-                    *adapter_generation,
-                    *block_hash_revision,
+                    seq_id,
+                    seq_guard.get_toks(),
+                    seq_guard.mm_features(),
+                    seq_guard.adapter_generation(),
+                    seq_guard.block_hash_revision(),
                 );
-                if let Some(block_hashes) = self.seq_block_hashes.get(seq_id).cloned() {
+                drop(seq_guard);
+                if let Some(block_hashes) = self.seq_block_hashes.get(&seq_id) {
                     let mut kv_mgr = get_mut_arcmutex!(self.kv_cache_manager);
-                    kv_mgr.cache_blocks(*seq_id, &block_hashes, *num_computed_tokens);
+                    kv_mgr.cache_blocks(seq_id, block_hashes, num_computed_tokens);
                 }
             }
         }
@@ -1120,6 +1163,10 @@ impl PagedAttentionScheduler {
         metrics::gauge!("mistralrs_kv_cache_blocks_used").set(active as f64);
         metrics::gauge!("mistralrs_kv_cache_blocks_total").set(total as f64);
         metrics::gauge!("mistralrs_kv_cache_blocks_active").set(active as f64);
+        metrics::gauge!("mistralrs_kv_cache_blocks_reserved")
+            .set(kv_mgr.num_reserved_blocks() as f64);
+        metrics::gauge!("mistralrs_kv_cache_blocks_available")
+            .set(kv_mgr.num_unreserved_blocks() as f64);
         metrics::gauge!("mistralrs_kv_cache_blocks_prefix_cached")
             .set(kv_mgr.num_prefix_cached_blocks() as f64);
         metrics::gauge!("mistralrs_kv_cache_blocks_prefix_retained")
@@ -1661,6 +1708,78 @@ mod tests {
                 None,
             )]),
         )
+    }
+
+    #[test]
+    fn block_hash_update_waits_for_a_full_block() {
+        let mut scheduler = test_scheduler();
+        let seq_id = 7;
+        let revision = 3;
+        let mut tokens = vec![1; scheduler.block_size - 1];
+
+        assert_eq!(
+            scheduler.block_hash_update(seq_id, tokens.len(), revision),
+            Some(BlockHashUpdate::Rebuild)
+        );
+        scheduler.ensure_block_hashes(seq_id, &tokens, &[], None, revision);
+        assert!(scheduler.seq_block_hashes[&seq_id].is_empty());
+        assert_eq!(
+            scheduler.block_hash_update(seq_id, tokens.len(), revision),
+            None
+        );
+
+        tokens.push(1);
+        assert_eq!(
+            scheduler.block_hash_update(seq_id, tokens.len(), revision),
+            Some(BlockHashUpdate::Append)
+        );
+        scheduler.ensure_block_hashes(seq_id, &tokens, &[], None, revision);
+        assert_eq!(scheduler.seq_block_hashes[&seq_id].len(), 1);
+
+        tokens.extend(std::iter::repeat_n(2, scheduler.block_size - 1));
+        assert_eq!(
+            scheduler.block_hash_update(seq_id, tokens.len(), revision),
+            None
+        );
+    }
+
+    #[test]
+    fn block_hash_update_appends_then_rebuilds_on_revision_change() {
+        let mut scheduler = test_scheduler();
+        let seq_id = 9;
+        let revision = 4;
+        let mut tokens = vec![1; scheduler.block_size];
+
+        scheduler.ensure_block_hashes(seq_id, &tokens, &[], None, revision);
+        let first_hashes = scheduler.seq_block_hashes[&seq_id].clone();
+        tokens.extend(std::iter::repeat_n(2, scheduler.block_size));
+
+        assert_eq!(
+            scheduler.block_hash_update(seq_id, tokens.len(), revision),
+            Some(BlockHashUpdate::Append)
+        );
+        scheduler.ensure_block_hashes(seq_id, &tokens, &[], None, revision);
+        assert_eq!(
+            scheduler.seq_block_hashes[&seq_id],
+            compute_block_hashes(&tokens, scheduler.block_size, &[], &[])
+        );
+        assert_eq!(
+            scheduler.block_hash_update(seq_id, tokens.len(), revision),
+            None
+        );
+
+        tokens[0] = 100;
+        let next_revision = revision + 1;
+        assert_eq!(
+            scheduler.block_hash_update(seq_id, tokens.len(), next_revision),
+            Some(BlockHashUpdate::Rebuild)
+        );
+        scheduler.ensure_block_hashes(seq_id, &tokens, &[], None, next_revision);
+        assert_ne!(scheduler.seq_block_hashes[&seq_id][0], first_hashes[0]);
+        assert_eq!(
+            scheduler.seq_block_hashes[&seq_id],
+            compute_block_hashes(&tokens, scheduler.block_size, &[], &[])
+        );
     }
 
     #[test]
@@ -3120,6 +3239,220 @@ mod tests {
     }
 
     #[test]
+    fn lazy_prompt_admission_materializes_only_the_selected_chunk() {
+        let mut scheduler = test_scheduler();
+        scheduler.scheduler_visible_prompt_chunks = true;
+        scheduler.config.max_num_batched_tokens = 8;
+        let seq = test_sequence(0, 32);
+        get_mut_arcmutex!(seq).set_state(SequenceState::Waiting);
+        scheduler.waiting.push_back(seq);
+        let logger = IntervalLogger::new(std::time::Duration::from_secs(3600), None);
+
+        let output = scheduler.schedule(&logger, None);
+
+        assert_eq!(output.scheduled_prompt_chunks.unwrap()[0].end, 8);
+        let kv_mgr = get_mut_arcmutex!(scheduler.kv_cache_manager);
+        assert_eq!(kv_mgr.num_blocks_for_request(0), 1);
+        assert_eq!(kv_mgr.num_reserved_blocks(), 3);
+        assert_eq!(kv_mgr.num_active_blocks() + kv_mgr.num_reserved_blocks(), 4);
+    }
+
+    #[test]
+    fn lazy_prompt_allocation_grows_with_each_chunk_frontier() {
+        let mut scheduler = test_scheduler();
+        scheduler.scheduler_visible_prompt_chunks = true;
+        scheduler.config.max_num_batched_tokens = 8;
+        let seq = test_sequence(0, 24);
+        get_mut_arcmutex!(seq).set_state(SequenceState::Waiting);
+        scheduler.waiting.push_back(seq.clone());
+        let logger = IntervalLogger::new(std::time::Duration::from_secs(3600), None);
+
+        let first = scheduler.schedule(&logger, None);
+        let first_chunk = first.scheduled_prompt_chunks.unwrap()[0];
+        let first_blocks = get_mut_arcmutex!(scheduler.kv_cache_manager)
+            .get_block_ids(0)
+            .unwrap()
+            .to_vec();
+        assert_eq!((first_chunk.start, first_chunk.end), (0, 8));
+        assert_eq!(first_blocks.len(), 1);
+        assert_eq!(
+            get_mut_arcmutex!(scheduler.kv_cache_manager).num_reserved_blocks(),
+            2
+        );
+
+        {
+            let mut seq = get_mut_arcmutex!(seq);
+            seq.set_prefix_cache_len(first_chunk.end);
+            seq.set_num_computed_tokens(first_chunk.end);
+        }
+        let second = scheduler.schedule(&logger, None);
+        let second_chunk = second.scheduled_prompt_chunks.unwrap()[0];
+        let kv_mgr = get_mut_arcmutex!(scheduler.kv_cache_manager);
+        let second_blocks = kv_mgr.get_block_ids(0).unwrap();
+        assert_eq!((second_chunk.start, second_chunk.end), (8, 16));
+        assert_eq!(second_blocks.len(), 2);
+        assert_eq!(&second_blocks[..first_blocks.len()], first_blocks);
+        assert_eq!(kv_mgr.num_reserved_blocks(), 1);
+    }
+
+    #[test]
+    fn lazy_prompt_reservation_pressure_preserves_decode_and_staged_validation() {
+        let mut scheduler = PagedAttentionScheduler::new(
+            PagedAttentionSchedulerConfig {
+                max_num_seqs: 8,
+                max_num_batched_tokens: 8,
+                max_prefill_chunk_tokens: 8,
+                max_decode_steps_before_prefill: 1,
+            },
+            CacheConfig {
+                block_size: 8,
+                num_gpu_blocks: 8,
+                cache_type: PagedCacheType::Auto,
+                kv_cache_group_ids: vec![0],
+            },
+        );
+        scheduler.scheduler_visible_prompt_chunks = true;
+        let completion = test_sequence(0, 8);
+        get_mut_arcmutex!(completion).set_num_computed_tokens(8);
+        assert!(get_mut_arcmutex!(scheduler.kv_cache_manager)
+            .allocate_slots(0, 9, &[])
+            .is_some());
+        scheduler.running.push_back(completion);
+
+        let prompt = test_sequence(1, 48);
+        get_mut_arcmutex!(prompt).set_state(SequenceState::Waiting);
+        scheduler.waiting.push_back(prompt);
+        scheduler.decode_steps_since_prefill = scheduler.config.max_decode_steps_before_prefill;
+        let logger = IntervalLogger::new(std::time::Duration::from_secs(3600), None);
+        let mut validator = RecordingPrefixValidator::default();
+        let committed_ids = Arc::clone(&validator.committed_ids);
+
+        let SchedulerOutput::PagedAttention {
+            output,
+            preempted_sequence_ids,
+        } = Scheduler::schedule(&mut scheduler, &logger, Some(&mut validator))
+        else {
+            panic!("paged scheduler returned a default scheduler output");
+        };
+
+        assert_eq!(output.scheduled.len(), 1);
+        assert_eq!(*get_mut_arcmutex!(output.scheduled[0]).id(), 0);
+        assert!(preempted_sequence_ids.is_empty());
+        assert_eq!(scheduler.waiting.len(), 1);
+        assert_eq!(validator.validated_ids, vec![1]);
+        assert!(get_mut_arcmutex!(committed_ids).is_empty());
+        let kv_mgr = get_mut_arcmutex!(scheduler.kv_cache_manager);
+        assert!(!kv_mgr.has_request(1));
+        assert_eq!(kv_mgr.num_reserved_blocks(), 0);
+    }
+
+    #[test]
+    fn canceling_lazy_prompt_releases_physical_and_reserved_blocks() {
+        let mut scheduler = test_scheduler();
+        scheduler.scheduler_visible_prompt_chunks = true;
+        scheduler.config.max_num_batched_tokens = 8;
+        let initial_free_blocks = get_mut_arcmutex!(scheduler.kv_cache_manager).num_free_blocks();
+        let (seq, receiver) = test_sequence_with_media_and_receiver(0, 32, None, None, None);
+        get_mut_arcmutex!(seq).set_state(SequenceState::Waiting);
+        scheduler.waiting.push_back(seq.clone());
+        let logger = IntervalLogger::new(std::time::Duration::from_secs(3600), None);
+
+        let output = scheduler.schedule(&logger, None);
+        let chunk_end = output.scheduled_prompt_chunks.unwrap()[0].end;
+        {
+            let mut seq = get_mut_arcmutex!(seq);
+            seq.set_prefix_cache_len(chunk_end);
+            seq.set_num_computed_tokens(chunk_end);
+        }
+        assert_eq!(
+            get_mut_arcmutex!(scheduler.kv_cache_manager).num_reserved_blocks(),
+            3
+        );
+
+        drop(receiver);
+        Scheduler::cancel_closed_response_groups(&mut scheduler);
+        scheduler.free_finished_sequence_groups();
+
+        let kv_mgr = get_mut_arcmutex!(scheduler.kv_cache_manager);
+        assert!(!kv_mgr.has_request(0));
+        assert_eq!(kv_mgr.num_active_blocks(), 0);
+        assert_eq!(kv_mgr.num_reserved_blocks(), 0);
+        assert_eq!(kv_mgr.num_free_blocks(), initial_free_blocks);
+    }
+
+    #[test]
+    fn lazy_prompt_prefix_hit_pins_cache_and_materializes_only_the_suffix_chunk() {
+        let mut scheduler = test_scheduler();
+        scheduler.scheduler_visible_prompt_chunks = true;
+        scheduler.config.max_num_batched_tokens = 4;
+        let tokens = vec![1; 24];
+        let hashes = compute_block_hashes(&tokens, scheduler.block_size, &[], &[]);
+        {
+            let mut kv_mgr = get_mut_arcmutex!(scheduler.kv_cache_manager);
+            kv_mgr.allocate_slots(99, 8, &[]).unwrap();
+            kv_mgr.cache_blocks(99, &hashes, 8);
+            kv_mgr.free(99);
+        }
+
+        let seq = test_sequence(0, tokens.len());
+        get_mut_arcmutex!(seq).set_state(SequenceState::Waiting);
+        scheduler.waiting.push_back(seq);
+        let logger = IntervalLogger::new(std::time::Duration::from_secs(3600), None);
+        let mut validator = RecordingPrefixValidator::default();
+        let committed_ids = Arc::clone(&validator.committed_ids);
+
+        let output = scheduler.schedule(&logger, Some(&mut validator));
+
+        assert_eq!(output.num_cached_tokens, vec![8]);
+        let chunk = output.scheduled_prompt_chunks.unwrap()[0];
+        assert_eq!((chunk.start, chunk.end), (8, 12));
+        assert_eq!(validator.cached_tokens, vec![8]);
+        assert_eq!(&*get_mut_arcmutex!(committed_ids), &[0]);
+        let kv_mgr = get_mut_arcmutex!(scheduler.kv_cache_manager);
+        assert_eq!(kv_mgr.num_blocks_for_request(0), 2);
+        assert_eq!(kv_mgr.num_reserved_blocks(), 1);
+        assert_eq!(kv_mgr.num_cached_blocks(0), 1);
+    }
+
+    #[test]
+    fn lazy_prompt_still_rejects_a_full_request_over_capacity() {
+        let mut scheduler = PagedAttentionScheduler::new(
+            PagedAttentionSchedulerConfig {
+                max_num_seqs: 8,
+                max_num_batched_tokens: 8,
+                max_prefill_chunk_tokens: 8,
+                max_decode_steps_before_prefill: 8,
+            },
+            CacheConfig {
+                block_size: 8,
+                num_gpu_blocks: 4,
+                cache_type: PagedCacheType::Auto,
+                kv_cache_group_ids: vec![0],
+            },
+        );
+        scheduler.scheduler_visible_prompt_chunks = true;
+        let (seq, mut receiver) = test_sequence_with_media_and_receiver(0, 25, None, None, None);
+        get_mut_arcmutex!(seq).set_state(SequenceState::Waiting);
+        scheduler.waiting.push_back(seq.clone());
+        let logger = IntervalLogger::new(std::time::Duration::from_secs(3600), None);
+
+        let output = scheduler.schedule(&logger, None);
+
+        assert!(output.scheduled.is_empty());
+        assert_eq!(
+            get_mut_arcmutex!(seq).getstate(),
+            SequenceState::FinishedIgnored
+        );
+        assert!(matches!(
+            receiver.try_recv(),
+            Ok(Response::ValidationError(_))
+        ));
+        let kv_mgr = get_mut_arcmutex!(scheduler.kv_cache_manager);
+        assert_eq!(kv_mgr.num_active_blocks(), 0);
+        assert_eq!(kv_mgr.num_reserved_blocks(), 0);
+    }
+
+    #[test]
     fn scheduler_visible_prefill_uses_exact_long_prompt_ranges() {
         let mut scheduler = test_scheduler();
         scheduler.scheduler_visible_prompt_chunks = true;
@@ -3324,6 +3657,14 @@ mod tests {
         let raw_output = raw_scheduler.schedule(&logger, None);
         assert!(raw_output.scheduled_prompt_chunks.is_none());
         assert!(raw_output.prompt_chunk_size.is_none());
+        assert_eq!(
+            get_mut_arcmutex!(raw_scheduler.kv_cache_manager).num_blocks_for_request(0),
+            2
+        );
+        assert_eq!(
+            get_mut_arcmutex!(raw_scheduler.kv_cache_manager).num_reserved_blocks(),
+            0
+        );
 
         let mut media_scheduler = test_scheduler();
         media_scheduler.scheduler_visible_prompt_chunks = true;
@@ -3335,5 +3676,13 @@ mod tests {
         let media_output = media_scheduler.schedule(&logger, None);
         assert!(media_output.scheduled_prompt_chunks.is_none());
         assert!(media_output.prompt_chunk_size.is_none());
+        assert_eq!(
+            get_mut_arcmutex!(media_scheduler.kv_cache_manager).num_blocks_for_request(1),
+            2
+        );
+        assert_eq!(
+            get_mut_arcmutex!(media_scheduler.kv_cache_manager).num_reserved_blocks(),
+            0
+        );
     }
 }
