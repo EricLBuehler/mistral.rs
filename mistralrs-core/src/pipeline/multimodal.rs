@@ -2343,7 +2343,8 @@ impl Pipeline for MultimodalPipeline {
     fn supports_packed_prefill(&self) -> bool {
         self.model.supports_packed_prefill()
             && self.metadata.cache_engine.is_some()
-            && !self.model.has_speculative_proposer()
+            && (!self.model.has_speculative_proposer()
+                || self.model.supports_speculative_packed_prefill())
             && self.model.device().is_cuda()
             && self.mapper.get_unique_devices().iter().all(Device::is_cuda)
             && crate::using_flash_attn()

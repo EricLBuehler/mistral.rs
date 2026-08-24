@@ -121,6 +121,10 @@ pub trait SpeculativeTargetMixin {
         false
     }
 
+    fn supports_speculative_packed_prefill(&self) -> bool {
+        false
+    }
+
     fn speculative_prefix_replay(&self) -> SpeculativePrefixReplay {
         SpeculativePrefixReplay::NotRequired
     }

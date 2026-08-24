@@ -275,7 +275,9 @@ fn normal_model_requires_uniform_prompt_batch(
     is_xlora: bool,
     has_speculative_proposer: bool,
 ) -> bool {
-    (is_hybrid && !packed_prefill_available) || is_xlora || has_speculative_proposer
+    (is_hybrid && !packed_prefill_available)
+        || is_xlora
+        || (has_speculative_proposer && !packed_prefill_available)
 }
 
 /// A loader for a "normal" (non-quantized) model.
@@ -2248,7 +2250,8 @@ impl Pipeline for NormalPipeline {
         self.model.supports_packed_prefill()
             && self.metadata.cache_engine.is_some()
             && !self.model.is_xlora()
-            && !self.model.has_speculative_proposer()
+            && (!self.model.has_speculative_proposer()
+                || self.model.supports_speculative_packed_prefill())
             && self.model.device().is_cuda()
             && self.mapper.get_unique_devices().iter().all(Device::is_cuda)
             && crate::using_flash_attn()
@@ -2733,11 +2736,14 @@ mod tests {
     }
 
     #[test]
-    fn xlora_and_speculative_models_remain_uniform() {
+    fn xlora_and_unsupported_speculative_models_remain_uniform() {
         assert!(normal_model_requires_uniform_prompt_batch(
             true, true, true, false
         ));
         assert!(normal_model_requires_uniform_prompt_batch(
+            true, false, false, true
+        ));
+        assert!(!normal_model_requires_uniform_prompt_batch(
             true, true, false, true
         ));
     }
