@@ -110,7 +110,7 @@ int main(int argc, char** argv) {
     return 1;
   }
   if (!providerOk(mistralrs_deepgemm_sm90_gemm(
-                      &prepared, activation, weight, weight_scale, output, workspace,
+                      &prepared, plan.m, activation, weight, weight_scale, output, workspace,
                       plan.workspace_bytes, stream),
                   "gemm") ||
       !cudaOk(cudaMemcpyAsync(host_output.data(), output,
@@ -132,7 +132,7 @@ int main(int argc, char** argv) {
   if (!cudaOk(cudaStreamBeginCapture(stream, cudaStreamCaptureModeThreadLocal),
               "graph begin") ||
       !providerOk(mistralrs_deepgemm_sm90_gemm(
-                      &prepared, activation, weight, weight_scale, output, workspace,
+                      &prepared, plan.m, activation, weight, weight_scale, output, workspace,
                       plan.workspace_bytes, stream),
                   "captured gemm") ||
       !cudaOk(cudaStreamEndCapture(stream, &graph), "graph end") ||

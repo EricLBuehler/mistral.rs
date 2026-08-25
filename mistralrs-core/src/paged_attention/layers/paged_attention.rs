@@ -117,13 +117,27 @@ fn resolve_tensor_for_device(
     candle_core::bail!("Missing {what} tensor for {:?}", device.location())
 }
 
+fn checked_sequence_token_count(lengths: &[usize]) -> Result<usize> {
+    let total = lengths.iter().try_fold(0usize, |total, &len| {
+        total
+            .checked_add(len)
+            .ok_or_else(|| candle_core::Error::msg("sequence token count overflow"))
+    })?;
+    i32::try_from(total)
+        .map_err(|_| candle_core::Error::msg("sequence token count exceeds kernel i32 limit"))?;
+    Ok(total)
+}
+
 fn cumulative_seqlens_from_lengths(lengths: &[usize], device: &Device) -> Result<Tensor> {
+    let expected_total = checked_sequence_token_count(lengths)?;
     let mut cumulative = Vec::with_capacity(lengths.len() + 1);
+    let mut total = 0usize;
     cumulative.push(0u32);
     for &len in lengths {
-        #[allow(clippy::cast_possible_truncation)]
-        cumulative.push(cumulative.last().copied().unwrap_or(0) + len as u32);
+        total += len;
+        cumulative.push(u32::try_from(total).map_err(candle_core::Error::wrap)?);
     }
+    debug_assert_eq!(total, expected_total);
     Tensor::new(&cumulative[..], &Device::Cpu)?.to_device(device)
 }
 
@@ -256,6 +270,7 @@ fn gather_kv_cache_for_layout(
     scales: CacheScales<'_>,
     block_tables: &Tensor,
     cu_kv: &Tensor,
+    num_tokens: usize, // Must equal cu_kv[-1].
     dtype: DType,
 ) -> Result<(Tensor, Tensor)> {
     match AttentionBackendKind::from_cache(key_cache, value_cache) {
@@ -267,6 +282,7 @@ fn gather_kv_cache_for_layout(
                     value_cache,
                     block_tables,
                     cu_kv,
+                    num_tokens,
                     dtype,
                     scales.flashinfer(key_cache),
                 )
@@ -283,6 +299,7 @@ fn gather_kv_cache_for_layout(
             scales.v,
             block_tables,
             cu_kv,
+            num_tokens,
             dtype,
         ),
     }
@@ -903,10 +920,19 @@ impl PagedAttention {
                 .collect::<candle_core::Result<_>>()?;
             block_tables.index_select(&Tensor::from_vec(row_idx, (num_seqs,), device)?, 0)?
         };
-        let cu_kv = cumulative_seqlens_from_lengths(&vec![kv_len; num_seqs], device)?;
+        let kv_lens = vec![kv_len; num_seqs];
+        let num_tokens = checked_sequence_token_count(&kv_lens)?;
+        let cu_kv = cumulative_seqlens_from_lengths(&kv_lens, device)?;
         let scales = self.cache_scales(key_cache);
-        let (k, v) =
-            gather_kv_cache_for_layout(key_cache, value_cache, scales, &table, &cu_kv, dtype)?;
+        let (k, v) = gather_kv_cache_for_layout(
+            key_cache,
+            value_cache,
+            scales,
+            &table,
+            &cu_kv,
+            num_tokens,
+            dtype,
+        )?;
         // Packed [num_seqs * kv_len, kv_heads, head_size] -> [num_seqs, kv_heads, kv_len, hd].
         let unpack = |t: Tensor| -> Result<Tensor> {
             let (_, kv_heads, head_size) = t.dims3()?;
@@ -1084,6 +1110,7 @@ impl PagedAttention {
         } else {
             cumulative_seqlens_from_lengths(&kv_lens, device)?
         };
+        let num_kv_tokens = checked_sequence_token_count(&kv_lens)?;
         let query_layout_is_dense =
             query_layout_is_dense(&query_lens, ctx.dims.batch_size, ctx.dims.seq_len);
         let declared_causal = ctx.flash_params.map_or(
@@ -1204,6 +1231,7 @@ impl PagedAttention {
             scales,
             block_tables,
             &cu_kv,
+            num_kv_tokens,
             tensors.query.dtype(),
         )?;
         let max_kv = kv_lens.iter().copied().max().unwrap_or(0);
@@ -1734,6 +1762,7 @@ impl PagedAttention {
             }
         };
         let query_rows = decode_query_rows(query, &kv_lens)?;
+        let num_kv_tokens = checked_sequence_token_count(&kv_lens)?;
         let cu_kv = cumulative_seqlens_from_lengths(&kv_lens, query.device())?;
         let scales = self.cache_scales(key_cache);
         let (k_gathered, v_gathered) = gather_kv_cache_for_layout(
@@ -1742,6 +1771,7 @@ impl PagedAttention {
             scales,
             block_tables,
             &cu_kv,
+            num_kv_tokens,
             query.dtype(),
         )?;
         let q_4d = query.reshape((query_rows, ctx.dims.attention_heads, 1, ctx.dims.head_size))?;
@@ -2173,6 +2203,24 @@ impl PagedAttention {
 mod tests {
     use super::*;
     use candle_core::D;
+
+    #[test]
+    fn cumulative_seqlens_match_checked_host_token_count() -> Result<()> {
+        let lengths = [3usize, 0, 5];
+        let num_tokens = checked_sequence_token_count(&lengths)?;
+        let cu_seqlens = cumulative_seqlens_from_lengths(&lengths, &Device::Cpu)?;
+
+        assert_eq!(num_tokens, 8);
+        assert_eq!(cu_seqlens.to_vec1::<u32>()?, vec![0, 3, 3, 8]);
+        Ok(())
+    }
+
+    #[test]
+    fn checked_sequence_token_count_rejects_invalid_kernel_sizes() {
+        let kernel_limit = usize::try_from(i32::MAX).unwrap();
+        assert!(checked_sequence_token_count(&[kernel_limit, 1]).is_err());
+        assert!(checked_sequence_token_count(&[usize::MAX, 1]).is_err());
+    }
 
     #[cfg(all(feature = "cuda", target_family = "unix"))]
     fn supported_fa3_decode_candidate() -> Fa3DecodeCandidate {

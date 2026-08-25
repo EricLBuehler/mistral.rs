@@ -589,6 +589,7 @@ impl Engine {
             requires_uniform_completion_batch,
             requires_uniform_media_batch,
             supports_packed_prefill,
+            prefill_has_per_sequence_state,
             scheduler_visible_prompt_chunks,
             prompt_chunks_require_block_alignment,
             prefix_policy,
@@ -600,6 +601,7 @@ impl Engine {
                 pipeline.requires_uniform_completion_batch(),
                 pipeline.requires_uniform_media_batch(),
                 pipeline.supports_packed_prefill(),
+                pipeline.cache().is_hybrid(),
                 pipeline.device().is_cuda() && !pipeline_metadata.is_xlora,
                 pipeline.cache().is_hybrid(),
                 pipeline.speculative_prefix_checkpoint_policy(),
@@ -629,6 +631,8 @@ impl Engine {
             .set_requires_uniform_completion_batch(requires_uniform_completion_batch);
         get_mut_arcmutex!(scheduler).set_requires_uniform_media_batch(requires_uniform_media_batch);
         get_mut_arcmutex!(scheduler).set_supports_packed_prefill(supports_packed_prefill);
+        get_mut_arcmutex!(scheduler)
+            .set_prefill_has_per_sequence_state(prefill_has_per_sequence_state);
         get_mut_arcmutex!(scheduler).set_scheduler_visible_prompt_chunks(
             scheduler_visible_prompt_chunks,
             prompt_chunks_require_block_alignment,

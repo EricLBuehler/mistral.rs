@@ -3,7 +3,7 @@ use std::ops::Range;
 use candle_core::{Result, Tensor};
 
 use crate::{
-    gdn::{GatedDeltaNet, GdnLayerCache},
+    gdn::{try_forward_uniform_packed_gdn, GatedDeltaNet, GdnLayerCache},
     pipeline::{ModelForwardContext, RecurrentBatchKind},
 };
 
@@ -138,6 +138,10 @@ pub(crate) fn forward_packed_gdn(
         candle_core::bail!(
             "Qwen3.5 packed GDN tokens and recurrent states are on different devices"
         );
+    }
+
+    if let Some(output) = try_forward_uniform_packed_gdn(gdn, x, cache, query_lens)? {
+        return Ok(output);
     }
 
     let mut outputs = Vec::with_capacity(segments.len());

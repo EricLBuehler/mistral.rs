@@ -580,7 +580,7 @@ pub struct RuntimeOptions {
     #[serde(default = "default_max_num_batched_tokens")]
     pub max_num_batched_tokens: NonZeroUsize,
 
-    /// Maximum chunkable CUDA text-prompt tokens in one paged-attention scheduler step
+    /// CUDA prompt-token quantum used while decode is resident and for recurrent prefill batching
     #[arg(long, default_value_t = default_max_prefill_chunk_tokens())]
     #[serde(default = "default_max_prefill_chunk_tokens")]
     pub max_prefill_chunk_tokens: NonZeroUsize,

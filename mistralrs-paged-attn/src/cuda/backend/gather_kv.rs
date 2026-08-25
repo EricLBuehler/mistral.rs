@@ -2,7 +2,7 @@ use crate::cuda::backend::flashinfer::{gather_kv_cache_flashinfer, is_flashinfer
 use crate::cuda::backend::slice_ptr;
 use crate::cuda::ffi::gather_kv_cache as ffi_gather_kv_cache;
 use candle_core::backend::BackendStorage;
-use candle_core::{DType, IndexOp, Result, Storage, Tensor};
+use candle_core::{DType, Result, Storage, Tensor};
 use float8::F8E4M3;
 
 use crate::{KvCacheScales, DEFAULT_FP8_KV_CACHE_SCALES};
@@ -57,6 +57,7 @@ pub fn gather_kv_cache(
     v_scale: Option<&Tensor>,
     block_table: &Tensor, // [batch, max_blocks]
     cu_seq_lens: &Tensor, // [batch + 1]
+    num_tokens: usize,    // cu_seq_lens[-1]
     out_dtype: DType,
 ) -> Result<(Tensor, Tensor)> {
     let cache_dtype = key_cache.dtype();
@@ -74,6 +75,7 @@ pub fn gather_kv_cache(
             value_cache,
             block_table,
             cu_seq_lens,
+            num_tokens,
             out_dtype,
             flashinfer_cache_scales(cache_dtype, k_scale, v_scale)?,
         );
@@ -103,14 +105,14 @@ pub fn gather_kv_cache(
     let x = k_dims.4;
     let head_size = head_size_over_x * x;
 
-    // num_tokens = cu_seq_lens[-1], num_seqs = len(cu_seq_lens) - 1
     let cu_seq_lens_len = cu_seq_lens.dims1()?;
-    let num_seqs = cu_seq_lens_len - 1;
-    let num_tokens = if cu_seq_lens.dtype() == DType::I32 {
-        cu_seq_lens.i(cu_seq_lens_len - 1)?.to_scalar::<i32>()? as usize
-    } else {
-        cu_seq_lens.i(cu_seq_lens_len - 1)?.to_scalar::<u32>()? as usize
-    };
+    let num_seqs = cu_seq_lens_len
+        .checked_sub(1)
+        .ok_or_else(|| candle_core::Error::msg("cu_seq_lens must contain an initial offset"))?;
+    let num_tokens_i32 = i32::try_from(num_tokens)
+        .map_err(|_| candle_core::Error::msg("num_tokens exceeds the kernel i32 limit"))?;
+    let num_seqs_i32 = i32::try_from(num_seqs)
+        .map_err(|_| candle_core::Error::msg("num_seqs exceeds the kernel i32 limit"))?;
 
     if num_tokens == 0 {
         let k_out = Tensor::zeros((0, num_kv_heads, head_size), out_dtype, key_cache.device())?;
@@ -263,8 +265,8 @@ pub fn gather_kv_cache(
                 v_scale_ptr,
                 bt_ptr as *const i32,
                 cu_ptr as *const i32,
-                num_tokens as i32,
-                num_seqs as i32,
+                num_tokens_i32,
+                num_seqs_i32,
                 block_size as i32,
                 block_table_stride as i32,
                 num_kv_heads as i32,

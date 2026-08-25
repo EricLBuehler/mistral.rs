@@ -482,7 +482,7 @@ extern "C" int32_t mistralrs_deepgemm_sm90_prepare(const MistralrsDeepGemmPlan* 
 }
 
 extern "C" int32_t mistralrs_deepgemm_sm90_gemm(
-    const MistralrsDeepGemmPrepared* prepared, const void* activation_bf16,
+    const MistralrsDeepGemmPrepared* prepared, uint32_t m, const void* activation_bf16,
     const void* weight_e4m3, const float* weight_scales, void* output_bf16,
     void* workspace, size_t workspace_bytes, cudaStream_t stream) {
   last_error.clear();
@@ -493,6 +493,11 @@ extern "C" int32_t mistralrs_deepgemm_sm90_gemm(
       return MISTRALRS_DEEPGEMM_INVALID_ARGUMENT;
     }
     const auto* plan = &prepared->plan;
+    if (m == 0 || m > plan->m ||
+        ((plan->flags & MISTRALRS_DEEPGEMM_PLAN_SWAP_AB) != 0 && m != plan->m)) {
+      last_error = "DeepGEMM launch M exceeds the prepared row capacity";
+      return MISTRALRS_DEEPGEMM_INVALID_ARGUMENT;
+    }
     if (activation_bf16 == nullptr || weight_e4m3 == nullptr || weight_scales == nullptr ||
         output_bf16 == nullptr || workspace == nullptr ||
         !pointerAligned(activation_bf16, kTensorAlignment) ||
@@ -511,17 +516,17 @@ extern "C" int32_t mistralrs_deepgemm_sm90_gemm(
     auto function = reinterpret_cast<CUfunction>(prepared->function);
 
     auto* workspace_bytes_ptr = static_cast<std::byte*>(workspace);
-    size_t activation_elements = static_cast<size_t>(plan->m) * plan->k;
+    size_t activation_elements = static_cast<size_t>(m) * plan->k;
     size_t activation_bytes = alignUp(activation_elements, kWorkspaceAlignment);
     auto* activation_fp8 = reinterpret_cast<__nv_fp8_e4m3*>(workspace_bytes_ptr);
     auto* activation_scales = reinterpret_cast<float*>(workspace_bytes_ptr + activation_bytes);
-    uint64_t scale_count = static_cast<uint64_t>(plan->m) * (plan->k / kBlockSize);
+    uint64_t scale_count = static_cast<uint64_t>(m) * (plan->k / kBlockSize);
     uint32_t blocks = static_cast<uint32_t>(
         std::min<uint64_t>(static_cast<uint64_t>(plan->sm_count) * 8,
                            std::max<uint64_t>(1, (scale_count + 7) / 8)));
     quantizeBf16ToFp8E4m3<<<blocks, 256, 0, stream>>>(
         static_cast<const __nv_bfloat16*>(activation_bf16), activation_fp8, activation_scales,
-        plan->m, plan->k, static_cast<uint32_t>(alignUp(plan->m, 4)));
+        m, plan->k, static_cast<uint32_t>(alignUp(m, 4)));
     auto cuda_status = cudaPeekAtLastError();
     if (cuda_status != cudaSuccess) {
       return cudaFailure("DeepGEMM activation quantization launch", cuda_status);
@@ -531,13 +536,13 @@ extern "C" int32_t mistralrs_deepgemm_sm90_gemm(
     if (swap_ab) {
       launchNormalGemmSwapAB(
           function, const_cast<void*>(weight_e4m3), plan->k, activation_fp8, plan->k, output_bf16,
-          plan->n, const_cast<float*>(weight_scales), activation_scales, plan->n, plan->m, plan->k,
+          plan->n, const_cast<float*>(weight_scales), activation_scales, plan->n, m, plan->k,
           plan->block_m, plan->block_n, plan->block_k, plan->num_tma_multicast,
           reinterpret_cast<CUstream>(stream), plan->sm_count, plan->smem_bytes);
     } else {
       launchNormalGemm(
           function, activation_fp8, plan->k, const_cast<void*>(weight_e4m3), plan->k, output_bf16,
-          plan->n, activation_scales, const_cast<float*>(weight_scales), plan->m, plan->n, plan->k,
+          plan->n, activation_scales, const_cast<float*>(weight_scales), m, plan->n, plan->k,
           plan->block_m, plan->block_n, plan->block_k, plan->num_tma_multicast,
           reinterpret_cast<CUstream>(stream), plan->sm_count, plan->smem_bytes);
     }

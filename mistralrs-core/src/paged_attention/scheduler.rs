@@ -108,6 +108,7 @@ pub struct PagedAttentionScheduler {
     requires_uniform_completion_batch: bool,
     requires_uniform_media_batch: bool,
     supports_packed_prefill: bool,
+    prefill_has_per_sequence_state: bool,
     scheduler_visible_prompt_chunks: bool,
     prompt_chunks_require_block_alignment: bool,
     prefix_policy: SpeculativePrefixCheckpointPolicy,
@@ -154,6 +155,7 @@ impl PagedAttentionScheduler {
             requires_uniform_completion_batch: true,
             requires_uniform_media_batch: false,
             supports_packed_prefill: false,
+            prefill_has_per_sequence_state: false,
             scheduler_visible_prompt_chunks: false,
             prompt_chunks_require_block_alignment: false,
             prefix_policy: SpeculativePrefixCheckpointPolicy::default(),
@@ -169,18 +171,27 @@ impl PagedAttentionScheduler {
         }
     }
 
-    fn prompt_chunk_size(&self, batch_size: usize) -> Option<usize> {
-        (batch_size > 0).then(|| (self.prefill_token_budget() / batch_size).max(1))
+    fn prompt_chunk_size(&self, batch_size: usize, latency_bounded: bool) -> Option<usize> {
+        (batch_size > 0).then(|| (self.prefill_token_budget(latency_bounded) / batch_size).max(1))
     }
 
-    fn prefill_token_budget(&self) -> usize {
-        if self.scheduler_visible_prompt_chunks {
+    fn prefill_token_budget(&self, latency_bounded: bool) -> usize {
+        if self.scheduler_visible_prompt_chunks && latency_bounded {
             self.config
                 .max_num_batched_tokens
                 .min(self.config.max_prefill_chunk_tokens)
         } else {
             self.config.max_num_batched_tokens
         }
+    }
+
+    fn prompt_sequence_budget(&self, latency_bounded: bool) -> usize {
+        let token_budget = self.prefill_token_budget(latency_bounded);
+        if !self.prefill_has_per_sequence_state {
+            return token_budget;
+        }
+        let target_chunk_tokens = self.config.max_prefill_chunk_tokens.min(token_budget);
+        (token_budget / target_chunk_tokens).max(1)
     }
 
     fn supports_scheduler_visible_prompt_chunks(&self, seq: &Sequence) -> bool {
@@ -241,8 +252,12 @@ impl PagedAttentionScheduler {
         let first_offset = first.token_offset();
         let first_cursor = first.num_computed_tokens();
         drop(first);
+        let latency_bounded = self
+            .running
+            .iter()
+            .any(|seq| get_mut_arcmutex!(seq).is_completion());
         let max_candidates = if scheduler_visible {
-            self.prefill_token_budget()
+            self.prompt_sequence_budget(latency_bounded)
         } else {
             usize::MAX
         };
@@ -275,7 +290,7 @@ impl PagedAttentionScheduler {
             let chunk_size = if self.scheduler_visible_prompt_chunks {
                 None
             } else {
-                self.prompt_chunk_size(scheduled.len())
+                self.prompt_chunk_size(scheduled.len(), false)
             };
             self.advance_prompt_cursor(&rotation_candidates, &scheduled);
             return PromptBatch {
@@ -285,7 +300,9 @@ impl PagedAttentionScheduler {
             };
         }
 
-        let chunk_size = self.prompt_chunk_size(candidates.len()).unwrap();
+        let chunk_size = self
+            .prompt_chunk_size(candidates.len(), latency_bounded)
+            .unwrap();
         let block_align = self
             .prompt_chunks_require_block_alignment
             .then_some(self.block_size);
@@ -358,7 +375,7 @@ impl PagedAttentionScheduler {
             })
             .sum::<usize>();
         if running_prompt_tokens > 0
-            && running_prompt_tokens <= self.prefill_token_budget()
+            && running_prompt_tokens <= self.prefill_token_budget(true)
             && self.decode_steps_since_prefill > 0
         {
             return false;
@@ -1366,6 +1383,9 @@ impl Scheduler for PagedAttentionScheduler {
     }
     fn set_supports_packed_prefill(&mut self, supported: bool) {
         self.supports_packed_prefill = supported;
+    }
+    fn set_prefill_has_per_sequence_state(&mut self, enabled: bool) {
+        self.prefill_has_per_sequence_state = enabled;
     }
     fn set_scheduler_visible_prompt_chunks(
         &mut self,
@@ -2998,12 +3018,12 @@ mod tests {
         let mut scheduler = test_scheduler();
         scheduler.config.max_num_batched_tokens = 4096;
 
-        assert_eq!(scheduler.prompt_chunk_size(0), None);
-        assert_eq!(scheduler.prompt_chunk_size(1), Some(4096));
-        assert_eq!(scheduler.prompt_chunk_size(8), Some(512));
-        assert_eq!(scheduler.prompt_chunk_size(16), Some(256));
-        assert_eq!(scheduler.prompt_chunk_size(7), Some(585));
-        assert!(scheduler.prompt_chunk_size(7).unwrap() * 7 <= 4096);
+        assert_eq!(scheduler.prompt_chunk_size(0, false), None);
+        assert_eq!(scheduler.prompt_chunk_size(1, false), Some(4096));
+        assert_eq!(scheduler.prompt_chunk_size(8, false), Some(512));
+        assert_eq!(scheduler.prompt_chunk_size(16, false), Some(256));
+        assert_eq!(scheduler.prompt_chunk_size(7, false), Some(585));
+        assert!(scheduler.prompt_chunk_size(7, false).unwrap() * 7 <= 4096);
     }
 
     #[test]
@@ -3013,9 +3033,10 @@ mod tests {
         scheduler.config.max_num_batched_tokens = 4096;
         scheduler.config.max_prefill_chunk_tokens = 512;
 
-        assert_eq!(scheduler.prompt_chunk_size(1), Some(512));
-        assert_eq!(scheduler.prompt_chunk_size(8), Some(64));
-        assert_eq!(scheduler.prompt_chunk_size(16), Some(32));
+        assert_eq!(scheduler.prompt_chunk_size(1, true), Some(512));
+        assert_eq!(scheduler.prompt_chunk_size(8, true), Some(64));
+        assert_eq!(scheduler.prompt_chunk_size(16, true), Some(32));
+        assert_eq!(scheduler.prompt_chunk_size(16, false), Some(256));
     }
 
     #[test]
@@ -3024,7 +3045,7 @@ mod tests {
         scheduler.config.max_num_batched_tokens = 4096;
         scheduler.config.max_prefill_chunk_tokens = 512;
 
-        assert_eq!(scheduler.prompt_chunk_size(1), Some(4096));
+        assert_eq!(scheduler.prompt_chunk_size(1, true), Some(4096));
     }
 
     #[test]
@@ -3053,6 +3074,9 @@ mod tests {
         scheduler.scheduler_visible_prompt_chunks = true;
         scheduler.config.max_num_batched_tokens = 16;
         scheduler.config.max_prefill_chunk_tokens = 2;
+        let completion = test_sequence(100, 8);
+        get_mut_arcmutex!(completion).set_num_computed_tokens(8);
+        scheduler.running.push_back(completion);
         let candidates = (0..3)
             .map(|id| {
                 let seq = test_sequence(id, 8);
@@ -3074,6 +3098,100 @@ mod tests {
                 .sum::<usize>(),
             2
         );
+    }
+
+    #[test]
+    fn pure_prefill_batch_uses_the_full_token_budget() {
+        let mut scheduler = test_scheduler();
+        scheduler.scheduler_visible_prompt_chunks = true;
+        scheduler.config.max_num_batched_tokens = 16;
+        scheduler.config.max_prefill_chunk_tokens = 2;
+        let candidates = (0..4)
+            .map(|id| {
+                let seq = test_sequence(id, 8);
+                get_mut_arcmutex!(seq).set_state(SequenceState::RunningPrompt);
+                seq
+            })
+            .collect::<VecDeque<_>>();
+
+        let batch = scheduler.select_prompt_batch(candidates);
+
+        assert_eq!(batch.scheduled.len(), 4);
+        assert_eq!(batch.chunk_size, Some(4));
+        assert_eq!(
+            batch
+                .chunks
+                .unwrap()
+                .into_iter()
+                .map(|chunk| chunk.end - chunk.start)
+                .sum::<usize>(),
+            16
+        );
+    }
+
+    #[test]
+    fn recurrent_prefill_preserves_efficient_sequence_width_and_rotates() {
+        let mut scheduler = test_scheduler();
+        scheduler.scheduler_visible_prompt_chunks = true;
+        scheduler.prefill_has_per_sequence_state = true;
+        scheduler.config.max_num_seqs = 16;
+        scheduler.config.max_num_batched_tokens = 4096;
+        scheduler.config.max_prefill_chunk_tokens = 512;
+        let candidates = (0..16)
+            .map(|id| {
+                let seq = test_sequence(id, 8192);
+                get_mut_arcmutex!(seq).set_state(SequenceState::RunningPrompt);
+                seq
+            })
+            .collect::<VecDeque<_>>();
+
+        let first = scheduler.select_prompt_batch(candidates.clone());
+        assert_eq!(first.scheduled.len(), 8);
+        assert_eq!(first.chunk_size, Some(512));
+        assert_eq!(
+            first
+                .scheduled
+                .iter()
+                .map(|seq| *get_mut_arcmutex!(seq).id())
+                .collect::<Vec<_>>(),
+            (0..8).collect::<Vec<_>>()
+        );
+
+        let second = scheduler.select_prompt_batch(candidates);
+        assert_eq!(second.scheduled.len(), 8);
+        assert_eq!(second.chunk_size, Some(512));
+        assert_eq!(
+            second
+                .scheduled
+                .iter()
+                .map(|seq| *get_mut_arcmutex!(seq).id())
+                .collect::<Vec<_>>(),
+            (8..16).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn recurrent_prefill_with_decode_uses_one_sequence_quantum() {
+        let mut scheduler = test_scheduler();
+        scheduler.scheduler_visible_prompt_chunks = true;
+        scheduler.prefill_has_per_sequence_state = true;
+        scheduler.config.max_num_seqs = 16;
+        scheduler.config.max_num_batched_tokens = 4096;
+        scheduler.config.max_prefill_chunk_tokens = 512;
+        scheduler.running.push_back(test_sequence(100, 8));
+        let candidates = (0..16)
+            .map(|id| {
+                let seq = test_sequence(id, 8192);
+                get_mut_arcmutex!(seq).set_state(SequenceState::RunningPrompt);
+                seq
+            })
+            .collect::<VecDeque<_>>();
+
+        let batch = scheduler.select_prompt_batch(candidates);
+
+        assert_eq!(batch.scheduled.len(), 1);
+        assert_eq!(batch.chunk_size, Some(512));
+        assert_eq!(batch.chunks.unwrap()[0].end, 512);
     }
 
     #[test]

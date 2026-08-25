@@ -1,8 +1,16 @@
 #[cfg(feature = "cuda")]
 const CUDA_NVCC_FLAGS: Option<&'static str> = option_env!("CUDA_NVCC_FLAGS");
+#[cfg(feature = "cuda")]
+const FLASHINFER_GDN_COMMIT: &str = "28406af5b9134757acbd6bc44647fd00261d163f";
+#[cfg(feature = "cuda")]
+const CUTLASS_COMMIT: &str = "7127592069c2fe01b041e174ba4345ef9b279671";
+#[cfg(feature = "cuda")]
+const FLASHINFER_GDN_MIN_CUDA: u32 = 1208;
 
 fn main() {
     set_git_revision();
+
+    println!("cargo::rustc-check-cfg=cfg(has_flashinfer_gdn_sm90_kernel)");
 
     #[cfg(feature = "cudnn")]
     add_cudnn_link_search();
@@ -10,10 +18,13 @@ fn main() {
     #[cfg(feature = "cuda")]
     {
         use std::path::PathBuf;
-        set_cuda_toolkit_version();
+        let cuda_version_code = set_cuda_toolkit_version();
         println!("cargo:rerun-if-changed=build.rs");
         println!("cargo:rerun-if-changed=src/cuda");
         println!("cargo:rerun-if-env-changed=CUDA_NVCC_FLAGS");
+        println!("cargo:rerun-if-env-changed=NVCC");
+        println!("cargo:rerun-if-env-changed=CUDA_HOME");
+        println!("cargo:rerun-if-env-changed=CUDA_PATH");
         let build_dir = PathBuf::from(std::env::var("OUT_DIR").unwrap());
 
         let mut builder = cudaforge::KernelBuilder::new()
@@ -32,12 +43,12 @@ fn main() {
             .arg("--compiler-options")
             .arg("-fPIC");
 
+        let compute_cap = builder.get_compute_cap().unwrap_or(80);
+
         // Check if CUDA_COMPUTE_CAP < 80 and disable bf16 kernels if so.
         // bf16 WMMA operations and certain bf16 intrinsics are only available on sm_80+.
-        if let Some(compute_cap) = builder.get_compute_cap() {
-            if compute_cap < 80 {
-                builder = builder.arg("-DNO_BF16_KERNEL");
-            }
+        if compute_cap < 80 {
+            builder = builder.arg("-DNO_BF16_KERNEL");
         }
 
         // https://github.com/EricLBuehler/mistral.rs/issues/286
@@ -68,6 +79,58 @@ fn main() {
         println!("cargo:rustc-link-lib=mistralrscuda");
         println!("cargo:rustc-link-lib=dylib=cudart");
 
+        if compute_cap == 90
+            && target.contains("linux")
+            && cuda_version_code.is_some_and(|version| version >= FLASHINFER_GDN_MIN_CUDA)
+        {
+            println!("cargo:rustc-cfg=has_flashinfer_gdn_sm90_kernel");
+            println!("cargo:rerun-if-changed=third_party/flashinfer_gdn_sm90");
+            let mut flashinfer_gdn = cudaforge::KernelBuilder::new()
+                .source_files(["third_party/flashinfer_gdn_sm90/mistralrs_flashinfer_gdn_sm90.cu"])
+                .out_dir(&build_dir)
+                .compute_cap_arch("90a")
+                .arg("-std=c++20")
+                .arg("-O3")
+                .arg("-U__CUDA_NO_HALF_OPERATORS__")
+                .arg("-U__CUDA_NO_HALF_CONVERSIONS__")
+                .arg("-U__CUDA_NO_HALF2_OPERATORS__")
+                .arg("-U__CUDA_NO_BFLOAT16_CONVERSIONS__")
+                .arg("--expt-relaxed-constexpr")
+                .arg("--expt-extended-lambda")
+                .arg("--use_fast_math")
+                .arg("-static-global-template-stub=false")
+                .arg("-Xfatbin=-compress-all")
+                .arg("--compiler-options")
+                .arg("-fPIC")
+                .arg("-DFLAT_SM90A_ENABLED")
+                .arg("-DCUTE_SM90_EXTENDED_MMA_SHAPES_ENABLED")
+                .arg("-DFLASHINFER_ENABLE_BF16")
+                .with_cutlass(Some(CUTLASS_COMMIT))
+                .with_git_dependency(
+                    "flashinfer-gdn",
+                    "https://github.com/flashinfer-ai/flashinfer.git",
+                    FLASHINFER_GDN_COMMIT,
+                    vec!["include"],
+                    false,
+                );
+            if let Some(cuda_nvcc_flags_env) = CUDA_NVCC_FLAGS {
+                flashinfer_gdn = flashinfer_gdn
+                    .arg("--compiler-options")
+                    .arg(cuda_nvcc_flags_env);
+            }
+            flashinfer_gdn
+                .build_lib(build_dir.join("libmistralrsflashinfergdn.a"))
+                .expect("Build FlashInfer GDN provider failed!");
+            println!("cargo:rustc-link-lib=mistralrsflashinfergdn");
+        } else if compute_cap == 90
+            && target.contains("linux")
+            && cuda_version_code.is_none_or(|version| version < FLASHINFER_GDN_MIN_CUDA)
+        {
+            println!(
+                "cargo:warning=FlashInfer GDN SM90 provider requires CUDA 12.8 or newer; using the native fallback"
+            );
+        }
+
         if target.contains("msvc") {
             // nothing to link to
         } else if target.contains("apple")
@@ -84,32 +147,23 @@ fn main() {
 }
 
 #[cfg(feature = "cuda")]
-fn set_cuda_toolkit_version() {
-    if let Some((version, code)) = cuda_version_from_nvcc() {
+fn set_cuda_toolkit_version() -> Option<u32> {
+    let (version, code) = cuda_toolkit_version()?;
+    {
         println!("cargo:rustc-env=MISTRALRS_BUILD_CUDA_VERSION={version}");
         println!("cargo:rustc-env=MISTRALRS_BUILD_CUDA_VERSION_CODE={code}");
     }
+    Some(code)
 }
 
 #[cfg(feature = "cuda")]
-fn cuda_version_from_nvcc() -> Option<(String, u32)> {
-    let output = std::process::Command::new("nvcc")
-        .arg("--version")
-        .output()
-        .ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    let stdout = String::from_utf8(output.stdout).ok()?;
-    parse_cuda_version_from_nvcc(&stdout)
+fn cuda_toolkit_version() -> Option<(String, u32)> {
+    let version = cudaforge::CudaToolkit::detect().ok()?.version?;
+    parse_cuda_version(&version)
 }
 
 #[cfg(feature = "cuda")]
-fn parse_cuda_version_from_nvcc(stdout: &str) -> Option<(String, u32)> {
-    let release = stdout.split("release ").nth(1)?;
-    let version = release
-        .split(|c: char| c == ',' || c.is_whitespace())
-        .next()?;
+fn parse_cuda_version(version: &str) -> Option<(String, u32)> {
     let mut parts = version.split('.');
     let major: u32 = parts.next()?.parse().ok()?;
     let minor: u32 = parts.next().unwrap_or("0").parse().ok()?;
