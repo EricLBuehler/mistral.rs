@@ -476,9 +476,7 @@ impl Loader for MultimodalLoader {
                 .filter(|_| supports_encoder_cache),
             paged_attn_config.as_mut(),
         ) {
-            *cache_config = cache_config
-                .clone()
-                .with_base_device_memory_reservation(bytes)?;
+            *cache_config = (*cache_config).with_base_device_memory_reservation(bytes)?;
         }
 
         debug!("Prompt chunk size is {ATTENTION_CHUNK_SIZE}.");
