@@ -121,6 +121,7 @@ Pass `in_situ_quant` to `Runner` to requantize compatible GGUF weights while loa
 | `hf_cache_path` | `str \| None` | `None (keyword-only)` |
 | `matformer_config_path` | `str \| None` | `None (keyword-only)` |
 | `matformer_slice_name` | `str \| None` | `None (keyword-only)` |
+| `encoder_cache_memory_bytes` | `int \| None` | `None (keyword-only)` |
 
 ### `Which.XLoraGGUF`
 
@@ -218,6 +219,7 @@ For dynamic adapters on a supported GGUF, pass `adapters` to `Which.GGUF`.
 | `matformer_config_path` | `str \| None` | `None` |
 | `matformer_slice_name` | `str \| None` | `None` |
 | `organization` | `IsqOrganization \| None` | `None` |
+| `encoder_cache_memory_bytes` | `int \| None` | `None` |
 
 ### `Which.DiffusionPlain`
 
