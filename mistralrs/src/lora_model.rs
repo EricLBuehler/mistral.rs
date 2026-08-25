@@ -67,6 +67,8 @@ impl LoraModelBuilder {
             imatrix: self.text_model.imatrix,
             calibration_file: self.text_model.calibration_file,
             hf_cache_path: self.text_model.hf_cache_path,
+            hf_config_overrides: self.text_model.hf_config_overrides,
+            max_model_len: self.text_model.max_model_len,
             matformer_config_path: self.text_model.matformer_config_path,
             matformer_slice_name: self.text_model.matformer_slice_name,
         };

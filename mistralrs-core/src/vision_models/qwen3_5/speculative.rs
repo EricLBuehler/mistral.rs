@@ -20,8 +20,8 @@ use crate::{
     pipeline::text_models_inputs_processor::FlashParams,
     speculative::{
         dflash::{
-            CtxAppend, DFlashDraftModel, DFlashGraphProposalInputs, DFlashPreparedContext,
-            DFlashProposalBatch, DFlashSamplingInputs,
+            CtxAppend, DFlashDraftModel, DFlashGraphProposalInputs, DFlashLoadTarget,
+            DFlashPreparedContext, DFlashProposalBatch, DFlashSamplingInputs,
         },
         paged_rows::make_paged_rows_metadata,
         proposer::sample_draft_rows,
@@ -243,10 +243,13 @@ impl Qwen3_5Model {
     ) -> Result<Option<SpeculativeAttachInfo>> {
         let mut drafter = DFlashDraftModel::load(
             &config,
-            self.text.layer_types.len(),
-            self.text.cfg.hidden_size,
-            &self.text.device,
-            self.text.dtype,
+            DFlashLoadTarget {
+                num_layers: self.text.layer_types.len(),
+                hidden_size: self.text.cfg.hidden_size,
+                yarn_rope_config: self.text.yarn_rope_config.as_ref(),
+                device: &self.text.device,
+                dtype: self.text.dtype,
+            },
             false,
         )?;
         let block = drafter.block_size();

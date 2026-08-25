@@ -59,6 +59,7 @@ pub async fn run_server(
     let api_id_override =
         (model_id_of(&model_type) != original_model_id).then_some(original_model_id);
     let model_selected = convert_to_model_selected(&model_type, &matformer)?;
+    let (max_model_len, hf_config_overrides) = extract_hf_config_settings(&model_type);
 
     // Extract paged attention settings
     let (
@@ -113,6 +114,8 @@ pub async fn run_server(
         .with_paged_ctxt_len_optional(paged_ctxt_len)
         .with_paged_attn_block_size_optional(paged_attn_block_size)
         .with_mtp_config_optional(runtime.mtp_config())
+        .with_max_model_len_optional(max_model_len)
+        .with_hf_config_overrides_optional(hf_config_overrides)
         .with_paged_attn_cache_type(paged_cache_type);
 
     if let Some(max_bytes) = encoder_cache_memory_bytes {
@@ -958,6 +961,20 @@ pub(crate) fn model_id_of(model_type: &ModelType) -> &str {
     }
 }
 
+pub(crate) fn extract_hf_config_settings(
+    model_type: &ModelType,
+) -> (Option<usize>, Option<mistralrs_core::HfConfigOverrides>) {
+    let model = match model_type {
+        ModelType::Auto { model, .. }
+        | ModelType::Text { model, .. }
+        | ModelType::Multimodal { model, .. }
+        | ModelType::Diffusion { model, .. }
+        | ModelType::Speech { model, .. }
+        | ModelType::Embedding { model, .. } => model,
+    };
+    (model.max_model_len, model.hf_overrides.clone())
+}
+
 pub(crate) async fn apply_quant_resolution(
     model_type: &mut ModelType,
     token_source: &mistralrs_core::TokenSource,
@@ -1461,7 +1478,7 @@ mod tests {
         AutoDeviceMapParams, IsqOrganization, LoraAdapterSpec, ModelDType, NormalLoaderType,
     };
     use mistralrs_sandbox::NetworkMode;
-    use std::{fs, path::PathBuf};
+    use std::{fs, num::NonZeroUsize, path::PathBuf};
 
     use super::*;
     use crate::args::{SandboxNetworkMode, SandboxProfileArg};
@@ -1472,7 +1489,36 @@ mod tests {
             tokenizer: None,
             arch: None,
             dtype: ModelDType::Auto,
+            hf_overrides: None,
+            max_model_len: None,
         }
+    }
+
+    #[test]
+    fn extracts_runtime_hf_config_settings() {
+        let mut model = test_model();
+        model.max_model_len = Some(131072);
+        model.hf_overrides = Some(
+            r#"{"text_config":{"max_position_embeddings":131072}}"#
+                .parse()
+                .unwrap(),
+        );
+        let model_type = ModelType::Auto {
+            model,
+            format: FormatOptions::default(),
+            adapter: AdapterOptions::default(),
+            quantization: QuantizationOptions::default(),
+            device: DeviceOptions::default(),
+            cache: Default::default(),
+            multimodal: MultimodalOptions::default(),
+        };
+
+        let (max_model_len, overrides) = extract_hf_config_settings(&model_type);
+        assert_eq!(max_model_len, Some(131072));
+        assert_eq!(
+            overrides.unwrap().as_value()["text_config"]["max_position_embeddings"],
+            131072
+        );
     }
 
     #[tokio::test]

@@ -468,6 +468,7 @@ impl Model {
                             })?,
                             mscale: rope.mscale.unwrap_or(1.),
                             mscale_all_dim: rope.mscale_all_dim.unwrap_or(0.),
+                            attention_factor: None,
                         },
                         device,
                         is_gptx,

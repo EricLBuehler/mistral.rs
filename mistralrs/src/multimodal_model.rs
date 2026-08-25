@@ -30,6 +30,7 @@ pub struct MultimodalModelBuilder {
     pub(crate) device_mapping: Option<DeviceMapSetting>,
     pub(crate) max_edge: Option<u32>,
     pub(crate) max_model_len: Option<usize>,
+    pub(crate) hf_config_overrides: Option<HfConfigOverrides>,
     pub(crate) hf_cache_path: Option<PathBuf>,
     pub(crate) search_embedding_model: Option<SearchEmbeddingModel>,
     pub(crate) search_callback: Option<Arc<SearchCallback>>,
@@ -75,6 +76,7 @@ impl MultimodalModelBuilder {
             tokenizer_json: None,
             max_edge: None,
             max_model_len: None,
+            hf_config_overrides: None,
             loader_type: None,
             dtype: ModelDType::Auto,
             force_cpu: false,
@@ -142,11 +144,16 @@ impl MultimodalModelBuilder {
         self
     }
 
-    /// Cap the model's runtime context length without changing the source configuration.
-    ///
-    /// This is currently supported by the Gemma 4 multimodal loader.
+    /// Set the runtime model context length.
     pub fn with_max_model_len(mut self, max_model_len: usize) -> Self {
+        assert!(max_model_len > 0, "maximum model length must be nonzero");
         self.max_model_len = Some(max_model_len);
+        self
+    }
+
+    /// Set recursively merged Hugging Face config.json overrides.
+    pub fn with_hf_config_overrides(mut self, overrides: HfConfigOverrides) -> Self {
+        self.hf_config_overrides = Some(overrides);
         self
     }
 

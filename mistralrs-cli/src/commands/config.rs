@@ -373,6 +373,12 @@ async fn build_model_configs(
 
         let resolved_loader_id = crate::commands::serve::model_id_of(&model_type);
         let mut config = ModelConfig::new(entry.model_id.clone(), model_selected);
+        if let Some(max_model_len) = entry.max_model_len {
+            config = config.with_max_model_len(max_model_len);
+        }
+        if let Some(overrides) = entry.hf_overrides.clone() {
+            config = config.with_hf_config_overrides(overrides);
+        }
         if resolved_loader_id != entry.model_id {
             config = config.with_alias(entry.model_id.clone());
         }

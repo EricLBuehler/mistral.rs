@@ -523,6 +523,7 @@ impl Qwen3_5MoeTextModel {
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
     ) -> Result<Self> {
+        cfg.validate()?;
         let mapper = normal_loading_metadata.mapper;
         let vb_m = text_model_vb(vb.clone())?;
 
@@ -543,6 +544,15 @@ impl Qwen3_5MoeTextModel {
         }
 
         let layer_types = cfg.layer_types();
+        let yarn_rope_config = cfg.yarn_rope_config()?;
+        if let Some(yarn) = &yarn_rope_config {
+            tracing::info!(
+                factor = yarn.factor,
+                original_max_position_embeddings = yarn.original_max_position_embeddings,
+                max_position_embeddings = yarn.max_position_embeddings,
+                "Using Qwen3.5 MoE YaRN rotary embeddings"
+            );
+        }
 
         // Create MRoPE embeddings (one per device, using rot_dim not head_dim)
         let rot_dim = cfg.rot_dim();
@@ -556,12 +566,19 @@ impl Qwen3_5MoeTextModel {
                 .unwrap_or(&normal_loading_metadata.real_device);
             ropes.entry(device.location()).or_insert_with(|| {
                 Arc::new(
-                    Qwen3VLRotaryEmbedding::new(
-                        cfg.rope_theta() as f32,
-                        rot_dim,
-                        device,
-                        cfg.mrope_section().to_vec(),
-                    )
+                    match yarn_rope_config.as_ref() {
+                        Some(yarn) => Qwen3VLRotaryEmbedding::new_yarn(
+                            yarn,
+                            device,
+                            cfg.mrope_section().to_vec(),
+                        ),
+                        None => Qwen3VLRotaryEmbedding::new(
+                            cfg.rope_theta() as f32,
+                            rot_dim,
+                            device,
+                            cfg.mrope_section().to_vec(),
+                        ),
+                    }
                     .expect("Failed to create rotary embedding"),
                 )
             });

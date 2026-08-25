@@ -2,9 +2,9 @@
 
 use clap::{Args, ValueEnum};
 use mistralrs_core::{
-    AutoDeviceMapParams, IsqOrganization, LoraAdapterSpec, LoraRuntimeConfig, ModelDType,
-    NormalLoaderType, DEFAULT_LORA_MAX_ADAPTERS, DEFAULT_LORA_MAX_BYTES, DEFAULT_LORA_MAX_RANK,
-    MAX_LORA_ALIAS_BYTES,
+    AutoDeviceMapParams, HfConfigOverrides, IsqOrganization, LoraAdapterSpec, LoraRuntimeConfig,
+    ModelDType, NormalLoaderType, DEFAULT_LORA_MAX_ADAPTERS, DEFAULT_LORA_MAX_BYTES,
+    DEFAULT_LORA_MAX_RANK, MAX_LORA_ALIAS_BYTES,
 };
 use serde::Deserialize;
 use std::{
@@ -39,6 +39,24 @@ pub struct ModelSourceOptions {
     #[arg(long, default_value = "auto", value_parser = parse_dtype)]
     #[serde(default)]
     pub dtype: ModelDType,
+
+    /// Recursively merged JSON overrides for the Hugging Face model config
+    #[arg(long)]
+    pub hf_overrides: Option<HfConfigOverrides>,
+
+    /// Runtime model context length
+    #[arg(long, value_parser = parse_positive_usize)]
+    pub max_model_len: Option<usize>,
+}
+
+pub(super) fn parse_positive_usize(value: &str) -> Result<usize, String> {
+    let value = value
+        .parse::<usize>()
+        .map_err(|err| format!("invalid positive integer: {err}"))?;
+    if value == 0 {
+        return Err("value must be greater than zero".to_string());
+    }
+    Ok(value)
 }
 
 /// Format options for model loading

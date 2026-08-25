@@ -8,8 +8,8 @@ use crate::{
     get_toml_selected_model_dtype,
     pipeline::{
         AutoLoaderBuilder, DiffusionLoaderBuilder, GGMLLoaderBuilder, GGMLSpecificConfig,
-        GGUFLoaderBuilder, GGUFSpecificConfig, MultimodalLoaderBuilder, MultimodalSpecificConfig,
-        NormalLoaderBuilder, NormalSpecificConfig,
+        GGUFLoaderBuilder, GGUFSpecificConfig, HfConfigOverrides, MultimodalLoaderBuilder,
+        MultimodalSpecificConfig, NormalLoaderBuilder, NormalSpecificConfig,
     },
     toml_selector::get_toml_selected_model_device_map_params,
     AutoDeviceMapParams, EmbeddingLoaderBuilder, EmbeddingSpecificConfig, Loader, ModelDType,
@@ -24,6 +24,7 @@ pub struct LoaderBuilder {
     chat_template: Option<String>,
     jinja_explicit: Option<String>,
     max_model_len: Option<usize>,
+    hf_config_overrides: Option<HfConfigOverrides>,
     mtp: bool,
     encoder_cache_memory_bytes: Option<usize>,
 }
@@ -36,6 +37,7 @@ impl LoaderBuilder {
             chat_template: None,
             jinja_explicit: None,
             max_model_len: None,
+            hf_config_overrides: None,
             mtp: false,
             encoder_cache_memory_bytes: None,
         }
@@ -69,6 +71,13 @@ impl LoaderBuilder {
     }
     pub fn with_max_model_len(mut self, max_model_len: Option<usize>) -> Self {
         self.max_model_len = max_model_len;
+        self
+    }
+    pub fn with_hf_config_overrides(
+        mut self,
+        hf_config_overrides: Option<HfConfigOverrides>,
+    ) -> Self {
+        self.hf_config_overrides = hf_config_overrides;
         self
     }
 
@@ -281,6 +290,32 @@ pub fn get_auto_device_map_params(model: &ModelSelected) -> anyhow::Result<AutoD
 }
 
 fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loader>> {
+    if args.max_model_len == Some(0) {
+        anyhow::bail!("max_model_len must be greater than zero");
+    }
+    let supports_hf_config_overrides = matches!(
+        &args.model,
+        ModelSelected::Plain { .. }
+            | ModelSelected::Run { .. }
+            | ModelSelected::Lora { .. }
+            | ModelSelected::XLora { .. }
+            | ModelSelected::MultimodalPlain { .. }
+            | ModelSelected::Toml { .. }
+    );
+    if args.hf_config_overrides.is_some() && !supports_hf_config_overrides {
+        anyhow::bail!("HF config overrides are supported only for text and multimodal models");
+    }
+    let supports_max_model_len = supports_hf_config_overrides
+        || matches!(
+            &args.model,
+            ModelSelected::GGUF { .. }
+                | ModelSelected::LoraGGUF { .. }
+                | ModelSelected::XLoraGGUF { .. }
+        );
+    if args.max_model_len.is_some() && !supports_max_model_len {
+        anyhow::bail!("max_model_len is not supported by this model format");
+    }
+
     let loader: Box<dyn Loader> = match args.model {
         ModelSelected::Toml { file } => {
             let selector: TomlSelector = toml::from_str(
@@ -292,6 +327,8 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
                 no_kv_cache: args.no_kv_cache,
                 jinja_explicit: args.jinja_explicit,
                 encoder_cache_memory_bytes: args.encoder_cache_memory_bytes,
+                max_model_len: args.max_model_len,
+                hf_config_overrides: args.hf_config_overrides,
             };
             (selector, args).try_into()?
         }
@@ -325,6 +362,8 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
                 imatrix,
                 calibration_file,
                 hf_cache_path,
+                hf_config_overrides: args.hf_config_overrides.clone(),
+                max_model_len: args.max_model_len,
                 matformer_config_path,
                 matformer_slice_name,
             },
@@ -369,6 +408,8 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
                     imatrix: imatrix.clone(),
                     calibration_file: calibration_file.clone(),
                     hf_cache_path: hf_cache_path.clone(),
+                    hf_config_overrides: args.hf_config_overrides.clone(),
+                    max_model_len: args.max_model_len,
                     matformer_config_path: matformer_config_path.clone(),
                     matformer_slice_name: matformer_slice_name.clone(),
                 },
@@ -383,6 +424,7 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
                     }),
                     max_edge,
                     max_model_len: args.max_model_len,
+                    hf_config_overrides: args.hf_config_overrides.clone(),
                     calibration_file: calibration_file.clone(),
                     imatrix: imatrix.clone(),
                     hf_cache_path: hf_cache_path.clone(),
@@ -450,6 +492,7 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
                 }),
                 max_edge,
                 max_model_len: args.max_model_len,
+                hf_config_overrides: args.hf_config_overrides.clone(),
                 calibration_file,
                 imatrix,
                 hf_cache_path,
@@ -509,6 +552,8 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
                 imatrix: None,
                 calibration_file: None,
                 hf_cache_path,
+                hf_config_overrides: args.hf_config_overrides.clone(),
+                max_model_len: args.max_model_len,
                 matformer_config_path: None,
                 matformer_slice_name: None,
             },
@@ -565,6 +610,8 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
                 imatrix: imatrix.clone(),
                 calibration_file: calibration_file.clone(),
                 hf_cache_path: hf_cache_path.clone(),
+                hf_config_overrides: args.hf_config_overrides.clone(),
+                max_model_len: args.max_model_len,
                 matformer_config_path: matformer_config_path.clone(),
                 matformer_slice_name: matformer_slice_name.clone(),
             };
@@ -588,6 +635,7 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
                         from_uqff: from_uqff.clone(),
                         max_edge,
                         max_model_len: args.max_model_len,
+                        hf_config_overrides: args.hf_config_overrides.clone(),
                         imatrix: imatrix.clone(),
                         calibration_file: calibration_file.clone(),
                         hf_cache_path: hf_cache_path.clone(),

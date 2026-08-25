@@ -115,6 +115,16 @@ Qwen3 Next mixes Gated Delta Network (linear attention) layers with full softmax
 
 Qwen3.5 and Qwen3.6 dense and MoE checkpoints are supported. Qwen3.6 shares the Qwen3.5 HF `model_type`, so it loads through the same `Qwen3_5` and `Qwen3_5Moe` paths.
 
+Use nested Hugging Face config overrides to enable YaRN without editing the downloaded checkpoint. This example extends a native 262,144-token Qwen3.5 model to a 1,010,000-token serving limit:
+
+```bash
+mistralrs serve -m Qwen/Qwen3.5-27B \
+  --hf-overrides '{"text_config":{"rope_parameters":{"rope_type":"yarn","factor":4.0,"original_max_position_embeddings":262144}}}' \
+  --max-model-len 1010000
+```
+
+Overrides merge recursively, so the checkpoint's `rope_theta`, `partial_rotary_factor`, and MRoPE sections remain intact. `--max-model-len` only sets the prompt-plus-output limit; it does not enable RoPE scaling and cannot exceed the context length supported by the final config. Static YaRN can reduce quality on shorter inputs, so enable it only when the extended context is needed.
+
 ## Granite 4.0 (GraniteMoeHybrid)
 
 IBM Granite 4.0 checkpoints (e.g. `ibm-granite/granite-4.0-micro`) mix Mamba-2 recurrent layers with attention layers. They load through auto-detection like any other text model.

@@ -19,6 +19,8 @@ mistralrs serve [OPTIONS] [COMMAND]
 | `-t, --tokenizer <TOKENIZER>` |  | Path to local tokenizer.json file |
 | `-a, --arch <ARCH>` |  | Model architecture (auto-detected if not specified) |
 | `--dtype <DTYPE>` | `auto` | Model data type |
+| `--hf-overrides <HF_OVERRIDES>` |  | Recursively merged JSON overrides for the Hugging Face model config |
+| `--max-model-len <MAX_MODEL_LEN>` |  | Runtime model context length |
 | `--format <FORMAT>` |  | Model format: plain (safetensors), GGUF, or GGML. Auto-detected from `-f` when not specified. Possible values: `plain`, `gguf`, `ggml`. |
 | `-f, --quantized-file <QUANTIZED_FILE>` |  | GGUF/GGML filename(s); the suffix selects the format (semicolon-separated for multiple) |
 | `--mmproj <MMPROJ>` |  | GGUF projector override; auto-selected when unambiguous (semicolon-separated for multiple) |
@@ -52,6 +54,7 @@ mistralrs serve [OPTIONS] [COMMAND]
 | `--pa-memory-fraction <MEMORY_FRACTION>` |  | GPU memory utilization fraction 0.0-1.0 (alternative to context-len/memory-mb) |
 | `--pa-block-size <BLOCK_SIZE>` |  | Tokens per block (default: 32 on CUDA) |
 | `--pa-cache-type <CACHE_TYPE>` | `auto` | KV cache quantization type |
+| `--encoder-cache-memory-mb <ENCODER_CACHE_MEMORY_MB>` |  | Maximum logical tensor memory retained by the multimodal encoder cache, in MiB |
 | `--max-edge <MAX_EDGE>` |  | Maximum edge length for image resizing (aspect ratio preserved) |
 | `--max-num-images <MAX_NUM_IMAGES>` |  | Maximum number of images per request |
 | `--max-image-length <MAX_IMAGE_LENGTH>` |  | Maximum image dimension for device mapping |
@@ -115,6 +118,8 @@ mistralrs serve auto [OPTIONS] --model-id <MODEL_ID>
 | `-t, --tokenizer <TOKENIZER>` |  | Path to local tokenizer.json file |
 | `-a, --arch <ARCH>` |  | Model architecture (auto-detected if not specified) |
 | `--dtype <DTYPE>` | `auto` | Model data type |
+| `--hf-overrides <HF_OVERRIDES>` |  | Recursively merged JSON overrides for the Hugging Face model config |
+| `--max-model-len <MAX_MODEL_LEN>` |  | Runtime model context length |
 | `--format <FORMAT>` |  | Model format: plain (safetensors), GGUF, or GGML. Auto-detected from `-f` when not specified. Possible values: `plain`, `gguf`, `ggml`. |
 | `-f, --quantized-file <QUANTIZED_FILE>` |  | GGUF/GGML filename(s); the suffix selects the format (semicolon-separated for multiple) |
 | `--mmproj <MMPROJ>` |  | GGUF projector override; auto-selected when unambiguous (semicolon-separated for multiple) |
@@ -148,6 +153,7 @@ mistralrs serve auto [OPTIONS] --model-id <MODEL_ID>
 | `--pa-memory-fraction <MEMORY_FRACTION>` |  | GPU memory utilization fraction 0.0-1.0 (alternative to context-len/memory-mb) |
 | `--pa-block-size <BLOCK_SIZE>` |  | Tokens per block (default: 32 on CUDA) |
 | `--pa-cache-type <CACHE_TYPE>` | `auto` | KV cache quantization type |
+| `--encoder-cache-memory-mb <ENCODER_CACHE_MEMORY_MB>` |  | Maximum logical tensor memory retained by the multimodal encoder cache, in MiB |
 | `--max-edge <MAX_EDGE>` |  | Maximum edge length for image resizing (aspect ratio preserved) |
 | `--max-num-images <MAX_NUM_IMAGES>` |  | Maximum number of images per request |
 | `--max-image-length <MAX_IMAGE_LENGTH>` |  | Maximum image dimension for device mapping |
@@ -166,6 +172,8 @@ mistralrs serve text [OPTIONS] --model-id <MODEL_ID>
 | `-t, --tokenizer <TOKENIZER>` |  | Path to local tokenizer.json file |
 | `-a, --arch <ARCH>` |  | Model architecture (auto-detected if not specified) |
 | `--dtype <DTYPE>` | `auto` | Model data type |
+| `--hf-overrides <HF_OVERRIDES>` |  | Recursively merged JSON overrides for the Hugging Face model config |
+| `--max-model-len <MAX_MODEL_LEN>` |  | Runtime model context length |
 | `--format <FORMAT>` |  | Model format: plain (safetensors), GGUF, or GGML. Auto-detected from `-f` when not specified. Possible values: `plain`, `gguf`, `ggml`. |
 | `-f, --quantized-file <QUANTIZED_FILE>` |  | GGUF/GGML filename(s); the suffix selects the format (semicolon-separated for multiple) |
 | `--mmproj <MMPROJ>` |  | GGUF projector override; auto-selected when unambiguous (semicolon-separated for multiple) |
@@ -199,7 +207,6 @@ mistralrs serve text [OPTIONS] --model-id <MODEL_ID>
 | `--pa-memory-fraction <MEMORY_FRACTION>` |  | GPU memory utilization fraction 0.0-1.0 (alternative to context-len/memory-mb) |
 | `--pa-block-size <BLOCK_SIZE>` |  | Tokens per block (default: 32 on CUDA) |
 | `--pa-cache-type <CACHE_TYPE>` | `auto` | KV cache quantization type |
-
 ## mistralrs serve multimodal
 
 Multimodal model
@@ -214,6 +221,8 @@ mistralrs serve multimodal [OPTIONS] --model-id <MODEL_ID>
 | `-t, --tokenizer <TOKENIZER>` |  | Path to local tokenizer.json file |
 | `-a, --arch <ARCH>` |  | Model architecture (auto-detected if not specified) |
 | `--dtype <DTYPE>` | `auto` | Model data type |
+| `--hf-overrides <HF_OVERRIDES>` |  | Recursively merged JSON overrides for the Hugging Face model config |
+| `--max-model-len <MAX_MODEL_LEN>` |  | Runtime model context length |
 | `--format <FORMAT>` |  | Model format: plain (safetensors), GGUF, or GGML. Auto-detected from `-f` when not specified. Possible values: `plain`, `gguf`, `ggml`. |
 | `-f, --quantized-file <QUANTIZED_FILE>` |  | GGUF/GGML filename(s); the suffix selects the format (semicolon-separated for multiple) |
 | `--mmproj <MMPROJ>` |  | GGUF projector override; auto-selected when unambiguous (semicolon-separated for multiple) |
@@ -242,6 +251,7 @@ mistralrs serve multimodal [OPTIONS] --model-id <MODEL_ID>
 | `--pa-memory-fraction <MEMORY_FRACTION>` |  | GPU memory utilization fraction 0.0-1.0 (alternative to context-len/memory-mb) |
 | `--pa-block-size <BLOCK_SIZE>` |  | Tokens per block (default: 32 on CUDA) |
 | `--pa-cache-type <CACHE_TYPE>` | `auto` | KV cache quantization type |
+| `--encoder-cache-memory-mb <ENCODER_CACHE_MEMORY_MB>` |  | Maximum logical tensor memory retained by the multimodal encoder cache, in MiB |
 | `--max-edge <MAX_EDGE>` |  | Maximum edge length for image resizing (aspect ratio preserved) |
 | `--max-num-images <MAX_NUM_IMAGES>` |  | Maximum number of images per request |
 | `--max-image-length <MAX_IMAGE_LENGTH>` |  | Maximum image dimension for device mapping |
@@ -260,6 +270,8 @@ mistralrs serve diffusion [OPTIONS] --model-id <MODEL_ID>
 | `-t, --tokenizer <TOKENIZER>` |  | Path to local tokenizer.json file |
 | `-a, --arch <ARCH>` |  | Model architecture (auto-detected if not specified) |
 | `--dtype <DTYPE>` | `auto` | Model data type |
+| `--hf-overrides <HF_OVERRIDES>` |  | Recursively merged JSON overrides for the Hugging Face model config |
+| `--max-model-len <MAX_MODEL_LEN>` |  | Runtime model context length |
 | `--cpu` | `false` | Force CPU-only execution |
 | `-n, --device-layers <DEVICE_LAYERS>` |  | Device layer mapping (format: ORD:NUM;... e.g., "0:10;1:20") Omit for automatic device mapping |
 | `--topology <TOPOLOGY>` |  | Topology YAML file for device mapping |
@@ -281,6 +293,8 @@ mistralrs serve speech [OPTIONS] --model-id <MODEL_ID>
 | `-t, --tokenizer <TOKENIZER>` |  | Path to local tokenizer.json file |
 | `-a, --arch <ARCH>` |  | Model architecture (auto-detected if not specified) |
 | `--dtype <DTYPE>` | `auto` | Model data type |
+| `--hf-overrides <HF_OVERRIDES>` |  | Recursively merged JSON overrides for the Hugging Face model config |
+| `--max-model-len <MAX_MODEL_LEN>` |  | Runtime model context length |
 | `--cpu` | `false` | Force CPU-only execution |
 | `-n, --device-layers <DEVICE_LAYERS>` |  | Device layer mapping (format: ORD:NUM;... e.g., "0:10;1:20") Omit for automatic device mapping |
 | `--topology <TOPOLOGY>` |  | Topology YAML file for device mapping |
@@ -302,6 +316,8 @@ mistralrs serve embedding [OPTIONS] --model-id <MODEL_ID>
 | `-t, --tokenizer <TOKENIZER>` |  | Path to local tokenizer.json file |
 | `-a, --arch <ARCH>` |  | Model architecture (auto-detected if not specified) |
 | `--dtype <DTYPE>` | `auto` | Model data type |
+| `--hf-overrides <HF_OVERRIDES>` |  | Recursively merged JSON overrides for the Hugging Face model config |
+| `--max-model-len <MAX_MODEL_LEN>` |  | Runtime model context length |
 | `--format <FORMAT>` |  | Model format: plain (safetensors), GGUF, or GGML. Auto-detected from `-f` when not specified. Possible values: `plain`, `gguf`, `ggml`. |
 | `-f, --quantized-file <QUANTIZED_FILE>` |  | GGUF/GGML filename(s); the suffix selects the format (semicolon-separated for multiple) |
 | `--mmproj <MMPROJ>` |  | GGUF projector override; auto-selected when unambiguous (semicolon-separated for multiple) |

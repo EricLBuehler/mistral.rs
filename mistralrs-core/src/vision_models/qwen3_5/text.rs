@@ -30,7 +30,7 @@ use crate::{
     kv_cache::{
         HybridCache, HybridCacheConfig, HybridLayerCache, HybridLayerType, RecurrentLayerConfig,
     },
-    layers::{self, CausalMasker, GemmaRmsNorm, Mlp, Qwen3VLRotaryEmbedding, Sdpa},
+    layers::{self, CausalMasker, GemmaRmsNorm, Mlp, Qwen3VLRotaryEmbedding, Sdpa, YarnRopeConfig},
     layers_masker::{CausalMaskConfig, PastKvLenCache},
     paged_attention::{
         load_fp8_attention_scales, AttentionImplementation, ModelConfigMetadata, PagedAttention,
@@ -853,6 +853,7 @@ pub struct Qwen3_5TextModel {
     gdn_replay_stash: Mutex<Option<GdnReplayStash>>,
     // Target layers whose outputs a DFlash drafter consumes; empty when none is attached
     dflash_tap_layers: Mutex<Vec<usize>>,
+    pub(super) yarn_rope_config: Option<YarnRopeConfig>,
 }
 
 impl Qwen3_5TextModel {
@@ -865,6 +866,15 @@ impl Qwen3_5TextModel {
         attention_mechanism: AttentionImplementation,
     ) -> Result<Self> {
         cfg.validate()?;
+        let yarn_rope_config = cfg.yarn_rope_config()?;
+        if let Some(yarn) = &yarn_rope_config {
+            tracing::info!(
+                factor = yarn.factor,
+                original_max_position_embeddings = yarn.original_max_position_embeddings,
+                max_position_embeddings = yarn.max_position_embeddings,
+                "Using Qwen3.5 YaRN rotary embeddings"
+            );
+        }
         let mtp = mtp
             .then(|| {
                 Qwen3_5MtpHead::load(
@@ -919,12 +929,19 @@ impl Qwen3_5TextModel {
                 .unwrap_or(&normal_loading_metadata.real_device);
             ropes.entry(device.location()).or_insert_with(|| {
                 Arc::new(
-                    Qwen3VLRotaryEmbedding::new(
-                        cfg.rope_theta() as f32,
-                        rot_dim,
-                        device,
-                        cfg.mrope_section().to_vec(),
-                    )
+                    match yarn_rope_config.as_ref() {
+                        Some(yarn) => Qwen3VLRotaryEmbedding::new_yarn(
+                            yarn,
+                            device,
+                            cfg.mrope_section().to_vec(),
+                        ),
+                        None => Qwen3VLRotaryEmbedding::new(
+                            cfg.rope_theta() as f32,
+                            rot_dim,
+                            device,
+                            cfg.mrope_section().to_vec(),
+                        ),
+                    }
                     .expect("Failed to create rotary embedding"),
                 )
             });
@@ -1091,6 +1108,7 @@ impl Qwen3_5TextModel {
             last_full_capture: Mutex::new(None),
             gdn_replay_stash: Mutex::new(None),
             dflash_tap_layers: Mutex::new(Vec::new()),
+            yarn_rope_config,
         })
     }
 

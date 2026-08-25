@@ -54,6 +54,8 @@ pub struct ModelBuilder {
     pub(crate) tokenizer_json: Option<String>,
     pub(crate) device_mapping: Option<DeviceMapSetting>,
     pub(crate) hf_cache_path: Option<PathBuf>,
+    pub(crate) hf_config_overrides: Option<HfConfigOverrides>,
+    pub(crate) max_model_len: Option<usize>,
     pub(crate) search_embedding_model: Option<SearchEmbeddingModel>,
     pub(crate) search_callback: Option<Arc<SearchCallback>>,
     pub(crate) tool_callbacks: HashMap<String, ToolCallbackWithTool>,
@@ -114,6 +116,8 @@ impl ModelBuilder {
             jinja_explicit: None,
             throughput_logging: false,
             hf_cache_path: None,
+            hf_config_overrides: None,
+            max_model_len: None,
             search_embedding_model: None,
             search_callback: None,
             tool_callbacks: HashMap::new(),
@@ -163,6 +167,19 @@ impl ModelBuilder {
     /// Only applies to multimodal models that support this (e.g., Qwen2-VL, Idefics 2).
     pub fn with_max_edge(mut self, max_edge: u32) -> Self {
         self.max_edge = Some(max_edge);
+        self
+    }
+
+    /// Set recursively merged Hugging Face config.json overrides.
+    pub fn with_hf_config_overrides(mut self, overrides: HfConfigOverrides) -> Self {
+        self.hf_config_overrides = Some(overrides);
+        self
+    }
+
+    /// Set the runtime model context length.
+    pub fn with_max_model_len(mut self, max_model_len: usize) -> Self {
+        assert!(max_model_len > 0, "maximum model length must be nonzero");
+        self.max_model_len = Some(max_model_len);
         self
     }
 

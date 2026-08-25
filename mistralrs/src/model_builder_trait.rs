@@ -642,6 +642,8 @@ pub async fn build_text_pipeline(
         imatrix: builder.imatrix.clone(),
         calibration_file: builder.calibration_file.clone(),
         hf_cache_path: builder.hf_cache_path.clone(),
+        hf_config_overrides: builder.hf_config_overrides.clone(),
+        max_model_len: builder.max_model_len,
         matformer_config_path: builder.matformer_config_path.clone(),
         matformer_slice_name: builder.matformer_slice_name.clone(),
     };
@@ -747,7 +749,8 @@ pub async fn build_text_pipeline(
         silent: !builder.with_logging,
         chat_template: builder.chat_template.clone(),
         jinja_explicit: builder.jinja_explicit.clone(),
-        max_model_len: None,
+        max_model_len: builder.max_model_len,
+        hf_config_overrides: builder.hf_config_overrides.clone(),
         mtp_config: builder.mtp_config.clone(),
         encoder_cache_memory_bytes: None,
     };
@@ -784,6 +787,7 @@ pub async fn build_multimodal_pipeline(
         from_uqff: builder.from_uqff.clone(),
         max_edge: builder.max_edge,
         max_model_len: builder.max_model_len,
+        hf_config_overrides: builder.hf_config_overrides.clone(),
         calibration_file: builder.calibration_file.clone(),
         imatrix: builder.imatrix.clone(),
         hf_cache_path: builder.hf_cache_path.clone(),
@@ -901,6 +905,7 @@ pub async fn build_multimodal_pipeline(
         chat_template: builder.chat_template.clone(),
         jinja_explicit: builder.jinja_explicit.clone(),
         max_model_len: builder.max_model_len,
+        hf_config_overrides: builder.hf_config_overrides.clone(),
         mtp_config: builder.mtp_config.clone(),
         encoder_cache_memory_bytes: builder.encoder_cache_memory_bytes,
     };
@@ -1091,6 +1096,7 @@ pub async fn build_gguf_pipeline(
         chat_template: builder.chat_template.clone(),
         jinja_explicit: builder.jinja_explicit.clone(),
         max_model_len: builder.max_model_len,
+        hf_config_overrides: None,
         mtp_config: builder.mtp_config.clone(),
         encoder_cache_memory_bytes: builder.encoder_cache_memory_bytes,
     };
@@ -1153,6 +1159,7 @@ pub async fn build_diffusion_pipeline(
         chat_template: None,
         jinja_explicit: None,
         max_model_len: None,
+        hf_config_overrides: None,
         mtp_config: None,
         encoder_cache_memory_bytes: None,
     };
@@ -1219,6 +1226,7 @@ pub async fn build_speech_pipeline(
         chat_template: None,
         jinja_explicit: None,
         max_model_len: None,
+        hf_config_overrides: None,
         mtp_config: None,
         encoder_cache_memory_bytes: None,
     };
@@ -1316,6 +1324,7 @@ pub async fn build_embedding_pipeline(
         chat_template: None,
         jinja_explicit: None,
         max_model_len: None,
+        hf_config_overrides: None,
         mtp_config: None,
         encoder_cache_memory_bytes: None,
     };
@@ -1355,6 +1364,8 @@ pub async fn build_auto_pipeline(
         imatrix: builder.imatrix.clone(),
         calibration_file: builder.calibration_file.clone(),
         hf_cache_path: builder.hf_cache_path.clone(),
+        hf_config_overrides: builder.hf_config_overrides.clone(),
+        max_model_len: builder.max_model_len,
         matformer_config_path: builder.matformer_config_path.clone(),
         matformer_slice_name: builder.matformer_slice_name.clone(),
     };
@@ -1364,7 +1375,8 @@ pub async fn build_auto_pipeline(
         write_uqff: builder.write_uqff.clone(),
         from_uqff: builder.from_uqff.clone(),
         max_edge: builder.max_edge,
-        max_model_len: None,
+        max_model_len: builder.max_model_len,
+        hf_config_overrides: builder.hf_config_overrides.clone(),
         calibration_file: builder.calibration_file.clone(),
         imatrix: builder.imatrix.clone(),
         hf_cache_path: builder.hf_cache_path.clone(),
@@ -1494,7 +1506,8 @@ pub async fn build_auto_pipeline(
         silent: !builder.with_logging,
         chat_template: builder.chat_template.clone(),
         jinja_explicit: builder.jinja_explicit.clone(),
-        max_model_len: None,
+        max_model_len: builder.max_model_len,
+        hf_config_overrides: builder.hf_config_overrides.clone(),
         mtp_config: builder.mtp_config.clone(),
         encoder_cache_memory_bytes: builder.encoder_cache_memory_bytes,
     };

@@ -35,6 +35,8 @@ pub struct AutoLoader {
     embedding_builder: Mutex<Option<EmbeddingLoaderBuilder>>,
     loader: Mutex<Option<Box<dyn Loader>>>,
     hf_cache_path: Option<PathBuf>,
+    hf_config_overrides: Option<super::HfConfigOverrides>,
+    max_model_len: Option<usize>,
     dynamic_lora_enabled: bool,
 }
 
@@ -152,6 +154,11 @@ impl AutoLoaderBuilder {
             encoder_cache_memory_bytes,
         } = self;
 
+        let hf_config_overrides = normal_cfg
+            .hf_config_overrides
+            .clone()
+            .or(multimodal_cfg.hf_config_overrides.clone());
+        let max_model_len = normal_cfg.max_model_len.or(multimodal_cfg.max_model_len);
         let mut normal_builder = NormalLoaderBuilder::new(
             normal_cfg,
             chat_template.clone(),
@@ -204,6 +211,8 @@ impl AutoLoaderBuilder {
             embedding_builder: Mutex::new(Some(embedding_builder)),
             loader: Mutex::new(None),
             hf_cache_path,
+            hf_config_overrides,
+            max_model_len,
             dynamic_lora_enabled: lora_adapters.is_some(),
         })
     }
@@ -280,6 +289,9 @@ impl AutoLoader {
             Err(err) if err.kind() == io::ErrorKind::NotFound => None,
             Err(err) => return Err(err.into()),
         };
+        let contents = contents
+            .map(|config| self.apply_config_overrides(&config))
+            .transpose()?;
         let model_root = Path::new(&self.model_id);
         let repo_files = if model_root.exists() {
             Self::list_local_repo_files(model_root)
@@ -332,6 +344,9 @@ impl AutoLoader {
                 None
             }
         };
+        let contents = contents
+            .map(|config| self.apply_config_overrides(&config))
+            .transpose()?;
         let sentence_transformers_present =
             model_id.join("config_sentence_transformers.json").exists()
                 || Self::fetch_sentence_transformers_config(&api, model_id, &revision);
@@ -353,6 +368,13 @@ impl AutoLoader {
             .parent()
             .map(|parent| parent.join("config_sentence_transformers.json").exists())
             .unwrap_or(false)
+    }
+
+    fn apply_config_overrides(&self, config: &str) -> Result<String> {
+        match self.hf_config_overrides.as_ref() {
+            Some(overrides) => overrides.apply(config),
+            None => Ok(config.to_string()),
+        }
     }
 
     fn fetch_sentence_transformers_config(api: &ApiRepo, model_id: &Path, revision: &str) -> bool {
@@ -445,6 +467,15 @@ impl AutoLoader {
         }
         if self.dynamic_lora_enabled && !supports_dynamic_lora(&detected) {
             anyhow::bail!("dynamic LoRA is not supported for this model architecture");
+        }
+        if matches!(
+            &detected,
+            Detected::Embedding(_) | Detected::Diffusion(_) | Detected::Speech(_)
+        ) && (self.max_model_len.is_some() || self.hf_config_overrides.is_some())
+        {
+            anyhow::bail!(
+                "HF config overrides and max_model_len are supported only for text and multimodal models"
+            );
         }
         match detected {
             Detected::Normal(tp) => {
@@ -620,6 +651,8 @@ mod tests {
             embedding_builder: Mutex::new(None),
             loader: Mutex::new(None),
             hf_cache_path: None,
+            hf_config_overrides: None,
+            max_model_len: None,
             dynamic_lora_enabled: true,
         }
     }

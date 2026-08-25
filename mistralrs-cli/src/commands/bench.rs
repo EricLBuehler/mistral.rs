@@ -19,7 +19,8 @@ use crate::args::{BenchRuntimeOptions, GlobalOptions, ModelType};
 use super::normalize_requested_adapter;
 use super::serve::{
     apply_quant_resolution, convert_to_model_selected, extract_device_settings,
-    extract_encoder_cache_memory_bytes, extract_isq_setting, extract_paged_attn_settings,
+    extract_encoder_cache_memory_bytes, extract_hf_config_settings, extract_isq_setting,
+    extract_paged_attn_settings,
 };
 
 #[cfg(feature = "cuda")]
@@ -116,6 +117,7 @@ pub async fn run_bench(
     let matformer = runtime.matformer_selection();
     apply_quant_resolution(&mut model_type, &global.token_source, &matformer).await?;
     let model_selected = convert_to_model_selected(&model_type, &matformer)?;
+    let (max_model_len, hf_config_overrides) = extract_hf_config_settings(&model_type);
 
     let (
         paged_attn,
@@ -142,6 +144,8 @@ pub async fn run_bench(
         .with_prefix_cache_n(0) // Disable prefix cache for benchmarking
         .with_disable_eos_stop(true) // Always generate exactly gen_len tokens
         .with_mtp_config_optional(runtime.mtp_config())
+        .with_max_model_len_optional(max_model_len)
+        .with_hf_config_overrides_optional(hf_config_overrides)
         .set_paged_attn(paged_attn)
         .with_cpu(cpu)
         .with_seed_optional(global.seed)

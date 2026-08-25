@@ -371,6 +371,8 @@ pub struct NormalSpecificConfig {
     pub imatrix: Option<PathBuf>,
     pub calibration_file: Option<PathBuf>,
     pub hf_cache_path: Option<PathBuf>,
+    pub hf_config_overrides: Option<super::HfConfigOverrides>,
+    pub max_model_len: Option<usize>,
     pub matformer_config_path: Option<PathBuf>,
     pub matformer_slice_name: Option<String>,
 }
@@ -613,16 +615,24 @@ impl Loader for NormalLoader {
             Some(source) => source.config.clone(),
             None => std::fs::read_to_string(paths.get_config_filename())?,
         };
-        let config = if self.mtp {
-            super::loaders::inject_mtp_config_flag(&config)?
-        } else {
-            config
-        };
         let config = if self.config.from_uqff.is_some() {
             super::isq::sanitize_quantized_weight_source_config(&config)?
         } else {
             config
         };
+        let config = match &self.config.hf_config_overrides {
+            Some(overrides) => overrides.apply(&config)?,
+            None => config,
+        };
+        let config = if self.mtp {
+            super::loaders::inject_mtp_config_flag(&config)?
+        } else {
+            config
+        };
+        let config = self
+            .inner
+            .runtime_config(&config, self.config.max_model_len)?
+            .into_owned();
         super::loaders::validate_lora_qk_rope_layout(
             &config,
             self.lora_adapters.is_some() || self.xlora_model_id.is_some(),

@@ -6901,6 +6901,19 @@ impl MultimodalPromptPrefixer for Qwen3_5Prefixer {
 }
 
 impl MultimodalModelLoader for Qwen3_5Loader {
+    fn runtime_config<'a>(
+        &self,
+        config: &'a str,
+        max_model_len: Option<usize>,
+    ) -> Result<Cow<'a, str>> {
+        match max_model_len {
+            Some(max_model_len) => Ok(Cow::Owned(
+                crate::vision_models::qwen3_5::config::apply_max_model_len(config, max_model_len)?,
+            )),
+            None => Ok(Cow::Borrowed(config)),
+        }
+    }
+
     fn load(
         &self,
         config: &str,
@@ -7306,6 +7319,19 @@ impl MultimodalPromptPrefixer for Qwen3_5MoePrefixer {
 }
 
 impl MultimodalModelLoader for Qwen3_5MoeLoader {
+    fn runtime_config<'a>(
+        &self,
+        config: &'a str,
+        max_model_len: Option<usize>,
+    ) -> Result<Cow<'a, str>> {
+        match max_model_len {
+            Some(max_model_len) => Ok(Cow::Owned(
+                crate::vision_models::qwen3_5::config::apply_max_model_len(config, max_model_len)?,
+            )),
+            None => Ok(Cow::Borrowed(config)),
+        }
+    }
+
     fn load(
         &self,
         config: &str,

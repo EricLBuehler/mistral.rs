@@ -197,6 +197,7 @@ pub struct MultimodalSpecificConfig {
     pub from_uqff: Option<Vec<PathBuf>>,
     pub max_edge: Option<u32>,
     pub max_model_len: Option<usize>,
+    pub hf_config_overrides: Option<super::HfConfigOverrides>,
     pub imatrix: Option<PathBuf>,
     pub calibration_file: Option<PathBuf>,
     pub hf_cache_path: Option<PathBuf>,
@@ -445,6 +446,10 @@ impl Loader for MultimodalLoader {
             super::isq::sanitize_quantized_weight_source_config(&config)?
         } else {
             config
+        };
+        let config = match &self.config.hf_config_overrides {
+            Some(overrides) => overrides.apply(&config)?,
+            None => config,
         };
         let config = if self.mtp {
             super::loaders::inject_mtp_config_flag(&config)?

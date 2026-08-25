@@ -128,6 +128,8 @@ Each entry defines one loaded model.
 | `tokenizer` | path | no | Local tokenizer.json. |
 | `arch` | enum | no | Architecture override (text models). |
 | `dtype` | enum | no | `auto`, `f16`, `bf16`, `f32`. |
+| `hf_overrides` | JSON object | no | Recursively merged Hugging Face config overrides. |
+| `max_model_len` | integer | no | Runtime prompt-plus-output context limit. |
 | `chat_template` | path | no | Chat template override for this model. |
 | `jinja_explicit` | path | no | Jinja override for this model. |
 | `matformer_config_path` | path | no | MatFormer slice config (CSV/JSON). |
