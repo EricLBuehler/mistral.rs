@@ -32,6 +32,8 @@ struct RequestBlocks {
     block_ids: Vec<usize>,
     /// Number of blocks that are already cached (skip during `cache_blocks`).
     num_cached_blocks: usize,
+    /// Logical tail capacity reserved for future physical allocation.
+    reserved_blocks: usize,
 }
 
 /// KV Cache Manager, manages block allocation and prefix caching.
@@ -50,6 +52,7 @@ pub struct KVCacheManager {
     kv_cache_group_ids: Vec<u32>,
     /// Per-request block tracking.
     req_to_blocks: HashMap<usize, RequestBlocks>,
+    total_reserved_blocks: usize,
 }
 
 impl KVCacheManager {
@@ -73,6 +76,7 @@ impl KVCacheManager {
             enable_caching,
             kv_cache_group_ids,
             req_to_blocks: HashMap::new(),
+            total_reserved_blocks: 0,
         }
     }
 
@@ -83,6 +87,10 @@ impl KVCacheManager {
 
     /// Get a mutable reference to the block pool.
     pub fn block_pool_mut(&mut self) -> &mut BlockPool {
+        assert_eq!(
+            self.total_reserved_blocks, 0,
+            "cannot mutate the block pool while prompt reservations are active"
+        );
         &mut self.block_pool
     }
 
@@ -108,6 +116,17 @@ impl KVCacheManager {
     /// Get the number of free blocks available.
     pub fn num_free_blocks(&self) -> usize {
         self.block_pool.num_free_blocks()
+    }
+
+    /// Physical blocks not committed to a logical prompt tail reservation.
+    pub fn num_unreserved_blocks(&self) -> usize {
+        self.num_free_blocks()
+            .checked_sub(self.total_reserved_blocks)
+            .expect("KV reservations exceed physical free blocks")
+    }
+
+    pub fn num_reserved_blocks(&self) -> usize {
+        self.total_reserved_blocks
     }
 
     /// Total allocatable GPU blocks (excluding the null block).
@@ -137,6 +156,19 @@ impl KVCacheManager {
     /// Whether prefix caching is enabled.
     pub fn caching_enabled(&self) -> bool {
         self.enable_caching
+    }
+
+    fn debug_assert_reservation_invariant(&self) {
+        debug_assert_eq!(
+            self.total_reserved_blocks,
+            self.req_to_blocks
+                .values()
+                .map(|request| request.reserved_blocks)
+                .sum::<usize>()
+        );
+        debug_assert!(
+            self.num_active_blocks() + self.total_reserved_blocks <= self.num_usable_blocks()
+        );
     }
 
     /// Find the longest prefix cache hit for a request.
@@ -170,17 +202,11 @@ impl KVCacheManager {
                 break;
             }
 
-            if let Some(ids) = self
+            if let Some(block_id) = self
                 .block_pool
-                .get_cached_block(block_hash, &self.kv_cache_group_ids)
+                .get_common_cached_block(block_hash, &self.kv_cache_group_ids)
             {
-                let Some(first) = ids.first().copied() else {
-                    break;
-                };
-                if ids.iter().any(|&id| id != first) {
-                    break;
-                }
-                cached_block_ids.push(first);
+                cached_block_ids.push(block_id);
             } else {
                 break;
             }
@@ -192,6 +218,51 @@ impl KVCacheManager {
             block_ids: cached_block_ids,
             num_computed_tokens,
         }
+    }
+
+    /// Pin a validated cached prefix and reserve the remaining full-prompt capacity.
+    pub fn reserve_prompt(
+        &mut self,
+        request_id: usize,
+        num_tokens: usize,
+        computed_blocks: &[usize],
+    ) -> Option<()> {
+        if self.req_to_blocks.contains_key(&request_id) {
+            return None;
+        }
+
+        let num_required_blocks = num_tokens.div_ceil(self.block_size);
+        let num_reserved_blocks = num_required_blocks.checked_sub(computed_blocks.len())?;
+        let num_evictable = if self.enable_caching {
+            computed_blocks
+                .iter()
+                .filter(|&&id| self.block_pool.block_ref_cnt(id) == 0)
+                .count()
+        } else {
+            0
+        };
+        if num_reserved_blocks + num_evictable > self.num_unreserved_blocks() {
+            return None;
+        }
+
+        if !computed_blocks.is_empty() && self.enable_caching {
+            self.block_pool.touch(computed_blocks);
+        }
+
+        self.req_to_blocks.insert(
+            request_id,
+            RequestBlocks {
+                block_ids: computed_blocks.to_vec(),
+                num_cached_blocks: computed_blocks.len(),
+                reserved_blocks: num_reserved_blocks,
+            },
+        );
+        self.total_reserved_blocks = self
+            .total_reserved_blocks
+            .checked_add(num_reserved_blocks)
+            .expect("KV reservation count overflow");
+        self.debug_assert_reservation_invariant();
+        Some(())
     }
 
     /// Allocate blocks for a request.
@@ -215,7 +286,6 @@ impl KVCacheManager {
         let num_required_blocks = num_tokens.div_ceil(self.block_size);
 
         if let Some(req) = self.req_to_blocks.get(&request_id) {
-            // Running request, just need to allocate additional blocks
             let num_existing = req.block_ids.len();
             let num_new_blocks = num_required_blocks.saturating_sub(num_existing);
 
@@ -223,12 +293,18 @@ impl KVCacheManager {
                 return Some(Vec::new());
             }
 
+            let num_reserved = num_new_blocks.min(req.reserved_blocks);
+            let num_unreserved = num_new_blocks - num_reserved;
+            if num_unreserved > self.num_unreserved_blocks() {
+                return None;
+            }
+
             let new_block_ids = self.block_pool.get_new_blocks(num_new_blocks)?;
-            self.req_to_blocks
-                .get_mut(&request_id)
-                .unwrap()
-                .block_ids
-                .extend_from_slice(&new_block_ids);
+            let req = self.req_to_blocks.get_mut(&request_id).unwrap();
+            req.block_ids.extend_from_slice(&new_block_ids);
+            req.reserved_blocks -= num_reserved;
+            self.total_reserved_blocks -= num_reserved;
+            self.debug_assert_reservation_invariant();
             return Some(new_block_ids);
         }
 
@@ -249,7 +325,7 @@ impl KVCacheManager {
         };
 
         let total_needed = num_new_blocks + num_evictable;
-        if total_needed > self.block_pool.num_free_blocks() {
+        if total_needed > self.num_unreserved_blocks() {
             return None;
         }
 
@@ -277,9 +353,11 @@ impl KVCacheManager {
             RequestBlocks {
                 block_ids: all_block_ids,
                 num_cached_blocks: num_computed,
+                reserved_blocks: 0,
             },
         );
 
+        self.debug_assert_reservation_invariant();
         Some(new_block_ids)
     }
 
@@ -289,9 +367,11 @@ impl KVCacheManager {
     /// are evicted first when the free list is used for LRU eviction.
     pub fn free(&mut self, request_id: usize) {
         if let Some(req) = self.req_to_blocks.remove(&request_id) {
+            self.total_reserved_blocks -= req.reserved_blocks;
             // Free in reverse order for LRU eviction priority
             let reversed: Vec<usize> = req.block_ids.into_iter().rev().collect();
             self.block_pool.free_blocks(&reversed);
+            self.debug_assert_reservation_invariant();
         }
     }
 
@@ -302,7 +382,7 @@ impl KVCacheManager {
     pub fn trim_request_to_num_tokens(&mut self, request_id: usize, num_tokens: usize) {
         let num_required_blocks = num_tokens.div_ceil(self.block_size);
 
-        let mut removed_blocks = {
+        let (mut removed_blocks, restored_reservation) = {
             let Some(req) = self.req_to_blocks.get_mut(&request_id) else {
                 return;
             };
@@ -317,12 +397,26 @@ impl KVCacheManager {
                 .drain(num_required_blocks..)
                 .collect::<Vec<_>>();
             req.num_cached_blocks = req.num_cached_blocks.min(req.block_ids.len());
-            removed
+            let restored_reservation = if req.reserved_blocks != 0 {
+                removed.len()
+            } else {
+                0
+            };
+            req.reserved_blocks = req
+                .reserved_blocks
+                .checked_add(restored_reservation)
+                .expect("KV reservation count overflow");
+            (removed, restored_reservation)
         };
 
         // Free in reverse order for LRU eviction priority.
         removed_blocks.reverse();
         self.block_pool.free_blocks(&removed_blocks);
+        self.total_reserved_blocks = self
+            .total_reserved_blocks
+            .checked_add(restored_reservation)
+            .expect("KV reservation count overflow");
+        self.debug_assert_reservation_invariant();
     }
 
     /// Cache newly-full blocks after tokens are computed.
@@ -400,7 +494,15 @@ impl KVCacheManager {
 
     /// Reset the prefix cache. Only succeeds if all blocks are free.
     pub fn reset_prefix_cache(&mut self) -> bool {
-        self.block_pool.reset_prefix_cache()
+        if !self.req_to_blocks.is_empty() {
+            return false;
+        }
+        let reset = self.block_pool.reset_prefix_cache();
+        if reset {
+            self.total_reserved_blocks = 0;
+            self.debug_assert_reservation_invariant();
+        }
+        reset
     }
 
     /// Get the slot mapping for a request's tokens.
@@ -482,6 +584,96 @@ mod tests {
         let new_blocks = mgr.allocate_slots(1, 12, &[]).unwrap();
         assert_eq!(new_blocks.len(), 1);
         assert_eq!(mgr.num_blocks_for_request(1), 3);
+    }
+
+    #[test]
+    fn prompt_reservation_materializes_without_overcommitting() {
+        let mut mgr = KVCacheManager::new(8, 4, false, vec![0]);
+
+        mgr.reserve_prompt(1, 20, &[]).unwrap();
+        assert_eq!(mgr.num_blocks_for_request(1), 0);
+        assert_eq!(mgr.num_reserved_blocks(), 5);
+        assert_eq!(mgr.num_free_blocks(), 7);
+        assert_eq!(mgr.num_unreserved_blocks(), 2);
+
+        assert!(mgr.allocate_slots(2, 12, &[]).is_none());
+        assert!(mgr.allocate_slots(2, 8, &[]).is_some());
+        assert_eq!(mgr.num_active_blocks() + mgr.num_reserved_blocks(), 7);
+        assert_eq!(mgr.num_unreserved_blocks(), 0);
+
+        assert_eq!(mgr.allocate_slots(1, 8, &[]).unwrap().len(), 2);
+        assert_eq!(mgr.num_blocks_for_request(1), 2);
+        assert_eq!(mgr.num_reserved_blocks(), 3);
+        assert_eq!(mgr.num_active_blocks() + mgr.num_reserved_blocks(), 7);
+
+        assert_eq!(mgr.allocate_slots(1, 20, &[]).unwrap().len(), 3);
+        assert_eq!(mgr.num_reserved_blocks(), 0);
+        assert_eq!(mgr.num_free_blocks(), 0);
+    }
+
+    #[test]
+    fn prompt_reservation_pins_cached_prefix_and_free_releases_tail() {
+        let mut mgr = KVCacheManager::new(8, 4, true, vec![0]);
+        let tokens = vec![1; 20];
+        let hashes = compute_block_hashes(&tokens, 4, &[], &[]);
+
+        mgr.allocate_slots(1, 8, &[]).unwrap();
+        mgr.cache_blocks(1, &hashes, 8);
+        mgr.free(1);
+        let computed = mgr.get_computed_blocks(&hashes, tokens.len());
+        assert_eq!(computed.num_computed_tokens, 8);
+
+        mgr.reserve_prompt(2, tokens.len(), &computed.block_ids)
+            .unwrap();
+        assert_eq!(mgr.num_blocks_for_request(2), 2);
+        assert_eq!(mgr.num_active_blocks(), 2);
+        assert_eq!(mgr.num_reserved_blocks(), 3);
+
+        mgr.allocate_slots(2, 12, &[]).unwrap();
+        assert_eq!(mgr.num_blocks_for_request(2), 3);
+        assert_eq!(mgr.num_reserved_blocks(), 2);
+
+        mgr.free(2);
+        assert_eq!(mgr.num_active_blocks(), 0);
+        assert_eq!(mgr.num_reserved_blocks(), 0);
+        assert_eq!(mgr.num_free_blocks(), 7);
+    }
+
+    #[test]
+    fn prefix_cache_reset_refuses_active_prompt_reservation() {
+        let mut mgr = KVCacheManager::new(8, 4, true, vec![0]);
+
+        mgr.reserve_prompt(1, 20, &[]).unwrap();
+        assert!(!mgr.reset_prefix_cache());
+        assert_eq!(mgr.num_reserved_blocks(), 5);
+
+        mgr.free(1);
+        assert!(mgr.reset_prefix_cache());
+        assert_eq!(mgr.num_reserved_blocks(), 0);
+    }
+
+    #[test]
+    #[should_panic(expected = "cannot mutate the block pool while prompt reservations are active")]
+    fn mutable_block_pool_refuses_active_prompt_reservation() {
+        let mut mgr = KVCacheManager::new(8, 4, true, vec![0]);
+        mgr.reserve_prompt(1, 20, &[]).unwrap();
+        let _ = mgr.block_pool_mut();
+    }
+
+    #[test]
+    fn trim_restores_live_prompt_reservation() {
+        let mut mgr = KVCacheManager::new(8, 4, false, vec![0]);
+
+        mgr.reserve_prompt(1, 20, &[]).unwrap();
+        mgr.allocate_slots(1, 12, &[]).unwrap();
+        mgr.trim_request_to_num_tokens(1, 4);
+
+        assert_eq!(mgr.num_blocks_for_request(1), 1);
+        assert_eq!(mgr.num_reserved_blocks(), 4);
+        assert_eq!(mgr.num_active_blocks() + mgr.num_reserved_blocks(), 5);
+
+        assert_eq!(mgr.allocate_slots(1, 20, &[]).unwrap().len(), 4);
+        assert_eq!(mgr.num_reserved_blocks(), 0);
     }
 
     #[test]

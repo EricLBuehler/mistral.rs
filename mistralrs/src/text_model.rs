@@ -29,6 +29,8 @@ pub struct TextModelBuilder {
     pub(crate) tokenizer_json: Option<String>,
     pub(crate) device_mapping: Option<DeviceMapSetting>,
     pub(crate) hf_cache_path: Option<PathBuf>,
+    pub(crate) hf_config_overrides: Option<HfConfigOverrides>,
+    pub(crate) max_model_len: Option<usize>,
     pub(crate) search_embedding_model: Option<SearchEmbeddingModel>,
     pub(crate) search_callback: Option<Arc<SearchCallback>>,
     pub(crate) tool_callbacks: HashMap<String, ToolCallbackWithTool>,
@@ -146,6 +148,8 @@ impl TextModelBuilder {
             jinja_explicit: None,
             throughput_logging: false,
             hf_cache_path: None,
+            hf_config_overrides: None,
+            max_model_len: None,
             search_embedding_model: None,
             search_callback: None,
             tool_callbacks: HashMap::new(),
@@ -185,6 +189,19 @@ impl TextModelBuilder {
     /// determine the loader type.
     pub fn with_loader_type(mut self, loader_type: NormalLoaderType) -> Self {
         self.loader_type = Some(loader_type);
+        self
+    }
+
+    /// Set recursively merged Hugging Face config.json overrides.
+    pub fn with_hf_config_overrides(mut self, overrides: HfConfigOverrides) -> Self {
+        self.hf_config_overrides = Some(overrides);
+        self
+    }
+
+    /// Set the runtime model context length.
+    pub fn with_max_model_len(mut self, max_model_len: usize) -> Self {
+        assert!(max_model_len > 0, "maximum model length must be nonzero");
+        self.max_model_len = Some(max_model_len);
         self
     }
 

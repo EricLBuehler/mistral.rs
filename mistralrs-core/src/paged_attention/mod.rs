@@ -6,6 +6,7 @@ pub(crate) mod attention_backend;
 pub mod block_hash;
 /// Flat block pool with LRU free list for KV cache block management (vLLM v1 approach).
 pub mod block_pool;
+pub(crate) mod block_table_rows;
 mod cache_engine;
 mod config;
 /// Encoder output cache for multimodal models (vision/audio encoder outputs).

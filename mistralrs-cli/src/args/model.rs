@@ -2,13 +2,14 @@
 
 use clap::{Args, ValueEnum};
 use mistralrs_core::{
-    AutoDeviceMapParams, IsqOrganization, LoraAdapterSpec, LoraRuntimeConfig, ModelDType,
-    NormalLoaderType, DEFAULT_LORA_MAX_ADAPTERS, DEFAULT_LORA_MAX_BYTES, DEFAULT_LORA_MAX_RANK,
-    MAX_LORA_ALIAS_BYTES,
+    AutoDeviceMapParams, HfConfigOverrides, IsqOrganization, LoraAdapterSpec, LoraRuntimeConfig,
+    ModelDType, NormalLoaderType, DEFAULT_LORA_MAX_ADAPTERS, DEFAULT_LORA_MAX_BYTES,
+    DEFAULT_LORA_MAX_RANK, MAX_LORA_ALIAS_BYTES,
 };
 use serde::Deserialize;
 use std::{
     collections::HashSet,
+    num::NonZeroUsize,
     path::{Path, PathBuf},
 };
 
@@ -38,6 +39,24 @@ pub struct ModelSourceOptions {
     #[arg(long, default_value = "auto", value_parser = parse_dtype)]
     #[serde(default)]
     pub dtype: ModelDType,
+
+    /// Recursively merged JSON overrides for the Hugging Face model config
+    #[arg(long)]
+    pub hf_overrides: Option<HfConfigOverrides>,
+
+    /// Runtime model context length
+    #[arg(long, value_parser = parse_positive_usize)]
+    pub max_model_len: Option<usize>,
+}
+
+pub(super) fn parse_positive_usize(value: &str) -> Result<usize, String> {
+    let value = value
+        .parse::<usize>()
+        .map_err(|err| format!("invalid positive integer: {err}"))?;
+    if value == 0 {
+        return Err("value must be greater than zero".to_string());
+    }
+    Ok(value)
 }
 
 /// Format options for model loading
@@ -681,6 +700,10 @@ pub struct DeviceOptions {
 /// Multimodal model specific options
 #[derive(Args, Clone, Default, Deserialize)]
 pub struct MultimodalOptions {
+    /// Maximum logical tensor memory retained by the multimodal encoder cache, in MiB
+    #[arg(long = "encoder-cache-memory-mb")]
+    pub encoder_cache_memory_mb: Option<NonZeroUsize>,
+
     /// Maximum edge length for image resizing (aspect ratio preserved)
     #[arg(long)]
     pub max_edge: Option<u32>,

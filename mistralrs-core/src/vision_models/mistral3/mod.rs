@@ -407,6 +407,9 @@ impl MultimodalModel for Mistral3Model {
     fn config(&self) -> &ModelConfigMetadata {
         self.text_model.config()
     }
+    fn encoder_cache(&self) -> Option<&Mutex<EncoderCacheManager>> {
+        Some(&self.encoder_cache)
+    }
     fn encoder_cache_counters(
         &self,
     ) -> Option<(

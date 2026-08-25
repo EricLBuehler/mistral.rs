@@ -12,6 +12,7 @@ pub(crate) mod execution;
 mod ggml;
 mod gguf;
 pub(crate) mod hf;
+mod hf_config;
 mod inputs_processor;
 mod isq;
 mod isq_flow;
@@ -48,6 +49,7 @@ pub use embedding::{EmbeddingLoader, EmbeddingLoaderBuilder, EmbeddingSpecificCo
 pub use execution::{StepLookahead, StepSubmission};
 pub use ggml::{GGMLLoader, GGMLLoaderBuilder, GGMLSpecificConfig};
 pub use gguf::{GGUFLoader, GGUFLoaderBuilder, GGUFSpecificConfig};
+pub use hf_config::HfConfigOverrides;
 use image::DynamicImage;
 pub use inputs_processor::InputProcessorOutput;
 pub(crate) use isq::IsqModelLoader;
@@ -2342,7 +2344,6 @@ pub trait Pipeline:
                             )?;
                         }
                         for (seq_idx, end) in computed_updates {
-                            input_seqs[seq_idx].set_prefix_cache_len(end);
                             input_seqs[seq_idx].set_num_computed_tokens(end);
                         }
                         let end = Instant::now();

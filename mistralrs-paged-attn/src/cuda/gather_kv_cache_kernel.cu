@@ -69,6 +69,9 @@ __global__ void gather_kv_cache_kernel(
     }
   }
   const int32_t batch_id = lo;
+  if (batch_id >= num_seqs) {
+    return;
+  }
 
   const int32_t batch_offset = token_id - cu_seq_lens[batch_id];
   const int32_t block_table_id = batch_offset / block_size;

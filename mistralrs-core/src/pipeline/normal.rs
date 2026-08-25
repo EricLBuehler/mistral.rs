@@ -275,7 +275,9 @@ fn normal_model_requires_uniform_prompt_batch(
     is_xlora: bool,
     has_speculative_proposer: bool,
 ) -> bool {
-    (is_hybrid && !packed_prefill_available) || is_xlora || has_speculative_proposer
+    (is_hybrid && !packed_prefill_available)
+        || is_xlora
+        || (has_speculative_proposer && !packed_prefill_available)
 }
 
 /// A loader for a "normal" (non-quantized) model.
@@ -369,6 +371,8 @@ pub struct NormalSpecificConfig {
     pub imatrix: Option<PathBuf>,
     pub calibration_file: Option<PathBuf>,
     pub hf_cache_path: Option<PathBuf>,
+    pub hf_config_overrides: Option<super::HfConfigOverrides>,
+    pub max_model_len: Option<usize>,
     pub matformer_config_path: Option<PathBuf>,
     pub matformer_slice_name: Option<String>,
 }
@@ -611,16 +615,24 @@ impl Loader for NormalLoader {
             Some(source) => source.config.clone(),
             None => std::fs::read_to_string(paths.get_config_filename())?,
         };
-        let config = if self.mtp {
-            super::loaders::inject_mtp_config_flag(&config)?
-        } else {
-            config
-        };
         let config = if self.config.from_uqff.is_some() {
             super::isq::sanitize_quantized_weight_source_config(&config)?
         } else {
             config
         };
+        let config = match &self.config.hf_config_overrides {
+            Some(overrides) => overrides.apply(&config)?,
+            None => config,
+        };
+        let config = if self.mtp {
+            super::loaders::inject_mtp_config_flag(&config)?
+        } else {
+            config
+        };
+        let config = self
+            .inner
+            .runtime_config(&config, self.config.max_model_len)?
+            .into_owned();
         super::loaders::validate_lora_qk_rope_layout(
             &config,
             self.lora_adapters.is_some() || self.xlora_model_id.is_some(),
@@ -2248,7 +2260,8 @@ impl Pipeline for NormalPipeline {
         self.model.supports_packed_prefill()
             && self.metadata.cache_engine.is_some()
             && !self.model.is_xlora()
-            && !self.model.has_speculative_proposer()
+            && (!self.model.has_speculative_proposer()
+                || self.model.supports_speculative_packed_prefill())
             && self.model.device().is_cuda()
             && self.mapper.get_unique_devices().iter().all(Device::is_cuda)
             && crate::using_flash_attn()
@@ -2733,11 +2746,14 @@ mod tests {
     }
 
     #[test]
-    fn xlora_and_speculative_models_remain_uniform() {
+    fn xlora_and_unsupported_speculative_models_remain_uniform() {
         assert!(normal_model_requires_uniform_prompt_batch(
             true, true, true, false
         ));
         assert!(normal_model_requires_uniform_prompt_batch(
+            true, false, false, true
+        ));
+        assert!(!normal_model_requires_uniform_prompt_batch(
             true, true, false, true
         ));
     }

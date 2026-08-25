@@ -74,6 +74,18 @@ mod file_tools;
 mod logger;
 mod tool_dispatch;
 
+const PAGED_RECURRENT_PREFIX_VALIDATION_METRIC: &str =
+    "mistralrs_paged_recurrent_prefix_validation_total";
+
+fn record_paged_recurrent_prefix_validation(outcome: &'static str, reason: &'static str) {
+    metrics::counter!(
+        PAGED_RECURRENT_PREFIX_VALIDATION_METRIC,
+        "outcome" => outcome,
+        "reason" => reason
+    )
+    .increment(1);
+}
+
 #[cfg(feature = "cuda")]
 use self::cuda_decode::CudaDecodeCompletionWorker;
 #[cfg(feature = "cuda")]
@@ -298,6 +310,7 @@ impl HybridPagedPrefixValidator {
         sequence_id: usize,
         slot_idx: usize,
         record_auxiliary_miss: bool,
+        validation_reason: &'static str,
     ) -> PagedPrefixCacheValidation {
         let pipeline = Arc::clone(&self.pipeline);
         PagedPrefixCacheValidation::staged(0, move |seq| {
@@ -310,6 +323,7 @@ impl HybridPagedPrefixValidator {
             if record_auxiliary_miss {
                 metrics::counter!("mistralrs_speculative_prefix_cache_misses_total").increment(1);
             }
+            record_paged_recurrent_prefix_validation("miss", validation_reason);
             Ok(())
         })
     }
@@ -343,6 +357,14 @@ impl HybridPagedPrefixValidator {
             drop(pipeline);
             get_mut_arcmutex!(prefix_cacher)
                 .promote_paged_recurrent_prefix(&restore.prefix_key, restore.current_owner);
+            let validation_reason = if restore.restore_auxiliary {
+                "recurrent_and_auxiliary"
+            } else if restore.record_auxiliary_miss {
+                "recurrent_without_auxiliary"
+            } else {
+                "recurrent"
+            };
+            record_paged_recurrent_prefix_validation("hit", validation_reason);
             if restore.restore_auxiliary {
                 metrics::counter!("mistralrs_speculative_prefix_cache_hits_total").increment(1);
                 metrics::counter!("mistralrs_speculative_prefix_replay_tokens_avoided_total")
@@ -364,7 +386,10 @@ impl PagedPrefixCacheValidator for HybridPagedPrefixValidator {
         block_size: usize,
     ) -> candle_core::Result<PagedPrefixCacheValidation> {
         let Some(slot_idx) = seq.recurrent_state_idx() else {
-            return Ok(PagedPrefixCacheValidation::ready(0));
+            return Ok(PagedPrefixCacheValidation::staged(0, |_| {
+                record_paged_recurrent_prefix_validation("miss", "missing_slot");
+                Ok(())
+            }));
         };
         let sequence_id = *seq.id();
 
@@ -422,30 +447,48 @@ impl PagedPrefixCacheValidator for HybridPagedPrefixValidator {
             replay,
             seq.mm_features(),
         ) else {
-            return Ok(self.stage_recurrent_reset(sequence_id, slot_idx, record_auxiliary_miss));
+            return Ok(self.stage_recurrent_reset(
+                sequence_id,
+                slot_idx,
+                record_auxiliary_miss,
+                "no_replay_boundary",
+            ));
         };
 
         if !cached_tokens.is_multiple_of(block_size) {
-            return Ok(self.stage_recurrent_reset(sequence_id, slot_idx, record_auxiliary_miss));
+            return Ok(self.stage_recurrent_reset(
+                sequence_id,
+                slot_idx,
+                record_auxiliary_miss,
+                "unaligned_boundary",
+            ));
         }
 
         let max_blocks = cached_tokens / block_size;
         let Some((n_blocks, checkpoint)) = get_mut_arcmutex!(self.prefix_cacher)
             .peek_longest_paged_recurrent_prefix(block_hashes, max_blocks)
         else {
-            return Ok(self.stage_recurrent_reset(sequence_id, slot_idx, record_auxiliary_miss));
+            return Ok(self.stage_recurrent_reset(
+                sequence_id,
+                slot_idx,
+                record_auxiliary_miss,
+                "checkpoint_unavailable",
+            ));
         };
 
         let pipeline = get_mut_arcmutex!(self.pipeline);
         if !pipeline.cache().is_hybrid() {
-            if record_auxiliary_miss {
-                return Ok(PagedPrefixCacheValidation::staged(cached_tokens, |_| {
-                    metrics::counter!("mistralrs_speculative_prefix_cache_misses_total")
-                        .increment(1);
+            return Ok(PagedPrefixCacheValidation::staged(
+                cached_tokens,
+                move |_| {
+                    record_paged_recurrent_prefix_validation("hit", "attention_only");
+                    if record_auxiliary_miss {
+                        metrics::counter!("mistralrs_speculative_prefix_cache_misses_total")
+                            .increment(1);
+                    }
                     Ok(())
-                }));
-            }
-            return Ok(PagedPrefixCacheValidation::ready(cached_tokens));
+                },
+            ));
         }
         drop(pipeline);
         Ok(self.stage_recurrent_restore(HybridPrefixRestore {
@@ -546,6 +589,7 @@ impl Engine {
             requires_uniform_completion_batch,
             requires_uniform_media_batch,
             supports_packed_prefill,
+            prefill_has_per_sequence_state,
             scheduler_visible_prompt_chunks,
             prompt_chunks_require_block_alignment,
             prefix_policy,
@@ -557,6 +601,7 @@ impl Engine {
                 pipeline.requires_uniform_completion_batch(),
                 pipeline.requires_uniform_media_batch(),
                 pipeline.supports_packed_prefill(),
+                pipeline.cache().is_hybrid(),
                 pipeline.device().is_cuda() && !pipeline_metadata.is_xlora,
                 pipeline.cache().is_hybrid(),
                 pipeline.speculative_prefix_checkpoint_policy(),
@@ -586,6 +631,8 @@ impl Engine {
             .set_requires_uniform_completion_batch(requires_uniform_completion_batch);
         get_mut_arcmutex!(scheduler).set_requires_uniform_media_batch(requires_uniform_media_batch);
         get_mut_arcmutex!(scheduler).set_supports_packed_prefill(supports_packed_prefill);
+        get_mut_arcmutex!(scheduler)
+            .set_prefill_has_per_sequence_state(prefill_has_per_sequence_state);
         get_mut_arcmutex!(scheduler).set_scheduler_visible_prompt_chunks(
             scheduler_visible_prompt_chunks,
             prompt_chunks_require_block_alignment,

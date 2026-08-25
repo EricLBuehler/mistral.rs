@@ -64,6 +64,7 @@ extern "C" {
 
     pub(crate) fn mistralrs_deepgemm_sm90_gemm(
         prepared: *const DeepGemmPrepared,
+        m: u32,
         activation_bf16: *const core::ffi::c_void,
         weight_e4m3: *const core::ffi::c_void,
         weight_scales: *const f32,

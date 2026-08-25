@@ -226,32 +226,34 @@ impl Qwen3VLMoEModel {
                 let last_dim = pixel_values.dim(ndim - 1)?;
                 pixel_values = pixel_values.reshape(((), last_dim))?;
             }
-            let (video_embeds, deepstack_video_embeds, per_video) = if packed_layout.is_some() {
-                let per_video =
+            let per_video = if video_hashes.is_empty() {
+                None
+            } else {
+                Some(
                     VisualEncoder::new(&self.vision, &self.encoder_cache, self.spatial_merge_size)
                         .encode(
                             &pixel_values,
                             video_grid_thw_ref,
                             video_hashes,
                             CacheModality::Video,
-                        )?;
-                let (main, deepstack) = concatenate_visual_items(&per_video)?;
-                (main, deepstack, Some(per_video))
-            } else {
-                let (main, deepstack) = self.vision.forward(&pixel_values, video_grid_thw_ref)?;
-                (main, deepstack, None)
+                        )?,
+                )
+            };
+            let (video_embeds, deepstack_video_embeds) = match &per_video {
+                Some(outputs) => concatenate_visual_items(outputs)?,
+                None => self.vision.forward(&pixel_values, video_grid_thw_ref)?,
             };
             let video_embeds = video_embeds.to_device(&device)?.to_dtype(self.text.dtype)?;
             let deepstack_video_embeds = deepstack_video_embeds
                 .into_iter()
                 .map(|t| t.to_device(&device)?.to_dtype(self.text.dtype))
                 .collect::<Result<Vec<_>>>()?;
-            if let Some(per_video) = per_video {
+            if packed_layout.is_some() {
                 insert_current_visual_outputs(
                     &mut packed_encoder_outputs,
                     MultimodalKind::Video,
                     video_hashes,
-                    per_video,
+                    per_video.unwrap_or_default(),
                 )?;
             }
 
@@ -535,6 +537,9 @@ impl MultimodalModel for Qwen3VLMoEModel {
             packed_layout: None,
             prompt_position_ids: None,
         })
+    }
+    fn encoder_cache(&self) -> Option<&Mutex<EncoderCacheManager>> {
+        Some(&self.encoder_cache)
     }
     fn encoder_cache_counters(
         &self,

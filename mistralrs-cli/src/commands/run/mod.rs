@@ -15,8 +15,9 @@ use mistralrs_server_core::mistralrs_for_server_builder::MistralRsForServerBuild
 use super::normalize_requested_adapter;
 use super::serve::{
     apply_agent_mode, apply_quant_resolution, convert_to_model_selected, extract_device_settings,
-    extract_isq_setting, extract_paged_attn_settings, extract_sandbox_settings, load_mcp_config,
-    log_agent_runtime, validate_agent_options,
+    extract_encoder_cache_memory_bytes, extract_hf_config_settings, extract_isq_setting,
+    extract_paged_attn_settings, extract_sandbox_settings, load_mcp_config, log_agent_runtime,
+    validate_agent_options,
 };
 #[cfg(feature = "code-execution")]
 use super::serve::{build_code_exec_config, build_shell_config};
@@ -52,6 +53,7 @@ pub async fn run_interactive(
     let matformer = runtime.matformer_selection();
     apply_quant_resolution(&mut model_type, &global.token_source, &matformer).await?;
     let model_selected = convert_to_model_selected(&model_type, &matformer)?;
+    let (max_model_len, hf_config_overrides) = extract_hf_config_settings(&model_type);
 
     // Extract settings
     let (
@@ -64,6 +66,7 @@ pub async fn run_interactive(
     ) = extract_paged_attn_settings(&model_type);
     let (cpu, device_layers) = extract_device_settings(&model_type);
     let isq = extract_isq_setting(&model_type);
+    let encoder_cache_memory_bytes = extract_encoder_cache_memory_bytes(&model_type)?;
 
     // Build the MistralRs instance
     let mut builder = MistralRsForServerBuilder::new()
@@ -100,7 +103,13 @@ pub async fn run_interactive(
         .with_paged_ctxt_len_optional(paged_ctxt_len)
         .with_paged_attn_block_size_optional(paged_attn_block_size)
         .with_mtp_config_optional(runtime.mtp_config())
+        .with_max_model_len_optional(max_model_len)
+        .with_hf_config_overrides_optional(hf_config_overrides)
         .with_paged_attn_cache_type(paged_cache_type);
+
+    if let Some(max_bytes) = encoder_cache_memory_bytes {
+        builder = builder.with_encoder_cache_memory_bytes(max_bytes);
+    }
 
     if let Some(model) = runtime.search_embedding_model {
         builder = builder.with_search_embedding_model(model.into());

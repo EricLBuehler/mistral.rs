@@ -20,7 +20,9 @@ use crate::{
         make_fa3_decode_state, Fa3DecodeState, FlashInferMetadata, FlashInferPagedAttentionView,
         FlashInferPagedAttentionViews, FlashInferPagedKv, FlashInferTilePlan,
     },
-    paged_attention::{AttentionBackendKind, ModelConfigLike},
+    paged_attention::{
+        block_table_rows::BlockTableSnapshot, AttentionBackendKind, ModelConfigLike,
+    },
 };
 
 use crate::device_map::DeviceMapper;
@@ -501,7 +503,6 @@ impl CudaGraphDecodeStep {
         let mut slot_mappings = Vec::with_capacity(self.real_batch);
         let mut block_tables = Vec::with_capacity(self.real_batch);
         let mut context_lens = Vec::with_capacity(self.real_batch);
-        let mut full_block_tables = Vec::with_capacity(self.real_batch);
         let mut full_context_lens = Vec::with_capacity(self.real_batch);
         for row in 0..self.real_batch {
             let Some(&current_slot) = rows.slot_mappings[row].first() else {
@@ -510,7 +511,7 @@ impl CudaGraphDecodeStep {
             let Ok(current_slot) = usize::try_from(current_slot) else {
                 return Ok(None);
             };
-            let full_table = &rows.full_block_tables[row];
+            let full_table = rows.full_block_table(row);
             let current_block = current_slot / rows.block_size;
             let Some(current_block_idx) =
                 full_table.iter().position(|&block| block == current_block)
@@ -518,8 +519,8 @@ impl CudaGraphDecodeStep {
                 return Ok(None);
             };
             let current_block_offset = current_slot % rows.block_size;
-            let (next_block_idx, next_slot) = if current_block_offset + 1 < rows.block_size {
-                (current_block_idx, current_slot + 1)
+            let next_slot = if current_block_offset + 1 < rows.block_size {
+                current_slot + 1
             } else {
                 let next_block_idx = current_block_idx + 1;
                 let Some(&next_block) = full_table.get(next_block_idx) else {
@@ -528,7 +529,7 @@ impl CudaGraphDecodeStep {
                 let Some(next_slot) = next_block.checked_mul(rows.block_size) else {
                     return Ok(None);
                 };
-                (next_block_idx, next_slot)
+                next_slot
             };
             let Ok(next_slot) = i64::try_from(next_slot) else {
                 return Ok(None);
@@ -537,34 +538,28 @@ impl CudaGraphDecodeStep {
                 return Ok(None);
             };
 
-            let (paged_table, paged_context_len) = match rows.sliding_window {
+            let paged_context_len = match rows.sliding_window {
                 Some(window) => {
                     let window_start = next_full_context_len.saturating_sub(window);
                     let block_aligned_start = window_start / rows.block_size * rows.block_size;
-                    let paged_context_len = next_full_context_len - block_aligned_start;
-                    let needed_blocks = paged_context_len.div_ceil(rows.block_size);
-                    let table_end = next_block_idx + 1;
-                    let table_start = table_end.saturating_sub(needed_blocks);
-                    (
-                        full_table[table_start..table_end].to_vec(),
-                        paged_context_len,
-                    )
+                    next_full_context_len - block_aligned_start
                 }
-                None => (full_table.clone(), next_full_context_len),
+                None => next_full_context_len,
             };
             slot_mappings.push(vec![next_slot]);
-            block_tables.push(paged_table);
+            block_tables.push(
+                rows.block_tables
+                    .table_arc(rows.block_tables.row_table_index(row)),
+            );
             context_lens.push(paged_context_len);
-            full_block_tables.push(full_table.clone());
             full_context_lens.push(next_full_context_len);
         }
 
         let rows = Arc::new(
             DecodePagedRows {
                 slot_mappings,
-                block_tables,
+                block_tables: BlockTableSnapshot::from_sequence_tables(block_tables, 1),
                 context_lens,
-                full_block_tables,
                 full_context_lens,
                 query_len: 1,
                 block_size: rows.block_size,
@@ -631,9 +626,8 @@ impl CudaGraphPrecaptureInputs {
             .unwrap_or_else(|| vec![device.clone()]);
         let rows = Arc::new(DecodePagedRows {
             slot_mappings: vec![vec![_PAD_SLOT_ID; q_len]],
-            block_tables: vec![vec![0]; q_len],
+            block_tables: BlockTableSnapshot::from_owned_sequence_tables(vec![vec![0]], q_len),
             context_lens: vec![1; q_len],
-            full_block_tables: vec![vec![0]; q_len],
             full_context_lens: vec![1; q_len],
             query_len: q_len,
             block_size: ctx.block_size,
@@ -3651,9 +3645,8 @@ mod tests {
         let table = vec![1, 2, 3, 4];
         let rows = Arc::new(DecodePagedRows {
             slot_mappings: vec![vec![127]],
-            block_tables: vec![table.clone()],
+            block_tables: BlockTableSnapshot::from_owned_sequence_tables(vec![table], 1),
             context_lens: vec![128],
-            full_block_tables: vec![table],
             full_context_lens: vec![128],
             query_len: 1,
             block_size: 32,
@@ -3685,8 +3678,8 @@ mod tests {
         assert_ne!(staged_key, speculative_key);
 
         let mut next_bucket_rows = (*rows).clone();
-        next_bucket_rows.block_tables = vec![(1..=17).collect()];
-        next_bucket_rows.full_block_tables = next_bucket_rows.block_tables.clone();
+        next_bucket_rows.block_tables =
+            BlockTableSnapshot::from_owned_sequence_tables(vec![(1..=17).collect()], 1);
         next_bucket_rows.context_lens = vec![513];
         next_bucket_rows.full_context_lens = vec![513];
         let next_bucket = Arc::new(next_bucket_rows).build_graph_staged().unwrap();
@@ -3701,9 +3694,8 @@ mod tests {
         let table = vec![1, 2, 3, 4];
         let metadata = Arc::new(DecodePagedRows {
             slot_mappings: vec![vec![127]],
-            block_tables: vec![table.clone()],
+            block_tables: BlockTableSnapshot::from_owned_sequence_tables(vec![table], 1),
             context_lens: vec![128],
-            full_block_tables: vec![table],
             full_context_lens: vec![128],
             query_len: 1,
             block_size: 32,
@@ -3752,9 +3744,11 @@ mod tests {
         let table = vec![1, 2];
         let metadata = Arc::new(DecodePagedRows {
             slot_mappings: vec![vec![37, 38, 39], vec![37, 38, 39]],
-            block_tables: vec![table.clone(); 6],
+            block_tables: BlockTableSnapshot::from_owned_sequence_tables(
+                vec![table.clone(), table],
+                3,
+            ),
             context_lens: vec![38, 39, 40, 38, 39, 40],
-            full_block_tables: vec![table; 6],
             full_context_lens: vec![38, 39, 40, 38, 39, 40],
             query_len: 3,
             block_size: 32,
@@ -3794,9 +3788,8 @@ mod tests {
         let rows = |table: Vec<usize>, context_len: usize| -> anyhow::Result<_> {
             Ok(Arc::new(DecodePagedRows {
                 slot_mappings: vec![vec![i64::try_from(context_len - 1)?]],
-                block_tables: vec![table.clone()],
+                block_tables: BlockTableSnapshot::from_owned_sequence_tables(vec![table], 1),
                 context_lens: vec![context_len],
-                full_block_tables: vec![table],
                 full_context_lens: vec![context_len],
                 query_len: 1,
                 block_size: 32,
@@ -4206,9 +4199,8 @@ mod tests {
         let rows = Arc::new(
             DecodePagedRows {
                 slot_mappings: vec![vec![39]],
-                block_tables: vec![vec![9]],
+                block_tables: BlockTableSnapshot::from_owned_sequence_tables(vec![vec![9, 17]], 1),
                 context_lens: vec![4],
-                full_block_tables: vec![vec![9, 17]],
                 full_context_lens: vec![4],
                 query_len: 1,
                 block_size: 4,
@@ -4235,7 +4227,10 @@ mod tests {
             .expect("next allocated block should permit one token");
         let rows = continuation.metadata.decode_rows.as_ref().unwrap();
         assert_eq!(rows.slot_mappings, vec![vec![68], vec![_PAD_SLOT_ID]]);
-        assert_eq!(rows.block_tables, vec![vec![9, 17], vec![9, 17]]);
+        assert_eq!(
+            rows.materialized_block_tables(),
+            vec![vec![9, 17], vec![9, 17]]
+        );
         assert_eq!(rows.context_lens, vec![5, 5]);
         assert_eq!(rows.full_context_lens, vec![5, 5]);
         assert_eq!(continuation.seqlen_offsets, vec![101, 101]);
@@ -4249,9 +4244,8 @@ mod tests {
     fn one_token_continuation_requires_an_allocated_boundary_slot() -> anyhow::Result<()> {
         let rows = Arc::new(DecodePagedRows {
             slot_mappings: vec![vec![39]],
-            block_tables: vec![vec![9]],
+            block_tables: BlockTableSnapshot::from_owned_sequence_tables(vec![vec![9]], 1),
             context_lens: vec![4],
-            full_block_tables: vec![vec![9]],
             full_context_lens: vec![4],
             query_len: 1,
             block_size: 4,
@@ -4283,9 +4277,8 @@ mod tests {
         let device = Device::new_cuda(0)?;
         let metadata = Arc::new(DecodePagedRows {
             slot_mappings: vec![vec![0]],
-            block_tables: vec![vec![0]],
+            block_tables: BlockTableSnapshot::from_owned_sequence_tables(vec![vec![0]], 1),
             context_lens: vec![1],
-            full_block_tables: vec![vec![0]],
             full_context_lens: vec![1],
             query_len: 1,
             block_size: 32,

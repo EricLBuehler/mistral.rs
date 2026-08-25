@@ -354,6 +354,14 @@ pub struct DefaultModelOptions {
     #[arg(long, default_value = "auto", value_parser = parse_dtype)]
     pub dtype: mistralrs_core::ModelDType,
 
+    /// Recursively merged JSON overrides for the Hugging Face model config
+    #[arg(long)]
+    pub hf_overrides: Option<mistralrs_core::HfConfigOverrides>,
+
+    /// Runtime model context length
+    #[arg(long, value_parser = crate::args::model::parse_positive_usize)]
+    pub max_model_len: Option<usize>,
+
     #[command(flatten)]
     pub format: FormatOptions,
 
@@ -388,6 +396,8 @@ impl DefaultModelOptions {
                 tokenizer: self.tokenizer,
                 arch: self.arch,
                 dtype: self.dtype,
+                hf_overrides: self.hf_overrides,
+                max_model_len: self.max_model_len,
             },
             format: self.format,
             adapter: self.adapter,
@@ -580,7 +590,7 @@ pub struct RuntimeOptions {
     #[serde(default = "default_max_num_batched_tokens")]
     pub max_num_batched_tokens: NonZeroUsize,
 
-    /// Maximum chunkable CUDA text-prompt tokens in one paged-attention scheduler step
+    /// CUDA prompt-token quantum used while decode is resident and for recurrent prefill batching
     #[arg(long, default_value_t = default_max_prefill_chunk_tokens())]
     #[serde(default = "default_max_prefill_chunk_tokens")]
     pub max_prefill_chunk_tokens: NonZeroUsize,
@@ -1343,6 +1353,34 @@ mod tests {
         };
         assert_eq!(model.model_id, "org/plain");
         assert_eq!(format.format, None);
+    }
+
+    #[test]
+    fn parses_hf_config_overrides_and_max_model_len() {
+        let resolved = resolve_run(&[
+            "-m",
+            "org/model",
+            "--hf-overrides",
+            r#"{"text_config":{"rope_parameters":{"rope_type":"yarn","factor":4.0}}}"#,
+            "--max-model-len",
+            "131072",
+        ])
+        .unwrap();
+        let ModelType::Auto { model, .. } = resolved else {
+            panic!("expected auto model");
+        };
+
+        assert_eq!(model.max_model_len, Some(131072));
+        let overrides = model.hf_overrides.unwrap();
+        assert_eq!(
+            overrides.as_value()["text_config"]["rope_parameters"]["rope_type"],
+            "yarn"
+        );
+    }
+
+    #[test]
+    fn rejects_zero_max_model_len() {
+        assert!(resolve_run(&["-m", "org/model", "--max-model-len", "0"]).is_err());
     }
 
     #[test]

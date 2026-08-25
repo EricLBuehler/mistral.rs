@@ -1,7 +1,7 @@
 use std::any::Any;
 use std::borrow::Cow;
 use std::sync::atomic::AtomicUsize;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::{fmt::Debug, str::FromStr};
 
 use anyhow::Result;
@@ -29,7 +29,8 @@ use crate::gguf::normal_registry::RopePairing;
 use crate::layers::Conv3dConfig;
 use crate::matformer::MatformerSliceConfig;
 use crate::paged_attention::{
-    AttentionImplementation, HybridPagedKvCacheConfig, ModelConfigLike, ModelConfigMetadata,
+    encoder_cache::EncoderCacheManager, AttentionImplementation, HybridPagedKvCacheConfig,
+    ModelConfigLike, ModelConfigMetadata,
 };
 use crate::pipeline::isq::IsqModelLoader;
 use crate::pipeline::loaders::AutoDeviceMapParams;
@@ -131,9 +132,22 @@ pub trait MultimodalModel:
     }
     /// For a prompt without images. Requires batch size of 1!
     fn default_model_specific_args(&self, input_ids: &Tensor) -> Box<dyn Any>;
-    /// Return encoder cache hit/miss counters (hits, misses) if this model has an encoder cache.
-    fn encoder_cache_counters(&self) -> Option<(Arc<AtomicUsize>, Arc<AtomicUsize>)> {
+    fn encoder_cache(&self) -> Option<&Mutex<EncoderCacheManager>> {
         None
+    }
+    fn configure_encoder_cache_memory_bytes(&self, max_bytes: usize) -> bool {
+        let Some(cache) = self.encoder_cache() else {
+            return false;
+        };
+        cache
+            .lock()
+            .expect("encoder cache poisoned")
+            .set_max_logical_bytes(max_bytes);
+        true
+    }
+    fn encoder_cache_counters(&self) -> Option<(Arc<AtomicUsize>, Arc<AtomicUsize>)> {
+        self.encoder_cache()
+            .map(|cache| cache.lock().expect("encoder cache poisoned").counters())
     }
     fn reset_model_specific_state(&self) {}
     fn reset_model_specific_state_for_sequences(&self, _sequence_ids: &[usize]) {
@@ -186,6 +200,9 @@ pub trait MultimodalModelLoader: IsqModelLoader + Send + Sync + DeviceMappedMode
         max_edge: Option<u32>,
     ) -> Arc<dyn Processor + Send + Sync>;
     fn supports_paged_attention(&self, config: &str) -> bool;
+    fn supports_encoder_cache(&self, _config: &str) -> bool {
+        false
+    }
     fn supports_prefix_cacher(&self, _config: &str) -> bool {
         // Default is false, specific model must override.
         false
@@ -504,6 +521,12 @@ impl MultimodalModelLoader for AutoMultimodalLoader {
             .supports_paged_attention(config)
     }
 
+    fn supports_encoder_cache(&self, config: &str) -> bool {
+        Self::get_loader(config)
+            .expect("AutoMultimodalLoader")
+            .supports_encoder_cache(config)
+    }
+
     fn modalities(&self, config: &str) -> Result<Modalities> {
         Self::get_loader(config)?.modalities(config)
     }
@@ -739,6 +762,9 @@ impl MultimodalModelLoader for Phi3VLoader {
         Phi3Processor::new_processor(processor_config, preprocessor_config)
     }
     fn supports_paged_attention(&self, _config: &str) -> bool {
+        true
+    }
+    fn supports_encoder_cache(&self, _config: &str) -> bool {
         true
     }
     fn supports_prefix_cacher(&self, _config: &str) -> bool {
@@ -1035,6 +1061,9 @@ impl MultimodalModelLoader for Idefics2Loader {
         ))
     }
     fn supports_paged_attention(&self, _config: &str) -> bool {
+        true
+    }
+    fn supports_encoder_cache(&self, _config: &str) -> bool {
         true
     }
     fn supports_prefix_cacher(&self, _config: &str) -> bool {
@@ -1400,6 +1429,9 @@ impl MultimodalModelLoader for LLaVANextLoader {
     fn supports_paged_attention(&self, _config: &str) -> bool {
         true
     }
+    fn supports_encoder_cache(&self, _config: &str) -> bool {
+        true
+    }
     fn supports_prefix_cacher(&self, _config: &str) -> bool {
         true
     }
@@ -1690,6 +1722,9 @@ impl MultimodalModelLoader for LLaVALoader {
     fn supports_paged_attention(&self, _config: &str) -> bool {
         true
     }
+    fn supports_encoder_cache(&self, _config: &str) -> bool {
+        true
+    }
     fn supports_prefix_cacher(&self, _config: &str) -> bool {
         true
     }
@@ -1970,6 +2005,9 @@ impl MultimodalModelLoader for VLlamaLoader {
         Arc::new(MLlamaProcessor::new())
     }
     fn supports_paged_attention(&self, _config: &str) -> bool {
+        true
+    }
+    fn supports_encoder_cache(&self, _config: &str) -> bool {
         true
     }
     fn supports_prefix_cacher(&self, _config: &str) -> bool {
@@ -2383,6 +2421,9 @@ impl MultimodalModelLoader for Qwen2VLLoader {
     fn supports_paged_attention(&self, _config: &str) -> bool {
         true
     }
+    fn supports_encoder_cache(&self, _config: &str) -> bool {
+        true
+    }
     fn prefixer(&self, _config: &str) -> Arc<dyn MultimodalPromptPrefixer> {
         Arc::new(Qwen2VLPrefixer)
     }
@@ -2697,6 +2738,9 @@ impl MultimodalModelLoader for Idefics3Loader {
         ))
     }
     fn supports_paged_attention(&self, _config: &str) -> bool {
+        true
+    }
+    fn supports_encoder_cache(&self, _config: &str) -> bool {
         true
     }
     fn supports_prefix_cacher(&self, _config: &str) -> bool {
@@ -3040,6 +3084,9 @@ impl MultimodalModelLoader for MiniCpmOLoader {
     fn supports_paged_attention(&self, _config: &str) -> bool {
         true
     }
+    fn supports_encoder_cache(&self, _config: &str) -> bool {
+        true
+    }
     fn prefixer(&self, _config: &str) -> Arc<dyn MultimodalPromptPrefixer> {
         Arc::new(MiniCpmOPrefixer)
     }
@@ -3350,6 +3397,9 @@ impl MultimodalModelLoader for Phi4MMLoader {
         Phi4MMProcessor::new_processor(processor_config, preprocessor_config)
     }
     fn supports_paged_attention(&self, _config: &str) -> bool {
+        true
+    }
+    fn supports_encoder_cache(&self, _config: &str) -> bool {
         true
     }
     fn supports_prefix_cacher(&self, _config: &str) -> bool {
@@ -3704,6 +3754,9 @@ impl MultimodalModelLoader for Qwen2_5VLLoader {
     fn supports_paged_attention(&self, _config: &str) -> bool {
         true
     }
+    fn supports_encoder_cache(&self, _config: &str) -> bool {
+        true
+    }
     fn prefixer(&self, _config: &str) -> Arc<dyn MultimodalPromptPrefixer> {
         Arc::new(Qwen2_5VLPrefixer)
     }
@@ -4014,6 +4067,13 @@ impl MultimodalModelLoader for Gemma3Loader {
     }
     fn supports_paged_attention(&self, _config: &str) -> bool {
         true
+    }
+    fn supports_encoder_cache(&self, config: &str) -> bool {
+        serde_json::from_str::<serde_json::Value>(config).is_ok_and(|config| {
+            config
+                .get("vision_config")
+                .is_some_and(|vision_config| !vision_config.is_null())
+        })
     }
     fn supports_prefix_cacher(&self, _config: &str) -> bool {
         true
@@ -4416,6 +4476,9 @@ impl MultimodalModelLoader for Mistral3Loader {
     fn supports_paged_attention(&self, _config: &str) -> bool {
         true
     }
+    fn supports_encoder_cache(&self, _config: &str) -> bool {
+        true
+    }
     fn supports_prefix_cacher(&self, _config: &str) -> bool {
         true
     }
@@ -4759,6 +4822,9 @@ impl MultimodalModelLoader for VLlama4Loader {
         Arc::new(Llama4Processor::new(&processor_config.unwrap_or_default()))
     }
     fn supports_paged_attention(&self, _config: &str) -> bool {
+        true
+    }
+    fn supports_encoder_cache(&self, _config: &str) -> bool {
         true
     }
     fn prefixer(&self, _config: &str) -> Arc<dyn MultimodalPromptPrefixer> {
@@ -5178,6 +5244,9 @@ impl MultimodalModelLoader for Gemma3nLoader {
         ))
     }
     fn supports_paged_attention(&self, _config: &str) -> bool {
+        true
+    }
+    fn supports_encoder_cache(&self, _config: &str) -> bool {
         true
     }
     fn supports_prefix_cacher(&self, _config: &str) -> bool {
@@ -6078,6 +6147,9 @@ impl MultimodalModelLoader for Qwen3VLLoader {
     fn supports_paged_attention(&self, _config: &str) -> bool {
         true
     }
+    fn supports_encoder_cache(&self, _config: &str) -> bool {
+        true
+    }
     fn supports_prefix_cacher(&self, _config: &str) -> bool {
         true
     }
@@ -6438,6 +6510,9 @@ impl MultimodalModelLoader for Qwen3VLMoELoader {
         Arc::new(Qwen3VLMoEProcessor::new(max_edge))
     }
     fn supports_paged_attention(&self, _config: &str) -> bool {
+        true
+    }
+    fn supports_encoder_cache(&self, _config: &str) -> bool {
         true
     }
     fn supports_prefix_cacher(&self, _config: &str) -> bool {
@@ -6826,6 +6901,19 @@ impl MultimodalPromptPrefixer for Qwen3_5Prefixer {
 }
 
 impl MultimodalModelLoader for Qwen3_5Loader {
+    fn runtime_config<'a>(
+        &self,
+        config: &'a str,
+        max_model_len: Option<usize>,
+    ) -> Result<Cow<'a, str>> {
+        match max_model_len {
+            Some(max_model_len) => Ok(Cow::Owned(
+                crate::vision_models::qwen3_5::config::apply_max_model_len(config, max_model_len)?,
+            )),
+            None => Ok(Cow::Borrowed(config)),
+        }
+    }
+
     fn load(
         &self,
         config: &str,
@@ -6859,6 +6947,9 @@ impl MultimodalModelLoader for Qwen3_5Loader {
         Arc::new(Qwen3_5Processor::new(max_edge))
     }
     fn supports_paged_attention(&self, _config: &str) -> bool {
+        true
+    }
+    fn supports_encoder_cache(&self, _config: &str) -> bool {
         true
     }
     fn supports_prefix_cacher(&self, _config: &str) -> bool {
@@ -7228,6 +7319,19 @@ impl MultimodalPromptPrefixer for Qwen3_5MoePrefixer {
 }
 
 impl MultimodalModelLoader for Qwen3_5MoeLoader {
+    fn runtime_config<'a>(
+        &self,
+        config: &'a str,
+        max_model_len: Option<usize>,
+    ) -> Result<Cow<'a, str>> {
+        match max_model_len {
+            Some(max_model_len) => Ok(Cow::Owned(
+                crate::vision_models::qwen3_5::config::apply_max_model_len(config, max_model_len)?,
+            )),
+            None => Ok(Cow::Borrowed(config)),
+        }
+    }
+
     fn load(
         &self,
         config: &str,
@@ -7261,6 +7365,9 @@ impl MultimodalModelLoader for Qwen3_5MoeLoader {
         Arc::new(Qwen3_5MoeProcessor::new(max_edge))
     }
     fn supports_paged_attention(&self, _config: &str) -> bool {
+        true
+    }
+    fn supports_encoder_cache(&self, _config: &str) -> bool {
         true
     }
     fn supports_prefix_cacher(&self, _config: &str) -> bool {
@@ -8074,6 +8181,9 @@ impl MultimodalModelLoader for Gemma4Loader {
     fn supports_paged_attention(&self, config: &str) -> bool {
         supports_gemma4_incremental_cache(config)
     }
+    fn supports_encoder_cache(&self, _config: &str) -> bool {
+        true
+    }
     fn supports_prefix_cacher(&self, config: &str) -> bool {
         supports_gemma4_incremental_cache(config)
     }
@@ -8604,6 +8714,10 @@ impl MultimodalModelLoader for MuseGlimmerLoader {
     }
 
     fn supports_paged_attention(&self, _config: &str) -> bool {
+        true
+    }
+
+    fn supports_encoder_cache(&self, _config: &str) -> bool {
         true
     }
 
@@ -9571,6 +9685,55 @@ mod tests {
             assert_eq!(modalities.output, vec![SupportedModality::Text], "{name}");
         }
         Ok(())
+    }
+
+    #[test]
+    fn auto_loader_reports_encoder_cache_capability() {
+        for (architecture, expected) in [
+            ("Phi3VForCausalLM", true),
+            ("Idefics2ForConditionalGeneration", true),
+            ("LlavaNextForConditionalGeneration", true),
+            ("LlavaForConditionalGeneration", true),
+            ("Lfm2VlForConditionalGeneration", false),
+            ("MllamaForConditionalGeneration", true),
+            ("Qwen2VLForConditionalGeneration", true),
+            ("Idefics3ForConditionalGeneration", true),
+            ("MiniCPMO", true),
+            ("Phi4MMForCausalLM", true),
+            ("Qwen2_5_VLForConditionalGeneration", true),
+            ("Gemma3ForConditionalGeneration", false),
+            ("Mistral3ForConditionalGeneration", true),
+            ("Llama4ForConditionalGeneration", true),
+            ("Gemma3nForConditionalGeneration", true),
+            ("Qwen3VLForConditionalGeneration", true),
+            ("Qwen3VLMoeForConditionalGeneration", true),
+            ("Qwen3_5ForConditionalGeneration", true),
+            ("Qwen3_5MoeForConditionalGeneration", true),
+            ("VoxtralRealtimeForConditionalGeneration", false),
+            ("Gemma4ForConditionalGeneration", true),
+            ("MuseGlimmerForConditionalGeneration", true),
+            ("DiffusionGemmaForBlockDiffusion", false),
+        ] {
+            let config = format!(r#"{{"architectures":["{architecture}"]}}"#);
+            assert_eq!(
+                AutoMultimodalLoader.supports_encoder_cache(&config),
+                expected,
+                "{architecture}"
+            );
+        }
+    }
+
+    #[test]
+    fn gemma3_reports_encoder_cache_only_with_vision_config() {
+        let loader = Gemma3Loader;
+        assert!(!loader
+            .supports_encoder_cache(r#"{"architectures":["Gemma3ForConditionalGeneration"]}"#));
+        assert!(!loader.supports_encoder_cache(
+            r#"{"architectures":["Gemma3ForConditionalGeneration"],"vision_config":null}"#
+        ));
+        assert!(loader.supports_encoder_cache(
+            r#"{"architectures":["Gemma3ForConditionalGeneration"],"vision_config":{}}"#
+        ));
     }
 
     fn assert_fused_moe_default_isq_predicates(

@@ -28,6 +28,15 @@ constexpr int GDN_DECODE_KERNEL_VALUE_MAJOR_32 = 4;
 constexpr int GDN_DECODE_VALUE_MAJOR_K = 128;
 constexpr int GDN_DECODE_VALUE_MAJOR_V = 128;
 constexpr int GDN_PACKED_CONV_WIDTH = 4;
+constexpr int GDN_PREFILL_CONV_THREADS = 128;
+constexpr int GDN_PREFILL_CONV_TOKEN_TILE = 64;
+constexpr int GDN_RMSNORM_FAST_HIDDEN = 128;
+constexpr int GDN_RMSNORM_ROWS_PER_BLOCK = 8;
+constexpr int GDN_RMSNORM_TILED_LANES_PER_ROW = 16;
+constexpr int GDN_RMSNORM_TILED_ROW_PAIR_OFFSET = 2;
+constexpr int GDN_RMSNORM_TILED_ROWS_PER_BLOCK = 4;
+constexpr int GDN_RMSNORM_TILED_MIN_ROWS = 1024;
+constexpr int GDN_RMSNORM_TILED_VALUES_PER_LANE = 8;
 constexpr int GDN_STATE_DTYPE_F16 = 0;
 constexpr int GDN_STATE_DTYPE_BF16 = 1;
 constexpr int GDN_STATE_DTYPE_F32 = 2;
@@ -542,6 +551,183 @@ extern "C" void vmajor_warp_gated_delta_rule_recurrence(
   }
 }
 
+template <typename StateT, int VALUES_PER_WARP, int NUM_WARPS>
+__global__ __launch_bounds__(32 * NUM_WARPS, 2) void
+gated_delta_rule_recurrence_kernel_vmajor_grouped(
+    const float *__restrict__ q, const float *__restrict__ k,
+    const float *__restrict__ v, const float *__restrict__ g,
+    const float *__restrict__ beta, StateT *__restrict__ state,
+    float *__restrict__ output, int seq_len,
+    const int32_t *__restrict__ slot_indices, int num_heads) {
+  constexpr int WARP_SIZE = 32;
+  constexpr int BK = 128;
+  constexpr int V_DIM = 128;
+  constexpr int ROWS_PER_LANE = BK / WARP_SIZE;
+
+  const int lane = threadIdx.x;
+  const int warp = threadIdx.y;
+  const int value_group = blockIdx.x * NUM_WARPS + warp;
+  const int first_value = value_group * VALUES_PER_WARP;
+  const int bh = blockIdx.y;
+
+  if (first_value >= V_DIM) {
+    return;
+  }
+
+  float *out_bh = output + (size_t)bh * seq_len * V_DIM;
+  if (gdn_is_padding_row(slot_indices, bh / num_heads)) {
+    if (lane == 0) {
+#pragma unroll
+      for (int value = 0; value < VALUES_PER_WARP; value++) {
+        for (int t = 0; t < seq_len; t++) {
+          out_bh[t * V_DIM + first_value + value] = 0.0f;
+        }
+      }
+    }
+    return;
+  }
+
+  const float *q_bh = q + (size_t)bh * seq_len * BK;
+  const float *k_bh = k + (size_t)bh * seq_len * BK;
+  const float *v_bh = v + (size_t)bh * seq_len * V_DIM;
+  const float *g_bh = g + (size_t)bh * seq_len;
+  const float *beta_bh = beta + (size_t)bh * seq_len;
+  StateT *state_bh =
+      state + gdn_state_row(slot_indices, bh / num_heads, bh % num_heads,
+                            num_heads) *
+                  BK * V_DIM;
+
+  float s[VALUES_PER_WARP][ROWS_PER_LANE];
+#pragma unroll
+  for (int value = 0; value < VALUES_PER_WARP; value++) {
+#pragma unroll
+    for (int row = 0; row < ROWS_PER_LANE; row++) {
+      const int key = row * WARP_SIZE + lane;
+      s[value][row] = state_bh[(first_value + value) * BK + key];
+    }
+  }
+
+  for (int t = 0; t < seq_len; t++) {
+    const float *q_t = q_bh + t * BK;
+    const float *k_t = k_bh + t * BK;
+    float k_reg[ROWS_PER_LANE];
+    float q_reg[ROWS_PER_LANE];
+    float kv_partial[VALUES_PER_WARP] = {};
+
+#pragma unroll
+    for (int row = 0; row < ROWS_PER_LANE; row++) {
+      const int key = row * WARP_SIZE + lane;
+      const float k_value = k_t[key];
+      k_reg[row] = k_value;
+      q_reg[row] = q_t[key];
+#pragma unroll
+      for (int value = 0; value < VALUES_PER_WARP; value++) {
+        kv_partial[value] =
+            __fmaf_rn(s[value][row], k_value, kv_partial[value]);
+      }
+    }
+
+    const float decay = expf(g_bh[t]);
+#pragma unroll
+    for (int value = 0; value < VALUES_PER_WARP; value++) {
+      const int value_idx = first_value + value;
+      const float kv_col = gdn_warp_sum<WARP_SIZE>(kv_partial[value]);
+      const float delta =
+          (v_bh[t * V_DIM + value_idx] - decay * kv_col) * beta_bh[t];
+      float y_partial = 0.0f;
+#pragma unroll
+      for (int row = 0; row < ROWS_PER_LANE; row++) {
+        s[value][row] =
+            __fmaf_rn(k_reg[row], delta, decay * s[value][row]);
+        y_partial = __fmaf_rn(s[value][row], q_reg[row], y_partial);
+      }
+      const float y_col = gdn_warp_sum<WARP_SIZE>(y_partial);
+      if (lane == 0) {
+        out_bh[t * V_DIM + value_idx] = y_col;
+      }
+    }
+  }
+
+#pragma unroll
+  for (int value = 0; value < VALUES_PER_WARP; value++) {
+#pragma unroll
+    for (int row = 0; row < ROWS_PER_LANE; row++) {
+      const int key = row * WARP_SIZE + lane;
+      state_bh[(first_value + value) * BK + key] = s[value][row];
+    }
+  }
+}
+
+template <typename StateT, int VALUES_PER_WARP>
+cudaError_t launch_vmajor_grouped_warp_gated_delta_rule_recurrence(
+    const float *q, const float *k, const float *v, const float *g,
+    const float *beta, StateT *state, float *output, int bh, int seq_len,
+    int k_dim, int v_dim, const int32_t *slot_indices, int num_heads,
+    cudaStream_t stream) {
+  if (k_dim != 128 || v_dim != 128) {
+    return cudaErrorInvalidValue;
+  }
+
+  constexpr int NUM_WARPS = 4;
+  constexpr int VALUES_PER_BLOCK = NUM_WARPS * VALUES_PER_WARP;
+  const dim3 grid((v_dim + VALUES_PER_BLOCK - 1) / VALUES_PER_BLOCK, bh);
+  const dim3 block(32, NUM_WARPS);
+  gated_delta_rule_recurrence_kernel_vmajor_grouped<StateT, VALUES_PER_WARP,
+                                                     NUM_WARPS>
+      <<<grid, block, 0, stream>>>(q, k, v, g, beta, state, output, seq_len,
+                                  slot_indices, num_heads);
+  return cudaGetLastError();
+}
+
+template <typename StateT>
+cudaError_t dispatch_vmajor_grouped_warp_gated_delta_rule_recurrence(
+    const float *q, const float *k, const float *v, const float *g,
+    const float *beta, StateT *state, float *output, int bh, int seq_len,
+    int k_dim, int v_dim, const int32_t *slot_indices, int num_heads,
+    int values_per_warp, cudaStream_t stream) {
+  switch (values_per_warp) {
+  case 2:
+    return launch_vmajor_grouped_warp_gated_delta_rule_recurrence<StateT, 2>(
+        q, k, v, g, beta, state, output, bh, seq_len, k_dim, v_dim,
+        slot_indices, num_heads, stream);
+  case 4:
+    return launch_vmajor_grouped_warp_gated_delta_rule_recurrence<StateT, 4>(
+        q, k, v, g, beta, state, output, bh, seq_len, k_dim, v_dim,
+        slot_indices, num_heads, stream);
+  case 8:
+    return launch_vmajor_grouped_warp_gated_delta_rule_recurrence<StateT, 8>(
+        q, k, v, g, beta, state, output, bh, seq_len, k_dim, v_dim,
+        slot_indices, num_heads, stream);
+  default:
+    return cudaErrorInvalidValue;
+  }
+}
+
+extern "C" int vmajor_grouped_warp_gated_delta_rule_recurrence(
+    const float *q, const float *k, const float *v, const float *g,
+    const float *beta, void *state, float *output, int bh, int seq_len,
+    int k_dim, int v_dim, const int32_t *slot_indices, int num_heads,
+    int values_per_warp, int state_dtype, int64_t stream) {
+  const cudaStream_t custream = (cudaStream_t)stream;
+  if (state_dtype == GDN_STATE_DTYPE_F16) {
+    return static_cast<int>(
+        dispatch_vmajor_grouped_warp_gated_delta_rule_recurrence(
+            q, k, v, g, beta, (__half *)state, output, bh, seq_len, k_dim,
+            v_dim, slot_indices, num_heads, values_per_warp, custream));
+  } else if (state_dtype == GDN_STATE_DTYPE_BF16) {
+    return static_cast<int>(
+        dispatch_vmajor_grouped_warp_gated_delta_rule_recurrence(
+            q, k, v, g, beta, (__nv_bfloat16 *)state, output, bh, seq_len,
+            k_dim, v_dim, slot_indices, num_heads, values_per_warp, custream));
+  } else {
+    return static_cast<int>(
+        dispatch_vmajor_grouped_warp_gated_delta_rule_recurrence(
+            q, k, v, g, beta, (float *)state, output, bh, seq_len, k_dim,
+            v_dim, slot_indices, num_heads, values_per_warp, custream));
+  }
+}
+
+
 // ============================================================================
 // Kernel 1b: chunked_gated_delta_rule_recurrence (prefill optimization)
 //
@@ -561,17 +747,17 @@ extern "C" void vmajor_warp_gated_delta_rule_recurrence(
 //   q_buf[BK]          -- q vector (loaded one row at a time)
 //
 // q,k: [BH, S, K]  v: [BH, S, V]  g,beta: [BH, S]
-// state: [BH, K, V] (in/out)  output: [BH, S, V]
+// state: [BH, K, V] or [BH, V, K] (in/out)  output: [BH, S, V]
 // ============================================================================
 
-template <typename StateT, int BT, int BK, int BV>
+template <typename StateT, int BT, int BK, int BV, bool VALUE_MAJOR = false>
 __global__ void
 chunked_gated_delta_rule_kernel(const float *__restrict__ q,    // [BH, S, K]
                                 const float *__restrict__ k,    // [BH, S, K]
                                 const float *__restrict__ v,    // [BH, S, V]
                                 const float *__restrict__ g,    // [BH, S]
                                 const float *__restrict__ beta, // [BH, S]
-                                StateT *__restrict__ state,     // [BH, K, V] or pool
+                                StateT *__restrict__ state,     // key-major/value-major or pool
                                 float *__restrict__ output,     // [BH, S, V]
                                 int seq_len, int v_dim,
                                 const int32_t *__restrict__ slot_indices,
@@ -616,7 +802,11 @@ chunked_gated_delta_rule_kernel(const float *__restrict__ q,    // [BH, S, K]
   float s[BK];
 #pragma unroll
   for (int j = 0; j < BK; j++) {
-    s[j] = state_bh[j * v_dim + v_idx];
+    if constexpr (VALUE_MAJOR) {
+      s[j] = state_bh[v_idx * BK + j];
+    } else {
+      s[j] = state_bh[j * v_dim + v_idx];
+    }
   }
 
   // Per-thread register array for corrected deltas
@@ -736,11 +926,15 @@ chunked_gated_delta_rule_kernel(const float *__restrict__ q,    // [BH, S, K]
   // Write final state back
 #pragma unroll
   for (int j = 0; j < BK; j++) {
-    state_bh[j * v_dim + v_idx] = s[j];
+    if constexpr (VALUE_MAJOR) {
+      state_bh[v_idx * BK + j] = s[j];
+    } else {
+      state_bh[j * v_dim + v_idx] = s[j];
+    }
   }
 }
 
-template <typename StateT>
+template <typename StateT, bool VALUE_MAJOR = false>
 void launch_chunked_gated_delta_rule_recurrence(
     const float *q, const float *k, const float *v, const float *g,
     const float *beta, StateT *state, float *output, int bh, int seq_len,
@@ -754,7 +948,8 @@ void launch_chunked_gated_delta_rule_recurrence(
     size_t smem = (BT * BK + BT * BT + 2 * BT + BK) * sizeof(float);
 
     // Request extended shared memory
-    auto kernel = chunked_gated_delta_rule_kernel<StateT, BT, BK, BV>;
+    auto kernel =
+        chunked_gated_delta_rule_kernel<StateT, BT, BK, BV, VALUE_MAJOR>;
     cudaFuncSetAttribute(kernel, cudaFuncAttributeMaxDynamicSharedMemorySize,
                          smem);
 
@@ -769,7 +964,8 @@ void launch_chunked_gated_delta_rule_recurrence(
     constexpr int BV = 64;
     size_t smem = (BT * BK + BT * BT + 2 * BT + BK) * sizeof(float);
 
-    auto kernel = chunked_gated_delta_rule_kernel<StateT, BT, BK, BV>;
+    auto kernel =
+        chunked_gated_delta_rule_kernel<StateT, BT, BK, BV, VALUE_MAJOR>;
     cudaFuncSetAttribute(kernel, cudaFuncAttributeMaxDynamicSharedMemorySize,
                          smem);
 
@@ -778,7 +974,7 @@ void launch_chunked_gated_delta_rule_recurrence(
     kernel<<<grid, block, smem, stream>>>(q, k, v, g, beta, state, output,
                                           seq_len, v_dim, slot_indices,
                                           num_heads);
-  } else {
+  } else if constexpr (!VALUE_MAJOR) {
     launch_gated_delta_rule_recurrence(q, k, v, g, beta, state, output, bh,
                                        seq_len, k_dim, v_dim, slot_indices,
                                        num_heads, stream);
@@ -803,6 +999,56 @@ extern "C" void chunked_gated_delta_rule_recurrence(
     launch_chunked_gated_delta_rule_recurrence(
         q, k, v, g, beta, (float *)state, output, bh, seq_len, k_dim, v_dim,
         slot_indices, num_heads, custream);
+  }
+}
+
+template <typename StateT>
+cudaError_t launch_vmajor_chunked_gated_delta_rule_recurrence(
+    const float *q, const float *k, const float *v, const float *g,
+    const float *beta, StateT *state, float *output, int bh, int seq_len,
+    int k_dim, int v_dim, const int32_t *slot_indices, int num_heads,
+    cudaStream_t stream) {
+  if (k_dim != 128 || v_dim != 128) {
+    return cudaErrorInvalidValue;
+  }
+
+  constexpr int BT = 64;
+  constexpr int BK = 128;
+  constexpr int BV = 64;
+  const size_t smem = (BT * BK + BT * BT + 2 * BT + BK) * sizeof(float);
+  auto kernel = chunked_gated_delta_rule_kernel<StateT, BT, BK, BV, true>;
+  const cudaError_t attribute_status = cudaFuncSetAttribute(
+      kernel, cudaFuncAttributeMaxDynamicSharedMemorySize, smem);
+  if (attribute_status != cudaSuccess) {
+    return attribute_status;
+  }
+
+  const dim3 grid((v_dim + BV - 1) / BV, bh);
+  const dim3 block(BV);
+  kernel<<<grid, block, smem, stream>>>(q, k, v, g, beta, state, output,
+                                        seq_len, v_dim, slot_indices,
+                                        num_heads);
+  return cudaGetLastError();
+}
+
+extern "C" int vmajor_chunked_gated_delta_rule_recurrence(
+    const float *q, const float *k, const float *v, const float *g,
+    const float *beta, void *state, float *output, int bh, int seq_len,
+    int k_dim, int v_dim, const int32_t *slot_indices, int num_heads,
+    int state_dtype, int64_t stream) {
+  const cudaStream_t custream = (cudaStream_t)stream;
+  if (state_dtype == GDN_STATE_DTYPE_F16) {
+    return static_cast<int>(launch_vmajor_chunked_gated_delta_rule_recurrence(
+        q, k, v, g, beta, (__half *)state, output, bh, seq_len, k_dim, v_dim,
+        slot_indices, num_heads, custream));
+  } else if (state_dtype == GDN_STATE_DTYPE_BF16) {
+    return static_cast<int>(launch_vmajor_chunked_gated_delta_rule_recurrence(
+        q, k, v, g, beta, (__nv_bfloat16 *)state, output, bh, seq_len, k_dim,
+        v_dim, slot_indices, num_heads, custream));
+  } else {
+    return static_cast<int>(launch_vmajor_chunked_gated_delta_rule_recurrence(
+        q, k, v, g, beta, (float *)state, output, bh, seq_len, k_dim, v_dim,
+        slot_indices, num_heads, custream));
   }
 }
 
@@ -1007,6 +1253,69 @@ __global__ void causal_conv1d_full_kernel(
 }
 
 template <typename T>
+__device__ __forceinline__ float causal_conv1d_width4_load(
+    const T *__restrict__ x, const T *__restrict__ state, int pos,
+    size_t x_batch_offset, int64_t x_stride_s, int64_t x_stride_c, int ch) {
+  if (pos >= 0) {
+    return (float)x[x_batch_offset + (size_t)pos * x_stride_s +
+                    (size_t)ch * x_stride_c];
+  }
+  return (float)state[GDN_PACKED_CONV_WIDTH + pos];
+}
+
+template <typename T, int TOKEN_TILE>
+__global__ void causal_conv1d_full_width4_tiled_kernel(
+    const T *__restrict__ x, const T *__restrict__ weight,
+    const T *__restrict__ conv_state, T *__restrict__ output, int batch_size,
+    int conv_dim, int seq_len, int64_t x_stride_b, int64_t x_stride_s,
+    int64_t x_stride_c, const int32_t *__restrict__ slot_indices) {
+  const int ch = blockIdx.x * blockDim.x + threadIdx.x;
+  const int start = blockIdx.y * TOKEN_TILE;
+  const int b = blockIdx.z;
+  if (ch >= conv_dim || start >= seq_len || b >= batch_size) {
+    return;
+  }
+
+  const int end = min(start + TOKEN_TILE, seq_len);
+  T *out = output + ((size_t)b * seq_len + start) * conv_dim + ch;
+  if (gdn_is_padding_row(slot_indices, b)) {
+    for (int pos = start; pos < end; ++pos) {
+      *out = (T)0.0f;
+      out += conv_dim;
+    }
+    return;
+  }
+
+  const size_t state_row = gdn_state_row(slot_indices, b, 0, 1);
+  const T *state = conv_state +
+                   (state_row * conv_dim + ch) * GDN_PACKED_CONV_WIDTH;
+  const T *w = weight + (size_t)ch * GDN_PACKED_CONV_WIDTH;
+  const size_t x_batch_offset = (size_t)b * x_stride_b;
+  float x0 = causal_conv1d_width4_load(
+      x, state, start - 3, x_batch_offset, x_stride_s, x_stride_c, ch);
+  float x1 = causal_conv1d_width4_load(
+      x, state, start - 2, x_batch_offset, x_stride_s, x_stride_c, ch);
+  float x2 = causal_conv1d_width4_load(
+      x, state, start - 1, x_batch_offset, x_stride_s, x_stride_c, ch);
+  const float w0 = (float)w[0];
+  const float w1 = (float)w[1];
+  const float w2 = (float)w[2];
+  const float w3 = (float)w[3];
+
+  for (int pos = start; pos < end; ++pos) {
+    const float x3 = (float)x[x_batch_offset + (size_t)pos * x_stride_s +
+                              (size_t)ch * x_stride_c];
+    const float acc = __fmaf_rn(x0, w0, __fmaf_rn(x1, w1, __fmaf_rn(x2, w2, x3 * w3)));
+    const float result = acc / (1.0f + expf(-acc));
+    *out = (T)result;
+    out += conv_dim;
+    x0 = x1;
+    x1 = x2;
+    x2 = x3;
+  }
+}
+
+template <typename T>
 __global__ void save_conv_state_kernel(
     const T *__restrict__ x, // [B, S, conv_dim]
     // May alias conv_state_out (pooled in-place update): every read is ahead of the write position
@@ -1052,30 +1361,62 @@ extern "C" void causal_conv1d_full(const void *x, const void *weight,
                                    int64_t stream) {
   const cudaStream_t custream = (cudaStream_t)stream;
 
-  // Main convolution kernel
-  dim3 block(256);
+  const dim3 state_block(256);
+  dim3 block = state_block;
   const size_t plane = (size_t)conv_dim * seq_len;
   dim3 grid((unsigned int)((plane + 255) / 256), batch_size);
 
+  const bool use_width4_tiled =
+      kernel_size == GDN_PACKED_CONV_WIDTH && x_stride_c == 1;
+  if (use_width4_tiled) {
+    block = dim3(GDN_PREFILL_CONV_THREADS);
+    grid = dim3((conv_dim + GDN_PREFILL_CONV_THREADS - 1) /
+                    GDN_PREFILL_CONV_THREADS,
+                (seq_len + GDN_PREFILL_CONV_TOKEN_TILE - 1) /
+                    GDN_PREFILL_CONV_TOKEN_TILE,
+                batch_size);
+  }
+
   if (dtype == 0) {
-    causal_conv1d_full_kernel<__half><<<grid, block, 0, custream>>>(
-        (const __half *)x, (const __half *)weight,
-        (const __half *)conv_state_in, (__half *)output, batch_size, conv_dim,
-        seq_len, kernel_size, x_stride_b, x_stride_s, x_stride_c,
-        slot_indices);
-    dim3 grid2((conv_dim + 255) / 256, batch_size);
-    save_conv_state_kernel<__half><<<grid2, block, 0, custream>>>(
+    if (use_width4_tiled) {
+      causal_conv1d_full_width4_tiled_kernel<__half,
+                                             GDN_PREFILL_CONV_TOKEN_TILE>
+          <<<grid, block, 0, custream>>>(
+              (const __half *)x, (const __half *)weight,
+              (const __half *)conv_state_in, (__half *)output, batch_size,
+              conv_dim, seq_len, x_stride_b, x_stride_s, x_stride_c,
+              slot_indices);
+    } else {
+      causal_conv1d_full_kernel<__half><<<grid, block, 0, custream>>>(
+          (const __half *)x, (const __half *)weight,
+          (const __half *)conv_state_in, (__half *)output, batch_size,
+          conv_dim, seq_len, kernel_size, x_stride_b, x_stride_s, x_stride_c,
+          slot_indices);
+    }
+    dim3 grid2((conv_dim + state_block.x - 1) / state_block.x, batch_size);
+    save_conv_state_kernel<__half><<<grid2, state_block, 0, custream>>>(
         (const __half *)x, (const __half *)conv_state_in,
         (__half *)conv_state_out, batch_size, conv_dim, seq_len, kernel_size,
         x_stride_b, x_stride_s, x_stride_c, slot_indices);
   } else {
-    causal_conv1d_full_kernel<__nv_bfloat16><<<grid, block, 0, custream>>>(
-        (const __nv_bfloat16 *)x, (const __nv_bfloat16 *)weight,
-        (const __nv_bfloat16 *)conv_state_in, (__nv_bfloat16 *)output,
-        batch_size, conv_dim, seq_len, kernel_size, x_stride_b, x_stride_s,
-        x_stride_c, slot_indices);
-    dim3 grid2((conv_dim + 255) / 256, batch_size);
-    save_conv_state_kernel<__nv_bfloat16><<<grid2, block, 0, custream>>>(
+    if (use_width4_tiled) {
+      causal_conv1d_full_width4_tiled_kernel<
+          __nv_bfloat16, GDN_PREFILL_CONV_TOKEN_TILE>
+          <<<grid, block, 0, custream>>>(
+              (const __nv_bfloat16 *)x, (const __nv_bfloat16 *)weight,
+              (const __nv_bfloat16 *)conv_state_in,
+              (__nv_bfloat16 *)output, batch_size, conv_dim, seq_len,
+              x_stride_b, x_stride_s, x_stride_c, slot_indices);
+    } else {
+      causal_conv1d_full_kernel<__nv_bfloat16><<<grid, block, 0, custream>>>(
+          (const __nv_bfloat16 *)x, (const __nv_bfloat16 *)weight,
+          (const __nv_bfloat16 *)conv_state_in, (__nv_bfloat16 *)output,
+          batch_size, conv_dim, seq_len, kernel_size, x_stride_b, x_stride_s,
+          x_stride_c, slot_indices);
+    }
+    dim3 grid2((conv_dim + state_block.x - 1) / state_block.x, batch_size);
+    save_conv_state_kernel<__nv_bfloat16>
+        <<<grid2, state_block, 0, custream>>>(
         (const __nv_bfloat16 *)x, (const __nv_bfloat16 *)conv_state_in,
         (__nv_bfloat16 *)conv_state_out, batch_size, conv_dim, seq_len,
         kernel_size, x_stride_b, x_stride_s, x_stride_c, slot_indices);
@@ -2201,6 +2542,163 @@ gdn_rmsnorm_gated_kernel(const T *__restrict__ x, const T *__restrict__ gate,
   }
 }
 
+template <typename T, int HIDDEN_DIM, int ROWS_PER_BLOCK>
+__global__ void gdn_rmsnorm_gated_warp_kernel(
+    const T *__restrict__ x, const T *__restrict__ gate,
+    const T *__restrict__ weight, T *__restrict__ output, int rows,
+    int outer_dim_1, int outer_dim_2, int64_t x_stride_0,
+    int64_t x_stride_1, int64_t x_stride_2, int64_t gate_stride_0,
+    int64_t gate_stride_1, int64_t gate_stride_2, float eps) {
+  const int lane = threadIdx.x;
+  const int warp = threadIdx.y;
+  const int row = blockIdx.x * ROWS_PER_BLOCK + warp;
+  if (row >= rows) {
+    return;
+  }
+
+  const int outer_plane = outer_dim_1 * outer_dim_2;
+  const int outer_0 = row / outer_plane;
+  const int outer_1 = (row / outer_dim_2) % outer_dim_1;
+  const int outer_2 = row % outer_dim_2;
+  const T *x_row = x + (size_t)outer_0 * x_stride_0 +
+                   (size_t)outer_1 * x_stride_1 +
+                   (size_t)outer_2 * x_stride_2;
+  const T *gate_row = gate + (size_t)outer_0 * gate_stride_0 +
+                      (size_t)outer_1 * gate_stride_1 +
+                      (size_t)outer_2 * gate_stride_2;
+  T *out_row = output + (size_t)row * HIDDEN_DIM;
+
+  float values[HIDDEN_DIM / 32];
+  float sum = 0.0f;
+#pragma unroll
+  for (int i = lane; i < HIDDEN_DIM; i += 32) {
+    const float value = (float)x_row[i];
+    values[i / 32] = value;
+    sum = __fmaf_rn(value, value, sum);
+  }
+#pragma unroll
+  for (int offset = 16; offset > 0; offset >>= 1) {
+    sum += __shfl_down_sync(0xffffffff, sum, offset);
+  }
+  const float inv_rms =
+      rsqrtf(__shfl_sync(0xffffffff, sum, 0) / (float)HIDDEN_DIM + eps);
+
+#pragma unroll
+  for (int i = lane; i < HIDDEN_DIM; i += 32) {
+    out_row[i] = (T)(values[i / 32] * inv_rms * (float)weight[i] *
+                     gdn_silu((float)gate_row[i]));
+  }
+}
+
+template <typename T> struct alignas(16) gdn_rmsnorm_vec8 {
+  T data[GDN_RMSNORM_TILED_VALUES_PER_LANE];
+};
+
+template <typename T>
+__global__ void gdn_rmsnorm_gated_rows4_kernel(
+    const T *__restrict__ x, const T *__restrict__ gate,
+    const T *__restrict__ weight, T *__restrict__ output, int rows,
+    float eps) {
+  using Vec = gdn_rmsnorm_vec8<T>;
+  constexpr int vecs_per_row =
+      GDN_RMSNORM_FAST_HIDDEN / GDN_RMSNORM_TILED_VALUES_PER_LANE;
+  constexpr unsigned warp_mask = 0xffffffffu;
+
+  const int lane = threadIdx.x;
+  const int half_warp = lane / GDN_RMSNORM_TILED_LANES_PER_ROW;
+  const int lane_in_half = lane % GDN_RMSNORM_TILED_LANES_PER_ROW;
+  const int first_row =
+      blockIdx.x * GDN_RMSNORM_TILED_ROWS_PER_BLOCK + half_warp;
+  const int second_row = first_row + GDN_RMSNORM_TILED_ROW_PAIR_OFFSET;
+  const Vec weight_value =
+      reinterpret_cast<const Vec *>(weight)[lane_in_half];
+
+  Vec first_value{};
+  Vec second_value{};
+  if (first_row < rows) {
+    first_value = reinterpret_cast<const Vec *>(x)[first_row * vecs_per_row +
+                                                   lane_in_half];
+  }
+  if (second_row < rows) {
+    second_value = reinterpret_cast<const Vec *>(x)[second_row * vecs_per_row +
+                                                    lane_in_half];
+  }
+
+  float first_sum = 0.0f;
+  float second_sum = 0.0f;
+#pragma unroll
+  for (int i = 0; i < GDN_RMSNORM_TILED_VALUES_PER_LANE; ++i) {
+    const float first = (float)first_value.data[i];
+    const float second = (float)second_value.data[i];
+    first_sum = __fmaf_rn(first, first, first_sum);
+    second_sum = __fmaf_rn(second, second, second_sum);
+  }
+#pragma unroll
+  for (int offset = GDN_RMSNORM_TILED_LANES_PER_ROW / 2; offset > 0;
+       offset >>= 1) {
+    first_sum += __shfl_down_sync(warp_mask, first_sum, offset,
+                                  GDN_RMSNORM_TILED_LANES_PER_ROW);
+    second_sum += __shfl_down_sync(warp_mask, second_sum, offset,
+                                   GDN_RMSNORM_TILED_LANES_PER_ROW);
+  }
+  const float first_inv_rms =
+      rsqrtf(__shfl_sync(warp_mask, first_sum, 0,
+                         GDN_RMSNORM_TILED_LANES_PER_ROW) /
+                 (float)GDN_RMSNORM_FAST_HIDDEN +
+             eps);
+  const float second_inv_rms =
+      rsqrtf(__shfl_sync(warp_mask, second_sum, 0,
+                         GDN_RMSNORM_TILED_LANES_PER_ROW) /
+                 (float)GDN_RMSNORM_FAST_HIDDEN +
+             eps);
+
+  if (first_row < rows) {
+    const Vec gate_value = reinterpret_cast<const Vec *>(
+        gate)[first_row * vecs_per_row + lane_in_half];
+    Vec result;
+#pragma unroll
+    for (int i = 0; i < GDN_RMSNORM_TILED_VALUES_PER_LANE; ++i) {
+      result.data[i] =
+          (T)((float)first_value.data[i] * first_inv_rms *
+              (float)weight_value.data[i] *
+              gdn_silu((float)gate_value.data[i]));
+    }
+    reinterpret_cast<Vec *>(output)[first_row * vecs_per_row + lane_in_half] =
+        result;
+  }
+  if (second_row < rows) {
+    const Vec gate_value = reinterpret_cast<const Vec *>(
+        gate)[second_row * vecs_per_row + lane_in_half];
+    Vec result;
+#pragma unroll
+    for (int i = 0; i < GDN_RMSNORM_TILED_VALUES_PER_LANE; ++i) {
+      result.data[i] =
+          (T)((float)second_value.data[i] * second_inv_rms *
+              (float)weight_value.data[i] *
+              gdn_silu((float)gate_value.data[i]));
+    }
+    reinterpret_cast<Vec *>(
+        output)[second_row * vecs_per_row + lane_in_half] = result;
+  }
+}
+
+template <typename T>
+__host__ __forceinline__ bool gdn_rmsnorm_vec8_aligned(const void *ptr) {
+  return reinterpret_cast<uintptr_t>(ptr) % alignof(gdn_rmsnorm_vec8<T>) == 0;
+}
+
+__host__ __forceinline__ bool gdn_rmsnorm_dense_rows(
+    int rows, int outer_dim_1, int outer_dim_2, int64_t stride_0,
+    int64_t stride_1, int64_t stride_2) {
+  const int outer_plane = outer_dim_1 * outer_dim_2;
+  const int outer_dim_0 = rows / outer_plane;
+  return (outer_dim_2 <= 1 || stride_2 == GDN_RMSNORM_FAST_HIDDEN) &&
+         (outer_dim_1 <= 1 ||
+          stride_1 == (int64_t)outer_dim_2 * GDN_RMSNORM_FAST_HIDDEN) &&
+         (outer_dim_0 <= 1 ||
+          stride_0 == (int64_t)outer_plane * GDN_RMSNORM_FAST_HIDDEN);
+}
+
 extern "C" void gdn_rmsnorm_gated(const void *x, const void *gate,
                                   const void *weight, void *output, int rows,
                                   int hidden_dim, int outer_dim_1,
@@ -2211,6 +2709,67 @@ extern "C" void gdn_rmsnorm_gated(const void *x, const void *gate,
                                   int64_t gate_stride_3, float eps, int dtype,
                                   int64_t stream) {
   const cudaStream_t custream = (cudaStream_t)stream;
+  const bool use_warp_kernel =
+      hidden_dim == GDN_RMSNORM_FAST_HIDDEN && x_stride_3 == 1 &&
+      gate_stride_3 == 1;
+  if (use_warp_kernel) {
+    const bool use_rows4_kernel =
+        rows >= GDN_RMSNORM_TILED_MIN_ROWS &&
+        gdn_rmsnorm_dense_rows(rows, outer_dim_1, outer_dim_2, x_stride_0,
+                               x_stride_1, x_stride_2) &&
+        gdn_rmsnorm_dense_rows(rows, outer_dim_1, outer_dim_2, gate_stride_0,
+                               gate_stride_1, gate_stride_2);
+    if (dtype == 0 && use_rows4_kernel &&
+        gdn_rmsnorm_vec8_aligned<__half>(x) &&
+        gdn_rmsnorm_vec8_aligned<__half>(gate) &&
+        gdn_rmsnorm_vec8_aligned<__half>(weight) &&
+        gdn_rmsnorm_vec8_aligned<__half>(output)) {
+      const dim3 rows4_block(32);
+      const dim3 rows4_grid((rows + GDN_RMSNORM_TILED_ROWS_PER_BLOCK - 1) /
+                            GDN_RMSNORM_TILED_ROWS_PER_BLOCK);
+      gdn_rmsnorm_gated_rows4_kernel<<<rows4_grid, rows4_block, 0, custream>>>(
+          (const __half *)x, (const __half *)gate, (const __half *)weight,
+          (__half *)output, rows, eps);
+      return;
+    }
+    if (dtype != 0 && use_rows4_kernel &&
+        gdn_rmsnorm_vec8_aligned<__nv_bfloat16>(x) &&
+        gdn_rmsnorm_vec8_aligned<__nv_bfloat16>(gate) &&
+        gdn_rmsnorm_vec8_aligned<__nv_bfloat16>(weight) &&
+        gdn_rmsnorm_vec8_aligned<__nv_bfloat16>(output)) {
+      const dim3 rows4_block(32);
+      const dim3 rows4_grid((rows + GDN_RMSNORM_TILED_ROWS_PER_BLOCK - 1) /
+                            GDN_RMSNORM_TILED_ROWS_PER_BLOCK);
+      gdn_rmsnorm_gated_rows4_kernel<<<rows4_grid, rows4_block, 0, custream>>>(
+          (const __nv_bfloat16 *)x, (const __nv_bfloat16 *)gate,
+          (const __nv_bfloat16 *)weight, (__nv_bfloat16 *)output, rows, eps);
+      return;
+    }
+
+    const dim3 warp_block(32, GDN_RMSNORM_ROWS_PER_BLOCK);
+    const dim3 warp_grid((rows + GDN_RMSNORM_ROWS_PER_BLOCK - 1) /
+                         GDN_RMSNORM_ROWS_PER_BLOCK);
+    if (dtype == 0) {
+      gdn_rmsnorm_gated_warp_kernel<__half, GDN_RMSNORM_FAST_HIDDEN,
+                                     GDN_RMSNORM_ROWS_PER_BLOCK>
+          <<<warp_grid, warp_block, 0, custream>>>(
+              (const __half *)x, (const __half *)gate,
+              (const __half *)weight, (__half *)output, rows, outer_dim_1,
+              outer_dim_2, x_stride_0, x_stride_1, x_stride_2, gate_stride_0,
+              gate_stride_1, gate_stride_2, eps);
+    } else {
+      gdn_rmsnorm_gated_warp_kernel<
+          __nv_bfloat16, GDN_RMSNORM_FAST_HIDDEN,
+          GDN_RMSNORM_ROWS_PER_BLOCK>
+          <<<warp_grid, warp_block, 0, custream>>>(
+              (const __nv_bfloat16 *)x, (const __nv_bfloat16 *)gate,
+              (const __nv_bfloat16 *)weight, (__nv_bfloat16 *)output, rows,
+              outer_dim_1, outer_dim_2, x_stride_0, x_stride_1, x_stride_2,
+              gate_stride_0, gate_stride_1, gate_stride_2, eps);
+    }
+    return;
+  }
+
   dim3 block(128);
   dim3 grid(rows);
 

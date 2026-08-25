@@ -5,7 +5,7 @@ use crate::cuda::ffi::{
     reshape_and_cache_flashinfer as ffi_reshape_and_cache_flashinfer,
 };
 use candle_core::backend::BackendStorage;
-use candle_core::{DType, IndexOp, Result, Storage, Tensor};
+use candle_core::{DType, Result, Storage, Tensor};
 use float8::F8E4M3;
 
 use crate::{KvCacheScales, DEFAULT_FP8_KV_CACHE_SCALES};
@@ -552,6 +552,7 @@ pub fn gather_kv_cache_flashinfer(
     value_cache: &Tensor,
     block_table: &Tensor,
     cu_seq_lens: &Tensor,
+    num_tokens: usize, // Must equal cu_seq_lens[-1].
     out_dtype: DType,
     scales: KvCacheScales,
 ) -> Result<(Tensor, Tensor)> {
@@ -576,12 +577,13 @@ pub fn gather_kv_cache_flashinfer(
     }
 
     let cu_len = cu_seq_lens.dims1()?;
-    let num_seqs = cu_len - 1;
-    let num_tokens = if cu_seq_lens.dtype() == DType::I32 {
-        cu_seq_lens.i(cu_len - 1)?.to_scalar::<i32>()? as usize
-    } else {
-        cu_seq_lens.i(cu_len - 1)?.to_scalar::<u32>()? as usize
-    };
+    let num_seqs = cu_len
+        .checked_sub(1)
+        .ok_or_else(|| candle_core::Error::msg("cu_seq_lens must contain an initial offset"))?;
+    let num_tokens_i32 = i32::try_from(num_tokens)
+        .map_err(|_| candle_core::Error::msg("num_tokens exceeds the kernel i32 limit"))?;
+    let num_seqs_i32 = i32::try_from(num_seqs)
+        .map_err(|_| candle_core::Error::msg("num_seqs exceeds the kernel i32 limit"))?;
 
     let k_out = unsafe {
         Tensor::empty(
@@ -679,8 +681,8 @@ pub fn gather_kv_cache_flashinfer(
             vo_ptr as *const core::ffi::c_void,
             bt_ptr as *const i32,
             cu_ptr as *const i32,
-            num_tokens as i32,
-            num_seqs as i32,
+            num_tokens_i32,
+            num_seqs_i32,
             block_size as i32,
             block_table_stride as i32,
             num_kv_heads as i32,
@@ -771,6 +773,7 @@ mod tests {
                 &value_cache,
                 &block_table,
                 &cu_seq_lens,
+                2,
                 dtype,
                 TEST_FP8_SCALES,
             )?;

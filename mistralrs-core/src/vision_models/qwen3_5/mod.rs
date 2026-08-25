@@ -24,7 +24,10 @@ use crate::{
     },
     vision_models::{
         multimodal_layout::PackedMultimodalLayout,
-        qwen3_vl::{vision::Qwen3VLVisionModel, Qwen3VLVisionSpecificArgs},
+        qwen3_vl::{
+            concatenate_visual_items, vision::Qwen3VLVisionModel, Qwen3VLVisionSpecificArgs,
+            VisualEncoder,
+        },
     },
 };
 
@@ -192,117 +195,18 @@ impl Qwen3_5Model {
                 pixel_values = pixel_values.reshape(((), last_dim))?;
             }
 
-            let (image_embeds, deepstack_image_embeds) = if !image_hashes.is_empty() {
-                let n_images = image_hashes.len();
-                let grid_data = image_grid_thw_ref.to_vec2::<u32>()?;
-                let patches_per_image: Vec<usize> = grid_data
-                    .iter()
-                    .map(|row| row[0] as usize * row[1] as usize * row[2] as usize)
-                    .collect();
-                let merge = self.spatial_merge_size;
-                let output_tokens_per_image: Vec<usize> = grid_data
-                    .iter()
-                    .map(|row| {
-                        (row[0] as usize) * (row[1] as usize / merge) * (row[2] as usize / merge)
-                    })
-                    .collect();
-
-                let mut per_image: Vec<Option<Vec<Tensor>>> = vec![None; n_images];
-                let mut miss_indices = Vec::new();
-                {
-                    let mut guard = self
-                        .encoder_cache
-                        .lock()
-                        .expect("encoder cache lock poisoned");
-                    for (i, &hash) in image_hashes.iter().enumerate() {
-                        if let Some(cached) = guard.get(CacheModality::Image, hash) {
-                            per_image[i] = Some(cached);
-                        } else {
-                            miss_indices.push(i);
-                        }
-                    }
-                }
-
-                if miss_indices.is_empty() {
-                    let main_parts: Vec<Tensor> = per_image
-                        .iter()
-                        .map(|o| o.as_ref().unwrap()[0].clone())
-                        .collect();
-                    let image_embeds = Tensor::cat(&main_parts, 0)?;
-                    let n_ds_layers = per_image[0].as_ref().unwrap().len() - 1;
-                    let mut deepstack_layers = Vec::with_capacity(n_ds_layers);
-                    for layer_idx in 0..n_ds_layers {
-                        let layer_parts: Vec<Tensor> = per_image
-                            .iter()
-                            .map(|o| o.as_ref().unwrap()[1 + layer_idx].clone())
-                            .collect();
-                        deepstack_layers.push(Tensor::cat(&layer_parts, 0)?);
-                    }
-                    (image_embeds, deepstack_layers)
-                } else {
-                    let mut miss_pixel_slices = Vec::new();
-                    let mut miss_grid_rows = Vec::new();
-                    let mut pv_offset = 0usize;
-                    for (i, &n_patches) in patches_per_image.iter().enumerate() {
-                        if miss_indices.contains(&i) {
-                            miss_pixel_slices.push(pixel_values.narrow(0, pv_offset, n_patches)?);
-                            miss_grid_rows.push(image_grid_thw_ref.i(i)?);
-                        }
-                        pv_offset += n_patches;
-                    }
-                    let miss_pixels = Tensor::cat(&miss_pixel_slices, 0)?;
-                    let miss_grid = Tensor::stack(&miss_grid_rows, 0)?;
-
-                    let (encoded_main, encoded_ds) =
-                        self.vision.forward(&miss_pixels, &miss_grid)?;
-
-                    let miss_output_tokens: Vec<usize> = miss_indices
-                        .iter()
-                        .map(|&i| output_tokens_per_image[i])
-                        .collect();
-
-                    let mut enc_offset = 0usize;
-                    {
-                        let mut guard = self
-                            .encoder_cache
-                            .lock()
-                            .expect("encoder cache lock poisoned");
-                        for (j, &orig_idx) in miss_indices.iter().enumerate() {
-                            let n_out = miss_output_tokens[j];
-                            let single_main = encoded_main.narrow(0, enc_offset, n_out)?;
-                            let mut cache_entry = vec![single_main.clone()];
-                            for ds_layer in &encoded_ds {
-                                let single_ds = ds_layer.narrow(0, enc_offset, n_out)?;
-                                cache_entry.push(single_ds.clone());
-                            }
-                            enc_offset += n_out;
-                            guard.insert(
-                                CacheModality::Image,
-                                image_hashes[orig_idx],
-                                cache_entry.clone(),
-                            );
-                            per_image[orig_idx] = Some(cache_entry);
-                        }
-                    }
-
-                    let main_parts: Vec<Tensor> = per_image
-                        .iter()
-                        .map(|o| o.as_ref().unwrap()[0].clone())
-                        .collect();
-                    let image_embeds = Tensor::cat(&main_parts, 0)?;
-                    let n_ds_layers = per_image[0].as_ref().unwrap().len() - 1;
-                    let mut deepstack_layers = Vec::with_capacity(n_ds_layers);
-                    for layer_idx in 0..n_ds_layers {
-                        let layer_parts: Vec<Tensor> = per_image
-                            .iter()
-                            .map(|o| o.as_ref().unwrap()[1 + layer_idx].clone())
-                            .collect();
-                        deepstack_layers.push(Tensor::cat(&layer_parts, 0)?);
-                    }
-                    (image_embeds, deepstack_layers)
-                }
-            } else {
+            let (image_embeds, deepstack_image_embeds) = if image_hashes.is_empty() {
                 self.vision.forward(&pixel_values, image_grid_thw_ref)?
+            } else {
+                let per_image =
+                    VisualEncoder::new(&self.vision, &self.encoder_cache, self.spatial_merge_size)
+                        .encode(
+                            &pixel_values,
+                            image_grid_thw_ref,
+                            image_hashes,
+                            CacheModality::Image,
+                        )?;
+                concatenate_visual_items(&per_image)?
             };
 
             let image_embeds = image_embeds.to_device(&device)?.to_dtype(self.text.dtype)?;
@@ -353,8 +257,19 @@ impl Qwen3_5Model {
                 let last_dim = pixel_values.dim(ndim - 1)?;
                 pixel_values = pixel_values.reshape(((), last_dim))?;
             }
-            let (video_embeds, deepstack_video_embeds) =
-                self.vision.forward(&pixel_values, video_grid_thw_ref)?;
+            let (video_embeds, deepstack_video_embeds) = if video_hashes.is_empty() {
+                self.vision.forward(&pixel_values, video_grid_thw_ref)?
+            } else {
+                let per_video =
+                    VisualEncoder::new(&self.vision, &self.encoder_cache, self.spatial_merge_size)
+                        .encode(
+                            &pixel_values,
+                            video_grid_thw_ref,
+                            video_hashes,
+                            CacheModality::Video,
+                        )?;
+                concatenate_visual_items(&per_video)?
+            };
             let video_embeds = video_embeds.to_device(&device)?.to_dtype(self.text.dtype)?;
             let deepstack_video_embeds = deepstack_video_embeds
                 .into_iter()
@@ -624,6 +539,9 @@ impl MultimodalModel for Qwen3_5Model {
             packed_layout: None,
             prompt_position_ids: None,
         })
+    }
+    fn encoder_cache(&self) -> Option<&Mutex<EncoderCacheManager>> {
+        Some(&self.encoder_cache)
     }
     fn encoder_cache_counters(
         &self,

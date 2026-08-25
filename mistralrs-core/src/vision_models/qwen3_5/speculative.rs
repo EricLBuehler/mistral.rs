@@ -20,8 +20,8 @@ use crate::{
     pipeline::text_models_inputs_processor::FlashParams,
     speculative::{
         dflash::{
-            CtxAppend, DFlashDraftModel, DFlashGraphProposalInputs, DFlashPreparedContext,
-            DFlashProposalBatch, DFlashSamplingInputs,
+            CtxAppend, DFlashDraftModel, DFlashGraphProposalInputs, DFlashLoadTarget,
+            DFlashPreparedContext, DFlashProposalBatch, DFlashSamplingInputs,
         },
         paged_rows::make_paged_rows_metadata,
         proposer::sample_draft_rows,
@@ -29,7 +29,8 @@ use crate::{
         SpeculativeConfig, SpeculativeGraphPlan, SpeculativeGraphState, SpeculativeKvCache,
         SpeculativePrefillCtx, SpeculativePrefixReplay, SpeculativeProposal,
         SpeculativeProposalBatch, SpeculativeProposeBatchCtx, SpeculativeProposePreparation,
-        SpeculativeProposePrepareCtx, SpeculativeTargetMixin, TargetAttentionInputs,
+        SpeculativeProposePrepareCtx, SpeculativeTapRouting, SpeculativeTargetMixin,
+        TargetAttentionInputs,
     },
 };
 
@@ -242,10 +243,13 @@ impl Qwen3_5Model {
     ) -> Result<Option<SpeculativeAttachInfo>> {
         let mut drafter = DFlashDraftModel::load(
             &config,
-            self.text.layer_types.len(),
-            self.text.cfg.hidden_size,
-            &self.text.device,
-            self.text.dtype,
+            DFlashLoadTarget {
+                num_layers: self.text.layer_types.len(),
+                hidden_size: self.text.cfg.hidden_size,
+                yarn_rope_config: self.text.yarn_rope_config.as_ref(),
+                device: &self.text.device,
+                dtype: self.text.dtype,
+            },
             false,
         )?;
         let block = drafter.block_size();
@@ -606,32 +610,29 @@ impl Qwen3_5Model {
         if capture.taps.len() != drafter.target_layer_ids.len() {
             return Ok(());
         }
+        let (capture_batch, capture_rows, _) = capture.taps[0].dims3()?;
+        let routing = SpeculativeTapRouting::new(
+            ctx.capture_layout(),
+            capture_batch,
+            capture_rows,
+            ctx.batch_indices,
+            ctx.chunk_ranges,
+        )?;
         drafter.activate_seqs(ctx.seq_ids);
-        let source_rows = capture.taps[0].dim(1)?;
         let mut appends = Vec::with_capacity(ctx.seq_ids.len());
-        let mut flat_row_indices = Vec::new();
-        for (i, seq_id) in ctx.seq_ids.iter().enumerate() {
-            let batch_idx = ctx.batch_indices[i];
-            let (start, end) = ctx.chunk_ranges[i];
-            if end <= start || source_rows < end - start {
-                continue;
-            }
-            let rows = end - start;
-            let flat_start = batch_idx
-                .checked_mul(source_rows)
-                .ok_or_else(|| candle_core::Error::msg("DFlash tap row index overflow"))?;
-            let flat_end = flat_start
-                .checked_add(rows)
-                .ok_or_else(|| candle_core::Error::msg("DFlash tap row index overflow"))?;
-            for row in flat_start..flat_end {
-                flat_row_indices.push(u32::try_from(row).map_err(candle_core::Error::wrap)?);
-            }
+        for ((seq_id, &(start, _)), span) in ctx
+            .seq_ids
+            .iter()
+            .zip(ctx.chunk_ranges)
+            .zip(routing.spans())
+        {
             appends.push(crate::speculative::dflash::CtxAppend {
                 seq_id: *seq_id,
-                rows,
+                rows: span.rows(),
                 start_pos: start,
             });
         }
+        let flat_row_indices = routing.flat_row_indices()?;
         drafter.append_ctx_batch(&capture.taps, flat_row_indices, &appends)
     }
 
@@ -977,6 +978,10 @@ impl SpeculativeTargetMixin for Qwen3_5Model {
     }
 
     fn supports_speculative_prompt_bootstrap(&self) -> bool {
+        self.dflash.lock().expect("dflash poisoned").is_some()
+    }
+
+    fn supports_speculative_packed_prefill(&self) -> bool {
         self.dflash.lock().expect("dflash poisoned").is_some()
     }
 

@@ -19,7 +19,8 @@ use crate::args::{BenchRuntimeOptions, GlobalOptions, ModelType};
 use super::normalize_requested_adapter;
 use super::serve::{
     apply_quant_resolution, convert_to_model_selected, extract_device_settings,
-    extract_isq_setting, extract_paged_attn_settings,
+    extract_encoder_cache_memory_bytes, extract_hf_config_settings, extract_isq_setting,
+    extract_paged_attn_settings,
 };
 
 #[cfg(feature = "cuda")]
@@ -116,6 +117,7 @@ pub async fn run_bench(
     let matformer = runtime.matformer_selection();
     apply_quant_resolution(&mut model_type, &global.token_source, &matformer).await?;
     let model_selected = convert_to_model_selected(&model_type, &matformer)?;
+    let (max_model_len, hf_config_overrides) = extract_hf_config_settings(&model_type);
 
     let (
         paged_attn,
@@ -128,11 +130,12 @@ pub async fn run_bench(
 
     let (cpu, device_layers) = extract_device_settings(&model_type);
     let isq = extract_isq_setting(&model_type);
+    let encoder_cache_memory_bytes = extract_encoder_cache_memory_bytes(&model_type)?;
 
     info!("Loading model for benchmarking...");
 
     // Build using the same infrastructure as serve
-    let builder = MistralRsForServerBuilder::new()
+    let mut builder = MistralRsForServerBuilder::new()
         .with_model(model_selected)
         .with_max_seqs(1) // Single sequence for benchmarking
         .with_no_kv_cache(runtime.no_kv_cache)
@@ -141,6 +144,8 @@ pub async fn run_bench(
         .with_prefix_cache_n(0) // Disable prefix cache for benchmarking
         .with_disable_eos_stop(true) // Always generate exactly gen_len tokens
         .with_mtp_config_optional(runtime.mtp_config())
+        .with_max_model_len_optional(max_model_len)
+        .with_hf_config_overrides_optional(hf_config_overrides)
         .set_paged_attn(paged_attn)
         .with_cpu(cpu)
         .with_seed_optional(global.seed)
@@ -151,6 +156,10 @@ pub async fn run_bench(
         .with_paged_ctxt_len_optional(paged_ctxt_len)
         .with_paged_attn_block_size_optional(paged_attn_block_size)
         .with_paged_attn_cache_type(paged_cache_type);
+
+    if let Some(max_bytes) = encoder_cache_memory_bytes {
+        builder = builder.with_encoder_cache_memory_bytes(max_bytes);
+    }
 
     let mistralrs = builder.build().await?;
     if let Some(alias) = request_adapter.as_deref() {

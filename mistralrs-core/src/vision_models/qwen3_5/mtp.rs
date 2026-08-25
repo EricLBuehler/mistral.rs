@@ -92,12 +92,17 @@ impl Qwen3_5MtpHead {
             false,
             vb_quant.pp("fc"),
         )?;
-        let rotary_emb = Arc::new(Qwen3VLRotaryEmbedding::new(
-            cfg.rope_theta() as f32,
-            cfg.rot_dim(),
-            &device,
-            cfg.mrope_section().to_vec(),
-        )?);
+        let rotary_emb = Arc::new(match cfg.yarn_rope_config()? {
+            Some(yarn) => {
+                Qwen3VLRotaryEmbedding::new_yarn(&yarn, &device, cfg.mrope_section().to_vec())?
+            }
+            None => Qwen3VLRotaryEmbedding::new(
+                cfg.rope_theta() as f32,
+                cfg.rot_dim(),
+                &device,
+                cfg.mrope_section().to_vec(),
+            )?,
+        });
         let vb_layer = vb_plain.pp("layers").pp(0);
         let paged_attn = match attention_mechanism {
             AttentionImplementation::Eager => None,

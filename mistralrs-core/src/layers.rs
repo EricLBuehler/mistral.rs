@@ -1669,27 +1669,21 @@ impl Qwen2VLRotaryEmbedding {
 #[derive(Debug, Clone)]
 pub struct Qwen3VLRotaryEmbedding {
     inv_freq: Tensor,
+    attention_factor: f32,
     /// Precomputed interleave indices for H (dim=1, offset=1) and W (dim=2, offset=2).
     /// Stored as (indices_1d, dim_idx) pairs. Created once at init to avoid CPU->GPU sync per step.
     interleave_indices: Vec<(Tensor, usize)>,
 }
 
 impl Qwen3VLRotaryEmbedding {
-    pub fn new(
-        base: f32,
+    fn interleave_indices(
         head_dim: usize,
+        mrope_section: &[usize],
         device: &Device,
-        mrope_section: Vec<usize>,
-    ) -> Result<Self> {
-        let inv_freq: Vec<_> = (0..head_dim)
-            .step_by(2)
-            .map(|i| 1f32 / base.powf(i as f32 / head_dim as f32))
-            .collect();
-        let inv_freq_len = inv_freq.len();
-        let inv_freq = Tensor::from_vec(inv_freq, (inv_freq_len,), device)?.to_dtype(DType::F32)?;
-
-        // Precompute interleave index tensors for H (dim=1, offset=1) and W (dim=2, offset=2)
-        // to avoid CPU->GPU sync from Tensor::from_vec on every decode step.
+    ) -> Result<Vec<(Tensor, usize)>> {
+        if mrope_section.len() != 3 {
+            candle_core::bail!("Qwen3 MRoPE requires three sections");
+        }
         let half_dim = head_dim / 2;
         let mut interleave_indices = Vec::new();
         for (dim_idx, offset) in [(1usize, 1usize), (2usize, 2usize)] {
@@ -1705,9 +1699,43 @@ impl Qwen3VLRotaryEmbedding {
                 interleave_indices.push((idx_tensor, dim_idx));
             }
         }
+        Ok(interleave_indices)
+    }
+
+    pub fn new(
+        base: f32,
+        head_dim: usize,
+        device: &Device,
+        mrope_section: Vec<usize>,
+    ) -> Result<Self> {
+        let inv_freq: Vec<_> = (0..head_dim)
+            .step_by(2)
+            .map(|i| 1f32 / base.powf(i as f32 / head_dim as f32))
+            .collect();
+        let inv_freq_len = inv_freq.len();
+        let inv_freq = Tensor::from_vec(inv_freq, (inv_freq_len,), device)?.to_dtype(DType::F32)?;
+
+        let interleave_indices = Self::interleave_indices(head_dim, &mrope_section, device)?;
 
         Ok(Self {
             inv_freq,
+            attention_factor: 1.0,
+            interleave_indices,
+        })
+    }
+
+    pub fn new_yarn(
+        cfg: &YarnRopeConfig,
+        device: &Device,
+        mrope_section: Vec<usize>,
+    ) -> Result<Self> {
+        let (inv_freq, attention_factor) = yarn_inv_freq_and_attention_factor(cfg, device)?;
+        let inv_freq = inv_freq.to_dtype(DType::F32)?;
+        let interleave_indices = Self::interleave_indices(cfg.head_dim, &mrope_section, device)?;
+
+        Ok(Self {
+            inv_freq,
+            attention_factor,
             interleave_indices,
         })
     }
@@ -1749,8 +1777,14 @@ impl Qwen3VLRotaryEmbedding {
 
         // cos/sin from freqs_t -> (batch, seq_len, head_dim/2)
         // candle's rope() expects half-dim cos/sin and handles both halves internally
-        let cos = freqs_t.cos()?.to_dtype(dtype)?.contiguous()?;
-        let sin = freqs_t.sin()?.to_dtype(dtype)?.contiguous()?;
+        let mut cos = freqs_t.cos()?;
+        let mut sin = freqs_t.sin()?;
+        if self.attention_factor != 1.0 {
+            cos = (cos * self.attention_factor as f64)?;
+            sin = (sin * self.attention_factor as f64)?;
+        }
+        let cos = cos.to_dtype(dtype)?.contiguous()?;
+        let sin = sin.to_dtype(dtype)?.contiguous()?;
         Ok((cos, sin))
     }
 
@@ -2586,6 +2620,7 @@ pub struct RotaryEmbedding {
     is_gpt_neox: bool,
 }
 
+#[derive(Debug, Clone)]
 pub struct YarnRopeConfig {
     pub base: f32,
     pub head_dim: usize,
@@ -2596,6 +2631,64 @@ pub struct YarnRopeConfig {
     pub beta_slow: f32,
     pub mscale: f32,
     pub mscale_all_dim: f32,
+    pub attention_factor: Option<f32>,
+}
+
+pub(crate) fn yarn_inv_freq_and_attention_factor(
+    cfg: &YarnRopeConfig,
+    device: &Device,
+) -> Result<(Tensor, f32)> {
+    if !cfg.base.is_finite() || cfg.base <= 0.0 {
+        candle_core::bail!("YaRN base must be finite and positive");
+    }
+    if cfg.head_dim == 0 || !cfg.head_dim.is_multiple_of(2) {
+        candle_core::bail!("YaRN head dimension must be positive and even");
+    }
+    if !cfg.factor.is_finite() || cfg.factor <= 0.0 {
+        candle_core::bail!("YaRN factor must be finite and positive");
+    }
+    if cfg.original_max_position_embeddings == 0 {
+        candle_core::bail!("YaRN original context length must be positive");
+    }
+    if !cfg.beta_fast.is_finite()
+        || cfg.beta_fast <= 0.0
+        || !cfg.beta_slow.is_finite()
+        || cfg.beta_slow <= 0.0
+    {
+        candle_core::bail!("YaRN beta values must be finite and positive");
+    }
+
+    let freq_extra = (0..cfg.head_dim)
+        .step_by(2)
+        .map(|i| 1f32 / cfg.base.powf(i as f32 / cfg.head_dim as f32))
+        .collect::<Vec<_>>();
+    let freq_inter = (0..cfg.head_dim)
+        .step_by(2)
+        .map(|i| 1f32 / (cfg.factor * cfg.base.powf(i as f32 / cfg.head_dim as f32)))
+        .collect::<Vec<_>>();
+    let freq_len = freq_extra.len();
+    let freq_extra = Tensor::from_vec(freq_extra, freq_len, device)?;
+    let freq_inter = Tensor::from_vec(freq_inter, freq_len, device)?;
+    let (low, high) = DeepSeekV2RotaryEmbedding::yarn_find_correction_range(
+        cfg.beta_fast,
+        cfg.beta_slow,
+        cfg.head_dim,
+        cfg.base,
+        cfg.original_max_position_embeddings,
+    );
+    let inv_freq_mask =
+        (1. - DeepSeekV2RotaryEmbedding::yarn_linear_ramp_mask(low, high, freq_len, device)?)?;
+    let inv_freq = freq_inter
+        .broadcast_mul(&(1. - &inv_freq_mask)?)?
+        .broadcast_add(&freq_extra.broadcast_mul(&inv_freq_mask)?)?;
+    let attention_factor = cfg.attention_factor.unwrap_or_else(|| {
+        DeepSeekV2RotaryEmbedding::yarn_get_mscale(cfg.factor, cfg.mscale)
+            / DeepSeekV2RotaryEmbedding::yarn_get_mscale(cfg.factor, cfg.mscale_all_dim)
+    });
+    if !attention_factor.is_finite() || attention_factor <= 0.0 {
+        candle_core::bail!("YaRN attention factor must be finite and positive");
+    }
+    Ok((inv_freq, attention_factor))
 }
 
 fn post_rope_output(mut x: Tensor) -> Result<Tensor> {
@@ -2857,40 +2950,12 @@ impl RotaryEmbedding {
         is_gpt_neox: bool,
         dtype: DType,
     ) -> Result<Self> {
-        let freq_extra = (0..cfg.head_dim)
-            .step_by(2)
-            .map(|i| 1f32 / cfg.base.powf(i as f32 / cfg.head_dim as f32))
-            .collect::<Vec<_>>();
-        let freq_inter = (0..cfg.head_dim)
-            .step_by(2)
-            .map(|i| 1f32 / (cfg.factor * cfg.base.powf(i as f32 / cfg.head_dim as f32)))
-            .collect::<Vec<_>>();
-        let freq_len = freq_extra.len();
-        let freq_extra = Tensor::from_vec(freq_extra, (1, freq_len), device)?;
-        let freq_inter = Tensor::from_vec(freq_inter, (1, freq_len), device)?;
-        let (low, high) = DeepSeekV2RotaryEmbedding::yarn_find_correction_range(
-            cfg.beta_fast,
-            cfg.beta_slow,
-            cfg.head_dim,
-            cfg.base,
-            cfg.original_max_position_embeddings,
-        );
-        let inv_freq_mask = (1.
-            - DeepSeekV2RotaryEmbedding::yarn_linear_ramp_mask(
-                low,
-                high,
-                cfg.head_dim / 2,
-                device,
-            )?)?;
-        let inv_freq = freq_inter
-            .broadcast_mul(&(1. - &inv_freq_mask)?)?
-            .broadcast_add(&freq_extra.broadcast_mul(&inv_freq_mask)?)?;
+        let (inv_freq, mscale) = yarn_inv_freq_and_attention_factor(cfg, device)?;
+        let inv_freq = inv_freq.reshape((1, cfg.head_dim / 2))?;
         let t = Tensor::arange(0u32, cfg.max_position_embeddings as u32, device)?
             .to_dtype(DType::F32)?
             .reshape((cfg.max_position_embeddings, 1))?;
         let freqs = t.matmul(&inv_freq)?;
-        let mscale = DeepSeekV2RotaryEmbedding::yarn_get_mscale(cfg.factor, cfg.mscale)
-            / DeepSeekV2RotaryEmbedding::yarn_get_mscale(cfg.factor, cfg.mscale_all_dim);
         Ok(Self {
             sin: (freqs.sin()? * mscale as f64)?.to_dtype(dtype)?,
             cos: (freqs.cos()? * mscale as f64)?.to_dtype(dtype)?,
@@ -3762,7 +3827,11 @@ impl Module for ScaledEmbedding {
 
 #[cfg(test)]
 mod tests {
-    use super::{contains_tensor_or_weight_source_with, use_legacy_tied_uqff_head};
+    use super::{
+        contains_tensor_or_weight_source_with, use_legacy_tied_uqff_head,
+        yarn_inv_freq_and_attention_factor, Qwen3VLRotaryEmbedding, YarnRopeConfig,
+    };
+    use candle_core::{DType, Device, Tensor};
     use std::collections::HashSet;
 
     #[test]
@@ -3805,5 +3874,71 @@ mod tests {
             "embed_tokens.weight",
             |name| name == "embed_tokens.weight",
         ));
+    }
+
+    #[test]
+    fn qwen_mrope_yarn_factor_one_matches_default() -> candle_core::Result<()> {
+        let device = Device::Cpu;
+        let sections = vec![1, 1, 2];
+        let default = Qwen3VLRotaryEmbedding::new(10_000.0, 8, &device, sections.clone())?;
+        let yarn = Qwen3VLRotaryEmbedding::new_yarn(
+            &YarnRopeConfig {
+                base: 10_000.0,
+                head_dim: 8,
+                max_position_embeddings: 128,
+                original_max_position_embeddings: 128,
+                factor: 1.0,
+                beta_fast: 32.0,
+                beta_slow: 1.0,
+                mscale: 1.0,
+                mscale_all_dim: 0.0,
+                attention_factor: None,
+            },
+            &device,
+            sections,
+        )?;
+        let position_ids =
+            Tensor::from_vec(vec![0u32, 1, 2, 0, 1, 2, 0, 1, 2], (3, 1, 3), &device)?;
+        let (default_cos, default_sin) = default.compute_cos_sin(&position_ids, DType::F32)?;
+        let (yarn_cos, yarn_sin) = yarn.compute_cos_sin(&position_ids, DType::F32)?;
+        for (default, yarn) in default_cos
+            .flatten_all()?
+            .to_vec1::<f32>()?
+            .into_iter()
+            .zip(yarn_cos.flatten_all()?.to_vec1::<f32>()?)
+        {
+            assert!((default - yarn).abs() < 1e-6);
+        }
+        for (default, yarn) in default_sin
+            .flatten_all()?
+            .to_vec1::<f32>()?
+            .into_iter()
+            .zip(yarn_sin.flatten_all()?.to_vec1::<f32>()?)
+        {
+            assert!((default - yarn).abs() < 1e-6);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn yarn_uses_hf_default_attention_factor() -> candle_core::Result<()> {
+        let (_, attention_factor) = yarn_inv_freq_and_attention_factor(
+            &YarnRopeConfig {
+                base: 10_000.0,
+                head_dim: 8,
+                max_position_embeddings: 512,
+                original_max_position_embeddings: 128,
+                factor: 4.0,
+                beta_fast: 32.0,
+                beta_slow: 1.0,
+                mscale: 1.0,
+                mscale_all_dim: 0.0,
+                attention_factor: None,
+            },
+            &Device::Cpu,
+        )?;
+        let expected = 1.0 + 0.1 * 4.0f32.ln();
+        assert!((attention_factor - expected).abs() < 1e-6);
+        Ok(())
     }
 }

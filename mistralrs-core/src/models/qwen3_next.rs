@@ -15,7 +15,8 @@ use std::{
 };
 
 use crate::gdn::{
-    GatedDeltaNet, GdnConfig, GdnInputProjectionKind, GdnLayerCache, GdnStateDType, GdnVHeadLayout,
+    try_forward_uniform_packed_gdn, GatedDeltaNet, GdnConfig, GdnInputProjectionKind,
+    GdnLayerCache, GdnStateDType, GdnVHeadLayout,
 };
 use crate::{
     amoe::AnyMoeBaseModelMixin,
@@ -654,28 +655,32 @@ impl DecoderLayer {
                 );
             }
 
-            let mut outputs = Vec::with_capacity(segments.len());
-            let mut next_conv_states = Vec::with_capacity(segments.len());
-            let mut next_recurrent_states = Vec::with_capacity(segments.len());
-            for segment in segments {
-                let segment_x =
-                    x.narrow(1, segment.token_range.start, segment.token_range.len())?;
-                let mut segment_cache = GdnLayerCache {
-                    conv_state: cache.conv_state.narrow(0, segment.state_index, 1)?,
-                    recurrent_state: cache.recurrent_state.narrow(0, segment.state_index, 1)?,
-                    state_layout: cache.state_layout,
-                    slots: None,
-                };
-                outputs.push(mistralrs_quant::with_lora_execution_row_range(
-                    segment.token_range.clone(),
-                    || gdn.forward(&segment_x, &mut segment_cache, RecurrentBatchKind::Prefill),
-                )?);
-                next_conv_states.push(segment_cache.conv_state);
-                next_recurrent_states.push(segment_cache.recurrent_state);
+            if let Some(output) = try_forward_uniform_packed_gdn(gdn, &x, cache, query_lens)? {
+                output
+            } else {
+                let mut outputs = Vec::with_capacity(segments.len());
+                let mut next_conv_states = Vec::with_capacity(segments.len());
+                let mut next_recurrent_states = Vec::with_capacity(segments.len());
+                for segment in segments {
+                    let segment_x =
+                        x.narrow(1, segment.token_range.start, segment.token_range.len())?;
+                    let mut segment_cache = GdnLayerCache {
+                        conv_state: cache.conv_state.narrow(0, segment.state_index, 1)?,
+                        recurrent_state: cache.recurrent_state.narrow(0, segment.state_index, 1)?,
+                        state_layout: cache.state_layout,
+                        slots: None,
+                    };
+                    outputs.push(mistralrs_quant::with_lora_execution_row_range(
+                        segment.token_range.clone(),
+                        || gdn.forward(&segment_x, &mut segment_cache, RecurrentBatchKind::Prefill),
+                    )?);
+                    next_conv_states.push(segment_cache.conv_state);
+                    next_recurrent_states.push(segment_cache.recurrent_state);
+                }
+                cache.conv_state = Tensor::cat(&next_conv_states, 0)?;
+                cache.recurrent_state = Tensor::cat(&next_recurrent_states, 0)?;
+                Tensor::cat(&outputs, 1)?
             }
-            cache.conv_state = Tensor::cat(&next_conv_states, 0)?;
-            cache.recurrent_state = Tensor::cat(&next_recurrent_states, 0)?;
-            Tensor::cat(&outputs, 1)?
         } else {
             gdn.forward(&x, cache, batch_kind)?
         };

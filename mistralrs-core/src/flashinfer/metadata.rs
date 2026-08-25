@@ -20,6 +20,7 @@ use super::{
 };
 #[cfg(all(feature = "cuda", target_family = "unix"))]
 use super::{Fa3DecodeBuffers, Fa3DecodeScheduleKey, Fa3DecodeView, Fa3PagedScheduleShape};
+use crate::paged_attention::block_table_rows::BlockTableRows;
 #[cfg(all(feature = "cuda", target_family = "unix"))]
 use crate::paged_attention::AttentionBackendKind;
 #[cfg(feature = "cuda")]
@@ -96,8 +97,8 @@ fn decode_split_tokens(
 }
 
 // Converts scheduler block tables into FlashInfer's paged-KV CSR tensors.
-pub(crate) fn make_paged_kv_tensors(
-    tables: &[Vec<usize>],
+pub(crate) fn make_paged_kv_tensors<T: BlockTableRows + ?Sized>(
+    tables: &T,
     context_lens: &[usize],
     block_size: usize,
     padded_indices_len: usize,
@@ -108,7 +109,15 @@ pub(crate) fn make_paged_kv_tensors(
     let mut paged_kv_last_page_len = Vec::with_capacity(batch_size);
     paged_kv_indptr.push(0i32);
     let mut nnz_pages = 0i32;
-    for (table, context_len) in tables.iter().zip(context_lens.iter()) {
+    if batch_size != context_lens.len() {
+        anyhow::bail!(
+            "paged kv table/context length mismatch: tables={} context_lens={}",
+            batch_size,
+            context_lens.len()
+        );
+    }
+    for (row, context_len) in context_lens.iter().enumerate() {
+        let table = tables.row(row);
         let num_blocks = context_len.div_ceil(block_size);
         if num_blocks > table.len() {
             anyhow::bail!(
@@ -158,8 +167,8 @@ pub(crate) fn make_paged_kv_tensors(
 }
 
 // Decode splits each request's KV pages into chunks and pads the tile queue for graphs.
-pub(crate) fn make_paged_kv_decode_tensors(
-    tables: &[Vec<usize>],
+pub(crate) fn make_paged_kv_decode_tensors<T: BlockTableRows + ?Sized>(
+    tables: &T,
     context_lens: &[usize],
     block_size: usize,
     split_pages: Option<usize>,
@@ -177,7 +186,8 @@ pub(crate) fn make_paged_kv_decode_tensors(
     let mut kv_tile_indices = Vec::new();
     let mut o_indptr = Vec::with_capacity(tables.len() + 1);
     o_indptr.push(0i32);
-    for (batch_idx, (table, context_len)) in tables.iter().zip(context_lens.iter()).enumerate() {
+    for (batch_idx, context_len) in context_lens.iter().enumerate() {
+        let table = tables.row(batch_idx);
         let num_blocks = context_len.div_ceil(block_size);
         if num_blocks > table.len() {
             anyhow::bail!(
