@@ -2633,6 +2633,7 @@ mod tests {
     fn test_streaming_chunk(index: usize, finish_reason: Option<&str>) -> ChunkChoice {
         ChunkChoice {
             finish_reason: finish_reason.map(str::to_string),
+            stop_sequence: None,
             index,
             delta: crate::Delta {
                 content: Some(format!("choice {index}")),

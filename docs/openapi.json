@@ -1787,6 +1787,21 @@
           }
         }
       },
+      "AnthropicJsonOutputFormat": {
+        "type": "object",
+        "required": [
+          "type",
+          "schema"
+        ],
+        "properties": {
+          "schema": {
+            "type": "object"
+          },
+          "type": {
+            "type": "string"
+          }
+        }
+      },
       "AnthropicMessage": {
         "type": "object",
         "required": [
@@ -2018,6 +2033,16 @@
           "model": {
             "type": "string"
           },
+          "output_config": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/AnthropicOutputConfig"
+              }
+            ]
+          },
           "presence_penalty": {
             "type": [
               "number",
@@ -2032,7 +2057,7 @@
               },
               {
                 "$ref": "#/components/schemas/ReasoningEffort",
-                "description": "mistral.rs extension accepting off, low, medium, high, or xhigh. \"none\" aliases \"off\"."
+                "description": "mistral.rs extension for local reasoning effort. \"none\" aliases \"off\"; \"max\" aliases \"xhigh\"."
               }
             ]
           },
@@ -2159,6 +2184,27 @@
           }
         }
       },
+      "AnthropicOutputConfig": {
+        "type": "object",
+        "properties": {
+          "effort": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "format": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/AnthropicJsonOutputFormat"
+              }
+            ]
+          }
+        }
+      },
       "AnthropicResponseContentBlock": {
         "type": "object",
         "required": [
@@ -2178,6 +2224,12 @@
             ]
           },
           "name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "signature": {
             "type": [
               "string",
               "null"
@@ -2364,6 +2416,12 @@
             ],
             "minimum": 0
           },
+          "display": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "type": {
             "type": "string"
           }
@@ -2454,9 +2512,19 @@
         "type": "object",
         "required": [
           "input_tokens",
+          "cache_creation_input_tokens",
+          "cache_read_input_tokens",
           "output_tokens"
         ],
         "properties": {
+          "cache_creation_input_tokens": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "cache_read_input_tokens": {
+            "type": "integer",
+            "minimum": 0
+          },
           "input_tokens": {
             "type": "integer",
             "minimum": 0

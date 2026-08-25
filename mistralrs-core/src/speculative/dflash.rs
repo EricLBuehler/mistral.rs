@@ -301,6 +301,7 @@ impl DFlashConfig {
         Ok(())
     }
 
+    #[allow(clippy::cast_possible_truncation)]
     fn yarn_rope_config(&self, target: Option<&YarnRopeConfig>) -> Result<Option<YarnRopeConfig>> {
         let Some(target) = target else {
             return Ok(None);

@@ -869,7 +869,7 @@ impl PagedAttentionScheduler {
                 let seq_guard = get_mut_arcmutex!(seq);
                 let validation = validator.validate_prefix_cache_hit(
                     &seq_guard,
-                    &block_hashes,
+                    block_hashes,
                     computed.num_computed_tokens,
                     self.block_size,
                 );
