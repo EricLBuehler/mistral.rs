@@ -1428,6 +1428,15 @@ pub enum ActivationScaleLayout {
     GroupMajor { row_alignment: NonZeroUsize },
 }
 
+fn aligned_activation_scale_rows(rows: usize, row_alignment: NonZeroUsize) -> Result<usize> {
+    let alignment = row_alignment.get();
+    rows.checked_add(alignment - 1)
+        .ok_or_else(|| {
+            candle_core::Error::msg("group-major activation scale row count overflows usize")
+        })
+        .map(|rows| rows / alignment * alignment)
+}
+
 #[derive(Clone, Debug)]
 pub struct QuantizedActivation {
     quantized: Tensor,
@@ -1507,13 +1516,7 @@ impl QuantizedActivation {
                         "group-major activation scales require a row block size of 1, got {row_block}"
                     );
                 }
-                let row_alignment = row_alignment.get();
-                let scale_rows = rows.checked_add(row_alignment - 1).ok_or_else(|| {
-                    candle_core::Error::msg(
-                        "group-major activation scale row count overflows usize",
-                    )
-                })? / row_alignment
-                    * row_alignment;
+                let scale_rows = aligned_activation_scale_rows(rows, row_alignment)?;
                 (cols.div_ceil(col_block), scale_rows)
             }
         };
@@ -1839,6 +1842,76 @@ pub fn try_forward_with_shared_quantized_activation(
         .map(|method| method.forward_quantized(&activation))
         .collect::<Result<Vec<_>>>()
         .map(Some)
+}
+
+pub fn try_forward_fused_quantized_glu(
+    gate: &Tensor,
+    value: &Tensor,
+    projection: &dyn QuantMethod,
+    activation: GluActivationType,
+) -> Result<Option<Tensor>> {
+    #[cfg(feature = "cuda")]
+    {
+        if gate.dtype() != DType::BF16
+            || value.dtype() != DType::BF16
+            || gate.shape() != value.shape()
+            || !gate.device().same_device(value.device())
+            || !gate.device().is_cuda()
+            || projection.is_dynamic_lora_active()
+            || projection.stats_snapshot().is_some()
+        {
+            return Ok(None);
+        }
+        let Some(scheme) = projection.activation_quantization_scheme_for(value) else {
+            return Ok(None);
+        };
+        if scheme.dtype != DType::F8E4M3 || scheme.block_shape != [1, 128] {
+            return Ok(None);
+        }
+        let Some(scale_layout @ ActivationScaleLayout::GroupMajor { row_alignment }) =
+            projection.preferred_activation_scale_layout_for(value)
+        else {
+            return Ok(None);
+        };
+        let Some((&columns, batch_dims)) = value.dims().split_last() else {
+            return Ok(None);
+        };
+        let rows = batch_dims
+            .iter()
+            .try_fold(1usize, |rows, dim| rows.checked_mul(*dim))
+            .ok_or_else(|| {
+                candle_core::Error::msg("fused GLU activation row count overflows usize")
+            })?;
+        if rows == 0 || columns == 0 {
+            return Ok(None);
+        }
+        let scale_stride_m = aligned_activation_scale_rows(rows, row_alignment)?;
+        let Some((quantized, scales)) = utils::fused_glu_quantized_bf16(
+            gate,
+            value,
+            scheme.block_shape[1],
+            scale_stride_m,
+            activation,
+        )?
+        else {
+            return Ok(None);
+        };
+        let quantized = QuantizedActivation::new_with_scale_layout(
+            quantized,
+            scales,
+            value.dims().to_vec(),
+            value.dtype(),
+            scheme,
+            scale_layout,
+        )?;
+        return projection.forward_quantized(&quantized).map(Some);
+    }
+
+    #[cfg(not(feature = "cuda"))]
+    {
+        let _ = (gate, value, projection, activation);
+        Ok(None)
+    }
 }
 
 impl Module for dyn QuantMethod {
@@ -2758,6 +2831,31 @@ mod tests {
         let input = Tensor::zeros((1, 4), DType::F32, &Device::Cpu)?;
         let method = SharedActivationProbe;
         assert!(try_forward_with_shared_quantized_activation(&input, &[&method])?.is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn fused_quantized_glu_falls_back_off_cuda() -> Result<()> {
+        let gate = Tensor::zeros((3, 4), DType::BF16, &Device::Cpu)?;
+        let value = Tensor::ones((3, 4), DType::BF16, &Device::Cpu)?;
+        let method = SharedActivationProbe;
+        assert!(try_forward_fused_quantized_glu(
+            &gate,
+            &value,
+            &method,
+            GluActivationType::Sigmoid,
+        )?
+        .is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn group_major_scale_rows_follow_physical_bucket() -> Result<()> {
+        let alignment = NonZeroUsize::new(4).unwrap();
+        assert_eq!(aligned_activation_scale_rows(1, alignment)?, 4);
+        assert_eq!(aligned_activation_scale_rows(5, alignment)?, 8);
+        assert_eq!(aligned_activation_scale_rows(16, alignment)?, 16);
+        assert!(aligned_activation_scale_rows(usize::MAX, alignment).is_err());
         Ok(())
     }
 

@@ -362,6 +362,14 @@ impl FullAttention {
         };
 
         // Apply output gate: y = y * sigmoid(gate)
+        if let Some(res) = crate::ops::try_fused_gated_projection(
+            &gate,
+            &y,
+            crate::layers::Activation::Sigmoid,
+            &*self.o_proj,
+        )? {
+            return Ok(res);
+        }
         let gate = candle_nn::ops::sigmoid(&gate.to_dtype(y.dtype())?)?;
         y = y.broadcast_mul(&gate)?;
 

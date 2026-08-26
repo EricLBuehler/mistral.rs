@@ -5894,6 +5894,18 @@ pub fn mul_and_act(a: &Tensor, b: &Tensor, act: Activation) -> Result<Tensor> {
     a.apply(&act)? * b
 }
 
+pub(crate) fn try_fused_gated_projection(
+    gate: &Tensor,
+    value: &Tensor,
+    act: Activation,
+    projection: &dyn mistralrs_quant::QuantMethod,
+) -> Result<Option<Tensor>> {
+    let Some(activation) = glu_activation_type(act) else {
+        return Ok(None);
+    };
+    mistralrs_quant::try_forward_fused_quantized_glu(gate, value, projection, activation)
+}
+
 pub fn mul_and_candle_act(a: &Tensor, b: &Tensor, act: candle_nn::Activation) -> Result<Tensor> {
     // Check if we can use the fused kernel (works on CUDA, Metal, and CPU)
     if matches!(a.dtype(), DType::F16 | DType::BF16 | DType::F32) && a.dtype() == b.dtype() {

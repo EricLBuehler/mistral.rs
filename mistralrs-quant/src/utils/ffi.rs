@@ -338,6 +338,19 @@ extern "C" {
         activation: i32,
         stream: CUstream,
     );
+    pub fn fused_glu_quantize_bf16(
+        gate: *const c_void,
+        value: *const c_void,
+        output: *mut c_void,
+        scales: *mut f32,
+        rows: u32,
+        columns: u32,
+        gate_row_stride: u32,
+        value_row_stride: u32,
+        scale_stride_m: u32,
+        activation: i32,
+        stream: CUstream,
+    );
     pub fn softcap_f32(
         input: *const c_void,
         output: *mut c_void,
