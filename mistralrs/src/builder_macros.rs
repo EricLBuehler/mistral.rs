@@ -162,8 +162,8 @@ macro_rules! common_builder_methods {
             self
         }
 
-        /// Enable PagedAttention. If PagedAttention is not supported on this platform,
-        /// the configuration is silently ignored.
+        /// Enable PagedAttention. This stores an explicit request; loading fails if the
+        /// device, build, or model cannot honor it.
         ///
         /// Configure with a [`PagedAttentionConfig`] object, which can be created with
         /// sensible defaults via [`crate::PagedAttentionMetaBuilder`]:
@@ -177,9 +177,7 @@ macro_rules! common_builder_methods {
         /// # }
         /// ```
         pub fn with_paged_attn(mut self, paged_attn_cfg: PagedAttentionConfig) -> Self {
-            if paged_attn_supported() {
-                self.paged_attn_cfg = Some(paged_attn_cfg);
-            }
+            self.paged_attn_cfg = Some(paged_attn_cfg.with_required());
             self
         }
 

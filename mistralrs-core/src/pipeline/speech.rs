@@ -7,6 +7,7 @@ use super::{
 };
 use crate::device_map::{self, DeviceMapper};
 use crate::distributed::{use_ring, WorkerTransferData};
+use crate::paged_attention::disable_paged_attention;
 use crate::pipeline::{ChatTemplate, EmbeddingModulePaths, Modalities, SupportedModality};
 use crate::prefix_cacher::PrefixCacheManagerV2;
 use crate::sequence::Sequence;
@@ -243,13 +244,19 @@ impl Loader for SpeechLoader {
         silent: bool,
         mapper: DeviceMapSetting,
         in_situ_quant: Option<IsqType>,
-        _paged_attn_config: Option<PagedAttentionConfig>,
+        mut paged_attn_config: Option<PagedAttentionConfig>,
     ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
         let _progress_guard = ProgressScopeGuard::new(silent);
         let paths = paths
             .as_any()
             .downcast_ref::<SpeechModelPaths>()
             .expect("Path downcast failed.");
+
+        disable_paged_attention(
+            &mut paged_attn_config,
+            "speech models do not support PagedAttention",
+        )?;
+        let _ = paged_attn_config;
 
         if matches!(mapper, DeviceMapSetting::Map(_)) {
             anyhow::bail!("Device mapping is not supported for speech models.")

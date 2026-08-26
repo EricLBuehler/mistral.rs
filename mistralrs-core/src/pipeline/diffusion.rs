@@ -8,7 +8,7 @@ use super::{
 use crate::device_map::{self, DeviceMapper};
 use crate::diffusion_models::processor::{DiffusionProcessor, ModelInputs};
 use crate::distributed::{self, use_ring, WorkerTransferData};
-use crate::paged_attention::AttentionImplementation;
+use crate::paged_attention::{disable_paged_attention, AttentionImplementation};
 use crate::pipeline::{ChatTemplate, Modalities, SupportedModality};
 use crate::prefix_cacher::PrefixCacheManagerV2;
 use crate::sequence::Sequence;
@@ -31,7 +31,6 @@ use std::sync::Arc;
 use std::{env, io};
 use tokenizers::Tokenizer;
 use tokio::sync::Mutex;
-use tracing::warn;
 
 pub struct DiffusionPipeline {
     model: Box<dyn DiffusionModel + Send + Sync>,
@@ -145,11 +144,10 @@ impl Loader for DiffusionLoader {
             anyhow::bail!("ISQ is not supported for Diffusion models.");
         }
 
-        if paged_attn_config.is_some() {
-            warn!("PagedAttention is not supported for Diffusion models, disabling it.");
-
-            paged_attn_config = None;
-        }
+        disable_paged_attention(
+            &mut paged_attn_config,
+            "diffusion models do not support PagedAttention",
+        )?;
 
         if crate::using_flash_attn() {
             once_log_info("FlashAttention is enabled.");

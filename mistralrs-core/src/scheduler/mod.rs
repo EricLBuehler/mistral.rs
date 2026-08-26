@@ -9,8 +9,8 @@ use crate::{
     engine::IntervalLogger,
     paged_attention::{
         block_hash::{BlockHash, MultimodalKind},
-        CacheConfig, KVCacheManager, PagedAttentionScheduler, PagedAttentionSchedulerConfig,
-        PagedAttentionSchedulerOutput,
+        required_paged_attention_error, CacheConfig, KVCacheManager, PagedAttentionConfig,
+        PagedAttentionScheduler, PagedAttentionSchedulerConfig, PagedAttentionSchedulerOutput,
     },
     sequence::Sequence,
     speculative::SpeculativePrefixCheckpointPolicy,
@@ -64,6 +64,46 @@ pub enum SchedulerConfig {
         max_decode_steps_before_prefill: usize,
         config: CacheConfig,
     },
+}
+
+const PAGED_ATTENTION_SCHEDULER_FALLBACK_REASON: &str =
+    "the pipeline did not install a PagedAttention cache (scheduler would fall back to eager KV)";
+
+pub fn scheduler_config_for_paged_attention(
+    requested: &Option<PagedAttentionConfig>,
+    realized: Option<&CacheConfig>,
+    max_num_seqs: usize,
+    max_num_batched_tokens: usize,
+    max_prefill_chunk_tokens: usize,
+    max_decode_steps_before_prefill: usize,
+) -> anyhow::Result<SchedulerConfig> {
+    if let Some(config) = realized {
+        return Ok(SchedulerConfig::PagedAttentionMeta {
+            max_num_seqs,
+            max_num_batched_tokens,
+            max_prefill_chunk_tokens,
+            max_decode_steps_before_prefill,
+            config: config.clone(),
+        });
+    }
+
+    if requested.is_some_and(|config| config.required) {
+        return Err(required_paged_attention_error(
+            PAGED_ATTENTION_SCHEDULER_FALLBACK_REASON,
+        ));
+    }
+
+    if requested.is_some() {
+        tracing::warn!("PagedAttention disabled: {PAGED_ATTENTION_SCHEDULER_FALLBACK_REASON}");
+    }
+
+    Ok(SchedulerConfig::DefaultScheduler {
+        method: DefaultSchedulerMethod::Fixed(
+            max_num_seqs
+                .try_into()
+                .map_err(|_| anyhow::anyhow!("max_num_seqs must be nonzero"))?,
+        ),
+    })
 }
 
 impl SchedulerConfig {
@@ -292,5 +332,71 @@ mod tests {
             config: cache_config(128),
         };
         assert!(scheduler.refresh_paged_cache_config(None).is_err());
+    }
+
+    fn sample_paged_attn_config(required: bool) -> anyhow::Result<PagedAttentionConfig> {
+        let config = PagedAttentionConfig::new(
+            Some(32),
+            crate::MemoryGpuConfig::Utilization(0.9),
+            PagedCacheType::Auto,
+        )?;
+        Ok(if required {
+            config.with_required()
+        } else {
+            config
+        })
+    }
+
+    #[test]
+    fn required_paged_attention_cannot_fall_back_to_default_scheduler() -> anyhow::Result<()> {
+        let requested = Some(sample_paged_attn_config(true)?);
+        let Err(error) = scheduler_config_for_paged_attention(&requested, None, 1, 4096, 512, 8)
+        else {
+            panic!("required PagedAttention must not become DefaultScheduler");
+        };
+        let message = error.to_string();
+        assert!(message.contains("--paged-attn on"));
+        assert!(message.contains("pipeline did not install"));
+        Ok(())
+    }
+
+    #[test]
+    fn optional_paged_attention_falls_back_to_default_scheduler() -> anyhow::Result<()> {
+        let requested = Some(sample_paged_attn_config(false)?);
+        let scheduler = scheduler_config_for_paged_attention(&requested, None, 4, 4096, 512, 8)?;
+        assert!(matches!(
+            scheduler,
+            SchedulerConfig::DefaultScheduler { .. }
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn realized_cache_config_selects_paged_attention_scheduler() -> anyhow::Result<()> {
+        let requested = Some(sample_paged_attn_config(true)?);
+        let realized = cache_config(8);
+        let scheduler =
+            scheduler_config_for_paged_attention(&requested, Some(&realized), 4, 4096, 512, 8)?;
+        let SchedulerConfig::PagedAttentionMeta {
+            max_num_seqs,
+            config,
+            ..
+        } = scheduler
+        else {
+            panic!("expected PagedAttention scheduler")
+        };
+        assert_eq!(max_num_seqs, 4);
+        assert_eq!(config.num_gpu_blocks, 8);
+        Ok(())
+    }
+
+    #[test]
+    fn disabled_paged_attention_uses_default_scheduler_quietly() -> anyhow::Result<()> {
+        let scheduler = scheduler_config_for_paged_attention(&None, None, 2, 4096, 512, 8)?;
+        assert!(matches!(
+            scheduler,
+            SchedulerConfig::DefaultScheduler { .. }
+        ));
+        Ok(())
     }
 }

@@ -30,6 +30,7 @@ type SeqRecurrentCheckpointSnapshots = Vec<(usize, RecurrentCheckpointStateSnaps
 type HybridStateIndicesSnapshot = (Option<Tensor>, Option<Vec<u32>>);
 use crate::kv_cache::{FullCacheManager, HybridCacheManager, NormalCacheManager};
 use crate::lora::Ordering;
+use crate::paged_attention::disable_paged_attention;
 use crate::paged_attention::{calculate_cache_config, AttentionImplementation, CacheEngine};
 use crate::pipeline::chat_template::{calculate_eos_tokens, BeginEndUnkPadTok, GenerationConfig};
 #[cfg(feature = "cuda")]
@@ -202,6 +203,7 @@ pub(crate) fn build_normal_pipeline(
             silent,
             None,
             max_kv_tokens,
+            paged_attn_config.required,
         )?;
         let layer_devices = (0..num_hidden_layers)
             .map(|layer| mapper.device_for(layer, false).cloned())
@@ -639,7 +641,10 @@ impl Loader for NormalLoader {
         )?;
 
         if !self.inner.supports_paged_attention(&config)? {
-            paged_attn_config = None;
+            disable_paged_attention(
+                &mut paged_attn_config,
+                "this model does not support PagedAttention",
+            )?;
         }
 
         debug!("Prompt chunk size is {ATTENTION_CHUNK_SIZE}.");
@@ -925,9 +930,11 @@ impl Loader for NormalLoader {
         // TODO: PagedAttention is not supported with CPU for now.
         // This check is not really necessary because `get_device_layers` should prevent it.
         let mapping_uses_cpu = mapper.get_unique_devices().iter().any(Device::is_cpu);
-        if mapping_uses_cpu && paged_attn_config.is_some() {
-            warn!("Device mapping contains a mix of GPU and CPU. There is no CPU support for PagedAttention, disabling PagedAttention.");
-            paged_attn_config = None;
+        if mapping_uses_cpu {
+            disable_paged_attention(
+                &mut paged_attn_config,
+                "device mapping includes CPU, and PagedAttention has no CPU KV cache",
+            )?;
         }
 
         trace!("Model config: {:?}", self.inner.get_config_repr(&config)?);
@@ -1394,19 +1401,17 @@ impl Loader for NormalLoader {
             })?;
         }
 
-        let paged_attn_config = if matches!(
+        if matches!(
             self.kind,
             ModelKind::Adapter {
                 adapter: AdapterKind::XLora
             }
         ) {
-            warn!(
-                "Adapter parallel_models do not currently support PagedAttention, running without"
-            );
-            None
-        } else {
-            paged_attn_config
-        };
+            disable_paged_attention(
+                &mut paged_attn_config,
+                "X-LoRA adapter parallel_models do not support PagedAttention",
+            )?;
+        }
 
         if plan.immediate_isq_installed {
             for module in tracker.get().clone() {

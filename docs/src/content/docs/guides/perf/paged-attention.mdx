@@ -18,7 +18,7 @@ mistralrs serve --paged-attn on --pa-memory-mb 8192 -m Qwen/Qwen3-4B
 mistralrs serve --paged-attn off -m Qwen/Qwen3-4B
 ```
 
-`--paged-attn` accepts `auto` (default), `on`, or `off`. `auto` enables paged attention on CUDA and disables it on Metal and CPU.
+`--paged-attn` accepts `auto` (default), `on`, or `off`. `auto` enables paged attention on CUDA and disables it on Metal and CPU, logging a reason when it stays off. `on` fails closed: if the device, build, or model cannot honor PagedAttention, startup errors instead of silently using eager KV. `off` disables it with no fallback warning.
 
 </TabItem>
 <TabItem label="Python">
@@ -53,7 +53,7 @@ let model = ModelBuilder::new("Qwen/Qwen3-4B")
     .await?;
 ```
 
-`with_paged_attn` is silently ignored on platforms without paged attention support. [Full example](/examples/rust/advanced/paged-attn/).
+`with_paged_attn` is an explicit request. Loading fails if the platform, device, or model cannot honor PagedAttention. [Full example](/examples/rust/advanced/paged-attn/).
 
 </TabItem>
 </Tabs>

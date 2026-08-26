@@ -6,8 +6,9 @@ use anyhow::{Context, Result};
 use candle_core::Device;
 use mistralrs_core::{
     get_auto_device_map_params, get_model_dtype, get_tgt_non_granular_index, paged_attn_supported,
-    parse_isq_value, plan_paged_kv, reserve_external_mtp_memory_with_runtime, AutoDeviceMapParams,
-    DefaultSchedulerMethod, DeviceLayerMapMetadata, DeviceMapMetadata, DeviceMapSetting,
+    parse_isq_value, plan_paged_kv, required_paged_attention_error,
+    reserve_external_mtp_memory_with_runtime, scheduler_config_for_paged_attention,
+    AutoDeviceMapParams, DeviceLayerMapMetadata, DeviceMapMetadata, DeviceMapSetting,
     HfConfigOverrides, Loader, LoaderBuilder, McpClientConfig, MemoryGpuConfig, MistralRsBuilder,
     ModelLoaderConfig, ModelSelected, MtpConfig, MtpRuntimeConfig, PagedAttentionConfig,
     PagedCacheType, PagedKvModelRequest, SchedulerConfig, SearchCallback, SearchEmbeddingModel,
@@ -624,7 +625,7 @@ impl MistralRsForServerBuilder {
     /// and `Some(false)` have different implications.
     ///
     /// `None`: default behavior for target device (e.g. enable for CUDA, disable for Metal)
-    /// `Some(true)`: enable (if supported by target device)
+    /// `Some(true)`: require PagedAttention; fail if the device, build, or model cannot honor it
     /// `Some(false)`: disable
     pub fn set_paged_attn(mut self, paged_attn: Option<bool>) -> Self {
         self.paged_attn = paged_attn;
@@ -832,7 +833,7 @@ impl MistralRsForServerBuilder {
         };
 
         let mapper = init_mapper(&self.num_device_layers, &auto_device_map_params);
-        let paged_attn = configure_paged_attn(&device, self.paged_attn);
+        let paged_attn = configure_paged_attn(&device, self.paged_attn)?;
 
         let cache_config = reserve_external_mtp_memory_with_runtime(
             init_cache_config(
@@ -841,7 +842,8 @@ impl MistralRsForServerBuilder {
                 self.paged_attn_gpu_mem_usage,
                 self.paged_ctxt_len,
                 self.paged_cache_type,
-                !paged_attn,
+                !paged_attn.enabled,
+                paged_attn.required,
             )?
             .map(|config| config.with_serving_capacity(self.max_seqs))
             .transpose()?
@@ -906,7 +908,7 @@ impl MistralRsForServerBuilder {
             self.max_prefill_chunk_tokens.get(),
             self.max_decode_steps_before_prefill.get(),
         )
-        .await;
+        .await?;
 
         let search_embedding_model =
             get_search_embedding_model(self.enable_search, self.search_embedding_model);
@@ -1029,7 +1031,7 @@ impl MistralRsForServerBuilder {
             &auto_device_map_params,
         );
         let mapper_for_config = mapper.clone();
-        let paged_attn = configure_paged_attn(&device, self.paged_attn);
+        let paged_attn = configure_paged_attn(&device, self.paged_attn)?;
 
         let requested_cache_config = init_cache_config(
             self.paged_attn_block_size,
@@ -1037,7 +1039,8 @@ impl MistralRsForServerBuilder {
             self.paged_attn_gpu_mem_usage,
             self.paged_ctxt_len,
             self.paged_cache_type,
-            !paged_attn,
+            !paged_attn.enabled,
+            paged_attn.required,
         )?
         .map(|config| config.with_serving_capacity(self.max_seqs))
         .transpose()?
@@ -1125,7 +1128,7 @@ impl MistralRsForServerBuilder {
             self.max_prefill_chunk_tokens.get(),
             self.max_decode_steps_before_prefill.get(),
         )
-        .await;
+        .await?;
         let search_embedding_model =
             get_search_embedding_model(self.enable_search, self.search_embedding_model);
         let first_loader_config = ModelLoaderConfig {
@@ -1261,7 +1264,7 @@ impl MistralRsForServerBuilder {
                 self.max_prefill_chunk_tokens.get(),
                 self.max_decode_steps_before_prefill.get(),
             )
-            .await;
+            .await?;
 
             // Use the pipeline's name() as the canonical ID, but allow an alias.
             let pipeline_name = pipeline.lock().await.name();
@@ -1464,22 +1467,84 @@ fn mistralrs_instance_info(loader: &dyn Loader) {
     debug!("Model kind is: {}", loader.get_kind().to_string());
 }
 
-/// Determines whether paged attention should be enabled based on device type and preferences.
-fn configure_paged_attn(device: &Device, paged_attn: Option<bool>) -> bool {
-    if mistralrs_core::distributed::use_nccl() {
-        paged_attn.unwrap_or(defaults::PAGED_ATTN_CUDA)
-    } else if device.is_cpu() {
-        if paged_attn == Some(true) {
-            warn!("Paged attention is not supported on CPU.");
-        }
+/// Device-level PagedAttention enablement. `reason` is set only for auto fallback.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct PagedAttentionDeviceDecision {
+    enabled: bool,
+    required: bool,
+    reason: Option<&'static str>,
+}
 
-        defaults::PAGED_ATTN_CPU
+/// Determines whether paged attention should be enabled based on device type and preferences.
+fn configure_paged_attn(
+    device: &Device,
+    paged_attn: Option<bool>,
+) -> Result<PagedAttentionDeviceDecision> {
+    let required = paged_attn == Some(true);
+
+    let decision = if mistralrs_core::distributed::use_nccl() {
+        PagedAttentionDeviceDecision {
+            enabled: paged_attn.unwrap_or(defaults::PAGED_ATTN_CUDA),
+            required,
+            reason: None,
+        }
+    } else if device.is_cpu() {
+        if required {
+            return Err(required_paged_attention_error("it is not supported on CPU"));
+        }
+        let reason = match paged_attn {
+            Some(false) => None,
+            _ => Some("it is not supported on CPU"),
+        };
+        PagedAttentionDeviceDecision {
+            enabled: defaults::PAGED_ATTN_CPU,
+            required: false,
+            reason,
+        }
     } else if device.is_cuda() {
-        paged_attn.unwrap_or(defaults::PAGED_ATTN_CUDA)
+        PagedAttentionDeviceDecision {
+            enabled: paged_attn.unwrap_or(defaults::PAGED_ATTN_CUDA),
+            required,
+            reason: None,
+        }
     } else if device.is_metal() {
-        paged_attn.unwrap_or(defaults::PAGED_ATTN_METAL)
+        let enabled = paged_attn.unwrap_or(defaults::PAGED_ATTN_METAL);
+        let reason = if !enabled && paged_attn.is_none() {
+            Some("it is disabled by default on Metal")
+        } else {
+            None
+        };
+        PagedAttentionDeviceDecision {
+            enabled,
+            required,
+            reason,
+        }
+    } else if required {
+        return Err(required_paged_attention_error(
+            "it is not supported on this device",
+        ));
     } else {
-        false
+        PagedAttentionDeviceDecision {
+            enabled: false,
+            required: false,
+            reason: None,
+        }
+    };
+
+    if let Some(reason) = decision.reason {
+        info!("PagedAttention not enabled: {reason}");
+    }
+    Ok(decision)
+}
+
+fn apply_paged_attention_required(
+    config: PagedAttentionConfig,
+    required: bool,
+) -> PagedAttentionConfig {
+    if required {
+        config.with_required()
+    } else {
+        config
     }
 }
 
@@ -1491,62 +1556,84 @@ fn init_cache_config(
     paged_ctxt_len: Option<usize>,
     cache_type: PagedCacheType,
     no_paged_attn: bool,
+    required: bool,
 ) -> Result<Option<PagedAttentionConfig>> {
+    if no_paged_attn {
+        if required {
+            return Err(required_paged_attention_error(
+                "it could not be enabled for this device",
+            ));
+        }
+        return Ok(None);
+    }
+
+    if !paged_attn_supported() {
+        let reason =
+            "this build was compiled without PagedAttention (needs the cuda feature on Unix, or metal)";
+        if required {
+            return Err(required_paged_attention_error(reason));
+        }
+        warn!("PagedAttention disabled: {reason}");
+        return Ok(None);
+    }
+
     match (
         paged_attn_block_size,
         paged_attn_gpu_mem,
         paged_attn_gpu_mem_usage,
         paged_ctxt_len,
-        paged_attn_supported(),
-        no_paged_attn,
     ) {
-        (block_size, None, None, None, true, false) => Ok(Some(PagedAttentionConfig::new(
-            block_size,
-            MemoryGpuConfig::Utilization(0.9),
-            cache_type,
-        )?)),
-        (block_size, None, None, Some(ctxt), true, false) => Ok(Some(PagedAttentionConfig::new(
-            block_size,
-            MemoryGpuConfig::ContextSize(ctxt),
-            cache_type,
-        )?)),
-        (block_size, None, Some(f), None, true, false) => Ok(Some(PagedAttentionConfig::new(
-            block_size,
-            MemoryGpuConfig::Utilization(f),
-            cache_type,
-        )?)),
-        (block_size, Some(m), None, None, true, false) => Ok(Some(PagedAttentionConfig::new(
-            block_size,
-            MemoryGpuConfig::MbAmount(m),
-            cache_type,
-        )?)),
-        (block_size, Some(_m), Some(f), None, true, false) => {
+        (block_size, None, None, None) => Ok(Some(apply_paged_attention_required(
+            PagedAttentionConfig::new(block_size, MemoryGpuConfig::Utilization(0.9), cache_type)?,
+            required,
+        ))),
+        (block_size, None, None, Some(ctxt)) => Ok(Some(apply_paged_attention_required(
+            PagedAttentionConfig::new(block_size, MemoryGpuConfig::ContextSize(ctxt), cache_type)?,
+            required,
+        ))),
+        (block_size, None, Some(f), None) => Ok(Some(apply_paged_attention_required(
+            PagedAttentionConfig::new(block_size, MemoryGpuConfig::Utilization(f), cache_type)?,
+            required,
+        ))),
+        (block_size, Some(m), None, None) => Ok(Some(apply_paged_attention_required(
+            PagedAttentionConfig::new(block_size, MemoryGpuConfig::MbAmount(m), cache_type)?,
+            required,
+        ))),
+        (block_size, Some(_m), Some(f), None) => {
             warn!("Both memory size and usage were specified, defaulting to the usage value.");
-            Ok(Some(PagedAttentionConfig::new(
-                block_size,
-                MemoryGpuConfig::Utilization(f),
-                cache_type,
-            )?))
+            Ok(Some(apply_paged_attention_required(
+                PagedAttentionConfig::new(block_size, MemoryGpuConfig::Utilization(f), cache_type)?,
+                required,
+            )))
         }
-        (block_size, Some(_m), None, Some(ctxt), true, false) => {
+        (block_size, Some(_m), None, Some(ctxt)) => {
             warn!(
                 "Both memory size and context length were specified, defaulting to context length."
             );
-            Ok(Some(PagedAttentionConfig::new(
-                block_size,
-                MemoryGpuConfig::ContextSize(ctxt),
-                cache_type,
-            )?))
+            Ok(Some(apply_paged_attention_required(
+                PagedAttentionConfig::new(
+                    block_size,
+                    MemoryGpuConfig::ContextSize(ctxt),
+                    cache_type,
+                )?,
+                required,
+            )))
         }
-        (block_size, None, Some(f), Some(_ctxt), true, false) => {
+        (block_size, None, Some(f), Some(_ctxt)) => {
             warn!("Both context length and usage were specified, defaulting to the usage value.");
-            Ok(Some(PagedAttentionConfig::new(
-                block_size,
-                MemoryGpuConfig::Utilization(f),
-                cache_type,
-            )?))
+            Ok(Some(apply_paged_attention_required(
+                PagedAttentionConfig::new(block_size, MemoryGpuConfig::Utilization(f), cache_type)?,
+                required,
+            )))
         }
-        (_, _, _, _, _, _) => Ok(None),
+        (_, _, _, _) => {
+            if required {
+                return Err(required_paged_attention_error(
+                    "a valid KV cache configuration could not be created",
+                ));
+            }
+            Ok(None)
+        }
     }
 }
 
@@ -1558,27 +1645,16 @@ async fn init_scheduler_config(
     max_num_batched_tokens: usize,
     max_prefill_chunk_tokens: usize,
     max_decode_steps_before_prefill: usize,
-) -> SchedulerConfig {
-    if cache_config.is_some() {
-        // Handle case where we may have device mapping
-        if let Some(ref cache_config) = pipeline.lock().await.get_metadata().cache_config {
-            SchedulerConfig::PagedAttentionMeta {
-                max_num_seqs: args_max_seqs,
-                max_num_batched_tokens,
-                max_prefill_chunk_tokens,
-                max_decode_steps_before_prefill,
-                config: cache_config.clone(),
-            }
-        } else {
-            SchedulerConfig::DefaultScheduler {
-                method: DefaultSchedulerMethod::Fixed(args_max_seqs.try_into().unwrap()),
-            }
-        }
-    } else {
-        SchedulerConfig::DefaultScheduler {
-            method: DefaultSchedulerMethod::Fixed(args_max_seqs.try_into().unwrap()),
-        }
-    }
+) -> Result<SchedulerConfig> {
+    let realized = pipeline.lock().await.get_metadata().cache_config.clone();
+    scheduler_config_for_paged_attention(
+        cache_config,
+        realized.as_ref(),
+        args_max_seqs,
+        max_num_batched_tokens,
+        max_prefill_chunk_tokens,
+        max_decode_steps_before_prefill,
+    )
 }
 
 /// Configures PagedAttention based on two flags.
@@ -1608,5 +1684,85 @@ pub fn get_search_embedding_model(
         Some(search_embedding_model.unwrap_or_default())
     } else {
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn empty_cache_config(
+        no_paged_attn: bool,
+        required: bool,
+    ) -> Result<Option<PagedAttentionConfig>> {
+        init_cache_config(
+            None,
+            None,
+            None,
+            None,
+            PagedCacheType::Auto,
+            no_paged_attn,
+            required,
+        )
+    }
+
+    #[test]
+    fn explicit_on_cpu_is_an_error() {
+        let error = configure_paged_attn(&Device::Cpu, Some(true))
+            .expect_err("CPU --paged-attn on must fail closed");
+        let message = error.to_string();
+        assert!(message.contains("--paged-attn on"));
+        assert!(message.contains("CPU"));
+    }
+
+    #[test]
+    fn auto_cpu_stays_disabled_with_reason() {
+        let decision =
+            configure_paged_attn(&Device::Cpu, None).expect("CPU auto must not be an error");
+        assert!(!decision.enabled);
+        assert!(!decision.required);
+        assert_eq!(decision.reason, Some("it is not supported on CPU"));
+    }
+
+    #[test]
+    fn off_cpu_stays_disabled_quietly() {
+        let decision = configure_paged_attn(&Device::Cpu, Some(false))
+            .expect("CPU --paged-attn off must not be an error");
+        assert!(!decision.enabled);
+        assert!(!decision.required);
+        assert_eq!(decision.reason, None);
+    }
+
+    #[test]
+    fn off_cache_config_is_none() -> Result<()> {
+        assert!(empty_cache_config(true, false)?.is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn required_cache_config_fails_when_paged_attention_is_unsupported() {
+        if paged_attn_supported() {
+            let config = empty_cache_config(false, true)
+                .expect("supported builds can create a required config");
+            assert!(config.is_some_and(|config| config.is_required()));
+            return;
+        }
+
+        let error = empty_cache_config(false, true)
+            .expect_err("required PagedAttention must fail on unsupported builds");
+        let message = error.to_string();
+        assert!(message.contains("--paged-attn on"));
+        assert!(message.contains("cuda feature on Unix"));
+    }
+
+    #[test]
+    fn auto_cache_config_is_none_when_paged_attention_is_unsupported() -> Result<()> {
+        if paged_attn_supported() {
+            let config = empty_cache_config(false, false)?;
+            assert!(config.is_some_and(|config| !config.is_required()));
+        } else {
+            assert!(empty_cache_config(false, false)?.is_none());
+        }
+        Ok(())
     }
 }

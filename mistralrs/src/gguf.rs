@@ -400,13 +400,11 @@ impl GgufModelBuilder {
     /// Enable PagedAttention. Configure PagedAttention with a [`PagedAttentionConfig`] object, which
     /// can be created with sensible values with a [`PagedAttentionMetaBuilder`].
     ///
-    /// If PagedAttention is not supported (query with [`paged_attn_supported`]), this will do nothing.
+    /// This stores an explicit request; loading fails if the device, build, or model cannot honor it.
     ///
     /// [`PagedAttentionMetaBuilder`]: crate::PagedAttentionMetaBuilder
     pub fn with_paged_attn(mut self, paged_attn_cfg: PagedAttentionConfig) -> Self {
-        if paged_attn_supported() {
-            self.paged_attn_cfg = Some(paged_attn_cfg);
-        }
+        self.paged_attn_cfg = Some(paged_attn_cfg.with_required());
         self
     }
 
