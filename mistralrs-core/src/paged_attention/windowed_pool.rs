@@ -812,7 +812,7 @@ impl WindowedKvPool {
         Ok((pool_slot, generation))
     }
 
-    fn live_slots_used(&self) -> usize {
+    pub(crate) fn live_sequence_count(&self) -> usize {
         self.config.live_sequence_capacity() - self.free_slots.len()
     }
 
@@ -828,7 +828,7 @@ impl WindowedKvPool {
         publish_slot_metrics(
             self.metric_component,
             WINDOWED_KV_LIVE_POOL_LABEL,
-            self.live_slots_used(),
+            self.live_sequence_count(),
             self.config.live_sequence_capacity(),
         );
     }
@@ -1321,10 +1321,10 @@ mod tests {
     #[test]
     fn checkpoint_handle_clone_holds_capacity_until_last_drop() -> Result<()> {
         let mut pool = checkpoint_pool(1, 1)?;
-        assert_eq!(pool.live_slots_used(), 0);
+        assert_eq!(pool.live_sequence_count(), 0);
         assert_eq!(pool.checkpoint_slots_used(), 0);
         pool.acquire(1)?;
-        assert_eq!(pool.live_slots_used(), 1);
+        assert_eq!(pool.live_sequence_count(), 1);
         let first = pool.snapshot_sequence(1)?;
         assert_eq!(pool.checkpoint_slots_used(), 1);
         let first_generation = first.generation();
@@ -1345,7 +1345,7 @@ mod tests {
         assert_eq!(pool.free_checkpoint_capacity(), 1);
         assert_eq!(pool.checkpoint_slots_used(), 0);
         assert!(pool.release(1));
-        assert_eq!(pool.live_slots_used(), 0);
+        assert_eq!(pool.live_sequence_count(), 0);
         Ok(())
     }
 

@@ -45,21 +45,25 @@ pub const DEFAULT_MAX_DRAFTS: usize = 7;
 const ROPE_CACHE_LEN: usize = 65536;
 const MASK_CACHE_CAP: usize = 64;
 #[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
-const DFLASH_CUDA_GRAPH_CACHE_CAPACITY: usize = 32;
-const ADAPT_FULL_DEPTH_MAX_BATCH: usize = 2;
-const ADAPT_MIN_DEPTH: usize = 1;
+const DFLASH_CUDA_GRAPH_CACHE_CAPACITY: usize = 40;
+const ADAPT_FULL_DEPTH_MAX_BATCH: usize = 8;
+const ADAPT_BATCH_DEPTH: usize = 3;
 const DFLASH_ADAPTIVE_ENV: &str = "MISTRALRS_DFLASH_ADAPTIVE";
 
-fn select_dflash_depth(adaptive: bool, max_n: usize, batch: usize) -> usize {
-    if max_n == 0 || !adaptive || batch <= ADAPT_FULL_DEPTH_MAX_BATCH {
+fn select_dflash_depth(adaptive: bool, max_n: usize, batch: usize, live_sequences: usize) -> usize {
+    if max_n == 0 || !adaptive || batch.max(live_sequences) <= ADAPT_FULL_DEPTH_MAX_BATCH {
         max_n
     } else {
-        ADAPT_MIN_DEPTH.min(max_n)
+        ADAPT_BATCH_DEPTH.min(max_n)
     }
 }
 
 fn dflash_adaptive_env_value(value: &str) -> bool {
     value == "1" || value.eq_ignore_ascii_case("true")
+}
+
+fn dflash_adaptive_supported(max_n: usize, max_live_sequences: usize) -> bool {
+    max_n > ADAPT_BATCH_DEPTH && max_live_sequences > ADAPT_FULL_DEPTH_MAX_BATCH
 }
 
 #[cfg(any(
@@ -121,19 +125,20 @@ pub(crate) fn dflash_adaptive_requested() -> bool {
     std::env::var(DFLASH_ADAPTIVE_ENV)
         .ok()
         .as_deref()
-        .is_some_and(dflash_adaptive_env_value)
+        .map(dflash_adaptive_env_value)
+        .unwrap_or(true)
 }
 
 fn dflash_graph_plans(adaptive: bool, max_n: usize) -> Vec<super::SpeculativeGraphPlan> {
     if max_n == 0 {
         return Vec::new();
     }
-    if !adaptive || max_n == ADAPT_MIN_DEPTH {
+    if !adaptive || max_n <= ADAPT_BATCH_DEPTH {
         return vec![super::SpeculativeGraphPlan::new(max_n, None)];
     }
     vec![
         super::SpeculativeGraphPlan::new(max_n, Some(ADAPT_FULL_DEPTH_MAX_BATCH)),
-        super::SpeculativeGraphPlan::new(ADAPT_MIN_DEPTH, None),
+        super::SpeculativeGraphPlan::new(ADAPT_BATCH_DEPTH, None),
     ]
 }
 
@@ -2657,8 +2662,8 @@ impl DFlashDraftModel {
         }
     }
 
-    pub fn enable_adaptive(&self, max_n: usize) -> bool {
-        if max_n == 0 {
+    pub fn enable_adaptive(&self, max_n: usize, max_live_sequences: usize) -> bool {
+        if !dflash_adaptive_supported(max_n, max_live_sequences) {
             return false;
         }
         *self.adaptive.lock().expect("dflash adaptive poisoned") = Some(AdaptiveState { max_n });
@@ -2666,11 +2671,14 @@ impl DFlashDraftModel {
     }
 
     pub fn plan_n(&self, max_n: usize, batch: usize) -> usize {
-        let guard = self.adaptive.lock().expect("dflash adaptive poisoned");
-        if let Some(adaptive) = guard.as_ref() {
-            debug_assert_eq!(adaptive.max_n, max_n);
-        }
-        select_dflash_depth(guard.is_some(), max_n, batch)
+        let adaptive = {
+            let guard = self.adaptive.lock().expect("dflash adaptive poisoned");
+            if let Some(adaptive) = guard.as_ref() {
+                debug_assert_eq!(adaptive.max_n, max_n);
+            }
+            guard.is_some()
+        };
+        select_dflash_depth(adaptive, max_n, batch, self.live_sequence_count())
     }
 
     pub fn graph_plans(&self, max_n: usize) -> Vec<super::SpeculativeGraphPlan> {
@@ -2679,6 +2687,17 @@ impl DFlashDraftModel {
             debug_assert_eq!(adaptive.max_n, max_n);
         }
         dflash_graph_plans(guard.is_some(), max_n)
+    }
+
+    fn live_sequence_count(&self) -> usize {
+        #[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
+        if let Some(pool) = &self.windowed_pool {
+            return pool
+                .lock()
+                .expect("dflash windowed pool poisoned")
+                .live_sequence_count();
+        }
+        self.ctx_cache.lock().expect("dflash cache poisoned").len()
     }
 
     pub fn block_size(&self) -> usize {
@@ -3770,9 +3789,9 @@ mod tests {
 
     use super::{
         contiguous_row_range, copy_dflash_graph_output_rows, dflash_adaptive_env_value,
-        dflash_graph_host_rows, dflash_graph_plans, dflash_graph_positions_fit,
-        dflash_graph_precapture_shapes, dflash_prefix_replay, dflash_rope_from_positions,
-        drain_dflash_lru_entries, gather_ctx_taps, linear_from_weight,
+        dflash_adaptive_supported, dflash_graph_host_rows, dflash_graph_plans,
+        dflash_graph_positions_fit, dflash_graph_precapture_shapes, dflash_prefix_replay,
+        dflash_rope_from_positions, drain_dflash_lru_entries, gather_ctx_taps, linear_from_weight,
         resolve_dflash_sampling_policy, select_ctx_kv_rows, select_dflash_depth,
         update_dormant_sequences, DFlashConfig, DFlashGraphHostInput, DFlashSamplingInputs,
         DFlashSequenceEviction, ADAPT_FULL_DEPTH_MAX_BATCH,
@@ -3999,24 +4018,34 @@ mod tests {
 
     #[test]
     fn adaptive_depth_is_full_for_small_batches() {
-        assert_eq!(select_dflash_depth(true, 7, 1), 7);
-        assert_eq!(select_dflash_depth(true, 7, ADAPT_FULL_DEPTH_MAX_BATCH), 7);
+        assert_eq!(select_dflash_depth(true, 7, 1, 1), 7);
+        assert_eq!(
+            select_dflash_depth(true, 7, ADAPT_FULL_DEPTH_MAX_BATCH, 1),
+            7
+        );
     }
 
     #[test]
     fn adaptive_depth_keeps_a_live_draft_at_large_batches() {
         for max_n in 1..=7 {
-            for batch in [3, 8, 16] {
-                assert!(select_dflash_depth(true, max_n, batch) > 0);
+            for batch in [9, 16, 64] {
+                assert!(select_dflash_depth(true, max_n, batch, batch) > 0);
             }
         }
-        assert_eq!(select_dflash_depth(true, 7, 16), 1);
+        assert_eq!(select_dflash_depth(true, 7, 16, 16), 3);
+    }
+
+    #[test]
+    fn adaptive_depth_uses_global_live_load_for_fragmented_batches() {
+        assert_eq!(select_dflash_depth(true, 7, 1, 9), 3);
+        assert_eq!(select_dflash_depth(true, 7, 8, 9), 3);
+        assert_eq!(select_dflash_depth(true, 7, 8, 8), 7);
     }
 
     #[test]
     fn fixed_depth_ignores_batch_size() {
-        assert_eq!(select_dflash_depth(false, 7, 1), 7);
-        assert_eq!(select_dflash_depth(false, 7, 16), 7);
+        assert_eq!(select_dflash_depth(false, 7, 1, 1), 7);
+        assert_eq!(select_dflash_depth(false, 7, 16, 16), 7);
     }
 
     #[test]
@@ -4032,13 +4061,20 @@ mod tests {
     }
 
     #[test]
-    fn adaptive_mode_requires_an_explicit_true_value() {
+    fn adaptive_env_parses_explicit_values() {
         assert!(dflash_adaptive_env_value("1"));
         assert!(dflash_adaptive_env_value("true"));
         assert!(dflash_adaptive_env_value("TRUE"));
         for value in ["", "0", "false", "yes", "on", "7"] {
             assert!(!dflash_adaptive_env_value(value));
         }
+    }
+
+    #[test]
+    fn adaptive_mode_requires_depth_and_serving_headroom() {
+        assert!(dflash_adaptive_supported(7, 16));
+        assert!(!dflash_adaptive_supported(3, 16));
+        assert!(!dflash_adaptive_supported(7, 8));
     }
 
     #[test]
@@ -4051,12 +4087,12 @@ mod tests {
             dflash_graph_plans(true, 7),
             vec![
                 SpeculativeGraphPlan::new(7, Some(ADAPT_FULL_DEPTH_MAX_BATCH)),
-                SpeculativeGraphPlan::new(1, None),
+                SpeculativeGraphPlan::new(3, None),
             ]
         );
         assert_eq!(
-            dflash_graph_plans(true, 1),
-            vec![SpeculativeGraphPlan::new(1, None)]
+            dflash_graph_plans(true, 3),
+            vec![SpeculativeGraphPlan::new(3, None)]
         );
     }
 
@@ -4078,18 +4114,25 @@ mod tests {
             ]
         );
         assert_eq!(
-            dflash_graph_precapture_shapes(&dflash_graph_plans(true, 7), batches, 8),
+            dflash_graph_precapture_shapes(&dflash_graph_plans(true, 7), batches, 16),
             vec![
-                (1, 2),
+                (1, 4),
                 (1, 8),
-                (2, 2),
+                (2, 4),
                 (2, 8),
-                (3, 2),
-                (4, 2),
-                (5, 2),
-                (6, 2),
-                (7, 2),
-                (8, 2),
+                (3, 4),
+                (3, 8),
+                (4, 4),
+                (4, 8),
+                (5, 4),
+                (5, 8),
+                (6, 4),
+                (6, 8),
+                (7, 4),
+                (7, 8),
+                (8, 4),
+                (8, 8),
+                (16, 4),
             ]
         );
     }

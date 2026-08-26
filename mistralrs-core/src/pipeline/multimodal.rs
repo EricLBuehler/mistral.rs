@@ -1321,10 +1321,14 @@ impl Loader for MultimodalLoader {
         let recurrent_checkpoints_supported = model.supports_recurrent_speculative_checkpoints();
         let recurrent_pool_grew = paged_attn_config
             .map(|config| {
+                let kv_bytes_per_token =
+                    super::paged_kv_bytes_per_token(config, dtype, model_metadata.as_ref())?;
                 reserve_recurrent_serving_capacity(
                     model.cache(),
                     config,
                     recurrent_checkpoints_supported,
+                    &device,
+                    kv_bytes_per_token,
                 )
             })
             .transpose()?

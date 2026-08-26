@@ -176,6 +176,7 @@ pub fn reserve_external_mtp_memory_with_runtime(
             );
         }
         cache_config = cache_config.with_recurrent_checkpoint_lanes(drafts + 1)?;
+        cache_config.recurrent_checkpoint_lanes_auto = mtp_config.n_predict.is_none();
     }
     let bytes = mtp_config.external_weight_size_in_bytes(dtype)?;
     #[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
@@ -247,14 +248,12 @@ mod tests {
     use std::collections::HashMap;
 
     use safetensors::{serialize_to_file, tensor::Dtype as SafeDtype, tensor::TensorView};
-    use tempfile::tempdir;
+    use tempfile::{tempdir, TempDir};
 
     use super::*;
 
-    #[test]
-    fn external_weight_size_uses_runtime_dtype() -> anyhow::Result<()> {
+    fn external_checkpoint(config: &str) -> anyhow::Result<TempDir> {
         let dir = tempdir()?;
-        let path = dir.path().join("model.safetensors");
         let data = vec![0u8; 8];
         serialize_to_file(
             HashMap::from([(
@@ -262,12 +261,15 @@ mod tests {
                 TensorView::new(SafeDtype::BF16, vec![4], &data)?,
             )]),
             None,
-            &path,
+            &dir.path().join("model.safetensors"),
         )?;
-        fs::write(
-            dir.path().join("config.json"),
-            r#"{"architectures":["GenericMtpModel"]}"#,
-        )?;
+        fs::write(dir.path().join("config.json"), config)?;
+        Ok(dir)
+    }
+
+    #[test]
+    fn external_weight_size_uses_runtime_dtype() -> anyhow::Result<()> {
+        let dir = external_checkpoint(r#"{"architectures":["GenericMtpModel"]}"#)?;
         let config = MtpConfig::new(dir.path().to_string_lossy().into_owned(), None);
 
         assert_eq!(config.external_weight_size_in_bytes(DType::F32)?, 16);
@@ -284,6 +286,8 @@ mod tests {
             &Device::Cpu,
         )?
         .expect("cache config missing");
+        assert_eq!(cache_config.recurrent_checkpoint_lanes, 1);
+        assert!(!cache_config.recurrent_checkpoint_lanes_auto);
         let error = reserve_external_mtp_memory(
             Some(cache_config),
             Some(&config),
@@ -294,6 +298,44 @@ mod tests {
         assert!(error
             .to_string()
             .contains("paged attention device memory reservation overflow"));
+        Ok(())
+    }
+
+    #[test]
+    fn external_dflash_records_auto_and_explicit_checkpoint_depth() -> anyhow::Result<()> {
+        let dir = external_checkpoint(
+            r#"{
+                "architectures": ["DFlashDraftModel"],
+                "hidden_size": 8,
+                "intermediate_size": 16,
+                "num_hidden_layers": 1,
+                "num_attention_heads": 2,
+                "num_key_value_heads": 1,
+                "head_dim": 4,
+                "rms_norm_eps": 1e-6,
+                "vocab_size": 32,
+                "num_target_layers": 4,
+                "block_size": 8
+            }"#,
+        )?;
+        let base = crate::PagedAttentionConfig::new(
+            None,
+            crate::MemoryGpuConfig::Utilization(0.9),
+            crate::PagedCacheType::Auto,
+        )?;
+
+        let auto = MtpConfig::new(dir.path().to_string_lossy().into_owned(), None);
+        let auto = reserve_external_mtp_memory(Some(base), Some(&auto), &DType::F32, &Device::Cpu)?
+            .expect("cache config missing");
+        assert_eq!(auto.recurrent_checkpoint_lanes, 8);
+        assert!(auto.recurrent_checkpoint_lanes_auto);
+
+        let explicit = MtpConfig::new(dir.path().to_string_lossy().into_owned(), Some(3));
+        let explicit =
+            reserve_external_mtp_memory(Some(base), Some(&explicit), &DType::F32, &Device::Cpu)?
+                .expect("cache config missing");
+        assert_eq!(explicit.recurrent_checkpoint_lanes, 4);
+        assert!(!explicit.recurrent_checkpoint_lanes_auto);
         Ok(())
     }
 }

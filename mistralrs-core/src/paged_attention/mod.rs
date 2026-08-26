@@ -123,6 +123,8 @@ mod tests {
             MemoryGpuConfig::MbAmount(1),
             PagedCacheType::Auto,
         )?;
+        assert_eq!(config.recurrent_checkpoint_lanes, 1);
+        assert!(!config.recurrent_checkpoint_lanes_auto);
         assert_eq!(config.recurrent_prefix_capacity, 0);
         assert_eq!(
             config
@@ -201,6 +203,7 @@ pub struct PagedAttentionConfig {
     pub(crate) primary_activation_memory_reservation_bytes: usize,
     pub(crate) mapped_activation_memory_reservation_bytes: usize,
     pub(crate) recurrent_checkpoint_lanes: usize,
+    pub(crate) recurrent_checkpoint_lanes_auto: bool,
     pub(crate) recurrent_prefix_capacity: usize,
     pub(crate) resolve_memory_utilization_after_load: bool,
 }
@@ -226,6 +229,7 @@ impl PagedAttentionConfig {
             primary_activation_memory_reservation_bytes: 0,
             mapped_activation_memory_reservation_bytes: 0,
             recurrent_checkpoint_lanes: 1,
+            recurrent_checkpoint_lanes_auto: false,
             recurrent_prefix_capacity: 0,
             resolve_memory_utilization_after_load: true,
         })
@@ -253,6 +257,7 @@ impl PagedAttentionConfig {
             anyhow::bail!("recurrent checkpoint lane count must be nonzero")
         }
         self.recurrent_checkpoint_lanes = lanes;
+        self.recurrent_checkpoint_lanes_auto = false;
         Ok(self)
     }
 
