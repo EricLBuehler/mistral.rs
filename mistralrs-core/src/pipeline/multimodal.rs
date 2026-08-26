@@ -157,12 +157,13 @@ use crate::pipeline::chat_template::{
 use crate::pipeline::cuda_graph::{
     capture_cuda_decode_graph, cuda_decode_graph_batch_kind_supported,
     cuda_decode_graph_supported_for_model, cuda_decode_graphs_enabled, cuda_graph_batch_bucket,
-    cuda_graph_precapture_batches, cuda_graph_startup_capture_allowed, hybrid_graph_slots,
-    install_hybrid_graph_state_indices, record_cuda_graph_dispatch, CudaDecodeGraphCaptureCtx,
+    cuda_graph_precapture_batches, cuda_graph_precapture_max_batch,
+    cuda_graph_startup_capture_allowed, hybrid_graph_slots, install_hybrid_graph_state_indices,
+    record_cuda_graph_dispatch, target_cuda_graph_cache_capacity, CudaDecodeGraphCaptureCtx,
     CudaDecodeGraphKey, CudaDecodeGraphLaunch, CudaDecodeGraphReplay, CudaDecodeGraphReplayInput,
     CudaDecodeGraphState, CudaGraphComponent, CudaGraphDecodeStep, CudaGraphDecodeStepInputs,
     CudaGraphDispatchMode, CudaGraphDispatchReason, CudaGraphEvent, CudaGraphEventGuard,
-    CudaGraphPrecaptureInputs, CUDA_GRAPH_PRECAPTURE_MAX_BATCH,
+    CudaGraphPrecaptureInputs,
 };
 use crate::pipeline::llg::build_llg_factory;
 use crate::pipeline::loaders::auto_device_map;
@@ -2184,6 +2185,22 @@ impl MultimodalPipeline {
         }
         let start = std::time::Instant::now();
         let mut captured = 0usize;
+        let precapture_max_bucket = cuda_graph_precapture_max_batch(ctx.max_batch_size);
+        let batch_buckets = cuda_graph_precapture_batches()
+            .filter(|bucket| *bucket <= precapture_max_bucket)
+            .collect::<Vec<_>>();
+        let startup_shapes = widths.iter().fold(0usize, |total, (_, max_bucket)| {
+            total.saturating_add(
+                batch_buckets
+                    .iter()
+                    .filter(|bucket| **bucket <= *max_bucket)
+                    .count(),
+            )
+        });
+        state.ensure_capacity(target_cuda_graph_cache_capacity(
+            startup_shapes,
+            batch_buckets.len(),
+        ));
         for (q_len, max_bucket) in widths {
             let inputs = CudaGraphPrecaptureInputs::new(ctx, q_len, &device, self.device_mapper())?;
             let live = hybrid_slots.map(|pad_slot| vec![pad_slot]);
@@ -2195,7 +2212,11 @@ impl MultimodalPipeline {
                 RecurrentBatchKind::Prefill
             };
             let graph_pad_slot = hybrid_slots.map(|_| GDN_PAD_SLOT);
-            for bucket in cuda_graph_precapture_batches().filter(|b| *b <= max_bucket) {
+            for bucket in batch_buckets
+                .iter()
+                .copied()
+                .filter(|bucket| *bucket <= max_bucket.min(precapture_max_bucket))
+            {
                 let Some(step) = CudaGraphDecodeStep::padded(
                     inputs.step_inputs(live.as_deref(), graph_pad_slot),
                     bucket,
@@ -2236,7 +2257,7 @@ impl MultimodalPipeline {
         if captured > 0 {
             info!(
                 "Captured {captured} CUDA decode graphs through batch bucket {} in {:.2?}",
-                CUDA_GRAPH_PRECAPTURE_MAX_BATCH,
+                precapture_max_bucket,
                 start.elapsed()
             );
         }

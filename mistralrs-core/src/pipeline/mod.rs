@@ -1507,6 +1507,7 @@ pub trait MultimodalPromptPrefixer: Send + Sync {
 #[derive(Clone, Debug)]
 pub struct DecodeGraphPrecaptureCtx {
     pub block_size: usize,
+    pub max_batch_size: usize,
     pub max_paged_context_len: usize,
     pub attention_backend: AttentionBackendKind,
     pub sliding_window: Option<usize>,

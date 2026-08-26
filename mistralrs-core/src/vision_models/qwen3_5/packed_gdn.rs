@@ -3,7 +3,7 @@ use std::ops::Range;
 use candle_core::{Result, Tensor};
 
 use crate::{
-    gdn::{try_forward_uniform_packed_gdn, GatedDeltaNet, GdnLayerCache},
+    gdn::{try_forward_grouped_packed_gdn, GatedDeltaNet, GdnLayerCache},
     pipeline::{ModelForwardContext, RecurrentBatchKind},
 };
 
@@ -140,7 +140,7 @@ pub(crate) fn forward_packed_gdn(
         );
     }
 
-    if let Some(output) = try_forward_uniform_packed_gdn(gdn, x, cache, query_lens)? {
+    if let Some(output) = try_forward_grouped_packed_gdn(gdn, x, cache, query_lens)? {
         return Ok(output);
     }
 

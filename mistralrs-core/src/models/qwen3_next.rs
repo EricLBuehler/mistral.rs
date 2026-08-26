@@ -15,7 +15,7 @@ use std::{
 };
 
 use crate::gdn::{
-    try_forward_uniform_packed_gdn, GatedDeltaNet, GdnConfig, GdnInputProjectionKind,
+    try_forward_grouped_packed_gdn, GatedDeltaNet, GdnConfig, GdnInputProjectionKind,
     GdnLayerCache, GdnStateDType, GdnVHeadLayout,
 };
 use crate::{
@@ -655,7 +655,7 @@ impl DecoderLayer {
                 );
             }
 
-            if let Some(output) = try_forward_uniform_packed_gdn(gdn, &x, cache, query_lens)? {
+            if let Some(output) = try_forward_grouped_packed_gdn(gdn, &x, cache, query_lens)? {
                 output
             } else {
                 let mut outputs = Vec::with_capacity(segments.len());

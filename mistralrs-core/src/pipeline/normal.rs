@@ -36,12 +36,12 @@ use crate::pipeline::chat_template::{calculate_eos_tokens, BeginEndUnkPadTok, Ge
 use crate::pipeline::cuda_graph::{
     capture_cuda_decode_graph, cuda_decode_graph_batch_kind_supported,
     cuda_decode_graph_supported_for_model, cuda_decode_graphs_enabled, cuda_graph_batch_bucket,
-    cuda_graph_precapture_batches, hybrid_graph_slots, install_hybrid_graph_state_indices,
-    record_cuda_graph_dispatch, CudaDecodeGraphCaptureCtx, CudaDecodeGraphKey,
-    CudaDecodeGraphLaunch, CudaDecodeGraphReplay, CudaDecodeGraphReplayInput, CudaDecodeGraphState,
-    CudaGraphComponent, CudaGraphDecodeStep, CudaGraphDecodeStepInputs, CudaGraphDispatchMode,
-    CudaGraphDispatchReason, CudaGraphEvent, CudaGraphEventGuard, CudaGraphPrecaptureInputs,
-    CUDA_GRAPH_PRECAPTURE_MAX_BATCH,
+    cuda_graph_precapture_batches, cuda_graph_precapture_max_batch, hybrid_graph_slots,
+    install_hybrid_graph_state_indices, record_cuda_graph_dispatch, CudaDecodeGraphCaptureCtx,
+    CudaDecodeGraphKey, CudaDecodeGraphLaunch, CudaDecodeGraphReplay, CudaDecodeGraphReplayInput,
+    CudaDecodeGraphState, CudaGraphComponent, CudaGraphDecodeStep, CudaGraphDecodeStepInputs,
+    CudaGraphDispatchMode, CudaGraphDispatchReason, CudaGraphEvent, CudaGraphEventGuard,
+    CudaGraphPrecaptureInputs,
 };
 use crate::pipeline::isq::{
     write_uqff_artifacts, UqffFullSer, UqffWriteConfig, UqffWriteRequest, WeightLoadingMode,
@@ -1962,7 +1962,8 @@ impl NormalPipeline {
         let mut captured = 0usize;
         let inputs = CudaGraphPrecaptureInputs::new(ctx, 1, &device, self.device_mapper())?;
         let live = hybrid_slots.map(|pad_slot| vec![pad_slot]);
-        for bucket in cuda_graph_precapture_batches() {
+        let max_bucket = cuda_graph_precapture_max_batch(ctx.max_batch_size);
+        for bucket in cuda_graph_precapture_batches().filter(|bucket| *bucket <= max_bucket) {
             let Some(step) = CudaGraphDecodeStep::padded(
                 inputs.step_inputs(live.as_deref(), hybrid_slots.map(|_| GDN_PAD_SLOT)),
                 bucket,
@@ -1994,7 +1995,7 @@ impl NormalPipeline {
         if captured > 0 {
             info!(
                 "Captured {captured} CUDA decode graphs through batch bucket {} in {:.2?}",
-                CUDA_GRAPH_PRECAPTURE_MAX_BATCH,
+                max_bucket,
                 start.elapsed()
             );
         }

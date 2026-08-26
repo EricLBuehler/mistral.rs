@@ -680,6 +680,7 @@ impl Engine {
                         };
                         DecodeGraphPrecaptureCtx {
                             block_size,
+                            max_batch_size: max_active_sequences,
                             max_paged_context_len,
                             attention_backend: pipeline_metadata
                                 .model_metadata

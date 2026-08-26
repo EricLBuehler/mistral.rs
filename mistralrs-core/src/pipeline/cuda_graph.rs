@@ -42,15 +42,17 @@ const CUDA_GRAPH_INSTANTIATE_FLAGS: u64 =
     sys::CUgraphInstantiate_flags_enum::CUDA_GRAPH_INSTANTIATE_FLAG_AUTO_FREE_ON_LAUNCH as u64;
 // Matches the standard CUDA paged-attention V2 partition size.
 const PAGED_ATTENTION_PARTITION_SIZE: usize = 512;
-const TARGET_CUDA_DECODE_GRAPH_CACHE_CAPACITY: usize = 64;
+const TARGET_CUDA_DECODE_GRAPH_CACHE_DEFAULT_CAPACITY: usize = 64;
+const TARGET_CUDA_DECODE_GRAPH_CACHE_MAX_CAPACITY: usize = 96;
+const TARGET_CUDA_DECODE_GRAPH_CACHE_CAPACITY_QUANTUM: usize = 16;
 // Batches up to this size get their own graph; larger ones pad to the next 8-row boundary.
 pub(crate) const CUDA_GRAPH_EXACT_BATCH_BUCKETS: usize = 8;
-pub(crate) const CUDA_GRAPH_MAX_BATCH_BUCKET: usize = 64;
+pub(crate) const CUDA_GRAPH_MAX_BATCH_BUCKET: usize = 128;
 pub(crate) const CUDA_GRAPH_PRECAPTURE_MAX_BATCH: usize = CUDA_GRAPH_MAX_BATCH_BUCKET;
 const CUDA_GRAPH_SPEC_STATE_BUDGET_FLOOR_PERCENT: usize = 4;
 const CUDA_GRAPH_SPEC_STATE_BUDGET_CEILING_PERCENT: usize = 8;
-// C64 buckets plus one extra max-batch context graph require just under six largest entries.
-const CUDA_GRAPH_SPEC_STATE_WORKING_SET_MULTIPLIER: usize = 6;
+// C128 buckets plus one extra max-batch context graph require just under ten largest entries.
+const CUDA_GRAPH_SPEC_STATE_WORKING_SET_MULTIPLIER: usize = 10;
 const CUDA_GRAPH_SPEC_STATE_BUDGET_BYTES_ENV: &str = "MISTRALRS_CUDA_GRAPH_SPEC_STATE_BUDGET_BYTES";
 const CUDA_PHASE_TIMINGS_ENV: &str = "MISTRALRS_CUDA_PHASE_TIMINGS";
 const CUDA_GRAPH_EVENTS_METRIC: &str = "mistralrs_cuda_graph_events_total";
@@ -397,6 +399,28 @@ pub(crate) fn cuda_graph_batch_bucket(batch: usize) -> Option<usize> {
             .saturating_mul(CUDA_GRAPH_EXACT_BATCH_BUCKETS);
         (bucket <= CUDA_GRAPH_MAX_BATCH_BUCKET).then_some(bucket)
     }
+}
+
+pub(crate) fn cuda_graph_precapture_max_batch(configured_max: usize) -> usize {
+    if configured_max == 0 {
+        0
+    } else {
+        cuda_graph_batch_bucket(configured_max).unwrap_or(CUDA_GRAPH_MAX_BATCH_BUCKET)
+    }
+}
+
+pub(crate) fn target_cuda_graph_cache_capacity(
+    startup_shapes: usize,
+    runtime_batch_shapes: usize,
+) -> usize {
+    let working_set = startup_shapes.saturating_add(runtime_batch_shapes);
+    let rounded = working_set
+        .div_ceil(TARGET_CUDA_DECODE_GRAPH_CACHE_CAPACITY_QUANTUM)
+        .saturating_mul(TARGET_CUDA_DECODE_GRAPH_CACHE_CAPACITY_QUANTUM);
+    rounded.clamp(
+        TARGET_CUDA_DECODE_GRAPH_CACHE_DEFAULT_CAPACITY,
+        TARGET_CUDA_DECODE_GRAPH_CACHE_MAX_CAPACITY,
+    )
 }
 
 /// The batch buckets captured ahead of time at load.
@@ -1813,14 +1837,28 @@ pub(crate) struct CudaDecodeGraphReplay {
     pub(crate) launch: Option<CudaDecodeGraphLaunch>,
 }
 
-#[derive(Default)]
 pub(crate) struct CudaDecodeGraphState {
     entries: Vec<CudaDecodeGraphEntry>,
     spec_state_budgets: HashMap<DeviceLocation, usize>,
+    capacity: usize,
     disabled: bool,
     suspended: bool,
     eager_retry_blocked: bool,
     recurrent_storage_generation: Option<u64>,
+}
+
+impl Default for CudaDecodeGraphState {
+    fn default() -> Self {
+        Self {
+            entries: Vec::new(),
+            spec_state_budgets: HashMap::new(),
+            capacity: TARGET_CUDA_DECODE_GRAPH_CACHE_DEFAULT_CAPACITY,
+            disabled: false,
+            suspended: false,
+            eager_retry_blocked: false,
+            recurrent_storage_generation: None,
+        }
+    }
 }
 
 impl Drop for CudaDecodeGraphState {
@@ -1830,6 +1868,10 @@ impl Drop for CudaDecodeGraphState {
 }
 
 impl CudaDecodeGraphState {
+    pub(crate) fn ensure_capacity(&mut self, capacity: usize) {
+        self.capacity = self.capacity.max(capacity);
+    }
+
     pub(crate) fn disabled(&self) -> bool {
         self.disabled || self.suspended
     }
@@ -2083,10 +2125,7 @@ impl CudaDecodeGraphState {
 
     pub(crate) fn insert(&mut self, mut entry: CudaDecodeGraphEntry) {
         self.evict_for_spec_state(&entry.spec_state_usage);
-        if let Some(evicted) = take_cuda_graph_capacity_eviction(
-            &mut self.entries,
-            TARGET_CUDA_DECODE_GRAPH_CACHE_CAPACITY,
-        ) {
+        if let Some(evicted) = take_cuda_graph_capacity_eviction(&mut self.entries, self.capacity) {
             record_cuda_graph_evictions(
                 CudaGraphComponent::Target,
                 CudaGraphEvictionReason::Capacity,
@@ -3650,7 +3689,7 @@ mod tests {
 
     #[test]
     fn target_cache_retains_64_entries_before_lru_eviction() {
-        let capacity = TARGET_CUDA_DECODE_GRAPH_CACHE_CAPACITY;
+        let capacity = TARGET_CUDA_DECODE_GRAPH_CACHE_DEFAULT_CAPACITY;
         assert_eq!(capacity, 64);
 
         let mut entries = (0..capacity - 1).collect::<Vec<_>>();
@@ -3673,6 +3712,15 @@ mod tests {
     }
 
     #[test]
+    fn target_cache_capacity_tracks_large_speculative_working_sets() {
+        assert_eq!(target_cuda_graph_cache_capacity(23, 23), 64);
+        assert_eq!(target_cuda_graph_cache_capacity(38, 15), 64);
+        assert_eq!(target_cuda_graph_cache_capacity(54, 23), 80);
+        assert_eq!(target_cuda_graph_cache_capacity(80, 23), 96);
+        assert_eq!(target_cuda_graph_cache_capacity(usize::MAX, usize::MAX), 96);
+    }
+
+    #[test]
     fn batch_buckets_are_exact_then_eight_row_aligned() {
         assert_eq!(cuda_graph_batch_bucket(0), None);
         for batch in 1..=CUDA_GRAPH_EXACT_BATCH_BUCKETS {
@@ -3684,6 +3732,8 @@ mod tests {
         assert_eq!(cuda_graph_batch_bucket(31), Some(32));
         assert_eq!(cuda_graph_batch_bucket(33), Some(40));
         assert_eq!(cuda_graph_batch_bucket(57), Some(64));
+        assert_eq!(cuda_graph_batch_bucket(65), Some(72));
+        assert_eq!(cuda_graph_batch_bucket(121), Some(128));
         assert_eq!(
             cuda_graph_batch_bucket(CUDA_GRAPH_MAX_BATCH_BUCKET),
             Some(CUDA_GRAPH_MAX_BATCH_BUCKET)
@@ -3698,8 +3748,23 @@ mod tests {
     fn precapture_includes_every_batch_bucket() {
         assert_eq!(
             cuda_graph_precapture_batches().collect::<Vec<_>>(),
-            vec![1, 2, 3, 4, 5, 6, 7, 8, 16, 24, 32, 40, 48, 56, 64]
+            vec![
+                1, 2, 3, 4, 5, 6, 7, 8, 16, 24, 32, 40, 48, 56, 64, 72, 80, 88, 96, 104, 112, 120,
+                128,
+            ]
         );
+    }
+
+    #[test]
+    fn precapture_max_batch_rounds_to_the_shared_bucket_ceiling() {
+        assert_eq!(cuda_graph_precapture_max_batch(0), 0);
+        assert_eq!(cuda_graph_precapture_max_batch(8), 8);
+        assert_eq!(cuda_graph_precapture_max_batch(9), 16);
+        assert_eq!(cuda_graph_precapture_max_batch(17), 24);
+        assert_eq!(cuda_graph_precapture_max_batch(64), 64);
+        assert_eq!(cuda_graph_precapture_max_batch(65), 72);
+        assert_eq!(cuda_graph_precapture_max_batch(128), 128);
+        assert_eq!(cuda_graph_precapture_max_batch(129), 128);
     }
 
     #[test]
@@ -4286,8 +4351,8 @@ mod tests {
     #[test]
     fn speculative_state_budget_scales_with_the_largest_entry() {
         assert_eq!(default_spec_state_budget(10_000, 0), 400);
-        assert_eq!(default_spec_state_budget(10_000, 50), 400);
-        assert_eq!(default_spec_state_budget(10_000, 100), 600);
+        assert_eq!(default_spec_state_budget(10_000, 50), 500);
+        assert_eq!(default_spec_state_budget(10_000, 100), 800);
         assert_eq!(default_spec_state_budget(10_000, 200), 800);
         assert_eq!(default_spec_state_budget(10_000, 300), 800);
         assert_eq!(default_spec_state_budget(10_000, 900), 900);

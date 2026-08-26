@@ -3880,6 +3880,8 @@ mod tests {
     #[cfg(feature = "cuda")]
     use super::{validate_candidate_selector_cuda, CandidateSelectorCudaSpec};
     use crate::layers::{yarn_inv_freq_and_attention_factor, YarnRopeConfig};
+    #[cfg(feature = "cuda")]
+    use crate::pipeline::cuda_graph::{cuda_graph_precapture_batches, CUDA_GRAPH_MAX_BATCH_BUCKET};
     use crate::speculative::MtpDraftSamplingMethod;
     use crate::speculative::{SpeculativeGraphPlan, SpeculativePrefixReplay};
 
@@ -4214,6 +4216,18 @@ mod tests {
                 (16, 4),
             ]
         );
+    }
+
+    #[cfg(feature = "cuda")]
+    #[test]
+    fn graph_precapture_shapes_cover_large_shared_batch_buckets() {
+        let shapes = dflash_graph_precapture_shapes(
+            &dflash_graph_plans(false, 7),
+            cuda_graph_precapture_batches(),
+            CUDA_GRAPH_MAX_BATCH_BUCKET,
+        );
+        assert_eq!(shapes.len(), cuda_graph_precapture_batches().count());
+        assert_eq!(shapes.last(), Some(&(CUDA_GRAPH_MAX_BATCH_BUCKET, 8)));
     }
 
     #[test]

@@ -17,5 +17,5 @@ pub use layer::{
     GatedDeltaNet, GdnForwardStash, GdnSpeculativeStash, GdnTransitionCommitConfig,
     GdnTransitionStash,
 };
-pub(crate) use packed::try_forward_uniform_packed_gdn;
+pub(crate) use packed::try_forward_grouped_packed_gdn;
 pub use weights::GdnInputProjectionKind;
