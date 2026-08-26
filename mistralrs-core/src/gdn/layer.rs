@@ -3,7 +3,7 @@ use mistralrs_quant::{Comm, QuantMethod, Shard, ShardedVarBuilder};
 use std::sync::Arc;
 
 use crate::device_map::DeviceMapper;
-use crate::kv_cache::GdnPendingTransitionSpec;
+use crate::kv_cache::{GdnDeferredStateSpec, GdnPendingTransitionSpec};
 use crate::kv_cache::{RecurrentStateLayout, RecurrentStatePool};
 use crate::pipeline::RecurrentBatchKind;
 
@@ -196,6 +196,21 @@ impl GatedDeltaNet {
             && self.norm.weight.device().same_device(pool.device())
     }
 
+    pub(crate) fn deferred_decode_supported(
+        &self,
+        pool: &RecurrentStatePool,
+        activation_dtype: DType,
+    ) -> bool {
+        self.speculative_checkpoints_supported(pool, activation_dtype)
+            && pool.checkpoint_lanes() == 1
+            && pool.state_layout() == RecurrentStateLayout::GdnValueMajor
+            && pool.recurrent_dtype() == DType::F32
+            && self.dims.head_k_dim == crate::cuda::gdn::GDN_DECODE_K_DIM
+            && self.dims.head_v_dim == crate::cuda::gdn::GDN_DECODE_V_DIM
+            && self.norm.weight.dtype() == activation_dtype
+            && self.norm.weight.device().same_device(pool.device())
+    }
+
     pub(crate) fn transition_commit_config(
         &self,
         pool: &RecurrentStatePool,
@@ -216,6 +231,13 @@ impl GatedDeltaNet {
         GdnPendingTransitionSpec {
             num_k_heads: self.dims.num_k_heads,
             max_rows,
+        }
+    }
+
+    pub(crate) fn deferred_state_spec(&self) -> GdnDeferredStateSpec {
+        GdnDeferredStateSpec {
+            num_k_heads: self.dims.num_k_heads,
+            depth: crate::cuda::gdn::GDN_DEFERRED_STATE_DEPTH,
         }
     }
 
@@ -367,7 +389,7 @@ impl GatedDeltaNet {
         let projected = self.project(x, batch_size, seq_len)?;
         let mixed_qkv = projected.conv_input(&self.dims, batch_size, seq_len)?;
         #[cfg(feature = "cuda")]
-        let checkpointed = if checkpoint_lanes > 1
+        let accelerated = if checkpoint_lanes > 1
             && batch_kind == RecurrentBatchKind::SpeculativeDecode
             && mixed_qkv.device().is_cuda()
             && cache.slots.is_some()
@@ -379,13 +401,24 @@ impl GatedDeltaNet {
                 checkpoint_lanes,
                 transition_checkpoints,
             )?)
+        } else if batch_kind == RecurrentBatchKind::Decode
+            && seq_len == 1
+            && mixed_qkv.dtype() == DType::BF16
+            && cache.slots.is_some()
+            && cache.deferred_state.is_some()
+            && cache.state_layout == RecurrentStateLayout::GdnValueMajor
+            && cache.recurrent_state.dtype() == DType::F32
+            && self.dims.head_k_dim == crate::cuda::gdn::GDN_DECODE_K_DIM
+            && self.dims.head_v_dim == crate::cuda::gdn::GDN_DECODE_V_DIM
+        {
+            Some(self.forward_deferred_decode(&mixed_qkv, &projected, cache)?)
         } else {
             None
         };
         #[cfg(not(feature = "cuda"))]
-        let checkpointed: Option<(Tensor, GdnCoreOutput, Option<GdnTransitionStash>)> = None;
-        let (convolved_qkv, output, transitions) = match checkpointed {
-            Some(checkpointed) => checkpointed,
+        let accelerated: Option<(Tensor, GdnCoreOutput, Option<GdnTransitionStash>)> = None;
+        let (convolved_qkv, output, transitions) = match accelerated {
+            Some(accelerated) => accelerated,
             None => {
                 let convolved_qkv = backend::causal_conv1d(
                     &mixed_qkv,
@@ -422,6 +455,95 @@ impl GatedDeltaNet {
         }
 
         self.finish_forward(output, projected.z, batch_size, seq_len, dtype)
+    }
+
+    #[cfg(feature = "cuda")]
+    fn forward_deferred_decode(
+        &self,
+        mixed_qkv: &Tensor,
+        projected: &GdnProjection,
+        cache: &mut GdnLayerCache,
+    ) -> Result<(Tensor, GdnCoreOutput, Option<GdnTransitionStash>)> {
+        let convolved_qkv = backend::causal_conv1d(
+            mixed_qkv,
+            &self.conv1d_weight,
+            &self.dims,
+            cache,
+            RecurrentBatchKind::Decode,
+        )?;
+        let active_slots = cache
+            .slots
+            .as_ref()
+            .expect("deferred decode requires pooled state");
+        let deferred = cache
+            .deferred_state
+            .as_ref()
+            .expect("deferred decode requires transition storage");
+        let output = crate::cuda::gdn::deferred_recurrence_rmsnorm_gate_cuda(
+            crate::cuda::gdn::GdnDeferredRecurrence {
+                mixed_qkv: &convolved_qkv,
+                b: &projected.b,
+                a: &projected.a,
+                a_log: &self.a_log,
+                dt_bias: &self.dt_bias,
+                state_pool: &cache.recurrent_state,
+                active_slots,
+                deferred_key: &deferred.key,
+                deferred_delta: &deferred.delta,
+                deferred_decay: &deferred.decay,
+                deferred_cursor: &deferred.pending_rows,
+                gate: &projected.z,
+                norm_weight: &self.norm.weight,
+                norm_eps: self.norm.eps(),
+                num_k_heads: self.dims.num_k_heads,
+                num_v_heads: self.dims.num_v_heads,
+                head_k_dim: self.dims.head_k_dim,
+                head_v_dim: self.dims.head_v_dim,
+                tiled_v_heads: self.dims.v_head_layout == GdnVHeadLayout::Tiled,
+                state_layout: cache.state_layout,
+            },
+        )?;
+        Ok((convolved_qkv, GdnCoreOutput::Normalized(output), None))
+    }
+
+    #[cfg(feature = "cuda")]
+    pub(crate) fn flush_deferred_state(
+        &self,
+        pool: &RecurrentStatePool,
+        active_slots: &Tensor,
+        activation_dtype: DType,
+    ) -> Result<bool> {
+        if !self.deferred_decode_supported(pool, activation_dtype) {
+            return Ok(false);
+        }
+        let Some(deferred) = pool.deferred_state() else {
+            return Ok(false);
+        };
+        crate::cuda::gdn::flush_deferred_state_cuda(crate::cuda::gdn::GdnDeferredStateFlush {
+            state_pool: &pool.recurrent_state,
+            active_slots,
+            deferred_key: &deferred.key,
+            deferred_delta: &deferred.delta,
+            deferred_decay: &deferred.decay,
+            deferred_cursor: &deferred.pending_rows,
+            num_k_heads: self.dims.num_k_heads,
+            num_v_heads: self.dims.num_v_heads,
+            head_k_dim: self.dims.head_k_dim,
+            head_v_dim: self.dims.head_v_dim,
+            tiled_v_heads: self.dims.v_head_layout == GdnVHeadLayout::Tiled,
+            state_layout: pool.state_layout(),
+        })?;
+        Ok(true)
+    }
+
+    #[cfg(not(feature = "cuda"))]
+    pub(crate) fn flush_deferred_state(
+        &self,
+        _pool: &RecurrentStatePool,
+        _active_slots: &Tensor,
+        _activation_dtype: DType,
+    ) -> Result<bool> {
+        Ok(false)
     }
 
     #[cfg(feature = "cuda")]

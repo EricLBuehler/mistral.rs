@@ -1,6 +1,8 @@
 use candle_core::{DType, Device, Result, Tensor};
 
-use crate::kv_cache::{GdnPendingTransitionPool, RecurrentStateLayout, RecurrentStatePool};
+use crate::kv_cache::{
+    GdnDeferredStatePool, GdnPendingTransitionPool, RecurrentStateLayout, RecurrentStatePool,
+};
 
 use super::config::{GdnConfig, GdnDims};
 
@@ -14,6 +16,7 @@ pub struct GdnLayerCache {
     pub state_layout: RecurrentStateLayout,
     pub slots: Option<Tensor>,
     pub(crate) pending_transitions: Option<GdnPendingTransitionPool>,
+    pub(crate) deferred_state: Option<GdnDeferredStatePool>,
 }
 
 #[allow(dead_code)]
@@ -44,6 +47,7 @@ impl GdnLayerCache {
             state_layout,
             slots: None,
             pending_transitions: None,
+            deferred_state: None,
         }
     }
 
@@ -59,6 +63,7 @@ impl GdnLayerCache {
             state_layout,
             slots: Some(slots),
             pending_transitions: None,
+            deferred_state: None,
         }
     }
 
@@ -73,6 +78,7 @@ impl GdnLayerCache {
                 indices.clone(),
             );
             cache.pending_transitions = pool.pending_transitions().cloned();
+            cache.deferred_state = pool.deferred_state().cloned();
             return Ok(cache);
         }
         Ok(Self::gathered(
@@ -110,6 +116,7 @@ impl Clone for GdnLayerCache {
             state_layout: self.state_layout,
             slots: self.slots.clone(),
             pending_transitions: self.pending_transitions.clone(),
+            deferred_state: self.deferred_state.clone(),
         }
     }
 }

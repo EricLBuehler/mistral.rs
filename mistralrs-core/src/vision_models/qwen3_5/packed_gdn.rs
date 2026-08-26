@@ -155,6 +155,7 @@ pub(crate) fn forward_packed_gdn(
             state_layout: cache.state_layout,
             slots: None,
             pending_transitions: None,
+            deferred_state: None,
         };
         outputs.push(mistralrs_quant::with_lora_execution_row_range(
             segment.token_range.clone(),

@@ -1013,8 +1013,24 @@ impl SpeculativeTargetMixin for Qwen3_5Model {
         self.text.reserve_recurrent_transition_storage()
     }
 
+    fn reserve_recurrent_decode_deferred_storage(&self) -> Result<bool> {
+        if self.has_speculative_proposer() {
+            Ok(false)
+        } else {
+            self.text.reserve_recurrent_decode_deferred_storage()
+        }
+    }
+
+    fn disable_recurrent_decode_deferred_storage(&self) -> Result<bool> {
+        self.text.disable_recurrent_decode_deferred_storage()
+    }
+
     fn apply_recurrent_speculative_transitions_for_current_batch(&self) -> Result<bool> {
         self.text.apply_current_recurrent_transitions()
+    }
+
+    fn flush_recurrent_state_for_current_batch(&self) -> Result<()> {
+        self.text.flush_current_recurrent_state()
     }
 
     fn flush_recurrent_speculative_transitions(&self, seq_ids: &[usize]) -> Result<()> {

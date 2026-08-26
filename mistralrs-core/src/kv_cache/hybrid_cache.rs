@@ -59,6 +59,12 @@ const GDN_PENDING_KEY_BANK: usize = 2;
 const GDN_PENDING_METADATA_FIELDS: usize = 3;
 pub(crate) const GDN_PENDING_KEY_BANK_COUNT: usize = 2;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct GdnDeferredStateSpec {
+    pub num_k_heads: usize,
+    pub depth: usize,
+}
+
 #[derive(Clone, Debug)]
 pub(crate) struct GdnPendingTransitionPool {
     pub conv_input: Tensor,
@@ -266,6 +272,134 @@ impl GdnPendingTransitionPool {
     }
 }
 
+#[derive(Clone, Debug)]
+pub(crate) struct GdnDeferredStatePool {
+    pub key: Tensor,
+    pub delta: Tensor,
+    pub decay: Tensor,
+    pub pending_rows: Tensor,
+    pending_rows_zero: Tensor,
+    spec: GdnDeferredStateSpec,
+    capacity: usize,
+    num_v_heads: usize,
+    head_k_dim: usize,
+    head_v_dim: usize,
+    state_layout: RecurrentStateLayout,
+    device: Device,
+}
+
+impl GdnDeferredStatePool {
+    fn new(
+        capacity: usize,
+        state_dims: &[usize],
+        state_layout: RecurrentStateLayout,
+        device: &Device,
+        spec: GdnDeferredStateSpec,
+    ) -> Result<Self> {
+        let (num_v_heads, head_k_dim, head_v_dim) = match (state_layout, state_dims) {
+            (RecurrentStateLayout::GdnKeyMajor, [heads, key_dim, value_dim]) => {
+                (*heads, *key_dim, *value_dim)
+            }
+            (RecurrentStateLayout::GdnValueMajor, [heads, value_dim, key_dim]) => {
+                (*heads, *key_dim, *value_dim)
+            }
+            _ => candle_core::bail!("deferred state requires a GDN recurrent state layout"),
+        };
+        if spec.num_k_heads == 0
+            || spec.depth != crate::cuda::gdn::GDN_DEFERRED_STATE_DEPTH
+            || num_v_heads == 0
+            || head_k_dim == 0
+            || head_v_dim == 0
+            || !num_v_heads.is_multiple_of(spec.num_k_heads)
+        {
+            candle_core::bail!("GDN deferred state dimensions are incompatible");
+        }
+
+        Ok(Self {
+            key: Tensor::zeros(
+                (capacity, spec.depth, spec.num_k_heads, head_k_dim),
+                DType::F32,
+                device,
+            )?,
+            delta: Tensor::zeros(
+                (capacity, spec.depth, num_v_heads, head_v_dim),
+                DType::F32,
+                device,
+            )?,
+            decay: Tensor::zeros((capacity, spec.depth, num_v_heads), DType::F32, device)?,
+            pending_rows: Tensor::zeros((capacity,), DType::U32, device)?,
+            pending_rows_zero: Tensor::zeros((1,), DType::U32, device)?,
+            spec,
+            capacity,
+            num_v_heads,
+            head_k_dim,
+            head_v_dim,
+            state_layout,
+            device: device.clone(),
+        })
+    }
+
+    fn resized(&self, new_capacity: usize) -> Result<Self> {
+        let state_dims = match self.state_layout {
+            RecurrentStateLayout::GdnKeyMajor => {
+                [self.num_v_heads, self.head_k_dim, self.head_v_dim]
+            }
+            RecurrentStateLayout::GdnValueMajor => {
+                [self.num_v_heads, self.head_v_dim, self.head_k_dim]
+            }
+            RecurrentStateLayout::Opaque => unreachable!("deferred state requires GDN state"),
+        };
+        let resized = Self::new(
+            new_capacity,
+            &state_dims,
+            self.state_layout,
+            &self.device,
+            self.spec,
+        )?;
+        resized.key.slice_set(&self.key, 0, 0)?;
+        resized.delta.slice_set(&self.delta, 0, 0)?;
+        resized.decay.slice_set(&self.decay, 0, 0)?;
+        resized.pending_rows.slice_set(&self.pending_rows, 0, 0)?;
+        Ok(resized)
+    }
+
+    fn clear_slot(&self, slot_idx: usize) -> Result<()> {
+        if slot_idx >= self.capacity {
+            candle_core::bail!(
+                "GDN deferred state slot {slot_idx} exceeds capacity {}",
+                self.capacity
+            );
+        }
+        self.pending_rows
+            .slice_set(&self.pending_rows_zero, 0, slot_idx)
+    }
+
+    fn clear_metadata(&self) -> Result<()> {
+        let zeros = Tensor::zeros((self.capacity,), DType::U32, &self.device)?;
+        self.pending_rows.slice_set(&zeros, 0, 0)
+    }
+
+    pub fn spec(&self) -> GdnDeferredStateSpec {
+        self.spec
+    }
+
+    pub(crate) fn storage_bytes(&self) -> Result<usize> {
+        [&self.key, &self.delta, &self.decay, &self.pending_rows]
+            .into_iter()
+            .try_fold(0usize, |bytes, tensor| {
+                let tensor_bytes = tensor
+                    .elem_count()
+                    .checked_mul(tensor.dtype().size_in_bytes())
+                    .ok_or_else(|| {
+                        candle_core::Error::msg("GDN deferred state storage size overflow")
+                    })?;
+                bytes.checked_add(tensor_bytes).ok_or_else(|| {
+                    candle_core::Error::msg("GDN deferred state storage size overflow")
+                })
+            })
+    }
+}
+
 impl RecurrentStateSpec {
     fn physical_layout(
         &self,
@@ -327,6 +461,7 @@ pub struct RecurrentStatePool {
     recurrent_dtype: DType,
     device: Device,
     pending_transitions: Option<GdnPendingTransitionPool>,
+    deferred_state: Option<GdnDeferredStatePool>,
 }
 
 /// Initial pool capacity before dynamic growth: the pre-captured CUDA graph batch range plus the
@@ -403,13 +538,19 @@ impl RecurrentStatePool {
             recurrent_dtype,
             device: device.clone(),
             pending_transitions: None,
+            deferred_state: None,
         })
     }
 
     fn resized_storage(
         &self,
         new_capacity: usize,
-    ) -> Result<(Tensor, Tensor, Option<GdnPendingTransitionPool>)> {
+    ) -> Result<(
+        Tensor,
+        Tensor,
+        Option<GdnPendingTransitionPool>,
+        Option<GdnDeferredStatePool>,
+    )> {
         let physical_capacity = new_capacity
             .checked_mul(self.checkpoint_lanes)
             .ok_or_else(|| candle_core::Error::msg("recurrent physical capacity overflow"))?;
@@ -429,7 +570,12 @@ impl RecurrentStatePool {
             .as_ref()
             .map(|pending| pending.resized(new_capacity))
             .transpose()?;
-        Ok((new_conv, new_recurrent, pending_transitions))
+        let deferred_state = self
+            .deferred_state
+            .as_ref()
+            .map(|deferred| deferred.resized(new_capacity))
+            .transpose()?;
+        Ok((new_conv, new_recurrent, pending_transitions, deferred_state))
     }
 
     fn install_resized_storage(
@@ -438,10 +584,12 @@ impl RecurrentStatePool {
         conv_state: Tensor,
         recurrent_state: Tensor,
         pending_transitions: Option<GdnPendingTransitionPool>,
+        deferred_state: Option<GdnDeferredStatePool>,
     ) {
         self.conv_state = conv_state;
         self.recurrent_state = recurrent_state;
         self.pending_transitions = pending_transitions;
+        self.deferred_state = deferred_state;
         self.allocated_slots.resize(new_capacity, false);
         self.capacity = new_capacity;
     }
@@ -480,6 +628,7 @@ impl RecurrentStatePool {
         self.capacity = capacity;
         self.checkpoint_lanes = checkpoint_lanes;
         self.pending_transitions = None;
+        self.deferred_state = None;
     }
 
     fn install_checkpoint_storage(
@@ -512,6 +661,20 @@ impl RecurrentStatePool {
         self.pending_transitions = Some(pending);
     }
 
+    fn deferred_state_storage(&self, spec: GdnDeferredStateSpec) -> Result<GdnDeferredStatePool> {
+        GdnDeferredStatePool::new(
+            self.capacity,
+            &self.state_dims,
+            self.state_layout,
+            &self.device,
+            spec,
+        )
+    }
+
+    fn install_deferred_state_storage(&mut self, deferred: GdnDeferredStatePool) {
+        self.deferred_state = Some(deferred);
+    }
+
     fn clear_pending_transition_slot(&mut self, slot_idx: usize) -> Result<()> {
         if let Some(pending) = &mut self.pending_transitions {
             pending.clear_slot(slot_idx)?;
@@ -522,6 +685,20 @@ impl RecurrentStatePool {
     fn clear_pending_transition_metadata(&mut self) -> Result<()> {
         if let Some(pending) = &mut self.pending_transitions {
             pending.clear_metadata()?;
+        }
+        Ok(())
+    }
+
+    fn clear_deferred_state_slot(&self, slot_idx: usize) -> Result<()> {
+        if let Some(deferred) = &self.deferred_state {
+            deferred.clear_slot(slot_idx)?;
+        }
+        Ok(())
+    }
+
+    fn clear_deferred_state_metadata(&self) -> Result<()> {
+        if let Some(deferred) = &self.deferred_state {
+            deferred.clear_metadata()?;
         }
         Ok(())
     }
@@ -673,6 +850,7 @@ impl RecurrentStatePool {
         if let Some(pending) = &mut self.pending_transitions {
             pending.clear_slot(slot_idx)?;
         }
+        self.clear_deferred_state_slot(slot_idx)?;
         Ok(())
     }
 
@@ -756,6 +934,10 @@ impl RecurrentStatePool {
     pub(crate) fn pending_transitions(&self) -> Option<&GdnPendingTransitionPool> {
         self.pending_transitions.as_ref()
     }
+
+    pub(crate) fn deferred_state(&self) -> Option<&GdnDeferredStatePool> {
+        self.deferred_state.as_ref()
+    }
 }
 
 impl Clone for RecurrentStatePool {
@@ -775,6 +957,7 @@ impl Clone for RecurrentStatePool {
             recurrent_dtype: self.recurrent_dtype,
             device: self.device.clone(),
             pending_transitions: self.pending_transitions.clone(),
+            deferred_state: self.deferred_state.clone(),
         }
     }
 }
@@ -962,6 +1145,7 @@ impl HybridCache {
         for cache in &mut self.caches {
             if let HybridLayerCache::Recurrent(pool) = cache {
                 pool.clear_pending_transition_slot(slot_idx)?;
+                pool.clear_deferred_state_slot(slot_idx)?;
                 let released = pool.free(slot_idx);
                 debug_assert!(released);
             }
@@ -1039,6 +1223,7 @@ impl HybridCache {
                     .expect("one checkpoint allocation per recurrent pool");
                 pool.install_checkpoint_storage(physical_lanes, conv_state, recurrent_state);
                 pool.pending_transitions = None;
+                pool.deferred_state = None;
             }
         }
         self.checkpoint_lanes = checkpoint_lanes;
@@ -1355,7 +1540,7 @@ impl HybridCache {
         let mut storage = storage.into_iter();
         for cache in &mut self.caches {
             if let HybridLayerCache::Recurrent(pool) = cache {
-                let (conv_state, recurrent_state, pending_transitions) = storage
+                let (conv_state, recurrent_state, pending_transitions, deferred_state) = storage
                     .next()
                     .expect("one resized allocation per recurrent pool");
                 pool.install_resized_storage(
@@ -1363,6 +1548,7 @@ impl HybridCache {
                     conv_state,
                     recurrent_state,
                     pending_transitions,
+                    deferred_state,
                 );
             }
         }
@@ -1461,6 +1647,117 @@ impl HybridCache {
         }
         self.advance_recurrent_storage_generation();
         tracing::info!(storage_bytes, "Reserved GDN speculative transition storage");
+        Ok(true)
+    }
+
+    pub(crate) fn reserve_gdn_deferred_state(
+        &mut self,
+        spec: GdnDeferredStateSpec,
+    ) -> Result<bool> {
+        if spec.depth != crate::cuda::gdn::GDN_DEFERRED_STATE_DEPTH {
+            candle_core::bail!(
+                "GDN deferred state depth {} does not match kernel depth {}",
+                spec.depth,
+                crate::cuda::gdn::GDN_DEFERRED_STATE_DEPTH
+            );
+        }
+        if self.slot_owners.iter().any(Option::is_some) {
+            candle_core::bail!(
+                "GDN deferred state must be reserved before recurrent slot allocation"
+            );
+        }
+        let recurrent_pools = self
+            .caches
+            .iter()
+            .filter_map(HybridLayerCache::as_recurrent_pool)
+            .collect::<Vec<_>>();
+        if recurrent_pools.is_empty() {
+            candle_core::bail!("hybrid cache has no recurrent state pool");
+        }
+        let existing = recurrent_pools
+            .iter()
+            .map(|pool| pool.deferred_state().map(GdnDeferredStatePool::spec))
+            .collect::<Vec<_>>();
+        if existing.iter().all(|configured| *configured == Some(spec)) {
+            return Ok(false);
+        }
+        if existing.iter().any(Option::is_some) {
+            candle_core::bail!("GDN deferred state pool configuration diverged");
+        }
+        let storage = recurrent_pools
+            .into_iter()
+            .map(|pool| pool.deferred_state_storage(spec))
+            .collect::<Result<Vec<_>>>()?;
+        let storage_bytes = storage.iter().try_fold(0usize, |bytes, deferred| {
+            bytes
+                .checked_add(deferred.storage_bytes()?)
+                .ok_or_else(|| candle_core::Error::msg("GDN deferred state storage size overflow"))
+        })?;
+        let mut storage = storage.into_iter();
+        for cache in &mut self.caches {
+            if let HybridLayerCache::Recurrent(pool) = cache {
+                pool.install_deferred_state_storage(
+                    storage
+                        .next()
+                        .expect("one deferred-state allocation per recurrent pool"),
+                );
+            }
+        }
+        self.advance_recurrent_storage_generation();
+        tracing::info!(storage_bytes, "Reserved GDN deferred-state storage");
+        Ok(true)
+    }
+
+    pub(crate) fn uses_gdn_deferred_state(&self) -> bool {
+        let mut recurrent_pools = self
+            .caches
+            .iter()
+            .filter_map(HybridLayerCache::as_recurrent_pool);
+        recurrent_pools
+            .next()
+            .is_some_and(|pool| pool.deferred_state().is_some())
+            && recurrent_pools.all(|pool| pool.deferred_state().is_some())
+    }
+
+    pub(crate) fn disable_gdn_deferred_state(&mut self) -> Result<bool> {
+        if self.slot_owners.iter().any(Option::is_some) {
+            candle_core::bail!(
+                "GDN deferred state must be disabled before recurrent slot allocation"
+            );
+        }
+        let recurrent_pools = self
+            .caches
+            .iter()
+            .filter_map(HybridLayerCache::as_recurrent_pool)
+            .collect::<Vec<_>>();
+        if recurrent_pools.is_empty() {
+            return Ok(false);
+        }
+        let configured = recurrent_pools
+            .iter()
+            .map(|pool| pool.deferred_state().is_some())
+            .collect::<Vec<_>>();
+        if configured.iter().all(|&configured| !configured) {
+            return Ok(false);
+        }
+        if configured.iter().any(|&configured| !configured) {
+            candle_core::bail!("GDN deferred state pool configuration diverged");
+        }
+        let storage_bytes = recurrent_pools.iter().try_fold(0usize, |bytes, pool| {
+            let deferred = pool
+                .deferred_state()
+                .expect("GDN deferred state configuration was validated");
+            bytes
+                .checked_add(deferred.storage_bytes()?)
+                .ok_or_else(|| candle_core::Error::msg("GDN deferred state storage size overflow"))
+        })?;
+        for cache in &mut self.caches {
+            if let HybridLayerCache::Recurrent(pool) = cache {
+                pool.deferred_state = None;
+            }
+        }
+        self.advance_recurrent_storage_generation();
+        tracing::info!(storage_bytes, "Disabled GDN deferred-state storage");
         Ok(true)
     }
 
@@ -1670,6 +1967,7 @@ impl HybridCache {
         for cache in &mut self.caches {
             if let HybridLayerCache::Recurrent(pool) = cache {
                 pool.clear_pending_transition_slot(slot_idx)?;
+                pool.clear_deferred_state_slot(slot_idx)?;
                 let released = pool.free(slot_idx);
                 debug_assert!(released);
             }
@@ -1742,6 +2040,7 @@ impl HybridCache {
                         .expect("one reset allocation per recurrent pool");
                     pool.install_checkpoint_storage(physical_lanes, conv_state, recurrent_state);
                     pool.clear_pending_transition_metadata()?;
+                    pool.clear_deferred_state_metadata()?;
                     pool.allocated_slots.fill(false);
                     pool.allocated_count = 0;
                 }
@@ -2508,6 +2807,127 @@ mod tests {
                 vec![0; 3]
             );
         }
+        Ok(())
+    }
+
+    #[test]
+    fn deferred_state_storage_tracks_capacity_and_slot_lifecycle() -> Result<()> {
+        let mut cache = HybridCache::new(
+            gdn_config(vec![
+                HybridLayerType::Recurrent,
+                HybridLayerType::Attention,
+                HybridLayerType::Recurrent,
+            ]),
+            DType::BF16,
+            &[Device::Cpu, Device::Cpu, Device::Cpu],
+        )?;
+        let depth = crate::cuda::gdn::GDN_DEFERRED_STATE_DEPTH;
+        assert!(cache
+            .reserve_gdn_deferred_state(GdnDeferredStateSpec {
+                num_k_heads: 1,
+                depth: depth - 1,
+            })
+            .is_err());
+        let spec = GdnDeferredStateSpec {
+            num_k_heads: 1,
+            depth,
+        };
+        assert!(cache.reserve_gdn_deferred_state(spec)?);
+        assert!(!cache.reserve_gdn_deferred_state(spec)?);
+        assert!(cache.uses_gdn_deferred_state());
+
+        for layer_idx in [0, 2] {
+            let HybridLayerCache::Recurrent(pool) = cache.get(layer_idx).unwrap() else {
+                unreachable!()
+            };
+            let deferred = pool.deferred_state().unwrap();
+            assert_eq!(deferred.capacity, INITIAL_POOL_CAPACITY);
+            assert_eq!(deferred.key.dims(), &[9, depth, 1, 4]);
+            assert_eq!(deferred.delta.dims(), &[9, depth, 3, 5]);
+            assert_eq!(deferred.decay.dims(), &[9, depth, 3]);
+            assert_eq!(deferred.pending_rows.dims(), &[9]);
+            assert!(deferred.storage_bytes()? > 0);
+        }
+
+        let slots = (0..INITIAL_POOL_CAPACITY)
+            .map(|sequence_id| cache.allocate_seq(sequence_id))
+            .collect::<Result<Vec<_>>>()?;
+        for layer_idx in [0, 2] {
+            let HybridLayerCache::Recurrent(pool) = cache.get_mut(layer_idx).unwrap() else {
+                unreachable!()
+            };
+            let deferred = pool.deferred_state.as_mut().unwrap();
+            deferred.key = Tensor::ones(deferred.key.shape().clone(), DType::F32, &Device::Cpu)?;
+            deferred.delta =
+                Tensor::ones(deferred.delta.shape().clone(), DType::F32, &Device::Cpu)?;
+            deferred.decay =
+                Tensor::ones(deferred.decay.shape().clone(), DType::F32, &Device::Cpu)?;
+            deferred.pending_rows.slice_set(
+                &Tensor::from_vec(vec![3u32; INITIAL_POOL_CAPACITY], (9,), &Device::Cpu)?,
+                0,
+                0,
+            )?;
+        }
+
+        assert_eq!(cache.allocate_seq(INITIAL_POOL_CAPACITY)?, 9);
+        assert_eq!(cache.recurrent_capacity(), 18);
+        for layer_idx in [0, 2] {
+            let HybridLayerCache::Recurrent(pool) = cache.get(layer_idx).unwrap() else {
+                unreachable!()
+            };
+            let deferred = pool.deferred_state().unwrap();
+            assert_eq!(deferred.capacity, 18);
+            assert_eq!(deferred.pending_rows.to_vec1::<u32>()?[0], 3);
+            assert_eq!(deferred.pending_rows.to_vec1::<u32>()?[9], 0);
+            assert_eq!(
+                deferred.key.i(0)?.flatten_all()?.to_vec1::<f32>()?,
+                vec![1.0; depth * 4]
+            );
+        }
+
+        let checkpoint = cache.snapshot_recurrent_checkpoint_state(slots[1])?;
+        cache.restore_recurrent_checkpoint_state(slots[1], &checkpoint)?;
+        for layer_idx in [0, 2] {
+            let HybridLayerCache::Recurrent(pool) = cache.get(layer_idx).unwrap() else {
+                unreachable!()
+            };
+            let deferred = pool.deferred_state().unwrap();
+            assert_eq!(deferred.pending_rows.to_vec1::<u32>()?[1], 0);
+        }
+
+        assert!(cache.release_seq(0, slots[0])?);
+        for layer_idx in [0, 2] {
+            let HybridLayerCache::Recurrent(pool) = cache.get(layer_idx).unwrap() else {
+                unreachable!()
+            };
+            let deferred = pool.deferred_state().unwrap();
+            assert_eq!(deferred.pending_rows.to_vec1::<u32>()?[0], 0);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn deferred_state_can_only_be_disabled_before_slot_allocation() -> Result<()> {
+        let spec = GdnDeferredStateSpec {
+            num_k_heads: 1,
+            depth: crate::cuda::gdn::GDN_DEFERRED_STATE_DEPTH,
+        };
+        let mut cache = HybridCache::new(
+            gdn_config(vec![HybridLayerType::Recurrent]),
+            DType::BF16,
+            &[Device::Cpu],
+        )?;
+        cache.reserve_gdn_deferred_state(spec)?;
+        let generation = cache.recurrent_storage_generation();
+        assert!(cache.disable_gdn_deferred_state()?);
+        assert_eq!(cache.recurrent_storage_generation(), generation + 1);
+        assert!(!cache.uses_gdn_deferred_state());
+        assert!(!cache.disable_gdn_deferred_state()?);
+
+        cache.reserve_gdn_deferred_state(spec)?;
+        cache.allocate_seq(0)?;
+        assert!(cache.disable_gdn_deferred_state().is_err());
+        assert!(cache.uses_gdn_deferred_state());
         Ok(())
     }
 
@@ -3547,6 +3967,7 @@ impl HybridCache {
             if let HybridLayerCache::Recurrent(pool) = cache {
                 let state = states.next().expect("snapshot count checked above");
                 pool.clear_pending_transition_slot(slot_idx)?;
+                pool.clear_deferred_state_slot(slot_idx)?;
                 let idx_tensor = Tensor::from_vec(vec![physical_slot], (1,), pool.device())?;
                 let conv_state = state.conv_state.to_device(pool.device())?;
                 let recurrent_state = state.recurrent_state.to_device(pool.device())?;

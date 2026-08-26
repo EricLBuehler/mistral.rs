@@ -151,6 +151,7 @@ pub(crate) fn cache_finished_sequence(
             );
             return Ok(());
         };
+        this.flush_recurrent_speculative_transitions(&[*seq.id()])?;
         match this
             .cache()
             .hybrid()

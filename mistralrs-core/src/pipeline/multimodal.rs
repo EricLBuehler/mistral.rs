@@ -1442,6 +1442,8 @@ impl Loader for MultimodalLoader {
         } else {
             recurrent_pool_grew
         };
+        let recurrent_pool_grew =
+            model.reserve_recurrent_decode_deferred_storage()? || recurrent_pool_grew;
         #[cfg(feature = "cuda")]
         if recurrent_pool_grew {
             super::synchronize_cuda_contexts(&device, pipeline_mapper.as_ref())?;
@@ -1884,6 +1886,7 @@ impl MultimodalPipeline {
         if self.uses_nonmutating_recurrent_transition_log(batch_kind) {
             return Ok(None);
         }
+        self.model.flush_recurrent_state_for_current_batch()?;
         let hybrid_cache = self.model.cache().hybrid();
         let Some(mut indices) = hybrid_cache
             .logical_state_indices_host()
@@ -2790,6 +2793,10 @@ impl Pipeline for MultimodalPipeline {
                 "MTP speculative decoding currently requires PagedAttention for this pipeline."
             );
         }
+        if matches!(config, crate::speculative::SpeculativeConfig::Mtp(_)) {
+            self.cleanup_cuda_graphs();
+            self.model.disable_recurrent_decode_deferred_storage()?;
+        }
         if let Some(info) = self
             .model
             .attach_speculative_with_runtime(config, runtime)?
@@ -2804,7 +2811,7 @@ impl Pipeline for MultimodalPipeline {
     }
 
     fn flush_recurrent_speculative_transitions(
-        &mut self,
+        &self,
         seq_ids: &[usize],
     ) -> candle_core::Result<()> {
         self.model.flush_recurrent_speculative_transitions(seq_ids)

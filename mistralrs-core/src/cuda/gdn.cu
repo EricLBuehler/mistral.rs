@@ -3160,6 +3160,7 @@ constexpr int GDN_SPEC_FUSED_VALUES_PER_WARP =
 constexpr int GDN_SPEC_FUSED_PAIR_LOW_GRID_MAX = 144;
 constexpr int GDN_SPEC_FUSED_PAIR_HIGH_GRID_MIN = 768;
 constexpr uint32_t GDN_SPEC_CHECKPOINT_PAD_SLOT = 0xffffffffu;
+constexpr int GDN_DEFERRED_STATE_DEPTH = 4;
 
 __device__ __forceinline__ size_t
 gdn_spec_checkpoint_base(uint32_t active_slot, int checkpoint_lanes) {
@@ -3994,6 +3995,502 @@ __global__ __launch_bounds__(GDN_SPEC_FUSED_THREADS, 2)
               silu_gate);
     }
   }
+}
+
+__global__ __launch_bounds__(GDN_SPEC_FUSED_THREADS, 2)
+    void gdn_deferred_recurrence_rmsnorm_gate_value_major_128_kernel(
+        const __nv_bfloat16 *__restrict__ mixed_qkv,
+        const __nv_bfloat16 *__restrict__ b,
+        const __nv_bfloat16 *__restrict__ a,
+        const float *__restrict__ a_log,
+        const float *__restrict__ dt_bias, float *__restrict__ state_pool,
+        __nv_bfloat16 *__restrict__ output,
+        const uint32_t *__restrict__ active_slots,
+        float *__restrict__ deferred_key,
+        float *__restrict__ deferred_delta,
+        float *__restrict__ deferred_decay,
+        const uint32_t *__restrict__ deferred_cursor,
+        const __nv_bfloat16 *__restrict__ gate,
+        const __nv_bfloat16 *__restrict__ norm_weight,
+        int64_t b_stride_b, int64_t b_stride_h, int64_t a_stride_b,
+        int64_t a_stride_h, int64_t gate_stride_b,
+        int64_t gate_stride_h, int64_t gate_stride_v, int batch_size,
+        int capacity, int num_k_heads, int num_v_heads,
+        int tiled_v_heads, float norm_eps) {
+  constexpr int K = GDN_DECODE_VALUE_MAJOR_K;
+  constexpr int V = GDN_DECODE_VALUE_MAJOR_V;
+  constexpr int VALUES_PER_WARP = GDN_SPEC_FUSED_VALUES_PER_WARP;
+  const int batch_idx = blockIdx.x;
+  const int value_head = blockIdx.y;
+  const int tid = threadIdx.x;
+  const int lane = tid & 31;
+  const int warp = tid >> 5;
+  if (batch_idx >= batch_size) {
+    return;
+  }
+
+  const uint32_t active_slot = active_slots[batch_idx];
+  if (active_slot == GDN_SPEC_CHECKPOINT_PAD_SLOT || active_slot >= capacity) {
+    for (int value = tid; value < V; value += GDN_SPEC_FUSED_THREADS) {
+      output[((size_t)batch_idx * num_v_heads + value_head) * V + value] =
+          (__nv_bfloat16)0.0f;
+    }
+    return;
+  }
+
+  const uint32_t deferred_rows = deferred_cursor[active_slot];
+  if (deferred_rows >= GDN_DEFERRED_STATE_DEPTH) {
+    return;
+  }
+  const int values_per_group = num_v_heads / num_k_heads;
+  const int key_head = tiled_v_heads
+                           ? value_head % num_k_heads
+                           : value_head / values_per_group;
+  const bool key_leader = tiled_v_heads
+                              ? value_head < num_k_heads
+                              : value_head % values_per_group == 0;
+  const int key_dim = num_k_heads * K;
+  const int value_dim = num_v_heads * V;
+  const int conv_dim = 2 * key_dim + value_dim;
+  const __nv_bfloat16 *row = mixed_qkv + (size_t)batch_idx * conv_dim;
+  float *source =
+      state_pool + ((size_t)active_slot * num_v_heads + value_head) * V * K;
+
+  __shared__ __align__(16) float shared_state[GDN_SPEC_FUSED_VALUE_CHUNK][K];
+  __shared__ float shared_query[K];
+  __shared__ float shared_key[K];
+  __shared__ float shared_pending_key[GDN_DEFERRED_STATE_DEPTH][K];
+  __shared__ float shared_pending_decay[GDN_DEFERRED_STATE_DEPTH];
+  __shared__ __nv_bfloat16 shared_output[V];
+  __shared__ float shared_beta;
+  __shared__ float shared_decay;
+
+  gdn_spec_copy_state_chunk(&shared_state[0][0], source, 0, tid);
+  for (int linear = tid; linear < (int)deferred_rows * K;
+       linear += GDN_SPEC_FUSED_THREADS) {
+    const int position = linear / K;
+    const int key = linear - position * K;
+    shared_pending_key[position][key] =
+        deferred_key[(((size_t)active_slot * GDN_DEFERRED_STATE_DEPTH +
+                       position) *
+                          num_k_heads +
+                      key_head) *
+                         K +
+                     key];
+  }
+  for (int position = tid; position < (int)deferred_rows;
+       position += GDN_SPEC_FUSED_THREADS) {
+    shared_pending_decay[position] =
+        deferred_decay[((size_t)active_slot * GDN_DEFERRED_STATE_DEPTH +
+                        position) *
+                           num_v_heads +
+                       value_head];
+  }
+
+  if (warp == 0) {
+    float4 query = gdn_load_state_x4(row + key_head * K + lane * 4);
+    float4 key =
+        gdn_load_state_x4(row + key_dim + key_head * K + lane * 4);
+    float query_norm = query.x * query.x + query.y * query.y +
+                       query.z * query.z + query.w * query.w;
+    float key_norm =
+        key.x * key.x + key.y * key.y + key.z * key.z + key.w * key.w;
+    query_norm = gdn_warp_sum<32>(query_norm);
+    key_norm = gdn_warp_sum<32>(key_norm);
+    const float query_multiplier =
+        rsqrtf(query_norm + 1.0e-6f) * rsqrtf((float)K);
+    const float key_multiplier = rsqrtf(key_norm + 1.0e-6f);
+    const float query_values[4] = {query.x, query.y, query.z, query.w};
+    const float key_values[4] = {key.x, key.y, key.z, key.w};
+#pragma unroll
+    for (int i = 0; i < 4; i++) {
+      const int key_idx = lane * 4 + i;
+      shared_query[key_idx] = query_values[i] * query_multiplier;
+      shared_key[key_idx] = key_values[i] * key_multiplier;
+    }
+    if (lane == 0) {
+      const float b_value =
+          (float)b[(size_t)batch_idx * b_stride_b +
+                   value_head * b_stride_h];
+      const float a_value =
+          (float)a[(size_t)batch_idx * a_stride_b +
+                   value_head * a_stride_h] +
+          dt_bias[value_head];
+      shared_beta = 1.0f / (1.0f + expf(-b_value));
+      shared_decay =
+          expf(-expf(a_log[value_head]) * gdn_spec_softplus(a_value));
+    }
+  }
+  __syncthreads();
+
+  if (key_leader) {
+    for (int key = tid; key < K; key += GDN_SPEC_FUSED_THREADS) {
+      deferred_key[(((size_t)active_slot * GDN_DEFERRED_STATE_DEPTH +
+                     deferred_rows) *
+                        num_k_heads +
+                    key_head) *
+                       K +
+                   key] = shared_key[key];
+    }
+  }
+  if (tid == 0) {
+    deferred_decay[((size_t)active_slot * GDN_DEFERRED_STATE_DEPTH +
+                    deferred_rows) *
+                       num_v_heads +
+                   value_head] = shared_decay;
+  }
+
+  const int key_base = lane * 4;
+  int value_rows[VALUES_PER_WARP];
+#pragma unroll
+  for (int row_idx = 0; row_idx < VALUES_PER_WARP; row_idx++) {
+    value_rows[row_idx] = warp + row_idx * GDN_SPEC_FUSED_WARPS;
+  }
+
+#pragma unroll
+  for (int chunk = 0; chunk < GDN_SPEC_FUSED_VALUE_CHUNKS; chunk++) {
+    gdn_cp_async_wait();
+    __syncthreads();
+    float4 state[VALUES_PER_WARP];
+#pragma unroll
+    for (int row_idx = 0; row_idx < VALUES_PER_WARP; row_idx++) {
+      state[row_idx] =
+          gdn_load_state_x4(&shared_state[value_rows[row_idx]][key_base]);
+    }
+    __syncthreads();
+    if (chunk + 1 < GDN_SPEC_FUSED_VALUE_CHUNKS) {
+      gdn_spec_copy_state_chunk(&shared_state[0][0], source, chunk + 1, tid);
+    }
+
+#pragma unroll
+    for (int position = 0; position < GDN_DEFERRED_STATE_DEPTH - 1;
+         position++) {
+      if (position < deferred_rows) {
+        const float4 key = *reinterpret_cast<const float4 *>(
+            &shared_pending_key[position][key_base]);
+        const float decay = shared_pending_decay[position];
+#pragma unroll
+        for (int row_idx = 0; row_idx < VALUES_PER_WARP; row_idx++) {
+          const int value = chunk * GDN_SPEC_FUSED_VALUE_CHUNK +
+                            value_rows[row_idx];
+          float delta = lane == 0
+                            ? deferred_delta
+                                  [(((size_t)active_slot *
+                                         GDN_DEFERRED_STATE_DEPTH +
+                                     position) *
+                                        num_v_heads +
+                                    value_head) *
+                                       V +
+                                   value]
+                            : 0.0f;
+          delta = __shfl_sync(0xffffffff, delta, 0);
+          state[row_idx].x =
+              __fmaf_rn(key.x, delta, state[row_idx].x * decay);
+          state[row_idx].y =
+              __fmaf_rn(key.y, delta, state[row_idx].y * decay);
+          state[row_idx].z =
+              __fmaf_rn(key.z, delta, state[row_idx].z * decay);
+          state[row_idx].w =
+              __fmaf_rn(key.w, delta, state[row_idx].w * decay);
+        }
+      }
+    }
+
+    const float4 query =
+        *reinterpret_cast<const float4 *>(&shared_query[key_base]);
+    const float4 key =
+        *reinterpret_cast<const float4 *>(&shared_key[key_base]);
+    float state_dot_key[VALUES_PER_WARP];
+#pragma unroll
+    for (int row_idx = 0; row_idx < VALUES_PER_WARP; row_idx++) {
+      state[row_idx].x *= shared_decay;
+      state[row_idx].y *= shared_decay;
+      state[row_idx].z *= shared_decay;
+      state[row_idx].w *= shared_decay;
+      float dot = state[row_idx].x * key.x;
+      dot = __fmaf_rn(state[row_idx].y, key.y, dot);
+      dot = __fmaf_rn(state[row_idx].z, key.z, dot);
+      state_dot_key[row_idx] =
+          gdn_warp_sum<32>(__fmaf_rn(state[row_idx].w, key.w, dot));
+    }
+#pragma unroll
+    for (int row_idx = 0; row_idx < VALUES_PER_WARP; row_idx++) {
+      const int value =
+          chunk * GDN_SPEC_FUSED_VALUE_CHUNK + value_rows[row_idx];
+      float value_input =
+          lane == 0
+              ? (float)row[2 * key_dim + value_head * V + value]
+              : 0.0f;
+      value_input = __shfl_sync(0xffffffff, value_input, 0);
+      const float delta =
+          (value_input - state_dot_key[row_idx]) * shared_beta;
+      state[row_idx].x = __fmaf_rn(key.x, delta, state[row_idx].x);
+      state[row_idx].y = __fmaf_rn(key.y, delta, state[row_idx].y);
+      state[row_idx].z = __fmaf_rn(key.z, delta, state[row_idx].z);
+      state[row_idx].w = __fmaf_rn(key.w, delta, state[row_idx].w);
+      if (lane == 0) {
+        deferred_delta[(((size_t)active_slot * GDN_DEFERRED_STATE_DEPTH +
+                         deferred_rows) *
+                            num_v_heads +
+                        value_head) *
+                           V +
+                       value] = delta;
+      }
+      float state_dot_query = state[row_idx].x * query.x;
+      state_dot_query =
+          __fmaf_rn(state[row_idx].y, query.y, state_dot_query);
+      state_dot_query =
+          __fmaf_rn(state[row_idx].z, query.z, state_dot_query);
+      state_dot_query = gdn_warp_sum<32>(
+          __fmaf_rn(state[row_idx].w, query.w, state_dot_query));
+      if (lane == 0) {
+        shared_output[value] = (__nv_bfloat16)state_dot_query;
+      }
+    }
+
+    if (deferred_rows == GDN_DEFERRED_STATE_DEPTH - 1) {
+#pragma unroll
+      for (int row_idx = 0; row_idx < VALUES_PER_WARP; row_idx++) {
+        const int value = chunk * GDN_SPEC_FUSED_VALUE_CHUNK +
+                          value_rows[row_idx];
+        gdn_store_state_x4(source + (size_t)value * K + key_base,
+                           state[row_idx]);
+      }
+    }
+  }
+  __syncthreads();
+
+  if (warp == 0) {
+    float output_values[4];
+    float sum_square = 0.0f;
+#pragma unroll
+    for (int i = 0; i < 4; i++) {
+      const int value = lane + i * 32;
+      output_values[i] = (float)shared_output[value];
+      sum_square =
+          __fmaf_rn(output_values[i], output_values[i], sum_square);
+    }
+    sum_square = gdn_warp_sum<32>(sum_square);
+    const float rstd = rsqrtf(sum_square / (float)V + norm_eps);
+#pragma unroll
+    for (int i = 0; i < 4; i++) {
+      const int value = lane + i * 32;
+      const size_t gate_offset =
+          (size_t)batch_idx * gate_stride_b +
+          (size_t)value_head * gate_stride_h +
+          (size_t)value * gate_stride_v;
+      output[((size_t)batch_idx * num_v_heads + value_head) * V + value] =
+          (__nv_bfloat16)(output_values[i] * rstd *
+                          (float)norm_weight[value] *
+                          gdn_silu((float)gate[gate_offset]));
+    }
+  }
+}
+
+__global__ void gdn_deferred_cursor_advance_kernel(
+    uint32_t *__restrict__ deferred_cursor,
+    const uint32_t *__restrict__ active_slots, int batch_size,
+    int capacity) {
+  const int batch_idx = blockIdx.x * blockDim.x + threadIdx.x;
+  if (batch_idx >= batch_size) {
+    return;
+  }
+  const uint32_t active_slot = active_slots[batch_idx];
+  if (active_slot == GDN_SPEC_CHECKPOINT_PAD_SLOT || active_slot >= capacity) {
+    return;
+  }
+  const uint32_t cursor = deferred_cursor[active_slot];
+  deferred_cursor[active_slot] =
+      cursor == GDN_DEFERRED_STATE_DEPTH - 1 ? 0 : cursor + 1;
+}
+
+__global__ __launch_bounds__(GDN_SPEC_FUSED_THREADS, 2)
+    void gdn_flush_deferred_state_value_major_128_kernel(
+        float *__restrict__ state_pool,
+        const uint32_t *__restrict__ active_slots,
+        const float *__restrict__ deferred_key,
+        const float *__restrict__ deferred_delta,
+        const float *__restrict__ deferred_decay,
+        const uint32_t *__restrict__ deferred_cursor, int batch_size,
+        int capacity, int num_k_heads, int num_v_heads,
+        int tiled_v_heads) {
+  constexpr int K = GDN_DECODE_VALUE_MAJOR_K;
+  constexpr int V = GDN_DECODE_VALUE_MAJOR_V;
+  constexpr int VALUES_PER_WARP = GDN_SPEC_FUSED_VALUES_PER_WARP;
+  const int batch_idx = blockIdx.x;
+  const int value_head = blockIdx.y;
+  const int tid = threadIdx.x;
+  const int lane = tid & 31;
+  const int warp = tid >> 5;
+  if (batch_idx >= batch_size) {
+    return;
+  }
+  const uint32_t active_slot = active_slots[batch_idx];
+  if (active_slot == GDN_SPEC_CHECKPOINT_PAD_SLOT || active_slot >= capacity) {
+    return;
+  }
+  const uint32_t deferred_rows = deferred_cursor[active_slot];
+  if (deferred_rows == 0 || deferred_rows >= GDN_DEFERRED_STATE_DEPTH) {
+    return;
+  }
+  const int values_per_group = num_v_heads / num_k_heads;
+  const int key_head = tiled_v_heads
+                           ? value_head % num_k_heads
+                           : value_head / values_per_group;
+  float *source =
+      state_pool + ((size_t)active_slot * num_v_heads + value_head) * V * K;
+  __shared__ __align__(16) float shared_state[GDN_SPEC_FUSED_VALUE_CHUNK][K];
+  __shared__ float shared_pending_key[GDN_DEFERRED_STATE_DEPTH][K];
+  __shared__ float shared_pending_decay[GDN_DEFERRED_STATE_DEPTH];
+
+  gdn_spec_copy_state_chunk(&shared_state[0][0], source, 0, tid);
+  for (int linear = tid; linear < (int)deferred_rows * K;
+       linear += GDN_SPEC_FUSED_THREADS) {
+    const int position = linear / K;
+    const int key = linear - position * K;
+    shared_pending_key[position][key] =
+        deferred_key[(((size_t)active_slot * GDN_DEFERRED_STATE_DEPTH +
+                       position) *
+                          num_k_heads +
+                      key_head) *
+                         K +
+                     key];
+  }
+  for (int position = tid; position < (int)deferred_rows;
+       position += GDN_SPEC_FUSED_THREADS) {
+    shared_pending_decay[position] =
+        deferred_decay[((size_t)active_slot * GDN_DEFERRED_STATE_DEPTH +
+                        position) *
+                           num_v_heads +
+                       value_head];
+  }
+  __syncthreads();
+
+  const int key_base = lane * 4;
+  int value_rows[VALUES_PER_WARP];
+#pragma unroll
+  for (int row_idx = 0; row_idx < VALUES_PER_WARP; row_idx++) {
+    value_rows[row_idx] = warp + row_idx * GDN_SPEC_FUSED_WARPS;
+  }
+#pragma unroll
+  for (int chunk = 0; chunk < GDN_SPEC_FUSED_VALUE_CHUNKS; chunk++) {
+    gdn_cp_async_wait();
+    __syncthreads();
+    float4 state[VALUES_PER_WARP];
+#pragma unroll
+    for (int row_idx = 0; row_idx < VALUES_PER_WARP; row_idx++) {
+      state[row_idx] =
+          gdn_load_state_x4(&shared_state[value_rows[row_idx]][key_base]);
+    }
+    __syncthreads();
+    if (chunk + 1 < GDN_SPEC_FUSED_VALUE_CHUNKS) {
+      gdn_spec_copy_state_chunk(&shared_state[0][0], source, chunk + 1, tid);
+    }
+#pragma unroll
+    for (int position = 0; position < GDN_DEFERRED_STATE_DEPTH - 1;
+         position++) {
+      if (position < deferred_rows) {
+        const float4 key = *reinterpret_cast<const float4 *>(
+            &shared_pending_key[position][key_base]);
+        const float decay = shared_pending_decay[position];
+#pragma unroll
+        for (int row_idx = 0; row_idx < VALUES_PER_WARP; row_idx++) {
+          const int value = chunk * GDN_SPEC_FUSED_VALUE_CHUNK +
+                            value_rows[row_idx];
+          float delta = lane == 0
+                            ? deferred_delta
+                                  [(((size_t)active_slot *
+                                         GDN_DEFERRED_STATE_DEPTH +
+                                     position) *
+                                        num_v_heads +
+                                    value_head) *
+                                       V +
+                                   value]
+                            : 0.0f;
+          delta = __shfl_sync(0xffffffff, delta, 0);
+          state[row_idx].x =
+              __fmaf_rn(key.x, delta, state[row_idx].x * decay);
+          state[row_idx].y =
+              __fmaf_rn(key.y, delta, state[row_idx].y * decay);
+          state[row_idx].z =
+              __fmaf_rn(key.z, delta, state[row_idx].z * decay);
+          state[row_idx].w =
+              __fmaf_rn(key.w, delta, state[row_idx].w * decay);
+        }
+      }
+    }
+#pragma unroll
+    for (int row_idx = 0; row_idx < VALUES_PER_WARP; row_idx++) {
+      const int value =
+          chunk * GDN_SPEC_FUSED_VALUE_CHUNK + value_rows[row_idx];
+      gdn_store_state_x4(source + (size_t)value * K + key_base,
+                         state[row_idx]);
+    }
+  }
+}
+
+__global__ void gdn_deferred_cursor_clear_kernel(
+    uint32_t *__restrict__ deferred_cursor,
+    const uint32_t *__restrict__ active_slots, int batch_size,
+    int capacity) {
+  const int batch_idx = blockIdx.x * blockDim.x + threadIdx.x;
+  if (batch_idx >= batch_size) {
+    return;
+  }
+  const uint32_t active_slot = active_slots[batch_idx];
+  if (active_slot != GDN_SPEC_CHECKPOINT_PAD_SLOT && active_slot < capacity) {
+    deferred_cursor[active_slot] = 0;
+  }
+}
+
+extern "C" void gdn_deferred_recurrence_rmsnorm_gate_value_major_128(
+    const void *mixed_qkv, const void *b, const void *a,
+    const float *a_log, const float *dt_bias, float *state_pool, void *output,
+    const uint32_t *active_slots, float *deferred_key,
+    float *deferred_delta, float *deferred_decay, uint32_t *deferred_cursor,
+    const void *gate, const void *norm_weight, int64_t b_stride_b,
+    int64_t b_stride_h, int64_t a_stride_b, int64_t a_stride_h,
+    int64_t gate_stride_b, int64_t gate_stride_h, int64_t gate_stride_v,
+    int batch_size, int capacity, int num_k_heads, int num_v_heads,
+    int tiled_v_heads, float norm_eps, int64_t stream) {
+  const cudaStream_t custream = (cudaStream_t)stream;
+  dim3 recurrence_grid(batch_size, num_v_heads);
+  gdn_deferred_recurrence_rmsnorm_gate_value_major_128_kernel
+      <<<recurrence_grid, GDN_SPEC_FUSED_THREADS, 0, custream>>>(
+          (const __nv_bfloat16 *)mixed_qkv, (const __nv_bfloat16 *)b,
+          (const __nv_bfloat16 *)a, a_log, dt_bias, state_pool,
+          (__nv_bfloat16 *)output, active_slots, deferred_key,
+          deferred_delta, deferred_decay, deferred_cursor,
+          (const __nv_bfloat16 *)gate,
+          (const __nv_bfloat16 *)norm_weight, b_stride_b, b_stride_h,
+          a_stride_b, a_stride_h, gate_stride_b, gate_stride_h,
+          gate_stride_v, batch_size, capacity, num_k_heads, num_v_heads,
+          tiled_v_heads, norm_eps);
+  constexpr int FINALIZE_THREADS = 256;
+  gdn_deferred_cursor_advance_kernel
+      <<<(batch_size + FINALIZE_THREADS - 1) / FINALIZE_THREADS,
+         FINALIZE_THREADS, 0, custream>>>(deferred_cursor, active_slots,
+                                          batch_size, capacity);
+}
+
+extern "C" void gdn_flush_deferred_state_value_major_128(
+    float *state_pool, const uint32_t *active_slots,
+    const float *deferred_key, const float *deferred_delta,
+    const float *deferred_decay, uint32_t *deferred_cursor, int batch_size,
+    int capacity, int num_k_heads, int num_v_heads, int tiled_v_heads,
+    int64_t stream) {
+  const cudaStream_t custream = (cudaStream_t)stream;
+  dim3 flush_grid(batch_size, num_v_heads);
+  gdn_flush_deferred_state_value_major_128_kernel
+      <<<flush_grid, GDN_SPEC_FUSED_THREADS, 0, custream>>>(
+          state_pool, active_slots, deferred_key, deferred_delta,
+          deferred_decay, deferred_cursor, batch_size, capacity, num_k_heads,
+          num_v_heads, tiled_v_heads);
+  constexpr int FINALIZE_THREADS = 256;
+  gdn_deferred_cursor_clear_kernel
+      <<<(batch_size + FINALIZE_THREADS - 1) / FINALIZE_THREADS,
+         FINALIZE_THREADS, 0, custream>>>(deferred_cursor, active_slots,
+                                          batch_size, capacity);
 }
 
 template <typename T, typename StateT>

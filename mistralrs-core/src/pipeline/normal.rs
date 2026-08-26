@@ -189,6 +189,8 @@ pub(crate) fn build_normal_pipeline(
     } else {
         recurrent_pool_grew
     };
+    let recurrent_pool_grew =
+        model.reserve_recurrent_decode_deferred_storage()? || recurrent_pool_grew;
     #[cfg(feature = "cuda")]
     if recurrent_pool_grew {
         super::synchronize_cuda_contexts(&device, mapper.as_ref())?;
@@ -2174,6 +2176,9 @@ impl NormalPipeline {
         if transitions_supported && hybrid_cache.uses_recurrent_transition_log() {
             return Ok(None);
         }
+        drop(hybrid_cache);
+        self.model.flush_recurrent_state_for_current_batch()?;
+        let hybrid_cache = self.model.cache().hybrid();
         let Some(mut indices) = hybrid_cache
             .logical_state_indices_host()
             .map(ToOwned::to_owned)
@@ -2504,6 +2509,10 @@ impl Pipeline for NormalPipeline {
                 "MTP speculative decoding currently requires PagedAttention for this pipeline."
             );
         }
+        if matches!(config, crate::speculative::SpeculativeConfig::Mtp(_)) {
+            self.cleanup_cuda_graphs();
+            self.model.disable_recurrent_decode_deferred_storage()?;
+        }
         if let Some(info) = self
             .model
             .attach_speculative_with_runtime(config, runtime)?
@@ -2518,7 +2527,7 @@ impl Pipeline for NormalPipeline {
     }
 
     fn flush_recurrent_speculative_transitions(
-        &mut self,
+        &self,
         seq_ids: &[usize],
     ) -> candle_core::Result<()> {
         self.model.flush_recurrent_speculative_transitions(seq_ids)

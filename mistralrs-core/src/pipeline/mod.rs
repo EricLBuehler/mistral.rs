@@ -1774,7 +1774,7 @@ pub trait Pipeline:
     }
 
     fn flush_recurrent_speculative_transitions(
-        &mut self,
+        &self,
         _seq_ids: &[usize],
     ) -> candle_core::Result<()> {
         Ok(())

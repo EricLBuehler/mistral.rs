@@ -327,7 +327,7 @@ impl Pipeline for AnyMoePipeline {
     }
 
     fn flush_recurrent_speculative_transitions(
-        &mut self,
+        &self,
         seq_ids: &[usize],
     ) -> candle_core::Result<()> {
         get_mut_arcmutex!(self.target).flush_recurrent_speculative_transitions(seq_ids)

@@ -40,6 +40,7 @@ pub(crate) const GDN_SPEC_CHECKPOINT_MAX_CONV_WIDTH: usize = 16;
 pub(crate) const GDN_SPEC_CHECKPOINT_MAX_K: usize = 256;
 pub(crate) const GDN_SPEC_FUSED_MAX_TOKENS: usize = 8;
 pub(crate) const GDN_CHANNEL_BLOCK_SIZE: usize = 256;
+pub(crate) const GDN_DEFERRED_STATE_DEPTH: usize = 4;
 #[cfg(feature = "cuda")]
 #[allow(dead_code)]
 const GDN_TRANSITION_STAGE_POINTER_SEGMENTS: usize = 10;
@@ -2874,6 +2875,368 @@ pub fn speculative_recurrence_checkpoints_cuda(
     _context: GdnSpeculativeRecurrenceCheckpoints<'_>,
 ) -> Result<GdnSpeculativeRecurrenceOutput> {
     candle_core::bail!("speculative_recurrence_checkpoints_cuda requires the cuda feature")
+}
+
+#[cfg_attr(not(feature = "cuda"), allow(dead_code))]
+pub struct GdnDeferredRecurrence<'a> {
+    pub mixed_qkv: &'a Tensor,
+    pub b: &'a Tensor,
+    pub a: &'a Tensor,
+    pub a_log: &'a Tensor,
+    pub dt_bias: &'a Tensor,
+    pub state_pool: &'a Tensor,
+    pub active_slots: &'a Tensor,
+    pub deferred_key: &'a Tensor,
+    pub deferred_delta: &'a Tensor,
+    pub deferred_decay: &'a Tensor,
+    pub deferred_cursor: &'a Tensor,
+    pub gate: &'a Tensor,
+    pub norm_weight: &'a Tensor,
+    pub norm_eps: f64,
+    pub num_k_heads: usize,
+    pub num_v_heads: usize,
+    pub head_k_dim: usize,
+    pub head_v_dim: usize,
+    pub tiled_v_heads: bool,
+    pub state_layout: RecurrentStateLayout,
+}
+
+#[cfg(feature = "cuda")]
+pub fn deferred_recurrence_rmsnorm_gate_cuda(context: GdnDeferredRecurrence<'_>) -> Result<Tensor> {
+    use candle::cuda_backend::cudarc::driver::DevicePtr;
+    use candle_core as candle;
+    use core::ffi::c_void;
+
+    let GdnDeferredRecurrence {
+        mixed_qkv,
+        b,
+        a,
+        a_log,
+        dt_bias,
+        state_pool,
+        active_slots,
+        deferred_key,
+        deferred_delta,
+        deferred_decay,
+        deferred_cursor,
+        gate,
+        norm_weight,
+        norm_eps,
+        num_k_heads,
+        num_v_heads,
+        head_k_dim,
+        head_v_dim,
+        tiled_v_heads,
+        state_layout,
+    } = context;
+    let (batch_size, seq_len, conv_dim) = mixed_qkv.dims3()?;
+    if batch_size == 0 || seq_len != 1 || num_k_heads == 0 || num_v_heads == 0 {
+        candle::bail!("deferred GDN recurrence requires non-empty single-token input");
+    }
+    if mixed_qkv.dtype() != DType::BF16
+        || b.dtype() != DType::BF16
+        || a.dtype() != DType::BF16
+        || gate.dtype() != DType::BF16
+        || norm_weight.dtype() != DType::BF16
+        || state_pool.dtype() != DType::F32
+        || deferred_key.dtype() != DType::F32
+        || deferred_delta.dtype() != DType::F32
+        || deferred_decay.dtype() != DType::F32
+        || deferred_cursor.dtype() != DType::U32
+        || active_slots.dtype() != DType::U32
+    {
+        candle::bail!("deferred GDN recurrence requires BF16 activations and FP32 state");
+    }
+    if head_k_dim != GDN_DECODE_K_DIM
+        || head_v_dim != GDN_DECODE_V_DIM
+        || !num_v_heads.is_multiple_of(num_k_heads)
+        || state_layout != RecurrentStateLayout::GdnValueMajor
+    {
+        candle::bail!("deferred GDN recurrence requires value-major 128x128 state");
+    }
+    let expected_conv_dim = 2 * num_k_heads * head_k_dim + num_v_heads * head_v_dim;
+    if conv_dim != expected_conv_dim
+        || b.dims3()? != (batch_size, 1, num_v_heads)
+        || a.dims3()? != (batch_size, 1, num_v_heads)
+        || a_log.dims1()? != num_v_heads
+        || dt_bias.dims1()? != num_v_heads
+        || norm_weight.dims1()? != head_v_dim
+        || active_slots.dims1()? != batch_size
+    {
+        candle::bail!("deferred GDN recurrence input shapes are incompatible");
+    }
+    let (capacity, state_heads, state_v_dim, state_k_dim) = state_pool.dims4()?;
+    if capacity == 0
+        || state_heads != num_v_heads
+        || state_v_dim != head_v_dim
+        || state_k_dim != head_k_dim
+        || deferred_key.dims() != [capacity, GDN_DEFERRED_STATE_DEPTH, num_k_heads, head_k_dim]
+        || deferred_delta.dims() != [capacity, GDN_DEFERRED_STATE_DEPTH, num_v_heads, head_v_dim]
+        || deferred_decay.dims() != [capacity, GDN_DEFERRED_STATE_DEPTH, num_v_heads]
+        || deferred_cursor.dims() != [capacity]
+    {
+        candle::bail!("deferred GDN recurrence storage shapes are incompatible");
+    }
+    let gate_strides = {
+        let (_storage, layout) = gate.storage_and_layout();
+        let strides = layout.stride();
+        match gate.dims() {
+            [gate_batch, gate_seq, gate_heads, gate_width]
+                if (*gate_batch, *gate_seq, *gate_heads, *gate_width)
+                    == (batch_size, 1, num_v_heads, head_v_dim) =>
+            {
+                [strides[0], strides[2], strides[3]]
+            }
+            [gate_batch, gate_seq, gate_width]
+                if (*gate_batch, *gate_seq, *gate_width)
+                    == (batch_size, 1, num_v_heads * head_v_dim) =>
+            {
+                [strides[0], head_v_dim * strides[2], strides[2]]
+            }
+            _ => candle::bail!("deferred GDN recurrence gate shape is incompatible"),
+        }
+    };
+    if !norm_eps.is_finite() || norm_eps < 0.0 {
+        candle::bail!("deferred GDN recurrence epsilon must be finite and non-negative");
+    }
+    let device = mixed_qkv.device();
+    if !device.is_cuda() {
+        candle::bail!("deferred GDN recurrence requires CUDA");
+    }
+    if gdn_cuda_device_properties(device.as_cuda_device()?)?.compute_major
+        != GDN_DECODE_TUNED_COMPUTE_MAJOR
+    {
+        candle::bail!("deferred GDN recurrence requires compute capability 9.x");
+    }
+    for tensor in [
+        b,
+        a,
+        a_log,
+        dt_bias,
+        state_pool,
+        active_slots,
+        deferred_key,
+        deferred_delta,
+        deferred_decay,
+        deferred_cursor,
+        gate,
+        norm_weight,
+    ] {
+        if !tensor.device().same_device(device) {
+            candle::bail!("deferred GDN recurrence tensors must share one device");
+        }
+    }
+    for tensor in [
+        state_pool,
+        active_slots,
+        deferred_key,
+        deferred_delta,
+        deferred_decay,
+        deferred_cursor,
+    ] {
+        if !tensor.is_contiguous() {
+            candle::bail!("deferred GDN recurrence state must be contiguous");
+        }
+    }
+
+    let mixed_qkv = mixed_qkv.contiguous()?;
+    let a_log = a_log.to_dtype(DType::F32)?.contiguous()?;
+    let dt_bias = dt_bias.to_dtype(DType::F32)?.contiguous()?;
+    let norm_weight = norm_weight.contiguous()?;
+    let b_strides = {
+        let (_storage, layout) = b.storage_and_layout();
+        let strides = layout.stride();
+        [strides[0], strides[2]]
+    };
+    let a_strides = {
+        let (_storage, layout) = a.storage_and_layout();
+        let strides = layout.stride();
+        [strides[0], strides[2]]
+    };
+    let dev = device.as_cuda_device()?;
+    macro_rules! cuda_ptr {
+        ($tensor:expr, $ty:ty, $name:literal) => {{
+            let (storage, layout) = $tensor.storage_and_layout();
+            let storage = match &*storage {
+                candle::Storage::Cuda(storage) => storage.as_cuda_slice::<$ty>()?,
+                _ => candle::bail!(concat!($name, " must be CUDA")),
+            };
+            let pointer = storage
+                .slice(layout.start_offset()..)
+                .device_ptr(storage.stream())
+                .0;
+            pointer
+        }};
+    }
+    let output = unsafe { dev.alloc::<half::bf16>(batch_size * num_v_heads * head_v_dim) }?;
+    unsafe {
+        crate::cuda::ffi::gdn_deferred_recurrence_rmsnorm_gate_value_major_128(
+            cuda_ptr!(mixed_qkv, half::bf16, "mixed_qkv") as *const c_void,
+            cuda_ptr!(b, half::bf16, "b") as *const c_void,
+            cuda_ptr!(a, half::bf16, "a") as *const c_void,
+            cuda_ptr!(a_log, f32, "a_log") as *const f32,
+            cuda_ptr!(dt_bias, f32, "dt_bias") as *const f32,
+            cuda_ptr!(state_pool, f32, "state_pool") as *mut f32,
+            output.device_ptr(output.stream()).0 as *mut c_void,
+            cuda_ptr!(active_slots, u32, "active_slots") as *const u32,
+            cuda_ptr!(deferred_key, f32, "deferred_key") as *mut f32,
+            cuda_ptr!(deferred_delta, f32, "deferred_delta") as *mut f32,
+            cuda_ptr!(deferred_decay, f32, "deferred_decay") as *mut f32,
+            cuda_ptr!(deferred_cursor, u32, "deferred_cursor") as *mut u32,
+            cuda_ptr!(gate, half::bf16, "gate") as *const c_void,
+            cuda_ptr!(norm_weight, half::bf16, "norm_weight") as *const c_void,
+            b_strides[0] as i64,
+            b_strides[1] as i64,
+            a_strides[0] as i64,
+            a_strides[1] as i64,
+            gate_strides[0] as i64,
+            gate_strides[1] as i64,
+            gate_strides[2] as i64,
+            batch_size as i32,
+            capacity as i32,
+            num_k_heads as i32,
+            num_v_heads as i32,
+            i32::from(tiled_v_heads),
+            norm_eps as f32,
+            dev.cuda_stream().cu_stream() as i64,
+        );
+    }
+    Ok(Tensor::from((
+        candle::Storage::Cuda(candle::CudaStorage::wrap_cuda_slice(output, dev.clone())),
+        (batch_size, 1, num_v_heads, head_v_dim),
+    )))
+}
+
+#[cfg(not(feature = "cuda"))]
+#[allow(dead_code)]
+pub fn deferred_recurrence_rmsnorm_gate_cuda(
+    _context: GdnDeferredRecurrence<'_>,
+) -> Result<Tensor> {
+    candle_core::bail!("deferred_recurrence_rmsnorm_gate_cuda requires the cuda feature")
+}
+
+#[cfg_attr(not(feature = "cuda"), allow(dead_code))]
+pub struct GdnDeferredStateFlush<'a> {
+    pub state_pool: &'a Tensor,
+    pub active_slots: &'a Tensor,
+    pub deferred_key: &'a Tensor,
+    pub deferred_delta: &'a Tensor,
+    pub deferred_decay: &'a Tensor,
+    pub deferred_cursor: &'a Tensor,
+    pub num_k_heads: usize,
+    pub num_v_heads: usize,
+    pub head_k_dim: usize,
+    pub head_v_dim: usize,
+    pub tiled_v_heads: bool,
+    pub state_layout: RecurrentStateLayout,
+}
+
+#[cfg(feature = "cuda")]
+pub fn flush_deferred_state_cuda(context: GdnDeferredStateFlush<'_>) -> Result<()> {
+    use candle::cuda_backend::cudarc::driver::DevicePtr;
+    use candle_core as candle;
+
+    let GdnDeferredStateFlush {
+        state_pool,
+        active_slots,
+        deferred_key,
+        deferred_delta,
+        deferred_decay,
+        deferred_cursor,
+        num_k_heads,
+        num_v_heads,
+        head_k_dim,
+        head_v_dim,
+        tiled_v_heads,
+        state_layout,
+    } = context;
+    let batch_size = active_slots.dims1()?;
+    if batch_size == 0 || active_slots.dtype() != DType::U32 {
+        candle::bail!("deferred GDN flush requires non-empty u32 active slots");
+    }
+    if state_pool.dtype() != DType::F32
+        || deferred_key.dtype() != DType::F32
+        || deferred_delta.dtype() != DType::F32
+        || deferred_decay.dtype() != DType::F32
+        || deferred_cursor.dtype() != DType::U32
+        || head_k_dim != GDN_DECODE_K_DIM
+        || head_v_dim != GDN_DECODE_V_DIM
+        || num_k_heads == 0
+        || num_v_heads == 0
+        || !num_v_heads.is_multiple_of(num_k_heads)
+        || state_layout != RecurrentStateLayout::GdnValueMajor
+    {
+        candle::bail!("deferred GDN flush requires FP32 value-major 128x128 state");
+    }
+    let (capacity, state_heads, state_v_dim, state_k_dim) = state_pool.dims4()?;
+    if capacity == 0
+        || state_heads != num_v_heads
+        || state_v_dim != head_v_dim
+        || state_k_dim != head_k_dim
+        || deferred_key.dims() != [capacity, GDN_DEFERRED_STATE_DEPTH, num_k_heads, head_k_dim]
+        || deferred_delta.dims() != [capacity, GDN_DEFERRED_STATE_DEPTH, num_v_heads, head_v_dim]
+        || deferred_decay.dims() != [capacity, GDN_DEFERRED_STATE_DEPTH, num_v_heads]
+        || deferred_cursor.dims() != [capacity]
+    {
+        candle::bail!("deferred GDN flush storage shapes are incompatible");
+    }
+    let device = state_pool.device();
+    if !device.is_cuda()
+        || gdn_cuda_device_properties(device.as_cuda_device()?)?.compute_major
+            != GDN_DECODE_TUNED_COMPUTE_MAJOR
+    {
+        candle::bail!("deferred GDN flush requires compute capability 9.x CUDA");
+    }
+    for tensor in [
+        state_pool,
+        active_slots,
+        deferred_key,
+        deferred_delta,
+        deferred_decay,
+        deferred_cursor,
+    ] {
+        if !tensor.device().same_device(device) || !tensor.is_contiguous() {
+            candle::bail!("deferred GDN flush tensors must be contiguous on one CUDA device");
+        }
+    }
+    macro_rules! cuda_ptr {
+        ($tensor:expr, $ty:ty, $name:literal) => {{
+            let (storage, layout) = $tensor.storage_and_layout();
+            let storage = match &*storage {
+                candle::Storage::Cuda(storage) => storage.as_cuda_slice::<$ty>()?,
+                _ => candle::bail!(concat!($name, " must be CUDA")),
+            };
+            let pointer = storage
+                .slice(layout.start_offset()..)
+                .device_ptr(storage.stream())
+                .0;
+            pointer
+        }};
+    }
+    let dev = device.as_cuda_device()?;
+    unsafe {
+        crate::cuda::ffi::gdn_flush_deferred_state_value_major_128(
+            cuda_ptr!(state_pool, f32, "state_pool") as *mut f32,
+            cuda_ptr!(active_slots, u32, "active_slots") as *const u32,
+            cuda_ptr!(deferred_key, f32, "deferred_key") as *const f32,
+            cuda_ptr!(deferred_delta, f32, "deferred_delta") as *const f32,
+            cuda_ptr!(deferred_decay, f32, "deferred_decay") as *const f32,
+            cuda_ptr!(deferred_cursor, u32, "deferred_cursor") as *mut u32,
+            batch_size as i32,
+            capacity as i32,
+            num_k_heads as i32,
+            num_v_heads as i32,
+            i32::from(tiled_v_heads),
+            dev.cuda_stream().cu_stream() as i64,
+        );
+    }
+    Ok(())
+}
+
+#[cfg(not(feature = "cuda"))]
+#[allow(dead_code)]
+pub fn flush_deferred_state_cuda(_context: GdnDeferredStateFlush<'_>) -> Result<()> {
+    candle_core::bail!("flush_deferred_state_cuda requires the cuda feature")
 }
 
 #[cfg_attr(not(feature = "cuda"), allow(dead_code))]
@@ -8306,6 +8669,196 @@ mod tests {
                     RecurrentStateLayout::GdnValueMajor,
                 )?;
             }
+        }
+        Ok(())
+    }
+
+    #[test]
+    #[ignore = "requires an SM90 CUDA device"]
+    fn deferred_decode_matches_eager_across_wrap_and_flush_cuda() -> Result<()> {
+        const BATCH_SIZE: usize = 3;
+        const CAPACITY: usize = 5;
+        const NUM_K_HEADS: usize = 1;
+        const NUM_V_HEADS: usize = 2;
+        const HEAD_DIM: usize = 128;
+        const STEPS: usize = 14;
+        const NORM_EPS: f64 = 1.0e-6;
+
+        let dev = Device::new_cuda(0)?;
+        let key_dim = NUM_K_HEADS * HEAD_DIM;
+        let value_dim = NUM_V_HEADS * HEAD_DIM;
+        let conv_dim = 2 * key_dim + value_dim;
+        let mixed_qkv = tensor3(
+            patterned(BATCH_SIZE * STEPS * conv_dim, 301, 0.08, 0.01),
+            (BATCH_SIZE, STEPS, conv_dim),
+            &dev,
+        )?
+        .to_dtype(DType::BF16)?;
+        let b = tensor3(
+            patterned(BATCH_SIZE * STEPS * NUM_V_HEADS, 302, 0.2, 0.1),
+            (BATCH_SIZE, STEPS, NUM_V_HEADS),
+            &dev,
+        )?
+        .to_dtype(DType::BF16)?;
+        let a = tensor3(
+            patterned(BATCH_SIZE * STEPS * NUM_V_HEADS, 303, 0.18, -0.04),
+            (BATCH_SIZE, STEPS, NUM_V_HEADS),
+            &dev,
+        )?
+        .to_dtype(DType::BF16)?;
+        let gate = Tensor::from_vec(
+            patterned(BATCH_SIZE * STEPS * NUM_V_HEADS * HEAD_DIM, 304, 0.3, 0.02),
+            (BATCH_SIZE, STEPS, NUM_V_HEADS, HEAD_DIM),
+            &dev,
+        )?
+        .to_dtype(DType::BF16)?;
+        let a_log = Tensor::from_vec(
+            patterned(NUM_V_HEADS, 305, 0.05, -0.2),
+            (NUM_V_HEADS,),
+            &dev,
+        )?;
+        let dt_bias =
+            Tensor::from_vec(patterned(NUM_V_HEADS, 306, 0.1, 0.3), (NUM_V_HEADS,), &dev)?;
+        let norm_weight = Tensor::from_vec(patterned(HEAD_DIM, 307, 0.08, 1.0), (HEAD_DIM,), &dev)?
+            .to_dtype(DType::BF16)?;
+        let initial_state = Tensor::from_vec(
+            patterned(CAPACITY * NUM_V_HEADS * HEAD_DIM * HEAD_DIM, 308, 0.01, 0.0),
+            (CAPACITY, NUM_V_HEADS, HEAD_DIM, HEAD_DIM),
+            &dev,
+        )?;
+        let initial_state_host = flat(&initial_state)?;
+        let mut eager_state = initial_state.copy()?;
+        let deferred_state = initial_state.copy()?;
+        let active_slots = Tensor::from_vec(vec![4u32, GDN_PAD_SLOT, 1], (BATCH_SIZE,), &dev)?;
+        let deferred_key = Tensor::zeros(
+            (CAPACITY, GDN_DEFERRED_STATE_DEPTH, NUM_K_HEADS, HEAD_DIM),
+            DType::F32,
+            &dev,
+        )?;
+        let deferred_delta = Tensor::zeros(
+            (CAPACITY, GDN_DEFERRED_STATE_DEPTH, NUM_V_HEADS, HEAD_DIM),
+            DType::F32,
+            &dev,
+        )?;
+        let deferred_decay = Tensor::zeros(
+            (CAPACITY, GDN_DEFERRED_STATE_DEPTH, NUM_V_HEADS),
+            DType::F32,
+            &dev,
+        )?;
+        let deferred_cursor = Tensor::zeros((CAPACITY,), DType::U32, &dev)?;
+
+        let mut expected_cursor = 0usize;
+        for step in 0..STEPS {
+            let mixed_step = mixed_qkv.narrow(1, step, 1)?.contiguous()?;
+            let b_step = b.narrow(1, step, 1)?;
+            let a_step = a.narrow(1, step, 1)?;
+            let gate_step = gate.narrow(1, step, 1)?;
+            let eager_raw = fused_decode_recurrence_cuda(FusedDecodeRecurrence {
+                mixed_qkv: &mixed_step,
+                b: &b_step,
+                a: &a_step,
+                a_log: &a_log,
+                dt_bias: &dt_bias,
+                state: &mut eager_state,
+                batch_size: BATCH_SIZE,
+                num_k_heads: NUM_K_HEADS,
+                num_v_heads: NUM_V_HEADS,
+                head_k_dim: HEAD_DIM,
+                head_v_dim: HEAD_DIM,
+                tiled_v_heads: false,
+                state_layout: RecurrentStateLayout::GdnValueMajor,
+                slots: GdnStateSlots::Pooled(&active_slots),
+            })?
+            .reshape((BATCH_SIZE, 1, NUM_V_HEADS, HEAD_DIM))?;
+            let eager_output = rmsnorm_gated_cuda(&eager_raw, &gate_step, &norm_weight, NORM_EPS)?;
+            let deferred_output = deferred_recurrence_rmsnorm_gate_cuda(GdnDeferredRecurrence {
+                mixed_qkv: &mixed_step,
+                b: &b_step,
+                a: &a_step,
+                a_log: &a_log,
+                dt_bias: &dt_bias,
+                state_pool: &deferred_state,
+                active_slots: &active_slots,
+                deferred_key: &deferred_key,
+                deferred_delta: &deferred_delta,
+                deferred_decay: &deferred_decay,
+                deferred_cursor: &deferred_cursor,
+                gate: &gate_step,
+                norm_weight: &norm_weight,
+                norm_eps: NORM_EPS,
+                num_k_heads: NUM_K_HEADS,
+                num_v_heads: NUM_V_HEADS,
+                head_k_dim: HEAD_DIM,
+                head_v_dim: HEAD_DIM,
+                tiled_v_heads: false,
+                state_layout: RecurrentStateLayout::GdnValueMajor,
+            })?;
+            assert_close(
+                &format!("deferred output at step {step}"),
+                &flat(&deferred_output.to_dtype(DType::F32)?)?,
+                &flat(&eager_output.to_dtype(DType::F32)?)?,
+                2.0e-3,
+            );
+            assert_zero(
+                &format!("deferred padding output at step {step}"),
+                &deferred_output.narrow(0, 1, 1)?,
+            )?;
+
+            expected_cursor = (expected_cursor + 1) % GDN_DEFERRED_STATE_DEPTH;
+            let cursors = deferred_cursor.to_device(&Device::Cpu)?.to_vec1::<u32>()?;
+            assert_eq!(cursors[4], expected_cursor as u32);
+            assert_eq!(cursors[1], expected_cursor as u32);
+            assert_eq!(cursors[0], 0);
+            assert_eq!(cursors[2], 0);
+            assert_eq!(cursors[3], 0);
+
+            let flush_depth = match step {
+                8 => Some(1),
+                10 => Some(2),
+                13 => Some(3),
+                _ => None,
+            };
+            if let Some(expected_depth) = flush_depth {
+                assert_eq!(expected_cursor, expected_depth);
+                flush_deferred_state_cuda(GdnDeferredStateFlush {
+                    state_pool: &deferred_state,
+                    active_slots: &active_slots,
+                    deferred_key: &deferred_key,
+                    deferred_delta: &deferred_delta,
+                    deferred_decay: &deferred_decay,
+                    deferred_cursor: &deferred_cursor,
+                    num_k_heads: NUM_K_HEADS,
+                    num_v_heads: NUM_V_HEADS,
+                    head_k_dim: HEAD_DIM,
+                    head_v_dim: HEAD_DIM,
+                    tiled_v_heads: false,
+                    state_layout: RecurrentStateLayout::GdnValueMajor,
+                })?;
+                assert_eq!(
+                    deferred_cursor.to_device(&Device::Cpu)?.to_vec1::<u32>()?,
+                    vec![0; CAPACITY]
+                );
+                expected_cursor = 0;
+            }
+            if matches!(step, 3 | 7 | 8 | 10 | 13) {
+                assert_close(
+                    &format!("deferred materialized state at step {step}"),
+                    &flat(&deferred_state)?,
+                    &flat(&eager_state)?,
+                    0.0,
+                );
+            }
+        }
+
+        let deferred_state_host = flat(&deferred_state)?;
+        let slot_elements = NUM_V_HEADS * HEAD_DIM * HEAD_DIM;
+        for slot in [0usize, 2, 3] {
+            assert_close(
+                &format!("deferred untouched state slot {slot}"),
+                &deferred_state_host[slot * slot_elements..(slot + 1) * slot_elements],
+                &initial_state_host[slot * slot_elements..(slot + 1) * slot_elements],
+                0.0,
+            );
         }
         Ok(())
     }

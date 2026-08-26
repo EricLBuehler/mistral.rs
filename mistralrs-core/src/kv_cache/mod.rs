@@ -19,7 +19,9 @@ pub use full_cache::{EitherCache, LayerCaches};
 pub(crate) use hybrid_cache::RecurrentCheckpointStateSnapshot;
 #[cfg(feature = "cuda")]
 pub(crate) use hybrid_cache::GDN_PENDING_KEY_BANK_COUNT;
-pub(crate) use hybrid_cache::{GdnPendingTransitionPool, GdnPendingTransitionSpec};
+pub(crate) use hybrid_cache::{
+    GdnDeferredStatePool, GdnDeferredStateSpec, GdnPendingTransitionPool, GdnPendingTransitionSpec,
+};
 pub use hybrid_cache::{
     HybridCache, HybridCacheConfig, HybridLayerCache, HybridLayerType, RecurrentLayerConfig,
     RecurrentStateLayout, RecurrentStatePool, RecurrentStateSnapshot, RecurrentStateSpec,
