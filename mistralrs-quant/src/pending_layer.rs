@@ -10,8 +10,8 @@ use std::{
 use candle_core::{DType, Device, Result, Tensor};
 
 use crate::{
-    ActivationQuantizationScheme, DistributedKind, IsqJobOutput, IsqType, QuantMethod,
-    QuantMethodConfig, QuantizeOntoGuard, QuantizedActivation, QuantizedSerde,
+    ActivationQuantizationScheme, ActivationScaleLayout, DistributedKind, IsqJobOutput, IsqType,
+    QuantMethod, QuantMethodConfig, QuantizeOntoGuard, QuantizedActivation, QuantizedSerde,
 };
 
 enum PendingState {
@@ -179,6 +179,12 @@ impl QuantMethod for PendingIsqLayer {
         a: &Tensor,
     ) -> Option<ActivationQuantizationScheme> {
         self.resolve().ok()?.activation_quantization_scheme_for(a)
+    }
+
+    fn preferred_activation_scale_layout_for(&self, a: &Tensor) -> Option<ActivationScaleLayout> {
+        self.resolve()
+            .ok()?
+            .preferred_activation_scale_layout_for(a)
     }
 
     fn quantize_activation(&self, a: &Tensor) -> Result<QuantizedActivation> {

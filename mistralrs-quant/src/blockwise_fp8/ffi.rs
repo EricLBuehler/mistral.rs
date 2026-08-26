@@ -7,6 +7,28 @@ pub(crate) const HAVE_BLOCKWISE_GEMM_KERNELS: bool = cfg!(has_blockwise_fp8_kern
 pub(crate) const HAVE_CUTLASS_FP8_SM90_KERNELS: bool = cfg!(has_cutlass_fp8_sm90_kernels);
 pub(crate) const HAVE_DEEPGEMM_FP8_SM90_PROVIDER: bool = cfg!(has_deepgemm_fp8_sm90_provider);
 
+#[cfg(has_blockwise_fp8_kernels)]
+extern "C" {
+    pub(crate) fn mistralrs_fused_rms_norm_fp8_error_string(
+        status: i32,
+    ) -> *const core::ffi::c_char;
+
+    pub(crate) fn mistralrs_fused_add_rms_norm_quantize_bf16(
+        input: *const bf16,
+        residual: *const bf16,
+        weight: *const bf16,
+        residual_output: *mut bf16,
+        quantized_output: *mut F8E4M3,
+        scales: *mut f32,
+        inverse_rms: *mut f32,
+        rows: i32,
+        columns: i32,
+        scale_stride_m: i32,
+        epsilon: f32,
+        stream: *mut core::ffi::c_void,
+    ) -> i32;
+}
+
 #[cfg(has_deepgemm_fp8_sm90_provider)]
 pub(crate) const DEEPGEMM_SUCCESS: i32 = 0;
 #[cfg(has_deepgemm_fp8_sm90_provider)]

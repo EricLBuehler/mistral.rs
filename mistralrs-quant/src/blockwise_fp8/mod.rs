@@ -9,7 +9,7 @@ use candle_nn::Linear;
 #[cfg(all(feature = "cuda", has_deepgemm_fp8_sm90_provider))]
 mod deepgemm;
 mod ops;
-pub use ops::{fp8_blockwise_dequantize, fp8_blockwise_quantize};
+pub use ops::{fp8_blockwise_dequantize, fp8_blockwise_quantize, fused_add_rms_norm_quantized};
 #[cfg(feature = "cuda")]
 #[allow(unused_imports)]
 pub(crate) use ops::{fp8_blockwise_matmul, fp8_indexed_moe_gemm};
@@ -22,10 +22,10 @@ use crate::GluActivationType;
 use crate::{
     generate_isq, generate_isq_imatrix,
     hqq::{ISQ_HQQ_DEFAULT_OPT_STEPS, ISQ_HQQ_GROUP_SIZE},
-    make_dummy_or_error, ActivationQuantizationScheme, AfqBits, AfqGroupSize, AfqLayer, FP8Linear,
-    Fp8ActivationScheme, GgufMatMul, HqqAxis, HqqBits, HqqConfig, HqqLayer, IsqType, QuantMethod,
-    QuantMethodConfig, QuantizeOntoGuard, QuantizedActivation, QuantizedConfig, QuantizedSerde,
-    Shard, ShardedVarBuilder, UnquantLinear,
+    make_dummy_or_error, ActivationQuantizationScheme, ActivationScaleLayout, AfqBits,
+    AfqGroupSize, AfqLayer, FP8Linear, Fp8ActivationScheme, GgufMatMul, HqqAxis, HqqBits,
+    HqqConfig, HqqLayer, IsqType, QuantMethod, QuantMethodConfig, QuantizeOntoGuard,
+    QuantizedActivation, QuantizedConfig, QuantizedSerde, Shard, ShardedVarBuilder, UnquantLinear,
 };
 
 #[derive(Debug)]
@@ -396,20 +396,29 @@ impl QuantMethod for BlockwiseFP8Linear {
         &self,
         _x: &Tensor,
     ) -> Option<ActivationQuantizationScheme> {
-        let scheme = self.activation_quantization_scheme()?;
+        self.activation_quantization_scheme()
+    }
+
+    fn preferred_activation_scale_layout_for(&self, x: &Tensor) -> Option<ActivationScaleLayout> {
+        self.activation_quantization_scheme_for(x)?;
         #[cfg(all(feature = "cuda", has_deepgemm_fp8_sm90_provider))]
         if matches!(&self.provider, BlockwiseFp8Provider::DeepGemmSm90(_))
-            && _x.dtype() == DType::BF16
+            && x.dtype() == DType::BF16
         {
-            let (_, batch_dims) = _x.dims().split_last()?;
+            let (_, batch_dims) = x.dims().split_last()?;
             let rows = batch_dims
                 .iter()
                 .try_fold(1usize, |rows, dim| rows.checked_mul(*dim))?;
-            if deepgemm::serving_shape_supported(_x.dtype(), rows) {
-                return None;
+            if deepgemm::serving_shape_supported(x.dtype(), rows) {
+                return Some(ActivationScaleLayout::GroupMajor {
+                    row_alignment: std::num::NonZeroUsize::new(
+                        deepgemm::DEEPGEMM_ACTIVATION_SCALE_M_ALIGNMENT,
+                    )
+                    .expect("DeepGEMM row alignment is nonzero"),
+                });
             }
         }
-        Some(scheme)
+        Some(ActivationScaleLayout::RowMajor)
     }
 
     fn quantize_activation(&self, x: &Tensor) -> Result<QuantizedActivation> {
@@ -453,13 +462,50 @@ impl QuantMethod for BlockwiseFP8Linear {
                     scheme
                 )
             }
-            let result = ops::fp8_blockwise_matmul_cutlass(
-                activation.quantized(),
-                activation.scales(),
-                &self.weight,
-                &self.weight_scale_inv,
-                activation.source_dtype(),
-            )?;
+            let result = match activation.scale_layout() {
+                ActivationScaleLayout::RowMajor => ops::fp8_blockwise_matmul_cutlass(
+                    activation.quantized(),
+                    activation.scales(),
+                    &self.weight,
+                    &self.weight_scale_inv,
+                    activation.source_dtype(),
+                )?,
+                ActivationScaleLayout::GroupMajor { row_alignment } => {
+                    #[cfg(all(feature = "cuda", has_deepgemm_fp8_sm90_provider))]
+                    {
+                        if row_alignment.get() != deepgemm::DEEPGEMM_ACTIVATION_SCALE_M_ALIGNMENT {
+                            candle_core::bail!(
+                                "DeepGEMM activation scales require row alignment {}",
+                                deepgemm::DEEPGEMM_ACTIVATION_SCALE_M_ALIGNMENT
+                            )
+                        }
+                        if activation.source_dtype() != DType::BF16 {
+                            candle_core::bail!(
+                                "DeepGEMM prequantized activation requires a BF16 source"
+                            )
+                        }
+                        let BlockwiseFp8Provider::DeepGemmSm90(prepared) = &self.provider else {
+                            candle_core::bail!(
+                                "group-major FP8 activation scales require the DeepGEMM provider"
+                            )
+                        };
+                        deepgemm::matmul_prequantized(
+                            prepared,
+                            activation.quantized(),
+                            activation.scales(),
+                            &self.weight,
+                            &self.weight_scale_inv,
+                        )?
+                    }
+                    #[cfg(not(all(feature = "cuda", has_deepgemm_fp8_sm90_provider)))]
+                    {
+                        let _ = row_alignment;
+                        candle_core::bail!(
+                            "group-major FP8 activation scales require the DeepGEMM provider"
+                        )
+                    }
+                }
+            };
             let output_features = result.dim(1)?;
             let mut output_shape =
                 activation.source_shape()[..activation.source_shape().len() - 1].to_vec();
@@ -1204,6 +1250,308 @@ mod tests {
         dev.synchronize()?;
         assert_eq!(output.dims(), [2, 3, OUTPUT_FEATURES]);
         assert_deepgemm_fused_glu_close("rank=3", &reference, &output)
+    }
+
+    #[cfg(all(
+        feature = "cuda",
+        has_cutlass_fp8_sm90_kernels,
+        has_deepgemm_fp8_sm90_provider
+    ))]
+    #[test]
+    #[ignore = "requires an SM90 GPU and runtime nvcc or a prepared cubin cache"]
+    fn deepgemm_consumes_fused_rms_norm_group_major_activation() -> Result<()> {
+        use float8::F8E4M3;
+
+        const ROWS: usize = 5;
+        const FEATURES: usize = 256;
+        const OUTPUT_FEATURES: usize = 256;
+        const EPSILON: f32 = 1.0e-6;
+
+        let device = Device::new_cuda(0)?;
+        let layer = deepgemm_fused_glu_test_layer(&device, OUTPUT_FEATURES, FEATURES)?;
+        let input_values = (0..ROWS * FEATURES)
+            .map(|index| ((index * 17 + index / FEATURES * 13) % 79) as f32 / 23.0 - 1.5)
+            .collect::<Vec<_>>();
+        let residual_values = (0..ROWS * FEATURES)
+            .map(|index| ((index * 11 + index / FEATURES * 7) % 47) as f32 / 31.0 - 0.7)
+            .collect::<Vec<_>>();
+        let norm_weight_values = (0..FEATURES)
+            .map(|column| 0.8 + (column % 29) as f32 / 64.0)
+            .collect::<Vec<_>>();
+        let input =
+            Tensor::from_vec(input_values, (ROWS, FEATURES), &device)?.to_dtype(DType::BF16)?;
+        let residual =
+            Tensor::from_vec(residual_values, (ROWS, FEATURES), &device)?.to_dtype(DType::BF16)?;
+        let norm_weight =
+            Tensor::from_vec(norm_weight_values, FEATURES, &device)?.to_dtype(DType::BF16)?;
+        let scheme = layer
+            .activation_quantization_scheme_for(&input)
+            .ok_or_else(|| candle_core::Error::msg("DeepGEMM activation scheme is unavailable"))?;
+        let scale_layout = layer
+            .preferred_activation_scale_layout_for(&input)
+            .ok_or_else(|| candle_core::Error::msg("DeepGEMM scale layout is unavailable"))?;
+        assert_eq!(
+            scale_layout,
+            ActivationScaleLayout::GroupMajor {
+                row_alignment: std::num::NonZeroUsize::new(4).unwrap(),
+            }
+        );
+        let fused = fused_add_rms_norm_quantized(
+            &input,
+            &residual,
+            &norm_weight,
+            EPSILON,
+            scheme,
+            scale_layout,
+        )?;
+        assert_eq!(fused.activation().scales().dims(), &[2, 8]);
+        let output = layer.forward_quantized(fused.activation())?;
+        device.synchronize()?;
+
+        let activation = fused
+            .activation()
+            .quantized()
+            .to_device(&Device::Cpu)?
+            .flatten_all()?
+            .to_vec1::<F8E4M3>()?;
+        let activation_scales = fused
+            .activation()
+            .scales()
+            .to_device(&Device::Cpu)?
+            .to_vec2::<f32>()?;
+        let weight = ops::fp8_blockwise_dequantize(
+            &layer.weight,
+            &layer.weight_scale_inv,
+            vec![128, 128],
+            DType::F32,
+        )?
+        .to_device(&Device::Cpu)?
+        .to_vec2::<f32>()?;
+        let output = output
+            .to_dtype(DType::F32)?
+            .to_device(&Device::Cpu)?
+            .to_vec2::<f32>()?;
+        let mut max_reference = 0.0f32;
+        let mut max_error = 0.0f32;
+        for row in 0..ROWS {
+            for output_column in 0..OUTPUT_FEATURES {
+                let mut reference = 0.0f32;
+                for column in 0..FEATURES {
+                    let activation_value = activation[row * FEATURES + column].to_f32()
+                        * activation_scales[column / 128][row];
+                    reference += activation_value * weight[output_column][column];
+                }
+                max_reference = max_reference.max(reference.abs());
+                max_error = max_error.max((output[row][output_column] - reference).abs());
+            }
+        }
+        assert!(
+            max_error <= 0.02 + 0.02 * max_reference,
+            "DeepGEMM group-major prequantized output error {max_error}, max reference {max_reference}"
+        );
+        Ok(())
+    }
+
+    #[cfg(all(
+        feature = "cuda",
+        has_cutlass_fp8_sm90_kernels,
+        has_deepgemm_fp8_sm90_provider
+    ))]
+    #[test]
+    #[ignore = "requires an SM90 GPU and runtime nvcc or a prepared cubin cache"]
+    fn deepgemm_fused_rms_norm_cuda_graph_replays_sm90() -> Result<()> {
+        use candle_core::cuda::cudarc::driver::sys;
+        use half::bf16;
+
+        const ROWS: usize = 5;
+        const FEATURES: usize = 256;
+        const OUTPUT_FEATURES: usize = 256;
+        const EPSILON: f32 = 1.0e-6;
+
+        let device = Device::new_cuda(0)?;
+        let Device::Cuda(cuda_device) = &device else {
+            unreachable!()
+        };
+        let stream = cuda_device.cuda_stream();
+        let layer = deepgemm_fused_glu_test_layer(&device, OUTPUT_FEATURES, FEATURES)?;
+        let norm_weight_values = (0..FEATURES)
+            .map(|column| 0.8 + (column % 29) as f32 / 64.0)
+            .collect::<Vec<_>>();
+        let norm_weight =
+            Tensor::from_vec(norm_weight_values, FEATURES, &device)?.to_dtype(DType::BF16)?;
+        let make_inputs = |phase: usize| -> Result<(Tensor, Tensor)> {
+            let input_values = (0..ROWS * FEATURES)
+                .map(|index| {
+                    ((index * 17 + index / FEATURES * 13 + phase * 19) % 79) as f32 / 23.0 - 1.5
+                })
+                .collect::<Vec<_>>();
+            let residual_values = (0..ROWS * FEATURES)
+                .map(|index| {
+                    ((index * 11 + index / FEATURES * 7 + phase * 23) % 47) as f32 / 31.0 - 0.7
+                })
+                .collect::<Vec<_>>();
+            Ok((
+                Tensor::from_vec(input_values, (ROWS, FEATURES), &device)?.to_dtype(DType::BF16)?,
+                Tensor::from_vec(residual_values, (ROWS, FEATURES), &device)?
+                    .to_dtype(DType::BF16)?,
+            ))
+        };
+        let (input_a, residual_a) = make_inputs(7)?;
+        let (input_b, residual_b) = make_inputs(53)?;
+        let make_reference = |input: &Tensor, residual: &Tensor| -> Result<(Tensor, Tensor)> {
+            let residual_output = (input + residual)?;
+            let normalized =
+                candle_nn::ops::rms_norm(&residual_output.contiguous()?, &norm_weight, EPSILON)?;
+            let output = layer.forward(&normalized)?;
+            Ok((residual_output, output))
+        };
+        let (reference_residual_a, reference_output_a) = make_reference(&input_a, &residual_a)?;
+        let (reference_residual_b, reference_output_b) = make_reference(&input_b, &residual_b)?;
+
+        let graph_input = Tensor::zeros((ROWS, FEATURES), DType::BF16, &device)?;
+        let graph_residual = Tensor::zeros((ROWS, FEATURES), DType::BF16, &device)?;
+        let graph_residual_output = Tensor::zeros((ROWS, FEATURES), DType::BF16, &device)?;
+        let graph_output = Tensor::zeros((ROWS, OUTPUT_FEATURES), DType::BF16, &device)?;
+        copy_cuda_bf16(&input_a, &graph_input)?;
+        copy_cuda_bf16(&residual_a, &graph_residual)?;
+        let scheme = layer
+            .activation_quantization_scheme_for(&graph_input)
+            .ok_or_else(|| candle_core::Error::msg("DeepGEMM activation scheme is unavailable"))?;
+        let scale_layout = layer
+            .preferred_activation_scale_layout_for(&graph_input)
+            .ok_or_else(|| candle_core::Error::msg("DeepGEMM scale layout is unavailable"))?;
+        assert_eq!(
+            scale_layout,
+            ActivationScaleLayout::GroupMajor {
+                row_alignment: std::num::NonZeroUsize::new(4).unwrap(),
+            }
+        );
+        let warmup = fused_add_rms_norm_quantized(
+            &graph_input,
+            &graph_residual,
+            &norm_weight,
+            EPSILON,
+            scheme,
+            scale_layout,
+        )?;
+        assert_eq!(warmup.activation().scales().dims(), &[2, 8]);
+        let warmup_output = layer.forward_quantized(warmup.activation())?;
+        drop((warmup_output, warmup));
+        device.synchronize()?;
+
+        let restore_event_tracking = stream.context().is_event_tracking();
+        if restore_event_tracking {
+            unsafe { stream.context().disable_event_tracking() };
+        }
+        if let Err(error) =
+            stream.begin_capture(sys::CUstreamCaptureMode::CU_STREAM_CAPTURE_MODE_RELAXED)
+        {
+            if restore_event_tracking {
+                unsafe { stream.context().enable_event_tracking() };
+            }
+            return Err(candle_core::Error::msg(error.to_string()));
+        }
+        let captured = (|| -> Result<()> {
+            let fused = fused_add_rms_norm_quantized(
+                &graph_input,
+                &graph_residual,
+                &norm_weight,
+                EPSILON,
+                scheme,
+                scale_layout,
+            )?;
+            let output = layer.forward_quantized(fused.activation())?;
+            copy_cuda_bf16(fused.residual(), &graph_residual_output)?;
+            copy_cuda_bf16(&output, &graph_output)?;
+            drop((output, fused));
+            Ok(())
+        })();
+        let graph = stream.end_capture(
+            sys::CUgraphInstantiate_flags::CUDA_GRAPH_INSTANTIATE_FLAG_AUTO_FREE_ON_LAUNCH,
+        );
+        if restore_event_tracking {
+            unsafe { stream.context().enable_event_tracking() };
+        }
+        captured?;
+        let graph = graph
+            .map_err(|error| candle_core::Error::msg(error.to_string()))?
+            .ok_or_else(|| candle_core::Error::msg("CUDA graph capture returned no graph"))?;
+
+        let expected_residual_a = reference_residual_a
+            .to_device(&Device::Cpu)?
+            .flatten_all()?
+            .to_vec1::<bf16>()?;
+        let expected_residual_b = reference_residual_b
+            .to_device(&Device::Cpu)?
+            .flatten_all()?
+            .to_vec1::<bf16>()?;
+        let replays = [
+            (
+                &input_a,
+                &residual_a,
+                &reference_output_a,
+                &expected_residual_a,
+            ),
+            (
+                &input_a,
+                &residual_a,
+                &reference_output_a,
+                &expected_residual_a,
+            ),
+            (
+                &input_b,
+                &residual_b,
+                &reference_output_b,
+                &expected_residual_b,
+            ),
+            (
+                &input_a,
+                &residual_a,
+                &reference_output_a,
+                &expected_residual_a,
+            ),
+        ];
+        let mut first_output = None;
+        for (replay, (input, residual, reference_output, expected_residual)) in
+            replays.into_iter().enumerate()
+        {
+            copy_cuda_bf16(input, &graph_input)?;
+            copy_cuda_bf16(residual, &graph_residual)?;
+            graph
+                .launch()
+                .map_err(|error| candle_core::Error::msg(error.to_string()))?;
+            stream
+                .synchronize()
+                .map_err(|error| candle_core::Error::msg(error.to_string()))?;
+
+            let actual_residual = graph_residual_output
+                .to_device(&Device::Cpu)?
+                .flatten_all()?
+                .to_vec1::<bf16>()?;
+            assert_eq!(actual_residual.as_slice(), expected_residual.as_slice());
+            assert_deepgemm_fused_glu_close(
+                &format!("fused RMSNorm graph replay {replay}"),
+                reference_output,
+                &graph_output,
+            )?;
+            let actual_output = graph_output
+                .to_device(&Device::Cpu)?
+                .flatten_all()?
+                .to_vec1::<bf16>()?;
+            match replay {
+                0 => first_output = Some(actual_output),
+                1 | 3 => assert_eq!(
+                    actual_output.as_slice(),
+                    first_output.as_ref().unwrap().as_slice()
+                ),
+                2 => assert_ne!(
+                    actual_output.as_slice(),
+                    first_output.as_ref().unwrap().as_slice()
+                ),
+                _ => unreachable!(),
+            }
+        }
+        Ok(())
     }
 
     #[cfg(all(

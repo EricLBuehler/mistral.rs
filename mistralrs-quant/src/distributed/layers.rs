@@ -15,9 +15,10 @@ use crate::{
     pertensor_fp8::pertensor_fp8_linear_b,
     should_apply_immediate_isq,
     utils::isq::apply_immediate_isq_sharded,
-    ActivationQuantizationScheme, AfqLayer, BlockwiseFP8Linear, BnbLinear, DistributedKind,
-    LoraLinearSpec, LoraSiteKey, MXFP4Layer, QuantMethod, QuantMethodConfig, QuantizeOntoGuard,
-    QuantizedActivation, QuantizedConfig, QuantizedSerde, Shard, ShardedVarBuilder, UnquantLinear,
+    ActivationQuantizationScheme, ActivationScaleLayout, AfqLayer, BlockwiseFP8Linear, BnbLinear,
+    DistributedKind, LoraLinearSpec, LoraSiteKey, MXFP4Layer, QuantMethod, QuantMethodConfig,
+    QuantizeOntoGuard, QuantizedActivation, QuantizedConfig, QuantizedSerde, Shard,
+    ShardedVarBuilder, UnquantLinear,
 };
 
 use super::Comm;
@@ -303,6 +304,10 @@ impl QuantMethod for RuntimeOutputLinear {
         a: &Tensor,
     ) -> Option<ActivationQuantizationScheme> {
         self.inner.activation_quantization_scheme_for(a)
+    }
+
+    fn preferred_activation_scale_layout_for(&self, a: &Tensor) -> Option<ActivationScaleLayout> {
+        self.inner.preferred_activation_scale_layout_for(a)
     }
 
     fn quantize_activation(&self, a: &Tensor) -> Result<QuantizedActivation> {
@@ -1033,6 +1038,10 @@ impl QuantMethod for RowParallelLayer {
         self.weight.activation_quantization_scheme_for(a)
     }
 
+    fn preferred_activation_scale_layout_for(&self, a: &Tensor) -> Option<ActivationScaleLayout> {
+        self.weight.preferred_activation_scale_layout_for(a)
+    }
+
     fn quantize_activation(&self, a: &Tensor) -> Result<QuantizedActivation> {
         self.weight.quantize_activation(a)
     }
@@ -1703,6 +1712,10 @@ impl QuantMethod for ColumnParallelLayer {
         self.weight.activation_quantization_scheme_for(a)
     }
 
+    fn preferred_activation_scale_layout_for(&self, a: &Tensor) -> Option<ActivationScaleLayout> {
+        self.weight.preferred_activation_scale_layout_for(a)
+    }
+
     fn quantize_activation(&self, a: &Tensor) -> Result<QuantizedActivation> {
         self.weight.quantize_activation(a)
     }
@@ -2268,6 +2281,10 @@ impl QuantMethod for ReplicatedLayer {
         a: &Tensor,
     ) -> Option<ActivationQuantizationScheme> {
         self.0.activation_quantization_scheme_for(a)
+    }
+
+    fn preferred_activation_scale_layout_for(&self, a: &Tensor) -> Option<ActivationScaleLayout> {
+        self.0.preferred_activation_scale_layout_for(a)
     }
 
     fn quantize_activation(&self, a: &Tensor) -> Result<QuantizedActivation> {
