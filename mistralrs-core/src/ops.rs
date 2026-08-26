@@ -5789,6 +5789,27 @@ pub fn split_mul_and_act(xs: &Tensor, split_size: usize, act: Activation) -> Res
     split_mul_and_act_order(xs, split_size, act, GatedActivationOrder::GateUp)
 }
 
+pub(crate) fn try_fused_split_glu_quantized_forward(
+    xs: &Tensor,
+    split_size: usize,
+    act: Activation,
+    projection: &dyn mistralrs_quant::QuantMethod,
+) -> Result<Option<Tensor>> {
+    #[cfg(feature = "cuda")]
+    {
+        let Some(activation) = glu_activation_type(act) else {
+            return Ok(None);
+        };
+        return projection.try_forward_fused_split_glu(xs, split_size, activation);
+    }
+
+    #[cfg(not(feature = "cuda"))]
+    {
+        let _ = (xs, split_size, act, projection);
+        Ok(None)
+    }
+}
+
 pub fn split_mul_and_act_order(
     xs: &Tensor,
     split_size: usize,

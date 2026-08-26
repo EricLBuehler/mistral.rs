@@ -135,7 +135,7 @@ fn streaming_response_logprob(emission: &StreamingEmission) -> crate::ResponseLo
     }
 }
 
-fn cache_finished_sequence(
+pub(crate) fn cache_finished_sequence(
     this: &dyn Pipeline,
     prefix_cacher: &mut PrefixCacheManagerV2,
     seq: &mut Sequence,

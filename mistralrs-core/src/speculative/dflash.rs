@@ -37,6 +37,7 @@ use crate::pipeline::cuda_graph::{
     record_cuda_graph_dispatch, record_cuda_graph_evictions, record_cuda_graph_resident_entries,
     take_cuda_graph_capacity_eviction, CudaGraphComponent, CudaGraphDispatchMode,
     CudaGraphDispatchReason, CudaGraphEvent, CudaGraphEventGuard, CudaGraphEvictionReason,
+    CudaPhaseTimer,
 };
 
 const DEFAULT_BLOCK_SIZE: usize = 16;
@@ -1513,6 +1514,7 @@ impl DFlashCudaGraphEntry {
     fn launch(&mut self, real_batch: usize) -> Result<DFlashProposalBatch> {
         let graph_event =
             CudaGraphEventGuard::new(CudaGraphComponent::DFlash, CudaGraphEvent::Replay);
+        let phase_timer = CudaPhaseTimer::start(self.graph.stream())?;
         self.graph.launch()?;
         self.staging.record_graph_complete()?;
         let output = DFlashCudaGraphOutput {
@@ -1529,6 +1531,9 @@ impl DFlashCudaGraphEntry {
                 .map(Var::as_detached_tensor),
         }
         .finish(real_batch)?;
+        if let Some(timer) = phase_timer {
+            timer.finish("dflash_graph", real_batch, self.key.block)?;
+        }
         graph_event.success();
         record_cuda_graph_dispatch(
             CudaGraphComponent::DFlash,
@@ -3414,11 +3419,21 @@ impl DFlashDraftModel {
                 None => None,
             };
             let gate_up = layer.gate_up_proj.forward(&x)?;
-            let mut out = layer.down_proj.forward(&crate::ops::split_mul_and_act(
+            let mut out = if let Some(output) = crate::ops::try_fused_split_glu_quantized_forward(
                 &gate_up,
                 self.intermediate_size,
                 crate::layers::Activation::Silu,
-            )?)?;
+                &*layer.down_proj,
+            )? {
+                output
+            } else {
+                let inter = crate::ops::split_mul_and_act(
+                    &gate_up,
+                    self.intermediate_size,
+                    crate::layers::Activation::Silu,
+                )?;
+                layer.down_proj.forward(&inter)?
+            };
             if let (Some(conv), Some(kernel)) = (&layer.mlp_conv, mlp_kernel) {
                 out = conv.finish(&out, &kernel)?;
             }

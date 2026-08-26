@@ -825,7 +825,7 @@ pub(crate) async fn finish_verified_step<P: Pipeline>(
     let return_logprobs = seq.return_logprobs();
 
     if let Some(anchor) = anchor_to_emit {
-        finish_or_add_toks_to_seq(pipeline, prefix_cacher, seq, anchor, eos_tok, true).await?;
+        finish_or_add_toks_to_seq(pipeline, prefix_cacher, seq, anchor, eos_tok, false).await?;
         if matches!(seq.getstate(), SequenceState::Done(_)) {
             let keep_len = base_len + 1;
             seq.clear_staged_speculative_tokens();
@@ -908,7 +908,8 @@ pub(crate) async fn finish_verified_step<P: Pipeline>(
         let sampled_token = sampled.token;
         if accepted_by_device.unwrap_or(sampled_token == draft) {
             accepted += 1;
-            finish_or_add_toks_to_seq(pipeline, prefix_cacher, seq, sampled, eos_tok, true).await?;
+            finish_or_add_toks_to_seq(pipeline, prefix_cacher, seq, sampled, eos_tok, false)
+                .await?;
             if matches!(seq.getstate(), SequenceState::Done(_)) {
                 let keep_len = base_len + 1 + accepted;
                 seq.clear_staged_speculative_tokens();
@@ -921,7 +922,8 @@ pub(crate) async fn finish_verified_step<P: Pipeline>(
             }
         } else {
             let keep_len = base_len + 1 + accepted;
-            finish_or_add_toks_to_seq(pipeline, prefix_cacher, seq, sampled, eos_tok, true).await?;
+            finish_or_add_toks_to_seq(pipeline, prefix_cacher, seq, sampled, eos_tok, false)
+                .await?;
             if matches!(seq.getstate(), SequenceState::Done(_)) {
                 seq.clear_staged_speculative_tokens();
                 return Ok(VerificationOutcome {
@@ -966,7 +968,7 @@ pub(crate) async fn finish_verified_step<P: Pipeline>(
         }
     };
     let continuation_token = continuation.token;
-    finish_or_add_toks_to_seq(pipeline, prefix_cacher, seq, continuation, eos_tok, true).await?;
+    finish_or_add_toks_to_seq(pipeline, prefix_cacher, seq, continuation, eos_tok, false).await?;
 
     let keep_len = base_len + 1 + accepted;
     let continuation_token = if matches!(seq.getstate(), SequenceState::Done(_)) {
@@ -1294,7 +1296,8 @@ async fn finish_verified_step_stochastic<P: Pipeline>(
             accepted += 1;
             let sampled =
                 sampler.logprobs_from_probs(draft, &target_probs.reporting, return_logprobs)?;
-            finish_or_add_toks_to_seq(pipeline, prefix_cacher, seq, sampled, eos_tok, true).await?;
+            finish_or_add_toks_to_seq(pipeline, prefix_cacher, seq, sampled, eos_tok, false)
+                .await?;
             if matches!(seq.getstate(), SequenceState::Done(_)) {
                 let keep_len = base_len + 1 + accepted;
                 seq.clear_staged_speculative_tokens();
@@ -1333,7 +1336,7 @@ async fn finish_verified_step_stochastic<P: Pipeline>(
         };
         let sampled_token = sampled.token;
         let keep_len = base_len + 1 + accepted;
-        finish_or_add_toks_to_seq(pipeline, prefix_cacher, seq, sampled, eos_tok, true).await?;
+        finish_or_add_toks_to_seq(pipeline, prefix_cacher, seq, sampled, eos_tok, false).await?;
         if matches!(seq.getstate(), SequenceState::Done(_)) {
             seq.clear_staged_speculative_tokens();
             return Ok(VerificationOutcome {
@@ -1374,7 +1377,7 @@ async fn finish_verified_step_stochastic<P: Pipeline>(
         )?,
     };
     let continuation_token = continuation.token;
-    finish_or_add_toks_to_seq(pipeline, prefix_cacher, seq, continuation, eos_tok, true).await?;
+    finish_or_add_toks_to_seq(pipeline, prefix_cacher, seq, continuation, eos_tok, false).await?;
 
     let keep_len = base_len + 1 + accepted;
     let continuation_token = if matches!(seq.getstate(), SequenceState::Done(_)) {

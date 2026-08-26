@@ -3170,17 +3170,23 @@ __global__ void gdn_speculative_conv_checkpoints_kernel(
     const T *__restrict__ x, const T *__restrict__ weight,
     T *__restrict__ state_pool, T *__restrict__ output,
     const uint32_t *__restrict__ active_slots, int batch_size, int seq_len,
-    int conv_dim, int kernel_size, int checkpoint_lanes, int64_t x_stride_b,
+    int conv_dim, int kernel_size, int checkpoint_lanes,
+    bool write_checkpoints, const T *__restrict__ pending_conv_input,
+    const uint32_t *__restrict__ pending_keep_rows,
+    const uint32_t *__restrict__ pending_epochs,
+    uint32_t *__restrict__ conv_applied_epochs, int max_pending_rows,
+    int pending_capacity, int conv_blocks, int64_t x_stride_b,
     int64_t x_stride_s, int64_t x_stride_c) {
   const int channel = blockIdx.x * blockDim.x + threadIdx.x;
   const int batch_idx = blockIdx.y;
-  if (channel >= conv_dim || batch_idx >= batch_size) {
+  if (batch_idx >= batch_size) {
     return;
   }
+  const bool channel_valid = channel < conv_dim;
 
   const uint32_t active_slot = active_slots[batch_idx];
   if (active_slot == GDN_SPEC_CHECKPOINT_PAD_SLOT) {
-    for (int position = 0; position < seq_len; position++) {
+    for (int position = 0; channel_valid && position < seq_len; position++) {
       output[((size_t)batch_idx * seq_len + position) * conv_dim + channel] =
           (T)0.0f;
     }
@@ -3188,10 +3194,51 @@ __global__ void gdn_speculative_conv_checkpoints_kernel(
   }
 
   T state[GDN_SPEC_CHECKPOINT_MAX_CONV_WIDTH];
-  const T *source =
-      state_pool + ((size_t)active_slot * conv_dim + channel) * kernel_size;
-  for (int i = 0; i < kernel_size; i++) {
-    state[i] = source[i];
+  T *source = channel_valid
+                  ? state_pool +
+                        ((size_t)active_slot * conv_dim + channel) * kernel_size
+                  : nullptr;
+  if (channel_valid) {
+    for (int i = 0; i < kernel_size; i++) {
+      state[i] = source[i];
+    }
+  }
+  const int conv_block = blockIdx.x;
+  uint32_t pending_epoch = 0;
+  int pending_rows = 0;
+  bool apply_pending = false;
+  if (pending_epochs != nullptr && active_slot < pending_capacity) {
+    pending_epoch = pending_epochs[active_slot];
+    pending_rows = (int)pending_keep_rows[active_slot];
+    apply_pending = pending_epoch != 0 && pending_rows > 0 &&
+                    pending_rows <= max_pending_rows &&
+                    conv_applied_epochs[(size_t)active_slot * conv_blocks +
+                                        conv_block] != pending_epoch;
+  }
+  if (channel_valid && apply_pending) {
+    for (int position = 0; position < pending_rows; position++) {
+      for (int i = 0; i < kernel_size - 1; i++) {
+        state[i] = state[i + 1];
+      }
+      state[kernel_size - 1] =
+          pending_conv_input[((size_t)active_slot * max_pending_rows +
+                              position) *
+                                 conv_dim +
+                             channel];
+    }
+    for (int i = 0; i < kernel_size; i++) {
+      source[i] = state[i];
+    }
+  }
+  if (pending_epochs != nullptr) {
+    __syncthreads();
+    if (threadIdx.x == 0 && apply_pending) {
+      conv_applied_epochs[(size_t)active_slot * conv_blocks + conv_block] =
+          pending_epoch;
+    }
+  }
+  if (!channel_valid) {
+    return;
   }
   const T *channel_weight = weight + (size_t)channel * kernel_size;
   const size_t base_slot =
@@ -3213,11 +3260,13 @@ __global__ void gdn_speculative_conv_checkpoints_kernel(
     output[((size_t)batch_idx * seq_len + position) * conv_dim + channel] =
         (T)result;
 
-    T *destination =
-        state_pool +
-        (((base_slot + position) * conv_dim + channel) * kernel_size);
-    for (int i = 0; i < kernel_size; i++) {
-      destination[i] = state[i];
+    if (write_checkpoints) {
+      T *destination =
+          state_pool +
+          (((base_slot + position) * conv_dim + channel) * kernel_size);
+      for (int i = 0; i < kernel_size; i++) {
+        destination[i] = state[i];
+      }
     }
   }
 }
@@ -3227,17 +3276,23 @@ __global__ void gdn_speculative_conv_checkpoints_width4_kernel(
     const T *__restrict__ x, const T *__restrict__ weight,
     T *__restrict__ state_pool, T *__restrict__ output,
     const uint32_t *__restrict__ active_slots, int batch_size, int seq_len,
-    int conv_dim, int checkpoint_lanes, int64_t x_stride_b,
+    int conv_dim, int checkpoint_lanes, bool write_checkpoints,
+    const T *__restrict__ pending_conv_input,
+    const uint32_t *__restrict__ pending_keep_rows,
+    const uint32_t *__restrict__ pending_epochs,
+    uint32_t *__restrict__ conv_applied_epochs, int max_pending_rows,
+    int pending_capacity, int conv_blocks, int64_t x_stride_b,
     int64_t x_stride_s, int64_t x_stride_c) {
   const int channel = blockIdx.x * blockDim.x + threadIdx.x;
   const int batch_idx = blockIdx.y;
-  if (channel >= conv_dim || batch_idx >= batch_size) {
+  if (batch_idx >= batch_size) {
     return;
   }
+  const bool channel_valid = channel < conv_dim;
 
   const uint32_t active_slot = active_slots[batch_idx];
   if (active_slot == GDN_SPEC_CHECKPOINT_PAD_SLOT) {
-    for (int position = 0; position < seq_len; position++) {
+    for (int position = 0; channel_valid && position < seq_len; position++) {
       output[((size_t)batch_idx * seq_len + position) * conv_dim + channel] =
           (T)0.0f;
     }
@@ -3246,7 +3301,46 @@ __global__ void gdn_speculative_conv_checkpoints_width4_kernel(
 
   auto *states = reinterpret_cast<GdnConvWidth4<T> *>(state_pool);
   const auto *weights = reinterpret_cast<const GdnConvWidth4<T> *>(weight);
-  GdnConvWidth4<T> state = states[(size_t)active_slot * conv_dim + channel];
+  GdnConvWidth4<T> state;
+  if (channel_valid) {
+    state = states[(size_t)active_slot * conv_dim + channel];
+  }
+  const int conv_block = blockIdx.x;
+  uint32_t pending_epoch = 0;
+  int pending_rows = 0;
+  bool apply_pending = false;
+  if (pending_epochs != nullptr && active_slot < pending_capacity) {
+    pending_epoch = pending_epochs[active_slot];
+    pending_rows = (int)pending_keep_rows[active_slot];
+    apply_pending = pending_epoch != 0 && pending_rows > 0 &&
+                    pending_rows <= max_pending_rows &&
+                    conv_applied_epochs[(size_t)active_slot * conv_blocks +
+                                        conv_block] != pending_epoch;
+  }
+  if (channel_valid && apply_pending) {
+    for (int position = 0; position < pending_rows; position++) {
+#pragma unroll
+      for (int i = 0; i < GDN_PACKED_CONV_WIDTH - 1; i++) {
+        state.values[i] = state.values[i + 1];
+      }
+      state.values[GDN_PACKED_CONV_WIDTH - 1] =
+          pending_conv_input[((size_t)active_slot * max_pending_rows +
+                              position) *
+                                 conv_dim +
+                             channel];
+    }
+    states[(size_t)active_slot * conv_dim + channel] = state;
+  }
+  if (pending_epochs != nullptr) {
+    __syncthreads();
+    if (threadIdx.x == 0 && apply_pending) {
+      conv_applied_epochs[(size_t)active_slot * conv_blocks + conv_block] =
+          pending_epoch;
+    }
+  }
+  if (!channel_valid) {
+    return;
+  }
   const GdnConvWidth4<T> channel_weight = weights[channel];
   const size_t base_slot =
       gdn_spec_checkpoint_base(active_slot, checkpoint_lanes);
@@ -3269,7 +3363,9 @@ __global__ void gdn_speculative_conv_checkpoints_width4_kernel(
     const float result = acc / (1.0f + expf(-acc));
     output[((size_t)batch_idx * seq_len + position) * conv_dim + channel] =
         (T)result;
-    states[(base_slot + position) * conv_dim + channel] = state;
+    if (write_checkpoints) {
+      states[(base_slot + position) * conv_dim + channel] = state;
+    }
   }
 }
 
@@ -3277,8 +3373,12 @@ template <typename T>
 void launch_gdn_speculative_conv_checkpoints(
     const T *x, const T *weight, T *state_pool, T *output,
     const uint32_t *active_slots, int batch_size, int seq_len, int conv_dim,
-    int kernel_size, int checkpoint_lanes, int64_t x_stride_b,
-    int64_t x_stride_s, int64_t x_stride_c, cudaStream_t stream) {
+    int kernel_size, int checkpoint_lanes, bool write_checkpoints,
+    const T *pending_conv_input, const uint32_t *pending_keep_rows,
+    const uint32_t *pending_epochs, uint32_t *conv_applied_epochs,
+    int max_pending_rows, int pending_capacity, int conv_blocks,
+    int64_t x_stride_b, int64_t x_stride_s, int64_t x_stride_c,
+    cudaStream_t stream) {
   dim3 block(GDN_CHANNEL_BLOCK_SIZE);
   dim3 grid((conv_dim + GDN_CHANNEL_BLOCK_SIZE - 1) /
                 GDN_CHANNEL_BLOCK_SIZE,
@@ -3287,33 +3387,48 @@ void launch_gdn_speculative_conv_checkpoints(
     gdn_speculative_conv_checkpoints_width4_kernel<T>
         <<<grid, block, 0, stream>>>(
             x, weight, state_pool, output, active_slots, batch_size, seq_len,
-            conv_dim, checkpoint_lanes, x_stride_b, x_stride_s, x_stride_c);
+            conv_dim, checkpoint_lanes, write_checkpoints, pending_conv_input,
+            pending_keep_rows, pending_epochs, conv_applied_epochs,
+            max_pending_rows, pending_capacity, conv_blocks, x_stride_b,
+            x_stride_s, x_stride_c);
   } else {
     gdn_speculative_conv_checkpoints_kernel<T><<<grid, block, 0, stream>>>(
         x, weight, state_pool, output, active_slots, batch_size, seq_len,
-        conv_dim, kernel_size, checkpoint_lanes, x_stride_b, x_stride_s,
-        x_stride_c);
+        conv_dim, kernel_size, checkpoint_lanes, write_checkpoints,
+        pending_conv_input, pending_keep_rows, pending_epochs,
+        conv_applied_epochs, max_pending_rows, pending_capacity, conv_blocks,
+        x_stride_b, x_stride_s, x_stride_c);
   }
 }
 
 extern "C" void gdn_speculative_conv_checkpoints(
     const void *x, const void *weight, void *state_pool, void *output,
     const uint32_t *active_slots, int batch_size, int seq_len, int conv_dim,
-    int kernel_size, int checkpoint_lanes, int64_t x_stride_b,
-    int64_t x_stride_s, int64_t x_stride_c, int dtype, int64_t stream) {
+    int kernel_size, int checkpoint_lanes, int write_checkpoints,
+    const void *pending_conv_input, const uint32_t *pending_keep_rows,
+    const uint32_t *pending_epochs, uint32_t *conv_applied_epochs,
+    int max_pending_rows, int pending_capacity, int conv_blocks,
+    int64_t x_stride_b, int64_t x_stride_s, int64_t x_stride_c, int dtype,
+    int64_t stream) {
   const cudaStream_t custream = (cudaStream_t)stream;
   if (dtype == 0) {
     launch_gdn_speculative_conv_checkpoints(
         (const __half *)x, (const __half *)weight, (__half *)state_pool,
         (__half *)output, active_slots, batch_size, seq_len, conv_dim,
-        kernel_size, checkpoint_lanes, x_stride_b, x_stride_s, x_stride_c,
-        custream);
+        kernel_size, checkpoint_lanes, write_checkpoints != 0,
+        (const __half *)pending_conv_input, pending_keep_rows, pending_epochs,
+        conv_applied_epochs, max_pending_rows, pending_capacity, conv_blocks,
+        x_stride_b, x_stride_s, x_stride_c, custream);
   } else {
     launch_gdn_speculative_conv_checkpoints(
         (const __nv_bfloat16 *)x, (const __nv_bfloat16 *)weight,
         (__nv_bfloat16 *)state_pool, (__nv_bfloat16 *)output, active_slots,
         batch_size, seq_len, conv_dim, kernel_size, checkpoint_lanes,
-        x_stride_b, x_stride_s, x_stride_c, custream);
+        write_checkpoints != 0,
+        (const __nv_bfloat16 *)pending_conv_input, pending_keep_rows,
+        pending_epochs, conv_applied_epochs, max_pending_rows,
+        pending_capacity, conv_blocks, x_stride_b, x_stride_s, x_stride_c,
+        custream);
   }
 }
 
@@ -3340,11 +3455,10 @@ __device__ __forceinline__ void gdn_spec_copy_state_chunk(
   constexpr int ELEMENTS_PER_CHUNK =
       GDN_SPEC_FUSED_VALUE_CHUNK * GDN_DECODE_VALUE_MAJOR_K;
   constexpr int COPIES_PER_CHUNK = ELEMENTS_PER_CHUNK / ELEMENTS_PER_COPY;
-  const int stage = chunk % 2;
   for (int copy = thread; copy < COPIES_PER_CHUNK;
        copy += GDN_SPEC_FUSED_THREADS) {
     const int element = copy * ELEMENTS_PER_COPY;
-    gdn_cp_async_cg_16(shared_state + stage * ELEMENTS_PER_CHUNK + element,
+    gdn_cp_async_cg_16(shared_state + element,
                        state + chunk * ELEMENTS_PER_CHUNK + element);
   }
   gdn_cp_async_commit();
@@ -3360,6 +3474,16 @@ __global__ __launch_bounds__(GDN_SPEC_FUSED_THREADS, 2)
         const float *__restrict__ dt_bias, StateT *__restrict__ state_pool,
         T *__restrict__ output, const uint32_t *__restrict__ active_slots,
         const T *__restrict__ gate, const T *__restrict__ norm_weight,
+        float *__restrict__ transition_key,
+        float *__restrict__ transition_delta,
+        float *__restrict__ transition_decay,
+        const float *__restrict__ pending_key,
+        const float *__restrict__ pending_delta,
+        const float *__restrict__ pending_decay,
+        const uint32_t *__restrict__ pending_keep_rows,
+        const uint32_t *__restrict__ pending_epochs,
+        uint32_t *__restrict__ recurrent_applied_epochs,
+        int max_pending_rows, int pending_capacity,
         int64_t b_stride_b, int64_t b_stride_s, int64_t b_stride_h,
         int64_t a_stride_b, int64_t a_stride_s, int64_t a_stride_h,
         int64_t gate_stride_b, int64_t gate_stride_s,
@@ -3389,6 +3513,42 @@ __global__ __launch_bounds__(GDN_SPEC_FUSED_THREADS, 2)
                  V +
              value] = (T)0.0f;
     }
+    if (transition_delta != nullptr) {
+      for (int linear = tid; linear < seq_len * V;
+           linear += GDN_SPEC_FUSED_THREADS) {
+        const int position = linear / V;
+        const int value = linear - position * V;
+        transition_delta[(((size_t)batch_idx * seq_len + position) *
+                              num_v_heads +
+                          value_head) *
+                             V +
+                         value] = 0.0f;
+      }
+      for (int position = tid; position < seq_len;
+           position += GDN_SPEC_FUSED_THREADS) {
+        transition_decay[((size_t)batch_idx * seq_len + position) *
+                             num_v_heads +
+                         value_head] = 0.0f;
+      }
+      const bool key_leader =
+          tiled_v_heads ? value_head < num_k_heads
+                        : value_head % (num_v_heads / num_k_heads) == 0;
+      if (key_leader) {
+        const int key_head = tiled_v_heads
+                                 ? value_head % num_k_heads
+                                 : value_head / (num_v_heads / num_k_heads);
+        for (int linear = tid; linear < seq_len * K;
+             linear += GDN_SPEC_FUSED_THREADS) {
+          const int position = linear / K;
+          const int key = linear - position * K;
+          transition_key[(((size_t)batch_idx * seq_len + position) *
+                              num_k_heads +
+                          key_head) *
+                             K +
+                         key] = 0.0f;
+        }
+      }
+    }
     return;
   }
 
@@ -3400,22 +3560,69 @@ __global__ __launch_bounds__(GDN_SPEC_FUSED_THREADS, 2)
   const int value_dim = num_v_heads * V;
   const int conv_dim = 2 * key_dim + value_dim;
   const size_t state_head_elements = (size_t)V * K;
-  const StateT *source =
+  StateT *source =
       state_pool + ((size_t)active_slot * num_v_heads + value_head) *
                        state_head_elements;
   const size_t base_slot =
       gdn_spec_checkpoint_base(active_slot, checkpoint_lanes);
 
-  __shared__ __align__(16) StateT shared_state[2][GDN_SPEC_FUSED_VALUE_CHUNK]
-                                                [K];
+  __shared__ __align__(16) StateT shared_state[GDN_SPEC_FUSED_VALUE_CHUNK][K];
   __shared__ float shared_query[GDN_SPEC_FUSED_MAX_TOKENS][K];
   __shared__ float shared_key[GDN_SPEC_FUSED_MAX_TOKENS][K];
   __shared__ T shared_value[GDN_SPEC_FUSED_MAX_TOKENS][V];
   __shared__ T shared_output[GDN_SPEC_FUSED_MAX_TOKENS][V];
   __shared__ float shared_decay[GDN_SPEC_FUSED_MAX_TOKENS];
   __shared__ float shared_beta[GDN_SPEC_FUSED_MAX_TOKENS];
+  __shared__ float shared_pending_key[GDN_SPEC_FUSED_MAX_TOKENS][K];
+  __shared__ float shared_pending_delta[GDN_SPEC_FUSED_MAX_TOKENS][V];
+  __shared__ float shared_pending_decay[GDN_SPEC_FUSED_MAX_TOKENS];
 
-  gdn_spec_copy_state_chunk(&shared_state[0][0][0], source, 0, tid);
+  uint32_t pending_epoch = 0;
+  int pending_rows = 0;
+  bool apply_pending = false;
+  if (pending_epochs != nullptr && active_slot < pending_capacity) {
+    pending_epoch = pending_epochs[active_slot];
+    pending_rows = (int)pending_keep_rows[active_slot];
+    apply_pending =
+        pending_epoch != 0 && pending_rows > 0 &&
+        pending_rows <= max_pending_rows &&
+        recurrent_applied_epochs[(size_t)active_slot * num_v_heads +
+                                 value_head] != pending_epoch;
+  }
+
+  gdn_spec_copy_state_chunk(&shared_state[0][0], source, 0, tid);
+
+  if (apply_pending) {
+    for (int linear = tid; linear < pending_rows * K;
+         linear += GDN_SPEC_FUSED_THREADS) {
+      const int position = linear / K;
+      const int key = linear - position * K;
+      shared_pending_key[position][key] =
+          pending_key[(((size_t)active_slot * max_pending_rows + position) *
+                           num_k_heads +
+                       key_head) *
+                          K +
+                      key];
+    }
+    for (int linear = tid; linear < pending_rows * V;
+         linear += GDN_SPEC_FUSED_THREADS) {
+      const int position = linear / V;
+      const int value = linear - position * V;
+      shared_pending_delta[position][value] =
+          pending_delta[(((size_t)active_slot * max_pending_rows + position) *
+                             num_v_heads +
+                         value_head) *
+                            V +
+                        value];
+    }
+    for (int position = tid; position < pending_rows;
+         position += GDN_SPEC_FUSED_THREADS) {
+      shared_pending_decay[position] =
+          pending_decay[((size_t)active_slot * max_pending_rows + position) *
+                            num_v_heads +
+                        value_head];
+    }
+  }
 
   if (warp < seq_len) {
     const int position = warp;
@@ -3468,6 +3675,30 @@ __global__ __launch_bounds__(GDN_SPEC_FUSED_THREADS, 2)
   }
   __syncthreads();
 
+  if (transition_key != nullptr) {
+    const bool key_leader =
+        tiled_v_heads ? value_head < num_k_heads
+                      : value_head % values_per_group == 0;
+    if (key_leader && warp < seq_len) {
+      const int position = warp;
+#pragma unroll
+      for (int i = 0; i < 4; i++) {
+        const int key = lane * 4 + i;
+        transition_key[(((size_t)batch_idx * seq_len + position) *
+                            num_k_heads +
+                        key_head) *
+                           K +
+                       key] = shared_key[position][key];
+      }
+    }
+    if (warp < seq_len && lane == 0) {
+      const int position = warp;
+      transition_decay[((size_t)batch_idx * seq_len + position) *
+                           num_v_heads +
+                       value_head] = shared_decay[position];
+    }
+  }
+
   const int key_base = lane * 4;
   int value_rows[VALUES_PER_WARP];
 #pragma unroll
@@ -3479,16 +3710,47 @@ __global__ __launch_bounds__(GDN_SPEC_FUSED_THREADS, 2)
   for (int chunk = 0; chunk < GDN_SPEC_FUSED_VALUE_CHUNKS; chunk++) {
     gdn_cp_async_wait();
     __syncthreads();
-    if (chunk + 1 < GDN_SPEC_FUSED_VALUE_CHUNKS) {
-      gdn_spec_copy_state_chunk(&shared_state[0][0][0], source, chunk + 1,
-                                tid);
-    }
 
     float4 state[VALUES_PER_WARP];
 #pragma unroll
     for (int row = 0; row < VALUES_PER_WARP; row++) {
       state[row] = gdn_load_state_x4(
-          &shared_state[chunk & 1][value_rows[row]][key_base]);
+          &shared_state[value_rows[row]][key_base]);
+    }
+    __syncthreads();
+    if (chunk + 1 < GDN_SPEC_FUSED_VALUE_CHUNKS) {
+      gdn_spec_copy_state_chunk(&shared_state[0][0], source, chunk + 1, tid);
+    }
+
+    if (apply_pending) {
+      for (int position = 0; position < pending_rows; position++) {
+        const float4 key = *reinterpret_cast<const float4 *>(
+            &shared_pending_key[position][key_base]);
+        const float decay = shared_pending_decay[position];
+#pragma unroll
+        for (int row = 0; row < VALUES_PER_WARP; row++) {
+          const int value = chunk * GDN_SPEC_FUSED_VALUE_CHUNK +
+                            value_rows[row];
+          const float delta = shared_pending_delta[position][value];
+          state[row].x = __fmaf_rn(key.x, delta, state[row].x * decay);
+          state[row].y = __fmaf_rn(key.y, delta, state[row].y * decay);
+          state[row].z = __fmaf_rn(key.z, delta, state[row].z * decay);
+          state[row].w = __fmaf_rn(key.w, delta, state[row].w * decay);
+        }
+      }
+#pragma unroll
+      for (int row = 0; row < VALUES_PER_WARP; row++) {
+        const int value = chunk * GDN_SPEC_FUSED_VALUE_CHUNK +
+                          value_rows[row];
+        gdn_store_state_x4(source + (size_t)value * K + key_base,
+                           state[row]);
+        if constexpr (sizeof(StateT) < sizeof(float)) {
+          state[row].x = (float)(StateT)state[row].x;
+          state[row].y = (float)(StateT)state[row].y;
+          state[row].z = (float)(StateT)state[row].z;
+          state[row].w = (float)(StateT)state[row].w;
+        }
+      }
     }
 
     for (int position = 0; position < seq_len; position++) {
@@ -3530,6 +3792,13 @@ __global__ __launch_bounds__(GDN_SPEC_FUSED_THREADS, 2)
           state[row].y = __fmaf_rn(key.y, delta, state[row].y);
           state[row].z = __fmaf_rn(key.z, delta, state[row].z);
           state[row].w = __fmaf_rn(key.w, delta, state[row].w);
+          if (lane == 0 && transition_delta != nullptr) {
+            transition_delta[(((size_t)batch_idx * seq_len + position) *
+                                  num_v_heads +
+                              value_head) *
+                                 V +
+                             value] = delta;
+          }
           float dot = state[row].x * query.x;
           dot = __fmaf_rn(state[row].y, query.y, dot);
           dot = __fmaf_rn(state[row].z, query.z, dot);
@@ -3564,6 +3833,13 @@ __global__ __launch_bounds__(GDN_SPEC_FUSED_THREADS, 2)
           state[row].y = __fmaf_rn(key.y, delta, state[row].y);
           state[row].z = __fmaf_rn(key.z, delta, state[row].z);
           state[row].w = __fmaf_rn(key.w, delta, state[row].w);
+          if (lane == 0 && transition_delta != nullptr) {
+            transition_delta[(((size_t)batch_idx * seq_len + position) *
+                                  num_v_heads +
+                              value_head) *
+                                 V +
+                             value] = delta;
+          }
           float dot = state[row].x * query.x;
           dot = __fmaf_rn(state[row].y, query.y, dot);
           dot = __fmaf_rn(state[row].z, query.z, dot);
@@ -3575,20 +3851,27 @@ __global__ __launch_bounds__(GDN_SPEC_FUSED_THREADS, 2)
         }
       }
 
-      StateT *destination =
-          state_pool +
-          (((base_slot + position) * num_v_heads + value_head) *
-           state_head_elements);
+      if (transition_delta == nullptr) {
+        StateT *destination =
+            state_pool +
+            (((base_slot + position) * num_v_heads + value_head) *
+             state_head_elements);
 #pragma unroll
-      for (int row = 0; row < VALUES_PER_WARP; row++) {
-        const int value = chunk * GDN_SPEC_FUSED_VALUE_CHUNK +
-                          value_rows[row];
-        gdn_store_state_x4(destination + (size_t)value * K + key_base,
-                           state[row]);
+        for (int row = 0; row < VALUES_PER_WARP; row++) {
+          const int value = chunk * GDN_SPEC_FUSED_VALUE_CHUNK +
+                            value_rows[row];
+          gdn_store_state_x4(destination + (size_t)value * K + key_base,
+                             state[row]);
+        }
       }
     }
   }
   __syncthreads();
+
+  if (tid == 0 && apply_pending) {
+    recurrent_applied_epochs[(size_t)active_slot * num_v_heads + value_head] =
+        pending_epoch;
+  }
 
   if (warp < seq_len) {
     const int position = warp;
@@ -3881,6 +4164,11 @@ void launch_gdn_speculative_recurrence_checkpoints(
     const T *mixed_qkv, const T *b, const T *a, const float *a_log,
     const float *dt_bias, StateT *state_pool, T *output,
     const uint32_t *active_slots, const T *gate, const T *norm_weight,
+    float *transition_key, float *transition_delta, float *transition_decay,
+    const float *pending_key, const float *pending_delta,
+    const float *pending_decay, const uint32_t *pending_keep_rows,
+    const uint32_t *pending_epochs, uint32_t *recurrent_applied_epochs,
+    int max_pending_rows, int pending_capacity,
     int64_t b_stride_b, int64_t b_stride_s, int64_t b_stride_h,
     int64_t a_stride_b, int64_t a_stride_s, int64_t a_stride_h,
     int64_t gate_stride_b, int64_t gate_stride_s, int64_t gate_stride_h,
@@ -3888,6 +4176,22 @@ void launch_gdn_speculative_recurrence_checkpoints(
     int num_v_heads, int head_k_dim, int head_v_dim, int checkpoint_lanes,
     int tiled_v_heads, int value_major, float norm_eps,
     cudaStream_t stream) {
+  const bool has_transitions = transition_delta != nullptr;
+  if ((transition_key != nullptr) != has_transitions ||
+      (transition_decay != nullptr) != has_transitions) {
+    return;
+  }
+  const bool has_pending = pending_key != nullptr;
+  if ((pending_delta != nullptr) != has_pending ||
+      (pending_decay != nullptr) != has_pending ||
+      (pending_keep_rows != nullptr) != has_pending ||
+      (pending_epochs != nullptr) != has_pending ||
+      (recurrent_applied_epochs != nullptr) != has_pending ||
+      (has_pending && (max_pending_rows <= 0 ||
+                       max_pending_rows > GDN_SPEC_FUSED_MAX_TOKENS ||
+                       pending_capacity <= 0))) {
+    return;
+  }
   if (gate != nullptr && norm_weight != nullptr) {
     dim3 fused_grid(batch_size, num_v_heads);
     const int grid_blocks = batch_size * num_v_heads;
@@ -3899,18 +4203,24 @@ void launch_gdn_speculative_recurrence_checkpoints(
       gdn_speculative_recurrence_rmsnorm_gate_value_major_128_kernel<
           T, StateT, true><<<fused_grid, GDN_SPEC_FUSED_THREADS, 0, stream>>>(
           mixed_qkv, b, a, a_log, dt_bias, state_pool, output, active_slots,
-          gate, norm_weight, b_stride_b, b_stride_s, b_stride_h, a_stride_b,
-          a_stride_s, a_stride_h, gate_stride_b, gate_stride_s, gate_stride_h,
-          gate_stride_v, batch_size, seq_len, num_k_heads, num_v_heads,
-          checkpoint_lanes, tiled_v_heads, norm_eps);
+          gate, norm_weight, transition_key, transition_delta,
+          transition_decay, pending_key, pending_delta, pending_decay,
+          pending_keep_rows, pending_epochs, recurrent_applied_epochs,
+          max_pending_rows, pending_capacity, b_stride_b, b_stride_s,
+          b_stride_h, a_stride_b, a_stride_s, a_stride_h, gate_stride_b,
+          gate_stride_s, gate_stride_h, gate_stride_v, batch_size, seq_len,
+          num_k_heads, num_v_heads, checkpoint_lanes, tiled_v_heads, norm_eps);
     } else {
       gdn_speculative_recurrence_rmsnorm_gate_value_major_128_kernel<
           T, StateT, false><<<fused_grid, GDN_SPEC_FUSED_THREADS, 0, stream>>>(
           mixed_qkv, b, a, a_log, dt_bias, state_pool, output, active_slots,
-          gate, norm_weight, b_stride_b, b_stride_s, b_stride_h, a_stride_b,
-          a_stride_s, a_stride_h, gate_stride_b, gate_stride_s, gate_stride_h,
-          gate_stride_v, batch_size, seq_len, num_k_heads, num_v_heads,
-          checkpoint_lanes, tiled_v_heads, norm_eps);
+          gate, norm_weight, transition_key, transition_delta,
+          transition_decay, pending_key, pending_delta, pending_decay,
+          pending_keep_rows, pending_epochs, recurrent_applied_epochs,
+          max_pending_rows, pending_capacity, b_stride_b, b_stride_s,
+          b_stride_h, a_stride_b, a_stride_s, a_stride_h, gate_stride_b,
+          gate_stride_s, gate_stride_h, gate_stride_v, batch_size, seq_len,
+          num_k_heads, num_v_heads, checkpoint_lanes, tiled_v_heads, norm_eps);
     }
     return;
   }
@@ -3956,6 +4266,11 @@ void dispatch_gdn_speculative_recurrence_checkpoints(
     const T *mixed_qkv, const T *b, const T *a, const float *a_log,
     const float *dt_bias, void *state_pool, T *output,
     const uint32_t *active_slots, const T *gate, const T *norm_weight,
+    float *transition_key, float *transition_delta, float *transition_decay,
+    const float *pending_key, const float *pending_delta,
+    const float *pending_decay, const uint32_t *pending_keep_rows,
+    const uint32_t *pending_epochs, uint32_t *recurrent_applied_epochs,
+    int max_pending_rows, int pending_capacity,
     int64_t b_stride_b, int64_t b_stride_s, int64_t b_stride_h,
     int64_t a_stride_b, int64_t a_stride_s, int64_t a_stride_h,
     int64_t gate_stride_b, int64_t gate_stride_s, int64_t gate_stride_h,
@@ -3966,27 +4281,36 @@ void dispatch_gdn_speculative_recurrence_checkpoints(
   if (state_dtype == GDN_STATE_DTYPE_F16) {
     launch_gdn_speculative_recurrence_checkpoints(
         mixed_qkv, b, a, a_log, dt_bias, (__half *)state_pool, output,
-        active_slots, gate, norm_weight, b_stride_b, b_stride_s, b_stride_h,
+        active_slots, gate, norm_weight, transition_key, transition_delta,
+        transition_decay, pending_key, pending_delta, pending_decay,
+        pending_keep_rows, pending_epochs, recurrent_applied_epochs,
+        max_pending_rows, pending_capacity, b_stride_b, b_stride_s, b_stride_h,
         a_stride_b, a_stride_s, a_stride_h, gate_stride_b, gate_stride_s,
         gate_stride_h, gate_stride_v, batch_size, seq_len, num_k_heads,
-        num_v_heads, head_k_dim, head_v_dim, checkpoint_lanes,
-        tiled_v_heads, value_major, norm_eps, stream);
+        num_v_heads, head_k_dim, head_v_dim, checkpoint_lanes, tiled_v_heads,
+        value_major, norm_eps, stream);
   } else if (state_dtype == GDN_STATE_DTYPE_BF16) {
     launch_gdn_speculative_recurrence_checkpoints(
         mixed_qkv, b, a, a_log, dt_bias, (__nv_bfloat16 *)state_pool, output,
-        active_slots, gate, norm_weight, b_stride_b, b_stride_s, b_stride_h,
+        active_slots, gate, norm_weight, transition_key, transition_delta,
+        transition_decay, pending_key, pending_delta, pending_decay,
+        pending_keep_rows, pending_epochs, recurrent_applied_epochs,
+        max_pending_rows, pending_capacity, b_stride_b, b_stride_s, b_stride_h,
         a_stride_b, a_stride_s, a_stride_h, gate_stride_b, gate_stride_s,
         gate_stride_h, gate_stride_v, batch_size, seq_len, num_k_heads,
-        num_v_heads, head_k_dim, head_v_dim, checkpoint_lanes,
-        tiled_v_heads, value_major, norm_eps, stream);
+        num_v_heads, head_k_dim, head_v_dim, checkpoint_lanes, tiled_v_heads,
+        value_major, norm_eps, stream);
   } else {
     launch_gdn_speculative_recurrence_checkpoints(
         mixed_qkv, b, a, a_log, dt_bias, (float *)state_pool, output,
-        active_slots, gate, norm_weight, b_stride_b, b_stride_s, b_stride_h,
+        active_slots, gate, norm_weight, transition_key, transition_delta,
+        transition_decay, pending_key, pending_delta, pending_decay,
+        pending_keep_rows, pending_epochs, recurrent_applied_epochs,
+        max_pending_rows, pending_capacity, b_stride_b, b_stride_s, b_stride_h,
         a_stride_b, a_stride_s, a_stride_h, gate_stride_b, gate_stride_s,
         gate_stride_h, gate_stride_v, batch_size, seq_len, num_k_heads,
-        num_v_heads, head_k_dim, head_v_dim, checkpoint_lanes,
-        tiled_v_heads, value_major, norm_eps, stream);
+        num_v_heads, head_k_dim, head_v_dim, checkpoint_lanes, tiled_v_heads,
+        value_major, norm_eps, stream);
   }
 }
 
@@ -3994,6 +4318,11 @@ extern "C" void gdn_speculative_recurrence_checkpoints(
     const void *mixed_qkv, const void *b, const void *a,
     const float *a_log, const float *dt_bias, void *state_pool, void *output,
     const uint32_t *active_slots, const void *gate, const void *norm_weight,
+    float *transition_key, float *transition_delta, float *transition_decay,
+    const float *pending_key, const float *pending_delta,
+    const float *pending_decay, const uint32_t *pending_keep_rows,
+    const uint32_t *pending_epochs, uint32_t *recurrent_applied_epochs,
+    int max_pending_rows, int pending_capacity,
     int64_t b_stride_b, int64_t b_stride_s, int64_t b_stride_h,
     int64_t a_stride_b, int64_t a_stride_s, int64_t a_stride_h,
     int64_t gate_stride_b, int64_t gate_stride_s, int64_t gate_stride_h,
@@ -4006,20 +4335,586 @@ extern "C" void gdn_speculative_recurrence_checkpoints(
     dispatch_gdn_speculative_recurrence_checkpoints(
         (const __half *)mixed_qkv, (const __half *)b, (const __half *)a,
         a_log, dt_bias, state_pool, (__half *)output, active_slots,
-        (const __half *)gate, (const __half *)norm_weight, b_stride_b,
-        b_stride_s, b_stride_h, a_stride_b, a_stride_s, a_stride_h, gate_stride_b,
-        gate_stride_s, gate_stride_h, gate_stride_v, batch_size, seq_len,
-        num_k_heads, num_v_heads, head_k_dim, head_v_dim, checkpoint_lanes,
-        tiled_v_heads, value_major, norm_eps, state_dtype, custream);
+        (const __half *)gate, (const __half *)norm_weight, transition_key,
+        transition_delta, transition_decay, pending_key, pending_delta,
+        pending_decay, pending_keep_rows, pending_epochs,
+        recurrent_applied_epochs, max_pending_rows, pending_capacity,
+        b_stride_b, b_stride_s, b_stride_h, a_stride_b, a_stride_s, a_stride_h,
+        gate_stride_b, gate_stride_s, gate_stride_h, gate_stride_v, batch_size,
+        seq_len, num_k_heads, num_v_heads, head_k_dim, head_v_dim,
+        checkpoint_lanes, tiled_v_heads, value_major, norm_eps, state_dtype,
+        custream);
   } else {
     dispatch_gdn_speculative_recurrence_checkpoints(
         (const __nv_bfloat16 *)mixed_qkv, (const __nv_bfloat16 *)b,
         (const __nv_bfloat16 *)a, a_log, dt_bias, state_pool,
         (__nv_bfloat16 *)output, active_slots, (const __nv_bfloat16 *)gate,
-        (const __nv_bfloat16 *)norm_weight, b_stride_b, b_stride_s,
-        b_stride_h, a_stride_b, a_stride_s, a_stride_h, gate_stride_b,
-        gate_stride_s, gate_stride_h, gate_stride_v, batch_size, seq_len,
-        num_k_heads, num_v_heads, head_k_dim, head_v_dim, checkpoint_lanes,
-        tiled_v_heads, value_major, norm_eps, state_dtype, custream);
+        (const __nv_bfloat16 *)norm_weight, transition_key, transition_delta,
+        transition_decay, pending_key, pending_delta, pending_decay,
+        pending_keep_rows, pending_epochs, recurrent_applied_epochs,
+        max_pending_rows, pending_capacity, b_stride_b, b_stride_s, b_stride_h,
+        a_stride_b, a_stride_s, a_stride_h, gate_stride_b, gate_stride_s,
+        gate_stride_h, gate_stride_v, batch_size, seq_len, num_k_heads,
+        num_v_heads, head_k_dim, head_v_dim, checkpoint_lanes, tiled_v_heads,
+        value_major, norm_eps, state_dtype, custream);
+  }
+}
+
+constexpr int GDN_TRANSITION_CONV_INPUT = 0;
+constexpr int GDN_TRANSITION_KEY = 1;
+constexpr int GDN_TRANSITION_DELTA = 2;
+constexpr int GDN_TRANSITION_DECAY = 3;
+constexpr int GDN_TRANSITION_CONV_STATE = 4;
+constexpr int GDN_TRANSITION_RECURRENT_STATE = 5;
+
+template <typename T, typename StateT>
+__global__ void gdn_speculative_transition_commit_batched_kernel(
+    const uint64_t *__restrict__ pointer_table,
+    const uint32_t *__restrict__ keep_rows,
+    const uint32_t *__restrict__ active_slots, int layer_count, int batch_size,
+    int seq_len, int num_k_heads, int num_v_heads, int head_k_dim,
+    int head_v_dim, int conv_dim, int conv_width, int tiled_v_heads,
+    int value_major) {
+  const int conv_blocks = (conv_dim + blockDim.x - 1) / blockDim.x;
+  const int state_elements = head_k_dim * head_v_dim;
+  const int layer = blockIdx.z;
+  const int batch_idx = blockIdx.y;
+  const int batch_block = blockIdx.x;
+  if (layer >= layer_count || batch_idx >= batch_size) {
+    return;
+  }
+
+  const int rows = (int)keep_rows[batch_idx];
+  const uint32_t slot = active_slots[batch_idx];
+  if (rows == 0 || slot == GDN_SPEC_CHECKPOINT_PAD_SLOT) {
+    return;
+  }
+
+  if (batch_block < conv_blocks) {
+    const int channel = batch_block * blockDim.x + threadIdx.x;
+    if (channel >= conv_dim) {
+      return;
+    }
+    const auto *input = reinterpret_cast<const T *>(
+        pointer_table[GDN_TRANSITION_CONV_INPUT * layer_count + layer]);
+    auto *conv_state = reinterpret_cast<T *>(
+        pointer_table[GDN_TRANSITION_CONV_STATE * layer_count + layer]);
+    T state[GDN_SPEC_CHECKPOINT_MAX_CONV_WIDTH];
+    T *destination =
+        conv_state + ((size_t)slot * conv_dim + channel) * conv_width;
+    for (int i = 0; i < conv_width; i++) {
+      state[i] = destination[i];
+    }
+    for (int position = 0; position < rows; position++) {
+      for (int i = 0; i < conv_width - 1; i++) {
+        state[i] = state[i + 1];
+      }
+      state[conv_width - 1] =
+          input[((size_t)batch_idx * seq_len + position) * conv_dim +
+                channel];
+    }
+    for (int i = 0; i < conv_width; i++) {
+      destination[i] = state[i];
+    }
+    return;
+  }
+
+  const int recurrence_block = batch_block - conv_blocks;
+  const int value_head = recurrence_block;
+  if (value_head >= num_v_heads) {
+    return;
+  }
+  const int values_per_group = num_v_heads / num_k_heads;
+  const int key_head = tiled_v_heads ? value_head % num_k_heads
+                                     : value_head / values_per_group;
+  const auto *transition_key = reinterpret_cast<const float *>(
+      pointer_table[GDN_TRANSITION_KEY * layer_count + layer]);
+  const auto *transition_delta = reinterpret_cast<const float *>(
+      pointer_table[GDN_TRANSITION_DELTA * layer_count + layer]);
+  const auto *transition_decay = reinterpret_cast<const float *>(
+      pointer_table[GDN_TRANSITION_DECAY * layer_count + layer]);
+  auto *recurrent_state = reinterpret_cast<StateT *>(
+      pointer_table[GDN_TRANSITION_RECURRENT_STATE * layer_count + layer]);
+  const size_t state_head =
+      ((size_t)slot * num_v_heads + value_head) * state_elements;
+  __shared__ float shared_key[GDN_SPEC_FUSED_MAX_TOKENS]
+                             [GDN_DECODE_VALUE_MAJOR_K];
+  __shared__ float shared_delta[GDN_SPEC_FUSED_MAX_TOKENS]
+                               [GDN_DECODE_VALUE_MAJOR_V];
+  __shared__ float shared_decay[GDN_SPEC_FUSED_MAX_TOKENS];
+  for (int linear = threadIdx.x; linear < rows * head_k_dim;
+       linear += blockDim.x) {
+    const int position = linear / head_k_dim;
+    const int key = linear - position * head_k_dim;
+    shared_key[position][key] =
+        transition_key[(((size_t)batch_idx * seq_len + position) *
+                            num_k_heads +
+                        key_head) *
+                           head_k_dim +
+                       key];
+  }
+  for (int linear = threadIdx.x; linear < rows * head_v_dim;
+       linear += blockDim.x) {
+    const int position = linear / head_v_dim;
+    const int value = linear - position * head_v_dim;
+    shared_delta[position][value] =
+        transition_delta[(((size_t)batch_idx * seq_len + position) *
+                              num_v_heads +
+                          value_head) *
+                             head_v_dim +
+                         value];
+  }
+  for (int position = threadIdx.x; position < rows;
+       position += blockDim.x) {
+    shared_decay[position] =
+        transition_decay[((size_t)batch_idx * seq_len + position) *
+                             num_v_heads +
+                         value_head];
+  }
+  __syncthreads();
+  for (int element = threadIdx.x; element < state_elements;
+       element += blockDim.x) {
+    const int value = element / head_k_dim;
+    const int key = element - value * head_k_dim;
+    const size_t state_offset = value_major
+                                    ? (size_t)value * head_k_dim + key
+                                    : (size_t)key * head_v_dim + value;
+    float state = (float)recurrent_state[state_head + state_offset];
+    for (int position = 0; position < rows; position++) {
+      state = __fmaf_rn(shared_key[position][key],
+                        shared_delta[position][value],
+                        __fmul_rn(shared_decay[position], state));
+    }
+    recurrent_state[state_head + state_offset] = (StateT)state;
+  }
+}
+
+template <typename T>
+void dispatch_gdn_speculative_transition_commit_batched(
+    const uint64_t *pointer_table, const uint32_t *keep_rows,
+    const uint32_t *active_slots, int layer_count, int batch_size, int seq_len,
+    int num_k_heads, int num_v_heads, int head_k_dim, int head_v_dim,
+    int conv_dim, int conv_width, int tiled_v_heads, int value_major,
+    int state_dtype, cudaStream_t stream) {
+  const int conv_blocks =
+      (conv_dim + GDN_CHANNEL_BLOCK_SIZE - 1) / GDN_CHANNEL_BLOCK_SIZE;
+  dim3 grid(conv_blocks + num_v_heads, batch_size, layer_count);
+  if (state_dtype == GDN_STATE_DTYPE_F16) {
+    gdn_speculative_transition_commit_batched_kernel<T, __half>
+        <<<grid, GDN_CHANNEL_BLOCK_SIZE, 0, stream>>>(
+            pointer_table, keep_rows, active_slots, layer_count, batch_size,
+            seq_len, num_k_heads, num_v_heads, head_k_dim, head_v_dim,
+            conv_dim, conv_width, tiled_v_heads, value_major);
+  } else if (state_dtype == GDN_STATE_DTYPE_BF16) {
+    gdn_speculative_transition_commit_batched_kernel<T, __nv_bfloat16>
+        <<<grid, GDN_CHANNEL_BLOCK_SIZE, 0, stream>>>(
+            pointer_table, keep_rows, active_slots, layer_count, batch_size,
+            seq_len, num_k_heads, num_v_heads, head_k_dim, head_v_dim,
+            conv_dim, conv_width, tiled_v_heads, value_major);
+  } else {
+    gdn_speculative_transition_commit_batched_kernel<T, float>
+        <<<grid, GDN_CHANNEL_BLOCK_SIZE, 0, stream>>>(
+            pointer_table, keep_rows, active_slots, layer_count, batch_size,
+            seq_len, num_k_heads, num_v_heads, head_k_dim, head_v_dim,
+            conv_dim, conv_width, tiled_v_heads, value_major);
+  }
+}
+
+extern "C" void gdn_speculative_transition_commit_batched(
+    const uint64_t *pointer_table, const uint32_t *keep_rows,
+    const uint32_t *active_slots, int layer_count, int batch_size, int seq_len,
+    int num_k_heads, int num_v_heads, int head_k_dim, int head_v_dim,
+    int conv_dim, int conv_width, int tiled_v_heads, int value_major,
+    int activation_dtype, int state_dtype, int64_t stream) {
+  if (layer_count <= 0 || batch_size <= 0 || seq_len <= 0 ||
+      seq_len > GDN_SPEC_FUSED_MAX_TOKENS ||
+      head_k_dim != GDN_DECODE_VALUE_MAJOR_K ||
+      head_v_dim != GDN_DECODE_VALUE_MAJOR_V) {
+    return;
+  }
+  const cudaStream_t custream = (cudaStream_t)stream;
+  if (activation_dtype == 0) {
+    dispatch_gdn_speculative_transition_commit_batched<__half>(
+        pointer_table, keep_rows, active_slots, layer_count, batch_size,
+        seq_len, num_k_heads, num_v_heads, head_k_dim, head_v_dim, conv_dim,
+        conv_width, tiled_v_heads, value_major, state_dtype, custream);
+  } else {
+    dispatch_gdn_speculative_transition_commit_batched<__nv_bfloat16>(
+        pointer_table, keep_rows, active_slots, layer_count, batch_size,
+        seq_len, num_k_heads, num_v_heads, head_k_dim, head_v_dim, conv_dim,
+        conv_width, tiled_v_heads, value_major, state_dtype, custream);
+  }
+}
+
+constexpr int GDN_TRANSITION_STAGE_SRC_CONV = 0;
+constexpr int GDN_TRANSITION_STAGE_SRC_KEY = 1;
+constexpr int GDN_TRANSITION_STAGE_SRC_DELTA = 2;
+constexpr int GDN_TRANSITION_STAGE_SRC_DECAY = 3;
+constexpr int GDN_TRANSITION_STAGE_DST_CONV = 4;
+constexpr int GDN_TRANSITION_STAGE_DST_KEY = 5;
+constexpr int GDN_TRANSITION_STAGE_DST_DELTA = 6;
+constexpr int GDN_TRANSITION_STAGE_DST_DECAY = 7;
+constexpr int GDN_TRANSITION_STAGE_DST_KEEP = 8;
+constexpr int GDN_TRANSITION_STAGE_DST_EPOCH = 9;
+constexpr int GDN_TRANSITION_STAGE_COPY_BLOCKS = 4;
+
+template <typename T>
+__global__ void gdn_speculative_transition_stage_batched_kernel(
+    const uint64_t *__restrict__ pointer_table,
+    const uint32_t *__restrict__ keep_rows,
+    const uint32_t *__restrict__ destination_slots, int layer_count,
+    int batch_size,
+    int seq_len, int max_rows, int destination_capacity, int num_k_heads,
+    int num_v_heads, int head_k_dim, int head_v_dim, int conv_dim) {
+  const int layer = blockIdx.z;
+  const int batch_idx = blockIdx.y;
+  if (layer >= layer_count || batch_idx >= batch_size) {
+    return;
+  }
+
+  const uint32_t slot = destination_slots[batch_idx];
+  if (slot == GDN_SPEC_CHECKPOINT_PAD_SLOT || slot >= destination_capacity) {
+    return;
+  }
+  const int rows = (int)keep_rows[batch_idx];
+  auto *pending_keep = reinterpret_cast<uint32_t *>(
+      pointer_table[GDN_TRANSITION_STAGE_DST_KEEP * layer_count + layer]);
+  auto *pending_epoch = reinterpret_cast<uint32_t *>(
+      pointer_table[GDN_TRANSITION_STAGE_DST_EPOCH * layer_count + layer]);
+  uint32_t next_epoch = pending_epoch[slot] + 1;
+  if (next_epoch == 0) {
+    next_epoch = 1;
+  }
+  if (rows <= 0 || rows > seq_len || rows > max_rows) {
+    if (blockIdx.x == 0 && threadIdx.x == 0) {
+      pending_keep[slot] = 0;
+      pending_epoch[slot] = next_epoch;
+    }
+    return;
+  }
+
+  const size_t conv_elements = (size_t)rows * conv_dim;
+  const size_t key_row_elements = (size_t)num_k_heads * head_k_dim;
+  const size_t key_elements = (size_t)rows * key_row_elements;
+  const size_t delta_row_elements = (size_t)num_v_heads * head_v_dim;
+  const size_t delta_elements = (size_t)rows * delta_row_elements;
+  const size_t decay_row_elements = num_v_heads;
+  const size_t decay_elements = (size_t)rows * decay_row_elements;
+  const size_t total_elements =
+      conv_elements + key_elements + delta_elements + decay_elements;
+  const auto *source_conv = reinterpret_cast<const T *>(
+      pointer_table[GDN_TRANSITION_STAGE_SRC_CONV * layer_count + layer]);
+  const auto *source_key = reinterpret_cast<const float *>(
+      pointer_table[GDN_TRANSITION_STAGE_SRC_KEY * layer_count + layer]);
+  const auto *source_delta = reinterpret_cast<const float *>(
+      pointer_table[GDN_TRANSITION_STAGE_SRC_DELTA * layer_count + layer]);
+  const auto *source_decay = reinterpret_cast<const float *>(
+      pointer_table[GDN_TRANSITION_STAGE_SRC_DECAY * layer_count + layer]);
+  auto *destination_conv = reinterpret_cast<T *>(
+      pointer_table[GDN_TRANSITION_STAGE_DST_CONV * layer_count + layer]);
+  auto *destination_key = reinterpret_cast<float *>(
+      pointer_table[GDN_TRANSITION_STAGE_DST_KEY * layer_count + layer]);
+  auto *destination_delta = reinterpret_cast<float *>(
+      pointer_table[GDN_TRANSITION_STAGE_DST_DELTA * layer_count + layer]);
+  auto *destination_decay = reinterpret_cast<float *>(
+      pointer_table[GDN_TRANSITION_STAGE_DST_DECAY * layer_count + layer]);
+  const size_t stride = (size_t)gridDim.x * blockDim.x;
+  for (size_t linear = (size_t)blockIdx.x * blockDim.x + threadIdx.x;
+       linear < total_elements; linear += stride) {
+    if (linear < conv_elements) {
+      destination_conv[((size_t)slot * max_rows * conv_dim) + linear] =
+          source_conv[((size_t)batch_idx * seq_len * conv_dim) + linear];
+    } else if (linear < conv_elements + key_elements) {
+      const size_t offset = linear - conv_elements;
+      destination_key[((size_t)slot * max_rows * key_row_elements) + offset] =
+          source_key[((size_t)batch_idx * seq_len * key_row_elements) + offset];
+    } else if (linear < conv_elements + key_elements + delta_elements) {
+      const size_t offset = linear - conv_elements - key_elements;
+      destination_delta[((size_t)slot * max_rows * delta_row_elements) +
+                        offset] =
+          source_delta[((size_t)batch_idx * seq_len * delta_row_elements) +
+                       offset];
+    } else {
+      const size_t offset =
+          linear - conv_elements - key_elements - delta_elements;
+      destination_decay[((size_t)slot * max_rows * decay_row_elements) +
+                        offset] =
+          source_decay[((size_t)batch_idx * seq_len * decay_row_elements) +
+                       offset];
+    }
+  }
+
+  if (blockIdx.x == 0 && threadIdx.x == 0) {
+    pending_keep[slot] = (uint32_t)rows;
+    pending_epoch[slot] = next_epoch;
+  }
+}
+
+template <typename T>
+void dispatch_gdn_speculative_transition_stage_batched(
+    const uint64_t *pointer_table, const uint32_t *keep_rows,
+    const uint32_t *destination_slots, int layer_count, int batch_size,
+    int seq_len, int max_rows,
+    int destination_capacity, int num_k_heads, int num_v_heads,
+    int head_k_dim, int head_v_dim, int conv_dim, cudaStream_t stream) {
+  const size_t row_elements =
+      (size_t)conv_dim + (size_t)num_k_heads * head_k_dim +
+      (size_t)num_v_heads * head_v_dim + num_v_heads;
+  const size_t required_blocks =
+      ((size_t)seq_len * row_elements + GDN_CHANNEL_BLOCK_SIZE - 1) /
+      GDN_CHANNEL_BLOCK_SIZE;
+  const unsigned int copy_blocks = (unsigned int)(
+      required_blocks < GDN_TRANSITION_STAGE_COPY_BLOCKS
+          ? required_blocks
+          : GDN_TRANSITION_STAGE_COPY_BLOCKS);
+  dim3 grid(copy_blocks, batch_size, layer_count);
+  gdn_speculative_transition_stage_batched_kernel<T>
+      <<<grid, GDN_CHANNEL_BLOCK_SIZE, 0, stream>>>(
+          pointer_table, keep_rows, destination_slots, layer_count, batch_size,
+          seq_len, max_rows, destination_capacity, num_k_heads,
+          num_v_heads, head_k_dim, head_v_dim, conv_dim);
+}
+
+extern "C" void gdn_speculative_transition_stage_batched(
+    const uint64_t *pointer_table, const uint32_t *keep_rows,
+    const uint32_t *destination_slots, int layer_count, int batch_size,
+    int seq_len, int max_rows,
+    int destination_capacity, int num_k_heads, int num_v_heads,
+    int head_k_dim, int head_v_dim, int conv_dim, int activation_dtype,
+    int64_t stream) {
+  if (layer_count <= 0 || batch_size <= 0 || seq_len <= 0 ||
+      seq_len > GDN_SPEC_FUSED_MAX_TOKENS || max_rows < seq_len ||
+      max_rows > GDN_SPEC_FUSED_MAX_TOKENS || destination_capacity <= 0 ||
+      num_k_heads <= 0 || num_v_heads <= 0 || head_k_dim <= 0 ||
+      head_v_dim <= 0 || conv_dim <= 0) {
+    return;
+  }
+  const cudaStream_t custream = (cudaStream_t)stream;
+  if (activation_dtype == 0) {
+    dispatch_gdn_speculative_transition_stage_batched<__half>(
+        pointer_table, keep_rows, destination_slots, layer_count, batch_size,
+        seq_len, max_rows, destination_capacity, num_k_heads,
+        num_v_heads, head_k_dim, head_v_dim, conv_dim, custream);
+  } else {
+    dispatch_gdn_speculative_transition_stage_batched<__nv_bfloat16>(
+        pointer_table, keep_rows, destination_slots, layer_count, batch_size,
+        seq_len, max_rows, destination_capacity, num_k_heads,
+        num_v_heads, head_k_dim, head_v_dim, conv_dim, custream);
+  }
+}
+
+constexpr int GDN_TRANSITION_APPLY_PENDING_CONV = 0;
+constexpr int GDN_TRANSITION_APPLY_PENDING_KEY = 1;
+constexpr int GDN_TRANSITION_APPLY_PENDING_DELTA = 2;
+constexpr int GDN_TRANSITION_APPLY_PENDING_DECAY = 3;
+constexpr int GDN_TRANSITION_APPLY_PENDING_KEEP = 4;
+constexpr int GDN_TRANSITION_APPLY_PENDING_EPOCH = 5;
+constexpr int GDN_TRANSITION_APPLY_CONV_EPOCH = 6;
+constexpr int GDN_TRANSITION_APPLY_RECURRENT_EPOCH = 7;
+constexpr int GDN_TRANSITION_APPLY_CONV_STATE = 8;
+constexpr int GDN_TRANSITION_APPLY_RECURRENT_STATE = 9;
+
+template <typename T, typename StateT>
+__global__ void gdn_pending_transition_apply_batched_kernel(
+    const uint64_t *__restrict__ pointer_table,
+    const uint32_t *__restrict__ active_slots, int layer_count, int batch_size,
+    int max_rows, int capacity, int num_k_heads, int num_v_heads,
+    int head_k_dim, int head_v_dim, int conv_dim, int conv_width,
+    int tiled_v_heads, int conv_blocks) {
+  const int layer = blockIdx.z;
+  const int batch_idx = blockIdx.y;
+  const int batch_block = blockIdx.x;
+  if (layer >= layer_count || batch_idx >= batch_size) {
+    return;
+  }
+
+  const uint32_t slot = active_slots[batch_idx];
+  if (slot == GDN_SPEC_CHECKPOINT_PAD_SLOT || slot >= capacity) {
+    return;
+  }
+  const auto *pending_keep = reinterpret_cast<const uint32_t *>(
+      pointer_table[GDN_TRANSITION_APPLY_PENDING_KEEP * layer_count + layer]);
+  const auto *pending_epoch = reinterpret_cast<const uint32_t *>(
+      pointer_table[GDN_TRANSITION_APPLY_PENDING_EPOCH * layer_count + layer]);
+  const int rows = (int)pending_keep[slot];
+  const uint32_t epoch = pending_epoch[slot];
+  if (epoch == 0 || rows <= 0 || rows > max_rows) {
+    return;
+  }
+
+  if (batch_block < conv_blocks) {
+    auto *applied_epochs = reinterpret_cast<uint32_t *>(
+        pointer_table[GDN_TRANSITION_APPLY_CONV_EPOCH * layer_count + layer]);
+    const size_t applied_offset = (size_t)slot * conv_blocks + batch_block;
+    if (applied_epochs[applied_offset] == epoch) {
+      return;
+    }
+    const int channel = batch_block * blockDim.x + threadIdx.x;
+    if (channel < conv_dim) {
+      const auto *pending_conv = reinterpret_cast<const T *>(
+          pointer_table[GDN_TRANSITION_APPLY_PENDING_CONV * layer_count +
+                        layer]);
+      auto *conv_state = reinterpret_cast<T *>(
+          pointer_table[GDN_TRANSITION_APPLY_CONV_STATE * layer_count + layer]);
+      T state[GDN_SPEC_CHECKPOINT_MAX_CONV_WIDTH];
+      T *destination =
+          conv_state + ((size_t)slot * conv_dim + channel) * conv_width;
+      for (int i = 0; i < conv_width; i++) {
+        state[i] = destination[i];
+      }
+      for (int position = 0; position < rows; position++) {
+        for (int i = 0; i < conv_width - 1; i++) {
+          state[i] = state[i + 1];
+        }
+        state[conv_width - 1] =
+            pending_conv[((size_t)slot * max_rows + position) * conv_dim +
+                         channel];
+      }
+      for (int i = 0; i < conv_width; i++) {
+        destination[i] = state[i];
+      }
+    }
+    __syncthreads();
+    if (threadIdx.x == 0) {
+      applied_epochs[applied_offset] = epoch;
+    }
+    return;
+  }
+
+  const int value_head = batch_block - conv_blocks;
+  if (value_head >= num_v_heads) {
+    return;
+  }
+  auto *applied_epochs = reinterpret_cast<uint32_t *>(
+      pointer_table[GDN_TRANSITION_APPLY_RECURRENT_EPOCH * layer_count +
+                    layer]);
+  const size_t applied_offset = (size_t)slot * num_v_heads + value_head;
+  if (applied_epochs[applied_offset] == epoch) {
+    return;
+  }
+
+  const int values_per_group = num_v_heads / num_k_heads;
+  const int key_head = tiled_v_heads ? value_head % num_k_heads
+                                     : value_head / values_per_group;
+  const auto *pending_key = reinterpret_cast<const float *>(
+      pointer_table[GDN_TRANSITION_APPLY_PENDING_KEY * layer_count + layer]);
+  const auto *pending_delta = reinterpret_cast<const float *>(
+      pointer_table[GDN_TRANSITION_APPLY_PENDING_DELTA * layer_count + layer]);
+  const auto *pending_decay = reinterpret_cast<const float *>(
+      pointer_table[GDN_TRANSITION_APPLY_PENDING_DECAY * layer_count + layer]);
+  auto *recurrent_state = reinterpret_cast<StateT *>(
+      pointer_table[GDN_TRANSITION_APPLY_RECURRENT_STATE * layer_count +
+                    layer]);
+  __shared__ float shared_key[GDN_SPEC_FUSED_MAX_TOKENS]
+                             [GDN_DECODE_VALUE_MAJOR_K];
+  __shared__ float shared_delta[GDN_SPEC_FUSED_MAX_TOKENS]
+                               [GDN_DECODE_VALUE_MAJOR_V];
+  __shared__ float shared_decay[GDN_SPEC_FUSED_MAX_TOKENS];
+  for (int linear = threadIdx.x; linear < rows * head_k_dim;
+       linear += blockDim.x) {
+    const int position = linear / head_k_dim;
+    const int key = linear - position * head_k_dim;
+    shared_key[position][key] =
+        pending_key[(((size_t)slot * max_rows + position) * num_k_heads +
+                     key_head) *
+                        head_k_dim +
+                    key];
+  }
+  for (int linear = threadIdx.x; linear < rows * head_v_dim;
+       linear += blockDim.x) {
+    const int position = linear / head_v_dim;
+    const int value = linear - position * head_v_dim;
+    shared_delta[position][value] =
+        pending_delta[(((size_t)slot * max_rows + position) * num_v_heads +
+                       value_head) *
+                          head_v_dim +
+                      value];
+  }
+  for (int position = threadIdx.x; position < rows;
+       position += blockDim.x) {
+    shared_decay[position] =
+        pending_decay[((size_t)slot * max_rows + position) * num_v_heads +
+                      value_head];
+  }
+  __syncthreads();
+
+  const int state_elements = head_k_dim * head_v_dim;
+  const size_t state_head =
+      ((size_t)slot * num_v_heads + value_head) * state_elements;
+  for (int element = threadIdx.x; element < state_elements;
+       element += blockDim.x) {
+    const int value = element / head_k_dim;
+    const int key = element - value * head_k_dim;
+    float state = (float)recurrent_state[state_head + element];
+    for (int position = 0; position < rows; position++) {
+      state = __fmaf_rn(shared_key[position][key],
+                        shared_delta[position][value],
+                        __fmul_rn(shared_decay[position], state));
+    }
+    recurrent_state[state_head + element] = (StateT)state;
+  }
+  __syncthreads();
+  if (threadIdx.x == 0) {
+    applied_epochs[applied_offset] = epoch;
+  }
+}
+
+template <typename T>
+void dispatch_gdn_pending_transition_apply_batched(
+    const uint64_t *pointer_table, const uint32_t *active_slots,
+    int layer_count, int batch_size, int max_rows, int capacity,
+    int num_k_heads, int num_v_heads, int head_k_dim, int head_v_dim,
+    int conv_dim, int conv_width, int tiled_v_heads, int state_dtype,
+    cudaStream_t stream) {
+  const int conv_blocks =
+      (conv_dim + GDN_CHANNEL_BLOCK_SIZE - 1) / GDN_CHANNEL_BLOCK_SIZE;
+  dim3 grid(conv_blocks + num_v_heads, batch_size, layer_count);
+  if (state_dtype == GDN_STATE_DTYPE_F16) {
+    gdn_pending_transition_apply_batched_kernel<T, __half>
+        <<<grid, GDN_CHANNEL_BLOCK_SIZE, 0, stream>>>(
+            pointer_table, active_slots, layer_count, batch_size, max_rows,
+            capacity, num_k_heads, num_v_heads, head_k_dim, head_v_dim,
+            conv_dim, conv_width, tiled_v_heads, conv_blocks);
+  } else if (state_dtype == GDN_STATE_DTYPE_BF16) {
+    gdn_pending_transition_apply_batched_kernel<T, __nv_bfloat16>
+        <<<grid, GDN_CHANNEL_BLOCK_SIZE, 0, stream>>>(
+            pointer_table, active_slots, layer_count, batch_size, max_rows,
+            capacity, num_k_heads, num_v_heads, head_k_dim, head_v_dim,
+            conv_dim, conv_width, tiled_v_heads, conv_blocks);
+  } else {
+    gdn_pending_transition_apply_batched_kernel<T, float>
+        <<<grid, GDN_CHANNEL_BLOCK_SIZE, 0, stream>>>(
+            pointer_table, active_slots, layer_count, batch_size, max_rows,
+            capacity, num_k_heads, num_v_heads, head_k_dim, head_v_dim,
+            conv_dim, conv_width, tiled_v_heads, conv_blocks);
+  }
+}
+
+extern "C" void gdn_pending_transition_apply_batched(
+    const uint64_t *pointer_table, const uint32_t *active_slots,
+    int layer_count, int batch_size, int max_rows, int capacity,
+    int num_k_heads, int num_v_heads, int head_k_dim, int head_v_dim,
+    int conv_dim, int conv_width, int tiled_v_heads, int activation_dtype,
+    int state_dtype, int64_t stream) {
+  if (layer_count <= 0 || batch_size <= 0 || max_rows <= 0 ||
+      max_rows > GDN_SPEC_FUSED_MAX_TOKENS || capacity <= 0 ||
+      num_k_heads <= 0 || num_v_heads <= 0 ||
+      num_v_heads % num_k_heads != 0 ||
+      head_k_dim != GDN_DECODE_VALUE_MAJOR_K ||
+      head_v_dim != GDN_DECODE_VALUE_MAJOR_V || conv_dim <= 0 ||
+      conv_width <= 0 || conv_width > GDN_SPEC_CHECKPOINT_MAX_CONV_WIDTH) {
+    return;
+  }
+  const cudaStream_t custream = (cudaStream_t)stream;
+  if (activation_dtype == 0) {
+    dispatch_gdn_pending_transition_apply_batched<__half>(
+        pointer_table, active_slots, layer_count, batch_size, max_rows,
+        capacity, num_k_heads, num_v_heads, head_k_dim, head_v_dim, conv_dim,
+        conv_width, tiled_v_heads, state_dtype, custream);
+  } else {
+    dispatch_gdn_pending_transition_apply_batched<__nv_bfloat16>(
+        pointer_table, active_slots, layer_count, batch_size, max_rows,
+        capacity, num_k_heads, num_v_heads, head_k_dim, head_v_dim, conv_dim,
+        conv_width, tiled_v_heads, state_dtype, custream);
   }
 }

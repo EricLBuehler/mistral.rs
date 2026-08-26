@@ -669,6 +669,7 @@ impl DecoderLayer {
                         recurrent_state: cache.recurrent_state.narrow(0, segment.state_index, 1)?,
                         state_layout: cache.state_layout,
                         slots: None,
+                        pending_transitions: None,
                     };
                     outputs.push(mistralrs_quant::with_lora_execution_row_range(
                         segment.token_range.clone(),

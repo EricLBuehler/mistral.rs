@@ -319,7 +319,7 @@ impl HybridPagedPrefixValidator {
             if pipeline.cache().is_hybrid() {
                 pipeline.cache().hybrid().reset_seq(sequence_id, slot_idx)?;
             }
-            pipeline.release_speculative_sequences(&[sequence_id]);
+            pipeline.release_speculative_sequences(&[sequence_id])?;
             if record_auxiliary_miss {
                 metrics::counter!("mistralrs_speculative_prefix_cache_misses_total").increment(1);
             }
@@ -334,7 +334,7 @@ impl HybridPagedPrefixValidator {
         PagedPrefixCacheValidation::staged(restore.cached_tokens, move |seq| {
             debug_assert_eq!(*seq.id(), restore.sequence_id);
             let mut pipeline = get_mut_arcmutex!(pipeline);
-            pipeline.release_speculative_sequences(&[restore.sequence_id]);
+            pipeline.release_speculative_sequences(&[restore.sequence_id])?;
             if restore.restore_auxiliary {
                 let auxiliary = restore
                     .checkpoint
@@ -512,12 +512,12 @@ impl PagedPrefixCacheValidator for HybridPagedPrefixValidator {
         slot_idx: usize,
     ) -> candle_core::Result<bool> {
         let mut pipeline = get_mut_arcmutex!(self.pipeline);
+        pipeline.release_speculative_sequences(&[sequence_id])?;
         let recurrent_result = if pipeline.cache().is_hybrid() {
             pipeline.cache().hybrid().release_seq(sequence_id, slot_idx)
         } else {
             Ok(false)
         };
-        pipeline.release_speculative_sequences(&[sequence_id]);
         recurrent_result
     }
 }
@@ -764,7 +764,9 @@ impl Engine {
                     }
                 }
             }
-            pipeline.release_speculative_sequences(&finished_sequence_ids);
+            if let Err(err) = pipeline.release_speculative_sequences(&finished_sequence_ids) {
+                tracing::error!("Failed to release speculative sequence state: {err}");
+            }
             if !recurrent_release_errors.is_empty() {
                 tracing::error!(
                     "Failed to release recurrent state for finished sequences: {}",
@@ -1593,8 +1595,11 @@ impl Engine {
                     let step_lookahead = StepLookahead::Disabled;
                     drop(scheduler);
                     if !preempted_sequence_ids.is_empty() {
-                        get_mut_arcmutex!(self.pipeline)
-                            .release_speculative_sequences(&preempted_sequence_ids);
+                        if let Err(err) = get_mut_arcmutex!(self.pipeline)
+                            .release_speculative_sequences(&preempted_sequence_ids)
+                        {
+                            tracing::error!("Failed to release preempted speculative state: {err}");
+                        }
                     }
                     #[cfg(feature = "cuda")]
                     let mut prefix_gather_workspace_limit = None;

@@ -3635,16 +3635,26 @@ impl Mlp {
 
     pub fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         let res = if let Some(merged_gate_up) = &self.merged_gate_up {
-            let inter = if let Some(gate_up) = merged_gate_up.forward_packed(xs)? {
+            if let Some(gate_up) = merged_gate_up.forward_packed(xs)? {
                 let split_size = gate_up.dim(D::Minus1)? / 2;
-                crate::ops::split_mul_and_act(&gate_up, split_size, self.act)?
+                if let Some(output) = crate::ops::try_fused_split_glu_quantized_forward(
+                    &gate_up,
+                    split_size,
+                    self.act,
+                    &*self.down,
+                )? {
+                    output
+                } else {
+                    let inter = crate::ops::split_mul_and_act(&gate_up, split_size, self.act)?;
+                    self.down.forward(&inter)?
+                }
             } else {
                 let mut gate_up = merged_gate_up.forward(xs)?.into_iter();
                 let gate = gate_up.next().unwrap();
                 let up = gate_up.next().unwrap();
-                crate::ops::mul_and_act(&gate, &up, self.act)?
-            };
-            self.down.forward(&inter)?
+                let inter = crate::ops::mul_and_act(&gate, &up, self.act)?;
+                self.down.forward(&inter)?
+            }
         } else {
             crate::ops::quantized_ffn(xs, &*self.gate, &*self.up, &*self.down, self.act)?
         };

@@ -1002,6 +1002,18 @@ impl SpeculativeTargetMixin for Qwen3_5Model {
         self.text.supports_recurrent_speculative_checkpoints()
     }
 
+    fn supports_recurrent_speculative_transitions(&self) -> bool {
+        self.text.supports_recurrent_speculative_transitions()
+    }
+
+    fn reserve_recurrent_speculative_transition_storage(&self) -> Result<bool> {
+        self.text.reserve_recurrent_transition_storage()
+    }
+
+    fn flush_recurrent_speculative_transitions(&self, seq_ids: &[usize]) -> Result<()> {
+        self.text.flush_recurrent_transitions_for_sequences(seq_ids)
+    }
+
     fn supports_speculative_prompt_bootstrap(&self) -> bool {
         self.dflash.lock().expect("dflash poisoned").is_some()
     }
@@ -1102,16 +1114,20 @@ impl SpeculativeTargetMixin for Qwen3_5Model {
         drafter.evict_cuda_graphs_lru(max_entries)
     }
 
-    fn speculative_bypass(&mut self, seq_ids: &[usize]) {
+    fn speculative_bypass(&mut self, seq_ids: &[usize]) -> Result<()> {
+        let flush_result = self.text.flush_recurrent_transitions_for_sequences(seq_ids);
         if let Some(drafter) = self.dflash.lock().expect("dflash poisoned").as_ref() {
             drafter.mark_seqs_dormant(seq_ids);
         }
+        flush_result
     }
 
-    fn release_speculative_sequences(&mut self, seq_ids: &[usize]) {
+    fn release_speculative_sequences(&mut self, seq_ids: &[usize]) -> Result<()> {
+        let flush_result = self.text.flush_recurrent_transitions_for_sequences(seq_ids);
         if let Some(drafter) = self.dflash.lock().expect("dflash poisoned").as_ref() {
             drafter.release_seqs(seq_ids);
         }
+        flush_result
     }
 
     fn speculative_propose(
@@ -1161,6 +1177,13 @@ impl SpeculativeTargetMixin for Qwen3_5Model {
             .iter()
             .map(|row| (row.batch_idx, row.keep_rows))
             .collect::<Vec<_>>();
+        if self.text.cache.hybrid().uses_recurrent_transition_log() {
+            if !self.text.stage_recurrent_prefixes(rows)? {
+                self.text.replay_recurrent_prefixes(&checkpoint_rows)?;
+            }
+            self.text.clear_gdn_replay_stash();
+            return Ok(());
+        }
         let checkpointed = {
             let mut cache = self.text.cache.hybrid();
             self.text
@@ -1194,8 +1217,7 @@ impl SpeculativeTargetMixin for Qwen3_5Model {
             .ok_or_else(|| {
                 candle_core::Error::msg("foreign speculative graph state for Qwen3.5")
             })?;
-        self.text.install_spec_graph_state(state);
-        Ok(())
+        self.text.install_spec_graph_state(state)
     }
 }
 

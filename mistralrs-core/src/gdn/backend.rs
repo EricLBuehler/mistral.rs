@@ -1348,6 +1348,7 @@ mod tests {
             recurrent_state: initial_state.clone(),
             state_layout: RecurrentStateLayout::GdnKeyMajor,
             slots: None,
+            pending_transitions: None,
         };
         let fast = decode_recurrence_cpu_from_convolved(
             &mixed,
@@ -1377,6 +1378,7 @@ mod tests {
             recurrent_state: initial_state,
             state_layout: RecurrentStateLayout::GdnKeyMajor,
             slots: None,
+            pending_transitions: None,
         };
         let reference = gated_delta_rule_recurrence(
             &q,
@@ -1548,6 +1550,7 @@ mod tests {
             recurrent_state: recurrent_state_grouped.clone(),
             state_layout: RecurrentStateLayout::GdnKeyMajor,
             slots: None,
+            pending_transitions: None,
         };
         let mut tiled_cache = GdnLayerCache {
             conv_state: runtime_from_grouped(&conv_state_grouped, 1, &conv_runtime_to_grouped)?,
@@ -1558,6 +1561,7 @@ mod tests {
             )?,
             state_layout: RecurrentStateLayout::GdnKeyMajor,
             slots: None,
+            pending_transitions: None,
         };
 
         let prefill_mixed_grouped = Tensor::from_vec(
@@ -1838,12 +1842,14 @@ mod tests {
             recurrent_state: recurrent_state.clone(),
             state_layout: RecurrentStateLayout::GdnKeyMajor,
             slots: None,
+            pending_transitions: None,
         };
         let mut reference_cache = GdnLayerCache {
             conv_state: initial_state,
             recurrent_state,
             state_layout: RecurrentStateLayout::GdnKeyMajor,
             slots: None,
+            pending_transitions: None,
         };
 
         let fast = causal_conv1d_update_cpu(&x, &weight, &dims, &mut fast_cache)?;
@@ -1895,12 +1901,14 @@ mod tests {
             recurrent_state: recurrent_state.clone(),
             state_layout: RecurrentStateLayout::GdnKeyMajor,
             slots: None,
+            pending_transitions: None,
         };
         let mut chunked_cache = GdnLayerCache {
             conv_state,
             recurrent_state,
             state_layout: RecurrentStateLayout::GdnKeyMajor,
             slots: None,
+            pending_transitions: None,
         };
 
         let one_shot = causal_conv1d_full(&x, &weight, &dims, &mut one_shot_cache)?;

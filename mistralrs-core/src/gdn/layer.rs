@@ -3,6 +3,7 @@ use mistralrs_quant::{Comm, QuantMethod, Shard, ShardedVarBuilder};
 use std::sync::Arc;
 
 use crate::device_map::DeviceMapper;
+use crate::kv_cache::GdnPendingTransitionSpec;
 use crate::kv_cache::{RecurrentStateLayout, RecurrentStatePool};
 use crate::pipeline::RecurrentBatchKind;
 
@@ -23,6 +24,30 @@ pub struct GdnForwardStash {
     pub convolved_qkv: Tensor,
     pub b: Tensor,
     pub a: Tensor,
+}
+
+#[derive(Clone)]
+pub struct GdnTransitionStash {
+    pub conv_input: Tensor,
+    pub transitions: crate::cuda::gdn::GdnSpeculativeTransitions,
+}
+
+#[derive(Clone)]
+pub enum GdnSpeculativeStash {
+    Replay(GdnForwardStash),
+    Transition(GdnTransitionStash),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct GdnTransitionCommitConfig {
+    pub num_k_heads: usize,
+    pub num_v_heads: usize,
+    pub head_k_dim: usize,
+    pub head_v_dim: usize,
+    pub conv_dim: usize,
+    pub conv_width: usize,
+    pub tiled_v_heads: bool,
+    pub state_layout: RecurrentStateLayout,
 }
 
 enum GdnCoreOutput {
@@ -159,6 +184,44 @@ impl GatedDeltaNet {
         .all(|device| device.same_device(pool.device()))
     }
 
+    pub(crate) fn speculative_transitions_supported(
+        &self,
+        pool: &RecurrentStatePool,
+        activation_dtype: DType,
+    ) -> bool {
+        self.speculative_checkpoints_supported(pool, activation_dtype)
+            && pool.checkpoint_lanes() == 1
+            && pool.state_layout() == RecurrentStateLayout::GdnValueMajor
+            && self.dims.head_k_dim == crate::cuda::gdn::GDN_DECODE_K_DIM
+            && self.dims.head_v_dim == crate::cuda::gdn::GDN_DECODE_V_DIM
+            && self.dims.conv_kernel_size <= crate::cuda::gdn::GDN_SPEC_CHECKPOINT_MAX_CONV_WIDTH
+            && self.norm.weight.dtype() == activation_dtype
+            && self.norm.weight.device().same_device(pool.device())
+    }
+
+    pub(crate) fn transition_commit_config(
+        &self,
+        pool: &RecurrentStatePool,
+    ) -> GdnTransitionCommitConfig {
+        GdnTransitionCommitConfig {
+            num_k_heads: self.dims.num_k_heads,
+            num_v_heads: self.dims.num_v_heads,
+            head_k_dim: self.dims.head_k_dim,
+            head_v_dim: self.dims.head_v_dim,
+            conv_dim: self.dims.conv_dim,
+            conv_width: self.dims.conv_kernel_size,
+            tiled_v_heads: self.dims.v_head_layout == super::config::GdnVHeadLayout::Tiled,
+            state_layout: pool.state_layout(),
+        }
+    }
+
+    pub(crate) fn pending_transition_spec(&self, max_rows: usize) -> GdnPendingTransitionSpec {
+        GdnPendingTransitionSpec {
+            num_k_heads: self.dims.num_k_heads,
+            max_rows,
+        }
+    }
+
     pub(crate) fn speculative_state_commit_supported(
         &self,
         stash: &GdnForwardStash,
@@ -287,7 +350,7 @@ impl GatedDeltaNet {
         cache: &mut GdnLayerCache,
         batch_kind: RecurrentBatchKind,
     ) -> Result<Tensor> {
-        self.forward_with_stash(x, cache, batch_kind, 1, None)
+        self.forward_with_stash(x, cache, batch_kind, 1, false, None)
     }
 
     pub fn forward_with_stash(
@@ -296,10 +359,11 @@ impl GatedDeltaNet {
         cache: &mut GdnLayerCache,
         batch_kind: RecurrentBatchKind,
         checkpoint_lanes: usize,
-        stash_out: Option<&mut Option<GdnForwardStash>>,
+        transition_checkpoints: bool,
+        stash_out: Option<&mut Option<GdnSpeculativeStash>>,
     ) -> Result<Tensor> {
         #[cfg(not(feature = "cuda"))]
-        let _ = checkpoint_lanes;
+        let _ = (checkpoint_lanes, transition_checkpoints);
         let (batch_size, seq_len, _) = x.dims3()?;
         let dtype = x.dtype();
 
@@ -316,13 +380,14 @@ impl GatedDeltaNet {
                 &projected,
                 cache,
                 checkpoint_lanes,
+                transition_checkpoints,
             )?)
         } else {
             None
         };
         #[cfg(not(feature = "cuda"))]
-        let checkpointed: Option<(Tensor, GdnCoreOutput)> = None;
-        let (convolved_qkv, output) = match checkpointed {
+        let checkpointed: Option<(Tensor, GdnCoreOutput, Option<GdnTransitionStash>)> = None;
+        let (convolved_qkv, output, transitions) = match checkpointed {
             Some(checkpointed) => checkpointed,
             None => {
                 let convolved_qkv = backend::causal_conv1d(
@@ -344,15 +409,18 @@ impl GatedDeltaNet {
                     cache,
                     dtype,
                 )?;
-                (convolved_qkv, GdnCoreOutput::Recurrent(y))
+                (convolved_qkv, GdnCoreOutput::Recurrent(y), None)
             }
         };
         if let Some(stash_out) = stash_out {
-            *stash_out = Some(GdnForwardStash {
-                mixed_qkv,
-                convolved_qkv: convolved_qkv.clone(),
-                b: projected.b.clone(),
-                a: projected.a.clone(),
+            *stash_out = Some(match transitions {
+                Some(transitions) => GdnSpeculativeStash::Transition(transitions),
+                None => GdnSpeculativeStash::Replay(GdnForwardStash {
+                    mixed_qkv,
+                    convolved_qkv: convolved_qkv.clone(),
+                    b: projected.b.clone(),
+                    a: projected.a.clone(),
+                }),
             });
         }
 
@@ -366,7 +434,8 @@ impl GatedDeltaNet {
         projected: &GdnProjection,
         cache: &GdnLayerCache,
         checkpoint_lanes: usize,
-    ) -> Result<(Tensor, GdnCoreOutput)> {
+        transition_checkpoints: bool,
+    ) -> Result<(Tensor, GdnCoreOutput, Option<GdnTransitionStash>)> {
         let (batch_size, seq_len, _) = mixed_qkv.dims3()?;
         let active_slots = cache
             .slots
@@ -377,13 +446,32 @@ impl GatedDeltaNet {
             .squeeze(1)?
             .to_dtype(mixed_qkv.dtype())?
             .contiguous()?;
+        let conv_input = if transition_checkpoints {
+            mixed_qkv.contiguous()?
+        } else {
+            mixed_qkv.clone()
+        };
+        let pending_conv = cache.pending_transitions.as_ref().map(|pending| {
+            crate::cuda::gdn::GdnPendingSpeculativeConv {
+                conv_input: &pending.conv_input,
+                keep_rows: &pending.keep_rows,
+                epochs: &pending.pending_epochs,
+                applied_epochs: &pending.conv_applied_epochs,
+            }
+        });
         let convolved_qkv = crate::cuda::gdn::speculative_conv_checkpoints_cuda(
             crate::cuda::gdn::GdnSpeculativeConvCheckpoints {
-                x: mixed_qkv,
+                x: &conv_input,
                 weight: &weight,
                 state_pool: &cache.conv_state,
                 active_slots,
-                checkpoint_lanes,
+                checkpoint_lanes: if transition_checkpoints {
+                    1
+                } else {
+                    checkpoint_lanes
+                },
+                write_checkpoints: !transition_checkpoints,
+                pending: pending_conv,
             },
         )?;
         let fused_norm = cache.state_layout == RecurrentStateLayout::GdnValueMajor
@@ -397,7 +485,17 @@ impl GatedDeltaNet {
             weight: &self.norm.weight,
             eps: self.norm.eps(),
         });
-        let output = crate::cuda::gdn::speculative_recurrence_checkpoints_cuda(
+        let pending_recurrence = cache.pending_transitions.as_ref().map(|pending| {
+            crate::cuda::gdn::GdnPendingSpeculativeRecurrence {
+                key: &pending.key,
+                delta: &pending.delta,
+                decay: &pending.decay,
+                keep_rows: &pending.keep_rows,
+                epochs: &pending.pending_epochs,
+                applied_epochs: &pending.recurrent_applied_epochs,
+            }
+        });
+        let recurrence = crate::cuda::gdn::speculative_recurrence_checkpoints_cuda(
             crate::cuda::gdn::GdnSpeculativeRecurrenceCheckpoints {
                 mixed_qkv: &convolved_qkv,
                 b: &projected.b,
@@ -406,7 +504,11 @@ impl GatedDeltaNet {
                 dt_bias: &self.dt_bias,
                 state_pool: &cache.recurrent_state,
                 active_slots,
-                checkpoint_lanes,
+                checkpoint_lanes: if transition_checkpoints {
+                    1
+                } else {
+                    checkpoint_lanes
+                },
                 num_k_heads: self.dims.num_k_heads,
                 num_v_heads: self.dims.num_v_heads,
                 head_k_dim: self.dims.head_k_dim,
@@ -414,10 +516,23 @@ impl GatedDeltaNet {
                 tiled_v_heads: self.dims.v_head_layout == GdnVHeadLayout::Tiled,
                 state_layout: cache.state_layout,
                 post_op,
+                record_transitions: transition_checkpoints,
+                pending: pending_recurrence,
             },
         )?;
+        let transitions = recurrence
+            .transitions
+            .map(|transitions| GdnTransitionStash {
+                conv_input,
+                transitions,
+            });
+        let output = recurrence.output;
         if fused_norm {
-            Ok((convolved_qkv, GdnCoreOutput::Normalized(output)))
+            Ok((
+                convolved_qkv,
+                GdnCoreOutput::Normalized(output),
+                transitions,
+            ))
         } else {
             let output = output
                 .reshape((
@@ -427,7 +542,7 @@ impl GatedDeltaNet {
                     self.dims.head_v_dim,
                 ))?
                 .transpose(1, 2)?;
-            Ok((convolved_qkv, GdnCoreOutput::Recurrent(output)))
+            Ok((convolved_qkv, GdnCoreOutput::Recurrent(output), transitions))
         }
     }
 

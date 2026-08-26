@@ -168,6 +168,7 @@ pub(crate) fn build_normal_pipeline(
         EitherCache::Hybrid(hybrid) => hybrid.lock().unwrap().num_layers(),
     };
     let recurrent_checkpoints_supported = model.supports_recurrent_speculative_checkpoints();
+    let recurrent_transitions_supported = model.supports_recurrent_speculative_transitions();
     let recurrent_pool_grew = paged_attn_config
         .map(|config| {
             let kv_bytes_per_token =
@@ -176,12 +177,18 @@ pub(crate) fn build_normal_pipeline(
                 model.cache(),
                 config,
                 recurrent_checkpoints_supported,
+                recurrent_transitions_supported,
                 &device,
                 kv_bytes_per_token,
             )
         })
         .transpose()?
         .unwrap_or(false);
+    let recurrent_pool_grew = if recurrent_transitions_supported {
+        model.reserve_recurrent_speculative_transition_storage()? || recurrent_pool_grew
+    } else {
+        recurrent_pool_grew
+    };
     #[cfg(feature = "cuda")]
     if recurrent_pool_grew {
         super::synchronize_cuda_contexts(&device, mapper.as_ref())?;
@@ -1667,8 +1674,8 @@ impl crate::speculative::driver::SpeculativePipelineExt for NormalPipeline {
         self.model.speculative_observe(observation);
     }
 
-    fn speculative_bypass(&mut self, seq_ids: &[usize]) {
-        self.model.speculative_bypass(seq_ids);
+    fn speculative_bypass(&mut self, seq_ids: &[usize]) -> candle_core::Result<()> {
+        self.model.speculative_bypass(seq_ids)
     }
 
     fn speculative_target_hiddens(
@@ -2017,7 +2024,8 @@ impl NormalPipeline {
             .materialize_decode_tensors()
             .map_err(candle_core::Error::msg)?;
 
-        let recurrent_snapshots = self.snapshot_hybrid_recurrent_checkpoints()?;
+        let recurrent_snapshots =
+            self.snapshot_hybrid_recurrent_checkpoints(recurrent_batch_kind)?;
         let live_state_indices = self.snapshot_hybrid_state_indices();
         let capture_attempt: candle_core::Result<_> = (|| {
             let state_index_buffers = match &step.state_indices {
@@ -2139,11 +2147,17 @@ impl NormalPipeline {
 
     fn snapshot_hybrid_recurrent_checkpoints(
         &self,
+        batch_kind: RecurrentBatchKind,
     ) -> candle_core::Result<Option<SeqRecurrentCheckpointSnapshots>> {
         if !self.model.cache().is_hybrid() {
             return Ok(None);
         }
+        let transitions_supported = batch_kind == RecurrentBatchKind::SpeculativeDecode
+            && self.model.supports_recurrent_speculative_transitions();
         let hybrid_cache = self.model.cache().hybrid();
+        if transitions_supported && hybrid_cache.uses_recurrent_transition_log() {
+            return Ok(None);
+        }
         let Some(mut indices) = hybrid_cache
             .logical_state_indices_host()
             .map(ToOwned::to_owned)
@@ -2483,8 +2497,15 @@ impl Pipeline for NormalPipeline {
         Ok(())
     }
 
-    fn release_speculative_sequences(&mut self, seq_ids: &[usize]) {
-        self.model.release_speculative_sequences(seq_ids);
+    fn release_speculative_sequences(&mut self, seq_ids: &[usize]) -> candle_core::Result<()> {
+        self.model.release_speculative_sequences(seq_ids)
+    }
+
+    fn flush_recurrent_speculative_transitions(
+        &mut self,
+        seq_ids: &[usize],
+    ) -> candle_core::Result<()> {
+        self.model.flush_recurrent_speculative_transitions(seq_ids)
     }
 
     #[allow(clippy::too_many_arguments)]

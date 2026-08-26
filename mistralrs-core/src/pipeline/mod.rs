@@ -508,6 +508,7 @@ fn reserve_recurrent_serving_capacity(
     cache: &EitherCache,
     paged_attn_config: PagedAttentionConfig,
     recurrent_checkpoints_supported: bool,
+    recurrent_transitions_supported: bool,
     primary_device: &Device,
     kv_bytes_per_token: usize,
 ) -> Result<bool> {
@@ -516,26 +517,34 @@ fn reserve_recurrent_serving_capacity(
     }
     let requested_lanes = effective_recurrent_checkpoint_lanes(
         paged_attn_config.recurrent_checkpoint_lanes,
-        recurrent_checkpoints_supported,
+        recurrent_checkpoints_supported || recurrent_transitions_supported,
     );
+    let transition_log = recurrent_transitions_supported
+        && requested_lanes <= crate::cuda::gdn::GDN_SPEC_FUSED_MAX_TOKENS;
     let Some(serving_capacity) = paged_attn_config.serving_capacity else {
-        return Ok(cache.hybrid().configure_checkpoint_lanes(requested_lanes)?);
+        return Ok(if transition_log {
+            cache.hybrid().configure_transition_lanes(requested_lanes)?
+        } else {
+            cache.hybrid().configure_checkpoint_lanes(requested_lanes)?
+        });
     };
     let capacity = serving_capacity
         .checked_add(RECURRENT_GRAPH_PAD_SLOTS)
         .ok_or_else(|| candle_core::Error::msg("recurrent serving capacity overflow"))?;
-    let checkpoint_lanes =
-        if paged_attn_config.recurrent_checkpoint_lanes_auto && requested_lanes > 1 {
-            automatic_recurrent_checkpoint_lanes(
-                cache,
-                paged_attn_config,
-                primary_device,
-                capacity,
-                kv_bytes_per_token,
-            )?
-        } else {
-            requested_lanes
-        };
+    let checkpoint_lanes = if !transition_log
+        && paged_attn_config.recurrent_checkpoint_lanes_auto
+        && requested_lanes > 1
+    {
+        automatic_recurrent_checkpoint_lanes(
+            cache,
+            paged_attn_config,
+            primary_device,
+            capacity,
+            kv_bytes_per_token,
+        )?
+    } else {
+        requested_lanes
+    };
     if checkpoint_lanes != paged_attn_config.recurrent_checkpoint_lanes {
         tracing::info!(
             requested_lanes = paged_attn_config.recurrent_checkpoint_lanes,
@@ -544,9 +553,15 @@ fn reserve_recurrent_serving_capacity(
             "Adjusted recurrent speculative checkpoint depth for the serving memory budget"
         );
     }
-    Ok(cache
-        .hybrid()
-        .reserve_recurrent_layout(capacity, checkpoint_lanes)?)
+    Ok(if transition_log {
+        cache
+            .hybrid()
+            .reserve_recurrent_transition_layout(capacity, checkpoint_lanes)?
+    } else {
+        cache
+            .hybrid()
+            .reserve_recurrent_layout(capacity, checkpoint_lanes)?
+    })
 }
 
 fn add_recurrent_prefix_memory_reservations(
@@ -1753,7 +1768,16 @@ pub trait Pipeline:
         self.attach_speculative(config)
     }
 
-    fn release_speculative_sequences(&mut self, _seq_ids: &[usize]) {}
+    fn release_speculative_sequences(&mut self, _seq_ids: &[usize]) -> candle_core::Result<()> {
+        Ok(())
+    }
+
+    fn flush_recurrent_speculative_transitions(
+        &mut self,
+        _seq_ids: &[usize],
+    ) -> candle_core::Result<()> {
+        Ok(())
+    }
 
     fn supports_speculative_prompt_bootstrap(&self) -> bool {
         false
@@ -1850,6 +1874,8 @@ pub trait Pipeline:
         let Some(slot_idx) = seq.recurrent_state_idx() else {
             return Ok(());
         };
+
+        self.flush_recurrent_speculative_transitions(&[*seq.id()])?;
 
         let snapshots = self
             .cache()
@@ -3119,13 +3145,55 @@ mod tests {
                 .with_recurrent_checkpoint_lanes(8)
                 .unwrap();
 
-        reserve_recurrent_serving_capacity(&cache, config, false, &Device::Cpu, 1).unwrap();
+        reserve_recurrent_serving_capacity(&cache, config, false, false, &Device::Cpu, 1).unwrap();
 
         let cache = cache.hybrid();
         assert_eq!(cache.checkpoint_lanes(), 1);
         let pool = cache.get(0).unwrap().as_recurrent_pool().unwrap();
         assert_eq!(pool.capacity(), 17);
         assert_eq!(pool.physical_capacity(), 17);
+    }
+
+    #[test]
+    fn recurrent_transition_reservation_keeps_one_physical_lane() {
+        let hybrid = HybridCache::new(
+            HybridCacheConfig {
+                layer_types: vec![HybridLayerType::Recurrent],
+                max_seq_len: 32,
+                recurrent: RecurrentLayerConfig {
+                    conv_dim: 8,
+                    conv_width: 4,
+                    state: RecurrentStateSpec::Gdn {
+                        heads: 2,
+                        key_dim: 4,
+                        value_dim: 4,
+                    },
+                    recurrent_dtype: Some(candle_core::DType::F32),
+                },
+            },
+            candle_core::DType::BF16,
+            &[Device::Cpu],
+        )
+        .unwrap();
+        let cache = EitherCache::Hybrid(Arc::new(Mutex::new(hybrid)));
+        let config =
+            PagedAttentionConfig::new(None, MemoryGpuConfig::MbAmount(1), PagedCacheType::Auto)
+                .unwrap()
+                .with_serving_capacity(64)
+                .unwrap()
+                .with_recurrent_checkpoint_lanes(8)
+                .unwrap();
+
+        reserve_recurrent_serving_capacity(&cache, config, true, true, &Device::Cpu, 1).unwrap();
+
+        let cache = cache.hybrid();
+        assert_eq!(cache.recurrent_capacity(), 65);
+        assert_eq!(cache.checkpoint_lanes(), 8);
+        assert_eq!(cache.physical_checkpoint_lanes(), 1);
+        assert!(cache.uses_recurrent_transition_log());
+        let pool = cache.get(0).unwrap().as_recurrent_pool().unwrap();
+        assert_eq!(pool.capacity(), 65);
+        assert_eq!(pool.physical_capacity(), 65);
     }
 
     #[test]

@@ -36,8 +36,12 @@ const GDN_DECODE_INPUT_ALIGNMENT: usize = 8;
 pub(crate) const GDN_SPEC_COMMIT_MAX_K: usize = 256;
 pub(crate) const GDN_SPEC_CHECKPOINT_MAX_CONV_WIDTH: usize = 16;
 pub(crate) const GDN_SPEC_CHECKPOINT_MAX_K: usize = 256;
-#[cfg(feature = "cuda")]
 pub(crate) const GDN_SPEC_FUSED_MAX_TOKENS: usize = 8;
+pub(crate) const GDN_CHANNEL_BLOCK_SIZE: usize = 256;
+#[cfg(feature = "cuda")]
+const GDN_TRANSITION_STAGE_POINTER_SEGMENTS: usize = 10;
+#[cfg(feature = "cuda")]
+const GDN_TRANSITION_APPLY_POINTER_SEGMENTS: usize = 10;
 #[cfg(feature = "cuda")]
 const GDN_DECODE_KERNEL_ENV: &str = "MISTRALRS_GDN_DECODE_KERNEL";
 #[cfg(feature = "cuda")]
@@ -408,6 +412,80 @@ fn cuda_recurrent_state_ptr(tensor: &Tensor, name: &str) -> Result<(*mut core::f
         dtype => candle::bail!("{name} has unsupported recurrent state dtype {dtype:?}"),
     };
     Ok((pointer as *mut core::ffi::c_void, dtype))
+}
+
+#[cfg(feature = "cuda")]
+fn cuda_read_ptr_with_guard<'a, T: candle_core::cuda_backend::CudaDType + 'a>(
+    storage: &'a candle_core::Storage,
+    layout: &candle_core::Layout,
+    stream: &'a candle_core::cuda_backend::cudarc::driver::CudaStream,
+    name: &str,
+) -> Result<(
+    candle_core::cuda_backend::cudarc::driver::sys::CUdeviceptr,
+    candle_core::cuda_backend::cudarc::driver::SyncOnDrop<'a>,
+)> {
+    use candle_core::cuda_backend::cudarc::driver::DevicePtr;
+
+    let slice = match storage {
+        candle_core::Storage::Cuda(storage) => storage.as_cuda_slice::<T>()?,
+        _ => candle_core::bail!("{name} must be CUDA"),
+    };
+    let (base, guard) = slice.device_ptr(stream);
+    let pointer = unsafe { (base as *const T).add(layout.start_offset()) as u64 };
+    Ok((pointer, guard))
+}
+
+#[cfg(feature = "cuda")]
+fn cuda_inplace_ptr_with_guard<'a, T: candle_core::cuda_backend::CudaDType + 'a>(
+    storage: &'a candle_core::Storage,
+    layout: &candle_core::Layout,
+    stream: &'a candle_core::cuda_backend::cudarc::driver::CudaStream,
+    name: &str,
+) -> Result<(
+    candle_core::cuda_backend::cudarc::driver::sys::CUdeviceptr,
+    candle_core::cuda_backend::cudarc::driver::SyncOnDrop<'a>,
+)> {
+    let slice = match storage {
+        candle_core::Storage::Cuda(storage) => storage.as_cuda_slice::<T>()?,
+        _ => candle_core::bail!("{name} must be CUDA"),
+    };
+    if slice.stream().cu_stream() != stream.cu_stream() {
+        candle_core::bail!("{name} must be owned by the GDN launch stream");
+    }
+    cuda_read_ptr_with_guard::<T>(storage, layout, stream, name)
+}
+
+#[cfg(feature = "cuda")]
+fn cuda_recurrent_state_inplace_ptr_with_guard<'a>(
+    dtype: DType,
+    storage: &'a candle_core::Storage,
+    layout: &candle_core::Layout,
+    stream: &'a candle_core::cuda_backend::cudarc::driver::CudaStream,
+    name: &str,
+) -> Result<(
+    candle_core::cuda_backend::cudarc::driver::sys::CUdeviceptr,
+    i32,
+    candle_core::cuda_backend::cudarc::driver::SyncOnDrop<'a>,
+)> {
+    let (pointer, dtype_code, guard) = match dtype {
+        DType::F16 => {
+            let (pointer, guard) =
+                cuda_inplace_ptr_with_guard::<half::f16>(storage, layout, stream, name)?;
+            (pointer, GDN_STATE_DTYPE_F16, guard)
+        }
+        DType::BF16 => {
+            let (pointer, guard) =
+                cuda_inplace_ptr_with_guard::<half::bf16>(storage, layout, stream, name)?;
+            (pointer, GDN_STATE_DTYPE_BF16, guard)
+        }
+        DType::F32 => {
+            let (pointer, guard) =
+                cuda_inplace_ptr_with_guard::<f32>(storage, layout, stream, name)?;
+            (pointer, GDN_STATE_DTYPE_F32, guard)
+        }
+        other => candle_core::bail!("{name} has unsupported dtype {other:?}"),
+    };
+    Ok((pointer, dtype_code, guard))
 }
 
 /// Which rows of the recurrent state a GDN kernel reads and writes. `Gathered` means the state is a
@@ -819,6 +897,7 @@ pub fn causal_conv1d_cuda(
     use candle::cuda_backend::cudarc::driver::DevicePtr;
     use candle_core as candle;
     use core::ffi::c_void;
+
     fn cuda_fwd<
         T: candle::cuda_backend::CudaDType + candle::cuda_backend::cudarc::driver::DeviceRepr,
     >(
@@ -2036,12 +2115,22 @@ pub fn speculative_state_commit_cuda(_commit: GdnSpeculativeStateCommit<'_>) -> 
 }
 
 #[allow(dead_code)]
+pub struct GdnPendingSpeculativeConv<'a> {
+    pub conv_input: &'a Tensor,
+    pub keep_rows: &'a Tensor,
+    pub epochs: &'a Tensor,
+    pub applied_epochs: &'a Tensor,
+}
+
+#[allow(dead_code)]
 pub struct GdnSpeculativeConvCheckpoints<'a> {
     pub x: &'a Tensor,
     pub weight: &'a Tensor,
     pub state_pool: &'a Tensor,
     pub active_slots: &'a Tensor,
     pub checkpoint_lanes: usize,
+    pub write_checkpoints: bool,
+    pub pending: Option<GdnPendingSpeculativeConv<'a>>,
 }
 
 #[cfg(feature = "cuda")]
@@ -2065,6 +2154,8 @@ pub fn speculative_conv_checkpoints_cuda(
             state_pool,
             active_slots,
             checkpoint_lanes,
+            write_checkpoints,
+            pending,
         } = context;
         let (batch_size, seq_len, conv_dim) = x.dims3()?;
         let (weight_conv_dim, kernel_size) = weight.dims2()?;
@@ -2088,7 +2179,7 @@ pub fn speculative_conv_checkpoints_cuda(
                 state_pool.dims()
             );
         }
-        if checkpoint_lanes == 0 || seq_len > checkpoint_lanes {
+        if checkpoint_lanes == 0 || (write_checkpoints && seq_len > checkpoint_lanes) {
             candle::bail!(
                 "GDN speculative convolution has query length {seq_len}, checkpoint lane count {checkpoint_lanes}"
             );
@@ -2113,6 +2204,45 @@ pub fn speculative_conv_checkpoints_cuda(
             if !tensor.device().same_device(x.device()) {
                 candle::bail!("GDN speculative convolution tensors must share one device");
             }
+        }
+        let pending = pending
+            .map(|pending| {
+                let logical_capacity = capacity / checkpoint_lanes;
+                let (pending_capacity, max_rows, pending_conv_dim) = pending.conv_input.dims3()?;
+                let conv_blocks = conv_dim.div_ceil(GDN_CHANNEL_BLOCK_SIZE);
+                if pending_capacity != logical_capacity
+                    || max_rows == 0
+                    || max_rows > GDN_SPEC_FUSED_MAX_TOKENS
+                    || pending_conv_dim != conv_dim
+                    || pending.keep_rows.dims() != [logical_capacity]
+                    || pending.epochs.dims() != [logical_capacity]
+                    || pending.applied_epochs.dims() != [logical_capacity, conv_blocks]
+                    || pending.conv_input.dtype() != x.dtype()
+                    || pending.keep_rows.dtype() != DType::U32
+                    || pending.epochs.dtype() != DType::U32
+                    || pending.applied_epochs.dtype() != DType::U32
+                {
+                    candle::bail!("GDN pending convolution transition shape is incompatible");
+                }
+                for tensor in [
+                    pending.conv_input,
+                    pending.keep_rows,
+                    pending.epochs,
+                    pending.applied_epochs,
+                ] {
+                    if !tensor.device().same_device(x.device()) || !tensor.is_contiguous() {
+                        candle::bail!(
+                            "GDN pending convolution transitions must be contiguous on one device"
+                        );
+                    }
+                }
+                Ok((pending, max_rows, logical_capacity, conv_blocks))
+            })
+            .transpose()?;
+        if pending.is_some() && (write_checkpoints || checkpoint_lanes != 1) {
+            candle::bail!(
+                "GDN pending convolution transitions require single-lane transition logging"
+            );
         }
 
         let dev = x.device().as_cuda_device()?;
@@ -2140,6 +2270,50 @@ pub fn speculative_conv_checkpoints_cuda(
         let output = unsafe { dev.alloc::<T>(batch_size * seq_len * conv_dim) }?;
         let stream = dev.cuda_stream().cu_stream() as i64;
 
+        macro_rules! cuda_ptr {
+            ($tensor:expr, $ty:ty, $name:literal) => {{
+                let (storage, layout) = $tensor.storage_and_layout();
+                let storage = match &*storage {
+                    candle::Storage::Cuda(storage) => storage.as_cuda_slice::<$ty>()?,
+                    _ => candle::bail!(concat!($name, " must be CUDA")),
+                };
+                let pointer = storage
+                    .slice(layout.start_offset()..)
+                    .device_ptr(storage.stream())
+                    .0;
+                pointer
+            }};
+        }
+        let (
+            pending_conv,
+            pending_keep,
+            pending_epochs,
+            applied_epochs,
+            max_rows,
+            pending_capacity,
+            conv_blocks,
+        ) = if let Some((pending, max_rows, pending_capacity, conv_blocks)) = pending {
+            (
+                cuda_ptr!(pending.conv_input, T, "pending_conv_input") as *const c_void,
+                cuda_ptr!(pending.keep_rows, u32, "pending_keep_rows") as *const u32,
+                cuda_ptr!(pending.epochs, u32, "pending_epochs") as *const u32,
+                cuda_ptr!(pending.applied_epochs, u32, "conv_applied_epochs") as *mut u32,
+                max_rows,
+                pending_capacity,
+                conv_blocks,
+            )
+        } else {
+            (
+                std::ptr::null(),
+                std::ptr::null(),
+                std::ptr::null(),
+                std::ptr::null_mut(),
+                0,
+                0,
+                0,
+            )
+        };
+
         unsafe {
             crate::cuda::ffi::gdn_speculative_conv_checkpoints(
                 x_storage
@@ -2164,6 +2338,14 @@ pub fn speculative_conv_checkpoints_cuda(
                 conv_dim as i32,
                 kernel_size as i32,
                 checkpoint_lanes as i32,
+                i32::from(write_checkpoints),
+                pending_conv,
+                pending_keep,
+                pending_epochs,
+                applied_epochs,
+                max_rows as i32,
+                pending_capacity as i32,
+                conv_blocks as i32,
                 x_strides[0] as i64,
                 x_strides[1] as i64,
                 x_strides[2] as i64,
@@ -2196,6 +2378,16 @@ pub fn speculative_conv_checkpoints_cuda(
 }
 
 #[allow(dead_code)]
+pub struct GdnPendingSpeculativeRecurrence<'a> {
+    pub key: &'a Tensor,
+    pub delta: &'a Tensor,
+    pub decay: &'a Tensor,
+    pub keep_rows: &'a Tensor,
+    pub epochs: &'a Tensor,
+    pub applied_epochs: &'a Tensor,
+}
+
+#[allow(dead_code)]
 pub struct GdnSpeculativeRmsNormGate<'a> {
     pub gate: &'a Tensor,
     pub weight: &'a Tensor,
@@ -2219,13 +2411,28 @@ pub struct GdnSpeculativeRecurrenceCheckpoints<'a> {
     pub tiled_v_heads: bool,
     pub state_layout: RecurrentStateLayout,
     pub post_op: Option<GdnSpeculativeRmsNormGate<'a>>,
+    pub record_transitions: bool,
+    pub pending: Option<GdnPendingSpeculativeRecurrence<'a>>,
+}
+
+#[derive(Clone)]
+pub struct GdnSpeculativeTransitions {
+    pub key: Tensor,
+    pub delta: Tensor,
+    pub decay: Tensor,
+}
+
+#[cfg_attr(not(feature = "cuda"), allow(dead_code))]
+pub struct GdnSpeculativeRecurrenceOutput {
+    pub output: Tensor,
+    pub transitions: Option<GdnSpeculativeTransitions>,
 }
 
 #[cfg(feature = "cuda")]
 #[allow(dead_code)]
 pub fn speculative_recurrence_checkpoints_cuda(
     context: GdnSpeculativeRecurrenceCheckpoints<'_>,
-) -> Result<Tensor> {
+) -> Result<GdnSpeculativeRecurrenceOutput> {
     use candle::cuda_backend::cudarc::driver::DevicePtr;
     use candle_core as candle;
     use core::ffi::c_void;
@@ -2235,7 +2442,7 @@ pub fn speculative_recurrence_checkpoints_cuda(
     >(
         context: GdnSpeculativeRecurrenceCheckpoints<'_>,
         dtype_code: i32,
-    ) -> Result<Tensor> {
+    ) -> Result<GdnSpeculativeRecurrenceOutput> {
         let GdnSpeculativeRecurrenceCheckpoints {
             mixed_qkv,
             b,
@@ -2252,6 +2459,8 @@ pub fn speculative_recurrence_checkpoints_cuda(
             tiled_v_heads,
             state_layout,
             post_op,
+            record_transitions,
+            pending,
         } = context;
         let (batch_size, seq_len, conv_dim) = mixed_qkv.dims3()?;
         if batch_size == 0 || seq_len == 0 || num_k_heads == 0 || num_v_heads == 0 {
@@ -2293,7 +2502,7 @@ pub fn speculative_recurrence_checkpoints_cuda(
                 state_pool.dims()
             );
         }
-        if checkpoint_lanes == 0 || seq_len > checkpoint_lanes {
+        if checkpoint_lanes == 0 || (!record_transitions && seq_len > checkpoint_lanes) {
             candle::bail!(
                 "GDN speculative recurrence has query length {seq_len}, checkpoint lane count {checkpoint_lanes}"
             );
@@ -2323,8 +2532,65 @@ pub fn speculative_recurrence_checkpoints_cuda(
         if !state_pool.is_contiguous() || !active_slots.is_contiguous() {
             candle::bail!("GDN speculative recurrence state and slots must be contiguous");
         }
+        let pending = pending
+            .map(|pending| {
+                let logical_capacity = capacity / checkpoint_lanes;
+                let (pending_capacity, max_rows, pending_k_heads, pending_k_dim) =
+                    pending.key.dims4()?;
+                if pending_capacity != logical_capacity
+                    || max_rows == 0
+                    || max_rows > GDN_SPEC_FUSED_MAX_TOKENS
+                    || pending_k_heads != num_k_heads
+                    || pending_k_dim != head_k_dim
+                    || pending.delta.dims() != [logical_capacity, max_rows, num_v_heads, head_v_dim]
+                    || pending.decay.dims() != [logical_capacity, max_rows, num_v_heads]
+                    || pending.keep_rows.dims() != [logical_capacity]
+                    || pending.epochs.dims() != [logical_capacity]
+                    || pending.applied_epochs.dims() != [logical_capacity, num_v_heads]
+                    || pending.key.dtype() != DType::F32
+                    || pending.delta.dtype() != DType::F32
+                    || pending.decay.dtype() != DType::F32
+                    || pending.keep_rows.dtype() != DType::U32
+                    || pending.epochs.dtype() != DType::U32
+                    || pending.applied_epochs.dtype() != DType::U32
+                {
+                    candle::bail!("GDN pending recurrence transition shape is incompatible");
+                }
+                for tensor in [
+                    pending.key,
+                    pending.delta,
+                    pending.decay,
+                    pending.keep_rows,
+                    pending.epochs,
+                    pending.applied_epochs,
+                ] {
+                    if !tensor.device().same_device(mixed_qkv.device()) || !tensor.is_contiguous() {
+                        candle::bail!(
+                            "GDN pending recurrence transitions must be contiguous on one device"
+                        );
+                    }
+                }
+                Ok((pending, max_rows, logical_capacity))
+            })
+            .transpose()?;
 
         let fused_post_op = post_op.is_some();
+        if pending.is_some() && (!record_transitions || !fused_post_op || checkpoint_lanes != 1) {
+            candle::bail!(
+                "GDN pending recurrence transitions require fused single-lane transition logging"
+            );
+        }
+        if record_transitions
+            && (state_layout != RecurrentStateLayout::GdnValueMajor
+                || head_k_dim != GDN_DECODE_K_DIM
+                || head_v_dim != GDN_DECODE_V_DIM
+                || seq_len > GDN_SPEC_FUSED_MAX_TOKENS
+                || !fused_post_op)
+        {
+            candle::bail!(
+                "GDN transition logging requires fused value-major 128x128 speculative recurrence"
+            );
+        }
         let post_op = post_op
             .map(|post_op| {
                 if state_layout != RecurrentStateLayout::GdnValueMajor
@@ -2432,6 +2698,62 @@ pub fn speculative_recurrence_checkpoints_cuda(
             std::ptr::null()
         };
         let output = unsafe { dev.alloc::<T>(batch_size * num_v_heads * seq_len * head_v_dim) }?;
+        let mut transition_key = record_transitions
+            .then(|| unsafe { dev.alloc::<f32>(batch_size * seq_len * num_k_heads * head_k_dim) })
+            .transpose()?;
+        let mut transition_delta = record_transitions
+            .then(|| unsafe { dev.alloc::<f32>(batch_size * seq_len * num_v_heads * head_v_dim) })
+            .transpose()?;
+        let mut transition_decay = record_transitions
+            .then(|| unsafe { dev.alloc::<f32>(batch_size * seq_len * num_v_heads) })
+            .transpose()?;
+        let transition_key_ptr = transition_key
+            .as_mut()
+            .map_or(std::ptr::null_mut(), |buffer| {
+                buffer.device_ptr(buffer.stream()).0 as *mut f32
+            });
+        let transition_delta_ptr = transition_delta
+            .as_mut()
+            .map_or(std::ptr::null_mut(), |buffer| {
+                buffer.device_ptr(buffer.stream()).0 as *mut f32
+            });
+        let transition_decay_ptr = transition_decay
+            .as_mut()
+            .map_or(std::ptr::null_mut(), |buffer| {
+                buffer.device_ptr(buffer.stream()).0 as *mut f32
+            });
+        let (
+            pending_key,
+            pending_delta,
+            pending_decay,
+            pending_keep,
+            pending_epochs,
+            applied_epochs,
+            max_pending_rows,
+            pending_capacity,
+        ) = if let Some((pending, max_rows, pending_capacity)) = pending {
+            (
+                cuda_ptr!(pending.key, f32, "pending_key") as *const f32,
+                cuda_ptr!(pending.delta, f32, "pending_delta") as *const f32,
+                cuda_ptr!(pending.decay, f32, "pending_decay") as *const f32,
+                cuda_ptr!(pending.keep_rows, u32, "pending_keep_rows") as *const u32,
+                cuda_ptr!(pending.epochs, u32, "pending_epochs") as *const u32,
+                cuda_ptr!(pending.applied_epochs, u32, "recurrent_applied_epochs") as *mut u32,
+                max_rows,
+                pending_capacity,
+            )
+        } else {
+            (
+                std::ptr::null(),
+                std::ptr::null(),
+                std::ptr::null(),
+                std::ptr::null(),
+                std::ptr::null(),
+                std::ptr::null_mut(),
+                0,
+                0,
+            )
+        };
         let stream = dev.cuda_stream().cu_stream() as i64;
 
         unsafe {
@@ -2446,6 +2768,17 @@ pub fn speculative_recurrence_checkpoints_cuda(
                 slots_ptr,
                 gate_ptr,
                 norm_weight_ptr,
+                transition_key_ptr,
+                transition_delta_ptr,
+                transition_decay_ptr,
+                pending_key,
+                pending_delta,
+                pending_decay,
+                pending_keep,
+                pending_epochs,
+                applied_epochs,
+                max_pending_rows as i32,
+                pending_capacity as i32,
                 b_strides[0],
                 b_strides[1],
                 b_strides[2],
@@ -2472,19 +2805,41 @@ pub fn speculative_recurrence_checkpoints_cuda(
             );
         }
 
-        let output =
+        let output_storage =
             candle::Storage::Cuda(candle::CudaStorage::wrap_cuda_slice(output, dev.clone()));
-        if fused_post_op {
-            Ok(Tensor::from((
-                output,
+        let output = if fused_post_op {
+            Tensor::from((
+                output_storage,
                 (batch_size, seq_len, num_v_heads, head_v_dim),
-            )))
+            ))
         } else {
-            Ok(Tensor::from((
-                output,
+            Tensor::from((
+                output_storage,
                 (batch_size * num_v_heads, seq_len, head_v_dim),
-            )))
-        }
+            ))
+        };
+        let transitions = match (transition_key, transition_delta, transition_decay) {
+            (Some(key), Some(delta), Some(decay)) => Some(GdnSpeculativeTransitions {
+                key: Tensor::from((
+                    candle::Storage::Cuda(candle::CudaStorage::wrap_cuda_slice(key, dev.clone())),
+                    (batch_size, seq_len, num_k_heads, head_k_dim),
+                )),
+                delta: Tensor::from((
+                    candle::Storage::Cuda(candle::CudaStorage::wrap_cuda_slice(delta, dev.clone())),
+                    (batch_size, seq_len, num_v_heads, head_v_dim),
+                )),
+                decay: Tensor::from((
+                    candle::Storage::Cuda(candle::CudaStorage::wrap_cuda_slice(decay, dev.clone())),
+                    (batch_size, seq_len, num_v_heads),
+                )),
+            }),
+            (None, None, None) => None,
+            _ => unreachable!("transition buffers are allocated together"),
+        };
+        Ok(GdnSpeculativeRecurrenceOutput {
+            output,
+            transitions,
+        })
     }
 
     match context.mixed_qkv.dtype() {
@@ -2500,8 +2855,812 @@ pub fn speculative_recurrence_checkpoints_cuda(
 #[allow(unused)]
 pub fn speculative_recurrence_checkpoints_cuda(
     _context: GdnSpeculativeRecurrenceCheckpoints<'_>,
-) -> Result<Tensor> {
+) -> Result<GdnSpeculativeRecurrenceOutput> {
     candle_core::bail!("speculative_recurrence_checkpoints_cuda requires the cuda feature")
+}
+
+#[cfg_attr(not(feature = "cuda"), allow(dead_code))]
+pub struct GdnSpeculativeTransitionLayer<'a> {
+    pub conv_input: &'a Tensor,
+    pub key: &'a Tensor,
+    pub delta: &'a Tensor,
+    pub decay: &'a Tensor,
+    pub conv_state: &'a Tensor,
+    pub recurrent_state: &'a Tensor,
+}
+
+#[cfg_attr(not(feature = "cuda"), allow(dead_code))]
+pub struct GdnSpeculativeTransitionCommit<'a> {
+    pub layers: &'a [GdnSpeculativeTransitionLayer<'a>],
+    pub keep_rows: &'a Tensor,
+    pub active_slots: &'a Tensor,
+    pub num_k_heads: usize,
+    pub num_v_heads: usize,
+    pub head_k_dim: usize,
+    pub head_v_dim: usize,
+    pub conv_dim: usize,
+    pub conv_width: usize,
+    pub tiled_v_heads: bool,
+    pub state_layout: RecurrentStateLayout,
+}
+
+#[cfg(feature = "cuda")]
+pub fn speculative_transition_commit_batched_cuda(
+    commit: GdnSpeculativeTransitionCommit<'_>,
+) -> Result<()> {
+    use candle::cuda_backend::cudarc::driver::DevicePtr;
+    use candle_core as candle;
+
+    fn cuda_commit<
+        T: candle::cuda_backend::CudaDType + candle::cuda_backend::cudarc::driver::DeviceRepr,
+    >(
+        commit: GdnSpeculativeTransitionCommit<'_>,
+        activation_dtype: i32,
+    ) -> Result<()> {
+        let GdnSpeculativeTransitionCommit {
+            layers,
+            keep_rows,
+            active_slots,
+            num_k_heads,
+            num_v_heads,
+            head_k_dim,
+            head_v_dim,
+            conv_dim,
+            conv_width,
+            tiled_v_heads,
+            state_layout,
+        } = commit;
+        if layers.is_empty() {
+            return Ok(());
+        }
+        let batch_size = keep_rows.dims1()?;
+        if batch_size == 0
+            || active_slots.dims1()? != batch_size
+            || keep_rows.dtype() != DType::U32
+            || active_slots.dtype() != DType::U32
+        {
+            candle::bail!("GDN transition commit indices must be non-empty u32 [batch]");
+        }
+        if conv_width == 0 || conv_width > GDN_SPEC_CHECKPOINT_MAX_CONV_WIDTH {
+            candle::bail!("GDN transition commit has unsupported convolution width");
+        }
+        if num_k_heads == 0
+            || num_v_heads == 0
+            || !num_v_heads.is_multiple_of(num_k_heads)
+            || head_k_dim != GDN_DECODE_K_DIM
+            || head_v_dim != GDN_DECODE_V_DIM
+        {
+            candle::bail!("GDN transition commit has incompatible head dimensions");
+        }
+        let value_major = match state_layout {
+            RecurrentStateLayout::GdnKeyMajor => false,
+            RecurrentStateLayout::GdnValueMajor => true,
+            RecurrentStateLayout::Opaque => {
+                candle::bail!("GDN transition commit does not support opaque state")
+            }
+        };
+        let (first_batch, seq_len, first_conv_dim) = layers[0].conv_input.dims3()?;
+        if first_batch != batch_size
+            || seq_len == 0
+            || seq_len > GDN_SPEC_FUSED_MAX_TOKENS
+            || first_conv_dim != conv_dim
+        {
+            candle::bail!("GDN transition commit input shape is incompatible with its indices");
+        }
+        let device = layers[0].conv_input.device();
+        if !device.is_cuda()
+            || !keep_rows.device().same_device(device)
+            || !active_slots.device().same_device(device)
+        {
+            candle::bail!("GDN transition commit tensors must share one CUDA device");
+        }
+        let activation_tensor_dtype = layers[0].conv_input.dtype();
+        let recurrent_dtype = layers[0].recurrent_state.dtype();
+        if !recurrent_state_dtype_supported(recurrent_dtype) {
+            candle::bail!("GDN transition commit state has unsupported dtype");
+        }
+
+        let cuda_stream = device.as_cuda_device()?.cuda_stream();
+        let phase_timer = crate::pipeline::cuda_graph::CudaPhaseTimer::start(&cuda_stream)?;
+        let mut pointer_segments = (0..6)
+            .map(|_| Vec::with_capacity(layers.len()))
+            .collect::<Vec<_>>();
+        let mut recurrent_state_dtype = None;
+        for layer in layers {
+            let (layer_batch, layer_seq, layer_conv_dim) = layer.conv_input.dims3()?;
+            let conv_capacity = layer.conv_state.dim(0)?;
+            let recurrent_capacity = layer.recurrent_state.dim(0)?;
+            if (layer_batch, layer_seq, layer_conv_dim) != (batch_size, seq_len, conv_dim)
+                || layer.key.dims() != [batch_size, seq_len, num_k_heads, head_k_dim]
+                || layer.delta.dims() != [batch_size, seq_len, num_v_heads, head_v_dim]
+                || layer.decay.dims() != [batch_size, seq_len, num_v_heads]
+                || layer.conv_state.dims() != [conv_capacity, conv_dim, conv_width]
+                || recurrent_capacity != conv_capacity
+            {
+                candle::bail!("GDN transition commit layer shapes are incompatible");
+            }
+            let expected_state_shape = if value_major {
+                [recurrent_capacity, num_v_heads, head_v_dim, head_k_dim]
+            } else {
+                [recurrent_capacity, num_v_heads, head_k_dim, head_v_dim]
+            };
+            if layer.recurrent_state.dims() != expected_state_shape {
+                candle::bail!("GDN transition commit recurrent state shape is incompatible");
+            }
+            if layer.conv_input.dtype() != activation_tensor_dtype
+                || layer.conv_state.dtype() != activation_tensor_dtype
+                || layer.key.dtype() != DType::F32
+                || layer.delta.dtype() != DType::F32
+                || layer.decay.dtype() != DType::F32
+                || layer.recurrent_state.dtype() != recurrent_dtype
+            {
+                candle::bail!("GDN transition commit layer dtypes are incompatible");
+            }
+            for tensor in [
+                layer.conv_input,
+                layer.key,
+                layer.delta,
+                layer.decay,
+                layer.conv_state,
+                layer.recurrent_state,
+            ] {
+                if !tensor.device().same_device(device) || !tensor.is_contiguous() {
+                    candle::bail!(
+                        "GDN transition commit layer tensors must be contiguous on one device"
+                    );
+                }
+            }
+
+            macro_rules! tensor_ptr {
+                ($tensor:expr, $ty:ty, $name:literal) => {{
+                    let (storage, layout) = $tensor.storage_and_layout();
+                    let storage = match &*storage {
+                        candle::Storage::Cuda(storage) => storage.as_cuda_slice::<$ty>()?,
+                        _ => candle::bail!(concat!($name, " must be CUDA")),
+                    };
+                    let pointer = storage
+                        .slice(layout.start_offset()..)
+                        .device_ptr(storage.stream())
+                        .0;
+                    pointer
+                }};
+            }
+            pointer_segments[0].push(tensor_ptr!(layer.conv_input, T, "conv_input"));
+            pointer_segments[1].push(tensor_ptr!(layer.key, f32, "key"));
+            pointer_segments[2].push(tensor_ptr!(layer.delta, f32, "delta"));
+            pointer_segments[3].push(tensor_ptr!(layer.decay, f32, "decay"));
+            pointer_segments[4].push(tensor_ptr!(layer.conv_state, T, "conv_state"));
+            let (state_ptr, state_dtype) =
+                cuda_recurrent_state_ptr(layer.recurrent_state, "recurrent_state")?;
+            if recurrent_state_dtype
+                .replace(state_dtype)
+                .is_some_and(|dtype| dtype != state_dtype)
+            {
+                candle::bail!("GDN transition commit recurrent state dtypes diverged");
+            }
+            pointer_segments[5].push(state_ptr as u64);
+        }
+        let pointers = pointer_segments.into_iter().flatten().collect::<Vec<_>>();
+        let pointers = pointers
+            .into_iter()
+            .map(|pointer| pointer as i64)
+            .collect::<Vec<_>>();
+        let pointer_table = Tensor::from_vec(pointers, (6 * layers.len(),), device)?;
+
+        macro_rules! tensor_ptr {
+            ($tensor:expr, $ty:ty, $name:literal) => {{
+                let (storage, layout) = $tensor.storage_and_layout();
+                let storage = match &*storage {
+                    candle::Storage::Cuda(storage) => storage.as_cuda_slice::<$ty>()?,
+                    _ => candle::bail!(concat!($name, " must be CUDA")),
+                };
+                let pointer = storage
+                    .slice(layout.start_offset()..)
+                    .device_ptr(storage.stream())
+                    .0;
+                pointer
+            }};
+        }
+        let pointer_table_ptr = tensor_ptr!(pointer_table, i64, "pointer_table") as *const u64;
+        let keep_rows_ptr = tensor_ptr!(keep_rows, u32, "keep_rows") as *const u32;
+        let active_slots_ptr = tensor_ptr!(active_slots, u32, "active_slots") as *const u32;
+        let stream = cuda_stream.cu_stream() as i64;
+        unsafe {
+            crate::cuda::ffi::gdn_speculative_transition_commit_batched(
+                pointer_table_ptr,
+                keep_rows_ptr,
+                active_slots_ptr,
+                layers.len() as i32,
+                batch_size as i32,
+                seq_len as i32,
+                num_k_heads as i32,
+                num_v_heads as i32,
+                head_k_dim as i32,
+                head_v_dim as i32,
+                conv_dim as i32,
+                conv_width as i32,
+                i32::from(tiled_v_heads),
+                i32::from(value_major),
+                activation_dtype,
+                recurrent_state_dtype.expect("layers are non-empty"),
+                stream,
+            );
+        }
+        if let Some(timer) = phase_timer {
+            timer.finish("gdn_transition_commit", batch_size, seq_len)?;
+        }
+        Ok(())
+    }
+
+    match commit.layers.first().map(|layer| layer.conv_input.dtype()) {
+        Some(DType::F16) => cuda_commit::<half::f16>(commit, 0),
+        Some(DType::BF16) => cuda_commit::<half::bf16>(commit, 1),
+        Some(other) => candle_core::bail!(
+            "GDN transition commit only supports f16/bf16 activations, got {other:?}"
+        ),
+        None => Ok(()),
+    }
+}
+
+#[cfg(not(feature = "cuda"))]
+pub fn speculative_transition_commit_batched_cuda(
+    _commit: GdnSpeculativeTransitionCommit<'_>,
+) -> Result<()> {
+    candle_core::bail!("speculative_transition_commit_batched_cuda requires the cuda feature")
+}
+
+#[cfg_attr(not(feature = "cuda"), allow(dead_code))]
+pub struct GdnSpeculativeTransitionStageLayer<'a> {
+    pub conv_input: &'a Tensor,
+    pub key: &'a Tensor,
+    pub delta: &'a Tensor,
+    pub decay: &'a Tensor,
+    pub pending_conv_input: &'a Tensor,
+    pub pending_key: &'a Tensor,
+    pub pending_delta: &'a Tensor,
+    pub pending_decay: &'a Tensor,
+    pub pending_keep_rows: &'a Tensor,
+    pub pending_epochs: &'a Tensor,
+}
+
+#[cfg_attr(not(feature = "cuda"), allow(dead_code))]
+pub struct GdnSpeculativeTransitionStage<'a> {
+    pub layers: &'a [GdnSpeculativeTransitionStageLayer<'a>],
+    pub keep_rows: &'a Tensor,
+    pub destination_slots: &'a Tensor,
+    pub num_k_heads: usize,
+    pub num_v_heads: usize,
+    pub head_k_dim: usize,
+    pub head_v_dim: usize,
+    pub conv_dim: usize,
+}
+
+#[cfg(feature = "cuda")]
+pub fn speculative_transition_stage_batched_cuda(
+    stage: GdnSpeculativeTransitionStage<'_>,
+) -> Result<()> {
+    use candle_core as candle;
+
+    fn cuda_stage<
+        T: candle::cuda_backend::CudaDType + candle::cuda_backend::cudarc::driver::DeviceRepr,
+    >(
+        stage: GdnSpeculativeTransitionStage<'_>,
+        activation_dtype: i32,
+    ) -> Result<()> {
+        let GdnSpeculativeTransitionStage {
+            layers,
+            keep_rows,
+            destination_slots,
+            num_k_heads,
+            num_v_heads,
+            head_k_dim,
+            head_v_dim,
+            conv_dim,
+        } = stage;
+        if layers.is_empty() {
+            return Ok(());
+        }
+        let batch_size = keep_rows.dims1()?;
+        if batch_size == 0
+            || destination_slots.dims1()? != batch_size
+            || keep_rows.dtype() != DType::U32
+            || destination_slots.dtype() != DType::U32
+        {
+            candle::bail!("GDN transition stage indices must be non-empty u32 [batch]");
+        }
+        if num_k_heads == 0
+            || num_v_heads == 0
+            || !num_v_heads.is_multiple_of(num_k_heads)
+            || head_k_dim == 0
+            || head_v_dim == 0
+            || conv_dim == 0
+        {
+            candle::bail!("GDN transition stage has incompatible dimensions");
+        }
+        let (first_batch, seq_len, first_conv_dim) = layers[0].conv_input.dims3()?;
+        if first_batch != batch_size
+            || seq_len == 0
+            || seq_len > GDN_SPEC_FUSED_MAX_TOKENS
+            || first_conv_dim != conv_dim
+        {
+            candle::bail!("GDN transition stage input shape is incompatible with its indices");
+        }
+        let (destination_capacity, max_rows, destination_conv_dim) =
+            layers[0].pending_conv_input.dims3()?;
+        if destination_capacity == 0
+            || max_rows < seq_len
+            || max_rows > GDN_SPEC_FUSED_MAX_TOKENS
+            || destination_conv_dim != conv_dim
+        {
+            candle::bail!("GDN transition stage destination shape is incompatible");
+        }
+        let device = layers[0].conv_input.device();
+        if !device.is_cuda()
+            || !keep_rows.device().same_device(device)
+            || !destination_slots.device().same_device(device)
+            || !keep_rows.is_contiguous()
+            || !destination_slots.is_contiguous()
+        {
+            candle::bail!("GDN transition stage tensors must be contiguous on one CUDA device");
+        }
+        let activation_tensor_dtype = layers[0].conv_input.dtype();
+        for layer in layers {
+            if layer.conv_input.dims() != [batch_size, seq_len, conv_dim]
+                || layer.key.dims() != [batch_size, seq_len, num_k_heads, head_k_dim]
+                || layer.delta.dims() != [batch_size, seq_len, num_v_heads, head_v_dim]
+                || layer.decay.dims() != [batch_size, seq_len, num_v_heads]
+                || layer.pending_conv_input.dims() != [destination_capacity, max_rows, conv_dim]
+                || layer.pending_key.dims()
+                    != [destination_capacity, max_rows, num_k_heads, head_k_dim]
+                || layer.pending_delta.dims()
+                    != [destination_capacity, max_rows, num_v_heads, head_v_dim]
+                || layer.pending_decay.dims() != [destination_capacity, max_rows, num_v_heads]
+                || layer.pending_keep_rows.dims() != [destination_capacity]
+                || layer.pending_epochs.dims() != [destination_capacity]
+            {
+                candle::bail!("GDN transition stage layer shapes are incompatible");
+            }
+            if layer.conv_input.dtype() != activation_tensor_dtype
+                || layer.pending_conv_input.dtype() != activation_tensor_dtype
+                || layer.key.dtype() != DType::F32
+                || layer.delta.dtype() != DType::F32
+                || layer.decay.dtype() != DType::F32
+                || layer.pending_key.dtype() != DType::F32
+                || layer.pending_delta.dtype() != DType::F32
+                || layer.pending_decay.dtype() != DType::F32
+                || layer.pending_keep_rows.dtype() != DType::U32
+                || layer.pending_epochs.dtype() != DType::U32
+            {
+                candle::bail!("GDN transition stage layer dtypes are incompatible");
+            }
+            for tensor in [
+                layer.conv_input,
+                layer.key,
+                layer.delta,
+                layer.decay,
+                layer.pending_conv_input,
+                layer.pending_key,
+                layer.pending_delta,
+                layer.pending_decay,
+                layer.pending_keep_rows,
+                layer.pending_epochs,
+            ] {
+                if !tensor.device().same_device(device) || !tensor.is_contiguous() {
+                    candle::bail!(
+                        "GDN transition stage layer tensors must be contiguous on one device"
+                    );
+                }
+            }
+        }
+        let cuda_stream = device.as_cuda_device()?.cuda_stream();
+        let layer_storage_layouts = layers
+            .iter()
+            .map(|layer| {
+                [
+                    layer.conv_input.storage_and_layout(),
+                    layer.key.storage_and_layout(),
+                    layer.delta.storage_and_layout(),
+                    layer.decay.storage_and_layout(),
+                    layer.pending_conv_input.storage_and_layout(),
+                    layer.pending_key.storage_and_layout(),
+                    layer.pending_delta.storage_and_layout(),
+                    layer.pending_decay.storage_and_layout(),
+                    layer.pending_keep_rows.storage_and_layout(),
+                    layer.pending_epochs.storage_and_layout(),
+                ]
+            })
+            .collect::<Vec<_>>();
+        let mut pointer_segments = (0..GDN_TRANSITION_STAGE_POINTER_SEGMENTS)
+            .map(|_| Vec::with_capacity(layers.len()))
+            .collect::<Vec<_>>();
+        let mut pointer_guards =
+            Vec::with_capacity(GDN_TRANSITION_STAGE_POINTER_SEGMENTS.saturating_mul(layers.len()));
+        for storage_layouts in &layer_storage_layouts {
+            macro_rules! read_ptr {
+                ($segment:expr, $ty:ty, $name:literal) => {{
+                    let (storage, layout) = &storage_layouts[$segment];
+                    let (pointer, guard) =
+                        cuda_read_ptr_with_guard::<$ty>(storage, layout, &cuda_stream, $name)?;
+                    pointer_segments[$segment].push(pointer);
+                    pointer_guards.push(guard);
+                }};
+            }
+            macro_rules! inplace_ptr {
+                ($segment:expr, $ty:ty, $name:literal) => {{
+                    let (storage, layout) = &storage_layouts[$segment];
+                    let (pointer, guard) =
+                        cuda_inplace_ptr_with_guard::<$ty>(storage, layout, &cuda_stream, $name)?;
+                    pointer_segments[$segment].push(pointer);
+                    pointer_guards.push(guard);
+                }};
+            }
+            read_ptr!(0, T, "conv_input");
+            read_ptr!(1, f32, "key");
+            read_ptr!(2, f32, "delta");
+            read_ptr!(3, f32, "decay");
+            inplace_ptr!(4, T, "pending_conv_input");
+            inplace_ptr!(5, f32, "pending_key");
+            inplace_ptr!(6, f32, "pending_delta");
+            inplace_ptr!(7, f32, "pending_decay");
+            inplace_ptr!(8, u32, "pending_keep_rows");
+            inplace_ptr!(9, u32, "pending_epochs");
+        }
+        let pointers = pointer_segments
+            .into_iter()
+            .flatten()
+            .map(|pointer| pointer as i64)
+            .collect::<Vec<_>>();
+        let pointer_table = Tensor::from_vec(
+            pointers,
+            (GDN_TRANSITION_STAGE_POINTER_SEGMENTS * layers.len(),),
+            device,
+        )?;
+        let (pointer_table_storage, pointer_table_layout) = pointer_table.storage_and_layout();
+        let (pointer_table_ptr, pointer_table_guard) = cuda_read_ptr_with_guard::<i64>(
+            &pointer_table_storage,
+            pointer_table_layout,
+            &cuda_stream,
+            "pointer_table",
+        )?;
+        let (keep_rows_storage, keep_rows_layout) = keep_rows.storage_and_layout();
+        let (keep_rows_ptr, keep_rows_guard) = cuda_read_ptr_with_guard::<u32>(
+            &keep_rows_storage,
+            keep_rows_layout,
+            &cuda_stream,
+            "keep_rows",
+        )?;
+        let (destination_slots_storage, destination_slots_layout) =
+            destination_slots.storage_and_layout();
+        let (destination_slots_ptr, destination_slots_guard) = cuda_read_ptr_with_guard::<u32>(
+            &destination_slots_storage,
+            destination_slots_layout,
+            &cuda_stream,
+            "destination_slots",
+        )?;
+        let phase_timer = crate::pipeline::cuda_graph::CudaPhaseTimer::start(&cuda_stream)?;
+        unsafe {
+            crate::cuda::ffi::gdn_speculative_transition_stage_batched(
+                pointer_table_ptr as *const u64,
+                keep_rows_ptr as *const u32,
+                destination_slots_ptr as *const u32,
+                layers.len() as i32,
+                batch_size as i32,
+                seq_len as i32,
+                max_rows as i32,
+                destination_capacity as i32,
+                num_k_heads as i32,
+                num_v_heads as i32,
+                head_k_dim as i32,
+                head_v_dim as i32,
+                conv_dim as i32,
+                activation_dtype,
+                cuda_stream.cu_stream() as i64,
+            );
+        }
+        drop(destination_slots_guard);
+        drop(keep_rows_guard);
+        drop(pointer_table_guard);
+        drop(pointer_guards);
+        if let Some(timer) = phase_timer {
+            timer.finish("gdn_transition_stage", batch_size, seq_len)?;
+        }
+        Ok(())
+    }
+
+    match stage.layers.first().map(|layer| layer.conv_input.dtype()) {
+        Some(DType::F16) => cuda_stage::<half::f16>(stage, 0),
+        Some(DType::BF16) => cuda_stage::<half::bf16>(stage, 1),
+        Some(other) => candle_core::bail!(
+            "GDN transition stage only supports f16/bf16 activations, got {other:?}"
+        ),
+        None => Ok(()),
+    }
+}
+
+#[cfg(not(feature = "cuda"))]
+#[allow(dead_code)]
+pub fn speculative_transition_stage_batched_cuda(
+    _stage: GdnSpeculativeTransitionStage<'_>,
+) -> Result<()> {
+    candle_core::bail!("speculative_transition_stage_batched_cuda requires the cuda feature")
+}
+
+#[cfg_attr(not(feature = "cuda"), allow(dead_code))]
+pub struct GdnPendingTransitionApplyLayer<'a> {
+    pub pending_conv_input: &'a Tensor,
+    pub pending_key: &'a Tensor,
+    pub pending_delta: &'a Tensor,
+    pub pending_decay: &'a Tensor,
+    pub pending_keep_rows: &'a Tensor,
+    pub pending_epochs: &'a Tensor,
+    pub conv_applied_epochs: &'a Tensor,
+    pub recurrent_applied_epochs: &'a Tensor,
+    pub conv_state: &'a Tensor,
+    pub recurrent_state: &'a Tensor,
+}
+
+#[cfg_attr(not(feature = "cuda"), allow(dead_code))]
+pub struct GdnPendingTransitionApply<'a> {
+    pub layers: &'a [GdnPendingTransitionApplyLayer<'a>],
+    pub active_slots: &'a Tensor,
+    pub num_k_heads: usize,
+    pub num_v_heads: usize,
+    pub head_k_dim: usize,
+    pub head_v_dim: usize,
+    pub conv_dim: usize,
+    pub conv_width: usize,
+    pub tiled_v_heads: bool,
+    pub state_layout: RecurrentStateLayout,
+}
+
+#[cfg(feature = "cuda")]
+pub fn pending_transition_apply_batched_cuda(apply: GdnPendingTransitionApply<'_>) -> Result<()> {
+    use candle_core as candle;
+
+    fn cuda_apply<
+        T: candle::cuda_backend::CudaDType + candle::cuda_backend::cudarc::driver::DeviceRepr,
+    >(
+        apply: GdnPendingTransitionApply<'_>,
+        activation_dtype: i32,
+    ) -> Result<()> {
+        let GdnPendingTransitionApply {
+            layers,
+            active_slots,
+            num_k_heads,
+            num_v_heads,
+            head_k_dim,
+            head_v_dim,
+            conv_dim,
+            conv_width,
+            tiled_v_heads,
+            state_layout,
+        } = apply;
+        if layers.is_empty() {
+            return Ok(());
+        }
+        let batch_size = active_slots.dims1()?;
+        if batch_size == 0 || active_slots.dtype() != DType::U32 || !active_slots.is_contiguous() {
+            candle::bail!("GDN pending transition slots must be non-empty contiguous u32 [batch]");
+        }
+        if num_k_heads == 0
+            || num_v_heads == 0
+            || !num_v_heads.is_multiple_of(num_k_heads)
+            || head_k_dim != GDN_DECODE_K_DIM
+            || head_v_dim != GDN_DECODE_V_DIM
+            || conv_dim == 0
+            || conv_width == 0
+            || conv_width > GDN_SPEC_CHECKPOINT_MAX_CONV_WIDTH
+            || state_layout != RecurrentStateLayout::GdnValueMajor
+        {
+            candle::bail!("GDN pending transition apply has incompatible dimensions");
+        }
+        let (capacity, max_rows, pending_conv_dim) = layers[0].pending_conv_input.dims3()?;
+        let conv_blocks = conv_dim.div_ceil(GDN_CHANNEL_BLOCK_SIZE);
+        if capacity == 0
+            || max_rows == 0
+            || max_rows > GDN_SPEC_FUSED_MAX_TOKENS
+            || pending_conv_dim != conv_dim
+        {
+            candle::bail!("GDN pending transition apply storage is incompatible");
+        }
+        let device = layers[0].pending_conv_input.device();
+        if !device.is_cuda() || !active_slots.device().same_device(device) {
+            candle::bail!("GDN pending transition apply tensors must share one CUDA device");
+        }
+        let activation_tensor_dtype = layers[0].pending_conv_input.dtype();
+        let recurrent_dtype = layers[0].recurrent_state.dtype();
+        if !recurrent_state_dtype_supported(recurrent_dtype) {
+            candle::bail!("GDN pending transition apply state has unsupported dtype");
+        }
+
+        for layer in layers {
+            if layer.pending_conv_input.dims() != [capacity, max_rows, conv_dim]
+                || layer.pending_key.dims() != [capacity, max_rows, num_k_heads, head_k_dim]
+                || layer.pending_delta.dims() != [capacity, max_rows, num_v_heads, head_v_dim]
+                || layer.pending_decay.dims() != [capacity, max_rows, num_v_heads]
+                || layer.pending_keep_rows.dims() != [capacity]
+                || layer.pending_epochs.dims() != [capacity]
+                || layer.conv_applied_epochs.dims() != [capacity, conv_blocks]
+                || layer.recurrent_applied_epochs.dims() != [capacity, num_v_heads]
+                || layer.conv_state.dims() != [capacity, conv_dim, conv_width]
+                || layer.recurrent_state.dims() != [capacity, num_v_heads, head_v_dim, head_k_dim]
+            {
+                candle::bail!("GDN pending transition apply layer shapes are incompatible");
+            }
+            if layer.pending_conv_input.dtype() != activation_tensor_dtype
+                || layer.conv_state.dtype() != activation_tensor_dtype
+                || layer.pending_key.dtype() != DType::F32
+                || layer.pending_delta.dtype() != DType::F32
+                || layer.pending_decay.dtype() != DType::F32
+                || layer.pending_keep_rows.dtype() != DType::U32
+                || layer.pending_epochs.dtype() != DType::U32
+                || layer.conv_applied_epochs.dtype() != DType::U32
+                || layer.recurrent_applied_epochs.dtype() != DType::U32
+                || layer.recurrent_state.dtype() != recurrent_dtype
+            {
+                candle::bail!("GDN pending transition apply layer dtypes are incompatible");
+            }
+            for tensor in [
+                layer.pending_conv_input,
+                layer.pending_key,
+                layer.pending_delta,
+                layer.pending_decay,
+                layer.pending_keep_rows,
+                layer.pending_epochs,
+                layer.conv_applied_epochs,
+                layer.recurrent_applied_epochs,
+                layer.conv_state,
+                layer.recurrent_state,
+            ] {
+                if !tensor.device().same_device(device) || !tensor.is_contiguous() {
+                    candle::bail!(
+                        "GDN pending transition apply layer tensors must be contiguous on one device"
+                    );
+                }
+            }
+        }
+        let cuda_stream = device.as_cuda_device()?.cuda_stream();
+        let layer_storage_layouts = layers
+            .iter()
+            .map(|layer| {
+                [
+                    layer.pending_conv_input.storage_and_layout(),
+                    layer.pending_key.storage_and_layout(),
+                    layer.pending_delta.storage_and_layout(),
+                    layer.pending_decay.storage_and_layout(),
+                    layer.pending_keep_rows.storage_and_layout(),
+                    layer.pending_epochs.storage_and_layout(),
+                    layer.conv_applied_epochs.storage_and_layout(),
+                    layer.recurrent_applied_epochs.storage_and_layout(),
+                    layer.conv_state.storage_and_layout(),
+                    layer.recurrent_state.storage_and_layout(),
+                ]
+            })
+            .collect::<Vec<_>>();
+        let mut pointer_segments = (0..GDN_TRANSITION_APPLY_POINTER_SEGMENTS)
+            .map(|_| Vec::with_capacity(layers.len()))
+            .collect::<Vec<_>>();
+        let mut pointer_guards =
+            Vec::with_capacity(GDN_TRANSITION_APPLY_POINTER_SEGMENTS.saturating_mul(layers.len()));
+        let mut recurrent_state_dtype = None;
+        for storage_layouts in &layer_storage_layouts {
+            macro_rules! read_ptr {
+                ($segment:expr, $ty:ty, $name:literal) => {{
+                    let (storage, layout) = &storage_layouts[$segment];
+                    let (pointer, guard) =
+                        cuda_read_ptr_with_guard::<$ty>(storage, layout, &cuda_stream, $name)?;
+                    pointer_segments[$segment].push(pointer);
+                    pointer_guards.push(guard);
+                }};
+            }
+            macro_rules! inplace_ptr {
+                ($segment:expr, $ty:ty, $name:literal) => {{
+                    let (storage, layout) = &storage_layouts[$segment];
+                    let (pointer, guard) =
+                        cuda_inplace_ptr_with_guard::<$ty>(storage, layout, &cuda_stream, $name)?;
+                    pointer_segments[$segment].push(pointer);
+                    pointer_guards.push(guard);
+                }};
+            }
+            read_ptr!(0, T, "pending_conv_input");
+            read_ptr!(1, f32, "pending_key");
+            read_ptr!(2, f32, "pending_delta");
+            read_ptr!(3, f32, "pending_decay");
+            read_ptr!(4, u32, "pending_keep_rows");
+            read_ptr!(5, u32, "pending_epochs");
+            inplace_ptr!(6, u32, "conv_applied_epochs");
+            inplace_ptr!(7, u32, "recurrent_applied_epochs");
+            inplace_ptr!(8, T, "conv_state");
+            let (storage, layout) = &storage_layouts[9];
+            let (state_ptr, state_dtype, state_guard) =
+                cuda_recurrent_state_inplace_ptr_with_guard(
+                    recurrent_dtype,
+                    storage,
+                    layout,
+                    &cuda_stream,
+                    "recurrent_state",
+                )?;
+            if recurrent_state_dtype
+                .replace(state_dtype)
+                .is_some_and(|dtype| dtype != state_dtype)
+            {
+                candle::bail!("GDN pending transition apply state dtypes diverged");
+            }
+            pointer_segments[9].push(state_ptr);
+            pointer_guards.push(state_guard);
+        }
+        let pointers = pointer_segments
+            .into_iter()
+            .flatten()
+            .map(|pointer| pointer as i64)
+            .collect::<Vec<_>>();
+        let pointer_table = Tensor::from_vec(
+            pointers,
+            (GDN_TRANSITION_APPLY_POINTER_SEGMENTS * layers.len(),),
+            device,
+        )?;
+        let (pointer_table_storage, pointer_table_layout) = pointer_table.storage_and_layout();
+        let (pointer_table_ptr, pointer_table_guard) = cuda_read_ptr_with_guard::<i64>(
+            &pointer_table_storage,
+            pointer_table_layout,
+            &cuda_stream,
+            "pointer_table",
+        )?;
+        let (active_slots_storage, active_slots_layout) = active_slots.storage_and_layout();
+        let (active_slots_ptr, active_slots_guard) = cuda_read_ptr_with_guard::<u32>(
+            &active_slots_storage,
+            active_slots_layout,
+            &cuda_stream,
+            "active_slots",
+        )?;
+        let phase_timer = crate::pipeline::cuda_graph::CudaPhaseTimer::start(&cuda_stream)?;
+        unsafe {
+            crate::cuda::ffi::gdn_pending_transition_apply_batched(
+                pointer_table_ptr as *const u64,
+                active_slots_ptr as *const u32,
+                layers.len() as i32,
+                batch_size as i32,
+                max_rows as i32,
+                capacity as i32,
+                num_k_heads as i32,
+                num_v_heads as i32,
+                head_k_dim as i32,
+                head_v_dim as i32,
+                conv_dim as i32,
+                conv_width as i32,
+                i32::from(tiled_v_heads),
+                activation_dtype,
+                recurrent_state_dtype.expect("layers are non-empty"),
+                cuda_stream.cu_stream() as i64,
+            );
+        }
+        drop(active_slots_guard);
+        drop(pointer_table_guard);
+        drop(pointer_guards);
+        if let Some(timer) = phase_timer {
+            timer.finish("gdn_transition_apply", batch_size, max_rows)?;
+        }
+        Ok(())
+    }
+
+    match apply
+        .layers
+        .first()
+        .map(|layer| layer.pending_conv_input.dtype())
+    {
+        Some(DType::F16) => cuda_apply::<half::f16>(apply, 0),
+        Some(DType::BF16) => cuda_apply::<half::bf16>(apply, 1),
+        Some(other) => candle_core::bail!(
+            "GDN pending transition apply only supports f16/bf16 activations, got {other:?}"
+        ),
+        None => Ok(()),
+    }
+}
+
+#[cfg(not(feature = "cuda"))]
+#[allow(dead_code)]
+pub fn pending_transition_apply_batched_cuda(_apply: GdnPendingTransitionApply<'_>) -> Result<()> {
+    candle_core::bail!("pending_transition_apply_batched_cuda requires the cuda feature")
 }
 
 /// CUDA RMSNorm with a SiLU gate; packed final dimensions are split by the norm weight width.
@@ -4703,6 +5862,8 @@ mod tests {
                 state_pool: &conv_pool,
                 active_slots: &active_slots,
                 checkpoint_lanes,
+                write_checkpoints: true,
+                pending: None,
             })?;
         assert_close(
             "speculative checkpoint convolution output",
@@ -4886,7 +6047,10 @@ mod tests {
                         tiled_v_heads: true,
                         state_layout,
                         post_op: None,
+                        record_transitions: false,
+                        pending: None,
                     })?;
+                let actual_recurrent_output = actual_recurrent_output.output;
                 let label = format!("{state_layout:?} {state_dtype:?}");
                 assert_close(
                     &format!("{label} speculative checkpoint recurrence output"),
@@ -4928,8 +6092,11 @@ mod tests {
                                 weight: &norm_weight,
                                 eps: norm_eps,
                             }),
+                            record_transitions: false,
+                            pending: None,
                         },
                     )?;
+                    let actual_normalized = actual_normalized.output;
                     assert_close(
                         &format!("{label} fused speculative normalization state"),
                         &flat(&fused_pool.to_dtype(DType::F32)?)?,
@@ -4946,6 +6113,837 @@ mod tests {
             }
         }
 
+        Ok(())
+    }
+
+    fn run_speculative_transition_commit_case(
+        dev: &Device,
+        seq_len: usize,
+        activation_dtype: DType,
+        state_dtype: DType,
+        tiled_v_heads: bool,
+    ) -> Result<()> {
+        struct LayerCase {
+            conv_input: Tensor,
+            weight: Tensor,
+            b: Tensor,
+            a: Tensor,
+            a_log: Tensor,
+            dt_bias: Tensor,
+            gate: Tensor,
+            norm_weight: Tensor,
+            transitions: GdnSpeculativeTransitions,
+            conv_state: Tensor,
+            recurrent_state: Tensor,
+            pending_conv_input: Tensor,
+            pending_key: Tensor,
+            pending_delta: Tensor,
+            pending_decay: Tensor,
+            pending_keep_rows: Tensor,
+            pending_epochs: Tensor,
+            conv_applied_epochs: Tensor,
+            recurrent_applied_epochs: Tensor,
+            staged_conv_state: Tensor,
+            staged_recurrent_state: Tensor,
+            lazy_conv_applied_epochs: Tensor,
+            lazy_recurrent_applied_epochs: Tensor,
+            lazy_conv_state: Tensor,
+            lazy_recurrent_state: Tensor,
+            expected_conv_state: Tensor,
+            expected_recurrent_state: Tensor,
+        }
+
+        let batch_size = seq_len + 2;
+        let capacity = 2 * batch_size + 3;
+        let num_k_heads = 2;
+        let num_v_heads = 4;
+        let head_k_dim = 128;
+        let head_v_dim = 128;
+        let conv_width = 4;
+        let conv_dim = 2 * num_k_heads * head_k_dim + num_v_heads * head_v_dim;
+        let mut active_slots_host = (0..=seq_len)
+            .map(|row| ((row * 2 + 1) % capacity) as u32)
+            .collect::<Vec<_>>();
+        active_slots_host.push(GDN_PAD_SLOT);
+        let mut keep_rows_host = (1..=seq_len).map(|rows| rows as u32).collect::<Vec<_>>();
+        keep_rows_host.push(0);
+        keep_rows_host.push(0);
+        let active_slots = Tensor::from_vec(active_slots_host.clone(), (batch_size,), dev)?;
+        let keep_rows = Tensor::from_vec(keep_rows_host.clone(), (batch_size,), dev)?;
+        let mut cases = Vec::new();
+
+        for layer_idx in 0..2 {
+            let seed = 200 + layer_idx * 20 + seq_len;
+            let conv_input = tensor3(
+                patterned(batch_size * seq_len * conv_dim, seed, 0.08, 0.01),
+                (batch_size, seq_len, conv_dim),
+                dev,
+            )?
+            .to_dtype(activation_dtype)?;
+            let weight = tensor2(
+                patterned(conv_dim * conv_width, seed + 1, 0.05, -0.01),
+                (conv_dim, conv_width),
+                dev,
+            )?
+            .to_dtype(activation_dtype)?;
+            let conv_state = tensor3(
+                patterned(capacity * conv_dim * conv_width, seed + 2, 0.03, 0.0),
+                (capacity, conv_dim, conv_width),
+                dev,
+            )?
+            .to_dtype(activation_dtype)?;
+            let recurrent_state = Tensor::from_vec(
+                patterned(
+                    capacity * num_v_heads * head_v_dim * head_k_dim,
+                    seed + 3,
+                    0.02,
+                    0.0,
+                ),
+                (capacity, num_v_heads, head_v_dim, head_k_dim),
+                dev,
+            )?
+            .to_dtype(state_dtype)?;
+            let initial_conv = flat(&conv_state.to_dtype(DType::F32)?)?;
+            let initial_recurrent = flat(&recurrent_state.to_dtype(DType::F32)?)?;
+            let convolved = speculative_conv_checkpoints_cuda(GdnSpeculativeConvCheckpoints {
+                x: &conv_input,
+                weight: &weight,
+                state_pool: &conv_state,
+                active_slots: &active_slots,
+                checkpoint_lanes: 1,
+                write_checkpoints: false,
+                pending: None,
+            })?;
+            assert_close(
+                "transition convolution leaves state untouched",
+                &flat(&conv_state.to_dtype(DType::F32)?)?,
+                &initial_conv,
+                0.0,
+            );
+
+            let b = tensor3(
+                patterned(batch_size * seq_len * num_v_heads, seed + 4, 0.2, 0.1),
+                (batch_size, seq_len, num_v_heads),
+                dev,
+            )?
+            .to_dtype(activation_dtype)?;
+            let a = tensor3(
+                patterned(batch_size * seq_len * num_v_heads, seed + 5, 0.18, -0.04),
+                (batch_size, seq_len, num_v_heads),
+                dev,
+            )?
+            .to_dtype(activation_dtype)?;
+            let a_log = Tensor::from_vec(
+                patterned(num_v_heads, seed + 6, 0.05, -0.2),
+                (num_v_heads,),
+                dev,
+            )?;
+            let dt_bias = Tensor::from_vec(
+                patterned(num_v_heads, seed + 7, 0.1, 0.3),
+                (num_v_heads,),
+                dev,
+            )?;
+            let gate = Tensor::from_vec(
+                patterned(
+                    batch_size * seq_len * num_v_heads * head_v_dim,
+                    seed + 8,
+                    0.2,
+                    0.0,
+                ),
+                (batch_size, seq_len, num_v_heads, head_v_dim),
+                dev,
+            )?
+            .to_dtype(activation_dtype)?;
+            let norm_weight = Tensor::from_vec(
+                patterned(head_v_dim, seed + 9, 0.1, 1.0),
+                (head_v_dim,),
+                dev,
+            )?
+            .to_dtype(activation_dtype)?;
+            let recurrence =
+                speculative_recurrence_checkpoints_cuda(GdnSpeculativeRecurrenceCheckpoints {
+                    mixed_qkv: &convolved,
+                    b: &b,
+                    a: &a,
+                    a_log: &a_log,
+                    dt_bias: &dt_bias,
+                    state_pool: &recurrent_state,
+                    active_slots: &active_slots,
+                    checkpoint_lanes: 1,
+                    num_k_heads,
+                    num_v_heads,
+                    head_k_dim,
+                    head_v_dim,
+                    tiled_v_heads,
+                    state_layout: RecurrentStateLayout::GdnValueMajor,
+                    post_op: Some(GdnSpeculativeRmsNormGate {
+                        gate: &gate,
+                        weight: &norm_weight,
+                        eps: 1.0e-6,
+                    }),
+                    record_transitions: true,
+                    pending: None,
+                })?;
+            assert_close(
+                "transition recurrence leaves state untouched",
+                &flat(&recurrent_state.to_dtype(DType::F32)?)?,
+                &initial_recurrent,
+                0.0,
+            );
+
+            let expected_conv_state = conv_state.copy()?;
+            let expected_recurrent_state = recurrent_state.copy()?;
+            let initial_conv_rows = active_slots_host
+                .iter()
+                .map(|&slot| {
+                    if slot == GDN_PAD_SLOT {
+                        Tensor::zeros((1, conv_dim, conv_width), activation_dtype, dev)
+                    } else {
+                        conv_state.narrow(0, slot as usize, 1)?.copy()
+                    }
+                })
+                .collect::<Result<Vec<_>>>()?;
+            let initial_recurrent_rows = active_slots_host
+                .iter()
+                .map(|&slot| {
+                    if slot == GDN_PAD_SLOT {
+                        Tensor::zeros((1, num_v_heads, head_v_dim, head_k_dim), state_dtype, dev)
+                    } else {
+                        recurrent_state.narrow(0, slot as usize, 1)?.copy()
+                    }
+                })
+                .collect::<Result<Vec<_>>>()?;
+            speculative_state_commit_cuda(GdnSpeculativeStateCommit {
+                mixed_qkv: &conv_input,
+                convolved_qkv: &convolved,
+                b: &b,
+                a: &a,
+                initial_conv_state: &Tensor::cat(&initial_conv_rows, 0)?,
+                initial_recurrent_state: &Tensor::cat(&initial_recurrent_rows, 0)?,
+                a_log: &a_log,
+                dt_bias: &dt_bias,
+                conv_state_pool: &expected_conv_state,
+                recurrent_state_pool: &expected_recurrent_state,
+                keep_rows: &keep_rows,
+                slot_indices: &active_slots,
+                num_k_heads,
+                num_v_heads,
+                head_k_dim,
+                head_v_dim,
+                tiled_v_heads,
+                state_layout: RecurrentStateLayout::GdnValueMajor,
+            })?;
+            let pending_conv_input =
+                Tensor::zeros((capacity, seq_len, conv_dim), activation_dtype, dev)?;
+            let pending_key = Tensor::zeros(
+                (capacity, seq_len, num_k_heads, head_k_dim),
+                DType::F32,
+                dev,
+            )?;
+            let pending_delta = Tensor::zeros(
+                (capacity, seq_len, num_v_heads, head_v_dim),
+                DType::F32,
+                dev,
+            )?;
+            let pending_decay = Tensor::zeros((capacity, seq_len, num_v_heads), DType::F32, dev)?;
+            let pending_keep_rows = Tensor::zeros(capacity, DType::U32, dev)?;
+            let pending_epochs = Tensor::zeros(capacity, DType::U32, dev)?;
+            let conv_applied_epochs = Tensor::zeros(
+                (capacity, conv_dim.div_ceil(GDN_CHANNEL_BLOCK_SIZE)),
+                DType::U32,
+                dev,
+            )?;
+            let recurrent_applied_epochs = Tensor::zeros((capacity, num_v_heads), DType::U32, dev)?;
+            cases.push(LayerCase {
+                conv_input,
+                weight,
+                b,
+                a,
+                a_log,
+                dt_bias,
+                gate,
+                norm_weight,
+                transitions: recurrence
+                    .transitions
+                    .expect("record_transitions produced no transition tensors"),
+                staged_conv_state: conv_state.copy()?,
+                staged_recurrent_state: recurrent_state.copy()?,
+                lazy_conv_applied_epochs: conv_applied_epochs.copy()?,
+                lazy_recurrent_applied_epochs: recurrent_applied_epochs.copy()?,
+                lazy_conv_state: conv_state.copy()?,
+                lazy_recurrent_state: recurrent_state.copy()?,
+                conv_state,
+                recurrent_state,
+                pending_conv_input,
+                pending_key,
+                pending_delta,
+                pending_decay,
+                pending_keep_rows,
+                pending_epochs,
+                conv_applied_epochs,
+                recurrent_applied_epochs,
+                expected_conv_state,
+                expected_recurrent_state,
+            });
+        }
+
+        let layers = cases
+            .iter()
+            .map(|case| GdnSpeculativeTransitionLayer {
+                conv_input: &case.conv_input,
+                key: &case.transitions.key,
+                delta: &case.transitions.delta,
+                decay: &case.transitions.decay,
+                conv_state: &case.conv_state,
+                recurrent_state: &case.recurrent_state,
+            })
+            .collect::<Vec<_>>();
+        speculative_transition_commit_batched_cuda(GdnSpeculativeTransitionCommit {
+            layers: &layers,
+            keep_rows: &keep_rows,
+            active_slots: &active_slots,
+            num_k_heads,
+            num_v_heads,
+            head_k_dim,
+            head_v_dim,
+            conv_dim,
+            conv_width,
+            tiled_v_heads,
+            state_layout: RecurrentStateLayout::GdnValueMajor,
+        })?;
+        let stage_layers = cases
+            .iter()
+            .map(|case| GdnSpeculativeTransitionStageLayer {
+                conv_input: &case.conv_input,
+                key: &case.transitions.key,
+                delta: &case.transitions.delta,
+                decay: &case.transitions.decay,
+                pending_conv_input: &case.pending_conv_input,
+                pending_key: &case.pending_key,
+                pending_delta: &case.pending_delta,
+                pending_decay: &case.pending_decay,
+                pending_keep_rows: &case.pending_keep_rows,
+                pending_epochs: &case.pending_epochs,
+            })
+            .collect::<Vec<_>>();
+        speculative_transition_stage_batched_cuda(GdnSpeculativeTransitionStage {
+            layers: &stage_layers,
+            keep_rows: &keep_rows,
+            destination_slots: &active_slots,
+            num_k_heads,
+            num_v_heads,
+            head_k_dim,
+            head_v_dim,
+            conv_dim,
+        })?;
+        let apply_layers = cases
+            .iter()
+            .map(|case| GdnPendingTransitionApplyLayer {
+                pending_conv_input: &case.pending_conv_input,
+                pending_key: &case.pending_key,
+                pending_delta: &case.pending_delta,
+                pending_decay: &case.pending_decay,
+                pending_keep_rows: &case.pending_keep_rows,
+                pending_epochs: &case.pending_epochs,
+                conv_applied_epochs: &case.conv_applied_epochs,
+                recurrent_applied_epochs: &case.recurrent_applied_epochs,
+                conv_state: &case.staged_conv_state,
+                recurrent_state: &case.staged_recurrent_state,
+            })
+            .collect::<Vec<_>>();
+        let apply = || {
+            pending_transition_apply_batched_cuda(GdnPendingTransitionApply {
+                layers: &apply_layers,
+                active_slots: &active_slots,
+                num_k_heads,
+                num_v_heads,
+                head_k_dim,
+                head_v_dim,
+                conv_dim,
+                conv_width,
+                tiled_v_heads,
+                state_layout: RecurrentStateLayout::GdnValueMajor,
+            })
+        };
+        apply()?;
+        apply()?;
+        for case in &cases {
+            assert_close(
+                "batched transition convolution state",
+                &flat(&case.conv_state.to_dtype(DType::F32)?)?,
+                &flat(&case.expected_conv_state.to_dtype(DType::F32)?)?,
+                0.0,
+            );
+            assert_close(
+                "batched transition recurrent state",
+                &flat(&case.recurrent_state.to_dtype(DType::F32)?)?,
+                &flat(&case.expected_recurrent_state.to_dtype(DType::F32)?)?,
+                3.0e-3,
+            );
+            assert_close(
+                "staged transition convolution state",
+                &flat(&case.staged_conv_state.to_dtype(DType::F32)?)?,
+                &flat(&case.expected_conv_state.to_dtype(DType::F32)?)?,
+                0.0,
+            );
+            assert_close(
+                "staged transition recurrent state",
+                &flat(&case.staged_recurrent_state.to_dtype(DType::F32)?)?,
+                &flat(&case.expected_recurrent_state.to_dtype(DType::F32)?)?,
+                3.0e-3,
+            );
+
+            let expected_convolved =
+                speculative_conv_checkpoints_cuda(GdnSpeculativeConvCheckpoints {
+                    x: &case.conv_input,
+                    weight: &case.weight,
+                    state_pool: &case.expected_conv_state,
+                    active_slots: &active_slots,
+                    checkpoint_lanes: 1,
+                    write_checkpoints: false,
+                    pending: None,
+                })?;
+            let expected_output =
+                speculative_recurrence_checkpoints_cuda(GdnSpeculativeRecurrenceCheckpoints {
+                    mixed_qkv: &expected_convolved,
+                    b: &case.b,
+                    a: &case.a,
+                    a_log: &case.a_log,
+                    dt_bias: &case.dt_bias,
+                    state_pool: &case.expected_recurrent_state,
+                    active_slots: &active_slots,
+                    checkpoint_lanes: 1,
+                    num_k_heads,
+                    num_v_heads,
+                    head_k_dim,
+                    head_v_dim,
+                    tiled_v_heads,
+                    state_layout: RecurrentStateLayout::GdnValueMajor,
+                    post_op: Some(GdnSpeculativeRmsNormGate {
+                        gate: &case.gate,
+                        weight: &case.norm_weight,
+                        eps: 1.0e-6,
+                    }),
+                    record_transitions: true,
+                    pending: None,
+                })?
+                .output;
+            let run_lazy = || {
+                let convolved = speculative_conv_checkpoints_cuda(GdnSpeculativeConvCheckpoints {
+                    x: &case.conv_input,
+                    weight: &case.weight,
+                    state_pool: &case.lazy_conv_state,
+                    active_slots: &active_slots,
+                    checkpoint_lanes: 1,
+                    write_checkpoints: false,
+                    pending: Some(GdnPendingSpeculativeConv {
+                        conv_input: &case.pending_conv_input,
+                        keep_rows: &case.pending_keep_rows,
+                        epochs: &case.pending_epochs,
+                        applied_epochs: &case.lazy_conv_applied_epochs,
+                    }),
+                })?;
+                let output =
+                    speculative_recurrence_checkpoints_cuda(GdnSpeculativeRecurrenceCheckpoints {
+                        mixed_qkv: &convolved,
+                        b: &case.b,
+                        a: &case.a,
+                        a_log: &case.a_log,
+                        dt_bias: &case.dt_bias,
+                        state_pool: &case.lazy_recurrent_state,
+                        active_slots: &active_slots,
+                        checkpoint_lanes: 1,
+                        num_k_heads,
+                        num_v_heads,
+                        head_k_dim,
+                        head_v_dim,
+                        tiled_v_heads,
+                        state_layout: RecurrentStateLayout::GdnValueMajor,
+                        post_op: Some(GdnSpeculativeRmsNormGate {
+                            gate: &case.gate,
+                            weight: &case.norm_weight,
+                            eps: 1.0e-6,
+                        }),
+                        record_transitions: true,
+                        pending: Some(GdnPendingSpeculativeRecurrence {
+                            key: &case.pending_key,
+                            delta: &case.pending_delta,
+                            decay: &case.pending_decay,
+                            keep_rows: &case.pending_keep_rows,
+                            epochs: &case.pending_epochs,
+                            applied_epochs: &case.lazy_recurrent_applied_epochs,
+                        }),
+                    })?
+                    .output;
+                Ok::<_, candle_core::Error>((convolved, output))
+            };
+            let (lazy_convolved, lazy_output) = run_lazy()?;
+            let (retried_convolved, retried_output) = run_lazy()?;
+            assert_close(
+                "lazy transition convolution state",
+                &flat(&case.lazy_conv_state.to_dtype(DType::F32)?)?,
+                &flat(&case.expected_conv_state.to_dtype(DType::F32)?)?,
+                0.0,
+            );
+            assert_close(
+                "lazy transition recurrent state",
+                &flat(&case.lazy_recurrent_state.to_dtype(DType::F32)?)?,
+                &flat(&case.expected_recurrent_state.to_dtype(DType::F32)?)?,
+                3.0e-3,
+            );
+            for (label, actual, expected, tolerance) in [
+                (
+                    "lazy transition convolution output",
+                    &lazy_convolved,
+                    &expected_convolved,
+                    0.0,
+                ),
+                (
+                    "retried transition convolution output",
+                    &retried_convolved,
+                    &expected_convolved,
+                    0.0,
+                ),
+                (
+                    "lazy transition recurrence output",
+                    &lazy_output,
+                    &expected_output,
+                    3.0e-2,
+                ),
+                (
+                    "retried transition recurrence output",
+                    &retried_output,
+                    &expected_output,
+                    3.0e-2,
+                ),
+            ] {
+                assert_close(
+                    label,
+                    &flat(&actual.to_dtype(DType::F32)?)?,
+                    &flat(&expected.to_dtype(DType::F32)?)?,
+                    tolerance,
+                );
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    #[ignore = "requires an SM90 CUDA device"]
+    fn speculative_transition_commit_matches_prefix_replay_cuda() -> Result<()> {
+        let dev = Device::new_cuda(0)?;
+        for seq_len in [4, 8] {
+            for activation_dtype in [DType::F16, DType::BF16] {
+                for state_dtype in [DType::F32, DType::BF16, DType::F16] {
+                    for tiled_v_heads in [false, true] {
+                        run_speculative_transition_commit_case(
+                            &dev,
+                            seq_len,
+                            activation_dtype,
+                            state_dtype,
+                            tiled_v_heads,
+                        )?;
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn run_speculative_transition_stage_case(
+        dev: &Device,
+        seq_len: usize,
+        activation_dtype: DType,
+    ) -> Result<()> {
+        struct LayerCase {
+            conv_input: Tensor,
+            key: Tensor,
+            delta: Tensor,
+            decay: Tensor,
+            pending_conv_input: Tensor,
+            pending_key: Tensor,
+            pending_delta: Tensor,
+            pending_decay: Tensor,
+            pending_keep_rows: Tensor,
+            pending_epochs: Tensor,
+            expected_conv_input: Vec<f32>,
+            expected_key: Vec<f32>,
+            expected_delta: Vec<f32>,
+            expected_decay: Vec<f32>,
+            expected_keep_rows: Vec<u32>,
+            expected_epochs: Vec<u32>,
+        }
+
+        fn stage_rows(
+            destination: &mut [f32],
+            source: &[f32],
+            destination_slot: usize,
+            batch_idx: usize,
+            rows: usize,
+            max_rows: usize,
+            seq_len: usize,
+            row_elements: usize,
+        ) {
+            let source_start = batch_idx * seq_len * row_elements;
+            let destination_start = destination_slot * max_rows * row_elements;
+            let elements = rows * row_elements;
+            destination[destination_start..destination_start + elements]
+                .copy_from_slice(&source[source_start..source_start + elements]);
+        }
+
+        let batch_size = 4;
+        let max_rows = 8;
+        let capacity = 7;
+        let num_k_heads = 2;
+        let num_v_heads = 4;
+        let head_k_dim = 8;
+        let head_v_dim = 6;
+        let conv_dim = 37;
+        let keep_rows_host = vec![1u32, seq_len as u32, 0, (seq_len / 2) as u32];
+        let destination_slots_host = vec![3u32, 1, 5, GDN_PAD_SLOT];
+        let keep_rows = Tensor::from_vec(keep_rows_host.clone(), (batch_size,), dev)?;
+        let destination_slots =
+            Tensor::from_vec(destination_slots_host.clone(), (batch_size,), dev)?;
+        let mut cases = Vec::new();
+
+        for layer_idx in 0..2 {
+            let salt = 400 + layer_idx * 20 + seq_len;
+            let conv_input = Tensor::from_vec(
+                patterned(batch_size * seq_len * conv_dim, salt, 0.2, 0.01),
+                (batch_size, seq_len, conv_dim),
+                dev,
+            )?
+            .to_dtype(activation_dtype)?;
+            let key = Tensor::from_vec(
+                patterned(
+                    batch_size * seq_len * num_k_heads * head_k_dim,
+                    salt + 1,
+                    0.3,
+                    -0.02,
+                ),
+                (batch_size, seq_len, num_k_heads, head_k_dim),
+                dev,
+            )?;
+            let delta = Tensor::from_vec(
+                patterned(
+                    batch_size * seq_len * num_v_heads * head_v_dim,
+                    salt + 2,
+                    0.25,
+                    0.03,
+                ),
+                (batch_size, seq_len, num_v_heads, head_v_dim),
+                dev,
+            )?;
+            let decay = Tensor::from_vec(
+                patterned(batch_size * seq_len * num_v_heads, salt + 3, 0.1, 0.8),
+                (batch_size, seq_len, num_v_heads),
+                dev,
+            )?;
+            let pending_conv_input = Tensor::from_vec(
+                patterned(capacity * max_rows * conv_dim, salt + 4, 0.05, -0.4),
+                (capacity, max_rows, conv_dim),
+                dev,
+            )?
+            .to_dtype(activation_dtype)?;
+            let pending_key = Tensor::from_vec(
+                patterned(
+                    capacity * max_rows * num_k_heads * head_k_dim,
+                    salt + 5,
+                    0.05,
+                    -0.5,
+                ),
+                (capacity, max_rows, num_k_heads, head_k_dim),
+                dev,
+            )?;
+            let pending_delta = Tensor::from_vec(
+                patterned(
+                    capacity * max_rows * num_v_heads * head_v_dim,
+                    salt + 6,
+                    0.05,
+                    -0.6,
+                ),
+                (capacity, max_rows, num_v_heads, head_v_dim),
+                dev,
+            )?;
+            let pending_decay = Tensor::from_vec(
+                patterned(capacity * max_rows * num_v_heads, salt + 7, 0.05, -0.7),
+                (capacity, max_rows, num_v_heads),
+                dev,
+            )?;
+            let pending_keep_rows = Tensor::from_vec(
+                (0..capacity).map(|idx| 40 + idx as u32).collect::<Vec<_>>(),
+                (capacity,),
+                dev,
+            )?;
+            let pending_epochs = Tensor::from_vec(
+                (0..capacity).map(|idx| 70 + idx as u32).collect::<Vec<_>>(),
+                (capacity,),
+                dev,
+            )?;
+
+            let source_conv = flat(&conv_input.to_dtype(DType::F32)?)?;
+            let source_key = flat(&key)?;
+            let source_delta = flat(&delta)?;
+            let source_decay = flat(&decay)?;
+            let mut expected_conv_input = flat(&pending_conv_input.to_dtype(DType::F32)?)?;
+            let mut expected_key = flat(&pending_key)?;
+            let mut expected_delta = flat(&pending_delta)?;
+            let mut expected_decay = flat(&pending_decay)?;
+            let mut expected_keep_rows: Vec<u32> =
+                pending_keep_rows.to_device(&Device::Cpu)?.to_vec1()?;
+            let mut expected_epochs: Vec<u32> =
+                pending_epochs.to_device(&Device::Cpu)?.to_vec1()?;
+            for batch_idx in 0..batch_size {
+                let slot = destination_slots_host[batch_idx];
+                if slot == GDN_PAD_SLOT {
+                    continue;
+                }
+                let slot = slot as usize;
+                let rows = keep_rows_host[batch_idx] as usize;
+                if rows == 0 {
+                    expected_keep_rows[slot] = 0;
+                    expected_epochs[slot] = expected_epochs[slot].wrapping_add(1).max(1);
+                    continue;
+                }
+                stage_rows(
+                    &mut expected_conv_input,
+                    &source_conv,
+                    slot,
+                    batch_idx,
+                    rows,
+                    max_rows,
+                    seq_len,
+                    conv_dim,
+                );
+                stage_rows(
+                    &mut expected_key,
+                    &source_key,
+                    slot,
+                    batch_idx,
+                    rows,
+                    max_rows,
+                    seq_len,
+                    num_k_heads * head_k_dim,
+                );
+                stage_rows(
+                    &mut expected_delta,
+                    &source_delta,
+                    slot,
+                    batch_idx,
+                    rows,
+                    max_rows,
+                    seq_len,
+                    num_v_heads * head_v_dim,
+                );
+                stage_rows(
+                    &mut expected_decay,
+                    &source_decay,
+                    slot,
+                    batch_idx,
+                    rows,
+                    max_rows,
+                    seq_len,
+                    num_v_heads,
+                );
+                expected_keep_rows[slot] = rows as u32;
+                expected_epochs[slot] = expected_epochs[slot].wrapping_add(1).max(1);
+            }
+            cases.push(LayerCase {
+                conv_input,
+                key,
+                delta,
+                decay,
+                pending_conv_input,
+                pending_key,
+                pending_delta,
+                pending_decay,
+                pending_keep_rows,
+                pending_epochs,
+                expected_conv_input,
+                expected_key,
+                expected_delta,
+                expected_decay,
+                expected_keep_rows,
+                expected_epochs,
+            });
+        }
+
+        let layers = cases
+            .iter()
+            .map(|case| GdnSpeculativeTransitionStageLayer {
+                conv_input: &case.conv_input,
+                key: &case.key,
+                delta: &case.delta,
+                decay: &case.decay,
+                pending_conv_input: &case.pending_conv_input,
+                pending_key: &case.pending_key,
+                pending_delta: &case.pending_delta,
+                pending_decay: &case.pending_decay,
+                pending_keep_rows: &case.pending_keep_rows,
+                pending_epochs: &case.pending_epochs,
+            })
+            .collect::<Vec<_>>();
+        speculative_transition_stage_batched_cuda(GdnSpeculativeTransitionStage {
+            layers: &layers,
+            keep_rows: &keep_rows,
+            destination_slots: &destination_slots,
+            num_k_heads,
+            num_v_heads,
+            head_k_dim,
+            head_v_dim,
+            conv_dim,
+        })?;
+
+        for case in cases {
+            assert_close(
+                "staged convolution input",
+                &flat(&case.pending_conv_input.to_dtype(DType::F32)?)?,
+                &case.expected_conv_input,
+                0.0,
+            );
+            assert_close(
+                "staged recurrence key",
+                &flat(&case.pending_key)?,
+                &case.expected_key,
+                0.0,
+            );
+            assert_close(
+                "staged recurrence delta",
+                &flat(&case.pending_delta)?,
+                &case.expected_delta,
+                0.0,
+            );
+            assert_close(
+                "staged recurrence decay",
+                &flat(&case.pending_decay)?,
+                &case.expected_decay,
+                0.0,
+            );
+            assert_eq!(
+                case.pending_keep_rows
+                    .to_device(&Device::Cpu)?
+                    .to_vec1::<u32>()?,
+                case.expected_keep_rows
+            );
+            assert_eq!(
+                case.pending_epochs
+                    .to_device(&Device::Cpu)?
+                    .to_vec1::<u32>()?,
+                case.expected_epochs
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    #[ignore = "requires a CUDA device"]
+    fn speculative_transition_stage_is_slot_indexed_cuda() -> Result<()> {
+        let dev = Device::new_cuda(0)?;
+        for seq_len in [4, 8] {
+            for activation_dtype in [DType::F16, DType::BF16] {
+                run_speculative_transition_stage_case(&dev, seq_len, activation_dtype)?;
+            }
+        }
         Ok(())
     }
 
