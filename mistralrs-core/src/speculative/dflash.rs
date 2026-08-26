@@ -22,7 +22,7 @@ use mistralrs_quant::{
 };
 use serde::Deserialize;
 
-use crate::layers::RmsNorm;
+use crate::layers::{yarn_inv_freq_and_attention_factor, RmsNorm, YarnRopeConfig};
 use crate::prefix_cacher::PagedAuxiliaryPrefixState;
 use crate::speculative::{MtpConfig, MtpDraftSamplingMethod, SpeculativePrefixReplay};
 use crate::utils::varbuilder_utils::{from_mmaped_safetensors, DeviceForLoadTensor};
@@ -83,16 +83,38 @@ fn dflash_rope_from_positions(
     positions: &Tensor,
     inv_freq: &Tensor,
     dtype: DType,
+    attention_factor: f32,
 ) -> Result<(Tensor, Tensor)> {
     let positions = positions.flatten_all()?;
     #[cfg(feature = "cuda")]
-    if let Some(rope) = crate::ops::try_cuda_rope_sincos_positions(&positions, inv_freq, dtype)? {
-        return Ok(rope);
+    {
+        let rope_dtype = if attention_factor == 1.0 {
+            dtype
+        } else {
+            DType::F32
+        };
+        if let Some(rope) =
+            crate::ops::try_cuda_rope_sincos_positions(&positions, inv_freq, rope_dtype)?
+        {
+            return finalize_dflash_rope(rope, dtype, attention_factor);
+        }
     }
     let positions = positions.to_dtype(DType::F32)?.unsqueeze(1)?;
     let inv_freq = inv_freq.to_dtype(DType::F32)?.unsqueeze(0)?;
     let freqs = positions.broadcast_mul(&inv_freq)?;
-    Ok((freqs.cos()?.to_dtype(dtype)?, freqs.sin()?.to_dtype(dtype)?))
+    finalize_dflash_rope((freqs.cos()?, freqs.sin()?), dtype, attention_factor)
+}
+
+fn finalize_dflash_rope(
+    (mut cos, mut sin): (Tensor, Tensor),
+    dtype: DType,
+    attention_factor: f32,
+) -> Result<(Tensor, Tensor)> {
+    if attention_factor != 1.0 {
+        cos = (cos * attention_factor as f64)?;
+        sin = (sin * attention_factor as f64)?;
+    }
+    Ok((cos.to_dtype(dtype)?, sin.to_dtype(dtype)?))
 }
 
 pub(crate) fn dflash_adaptive_requested() -> bool {
@@ -188,6 +210,8 @@ pub struct DFlashConfig {
     pub num_attention_heads: usize,
     pub num_key_value_heads: usize,
     pub head_dim: Option<usize>,
+    #[serde(default)]
+    pub max_position_embeddings: Option<usize>,
     pub rms_norm_eps: f64,
     pub vocab_size: usize,
     pub rope_theta: Option<f64>,
@@ -201,6 +225,14 @@ pub struct DFlashConfig {
     pub mask_token_id: Option<u32>,
     #[serde(default)]
     pub dflash_config: DFlashSpecificConfig,
+}
+
+pub struct DFlashLoadTarget<'a> {
+    pub num_layers: usize,
+    pub hidden_size: usize,
+    pub yarn_rope_config: Option<&'a YarnRopeConfig>,
+    pub device: &'a Device,
+    pub dtype: DType,
 }
 
 impl DFlashConfig {
@@ -228,6 +260,68 @@ impl DFlashConfig {
                     .and_then(|v| v.as_f64())
             })
             .unwrap_or(1e7)
+    }
+
+    fn validate_rope_type(&self) -> Result<()> {
+        let Some(parameters) = self.rope_parameters.as_ref() else {
+            return Ok(());
+        };
+        let parameters = parameters.as_object().ok_or_else(|| {
+            candle_core::Error::msg("DFlash rope_parameters must be a JSON object")
+        })?;
+        let rope_type = parameters
+            .get("rope_type")
+            .map(|value| {
+                value.as_str().ok_or_else(|| {
+                    candle_core::Error::msg("DFlash rope_parameters.rope_type must be a string")
+                })
+            })
+            .transpose()?;
+        let legacy_type = parameters
+            .get("type")
+            .map(|value| {
+                value.as_str().ok_or_else(|| {
+                    candle_core::Error::msg("DFlash rope_parameters.type must be a string")
+                })
+            })
+            .transpose()?;
+        if let (Some(rope_type), Some(legacy_type)) = (rope_type, legacy_type) {
+            if rope_type != legacy_type {
+                candle_core::bail!(
+                    "DFlash rope_parameters.rope_type `{rope_type}` conflicts with legacy type `{legacy_type}`"
+                );
+            }
+        }
+        let rope_type = rope_type.or(legacy_type).unwrap_or("default");
+        if rope_type != "default" {
+            candle_core::bail!(
+                "DFlash draft-side RoPE type `{rope_type}` is unsupported; configure RoPE scaling on the target model"
+            );
+        }
+        Ok(())
+    }
+
+    #[allow(clippy::cast_possible_truncation)]
+    fn yarn_rope_config(&self, target: Option<&YarnRopeConfig>) -> Result<Option<YarnRopeConfig>> {
+        let Some(target) = target else {
+            return Ok(None);
+        };
+        let max_position_embeddings = self.max_position_embeddings.ok_or_else(|| {
+            candle_core::Error::msg(
+                "DFlash max_position_embeddings is required when the target uses YaRN",
+            )
+        })?;
+        if max_position_embeddings != target.original_max_position_embeddings {
+            candle_core::bail!(
+                "DFlash native context length {} does not match target YaRN original context length {}",
+                max_position_embeddings,
+                target.original_max_position_embeddings
+            );
+        }
+        let mut config = target.clone();
+        config.base = self.rope_theta() as f32;
+        config.head_dim = self.head_dim();
+        Ok(Some(config))
     }
 
     pub fn block_size(&self) -> usize {
@@ -1175,6 +1269,7 @@ pub struct DFlashDraftModel {
     selector: Option<CandidateSelector>,
     draft_sampling_method: MtpDraftSamplingMethod,
     inv_freq: Tensor,
+    rope_attention_factor: f32,
     pub target_layer_ids: Vec<usize>,
     mask_token_id: u32,
     block_size: usize,
@@ -2052,17 +2147,16 @@ impl DFlashDraftModel {
         }
     }
 
-    /// Loads a DFlash/DFlash2 drafter from a local path or HF repo. `target_num_layers` and
-    /// `target_hidden_size` validate the checkpoint against the target model; the config's draft
-    /// ISQ type requantizes the projection weights so drafting reads match the target's own.
-    pub fn load(
-        config: &MtpConfig,
-        target_num_layers: usize,
-        target_hidden_size: usize,
-        device: &Device,
-        dtype: DType,
-        silent: bool,
-    ) -> Result<Self> {
+    /// Loads a DFlash/DFlash2 drafter from a local path or HF repo. Target metadata validates the
+    /// checkpoint against the target model and supplies any shared RoPE scaling parameters.
+    pub fn load(config: &MtpConfig, target: DFlashLoadTarget<'_>, silent: bool) -> Result<Self> {
+        let DFlashLoadTarget {
+            num_layers: target_num_layers,
+            hidden_size: target_hidden_size,
+            yarn_rope_config,
+            device,
+            dtype,
+        } = target;
         let path = config.resolve_path()?;
         let raw = fs::read_to_string(path.join("config.json"))
             .map_err(|e| candle_core::Error::Msg(format!("failed to read DFlash config: {e}")))?;
@@ -2073,6 +2167,7 @@ impl DFlashDraftModel {
                 cfg.architectures
             );
         }
+        cfg.validate_rope_type()?;
         if cfg.hidden_size != target_hidden_size {
             candle_core::bail!(
                 "DFlash hidden size {} does not match target hidden size {target_hidden_size}",
@@ -2087,6 +2182,26 @@ impl DFlashDraftModel {
                 );
             }
         }
+        let head_dim = cfg.head_dim();
+        let (inv_freq, rope_attention_factor) = match cfg.yarn_rope_config(yarn_rope_config)? {
+            Some(yarn) => {
+                tracing::info!(
+                    factor = yarn.factor,
+                    original_max_position_embeddings = yarn.original_max_position_embeddings,
+                    max_position_embeddings = yarn.max_position_embeddings,
+                    "Using target YaRN scaling for DFlash rotary embeddings"
+                );
+                yarn_inv_freq_and_attention_factor(&yarn, device)?
+            }
+            None => {
+                #[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+                let inv_freq = (0..head_dim)
+                    .step_by(2)
+                    .map(|i| 1f32 / (cfg.rope_theta() as f32).powf(i as f32 / head_dim as f32))
+                    .collect::<Vec<_>>();
+                (Tensor::from_vec(inv_freq, (head_dim / 2,), device)?, 1.0)
+            }
+        };
 
         let mut weight_paths = fs::read_dir(&path)
             .map_err(|e| {
@@ -2125,7 +2240,6 @@ impl DFlashDraftModel {
             None => config.draft_lm_head_isq,
         };
         let hidden = cfg.hidden_size;
-        let head_dim = cfg.head_dim();
         let eps = cfg.rms_norm_eps;
         let mut layers = Vec::with_capacity(cfg.num_hidden_layers);
         let mut context_kv_weights = Vec::with_capacity(cfg.num_hidden_layers * 2);
@@ -2210,18 +2324,12 @@ impl DFlashDraftModel {
         let draft_sampling_method =
             resolve_dflash_sampling_policy(config.draft_sampling_method, selector_capability)?;
 
-        #[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
-        let inv_freq: Vec<f32> = (0..head_dim)
-            .step_by(2)
-            .map(|i| 1f32 / (cfg.rope_theta() as f32).powf(i as f32 / head_dim as f32))
-            .collect();
-        let inv_freq = Tensor::from_vec(inv_freq, (head_dim / 2,), device)?;
         let rope_table = {
             #[allow(clippy::cast_precision_loss)]
             let pos: Vec<f32> = (0..ROPE_CACHE_LEN).map(|p| p as f32).collect();
             let pos = Tensor::from_vec(pos, (ROPE_CACHE_LEN, 1), device)?;
             let freqs = pos.broadcast_matmul(&inv_freq.reshape((1, ()))?)?;
-            (freqs.cos()?.to_dtype(dtype)?, freqs.sin()?.to_dtype(dtype)?)
+            finalize_dflash_rope((freqs.cos()?, freqs.sin()?), dtype, rope_attention_factor)?
         };
 
         Ok(Self {
@@ -2235,6 +2343,7 @@ impl DFlashDraftModel {
             selector,
             draft_sampling_method,
             inv_freq,
+            rope_attention_factor,
             target_layer_ids,
             mask_token_id: cfg.mask_token_id()?,
             block_size: cfg.block_size(),
@@ -2446,7 +2555,7 @@ impl DFlashDraftModel {
             sampling,
             token_embedding,
             lm_head,
-        } = inputs;
+        } = *inputs;
         #[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
         {
             if !crate::pipeline::cuda_graph::cuda_decode_graphs_enabled()
@@ -2794,10 +2903,11 @@ impl DFlashDraftModel {
         let pos: Vec<f32> = (start..start + len).map(|p| p as f32).collect();
         let pos = Tensor::from_vec(pos, (len, 1), &self.device)?;
         let freqs = pos.broadcast_matmul(&self.inv_freq.reshape((1, ()))?)?;
-        Ok((
-            freqs.cos()?.to_dtype(self.dtype)?,
-            freqs.sin()?.to_dtype(self.dtype)?,
-        ))
+        finalize_dflash_rope(
+            (freqs.cos()?, freqs.sin()?),
+            self.dtype,
+            self.rope_attention_factor,
+        )
     }
 
     fn rope(&self, x: &Tensor, cos: &Tensor, sin: &Tensor) -> Result<Tensor> {
@@ -3442,7 +3552,12 @@ impl DFlashDraftModel {
             noise = (noise * self.input_embedding_scale)?;
         }
         let rope_indices = buffers.rope_indices.as_detached_tensor();
-        let (q_cos, q_sin) = dflash_rope_from_positions(&rope_indices, &self.inv_freq, self.dtype)?;
+        let (q_cos, q_sin) = dflash_rope_from_positions(
+            &rope_indices,
+            &self.inv_freq,
+            self.dtype,
+            self.rope_attention_factor,
+        )?;
         let q_cos = q_cos.reshape((key.batch_bucket, key.block, self.head_dim / 2))?;
         let q_sin = q_sin.reshape((key.batch_bucket, key.block, self.head_dim / 2))?;
         let metadata = buffers.metadata();
@@ -3660,13 +3775,14 @@ mod tests {
         dflash_graph_precapture_shapes, dflash_prefix_replay, dflash_rope_from_positions,
         drain_dflash_lru_entries, gather_ctx_taps, linear_from_weight,
         resolve_dflash_sampling_policy, select_ctx_kv_rows, select_dflash_depth,
-        update_dormant_sequences, DFlashGraphHostInput, DFlashSamplingInputs,
+        update_dormant_sequences, DFlashConfig, DFlashGraphHostInput, DFlashSamplingInputs,
         DFlashSequenceEviction, ADAPT_FULL_DEPTH_MAX_BATCH,
     };
     #[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
     use super::{release_dflash_cuda_graph_resources, windowed_kv_checkpoint_capacity};
     #[cfg(feature = "cuda")]
     use super::{validate_candidate_selector_cuda, CandidateSelectorCudaSpec};
+    use crate::layers::{yarn_inv_freq_and_attention_factor, YarnRopeConfig};
     use crate::speculative::MtpDraftSamplingMethod;
     use crate::speculative::{SpeculativeGraphPlan, SpeculativePrefixReplay};
 
@@ -4062,6 +4178,117 @@ mod tests {
         assert!(!dflash_graph_positions_fit(&[100_000], 0));
     }
 
+    fn qwen35_dflash_config() -> DFlashConfig {
+        serde_json::from_str(
+            r#"{
+                "architectures": ["DFlash2DraftModel"],
+                "hidden_size": 5120,
+                "intermediate_size": 17408,
+                "num_hidden_layers": 5,
+                "num_attention_heads": 32,
+                "num_key_value_heads": 8,
+                "head_dim": 128,
+                "max_position_embeddings": 262144,
+                "rms_norm_eps": 1e-6,
+                "vocab_size": 248320,
+                "rope_parameters": {"rope_theta": 10000000, "rope_type": "default"},
+                "num_target_layers": 64
+            }"#,
+        )
+        .unwrap()
+    }
+
+    fn qwen35_target_yarn() -> YarnRopeConfig {
+        YarnRopeConfig {
+            base: 10_000_000.0,
+            head_dim: 64,
+            max_position_embeddings: 1_048_576,
+            original_max_position_embeddings: 262_144,
+            factor: 4.0,
+            beta_fast: 32.0,
+            beta_slow: 1.0,
+            mscale: 1.0,
+            mscale_all_dim: 0.0,
+            attention_factor: None,
+        }
+    }
+
+    #[test]
+    fn dflash_yarn_uses_draft_geometry_and_target_scaling() -> Result<()> {
+        let cfg = qwen35_dflash_config();
+        let yarn = cfg
+            .yarn_rope_config(Some(&qwen35_target_yarn()))?
+            .expect("target uses YaRN");
+        assert_eq!(yarn.base, 10_000_000.0);
+        assert_eq!(yarn.head_dim, 128);
+        assert_eq!(yarn.factor, 4.0);
+        assert_eq!(yarn.original_max_position_embeddings, 262_144);
+
+        let (inv_freq, attention_factor) = yarn_inv_freq_and_attention_factor(&yarn, &Device::Cpu)?;
+        let inv_freq = inv_freq.to_vec1::<f32>()?;
+        assert_eq!(inv_freq.len(), 64);
+        assert!((inv_freq[0] - 1.0).abs() < 1e-6);
+        let unscaled_last = 1.0 / yarn.base.powf(126.0 / 128.0);
+        assert!((inv_freq[63] - unscaled_last / yarn.factor).abs() < 1e-8);
+        assert!((attention_factor - (1.0 + 0.1 * yarn.factor.ln())).abs() < 1e-6);
+        Ok(())
+    }
+
+    #[test]
+    fn dflash_yarn_rejects_a_mismatched_native_context() {
+        let cfg = qwen35_dflash_config();
+        let mut target = qwen35_target_yarn();
+        target.original_max_position_embeddings = 131_072;
+        let error = cfg
+            .yarn_rope_config(Some(&target))
+            .expect_err("mismatched native context must not silently change draft RoPE");
+        assert!(error.to_string().contains("native context length"));
+    }
+
+    #[test]
+    fn dflash_native_rope_does_not_require_a_declared_context() -> Result<()> {
+        let mut cfg = qwen35_dflash_config();
+        cfg.max_position_embeddings = None;
+        assert!(cfg.yarn_rope_config(None)?.is_none());
+        let error = cfg
+            .yarn_rope_config(Some(&qwen35_target_yarn()))
+            .expect_err("YaRN must validate the draft's native context");
+        assert!(error
+            .to_string()
+            .contains("max_position_embeddings is required"));
+        Ok(())
+    }
+
+    #[test]
+    fn dflash_rejects_draft_side_rope_scaling() {
+        for key in ["rope_type", "type"] {
+            let mut cfg = qwen35_dflash_config();
+            cfg.rope_parameters = Some(serde_json::json!({
+                "rope_theta": 10_000_000,
+                (key): "yarn",
+            }));
+            let error = cfg
+                .validate_rope_type()
+                .expect_err("draft-side scaling must not be silently ignored");
+            assert!(error
+                .to_string()
+                .contains("configure RoPE scaling on the target"));
+        }
+    }
+
+    #[test]
+    fn dflash_rejects_conflicting_rope_type_aliases() {
+        let mut cfg = qwen35_dflash_config();
+        cfg.rope_parameters = Some(serde_json::json!({
+            "rope_type": "default",
+            "type": "yarn",
+        }));
+        let error = cfg
+            .validate_rope_type()
+            .expect_err("conflicting aliases must not be accepted");
+        assert!(error.to_string().contains("conflicts with legacy type"));
+    }
+
     #[allow(clippy::cast_precision_loss)]
     #[test]
     fn graph_rope_uses_each_replayed_long_position() -> Result<()> {
@@ -4071,7 +4298,7 @@ mod tests {
         let positions_tensor = Tensor::from_vec(positions.to_vec(), (positions.len(),), &device)?;
         let inv_freq = Tensor::from_vec(frequencies.to_vec(), (frequencies.len(),), &device)?;
         let (cos, sin) =
-            dflash_rope_from_positions(&positions_tensor, &inv_freq, candle_core::DType::F32)?;
+            dflash_rope_from_positions(&positions_tensor, &inv_freq, candle_core::DType::F32, 1.0)?;
         let cos = cos.to_vec2::<f32>()?;
         let sin = sin.to_vec2::<f32>()?;
 
@@ -4082,6 +4309,26 @@ mod tests {
                 assert!((sin[row][column] - angle.sin()).abs() < 1e-5);
             }
         }
+        Ok(())
+    }
+
+    #[test]
+    fn graph_rope_applies_yarn_attention_scaling() -> Result<()> {
+        let positions = Tensor::from_vec(vec![0u32, 1], 2, &Device::Cpu)?;
+        let inv_freq = Tensor::from_vec(vec![1.0f32, 0.25], 2, &Device::Cpu)?;
+        let attention_factor = 1.25;
+        let (cos, sin) = dflash_rope_from_positions(
+            &positions,
+            &inv_freq,
+            candle_core::DType::F32,
+            attention_factor,
+        )?;
+        let cos = cos.to_vec2::<f32>()?;
+        let sin = sin.to_vec2::<f32>()?;
+        assert_eq!(cos[0], vec![attention_factor, attention_factor]);
+        assert_eq!(sin[0], vec![0.0, 0.0]);
+        assert!((cos[1][0] - attention_factor * 1.0f32.cos()).abs() < 1e-6);
+        assert!((sin[1][1] - attention_factor * 0.25f32.sin()).abs() < 1e-6);
         Ok(())
     }
 
@@ -4130,6 +4377,7 @@ mod tests {
             &positions.as_detached_tensor(),
             &inv_freq,
             candle_core::DType::BF16,
+            1.0,
         )?;
         device.synchronize()?;
         drop(warmup);
@@ -4140,6 +4388,7 @@ mod tests {
             &positions.as_detached_tensor(),
             &inv_freq,
             candle_core::DType::BF16,
+            1.0,
         )?;
         let graph = CudaGraphHandle::end_capture(&stream)?
             .ok_or_else(|| anyhow::anyhow!("CUDA graph capture returned no graph"))?;

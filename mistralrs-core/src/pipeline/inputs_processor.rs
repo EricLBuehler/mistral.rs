@@ -109,6 +109,7 @@ pub mod text_models_inputs_processor {
         paged_attention::{
             block_aligned_sliding_window_start,
             block_hash::{noncausal_mm_ranges, MultimodalAttentionPolicy},
+            block_table_rows::{BlockTableRanges, BlockTableRows, BlockTableSnapshot},
             AttentionBackendKind, KVCacheManager, _PAD_SLOT_ID,
         },
         pipeline::{recurrent_batch_kind_for_input, RecurrentBatchKind},
@@ -165,6 +166,24 @@ pub mod text_models_inputs_processor {
             padded_x.push(Tensor::from_vec(x_i, shape, device)?);
         }
         Tensor::cat(&padded_x[..], 0).map_err(anyhow::Error::msg)
+    }
+
+    fn make_block_table_tensor<T: BlockTableRows + ?Sized>(
+        rows: &T,
+        max_len: usize,
+    ) -> Result<Tensor> {
+        let mut values = Vec::with_capacity(rows.len() * max_len);
+        for row in 0..rows.len() {
+            let table = rows.row(row);
+            assert!(table.len() <= max_len);
+            values.extend(table.iter().map(|&block| block as u32));
+            values.extend(std::iter::repeat_n(0, max_len - table.len()));
+        }
+        Ok(Tensor::from_vec(
+            values,
+            (rows.len(), max_len),
+            &Device::Cpu,
+        )?)
     }
 
     fn decode_metadata_tensor(
@@ -1505,9 +1524,7 @@ pub mod text_models_inputs_processor {
         let mut position_ids = Vec::new();
 
         let mut slot_mappings = Vec::new();
-        let mut block_tables = Vec::new();
         let mut paged_attn_context_lens = Vec::new();
-        let mut full_block_tables = Vec::new();
         let mut full_paged_attn_context_lens = Vec::new();
         let mut seqlens_q = if flash_attn { vec![0] } else { Vec::new() };
         let mut seqlens_k = if flash_attn { vec![0] } else { Vec::new() };
@@ -1522,8 +1539,21 @@ pub mod text_models_inputs_processor {
             && input_seqs
                 .iter()
                 .any(|seq| seq.active_staged_speculative_tokens().as_device().is_some());
+        let sequence_block_tables = paged_attn_metadata.as_ref().map(|paged_attn_metadata| {
+            let kv_mgr = get_mut_arcmutex!(paged_attn_metadata.kv_cache_manager);
+            input_seqs
+                .iter()
+                .map(|seq| {
+                    Arc::<[usize]>::from(
+                        kv_mgr
+                            .get_block_ids(*seq.id())
+                            .expect("Sequence must have allocated blocks for completion"),
+                    )
+                })
+                .collect::<Vec<_>>()
+        });
         let mut host_input_width = None;
-        for (seq, ctxt) in input_seqs.iter().zip(toks) {
+        for (seq_idx, (seq, ctxt)) in input_seqs.iter().zip(toks).enumerate() {
             let staged_speculative = if use_staged_speculative && !use_device_staged {
                 seq.active_staged_speculative_tokens()
                     .as_host()
@@ -1568,12 +1598,9 @@ pub mod text_models_inputs_processor {
             input_tokens.extend(ctxt);
 
             if let Some(paged_attn_metadata) = &mut paged_attn_metadata {
-                let kv_mgr = get_mut_arcmutex!(paged_attn_metadata.kv_cache_manager);
-                let table: Vec<usize> = kv_mgr
-                    .get_block_ids(*seq.id())
-                    .expect("Sequence must have allocated blocks for completion")
-                    .to_vec();
-                drop(kv_mgr);
+                let table = &sequence_block_tables
+                    .as_ref()
+                    .expect("paged block tables were snapshotted")[seq_idx];
 
                 let block_start = start_pos - seq.token_offset();
                 let block_end = block_start + query_len;
@@ -1603,8 +1630,6 @@ pub mod text_models_inputs_processor {
                 for row in 0..query_len {
                     let full_context_len = start_pos + row + 1;
 
-                    // Always collect the full (unwindowed) block tables.
-                    full_block_tables.push(table.clone());
                     full_paged_attn_context_lens.push(full_context_len);
 
                     let paged_attn_context_len = if let Some(sliding_window) =
@@ -1617,16 +1642,6 @@ pub mod text_models_inputs_processor {
                     } else {
                         full_context_len
                     };
-                    if let Some(sliding_window) = paged_attn_metadata.sliding_window {
-                        let window_start = full_context_len.saturating_sub(sliding_window);
-                        let slide_idx = window_start / paged_attn_metadata.block_size;
-                        let needed_blocks =
-                            paged_attn_context_len.div_ceil(paged_attn_metadata.block_size);
-                        let slide_end = (slide_idx + needed_blocks).min(table.len());
-                        block_tables.push(table.get(slide_idx..slide_end).unwrap_or(&[]).to_vec());
-                    } else {
-                        block_tables.push(table.clone());
-                    }
                     paged_attn_context_lens.push(paged_attn_context_len);
                 }
             }
@@ -1649,13 +1664,17 @@ pub mod text_models_inputs_processor {
         };
 
         let paged_attn_meta = if let Some(paged_attn_input) = &paged_attn_metadata {
+            let query_len = context_lens.first().map_or(1, |(_, q)| *q);
+            let block_tables = BlockTableSnapshot::from_sequence_tables(
+                sequence_block_tables.expect("paged block tables were snapshotted"),
+                query_len,
+            );
             let rows = Arc::new(DecodePagedRows {
                 slot_mappings,
                 block_tables,
                 context_lens: paged_attn_context_lens,
-                full_block_tables,
                 full_context_lens: full_paged_attn_context_lens,
-                query_len: context_lens.first().map_or(1, |(_, q)| *q),
+                query_len,
                 block_size: paged_attn_input.block_size,
                 use_standard_metadata: paged_attn_input.attention_backend
                     == AttentionBackendKind::Standard,
@@ -1710,9 +1729,8 @@ pub mod text_models_inputs_processor {
     #[derive(Clone, Debug)]
     pub struct DecodePagedRows {
         pub slot_mappings: Vec<Vec<i64>>,
-        pub block_tables: Vec<Vec<usize>>,
+        pub(crate) block_tables: BlockTableSnapshot,
         pub context_lens: Vec<usize>,
-        pub full_block_tables: Vec<Vec<usize>>,
         pub full_context_lens: Vec<usize>,
         pub query_len: usize,
         pub block_size: usize,
@@ -1859,6 +1877,41 @@ pub mod text_models_inputs_processor {
             self.slot_mappings.len()
         }
 
+        fn paged_block_tables(&self) -> BlockTableRanges<'_> {
+            let ranges = self
+                .context_lens
+                .iter()
+                .zip(&self.full_context_lens)
+                .enumerate()
+                .map(|(row, (&context_len, &full_context_len))| {
+                    let table = self.block_tables.row(row);
+                    if self.sliding_window.is_none() {
+                        return 0..table.len();
+                    }
+                    let block_start =
+                        full_context_len.saturating_sub(context_len) / self.block_size;
+                    let block_end = block_start
+                        .saturating_add(context_len.div_ceil(self.block_size))
+                        .min(table.len());
+                    block_start.min(block_end)..block_end
+                })
+                .collect();
+            BlockTableRanges::new(&self.block_tables, ranges)
+        }
+
+        #[cfg(feature = "cuda")]
+        pub(crate) fn full_block_table(&self, row: usize) -> &[usize] {
+            self.block_tables.row(row)
+        }
+
+        #[cfg(test)]
+        pub(crate) fn materialized_block_tables(&self) -> Vec<Vec<usize>> {
+            let tables = self.paged_block_tables();
+            (0..tables.len())
+                .map(|row| tables.row(row).to_vec())
+                .collect()
+        }
+
         /// Pad to `batch_size` rows. Pad rows alias row 0 for every read (same block table and context)
         /// and carry `_PAD_SLOT_ID` slot mappings, so the cache kernels skip their KV writes.
         pub fn padded(&self, batch_size: usize) -> Self {
@@ -1867,10 +1920,9 @@ pub mod text_models_inputs_processor {
             while rows.slot_mappings.len() < batch_size {
                 rows.slot_mappings
                     .push(vec![_PAD_SLOT_ID; self.slot_mappings[0].len()]);
-                rows.block_tables.extend_from_slice(&self.block_tables[..q]);
+                rows.block_tables
+                    .push_rows_for_table(self.block_tables.row_table_index(0), q);
                 rows.context_lens.extend_from_slice(&self.context_lens[..q]);
-                rows.full_block_tables
-                    .extend_from_slice(&self.full_block_tables[..q]);
                 rows.full_context_lens
                     .extend_from_slice(&self.full_context_lens[..q]);
             }
@@ -1886,8 +1938,8 @@ pub mod text_models_inputs_processor {
                 .all(|slots| slots.len() == self.query_len));
             assert_eq!(self.block_tables.len(), batch_size * self.query_len);
             assert_eq!(self.context_lens.len(), batch_size * self.query_len);
-            assert_eq!(self.full_block_tables.len(), batch_size * self.query_len);
             assert_eq!(self.full_context_lens.len(), batch_size * self.query_len);
+            let paged_block_tables = self.paged_block_tables();
             let max_context_len = self.context_lens.iter().copied().max().unwrap_or(0);
             let full_max_context_len = self.full_context_lens.iter().copied().max().unwrap_or(0);
             let graph_capacity =
@@ -1901,16 +1953,18 @@ pub mod text_models_inputs_processor {
                 })
                 .or(graph_capacity);
             let paged_block_table_len = cuda_graph_block_table_len_with_cap(
-                self.block_tables.iter().map(Vec::len).max().unwrap_or(1),
+                (0..paged_block_tables.len())
+                    .map(|row| paged_block_tables.row(row).len())
+                    .max()
+                    .unwrap_or(1),
                 self.block_size,
                 true,
                 max_context_len,
                 paged_graph_capacity,
             );
             let full_block_table_len = cuda_graph_block_table_len_with_cap(
-                self.full_block_tables
-                    .iter()
-                    .map(Vec::len)
+                (0..self.block_tables.len())
+                    .map(|row| self.block_tables.row(row).len())
                     .max()
                     .unwrap_or(1),
                 self.block_size,
@@ -2014,20 +2068,18 @@ pub mod text_models_inputs_processor {
                 &Device::Cpu,
             )?;
 
-            let block_tables = &self.block_tables;
+            let block_tables = self.paged_block_tables();
             let paged_attn_context_lens = &self.context_lens;
-            let full_block_tables = &self.full_block_tables;
+            let full_block_tables = &self.block_tables;
             let full_paged_attn_context_lens = &self.full_context_lens;
             let block_size = self.block_size;
             let use_standard_metadata = self.use_standard_metadata;
-            let max_block_table_len = block_tables
-                .iter()
-                .map(|x| x.len())
+            let max_block_table_len = (0..block_tables.len())
+                .map(|row| block_tables.row(row).len())
                 .max()
                 .expect("block_tables should not be empty when paged attention is enabled");
-            let full_max_block_table_len = full_block_tables
-                .iter()
-                .map(|x| x.len())
+            let full_max_block_table_len = (0..full_block_tables.len())
+                .map(|row| full_block_tables.row(row).len())
                 .max()
                 .unwrap_or(0)
                 .max(1);
@@ -2059,7 +2111,7 @@ pub mod text_models_inputs_processor {
                 .flashinfer_paged_kv
                 .then(|| {
                     make_paged_kv_tensors(
-                        block_tables,
+                        &block_tables,
                         paged_attn_context_lens,
                         block_size,
                         batch_size * max_block_table_len,
@@ -2079,7 +2131,7 @@ pub mod text_models_inputs_processor {
                         .max(1)
                         .div_ceil(flashinfer_decode_split_capacity_pages(block_size));
                     make_paged_kv_decode_tensors(
-                        block_tables,
+                        &block_tables,
                         paged_attn_context_lens,
                         block_size,
                         Some(decode_split_pages),
@@ -2089,16 +2141,8 @@ pub mod text_models_inputs_processor {
                 .transpose()?;
             let block_tables_tensor = if requirements.block_tables {
                 Some(
-                    _make_tensor_with_pad(
-                        block_tables
-                            .iter()
-                            .map(|x| x.iter().map(|x| *x as u32).collect::<Vec<_>>())
-                            .collect::<Vec<_>>(),
-                        max_block_table_len,
-                        0,
-                        &Device::Cpu,
-                    )?
-                    .reshape(((), max_block_table_len))?,
+                    make_block_table_tensor(&block_tables, max_block_table_len)?
+                        .reshape(((), max_block_table_len))?,
                 )
             } else {
                 None
@@ -2135,16 +2179,8 @@ pub mod text_models_inputs_processor {
                 );
                 let block_tables_tensor = if requirements.block_tables {
                     Some(
-                        _make_tensor_with_pad(
-                            full_block_tables
-                                .iter()
-                                .map(|x| x.iter().map(|x| *x as u32).collect::<Vec<_>>())
-                                .collect::<Vec<_>>(),
-                            full_max_block_table_len,
-                            0,
-                            &Device::Cpu,
-                        )?
-                        .reshape(((), full_max_block_table_len))?,
+                        make_block_table_tensor(full_block_tables, full_max_block_table_len)?
+                            .reshape(((), full_max_block_table_len))?,
                     )
                 } else {
                     None
@@ -2743,6 +2779,14 @@ pub mod text_models_inputs_processor {
     mod tests {
         use super::*;
 
+        fn assert_zero_padded_rows(rows: &[Vec<u32>], prefixes: &[&[u32]]) {
+            assert_eq!(rows.len(), prefixes.len());
+            for (row, prefix) in rows.iter().zip(prefixes) {
+                assert_eq!(&row[..prefix.len()], *prefix);
+                assert!(row[prefix.len()..].iter().all(|&value| value == 0));
+            }
+        }
+
         #[test]
         fn completion_input_keeps_staged_rows_device_backed() {
             let staged = vec![
@@ -2784,9 +2828,8 @@ pub mod text_models_inputs_processor {
             let table = vec![1, 2, 3, 4];
             let metadata = Arc::new(DecodePagedRows {
                 slot_mappings: vec![vec![127]],
-                block_tables: vec![table.clone()],
+                block_tables: BlockTableSnapshot::from_owned_sequence_tables(vec![table], 1),
                 context_lens: vec![128],
-                full_block_tables: vec![table],
                 full_context_lens: vec![128],
                 query_len: 1,
                 block_size: 32,
@@ -2812,9 +2855,8 @@ pub mod text_models_inputs_processor {
             let table = vec![1, 2, 3, 4];
             let rows = Arc::new(DecodePagedRows {
                 slot_mappings: vec![vec![127]],
-                block_tables: vec![table.clone()],
+                block_tables: BlockTableSnapshot::from_owned_sequence_tables(vec![table], 1),
                 context_lens: vec![128],
-                full_block_tables: vec![table],
                 full_context_lens: vec![128],
                 query_len: 1,
                 block_size: 32,
@@ -2845,9 +2887,11 @@ pub mod text_models_inputs_processor {
         fn padded_decode_rows_alias_row_zero_without_kv_writes() {
             let rows = DecodePagedRows {
                 slot_mappings: vec![vec![40, 41], vec![72, 73]],
-                block_tables: vec![vec![1, 2], vec![1, 2], vec![3], vec![3]],
+                block_tables: BlockTableSnapshot::from_owned_sequence_tables(
+                    vec![vec![1, 2], vec![3]],
+                    2,
+                ),
                 context_lens: vec![40, 41, 8, 9],
-                full_block_tables: vec![vec![1, 2], vec![1, 2], vec![3], vec![3]],
                 full_context_lens: vec![40, 41, 8, 9],
                 query_len: 2,
                 block_size: 32,
@@ -2863,8 +2907,9 @@ pub mod text_models_inputs_processor {
             assert_eq!(padded.slot_mappings[2], vec![_PAD_SLOT_ID, _PAD_SLOT_ID]);
             assert_eq!(padded.slot_mappings[3], vec![_PAD_SLOT_ID, _PAD_SLOT_ID]);
             assert_eq!(padded.block_tables.len(), 8);
+            assert_eq!(padded.block_tables.unique_table_count(), 2);
             assert_eq!(
-                &padded.block_tables[4..],
+                &padded.materialized_block_tables()[4..],
                 &[vec![1, 2], vec![1, 2], vec![1, 2], vec![1, 2]]
             );
             assert_eq!(&padded.context_lens[4..], &[40, 41, 40, 41]);
@@ -2876,6 +2921,100 @@ pub mod text_models_inputs_processor {
                 Some(&[40, 41, 8, 9, 40, 41, 40, 41][..])
             );
             assert!(metadata.decode_rows.is_some());
+        }
+
+        #[test]
+        fn unsliding_decode_rows_share_canonical_tables_and_metadata() {
+            let rows = Arc::new(DecodePagedRows {
+                slot_mappings: vec![vec![39, 40], vec![71, 72]],
+                block_tables: BlockTableSnapshot::from_owned_sequence_tables(
+                    vec![vec![10, 11, 12], vec![20, 21, 22]],
+                    2,
+                ),
+                context_lens: vec![9, 10, 7, 8],
+                full_context_lens: vec![9, 10, 7, 8],
+                query_len: 2,
+                block_size: 4,
+                use_standard_metadata: true,
+                max_paged_context_len: 128,
+                sliding_window: None,
+                decode_window: 1,
+                devices: vec![Device::Cpu],
+                num_kv_heads: 1,
+            });
+
+            assert_eq!(rows.block_tables.unique_table_count(), 2);
+            assert_eq!(
+                rows.materialized_block_tables(),
+                vec![
+                    vec![10, 11, 12],
+                    vec![10, 11, 12],
+                    vec![20, 21, 22],
+                    vec![20, 21, 22],
+                ]
+            );
+
+            let metadata = rows.build_materialized().unwrap();
+            let location = Device::Cpu.location();
+            assert_eq!(
+                metadata.block_tables.as_ref().unwrap()[&location].id(),
+                metadata.full_block_tables.as_ref().unwrap()[&location].id()
+            );
+            let flashinfer = metadata.flashinfer.unwrap();
+            assert!(flashinfer.views.sliding.is_none());
+            let block_tables = flashinfer.views.logical.block_tables.unwrap()[&location]
+                .to_vec2::<u32>()
+                .unwrap();
+            assert_zero_padded_rows(
+                &block_tables,
+                &[&[10, 11, 12], &[10, 11, 12], &[20, 21, 22], &[20, 21, 22]],
+            );
+        }
+
+        #[test]
+        fn sliding_decode_rows_materialize_exact_logical_and_windowed_tables() {
+            let rows = Arc::new(DecodePagedRows {
+                slot_mappings: vec![vec![47, 48], vec![91, 92]],
+                block_tables: BlockTableSnapshot::from_owned_sequence_tables(
+                    vec![vec![10, 11, 12, 13], vec![20, 21, 22]],
+                    2,
+                ),
+                context_lens: vec![5, 6, 4, 5],
+                full_context_lens: vec![9, 10, 4, 5],
+                query_len: 2,
+                block_size: 4,
+                use_standard_metadata: true,
+                max_paged_context_len: 128,
+                sliding_window: Some(4),
+                decode_window: 1,
+                devices: vec![Device::Cpu],
+                num_kv_heads: 1,
+            });
+
+            assert_eq!(
+                rows.materialized_block_tables(),
+                vec![vec![11, 12], vec![11, 12], vec![20], vec![20, 21]]
+            );
+            let metadata = rows.build_materialized().unwrap();
+            let location = Device::Cpu.location();
+            assert_eq!(
+                metadata.block_tables.unwrap()[&location]
+                    .to_vec2::<u32>()
+                    .unwrap(),
+                vec![vec![11, 12], vec![11, 12], vec![20, 0], vec![20, 21]]
+            );
+            let full_block_tables = metadata.full_block_tables.unwrap()[&location]
+                .to_vec2::<u32>()
+                .unwrap();
+            assert_zero_padded_rows(
+                &full_block_tables,
+                &[
+                    &[10, 11, 12, 13],
+                    &[10, 11, 12, 13],
+                    &[20, 21, 22],
+                    &[20, 21, 22],
+                ],
+            );
         }
 
         #[test]

@@ -100,6 +100,10 @@ pub struct GatedDeltaNet {
 }
 
 impl GatedDeltaNet {
+    pub(crate) fn is_dynamic_lora_active(&self) -> bool {
+        self.input_proj.is_dynamic_lora_active() || self.out_proj.is_dynamic_lora_active()
+    }
+
     pub(crate) fn speculative_checkpoints_supported(
         &self,
         pool: &RecurrentStatePool,

@@ -19,6 +19,10 @@ const PAGED_RECURRENT_PREFIX_OWNERS_CAPACITY_METRIC: &str =
     "mistralrs_paged_recurrent_prefix_owners_capacity";
 const PAGED_RECURRENT_PREFIX_OWNERS_USED_METRIC: &str =
     "mistralrs_paged_recurrent_prefix_owners_used";
+const PAGED_RECURRENT_PREFIX_CHECKPOINTS_USED_METRIC: &str =
+    "mistralrs_paged_recurrent_prefix_checkpoints_used";
+const PAGED_RECURRENT_PREFIX_BYTES_USED_METRIC: &str =
+    "mistralrs_paged_recurrent_prefix_bytes_used";
 const PAGED_RECURRENT_PREFIX_OWNER_EVICTIONS_METRIC: &str =
     "mistralrs_paged_recurrent_prefix_owner_evictions_total";
 const CAPACITY_EVICTION_REASON: &str = "capacity";
@@ -230,7 +234,7 @@ impl PrefixCacheManagerV2 {
             no_prefix_cache,
             has_paged_attention,
         };
-        manager.publish_paged_recurrent_owner_metrics();
+        manager.publish_paged_recurrent_metrics();
         metrics::counter!(
             PAGED_RECURRENT_PREFIX_OWNER_EVICTIONS_METRIC,
             "reason" => CAPACITY_EVICTION_REASON
@@ -276,10 +280,15 @@ impl PrefixCacheManagerV2 {
         (used, capacity)
     }
 
-    fn publish_paged_recurrent_owner_metrics(&self) {
+    #[allow(clippy::cast_precision_loss)]
+    fn publish_paged_recurrent_metrics(&self) {
         let (used, capacity) = self.paged_recurrent_owner_metric_values();
         metrics::gauge!(PAGED_RECURRENT_PREFIX_OWNERS_USED_METRIC).set(f64::from(used));
         metrics::gauge!(PAGED_RECURRENT_PREFIX_OWNERS_CAPACITY_METRIC).set(f64::from(capacity));
+        metrics::gauge!(PAGED_RECURRENT_PREFIX_CHECKPOINTS_USED_METRIC)
+            .set(self.paged_recurrent_caches.len() as f64);
+        metrics::gauge!(PAGED_RECURRENT_PREFIX_BYTES_USED_METRIC)
+            .set(self.paged_recurrent_bytes as f64);
     }
 
     pub(crate) fn prune_revoked_paged_recurrent_entries(&mut self) -> usize {
@@ -295,10 +304,12 @@ impl PrefixCacheManagerV2 {
             })
             .collect::<Vec<_>>();
         let mut removed_owners = 0;
+        let mut removed_entries = 0;
         for key in revoked_keys {
             let Some(entry) = self.paged_recurrent_caches.shift_remove(&key) else {
                 continue;
             };
+            removed_entries += 1;
             self.paged_recurrent_bytes =
                 self.paged_recurrent_bytes
                     .saturating_sub(Self::checkpoint_bytes(
@@ -324,7 +335,9 @@ impl PrefixCacheManagerV2 {
                 "reason" => BLOCK_PRESSURE_EVICTION_REASON
             )
             .increment(removed_owners as u64);
-            self.publish_paged_recurrent_owner_metrics();
+        }
+        if removed_entries > 0 {
+            self.publish_paged_recurrent_metrics();
         }
         removed_owners
     }
@@ -459,7 +472,7 @@ impl PrefixCacheManagerV2 {
         self.paged_recurrent_caches.clear();
         self.paged_recurrent_sequence_keys.clear();
         self.paged_recurrent_bytes = 0;
-        self.publish_paged_recurrent_owner_metrics();
+        self.publish_paged_recurrent_metrics();
         if len > 0 {
             metrics::counter!("mistralrs_prefix_cache_evictions_total").increment(len as u64);
         }
@@ -545,7 +558,7 @@ impl PrefixCacheManagerV2 {
             )
             .increment(capacity_evictions as u64);
         }
-        self.publish_paged_recurrent_owner_metrics();
+        self.publish_paged_recurrent_metrics();
 
         debug_assert!(
             self.paged_recurrent_caches.len() <= self.paged_recurrent_sequence_keys.len()

@@ -62,6 +62,7 @@ const ANTHROPIC_WEB_SEARCH_NAME: &str = "web_search";
 const ANTHROPIC_CODE_EXECUTION_PREFIX: &str = "code_execution_";
 const ANTHROPIC_CODE_EXECUTION_NAME: &str = "code_execution";
 const ANTHROPIC_OVERLOADED_STATUS: u16 = 529;
+const ANTHROPIC_OUTPUT_SCHEMA_NAME: &str = "anthropic_output";
 
 fn default_model() -> String {
     "default".to_string()
@@ -119,10 +120,12 @@ pub struct AnthropicMessagesRequest {
     pub container: Option<AnthropicContainer>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub thinking: Option<AnthropicThinking>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_config: Option<AnthropicOutputConfig>,
     /// mistral.rs extension for toggling reasoning.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub enable_thinking: Option<bool>,
-    /// mistral.rs extension accepting off, low, medium, high, or xhigh. "none" aliases "off".
+    /// mistral.rs extension for local reasoning effort. "none" aliases "off"; "max" aliases "xhigh".
     #[schema(value_type = Option<ReasoningEffort>)]
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reasoning_effort: Option<String>,
@@ -292,6 +295,24 @@ pub struct AnthropicThinking {
     pub tp: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub budget_tokens: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
+pub struct AnthropicOutputConfig {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effort: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub format: Option<AnthropicJsonOutputFormat>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
+pub struct AnthropicJsonOutputFormat {
+    #[serde(rename = "type")]
+    pub tp: String,
+    #[schema(value_type = Object)]
+    pub schema: Value,
 }
 
 #[derive(Debug, Clone, Serialize, ToSchema)]
@@ -328,6 +349,8 @@ pub struct AnthropicResponseContentBlock {
     pub input: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub thinking: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub signature: Option<String>,
 }
 
 impl AnthropicResponseContentBlock {
@@ -339,6 +362,7 @@ impl AnthropicResponseContentBlock {
             name: None,
             input: None,
             thinking: None,
+            signature: None,
         }
     }
 
@@ -350,6 +374,7 @@ impl AnthropicResponseContentBlock {
             name: None,
             input: None,
             thinking: Some(thinking),
+            signature: Some(String::new()),
         }
     }
 
@@ -361,6 +386,7 @@ impl AnthropicResponseContentBlock {
             name: Some(name),
             input: Some(input),
             thinking: None,
+            signature: None,
         }
     }
 }
@@ -368,6 +394,8 @@ impl AnthropicResponseContentBlock {
 #[derive(Debug, Clone, Default, Serialize, ToSchema)]
 pub struct AnthropicUsage {
     pub input_tokens: usize,
+    pub cache_creation_input_tokens: usize,
+    pub cache_read_input_tokens: usize,
     pub output_tokens: usize,
 }
 
@@ -403,6 +431,7 @@ fn resolve_anthropic_thinking(
     thinking: Option<&AnthropicThinking>,
     enable_thinking: Option<bool>,
 ) -> Result<Option<bool>> {
+    omit_anthropic_thinking_output(thinking)?;
     let native = thinking
         .map(|thinking| match thinking.tp.as_str() {
             "enabled" | "adaptive" => Ok(true),
@@ -420,6 +449,72 @@ fn resolve_anthropic_thinking(
     Ok(enable_thinking.or(native))
 }
 
+fn omit_anthropic_thinking_output(thinking: Option<&AnthropicThinking>) -> Result<bool> {
+    let Some(thinking) = thinking else {
+        return Ok(false);
+    };
+    let Some(display) = thinking.display.as_deref() else {
+        return Ok(false);
+    };
+    if thinking.tp == "disabled" {
+        anyhow::bail!("Anthropic `thinking.display` cannot be used with `thinking.type=disabled`.");
+    }
+    match display {
+        "summarized" => Ok(false),
+        "omitted" => Ok(true),
+        other => anyhow::bail!("Unsupported Anthropic thinking display `{other}`."),
+    }
+}
+
+fn resolve_anthropic_effort(
+    output_config: Option<&AnthropicOutputConfig>,
+    extension: Option<&str>,
+) -> Result<Option<ReasoningEffort>> {
+    let native = output_config
+        .and_then(|config| config.effort.as_deref())
+        .map(str::parse)
+        .transpose()?;
+    let extension = extension.map(str::parse).transpose()?;
+
+    if let (Some(native), Some(extension)) = (native, extension) {
+        if native != extension {
+            anyhow::bail!(
+                "Anthropic `output_config.effort` conflicts with mistral.rs `reasoning_effort`."
+            );
+        }
+    }
+
+    Ok(extension.or(native))
+}
+
+fn resolve_anthropic_response_format(
+    output_config: Option<&AnthropicOutputConfig>,
+    extension: Option<ResponseFormat>,
+) -> Result<Option<ResponseFormat>> {
+    let native = output_config
+        .and_then(|config| config.format.as_ref())
+        .map(|format| {
+            if format.tp != "json_schema" {
+                anyhow::bail!("Unsupported Anthropic output format `{}`.", format.tp);
+            }
+            Ok(ResponseFormat::JsonSchema {
+                json_schema: crate::openai::JsonSchemaResponseFormat {
+                    name: ANTHROPIC_OUTPUT_SCHEMA_NAME.to_string(),
+                    schema: format.schema.clone(),
+                },
+            })
+        })
+        .transpose()?;
+
+    if native.is_some() && extension.is_some() {
+        anyhow::bail!(
+            "Anthropic `output_config.format` conflicts with mistral.rs `response_format`."
+        );
+    }
+
+    Ok(extension.or(native))
+}
+
 impl AnthropicMessagesRequest {
     fn validate(&self, require_max_tokens: bool) -> Result<()> {
         if self.messages.is_empty() {
@@ -427,8 +522,8 @@ impl AnthropicMessagesRequest {
         }
 
         for (index, message) in self.messages.iter().enumerate() {
-            if !matches!(message.role.as_str(), "user" | "assistant") {
-                anyhow::bail!("`messages.{index}.role` must be either `user` or `assistant`.");
+            if !matches!(message.role.as_str(), "user" | "assistant" | "system") {
+                anyhow::bail!("`messages.{index}.role` must be `user`, `assistant`, or `system`.");
             }
         }
 
@@ -446,12 +541,13 @@ impl AnthropicMessagesRequest {
     fn into_chat_completion_request(self) -> Result<ChatCompletionRequest> {
         let enable_thinking =
             resolve_anthropic_thinking(self.thinking.as_ref(), self.enable_thinking)?;
-        let reasoning_effort = self
-            .reasoning_effort
-            .as_deref()
-            .map(str::parse)
-            .transpose()?;
+        let reasoning_effort = resolve_anthropic_effort(
+            self.output_config.as_ref(),
+            self.reasoning_effort.as_deref(),
+        )?;
         mistralrs_core::resolve_reasoning_controls(enable_thinking, reasoning_effort)?;
+        let response_format =
+            resolve_anthropic_response_format(self.output_config.as_ref(), self.response_format)?;
         let mut converted_tools = convert_tools_and_agentic(
             self.tools,
             self.web_search_options,
@@ -524,7 +620,7 @@ impl AnthropicMessagesRequest {
             stream: self.stream,
             tools,
             tool_choice,
-            response_format: self.response_format,
+            response_format,
             web_search_options: converted_tools.web_search_options,
             agent_permission: self.agent_permission,
             code_execution_permission: self.code_execution_permission,
@@ -540,7 +636,7 @@ impl AnthropicMessagesRequest {
             dry_allowed_length: self.dry_allowed_length,
             dry_sequence_breakers: self.dry_sequence_breakers,
             enable_thinking,
-            reasoning_effort: self.reasoning_effort,
+            reasoning_effort: reasoning_effort.map(|effort| effort.to_string()),
             chat_template_kwargs: None,
             max_tool_rounds: self.max_tool_rounds,
             truncate_sequence: self.truncate_sequence,
@@ -722,7 +818,10 @@ fn convert_tool_choice(
     };
 
     match tool_choice.tp.as_str() {
-        "auto" | "any" => Ok(Some(ToolChoice::Auto)),
+        "auto" => Ok(Some(ToolChoice::Auto)),
+        "any" if tools.is_some_and(|tools| !tools.is_empty()) => Ok(Some(ToolChoice::Required)),
+        "any" if !server_tool_names.is_empty() => Ok(Some(ToolChoice::Auto)),
+        "any" => anyhow::bail!("Anthropic tool_choice type `any` requires at least one tool."),
         "none" => Ok(Some(ToolChoice::None)),
         "tool" => {
             let name = tool_choice
@@ -762,15 +861,25 @@ fn append_anthropic_blocks(
     role: String,
     blocks: Vec<AnthropicContentBlock>,
 ) -> Result<()> {
+    if role == "system" {
+        let text = system_to_text(AnthropicSystem::Blocks(blocks))?;
+        if let Some(text) = text {
+            out.push(message_with_text(role, text));
+        }
+        return Ok(());
+    }
+
     if role == "assistant" {
         let mut text_parts = Vec::new();
+        let mut thinking_parts = Vec::new();
         let mut tool_calls = Vec::new();
 
         for block in blocks {
             match block.tp.as_str() {
                 "text" => text_parts.push(required_text(&block)?),
                 "tool_use" => tool_calls.push(tool_call_from_block(block)?),
-                "server_tool_use" | "thinking" | "redacted_thinking" => {}
+                "thinking" => thinking_parts.push(required_thinking(&block)?),
+                "server_tool_use" | "redacted_thinking" => {}
                 other => anyhow::bail!("Unsupported Anthropic assistant content block `{other}`."),
             }
         }
@@ -784,17 +893,16 @@ fn append_anthropic_blocks(
             name: None,
             tool_calls,
             tool_call_id: None,
-            reasoning_content: None,
+            reasoning_content: (!thinking_parts.is_empty()).then(|| thinking_parts.join("\n")),
         });
         return Ok(());
     }
 
-    let mut text_parts = Vec::new();
-    let mut image_parts = Vec::new();
+    let mut content_parts = Vec::new();
 
     for block in blocks {
         match block.tp.as_str() {
-            "text" => text_parts.push(required_text(&block)?),
+            "text" => content_parts.push(AnthropicUserContentPart::Text(required_text(&block)?)),
             "image" => {
                 if role != "user" {
                     anyhow::bail!("Anthropic image content is only supported for user messages.");
@@ -802,10 +910,12 @@ fn append_anthropic_blocks(
                 let source = block
                     .source
                     .context("Anthropic image content block requires `source`.")?;
-                image_parts.push(MessageContent::image_url_part(source.into_url()?));
+                content_parts.push(AnthropicUserContentPart::Image(
+                    MessageContent::image_url_part(source.into_url()?),
+                ));
             }
             "tool_result" => {
-                flush_user_content(out, &role, &mut text_parts, &mut image_parts);
+                flush_user_content(out, &role, &mut content_parts);
                 out.push(tool_result_message_from_block(block)?);
             }
             "thinking"
@@ -816,28 +926,45 @@ fn append_anthropic_blocks(
         }
     }
 
-    flush_user_content(out, &role, &mut text_parts, &mut image_parts);
+    flush_user_content(out, &role, &mut content_parts);
     Ok(())
+}
+
+enum AnthropicUserContentPart {
+    Text(String),
+    Image(HashMap<String, crate::openai::MessageInnerContent>),
 }
 
 fn flush_user_content(
     out: &mut Vec<Message>,
     role: &str,
-    text_parts: &mut Vec<String>,
-    image_parts: &mut Vec<HashMap<String, crate::openai::MessageInnerContent>>,
+    content_parts: &mut Vec<AnthropicUserContentPart>,
 ) {
-    if text_parts.is_empty() && image_parts.is_empty() {
+    if content_parts.is_empty() {
         return;
     }
 
-    let text = text_parts.join("\n");
-    let content = if image_parts.is_empty() {
+    let has_image = content_parts
+        .iter()
+        .any(|part| matches!(part, AnthropicUserContentPart::Image(_)));
+    let content = if !has_image {
+        let text = std::mem::take(content_parts)
+            .into_iter()
+            .map(|part| match part {
+                AnthropicUserContentPart::Text(text) => text,
+                AnthropicUserContentPart::Image(_) => unreachable!(),
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
         MessageContent::from_text(text)
     } else {
-        let mut parts = std::mem::take(image_parts);
-        if !text.is_empty() {
-            parts.push(MessageContent::text_part(text));
-        }
+        let parts = std::mem::take(content_parts)
+            .into_iter()
+            .map(|part| match part {
+                AnthropicUserContentPart::Text(text) => MessageContent::text_part(text),
+                AnthropicUserContentPart::Image(image) => image,
+            })
+            .collect();
         MessageContent::from_parts(parts)
     };
 
@@ -849,7 +976,6 @@ fn flush_user_content(
         tool_call_id: None,
         reasoning_content: None,
     });
-    text_parts.clear();
 }
 
 fn message_with_text(role: impl Into<String>, text: String) -> Message {
@@ -870,6 +996,13 @@ fn required_text(block: &AnthropicContentBlock) -> Result<String> {
         .with_context(|| format!("Anthropic `{}` content block requires `text`.", block.tp))
 }
 
+fn required_thinking(block: &AnthropicContentBlock) -> Result<String> {
+    block
+        .thinking
+        .clone()
+        .context("Anthropic `thinking` content block requires `thinking`.")
+}
+
 fn tool_call_from_block(block: AnthropicContentBlock) -> Result<ToolCall> {
     let id = block
         .id
@@ -878,6 +1011,9 @@ fn tool_call_from_block(block: AnthropicContentBlock) -> Result<ToolCall> {
         .name
         .context("Anthropic tool_use content block requires `name`.")?;
     let input = block.input.unwrap_or_else(|| Value::Object(Map::new()));
+    if !input.is_object() {
+        anyhow::bail!("Anthropic tool_use content block `input` must be a JSON object.");
+    }
 
     Ok(ToolCall {
         id: Some(id),
@@ -973,8 +1109,15 @@ fn system_to_text(system: AnthropicSystem) -> Result<Option<String>> {
 }
 
 fn usage_from_openai(usage: &Usage) -> AnthropicUsage {
+    let cache_read_input_tokens = usage
+        .prompt_tokens_details
+        .as_ref()
+        .map(|details| details.cached_tokens)
+        .unwrap_or_default();
     AnthropicUsage {
-        input_tokens: usage.prompt_tokens,
+        input_tokens: usage.prompt_tokens.saturating_sub(cache_read_input_tokens),
+        cache_creation_input_tokens: 0,
+        cache_read_input_tokens,
         output_tokens: usage.completion_tokens,
     }
 }
@@ -984,9 +1127,10 @@ fn usage_json(usage: Option<&Usage>) -> Value {
 }
 
 fn output_usage_json(usage: Option<&Usage>) -> Value {
-    json!({
-        "output_tokens": usage.map(|usage| usage.completion_tokens).unwrap_or_default(),
-    })
+    match usage {
+        Some(usage) => json!(usage_from_openai(usage)),
+        None => json!({"output_tokens": 0}),
+    }
 }
 
 fn stop_reason(finish_reason: &str) -> String {
@@ -1001,23 +1145,36 @@ fn stop_reason(finish_reason: &str) -> String {
 }
 
 fn tool_input_from_arguments(arguments: &str) -> Value {
-    serde_json::from_str(arguments).unwrap_or_else(|_| json!({ "arguments": arguments }))
+    match serde_json::from_str(arguments) {
+        Ok(Value::Object(input)) => Value::Object(input),
+        Ok(input) => json!({"arguments": input}),
+        Err(_) => json!({"arguments": arguments}),
+    }
 }
 
-fn anthropic_response_from_chat(response: ChatCompletionResponse) -> AnthropicMessageResponse {
+fn anthropic_response_from_chat(
+    response: ChatCompletionResponse,
+    omit_thinking: bool,
+) -> AnthropicMessageResponse {
     let mut content = Vec::new();
     let mut finish_reason = "stop".to_string();
+    let mut stop_sequence = None;
     let files = response.files.clone();
     let session_id = response.session_id.clone();
 
     if let Some(choice) = response.choices.into_iter().next() {
         finish_reason = choice.finish_reason;
+        stop_sequence = choice.stop_sequence;
         if let Some(thinking) = choice
             .message
             .reasoning_content
             .filter(|thinking| !thinking.is_empty())
         {
-            content.push(AnthropicResponseContentBlock::thinking(thinking));
+            content.push(AnthropicResponseContentBlock::thinking(if omit_thinking {
+                String::new()
+            } else {
+                thinking
+            }));
         }
         if let Some(text) = choice.message.content.filter(|text| !text.is_empty()) {
             content.push(AnthropicResponseContentBlock::text(text));
@@ -1039,53 +1196,57 @@ fn anthropic_response_from_chat(response: ChatCompletionResponse) -> AnthropicMe
         role: default_assistant_role(),
         content,
         model: response.model,
-        stop_reason: stop_reason(&finish_reason),
-        stop_sequence: None,
+        stop_reason: if stop_sequence.is_some() {
+            "stop_sequence".to_string()
+        } else {
+            stop_reason(&finish_reason)
+        },
+        stop_sequence,
         usage: usage_from_openai(&response.usage),
         files,
         session_id,
     }
 }
 
-pub struct AnthropicStreamer {
-    rx: Receiver<Response>,
-    state: SharedMistralRsState,
-    pending: VecDeque<Result<Event, axum::Error>>,
+struct AnthropicStreamEvent {
+    name: &'static str,
+    payload: Value,
+}
+
+impl AnthropicStreamEvent {
+    fn into_axum(self) -> Result<Event, axum::Error> {
+        Event::default().event(self.name).json_data(self.payload)
+    }
+}
+
+struct AnthropicStreamState {
+    pending: VecDeque<AnthropicStreamEvent>,
     done: bool,
     message_started: bool,
     thinking_block_index: Option<usize>,
     text_block_index: Option<usize>,
     next_content_index: usize,
-    ping: Interval,
-    outcome: Option<StreamOutcomeHandle>,
+    omit_thinking: bool,
 }
 
-impl AnthropicStreamer {
-    fn new(
-        rx: Receiver<Response>,
-        state: SharedMistralRsState,
-        outcome: Option<StreamOutcomeHandle>,
-    ) -> Self {
-        let ping_interval = Duration::from_millis(get_keep_alive_interval());
-        let mut ping = interval_at(Instant::now() + ping_interval, ping_interval);
-        ping.set_missed_tick_behavior(MissedTickBehavior::Delay);
+impl AnthropicStreamState {
+    fn new(omit_thinking: bool) -> Self {
         Self {
-            rx,
-            state,
             pending: VecDeque::new(),
             done: false,
             message_started: false,
             thinking_block_index: None,
             text_block_index: None,
             next_content_index: 0,
-            ping,
-            outcome,
+            omit_thinking,
         }
     }
 
     fn enqueue_json(&mut self, event: &'static str, payload: Value) {
-        self.pending
-            .push_back(Event::default().event(event).json_data(payload));
+        self.pending.push_back(AnthropicStreamEvent {
+            name: event,
+            payload,
+        });
     }
 
     fn start_message(&mut self, chunk: &ChatCompletionChunkResponse) {
@@ -1143,7 +1304,7 @@ impl AnthropicStreamer {
             json!({
                 "type": "content_block_start",
                 "index": index,
-                "content_block": {"type": "thinking", "thinking": ""},
+                "content_block": {"type": "thinking", "thinking": "", "signature": ""},
             }),
         );
         index
@@ -1153,6 +1314,14 @@ impl AnthropicStreamer {
         let Some(index) = self.thinking_block_index.take() else {
             return;
         };
+        self.enqueue_json(
+            "content_block_delta",
+            json!({
+                "type": "content_block_delta",
+                "index": index,
+                "delta": {"type": "signature_delta", "signature": ""},
+            }),
+        );
         self.enqueue_json(
             "content_block_stop",
             json!({
@@ -1180,6 +1349,9 @@ impl AnthropicStreamer {
             return;
         }
         let index = self.start_thinking_block();
+        if self.omit_thinking {
+            return;
+        }
         self.enqueue_json(
             "content_block_delta",
             json!({
@@ -1245,7 +1417,12 @@ impl AnthropicStreamer {
         );
     }
 
-    fn finish_message(&mut self, finish_reason: Option<&str>, usage: Option<&Usage>) {
+    fn finish_message(
+        &mut self,
+        finish_reason: Option<&str>,
+        stop_sequence: Option<&str>,
+        usage: Option<&Usage>,
+    ) {
         self.stop_thinking_block();
         self.stop_text_block();
         self.enqueue_json(
@@ -1253,8 +1430,12 @@ impl AnthropicStreamer {
             json!({
                 "type": "message_delta",
                 "delta": {
-                    "stop_reason": finish_reason.map(stop_reason).unwrap_or_else(|| "end_turn".to_string()),
-                    "stop_sequence": null,
+                    "stop_reason": if stop_sequence.is_some() {
+                        "stop_sequence".to_string()
+                    } else {
+                        finish_reason.map(stop_reason).unwrap_or_else(|| "end_turn".to_string())
+                    },
+                    "stop_sequence": stop_sequence,
                 },
                 "usage": output_usage_json(usage),
             }),
@@ -1264,7 +1445,6 @@ impl AnthropicStreamer {
     }
 
     fn handle_chunk(&mut self, chunk: ChatCompletionChunkResponse) {
-        MistralRs::maybe_log_response(self.state.clone(), &chunk);
         self.start_message(&chunk);
 
         let Some(choice) = chunk.choices.first() else {
@@ -1286,7 +1466,11 @@ impl AnthropicStreamer {
         }
 
         if choice.finish_reason.is_some() {
-            self.finish_message(choice.finish_reason.as_deref(), chunk.usage.as_ref());
+            self.finish_message(
+                choice.finish_reason.as_deref(),
+                choice.stop_sequence.as_deref(),
+                chunk.usage.as_ref(),
+            );
         }
     }
 
@@ -1306,6 +1490,34 @@ impl AnthropicStreamer {
     }
 }
 
+pub struct AnthropicStreamer {
+    rx: Receiver<Response>,
+    state: SharedMistralRsState,
+    stream: AnthropicStreamState,
+    ping: Interval,
+    outcome: Option<StreamOutcomeHandle>,
+}
+
+impl AnthropicStreamer {
+    fn new(
+        rx: Receiver<Response>,
+        state: SharedMistralRsState,
+        outcome: Option<StreamOutcomeHandle>,
+        omit_thinking: bool,
+    ) -> Self {
+        let ping_interval = Duration::from_millis(get_keep_alive_interval());
+        let mut ping = interval_at(Instant::now() + ping_interval, ping_interval);
+        ping.set_missed_tick_behavior(MissedTickBehavior::Delay);
+        Self {
+            rx,
+            state,
+            stream: AnthropicStreamState::new(omit_thinking),
+            ping,
+            outcome,
+        }
+    }
+}
+
 impl futures::Stream for AnthropicStreamer {
     type Item = Result<Event, axum::Error>;
 
@@ -1314,10 +1526,10 @@ impl futures::Stream for AnthropicStreamer {
         cx: &mut std::task::Context<'_>,
     ) -> Poll<Option<Self::Item>> {
         loop {
-            if let Some(event) = self.pending.pop_front() {
-                return Poll::Ready(Some(event));
+            if let Some(event) = self.stream.pending.pop_front() {
+                return Poll::Ready(Some(event.into_axum()));
             }
-            if self.done {
+            if self.stream.done {
                 return Poll::Ready(None);
             }
 
@@ -1325,13 +1537,16 @@ impl futures::Stream for AnthropicStreamer {
                 Poll::Ready(Some(resp)) => {
                     observe_response(&self.outcome, &resp);
                     match resp {
-                        Response::Chunk(chunk) => self.handle_chunk(chunk),
+                        Response::Chunk(chunk) => {
+                            MistralRs::maybe_log_response(self.state.clone(), &chunk);
+                            self.stream.handle_chunk(chunk);
+                        }
                         Response::ModelError(msg, _) => {
                             MistralRs::maybe_log_error(
                                 self.state.clone(),
                                 &crate::handler_core::ModelErrorMessage(msg.to_string()),
                             );
-                            self.handle_error_event(ApiError::model_error());
+                            self.stream.handle_error_event(ApiError::model_error());
                         }
                         Response::ValidationError(e) => {
                             let error =
@@ -1344,11 +1559,11 @@ impl futures::Stream for AnthropicStreamer {
                             ) {
                                 MistralRs::maybe_log_error(self.state.clone(), e.as_ref());
                             }
-                            self.handle_error_event(error);
+                            self.stream.handle_error_event(error);
                         }
                         Response::InternalError(e) => {
                             MistralRs::maybe_log_error(self.state.clone(), &*e);
-                            self.handle_error_event(ApiError::from_error(
+                            self.stream.handle_error_event(ApiError::from_error(
                                 e.as_ref(),
                                 ApiErrorKind::Internal,
                             ));
@@ -1358,7 +1573,7 @@ impl futures::Stream for AnthropicStreamer {
                             tool_name,
                             phase,
                         } => {
-                            self.enqueue_json(
+                            self.stream.enqueue_json(
                                 "agentic_tool_call_progress",
                                 crate::chat_completion::serialize_agentic_progress(
                                     round, &tool_name, &phase,
@@ -1372,7 +1587,7 @@ impl futures::Stream for AnthropicStreamer {
                             tool,
                             arguments,
                         } => {
-                            self.enqueue_json(
+                            self.stream.enqueue_json(
                                 "agentic_tool_approval_required",
                                 json!({
                                     "type": "agentic_tool_approval_required",
@@ -1385,7 +1600,7 @@ impl futures::Stream for AnthropicStreamer {
                             );
                         }
                         Response::File(file) => {
-                            self.enqueue_json("file_produced", json!(file));
+                            self.stream.enqueue_json("file_produced", json!(file));
                         }
                         Response::BlockDenoisingProgress(_) => {}
                         Response::Done(_)
@@ -1399,7 +1614,7 @@ impl futures::Stream for AnthropicStreamer {
                     }
                 }
                 Poll::Ready(None) => {
-                    self.handle_error_event(ApiError::new(
+                    self.stream.handle_error_event(ApiError::new(
                         ApiErrorKind::Internal,
                         INTERNAL_ERROR_MESSAGE,
                         Some("internal_error"),
@@ -1408,7 +1623,7 @@ impl futures::Stream for AnthropicStreamer {
                 }
                 Poll::Pending => {
                     if Pin::new(&mut self.ping).poll_tick(cx).is_ready() {
-                        self.enqueue_json("ping", json!({"type": "ping"}));
+                        self.stream.enqueue_json("ping", json!({"type": "ping"}));
                         continue;
                     }
                     return Poll::Pending;
@@ -1534,8 +1749,9 @@ fn create_streamer(
     rx: Receiver<Response>,
     state: SharedMistralRsState,
     outcome: Option<StreamOutcomeHandle>,
+    omit_thinking: bool,
 ) -> AnthropicMessagesSse {
-    let streamer = AnthropicStreamer::new(rx, state, outcome);
+    let streamer = AnthropicStreamer::new(rx, state, outcome, omit_thinking);
     Sse::new(streamer)
         .keep_alive(KeepAlive::new().interval(Duration::from_millis(get_keep_alive_interval())))
 }
@@ -1543,12 +1759,16 @@ fn create_streamer(
 async fn process_non_streaming_response(
     rx: &mut Receiver<Response>,
     state: SharedMistralRsState,
+    omit_thinking: bool,
 ) -> AnthropicMessagesResponder {
     loop {
         match rx.recv().await {
             Some(Response::Done(response)) => {
                 MistralRs::maybe_log_response(state, &response);
-                return AnthropicMessagesResponder::Json(anthropic_response_from_chat(response));
+                return AnthropicMessagesResponder::Json(anthropic_response_from_chat(
+                    response,
+                    omit_thinking,
+                ));
             }
             Some(Response::ModelError(msg, response)) => {
                 MistralRs::maybe_log_error(
@@ -1612,6 +1832,10 @@ pub async fn anthropic_messages(
     if let Err(error) = request.validate(true) {
         return handle_validation_error(error);
     }
+    let omit_thinking = match omit_anthropic_thinking_output(request.thinking.as_ref()) {
+        Ok(omit) => omit,
+        Err(error) => return handle_validation_error(error),
+    };
 
     let (tx, mut rx) = create_response_channel(None);
     let mut oairequest = match request.into_chat_completion_request() {
@@ -1680,9 +1904,10 @@ pub async fn anthropic_messages(
             rx,
             state,
             stream_outcome.map(|Extension(handle)| handle),
+            omit_thinking,
         ))
     } else {
-        process_non_streaming_response(&mut rx, state).await
+        process_non_streaming_response(&mut rx, state, omit_thinking).await
     }
 }
 
@@ -1801,7 +2026,10 @@ mod tests {
         extract::FromRequest,
         http::Request as HttpRequest,
     };
-    use mistralrs_core::MistralRsError;
+    use mistralrs_core::{
+        CalledFunction, Choice, ChunkChoice, Delta, MistralRsError, PromptTokensDetails,
+        ResponseMessage, ToolCallResponse, ToolCallType,
+    };
 
     async fn error_body(response: axum::response::Response) -> Value {
         let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
@@ -1815,6 +2043,54 @@ mod tests {
             "messages": [{"role": "user", "content": "Hello"}]
         }))
         .unwrap()
+    }
+
+    fn test_usage(prompt_tokens: usize, cached_tokens: usize, output_tokens: usize) -> Usage {
+        Usage {
+            completion_tokens: output_tokens,
+            prompt_tokens,
+            total_tokens: prompt_tokens + output_tokens,
+            prompt_tokens_details: (cached_tokens > 0)
+                .then_some(PromptTokensDetails { cached_tokens }),
+            avg_tok_per_sec: 0.0,
+            avg_prompt_tok_per_sec: 0.0,
+            avg_compl_tok_per_sec: 0.0,
+            total_time_sec: 0.0,
+            total_prompt_time_sec: 0.0,
+            total_completion_time_sec: 0.0,
+        }
+    }
+
+    fn stream_chunk(
+        reasoning: Option<&str>,
+        text: Option<&str>,
+        tool_calls: Option<Vec<ToolCallResponse>>,
+        finish_reason: Option<&str>,
+        stop_sequence: Option<&str>,
+        usage: Option<Usage>,
+    ) -> ChatCompletionChunkResponse {
+        ChatCompletionChunkResponse {
+            id: "msg_test".to_string(),
+            choices: vec![ChunkChoice {
+                finish_reason: finish_reason.map(str::to_string),
+                stop_sequence: stop_sequence.map(str::to_string),
+                index: 0,
+                delta: Delta {
+                    content: text.map(str::to_string),
+                    role: "assistant".to_string(),
+                    tool_calls,
+                    reasoning_content: reasoning.map(str::to_string),
+                },
+                logprobs: None,
+            }],
+            created: 0,
+            model: "default".to_string(),
+            system_fingerprint: "local".to_string(),
+            object: "chat.completion.chunk".to_string(),
+            usage,
+            adapter_generation: None,
+            session_id: None,
+        }
     }
 
     #[test]
@@ -1832,12 +2108,12 @@ mod tests {
         assert!(request.validate(true).is_err());
 
         request.messages.push(AnthropicMessage {
-            role: "system".to_string(),
+            role: "developer".to_string(),
             content: AnthropicMessageContent::Text("No".to_string()),
         });
         assert!(request.validate(true).is_err());
 
-        request.messages[0].role = "assistant".to_string();
+        request.messages[0].role = "system".to_string();
         assert!(request.validate(true).is_ok());
     }
 
@@ -2024,6 +2300,145 @@ mod tests {
                 .and_then(MessageContent::to_text),
             Some("Hello".to_string())
         );
+    }
+
+    #[test]
+    fn converts_claude_code_tool_round_trip_and_native_effort() {
+        let req: AnthropicMessagesRequest = serde_json::from_value(json!({
+            "model": "default",
+            "max_tokens": 32000,
+            "stream": true,
+            "system": [
+                {"type": "text", "text": "You are a coding agent.", "cache_control": {"type": "ephemeral"}}
+            ],
+            "messages": [
+                {"role": "user", "content": [{"type": "text", "text": "Read Cargo.toml"}]},
+                {"role": "assistant", "content": [
+                    {"type": "thinking", "thinking": "I should inspect the file.", "signature": "opaque"},
+                    {"type": "tool_use", "id": "toolu_1", "name": "Read", "input": {"file_path": "Cargo.toml"}}
+                ]},
+                {"role": "user", "content": [
+                    {"type": "tool_result", "tool_use_id": "toolu_1", "content": "[workspace]", "cache_control": {"type": "ephemeral"}}
+                ]},
+                {"role": "system", "content": "Keep the final answer short."}
+            ],
+            "tools": [{
+                "name": "Read",
+                "description": "Read a file.",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {"file_path": {"type": "string"}},
+                    "required": ["file_path"]
+                }
+            }],
+            "thinking": {"type": "adaptive", "display": "omitted"},
+            "output_config": {"effort": "high"},
+            "context_management": {"edits": [{"type": "clear_thinking_20251015", "keep": "all"}]}
+        }))
+        .unwrap();
+
+        assert!(omit_anthropic_thinking_output(req.thinking.as_ref()).unwrap());
+        req.validate(true).unwrap();
+        let chat = req.into_chat_completion_request().unwrap();
+        assert_eq!(chat.model, "default");
+        assert_eq!(chat.stream, Some(true));
+        assert_eq!(chat.enable_thinking, Some(true));
+        assert_eq!(chat.reasoning_effort.as_deref(), Some("high"));
+
+        let Either::Left(messages) = chat.messages else {
+            panic!("expected message array");
+        };
+        assert_eq!(
+            messages
+                .iter()
+                .map(|message| message.role.as_str())
+                .collect::<Vec<_>>(),
+            ["system", "user", "assistant", "tool", "system"]
+        );
+        assert_eq!(
+            messages[2].reasoning_content.as_deref(),
+            Some("I should inspect the file.")
+        );
+        assert_eq!(
+            messages[2].tool_calls.as_ref().unwrap()[0].id.as_deref(),
+            Some("toolu_1")
+        );
+        assert_eq!(messages[3].tool_call_id.as_deref(), Some("toolu_1"));
+        assert_eq!(
+            messages[3]
+                .content
+                .as_ref()
+                .and_then(MessageContent::to_text)
+                .as_deref(),
+            Some("[workspace]")
+        );
+    }
+
+    #[test]
+    fn converts_native_output_format_and_required_tool_choice() {
+        let req: AnthropicMessagesRequest = serde_json::from_value(json!({
+            "model": "default",
+            "max_tokens": 32,
+            "messages": [{"role": "user", "content": "Return JSON."}],
+            "tools": [{
+                "name": "emit",
+                "input_schema": {"type": "object", "properties": {}}
+            }],
+            "tool_choice": {"type": "any"},
+            "output_config": {
+                "format": {
+                    "type": "json_schema",
+                    "schema": {
+                        "type": "object",
+                        "properties": {"ok": {"type": "boolean"}},
+                        "required": ["ok"]
+                    }
+                }
+            }
+        }))
+        .unwrap();
+
+        let chat = req.into_chat_completion_request().unwrap();
+        assert!(matches!(chat.tool_choice, Some(ToolChoice::Required)));
+        let Some(ResponseFormat::JsonSchema { json_schema }) = chat.response_format else {
+            panic!("expected JSON schema response format");
+        };
+        assert_eq!(json_schema.name, ANTHROPIC_OUTPUT_SCHEMA_NAME);
+        assert_eq!(json_schema.schema["required"], json!(["ok"]));
+    }
+
+    #[test]
+    fn preserves_multimodal_content_order() {
+        let req: AnthropicMessagesRequest = serde_json::from_value(json!({
+            "model": "default",
+            "max_tokens": 32,
+            "messages": [{
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "before"},
+                    {"type": "image", "source": {"type": "url", "url": "https://example.com/image.png"}},
+                    {"type": "text", "text": "after"}
+                ]
+            }]
+        }))
+        .unwrap();
+
+        let chat = req.into_chat_completion_request().unwrap();
+        let Either::Left(messages) = chat.messages else {
+            panic!("expected message array");
+        };
+        let content = messages[0].content.as_ref().unwrap();
+        let Either::Right(parts) = &**content else {
+            panic!("expected multimodal content");
+        };
+        let types = parts
+            .iter()
+            .map(|part| match &**part.get("type").unwrap() {
+                Either::Left(value) => value.as_str(),
+                Either::Right(_) => panic!("expected string content type"),
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(types, ["text", "image_url", "text"]);
     }
 
     #[test]
@@ -2230,6 +2645,151 @@ mod tests {
 
         let chat = req.into_chat_completion_request().unwrap();
         assert_eq!(chat.enable_thinking, Some(true));
+    }
+
+    #[test]
+    fn serializes_response_blocks_usage_and_stop_sequence() {
+        let response = ChatCompletionResponse {
+            id: "msg_test".to_string(),
+            choices: vec![Choice {
+                finish_reason: "stop".to_string(),
+                stop_sequence: Some("END".to_string()),
+                index: 0,
+                message: ResponseMessage {
+                    content: Some("done".to_string()),
+                    role: "assistant".to_string(),
+                    tool_calls: Some(vec![ToolCallResponse {
+                        index: 0,
+                        id: "toolu_1".to_string(),
+                        tp: ToolCallType::Function,
+                        function: CalledFunction {
+                            name: "list_items".to_string(),
+                            arguments: "[1,2]".to_string(),
+                        },
+                    }]),
+                    reasoning_content: Some("private reasoning".to_string()),
+                },
+                logprobs: None,
+            }],
+            created: 0,
+            model: "default".to_string(),
+            system_fingerprint: "local".to_string(),
+            object: "chat.completion".to_string(),
+            usage: test_usage(120, 100, 8),
+            adapter_generation: None,
+            agentic_tool_calls: None,
+            files: None,
+            session_id: None,
+        };
+
+        let value = serde_json::to_value(anthropic_response_from_chat(response, true)).unwrap();
+        assert_eq!(value["stop_reason"], "stop_sequence");
+        assert_eq!(value["stop_sequence"], "END");
+        assert_eq!(value["usage"]["input_tokens"], 20);
+        assert_eq!(value["usage"]["cache_creation_input_tokens"], 0);
+        assert_eq!(value["usage"]["cache_read_input_tokens"], 100);
+        assert_eq!(value["content"][0]["type"], "thinking");
+        assert_eq!(value["content"][0]["thinking"], "");
+        assert_eq!(value["content"][0]["signature"], "");
+        assert_eq!(value["content"][2]["type"], "tool_use");
+        assert_eq!(value["content"][2]["input"], json!({"arguments": [1, 2]}));
+    }
+
+    #[test]
+    fn streams_ordered_thinking_text_tool_and_usage_events() {
+        let mut stream = AnthropicStreamState::new(true);
+        stream.handle_chunk(stream_chunk(Some("hidden"), None, None, None, None, None));
+        stream.handle_chunk(stream_chunk(None, Some("answer"), None, None, None, None));
+        stream.handle_chunk(stream_chunk(
+            None,
+            None,
+            Some(vec![ToolCallResponse {
+                index: 0,
+                id: "toolu_1".to_string(),
+                tp: ToolCallType::Function,
+                function: CalledFunction {
+                    name: "Read".to_string(),
+                    arguments: r#"{"file_path":"Cargo.toml"}"#.to_string(),
+                },
+            }]),
+            Some("tool_calls"),
+            None,
+            Some(test_usage(50, 30, 7)),
+        ));
+
+        let done = stream.done;
+        let events = stream
+            .pending
+            .into_iter()
+            .map(|event| (event.name, event.payload))
+            .collect::<Vec<_>>();
+        let names = events.iter().map(|(name, _)| *name).collect::<Vec<_>>();
+        assert_eq!(
+            names,
+            [
+                "message_start",
+                "content_block_start",
+                "content_block_delta",
+                "content_block_stop",
+                "content_block_start",
+                "content_block_delta",
+                "content_block_stop",
+                "content_block_start",
+                "content_block_delta",
+                "content_block_stop",
+                "message_delta",
+                "message_stop",
+            ]
+        );
+        assert_eq!(events[1].1["content_block"]["type"], "thinking");
+        assert_eq!(events[2].1["delta"]["type"], "signature_delta");
+        assert_eq!(events[4].1["index"], 1);
+        assert_eq!(events[7].1["index"], 2);
+        assert_eq!(events[8].1["delta"]["type"], "input_json_delta");
+        assert_eq!(events[10].1["delta"]["stop_reason"], "tool_use");
+        assert_eq!(events[10].1["usage"]["input_tokens"], 20);
+        assert_eq!(events[10].1["usage"]["cache_read_input_tokens"], 30);
+        assert_eq!(events[10].1["usage"]["output_tokens"], 7);
+        assert!(done);
+    }
+
+    #[test]
+    fn streams_matched_stop_sequence() {
+        let mut stream = AnthropicStreamState::new(false);
+        stream.handle_chunk(stream_chunk(
+            None,
+            Some("done"),
+            None,
+            Some("stop"),
+            Some("END"),
+            Some(test_usage(5, 0, 1)),
+        ));
+
+        let message_delta = stream
+            .pending
+            .iter()
+            .find(|event| event.name == "message_delta")
+            .unwrap();
+        assert_eq!(
+            message_delta.payload["delta"]["stop_reason"],
+            "stop_sequence"
+        );
+        assert_eq!(message_delta.payload["delta"]["stop_sequence"], "END");
+    }
+
+    #[test]
+    fn rejects_non_object_tool_use_input() {
+        let req: AnthropicMessagesRequest = serde_json::from_value(json!({
+            "model": "default",
+            "max_tokens": 32,
+            "messages": [{
+                "role": "assistant",
+                "content": [{"type": "tool_use", "id": "toolu_1", "name": "Read", "input": []}]
+            }]
+        }))
+        .unwrap();
+
+        assert!(req.into_chat_completion_request().is_err());
     }
 
     #[test]

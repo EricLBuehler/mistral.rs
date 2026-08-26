@@ -208,6 +208,8 @@ pub trait Scheduler: Send + Sync {
 
     fn set_supports_packed_prefill(&mut self, _supported: bool) {}
 
+    fn set_prefill_has_per_sequence_state(&mut self, _enabled: bool) {}
+
     fn set_scheduler_visible_prompt_chunks(
         &mut self,
         _enabled: bool,

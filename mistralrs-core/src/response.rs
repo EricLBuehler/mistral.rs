@@ -86,6 +86,8 @@ generate_repr!(Logprobs);
 /// Chat completion choice.
 pub struct Choice {
     pub finish_reason: String,
+    #[serde(skip)]
+    pub stop_sequence: Option<String>,
     pub index: usize,
     pub message: ResponseMessage,
     pub logprobs: Option<Logprobs>,
@@ -99,6 +101,8 @@ generate_repr!(Choice);
 /// Chat completion streaming chunk choice.
 pub struct ChunkChoice {
     pub finish_reason: Option<String>,
+    #[serde(skip)]
+    pub stop_sequence: Option<String>,
     pub index: usize,
     pub delta: Delta,
     pub logprobs: Option<ResponseLogprob>,

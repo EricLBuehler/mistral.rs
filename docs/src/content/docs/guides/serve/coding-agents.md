@@ -91,6 +91,7 @@ project-local `.claude/settings.local.json`:
     "ANTHROPIC_CUSTOM_MODEL_OPTION": "default",
     "ANTHROPIC_CUSTOM_MODEL_OPTION_NAME": "mistral.rs default",
     "ANTHROPIC_CUSTOM_MODEL_OPTION_DESCRIPTION": "Local model served by mistral.rs",
+    "CLAUDE_CODE_MAX_CONTEXT_TOKENS": "32768",
     "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1"
   }
 }
@@ -106,6 +107,7 @@ export ANTHROPIC_DEFAULT_SONNET_MODEL=default
 export ANTHROPIC_DEFAULT_OPUS_MODEL=default
 export ANTHROPIC_DEFAULT_HAIKU_MODEL=default
 export ANTHROPIC_CUSTOM_MODEL_OPTION=default
+export CLAUDE_CODE_MAX_CONTEXT_TOKENS=32768
 export CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
 claude
 ```
@@ -114,6 +116,10 @@ Map the Sonnet, Opus, and Haiku defaults to `default` so the `sonnet` setting
 and Claude Code's background and planning calls all use the single loaded
 mistral.rs model. If you serve several models, map each Claude Code default to
 the local model id you want for that role.
+
+Set `CLAUDE_CODE_MAX_CONTEXT_TOKENS` to the loaded model's actual context
+window. This avoids Claude Code guessing from an unfamiliar local model id and
+keeps its compaction threshold within the server limit.
 
 Every variable above is documented in the
 [Claude Code environment variables reference](https://code.claude.com/docs/en/env-vars).
@@ -157,6 +163,7 @@ Copyable config snippets live in `examples/server/`:
 | Codex returns 404 | Include `/v1` in the Codex provider `base_url`. |
 | Claude Code returns 404 | Remove `/v1` from `ANTHROPIC_BASE_URL`. |
 | The client requests an Anthropic model id | Use `default`, or map Claude Code default model env vars to your local ids. |
+| Claude Code warns that the model context window is unknown | Set `CLAUDE_CODE_MAX_CONTEXT_TOKENS` to the loaded model's context window. |
 | A remote server accepts any key | Put authentication in a reverse proxy. mistral.rs does not validate compatibility API keys. |
 | Claude Code sends beta fields your proxy rejects | Set `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS=1` in Claude Code. |
 | Long streams time out | Raise Codex `stream_idle_timeout_ms` or Claude Code `API_TIMEOUT_MS`. |

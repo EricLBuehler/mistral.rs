@@ -410,6 +410,25 @@ fn validate_gguf_runner_options(which: &Which) -> std::result::Result<(), &'stat
     Ok(())
 }
 
+fn validate_encoder_cache_runner_options(which: &Which) -> std::result::Result<(), &'static str> {
+    let max_bytes = match which {
+        Which::GGUF {
+            encoder_cache_memory_bytes,
+            ..
+        }
+        | Which::MultimodalPlain {
+            encoder_cache_memory_bytes,
+            ..
+        } => *encoder_cache_memory_bytes,
+        _ => None,
+    };
+
+    if max_bytes == Some(0) {
+        return Err("encoder_cache_memory_bytes must be nonzero");
+    }
+    Ok(())
+}
+
 fn parse_which(
     which: Which,
     no_kv_cache: bool,
@@ -446,6 +465,8 @@ fn parse_which(
                 imatrix,
                 calibration_file,
                 hf_cache_path,
+                hf_config_overrides: None,
+                max_model_len: None,
                 matformer_config_path,
                 matformer_slice_name,
             },
@@ -512,6 +533,8 @@ fn parse_which(
                 imatrix: None,
                 calibration_file: None,
                 hf_cache_path,
+                hf_config_overrides: None,
+                max_model_len: None,
                 matformer_config_path: None,
                 matformer_slice_name: None,
             },
@@ -559,6 +582,8 @@ fn parse_which(
                 imatrix: None,
                 calibration_file: None,
                 hf_cache_path,
+                hf_config_overrides: None,
+                max_model_len: None,
                 matformer_config_path: None,
                 matformer_slice_name: None,
             },
@@ -609,6 +634,7 @@ fn parse_which(
             hf_cache_path,
             matformer_config_path,
             matformer_slice_name,
+            encoder_cache_memory_bytes,
         } => {
             let runtime_config = LoraRuntimeConfig {
                 max_adapters,
@@ -635,7 +661,8 @@ fn parse_which(
                 },
                 no_kv_cache,
                 jinja_explicit,
-            );
+            )
+            .with_encoder_cache_memory_bytes(encoder_cache_memory_bytes);
             if let Some(mmproj_filename) = mmproj_filename {
                 builder = builder
                     .with_mmproj_files(mmproj_filename.map_left(|file| vec![file]).into_inner());
@@ -828,6 +855,7 @@ fn parse_which(
             matformer_config_path,
             matformer_slice_name,
             organization,
+            encoder_cache_memory_bytes,
         } => MultimodalLoaderBuilder::new(
             MultimodalSpecificConfig {
                 topology: Topology::from_option_path(topology)?,
@@ -840,6 +868,7 @@ fn parse_which(
                 }),
                 max_edge,
                 max_model_len: None,
+                hf_config_overrides: None,
                 calibration_file,
                 imatrix,
                 hf_cache_path,
@@ -852,6 +881,7 @@ fn parse_which(
             Some(model_id),
             jinja_explicit,
         )
+        .with_encoder_cache_memory_bytes(encoder_cache_memory_bytes)
         .build(arch.map(Into::into)),
         Which::DiffusionPlain {
             model_id,
@@ -975,6 +1005,7 @@ impl Runner {
             ));
         }
         validate_gguf_runner_options(&which).map_err(PyApiErr::from)?;
+        validate_encoder_cache_runner_options(&which).map_err(PyApiErr::from)?;
         let tgt_non_granular_index = match which {
             Which::Plain { .. }
             | Which::Lora { .. }
@@ -3332,6 +3363,7 @@ mod lora_adapter_error_tests {
             hf_cache_path: None,
             matformer_config_path: None,
             matformer_slice_name: None,
+            encoder_cache_memory_bytes: None,
         }
     }
 
@@ -3402,5 +3434,23 @@ mod lora_adapter_error_tests {
         *multimodal_auto_map_params = Some(which::MultimodalAutoMapParams::new(4096, 1, 1, 1024));
 
         validate_gguf_runner_options(&which).unwrap();
+    }
+
+    #[test]
+    fn encoder_cache_memory_requires_nonzero_capacity() {
+        let mut which = gguf_which(None, mistralrs_core::DEFAULT_LORA_MAX_RANK);
+        let Which::GGUF {
+            encoder_cache_memory_bytes,
+            ..
+        } = &mut which
+        else {
+            unreachable!()
+        };
+        *encoder_cache_memory_bytes = Some(0);
+
+        assert_eq!(
+            validate_encoder_cache_runner_options(&which),
+            Err("encoder_cache_memory_bytes must be nonzero")
+        );
     }
 }

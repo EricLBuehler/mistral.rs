@@ -64,6 +64,7 @@ int32_t mistralrs_deepgemm_sm90_prepare(const MistralrsDeepGemmPlan* plan,
                                         MistralrsDeepGemmPrepared* prepared);
 
 int32_t mistralrs_deepgemm_sm90_gemm(const MistralrsDeepGemmPrepared* prepared,
+                                     uint32_t m,
                                      const void* activation_bf16,
                                      const void* weight_e4m3,
                                      const float* weight_scales,

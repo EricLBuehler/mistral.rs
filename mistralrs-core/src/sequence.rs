@@ -237,9 +237,12 @@ impl SequenceAudios {
 
 impl SequenceImages {
     fn new(input_images: Vec<image::DynamicImage>) -> Self {
-        let hashes = input_images.iter().map(|x| {
+        let hashes = input_images.iter().map(|image| {
             let mut hasher = DefaultHasher::new();
-            x.as_bytes().hash(&mut hasher);
+            image.width().hash(&mut hasher);
+            image.height().hash(&mut hasher);
+            image.color().hash(&mut hasher);
+            image.as_bytes().hash(&mut hasher);
             hasher.finish()
         });
         Self {
@@ -2558,6 +2561,38 @@ mod tests {
     use std::collections::HashMap;
     use tokio::sync::mpsc::channel;
 
+    #[test]
+    fn image_hash_distinguishes_geometry() {
+        let bytes = vec![1, 2, 3, 4, 5, 6];
+        let wide =
+            image::DynamicImage::ImageRgb8(image::RgbImage::from_raw(2, 1, bytes.clone()).unwrap());
+        let tall = image::DynamicImage::ImageRgb8(image::RgbImage::from_raw(1, 2, bytes).unwrap());
+
+        assert_eq!(wide.as_bytes(), tall.as_bytes());
+        let images = SequenceImages::new(vec![wide, tall]);
+        assert_ne!(images.hashes()[0], images.hashes()[1]);
+    }
+
+    #[test]
+    fn image_hash_distinguishes_color_type() {
+        let rgba = image::DynamicImage::ImageRgba8(
+            image::RgbaImage::from_raw(1, 1, vec![1, 2, 3, 4]).unwrap(),
+        );
+        let luma_alpha = image::DynamicImage::ImageLumaA16(
+            image::ImageBuffer::<image::LumaA<u16>, Vec<u16>>::from_raw(
+                1,
+                1,
+                vec![u16::from_ne_bytes([1, 2]), u16::from_ne_bytes([3, 4])],
+            )
+            .unwrap(),
+        );
+
+        assert_eq!(rgba.as_bytes(), luma_alpha.as_bytes());
+        assert_ne!(rgba.color(), luma_alpha.color());
+        let images = SequenceImages::new(vec![rgba, luma_alpha]);
+        assert_ne!(images.hashes()[0], images.hashes()[1]);
+    }
+
     fn make_test_sequence() -> Sequence {
         make_test_sequence_with_seed(None)
     }
@@ -2598,6 +2633,7 @@ mod tests {
     fn test_streaming_chunk(index: usize, finish_reason: Option<&str>) -> ChunkChoice {
         ChunkChoice {
             finish_reason: finish_reason.map(str::to_string),
+            stop_sequence: None,
             index,
             delta: crate::Delta {
                 content: Some(format!("choice {index}")),
@@ -3218,13 +3254,30 @@ mod tests {
     #[test]
     fn usage_omits_prompt_details_without_prefix_cache() {
         let seq = make_test_sequence();
-        let seq = seq.prefill_v2_normal(vec![], vec![7, 8], 0);
+        let mut seq = seq.prefill_v2_normal(vec![], vec![7, 8], 0);
+        seq.set_num_computed_tokens(seq.len());
         seq.update_time_info();
         assert!(seq
             .get_mut_group()
             .get_usage()
             .prompt_tokens_details
             .is_none());
+    }
+
+    #[test]
+    fn usage_does_not_treat_prefill_progress_as_cached_tokens() {
+        let seq = make_test_sequence();
+        let mut seq = seq.prefill_v2_normal(vec![], vec![1, 2, 3, 4, 5, 6, 7, 8], 4);
+        seq.set_num_computed_tokens(seq.len());
+        seq.update_time_info();
+
+        let usage = seq.get_mut_group().get_usage();
+        assert_eq!(
+            usage
+                .prompt_tokens_details
+                .map(|details| details.cached_tokens),
+            Some(4)
+        );
     }
 
     #[test]

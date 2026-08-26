@@ -59,6 +59,150 @@ pub struct SpeculativeCommitRow {
     pub accepted_all: bool,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SpeculativePrefillCaptureLayout {
+    Dense,
+    Packed,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct SpeculativeTapSpan {
+    capture_batch_idx: usize,
+    capture_row_start: usize,
+    rows: usize,
+}
+
+impl SpeculativeTapSpan {
+    pub(crate) fn rows(&self) -> usize {
+        self.rows
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct SpeculativeTapRouting {
+    spans: Vec<SpeculativeTapSpan>,
+    capture_rows: usize,
+}
+
+impl SpeculativeTapRouting {
+    pub(crate) fn new(
+        layout: SpeculativePrefillCaptureLayout,
+        capture_batch: usize,
+        capture_rows: usize,
+        target_batch_indices: &[usize],
+        chunk_ranges: &[(usize, usize)],
+    ) -> Result<Self> {
+        if target_batch_indices.len() != chunk_ranges.len() {
+            candle_core::bail!(
+                "speculative tap routing has {} batch indices for {} prompt rows",
+                target_batch_indices.len(),
+                chunk_ranges.len()
+            );
+        }
+        let row_counts = chunk_ranges
+            .iter()
+            .map(|&(start, end)| {
+                let rows = end.checked_sub(start).ok_or_else(|| {
+                    candle_core::Error::msg(format!(
+                        "speculative prompt range ({start}, {end}) is reversed"
+                    ))
+                })?;
+                if rows == 0 {
+                    candle_core::bail!("speculative prompt range ({start}, {end}) is empty");
+                }
+                Ok(rows)
+            })
+            .collect::<Result<Vec<_>>>()?;
+
+        let spans = match layout {
+            SpeculativePrefillCaptureLayout::Dense => target_batch_indices
+                .iter()
+                .zip(row_counts)
+                .map(|(&batch_idx, rows)| {
+                    if batch_idx >= capture_batch {
+                        candle_core::bail!(
+                            "speculative tap batch row {batch_idx} exceeds capture batch {capture_batch}"
+                        );
+                    }
+                    if rows > capture_rows {
+                        candle_core::bail!(
+                            "speculative prompt has {rows} rows but dense tap capture has {capture_rows}"
+                        );
+                    }
+                    Ok(SpeculativeTapSpan {
+                        capture_batch_idx: batch_idx,
+                        capture_row_start: 0,
+                        rows,
+                    })
+                })
+                .collect::<Result<Vec<_>>>()?,
+            SpeculativePrefillCaptureLayout::Packed => {
+                if capture_batch != 1 {
+                    candle_core::bail!(
+                        "packed speculative tap capture has batch {capture_batch}, expected 1"
+                    );
+                }
+                for (logical_idx, &batch_idx) in target_batch_indices.iter().enumerate() {
+                    if batch_idx != logical_idx {
+                        candle_core::bail!(
+                            "packed speculative tap row {logical_idx} maps to target batch {batch_idx}"
+                        );
+                    }
+                }
+                let mut row_start = 0usize;
+                let mut spans = Vec::with_capacity(row_counts.len());
+                for rows in row_counts {
+                    spans.push(SpeculativeTapSpan {
+                        capture_batch_idx: 0,
+                        capture_row_start: row_start,
+                        rows,
+                    });
+                    row_start = row_start.checked_add(rows).ok_or_else(|| {
+                        candle_core::Error::msg("packed speculative tap row count overflow")
+                    })?;
+                }
+                if row_start != capture_rows {
+                    candle_core::bail!(
+                        "packed speculative prompts have {row_start} rows but tap capture has {capture_rows}"
+                    );
+                }
+                spans
+            }
+        };
+        Ok(Self {
+            spans,
+            capture_rows,
+        })
+    }
+
+    pub(crate) fn spans(&self) -> &[SpeculativeTapSpan] {
+        &self.spans
+    }
+
+    pub(crate) fn flat_row_indices(&self) -> Result<Vec<u32>> {
+        let total_rows = self.spans.iter().try_fold(0usize, |total, span| {
+            total.checked_add(span.rows).ok_or_else(|| {
+                candle_core::Error::msg("speculative tap routing row count overflow")
+            })
+        })?;
+        let mut indices = Vec::with_capacity(total_rows);
+        for span in &self.spans {
+            let start = span
+                .capture_batch_idx
+                .checked_mul(self.capture_rows)
+                .and_then(|row| row.checked_add(span.capture_row_start))
+                .ok_or_else(|| candle_core::Error::msg("speculative tap row index overflow"))?;
+            let end = start
+                .checked_add(span.rows)
+                .ok_or_else(|| candle_core::Error::msg("speculative tap row index overflow"))?;
+            for row in start..end {
+                indices.push(u32::try_from(row).map_err(candle_core::Error::wrap)?);
+            }
+        }
+        Ok(indices)
+    }
+}
+
 /// One prompt chunk the target just processed; proposers that keep their own KV cache use it to
 /// catch up over the prompt (rows are `[start, end)` per sequence, in target-batch order).
 pub struct SpeculativePrefillCtx<'a> {
@@ -76,6 +220,19 @@ pub struct SpeculativePrefillCtx<'a> {
 pub struct TargetAttentionInputs<'a> {
     pub metadata: &'a PagedAttentionInputMetadata,
     pub flash_params: &'a FlashParams,
+}
+
+impl SpeculativePrefillCtx<'_> {
+    pub(crate) fn capture_layout(&self) -> SpeculativePrefillCaptureLayout {
+        self.target_attention
+            .map_or(SpeculativePrefillCaptureLayout::Dense, |target| {
+                if target.flash_params.packed {
+                    SpeculativePrefillCaptureLayout::Packed
+                } else {
+                    SpeculativePrefillCaptureLayout::Dense
+                }
+            })
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -331,7 +488,102 @@ pub fn sample_draft_rows(
 mod tests {
     use candle_core::{Device, Tensor};
 
-    use super::{SparseSpeculativeProbs, SpeculativeProposal, SpeculativeTokens};
+    use super::{
+        SparseSpeculativeProbs, SpeculativePrefillCaptureLayout, SpeculativeProposal,
+        SpeculativeTapRouting, SpeculativeTapSpan, SpeculativeTokens,
+    };
+
+    #[test]
+    fn dense_speculative_tap_routing_preserves_target_batch_rows() {
+        let routing = SpeculativeTapRouting::new(
+            SpeculativePrefillCaptureLayout::Dense,
+            3,
+            5,
+            &[2, 0],
+            &[(7, 10), (4, 9)],
+        )
+        .unwrap();
+
+        assert_eq!(
+            routing.spans(),
+            &[
+                SpeculativeTapSpan {
+                    capture_batch_idx: 2,
+                    capture_row_start: 0,
+                    rows: 3,
+                },
+                SpeculativeTapSpan {
+                    capture_batch_idx: 0,
+                    capture_row_start: 0,
+                    rows: 5,
+                },
+            ]
+        );
+        assert_eq!(
+            routing.flat_row_indices().unwrap(),
+            vec![10, 11, 12, 0, 1, 2, 3, 4]
+        );
+    }
+
+    #[test]
+    fn packed_speculative_tap_routing_uses_cumulative_rows() {
+        let routing = SpeculativeTapRouting::new(
+            SpeculativePrefillCaptureLayout::Packed,
+            1,
+            8,
+            &[0, 1],
+            &[(7, 10), (4, 9)],
+        )
+        .unwrap();
+
+        assert_eq!(
+            routing.spans(),
+            &[
+                SpeculativeTapSpan {
+                    capture_batch_idx: 0,
+                    capture_row_start: 0,
+                    rows: 3,
+                },
+                SpeculativeTapSpan {
+                    capture_batch_idx: 0,
+                    capture_row_start: 3,
+                    rows: 5,
+                },
+            ]
+        );
+        assert_eq!(
+            routing.flat_row_indices().unwrap(),
+            (0..8).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn speculative_tap_routing_rejects_inconsistent_packed_metadata() {
+        assert!(SpeculativeTapRouting::new(
+            SpeculativePrefillCaptureLayout::Packed,
+            2,
+            8,
+            &[0, 1],
+            &[(0, 3), (0, 5)],
+        )
+        .is_err());
+        assert!(SpeculativeTapRouting::new(
+            SpeculativePrefillCaptureLayout::Packed,
+            1,
+            9,
+            &[0, 1],
+            &[(0, 3), (0, 5)],
+        )
+        .is_err());
+        assert!(SpeculativeTapRouting::new(
+            SpeculativePrefillCaptureLayout::Packed,
+            1,
+            8,
+            &[1, 0],
+            &[(0, 3), (0, 5)],
+        )
+        .is_err());
+    }
 
     #[test]
     fn sparse_probabilities_validate_shape_and_proposal_length() {

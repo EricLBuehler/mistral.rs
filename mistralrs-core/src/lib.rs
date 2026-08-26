@@ -173,13 +173,13 @@ pub use pipeline::{
     DiffusionLoaderBuilder, DiffusionLoaderType, EmbeddingLoader, EmbeddingLoaderBuilder,
     EmbeddingLoaderType, EmbeddingModelPaths, EmbeddingSpecificConfig, GGMLLoader,
     GGMLLoaderBuilder, GGMLSpecificConfig, GGUFLoader, GGUFLoaderBuilder, GGUFSpecificConfig,
-    GemmaLoader, Idefics2Loader, IsqOrganization, LLaVALoader, LLaVANextLoader, LlamaLoader,
-    Loader, LocalModelPaths, MistralLoader, MixtralLoader, Modalities, ModelKind, ModelPaths,
-    MultimodalLoader, MultimodalLoaderBuilder, MultimodalLoaderType, MultimodalPromptPrefixer,
-    MultimodalSpecificConfig, NormalLoader, NormalLoaderBuilder, NormalLoaderType,
-    NormalSpecificConfig, Phi2Loader, Phi3Loader, Phi3VLoader, Qwen2Loader, ResolvedLoraAdapter,
-    SpeechLoader, SpeechPipeline, Starcoder2Loader, SupportedModality, TokenSource,
-    UqffWriteConfig, UQFF_MULTI_FILE_DELIMITER,
+    GemmaLoader, HfConfigOverrides, Idefics2Loader, IsqOrganization, LLaVALoader, LLaVANextLoader,
+    LlamaLoader, Loader, LocalModelPaths, MistralLoader, MixtralLoader, Modalities, ModelKind,
+    ModelPaths, MultimodalLoader, MultimodalLoaderBuilder, MultimodalLoaderType,
+    MultimodalPromptPrefixer, MultimodalSpecificConfig, NormalLoader, NormalLoaderBuilder,
+    NormalLoaderType, NormalSpecificConfig, Phi2Loader, Phi3Loader, Phi3VLoader, Qwen2Loader,
+    ResolvedLoraAdapter, SpeechLoader, SpeechPipeline, Starcoder2Loader, SupportedModality,
+    TokenSource, UqffWriteConfig, UQFF_MULTI_FILE_DELIMITER,
 };
 pub use request::{
     resolve_reasoning_controls, ApproximateUserLocation, CalibrationAction, CalibrationRequest,
@@ -349,8 +349,12 @@ pub struct ModelLoaderConfig {
     pub jinja_explicit: Option<String>,
     /// Optional runtime context cap applied by loaders that support it.
     pub max_model_len: Option<usize>,
+    /// Optional recursively merged Hugging Face config.json overrides.
+    pub hf_config_overrides: Option<HfConfigOverrides>,
     /// Optional speculative decoding attachment to recreate after reload.
     pub mtp_config: Option<MtpConfig>,
+    /// Optional logical tensor byte budget for multimodal encoder outputs.
+    pub encoder_cache_memory_bytes: Option<usize>,
 }
 
 /// State preserved when a model is unloaded.
@@ -2730,6 +2734,7 @@ impl MistralRs {
             .with_chat_template(loader_config.chat_template.clone())
             .with_jinja_explicit(loader_config.jinja_explicit.clone())
             .with_max_model_len(loader_config.max_model_len)
+            .with_hf_config_overrides(loader_config.hf_config_overrides.clone())
             .with_no_kv_cache(unloaded_state.engine_config.no_kv_cache)
             .with_mtp(
                 loader_config
@@ -2737,6 +2742,7 @@ impl MistralRs {
                     .as_ref()
                     .is_some_and(MtpConfig::is_builtin),
             )
+            .with_encoder_cache_memory_bytes(loader_config.encoder_cache_memory_bytes)
             .build()
             .map_err(|e| MistralRsError::ReloadFailed(format!("Failed to build loader: {e}")))?;
 

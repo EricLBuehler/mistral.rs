@@ -1,4 +1,5 @@
 use std::{
+    borrow::Cow,
     collections::HashMap,
     fmt::{Debug, Display},
     str::FromStr,
@@ -112,6 +113,16 @@ pub trait NormalModelLoader: IsqModelLoader + Send + Sync + DeviceMappedModelLoa
         normal_loading_metadata: NormalLoadingMetadata,
         preload_adapters: &Option<HashMap<String, (ShardedVarBuilder, LoraConfig)>>,
     ) -> Result<Box<dyn NormalModel + Send + Sync>>;
+    fn runtime_config<'a>(
+        &self,
+        config: &'a str,
+        max_model_len: Option<usize>,
+    ) -> Result<Cow<'a, str>> {
+        if let Some(max_model_len) = max_model_len {
+            anyhow::bail!("max_model_len={max_model_len} is not supported by this model loader");
+        }
+        Ok(Cow::Borrowed(config))
+    }
     fn is_gptx(&self, config: &str) -> Result<bool>;
     fn is_gptx_for(
         &self,
@@ -449,6 +460,14 @@ impl AutoNormalLoader {
 }
 
 impl NormalModelLoader for AutoNormalLoader {
+    fn runtime_config<'a>(
+        &self,
+        config: &'a str,
+        max_model_len: Option<usize>,
+    ) -> Result<Cow<'a, str>> {
+        Self::get_loader(config)?.runtime_config(config, max_model_len)
+    }
+
     fn load(
         &self,
         config: &str,
@@ -5924,6 +5943,19 @@ fn parse_qwen35_text_config(config: &str) -> Result<crate::vision_models::qwen3_
 }
 
 impl NormalModelLoader for Qwen3_5TextLoader {
+    fn runtime_config<'a>(
+        &self,
+        config: &'a str,
+        max_model_len: Option<usize>,
+    ) -> Result<Cow<'a, str>> {
+        match max_model_len {
+            Some(max_model_len) => Ok(Cow::Owned(
+                crate::vision_models::qwen3_5::config::apply_max_model_len(config, max_model_len)?,
+            )),
+            None => Ok(Cow::Borrowed(config)),
+        }
+    }
+
     fn load(
         &self,
         config: &str,

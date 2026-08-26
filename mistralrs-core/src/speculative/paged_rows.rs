@@ -2,7 +2,7 @@
 //! query with its own context length (one row per sequence for decode-style drafting, or several rows
 //! per sequence when refreshing a drafter over accepted tokens).
 
-use std::collections::HashMap;
+use std::{collections::HashMap, sync::Arc};
 
 use candle_core::{Device, Result, Tensor};
 
@@ -12,6 +12,7 @@ use crate::{
         FlashInferPagedKv, FlashInferTilePlan,
     },
     get_mut_arcmutex,
+    paged_attention::block_table_rows::{BlockTableRanges, BlockTableRows, BlockTableSnapshot},
     pipeline::text_models_inputs_processor::{PagedAttentionInputMetadata, PagedAttentionMeta},
 };
 
@@ -32,39 +33,38 @@ pub(crate) fn make_paged_rows_metadata(
     }
 
     let kv_mgr = get_mut_arcmutex!(paged_meta.kv_cache_manager);
-    let full_tables = seq_ids
-        .iter()
-        .map(|seq_id| {
-            kv_mgr
-                .get_block_ids(*seq_id)
-                .ok_or_else(|| {
-                    candle_core::Error::Msg(format!(
-                        "sequence {seq_id} has no paged attention blocks"
-                    ))
-                })
-                .map(|ids| ids.to_vec())
-        })
-        .collect::<Result<Vec<_>>>()?;
+    let mut table_indices_by_seq = HashMap::new();
+    let mut tables = Vec::new();
+    let mut row_table_indices = Vec::with_capacity(seq_ids.len());
+    for seq_id in seq_ids {
+        let table_idx = if let Some(&table_idx) = table_indices_by_seq.get(seq_id) {
+            table_idx
+        } else {
+            let table = Arc::<[usize]>::from(kv_mgr.get_block_ids(*seq_id).ok_or_else(|| {
+                candle_core::Error::Msg(format!("sequence {seq_id} has no paged attention blocks"))
+            })?);
+            let table_idx = tables.len();
+            tables.push(table);
+            table_indices_by_seq.insert(*seq_id, table_idx);
+            table_idx
+        };
+        row_table_indices.push(table_idx);
+    }
     drop(kv_mgr);
+    let full_tables = BlockTableSnapshot::from_mapped_tables(tables, row_table_indices);
 
-    let mut block_tables = Vec::with_capacity(seq_ids.len());
+    let mut block_table_ranges = Vec::with_capacity(seq_ids.len());
     let mut context_lens_windowed = Vec::with_capacity(seq_ids.len());
     let mut slot_mappings = Vec::with_capacity(seq_ids.len());
-    for (full_table, context_len) in full_tables.iter().zip(context_lens.iter().copied()) {
-        let (block_table, context_len_windowed) =
-            if let Some(sliding_window) = paged_meta.sliding_window {
-                // Keep paged MTP aligned with the normal-cache inclusive SWA mask.
-                let window_start = context_len.saturating_sub(sliding_window + 1);
-                let slide_idx = window_start / paged_meta.block_size;
-                let block_aligned_start = slide_idx * paged_meta.block_size;
-                (
-                    full_table.get(slide_idx..).unwrap_or(&[]).to_vec(),
-                    context_len.saturating_sub(block_aligned_start),
-                )
-            } else {
-                (full_table.clone(), context_len)
-            };
-        block_tables.push(block_table);
+    for (row, context_len) in context_lens.iter().copied().enumerate() {
+        let full_table = full_tables.row(row);
+        let (block_range, context_len_windowed) = paged_row_window(
+            full_table.len(),
+            context_len,
+            paged_meta.sliding_window,
+            paged_meta.block_size,
+        );
+        block_table_ranges.push(block_range);
         context_lens_windowed.push(context_len_windowed);
 
         let block_pos = context_len.saturating_sub(1);
@@ -81,13 +81,17 @@ pub(crate) fn make_paged_rows_metadata(
         let slot = block_number * paged_meta.block_size + block_pos % paged_meta.block_size;
         slot_mappings.push(slot as i64);
     }
+    let windowed_block_tables = BlockTableRanges::new(&full_tables, block_table_ranges);
 
     let batch = seq_ids.len();
     let slot_mappings = Tensor::from_vec(slot_mappings, (batch,), device)?;
 
-    let windowed_block_tables = block_tables;
     let block_tables = table_tensor(&windowed_block_tables, device)?;
-    let full_block_tables = table_tensor(&full_tables, device)?;
+    let full_block_tables = if paged_meta.sliding_window.is_some() {
+        table_tensor(&full_tables, device)?
+    } else {
+        block_tables.clone()
+    };
     let context_lens_tensor = Tensor::from_vec(
         context_lens_windowed
             .iter()
@@ -96,14 +100,18 @@ pub(crate) fn make_paged_rows_metadata(
         (batch,),
         device,
     )?;
-    let full_context_lens_tensor = Tensor::from_vec(
-        context_lens
-            .iter()
-            .map(|len| usize_to_u32(*len, "full context length"))
-            .collect::<Result<Vec<_>>>()?,
-        (batch,),
-        device,
-    )?;
+    let full_context_lens_tensor = if paged_meta.sliding_window.is_some() {
+        Tensor::from_vec(
+            context_lens
+                .iter()
+                .map(|len| usize_to_u32(*len, "full context length"))
+                .collect::<Result<Vec<_>>>()?,
+            (batch,),
+            device,
+        )?
+    } else {
+        context_lens_tensor.clone()
+    };
 
     let (paged_kv_indptr, paged_kv_indices, paged_kv_last_page_len) = paged_kv_tensors(
         &windowed_block_tables,
@@ -112,7 +120,15 @@ pub(crate) fn make_paged_rows_metadata(
         device,
     )?;
     let (full_paged_kv_indptr, full_paged_kv_indices, full_paged_kv_last_page_len) =
-        paged_kv_tensors(&full_tables, context_lens, paged_meta.block_size, device)?;
+        if paged_meta.sliding_window.is_some() {
+            paged_kv_tensors(&full_tables, context_lens, paged_meta.block_size, device)?
+        } else {
+            (
+                paged_kv_indptr.clone(),
+                paged_kv_indices.clone(),
+                paged_kv_last_page_len.clone(),
+            )
+        };
     let batch_i32 = usize_to_i32(batch, "paged rows batch size")?;
     let request_indices = Tensor::from_vec((0..batch_i32).collect::<Vec<_>>(), (batch,), device)?;
     let kv_tile_indices = Tensor::from_vec(vec![0i32; batch], (batch,), device)?;
@@ -209,10 +225,34 @@ pub(crate) fn make_paged_rows_metadata(
     })
 }
 
-fn table_tensor(rows: &[Vec<usize>], device: &Device) -> Result<Tensor> {
-    let max_len = rows.iter().map(Vec::len).max().unwrap_or(0).max(1);
+fn paged_row_window(
+    table_len: usize,
+    context_len: usize,
+    sliding_window: Option<usize>,
+    block_size: usize,
+) -> (std::ops::Range<usize>, usize) {
+    let Some(sliding_window) = sliding_window else {
+        return (0..table_len, context_len);
+    };
+    // Keep paged MTP aligned with the normal-cache inclusive SWA mask.
+    let window_start = context_len.saturating_sub(sliding_window.saturating_add(1));
+    let slide_idx = window_start / block_size;
+    let block_aligned_start = slide_idx * block_size;
+    (
+        slide_idx.min(table_len)..table_len,
+        context_len.saturating_sub(block_aligned_start),
+    )
+}
+
+fn table_tensor<T: BlockTableRows + ?Sized>(rows: &T, device: &Device) -> Result<Tensor> {
+    let max_len = (0..rows.len())
+        .map(|row| rows.row(row).len())
+        .max()
+        .unwrap_or(0)
+        .max(1);
     let mut values = Vec::with_capacity(rows.len() * max_len);
-    for row in rows {
+    for row in 0..rows.len() {
+        let row = rows.row(row);
         for value in row {
             values.push(usize_to_u32(*value, "block table entry")?);
         }
@@ -221,8 +261,8 @@ fn table_tensor(rows: &[Vec<usize>], device: &Device) -> Result<Tensor> {
     Tensor::from_vec(values, (rows.len(), max_len), device)
 }
 
-fn paged_kv_tensors(
-    tables: &[Vec<usize>],
+fn paged_kv_tensors<T: BlockTableRows + ?Sized>(
+    tables: &T,
     context_lens: &[usize],
     block_size: usize,
     device: &Device,
@@ -232,7 +272,15 @@ fn paged_kv_tensors(
     let mut last_page_len = Vec::with_capacity(tables.len());
     indptr.push(0i32);
     let mut nnz = 0i32;
-    for (table, context_len) in tables.iter().zip(context_lens.iter().copied()) {
+    if tables.len() != context_lens.len() {
+        candle_core::bail!(
+            "paged rows table/context mismatch: tables={}, context_lens={}",
+            tables.len(),
+            context_lens.len()
+        );
+    }
+    for (row, context_len) in context_lens.iter().copied().enumerate() {
+        let table = tables.row(row);
         // FlashInfer derives kv_len from the page count, so blocks reserved past the row's context must not be listed
         let num_blocks = context_len.div_ceil(block_size);
         if num_blocks > table.len() {
@@ -273,4 +321,32 @@ fn usize_to_u32(value: usize, name: &str) -> Result<u32> {
 fn usize_to_i32(value: usize, name: &str) -> Result<i32> {
     i32::try_from(value)
         .map_err(|_| candle_core::Error::Msg(format!("{name} exceeds i32::MAX: {value}")))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn speculative_rows_keep_inclusive_sliding_layout() {
+        assert_eq!(paged_row_window(8, 9, Some(4), 4), (1..8, 5));
+        assert_eq!(paged_row_window(8, 10, Some(4), 4), (1..8, 6));
+        assert_eq!(paged_row_window(8, 3, Some(4), 4), (0..8, 3));
+        assert_eq!(paged_row_window(8, 10, None, 4), (0..8, 10));
+    }
+
+    #[test]
+    fn speculative_table_materialization_preserves_mapped_row_order() {
+        let tables = BlockTableSnapshot::from_mapped_tables(
+            vec![vec![10, 11, 12].into(), vec![20, 21].into()],
+            vec![0, 1, 0],
+        );
+        let ranges = BlockTableRanges::new(&tables, vec![1..3, 0..2, 0..3]);
+        let tensor = table_tensor(&ranges, &Device::Cpu).unwrap();
+
+        assert_eq!(
+            tensor.to_vec2::<u32>().unwrap(),
+            vec![vec![11, 12, 0], vec![20, 21, 0], vec![10, 11, 12]]
+        );
+    }
 }

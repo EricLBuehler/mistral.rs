@@ -75,12 +75,20 @@ Timing is measured at the engine's token steps, not at SSE frames, so keep-alive
 | `mistralrs_prefix_cache_evictions_total` | counter | - | Prefix cache entries, logical recurrent owners, or paged KV hash keys evicted from cache. |
 | `mistralrs_encoder_cache_hits_total` | counter | - | Multimodal encoder cache hits (multimodal models only). |
 | `mistralrs_encoder_cache_misses_total` | counter | - | Multimodal encoder cache misses (multimodal models only). |
+| `mistralrs_encoder_cache_intra_batch_deduplications_total` | counter | - | Repeated media items coalesced within one encoder batch. |
+| `mistralrs_encoder_cache_evictions_total` | counter | `reason` | Encoder outputs removed because of entry, configured logical-byte, or shape constraints. |
+| `mistralrs_encoder_cache_insert_rejections_total` | counter | `reason` | Encoder outputs rejected because one entry exceeds the configured byte budget or compact storage allocation failed. |
+| `mistralrs_encoder_cache_resident_entries` | gauge | - | Encoder outputs resident across all encoder caches in the process. |
+| `mistralrs_encoder_cache_resident_logical_bytes` | gauge | - | Logical tensor payload bytes resident across all encoder caches in the process. Byte-budgeted entries use compact storage. |
 | `mistralrs_sequences_running` | gauge | - | Sequences currently running. |
 | `mistralrs_sequences_waiting` | gauge | - | Sequences in the waiting queue. |
 | `mistralrs_sequences_capacity` | gauge | - | Maximum sequences the engine schedules concurrently (set at engine startup). |
 | `mistralrs_sequences_completed_total` | counter | `reason` | Sequences that reached a terminal state. `reason` is one of `stop`, `length`, `canceled`, `generated_image`, `generated_speech`, `tool_calls`, `error`. |
 | `mistralrs_kv_cache_blocks_used` | gauge | - | KV cache blocks currently in use (paged attention). |
 | `mistralrs_kv_cache_blocks_total` | gauge | - | Total KV cache blocks (paged attention). |
+| `mistralrs_kv_cache_blocks_active` | gauge | - | Physical KV cache blocks referenced by running sequences. |
+| `mistralrs_kv_cache_blocks_reserved` | gauge | - | Prompt-tail blocks logically reserved but not yet materialized. |
+| `mistralrs_kv_cache_blocks_available` | gauge | - | Physical KV blocks available after subtracting prompt-tail reservations. |
 | `mistralrs_kv_cache_blocks_prefix_cached` | gauge | - | Physical KV blocks that retain at least one prefix-cache key. |
 | `mistralrs_kv_cache_blocks_prefix_retained` | gauge | - | Physical KV blocks protected by a paired recurrent prefix checkpoint. |
 | `mistralrs_paged_prefix_retention_free_blocks` | gauge | - | Protected physical KV blocks not referenced by a running sequence. |
@@ -89,6 +97,9 @@ Timing is measured at the engine's token steps, not at SSE frames, so keep-alive
 | `mistralrs_paged_prefix_retention_pressure_evictions_total` | counter | `reason` | Paired checkpoint leases revoked to preserve allocation progress. `reason` is `allocation_pressure` or `reset`. |
 | `mistralrs_paged_recurrent_prefix_owners_used` | gauge | - | Logical recurrent prefix owners currently retained. |
 | `mistralrs_paged_recurrent_prefix_owners_capacity` | gauge | - | Configured logical recurrent prefix owner capacity. |
+| `mistralrs_paged_recurrent_prefix_checkpoints_used` | gauge | - | Recurrent prefix checkpoints currently retained. |
+| `mistralrs_paged_recurrent_prefix_bytes_used` | gauge | - | Logical tensor payload bytes retained by recurrent prefix checkpoints. |
+| `mistralrs_paged_recurrent_prefix_validation_total` | counter | `outcome`, `reason` | Prefix validation outcomes, including attention-only hits and recurrent restore misses. |
 | `mistralrs_paged_recurrent_prefix_owner_evictions_total` | counter | `reason` | Logical recurrent owners evicted by `capacity` or after `block_pressure` revokes their paired blocks. |
 
 ### Speculative decoding (MTP)

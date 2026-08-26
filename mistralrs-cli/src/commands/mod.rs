@@ -93,6 +93,8 @@ mod tests {
                 tokenizer: None,
                 arch: None,
                 dtype: ModelDType::Auto,
+                hf_overrides: None,
+                max_model_len: None,
             },
             format: FormatOptions::default(),
             adapter,

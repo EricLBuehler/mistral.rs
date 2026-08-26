@@ -5,6 +5,7 @@ use crate::layers_masker::CausalMaskConfig;
 use std::{
     any::Any,
     collections::HashMap,
+    hash::{DefaultHasher, Hash, Hasher},
     sync::{Arc, Mutex},
 };
 
@@ -19,7 +20,7 @@ use crate::{
     layers_masker::PastKvLenCache,
     paged_attention::{
         block_hash::MultimodalKind,
-        encoder_cache::{CacheModality, EncoderCacheManager},
+        encoder_cache::{CacheModality, EncoderCacheBatchLookup, EncoderCacheManager},
         AttentionImplementation, ModelConfigMetadata,
     },
     pipeline::{
@@ -370,6 +371,54 @@ pub(crate) struct VisualEncoder<'a> {
     spatial_merge_size: usize,
 }
 
+fn visual_encoder_cache_hash(content_hash: u64, grid: &[u32], spatial_merge_size: usize) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    content_hash.hash(&mut hasher);
+    grid.hash(&mut hasher);
+    spatial_merge_size.hash(&mut hasher);
+    hasher.finish()
+}
+
+fn checked_visual_sum(name: &str, values: impl IntoIterator<Item = usize>) -> Result<usize> {
+    values.into_iter().try_fold(0usize, |total, value| {
+        total
+            .checked_add(value)
+            .ok_or_else(|| candle_core::Error::msg(format!("Qwen vision {name} count overflow")))
+    })
+}
+
+fn validate_visual_input_rows(pixel_values: &Tensor, expected_rows: usize) -> Result<()> {
+    let pixel_rows = pixel_values.dim(0)?;
+    if pixel_rows != expected_rows {
+        candle_core::bail!(
+            "Qwen vision received {pixel_rows} pixel rows, expected {expected_rows} from grid metadata"
+        );
+    }
+    Ok(())
+}
+
+fn validate_visual_encoder_rows(
+    main: &Tensor,
+    deepstack: &[Tensor],
+    expected_rows: usize,
+) -> Result<()> {
+    let main_rows = main.dim(0)?;
+    if main_rows != expected_rows {
+        candle_core::bail!(
+            "Qwen vision encoder returned {main_rows} rows, expected {expected_rows}"
+        );
+    }
+    for (index, output) in deepstack.iter().enumerate() {
+        let output_rows = output.dim(0)?;
+        if output_rows != expected_rows {
+            candle_core::bail!(
+                "Qwen vision DeepStack output {index} returned {output_rows} rows, expected {expected_rows}"
+            );
+        }
+    }
+    Ok(())
+}
+
 impl<'a> VisualEncoder<'a> {
     pub(crate) fn new(
         vision: &'a Qwen3VLVisionModel,
@@ -398,69 +447,113 @@ impl<'a> VisualEncoder<'a> {
                 grid_data.len()
             );
         }
-        let patches_per_item = grid_data
-            .iter()
-            .map(|row| row.iter().map(|value| *value as usize).product::<usize>())
-            .collect::<Vec<_>>();
-        let output_tokens_per_item = grid_data
-            .iter()
-            .map(|row| {
-                row[0] as usize
-                    * (row[1] as usize / self.spatial_merge_size)
-                    * (row[2] as usize / self.spatial_merge_size)
-            })
-            .collect::<Vec<_>>();
-        let mut per_item = vec![None; grid_data.len()];
-        let mut misses = Vec::new();
-        if hashes.is_empty() {
-            misses.extend(0..grid_data.len());
-        } else {
-            let mut cache = self.cache.lock().expect("encoder cache lock poisoned");
-            for (index, &hash) in hashes.iter().enumerate() {
-                if let Some(outputs) = cache.get(modality, hash) {
-                    per_item[index] = Some(outputs);
-                } else {
-                    misses.push(index);
+        if !hashes.is_empty() {
+            let mut grids_by_hash = HashMap::<u64, &[u32]>::new();
+            for (&hash, grid) in hashes.iter().zip(&grid_data) {
+                if grids_by_hash
+                    .insert(hash, grid)
+                    .is_some_and(|previous| previous != grid)
+                {
+                    candle_core::bail!(
+                        "Qwen encoder hash {hash} is associated with different visual grids"
+                    );
                 }
             }
         }
-        if !misses.is_empty() {
+        let patches_per_item = grid_data
+            .iter()
+            .map(|row| {
+                row.iter().try_fold(1usize, |count, &value| {
+                    count
+                        .checked_mul(value as usize)
+                        .ok_or_else(|| candle_core::Error::msg("Qwen vision patch count overflow"))
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let total_patches = checked_visual_sum("patch", patches_per_item.iter().copied())?;
+        validate_visual_input_rows(pixel_values, total_patches)?;
+        let output_tokens_per_item = grid_data
+            .iter()
+            .map(|row| {
+                (row[0] as usize)
+                    .checked_mul(row[1] as usize / self.spatial_merge_size)
+                    .and_then(|count| count.checked_mul(row[2] as usize / self.spatial_merge_size))
+                    .ok_or_else(|| {
+                        candle_core::Error::msg("Qwen vision encoder output count overflow")
+                    })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let cache_hashes = hashes
+            .iter()
+            .zip(&grid_data)
+            .map(|(&hash, grid)| visual_encoder_cache_hash(hash, grid, self.spatial_merge_size))
+            .collect::<Vec<_>>();
+        let mut lookup = if hashes.is_empty() {
+            EncoderCacheBatchLookup::uncached(grid_data.len())
+        } else {
+            EncoderCacheBatchLookup::lookup_validated(
+                modality,
+                &cache_hashes,
+                self.cache,
+                |index, outputs| {
+                    let expected = output_tokens_per_item[index];
+                    !outputs.is_empty()
+                        && outputs
+                            .iter()
+                            .all(|output| output.dims().first() == Some(&expected))
+                },
+            )
+        };
+        if !lookup.miss_groups().is_empty() {
+            let mut patch_offsets = Vec::with_capacity(patches_per_item.len());
             let mut pixel_offset = 0usize;
-            let mut miss_pixels = Vec::with_capacity(misses.len());
-            let mut miss_grids = Vec::with_capacity(misses.len());
-            for (index, &patch_count) in patches_per_item.iter().enumerate() {
-                if misses.contains(&index) {
-                    miss_pixels.push(pixel_values.narrow(0, pixel_offset, patch_count)?);
-                    miss_grids.push(grid_thw.i(index)?);
-                }
-                pixel_offset += patch_count;
+            for &patch_count in &patches_per_item {
+                patch_offsets.push(pixel_offset);
+                pixel_offset = pixel_offset
+                    .checked_add(patch_count)
+                    .ok_or_else(|| candle_core::Error::msg("Qwen vision patch offset overflow"))?;
             }
+            let miss_indices = lookup
+                .miss_groups()
+                .iter()
+                .map(|group| group[0])
+                .collect::<Vec<_>>();
+            let miss_pixels = miss_indices
+                .iter()
+                .map(|&index| pixel_values.narrow(0, patch_offsets[index], patches_per_item[index]))
+                .collect::<Result<Vec<_>>>()?;
+            let miss_grids = miss_indices
+                .iter()
+                .map(|&index| grid_thw.i(index))
+                .collect::<Result<Vec<_>>>()?;
             let (main, deepstack) = self.vision.forward(
                 &Tensor::cat(&miss_pixels, 0)?,
                 &Tensor::stack(&miss_grids, 0)?,
             )?;
+            let expected_output_rows = checked_visual_sum(
+                "encoder output",
+                miss_indices
+                    .iter()
+                    .map(|&index| output_tokens_per_item[index]),
+            )?;
+            validate_visual_encoder_rows(&main, &deepstack, expected_output_rows)?;
             let mut output_offset = 0usize;
             let mut cache = self.cache.lock().expect("encoder cache lock poisoned");
-            for &index in &misses {
+            for miss_idx in 0..lookup.miss_groups().len() {
+                let index = lookup.miss_groups()[miss_idx][0];
                 let output_len = output_tokens_per_item[index];
                 let mut outputs = vec![main.narrow(0, output_offset, output_len)?];
                 for layer in &deepstack {
                     outputs.push(layer.narrow(0, output_offset, output_len)?);
                 }
                 output_offset += output_len;
-                if let Some(&hash) = hashes.get(index) {
+                if let Some(&hash) = cache_hashes.get(index) {
                     cache.insert(modality, hash, outputs.clone());
                 }
-                per_item[index] = Some(outputs);
+                lookup.resolve_miss(miss_idx, outputs);
             }
         }
-        per_item
-            .into_iter()
-            .map(|outputs| {
-                outputs
-                    .ok_or_else(|| candle_core::Error::msg("Qwen encoder item is missing outputs"))
-            })
-            .collect()
+        lookup.into_outputs()
     }
 }
 
@@ -688,32 +781,34 @@ impl Qwen3VLModel {
                 let last_dim = pixel_values.dim(ndim - 1)?;
                 pixel_values = pixel_values.reshape(((), last_dim))?;
             }
-            let (video_embeds, deepstack_video_embeds, per_video) = if packed_layout.is_some() {
-                let per_video =
+            let per_video = if video_hashes.is_empty() {
+                None
+            } else {
+                Some(
                     VisualEncoder::new(&self.vision, &self.encoder_cache, self.spatial_merge_size)
                         .encode(
                             &pixel_values,
                             video_grid_thw_ref,
                             video_hashes,
                             CacheModality::Video,
-                        )?;
-                let (main, deepstack) = concatenate_visual_items(&per_video)?;
-                (main, deepstack, Some(per_video))
-            } else {
-                let (main, deepstack) = self.vision.forward(&pixel_values, video_grid_thw_ref)?;
-                (main, deepstack, None)
+                        )?,
+                )
+            };
+            let (video_embeds, deepstack_video_embeds) = match &per_video {
+                Some(outputs) => concatenate_visual_items(outputs)?,
+                None => self.vision.forward(&pixel_values, video_grid_thw_ref)?,
             };
             let video_embeds = video_embeds.to_device(&device)?.to_dtype(self.text.dtype)?;
             let deepstack_video_embeds = deepstack_video_embeds
                 .into_iter()
                 .map(|t| t.to_device(&device)?.to_dtype(self.text.dtype))
                 .collect::<Result<Vec<_>>>()?;
-            if let Some(per_video) = per_video {
+            if packed_layout.is_some() {
                 insert_current_visual_outputs(
                     &mut packed_encoder_outputs,
                     MultimodalKind::Video,
                     video_hashes,
-                    per_video,
+                    per_video.unwrap_or_default(),
                 )?;
             }
 
@@ -1014,6 +1109,9 @@ impl MultimodalModel for Qwen3VLModel {
             prompt_position_ids: None,
         })
     }
+    fn encoder_cache(&self) -> Option<&Mutex<EncoderCacheManager>> {
+        Some(&self.encoder_cache)
+    }
     fn encoder_cache_counters(
         &self,
     ) -> Option<(
@@ -1045,6 +1143,33 @@ mod tests {
 
     const ENCODER_CACHE_CAPACITY: usize = 32;
     const EVICTION_BATCH_SIZE: usize = ENCODER_CACHE_CAPACITY + 1;
+
+    #[test]
+    fn visual_encoder_cache_hash_includes_geometry() {
+        let base = visual_encoder_cache_hash(7, &[1, 8, 4], 2);
+        assert_eq!(base, visual_encoder_cache_hash(7, &[1, 8, 4], 2));
+        assert_ne!(base, visual_encoder_cache_hash(7, &[1, 4, 8], 2));
+        assert_ne!(base, visual_encoder_cache_hash(7, &[1, 8, 4], 4));
+        assert_ne!(base, visual_encoder_cache_hash(8, &[1, 8, 4], 2));
+    }
+
+    #[test]
+    fn visual_encoder_row_validation_rejects_main_and_deepstack_mismatches() -> Result<()> {
+        let pixels = Tensor::zeros((6, 2), DType::F32, &Device::Cpu)?;
+        validate_visual_input_rows(&pixels, 6)?;
+        assert!(validate_visual_input_rows(&pixels, 5).is_err());
+
+        let main = Tensor::zeros((3, 2), DType::F32, &Device::Cpu)?;
+        let deepstack = vec![Tensor::zeros((3, 2), DType::F32, &Device::Cpu)?];
+        validate_visual_encoder_rows(&main, &deepstack, 3)?;
+
+        let extra_main = Tensor::zeros((4, 2), DType::F32, &Device::Cpu)?;
+        assert!(validate_visual_encoder_rows(&extra_main, &deepstack, 3).is_err());
+
+        let short_deepstack = vec![Tensor::zeros((2, 2), DType::F32, &Device::Cpu)?];
+        assert!(validate_visual_encoder_rows(&main, &short_deepstack, 3).is_err());
+        Ok(())
+    }
 
     #[test]
     fn current_deepstack_outputs_outlive_encoder_lru_eviction() -> Result<()> {

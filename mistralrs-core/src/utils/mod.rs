@@ -164,6 +164,7 @@ macro_rules! handle_pipeline_forward_error {
                     if seq.get_mut_group().is_chat {
                         let choice = Choice {
                             finish_reason: "error".to_string(),
+                            stop_sequence: None,
                             index: seq.get_response_index(),
                             message: ResponseMessage {
                                 content: Some(res),

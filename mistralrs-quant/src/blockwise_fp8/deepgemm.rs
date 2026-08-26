@@ -18,7 +18,8 @@ use super::{
     ops::{fp8_tensor_aligned, fp8_workspace, is_sm90, FP8_BLOCK_SIZE},
 };
 
-const SERVING_MAX_M: usize = 128;
+const DECODE_MAX_M: usize = 128;
+const PREFILL_M_VALUES: [usize; 5] = [256, 512, 1024, 2048, 4096];
 const JIT_SOURCE_HASH: &str = env!("MISTRALRS_DEEPGEMM_SOURCE_HASH");
 
 #[derive(Clone, Copy, Eq, Hash, PartialEq)]
@@ -38,7 +39,7 @@ pub(super) struct Prepared {
     device: candle_core::cuda::DeviceId,
     n: usize,
     k: usize,
-    plans: Box<[ffi::DeepGemmPrepared]>,
+    plans: HashMap<usize, ffi::DeepGemmPrepared>,
 }
 
 #[cfg(all(feature = "cuda", has_deepgemm_fp8_sm90_provider))]
@@ -295,8 +296,8 @@ pub(super) fn prepare(
                 })?;
             let stream = dev.cuda_stream().cu_stream() as *mut core::ffi::c_void;
             let mut include_dir = None;
-            let mut plans = Vec::with_capacity(SERVING_MAX_M);
-            for m in 1..=SERVING_MAX_M {
+            let mut plans = HashMap::with_capacity(DECODE_MAX_M + PREFILL_M_VALUES.len());
+            for m in (1..=DECODE_MAX_M).chain(PREFILL_M_VALUES) {
                 let plan = deepgemm_plan(m, *n, *k)?;
                 let mut prepared = std::mem::MaybeUninit::uninit();
                 let mut status = unsafe {
@@ -329,13 +330,13 @@ pub(super) fn prepare(
                     };
                 }
                 check_deepgemm_status(&format!("DeepGEMM M={m} kernel preparation"), status)?;
-                plans.push(unsafe { prepared.assume_init() });
+                plans.insert(m, unsafe { prepared.assume_init() });
             }
             Ok(Prepared {
                 device: dev.id(),
                 n: *n,
                 k: *k,
-                plans: plans.into_boxed_slice(),
+                plans,
             })
         };
         prepare_inner()
@@ -354,11 +355,19 @@ pub(super) fn serving_supported(input: &Tensor) -> bool {
 }
 
 pub(super) fn serving_shape_supported(dtype: DType, rows: usize) -> bool {
-    dtype == DType::BF16 && serving_plan_index(rows).is_some()
+    dtype == DType::BF16 && serving_bucket(rows).is_some()
 }
 
-fn serving_plan_index(rows: usize) -> Option<usize> {
-    rows.checked_sub(1).filter(|index| *index < SERVING_MAX_M)
+fn serving_bucket(rows: usize) -> Option<usize> {
+    if rows == 0 {
+        return None;
+    }
+    if (1..=DECODE_MAX_M).contains(&rows) {
+        return Some(rows);
+    }
+    PREFILL_M_VALUES
+        .into_iter()
+        .find(|capacity| rows <= *capacity)
 }
 
 #[cfg(all(feature = "cuda", has_deepgemm_fp8_sm90_provider))]
@@ -374,7 +383,7 @@ pub(super) fn matmul(
     use crate::utils::{slice_ptr_mut_on_stream, slice_ptr_on_stream};
 
     if !serving_supported(input) {
-        candle_core::bail!("DeepGEMM serving requires 1..={SERVING_MAX_M} BF16 rows")
+        candle_core::bail!("DeepGEMM serving does not have a prepared BF16 row bucket")
     }
     let input = input.contiguous()?;
     let input = if fp8_tensor_aligned(&input) {
@@ -407,7 +416,12 @@ pub(super) fn matmul(
     if prepared.device != dev.id() || prepared.n != n || prepared.k != k {
         candle_core::bail!("DeepGEMM prepared state does not match the CUDA device or weight shape")
     }
-    let plan = &prepared.plans[serving_plan_index(m).unwrap()];
+    let bucket = serving_bucket(m)
+        .ok_or_else(|| candle_core::Error::msg("DeepGEMM row count exceeds prepared capacity"))?;
+    let plan = prepared
+        .plans
+        .get(&bucket)
+        .ok_or_else(|| candle_core::Error::msg("DeepGEMM row bucket was not prepared"))?;
     dev.cuda_stream()
         .context()
         .bind_to_thread()
@@ -458,6 +472,8 @@ pub(super) fn matmul(
     let status = unsafe {
         ffi::mistralrs_deepgemm_sm90_gemm(
             plan,
+            u32::try_from(m)
+                .map_err(|_| candle_core::Error::msg("DeepGEMM M dimension exceeds u32"))?,
             input_ptr as *const core::ffi::c_void,
             weight_ptr as *const core::ffi::c_void,
             scale_ptr as *const f32,
@@ -488,13 +504,17 @@ mod tests {
     use super::*;
 
     #[test]
-    fn direct_decode_route_is_dense_through_the_serving_limit() {
-        for rows in 1..=SERVING_MAX_M {
+    fn serving_rows_use_dense_decode_and_prefill_capacities() {
+        for rows in 1..=DECODE_MAX_M {
             assert!(serving_shape_supported(DType::BF16, rows));
-            assert_eq!(serving_plan_index(rows), Some(rows - 1));
         }
+        for rows in PREFILL_M_VALUES {
+            assert!(serving_shape_supported(DType::BF16, rows));
+        }
+        assert!(serving_shape_supported(DType::BF16, DECODE_MAX_M + 1));
+        assert!(serving_shape_supported(DType::BF16, 4095));
         assert!(!serving_shape_supported(DType::BF16, 0));
-        assert!(!serving_shape_supported(DType::BF16, SERVING_MAX_M + 1));
+        assert!(!serving_shape_supported(DType::BF16, 4097));
         assert!(!serving_shape_supported(DType::F16, 1));
     }
 }

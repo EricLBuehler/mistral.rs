@@ -486,6 +486,9 @@ impl MultimodalModel for Qwen2_5VLModel {
             prompt_position_ids: None,
         })
     }
+    fn encoder_cache(&self) -> Option<&Mutex<EncoderCacheManager>> {
+        Some(&self.encoder_cache)
+    }
     fn encoder_cache_counters(
         &self,
     ) -> Option<(

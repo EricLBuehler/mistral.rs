@@ -60,15 +60,24 @@ __global__ void gather_kv_cache_flashinfer_kernel(
     OutType *__restrict__ v_out,
     const int32_t *__restrict__ block_table,
     const int32_t *__restrict__ cu_seq_lens, int32_t num_tokens,
-    int32_t block_size, int32_t block_table_stride, int32_t num_kv_heads,
-    int32_t head_size, float k_scale, float v_scale) {
+    int32_t num_seqs, int32_t block_size, int32_t block_table_stride,
+    int32_t num_kv_heads, int32_t head_size, float k_scale, float v_scale) {
   const int32_t token_id = blockIdx.x;
   if (token_id >= num_tokens) {
     return;
   }
+  const int32_t n = num_kv_heads * head_size;
+  if (token_id >= cu_seq_lens[num_seqs]) {
+    for (int32_t i = threadIdx.x; i < n; i += blockDim.x) {
+      const int64_t out_idx = int64_t(token_id) * n + i;
+      k_out[out_idx] = static_cast<OutType>(0);
+      v_out[out_idx] = static_cast<OutType>(0);
+    }
+    return;
+  }
 
   int32_t seq_id = 0;
-  while (cu_seq_lens[seq_id + 1] <= token_id) {
+  while (seq_id + 1 < num_seqs && cu_seq_lens[seq_id + 1] <= token_id) {
     seq_id++;
   }
 
@@ -78,7 +87,6 @@ __global__ void gather_kv_cache_flashinfer_kernel(
   const int32_t slot = seq_offset % block_size;
   const int32_t block_idx =
       block_table[seq_id * block_table_stride + table_idx];
-  const int32_t n = num_kv_heads * head_size;
 
   for (int32_t i = threadIdx.x; i < n; i += blockDim.x) {
     const int32_t head_idx = i / head_size;
@@ -373,8 +381,8 @@ extern "C" void gather_kv_cache_flashinfer(
             static_cast<__half *>(key_cache),
             static_cast<__half *>(value_cache), static_cast<__half *>(k_out),
             static_cast<__half *>(v_out), block_table, cu_seq_lens, num_tokens,
-            block_size, block_table_stride, num_kv_heads, head_size, k_scale,
-            v_scale);
+            num_seqs, block_size, block_table_stride, num_kv_heads, head_size,
+            k_scale, v_scale);
   } else if (out_dtype == 1 && cache_dtype == 1) {
     mistralrs_flashinfer::gather_kv_cache_flashinfer_kernel<__nv_bfloat16,
                                                             __nv_bfloat16>
@@ -383,14 +391,14 @@ extern "C" void gather_kv_cache_flashinfer(
                                      static_cast<__nv_bfloat16 *>(k_out),
                                      static_cast<__nv_bfloat16 *>(v_out),
                                      block_table, cu_seq_lens, num_tokens,
-                                     block_size, block_table_stride,
+                                     num_seqs, block_size, block_table_stride,
                                      num_kv_heads, head_size, k_scale, v_scale);
   } else if (out_dtype == 2 && cache_dtype == 2) {
     mistralrs_flashinfer::gather_kv_cache_flashinfer_kernel<float, float>
         <<<grid, block, 0, stream>>>(
             static_cast<float *>(key_cache), static_cast<float *>(value_cache),
             static_cast<float *>(k_out), static_cast<float *>(v_out),
-            block_table, cu_seq_lens, num_tokens, block_size,
+            block_table, cu_seq_lens, num_tokens, num_seqs, block_size,
             block_table_stride, num_kv_heads, head_size, k_scale, v_scale);
   } else if (cache_dtype == 3 && out_dtype == 0) {
     mistralrs_flashinfer::gather_kv_cache_flashinfer_kernel<__nv_fp8_e4m3,
@@ -399,7 +407,7 @@ extern "C" void gather_kv_cache_flashinfer(
             static_cast<__nv_fp8_e4m3 *>(key_cache),
             static_cast<__nv_fp8_e4m3 *>(value_cache),
             static_cast<__half *>(k_out), static_cast<__half *>(v_out),
-            block_table, cu_seq_lens, num_tokens, block_size,
+            block_table, cu_seq_lens, num_tokens, num_seqs, block_size,
             block_table_stride, num_kv_heads, head_size, k_scale, v_scale);
   } else if (cache_dtype == 3 && out_dtype == 1) {
     mistralrs_flashinfer::gather_kv_cache_flashinfer_kernel<__nv_fp8_e4m3,
@@ -409,8 +417,8 @@ extern "C" void gather_kv_cache_flashinfer(
             static_cast<__nv_fp8_e4m3 *>(value_cache),
             static_cast<__nv_bfloat16 *>(k_out),
             static_cast<__nv_bfloat16 *>(v_out), block_table, cu_seq_lens,
-            num_tokens, block_size, block_table_stride, num_kv_heads, head_size,
-            k_scale, v_scale);
+            num_tokens, num_seqs, block_size, block_table_stride, num_kv_heads,
+            head_size, k_scale, v_scale);
   } else if (cache_dtype == 3 && out_dtype == 2) {
     mistralrs_flashinfer::gather_kv_cache_flashinfer_kernel<__nv_fp8_e4m3,
                                                             float>
@@ -418,7 +426,7 @@ extern "C" void gather_kv_cache_flashinfer(
             static_cast<__nv_fp8_e4m3 *>(key_cache),
             static_cast<__nv_fp8_e4m3 *>(value_cache),
             static_cast<float *>(k_out), static_cast<float *>(v_out), block_table,
-            cu_seq_lens, num_tokens, block_size, block_table_stride,
+            cu_seq_lens, num_tokens, num_seqs, block_size, block_table_stride,
             num_kv_heads, head_size, k_scale, v_scale);
   } else {
     fprintf(stderr,

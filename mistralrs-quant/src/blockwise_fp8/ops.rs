@@ -2150,7 +2150,10 @@ mod tests {
             .wait(&live_event)
             .map_err(|error| candle_core::Error::msg(error.to_string()))?;
         dev.synchronize()?;
-        for rows in [1usize, 8, 16, 21, 24, 28, 35, 42, 49] {
+        for rows in [
+            1usize, 8, 16, 21, 24, 28, 35, 42, 49, 129, 192, 255, 257, 511, 513, 1023, 1920, 2304,
+            4095,
+        ] {
             let input_values = (0..rows * K)
                 .map(|index| {
                     let row = index / K;
@@ -2610,7 +2613,7 @@ mod tests {
         const DEFAULT_WARMUP: usize = 10;
         const DEFAULT_ITERATIONS: usize = 100;
         const OUTPUT_TOLERANCE: f32 = 0.02;
-        const M_VALUES: [usize; 8] = [1, 8, 16, 21, 24, 32, 64, 128];
+        const M_VALUES: [usize; 12] = [1, 8, 16, 21, 24, 32, 64, 128, 192, 2304, 3840, 4095];
         const SHAPES: [BlockwiseFp8BenchShape; 5] = [
             BlockwiseFp8BenchShape {
                 name: "gdn_qkvz",
@@ -2701,7 +2704,7 @@ mod tests {
         const DEFAULT_WARMUP: usize = 10;
         const DEFAULT_ITERATIONS: usize = 100;
         const SAMPLES: usize = 7;
-        const M_VALUES: [usize; 8] = [1, 8, 16, 21, 24, 32, 64, 128];
+        const M_VALUES: [usize; 12] = [1, 8, 16, 21, 24, 32, 64, 128, 192, 2304, 3840, 4095];
         const SHAPES: [BlockwiseFp8BenchShape; 5] = [
             BlockwiseFp8BenchShape {
                 name: "gdn_qkvz",

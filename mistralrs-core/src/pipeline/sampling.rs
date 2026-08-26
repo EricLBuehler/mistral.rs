@@ -108,6 +108,13 @@ fn append_hidden_stop(mut text: Option<String>, hidden_stop: Option<&str>) -> Op
     text
 }
 
+fn response_stop_sequence(reason: Option<StopReason>, hidden_stop: Option<&str>) -> Option<String> {
+    match reason {
+        Some(StopReason::StopString { .. }) => hidden_stop.map(str::to_string),
+        _ => None,
+    }
+}
+
 // With a think-tag parser, only content outside the think block counts as tool text.
 fn tool_detection_text(seq: &Sequence, hidden_stop: Option<&str>) -> Option<String> {
     let text = if seq.reasoning_mode().is_some() {
@@ -368,6 +375,11 @@ pub(crate) async fn finish_or_add_toks_to_seq(
                                 } else {
                                     None
                                 },
+                                stop_sequence: if idx + 1 == emission_count {
+                                    response_stop_sequence(is_done, hidden_stop.as_deref())
+                                } else {
+                                    None
+                                },
                                 logprobs: Some(streaming_response_logprob(emission)),
                             });
                         }
@@ -383,6 +395,7 @@ pub(crate) async fn finish_or_add_toks_to_seq(
                                     },
                                     index: seq.get_response_index(),
                                     finish_reason: None,
+                                    stop_sequence: None,
                                     logprobs: Some(streaming_response_logprob(emission)),
                                 });
                             }
@@ -396,6 +409,7 @@ pub(crate) async fn finish_or_add_toks_to_seq(
                             },
                             index: seq.get_response_index(),
                             finish_reason: is_done.map(|reason| reason.to_string()),
+                            stop_sequence: response_stop_sequence(is_done, hidden_stop.as_deref()),
                             logprobs: None,
                         });
                     }
@@ -580,6 +594,7 @@ pub(crate) async fn finish_or_add_toks_to_seq(
 
                 let choice = crate::Choice {
                     finish_reason: fixup_sentencepiece!(reason),
+                    stop_sequence: response_stop_sequence(Some(reason), hidden_stop.as_deref()),
                     index: seq.get_response_index(),
                     message: crate::ResponseMessage {
                         content: text_new,

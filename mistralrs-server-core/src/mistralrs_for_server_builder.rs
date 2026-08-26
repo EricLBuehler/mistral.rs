@@ -7,10 +7,11 @@ use candle_core::Device;
 use mistralrs_core::{
     get_auto_device_map_params, get_model_dtype, get_tgt_non_granular_index, paged_attn_supported,
     parse_isq_value, plan_paged_kv, reserve_external_mtp_memory_with_runtime, AutoDeviceMapParams,
-    DefaultSchedulerMethod, DeviceLayerMapMetadata, DeviceMapMetadata, DeviceMapSetting, Loader,
-    LoaderBuilder, McpClientConfig, MemoryGpuConfig, MistralRsBuilder, ModelLoaderConfig,
-    ModelSelected, MtpConfig, MtpRuntimeConfig, PagedAttentionConfig, PagedCacheType,
-    PagedKvModelRequest, SchedulerConfig, SearchCallback, SearchEmbeddingModel, TokenSource,
+    DefaultSchedulerMethod, DeviceLayerMapMetadata, DeviceMapMetadata, DeviceMapSetting,
+    HfConfigOverrides, Loader, LoaderBuilder, McpClientConfig, MemoryGpuConfig, MistralRsBuilder,
+    ModelLoaderConfig, ModelSelected, MtpConfig, MtpRuntimeConfig, PagedAttentionConfig,
+    PagedCacheType, PagedKvModelRequest, SchedulerConfig, SearchCallback, SearchEmbeddingModel,
+    TokenSource,
 };
 use tracing::{debug, info, warn};
 
@@ -30,10 +31,16 @@ pub struct ModelConfig {
     pub chat_template: Option<String>,
     /// Model-specific JINJA template
     pub jinja_explicit: Option<String>,
+    #[serde(default)]
+    pub max_model_len: Option<usize>,
+    #[serde(default)]
+    pub hf_config_overrides: Option<HfConfigOverrides>,
     /// Model-specific device layers
     pub num_device_layers: Option<Vec<String>>,
     /// Model-specific in-situ quantization
     pub in_situ_quant: Option<String>,
+    #[serde(default)]
+    pub encoder_cache_memory_bytes: Option<NonZeroUsize>,
 }
 
 impl ModelConfig {
@@ -44,8 +51,11 @@ impl ModelConfig {
             model,
             chat_template: None,
             jinja_explicit: None,
+            max_model_len: None,
+            hf_config_overrides: None,
             num_device_layers: None,
             in_situ_quant: None,
+            encoder_cache_memory_bytes: None,
         }
     }
 
@@ -64,6 +74,17 @@ impl ModelConfig {
         self
     }
 
+    pub fn with_max_model_len(mut self, max_model_len: usize) -> Self {
+        assert!(max_model_len > 0, "maximum model length must be nonzero");
+        self.max_model_len = Some(max_model_len);
+        self
+    }
+
+    pub fn with_hf_config_overrides(mut self, overrides: HfConfigOverrides) -> Self {
+        self.hf_config_overrides = Some(overrides);
+        self
+    }
+
     pub fn with_num_device_layers(mut self, num_device_layers: Vec<String>) -> Self {
         self.num_device_layers = Some(num_device_layers);
         self
@@ -71,6 +92,13 @@ impl ModelConfig {
 
     pub fn with_in_situ_quant(mut self, in_situ_quant: String) -> Self {
         self.in_situ_quant = Some(in_situ_quant);
+        self
+    }
+
+    pub fn with_encoder_cache_memory_bytes(mut self, max_bytes: usize) -> Self {
+        self.encoder_cache_memory_bytes = Some(
+            NonZeroUsize::new(max_bytes).expect("encoder cache memory capacity must be nonzero"),
+        );
         self
     }
 }
@@ -196,6 +224,12 @@ pub struct MistralRsForServerBuilder {
     /// Explicit JINJA chat template file (.jinja) to be used. If specified, this overrides all other chat templates.
     jinja_explicit: Option<String>,
 
+    /// Optional runtime context length applied by the selected model loader.
+    max_model_len: Option<usize>,
+
+    /// Optional recursively merged Hugging Face config.json overrides.
+    hf_config_overrides: Option<HfConfigOverrides>,
+
     /// Source of the token for authentication.
     /// Can be in the formats: `literal:<value>`, `env:<value>`, `path:<value>`, `cache` to use a cached token, or `none` to use no token.
     /// Defaults to `cache`.
@@ -260,6 +294,7 @@ pub struct MistralRsForServerBuilder {
 
     /// Optional MTP assistant configuration.
     mtp_config: Option<MtpConfig>,
+    encoder_cache_memory_bytes: Option<usize>,
 
     /// Disable EOS token stopping (generate until max_len regardless of EOS)
     disable_eos_stop: bool,
@@ -292,6 +327,8 @@ impl Default for MistralRsForServerBuilder {
             no_kv_cache: defaults::NO_KV_CACHE,
             chat_template: defaults::CHAT_TEMPLATE,
             jinja_explicit: defaults::JINJA_EXPLICIT,
+            max_model_len: None,
+            hf_config_overrides: None,
             token_source: defaults::TOKEN_SOURCE,
             interactive_mode: defaults::INTERACTIVE_MODE,
             prefix_cache_n: defaults::PREFIX_CACHE_N,
@@ -309,6 +346,7 @@ impl Default for MistralRsForServerBuilder {
             mcp_client_config: None,
             paged_cache_type: defaults::PAGED_CACHE_TYPE,
             mtp_config: defaults::MTP_CONFIG,
+            encoder_cache_memory_bytes: None,
             disable_eos_stop: false,
             code_exec_config: None,
             shell_config: None,
@@ -434,6 +472,15 @@ impl MistralRsForServerBuilder {
         self
     }
 
+    pub fn with_encoder_cache_memory_bytes(mut self, max_bytes: usize) -> Self {
+        assert!(
+            max_bytes > 0,
+            "encoder cache memory capacity must be nonzero"
+        );
+        self.encoder_cache_memory_bytes = Some(max_bytes);
+        self
+    }
+
     /// Sets the maximum number of tokens processed by one paged-attention scheduler step.
     pub fn with_max_num_batched_tokens(mut self, max_num_batched_tokens: NonZeroUsize) -> Self {
         self.max_num_batched_tokens = max_num_batched_tokens;
@@ -485,6 +532,38 @@ impl MistralRsForServerBuilder {
     pub fn with_jinja_explicit_optional(mut self, jinja_explicit: Option<String>) -> Self {
         if let Some(jinja_explicit) = jinja_explicit {
             self = self.with_jinja_explicit(jinja_explicit);
+        }
+        self
+    }
+
+    /// Sets the runtime model context length.
+    pub fn with_max_model_len(mut self, max_model_len: usize) -> Self {
+        assert!(max_model_len > 0, "maximum model length must be nonzero");
+        self.max_model_len = Some(max_model_len);
+        self
+    }
+
+    /// Sets the runtime model context length if provided.
+    pub fn with_max_model_len_optional(mut self, max_model_len: Option<usize>) -> Self {
+        if let Some(max_model_len) = max_model_len {
+            self = self.with_max_model_len(max_model_len);
+        }
+        self
+    }
+
+    /// Sets recursively merged Hugging Face config.json overrides.
+    pub fn with_hf_config_overrides(mut self, overrides: HfConfigOverrides) -> Self {
+        self.hf_config_overrides = Some(overrides);
+        self
+    }
+
+    /// Sets Hugging Face config.json overrides if provided.
+    pub fn with_hf_config_overrides_optional(
+        mut self,
+        overrides: Option<HfConfigOverrides>,
+    ) -> Self {
+        if let Some(overrides) = overrides {
+            self = self.with_hf_config_overrides(overrides);
         }
         self
     }
@@ -779,13 +858,17 @@ impl MistralRsForServerBuilder {
         let mapper_for_config = mapper.clone();
         let chat_template_for_config = self.chat_template.clone();
         let jinja_explicit_for_config = self.jinja_explicit.clone();
+        let hf_config_overrides_for_config = self.hf_config_overrides.clone();
 
         // Configure this last to prevent arg moves
         let loader: Box<dyn Loader> = LoaderBuilder::new(model)
             .with_no_kv_cache(self.no_kv_cache)
             .with_chat_template(self.chat_template)
             .with_jinja_explicit(self.jinja_explicit)
+            .with_max_model_len(self.max_model_len)
+            .with_hf_config_overrides(self.hf_config_overrides)
             .with_mtp(self.mtp_config.as_ref().is_some_and(MtpConfig::is_builtin))
+            .with_encoder_cache_memory_bytes(self.encoder_cache_memory_bytes)
             .build()?;
 
         mistralrs_instance_info(&*loader);
@@ -841,8 +924,10 @@ impl MistralRsForServerBuilder {
             silent: false,
             chat_template: chat_template_for_config,
             jinja_explicit: jinja_explicit_for_config,
-            max_model_len: None,
+            max_model_len: self.max_model_len,
+            hf_config_overrides: hf_config_overrides_for_config,
             mtp_config: self.mtp_config.clone(),
+            encoder_cache_memory_bytes: self.encoder_cache_memory_bytes,
         };
 
         let mut builder = MistralRsBuilder::new(
@@ -899,6 +984,11 @@ impl MistralRsForServerBuilder {
             .jinja_explicit
             .clone()
             .or(self.jinja_explicit.clone());
+        let first_max_model_len = first_model.max_model_len.or(self.max_model_len);
+        let first_hf_config_overrides = first_model
+            .hf_config_overrides
+            .clone()
+            .or(self.hf_config_overrides.clone());
 
         let tgt_non_granular_index = get_tgt_non_granular_index(&model);
         let dtype = get_model_dtype(&model)?;
@@ -915,11 +1005,18 @@ impl MistralRsForServerBuilder {
         };
 
         // Create the first model's pipeline
+        let first_encoder_cache_memory_bytes = first_model
+            .encoder_cache_memory_bytes
+            .map(NonZeroUsize::get)
+            .or(self.encoder_cache_memory_bytes);
         let loader: Box<dyn Loader> = LoaderBuilder::new(model)
             .with_no_kv_cache(self.no_kv_cache)
             .with_chat_template(first_chat_template.clone())
             .with_jinja_explicit(first_jinja_explicit.clone())
+            .with_max_model_len(first_max_model_len)
+            .with_hf_config_overrides(first_hf_config_overrides.clone())
             .with_mtp(self.mtp_config.as_ref().is_some_and(MtpConfig::is_builtin))
+            .with_encoder_cache_memory_bytes(first_encoder_cache_memory_bytes)
             .build()?;
 
         mistralrs_instance_info(&*loader);
@@ -1043,8 +1140,10 @@ impl MistralRsForServerBuilder {
             silent: false,
             chat_template: first_chat_template,
             jinja_explicit: first_jinja_explicit,
-            max_model_len: None,
+            max_model_len: first_max_model_len,
+            hf_config_overrides: first_hf_config_overrides,
             mtp_config: self.mtp_config.clone(),
+            encoder_cache_memory_bytes: first_encoder_cache_memory_bytes,
         };
 
         // Create the first MistralRs instance with the first model
@@ -1105,11 +1204,24 @@ impl MistralRsForServerBuilder {
                 .jinja_explicit
                 .clone()
                 .or(self.jinja_explicit.clone());
+            let max_model_len = model_config.max_model_len.or(self.max_model_len);
+            let hf_config_overrides = model_config
+                .hf_config_overrides
+                .clone()
+                .or(self.hf_config_overrides.clone());
 
             let loader: Box<dyn Loader> = LoaderBuilder::new(model)
                 .with_no_kv_cache(self.no_kv_cache)
                 .with_chat_template(chat_template.clone())
                 .with_jinja_explicit(jinja_explicit.clone())
+                .with_max_model_len(max_model_len)
+                .with_hf_config_overrides(hf_config_overrides.clone())
+                .with_encoder_cache_memory_bytes(
+                    model_config
+                        .encoder_cache_memory_bytes
+                        .map(NonZeroUsize::get)
+                        .or(self.encoder_cache_memory_bytes),
+                )
                 .build()?;
 
             let mapper = init_mapper(
@@ -1190,8 +1302,13 @@ impl MistralRsForServerBuilder {
                 silent: false,
                 chat_template,
                 jinja_explicit,
-                max_model_len: None,
+                max_model_len,
+                hf_config_overrides,
                 mtp_config: None,
+                encoder_cache_memory_bytes: model_config
+                    .encoder_cache_memory_bytes
+                    .map(NonZeroUsize::get)
+                    .or(self.encoder_cache_memory_bytes),
             };
             let mut add_model_config = mistralrs_core::AddModelConfig::new(engine_config)
                 .with_loader_config(loader_config);

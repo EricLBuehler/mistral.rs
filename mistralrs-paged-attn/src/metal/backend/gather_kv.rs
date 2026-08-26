@@ -1,4 +1,4 @@
-use candle_core::{DType, IndexOp, Result, Storage, Tensor};
+use candle_core::{DType, Result, Storage, Tensor};
 
 use crate::metal::{
     backend::validate_kv_cache_scales,
@@ -12,6 +12,7 @@ pub fn gather_kv_cache(
     v_scale: Option<&Tensor>,
     block_table: &Tensor, // [batch, max_blocks]
     cu_seq_lens: &Tensor, // [batch + 1]
+    num_tokens: usize,    // cu_seq_lens[-1]
     out_dtype: DType,
 ) -> Result<(Tensor, Tensor)> {
     let cache_dtype = key_cache.dtype();
@@ -62,14 +63,14 @@ pub fn gather_kv_cache(
     let x = k_dims.4;
     let head_size = head_size_over_x * x;
 
-    // num_tokens = cu_seq_lens[-1], num_seqs = len(cu_seq_lens) - 1
     let cu_seq_lens_len = cu_seq_lens.dims1()?;
-    let num_seqs = cu_seq_lens_len - 1;
-    let num_tokens = if cu_seq_lens.dtype() == DType::I32 {
-        cu_seq_lens.i(cu_seq_lens_len - 1)?.to_scalar::<i32>()? as usize
-    } else {
-        cu_seq_lens.i(cu_seq_lens_len - 1)?.to_scalar::<u32>()? as usize
-    };
+    let num_seqs = cu_seq_lens_len
+        .checked_sub(1)
+        .ok_or_else(|| candle_core::Error::msg("cu_seq_lens must contain an initial offset"))?;
+    let num_tokens_i32 = i32::try_from(num_tokens)
+        .map_err(|_| candle_core::Error::msg("num_tokens exceeds the kernel i32 limit"))?;
+    let num_seqs_i32 = i32::try_from(num_seqs)
+        .map_err(|_| candle_core::Error::msg("num_seqs exceeds the kernel i32 limit"))?;
 
     if num_tokens == 0 {
         let k_out = Tensor::zeros((0, num_kv_heads, head_size), out_dtype, key_cache.device())?;
@@ -166,8 +167,8 @@ pub fn gather_kv_cache(
             bt_l.start_offset() * block_table.dtype().size_in_bytes(),
             cu.buffer(),
             cu_l.start_offset() * cu_seq_lens.dtype().size_in_bytes(),
-            num_tokens as i32,
-            num_seqs as i32,
+            num_tokens_i32,
+            num_seqs_i32,
             block_size as i32,
             block_table_stride as i32,
             num_kv_heads as i32,

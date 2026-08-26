@@ -25,6 +25,37 @@ pub enum GdnInputProjection {
 }
 
 impl GdnInputProjection {
+    pub(crate) fn is_dynamic_lora_active(&self) -> bool {
+        match self {
+            Self::Grouped {
+                in_proj_qkvz,
+                in_proj_ba,
+            } => in_proj_qkvz.is_dynamic_lora_active() || in_proj_ba.is_dynamic_lora_active(),
+            Self::Split {
+                in_proj_qkv,
+                in_proj_z,
+                in_proj_b,
+                in_proj_a,
+                ..
+            } => {
+                in_proj_qkv.is_dynamic_lora_active()
+                    || in_proj_z.is_dynamic_lora_active()
+                    || in_proj_b.is_dynamic_lora_active()
+                    || in_proj_a.is_dynamic_lora_active()
+            }
+            Self::SplitQkvzGroupedBa {
+                in_proj_qkv,
+                in_proj_z,
+                in_proj_ba,
+                ..
+            } => {
+                in_proj_qkv.is_dynamic_lora_active()
+                    || in_proj_z.is_dynamic_lora_active()
+                    || in_proj_ba.is_dynamic_lora_active()
+            }
+        }
+    }
+
     pub fn forward(
         &self,
         x: &Tensor,

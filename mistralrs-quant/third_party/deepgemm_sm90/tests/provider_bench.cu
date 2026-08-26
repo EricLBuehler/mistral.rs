@@ -66,8 +66,9 @@ bool benchmark(const Shape& shape, uint32_t m, const char* include_dir, cudaStre
 
   for (int iteration = 0; iteration < 10; ++iteration) {
     if (!checkProvider(mistralrs_deepgemm_sm90_gemm(
-                           &prepared, activation, weight, static_cast<float*>(weight_scales), output,
-                           workspace, plan.workspace_bytes, stream),
+                           &prepared, m, activation, weight,
+                           static_cast<float*>(weight_scales), output, workspace,
+                           plan.workspace_bytes, stream),
                        "warmup")) {
       return false;
     }
@@ -82,8 +83,9 @@ bool benchmark(const Shape& shape, uint32_t m, const char* include_dir, cudaStre
   constexpr int iterations = 100;
   for (int iteration = 0; iteration < iterations; ++iteration) {
     if (!checkProvider(mistralrs_deepgemm_sm90_gemm(
-                           &prepared, activation, weight, static_cast<float*>(weight_scales), output,
-                           workspace, plan.workspace_bytes, stream),
+                           &prepared, m, activation, weight,
+                           static_cast<float*>(weight_scales), output, workspace,
+                           plan.workspace_bytes, stream),
                        "benchmark")) {
       return false;
     }
@@ -124,7 +126,7 @@ int main(int argc, char** argv) {
       {"gate_up", 34816, 5120},
       {"down", 5120, 17408},
   };
-  for (uint32_t m : {1U, 8U, 16U, 21U, 24U}) {
+  for (uint32_t m : {1U, 8U, 16U, 21U, 24U, 128U, 192U, 256U, 512U, 2304U, 3840U, 4096U}) {
     for (const auto& shape : shapes) {
       if (!benchmark(shape, m, include_dir, stream)) {
         return 1;
