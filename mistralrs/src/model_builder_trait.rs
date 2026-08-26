@@ -2,9 +2,9 @@
 
 use candle_core::Device;
 use mistralrs_core::{
-    plan_paged_kv, AddModelConfig, DefaultSchedulerMethod, EngineConfig, IsqType,
-    PagedAttentionConfig, PagedKvModelRequest, Pipeline, SchedulerConfig, SearchCallback,
-    SearchEmbeddingModel, ToolCallbackWithTool,
+    plan_paged_kv, scheduler_config_for_paged_attention, AddModelConfig, DefaultSchedulerMethod,
+    EngineConfig, IsqType, PagedAttentionConfig, PagedKvModelRequest, Pipeline, SchedulerConfig,
+    SearchCallback, SearchEmbeddingModel, ToolCallbackWithTool,
 };
 use std::{collections::HashMap, path::PathBuf, sync::Arc};
 use tokio::sync::Mutex;
@@ -367,33 +367,21 @@ fn paged_attn_with_serving_capacity(
 
 pub(crate) async fn scheduler_config_from_pipeline<P>(
     pipeline: &Arc<Mutex<P>>,
-    paged_attn_requested: bool,
+    paged_attn_cfg: &Option<PagedAttentionConfig>,
     max_num_seqs: usize,
 ) -> anyhow::Result<SchedulerConfig>
 where
     P: ?Sized + Pipeline,
 {
-    if paged_attn_requested {
-        if let Some(config) = pipeline
-            .lock()
-            .await
-            .get_metadata()
-            .cache_config
-            .as_ref()
-            .cloned()
-        {
-            return Ok(SchedulerConfig::PagedAttentionMeta {
-                max_num_seqs,
-                max_num_batched_tokens: mistralrs_core::DEFAULT_MAX_NUM_BATCHED_TOKENS,
-                max_prefill_chunk_tokens: mistralrs_core::DEFAULT_MAX_PREFILL_CHUNK_TOKENS,
-                max_decode_steps_before_prefill:
-                    mistralrs_core::DEFAULT_MAX_DECODE_STEPS_BEFORE_PREFILL,
-                config,
-            });
-        }
-    }
-
-    default_scheduler_config(max_num_seqs)
+    let realized = pipeline.lock().await.get_metadata().cache_config.clone();
+    scheduler_config_for_paged_attention(
+        paged_attn_cfg,
+        realized.as_ref(),
+        max_num_seqs,
+        mistralrs_core::DEFAULT_MAX_NUM_BATCHED_TOKENS,
+        mistralrs_core::DEFAULT_MAX_PREFILL_CHUNK_TOKENS,
+        mistralrs_core::DEFAULT_MAX_DECODE_STEPS_BEFORE_PREFILL,
+    )
 }
 
 pub(crate) fn build_engine_config(
@@ -465,7 +453,6 @@ pub(crate) async fn build_pipeline_from_text_loader(
             .unwrap_or(mistralrs_core::DeviceMapSetting::Auto(
                 mistralrs_core::AutoDeviceMapParams::default_text(),
             ));
-    let paged_attn_requested = builder.paged_attn_cfg.is_some();
 
     let pipeline = loader.load_model_from_hf(
         builder.hf_revision,
@@ -485,7 +472,7 @@ pub(crate) async fn build_pipeline_from_text_loader(
     }
 
     let scheduler_config =
-        scheduler_config_from_pipeline(&pipeline, paged_attn_requested, builder.max_num_seqs)
+        scheduler_config_from_pipeline(&pipeline, &builder.paged_attn_cfg, builder.max_num_seqs)
             .await?;
 
     let add_model_config = AddModelConfig {
@@ -538,7 +525,6 @@ pub(crate) async fn build_pipeline_from_gguf_loader(
         .device_mapping
         .clone()
         .unwrap_or(DeviceMapSetting::Auto(default_device_map));
-    let paged_attn_requested = builder.paged_attn_cfg.is_some();
     let isq_type = resolve_isq_type(builder.isq.as_ref(), &device)?;
 
     let pipeline = loader.load_model_from_hf(
@@ -559,7 +545,7 @@ pub(crate) async fn build_pipeline_from_gguf_loader(
     }
 
     let scheduler_config =
-        scheduler_config_from_pipeline(&pipeline, paged_attn_requested, builder.max_num_seqs)
+        scheduler_config_from_pipeline(&pipeline, &builder.paged_attn_cfg, builder.max_num_seqs)
             .await?;
 
     let add_model_config = AddModelConfig {
@@ -696,12 +682,9 @@ pub async fn build_text_pipeline(
             .attach_speculative_with_runtime(SpeculativeConfig::Mtp(mtp_config), mtp_runtime)?;
     }
 
-    let scheduler_config = scheduler_config_from_pipeline(
-        &pipeline,
-        builder.paged_attn_cfg.is_some(),
-        builder.max_num_seqs,
-    )
-    .await?;
+    let scheduler_config =
+        scheduler_config_from_pipeline(&pipeline, &builder.paged_attn_cfg, builder.max_num_seqs)
+            .await?;
 
     let engine_config = build_engine_config(
         builder.throughput_logging,
@@ -846,12 +829,9 @@ pub async fn build_multimodal_pipeline(
             .attach_speculative_with_runtime(SpeculativeConfig::Mtp(mtp_config), mtp_runtime)?;
     }
 
-    let scheduler_config = scheduler_config_from_pipeline(
-        &pipeline,
-        builder.paged_attn_cfg.is_some(),
-        builder.max_num_seqs,
-    )
-    .await?;
+    let scheduler_config =
+        scheduler_config_from_pipeline(&pipeline, &builder.paged_attn_cfg, builder.max_num_seqs)
+            .await?;
 
     let engine_config = build_engine_config(
         builder.throughput_logging,
@@ -1007,12 +987,9 @@ pub async fn build_gguf_pipeline(
             .attach_speculative_with_runtime(SpeculativeConfig::Mtp(mtp_config), mtp_runtime)?;
     }
 
-    let scheduler_config = scheduler_config_from_pipeline(
-        &pipeline,
-        builder.paged_attn_cfg.is_some(),
-        builder.max_num_seqs,
-    )
-    .await?;
+    let scheduler_config =
+        scheduler_config_from_pipeline(&pipeline, &builder.paged_attn_cfg, builder.max_num_seqs)
+            .await?;
 
     let engine_config = build_engine_config(
         builder.throughput_logging,
@@ -1451,12 +1428,9 @@ pub async fn build_auto_pipeline(
             .attach_speculative_with_runtime(SpeculativeConfig::Mtp(mtp_config), mtp_runtime)?;
     }
 
-    let scheduler_config = scheduler_config_from_pipeline(
-        &pipeline,
-        builder.paged_attn_cfg.is_some(),
-        builder.max_num_seqs,
-    )
-    .await?;
+    let scheduler_config =
+        scheduler_config_from_pipeline(&pipeline, &builder.paged_attn_cfg, builder.max_num_seqs)
+            .await?;
 
     let engine_config = build_engine_config(
         builder.throughput_logging,

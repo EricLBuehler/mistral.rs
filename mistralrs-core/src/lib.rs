@@ -159,7 +159,10 @@ pub use mistralrs_mcp::{
 };
 pub use mistralrs_quant::{IsqBits, IsqType};
 pub use mistralrs_sandbox::{NetworkMode, SandboxPolicy};
-pub use paged_attention::{MemoryGpuConfig, PagedAttentionConfig, PagedCacheType};
+pub use paged_attention::{
+    disable_paged_attention, required_paged_attention_error, MemoryGpuConfig, PagedAttentionConfig,
+    PagedCacheType,
+};
 pub use pipeline::hf::{
     get_model_file, hf_home_dir, hf_hub_cache_dir, hf_token_path, is_hf_hub_offline,
     list_model_files, probe_hf_repo_files, read_model_file_range, try_get_model_file,
@@ -199,8 +202,9 @@ pub use sampler::{
     TopLogprob,
 };
 pub use scheduler::{
-    DefaultSchedulerMethod, SchedulerConfig, DEFAULT_MAX_DECODE_STEPS_BEFORE_PREFILL,
-    DEFAULT_MAX_NUM_BATCHED_TOKENS, DEFAULT_MAX_PREFILL_CHUNK_TOKENS,
+    scheduler_config_for_paged_attention, DefaultSchedulerMethod, SchedulerConfig,
+    DEFAULT_MAX_DECODE_STEPS_BEFORE_PREFILL, DEFAULT_MAX_NUM_BATCHED_TOKENS,
+    DEFAULT_MAX_PREFILL_CHUNK_TOKENS,
 };
 pub use search::{SearchCallback, SearchFunctionParameters, SearchResult};
 use serde::Serialize;

@@ -317,6 +317,7 @@ pub fn get_device_layers(
                 true,
                 Some(total_model_size_in_bytes),
                 Some(max_seq_len * max_batch_size),
+                cfg.required,
             )?;
             let key_shape = calculate_key_block_shape(&*model_cfg, dtype, cache.block_size);
             let key_sz =

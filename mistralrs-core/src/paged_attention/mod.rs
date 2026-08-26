@@ -40,7 +40,7 @@ pub use scheduler::{
 };
 
 use crate::MemoryUsage;
-use tracing::info;
+use tracing::{info, warn};
 
 pub const DEFAULT_PAGED_ATTENTION_BLOCK_SIZE: usize = 32;
 const GPU_RESERVE_FRACTION: f64 = 0.02;
@@ -188,6 +188,60 @@ mod tests {
         );
         Ok(())
     }
+
+    fn sample_config() -> anyhow::Result<super::PagedAttentionConfig> {
+        super::PagedAttentionConfig::new(
+            Some(32),
+            MemoryGpuConfig::Utilization(0.9),
+            PagedCacheType::Auto,
+        )
+    }
+
+    #[test]
+    fn new_paged_attention_config_is_not_required() -> anyhow::Result<()> {
+        assert!(!sample_config()?.required);
+        assert!(!sample_config()?.is_required());
+        Ok(())
+    }
+
+    #[test]
+    fn with_required_marks_explicit_paged_attention_intent() -> anyhow::Result<()> {
+        let config = sample_config()?.with_required();
+        assert!(config.required);
+        assert!(config.is_required());
+        Ok(())
+    }
+
+    #[test]
+    fn disable_paged_attention_is_noop_when_already_disabled() -> anyhow::Result<()> {
+        let mut config = None;
+        super::disable_paged_attention(&mut config, "this model does not support PagedAttention")?;
+        assert!(config.is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn disable_paged_attention_clears_optional_config() -> anyhow::Result<()> {
+        let mut config = Some(sample_config()?);
+        super::disable_paged_attention(&mut config, "this model does not support PagedAttention")?;
+        assert!(config.is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn disable_paged_attention_errors_when_required() -> anyhow::Result<()> {
+        let mut config = Some(sample_config()?.with_required());
+        let error = super::disable_paged_attention(
+            &mut config,
+            "this model does not support PagedAttention",
+        )
+        .expect_err("required PagedAttention must fail closed");
+        let message = error.to_string();
+        assert!(message.contains("--paged-attn on"));
+        assert!(message.contains("this model does not support PagedAttention"));
+        assert!(config.is_some());
+        Ok(())
+    }
 }
 
 /// All memory counts in MB. Default for block size is 32.
@@ -203,6 +257,7 @@ pub struct PagedAttentionConfig {
     pub(crate) recurrent_checkpoint_lanes: usize,
     pub(crate) recurrent_prefix_capacity: usize,
     pub(crate) resolve_memory_utilization_after_load: bool,
+    pub(crate) required: bool,
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -228,7 +283,17 @@ impl PagedAttentionConfig {
             recurrent_checkpoint_lanes: 1,
             recurrent_prefix_capacity: 0,
             resolve_memory_utilization_after_load: true,
+            required: false,
         })
+    }
+
+    pub fn with_required(mut self) -> Self {
+        self.required = true;
+        self
+    }
+
+    pub fn is_required(&self) -> bool {
+        self.required
     }
 
     pub fn with_serving_capacity(mut self, serving_capacity: usize) -> anyhow::Result<Self> {
@@ -283,6 +348,25 @@ impl PagedAttentionConfig {
             primary_device_bytes,
             secondary_device_bytes: self.mapped_activation_memory_reservation_bytes,
         })
+    }
+}
+
+pub fn required_paged_attention_error(reason: impl std::fmt::Display) -> anyhow::Error {
+    anyhow::anyhow!("PagedAttention was explicitly requested (--paged-attn on), but {reason}")
+}
+
+pub fn disable_paged_attention(
+    config: &mut Option<PagedAttentionConfig>,
+    reason: impl std::fmt::Display,
+) -> anyhow::Result<()> {
+    match config {
+        None => Ok(()),
+        Some(cfg) if cfg.required => Err(required_paged_attention_error(reason)),
+        Some(_) => {
+            warn!("PagedAttention disabled: {reason}");
+            *config = None;
+            Ok(())
+        }
     }
 }
 
@@ -371,6 +455,8 @@ fn fit_post_load_cache_budget(
 /// Unlike CUDA with dedicated VRAM where unused memory is wasted, Metal's wired buffers
 /// compete with the OS and CPU for the same physical RAM. On CUDA this is ignored.
 /// If `None` on Metal, falls back to `config.max_seq_len()`.
+///
+/// `required`: true when PagedAttention was explicitly requested (`--paged-attn on`).
 #[allow(clippy::too_many_arguments)]
 pub fn calculate_cache_config(
     mem_gpu: MemoryGpuConfig,
@@ -384,6 +470,7 @@ pub fn calculate_cache_config(
     silent: bool,
     model_weight_size_in_bytes: Option<usize>,
     max_num_tokens: Option<usize>,
+    required: bool,
 ) -> anyhow::Result<CacheConfig> {
     let block_size = block_size.unwrap_or(DEFAULT_PAGED_ATTENTION_BLOCK_SIZE);
     if !SUPPORTED_BLOCK_SIZE.contains(&block_size) {
@@ -542,7 +629,8 @@ pub fn calculate_cache_config(
         let available_context_tokens = num_gpu_blocks.saturating_sub(1) * block_size;
         info!("Allocating {mem_gpu} MB for PagedAttention KV cache per GPU");
         info!("PagedAttention KV cache type is {dtype:?}");
-        info!("Using PagedAttention with block size {block_size} and {num_gpu_blocks} GPU blocks: available context length is {available_context_tokens} tokens");
+        let mode = if required { "on" } else { "auto" };
+        info!("Using PagedAttention with block size {block_size} and {num_gpu_blocks} GPU blocks: available context length is {available_context_tokens} tokens (mode={mode})");
     }
     Ok(CacheConfig {
         block_size,

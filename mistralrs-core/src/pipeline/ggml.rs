@@ -11,6 +11,7 @@ use crate::attention::ATTENTION_CHUNK_SIZE;
 use crate::device_map::DeviceMapper;
 use crate::kv_cache::FullCacheManager;
 use crate::lora::Ordering;
+use crate::paged_attention::disable_paged_attention;
 use crate::pipeline::chat_template::{calculate_eos_tokens, GenerationConfig};
 use crate::pipeline::sampling::sample_and_add_toks;
 use crate::pipeline::{get_chat_template, Modalities, SupportedModality};
@@ -40,7 +41,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 use tokenizers::Tokenizer;
 use tokio::sync::Mutex;
-use tracing::{debug, info, trace, warn};
+use tracing::{debug, info, trace};
 
 enum Model {
     Llama(Box<QLlama>),
@@ -257,11 +258,11 @@ impl Loader for GGMLLoader {
             anyhow::bail!("Device mapping is not supported for diffusion models.")
         }
 
-        if paged_attn_config.is_some() {
-            warn!("PagedAttention is not supported for GGML models, disabling it.");
-
-            paged_attn_config = None;
-        }
+        disable_paged_attention(
+            &mut paged_attn_config,
+            "GGML models do not support PagedAttention",
+        )?;
+        let _ = paged_attn_config;
 
         debug!("Prompt chunk size is {ATTENTION_CHUNK_SIZE}.");
 
@@ -298,13 +299,6 @@ impl Loader for GGMLLoader {
 
             info!("Debug is enabled, wrote the names and information about each tensor to `mistralrs_ggml_tensors.txt`.");
         }
-
-        let _ = if paged_attn_config.is_none() {
-            warn!("GGML does not currently support PagedAttention, running without");
-            None
-        } else {
-            paged_attn_config
-        };
 
         let has_adapter = self.kind.is_adapted();
         let is_xlora = self.kind.is_adapted_and(|a| a.is_x_lora());

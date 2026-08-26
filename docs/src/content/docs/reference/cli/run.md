@@ -48,7 +48,7 @@ mistralrs run [OPTIONS] [COMMAND]
 | `--hf-cache <HF_CACHE>` |  | Custom Hugging Face cache directory |
 | `--max-seq-len <MAX_SEQ_LEN>` | `4096` | Max sequence length for automatic device mapping |
 | `--max-batch-size <MAX_BATCH_SIZE>` | `1` | Max batch size for automatic device mapping |
-| `--paged-attn <MODE>` | `auto` | PagedAttention mode - auto: enabled on CUDA, disabled on Metal/CPU (default) - on: force enable (fails if unsupported) - off: force disable. Possible values: `auto`, `on`, `off`. |
+| `--paged-attn <MODE>` | `auto` | PagedAttention mode - auto: enabled on CUDA, disabled on Metal/CPU (default) - on: force enable; error if the device, build, or model cannot honor it - off: force disable. Possible values: `auto`, `on`, `off`. |
 | `--pa-context-len <CONTEXT_LEN>` |  | Allocate KV cache for this context length. If not specified, defaults to using 90% of available VRAM |
 | `--pa-memory-mb <MEMORY_MB>` |  | GPU memory to allocate in MBs (alternative to context-len) |
 | `--pa-memory-fraction <MEMORY_FRACTION>` |  | GPU memory utilization fraction 0.0-1.0 (alternative to context-len/memory-mb) |
@@ -143,7 +143,7 @@ mistralrs run auto [OPTIONS] --model-id <MODEL_ID>
 | `--hf-cache <HF_CACHE>` |  | Custom Hugging Face cache directory |
 | `--max-seq-len <MAX_SEQ_LEN>` | `4096` | Max sequence length for automatic device mapping |
 | `--max-batch-size <MAX_BATCH_SIZE>` | `1` | Max batch size for automatic device mapping |
-| `--paged-attn <MODE>` | `auto` | PagedAttention mode - auto: enabled on CUDA, disabled on Metal/CPU (default) - on: force enable (fails if unsupported) - off: force disable. Possible values: `auto`, `on`, `off`. |
+| `--paged-attn <MODE>` | `auto` | PagedAttention mode - auto: enabled on CUDA, disabled on Metal/CPU (default) - on: force enable; error if the device, build, or model cannot honor it - off: force disable. Possible values: `auto`, `on`, `off`. |
 | `--pa-context-len <CONTEXT_LEN>` |  | Allocate KV cache for this context length. If not specified, defaults to using 90% of available VRAM |
 | `--pa-memory-mb <MEMORY_MB>` |  | GPU memory to allocate in MBs (alternative to context-len) |
 | `--pa-memory-fraction <MEMORY_FRACTION>` |  | GPU memory utilization fraction 0.0-1.0 (alternative to context-len/memory-mb) |
@@ -197,7 +197,7 @@ mistralrs run text [OPTIONS] --model-id <MODEL_ID>
 | `--hf-cache <HF_CACHE>` |  | Custom Hugging Face cache directory |
 | `--max-seq-len <MAX_SEQ_LEN>` | `4096` | Max sequence length for automatic device mapping |
 | `--max-batch-size <MAX_BATCH_SIZE>` | `1` | Max batch size for automatic device mapping |
-| `--paged-attn <MODE>` | `auto` | PagedAttention mode - auto: enabled on CUDA, disabled on Metal/CPU (default) - on: force enable (fails if unsupported) - off: force disable. Possible values: `auto`, `on`, `off`. |
+| `--paged-attn <MODE>` | `auto` | PagedAttention mode - auto: enabled on CUDA, disabled on Metal/CPU (default) - on: force enable; error if the device, build, or model cannot honor it - off: force disable. Possible values: `auto`, `on`, `off`. |
 | `--pa-context-len <CONTEXT_LEN>` |  | Allocate KV cache for this context length. If not specified, defaults to using 90% of available VRAM |
 | `--pa-memory-mb <MEMORY_MB>` |  | GPU memory to allocate in MBs (alternative to context-len) |
 | `--pa-memory-fraction <MEMORY_FRACTION>` |  | GPU memory utilization fraction 0.0-1.0 (alternative to context-len/memory-mb) |
@@ -242,7 +242,7 @@ mistralrs run multimodal [OPTIONS] --model-id <MODEL_ID>
 | `--hf-cache <HF_CACHE>` |  | Custom Hugging Face cache directory |
 | `--max-seq-len <MAX_SEQ_LEN>` | `4096` | Max sequence length for automatic device mapping |
 | `--max-batch-size <MAX_BATCH_SIZE>` | `1` | Max batch size for automatic device mapping |
-| `--paged-attn <MODE>` | `auto` | PagedAttention mode - auto: enabled on CUDA, disabled on Metal/CPU (default) - on: force enable (fails if unsupported) - off: force disable. Possible values: `auto`, `on`, `off`. |
+| `--paged-attn <MODE>` | `auto` | PagedAttention mode - auto: enabled on CUDA, disabled on Metal/CPU (default) - on: force enable; error if the device, build, or model cannot honor it - off: force disable. Possible values: `auto`, `on`, `off`. |
 | `--pa-context-len <CONTEXT_LEN>` |  | Allocate KV cache for this context length. If not specified, defaults to using 90% of available VRAM |
 | `--pa-memory-mb <MEMORY_MB>` |  | GPU memory to allocate in MBs (alternative to context-len) |
 | `--pa-memory-fraction <MEMORY_FRACTION>` |  | GPU memory utilization fraction 0.0-1.0 (alternative to context-len/memory-mb) |
@@ -332,7 +332,7 @@ mistralrs run embedding [OPTIONS] --model-id <MODEL_ID>
 | `--hf-cache <HF_CACHE>` |  | Custom Hugging Face cache directory |
 | `--max-seq-len <MAX_SEQ_LEN>` | `4096` | Max sequence length for automatic device mapping |
 | `--max-batch-size <MAX_BATCH_SIZE>` | `1` | Max batch size for automatic device mapping |
-| `--paged-attn <MODE>` | `auto` | PagedAttention mode - auto: enabled on CUDA, disabled on Metal/CPU (default) - on: force enable (fails if unsupported) - off: force disable. Possible values: `auto`, `on`, `off`. |
+| `--paged-attn <MODE>` | `auto` | PagedAttention mode - auto: enabled on CUDA, disabled on Metal/CPU (default) - on: force enable; error if the device, build, or model cannot honor it - off: force disable. Possible values: `auto`, `on`, `off`. |
 | `--pa-context-len <CONTEXT_LEN>` |  | Allocate KV cache for this context length. If not specified, defaults to using 90% of available VRAM |
 | `--pa-memory-mb <MEMORY_MB>` |  | GPU memory to allocate in MBs (alternative to context-len) |
 | `--pa-memory-fraction <MEMORY_FRACTION>` |  | GPU memory utilization fraction 0.0-1.0 (alternative to context-len/memory-mb) |

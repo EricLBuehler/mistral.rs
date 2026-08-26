@@ -36,6 +36,7 @@ use crate::gguf::{
 use crate::gguf::{Content, GGUFArchitecture};
 use crate::kv_cache::FullCacheManager;
 use crate::lora::Ordering;
+use crate::paged_attention::disable_paged_attention;
 use crate::pipeline::chat_template::{calculate_eos_tokens, BeginEndUnkPadTok, GenerationConfig};
 use crate::pipeline::hf::{build_api, get_file, list_repo_files};
 use crate::pipeline::loaders::{stamp_qk_rope_layout, DeviceMappedModelLoader};
@@ -1197,7 +1198,7 @@ impl Loader for GGUFLoader {
         silent: bool,
         mut mapper: DeviceMapSetting,
         in_situ_quant: Option<IsqType>,
-        paged_attn_config: Option<PagedAttentionConfig>,
+        mut paged_attn_config: Option<PagedAttentionConfig>,
     ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
         let _progress_guard = ProgressScopeGuard::new(silent);
         if matches!(self.kind, ModelKind::GgufQuantized { .. }) || self.dynamic_lora.is_some() {
@@ -1218,9 +1219,11 @@ impl Loader for GGUFLoader {
         {
             bail!("ISQ conversion is only supported by the native GGUF loading path");
         }
-        if paged_attn_config.is_some() {
-            warn!("Adapter models do not currently support PagedAttention, running without");
-        }
+        disable_paged_attention(
+            &mut paged_attn_config,
+            "adapter models do not support PagedAttention",
+        )?;
+        let _ = paged_attn_config;
 
         let mut readers = Vec::new();
         for filename in paths.get_weight_filenames() {

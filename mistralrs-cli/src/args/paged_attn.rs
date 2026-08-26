@@ -18,7 +18,7 @@ pub struct CacheOptions {
 pub struct PagedAttentionOptions {
     /// PagedAttention mode
     /// - auto: enabled on CUDA, disabled on Metal/CPU (default)
-    /// - on: force enable (fails if unsupported)
+    /// - on: force enable; error if the device, build, or model cannot honor it
     /// - off: force disable
     #[arg(long = "paged-attn", default_value = "auto", value_enum)]
     #[serde(default)]
@@ -67,7 +67,7 @@ pub enum PagedAttnMode {
     /// Automatic: enabled on CUDA, disabled on Metal/CPU
     #[default]
     Auto,
-    /// Force enable (error if device doesn't support it)
+    /// Force enable; error if the device, build, or model cannot honor it
     On,
     /// Force disable
     Off,
@@ -106,3 +106,23 @@ pub type PagedAttnBuilderFlags = (
     Option<usize>,  // block_size
     PagedCacheType, // cache_type
 );
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn flags_for(mode: PagedAttnMode) -> PagedAttnBuilderFlags {
+        PagedAttentionOptions {
+            mode,
+            ..Default::default()
+        }
+        .into_builder_flags()
+    }
+
+    #[test]
+    fn into_builder_flags_preserves_auto_on_off_intent() {
+        assert_eq!(flags_for(PagedAttnMode::Auto).0, None);
+        assert_eq!(flags_for(PagedAttnMode::On).0, Some(true));
+        assert_eq!(flags_for(PagedAttnMode::Off).0, Some(false));
+    }
+}

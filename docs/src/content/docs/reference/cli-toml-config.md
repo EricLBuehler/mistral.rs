@@ -97,7 +97,7 @@ The MCP *client* configuration (`mcp_config`) lives under `[runtime]`, not `[ser
 
 | Field | CLI flag | Default | Purpose |
 |---|---|---|---|
-| `mode` | `--paged-attn` | `auto` | `auto` (on for CUDA, off for Metal/CPU), `on`, or `off`. |
+| `mode` | `--paged-attn` | `auto` | `auto` (on for CUDA, off for Metal/CPU), `on` (fail closed if PagedAttention cannot be enabled), or `off`. |
 | `context_len` | `--pa-context-len` | not set | Allocate KV cache for this context length. |
 | `memory_mb` | `--pa-memory-mb` | not set | KV cache budget in MB. Conflicts with `context_len`. |
 | `memory_fraction` | `--pa-memory-fraction` | not set | KV cache budget as fraction of VRAM (0.0 to 1.0). Conflicts with `context_len` and `memory_mb`. |

@@ -48,6 +48,7 @@ struct CudaDecodeGraphForwardInput<'a> {
     model_specific_args: &'a dyn Any,
     recurrent_batch_kind: RecurrentBatchKind,
 }
+use crate::paged_attention::disable_paged_attention;
 use crate::paged_attention::{calculate_cache_config, AttentionImplementation, CacheEngine};
 use crate::pipeline::chat_template::{
     calculate_eos_tokens, BeginEndUnkPadTok, ChatTemplateValue, GenerationConfig,
@@ -463,7 +464,10 @@ impl Loader for MultimodalLoader {
             .runtime_config(&config, self.config.max_model_len)?;
 
         if !self.inner.supports_paged_attention(&config) {
-            paged_attn_config = None;
+            disable_paged_attention(
+                &mut paged_attn_config,
+                "this model does not support PagedAttention",
+            )?;
         }
         let supports_encoder_cache = self.inner.supports_encoder_cache(&config);
         if self.encoder_cache_memory_bytes.is_some() && !supports_encoder_cache {
@@ -872,9 +876,11 @@ impl Loader for MultimodalLoader {
         // TODO: PagedAttention is not supported with CPU for now.
         // This check is not really necessary because `get_device_layers` should prevent it.
         let mapping_uses_cpu = mapper.get_unique_devices().iter().any(Device::is_cpu);
-        if mapping_uses_cpu && paged_attn_config.is_some() {
-            warn!("Device mapping contains a mix of GPU and CPU. There is no CPU support for PagedAttention, disabling PagedAttention.");
-            paged_attn_config = None;
+        if mapping_uses_cpu {
+            disable_paged_attention(
+                &mut paged_attn_config,
+                "device mapping includes CPU, and PagedAttention has no CPU KV cache",
+            )?;
         }
 
         trace!("Model config: {:?}", self.inner.get_config_repr(&config)?);
@@ -1347,6 +1353,7 @@ impl Loader for MultimodalLoader {
                 silent,
                 None,
                 max_kv_tokens,
+                paged_attn_config.required,
             )?;
             let cache_engine = CacheEngine::new(
                 model_metadata.as_ref(),

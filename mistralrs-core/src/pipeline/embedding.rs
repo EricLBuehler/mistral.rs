@@ -15,6 +15,7 @@ use crate::embedding_models::{Dense, DenseActivation, Normalize, Pooling};
 use crate::embedding_normal_model_loader;
 use crate::embedding_normal_model_loader_sharded;
 use crate::get_embedding_paths;
+use crate::paged_attention::disable_paged_attention;
 use crate::paged_attention::AttentionImplementation;
 use crate::pipeline::loaders::auto_device_map;
 use crate::pipeline::loaders::{AutoDeviceMapQuantization, QuantizationConfigShim};
@@ -55,7 +56,7 @@ use std::str::FromStr;
 use std::sync::{Arc, RwLock};
 use tokenizers::Tokenizer;
 use tokio::sync::Mutex;
-use tracing::{debug, info, trace, warn};
+use tracing::{debug, info, trace};
 
 pub struct EmbeddingPipeline {
     model: Box<dyn EmbeddingModel + Send + Sync>,
@@ -238,10 +239,10 @@ impl Loader for EmbeddingLoader {
             config
         };
 
-        if paged_attn_config.is_some() {
-            warn!("PagedAttention is not supported for embedding models, disabling it.");
-            paged_attn_config = None;
-        }
+        disable_paged_attention(
+            &mut paged_attn_config,
+            "embedding models do not support PagedAttention",
+        )?;
 
         debug!("Prompt chunk size is {ATTENTION_CHUNK_SIZE}.");
 

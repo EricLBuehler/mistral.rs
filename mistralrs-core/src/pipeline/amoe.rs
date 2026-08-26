@@ -15,8 +15,9 @@ use indexmap::IndexMap;
 use mistralrs_quant::IsqType;
 use rand::{rng, seq::SliceRandom};
 use rand_isaac::Isaac64Rng;
-use tracing::{info, warn};
+use tracing::info;
 
+use crate::paged_attention::disable_paged_attention;
 use crate::{
     amoe::{AnyMoeConfig, AnyMoeTrainingInputRow, AnyMoeTrainingInputs, AnyMoeTrainingResult},
     device_map::DeviceMapper,
@@ -63,12 +64,11 @@ impl Loader for AnyMoeLoader {
         paged_attn_config: Option<PagedAttentionConfig>,
     ) -> anyhow::Result<Arc<tokio::sync::Mutex<dyn Pipeline + Send + Sync>>> {
         let _progress_guard = ProgressScopeGuard::new(silent);
-        let paged_attn_config = if paged_attn_config.is_some() {
-            warn!("AnyMoE does not currently support PagedAttention, running without");
-            None
-        } else {
-            paged_attn_config
-        };
+        let mut paged_attn_config = paged_attn_config;
+        disable_paged_attention(
+            &mut paged_attn_config,
+            "AnyMoE models do not support PagedAttention",
+        )?;
 
         let target = self.target.load_model_from_hf(
             revision.clone(),
@@ -106,12 +106,11 @@ impl Loader for AnyMoeLoader {
         paged_attn_config: Option<PagedAttentionConfig>,
     ) -> anyhow::Result<Arc<tokio::sync::Mutex<dyn Pipeline + Send + Sync>>> {
         let _progress_guard = ProgressScopeGuard::new(silent);
-        let paged_attn_config = if paged_attn_config.is_some() {
-            warn!("AnyMoE does not currently support PagedAttention, running without");
-            None
-        } else {
-            paged_attn_config
-        };
+        let mut paged_attn_config = paged_attn_config;
+        disable_paged_attention(
+            &mut paged_attn_config,
+            "AnyMoE models do not support PagedAttention",
+        )?;
 
         let target = self.target.load_model_from_path(
             paths,
