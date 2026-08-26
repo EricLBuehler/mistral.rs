@@ -1620,6 +1620,16 @@ pub trait QuantMethod: Send + Sync + Debug + QuantizedSerde {
         )
     }
 
+    #[cfg(feature = "cuda")]
+    fn try_forward_fused_split_glu(
+        &self,
+        _input: &Tensor,
+        _split_size: usize,
+        _activation: GluActivationType,
+    ) -> Result<Option<Tensor>> {
+        Ok(None)
+    }
+
     /// If a quantized method, return the activation dtype.
     fn quantized_act_type(&self) -> Option<DType>;
 

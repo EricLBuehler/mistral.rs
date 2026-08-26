@@ -2613,7 +2613,9 @@ mod tests {
         const DEFAULT_WARMUP: usize = 10;
         const DEFAULT_ITERATIONS: usize = 100;
         const OUTPUT_TOLERANCE: f32 = 0.02;
-        const M_VALUES: [usize; 12] = [1, 8, 16, 21, 24, 32, 64, 128, 192, 2304, 3840, 4095];
+        const M_VALUES: [usize; 14] = [
+            1, 8, 16, 21, 24, 32, 64, 128, 192, 256, 512, 2304, 3840, 4095,
+        ];
         const SHAPES: [BlockwiseFp8BenchShape; 5] = [
             BlockwiseFp8BenchShape {
                 name: "gdn_qkvz",
@@ -2704,7 +2706,9 @@ mod tests {
         const DEFAULT_WARMUP: usize = 10;
         const DEFAULT_ITERATIONS: usize = 100;
         const SAMPLES: usize = 7;
-        const M_VALUES: [usize; 12] = [1, 8, 16, 21, 24, 32, 64, 128, 192, 2304, 3840, 4095];
+        const M_VALUES: [usize; 14] = [
+            1, 8, 16, 21, 24, 32, 64, 128, 192, 256, 512, 2304, 3840, 4095,
+        ];
         const SHAPES: [BlockwiseFp8BenchShape; 5] = [
             BlockwiseFp8BenchShape {
                 name: "gdn_qkvz",

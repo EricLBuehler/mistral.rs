@@ -313,6 +313,17 @@ impl QuantMethod for RuntimeOutputLinear {
         self.inner.forward_quantized(a)
     }
 
+    #[cfg(feature = "cuda")]
+    fn try_forward_fused_split_glu(
+        &self,
+        input: &Tensor,
+        split_size: usize,
+        activation: crate::GluActivationType,
+    ) -> Result<Option<Tensor>> {
+        self.inner
+            .try_forward_fused_split_glu(input, split_size, activation)
+    }
+
     fn quantized_act_type(&self) -> Option<DType> {
         self.inner.quantized_act_type()
     }
@@ -1038,6 +1049,28 @@ impl QuantMethod for RowParallelLayer {
         Ok(xs)
     }
 
+    #[cfg(feature = "cuda")]
+    fn try_forward_fused_split_glu(
+        &self,
+        input: &Tensor,
+        split_size: usize,
+        activation: crate::GluActivationType,
+    ) -> Result<Option<Tensor>> {
+        let Some(mut output) = self
+            .weight
+            .try_forward_fused_split_glu(input, split_size, activation)?
+        else {
+            return Ok(None);
+        };
+        if !self.all_reduce.is_noop() {
+            output = self.all_reduce.sum_all_reduce(&output.contiguous()?)?;
+        }
+        if let Some(bias) = &self.bias {
+            output = output.broadcast_add(bias)?;
+        }
+        Ok(Some(output))
+    }
+
     fn quantized_act_type(&self) -> Option<candle_core::DType> {
         self.weight.quantized_act_type()
     }
@@ -1682,6 +1715,25 @@ impl QuantMethod for ColumnParallelLayer {
         Ok(xs)
     }
 
+    #[cfg(feature = "cuda")]
+    fn try_forward_fused_split_glu(
+        &self,
+        input: &Tensor,
+        split_size: usize,
+        activation: crate::GluActivationType,
+    ) -> Result<Option<Tensor>> {
+        let Some(mut output) = self
+            .weight
+            .try_forward_fused_split_glu(input, split_size, activation)?
+        else {
+            return Ok(None);
+        };
+        if let Some(bias) = &self.bias {
+            output = output.broadcast_add(bias)?;
+        }
+        Ok(Some(output))
+    }
+
     fn quantized_act_type(&self) -> Option<candle_core::DType> {
         self.weight.quantized_act_type()
     }
@@ -2224,6 +2276,17 @@ impl QuantMethod for ReplicatedLayer {
 
     fn forward_quantized(&self, a: &QuantizedActivation) -> Result<Tensor> {
         self.0.forward_quantized(a)
+    }
+
+    #[cfg(feature = "cuda")]
+    fn try_forward_fused_split_glu(
+        &self,
+        input: &Tensor,
+        split_size: usize,
+        activation: crate::GluActivationType,
+    ) -> Result<Option<Tensor>> {
+        self.0
+            .try_forward_fused_split_glu(input, split_size, activation)
     }
 
     fn quantized_act_type(&self) -> Option<candle_core::DType> {

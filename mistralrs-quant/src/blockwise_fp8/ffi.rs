@@ -73,6 +73,19 @@ extern "C" {
         workspace_bytes: usize,
         stream: *mut core::ffi::c_void,
     ) -> i32;
+
+    #[allow(dead_code)]
+    pub(crate) fn mistralrs_deepgemm_sm90_gemm_prequantized(
+        prepared: *const DeepGemmPrepared,
+        m: u32,
+        activation_e4m3: *const core::ffi::c_void,
+        activation_scales: *const f32,
+        activation_scale_stride_m: u32,
+        weight_e4m3: *const core::ffi::c_void,
+        weight_scales: *const f32,
+        output_bf16: *mut core::ffi::c_void,
+        stream: *mut core::ffi::c_void,
+    ) -> i32;
 }
 
 #[cfg(has_cutlass_fp8_sm90_kernels)]

@@ -189,6 +189,17 @@ impl QuantMethod for PendingIsqLayer {
         self.resolve()?.forward_quantized(a)
     }
 
+    #[cfg(feature = "cuda")]
+    fn try_forward_fused_split_glu(
+        &self,
+        input: &Tensor,
+        split_size: usize,
+        activation: crate::GluActivationType,
+    ) -> Result<Option<Tensor>> {
+        self.resolve()?
+            .try_forward_fused_split_glu(input, split_size, activation)
+    }
+
     fn quantized_act_type(&self) -> Option<DType> {
         self.resolve().ok()?.quantized_act_type()
     }
