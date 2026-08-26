@@ -203,7 +203,9 @@ impl PagedAttentionScheduler {
             .iter()
             .any(|seq| get_mut_arcmutex!(seq).is_prompt());
         let has_prompt = has_running_prompt || !self.waiting.is_empty();
-        if !has_prompt && self.decode_steps_since_prefill > 0 {
+        if !has_prompt
+            && self.decode_steps_since_prefill >= self.config.max_decode_steps_before_prefill
+        {
             self.prompt_admission_epoch = false;
         } else if !self
             .running
@@ -3190,18 +3192,49 @@ mod tests {
     }
 
     #[test]
-    fn admission_epoch_clears_after_prompt_backlog_drains() {
+    fn admission_epoch_survives_a_transient_prompt_free_gap() {
         let mut scheduler = test_scheduler();
+        scheduler.scheduler_visible_prompt_chunks = true;
+        scheduler.config.max_prefill_chunk_tokens = 512;
         scheduler.prompt_admission_epoch = true;
         scheduler.running.push_back(test_sequence(0, 4));
+        scheduler.decode_steps_since_prefill = 1;
 
         scheduler.update_prompt_admission_epoch();
 
         assert!(scheduler.prompt_admission_epoch);
-        scheduler.decode_steps_since_prefill = 1;
+        let prompt = test_sequence(1, 1024);
+        get_mut_arcmutex!(prompt).set_state(SequenceState::Waiting);
+        scheduler.waiting.push_back(prompt);
+        scheduler.update_prompt_admission_epoch();
+
+        assert!(scheduler.prompt_admission_epoch);
+        assert_eq!(scheduler.prefill_token_budget(true), 4096);
+    }
+
+    #[test]
+    fn admission_epoch_closes_after_the_decode_fairness_window() {
+        let mut scheduler = test_scheduler();
+        scheduler.scheduler_visible_prompt_chunks = true;
+        scheduler.config.max_prefill_chunk_tokens = 512;
+        scheduler.prompt_admission_epoch = true;
+        scheduler.running.push_back(test_sequence(0, 4));
+        scheduler.decode_steps_since_prefill = scheduler.config.max_decode_steps_before_prefill - 1;
+
+        scheduler.update_prompt_admission_epoch();
+
+        assert!(scheduler.prompt_admission_epoch);
+        scheduler.decode_steps_since_prefill = scheduler.config.max_decode_steps_before_prefill;
         scheduler.update_prompt_admission_epoch();
 
         assert!(!scheduler.prompt_admission_epoch);
+        let prompt = test_sequence(1, 1024);
+        get_mut_arcmutex!(prompt).set_state(SequenceState::Waiting);
+        scheduler.waiting.push_back(prompt);
+        scheduler.update_prompt_admission_epoch();
+
+        assert!(!scheduler.prompt_admission_epoch);
+        assert_eq!(scheduler.prefill_token_budget(true), 512);
     }
 
     #[test]
