@@ -738,7 +738,74 @@ impl Sampler {
             .iter()
             .map(|value| ((*value * plan.inverse_temperature - global_max).exp()) / denom)
             .collect::<Vec<_>>();
-        let selected = if matches!(plan.kind, CudaBatchSamplingKind::Greedy) || row_k == 1 {
+        self.sample_cuda_topk_probabilities(
+            &top_indices,
+            reporting_probs,
+            matches!(plan.kind, CudaBatchSamplingKind::Greedy) || row_k == 1,
+            rng,
+        )
+    }
+
+    #[cfg(feature = "cuda")]
+    pub(crate) fn sample_cuda_ranked_topk_packed_row(
+        &self,
+        packed: &[f32],
+        packed_k: usize,
+        plan: CudaBatchSamplingPlan,
+        rng: &mut Isaac64Rng,
+    ) -> Result<Logprobs> {
+        let expected = 2 * packed_k;
+        if packed.len() != expected {
+            candle_core::bail!(
+                "invalid batched CUDA ranked top-k row length {}, expected {expected}",
+                packed.len()
+            );
+        }
+        let row_k = match plan.kind {
+            CudaBatchSamplingKind::Greedy => 1,
+            CudaBatchSamplingKind::TopK { k } => k.min(packed_k),
+            CudaBatchSamplingKind::Categorical => {
+                candle_core::bail!("categorical plan cannot parse CUDA ranked top-k output")
+            }
+        };
+        let top_values = &packed[..row_k];
+        let top_indices = packed[packed_k..packed_k + row_k]
+            .iter()
+            .map(|idx| *idx as u32)
+            .collect::<Vec<_>>();
+        let scaled_max =
+            top_values.first().copied().unwrap_or(f32::NEG_INFINITY) * plan.inverse_temperature;
+        if !scaled_max.is_finite() {
+            candle_core::bail!("invalid batched CUDA ranked top-k maximum");
+        }
+        let mut reporting_probs = top_values
+            .iter()
+            .map(|value| (*value * plan.inverse_temperature - scaled_max).exp())
+            .collect::<Vec<_>>();
+        let denominator = reporting_probs.iter().sum::<f32>();
+        if denominator <= 0.0 || !denominator.is_finite() {
+            candle_core::bail!("invalid batched CUDA ranked top-k normalizer");
+        }
+        for probability in &mut reporting_probs {
+            *probability /= denominator;
+        }
+        self.sample_cuda_topk_probabilities(
+            &top_indices,
+            reporting_probs,
+            matches!(plan.kind, CudaBatchSamplingKind::Greedy) || row_k == 1,
+            rng,
+        )
+    }
+
+    #[cfg(feature = "cuda")]
+    fn sample_cuda_topk_probabilities(
+        &self,
+        top_indices: &[u32],
+        reporting_probs: Vec<f32>,
+        greedy: bool,
+        rng: &mut Isaac64Rng,
+    ) -> Result<Logprobs> {
+        let selected = if greedy {
             0
         } else {
             let mut sampling_probs = reporting_probs.clone();
@@ -2451,6 +2518,74 @@ mod tests {
 
         assert_eq!(sampled.token, 7);
         assert!((sampled.logprob - 0.5f32.ln()).abs() < 1e-6);
+    }
+
+    #[cfg(feature = "cuda")]
+    #[test]
+    fn cuda_ranked_topk_matches_packed_reference_for_fixed_seeds() {
+        use super::Sampler;
+        use rand::SeedableRng;
+        use rand_isaac::Isaac64Rng;
+
+        for k in [20, 32] {
+            let sampler = Sampler::new(
+                Some(0.8),
+                0,
+                None,
+                None,
+                None,
+                None,
+                None,
+                k as i64,
+                0.37,
+                0.05,
+                HashMap::new(),
+                vec![],
+            )
+            .unwrap();
+            let plan = sampler.cuda_batch_sampling_plan(false).unwrap();
+            let values = (0..k)
+                .map(|slot| 5.0 - (slot / 4) as f32 * 0.25)
+                .collect::<Vec<_>>();
+            let indices = (0..k).map(|slot| (1000 + slot) as f32).collect::<Vec<_>>();
+            let scaled_max = values[0] * plan.inverse_temperature;
+            let probabilities = values
+                .iter()
+                .map(|value| (*value * plan.inverse_temperature - scaled_max).exp())
+                .collect::<Vec<_>>();
+            let denominator = probabilities.iter().sum::<f32>();
+            let cutoff = 0.37 * denominator;
+            let mut cumulative = 0.0f32;
+            let mut support = 0;
+            for probability in &probabilities {
+                if cumulative >= cutoff {
+                    break;
+                }
+                cumulative += probability;
+                support += 1;
+            }
+
+            let mut ranked = Vec::with_capacity(2 * k);
+            ranked.extend_from_slice(&values);
+            ranked.extend_from_slice(&indices);
+            let mut full = ranked.clone();
+            full.extend_from_slice(&[denominator, scaled_max]);
+
+            for seed in 0..256 {
+                let mut reference_rng = Isaac64Rng::seed_from_u64(seed);
+                let reference = sampler
+                    .sample_cuda_topk_packed_row(&full, k, plan, &mut reference_rng)
+                    .unwrap();
+                let mut ranked_rng = Isaac64Rng::seed_from_u64(seed);
+                let actual = sampler
+                    .sample_cuda_ranked_topk_packed_row(&ranked, k, plan, &mut ranked_rng)
+                    .unwrap();
+
+                assert_eq!(actual.token, reference.token);
+                assert_eq!(actual.logprob, reference.logprob);
+                assert!((actual.token as usize) < 1000 + support);
+            }
+        }
     }
 
     #[cfg(feature = "cuda")]

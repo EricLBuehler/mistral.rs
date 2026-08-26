@@ -43,6 +43,8 @@ use crate::{
     utils::{progress::NiceProgressBar, unvarbuilder::UnVarBuilder},
 };
 
+const GDN_PENDING_APPLY_MAX_LAYERS: usize = 32;
+
 impl GdnConfig for TextConfig {
     fn hidden_size(&self) -> usize {
         self.hidden_size
@@ -285,7 +287,10 @@ impl FullAttention {
             cos_sin.0.to_device(q.device())?,
             cos_sin.1.to_device(q.device())?,
         );
-        (q, k) = self.rotary_emb.forward_qk_norm(
+        let tokens_first = metadata
+            .as_ref()
+            .is_some_and(|(_, input_metadata)| input_metadata.is_decode_step());
+        (q, k) = self.rotary_emb.forward_qk_norm_layout(
             cos_sin,
             &q,
             &k,
@@ -293,6 +298,7 @@ impl FullAttention {
             self.k_norm.weight(),
             self.q_norm.eps(),
             self.k_norm.eps(),
+            tokens_first,
         )?;
 
         // Standard attention
@@ -497,10 +503,11 @@ impl DecoderLayer {
             metadata,
             flash_params,
         )?;
-        let (x, normed) = self
-            .post_attention_layernorm
-            .forward_add_rms_norm(&attn_out, residual)?;
-        let ffn_out = self.mlp.forward(&normed)?;
+        let (x, ffn_out) = self.mlp.forward_with_add_rms_norm(
+            &attn_out,
+            residual,
+            &self.post_attention_layernorm,
+        )?;
         Ok(DecoderLayerOutput {
             branch: ffn_out,
             residual: x,
@@ -542,10 +549,11 @@ impl DecoderLayer {
                 stash_out,
             )?
         };
-        let (x, normed) = self
-            .post_attention_layernorm
-            .forward_add_rms_norm(&gdn_out, residual)?;
-        let ffn_out = self.mlp.forward(&normed)?;
+        let (x, ffn_out) = self.mlp.forward_with_add_rms_norm(
+            &gdn_out,
+            residual,
+            &self.post_attention_layernorm,
+        )?;
         Ok(DecoderLayerOutput {
             branch: ffn_out,
             residual: x,
@@ -562,8 +570,8 @@ enum TextWeightPrefix {
     Model,
 }
 
-/// Target activations captured for the MTP proposer: hidden states after the final norm and the
-/// MRoPE position ids they were computed at, `[b, rows, hidden]` / `[3, b, rows]`.
+/// Target activations captured for the MTP proposer: hidden states after the final norm and their
+/// text RoPE or MRoPE position ids, `[b, rows, hidden]` / `[b, rows]` or `[3, b, rows]`.
 #[derive(Clone)]
 pub(super) struct SpecCapture {
     pub(super) hidden: Tensor,
@@ -595,6 +603,12 @@ pub(super) enum GdnLayerRollback {
         recurrent_state: Tensor,
     },
     Transition(GdnTransitionStash),
+}
+
+struct GdnPendingApplyGroup {
+    device: Device,
+    config: GdnTransitionCommitConfig,
+    layers: Vec<usize>,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -674,9 +688,14 @@ fn narrow_spec_capture(capture: &mut SpecCapture, real_batch: usize) -> Result<(
         real_batch,
         "hidden state",
     )?;
+    let position_batch_dim = match capture.positions.rank() {
+        2 => 0,
+        3 => 1,
+        rank => candle_core::bail!("unexpected speculative position rank {rank}"),
+    };
     capture.positions = narrow_spec_graph_tensor(
         &capture.positions,
-        1,
+        position_batch_dim,
         captured_batch,
         real_batch,
         "positions",
@@ -732,36 +751,7 @@ fn narrow_gdn_replay_stash(stash: &mut GdnReplayStash, real_batch: usize) -> Res
                     "recurrent_state",
                 )?;
             }
-            GdnLayerRollback::Transition(transition) => {
-                transition.conv_input = narrow_spec_graph_tensor(
-                    &transition.conv_input,
-                    0,
-                    captured_batch,
-                    real_batch,
-                    "transition conv input",
-                )?;
-                transition.transitions.key = narrow_spec_graph_tensor(
-                    &transition.transitions.key,
-                    0,
-                    captured_batch,
-                    real_batch,
-                    "transition key",
-                )?;
-                transition.transitions.delta = narrow_spec_graph_tensor(
-                    &transition.transitions.delta,
-                    0,
-                    captured_batch,
-                    real_batch,
-                    "transition delta",
-                )?;
-                transition.transitions.decay = narrow_spec_graph_tensor(
-                    &transition.transitions.decay,
-                    0,
-                    captured_batch,
-                    real_batch,
-                    "transition decay",
-                )?;
-            }
+            GdnLayerRollback::Transition(_) => {}
         }
     }
     stash.slots.truncate(real_batch);
@@ -908,12 +898,7 @@ impl crate::speculative::SpeculativeGraphState for SpecGraphState {
                         out.push(conv_state.clone());
                         out.push(recurrent_state.clone());
                     }
-                    GdnLayerRollback::Transition(transition) => {
-                        out.push(transition.conv_input.clone());
-                        out.push(transition.transitions.key.clone());
-                        out.push(transition.transitions.delta.clone());
-                        out.push(transition.transitions.decay.clone());
-                    }
+                    GdnLayerRollback::Transition(_) => {}
                 }
             }
         }
@@ -956,12 +941,7 @@ impl crate::speculative::SpeculativeGraphState for SpecGraphState {
                         *conv_state = next()?;
                         *recurrent_state = next()?;
                     }
-                    GdnLayerRollback::Transition(transition) => {
-                        transition.conv_input = next()?;
-                        transition.transitions.key = next()?;
-                        transition.transitions.delta = next()?;
-                        transition.transitions.decay = next()?;
-                    }
+                    GdnLayerRollback::Transition(_) => {}
                 }
             }
         }
@@ -1337,13 +1317,38 @@ impl Qwen3_5TextModel {
         if !cache.uses_recurrent_transition_log() {
             return Ok(false);
         }
+        let active_slots = Tensor::from_vec(slots.clone(), (slots.len(),), &self.device)?;
+        self.apply_pending_recurrent_transitions(cache, &active_slots, false)
+    }
 
-        struct ApplyGroup {
-            device: Device,
-            config: GdnTransitionCommitConfig,
-            layers: Vec<usize>,
+    fn apply_pending_recurrent_transitions_for_current_batch(
+        &self,
+        cache: &HybridCache,
+    ) -> Result<bool> {
+        let Some(active_slots) = cache.state_indices() else {
+            return Ok(false);
+        };
+        self.apply_pending_recurrent_transitions(cache, active_slots, true)
+    }
+
+    pub(super) fn apply_current_recurrent_transitions(&self) -> Result<bool> {
+        let cache = self.cache.hybrid();
+        self.apply_pending_recurrent_transitions_for_current_batch(&cache)
+    }
+
+    fn apply_pending_recurrent_transitions(
+        &self,
+        cache: &HybridCache,
+        active_slots: &Tensor,
+        use_cached_device_slots: bool,
+    ) -> Result<bool> {
+        if active_slots.elem_count() == 0 {
+            return Ok(true);
         }
-        let mut groups = Vec::<ApplyGroup>::new();
+        if !cache.uses_recurrent_transition_log() {
+            return Ok(false);
+        }
+        let mut groups = Vec::<GdnPendingApplyGroup>::new();
         for (layer_idx, layer_type) in self.layer_types.iter().enumerate() {
             if *layer_type != LayerType::LinearAttention {
                 continue;
@@ -1366,7 +1371,7 @@ impl Qwen3_5TextModel {
             {
                 group.layers.push(layer_idx);
             } else {
-                groups.push(ApplyGroup {
+                groups.push(GdnPendingApplyGroup {
                     device: device.clone(),
                     config,
                     layers: vec![layer_idx],
@@ -1378,42 +1383,55 @@ impl Qwen3_5TextModel {
         }
 
         for group in groups {
-            let active_slots = Tensor::from_vec(slots.clone(), (slots.len(),), &group.device)?;
-            let mut layers = Vec::with_capacity(group.layers.len());
-            for layer_idx in group.layers {
-                let Some(HybridLayerCache::Recurrent(pool)) = cache.get(layer_idx) else {
-                    unreachable!("GDN transition pool was validated above")
-                };
-                let pending = pool
-                    .pending_transitions()
-                    .expect("GDN pending transition pool was validated above");
-                layers.push(crate::cuda::gdn::GdnPendingTransitionApplyLayer {
-                    pending_conv_input: &pending.conv_input,
-                    pending_key: &pending.key,
-                    pending_delta: &pending.delta,
-                    pending_decay: &pending.decay,
-                    pending_keep_rows: &pending.keep_rows,
-                    pending_epochs: &pending.pending_epochs,
-                    conv_applied_epochs: &pending.conv_applied_epochs,
-                    recurrent_applied_epochs: &pending.recurrent_applied_epochs,
-                    conv_state: &pool.conv_state,
-                    recurrent_state: &pool.recurrent_state,
-                });
+            let active_slots = if use_cached_device_slots {
+                cache
+                    .state_indices_for_device(&group.device)
+                    .ok_or_else(|| {
+                        candle_core::Error::msg(
+                            "GDN transition batch has no device-local state slots",
+                        )
+                    })?
+            } else {
+                active_slots.to_device(&group.device)?
+            };
+            for layer_indices in group.layers.chunks(GDN_PENDING_APPLY_MAX_LAYERS) {
+                let mut layers = Vec::with_capacity(layer_indices.len());
+                for &layer_idx in layer_indices {
+                    let Some(HybridLayerCache::Recurrent(pool)) = cache.get(layer_idx) else {
+                        unreachable!("GDN transition pool was validated above")
+                    };
+                    let pending = pool
+                        .pending_transitions()
+                        .expect("GDN pending transition pool was validated above");
+                    layers.push(crate::cuda::gdn::GdnPendingTransitionApplyLayer {
+                        pending_conv_input: &pending.conv_input,
+                        pending_key_banks: &pending.key_banks,
+                        pending_key_bank: &pending.key_bank,
+                        pending_delta: &pending.delta,
+                        pending_decay: &pending.decay,
+                        pending_keep_rows: &pending.keep_rows,
+                        pending_epochs: &pending.pending_epochs,
+                        conv_applied_epochs: &pending.conv_applied_epochs,
+                        recurrent_applied_epochs: &pending.recurrent_applied_epochs,
+                        conv_state: &pool.conv_state,
+                        recurrent_state: &pool.recurrent_state,
+                    });
+                }
+                crate::cuda::gdn::pending_transition_apply_batched_cuda(
+                    crate::cuda::gdn::GdnPendingTransitionApply {
+                        layers: &layers,
+                        active_slots: &active_slots,
+                        num_k_heads: group.config.num_k_heads,
+                        num_v_heads: group.config.num_v_heads,
+                        head_k_dim: group.config.head_k_dim,
+                        head_v_dim: group.config.head_v_dim,
+                        conv_dim: group.config.conv_dim,
+                        conv_width: group.config.conv_width,
+                        tiled_v_heads: group.config.tiled_v_heads,
+                        state_layout: group.config.state_layout,
+                    },
+                )?;
             }
-            crate::cuda::gdn::pending_transition_apply_batched_cuda(
-                crate::cuda::gdn::GdnPendingTransitionApply {
-                    layers: &layers,
-                    active_slots: &active_slots,
-                    num_k_heads: group.config.num_k_heads,
-                    num_v_heads: group.config.num_v_heads,
-                    head_k_dim: group.config.head_k_dim,
-                    head_v_dim: group.config.head_v_dim,
-                    conv_dim: group.config.conv_dim,
-                    conv_width: group.config.conv_width,
-                    tiled_v_heads: group.config.tiled_v_heads,
-                    state_layout: group.config.state_layout,
-                },
-            )?;
         }
         Ok(true)
     }
@@ -1458,19 +1476,30 @@ impl Qwen3_5TextModel {
 
         let max_rows = self.cache.hybrid().checkpoint_lanes();
         let keep_rows_host = gdn_transition_keep_rows(rows, stash.slots.len(), max_rows)?;
+        let mut live_slots = stash
+            .slots
+            .iter()
+            .copied()
+            .filter(|slot| *slot != crate::cuda::gdn::GDN_PAD_SLOT)
+            .collect::<Vec<_>>();
+        live_slots.sort_unstable();
+        if live_slots.windows(2).any(|slots| slots[0] == slots[1]) {
+            candle_core::bail!("GDN transition batch contains duplicate recurrent slots");
+        }
 
-        struct StageGroup {
+        struct PublishGroup {
             device: Device,
-            config: GdnTransitionCommitConfig,
+            capacity: usize,
+            max_rows: usize,
             layers: Vec<usize>,
         }
         let cache = self.cache.hybrid();
         if !cache.uses_recurrent_transition_log() {
             return Ok(false);
         }
-        let mut groups = Vec::<StageGroup>::new();
+        let mut groups = Vec::<PublishGroup>::new();
         for (stash_idx, layer) in stash.layers.iter().enumerate() {
-            let GdnLayerRollback::Transition(transition) = &layer.rollback else {
+            let GdnLayerRollback::Transition(_) = &layer.rollback else {
                 unreachable!("transition stash was validated above")
             };
             let (LayerImpl::LinearAttention(gdn), Some(HybridLayerCache::Recurrent(pool))) = (
@@ -1486,26 +1515,34 @@ impl Qwen3_5TextModel {
                 || pool.state_layout() != layer.state_layout
                 || pending.capacity() != cache.recurrent_capacity()
                 || pending.spec().num_k_heads != gdn.transition_commit_config(pool).num_k_heads
+                || pending.spec().max_rows != max_rows
             {
                 return Ok(false);
             }
-            let config = gdn.transition_commit_config(pool);
-            let device = transition.conv_input.device();
-            if let Some(group) = groups
-                .iter_mut()
-                .find(|group| group.config == config && group.device.same_device(device))
-            {
+            let device = pool.device();
+            if let Some(group) = groups.iter_mut().find(|group| {
+                group.capacity == pending.capacity()
+                    && group.max_rows == pending.spec().max_rows
+                    && group.device.same_device(device)
+            }) {
                 group.layers.push(stash_idx);
             } else {
-                groups.push(StageGroup {
+                groups.push(PublishGroup {
                     device: device.clone(),
-                    config,
+                    capacity: pending.capacity(),
+                    max_rows: pending.spec().max_rows,
                     layers: vec![stash_idx],
                 });
             }
         }
 
         for group in groups {
+            if live_slots
+                .iter()
+                .any(|slot| *slot as usize >= group.capacity)
+            {
+                candle_core::bail!("GDN transition slot exceeds recurrent capacity");
+            }
             let keep_rows = Tensor::from_vec(
                 keep_rows_host.clone(),
                 (keep_rows_host.len(),),
@@ -1515,7 +1552,7 @@ impl Qwen3_5TextModel {
             let mut layers = Vec::with_capacity(group.layers.len());
             for stash_idx in group.layers {
                 let layer = &stash.layers[stash_idx];
-                let GdnLayerRollback::Transition(transition) = &layer.rollback else {
+                let GdnLayerRollback::Transition(_) = &layer.rollback else {
                     unreachable!("transition stash was validated above")
                 };
                 let Some(HybridLayerCache::Recurrent(pool)) = cache.get(layer.layer_idx) else {
@@ -1524,29 +1561,19 @@ impl Qwen3_5TextModel {
                 let pending = pool
                     .pending_transitions()
                     .expect("pending transition pool was validated above");
-                layers.push(crate::cuda::gdn::GdnSpeculativeTransitionStageLayer {
-                    conv_input: &transition.conv_input,
-                    key: &transition.transitions.key,
-                    delta: &transition.transitions.delta,
-                    decay: &transition.transitions.decay,
-                    pending_conv_input: &pending.conv_input,
-                    pending_key: &pending.key,
-                    pending_delta: &pending.delta,
-                    pending_decay: &pending.decay,
+                layers.push(crate::cuda::gdn::GdnPendingTransitionPublishLayer {
                     pending_keep_rows: &pending.keep_rows,
                     pending_epochs: &pending.pending_epochs,
+                    pending_key_bank: &pending.key_bank,
                 });
             }
-            crate::cuda::gdn::speculative_transition_stage_batched_cuda(
-                crate::cuda::gdn::GdnSpeculativeTransitionStage {
+            crate::cuda::gdn::pending_transition_publish_batched_cuda(
+                crate::cuda::gdn::GdnPendingTransitionPublish {
                     layers: &layers,
                     keep_rows: &keep_rows,
                     destination_slots: &slots,
-                    num_k_heads: group.config.num_k_heads,
-                    num_v_heads: group.config.num_v_heads,
-                    head_k_dim: group.config.head_k_dim,
-                    head_v_dim: group.config.head_v_dim,
-                    conv_dim: group.config.conv_dim,
+                    max_rows: group.max_rows,
+                    destination_capacity: group.capacity,
                 },
             )?;
         }
@@ -1580,105 +1607,7 @@ impl Qwen3_5TextModel {
             candle_core::bail!("GDN speculative stash mixes replay and transition layers");
         }
         if transition_layers == stash.layers.len() && !stash.layers.is_empty() {
-            let mut keep_rows_host = vec![0u32; stash.slots.len()];
-            for &(batch_idx, rows) in rows {
-                let keep_rows = u32::try_from(rows).map_err(|_| {
-                    candle_core::Error::msg(format!("GDN commit row count {rows} exceeds u32"))
-                })?;
-                *keep_rows_host.get_mut(batch_idx).ok_or_else(|| {
-                    candle_core::Error::msg(format!(
-                        "GDN transition stash has no batch row {batch_idx}"
-                    ))
-                })? = keep_rows;
-            }
-
-            struct TransitionGroup {
-                device: Device,
-                config: GdnTransitionCommitConfig,
-                layers: Vec<usize>,
-            }
-            let hybrid_cache = self.cache.hybrid();
-            if !hybrid_cache.uses_recurrent_transition_log() {
-                candle_core::bail!("GDN transition stash requires transition-log cache storage");
-            }
-            let mut groups = Vec::<TransitionGroup>::new();
-            for (stash_idx, layer) in stash.layers.iter().enumerate() {
-                let GdnLayerRollback::Transition(transition) = &layer.rollback else {
-                    unreachable!("transition layer count was checked above")
-                };
-                let (LayerImpl::LinearAttention(gdn), Some(HybridLayerCache::Recurrent(pool))) = (
-                    &self.layers[layer.layer_idx].layer_impl,
-                    hybrid_cache.get(layer.layer_idx),
-                ) else {
-                    candle_core::bail!(
-                        "GDN transition stash layer {} has no recurrent state pool",
-                        layer.layer_idx
-                    );
-                };
-                if !gdn.speculative_transitions_supported(pool, self.dtype)
-                    || pool.state_layout() != layer.state_layout
-                {
-                    candle_core::bail!("GDN transition commit configuration changed after capture");
-                }
-                let config = gdn.transition_commit_config(pool);
-                let device = transition.conv_input.device();
-                if let Some(group) = groups
-                    .iter_mut()
-                    .find(|group| group.config == config && group.device.same_device(device))
-                {
-                    group.layers.push(stash_idx);
-                } else {
-                    groups.push(TransitionGroup {
-                        device: device.clone(),
-                        config,
-                        layers: vec![stash_idx],
-                    });
-                }
-            }
-            for group in groups {
-                let keep_rows = Tensor::from_vec(
-                    keep_rows_host.clone(),
-                    (keep_rows_host.len(),),
-                    &group.device,
-                )?;
-                let slots =
-                    Tensor::from_vec(stash.slots.clone(), (stash.slots.len(),), &group.device)?;
-                let mut layers = Vec::with_capacity(group.layers.len());
-                for stash_idx in group.layers {
-                    let layer = &stash.layers[stash_idx];
-                    let GdnLayerRollback::Transition(transition) = &layer.rollback else {
-                        unreachable!("transition layer count was checked above")
-                    };
-                    let Some(HybridLayerCache::Recurrent(pool)) = hybrid_cache.get(layer.layer_idx)
-                    else {
-                        unreachable!("transition pool was validated above")
-                    };
-                    layers.push(crate::cuda::gdn::GdnSpeculativeTransitionLayer {
-                        conv_input: &transition.conv_input,
-                        key: &transition.transitions.key,
-                        delta: &transition.transitions.delta,
-                        decay: &transition.transitions.decay,
-                        conv_state: &pool.conv_state,
-                        recurrent_state: &pool.recurrent_state,
-                    });
-                }
-                crate::cuda::gdn::speculative_transition_commit_batched_cuda(
-                    crate::cuda::gdn::GdnSpeculativeTransitionCommit {
-                        layers: &layers,
-                        keep_rows: &keep_rows,
-                        active_slots: &slots,
-                        num_k_heads: group.config.num_k_heads,
-                        num_v_heads: group.config.num_v_heads,
-                        head_k_dim: group.config.head_k_dim,
-                        head_v_dim: group.config.head_v_dim,
-                        conv_dim: group.config.conv_dim,
-                        conv_width: group.config.conv_width,
-                        tiled_v_heads: group.config.tiled_v_heads,
-                        state_layout: group.config.state_layout,
-                    },
-                )?;
-            }
-            return Ok(());
+            candle_core::bail!("GDN direct transitions must be published before replay fallback");
         }
 
         let devices = stash.layers.iter().fold(Vec::new(), |mut devices, layer| {
@@ -2068,9 +1997,15 @@ impl Qwen3_5TextModel {
                 .position(|lt| *lt == LayerType::FullAttention)
                 .expect("No full attention layer found");
             match &self.layers[first_attn_idx].layer_impl {
-                LayerImpl::FullAttention(attn) => {
-                    attn.rotary_emb.compute_cos_sin(position_ids, xs.dtype())?
-                }
+                LayerImpl::FullAttention(attn) => match position_ids.rank() {
+                    2 => attn
+                        .rotary_emb
+                        .compute_text_cos_sin(position_ids, xs.dtype())?,
+                    3 => attn.rotary_emb.compute_cos_sin(position_ids, xs.dtype())?,
+                    rank => {
+                        candle_core::bail!("unexpected Qwen3.5 position rank {rank}")
+                    }
+                },
                 _ => unreachable!(),
             }
         };
@@ -2086,13 +2021,12 @@ impl Qwen3_5TextModel {
             && hybrid_cache.uses_recurrent_transition_log()
             && query_len <= crate::cuda::gdn::GDN_SPEC_FUSED_MAX_TOKENS
             && self.supports_recurrent_speculative_transitions_with_cache(&hybrid_cache);
-        if hybrid_cache.uses_recurrent_transition_log() && !transition_gdn {
-            let slots = recurrent_metadata
-                .as_ref()
-                .and_then(|metadata| metadata.state_indices_host())
-                .unwrap_or_default();
-            if !self.apply_pending_recurrent_transitions_with_cache(&hybrid_cache, slots)?
-                && !slots.is_empty()
+        if !transition_gdn && hybrid_cache.uses_recurrent_transition_log() {
+            let has_slots = hybrid_cache
+                .state_indices()
+                .is_some_and(|slots| slots.elem_count() != 0);
+            if !self.apply_pending_recurrent_transitions_for_current_batch(&hybrid_cache)?
+                && has_slots
             {
                 candle_core::bail!("Qwen3.5 pending recurrent transitions cannot be applied");
             }
@@ -2314,9 +2248,14 @@ impl Qwen3_5TextModel {
                 .as_ref()
                 .is_some_and(|metadata| metadata.batch_kind() == RecurrentBatchKind::Prefill)
             {
+                let positions = position_ids.to_device(&self.device)?;
+                let positions = match positions.rank() {
+                    2 | 3 => positions,
+                    rank => candle_core::bail!("unexpected Qwen3.5 position rank {rank}"),
+                };
                 Some(SpecCapture {
                     hidden: xs.clone(),
-                    positions: position_ids.to_device(&self.device)?,
+                    positions,
                     taps: taps_all.clone(),
                 })
             } else {
@@ -2329,12 +2268,15 @@ impl Qwen3_5TextModel {
         }
         let xs = ctx.logits(&xs)?;
         if store_spec {
-            // Reduce the position ids exactly like the hidden rows so they stay aligned
-            let positions = position_ids
-                .to_device(&self.device)?
-                .permute((1, 2, 0))?
-                .contiguous()?;
-            let positions = ctx.logits(&positions)?.permute((2, 0, 1))?.contiguous()?;
+            let positions = position_ids.to_device(&self.device)?;
+            let positions = match positions.rank() {
+                2 => ctx.logits(&positions.unsqueeze(D::Minus1)?)?.squeeze(2)?,
+                3 => {
+                    let positions = positions.permute((1, 2, 0))?.contiguous()?;
+                    ctx.logits(&positions)?.permute((2, 0, 1))?.contiguous()?
+                }
+                rank => candle_core::bail!("unexpected Qwen3.5 position rank {rank}"),
+            };
             let taps = taps_all
                 .iter()
                 .map(|t| ctx.logits(t))
@@ -2440,6 +2382,10 @@ impl crate::speculative::SpeculativeTargetMixin for Qwen3_5TextModel {
         self.reserve_recurrent_transition_storage()
     }
 
+    fn apply_recurrent_speculative_transitions_for_current_batch(&self) -> Result<bool> {
+        self.apply_current_recurrent_transitions()
+    }
+
     fn flush_recurrent_speculative_transitions(&self, seq_ids: &[usize]) -> Result<()> {
         self.flush_recurrent_transitions_for_sequences(seq_ids)
     }
@@ -2477,10 +2423,7 @@ impl NormalModel for Qwen3_5TextModel {
             .text_positions(input_ids.device(), seq_len)?
             .ok_or_else(|| candle_core::Error::msg("Qwen3.5 is missing text positions"))?
             .clone();
-        let position_ids = text_positions
-            .reshape((batch_size, seq_len))?
-            .unsqueeze(0)?
-            .repeat((3, 1, 1))?;
+        let position_ids = text_positions.reshape((batch_size, seq_len))?;
         self.forward_embeds(
             input_embeds,
             &attention_mask,
@@ -2551,7 +2494,6 @@ mod tests {
         SpecGraphState,
     };
     use crate::{
-        cuda::gdn::GdnSpeculativeTransitions,
         gdn::{GdnForwardStash, GdnTransitionStash},
         kv_cache::RecurrentStateLayout,
         pipeline::RecurrentBatchKind,
@@ -2737,14 +2679,19 @@ mod tests {
     #[test]
     fn speculative_graph_state_narrows_a_bucket_to_the_live_batch() {
         let device = Device::Cpu;
-        let capture = || SpecCapture {
+        let mrope_capture = || SpecCapture {
             hidden: Tensor::zeros((16, 8, 32), DType::F32, &device).unwrap(),
             positions: Tensor::zeros((3, 16, 8), DType::U32, &device).unwrap(),
             taps: vec![Tensor::zeros((16, 8, 32), DType::F32, &device).unwrap()],
         };
+        let text_capture = || SpecCapture {
+            hidden: Tensor::zeros((16, 8, 32), DType::F32, &device).unwrap(),
+            positions: Tensor::zeros((16, 8), DType::U32, &device).unwrap(),
+            taps: vec![Tensor::zeros((16, 8, 32), DType::F32, &device).unwrap()],
+        };
         let state = SpecGraphState {
-            spec_capture: Some(capture()),
-            full_capture: Some(capture()),
+            spec_capture: Some(text_capture()),
+            full_capture: Some(mrope_capture()),
             gdn_stash: Some(GdnReplayStash {
                 slots: (0..16).collect(),
                 layers: vec![GdnLayerStash {
@@ -2767,14 +2714,14 @@ mod tests {
         let state = state.for_real_batch(9).unwrap();
         let state = state.as_any().downcast_ref::<SpecGraphState>().unwrap();
 
-        for capture in [
-            state.spec_capture.as_ref().unwrap(),
-            state.full_capture.as_ref().unwrap(),
-        ] {
-            assert_eq!(capture.hidden.dims(), &[9, 8, 32]);
-            assert_eq!(capture.positions.dims(), &[3, 9, 8]);
-            assert_eq!(capture.taps[0].dims(), &[9, 8, 32]);
-        }
+        let text_capture = state.spec_capture.as_ref().unwrap();
+        assert_eq!(text_capture.hidden.dims(), &[9, 8, 32]);
+        assert_eq!(text_capture.positions.dims(), &[9, 8]);
+        assert_eq!(text_capture.taps[0].dims(), &[9, 8, 32]);
+        let mrope_capture = state.full_capture.as_ref().unwrap();
+        assert_eq!(mrope_capture.hidden.dims(), &[9, 8, 32]);
+        assert_eq!(mrope_capture.positions.dims(), &[3, 9, 8]);
+        assert_eq!(mrope_capture.taps[0].dims(), &[9, 8, 32]);
         let stash = state.gdn_stash.as_ref().unwrap();
         assert_eq!(stash.slots, (0..9).collect::<Vec<_>>());
         let layer = &stash.layers[0];
@@ -2795,8 +2742,7 @@ mod tests {
     }
 
     #[test]
-    fn speculative_graph_state_narrows_transition_logs() {
-        let device = Device::Cpu;
+    fn speculative_graph_state_narrows_direct_transition_slots() {
         let state = SpecGraphState {
             spec_capture: None,
             full_capture: None,
@@ -2804,14 +2750,7 @@ mod tests {
                 slots: (0..16).collect(),
                 layers: vec![GdnLayerStash {
                     layer_idx: 2,
-                    rollback: GdnLayerRollback::Transition(GdnTransitionStash {
-                        conv_input: Tensor::zeros((16, 8, 24), DType::F32, &device).unwrap(),
-                        transitions: GdnSpeculativeTransitions {
-                            key: Tensor::zeros((16, 8, 2, 4), DType::F32, &device).unwrap(),
-                            delta: Tensor::zeros((16, 8, 4, 4), DType::F32, &device).unwrap(),
-                            decay: Tensor::zeros((16, 8, 4), DType::F32, &device).unwrap(),
-                        },
-                    }),
+                    rollback: GdnLayerRollback::Transition(GdnTransitionStash),
                     state_layout: RecurrentStateLayout::GdnValueMajor,
                 }],
             }),
@@ -2821,13 +2760,10 @@ mod tests {
         let state = state.as_any().downcast_ref::<SpecGraphState>().unwrap();
         let stash = state.gdn_stash.as_ref().unwrap();
         assert_eq!(stash.slots, (0..9).collect::<Vec<_>>());
-        let GdnLayerRollback::Transition(transition) = &stash.layers[0].rollback else {
+        let GdnLayerRollback::Transition(_) = &stash.layers[0].rollback else {
             panic!("expected transition stash")
         };
-        assert_eq!(transition.conv_input.dims(), &[9, 8, 24]);
-        assert_eq!(transition.transitions.key.dims(), &[9, 8, 2, 4]);
-        assert_eq!(transition.transitions.delta.dims(), &[9, 8, 4, 4]);
-        assert_eq!(transition.transitions.decay.dims(), &[9, 8, 4]);
+        assert!(state.tensors().is_empty());
     }
 
     #[test]

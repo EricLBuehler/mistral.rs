@@ -2359,12 +2359,12 @@ topk_large_f16_packed_batched(const __half *input,
 template <typename T>
 cudaError_t launch_topk_large_ranked_packed_batched(
     const T *input, float *block_values, uint32_t *block_indices,
-    float *packed_out, int nrows, int ncols, int k, int chunk_size, int nblocks,
-    int64_t stream) {
+    float *packed_out, void *radix_workspace, int nrows, int ncols, int k,
+    int chunk_size, int nblocks, int64_t stream) {
   const cudaStream_t custream = (cudaStream_t)stream;
   bool radix_launched = false;
   cudaError_t status = mistralrs_radix_topk::launch(
-      input, packed_out, block_values, nrows, ncols, k, custream,
+      input, packed_out, radix_workspace, nrows, ncols, k, custream,
       &radix_launched);
   if (status != cudaSuccess || radix_launched) {
     return status;
@@ -2413,28 +2413,28 @@ extern "C" size_t topk_large_ranked_state_words_per_row() {
 
 extern "C" int topk_large_ranked_f32_packed_batched(
     const float *input, float *block_values, uint32_t *block_indices,
-    float *packed_out, int nrows, int ncols, int k, int chunk_size, int nblocks,
-    int64_t stream) {
+    float *packed_out, void *radix_workspace, int nrows, int ncols, int k,
+    int chunk_size, int nblocks, int64_t stream) {
   return static_cast<int>(launch_topk_large_ranked_packed_batched(
-      input, block_values, block_indices, packed_out, nrows, ncols, k,
+      input, block_values, block_indices, packed_out, radix_workspace, nrows, ncols, k,
       chunk_size, nblocks, stream));
 }
 
 extern "C" int topk_large_ranked_bf16_packed_batched(
     const __nv_bfloat16 *input, float *block_values, uint32_t *block_indices,
-    float *packed_out, int nrows, int ncols, int k, int chunk_size, int nblocks,
-    int64_t stream) {
+    float *packed_out, void *radix_workspace, int nrows, int ncols, int k,
+    int chunk_size, int nblocks, int64_t stream) {
   return static_cast<int>(launch_topk_large_ranked_packed_batched(
-      input, block_values, block_indices, packed_out, nrows, ncols, k,
+      input, block_values, block_indices, packed_out, radix_workspace, nrows, ncols, k,
       chunk_size, nblocks, stream));
 }
 
 extern "C" int topk_large_ranked_f16_packed_batched(
     const __half *input, float *block_values, uint32_t *block_indices,
-    float *packed_out, int nrows, int ncols, int k, int chunk_size, int nblocks,
-    int64_t stream) {
+    float *packed_out, void *radix_workspace, int nrows, int ncols, int k,
+    int chunk_size, int nblocks, int64_t stream) {
   return static_cast<int>(launch_topk_large_ranked_packed_batched(
-      input, block_values, block_indices, packed_out, nrows, ncols, k,
+      input, block_values, block_indices, packed_out, radix_workspace, nrows, ncols, k,
       chunk_size, nblocks, stream));
 }
 

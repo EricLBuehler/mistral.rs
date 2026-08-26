@@ -253,6 +253,10 @@ impl PrefixCacheManagerV2 {
         !self.no_prefix_cache && self.has_paged_attention && self.paged_recurrent_capacity() > 0
     }
 
+    pub fn accepts_sequence_cache(&self) -> bool {
+        !self.no_prefix_cache && !self.has_paged_attention
+    }
+
     pub(crate) fn attach_paged_block_retention(&mut self, retention: PrefixBlockRetention) {
         assert!(
             self.paged_recurrent_caches.is_empty(),
@@ -1345,6 +1349,13 @@ mod tests {
         assert!(prefix_cacher.paged_recurrent_caches.is_empty());
         assert!(prefix_cacher.paged_recurrent_sequence_keys.is_empty());
         Ok(())
+    }
+
+    #[test]
+    fn sequence_cache_admission_excludes_paged_attention() {
+        assert!(PrefixCacheManagerV2::new(1, false, false).accepts_sequence_cache());
+        assert!(!PrefixCacheManagerV2::new(1, true, false).accepts_sequence_cache());
+        assert!(!PrefixCacheManagerV2::new(1, false, true).accepts_sequence_cache());
     }
 
     #[test]

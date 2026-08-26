@@ -3,6 +3,8 @@
 use candle_core::{DType, Device, Result, Tensor};
 
 use crate::kv_cache::RecurrentStateLayout;
+#[cfg(feature = "cuda")]
+use crate::kv_cache::GDN_PENDING_KEY_BANK_COUNT;
 
 #[cfg_attr(not(feature = "cuda"), allow(dead_code))]
 pub(crate) const GDN_PAD_SLOT: u32 = u32::MAX;
@@ -39,9 +41,12 @@ pub(crate) const GDN_SPEC_CHECKPOINT_MAX_K: usize = 256;
 pub(crate) const GDN_SPEC_FUSED_MAX_TOKENS: usize = 8;
 pub(crate) const GDN_CHANNEL_BLOCK_SIZE: usize = 256;
 #[cfg(feature = "cuda")]
+#[allow(dead_code)]
 const GDN_TRANSITION_STAGE_POINTER_SEGMENTS: usize = 10;
 #[cfg(feature = "cuda")]
-const GDN_TRANSITION_APPLY_POINTER_SEGMENTS: usize = 10;
+const GDN_TRANSITION_PUBLISH_POINTER_SEGMENTS: usize = 3;
+#[cfg(feature = "cuda")]
+const GDN_TRANSITION_APPLY_POINTER_SEGMENTS: usize = 11;
 #[cfg(feature = "cuda")]
 const GDN_DECODE_KERNEL_ENV: &str = "MISTRALRS_GDN_DECODE_KERNEL";
 #[cfg(feature = "cuda")]
@@ -2118,7 +2123,7 @@ pub fn speculative_state_commit_cuda(_commit: GdnSpeculativeStateCommit<'_>) -> 
 pub struct GdnPendingSpeculativeConv<'a> {
     pub conv_input: &'a Tensor,
     pub keep_rows: &'a Tensor,
-    pub epochs: &'a Tensor,
+    pub pending_epochs: &'a Tensor,
     pub applied_epochs: &'a Tensor,
 }
 
@@ -2208,18 +2213,18 @@ pub fn speculative_conv_checkpoints_cuda(
         let pending = pending
             .map(|pending| {
                 let logical_capacity = capacity / checkpoint_lanes;
-                let (pending_capacity, max_rows, pending_conv_dim) = pending.conv_input.dims3()?;
                 let conv_blocks = conv_dim.div_ceil(GDN_CHANNEL_BLOCK_SIZE);
+                let (pending_capacity, max_rows, pending_conv_dim) = pending.conv_input.dims3()?;
                 if pending_capacity != logical_capacity
-                    || max_rows == 0
+                    || max_rows < seq_len
                     || max_rows > GDN_SPEC_FUSED_MAX_TOKENS
                     || pending_conv_dim != conv_dim
-                    || pending.keep_rows.dims() != [logical_capacity]
-                    || pending.epochs.dims() != [logical_capacity]
-                    || pending.applied_epochs.dims() != [logical_capacity, conv_blocks]
                     || pending.conv_input.dtype() != x.dtype()
+                    || pending.keep_rows.dims() != [logical_capacity]
+                    || pending.pending_epochs.dims() != [logical_capacity]
+                    || pending.applied_epochs.dims() != [logical_capacity, conv_blocks]
                     || pending.keep_rows.dtype() != DType::U32
-                    || pending.epochs.dtype() != DType::U32
+                    || pending.pending_epochs.dtype() != DType::U32
                     || pending.applied_epochs.dtype() != DType::U32
                 {
                     candle::bail!("GDN pending convolution transition shape is incompatible");
@@ -2227,7 +2232,7 @@ pub fn speculative_conv_checkpoints_cuda(
                 for tensor in [
                     pending.conv_input,
                     pending.keep_rows,
-                    pending.epochs,
+                    pending.pending_epochs,
                     pending.applied_epochs,
                 ] {
                     if !tensor.device().same_device(x.device()) || !tensor.is_contiguous() {
@@ -2286,7 +2291,7 @@ pub fn speculative_conv_checkpoints_cuda(
         }
         let (
             pending_conv,
-            pending_keep,
+            pending_keep_rows,
             pending_epochs,
             applied_epochs,
             max_rows,
@@ -2294,9 +2299,9 @@ pub fn speculative_conv_checkpoints_cuda(
             conv_blocks,
         ) = if let Some((pending, max_rows, pending_capacity, conv_blocks)) = pending {
             (
-                cuda_ptr!(pending.conv_input, T, "pending_conv_input") as *const c_void,
+                cuda_ptr!(pending.conv_input, T, "pending_conv_input") as *mut c_void,
                 cuda_ptr!(pending.keep_rows, u32, "pending_keep_rows") as *const u32,
-                cuda_ptr!(pending.epochs, u32, "pending_epochs") as *const u32,
+                cuda_ptr!(pending.pending_epochs, u32, "pending_epochs") as *const u32,
                 cuda_ptr!(pending.applied_epochs, u32, "conv_applied_epochs") as *mut u32,
                 max_rows,
                 pending_capacity,
@@ -2304,7 +2309,7 @@ pub fn speculative_conv_checkpoints_cuda(
             )
         } else {
             (
-                std::ptr::null(),
+                std::ptr::null_mut(),
                 std::ptr::null(),
                 std::ptr::null(),
                 std::ptr::null_mut(),
@@ -2340,7 +2345,7 @@ pub fn speculative_conv_checkpoints_cuda(
                 checkpoint_lanes as i32,
                 i32::from(write_checkpoints),
                 pending_conv,
-                pending_keep,
+                pending_keep_rows,
                 pending_epochs,
                 applied_epochs,
                 max_rows as i32,
@@ -2379,11 +2384,12 @@ pub fn speculative_conv_checkpoints_cuda(
 
 #[allow(dead_code)]
 pub struct GdnPendingSpeculativeRecurrence<'a> {
-    pub key: &'a Tensor,
+    pub key_banks: &'a Tensor,
+    pub key_bank: &'a Tensor,
     pub delta: &'a Tensor,
     pub decay: &'a Tensor,
     pub keep_rows: &'a Tensor,
-    pub epochs: &'a Tensor,
+    pub pending_epochs: &'a Tensor,
     pub applied_epochs: &'a Tensor,
 }
 
@@ -2416,13 +2422,14 @@ pub struct GdnSpeculativeRecurrenceCheckpoints<'a> {
 }
 
 #[derive(Clone)]
+#[allow(dead_code)]
 pub struct GdnSpeculativeTransitions {
     pub key: Tensor,
     pub delta: Tensor,
     pub decay: Tensor,
 }
 
-#[cfg_attr(not(feature = "cuda"), allow(dead_code))]
+#[allow(dead_code)]
 pub struct GdnSpeculativeRecurrenceOutput {
     pub output: Tensor,
     pub transitions: Option<GdnSpeculativeTransitions>,
@@ -2535,33 +2542,37 @@ pub fn speculative_recurrence_checkpoints_cuda(
         let pending = pending
             .map(|pending| {
                 let logical_capacity = capacity / checkpoint_lanes;
-                let (pending_capacity, max_rows, pending_k_heads, pending_k_dim) =
-                    pending.key.dims4()?;
-                if pending_capacity != logical_capacity
-                    || max_rows == 0
+                let (key_banks, pending_capacity, max_rows, pending_k_heads, pending_k_dim) =
+                    pending.key_banks.dims5()?;
+                if key_banks != GDN_PENDING_KEY_BANK_COUNT
+                    || pending_capacity != logical_capacity
+                    || max_rows < seq_len
                     || max_rows > GDN_SPEC_FUSED_MAX_TOKENS
                     || pending_k_heads != num_k_heads
                     || pending_k_dim != head_k_dim
                     || pending.delta.dims() != [logical_capacity, max_rows, num_v_heads, head_v_dim]
                     || pending.decay.dims() != [logical_capacity, max_rows, num_v_heads]
+                    || pending.key_bank.dims() != [logical_capacity]
                     || pending.keep_rows.dims() != [logical_capacity]
-                    || pending.epochs.dims() != [logical_capacity]
+                    || pending.pending_epochs.dims() != [logical_capacity]
                     || pending.applied_epochs.dims() != [logical_capacity, num_v_heads]
-                    || pending.key.dtype() != DType::F32
+                    || pending.key_banks.dtype() != DType::F32
                     || pending.delta.dtype() != DType::F32
                     || pending.decay.dtype() != DType::F32
+                    || pending.key_bank.dtype() != DType::U32
                     || pending.keep_rows.dtype() != DType::U32
-                    || pending.epochs.dtype() != DType::U32
+                    || pending.pending_epochs.dtype() != DType::U32
                     || pending.applied_epochs.dtype() != DType::U32
                 {
                     candle::bail!("GDN pending recurrence transition shape is incompatible");
                 }
                 for tensor in [
-                    pending.key,
+                    pending.key_banks,
+                    pending.key_bank,
                     pending.delta,
                     pending.decay,
                     pending.keep_rows,
-                    pending.epochs,
+                    pending.pending_epochs,
                     pending.applied_epochs,
                 ] {
                     if !tensor.device().same_device(mixed_qkv.device()) || !tensor.is_contiguous() {
@@ -2698,15 +2709,51 @@ pub fn speculative_recurrence_checkpoints_cuda(
             std::ptr::null()
         };
         let output = unsafe { dev.alloc::<T>(batch_size * num_v_heads * seq_len * head_v_dim) }?;
-        let mut transition_key = record_transitions
+        let direct_transitions = record_transitions && pending.is_some();
+        let mut transition_key = (record_transitions && !direct_transitions)
             .then(|| unsafe { dev.alloc::<f32>(batch_size * seq_len * num_k_heads * head_k_dim) })
             .transpose()?;
-        let mut transition_delta = record_transitions
+        let mut transition_delta = (record_transitions && !direct_transitions)
             .then(|| unsafe { dev.alloc::<f32>(batch_size * seq_len * num_v_heads * head_v_dim) })
             .transpose()?;
-        let mut transition_decay = record_transitions
+        let mut transition_decay = (record_transitions && !direct_transitions)
             .then(|| unsafe { dev.alloc::<f32>(batch_size * seq_len * num_v_heads) })
             .transpose()?;
+        let (
+            pending_key_banks,
+            pending_key_bank,
+            pending_delta,
+            pending_decay,
+            pending_keep_rows,
+            pending_epochs,
+            recurrent_applied_epochs,
+            max_pending_rows,
+            pending_capacity,
+        ) = if let Some((pending, max_rows, pending_capacity)) = pending {
+            (
+                cuda_ptr!(pending.key_banks, f32, "pending_key_banks") as *mut f32,
+                cuda_ptr!(pending.key_bank, u32, "pending_key_bank") as *const u32,
+                cuda_ptr!(pending.delta, f32, "pending_delta") as *mut f32,
+                cuda_ptr!(pending.decay, f32, "pending_decay") as *mut f32,
+                cuda_ptr!(pending.keep_rows, u32, "pending_keep_rows") as *const u32,
+                cuda_ptr!(pending.pending_epochs, u32, "pending_epochs") as *const u32,
+                cuda_ptr!(pending.applied_epochs, u32, "recurrent_applied_epochs") as *mut u32,
+                max_rows,
+                pending_capacity,
+            )
+        } else {
+            (
+                std::ptr::null_mut(),
+                std::ptr::null(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                std::ptr::null(),
+                std::ptr::null(),
+                std::ptr::null_mut(),
+                0,
+                0,
+            )
+        };
         let transition_key_ptr = transition_key
             .as_mut()
             .map_or(std::ptr::null_mut(), |buffer| {
@@ -2722,38 +2769,6 @@ pub fn speculative_recurrence_checkpoints_cuda(
             .map_or(std::ptr::null_mut(), |buffer| {
                 buffer.device_ptr(buffer.stream()).0 as *mut f32
             });
-        let (
-            pending_key,
-            pending_delta,
-            pending_decay,
-            pending_keep,
-            pending_epochs,
-            applied_epochs,
-            max_pending_rows,
-            pending_capacity,
-        ) = if let Some((pending, max_rows, pending_capacity)) = pending {
-            (
-                cuda_ptr!(pending.key, f32, "pending_key") as *const f32,
-                cuda_ptr!(pending.delta, f32, "pending_delta") as *const f32,
-                cuda_ptr!(pending.decay, f32, "pending_decay") as *const f32,
-                cuda_ptr!(pending.keep_rows, u32, "pending_keep_rows") as *const u32,
-                cuda_ptr!(pending.epochs, u32, "pending_epochs") as *const u32,
-                cuda_ptr!(pending.applied_epochs, u32, "recurrent_applied_epochs") as *mut u32,
-                max_rows,
-                pending_capacity,
-            )
-        } else {
-            (
-                std::ptr::null(),
-                std::ptr::null(),
-                std::ptr::null(),
-                std::ptr::null(),
-                std::ptr::null(),
-                std::ptr::null_mut(),
-                0,
-                0,
-            )
-        };
         let stream = dev.cuda_stream().cu_stream() as i64;
 
         unsafe {
@@ -2771,14 +2786,16 @@ pub fn speculative_recurrence_checkpoints_cuda(
                 transition_key_ptr,
                 transition_delta_ptr,
                 transition_decay_ptr,
-                pending_key,
+                pending_key_banks,
+                pending_key_bank,
                 pending_delta,
                 pending_decay,
-                pending_keep,
+                pending_keep_rows,
                 pending_epochs,
-                applied_epochs,
+                recurrent_applied_epochs,
                 max_pending_rows as i32,
                 pending_capacity as i32,
+                i32::from(direct_transitions),
                 b_strides[0],
                 b_strides[1],
                 b_strides[2],
@@ -2885,6 +2902,7 @@ pub struct GdnSpeculativeTransitionCommit<'a> {
 }
 
 #[cfg(feature = "cuda")]
+#[allow(dead_code)]
 pub fn speculative_transition_commit_batched_cuda(
     commit: GdnSpeculativeTransitionCommit<'_>,
 ) -> Result<()> {
@@ -3103,13 +3121,14 @@ pub fn speculative_transition_commit_batched_cuda(
 }
 
 #[cfg(not(feature = "cuda"))]
+#[allow(dead_code)]
 pub fn speculative_transition_commit_batched_cuda(
     _commit: GdnSpeculativeTransitionCommit<'_>,
 ) -> Result<()> {
     candle_core::bail!("speculative_transition_commit_batched_cuda requires the cuda feature")
 }
 
-#[cfg_attr(not(feature = "cuda"), allow(dead_code))]
+#[allow(dead_code)]
 pub struct GdnSpeculativeTransitionStageLayer<'a> {
     pub conv_input: &'a Tensor,
     pub key: &'a Tensor,
@@ -3123,7 +3142,7 @@ pub struct GdnSpeculativeTransitionStageLayer<'a> {
     pub pending_epochs: &'a Tensor,
 }
 
-#[cfg_attr(not(feature = "cuda"), allow(dead_code))]
+#[allow(dead_code)]
 pub struct GdnSpeculativeTransitionStage<'a> {
     pub layers: &'a [GdnSpeculativeTransitionStageLayer<'a>],
     pub keep_rows: &'a Tensor,
@@ -3136,6 +3155,7 @@ pub struct GdnSpeculativeTransitionStage<'a> {
 }
 
 #[cfg(feature = "cuda")]
+#[allow(dead_code)]
 pub fn speculative_transition_stage_batched_cuda(
     stage: GdnSpeculativeTransitionStage<'_>,
 ) -> Result<()> {
@@ -3386,9 +3406,165 @@ pub fn speculative_transition_stage_batched_cuda(
 }
 
 #[cfg_attr(not(feature = "cuda"), allow(dead_code))]
+pub struct GdnPendingTransitionPublishLayer<'a> {
+    pub pending_keep_rows: &'a Tensor,
+    pub pending_epochs: &'a Tensor,
+    pub pending_key_bank: &'a Tensor,
+}
+
+#[cfg_attr(not(feature = "cuda"), allow(dead_code))]
+pub struct GdnPendingTransitionPublish<'a> {
+    pub layers: &'a [GdnPendingTransitionPublishLayer<'a>],
+    pub keep_rows: &'a Tensor,
+    pub destination_slots: &'a Tensor,
+    pub max_rows: usize,
+    pub destination_capacity: usize,
+}
+
+#[cfg(feature = "cuda")]
+pub fn pending_transition_publish_batched_cuda(
+    publish: GdnPendingTransitionPublish<'_>,
+) -> Result<()> {
+    use candle_core as candle;
+
+    let GdnPendingTransitionPublish {
+        layers,
+        keep_rows,
+        destination_slots,
+        max_rows,
+        destination_capacity,
+    } = publish;
+    if layers.is_empty() {
+        return Ok(());
+    }
+    let batch_size = keep_rows.dims1()?;
+    if batch_size == 0
+        || destination_slots.dims1()? != batch_size
+        || keep_rows.dtype() != DType::U32
+        || destination_slots.dtype() != DType::U32
+        || !keep_rows.is_contiguous()
+        || !destination_slots.is_contiguous()
+    {
+        candle::bail!("GDN transition publish indices must be non-empty contiguous u32 [batch]");
+    }
+    if max_rows == 0 || max_rows > GDN_SPEC_FUSED_MAX_TOKENS || destination_capacity == 0 {
+        candle::bail!("GDN transition publish storage dimensions are incompatible");
+    }
+    let device = layers[0].pending_keep_rows.device();
+    if !device.is_cuda()
+        || !keep_rows.device().same_device(device)
+        || !destination_slots.device().same_device(device)
+    {
+        candle::bail!("GDN transition publish tensors must share one CUDA device");
+    }
+    for layer in layers {
+        for tensor in [
+            layer.pending_keep_rows,
+            layer.pending_epochs,
+            layer.pending_key_bank,
+        ] {
+            if tensor.dims() != [destination_capacity]
+                || tensor.dtype() != DType::U32
+                || !tensor.device().same_device(device)
+                || !tensor.is_contiguous()
+            {
+                candle::bail!("GDN transition publish metadata is incompatible");
+            }
+        }
+    }
+
+    let cuda_stream = device.as_cuda_device()?.cuda_stream();
+    let layer_storage_layouts = layers
+        .iter()
+        .map(|layer| {
+            [
+                layer.pending_keep_rows.storage_and_layout(),
+                layer.pending_epochs.storage_and_layout(),
+                layer.pending_key_bank.storage_and_layout(),
+            ]
+        })
+        .collect::<Vec<_>>();
+    let mut pointer_segments = (0..GDN_TRANSITION_PUBLISH_POINTER_SEGMENTS)
+        .map(|_| Vec::with_capacity(layers.len()))
+        .collect::<Vec<_>>();
+    let mut pointer_guards =
+        Vec::with_capacity(GDN_TRANSITION_PUBLISH_POINTER_SEGMENTS.saturating_mul(layers.len()));
+    for storage_layouts in &layer_storage_layouts {
+        for (segment, (storage, layout)) in storage_layouts.iter().enumerate() {
+            let (pointer, guard) = cuda_inplace_ptr_with_guard::<u32>(
+                storage,
+                layout,
+                &cuda_stream,
+                "pending_transition_metadata",
+            )?;
+            pointer_segments[segment].push(pointer);
+            pointer_guards.push(guard);
+        }
+    }
+    let pointers = pointer_segments
+        .into_iter()
+        .flatten()
+        .map(|pointer| pointer as i64)
+        .collect::<Vec<_>>();
+    let pointer_table = Tensor::from_vec(
+        pointers,
+        (GDN_TRANSITION_PUBLISH_POINTER_SEGMENTS * layers.len(),),
+        device,
+    )?;
+    let (pointer_table_storage, pointer_table_layout) = pointer_table.storage_and_layout();
+    let (pointer_table_ptr, pointer_table_guard) = cuda_read_ptr_with_guard::<i64>(
+        &pointer_table_storage,
+        pointer_table_layout,
+        &cuda_stream,
+        "pointer_table",
+    )?;
+    let (keep_rows_storage, keep_rows_layout) = keep_rows.storage_and_layout();
+    let (keep_rows_ptr, keep_rows_guard) = cuda_read_ptr_with_guard::<u32>(
+        &keep_rows_storage,
+        keep_rows_layout,
+        &cuda_stream,
+        "keep_rows",
+    )?;
+    let (destination_slots_storage, destination_slots_layout) =
+        destination_slots.storage_and_layout();
+    let (destination_slots_ptr, destination_slots_guard) = cuda_read_ptr_with_guard::<u32>(
+        &destination_slots_storage,
+        destination_slots_layout,
+        &cuda_stream,
+        "destination_slots",
+    )?;
+    unsafe {
+        crate::cuda::ffi::gdn_pending_transition_publish_batched(
+            pointer_table_ptr as *const u64,
+            keep_rows_ptr as *const u32,
+            destination_slots_ptr as *const u32,
+            layers.len() as i32,
+            batch_size as i32,
+            max_rows as i32,
+            destination_capacity as i32,
+            cuda_stream.cu_stream() as i64,
+        );
+    }
+    drop(destination_slots_guard);
+    drop(keep_rows_guard);
+    drop(pointer_table_guard);
+    drop(pointer_guards);
+    Ok(())
+}
+
+#[cfg(not(feature = "cuda"))]
+#[allow(dead_code)]
+pub fn pending_transition_publish_batched_cuda(
+    _publish: GdnPendingTransitionPublish<'_>,
+) -> Result<()> {
+    candle_core::bail!("pending_transition_publish_batched_cuda requires the cuda feature")
+}
+
+#[cfg_attr(not(feature = "cuda"), allow(dead_code))]
 pub struct GdnPendingTransitionApplyLayer<'a> {
     pub pending_conv_input: &'a Tensor,
-    pub pending_key: &'a Tensor,
+    pub pending_key_banks: &'a Tensor,
+    pub pending_key_bank: &'a Tensor,
     pub pending_delta: &'a Tensor,
     pub pending_decay: &'a Tensor,
     pub pending_keep_rows: &'a Tensor,
@@ -3475,7 +3651,9 @@ pub fn pending_transition_apply_batched_cuda(apply: GdnPendingTransitionApply<'_
 
         for layer in layers {
             if layer.pending_conv_input.dims() != [capacity, max_rows, conv_dim]
-                || layer.pending_key.dims() != [capacity, max_rows, num_k_heads, head_k_dim]
+                || layer.pending_key_banks.dims()
+                    != [2, capacity, max_rows, num_k_heads, head_k_dim]
+                || layer.pending_key_bank.dims() != [capacity]
                 || layer.pending_delta.dims() != [capacity, max_rows, num_v_heads, head_v_dim]
                 || layer.pending_decay.dims() != [capacity, max_rows, num_v_heads]
                 || layer.pending_keep_rows.dims() != [capacity]
@@ -3489,7 +3667,8 @@ pub fn pending_transition_apply_batched_cuda(apply: GdnPendingTransitionApply<'_
             }
             if layer.pending_conv_input.dtype() != activation_tensor_dtype
                 || layer.conv_state.dtype() != activation_tensor_dtype
-                || layer.pending_key.dtype() != DType::F32
+                || layer.pending_key_banks.dtype() != DType::F32
+                || layer.pending_key_bank.dtype() != DType::U32
                 || layer.pending_delta.dtype() != DType::F32
                 || layer.pending_decay.dtype() != DType::F32
                 || layer.pending_keep_rows.dtype() != DType::U32
@@ -3502,7 +3681,8 @@ pub fn pending_transition_apply_batched_cuda(apply: GdnPendingTransitionApply<'_
             }
             for tensor in [
                 layer.pending_conv_input,
-                layer.pending_key,
+                layer.pending_key_banks,
+                layer.pending_key_bank,
                 layer.pending_delta,
                 layer.pending_decay,
                 layer.pending_keep_rows,
@@ -3525,7 +3705,8 @@ pub fn pending_transition_apply_batched_cuda(apply: GdnPendingTransitionApply<'_
             .map(|layer| {
                 [
                     layer.pending_conv_input.storage_and_layout(),
-                    layer.pending_key.storage_and_layout(),
+                    layer.pending_key_banks.storage_and_layout(),
+                    layer.pending_key_bank.storage_and_layout(),
                     layer.pending_delta.storage_and_layout(),
                     layer.pending_decay.storage_and_layout(),
                     layer.pending_keep_rows.storage_and_layout(),
@@ -3563,15 +3744,16 @@ pub fn pending_transition_apply_batched_cuda(apply: GdnPendingTransitionApply<'_
                 }};
             }
             read_ptr!(0, T, "pending_conv_input");
-            read_ptr!(1, f32, "pending_key");
-            read_ptr!(2, f32, "pending_delta");
-            read_ptr!(3, f32, "pending_decay");
-            read_ptr!(4, u32, "pending_keep_rows");
-            read_ptr!(5, u32, "pending_epochs");
-            inplace_ptr!(6, u32, "conv_applied_epochs");
-            inplace_ptr!(7, u32, "recurrent_applied_epochs");
-            inplace_ptr!(8, T, "conv_state");
-            let (storage, layout) = &storage_layouts[9];
+            read_ptr!(1, f32, "pending_key_banks");
+            read_ptr!(2, u32, "pending_key_bank");
+            read_ptr!(3, f32, "pending_delta");
+            read_ptr!(4, f32, "pending_decay");
+            read_ptr!(5, u32, "pending_keep_rows");
+            read_ptr!(6, u32, "pending_epochs");
+            inplace_ptr!(7, u32, "conv_applied_epochs");
+            inplace_ptr!(8, u32, "recurrent_applied_epochs");
+            inplace_ptr!(9, T, "conv_state");
+            let (storage, layout) = &storage_layouts[10];
             let (state_ptr, state_dtype, state_guard) =
                 cuda_recurrent_state_inplace_ptr_with_guard(
                     recurrent_dtype,
@@ -3586,7 +3768,7 @@ pub fn pending_transition_apply_batched_cuda(apply: GdnPendingTransitionApply<'_
             {
                 candle::bail!("GDN pending transition apply state dtypes diverged");
             }
-            pointer_segments[9].push(state_ptr);
+            pointer_segments[10].push(state_ptr);
             pointer_guards.push(state_guard);
         }
         let pointers = pointer_segments
@@ -4321,7 +4503,7 @@ mod dispatch_tests {
 #[cfg(all(test, feature = "cuda"))]
 mod tests {
     use super::*;
-    use candle_core::{Device, D};
+    use candle_core::{Device, IndexOp, D};
 
     #[derive(Clone, Copy)]
     struct RecurrenceCase {
@@ -5798,13 +5980,16 @@ mod tests {
         let active_slots = Tensor::from_vec(active_slots_host.clone(), (batch_size,), &dev)?;
 
         let conv_dim = 37;
+        let conv_storage_dim = conv_dim + 5;
         let kernel_size = 4;
         let x = tensor3(
-            patterned(batch_size * seq_len * conv_dim, 130, 0.08, 0.01),
-            (batch_size, seq_len, conv_dim),
+            patterned(batch_size * seq_len * conv_storage_dim, 130, 0.08, 0.01),
+            (batch_size, seq_len, conv_storage_dim),
             &dev,
         )?
-        .to_dtype(DType::BF16)?;
+        .to_dtype(DType::BF16)?
+        .narrow(2, 2, conv_dim)?;
+        assert!(!x.is_contiguous());
         let weight = tensor2(
             patterned(conv_dim * kernel_size, 131, 0.05, -0.01),
             (conv_dim, kernel_size),
@@ -6137,6 +6322,8 @@ mod tests {
             recurrent_state: Tensor,
             pending_conv_input: Tensor,
             pending_key: Tensor,
+            pending_key_banks: Tensor,
+            pending_key_bank: Tensor,
             pending_delta: Tensor,
             pending_decay: Tensor,
             pending_keep_rows: Tensor,
@@ -6335,11 +6522,13 @@ mod tests {
             })?;
             let pending_conv_input =
                 Tensor::zeros((capacity, seq_len, conv_dim), activation_dtype, dev)?;
-            let pending_key = Tensor::zeros(
-                (capacity, seq_len, num_k_heads, head_k_dim),
+            let pending_key_banks = Tensor::zeros(
+                (2, capacity, seq_len, num_k_heads, head_k_dim),
                 DType::F32,
                 dev,
             )?;
+            let pending_key = pending_key_banks.i(0)?;
+            let pending_key_bank = Tensor::zeros(capacity, DType::U32, dev)?;
             let pending_delta = Tensor::zeros(
                 (capacity, seq_len, num_v_heads, head_v_dim),
                 DType::F32,
@@ -6376,6 +6565,8 @@ mod tests {
                 recurrent_state,
                 pending_conv_input,
                 pending_key,
+                pending_key_banks,
+                pending_key_bank,
                 pending_delta,
                 pending_decay,
                 pending_keep_rows,
@@ -6440,7 +6631,8 @@ mod tests {
             .iter()
             .map(|case| GdnPendingTransitionApplyLayer {
                 pending_conv_input: &case.pending_conv_input,
-                pending_key: &case.pending_key,
+                pending_key_banks: &case.pending_key_banks,
+                pending_key_bank: &case.pending_key_bank,
                 pending_delta: &case.pending_delta,
                 pending_decay: &case.pending_decay,
                 pending_keep_rows: &case.pending_keep_rows,
@@ -6503,7 +6695,7 @@ mod tests {
                     write_checkpoints: false,
                     pending: None,
                 })?;
-            let expected_output =
+            let expected_recurrence =
                 speculative_recurrence_checkpoints_cuda(GdnSpeculativeRecurrenceCheckpoints {
                     mixed_qkv: &expected_convolved,
                     b: &case.b,
@@ -6526,8 +6718,8 @@ mod tests {
                     }),
                     record_transitions: true,
                     pending: None,
-                })?
-                .output;
+                })?;
+            let expected_output = &expected_recurrence.output;
             let run_lazy = || {
                 let convolved = speculative_conv_checkpoints_cuda(GdnSpeculativeConvCheckpoints {
                     x: &case.conv_input,
@@ -6539,7 +6731,7 @@ mod tests {
                     pending: Some(GdnPendingSpeculativeConv {
                         conv_input: &case.pending_conv_input,
                         keep_rows: &case.pending_keep_rows,
-                        epochs: &case.pending_epochs,
+                        pending_epochs: &case.pending_epochs,
                         applied_epochs: &case.lazy_conv_applied_epochs,
                     }),
                 })?;
@@ -6566,11 +6758,12 @@ mod tests {
                         }),
                         record_transitions: true,
                         pending: Some(GdnPendingSpeculativeRecurrence {
-                            key: &case.pending_key,
+                            key_banks: &case.pending_key_banks,
+                            key_bank: &case.pending_key_bank,
                             delta: &case.pending_delta,
                             decay: &case.pending_decay,
                             keep_rows: &case.pending_keep_rows,
-                            epochs: &case.pending_epochs,
+                            pending_epochs: &case.pending_epochs,
                             applied_epochs: &case.lazy_recurrent_applied_epochs,
                         }),
                     })?
@@ -6623,6 +6816,123 @@ mod tests {
                     &flat(&expected.to_dtype(DType::F32)?)?,
                     tolerance,
                 );
+            }
+
+            let expected_second_conv_state = case.expected_conv_state.copy()?;
+            let expected_second_recurrent_state = case.expected_recurrent_state.copy()?;
+            let expected_transitions = expected_recurrence
+                .transitions
+                .as_ref()
+                .expect("record_transitions produced no transition tensors");
+            let expected_transition_layers = [GdnSpeculativeTransitionLayer {
+                conv_input: &case.conv_input,
+                key: &expected_transitions.key,
+                delta: &expected_transitions.delta,
+                decay: &expected_transitions.decay,
+                conv_state: &expected_second_conv_state,
+                recurrent_state: &expected_second_recurrent_state,
+            }];
+            speculative_transition_commit_batched_cuda(GdnSpeculativeTransitionCommit {
+                layers: &expected_transition_layers,
+                keep_rows: &keep_rows,
+                active_slots: &active_slots,
+                num_k_heads,
+                num_v_heads,
+                head_k_dim,
+                head_v_dim,
+                conv_dim,
+                conv_width,
+                tiled_v_heads,
+                state_layout: RecurrentStateLayout::GdnValueMajor,
+            })?;
+
+            let publish_layers = [GdnPendingTransitionPublishLayer {
+                pending_keep_rows: &case.pending_keep_rows,
+                pending_epochs: &case.pending_epochs,
+                pending_key_bank: &case.pending_key_bank,
+            }];
+            pending_transition_publish_batched_cuda(GdnPendingTransitionPublish {
+                layers: &publish_layers,
+                keep_rows: &keep_rows,
+                destination_slots: &active_slots,
+                max_rows: seq_len,
+                destination_capacity: capacity,
+            })?;
+
+            let expected_second_convolved =
+                speculative_conv_checkpoints_cuda(GdnSpeculativeConvCheckpoints {
+                    x: &case.conv_input,
+                    weight: &case.weight,
+                    state_pool: &expected_second_conv_state,
+                    active_slots: &active_slots,
+                    checkpoint_lanes: 1,
+                    write_checkpoints: false,
+                    pending: None,
+                })?;
+            let expected_second_output =
+                speculative_recurrence_checkpoints_cuda(GdnSpeculativeRecurrenceCheckpoints {
+                    mixed_qkv: &expected_second_convolved,
+                    b: &case.b,
+                    a: &case.a,
+                    a_log: &case.a_log,
+                    dt_bias: &case.dt_bias,
+                    state_pool: &expected_second_recurrent_state,
+                    active_slots: &active_slots,
+                    checkpoint_lanes: 1,
+                    num_k_heads,
+                    num_v_heads,
+                    head_k_dim,
+                    head_v_dim,
+                    tiled_v_heads,
+                    state_layout: RecurrentStateLayout::GdnValueMajor,
+                    post_op: Some(GdnSpeculativeRmsNormGate {
+                        gate: &case.gate,
+                        weight: &case.norm_weight,
+                        eps: 1.0e-6,
+                    }),
+                    record_transitions: true,
+                    pending: None,
+                })?
+                .output;
+            let (second_convolved, second_output) = run_lazy()?;
+            assert_close(
+                "second-epoch transition convolution state",
+                &flat(&case.lazy_conv_state.to_dtype(DType::F32)?)?,
+                &flat(&expected_second_conv_state.to_dtype(DType::F32)?)?,
+                0.0,
+            );
+            assert_close(
+                "second-epoch transition recurrent state",
+                &flat(&case.lazy_recurrent_state.to_dtype(DType::F32)?)?,
+                &flat(&expected_second_recurrent_state.to_dtype(DType::F32)?)?,
+                3.0e-3,
+            );
+            assert_close(
+                "second-epoch transition convolution output",
+                &flat(&second_convolved.to_dtype(DType::F32)?)?,
+                &flat(&expected_second_convolved.to_dtype(DType::F32)?)?,
+                0.0,
+            );
+            assert_close(
+                "second-epoch transition recurrence output",
+                &flat(&second_output.to_dtype(DType::F32)?)?,
+                &flat(&expected_second_output.to_dtype(DType::F32)?)?,
+                3.0e-2,
+            );
+            let published_banks = case
+                .pending_key_bank
+                .to_device(&Device::Cpu)?
+                .to_vec1::<u32>()?;
+            let published_epochs = case
+                .pending_epochs
+                .to_device(&Device::Cpu)?
+                .to_vec1::<u32>()?;
+            for &slot in active_slots_host
+                .iter()
+                .filter(|&&slot| slot != GDN_PAD_SLOT)
+            {
+                assert_eq!(published_banks[slot as usize], 1);
+                assert_eq!(published_epochs[slot as usize], 2);
             }
         }
         Ok(())
@@ -6943,6 +7253,78 @@ mod tests {
             for activation_dtype in [DType::F16, DType::BF16] {
                 run_speculative_transition_stage_case(&dev, seq_len, activation_dtype)?;
             }
+        }
+        Ok(())
+    }
+
+    #[test]
+    #[ignore = "requires a CUDA device"]
+    fn pending_transition_publish_is_slot_indexed_cuda() -> Result<()> {
+        const CAPACITY: usize = 6;
+        const MAX_ROWS: usize = 8;
+
+        let dev = Device::new_cuda(0)?;
+        let keep_rows = Tensor::from_vec(vec![3u32, 8, 5], (3,), &dev)?;
+        let destination_slots = Tensor::from_vec(vec![4u32, 1, GDN_PAD_SLOT], (3,), &dev)?;
+        let layer_keep = [
+            Tensor::from_vec(vec![10u32, 11, 12, 13, 14, 15], (CAPACITY,), &dev)?,
+            Tensor::from_vec(vec![20u32, 21, 22, 23, 24, 25], (CAPACITY,), &dev)?,
+        ];
+        let layer_epochs = [
+            Tensor::from_vec(vec![30u32, 31, 32, 33, u32::MAX, 35], (CAPACITY,), &dev)?,
+            Tensor::from_vec(vec![40u32, 41, 42, 43, u32::MAX, 45], (CAPACITY,), &dev)?,
+        ];
+        let layer_key_bank = [
+            Tensor::from_vec(vec![0u32, 1, 0, 1, 0, 1], (CAPACITY,), &dev)?,
+            Tensor::from_vec(vec![1u32, 0, 1, 0, 1, 0], (CAPACITY,), &dev)?,
+        ];
+        let layers = (0..layer_keep.len())
+            .map(|idx| GdnPendingTransitionPublishLayer {
+                pending_keep_rows: &layer_keep[idx],
+                pending_epochs: &layer_epochs[idx],
+                pending_key_bank: &layer_key_bank[idx],
+            })
+            .collect::<Vec<_>>();
+
+        pending_transition_publish_batched_cuda(GdnPendingTransitionPublish {
+            layers: &layers,
+            keep_rows: &keep_rows,
+            destination_slots: &destination_slots,
+            max_rows: MAX_ROWS,
+            destination_capacity: CAPACITY,
+        })?;
+
+        for (idx, (keep, epochs)) in layer_keep.iter().zip(&layer_epochs).enumerate() {
+            let keep = keep.to_device(&Device::Cpu)?.to_vec1::<u32>()?;
+            let epochs = epochs.to_device(&Device::Cpu)?.to_vec1::<u32>()?;
+            let key_bank = layer_key_bank[idx]
+                .to_device(&Device::Cpu)?
+                .to_vec1::<u32>()?;
+            let keep_base = if idx == 0 { 10 } else { 20 };
+            let epoch_base = if idx == 0 { 30 } else { 40 };
+            assert_eq!(
+                keep,
+                vec![keep_base, 8, keep_base + 2, keep_base + 3, 3, keep_base + 5]
+            );
+            assert_eq!(
+                epochs,
+                vec![
+                    epoch_base,
+                    epoch_base + 2,
+                    epoch_base + 2,
+                    epoch_base + 3,
+                    1,
+                    epoch_base + 5,
+                ]
+            );
+            assert_eq!(
+                key_bank,
+                if idx == 0 {
+                    vec![0, 0, 0, 1, 1, 1]
+                } else {
+                    vec![1, 1, 1, 0, 0, 0]
+                }
+            );
         }
         Ok(())
     }

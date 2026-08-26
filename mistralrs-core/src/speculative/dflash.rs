@@ -46,7 +46,7 @@ pub const DEFAULT_MAX_DRAFTS: usize = 7;
 const ROPE_CACHE_LEN: usize = 65536;
 const MASK_CACHE_CAP: usize = 64;
 #[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
-const DFLASH_CUDA_GRAPH_CACHE_CAPACITY: usize = 40;
+const DFLASH_CUDA_GRAPH_DEFAULT_CACHE_CAPACITY: usize = 40;
 const ADAPT_FULL_DEPTH_MAX_BATCH: usize = 8;
 const ADAPT_BATCH_DEPTH: usize = 3;
 const DFLASH_ADAPTIVE_ENV: &str = "MISTRALRS_DFLASH_ADAPTIVE";
@@ -898,6 +898,10 @@ fn gather_ctx_taps(taps: &[Tensor], flat_row_indices: Vec<u32>, device: &Device)
     {
         candle_core::bail!("DFlash context tap row index is out of range");
     }
+    #[cfg(feature = "cuda")]
+    if let Some(packed) = crate::cuda::dflash_context::pack_taps(taps, &flat_row_indices)? {
+        return packed.unsqueeze(0);
+    }
     let contiguous_range = contiguous_row_range(&flat_row_indices);
     let indices = if contiguous_range.is_none() {
         let len = flat_row_indices.len();
@@ -1147,11 +1151,23 @@ struct DFlashCudaGraphEntry {
 }
 
 #[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
-#[derive(Default)]
 struct DFlashCudaGraphState {
     entries: Vec<DFlashCudaGraphEntry>,
     warmed: HashSet<DFlashCudaGraphKey>,
     failed: HashSet<DFlashCudaGraphKey>,
+    capacity: usize,
+}
+
+#[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
+impl Default for DFlashCudaGraphState {
+    fn default() -> Self {
+        Self {
+            entries: Vec::new(),
+            warmed: HashSet::new(),
+            failed: HashSet::new(),
+            capacity: DFLASH_CUDA_GRAPH_DEFAULT_CACHE_CAPACITY,
+        }
+    }
 }
 
 #[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
@@ -1269,6 +1285,8 @@ pub struct DFlashDraftModel {
     layers: Vec<DFlashLayer>,
     fc: Arc<dyn QuantMethod>,
     context_kv_proj: Arc<dyn QuantMethod>,
+    #[cfg(feature = "cuda")]
+    context_k_norm_weights: Option<Tensor>,
     hidden_norm: RmsNorm,
     norm: RmsNorm,
     selector: Option<CandidateSelector>,
@@ -1664,9 +1682,7 @@ impl DFlashCudaGraphState {
     }
 
     fn store(&mut self, entry: DFlashCudaGraphEntry) {
-        if let Some(evicted) =
-            take_cuda_graph_capacity_eviction(&mut self.entries, DFLASH_CUDA_GRAPH_CACHE_CAPACITY)
-        {
+        if let Some(evicted) = take_cuda_graph_capacity_eviction(&mut self.entries, self.capacity) {
             record_cuda_graph_evictions(
                 CudaGraphComponent::DFlash,
                 CudaGraphEvictionReason::Capacity,
@@ -2312,6 +2328,16 @@ impl DFlashDraftModel {
         }
         let context_kv_weight = Tensor::cat(&context_kv_weights.iter().collect::<Vec<_>>(), 0)?;
         let context_kv_proj = linear_from_weight(context_kv_weight, isq, device)?;
+        #[cfg(feature = "cuda")]
+        let context_k_norm_weights = if device.is_cuda() {
+            let weights = layers
+                .iter()
+                .map(|layer| layer.k_norm.weight().clone())
+                .collect::<Vec<_>>();
+            Some(Tensor::stack(&weights, 0)?)
+        } else {
+            None
+        };
         let fc = load_linear(
             &vb,
             (target_layer_ids.len() * hidden, hidden),
@@ -2347,6 +2373,8 @@ impl DFlashDraftModel {
             layers,
             fc,
             context_kv_proj,
+            #[cfg(feature = "cuda")]
+            context_k_norm_weights,
             hidden_norm: RmsNorm::new(hidden, eps, vb.pp("hidden_norm"))?,
             norm: RmsNorm::new(hidden, eps, vb.pp("norm"))?,
             selector,
@@ -2478,6 +2506,9 @@ impl DFlashDraftModel {
             .cuda_graphs
             .lock()
             .expect("dflash CUDA graph cache poisoned");
+        state.capacity = state
+            .capacity
+            .max(shapes.len().saturating_mul(selector_modes.len()));
         for selector_mode in selector_modes {
             for &(batch_bucket, block) in &shapes {
                 let key = DFlashCudaGraphKey {
@@ -2977,18 +3008,6 @@ impl DFlashDraftModel {
         let ctx_hidden = self
             .hidden_norm
             .forward(&self.fc.forward(&packed.to_dtype(self.dtype)?)?)?;
-        let mut coss = Vec::with_capacity(entries.len());
-        let mut sins = Vec::with_capacity(entries.len());
-        for (entry, rows) in entries.iter().zip(&rows) {
-            if *rows == 0 {
-                continue;
-            }
-            let (cos, sin) = self.cos_sin(entry.start_pos, *rows)?;
-            coss.push(cos);
-            sins.push(sin);
-        }
-        let (cos, sin) = (Tensor::cat(&coss, 0)?, Tensor::cat(&sins, 0)?);
-
         let all_kv = self
             .context_kv_proj
             .forward(&ctx_hidden)?
@@ -3004,14 +3023,59 @@ impl DFlashDraftModel {
             .contiguous()?;
         let raw_k = all_kv.i(0)?;
         let v_all = all_kv.i(1)?;
-        let mut ks = Vec::with_capacity(self.layers.len());
-        for (i, layer) in self.layers.iter().enumerate() {
-            let k = layer.k_norm.forward(&raw_k.narrow(0, i, 1)?)?;
-            let k = self.rope(&k, &cos, &sin)?;
-            ks.push(k.squeeze(0)?);
-        }
-        // [layers, kv_heads, total, head_dim]
-        let k_all = Tensor::stack(&ks, 0)?;
+        #[cfg(feature = "cuda")]
+        let fused_k = if entries.iter().all(|entry| {
+            entry
+                .start_pos
+                .checked_add(entry.rows)
+                .is_some_and(|end| end <= ROPE_CACHE_LEN)
+        }) {
+            if let Some(norm_weights) = &self.context_k_norm_weights {
+                let mut positions = Vec::with_capacity(total);
+                for entry in entries {
+                    for position in entry.start_pos..entry.start_pos + entry.rows {
+                        positions.push(u32::try_from(position).map_err(candle_core::Error::wrap)?);
+                    }
+                }
+                let positions = Tensor::from_vec(positions, (total,), &self.device)?;
+                crate::cuda::dflash_context::context_keys(
+                    &raw_k,
+                    norm_weights,
+                    &self.rope_table.0,
+                    &self.rope_table.1,
+                    &positions,
+                    self.layers[0].k_norm.eps() as f32,
+                )?
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        #[cfg(not(feature = "cuda"))]
+        let fused_k: Option<Tensor> = None;
+        let k_all = if let Some(k) = fused_k {
+            k
+        } else {
+            let mut coss = Vec::with_capacity(entries.len());
+            let mut sins = Vec::with_capacity(entries.len());
+            for (entry, rows) in entries.iter().zip(&rows) {
+                if *rows == 0 {
+                    continue;
+                }
+                let (cos, sin) = self.cos_sin(entry.start_pos, *rows)?;
+                coss.push(cos);
+                sins.push(sin);
+            }
+            let (cos, sin) = (Tensor::cat(&coss, 0)?, Tensor::cat(&sins, 0)?);
+            let mut ks = Vec::with_capacity(self.layers.len());
+            for (i, layer) in self.layers.iter().enumerate() {
+                let k = layer.k_norm.forward(&raw_k.narrow(0, i, 1)?)?;
+                let k = self.rope(&k, &cos, &sin)?;
+                ks.push(k.squeeze(0)?);
+            }
+            Tensor::stack(&ks, 0)?
+        };
 
         Ok(DFlashPreparedContext {
             k: k_all,

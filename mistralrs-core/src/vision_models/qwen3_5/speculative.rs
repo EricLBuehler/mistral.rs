@@ -913,7 +913,10 @@ fn capture_view(capture: &SpecCapture) -> Result<CaptureView> {
     let positions = capture.positions.to_dtype(candle_core::DType::U32)?;
     let mrope = match positions.rank() {
         3 => positions.to_vec3::<u32>()?,
-        2 => positions.unsqueeze(2)?.to_vec3::<u32>()?,
+        2 => {
+            let positions = positions.to_vec2::<u32>()?;
+            vec![positions.clone(), positions.clone(), positions]
+        }
         rank => candle_core::bail!("unexpected MTP position rank {rank}"),
     };
     Ok(CaptureView { hidden, mrope })
@@ -1008,6 +1011,10 @@ impl SpeculativeTargetMixin for Qwen3_5Model {
 
     fn reserve_recurrent_speculative_transition_storage(&self) -> Result<bool> {
         self.text.reserve_recurrent_transition_storage()
+    }
+
+    fn apply_recurrent_speculative_transitions_for_current_batch(&self) -> Result<bool> {
+        self.text.apply_current_recurrent_transitions()
     }
 
     fn flush_recurrent_speculative_transitions(&self, seq_ids: &[usize]) -> Result<()> {
@@ -1223,7 +1230,24 @@ impl SpeculativeTargetMixin for Qwen3_5Model {
 
 #[cfg(test)]
 mod tests {
-    use super::resolve_dflash_n_predict;
+    use super::{capture_view, resolve_dflash_n_predict, SpecCapture};
+    use candle_core::{DType, Device, Tensor};
+
+    #[test]
+    fn text_capture_positions_expand_to_equal_mrope_planes() {
+        let device = Device::Cpu;
+        let capture = SpecCapture {
+            hidden: Tensor::zeros((2, 2, 4), DType::F32, &device).unwrap(),
+            positions: Tensor::from_vec(vec![3u32, 4, 9, 10], (2, 2), &device).unwrap(),
+            taps: Vec::new(),
+        };
+        let view = capture_view(&capture).unwrap();
+        let expected = vec![vec![3u32, 4], vec![9, 10]];
+        assert_eq!(
+            view.mrope,
+            vec![expected.clone(), expected.clone(), expected]
+        );
+    }
 
     #[test]
     fn auto_dflash_depth_follows_reserved_checkpoint_lanes() {

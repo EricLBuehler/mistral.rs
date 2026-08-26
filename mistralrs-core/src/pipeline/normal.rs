@@ -2024,6 +2024,21 @@ impl NormalPipeline {
             .materialize_decode_tensors()
             .map_err(candle_core::Error::msg)?;
 
+        let uses_recurrent_transition_log = self.model.cache().is_hybrid()
+            && self.model.cache().hybrid().uses_recurrent_transition_log();
+        if rollback_live_state
+            && recurrent_batch_kind == RecurrentBatchKind::Decode
+            && self.model.supports_recurrent_speculative_transitions()
+            && uses_recurrent_transition_log
+            && !self
+                .model
+                .apply_recurrent_speculative_transitions_for_current_batch()?
+        {
+            candle_core::bail!(
+                "CUDA graph capture could not materialize pending recurrent transitions"
+            );
+        }
+
         let recurrent_snapshots =
             self.snapshot_hybrid_recurrent_checkpoints(recurrent_batch_kind)?;
         let live_state_indices = self.snapshot_hybrid_state_indices();

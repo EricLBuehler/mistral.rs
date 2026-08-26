@@ -2261,6 +2261,9 @@ impl MultimodalPipeline {
             block_size,
             speculative,
         } = inputs;
+        if speculative {
+            state.prepare_spec_state_admission_for_key(&key);
+        }
         let Device::Cuda(cuda_device) = step.input_ids.device() else {
             candle_core::bail!("CUDA graph decode expected CUDA input ids");
         };
@@ -2269,6 +2272,21 @@ impl MultimodalPipeline {
             .metadata
             .materialize_decode_tensors()
             .map_err(candle_core::Error::msg)?;
+
+        let uses_recurrent_transition_log = self.model.cache().is_hybrid()
+            && self.model.cache().hybrid().uses_recurrent_transition_log();
+        if rollback_live_state
+            && recurrent_batch_kind == RecurrentBatchKind::Decode
+            && self.model.supports_recurrent_speculative_transitions()
+            && uses_recurrent_transition_log
+            && !self
+                .model
+                .apply_recurrent_speculative_transitions_for_current_batch()?
+        {
+            candle_core::bail!(
+                "CUDA graph capture could not materialize pending recurrent transitions"
+            );
+        }
 
         let nonmutating_transition_capture =
             self.uses_nonmutating_recurrent_transition_log(recurrent_batch_kind);

@@ -77,6 +77,10 @@ impl CudaPhaseTimer {
         if !enabled {
             return Ok(None);
         }
+        let capture_status = stream.capture_status().map_err(candle_core::Error::wrap)?;
+        if capture_status != sys::CUstreamCaptureStatus::CU_STREAM_CAPTURE_STATUS_NONE {
+            return Ok(None);
+        }
         let start = stream
             .record_event(Some(sys::CUevent_flags::CU_EVENT_DEFAULT))
             .map_err(candle_core::Error::wrap)?;
@@ -494,8 +498,12 @@ impl CudaGraphDecodeStep {
         };
         let pad = batch - real_batch;
         let (_, q_len) = input_ids.dims2()?;
-        let pad_ids = input_ids.narrow(0, 0, 1)?.repeat((pad, 1))?;
-        let input_ids = Tensor::cat(&[input_ids, &pad_ids], 0)?;
+        let input_ids = if input_ids.dtype() == DType::U32 && input_ids.device().is_cuda() {
+            crate::cuda::input_packing::pad_decode_input(input_ids, batch)?
+        } else {
+            let pad_ids = input_ids.narrow(0, 0, 1)?.repeat((pad, 1))?;
+            Tensor::cat(&[input_ids, &pad_ids], 0)?
+        };
         let mut seqlen_offsets = seqlen_offsets.to_vec();
         seqlen_offsets.resize(batch, seqlen_offsets[0]);
         let mut context_lens = context_lens.to_vec();
@@ -996,6 +1004,13 @@ pub(crate) struct CudaDecodeGraphMetadataBuffers {
 }
 
 impl CudaDecodeGraphKey {
+    fn has_same_spec_state_shape(&self, other: &Self) -> bool {
+        self.device == other.device
+            && self.input_shape == other.input_shape
+            && self.input_dtype == other.input_dtype
+            && self.recurrent_batch_kind == other.recurrent_batch_kind
+    }
+
     pub(crate) fn new(
         input_ids: &Tensor,
         metadata: &PagedAttentionInputMetadata,
@@ -2052,6 +2067,18 @@ impl CudaDecodeGraphState {
         let usage = CudaGraphSpecStateUsage::from_state(spec_state)?;
         self.evict_for_spec_state(&usage);
         Ok(usage)
+    }
+
+    pub(crate) fn prepare_spec_state_admission_for_key(&mut self, key: &CudaDecodeGraphKey) {
+        let usage = self
+            .entries
+            .iter()
+            .rev()
+            .find(|entry| entry.key.has_same_spec_state_shape(key))
+            .map(|entry| entry.spec_state_usage.clone());
+        if let Some(usage) = usage {
+            self.evict_for_spec_state(&usage);
+        }
     }
 
     pub(crate) fn insert(&mut self, mut entry: CudaDecodeGraphEntry) {
@@ -3747,6 +3774,7 @@ mod tests {
         )
         .unwrap();
         assert_ne!(staged_key, speculative_key);
+        assert!(!staged_key.has_same_spec_state_shape(&speculative_key));
 
         let mut next_bucket_rows = (*rows).clone();
         next_bucket_rows.block_tables =
@@ -3758,6 +3786,7 @@ mod tests {
             CudaDecodeGraphKey::new(&input_ids, &next_bucket, 32, RecurrentBatchKind::Decode)
                 .unwrap();
         assert_ne!(staged_key, next_bucket_key);
+        assert!(staged_key.has_same_spec_state_shape(&next_bucket_key));
     }
 
     #[test]

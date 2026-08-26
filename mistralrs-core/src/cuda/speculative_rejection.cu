@@ -456,12 +456,6 @@ __device__ SpecRejectionStatus prepare_topk_distribution(
   if (!(inverse_temperature > 0.0f) || !isfinite(inverse_temperature)) {
     return SPEC_REJECTION_INVALID_TARGET;
   }
-  if (!(packed[2 * packed_k] > 0.0f) ||
-      !isfinite(packed[2 * packed_k]) ||
-      !isfinite(packed[2 * packed_k + 1])) {
-    return SPEC_REJECTION_INVALID_TARGET;
-  }
-
   const float first_value = packed[0];
   if (!isfinite(first_value)) {
     return SPEC_REJECTION_INVALID_TARGET;
@@ -597,7 +591,7 @@ __global__ void sparse_rejection_topk_f32_kernel(
   uint32_t accepted = 0;
   uint32_t continuation = SPEC_REJECTION_INVALID_VALUE;
   SpecRejectionStatus status = SPEC_REJECTION_OK;
-  const int packed_width = 2 * packed_k + 2;
+  const int packed_width = 2 * packed_k;
   const float inverse_temperature = inverse_temperatures[sequence];
   const size_t sequence_row = static_cast<size_t>(sequence) * (drafts + 1);
 

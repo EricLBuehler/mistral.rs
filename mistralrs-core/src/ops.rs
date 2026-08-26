@@ -935,6 +935,88 @@ impl CudaTopKLogitsPackedWorkspace {
 }
 
 #[cfg(feature = "cuda")]
+pub(crate) struct CudaRankedTopKPackedWorkspace {
+    location: candle_core::DeviceLocation,
+    stream: Arc<candle_core::cuda_backend::cudarc::driver::CudaStream>,
+    capacity_rows: usize,
+    vocab: usize,
+    capacity_k: usize,
+    nblocks: usize,
+    block_values: Tensor,
+    block_indices: Tensor,
+    radix_state: Tensor,
+    packed: Tensor,
+}
+
+#[cfg(feature = "cuda")]
+impl CudaRankedTopKPackedWorkspace {
+    fn new(
+        dev: &candle_core::CudaDevice,
+        rows: usize,
+        vocab: usize,
+        k: usize,
+        nblocks: usize,
+    ) -> Result<Self> {
+        use candle_core::backend::BackendDevice;
+
+        let capacity_rows = rows
+            .checked_next_power_of_two()
+            .ok_or_else(|| candle_core::Error::msg("CUDA ranked top-k row capacity overflow"))?;
+        let capacity_k = k
+            .checked_next_power_of_two()
+            .ok_or_else(|| candle_core::Error::msg("CUDA ranked top-k width capacity overflow"))?;
+        let candidate_elems = capacity_rows
+            .checked_mul(nblocks)
+            .and_then(|elems| elems.checked_mul(capacity_k))
+            .ok_or_else(|| candle_core::Error::msg("CUDA ranked top-k workspace overflow"))?;
+        let radix_state_elems = capacity_rows
+            .checked_mul(unsafe { ffi::topk_large_ranked_state_words_per_row() })
+            .ok_or_else(|| candle_core::Error::msg("CUDA ranked top-k radix overflow"))?;
+        let index_elems = capacity_rows
+            .checked_mul(nblocks)
+            .and_then(|elems| elems.checked_mul(capacity_k))
+            .ok_or_else(|| candle_core::Error::msg("CUDA ranked top-k index overflow"))?;
+        let packed_elems = capacity_rows
+            .checked_mul(capacity_k)
+            .and_then(|elems| elems.checked_mul(2))
+            .ok_or_else(|| candle_core::Error::msg("CUDA ranked top-k packed overflow"))?;
+        let device = candle_core::Device::Cuda(dev.clone());
+        Ok(Self {
+            location: dev.location(),
+            stream: dev.cuda_stream(),
+            capacity_rows,
+            vocab,
+            capacity_k,
+            nblocks,
+            block_values: Tensor::zeros(candidate_elems, DType::F32, &device)?,
+            block_indices: Tensor::zeros(index_elems, DType::U32, &device)?,
+            radix_state: Tensor::zeros(radix_state_elems, DType::U32, &device)?,
+            packed: Tensor::zeros(packed_elems, DType::F32, &device)?,
+        })
+    }
+
+    fn can_hold(
+        &self,
+        dev: &candle_core::CudaDevice,
+        rows: usize,
+        vocab: usize,
+        k: usize,
+        nblocks: usize,
+    ) -> bool {
+        use candle_core::backend::BackendDevice;
+
+        let stream = dev.cuda_stream();
+        self.location == dev.location()
+            && Arc::ptr_eq(self.stream.context(), stream.context())
+            && self.stream.cu_stream() == stream.cu_stream()
+            && self.capacity_rows >= rows
+            && self.vocab == vocab
+            && self.capacity_k >= k
+            && self.nblocks == nblocks
+    }
+}
+
+#[cfg(feature = "cuda")]
 pub(crate) fn cuda_topk_logits_packed_batched(
     input: &Tensor,
     k: usize,
@@ -1079,8 +1161,8 @@ pub(crate) fn cuda_topk_logits_packed_batched_with_workspace(
         _ => candle_core::bail!("{OP} logits dtype mismatch"),
     };
     let (temperature_ptr, temperature_guard) = temperature_slice.device_ptr(&stream);
-    let (block_values_storage, block_values_layout) = block_values.storage_and_layout();
-    let candle_core::Storage::Cuda(block_values_storage) = &*block_values_storage else {
+    let (block_values_storage_guard, block_values_layout) = block_values.storage_and_layout();
+    let candle_core::Storage::Cuda(block_values_storage) = &*block_values_storage_guard else {
         unreachable!("CUDA top-k workspace values are CUDA")
     };
     let CudaStorageSlice::F32(block_values_slice) = &block_values_storage.slice else {
@@ -1089,8 +1171,8 @@ pub(crate) fn cuda_topk_logits_packed_batched_with_workspace(
     let (block_values_ptr, block_values_guard) = block_values_slice.device_ptr(&stream);
     let block_values_ptr =
         unsafe { (block_values_ptr as *mut f32).add(block_values_layout.start_offset()) };
-    let (block_indices_storage, block_indices_layout) = block_indices.storage_and_layout();
-    let candle_core::Storage::Cuda(block_indices_storage) = &*block_indices_storage else {
+    let (block_indices_storage_guard, block_indices_layout) = block_indices.storage_and_layout();
+    let candle_core::Storage::Cuda(block_indices_storage) = &*block_indices_storage_guard else {
         unreachable!("CUDA top-k workspace indices are CUDA")
     };
     let CudaStorageSlice::U32(block_indices_slice) = &block_indices_storage.slice else {
@@ -1119,8 +1201,8 @@ pub(crate) fn cuda_topk_logits_packed_batched_with_workspace(
     let (block_sums_ptr, block_sums_guard) = block_sums_slice.device_ptr(&stream);
     let block_sums_ptr =
         unsafe { (block_sums_ptr as *mut f32).add(block_sums_layout.start_offset()) };
-    let (packed_storage, packed_layout) = packed_dst.storage_and_layout();
-    let candle_core::Storage::Cuda(packed_storage) = &*packed_storage else {
+    let (packed_storage_guard, packed_layout) = packed_dst.storage_and_layout();
+    let candle_core::Storage::Cuda(packed_storage) = &*packed_storage_guard else {
         unreachable!("CUDA top-k packed workspace is CUDA")
     };
     let CudaStorageSlice::F32(packed_slice) = &packed_storage.slice else {
@@ -1183,8 +1265,18 @@ pub(crate) fn cuda_topk_ranked_packed_batched(
     input: &Tensor,
     k: usize,
 ) -> Result<RankedTopKPackedOutput> {
+    let mut workspace = None;
+    cuda_topk_ranked_packed_batched_with_workspace(input, k, &mut workspace)
+}
+
+#[cfg(feature = "cuda")]
+pub(crate) fn cuda_topk_ranked_packed_batched_with_workspace(
+    input: &Tensor,
+    k: usize,
+    cache: &mut Option<CudaRankedTopKPackedWorkspace>,
+) -> Result<RankedTopKPackedOutput> {
     use candle_core::backend::BackendStorage;
-    use candle_core::cuda_backend::cudarc::driver::{DevicePtr, DevicePtrMut};
+    use candle_core::cuda_backend::cudarc::driver::DevicePtr;
     use candle_core::cuda_backend::CudaStorageSlice;
     use std::ffi::c_void;
 
@@ -1237,7 +1329,6 @@ pub(crate) fn cuda_topk_ranked_packed_batched(
     let radix_state_elems = batch
         .checked_mul(radix_state_words_per_row)
         .ok_or_else(|| candle_core::Error::Msg(format!("{OP} radix workspace overflow")))?;
-    let value_workspace_elems = workspace_elems.max(radix_state_elems);
     let packed_width = k
         .checked_mul(2)
         .ok_or_else(|| candle_core::Error::Msg(format!("{OP} packed width overflow")))?;
@@ -1258,9 +1349,21 @@ pub(crate) fn cuda_topk_ranked_packed_batched(
     };
     let dev = input_storage.device();
     let stream = dev.cuda_stream();
-    let mut block_values = dev.alloc_zeros::<f32>(value_workspace_elems)?;
-    let mut block_indices = unsafe { dev.alloc::<u32>(workspace_elems) }?;
-    let mut packed_dst = unsafe { dev.alloc::<f32>(packed_elems) }?;
+    let needs_alloc = cache
+        .as_ref()
+        .is_none_or(|workspace| !workspace.can_hold(dev, batch, vocab, k, nblocks));
+    if needs_alloc {
+        *cache = Some(CudaRankedTopKPackedWorkspace::new(
+            dev, batch, vocab, k, nblocks,
+        )?);
+    }
+    let workspace = cache
+        .as_ref()
+        .expect("CUDA ranked top-k workspace was allocated above");
+    let block_values = workspace.block_values.narrow(0, 0, workspace_elems)?;
+    let block_indices = workspace.block_indices.narrow(0, 0, workspace_elems)?;
+    let radix_state = workspace.radix_state.narrow(0, 0, radix_state_elems)?;
+    let packed_dst = workspace.packed.narrow(0, 0, packed_elems)?;
 
     macro_rules! input_ptr {
         ($slice:expr, $ty:ty) => {{
@@ -1276,18 +1379,54 @@ pub(crate) fn cuda_topk_ranked_packed_batched(
         CudaStorageSlice::F16(slice) => input_ptr!(slice, half::f16),
         _ => candle_core::bail!("{OP} logits dtype mismatch"),
     };
-    let (block_values_ptr, block_values_guard) = block_values.device_ptr_mut(&stream);
-    let (block_indices_ptr, block_indices_guard) = block_indices.device_ptr_mut(&stream);
-    let (packed_ptr, packed_guard) = packed_dst.device_ptr_mut(&stream);
+    let (block_values_storage_guard, block_values_layout) = block_values.storage_and_layout();
+    let candle_core::Storage::Cuda(block_values_storage) = &*block_values_storage_guard else {
+        unreachable!("CUDA ranked top-k workspace values are CUDA")
+    };
+    let CudaStorageSlice::F32(block_values_slice) = &block_values_storage.slice else {
+        unreachable!("CUDA ranked top-k workspace values are F32")
+    };
+    let (block_values_ptr, block_values_guard) = block_values_slice.device_ptr(&stream);
+    let block_values_ptr =
+        unsafe { (block_values_ptr as *mut f32).add(block_values_layout.start_offset()) };
+    let (block_indices_storage_guard, block_indices_layout) = block_indices.storage_and_layout();
+    let candle_core::Storage::Cuda(block_indices_storage) = &*block_indices_storage_guard else {
+        unreachable!("CUDA ranked top-k workspace indices are CUDA")
+    };
+    let CudaStorageSlice::U32(block_indices_slice) = &block_indices_storage.slice else {
+        unreachable!("CUDA ranked top-k workspace indices are U32")
+    };
+    let (block_indices_ptr, block_indices_guard) = block_indices_slice.device_ptr(&stream);
+    let block_indices_ptr =
+        unsafe { (block_indices_ptr as *mut u32).add(block_indices_layout.start_offset()) };
+    let (packed_storage_guard, packed_layout) = packed_dst.storage_and_layout();
+    let candle_core::Storage::Cuda(packed_storage) = &*packed_storage_guard else {
+        unreachable!("CUDA ranked top-k packed workspace is CUDA")
+    };
+    let CudaStorageSlice::F32(packed_slice) = &packed_storage.slice else {
+        unreachable!("CUDA ranked top-k packed workspace is F32")
+    };
+    let (packed_ptr, packed_guard) = packed_slice.device_ptr(&stream);
+    let packed_ptr = unsafe { (packed_ptr as *mut f32).add(packed_layout.start_offset()) };
+    let (radix_storage_guard, radix_layout) = radix_state.storage_and_layout();
+    let candle_core::Storage::Cuda(radix_storage) = &*radix_storage_guard else {
+        unreachable!("CUDA ranked top-k radix workspace is CUDA")
+    };
+    let CudaStorageSlice::U32(radix_slice) = &radix_storage.slice else {
+        unreachable!("CUDA ranked top-k radix workspace is U32")
+    };
+    let (radix_ptr, radix_guard) = radix_slice.device_ptr(&stream);
+    let radix_ptr = unsafe { (radix_ptr as *mut u32).add(radix_layout.start_offset()) };
 
     macro_rules! launch {
         ($kernel:path, $input:expr) => {{
             unsafe {
                 $kernel(
                     $input,
-                    block_values_ptr as *mut f32,
-                    block_indices_ptr as *mut u32,
-                    packed_ptr as *mut f32,
+                    block_values_ptr,
+                    block_indices_ptr,
+                    packed_ptr,
+                    radix_ptr.cast::<c_void>(),
                     nrows_i32,
                     ncols_i32,
                     k_i32,
@@ -1312,38 +1451,19 @@ pub(crate) fn cuda_topk_ranked_packed_batched(
     drop(block_values_guard);
     drop(block_indices_guard);
     drop(packed_guard);
+    drop(radix_guard);
+    drop(block_values_storage_guard);
+    drop(block_indices_storage_guard);
+    drop(packed_storage_guard);
+    drop(radix_storage_guard);
     if status != 0 {
         candle_core::bail!("{OP} CUDA launch failed with status {status}");
     }
 
-    let workspace = vec![
-        Tensor::from((
-            candle_core::Storage::Cuda(candle_core::cuda_backend::CudaStorage {
-                slice: CudaStorageSlice::F32(block_values),
-                device: dev.clone(),
-            }),
-            Shape::from_dims(&[value_workspace_elems]),
-        )),
-        Tensor::from((
-            candle_core::Storage::Cuda(candle_core::cuda_backend::CudaStorage {
-                slice: CudaStorageSlice::U32(block_indices),
-                device: dev.clone(),
-            }),
-            Shape::from_dims(&[batch, nblocks, k]),
-        )),
-    ];
-    let packed_storage = candle_core::cuda_backend::CudaStorage {
-        slice: CudaStorageSlice::F32(packed_dst),
-        device: dev.clone(),
-    };
-
     Ok(RankedTopKPackedOutput {
-        packed: Tensor::from((
-            candle_core::Storage::Cuda(packed_storage),
-            Shape::from_dims(&[batch, packed_width]),
-        )),
+        packed: packed_dst.reshape((batch, packed_width))?,
         k,
-        _workspace: workspace,
+        _workspace: vec![block_values, block_indices, radix_state],
     })
 }
 
@@ -5883,6 +6003,52 @@ impl MergedDenseProjection {
             self.proj.forward(xs).map(Some)
         }
     }
+
+    pub(crate) fn activation_quantization_scheme_for(
+        &self,
+        xs: &Tensor,
+    ) -> Option<mistralrs_quant::ActivationQuantizationScheme> {
+        if self
+            .originals
+            .iter()
+            .any(|proj| proj.is_dynamic_lora_active())
+        {
+            None
+        } else {
+            self.proj.activation_quantization_scheme_for(xs)
+        }
+    }
+
+    pub(crate) fn preferred_activation_scale_layout_for(
+        &self,
+        xs: &Tensor,
+    ) -> Option<mistralrs_quant::ActivationScaleLayout> {
+        if self
+            .originals
+            .iter()
+            .any(|proj| proj.is_dynamic_lora_active())
+        {
+            None
+        } else {
+            self.proj.preferred_activation_scale_layout_for(xs)
+        }
+    }
+
+    pub(crate) fn forward_quantized_packed(
+        &self,
+        activation: &mistralrs_quant::QuantizedActivation,
+    ) -> Result<Tensor> {
+        if self
+            .originals
+            .iter()
+            .any(|proj| proj.is_dynamic_lora_active())
+        {
+            candle_core::bail!(
+                "packed projection cannot use a prequantized activation with active dynamic LoRA"
+            )
+        }
+        self.proj.forward_quantized(activation)
+    }
 }
 
 /// Feed-forward path for quantized gate/up/down projections.
@@ -6977,7 +7143,6 @@ mod tests {
         const BACKING_ROWS: usize = 3;
         const ROWS: usize = 2;
         const VOCAB: usize = 248_320;
-        const K: usize = 16;
 
         let device = Device::new_cuda(0)?;
         let mut values = vec![-32.0f32; BACKING_ROWS * VOCAB];
@@ -6998,19 +7163,21 @@ mod tests {
                 .to_dtype(DType::F32)?
                 .to_device(&Device::Cpu)?
                 .to_vec2::<f32>()?;
-            let output = super::cuda_topk_ranked_packed_batched(&input, K)?;
-            let packed = output.packed.to_device(&Device::Cpu)?.to_vec2::<f32>()?;
+            for k in [20, 32] {
+                let output = super::cuda_topk_ranked_packed_batched(&input, k)?;
+                let packed = output.packed.to_device(&Device::Cpu)?.to_vec2::<f32>()?;
 
-            for (packed_row, reference_row) in packed.iter().zip(&reference) {
-                let mut indices = (0..VOCAB).collect::<Vec<_>>();
-                indices.sort_unstable_by(|&left, &right| {
-                    reference_row[right]
-                        .total_cmp(&reference_row[left])
-                        .then_with(|| left.cmp(&right))
-                });
-                for (slot, &index) in indices.iter().take(K).enumerate() {
-                    assert_eq!(packed_row[slot], reference_row[index]);
-                    assert_eq!(packed_row[K + slot], index as f32);
+                for (packed_row, reference_row) in packed.iter().zip(&reference) {
+                    let mut indices = (0..VOCAB).collect::<Vec<_>>();
+                    indices.sort_unstable_by(|&left, &right| {
+                        reference_row[right]
+                            .total_cmp(&reference_row[left])
+                            .then_with(|| left.cmp(&right))
+                    });
+                    for (slot, &index) in indices.iter().take(k).enumerate() {
+                        assert_eq!(packed_row[slot], reference_row[index]);
+                        assert_eq!(packed_row[k + slot], index as f32);
+                    }
                 }
             }
         }
@@ -7073,7 +7240,7 @@ mod tests {
                 .then_with(|| left.cmp(&right))
         });
 
-        for k in [7, 8, 16, 17, 20, 128] {
+        for k in [7, 8, 16, 17, 20, 32, 33, 128] {
             let output = super::cuda_topk_ranked_packed_batched(&logits, k)?;
             let packed = output.packed.to_device(&Device::Cpu)?.to_vec2::<f32>()?;
             for (slot, &index) in expected_indices.iter().take(k).enumerate() {

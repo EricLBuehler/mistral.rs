@@ -226,7 +226,7 @@ struct SparseRejectionCandidate<'a> {
 #[cfg(feature = "cuda")]
 enum SparseRejectionDraftTokens {
     Host(Vec<u32>),
-    Device(Tensor),
+    DeviceRows(Vec<Tensor>),
 }
 
 #[cfg(feature = "cuda")]
@@ -236,8 +236,8 @@ impl SparseRejectionDraftTokens {
             Self::Host(tokens) => {
                 crate::cuda::speculative_rejection::SparseRejectionDraftInput::Host(tokens)
             }
-            Self::Device(tokens) => {
-                crate::cuda::speculative_rejection::SparseRejectionDraftInput::Device(tokens)
+            Self::DeviceRows(tokens) => {
+                crate::cuda::speculative_rejection::SparseRejectionDraftInput::DeviceRows(tokens)
             }
         }
     }
@@ -558,38 +558,40 @@ fn submit_sparse_rejection_group(
             batch_sparse_rejection_logits(logits)?
         }
     };
-    let sparse_q = if seed.distribution.is_deterministic() {
-        None
+    let q_token_rows = if seed.distribution.is_deterministic() {
+        Vec::new()
     } else {
-        let q_token_rows = group
+        group
             .iter()
             .map(|row| match &row.distribution {
-                SparseRejectionCandidateDistribution::Sparse { token_ids, .. } => {
-                    token_ids.unsqueeze(0)
-                }
+                SparseRejectionCandidateDistribution::Sparse { token_ids, .. } => token_ids.clone(),
                 SparseRejectionCandidateDistribution::Deterministic => {
                     unreachable!("sparse rejection groups have one proposal distribution kind")
                 }
             })
-            .collect::<Result<Vec<_>>>()?;
-        let q_prob_rows = group
-            .iter()
-            .map(|row| match &row.distribution {
-                SparseRejectionCandidateDistribution::Sparse { probs, .. } => probs.unsqueeze(0),
-                SparseRejectionCandidateDistribution::Deterministic => {
-                    unreachable!("sparse rejection groups have one proposal distribution kind")
-                }
-            })
-            .collect::<Result<Vec<_>>>()?;
-        Some((
-            Tensor::cat(&q_token_rows.iter().collect::<Vec<_>>(), 0)?,
-            Tensor::cat(&q_prob_rows.iter().collect::<Vec<_>>(), 0)?,
-        ))
+            .collect::<Vec<_>>()
     };
-    let proposal = sparse_q.as_ref().map_or(
-        SparseRejectionProposalInput::Deterministic,
-        |(token_ids, probs)| SparseRejectionProposalInput::Sparse { token_ids, probs },
-    );
+    let q_prob_rows = if seed.distribution.is_deterministic() {
+        Vec::new()
+    } else {
+        group
+            .iter()
+            .map(|row| match &row.distribution {
+                SparseRejectionCandidateDistribution::Sparse { probs, .. } => probs.clone(),
+                SparseRejectionCandidateDistribution::Deterministic => {
+                    unreachable!("sparse rejection groups have one proposal distribution kind")
+                }
+            })
+            .collect::<Vec<_>>()
+    };
+    let proposal = if seed.distribution.is_deterministic() {
+        SparseRejectionProposalInput::Deterministic
+    } else {
+        SparseRejectionProposalInput::SparseRows {
+            token_ids: &q_token_rows,
+            probs: &q_prob_rows,
+        }
+    };
     let draft_tokens = if seed.proposal.as_device().is_some() {
         let rows = group
             .iter()
@@ -597,13 +599,10 @@ fn submit_sparse_rejection_group(
                 row.proposal
                     .as_device()
                     .expect("sparse rejection group has one proposal storage kind")
+                    .clone()
             })
             .collect::<Vec<_>>();
-        let tokens = match rows.as_slice() {
-            [row] => row.unsqueeze(0)?.contiguous()?,
-            _ => Tensor::stack(&rows, 0)?.contiguous()?,
-        };
-        SparseRejectionDraftTokens::Device(tokens)
+        SparseRejectionDraftTokens::DeviceRows(rows)
     } else {
         SparseRejectionDraftTokens::Host(
             group

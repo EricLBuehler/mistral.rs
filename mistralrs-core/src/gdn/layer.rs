@@ -27,10 +27,7 @@ pub struct GdnForwardStash {
 }
 
 #[derive(Clone)]
-pub struct GdnTransitionStash {
-    pub conv_input: Tensor,
-    pub transitions: crate::cuda::gdn::GdnSpeculativeTransitions,
-}
+pub struct GdnTransitionStash;
 
 #[derive(Clone)]
 pub enum GdnSpeculativeStash {
@@ -446,16 +443,12 @@ impl GatedDeltaNet {
             .squeeze(1)?
             .to_dtype(mixed_qkv.dtype())?
             .contiguous()?;
-        let conv_input = if transition_checkpoints {
-            mixed_qkv.contiguous()?
-        } else {
-            mixed_qkv.clone()
-        };
+        let conv_input = mixed_qkv.clone();
         let pending_conv = cache.pending_transitions.as_ref().map(|pending| {
             crate::cuda::gdn::GdnPendingSpeculativeConv {
                 conv_input: &pending.conv_input,
                 keep_rows: &pending.keep_rows,
-                epochs: &pending.pending_epochs,
+                pending_epochs: &pending.pending_epochs,
                 applied_epochs: &pending.conv_applied_epochs,
             }
         });
@@ -487,11 +480,12 @@ impl GatedDeltaNet {
         });
         let pending_recurrence = cache.pending_transitions.as_ref().map(|pending| {
             crate::cuda::gdn::GdnPendingSpeculativeRecurrence {
-                key: &pending.key,
+                key_banks: &pending.key_banks,
+                key_bank: &pending.key_bank,
                 delta: &pending.delta,
                 decay: &pending.decay,
                 keep_rows: &pending.keep_rows,
-                epochs: &pending.pending_epochs,
+                pending_epochs: &pending.pending_epochs,
                 applied_epochs: &pending.recurrent_applied_epochs,
             }
         });
@@ -520,12 +514,7 @@ impl GatedDeltaNet {
                 pending: pending_recurrence,
             },
         )?;
-        let transitions = recurrence
-            .transitions
-            .map(|transitions| GdnTransitionStash {
-                conv_input,
-                transitions,
-            });
+        let transitions = transition_checkpoints.then_some(GdnTransitionStash);
         let output = recurrence.output;
         if fused_norm {
             Ok((

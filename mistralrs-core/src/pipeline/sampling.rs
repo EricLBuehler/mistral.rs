@@ -140,6 +140,9 @@ pub(crate) fn cache_finished_sequence(
     prefix_cacher: &mut PrefixCacheManagerV2,
     seq: &mut Sequence,
 ) -> Result<()> {
+    if !prefix_cacher.accepts_sequence_cache() {
+        return Ok(());
+    }
     let recurrent_snapshots = if this.cache().is_hybrid() {
         let Some(idx) = seq.recurrent_state_idx() else {
             tracing::warn!(
@@ -1142,13 +1145,13 @@ fn try_sample_batch_cuda(
         .iter()
         .map(|(_, plan)| plan.inverse_temperature)
         .collect::<Vec<_>>();
-    let inverse_temperatures = Tensor::from_vec(
-        inverse_temperatures,
-        samplers_and_plans.len(),
-        logits.device(),
-    )?;
 
     if categorical {
+        let inverse_temperatures = Tensor::from_vec(
+            inverse_temperatures,
+            samplers_and_plans.len(),
+            logits.device(),
+        )?;
         let uniform = Uniform::new(0.0f32, 1.0f32).expect("valid unit uniform distribution");
         let uniforms = seqs
             .iter()
@@ -1180,18 +1183,40 @@ fn try_sample_batch_cuda(
         })
         .max()
         .expect("batch is non-empty");
-    let output =
-        crate::ops::cuda_topk_logits_f32_packed_batched(&logits, common_k, &inverse_temperatures)?;
-    let packed = output.packed.to_vec2::<f32>()?;
-    Ok(Some(
-        std::iter::zip(std::iter::zip(packed, samplers_and_plans), seqs.iter())
-            .map(|((row, (sampler, plan)), seq)| {
-                let rng = seq.sampling_rng(rng);
-                let mut rng = rng.lock().expect("could not lock rng mutex");
-                sampler.sample_cuda_topk_packed_row(&row, output.k, plan, &mut rng)
-            })
-            .collect(),
-    ))
+    if !sampling_logprob_required {
+        let output = crate::ops::cuda_topk_ranked_packed_batched(&logits, common_k)?;
+        let packed = output.packed.to_vec2::<f32>()?;
+        Ok(Some(
+            std::iter::zip(std::iter::zip(packed, samplers_and_plans), seqs.iter())
+                .map(|((row, (sampler, plan)), seq)| {
+                    let rng = seq.sampling_rng(rng);
+                    let mut rng = rng.lock().expect("could not lock rng mutex");
+                    sampler.sample_cuda_ranked_topk_packed_row(&row, output.k, plan, &mut rng)
+                })
+                .collect(),
+        ))
+    } else {
+        let inverse_temperatures = Tensor::from_vec(
+            inverse_temperatures,
+            samplers_and_plans.len(),
+            logits.device(),
+        )?;
+        let output = crate::ops::cuda_topk_logits_f32_packed_batched(
+            &logits,
+            common_k,
+            &inverse_temperatures,
+        )?;
+        let packed = output.packed.to_vec2::<f32>()?;
+        Ok(Some(
+            std::iter::zip(std::iter::zip(packed, samplers_and_plans), seqs.iter())
+                .map(|((row, (sampler, plan)), seq)| {
+                    let rng = seq.sampling_rng(rng);
+                    let mut rng = rng.lock().expect("could not lock rng mutex");
+                    sampler.sample_cuda_topk_packed_row(&row, output.k, plan, &mut rng)
+                })
+                .collect(),
+        ))
+    }
 }
 
 #[cfg(not(feature = "cuda"))]

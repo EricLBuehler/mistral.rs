@@ -125,6 +125,10 @@ pub trait SpeculativeTargetMixin {
         Ok(false)
     }
 
+    fn apply_recurrent_speculative_transitions_for_current_batch(&self) -> Result<bool> {
+        Ok(false)
+    }
+
     fn flush_recurrent_speculative_transitions(&self, _seq_ids: &[usize]) -> Result<()> {
         Ok(())
     }

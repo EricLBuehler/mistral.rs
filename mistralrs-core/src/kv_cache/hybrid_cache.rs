@@ -55,16 +55,19 @@ pub(crate) struct GdnPendingTransitionSpec {
 
 const GDN_PENDING_KEEP_ROWS: usize = 0;
 const GDN_PENDING_EPOCHS: usize = 1;
-const GDN_PENDING_METADATA_FIELDS: usize = 2;
+const GDN_PENDING_KEY_BANK: usize = 2;
+const GDN_PENDING_METADATA_FIELDS: usize = 3;
+pub(crate) const GDN_PENDING_KEY_BANK_COUNT: usize = 2;
 
 #[derive(Clone, Debug)]
 pub(crate) struct GdnPendingTransitionPool {
     pub conv_input: Tensor,
-    pub key: Tensor,
+    pub key_banks: Tensor,
     pub delta: Tensor,
     pub decay: Tensor,
     pub keep_rows: Tensor,
     pub pending_epochs: Tensor,
+    pub key_bank: Tensor,
     pub conv_applied_epochs: Tensor,
     pub recurrent_applied_epochs: Tensor,
     metadata: Tensor,
@@ -119,12 +122,19 @@ impl GdnPendingTransitionPool {
         let metadata = Tensor::zeros((GDN_PENDING_METADATA_FIELDS, capacity), DType::U32, device)?;
         let keep_rows = metadata.i(GDN_PENDING_KEEP_ROWS)?;
         let pending_epochs = metadata.i(GDN_PENDING_EPOCHS)?;
+        let key_bank = metadata.i(GDN_PENDING_KEY_BANK)?;
         let conv_applied_epochs = Tensor::zeros((capacity, conv_blocks), DType::U32, device)?;
         let recurrent_applied_epochs = Tensor::zeros((capacity, num_v_heads), DType::U32, device)?;
         Ok(Self {
             conv_input: Tensor::zeros((capacity, spec.max_rows, conv_dim), conv_dtype, device)?,
-            key: Tensor::zeros(
-                (capacity, spec.max_rows, spec.num_k_heads, head_k_dim),
+            key_banks: Tensor::zeros(
+                (
+                    GDN_PENDING_KEY_BANK_COUNT,
+                    capacity,
+                    spec.max_rows,
+                    spec.num_k_heads,
+                    head_k_dim,
+                ),
                 DType::F32,
                 device,
             )?,
@@ -136,6 +146,7 @@ impl GdnPendingTransitionPool {
             decay: Tensor::zeros((capacity, spec.max_rows, num_v_heads), DType::F32, device)?,
             keep_rows,
             pending_epochs,
+            key_bank,
             conv_applied_epochs,
             recurrent_applied_epochs,
             metadata,
@@ -178,7 +189,7 @@ impl GdnPendingTransitionPool {
             self.spec,
         )?;
         resized.conv_input.slice_set(&self.conv_input, 0, 0)?;
-        resized.key.slice_set(&self.key, 0, 0)?;
+        resized.key_banks.slice_set(&self.key_banks, 1, 0)?;
         resized.delta.slice_set(&self.delta, 0, 0)?;
         resized.decay.slice_set(&self.decay, 0, 0)?;
         resized.metadata.slice_set(&self.metadata, 1, 0)?;
@@ -230,7 +241,7 @@ impl GdnPendingTransitionPool {
     pub(crate) fn storage_bytes(&self) -> Result<usize> {
         [
             &self.conv_input,
-            &self.key,
+            &self.key_banks,
             &self.delta,
             &self.decay,
             &self.metadata,
@@ -1989,6 +2000,18 @@ impl HybridCache {
         self.state_indices.as_ref()
     }
 
+    pub(crate) fn state_indices_for_device(&self, device: &Device) -> Option<Tensor> {
+        if let Some(indices) = &self.state_indices {
+            if indices.device().same_device(device) {
+                return Some(indices.clone());
+            }
+        }
+        self.device_state_indices
+            .iter()
+            .find(|(cached_device, _)| cached_device.same_device(device))
+            .map(|(_, indices)| indices.clone())
+    }
+
     pub fn state_indices_host(&self) -> Option<&[u32]> {
         self.state_indices_host.as_deref()
     }
@@ -2365,11 +2388,12 @@ mod tests {
             let pending = pool.pending_transitions().unwrap();
             assert_eq!(pending.capacity(), INITIAL_POOL_CAPACITY);
             assert_eq!(pending.conv_input.dims(), &[9, 8, 2]);
-            assert_eq!(pending.key.dims(), &[9, 8, 1, 4]);
+            assert_eq!(pending.key_banks.dims(), &[2, 9, 8, 1, 4]);
             assert_eq!(pending.delta.dims(), &[9, 8, 3, 5]);
             assert_eq!(pending.decay.dims(), &[9, 8, 3]);
             assert_eq!(pending.keep_rows.dims(), &[9]);
             assert_eq!(pending.pending_epochs.dims(), &[9]);
+            assert_eq!(pending.key_bank.dims(), &[9]);
             assert_eq!(pending.conv_applied_epochs.dims(), &[9, 1]);
             assert_eq!(pending.recurrent_applied_epochs.dims(), &[9, 3]);
             assert!(pending.storage_bytes()? > 0);
@@ -2391,6 +2415,11 @@ mod tests {
             )?;
             pending.pending_epochs.slice_set(
                 &Tensor::from_vec(vec![17u32; 9], (9,), &Device::Cpu)?,
+                0,
+                0,
+            )?;
+            pending.key_bank.slice_set(
+                &Tensor::from_vec(vec![1u32; 9], (9,), &Device::Cpu)?,
                 0,
                 0,
             )?;
@@ -2417,6 +2446,7 @@ mod tests {
             assert_eq!(pending.conv_input.dims(), &[18, 8, 2]);
             assert_eq!(pending.keep_rows.to_vec1::<u32>()?[0], 6);
             assert_eq!(pending.pending_epochs.to_vec1::<u32>()?[0], 17);
+            assert_eq!(pending.key_bank.to_vec1::<u32>()?[0], 1);
             assert_eq!(
                 pending
                     .conv_applied_epochs
@@ -2433,6 +2463,7 @@ mod tests {
             );
             assert_eq!(pending.keep_rows.to_vec1::<u32>()?[9], 0);
             assert_eq!(pending.pending_epochs.to_vec1::<u32>()?[9], 0);
+            assert_eq!(pending.key_bank.to_vec1::<u32>()?[9], 0);
             assert_eq!(
                 pending
                     .conv_applied_epochs
@@ -2459,6 +2490,7 @@ mod tests {
             let pending = pool.pending_transitions().unwrap();
             assert_eq!(pending.keep_rows.to_vec1::<u32>()?[0], 0);
             assert_eq!(pending.pending_epochs.to_vec1::<u32>()?[0], 0);
+            assert_eq!(pending.key_bank.to_vec1::<u32>()?[0], 0);
             assert_eq!(
                 pending
                     .conv_applied_epochs

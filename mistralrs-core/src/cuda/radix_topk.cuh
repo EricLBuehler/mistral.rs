@@ -33,7 +33,7 @@ constexpr uint32_t kRadix = 256;
 constexpr uint32_t kHistogramBuffers = 3;
 constexpr uint32_t kMaxCtasPerGroup = 256;
 constexpr uint32_t kMinTopK = 8;
-constexpr uint32_t kMaxTopK = 16;
+constexpr uint32_t kMaxTopK = 32;
 constexpr size_t kLaunchSmemHeadroom = 2048;
 
 template <typename T> struct Traits;
