@@ -45,6 +45,8 @@ Response shape:
   "stop_sequence": null,
   "usage": {
     "input_tokens": 18,
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 0,
     "output_tokens": 31
   }
 }
@@ -109,17 +111,18 @@ Request fields:
 | Anthropic field | Support |
 |---|---|
 | `model` | Supported. Use `default` or a loaded model id. |
-| `messages` | Supports `user` and `assistant` messages with string content or content blocks. |
+| `messages` | Supports `user`, `assistant`, and mid-conversation `system` messages with string content or content blocks. |
 | `system` | Supported as a top-level string or text-block array. |
 | `max_tokens` | Supported. |
 | `temperature`, `top_p`, `top_k`, `min_p` | Supported. |
 | `stop_sequences` | Supported. |
 | `stream` | Supported. |
 | `tools` | Client tools are converted to OpenAI-compatible function tools. Anthropic server tools for `web_search_*` and `code_execution_*` map to mistral.rs agentic features. |
-| `tool_choice` | `auto`, `none`, and specific client `tool` choices are supported. `any` is accepted as `auto`. Anthropic server-tool choices are accepted as `auto`. |
+| `tool_choice` | `auto`, `any`, `none`, and specific client `tool` choices are supported. `any` requires a client tool call when client tools are present. Anthropic server-tool choices use local agentic auto-selection. |
 | `container.skills` | Supports uploaded custom Skills with `{"type":"custom","skill_id":"...","version":"latest"}`. Anthropic-managed built-in Skills such as `pptx`, `xlsx`, `docx`, and `pdf` are not bundled. |
-| `thinking` | `enabled` and `adaptive` map to thinking on; `disabled` maps to thinking off. The loaded chat template determines the effect. |
-| `enable_thinking`, `reasoning_effort` | Supported as mistral.rs extensions. Effort accepts `off`, `low`, `medium`, `high`, and `xhigh`; `none` aliases `off`. If all controls are omitted, thinking defaults on with no selected effort. Contradictory native and extension controls return a validation error. |
+| `thinking` | `enabled` and `adaptive` map to thinking on; `disabled` maps to thinking off. `display: "omitted"` suppresses reasoning text while preserving the thinking block lifecycle. The loaded chat template determines the effect. |
+| `output_config` | Native `effort` and JSON Schema `format` are supported. Effort accepts `low`, `medium`, `high`, `xhigh`, and `max`; `max` maps to local `xhigh`. Do not combine these fields with the equivalent mistral.rs extensions. |
+| `enable_thinking`, `reasoning_effort` | Supported as mistral.rs extensions. Effort also accepts `off`; `none` aliases `off`. If all controls are omitted, thinking defaults on with no selected effort. Contradictory native and extension controls return a validation error. |
 | `logit_bias`, `logprobs`, `top_logprobs` | Supported as mistral.rs extensions. |
 | `presence_penalty`, `frequency_penalty`, `repetition_penalty` | Supported as mistral.rs extensions. |
 | `response_format`, `grammar` | Supported as mistral.rs extensions. Do not set both in one request. |
@@ -133,12 +136,33 @@ Content blocks:
 | `text` | Supported. |
 | `image` | Supports base64 and URL sources. Requires a multimodal model. |
 | `tool_use` | Supported on assistant messages. |
-| `tool_result` | Supported on user messages. Text results are forwarded as tool messages. |
+| `tool_result` | Supported on user messages. String and text-block results are forwarded as tool messages. |
 | `thinking`, `redacted_thinking` | Accepted in request history. Returned when the model exposes separate reasoning content. |
 
 mistral.rs agentic extensions accepted on this endpoint: `session_id`,
 `web_search_options`, `enable_code_execution`, `agent_permission`,
 `code_execution_permission`, `files`, `max_tool_rounds`, and `truncate_sequence`.
+
+## Compatibility status
+
+Core Messages requests and responses, streaming event order, client tool loops,
+stop reasons and sequences, token usage, request IDs, structured errors, and
+`/v1/messages/count_tokens` use Anthropic-compatible wire shapes.
+
+Some hosted Anthropic features have local equivalents rather than identical
+semantics:
+
+| Feature | Local behavior |
+|---|---|
+| Prompt caching | `cache_control` is accepted. mistral.rs uses its own automatic prefix cache, reports detected hits as `cache_read_input_tokens`, and reports `cache_creation_input_tokens` as `0`; explicit breakpoints and TTLs are not implemented. |
+| Extended thinking | Thinking maps to the loaded model's chat-template reasoning controls. `budget_tokens` is accepted but not enforced. Returned thinking blocks include an empty structural signature because mistral.rs cannot produce Anthropic cryptographic signatures. |
+| Rich tool results | Text results are supported. Nested image, document, search-result, and citation blocks are not translated as multimodal tool content, and `is_error` is not separately modeled. |
+| Server tools | Web search and code execution use mistral.rs agentic implementations. Their extra streaming events are mistral.rs extensions, not Anthropic server-tool result blocks. |
+| Beta request controls | Unknown forward-compatible fields are ignored. Anthropic context management and context editing are not implemented. |
+
+`max_tokens` must be greater than zero. Authentication headers are accepted for
+client compatibility but are not validated by the local server; use a reverse
+proxy when authentication is required.
 
 ## Tool use
 

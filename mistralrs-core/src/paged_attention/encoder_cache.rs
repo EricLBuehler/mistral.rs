@@ -767,8 +767,7 @@ mod tests {
         let mut entry_cache = EncoderCacheManager::new(0);
         let mut byte_cache = EncoderCacheManager::with_max_logical_bytes(0);
 
-        for hash in 0..3 {
-            let value = f32::from(u16::try_from(hash).unwrap());
+        for (hash, value) in [(0, 0.0), (1, 1.0), (2, 2.0)] {
             entry_cache.insert(CacheModality::Image, hash, vec![dummy_tensor(value)]);
             byte_cache.insert(CacheModality::Image, hash, vec![dummy_tensor(value)]);
         }

@@ -97,15 +97,19 @@ The long 512-token completions make decode dominant without removing production-
 
 The vLLM server is the official immutable aarch64 wheel for the pinned upstream commit. Its wheel
 SHA256 is `a2cc284fbdefba0d8b42d97fece25ac4762407438a4fb8c9f351ed0136a42384`.
-The mistral.rs source hash covers the tracked repository tree except `releases/`, so it remains
-stable when this release bundle is added or the performance branch is squash-merged.
+The mistral.rs source hash covers the tracked repository tree except `releases/` and identifies
+the exact engine source used for the published measurements.
 
 ## Reproduction
 
-Build mistral.rs from this release checkout:
+Create a worktree at the measured mistral.rs revision and build it:
 
 ```bash
-cargo build --release --package mistralrs-cli --features "cuda flash-attn"
+git fetch origin b6ea3f2aa83bc77db69f1d5963988de72855be47
+git worktree add /tmp/mistralrs-v0.9.3-bench \
+  b6ea3f2aa83bc77db69f1d5963988de72855be47
+cargo build --manifest-path /tmp/mistralrs-v0.9.3-bench/Cargo.toml \
+  --release --package mistralrs-cli --features "cuda flash-attn"
 ```
 
 Create the pinned vLLM client and server environment:
@@ -143,7 +147,9 @@ python3 -m venv /tmp/sglang-1cf2b8c54d81802abc15dcf23a29b9cc687bc01e-venv
 Run the complete 42-cell sweep:
 
 ```bash
-/tmp/vllm-bench-venv/bin/python \
+MISTRALRS_REPO=/tmp/mistralrs-v0.9.3-bench \
+MISTRALRS_BIN=/tmp/mistralrs-v0.9.3-bench/target/release/mistralrs \
+  /tmp/vllm-bench-venv/bin/python \
   releases/v0.9.3/scripts/bench_decode_serving.py
 ```
 
