@@ -1,3 +1,5 @@
+import { copyText } from "./clipboard.js";
+
 const COPY_RESET_MS = 1800;
 
 const commands = {
@@ -52,8 +54,8 @@ for (const [index, tab] of tabs.entries()) {
 }
 
 copyButton.addEventListener("click", async () => {
-  await navigator.clipboard.writeText(commands[platform]);
-  copyButton.textContent = "Copied";
+  const copied = await copyText(commands[platform]);
+  copyButton.textContent = copied ? "Copied" : "Copy failed";
   window.clearTimeout(copyResetTimer);
   copyResetTimer = window.setTimeout(() => {
     copyButton.textContent = "Copy";
