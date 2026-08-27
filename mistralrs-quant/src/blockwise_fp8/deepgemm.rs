@@ -20,6 +20,8 @@ use super::{
 
 const DECODE_MAX_M: usize = 128;
 const PREFILL_M_VALUES: [usize; 5] = [256, 512, 1024, 2048, 4096];
+#[allow(dead_code)]
+pub(super) const DEEPGEMM_ACTIVATION_SCALE_M_ALIGNMENT: usize = 4;
 const JIT_SOURCE_HASH: &str = env!("MISTRALRS_DEEPGEMM_SOURCE_HASH");
 
 #[derive(Clone, Copy, Eq, Hash, PartialEq)]
@@ -43,32 +45,16 @@ pub(super) struct Prepared {
 }
 
 #[cfg(all(feature = "cuda", has_deepgemm_fp8_sm90_provider))]
-const DEEPGEMM_JIT_HEADERS: &[(&str, &[u8])] = &[
-    (
-        "deep_gemm/fp8_gemm_impl.cuh",
-        include_bytes!("../../third_party/deepgemm_sm90/include/deep_gemm/fp8_gemm_impl.cuh"),
-    ),
-    (
-        "deep_gemm/mma_utils.cuh",
-        include_bytes!("../../third_party/deepgemm_sm90/include/deep_gemm/mma_utils.cuh"),
-    ),
-    (
-        "deep_gemm/nvrtc_cutlass.cuh",
-        include_bytes!("../../third_party/deepgemm_sm90/include/deep_gemm/nvrtc_cutlass.cuh"),
-    ),
-    (
-        "deep_gemm/scheduler.cuh",
-        include_bytes!("../../third_party/deepgemm_sm90/include/deep_gemm/scheduler.cuh"),
-    ),
-    (
-        "deep_gemm/tma_utils.cuh",
-        include_bytes!("../../third_party/deepgemm_sm90/include/deep_gemm/tma_utils.cuh"),
-    ),
-    (
-        "deep_gemm/utils.cuh",
-        include_bytes!("../../third_party/deepgemm_sm90/include/deep_gemm/utils.cuh"),
-    ),
-];
+struct MatmulContext<'a> {
+    dev: &'a candle_core::CudaDevice,
+    plan: &'a ffi::DeepGemmPrepared,
+    m: usize,
+    n: usize,
+    k: usize,
+}
+
+#[cfg(all(feature = "cuda", has_deepgemm_fp8_sm90_provider))]
+include!(concat!(env!("OUT_DIR"), "/deepgemm_jit_headers.rs"));
 
 #[cfg(all(feature = "cuda", has_deepgemm_fp8_sm90_provider))]
 const DEEPGEMM_JIT_LEGAL_FILES: &[(&str, &[u8])] = &[
@@ -83,6 +69,10 @@ const DEEPGEMM_JIT_LEGAL_FILES: &[(&str, &[u8])] = &[
     (
         "LICENSE-MIT",
         include_bytes!("../../third_party/deepgemm_sm90/LICENSE-MIT"),
+    ),
+    (
+        "LICENSE-BSD-3-CLAUSE",
+        include_bytes!("../../third_party/deepgemm_sm90/LICENSE-BSD-3-CLAUSE"),
     ),
 ];
 
@@ -370,6 +360,108 @@ fn serving_bucket(rows: usize) -> Option<usize> {
         .find(|capacity| rows <= *capacity)
 }
 
+#[allow(dead_code)]
+pub(super) fn activation_scale_shape(rows: usize, features: usize) -> Result<[usize; 2]> {
+    if rows == 0 || features == 0 || !features.is_multiple_of(FP8_BLOCK_SIZE) {
+        candle_core::bail!(
+            "DeepGEMM activation shape must be nonzero with K divisible by {FP8_BLOCK_SIZE}"
+        )
+    }
+    let scale_stride_m = rows
+        .checked_add(DEEPGEMM_ACTIVATION_SCALE_M_ALIGNMENT - 1)
+        .ok_or_else(|| {
+            candle_core::Error::msg("DeepGEMM activation scale shape overflows usize")
+        })?
+        / DEEPGEMM_ACTIVATION_SCALE_M_ALIGNMENT
+        * DEEPGEMM_ACTIVATION_SCALE_M_ALIGNMENT;
+    Ok([features / FP8_BLOCK_SIZE, scale_stride_m])
+}
+
+#[cfg(all(feature = "cuda", has_deepgemm_fp8_sm90_provider))]
+#[allow(dead_code)]
+fn validate_prequantized_activation_layout(
+    activation: &Tensor,
+    activation_scales: &Tensor,
+) -> Result<(usize, usize, usize)> {
+    if activation.dtype() != DType::F8E4M3 {
+        candle_core::bail!("DeepGEMM prequantized activation must be F8E4M3")
+    }
+    let (m, k) = activation.dims2()?;
+    let expected_scale_shape = activation_scale_shape(m, k)?;
+    if activation_scales.dtype() != DType::F32 || activation_scales.dims() != expected_scale_shape {
+        candle_core::bail!(
+            "DeepGEMM activation scales must be contiguous F32 with shape {:?}",
+            expected_scale_shape
+        )
+    }
+    if !activation.is_contiguous()
+        || !activation_scales.is_contiguous()
+        || !fp8_tensor_aligned(activation)
+        || !fp8_tensor_aligned(activation_scales)
+    {
+        candle_core::bail!(
+            "DeepGEMM prequantized activation and scales must be contiguous and 16-byte aligned"
+        )
+    }
+    if !activation.device().same_device(activation_scales.device()) {
+        candle_core::bail!("DeepGEMM prequantized activation and scales must be on the same device")
+    }
+    Ok((m, k, expected_scale_shape[1]))
+}
+
+#[cfg(all(feature = "cuda", has_deepgemm_fp8_sm90_provider))]
+fn matmul_context<'a>(
+    prepared: &'a Prepared,
+    activation: &'a Tensor,
+    weight: &Tensor,
+    weight_scales: &Tensor,
+) -> Result<MatmulContext<'a>> {
+    use candle_core::Device;
+
+    if !activation.is_contiguous() || !fp8_tensor_aligned(activation) {
+        candle_core::bail!("DeepGEMM activation must be contiguous and 16-byte aligned")
+    }
+    let (m, k) = activation.dims2()?;
+    let (n, weight_k) = weight.dims2()?;
+    if n == 0
+        || weight_k == 0
+        || n % FP8_BLOCK_SIZE != 0
+        || weight_k % FP8_BLOCK_SIZE != 0
+        || weight.dtype() != DType::F8E4M3
+        || weight_scales.dtype() != DType::F32
+        || !weight.is_contiguous()
+        || !weight_scales.is_contiguous()
+        || !fp8_tensor_aligned(weight)
+        || !fp8_tensor_aligned(weight_scales)
+        || weight_scales.dims() != [n / FP8_BLOCK_SIZE, weight_k / FP8_BLOCK_SIZE]
+    {
+        candle_core::bail!("DeepGEMM weight tensors do not match the prepared FP8 layout")
+    }
+    if weight_k != k {
+        candle_core::bail!(
+            "DeepGEMM input K dimension {k} does not match weight K dimension {weight_k}"
+        )
+    }
+    if !activation.device().same_device(weight.device())
+        || !weight.device().same_device(weight_scales.device())
+    {
+        candle_core::bail!("DeepGEMM operands must be on the same CUDA device")
+    }
+    let Device::Cuda(dev) = activation.device() else {
+        candle_core::bail!("DeepGEMM requires CUDA tensors")
+    };
+    if prepared.device != dev.id() || prepared.n != n || prepared.k != k {
+        candle_core::bail!("DeepGEMM prepared state does not match the CUDA device or weight shape")
+    }
+    let bucket = serving_bucket(m)
+        .ok_or_else(|| candle_core::Error::msg("DeepGEMM row count exceeds prepared capacity"))?;
+    let plan = prepared
+        .plans
+        .get(&bucket)
+        .ok_or_else(|| candle_core::Error::msg("DeepGEMM row bucket was not prepared"))?;
+    Ok(MatmulContext { dev, plan, m, n, k })
+}
+
 #[cfg(all(feature = "cuda", has_deepgemm_fp8_sm90_provider))]
 pub(super) fn matmul(
     prepared: &Prepared,
@@ -377,7 +469,7 @@ pub(super) fn matmul(
     weight: &Tensor,
     weight_scales: &Tensor,
 ) -> Result<Tensor> {
-    use candle_core::{CudaStorage, Device, Shape, Storage};
+    use candle_core::{CudaStorage, Shape, Storage};
     use half::bf16;
 
     use crate::utils::{slice_ptr_mut_on_stream, slice_ptr_on_stream};
@@ -391,37 +483,9 @@ pub(super) fn matmul(
     } else {
         input.copy()?
     };
-    let (m, k) = input.dims2()?;
-    let (n, weight_k) = weight.dims2()?;
-    if weight.dtype() != DType::F8E4M3
-        || weight_scales.dtype() != DType::F32
-        || !weight.is_contiguous()
-        || !weight_scales.is_contiguous()
-        || !weight.device().same_device(weight_scales.device())
-        || weight_scales.dims() != [n / FP8_BLOCK_SIZE, k / FP8_BLOCK_SIZE]
-    {
-        candle_core::bail!("DeepGEMM weight tensors do not match the prepared FP8 layout")
-    }
-    if weight_k != k {
-        candle_core::bail!(
-            "DeepGEMM input K dimension {k} does not match weight K dimension {weight_k}"
-        )
-    }
-    if !input.device().same_device(weight.device()) {
-        candle_core::bail!("DeepGEMM operands must be on the same CUDA device")
-    }
-    let Device::Cuda(dev) = input.device() else {
-        candle_core::bail!("DeepGEMM requires CUDA tensors")
-    };
-    if prepared.device != dev.id() || prepared.n != n || prepared.k != k {
-        candle_core::bail!("DeepGEMM prepared state does not match the CUDA device or weight shape")
-    }
-    let bucket = serving_bucket(m)
-        .ok_or_else(|| candle_core::Error::msg("DeepGEMM row count exceeds prepared capacity"))?;
-    let plan = prepared
-        .plans
-        .get(&bucket)
-        .ok_or_else(|| candle_core::Error::msg("DeepGEMM row bucket was not prepared"))?;
+    let MatmulContext {
+        dev, plan, m, n, ..
+    } = matmul_context(prepared, &input, weight, weight_scales)?;
     dev.cuda_stream()
         .context()
         .bind_to_thread()
@@ -499,9 +563,153 @@ pub(super) fn matmul(
     )))
 }
 
+#[cfg(all(feature = "cuda", has_deepgemm_fp8_sm90_provider))]
+#[allow(dead_code)]
+pub(super) fn matmul_prequantized(
+    prepared: &Prepared,
+    activation: &Tensor,
+    activation_scales: &Tensor,
+    weight: &Tensor,
+    weight_scales: &Tensor,
+) -> Result<Tensor> {
+    use candle_core::{CudaStorage, Shape, Storage};
+    use half::bf16;
+
+    use crate::utils::{slice_ptr_mut_on_stream, slice_ptr_on_stream};
+
+    let (activation_m, activation_k, scale_stride_m) =
+        validate_prequantized_activation_layout(activation, activation_scales)?;
+    let MatmulContext { dev, plan, m, n, k } =
+        matmul_context(prepared, activation, weight, weight_scales)?;
+    if (activation_m, activation_k) != (m, k) {
+        unreachable!()
+    }
+    dev.cuda_stream()
+        .context()
+        .bind_to_thread()
+        .map_err(|error| {
+            candle_core::Error::msg(format!("CUDA context binding failed: {error}"))
+        })?;
+    let stream = dev.cuda_stream();
+
+    let output_len = m
+        .checked_mul(n)
+        .ok_or_else(|| candle_core::Error::msg("DeepGEMM output shape overflows usize"))?;
+    let mut output = unsafe { dev.alloc::<bf16>(output_len)? };
+    let (output_ptr, output_guard) = slice_ptr_mut_on_stream(&mut output, 0, &stream);
+
+    let (activation_storage, activation_layout) = activation.storage_and_layout();
+    let Storage::Cuda(activation_storage) = &*activation_storage else {
+        unreachable!()
+    };
+    let (activation_ptr, activation_guard) = slice_ptr_on_stream(
+        activation_storage.as_cuda_slice::<F8E4M3>()?,
+        activation_layout.start_offset(),
+        &stream,
+    );
+    let (activation_scale_storage, activation_scale_layout) =
+        activation_scales.storage_and_layout();
+    let Storage::Cuda(activation_scale_storage) = &*activation_scale_storage else {
+        unreachable!()
+    };
+    let (activation_scale_ptr, activation_scale_guard) = slice_ptr_on_stream(
+        activation_scale_storage.as_cuda_slice::<f32>()?,
+        activation_scale_layout.start_offset(),
+        &stream,
+    );
+    let (weight_storage, weight_layout) = weight.storage_and_layout();
+    let Storage::Cuda(weight_storage) = &*weight_storage else {
+        unreachable!()
+    };
+    let (weight_ptr, weight_guard) = slice_ptr_on_stream(
+        weight_storage.as_cuda_slice::<F8E4M3>()?,
+        weight_layout.start_offset(),
+        &stream,
+    );
+    let (scale_storage, scale_layout) = weight_scales.storage_and_layout();
+    let Storage::Cuda(scale_storage) = &*scale_storage else {
+        unreachable!()
+    };
+    let (scale_ptr, scale_guard) = slice_ptr_on_stream(
+        scale_storage.as_cuda_slice::<f32>()?,
+        scale_layout.start_offset(),
+        &stream,
+    );
+
+    let status = unsafe {
+        ffi::mistralrs_deepgemm_sm90_gemm_prequantized(
+            plan,
+            u32::try_from(m)
+                .map_err(|_| candle_core::Error::msg("DeepGEMM M dimension exceeds u32"))?,
+            activation_ptr as *const core::ffi::c_void,
+            activation_scale_ptr as *const f32,
+            u32::try_from(scale_stride_m).map_err(|_| {
+                candle_core::Error::msg("DeepGEMM activation scale stride exceeds u32")
+            })?,
+            weight_ptr as *const core::ffi::c_void,
+            scale_ptr as *const f32,
+            output_ptr as *mut core::ffi::c_void,
+            stream.cu_stream() as *mut core::ffi::c_void,
+        )
+    };
+    check_deepgemm_status("DeepGEMM prequantized blockwise FP8 GEMM", status)?;
+    drop((
+        activation_guard,
+        activation_scale_guard,
+        weight_guard,
+        scale_guard,
+        output_guard,
+    ));
+
+    Ok(Tensor::from((
+        Storage::Cuda(CudaStorage::wrap_cuda_slice(output, dev.clone())),
+        Shape::from_dims(&[m, n]),
+    )))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn activation_scales_use_native_padded_column_major_shape() -> Result<()> {
+        assert_eq!(activation_scale_shape(1, 128)?, [1, 4]);
+        assert_eq!(activation_scale_shape(5, 256)?, [2, 8]);
+        assert_eq!(activation_scale_shape(32, 512)?, [4, 32]);
+        assert!(activation_scale_shape(0, 128).is_err());
+        assert!(activation_scale_shape(1, 127).is_err());
+        assert!(activation_scale_shape(usize::MAX, 128).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn prequantized_activation_layout_validation_is_exact() -> Result<()> {
+        use candle_core::Device;
+
+        let activation = Tensor::zeros((5, 256), DType::F8E4M3, &Device::Cpu)?;
+        let scales = Tensor::zeros((2, 8), DType::F32, &Device::Cpu)?;
+        assert_eq!(
+            validate_prequantized_activation_layout(&activation, &scales)?,
+            (5, 256, 8)
+        );
+
+        let row_major_scales = Tensor::zeros((5, 2), DType::F32, &Device::Cpu)?;
+        assert!(validate_prequantized_activation_layout(&activation, &row_major_scales).is_err());
+
+        let noncontiguous_scales =
+            Tensor::zeros((8, 2), DType::F32, &Device::Cpu)?.transpose(0, 1)?;
+        assert!(!noncontiguous_scales.is_contiguous());
+        assert!(
+            validate_prequantized_activation_layout(&activation, &noncontiguous_scales).is_err()
+        );
+
+        let storage = Tensor::zeros(5 * 256 + 8, DType::F8E4M3, &Device::Cpu)?;
+        let misaligned_activation = storage.narrow(0, 8, 5 * 256)?.reshape((5, 256))?;
+        assert!(misaligned_activation.is_contiguous());
+        assert!(!fp8_tensor_aligned(&misaligned_activation));
+        assert!(validate_prequantized_activation_layout(&misaligned_activation, &scales).is_err());
+        Ok(())
+    }
 
     #[test]
     fn serving_rows_use_dense_decode_and_prefill_capacities() {

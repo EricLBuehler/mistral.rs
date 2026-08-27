@@ -319,7 +319,7 @@ impl HybridPagedPrefixValidator {
             if pipeline.cache().is_hybrid() {
                 pipeline.cache().hybrid().reset_seq(sequence_id, slot_idx)?;
             }
-            pipeline.release_speculative_sequences(&[sequence_id]);
+            pipeline.release_speculative_sequences(&[sequence_id])?;
             if record_auxiliary_miss {
                 metrics::counter!("mistralrs_speculative_prefix_cache_misses_total").increment(1);
             }
@@ -334,7 +334,7 @@ impl HybridPagedPrefixValidator {
         PagedPrefixCacheValidation::staged(restore.cached_tokens, move |seq| {
             debug_assert_eq!(*seq.id(), restore.sequence_id);
             let mut pipeline = get_mut_arcmutex!(pipeline);
-            pipeline.release_speculative_sequences(&[restore.sequence_id]);
+            pipeline.release_speculative_sequences(&[restore.sequence_id])?;
             if restore.restore_auxiliary {
                 let auxiliary = restore
                     .checkpoint
@@ -512,12 +512,12 @@ impl PagedPrefixCacheValidator for HybridPagedPrefixValidator {
         slot_idx: usize,
     ) -> candle_core::Result<bool> {
         let mut pipeline = get_mut_arcmutex!(self.pipeline);
+        pipeline.release_speculative_sequences(&[sequence_id])?;
         let recurrent_result = if pipeline.cache().is_hybrid() {
             pipeline.cache().hybrid().release_seq(sequence_id, slot_idx)
         } else {
             Ok(false)
         };
-        pipeline.release_speculative_sequences(&[sequence_id]);
         recurrent_result
     }
 }
@@ -680,6 +680,7 @@ impl Engine {
                         };
                         DecodeGraphPrecaptureCtx {
                             block_size,
+                            max_batch_size: max_active_sequences,
                             max_paged_context_len,
                             attention_backend: pipeline_metadata
                                 .model_metadata
@@ -764,7 +765,9 @@ impl Engine {
                     }
                 }
             }
-            pipeline.release_speculative_sequences(&finished_sequence_ids);
+            if let Err(err) = pipeline.release_speculative_sequences(&finished_sequence_ids) {
+                tracing::error!("Failed to release speculative sequence state: {err}");
+            }
             if !recurrent_release_errors.is_empty() {
                 tracing::error!(
                     "Failed to release recurrent state for finished sequences: {}",
@@ -978,6 +981,7 @@ impl Engine {
         lease: CudaDecodeBatchLease,
         worker: &CudaDecodeCompletionWorker,
         allow_lookahead: bool,
+        rng: &Arc<std::sync::Mutex<Isaac64Rng>>,
     ) -> candle_core::Result<Option<CudaDecodeBatchLease>> {
         let CudaDecodeBatchLease {
             rows,
@@ -1013,8 +1017,14 @@ impl Engine {
                 StepLookahead::Disabled
             };
             let mut pipeline = get_mut_arcmutex!(self.pipeline);
-            match submit_decode_tail(&mut *pipeline, &guards_mut, tail, Duration::ZERO, lookahead)?
-            {
+            match submit_decode_tail(
+                &mut *pipeline,
+                &guards_mut,
+                tail,
+                Duration::ZERO,
+                lookahead,
+                rng,
+            )? {
                 CudaTailSubmission::Submitted(submission) => submission,
                 CudaTailSubmission::Unsupported(mut unsupported) => {
                     unsupported.synchronize()?;
@@ -1045,7 +1055,7 @@ impl Engine {
             self.logger.add_decode_tokens_processed(guards_mut.len());
 
             let pipeline = get_mut_arcmutex!(self.pipeline);
-            if crate::pipeline::sampling::greedy_batch_will_finish(
+            if crate::pipeline::sampling::cuda_token_batch_will_finish(
                 &*pipeline,
                 &guards_mut,
                 completion.token_ids(),
@@ -1322,6 +1332,7 @@ impl Engine {
                             .as_ref()
                             .expect("CUDA decode lease requires a completion worker"),
                         allow_lookahead,
+                        &rng,
                     )
                     .await;
                 let mut guards = leased_rows
@@ -1593,8 +1604,11 @@ impl Engine {
                     let step_lookahead = StepLookahead::Disabled;
                     drop(scheduler);
                     if !preempted_sequence_ids.is_empty() {
-                        get_mut_arcmutex!(self.pipeline)
-                            .release_speculative_sequences(&preempted_sequence_ids);
+                        if let Err(err) = get_mut_arcmutex!(self.pipeline)
+                            .release_speculative_sequences(&preempted_sequence_ids)
+                        {
+                            tracing::error!("Failed to release preempted speculative state: {err}");
+                        }
                     }
                     #[cfg(feature = "cuda")]
                     let mut prefix_gather_workspace_limit = None;
@@ -1981,7 +1995,7 @@ impl Engine {
                                     .collect::<Vec<_>>();
                                 let finish_result: candle_core::Result<_> = async {
                                     let pipeline = get_mut_arcmutex!(self.pipeline);
-                                    if crate::pipeline::sampling::greedy_batch_will_finish(
+                                    if crate::pipeline::sampling::cuda_token_batch_will_finish(
                                         &*pipeline,
                                         &completion_guards_mut,
                                         completion.token_ids(),

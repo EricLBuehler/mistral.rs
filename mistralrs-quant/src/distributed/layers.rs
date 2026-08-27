@@ -15,9 +15,10 @@ use crate::{
     pertensor_fp8::pertensor_fp8_linear_b,
     should_apply_immediate_isq,
     utils::isq::apply_immediate_isq_sharded,
-    ActivationQuantizationScheme, AfqLayer, BlockwiseFP8Linear, BnbLinear, DistributedKind,
-    LoraLinearSpec, LoraSiteKey, MXFP4Layer, QuantMethod, QuantMethodConfig, QuantizeOntoGuard,
-    QuantizedActivation, QuantizedConfig, QuantizedSerde, Shard, ShardedVarBuilder, UnquantLinear,
+    ActivationQuantizationScheme, ActivationScaleLayout, AfqLayer, BlockwiseFP8Linear, BnbLinear,
+    DistributedKind, LoraLinearSpec, LoraSiteKey, MXFP4Layer, QuantMethod, QuantMethodConfig,
+    QuantizeOntoGuard, QuantizedActivation, QuantizedConfig, QuantizedSerde, Shard,
+    ShardedVarBuilder, UnquantLinear,
 };
 
 use super::Comm;
@@ -305,12 +306,27 @@ impl QuantMethod for RuntimeOutputLinear {
         self.inner.activation_quantization_scheme_for(a)
     }
 
+    fn preferred_activation_scale_layout_for(&self, a: &Tensor) -> Option<ActivationScaleLayout> {
+        self.inner.preferred_activation_scale_layout_for(a)
+    }
+
     fn quantize_activation(&self, a: &Tensor) -> Result<QuantizedActivation> {
         self.inner.quantize_activation(a)
     }
 
     fn forward_quantized(&self, a: &QuantizedActivation) -> Result<Tensor> {
         self.inner.forward_quantized(a)
+    }
+
+    #[cfg(feature = "cuda")]
+    fn try_forward_fused_split_glu(
+        &self,
+        input: &Tensor,
+        split_size: usize,
+        activation: crate::GluActivationType,
+    ) -> Result<Option<Tensor>> {
+        self.inner
+            .try_forward_fused_split_glu(input, split_size, activation)
     }
 
     fn quantized_act_type(&self) -> Option<DType> {
@@ -1022,6 +1038,10 @@ impl QuantMethod for RowParallelLayer {
         self.weight.activation_quantization_scheme_for(a)
     }
 
+    fn preferred_activation_scale_layout_for(&self, a: &Tensor) -> Option<ActivationScaleLayout> {
+        self.weight.preferred_activation_scale_layout_for(a)
+    }
+
     fn quantize_activation(&self, a: &Tensor) -> Result<QuantizedActivation> {
         self.weight.quantize_activation(a)
     }
@@ -1036,6 +1056,28 @@ impl QuantMethod for RowParallelLayer {
             xs = xs.broadcast_add(bias)?;
         }
         Ok(xs)
+    }
+
+    #[cfg(feature = "cuda")]
+    fn try_forward_fused_split_glu(
+        &self,
+        input: &Tensor,
+        split_size: usize,
+        activation: crate::GluActivationType,
+    ) -> Result<Option<Tensor>> {
+        let Some(mut output) = self
+            .weight
+            .try_forward_fused_split_glu(input, split_size, activation)?
+        else {
+            return Ok(None);
+        };
+        if !self.all_reduce.is_noop() {
+            output = self.all_reduce.sum_all_reduce(&output.contiguous()?)?;
+        }
+        if let Some(bias) = &self.bias {
+            output = output.broadcast_add(bias)?;
+        }
+        Ok(Some(output))
     }
 
     fn quantized_act_type(&self) -> Option<candle_core::DType> {
@@ -1670,6 +1712,10 @@ impl QuantMethod for ColumnParallelLayer {
         self.weight.activation_quantization_scheme_for(a)
     }
 
+    fn preferred_activation_scale_layout_for(&self, a: &Tensor) -> Option<ActivationScaleLayout> {
+        self.weight.preferred_activation_scale_layout_for(a)
+    }
+
     fn quantize_activation(&self, a: &Tensor) -> Result<QuantizedActivation> {
         self.weight.quantize_activation(a)
     }
@@ -1680,6 +1726,25 @@ impl QuantMethod for ColumnParallelLayer {
             xs = xs.broadcast_add(bias)?;
         }
         Ok(xs)
+    }
+
+    #[cfg(feature = "cuda")]
+    fn try_forward_fused_split_glu(
+        &self,
+        input: &Tensor,
+        split_size: usize,
+        activation: crate::GluActivationType,
+    ) -> Result<Option<Tensor>> {
+        let Some(mut output) = self
+            .weight
+            .try_forward_fused_split_glu(input, split_size, activation)?
+        else {
+            return Ok(None);
+        };
+        if let Some(bias) = &self.bias {
+            output = output.broadcast_add(bias)?;
+        }
+        Ok(Some(output))
     }
 
     fn quantized_act_type(&self) -> Option<candle_core::DType> {
@@ -2218,12 +2283,27 @@ impl QuantMethod for ReplicatedLayer {
         self.0.activation_quantization_scheme_for(a)
     }
 
+    fn preferred_activation_scale_layout_for(&self, a: &Tensor) -> Option<ActivationScaleLayout> {
+        self.0.preferred_activation_scale_layout_for(a)
+    }
+
     fn quantize_activation(&self, a: &Tensor) -> Result<QuantizedActivation> {
         self.0.quantize_activation(a)
     }
 
     fn forward_quantized(&self, a: &QuantizedActivation) -> Result<Tensor> {
         self.0.forward_quantized(a)
+    }
+
+    #[cfg(feature = "cuda")]
+    fn try_forward_fused_split_glu(
+        &self,
+        input: &Tensor,
+        split_size: usize,
+        activation: crate::GluActivationType,
+    ) -> Result<Option<Tensor>> {
+        self.0
+            .try_forward_fused_split_glu(input, split_size, activation)
     }
 
     fn quantized_act_type(&self) -> Option<candle_core::DType> {

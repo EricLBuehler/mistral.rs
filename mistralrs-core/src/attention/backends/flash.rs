@@ -22,10 +22,14 @@ pub(crate) fn flash_backend_supports_sdpa(
     has_softcap: bool,
     has_sliding_window: bool,
 ) -> bool {
-    flash_backend_supports(head_dim, has_softcap)
-        && !(cfg!(feature = "flash-attn") && head_dim > 256 && has_sliding_window)
-        // v3 never sets is_local, so without v2 to fall back to a sliding window has to go eager.
-        && !(!cfg!(feature = "flash-attn") && has_sliding_window)
+    if !flash_backend_supports(head_dim, has_softcap) {
+        return false;
+    }
+    if !has_sliding_window {
+        return true;
+    }
+    // v3 never sets is_local, so without v2 to fall back to a sliding window has to go eager.
+    cfg!(feature = "flash-attn") && head_dim <= 256
 }
 
 #[cfg(any(feature = "flash-attn", feature = "flash-attn-v3"))]

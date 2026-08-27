@@ -172,7 +172,11 @@ impl Qwen3_5MtpHead {
             .layer
             .rotary_emb()
             .expect("MTP layer is a full-attention block");
-        let cos_sin = rotary_emb.compute_cos_sin(positions, xs.dtype())?;
+        let cos_sin = match positions.rank() {
+            2 => rotary_emb.compute_text_cos_sin(positions, xs.dtype())?,
+            3 => rotary_emb.compute_cos_sin(positions, xs.dtype())?,
+            rank => candle_core::bail!("unexpected Qwen3.5 MTP position rank {rank}"),
+        };
         let xs = self.layer.forward_attention(
             &xs,
             attention.attention_mask,

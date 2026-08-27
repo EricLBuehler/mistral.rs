@@ -134,21 +134,45 @@ pub(crate) fn text_mrope_position_ids(
     input_ids: &Tensor,
     seqlen_offsets: &[usize],
 ) -> Result<Tensor> {
+    text_position_ids(input_ids, seqlen_offsets).and_then(|positions| {
+        let (batch, seq_len) = positions.dims2()?;
+        positions
+            .to_dtype(candle_core::DType::I64)?
+            .reshape((1, batch, seq_len))?
+            .repeat((3, 1, 1))
+    })
+}
+
+pub(crate) fn text_position_ids(input_ids: &Tensor, seqlen_offsets: &[usize]) -> Result<Tensor> {
     let (batch, seq_len) = input_ids.dims2()?;
     if seqlen_offsets.len() != batch {
         candle_core::bail!(
-            "MRoPE offsets ({}) do not match batch size {batch}",
+            "RoPE offsets ({}) do not match batch size {batch}",
             seqlen_offsets.len()
         );
     }
-    let mut positions = Vec::with_capacity(batch * seq_len);
-    for offset in seqlen_offsets {
-        positions.extend((*offset..*offset + seq_len).map(|pos| pos as i64));
-    }
-    Tensor::from_vec(positions, (1, batch, seq_len), input_ids.device())?.repeat((3, 1, 1))
+    crate::pipeline::text_positions_tensor(seqlen_offsets, seq_len, input_ids.device())?
+        .reshape((batch, seq_len))
 }
 
 pub(crate) fn text_decode_mrope_position_ids_from_context(
+    input_ids: &Tensor,
+    ctx: &crate::pipeline::ModelForwardContext<'_>,
+) -> Result<Option<Tensor>> {
+    text_decode_position_ids_from_context(input_ids, ctx).and_then(|positions| {
+        positions
+            .map(|positions| {
+                let (batch, seq_len) = positions.dims2()?;
+                positions
+                    .to_dtype(candle_core::DType::I64)?
+                    .reshape((1, batch, seq_len))?
+                    .repeat((3, 1, 1))
+            })
+            .transpose()
+    })
+}
+
+pub(crate) fn text_decode_position_ids_from_context(
     input_ids: &Tensor,
     ctx: &crate::pipeline::ModelForwardContext<'_>,
 ) -> Result<Option<Tensor>> {
@@ -177,9 +201,8 @@ pub(crate) fn text_decode_mrope_position_ids_from_context(
     }
     Ok(Some(
         rope_positions
-            .to_dtype(candle_core::DType::I64)?
-            .reshape((1, batch, seq_len))?
-            .repeat((3, 1, 1))?,
+            .to_dtype(candle_core::DType::U32)?
+            .reshape((batch, seq_len))?,
     ))
 }
 
@@ -220,9 +243,16 @@ mod tests {
         .with_recurrent_batch_kind(RecurrentBatchKind::SpeculativeDecode);
         let positions = text_decode_mrope_position_ids_from_context(&input_ids, &decode)?
             .expect("decode MRoPE positions missing");
+        let text_positions = text_decode_position_ids_from_context(&input_ids, &decode)?
+            .expect("decode text positions missing");
 
         assert_eq!(
             positions.i((0, .., ..))?.to_vec2::<i64>()?,
+            vec![vec![2, 3, 4], vec![7, 8, 9]]
+        );
+        assert_eq!(text_positions.dims(), &[2, 3]);
+        assert_eq!(
+            text_positions.to_vec2::<u32>()?,
             vec![vec![2, 3, 4], vec![7, 8, 9]]
         );
         Ok(())

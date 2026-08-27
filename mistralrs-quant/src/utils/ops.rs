@@ -15,6 +15,8 @@ use crate::utils::{ffi, slice_ptr, slice_ptr_mut_on_stream, slice_ptr_on_stream}
 #[cfg(feature = "cuda")]
 use candle_core::cuda::{cudarc::driver::DevicePtr, CudaStorage};
 #[cfg(feature = "cuda")]
+use float8::F8E4M3;
+#[cfg(feature = "cuda")]
 use std::ffi::c_void;
 
 #[cfg(feature = "metal")]
@@ -2975,6 +2977,117 @@ pub fn fused_glu(a: &Tensor, b: &Tensor, activation: GluActivationType) -> Resul
 }
 
 #[cfg(feature = "cuda")]
+pub(crate) fn fused_glu_quantized_bf16(
+    gate: &Tensor,
+    value: &Tensor,
+    scale_group_size: usize,
+    scale_stride_m: usize,
+    activation: GluActivationType,
+) -> Result<Option<(Tensor, Tensor)>> {
+    use candle_core::{Storage, Storage::Cuda};
+    use half::bf16;
+
+    const KERNEL_SCALE_GROUP_SIZE: usize = 128;
+
+    if gate.dtype() != DType::BF16 || value.dtype() != DType::BF16 {
+        return Ok(None);
+    }
+    if gate.shape() != value.shape() {
+        return Ok(None);
+    }
+    if !gate.device().same_device(value.device()) || !gate.device().is_cuda() {
+        return Ok(None);
+    }
+    if scale_group_size != KERNEL_SCALE_GROUP_SIZE {
+        return Ok(None);
+    }
+    let Some(gate_layout) = dense_last_dim_layout(gate.layout()) else {
+        return Ok(None);
+    };
+    let Some(value_layout) = dense_last_dim_layout(value.layout()) else {
+        return Ok(None);
+    };
+    if !gate.layout().start_offset().is_multiple_of(2)
+        || !value.layout().start_offset().is_multiple_of(2)
+        || !gate_layout.row_stride.is_multiple_of(2)
+        || !value_layout.row_stride.is_multiple_of(2)
+    {
+        return Ok(None);
+    }
+    if (gate_layout.rows, gate_layout.cols) != (value_layout.rows, value_layout.cols) {
+        return Ok(None);
+    }
+    let rows = gate_layout.rows;
+    let columns = gate_layout.cols;
+    if rows == 0 || columns == 0 || columns % scale_group_size != 0 {
+        return Ok(None);
+    }
+    if scale_stride_m < rows {
+        return Ok(None);
+    }
+    let output_elements = rows
+        .checked_mul(columns)
+        .ok_or_else(|| candle_core::Error::msg("fused GLU FP8 output size overflows usize"))?;
+    let scale_groups = columns / scale_group_size;
+    let scale_elements = scale_groups
+        .checked_mul(scale_stride_m)
+        .ok_or_else(|| candle_core::Error::msg("fused GLU FP8 scale size overflows usize"))?;
+    let rows_u32 = u32::try_from(rows)?;
+    let columns_u32 = u32::try_from(columns)?;
+    let gate_row_stride_u32 = u32::try_from(gate_layout.row_stride)?;
+    let value_row_stride_u32 = u32::try_from(value_layout.row_stride)?;
+    let scale_stride_u32 = u32::try_from(scale_stride_m)?;
+    let candle_core::Device::Cuda(device) = gate.device() else {
+        unreachable!()
+    };
+    let stream = device.cuda_stream();
+    let mut output = unsafe { device.alloc::<F8E4M3>(output_elements)? };
+    let mut scales = unsafe { device.alloc::<f32>(scale_elements)? };
+    let (gate_storage, gate_tensor_layout) = gate.storage_and_layout();
+    let Cuda(gate_storage) = &*gate_storage else {
+        unreachable!()
+    };
+    let (value_storage, value_tensor_layout) = value.storage_and_layout();
+    let Cuda(value_storage) = &*value_storage else {
+        unreachable!()
+    };
+    let gate_slice = gate_storage.as_cuda_slice::<bf16>()?;
+    let value_slice = value_storage.as_cuda_slice::<bf16>()?;
+    let (gate_ptr, gate_guard) =
+        slice_ptr_on_stream(gate_slice, gate_tensor_layout.start_offset(), &stream);
+    let (value_ptr, value_guard) =
+        slice_ptr_on_stream(value_slice, value_tensor_layout.start_offset(), &stream);
+    let (output_ptr, output_guard) = slice_ptr_mut_on_stream(&mut output, 0, &stream);
+    let (scales_ptr, scales_guard) = slice_ptr_mut_on_stream(&mut scales, 0, &stream);
+    unsafe {
+        ffi::fused_glu_quantize_bf16(
+            gate_ptr as *const c_void,
+            value_ptr as *const c_void,
+            output_ptr as *mut c_void,
+            scales_ptr as *mut f32,
+            rows_u32,
+            columns_u32,
+            gate_row_stride_u32,
+            value_row_stride_u32,
+            scale_stride_u32,
+            activation as i32,
+            stream.cu_stream(),
+        );
+    }
+    drop((gate_guard, value_guard, output_guard, scales_guard));
+
+    let output = Tensor::from((
+        Storage::Cuda(CudaStorage::wrap_cuda_slice(output, device.clone())),
+        Shape::from_dims(&[rows, columns]),
+    ));
+    let scales = Tensor::from((
+        Storage::Cuda(CudaStorage::wrap_cuda_slice(scales, device.clone())),
+        Shape::from_dims(&[scale_groups, scale_stride_m]),
+    ));
+    Ok(Some((output, scales)))
+}
+
+#[cfg(feature = "cuda")]
 struct FusedSplitGlu {
     split_size: usize,
     activation: GluActivationType,
@@ -3102,6 +3215,102 @@ pub fn fused_split_glu(
     fused_glu(&gate, &up, activation)
 }
 
+#[cfg(feature = "cuda")]
+pub(crate) fn fused_split_glu_quantized_bf16(
+    input: &Tensor,
+    split_size: usize,
+    scale_group_size: usize,
+    scale_stride_m: usize,
+    activation: GluActivationType,
+) -> Result<(Tensor, Tensor)> {
+    use candle_core::{Storage, Storage::Cuda};
+    use half::bf16;
+
+    const KERNEL_SCALE_GROUP_SIZE: usize = 128;
+
+    if input.dtype() != DType::BF16 || !input.device().is_cuda() {
+        candle_core::bail!("fused split GLU FP8 quantization requires a CUDA BF16 input");
+    }
+    if scale_group_size != KERNEL_SCALE_GROUP_SIZE {
+        candle_core::bail!(
+            "fused split GLU FP8 quantization requires group size {KERNEL_SCALE_GROUP_SIZE}"
+        );
+    }
+    if split_size == 0 || !split_size.is_multiple_of(scale_group_size) {
+        candle_core::bail!(
+            "fused split GLU FP8 quantization requires a nonzero split size divisible by {scale_group_size}"
+        );
+    }
+    let expected = split_size
+        .checked_mul(2)
+        .ok_or_else(|| candle_core::Error::msg("fused split GLU split size overflow"))?;
+    if input.dim(candle_core::D::Minus1)? != expected {
+        candle_core::bail!("fused split GLU FP8 quantization expected last dimension {expected}");
+    }
+    const BF16_ELEMENTS_PER_VECTOR: usize = 2;
+
+    let input = input.contiguous()?;
+    let input = if input.layout().start_offset() % BF16_ELEMENTS_PER_VECTOR == 0 {
+        input
+    } else {
+        input.force_contiguous()?
+    };
+    let rows = input.elem_count() / expected;
+    if rows == 0 || scale_stride_m < rows {
+        candle_core::bail!("fused split GLU FP8 quantization scale stride is too small");
+    }
+    let scale_groups = split_size / scale_group_size;
+    let output_elements = rows
+        .checked_mul(split_size)
+        .ok_or_else(|| candle_core::Error::msg("fused split GLU FP8 output size overflow"))?;
+    let scale_elements = scale_groups
+        .checked_mul(scale_stride_m)
+        .ok_or_else(|| candle_core::Error::msg("fused split GLU FP8 scale size overflow"))?;
+    let rows_u32 = u32::try_from(rows)?;
+    let split_size_u32 = u32::try_from(split_size)?;
+    let scale_stride_u32 = u32::try_from(scale_stride_m)?;
+    let candle_core::Device::Cuda(device) = input.device() else {
+        unreachable!()
+    };
+    let stream = device.cuda_stream();
+    let mut output = unsafe { device.alloc::<F8E4M3>(output_elements)? };
+    let mut scales = unsafe { device.alloc::<f32>(scale_elements)? };
+    let (input_storage, input_layout) = input.storage_and_layout();
+    let Cuda(input_storage) = &*input_storage else {
+        unreachable!()
+    };
+    let input_slice = input_storage.as_cuda_slice::<bf16>()?;
+    let (input_ptr, input_guard) =
+        slice_ptr_on_stream(input_slice, input_layout.start_offset(), &stream);
+    let (output_ptr, output_guard) = slice_ptr_mut_on_stream(&mut output, 0, &stream);
+    let (scales_ptr, scales_guard) = slice_ptr_mut_on_stream(&mut scales, 0, &stream);
+    unsafe {
+        ffi::fused_split_glu_quantize_bf16(
+            input_ptr as *const c_void,
+            output_ptr as *mut c_void,
+            scales_ptr as *mut f32,
+            rows_u32,
+            split_size_u32,
+            scale_stride_u32,
+            activation as i32,
+            stream.cu_stream(),
+        );
+    }
+    drop((input_guard, output_guard, scales_guard));
+
+    let mut output_shape = input.dims()[..input.rank() - 1].to_vec();
+    output_shape.push(split_size);
+    let output = Tensor::from((
+        Storage::Cuda(CudaStorage::wrap_cuda_slice(output, device.clone())),
+        Shape::from_dims(&output_shape),
+    ));
+    let scales = Tensor::from((
+        Storage::Cuda(CudaStorage::wrap_cuda_slice(scales, device.clone())),
+        Shape::from_dims(&[scale_groups, scale_stride_m]),
+    ));
+    Ok((output, scales))
+}
+
 struct Softcap(f32);
 
 impl CustomOp1 for Softcap {
@@ -3220,6 +3429,7 @@ pub fn softcap(input: &Tensor, cap: f32) -> Result<Tensor> {
 }
 
 #[cfg(test)]
+#[allow(clippy::needless_range_loop)]
 mod tests {
     fn assert_close(actual: &[f32], expected: &[f32], tolerance: f32) {
         for (i, (a, e)) in actual.iter().zip(expected.iter()).enumerate() {
@@ -3367,6 +3577,202 @@ mod tests {
                         .to_vec1::<f32>()
                         .unwrap();
                     assert_close(&actual, &expected, tolerance);
+                }
+            }
+        }
+    }
+
+    #[cfg(feature = "cuda")]
+    #[test]
+    fn test_fused_split_glu_fp8_quantization_cuda() {
+        use super::{fused_split_glu, fused_split_glu_quantized_bf16, GluActivationType};
+        use candle_core::{DType, Device, Tensor};
+        use float8::F8E4M3;
+
+        const ROWS: usize = 5;
+        const SPLIT: usize = 256;
+        const GROUP_SIZE: usize = 128;
+        const SCALE_STRIDE: usize = 8;
+        const PACKED: usize = SPLIT * 2;
+        const SCALE_TOLERANCE: f32 = 1.0e-6;
+        const QUANTIZATION_TOLERANCE: f32 = 0.08;
+
+        let cuda = Device::new_cuda(0).unwrap();
+        let values = (0..ROWS * PACKED + 1)
+            .map(|index| {
+                let value = ((index * 17 + 11) % 97) as f32 - 48.0;
+                value / 13.0
+            })
+            .collect::<Vec<_>>();
+        let storage = Tensor::from_vec(values, ROWS * PACKED + 1, &cuda)
+            .unwrap()
+            .to_dtype(DType::BF16)
+            .unwrap();
+        let input = storage
+            .narrow(0, 1, ROWS * PACKED)
+            .unwrap()
+            .reshape((ROWS, PACKED))
+            .unwrap();
+        assert!(input.is_contiguous());
+        assert_eq!(input.layout().start_offset(), 1);
+
+        for activation in [
+            GluActivationType::Silu,
+            GluActivationType::Gelu,
+            GluActivationType::Relu,
+            GluActivationType::GeluErf,
+            GluActivationType::Sigmoid,
+        ] {
+            let expected = fused_split_glu(&input, SPLIT, activation)
+                .unwrap()
+                .to_dtype(DType::F32)
+                .unwrap()
+                .flatten_all()
+                .unwrap()
+                .to_vec1::<f32>()
+                .unwrap();
+            let (quantized, scales) =
+                fused_split_glu_quantized_bf16(&input, SPLIT, GROUP_SIZE, SCALE_STRIDE, activation)
+                    .unwrap();
+            let quantized = quantized
+                .to_device(&Device::Cpu)
+                .unwrap()
+                .flatten_all()
+                .unwrap()
+                .to_vec1::<F8E4M3>()
+                .unwrap();
+            let scales = scales
+                .to_device(&Device::Cpu)
+                .unwrap()
+                .to_vec2::<f32>()
+                .unwrap();
+
+            for row in 0..ROWS {
+                for group in 0..SPLIT / GROUP_SIZE {
+                    let start = row * SPLIT + group * GROUP_SIZE;
+                    let end = start + GROUP_SIZE;
+                    let maximum = expected[start..end]
+                        .iter()
+                        .copied()
+                        .map(f32::abs)
+                        .fold(0.0f32, f32::max);
+                    let expected_scale = if maximum == 0.0 { 1.0 } else { maximum / 448.0 };
+                    assert!(
+                        (scales[group][row] - expected_scale).abs() <= SCALE_TOLERANCE,
+                        "scale mismatch at row {row}, group {group}"
+                    );
+                    for column in group * GROUP_SIZE..(group + 1) * GROUP_SIZE {
+                        let index = row * SPLIT + column;
+                        let actual = quantized[index].to_f32() * scales[group][row];
+                        let tolerance =
+                            QUANTIZATION_TOLERANCE * expected[index].abs().max(maximum / 64.0);
+                        assert!(
+                            (actual - expected[index]).abs() <= tolerance,
+                            "value mismatch at row {row}, column {column}: actual={actual}, expected={}",
+                            expected[index]
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[cfg(feature = "cuda")]
+    #[test]
+    fn test_fused_glu_fp8_quantization_preserves_bf16_rounding_and_row_strides() {
+        use super::{fused_glu, fused_glu_quantized_bf16, GluActivationType};
+        use candle_core::{DType, Device, Tensor};
+        use float8::F8E4M3;
+
+        const ROWS: usize = 5;
+        const COLUMNS: usize = 256;
+        const GROUP_SIZE: usize = 128;
+        const SCALE_STRIDE: usize = 8;
+        const GATE_WIDTH: usize = 280;
+        const VALUE_WIDTH: usize = 296;
+        const GATE_START: usize = 8;
+        const VALUE_START: usize = 16;
+        const QUANTIZATION_TOLERANCE: f32 = 0.08;
+
+        let cuda = Device::new_cuda(0).unwrap();
+        let gate_values = (0..ROWS * GATE_WIDTH)
+            .map(|index| (((index * 17 + 5) % 101) as f32 - 50.0) / 19.0)
+            .collect::<Vec<_>>();
+        let value_values = (0..ROWS * VALUE_WIDTH)
+            .map(|index| (((index * 13 + 7) % 89) as f32 - 44.0) / 17.0)
+            .collect::<Vec<_>>();
+        let gate = Tensor::from_vec(gate_values, (ROWS, 1, GATE_WIDTH), &cuda)
+            .unwrap()
+            .to_dtype(DType::BF16)
+            .unwrap()
+            .narrow(2, GATE_START, COLUMNS)
+            .unwrap();
+        let value = Tensor::from_vec(value_values, (ROWS, 1, VALUE_WIDTH), &cuda)
+            .unwrap()
+            .to_dtype(DType::BF16)
+            .unwrap()
+            .narrow(2, VALUE_START, COLUMNS)
+            .unwrap();
+        assert!(!gate.is_contiguous());
+        assert!(!value.is_contiguous());
+        assert_eq!(gate.layout().stride()[1], GATE_WIDTH);
+        assert_eq!(value.layout().stride()[1], VALUE_WIDTH);
+
+        let expected = fused_glu(&gate, &value, GluActivationType::Sigmoid)
+            .unwrap()
+            .to_dtype(DType::F32)
+            .unwrap()
+            .to_device(&Device::Cpu)
+            .unwrap()
+            .flatten_all()
+            .unwrap()
+            .to_vec1::<f32>()
+            .unwrap();
+        let (quantized, scales) = fused_glu_quantized_bf16(
+            &gate,
+            &value,
+            GROUP_SIZE,
+            SCALE_STRIDE,
+            GluActivationType::Sigmoid,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(quantized.dims(), &[ROWS, COLUMNS]);
+        assert_eq!(scales.dims(), &[COLUMNS / GROUP_SIZE, SCALE_STRIDE]);
+        let quantized = quantized
+            .to_device(&Device::Cpu)
+            .unwrap()
+            .flatten_all()
+            .unwrap()
+            .to_vec1::<F8E4M3>()
+            .unwrap();
+        let scales = scales
+            .to_device(&Device::Cpu)
+            .unwrap()
+            .to_vec2::<f32>()
+            .unwrap();
+
+        for row in 0..ROWS {
+            for group in 0..COLUMNS / GROUP_SIZE {
+                let start = row * COLUMNS + group * GROUP_SIZE;
+                let end = start + GROUP_SIZE;
+                let maximum = expected[start..end]
+                    .iter()
+                    .copied()
+                    .map(f32::abs)
+                    .fold(0.0f32, f32::max);
+                let expected_scale = if maximum == 0.0 { 1.0 } else { maximum / 448.0 };
+                assert!((scales[group][row] - expected_scale).abs() <= 1.0e-6);
+                for column in group * GROUP_SIZE..(group + 1) * GROUP_SIZE {
+                    let index = row * COLUMNS + column;
+                    let actual = quantized[index].to_f32() * scales[group][row];
+                    let tolerance =
+                        QUANTIZATION_TOLERANCE * expected[index].abs().max(maximum / 64.0);
+                    assert!(
+                        (actual - expected[index]).abs() <= tolerance,
+                        "value mismatch at row {row}, column {column}: actual={actual}, expected={}",
+                        expected[index]
+                    );
                 }
             }
         }

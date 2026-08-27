@@ -37,6 +37,7 @@ use crate::pipeline::cuda_graph::{
     record_cuda_graph_dispatch, record_cuda_graph_evictions, record_cuda_graph_resident_entries,
     take_cuda_graph_capacity_eviction, CudaGraphComponent, CudaGraphDispatchMode,
     CudaGraphDispatchReason, CudaGraphEvent, CudaGraphEventGuard, CudaGraphEvictionReason,
+    CudaPhaseTimer,
 };
 
 const DEFAULT_BLOCK_SIZE: usize = 16;
@@ -45,21 +46,25 @@ pub const DEFAULT_MAX_DRAFTS: usize = 7;
 const ROPE_CACHE_LEN: usize = 65536;
 const MASK_CACHE_CAP: usize = 64;
 #[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
-const DFLASH_CUDA_GRAPH_CACHE_CAPACITY: usize = 32;
-const ADAPT_FULL_DEPTH_MAX_BATCH: usize = 2;
-const ADAPT_MIN_DEPTH: usize = 1;
+const DFLASH_CUDA_GRAPH_DEFAULT_CACHE_CAPACITY: usize = 40;
+const ADAPT_FULL_DEPTH_MAX_BATCH: usize = 8;
+const ADAPT_BATCH_DEPTH: usize = 3;
 const DFLASH_ADAPTIVE_ENV: &str = "MISTRALRS_DFLASH_ADAPTIVE";
 
-fn select_dflash_depth(adaptive: bool, max_n: usize, batch: usize) -> usize {
-    if max_n == 0 || !adaptive || batch <= ADAPT_FULL_DEPTH_MAX_BATCH {
+fn select_dflash_depth(adaptive: bool, max_n: usize, batch: usize, live_sequences: usize) -> usize {
+    if max_n == 0 || !adaptive || batch.max(live_sequences) <= ADAPT_FULL_DEPTH_MAX_BATCH {
         max_n
     } else {
-        ADAPT_MIN_DEPTH.min(max_n)
+        ADAPT_BATCH_DEPTH.min(max_n)
     }
 }
 
 fn dflash_adaptive_env_value(value: &str) -> bool {
     value == "1" || value.eq_ignore_ascii_case("true")
+}
+
+fn dflash_adaptive_supported(max_n: usize, max_live_sequences: usize) -> bool {
+    max_n > ADAPT_BATCH_DEPTH && max_live_sequences > ADAPT_FULL_DEPTH_MAX_BATCH
 }
 
 #[cfg(any(
@@ -121,19 +126,20 @@ pub(crate) fn dflash_adaptive_requested() -> bool {
     std::env::var(DFLASH_ADAPTIVE_ENV)
         .ok()
         .as_deref()
-        .is_some_and(dflash_adaptive_env_value)
+        .map(dflash_adaptive_env_value)
+        .unwrap_or(true)
 }
 
 fn dflash_graph_plans(adaptive: bool, max_n: usize) -> Vec<super::SpeculativeGraphPlan> {
     if max_n == 0 {
         return Vec::new();
     }
-    if !adaptive || max_n == ADAPT_MIN_DEPTH {
+    if !adaptive || max_n <= ADAPT_BATCH_DEPTH {
         return vec![super::SpeculativeGraphPlan::new(max_n, None)];
     }
     vec![
         super::SpeculativeGraphPlan::new(max_n, Some(ADAPT_FULL_DEPTH_MAX_BATCH)),
-        super::SpeculativeGraphPlan::new(ADAPT_MIN_DEPTH, None),
+        super::SpeculativeGraphPlan::new(ADAPT_BATCH_DEPTH, None),
     ]
 }
 
@@ -893,6 +899,10 @@ fn gather_ctx_taps(taps: &[Tensor], flat_row_indices: Vec<u32>, device: &Device)
     {
         candle_core::bail!("DFlash context tap row index is out of range");
     }
+    #[cfg(feature = "cuda")]
+    if let Some(packed) = crate::cuda::dflash_context::pack_taps(taps, &flat_row_indices)? {
+        return packed.unsqueeze(0);
+    }
     let contiguous_range = contiguous_row_range(&flat_row_indices);
     let indices = if contiguous_range.is_none() {
         let len = flat_row_indices.len();
@@ -1142,11 +1152,23 @@ struct DFlashCudaGraphEntry {
 }
 
 #[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
-#[derive(Default)]
 struct DFlashCudaGraphState {
     entries: Vec<DFlashCudaGraphEntry>,
     warmed: HashSet<DFlashCudaGraphKey>,
     failed: HashSet<DFlashCudaGraphKey>,
+    capacity: usize,
+}
+
+#[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
+impl Default for DFlashCudaGraphState {
+    fn default() -> Self {
+        Self {
+            entries: Vec::new(),
+            warmed: HashSet::new(),
+            failed: HashSet::new(),
+            capacity: DFLASH_CUDA_GRAPH_DEFAULT_CACHE_CAPACITY,
+        }
+    }
 }
 
 #[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
@@ -1264,6 +1286,8 @@ pub struct DFlashDraftModel {
     layers: Vec<DFlashLayer>,
     fc: Arc<dyn QuantMethod>,
     context_kv_proj: Arc<dyn QuantMethod>,
+    #[cfg(feature = "cuda")]
+    context_k_norm_weights: Option<Tensor>,
     hidden_norm: RmsNorm,
     norm: RmsNorm,
     selector: Option<CandidateSelector>,
@@ -1509,6 +1533,7 @@ impl DFlashCudaGraphEntry {
     fn launch(&mut self, real_batch: usize) -> Result<DFlashProposalBatch> {
         let graph_event =
             CudaGraphEventGuard::new(CudaGraphComponent::DFlash, CudaGraphEvent::Replay);
+        let phase_timer = CudaPhaseTimer::start(self.graph.stream())?;
         self.graph.launch()?;
         self.staging.record_graph_complete()?;
         let output = DFlashCudaGraphOutput {
@@ -1525,6 +1550,9 @@ impl DFlashCudaGraphEntry {
                 .map(Var::as_detached_tensor),
         }
         .finish(real_batch)?;
+        if let Some(timer) = phase_timer {
+            timer.finish("dflash_graph", real_batch, self.key.block)?;
+        }
         graph_event.success();
         record_cuda_graph_dispatch(
             CudaGraphComponent::DFlash,
@@ -1655,9 +1683,7 @@ impl DFlashCudaGraphState {
     }
 
     fn store(&mut self, entry: DFlashCudaGraphEntry) {
-        if let Some(evicted) =
-            take_cuda_graph_capacity_eviction(&mut self.entries, DFLASH_CUDA_GRAPH_CACHE_CAPACITY)
-        {
+        if let Some(evicted) = take_cuda_graph_capacity_eviction(&mut self.entries, self.capacity) {
             record_cuda_graph_evictions(
                 CudaGraphComponent::DFlash,
                 CudaGraphEvictionReason::Capacity,
@@ -2303,6 +2329,16 @@ impl DFlashDraftModel {
         }
         let context_kv_weight = Tensor::cat(&context_kv_weights.iter().collect::<Vec<_>>(), 0)?;
         let context_kv_proj = linear_from_weight(context_kv_weight, isq, device)?;
+        #[cfg(feature = "cuda")]
+        let context_k_norm_weights = if device.is_cuda() {
+            let weights = layers
+                .iter()
+                .map(|layer| layer.k_norm.weight().clone())
+                .collect::<Vec<_>>();
+            Some(Tensor::stack(&weights, 0)?)
+        } else {
+            None
+        };
         let fc = load_linear(
             &vb,
             (target_layer_ids.len() * hidden, hidden),
@@ -2338,6 +2374,8 @@ impl DFlashDraftModel {
             layers,
             fc,
             context_kv_proj,
+            #[cfg(feature = "cuda")]
+            context_k_norm_weights,
             hidden_norm: RmsNorm::new(hidden, eps, vb.pp("hidden_norm"))?,
             norm: RmsNorm::new(hidden, eps, vb.pp("norm"))?,
             selector,
@@ -2456,7 +2494,10 @@ impl DFlashDraftModel {
             .sequence_capacity();
         let shapes = dflash_graph_precapture_shapes(
             &self.graph_plans(max_n),
-            crate::pipeline::cuda_graph::cuda_graph_precapture_batches(),
+            crate::pipeline::cuda_graph::cuda_graph_precapture_batches(
+                CudaGraphComponent::DFlash,
+                max_n.saturating_add(1),
+            ),
             sequence_capacity,
         );
         let Some(max_batch) = shapes.iter().map(|(batch, _)| *batch).max() else {
@@ -2469,6 +2510,9 @@ impl DFlashDraftModel {
             .cuda_graphs
             .lock()
             .expect("dflash CUDA graph cache poisoned");
+        state.capacity = state
+            .capacity
+            .max(shapes.len().saturating_mul(selector_modes.len()));
         for selector_mode in selector_modes {
             for &(batch_bucket, block) in &shapes {
                 let key = DFlashCudaGraphKey {
@@ -2571,9 +2615,11 @@ impl DFlashDraftModel {
             if block > self.block_size || !dflash_graph_positions_fit(start_positions, block) {
                 return Ok(None);
             }
-            let Some(batch_bucket) =
-                crate::pipeline::cuda_graph::cuda_graph_batch_bucket(seq_ids.len())
-            else {
+            let Some(batch_bucket) = crate::pipeline::cuda_graph::cuda_graph_batch_bucket(
+                CudaGraphComponent::DFlash,
+                block,
+                seq_ids.len(),
+            ) else {
                 return Ok(None);
             };
             let use_selector = self.selector.is_some();
@@ -2658,8 +2704,8 @@ impl DFlashDraftModel {
         }
     }
 
-    pub fn enable_adaptive(&self, max_n: usize) -> bool {
-        if max_n == 0 {
+    pub fn enable_adaptive(&self, max_n: usize, max_live_sequences: usize) -> bool {
+        if !dflash_adaptive_supported(max_n, max_live_sequences) {
             return false;
         }
         *self.adaptive.lock().expect("dflash adaptive poisoned") = Some(AdaptiveState { max_n });
@@ -2667,11 +2713,14 @@ impl DFlashDraftModel {
     }
 
     pub fn plan_n(&self, max_n: usize, batch: usize) -> usize {
-        let guard = self.adaptive.lock().expect("dflash adaptive poisoned");
-        if let Some(adaptive) = guard.as_ref() {
-            debug_assert_eq!(adaptive.max_n, max_n);
-        }
-        select_dflash_depth(guard.is_some(), max_n, batch)
+        let adaptive = {
+            let guard = self.adaptive.lock().expect("dflash adaptive poisoned");
+            if let Some(adaptive) = guard.as_ref() {
+                debug_assert_eq!(adaptive.max_n, max_n);
+            }
+            guard.is_some()
+        };
+        select_dflash_depth(adaptive, max_n, batch, self.live_sequence_count())
     }
 
     pub fn graph_plans(&self, max_n: usize) -> Vec<super::SpeculativeGraphPlan> {
@@ -2680,6 +2729,17 @@ impl DFlashDraftModel {
             debug_assert_eq!(adaptive.max_n, max_n);
         }
         dflash_graph_plans(guard.is_some(), max_n)
+    }
+
+    fn live_sequence_count(&self) -> usize {
+        #[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
+        if let Some(pool) = &self.windowed_pool {
+            return pool
+                .lock()
+                .expect("dflash windowed pool poisoned")
+                .live_sequence_count();
+        }
+        self.ctx_cache.lock().expect("dflash cache poisoned").len()
     }
 
     pub fn block_size(&self) -> usize {
@@ -2693,13 +2753,13 @@ impl DFlashDraftModel {
     pub fn supports_paged_auxiliary_prefix_state(&self) -> bool {
         #[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
         {
-            return self.windowed_pool.as_ref().is_some_and(|pool| {
+            self.windowed_pool.as_ref().is_some_and(|pool| {
                 pool.lock()
                     .expect("dflash windowed pool poisoned")
                     .config()
                     .checkpoint_capacity()
                     > 0
-            });
+            })
         }
         #[cfg(not(all(feature = "cuda", feature = "flash-attn", target_family = "unix")))]
         {
@@ -2736,7 +2796,7 @@ impl DFlashDraftModel {
             }
             let checkpoint = pool.snapshot_sequence(sequence_id)?;
             metrics::counter!("mistralrs_speculative_prefix_cache_captures_total").increment(1);
-            return Ok(Some(Arc::new(DFlashPagedPrefixState { checkpoint })));
+            Ok(Some(Arc::new(DFlashPagedPrefixState { checkpoint })))
         }
         #[cfg(not(all(feature = "cuda", feature = "flash-attn", target_family = "unix")))]
         {
@@ -2775,7 +2835,7 @@ impl DFlashDraftModel {
                 .increment(1);
             metrics::histogram!("mistralrs_speculative_prefix_cache_restore_seconds")
                 .record(started.elapsed().as_secs_f64());
-            return Ok(());
+            Ok(())
         }
         #[cfg(not(all(feature = "cuda", feature = "flash-attn", target_family = "unix")))]
         {
@@ -2933,6 +2993,7 @@ impl DFlashDraftModel {
         self.commit_prepared_ctx_batch(&prepared, row_indices, entries)
     }
 
+    #[allow(clippy::cast_possible_truncation)]
     pub fn prepare_ctx_batch(
         &self,
         taps: &[Tensor],
@@ -2954,18 +3015,6 @@ impl DFlashDraftModel {
         let ctx_hidden = self
             .hidden_norm
             .forward(&self.fc.forward(&packed.to_dtype(self.dtype)?)?)?;
-        let mut coss = Vec::with_capacity(entries.len());
-        let mut sins = Vec::with_capacity(entries.len());
-        for (entry, rows) in entries.iter().zip(&rows) {
-            if *rows == 0 {
-                continue;
-            }
-            let (cos, sin) = self.cos_sin(entry.start_pos, *rows)?;
-            coss.push(cos);
-            sins.push(sin);
-        }
-        let (cos, sin) = (Tensor::cat(&coss, 0)?, Tensor::cat(&sins, 0)?);
-
         let all_kv = self
             .context_kv_proj
             .forward(&ctx_hidden)?
@@ -2981,14 +3030,59 @@ impl DFlashDraftModel {
             .contiguous()?;
         let raw_k = all_kv.i(0)?;
         let v_all = all_kv.i(1)?;
-        let mut ks = Vec::with_capacity(self.layers.len());
-        for (i, layer) in self.layers.iter().enumerate() {
-            let k = layer.k_norm.forward(&raw_k.narrow(0, i, 1)?)?;
-            let k = self.rope(&k, &cos, &sin)?;
-            ks.push(k.squeeze(0)?);
-        }
-        // [layers, kv_heads, total, head_dim]
-        let k_all = Tensor::stack(&ks, 0)?;
+        #[cfg(feature = "cuda")]
+        let fused_k = if entries.iter().all(|entry| {
+            entry
+                .start_pos
+                .checked_add(entry.rows)
+                .is_some_and(|end| end <= ROPE_CACHE_LEN)
+        }) {
+            if let Some(norm_weights) = &self.context_k_norm_weights {
+                let mut positions = Vec::with_capacity(total);
+                for entry in entries {
+                    for position in entry.start_pos..entry.start_pos + entry.rows {
+                        positions.push(u32::try_from(position).map_err(candle_core::Error::wrap)?);
+                    }
+                }
+                let positions = Tensor::from_vec(positions, (total,), &self.device)?;
+                crate::cuda::dflash_context::context_keys(
+                    &raw_k,
+                    norm_weights,
+                    &self.rope_table.0,
+                    &self.rope_table.1,
+                    &positions,
+                    self.layers[0].k_norm.eps() as f32,
+                )?
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        #[cfg(not(feature = "cuda"))]
+        let fused_k: Option<Tensor> = None;
+        let k_all = if let Some(k) = fused_k {
+            k
+        } else {
+            let mut coss = Vec::with_capacity(entries.len());
+            let mut sins = Vec::with_capacity(entries.len());
+            for (entry, rows) in entries.iter().zip(&rows) {
+                if *rows == 0 {
+                    continue;
+                }
+                let (cos, sin) = self.cos_sin(entry.start_pos, *rows)?;
+                coss.push(cos);
+                sins.push(sin);
+            }
+            let (cos, sin) = (Tensor::cat(&coss, 0)?, Tensor::cat(&sins, 0)?);
+            let mut ks = Vec::with_capacity(self.layers.len());
+            for (i, layer) in self.layers.iter().enumerate() {
+                let k = layer.k_norm.forward(&raw_k.narrow(0, i, 1)?)?;
+                let k = self.rope(&k, &cos, &sin)?;
+                ks.push(k.squeeze(0)?);
+            }
+            Tensor::stack(&ks, 0)?
+        };
 
         Ok(DFlashPreparedContext {
             k: k_all,
@@ -3278,6 +3372,7 @@ impl DFlashDraftModel {
         hs.narrow(1, 1, block - 1)
     }
 
+    #[allow(clippy::cast_possible_truncation)]
     fn run_draft_layers<F>(
         &self,
         noise_embedding: &Tensor,
@@ -3396,11 +3491,21 @@ impl DFlashDraftModel {
                 None => None,
             };
             let gate_up = layer.gate_up_proj.forward(&x)?;
-            let mut out = layer.down_proj.forward(&crate::ops::split_mul_and_act(
+            let mut out = if let Some(output) = crate::ops::try_fused_split_glu_quantized_forward(
                 &gate_up,
                 self.intermediate_size,
                 crate::layers::Activation::Silu,
-            )?)?;
+                &*layer.down_proj,
+            )? {
+                output
+            } else {
+                let inter = crate::ops::split_mul_and_act(
+                    &gate_up,
+                    self.intermediate_size,
+                    crate::layers::Activation::Silu,
+                )?;
+                layer.down_proj.forward(&inter)?
+            };
             if let (Some(conv), Some(kernel)) = (&layer.mlp_conv, mlp_kernel) {
                 out = conv.finish(&out, &kernel)?;
             }
@@ -3763,6 +3868,7 @@ fn repeat_kv(x: &Tensor, groups: usize) -> Result<Tensor> {
 }
 
 #[cfg(test)]
+#[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 mod tests {
     use std::{collections::HashSet, sync::Arc};
 
@@ -3771,9 +3877,9 @@ mod tests {
 
     use super::{
         contiguous_row_range, copy_dflash_graph_output_rows, dflash_adaptive_env_value,
-        dflash_graph_host_rows, dflash_graph_plans, dflash_graph_positions_fit,
-        dflash_graph_precapture_shapes, dflash_prefix_replay, dflash_rope_from_positions,
-        drain_dflash_lru_entries, gather_ctx_taps, linear_from_weight,
+        dflash_adaptive_supported, dflash_graph_host_rows, dflash_graph_plans,
+        dflash_graph_positions_fit, dflash_graph_precapture_shapes, dflash_prefix_replay,
+        dflash_rope_from_positions, drain_dflash_lru_entries, gather_ctx_taps, linear_from_weight,
         resolve_dflash_sampling_policy, select_ctx_kv_rows, select_dflash_depth,
         update_dormant_sequences, DFlashConfig, DFlashGraphHostInput, DFlashSamplingInputs,
         DFlashSequenceEviction, ADAPT_FULL_DEPTH_MAX_BATCH,
@@ -3783,6 +3889,10 @@ mod tests {
     #[cfg(feature = "cuda")]
     use super::{validate_candidate_selector_cuda, CandidateSelectorCudaSpec};
     use crate::layers::{yarn_inv_freq_and_attention_factor, YarnRopeConfig};
+    #[cfg(feature = "cuda")]
+    use crate::pipeline::cuda_graph::{
+        cuda_graph_precapture_batches, CudaGraphComponent, CUDA_GRAPH_MAX_BATCH_BUCKET,
+    };
     use crate::speculative::MtpDraftSamplingMethod;
     use crate::speculative::{SpeculativeGraphPlan, SpeculativePrefixReplay};
 
@@ -4000,24 +4110,34 @@ mod tests {
 
     #[test]
     fn adaptive_depth_is_full_for_small_batches() {
-        assert_eq!(select_dflash_depth(true, 7, 1), 7);
-        assert_eq!(select_dflash_depth(true, 7, ADAPT_FULL_DEPTH_MAX_BATCH), 7);
+        assert_eq!(select_dflash_depth(true, 7, 1, 1), 7);
+        assert_eq!(
+            select_dflash_depth(true, 7, ADAPT_FULL_DEPTH_MAX_BATCH, 1),
+            7
+        );
     }
 
     #[test]
     fn adaptive_depth_keeps_a_live_draft_at_large_batches() {
         for max_n in 1..=7 {
-            for batch in [3, 8, 16] {
-                assert!(select_dflash_depth(true, max_n, batch) > 0);
+            for batch in [9, 16, 64] {
+                assert!(select_dflash_depth(true, max_n, batch, batch) > 0);
             }
         }
-        assert_eq!(select_dflash_depth(true, 7, 16), 1);
+        assert_eq!(select_dflash_depth(true, 7, 16, 16), 3);
+    }
+
+    #[test]
+    fn adaptive_depth_uses_global_live_load_for_fragmented_batches() {
+        assert_eq!(select_dflash_depth(true, 7, 1, 9), 3);
+        assert_eq!(select_dflash_depth(true, 7, 8, 9), 3);
+        assert_eq!(select_dflash_depth(true, 7, 8, 8), 7);
     }
 
     #[test]
     fn fixed_depth_ignores_batch_size() {
-        assert_eq!(select_dflash_depth(false, 7, 1), 7);
-        assert_eq!(select_dflash_depth(false, 7, 16), 7);
+        assert_eq!(select_dflash_depth(false, 7, 1, 1), 7);
+        assert_eq!(select_dflash_depth(false, 7, 16, 16), 7);
     }
 
     #[test]
@@ -4033,13 +4153,20 @@ mod tests {
     }
 
     #[test]
-    fn adaptive_mode_requires_an_explicit_true_value() {
+    fn adaptive_env_parses_explicit_values() {
         assert!(dflash_adaptive_env_value("1"));
         assert!(dflash_adaptive_env_value("true"));
         assert!(dflash_adaptive_env_value("TRUE"));
         for value in ["", "0", "false", "yes", "on", "7"] {
             assert!(!dflash_adaptive_env_value(value));
         }
+    }
+
+    #[test]
+    fn adaptive_mode_requires_depth_and_serving_headroom() {
+        assert!(dflash_adaptive_supported(7, 16));
+        assert!(!dflash_adaptive_supported(3, 16));
+        assert!(!dflash_adaptive_supported(7, 8));
     }
 
     #[test]
@@ -4052,12 +4179,12 @@ mod tests {
             dflash_graph_plans(true, 7),
             vec![
                 SpeculativeGraphPlan::new(7, Some(ADAPT_FULL_DEPTH_MAX_BATCH)),
-                SpeculativeGraphPlan::new(1, None),
+                SpeculativeGraphPlan::new(3, None),
             ]
         );
         assert_eq!(
-            dflash_graph_plans(true, 1),
-            vec![SpeculativeGraphPlan::new(1, None)]
+            dflash_graph_plans(true, 3),
+            vec![SpeculativeGraphPlan::new(3, None)]
         );
     }
 
@@ -4079,20 +4206,42 @@ mod tests {
             ]
         );
         assert_eq!(
-            dflash_graph_precapture_shapes(&dflash_graph_plans(true, 7), batches, 8),
+            dflash_graph_precapture_shapes(&dflash_graph_plans(true, 7), batches, 16),
             vec![
-                (1, 2),
+                (1, 4),
                 (1, 8),
-                (2, 2),
+                (2, 4),
                 (2, 8),
-                (3, 2),
-                (4, 2),
-                (5, 2),
-                (6, 2),
-                (7, 2),
-                (8, 2),
+                (3, 4),
+                (3, 8),
+                (4, 4),
+                (4, 8),
+                (5, 4),
+                (5, 8),
+                (6, 4),
+                (6, 8),
+                (7, 4),
+                (7, 8),
+                (8, 4),
+                (8, 8),
+                (16, 4),
             ]
         );
+    }
+
+    #[cfg(feature = "cuda")]
+    #[test]
+    fn graph_precapture_shapes_cover_large_shared_batch_buckets() {
+        let shapes = dflash_graph_precapture_shapes(
+            &dflash_graph_plans(false, 7),
+            cuda_graph_precapture_batches(CudaGraphComponent::DFlash, 8),
+            CUDA_GRAPH_MAX_BATCH_BUCKET,
+        );
+        assert_eq!(
+            shapes.len(),
+            cuda_graph_precapture_batches(CudaGraphComponent::DFlash, 8).count()
+        );
+        assert_eq!(shapes.last(), Some(&(CUDA_GRAPH_MAX_BATCH_BUCKET, 8)));
     }
 
     #[test]

@@ -300,6 +300,10 @@ pub mod text_models_inputs_processor {
     }
 
     impl PagedAttentionInputMetadata {
+        pub(crate) fn is_decode_step(&self) -> bool {
+            !self.is_first_prompt_chunk && self.query_lens.is_none()
+        }
+
         pub(crate) fn has_host_staged_decode_tensors(&self) -> bool {
             self.decode_rows.is_some()
                 && self
@@ -1502,6 +1506,11 @@ pub mod text_models_inputs_processor {
             .iter()
             .map(|tokens| tokens.to_device(device)?.to_dtype(T::DTYPE))
             .collect::<candle_core::Result<Vec<_>>>()?;
+        #[cfg(feature = "cuda")]
+        if T::DTYPE == DType::U32 && device.is_cuda() {
+            return crate::cuda::input_packing::pack_completion_input(&host, &staged_device_rows)
+                .map_err(anyhow::Error::msg);
+        }
         let staged = Tensor::stack(&staged_device_rows, 0)?;
         Ok(Tensor::cat(&[&host, &staged], 1)?)
     }

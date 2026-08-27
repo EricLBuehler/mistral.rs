@@ -1,6 +1,8 @@
 use candle_core::{DType, Device, Result, Tensor};
 
-use crate::kv_cache::{RecurrentStateLayout, RecurrentStatePool};
+use crate::kv_cache::{
+    GdnDeferredStatePool, GdnPendingTransitionPool, RecurrentStateLayout, RecurrentStatePool,
+};
 
 use super::config::{GdnConfig, GdnDims};
 
@@ -13,6 +15,8 @@ pub struct GdnLayerCache {
     pub recurrent_state: Tensor,
     pub state_layout: RecurrentStateLayout,
     pub slots: Option<Tensor>,
+    pub(crate) pending_transitions: Option<GdnPendingTransitionPool>,
+    pub(crate) deferred_state: Option<GdnDeferredStatePool>,
 }
 
 #[allow(dead_code)]
@@ -42,6 +46,8 @@ impl GdnLayerCache {
             recurrent_state,
             state_layout,
             slots: None,
+            pending_transitions: None,
+            deferred_state: None,
         }
     }
 
@@ -56,6 +62,8 @@ impl GdnLayerCache {
             recurrent_state,
             state_layout,
             slots: Some(slots),
+            pending_transitions: None,
+            deferred_state: None,
         }
     }
 
@@ -63,12 +71,15 @@ impl GdnLayerCache {
     /// pool in place through the slot table; elsewhere this is a gathered copy that `commit` scatters back.
     pub fn checkout(pool: &RecurrentStatePool, indices: &Tensor) -> Result<Self> {
         if pool.device().is_cuda() {
-            return Ok(Self::pooled(
+            let mut cache = Self::pooled(
                 pool.conv_state.clone(),
                 pool.recurrent_state.clone(),
                 pool.state_layout(),
                 indices.clone(),
-            ));
+            );
+            cache.pending_transitions = pool.pending_transitions().cloned();
+            cache.deferred_state = pool.deferred_state().cloned();
+            return Ok(cache);
         }
         Ok(Self::gathered(
             pool.gather_conv_state(indices)?,
@@ -104,6 +115,8 @@ impl Clone for GdnLayerCache {
             recurrent_state: self.recurrent_state.clone(),
             state_layout: self.state_layout,
             slots: self.slots.clone(),
+            pending_transitions: self.pending_transitions.clone(),
+            deferred_state: self.deferred_state.clone(),
         }
     }
 }

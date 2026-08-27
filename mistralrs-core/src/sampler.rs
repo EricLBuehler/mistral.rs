@@ -311,6 +311,8 @@ pub struct Sampler {
     logits_processors: Vec<Arc<dyn CustomLogitsProcessor>>,
     #[cfg(feature = "cuda")]
     top1_cache: Arc<Mutex<Option<crate::ops::CudaTop1LogitsWorkspace>>>,
+    #[cfg(feature = "cuda")]
+    topk_sampling_cache: Arc<Mutex<Option<crate::ops::CudaTopKSamplingWorkspace>>>,
 }
 
 #[cfg(feature = "cuda")]
@@ -398,11 +400,7 @@ impl CudaTop1BatchSubmission {
             (token_ids, packed)
         };
         self.submission = None;
-        if packed.is_none()
-            && token_ids
-                .iter()
-                .any(|&token| token == crate::ops::CUDA_TOP1_INVALID_TOKEN)
-        {
+        if packed.is_none() && token_ids.contains(&crate::ops::CUDA_TOP1_INVALID_TOKEN) {
             candle_core::bail!("invalid CUDA top-1 output");
         }
         Ok(CudaTop1BatchCompletion { token_ids, packed })
@@ -427,6 +425,92 @@ impl Drop for CudaTop1BatchSubmission {
 }
 
 #[cfg(feature = "cuda")]
+pub(crate) struct CudaTopKBatchSubmission {
+    cache: Arc<Mutex<Option<crate::ops::CudaTopKSamplingWorkspace>>>,
+    submission: Option<crate::ops::CudaTopKSamplingSubmission>,
+}
+
+#[cfg(feature = "cuda")]
+impl CudaTopKBatchSubmission {
+    pub(crate) fn batch_size(&self) -> usize {
+        self.submission
+            .as_ref()
+            .expect("CUDA top-k submission was already completed")
+            .batch_size()
+    }
+
+    pub(crate) fn wait_on(
+        &self,
+        stream: &Arc<candle_core::cuda_backend::cudarc::driver::CudaStream>,
+    ) -> Result<()> {
+        let mut cache = self.cache.lock().unwrap();
+        crate::ops::cuda_topk_sampling_device_tokens_wait_on(
+            cache
+                .as_mut()
+                .expect("CUDA top-k workspace exists while its submission is active"),
+            self.submission
+                .as_ref()
+                .expect("CUDA top-k submission was already completed"),
+            stream,
+        )
+    }
+
+    pub(crate) fn release_after(
+        &self,
+        stream: &Arc<candle_core::cuda_backend::cudarc::driver::CudaStream>,
+    ) -> Result<()> {
+        let mut cache = self.cache.lock().unwrap();
+        crate::ops::cuda_topk_sampling_device_tokens_release_after(
+            cache
+                .as_mut()
+                .expect("CUDA top-k workspace exists while its submission is active"),
+            self.submission
+                .as_ref()
+                .expect("CUDA top-k submission was already completed"),
+            stream,
+        )
+    }
+
+    pub(crate) fn complete(mut self) -> Result<Vec<u32>> {
+        let submission = self
+            .submission
+            .as_ref()
+            .expect("CUDA top-k submission was already completed");
+        submission.wait()?;
+        let token_ids = {
+            let mut cache = self.cache.lock().unwrap();
+            crate::ops::cuda_topk_sampling_submission_complete(
+                cache
+                    .as_mut()
+                    .expect("CUDA top-k workspace exists while its submission is active"),
+                submission,
+            )?
+            .token_ids()
+            .to_vec()
+        };
+        self.submission = None;
+        Ok(token_ids)
+    }
+}
+
+#[cfg(feature = "cuda")]
+impl Drop for CudaTopKBatchSubmission {
+    fn drop(&mut self) {
+        let Some(submission) = self.submission.take() else {
+            return;
+        };
+        let _ = submission.wait();
+        let mut cache = self
+            .cache
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(workspace) = cache.as_mut() {
+            let _ = crate::ops::cuda_topk_sampling_submission_cancel(workspace, &submission);
+        }
+    }
+}
+
+#[cfg(feature = "cuda")]
 impl CudaBatchSamplingKind {
     pub(crate) fn is_argmax(self) -> bool {
         matches!(self, Self::Greedy | Self::TopK { k: 1 })
@@ -438,6 +522,8 @@ impl CudaBatchSamplingKind {
 pub(crate) struct CudaBatchSamplingPlan {
     pub(crate) kind: CudaBatchSamplingKind,
     pub(crate) inverse_temperature: f32,
+    pub(crate) top_p: f32,
+    pub(crate) min_p: f32,
 }
 
 #[cfg(feature = "cuda")]
@@ -544,6 +630,37 @@ fn top_p_cutoff(top_p: f32, kept_probs: impl Iterator<Item = f32>) -> f32 {
     top_p * kept_probs.sum::<f32>()
 }
 
+#[cfg(all(feature = "cuda", test))]
+fn weighted_index_from_unit_f32(weights: &[f32], unit: f32) -> Result<usize> {
+    if weights.is_empty() || !unit.is_finite() || !(0.0..1.0).contains(&unit) {
+        candle_core::bail!("invalid resident sampling weights or uniform");
+    }
+    let mut total = 0.0f32;
+    for &weight in weights {
+        if !weight.is_finite() || weight < 0.0 {
+            candle_core::bail!("invalid resident sampling weight");
+        }
+        total += weight;
+    }
+    if !total.is_finite() || total <= 0.0 {
+        candle_core::bail!("resident sampling weights have no positive mass");
+    }
+
+    let chosen = unit * total;
+    let mut cumulative = 0.0f32;
+    let mut last_positive = None;
+    for (index, &weight) in weights.iter().enumerate() {
+        cumulative += weight;
+        if weight > 0.0 {
+            last_positive = Some(index);
+        }
+        if cumulative > chosen {
+            return Ok(index);
+        }
+    }
+    Ok(last_positive.expect("positive sampling mass was checked above"))
+}
+
 #[cfg(any(feature = "cuda", feature = "metal"))]
 fn sparse_token_counts(
     context: &[u32],
@@ -613,6 +730,8 @@ impl Sampler {
             logits_processors,
             #[cfg(feature = "cuda")]
             top1_cache: Arc::new(Mutex::new(None)),
+            #[cfg(feature = "cuda")]
+            topk_sampling_cache: Arc::new(Mutex::new(None)),
         })
     }
 
@@ -649,21 +768,23 @@ impl Sampler {
             None => Some(CudaBatchSamplingPlan {
                 kind: CudaBatchSamplingKind::Greedy,
                 inverse_temperature: 1.0,
+                top_p: 1.0,
+                min_p: 0.0,
             }),
             Some(temperature) if temperature.is_finite() && temperature > 0.0 => {
                 let inverse_temperature = (1.0 / temperature) as f32;
                 if !inverse_temperature.is_finite() || inverse_temperature <= 0.0 {
                     return None;
                 }
+                let has_top_p_filter = self.top_p > 0.0 && self.top_p < 1.0;
+                let has_min_p_filter = self.min_p > 0.0 && self.min_p < 1.0;
                 let kind = if self.top_k > 0 {
                     let k = usize::try_from(self.top_k).ok()?;
                     if k > crate::ops::CUDA_TOPK_MAX_K {
                         return None;
                     }
                     CudaBatchSamplingKind::TopK { k }
-                } else if !(self.top_p > 0.0 && self.top_p < 1.0)
-                    && !(self.min_p > 0.0 && self.min_p < 1.0)
-                {
+                } else if !(has_top_p_filter || has_min_p_filter) {
                     CudaBatchSamplingKind::Categorical
                 } else {
                     return None;
@@ -671,6 +792,8 @@ impl Sampler {
                 Some(CudaBatchSamplingPlan {
                     kind,
                     inverse_temperature,
+                    top_p: self.top_p as f32,
+                    min_p: self.min_p as f32,
                 })
             }
             Some(_) => None,
@@ -688,8 +811,8 @@ impl Sampler {
             CudaBatchSamplingKind::Categorical => 0,
             CudaBatchSamplingKind::TopK { k } => k,
         };
-        let top_p = self.top_p as f32;
-        let min_p = self.min_p as f32;
+        let top_p = plan.top_p;
+        let min_p = plan.min_p;
         if !top_p.is_finite() || !min_p.is_finite() {
             return None;
         }
@@ -699,6 +822,30 @@ impl Sampler {
             top_p,
             min_p,
         })
+    }
+
+    #[cfg(feature = "cuda")]
+    pub(crate) fn cuda_resident_sampling_plan(
+        &self,
+        return_logprobs: bool,
+    ) -> Option<CudaBatchSamplingPlan> {
+        let plan = self.cuda_batch_sampling_plan(return_logprobs)?;
+        if matches!(plan.kind, CudaBatchSamplingKind::Categorical)
+            || !plan.top_p.is_finite()
+            || !plan.min_p.is_finite()
+        {
+            return None;
+        }
+        Some(plan)
+    }
+
+    #[cfg(feature = "cuda")]
+    pub(crate) fn draw_cuda_resident_uniform(rng: &mut Isaac64Rng) -> f32 {
+        use rand::distr::Uniform;
+
+        Uniform::new(0.0f32, 1.0f32)
+            .expect("valid unit uniform distribution")
+            .sample(rng)
     }
 
     #[cfg(feature = "cuda")]
@@ -738,7 +885,74 @@ impl Sampler {
             .iter()
             .map(|value| ((*value * plan.inverse_temperature - global_max).exp()) / denom)
             .collect::<Vec<_>>();
-        let selected = if matches!(plan.kind, CudaBatchSamplingKind::Greedy) || row_k == 1 {
+        self.sample_cuda_topk_probabilities(
+            &top_indices,
+            reporting_probs,
+            matches!(plan.kind, CudaBatchSamplingKind::Greedy) || row_k == 1,
+            rng,
+        )
+    }
+
+    #[cfg(feature = "cuda")]
+    pub(crate) fn sample_cuda_ranked_topk_packed_row(
+        &self,
+        packed: &[f32],
+        packed_k: usize,
+        plan: CudaBatchSamplingPlan,
+        rng: &mut Isaac64Rng,
+    ) -> Result<Logprobs> {
+        let expected = 2 * packed_k;
+        if packed.len() != expected {
+            candle_core::bail!(
+                "invalid batched CUDA ranked top-k row length {}, expected {expected}",
+                packed.len()
+            );
+        }
+        let row_k = match plan.kind {
+            CudaBatchSamplingKind::Greedy => 1,
+            CudaBatchSamplingKind::TopK { k } => k.min(packed_k),
+            CudaBatchSamplingKind::Categorical => {
+                candle_core::bail!("categorical plan cannot parse CUDA ranked top-k output")
+            }
+        };
+        let top_values = &packed[..row_k];
+        let top_indices = packed[packed_k..packed_k + row_k]
+            .iter()
+            .map(|idx| *idx as u32)
+            .collect::<Vec<_>>();
+        let scaled_max =
+            top_values.first().copied().unwrap_or(f32::NEG_INFINITY) * plan.inverse_temperature;
+        if !scaled_max.is_finite() {
+            candle_core::bail!("invalid batched CUDA ranked top-k maximum");
+        }
+        let mut reporting_probs = top_values
+            .iter()
+            .map(|value| (*value * plan.inverse_temperature - scaled_max).exp())
+            .collect::<Vec<_>>();
+        let denominator = reporting_probs.iter().sum::<f32>();
+        if denominator <= 0.0 || !denominator.is_finite() {
+            candle_core::bail!("invalid batched CUDA ranked top-k normalizer");
+        }
+        for probability in &mut reporting_probs {
+            *probability /= denominator;
+        }
+        self.sample_cuda_topk_probabilities(
+            &top_indices,
+            reporting_probs,
+            matches!(plan.kind, CudaBatchSamplingKind::Greedy) || row_k == 1,
+            rng,
+        )
+    }
+
+    #[cfg(feature = "cuda")]
+    fn sample_cuda_topk_probabilities(
+        &self,
+        top_indices: &[u32],
+        reporting_probs: Vec<f32>,
+        greedy: bool,
+        rng: &mut Isaac64Rng,
+    ) -> Result<Logprobs> {
+        let selected = if greedy {
             0
         } else {
             let mut sampling_probs = reporting_probs.clone();
@@ -867,6 +1081,44 @@ impl Sampler {
         };
         Ok(CudaTop1BatchSubmission {
             cache: self.top1_cache.clone(),
+            submission: Some(submission),
+        })
+    }
+
+    #[cfg(feature = "cuda")]
+    pub(crate) fn submit_cuda_topk_batch_owned(
+        &self,
+        logits: &Tensor,
+        params: &[crate::ops::CudaTopKSamplingParams],
+    ) -> Result<CudaTopKBatchSubmission> {
+        let submission = {
+            let mut cache = self.topk_sampling_cache.lock().unwrap();
+            crate::ops::cuda_topk_sampling_submit_batched(logits, params, &mut cache)?
+        };
+        Ok(CudaTopKBatchSubmission {
+            cache: self.topk_sampling_cache.clone(),
+            submission: Some(submission),
+        })
+    }
+
+    #[cfg(feature = "cuda")]
+    pub(crate) fn submit_cuda_topk_batch_into(
+        &self,
+        logits: &Tensor,
+        token_ids_dst: &Tensor,
+        params: &[crate::ops::CudaTopKSamplingParams],
+    ) -> Result<CudaTopKBatchSubmission> {
+        let submission = {
+            let mut cache = self.topk_sampling_cache.lock().unwrap();
+            crate::ops::cuda_topk_sampling_submit_batched_into(
+                logits,
+                token_ids_dst,
+                params,
+                &mut cache,
+            )?
+        };
+        Ok(CudaTopKBatchSubmission {
+            cache: self.topk_sampling_cache.clone(),
             submission: Some(submission),
         })
     }
@@ -2329,6 +2581,7 @@ mod tests {
         let greedy_plan = greedy.cuda_batch_sampling_plan(false).unwrap();
         assert!(matches!(greedy_plan.kind, CudaBatchSamplingKind::Greedy));
         assert_eq!(greedy_plan.inverse_temperature, 1.0);
+        assert!(greedy.cuda_resident_sampling_plan(false).is_some());
         assert!(greedy.cuda_speculative_sampling_plan(false).is_none());
 
         let mut penalized = greedy.clone();
@@ -2364,6 +2617,7 @@ mod tests {
             CudaBatchSamplingKind::TopK { k: 64 }
         ));
         assert_eq!(top_k_plan.inverse_temperature, 2.0);
+        assert!(top_k.cuda_resident_sampling_plan(false).is_some());
         assert!(top_k.cuda_batch_sampling_plan(true).is_none());
         let speculative_top_k = top_k.cuda_speculative_sampling_plan(false).unwrap();
         assert_eq!(speculative_top_k.inverse_temperature, 2.0);
@@ -2409,6 +2663,7 @@ mod tests {
             unbounded_plan.kind,
             CudaBatchSamplingKind::Categorical
         ));
+        assert!(unbounded.cuda_resident_sampling_plan(false).is_none());
         let speculative_unbounded = unbounded.cuda_speculative_sampling_plan(false).unwrap();
         assert_eq!(speculative_unbounded.top_k, 0);
         assert_eq!(speculative_unbounded.top_p, 1.0);
@@ -2451,6 +2706,123 @@ mod tests {
 
         assert_eq!(sampled.token, 7);
         assert!((sampled.logprob - 0.5f32.ln()).abs() < 1e-6);
+    }
+
+    #[cfg(feature = "cuda")]
+    #[test]
+    fn cuda_ranked_topk_matches_packed_reference_for_fixed_seeds() {
+        use super::Sampler;
+        use rand::SeedableRng;
+        use rand_isaac::Isaac64Rng;
+
+        for k in [20, 32] {
+            let sampler = Sampler::new(
+                Some(0.8),
+                0,
+                None,
+                None,
+                None,
+                None,
+                None,
+                k as i64,
+                0.37,
+                0.05,
+                HashMap::new(),
+                vec![],
+            )
+            .unwrap();
+            let plan = sampler.cuda_batch_sampling_plan(false).unwrap();
+            let values = (0..k)
+                .map(|slot| 5.0 - (slot / 4) as f32 * 0.25)
+                .collect::<Vec<_>>();
+            let indices = (0..k).map(|slot| (1000 + slot) as f32).collect::<Vec<_>>();
+            let scaled_max = values[0] * plan.inverse_temperature;
+            let probabilities = values
+                .iter()
+                .map(|value| (*value * plan.inverse_temperature - scaled_max).exp())
+                .collect::<Vec<_>>();
+            let denominator = probabilities.iter().sum::<f32>();
+            let cutoff = 0.37 * denominator;
+            let mut cumulative = 0.0f32;
+            let mut support = 0;
+            for probability in &probabilities {
+                if cumulative >= cutoff {
+                    break;
+                }
+                cumulative += probability;
+                support += 1;
+            }
+
+            let mut ranked = Vec::with_capacity(2 * k);
+            ranked.extend_from_slice(&values);
+            ranked.extend_from_slice(&indices);
+            let mut full = ranked.clone();
+            full.extend_from_slice(&[denominator, scaled_max]);
+
+            for seed in 0..256 {
+                let mut reference_rng = Isaac64Rng::seed_from_u64(seed);
+                let reference = sampler
+                    .sample_cuda_topk_packed_row(&full, k, plan, &mut reference_rng)
+                    .unwrap();
+                let mut ranked_rng = Isaac64Rng::seed_from_u64(seed);
+                let actual = sampler
+                    .sample_cuda_ranked_topk_packed_row(&ranked, k, plan, &mut ranked_rng)
+                    .unwrap();
+
+                assert_eq!(actual.token, reference.token);
+                assert_eq!(actual.logprob, reference.logprob);
+                assert!((actual.token as usize) < 1000 + support);
+            }
+        }
+    }
+
+    #[cfg(feature = "cuda")]
+    #[test]
+    fn resident_unit_uniform_matches_weighted_index_for_fixed_seeds() {
+        use super::weighted_index_from_unit_f32;
+        use rand::{
+            distr::{weighted::WeightedIndex, Distribution, Uniform},
+            RngCore, SeedableRng,
+        };
+        use rand_isaac::Isaac64Rng;
+
+        let top_p_truncated = |mut weights: Vec<f32>, top_p: f32| {
+            let cutoff = top_p * weights.iter().sum::<f32>();
+            let mut cumulative = 0.0f32;
+            for weight in &mut weights {
+                if cumulative >= cutoff {
+                    *weight = 0.0;
+                } else {
+                    cumulative += *weight;
+                }
+            }
+            weights
+        };
+        let distributions = [
+            vec![1.0, 2.0, 3.0, 4.0],
+            vec![0.0, 0.125, 0.0, 8.0, 1.0],
+            vec![1.0e-7, 3.0e-5, 0.25, 9.0],
+            top_p_truncated(vec![0.42, 0.31, 0.17, 0.07, 0.03], 0.72),
+            top_p_truncated(vec![1.0; 20], 0.95),
+        ];
+        let unit = Uniform::new(0.0f32, 1.0f32).unwrap();
+
+        for weights in distributions {
+            let reference = WeightedIndex::new(&weights).unwrap();
+            for seed in 0..4096 {
+                let mut reference_rng = Isaac64Rng::seed_from_u64(seed);
+                let expected = reference.sample(&mut reference_rng);
+                let expected_next = reference_rng.next_u64();
+
+                let mut resident_rng = Isaac64Rng::seed_from_u64(seed);
+                let uniform = unit.sample(&mut resident_rng);
+                let actual = weighted_index_from_unit_f32(&weights, uniform).unwrap();
+                let actual_next = resident_rng.next_u64();
+
+                assert_eq!(actual, expected, "seed={seed}, weights={weights:?}");
+                assert_eq!(actual_next, expected_next, "seed={seed}");
+            }
+        }
     }
 
     #[cfg(feature = "cuda")]

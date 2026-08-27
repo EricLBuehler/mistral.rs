@@ -150,6 +150,21 @@ impl QuantMethod for DynamicLoraLinear {
         }
     }
 
+    #[cfg(feature = "cuda")]
+    fn try_forward_fused_split_glu(
+        &self,
+        input: &Tensor,
+        split_size: usize,
+        activation: crate::GluActivationType,
+    ) -> Result<Option<Tensor>> {
+        if self.site_is_active() {
+            Ok(None)
+        } else {
+            self.base
+                .try_forward_fused_split_glu(input, split_size, activation)
+        }
+    }
+
     fn afq_inner(&self) -> Option<crate::AfqInner> {
         if self.site_is_active() {
             None

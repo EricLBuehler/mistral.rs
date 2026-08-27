@@ -322,8 +322,15 @@ impl Pipeline for AnyMoePipeline {
         get_mut_arcmutex!(self.target).attach_speculative_with_runtime(config, runtime)
     }
 
-    fn release_speculative_sequences(&mut self, seq_ids: &[usize]) {
-        get_mut_arcmutex!(self.target).release_speculative_sequences(seq_ids);
+    fn release_speculative_sequences(&mut self, seq_ids: &[usize]) -> candle_core::Result<()> {
+        get_mut_arcmutex!(self.target).release_speculative_sequences(seq_ids)
+    }
+
+    fn flush_recurrent_speculative_transitions(
+        &self,
+        seq_ids: &[usize],
+    ) -> candle_core::Result<()> {
+        get_mut_arcmutex!(self.target).flush_recurrent_speculative_transitions(seq_ids)
     }
 
     fn supports_speculative_prompt_bootstrap(&self) -> bool {

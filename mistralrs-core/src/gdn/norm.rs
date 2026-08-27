@@ -1,5 +1,10 @@
 use candle_core::{DType, Device, Result, Tensor, D};
+#[cfg(feature = "cuda")]
+use mistralrs_quant::QuantizedActivation;
 use mistralrs_quant::ShardedVarBuilder;
+
+#[cfg(feature = "cuda")]
+use crate::cuda::gdn::GdnFp8OutputSpec;
 
 pub struct RmsNormGated {
     pub weight: Tensor,
@@ -7,6 +12,11 @@ pub struct RmsNormGated {
 }
 
 impl RmsNormGated {
+    #[cfg(test)]
+    pub(crate) fn from_parts(weight: Tensor, eps: f64) -> Self {
+        Self { weight, eps }
+    }
+
     pub fn new(
         size: usize,
         eps: f64,
@@ -49,5 +59,25 @@ impl RmsNormGated {
             .broadcast_mul(&self.weight.to_dtype(DType::F32)?)?
             .broadcast_mul(&gate)?;
         out.to_dtype(dtype)
+    }
+
+    #[cfg(feature = "cuda")]
+    pub(crate) fn forward_quantized(
+        &self,
+        x: &Tensor,
+        gate: &Tensor,
+        spec: &GdnFp8OutputSpec,
+        num_v_heads: usize,
+        head_v_dim: usize,
+    ) -> Result<QuantizedActivation> {
+        crate::cuda::gdn::rmsnorm_gated_quantized_cuda(
+            x,
+            gate,
+            &self.weight,
+            self.eps,
+            spec,
+            num_v_heads,
+            head_v_dim,
+        )
     }
 }

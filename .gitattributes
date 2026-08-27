@@ -17,3 +17,4 @@
 #   https://github.com/EricLBuehler/mistral.rs/pull/361
 
 Dockerfile* eol=lf
+mistralrs-quant/third_party/deepgemm_sm90/include/official/** -whitespace

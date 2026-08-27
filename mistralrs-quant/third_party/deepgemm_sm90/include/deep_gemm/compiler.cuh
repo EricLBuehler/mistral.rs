@@ -45,6 +45,12 @@ extern char** environ;
 
 namespace deep_gemm::jit {
 
+enum class KernelFamily {
+  Legacy,
+  Official1D2D,
+  SmallMSwapAB,
+};
+
 #ifndef MISTRALRS_DEEPGEMM_SOURCE_HASH
 #error "MISTRALRS_DEEPGEMM_SOURCE_HASH must identify the bundled JIT sources"
 #endif
@@ -332,6 +338,54 @@ __global__ void dummy_kernel() {
 )";
 }
 
+inline uint32_t getOfficialOutputSwizzle(uint32_t block_n) {
+  for (uint32_t mode : {128U, 64U, 32U, 16U}) {
+    if ((block_n * sizeof(__nv_bfloat16)) % mode == 0) {
+      return mode;
+    }
+  }
+  throw std::runtime_error("DeepGEMM official kernel has an invalid output swizzle");
+}
+
+inline std::string generateOfficialKernel(uint32_t shape_n, uint32_t shape_k,
+                                          uint32_t block_m, uint32_t block_n,
+                                          uint32_t block_k, uint32_t num_stages,
+                                          uint32_t num_tma_multicast,
+                                          uint32_t num_sms, bool multicast_on_a) {
+  constexpr uint32_t kNumTMAThreads = 128;
+  const uint32_t num_math_threads = block_m <= 64 ? 128 : 256;
+  const uint32_t swizzle_d = getOfficialOutputSwizzle(block_n);
+  return R"(
+#include <deep_gemm/impls/sm90_fp8_gemm_1d2d.cuh>
+
+using namespace deep_gemm;
+
+static void __instantiate_kernel() {
+  auto ptr = reinterpret_cast<void*>(&sm90_fp8_gemm_1d2d_impl<
+      cute::UMMA::Major::K,
+      0, )" +
+         std::to_string(shape_n) + ", " + std::to_string(shape_k) + R"(,
+      1,
+      )" +
+         std::to_string(block_m) + ", " + std::to_string(block_n) + ", " +
+         std::to_string(block_k) + R"(,
+      128, 128, )" +
+         std::to_string(swizzle_d) + R"(,
+      )" +
+         std::to_string(num_stages) + R"(,
+      )" +
+         std::to_string(kNumTMAThreads) + ", " + std::to_string(num_math_threads) + R"(,
+      )" +
+         std::to_string(num_tma_multicast) + ", " +
+         (multicast_on_a ? "true" : "false") + R"(,
+      )" +
+         std::to_string(num_sms) + R"(, GemmType::Normal,
+      cutlass::bfloat16_t,
+      epilogue::transform::EpilogueIdentity>);
+}
+)";
+}
+
 class Compiler {
  public:
   static Compiler& getInstance() {
@@ -359,7 +413,8 @@ class Compiler {
   Runtime* build(uint32_t shape_n, uint32_t shape_k, uint32_t block_m, uint32_t block_n,
                  uint32_t block_k, uint32_t num_groups, uint32_t num_stages,
                  uint32_t num_tma_multicast, deep_gemm::GemmType gemm_type,
-                 bool swap_ab = false) {
+                 bool swap_ab = false, KernelFamily family = KernelFamily::Legacy,
+                 bool multicast_on_a = false, uint32_t num_sms = 0) {
     CUcontext context = nullptr;
     CHECK_CUDA(cuCtxGetCurrent(&context));
     if (context == nullptr) {
@@ -378,12 +433,24 @@ class Compiler {
     }
     ensurePrivateCacheRoot();
 
-    std::string name = std::string(swap_ab ? "gemm_swap_ab_" : "gemm_") +
-                       std::to_string(shape_n) + "_" + std::to_string(shape_k) + "_" +
-                       std::to_string(block_m) + "_" + std::to_string(block_n) + "_" +
-                       std::to_string(block_k) + "_" + std::to_string(num_groups) + "_" +
-                       std::to_string(num_stages) + "_" + std::to_string(num_tma_multicast) + "_" +
+    const char* family_name = nullptr;
+    if (family == KernelFamily::Official1D2D) {
+      family_name = "official_1d2d_";
+    } else if (family == KernelFamily::SmallMSwapAB) {
+      family_name = "small_m_swap_ab_";
+    } else {
+      family_name = swap_ab ? "gemm_swap_ab_" : "gemm_";
+    }
+    std::string name = std::string(family_name) + std::to_string(shape_n) + "_" +
+                       std::to_string(shape_k) + "_" + std::to_string(block_m) + "_" +
+                       std::to_string(block_n) + "_" + std::to_string(block_k) + "_" +
+                       std::to_string(num_groups) + "_" + std::to_string(num_stages) + "_" +
+                       std::to_string(num_tma_multicast) + "_" +
                        gemm_type_to_string(gemm_type);
+    if (family == KernelFamily::Official1D2D) {
+      name += "_" + std::to_string(num_sms) + "_" +
+              (multicast_on_a ? "multicast_a" : "multicast_b");
+    }
     auto path = getCacheDir() / name;
     auto& runtime_cache = getGlobalRuntimeCache();
     if (auto* cached = runtime_cache.get(path.string(), gemm_type); cached != nullptr) {
@@ -422,8 +489,14 @@ class Compiler {
     auto cached_cubin = path / kKernelName;
     {
       std::ofstream source(source_path, std::ios::binary);
-      source << generateKernel(shape_n, shape_k, block_m, block_n, block_k, num_groups, num_stages,
-                               num_tma_multicast, gemm_type, swap_ab);
+      if (family == KernelFamily::Official1D2D) {
+        source << generateOfficialKernel(shape_n, shape_k, block_m, block_n, block_k,
+                                         num_stages, num_tma_multicast, num_sms,
+                                         multicast_on_a);
+      } else {
+        source << generateKernel(shape_n, shape_k, block_m, block_n, block_k, num_groups,
+                                 num_stages, num_tma_multicast, gemm_type, swap_ab);
+      }
       if (!source) {
         throw std::runtime_error("Failed to write DeepGEMM kernel source");
       }
@@ -434,7 +507,7 @@ class Compiler {
         source_path.string(),
         "-o",
         temporary_cubin.string(),
-        "-std=c++17",
+        family == KernelFamily::Official1D2D ? "-std=c++20" : "-std=c++17",
         "--gpu-architecture=sm_90a",
         "--ptxas-options=-allow-expensive-optimizations=true",
         "--ptxas-options=--register-usage-level=10",

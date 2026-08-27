@@ -1,4 +1,6 @@
 #[cfg(feature = "cuda")]
+pub(crate) mod dflash_context;
+#[cfg(feature = "cuda")]
 pub(crate) mod dynamic_conv;
 pub mod ffi;
 pub mod gdn;
@@ -6,6 +8,8 @@ pub mod gdn;
 pub mod graph;
 #[cfg(feature = "cuda")]
 pub(crate) mod indexed_copy;
+#[cfg(feature = "cuda")]
+pub(crate) mod input_packing;
 pub mod moe;
 #[cfg(feature = "cuda")]
 pub(crate) mod preload;

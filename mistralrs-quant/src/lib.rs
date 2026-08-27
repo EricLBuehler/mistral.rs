@@ -138,7 +138,8 @@ pub use afq::ops::{
 pub use afq::{AfqBits, AfqGroupSize, AfqInner, AfqLayer};
 pub use bitsandbytes::{BnbLinear, BnbQuantParams, BnbQuantType};
 pub use blockwise_fp8::{
-    blockwise_fp8_moe, fp8_blockwise_dequantize, fp8_blockwise_quantize, BlockwiseFP8Linear,
+    blockwise_fp8_moe, fp8_blockwise_dequantize, fp8_blockwise_quantize,
+    fused_add_rms_norm_quantized, fused_add_rms_norm_quantized_with_normalized, BlockwiseFP8Linear,
 };
 pub use distributed::{
     layers::{
@@ -1421,6 +1422,21 @@ pub struct ActivationQuantizationScheme {
     pub block_shape: [usize; 2],
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ActivationScaleLayout {
+    RowMajor,
+    GroupMajor { row_alignment: NonZeroUsize },
+}
+
+fn aligned_activation_scale_rows(rows: usize, row_alignment: NonZeroUsize) -> Result<usize> {
+    let alignment = row_alignment.get();
+    rows.checked_add(alignment - 1)
+        .ok_or_else(|| {
+            candle_core::Error::msg("group-major activation scale row count overflows usize")
+        })
+        .map(|rows| rows / alignment * alignment)
+}
+
 #[derive(Clone, Debug)]
 pub struct QuantizedActivation {
     quantized: Tensor,
@@ -1428,6 +1444,7 @@ pub struct QuantizedActivation {
     source_shape: Vec<usize>,
     source_dtype: DType,
     scheme: ActivationQuantizationScheme,
+    scale_layout: ActivationScaleLayout,
 }
 
 impl QuantizedActivation {
@@ -1437,6 +1454,24 @@ impl QuantizedActivation {
         source_shape: Vec<usize>,
         source_dtype: DType,
         scheme: ActivationQuantizationScheme,
+    ) -> Result<Self> {
+        Self::new_with_scale_layout(
+            quantized,
+            scales,
+            source_shape,
+            source_dtype,
+            scheme,
+            ActivationScaleLayout::RowMajor,
+        )
+    }
+
+    pub fn new_with_scale_layout(
+        quantized: Tensor,
+        scales: Tensor,
+        source_shape: Vec<usize>,
+        source_dtype: DType,
+        scheme: ActivationQuantizationScheme,
+        scale_layout: ActivationScaleLayout,
     ) -> Result<Self> {
         let [row_block, col_block] = scheme.block_shape;
         if row_block == 0 || col_block == 0 {
@@ -1473,12 +1508,24 @@ impl QuantizedActivation {
                 source_shape
             );
         }
-        let expected_scale_shape = (rows.div_ceil(row_block), cols.div_ceil(col_block));
+        let expected_scale_shape = match scale_layout {
+            ActivationScaleLayout::RowMajor => (rows.div_ceil(row_block), cols.div_ceil(col_block)),
+            ActivationScaleLayout::GroupMajor { row_alignment } => {
+                if row_block != 1 {
+                    candle_core::bail!(
+                        "group-major activation scales require a row block size of 1, got {row_block}"
+                    );
+                }
+                let scale_rows = aligned_activation_scale_rows(rows, row_alignment)?;
+                (cols.div_ceil(col_block), scale_rows)
+            }
+        };
         if scales.dims2()? != expected_scale_shape {
             candle_core::bail!(
-                "quantized activation scale shape {:?} does not match expected {:?}",
+                "quantized activation scale shape {:?} does not match expected {:?} for {:?}",
                 scales.dims(),
-                expected_scale_shape
+                expected_scale_shape,
+                scale_layout
             );
         }
         Ok(Self {
@@ -1487,6 +1534,7 @@ impl QuantizedActivation {
             source_shape,
             source_dtype,
             scheme,
+            scale_layout,
         })
     }
 
@@ -1508,6 +1556,54 @@ impl QuantizedActivation {
 
     pub fn scheme(&self) -> ActivationQuantizationScheme {
         self.scheme
+    }
+
+    pub fn scale_layout(&self) -> ActivationScaleLayout {
+        self.scale_layout
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct FusedRmsNormQuantized {
+    residual: Tensor,
+    activation: QuantizedActivation,
+}
+
+impl FusedRmsNormQuantized {
+    pub fn new(residual: Tensor, activation: QuantizedActivation) -> Result<Self> {
+        if residual.dtype() != activation.source_dtype()
+            || residual.dims() != activation.source_shape()
+        {
+            candle_core::bail!(
+                "fused RMSNorm residual shape {:?} and dtype {:?} do not match activation source shape {:?} and dtype {:?}",
+                residual.dims(),
+                residual.dtype(),
+                activation.source_shape(),
+                activation.source_dtype()
+            );
+        }
+        if !residual
+            .device()
+            .same_device(activation.quantized().device())
+        {
+            candle_core::bail!("fused RMSNorm residual and activation are on different devices");
+        }
+        Ok(Self {
+            residual,
+            activation,
+        })
+    }
+
+    pub fn residual(&self) -> &Tensor {
+        &self.residual
+    }
+
+    pub fn activation(&self) -> &QuantizedActivation {
+        &self.activation
+    }
+
+    pub fn into_parts(self) -> (Tensor, QuantizedActivation) {
+        (self.residual, self.activation)
     }
 }
 
@@ -1609,6 +1705,11 @@ pub trait QuantMethod: Send + Sync + Debug + QuantizedSerde {
         self.activation_quantization_scheme()
     }
 
+    fn preferred_activation_scale_layout_for(&self, a: &Tensor) -> Option<ActivationScaleLayout> {
+        self.activation_quantization_scheme_for(a)
+            .map(|_| ActivationScaleLayout::RowMajor)
+    }
+
     fn quantize_activation(&self, _a: &Tensor) -> Result<QuantizedActivation> {
         candle_core::bail!("{} does not support activation quantization", self.name())
     }
@@ -1618,6 +1719,16 @@ pub trait QuantMethod: Send + Sync + Debug + QuantizedSerde {
             "{} does not support prequantized activation input",
             self.name()
         )
+    }
+
+    #[cfg(feature = "cuda")]
+    fn try_forward_fused_split_glu(
+        &self,
+        _input: &Tensor,
+        _split_size: usize,
+        _activation: GluActivationType,
+    ) -> Result<Option<Tensor>> {
+        Ok(None)
     }
 
     /// If a quantized method, return the activation dtype.
@@ -1700,11 +1811,14 @@ pub fn try_forward_with_shared_quantized_activation(
     let Some(scheme) = first.activation_quantization_scheme_for(a) else {
         return Ok(None);
     };
-    if methods
-        .iter()
-        .skip(1)
-        .any(|method| method.activation_quantization_scheme_for(a) != Some(scheme))
-    {
+    if first.preferred_activation_scale_layout_for(a) != Some(ActivationScaleLayout::RowMajor) {
+        return Ok(None);
+    }
+    if methods.iter().skip(1).any(|method| {
+        method.activation_quantization_scheme_for(a) != Some(scheme)
+            || method.preferred_activation_scale_layout_for(a)
+                != Some(ActivationScaleLayout::RowMajor)
+    }) {
         return Ok(None);
     }
     let activation = first.quantize_activation(a)?;
@@ -1716,11 +1830,88 @@ pub fn try_forward_with_shared_quantized_activation(
             scheme
         );
     }
+    if activation.scale_layout() != ActivationScaleLayout::RowMajor {
+        candle_core::bail!(
+            "{} produced activation scale layout {:?}, expected row-major",
+            first.name(),
+            activation.scale_layout()
+        );
+    }
     methods
         .iter()
         .map(|method| method.forward_quantized(&activation))
         .collect::<Result<Vec<_>>>()
         .map(Some)
+}
+
+pub fn try_forward_fused_quantized_glu(
+    gate: &Tensor,
+    value: &Tensor,
+    projection: &dyn QuantMethod,
+    activation: GluActivationType,
+) -> Result<Option<Tensor>> {
+    #[cfg(feature = "cuda")]
+    {
+        if gate.dtype() != DType::BF16
+            || value.dtype() != DType::BF16
+            || gate.shape() != value.shape()
+            || !gate.device().same_device(value.device())
+            || !gate.device().is_cuda()
+            || projection.is_dynamic_lora_active()
+            || projection.stats_snapshot().is_some()
+        {
+            return Ok(None);
+        }
+        let Some(scheme) = projection.activation_quantization_scheme_for(value) else {
+            return Ok(None);
+        };
+        if scheme.dtype != DType::F8E4M3 || scheme.block_shape != [1, 128] {
+            return Ok(None);
+        }
+        let Some(scale_layout @ ActivationScaleLayout::GroupMajor { row_alignment }) =
+            projection.preferred_activation_scale_layout_for(value)
+        else {
+            return Ok(None);
+        };
+        let Some((&columns, batch_dims)) = value.dims().split_last() else {
+            return Ok(None);
+        };
+        let rows = batch_dims
+            .iter()
+            .try_fold(1usize, |rows, dim| rows.checked_mul(*dim))
+            .ok_or_else(|| {
+                candle_core::Error::msg("fused GLU activation row count overflows usize")
+            })?;
+        if rows == 0 || columns == 0 {
+            return Ok(None);
+        }
+        let scale_stride_m = aligned_activation_scale_rows(rows, row_alignment)?;
+        let Some((quantized, scales)) = utils::fused_glu_quantized_bf16(
+            gate,
+            value,
+            scheme.block_shape[1],
+            scale_stride_m,
+            activation,
+        )?
+        else {
+            return Ok(None);
+        };
+        let quantized = QuantizedActivation::new_with_scale_layout(
+            quantized,
+            scales,
+            value.dims().to_vec(),
+            value.dtype(),
+            scheme,
+            scale_layout,
+        )?;
+        projection.forward_quantized(&quantized).map(Some)
+    }
+
+    #[cfg(not(feature = "cuda"))]
+    {
+        let _ = (gate, value, projection, activation);
+        Ok(None)
+    }
 }
 
 impl Module for dyn QuantMethod {
@@ -2644,6 +2835,31 @@ mod tests {
     }
 
     #[test]
+    fn fused_quantized_glu_falls_back_off_cuda() -> Result<()> {
+        let gate = Tensor::zeros((3, 4), DType::BF16, &Device::Cpu)?;
+        let value = Tensor::ones((3, 4), DType::BF16, &Device::Cpu)?;
+        let method = SharedActivationProbe;
+        assert!(try_forward_fused_quantized_glu(
+            &gate,
+            &value,
+            &method,
+            GluActivationType::Sigmoid,
+        )?
+        .is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn group_major_scale_rows_follow_physical_bucket() -> Result<()> {
+        let alignment = NonZeroUsize::new(4).unwrap();
+        assert_eq!(aligned_activation_scale_rows(1, alignment)?, 4);
+        assert_eq!(aligned_activation_scale_rows(5, alignment)?, 8);
+        assert_eq!(aligned_activation_scale_rows(16, alignment)?, 16);
+        assert!(aligned_activation_scale_rows(usize::MAX, alignment).is_err());
+        Ok(())
+    }
+
+    #[test]
     fn quantized_activation_validates_flattened_shape_and_scale_grid() -> Result<()> {
         let scheme = ActivationQuantizationScheme {
             dtype: DType::F8E4M3,
@@ -2661,6 +2877,7 @@ mod tests {
         assert_eq!(activation.source_shape(), &[2, 3, 8]);
         assert_eq!(activation.source_dtype(), DType::BF16);
         assert_eq!(activation.scheme(), scheme);
+        assert_eq!(activation.scale_layout(), ActivationScaleLayout::RowMajor);
 
         let wrong_scales = Tensor::zeros((3, 2), DType::F32, &Device::Cpu)?;
         assert!(QuantizedActivation::new(
@@ -2669,6 +2886,59 @@ mod tests {
             vec![2, 3, 8],
             DType::BF16,
             scheme,
+        )
+        .is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn quantized_activation_validates_group_major_scale_layout() -> Result<()> {
+        let scheme = ActivationQuantizationScheme {
+            dtype: DType::F8E4M3,
+            block_shape: [1, 128],
+        };
+        let layout = ActivationScaleLayout::GroupMajor {
+            row_alignment: std::num::NonZeroUsize::new(4).unwrap(),
+        };
+        let quantized = Tensor::zeros((5, 256), DType::F8E4M3, &Device::Cpu)?;
+        let scales = Tensor::zeros((2, 8), DType::F32, &Device::Cpu)?;
+        let activation = QuantizedActivation::new_with_scale_layout(
+            quantized.clone(),
+            scales,
+            vec![5, 256],
+            DType::BF16,
+            scheme,
+            layout,
+        )?;
+        assert_eq!(activation.scale_layout(), layout);
+        let fused = FusedRmsNormQuantized::new(
+            Tensor::zeros((5, 256), DType::BF16, &Device::Cpu)?,
+            activation,
+        )?;
+        assert_eq!(fused.residual().dims(), &[5, 256]);
+        assert_eq!(fused.activation().scales().dims(), &[2, 8]);
+
+        let wrong_scales = Tensor::zeros((5, 2), DType::F32, &Device::Cpu)?;
+        assert!(QuantizedActivation::new_with_scale_layout(
+            quantized.clone(),
+            wrong_scales,
+            vec![5, 256],
+            DType::BF16,
+            scheme,
+            layout,
+        )
+        .is_err());
+        let row_blocked_scheme = ActivationQuantizationScheme {
+            dtype: DType::F8E4M3,
+            block_shape: [2, 128],
+        };
+        assert!(QuantizedActivation::new_with_scale_layout(
+            quantized,
+            Tensor::zeros((2, 8), DType::F32, &Device::Cpu)?,
+            vec![5, 256],
+            DType::BF16,
+            row_blocked_scheme,
+            layout,
         )
         .is_err());
         Ok(())

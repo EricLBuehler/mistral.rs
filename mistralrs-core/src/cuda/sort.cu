@@ -1625,6 +1625,8 @@ constexpr int RANKED_TOPK_RADIX_CAPACITY =
     RANKED_TOPK_RADIX_THREADS * RANKED_TOPK_RADIX_ITEMS_PER_THREAD;
 constexpr int RANKED_TOPK_RADIX_MIN_K = 8;
 constexpr int RANKED_TOPK_RADIX_MAX_K = 16;
+constexpr int RANKED_TOPK_SAMPLE_THREADS = 128;
+constexpr int RANKED_TOPK_SAMPLE_PARAM_WIDTH = 5;
 
 template <typename T>
 __global__ void topk_large_ranked_stage1_radix(
@@ -1707,6 +1709,120 @@ __global__ void topk_large_ranked_stage2_radix(
                                  : 0.0f;
     }
   }
+}
+
+__global__ void sample_ranked_topk_kernel(
+    const float *__restrict__ packed, const float *__restrict__ params,
+    uint32_t *__restrict__ tokens, const int nrows, const int packed_k) {
+  const int row = blockIdx.x * blockDim.x + threadIdx.x;
+  if (row >= nrows) {
+    return;
+  }
+
+  const float *row_params =
+      params + row * static_cast<size_t>(RANKED_TOPK_SAMPLE_PARAM_WIDTH);
+  const float inv_temperature = row_params[0];
+  const int row_k = min(static_cast<int>(row_params[1]), packed_k);
+  const float top_p = row_params[2];
+  const float min_p = row_params[3];
+  const float uniform = row_params[4];
+  if (row_k <= 0 || !(inv_temperature > 0.0f) || !isfinite(inv_temperature) ||
+      !isfinite(top_p) || !isfinite(min_p) || !(uniform >= 0.0f) ||
+      !(uniform < 1.0f)) {
+    tokens[row] = UINT32_MAX;
+    return;
+  }
+
+  const float *row_packed = packed + row * static_cast<size_t>(2 * packed_k);
+  const float scaled_max = row_packed[0] * inv_temperature;
+  if (!isfinite(scaled_max)) {
+    tokens[row] = UINT32_MAX;
+    return;
+  }
+
+  float denominator = 0.0f;
+  for (int rank = 0; rank < row_k; ++rank) {
+    denominator += expf(row_packed[rank] * inv_temperature - scaled_max);
+  }
+  if (!(denominator > 0.0f) || !isfinite(denominator)) {
+    tokens[row] = UINT32_MAX;
+    return;
+  }
+
+  float normalized_sum = 0.0f;
+  for (int rank = 0; rank < row_k; ++rank) {
+    normalized_sum +=
+        expf(row_packed[rank] * inv_temperature - scaled_max) / denominator;
+  }
+  const bool filter_top_p = top_p > 0.0f && top_p < 1.0f;
+  const float cutoff = filter_top_p ? top_p * normalized_sum : 0.0f;
+  float nucleus_sum = 0.0f;
+  int retained = row_k;
+  if (filter_top_p) {
+    for (int rank = 0; rank < row_k; ++rank) {
+      if (nucleus_sum >= cutoff) {
+        retained = rank;
+        break;
+      }
+      nucleus_sum +=
+          expf(row_packed[rank] * inv_temperature - scaled_max) / denominator;
+    }
+  }
+
+  const bool filter_min_p = min_p > 0.0f && min_p < 1.0f;
+  const float first_probability = 1.0f / denominator;
+  const float min_probability =
+      filter_min_p ? first_probability * min_p : -1.0f;
+  float total = 0.0f;
+  for (int rank = 0; rank < retained; ++rank) {
+    const float probability =
+        expf(row_packed[rank] * inv_temperature - scaled_max) / denominator;
+    if (!filter_min_p || !(min_probability >= probability)) {
+      total += probability;
+    }
+  }
+  if (!(total > 0.0f) || !isfinite(total)) {
+    tokens[row] = UINT32_MAX;
+    return;
+  }
+
+  const float chosen = uniform * total;
+  float cumulative = 0.0f;
+  int selected = -1;
+  int last_positive = -1;
+  for (int rank = 0; rank < retained; ++rank) {
+    const float probability =
+        expf(row_packed[rank] * inv_temperature - scaled_max) / denominator;
+    if (filter_min_p && min_probability >= probability) {
+      continue;
+    }
+    cumulative += probability;
+    if (probability > 0.0f) {
+      last_positive = rank;
+    }
+    if (cumulative > chosen) {
+      selected = rank;
+      break;
+    }
+  }
+  if (selected < 0) {
+    selected = last_positive;
+  }
+  const float token = selected >= 0 ? row_packed[packed_k + selected] : -1.0f;
+  tokens[row] = token >= 0.0f && isfinite(token) ? static_cast<uint32_t>(token)
+                                                 : UINT32_MAX;
+}
+
+extern "C" void sample_ranked_topk(
+    const float *packed, const float *params, uint32_t *tokens,
+    const int nrows, const int packed_k, int64_t stream) {
+  if (nrows <= 0 || packed_k <= 0) {
+    return;
+  }
+  const int block = RANKED_TOPK_SAMPLE_THREADS;
+  const int grid = (nrows + block - 1) / block;
+  sample_ranked_topk_kernel<<<grid, block, 0, (cudaStream_t)stream>>>(
+      packed, params, tokens, nrows, packed_k);
 }
 
 __global__ void topk_large_stage2_f32(
@@ -2359,12 +2475,12 @@ topk_large_f16_packed_batched(const __half *input,
 template <typename T>
 cudaError_t launch_topk_large_ranked_packed_batched(
     const T *input, float *block_values, uint32_t *block_indices,
-    float *packed_out, int nrows, int ncols, int k, int chunk_size, int nblocks,
-    int64_t stream) {
+    float *packed_out, void *radix_workspace, int nrows, int ncols, int k,
+    int chunk_size, int nblocks, int64_t stream) {
   const cudaStream_t custream = (cudaStream_t)stream;
   bool radix_launched = false;
   cudaError_t status = mistralrs_radix_topk::launch(
-      input, packed_out, block_values, nrows, ncols, k, custream,
+      input, packed_out, radix_workspace, nrows, ncols, k, custream,
       &radix_launched);
   if (status != cudaSuccess || radix_launched) {
     return status;
@@ -2413,28 +2529,28 @@ extern "C" size_t topk_large_ranked_state_words_per_row() {
 
 extern "C" int topk_large_ranked_f32_packed_batched(
     const float *input, float *block_values, uint32_t *block_indices,
-    float *packed_out, int nrows, int ncols, int k, int chunk_size, int nblocks,
-    int64_t stream) {
+    float *packed_out, void *radix_workspace, int nrows, int ncols, int k,
+    int chunk_size, int nblocks, int64_t stream) {
   return static_cast<int>(launch_topk_large_ranked_packed_batched(
-      input, block_values, block_indices, packed_out, nrows, ncols, k,
+      input, block_values, block_indices, packed_out, radix_workspace, nrows, ncols, k,
       chunk_size, nblocks, stream));
 }
 
 extern "C" int topk_large_ranked_bf16_packed_batched(
     const __nv_bfloat16 *input, float *block_values, uint32_t *block_indices,
-    float *packed_out, int nrows, int ncols, int k, int chunk_size, int nblocks,
-    int64_t stream) {
+    float *packed_out, void *radix_workspace, int nrows, int ncols, int k,
+    int chunk_size, int nblocks, int64_t stream) {
   return static_cast<int>(launch_topk_large_ranked_packed_batched(
-      input, block_values, block_indices, packed_out, nrows, ncols, k,
+      input, block_values, block_indices, packed_out, radix_workspace, nrows, ncols, k,
       chunk_size, nblocks, stream));
 }
 
 extern "C" int topk_large_ranked_f16_packed_batched(
     const __half *input, float *block_values, uint32_t *block_indices,
-    float *packed_out, int nrows, int ncols, int k, int chunk_size, int nblocks,
-    int64_t stream) {
+    float *packed_out, void *radix_workspace, int nrows, int ncols, int k,
+    int chunk_size, int nblocks, int64_t stream) {
   return static_cast<int>(launch_topk_large_ranked_packed_batched(
-      input, block_values, block_indices, packed_out, nrows, ncols, k,
+      input, block_values, block_indices, packed_out, radix_workspace, nrows, ncols, k,
       chunk_size, nblocks, stream));
 }
 

@@ -16,7 +16,10 @@ use super::config::{LayerType, TextConfig};
 use crate::{
     attention::{AttentionMask, SdpaParams},
     device_map::{DeviceMappedMask, DeviceMapper},
-    gdn::{GatedDeltaNet, GdnConfig, GdnInputProjectionKind, GdnLayerCache, GdnVHeadLayout},
+    gdn::{
+        GatedDeltaNet, GdnConfig, GdnInputProjectionKind, GdnLayerCache, GdnVHeadLayout,
+        PackedGdnLayout,
+    },
     kv_cache::{
         HybridCache, HybridCacheConfig, HybridLayerCache, HybridLayerType, RecurrentLayerConfig,
     },
@@ -31,7 +34,7 @@ use crate::{
         RecurrentBatchKind,
     },
     utils::{progress::NiceProgressBar, unvarbuilder::UnVarBuilder},
-    vision_models::qwen3_5::packed_gdn::{forward_packed_gdn, packed_gdn_query_lens},
+    vision_models::qwen3_5::packed_gdn::{forward_packed_gdn, packed_gdn_layout},
 };
 
 impl GdnConfig for TextConfig {
@@ -458,7 +461,7 @@ impl DecoderLayer {
         x: &Tensor,
         cache: &mut GdnLayerCache,
         batch_kind: RecurrentBatchKind,
-        packed_query_lens: Option<&[usize]>,
+        packed_layout: Option<&PackedGdnLayout>,
     ) -> Result<Tensor> {
         let gdn = match &self.layer_impl {
             LayerImpl::LinearAttention(gdn) => gdn,
@@ -466,8 +469,8 @@ impl DecoderLayer {
         };
         let residual = x;
         let x = self.input_layernorm.forward(x)?;
-        let gdn_out = if let Some(query_lens) = packed_query_lens {
-            forward_packed_gdn(gdn, &x, cache, batch_kind, query_lens)?
+        let gdn_out = if let Some(layout) = packed_layout {
+            forward_packed_gdn(gdn, &x, cache, batch_kind, layout)?
         } else {
             gdn.forward(&x, cache, batch_kind)?
         };
@@ -768,8 +771,8 @@ impl Qwen3_5MoeTextModel {
                 "Hybrid recurrent metadata is required for linear-attention layers."
             );
         }
-        let packed_query_lens = if has_linear_attention {
-            packed_gdn_query_lens(&xs, ctx)?
+        let packed_layout = if has_linear_attention {
+            packed_gdn_layout(&xs, ctx)?
         } else {
             None
         };
@@ -844,7 +847,7 @@ impl Qwen3_5MoeTextModel {
                     })?;
                     if let Some(HybridLayerCache::Recurrent(pool)) = hybrid_cache.get_mut(i) {
                         // Packed prefill slices the gathered rows per logical sequence
-                        let mut gdn_cache = if packed_query_lens.is_some() {
+                        let mut gdn_cache = if packed_layout.is_some() {
                             GdnLayerCache::gathered(
                                 pool.gather_conv_state(&indices)?,
                                 pool.gather_recurrent_state(&indices)?,
@@ -858,7 +861,7 @@ impl Qwen3_5MoeTextModel {
                             &xs,
                             &mut gdn_cache,
                             recurrent_metadata.batch_kind(),
-                            packed_query_lens.as_deref(),
+                            packed_layout.as_ref(),
                         )?;
 
                         gdn_cache.commit(

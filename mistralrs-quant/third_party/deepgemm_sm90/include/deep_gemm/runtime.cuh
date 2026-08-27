@@ -85,7 +85,9 @@ class Runtime {
       for (auto kernel : kernels) {
         const char* name = nullptr;
         CHECK_CUDA(cuKernelGetName(&name, kernel));
-        if (name != nullptr && std::string(name).find("fp8_gemm_kernel") != std::string::npos) {
+        if (name != nullptr &&
+            (std::string(name).find("sm90_fp8_gemm_1d2d_impl") != std::string::npos ||
+             std::string(name).find("fp8_gemm_kernel") != std::string::npos)) {
           loaded_kernel = kernel;
           break;
         }
