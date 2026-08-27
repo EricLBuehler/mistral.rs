@@ -50,6 +50,7 @@ fn flashinfer_cache_scales(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn gather_kv_cache(
     key_cache: &Tensor,   // [num_blocks, kv_heads, head_size/x, block_size, x]
     value_cache: &Tensor, // [num_blocks, kv_heads, head_size, block_size]

@@ -45,8 +45,9 @@ const PAGED_ATTENTION_PARTITION_SIZE: usize = 512;
 const TARGET_CUDA_DECODE_GRAPH_CACHE_DEFAULT_CAPACITY: usize = 64;
 const TARGET_CUDA_DECODE_GRAPH_CACHE_MAX_CAPACITY: usize = 96;
 const TARGET_CUDA_DECODE_GRAPH_CACHE_CAPACITY_QUANTUM: usize = 16;
-// Batches up to this size get their own graph; larger ones pad to the next 8-row boundary.
-pub(crate) const CUDA_GRAPH_EXACT_BATCH_BUCKETS: usize = 8;
+const CUDA_GRAPH_BATCH_BUCKET_GRANULARITY: usize = 8;
+const CUDA_GRAPH_COARSE_EXACT_BATCH_BUCKETS: usize = 8;
+const TARGET_SINGLE_TOKEN_EXACT_BATCH_BUCKETS: usize = 16;
 pub(crate) const CUDA_GRAPH_MAX_BATCH_BUCKET: usize = 128;
 pub(crate) const CUDA_GRAPH_PRECAPTURE_MAX_BATCH: usize = CUDA_GRAPH_MAX_BATCH_BUCKET;
 const CUDA_GRAPH_SPEC_STATE_BUDGET_FLOOR_PERCENT: usize = 4;
@@ -387,25 +388,42 @@ struct MemoryPoolScopeState {
     release_threshold: u64,
 }
 
+const fn cuda_graph_exact_batch_buckets(component: CudaGraphComponent, q_len: usize) -> usize {
+    if matches!(component, CudaGraphComponent::Target) && q_len == 1 {
+        TARGET_SINGLE_TOKEN_EXACT_BATCH_BUCKETS
+    } else {
+        CUDA_GRAPH_COARSE_EXACT_BATCH_BUCKETS
+    }
+}
+
 /// Graph batch bucket a decode batch pads up to, or None when it is too large to graph.
-pub(crate) fn cuda_graph_batch_bucket(batch: usize) -> Option<usize> {
+pub(crate) fn cuda_graph_batch_bucket(
+    component: CudaGraphComponent,
+    q_len: usize,
+    batch: usize,
+) -> Option<usize> {
     if batch == 0 {
         None
-    } else if batch <= CUDA_GRAPH_EXACT_BATCH_BUCKETS {
+    } else if batch <= cuda_graph_exact_batch_buckets(component, q_len) {
         Some(batch)
     } else {
         let bucket = batch
-            .div_ceil(CUDA_GRAPH_EXACT_BATCH_BUCKETS)
-            .saturating_mul(CUDA_GRAPH_EXACT_BATCH_BUCKETS);
+            .div_ceil(CUDA_GRAPH_BATCH_BUCKET_GRANULARITY)
+            .saturating_mul(CUDA_GRAPH_BATCH_BUCKET_GRANULARITY);
         (bucket <= CUDA_GRAPH_MAX_BATCH_BUCKET).then_some(bucket)
     }
 }
 
-pub(crate) fn cuda_graph_precapture_max_batch(configured_max: usize) -> usize {
+pub(crate) fn cuda_graph_precapture_max_batch(
+    component: CudaGraphComponent,
+    q_len: usize,
+    configured_max: usize,
+) -> usize {
     if configured_max == 0 {
         0
     } else {
-        cuda_graph_batch_bucket(configured_max).unwrap_or(CUDA_GRAPH_MAX_BATCH_BUCKET)
+        cuda_graph_batch_bucket(component, q_len, configured_max)
+            .unwrap_or(CUDA_GRAPH_MAX_BATCH_BUCKET)
     }
 }
 
@@ -424,10 +442,14 @@ pub(crate) fn target_cuda_graph_cache_capacity(
 }
 
 /// The batch buckets captured ahead of time at load.
-pub(crate) fn cuda_graph_precapture_batches() -> impl Iterator<Item = usize> {
-    (1..=CUDA_GRAPH_EXACT_BATCH_BUCKETS).chain(
-        (CUDA_GRAPH_EXACT_BATCH_BUCKETS * 2..=CUDA_GRAPH_PRECAPTURE_MAX_BATCH)
-            .step_by(CUDA_GRAPH_EXACT_BATCH_BUCKETS),
+pub(crate) fn cuda_graph_precapture_batches(
+    component: CudaGraphComponent,
+    q_len: usize,
+) -> impl Iterator<Item = usize> {
+    let exact = cuda_graph_exact_batch_buckets(component, q_len);
+    (1..=exact).chain(
+        (exact + CUDA_GRAPH_BATCH_BUCKET_GRANULARITY..=CUDA_GRAPH_PRECAPTURE_MAX_BATCH)
+            .step_by(CUDA_GRAPH_BATCH_BUCKET_GRANULARITY),
     )
 }
 
@@ -997,6 +1019,17 @@ pub(crate) struct CudaDecodeGraphCaptureCtx<'a> {
     pub(crate) real_batch: usize,
 }
 
+struct CudaDecodeGraphMetadataInput<'a> {
+    metadata: &'a PagedAttentionInputMetadata,
+    seqlen_offsets: &'a [usize],
+    position_ids: &'a [usize],
+    seq_len: usize,
+    block_size: usize,
+    kv_cache: &'a [(Tensor, Tensor)],
+    model_metadata: Option<&'a (dyn ModelConfigLike + Send + Sync)>,
+    activation_dtype: DType,
+}
+
 pub(crate) struct CudaDecodeGraphMetadataBuffers {
     requirements: PagedDecodeMetadataRequirements,
     flashinfer_views_alias: bool,
@@ -1098,16 +1131,19 @@ impl CudaDecodeGraphKey {
 }
 
 impl CudaDecodeGraphMetadataBuffers {
-    pub(crate) fn new(
-        metadata: &PagedAttentionInputMetadata,
-        seqlen_offsets: &[usize],
-        position_ids: &[usize],
-        seq_len: usize,
-        block_size: usize,
-        kv_cache: &[(Tensor, Tensor)],
-        model_metadata: Option<&(dyn ModelConfigLike + Send + Sync)>,
-        activation_dtype: DType,
+    fn new(
+        input: CudaDecodeGraphMetadataInput<'_>,
     ) -> candle_core::Result<(Self, PagedAttentionInputMetadata)> {
+        let CudaDecodeGraphMetadataInput {
+            metadata,
+            seqlen_offsets,
+            position_ids,
+            seq_len,
+            block_size,
+            kv_cache,
+            model_metadata,
+            activation_dtype,
+        } = input;
         let slot_mappings = var_map_from_tensor_map(&metadata.slot_mappings)?;
         if seqlen_offsets.len() != position_ids.len() {
             candle_core::bail!(
@@ -2236,16 +2272,17 @@ where
     let metadata = &materialized_metadata;
     let (batch, seq_len) = input_ids.dims2()?;
     let input_ids = Var::from_tensor(input_ids)?;
-    let (mut metadata_buffers, metadata) = CudaDecodeGraphMetadataBuffers::new(
-        metadata,
-        seqlen_offsets,
-        position_ids,
-        seq_len,
-        block_size,
-        kv_cache,
-        model_metadata,
-        activation_dtype,
-    )?;
+    let (mut metadata_buffers, metadata) =
+        CudaDecodeGraphMetadataBuffers::new(CudaDecodeGraphMetadataInput {
+            metadata,
+            seqlen_offsets,
+            position_ids,
+            seq_len,
+            block_size,
+            kv_cache,
+            model_metadata,
+            activation_dtype,
+        })?;
     let graph_input_ids = input_ids.as_detached_tensor();
     let Device::Cuda(cuda_device) = graph_input_ids.device() else {
         candle_core::bail!("CUDA graph decode expected CUDA input ids");
@@ -3716,55 +3753,116 @@ mod tests {
         assert_eq!(target_cuda_graph_cache_capacity(23, 23), 64);
         assert_eq!(target_cuda_graph_cache_capacity(38, 15), 64);
         assert_eq!(target_cuda_graph_cache_capacity(54, 23), 80);
+        assert_eq!(target_cuda_graph_cache_capacity(61, 30), 96);
         assert_eq!(target_cuda_graph_cache_capacity(80, 23), 96);
         assert_eq!(target_cuda_graph_cache_capacity(usize::MAX, usize::MAX), 96);
     }
 
     #[test]
-    fn batch_buckets_are_exact_then_eight_row_aligned() {
-        assert_eq!(cuda_graph_batch_bucket(0), None);
-        for batch in 1..=CUDA_GRAPH_EXACT_BATCH_BUCKETS {
-            assert_eq!(cuda_graph_batch_bucket(batch), Some(batch));
-        }
-        assert_eq!(cuda_graph_batch_bucket(9), Some(16));
-        assert_eq!(cuda_graph_batch_bucket(16), Some(16));
-        assert_eq!(cuda_graph_batch_bucket(17), Some(24));
-        assert_eq!(cuda_graph_batch_bucket(31), Some(32));
-        assert_eq!(cuda_graph_batch_bucket(33), Some(40));
-        assert_eq!(cuda_graph_batch_bucket(57), Some(64));
-        assert_eq!(cuda_graph_batch_bucket(65), Some(72));
-        assert_eq!(cuda_graph_batch_bucket(121), Some(128));
+    fn target_single_token_batch_buckets_are_exact_through_16() {
         assert_eq!(
-            cuda_graph_batch_bucket(CUDA_GRAPH_MAX_BATCH_BUCKET),
+            cuda_graph_batch_bucket(CudaGraphComponent::Target, 1, 0),
+            None
+        );
+        for batch in 1..=TARGET_SINGLE_TOKEN_EXACT_BATCH_BUCKETS {
+            assert_eq!(
+                cuda_graph_batch_bucket(CudaGraphComponent::Target, 1, batch),
+                Some(batch)
+            );
+        }
+        assert_eq!(
+            cuda_graph_batch_bucket(CudaGraphComponent::Target, 1, 17),
+            Some(24)
+        );
+        assert_eq!(
+            cuda_graph_batch_bucket(CudaGraphComponent::Target, 1, 31),
+            Some(32)
+        );
+        assert_eq!(
+            cuda_graph_batch_bucket(CudaGraphComponent::Target, 1, CUDA_GRAPH_MAX_BATCH_BUCKET),
             Some(CUDA_GRAPH_MAX_BATCH_BUCKET)
         );
         assert_eq!(
-            cuda_graph_batch_bucket(CUDA_GRAPH_MAX_BATCH_BUCKET + 1),
+            cuda_graph_batch_bucket(
+                CudaGraphComponent::Target,
+                1,
+                CUDA_GRAPH_MAX_BATCH_BUCKET + 1
+            ),
             None
         );
     }
 
     #[test]
-    fn precapture_includes_every_batch_bucket() {
+    fn multi_token_and_dflash_batches_keep_coarse_buckets() {
+        for (component, q_len) in [
+            (CudaGraphComponent::Target, 4),
+            (CudaGraphComponent::DFlash, 1),
+            (CudaGraphComponent::DFlash, 8),
+        ] {
+            assert_eq!(cuda_graph_batch_bucket(component, q_len, 8), Some(8));
+            assert_eq!(cuda_graph_batch_bucket(component, q_len, 9), Some(16));
+            assert_eq!(cuda_graph_batch_bucket(component, q_len, 17), Some(24));
+        }
+    }
+
+    #[test]
+    fn precapture_batches_follow_component_and_query_width() {
         assert_eq!(
-            cuda_graph_precapture_batches().collect::<Vec<_>>(),
+            cuda_graph_precapture_batches(CudaGraphComponent::Target, 1).collect::<Vec<_>>(),
+            vec![
+                1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 24, 32, 40, 48, 56, 64, 72,
+                80, 88, 96, 104, 112, 120, 128,
+            ]
+        );
+        assert_eq!(
+            cuda_graph_precapture_batches(CudaGraphComponent::Target, 4).collect::<Vec<_>>(),
             vec![
                 1, 2, 3, 4, 5, 6, 7, 8, 16, 24, 32, 40, 48, 56, 64, 72, 80, 88, 96, 104, 112, 120,
                 128,
             ]
         );
+        assert_eq!(
+            cuda_graph_precapture_batches(CudaGraphComponent::DFlash, 1).collect::<Vec<_>>(),
+            cuda_graph_precapture_batches(CudaGraphComponent::Target, 4).collect::<Vec<_>>()
+        );
     }
 
     #[test]
-    fn precapture_max_batch_rounds_to_the_shared_bucket_ceiling() {
-        assert_eq!(cuda_graph_precapture_max_batch(0), 0);
-        assert_eq!(cuda_graph_precapture_max_batch(8), 8);
-        assert_eq!(cuda_graph_precapture_max_batch(9), 16);
-        assert_eq!(cuda_graph_precapture_max_batch(17), 24);
-        assert_eq!(cuda_graph_precapture_max_batch(64), 64);
-        assert_eq!(cuda_graph_precapture_max_batch(65), 72);
-        assert_eq!(cuda_graph_precapture_max_batch(128), 128);
-        assert_eq!(cuda_graph_precapture_max_batch(129), 128);
+    fn precapture_max_batch_uses_the_shape_policy() {
+        assert_eq!(
+            cuda_graph_precapture_max_batch(CudaGraphComponent::Target, 1, 0),
+            0
+        );
+        assert_eq!(
+            cuda_graph_precapture_max_batch(CudaGraphComponent::Target, 1, 9),
+            9
+        );
+        assert_eq!(
+            cuda_graph_precapture_max_batch(CudaGraphComponent::Target, 4, 9),
+            16
+        );
+        assert_eq!(
+            cuda_graph_precapture_max_batch(CudaGraphComponent::DFlash, 8, 9),
+            16
+        );
+        assert_eq!(
+            cuda_graph_precapture_max_batch(CudaGraphComponent::Target, 1, 17),
+            24
+        );
+        assert_eq!(
+            cuda_graph_precapture_max_batch(CudaGraphComponent::Target, 1, 129),
+            128
+        );
+    }
+
+    #[test]
+    fn target_single_token_buckets_fit_the_default_cache() {
+        let bucket_count = cuda_graph_precapture_batches(CudaGraphComponent::Target, 1).count();
+        assert_eq!(bucket_count, 30);
+        assert_eq!(
+            target_cuda_graph_cache_capacity(bucket_count, bucket_count),
+            TARGET_CUDA_DECODE_GRAPH_CACHE_DEFAULT_CAPACITY
+        );
     }
 
     #[test]
@@ -3881,16 +3979,16 @@ mod tests {
             .iter()
             .all(|tensor| !tensor.name.starts_with("full_")));
 
-        let (buffers, _) = CudaDecodeGraphMetadataBuffers::new(
-            &metadata,
-            &[127],
-            &[128],
-            1,
-            32,
-            &[],
-            None,
-            DType::F32,
-        )
+        let (buffers, _) = CudaDecodeGraphMetadataBuffers::new(CudaDecodeGraphMetadataInput {
+            metadata: &metadata,
+            seqlen_offsets: &[127],
+            position_ids: &[128],
+            seq_len: 1,
+            block_size: 32,
+            kv_cache: &[],
+            model_metadata: None,
+            activation_dtype: DType::F32,
+        })
         .unwrap();
         assert!(buffers.flashinfer_views_alias);
         let location = Device::Cpu.location();
@@ -3927,16 +4025,16 @@ mod tests {
         .build_materialized()
         .unwrap();
 
-        let (buffers, _) = CudaDecodeGraphMetadataBuffers::new(
-            &metadata,
-            &[97, 97],
-            &[100, 52],
-            3,
-            32,
-            &[],
-            None,
-            DType::F32,
-        )
+        let (buffers, _) = CudaDecodeGraphMetadataBuffers::new(CudaDecodeGraphMetadataInput {
+            metadata: &metadata,
+            seqlen_offsets: &[97, 97],
+            position_ids: &[100, 52],
+            seq_len: 3,
+            block_size: 32,
+            kv_cache: &[],
+            model_metadata: None,
+            activation_dtype: DType::F32,
+        })
         .unwrap();
         let positions = buffers.rope_positions[&Device::Cpu.location()]
             .as_detached_tensor()
@@ -3970,16 +4068,16 @@ mod tests {
         let updated = rows(vec![5, 6, 7, 8, 9, 10, 11, 12], 256)?.build()?;
         assert!(updated.has_host_staged_decode_tensors());
 
-        let (mut buffers, _) = CudaDecodeGraphMetadataBuffers::new(
-            &initial,
-            &[127],
-            &[128],
-            1,
-            32,
-            &[],
-            None,
-            DType::F32,
-        )?;
+        let (mut buffers, _) = CudaDecodeGraphMetadataBuffers::new(CudaDecodeGraphMetadataInput {
+            metadata: &initial,
+            seqlen_offsets: &[127],
+            position_ids: &[128],
+            seq_len: 1,
+            block_size: 32,
+            kv_cache: &[],
+            model_metadata: None,
+            activation_dtype: DType::F32,
+        })?;
         let location = device.location();
         let state_indices = Var::from_tensor(&Tensor::zeros((3,), DType::U32, &device)?)?;
         let mut state_indices_map = HashMap::from([(location, state_indices)]);
@@ -4065,6 +4163,7 @@ mod tests {
         let stream = device.as_cuda_device()?.cuda_stream();
         let used_attribute = sys::CUgraphMem_attribute::CU_GRAPH_MEM_ATTR_USED_MEM_CURRENT;
         let reserved_attribute = sys::CUgraphMem_attribute::CU_GRAPH_MEM_ATTR_RESERVED_MEM_CURRENT;
+        trim_cuda_graph_memory(&stream)?;
         let used_before = cuda_graph_memory_attribute(&stream, used_attribute)?;
         let reserved_before = cuda_graph_memory_attribute(&stream, reserved_attribute)?;
 
@@ -4103,6 +4202,7 @@ mod tests {
         let stream = device.as_cuda_device()?.cuda_stream();
         let used_attribute = sys::CUgraphMem_attribute::CU_GRAPH_MEM_ATTR_USED_MEM_CURRENT;
         let reserved_attribute = sys::CUgraphMem_attribute::CU_GRAPH_MEM_ATTR_RESERVED_MEM_CURRENT;
+        trim_cuda_graph_memory(&stream)?;
         let used_before = cuda_graph_memory_attribute(&stream, used_attribute)?;
         let reserved_before = cuda_graph_memory_attribute(&stream, reserved_attribute)?;
 
@@ -4528,7 +4628,7 @@ mod tests {
                 input_ids: Tensor::from_vec(vec![token], (1, 1), &device)?,
                 seqlen_offsets: vec![0],
                 context_lens: vec![(0, 1)],
-                position_ids: vec![0],
+                position_ids: vec![1],
                 metadata: metadata.clone(),
                 state_indices: None,
                 real_batch: 1,

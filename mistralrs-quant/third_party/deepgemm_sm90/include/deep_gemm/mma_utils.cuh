@@ -10,6 +10,7 @@
  *
  * SPDX-FileCopyrightText: Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: Apache-2.0
+ * Modified by the mistral.rs project in 2026.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -33,6 +34,34 @@
 #include "utils.cuh"
 
 namespace deep_gemm {
+
+struct SM90_64x8x32_F32E4M3E4M3_SS {
+  __device__ static void wgmma(uint64_t const& desc_a, uint64_t const& desc_b, float& d00,
+                               float& d01, float& d02, float& d03, bool scale_d) {
+    asm volatile(
+        "{\n"
+        ".reg .pred p;\n"
+        "setp.ne.b32 p, %6, 0;\n"
+        "wgmma.mma_async.sync.aligned.m64n8k32.f32.e4m3.e4m3"
+        "{%0,   %1,   %2,   %3},"
+        " %4,"
+        " %5,"
+        " p   , 1,    1;\n"
+        "}\n"
+        : "+f"(d00), "+f"(d01), "+f"(d02), "+f"(d03)
+        : "l"(desc_a), "l"(desc_b), "r"(int32_t(scale_d)));
+  }
+
+  __device__ static void wgmma(uint64_t const& desc_a, uint64_t const& desc_b, float* d,
+                               bool scale_d) {
+    wgmma(desc_a, desc_b, d[0], d[1], d[2], d[3], scale_d);
+  }
+
+  static constexpr int M = 64;
+  static constexpr int N = 8;
+  static constexpr int K = 32;
+  static constexpr int kNumAccum = M * N / 128;
+};
 
 struct SM90_64x16x32_F32E4M3E4M3_SS {
   __device__ static void wgmma(uint64_t const& desc_a, uint64_t const& desc_b, float& d00,
@@ -919,6 +948,7 @@ __device__ GmmaDescriptor make_smem_desc(PointerType smem_ptr, int layout_type,
 template <int N>
 struct FP8MMASelector {
   static constexpr auto select_type() {
+    if constexpr (N == 8) return SM90_64x8x32_F32E4M3E4M3_SS();
     if constexpr (N == 16) return SM90_64x16x32_F32E4M3E4M3_SS();
     if constexpr (N == 24) return SM90_64x24x32_F32E4M3E4M3_SS();
     if constexpr (N == 32) return SM90_64x32x32_F32E4M3E4M3_SS();

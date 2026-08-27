@@ -379,6 +379,7 @@ pub(crate) fn context_keys(
 }
 
 #[cfg(test)]
+#[allow(clippy::cast_precision_loss)]
 mod tests {
     use candle_core::{DType, Device, IndexOp, Result, Tensor};
 

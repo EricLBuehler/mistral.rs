@@ -9,7 +9,7 @@ use candle_core::{Error, Result};
 use tokio::sync::{mpsc, oneshot};
 
 #[cfg(feature = "cuda")]
-use crate::pipeline::sampling::CudaGreedyBatchSubmission;
+use crate::pipeline::sampling::CudaTokenBatchSubmission;
 
 const COMPLETION_QUEUE_CAPACITY: usize = 2;
 const COMPLETION_CHANNEL_CLOSED: &str = "CUDA decode completion worker stopped";
@@ -21,9 +21,9 @@ trait CompletionSubmission: Send + 'static {
 }
 
 #[cfg(feature = "cuda")]
-impl CompletionSubmission for CudaGreedyBatchSubmission {
+impl CompletionSubmission for CudaTokenBatchSubmission {
     fn complete(self) -> Result<Vec<u32>> {
-        CudaGreedyBatchSubmission::complete(self)
+        CudaTokenBatchSubmission::complete(self)
     }
 }
 
@@ -104,7 +104,7 @@ impl<S: CompletionSubmission> Drop for CompletionWorker<S> {
 
 #[cfg(feature = "cuda")]
 pub(crate) struct CudaDecodeCompletionWorker {
-    worker: CompletionWorker<CudaGreedyBatchSubmission>,
+    worker: CompletionWorker<CudaTokenBatchSubmission>,
 }
 
 #[cfg(feature = "cuda")]
@@ -117,7 +117,7 @@ impl CudaDecodeCompletionWorker {
 
     pub(crate) async fn submit(
         &self,
-        submission: CudaGreedyBatchSubmission,
+        submission: CudaTokenBatchSubmission,
     ) -> Result<CudaDecodeCompletion> {
         self.worker.submit(submission).await
     }

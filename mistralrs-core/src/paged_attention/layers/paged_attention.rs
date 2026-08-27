@@ -2293,26 +2293,20 @@ mod tests {
     fn fa3_decode_schedule_lookup_is_exact() {
         let candidate = supported_fa3_decode_candidate();
         let schedules = HashMap::from([(candidate.key, ())]);
-        assert!(schedules.get(&candidate.schedule_key().unwrap()).is_some());
+        assert!(schedules.contains_key(&candidate.schedule_key().unwrap()));
 
         let mut different_batch = candidate;
         different_batch.key.batch /= 2;
-        assert!(schedules
-            .get(&different_batch.schedule_key().unwrap())
-            .is_none());
+        assert!(!schedules.contains_key(&different_batch.schedule_key().unwrap()));
 
         let mut different_heads = candidate;
         different_heads.key.q_heads /= 2;
-        assert!(schedules
-            .get(&different_heads.schedule_key().unwrap())
-            .is_none());
+        assert!(!schedules.contains_key(&different_heads.schedule_key().unwrap()));
 
         let mut different_query = candidate;
         different_query.key.query_len = 8;
         different_query.key.causal = true;
-        assert!(schedules
-            .get(&different_query.schedule_key().unwrap())
-            .is_none());
+        assert!(!schedules.contains_key(&different_query.schedule_key().unwrap()));
     }
 
     #[test]

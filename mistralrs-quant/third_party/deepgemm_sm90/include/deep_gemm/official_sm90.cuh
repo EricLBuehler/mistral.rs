@@ -56,8 +56,8 @@ inline uint32_t swizzleMode(uint32_t block_size, uint32_t element_size) {
   return 0;
 }
 
-inline GemmConfig getBestGemmConfig(uint32_t m, uint32_t n, uint32_t k,
-                                    uint32_t num_sms) {
+inline std::vector<GemmConfig> getGemmConfigs(uint32_t m, uint32_t n, uint32_t k,
+                                              uint32_t num_sms) {
   if (m == 0 || n == 0 || k == 0 || num_sms == 0 || num_sms % 2 != 0) {
     return {};
   }
@@ -77,7 +77,7 @@ inline GemmConfig getBestGemmConfig(uint32_t m, uint32_t n, uint32_t k,
     block_n_candidates.push_back(block_n);
   }
 
-  GemmConfig best;
+  std::vector<GemmConfig> configs;
   for (uint32_t cluster_m = 1; cluster_m <= 2; ++cluster_m) {
     for (uint32_t cluster_n = 1; cluster_n <= 2; ++cluster_n) {
       const uint32_t cluster_size = cluster_m * cluster_n;
@@ -151,27 +151,51 @@ inline GemmConfig getBestGemmConfig(uint32_t m, uint32_t n, uint32_t k,
             estimated_cycles = std::numeric_limits<int64_t>::max();
           }
 
-          if (!best.valid() || estimated_cycles < best.estimated_cycles) {
-            best = {
-                block_m,
-                block_n,
-                kBlockK,
-                cluster_m,
-                cluster_n,
-                swizzle_a,
-                swizzle_b,
-                swizzle_d,
-                num_stages,
-                smem_extra + num_stages * smem_per_stage,
-                128U + (block_m <= 64 ? 128U : 256U),
-                estimated_cycles,
-            };
-          }
+          configs.push_back({
+              block_m,
+              block_n,
+              kBlockK,
+              cluster_m,
+              cluster_n,
+              swizzle_a,
+              swizzle_b,
+              swizzle_d,
+              num_stages,
+              smem_extra + num_stages * smem_per_stage,
+              128U + (block_m <= 64 ? 128U : 256U),
+              estimated_cycles,
+          });
         }
       }
     }
   }
-  return best;
+  return configs;
+}
+
+inline GemmConfig getBestGemmConfig(uint32_t m, uint32_t n, uint32_t k,
+                                    uint32_t num_sms) {
+  const auto configs = getGemmConfigs(m, n, k, num_sms);
+  if (configs.empty()) {
+    return {};
+  }
+  return *std::min_element(configs.begin(), configs.end(),
+                           [](const GemmConfig& lhs, const GemmConfig& rhs) {
+                             return lhs.estimated_cycles < rhs.estimated_cycles;
+                           });
+}
+
+inline GemmConfig getGemmConfig(uint32_t m, uint32_t n, uint32_t k,
+                                uint32_t num_sms, uint32_t block_m,
+                                uint32_t block_n, uint32_t cluster_m,
+                                uint32_t cluster_n) {
+  const auto configs = getGemmConfigs(m, n, k, num_sms);
+  const auto config = std::find_if(
+      configs.begin(), configs.end(), [&](const GemmConfig& candidate) {
+        return candidate.block_m == block_m && candidate.block_n == block_n &&
+               candidate.cluster_m == cluster_m &&
+               candidate.cluster_n == cluster_n;
+      });
+  return config == configs.end() ? GemmConfig{} : *config;
 }
 
 }  // namespace mistralrs::deepgemm_official

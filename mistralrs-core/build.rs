@@ -6,11 +6,14 @@ const FLASHINFER_GDN_COMMIT: &str = "28406af5b9134757acbd6bc44647fd00261d163f";
 const CUTLASS_COMMIT: &str = "7127592069c2fe01b041e174ba4345ef9b279671";
 #[cfg(feature = "cuda")]
 const FLASHINFER_GDN_MIN_CUDA: u32 = 1208;
+#[cfg(feature = "cuda")]
+const GDN_FP8_PRODUCER_MIN_CUDA: u32 = 1108;
 
 fn main() {
     set_git_revision();
 
     println!("cargo::rustc-check-cfg=cfg(has_flashinfer_gdn_sm90_kernel)");
+    println!("cargo::rustc-check-cfg=cfg(has_gdn_fp8_producer)");
 
     #[cfg(feature = "cudnn")]
     add_cudnn_link_search();
@@ -19,6 +22,9 @@ fn main() {
     {
         use std::path::PathBuf;
         let cuda_version_code = set_cuda_toolkit_version();
+        if cuda_version_code.is_some_and(|version| version >= GDN_FP8_PRODUCER_MIN_CUDA) {
+            println!("cargo:rustc-cfg=has_gdn_fp8_producer");
+        }
         println!("cargo:rerun-if-changed=build.rs");
         println!("cargo:rerun-if-changed=src/cuda");
         println!("cargo:rerun-if-env-changed=CUDA_NVCC_FLAGS");

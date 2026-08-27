@@ -3007,10 +3007,10 @@ pub(crate) fn fused_glu_quantized_bf16(
     let Some(value_layout) = dense_last_dim_layout(value.layout()) else {
         return Ok(None);
     };
-    if gate.layout().start_offset() % 2 != 0
-        || value.layout().start_offset() % 2 != 0
-        || gate_layout.row_stride % 2 != 0
-        || value_layout.row_stride % 2 != 0
+    if !gate.layout().start_offset().is_multiple_of(2)
+        || !value.layout().start_offset().is_multiple_of(2)
+        || !gate_layout.row_stride.is_multiple_of(2)
+        || !value_layout.row_stride.is_multiple_of(2)
     {
         return Ok(None);
     }
@@ -3236,7 +3236,7 @@ pub(crate) fn fused_split_glu_quantized_bf16(
             "fused split GLU FP8 quantization requires group size {KERNEL_SCALE_GROUP_SIZE}"
         );
     }
-    if split_size == 0 || split_size % scale_group_size != 0 {
+    if split_size == 0 || !split_size.is_multiple_of(scale_group_size) {
         candle_core::bail!(
             "fused split GLU FP8 quantization requires a nonzero split size divisible by {scale_group_size}"
         );
@@ -3429,6 +3429,7 @@ pub fn softcap(input: &Tensor, cap: f32) -> Result<Tensor> {
 }
 
 #[cfg(test)]
+#[allow(clippy::needless_range_loop)]
 mod tests {
     fn assert_close(actual: &[f32], expected: &[f32], tolerance: f32) {
         for (i, (a, e)) in actual.iter().zip(expected.iter()).enumerate() {

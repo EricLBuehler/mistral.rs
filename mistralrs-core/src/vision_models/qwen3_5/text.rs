@@ -10,22 +10,24 @@ use std::{
 
 use candle_core::{DType, Device, Module, Result, Tensor, D};
 use mistralrs_quant::{
-    ColumnParallelLayer, PackedOutputLayout, QuantMethod, QuantizedConfig, ReplicatedLayer,
-    RowParallelLayer, ShardedVarBuilder,
+    ActivationQuantizationScheme, ActivationScaleLayout, ColumnParallelLayer, PackedOutputLayout,
+    QuantMethod, QuantizedActivation, QuantizedConfig, ReplicatedLayer, RowParallelLayer,
+    ShardedVarBuilder,
 };
 
 use super::{
     config::{LayerType, TextConfig},
     mtp::Qwen3_5MtpHead,
-    packed_gdn::{forward_packed_gdn, packed_gdn_query_lens},
+    packed_gdn::{forward_packed_gdn, packed_gdn_layout},
 };
 use crate::{
     amoe::AnyMoeBaseModelMixin,
     attention::{AttentionMask, SdpaParams},
     device_map::{DeviceMappedMask, DeviceMapper},
     gdn::{
-        GatedDeltaNet, GdnConfig, GdnForwardStash, GdnInputProjectionKind, GdnLayerCache,
-        GdnSpeculativeStash, GdnTransitionCommitConfig, GdnTransitionStash, GdnVHeadLayout,
+        GatedDeltaNet, GdnConfig, GdnForwardContext, GdnForwardStash, GdnInputProjectionKind,
+        GdnLayerCache, GdnSpeculativeStash, GdnTransitionCommitConfig, GdnTransitionStash,
+        GdnVHeadLayout, PackedGdnLayout,
     },
     kv_cache::{
         HybridCache, HybridCacheConfig, HybridLayerCache, HybridLayerType, RecurrentLayerConfig,
@@ -93,6 +95,11 @@ pub(super) struct FullAttention {
     pub(super) rotary_emb: Arc<Qwen3VLRotaryEmbedding>,
     paged_attn: Option<PagedAttention>,
     sdpa_params: SdpaParams,
+}
+
+enum AttentionInput<'a> {
+    Dense(&'a Tensor),
+    Quantized(&'a QuantizedActivation),
 }
 
 impl FullAttention {
@@ -237,24 +244,69 @@ impl FullAttention {
         })
     }
 
+    fn input_activation_quantization_scheme_for(
+        &self,
+        input: &Tensor,
+    ) -> Option<ActivationQuantizationScheme> {
+        self.merged_qkv
+            .as_ref()?
+            .activation_quantization_scheme_for(input)
+    }
+
+    fn preferred_input_activation_scale_layout_for(
+        &self,
+        input: &Tensor,
+    ) -> Option<ActivationScaleLayout> {
+        self.merged_qkv
+            .as_ref()?
+            .preferred_activation_scale_layout_for(input)
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn forward(
         &self,
-        x: &Tensor,
+        input: AttentionInput<'_>,
         attention_mask: &AttentionMask,
         cos_sin: &(Tensor, Tensor),
         kv_cache: Option<&mut KvCache>,
         metadata: Option<((Tensor, Tensor), &PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
     ) -> Result<Tensor> {
-        let (b_sz, seq_len, _) = x.dims3()?;
-        let (q_gate, k, v) = if let Some(merged_qkv) = &self.merged_qkv {
-            let [q_gate, k, v]: [Tensor; 3] = merged_qkv.forward(x)?.try_into().map_err(|_| {
-                candle_core::Error::msg("packed QKV returned the wrong output count")
-            })?;
-            (q_gate, k, v)
-        } else {
-            crate::ops::qkv_projections(x, &*self.q_proj, &*self.k_proj, &*self.v_proj)?
+        let (b_sz, seq_len, _) = match input {
+            AttentionInput::Dense(x) => x.dims3()?,
+            AttentionInput::Quantized(activation) => {
+                let [batch, seq_len, width]: [usize; 3] = activation
+                    .source_shape()
+                    .try_into()
+                    .map_err(|_| candle_core::Error::msg("quantized QKV input must have rank 3"))?;
+                (batch, seq_len, width)
+            }
+        };
+        let (q_gate, k, v) = match input {
+            AttentionInput::Dense(x) => {
+                if let Some(merged_qkv) = &self.merged_qkv {
+                    let [q_gate, k, v]: [Tensor; 3] =
+                        merged_qkv.forward(x)?.try_into().map_err(|_| {
+                            candle_core::Error::msg("packed QKV returned the wrong output count")
+                        })?;
+                    (q_gate, k, v)
+                } else {
+                    crate::ops::qkv_projections(x, &*self.q_proj, &*self.k_proj, &*self.v_proj)?
+                }
+            }
+            AttentionInput::Quantized(activation) => {
+                let merged_qkv = self
+                    .merged_qkv
+                    .as_ref()
+                    .expect("quantized QKV input requires a packed projection");
+                let [q_gate, k, v]: [Tensor; 3] = merged_qkv
+                    .forward_quantized(activation)?
+                    .try_into()
+                    .map_err(|_| {
+                        candle_core::Error::msg("packed QKV returned the wrong output count")
+                    })?;
+                (q_gate, k, v)
+            }
         };
         let q_width = self.num_heads * self.head_dim;
         let (q, gate) = if self.q_gate_grouped {
@@ -388,14 +440,44 @@ struct DecoderLayerOutput {
     residual: Tensor,
 }
 
+struct LayerInputQuantizationPlan {
+    scheme: ActivationQuantizationScheme,
+    scale_layout: ActivationScaleLayout,
+    needs_dense: bool,
+}
+
+enum PreparedLayerInput {
+    Dense(Tensor),
+    Quantized {
+        normalized: Option<Tensor>,
+        activation: QuantizedActivation,
+    },
+}
+
+impl PreparedLayerInput {
+    fn device(&self) -> &Device {
+        match self {
+            Self::Dense(tensor) => tensor.device(),
+            Self::Quantized { activation, .. } => activation.quantized().device(),
+        }
+    }
+
+    fn dense(&self) -> Option<&Tensor> {
+        match self {
+            Self::Dense(tensor) => Some(tensor),
+            Self::Quantized { normalized, .. } => normalized.as_ref(),
+        }
+    }
+}
+
 struct LinearForwardContext<'a> {
     x: &'a Tensor,
-    normalized_x: Option<&'a Tensor>,
+    normalized_x: Option<&'a PreparedLayerInput>,
     cache: &'a mut GdnLayerCache,
     batch_kind: RecurrentBatchKind,
     checkpoint_lanes: usize,
     transition_checkpoints: bool,
-    packed_query_lens: Option<&'a [usize]>,
+    packed_layout: Option<&'a PackedGdnLayout>,
     stash_out: Option<&'a mut Option<GdnSpeculativeStash>>,
 }
 
@@ -407,9 +489,81 @@ impl DecoderLayerOutput {
     fn add_and_norm(self, norm: &GemmaRmsNorm) -> Result<(Tensor, Tensor)> {
         norm.forward_add_rms_norm(&self.branch, &self.residual)
     }
+
+    fn add_and_prepare(
+        self,
+        norm: &GemmaRmsNorm,
+        plan: Option<LayerInputQuantizationPlan>,
+    ) -> Result<(Tensor, PreparedLayerInput)> {
+        let Some(plan) = plan else {
+            let (residual, normalized) = self.add_and_norm(norm)?;
+            return Ok((residual, PreparedLayerInput::Dense(normalized)));
+        };
+        if plan.needs_dense {
+            let (fused, normalized) =
+                mistralrs_quant::fused_add_rms_norm_quantized_with_normalized(
+                    &self.branch,
+                    &self.residual,
+                    norm.weight(),
+                    norm.eps() as f32,
+                    plan.scheme,
+                    plan.scale_layout,
+                )?;
+            let (residual, activation) = fused.into_parts();
+            Ok((
+                residual,
+                PreparedLayerInput::Quantized {
+                    normalized: Some(normalized),
+                    activation,
+                },
+            ))
+        } else {
+            let fused = mistralrs_quant::fused_add_rms_norm_quantized(
+                &self.branch,
+                &self.residual,
+                norm.weight(),
+                norm.eps() as f32,
+                plan.scheme,
+                plan.scale_layout,
+            )?;
+            let (residual, activation) = fused.into_parts();
+            Ok((
+                residual,
+                PreparedLayerInput::Quantized {
+                    normalized: None,
+                    activation,
+                },
+            ))
+        }
+    }
 }
 
 impl DecoderLayer {
+    fn input_quantization_plan(&self, input: &Tensor) -> Option<LayerInputQuantizationPlan> {
+        if input.dtype() != DType::BF16 || !input.device().is_cuda() {
+            return None;
+        }
+        let (scheme, scale_layout, needs_dense) = match &self.layer_impl {
+            LayerImpl::FullAttention(attention) => (
+                attention.input_activation_quantization_scheme_for(input)?,
+                attention.preferred_input_activation_scale_layout_for(input)?,
+                false,
+            ),
+            LayerImpl::LinearAttention(gdn) => (
+                gdn.input_activation_quantization_scheme_for(input)?,
+                gdn.preferred_input_activation_scale_layout_for(input)?,
+                true,
+            ),
+        };
+        matches!(scale_layout, ActivationScaleLayout::GroupMajor { .. }).then_some(
+            LayerInputQuantizationPlan {
+                scheme,
+                scale_layout,
+                needs_dense,
+            },
+        )
+    }
+
     /// A full-attention block; `vb_quant` places quantizable projections (ISQ-aware) and `vb_plain`
     /// places norms, both already on the layer's device.
     pub(super) fn load_full_attention(
@@ -487,7 +641,7 @@ impl DecoderLayer {
     fn forward_attention_output(
         &self,
         x: &Tensor,
-        normalized_x: Option<&Tensor>,
+        normalized_x: Option<&PreparedLayerInput>,
         attention_mask: &AttentionMask,
         cos_sin: &(Tensor, Tensor),
         kv_cache: Option<&mut KvCache>,
@@ -499,12 +653,19 @@ impl DecoderLayer {
             _ => candle_core::bail!("Expected full attention layer"),
         };
         let residual = x;
-        let normalized_x = match normalized_x {
-            Some(normalized_x) => normalized_x.clone(),
-            None => self.input_layernorm.forward(x)?,
+        let normalized_storage;
+        let input = match normalized_x {
+            Some(PreparedLayerInput::Dense(normalized)) => AttentionInput::Dense(normalized),
+            Some(PreparedLayerInput::Quantized { activation, .. }) => {
+                AttentionInput::Quantized(activation)
+            }
+            None => {
+                normalized_storage = self.input_layernorm.forward(x)?;
+                AttentionInput::Dense(&normalized_storage)
+            }
         };
         let attn_out = attn.forward(
-            &normalized_x,
+            input,
             attention_mask,
             cos_sin,
             kv_cache,
@@ -533,7 +694,7 @@ impl DecoderLayer {
             batch_kind,
             checkpoint_lanes,
             transition_checkpoints,
-            packed_query_lens,
+            packed_layout,
             stash_out,
         } = context;
         let gdn = match &self.layer_impl {
@@ -541,20 +702,48 @@ impl DecoderLayer {
             _ => candle_core::bail!("Expected linear attention layer"),
         };
         let residual = x;
-        let normalized_x = match normalized_x {
-            Some(normalized_x) => normalized_x.clone(),
-            None => self.input_layernorm.forward(x)?,
+        let normalized_storage;
+        let (normalized_x, quantized_x) = match normalized_x {
+            Some(PreparedLayerInput::Dense(normalized)) => (normalized, None),
+            Some(PreparedLayerInput::Quantized {
+                normalized,
+                activation,
+            }) => (
+                normalized
+                    .as_ref()
+                    .expect("quantized GDN input requires dense normalized values"),
+                Some(activation),
+            ),
+            None => {
+                normalized_storage = self.input_layernorm.forward(x)?;
+                (&normalized_storage, None)
+            }
         };
-        let gdn_out = if let Some(query_lens) = packed_query_lens {
-            forward_packed_gdn(gdn, &normalized_x, cache, batch_kind, query_lens)?
-        } else {
-            gdn.forward_with_stash(
-                &normalized_x,
+        let gdn_out = if let Some(layout) = packed_layout {
+            forward_packed_gdn(gdn, normalized_x, cache, batch_kind, layout)?
+        } else if let Some(quantized_x) = quantized_x {
+            gdn.forward_quantized_with_context(
+                normalized_x,
+                quantized_x,
                 cache,
-                batch_kind,
-                checkpoint_lanes,
-                transition_checkpoints,
-                stash_out,
+                GdnForwardContext {
+                    batch_kind,
+                    checkpoint_lanes,
+                    transition_checkpoints,
+                    stash_out,
+                },
+            )?
+            .expect("prepared quantized GDN input must match its projection")
+        } else {
+            gdn.forward_with_context(
+                normalized_x,
+                cache,
+                GdnForwardContext {
+                    batch_kind,
+                    checkpoint_lanes,
+                    transition_checkpoints,
+                    stash_out,
+                },
             )?
         };
         let (x, ffn_out) = self.mlp.forward_with_add_rms_norm(
@@ -2088,6 +2277,7 @@ impl Qwen3_5TextModel {
     ) -> Result<Tensor> {
         let mut hybrid_cache = self.cache.hybrid();
         let checkpoint_lanes = hybrid_cache.checkpoint_lanes();
+        let batch_size = xs.dim(0)?;
         let query_len = xs.dim(1)?;
         let recurrent_metadata = ctx.recurrent_metadata().cloned();
         let has_linear_attention = self
@@ -2099,8 +2289,8 @@ impl Qwen3_5TextModel {
                 "Hybrid recurrent metadata is required for linear-attention layers."
             );
         }
-        let packed_query_lens = if has_linear_attention {
-            packed_gdn_query_lens(&xs, ctx)?
+        let packed_layout = if has_linear_attention {
+            packed_gdn_layout(&xs, ctx)?
         } else {
             None
         };
@@ -2148,7 +2338,8 @@ impl Qwen3_5TextModel {
             }
         }
         let deferred_gdn = query_len == 1
-            && packed_query_lens.is_none()
+            && crate::cuda::gdn::deferred_decode_batch_supported(batch_size)
+            && packed_layout.is_none()
             && recurrent_metadata
                 .as_ref()
                 .is_some_and(|metadata| metadata.batch_kind() == RecurrentBatchKind::Decode)
@@ -2225,202 +2416,219 @@ impl Qwen3_5TextModel {
             None
         };
 
-        let mut normalized_x = None;
-        for (i, layer) in self.layers.iter().enumerate() {
-            xs = self.mapper.map(xs, i)?;
-            if normalized_x
-                .as_ref()
-                .is_some_and(|normed: &Tensor| !normed.device().same_device(xs.device()))
-            {
-                normalized_x = None;
-            }
-
-            let layer_output = match &self.layer_types[i] {
-                LayerType::FullAttention => {
-                    let Some(HybridLayerCache::Attention(kv_cache)) = hybrid_cache.get_mut(i)
-                    else {
-                        candle_core::bail!(
-                            "Hybrid cache layer {i} is not attention for a full-attention layer."
-                        );
-                    };
-                    layer.forward_attention_output(
-                        &xs,
-                        normalized_x.as_ref(),
-                        &attention_mask.get(xs.device()),
-                        &cos_sin,
-                        Some(kv_cache),
-                        ctx.paged_layer(i),
-                        ctx.flash_params(),
-                    )?
-                }
-                LayerType::LinearAttention => {
-                    let recurrent_metadata = recurrent_metadata.as_ref().expect(
-                        "checked above: linear-attention layers require recurrent metadata",
-                    );
-                    let indices = hybrid_cache.state_indices_for_layer(i)?.ok_or_else(|| {
-                        candle_core::Error::msg(format!(
-                            "Hybrid cache layer {i} is missing recurrent state indices"
-                        ))
-                    })?;
-                    let Some(HybridLayerCache::Recurrent(pool)) = hybrid_cache.get_mut(i) else {
-                        candle_core::bail!(
-                            "Hybrid cache layer {i} is not recurrent for a linear-attention layer."
-                        );
-                    };
-                    let stash_states = stash_replay
-                        .then_some(())
-                        .as_ref()
-                        .map(|_| {
-                            candle_core::Result::Ok((
-                                pool.gather_conv_state(&indices)?,
-                                pool.gather_recurrent_state(&indices)?,
-                            ))
-                        })
-                        .transpose()?;
-
-                    let mut gdn_cache = if packed_query_lens.is_some() {
-                        GdnLayerCache::gathered(
-                            pool.gather_conv_state(&indices)?,
-                            pool.gather_recurrent_state(&indices)?,
-                            pool.state_layout(),
-                        )
-                    } else {
-                        GdnLayerCache::checkout(pool, &indices)?
-                    };
-
-                    let mut projected_stash = None;
-                    let output = layer.forward_linear_with_stash(LinearForwardContext {
-                        x: &xs,
-                        normalized_x: normalized_x.as_ref(),
-                        cache: &mut gdn_cache,
-                        batch_kind: recurrent_metadata.batch_kind(),
-                        checkpoint_lanes: if transition_gdn {
-                            checkpoint_lanes
-                        } else {
-                            gdn_checkpoint_lanes
-                        },
-                        transition_checkpoints: transition_gdn,
-                        packed_query_lens: packed_query_lens.as_deref(),
-                        stash_out: gdn_stash.as_ref().map(|_| &mut projected_stash),
-                    })?;
-                    if let Some(stash) = gdn_stash.as_mut() {
-                        let captured = projected_stash.ok_or_else(|| {
-                            candle_core::Error::msg("GDN forward returned no stash")
-                        })?;
-                        let rollback = match (captured, stash_states) {
-                            (
-                                GdnSpeculativeStash::Replay(projected),
-                                Some((conv_state, recurrent_state)),
-                            ) => GdnLayerRollback::Replay {
-                                projected,
-                                conv_state,
-                                recurrent_state,
-                            },
-                            (GdnSpeculativeStash::Transition(transition), None) => {
-                                GdnLayerRollback::Transition(transition)
-                            }
-                            _ => candle_core::bail!(
-                                "GDN speculative capture mode does not match cache storage"
-                            ),
-                        };
-                        stash.layers.push(GdnLayerStash {
-                            layer_idx: i,
-                            state_layout: pool.state_layout(),
-                            rollback,
-                        });
-                    }
-
-                    gdn_cache.commit(pool, &indices, recurrent_metadata.state_indices_host())?;
-                    output
-                }
-            };
-
-            let deepstack = deepstack_indices
-                .as_ref()
-                .zip(deepstack_visual_embeds)
-                .filter(|(_, embeds)| i < embeds.len());
-            if let Some(((idx, idx_expanded), embeds)) = deepstack {
-                xs = self.deepstack_process(layer_output.add()?, idx, idx_expanded, &embeds[i])?;
-                normalized_x = None;
-            } else {
-                let next_norm = self
-                    .layers
-                    .get(i + 1)
-                    .map(|next| &next.input_layernorm)
-                    .unwrap_or(&self.norm);
-                if next_norm
-                    .weight()
-                    .device()
-                    .same_device(layer_output.residual.device())
+        let forward_result = (|| -> Result<Tensor> {
+            let mut normalized_x = None;
+            for (i, layer) in self.layers.iter().enumerate() {
+                xs = self.mapper.map(xs, i)?;
+                if normalized_x
+                    .as_ref()
+                    .is_some_and(|prepared: &PreparedLayerInput| {
+                        !prepared.device().same_device(xs.device())
+                    })
                 {
-                    let (hidden, normed) = layer_output.add_and_norm(next_norm)?;
-                    xs = hidden;
-                    normalized_x = Some(normed);
-                } else {
-                    xs = layer_output.add()?;
                     normalized_x = None;
                 }
+
+                let layer_output = match &self.layer_types[i] {
+                    LayerType::FullAttention => {
+                        let Some(HybridLayerCache::Attention(kv_cache)) = hybrid_cache.get_mut(i)
+                        else {
+                            candle_core::bail!(
+                            "Hybrid cache layer {i} is not attention for a full-attention layer."
+                        );
+                        };
+                        layer.forward_attention_output(
+                            &xs,
+                            normalized_x.as_ref(),
+                            &attention_mask.get(xs.device()),
+                            &cos_sin,
+                            Some(kv_cache),
+                            ctx.paged_layer(i),
+                            ctx.flash_params(),
+                        )?
+                    }
+                    LayerType::LinearAttention => {
+                        let recurrent_metadata = recurrent_metadata.as_ref().expect(
+                            "checked above: linear-attention layers require recurrent metadata",
+                        );
+                        let indices =
+                            hybrid_cache.state_indices_for_layer(i)?.ok_or_else(|| {
+                                candle_core::Error::msg(format!(
+                                    "Hybrid cache layer {i} is missing recurrent state indices"
+                                ))
+                            })?;
+                        let Some(HybridLayerCache::Recurrent(pool)) = hybrid_cache.get_mut(i)
+                        else {
+                            candle_core::bail!(
+                            "Hybrid cache layer {i} is not recurrent for a linear-attention layer."
+                        );
+                        };
+                        let stash_states = stash_replay
+                            .then_some(())
+                            .as_ref()
+                            .map(|_| {
+                                candle_core::Result::Ok((
+                                    pool.gather_conv_state(&indices)?,
+                                    pool.gather_recurrent_state(&indices)?,
+                                ))
+                            })
+                            .transpose()?;
+
+                        let mut gdn_cache = if packed_layout.is_some() {
+                            GdnLayerCache::gathered(
+                                pool.gather_conv_state(&indices)?,
+                                pool.gather_recurrent_state(&indices)?,
+                                pool.state_layout(),
+                            )
+                        } else {
+                            GdnLayerCache::checkout(pool, &indices)?
+                        };
+
+                        let mut projected_stash = None;
+                        let output = layer.forward_linear_with_stash(LinearForwardContext {
+                            x: &xs,
+                            normalized_x: normalized_x.as_ref(),
+                            cache: &mut gdn_cache,
+                            batch_kind: recurrent_metadata.batch_kind(),
+                            checkpoint_lanes: if transition_gdn {
+                                checkpoint_lanes
+                            } else {
+                                gdn_checkpoint_lanes
+                            },
+                            transition_checkpoints: transition_gdn,
+                            packed_layout: packed_layout.as_ref(),
+                            stash_out: gdn_stash.as_ref().map(|_| &mut projected_stash),
+                        })?;
+                        if let Some(stash) = gdn_stash.as_mut() {
+                            let captured = projected_stash.ok_or_else(|| {
+                                candle_core::Error::msg("GDN forward returned no stash")
+                            })?;
+                            let rollback = match (captured, stash_states) {
+                                (
+                                    GdnSpeculativeStash::Replay(projected),
+                                    Some((conv_state, recurrent_state)),
+                                ) => GdnLayerRollback::Replay {
+                                    projected,
+                                    conv_state,
+                                    recurrent_state,
+                                },
+                                (GdnSpeculativeStash::Transition(transition), None) => {
+                                    GdnLayerRollback::Transition(transition)
+                                }
+                                _ => candle_core::bail!(
+                                    "GDN speculative capture mode does not match cache storage"
+                                ),
+                            };
+                            stash.layers.push(GdnLayerStash {
+                                layer_idx: i,
+                                state_layout: pool.state_layout(),
+                                rollback,
+                            });
+                        }
+
+                        gdn_cache.commit(
+                            pool,
+                            &indices,
+                            recurrent_metadata.state_indices_host(),
+                        )?;
+                        output
+                    }
+                };
+
+                let deepstack = deepstack_indices
+                    .as_ref()
+                    .zip(deepstack_visual_embeds)
+                    .filter(|(_, embeds)| i < embeds.len());
+                if let Some(((idx, idx_expanded), embeds)) = deepstack {
+                    xs =
+                        self.deepstack_process(layer_output.add()?, idx, idx_expanded, &embeds[i])?;
+                    normalized_x = None;
+                } else {
+                    let next_layer = self.layers.get(i + 1);
+                    let next_norm = next_layer
+                        .map(|next| &next.input_layernorm)
+                        .unwrap_or(&self.norm);
+                    if next_norm
+                        .weight()
+                        .device()
+                        .same_device(layer_output.residual.device())
+                    {
+                        let plan = next_layer
+                            .filter(|_| packed_layout.is_none())
+                            .and_then(|next| next.input_quantization_plan(&layer_output.residual));
+                        let (hidden, prepared) = layer_output.add_and_prepare(next_norm, plan)?;
+                        xs = hidden;
+                        normalized_x = Some(prepared);
+                    } else {
+                        xs = layer_output.add()?;
+                        normalized_x = None;
+                    }
+                }
+                if capture_taps && tap_layers.contains(&i) {
+                    taps_all.push(xs.to_device(&self.device)?);
+                }
             }
-            if capture_taps && tap_layers.contains(&i) {
-                taps_all.push(xs.to_device(&self.device)?);
+            if self.store_spec_hidden.load(Ordering::Relaxed) {
+                *self.gdn_replay_stash.lock().expect("gdn stash poisoned") = gdn_stash;
             }
-        }
-        if self.store_spec_hidden.load(Ordering::Relaxed) {
-            *self.gdn_replay_stash.lock().expect("gdn stash poisoned") = gdn_stash;
-        }
-        let xs = match normalized_x {
-            Some(normed) if normed.device().same_device(&self.device) => normed,
-            _ => xs.to_device(&self.device)?.apply(&self.norm)?,
-        };
-        let store_spec = self.store_spec_hidden.load(Ordering::Relaxed);
-        if store_spec {
-            let full_capture = if recurrent_metadata
-                .as_ref()
-                .is_some_and(|metadata| metadata.batch_kind() == RecurrentBatchKind::Prefill)
-            {
+            let xs = match normalized_x {
+                Some(prepared) if prepared.device().same_device(&self.device) => prepared
+                    .dense()
+                    .expect("final normalized model input must remain dense")
+                    .clone(),
+                _ => xs.to_device(&self.device)?.apply(&self.norm)?,
+            };
+            let store_spec = self.store_spec_hidden.load(Ordering::Relaxed);
+            if store_spec {
+                let full_capture = if recurrent_metadata
+                    .as_ref()
+                    .is_some_and(|metadata| metadata.batch_kind() == RecurrentBatchKind::Prefill)
+                {
+                    let positions = position_ids.to_device(&self.device)?;
+                    let positions = match positions.rank() {
+                        2 | 3 => positions,
+                        rank => candle_core::bail!("unexpected Qwen3.5 position rank {rank}"),
+                    };
+                    Some(SpecCapture {
+                        hidden: xs.clone(),
+                        positions,
+                        taps: taps_all.clone(),
+                    })
+                } else {
+                    None
+                };
+                *self
+                    .last_full_capture
+                    .lock()
+                    .expect("spec capture poisoned") = full_capture;
+            }
+            let xs = ctx.logits(&xs)?;
+            if store_spec {
                 let positions = position_ids.to_device(&self.device)?;
                 let positions = match positions.rank() {
-                    2 | 3 => positions,
+                    2 => ctx.logits(&positions.unsqueeze(D::Minus1)?)?.squeeze(2)?,
+                    3 => {
+                        let positions = positions.permute((1, 2, 0))?.contiguous()?;
+                        ctx.logits(&positions)?.permute((2, 0, 1))?.contiguous()?
+                    }
                     rank => candle_core::bail!("unexpected Qwen3.5 position rank {rank}"),
                 };
-                Some(SpecCapture {
+                let taps = taps_all
+                    .iter()
+                    .map(|t| ctx.logits(t))
+                    .collect::<Result<Vec<_>>>()?;
+                *self
+                    .last_spec_capture
+                    .lock()
+                    .expect("spec capture poisoned") = Some(SpecCapture {
                     hidden: xs.clone(),
                     positions,
-                    taps: taps_all.clone(),
-                })
-            } else {
-                None
-            };
-            *self
-                .last_full_capture
-                .lock()
-                .expect("spec capture poisoned") = full_capture;
-        }
-        let xs = ctx.logits(&xs)?;
-        if store_spec {
-            let positions = position_ids.to_device(&self.device)?;
-            let positions = match positions.rank() {
-                2 => ctx.logits(&positions.unsqueeze(D::Minus1)?)?.squeeze(2)?,
-                3 => {
-                    let positions = positions.permute((1, 2, 0))?.contiguous()?;
-                    ctx.logits(&positions)?.permute((2, 0, 1))?.contiguous()?
-                }
-                rank => candle_core::bail!("unexpected Qwen3.5 position rank {rank}"),
-            };
-            let taps = taps_all
-                .iter()
-                .map(|t| ctx.logits(t))
-                .collect::<Result<Vec<_>>>()?;
-            *self
-                .last_spec_capture
-                .lock()
-                .expect("spec capture poisoned") = Some(SpecCapture {
-                hidden: xs.clone(),
-                positions,
-                taps,
-            });
-        }
-        self.lm_head.forward(&xs)
+                    taps,
+                });
+            }
+            self.lm_head.forward(&xs)
+        })();
+        forward_result
     }
 
     fn deepstack_process(
@@ -2924,6 +3132,6 @@ mod tests {
     #[cfg(feature = "cuda")]
     #[test]
     fn text_architecture_supports_cuda_decode_graphs() {
-        assert!(SUPPORTS_CUDA_DECODE_GRAPHS);
+        const _: () = assert!(SUPPORTS_CUDA_DECODE_GRAPHS);
     }
 }

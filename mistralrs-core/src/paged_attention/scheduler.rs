@@ -232,7 +232,7 @@ impl PagedAttentionScheduler {
         let first_is_final = chunk_plans.first().is_some_and(|plan| plan.len() == 1);
         let require_uniform_query_len = self.requires_uniform_prompt_batch
             || !self.supports_packed_prefill
-            || (self.prompt_chunks_require_block_alignment && !first_is_final);
+            || (self.prompt_chunks_use_block_alignment() && !first_is_final);
         let plan_indices = vec![0; chunk_plans.len()];
         let (active_indices, _, _) =
             next_prompt_chunk_group(&plan_indices, &chunk_plans, require_uniform_query_len)
@@ -270,7 +270,7 @@ impl PagedAttentionScheduler {
 
     fn build_prompt_chunks(&self, seq: &Sequence, chunk_size: usize) -> Vec<PromptChunkPlan> {
         let block_align = self
-            .prompt_chunks_require_block_alignment
+            .prompt_chunks_use_block_alignment()
             .then_some(self.block_size);
         build_prompt_chunk_plan(
             seq.get_toks().len(),
@@ -280,6 +280,10 @@ impl PagedAttentionScheduler {
             self.prefix_policy.replay_for(modality_signature(seq)),
             seq.mm_features(),
         )
+    }
+
+    fn prompt_chunks_use_block_alignment(&self) -> bool {
+        self.prompt_chunks_require_block_alignment && self.prefix_caching_enabled
     }
 
     fn supports_scheduler_visible_prompt_chunks(&self, seq: &Sequence) -> bool {
@@ -404,7 +408,7 @@ impl PagedAttentionScheduler {
         let plan_indices = vec![0; chunk_plans.len()];
         let require_uniform_query_len = self.requires_uniform_prompt_batch
             || !self.supports_packed_prefill
-            || self.prompt_chunks_require_block_alignment;
+            || self.prompt_chunks_use_block_alignment();
         let (active_indices, _, _) =
             next_prompt_chunk_group(&plan_indices, &chunk_plans, require_uniform_query_len)
                 .expect("running prompt has uncomputed tokens");
@@ -956,7 +960,7 @@ impl PagedAttentionScheduler {
                 let seq_guard = get_mut_arcmutex!(seq);
                 let validation = validator.validate_prefix_cache_hit(
                     &seq_guard,
-                    &block_hashes,
+                    block_hashes,
                     computed.num_computed_tokens,
                     self.block_size,
                 );
@@ -3449,6 +3453,7 @@ mod tests {
         scheduler.prompt_chunks_require_block_alignment = true;
         scheduler.prefill_has_per_sequence_state = true;
         scheduler.prompt_admission_epoch = true;
+        scheduler.set_prefix_caching_enabled_sync(true);
         scheduler.config.max_num_seqs = 64;
         scheduler.config.max_num_batched_tokens = 4096;
         scheduler.config.max_prefill_chunk_tokens = 512;
@@ -3465,6 +3470,12 @@ mod tests {
 
         assert_eq!(batch.scheduled.len(), 32);
         assert_eq!(batch.chunk_size, Some(128));
+        assert!(batch
+            .chunks
+            .as_ref()
+            .unwrap()
+            .iter()
+            .all(|chunk| (chunk.start, chunk.end) == (0, 128)));
         assert_eq!(
             batch
                 .chunks
@@ -3473,6 +3484,47 @@ mod tests {
                 .map(|chunk| chunk.end - chunk.start)
                 .sum::<usize>(),
             4096
+        );
+    }
+
+    #[test]
+    fn admission_epoch_packs_complete_short_prefills_without_prefix_caching() {
+        let mut scheduler = test_scheduler();
+        scheduler.scheduler_visible_prompt_chunks = true;
+        scheduler.prompt_chunks_require_block_alignment = true;
+        scheduler.prefill_has_per_sequence_state = true;
+        scheduler.prompt_admission_epoch = true;
+        scheduler.set_prefix_caching_enabled_sync(false);
+        scheduler.config.max_num_seqs = 64;
+        scheduler.config.max_num_batched_tokens = 4096;
+        scheduler.config.max_prefill_chunk_tokens = 512;
+        scheduler.running.push_back(test_sequence(100, 8));
+        let candidates = (0..32)
+            .map(|id| {
+                let seq = test_sequence(id, 134);
+                get_mut_arcmutex!(seq).set_state(SequenceState::RunningPrompt);
+                seq
+            })
+            .collect::<VecDeque<_>>();
+
+        let batch = scheduler.select_prompt_batch(candidates);
+
+        assert_eq!(batch.scheduled.len(), 30);
+        assert_eq!(batch.chunk_size, Some(134));
+        assert!(batch
+            .chunks
+            .as_ref()
+            .unwrap()
+            .iter()
+            .all(|chunk| (chunk.start, chunk.end) == (0, 134)));
+        assert_eq!(
+            batch
+                .chunks
+                .unwrap()
+                .into_iter()
+                .map(|chunk| chunk.end - chunk.start)
+                .sum::<usize>(),
+            4020
         );
     }
 

@@ -56,6 +56,7 @@ fn push_entry(
 pub fn write(
     output_path: &Path,
     official_include_root: &Path,
+    skinny_include_root: &Path,
     cutlass_include_root: &Path,
     generator_hash: u64,
 ) -> io::Result<u64> {
@@ -68,6 +69,15 @@ pub fn write(
             &mut output,
             &mut source_hash,
             &Path::new("official").join(relative),
+            &source,
+        )?;
+    }
+    for source in collect_files(skinny_include_root)? {
+        let relative = source.strip_prefix(skinny_include_root).unwrap();
+        push_entry(
+            &mut output,
+            &mut source_hash,
+            &Path::new("skinny/deep_gemm").join(relative),
             &source,
         )?;
     }

@@ -18,6 +18,7 @@ extern "C" {
         residual: *const bf16,
         weight: *const bf16,
         residual_output: *mut bf16,
+        normalized_output: *mut bf16,
         quantized_output: *mut F8E4M3,
         scales: *mut f32,
         inverse_rms: *mut f32,

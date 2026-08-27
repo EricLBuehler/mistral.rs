@@ -756,7 +756,11 @@ impl RecurrentStatePool {
     pub fn scatter_conv_state(&mut self, state_indices: &Tensor, values: &Tensor) -> Result<()> {
         #[cfg(feature = "cuda")]
         if self.device.is_cuda() {
-            return crate::cuda::indexed_copy::copy_rows(values, &self.conv_state, state_indices);
+            return crate::cuda::indexed_copy::copy_rows(
+                &values.contiguous()?,
+                &self.conv_state,
+                state_indices,
+            );
         }
         let indices: Vec<u32> = state_indices.to_vec1()?;
         self.scatter_conv_state_for_indices(&indices, values)
@@ -780,6 +784,10 @@ impl RecurrentStatePool {
         host_indices: Option<&[u32]>,
         values: &Tensor,
     ) -> Result<()> {
+        #[cfg(feature = "cuda")]
+        if self.device.is_cuda() {
+            return self.scatter_conv_state(state_indices, values);
+        }
         if let Some(indices) = host_indices {
             self.scatter_conv_state_for_indices(indices, values)
         } else {
@@ -796,7 +804,7 @@ impl RecurrentStatePool {
         #[cfg(feature = "cuda")]
         if self.device.is_cuda() {
             return crate::cuda::indexed_copy::copy_rows(
-                values,
+                &values.contiguous()?,
                 &self.recurrent_state,
                 state_indices,
             );
@@ -824,6 +832,10 @@ impl RecurrentStatePool {
         host_indices: Option<&[u32]>,
         values: &Tensor,
     ) -> Result<()> {
+        #[cfg(feature = "cuda")]
+        if self.device.is_cuda() {
+            return self.scatter_recurrent_state(state_indices, values);
+        }
         if let Some(indices) = host_indices {
             self.scatter_recurrent_state_for_indices(indices, values)
         } else {
@@ -963,6 +975,7 @@ impl Clone for RecurrentStatePool {
 }
 
 /// Per-layer cache that can be either attention (KV) or recurrent (state pool)
+#[allow(clippy::large_enum_variant)]
 #[derive(Clone, Debug)]
 pub enum HybridLayerCache {
     Attention(KvCache),
@@ -2369,6 +2382,7 @@ impl HybridCache {
 }
 
 #[cfg(test)]
+#[allow(clippy::cast_possible_truncation)]
 mod tests {
     use std::collections::HashSet;
 

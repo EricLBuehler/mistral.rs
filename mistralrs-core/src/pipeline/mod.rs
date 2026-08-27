@@ -173,6 +173,7 @@ use crate::sequence::{SeqStepType, Sequence, SequenceState};
 
 use prompt_chunks::{
     build_prompt_chunk_plan, next_prompt_chunk_group, recurrent_checkpoint_boundary,
+    PromptChunkPlan,
 };
 
 pub(crate) use self::inputs_processor::{
@@ -520,6 +521,7 @@ fn reserve_recurrent_serving_capacity(
         recurrent_checkpoints_supported || recurrent_transitions_supported,
     );
     let transition_log = recurrent_transitions_supported
+        && requested_lanes > 1
         && requested_lanes <= crate::cuda::gdn::GDN_SPEC_FUSED_MAX_TOKENS;
     let Some(serving_capacity) = paged_attn_config.serving_capacity else {
         return Ok(if transition_log {
@@ -562,6 +564,10 @@ fn reserve_recurrent_serving_capacity(
             .hybrid()
             .reserve_recurrent_layout(capacity, checkpoint_lanes)?
     })
+}
+
+fn uses_recurrent_transition_log(cache: &EitherCache) -> bool {
+    cache.is_hybrid() && cache.hybrid().uses_recurrent_transition_log()
 }
 
 fn add_recurrent_prefix_memory_reservations(
@@ -1694,6 +1700,23 @@ fn prompt_chunk_is_final(
     }
 }
 
+fn next_pipeline_prompt_chunk_group(
+    plan_indices: &[usize],
+    chunk_plans: &[Vec<PromptChunkPlan>],
+    requires_uniform_prompt_batch: bool,
+    supports_packed_prefill: bool,
+    hybrid_recurrent: bool,
+) -> Option<(Vec<usize>, MultimodalAttentionPolicy, bool)> {
+    let planned_final_prompt_chunk = plan_indices
+        .iter()
+        .zip(chunk_plans)
+        .find_map(|(&plan_idx, plan)| plan.get(plan_idx).map(|_| plan_idx + 1 == plan.len()))?;
+    let require_uniform_query_len = requires_uniform_prompt_batch
+        || !supports_packed_prefill
+        || (hybrid_recurrent && !planned_final_prompt_chunk);
+    next_prompt_chunk_group(plan_indices, chunk_plans, require_uniform_query_len)
+}
+
 #[async_trait::async_trait]
 pub trait Pipeline:
     Send
@@ -2322,7 +2345,7 @@ pub trait Pipeline:
                     && !return_raw_logits
                     && self.device().is_cuda()
                     && self.supports_batched_cuda_sampling()
-                    && sampling::can_submit_greedy_batch_cuda_seqs(input_seqs)
+                    && sampling::can_submit_cuda_token_batch_seqs(input_seqs)
                     && sampling::can_launch_one_token_lookahead(
                         input_seqs,
                         self.get_metadata().max_seq_len,
@@ -2357,6 +2380,8 @@ pub trait Pipeline:
                             })
                             .collect::<Vec<_>>();
                         let mut plan_indices = vec![0usize; chunk_plans.len()];
+                        let requires_uniform_prompt_batch = self.requires_uniform_prompt_batch();
+                        let supports_packed_prefill = self.supports_packed_prefill();
                         let mut inputs = Vec::new();
                         while plan_indices
                             .iter()
@@ -2364,9 +2389,11 @@ pub trait Pipeline:
                             .any(|(plan_idx, plan)| *plan_idx < plan.len())
                         {
                             let (active_indices, attention_policy, planned_final_prompt_chunk) =
-                                next_prompt_chunk_group(
+                                next_pipeline_prompt_chunk_group(
                                     &plan_indices,
                                     &chunk_plans,
+                                    requires_uniform_prompt_batch,
+                                    supports_packed_prefill,
                                     hybrid_recurrent,
                                 )
                                 .expect("at least one chunk plan is active");
@@ -2683,6 +2710,7 @@ pub trait Pipeline:
                             input_seqs,
                             forward,
                             exec_duration,
+                            &rng,
                         )? {
                             Ok(submission) => return Ok(StepSubmission::cuda(submission)),
                             Err(forward) => {
@@ -2934,22 +2962,33 @@ mod tests {
     use super::{
         add_recurrent_prefix_memory_reservations, automatic_recurrent_checkpoint_lane_budget,
         decode_positions_tensor, effective_recurrent_checkpoint_lanes,
-        paged_attention_memory_reservations, prompt_chunk_is_final, recurrent_batch_kind_for_input,
-        recurrent_kv_floor_bytes, reserve_recurrent_serving_capacity, resolve_lora_execution,
-        should_sample_step, should_try_speculative_sampling, CacheMemoryReservations, ForwardCache,
-        LogitsSelection, ModelForwardContext, RecurrentBatchKind, RecurrentCheckpointBudget,
+        next_pipeline_prompt_chunk_group, paged_attention_memory_reservations,
+        prompt_chunk_is_final, recurrent_batch_kind_for_input, recurrent_kv_floor_bytes,
+        reserve_recurrent_serving_capacity, resolve_lora_execution, should_sample_step,
+        should_try_speculative_sampling, CacheMemoryReservations, ForwardCache, LogitsSelection,
+        ModelForwardContext, RecurrentBatchKind, RecurrentCheckpointBudget,
     };
     use crate::{
         kv_cache::{
             EitherCache, HybridCache, HybridCacheConfig, HybridLayerType, RecurrentLayerConfig,
             RecurrentStateSpec,
         },
+        paged_attention::block_hash::MultimodalAttentionPolicy,
+        pipeline::prompt_chunks::PromptChunkPlan,
         pipeline::text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
         MemoryGpuConfig, MessageContent, PagedAttentionConfig, PagedCacheType,
     };
     use candle_core::{Device, DeviceLocation, Tensor};
     use either::Either;
     use indexmap::IndexMap;
+
+    fn prompt_chunk(start: usize, end: usize) -> PromptChunkPlan {
+        PromptChunkPlan {
+            start,
+            end,
+            attention_policy: MultimodalAttentionPolicy::Causal,
+        }
+    }
 
     #[test]
     fn scheduler_visible_prefill_samples_only_the_final_chunk() {
@@ -2986,6 +3025,42 @@ mod tests {
         assert!(!prompt_chunk_is_final(true, false, true));
         assert!(prompt_chunk_is_final(true, true, false));
         assert!(prompt_chunk_is_final(false, false, true));
+    }
+
+    #[test]
+    fn packed_hybrid_final_prompt_chunks_remain_ragged() {
+        let plans = vec![
+            vec![prompt_chunk(0, 128), prompt_chunk(128, 129)],
+            vec![prompt_chunk(0, 128), prompt_chunk(128, 134)],
+        ];
+
+        assert_eq!(
+            next_pipeline_prompt_chunk_group(&[1, 1], &plans, false, true, true),
+            Some((vec![0, 1], MultimodalAttentionPolicy::Causal, true))
+        );
+    }
+
+    #[test]
+    fn hybrid_nonfinal_checkpoint_chunks_remain_uniform() {
+        let plans = vec![
+            vec![prompt_chunk(0, 64), prompt_chunk(64, 129)],
+            vec![prompt_chunk(0, 128), prompt_chunk(128, 134)],
+        ];
+
+        assert_eq!(
+            next_pipeline_prompt_chunk_group(&[0, 0], &plans, false, true, true),
+            Some((vec![0], MultimodalAttentionPolicy::Causal, false))
+        );
+    }
+
+    #[test]
+    fn unsupported_packed_prefill_keeps_final_chunks_uniform() {
+        let plans = vec![vec![prompt_chunk(0, 129)], vec![prompt_chunk(0, 134)]];
+
+        assert_eq!(
+            next_pipeline_prompt_chunk_group(&[0, 0], &plans, false, false, true),
+            Some((vec![0], MultimodalAttentionPolicy::Causal, true))
+        );
     }
 
     #[test]
@@ -3192,6 +3267,47 @@ mod tests {
         assert_eq!(cache.checkpoint_lanes(), 8);
         assert_eq!(cache.physical_checkpoint_lanes(), 1);
         assert!(cache.uses_recurrent_transition_log());
+        let pool = cache.get(0).unwrap().as_recurrent_pool().unwrap();
+        assert_eq!(pool.capacity(), 65);
+        assert_eq!(pool.physical_capacity(), 65);
+    }
+
+    #[test]
+    fn one_lane_recurrent_reservation_omits_transition_log() {
+        let hybrid = HybridCache::new(
+            HybridCacheConfig {
+                layer_types: vec![HybridLayerType::Recurrent],
+                max_seq_len: 32,
+                recurrent: RecurrentLayerConfig {
+                    conv_dim: 8,
+                    conv_width: 4,
+                    state: RecurrentStateSpec::Gdn {
+                        heads: 2,
+                        key_dim: 4,
+                        value_dim: 4,
+                    },
+                    recurrent_dtype: Some(candle_core::DType::F32),
+                },
+            },
+            candle_core::DType::BF16,
+            &[Device::Cpu],
+        )
+        .unwrap();
+        let cache = EitherCache::Hybrid(Arc::new(Mutex::new(hybrid)));
+        let config =
+            PagedAttentionConfig::new(None, MemoryGpuConfig::MbAmount(1), PagedCacheType::Auto)
+                .unwrap()
+                .with_serving_capacity(64)
+                .unwrap()
+                .with_recurrent_checkpoint_lanes(1)
+                .unwrap();
+
+        reserve_recurrent_serving_capacity(&cache, config, true, true, &Device::Cpu, 1).unwrap();
+
+        let cache = cache.hybrid();
+        assert_eq!(cache.recurrent_capacity(), 65);
+        assert_eq!(cache.checkpoint_lanes(), 1);
+        assert!(!cache.uses_recurrent_transition_log());
         let pool = cache.get(0).unwrap().as_recurrent_pool().unwrap();
         assert_eq!(pool.capacity(), 65);
         assert_eq!(pool.physical_capacity(), 65);

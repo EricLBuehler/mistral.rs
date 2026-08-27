@@ -785,6 +785,14 @@ extern "C" {
         nblocks: i32,
         stream: i64,
     ) -> i32;
+    pub(crate) fn sample_ranked_topk(
+        packed: *const f32,
+        params: *const f32,
+        tokens: *mut u32,
+        nrows: i32,
+        packed_k: i32,
+        stream: i64,
+    );
     pub(crate) fn dflash_greedy_select(
         packed_topk: *const f32,
         projected_hidden: *const c_void,
@@ -966,6 +974,46 @@ extern "C" {
     );
 
     // GDN (Gated Delta Net) kernels for qwen3_next
+    pub(crate) fn gdn_packed_to_padded(
+        source: *const c_void,
+        output: *mut c_void,
+        cu_seqlens: *const u32,
+        batch_size: i32,
+        padded_len: i32,
+        width: i32,
+        source_token_stride: i64,
+        padding_value: f32,
+        dtype: i32,
+        stream: i64,
+    );
+    pub(crate) fn gdn_padded_to_packed(
+        source: *const c_void,
+        output: *mut c_void,
+        cu_seqlens: *const u32,
+        batch_size: i32,
+        padded_len: i32,
+        width: i32,
+        source_batch_stride: i64,
+        source_token_stride: i64,
+        source_feature_stride: i64,
+        feature_inner_width: i32,
+        dtype: i32,
+        stream: i64,
+    );
+    pub(crate) fn gdn_extract_ragged_conv_state(
+        padded_input: *const c_void,
+        initial_state: *const c_void,
+        output: *mut c_void,
+        cu_seqlens: *const u32,
+        batch_size: i32,
+        padded_len: i32,
+        channels: i32,
+        state_width: i32,
+        input_batch_stride: i64,
+        input_token_stride: i64,
+        dtype: i32,
+        stream: i64,
+    );
     pub(crate) fn gated_delta_rule_recurrence(
         q: *const f32,
         k: *const f32,
@@ -1042,6 +1090,7 @@ extern "C" {
         num_k_heads: i32,
         num_v_heads: i32,
         sm_count: i32,
+        has_slots: i32,
     ) -> u64;
     #[cfg(has_flashinfer_gdn_sm90_kernel)]
     pub(crate) fn mistralrs_flashinfer_gdn_sm90_launch(params: *const c_void) -> i32;
@@ -1131,6 +1180,29 @@ extern "C" {
         gate_stride_3: i64,
         eps: f32,
         dtype: i32,
+        stream: i64,
+    );
+    pub(crate) fn gdn_rmsnorm_gated_quantized_bf16(
+        x: *const c_void,
+        gate: *const c_void,
+        weight: *const c_void,
+        output: *mut c_void,
+        scales: *mut f32,
+        rows: i32,
+        groups: i32,
+        scale_stride_m: i32,
+        scale_layout: i32,
+        outer_dim_1: i32,
+        outer_dim_2: i32,
+        x_stride_0: i64,
+        x_stride_1: i64,
+        x_stride_2: i64,
+        x_stride_3: i64,
+        gate_stride_0: i64,
+        gate_stride_1: i64,
+        gate_stride_2: i64,
+        gate_stride_3: i64,
+        eps: f32,
         stream: i64,
     );
     pub(crate) fn fused_gdn_gating(
@@ -1250,6 +1322,10 @@ extern "C" {
         dt_bias: *const f32,
         state_pool: *mut c_void,
         output: *mut c_void,
+        quantized_output: *mut c_void,
+        output_scales: *mut f32,
+        scale_stride_m: i32,
+        scale_layout: i32,
         active_slots: *const u32,
         gate: *const c_void,
         norm_weight: *const c_void,
@@ -1298,6 +1374,10 @@ extern "C" {
         dt_bias: *const f32,
         state_pool: *mut f32,
         output: *mut c_void,
+        quantized_output: *mut c_void,
+        output_scales: *mut f32,
+        scale_stride_m: i32,
+        scale_layout: i32,
         active_slots: *const u32,
         deferred_key: *mut f32,
         deferred_delta: *mut f32,

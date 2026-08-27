@@ -362,7 +362,7 @@ fn serving_bucket(rows: usize) -> Option<usize> {
 
 #[allow(dead_code)]
 pub(super) fn activation_scale_shape(rows: usize, features: usize) -> Result<[usize; 2]> {
-    if rows == 0 || features == 0 || features % FP8_BLOCK_SIZE != 0 {
+    if rows == 0 || features == 0 || !features.is_multiple_of(FP8_BLOCK_SIZE) {
         candle_core::bail!(
             "DeepGEMM activation shape must be nonzero with K divisible by {FP8_BLOCK_SIZE}"
         )

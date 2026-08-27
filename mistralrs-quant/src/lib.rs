@@ -139,7 +139,7 @@ pub use afq::{AfqBits, AfqGroupSize, AfqInner, AfqLayer};
 pub use bitsandbytes::{BnbLinear, BnbQuantParams, BnbQuantType};
 pub use blockwise_fp8::{
     blockwise_fp8_moe, fp8_blockwise_dequantize, fp8_blockwise_quantize,
-    fused_add_rms_norm_quantized, BlockwiseFP8Linear,
+    fused_add_rms_norm_quantized, fused_add_rms_norm_quantized_with_normalized, BlockwiseFP8Linear,
 };
 pub use distributed::{
     layers::{
@@ -1904,7 +1904,7 @@ pub fn try_forward_fused_quantized_glu(
             scheme,
             scale_layout,
         )?;
-        return projection.forward_quantized(&quantized).map(Some);
+        projection.forward_quantized(&quantized).map(Some)
     }
 
     #[cfg(not(feature = "cuda"))]

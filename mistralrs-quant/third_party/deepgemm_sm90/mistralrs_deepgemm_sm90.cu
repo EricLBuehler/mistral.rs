@@ -9,6 +9,7 @@
 #include <cuda_runtime.h>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -32,6 +33,10 @@ constexpr uint32_t kAbiVersion = 1;
 constexpr uint32_t kBlockSize = MISTRALRS_DEEPGEMM_BLOCK_SIZE;
 constexpr uint32_t kActivationScaleMAlignment =
     MISTRALRS_DEEPGEMM_ACTIVATION_SCALE_M_ALIGNMENT;
+constexpr uint32_t kWaveBalancedBlockM = 64;
+constexpr uint32_t kWaveBalancedBlockN = 8;
+constexpr uint32_t kWaveBalancedStages = 12;
+constexpr uint32_t kWaveBalancedMinWaveDivisor = 2;
 #ifdef MISTRALRS_DEEPGEMM_ENABLE_LEGACY_DIAGNOSTICS
 constexpr uint32_t kSwapAbThreshold = 32;
 #endif
@@ -39,7 +44,9 @@ constexpr size_t kWorkspaceAlignment = 128;
 constexpr uintptr_t kTensorAlignment = 16;
 
 enum class KernelFamily {
+  Production,
   Official1D2D,
+  SmallMSwapAB,
 #ifdef MISTRALRS_DEEPGEMM_ENABLE_LEGACY_DIAGNOSTICS
   Legacy,
 #endif
@@ -57,6 +64,101 @@ static_assert(sizeof(MistralrsDeepGemmPrepared) == 80);
 thread_local std::string last_error;
 
 std::mutex compiler_mutex;
+
+struct SmallMSwapABTuning {
+  uint32_t n;
+  uint32_t k;
+  uint32_t max_m;
+};
+
+constexpr std::array<SmallMSwapABTuning, 4> kSmallMSwapABTunings = {{
+    {16384, 5120, 16},
+    {14336, 5120, 16},
+    {5120, 6144, 8},
+    {5120, 17408, 8},
+}};
+
+struct OfficialSmallMTuning {
+  uint32_t n;
+  uint32_t k;
+  uint32_t max_m;
+  uint32_t block_m;
+  uint32_t block_n;
+  uint32_t cluster_m;
+  uint32_t cluster_n;
+};
+
+constexpr std::array<OfficialSmallMTuning, 2> kOfficialSmallMTunings = {{
+    {34816, 5120, 2, 32, 144, 1, 1},
+    {34816, 5120, 16, 64, 144, 2, 1},
+}};
+
+bool useTunedSmallMSwapAB(uint32_t m, uint32_t n, uint32_t k) {
+  return std::any_of(kSmallMSwapABTunings.begin(), kSmallMSwapABTunings.end(),
+                     [&](const SmallMSwapABTuning& tuning) {
+                       return m <= tuning.max_m && n == tuning.n && k == tuning.k;
+                     });
+}
+
+bool useWaveBalancedSmallMSwapAB(uint32_t m, uint32_t n, uint32_t k,
+                                 uint32_t sm_count) {
+  // A second logical M tile would reread every weight block.
+  if (m > kWaveBalancedBlockN || k > std::numeric_limits<int32_t>::max() ||
+      sm_count == 0) {
+    return false;
+  }
+  const uint64_t blocks =
+      (static_cast<uint64_t>(n) + kWaveBalancedBlockM - 1) /
+      kWaveBalancedBlockM;
+  const int smem_bytes = deep_gemm::jit::get_smem_size(
+      kWaveBalancedStages, static_cast<int>(k), kWaveBalancedBlockM,
+      kWaveBalancedBlockN, kBlockSize, true);
+  return blocks <= sm_count && blocks * kWaveBalancedMinWaveDivisor >= sm_count &&
+         smem_bytes > 0 &&
+         smem_bytes <= static_cast<int>(mistralrs::deepgemm_official::kSmemCapacity);
+}
+
+bool useSmallMSwapAB(uint32_t m, uint32_t n, uint32_t k, uint32_t sm_count) {
+  return useTunedSmallMSwapAB(m, n, k) ||
+         useWaveBalancedSmallMSwapAB(m, n, k, sm_count);
+}
+
+KernelFamily productionKernelFamily(uint32_t m, uint32_t n, uint32_t k,
+                                    uint32_t sm_count) {
+  return useSmallMSwapAB(m, n, k, sm_count) ? KernelFamily::SmallMSwapAB
+                                            : KernelFamily::Official1D2D;
+}
+
+mistralrs::deepgemm_official::GemmConfig productionOfficialConfig(
+    uint32_t m, uint32_t n, uint32_t k, uint32_t sm_count) {
+  const auto heuristic =
+      mistralrs::deepgemm_official::getBestGemmConfig(m, n, k, sm_count);
+  for (const auto& tuning : kOfficialSmallMTunings) {
+    if (m > tuning.max_m || n != tuning.n || k != tuning.k) {
+      continue;
+    }
+    const auto tuned = mistralrs::deepgemm_official::getGemmConfig(
+        m, n, k, sm_count, tuning.block_m, tuning.block_n, tuning.cluster_m,
+        tuning.cluster_n);
+    return tuned.valid() ? tuned : heuristic;
+  }
+  return heuristic;
+}
+
+KernelFamily planKernelFamily(const MistralrsDeepGemmPlan& plan) {
+  if ((plan.flags & MISTRALRS_DEEPGEMM_PLAN_OFFICIAL_1D2D) != 0) {
+    return KernelFamily::Official1D2D;
+  }
+  if ((plan.flags & MISTRALRS_DEEPGEMM_PLAN_SMALL_M_SWAP_AB) != 0 &&
+      useSmallMSwapAB(plan.m, plan.n, plan.k, plan.sm_count)) {
+    return KernelFamily::SmallMSwapAB;
+  }
+#ifdef MISTRALRS_DEEPGEMM_ENABLE_LEGACY_DIAGNOSTICS
+  return KernelFamily::Legacy;
+#else
+  return KernelFamily::SmallMSwapAB;
+#endif
+}
 
 bool pdlRequested() {
   const char* value = std::getenv("MISTRALRS_DEEPGEMM_PDL");
@@ -177,10 +279,10 @@ int32_t createPlan(uint32_t m, uint32_t n, uint32_t k, KernelFamily family,
     last_error = "DeepGEMM decode provider requires an SM90 CUDA device";
     return MISTRALRS_DEEPGEMM_UNAVAILABLE;
   }
+  if (family == KernelFamily::Production) {
+    family = productionKernelFamily(m, n, k, static_cast<uint32_t>(sm_count));
+  }
 
-#ifdef MISTRALRS_DEEPGEMM_ENABLE_LEGACY_DIAGNOSTICS
-  bool swap_ab = false;
-#endif
   uint32_t flags = 0;
   uint32_t block_m = 0;
   uint32_t block_n = 0;
@@ -188,8 +290,7 @@ int32_t createPlan(uint32_t m, uint32_t n, uint32_t k, KernelFamily family,
   uint32_t num_tma_multicast = 0;
   uint32_t smem_bytes = 0;
   if (family == KernelFamily::Official1D2D) {
-    const auto config = mistralrs::deepgemm_official::getBestGemmConfig(
-        m, n, k, static_cast<uint32_t>(sm_count));
+    const auto config = productionOfficialConfig(m, n, k, static_cast<uint32_t>(sm_count));
     if (config.valid()) {
       flags |= MISTRALRS_DEEPGEMM_PLAN_OFFICIAL_1D2D;
       if (config.multicast_on_a()) {
@@ -204,10 +305,40 @@ int32_t createPlan(uint32_t m, uint32_t n, uint32_t k, KernelFamily family,
       num_tma_multicast = config.cluster_size();
       smem_bytes = config.smem_bytes;
     }
+  } else if (family == KernelFamily::SmallMSwapAB) {
+    if (!useSmallMSwapAB(m, n, k, static_cast<uint32_t>(sm_count))) {
+      last_error = "DeepGEMM small-M swap-AB does not support the requested shape";
+      return MISTRALRS_DEEPGEMM_INVALID_ARGUMENT;
+    }
+    const bool wave_balanced = useWaveBalancedSmallMSwapAB(
+        m, n, k, static_cast<uint32_t>(sm_count));
+    const auto config = wave_balanced
+                            ? deep_gemm::jit::GemmConfig{
+                                  kWaveBalancedBlockM, kWaveBalancedBlockN,
+                                  kWaveBalancedStages, 1,
+                                  deep_gemm::jit::get_smem_size(
+                                      kWaveBalancedStages, static_cast<int>(k),
+                                      kWaveBalancedBlockM, kWaveBalancedBlockN,
+                                      kBlockSize, true)}
+                            : deep_gemm::jit::get_best_gemm_config(
+                                  n, m, k, 1, sm_count, false, true);
+    auto [small_m_block_m, small_m_block_n, small_m_num_stages,
+          small_m_num_tma_multicast, small_m_smem_bytes] = config;
+    if (small_m_block_m <= 0 || small_m_block_n <= 0 || small_m_num_stages <= 0 ||
+        small_m_num_tma_multicast <= 0 || small_m_smem_bytes <= 0) {
+      last_error = "DeepGEMM could not plan the requested small-M shape";
+      return MISTRALRS_DEEPGEMM_UNAVAILABLE;
+    }
+    flags |= MISTRALRS_DEEPGEMM_PLAN_SMALL_M_SWAP_AB;
+    block_m = static_cast<uint32_t>(small_m_block_m);
+    block_n = static_cast<uint32_t>(small_m_block_n);
+    num_stages = static_cast<uint32_t>(small_m_num_stages);
+    num_tma_multicast = static_cast<uint32_t>(small_m_num_tma_multicast);
+    smem_bytes = static_cast<uint32_t>(small_m_smem_bytes);
   }
 #ifdef MISTRALRS_DEEPGEMM_ENABLE_LEGACY_DIAGNOSTICS
   else {
-    swap_ab = m < kSwapAbThreshold;
+    const bool swap_ab = m < kSwapAbThreshold;
     auto config = swap_ab
                       ? deep_gemm::jit::get_best_gemm_config(n, m, k, 1,
                                                              sm_count, false, true)
@@ -281,12 +412,7 @@ int32_t validatePlan(const MistralrsDeepGemmPlan* plan) {
     return MISTRALRS_DEEPGEMM_INVALID_ARGUMENT;
   }
   MistralrsDeepGemmPlan expected{};
-  KernelFamily family = KernelFamily::Official1D2D;
-#ifdef MISTRALRS_DEEPGEMM_ENABLE_LEGACY_DIAGNOSTICS
-  if ((plan->flags & MISTRALRS_DEEPGEMM_PLAN_OFFICIAL_1D2D) == 0) {
-    family = KernelFamily::Legacy;
-  }
-#endif
+  const KernelFamily family = planKernelFamily(*plan);
   int32_t status = createPlan(plan->m, plan->n, plan->k, family, &expected);
   if (status != MISTRALRS_DEEPGEMM_SUCCESS) {
     return status;
@@ -310,15 +436,20 @@ std::filesystem::path resolveFamilyIncludeDir(const std::filesystem::path& inclu
   if (include_dir.empty()) {
     return {};
   }
-  const char* family_dir = "official";
-  const char* marker = "deep_gemm/impls/sm90_fp8_gemm_1d2d.cuh";
+  const char* family_dir = nullptr;
+  const char* marker = nullptr;
+  if (family == KernelFamily::Official1D2D) {
+    family_dir = "official";
+    marker = "deep_gemm/impls/sm90_fp8_gemm_1d2d.cuh";
+  } else if (family == KernelFamily::SmallMSwapAB) {
+    family_dir = "skinny";
+    marker = "deep_gemm/nvrtc_cutlass.cuh";
+  }
 #ifdef MISTRALRS_DEEPGEMM_ENABLE_LEGACY_DIAGNOSTICS
-  if (family == KernelFamily::Legacy) {
+  else {
     family_dir = "legacy";
     marker = "deep_gemm/nvrtc_cutlass.cuh";
   }
-#else
-  static_cast<void>(family);
 #endif
   std::error_code error;
   auto nested = include_dir / family_dir;
@@ -415,13 +546,14 @@ void launchNormalGemm(CUfunction function, void* mat_a, int ld_a, void* mat_b, i
                         &tma_scales_a_desc, &tma_d_desc};
   CHECK_CUDA(cuLaunchKernelEx(&config, function, parameters, nullptr));
 }
+#endif
 
-void launchNormalGemmSwapAB(CUfunction function, void* mat_a, int ld_a, void* mat_b, int ld_b,
-                            void* mat_d, int ld_d, float* scales_a, float* scales_b,
-                            uint32_t shape_m, uint32_t shape_n, uint32_t shape_k,
-                            uint32_t block_m, uint32_t block_n, uint32_t block_k,
-                            uint32_t num_tma_multicast, CUstream stream, uint32_t num_sms,
-                            uint32_t smem_size) {
+void launchSmallMSwapABGemm(CUfunction function, void* mat_a, int ld_a, void* mat_b,
+                            int ld_b, void* mat_d, int ld_d, float* scales_a,
+                            float* scales_b, uint32_t shape_m, uint32_t shape_n,
+                            uint32_t shape_k, uint32_t block_m, uint32_t block_n,
+                            uint32_t block_k, uint32_t num_tma_multicast, CUstream stream,
+                            uint32_t num_sms, uint32_t smem_size) {
   auto tma_a_desc = deep_gemm::make_2d_tma_a_desc_swapAB(
       reinterpret_cast<__nv_fp8_e4m3*>(mat_a), shape_m, shape_k, block_m, block_k, 1,
       deep_gemm::GemmType::Normal, ld_a);
@@ -456,7 +588,6 @@ void launchNormalGemmSwapAB(CUfunction function, void* mat_a, int ld_a, void* ma
                         &tma_scales_b_desc, &tma_d_desc};
   CHECK_CUDA(cuLaunchKernelEx(&config, function, parameters, nullptr));
 }
-#endif
 
 CUtensorMapSwizzle officialOutputSwizzle(uint32_t block_n) {
   switch (deep_gemm::jit::getOfficialOutputSwizzle(block_n)) {
@@ -541,12 +672,10 @@ int32_t validatePreparedLaunch(const MistralrsDeepGemmPrepared* prepared, uint32
     last_error = "DeepGEMM launch M exceeds the prepared row capacity";
     return MISTRALRS_DEEPGEMM_INVALID_ARGUMENT;
   }
-#ifdef MISTRALRS_DEEPGEMM_ENABLE_LEGACY_DIAGNOSTICS
-  if ((plan->flags & MISTRALRS_DEEPGEMM_PLAN_SWAP_AB) != 0 && m != plan->m) {
-    last_error = "DeepGEMM swap-AB diagnostics require the prepared row count";
+  if ((plan->flags & MISTRALRS_DEEPGEMM_PLAN_SMALL_M_SWAP_AB) != 0 && m != plan->m) {
+    last_error = "DeepGEMM small-M swap-AB launches require the prepared row count";
     return MISTRALRS_DEEPGEMM_INVALID_ARGUMENT;
   }
-#endif
   return MISTRALRS_DEEPGEMM_SUCCESS;
 }
 
@@ -578,10 +707,8 @@ int32_t launchPrequantizedGemm(const MistralrsDeepGemmPrepared* prepared, uint32
 
   const auto* plan = &prepared->plan;
   auto function = reinterpret_cast<CUfunction>(prepared->function);
-  bool official = (plan->flags & MISTRALRS_DEEPGEMM_PLAN_OFFICIAL_1D2D) != 0;
-#ifdef MISTRALRS_DEEPGEMM_ENABLE_LEGACY_DIAGNOSTICS
-  bool swap_ab = (plan->flags & MISTRALRS_DEEPGEMM_PLAN_SWAP_AB) != 0;
-#endif
+  const bool official = (plan->flags & MISTRALRS_DEEPGEMM_PLAN_OFFICIAL_1D2D) != 0;
+  const bool swap_ab = (plan->flags & MISTRALRS_DEEPGEMM_PLAN_SMALL_M_SWAP_AB) != 0;
   if (official) {
     launchOfficialGemm(
         function, const_cast<void*>(activation_e4m3), plan->k,
@@ -593,15 +720,16 @@ int32_t launchPrequantizedGemm(const MistralrsDeepGemmPrepared* prepared, uint32
         (plan->flags & MISTRALRS_DEEPGEMM_PLAN_PDL) != 0,
         reinterpret_cast<CUstream>(stream), plan->sm_count, plan->smem_bytes);
   }
-#ifdef MISTRALRS_DEEPGEMM_ENABLE_LEGACY_DIAGNOSTICS
   else if (swap_ab) {
-    launchNormalGemmSwapAB(
+    launchSmallMSwapABGemm(
         function, const_cast<void*>(weight_e4m3), plan->k, const_cast<void*>(activation_e4m3),
         plan->k, output_bf16, plan->n, const_cast<float*>(weight_scales),
         const_cast<float*>(activation_scales), plan->n, m, plan->k, plan->block_m, plan->block_n,
         plan->block_k, plan->num_tma_multicast, reinterpret_cast<CUstream>(stream), plan->sm_count,
         plan->smem_bytes);
-  } else {
+  }
+#ifdef MISTRALRS_DEEPGEMM_ENABLE_LEGACY_DIAGNOSTICS
+  else {
     launchNormalGemm(
         function, const_cast<void*>(activation_e4m3), plan->k, const_cast<void*>(weight_e4m3),
         plan->k, output_bf16, plan->n, const_cast<float*>(activation_scales),
@@ -611,7 +739,7 @@ int32_t launchPrequantizedGemm(const MistralrsDeepGemmPrepared* prepared, uint32
   }
 #else
   else {
-    last_error = "DeepGEMM production plans require the official kernel family";
+    last_error = "DeepGEMM production plan has an unknown kernel family";
     return MISTRALRS_DEEPGEMM_INVALID_ARGUMENT;
   }
 #endif
@@ -670,7 +798,7 @@ extern "C" int32_t mistralrs_deepgemm_sm90_plan(uint32_t m, uint32_t n, uint32_t
                                                  MistralrsDeepGemmPlan* plan) {
   last_error.clear();
   try {
-    return createPlan(m, n, k, KernelFamily::Official1D2D, plan);
+    return createPlan(m, n, k, KernelFamily::Production, plan);
   } catch (const std::exception& error) {
     return classifyException(error);
   } catch (...) {
@@ -722,28 +850,18 @@ extern "C" int32_t mistralrs_deepgemm_sm90_prepare(const MistralrsDeepGemmPlan* 
 
     std::lock_guard<std::mutex> compile_lock(compiler_mutex);
     auto headers = resolveIncludeDir(include_dir);
-    bool official = (plan->flags & MISTRALRS_DEEPGEMM_PLAN_OFFICIAL_1D2D) != 0;
-    KernelFamily family = KernelFamily::Official1D2D;
-#ifdef MISTRALRS_DEEPGEMM_ENABLE_LEGACY_DIAGNOSTICS
-    if (!official) {
-      family = KernelFamily::Legacy;
-    }
-#else
-    if (!official) {
-      last_error = "DeepGEMM production plans require the official kernel family";
-      return MISTRALRS_DEEPGEMM_INVALID_ARGUMENT;
-    }
-#endif
+    const KernelFamily family = planKernelFamily(*plan);
     auto family_headers = resolveFamilyIncludeDir(headers, family);
     deep_gemm::jit::Compiler::setIncludeDirs(
         family_headers.empty() ? std::vector<std::filesystem::path>{}
                                : std::vector<std::filesystem::path>{family_headers});
-    bool swap_ab = false;
-    deep_gemm::jit::KernelFamily jit_family =
-        deep_gemm::jit::KernelFamily::Official1D2D;
+    const bool swap_ab = (plan->flags & MISTRALRS_DEEPGEMM_PLAN_SMALL_M_SWAP_AB) != 0;
+    deep_gemm::jit::KernelFamily jit_family = deep_gemm::jit::KernelFamily::Official1D2D;
+    if (family == KernelFamily::SmallMSwapAB) {
+      jit_family = deep_gemm::jit::KernelFamily::SmallMSwapAB;
+    }
 #ifdef MISTRALRS_DEEPGEMM_ENABLE_LEGACY_DIAGNOSTICS
-    if (!official) {
-      swap_ab = (plan->flags & MISTRALRS_DEEPGEMM_PLAN_SWAP_AB) != 0;
+    if (family == KernelFamily::Legacy) {
       jit_family = deep_gemm::jit::KernelFamily::Legacy;
     }
 #endif

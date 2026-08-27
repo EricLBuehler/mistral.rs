@@ -1517,6 +1517,7 @@ fn sparse_rejection_cuda_device_with_outcomes(
 }
 
 #[cfg(test)]
+#[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 mod tests {
     use super::*;
     use candle_core::Device;

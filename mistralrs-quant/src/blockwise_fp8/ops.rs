@@ -1512,6 +1512,50 @@ pub fn fused_add_rms_norm_quantized(
     scheme: ActivationQuantizationScheme,
     scale_layout: ActivationScaleLayout,
 ) -> Result<FusedRmsNormQuantized> {
+    let (fused, _) = fused_add_rms_norm_quantized_impl(
+        input,
+        residual,
+        weight,
+        epsilon,
+        scheme,
+        scale_layout,
+        false,
+    )?;
+    Ok(fused)
+}
+
+pub fn fused_add_rms_norm_quantized_with_normalized(
+    input: &Tensor,
+    residual: &Tensor,
+    weight: &Tensor,
+    epsilon: f32,
+    scheme: ActivationQuantizationScheme,
+    scale_layout: ActivationScaleLayout,
+) -> Result<(FusedRmsNormQuantized, Tensor)> {
+    let (fused, normalized) = fused_add_rms_norm_quantized_impl(
+        input,
+        residual,
+        weight,
+        epsilon,
+        scheme,
+        scale_layout,
+        true,
+    )?;
+    Ok((
+        fused,
+        normalized.expect("normalized output was requested from the fused RMSNorm kernel"),
+    ))
+}
+
+fn fused_add_rms_norm_quantized_impl(
+    input: &Tensor,
+    residual: &Tensor,
+    weight: &Tensor,
+    epsilon: f32,
+    scheme: ActivationQuantizationScheme,
+    scale_layout: ActivationScaleLayout,
+    produce_normalized: bool,
+) -> Result<(FusedRmsNormQuantized, Option<Tensor>)> {
     #[cfg(all(feature = "cuda", has_blockwise_fp8_kernels))]
     {
         use std::ffi::CStr;
@@ -1608,6 +1652,11 @@ pub fn fused_add_rms_norm_quantized(
         let weight = weight.contiguous()?;
         let stream = device.cuda_stream();
         let mut residual_output = unsafe { device.alloc::<bf16>(elements)? };
+        let mut normalized_output = if produce_normalized {
+            Some(unsafe { device.alloc::<bf16>(elements)? })
+        } else {
+            None
+        };
         let mut quantized_output = unsafe { device.alloc::<F8E4M3>(elements)? };
         let mut scales = unsafe { device.alloc::<f32>(scale_storage_elements)? };
 
@@ -1640,6 +1689,13 @@ pub fn fused_add_rms_norm_quantized(
         );
         let (residual_output_ptr, residual_output_guard) =
             slice_ptr_mut_on_stream(&mut residual_output, 0, &stream);
+        let (normalized_output_ptr, normalized_output_guard) =
+            if let Some(normalized_output) = normalized_output.as_mut() {
+                let (pointer, guard) = slice_ptr_mut_on_stream(normalized_output, 0, &stream);
+                (pointer, Some(guard))
+            } else {
+                (0, None)
+            };
         let (quantized_output_ptr, quantized_output_guard) =
             slice_ptr_mut_on_stream(&mut quantized_output, 0, &stream);
         let (scales_ptr, scales_guard) = slice_ptr_mut_on_stream(&mut scales, 0, &stream);
@@ -1649,6 +1705,7 @@ pub fn fused_add_rms_norm_quantized(
                 residual_ptr as *const bf16,
                 weight_ptr as *const bf16,
                 residual_output_ptr as *mut bf16,
+                normalized_output_ptr as *mut bf16,
                 quantized_output_ptr as *mut F8E4M3,
                 scales_ptr as *mut f32,
                 (scales_ptr + (scale_elements * std::mem::size_of::<f32>()) as u64) as *mut f32,
@@ -1673,6 +1730,7 @@ pub fn fused_add_rms_norm_quantized(
             residual_guard,
             weight_guard,
             residual_output_guard,
+            normalized_output_guard,
             quantized_output_guard,
             scales_guard,
         ));
@@ -1684,6 +1742,15 @@ pub fn fused_add_rms_norm_quantized(
             )),
             Shape::from_dims(&source_shape),
         ));
+        let normalized_output = normalized_output.map(|normalized_output| {
+            Tensor::from((
+                Storage::Cuda(CudaStorage::wrap_cuda_slice(
+                    normalized_output,
+                    device.clone(),
+                )),
+                Shape::from_dims(&source_shape),
+            ))
+        });
         let quantized_output = Tensor::from((
             Storage::Cuda(CudaStorage::wrap_cuda_slice(
                 quantized_output,
@@ -1703,12 +1770,23 @@ pub fn fused_add_rms_norm_quantized(
             scheme,
             scale_layout,
         )?;
-        return FusedRmsNormQuantized::new(residual_output, activation);
+        Ok((
+            FusedRmsNormQuantized::new(residual_output, activation)?,
+            normalized_output,
+        ))
     }
 
     #[cfg(not(all(feature = "cuda", has_blockwise_fp8_kernels)))]
     {
-        let _ = (input, residual, weight, epsilon, scheme, scale_layout);
+        let _ = (
+            input,
+            residual,
+            weight,
+            epsilon,
+            scheme,
+            scale_layout,
+            produce_normalized,
+        );
         candle_core::bail!("fused RMSNorm FP8 quantization is unavailable")
     }
 }
@@ -1906,6 +1984,7 @@ pub(crate) fn fp8_blockwise_matmul_cutlass(
 
 #[cfg(test)]
 #[allow(unused_imports)]
+#[allow(clippy::needless_range_loop)]
 mod tests {
     use candle_core::{DType, Device, Result, Tensor};
     use candle_nn::{Linear, Module};
@@ -1953,7 +2032,6 @@ mod tests {
         const GROUP_SIZE: usize = 128;
         const EPSILON: f32 = 1.0e-6;
         const FP8_MAX: f32 = 448.0;
-        const MIN_SCALE: f32 = 1.0 / (FP8_MAX * 512.0);
 
         let device = Device::new_cuda(0)?;
         let mut weight_values = Vec::with_capacity(COLUMNS + 1);
@@ -1998,7 +2076,7 @@ mod tests {
             assert_eq!(input.layout().start_offset(), 1);
             assert_eq!(residual.layout().start_offset(), 1);
 
-            let fused = ops::fused_add_rms_norm_quantized(
+            let (fused, normalized) = ops::fused_add_rms_norm_quantized_with_normalized(
                 &input,
                 &residual,
                 &weight,
@@ -2026,6 +2104,10 @@ mod tests {
                 .to_device(&Device::Cpu)?
                 .flatten_all()?
                 .to_vec1::<F8E4M3>()?;
+            let actual_normalized = normalized
+                .to_device(&Device::Cpu)?
+                .flatten_all()?
+                .to_vec1::<bf16>()?;
             let actual_scales = fused
                 .activation()
                 .scales()
@@ -2061,6 +2143,14 @@ mod tests {
                 }
             }
             assert_eq!(actual_residual, expected_residual);
+            assert_eq!(
+                actual_normalized,
+                expected_normed
+                    .iter()
+                    .copied()
+                    .map(bf16::from_f32)
+                    .collect::<Vec<_>>()
+            );
 
             let scale_stride = rows.div_ceil(4) * 4;
             for group in 0..COLUMNS / GROUP_SIZE {
@@ -2071,7 +2161,11 @@ mod tests {
                         .copied()
                         .map(f32::abs)
                         .fold(0.0f32, f32::max);
-                    let expected_scale = (maximum / FP8_MAX).max(MIN_SCALE);
+                    let expected_scale = if maximum == 0.0 {
+                        1.0
+                    } else {
+                        maximum / FP8_MAX
+                    };
                     let actual_scale = actual_scales[group][row];
                     let scale_tolerance = 1.0e-7 + expected_scale.abs() * 2.0e-3;
                     assert!(
@@ -2082,6 +2176,179 @@ mod tests {
                         let index = row * COLUMNS + column;
                         let actual = actual_quantized[index].to_f32() * actual_scale;
                         let expected = expected_normed[index];
+                        let tolerance = 1.0e-4 + 0.09 * expected.abs().max(maximum / 64.0);
+                        assert!(
+                            (actual - expected).abs() <= tolerance,
+                            "rows={rows}, row={row}, column={column}: expected {expected}, got {actual}"
+                        );
+                    }
+                }
+                assert!(actual_scales[group][rows..scale_stride]
+                    .iter()
+                    .all(|scale| *scale == 0.0));
+            }
+        }
+        Ok(())
+    }
+
+    #[cfg(all(feature = "cuda", has_blockwise_fp8_kernels))]
+    #[test]
+    fn fused_add_rms_norm_quantized_aligned_store_normalized_matches_reference() -> Result<()> {
+        use crate::{ActivationQuantizationScheme, ActivationScaleLayout};
+
+        const COLUMNS: usize = 5120;
+        const GROUP_SIZE: usize = 128;
+        const ROW_ALIGNMENT: usize = 4;
+        const EPSILON: f32 = 1.0e-6;
+        const FP8_MAX: f32 = 448.0;
+
+        let device = Device::new_cuda(0)?;
+        let weight_values = (0..COLUMNS)
+            .map(|column| {
+                if column < GROUP_SIZE {
+                    bf16::ZERO
+                } else {
+                    bf16::from_f32(0.5 + (column % 16) as f32 / 16.0)
+                }
+            })
+            .collect::<Vec<_>>();
+        let weight = Tensor::from_vec(weight_values.clone(), COLUMNS, &device)?;
+        assert_eq!(weight.layout().start_offset(), 0);
+
+        let scheme = ActivationQuantizationScheme {
+            dtype: DType::F8E4M3,
+            block_shape: [1, GROUP_SIZE],
+        };
+        let scale_layout = ActivationScaleLayout::GroupMajor {
+            row_alignment: std::num::NonZeroUsize::new(ROW_ALIGNMENT).unwrap(),
+        };
+
+        for rows in [1usize, 5, 128] {
+            let elements = rows * COLUMNS;
+            let values = (0..elements)
+                .map(|index| {
+                    let row = index / COLUMNS;
+                    let magnitude = [0.5f32, 1.0, 2.0, 4.0][(index + row * 3) % 4];
+                    if (index + row).is_multiple_of(2) {
+                        magnitude
+                    } else {
+                        -magnitude
+                    }
+                })
+                .collect::<Vec<_>>();
+            let input_values = values
+                .iter()
+                .copied()
+                .map(|value| bf16::from_f32(value * 0.75))
+                .collect::<Vec<_>>();
+            let residual_values = values
+                .iter()
+                .copied()
+                .map(|value| bf16::from_f32(value * 0.25))
+                .collect::<Vec<_>>();
+            let input = Tensor::from_vec(input_values.clone(), (rows, COLUMNS), &device)?;
+            let residual = Tensor::from_vec(residual_values.clone(), (rows, COLUMNS), &device)?;
+            assert_eq!(input.layout().start_offset(), 0);
+            assert_eq!(residual.layout().start_offset(), 0);
+
+            let (fused, normalized) = ops::fused_add_rms_norm_quantized_with_normalized(
+                &input,
+                &residual,
+                &weight,
+                EPSILON,
+                scheme,
+                scale_layout,
+            )?;
+            assert_eq!(fused.residual().dims(), &[rows, COLUMNS]);
+            assert_eq!(normalized.dims(), &[rows, COLUMNS]);
+            assert_eq!(fused.activation().source_shape(), &[rows, COLUMNS]);
+            assert_eq!(fused.activation().scale_layout(), scale_layout);
+
+            let actual_residual = fused
+                .residual()
+                .to_device(&Device::Cpu)?
+                .flatten_all()?
+                .to_vec1::<bf16>()?;
+            let actual_normalized = normalized
+                .to_device(&Device::Cpu)?
+                .flatten_all()?
+                .to_vec1::<bf16>()?;
+            let actual_quantized = fused
+                .activation()
+                .quantized()
+                .to_device(&Device::Cpu)?
+                .flatten_all()?
+                .to_vec1::<F8E4M3>()?;
+            let actual_scales = fused
+                .activation()
+                .scales()
+                .to_device(&Device::Cpu)?
+                .to_vec2::<f32>()?;
+
+            let mut expected_residual = Vec::with_capacity(elements);
+            let mut expected_normalized = Vec::with_capacity(elements);
+            for row in 0..rows {
+                let row_start = row * COLUMNS;
+                let mut square_sum = 0.0f32;
+                for column in 0..COLUMNS {
+                    let index = row_start + column;
+                    let sum = input_values[index].to_f32() + residual_values[index].to_f32();
+                    let rounded = bf16::from_f32(sum);
+                    square_sum += rounded.to_f32() * rounded.to_f32();
+                    expected_residual.push(rounded);
+                }
+                let inverse_rms = (square_sum / COLUMNS as f32 + EPSILON).sqrt().recip();
+                for column in 0..COLUMNS {
+                    let index = row_start + column;
+                    expected_normalized.push(bf16::from_f32(
+                        expected_residual[index].to_f32()
+                            * inverse_rms
+                            * weight_values[column].to_f32(),
+                    ));
+                }
+            }
+            assert_eq!(actual_residual, expected_residual);
+            for (index, (actual, expected)) in actual_normalized
+                .iter()
+                .zip(&expected_normalized)
+                .enumerate()
+            {
+                let actual = actual.to_f32();
+                let expected = expected.to_f32();
+                let tolerance = 1.0e-4 + expected.abs() * 1.0e-2;
+                assert!(
+                    (actual - expected).abs() <= tolerance,
+                    "rows={rows}, index={index}: expected normalized {expected}, got {actual}"
+                );
+            }
+
+            let scale_stride = rows.div_ceil(ROW_ALIGNMENT) * ROW_ALIGNMENT;
+            assert_eq!(actual_scales.len(), COLUMNS / GROUP_SIZE);
+            assert!(actual_scales
+                .iter()
+                .all(|scales| scales.len() == scale_stride));
+            for group in 0..COLUMNS / GROUP_SIZE {
+                for row in 0..rows {
+                    let start = row * COLUMNS + group * GROUP_SIZE;
+                    let maximum = actual_normalized[start..start + GROUP_SIZE]
+                        .iter()
+                        .map(|value| value.to_f32().abs())
+                        .fold(0.0f32, f32::max);
+                    let expected_scale = if maximum == 0.0 {
+                        1.0
+                    } else {
+                        maximum / FP8_MAX
+                    };
+                    let actual_scale = actual_scales[group][row];
+                    let scale_tolerance = 1.0e-7 + expected_scale.abs() * 2.0e-3;
+                    assert!(
+                        (actual_scale - expected_scale).abs() <= scale_tolerance,
+                        "rows={rows}, row={row}, group={group}: expected scale {expected_scale}, got {actual_scale}"
+                    );
+                    for column in group * GROUP_SIZE..(group + 1) * GROUP_SIZE {
+                        let index = row * COLUMNS + column;
+                        let actual = actual_quantized[index].to_f32() * actual_scale;
+                        let expected = actual_normalized[index].to_f32();
                         let tolerance = 1.0e-4 + 0.09 * expected.abs().max(maximum / 64.0);
                         assert!(
                             (actual - expected).abs() <= tolerance,

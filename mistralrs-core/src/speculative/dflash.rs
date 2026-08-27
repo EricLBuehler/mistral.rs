@@ -307,6 +307,7 @@ impl DFlashConfig {
         Ok(())
     }
 
+    #[allow(clippy::cast_possible_truncation)]
     fn yarn_rope_config(&self, target: Option<&YarnRopeConfig>) -> Result<Option<YarnRopeConfig>> {
         let Some(target) = target else {
             return Ok(None);
@@ -2493,7 +2494,10 @@ impl DFlashDraftModel {
             .sequence_capacity();
         let shapes = dflash_graph_precapture_shapes(
             &self.graph_plans(max_n),
-            crate::pipeline::cuda_graph::cuda_graph_precapture_batches(),
+            crate::pipeline::cuda_graph::cuda_graph_precapture_batches(
+                CudaGraphComponent::DFlash,
+                max_n.saturating_add(1),
+            ),
             sequence_capacity,
         );
         let Some(max_batch) = shapes.iter().map(|(batch, _)| *batch).max() else {
@@ -2611,9 +2615,11 @@ impl DFlashDraftModel {
             if block > self.block_size || !dflash_graph_positions_fit(start_positions, block) {
                 return Ok(None);
             }
-            let Some(batch_bucket) =
-                crate::pipeline::cuda_graph::cuda_graph_batch_bucket(seq_ids.len())
-            else {
+            let Some(batch_bucket) = crate::pipeline::cuda_graph::cuda_graph_batch_bucket(
+                CudaGraphComponent::DFlash,
+                block,
+                seq_ids.len(),
+            ) else {
                 return Ok(None);
             };
             let use_selector = self.selector.is_some();
@@ -2747,13 +2753,13 @@ impl DFlashDraftModel {
     pub fn supports_paged_auxiliary_prefix_state(&self) -> bool {
         #[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
         {
-            return self.windowed_pool.as_ref().is_some_and(|pool| {
+            self.windowed_pool.as_ref().is_some_and(|pool| {
                 pool.lock()
                     .expect("dflash windowed pool poisoned")
                     .config()
                     .checkpoint_capacity()
                     > 0
-            });
+            })
         }
         #[cfg(not(all(feature = "cuda", feature = "flash-attn", target_family = "unix")))]
         {
@@ -2790,7 +2796,7 @@ impl DFlashDraftModel {
             }
             let checkpoint = pool.snapshot_sequence(sequence_id)?;
             metrics::counter!("mistralrs_speculative_prefix_cache_captures_total").increment(1);
-            return Ok(Some(Arc::new(DFlashPagedPrefixState { checkpoint })));
+            Ok(Some(Arc::new(DFlashPagedPrefixState { checkpoint })))
         }
         #[cfg(not(all(feature = "cuda", feature = "flash-attn", target_family = "unix")))]
         {
@@ -2829,7 +2835,7 @@ impl DFlashDraftModel {
                 .increment(1);
             metrics::histogram!("mistralrs_speculative_prefix_cache_restore_seconds")
                 .record(started.elapsed().as_secs_f64());
-            return Ok(());
+            Ok(())
         }
         #[cfg(not(all(feature = "cuda", feature = "flash-attn", target_family = "unix")))]
         {
@@ -2987,6 +2993,7 @@ impl DFlashDraftModel {
         self.commit_prepared_ctx_batch(&prepared, row_indices, entries)
     }
 
+    #[allow(clippy::cast_possible_truncation)]
     pub fn prepare_ctx_batch(
         &self,
         taps: &[Tensor],
@@ -3365,6 +3372,7 @@ impl DFlashDraftModel {
         hs.narrow(1, 1, block - 1)
     }
 
+    #[allow(clippy::cast_possible_truncation)]
     fn run_draft_layers<F>(
         &self,
         noise_embedding: &Tensor,
@@ -3860,6 +3868,7 @@ fn repeat_kv(x: &Tensor, groups: usize) -> Result<Tensor> {
 }
 
 #[cfg(test)]
+#[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 mod tests {
     use std::{collections::HashSet, sync::Arc};
 
@@ -3881,7 +3890,9 @@ mod tests {
     use super::{validate_candidate_selector_cuda, CandidateSelectorCudaSpec};
     use crate::layers::{yarn_inv_freq_and_attention_factor, YarnRopeConfig};
     #[cfg(feature = "cuda")]
-    use crate::pipeline::cuda_graph::{cuda_graph_precapture_batches, CUDA_GRAPH_MAX_BATCH_BUCKET};
+    use crate::pipeline::cuda_graph::{
+        cuda_graph_precapture_batches, CudaGraphComponent, CUDA_GRAPH_MAX_BATCH_BUCKET,
+    };
     use crate::speculative::MtpDraftSamplingMethod;
     use crate::speculative::{SpeculativeGraphPlan, SpeculativePrefixReplay};
 
@@ -4223,10 +4234,13 @@ mod tests {
     fn graph_precapture_shapes_cover_large_shared_batch_buckets() {
         let shapes = dflash_graph_precapture_shapes(
             &dflash_graph_plans(false, 7),
-            cuda_graph_precapture_batches(),
+            cuda_graph_precapture_batches(CudaGraphComponent::DFlash, 8),
             CUDA_GRAPH_MAX_BATCH_BUCKET,
         );
-        assert_eq!(shapes.len(), cuda_graph_precapture_batches().count());
+        assert_eq!(
+            shapes.len(),
+            cuda_graph_precapture_batches(CudaGraphComponent::DFlash, 8).count()
+        );
         assert_eq!(shapes.last(), Some(&(CUDA_GRAPH_MAX_BATCH_BUCKET, 8)));
     }
 

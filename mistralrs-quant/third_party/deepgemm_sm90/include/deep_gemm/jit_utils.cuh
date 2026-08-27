@@ -132,7 +132,7 @@ inline GemmConfig get_best_gemm_config(uint32_t shape_m, uint32_t shape_n, uint3
 
   // Candidate block sizes for N dimension
   std::vector<int> block_ns;
-  for (int i = 16; i <= 128; i += 8) {
+  for (int i = swap_ab ? 8 : 16; i <= 128; i += 8) {
     block_ns.push_back(i);
   }
 

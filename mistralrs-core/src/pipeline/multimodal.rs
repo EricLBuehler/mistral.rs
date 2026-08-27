@@ -578,9 +578,7 @@ impl Loader for MultimodalLoader {
                 .filter(|_| supports_encoder_cache),
             paged_attn_config.as_mut(),
         ) {
-            *cache_config = cache_config
-                .clone()
-                .with_base_device_memory_reservation(bytes)?;
+            *cache_config = (*cache_config).with_base_device_memory_reservation(bytes)?;
         }
 
         debug!("Prompt chunk size is {ATTENTION_CHUNK_SIZE}.");
@@ -1437,7 +1435,9 @@ impl Loader for MultimodalLoader {
             })
             .transpose()?
             .unwrap_or(false);
-        let recurrent_pool_grew = if recurrent_transitions_supported {
+        let recurrent_pool_grew = if recurrent_transitions_supported
+            && super::uses_recurrent_transition_log(model.cache())
+        {
             model.reserve_recurrent_speculative_transition_storage()? || recurrent_pool_grew
         } else {
             recurrent_pool_grew
@@ -2010,7 +2010,7 @@ impl MultimodalPipeline {
             );
             return Ok(None);
         }
-        let Some(bucket) = cuda_graph_batch_bucket(batch) else {
+        let Some(bucket) = cuda_graph_batch_bucket(CudaGraphComponent::Target, q_len, batch) else {
             record_cuda_graph_dispatch(
                 CudaGraphComponent::Target,
                 CudaGraphDispatchMode::Eager,
@@ -2188,21 +2188,37 @@ impl MultimodalPipeline {
         }
         let start = std::time::Instant::now();
         let mut captured = 0usize;
-        let precapture_max_bucket = cuda_graph_precapture_max_batch(ctx.max_batch_size);
-        let batch_buckets = cuda_graph_precapture_batches()
-            .filter(|bucket| *bucket <= precapture_max_bucket)
-            .collect::<Vec<_>>();
-        let startup_shapes = widths.iter().fold(0usize, |total, (_, max_bucket)| {
+        let runtime_max_bucket =
+            cuda_graph_precapture_max_batch(CudaGraphComponent::Target, 1, ctx.max_batch_size);
+        let runtime_batch_shapes = cuda_graph_precapture_batches(CudaGraphComponent::Target, 1)
+            .filter(|bucket| *bucket <= runtime_max_bucket)
+            .count();
+        let startup_max_bucket = widths
+            .iter()
+            .map(|(q_len, max_bucket)| {
+                (*max_bucket).min(cuda_graph_precapture_max_batch(
+                    CudaGraphComponent::Target,
+                    *q_len,
+                    ctx.max_batch_size,
+                ))
+            })
+            .max()
+            .unwrap_or(runtime_max_bucket);
+        let startup_shapes = widths.iter().fold(0usize, |total, (q_len, max_bucket)| {
+            let width_max_bucket = cuda_graph_precapture_max_batch(
+                CudaGraphComponent::Target,
+                *q_len,
+                ctx.max_batch_size,
+            );
             total.saturating_add(
-                batch_buckets
-                    .iter()
-                    .filter(|bucket| **bucket <= *max_bucket)
+                cuda_graph_precapture_batches(CudaGraphComponent::Target, *q_len)
+                    .filter(|bucket| *bucket <= (*max_bucket).min(width_max_bucket))
                     .count(),
             )
         });
         state.ensure_capacity(target_cuda_graph_cache_capacity(
             startup_shapes,
-            batch_buckets.len(),
+            runtime_batch_shapes,
         ));
         for (q_len, max_bucket) in widths {
             let inputs = CudaGraphPrecaptureInputs::new(ctx, q_len, &device, self.device_mapper())?;
@@ -2215,10 +2231,13 @@ impl MultimodalPipeline {
                 RecurrentBatchKind::Prefill
             };
             let graph_pad_slot = hybrid_slots.map(|_| GDN_PAD_SLOT);
-            for bucket in batch_buckets
-                .iter()
-                .copied()
-                .filter(|bucket| *bucket <= max_bucket.min(precapture_max_bucket))
+            let width_max_bucket = cuda_graph_precapture_max_batch(
+                CudaGraphComponent::Target,
+                q_len,
+                ctx.max_batch_size,
+            );
+            for bucket in cuda_graph_precapture_batches(CudaGraphComponent::Target, q_len)
+                .filter(|bucket| *bucket <= max_bucket.min(width_max_bucket))
             {
                 let Some(step) = CudaGraphDecodeStep::padded(
                     inputs.step_inputs(live.as_deref(), graph_pad_slot),
@@ -2260,7 +2279,7 @@ impl MultimodalPipeline {
         if captured > 0 {
             info!(
                 "Captured {captured} CUDA decode graphs through batch bucket {} in {:.2?}",
-                precapture_max_bucket,
+                startup_max_bucket,
                 start.elapsed()
             );
         }

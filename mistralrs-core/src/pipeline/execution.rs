@@ -8,13 +8,15 @@ use std::sync::Arc;
 
 #[cfg(feature = "cuda")]
 use candle_core::cuda_backend::cudarc::driver::CudaStream;
+#[cfg(feature = "cuda")]
+use rand_isaac::Isaac64Rng;
 
 #[cfg(feature = "cuda")]
 use crate::{prefix_cacher::PrefixCacheManagerV2, sequence::Sequence};
 
 #[cfg(feature = "cuda")]
 use super::{
-    sampling::{self, CudaGreedyBatchSubmission},
+    sampling::{self, CudaTokenBatchSubmission},
     ForwardInputsResult, ForwardStepResult, Pipeline,
 };
 
@@ -174,7 +176,7 @@ impl Drop for CudaDecodeTail {
 
 #[cfg(feature = "cuda")]
 pub(crate) struct CudaStepSubmission {
-    current: Option<CudaGreedyBatchSubmission>,
+    current: Option<CudaTokenBatchSubmission>,
     tail: Option<CudaDecodeTail>,
     duration: Duration,
 }
@@ -182,7 +184,7 @@ pub(crate) struct CudaStepSubmission {
 #[cfg(feature = "cuda")]
 impl CudaStepSubmission {
     fn new(
-        current: CudaGreedyBatchSubmission,
+        current: CudaTokenBatchSubmission,
         tail: Option<CudaDecodeTail>,
         duration: Duration,
     ) -> Self {
@@ -197,7 +199,7 @@ impl CudaStepSubmission {
         self.tail.is_some()
     }
 
-    pub(crate) fn into_parts(mut self) -> (CudaGreedyBatchSubmission, CudaStepPending) {
+    pub(crate) fn into_parts(mut self) -> (CudaTokenBatchSubmission, CudaStepPending) {
         let current = self
             .current
             .take()
@@ -269,7 +271,7 @@ impl CudaStepCompletion {
         prefix_cacher: &mut PrefixCacheManagerV2,
         disable_eos_stop: bool,
     ) -> candle_core::Result<StepCompletion> {
-        sampling::finish_greedy_batch(
+        sampling::finish_cuda_token_batch(
             pipeline,
             seqs,
             self.token_ids,
@@ -297,6 +299,7 @@ pub(crate) fn submit_forward_lookahead<P: Pipeline + ?Sized>(
     seqs: &[&mut Sequence],
     result: ForwardStepResult,
     duration: Duration,
+    rng: &Arc<std::sync::Mutex<Isaac64Rng>>,
 ) -> candle_core::Result<Result<CudaStepSubmission, ForwardStepResult>> {
     let started = Instant::now();
     let ForwardInputsResult::CausalGeneration { logits } = &result.output else {
@@ -312,7 +315,7 @@ pub(crate) fn submit_forward_lookahead<P: Pipeline + ?Sized>(
     }
     let stream = launch.graph_stream().clone();
     let Some(current) =
-        sampling::try_submit_greedy_batch_cuda(logits, seqs, launch.resident_input())?
+        sampling::try_submit_cuda_token_batch(logits, seqs, launch.resident_input(), rng)?
     else {
         return Ok(Err(result));
     };
@@ -343,9 +346,10 @@ pub(crate) fn submit_decode_tail<P: Pipeline + ?Sized>(
     mut tail: CudaDecodeTail,
     duration: Duration,
     lookahead: StepLookahead,
+    rng: &Arc<std::sync::Mutex<Isaac64Rng>>,
 ) -> candle_core::Result<CudaTailSubmission> {
     let started = Instant::now();
-    if tail.batch_size()? != seqs.len() || !sampling::can_submit_greedy_batch_cuda_seqs(seqs) {
+    if tail.batch_size()? != seqs.len() || !sampling::can_submit_cuda_token_batch_seqs(seqs) {
         return Ok(CudaTailSubmission::Unsupported(tail));
     }
 
@@ -356,10 +360,11 @@ pub(crate) fn submit_decode_tail<P: Pipeline + ?Sized>(
         let launch = tail
             .launch()
             .expect("CUDA decode tail launch was checked above");
-        let Some(current) = sampling::try_submit_greedy_batch_cuda(
+        let Some(current) = sampling::try_submit_cuda_token_batch(
             tail.causal_logits()?,
             seqs,
             launch.resident_input(),
+            rng,
         )?
         else {
             return Ok(CudaTailSubmission::Unsupported(tail));
@@ -367,7 +372,7 @@ pub(crate) fn submit_decode_tail<P: Pipeline + ?Sized>(
         current
     } else {
         let Some(current) =
-            sampling::try_submit_greedy_batch_cuda_owned(tail.causal_logits()?, seqs)?
+            sampling::try_submit_cuda_token_batch_owned(tail.causal_logits()?, seqs, rng)?
         else {
             return Ok(CudaTailSubmission::Unsupported(tail));
         };

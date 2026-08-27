@@ -1,6 +1,6 @@
 # DeepGEMM SM90 provider
 
-The production kernel family under `include/official/deep_gemm` is from
+The official kernel family under `include/official/deep_gemm` is from
 DeepGEMM 2.6.1 commit `559d79fb6994a58b8a15b4b93bf13ccc16edf247`.
 Its pinned CUTLASS commit `f3fde58372d33e9a5650ba7b80fc48b3b49d40c8`
 is fetched by cudaforge during the build. The Rust build generates an embedded
@@ -9,10 +9,12 @@ machine-local CUTLASS checkout.
 
 The headers directly under `include/deep_gemm` are the previous TensorRT-LLM
 DeepGEMM subset distributed by FlashInfer at commit
-`4927c0e15cb63a2abb6df09019c39a172222f0eb`. The production provider cannot
-select these kernels. They remain available behind
-`MISTRALRS_DEEPGEMM_ENABLE_LEGACY_DIAGNOSTICS` for the internal provider family
-A/B benchmark and regression diagnostics.
+`4927c0e15cb63a2abb6df09019c39a172222f0eb`. Production selects its swap-AB
+kernel with BN=8 or BN=16 WGMMA tiles for measured small-M projection shapes.
+The official SM90 1D2D family handles every other shape and uses measured
+small-M tiles where they beat its cost heuristic. The remaining TensorRT-LLM
+kernel paths stay behind `MISTRALRS_DEEPGEMM_ENABLE_LEGACY_DIAGNOSTICS` for
+internal family A/B benchmarks and regression diagnostics.
 
 The imported files retain their upstream SPDX and copyright headers. See
 `NOTICE`, `LICENSE-APACHE`, `LICENSE-MIT`, and `LICENSE-BSD-3-CLAUSE` for
@@ -29,6 +31,7 @@ weights, FP32 128x128 weight scales, and BF16 output on SM90. The official SM90
 substituted for that interface. Official launches enable PDL by default and
 `MISTRALRS_DEEPGEMM_PDL=0` is available for diagnostic comparison.
 
-To update the official snapshot, copy `deep_gemm/include/deep_gemm`, update both
-pinned commits and licenses, then run the provider smoke test, dense
-serving-shape parity and graph test, and the matched M512 family benchmark.
+To update either snapshot, copy the corresponding `deep_gemm/include/deep_gemm`
+tree, update the pinned commits and licenses, then run the provider selection
+and smoke tests, dense serving-shape parity and graph tests, and the matched
+family benchmarks.

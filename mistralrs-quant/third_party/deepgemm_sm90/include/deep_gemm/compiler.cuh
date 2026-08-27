@@ -48,6 +48,7 @@ namespace deep_gemm::jit {
 enum class KernelFamily {
   Legacy,
   Official1D2D,
+  SmallMSwapAB,
 };
 
 #ifndef MISTRALRS_DEEPGEMM_SOURCE_HASH
@@ -432,14 +433,19 @@ class Compiler {
     }
     ensurePrivateCacheRoot();
 
-    std::string name =
-        std::string(family == KernelFamily::Official1D2D
-                        ? "official_1d2d_"
-                        : (swap_ab ? "gemm_swap_ab_" : "gemm_")) +
-                       std::to_string(shape_n) + "_" + std::to_string(shape_k) + "_" +
-                       std::to_string(block_m) + "_" + std::to_string(block_n) + "_" +
-                       std::to_string(block_k) + "_" + std::to_string(num_groups) + "_" +
-                       std::to_string(num_stages) + "_" + std::to_string(num_tma_multicast) + "_" +
+    const char* family_name = nullptr;
+    if (family == KernelFamily::Official1D2D) {
+      family_name = "official_1d2d_";
+    } else if (family == KernelFamily::SmallMSwapAB) {
+      family_name = "small_m_swap_ab_";
+    } else {
+      family_name = swap_ab ? "gemm_swap_ab_" : "gemm_";
+    }
+    std::string name = std::string(family_name) + std::to_string(shape_n) + "_" +
+                       std::to_string(shape_k) + "_" + std::to_string(block_m) + "_" +
+                       std::to_string(block_n) + "_" + std::to_string(block_k) + "_" +
+                       std::to_string(num_groups) + "_" + std::to_string(num_stages) + "_" +
+                       std::to_string(num_tma_multicast) + "_" +
                        gemm_type_to_string(gemm_type);
     if (family == KernelFamily::Official1D2D) {
       name += "_" + std::to_string(num_sms) + "_" +

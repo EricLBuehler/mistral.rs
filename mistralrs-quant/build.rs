@@ -182,6 +182,7 @@ fn main() -> Result<(), String> {
             deepgemm_source_hash = deepgemm_jit_bundle::write(
                 &build_dir.join("deepgemm_jit_headers.rs"),
                 Path::new("third_party/deepgemm_sm90/include/official"),
+                Path::new("third_party/deepgemm_sm90/include/deep_gemm"),
                 &deepgemm_cutlass.join("include"),
                 deepgemm_generator_hash,
             )

@@ -981,6 +981,7 @@ impl Engine {
         lease: CudaDecodeBatchLease,
         worker: &CudaDecodeCompletionWorker,
         allow_lookahead: bool,
+        rng: &Arc<std::sync::Mutex<Isaac64Rng>>,
     ) -> candle_core::Result<Option<CudaDecodeBatchLease>> {
         let CudaDecodeBatchLease {
             rows,
@@ -1016,8 +1017,14 @@ impl Engine {
                 StepLookahead::Disabled
             };
             let mut pipeline = get_mut_arcmutex!(self.pipeline);
-            match submit_decode_tail(&mut *pipeline, &guards_mut, tail, Duration::ZERO, lookahead)?
-            {
+            match submit_decode_tail(
+                &mut *pipeline,
+                &guards_mut,
+                tail,
+                Duration::ZERO,
+                lookahead,
+                rng,
+            )? {
                 CudaTailSubmission::Submitted(submission) => submission,
                 CudaTailSubmission::Unsupported(mut unsupported) => {
                     unsupported.synchronize()?;
@@ -1048,7 +1055,7 @@ impl Engine {
             self.logger.add_decode_tokens_processed(guards_mut.len());
 
             let pipeline = get_mut_arcmutex!(self.pipeline);
-            if crate::pipeline::sampling::greedy_batch_will_finish(
+            if crate::pipeline::sampling::cuda_token_batch_will_finish(
                 &*pipeline,
                 &guards_mut,
                 completion.token_ids(),
@@ -1325,6 +1332,7 @@ impl Engine {
                             .as_ref()
                             .expect("CUDA decode lease requires a completion worker"),
                         allow_lookahead,
+                        &rng,
                     )
                     .await;
                 let mut guards = leased_rows
@@ -1987,7 +1995,7 @@ impl Engine {
                                     .collect::<Vec<_>>();
                                 let finish_result: candle_core::Result<_> = async {
                                     let pipeline = get_mut_arcmutex!(self.pipeline);
-                                    if crate::pipeline::sampling::greedy_batch_will_finish(
+                                    if crate::pipeline::sampling::cuda_token_batch_will_finish(
                                         &*pipeline,
                                         &completion_guards_mut,
                                         completion.token_ids(),

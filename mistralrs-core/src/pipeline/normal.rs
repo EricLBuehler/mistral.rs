@@ -28,6 +28,23 @@ use crate::kv_cache::RecurrentCheckpointStateSnapshot;
 type SeqRecurrentCheckpointSnapshots = Vec<(usize, RecurrentCheckpointStateSnapshot)>;
 #[cfg(feature = "cuda")]
 type HybridStateIndicesSnapshot = (Option<Tensor>, Option<Vec<u32>>);
+#[cfg(feature = "cuda")]
+struct CudaDecodeGraphCaptureInputs<'a> {
+    kv_cache: &'a [(Tensor, Tensor)],
+    flash_meta: &'a FlashParams,
+    block_size: usize,
+    recurrent_batch_kind: RecurrentBatchKind,
+}
+#[cfg(feature = "cuda")]
+struct CudaDecodeGraphForwardInput<'a> {
+    input_ids: &'a Tensor,
+    seqlen_offsets: &'a [usize],
+    context_lens: &'a [(usize, usize)],
+    position_ids: &'a [usize],
+    paged_attn_meta: Option<(Vec<(Tensor, Tensor)>, &'a PagedAttentionInputMetadata)>,
+    flash_meta: &'a FlashParams,
+    recurrent_batch_kind: RecurrentBatchKind,
+}
 use crate::kv_cache::{FullCacheManager, HybridCacheManager, NormalCacheManager};
 use crate::lora::Ordering;
 use crate::paged_attention::{calculate_cache_config, AttentionImplementation, CacheEngine};
@@ -184,11 +201,12 @@ pub(crate) fn build_normal_pipeline(
         })
         .transpose()?
         .unwrap_or(false);
-    let recurrent_pool_grew = if recurrent_transitions_supported {
-        model.reserve_recurrent_speculative_transition_storage()? || recurrent_pool_grew
-    } else {
-        recurrent_pool_grew
-    };
+    let recurrent_pool_grew =
+        if recurrent_transitions_supported && super::uses_recurrent_transition_log(model.cache()) {
+            model.reserve_recurrent_speculative_transition_storage()? || recurrent_pool_grew
+        } else {
+            recurrent_pool_grew
+        };
     let recurrent_pool_grew =
         model.reserve_recurrent_decode_deferred_storage()? || recurrent_pool_grew;
     #[cfg(feature = "cuda")]
@@ -1740,14 +1758,17 @@ impl crate::speculative::driver::SpeculativePipelineExt for NormalPipeline {
 impl NormalPipeline {
     fn try_cuda_decode_graph_forward(
         &self,
-        input_ids: &Tensor,
-        seqlen_offsets: &[usize],
-        context_lens: &[(usize, usize)],
-        position_ids: &[usize],
-        paged_attn_meta: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
-        flash_meta: &FlashParams,
-        recurrent_batch_kind: RecurrentBatchKind,
+        input: CudaDecodeGraphForwardInput<'_>,
     ) -> candle_core::Result<Option<CudaDecodeGraphReplay>> {
+        let CudaDecodeGraphForwardInput {
+            input_ids,
+            seqlen_offsets,
+            context_lens,
+            position_ids,
+            paged_attn_meta,
+            flash_meta,
+            recurrent_batch_kind,
+        } = input;
         if !cuda_decode_graphs_enabled() {
             record_cuda_graph_dispatch(
                 CudaGraphComponent::Target,
@@ -1820,7 +1841,7 @@ impl NormalPipeline {
             );
             return Ok(None);
         }
-        let Some(bucket) = cuda_graph_batch_bucket(batch) else {
+        let Some(bucket) = cuda_graph_batch_bucket(CudaGraphComponent::Target, q_len, batch) else {
             record_cuda_graph_dispatch(
                 CudaGraphComponent::Target,
                 CudaGraphDispatchMode::Eager,
@@ -1895,10 +1916,12 @@ impl NormalPipeline {
             &mut state,
             key,
             &step,
-            kv_cache.as_slice(),
-            flash_meta,
-            cache_config.block_size,
-            recurrent_batch_kind,
+            CudaDecodeGraphCaptureInputs {
+                kv_cache: kv_cache.as_slice(),
+                flash_meta,
+                block_size: cache_config.block_size,
+                recurrent_batch_kind,
+            },
             true,
         )?;
         super::synchronize_cuda_contexts(step.input_ids.device(), self.mapper.as_ref()).map_err(
@@ -1964,8 +1987,11 @@ impl NormalPipeline {
         let mut captured = 0usize;
         let inputs = CudaGraphPrecaptureInputs::new(ctx, 1, &device, self.device_mapper())?;
         let live = hybrid_slots.map(|pad_slot| vec![pad_slot]);
-        let max_bucket = cuda_graph_precapture_max_batch(ctx.max_batch_size);
-        for bucket in cuda_graph_precapture_batches().filter(|bucket| *bucket <= max_bucket) {
+        let max_bucket =
+            cuda_graph_precapture_max_batch(CudaGraphComponent::Target, 1, ctx.max_batch_size);
+        for bucket in cuda_graph_precapture_batches(CudaGraphComponent::Target, 1)
+            .filter(|bucket| *bucket <= max_bucket)
+        {
             let Some(step) = CudaGraphDecodeStep::padded(
                 inputs.step_inputs(live.as_deref(), hybrid_slots.map(|_| GDN_PAD_SLOT)),
                 bucket,
@@ -1986,10 +2012,12 @@ impl NormalPipeline {
                 &mut state,
                 key,
                 &step,
-                kv_cache.as_slice(),
-                &inputs.flash_meta,
-                cache_config.block_size,
-                RecurrentBatchKind::Decode,
+                CudaDecodeGraphCaptureInputs {
+                    kv_cache: kv_cache.as_slice(),
+                    flash_meta: &inputs.flash_meta,
+                    block_size: cache_config.block_size,
+                    recurrent_batch_kind: RecurrentBatchKind::Decode,
+                },
                 false,
             )?;
             captured += 1;
@@ -2010,12 +2038,15 @@ impl NormalPipeline {
         state: &mut CudaDecodeGraphState,
         key: CudaDecodeGraphKey,
         step: &CudaGraphDecodeStep,
-        kv_cache: &[(Tensor, Tensor)],
-        flash_meta: &FlashParams,
-        block_size: usize,
-        recurrent_batch_kind: RecurrentBatchKind,
+        inputs: CudaDecodeGraphCaptureInputs<'_>,
         rollback_live_state: bool,
     ) -> candle_core::Result<Tensor> {
+        let CudaDecodeGraphCaptureInputs {
+            kv_cache,
+            flash_meta,
+            block_size,
+            recurrent_batch_kind,
+        } = inputs;
         let graph_event =
             CudaGraphEventGuard::new(CudaGraphComponent::Target, CudaGraphEvent::Capture);
         let Device::Cuda(cuda_device) = step.input_ids.device() else {
@@ -2372,15 +2403,15 @@ impl Pipeline for NormalPipeline {
 
                 #[cfg(feature = "cuda")]
                 if lora_execution.is_none() && !return_raw_logits {
-                    match self.try_cuda_decode_graph_forward(
-                        &input_ids,
-                        &seqlen_offsets,
-                        &context_lens,
-                        &position_ids,
-                        paged_attn_meta.as_ref().map(|(a, b)| (a.clone(), b)),
-                        &flash_meta,
+                    match self.try_cuda_decode_graph_forward(CudaDecodeGraphForwardInput {
+                        input_ids: &input_ids,
+                        seqlen_offsets: &seqlen_offsets,
+                        context_lens: &context_lens,
+                        position_ids: &position_ids,
+                        paged_attn_meta: paged_attn_meta.as_ref().map(|(a, b)| (a.clone(), b)),
+                        flash_meta: &flash_meta,
                         recurrent_batch_kind,
-                    ) {
+                    }) {
                         Ok(Some(replay)) => {
                             return Ok(ForwardStepResult::cuda_decode(
                                 ForwardInputsResult::CausalGeneration {

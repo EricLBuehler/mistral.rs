@@ -1,6 +1,10 @@
 #![allow(clippy::cast_possible_truncation)]
 
 use candle_core::{DType, Device, Result, Tensor};
+#[cfg(feature = "cuda")]
+use mistralrs_quant::QuantizedActivation;
+#[cfg(any(feature = "cuda", test))]
+use mistralrs_quant::{ActivationQuantizationScheme, ActivationScaleLayout};
 
 use crate::kv_cache::RecurrentStateLayout;
 #[cfg(feature = "cuda")]
@@ -15,6 +19,12 @@ const GDN_DECODE_MIN_COMPUTE_MAJOR: i32 = 9;
 const GDN_DECODE_TUNED_COMPUTE_MAJOR: i32 = 9;
 pub(crate) const GDN_DECODE_K_DIM: usize = 128;
 pub(crate) const GDN_DECODE_V_DIM: usize = 128;
+#[cfg(any(feature = "cuda", test))]
+const GDN_FP8_GROUP_SIZE: usize = 128;
+#[cfg(any(feature = "cuda", test))]
+const GDN_FP8_SCALE_ROW_MAJOR: i32 = 0;
+#[cfg(any(feature = "cuda", test))]
+const GDN_FP8_SCALE_GROUP_MAJOR: i32 = 1;
 #[cfg(feature = "cuda")]
 const GDN_DECODE_FALLBACK_MAX_K: usize = 256;
 #[cfg(any(feature = "cuda", test))]
@@ -40,6 +50,7 @@ pub(crate) const GDN_SPEC_CHECKPOINT_MAX_CONV_WIDTH: usize = 16;
 pub(crate) const GDN_SPEC_CHECKPOINT_MAX_K: usize = 256;
 pub(crate) const GDN_SPEC_FUSED_MAX_TOKENS: usize = 8;
 pub(crate) const GDN_CHANNEL_BLOCK_SIZE: usize = 256;
+pub(crate) const GDN_DEFERRED_DECODE_MIN_BATCH: usize = 8;
 pub(crate) const GDN_DEFERRED_STATE_DEPTH: usize = 4;
 #[cfg(feature = "cuda")]
 #[allow(dead_code)]
@@ -61,8 +72,194 @@ const GDN_STATE_DTYPE_F32: i32 = 2;
 #[cfg(feature = "cuda")]
 const FLASHINFER_GDN_MIN_SEQ_LEN: usize = 32;
 
+#[cfg(any(feature = "cuda", test))]
+#[derive(Clone, Debug)]
+pub(crate) struct GdnFp8OutputSpec {
+    source_shape: [usize; 3],
+    scheme: ActivationQuantizationScheme,
+    scale_layout: ActivationScaleLayout,
+}
+
+#[cfg(any(feature = "cuda", test))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct GdnFp8OutputLayout {
+    rows: usize,
+    columns: usize,
+    groups: usize,
+    scale_stride_m: usize,
+    scale_elements: usize,
+    scale_layout_code: i32,
+}
+
+#[cfg(any(feature = "cuda", test))]
+impl GdnFp8OutputSpec {
+    pub(crate) fn new(
+        source_shape: [usize; 3],
+        scheme: ActivationQuantizationScheme,
+        scale_layout: ActivationScaleLayout,
+        num_v_heads: usize,
+        head_v_dim: usize,
+    ) -> Option<Self> {
+        let spec = Self {
+            source_shape,
+            scheme,
+            scale_layout,
+        };
+        spec.layout(num_v_heads, head_v_dim)?;
+        Some(spec)
+    }
+
+    fn layout(&self, num_v_heads: usize, head_v_dim: usize) -> Option<GdnFp8OutputLayout> {
+        if self.scheme.dtype != DType::F8E4M3
+            || self.scheme.block_shape != [1, GDN_FP8_GROUP_SIZE]
+            || head_v_dim != GDN_FP8_GROUP_SIZE
+            || num_v_heads == 0
+            || self.source_shape[0] == 0
+            || self.source_shape[1] == 0
+            || self.source_shape[2] != num_v_heads.checked_mul(head_v_dim)?
+        {
+            return None;
+        }
+        let rows = self.source_shape[0].checked_mul(self.source_shape[1])?;
+        let columns = self.source_shape[2];
+        let groups = num_v_heads;
+        let (scale_stride_m, scale_elements, scale_layout_code) = match self.scale_layout {
+            ActivationScaleLayout::RowMajor => {
+                // CUTLASS exposes [M, K/128] scales while consuming K-group-major storage.
+                (rows, rows.checked_mul(groups)?, GDN_FP8_SCALE_ROW_MAJOR)
+            }
+            ActivationScaleLayout::GroupMajor { row_alignment } => {
+                let alignment = row_alignment.get();
+                let aligned_rows = rows.checked_add(alignment - 1)? / alignment * alignment;
+                (
+                    aligned_rows,
+                    groups.checked_mul(aligned_rows)?,
+                    GDN_FP8_SCALE_GROUP_MAJOR,
+                )
+            }
+        };
+        Some(GdnFp8OutputLayout {
+            rows,
+            columns,
+            groups,
+            scale_stride_m,
+            scale_elements,
+            scale_layout_code,
+        })
+    }
+}
+
+#[cfg(feature = "cuda")]
+pub(crate) enum GdnPostOpOutput {
+    Tensor(Tensor),
+    Quantized(QuantizedActivation),
+}
+
+#[cfg(feature = "cuda")]
+impl GdnPostOpOutput {
+    #[cfg(test)]
+    fn into_tensor(self) -> Result<Tensor> {
+        match self {
+            Self::Tensor(output) => Ok(output),
+            Self::Quantized(_) => candle_core::bail!("expected a BF16 GDN test output"),
+        }
+    }
+
+    #[cfg(test)]
+    fn as_tensor(&self) -> Result<&Tensor> {
+        match self {
+            Self::Tensor(output) => Ok(output),
+            Self::Quantized(_) => candle_core::bail!("expected a BF16 GDN test output"),
+        }
+    }
+}
+
+#[cfg(test)]
+mod fp8_output_contract_tests {
+    use std::num::NonZeroUsize;
+
+    use super::*;
+
+    fn scheme() -> ActivationQuantizationScheme {
+        ActivationQuantizationScheme {
+            dtype: DType::F8E4M3,
+            block_shape: [1, GDN_FP8_GROUP_SIZE],
+        }
+    }
+
+    #[test]
+    fn gdn_fp8_group_major_contract_uses_aligned_projection_rows() {
+        let spec = GdnFp8OutputSpec::new(
+            [3, 5, 48 * GDN_FP8_GROUP_SIZE],
+            scheme(),
+            ActivationScaleLayout::GroupMajor {
+                row_alignment: NonZeroUsize::new(4).unwrap(),
+            },
+            48,
+            GDN_FP8_GROUP_SIZE,
+        )
+        .unwrap();
+        assert_eq!(
+            spec.layout(48, GDN_FP8_GROUP_SIZE),
+            Some(GdnFp8OutputLayout {
+                rows: 15,
+                columns: 48 * GDN_FP8_GROUP_SIZE,
+                groups: 48,
+                scale_stride_m: 16,
+                scale_elements: 48 * 16,
+                scale_layout_code: GDN_FP8_SCALE_GROUP_MAJOR,
+            })
+        );
+    }
+
+    #[test]
+    fn gdn_fp8_row_major_contract_uses_projection_groups() {
+        let spec = GdnFp8OutputSpec::new(
+            [2, 4, 16 * GDN_FP8_GROUP_SIZE],
+            scheme(),
+            ActivationScaleLayout::RowMajor,
+            16,
+            GDN_FP8_GROUP_SIZE,
+        )
+        .unwrap();
+        assert_eq!(
+            spec.layout(16, GDN_FP8_GROUP_SIZE),
+            Some(GdnFp8OutputLayout {
+                rows: 8,
+                columns: 16 * GDN_FP8_GROUP_SIZE,
+                groups: 16,
+                scale_stride_m: 8,
+                scale_elements: 8 * 16,
+                scale_layout_code: GDN_FP8_SCALE_ROW_MAJOR,
+            })
+        );
+    }
+
+    #[test]
+    fn gdn_fp8_contract_rejects_incompatible_dimensions_and_scheme() {
+        let row_major = ActivationScaleLayout::RowMajor;
+        assert!(GdnFp8OutputSpec::new([1, 1, 6144], scheme(), row_major, 48, 64).is_none());
+        assert!(GdnFp8OutputSpec::new([1, 1, 4096], scheme(), row_major, 48, 128).is_none());
+        assert!(GdnFp8OutputSpec::new(
+            [1, 1, 6144],
+            ActivationQuantizationScheme {
+                dtype: DType::F8E4M3,
+                block_shape: [1, 64],
+            },
+            row_major,
+            48,
+            128,
+        )
+        .is_none());
+    }
+}
+
 pub(crate) fn recurrent_state_dtype_supported(dtype: DType) -> bool {
     matches!(dtype, DType::F16 | DType::BF16 | DType::F32)
+}
+
+pub(crate) fn deferred_decode_batch_supported(batch_size: usize) -> bool {
+    batch_size >= GDN_DEFERRED_DECODE_MIN_BATCH
 }
 
 #[cfg(any(feature = "cuda", test))]
@@ -442,6 +639,75 @@ fn cuda_read_ptr_with_guard<'a, T: candle_core::cuda_backend::CudaDType + 'a>(
 }
 
 #[cfg(feature = "cuda")]
+struct CudaWritePtrOp<'a, T, F> {
+    stream: &'a std::sync::Arc<candle_core::cuda_backend::cudarc::driver::CudaStream>,
+    name: &'static str,
+    callback: std::cell::RefCell<Option<F>>,
+    marker: std::marker::PhantomData<T>,
+}
+
+#[cfg(feature = "cuda")]
+impl<T, F> candle_core::InplaceOp1 for CudaWritePtrOp<'_, T, F>
+where
+    T: candle_core::cuda_backend::CudaDType,
+    F: FnOnce(candle_core::cuda_backend::cudarc::driver::sys::CUdeviceptr) -> Result<()>,
+{
+    fn name(&self) -> &'static str {
+        "cuda-write-pointer"
+    }
+
+    fn cpu_fwd(
+        &self,
+        _storage: &mut candle_core::CpuStorage,
+        _layout: &candle_core::Layout,
+    ) -> Result<()> {
+        candle_core::bail!("{} must be CUDA", self.name)
+    }
+
+    fn cuda_fwd(
+        &self,
+        storage: &mut candle_core::CudaStorage,
+        layout: &candle_core::Layout,
+    ) -> Result<()> {
+        use candle_core::cuda_backend::cudarc::driver::DevicePtrMut;
+
+        let slice = storage.as_cuda_slice_mut::<T>()?;
+        if !std::sync::Arc::ptr_eq(slice.stream().context(), self.stream.context()) {
+            candle_core::bail!("{} belongs to another CUDA context", self.name);
+        }
+        let mut view = slice.slice_mut(layout.start_offset()..);
+        let (pointer, guard) = view.device_ptr_mut(self.stream);
+        let callback = self
+            .callback
+            .borrow_mut()
+            .take()
+            .expect("CUDA write callback runs once");
+        let result = callback(pointer);
+        drop(guard);
+        result
+    }
+}
+
+#[cfg(feature = "cuda")]
+fn with_cuda_write_ptr<T, F>(
+    tensor: &Tensor,
+    stream: &std::sync::Arc<candle_core::cuda_backend::cudarc::driver::CudaStream>,
+    name: &'static str,
+    callback: F,
+) -> Result<()>
+where
+    T: candle_core::cuda_backend::CudaDType,
+    F: FnOnce(candle_core::cuda_backend::cudarc::driver::sys::CUdeviceptr) -> Result<()>,
+{
+    tensor.inplace_op1(&CudaWritePtrOp::<T, F> {
+        stream,
+        name,
+        callback: std::cell::RefCell::new(Some(callback)),
+        marker: std::marker::PhantomData,
+    })
+}
+
+#[cfg(feature = "cuda")]
 fn cuda_inplace_ptr_with_guard<'a, T: candle_core::cuda_backend::CudaDType + 'a>(
     storage: &'a candle_core::Storage,
     layout: &candle_core::Layout,
@@ -492,6 +758,470 @@ fn cuda_recurrent_state_inplace_ptr_with_guard<'a>(
         other => candle_core::bail!("{name} has unsupported dtype {other:?}"),
     };
     Ok((pointer, dtype_code, guard))
+}
+
+#[derive(Clone, Copy)]
+#[cfg_attr(not(feature = "cuda"), allow(dead_code))]
+pub(crate) struct GdnPackedToPadded<'a> {
+    pub source: &'a Tensor,
+    pub cu_seqlens: &'a Tensor,
+    pub batch_size: usize,
+    pub token_count: usize,
+    pub padded_len: usize,
+    pub padding_value: f32,
+}
+
+#[derive(Clone, Copy)]
+#[cfg_attr(not(feature = "cuda"), allow(dead_code))]
+pub(crate) struct GdnPaddedToPacked<'a> {
+    pub source: &'a Tensor,
+    pub cu_seqlens: &'a Tensor,
+    pub batch_size: usize,
+    pub token_count: usize,
+}
+
+#[derive(Clone, Copy)]
+#[cfg_attr(not(feature = "cuda"), allow(dead_code))]
+pub(crate) struct GdnRaggedConvState<'a> {
+    pub padded_input: &'a Tensor,
+    pub initial_state: &'a Tensor,
+    pub cu_seqlens: &'a Tensor,
+    pub batch_size: usize,
+}
+
+#[cfg(feature = "cuda")]
+fn gdn_ragged_dense_suffix(source: &Tensor) -> Option<(usize, usize)> {
+    let dims = source.dims();
+    let strides = source.stride();
+    if dims.len() < 2 || dims.contains(&0) {
+        return None;
+    }
+    let mut width = 1usize;
+    for axis in (2..dims.len()).rev() {
+        if dims[axis] > 1 && strides[axis] != width {
+            return None;
+        }
+        width = width.checked_mul(dims[axis])?;
+    }
+    (strides[1] >= width).then_some((width, strides[1]))
+}
+
+#[cfg(feature = "cuda")]
+#[derive(Clone, Copy)]
+struct GdnPaddedToPackedGeometry {
+    width: usize,
+    batch_stride: usize,
+    token_stride: usize,
+    feature_stride: usize,
+    feature_inner_width: usize,
+}
+
+#[cfg(feature = "cuda")]
+fn gdn_padded_to_packed_geometry(source: &Tensor) -> Option<GdnPaddedToPackedGeometry> {
+    let dims = source.dims();
+    let strides = source.stride();
+    if let Some((width, token_stride)) = gdn_ragged_dense_suffix(source) {
+        return Some(GdnPaddedToPackedGeometry {
+            width,
+            batch_stride: strides[0],
+            token_stride,
+            feature_stride: 0,
+            feature_inner_width: width,
+        });
+    }
+    if dims.len() != 4 || dims.contains(&0) || strides[3] != 1 {
+        return None;
+    }
+    Some(GdnPaddedToPackedGeometry {
+        width: dims[2].checked_mul(dims[3])?,
+        batch_stride: strides[0],
+        token_stride: strides[1],
+        feature_stride: strides[2],
+        feature_inner_width: dims[3],
+    })
+}
+
+#[cfg(feature = "cuda")]
+fn validate_gdn_ragged_metadata(
+    source: &Tensor,
+    cu_seqlens: &Tensor,
+    batch_size: usize,
+) -> Result<()> {
+    if batch_size == 0
+        || cu_seqlens.dtype() != DType::U32
+        || cu_seqlens.dims() != [batch_size + 1]
+        || !cu_seqlens.is_contiguous()
+        || !cu_seqlens.device().same_device(source.device())
+    {
+        candle_core::bail!("packed GDN ragged metadata is incompatible");
+    }
+    Ok(())
+}
+
+#[cfg(feature = "cuda")]
+pub(crate) fn try_gdn_packed_to_padded_cuda(
+    context: GdnPackedToPadded<'_>,
+) -> Result<Option<Tensor>> {
+    use candle::cuda_backend::cudarc::driver::{DevicePtrMut, DeviceRepr};
+    use candle_core as candle;
+
+    fn launch<T: candle::cuda_backend::CudaDType + DeviceRepr>(
+        context: GdnPackedToPadded<'_>,
+        width: usize,
+        token_stride: usize,
+        output_shape: Vec<usize>,
+        dtype_code: i32,
+    ) -> Result<Tensor> {
+        use candle::cuda_backend::CudaStorage;
+
+        let GdnPackedToPadded {
+            source,
+            cu_seqlens,
+            batch_size,
+            padded_len,
+            padding_value,
+            ..
+        } = context;
+        let dev = source.device().as_cuda_device()?;
+        let stream = dev.cuda_stream();
+        let output_elements = batch_size
+            .checked_mul(padded_len)
+            .and_then(|elements| elements.checked_mul(width))
+            .ok_or_else(|| candle::Error::msg("packed GDN padded output size overflow"))?;
+        let (source_storage, source_layout) = source.storage_and_layout();
+        let (source_ptr, source_guard) = cuda_read_ptr_with_guard::<T>(
+            &source_storage,
+            source_layout,
+            &stream,
+            "packed GDN source",
+        )?;
+        let (seqlens_storage, seqlens_layout) = cu_seqlens.storage_and_layout();
+        let (seqlens_ptr, seqlens_guard) = cuda_read_ptr_with_guard::<u32>(
+            &seqlens_storage,
+            seqlens_layout,
+            &stream,
+            "packed GDN cu_seqlens",
+        )?;
+        let mut output = unsafe { dev.alloc::<T>(output_elements) }?;
+        let (output_ptr, output_guard) = output.device_ptr_mut(&stream);
+        unsafe {
+            crate::cuda::ffi::gdn_packed_to_padded(
+                source_ptr as *const core::ffi::c_void,
+                output_ptr as *mut core::ffi::c_void,
+                seqlens_ptr as *const u32,
+                i32::try_from(batch_size).map_err(candle::Error::wrap)?,
+                i32::try_from(padded_len).map_err(candle::Error::wrap)?,
+                i32::try_from(width).map_err(candle::Error::wrap)?,
+                i64::try_from(token_stride).map_err(candle::Error::wrap)?,
+                padding_value,
+                dtype_code,
+                stream.cu_stream() as i64,
+            );
+        }
+        drop(output_guard);
+        drop(seqlens_guard);
+        drop(source_guard);
+        drop(seqlens_storage);
+        drop(source_storage);
+        Ok(Tensor::from((
+            candle::Storage::Cuda(CudaStorage::wrap_cuda_slice(output, dev.clone())),
+            candle::Shape::from_dims(&output_shape),
+        )))
+    }
+
+    let GdnPackedToPadded {
+        source,
+        cu_seqlens,
+        batch_size,
+        token_count,
+        padded_len,
+        ..
+    } = context;
+    if !source.device().is_cuda() || !matches!(source.dtype(), DType::BF16 | DType::F32) {
+        return Ok(None);
+    }
+    validate_gdn_ragged_metadata(source, cu_seqlens, batch_size)?;
+    let Some((width, token_stride)) = gdn_ragged_dense_suffix(source) else {
+        return Ok(None);
+    };
+    let dims = source.dims();
+    if dims[0] != 1 || dims[1] != token_count || padded_len == 0 {
+        candle::bail!("packed GDN source dimensions are incompatible");
+    }
+    let mut output_shape = dims.to_vec();
+    output_shape[0] = batch_size;
+    output_shape[1] = padded_len;
+    match source.dtype() {
+        DType::BF16 => launch::<half::bf16>(
+            context,
+            width,
+            token_stride,
+            output_shape,
+            GDN_STATE_DTYPE_BF16,
+        ),
+        DType::F32 => launch::<f32>(
+            context,
+            width,
+            token_stride,
+            output_shape,
+            GDN_STATE_DTYPE_F32,
+        ),
+        _ => unreachable!(),
+    }
+    .map(Some)
+}
+
+#[cfg(not(feature = "cuda"))]
+pub(crate) fn try_gdn_packed_to_padded_cuda(
+    _context: GdnPackedToPadded<'_>,
+) -> Result<Option<Tensor>> {
+    Ok(None)
+}
+
+#[cfg(feature = "cuda")]
+pub(crate) fn try_gdn_padded_to_packed_cuda(
+    context: GdnPaddedToPacked<'_>,
+) -> Result<Option<Tensor>> {
+    use candle::cuda_backend::cudarc::driver::{DevicePtrMut, DeviceRepr};
+    use candle_core as candle;
+
+    fn launch<T: candle::cuda_backend::CudaDType + DeviceRepr>(
+        context: GdnPaddedToPacked<'_>,
+        geometry: GdnPaddedToPackedGeometry,
+        output_shape: Vec<usize>,
+        dtype_code: i32,
+    ) -> Result<Tensor> {
+        use candle::cuda_backend::CudaStorage;
+
+        let GdnPaddedToPacked {
+            source,
+            cu_seqlens,
+            batch_size,
+            token_count,
+        } = context;
+        let GdnPaddedToPackedGeometry {
+            width,
+            batch_stride,
+            token_stride,
+            feature_stride,
+            feature_inner_width,
+        } = geometry;
+        let padded_len = source.dim(1)?;
+        let dev = source.device().as_cuda_device()?;
+        let stream = dev.cuda_stream();
+        let output_elements = token_count
+            .checked_mul(width)
+            .ok_or_else(|| candle::Error::msg("packed GDN output size overflow"))?;
+        let (source_storage, source_layout) = source.storage_and_layout();
+        let (source_ptr, source_guard) = cuda_read_ptr_with_guard::<T>(
+            &source_storage,
+            source_layout,
+            &stream,
+            "padded GDN source",
+        )?;
+        let (seqlens_storage, seqlens_layout) = cu_seqlens.storage_and_layout();
+        let (seqlens_ptr, seqlens_guard) = cuda_read_ptr_with_guard::<u32>(
+            &seqlens_storage,
+            seqlens_layout,
+            &stream,
+            "packed GDN cu_seqlens",
+        )?;
+        let mut output = unsafe { dev.alloc::<T>(output_elements) }?;
+        let (output_ptr, output_guard) = output.device_ptr_mut(&stream);
+        unsafe {
+            crate::cuda::ffi::gdn_padded_to_packed(
+                source_ptr as *const core::ffi::c_void,
+                output_ptr as *mut core::ffi::c_void,
+                seqlens_ptr as *const u32,
+                i32::try_from(batch_size).map_err(candle::Error::wrap)?,
+                i32::try_from(padded_len).map_err(candle::Error::wrap)?,
+                i32::try_from(width).map_err(candle::Error::wrap)?,
+                i64::try_from(batch_stride).map_err(candle::Error::wrap)?,
+                i64::try_from(token_stride).map_err(candle::Error::wrap)?,
+                i64::try_from(feature_stride).map_err(candle::Error::wrap)?,
+                i32::try_from(feature_inner_width).map_err(candle::Error::wrap)?,
+                dtype_code,
+                stream.cu_stream() as i64,
+            );
+        }
+        drop(output_guard);
+        drop(seqlens_guard);
+        drop(source_guard);
+        drop(seqlens_storage);
+        drop(source_storage);
+        Ok(Tensor::from((
+            candle::Storage::Cuda(CudaStorage::wrap_cuda_slice(output, dev.clone())),
+            candle::Shape::from_dims(&output_shape),
+        )))
+    }
+
+    let GdnPaddedToPacked {
+        source,
+        cu_seqlens,
+        batch_size,
+        token_count,
+    } = context;
+    if !source.device().is_cuda() || !matches!(source.dtype(), DType::BF16 | DType::F32) {
+        return Ok(None);
+    }
+    validate_gdn_ragged_metadata(source, cu_seqlens, batch_size)?;
+    let Some(geometry) = gdn_padded_to_packed_geometry(source) else {
+        return Ok(None);
+    };
+    let dims = source.dims();
+    if dims[0] != batch_size || token_count == 0 {
+        candle::bail!("padded GDN source dimensions are incompatible");
+    }
+    let mut output_shape = dims.to_vec();
+    output_shape[0] = 1;
+    output_shape[1] = token_count;
+    match source.dtype() {
+        DType::BF16 => launch::<half::bf16>(context, geometry, output_shape, GDN_STATE_DTYPE_BF16),
+        DType::F32 => launch::<f32>(context, geometry, output_shape, GDN_STATE_DTYPE_F32),
+        _ => unreachable!(),
+    }
+    .map(Some)
+}
+
+#[cfg(not(feature = "cuda"))]
+pub(crate) fn try_gdn_padded_to_packed_cuda(
+    _context: GdnPaddedToPacked<'_>,
+) -> Result<Option<Tensor>> {
+    Ok(None)
+}
+
+#[cfg(feature = "cuda")]
+pub(crate) fn try_gdn_extract_ragged_conv_state_cuda(
+    context: GdnRaggedConvState<'_>,
+) -> Result<Option<Tensor>> {
+    use candle::cuda_backend::cudarc::driver::{DevicePtrMut, DeviceRepr};
+    use candle_core as candle;
+
+    fn launch<T: candle::cuda_backend::CudaDType + DeviceRepr>(
+        context: GdnRaggedConvState<'_>,
+        input_batch_stride: usize,
+        input_token_stride: usize,
+        output_elements: usize,
+        dtype_code: i32,
+    ) -> Result<Tensor> {
+        use candle::cuda_backend::CudaStorage;
+
+        let GdnRaggedConvState {
+            padded_input,
+            initial_state,
+            cu_seqlens,
+            batch_size,
+        } = context;
+        let (_, padded_len, channels) = padded_input.dims3()?;
+        let state_width = initial_state.dim(2)?;
+        let dev = padded_input.device().as_cuda_device()?;
+        let stream = dev.cuda_stream();
+        let (input_storage, input_layout) = padded_input.storage_and_layout();
+        let (input_ptr, input_guard) = cuda_read_ptr_with_guard::<T>(
+            &input_storage,
+            input_layout,
+            &stream,
+            "padded GDN convolution input",
+        )?;
+        let (state_storage, state_layout) = initial_state.storage_and_layout();
+        let (state_ptr, state_guard) = cuda_read_ptr_with_guard::<T>(
+            &state_storage,
+            state_layout,
+            &stream,
+            "initial GDN convolution state",
+        )?;
+        let (seqlens_storage, seqlens_layout) = cu_seqlens.storage_and_layout();
+        let (seqlens_ptr, seqlens_guard) = cuda_read_ptr_with_guard::<u32>(
+            &seqlens_storage,
+            seqlens_layout,
+            &stream,
+            "packed GDN cu_seqlens",
+        )?;
+        let mut output = unsafe { dev.alloc::<T>(output_elements) }?;
+        let (output_ptr, output_guard) = output.device_ptr_mut(&stream);
+        unsafe {
+            crate::cuda::ffi::gdn_extract_ragged_conv_state(
+                input_ptr as *const core::ffi::c_void,
+                state_ptr as *const core::ffi::c_void,
+                output_ptr as *mut core::ffi::c_void,
+                seqlens_ptr as *const u32,
+                i32::try_from(batch_size).map_err(candle::Error::wrap)?,
+                i32::try_from(padded_len).map_err(candle::Error::wrap)?,
+                i32::try_from(channels).map_err(candle::Error::wrap)?,
+                i32::try_from(state_width).map_err(candle::Error::wrap)?,
+                i64::try_from(input_batch_stride).map_err(candle::Error::wrap)?,
+                i64::try_from(input_token_stride).map_err(candle::Error::wrap)?,
+                dtype_code,
+                stream.cu_stream() as i64,
+            );
+        }
+        drop(output_guard);
+        drop(seqlens_guard);
+        drop(state_guard);
+        drop(input_guard);
+        drop(seqlens_storage);
+        drop(state_storage);
+        drop(input_storage);
+        Ok(Tensor::from((
+            candle::Storage::Cuda(CudaStorage::wrap_cuda_slice(output, dev.clone())),
+            initial_state.shape().clone(),
+        )))
+    }
+
+    let GdnRaggedConvState {
+        padded_input,
+        initial_state,
+        cu_seqlens,
+        batch_size,
+    } = context;
+    if !padded_input.device().is_cuda() || !matches!(padded_input.dtype(), DType::BF16 | DType::F32)
+    {
+        return Ok(None);
+    }
+    validate_gdn_ragged_metadata(padded_input, cu_seqlens, batch_size)?;
+    let (input_batch, _, channels) = padded_input.dims3()?;
+    let (state_batch, state_channels, state_width) = initial_state.dims3()?;
+    let Some((input_width, input_token_stride)) = gdn_ragged_dense_suffix(padded_input) else {
+        return Ok(None);
+    };
+    let input_batch_stride = padded_input.stride()[0];
+    if input_batch != batch_size
+        || input_width != channels
+        || state_batch != batch_size
+        || state_channels != channels
+        || state_width == 0
+        || initial_state.dtype() != padded_input.dtype()
+        || !initial_state.device().same_device(padded_input.device())
+        || !initial_state.is_contiguous()
+    {
+        candle::bail!("ragged GDN convolution state dimensions are incompatible");
+    }
+    let output_elements = initial_state.elem_count();
+    match padded_input.dtype() {
+        DType::BF16 => launch::<half::bf16>(
+            context,
+            input_batch_stride,
+            input_token_stride,
+            output_elements,
+            GDN_STATE_DTYPE_BF16,
+        ),
+        DType::F32 => launch::<f32>(
+            context,
+            input_batch_stride,
+            input_token_stride,
+            output_elements,
+            GDN_STATE_DTYPE_F32,
+        ),
+        _ => unreachable!(),
+    }
+    .map(Some)
+}
+
+#[cfg(not(feature = "cuda"))]
+pub(crate) fn try_gdn_extract_ragged_conv_state_cuda(
+    _context: GdnRaggedConvState<'_>,
+) -> Result<Option<Tensor>> {
+    Ok(None)
 }
 
 /// Which rows of the recurrent state a GDN kernel reads and writes. `Gathered` means the state is a
@@ -1603,6 +2333,11 @@ fn flashinfer_sm90_prefill(launch: FusedPrefillRecurrence<'_>) -> Result<FusedPr
     let num_v_heads_i32 = i32::try_from(num_v_heads).map_err(candle::Error::wrap)?;
     let sm_count_i32 =
         i32::try_from(properties.multiprocessor_count).map_err(candle::Error::wrap)?;
+    let has_slots = if matches!(slots, GdnStateSlots::Pooled(_)) {
+        1
+    } else {
+        0
+    };
     let workspace_bytes = unsafe {
         crate::cuda::ffi::mistralrs_flashinfer_gdn_sm90_workspace_size(
             batch_size_i32,
@@ -1610,6 +2345,7 @@ fn flashinfer_sm90_prefill(launch: FusedPrefillRecurrence<'_>) -> Result<FusedPr
             num_k_heads_i32,
             num_v_heads_i32,
             sm_count_i32,
+            has_slots,
         )
     };
     if workspace_bytes == 0 {
@@ -2399,6 +3135,8 @@ pub struct GdnSpeculativeRmsNormGate<'a> {
     pub gate: &'a Tensor,
     pub weight: &'a Tensor,
     pub eps: f64,
+    #[cfg(feature = "cuda")]
+    pub quantization: Option<GdnFp8OutputSpec>,
 }
 
 #[allow(dead_code)]
@@ -2432,6 +3170,9 @@ pub struct GdnSpeculativeTransitions {
 
 #[allow(dead_code)]
 pub struct GdnSpeculativeRecurrenceOutput {
+    #[cfg(feature = "cuda")]
+    pub output: GdnPostOpOutput,
+    #[cfg(not(feature = "cuda"))]
     pub output: Tensor,
     pub transitions: Option<GdnSpeculativeTransitions>,
 }
@@ -2444,6 +3185,7 @@ pub fn speculative_recurrence_checkpoints_cuda(
     use candle::cuda_backend::cudarc::driver::DevicePtr;
     use candle_core as candle;
     use core::ffi::c_void;
+    use float8::F8E4M3;
 
     fn cuda_fwd<
         T: candle::cuda_backend::CudaDType + candle::cuda_backend::cudarc::driver::DeviceRepr,
@@ -2650,9 +3392,35 @@ pub fn speculative_recurrence_checkpoints_cuda(
                         post_op.gate.dims()
                     ),
                 };
-                Ok((post_op, gate_strides))
+                let fp8_layout = post_op
+                    .quantization
+                    .as_ref()
+                    .map(|spec| {
+                        if mixed_qkv.dtype() != DType::BF16 {
+                            candle::bail!(
+                                "quantized GDN speculative output requires BF16 activations"
+                            );
+                        }
+                        let layout = spec.layout(num_v_heads, head_v_dim).ok_or_else(|| {
+                            candle::Error::msg(
+                                "quantized GDN speculative output has an incompatible contract",
+                            )
+                        })?;
+                        if layout.rows != batch_size * seq_len {
+                            candle::bail!(
+                                "quantized GDN speculative output row count is incompatible"
+                            );
+                        }
+                        Ok(layout)
+                    })
+                    .transpose()?;
+                Ok((post_op, gate_strides, fp8_layout))
             })
             .transpose()?;
+        let fp8_spec = post_op
+            .as_ref()
+            .and_then(|(post_op, _, _)| post_op.quantization.clone());
+        let fp8_layout = post_op.as_ref().and_then(|(_, _, fp8_layout)| *fp8_layout);
 
         let mixed_qkv = mixed_qkv.contiguous()?;
         let b_strides = {
@@ -2692,7 +3460,7 @@ pub fn speculative_recurrence_checkpoints_cuda(
         let (state_ptr, state_dtype) = cuda_recurrent_state_ptr(state_pool, "state_pool")?;
         let slots_ptr = cuda_ptr!(active_slots, u32, "active_slots") as *const u32;
         let (gate_ptr, norm_weight, gate_strides, norm_eps) =
-            if let Some((post_op, gate_strides)) = post_op {
+            if let Some((post_op, gate_strides, _)) = post_op {
                 let gate_ptr = cuda_ptr!(post_op.gate, T, "gate") as *const c_void;
                 let norm_weight = post_op.weight.contiguous()?;
                 (
@@ -2709,7 +3477,17 @@ pub fn speculative_recurrence_checkpoints_cuda(
         } else {
             std::ptr::null()
         };
-        let output = unsafe { dev.alloc::<T>(batch_size * num_v_heads * seq_len * head_v_dim) }?;
+        let output_elements = batch_size * num_v_heads * seq_len * head_v_dim;
+        let mut output = fp8_layout
+            .is_none()
+            .then(|| unsafe { dev.alloc::<T>(output_elements) })
+            .transpose()?;
+        let mut quantized_output = fp8_layout
+            .map(|_| unsafe { dev.alloc::<F8E4M3>(output_elements) })
+            .transpose()?;
+        let mut output_scales = fp8_layout
+            .map(|layout| unsafe { dev.alloc::<f32>(layout.scale_elements) })
+            .transpose()?;
         let direct_transitions = record_transitions && pending.is_some();
         let mut transition_key = (record_transitions && !direct_transitions)
             .then(|| unsafe { dev.alloc::<f32>(batch_size * seq_len * num_k_heads * head_k_dim) })
@@ -2771,6 +3549,19 @@ pub fn speculative_recurrence_checkpoints_cuda(
                 buffer.device_ptr(buffer.stream()).0 as *mut f32
             });
         let stream = dev.cuda_stream().cu_stream() as i64;
+        let output_ptr = output.as_mut().map_or(std::ptr::null_mut(), |output| {
+            output.device_ptr(output.stream()).0 as *mut c_void
+        });
+        let quantized_output_ptr = quantized_output
+            .as_mut()
+            .map_or(std::ptr::null_mut(), |output| {
+                output.device_ptr(output.stream()).0 as *mut c_void
+            });
+        let output_scales_ptr = output_scales
+            .as_mut()
+            .map_or(std::ptr::null_mut(), |scales| {
+                scales.device_ptr(scales.stream()).0 as *mut f32
+            });
 
         unsafe {
             crate::cuda::ffi::gdn_speculative_recurrence_checkpoints(
@@ -2780,7 +3571,11 @@ pub fn speculative_recurrence_checkpoints_cuda(
                 a_log_ptr,
                 dt_bias_ptr,
                 state_ptr,
-                output.device_ptr(output.stream()).0 as *mut c_void,
+                output_ptr,
+                quantized_output_ptr,
+                output_scales_ptr,
+                fp8_layout.map_or(0, |layout| layout.scale_stride_m as i32),
+                fp8_layout.map_or(GDN_FP8_SCALE_ROW_MAJOR, |layout| layout.scale_layout_code),
                 slots_ptr,
                 gate_ptr,
                 norm_weight_ptr,
@@ -2823,18 +3618,49 @@ pub fn speculative_recurrence_checkpoints_cuda(
             );
         }
 
-        let output_storage =
-            candle::Storage::Cuda(candle::CudaStorage::wrap_cuda_slice(output, dev.clone()));
-        let output = if fused_post_op {
-            Tensor::from((
-                output_storage,
-                (batch_size, seq_len, num_v_heads, head_v_dim),
-            ))
+        let output = if let (Some(spec), Some(layout)) = (fp8_spec, fp8_layout) {
+            let quantized_output = Tensor::from((
+                candle::Storage::Cuda(candle::CudaStorage::wrap_cuda_slice(
+                    quantized_output.expect("FP8 output allocation follows its layout"),
+                    dev.clone(),
+                )),
+                (layout.rows, layout.columns),
+            ));
+            let scale_shape = match spec.scale_layout {
+                ActivationScaleLayout::RowMajor => [layout.rows, layout.groups],
+                ActivationScaleLayout::GroupMajor { .. } => [layout.groups, layout.scale_stride_m],
+            };
+            let scales = Tensor::from((
+                candle::Storage::Cuda(candle::CudaStorage::wrap_cuda_slice(
+                    output_scales.expect("FP8 scale allocation follows its layout"),
+                    dev.clone(),
+                )),
+                (scale_shape[0], scale_shape[1]),
+            ));
+            GdnPostOpOutput::Quantized(QuantizedActivation::new_with_scale_layout(
+                quantized_output,
+                scales,
+                spec.source_shape.to_vec(),
+                DType::BF16,
+                spec.scheme,
+                spec.scale_layout,
+            )?)
         } else {
-            Tensor::from((
-                output_storage,
-                (batch_size * num_v_heads, seq_len, head_v_dim),
-            ))
+            let output_storage = candle::Storage::Cuda(candle::CudaStorage::wrap_cuda_slice(
+                output.expect("BF16 output allocation follows the FP8 contract"),
+                dev.clone(),
+            ));
+            GdnPostOpOutput::Tensor(if fused_post_op {
+                Tensor::from((
+                    output_storage,
+                    (batch_size, seq_len, num_v_heads, head_v_dim),
+                ))
+            } else {
+                Tensor::from((
+                    output_storage,
+                    (batch_size * num_v_heads, seq_len, head_v_dim),
+                ))
+            })
         };
         let transitions = match (transition_key, transition_delta, transition_decay) {
             (Some(key), Some(delta), Some(decay)) => Some(GdnSpeculativeTransitions {
@@ -2899,11 +3725,15 @@ pub struct GdnDeferredRecurrence<'a> {
     pub head_v_dim: usize,
     pub tiled_v_heads: bool,
     pub state_layout: RecurrentStateLayout,
+    #[cfg(feature = "cuda")]
+    pub quantization: Option<GdnFp8OutputSpec>,
 }
 
 #[cfg(feature = "cuda")]
-pub fn deferred_recurrence_rmsnorm_gate_cuda(context: GdnDeferredRecurrence<'_>) -> Result<Tensor> {
-    use candle::cuda_backend::cudarc::driver::DevicePtr;
+pub fn deferred_recurrence_rmsnorm_gate_cuda(
+    context: GdnDeferredRecurrence<'_>,
+) -> Result<GdnPostOpOutput> {
+    use candle::cuda_backend::cudarc::driver::DevicePtrMut;
     use candle_core as candle;
     use core::ffi::c_void;
 
@@ -2928,6 +3758,7 @@ pub fn deferred_recurrence_rmsnorm_gate_cuda(context: GdnDeferredRecurrence<'_>)
         head_v_dim,
         tiled_v_heads,
         state_layout,
+        quantization,
     } = context;
     let (batch_size, seq_len, conv_dim) = mixed_qkv.dims3()?;
     if batch_size == 0 || seq_len != 1 || num_k_heads == 0 || num_v_heads == 0 {
@@ -3008,6 +3839,18 @@ pub fn deferred_recurrence_rmsnorm_gate_cuda(context: GdnDeferredRecurrence<'_>)
     {
         candle::bail!("deferred GDN recurrence requires compute capability 9.x");
     }
+    let fp8_layout = quantization
+        .as_ref()
+        .map(|spec| {
+            let layout = spec.layout(num_v_heads, head_v_dim).ok_or_else(|| {
+                candle::Error::msg("deferred GDN output has an incompatible FP8 contract")
+            })?;
+            if layout.rows != batch_size {
+                candle::bail!("deferred GDN FP8 output row count is incompatible")
+            }
+            Ok(layout)
+        })
+        .transpose()?;
     for tensor in [
         b,
         a,
@@ -3054,57 +3897,221 @@ pub fn deferred_recurrence_rmsnorm_gate_cuda(context: GdnDeferredRecurrence<'_>)
         [strides[0], strides[2]]
     };
     let dev = device.as_cuda_device()?;
-    macro_rules! cuda_ptr {
-        ($tensor:expr, $ty:ty, $name:literal) => {{
-            let (storage, layout) = $tensor.storage_and_layout();
-            let storage = match &*storage {
-                candle::Storage::Cuda(storage) => storage.as_cuda_slice::<$ty>()?,
-                _ => candle::bail!(concat!($name, " must be CUDA")),
-            };
-            let pointer = storage
-                .slice(layout.start_offset()..)
-                .device_ptr(storage.stream())
-                .0;
-            pointer
-        }};
+    let stream = dev.cuda_stream();
+    macro_rules! cuda_read_ptr {
+        ($ptr:ident, $guard:ident, $storage:ident, $layout:ident, $tensor:expr, $ty:ty, $name:literal) => {
+            let ($storage, $layout) = $tensor.storage_and_layout();
+            let ($ptr, $guard) =
+                cuda_read_ptr_with_guard::<$ty>(&$storage, $layout, &stream, $name)?;
+        };
     }
-    let output = unsafe { dev.alloc::<half::bf16>(batch_size * num_v_heads * head_v_dim) }?;
-    unsafe {
-        crate::cuda::ffi::gdn_deferred_recurrence_rmsnorm_gate_value_major_128(
-            cuda_ptr!(mixed_qkv, half::bf16, "mixed_qkv") as *const c_void,
-            cuda_ptr!(b, half::bf16, "b") as *const c_void,
-            cuda_ptr!(a, half::bf16, "a") as *const c_void,
-            cuda_ptr!(a_log, f32, "a_log") as *const f32,
-            cuda_ptr!(dt_bias, f32, "dt_bias") as *const f32,
-            cuda_ptr!(state_pool, f32, "state_pool") as *mut f32,
-            output.device_ptr(output.stream()).0 as *mut c_void,
-            cuda_ptr!(active_slots, u32, "active_slots") as *const u32,
-            cuda_ptr!(deferred_key, f32, "deferred_key") as *mut f32,
-            cuda_ptr!(deferred_delta, f32, "deferred_delta") as *mut f32,
-            cuda_ptr!(deferred_decay, f32, "deferred_decay") as *mut f32,
-            cuda_ptr!(deferred_cursor, u32, "deferred_cursor") as *mut u32,
-            cuda_ptr!(gate, half::bf16, "gate") as *const c_void,
-            cuda_ptr!(norm_weight, half::bf16, "norm_weight") as *const c_void,
-            b_strides[0] as i64,
-            b_strides[1] as i64,
-            a_strides[0] as i64,
-            a_strides[1] as i64,
-            gate_strides[0] as i64,
-            gate_strides[1] as i64,
-            gate_strides[2] as i64,
-            batch_size as i32,
-            capacity as i32,
-            num_k_heads as i32,
-            num_v_heads as i32,
-            i32::from(tiled_v_heads),
-            norm_eps as f32,
-            dev.cuda_stream().cu_stream() as i64,
-        );
+    cuda_read_ptr!(
+        mixed_qkv_ptr,
+        mixed_qkv_guard,
+        mixed_qkv_storage,
+        mixed_qkv_layout,
+        mixed_qkv,
+        half::bf16,
+        "mixed_qkv"
+    );
+    cuda_read_ptr!(b_ptr, b_guard, b_storage, b_layout, b, half::bf16, "b");
+    cuda_read_ptr!(a_ptr, a_guard, a_storage, a_layout, a, half::bf16, "a");
+    cuda_read_ptr!(
+        a_log_ptr,
+        a_log_guard,
+        a_log_storage,
+        a_log_layout,
+        a_log,
+        f32,
+        "a_log"
+    );
+    cuda_read_ptr!(
+        dt_bias_ptr,
+        dt_bias_guard,
+        dt_bias_storage,
+        dt_bias_layout,
+        dt_bias,
+        f32,
+        "dt_bias"
+    );
+    cuda_read_ptr!(
+        state_pool_ptr,
+        state_pool_guard,
+        state_pool_storage,
+        state_pool_layout,
+        state_pool,
+        f32,
+        "state_pool"
+    );
+    cuda_read_ptr!(
+        active_slots_ptr,
+        active_slots_guard,
+        active_slots_storage,
+        active_slots_layout,
+        active_slots,
+        u32,
+        "active_slots"
+    );
+    cuda_read_ptr!(
+        gate_ptr,
+        gate_guard,
+        gate_storage,
+        gate_layout,
+        gate,
+        half::bf16,
+        "gate"
+    );
+    cuda_read_ptr!(
+        norm_weight_ptr,
+        norm_weight_guard,
+        norm_weight_storage,
+        norm_weight_layout,
+        norm_weight,
+        half::bf16,
+        "norm_weight"
+    );
+    use float8::F8E4M3;
+    let output_elements = batch_size * num_v_heads * head_v_dim;
+    let mut output = fp8_layout
+        .is_none()
+        .then(|| unsafe { dev.alloc::<half::bf16>(output_elements) })
+        .transpose()?;
+    let mut quantized_output = fp8_layout
+        .map(|_| unsafe { dev.alloc::<F8E4M3>(output_elements) })
+        .transpose()?;
+    let mut output_scales = fp8_layout
+        .map(|layout| unsafe { dev.alloc::<f32>(layout.scale_elements) })
+        .transpose()?;
+    let (output_ptr, output_guard) = if let Some(output) = output.as_mut() {
+        let (pointer, guard) = output.device_ptr_mut(&stream);
+        (pointer as *mut c_void, Some(guard))
+    } else {
+        (std::ptr::null_mut(), None)
+    };
+    let (quantized_output_ptr, quantized_output_guard) =
+        if let Some(quantized_output) = quantized_output.as_mut() {
+            let (pointer, guard) = quantized_output.device_ptr_mut(&stream);
+            (pointer as *mut c_void, Some(guard))
+        } else {
+            (std::ptr::null_mut(), None)
+        };
+    let (output_scales_ptr, output_scales_guard) =
+        if let Some(output_scales) = output_scales.as_mut() {
+            let (pointer, guard) = output_scales.device_ptr_mut(&stream);
+            (pointer as *mut f32, Some(guard))
+        } else {
+            (std::ptr::null_mut(), None)
+        };
+    with_cuda_write_ptr::<f32, _>(deferred_key, &stream, "deferred_key", |key_ptr| {
+        with_cuda_write_ptr::<f32, _>(deferred_delta, &stream, "deferred_delta", |delta_ptr| {
+            with_cuda_write_ptr::<f32, _>(deferred_decay, &stream, "deferred_decay", |decay_ptr| {
+                with_cuda_write_ptr::<u32, _>(
+                    deferred_cursor,
+                    &stream,
+                    "deferred_cursor",
+                    |cursor_ptr| {
+                        unsafe {
+                            crate::cuda::ffi::gdn_deferred_recurrence_rmsnorm_gate_value_major_128(
+                                mixed_qkv_ptr as *const c_void,
+                                b_ptr as *const c_void,
+                                a_ptr as *const c_void,
+                                a_log_ptr as *const f32,
+                                dt_bias_ptr as *const f32,
+                                state_pool_ptr as *mut f32,
+                                output_ptr,
+                                quantized_output_ptr,
+                                output_scales_ptr,
+                                fp8_layout.map_or(0, |layout| layout.scale_stride_m as i32),
+                                fp8_layout.map_or(GDN_FP8_SCALE_ROW_MAJOR, |layout| {
+                                    layout.scale_layout_code
+                                }),
+                                active_slots_ptr as *const u32,
+                                key_ptr as *mut f32,
+                                delta_ptr as *mut f32,
+                                decay_ptr as *mut f32,
+                                cursor_ptr as *mut u32,
+                                gate_ptr as *const c_void,
+                                norm_weight_ptr as *const c_void,
+                                b_strides[0] as i64,
+                                b_strides[1] as i64,
+                                a_strides[0] as i64,
+                                a_strides[1] as i64,
+                                gate_strides[0] as i64,
+                                gate_strides[1] as i64,
+                                gate_strides[2] as i64,
+                                batch_size as i32,
+                                capacity as i32,
+                                num_k_heads as i32,
+                                num_v_heads as i32,
+                                i32::from(tiled_v_heads),
+                                norm_eps as f32,
+                                stream.cu_stream() as i64,
+                            );
+                        }
+                        Ok(())
+                    },
+                )
+            })
+        })
+    })?;
+    drop(output_scales_guard);
+    drop(quantized_output_guard);
+    drop(output_guard);
+    drop(norm_weight_guard);
+    drop(gate_guard);
+    drop(active_slots_guard);
+    drop(state_pool_guard);
+    drop(dt_bias_guard);
+    drop(a_log_guard);
+    drop(a_guard);
+    drop(b_guard);
+    drop(mixed_qkv_guard);
+    drop(norm_weight_storage);
+    drop(gate_storage);
+    drop(active_slots_storage);
+    drop(state_pool_storage);
+    drop(dt_bias_storage);
+    drop(a_log_storage);
+    drop(a_storage);
+    drop(b_storage);
+    drop(mixed_qkv_storage);
+    if let (Some(spec), Some(layout)) = (quantization, fp8_layout) {
+        let quantized_output = Tensor::from((
+            candle::Storage::Cuda(candle::CudaStorage::wrap_cuda_slice(
+                quantized_output.expect("FP8 output allocation follows its layout"),
+                dev.clone(),
+            )),
+            (layout.rows, layout.columns),
+        ));
+        let scale_shape = match spec.scale_layout {
+            ActivationScaleLayout::RowMajor => [layout.rows, layout.groups],
+            ActivationScaleLayout::GroupMajor { .. } => [layout.groups, layout.scale_stride_m],
+        };
+        let scales = Tensor::from((
+            candle::Storage::Cuda(candle::CudaStorage::wrap_cuda_slice(
+                output_scales.expect("FP8 scale allocation follows its layout"),
+                dev.clone(),
+            )),
+            (scale_shape[0], scale_shape[1]),
+        ));
+        return Ok(GdnPostOpOutput::Quantized(
+            QuantizedActivation::new_with_scale_layout(
+                quantized_output,
+                scales,
+                spec.source_shape.to_vec(),
+                DType::BF16,
+                spec.scheme,
+                spec.scale_layout,
+            )?,
+        ));
     }
-    Ok(Tensor::from((
-        candle::Storage::Cuda(candle::CudaStorage::wrap_cuda_slice(output, dev.clone())),
+    Ok(GdnPostOpOutput::Tensor(Tensor::from((
+        candle::Storage::Cuda(candle::CudaStorage::wrap_cuda_slice(
+            output.expect("BF16 output allocation follows the FP8 contract"),
+            dev.clone(),
+        )),
         (batch_size, 1, num_v_heads, head_v_dim),
-    )))
+    ))))
 }
 
 #[cfg(not(feature = "cuda"))]
@@ -3132,8 +4139,10 @@ pub struct GdnDeferredStateFlush<'a> {
 }
 
 #[cfg(feature = "cuda")]
-pub fn flush_deferred_state_cuda(context: GdnDeferredStateFlush<'_>) -> Result<()> {
-    use candle::cuda_backend::cudarc::driver::DevicePtr;
+fn launch_deferred_state_cuda(
+    context: GdnDeferredStateFlush<'_>,
+    stream: &std::sync::Arc<candle_core::cuda_backend::cudarc::driver::CudaStream>,
+) -> Result<()> {
     use candle_core as candle;
 
     let GdnDeferredStateFlush {
@@ -3152,7 +4161,7 @@ pub fn flush_deferred_state_cuda(context: GdnDeferredStateFlush<'_>) -> Result<(
     } = context;
     let batch_size = active_slots.dims1()?;
     if batch_size == 0 || active_slots.dtype() != DType::U32 {
-        candle::bail!("deferred GDN flush requires non-empty u32 active slots");
+        candle::bail!("deferred GDN materialization requires non-empty u32 active slots");
     }
     if state_pool.dtype() != DType::F32
         || deferred_key.dtype() != DType::F32
@@ -3166,7 +4175,7 @@ pub fn flush_deferred_state_cuda(context: GdnDeferredStateFlush<'_>) -> Result<(
         || !num_v_heads.is_multiple_of(num_k_heads)
         || state_layout != RecurrentStateLayout::GdnValueMajor
     {
-        candle::bail!("deferred GDN flush requires FP32 value-major 128x128 state");
+        candle::bail!("deferred GDN materialization requires FP32 value-major 128x128 state");
     }
     let (capacity, state_heads, state_v_dim, state_k_dim) = state_pool.dims4()?;
     if capacity == 0
@@ -3178,14 +4187,18 @@ pub fn flush_deferred_state_cuda(context: GdnDeferredStateFlush<'_>) -> Result<(
         || deferred_decay.dims() != [capacity, GDN_DEFERRED_STATE_DEPTH, num_v_heads]
         || deferred_cursor.dims() != [capacity]
     {
-        candle::bail!("deferred GDN flush storage shapes are incompatible");
+        candle::bail!("deferred GDN materialization storage shapes are incompatible");
     }
     let device = state_pool.device();
     if !device.is_cuda()
         || gdn_cuda_device_properties(device.as_cuda_device()?)?.compute_major
             != GDN_DECODE_TUNED_COMPUTE_MAJOR
     {
-        candle::bail!("deferred GDN flush requires compute capability 9.x CUDA");
+        candle::bail!("deferred GDN materialization requires compute capability 9.x CUDA");
+    }
+    let dev = device.as_cuda_device()?;
+    if !std::sync::Arc::ptr_eq(dev.cuda_stream().context(), stream.context()) {
+        candle::bail!("deferred GDN materialization stream belongs to another CUDA context");
     }
     for tensor in [
         state_pool,
@@ -3196,41 +4209,95 @@ pub fn flush_deferred_state_cuda(context: GdnDeferredStateFlush<'_>) -> Result<(
         deferred_cursor,
     ] {
         if !tensor.device().same_device(device) || !tensor.is_contiguous() {
-            candle::bail!("deferred GDN flush tensors must be contiguous on one CUDA device");
+            candle::bail!(
+                "deferred GDN materialization tensors must be contiguous on one CUDA device"
+            );
         }
     }
-    macro_rules! cuda_ptr {
-        ($tensor:expr, $ty:ty, $name:literal) => {{
-            let (storage, layout) = $tensor.storage_and_layout();
-            let storage = match &*storage {
-                candle::Storage::Cuda(storage) => storage.as_cuda_slice::<$ty>()?,
-                _ => candle::bail!(concat!($name, " must be CUDA")),
-            };
-            let pointer = storage
-                .slice(layout.start_offset()..)
-                .device_ptr(storage.stream())
-                .0;
-            pointer
-        }};
+    macro_rules! cuda_read_ptr {
+        ($ptr:ident, $guard:ident, $storage:ident, $layout:ident, $tensor:expr, $ty:ty, $name:literal) => {
+            let ($storage, $layout) = $tensor.storage_and_layout();
+            let ($ptr, $guard) =
+                cuda_read_ptr_with_guard::<$ty>(&$storage, $layout, stream, $name)?;
+        };
     }
-    let dev = device.as_cuda_device()?;
-    unsafe {
-        crate::cuda::ffi::gdn_flush_deferred_state_value_major_128(
-            cuda_ptr!(state_pool, f32, "state_pool") as *mut f32,
-            cuda_ptr!(active_slots, u32, "active_slots") as *const u32,
-            cuda_ptr!(deferred_key, f32, "deferred_key") as *const f32,
-            cuda_ptr!(deferred_delta, f32, "deferred_delta") as *const f32,
-            cuda_ptr!(deferred_decay, f32, "deferred_decay") as *const f32,
-            cuda_ptr!(deferred_cursor, u32, "deferred_cursor") as *mut u32,
-            batch_size as i32,
-            capacity as i32,
-            num_k_heads as i32,
-            num_v_heads as i32,
-            i32::from(tiled_v_heads),
-            dev.cuda_stream().cu_stream() as i64,
-        );
-    }
+    cuda_read_ptr!(
+        active_slots_ptr,
+        active_slots_guard,
+        active_slots_storage,
+        active_slots_layout,
+        active_slots,
+        u32,
+        "active_slots"
+    );
+    cuda_read_ptr!(
+        deferred_key_ptr,
+        deferred_key_guard,
+        deferred_key_storage,
+        deferred_key_layout,
+        deferred_key,
+        f32,
+        "deferred_key"
+    );
+    cuda_read_ptr!(
+        deferred_delta_ptr,
+        deferred_delta_guard,
+        deferred_delta_storage,
+        deferred_delta_layout,
+        deferred_delta,
+        f32,
+        "deferred_delta"
+    );
+    cuda_read_ptr!(
+        deferred_decay_ptr,
+        deferred_decay_guard,
+        deferred_decay_storage,
+        deferred_decay_layout,
+        deferred_decay,
+        f32,
+        "deferred_decay"
+    );
+    with_cuda_write_ptr::<f32, _>(state_pool, stream, "state_pool", |state_pool_ptr| {
+        with_cuda_write_ptr::<u32, _>(
+            deferred_cursor,
+            stream,
+            "deferred_cursor",
+            |deferred_cursor_ptr| {
+                unsafe {
+                    crate::cuda::ffi::gdn_flush_deferred_state_value_major_128(
+                        state_pool_ptr as *mut f32,
+                        active_slots_ptr as *const u32,
+                        deferred_key_ptr as *const f32,
+                        deferred_delta_ptr as *const f32,
+                        deferred_decay_ptr as *const f32,
+                        deferred_cursor_ptr as *mut u32,
+                        batch_size as i32,
+                        capacity as i32,
+                        num_k_heads as i32,
+                        num_v_heads as i32,
+                        i32::from(tiled_v_heads),
+                        stream.cu_stream() as i64,
+                    );
+                }
+                Ok(())
+            },
+        )
+    })?;
+    drop(deferred_decay_guard);
+    drop(deferred_delta_guard);
+    drop(deferred_key_guard);
+    drop(active_slots_guard);
+    drop(deferred_decay_storage);
+    drop(deferred_delta_storage);
+    drop(deferred_key_storage);
+    drop(active_slots_storage);
     Ok(())
+}
+
+#[cfg(feature = "cuda")]
+pub fn flush_deferred_state_cuda(context: GdnDeferredStateFlush<'_>) -> Result<()> {
+    let stream = context.state_pool.device().as_cuda_device()?.cuda_stream();
+    launch_deferred_state_cuda(context, &stream)
 }
 
 #[cfg(not(feature = "cuda"))]
@@ -4208,35 +5275,36 @@ pub fn pending_transition_apply_batched_cuda(_apply: GdnPendingTransitionApply<'
     candle_core::bail!("pending_transition_apply_batched_cuda requires the cuda feature")
 }
 
+#[cfg(feature = "cuda")]
+fn normalize_gdn_rmsnorm_layout(
+    dims: &[usize],
+    strides: &[usize],
+    hidden_dim: usize,
+) -> Result<([usize; 4], [usize; 4])> {
+    match (dims, strides) {
+        ([d0, d1], [s0, s1]) if d1 % hidden_dim == 0 => Ok((
+            [1, *d0, d1 / hidden_dim, hidden_dim],
+            [0, *s0, hidden_dim * *s1, *s1],
+        )),
+        ([d0, d1, d2], [s0, s1, s2]) if d2 % hidden_dim == 0 => Ok((
+            [*d0, *d1, d2 / hidden_dim, hidden_dim],
+            [*s0, *s1, hidden_dim * *s2, *s2],
+        )),
+        ([d0, d1, d2, d3], [s0, s1, s2, s3]) if *d3 == hidden_dim => {
+            Ok(([*d0, *d1, *d2, *d3], [*s0, *s1, *s2, *s3]))
+        }
+        _ => candle_core::bail!(
+            "gated RMSNorm expects rank 2-4 with a final dimension divisible by {hidden_dim}"
+        ),
+    }
+}
+
 /// CUDA RMSNorm with a SiLU gate; packed final dimensions are split by the norm weight width.
 #[cfg(feature = "cuda")]
 pub fn rmsnorm_gated_cuda(x: &Tensor, gate: &Tensor, weight: &Tensor, eps: f64) -> Result<Tensor> {
     use candle::cuda_backend::cudarc::driver::DevicePtr;
     use candle_core as candle;
     use core::ffi::c_void;
-
-    fn normalize_layout(
-        dims: &[usize],
-        strides: &[usize],
-        hidden_dim: usize,
-    ) -> Result<([usize; 4], [usize; 4])> {
-        match (dims, strides) {
-            ([d0, d1], [s0, s1]) if d1 % hidden_dim == 0 => Ok((
-                [1, *d0, d1 / hidden_dim, hidden_dim],
-                [0, *s0, hidden_dim * *s1, *s1],
-            )),
-            ([d0, d1, d2], [s0, s1, s2]) if d2 % hidden_dim == 0 => Ok((
-                [*d0, *d1, d2 / hidden_dim, hidden_dim],
-                [*s0, *s1, hidden_dim * *s2, *s2],
-            )),
-            ([d0, d1, d2, d3], [s0, s1, s2, s3]) if *d3 == hidden_dim => {
-                Ok(([*d0, *d1, *d2, *d3], [*s0, *s1, *s2, *s3]))
-            }
-            _ => candle::bail!(
-                "gated RMSNorm expects rank 2-4 with a final dimension divisible by {hidden_dim}"
-            ),
-        }
-    }
 
     fn cuda_fwd<
         T: candle::cuda_backend::CudaDType + candle::cuda_backend::cudarc::driver::DeviceRepr,
@@ -4257,7 +5325,7 @@ pub fn rmsnorm_gated_cuda(x: &Tensor, gate: &Tensor, weight: &Tensor, eps: f64) 
             _ => candle::bail!("x must be a cuda tensor"),
         };
         let x_offset = x_l.start_offset();
-        let (dims, x_stride) = normalize_layout(x.dims(), x_l.stride(), hidden_dim)?;
+        let (dims, x_stride) = normalize_gdn_rmsnorm_layout(x.dims(), x_l.stride(), hidden_dim)?;
 
         let (gate_s, gate_l) = gate.storage_and_layout();
         let gate_s = match &*gate_s {
@@ -4265,7 +5333,8 @@ pub fn rmsnorm_gated_cuda(x: &Tensor, gate: &Tensor, weight: &Tensor, eps: f64) 
             _ => candle::bail!("gate must be a cuda tensor"),
         };
         let gate_offset = gate_l.start_offset();
-        let (gate_dims, gate_stride) = normalize_layout(gate.dims(), gate_l.stride(), hidden_dim)?;
+        let (gate_dims, gate_stride) =
+            normalize_gdn_rmsnorm_layout(gate.dims(), gate_l.stride(), hidden_dim)?;
         if gate_dims != dims {
             candle::bail!("gated RMSNorm inputs have incompatible logical shapes");
         }
@@ -4320,6 +5389,132 @@ pub fn rmsnorm_gated_cuda(x: &Tensor, gate: &Tensor, weight: &Tensor, eps: f64) 
         DType::BF16 => cuda_fwd::<half::bf16>(x, gate, weight, eps, 1),
         other => candle_core::bail!("rmsnorm_gated_cuda only supports f16/bf16, got {:?}", other),
     }
+}
+
+#[cfg(feature = "cuda")]
+pub(crate) fn rmsnorm_gated_quantized_cuda(
+    x: &Tensor,
+    gate: &Tensor,
+    weight: &Tensor,
+    eps: f64,
+    spec: &GdnFp8OutputSpec,
+    num_v_heads: usize,
+    head_v_dim: usize,
+) -> Result<QuantizedActivation> {
+    use candle::cuda_backend::cudarc::driver::DevicePtr;
+    use candle_core::{self as candle, CudaStorage, Shape, Storage};
+    use core::ffi::c_void;
+    use float8::F8E4M3;
+
+    if x.dtype() != DType::BF16
+        || gate.dtype() != DType::BF16
+        || weight.dtype() != DType::BF16
+        || !x.device().is_cuda()
+        || !x.device().same_device(gate.device())
+        || !x.device().same_device(weight.device())
+        || !eps.is_finite()
+        || eps < 0.0
+    {
+        candle::bail!("quantized gated RMSNorm requires compatible BF16 CUDA tensors")
+    }
+    let layout = spec.layout(num_v_heads, head_v_dim).ok_or_else(|| {
+        candle::Error::msg("quantized gated RMSNorm has an incompatible FP8 output contract")
+    })?;
+    let weight = weight.contiguous()?;
+    if weight.dims1()? != head_v_dim {
+        candle::bail!("quantized gated RMSNorm weight width is incompatible")
+    }
+
+    let (x_storage, x_layout) = x.storage_and_layout();
+    let Storage::Cuda(x_storage) = &*x_storage else {
+        unreachable!()
+    };
+    let x_storage = x_storage.as_cuda_slice::<half::bf16>()?;
+    let (dims, x_stride) = normalize_gdn_rmsnorm_layout(x.dims(), x_layout.stride(), head_v_dim)?;
+    let normalized_rows = dims[0]
+        .checked_mul(dims[1])
+        .and_then(|rows| rows.checked_mul(dims[2]))
+        .ok_or_else(|| candle::Error::msg("quantized gated RMSNorm row count overflows usize"))?;
+    if normalized_rows != layout.rows.saturating_mul(layout.groups) {
+        candle::bail!("quantized gated RMSNorm logical shape is incompatible")
+    }
+
+    let (gate_storage, gate_layout) = gate.storage_and_layout();
+    let Storage::Cuda(gate_storage) = &*gate_storage else {
+        unreachable!()
+    };
+    let gate_storage = gate_storage.as_cuda_slice::<half::bf16>()?;
+    let (gate_dims, gate_stride) =
+        normalize_gdn_rmsnorm_layout(gate.dims(), gate_layout.stride(), head_v_dim)?;
+    if gate_dims != dims {
+        candle::bail!("quantized gated RMSNorm inputs have incompatible logical shapes")
+    }
+
+    let (weight_storage, weight_layout) = weight.storage_and_layout();
+    let Storage::Cuda(weight_storage) = &*weight_storage else {
+        unreachable!()
+    };
+    let weight_storage = weight_storage.as_cuda_slice::<half::bf16>()?;
+    let dev = x.device().as_cuda_device()?;
+    let output = unsafe { dev.alloc::<F8E4M3>(layout.rows * layout.columns) }?;
+    let scales = unsafe { dev.alloc::<f32>(layout.scale_elements) }?;
+    let stream = dev.cuda_stream().cu_stream() as i64;
+
+    unsafe {
+        crate::cuda::ffi::gdn_rmsnorm_gated_quantized_bf16(
+            x_storage
+                .slice(x_layout.start_offset()..)
+                .device_ptr(x_storage.stream())
+                .0 as *const c_void,
+            gate_storage
+                .slice(gate_layout.start_offset()..)
+                .device_ptr(gate_storage.stream())
+                .0 as *const c_void,
+            weight_storage
+                .slice(weight_layout.start_offset()..)
+                .device_ptr(weight_storage.stream())
+                .0 as *const c_void,
+            output.device_ptr(output.stream()).0 as *mut c_void,
+            scales.device_ptr(scales.stream()).0 as *mut f32,
+            normalized_rows as i32,
+            layout.groups as i32,
+            layout.scale_stride_m as i32,
+            layout.scale_layout_code,
+            dims[1] as i32,
+            dims[2] as i32,
+            x_stride[0] as i64,
+            x_stride[1] as i64,
+            x_stride[2] as i64,
+            x_stride[3] as i64,
+            gate_stride[0] as i64,
+            gate_stride[1] as i64,
+            gate_stride[2] as i64,
+            gate_stride[3] as i64,
+            eps as f32,
+            stream,
+        );
+    }
+
+    let output = Tensor::from((
+        Storage::Cuda(CudaStorage::wrap_cuda_slice(output, dev.clone())),
+        Shape::from_dims(&[layout.rows, layout.columns]),
+    ));
+    let scale_shape = match spec.scale_layout {
+        ActivationScaleLayout::RowMajor => [layout.rows, layout.groups],
+        ActivationScaleLayout::GroupMajor { .. } => [layout.groups, layout.scale_stride_m],
+    };
+    let scales = Tensor::from((
+        Storage::Cuda(CudaStorage::wrap_cuda_slice(scales, dev.clone())),
+        Shape::from_dims(&scale_shape),
+    ));
+    QuantizedActivation::new_with_scale_layout(
+        output,
+        scales,
+        spec.source_shape.to_vec(),
+        DType::BF16,
+        spec.scheme,
+        spec.scale_layout,
+    )
 }
 
 #[cfg(not(feature = "cuda"))]
@@ -4443,8 +5638,8 @@ pub fn fused_gdn_gating_cuda(
 #[cfg(test)]
 mod dispatch_tests {
     use super::{
-        automatic_decode_kernel, automatic_prefill_kernel, parse_decode_kernel,
-        parse_prefill_kernel, prefill_kernel_supported, select_decode_kernel,
+        automatic_decode_kernel, automatic_prefill_kernel, deferred_decode_batch_supported,
+        parse_decode_kernel, parse_prefill_kernel, prefill_kernel_supported, select_decode_kernel,
         select_prefill_kernel, GdnDecodeKernel, GdnDecodePolicy, GdnPrefillKernel,
         GdnPrefillPolicy,
     };
@@ -4589,6 +5784,13 @@ mod dispatch_tests {
             GdnDecodeKernel::ValueMajor32,
             unsupported
         ));
+    }
+
+    #[test]
+    fn deferred_decode_dispatch_uses_the_measured_batch_boundary() {
+        assert!(!deferred_decode_batch_supported(4));
+        assert!(!deferred_decode_batch_supported(7));
+        assert!(deferred_decode_batch_supported(8));
     }
 
     #[test]
@@ -4864,6 +6066,7 @@ mod dispatch_tests {
 }
 
 #[cfg(all(test, feature = "cuda"))]
+#[allow(clippy::cast_precision_loss)]
 mod tests {
     use super::*;
     use candle_core::{Device, IndexOp, D};
@@ -4925,6 +6128,176 @@ mod tests {
             lhs_nan == 0 && rhs_nan == 0 && max_diff <= tol,
             "{label}: max_diff={max_diff} at {max_idx}, lhs={lhs_at_max}, rhs={rhs_at_max}, lhs_nan={lhs_nan}, rhs_nan={rhs_nan}"
         );
+    }
+
+    #[test]
+    #[ignore = "requires a CUDA device"]
+    fn packed_ragged_cuda_transforms_match_cpu_reference() -> Result<()> {
+        const BATCH_SIZE: usize = 3;
+        const PADDED_LEN: usize = 5;
+        const WIDTH: usize = 6;
+        const HEADS: usize = 2;
+        const HEAD_WIDTH: usize = WIDTH / HEADS;
+        const STATE_WIDTH: usize = 4;
+
+        let dev = Device::new_cuda(0)?;
+        let query_lens = [2usize, 5, 4];
+        let cu_seqlens_host = [0u32, 2, 7, 11];
+        let token_count = *cu_seqlens_host.last().unwrap() as usize;
+        let packed_host = (1..=token_count * WIDTH)
+            .map(|value| value as f32)
+            .collect::<Vec<_>>();
+        let packed = Tensor::from_vec(packed_host.clone(), (1, token_count, WIDTH), &dev)?;
+        let cu_seqlens = Tensor::from_vec(cu_seqlens_host.to_vec(), (BATCH_SIZE + 1,), &dev)?;
+
+        let mut zero_padded_reference = Vec::with_capacity(BATCH_SIZE * PADDED_LEN * WIDTH);
+        let mut identity_padded_reference = Vec::with_capacity(BATCH_SIZE * PADDED_LEN * WIDTH);
+        for (row, &query_len) in query_lens.iter().enumerate() {
+            let token_start = cu_seqlens_host[row] as usize;
+            for position in 0..PADDED_LEN {
+                for feature in 0..WIDTH {
+                    let source = (token_start + position) * WIDTH + feature;
+                    zero_padded_reference.push(if position < query_len {
+                        packed_host[source]
+                    } else {
+                        0.0
+                    });
+                    identity_padded_reference.push(if position < query_len {
+                        packed_host[source]
+                    } else {
+                        f32::NEG_INFINITY
+                    });
+                }
+            }
+        }
+
+        let zero_padded = try_gdn_packed_to_padded_cuda(GdnPackedToPadded {
+            source: &packed,
+            cu_seqlens: &cu_seqlens,
+            batch_size: BATCH_SIZE,
+            token_count,
+            padded_len: PADDED_LEN,
+            padding_value: 0.0,
+        })?
+        .unwrap();
+        assert_eq!(zero_padded.dims(), &[BATCH_SIZE, PADDED_LEN, WIDTH]);
+        assert_eq!(flat(&zero_padded)?, zero_padded_reference);
+
+        let repacked = try_gdn_padded_to_packed_cuda(GdnPaddedToPacked {
+            source: &zero_padded,
+            cu_seqlens: &cu_seqlens,
+            batch_size: BATCH_SIZE,
+            token_count,
+        })?
+        .unwrap();
+        assert_eq!(repacked.dims(), &[1, token_count, WIDTH]);
+        assert_eq!(flat(&repacked)?, packed_host);
+
+        let transposed = zero_padded
+            .reshape((BATCH_SIZE, PADDED_LEN, HEADS, HEAD_WIDTH))?
+            .transpose(1, 2)?
+            .contiguous()?
+            .transpose(1, 2)?;
+        assert_eq!(transposed.stride()[1], HEAD_WIDTH);
+        assert_eq!(transposed.stride()[2], PADDED_LEN * HEAD_WIDTH);
+        let repacked_transposed = try_gdn_padded_to_packed_cuda(GdnPaddedToPacked {
+            source: &transposed,
+            cu_seqlens: &cu_seqlens,
+            batch_size: BATCH_SIZE,
+            token_count,
+        })?
+        .unwrap();
+        assert_eq!(
+            repacked_transposed.dims(),
+            &[1, token_count, HEADS, HEAD_WIDTH]
+        );
+        assert_eq!(flat(&repacked_transposed)?, packed_host);
+
+        let f32_row_padding = Tensor::zeros((BATCH_SIZE, 1, WIDTH), DType::F32, &dev)?;
+        let narrowed_padded = Tensor::cat(&[&f32_row_padding, &zero_padded, &f32_row_padding], 1)?
+            .narrow(1, 1, PADDED_LEN)?;
+        assert_eq!(narrowed_padded.stride()[0], (PADDED_LEN + 2) * WIDTH);
+        let repacked_narrowed = try_gdn_padded_to_packed_cuda(GdnPaddedToPacked {
+            source: &narrowed_padded,
+            cu_seqlens: &cu_seqlens,
+            batch_size: BATCH_SIZE,
+            token_count,
+        })?
+        .unwrap();
+        assert_eq!(flat(&repacked_narrowed)?, packed_host);
+
+        let packed_bf16 = packed.to_dtype(DType::BF16)?;
+        let identity_padded = try_gdn_packed_to_padded_cuda(GdnPackedToPadded {
+            source: &packed_bf16,
+            cu_seqlens: &cu_seqlens,
+            batch_size: BATCH_SIZE,
+            token_count,
+            padded_len: PADDED_LEN,
+            padding_value: f32::NEG_INFINITY,
+        })?
+        .unwrap();
+        assert_eq!(
+            flat(&identity_padded.to_dtype(DType::F32)?)?,
+            identity_padded_reference
+        );
+        let repacked_bf16 = try_gdn_padded_to_packed_cuda(GdnPaddedToPacked {
+            source: &identity_padded,
+            cu_seqlens: &cu_seqlens,
+            batch_size: BATCH_SIZE,
+            token_count,
+        })?
+        .unwrap();
+        assert_eq!(flat(&repacked_bf16.to_dtype(DType::F32)?)?, packed_host);
+
+        let initial_state_host = (0..BATCH_SIZE * WIDTH * STATE_WIDTH)
+            .map(|index| index as f32 - 100.0)
+            .collect::<Vec<_>>();
+        let initial_state = Tensor::from_vec(
+            initial_state_host.clone(),
+            (BATCH_SIZE, WIDTH, STATE_WIDTH),
+            &dev,
+        )?
+        .to_dtype(DType::BF16)?;
+        let bf16_row_padding = Tensor::zeros((BATCH_SIZE, 1, WIDTH), DType::BF16, &dev)?;
+        let narrowed_identity_padded =
+            Tensor::cat(&[&bf16_row_padding, &identity_padded, &bf16_row_padding], 1)?
+                .narrow(1, 1, PADDED_LEN)?;
+        assert_eq!(
+            narrowed_identity_padded.stride()[0],
+            (PADDED_LEN + 2) * WIDTH
+        );
+        let next_state = try_gdn_extract_ragged_conv_state_cuda(GdnRaggedConvState {
+            padded_input: &narrowed_identity_padded,
+            initial_state: &initial_state,
+            cu_seqlens: &cu_seqlens,
+            batch_size: BATCH_SIZE,
+        })?
+        .unwrap();
+
+        let mut state_reference = Vec::with_capacity(BATCH_SIZE * WIDTH * STATE_WIDTH);
+        for (row, &query_len) in query_lens.iter().enumerate() {
+            let token_start = cu_seqlens_host[row] as usize;
+            for channel in 0..WIDTH {
+                for state_position in 0..STATE_WIDTH {
+                    let value = if query_len >= STATE_WIDTH {
+                        let position = query_len - STATE_WIDTH + state_position;
+                        packed_host[(token_start + position) * WIDTH + channel]
+                    } else {
+                        let retained = STATE_WIDTH - query_len;
+                        if state_position < retained {
+                            initial_state_host
+                                [(row * WIDTH + channel) * STATE_WIDTH + state_position + query_len]
+                        } else {
+                            let position = state_position - retained;
+                            packed_host[(token_start + position) * WIDTH + channel]
+                        }
+                    };
+                    state_reference.push(value);
+                }
+            }
+        }
+        assert_eq!(flat(&next_state.to_dtype(DType::F32)?)?, state_reference);
+        Ok(())
     }
 
     fn run_case(case: RecurrenceCase, dev: &Device) -> Result<()> {
@@ -5676,6 +7049,45 @@ mod tests {
             }
         }
         Ok(())
+    }
+
+    #[cfg(has_flashinfer_gdn_sm90_kernel)]
+    #[test]
+    fn flashinfer_sm90_gathered_workspace_excludes_packed_state() {
+        const BATCH_SIZE: i32 = 3;
+        const SEQ_LEN: i32 = 65;
+        const NUM_K_HEADS: i32 = 16;
+        const NUM_V_HEADS: i32 = 48;
+        const SM_COUNT: i32 = 132;
+
+        let gathered = unsafe {
+            crate::cuda::ffi::mistralrs_flashinfer_gdn_sm90_workspace_size(
+                BATCH_SIZE,
+                SEQ_LEN,
+                NUM_K_HEADS,
+                NUM_V_HEADS,
+                SM_COUNT,
+                0,
+            )
+        };
+        let pooled = unsafe {
+            crate::cuda::ffi::mistralrs_flashinfer_gdn_sm90_workspace_size(
+                BATCH_SIZE,
+                SEQ_LEN,
+                NUM_K_HEADS,
+                NUM_V_HEADS,
+                SM_COUNT,
+                1,
+            )
+        };
+        let packed_state_bytes = BATCH_SIZE as u64
+            * NUM_V_HEADS as u64
+            * GDN_DECODE_K_DIM as u64
+            * GDN_DECODE_V_DIM as u64
+            * std::mem::size_of::<f32>() as u64;
+
+        assert_ne!(gathered, 0);
+        assert_eq!(pooled - gathered, packed_state_bytes);
     }
 
     #[cfg(has_flashinfer_gdn_sm90_kernel)]
@@ -6578,6 +7990,10 @@ mod tests {
                 }
                 let expected_recurrent_output = Tensor::cat(&expected_recurrent_outputs, 0)?;
                 let fused_pool = recurrent_pool.copy()?;
+                let quantized_pool = (state_layout == RecurrentStateLayout::GdnValueMajor
+                    && state_dtype == DType::F32)
+                    .then(|| fused_pool.copy())
+                    .transpose()?;
                 let actual_recurrent_output =
                     speculative_recurrence_checkpoints_cuda(GdnSpeculativeRecurrenceCheckpoints {
                         mixed_qkv: &mixed_qkv,
@@ -6598,7 +8014,7 @@ mod tests {
                         record_transitions: false,
                         pending: None,
                     })?;
-                let actual_recurrent_output = actual_recurrent_output.output;
+                let actual_recurrent_output = actual_recurrent_output.output.into_tensor()?;
                 let label = format!("{state_layout:?} {state_dtype:?}");
                 assert_close(
                     &format!("{label} speculative checkpoint recurrence output"),
@@ -6639,12 +8055,13 @@ mod tests {
                                 gate: &gate,
                                 weight: &norm_weight,
                                 eps: norm_eps,
+                                quantization: None,
                             }),
                             record_transitions: false,
                             pending: None,
                         },
                     )?;
-                    let actual_normalized = actual_normalized.output;
+                    let actual_normalized = actual_normalized.output.into_tensor()?;
                     assert_close(
                         &format!("{label} fused speculative normalization state"),
                         &flat(&fused_pool.to_dtype(DType::F32)?)?,
@@ -6657,6 +8074,66 @@ mod tests {
                         &flat(&expected_normalized.to_dtype(DType::F32)?)?,
                         3.0e-2,
                     );
+                    if let Some(quantized_pool) = quantized_pool.as_ref() {
+                        let scale_layout = ActivationScaleLayout::GroupMajor {
+                            row_alignment: std::num::NonZeroUsize::new(4).unwrap(),
+                        };
+                        let quantization = GdnFp8OutputSpec::new(
+                            [batch_size, seq_len, value_dim],
+                            ActivationQuantizationScheme {
+                                dtype: DType::F8E4M3,
+                                block_shape: [1, GDN_FP8_GROUP_SIZE],
+                            },
+                            scale_layout,
+                            num_v_heads,
+                            head_v_dim,
+                        )
+                        .unwrap();
+                        let actual_quantized = speculative_recurrence_checkpoints_cuda(
+                            GdnSpeculativeRecurrenceCheckpoints {
+                                mixed_qkv: &mixed_qkv,
+                                b: &b,
+                                a: &a,
+                                a_log: &a_log,
+                                dt_bias: &dt_bias,
+                                state_pool: quantized_pool,
+                                active_slots: &active_slots,
+                                checkpoint_lanes,
+                                num_k_heads,
+                                num_v_heads,
+                                head_k_dim,
+                                head_v_dim,
+                                tiled_v_heads: true,
+                                state_layout,
+                                post_op: Some(GdnSpeculativeRmsNormGate {
+                                    gate: &gate,
+                                    weight: &norm_weight,
+                                    eps: norm_eps,
+                                    quantization: Some(quantization),
+                                }),
+                                record_transitions: false,
+                                pending: None,
+                            },
+                        )?;
+                        let GdnPostOpOutput::Quantized(actual_quantized) = actual_quantized.output
+                        else {
+                            panic!("speculative FP8 post-op returned BF16 output")
+                        };
+                        assert_gdn_quantized_matches_bf16(
+                            &format!("{label} quantized speculative normalization"),
+                            &actual_quantized,
+                            &actual_normalized,
+                            batch_size * seq_len,
+                            num_v_heads,
+                            scale_layout,
+                        )?;
+                        assert_close(
+                            &format!("{label} quantized speculative normalization state"),
+                            &flat(&quantized_pool.to_dtype(DType::F32)?)?,
+                            &expected_recurrent_pool,
+                            2.0e-3,
+                        );
+                    }
                 }
             }
         }
@@ -6830,6 +8307,7 @@ mod tests {
                         gate: &gate,
                         weight: &norm_weight,
                         eps: 1.0e-6,
+                        quantization: None,
                     }),
                     record_transitions: true,
                     pending: None,
@@ -7078,11 +8556,12 @@ mod tests {
                         gate: &case.gate,
                         weight: &case.norm_weight,
                         eps: 1.0e-6,
+                        quantization: None,
                     }),
                     record_transitions: true,
                     pending: None,
                 })?;
-            let expected_output = &expected_recurrence.output;
+            let expected_output = expected_recurrence.output.as_tensor()?;
             let run_lazy = || {
                 let convolved = speculative_conv_checkpoints_cuda(GdnSpeculativeConvCheckpoints {
                     x: &case.conv_input,
@@ -7118,6 +8597,7 @@ mod tests {
                             gate: &case.gate,
                             weight: &case.norm_weight,
                             eps: 1.0e-6,
+                            quantization: None,
                         }),
                         record_transitions: true,
                         pending: Some(GdnPendingSpeculativeRecurrence {
@@ -7130,7 +8610,8 @@ mod tests {
                             applied_epochs: &case.lazy_recurrent_applied_epochs,
                         }),
                     })?
-                    .output;
+                    .output
+                    .into_tensor()?;
                 Ok::<_, candle_core::Error>((convolved, output))
             };
             let (lazy_convolved, lazy_output) = run_lazy()?;
@@ -7163,13 +8644,13 @@ mod tests {
                 (
                     "lazy transition recurrence output",
                     &lazy_output,
-                    &expected_output,
+                    expected_output,
                     3.0e-2,
                 ),
                 (
                     "retried transition recurrence output",
                     &retried_output,
-                    &expected_output,
+                    expected_output,
                     3.0e-2,
                 ),
             ] {
@@ -7252,11 +8733,13 @@ mod tests {
                         gate: &case.gate,
                         weight: &case.norm_weight,
                         eps: 1.0e-6,
+                        quantization: None,
                     }),
                     record_transitions: true,
                     pending: None,
                 })?
-                .output;
+                .output
+                .into_tensor()?;
             let (second_convolved, second_output) = run_lazy()?;
             assert_close(
                 "second-epoch transition convolution state",
@@ -7347,6 +8830,7 @@ mod tests {
             expected_epochs: Vec<u32>,
         }
 
+        #[allow(clippy::too_many_arguments)]
         fn stage_rows(
             destination: &mut [f32],
             source: &[f32],
@@ -8100,6 +9584,170 @@ mod tests {
         Ok(())
     }
 
+    fn assert_gdn_quantized_matches_bf16(
+        label: &str,
+        activation: &QuantizedActivation,
+        expected: &Tensor,
+        projection_rows: usize,
+        groups: usize,
+        scale_layout: ActivationScaleLayout,
+    ) -> Result<()> {
+        use float8::F8E4M3;
+        use half::bf16;
+
+        let expected = expected
+            .to_device(&Device::Cpu)?
+            .flatten_all()?
+            .to_vec1::<bf16>()?;
+        let quantized = activation
+            .quantized()
+            .to_device(&Device::Cpu)?
+            .flatten_all()?
+            .to_vec1::<F8E4M3>()?;
+        let scales = activation
+            .scales()
+            .to_device(&Device::Cpu)?
+            .flatten_all()?
+            .to_vec1::<f32>()?;
+        let scale_stride_m = match scale_layout {
+            ActivationScaleLayout::RowMajor => projection_rows,
+            ActivationScaleLayout::GroupMajor { row_alignment } => {
+                projection_rows.div_ceil(row_alignment.get()) * row_alignment.get()
+            }
+        };
+        for projection_row in 0..projection_rows {
+            for group in 0..groups {
+                let start = (projection_row * groups + group) * GDN_FP8_GROUP_SIZE;
+                let maximum = expected[start..start + GDN_FP8_GROUP_SIZE]
+                    .iter()
+                    .map(|value| value.to_f32().abs())
+                    .fold(0.0f32, f32::max);
+                let (quant_scale, expected_scale, scale_offset) = match scale_layout {
+                    ActivationScaleLayout::RowMajor => {
+                        let scale = maximum.max(1.0e-10) / 448.0;
+                        (1.0 / scale, scale, group * scale_stride_m + projection_row)
+                    }
+                    ActivationScaleLayout::GroupMajor { .. } => {
+                        let quant_scale = if maximum == 0.0 { 1.0 } else { 448.0 / maximum };
+                        (
+                            quant_scale,
+                            1.0 / quant_scale,
+                            group * scale_stride_m + projection_row,
+                        )
+                    }
+                };
+                let actual_scale = scales[scale_offset];
+                let scale_tolerance = 1.0e-12 + expected_scale.abs() * 2.0e-6;
+                assert!(
+                    (actual_scale - expected_scale).abs() <= scale_tolerance,
+                    "{label}: row={projection_row}, group={group}, expected scale {expected_scale}, got {actual_scale}"
+                );
+                for column in 0..GDN_FP8_GROUP_SIZE {
+                    let index = start + column;
+                    let scaled = if scale_layout == ActivationScaleLayout::RowMajor {
+                        expected[index].to_f32() / expected_scale
+                    } else {
+                        expected[index].to_f32() * quant_scale
+                    };
+                    let expected_quantized = F8E4M3::from_f32(scaled.clamp(-448.0, 448.0)).to_f32();
+                    let actual_quantized = quantized[index].to_f32();
+                    let magnitude = expected_quantized.abs();
+                    let quantization_step = if magnitude < 2.0f32.powi(-6) {
+                        2.0f32.powi(-9)
+                    } else {
+                        2.0f32.powi(magnitude.log2().floor() as i32 - 3)
+                    };
+                    assert!(
+                        (actual_quantized - expected_quantized).abs()
+                            <= quantization_step * (1.0 + 2.0e-6),
+                        "{label}: row={projection_row}, group={group}, column={column}, expected {expected_quantized}, got {actual_quantized}"
+                    );
+                }
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    #[ignore = "requires an SM90 CUDA device"]
+    fn rmsnorm_gated_quantized_matches_bf16_rounding_cuda() -> Result<()> {
+        use std::num::NonZeroUsize;
+
+        const BATCH_SIZE: usize = 1;
+        const NUM_V_HEADS: usize = 4;
+        const HEAD_DIM: usize = GDN_FP8_GROUP_SIZE;
+        const EPS: f64 = 1.0e-6;
+
+        let dev = Device::new_cuda(0)?;
+        for seq_len in [3usize, 257] {
+            let mut x_values = patterned(
+                BATCH_SIZE * seq_len * NUM_V_HEADS * HEAD_DIM,
+                seq_len + 401,
+                0.2,
+                0.01,
+            );
+            x_values[..HEAD_DIM].fill(0.0);
+            let x = Tensor::from_vec(x_values, (BATCH_SIZE, seq_len, NUM_V_HEADS, HEAD_DIM), &dev)?
+                .to_dtype(DType::BF16)?;
+            let gate = Tensor::from_vec(
+                patterned(
+                    BATCH_SIZE * seq_len * NUM_V_HEADS * HEAD_DIM,
+                    seq_len + 402,
+                    0.3,
+                    -0.02,
+                ),
+                (BATCH_SIZE, seq_len, NUM_V_HEADS, HEAD_DIM),
+                &dev,
+            )?
+            .to_dtype(DType::BF16)?;
+            let weight =
+                Tensor::from_vec(patterned(HEAD_DIM, seq_len + 403, 0.1, 1.0), HEAD_DIM, &dev)?
+                    .to_dtype(DType::BF16)?;
+            let expected = rmsnorm_gated_cuda(&x, &gate, &weight, EPS)?;
+            for scale_layout in [
+                ActivationScaleLayout::RowMajor,
+                ActivationScaleLayout::GroupMajor {
+                    row_alignment: NonZeroUsize::new(4).unwrap(),
+                },
+            ] {
+                let source_shape = [BATCH_SIZE, seq_len, NUM_V_HEADS * HEAD_DIM];
+                let spec = GdnFp8OutputSpec::new(
+                    source_shape,
+                    ActivationQuantizationScheme {
+                        dtype: DType::F8E4M3,
+                        block_shape: [1, GDN_FP8_GROUP_SIZE],
+                    },
+                    scale_layout,
+                    NUM_V_HEADS,
+                    HEAD_DIM,
+                )
+                .unwrap();
+                let actual = rmsnorm_gated_quantized_cuda(
+                    &x,
+                    &gate,
+                    &weight,
+                    EPS,
+                    &spec,
+                    NUM_V_HEADS,
+                    HEAD_DIM,
+                )?;
+                dev.synchronize()?;
+                assert_eq!(actual.source_shape(), source_shape);
+                assert_eq!(actual.source_dtype(), DType::BF16);
+                assert_eq!(actual.scale_layout(), scale_layout);
+                assert_gdn_quantized_matches_bf16(
+                    &format!("seq_len={seq_len} {scale_layout:?}"),
+                    &actual,
+                    &expected,
+                    BATCH_SIZE * seq_len,
+                    NUM_V_HEADS,
+                    scale_layout,
+                )?;
+            }
+        }
+        Ok(())
+    }
+
     // Pooled kernels addressed through a permuted slot table must match the gathered kernels on
     // the same rows and leave every other pool row untouched.
     #[test]
@@ -8729,6 +10377,8 @@ mod tests {
         let initial_state_host = flat(&initial_state)?;
         let mut eager_state = initial_state.copy()?;
         let deferred_state = initial_state.copy()?;
+        let quantized_deferred_state = initial_state.copy()?;
+        let full_flush_state = initial_state.copy()?;
         let active_slots = Tensor::from_vec(vec![4u32, GDN_PAD_SLOT, 1], (BATCH_SIZE,), &dev)?;
         let deferred_key = Tensor::zeros(
             (CAPACITY, GDN_DEFERRED_STATE_DEPTH, NUM_K_HEADS, HEAD_DIM),
@@ -8746,6 +10396,25 @@ mod tests {
             &dev,
         )?;
         let deferred_cursor = Tensor::zeros((CAPACITY,), DType::U32, &dev)?;
+        let quantized_deferred_key = Tensor::zeros(
+            (CAPACITY, GDN_DEFERRED_STATE_DEPTH, NUM_K_HEADS, HEAD_DIM),
+            DType::F32,
+            &dev,
+        )?;
+        let quantized_deferred_delta = Tensor::zeros(
+            (CAPACITY, GDN_DEFERRED_STATE_DEPTH, NUM_V_HEADS, HEAD_DIM),
+            DType::F32,
+            &dev,
+        )?;
+        let quantized_deferred_decay = Tensor::zeros(
+            (CAPACITY, GDN_DEFERRED_STATE_DEPTH, NUM_V_HEADS),
+            DType::F32,
+            &dev,
+        )?;
+        let quantized_deferred_cursor = Tensor::zeros((CAPACITY,), DType::U32, &dev)?;
+        let scale_layout = ActivationScaleLayout::GroupMajor {
+            row_alignment: std::num::NonZeroUsize::new(4).unwrap(),
+        };
 
         let mut expected_cursor = 0usize;
         for step in 0..STEPS {
@@ -8792,7 +10461,9 @@ mod tests {
                 head_v_dim: HEAD_DIM,
                 tiled_v_heads: false,
                 state_layout: RecurrentStateLayout::GdnValueMajor,
-            })?;
+                quantization: None,
+            })?
+            .into_tensor()?;
             assert_close(
                 &format!("deferred output at step {step}"),
                 &flat(&deferred_output.to_dtype(DType::F32)?)?,
@@ -8803,6 +10474,51 @@ mod tests {
                 &format!("deferred padding output at step {step}"),
                 &deferred_output.narrow(0, 1, 1)?,
             )?;
+            let quantization = GdnFp8OutputSpec::new(
+                [BATCH_SIZE, 1, value_dim],
+                ActivationQuantizationScheme {
+                    dtype: DType::F8E4M3,
+                    block_shape: [1, GDN_FP8_GROUP_SIZE],
+                },
+                scale_layout,
+                NUM_V_HEADS,
+                HEAD_DIM,
+            )
+            .unwrap();
+            let quantized_output = deferred_recurrence_rmsnorm_gate_cuda(GdnDeferredRecurrence {
+                mixed_qkv: &mixed_step,
+                b: &b_step,
+                a: &a_step,
+                a_log: &a_log,
+                dt_bias: &dt_bias,
+                state_pool: &quantized_deferred_state,
+                active_slots: &active_slots,
+                deferred_key: &quantized_deferred_key,
+                deferred_delta: &quantized_deferred_delta,
+                deferred_decay: &quantized_deferred_decay,
+                deferred_cursor: &quantized_deferred_cursor,
+                gate: &gate_step,
+                norm_weight: &norm_weight,
+                norm_eps: NORM_EPS,
+                num_k_heads: NUM_K_HEADS,
+                num_v_heads: NUM_V_HEADS,
+                head_k_dim: HEAD_DIM,
+                head_v_dim: HEAD_DIM,
+                tiled_v_heads: false,
+                state_layout: RecurrentStateLayout::GdnValueMajor,
+                quantization: Some(quantization),
+            })?;
+            let GdnPostOpOutput::Quantized(quantized_output) = quantized_output else {
+                panic!("deferred FP8 post-op returned BF16 output")
+            };
+            assert_gdn_quantized_matches_bf16(
+                &format!("deferred quantized output at step {step}"),
+                &quantized_output,
+                &deferred_output,
+                BATCH_SIZE,
+                NUM_V_HEADS,
+                scale_layout,
+            )?;
 
             expected_cursor = (expected_cursor + 1) % GDN_DEFERRED_STATE_DEPTH;
             let cursors = deferred_cursor.to_device(&Device::Cpu)?.to_vec1::<u32>()?;
@@ -8811,6 +10527,50 @@ mod tests {
             assert_eq!(cursors[0], 0);
             assert_eq!(cursors[2], 0);
             assert_eq!(cursors[3], 0);
+            assert_eq!(
+                quantized_deferred_cursor
+                    .to_device(&Device::Cpu)?
+                    .to_vec1::<u32>()?,
+                cursors
+            );
+
+            if step == GDN_DEFERRED_STATE_DEPTH - 1 {
+                let full_cursor = Tensor::from_vec(
+                    vec![
+                        0,
+                        GDN_DEFERRED_STATE_DEPTH as u32,
+                        0,
+                        0,
+                        GDN_DEFERRED_STATE_DEPTH as u32,
+                    ],
+                    (CAPACITY,),
+                    &dev,
+                )?;
+                flush_deferred_state_cuda(GdnDeferredStateFlush {
+                    state_pool: &full_flush_state,
+                    active_slots: &active_slots,
+                    deferred_key: &deferred_key,
+                    deferred_delta: &deferred_delta,
+                    deferred_decay: &deferred_decay,
+                    deferred_cursor: &full_cursor,
+                    num_k_heads: NUM_K_HEADS,
+                    num_v_heads: NUM_V_HEADS,
+                    head_k_dim: HEAD_DIM,
+                    head_v_dim: HEAD_DIM,
+                    tiled_v_heads: false,
+                    state_layout: RecurrentStateLayout::GdnValueMajor,
+                })?;
+                assert_eq!(
+                    full_cursor.to_device(&Device::Cpu)?.to_vec1::<u32>()?,
+                    vec![0; CAPACITY]
+                );
+                assert_close(
+                    "explicit full-journal flush",
+                    &flat(&full_flush_state)?,
+                    &flat(&eager_state)?,
+                    0.0,
+                );
+            }
 
             let flush_depth = match step {
                 8 => Some(1),
@@ -8834,6 +10594,20 @@ mod tests {
                     tiled_v_heads: false,
                     state_layout: RecurrentStateLayout::GdnValueMajor,
                 })?;
+                flush_deferred_state_cuda(GdnDeferredStateFlush {
+                    state_pool: &quantized_deferred_state,
+                    active_slots: &active_slots,
+                    deferred_key: &quantized_deferred_key,
+                    deferred_delta: &quantized_deferred_delta,
+                    deferred_decay: &quantized_deferred_decay,
+                    deferred_cursor: &quantized_deferred_cursor,
+                    num_k_heads: NUM_K_HEADS,
+                    num_v_heads: NUM_V_HEADS,
+                    head_k_dim: HEAD_DIM,
+                    head_v_dim: HEAD_DIM,
+                    tiled_v_heads: false,
+                    state_layout: RecurrentStateLayout::GdnValueMajor,
+                })?;
                 assert_eq!(
                     deferred_cursor.to_device(&Device::Cpu)?.to_vec1::<u32>()?,
                     vec![0; CAPACITY]
@@ -8847,15 +10621,28 @@ mod tests {
                     &flat(&eager_state)?,
                     0.0,
                 );
+                assert_close(
+                    &format!("quantized deferred materialized state at step {step}"),
+                    &flat(&quantized_deferred_state)?,
+                    &flat(&eager_state)?,
+                    0.0,
+                );
             }
         }
 
         let deferred_state_host = flat(&deferred_state)?;
+        let quantized_deferred_state_host = flat(&quantized_deferred_state)?;
         let slot_elements = NUM_V_HEADS * HEAD_DIM * HEAD_DIM;
         for slot in [0usize, 2, 3] {
             assert_close(
                 &format!("deferred untouched state slot {slot}"),
                 &deferred_state_host[slot * slot_elements..(slot + 1) * slot_elements],
+                &initial_state_host[slot * slot_elements..(slot + 1) * slot_elements],
+                0.0,
+            );
+            assert_close(
+                &format!("quantized deferred untouched state slot {slot}"),
+                &quantized_deferred_state_host[slot * slot_elements..(slot + 1) * slot_elements],
                 &initial_state_host[slot * slot_elements..(slot + 1) * slot_elements],
                 0.0,
             );

@@ -396,12 +396,12 @@ pub fn get_device_layers(
         // For GPU/accelerators: keep a small dynamic safety reserve to avoid OOMs
         let cap = device_memory_cap(avail_bytes, &dev);
         if ordinal == 0
-            && !checked_memory_sum([
+            && checked_memory_sum([
                 non_mapped_max.max(mapped_max),
                 non_mapped_size_in_bytes,
                 base_device_memory_reservation_bytes,
             ])
-            .is_some_and(|required| required <= cap)
+            .is_none_or(|required| required > cap)
         {
             anyhow::bail!(
                 "Primary device {} cannot fit its fixed model components, activations, and post-load reservation within {} MB of usable capacity.",

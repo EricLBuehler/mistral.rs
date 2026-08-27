@@ -9,7 +9,10 @@ use candle_nn::Linear;
 #[cfg(all(feature = "cuda", has_deepgemm_fp8_sm90_provider))]
 mod deepgemm;
 mod ops;
-pub use ops::{fp8_blockwise_dequantize, fp8_blockwise_quantize, fused_add_rms_norm_quantized};
+pub use ops::{
+    fp8_blockwise_dequantize, fp8_blockwise_quantize, fused_add_rms_norm_quantized,
+    fused_add_rms_norm_quantized_with_normalized,
+};
 #[cfg(feature = "cuda")]
 #[allow(unused_imports)]
 pub(crate) use ops::{fp8_blockwise_matmul, fp8_indexed_moe_gemm};
@@ -577,10 +580,10 @@ impl QuantMethod for BlockwiseFP8Linear {
             let mut output_shape = batch_dims.to_vec();
             output_shape.push(result.dim(1)?);
             let result = result.reshape(output_shape)?;
-            return match &self.bias {
+            match &self.bias {
                 Some(bias) => result.broadcast_add(bias).map(Some),
                 None => Ok(Some(result)),
-            };
+            }
         }
 
         #[cfg(not(all(has_cutlass_fp8_sm90_kernels, has_deepgemm_fp8_sm90_provider)))]
