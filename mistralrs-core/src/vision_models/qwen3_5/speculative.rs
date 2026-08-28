@@ -117,6 +117,45 @@ struct DraftRow {
     mrope: [u32; MROPE_DIMS],
 }
 
+fn resolve_dflash_n_predict(
+    requested: Option<usize>,
+    block_size: usize,
+    checkpoint_lanes: usize,
+) -> Result<usize> {
+    let max_drafts = block_size
+        .checked_sub(1)
+        .filter(|max_drafts| *max_drafts > 0)
+        .ok_or_else(|| candle_core::Error::msg("DFlash block size must be at least 2"))?;
+    let configured =
+        requested.unwrap_or(max_drafts.min(crate::speculative::dflash::DEFAULT_MAX_DRAFTS));
+    if configured == 0 || configured > max_drafts {
+        candle_core::bail!(
+            "requested {configured} draft tokens but this DFlash drafter's block size is {block_size} (max {max_drafts} drafts)"
+        );
+    }
+    if checkpoint_lanes == 1 {
+        return Ok(configured);
+    }
+    let reserved = checkpoint_lanes.checked_sub(1).ok_or_else(|| {
+        candle_core::Error::msg("recurrent checkpoint lane count must be nonzero")
+    })?;
+    if reserved > max_drafts {
+        candle_core::bail!(
+            "reserved {checkpoint_lanes} recurrent checkpoint lanes but this DFlash drafter's block size is {block_size} (max {} lanes)",
+            max_drafts + 1
+        );
+    }
+    if let Some(requested) = requested {
+        if requested != reserved {
+            candle_core::bail!(
+                "requested {requested} draft tokens require {} recurrent checkpoint lanes, but {checkpoint_lanes} lanes were reserved",
+                requested + 1
+            );
+        }
+    }
+    Ok(reserved)
+}
+
 impl Qwen3_5Model {
     fn mtp_n_predict(&self) -> usize {
         self.mtp_n_predict.load(Ordering::Relaxed)
@@ -253,28 +292,11 @@ impl Qwen3_5Model {
             false,
         )?;
         let block = drafter.block_size();
-        let n_predict = match config.n_predict {
-            Some(n) if n + 1 > block => {
-                candle_core::bail!(
-                    "requested {n} draft tokens but this DFlash drafter's block size is {block} (max {} drafts)",
-                    block - 1
-                );
-            }
-            Some(0) => candle_core::bail!("MTP n_predict must be at least 1."),
-            Some(n) => n,
-            None => (block - 1).min(crate::speculative::dflash::DEFAULT_MAX_DRAFTS),
-        };
-        if self.text.supports_recurrent_speculative_checkpoints()
-            && self
-                .text
-                .cache
-                .hybrid()
-                .configure_checkpoint_lanes(n_predict + 1)?
-        {
-            self.text.device.synchronize()?;
-        }
+        let checkpoint_lanes = self.text.cache.hybrid().checkpoint_lanes();
+        let n_predict = resolve_dflash_n_predict(config.n_predict, block, checkpoint_lanes)?;
         let sequence_capacity = self.text.cache.hybrid().recurrent_capacity();
-        drafter.enable_windowed_kv(sequence_capacity, runtime.prefix_cache_capacity())?;
+        let windowed_kv =
+            drafter.enable_windowed_kv(sequence_capacity, runtime.prefix_cache_capacity())?;
         self.text
             .set_dflash_tap_layers(drafter.target_layer_ids.clone());
         self.mtp_n_predict.store(n_predict, Ordering::Relaxed);
@@ -289,9 +311,12 @@ impl Qwen3_5Model {
             )?;
             *self.draft_lm_head.lock().expect("draft lm_head poisoned") = Some(head);
         }
-        let adaptive =
-            config.n_predict.is_none() && crate::speculative::dflash::dflash_adaptive_requested();
-        let adaptive = adaptive && drafter.enable_adaptive(n_predict);
+        let adaptive = config.n_predict.is_none()
+            && windowed_kv
+            && crate::speculative::dflash::dflash_adaptive_requested();
+        let max_live_sequences =
+            sequence_capacity.saturating_sub(crate::pipeline::RECURRENT_GRAPH_PAD_SLOTS);
+        let adaptive = adaptive && drafter.enable_adaptive(n_predict, max_live_sequences);
         let kind = if drafter.has_selector() {
             "DFlash2"
         } else {
@@ -305,7 +330,7 @@ impl Qwen3_5Model {
             crate::speculative::MtpDraftSamplingMethod::Probabilistic => "probabilistic draft",
         };
         let depth = if adaptive {
-            format!("adaptive depth 1..={n_predict}")
+            format!("batch-adaptive depth <= {n_predict}")
         } else {
             format!("depth {n_predict}")
         };
@@ -888,7 +913,10 @@ fn capture_view(capture: &SpecCapture) -> Result<CaptureView> {
     let positions = capture.positions.to_dtype(candle_core::DType::U32)?;
     let mrope = match positions.rank() {
         3 => positions.to_vec3::<u32>()?,
-        2 => positions.unsqueeze(2)?.to_vec3::<u32>()?,
+        2 => {
+            let positions = positions.to_vec2::<u32>()?;
+            vec![positions.clone(), positions.clone(), positions]
+        }
         rank => candle_core::bail!("unexpected MTP position rank {rank}"),
     };
     Ok(CaptureView { hidden, mrope })
@@ -975,6 +1003,38 @@ impl SpeculativeTargetMixin for Qwen3_5Model {
 
     fn supports_recurrent_speculative_checkpoints(&self) -> bool {
         self.text.supports_recurrent_speculative_checkpoints()
+    }
+
+    fn supports_recurrent_speculative_transitions(&self) -> bool {
+        self.text.supports_recurrent_speculative_transitions()
+    }
+
+    fn reserve_recurrent_speculative_transition_storage(&self) -> Result<bool> {
+        self.text.reserve_recurrent_transition_storage()
+    }
+
+    fn reserve_recurrent_decode_deferred_storage(&self) -> Result<bool> {
+        if self.has_speculative_proposer() {
+            Ok(false)
+        } else {
+            self.text.reserve_recurrent_decode_deferred_storage()
+        }
+    }
+
+    fn disable_recurrent_decode_deferred_storage(&self) -> Result<bool> {
+        self.text.disable_recurrent_decode_deferred_storage()
+    }
+
+    fn apply_recurrent_speculative_transitions_for_current_batch(&self) -> Result<bool> {
+        self.text.apply_current_recurrent_transitions()
+    }
+
+    fn flush_recurrent_state_for_current_batch(&self) -> Result<()> {
+        self.text.flush_current_recurrent_state()
+    }
+
+    fn flush_recurrent_speculative_transitions(&self, seq_ids: &[usize]) -> Result<()> {
+        self.text.flush_recurrent_transitions_for_sequences(seq_ids)
     }
 
     fn supports_speculative_prompt_bootstrap(&self) -> bool {
@@ -1077,16 +1137,20 @@ impl SpeculativeTargetMixin for Qwen3_5Model {
         drafter.evict_cuda_graphs_lru(max_entries)
     }
 
-    fn speculative_bypass(&mut self, seq_ids: &[usize]) {
+    fn speculative_bypass(&mut self, seq_ids: &[usize]) -> Result<()> {
+        let flush_result = self.text.flush_recurrent_transitions_for_sequences(seq_ids);
         if let Some(drafter) = self.dflash.lock().expect("dflash poisoned").as_ref() {
             drafter.mark_seqs_dormant(seq_ids);
         }
+        flush_result
     }
 
-    fn release_speculative_sequences(&mut self, seq_ids: &[usize]) {
+    fn release_speculative_sequences(&mut self, seq_ids: &[usize]) -> Result<()> {
+        let flush_result = self.text.flush_recurrent_transitions_for_sequences(seq_ids);
         if let Some(drafter) = self.dflash.lock().expect("dflash poisoned").as_ref() {
             drafter.release_seqs(seq_ids);
         }
+        flush_result
     }
 
     fn speculative_propose(
@@ -1136,6 +1200,13 @@ impl SpeculativeTargetMixin for Qwen3_5Model {
             .iter()
             .map(|row| (row.batch_idx, row.keep_rows))
             .collect::<Vec<_>>();
+        if self.text.cache.hybrid().uses_recurrent_transition_log() {
+            if !self.text.stage_recurrent_prefixes(rows)? {
+                self.text.replay_recurrent_prefixes(&checkpoint_rows)?;
+            }
+            self.text.clear_gdn_replay_stash();
+            return Ok(());
+        }
         let checkpointed = {
             let mut cache = self.text.cache.hybrid();
             self.text
@@ -1169,7 +1240,59 @@ impl SpeculativeTargetMixin for Qwen3_5Model {
             .ok_or_else(|| {
                 candle_core::Error::msg("foreign speculative graph state for Qwen3.5")
             })?;
-        self.text.install_spec_graph_state(state);
-        Ok(())
+        self.text.install_spec_graph_state(state)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{capture_view, resolve_dflash_n_predict, SpecCapture};
+    use candle_core::{DType, Device, Tensor};
+
+    #[test]
+    fn text_capture_positions_expand_to_equal_mrope_planes() {
+        let device = Device::Cpu;
+        let capture = SpecCapture {
+            hidden: Tensor::zeros((2, 2, 4), DType::F32, &device).unwrap(),
+            positions: Tensor::from_vec(vec![3u32, 4, 9, 10], (2, 2), &device).unwrap(),
+            taps: Vec::new(),
+        };
+        let view = capture_view(&capture).unwrap();
+        let expected = vec![vec![3u32, 4], vec![9, 10]];
+        assert_eq!(
+            view.mrope,
+            vec![expected.clone(), expected.clone(), expected]
+        );
+    }
+
+    #[test]
+    fn auto_dflash_depth_follows_reserved_checkpoint_lanes() {
+        assert_eq!(resolve_dflash_n_predict(None, 8, 8).unwrap(), 7);
+        assert_eq!(resolve_dflash_n_predict(None, 8, 4).unwrap(), 3);
+    }
+
+    #[test]
+    fn replay_sentinel_keeps_configured_or_default_dflash_depth() {
+        assert_eq!(resolve_dflash_n_predict(None, 8, 1).unwrap(), 7);
+        assert_eq!(resolve_dflash_n_predict(Some(3), 8, 1).unwrap(), 3);
+    }
+
+    #[test]
+    fn explicit_dflash_depth_must_match_reserved_checkpoint_lanes() {
+        assert_eq!(resolve_dflash_n_predict(Some(3), 8, 4).unwrap(), 3);
+        let error = resolve_dflash_n_predict(Some(3), 8, 8)
+            .expect_err("explicit depth must match the reserved lanes");
+        assert!(error.to_string().contains(
+            "requested 3 draft tokens require 4 recurrent checkpoint lanes, but 8 lanes were reserved"
+        ));
+    }
+
+    #[test]
+    fn reserved_dflash_depth_must_fit_the_drafter_block() {
+        let error = resolve_dflash_n_predict(None, 8, 9)
+            .expect_err("reserved lanes must fit the drafter block");
+        assert!(error
+            .to_string()
+            .contains("reserved 9 recurrent checkpoint lanes"));
     }
 }

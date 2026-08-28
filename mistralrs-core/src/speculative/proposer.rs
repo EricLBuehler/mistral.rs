@@ -57,6 +57,7 @@ pub struct SpeculativeCommitRow {
     /// Rows of the verify forward that stay committed: the anchor plus accepted drafts.
     pub keep_rows: usize,
     pub accepted_all: bool,
+    pub terminal: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

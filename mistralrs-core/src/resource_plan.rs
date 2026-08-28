@@ -104,6 +104,7 @@ fn split_paged_config(
     split.mapped_activation_memory_reservation_bytes =
         config.mapped_activation_memory_reservation_bytes;
     split.recurrent_checkpoint_lanes = config.recurrent_checkpoint_lanes;
+    split.recurrent_checkpoint_lanes_auto = config.recurrent_checkpoint_lanes_auto;
     split.recurrent_prefix_capacity = config.recurrent_prefix_capacity;
     split.resolve_memory_utilization_after_load =
         config.resolve_memory_utilization_after_load && model_weight == active_weight;
@@ -126,6 +127,7 @@ mod tests {
         .with_base_device_memory_reservation(4 * 1024 * 1024 * 1024)?
         .with_recurrent_checkpoint_lanes(8)?
         .with_recurrent_prefix_capacity(16);
+        config.recurrent_checkpoint_lanes_auto = true;
         config.reserve_activation_memory(512 * 1024 * 1024, 256 * 1024 * 1024);
 
         let split = split_paged_config(config, 1, 2)?;
@@ -143,6 +145,7 @@ mod tests {
             256 * 1024 * 1024
         );
         assert_eq!(split.recurrent_checkpoint_lanes, 8);
+        assert!(split.recurrent_checkpoint_lanes_auto);
         assert_eq!(split.recurrent_prefix_capacity, 16);
         assert!(!split.resolve_memory_utilization_after_load);
         assert!(matches!(

@@ -9,12 +9,13 @@ use candle_core::cuda_backend::cudarc::driver::{
 };
 use candle_core::cuda_backend::CudaStorageSlice;
 use candle_core::{
-    CpuStorage, CudaStorage, DType, DeviceLocation, InplaceOp1, Layout, Result, Shape, Tensor,
+    CpuStorage, CudaStorage, DType, DeviceLocation, InplaceOp1, Layout, Result, Shape, Storage,
+    Tensor,
 };
 
 use crate::ops::{
-    cuda_topk_logits_packed_batched, cuda_topk_logits_packed_batched_with_workspace,
-    CudaTopKLogitsPackedWorkspace, TopKLogitsPackedOutput, CUDA_TOPK_MAX_K,
+    cuda_topk_ranked_packed_batched, cuda_topk_ranked_packed_batched_with_workspace,
+    CudaRankedTopKPackedWorkspace, RankedTopKPackedOutput, CUDA_TOPK_MAX_K,
 };
 
 use super::ffi;
@@ -36,6 +37,7 @@ pub(crate) enum SparseRejectionMode {
     BoundedTopK { max_top_k: usize },
 }
 
+#[cfg(test)]
 pub(crate) struct SparseRejectionInput<'a> {
     pub(crate) target_logits: &'a Tensor,
     pub(crate) draft_tokens: &'a Tensor,
@@ -66,16 +68,182 @@ pub(crate) struct SparseRejectionWorkspaceInput<'a> {
 #[derive(Clone, Copy)]
 pub(crate) enum SparseRejectionDraftInput<'a> {
     Host(&'a [u32]),
+    #[cfg(test)]
     Device(&'a Tensor),
+    DeviceRows(&'a [Tensor]),
 }
 
 #[derive(Clone, Copy)]
 pub(crate) enum SparseRejectionProposalInput<'a> {
     Deterministic,
+    #[cfg(test)]
     Sparse {
         token_ids: &'a Tensor,
         probs: &'a Tensor,
     },
+    SparseRows {
+        token_ids: &'a [Tensor],
+        probs: &'a [Tensor],
+    },
+}
+
+#[derive(Clone)]
+struct DenseCudaRows {
+    rows: Vec<Tensor>,
+    shape: Shape,
+}
+
+#[derive(Clone)]
+enum SparseRejectionDeviceTensor {
+    Tensor(Tensor),
+    DenseRows(DenseCudaRows),
+}
+
+impl SparseRejectionDeviceTensor {
+    fn from_tensor(tensor: &Tensor) -> Self {
+        Self::Tensor(tensor.clone())
+    }
+
+    fn from_rows(
+        rows: &[Tensor],
+        dtype: DType,
+        row_shape: &[usize],
+        device: &candle_core::Device,
+    ) -> Result<Self> {
+        if let Some(rows) = dense_cuda_rows(rows, dtype, row_shape, device)? {
+            return Ok(Self::DenseRows(rows));
+        }
+        let rows = rows.iter().collect::<Vec<_>>();
+        let tensor = match rows.as_slice() {
+            [row] => row.unsqueeze(0)?.contiguous()?,
+            [] => candle_core::bail!("{OP} cannot materialize an empty row batch"),
+            _ => Tensor::stack(&rows, 0)?.contiguous()?,
+        };
+        Ok(Self::Tensor(tensor))
+    }
+
+    fn anchor(&self) -> &Tensor {
+        match self {
+            Self::Tensor(tensor) => tensor,
+            Self::DenseRows(rows) => rows.rows.first().expect("dense CUDA rows are non-empty"),
+        }
+    }
+
+    fn dims(&self) -> &[usize] {
+        match self {
+            Self::Tensor(tensor) => tensor.dims(),
+            Self::DenseRows(rows) => rows.shape.dims(),
+        }
+    }
+
+    fn dtype(&self) -> DType {
+        self.anchor().dtype()
+    }
+
+    fn device(&self) -> &candle_core::Device {
+        self.anchor().device()
+    }
+
+    fn elem_count(&self) -> usize {
+        match self {
+            Self::Tensor(tensor) => tensor.elem_count(),
+            Self::DenseRows(rows) => rows.shape.elem_count(),
+        }
+    }
+
+    fn is_contiguous(&self) -> bool {
+        match self {
+            Self::Tensor(tensor) => tensor.is_contiguous(),
+            Self::DenseRows(_) => true,
+        }
+    }
+
+    fn reshape(&self, shape: Shape) -> Result<Self> {
+        if shape.elem_count() != self.elem_count() {
+            candle_core::bail!(
+                "{OP} cannot reshape {:?} to {:?}",
+                self.dims(),
+                shape.dims()
+            );
+        }
+        match self {
+            Self::Tensor(tensor) => Ok(Self::Tensor(tensor.reshape(shape)?)),
+            Self::DenseRows(rows) => Ok(Self::DenseRows(DenseCudaRows {
+                rows: rows.rows.clone(),
+                shape,
+            })),
+        }
+    }
+
+    fn extend_inputs(&self, inputs: &mut Vec<Tensor>) {
+        match self {
+            Self::Tensor(tensor) => inputs.push(tensor.clone()),
+            Self::DenseRows(rows) => inputs.extend(rows.rows.iter().cloned()),
+        }
+    }
+}
+
+fn dense_cuda_rows(
+    rows: &[Tensor],
+    dtype: DType,
+    row_shape: &[usize],
+    device: &candle_core::Device,
+) -> Result<Option<DenseCudaRows>> {
+    if rows.is_empty() || !device.is_cuda() {
+        return Ok(None);
+    }
+    let row_elems = row_shape.iter().try_fold(1usize, |elements, dim| {
+        elements
+            .checked_mul(*dim)
+            .ok_or_else(|| candle_core::Error::msg("sparse rejection row size overflow"))
+    })?;
+    let mut storage_id = None;
+    let mut first_offset = None;
+    for (index, row) in rows.iter().enumerate() {
+        if row.dtype() != dtype
+            || row.dims() != row_shape
+            || !row.is_contiguous()
+            || !row.device().same_device(device)
+        {
+            return Ok(None);
+        }
+        let (storage, layout) = row.storage_and_layout();
+        if !matches!(&*storage, Storage::Cuda(_)) {
+            return Ok(None);
+        }
+        let row_storage_id = std::ptr::from_ref::<Storage>(&*storage) as usize;
+        let row_offset = layout.start_offset();
+        let first_storage_id = *storage_id.get_or_insert(row_storage_id);
+        let first_row_offset = *first_offset.get_or_insert(row_offset);
+        let expected_offset = index
+            .checked_mul(row_elems)
+            .and_then(|offset| first_row_offset.checked_add(offset))
+            .ok_or_else(|| candle_core::Error::msg("sparse rejection row offset overflow"))?;
+        if row_storage_id != first_storage_id || row_offset != expected_offset {
+            return Ok(None);
+        }
+    }
+    let mut shape = Vec::with_capacity(row_shape.len() + 1);
+    shape.push(rows.len());
+    shape.extend_from_slice(row_shape);
+    Ok(Some(DenseCudaRows {
+        rows: rows.to_vec(),
+        shape: Shape::from_dims(&shape),
+    }))
+}
+
+struct SparseRejectionDeviceInput<'a> {
+    target_logits: &'a Tensor,
+    draft_tokens: &'a SparseRejectionDeviceTensor,
+    q_token_ids: &'a SparseRejectionDeviceTensor,
+    q_probs: &'a SparseRejectionDeviceTensor,
+    inverse_temperatures: &'a Tensor,
+    target_top_k: &'a Tensor,
+    top_p: &'a Tensor,
+    min_p: &'a Tensor,
+    accept_uniforms: &'a Tensor,
+    sample_uniforms: &'a Tensor,
+    mode: SparseRejectionMode,
 }
 
 struct SparseRejectionPinned<T> {
@@ -144,7 +312,7 @@ pub struct CudaSparseRejectionWorkspace {
     accept_uniforms_host: SparseRejectionPinned<f32>,
     sample_uniforms_host: SparseRejectionPinned<f32>,
     outcomes_host: SparseRejectionPinned<u32>,
-    topk: Option<CudaTopKLogitsPackedWorkspace>,
+    topk: Option<CudaRankedTopKPackedWorkspace>,
     completion: Arc<CudaEvent>,
     pending: Option<CudaSparseRejectionPending>,
 }
@@ -189,7 +357,7 @@ pub(crate) struct SparseRejectionCompletion {
 pub(crate) struct SparseRejectionOutput {
     _outcomes: Tensor,
     _inputs: Vec<Tensor>,
-    _packed_target: Option<TopKLogitsPackedOutput>,
+    _packed_target: Option<RankedTopKPackedOutput>,
     _row_inverse_temperatures: Option<Tensor>,
 }
 
@@ -303,7 +471,7 @@ impl InplaceOp1 for SparseRejectionKernelLaunch {
     }
 }
 
-fn validate_input(input: &SparseRejectionInput<'_>) -> Result<SparseRejectionShape> {
+fn validate_input(input: &SparseRejectionDeviceInput<'_>) -> Result<SparseRejectionShape> {
     let target_dims = input.target_logits.dims();
     if target_dims.len() != 3 {
         candle_core::bail!(
@@ -350,7 +518,7 @@ fn validate_input(input: &SparseRejectionInput<'_>) -> Result<SparseRejectionSha
     if !input.target_logits.is_contiguous() {
         candle_core::bail!("{OP} requires contiguous target logits");
     }
-    let specs = [
+    let device_specs = [
         (
             input.draft_tokens,
             DType::U32,
@@ -369,6 +537,28 @@ fn validate_input(input: &SparseRejectionInput<'_>) -> Result<SparseRejectionSha
             q_shape.as_slice(),
             "q probabilities",
         ),
+    ];
+    for (tensor, dtype, shape, name) in device_specs {
+        if tensor.dtype() != dtype {
+            candle_core::bail!(
+                "{OP} expected {name} to have dtype {dtype:?}, got {:?}",
+                tensor.dtype()
+            );
+        }
+        if tensor.dims() != shape {
+            candle_core::bail!(
+                "{OP} expected {name} with shape {shape:?}, got {:?}",
+                tensor.dims()
+            );
+        }
+        if !tensor.is_contiguous() {
+            candle_core::bail!("{OP} requires contiguous {name}");
+        }
+        if !input.target_logits.device().same_device(tensor.device()) {
+            candle_core::bail!("{OP} requires every tensor on one CUDA device");
+        }
+    }
+    let tensor_specs = [
         (
             input.inverse_temperatures,
             DType::F32,
@@ -396,7 +586,7 @@ fn validate_input(input: &SparseRejectionInput<'_>) -> Result<SparseRejectionSha
             "sample uniforms",
         ),
     ];
-    for (tensor, dtype, shape, name) in specs {
+    for (tensor, dtype, shape, name) in tensor_specs {
         if tensor.dtype() != dtype {
             candle_core::bail!(
                 "{OP} expected {name} to have dtype {dtype:?}, got {:?}",
@@ -668,6 +858,42 @@ fn enqueue_u32_dtoh(
     Ok(())
 }
 
+fn enqueue_device_u32_dtoh(
+    src: &SparseRejectionDeviceTensor,
+    host: &mut SparseRejectionPinned<u32>,
+    len: usize,
+    stream: &Arc<CudaStream>,
+) -> Result<()> {
+    let anchor = src.anchor();
+    let (storage, layout) = anchor.storage_and_layout();
+    let Storage::Cuda(storage) = &*storage else {
+        candle_core::bail!("{OP} workspace source must be CUDA");
+    };
+    let CudaStorageSlice::U32(slice) = &storage.slice else {
+        candle_core::bail!("{OP} workspace source must be U32");
+    };
+    if !src.is_contiguous() || len > src.elem_count() || len > host.allocation.len() {
+        candle_core::bail!("{OP} workspace D2H copy exceeds its capacity");
+    }
+    let start = layout.start_offset();
+    let slice = slice.slice(start..start + len);
+    let (src_ptr, src_guard) = slice.device_ptr(stream);
+    let result = unsafe {
+        sys::cuMemcpyDtoHAsync_v2(
+            host.as_mut_ptr().cast(),
+            src_ptr,
+            len * std::mem::size_of::<u32>(),
+            stream.cu_stream(),
+        )
+    };
+    drop(src_guard);
+    if result != sys::CUresult::CUDA_SUCCESS {
+        return Err(candle_core::Error::msg(format!("{result:?}"))
+            .context("sparse rejection U32 D2H copy failed"));
+    }
+    Ok(())
+}
+
 fn validate_host_len(name: &str, actual: usize, expected: usize) -> Result<()> {
     if actual != expected {
         candle_core::bail!("{OP} expected {expected} {name} values, got {actual}");
@@ -698,6 +924,7 @@ pub(crate) fn sparse_rejection_cuda_submit(
         SparseRejectionDraftInput::Host(tokens) => {
             validate_host_len("draft token", tokens.len(), draft_elems)?;
         }
+        #[cfg(test)]
         SparseRejectionDraftInput::Device(tokens) => {
             if tokens.dtype() != DType::U32
                 || tokens.dims() != [batch, drafts]
@@ -708,6 +935,23 @@ pub(crate) fn sparse_rejection_cuda_submit(
                     "{OP} device draft tokens must be contiguous CUDA U32 with shape [{batch}, {drafts}] on the target device"
                 );
             }
+        }
+        SparseRejectionDraftInput::DeviceRows(tokens) => {
+            if tokens.len() != batch {
+                candle_core::bail!(
+                    "{OP} expected {batch} device draft token rows, got {}",
+                    tokens.len()
+                );
+            }
+        }
+    }
+    if let SparseRejectionProposalInput::SparseRows { token_ids, probs } = input.proposal {
+        if token_ids.len() != batch || probs.len() != batch {
+            candle_core::bail!(
+                "{OP} expected {batch} sparse proposal rows, got {} token-id and {} probability rows",
+                token_ids.len(),
+                probs.len()
+            );
         }
     }
     validate_host_len(
@@ -821,22 +1065,71 @@ pub(crate) fn sparse_rejection_cuda_submit(
         }
 
         let draft_tokens = match input.draft_tokens {
-            SparseRejectionDraftInput::Host(_) => workspace
-                .draft_tokens
-                .narrow(0, 0, draft_elems)?
-                .reshape((batch, drafts))?,
-            SparseRejectionDraftInput::Device(tokens) => tokens.clone(),
+            SparseRejectionDraftInput::Host(_) => {
+                let tokens = workspace
+                    .draft_tokens
+                    .narrow(0, 0, draft_elems)?
+                    .reshape((batch, drafts))?;
+                SparseRejectionDeviceTensor::from_tensor(&tokens)
+            }
+            #[cfg(test)]
+            SparseRejectionDraftInput::Device(tokens) => {
+                SparseRejectionDeviceTensor::from_tensor(tokens)
+            }
+            SparseRejectionDraftInput::DeviceRows(tokens) => {
+                SparseRejectionDeviceTensor::from_rows(
+                    tokens,
+                    DType::U32,
+                    &[drafts],
+                    input.target_logits.device(),
+                )?
+            }
         };
         let (q_token_ids, q_probs) = match input.proposal {
             SparseRejectionProposalInput::Deterministic => (
-                draft_tokens.unsqueeze(2)?,
-                workspace
-                    .deterministic_q_probs
-                    .narrow(0, 0, draft_elems)?
-                    .reshape((batch, drafts, 1))?,
+                draft_tokens.reshape(Shape::from_dims(&[batch, drafts, 1]))?,
+                SparseRejectionDeviceTensor::from_tensor(
+                    &workspace
+                        .deterministic_q_probs
+                        .narrow(0, 0, draft_elems)?
+                        .reshape((batch, drafts, 1))?,
+                ),
             ),
-            SparseRejectionProposalInput::Sparse { token_ids, probs } => {
-                (token_ids.clone(), probs.clone())
+            #[cfg(test)]
+            SparseRejectionProposalInput::Sparse { token_ids, probs } => (
+                SparseRejectionDeviceTensor::from_tensor(token_ids),
+                SparseRejectionDeviceTensor::from_tensor(probs),
+            ),
+            SparseRejectionProposalInput::SparseRows { token_ids, probs } => {
+                let Some(first) = token_ids.first() else {
+                    candle_core::bail!("{OP} requires sparse proposal rows");
+                };
+                let [row_drafts, q_width] = first.dims() else {
+                    candle_core::bail!(
+                        "{OP} expected sparse proposal rows with shape [drafts, q_width], got {:?}",
+                        first.dims()
+                    );
+                };
+                if *row_drafts != drafts {
+                    candle_core::bail!(
+                        "{OP} expected sparse proposal rows with {drafts} drafts, got {row_drafts}"
+                    );
+                }
+                let row_shape = [drafts, *q_width];
+                (
+                    SparseRejectionDeviceTensor::from_rows(
+                        token_ids,
+                        DType::U32,
+                        &row_shape,
+                        input.target_logits.device(),
+                    )?,
+                    SparseRejectionDeviceTensor::from_rows(
+                        probs,
+                        DType::F32,
+                        &row_shape,
+                        input.target_logits.device(),
+                    )?,
+                )
             }
         };
         let inverse_temperatures = workspace.inverse_temperatures.narrow(0, 0, batch)?;
@@ -856,8 +1149,8 @@ pub(crate) fn sparse_rejection_cuda_submit(
             .outcomes
             .narrow(0, 0, outcome_elems)?
             .reshape((batch, SPARSE_REJECTION_OUTCOME_WIDTH))?;
-        let output = sparse_rejection_cuda_with_outcomes(
-            SparseRejectionInput {
+        let output = sparse_rejection_cuda_device_with_outcomes(
+            SparseRejectionDeviceInput {
                 target_logits: input.target_logits,
                 draft_tokens: &draft_tokens,
                 q_token_ids: &q_token_ids,
@@ -873,8 +1166,7 @@ pub(crate) fn sparse_rejection_cuda_submit(
             Some(&outcomes),
             row_inverse_temperatures
                 .as_ref()
-                .map(|temperatures| SparseRejectionTopKContext {
-                    row_inverse_temperatures: temperatures,
+                .map(|_| SparseRejectionTopKContext {
                     workspace: &mut workspace.topk,
                 }),
         )?;
@@ -884,8 +1176,14 @@ pub(crate) fn sparse_rejection_cuda_submit(
             outcome_elems,
             &stream,
         )?;
-        if matches!(input.draft_tokens, SparseRejectionDraftInput::Device(_)) {
-            enqueue_u32_dtoh(
+        let device_drafts = match input.draft_tokens {
+            #[cfg(test)]
+            SparseRejectionDraftInput::Device(_) => true,
+            SparseRejectionDraftInput::DeviceRows(_) => true,
+            SparseRejectionDraftInput::Host(_) => false,
+        };
+        if device_drafts {
+            enqueue_device_u32_dtoh(
                 &draft_tokens,
                 &mut workspace.draft_tokens_host,
                 draft_elems,
@@ -969,22 +1267,39 @@ pub(crate) fn sparse_rejection_cuda_complete(
 pub(crate) fn sparse_rejection_cuda(
     input: SparseRejectionInput<'_>,
 ) -> Result<SparseRejectionOutput> {
-    sparse_rejection_cuda_with_outcomes(input, None, None)
+    let draft_tokens = SparseRejectionDeviceTensor::from_tensor(input.draft_tokens);
+    let q_token_ids = SparseRejectionDeviceTensor::from_tensor(input.q_token_ids);
+    let q_probs = SparseRejectionDeviceTensor::from_tensor(input.q_probs);
+    sparse_rejection_cuda_device_with_outcomes(
+        SparseRejectionDeviceInput {
+            target_logits: input.target_logits,
+            draft_tokens: &draft_tokens,
+            q_token_ids: &q_token_ids,
+            q_probs: &q_probs,
+            inverse_temperatures: input.inverse_temperatures,
+            target_top_k: input.target_top_k,
+            top_p: input.top_p,
+            min_p: input.min_p,
+            accept_uniforms: input.accept_uniforms,
+            sample_uniforms: input.sample_uniforms,
+            mode: input.mode,
+        },
+        None,
+        None,
+    )
 }
 
 struct SparseRejectionTopKContext<'a> {
-    row_inverse_temperatures: &'a Tensor,
-    workspace: &'a mut Option<CudaTopKLogitsPackedWorkspace>,
+    workspace: &'a mut Option<CudaRankedTopKPackedWorkspace>,
 }
 
 #[allow(clippy::too_many_lines)]
-fn sparse_rejection_cuda_with_outcomes(
-    input: SparseRejectionInput<'_>,
+fn sparse_rejection_cuda_device_with_outcomes(
+    input: SparseRejectionDeviceInput<'_>,
     outcomes: Option<&Tensor>,
     mut topk_context: Option<SparseRejectionTopKContext<'_>>,
 ) -> Result<SparseRejectionOutput> {
     let shape = validate_input(&input)?;
-    let mut row_inverse_temperatures = None;
     let packed_target = match input.mode {
         SparseRejectionMode::Categorical => None,
         SparseRejectionMode::BoundedTopK { max_top_k } => {
@@ -995,24 +1310,13 @@ fn sparse_rejection_cuda_with_outcomes(
                 .target_logits
                 .reshape((shape.batch * shape.rows, shape.vocab))?;
             let packed = if let Some(context) = topk_context.as_mut() {
-                let packed = cuda_topk_logits_packed_batched_with_workspace(
+                cuda_topk_ranked_packed_batched_with_workspace(
                     &flattened,
                     max_top_k,
-                    context.row_inverse_temperatures,
                     &mut *context.workspace,
-                )?;
-                row_inverse_temperatures = Some(context.row_inverse_temperatures.clone());
-                packed
+                )?
             } else {
-                let repeated = input
-                    .inverse_temperatures
-                    .unsqueeze(1)?
-                    .broadcast_as((shape.batch, shape.rows))?
-                    .flatten_all()?
-                    .contiguous()?;
-                let packed = cuda_topk_logits_packed_batched(&flattened, max_top_k, &repeated)?;
-                row_inverse_temperatures = Some(repeated);
-                packed
+                cuda_topk_ranked_packed_batched(&flattened, max_top_k)?
             };
             Some(packed)
         }
@@ -1027,17 +1331,20 @@ fn sparse_rejection_cuda_with_outcomes(
         candle_core::Storage::Cuda(storage) => storage,
         _ => candle_core::bail!("{OP} requires CUDA target logits"),
     };
-    let (draft_storage, draft_layout) = input.draft_tokens.storage_and_layout();
+    let draft_tokens = input.draft_tokens.anchor();
+    let (draft_storage, draft_layout) = draft_tokens.storage_and_layout();
     let draft_storage = match &*draft_storage {
         candle_core::Storage::Cuda(storage) => storage,
         _ => candle_core::bail!("{OP} requires CUDA draft tokens"),
     };
-    let (q_ids_storage, q_ids_layout) = input.q_token_ids.storage_and_layout();
+    let q_token_ids = input.q_token_ids.anchor();
+    let (q_ids_storage, q_ids_layout) = q_token_ids.storage_and_layout();
     let q_ids_storage = match &*q_ids_storage {
         candle_core::Storage::Cuda(storage) => storage,
         _ => candle_core::bail!("{OP} requires CUDA q token ids"),
     };
-    let (q_probs_storage, q_probs_layout) = input.q_probs.storage_and_layout();
+    let q_probs = input.q_probs.anchor();
+    let (q_probs_storage, q_probs_layout) = q_probs.storage_and_layout();
     let q_probs_storage = match &*q_probs_storage {
         candle_core::Storage::Cuda(storage) => storage,
         _ => candle_core::bail!("{OP} requires CUDA q probabilities"),
@@ -1189,26 +1496,28 @@ fn sparse_rejection_cuda_with_outcomes(
     drop(accept_guard);
     drop(sample_guard);
 
+    let mut inputs = vec![
+        input.target_logits.clone(),
+        input.inverse_temperatures.clone(),
+        input.target_top_k.clone(),
+        input.top_p.clone(),
+        input.min_p.clone(),
+        input.accept_uniforms.clone(),
+        input.sample_uniforms.clone(),
+    ];
+    input.draft_tokens.extend_inputs(&mut inputs);
+    input.q_token_ids.extend_inputs(&mut inputs);
+    input.q_probs.extend_inputs(&mut inputs);
     Ok(SparseRejectionOutput {
         _outcomes: outcomes.clone(),
-        _inputs: vec![
-            input.target_logits.clone(),
-            input.draft_tokens.clone(),
-            input.q_token_ids.clone(),
-            input.q_probs.clone(),
-            input.inverse_temperatures.clone(),
-            input.target_top_k.clone(),
-            input.top_p.clone(),
-            input.min_p.clone(),
-            input.accept_uniforms.clone(),
-            input.sample_uniforms.clone(),
-        ],
+        _inputs: inputs,
         _packed_target: packed_target,
-        _row_inverse_temperatures: row_inverse_temperatures,
+        _row_inverse_temperatures: None,
     })
 }
 
 #[cfg(test)]
+#[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 mod tests {
     use super::*;
     use candle_core::Device;
@@ -1522,6 +1831,136 @@ mod tests {
 
     #[test]
     #[ignore = "requires CUDA"]
+    fn dense_rows_require_shared_ordered_tight_backing() -> Result<()> {
+        let device = Device::new_cuda(0)?;
+        let packed = Tensor::from_vec((0..24u32).collect(), (4, 3, 2), &device)?;
+        let rows = (0..4)
+            .map(|row| packed.get(row))
+            .collect::<Result<Vec<_>>>()?;
+        let dense = dense_cuda_rows(&rows, DType::U32, &[3, 2], &device)?
+            .expect("packed row views must remain dense");
+        assert_eq!(dense.shape.dims(), [4, 3, 2]);
+
+        let reordered = vec![
+            rows[1].clone(),
+            rows[0].clone(),
+            rows[2].clone(),
+            rows[3].clone(),
+        ];
+        assert!(dense_cuda_rows(&reordered, DType::U32, &[3, 2], &device)?.is_none());
+        assert!(matches!(
+            SparseRejectionDeviceTensor::from_rows(&reordered, DType::U32, &[3, 2], &device)?,
+            SparseRejectionDeviceTensor::Tensor(_)
+        ));
+
+        let gapped = vec![rows[0].clone(), rows[2].clone()];
+        assert!(dense_cuda_rows(&gapped, DType::U32, &[3, 2], &device)?.is_none());
+
+        let separate = (0..4)
+            .map(|row| Tensor::from_vec(vec![row as u32; 6], (3, 2), &device))
+            .collect::<Result<Vec<_>>>()?;
+        assert!(dense_cuda_rows(&separate, DType::U32, &[3, 2], &device)?.is_none());
+
+        let transposed = rows
+            .iter()
+            .map(|row| row.transpose(0, 1))
+            .collect::<Result<Vec<_>>>()?;
+        assert!(dense_cuda_rows(&transposed, DType::U32, &[2, 3], &device)?.is_none());
+        Ok(())
+    }
+
+    #[test]
+    #[ignore = "requires CUDA"]
+    fn dense_rows_match_packed_inputs_and_survive_owner_drop() -> Result<()> {
+        let device = Device::new_cuda(0)?;
+        for bounded_topk in [false, true] {
+            let mut case = deterministic_workspace_case(4, 3);
+            if bounded_topk {
+                case.target_top_k.fill(case.vocab as u32);
+                case.mode = SparseRejectionMode::BoundedTopK {
+                    max_top_k: case.vocab,
+                };
+            }
+            let tensors = case.to_device(&device)?;
+            let mut packed_workspace = None;
+            let packed_submission = sparse_rejection_cuda_submit(
+                SparseRejectionWorkspaceInput {
+                    target_logits: &tensors.target_logits,
+                    proposal: SparseRejectionProposalInput::Sparse {
+                        token_ids: &tensors.q_token_ids,
+                        probs: &tensors.q_probs,
+                    },
+                    draft_tokens: SparseRejectionDraftInput::Device(&tensors.draft_tokens),
+                    inverse_temperatures: &case.inverse_temperatures,
+                    target_top_k: &case.target_top_k,
+                    top_p: &case.top_p,
+                    min_p: &case.min_p,
+                    accept_uniforms: &case.accept_uniforms,
+                    sample_uniforms: &case.sample_uniforms,
+                    mode: case.mode,
+                },
+                &mut packed_workspace,
+            )?;
+            let packed = sparse_rejection_cuda_complete(&mut packed_workspace, &packed_submission)?;
+
+            let draft_rows = (0..case.batch)
+                .map(|row| tensors.draft_tokens.get(row))
+                .collect::<Result<Vec<_>>>()?;
+            let q_token_rows = (0..case.batch)
+                .map(|row| tensors.q_token_ids.get(row))
+                .collect::<Result<Vec<_>>>()?;
+            let q_prob_rows = (0..case.batch)
+                .map(|row| tensors.q_probs.get(row))
+                .collect::<Result<Vec<_>>>()?;
+            assert!(dense_cuda_rows(&draft_rows, DType::U32, &[case.drafts], &device)?.is_some());
+            assert!(dense_cuda_rows(
+                &q_token_rows,
+                DType::U32,
+                &[case.drafts, case.q_width],
+                &device
+            )?
+            .is_some());
+            assert!(dense_cuda_rows(
+                &q_prob_rows,
+                DType::F32,
+                &[case.drafts, case.q_width],
+                &device
+            )?
+            .is_some());
+
+            let mut row_workspace = None;
+            let row_submission = sparse_rejection_cuda_submit(
+                SparseRejectionWorkspaceInput {
+                    target_logits: &tensors.target_logits,
+                    proposal: SparseRejectionProposalInput::SparseRows {
+                        token_ids: &q_token_rows,
+                        probs: &q_prob_rows,
+                    },
+                    draft_tokens: SparseRejectionDraftInput::DeviceRows(&draft_rows),
+                    inverse_temperatures: &case.inverse_temperatures,
+                    target_top_k: &case.target_top_k,
+                    top_p: &case.top_p,
+                    min_p: &case.min_p,
+                    accept_uniforms: &case.accept_uniforms,
+                    sample_uniforms: &case.sample_uniforms,
+                    mode: case.mode,
+                },
+                &mut row_workspace,
+            )?;
+            drop(draft_rows);
+            drop(q_token_rows);
+            drop(q_prob_rows);
+            drop(tensors);
+            let rows = sparse_rejection_cuda_complete(&mut row_workspace, &row_submission)?;
+            assert_eq!(rows.rows, packed.rows);
+            assert_eq!(rows.draft_tokens, packed.draft_tokens);
+            assert_eq!(rows.rows, reference(&case));
+        }
+        Ok(())
+    }
+
+    #[test]
+    #[ignore = "requires CUDA"]
     fn workspace_reuses_grows_and_supports_deterministic_proposals() -> Result<()> {
         let device = Device::new_cuda(0)?;
         let mut workspace = None;
@@ -1763,6 +2202,45 @@ mod tests {
         assert!(error
             .to_string()
             .contains("categorical mode requires F32 target logits"));
+        Ok(())
+    }
+
+    #[test]
+    #[ignore = "requires CUDA"]
+    fn ranked_topk_20_32_matches_cpu_reference_with_ties_and_top_p() -> Result<()> {
+        let device = Device::new_cuda(0)?;
+        for max_top_k in [20, 32] {
+            let batch = 2;
+            let drafts = 2;
+            let vocab = 64;
+            let draft_tokens = vec![0, 7, 13, 31];
+            let case = HostCase {
+                batch,
+                drafts,
+                vocab,
+                q_width: 1,
+                target_logits: (0..batch * (drafts + 1))
+                    .flat_map(|row| {
+                        (0..vocab).map(move |token| ((token * 7 + row * 3) % 13) as f32 * 0.2 - 1.0)
+                    })
+                    .collect(),
+                draft_tokens: draft_tokens.clone(),
+                q_token_ids: draft_tokens,
+                q_probs: vec![1.0; batch * drafts],
+                inverse_temperatures: vec![0.8, 1.2],
+                target_top_k: vec![max_top_k as u32; batch],
+                top_p: vec![0.55, 0.72],
+                min_p: vec![0.05, 0.10],
+                accept_uniforms: vec![0.99; batch * drafts],
+                sample_uniforms: vec![0.27, 0.83],
+                mode: SparseRejectionMode::BoundedTopK { max_top_k },
+            };
+            let expected = reference(&case);
+            assert_eq!(case.run(&device)?, expected);
+
+            let mut workspace = None;
+            assert_eq!(case.run_workspace(&device, &mut workspace, true)?, expected);
+        }
         Ok(())
     }
 

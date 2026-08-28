@@ -1,5 +1,17 @@
 TensorRT-LLM DeepGEMM SM90 provider
 
+The official SM90 1D2D kernel family is imported from DeepGEMM 2.6.1:
+https://github.com/deepseek-ai/DeepGEMM/commit/559d79fb6994a58b8a15b4b93bf13ccc16edf247
+
+DeepGEMM
+Copyright (c) 2025 DeepSeek
+
+Its device runtime uses CUTLASS commit:
+https://github.com/NVIDIA/cutlass/commit/f3fde58372d33e9a5650ba7b80fc48b3b49d40c8
+
+CUTLASS
+Copyright (c) 2017 - 2025 NVIDIA CORPORATION & AFFILIATES
+
 This directory contains code adapted from the TensorRT-LLM DeepGEMM integration
 distributed by FlashInfer.
 
@@ -25,4 +37,5 @@ adapted from TensorRT-LLM's fp8_blockscale_gemm_kernel.cuh as distributed at
 the FlashInfer revision above. It is Copyright (c) 2025 NVIDIA CORPORATION and
 licensed under the Apache License, Version 2.0.
 
-See LICENSE-MIT and LICENSE-APACHE in this directory for the applicable terms.
+See LICENSE-MIT, LICENSE-APACHE, and LICENSE-BSD-3-CLAUSE in this directory for
+the applicable terms.

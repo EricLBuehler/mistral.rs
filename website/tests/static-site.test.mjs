@@ -3,6 +3,7 @@ import { access, readFile, readdir } from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
+import { copyText } from "../src/clipboard.js";
 
 const websiteDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const distDir = path.join(websiteDir, "dist");
@@ -51,4 +52,73 @@ test("copies the root installers into the Cloudflare Pages output", async () => 
   await assert.rejects(access(path.join(websiteDir, "public", "install.ps1")));
   await assert.rejects(access(path.join(distDir, "server")));
   await assert.rejects(access(path.join(distDir, "client")));
+});
+
+test("copies with the Clipboard API when available", async () => {
+  const writes = [];
+  const copied = await copyText("install command", {
+    clipboard: { writeText: async (text) => writes.push(text) },
+    document: undefined,
+  });
+
+  assert.equal(copied, true);
+  assert.deepEqual(writes, ["install command"]);
+});
+
+test("falls back when the Clipboard API rejects the write", async () => {
+  let selected = false;
+  let removed = false;
+  let copyHandler;
+  let copiedText;
+  const textarea = {
+    setAttribute() {},
+    style: {},
+    select() {
+      selected = true;
+    },
+    remove() {
+      removed = true;
+    },
+  };
+  const document = {
+    body: { append() {} },
+    createElement: () => textarea,
+    addEventListener: (event, handler) => {
+      if (event === "copy") copyHandler = handler;
+    },
+    removeEventListener: (event, handler) => {
+      if (event === "copy" && handler === copyHandler) copyHandler = undefined;
+    },
+    execCommand: (command) => {
+      copyHandler({
+        clipboardData: { setData: (_, text) => (copiedText = text) },
+        preventDefault() {},
+      });
+      return command === "copy";
+    },
+  };
+  const copied = await copyText("install command", {
+    clipboard: {
+      writeText: async () => {
+        throw new Error("clipboard unavailable");
+      },
+    },
+    document,
+  });
+
+  assert.equal(copied, true);
+  assert.equal(textarea.value, "install command");
+  assert.equal(copiedText, "install command");
+  assert.equal(selected, true);
+  assert.equal(removed, true);
+  assert.equal(copyHandler, undefined);
+});
+
+test("reports a copy failure when neither method works", async () => {
+  const copied = await copyText("install command", {
+    clipboard: undefined,
+    document: undefined,
+  });
+
+  assert.equal(copied, false);
 });

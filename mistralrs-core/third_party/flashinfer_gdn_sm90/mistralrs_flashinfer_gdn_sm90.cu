@@ -81,7 +81,7 @@ size_t append(size_t &cursor, size_t bytes) {
 
 WorkspaceLayout make_workspace_layout(int batch_size, int seq_len,
                                       int num_k_heads, int num_v_heads,
-                                      int sm_count) {
+                                      int sm_count, bool pack_state) {
   const size_t tokens = static_cast<size_t>(batch_size) * seq_len;
   const size_t key_elements = tokens * num_k_heads * kHeadDim;
   const size_t value_elements = tokens * num_v_heads * kHeadDim;
@@ -95,7 +95,9 @@ WorkspaceLayout make_workspace_layout(int batch_size, int seq_len,
   layout.v = append(cursor, value_elements * sizeof(__nv_bfloat16));
   layout.alpha = append(cursor, gate_elements * sizeof(float));
   layout.beta = append(cursor, gate_elements * sizeof(float));
-  layout.packed_state = append(cursor, state_elements * sizeof(float));
+  if (pack_state) {
+    layout.packed_state = append(cursor, state_elements * sizeof(float));
+  }
   layout.cu_seqlens =
       append(cursor, static_cast<size_t>(batch_size + 1) * sizeof(int64_t));
   layout.scheduler =
@@ -253,14 +255,14 @@ int launch_blocks(int64_t elements, int threads) {
 
 extern "C" uint64_t mistralrs_flashinfer_gdn_sm90_workspace_size(
     int32_t batch_size, int32_t seq_len, int32_t num_k_heads,
-    int32_t num_v_heads, int32_t sm_count) {
+    int32_t num_v_heads, int32_t sm_count, int32_t has_slots) {
   if (batch_size <= 0 || seq_len <= 0 || num_k_heads <= 0 ||
       num_v_heads < num_k_heads || num_v_heads % num_k_heads != 0 ||
-      sm_count <= 0) {
+      sm_count <= 0 || (has_slots != 0 && has_slots != 1)) {
     return 0;
   }
   return make_workspace_layout(batch_size, seq_len, num_k_heads, num_v_heads,
-                               sm_count)
+                               sm_count, has_slots != 0)
       .bytes;
 }
 
@@ -277,9 +279,10 @@ extern "C" int mistralrs_flashinfer_gdn_sm90_launch(
       params->sm_count <= 0) {
     return static_cast<int>(cudaErrorInvalidValue);
   }
+  const bool pack_state = params->slots != nullptr;
   const WorkspaceLayout layout = make_workspace_layout(
       params->batch_size, params->seq_len, params->num_k_heads,
-      params->num_v_heads, params->sm_count);
+      params->num_v_heads, params->sm_count, pack_state);
   if (params->workspace_bytes < layout.bytes) {
     return static_cast<int>(cudaErrorInvalidValue);
   }
@@ -289,8 +292,11 @@ extern "C" int mistralrs_flashinfer_gdn_sm90_launch(
   auto *v = reinterpret_cast<__nv_bfloat16 *>(workspace + layout.v);
   auto *alpha = reinterpret_cast<float *>(workspace + layout.alpha);
   auto *beta = reinterpret_cast<float *>(workspace + layout.beta);
-  auto *packed_state =
-      reinterpret_cast<float *>(workspace + layout.packed_state);
+  // Gathered value-major state already matches FlashInfer's K-contiguous layout.
+  float *kernel_state = params->state;
+  if (pack_state) {
+    kernel_state = reinterpret_cast<float *>(workspace + layout.packed_state);
+  }
   auto *cu_seqlens =
       reinterpret_cast<int64_t *>(workspace + layout.cu_seqlens);
   auto *scheduler = workspace + layout.scheduler;
@@ -308,10 +314,12 @@ extern "C" int mistralrs_flashinfer_gdn_sm90_launch(
       params->dt_bias, params->slots, q, k, v, alpha, beta, cu_seqlens,
       total_tokens, params->batch_size, params->seq_len, params->num_k_heads,
       params->num_v_heads);
-  gather_state_kernel<<<launch_blocks(state_elements, kThreads), kThreads, 0,
-                        stream>>>(
-      params->state, params->slots, packed_state, state_row_elements,
-      state_elements);
+  if (pack_state) {
+    gather_state_kernel<<<launch_blocks(state_elements, kThreads), kThreads, 0,
+                          stream>>>(
+        params->state, params->slots, kernel_state, state_row_elements,
+        state_elements);
+  }
   cudaError_t status = cudaPeekAtLastError();
   if (status != cudaSuccess) {
     return static_cast<int>(status);
@@ -321,8 +329,8 @@ extern "C" int mistralrs_flashinfer_gdn_sm90_launch(
     flat::launch_delta_rule_prefill_kernel_gbai<
         true, true, true, true, false, cutlass::arch::Sm90, nv_bfloat16,
         nv_bfloat16, float>(
-        stream, static_cast<__nv_bfloat16 *>(params->output), packed_state, q,
-        k, v, packed_state, alpha, beta, cu_seqlens, scheduler,
+        stream, static_cast<__nv_bfloat16 *>(params->output), kernel_state, q,
+        k, v, kernel_state, alpha, beta, cu_seqlens, scheduler,
         params->batch_size, params->num_k_heads, params->num_k_heads,
         params->num_v_heads, params->num_v_heads, kHeadDim, total_tokens,
         1.0f / sqrtf(static_cast<float>(kHeadDim)), params->sm_count, nullptr,
@@ -335,9 +343,11 @@ extern "C" int mistralrs_flashinfer_gdn_sm90_launch(
     return static_cast<int>(status);
   }
 
-  scatter_state_kernel<<<launch_blocks(state_elements, kThreads), kThreads, 0,
-                         stream>>>(
-      packed_state, params->slots, params->state, state_row_elements,
-      state_elements);
+  if (pack_state) {
+    scatter_state_kernel<<<launch_blocks(state_elements, kThreads), kThreads,
+                           0, stream>>>(
+        kernel_state, params->slots, params->state, state_row_elements,
+        state_elements);
+  }
   return static_cast<int>(cudaPeekAtLastError());
 }

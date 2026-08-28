@@ -96,12 +96,14 @@ its CUDA candidate selector is supported, while DFlash 1 and unsupported devices
 drafting. Pass `--mtp-draft-sampling greedy` to force greedy drafting. Passing `probabilistic`
 requires a supported DFlash 2 selector and fails during loading when that path is unavailable.
 
-The default draft depth is `min(block_size - 1, 7)`, or the fixed value passed with
-`--mtp-n-predict`. Set `MISTRALRS_DFLASH_ADAPTIVE=1` (or `true`) without an explicit depth to enable
-batch-aware depth selection: batches of up to 2 use the full default depth and larger batches use
-depth 1. The drafter's projection weights are requantized to the target's in-situ quantization type
-at load (override with the `MISTRALRS_DFLASH_ISQ` environment variable, e.g. `q6k` or `none` for
-bf16).
+The maximum automatic draft depth is `min(block_size - 1, 7)`. During serving, mistral.rs may use a
+shallower depth so the recurrent checkpoint layout fits the configured sequence capacity while
+preserving memory for the requested paged KV cache. Pass `--mtp-n-predict` to request a fixed depth
+instead. Automatic CUDA serving also adapts the active depth to live load: up to 8 live DFlash
+contexts use the full reserved depth, while larger loads use up to 3 drafts. Set
+`MISTRALRS_DFLASH_ADAPTIVE=0` (or `false`) to disable load adaptation. The drafter's projection
+weights are requantized to the target's in-situ quantization type at load (override with the
+`MISTRALRS_DFLASH_ISQ` environment variable, e.g. `q6k` or `none` for bf16).
 
 Acceptance is strongly content-dependent: [incoai/Qwen3.8-27B-DFlash2](https://huggingface.co/incoai/Qwen3.8-27B-DFlash2)
 accepts ~7 of 7 drafts on math/code and much less on thinking-mode reasoning traces, which are out

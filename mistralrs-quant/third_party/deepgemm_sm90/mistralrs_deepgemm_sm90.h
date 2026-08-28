@@ -24,8 +24,19 @@ typedef enum MistralrsDeepGemmStatus {
 } MistralrsDeepGemmStatus;
 
 typedef enum MistralrsDeepGemmPlanFlags {
-  MISTRALRS_DEEPGEMM_PLAN_SWAP_AB = 1U,
+  MISTRALRS_DEEPGEMM_PLAN_SMALL_M_SWAP_AB = 1U,
+#ifdef MISTRALRS_DEEPGEMM_ENABLE_LEGACY_DIAGNOSTICS
+  MISTRALRS_DEEPGEMM_PLAN_SWAP_AB = MISTRALRS_DEEPGEMM_PLAN_SMALL_M_SWAP_AB,
+#endif
+  MISTRALRS_DEEPGEMM_PLAN_OFFICIAL_1D2D = 2U,
+  MISTRALRS_DEEPGEMM_PLAN_MULTICAST_ON_A = 4U,
+  MISTRALRS_DEEPGEMM_PLAN_PDL = 8U,
 } MistralrsDeepGemmPlanFlags;
+
+enum {
+  MISTRALRS_DEEPGEMM_BLOCK_SIZE = 128U,
+  MISTRALRS_DEEPGEMM_ACTIVATION_SCALE_M_ALIGNMENT = 4U,
+};
 
 typedef struct MistralrsDeepGemmPlan {
   uint32_t abi_version;
@@ -58,6 +69,11 @@ const char* mistralrs_deepgemm_sm90_last_error();
 int32_t mistralrs_deepgemm_sm90_plan(uint32_t m, uint32_t n, uint32_t k,
                                      MistralrsDeepGemmPlan* plan);
 
+#ifdef MISTRALRS_DEEPGEMM_ENABLE_LEGACY_DIAGNOSTICS
+int32_t mistralrs_deepgemm_sm90_plan_legacy_for_test(
+    uint32_t m, uint32_t n, uint32_t k, MistralrsDeepGemmPlan* plan);
+#endif
+
 int32_t mistralrs_deepgemm_sm90_prepare(const MistralrsDeepGemmPlan* plan,
                                         const char* include_dir,
                                         cudaStream_t stream,
@@ -70,6 +86,13 @@ int32_t mistralrs_deepgemm_sm90_gemm(const MistralrsDeepGemmPrepared* prepared,
                                      const float* weight_scales,
                                      void* output_bf16, void* workspace,
                                      size_t workspace_bytes, cudaStream_t stream);
+
+// activation_scales is contiguous [K / 128, activation_scale_stride_m].
+int32_t mistralrs_deepgemm_sm90_gemm_prequantized(
+    const MistralrsDeepGemmPrepared* prepared, uint32_t m,
+    const void* activation_e4m3, const float* activation_scales,
+    uint32_t activation_scale_stride_m, const void* weight_e4m3,
+    const float* weight_scales, void* output_bf16, cudaStream_t stream);
 
 #ifdef __cplusplus
 }

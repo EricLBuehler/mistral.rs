@@ -1,6 +1,8 @@
 #[cfg(feature = "cuda")]
 const CUTLASS_COMMIT: &str = "7127592069c2fe01b041e174ba4345ef9b279671";
 #[cfg(feature = "cuda")]
+const DEEPGEMM_CUTLASS_COMMIT: &str = "f3fde58372d33e9a5650ba7b80fc48b3b49d40c8";
+#[cfg(feature = "cuda")]
 const CUTLASS_COMMIT_ENV: &str = "MISTRALRS_CUTLASS_COMMIT";
 #[cfg(feature = "cuda")]
 const SUPPORTED_CUDA_TOOLKIT_VERSIONS: &[(usize, usize)] = &[
@@ -48,6 +50,10 @@ include!("src/metal_kernels/source_set.rs");
 #[cfg(feature = "cuda")]
 #[path = "src/build_support/cuda_headers.rs"]
 mod cuda_headers;
+
+#[cfg(feature = "cuda")]
+#[path = "src/build_support/deepgemm_jit_bundle.rs"]
+mod deepgemm_jit_bundle;
 
 #[cfg(feature = "cuda")]
 #[allow(unused)]
@@ -122,9 +128,8 @@ fn main() -> Result<(), String> {
 
         let deepgemm_headers = cuda_headers::find(Path::new("third_party/deepgemm_sm90"))
             .map_err(|e| e.to_string())?;
-        let deepgemm_source_hash =
+        let deepgemm_generator_hash =
             cuda_headers::hash(&deepgemm_headers).map_err(|e| e.to_string())?;
-        println!("cargo:rustc-env=MISTRALRS_DEEPGEMM_SOURCE_HASH={deepgemm_source_hash:016x}");
         let header_files = cuda_headers::find(Path::new("kernels")).map_err(|e| e.to_string())?;
         for header_file in &header_files {
             println!("cargo:rerun-if-changed={}", header_file.display());
@@ -136,10 +141,8 @@ fn main() -> Result<(), String> {
             "-DMISTRALRS_QUANT_CUDA_HEADER_HASH=0x{:016x}",
             cuda_headers::hash(&header_files).map_err(|e| e.to_string())?
         );
-        let deepgemm_source_hash_arg =
-            format!("-DMISTRALRS_DEEPGEMM_SOURCE_HASH=0x{deepgemm_source_hash:016x}");
-
-        let mut builder = cuda_kernel_builder(&build_dir)
+        let kernel_build_dir = build_dir.join("kernels");
+        let mut builder = cuda_kernel_builder(&kernel_build_dir)
             .source_glob("kernels/*/*.cu")
             .watch(["kernels"])
             .arg(&header_hash_arg);
@@ -169,9 +172,23 @@ fn main() -> Result<(), String> {
         let deepgemm_fp8_sm90 = compute_cap == 90
             && (cuda_major > 12 || (cuda_major == 12 && cuda_minor >= 8))
             && target.contains("linux");
+        let mut deepgemm_source_hash = deepgemm_generator_hash;
         if deepgemm_fp8_sm90 {
             println!("cargo:rustc-cfg=has_deepgemm_fp8_sm90_provider");
+            let deepgemm_cutlass =
+                cudaforge::ExternalDependency::cutlass(Some(DEEPGEMM_CUTLASS_COMMIT))
+                    .fetch(&build_dir)
+                    .map_err(|error| error.to_string())?;
+            deepgemm_source_hash = deepgemm_jit_bundle::write(
+                &build_dir.join("deepgemm_jit_headers.rs"),
+                Path::new("third_party/deepgemm_sm90/include/official"),
+                Path::new("third_party/deepgemm_sm90/include/deep_gemm"),
+                &deepgemm_cutlass.join("include"),
+                deepgemm_generator_hash,
+            )
+            .map_err(|error| error.to_string())?;
         }
+        println!("cargo:rustc-env=MISTRALRS_DEEPGEMM_SOURCE_HASH={deepgemm_source_hash:016x}");
         // CUTLASS grouped-GEMM MoE fallback (Sm80 tensor-op, runs on sm_80+)
         if cutlass_moe {
             println!("cargo:rustc-cfg=has_cutlass_moe_kernels");
@@ -227,7 +244,10 @@ fn main() -> Result<(), String> {
             .build_lib(out_file)
             .expect("Build mistral quant lib failed!");
         if deepgemm_fp8_sm90 {
-            let mut deepgemm_builder = cuda_kernel_builder(&build_dir)
+            let deepgemm_source_hash_arg =
+                format!("-DMISTRALRS_DEEPGEMM_SOURCE_HASH=0x{deepgemm_source_hash:016x}");
+            let deepgemm_build_dir = build_dir.join("deepgemm");
+            let mut deepgemm_builder = cuda_kernel_builder(&deepgemm_build_dir)
                 .source_files(["third_party/deepgemm_sm90/mistralrs_deepgemm_sm90.cu"])
                 .watch(["third_party/deepgemm_sm90"])
                 .compute_cap_arch("90a")

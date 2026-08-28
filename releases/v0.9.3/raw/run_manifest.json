@@ -1,0 +1,101 @@
+{
+  "canonical_overrides": {
+    "mistralrs:dflash:c128": "mistralrs_c128",
+    "sglang:target:c128": "sglang_headroom",
+    "sglang:target:c64": "sglang_headroom",
+    "sglang:target:c96": "sglang_headroom"
+  },
+  "models": {
+    "draft_model": "incoai/Qwen3.8-27B-DFlash2",
+    "draft_revision": "dedf8df68adfb1afeaf7b7480c0a0243108177b4",
+    "model": "Qwen/Qwen3.8-27B-FP8",
+    "model_revision": "017b9c7af6b5689d5dd426a76e0bc077eb5ca20a",
+    "original_config_sha256": "74227dd615bf1ea975aa676bdf355a0379858c12f394b5365cd9dfa5fc2c70bc",
+    "view_policy": "snapshot entries symlinked except config variants; verified config copied read-only as config.json"
+  },
+  "provenance": {
+    "gpu": "NVIDIA GH200 480GB, 580.105.08",
+    "mistralrs_binary_sha256": "b97e361e4f79c8ba25c4ca004337cfeb26a71f3a7f531598ad8e79dda93ce0a2",
+    "mistralrs_commit": "b6ea3f2aa83bc77db69f1d5963988de72855be47",
+    "mistralrs_source_sha256": "da48c78130710f387e7fe32a571149a157f543b8f9ad25970b3f76d45dd525e6",
+    "sglang_commit": "1cf2b8c54d81802abc15dcf23a29b9cc687bc01e",
+    "sglang_packages": {
+      "flashinfer-python": "0.6.17",
+      "sgl-deep-gemm": "0.1.5.post3",
+      "sglang": "0.5.19.dev99+g1cf2b8c54",
+      "sglang-kernel": "0.4.6.post1",
+      "torch": "2.13.0"
+    },
+    "vllm_benchmark_packages": {
+      "flashinfer-python": "0.6.16.post3",
+      "torch": "2.13.0",
+      "vllm": "0.27.1"
+    },
+    "vllm_server_commit": "b389ac29465b33f9e9c534df221ea3c129e9793f",
+    "vllm_server_packages": {
+      "flashinfer-python": "0.6.17",
+      "humming-kernels": "0.1.12",
+      "instanttensor": "0.1.9",
+      "ninja": "1.13.0",
+      "nvidia-cutlass-dsl": "4.6.2",
+      "nvidia-cutlass-dsl-libs-base": "4.6.2",
+      "nvidia-cutlass-dsl-libs-core": "4.6.2",
+      "nvidia-cutlass-dsl-libs-cu12": "4.6.2",
+      "nvidia-cutlass-dsl-libs-cu13": "4.6.2",
+      "quack-kernels": "0.6.4",
+      "torch": "2.13.0",
+      "vllm": "0.26.1rc1.dev1048+gb389ac294"
+    },
+    "vllm_server_source_sha256": "149aad679434f46e8d0fef7d09e1091389419f0cc5807427e4ec358247b4b377",
+    "vllm_server_wheel_sha256": "a2cc284fbdefba0d8b42d97fece25ac4762407438a4fb8c9f351ed0136a42384",
+    "vllm_server_wheel_url": "https://wheels.vllm.ai/b389ac29465b33f9e9c534df221ea3c129e9793f/vllm-0.26.1rc1.dev1048%2Bgb389ac294-cp38-abi3-manylinux_2_28_aarch64.whl"
+  },
+  "schema_version": 2,
+  "serving": {
+    "dflash_memory_fraction": 0.85,
+    "dflash_policy_note": "all engines use probabilistic DFlash2 draft selection with sampling-correct target verification; SGLang's block size 8 is the anchor plus seven proposals",
+    "dflash_proposals": 7,
+    "dtype": "bfloat16",
+    "gdn_state_dtype": "float32",
+    "kv_cache_dtype": "fp8_e4m3",
+    "language_model_only_note": "vLLM uses its standalone language-model-only mode; pinned SGLang uses its equivalent model-config override because its Qwen3.5 implementation supports language_model_only but the dedicated CLI flag has not added Qwen3.5 to its validation allowlist; mistral.rs serves the monolithic checkpoint without invoking vision for text requests",
+    "max_model_len": 4096,
+    "max_num_batched_tokens": 4096,
+    "max_prefill_chunk_tokens": 512,
+    "prefix_cache": false,
+    "restart_per_cell": true,
+    "sglang_headroom_min_concurrency": 64,
+    "sglang_headroom_note": "Target-only C64+ reserves one internal scheduler slot; client concurrency and CUDA decode graph size remain exactly C.",
+    "sglang_sequence_headroom": 1,
+    "target_memory_fraction": 0.66
+  },
+  "source_manifests": {
+    "mistralrs_c128": "cfe5c9afa327c446f382feb6de93685113fd5be2bb646bc61d823d86cdd4bd09",
+    "primary": "1a29557e2a88d7bb944d52eb88573371a824807eb4e771a04774ac3a6e95a7d6",
+    "sglang_headroom": "5f9fd5127c67726e870096c0fb2865f0e17c3ce2ac2c7d8f76e14fd896387161"
+  },
+  "source_run_signatures": {
+    "mistralrs_c128": "2d79b7674467cea12cc319f4693fc906a7f5de1f0422c809315e97b5a98b162d",
+    "primary": "353e37fb2807709686ea6afed81e1cc152536e02058d1caccefacbb09b2cd922",
+    "sglang_headroom": "e7532adbe4f148b55a41bc77f40f5af632c271cfea8dbf45a651f84d5679b633"
+  },
+  "workload": {
+    "canonical_prompt_sha256": "2afa8b3e16c26fa36c8d7bf474aac90bdabc32b909f90e685bd1d7bc0d2e64f4",
+    "canonical_prompts": 64,
+    "output_len": 512,
+    "prompt_sha256": "5cdb082233a198b7ff4a14e33c6ac8d85980043238c9d08379ac812f7df730ef",
+    "repetitions": 3,
+    "request_count_policy": "max(64, concurrency), yielding 64/96/128 requests",
+    "sampling": {
+      "ignore_eos": true,
+      "min_p": 0,
+      "repetition_penalty": 1,
+      "temperature": 1,
+      "top_k": 20,
+      "top_p": 0.95
+    },
+    "seed": 20260825,
+    "stored_prompts": 128,
+    "warmup": "one full-concurrency wave per cell"
+  }
+}

@@ -2,6 +2,7 @@
 // https://github.com/pytorch/pytorch/blob/65aa16f968af2cd18ff8c25cc657e7abda594bfc/aten/src/ATen/native/cuda/Nonzero.cu
 #include <assert.h>
 #include <cub/cub.cuh>
+#include <cuda_fp8.h>
 #include <stdint.h>
 #include <stdio.h>
 
@@ -1058,6 +1059,249 @@ extern "C" void fused_split_glu_f32(const float *input, float *output,
                                     int activation, cudaStream_t stream) {
   launch_fused_split_glu<float, float4>(input, output, rows, split_size,
                                         activation, stream);
+}
+
+constexpr uint32_t kFusedGluFp8GroupSize = 128;
+
+__device__ float fused_glu_warp_max(float value) {
+  for (int offset = 16; offset > 0; offset /= 2) {
+    value = fmaxf(value, __shfl_xor_sync(0xffffffffU, value, offset));
+  }
+  return value;
+}
+
+__global__ void fused_split_glu_quantize_bf16_kernel(
+    const __nv_bfloat16 *__restrict__ input,
+    __nv_fp8_e4m3 *__restrict__ output, float *__restrict__ scales,
+    uint32_t rows, uint32_t split_size, uint32_t scale_stride_m,
+    int activation) {
+  const uint32_t groups_per_row = split_size / kFusedGluFp8GroupSize;
+  const uint64_t group_count = static_cast<uint64_t>(rows) * groups_per_row;
+  uint64_t group =
+      (static_cast<uint64_t>(blockIdx.x) * blockDim.x + threadIdx.x) /
+      warpSize;
+  const uint64_t group_stride =
+      static_cast<uint64_t>(gridDim.x) * blockDim.x / warpSize;
+  const uint32_t lane = threadIdx.x % warpSize;
+
+  for (; group < group_count; group += group_stride) {
+    const uint32_t row = static_cast<uint32_t>(group / groups_per_row);
+    const uint32_t column_group =
+        static_cast<uint32_t>(group - static_cast<uint64_t>(row) * groups_per_row);
+    const uint64_t column =
+        static_cast<uint64_t>(column_group) * kFusedGluFp8GroupSize;
+    const __nv_bfloat16 *gate =
+        input + static_cast<uint64_t>(row) * split_size * 2 + column;
+    const __nv_bfloat16 *up = gate + split_size;
+    __nv_fp8_e4m3 *quantized =
+        output + static_cast<uint64_t>(row) * split_size + column;
+
+    __nv_bfloat162 gate_values[2];
+    __nv_bfloat162 up_values[2];
+    gate_values[0] = reinterpret_cast<const __nv_bfloat162 *>(gate)[lane];
+    gate_values[1] = reinterpret_cast<const __nv_bfloat162 *>(gate)[lane + 32];
+    up_values[0] = reinterpret_cast<const __nv_bfloat162 *>(up)[lane];
+    up_values[1] = reinterpret_cast<const __nv_bfloat162 *>(up)[lane + 32];
+
+    __nv_bfloat16 products[4];
+    products[0] = static_cast<__nv_bfloat16>(apply_glu_activation(
+                      __bfloat162float(gate_values[0].x), activation)) *
+                  up_values[0].x;
+    products[1] = static_cast<__nv_bfloat16>(apply_glu_activation(
+                      __bfloat162float(gate_values[0].y), activation)) *
+                  up_values[0].y;
+    products[2] = static_cast<__nv_bfloat16>(apply_glu_activation(
+                      __bfloat162float(gate_values[1].x), activation)) *
+                  up_values[1].x;
+    products[3] = static_cast<__nv_bfloat16>(apply_glu_activation(
+                      __bfloat162float(gate_values[1].y), activation)) *
+                  up_values[1].y;
+
+    float maximum = 0.0f;
+#pragma unroll
+    for (int index = 0; index < 4; ++index) {
+      maximum = fmaxf(maximum, fabsf(__bfloat162float(products[index])));
+    }
+    maximum = fused_glu_warp_max(maximum);
+    const float quant_scale = maximum == 0.0f ? 1.0f : 448.0f / maximum;
+    if (lane == 0) {
+      scales[static_cast<uint64_t>(column_group) * scale_stride_m + row] =
+          1.0f / quant_scale;
+    }
+    quantized[lane * 2] =
+        __nv_fp8_e4m3(__bfloat162float(products[0]) * quant_scale);
+    quantized[lane * 2 + 1] =
+        __nv_fp8_e4m3(__bfloat162float(products[1]) * quant_scale);
+    quantized[64 + lane * 2] =
+        __nv_fp8_e4m3(__bfloat162float(products[2]) * quant_scale);
+    quantized[64 + lane * 2 + 1] =
+        __nv_fp8_e4m3(__bfloat162float(products[3]) * quant_scale);
+  }
+}
+
+extern "C" void fused_split_glu_quantize_bf16(
+    const __nv_bfloat16 *input, __nv_fp8_e4m3 *output, float *scales,
+    uint32_t rows, uint32_t split_size, uint32_t scale_stride_m,
+    int activation, cudaStream_t stream) {
+  if (rows == 0 || split_size == 0 ||
+      split_size % kFusedGluFp8GroupSize != 0 ||
+      scale_stride_m < rows) {
+    return;
+  }
+  constexpr int threads = 256;
+  constexpr int warp_width = 32;
+  constexpr int warps_per_block = threads / warp_width;
+  const uint64_t groups =
+      static_cast<uint64_t>(rows) * split_size / kFusedGluFp8GroupSize;
+  const int blocks =
+      static_cast<int>((groups + warps_per_block - 1) / warps_per_block);
+  fused_split_glu_quantize_bf16_kernel<<<blocks, threads, 0, stream>>>(
+      input, output, scales, rows, split_size, scale_stride_m, activation);
+  CUDA_CHECK(cudaGetLastError());
+}
+
+template <int Activation>
+__device__ __forceinline__ __nv_bfloat16 fused_glu_product_bf16(
+    __nv_bfloat16 gate, __nv_bfloat16 value) {
+  const __nv_bfloat16 activated = __float2bfloat16_rn(
+      apply_glu_activation(__bfloat162float(gate), Activation));
+  return __float2bfloat16_rn(__bfloat162float(activated) *
+                            __bfloat162float(value));
+}
+
+template <int Activation>
+__global__ void fused_glu_quantize_bf16_kernel(
+    const __nv_bfloat16 *__restrict__ gate,
+    const __nv_bfloat16 *__restrict__ value,
+    __nv_fp8_e4m3 *__restrict__ output, float *__restrict__ scales,
+    uint32_t rows, uint32_t columns, uint32_t gate_row_stride,
+    uint32_t value_row_stride, uint32_t scale_stride_m) {
+  const uint32_t groups_per_row = columns / kFusedGluFp8GroupSize;
+  const uint64_t group_count = static_cast<uint64_t>(rows) * groups_per_row;
+  uint64_t group =
+      (static_cast<uint64_t>(blockIdx.x) * blockDim.x + threadIdx.x) /
+      warpSize;
+  const uint64_t group_stride =
+      static_cast<uint64_t>(gridDim.x) * blockDim.x / warpSize;
+  const uint32_t lane = threadIdx.x % warpSize;
+
+  for (; group < group_count; group += group_stride) {
+    const uint32_t row = static_cast<uint32_t>(group / groups_per_row);
+    const uint32_t column_group =
+        static_cast<uint32_t>(group - static_cast<uint64_t>(row) * groups_per_row);
+    const uint64_t column =
+        static_cast<uint64_t>(column_group) * kFusedGluFp8GroupSize;
+    const __nv_bfloat16 *gate_group =
+        gate + static_cast<uint64_t>(row) * gate_row_stride + column;
+    const __nv_bfloat16 *value_group =
+        value + static_cast<uint64_t>(row) * value_row_stride + column;
+    __nv_fp8_e4m3 *quantized =
+        output + static_cast<uint64_t>(row) * columns + column;
+
+    __nv_bfloat162 gate_values[2];
+    __nv_bfloat162 value_values[2];
+    gate_values[0] = reinterpret_cast<const __nv_bfloat162 *>(gate_group)[lane];
+    gate_values[1] =
+        reinterpret_cast<const __nv_bfloat162 *>(gate_group)[lane + 32];
+    value_values[0] =
+        reinterpret_cast<const __nv_bfloat162 *>(value_group)[lane];
+    value_values[1] =
+        reinterpret_cast<const __nv_bfloat162 *>(value_group)[lane + 32];
+
+    __nv_bfloat16 products[4];
+    products[0] = fused_glu_product_bf16<Activation>(gate_values[0].x,
+                                                     value_values[0].x);
+    products[1] = fused_glu_product_bf16<Activation>(gate_values[0].y,
+                                                     value_values[0].y);
+    products[2] = fused_glu_product_bf16<Activation>(gate_values[1].x,
+                                                     value_values[1].x);
+    products[3] = fused_glu_product_bf16<Activation>(gate_values[1].y,
+                                                     value_values[1].y);
+
+    float maximum = 0.0f;
+#pragma unroll
+    for (int index = 0; index < 4; ++index) {
+      maximum = fmaxf(maximum, fabsf(__bfloat162float(products[index])));
+    }
+    maximum = fused_glu_warp_max(maximum);
+    const float quant_scale = maximum == 0.0f ? 1.0f : 448.0f / maximum;
+    if (lane == 0) {
+      scales[static_cast<uint64_t>(column_group) * scale_stride_m + row] =
+          1.0f / quant_scale;
+    }
+    quantized[lane * 2] =
+        __nv_fp8_e4m3(__bfloat162float(products[0]) * quant_scale);
+    quantized[lane * 2 + 1] =
+        __nv_fp8_e4m3(__bfloat162float(products[1]) * quant_scale);
+    quantized[64 + lane * 2] =
+        __nv_fp8_e4m3(__bfloat162float(products[2]) * quant_scale);
+    quantized[64 + lane * 2 + 1] =
+        __nv_fp8_e4m3(__bfloat162float(products[3]) * quant_scale);
+  }
+}
+
+template <int Activation>
+void launch_fused_glu_quantize_bf16(
+    const __nv_bfloat16 *gate, const __nv_bfloat16 *value,
+    __nv_fp8_e4m3 *output, float *scales, uint32_t rows, uint32_t columns,
+    uint32_t gate_row_stride, uint32_t value_row_stride,
+    uint32_t scale_stride_m, cudaStream_t stream) {
+  constexpr int threads = 256;
+  constexpr int warp_width = 32;
+  constexpr int warps_per_block = threads / warp_width;
+  const uint64_t groups =
+      static_cast<uint64_t>(rows) * columns / kFusedGluFp8GroupSize;
+  const int blocks =
+      static_cast<int>((groups + warps_per_block - 1) / warps_per_block);
+  fused_glu_quantize_bf16_kernel<Activation><<<blocks, threads, 0, stream>>>(
+      gate, value, output, scales, rows, columns, gate_row_stride,
+      value_row_stride, scale_stride_m);
+}
+
+extern "C" void fused_glu_quantize_bf16(
+    const __nv_bfloat16 *gate, const __nv_bfloat16 *value,
+    __nv_fp8_e4m3 *output, float *scales, uint32_t rows, uint32_t columns,
+    uint32_t gate_row_stride, uint32_t value_row_stride,
+    uint32_t scale_stride_m, int activation, cudaStream_t stream) {
+  const uintptr_t pointer_alignment = reinterpret_cast<uintptr_t>(gate) |
+                                      reinterpret_cast<uintptr_t>(value);
+  if (rows == 0 || columns == 0 ||
+      columns % kFusedGluFp8GroupSize != 0 || gate_row_stride < columns ||
+      value_row_stride < columns || scale_stride_m < rows ||
+      (pointer_alignment & (alignof(__nv_bfloat162) - 1)) != 0 ||
+      gate_row_stride % 2 != 0 || value_row_stride % 2 != 0) {
+    return;
+  }
+  switch (activation) {
+  case GLU_SILU:
+    launch_fused_glu_quantize_bf16<GLU_SILU>(
+        gate, value, output, scales, rows, columns, gate_row_stride,
+        value_row_stride, scale_stride_m, stream);
+    break;
+  case GLU_GELU:
+    launch_fused_glu_quantize_bf16<GLU_GELU>(
+        gate, value, output, scales, rows, columns, gate_row_stride,
+        value_row_stride, scale_stride_m, stream);
+    break;
+  case GLU_RELU:
+    launch_fused_glu_quantize_bf16<GLU_RELU>(
+        gate, value, output, scales, rows, columns, gate_row_stride,
+        value_row_stride, scale_stride_m, stream);
+    break;
+  case GLU_GELU_ERF:
+    launch_fused_glu_quantize_bf16<GLU_GELU_ERF>(
+        gate, value, output, scales, rows, columns, gate_row_stride,
+        value_row_stride, scale_stride_m, stream);
+    break;
+  case GLU_SIGMOID:
+    launch_fused_glu_quantize_bf16<GLU_SIGMOID>(
+        gate, value, output, scales, rows, columns, gate_row_stride,
+        value_row_stride, scale_stride_m, stream);
+    break;
+  default:
+    return;
+  }
+  CUDA_CHECK(cudaGetLastError());
 }
 
 __global__ void softcap_f32_kernel(const float *__restrict__ input,

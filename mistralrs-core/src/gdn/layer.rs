@@ -3,6 +3,7 @@ use mistralrs_quant::{Comm, QuantMethod, Shard, ShardedVarBuilder};
 use std::sync::Arc;
 
 use crate::device_map::DeviceMapper;
+use crate::kv_cache::{GdnDeferredStateSpec, GdnPendingTransitionSpec};
 use crate::kv_cache::{RecurrentStateLayout, RecurrentStatePool};
 use crate::pipeline::RecurrentBatchKind;
 
@@ -12,7 +13,8 @@ use super::cache::GdnLayerCache;
 use super::config::GdnVHeadLayout;
 use super::config::{GdnConfig, GdnDims};
 use super::norm::RmsNormGated;
-use super::projection::{GdnInputProjection, GdnProjection};
+use super::packed::PackedGdnLayout;
+use super::projection::{GdnCoreProjection, GdnInputProjection, GdnProjection};
 use super::weights::{GdnInputProjectionKind, GdnWeightLoadCtx, GdnWeights};
 
 /// Pre-convolution projected inputs of one forward, kept so a speculative rollback can re-advance
@@ -25,10 +27,102 @@ pub struct GdnForwardStash {
     pub a: Tensor,
 }
 
+#[derive(Clone)]
+pub struct GdnTransitionStash;
+
+#[derive(Clone)]
+pub enum GdnSpeculativeStash {
+    Replay(GdnForwardStash),
+    Transition(GdnTransitionStash),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct GdnTransitionCommitConfig {
+    pub num_k_heads: usize,
+    pub num_v_heads: usize,
+    pub head_k_dim: usize,
+    pub head_v_dim: usize,
+    pub conv_dim: usize,
+    pub conv_width: usize,
+    pub tiled_v_heads: bool,
+    pub state_layout: RecurrentStateLayout,
+}
+
+pub(crate) struct GdnForwardContext<'a> {
+    pub batch_kind: RecurrentBatchKind,
+    pub checkpoint_lanes: usize,
+    pub transition_checkpoints: bool,
+    pub stash_out: Option<&'a mut Option<GdnSpeculativeStash>>,
+}
+
 enum GdnCoreOutput {
     Recurrent(Tensor),
     #[cfg(feature = "cuda")]
     Normalized(Tensor),
+    #[cfg(feature = "cuda")]
+    Quantized(mistralrs_quant::QuantizedActivation),
+}
+
+#[derive(Clone, Copy)]
+struct GdnCoreContext {
+    batch_size: usize,
+    seq_len: usize,
+    dtype: DType,
+    batch_kind: RecurrentBatchKind,
+}
+
+fn exact_ragged_conv_state(
+    padded_input: &Tensor,
+    initial_state: &Tensor,
+    layout: &PackedGdnLayout,
+    expected_width: usize,
+) -> Result<Tensor> {
+    let query_lens = layout.query_lens();
+    let (batch_size, padded_len, conv_dim) = padded_input.dims3()?;
+    let (state_batch, state_conv_dim, state_width) = initial_state.dims3()?;
+    if query_lens.len() != batch_size
+        || query_lens.contains(&0)
+        || query_lens.iter().any(|&len| len > padded_len)
+        || state_batch != batch_size
+        || state_conv_dim != conv_dim
+        || state_width != expected_width
+        || state_width == 0
+    {
+        candle_core::bail!("padded GDN convolution state has incompatible dimensions");
+    }
+
+    if let Some(cu_seqlens) = layout.cu_seqlens(padded_input.device())? {
+        if let Some(state) = crate::cuda::gdn::try_gdn_extract_ragged_conv_state_cuda(
+            crate::cuda::gdn::GdnRaggedConvState {
+                padded_input,
+                initial_state,
+                cu_seqlens,
+                batch_size,
+            },
+        )? {
+            return Ok(state);
+        }
+    }
+
+    let mut rows = Vec::with_capacity(batch_size);
+    for (batch_index, &query_len) in query_lens.iter().enumerate() {
+        let input = padded_input
+            .narrow(0, batch_index, 1)?
+            .narrow(1, 0, query_len)?
+            .transpose(1, 2)?;
+        let row = if query_len >= state_width {
+            input.narrow(2, query_len - state_width, state_width)?
+        } else {
+            let retained = initial_state.narrow(0, batch_index, 1)?.narrow(
+                2,
+                query_len,
+                state_width - query_len,
+            )?;
+            Tensor::cat(&[&retained, &input], 2)?
+        };
+        rows.push(row);
+    }
+    Tensor::cat(&rows, 0)
 }
 
 fn index_select_rows(source: &Tensor, indices: &Tensor) -> Result<Tensor> {
@@ -159,6 +253,66 @@ impl GatedDeltaNet {
         .all(|device| device.same_device(pool.device()))
     }
 
+    pub(crate) fn speculative_transitions_supported(
+        &self,
+        pool: &RecurrentStatePool,
+        activation_dtype: DType,
+    ) -> bool {
+        self.speculative_checkpoints_supported(pool, activation_dtype)
+            && pool.checkpoint_lanes() == 1
+            && pool.state_layout() == RecurrentStateLayout::GdnValueMajor
+            && self.dims.head_k_dim == crate::cuda::gdn::GDN_DECODE_K_DIM
+            && self.dims.head_v_dim == crate::cuda::gdn::GDN_DECODE_V_DIM
+            && self.dims.conv_kernel_size <= crate::cuda::gdn::GDN_SPEC_CHECKPOINT_MAX_CONV_WIDTH
+            && self.norm.weight.dtype() == activation_dtype
+            && self.norm.weight.device().same_device(pool.device())
+    }
+
+    pub(crate) fn deferred_decode_supported(
+        &self,
+        pool: &RecurrentStatePool,
+        activation_dtype: DType,
+    ) -> bool {
+        self.speculative_checkpoints_supported(pool, activation_dtype)
+            && pool.checkpoint_lanes() == 1
+            && pool.state_layout() == RecurrentStateLayout::GdnValueMajor
+            && pool.recurrent_dtype() == DType::F32
+            && self.dims.head_k_dim == crate::cuda::gdn::GDN_DECODE_K_DIM
+            && self.dims.head_v_dim == crate::cuda::gdn::GDN_DECODE_V_DIM
+            && self.norm.weight.dtype() == activation_dtype
+            && self.norm.weight.device().same_device(pool.device())
+    }
+
+    pub(crate) fn transition_commit_config(
+        &self,
+        pool: &RecurrentStatePool,
+    ) -> GdnTransitionCommitConfig {
+        GdnTransitionCommitConfig {
+            num_k_heads: self.dims.num_k_heads,
+            num_v_heads: self.dims.num_v_heads,
+            head_k_dim: self.dims.head_k_dim,
+            head_v_dim: self.dims.head_v_dim,
+            conv_dim: self.dims.conv_dim,
+            conv_width: self.dims.conv_kernel_size,
+            tiled_v_heads: self.dims.v_head_layout == super::config::GdnVHeadLayout::Tiled,
+            state_layout: pool.state_layout(),
+        }
+    }
+
+    pub(crate) fn pending_transition_spec(&self, max_rows: usize) -> GdnPendingTransitionSpec {
+        GdnPendingTransitionSpec {
+            num_k_heads: self.dims.num_k_heads,
+            max_rows,
+        }
+    }
+
+    pub(crate) fn deferred_state_spec(&self) -> GdnDeferredStateSpec {
+        GdnDeferredStateSpec {
+            num_k_heads: self.dims.num_k_heads,
+            depth: crate::cuda::gdn::GDN_DEFERRED_STATE_DEPTH,
+        }
+    }
+
     pub(crate) fn speculative_state_commit_supported(
         &self,
         stash: &GdnForwardStash,
@@ -287,7 +441,7 @@ impl GatedDeltaNet {
         cache: &mut GdnLayerCache,
         batch_kind: RecurrentBatchKind,
     ) -> Result<Tensor> {
-        self.forward_with_stash(x, cache, batch_kind, 1, None)
+        self.forward_with_stash(x, cache, batch_kind, 1, false, None)
     }
 
     pub fn forward_with_stash(
@@ -296,17 +450,85 @@ impl GatedDeltaNet {
         cache: &mut GdnLayerCache,
         batch_kind: RecurrentBatchKind,
         checkpoint_lanes: usize,
-        stash_out: Option<&mut Option<GdnForwardStash>>,
+        transition_checkpoints: bool,
+        stash_out: Option<&mut Option<GdnSpeculativeStash>>,
     ) -> Result<Tensor> {
+        self.forward_with_context(
+            x,
+            cache,
+            GdnForwardContext {
+                batch_kind,
+                checkpoint_lanes,
+                transition_checkpoints,
+                stash_out,
+            },
+        )
+    }
+
+    pub(crate) fn forward_with_context(
+        &self,
+        x: &Tensor,
+        cache: &mut GdnLayerCache,
+        context: GdnForwardContext<'_>,
+    ) -> Result<Tensor> {
+        let (batch_size, seq_len, _) = x.dims3()?;
+        let projected = self.project(x, batch_size, seq_len)?;
+        self.forward_projected_with_context(x, projected, cache, context)
+    }
+
+    pub(crate) fn input_activation_quantization_scheme_for(
+        &self,
+        x: &Tensor,
+    ) -> Option<mistralrs_quant::ActivationQuantizationScheme> {
+        self.input_proj.activation_quantization_scheme_for(x)
+    }
+
+    pub(crate) fn preferred_input_activation_scale_layout_for(
+        &self,
+        x: &Tensor,
+    ) -> Option<mistralrs_quant::ActivationScaleLayout> {
+        self.input_proj.preferred_activation_scale_layout_for(x)
+    }
+
+    pub(crate) fn forward_quantized_with_context(
+        &self,
+        x: &Tensor,
+        activation: &mistralrs_quant::QuantizedActivation,
+        cache: &mut GdnLayerCache,
+        context: GdnForwardContext<'_>,
+    ) -> Result<Option<Tensor>> {
+        let (batch_size, seq_len, _) = x.dims3()?;
+        let Some(projected) = self
+            .input_proj
+            .try_forward_quantized(x, activation, &self.dims, batch_size, seq_len)?
+        else {
+            return Ok(None);
+        };
+        self.forward_projected_with_context(x, projected, cache, context)
+            .map(Some)
+    }
+
+    fn forward_projected_with_context(
+        &self,
+        x: &Tensor,
+        projected: GdnProjection,
+        cache: &mut GdnLayerCache,
+        context: GdnForwardContext<'_>,
+    ) -> Result<Tensor> {
+        let GdnForwardContext {
+            batch_kind,
+            checkpoint_lanes,
+            transition_checkpoints,
+            stash_out,
+        } = context;
         #[cfg(not(feature = "cuda"))]
-        let _ = checkpoint_lanes;
+        let _ = (checkpoint_lanes, transition_checkpoints);
         let (batch_size, seq_len, _) = x.dims3()?;
         let dtype = x.dtype();
 
-        let projected = self.project(x, batch_size, seq_len)?;
         let mixed_qkv = projected.conv_input(&self.dims, batch_size, seq_len)?;
         #[cfg(feature = "cuda")]
-        let checkpointed = if checkpoint_lanes > 1
+        let accelerated = if checkpoint_lanes > 1
             && batch_kind == RecurrentBatchKind::SpeculativeDecode
             && mixed_qkv.device().is_cuda()
             && cache.slots.is_some()
@@ -316,47 +538,246 @@ impl GatedDeltaNet {
                 &projected,
                 cache,
                 checkpoint_lanes,
+                transition_checkpoints,
             )?)
+        } else if crate::cuda::gdn::deferred_decode_batch_supported(batch_size)
+            && batch_kind == RecurrentBatchKind::Decode
+            && seq_len == 1
+            && mixed_qkv.dtype() == DType::BF16
+            && cache.slots.is_some()
+            && cache.deferred_state.is_some()
+            && cache.state_layout == RecurrentStateLayout::GdnValueMajor
+            && cache.recurrent_state.dtype() == DType::F32
+            && self.dims.head_k_dim == crate::cuda::gdn::GDN_DECODE_K_DIM
+            && self.dims.head_v_dim == crate::cuda::gdn::GDN_DECODE_V_DIM
+        {
+            Some(self.forward_deferred_decode(&mixed_qkv, &projected, cache)?)
         } else {
             None
         };
         #[cfg(not(feature = "cuda"))]
-        let checkpointed: Option<(Tensor, GdnCoreOutput)> = None;
-        let (convolved_qkv, output) = match checkpointed {
-            Some(checkpointed) => checkpointed,
+        let accelerated: Option<(Tensor, GdnCoreOutput, Option<GdnTransitionStash>)> = None;
+        let (convolved_qkv, output, transitions) = match accelerated {
+            Some(accelerated) => accelerated,
             None => {
-                let convolved_qkv = backend::causal_conv1d(
+                let core_projection = projected.core_projection();
+                let (convolved_qkv, y) = self.forward_recurrent_core(
                     &mixed_qkv,
-                    &self.conv1d_weight,
-                    &self.dims,
+                    &core_projection,
                     cache,
-                    batch_kind,
+                    GdnCoreContext {
+                        batch_size,
+                        seq_len,
+                        dtype,
+                        batch_kind,
+                    },
                 )?;
-                let y = backend::apply_recurrence_from_convolved(
-                    &convolved_qkv,
-                    &projected.b,
-                    &projected.a,
-                    &self.a_log,
-                    &self.dt_bias,
-                    &self.dims,
-                    batch_size,
-                    seq_len,
-                    cache,
-                    dtype,
-                )?;
-                (convolved_qkv, GdnCoreOutput::Recurrent(y))
+                (convolved_qkv, GdnCoreOutput::Recurrent(y), None)
             }
         };
         if let Some(stash_out) = stash_out {
-            *stash_out = Some(GdnForwardStash {
-                mixed_qkv,
-                convolved_qkv: convolved_qkv.clone(),
-                b: projected.b.clone(),
-                a: projected.a.clone(),
+            *stash_out = Some(match transitions {
+                Some(transitions) => GdnSpeculativeStash::Transition(transitions),
+                None => GdnSpeculativeStash::Replay(GdnForwardStash {
+                    mixed_qkv,
+                    convolved_qkv: convolved_qkv.clone(),
+                    b: projected.b.clone(),
+                    a: projected.a.clone(),
+                }),
             });
         }
 
         self.finish_forward(output, projected.z, batch_size, seq_len, dtype)
+    }
+
+    fn forward_recurrent_core(
+        &self,
+        mixed_qkv: &Tensor,
+        projected: &GdnCoreProjection,
+        cache: &mut GdnLayerCache,
+        ctx: GdnCoreContext,
+    ) -> Result<(Tensor, Tensor)> {
+        let convolved_qkv = backend::causal_conv1d(
+            mixed_qkv,
+            &self.conv1d_weight,
+            &self.dims,
+            cache,
+            ctx.batch_kind,
+        )?;
+        let y = backend::apply_recurrence_from_convolved(
+            &convolved_qkv,
+            &projected.b,
+            &projected.a,
+            &self.a_log,
+            &self.dt_bias,
+            &self.dims,
+            ctx.batch_size,
+            ctx.seq_len,
+            cache,
+            ctx.dtype,
+        )?;
+        Ok((convolved_qkv, y))
+    }
+
+    pub(crate) fn forward_projected_prefill_core(
+        &self,
+        projected: &GdnCoreProjection,
+        cache: &mut GdnLayerCache,
+    ) -> Result<Tensor> {
+        let (batch_size, seq_len, _) = projected.b.dims3()?;
+        let mixed_qkv = projected.conv_input(&self.dims, batch_size, seq_len)?;
+        let (_, y) = self.forward_recurrent_core(
+            &mixed_qkv,
+            projected,
+            cache,
+            GdnCoreContext {
+                batch_size,
+                seq_len,
+                dtype: projected.b.dtype(),
+                batch_kind: RecurrentBatchKind::Prefill,
+            },
+        )?;
+        Ok(y)
+    }
+
+    pub(crate) fn forward_projected_padded_prefill_core(
+        &self,
+        projected: &GdnCoreProjection,
+        cache: &mut GdnLayerCache,
+        layout: &PackedGdnLayout,
+    ) -> Result<Tensor> {
+        let (batch_size, seq_len, _) = projected.b.dims3()?;
+        let mixed_qkv = projected.conv_input(&self.dims, batch_size, seq_len)?;
+        let exact_conv_state = exact_ragged_conv_state(
+            &mixed_qkv,
+            &cache.conv_state,
+            layout,
+            self.dims.conv_kernel_size,
+        )?;
+        let (_, y) = self.forward_recurrent_core(
+            &mixed_qkv,
+            projected,
+            cache,
+            GdnCoreContext {
+                batch_size,
+                seq_len,
+                dtype: projected.b.dtype(),
+                batch_kind: RecurrentBatchKind::Prefill,
+            },
+        )?;
+        cache.conv_state = exact_conv_state;
+        Ok(y)
+    }
+
+    #[cfg(feature = "cuda")]
+    fn deferred_recurrence_context<'a>(
+        &'a self,
+        mixed_qkv: &'a Tensor,
+        projected: &'a GdnProjection,
+        cache: &'a GdnLayerCache,
+    ) -> Result<crate::cuda::gdn::GdnDeferredRecurrence<'a>> {
+        let active_slots = cache
+            .slots
+            .as_ref()
+            .expect("deferred decode requires pooled state");
+        let deferred = cache
+            .deferred_state
+            .as_ref()
+            .expect("deferred decode requires transition storage");
+        Ok(crate::cuda::gdn::GdnDeferredRecurrence {
+            mixed_qkv,
+            b: &projected.b,
+            a: &projected.a,
+            a_log: &self.a_log,
+            dt_bias: &self.dt_bias,
+            state_pool: &cache.recurrent_state,
+            active_slots,
+            deferred_key: &deferred.key,
+            deferred_delta: &deferred.delta,
+            deferred_decay: &deferred.decay,
+            deferred_cursor: &deferred.pending_rows,
+            gate: &projected.z,
+            norm_weight: &self.norm.weight,
+            norm_eps: self.norm.eps(),
+            num_k_heads: self.dims.num_k_heads,
+            num_v_heads: self.dims.num_v_heads,
+            head_k_dim: self.dims.head_k_dim,
+            head_v_dim: self.dims.head_v_dim,
+            tiled_v_heads: self.dims.v_head_layout == GdnVHeadLayout::Tiled,
+            state_layout: cache.state_layout,
+            quantization: self.fp8_output_spec(&projected.z, mixed_qkv.dim(0)?, 1),
+        })
+    }
+
+    #[cfg(feature = "cuda")]
+    fn deferred_output(output: crate::cuda::gdn::GdnPostOpOutput) -> GdnCoreOutput {
+        match output {
+            crate::cuda::gdn::GdnPostOpOutput::Tensor(output) => GdnCoreOutput::Normalized(output),
+            crate::cuda::gdn::GdnPostOpOutput::Quantized(output) => {
+                GdnCoreOutput::Quantized(output)
+            }
+        }
+    }
+
+    #[cfg(feature = "cuda")]
+    fn forward_deferred_decode(
+        &self,
+        mixed_qkv: &Tensor,
+        projected: &GdnProjection,
+        cache: &mut GdnLayerCache,
+    ) -> Result<(Tensor, GdnCoreOutput, Option<GdnTransitionStash>)> {
+        let convolved_qkv = backend::causal_conv1d(
+            mixed_qkv,
+            &self.conv1d_weight,
+            &self.dims,
+            cache,
+            RecurrentBatchKind::Decode,
+        )?;
+        let output = crate::cuda::gdn::deferred_recurrence_rmsnorm_gate_cuda(
+            self.deferred_recurrence_context(&convolved_qkv, projected, cache)?,
+        )?;
+        let output = Self::deferred_output(output);
+        Ok((convolved_qkv, output, None))
+    }
+
+    #[cfg(feature = "cuda")]
+    pub(crate) fn flush_deferred_state(
+        &self,
+        pool: &RecurrentStatePool,
+        active_slots: &Tensor,
+        activation_dtype: DType,
+    ) -> Result<bool> {
+        if !self.deferred_decode_supported(pool, activation_dtype) {
+            return Ok(false);
+        }
+        let Some(deferred) = pool.deferred_state() else {
+            return Ok(false);
+        };
+        crate::cuda::gdn::flush_deferred_state_cuda(crate::cuda::gdn::GdnDeferredStateFlush {
+            state_pool: &pool.recurrent_state,
+            active_slots,
+            deferred_key: &deferred.key,
+            deferred_delta: &deferred.delta,
+            deferred_decay: &deferred.decay,
+            deferred_cursor: &deferred.pending_rows,
+            num_k_heads: self.dims.num_k_heads,
+            num_v_heads: self.dims.num_v_heads,
+            head_k_dim: self.dims.head_k_dim,
+            head_v_dim: self.dims.head_v_dim,
+            tiled_v_heads: self.dims.v_head_layout == GdnVHeadLayout::Tiled,
+            state_layout: pool.state_layout(),
+        })?;
+        Ok(true)
+    }
+
+    #[cfg(not(feature = "cuda"))]
+    pub(crate) fn flush_deferred_state(
+        &self,
+        _pool: &RecurrentStatePool,
+        _active_slots: &Tensor,
+        _activation_dtype: DType,
+    ) -> Result<bool> {
+        Ok(false)
     }
 
     #[cfg(feature = "cuda")]
@@ -366,7 +787,8 @@ impl GatedDeltaNet {
         projected: &GdnProjection,
         cache: &GdnLayerCache,
         checkpoint_lanes: usize,
-    ) -> Result<(Tensor, GdnCoreOutput)> {
+        transition_checkpoints: bool,
+    ) -> Result<(Tensor, GdnCoreOutput, Option<GdnTransitionStash>)> {
         let (batch_size, seq_len, _) = mixed_qkv.dims3()?;
         let active_slots = cache
             .slots
@@ -377,13 +799,28 @@ impl GatedDeltaNet {
             .squeeze(1)?
             .to_dtype(mixed_qkv.dtype())?
             .contiguous()?;
+        let conv_input = mixed_qkv.clone();
+        let pending_conv = cache.pending_transitions.as_ref().map(|pending| {
+            crate::cuda::gdn::GdnPendingSpeculativeConv {
+                conv_input: &pending.conv_input,
+                keep_rows: &pending.keep_rows,
+                pending_epochs: &pending.pending_epochs,
+                applied_epochs: &pending.conv_applied_epochs,
+            }
+        });
         let convolved_qkv = crate::cuda::gdn::speculative_conv_checkpoints_cuda(
             crate::cuda::gdn::GdnSpeculativeConvCheckpoints {
-                x: mixed_qkv,
+                x: &conv_input,
                 weight: &weight,
                 state_pool: &cache.conv_state,
                 active_slots,
-                checkpoint_lanes,
+                checkpoint_lanes: if transition_checkpoints {
+                    1
+                } else {
+                    checkpoint_lanes
+                },
+                write_checkpoints: !transition_checkpoints,
+                pending: pending_conv,
             },
         )?;
         let fused_norm = cache.state_layout == RecurrentStateLayout::GdnValueMajor
@@ -396,8 +833,20 @@ impl GatedDeltaNet {
             gate: &projected.z,
             weight: &self.norm.weight,
             eps: self.norm.eps(),
+            quantization: self.fp8_output_spec(&projected.z, batch_size, seq_len),
         });
-        let output = crate::cuda::gdn::speculative_recurrence_checkpoints_cuda(
+        let pending_recurrence = cache.pending_transitions.as_ref().map(|pending| {
+            crate::cuda::gdn::GdnPendingSpeculativeRecurrence {
+                key_banks: &pending.key_banks,
+                key_bank: &pending.key_bank,
+                delta: &pending.delta,
+                decay: &pending.decay,
+                keep_rows: &pending.keep_rows,
+                pending_epochs: &pending.pending_epochs,
+                applied_epochs: &pending.recurrent_applied_epochs,
+            }
+        });
+        let recurrence = crate::cuda::gdn::speculative_recurrence_checkpoints_cuda(
             crate::cuda::gdn::GdnSpeculativeRecurrenceCheckpoints {
                 mixed_qkv: &convolved_qkv,
                 b: &projected.b,
@@ -406,7 +855,11 @@ impl GatedDeltaNet {
                 dt_bias: &self.dt_bias,
                 state_pool: &cache.recurrent_state,
                 active_slots,
-                checkpoint_lanes,
+                checkpoint_lanes: if transition_checkpoints {
+                    1
+                } else {
+                    checkpoint_lanes
+                },
                 num_k_heads: self.dims.num_k_heads,
                 num_v_heads: self.dims.num_v_heads,
                 head_k_dim: self.dims.head_k_dim,
@@ -414,21 +867,31 @@ impl GatedDeltaNet {
                 tiled_v_heads: self.dims.v_head_layout == GdnVHeadLayout::Tiled,
                 state_layout: cache.state_layout,
                 post_op,
+                record_transitions: transition_checkpoints,
+                pending: pending_recurrence,
             },
         )?;
-        if fused_norm {
-            Ok((convolved_qkv, GdnCoreOutput::Normalized(output)))
-        } else {
-            let output = output
-                .reshape((
-                    batch_size,
-                    self.dims.num_v_heads,
-                    seq_len,
-                    self.dims.head_v_dim,
-                ))?
-                .transpose(1, 2)?;
-            Ok((convolved_qkv, GdnCoreOutput::Recurrent(output)))
-        }
+        let transitions = transition_checkpoints.then_some(GdnTransitionStash);
+        let output = match recurrence.output {
+            crate::cuda::gdn::GdnPostOpOutput::Tensor(output) if fused_norm => {
+                GdnCoreOutput::Normalized(output)
+            }
+            crate::cuda::gdn::GdnPostOpOutput::Tensor(output) => {
+                let output = output
+                    .reshape((
+                        batch_size,
+                        self.dims.num_v_heads,
+                        seq_len,
+                        self.dims.head_v_dim,
+                    ))?
+                    .transpose(1, 2)?;
+                GdnCoreOutput::Recurrent(output)
+            }
+            crate::cuda::gdn::GdnPostOpOutput::Quantized(output) => {
+                GdnCoreOutput::Quantized(output)
+            }
+        };
+        Ok((convolved_qkv, output, transitions))
     }
 
     /// Advance a gathered cache over the selected rows of a stashed forward without rerunning projections.
@@ -512,8 +975,74 @@ impl GatedDeltaNet {
         Ok(false)
     }
 
-    fn project(&self, x: &Tensor, batch_size: usize, seq_len: usize) -> Result<GdnProjection> {
+    pub(crate) fn project(
+        &self,
+        x: &Tensor,
+        batch_size: usize,
+        seq_len: usize,
+    ) -> Result<GdnProjection> {
         self.input_proj.forward(x, &self.dims, batch_size, seq_len)
+    }
+
+    #[cfg(all(feature = "cuda", has_gdn_fp8_producer))]
+    fn fp8_output_spec(
+        &self,
+        gate: &Tensor,
+        batch_size: usize,
+        seq_len: usize,
+    ) -> Option<crate::cuda::gdn::GdnFp8OutputSpec> {
+        if self.out_proj_input_shard.is_some()
+            || gate.dtype() != DType::BF16
+            || !gate.device().is_cuda()
+            || self.norm.weight.dtype() != DType::BF16
+            || !self.norm.weight.device().same_device(gate.device())
+            || self.out_proj.is_dynamic_lora_active()
+            || self.out_proj.stats_snapshot().is_some()
+        {
+            return None;
+        }
+        let source_shape = [batch_size, seq_len, self.dims.value_dim];
+        let reshaped;
+        let source = if gate.dims() == source_shape {
+            gate
+        } else {
+            reshaped = gate.reshape(&source_shape).ok()?;
+            &reshaped
+        };
+        let scheme = self.out_proj.activation_quantization_scheme_for(source)?;
+        let scale_layout = self
+            .out_proj
+            .preferred_activation_scale_layout_for(source)?;
+        crate::cuda::gdn::GdnFp8OutputSpec::new(
+            [batch_size, seq_len, self.dims.value_dim],
+            scheme,
+            scale_layout,
+            self.dims.num_v_heads,
+            self.dims.head_v_dim,
+        )
+    }
+
+    #[cfg(all(feature = "cuda", not(has_gdn_fp8_producer)))]
+    fn fp8_output_spec(
+        &self,
+        _gate: &Tensor,
+        _batch_size: usize,
+        _seq_len: usize,
+    ) -> Option<crate::cuda::gdn::GdnFp8OutputSpec> {
+        None
+    }
+
+    pub(crate) fn finish_projected_recurrent(&self, output: Tensor, z: Tensor) -> Result<Tensor> {
+        let batch_size = z.dim(0)?;
+        let seq_len = z.dim(1)?;
+        let dtype = z.dtype();
+        self.finish_forward(
+            GdnCoreOutput::Recurrent(output),
+            z,
+            batch_size,
+            seq_len,
+            dtype,
+        )
     }
 
     fn finish_forward(
@@ -524,10 +1053,29 @@ impl GatedDeltaNet {
         seq_len: usize,
         _dtype: DType,
     ) -> Result<Tensor> {
+        #[cfg(feature = "cuda")]
+        let y = match output {
+            GdnCoreOutput::Recurrent(y) => {
+                if let Some(spec) = self.fp8_output_spec(&z, batch_size, seq_len) {
+                    let activation = self.norm.forward_quantized(
+                        &y,
+                        &z,
+                        &spec,
+                        self.dims.num_v_heads,
+                        self.dims.head_v_dim,
+                    )?;
+                    return self.out_proj.forward_quantized(&activation);
+                }
+                self.norm.forward(&y, &z)?
+            }
+            GdnCoreOutput::Normalized(y) => y,
+            GdnCoreOutput::Quantized(activation) => {
+                return self.out_proj.forward_quantized(&activation)
+            }
+        };
+        #[cfg(not(feature = "cuda"))]
         let y = match output {
             GdnCoreOutput::Recurrent(y) => self.norm.forward(&y, &z)?,
-            #[cfg(feature = "cuda")]
-            GdnCoreOutput::Normalized(y) => y,
         };
         let y = y.reshape((batch_size, seq_len, self.dims.value_dim))?;
         let y = shard_out_proj_input(y, self.out_proj_input_shard)?;
@@ -544,14 +1092,24 @@ fn shard_out_proj_input(y: Tensor, shard: Option<Shard>) -> Result<Tensor> {
 
 #[cfg(test)]
 mod tests {
-    use candle_core::{Device, Tensor};
-    use mistralrs_quant::Shard;
+    use std::{collections::HashMap, sync::Arc};
+
+    use candle_core::{DType, Device, Tensor};
+    use candle_nn::Linear;
+    use mistralrs_quant::{QuantMethod, QuantMethodConfig, Shard, UnquantLinear};
 
     use super::super::config::GdnVHeadLayout;
+    use super::super::norm::RmsNormGated;
+    use super::super::projection::GdnInputProjection;
+    use super::super::{try_forward_grouped_packed_gdn, GdnLayerCache, PackedGdnLayout};
     use super::{
         index_select_rows, shard_out_proj_input, speculative_checkpoint_dims_supported,
-        speculative_state_commit_dims_supported, GdnDims,
+        speculative_state_commit_dims_supported, GatedDeltaNet, GdnDims,
     };
+    use crate::kv_cache::RecurrentStateLayout;
+    use crate::pipeline::RecurrentBatchKind;
+
+    const PACKED_ASSERT_EPS: f32 = 1e-6;
 
     fn checkpoint_dims() -> GdnDims {
         GdnDims {
@@ -567,6 +1125,283 @@ mod tests {
             v_per_group: 2,
             v_head_layout: GdnVHeadLayout::Grouped,
         }
+    }
+
+    struct PackedTestGdn {
+        gdn: GatedDeltaNet,
+        projections: Vec<Arc<dyn QuantMethod>>,
+    }
+
+    fn packed_dims() -> GdnDims {
+        GdnDims {
+            hidden_size: 4,
+            num_k_heads: 1,
+            num_v_heads: 1,
+            head_k_dim: 2,
+            head_v_dim: 2,
+            conv_kernel_size: 2,
+            key_dim: 2,
+            value_dim: 2,
+            conv_dim: 6,
+            v_per_group: 1,
+            v_head_layout: GdnVHeadLayout::Grouped,
+        }
+    }
+
+    fn test_weight(rows: usize, cols: usize, phase: usize) -> candle_core::Result<Tensor> {
+        let values = (0..rows * cols)
+            .map(|index| (((index + phase) % 11) as f32 - 5.0) * 0.03)
+            .collect::<Vec<_>>();
+        Tensor::from_vec(values, (rows, cols), &Device::Cpu)
+    }
+
+    fn test_linear(
+        rows: usize,
+        cols: usize,
+        phase: usize,
+    ) -> candle_core::Result<Arc<dyn QuantMethod>> {
+        Ok(Arc::new(UnquantLinear::new(
+            QuantMethodConfig::Unquantized(Linear::new(test_weight(rows, cols, phase)?, None)),
+        )?))
+    }
+
+    fn packed_test_gdn() -> candle_core::Result<PackedTestGdn> {
+        let dims = packed_dims();
+        let qkv = test_linear(dims.conv_dim, dims.hidden_size, 0)?;
+        let z = test_linear(dims.value_dim, dims.hidden_size, 2)?;
+        let b = test_linear(dims.num_v_heads, dims.hidden_size, 4)?;
+        let a = test_linear(dims.num_v_heads, dims.hidden_size, 6)?;
+        let out = test_linear(dims.hidden_size, dims.value_dim, 8)?;
+        let projections = vec![qkv.clone(), z.clone(), b.clone(), a.clone(), out.clone()];
+        let conv1d_weight = Tensor::from_vec(
+            (0..dims.conv_dim * dims.conv_kernel_size)
+                .map(|index| ((index % 7) as f32 - 3.0) * 0.04)
+                .collect::<Vec<_>>(),
+            (dims.conv_dim, 1, dims.conv_kernel_size),
+            &Device::Cpu,
+        )?;
+        let gdn = GatedDeltaNet {
+            input_proj: GdnInputProjection::Split {
+                in_proj_qkv: qkv,
+                in_proj_z: z,
+                in_proj_b: b,
+                in_proj_a: a,
+                merged_qkv_z: None,
+                merged_b_a: None,
+            },
+            conv1d_weight,
+            dt_bias: Tensor::new(&[0.1f32], &Device::Cpu)?,
+            a_log: Tensor::new(&[-0.2f32], &Device::Cpu)?,
+            norm: RmsNormGated::from_parts(
+                Tensor::ones(dims.value_dim, DType::F32, &Device::Cpu)?,
+                1e-6,
+            ),
+            out_proj: out,
+            out_proj_input_shard: None,
+            dims,
+        };
+        Ok(PackedTestGdn { gdn, projections })
+    }
+
+    fn packed_test_cache(logical_batch: usize) -> candle_core::Result<GdnLayerCache> {
+        let dims = packed_dims();
+        let conv_state = Tensor::from_vec(
+            (0..logical_batch * dims.conv_dim * dims.conv_kernel_size)
+                .map(|index| ((index % 13) as f32 - 6.0) * 0.01)
+                .collect::<Vec<_>>(),
+            (logical_batch, dims.conv_dim, dims.conv_kernel_size),
+            &Device::Cpu,
+        )?;
+        let recurrent_state = Tensor::from_vec(
+            (0..logical_batch * dims.num_v_heads * dims.head_k_dim * dims.head_v_dim)
+                .map(|index| ((index % 9) as f32 - 4.0) * 0.02)
+                .collect::<Vec<_>>(),
+            (
+                logical_batch,
+                dims.num_v_heads,
+                dims.head_k_dim,
+                dims.head_v_dim,
+            ),
+            &Device::Cpu,
+        )?;
+        Ok(GdnLayerCache::gathered(
+            conv_state,
+            recurrent_state,
+            RecurrentStateLayout::GdnKeyMajor,
+        ))
+    }
+
+    fn reference_ragged_forward(
+        gdn: &GatedDeltaNet,
+        x: &Tensor,
+        cache: &mut GdnLayerCache,
+        query_lens: &[usize],
+    ) -> candle_core::Result<Tensor> {
+        let mut offset = 0;
+        let mut outputs = Vec::with_capacity(query_lens.len());
+        let mut conv_states = Vec::with_capacity(query_lens.len());
+        let mut recurrent_states = Vec::with_capacity(query_lens.len());
+        for (state_index, &query_len) in query_lens.iter().enumerate() {
+            let mut row_cache = GdnLayerCache::gathered(
+                cache.conv_state.narrow(0, state_index, 1)?,
+                cache.recurrent_state.narrow(0, state_index, 1)?,
+                cache.state_layout,
+            );
+            outputs.push(gdn.forward(
+                &x.narrow(1, offset, query_len)?,
+                &mut row_cache,
+                RecurrentBatchKind::Prefill,
+            )?);
+            conv_states.push(row_cache.conv_state);
+            recurrent_states.push(row_cache.recurrent_state);
+            offset += query_len;
+        }
+        cache.conv_state = Tensor::cat(&conv_states, 0)?;
+        cache.recurrent_state = Tensor::cat(&recurrent_states, 0)?;
+        Tensor::cat(&outputs, 1)
+    }
+
+    fn assert_tensor_close(
+        label: &str,
+        actual: &Tensor,
+        expected: &Tensor,
+    ) -> candle_core::Result<()> {
+        assert_eq!(actual.dims(), expected.dims(), "{label} shape");
+        let actual = actual.flatten_all()?.to_vec1::<f32>()?;
+        let expected = expected.flatten_all()?.to_vec1::<f32>()?;
+        assert!(
+            actual.iter().all(|value| value.is_finite()),
+            "{label} actual"
+        );
+        assert!(
+            expected.iter().all(|value| value.is_finite()),
+            "{label} expected"
+        );
+        let max_error = actual
+            .iter()
+            .zip(&expected)
+            .map(|(actual, expected)| (actual - expected).abs())
+            .fold(0.0f32, f32::max);
+        assert!(
+            max_error <= PACKED_ASSERT_EPS,
+            "{label} max error {max_error}"
+        );
+        Ok(())
+    }
+
+    fn assert_tensor_exact(
+        label: &str,
+        actual: &Tensor,
+        expected: &Tensor,
+    ) -> candle_core::Result<()> {
+        assert_eq!(actual.dims(), expected.dims(), "{label} shape");
+        let actual = actual.flatten_all()?.to_vec1::<f32>()?;
+        let expected = expected.flatten_all()?.to_vec1::<f32>()?;
+        assert!(
+            actual.iter().all(|value| value.is_finite()),
+            "{label} actual"
+        );
+        assert!(
+            expected.iter().all(|value| value.is_finite()),
+            "{label} expected"
+        );
+        assert_eq!(actual, expected, "{label}");
+        Ok(())
+    }
+
+    fn assert_packed_ragged_equivalence(query_lens: &[usize]) -> candle_core::Result<()> {
+        let PackedTestGdn { gdn, projections } = packed_test_gdn()?;
+        let token_count = query_lens.iter().sum::<usize>();
+        let x = Tensor::from_vec(
+            (0..token_count * packed_dims().hidden_size)
+                .map(|index| ((index % 17) as f32 - 8.0) * 0.025)
+                .collect::<Vec<_>>(),
+            (1, token_count, packed_dims().hidden_size),
+            &Device::Cpu,
+        )?;
+        let initial_cache = packed_test_cache(query_lens.len())?;
+        let mut reference_cache = initial_cache.clone();
+        let expected = reference_ragged_forward(&gdn, &x, &mut reference_cache, query_lens)?;
+
+        for projection in &projections {
+            projection.begin_track_stats()?;
+        }
+        let mut packed_cache = initial_cache;
+        let layout = PackedGdnLayout::new(query_lens.to_vec(), HashMap::new())?;
+        let actual = try_forward_grouped_packed_gdn(&gdn, &x, &mut packed_cache, &layout)?
+            .expect("ragged packed GDN should use the projected path");
+
+        for projection in projections {
+            assert_eq!(projection.stats_snapshot(), Some((1, token_count)));
+        }
+        assert_tensor_close("output", &actual, &expected)?;
+        assert_tensor_exact(
+            "convolution state",
+            &packed_cache.conv_state,
+            &reference_cache.conv_state,
+        )?;
+        assert_tensor_close(
+            "recurrent state",
+            &packed_cache.recurrent_state,
+            &reference_cache.recurrent_state,
+        )
+    }
+
+    #[test]
+    fn packed_ragged_projects_once_and_matches_per_sequence_forward() -> candle_core::Result<()> {
+        assert_packed_ragged_equivalence(&[2, 3, 2])?;
+        assert_packed_ragged_equivalence(&[1, 2, 3])?;
+        assert_packed_ragged_equivalence(&[7, 8, 9])
+    }
+
+    #[test]
+    fn padded_core_preserves_states_across_conv_width_boundaries() -> candle_core::Result<()> {
+        let query_lens = [1, 2, 3];
+        let PackedTestGdn { gdn, .. } = packed_test_gdn()?;
+        let token_count = query_lens.iter().sum::<usize>();
+        let x = Tensor::from_vec(
+            (0..token_count * packed_dims().hidden_size)
+                .map(|index| ((index % 17) as f32 - 8.0) * 0.025)
+                .collect::<Vec<_>>(),
+            (1, token_count, packed_dims().hidden_size),
+            &Device::Cpu,
+        )?;
+        let initial_cache = packed_test_cache(query_lens.len())?;
+        let mut reference_cache = initial_cache.clone();
+        let expected = reference_ragged_forward(&gdn, &x, &mut reference_cache, &query_lens)?;
+
+        let projected = gdn.project(&x, 1, token_count)?;
+        let layout = PackedGdnLayout::new(query_lens.to_vec(), HashMap::new())?;
+        let padded_projection = projected.pad_core_packed(&layout, layout.max_seq_len())?;
+        let mut padded_cache = initial_cache;
+        let padded_output = gdn.forward_projected_padded_prefill_core(
+            &padded_projection,
+            &mut padded_cache,
+            &layout,
+        )?;
+        let output_rows = query_lens
+            .iter()
+            .enumerate()
+            .map(|(batch_index, &query_len)| {
+                padded_output
+                    .narrow(0, batch_index, 1)?
+                    .narrow(1, 0, query_len)
+            })
+            .collect::<candle_core::Result<Vec<_>>>()?;
+        let output = Tensor::cat(&output_rows, 1)?;
+        let actual = gdn.finish_projected_recurrent(output, projected.z)?;
+
+        assert_tensor_close("padded output", &actual, &expected)?;
+        assert_tensor_exact(
+            "padded convolution state",
+            &padded_cache.conv_state,
+            &reference_cache.conv_state,
+        )?;
+        assert_tensor_close(
+            "padded recurrent state",
+            &padded_cache.recurrent_state,
+            &reference_cache.recurrent_state,
+        )
     }
 
     #[test]

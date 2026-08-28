@@ -15,8 +15,8 @@ use std::{
 };
 
 use crate::gdn::{
-    try_forward_uniform_packed_gdn, GatedDeltaNet, GdnConfig, GdnInputProjectionKind,
-    GdnLayerCache, GdnStateDType, GdnVHeadLayout,
+    try_forward_grouped_packed_gdn, GatedDeltaNet, GdnConfig, GdnInputProjectionKind,
+    GdnLayerCache, GdnStateDType, GdnVHeadLayout, PackedGdnLayout,
 };
 use crate::{
     amoe::AnyMoeBaseModelMixin,
@@ -362,6 +362,14 @@ impl FullAttention {
         };
 
         // Apply output gate: y = y * sigmoid(gate)
+        if let Some(res) = crate::ops::try_fused_gated_projection(
+            &gate,
+            &y,
+            crate::layers::Activation::Sigmoid,
+            &*self.o_proj,
+        )? {
+            return Ok(res);
+        }
         let gate = candle_nn::ops::sigmoid(&gate.to_dtype(y.dtype())?)?;
         y = y.broadcast_mul(&gate)?;
 
@@ -619,7 +627,7 @@ impl DecoderLayer {
         x: &Tensor,
         cache: &mut GdnLayerCache,
         batch_kind: RecurrentBatchKind,
-        packed_query_lens: Option<&[usize]>,
+        packed_layout: Option<&PackedGdnLayout>,
     ) -> Result<Tensor> {
         let gdn = match &self.layer_impl {
             LayerImpl::LinearAttention(gdn) => gdn,
@@ -627,7 +635,8 @@ impl DecoderLayer {
         };
         let residual = x;
         let x = self.input_layernorm.forward(x)?;
-        let gdn_out = if let Some(query_lens) = packed_query_lens {
+        let gdn_out = if let Some(layout) = packed_layout {
+            let query_lens = layout.query_lens();
             if batch_kind != RecurrentBatchKind::Prefill {
                 candle_core::bail!("Qwen3-Next packed GDN cannot run a decode batch");
             }
@@ -655,7 +664,7 @@ impl DecoderLayer {
                 );
             }
 
-            if let Some(output) = try_forward_uniform_packed_gdn(gdn, &x, cache, query_lens)? {
+            if let Some(output) = try_forward_grouped_packed_gdn(gdn, &x, cache, layout)? {
                 output
             } else {
                 let mut outputs = Vec::with_capacity(segments.len());
@@ -669,6 +678,8 @@ impl DecoderLayer {
                         recurrent_state: cache.recurrent_state.narrow(0, segment.state_index, 1)?,
                         state_layout: cache.state_layout,
                         slots: None,
+                        pending_transitions: None,
+                        deferred_state: None,
                     };
                     outputs.push(mistralrs_quant::with_lora_execution_row_range(
                         segment.token_range.clone(),
@@ -964,16 +975,17 @@ impl Model {
             .layer_types
             .iter()
             .any(|lt| matches!(lt, LayerType::LinearAttention));
-        let packed_query_lens = if ctx.flash_params().packed {
-            Some(
-                ctx.paged_input_metadata()
-                    .and_then(|metadata| metadata.query_lens.clone())
-                    .ok_or_else(|| {
-                        candle_core::Error::msg(
-                            "Qwen3-Next packed GDN requires logical query lengths",
-                        )
-                    })?,
-            )
+        let packed_layout = if ctx.flash_params().packed {
+            let query_lens = ctx
+                .paged_input_metadata()
+                .and_then(|metadata| metadata.query_lens.clone())
+                .ok_or_else(|| {
+                    candle_core::Error::msg("Qwen3-Next packed GDN requires logical query lengths")
+                })?;
+            Some(PackedGdnLayout::new(
+                query_lens,
+                ctx.flash_params().cumulative_seqlens_q.clone(),
+            )?)
         } else {
             None
         };
@@ -983,7 +995,8 @@ impl Model {
             );
         }
         if has_linear_attention {
-            if let Some(query_lens) = packed_query_lens.as_deref() {
+            if let Some(layout) = packed_layout.as_ref() {
+                let query_lens = layout.query_lens();
                 if !ctx.is_first_prompt_chunk() {
                     candle_core::bail!("Qwen3-Next packed GDN requires the first prompt chunk");
                 }
@@ -1070,7 +1083,7 @@ impl Model {
                     if let Some(HybridLayerCache::Recurrent(pool)) = hybrid_cache.get_mut(layer_idx)
                     {
                         // Packed prefill slices the gathered rows per logical sequence
-                        let mut gdn_cache = if packed_query_lens.is_some() {
+                        let mut gdn_cache = if packed_layout.is_some() {
                             GdnLayerCache::gathered(
                                 pool.gather_conv_state(&indices)?,
                                 pool.gather_recurrent_state(&indices)?,
@@ -1084,7 +1097,7 @@ impl Model {
                             &x,
                             &mut gdn_cache,
                             recurrent_metadata.batch_kind(),
-                            packed_query_lens.as_deref(),
+                            packed_layout.as_ref(),
                         )?;
 
                         gdn_cache.commit(

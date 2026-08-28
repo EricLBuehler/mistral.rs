@@ -3,7 +3,7 @@ use std::ops::Range;
 use candle_core::{Result, Tensor};
 
 use crate::{
-    gdn::{try_forward_uniform_packed_gdn, GatedDeltaNet, GdnLayerCache},
+    gdn::{try_forward_grouped_packed_gdn, GatedDeltaNet, GdnLayerCache, PackedGdnLayout},
     pipeline::{ModelForwardContext, RecurrentBatchKind},
 };
 
@@ -67,10 +67,10 @@ fn validate_packed_gdn_state_rows(
     Ok(())
 }
 
-pub(crate) fn packed_gdn_query_lens(
+pub(crate) fn packed_gdn_layout(
     x: &Tensor,
     ctx: &ModelForwardContext<'_>,
-) -> Result<Option<Vec<usize>>> {
+) -> Result<Option<PackedGdnLayout>> {
     if !ctx.flash_params().packed {
         return Ok(None);
     }
@@ -107,7 +107,10 @@ pub(crate) fn packed_gdn_query_lens(
             );
         }
     }
-    Ok(Some(query_lens))
+    Ok(Some(PackedGdnLayout::new(
+        query_lens,
+        ctx.flash_params().cumulative_seqlens_q.clone(),
+    )?))
 }
 
 pub(crate) fn forward_packed_gdn(
@@ -115,7 +118,7 @@ pub(crate) fn forward_packed_gdn(
     x: &Tensor,
     cache: &mut GdnLayerCache,
     batch_kind: RecurrentBatchKind,
-    query_lens: &[usize],
+    layout: &PackedGdnLayout,
 ) -> Result<Tensor> {
     if batch_kind != RecurrentBatchKind::Prefill {
         candle_core::bail!("Qwen3.5 packed GDN cannot run a decode batch");
@@ -123,8 +126,10 @@ pub(crate) fn forward_packed_gdn(
     let (physical_batch, physical_tokens, _) = x.dims3()?;
     let (conv_state_batch, _, _) = cache.conv_state.dims3()?;
     let (recurrent_state_batch, _, _, _) = cache.recurrent_state.dims4()?;
-    let segments = packed_gdn_segments(physical_batch, physical_tokens, query_lens)?;
-    validate_packed_gdn_state_rows(segments.len(), conv_state_batch, recurrent_state_batch)?;
+    if physical_batch != 1 || physical_tokens != layout.token_count() {
+        candle_core::bail!("Qwen3.5 packed GDN token dimensions are incompatible");
+    }
+    validate_packed_gdn_state_rows(layout.batch_size(), conv_state_batch, recurrent_state_batch)?;
     if x.dtype() != cache.conv_state.dtype() {
         candle_core::bail!(
             "Qwen3.5 packed GDN dtype mismatch: tokens are {:?}, convolution state is {:?}",
@@ -140,10 +145,11 @@ pub(crate) fn forward_packed_gdn(
         );
     }
 
-    if let Some(output) = try_forward_uniform_packed_gdn(gdn, x, cache, query_lens)? {
+    if let Some(output) = try_forward_grouped_packed_gdn(gdn, x, cache, layout)? {
         return Ok(output);
     }
 
+    let segments = packed_gdn_segments(physical_batch, physical_tokens, layout.query_lens())?;
     let mut outputs = Vec::with_capacity(segments.len());
     let mut next_conv_states = Vec::with_capacity(segments.len());
     let mut next_recurrent_states = Vec::with_capacity(segments.len());
@@ -154,6 +160,8 @@ pub(crate) fn forward_packed_gdn(
             recurrent_state: cache.recurrent_state.narrow(0, segment.state_index, 1)?,
             state_layout: cache.state_layout,
             slots: None,
+            pending_transitions: None,
+            deferred_state: None,
         };
         outputs.push(mistralrs_quant::with_lora_execution_row_range(
             segment.token_range.clone(),
