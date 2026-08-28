@@ -1246,7 +1246,9 @@ pub(crate) fn sparse_rejection_cuda_complete(
     }
     let outcome_elems = submission.batch * SPARSE_REJECTION_OUTCOME_WIDTH;
     let rows = workspace.outcomes_host.as_slice()[..outcome_elems]
-        .chunks_exact(SPARSE_REJECTION_OUTCOME_WIDTH)
+        .as_chunks::<SPARSE_REJECTION_OUTCOME_WIDTH>()
+        .0
+        .iter()
         .map(|row| SparseRejectionRow {
             accepted_count: row[0],
             continuation: row[1],

@@ -2,6 +2,7 @@ use core::ffi::{c_int, c_long, c_uint, c_void};
 
 use candle_core::cuda::cudarc::driver::sys::CUstream;
 
+#[cfg(has_fa3_fp8_paged)]
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct Fa3Fp8DecodeScheduleParams {
@@ -22,6 +23,7 @@ pub struct Fa3Fp8DecodeScheduleParams {
     pub device_id: c_int,
 }
 
+#[cfg(has_fa3_fp8_paged)]
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct Fa3Fp8DecodeParams {

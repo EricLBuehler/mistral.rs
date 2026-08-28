@@ -116,6 +116,7 @@ impl CudaPhaseTimer {
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(crate) enum CudaGraphComponent {
     Target,
+    #[cfg(any(test, all(feature = "flash-attn", target_family = "unix")))]
     DFlash,
 }
 
@@ -140,6 +141,7 @@ impl CudaGraphComponent {
     const fn label(self) -> &'static str {
         match self {
             Self::Target => "target",
+            #[cfg(any(test, all(feature = "flash-attn", target_family = "unix")))]
             Self::DFlash => "dflash",
         }
     }
@@ -3126,6 +3128,7 @@ impl CudaGraphPinnedBuffer {
         Ok(())
     }
 
+    #[cfg(all(feature = "flash-attn", target_family = "unix"))]
     fn copy_from_f32_slice(
         &mut self,
         src: &[f32],
@@ -3379,6 +3382,7 @@ impl CudaGraphHostStaging {
         buffer.copy_from_u32_slice(src, dst, &stream)
     }
 
+    #[cfg(all(feature = "flash-attn", target_family = "unix"))]
     pub(crate) fn copy_from_f32_slice(
         &mut self,
         name: &'static str,

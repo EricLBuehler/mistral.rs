@@ -69,7 +69,7 @@ const GDN_STATE_DTYPE_F16: i32 = 0;
 const GDN_STATE_DTYPE_BF16: i32 = 1;
 #[cfg(feature = "cuda")]
 const GDN_STATE_DTYPE_F32: i32 = 2;
-#[cfg(feature = "cuda")]
+#[cfg(all(feature = "cuda", has_flashinfer_gdn_sm90_kernel))]
 const FLASHINFER_GDN_MIN_SEQ_LEN: usize = 32;
 
 #[cfg(any(feature = "cuda", test))]
@@ -1991,7 +1991,10 @@ pub fn prepare_recurrence_inputs_cuda(
     candle_core::bail!("prepare_recurrence_inputs_cuda requires the cuda feature")
 }
 
-#[cfg_attr(not(feature = "cuda"), allow(dead_code))]
+#[cfg_attr(
+    not(all(feature = "cuda", has_flashinfer_gdn_sm90_kernel)),
+    allow(dead_code)
+)]
 pub struct FusedPrefillRecurrence<'a> {
     pub mixed_qkv: &'a Tensor,
     pub b: &'a Tensor,
@@ -2009,7 +2012,10 @@ pub struct FusedPrefillRecurrence<'a> {
     pub slots: GdnStateSlots<'a>,
 }
 
-#[cfg_attr(not(feature = "cuda"), allow(dead_code))]
+#[cfg_attr(
+    not(all(feature = "cuda", has_flashinfer_gdn_sm90_kernel)),
+    allow(dead_code)
+)]
 pub enum FusedPrefillOutput {
     TokenMajor(Tensor),
 }

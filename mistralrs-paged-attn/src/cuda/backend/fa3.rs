@@ -1,4 +1,6 @@
-use candle_core::{DType, Result, Tensor};
+#[cfg(has_fa3_fp8_paged)]
+use candle_core::DType;
+use candle_core::{Result, Tensor};
 
 pub const USE_FA3_FP8_PAGED: bool = cfg!(has_fa3_fp8_paged);
 pub const FA3_DECODE_MAX_QUERY_LEN: usize = 128;
@@ -51,10 +53,12 @@ impl Fa3PagedMetadataLayout {
         }
     }
 
+    #[cfg(any(test, has_fa3_fp8_paged))]
     fn source_rows(self, batch_size: usize) -> Option<usize> {
         batch_size.checked_mul(self.source_rows_per_sequence)
     }
 
+    #[cfg(any(test, has_fa3_fp8_paged))]
     fn valid(self) -> bool {
         self.source_rows_per_sequence > 0
             && self.source_rows_per_sequence <= FA3_DECODE_MAX_QUERY_LEN

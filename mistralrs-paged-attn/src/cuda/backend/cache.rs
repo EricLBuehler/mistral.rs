@@ -258,93 +258,6 @@ pub fn copy_blocks(
     Ok(())
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn copy_blocks_uses_device_metadata_and_view_offsets() -> Result<()> {
-        let Ok(device) = Device::new_cuda(0) else {
-            return Ok(());
-        };
-        let key_base = Tensor::from_vec(
-            (0..24).map(|value| value as f32).collect::<Vec<_>>(),
-            (6, 4),
-            &device,
-        )?
-        .to_dtype(candle_core::DType::BF16)?;
-        let value_base = Tensor::from_vec(
-            (100..124).map(|value| value as f32).collect::<Vec<_>>(),
-            (6, 4),
-            &device,
-        )?
-        .to_dtype(candle_core::DType::BF16)?;
-        let mut key = key_base.narrow(0, 1, 4)?;
-        let mut value = value_base.narrow(0, 1, 4)?;
-        let mapping = HashMap::from([(0, vec![2]), (1, vec![3])]);
-
-        copy_blocks(vec![&mut key], vec![&mut value], &mapping)?;
-        device.synchronize()?;
-
-        assert_eq!(
-            key_base
-                .to_dtype(candle_core::DType::F32)?
-                .to_vec2::<f32>()?,
-            vec![
-                vec![0.0, 1.0, 2.0, 3.0],
-                vec![4.0, 5.0, 6.0, 7.0],
-                vec![8.0, 9.0, 10.0, 11.0],
-                vec![4.0, 5.0, 6.0, 7.0],
-                vec![8.0, 9.0, 10.0, 11.0],
-                vec![20.0, 21.0, 22.0, 23.0],
-            ]
-        );
-        assert_eq!(
-            value_base
-                .to_dtype(candle_core::DType::F32)?
-                .to_vec2::<f32>()?,
-            vec![
-                vec![100.0, 101.0, 102.0, 103.0],
-                vec![104.0, 105.0, 106.0, 107.0],
-                vec![108.0, 109.0, 110.0, 111.0],
-                vec![104.0, 105.0, 106.0, 107.0],
-                vec![108.0, 109.0, 110.0, 111.0],
-                vec![120.0, 121.0, 122.0, 123.0],
-            ]
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn copy_blocks_rejects_alternate_allocation_streams() -> Result<()> {
-        let Ok(device) = Device::new_cuda(0) else {
-            return Ok(());
-        };
-        let Device::Cuda(dev) = &device else {
-            unreachable!()
-        };
-        let stream = dev.cuda_stream();
-        let alternate_stream = stream
-            .context()
-            .new_stream()
-            .map_err(|error| candle_core::Error::Cuda(Box::new(error)))?;
-        assert!(!Arc::ptr_eq(&stream, &alternate_stream));
-        let key_slice = alternate_stream
-            .clone_htod(&(0..16).map(|value| value as f32).collect::<Vec<_>>())
-            .map_err(|error| candle_core::Error::Cuda(Box::new(error)))?;
-        let key_storage = candle_core::CudaStorage::wrap_cuda_slice(key_slice, dev.clone());
-        let mut key = Tensor::from((Storage::Cuda(key_storage), (4, 4)));
-        let mut value = Tensor::zeros((4, 4), candle_core::DType::F32, &device)?;
-        let mapping = HashMap::from([(0, vec![1])]);
-
-        let error = copy_blocks(vec![&mut key], vec![&mut value], &mapping)
-            .unwrap_err()
-            .to_string();
-        assert!(error.contains("allocated on a different CUDA stream"));
-        Ok(())
-    }
-}
-
 // `dst` REALLY should be &mut. That's the only reason this is unsafe.
 /// # Safety
 /// `dst` is the only shared reference and upholds the `&mut` aliasing guarantee.
@@ -454,4 +367,91 @@ pub unsafe fn swap_blocks(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn copy_blocks_uses_device_metadata_and_view_offsets() -> Result<()> {
+        let Ok(device) = Device::new_cuda(0) else {
+            return Ok(());
+        };
+        let key_base = Tensor::from_vec(
+            (0..24).map(|value| value as f32).collect::<Vec<_>>(),
+            (6, 4),
+            &device,
+        )?
+        .to_dtype(candle_core::DType::BF16)?;
+        let value_base = Tensor::from_vec(
+            (100..124).map(|value| value as f32).collect::<Vec<_>>(),
+            (6, 4),
+            &device,
+        )?
+        .to_dtype(candle_core::DType::BF16)?;
+        let mut key = key_base.narrow(0, 1, 4)?;
+        let mut value = value_base.narrow(0, 1, 4)?;
+        let mapping = HashMap::from([(0, vec![2]), (1, vec![3])]);
+
+        copy_blocks(vec![&mut key], vec![&mut value], &mapping)?;
+        device.synchronize()?;
+
+        assert_eq!(
+            key_base
+                .to_dtype(candle_core::DType::F32)?
+                .to_vec2::<f32>()?,
+            vec![
+                vec![0.0, 1.0, 2.0, 3.0],
+                vec![4.0, 5.0, 6.0, 7.0],
+                vec![8.0, 9.0, 10.0, 11.0],
+                vec![4.0, 5.0, 6.0, 7.0],
+                vec![8.0, 9.0, 10.0, 11.0],
+                vec![20.0, 21.0, 22.0, 23.0],
+            ]
+        );
+        assert_eq!(
+            value_base
+                .to_dtype(candle_core::DType::F32)?
+                .to_vec2::<f32>()?,
+            vec![
+                vec![100.0, 101.0, 102.0, 103.0],
+                vec![104.0, 105.0, 106.0, 107.0],
+                vec![108.0, 109.0, 110.0, 111.0],
+                vec![104.0, 105.0, 106.0, 107.0],
+                vec![108.0, 109.0, 110.0, 111.0],
+                vec![120.0, 121.0, 122.0, 123.0],
+            ]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn copy_blocks_rejects_alternate_allocation_streams() -> Result<()> {
+        let Ok(device) = Device::new_cuda(0) else {
+            return Ok(());
+        };
+        let Device::Cuda(dev) = &device else {
+            unreachable!()
+        };
+        let stream = dev.cuda_stream();
+        let alternate_stream = stream
+            .context()
+            .new_stream()
+            .map_err(|error| candle_core::Error::Cuda(Box::new(error)))?;
+        assert!(!Arc::ptr_eq(&stream, &alternate_stream));
+        let key_slice = alternate_stream
+            .clone_htod(&(0..16).map(|value| value as f32).collect::<Vec<_>>())
+            .map_err(|error| candle_core::Error::Cuda(Box::new(error)))?;
+        let key_storage = candle_core::CudaStorage::wrap_cuda_slice(key_slice, dev.clone());
+        let mut key = Tensor::from((Storage::Cuda(key_storage), (4, 4)));
+        let mut value = Tensor::zeros((4, 4), candle_core::DType::F32, &device)?;
+        let mapping = HashMap::from([(0, vec![1])]);
+
+        let error = copy_blocks(vec![&mut key], vec![&mut value], &mapping)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("allocated on a different CUDA stream"));
+        Ok(())
+    }
 }

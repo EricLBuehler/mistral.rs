@@ -393,7 +393,9 @@ impl CudaTop1BatchSubmission {
             let token_ids = completion.token_ids().to_vec();
             let packed = completion.packed().map(|values| {
                 values
-                    .chunks_exact(crate::ops::CUDA_TOP1_PACKED_WIDTH)
+                    .as_chunks::<{ crate::ops::CUDA_TOP1_PACKED_WIDTH }>()
+                    .0
+                    .iter()
                     .map(|row| [row[0], row[1]])
                     .collect()
             });
