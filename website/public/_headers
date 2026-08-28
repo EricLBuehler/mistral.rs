@@ -1,3 +1,12 @@
+/blog/assets/*
+  Cache-Control: public, max-age=31536000, immutable
+
+/blog.css
+  Cache-Control: public, max-age=3600, must-revalidate
+
+/blog/*
+  Cache-Control: public, max-age=300, must-revalidate
+
 /assets/*
   Cache-Control: public, max-age=31536000, immutable
 

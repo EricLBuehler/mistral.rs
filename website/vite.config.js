@@ -1,5 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { defineConfig } from "vite";
+import { mistralrsBlog } from "./vite/blog-plugin.js";
 
 const installers = [
   { fileName: "install.sh", source: new URL("../install.sh", import.meta.url) },
@@ -48,5 +49,5 @@ function installerDevAssets() {
 }
 
 export default defineConfig({
-  plugins: [installerBuildAssets(), installerDevAssets()],
+  plugins: [installerBuildAssets(), installerDevAssets(), mistralrsBlog()],
 });
