@@ -2,6 +2,10 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## ABSOLUTE RULE: nothing leaves this machine without explicit approval
+
+Never push, publish, or send ANY code or content off this machine unless Eric explicitly approves that specific action in that specific instance. No `git push`, no PR creation, no PR merges, no releases, no package publishes, no remote API writes. EVER. Prior approval of a plan does not count as approval to push; ask immediately before the push itself. Commits to the local working tree are fine; everything remote requires a fresh, explicit yes.
+
 ## Project Overview
 
 mistral.rs is a blazing-fast LLM inference engine written in Rust. It supports text, multimodal, image generation, and speech models with Rust and Python SDKs, plus OpenAI HTTP and MCP APIs.
