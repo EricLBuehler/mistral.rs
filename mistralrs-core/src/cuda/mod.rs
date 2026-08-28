@@ -4,7 +4,10 @@ pub(crate) mod dflash_context;
 pub(crate) mod dynamic_conv;
 pub mod ffi;
 pub mod gdn;
-#[cfg(feature = "cuda")]
+#[cfg(all(
+    feature = "cuda",
+    any(test, all(feature = "flash-attn", target_family = "unix"))
+))]
 pub mod graph;
 #[cfg(feature = "cuda")]
 pub(crate) mod indexed_copy;

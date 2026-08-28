@@ -3258,7 +3258,9 @@ pub(crate) fn cuda_top1_logits_f32_packed_batched_cached(
     let (batch, vocab) = (*batch, *vocab);
     let packed = cuda_top1_logits_f32_packed_cached_inner(input, batch, vocab, cache, OP)?;
     Ok(packed
-        .chunks_exact(CUDA_TOP1_PACKED_WIDTH)
+        .as_chunks::<CUDA_TOP1_PACKED_WIDTH>()
+        .0
+        .iter()
         .map(|row| [row[0], row[1]])
         .collect())
 }

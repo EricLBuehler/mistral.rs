@@ -4,7 +4,9 @@ use half::{bf16, f16};
 pub(crate) const HAVE_BLOCKWISE_DEQUANT_KERNELS: bool = cfg!(has_blockwise_fp8_kernels);
 pub(crate) const HAVE_BLOCKWISE_QUANT_KERNELS: bool = cfg!(has_blockwise_fp8_kernels);
 pub(crate) const HAVE_BLOCKWISE_GEMM_KERNELS: bool = cfg!(has_blockwise_fp8_kernels);
+#[cfg(has_cutlass_fp8_sm90_kernels)]
 pub(crate) const HAVE_CUTLASS_FP8_SM90_KERNELS: bool = cfg!(has_cutlass_fp8_sm90_kernels);
+#[cfg(has_deepgemm_fp8_sm90_provider)]
 pub(crate) const HAVE_DEEPGEMM_FP8_SM90_PROVIDER: bool = cfg!(has_deepgemm_fp8_sm90_provider);
 
 #[cfg(has_blockwise_fp8_kernels)]

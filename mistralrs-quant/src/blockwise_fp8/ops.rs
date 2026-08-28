@@ -1134,48 +1134,39 @@ pub fn fp8_indexed_moe_gemm(
     }
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(all(feature = "cuda", has_cutlass_fp8_sm90_kernels))]
 pub(crate) fn cutlass_fp8_blockwise_supported(
     weight: &Tensor,
     weight_scales: &Tensor,
     weight_block_size: &[usize],
 ) -> bool {
-    #[cfg(not(has_cutlass_fp8_sm90_kernels))]
-    {
-        let _ = (weight, weight_scales, weight_block_size);
-        false
-    }
+    use candle_core::Device;
 
-    #[cfg(has_cutlass_fp8_sm90_kernels)]
+    if !ffi::HAVE_CUTLASS_FP8_SM90_KERNELS
+        || weight_block_size != [FP8_BLOCK_SIZE, FP8_BLOCK_SIZE]
+        || weight.dtype() != DType::F8E4M3
+        || weight_scales.dtype() != DType::F32
+        || !weight.is_contiguous()
+        || !weight_scales.is_contiguous()
+        || !weight.device().same_device(weight_scales.device())
+        || !fp8_tensor_aligned(weight)
+        || !fp8_tensor_aligned(weight_scales)
     {
-        use candle_core::Device;
-
-        if !ffi::HAVE_CUTLASS_FP8_SM90_KERNELS
-            || weight_block_size != [FP8_BLOCK_SIZE, FP8_BLOCK_SIZE]
-            || weight.dtype() != DType::F8E4M3
-            || weight_scales.dtype() != DType::F32
-            || !weight.is_contiguous()
-            || !weight_scales.is_contiguous()
-            || !weight.device().same_device(weight_scales.device())
-            || !fp8_tensor_aligned(weight)
-            || !fp8_tensor_aligned(weight_scales)
-        {
-            return false;
-        }
-        let [n, k] = weight.dims() else {
-            return false;
-        };
-        if *n == 0 || *k == 0 || n % CUTLASS_FP8_N_ALIGNMENT != 0 || k % FP8_BLOCK_SIZE != 0 {
-            return false;
-        }
-        if weight_scales.dims() != [n.div_ceil(FP8_BLOCK_SIZE), k / FP8_BLOCK_SIZE] {
-            return false;
-        }
-        let Device::Cuda(dev) = weight.device() else {
-            return false;
-        };
-        is_sm90(dev)
+        return false;
     }
+    let [n, k] = weight.dims() else {
+        return false;
+    };
+    if *n == 0 || *k == 0 || n % CUTLASS_FP8_N_ALIGNMENT != 0 || k % FP8_BLOCK_SIZE != 0 {
+        return false;
+    }
+    if weight_scales.dims() != [n.div_ceil(FP8_BLOCK_SIZE), k / FP8_BLOCK_SIZE] {
+        return false;
+    }
+    let Device::Cuda(dev) = weight.device() else {
+        return false;
+    };
+    is_sm90(dev)
 }
 
 #[cfg(all(

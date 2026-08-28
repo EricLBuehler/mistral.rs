@@ -8,14 +8,20 @@ mod uqff;
 pub use ops::flash_attn_sinks_metal;
 pub use ops::flash_attn_sinks_varlen_metal;
 #[cfg(feature = "cuda")]
+pub(crate) use ops::fused_glu_quantized_bf16;
+#[cfg(all(
+    feature = "cuda",
+    has_cutlass_fp8_sm90_kernels,
+    has_deepgemm_fp8_sm90_provider
+))]
+pub(crate) use ops::fused_split_glu_quantized_bf16;
+#[cfg(feature = "cuda")]
 pub use ops::gptoss_swiglu_fused;
 #[cfg(feature = "cuda")]
 pub use ops::gptoss_swiglu_interleaved;
 pub use ops::softcap;
 pub use ops::softmax_with_sinks;
 pub use ops::{fused_glu, fused_split_glu, GluActivationType};
-#[cfg(feature = "cuda")]
-pub(crate) use ops::{fused_glu_quantized_bf16, fused_split_glu_quantized_bf16};
 pub use ops::{BitWiseOp, CumSumOp, LeftshiftOp, NonZeroOp, SortOp};
 pub(crate) use uqff::{data_to_bytes, dtype_to_uqff_code, uqff_code_to_dtype};
 

@@ -3215,7 +3215,13 @@ pub fn fused_split_glu(
     fused_glu(&gate, &up, activation)
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(all(
+    feature = "cuda",
+    any(
+        test,
+        all(has_cutlass_fp8_sm90_kernels, has_deepgemm_fp8_sm90_provider)
+    )
+))]
 pub(crate) fn fused_split_glu_quantized_bf16(
     input: &Tensor,
     split_size: usize,
