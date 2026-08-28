@@ -76,8 +76,7 @@ policy, scheduling, and decode execution under the common memory fraction.
   `017b9c7af6b5689d5dd426a76e0bc077eb5ca20a`; draft
   `incoai/Qwen3.8-27B-DFlash2` at revision
   `dedf8df68adfb1afeaf7b7480c0a0243108177b4`.
-- Model configuration: original target `config.json` SHA256
-  `74227dd615bf1ea975aa676bdf355a0379858c12f394b5365cd9dfa5fc2c70bc`.
+- Model configuration: original target `config.json`
 
 Output throughput is the number of returned output tokens divided by the common client's complete
 measured wall time. It includes admission, prompt processing, TTFT, decode, and scheduler behavior.
@@ -88,15 +87,12 @@ The long 512-token completions make decode dominant without removing production-
 | Component | Commit or version |
 |---|---|
 | mistral.rs | `b6ea3f2aa83bc77db69f1d5963988de72855be47` |
-| mistral.rs source SHA256 | `da48c78130710f387e7fe32a571149a157f543b8f9ad25970b3f76d45dd525e6` |
-| mistral.rs binary SHA256 | `b97e361e4f79c8ba25c4ca004337cfeb26a71f3a7f531598ad8e79dda93ce0a2` |
 | vLLM server | `b389ac29465b33f9e9c534df221ea3c129e9793f` |
 | vLLM benchmark client | `0.27.1` |
 | SGLang | `1cf2b8c54d81802abc15dcf23a29b9cc687bc01e` (`0.5.19.dev99`) |
 | PyTorch | `2.13.0` |
 
-The vLLM server is the official immutable aarch64 wheel for the pinned upstream commit. Its wheel
-SHA256 is `a2cc284fbdefba0d8b42d97fece25ac4762407438a4fb8c9f351ed0136a42384`.
+The vLLM server is the official immutable aarch64 wheel for the pinned upstream commit.
 The mistral.rs source hash covers the tracked repository tree except `releases/` and identifies
 the exact engine source used for the published measurements.
 
