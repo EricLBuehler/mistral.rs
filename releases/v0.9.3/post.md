@@ -1,7 +1,7 @@
 ---
 title: mistral.rs v0.9.3: up to 19.5% higher serving throughput than vLLM
 author: Eric Buehler
-date: 2026-08-27
+date: 2026-08-28
 slug: v0-9-3-throughput
 tags: [benchmarks, cuda, fp8]
 ---
