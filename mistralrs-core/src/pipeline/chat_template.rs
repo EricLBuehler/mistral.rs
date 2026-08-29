@@ -442,7 +442,7 @@ impl serde_json::ser::Formatter for PythonCompactFormatter {
 }
 
 fn strftime_now(fmt: String) -> Result<String, minijinja::Error> {
-    let date = chrono::Utc::now();
+    let date = chrono::Local::now();
     let date_string = date.format(&fmt).to_string();
     Ok(date_string)
 }
@@ -822,7 +822,7 @@ pub fn apply_chat_template_to(
     env.add_function("strftime_now", strftime_now);
     let tmpl = env.get_template("chat_template")?;
 
-    let date = chrono::Utc::now();
+    let date = chrono::Local::now();
     let date_string = date.format("%d, %B, %Y").to_string();
 
     let reasoning_controls = resolve_reasoning_controls(enable_thinking, reasoning_effort)?;
