@@ -42,8 +42,10 @@ jobs:
         include:
           # arm64 32x64 boxes OOM at 32-wide rustc (~2GB each): kernel kills cargo (exit 137)
           # or the runner agent ("lost communication"); 16 leaves ~32GB headroom.
-          - { sm: "90", runner: namespace-profile-cuda-x86-64, cuda: "13.0.0", cargo_jobs: "32" }
-          - { sm: "90", runner: namespace-profile-cuda-arm64, cuda: "13.0.0", cargo_jobs: "16" }
+          # arm64 kill window coincides with flash-attn's nvcc storm (hd512 ~5GB each) overlapping
+          # the rustc phase; 8 nvcc + 16 rustc keeps peak under 64GB.
+          - { sm: "90", runner: namespace-profile-cuda-x86-64, cuda: "13.0.0", cargo_jobs: "32", cudaforge: "12" }
+          - { sm: "90", runner: namespace-profile-cuda-arm64, cuda: "13.0.0", cargo_jobs: "16", cudaforge: "8" }
     container:
       image: docker.io/nvidia/cuda:${{ matrix.cuda }}-cudnn-devel-ubuntu22.04
       volumes:
@@ -52,7 +54,7 @@ jobs:
       CARGO_BUILD_JOBS: ${{ matrix.cargo_jobs }}
       CUDA_COMPUTE_CAP: ${{ matrix.sm }}
       CUDA_TOOLKIT_PATH: /usr/local/cuda
-      CUDAFORGE_THREADS: "12"
+      CUDAFORGE_THREADS: ${{ matrix.cudaforge }}
       RUSTFLAGS: "-C target-cpu=generic"
       CARGO_HOME: /cache/cargo
       RUSTUP_HOME: /cache/rustup
@@ -84,9 +86,15 @@ jobs:
         run: cargo fetch --locked
       - name: Timed build
         run: |
+          ( while true; do
+              echo "MEMSAMPLE $(date -u +%H:%M:%S) $(free -m | awk '/Mem:/{print $3"MB/"$2"MB"}') top: $(ps -eo rss=,comm= --sort=-rss | head -3 | awk '{printf "%s:%dMB ", $2, $1/1024}')"
+              sleep 10
+            done ) &
+          sampler=$!
           start=$(date +%s)
           cargo build --release --locked --offline --features "cuda flash-attn nccl" -p mistralrs-cli
           end=$(date +%s)
+          kill "$sampler"
           echo "BUILD_SECONDS=$((end - start))" | tee -a "$GITHUB_ENV"
       - name: Report
         run: |
