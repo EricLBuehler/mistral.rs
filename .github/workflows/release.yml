@@ -198,9 +198,9 @@ jobs:
     env:
       CUDA_COMPUTE_CAP: ${{ matrix.sm }}
       CUDA_TOOLKIT_PATH: /usr/local/cuda
-      # Cap concurrent nvcc: flash-attn hdim512 kernels peak ~5GB each; 12 fits 64GB, 32 would OOM.
-      CUDAFORGE_THREADS: "12"
-      # arm64 32x64 boxes OOM at 32-wide rustc (~2GB each): kernel kills cargo or the runner agent
+      # Cap concurrent nvcc: cicc peaks ~7GB on the worst flash-attn kernels and overlaps the rustc
+      # phase; 12 rides the 64GB edge on arm64 (OOM kills present as exit 137 or a lost runner).
+      CUDAFORGE_THREADS: ${{ contains(matrix.runner, 'arm64') && '8' || '12' }}
       CARGO_BUILD_JOBS: ${{ contains(matrix.runner, 'arm64') && '16' || '32' }}
       RUSTFLAGS: "-C target-cpu=generic"
     steps:
