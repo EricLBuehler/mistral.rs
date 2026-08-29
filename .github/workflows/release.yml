@@ -18,13 +18,23 @@ on:
         required: false
         default: false
         type: boolean
+      publish_pypi:
+        description: "Publish stable wheels to PyPI during a manual release or repair. Tag pushes publish automatically."
+        required: false
+        default: false
+        type: boolean
+      update_latest:
+        description: "Move stable Docker aliases and mark the GitHub release latest. Tag pushes update automatically."
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: write
 
 # Dedupe release runs for the same tag; never cancel a run mid-upload.
 concurrency:
-  group: release-${{ github.ref }}
+  group: release-${{ inputs.tag || github.ref_name }}
   cancel-in-progress: false
 
 env:
@@ -36,7 +46,130 @@ env:
   CARGO_NET_GIT_FETCH_WITH_CLI: "true"
 
 jobs:
+  preflight:
+    runs-on: ubuntu-latest
+    outputs:
+      build_ref: ${{ steps.context.outputs.build_ref }}
+      publish_latest: ${{ steps.context.outputs.publish_latest }}
+      publish_pypi: ${{ steps.context.outputs.publish_pypi }}
+      release_draft: ${{ steps.release.outputs.draft }}
+      tag: ${{ steps.context.outputs.tag }}
+      version: ${{ steps.versions.outputs.version }}
+    steps:
+      - name: Resolve release context
+        id: context
+        env:
+          DRY_RUN: ${{ inputs.dry_run }}
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_TAG: ${{ inputs.tag }}
+          INPUT_PUBLISH_PYPI: ${{ inputs.publish_pypi }}
+          INPUT_UPDATE_LATEST: ${{ inputs.update_latest }}
+          REF: ${{ github.ref }}
+          REF_NAME: ${{ github.ref_name }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            if [ "$DRY_RUN" != "true" ] && [ -z "$INPUT_TAG" ]; then
+              echo "tag is required unless dry_run is enabled" >&2
+              exit 1
+            fi
+            tag="$INPUT_TAG"
+            build_ref="${INPUT_TAG:-$SHA}"
+          else
+            tag="$REF_NAME"
+            build_ref="$REF"
+          fi
+
+          release_tag_pattern='^v[0-9]+\.[0-9]+\.[0-9]+(-(alpha|a|beta|b|rc|c|pre|preview)([.-]?[0-9]+)?)?$'
+          if [ -n "$tag" ] && [[ ! "$tag" =~ $release_tag_pattern ]]; then
+            echo "invalid release tag: $tag" >&2
+            exit 1
+          fi
+
+          prerelease=false
+          if [[ "$tag" == *-* ]]; then
+            prerelease=true
+          fi
+
+          publish_latest=false
+          publish_pypi=false
+          if [ "$DRY_RUN" != "true" ] && [ "$prerelease" = "false" ]; then
+            if [ "$EVENT_NAME" = "push" ] || [ "$INPUT_UPDATE_LATEST" = "true" ]; then
+              publish_latest=true
+            fi
+            if [ "$EVENT_NAME" = "push" ] || [ "$INPUT_PUBLISH_PYPI" = "true" ]; then
+              publish_pypi=true
+            fi
+          fi
+
+          {
+            echo "build_ref=$build_ref"
+            echo "publish_latest=$publish_latest"
+            echo "publish_pypi=$publish_pypi"
+            echo "tag=$tag"
+          } >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+      - name: Test release verifier
+        run: |
+          pip3 install --quiet pyyaml==6.0.3
+          python3 -m unittest scripts/test_verify_release_assets.py
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.context.outputs.build_ref }}
+      - name: Verify package versions
+        id: versions
+        env:
+          TAG: ${{ steps.context.outputs.tag }}
+        run: |
+          python3 - <<'PY'
+          import os
+          import tomllib
+
+          with open("Cargo.toml", "rb") as f:
+              workspace_version = tomllib.load(f)["workspace"]["package"]["version"]
+          with open("mistralrs-pyo3/Cargo.toml", "rb") as f:
+              python_version = tomllib.load(f)["package"]["version"]
+
+          if python_version != workspace_version:
+              raise SystemExit(
+                  f"workspace version {workspace_version} does not match Python version {python_version}"
+              )
+
+          tag = os.environ["TAG"]
+          if tag and tag.removeprefix("v") != workspace_version:
+              raise SystemExit(f"tag {tag} does not match package version {workspace_version}")
+
+          with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+              f.write(f"version={workspace_version}\n")
+          PY
+      - name: Resolve release state
+        id: release
+        env:
+          DRY_RUN: ${{ inputs.dry_run }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.context.outputs.tag }}
+        run: |
+          draft=false
+          if [ "$DRY_RUN" != "true" ]; then
+            if existing_draft="$(gh release view "$TAG" -R "${{ github.repository }}" --json isDraft --jq .isDraft 2>/dev/null)"; then
+              draft="$existing_draft"
+            else
+              create_args=(--draft --verify-tag --title "$TAG" --notes "")
+              if [[ "$TAG" == *-* ]]; then
+                create_args+=(--prerelease)
+              fi
+              gh release create "$TAG" -R "${{ github.repository }}" "${create_args[@]}"
+              draft=true
+            fi
+          fi
+          echo "draft=$draft" >> "$GITHUB_OUTPUT"
+
   metal:
+    needs: preflight
     runs-on: macos-15
     env:
       # empty (not generic) so the apple-m1 baseline stays: ring asserts static aes/sha2 on aarch64-apple-darwin
@@ -44,7 +177,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.tag || github.ref }}
+          ref: ${{ needs.preflight.outputs.build_ref }}
       - uses: dtolnay/rust-toolchain@stable
       - name: Fetch Rust dependencies
         run: |
@@ -62,14 +195,20 @@ jobs:
         if: ${{ !inputs.dry_run }}
         continue-on-error: true
         with:
-          tag_name: ${{ inputs.tag || github.ref_name }}
-          prerelease: ${{ contains(inputs.tag || github.ref_name, '-') }}
+          tag_name: ${{ needs.preflight.outputs.tag }}
+          draft: ${{ needs.preflight.outputs.release_draft }}
+          prerelease: ${{ contains(needs.preflight.outputs.tag, '-') }}
+          fail_on_unmatched_files: true
+          overwrite_files: true
           files: mistralrs-metal-aarch64-apple-darwin.tar.gz
       - uses: softprops/action-gh-release@v2
         if: ${{ !inputs.dry_run && steps.upload_release_asset.outcome == 'failure' }}
         with:
-          tag_name: ${{ inputs.tag || github.ref_name }}
-          prerelease: ${{ contains(inputs.tag || github.ref_name, '-') }}
+          tag_name: ${{ needs.preflight.outputs.tag }}
+          draft: ${{ needs.preflight.outputs.release_draft }}
+          prerelease: ${{ contains(needs.preflight.outputs.tag, '-') }}
+          fail_on_unmatched_files: true
+          overwrite_files: true
           files: mistralrs-metal-aarch64-apple-darwin.tar.gz
       - name: Build wheel (Metal)
         uses: PyO3/maturin-action@v1
@@ -81,8 +220,11 @@ jobs:
         with:
           name: wheel-macos
           path: mistralrs-pyo3/dist/*.whl
+          if-no-files-found: error
+          overwrite: true
 
   linux-cpu:
+    needs: preflight
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
@@ -105,7 +247,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.tag || github.ref }}
+          ref: ${{ needs.preflight.outputs.build_ref }}
       - uses: dtolnay/rust-toolchain@stable
       - name: Fetch Rust dependencies
         run: |
@@ -123,14 +265,20 @@ jobs:
         if: ${{ !inputs.dry_run }}
         continue-on-error: true
         with:
-          tag_name: ${{ inputs.tag || github.ref_name }}
-          prerelease: ${{ contains(inputs.tag || github.ref_name, '-') }}
+          tag_name: ${{ needs.preflight.outputs.tag }}
+          draft: ${{ needs.preflight.outputs.release_draft }}
+          prerelease: ${{ contains(needs.preflight.outputs.tag, '-') }}
+          fail_on_unmatched_files: true
+          overwrite_files: true
           files: mistralrs-cpu-${{ matrix.triple }}${{ matrix.suffix }}.tar.gz
       - uses: softprops/action-gh-release@v2
         if: ${{ !inputs.dry_run && steps.upload_release_asset.outcome == 'failure' }}
         with:
-          tag_name: ${{ inputs.tag || github.ref_name }}
-          prerelease: ${{ contains(inputs.tag || github.ref_name, '-') }}
+          tag_name: ${{ needs.preflight.outputs.tag }}
+          draft: ${{ needs.preflight.outputs.release_draft }}
+          prerelease: ${{ contains(needs.preflight.outputs.tag, '-') }}
+          fail_on_unmatched_files: true
+          overwrite_files: true
           files: mistralrs-cpu-${{ matrix.triple }}${{ matrix.suffix }}.tar.gz
       - name: Build wheel (manylinux)
         if: ${{ !matrix.skip_wheel }}
@@ -145,8 +293,11 @@ jobs:
         with:
           name: wheel-${{ matrix.triple }}
           path: mistralrs-pyo3/dist/*.whl
+          if-no-files-found: error
+          overwrite: true
 
   linux-cuda:
+    needs: preflight
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
@@ -206,7 +357,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.tag || github.ref }}
+          ref: ${{ needs.preflight.outputs.build_ref }}
       - name: Install build dependencies
         run: |
           apt-get update
@@ -262,14 +413,20 @@ jobs:
         if: ${{ !inputs.dry_run }}
         continue-on-error: true
         with:
-          tag_name: ${{ inputs.tag || github.ref_name }}
-          prerelease: ${{ contains(inputs.tag || github.ref_name, '-') }}
+          tag_name: ${{ needs.preflight.outputs.tag }}
+          draft: ${{ needs.preflight.outputs.release_draft }}
+          prerelease: ${{ contains(needs.preflight.outputs.tag, '-') }}
+          fail_on_unmatched_files: true
+          overwrite_files: true
           files: ${{ env.ASSET }}
       - uses: softprops/action-gh-release@v2
         if: ${{ !inputs.dry_run && steps.upload_binary_asset.outcome == 'failure' }}
         with:
-          tag_name: ${{ inputs.tag || github.ref_name }}
-          prerelease: ${{ contains(inputs.tag || github.ref_name, '-') }}
+          tag_name: ${{ needs.preflight.outputs.tag }}
+          draft: ${{ needs.preflight.outputs.release_draft }}
+          prerelease: ${{ contains(needs.preflight.outputs.tag, '-') }}
+          fail_on_unmatched_files: true
+          overwrite_files: true
           files: ${{ env.ASSET }}
       # CUDA wheel -> release asset (PyPI has no compute-capability or CUDA-toolkit axis). The
       # +cudaNNN.smNN local version keeps wheels distinct and lets pip select; auditwheel bundles
@@ -298,27 +455,34 @@ jobs:
             auditwheel repair --exclude libcuda.so.1 -w wheelhouse wheelraw/*.whl
       - uses: softprops/action-gh-release@v2
         id: upload_wheel_asset
-        if: ${{ !inputs.dry_run && hashFiles('wheelhouse/*.whl') != '' }}
+        if: ${{ !inputs.dry_run }}
         continue-on-error: true
         with:
-          tag_name: ${{ inputs.tag || github.ref_name }}
-          prerelease: ${{ contains(inputs.tag || github.ref_name, '-') }}
+          tag_name: ${{ needs.preflight.outputs.tag }}
+          draft: ${{ needs.preflight.outputs.release_draft }}
+          prerelease: ${{ contains(needs.preflight.outputs.tag, '-') }}
+          fail_on_unmatched_files: true
+          overwrite_files: true
           files: wheelhouse/*.whl
       - uses: softprops/action-gh-release@v2
-        if: ${{ !inputs.dry_run && hashFiles('wheelhouse/*.whl') != '' && steps.upload_wheel_asset.outcome == 'failure' }}
+        if: ${{ !inputs.dry_run && steps.upload_wheel_asset.outcome == 'failure' }}
         with:
-          tag_name: ${{ inputs.tag || github.ref_name }}
-          prerelease: ${{ contains(inputs.tag || github.ref_name, '-') }}
+          tag_name: ${{ needs.preflight.outputs.tag }}
+          draft: ${{ needs.preflight.outputs.release_draft }}
+          prerelease: ${{ contains(needs.preflight.outputs.tag, '-') }}
+          fail_on_unmatched_files: true
+          overwrite_files: true
           files: wheelhouse/*.whl
 
   windows-cpu:
+    needs: preflight
     runs-on: windows-latest
     env:
       RUSTFLAGS: "-C target-cpu=generic"
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.tag || github.ref }}
+          ref: ${{ needs.preflight.outputs.build_ref }}
       - uses: dtolnay/rust-toolchain@stable
       - name: Fetch Rust dependencies
         shell: pwsh
@@ -338,14 +502,20 @@ jobs:
         if: ${{ !inputs.dry_run }}
         continue-on-error: true
         with:
-          tag_name: ${{ inputs.tag || github.ref_name }}
-          prerelease: ${{ contains(inputs.tag || github.ref_name, '-') }}
+          tag_name: ${{ needs.preflight.outputs.tag }}
+          draft: ${{ needs.preflight.outputs.release_draft }}
+          prerelease: ${{ contains(needs.preflight.outputs.tag, '-') }}
+          fail_on_unmatched_files: true
+          overwrite_files: true
           files: mistralrs-cpu-x86_64-pc-windows-msvc.zip
       - uses: softprops/action-gh-release@v2
         if: ${{ !inputs.dry_run && steps.upload_release_asset.outcome == 'failure' }}
         with:
-          tag_name: ${{ inputs.tag || github.ref_name }}
-          prerelease: ${{ contains(inputs.tag || github.ref_name, '-') }}
+          tag_name: ${{ needs.preflight.outputs.tag }}
+          draft: ${{ needs.preflight.outputs.release_draft }}
+          prerelease: ${{ contains(needs.preflight.outputs.tag, '-') }}
+          fail_on_unmatched_files: true
+          overwrite_files: true
           files: mistralrs-cpu-x86_64-pc-windows-msvc.zip
       - name: Build wheel
         uses: PyO3/maturin-action@v1
@@ -357,14 +527,16 @@ jobs:
         with:
           name: wheel-windows
           path: mistralrs-pyo3/dist/*.whl
+          if-no-files-found: error
+          overwrite: true
 
   # Docker images COPY the prebuilt binaries (no in-image compile). `needs:` guarantees the
   # binary is on the release before the image fetches it, avoiding a cross-workflow race.
   docker-cpu:
-    needs: linux-cpu
+    needs: [preflight, linux-cpu]
     # !cancelled(): run even when a build leg failed; each docker job fails on its own
     # only if the specific asset it stages is missing, keeping the blast radius per-image.
-    if: ${{ !inputs.dry_run && !cancelled() }}
+    if: ${{ !inputs.dry_run && !cancelled() && needs.preflight.result == 'success' }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -372,11 +544,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.tag || github.ref }}
+          ref: ${{ needs.preflight.outputs.build_ref }}
       - name: Stage prebuilt binaries (amd64 + arm64)
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: ${{ inputs.tag || github.ref_name }}
+          TAG: ${{ needs.preflight.outputs.tag }}
         run: |
           mkdir -p dist/amd64 dist/arm64
           gh release download "$TAG" -R "${{ github.repository }}" \
@@ -388,7 +560,7 @@ jobs:
       - name: Version tag
         id: ver
         env:
-          TAG: ${{ inputs.tag || github.ref_name }}
+          TAG: ${{ needs.preflight.outputs.tag }}
         run: echo "v=${TAG#v}" >> "$GITHUB_OUTPUT"
       - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
@@ -403,14 +575,18 @@ jobs:
           file: Dockerfile
           push: true
           platforms: linux/amd64,linux/arm64
-          tags: |
-            ghcr.io/ericlbuehler/mistral.rs:cpu-${{ steps.ver.outputs.v }}
-            ghcr.io/ericlbuehler/mistral.rs:cpu-latest
-            ghcr.io/ericlbuehler/mistral.rs:latest
+          tags: ghcr.io/ericlbuehler/mistral.rs:cpu-${{ steps.ver.outputs.v }}
+      - name: Smoke-test CPU images
+        env:
+          VERSION: ${{ steps.ver.outputs.v }}
+        run: |
+          image="ghcr.io/ericlbuehler/mistral.rs:cpu-${VERSION}"
+          docker run --rm --platform linux/amd64 "$image" --help >/dev/null
+          docker run --rm --platform linux/arm64 "$image" --help >/dev/null
 
   docker-cuda:
-    needs: linux-cuda
-    if: ${{ !inputs.dry_run && !cancelled() }}
+    needs: [preflight, linux-cuda]
+    if: ${{ !inputs.dry_run && !cancelled() && needs.preflight.result == 'success' }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -459,11 +635,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.tag || github.ref }}
+          ref: ${{ needs.preflight.outputs.build_ref }}
       - name: Stage prebuilt package(s)
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: ${{ inputs.tag || github.ref_name }}
+          TAG: ${{ needs.preflight.outputs.tag }}
         run: |
           mkdir -p "dist/${{ matrix.arch }}"
           gh release download "$TAG" -R "${{ github.repository }}" \
@@ -472,7 +648,7 @@ jobs:
       - name: Version tag
         id: ver
         env:
-          TAG: ${{ inputs.tag || github.ref_name }}
+          TAG: ${{ needs.preflight.outputs.tag }}
         run: echo "v=${TAG#v}" >> "$GITHUB_OUTPUT"
       - name: Docker tags
         id: docker_tags
@@ -510,8 +686,8 @@ jobs:
           tags: ${{ steps.docker_tags.outputs.tags }}
 
   docker-cuda-manifest:
-    needs: docker-cuda
-    if: ${{ !inputs.dry_run && !cancelled() }}
+    needs: [preflight, docker-cuda]
+    if: ${{ !inputs.dry_run && !cancelled() && needs.preflight.result == 'success' }}
     runs-on: ubuntu-latest
     permissions:
       packages: write
@@ -551,7 +727,7 @@ jobs:
       - name: Version tag
         id: ver
         env:
-          TAG: ${{ inputs.tag || github.ref_name }}
+          TAG: ${{ needs.preflight.outputs.tag }}
         run: echo "v=${TAG#v}" >> "$GITHUB_OUTPUT"
       - uses: docker/setup-buildx-action@v3
       - uses: docker/login-action@v3
@@ -574,12 +750,10 @@ jobs:
 
           tags=(
             -t "${image}:cuda${CUDA_ASSET}-sm${SM}-${VERSION}"
-            -t "${image}:cuda${CUDA_ASSET}-sm${SM}-latest"
           )
           if [ "$CUDA_ASSET" = "131" ]; then
             tags+=(
               -t "${image}:cuda-sm${SM}-${VERSION}"
-              -t "${image}:cuda-sm${SM}-latest"
             )
           fi
 
@@ -589,28 +763,107 @@ jobs:
   # linux-cpu / windows-cpu jobs above) to PyPI via OIDC (no token). rc tags build the wheels as
   # artifacts but skip publishing. CUDA wheels are shipped as release assets, not to PyPI.
   pypi-publish:
-    needs: [metal, linux-cpu, windows-cpu]
-    if: ${{ github.repository == 'EricLBuehler/mistral.rs' && !contains(inputs.tag || github.ref_name, '-') && !inputs.dry_run }}
+    needs: [preflight, metal, linux-cpu, linux-cuda, windows-cpu, docker-cpu, docker-cuda, docker-cuda-manifest]
+    if: ${{ !cancelled() && github.repository == 'EricLBuehler/mistral.rs' && needs.preflight.outputs.publish_pypi == 'true' && needs.metal.result == 'success' && needs.linux-cpu.result == 'success' && needs.linux-cuda.result == 'success' && needs.windows-cpu.result == 'success' && needs.docker-cpu.result == 'success' && needs.docker-cuda.result == 'success' && needs.docker-cuda-manifest.result == 'success' }}
     runs-on: ubuntu-latest
     environment: release_mistralrs_pypi
     permissions:
+      actions: read
       id-token: write
+      contents: read
     steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
       - uses: actions/download-artifact@v4
         with:
           pattern: wheel-*
           path: dist
           merge-multiple: true
+      - name: Validate PyPI upload set
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPOSITORY: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+          VERSION: ${{ needs.preflight.outputs.version }}
+        run: |
+          set -euo pipefail
+
+          pip3 install --quiet pyyaml==6.0.3
+          prior_jobs="$RUNNER_TEMP/prior-pypi-jobs.jsonl"
+          : > "$prior_jobs"
+          for ((attempt = 1; attempt < RUN_ATTEMPT; attempt++)); do
+            gh api --paginate \
+              "repos/$REPOSITORY/actions/runs/$RUN_ID/attempts/$attempt/jobs?per_page=100" \
+              --jq '.jobs[] | select(.name == "pypi-publish") | {started_at, completed_at} | @json' \
+              >> "$prior_jobs"
+          done
+          export PRIOR_PYPI_JOBS="$prior_jobs"
+          python3 - <<'PY'
+          import json
+          import os
+          import urllib.error
+          import urllib.request
+          from pathlib import Path
+
+          from scripts.verify_release_assets import (
+              PYPI_PLATFORMS,
+              pypi_mismatches_are_recoverable,
+              verify_pypi_dist_hashes,
+              verify_pypi_wheels,
+          )
+
+          version = os.environ["VERSION"]
+          wheels = sorted(Path("dist").glob("*.whl"))
+          local_data = {
+              "urls": [
+                  {"filename": wheel.name, "packagetype": "bdist_wheel"}
+                  for wheel in wheels
+              ]
+          }
+          verified, missing, invalid = verify_pypi_wheels(local_data, version)
+          if verified != len(PYPI_PLATFORMS) or missing or invalid:
+              raise SystemExit(f"invalid PyPI upload set: {missing + invalid}")
+
+          url = f"https://pypi.org/pypi/mistralrs/{version}/json"
+          try:
+              with urllib.request.urlopen(url, timeout=30) as response:
+                  remote_data = json.load(response)
+          except urllib.error.HTTPError as error:
+              if error.code != 404:
+                  raise
+              remote_data = {"urls": []}
+
+          complete, remote_missing, mismatched = verify_pypi_dist_hashes(
+              remote_data, wheels
+          )
+          with open(os.environ["PRIOR_PYPI_JOBS"], encoding="utf-8") as job_file:
+              prior_jobs = [json.loads(line) for line in job_file if line.strip()]
+          recoverable = pypi_mismatches_are_recoverable(
+              remote_data, mismatched, complete, prior_jobs
+          )
+          if mismatched and not recoverable:
+              raise SystemExit(f"existing PyPI files have different hashes: {mismatched}")
+          if mismatched:
+              print(f"Existing PyPI files came from an earlier build: {mismatched}")
+
+          if complete:
+              print("All PyPI files already exist; publication will be idempotent.")
+          elif remote_missing:
+              print(f"PyPI files to upload: {', '.join(remote_missing)}")
+          PY
       - uses: pypa/gh-action-pypi-publish@release/v1
         with:
           packages-dir: dist
+          skip-existing: true
 
   # The release contract check: every tarball, wheel, image, and (non-rc) PyPI version the
   # matrices promise must exist, or this fails with the missing list. Job status alone lies
   # in both directions (soft-failed steps look green, one flaked leg skips whole legs).
   verify-release:
-    needs: [metal, linux-cpu, windows-cpu, linux-cuda, docker-cpu, docker-cuda, docker-cuda-manifest, pypi-publish]
-    if: ${{ !cancelled() && !inputs.dry_run }}
+    needs: [preflight, metal, linux-cpu, windows-cpu, linux-cuda, docker-cpu, docker-cuda, docker-cuda-manifest, pypi-publish]
+    if: ${{ !cancelled() && !inputs.dry_run && needs.preflight.result == 'success' }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -618,7 +871,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.tag || github.ref }}
+          ref: ${{ github.sha }}
       - uses: docker/login-action@v3
         with:
           registry: ghcr.io
@@ -627,6 +880,127 @@ jobs:
       - name: Verify published artifacts
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          MAX_ATTEMPTS: "3"
+          RETRY_SECONDS: "30"
         run: |
-          pip3 install --quiet pyyaml
-          python3 scripts/verify_release_assets.py "${{ inputs.tag || github.ref_name }}"
+          pip3 install --quiet pyyaml==6.0.3
+          for ((attempt = 1; attempt <= MAX_ATTEMPTS; attempt++)); do
+            if python3 scripts/verify_release_assets.py "${{ needs.preflight.outputs.tag }}"; then
+              exit 0
+            fi
+            if [ "$attempt" -eq "$MAX_ATTEMPTS" ]; then
+              exit 1
+            fi
+            sleep "$((attempt * RETRY_SECONDS))"
+          done
+      - name: Require successful PyPI publication
+        if: ${{ always() && needs.preflight.outputs.publish_pypi == 'true' && needs.pypi-publish.result != 'success' }}
+        run: |
+          echo "PyPI publication did not complete successfully." >&2
+          exit 1
+
+  publish-latest:
+    needs: [preflight, verify-release]
+    if: ${{ needs.verify-release.result == 'success' && needs.preflight.outputs.publish_latest == 'true' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Promote verified Docker images
+        env:
+          MAX_ATTEMPTS: "3"
+          RETRY_SECONDS: "10"
+          VERSION: ${{ needs.preflight.outputs.version }}
+        run: |
+          pip3 install --quiet pyyaml==6.0.3
+          python3 - <<'PY'
+          import os
+          import subprocess
+          import time
+
+          import yaml
+
+          image = "ghcr.io/ericlbuehler/mistral.rs"
+          max_attempts = int(os.environ["MAX_ATTEMPTS"])
+          retry_seconds = int(os.environ["RETRY_SECONDS"])
+          version = os.environ["VERSION"]
+
+          def promote(source, targets):
+              command = ["docker", "buildx", "imagetools", "create"]
+              for target in targets:
+                  command.extend(["-t", target])
+              for attempt in range(1, max_attempts + 1):
+                  try:
+                      subprocess.run([*command, source], check=True)
+                      return
+                  except subprocess.CalledProcessError:
+                      if attempt == max_attempts:
+                          raise
+                      time.sleep(attempt * retry_seconds)
+
+          promote(f"{image}:cpu-{version}", [f"{image}:cpu-latest", f"{image}:latest"])
+
+          with open(".github/workflows/release.yml") as f:
+              workflow = yaml.safe_load(f)
+          rows = workflow["jobs"]["docker-cuda-manifest"]["strategy"]["matrix"]["include"]
+          for row in rows:
+              cuda_asset = row["cuda_asset"]
+              sm = row["sm"]
+              source = f"{image}:cuda{cuda_asset}-sm{sm}-{version}"
+              targets = [f"{image}:cuda{cuda_asset}-sm{sm}-latest"]
+              if cuda_asset == "131":
+                  targets.append(f"{image}:cuda-sm{sm}-latest")
+              promote(source, targets)
+          PY
+
+  publish-release:
+    needs: [preflight, verify-release, publish-latest]
+    if: ${{ !cancelled() && needs.verify-release.result == 'success' && (needs.preflight.outputs.publish_latest != 'true' || needs.publish-latest.result == 'success') }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Publish verified GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PUBLISH_LATEST: ${{ needs.preflight.outputs.publish_latest }}
+          REPOSITORY: ${{ github.repository }}
+          TAG: ${{ needs.preflight.outputs.tag }}
+        run: |
+          set -euo pipefail
+
+          prerelease=false
+          if [[ "$TAG" == *-* ]]; then
+            prerelease=true
+          fi
+
+          make_latest=false
+          if [ "$PUBLISH_LATEST" = "true" ]; then
+            make_latest=true
+          else
+            latest_tag="$(gh api "repos/$REPOSITORY/releases/latest" --jq .tag_name)"
+            if [ "$latest_tag" = "$TAG" ]; then
+              make_latest=true
+            fi
+          fi
+
+          release_api="$(gh release view "$TAG" -R "$REPOSITORY" --json apiUrl --jq .apiUrl)"
+          release_id="${release_api##*/}"
+          if [[ ! "$release_id" =~ ^[0-9]+$ ]]; then
+            echo "invalid GitHub release API URL: $release_api" >&2
+            exit 1
+          fi
+          gh api --method PATCH "repos/$REPOSITORY/releases/$release_id" \
+            -F draft=false \
+            -F prerelease="$prerelease" \
+            -f make_latest="$make_latest" >/dev/null

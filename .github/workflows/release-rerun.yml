@@ -1,7 +1,7 @@
 name: release-rerun
 
-# Auto-heals runner flakes: re-runs the failed jobs of a completed release run, which also
-# re-runs the jobs skipped downstream of them. Capped attempts keep a real failure red.
+# Auto-heals runner flakes. A verifier-only failure needs a full, idempotent rerun because
+# rerunning failed jobs alone cannot recreate an output omitted by a successful producer.
 
 on:
   workflow_run:
@@ -11,11 +11,47 @@ on:
 permissions:
   actions: write
 
+concurrency:
+  group: release-rerun-${{ github.event.workflow_run.id }}
+  cancel-in-progress: false
+
 jobs:
   rerun-failed:
-    if: ${{ github.event.workflow_run.conclusion == 'failure' && github.event.workflow_run.run_attempt < 3 }}
+    if: >-
+      ${{
+        contains(fromJSON('["failure", "timed_out", "startup_failure"]'), github.event.workflow_run.conclusion) &&
+        github.event.workflow_run.run_attempt < 3
+      }}
     runs-on: ubuntu-latest
     steps:
-      - env:
+      - name: Rerun release jobs
+        env:
+          CONCLUSION: ${{ github.event.workflow_run.conclusion }}
           GH_TOKEN: ${{ github.token }}
-        run: gh run rerun ${{ github.event.workflow_run.id }} --failed -R ${{ github.repository }}
+          REPOSITORY: ${{ github.repository }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+        run: |
+          set -euo pipefail
+          if [ "$CONCLUSION" = "startup_failure" ]; then
+            gh run rerun "$RUN_ID" -R "$REPOSITORY"
+            exit 0
+          fi
+
+          jobs_json=$(gh api --paginate \
+            "repos/$REPOSITORY/actions/runs/$RUN_ID/jobs?filter=latest&per_page=100" \
+            | jq -s '[.[].jobs[]]')
+          failed_jobs=$(jq '
+            [.[] | select(
+              .conclusion == "failure"
+              or .conclusion == "timed_out"
+              or .conclusion == "startup_failure"
+            )]
+          ' <<<"$jobs_json")
+          failed_count=$(jq 'length' <<<"$failed_jobs")
+          verifier_count=$(jq '[.[] | select(.name == "verify-release")] | length' <<<"$failed_jobs")
+
+          if [ "$failed_count" -eq 1 ] && [ "$verifier_count" -eq 1 ]; then
+            gh run rerun "$RUN_ID" -R "$REPOSITORY"
+          else
+            gh run rerun "$RUN_ID" --failed -R "$REPOSITORY"
+          fi

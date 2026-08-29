@@ -2,12 +2,18 @@ name: release-cache-probe
 
 # Measures Namespace cache-volume effectiveness for the CUDA release builds before wiring
 # caching into release.yml. Dispatch twice: the first run seeds the volume (cold), the
-# second measures warm. Requires a cache volume enabled on the runner profiles (dashboard).
-# nscloud-cache-action cannot see the volume from inside a container job, so the volume's
-# host mount is bind-mounted into the container and cargo is pointed at it via env instead.
+# second measures warm. The profile cache is bind-mounted into the job container, and the
+# Cargo, Rustup, and build directories are placed directly on it.
 
 on:
   workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-cache-probe-${{ github.ref }}
+  cancel-in-progress: false
 
 env:
   CARGO_INCREMENTAL: "0"
@@ -58,6 +64,7 @@ jobs:
       RUSTFLAGS: "-C target-cpu=generic"
       CARGO_HOME: /cache/cargo
       RUSTUP_HOME: /cache/rustup
+      CUDAFORGE_HOME: /cache/cudaforge
       CARGO_TARGET_DIR: /cache/target-sm${{ matrix.sm }}-cuda${{ matrix.cuda }}
     steps:
       - name: Cache volume sanity
@@ -81,6 +88,8 @@ jobs:
             fi
           fi
           rm -rf /var/lib/apt/lists/*
+      - name: Restore cached Cargo tools
+        run: echo "$CARGO_HOME/bin" >> "$GITHUB_PATH"
       - uses: dtolnay/rust-toolchain@stable
       - name: Fetch Rust dependencies
         run: cargo fetch --locked
@@ -91,10 +100,12 @@ jobs:
               sleep 10
             done ) &
           sampler=$!
+          trap 'kill "$sampler" 2>/dev/null || true' EXIT
           start=$(date +%s)
           cargo build --release --locked --offline --features "cuda flash-attn nccl" -p mistralrs-cli
           end=$(date +%s)
-          kill "$sampler"
+          kill "$sampler" 2>/dev/null || true
+          trap - EXIT
           echo "BUILD_SECONDS=$((end - start))" | tee -a "$GITHUB_ENV"
       - name: Report
         run: |
@@ -103,5 +114,6 @@ jobs:
             echo "- build: ${BUILD_SECONDS}s"
             echo "- target: $(du -sh "$CARGO_TARGET_DIR" | cut -f1)"
             echo "- cargo home: $(du -sh /cache/cargo 2>/dev/null | cut -f1)"
+            echo "- cudaforge: $(du -sh "$CUDAFORGE_HOME" 2>/dev/null | cut -f1)"
             echo "- volume: $(df -h /cache | tail -1)"
           } >> "$GITHUB_STEP_SUMMARY"
