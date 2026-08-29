@@ -21,6 +21,7 @@ const DECODE_STACK_HEAD_K_DIM: usize = 256;
 #[cfg(any(feature = "cuda", feature = "metal"))]
 enum RecurrenceOutput {
     BatchHeadMajor(Tensor),
+    #[allow(dead_code)]
     TokenMajor(Tensor),
 }
 
