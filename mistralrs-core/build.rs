@@ -8,6 +8,57 @@ const CUTLASS_COMMIT: &str = "7127592069c2fe01b041e174ba4345ef9b279671";
 const FLASHINFER_GDN_MIN_CUDA: u32 = 1208;
 #[cfg(feature = "cuda")]
 const GDN_FP8_PRODUCER_MIN_CUDA: u32 = 1108;
+#[cfg(feature = "cuda")]
+const CUDA_BUILD_ROOT_ENV: &str = "MISTRALRS_CUDA_BUILD_ROOT";
+
+#[cfg(feature = "cuda")]
+fn cuda_build_dir(out_dir: &std::path::Path, component: &str) -> std::path::PathBuf {
+    println!("cargo:rerun-if-env-changed={CUDA_BUILD_ROOT_ENV}");
+    let Some(root) = std::env::var_os(CUDA_BUILD_ROOT_ENV) else {
+        return out_dir.to_path_buf();
+    };
+    let build_dir = std::path::PathBuf::from(root).join("core").join(component);
+    std::fs::create_dir_all(&build_dir).expect("failed to create shared CUDA build directory");
+    build_dir
+}
+
+#[cfg(feature = "cuda")]
+fn cuda_header_hash(dir: &std::path::Path) -> std::io::Result<u64> {
+    fn update(hash: &mut u64, bytes: &[u8]) {
+        for byte in bytes {
+            *hash ^= u64::from(*byte);
+            *hash = hash.wrapping_mul(0x100000001b3);
+        }
+    }
+
+    fn visit(path: &std::path::Path, hash: &mut u64) -> std::io::Result<()> {
+        if path.is_dir() {
+            let mut entries = std::fs::read_dir(path)?
+                .map(|entry| entry.map(|entry| entry.path()))
+                .collect::<std::io::Result<Vec<_>>>()?;
+            entries.sort();
+            for entry in entries {
+                visit(&entry, hash)?;
+            }
+            return Ok(());
+        }
+
+        let Some(extension) = path.extension().and_then(|extension| extension.to_str()) else {
+            return Ok(());
+        };
+        if !matches!(extension, "h" | "cuh" | "hpp") {
+            return Ok(());
+        }
+
+        update(hash, path.to_string_lossy().as_bytes());
+        update(hash, &std::fs::read(path)?);
+        Ok(())
+    }
+
+    let mut hash = 0xcbf29ce484222325;
+    visit(dir, &mut hash)?;
+    Ok(hash)
+}
 
 fn main() {
     set_git_revision();
@@ -31,10 +82,17 @@ fn main() {
         println!("cargo:rerun-if-env-changed=NVCC");
         println!("cargo:rerun-if-env-changed=CUDA_HOME");
         println!("cargo:rerun-if-env-changed=CUDA_PATH");
-        let build_dir = PathBuf::from(std::env::var("OUT_DIR").unwrap());
+        let out_dir = PathBuf::from(std::env::var("OUT_DIR").unwrap());
+        let build_dir = cuda_build_dir(&out_dir, "kernels");
+        let header_hash_arg = format!(
+            "-DMISTRALRS_CORE_CUDA_HEADER_HASH=0x{:016x}",
+            cuda_header_hash(std::path::Path::new("src/cuda"))
+                .expect("failed to hash CUDA headers")
+        );
 
         let mut builder = cudaforge::KernelBuilder::new()
             .source_glob("src/cuda/*.cu")
+            .watch(["src/cuda"])
             .out_dir(&build_dir)
             .arg("-std=c++17")
             .arg("-O3")
@@ -47,7 +105,8 @@ fn main() {
             .arg("--use_fast_math")
             .arg("--verbose")
             .arg("--compiler-options")
-            .arg("-fPIC");
+            .arg("-fPIC")
+            .arg(&header_hash_arg);
 
         let compute_cap = builder.get_compute_cap().unwrap_or(80);
 
@@ -73,15 +132,15 @@ fn main() {
         // https://github.com/EricLBuehler/mistral.rs/issues/588
         let out_file = if target.contains("msvc") {
             // Windows case
-            build_dir.join("mistralrscuda.lib")
+            out_dir.join("mistralrscuda.lib")
         } else {
-            build_dir.join("libmistralrscuda.a")
+            out_dir.join("libmistralrscuda.a")
         };
 
         builder
             .build_lib(out_file)
             .expect("Build mistral-core failed!");
-        println!("cargo:rustc-link-search={}", build_dir.display());
+        println!("cargo:rustc-link-search={}", out_dir.display());
         println!("cargo:rustc-link-lib=mistralrscuda");
         println!("cargo:rustc-link-lib=dylib=cudart");
 
@@ -91,9 +150,10 @@ fn main() {
         {
             println!("cargo:rustc-cfg=has_flashinfer_gdn_sm90_kernel");
             println!("cargo:rerun-if-changed=third_party/flashinfer_gdn_sm90");
+            let gdn_build_dir = cuda_build_dir(&out_dir, "flashinfer-gdn-sm90");
             let mut flashinfer_gdn = cudaforge::KernelBuilder::new()
                 .source_files(["third_party/flashinfer_gdn_sm90/mistralrs_flashinfer_gdn_sm90.cu"])
-                .out_dir(&build_dir)
+                .out_dir(&gdn_build_dir)
                 .compute_cap_arch("90a")
                 .arg("-std=c++20")
                 .arg("-O3")
@@ -125,7 +185,7 @@ fn main() {
                     .arg(cuda_nvcc_flags_env);
             }
             flashinfer_gdn
-                .build_lib(build_dir.join("libmistralrsflashinfergdn.a"))
+                .build_lib(out_dir.join("libmistralrsflashinfergdn.a"))
                 .expect("Build FlashInfer GDN provider failed!");
             println!("cargo:rustc-link-lib=mistralrsflashinfergdn");
         } else if compute_cap == 90

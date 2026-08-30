@@ -5,6 +5,8 @@ const DEEPGEMM_CUTLASS_COMMIT: &str = "f3fde58372d33e9a5650ba7b80fc48b3b49d40c8"
 #[cfg(feature = "cuda")]
 const CUTLASS_COMMIT_ENV: &str = "MISTRALRS_CUTLASS_COMMIT";
 #[cfg(feature = "cuda")]
+const CUDA_BUILD_ROOT_ENV: &str = "MISTRALRS_CUDA_BUILD_ROOT";
+#[cfg(feature = "cuda")]
 const SUPPORTED_CUDA_TOOLKIT_VERSIONS: &[(usize, usize)] = &[
     (13, 3),
     (13, 2),
@@ -25,6 +27,17 @@ const SUPPORTED_CUDA_TOOLKIT_VERSIONS: &[(usize, usize)] = &[
     (11, 5),
     (11, 4),
 ];
+
+#[cfg(feature = "cuda")]
+fn cuda_build_dir(out_dir: &std::path::Path, component: &str) -> std::path::PathBuf {
+    println!("cargo:rerun-if-env-changed={CUDA_BUILD_ROOT_ENV}");
+    let Some(root) = std::env::var_os(CUDA_BUILD_ROOT_ENV) else {
+        return out_dir.join(component);
+    };
+    let build_dir = std::path::PathBuf::from(root).join("quant").join(component);
+    std::fs::create_dir_all(&build_dir).expect("failed to create shared CUDA build directory");
+    build_dir
+}
 
 #[cfg(feature = "cuda")]
 fn cuda_kernel_builder(build_dir: &std::path::Path) -> cudaforge::KernelBuilder {
@@ -123,7 +136,7 @@ fn main() -> Result<(), String> {
         println!("cargo:rerun-if-changed=build.rs");
         println!("cargo:rerun-if-env-changed=CUDA_NVCC_FLAGS");
         println!("cargo:rerun-if-env-changed={CUTLASS_COMMIT_ENV}");
-        let build_dir = PathBuf::from(std::env::var("OUT_DIR").unwrap());
+        let out_dir = PathBuf::from(std::env::var("OUT_DIR").unwrap());
         let (cuda_major, cuda_minor) = cuda_version_from_build_system();
 
         let deepgemm_headers = cuda_headers::find(Path::new("third_party/deepgemm_sm90"))
@@ -141,7 +154,7 @@ fn main() -> Result<(), String> {
             "-DMISTRALRS_QUANT_CUDA_HEADER_HASH=0x{:016x}",
             cuda_headers::hash(&header_files).map_err(|e| e.to_string())?
         );
-        let kernel_build_dir = build_dir.join("kernels");
+        let kernel_build_dir = cuda_build_dir(&out_dir, "kernels");
         let mut builder = cuda_kernel_builder(&kernel_build_dir)
             .source_glob("kernels/*/*.cu")
             .watch(["kernels"])
@@ -177,10 +190,10 @@ fn main() -> Result<(), String> {
             println!("cargo:rustc-cfg=has_deepgemm_fp8_sm90_provider");
             let deepgemm_cutlass =
                 cudaforge::ExternalDependency::cutlass(Some(DEEPGEMM_CUTLASS_COMMIT))
-                    .fetch(&build_dir)
+                    .fetch(&out_dir)
                     .map_err(|error| error.to_string())?;
             deepgemm_source_hash = deepgemm_jit_bundle::write(
-                &build_dir.join("deepgemm_jit_headers.rs"),
+                &out_dir.join("deepgemm_jit_headers.rs"),
                 Path::new("third_party/deepgemm_sm90/include/official"),
                 Path::new("third_party/deepgemm_sm90/include/deep_gemm"),
                 &deepgemm_cutlass.join("include"),
@@ -226,8 +239,6 @@ fn main() -> Result<(), String> {
             builder = builder.arg(cuda_nvcc_flags_env);
         }
 
-        let build_dir = PathBuf::from(std::env::var("OUT_DIR").unwrap());
-
         // CUDA 13.x CCCL headers require MSVC's conforming preprocessor.
         if target.contains("msvc") {
             builder = builder.arg("--compiler-options").arg("/Zc:preprocessor");
@@ -236,9 +247,9 @@ fn main() -> Result<(), String> {
         // https://github.com/EricLBuehler/mistral.rs/issues/588
         let out_file = if target.contains("msvc") {
             // Windows case
-            build_dir.join("mistralrsquant.lib")
+            out_dir.join("mistralrsquant.lib")
         } else {
-            build_dir.join("libmistralrsquant.a")
+            out_dir.join("libmistralrsquant.a")
         };
         builder
             .build_lib(out_file)
@@ -246,7 +257,7 @@ fn main() -> Result<(), String> {
         if deepgemm_fp8_sm90 {
             let deepgemm_source_hash_arg =
                 format!("-DMISTRALRS_DEEPGEMM_SOURCE_HASH=0x{deepgemm_source_hash:016x}");
-            let deepgemm_build_dir = build_dir.join("deepgemm");
+            let deepgemm_build_dir = cuda_build_dir(&out_dir, "deepgemm");
             let mut deepgemm_builder = cuda_kernel_builder(&deepgemm_build_dir)
                 .source_files(["third_party/deepgemm_sm90/mistralrs_deepgemm_sm90.cu"])
                 .watch(["third_party/deepgemm_sm90"])
@@ -261,10 +272,10 @@ fn main() -> Result<(), String> {
                     .arg(cuda_nvcc_flags_env);
             }
             deepgemm_builder
-                .build_lib(build_dir.join("libmistralrsdeepgemm.a"))
+                .build_lib(out_dir.join("libmistralrsdeepgemm.a"))
                 .expect("Build mistral DeepGEMM provider failed!");
         }
-        println!("cargo:rustc-link-search={}", build_dir.display());
+        println!("cargo:rustc-link-search={}", out_dir.display());
         println!("cargo:rustc-link-lib=mistralrsquant");
         println!("cargo:rustc-link-lib=dylib=cudart");
         if deepgemm_fp8_sm90 {

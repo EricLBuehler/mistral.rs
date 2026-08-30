@@ -14,6 +14,21 @@ const FA3_SOURCES: [&str; 4] = [
     "third_party/flash-attention/hopper/flash_fwd_combine.cu",
     "third_party/flash-attention/hopper/flash_prepare_scheduler.cu",
 ];
+#[cfg(all(feature = "cuda", target_family = "unix"))]
+const CUDA_BUILD_ROOT_ENV: &str = "MISTRALRS_CUDA_BUILD_ROOT";
+
+#[cfg(all(feature = "cuda", target_family = "unix"))]
+fn cuda_build_dir(out_dir: &std::path::Path, component: &str) -> std::path::PathBuf {
+    println!("cargo:rerun-if-env-changed={CUDA_BUILD_ROOT_ENV}");
+    let Some(root) = std::env::var_os(CUDA_BUILD_ROOT_ENV) else {
+        return out_dir.to_path_buf();
+    };
+    let build_dir = std::path::PathBuf::from(root)
+        .join("paged-attn")
+        .join(component);
+    std::fs::create_dir_all(&build_dir).expect("failed to create shared CUDA build directory");
+    build_dir
+}
 
 #[cfg(all(feature = "cuda", target_family = "unix"))]
 fn cuda_header_hash(dir: &str, excluded_dirs: &[&str]) -> Result<u64> {
@@ -103,6 +118,9 @@ fn main() -> Result<()> {
     println!("cargo:rerun-if-changed=src/cuda/flashinfer/attention/variant_helper.cuh");
     println!("cargo:rerun-if-changed=src/cuda/flashinfer/attention/variants.cuh");
 
+    let out_dir = PathBuf::from(std::env::var("OUT_DIR").unwrap());
+    let kernel_build_dir = cuda_build_dir(&out_dir, "kernels");
+
     let header_hash_arg = format!(
         "-DMISTRALRS_CUDA_HEADER_HASH={:016x}",
         cuda_header_hash("src/cuda", &["src/cuda/fa3"])?
@@ -110,6 +128,8 @@ fn main() -> Result<()> {
 
     let mut builder = cudaforge::KernelBuilder::new()
         .source_glob("src/cuda/*.cu")
+        .watch(["src/cuda"])
+        .out_dir(&kernel_build_dir)
         .arg("-std=c++17")
         .arg("-O3")
         .arg("-U__CUDA_NO_HALF_OPERATORS__")
@@ -141,13 +161,12 @@ fn main() -> Result<()> {
     println!("cargo:info={builder:?}");
 
     let target = std::env::var("TARGET").unwrap();
-    let build_dir = PathBuf::from(std::env::var("OUT_DIR").unwrap());
     // https://github.com/EricLBuehler/mistral.rs/issues/588
     let out_file = if target.contains("msvc") {
         // Windows case
-        build_dir.join("mistralrspagedattention.lib")
+        out_dir.join("mistralrspagedattention.lib")
     } else {
-        build_dir.join("libmistralrspagedattention.a")
+        out_dir.join("libmistralrspagedattention.a")
     };
     builder
         .build_lib(out_file)
@@ -159,9 +178,10 @@ fn main() -> Result<()> {
             .wrapping_mul(0x100000001b3)
             ^ cuda_header_hash("src/cuda/fa3", &[])?;
         let fa3_header_hash_arg = format!("-DMISTRALRS_FA3_HEADER_HASH={fa3_header_hash:016x}");
+        let fa3_build_dir = cuda_build_dir(&out_dir, "fa3");
         let mut fa3_builder = cudaforge::KernelBuilder::new()
             .source_files(FA3_SOURCES)
-            .out_dir(&build_dir)
+            .out_dir(&fa3_build_dir)
             .compute_cap_arch("90a")
             .with_cutlass(Some(FA3_CUTLASS_COMMIT))
             .include_path("src/cuda/fa3")
@@ -202,11 +222,11 @@ fn main() -> Result<()> {
                 .arg(cuda_nvcc_flags_env);
         }
         fa3_builder
-            .build_lib(build_dir.join("libmistralrsfa3paged.a"))
+            .build_lib(out_dir.join("libmistralrsfa3paged.a"))
             .expect("Build FA3 FP8 paged attention lib failed!");
     }
 
-    println!("cargo:rustc-link-search={}", build_dir.display());
+    println!("cargo:rustc-link-search={}", out_dir.display());
     println!("cargo:rustc-link-lib=mistralrspagedattention");
     println!("cargo:rustc-link-lib=dylib=cudart");
 

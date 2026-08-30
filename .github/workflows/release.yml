@@ -36,6 +36,7 @@ permissions:
 concurrency:
   group: release-${{ inputs.tag || github.ref_name }}
   cancel-in-progress: false
+  queue: max
 
 env:
   CARGO_INCREMENTAL: "0"
@@ -116,7 +117,9 @@ jobs:
       - name: Test release verifier
         run: |
           pip3 install --quiet pyyaml==6.0.3
-          python3 -m unittest scripts/test_verify_release_assets.py
+          python3 -m unittest \
+            scripts/test_verify_release_assets.py \
+            scripts/test_release_cuda_cache.py
       - uses: actions/checkout@v4
         with:
           ref: ${{ steps.context.outputs.build_ref }}
@@ -298,7 +301,13 @@ jobs:
 
   linux-cuda:
     needs: preflight
-    runs-on: ${{ matrix.runner }}
+    # Keep every native compiler axis isolated; bump v1 when compiler or build-hook semantics change.
+    runs-on: >-
+      ${{ matrix.runner }};overrides.cache-tag=mistral.rs-cuda-v1-${{ matrix.runner }}-${{ matrix.cuda }}-sm${{ matrix.sm }}
+    concurrency:
+      group: mistral.rs-cuda-v1-${{ matrix.runner }}-${{ matrix.cuda }}-sm${{ matrix.sm }}
+      cancel-in-progress: false
+      queue: max
     strategy:
       fail-fast: false
       matrix:
@@ -346,9 +355,13 @@ jobs:
           - { sm: "90", runner: namespace-profile-cuda-arm64, triple: aarch64-unknown-linux-gnu, cuda: "13.3.0", cuda_asset: "133", features: "cuda flash-attn nccl cutile" }
     container:
       image: docker.io/nvidia/cuda:${{ matrix.cuda }}-cudnn-devel-ubuntu22.04
+      volumes:
+        - /cache:/cache
     env:
       CUDA_COMPUTE_CAP: ${{ matrix.sm }}
       CUDA_TOOLKIT_PATH: /usr/local/cuda
+      CUDAFORGE_HOME: /cache/cudaforge-dependencies-v1
+      MISTRALRS_CUDA_BUILD_ROOT: /cache/mistralrs-cuda-objects-v1
       # Cap concurrent nvcc: cicc peaks ~7GB on the worst flash-attn kernels and overlaps the rustc
       # phase; 12 rides the 64GB edge on arm64 (OOM kills present as exit 137 or a lost runner).
       CUDAFORGE_THREADS: ${{ contains(matrix.runner, 'arm64') && '8' || '12' }}
@@ -389,11 +402,11 @@ jobs:
             sleep $((i * 20))
           done
       - name: Build
-        run: cargo build --release --locked --offline --features "${{ matrix.features }}" -p mistralrs-cli
+        run: cargo build --release --locked --offline --target "${{ matrix.triple }}" --features "${{ matrix.features }}" -p mistralrs-cli
       - name: Bundle runtime libraries
         run: |
           set -eux
-          bin=target/release/mistralrs
+          bin=target/${{ matrix.triple }}/release/mistralrs
           mkdir -p package/lib
           # Copy every CUDA/NCCL/cuDNN shared object the binary actually links, so the
           # artifact runs without a CUDA toolkit installed.
@@ -446,7 +459,7 @@ jobs:
           sed -i 's/^version = "\([^"]*\)"/version = "\1+cuda${{ matrix.cuda_asset }}.sm${{ matrix.sm }}"/' mistralrs-pyo3/Cargo.toml
           # --auditwheel skip: maturin's built-in repair has no --exclude and chokes on libcuda; do
           # our own repair below instead so the driver is excluded rather than bundled.
-          maturin build --release --features "cuda flash-attn nccl" --auditwheel skip -o wheelraw -m mistralrs-pyo3/Cargo.toml
+          maturin build --release --target "${{ matrix.triple }}" --features "cuda flash-attn nccl" --auditwheel skip -o wheelraw -m mistralrs-pyo3/Cargo.toml
           # auditwheel must resolve libcuda.so.1 before it can honor --exclude; the build container
           # has only the driver stub (libcuda.so), so symlink it as libcuda.so.1 on the search path.
           stubdir=/usr/local/cuda/lib64/stubs
