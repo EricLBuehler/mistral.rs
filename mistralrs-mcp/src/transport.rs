@@ -1,12 +1,16 @@
 use anyhow::Result;
 use futures_util::stream::{SplitSink, SplitStream};
 use futures_util::{SinkExt, StreamExt};
-use http::{Request, Uri};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::time::Duration;
 use tokio::net::TcpStream;
-use tokio_tungstenite::{connect_async, tungstenite::Message, MaybeTlsStream, WebSocketStream};
+use tokio::sync::oneshot;
+use tokio_tungstenite::{
+    connect_async,
+    tungstenite::{client::IntoClientRequest, Message},
+    MaybeTlsStream, WebSocketStream,
+};
 
 /// Transport layer for MCP communication
 #[async_trait::async_trait]
@@ -764,9 +768,85 @@ pub struct WebSocketTransport {
     write: std::sync::Arc<
         tokio::sync::Mutex<SplitSink<WebSocketStream<MaybeTlsStream<TcpStream>>, Message>>,
     >,
-    read:
-        std::sync::Arc<tokio::sync::Mutex<SplitStream<WebSocketStream<MaybeTlsStream<TcpStream>>>>>,
+    pending_responses: PendingWebSocketResponses,
     request_id: std::sync::Arc<std::sync::atomic::AtomicU64>,
+}
+
+type PendingWebSocketResponse = oneshot::Sender<Result<Value, String>>;
+type PendingWebSocketResponses =
+    std::sync::Arc<tokio::sync::Mutex<HashMap<u64, PendingWebSocketResponse>>>;
+
+async fn complete_websocket_response(
+    pending_responses: &PendingWebSocketResponses,
+    response_body: Value,
+) {
+    let Some(response_id) = response_body.get("id").and_then(|v| v.as_u64()) else {
+        return;
+    };
+    let Some(sender) = pending_responses.lock().await.remove(&response_id) else {
+        return;
+    };
+    let _ = sender.send(extract_jsonrpc_result(response_body).map_err(|e| e.to_string()));
+}
+
+async fn fail_pending_websocket_responses(
+    pending_responses: &PendingWebSocketResponses,
+    error: impl Into<String>,
+) {
+    let error = error.into();
+    let mut pending = pending_responses.lock().await;
+    for (_, sender) in pending.drain() {
+        let _ = sender.send(Err(error.clone()));
+    }
+}
+
+async fn dispatch_websocket_responses(
+    mut read: SplitStream<WebSocketStream<MaybeTlsStream<TcpStream>>>,
+    pending_responses: PendingWebSocketResponses,
+) {
+    loop {
+        let msg = match read.next().await {
+            Some(Ok(msg)) => msg,
+            Some(Err(e)) => {
+                fail_pending_websocket_responses(
+                    &pending_responses,
+                    format!("WebSocket read error: {e}"),
+                )
+                .await;
+                break;
+            }
+            None => {
+                fail_pending_websocket_responses(&pending_responses, "WebSocket connection closed")
+                    .await;
+                break;
+            }
+        };
+
+        match msg {
+            Message::Text(text) => match serde_json::from_str::<Value>(&text) {
+                Ok(response_body) => {
+                    complete_websocket_response(&pending_responses, response_body).await;
+                }
+                Err(e) => {
+                    fail_pending_websocket_responses(
+                        &pending_responses,
+                        format!("Failed to parse WebSocket response: {e}"),
+                    )
+                    .await;
+                    break;
+                }
+            },
+            Message::Close(_) => {
+                fail_pending_websocket_responses(
+                    &pending_responses,
+                    "WebSocket connection closed by server",
+                )
+                .await;
+                break;
+            }
+            Message::Binary(_) | Message::Ping(_) | Message::Pong(_) | Message::Frame(_) => {}
+        }
+    }
 }
 
 impl WebSocketTransport {
@@ -815,13 +895,9 @@ impl WebSocketTransport {
         headers: Option<HashMap<String, String>>,
     ) -> Result<Self> {
         // Create request with headers
-        let uri: Uri = url
-            .parse()
-            .map_err(|e| anyhow::anyhow!("Invalid WebSocket URL: {}", e))?;
-        let mut request = Request::builder()
-            .uri(uri)
-            .body(())
-            .map_err(|e| anyhow::anyhow!("Failed to create WebSocket request: {}", e))?;
+        let mut request = url
+            .into_client_request()
+            .map_err(|e| anyhow::anyhow!("Invalid WebSocket request: {}", e))?;
 
         // Add headers if provided
         if let Some(headers) = headers {
@@ -844,10 +920,15 @@ impl WebSocketTransport {
 
         // Split the stream
         let (write, read) = ws_stream.split();
+        let pending_responses = std::sync::Arc::new(tokio::sync::Mutex::new(HashMap::new()));
+        tokio::spawn(dispatch_websocket_responses(
+            read,
+            pending_responses.clone(),
+        ));
 
         Ok(Self {
             write: std::sync::Arc::new(tokio::sync::Mutex::new(write)),
-            read: std::sync::Arc::new(tokio::sync::Mutex::new(read)),
+            pending_responses,
             request_id: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(1)),
         })
     }
@@ -905,57 +986,24 @@ impl McpTransport for WebSocketTransport {
     /// ```
     async fn send_request(&self, method: &str, params: Value) -> Result<Value> {
         let (id, request_body) = build_jsonrpc_request(&self.request_id, method, params);
+        let (sender, receiver) = oneshot::channel();
+        self.pending_responses.lock().await.insert(id, sender);
 
         // Send request
         let message = Message::Text(serde_json::to_string(&request_body)?.into());
 
         {
             let mut write = self.write.lock().await;
-            write
-                .send(message)
-                .await
-                .map_err(|e| anyhow::anyhow!("Failed to send WebSocket message: {}", e))?;
-        }
-
-        // Read response
-        loop {
-            let mut read = self.read.lock().await;
-            let msg = read
-                .next()
-                .await
-                .ok_or_else(|| anyhow::anyhow!("WebSocket connection closed"))?
-                .map_err(|e| anyhow::anyhow!("WebSocket read error: {}", e))?;
-            drop(read);
-
-            match msg {
-                Message::Text(text) => {
-                    let response_body: Value = serde_json::from_str(&text)?;
-
-                    // Check if this is the response to our request
-                    if let Some(response_id) = response_body.get("id").and_then(|v| v.as_u64()) {
-                        if response_id == id {
-                            return extract_jsonrpc_result(response_body);
-                        }
-                    }
-                    // If it's not our response, continue reading
-                }
-                Message::Binary(_) => {
-                    // Handle binary messages if needed, for now skip
-                    continue;
-                }
-                Message::Close(_) => {
-                    return Err(anyhow::anyhow!("WebSocket connection closed by server"));
-                }
-                Message::Ping(_) | Message::Pong(_) => {
-                    // Handle ping/pong frames, continue reading
-                    continue;
-                }
-                Message::Frame(_) => {
-                    // Raw frames, continue reading
-                    continue;
-                }
+            if let Err(e) = write.send(message).await {
+                self.pending_responses.lock().await.remove(&id);
+                return Err(anyhow::anyhow!("Failed to send WebSocket message: {}", e));
             }
         }
+
+        receiver
+            .await
+            .map_err(|_| anyhow::anyhow!("WebSocket response dispatcher closed"))?
+            .map_err(|e| anyhow::anyhow!(e))
     }
 
     /// Sends a WebSocket ping frame to test connection health
@@ -1019,6 +1067,97 @@ impl McpTransport for WebSocketTransport {
                 .await
                 .map_err(|e| anyhow::anyhow!("Failed to send WebSocket message: {}", e))?;
         }
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use futures_util::{SinkExt, StreamExt};
+    use serde_json::json;
+    use tokio::net::TcpListener;
+    use tokio_tungstenite::accept_async;
+
+    async fn read_json_message(ws: &mut WebSocketStream<TcpStream>) -> Result<Value> {
+        loop {
+            let msg = ws
+                .next()
+                .await
+                .ok_or_else(|| anyhow::anyhow!("missing WebSocket request"))??;
+            if let Message::Text(text) = msg {
+                return Ok(serde_json::from_str(&text)?);
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn websocket_transport_routes_out_of_order_responses() -> Result<()> {
+        let listener = TcpListener::bind("127.0.0.1:0").await?;
+        let addr = listener.local_addr()?;
+
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await?;
+            let mut ws = accept_async(stream).await?;
+            let mut ids = HashMap::new();
+
+            for _ in 0..2 {
+                let request = read_json_message(&mut ws).await?;
+                let id = request
+                    .get("id")
+                    .and_then(|v| v.as_u64())
+                    .ok_or_else(|| anyhow::anyhow!("missing request id"))?;
+                let method = request
+                    .get("method")
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| anyhow::anyhow!("missing request method"))?;
+                ids.insert(method.to_string(), id);
+            }
+
+            let first_id = ids
+                .get("first")
+                .ok_or_else(|| anyhow::anyhow!("missing first request"))?;
+            let second_id = ids
+                .get("second")
+                .ok_or_else(|| anyhow::anyhow!("missing second request"))?;
+
+            ws.send(Message::Text(
+                json!({
+                    "jsonrpc": "2.0",
+                    "id": second_id,
+                    "result": {"method": "second"}
+                })
+                .to_string()
+                .into(),
+            ))
+            .await?;
+            ws.send(Message::Text(
+                json!({
+                    "jsonrpc": "2.0",
+                    "id": first_id,
+                    "result": {"method": "first"}
+                })
+                .to_string()
+                .into(),
+            ))
+            .await?;
+
+            Ok::<(), anyhow::Error>(())
+        });
+
+        let transport = WebSocketTransport::new(format!("ws://{addr}"), None, None).await?;
+        let (first, second) = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            tokio::join!(
+                transport.send_request("first", Value::Null),
+                transport.send_request("second", Value::Null)
+            )
+        })
+        .await?;
+
+        assert_eq!(first?, json!({"method": "first"}));
+        assert_eq!(second?, json!({"method": "second"}));
+        server.await??;
+
         Ok(())
     }
 }
