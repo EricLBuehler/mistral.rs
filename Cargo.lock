@@ -1209,22 +1209,25 @@ dependencies = [
 
 [[package]]
 name = "cuda-async"
-version = "0.1.0"
+version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9e5e6c51933b111a9ce229ec0a132ed01f6dc1905689619546f92e3579d067b6"
+checksum = "6d61b750ebfec804857e3ef889ee9ec2a667f8e25fe6cfcc92e468d1245b8b79"
 dependencies = [
  "anyhow",
+ "cuda-bindings",
  "cuda-core",
+ "dashmap",
  "futures",
  "half",
+ "once_cell",
  "thiserror 1.0.69",
 ]
 
 [[package]]
 name = "cuda-bindings"
-version = "0.1.0"
+version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bb536c6bd521e35942cf374515151457be1e09de2eb7d4627d4e7d7af70e618c"
+checksum = "78b6d3f0b0863faa14794f464039dcca77a80fa21dbbb123004a54d4e855c066"
 dependencies = [
  "bindgen",
  "libloading 0.8.9",
@@ -1236,9 +1239,9 @@ dependencies = [
 
 [[package]]
 name = "cuda-core"
-version = "0.1.0"
+version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "21a377120db77d05b039ff595298e9c542aaafa751de8cfe89a29bf8d0989e6f"
+checksum = "ea5d113544ff834c29d528508518e4baf68a461aa1a6036283ef330492b7ff6c"
 dependencies = [
  "anyhow",
  "cuda-bindings",
@@ -1287,9 +1290,9 @@ dependencies = [
 
 [[package]]
 name = "cutile"
-version = "0.1.0"
+version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "428ac421e843d7532b8213d17647f1bfed4ce641d9d4b234b493c63ef3aeca8c"
+checksum = "5513e83d13417b373c34c923ef05f857e023320041926209dc403bc7e9d6e0a9"
 dependencies = [
  "anyhow",
  "cuda-async",
@@ -1297,19 +1300,23 @@ dependencies = [
  "cutile-compiler",
  "cutile-ir",
  "cutile-macro",
+ "dashmap",
  "half",
  "linkme",
  "num-traits",
+ "once_cell",
  "proc-macro2",
  "quote",
+ "serde",
+ "serde_json",
  "syn 2.0.114",
 ]
 
 [[package]]
 name = "cutile-compiler"
-version = "0.1.0"
+version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "57ffebc1613d8a1c68521f3a324bfe5e4e3d1ce4915d609b8a7321faa0315f44"
+checksum = "e0ae8be10ccc065d85971b2df967f8e7aa3fdbb6973481c2c8b8bd6660986303"
 dependencies = [
  "anyhow",
  "cuda-async",
@@ -1321,6 +1328,7 @@ dependencies = [
  "proc-macro2",
  "quote",
  "regex",
+ "sha2",
  "stacker",
  "syn 2.0.114",
  "uuid 1.19.0",
@@ -1328,9 +1336,9 @@ dependencies = [
 
 [[package]]
 name = "cutile-ir"
-version = "0.1.0"
+version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "eccd5ebe2c1939252889d3dc757b631e5a36b819e7b6249a6158ea9dfbbf7009"
+checksum = "62fdd5d9afce743b22744aeab1e5c75ac4dd82836d72c76df41bfc2c6a323397"
 dependencies = [
  "half",
  "indexmap 2.13.0",
@@ -1339,9 +1347,9 @@ dependencies = [
 
 [[package]]
 name = "cutile-macro"
-version = "0.1.0"
+version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6f8c7841f202a8831094d9f768796efe36837b067e2b07ce0f3ab524d229952a"
+checksum = "d96b78bbc752571f6a1c211a7b7e4d625b808e36836c79a82265e3ae16d8f7f9"
 dependencies = [
  "convert_case",
  "cutile-compiler",
@@ -1349,6 +1357,7 @@ dependencies = [
  "phf 0.11.3",
  "proc-macro2",
  "quote",
+ "sha2",
  "syn 2.0.114",
 ]
 
@@ -1463,6 +1472,20 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "06d2e3287df1c007e74221c49ca10a95d557349e54b3a75dc2fb14712c751f04"
 dependencies = [
  "serde",
+]
+
+[[package]]
+name = "dashmap"
+version = "6.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e6361d5c062261c78a176addb82d4c821ae42bed6089de0e12603cd25de2059c"
+dependencies = [
+ "cfg-if",
+ "crossbeam-utils",
+ "hashbrown 0.14.5",
+ "lock_api",
+ "once_cell",
+ "parking_lot_core",
 ]
 
 [[package]]
@@ -2585,6 +2608,12 @@ name = "hashbrown"
 version = "0.12.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8a9ee70c43aaf417c914396645a0fa852624801b24ebb7ae78fe8272889ac888"
+
+[[package]]
+name = "hashbrown"
+version = "0.14.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e5274423e17b7c9fc20b6e7e208532f9b19825d82dfd615708b70edd83df41f1"
 
 [[package]]
 name = "hashbrown"
@@ -3996,13 +4025,8 @@ dependencies = [
  "candle-core",
  "candle-metal-kernels",
  "candle-nn",
- "cuda-async",
- "cuda-bindings",
- "cuda-core",
  "cudaforge",
  "cutile",
- "cutile-compiler",
- "cutile-ir",
  "dispatch2",
  "fancy-regex 0.14.0",
  "float8",
@@ -4491,9 +4515,9 @@ dependencies = [
 
 [[package]]
 name = "once_cell"
-version = "1.21.3"
+version = "1.21.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "42f5e15c9953c5e4ccceeb2e7382a716482c34515315f7b03532b8b4e8393d2d"
+checksum = "9f7c3e4beb33f85d45ae3e3a1792185706c8e16d043238c593331cc7cd313b50"
 
 [[package]]
 name = "once_cell_polyfill"

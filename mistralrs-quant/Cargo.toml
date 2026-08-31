@@ -43,11 +43,6 @@ tokio.workspace = true
 futures.workspace = true
 sysinfo.workspace = true
 cutile = { workspace = true, optional = true }
-cutile-compiler = { workspace = true, optional = true }
-cutile-ir = { workspace = true, optional = true }
-cuda-core = { workspace = true, optional = true }
-cuda-async = { workspace = true, optional = true }
-cuda-bindings = { workspace = true, optional = true }
 mistralrs-metal-compile = { workspace = true, optional = true, features = ["metal"] }
 
 [features]
@@ -59,11 +54,6 @@ cuda = [
 cutile = [
     "cuda",
     "dep:cutile",
-    "dep:cutile-compiler",
-    "dep:cutile-ir",
-    "dep:cuda-core",
-    "dep:cuda-async",
-    "dep:cuda-bindings",
 ]
 nccl = ["cuda", "candle-core/nccl"]
 metal = [

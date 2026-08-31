@@ -6,7 +6,8 @@ description: Install the optional cuTile runtime tool for supported NVIDIA GPUs.
 Supported CUDA builds can use cuTile acceleration for MoE and routed LoRA workloads. The installer
 selects a cuTile-capable binary automatically when one matches the GPU and driver. NVIDIA's
 `tileiras` tool is installed separately. mistral.rs checks it automatically and continues without
-cuTile when the requirements are not met.
+cuTile when the requirements are not met. Source builds use the workspace-pinned cuTile Rust 0.3.0
+release.
 
 ## Install tileiras
 
@@ -30,8 +31,10 @@ export CUTILE_TILEIRAS_PATH="$(python3 -c 'import nvidia.cu13.bin as b; print(ne
 ```
 
 A system CUDA installation containing a compatible `tileiras` works as well. Keep the NVIDIA CUDA
-package components on the same major/minor release. Put the executable on `PATH` or set
-`CUTILE_TILEIRAS_PATH` to it. Release archives do not redistribute `tileiras`.
+package components on the same major/minor release. Set `CUDA_TOOLKIT_PATH` to the toolkit root for
+a reproducible source build, or set `CUTILE_TILEIRAS_PATH` to the executable directly. cuTile also
+searches standard CUDA 13.3 and 13.2 installations before falling back to `PATH`. Release archives
+do not redistribute `tileiras`.
 
 Run `mistralrs doctor` to check cuTile availability for every detected GPU. See NVIDIA's
 [cuTile installation guide](https://docs.nvidia.com/cuda/cutile-python/quickstart.html).
@@ -40,11 +43,14 @@ Run `mistralrs doctor` to check cuTile availability for every detected GPU. See 
 
 - Ampere and Ada require CUDA 13.2 or newer.
 - Hopper requires CUDA 13.3 or newer.
-- Blackwell requires CUDA 13.2 or newer.
+- Blackwell requires CUDA 13.2 or newer for source builds. cuTile 0.3 can emit CUDA 13.1 Tile IR,
+  but its published CUDA bindings require CUDA 13.2 or newer headers.
 - The `tileiras` installation must support the active GPU.
 - The mistral.rs binary must include the `cutile` feature.
+- Source builds require `libclang` because cuTile generates CUDA bindings during the build.
 
-`CUTILE_TILEIRAS_PATH` selects a specific `tileiras` binary instead of resolving it from `PATH`.
+`CUTILE_TILEIRAS_PATH` selects a specific `tileiras` binary and takes precedence over
+`CUDA_TOOLKIT_PATH` and automatic discovery.
 
 See also: [environment variables](/reference/environment-variables/),
 [cargo features](/reference/cargo-features/).

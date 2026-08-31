@@ -3,9 +3,9 @@
 
 use candle_core::cuda::cudarc::driver::CudaSlice;
 use candle_core::{CudaDevice, DType, Device, Result, Storage, Tensor};
-use cuda_async::device_buffer::DevicePointer;
-use cuda_async::device_operation::DeviceOp;
-use cuda_core::sys::CUdeviceptr;
+use cutile::cuda_async::device_buffer::DevicePointer;
+use cutile::cuda_async::device_operation::DeviceOp;
+use cutile::cuda_core::sys::CUdeviceptr;
 use cutile::tile_kernel::TileKernel;
 use half::bf16;
 use indicatif::{ProgressBar, ProgressStyle};
@@ -21,6 +21,7 @@ use super::{catch_cutile_panic, context, get_default_config, MoeTileConfig};
 #[cutile::module]
 pub mod fused_moe {
     use cutile::core::*;
+    use cutile::cutile_compiler;
 
     #[cutile::entry(
         unchecked_accesses = true,
@@ -304,6 +305,38 @@ pub fn cutile_grouped_gemm(
     cfg: MoeTileConfig,
     dev: &CudaDevice,
 ) -> Result<Tensor> {
+    cutile_grouped_gemm_inner(
+        a,
+        b,
+        sorted_token_ids,
+        expert_ids,
+        num_tokens_post_pad,
+        topk_weights,
+        em,
+        num_valid_tokens,
+        top_k,
+        mul_routed_weight,
+        cfg,
+        dev,
+        false,
+    )
+}
+
+fn cutile_grouped_gemm_inner(
+    a: &Tensor,
+    b: &Tensor,
+    sorted_token_ids: &CudaSlice<i32>,
+    expert_ids: &CudaSlice<i32>,
+    num_tokens_post_pad: &CudaSlice<i32>,
+    topk_weights: Option<&CudaSlice<f32>>,
+    em: usize,
+    num_valid_tokens: usize,
+    top_k: usize,
+    mul_routed_weight: bool,
+    cfg: MoeTileConfig,
+    dev: &CudaDevice,
+    compile_only: bool,
+) -> Result<Tensor> {
     if a.dtype() != DType::BF16 || b.dtype() != DType::BF16 {
         candle_core::bail!("cutile gemm is bf16-only");
     }
@@ -358,7 +391,7 @@ pub fn cutile_grouped_gemm(
         (if mul_routed_weight { 1 } else { 0 }).to_string(),
     ];
 
-    let ctx = context::execution_context(dev);
+    let cutile_stream = context::stream(dev);
     let launcher = unsafe {
         fused_moe::fused_moe_kernel(
             DevicePointer::<bf16>::from_cu_deviceptr(out_addr as CUdeviceptr),
@@ -377,11 +410,19 @@ pub fn cutile_grouped_gemm(
     .generics(generics)
     .grid((grid_x, 1, 1));
 
-    catch_cutile_panic("fused MoE kernel execute", || unsafe {
-        launcher
-            .execute(&ctx)
-            .map_err(|e| candle_core::Error::Msg(format!("cutile fused_moe launch: {e:?}")))
-    })?;
+    if compile_only {
+        catch_cutile_panic("fused MoE kernel compile", || {
+            launcher
+                .compile_on(&cutile_stream)
+                .map_err(|e| candle_core::Error::Msg(format!("cutile fused_moe compile: {e:?}")))
+        })?;
+    } else {
+        catch_cutile_panic("fused MoE kernel execute", || unsafe {
+            launcher
+                .async_on(&cutile_stream)
+                .map_err(|e| candle_core::Error::Msg(format!("cutile fused_moe launch: {e:?}")))
+        })?;
+    }
     drop((out_guard, tw_guard));
 
     let storage = candle_core::CudaStorage::wrap_cuda_slice(out, dev.clone());
@@ -433,9 +474,8 @@ fn div_hint_class(x: i32) -> i32 {
 }
 
 // Returns one representative token count per distinct kernel the forward can ever launch, so warmup
-// can compile all of them up front. cuTile JIT-compiles per cache key into a thread-local cache with
-// no cross-thread or on-disk reuse, so the first launch of an un-warmed key is a latency spike
-// mid-inference. The point of this function is that the set of keys is CLOSED and small, so we can
+// can compile all of them up front. The first launch of an un-warmed key is a latency spike
+// mid-inference. The point of this function is that the set of keys is closed and small, so we can
 // enumerate it exactly from (top_k, E) rather than guessing a list of token lengths.
 //
 // This kernel takes raw pointers + i32 scalars (no shaped tensors), so as the token count m varies
@@ -536,8 +576,8 @@ fn warmup_moe_kernels_uncached(dev: &CudaDevice) -> Result<()> {
     Ok(())
 }
 
-// Replays both fused-MoE GEMMs (gate_up then down) with the real weights and dummy activations,
-// so the compiled kernel keys match the runtime forward at this token count.
+// Compiles both fused-MoE GEMMs with the real weights and dummy activations so their specialization
+// keys match the runtime forward at this token count.
 fn warmup_shape(dev: &CudaDevice, entry: &MoeWarmupEntry, m: usize) -> Result<()> {
     let device = Device::Cuda(dev.clone());
     let topk = entry.top_k;
@@ -551,7 +591,7 @@ fn warmup_shape(dev: &CudaDevice, entry: &MoeWarmupEntry, m: usize) -> Result<()
     let (sids, eids, ntpp, em) = moe_align(&topk_ids, m, num_experts, topk, cfg.bm, dev)?;
 
     let a1 = Tensor::zeros((m, entry.hidden), DType::BF16, &device)?;
-    let _ = cutile_grouped_gemm(
+    let _ = cutile_grouped_gemm_inner(
         &a1,
         &entry.gate_up_w,
         &sids,
@@ -564,13 +604,14 @@ fn warmup_shape(dev: &CudaDevice, entry: &MoeWarmupEntry, m: usize) -> Result<()
         false,
         cfg,
         dev,
+        true,
     )?;
 
     let a2 = Tensor::zeros((num_valid, entry.inter), DType::BF16, &device)?;
     let tw_host = vec![0f32; num_valid];
     let mut tw = unsafe { dev.alloc::<f32>(num_valid)? };
     dev.memcpy_htod(&tw_host, &mut tw)?;
-    let _ = cutile_grouped_gemm(
+    let _ = cutile_grouped_gemm_inner(
         &a2,
         &entry.down_w,
         &sids,
@@ -583,6 +624,7 @@ fn warmup_shape(dev: &CudaDevice, entry: &MoeWarmupEntry, m: usize) -> Result<()
         true,
         cfg,
         dev,
+        true,
     )?;
     Ok(())
 }

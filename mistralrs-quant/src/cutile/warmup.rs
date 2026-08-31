@@ -1,10 +1,10 @@
-//! cuTile JIT warmup driver: runs every registered [`CutileKernel`] once per device on the engine thread (the JIT cache is thread-local).
+//! cuTile JIT warmup driver for registered inference kernels.
 
 use candle_core::{CudaDevice, Device, DeviceLocation, Result};
 use std::collections::HashSet;
 use std::sync::{Mutex, OnceLock};
 
-/// A cuTile kernel that can pre-compile (warm) every JIT key it will hit at inference.
+/// A cuTile kernel that can pre-compile every JIT key it will hit at inference.
 pub(super) trait CutileKernel {
     fn warm(&self, dev: &CudaDevice) -> Result<()>;
 }
@@ -16,7 +16,7 @@ fn registered() -> [&'static dyn CutileKernel; 1] {
 
 static WARMED_LOCATIONS: OnceLock<Mutex<HashSet<DeviceLocation>>> = OnceLock::new();
 
-/// Warm every registered cuTile kernel for `device`, once per device. Call on the engine thread.
+/// Warm every registered cuTile kernel once per device.
 pub fn warmup_moe_kernels(device: &Device) -> Result<()> {
     let Device::Cuda(dev) = device else {
         return Ok(());
@@ -41,5 +41,5 @@ pub fn warmup_moe_kernels(device: &Device) -> Result<()> {
             return Err(err);
         }
     }
-    device.synchronize()
+    Ok(())
 }

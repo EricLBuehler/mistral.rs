@@ -84,7 +84,7 @@ fn build_cuda_version_code() -> Option<u32> {
 }
 
 const MIN_TILEIRAS_MAJOR: u32 = 13;
-const MIN_TILEIRAS_MINOR: u32 = 2;
+const MIN_TILEIRAS_MINOR: u32 = 1;
 
 fn parse_tileiras_version(output: &str) -> Option<(u32, u32)> {
     for part in output.split_whitespace() {
@@ -138,7 +138,7 @@ fn tileiras_capabilities() -> Option<&'static TileirasCapabilities> {
         std::sync::OnceLock::new();
     CAPABILITIES
         .get_or_init(|| {
-            let bin = cutile_compiler::cuda_tile_runtime_utils::tileiras_binary();
+            let bin = cutile::cutile_compiler::cuda_tile_runtime_utils::tileiras_binary();
             let version = tileiras_output(&bin, "--version")?;
             if !tileiras_version_supported(&version) {
                 return None;
@@ -176,6 +176,9 @@ mod tests {
     #[test]
     fn tileiras_version_gate_accepts_compatible_versions() {
         assert!(!tileiras_version_supported(
+            "Cuda compilation tools, release 13.0, V13.0.88"
+        ));
+        assert!(tileiras_version_supported(
             "Cuda compilation tools, release 13.1, V13.1.80"
         ));
         assert!(tileiras_version_supported(
