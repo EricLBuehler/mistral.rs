@@ -76,7 +76,12 @@ See [CPU threads and affinity](/guides/perf/throughput-tuning/#cpu-threads-and-a
 | `MISTRALRS_DEEPGEMM_NVCC` | Path to the `nvcc` executable used only when a DeepGEMM kernel is absent from the cache. A populated cache does not require runtime `nvcc`. |
 | `MISTRALRS_NO_MLA` | Disables MLA acceleration for DeepSeek V2/V3 when set to `1`. Use only for compatibility troubleshooting. |
 | `MISTRALRS_GGUF_AFFINE_BACKEND` | Set to `on` to speed up GGUF matmuls at batch sizes of 8 or more. Off by default because it keeps a second copy of the quantized weights, taking that memory from the KV cache. Worth enabling for production serving with high concurrency. |
-| `CUTILE_TILEIRAS_PATH` | Path to `tileiras` when it is not available on `PATH`. |
+| `CUDA_TOOLKIT_PATH` | CUDA toolkit root used by cuTile for headers, `tileiras`, and Tile IR bytecode compatibility. Recommended when multiple CUDA toolkits are installed. |
+| `CUTILE_TILEIRAS_PATH` | Path to a specific `tileiras` executable. Takes precedence over `CUDA_TOOLKIT_PATH` and automatic discovery. |
+| `CUTILE_SETUP_DIAGNOSTICS` | Set to `1` to print cuTile toolkit and `tileiras` discovery diagnostics. |
+| `CUTILE_JIT_LOG` | Set to `1` to print cuTile JIT and persistent-cache diagnostics. |
+| `CUTILE_JIT_TIMING` | If set, prints per-stage cuTile compilation timings and bounds-check placement counts. |
+| `CUTILE_BYTECODE_VERSION` | Advanced override for the emitted Tile IR bytecode version, such as `13.2`. Normally inferred from the selected toolkit or `tileiras`. |
 
 ## Multi-GPU and multi-node
 

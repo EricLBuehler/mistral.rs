@@ -7,12 +7,12 @@ use std::hash::{Hash, Hasher};
 use std::sync::{Mutex, OnceLock};
 
 use candle_core::{cuda::cudarc::driver::CudaSlice, CudaDevice, DType, Result};
-use cuda_async::device_buffer::DevicePointer;
-use cuda_async::device_operation::DeviceOp;
-use cuda_core::sys::CUdeviceptr;
+use cutile::cuda_async::device_buffer::DevicePointer;
+use cutile::cuda_async::device_operation::DeviceOp;
+use cutile::cuda_core::sys::CUdeviceptr;
+use cutile::cutile_compiler::compiler::utils::CompileOptions;
+use cutile::cutile_compiler::specialization::DivHint;
 use cutile::tile_kernel::TileKernel;
-use cutile_compiler::compiler::utils::CompileOptions;
-use cutile_compiler::specialization::DivHint;
 use half::bf16;
 
 #[cfg(test)]
@@ -41,6 +41,7 @@ const POINTER_HINT_MAX_BYTES: usize = 16;
 #[cutile::module]
 mod routed_lora_kernel {
     use cutile::core::*;
+    use cutile::cutile_compiler;
 
     const DESCRIPTOR_BYTES: i32 = 40;
 
@@ -1109,7 +1110,7 @@ unsafe fn launch_config(
         i32::from(addresses.naive_assignment).to_string(),
         i32::from(addresses.token_adapter_slots != 0).to_string(),
     ];
-    let ctx = context::execution_context(dev);
+    let cutile_stream = context::stream(dev);
     let launcher = routed_lora_kernel::routed_lora_one_shot(
         DevicePointer::<bf16>::from_cu_deviceptr(launch.input as CUdeviceptr),
         DevicePointer::<bf16>::from_cu_deviceptr(launch.output as CUdeviceptr),
@@ -1135,7 +1136,7 @@ unsafe fn launch_config(
     .compile_options(compile_options(config.optimization_hint));
     catch_cutile_panic("routed LoRA kernel execute", || unsafe {
         launcher
-            .execute(&ctx)
+            .async_on(&cutile_stream)
             .map_err(|error| driver_error("launch", error))
     })?;
     Ok(())
