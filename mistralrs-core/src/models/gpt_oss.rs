@@ -941,7 +941,7 @@ impl Model {
         xs = self.norm.forward(&xs)?;
         let xs = ctx.logits(&xs)?;
 
-        self.lm_head.forward(&xs)
+        ctx.lm_head(&*self.lm_head, &xs)
     }
 
     fn residual_tensors_inner(&self) -> Vec<(String, Tensor)> {

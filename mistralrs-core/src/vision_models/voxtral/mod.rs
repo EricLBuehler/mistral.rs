@@ -915,7 +915,7 @@ impl VoxtralModel {
         let xs = xs.apply(&self.norm)?;
 
         let xs = ctx.logits(&xs)?;
-        let logits = self.output.forward(&xs)?;
+        let logits = ctx.lm_head(&*self.output, &xs)?;
         Ok(logits)
     }
 }

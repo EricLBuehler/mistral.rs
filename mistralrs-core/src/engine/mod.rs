@@ -1907,6 +1907,8 @@ impl Engine {
                                     full_mm_prefix_ranges_by_seq_id: HashMap::new(),
                                     enable_packed_prefill: pipeline.supports_packed_prefill(),
                                     is_final_prompt_chunk,
+                                    needs_logits: is_final_prompt_chunk
+                                        || guards_mut[0].return_raw_logits,
                                 };
 
                                 let return_raw_logits = guards_mut[0].return_raw_logits;

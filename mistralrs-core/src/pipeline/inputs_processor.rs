@@ -221,6 +221,8 @@ pub mod text_models_inputs_processor {
         /// False only for non-final chunks of a chunked prompt; block-diffusion models skip
         /// canvas generation until the prompt is fully encoded.
         pub is_final_prompt_chunk: bool,
+        /// False when the pipeline discards this forward's logits, so models skip the lm_head.
+        pub needs_logits: bool,
     }
 
     impl PagedAttentionMeta {
@@ -272,6 +274,7 @@ pub mod text_models_inputs_processor {
         pub full_max_context_len: Option<usize>,
         pub is_first_prompt_chunk: bool,
         pub is_final_prompt_chunk: bool,
+        pub needs_logits: bool,
         pub prompt_chunk_attention_policy: MultimodalAttentionPolicy,
         pub has_noncausal_mm_context: bool,
         pub prefix_gather_workspace_limit: Option<usize>,
@@ -338,6 +341,7 @@ pub mod text_models_inputs_processor {
                 slot_mappings: HashMap::from([(dev.location(), Tensor::new(&[0f32], dev)?)]),
                 is_first_prompt_chunk: true,
                 is_final_prompt_chunk: true,
+                needs_logits: true,
                 prompt_chunk_attention_policy: MultimodalAttentionPolicy::Causal,
                 has_noncausal_mm_context: false,
                 prefix_gather_workspace_limit: None,
@@ -589,6 +593,7 @@ pub mod text_models_inputs_processor {
                 full_max_context_len,
                 is_first_prompt_chunk: false,
                 is_final_prompt_chunk: self.is_final_prompt_chunk,
+                needs_logits: self.needs_logits,
                 prompt_chunk_attention_policy: MultimodalAttentionPolicy::Causal,
                 has_noncausal_mm_context: self.has_noncausal_mm_context,
                 prefix_gather_workspace_limit: self.prefix_gather_workspace_limit,
@@ -1411,6 +1416,7 @@ pub mod text_models_inputs_processor {
                 full_max_context_len,
                 is_first_prompt_chunk: chunk_offset_toks == 0 && !has_any_cache_hit,
                 is_final_prompt_chunk: paged_attn_metadata.is_final_prompt_chunk,
+                needs_logits: paged_attn_metadata.needs_logits,
                 prompt_chunk_attention_policy,
                 // Keep the slow path local to chunks whose query rows overlap a noncausal range.
                 has_noncausal_mm_context: mm_prefix_ranges_tensor.is_some()
@@ -2045,6 +2051,7 @@ pub mod text_models_inputs_processor {
                 full_max_context_len: self.use_standard_metadata.then_some(full_max_context_len),
                 is_first_prompt_chunk: false,
                 is_final_prompt_chunk: true,
+                needs_logits: true,
                 prompt_chunk_attention_policy: MultimodalAttentionPolicy::Causal,
                 has_noncausal_mm_context: false,
                 prefix_gather_workspace_limit: None,
@@ -2336,6 +2343,7 @@ pub mod text_models_inputs_processor {
                 full_max_context_len: requirements.context_lens.then_some(full_max_context_len),
                 is_first_prompt_chunk: false,
                 is_final_prompt_chunk: true,
+                needs_logits: true,
                 prompt_chunk_attention_policy: MultimodalAttentionPolicy::Causal,
                 has_noncausal_mm_context: false,
                 prefix_gather_workspace_limit: None,

@@ -2412,7 +2412,7 @@ impl TextModel {
                 *hidden = Some(xs.clone());
             }
         }
-        let mut xs = self.lm_head.forward(&xs)?;
+        let mut xs = ctx.lm_head(&*self.lm_head, &xs)?;
         if let Some(final_logit_softcapping) = self.final_logit_softcapping {
             xs = softcap(&xs, final_logit_softcapping as f32)?;
         }
