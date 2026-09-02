@@ -89,7 +89,7 @@ struct GdnFp8OutputLayout {
     scale_layout_code: i32,
 }
 
-#[cfg(any(feature = "cuda", test))]
+#[cfg(feature = "cuda")]
 impl GdnFp8OutputLayout {
     // padded to the scale stride so group-major GEMMs can read whole aligned row blocks
     fn quantized_elements(&self) -> usize {
