@@ -32,6 +32,35 @@ extern "C" {
     ) -> i32;
 }
 
+#[cfg(has_blockwise_fp8_kernels)]
+extern "C" {
+    pub(crate) fn mistralrs_fp8_mma_error_string(status: i32) -> *const core::ffi::c_char;
+    pub(crate) fn mistralrs_fp8_mma_gemv(
+        weight: *const F8E4M3,
+        activation: *const F8E4M3,
+        activation_scales: *const f32,
+        weight_scales: *const f32,
+        output: *mut bf16,
+        rows: i32,
+        output_features: i32,
+        input_features: i32,
+        weight_scale_stride: i32,
+        activation_scale_stride_m: i32,
+        activation_scale_stride_g: i32,
+        stream: candle_core::cuda::cudarc::driver::sys::CUstream,
+    ) -> i32;
+    pub(crate) fn mistralrs_fp8_mma_quantize_bf16(
+        input: *const bf16,
+        quantized: *mut F8E4M3,
+        scales: *mut f32,
+        rows: i32,
+        columns: i32,
+        scale_stride_m: i32,
+        scale_stride_g: i32,
+        stream: candle_core::cuda::cudarc::driver::sys::CUstream,
+    ) -> i32;
+}
+
 #[cfg(has_deepgemm_fp8_sm90_provider)]
 pub(crate) const DEEPGEMM_SUCCESS: i32 = 0;
 #[cfg(has_deepgemm_fp8_sm90_provider)]

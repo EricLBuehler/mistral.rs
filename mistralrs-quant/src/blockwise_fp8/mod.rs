@@ -8,7 +8,9 @@ use candle_nn::Linear;
 
 #[cfg(all(feature = "cuda", has_deepgemm_fp8_sm90_provider))]
 mod deepgemm;
-mod ops;
+#[cfg(all(feature = "cuda", has_blockwise_fp8_kernels))]
+pub(crate) mod mma;
+pub(crate) mod ops;
 pub use ops::{
     fp8_blockwise_dequantize, fp8_blockwise_quantize, fused_add_rms_norm_quantized,
     fused_add_rms_norm_quantized_with_normalized,
@@ -49,6 +51,8 @@ enum BlockwiseFp8Provider {
     CutlassSm90,
     #[cfg(all(feature = "cuda", has_deepgemm_fp8_sm90_provider))]
     DeepGemmSm90(Arc<deepgemm::Prepared>),
+    #[cfg(all(feature = "cuda", has_blockwise_fp8_kernels))]
+    TensorCoreGemv,
 }
 
 #[cfg(all(feature = "cuda", has_cutlass_fp8_sm90_kernels))]
@@ -59,6 +63,8 @@ static DEEPGEMM_FP8_PROVIDER_LOG: std::sync::Once = std::sync::Once::new();
 static DEEPGEMM_FP8_FALLBACK_LOG: std::sync::Once = std::sync::Once::new();
 #[cfg(all(feature = "cuda", has_deepgemm_fp8_sm90_provider))]
 const FP8_SM90_PROVIDER_ENV: &str = "MISTRALRS_FP8_SM90_PROVIDER";
+#[cfg(all(feature = "cuda", has_blockwise_fp8_kernels))]
+static TENSOR_CORE_GEMV_PROVIDER_LOG: std::sync::Once = std::sync::Once::new();
 
 impl BlockwiseFp8Provider {
     fn supports_shared_activation(&self) -> bool {
@@ -68,6 +74,8 @@ impl BlockwiseFp8Provider {
             Self::CutlassSm90 => true,
             #[cfg(all(feature = "cuda", has_deepgemm_fp8_sm90_provider))]
             Self::DeepGemmSm90(_) => true,
+            #[cfg(all(feature = "cuda", has_blockwise_fp8_kernels))]
+            Self::TensorCoreGemv => true,
         }
     }
 }
@@ -140,7 +148,63 @@ impl BlockwiseFP8Linear {
                 );
             });
         }
+        #[cfg(all(feature = "cuda", has_blockwise_fp8_kernels))]
+        if self.dequant_dtype == DType::BF16
+            && mma::weight_supported(
+                &self.weight,
+                &self.weight_scale_inv,
+                &self.weight_block_size,
+            )
+        {
+            self.provider = BlockwiseFp8Provider::TensorCoreGemv;
+            #[cfg(feature = "cutile")]
+            if let (Device::Cuda(dev), Ok((n, k))) = (self.weight.device(), self.weight.dims2()) {
+                if crate::cutile::fp8_gemm_supported(dev, n, k) {
+                    crate::cutile::register_fp8_gemm_shape(n, k);
+                }
+            }
+            TENSOR_CORE_GEMV_PROVIDER_LOG.call_once(|| {
+                tracing::info!(
+                    "Using FP8 tensor-core W8A8 GEMV for decode with dynamic 1x128 activations"
+                );
+            });
+        }
         Ok(())
+    }
+
+    #[cfg(all(feature = "cuda", feature = "cutile", has_blockwise_fp8_kernels))]
+    fn try_forward_cutile_gemm(&self, x: &Tensor) -> Result<Option<Tensor>> {
+        let Device::Cuda(dev) = x.device() else {
+            return Ok(None);
+        };
+        let (n, k) = self.weight.dims2()?;
+        if !crate::cutile::fp8_gemm_supported(dev, n, k) {
+            return Ok(None);
+        }
+        let source_shape = x.dims().to_vec();
+        let features = source_shape[source_shape.len() - 1];
+        let rows = source_shape[..source_shape.len() - 1]
+            .iter()
+            .product::<usize>();
+        let block_rows = crate::cutile::FP8_GEMM_BLOCK_ROWS;
+        let padded_rows = rows.div_ceil(block_rows) * block_rows;
+        let (quantized, scales) =
+            mma::quantize_activation_padded(&x.reshape((rows, features))?, padded_rows)?;
+        let result = crate::cutile::cutile_fp8_gemm(
+            &quantized,
+            &scales,
+            &self.weight,
+            &self.weight_scale_inv,
+            dev,
+        )?
+        .narrow(0, 0, rows)?;
+        let mut output_shape = source_shape[..source_shape.len() - 1].to_vec();
+        output_shape.push(n);
+        let result = result.reshape(output_shape)?;
+        match &self.bias {
+            Some(bias) => Ok(Some(result.broadcast_add(bias)?)),
+            None => Ok(Some(result)),
+        }
     }
 }
 
@@ -239,6 +303,25 @@ impl QuantMethod for BlockwiseFP8Linear {
         {
             let activation = self.quantize_activation(x)?;
             return self.forward_quantized(&activation);
+        }
+
+        #[cfg(all(feature = "cuda", has_blockwise_fp8_kernels))]
+        if matches!(self.provider, BlockwiseFp8Provider::TensorCoreGemv) && x.dtype() == DType::BF16
+        {
+            if self.activation_quantization_scheme_for(x).is_some() {
+                let activation = self.quantize_activation(x)?;
+                return self.forward_quantized(&activation);
+            }
+            #[cfg(feature = "cutile")]
+            if let Some(result) = self.try_forward_cutile_gemm(x)? {
+                return Ok(result);
+            }
+            let weight = self.dequantize_w()?;
+            let unquant = UnquantLinear::new(QuantMethodConfig::Unquantized(Linear::new(
+                weight,
+                self.bias.clone(),
+            )))?;
+            return unquant.forward(x);
         }
 
         // Try to use native FP8 GEMM kernel on CUDA
@@ -382,6 +465,13 @@ impl QuantMethod for BlockwiseFP8Linear {
         {
             return None;
         }
+        #[cfg(all(feature = "cuda", has_blockwise_fp8_kernels))]
+        if matches!(self.provider, BlockwiseFp8Provider::TensorCoreGemv) {
+            return Some(ActivationQuantizationScheme {
+                dtype: DType::F8E4M3,
+                block_shape: [1, self.weight_block_size[1]],
+            });
+        }
         #[cfg(all(feature = "cuda", has_cutlass_fp8_sm90_kernels))]
         {
             Some(ActivationQuantizationScheme {
@@ -397,8 +487,17 @@ impl QuantMethod for BlockwiseFP8Linear {
 
     fn activation_quantization_scheme_for(
         &self,
-        _x: &Tensor,
+        x: &Tensor,
     ) -> Option<ActivationQuantizationScheme> {
+        #[cfg(all(feature = "cuda", has_blockwise_fp8_kernels))]
+        if matches!(self.provider, BlockwiseFp8Provider::TensorCoreGemv) {
+            let (_, batch_dims) = x.dims().split_last()?;
+            let rows = batch_dims.iter().product::<usize>();
+            if x.dtype() != DType::BF16 || rows == 0 || rows > mma::MMA_GEMV_MAX_ROWS {
+                return None;
+            }
+        }
+        let _ = x;
         self.activation_quantization_scheme()
     }
 
@@ -425,6 +524,28 @@ impl QuantMethod for BlockwiseFP8Linear {
     }
 
     fn quantize_activation(&self, x: &Tensor) -> Result<QuantizedActivation> {
+        #[cfg(all(feature = "cuda", has_blockwise_fp8_kernels))]
+        if matches!(self.provider, BlockwiseFp8Provider::TensorCoreGemv) {
+            let scheme = self.activation_quantization_scheme_for(x).ok_or_else(|| {
+                candle_core::Error::msg("FP8 tensor-core activation quantization is unavailable")
+            })?;
+            let source_shape = x.dims().to_vec();
+            let features = source_shape[source_shape.len() - 1];
+            let rows = source_shape[..source_shape.len() - 1]
+                .iter()
+                .product::<usize>();
+            let layout = ActivationScaleLayout::RowMajor;
+            let (quantized, scales) =
+                mma::quantize_activation(&x.reshape((rows, features))?, layout)?;
+            return QuantizedActivation::new_with_scale_layout(
+                quantized,
+                scales,
+                source_shape,
+                x.dtype(),
+                scheme,
+                layout,
+            );
+        }
         #[cfg(all(feature = "cuda", has_cutlass_fp8_sm90_kernels))]
         {
             let scheme = self.activation_quantization_scheme().ok_or_else(|| {
@@ -453,6 +574,24 @@ impl QuantMethod for BlockwiseFP8Linear {
     }
 
     fn forward_quantized(&self, activation: &QuantizedActivation) -> Result<Tensor> {
+        #[cfg(all(feature = "cuda", has_blockwise_fp8_kernels))]
+        if matches!(self.provider, BlockwiseFp8Provider::TensorCoreGemv) {
+            let result = mma::gemv(
+                activation.quantized(),
+                activation.scales(),
+                activation.scale_layout(),
+                &self.weight,
+                &self.weight_scale_inv,
+            )?;
+            let source_shape = activation.source_shape();
+            let mut output_shape = source_shape[..source_shape.len() - 1].to_vec();
+            output_shape.push(result.dim(1)?);
+            let result = result.reshape(output_shape)?;
+            if let Some(bias) = &self.bias {
+                return result.broadcast_add(bias);
+            }
+            return Ok(result);
+        }
         #[cfg(all(feature = "cuda", has_cutlass_fp8_sm90_kernels))]
         {
             let scheme = self.activation_quantization_scheme().ok_or_else(|| {
