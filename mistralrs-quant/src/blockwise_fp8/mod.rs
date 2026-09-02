@@ -172,38 +172,54 @@ impl BlockwiseFP8Linear {
         Ok(())
     }
 
-    #[cfg(all(feature = "cuda", feature = "cutile", has_blockwise_fp8_kernels))]
-    fn try_forward_cutile_gemm(&self, x: &Tensor) -> Result<Option<Tensor>> {
-        let Device::Cuda(dev) = x.device() else {
-            return Ok(None);
-        };
-        let (n, k) = self.weight.dims2()?;
-        if !crate::cutile::fp8_gemm_supported(dev, n, k) {
-            return Ok(None);
+    #[cfg(all(feature = "cuda", has_blockwise_fp8_kernels, feature = "cutile"))]
+    fn cutile_scale_layout() -> ActivationScaleLayout {
+        ActivationScaleLayout::GroupMajor {
+            row_alignment: std::num::NonZeroUsize::new(crate::cutile::FP8_GEMM_BLOCK_ROWS)
+                .expect("cuTile GEMM block rows are nonzero"),
         }
-        let source_shape = x.dims().to_vec();
-        let features = source_shape[source_shape.len() - 1];
-        let rows = source_shape[..source_shape.len() - 1]
+    }
+
+    /// Rows padded to the GEMM block when `x` takes the cuTile GEMM instead of the tensor-core GEMV.
+    #[cfg(all(feature = "cuda", has_blockwise_fp8_kernels, feature = "cutile"))]
+    fn cutile_padded_rows(&self, x: &Tensor) -> Option<usize> {
+        if !matches!(self.provider, BlockwiseFp8Provider::TensorCoreGemv)
+            || x.dtype() != DType::BF16
+        {
+            return None;
+        }
+        let Device::Cuda(dev) = x.device() else {
+            return None;
+        };
+        let (n, k) = self.weight.dims2().ok()?;
+        let (_, batch_dims) = x.dims().split_last()?;
+        let rows = batch_dims
             .iter()
-            .product::<usize>();
+            .try_fold(1usize, |rows, dim| rows.checked_mul(*dim))?;
         let block_rows = crate::cutile::FP8_GEMM_BLOCK_ROWS;
-        let padded_rows = rows.div_ceil(block_rows) * block_rows;
-        let (quantized, scales) =
-            mma::quantize_activation_padded(&x.reshape((rows, features))?, padded_rows)?;
+        (rows > mma::MMA_GEMV_MAX_ROWS && crate::cutile::fp8_gemm_supported(dev, n, k))
+            .then(|| rows.div_ceil(block_rows) * block_rows)
+    }
+
+    #[cfg(all(feature = "cuda", has_blockwise_fp8_kernels, feature = "cutile"))]
+    fn forward_cutile_quantized(&self, activation: &QuantizedActivation) -> Result<Tensor> {
+        let dev = activation.quantized().device().as_cuda_device()?;
+        let (rows, _) = activation.quantized().dims2()?;
         let result = crate::cutile::cutile_fp8_gemm(
-            &quantized,
-            &scales,
+            activation.quantized(),
+            activation.scales(),
             &self.weight,
             &self.weight_scale_inv,
             dev,
         )?
         .narrow(0, 0, rows)?;
+        let source_shape = activation.source_shape();
         let mut output_shape = source_shape[..source_shape.len() - 1].to_vec();
-        output_shape.push(n);
+        output_shape.push(result.dim(1)?);
         let result = result.reshape(output_shape)?;
         match &self.bias {
-            Some(bias) => Ok(Some(result.broadcast_add(bias)?)),
-            None => Ok(Some(result)),
+            Some(bias) => result.broadcast_add(bias),
+            None => Ok(result),
         }
     }
 }
@@ -311,10 +327,6 @@ impl QuantMethod for BlockwiseFP8Linear {
             if self.activation_quantization_scheme_for(x).is_some() {
                 let activation = self.quantize_activation(x)?;
                 return self.forward_quantized(&activation);
-            }
-            #[cfg(feature = "cutile")]
-            if let Some(result) = self.try_forward_cutile_gemm(x)? {
-                return Ok(result);
             }
             let weight = self.dequantize_w()?;
             let unquant = UnquantLinear::new(QuantMethodConfig::Unquantized(Linear::new(
@@ -491,6 +503,10 @@ impl QuantMethod for BlockwiseFP8Linear {
     ) -> Option<ActivationQuantizationScheme> {
         #[cfg(all(feature = "cuda", has_blockwise_fp8_kernels))]
         if matches!(self.provider, BlockwiseFp8Provider::TensorCoreGemv) {
+            #[cfg(feature = "cutile")]
+            if self.cutile_padded_rows(x).is_some() {
+                return self.activation_quantization_scheme();
+            }
             let (_, batch_dims) = x.dims().split_last()?;
             let rows = batch_dims.iter().product::<usize>();
             if x.dtype() != DType::BF16 || rows == 0 || rows > mma::MMA_GEMV_MAX_ROWS {
@@ -503,6 +519,10 @@ impl QuantMethod for BlockwiseFP8Linear {
 
     fn preferred_activation_scale_layout_for(&self, x: &Tensor) -> Option<ActivationScaleLayout> {
         self.activation_quantization_scheme_for(x)?;
+        #[cfg(all(feature = "cuda", has_blockwise_fp8_kernels, feature = "cutile"))]
+        if self.cutile_padded_rows(x).is_some() {
+            return Some(Self::cutile_scale_layout());
+        }
         #[cfg(all(feature = "cuda", has_deepgemm_fp8_sm90_provider))]
         if matches!(&self.provider, BlockwiseFp8Provider::DeepGemmSm90(_))
             && x.dtype() == DType::BF16
@@ -534,6 +554,19 @@ impl QuantMethod for BlockwiseFP8Linear {
             let rows = source_shape[..source_shape.len() - 1]
                 .iter()
                 .product::<usize>();
+            #[cfg(feature = "cutile")]
+            if let Some(padded_rows) = self.cutile_padded_rows(x) {
+                let (quantized, scales) =
+                    mma::quantize_activation_padded(&x.reshape((rows, features))?, padded_rows)?;
+                return QuantizedActivation::new_with_scale_layout(
+                    quantized.narrow(0, 0, rows)?,
+                    scales,
+                    source_shape,
+                    x.dtype(),
+                    scheme,
+                    Self::cutile_scale_layout(),
+                );
+            }
             let layout = ActivationScaleLayout::RowMajor;
             let (quantized, scales) =
                 mma::quantize_activation(&x.reshape((rows, features))?, layout)?;
@@ -576,6 +609,10 @@ impl QuantMethod for BlockwiseFP8Linear {
     fn forward_quantized(&self, activation: &QuantizedActivation) -> Result<Tensor> {
         #[cfg(all(feature = "cuda", has_blockwise_fp8_kernels))]
         if matches!(self.provider, BlockwiseFp8Provider::TensorCoreGemv) {
+            #[cfg(feature = "cutile")]
+            if activation.scale_layout() == Self::cutile_scale_layout() {
+                return self.forward_cutile_quantized(activation);
+            }
             let result = mma::gemv(
                 activation.quantized(),
                 activation.scales(),
@@ -673,6 +710,59 @@ impl QuantMethod for BlockwiseFP8Linear {
         split_size: usize,
         activation: GluActivationType,
     ) -> Result<Option<Tensor>> {
+        #[cfg(all(has_blockwise_fp8_kernels, feature = "cutile"))]
+        if matches!(self.provider, BlockwiseFp8Provider::TensorCoreGemv) {
+            if self.activation_scheme != Some(Fp8ActivationScheme::Dynamic)
+                || input.dtype() != DType::BF16
+            {
+                return Ok(None);
+            }
+            let Some((&packed_features, batch_dims)) = input.dims().split_last() else {
+                return Ok(None);
+            };
+            let Device::Cuda(dev) = input.device() else {
+                return Ok(None);
+            };
+            let (n, k) = self.weight.dims2()?;
+            let rows = batch_dims
+                .iter()
+                .try_fold(1usize, |rows, dim| rows.checked_mul(*dim))
+                .ok_or_else(|| {
+                    candle_core::Error::msg("fused split GLU activation shape overflows usize")
+                })?;
+            if packed_features != split_size.saturating_mul(2)
+                || k != split_size
+                || rows <= mma::MMA_GEMV_MAX_ROWS
+                || !crate::cutile::fp8_gemm_supported(dev, n, k)
+            {
+                return Ok(None);
+            }
+            let block_rows = crate::cutile::FP8_GEMM_BLOCK_ROWS;
+            let padded_rows = rows.div_ceil(block_rows) * block_rows;
+            let input = input.reshape((rows, packed_features))?;
+            let (quantized, scales) = crate::utils::fused_split_glu_quantized_bf16(
+                &input,
+                split_size,
+                self.weight_block_size[1],
+                padded_rows,
+                activation,
+            )?;
+            let result = crate::cutile::cutile_fp8_gemm(
+                &quantized,
+                &scales,
+                &self.weight,
+                &self.weight_scale_inv,
+                dev,
+            )?
+            .narrow(0, 0, rows)?;
+            let mut output_shape = batch_dims.to_vec();
+            output_shape.push(result.dim(1)?);
+            let result = result.reshape(output_shape)?;
+            return match &self.bias {
+                Some(bias) => result.broadcast_add(bias).map(Some),
+                None => Ok(Some(result)),
+            };
+        }
         #[cfg(all(has_cutlass_fp8_sm90_kernels, has_deepgemm_fp8_sm90_provider))]
         {
             let BlockwiseFp8Provider::DeepGemmSm90(prepared) = &self.provider else {
@@ -1491,6 +1581,186 @@ mod tests {
             max_error <= 0.02 + 0.02 * max_reference,
             "DeepGEMM group-major prequantized output error {max_error}, max reference {max_reference}"
         );
+        Ok(())
+    }
+
+    #[cfg(all(feature = "cuda", has_blockwise_fp8_kernels, feature = "cutile"))]
+    fn cutile_test_layer(
+        dev: &Device,
+        output_features: usize,
+        input_features: usize,
+    ) -> Result<BlockwiseFP8Linear> {
+        const BLOCK_SIZE: usize = 128;
+
+        let weight_values = (0..output_features * input_features)
+            .map(|index| {
+                let row = index / input_features;
+                let column = index % input_features;
+                let block = row / BLOCK_SIZE * (input_features / BLOCK_SIZE) + column / BLOCK_SIZE;
+                let amplitude = [0.04, 0.18, 0.75, 1.6][block % 4];
+                let value = ((row * 17 + column * 29) % 31) as f32 - 15.0;
+                value * amplitude
+            })
+            .collect::<Vec<_>>();
+        let weight = Tensor::from_vec(weight_values, (output_features, input_features), dev)?
+            .to_dtype(DType::BF16)?;
+        let (weight, weight_scale_inv) =
+            ops::fp8_blockwise_quantize(&weight, vec![BLOCK_SIZE, BLOCK_SIZE])?;
+        let layer = BlockwiseFP8Linear::new(QuantMethodConfig::BlockwiseFP8 {
+            weight,
+            weight_scale_inv,
+            bias: None,
+            dequant_dtype: DType::BF16,
+            weight_block_size: vec![BLOCK_SIZE, BLOCK_SIZE],
+            activation_scheme: Some(Fp8ActivationScheme::Dynamic),
+        })?;
+        assert!(matches!(
+            &layer.provider,
+            BlockwiseFp8Provider::TensorCoreGemv
+        ));
+        Ok(layer)
+    }
+
+    #[cfg(all(feature = "cuda", has_blockwise_fp8_kernels, feature = "cutile"))]
+    fn assert_close(label: &str, reference: &Tensor, output: &Tensor) -> Result<()> {
+        let reference = reference.to_dtype(DType::F32)?.to_device(&Device::Cpu)?;
+        let output = output.to_dtype(DType::F32)?.to_device(&Device::Cpu)?;
+        let max_error = output
+            .sub(&reference)?
+            .abs()?
+            .max_all()?
+            .to_scalar::<f32>()?;
+        let max_reference = reference.abs()?.max_all()?.to_scalar::<f32>()?;
+        assert!(
+            max_error <= 0.02 + 0.02 * max_reference,
+            "{label}: error {max_error}, max reference {max_reference}"
+        );
+        Ok(())
+    }
+
+    #[cfg(all(feature = "cuda", has_blockwise_fp8_kernels, feature = "cutile"))]
+    #[test]
+    #[ignore = "requires a CUDA device with cuTile support"]
+    fn cutile_fused_glu_matches_unfused() -> Result<()> {
+        const OUTPUT_FEATURES: usize = 256;
+        const SPLIT_SIZE: usize = 512;
+
+        let dev = Device::new_cuda(0)?;
+        let layer = cutile_test_layer(&dev, OUTPUT_FEATURES, SPLIT_SIZE)?;
+        let input_of = |shape: &[usize], phase: usize| -> Result<Tensor> {
+            let count = shape.iter().product::<usize>();
+            let values = (0..count)
+                .map(|index| ((index * 13 + phase * 7) % 89) as f32 / 29.0 - 1.4)
+                .collect::<Vec<_>>();
+            Tensor::from_vec(values, shape, &dev)?.to_dtype(DType::BF16)
+        };
+        for shape in [
+            &[64usize, 2 * SPLIT_SIZE][..],
+            &[300, 2 * SPLIT_SIZE],
+            &[2, 40, 2 * SPLIT_SIZE],
+        ] {
+            let input = input_of(shape, shape.len())?;
+            let reference = layer.forward(&crate::utils::fused_split_glu(
+                &input,
+                SPLIT_SIZE,
+                GluActivationType::Silu,
+            )?)?;
+            let output = layer
+                .try_forward_fused_split_glu(&input, SPLIT_SIZE, GluActivationType::Silu)?
+                .ok_or_else(|| candle_core::Error::msg("cuTile fused GLU was not selected"))?;
+            assert_eq!(output.dims(), reference.dims());
+            assert_close(&format!("shape {shape:?}"), &reference, &output)?;
+        }
+        let small = input_of(&[8, 2 * SPLIT_SIZE], 5)?;
+        assert!(layer
+            .try_forward_fused_split_glu(&small, SPLIT_SIZE, GluActivationType::Silu)?
+            .is_none());
+        Ok(())
+    }
+
+    #[cfg(all(feature = "cuda", has_blockwise_fp8_kernels, feature = "cutile"))]
+    #[test]
+    #[ignore = "requires a CUDA device with cuTile support"]
+    fn cutile_consumes_fused_rms_norm_group_major_activation() -> Result<()> {
+        const ROWS: usize = 300;
+        const FEATURES: usize = 256;
+        const OUTPUT_FEATURES: usize = 256;
+        const EPSILON: f32 = 1.0e-6;
+
+        let device = Device::new_cuda(0)?;
+        let layer = cutile_test_layer(&device, OUTPUT_FEATURES, FEATURES)?;
+        let input_values = (0..ROWS * FEATURES)
+            .map(|index| ((index * 17 + index / FEATURES * 13) % 79) as f32 / 23.0 - 1.5)
+            .collect::<Vec<_>>();
+        let residual_values = (0..ROWS * FEATURES)
+            .map(|index| ((index * 11 + index / FEATURES * 7) % 47) as f32 / 31.0 - 0.7)
+            .collect::<Vec<_>>();
+        let norm_weight_values = (0..FEATURES)
+            .map(|column| 0.8 + (column % 29) as f32 / 64.0)
+            .collect::<Vec<_>>();
+        let input =
+            Tensor::from_vec(input_values, (ROWS, FEATURES), &device)?.to_dtype(DType::BF16)?;
+        let residual =
+            Tensor::from_vec(residual_values, (ROWS, FEATURES), &device)?.to_dtype(DType::BF16)?;
+        let norm_weight =
+            Tensor::from_vec(norm_weight_values, FEATURES, &device)?.to_dtype(DType::BF16)?;
+        assert_eq!(
+            layer.preferred_activation_scale_layout_for(&input.narrow(0, 0, 8)?),
+            Some(ActivationScaleLayout::RowMajor)
+        );
+        let scheme = layer
+            .activation_quantization_scheme_for(&input)
+            .ok_or_else(|| candle_core::Error::msg("cuTile activation scheme is unavailable"))?;
+        let scale_layout = layer
+            .preferred_activation_scale_layout_for(&input)
+            .ok_or_else(|| candle_core::Error::msg("cuTile scale layout is unavailable"))?;
+        assert_eq!(
+            scale_layout,
+            ActivationScaleLayout::GroupMajor {
+                row_alignment: std::num::NonZeroUsize::new(crate::cutile::FP8_GEMM_BLOCK_ROWS)
+                    .unwrap(),
+            }
+        );
+        let fused = fused_add_rms_norm_quantized(
+            &input,
+            &residual,
+            &norm_weight,
+            EPSILON,
+            scheme,
+            scale_layout,
+        )?;
+        assert_eq!(fused.activation().scales().dims(), &[2, 384]);
+        let output = layer.forward_quantized(fused.activation())?;
+        let residual_ref = (input.to_dtype(DType::F32)? + residual.to_dtype(DType::F32)?)?
+            .to_dtype(DType::BF16)?;
+        assert_close("residual", &residual_ref, fused.residual())?;
+        // the GEMM must read the producer's padded storage right: compare against the dequantized
+        // activation it was handed rather than re-quantizing a bf16 normalization
+        let cpu = Device::Cpu;
+        let values = fused
+            .activation()
+            .quantized()
+            .to_device(&cpu)?
+            .to_dtype(DType::F32)?;
+        let row_scales = fused
+            .activation()
+            .scales()
+            .to_device(&cpu)?
+            .t()?
+            .narrow(0, 0, ROWS)?
+            .contiguous()?;
+        let dequantized = values
+            .reshape((ROWS, FEATURES / 128, 128))?
+            .broadcast_mul(&row_scales.reshape((ROWS, FEATURES / 128, 1))?)?
+            .reshape((ROWS, FEATURES))?;
+        let weight = ops::fp8_blockwise_dequantize(
+            &layer.weight,
+            &layer.weight_scale_inv,
+            vec![128, 128],
+            DType::F32,
+        )?
+        .to_device(&cpu)?;
+        assert_close("output", &dequantized.matmul(&weight.t()?)?, &output)?;
         Ok(())
     }
 

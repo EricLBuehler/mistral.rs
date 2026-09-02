@@ -113,8 +113,9 @@ struct GemmOperands<'a> {
     weight_scales: &'a Tensor,
 }
 
-/// `activation` [rows, K] E4M3 with rows a multiple of [`FP8_GEMM_BLOCK_ROWS`], `activation_scales`
-/// [K/128, rows] F32, `weight` [N, K] E4M3, `weight_scales` [N/128, K/128] F32 -> [rows, N] BF16.
+/// `activation` [rows, K] E4M3 whose storage holds `padded` rows, `activation_scales` [K/128, padded]
+/// F32 with `padded` a multiple of [`FP8_GEMM_BLOCK_ROWS`] and rows <= padded, `weight` [N, K] E4M3,
+/// `weight_scales` [N/128, K/128] F32 -> [padded, N] BF16; rows past `rows` are unspecified.
 pub fn cutile_fp8_gemm(
     activation: &Tensor,
     activation_scales: &Tensor,
@@ -131,17 +132,32 @@ pub fn cutile_fp8_gemm(
     launch(&operands, dev, false)
 }
 
+/// Rows an activation view's storage can supply past its start offset.
+fn activation_storage_rows(activation: &Tensor) -> Result<usize> {
+    let (_, k) = activation.dims2()?;
+    let (storage, layout) = activation.storage_and_layout();
+    let Storage::Cuda(cuda) = &*storage else {
+        candle_core::bail!("cuTile FP8 GEMM operands must be CUDA tensors")
+    };
+    Ok((cuda.as_cuda_slice::<F8E4M3>()?.len() - layout.start_offset()) / k)
+}
+
 fn launch(operands: &GemmOperands<'_>, dev: &CudaDevice, compile_only: bool) -> Result<Tensor> {
-    let (rows, k) = operands.activation.dims2()?;
+    let (logical_rows, k) = operands.activation.dims2()?;
+    let (groups_dim, rows) = operands.activation_scales.dims2()?;
     let (n, weight_k) = operands.weight.dims2()?;
     let groups = k / GROUP_SIZE;
     if weight_k != k
         || !rows.is_multiple_of(FP8_GEMM_BLOCK_ROWS)
         || !n.is_multiple_of(BLOCK_COLS)
         || !k.is_multiple_of(GROUP_SIZE)
-        || rows == 0
+        || logical_rows == 0
+        || logical_rows > rows
+        || !operands.activation.is_contiguous()
     {
-        candle_core::bail!("cuTile FP8 GEMM got unsupported shape rows={rows} n={n} k={k}")
+        candle_core::bail!(
+            "cuTile FP8 GEMM got unsupported shape rows={logical_rows} padded={rows} n={n} k={k}"
+        )
     }
     if operands.activation.dtype() != DType::F8E4M3
         || operands.weight.dtype() != DType::F8E4M3
@@ -150,15 +166,22 @@ fn launch(operands: &GemmOperands<'_>, dev: &CudaDevice, compile_only: bool) -> 
     {
         candle_core::bail!("cuTile FP8 GEMM needs E4M3 operands with F32 scales")
     }
-    if operands.activation_scales.dims2()? != (groups, rows)
-        || operands.weight_scales.dims2()? != (n / BLOCK_COLS, groups)
-    {
+    if groups_dim != groups || operands.weight_scales.dims2()? != (n / BLOCK_COLS, groups) {
         candle_core::bail!("cuTile FP8 GEMM scale shapes do not match the operands")
     }
     let stream = dev.cuda_stream();
     let ordinal = stream.context().ordinal();
     let mut out = unsafe { dev.alloc::<bf16>(rows * n)? };
-    let (a_storage, a_layout) = operands.activation.storage_and_layout();
+    // producers pad their FP8 rows to the scale stride; anything else gets copied into a padded buffer
+    let padded_copy;
+    let activation = if activation_storage_rows(operands.activation)? >= rows {
+        operands.activation
+    } else {
+        padded_copy = Tensor::zeros((rows, k), DType::F8E4M3, operands.activation.device())?;
+        padded_copy.slice_set(operands.activation, 0, 0)?;
+        &padded_copy
+    };
+    let (a_storage, a_layout) = activation.storage_and_layout();
     let (as_storage, as_layout) = operands.activation_scales.storage_and_layout();
     let (w_storage, w_layout) = operands.weight.storage_and_layout();
     let (ws_storage, ws_layout) = operands.weight_scales.storage_and_layout();
@@ -317,6 +340,51 @@ mod tests {
             .map(|index| ((index * 7919 + seed * 104729) % 2001) as f32 / 1000.0 - 1.0)
             .map(|value| value * amplitude + offset)
             .collect()
+    }
+
+    #[test]
+    #[ignore = "requires a CUDA device with cuTile support"]
+    fn cutile_fp8_gemm_reads_row_views_over_padded_storage() -> Result<()> {
+        const N: usize = 256;
+        const K: usize = 512;
+        const ROWS: usize = 200;
+        let dev = Device::new_cuda(0)?;
+        let Device::Cuda(cuda) = &dev else {
+            unreachable!()
+        };
+        let weight =
+            Tensor::from_vec(patterned(N * K, 5, 2.0, 0.1), (N, K), &dev)?.to_dtype(DType::BF16)?;
+        let (weight, weight_scales) =
+            ops::fp8_blockwise_quantize(&weight, vec![GROUP_SIZE, GROUP_SIZE])?;
+        let x = Tensor::from_vec(patterned(ROWS * K, 9, 3.0, -0.2), (ROWS, K), &dev)?
+            .to_dtype(DType::BF16)?;
+        let padded_rows = ROWS.div_ceil(FP8_GEMM_BLOCK_ROWS) * FP8_GEMM_BLOCK_ROWS;
+        let (quantized, scales) = mma::quantize_activation_padded(&x, padded_rows)?;
+        let full = cutile_fp8_gemm(&quantized, &scales, &weight, &weight_scales, cuda)?;
+        let view = quantized.narrow(0, 0, ROWS)?;
+        let viewed = cutile_fp8_gemm(&view, &scales, &weight, &weight_scales, cuda)?;
+        assert_eq!(full.dims(), &[padded_rows, N]);
+        assert_eq!(viewed.dims(), &[padded_rows, N]);
+        let difference = full
+            .narrow(0, 0, ROWS)?
+            .to_dtype(DType::F32)?
+            .sub(&viewed.narrow(0, 0, ROWS)?.to_dtype(DType::F32)?)?
+            .abs()?
+            .max_all()?
+            .to_scalar::<f32>()?;
+        assert_eq!(difference, 0.0);
+        // unpadded storage takes the copy fallback and must agree too
+        let (unpadded, _) = mma::quantize_activation_padded(&x, ROWS)?;
+        let copied = cutile_fp8_gemm(&unpadded, &scales, &weight, &weight_scales, cuda)?;
+        let difference = full
+            .narrow(0, 0, ROWS)?
+            .to_dtype(DType::F32)?
+            .sub(&copied.narrow(0, 0, ROWS)?.to_dtype(DType::F32)?)?
+            .abs()?
+            .max_all()?
+            .to_scalar::<f32>()?;
+        assert_eq!(difference, 0.0);
+        Ok(())
     }
 
     #[test]

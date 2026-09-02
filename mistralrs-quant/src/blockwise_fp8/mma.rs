@@ -107,7 +107,9 @@ pub(super) fn quantize_activation(
 ) -> Result<(Tensor, Tensor)> {
     let (rows, cols) = x.dims2()?;
     let strides = scale_strides(layout, rows, cols / GROUP_SIZE);
-    quantize_rows(x, rows, strides)
+    // group-major consumers read whole aligned row blocks, so the FP8 storage is padded like the scales
+    let (quantized, scales) = quantize_rows(x, strides.group.max(rows), strides)?;
+    Ok((quantized.narrow(0, 0, rows)?, scales))
 }
 
 /// Quantizes into `padded_rows` zero-filled rows with group-major scales `[K/128, padded_rows]`,

@@ -10,8 +10,12 @@ pub(super) trait CutileKernel {
 }
 
 /// Every cuTile kernel to warm; add a line per new kernel.
-fn registered() -> [&'static dyn CutileKernel; 2] {
-    [&super::fused_moe::FUSED_MOE, &super::fp8_gemm::FP8_GEMM]
+fn registered() -> [&'static dyn CutileKernel; 3] {
+    [
+        &super::fused_moe::FUSED_MOE,
+        &super::fp8_gemm::FP8_GEMM,
+        &super::gdn_prefill::GDN_PREFILL,
+    ]
 }
 
 static WARMED_LOCATIONS: OnceLock<Mutex<HashSet<DeviceLocation>>> = OnceLock::new();

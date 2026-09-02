@@ -3,6 +3,7 @@
 pub mod context;
 mod fp8_gemm;
 mod fused_moe;
+mod gdn_prefill;
 mod routed_lora;
 mod warmup;
 
@@ -10,6 +11,10 @@ pub use fp8_gemm::{
     cutile_fp8_gemm, fp8_gemm_supported, register_fp8_gemm_shape, FP8_GEMM_BLOCK_ROWS,
 };
 pub use fused_moe::{cutile_grouped_gemm, register_moe_shape};
+pub use gdn_prefill::{
+    cutile_gdn_prefill, gdn_prefill_supported, GdnPrefillArgs, GDN_PREFILL_CHUNK,
+    GDN_PREFILL_HEAD_DIM,
+};
 pub use routed_lora::{
     cached_cutile_routed_lora_config, cutile_routed_lora_candidate_configs,
     selected_cutile_routed_lora_config, set_cutile_routed_lora_tuned_config,

@@ -90,6 +90,14 @@ struct GdnFp8OutputLayout {
 }
 
 #[cfg(any(feature = "cuda", test))]
+impl GdnFp8OutputLayout {
+    // padded to the scale stride so group-major GEMMs can read whole aligned row blocks
+    fn quantized_elements(&self) -> usize {
+        self.scale_stride_m * self.columns
+    }
+}
+
+#[cfg(any(feature = "cuda", test))]
 impl GdnFp8OutputSpec {
     pub(crate) fn new(
         source_shape: [usize; 3],
@@ -275,6 +283,7 @@ enum GdnDecodeKernel {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum GdnPrefillKernel {
     FlashInferSm90,
+    Cutile,
     ValueMajor1,
     ValueMajor2,
     ValueMajor4,
@@ -297,8 +306,10 @@ struct GdnPrefillPolicy {
 
 #[cfg(any(feature = "cuda", test))]
 fn prefill_kernel_supported(kernel: GdnPrefillKernel, policy: GdnPrefillPolicy) -> bool {
-    kernel != GdnPrefillKernel::FlashInferSm90
-        && policy.state_layout == RecurrentStateLayout::GdnValueMajor
+    !matches!(
+        kernel,
+        GdnPrefillKernel::FlashInferSm90 | GdnPrefillKernel::Cutile
+    ) && policy.state_layout == RecurrentStateLayout::GdnValueMajor
         && policy.compute_major >= GDN_DECODE_MIN_COMPUTE_MAJOR
         && policy.multiprocessor_count > 0
         && policy.state_blocks > 0
@@ -335,13 +346,14 @@ fn parse_prefill_kernel(value: &str) -> std::result::Result<Option<GdnPrefillKer
     match value.trim().to_ascii_lowercase().as_str() {
         "auto" => Ok(None),
         "flashinfer-sm90" => Ok(Some(GdnPrefillKernel::FlashInferSm90)),
+        "cutile" => Ok(Some(GdnPrefillKernel::Cutile)),
         "vmajor1" => Ok(Some(GdnPrefillKernel::ValueMajor1)),
         "vmajor2" => Ok(Some(GdnPrefillKernel::ValueMajor2)),
         "vmajor4" => Ok(Some(GdnPrefillKernel::ValueMajor4)),
         "vmajor8" => Ok(Some(GdnPrefillKernel::ValueMajor8)),
         "legacy-chunked" => Ok(Some(GdnPrefillKernel::LegacyChunked)),
         other => Err(format!(
-            "invalid GDN prefill kernel '{other}', expected auto, flashinfer-sm90, vmajor1, vmajor2, vmajor4, vmajor8, or legacy-chunked"
+            "invalid GDN prefill kernel '{other}', expected auto, flashinfer-sm90, cutile, vmajor1, vmajor2, vmajor4, vmajor8, or legacy-chunked"
         )),
     }
 }
@@ -1515,8 +1527,8 @@ fn vmajor_prefill_gated_delta_rule_recurrence_cuda_impl(
         GdnPrefillKernel::ValueMajor2 => RecurrenceKernel::ValueMajorWarp2,
         GdnPrefillKernel::ValueMajor4 => RecurrenceKernel::ValueMajorWarp4,
         GdnPrefillKernel::ValueMajor8 => RecurrenceKernel::ValueMajorWarp8,
-        GdnPrefillKernel::FlashInferSm90 => {
-            candle_core::bail!("FlashInfer GDN prefill requires fused convolved inputs")
+        GdnPrefillKernel::FlashInferSm90 | GdnPrefillKernel::Cutile => {
+            candle_core::bail!("fused GDN prefill providers require convolved inputs")
         }
         GdnPrefillKernel::LegacyChunked => RecurrenceKernel::ValueMajorChunked,
     };
@@ -1530,8 +1542,12 @@ pub fn vmajor_prefill_gated_delta_rule_recurrence_cuda(
     slots: GdnStateSlots<'_>,
     activation_dtype: DType,
 ) -> Result<Tensor> {
-    let requested =
-        prefill_kernel_override()?.filter(|kernel| *kernel != GdnPrefillKernel::FlashInferSm90);
+    let requested = prefill_kernel_override()?.filter(|kernel| {
+        !matches!(
+            kernel,
+            GdnPrefillKernel::FlashInferSm90 | GdnPrefillKernel::Cutile
+        )
+    });
     vmajor_prefill_gated_delta_rule_recurrence_cuda_impl(
         inputs,
         state,
@@ -1817,6 +1833,49 @@ pub fn prepare_recurrence_inputs_cuda(
     head_v_dim: usize,
     tiled_v_heads: bool,
 ) -> Result<(Tensor, Tensor, Tensor, Tensor, Tensor)> {
+    prepare_recurrence_inputs_cuda_typed(PrepareRecurrenceInputs {
+        mixed_qkv,
+        b,
+        a,
+        a_log,
+        dt_bias,
+        batch_size,
+        seq_len,
+        token_stride: seq_len,
+        num_k_heads,
+        num_v_heads,
+        head_k_dim,
+        head_v_dim,
+        tiled_v_heads,
+        output_dtype: DType::F32,
+    })
+}
+
+/// Inputs for [`prepare_recurrence_inputs_cuda_typed`]: `q`, `k`, `v` come out in `output_dtype`
+/// (F32 or BF16) with `token_stride` rows per batch-head; rows past `seq_len` are zero.
+#[cfg(feature = "cuda")]
+#[derive(Clone, Copy)]
+pub struct PrepareRecurrenceInputs<'a> {
+    pub mixed_qkv: &'a Tensor,
+    pub b: &'a Tensor,
+    pub a: &'a Tensor,
+    pub a_log: &'a Tensor,
+    pub dt_bias: &'a Tensor,
+    pub batch_size: usize,
+    pub seq_len: usize,
+    pub token_stride: usize,
+    pub num_k_heads: usize,
+    pub num_v_heads: usize,
+    pub head_k_dim: usize,
+    pub head_v_dim: usize,
+    pub tiled_v_heads: bool,
+    pub output_dtype: DType,
+}
+
+#[cfg(feature = "cuda")]
+pub fn prepare_recurrence_inputs_cuda_typed(
+    inputs: PrepareRecurrenceInputs<'_>,
+) -> Result<(Tensor, Tensor, Tensor, Tensor, Tensor)> {
     use candle::cuda_backend::cudarc::driver::DevicePtr;
     use candle_core as candle;
     use core::ffi::c_void;
@@ -1824,20 +1883,28 @@ pub fn prepare_recurrence_inputs_cuda(
     fn cuda_fwd<
         T: candle::cuda_backend::CudaDType + candle::cuda_backend::cudarc::driver::DeviceRepr,
     >(
-        mixed_qkv: &Tensor,
-        b: &Tensor,
-        a: &Tensor,
-        a_log: &Tensor,
-        dt_bias: &Tensor,
-        batch_size: usize,
-        seq_len: usize,
-        num_k_heads: usize,
-        num_v_heads: usize,
-        head_k_dim: usize,
-        head_v_dim: usize,
-        tiled_v_heads: bool,
+        inputs: &PrepareRecurrenceInputs<'_>,
         dtype_code: i32,
     ) -> Result<(Tensor, Tensor, Tensor, Tensor, Tensor)> {
+        let PrepareRecurrenceInputs {
+            mixed_qkv,
+            b,
+            a,
+            a_log,
+            dt_bias,
+            batch_size,
+            seq_len,
+            token_stride,
+            num_k_heads,
+            num_v_heads,
+            head_k_dim,
+            head_v_dim,
+            tiled_v_heads,
+            output_dtype,
+        } = *inputs;
+        if token_stride < seq_len {
+            candle::bail!("GDN prepare token stride {token_stride} is below seq_len {seq_len}");
+        }
         let dev = mixed_qkv.device().as_cuda_device()?;
 
         let (mixed_s, mixed_l) = mixed_qkv.storage_and_layout();
@@ -1876,93 +1943,91 @@ pub fn prepare_recurrence_inputs_cuda(
         let dtb_offset = dtb_l.start_offset();
 
         let bh = batch_size * num_v_heads;
-        let q_buf = unsafe { dev.alloc::<f32>(bh * seq_len * head_k_dim) }?;
-        let k_buf = unsafe { dev.alloc::<f32>(bh * seq_len * head_k_dim) }?;
-        let v_buf = unsafe { dev.alloc::<f32>(bh * seq_len * head_v_dim) }?;
-        let g_buf = unsafe { dev.alloc::<f32>(bh * seq_len) }?;
-        let beta_buf = unsafe { dev.alloc::<f32>(bh * seq_len) }?;
-
-        let stream = dev.cuda_stream().cu_stream() as i64;
-
-        unsafe {
-            crate::cuda::ffi::gdn_prepare_recurrence(
-                mixed_s.slice(mixed_offset..).device_ptr(mixed_s.stream()).0 as *const c_void,
-                b_s.slice(b_offset..).device_ptr(b_s.stream()).0 as *const c_void,
-                a_s.slice(a_offset..).device_ptr(a_s.stream()).0 as *const c_void,
-                alog_s.slice(alog_offset..).device_ptr(alog_s.stream()).0 as *const f32,
-                dtb_s.slice(dtb_offset..).device_ptr(dtb_s.stream()).0 as *const f32,
-                q_buf.device_ptr(q_buf.stream()).0 as *mut f32,
-                k_buf.device_ptr(k_buf.stream()).0 as *mut f32,
-                v_buf.device_ptr(v_buf.stream()).0 as *mut f32,
-                g_buf.device_ptr(g_buf.stream()).0 as *mut f32,
-                beta_buf.device_ptr(beta_buf.stream()).0 as *mut f32,
-                batch_size as i32,
-                seq_len as i32,
-                num_k_heads as i32,
-                num_v_heads as i32,
-                head_k_dim as i32,
-                head_v_dim as i32,
-                i32::from(tiled_v_heads),
-                dtype_code,
-                stream,
-            );
+        let padded = token_stride > seq_len;
+        macro_rules! alloc_rows {
+            ($t:ty, $len:expr) => {
+                if padded {
+                    dev.alloc_zeros::<$t>($len)?
+                } else {
+                    unsafe { dev.alloc::<$t>($len) }?
+                }
+            };
         }
-
-        let q = Tensor::from((
-            candle::Storage::Cuda(candle::CudaStorage::wrap_cuda_slice(q_buf, dev.clone())),
-            (bh, seq_len, head_k_dim),
-        ));
-        let k = Tensor::from((
-            candle::Storage::Cuda(candle::CudaStorage::wrap_cuda_slice(k_buf, dev.clone())),
-            (bh, seq_len, head_k_dim),
-        ));
-        let v = Tensor::from((
-            candle::Storage::Cuda(candle::CudaStorage::wrap_cuda_slice(v_buf, dev.clone())),
-            (bh, seq_len, head_v_dim),
-        ));
+        let g_buf = alloc_rows!(f32, bh * token_stride);
+        let beta_buf = alloc_rows!(f32, bh * token_stride);
+        let out_bf16 = match output_dtype {
+            DType::F32 => false,
+            DType::BF16 => true,
+            other => candle::bail!("GDN prepare cannot emit {other:?} projections"),
+        };
+        let stream = dev.cuda_stream().cu_stream() as i64;
+        macro_rules! prepare_with {
+            ($out:ty) => {{
+                let q_buf = alloc_rows!($out, bh * token_stride * head_k_dim);
+                let k_buf = alloc_rows!($out, bh * token_stride * head_k_dim);
+                let v_buf = alloc_rows!($out, bh * token_stride * head_v_dim);
+                unsafe {
+                    crate::cuda::ffi::gdn_prepare_recurrence(
+                        mixed_s.slice(mixed_offset..).device_ptr(mixed_s.stream()).0
+                            as *const c_void,
+                        b_s.slice(b_offset..).device_ptr(b_s.stream()).0 as *const c_void,
+                        a_s.slice(a_offset..).device_ptr(a_s.stream()).0 as *const c_void,
+                        alog_s.slice(alog_offset..).device_ptr(alog_s.stream()).0 as *const f32,
+                        dtb_s.slice(dtb_offset..).device_ptr(dtb_s.stream()).0 as *const f32,
+                        q_buf.device_ptr(q_buf.stream()).0 as *mut c_void,
+                        k_buf.device_ptr(k_buf.stream()).0 as *mut c_void,
+                        v_buf.device_ptr(v_buf.stream()).0 as *mut c_void,
+                        g_buf.device_ptr(g_buf.stream()).0 as *mut f32,
+                        beta_buf.device_ptr(beta_buf.stream()).0 as *mut f32,
+                        batch_size as i32,
+                        seq_len as i32,
+                        token_stride as i32,
+                        num_k_heads as i32,
+                        num_v_heads as i32,
+                        head_k_dim as i32,
+                        head_v_dim as i32,
+                        i32::from(tiled_v_heads),
+                        dtype_code,
+                        i32::from(out_bf16),
+                        stream,
+                    );
+                }
+                let wrap = |buf, last_dim| {
+                    Tensor::from((
+                        candle::Storage::Cuda(candle::CudaStorage::wrap_cuda_slice(
+                            buf,
+                            dev.clone(),
+                        )),
+                        (bh, token_stride, last_dim),
+                    ))
+                };
+                (
+                    wrap(q_buf, head_k_dim),
+                    wrap(k_buf, head_k_dim),
+                    wrap(v_buf, head_v_dim),
+                )
+            }};
+        }
+        let (q, k, v) = if out_bf16 {
+            prepare_with!(half::bf16)
+        } else {
+            prepare_with!(f32)
+        };
         let g = Tensor::from((
             candle::Storage::Cuda(candle::CudaStorage::wrap_cuda_slice(g_buf, dev.clone())),
-            (bh, seq_len),
+            (bh, token_stride),
         ));
         let beta = Tensor::from((
             candle::Storage::Cuda(candle::CudaStorage::wrap_cuda_slice(beta_buf, dev.clone())),
-            (bh, seq_len),
+            (bh, token_stride),
         ));
 
         Ok((q, k, v, g, beta))
     }
 
-    match mixed_qkv.dtype() {
-        DType::F16 => cuda_fwd::<half::f16>(
-            mixed_qkv,
-            b,
-            a,
-            a_log,
-            dt_bias,
-            batch_size,
-            seq_len,
-            num_k_heads,
-            num_v_heads,
-            head_k_dim,
-            head_v_dim,
-            tiled_v_heads,
-            0,
-        ),
-        DType::BF16 => cuda_fwd::<half::bf16>(
-            mixed_qkv,
-            b,
-            a,
-            a_log,
-            dt_bias,
-            batch_size,
-            seq_len,
-            num_k_heads,
-            num_v_heads,
-            head_k_dim,
-            head_v_dim,
-            tiled_v_heads,
-            1,
-        ),
+    match inputs.mixed_qkv.dtype() {
+        DType::F16 => cuda_fwd::<half::f16>(&inputs, 0),
+        DType::BF16 => cuda_fwd::<half::bf16>(&inputs, 1),
         other => candle_core::bail!(
             "prepare_recurrence_inputs_cuda only supports f16/bf16, got {:?}",
             other
@@ -2411,7 +2476,144 @@ pub fn try_fused_vmajor_prefill_recurrence_cuda(
     if requested.is_none() && flashinfer_supported {
         return flashinfer_sm90_prefill_dispatch(launch).map(Some);
     }
+    #[cfg(feature = "cutile")]
+    {
+        let cutile_supported = cutile_prefill_supported(&launch)?;
+        // prompt tails shorter than a chunk stay on the value-major kernel even when forced
+        let (_, seq_len, _) = launch.mixed_qkv.dims3()?;
+        let long_enough = seq_len >= CUTILE_GDN_MIN_SEQ_LEN;
+        if requested == Some(GdnPrefillKernel::Cutile) {
+            if !cutile_supported {
+                candle_core::bail!(
+                    "cuTile GDN prefill does not support this launch: {}",
+                    describe_prefill_launch(&launch)
+                );
+            }
+            if long_enough {
+                return cutile_prefill(launch).map(Some);
+            }
+        } else if requested.is_none() && cutile_supported && long_enough {
+            return cutile_prefill(launch).map(Some);
+        }
+    }
+    #[cfg(not(feature = "cutile"))]
+    if requested == Some(GdnPrefillKernel::Cutile) {
+        candle_core::bail!("cuTile GDN prefill requires the cutile feature");
+    }
     Ok(None)
+}
+
+#[cfg(all(feature = "cuda", feature = "cutile"))]
+const CUTILE_GDN_MIN_SEQ_LEN: usize = 64;
+
+#[cfg(all(feature = "cuda", feature = "cutile"))]
+fn describe_prefill_launch(launch: &FusedPrefillRecurrence<'_>) -> String {
+    let describe = |tensor: &Tensor| {
+        format!(
+            "{:?}{:?}{}",
+            tensor.dtype(),
+            tensor.dims(),
+            if tensor.is_contiguous() {
+                ""
+            } else {
+                " (strided)"
+            }
+        )
+    };
+    format!(
+        "batch {} heads {}/{} dims {}x{} tiled {} layout {:?} state {} mixed {} b {} a {} a_log {} dt_bias {} on {:?}",
+        launch.batch_size,
+        launch.num_k_heads,
+        launch.num_v_heads,
+        launch.head_k_dim,
+        launch.head_v_dim,
+        launch.tiled_v_heads,
+        launch.state_layout,
+        describe(launch.state),
+        describe(launch.mixed_qkv),
+        describe(launch.b),
+        describe(launch.a),
+        describe(launch.a_log),
+        describe(launch.dt_bias),
+        launch.mixed_qkv.device().location(),
+    )
+}
+
+#[cfg(all(feature = "cuda", feature = "cutile"))]
+fn cutile_prefill_supported(launch: &FusedPrefillRecurrence<'_>) -> Result<bool> {
+    if launch.batch_size == 0
+        || launch.num_k_heads == 0
+        || launch.num_v_heads < launch.num_k_heads
+        || !launch.num_v_heads.is_multiple_of(launch.num_k_heads)
+        || launch.state_layout != RecurrentStateLayout::GdnValueMajor
+        || launch.state.dtype() != DType::F32
+        || !launch.state.is_contiguous()
+        || [launch.mixed_qkv, launch.b, launch.a]
+            .iter()
+            .any(|tensor| tensor.dtype() != DType::BF16 || !tensor.is_contiguous())
+        || [launch.a_log, launch.dt_bias]
+            .iter()
+            .any(|tensor| tensor.dtype() != DType::F32 || !tensor.is_contiguous())
+    {
+        return Ok(false);
+    }
+    let (_, seq_len, _) = launch.mixed_qkv.dims3()?;
+    if i32::try_from(launch.batch_size * seq_len).is_err() {
+        return Ok(false);
+    }
+    let Device::Cuda(dev) = launch.mixed_qkv.device() else {
+        return Ok(false);
+    };
+    Ok(mistralrs_quant::cutile::gdn_prefill_supported(
+        dev,
+        launch.head_k_dim,
+        launch.head_v_dim,
+    ))
+}
+
+#[cfg(all(feature = "cuda", feature = "cutile"))]
+fn cutile_prefill(launch: FusedPrefillRecurrence<'_>) -> Result<FusedPrefillOutput> {
+    let (_, seq_len, _) = launch.mixed_qkv.dims3()?;
+    // whole chunks keep every cuTile shape and stride in one divisibility class (one JIT variant)
+    let token_stride = seq_len.div_ceil(mistralrs_quant::cutile::GDN_PREFILL_CHUNK)
+        * mistralrs_quant::cutile::GDN_PREFILL_CHUNK;
+    let (q, k, v, g, beta) = prepare_recurrence_inputs_cuda_typed(PrepareRecurrenceInputs {
+        mixed_qkv: launch.mixed_qkv,
+        b: launch.b,
+        a: launch.a,
+        a_log: launch.a_log,
+        dt_bias: launch.dt_bias,
+        batch_size: launch.batch_size,
+        seq_len,
+        token_stride,
+        num_k_heads: launch.num_k_heads,
+        num_v_heads: launch.num_v_heads,
+        head_k_dim: launch.head_k_dim,
+        head_v_dim: launch.head_v_dim,
+        tiled_v_heads: launch.tiled_v_heads,
+        output_dtype: DType::BF16,
+    })?;
+    let slots = match launch.slots {
+        GdnStateSlots::Pooled(slots) => Some(slots),
+        GdnStateSlots::Gathered => None,
+    };
+    let dev = launch.mixed_qkv.device().as_cuda_device()?;
+    let output = mistralrs_quant::cutile::cutile_gdn_prefill(
+        &mistralrs_quant::cutile::GdnPrefillArgs {
+            q: &q,
+            k: &k,
+            v: &v,
+            g: &g,
+            beta: &beta,
+            state: launch.state,
+            slots,
+            batch_size: launch.batch_size,
+            num_heads: launch.num_v_heads,
+            seq_len,
+        },
+        dev,
+    )?;
+    Ok(FusedPrefillOutput::TokenMajor(output))
 }
 
 #[cfg(feature = "cuda")]
@@ -3487,7 +3689,7 @@ pub fn speculative_recurrence_checkpoints_cuda(
             .then(|| unsafe { dev.alloc::<T>(output_elements) })
             .transpose()?;
         let mut quantized_output = fp8_layout
-            .map(|_| unsafe { dev.alloc::<F8E4M3>(output_elements) })
+            .map(|layout| unsafe { dev.alloc::<F8E4M3>(layout.quantized_elements()) })
             .transpose()?;
         let mut output_scales = fp8_layout
             .map(|layout| unsafe { dev.alloc::<f32>(layout.scale_elements) })
@@ -3628,8 +3830,9 @@ pub fn speculative_recurrence_checkpoints_cuda(
                     quantized_output.expect("FP8 output allocation follows its layout"),
                     dev.clone(),
                 )),
-                (layout.rows, layout.columns),
-            ));
+                (layout.scale_stride_m, layout.columns),
+            ))
+            .narrow(0, 0, layout.rows)?;
             let scale_shape = match spec.scale_layout {
                 ActivationScaleLayout::RowMajor => [layout.rows, layout.groups],
                 ActivationScaleLayout::GroupMajor { .. } => [layout.groups, layout.scale_stride_m],
@@ -3981,7 +4184,7 @@ pub fn deferred_recurrence_rmsnorm_gate_cuda(
         .then(|| unsafe { dev.alloc::<half::bf16>(output_elements) })
         .transpose()?;
     let mut quantized_output = fp8_layout
-        .map(|_| unsafe { dev.alloc::<F8E4M3>(output_elements) })
+        .map(|layout| unsafe { dev.alloc::<F8E4M3>(layout.quantized_elements()) })
         .transpose()?;
     let mut output_scales = fp8_layout
         .map(|layout| unsafe { dev.alloc::<f32>(layout.scale_elements) })
@@ -4085,8 +4288,9 @@ pub fn deferred_recurrence_rmsnorm_gate_cuda(
                 quantized_output.expect("FP8 output allocation follows its layout"),
                 dev.clone(),
             )),
-            (layout.rows, layout.columns),
-        ));
+            (layout.scale_stride_m, layout.columns),
+        ))
+        .narrow(0, 0, layout.rows)?;
         let scale_shape = match spec.scale_layout {
             ActivationScaleLayout::RowMajor => [layout.rows, layout.groups],
             ActivationScaleLayout::GroupMajor { .. } => [layout.groups, layout.scale_stride_m],
@@ -5460,7 +5664,7 @@ pub(crate) fn rmsnorm_gated_quantized_cuda(
     };
     let weight_storage = weight_storage.as_cuda_slice::<half::bf16>()?;
     let dev = x.device().as_cuda_device()?;
-    let output = unsafe { dev.alloc::<F8E4M3>(layout.rows * layout.columns) }?;
+    let output = unsafe { dev.alloc::<F8E4M3>(layout.quantized_elements()) }?;
     let scales = unsafe { dev.alloc::<f32>(layout.scale_elements) }?;
     let stream = dev.cuda_stream().cu_stream() as i64;
 
@@ -5501,8 +5705,9 @@ pub(crate) fn rmsnorm_gated_quantized_cuda(
 
     let output = Tensor::from((
         Storage::Cuda(CudaStorage::wrap_cuda_slice(output, dev.clone())),
-        Shape::from_dims(&[layout.rows, layout.columns]),
-    ));
+        Shape::from_dims(&[layout.scale_stride_m, layout.columns]),
+    ))
+    .narrow(0, 0, layout.rows)?;
     let scale_shape = match spec.scale_layout {
         ActivationScaleLayout::RowMajor => [layout.rows, layout.groups],
         ActivationScaleLayout::GroupMajor { .. } => [layout.groups, layout.scale_stride_m],
@@ -5809,6 +6014,10 @@ mod dispatch_tests {
 
     #[test]
     fn decode_kernel_override_is_forceable_and_validated() {
+        assert_eq!(
+            parse_prefill_kernel("cutile").unwrap(),
+            Some(GdnPrefillKernel::Cutile)
+        );
         assert_eq!(parse_decode_kernel("auto").unwrap(), None);
         assert_eq!(
             parse_decode_kernel("BASELINE").unwrap(),
@@ -6832,16 +7041,26 @@ mod tests {
         Ok(())
     }
 
-    #[cfg(has_flashinfer_gdn_sm90_kernel)]
+    #[cfg(any(has_flashinfer_gdn_sm90_kernel, feature = "cutile"))]
     #[derive(Clone, Copy)]
     enum FusedPrefillStateSource {
         Gathered,
         Pooled,
     }
 
-    #[cfg(has_flashinfer_gdn_sm90_kernel)]
+    #[cfg(any(has_flashinfer_gdn_sm90_kernel, feature = "cutile"))]
+    #[derive(Clone, Copy, Debug)]
+    enum FusedPrefillProvider {
+        #[cfg(has_flashinfer_gdn_sm90_kernel)]
+        FlashInferSm90,
+        #[cfg(feature = "cutile")]
+        Cutile,
+    }
+
+    #[cfg(any(has_flashinfer_gdn_sm90_kernel, feature = "cutile"))]
     #[derive(Clone, Copy)]
     struct FusedPrefillCase {
+        provider: FusedPrefillProvider,
         batch_size: usize,
         seq_len: usize,
         num_k_heads: usize,
@@ -6850,7 +7069,7 @@ mod tests {
         state_source: FusedPrefillStateSource,
     }
 
-    #[cfg(has_flashinfer_gdn_sm90_kernel)]
+    #[cfg(any(has_flashinfer_gdn_sm90_kernel, feature = "cutile"))]
     fn run_fused_prefill_case(dev: &Device, case: FusedPrefillCase) -> Result<()> {
         const HEAD_DIM: usize = 128;
         const POOLED_PADDING_BATCH: usize = 1;
@@ -6966,7 +7185,7 @@ mod tests {
             slots,
         )?;
         let mut fused_state = initial.copy()?;
-        let fused_output = flashinfer_sm90_prefill_dispatch(FusedPrefillRecurrence {
+        let launch = FusedPrefillRecurrence {
             mixed_qkv: &mixed_qkv,
             b: &b,
             a: &a,
@@ -6981,7 +7200,13 @@ mod tests {
             tiled_v_heads: case.tiled_v_heads,
             state_layout: RecurrentStateLayout::GdnValueMajor,
             slots,
-        })?;
+        };
+        let fused_output = match case.provider {
+            #[cfg(has_flashinfer_gdn_sm90_kernel)]
+            FusedPrefillProvider::FlashInferSm90 => flashinfer_sm90_prefill_dispatch(launch)?,
+            #[cfg(feature = "cutile")]
+            FusedPrefillProvider::Cutile => cutile_prefill(launch)?,
+        };
         let fused_output = match fused_output {
             FusedPrefillOutput::TokenMajor(output) => output
                 .transpose(1, 2)?
@@ -6994,7 +7219,8 @@ mod tests {
             FusedPrefillStateSource::Pooled => "pooled",
         };
         let label = format!(
-            "FlashInferSm90 B={} S={} HK={} HV={} tiled={} {:?} {source}",
+            "{:?} B={} S={} HK={} HV={} tiled={} {:?} {source}",
+            case.provider,
             case.batch_size,
             case.seq_len,
             case.num_k_heads,
@@ -7117,6 +7343,7 @@ mod tests {
         let dev = Device::new_cuda(0)?;
         for case in [
             FusedPrefillCase {
+                provider: FusedPrefillProvider::FlashInferSm90,
                 batch_size: 3,
                 seq_len: 65,
                 num_k_heads: 16,
@@ -7125,11 +7352,51 @@ mod tests {
                 state_source: FusedPrefillStateSource::Pooled,
             },
             FusedPrefillCase {
+                provider: FusedPrefillProvider::FlashInferSm90,
                 batch_size: 1,
                 seq_len: 129,
                 num_k_heads: 16,
                 num_v_heads: 48,
                 tiled_v_heads: false,
+                state_source: FusedPrefillStateSource::Gathered,
+            },
+        ] {
+            run_fused_prefill_case(&dev, case)?;
+        }
+        Ok(())
+    }
+
+    #[cfg(feature = "cutile")]
+    #[test]
+    #[ignore = "requires a CUDA device"]
+    fn cutile_prefill_matches_sequential_recurrence() -> Result<()> {
+        let dev = Device::new_cuda(0)?;
+        for case in [
+            FusedPrefillCase {
+                provider: FusedPrefillProvider::Cutile,
+                batch_size: 3,
+                seq_len: 65,
+                num_k_heads: 16,
+                num_v_heads: 48,
+                tiled_v_heads: false,
+                state_source: FusedPrefillStateSource::Pooled,
+            },
+            FusedPrefillCase {
+                provider: FusedPrefillProvider::Cutile,
+                batch_size: 1,
+                seq_len: 129,
+                num_k_heads: 16,
+                num_v_heads: 48,
+                tiled_v_heads: false,
+                state_source: FusedPrefillStateSource::Gathered,
+            },
+            FusedPrefillCase {
+                provider: FusedPrefillProvider::Cutile,
+                batch_size: 2,
+                seq_len: 512,
+                num_k_heads: 16,
+                num_v_heads: 48,
+                tiled_v_heads: true,
                 state_source: FusedPrefillStateSource::Gathered,
             },
         ] {

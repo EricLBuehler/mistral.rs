@@ -3025,7 +3025,8 @@ pub(crate) fn fused_glu_quantized_bf16(
     if scale_stride_m < rows {
         return Ok(None);
     }
-    let output_elements = rows
+    // padded to the scale stride so group-major GEMMs can read whole aligned row blocks
+    let output_elements = scale_stride_m
         .checked_mul(columns)
         .ok_or_else(|| candle_core::Error::msg("fused GLU FP8 output size overflows usize"))?;
     let scale_groups = columns / scale_group_size;
@@ -3078,8 +3079,9 @@ pub(crate) fn fused_glu_quantized_bf16(
 
     let output = Tensor::from((
         Storage::Cuda(CudaStorage::wrap_cuda_slice(output, device.clone())),
-        Shape::from_dims(&[rows, columns]),
-    ));
+        Shape::from_dims(&[scale_stride_m, columns]),
+    ))
+    .narrow(0, 0, rows)?;
     let scales = Tensor::from((
         Storage::Cuda(CudaStorage::wrap_cuda_slice(scales, device.clone())),
         Shape::from_dims(&[scale_groups, scale_stride_m]),
@@ -3219,7 +3221,8 @@ pub fn fused_split_glu(
     feature = "cuda",
     any(
         test,
-        all(has_cutlass_fp8_sm90_kernels, has_deepgemm_fp8_sm90_provider)
+        all(has_cutlass_fp8_sm90_kernels, has_deepgemm_fp8_sm90_provider),
+        all(has_blockwise_fp8_kernels, feature = "cutile")
     )
 ))]
 pub(crate) fn fused_split_glu_quantized_bf16(
@@ -3266,7 +3269,8 @@ pub(crate) fn fused_split_glu_quantized_bf16(
         candle_core::bail!("fused split GLU FP8 quantization scale stride is too small");
     }
     let scale_groups = split_size / scale_group_size;
-    let output_elements = rows
+    // padded to the scale stride so group-major GEMMs can read whole aligned row blocks
+    let output_elements = scale_stride_m
         .checked_mul(split_size)
         .ok_or_else(|| candle_core::Error::msg("fused split GLU FP8 output size overflow"))?;
     let scale_elements = scale_groups
@@ -3308,8 +3312,10 @@ pub(crate) fn fused_split_glu_quantized_bf16(
     output_shape.push(split_size);
     let output = Tensor::from((
         Storage::Cuda(CudaStorage::wrap_cuda_slice(output, device.clone())),
-        Shape::from_dims(&output_shape),
-    ));
+        Shape::from_dims(&[scale_stride_m, split_size]),
+    ))
+    .narrow(0, 0, rows)?
+    .reshape(output_shape)?;
     let scales = Tensor::from((
         Storage::Cuda(CudaStorage::wrap_cuda_slice(scales, device.clone())),
         Shape::from_dims(&[scale_groups, scale_stride_m]),
