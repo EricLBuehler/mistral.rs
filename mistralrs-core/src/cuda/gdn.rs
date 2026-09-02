@@ -13,10 +13,8 @@ use crate::kv_cache::GDN_PENDING_KEY_BANK_COUNT;
 #[cfg_attr(not(feature = "cuda"), allow(dead_code))]
 pub(crate) const GDN_PAD_SLOT: u32 = u32::MAX;
 
-#[cfg(any(feature = "cuda", test))]
-const GDN_DECODE_MIN_COMPUTE_MAJOR: i32 = 9;
 #[cfg_attr(not(any(feature = "cuda", test)), allow(dead_code))]
-const GDN_DECODE_TUNED_COMPUTE_MAJOR: i32 = 9;
+const GDN_DECODE_MIN_COMPUTE_MAJOR: i32 = 8;
 pub(crate) const GDN_DECODE_K_DIM: usize = 128;
 pub(crate) const GDN_DECODE_V_DIM: usize = 128;
 #[cfg(any(feature = "cuda", test))]
@@ -301,7 +299,7 @@ struct GdnPrefillPolicy {
 fn prefill_kernel_supported(kernel: GdnPrefillKernel, policy: GdnPrefillPolicy) -> bool {
     kernel != GdnPrefillKernel::FlashInferSm90
         && policy.state_layout == RecurrentStateLayout::GdnValueMajor
-        && policy.compute_major == GDN_DECODE_TUNED_COMPUTE_MAJOR
+        && policy.compute_major >= GDN_DECODE_MIN_COMPUTE_MAJOR
         && policy.multiprocessor_count > 0
         && policy.state_blocks > 0
         && policy.seq_len > 0
@@ -400,7 +398,7 @@ fn decode_kernel_supported(kernel: GdnDecodeKernel, policy: GdnDecodePolicy) -> 
         }
         GdnDecodeKernel::ValueMajor4 | GdnDecodeKernel::ValueMajor32 => {
             policy.state_layout == RecurrentStateLayout::GdnValueMajor
-                && policy.compute_major == GDN_DECODE_TUNED_COMPUTE_MAJOR
+                && policy.compute_major >= GDN_DECODE_MIN_COMPUTE_MAJOR
                 && policy.bf16
                 && policy.vector_aligned
                 && policy.head_k_dim == GDN_DECODE_K_DIM
@@ -425,7 +423,7 @@ fn automatic_decode_kernel(policy: GdnDecodePolicy) -> GdnDecodeKernel {
         }
         return GdnDecodeKernel::ValueMajor4;
     }
-    if policy.compute_major != GDN_DECODE_TUNED_COMPUTE_MAJOR || policy.multiprocessor_count == 0 {
+    if policy.multiprocessor_count == 0 {
         return GdnDecodeKernel::Baseline;
     }
 
@@ -565,7 +563,7 @@ pub(crate) fn v_major_state_supported(
             return Ok(false);
         }
         let properties = gdn_cuda_device_properties(device.as_cuda_device()?)?;
-        Ok(properties.compute_major == GDN_DECODE_TUNED_COMPUTE_MAJOR)
+        Ok(properties.compute_major >= GDN_DECODE_MIN_COMPUTE_MAJOR)
     }
     #[cfg(not(feature = "cuda"))]
     {
@@ -2268,7 +2266,7 @@ fn flashinfer_sm90_prefill_supported(launch: &FusedPrefillRecurrence<'_>) -> Res
         }
         Ok(
             gdn_cuda_device_properties(device.as_cuda_device()?)?.compute_major
-                == GDN_DECODE_TUNED_COMPUTE_MAJOR,
+                >= GDN_DECODE_MIN_COMPUTE_MAJOR,
         )
     }
 }
@@ -3841,9 +3839,9 @@ pub fn deferred_recurrence_rmsnorm_gate_cuda(
         candle::bail!("deferred GDN recurrence requires CUDA");
     }
     if gdn_cuda_device_properties(device.as_cuda_device()?)?.compute_major
-        != GDN_DECODE_TUNED_COMPUTE_MAJOR
+        < GDN_DECODE_MIN_COMPUTE_MAJOR
     {
-        candle::bail!("deferred GDN recurrence requires compute capability 9.x");
+        candle::bail!("deferred GDN recurrence requires compute capability 8.0 or newer");
     }
     let fp8_layout = quantization
         .as_ref()
@@ -4198,9 +4196,9 @@ fn launch_deferred_state_cuda(
     let device = state_pool.device();
     if !device.is_cuda()
         || gdn_cuda_device_properties(device.as_cuda_device()?)?.compute_major
-            != GDN_DECODE_TUNED_COMPUTE_MAJOR
+            < GDN_DECODE_MIN_COMPUTE_MAJOR
     {
-        candle::bail!("deferred GDN materialization requires compute capability 9.x CUDA");
+        candle::bail!("deferred GDN materialization requires compute capability 8.0 or newer");
     }
     let dev = device.as_cuda_device()?;
     if !std::sync::Arc::ptr_eq(dev.cuda_stream().context(), stream.context()) {
@@ -5724,19 +5722,21 @@ mod dispatch_tests {
     }
 
     #[test]
-    fn automatic_decode_dispatch_requires_a_tuned_architecture_and_shape() {
+    fn automatic_decode_dispatch_requires_a_supported_architecture_and_shape() {
         let mut unsupported = sm90_policy(12 * TEST_SM_COUNT);
-        unsupported.compute_major = 8;
+        unsupported.compute_major = 7;
         assert_eq!(
             automatic_decode_kernel(unsupported),
             GdnDecodeKernel::Baseline
         );
-        unsupported = sm90_policy(12 * TEST_SM_COUNT);
-        unsupported.compute_major = 10;
-        assert_eq!(
-            automatic_decode_kernel(unsupported),
-            GdnDecodeKernel::Baseline
-        );
+        for compute_major in [8, 10, 12] {
+            let mut supported = sm90_policy(12 * TEST_SM_COUNT);
+            supported.compute_major = compute_major;
+            assert_eq!(
+                automatic_decode_kernel(supported),
+                GdnDecodeKernel::Pipelined
+            );
+        }
         unsupported = sm90_policy(12 * TEST_SM_COUNT);
         unsupported.head_k_dim = 64;
         assert_eq!(
@@ -5785,11 +5785,19 @@ mod dispatch_tests {
             unsupported
         ));
         unsupported = sm90_value_major_policy(8);
-        unsupported.compute_major = 10;
+        unsupported.compute_major = 7;
         assert!(!super::decode_kernel_supported(
             GdnDecodeKernel::ValueMajor32,
             unsupported
         ));
+        for compute_major in [8, 10, 12] {
+            let mut supported = sm90_value_major_policy(8);
+            supported.compute_major = compute_major;
+            assert_eq!(
+                automatic_decode_kernel(supported),
+                GdnDecodeKernel::ValueMajor32
+            );
+        }
     }
 
     #[test]
@@ -5830,15 +5838,15 @@ mod dispatch_tests {
             GdnDecodeKernel::Baseline
         );
         let mut unsupported = policy;
-        unsupported.compute_major = 8;
+        unsupported.compute_major = 7;
         assert_eq!(
             select_decode_kernel(unsupported, Some(GdnDecodeKernel::Pipelined)),
             Err(GdnDecodeKernel::Pipelined)
         );
-        let mut untuned = policy;
-        untuned.compute_major = 10;
+        let mut blackwell = policy;
+        blackwell.compute_major = 12;
         assert_eq!(
-            select_decode_kernel(untuned, Some(GdnDecodeKernel::Pipelined)).unwrap(),
+            select_decode_kernel(blackwell, Some(GdnDecodeKernel::Pipelined)).unwrap(),
             GdnDecodeKernel::Pipelined
         );
     }
@@ -5905,10 +5913,16 @@ mod dispatch_tests {
         }
 
         let mut unsupported = policy;
-        unsupported.compute_major = 8;
+        unsupported.compute_major = 7;
         assert_eq!(
             select_prefill_kernel(unsupported, Some(GdnPrefillKernel::ValueMajor4)),
             Err(GdnPrefillKernel::ValueMajor4)
+        );
+        let mut blackwell = policy;
+        blackwell.compute_major = 12;
+        assert_eq!(
+            select_prefill_kernel(blackwell, Some(GdnPrefillKernel::ValueMajor4)),
+            Ok(GdnPrefillKernel::ValueMajor4)
         );
         unsupported = policy;
         unsupported.bf16 = false;
@@ -6649,7 +6663,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "requires an SM90 CUDA device"]
+    #[ignore = "requires a CUDA device"]
     fn value_major_grouped_prefill_matches_warp_at_sequence_boundaries() -> Result<()> {
         const BH: usize = 48;
         const HEAD_DIM: usize = 128;
@@ -6725,7 +6739,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "requires an SM90 CUDA device"]
+    #[ignore = "requires a CUDA device"]
     fn value_major_grouped_prefill_preserves_pooled_padding() -> Result<()> {
         const BATCH_SIZE: usize = 3;
         const NUM_HEADS: usize = 48;
@@ -7239,8 +7253,8 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "requires an SM90 CUDA device"]
-    fn sm90_value_major_decode_repeats_with_shuffled_slots() -> Result<()> {
+    #[ignore = "requires a CUDA device"]
+    fn value_major_decode_repeats_with_shuffled_slots() -> Result<()> {
         let dev = Device::new_cuda(0)?;
         for case in [
             ValueMajorDecodeCase {
@@ -7750,7 +7764,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "requires an SM90 CUDA device"]
+    #[ignore = "requires a CUDA device"]
     fn speculative_checkpoint_kernels_match_serial_cuda() -> Result<()> {
         let dev = Device::new_cuda(0)?;
         let batch_size = 3;
@@ -8791,7 +8805,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "requires an SM90 CUDA device"]
+    #[ignore = "requires a CUDA device"]
     fn speculative_transition_commit_matches_prefix_replay_cuda() -> Result<()> {
         let dev = Device::new_cuda(0)?;
         for seq_len in [4, 8] {
@@ -9183,8 +9197,8 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "requires an SM90 CUDA device"]
-    fn sm90_fused_decode_kernel_variants_match_decomposed_cuda() -> Result<()> {
+    #[ignore = "requires a CUDA device"]
+    fn fused_decode_kernel_variants_match_decomposed_cuda() -> Result<()> {
         let dev = Device::new_cuda(0)?;
         run_fused_decode_case(
             &dev,
@@ -9675,7 +9689,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "requires an SM90 CUDA device"]
+    #[ignore = "requires a CUDA device"]
     fn rmsnorm_gated_quantized_matches_bf16_rounding_cuda() -> Result<()> {
         use std::num::NonZeroUsize;
 
@@ -10312,7 +10326,7 @@ mod tests {
                 )?;
             }
         }
-        if properties.compute_major == GDN_DECODE_TUNED_COMPUTE_MAJOR {
+        if properties.compute_major >= GDN_DECODE_MIN_COMPUTE_MAJOR {
             for kernel in [GdnDecodeKernel::ValueMajor4, GdnDecodeKernel::ValueMajor32] {
                 run_fused_decode_padding_case(
                     &dev,
@@ -10328,7 +10342,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "requires an SM90 CUDA device"]
+    #[ignore = "requires a CUDA device"]
     fn deferred_decode_matches_eager_across_wrap_and_flush_cuda() -> Result<()> {
         const BATCH_SIZE: usize = 3;
         const CAPACITY: usize = 5;
