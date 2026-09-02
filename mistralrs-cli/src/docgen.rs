@@ -16,7 +16,7 @@ const COMMITTED_DIR: &str = concat!(
     "/../docs/src/content/docs/reference/cli"
 );
 const OUT_DIR_ENV: &str = "CLI_DOCS_OUT";
-const LINK_BASE: &str = "/mistral.rs/reference/cli";
+const LINK_BASE: &str = "/reference/cli";
 const REGEN_HINT: &str = "cargo test -p mistralrs-cli regenerate_cli_reference -- --ignored";
 const GENERATED_NOTICE: &str =
     "<!-- Generated from clap definitions by mistralrs-cli docgen. Do not edit. -->\n\n";

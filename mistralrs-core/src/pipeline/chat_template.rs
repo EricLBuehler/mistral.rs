@@ -8,7 +8,7 @@ use minijinja::{context, value::Kwargs, Environment, Error, ErrorKind, Value};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use tokenizers::Tokenizer;
-use tracing::trace;
+use tracing::{trace, warn};
 
 use crate::{tools::ToolCallFormat, MessageContent, ModelGenerationDefaults, Tool};
 
@@ -38,8 +38,22 @@ pub struct AddedTokensDecoder {
     special: Option<bool>,
 }
 
+#[derive(Debug, thiserror::Error)]
+#[error("{0}")]
+pub(crate) struct ChatTemplateRequestError(String);
+
+#[doc(hidden)]
+pub fn is_chat_template_request_error(error: &anyhow::Error) -> bool {
+    error
+        .chain()
+        .any(|source| source.is::<ChatTemplateRequestError>())
+}
+
 fn raise_exception(msg: String) -> Result<String, minijinja::Error> {
-    Err(minijinja::Error::new(ErrorKind::InvalidOperation, msg))
+    Err(
+        minijinja::Error::new(ErrorKind::InvalidOperation, msg.clone())
+            .with_source(ChatTemplateRequestError(msg)),
+    )
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -194,9 +208,10 @@ pub fn calculate_eos_tokens(
                 Either::Right(ids) => ids.clone(),
             };
             for id in ids {
-                let s = tokenizer
-                    .decode(&[id], false)
-                    .unwrap_or_else(|_| panic!("Unable to decode id {id})"));
+                let Ok(s) = tokenizer.decode(&[id], false) else {
+                    warn!("Ignoring generation config EOS token id {id}: not in the tokenizer vocabulary");
+                    continue;
+                };
                 if !eos_tok_ids.contains(&s) {
                     eos_tok_ids.push(s);
                 }
@@ -281,6 +296,28 @@ pub struct GenerationConfig {
 }
 
 impl GenerationConfig {
+    /// HF `GenerationConfig.from_model_config`: without a generation_config.json the model config's own
+    /// generation fields apply, with a nested `text_config` filling anything the top level leaves unset.
+    pub fn from_model_config(config_json: &str) -> Option<Self> {
+        let raw: serde_json::Value = serde_json::from_str(config_json).ok()?;
+        let mut conf: GenerationConfig = serde_json::from_value(raw.clone()).ok()?;
+        if let Some(nested) = raw.get("text_config").cloned() {
+            if let Ok(nested) = serde_json::from_value::<GenerationConfig>(nested) {
+                conf.bos_token_id = conf.bos_token_id.or(nested.bos_token_id);
+                conf.eos_token_id = conf.eos_token_id.or(nested.eos_token_id);
+                conf.do_sample = conf.do_sample.or(nested.do_sample);
+                conf.temperature = conf.temperature.or(nested.temperature);
+                conf.top_k = conf.top_k.or(nested.top_k);
+                conf.top_p = conf.top_p.or(nested.top_p);
+                conf.min_p = conf.min_p.or(nested.min_p);
+                conf.repetition_penalty = conf.repetition_penalty.or(nested.repetition_penalty);
+            }
+        }
+        conf.max_new_tokens = None;
+        conf.max_length = None;
+        Some(conf)
+    }
+
     pub(crate) fn validate_token_ids(&self, vocab_size: usize) -> Result<()> {
         for (field, value) in [
             ("bos_token_id", self.bos_token_id.as_ref()),
@@ -353,31 +390,59 @@ fn tojson(value: Value, kwargs: Kwargs) -> Result<Value, Error> {
             Error::new(ErrorKind::BadSerialization, "cannot serialize to JSON").with_source(err)
         })
     } else {
-        serde_json::to_string(&value).map_err(|err| {
+        // Python's json.dumps default separators, which is what HF templates were rendered with
+        let mut buf = Vec::new();
+        let mut ser = serde_json::Serializer::with_formatter(&mut buf, PythonCompactFormatter);
+        value.serialize(&mut ser).map_err(|err| {
+            Error::new(ErrorKind::BadSerialization, "cannot serialize to JSON").with_source(err)
+        })?;
+        String::from_utf8(buf).map_err(|err| {
             Error::new(ErrorKind::BadSerialization, "cannot serialize to JSON").with_source(err)
         })
     }
     .map_err(|err| {
         Error::new(ErrorKind::InvalidOperation, "cannot serialize to JSON").with_source(err)
     })
-    .map(|s| {
-        // When this filter is used the return value is safe for both HTML and JSON
-        let mut rv = String::with_capacity(s.len());
-        for c in s.chars() {
-            match c {
-                '<' => rv.push_str("\\u003c"),
-                '>' => rv.push_str("\\u003e"),
-                '&' => rv.push_str("\\u0026"),
-                '\'' => rv.push_str("\\u0027"),
-                _ => rv.push(c),
-            }
+    // HF's tojson does not HTML-escape, so neither can we without changing the prompt
+    .map(Value::from_safe_string)
+}
+
+#[derive(Default)]
+struct PythonCompactFormatter;
+
+impl serde_json::ser::Formatter for PythonCompactFormatter {
+    fn begin_array_value<W: std::io::Write + ?Sized>(
+        &mut self,
+        writer: &mut W,
+        first: bool,
+    ) -> std::io::Result<()> {
+        if !first {
+            writer.write_all(b", ")?;
         }
-        Value::from_safe_string(rv)
-    })
+        Ok(())
+    }
+
+    fn begin_object_key<W: std::io::Write + ?Sized>(
+        &mut self,
+        writer: &mut W,
+        first: bool,
+    ) -> std::io::Result<()> {
+        if !first {
+            writer.write_all(b", ")?;
+        }
+        Ok(())
+    }
+
+    fn begin_object_value<W: std::io::Write + ?Sized>(
+        &mut self,
+        writer: &mut W,
+    ) -> std::io::Result<()> {
+        writer.write_all(b": ")
+    }
 }
 
 fn strftime_now(fmt: String) -> Result<String, minijinja::Error> {
-    let date = chrono::Utc::now();
+    let date = chrono::Local::now();
     let date_string = date.format(&fmt).to_string();
     Ok(date_string)
 }
@@ -470,6 +535,45 @@ fn parse_tool_call_arguments(messages: &mut [IndexMap<String, MessageContent>]) 
             }
         }
     }
+}
+
+// Schema keys most templates were trained on come first; the rest is alphabetical so renders stay deterministic
+const TOOL_PARAMETER_KEY_ORDER: &[&str] =
+    &["type", "properties", "required", "additionalProperties"];
+
+fn tool_template_value(tool: &Tool) -> serde_json::Value {
+    let mut function = serde_json::Map::new();
+    function.insert(
+        "name".to_string(),
+        serde_json::Value::String(tool.function.name.clone()),
+    );
+    if let Some(description) = &tool.function.description {
+        function.insert(
+            "description".to_string(),
+            serde_json::Value::String(description.clone()),
+        );
+    }
+    if let Some(parameters) = &tool.function.parameters {
+        let mut keys = parameters.keys().collect::<Vec<_>>();
+        keys.sort_by_key(|key| {
+            (
+                TOOL_PARAMETER_KEY_ORDER
+                    .iter()
+                    .position(|known| known == key)
+                    .unwrap_or(TOOL_PARAMETER_KEY_ORDER.len()),
+                key.as_str(),
+            )
+        });
+        let ordered = keys
+            .into_iter()
+            .map(|key| (key.clone(), parameters[key].clone()))
+            .collect::<serde_json::Map<_, _>>();
+        function.insert("parameters".to_string(), serde_json::Value::Object(ordered));
+    }
+    if let Some(strict) = tool.function.strict {
+        function.insert("strict".to_string(), serde_json::Value::Bool(strict));
+    }
+    serde_json::json!({ "type": tool.tp, "function": function })
 }
 
 fn clear_assistant_tool_call_content(messages: &mut [IndexMap<String, MessageContent>]) {
@@ -638,9 +742,11 @@ pub fn apply_chat_template_to(
             let must_use_tool_template = !tools.is_empty();
 
             if must_use_tool_template && !has_tool_use {
-                anyhow::bail!(
+                return Err(ChatTemplateRequestError(
                     "Tools were provided but this chat template does not handle tool usage"
-                );
+                        .to_string(),
+                )
+                .into());
             }
 
             let mut found_template = None;
@@ -716,7 +822,7 @@ pub fn apply_chat_template_to(
     env.add_function("strftime_now", strftime_now);
     let tmpl = env.get_template("chat_template")?;
 
-    let date = chrono::Utc::now();
+    let date = chrono::Local::now();
     let date_string = date.format("%d, %B, %Y").to_string();
 
     let reasoning_controls = resolve_reasoning_controls(enable_thinking, reasoning_effort)?;
@@ -750,6 +856,7 @@ pub fn apply_chat_template_to(
 
     let is_gemma4 = is_gemma4_tool_template(&resolved_template);
 
+    let tools = tools.iter().map(tool_template_value).collect::<Vec<_>>();
     let mut rendered = if tools.is_empty() {
         tmpl.render(context! {
             messages => new_messages,
@@ -793,6 +900,8 @@ pub fn apply_chat_template_to(
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
     use either::Either;
     use indexmap::IndexMap;
     use serde_json::Value;
@@ -802,7 +911,9 @@ mod tests {
         template_tool_call_format, ChatTemplate, ChatTemplateValue, GenerationConfig,
         ReasoningEffort,
     };
-    use crate::{tools::ToolCallFormat, MessageContent, DEFAULT_ENABLE_THINKING};
+    use crate::{
+        tools::ToolCallFormat, Function, MessageContent, Tool, ToolType, DEFAULT_ENABLE_THINKING,
+    };
     use tokenizers::Tokenizer;
 
     fn user_text_message(text: &str) -> IndexMap<String, MessageContent> {
@@ -827,6 +938,58 @@ mod tests {
         }))
         .unwrap();
         assert!(invalid.validate_token_ids(4).is_err());
+    }
+
+    #[test]
+    fn intentional_template_rejections_keep_validation_identity() {
+        let template = ChatTemplateValue(Either::Left(
+            "{{ raise_exception('messages must alternate') }}".to_string(),
+        ));
+        let error = apply_chat_template_to(
+            vec![user_text_message("hello")],
+            false,
+            None,
+            None,
+            &template,
+            None,
+            None,
+            None,
+            Vec::new(),
+        )
+        .unwrap_err();
+
+        assert!(super::is_chat_template_request_error(&error));
+    }
+
+    #[test]
+    fn tools_require_a_compatible_template() {
+        let template = ChatTemplateValue(Either::Right(vec![HashMap::from([
+            ("name".to_string(), "default".to_string()),
+            ("template".to_string(), "{{ messages }}".to_string()),
+        ])]));
+        let tool = Tool {
+            tp: ToolType::Function,
+            function: Function {
+                name: "lookup".to_string(),
+                description: None,
+                parameters: None,
+                strict: None,
+            },
+        };
+        let error = apply_chat_template_to(
+            vec![user_text_message("hello")],
+            false,
+            None,
+            None,
+            &template,
+            None,
+            None,
+            None,
+            vec![tool],
+        )
+        .unwrap_err();
+
+        assert!(super::is_chat_template_request_error(&error));
     }
 
     #[test]

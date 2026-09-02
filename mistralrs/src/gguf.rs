@@ -55,6 +55,7 @@ pub struct GgufModelBuilder {
     pub(crate) lora_adapters: Option<Vec<LoraAdapterSpec>>,
     pub(crate) lora_runtime_config: LoraRuntimeConfig,
     pub(crate) mtp_config: Option<MtpConfig>,
+    pub(crate) encoder_cache_memory_bytes: Option<usize>,
 }
 
 impl GgufModelBuilder {
@@ -104,6 +105,7 @@ impl GgufModelBuilder {
             lora_adapters: None,
             lora_runtime_config: LoraRuntimeConfig::default(),
             mtp_config: None,
+            encoder_cache_memory_bytes: None,
             organization: IsqOrganization::Default,
             isq: None,
         }
@@ -263,6 +265,15 @@ impl GgufModelBuilder {
     /// Cap a multimodal model's runtime context length.
     pub fn with_max_model_len(mut self, max_model_len: usize) -> Self {
         self.max_model_len = Some(max_model_len);
+        self
+    }
+
+    pub fn with_encoder_cache_memory_bytes(mut self, max_bytes: usize) -> Self {
+        assert!(
+            max_bytes > 0,
+            "encoder cache memory capacity must be nonzero"
+        );
+        self.encoder_cache_memory_bytes = Some(max_bytes);
         self
     }
 

@@ -12,7 +12,7 @@ use crate::args::{
     ModelType, MultimodalAdapterOptions, MultimodalOptions, PagedAttentionOptions,
     QuantizationOptions, RuntimeOptions, SandboxOptions, ServerOptions,
 };
-use mistralrs_core::{ModelDType, NormalLoaderType, ReasoningEffort, TokenSource};
+use mistralrs_core::{ModelDType, NormalLoaderType, ReasoningEffort, SpeechLoaderType, TokenSource};
 
 #[derive(Deserialize)]
 #[serde(tag = "command", rename_all = "kebab-case")]
@@ -99,6 +99,10 @@ pub struct ModelEntry {
     pub voice: Option<String>,
     #[serde(default)]
     pub dtype: ModelDType,
+    #[serde(default)]
+    pub hf_overrides: Option<mistralrs_core::HfConfigOverrides>,
+    #[serde(default)]
+    pub max_model_len: Option<usize>,
     #[serde(default)]
     pub format: FormatOptions,
     #[serde(default)]
@@ -193,6 +197,9 @@ fn validate_config(config: &CliConfig) -> Result<()> {
 
     let mut cpu_setting: Option<bool> = None;
     for model in models {
+        if model.max_model_len == Some(0) {
+            anyhow::bail!("max_model_len must be greater than zero");
+        }
         model
             .adapter
             .validate()
@@ -259,6 +266,8 @@ impl ModelEntry {
             tokenizer: self.tokenizer.clone(),
             arch: self.arch.clone(),
             dtype: self.dtype,
+            hf_overrides: self.hf_overrides.clone(),
+            max_model_len: self.max_model_len,
         };
 
         let device = self.device.to_device_options(cpu);

@@ -1,0 +1,410 @@
+:root {
+  --background: #070605;
+  --surface: #0d0b0a;
+  --surface-raised: #15110f;
+  --foreground: #f8f6f3;
+  --muted: #8f8781;
+  --muted-strong: #bbb2ab;
+  --line: #28211d;
+  --line-strong: #413229;
+  --accent: #e8772e;
+  --accent-soft: #ffa56b;
+  --page-width: 820px;
+  --font-terminal: "SFMono-Regular", Menlo, Monaco, Consolas, "Liberation Mono",
+    "DejaVu Sans Mono", monospace;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  color-scheme: dark;
+}
+
+body {
+  margin: 0;
+  overflow-x: hidden;
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-terminal);
+  font-variant-ligatures: none;
+  text-rendering: optimizeLegibility;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+button {
+  font: inherit;
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+
+.site-shell {
+  min-height: 100svh;
+}
+
+.skip-link {
+  position: fixed;
+  top: 12px;
+  left: 12px;
+  z-index: 10;
+  padding: 10px 14px;
+  border-radius: 6px;
+  background: var(--foreground);
+  color: var(--background);
+  transform: translateY(-150%);
+}
+
+.skip-link:focus {
+  transform: translateY(0);
+}
+
+.hero {
+  width: min(calc(100% - 48px), var(--page-width));
+  min-height: calc(100svh - 72px);
+  margin: 0 auto;
+  padding: 104px 0 88px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+}
+
+.hero h1 {
+  margin: 0;
+  font-size: clamp(4rem, 12vw, 7rem);
+  font-weight: 500;
+  letter-spacing: -0.075em;
+  line-height: 0.95;
+  white-space: nowrap;
+}
+
+.hero h1 span {
+  color: var(--accent);
+}
+
+.hero-tagline {
+  margin: 22px 0 0;
+  color: var(--muted-strong);
+  font-size: clamp(1.0625rem, 2.3vw, 1.3125rem);
+  letter-spacing: -0.015em;
+  white-space: nowrap;
+}
+
+.install-card {
+  width: min(100%, 720px);
+  margin-top: 52px;
+  overflow: hidden;
+  border: 1px solid var(--line-strong);
+  border-radius: 10px;
+  background: var(--surface);
+}
+
+.platform-tabs {
+  display: flex;
+  gap: 4px;
+  padding: 6px;
+  border-bottom: 1px solid var(--line);
+}
+
+.platform-tabs button {
+  padding: 8px 12px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 13px;
+  transition: background-color 150ms ease, color 150ms ease;
+}
+
+.platform-tabs button[aria-selected="true"] {
+  background: var(--surface-raised);
+  color: var(--foreground);
+}
+
+.platform-tabs button:hover,
+.platform-tabs button:focus-visible {
+  color: var(--foreground);
+}
+
+.command-row {
+  min-height: 62px;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 11px;
+  padding-left: 18px;
+}
+
+.command-row .prompt {
+  color: var(--accent);
+}
+
+.command-row code {
+  min-width: 0;
+  overflow-x: auto;
+  padding: 20px 0;
+  color: #ded8d3;
+  font-size: 15px;
+  text-align: left;
+  white-space: nowrap;
+  scrollbar-width: none;
+}
+
+.copy-button {
+  align-self: stretch;
+  min-width: 76px;
+  border: 0;
+  border-left: 1px solid var(--line);
+  background: transparent;
+  color: var(--muted-strong);
+  cursor: pointer;
+  font-size: 13px;
+  transition: background-color 150ms ease, color 150ms ease;
+}
+
+.copy-button:hover,
+.copy-button:focus-visible {
+  background: var(--surface-raised);
+  color: var(--accent-soft);
+}
+
+.source-install {
+  margin: 13px 0 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.source-install a {
+  color: var(--muted-strong);
+  text-decoration: underline;
+  text-decoration-color: var(--line-strong);
+  text-underline-offset: 4px;
+  transition: color 150ms ease;
+}
+
+.source-install a:hover,
+.source-install a:focus-visible {
+  color: var(--accent-soft);
+}
+
+.examples {
+  width: min(100%, 720px);
+  margin-top: 32px;
+}
+
+.examples-intro {
+  margin: 0 0 16px;
+  color: var(--muted);
+  font-size: clamp(11px, 2.8vw, 14px);
+  white-space: nowrap;
+}
+
+.command-pair {
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+}
+
+.example-row {
+  min-height: 62px;
+  display: grid;
+  grid-template-columns: 72px minmax(0, 1fr);
+  align-items: center;
+  text-align: left;
+}
+
+.example-row + .example-row {
+  border-top: 1px solid var(--line);
+}
+
+.example-label {
+  color: var(--accent);
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.example-row code {
+  min-width: 0;
+  overflow-x: auto;
+  padding: 20px 0;
+  color: var(--muted-strong);
+  font-size: 14px;
+  white-space: nowrap;
+  scrollbar-width: none;
+}
+
+.hero-meta {
+  margin-top: 30px;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 10px 24px;
+  color: var(--muted);
+  font-size: 14px;
+}
+
+.hero-meta a {
+  text-decoration: underline;
+  text-decoration-color: var(--line-strong);
+  text-underline-offset: 4px;
+  transition: color 150ms ease;
+}
+
+.hero-meta a:hover,
+.hero-meta a:focus-visible {
+  color: var(--accent-soft);
+}
+
+@media (max-width: 560px) {
+  .hero {
+    width: min(calc(100% - 32px), var(--page-width));
+    min-height: calc(100svh - 64px);
+    padding: 56px 0 48px;
+  }
+
+  .hero h1 {
+    max-width: 100%;
+    font-size: clamp(3rem, 16vw, 5rem);
+  }
+
+  .hero-tagline {
+    max-width: 28rem;
+    margin-top: 18px;
+    font-size: clamp(0.875rem, 4.2vw, 1.0625rem);
+    line-height: 1.5;
+    white-space: normal;
+  }
+
+  .install-card {
+    margin-top: 38px;
+  }
+
+  .platform-tabs button {
+    min-height: 44px;
+    flex: 1;
+    padding: 8px;
+  }
+
+  .command-row {
+    padding-left: 13px;
+    gap: 8px;
+  }
+
+  .command-row code,
+  .example-row code {
+    font-size: 12px;
+    scrollbar-color: var(--line-strong) transparent;
+    scrollbar-width: thin;
+  }
+
+  .command-row code::-webkit-scrollbar,
+  .example-row code::-webkit-scrollbar {
+    height: 4px;
+  }
+
+  .command-row code::-webkit-scrollbar-thumb,
+  .example-row code::-webkit-scrollbar-thumb {
+    border-radius: 999px;
+    background: var(--line-strong);
+  }
+
+  .copy-button {
+    min-width: 64px;
+  }
+
+  .source-install {
+    margin-top: 12px;
+    font-size: 12px;
+  }
+
+  .examples {
+    margin-top: 22px;
+  }
+
+  .examples-intro {
+    line-height: 1.5;
+    white-space: normal;
+  }
+
+  .example-row {
+    grid-template-columns: 58px minmax(0, 1fr);
+  }
+
+  .hero-meta {
+    margin-top: 24px;
+    gap: 4px 16px;
+    font-size: 12px;
+  }
+
+  .hero-meta a {
+    min-height: 44px;
+    display: inline-flex;
+    align-items: center;
+  }
+}
+
+@media (max-width: 360px) {
+  .hero {
+    width: min(calc(100% - 24px), var(--page-width));
+    padding: 44px 0 40px;
+  }
+
+  .hero h1 {
+    font-size: clamp(2.75rem, 16.5vw, 3.5rem);
+  }
+
+  .install-card {
+    margin-top: 34px;
+  }
+
+  .platform-tabs button {
+    font-size: 12px;
+  }
+
+  .command-row {
+    padding-left: 10px;
+    gap: 6px;
+  }
+
+  .command-row code,
+  .example-row code {
+    font-size: 11px;
+  }
+
+  .copy-button {
+    min-width: 58px;
+  }
+
+  .example-row {
+    grid-template-columns: 52px minmax(0, 1fr);
+  }
+
+  .example-label {
+    font-size: 11px;
+  }
+}
+
+@media (max-height: 560px) and (min-width: 561px) {
+  .hero {
+    min-height: auto;
+    padding: 64px 0 56px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    transition-duration: 0.01ms !important;
+  }
+}

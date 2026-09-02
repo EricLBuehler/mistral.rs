@@ -9,7 +9,7 @@
     "license": {
       "name": "MIT"
     },
-    "version": "0.9.1"
+    "version": "0.9.2"
   },
   "paths": {
     "/calibration/apply": {
@@ -134,6 +134,12 @@
         "responses": {
           "200": {
             "description": "Reapply ISQ to a model that was loaded with ISQ."
+          },
+          "400": {
+            "description": "Invalid ISQ type"
+          },
+          "500": {
+            "description": "Failed to dispatch the ISQ request"
           }
         }
       }
@@ -176,15 +182,17 @@
               }
             }
           },
+          "400": {
+            "description": "Invalid decision payload"
+          },
           "404": {
-            "description": "Unknown approval ID",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApprovalDecisionResponse"
-                }
-              }
-            }
+            "description": "Unknown approval ID"
+          },
+          "413": {
+            "description": "Decision payload is too large"
+          },
+          "415": {
+            "description": "Unsupported content type"
           }
         }
       }
@@ -315,6 +323,9 @@
                 }
               }
             }
+          },
+          "500": {
+            "description": "Internal server error"
           }
         }
       }
@@ -358,6 +369,9 @@
           },
           "404": {
             "description": "File not found or expired"
+          },
+          "500": {
+            "description": "Internal server error"
           }
         }
       }
@@ -397,6 +411,9 @@
           },
           "410": {
             "description": "File body was elided and is no longer fetchable"
+          },
+          "500": {
+            "description": "Internal server error"
           }
         }
       }
@@ -450,6 +467,9 @@
                 }
               }
             }
+          },
+          "500": {
+            "description": "Internal server error"
           }
         }
       },
@@ -510,6 +530,9 @@
           },
           "404": {
             "description": "File not found or expired"
+          },
+          "500": {
+            "description": "Internal server error"
           }
         }
       },
@@ -535,6 +558,9 @@
           },
           "404": {
             "description": "File not found or expired"
+          },
+          "500": {
+            "description": "Internal server error"
           }
         }
       }
@@ -565,6 +591,9 @@
           },
           "410": {
             "description": "File body was elided and is no longer fetchable"
+          },
+          "500": {
+            "description": "Internal server error"
           }
         }
       }
@@ -677,16 +706,6 @@
           },
           "415": {
             "description": "Request content type is not JSON",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/LoraAdapterErrorResponse"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Adapter files are invalid or unsupported",
             "content": {
               "application/json": {
                 "schema": {
@@ -875,6 +894,9 @@
                 }
               }
             }
+          },
+          "500": {
+            "description": "Failed to inspect the model registry"
           }
         }
       }
@@ -897,7 +919,7 @@
         },
         "responses": {
           "200": {
-            "description": "Model reloaded successfully",
+            "description": "Model reloaded or already loaded",
             "content": {
               "application/json": {
                 "schema": {
@@ -907,14 +929,22 @@
             }
           },
           "400": {
-            "description": "Failed to reload model",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ModelStatusResponse"
-                }
-              }
-            }
+            "description": "Invalid request or model cannot be reloaded"
+          },
+          "404": {
+            "description": "Model not found"
+          },
+          "409": {
+            "description": "Model state conflicts with the operation"
+          },
+          "413": {
+            "description": "Request body is too large"
+          },
+          "415": {
+            "description": "Request content type is not JSON"
+          },
+          "500": {
+            "description": "Model reload failure"
           }
         }
       }
@@ -946,15 +976,20 @@
               }
             }
           },
+          "400": {
+            "description": "Invalid request"
+          },
           "404": {
-            "description": "Model not found",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ModelStatusResponse"
-                }
-              }
-            }
+            "description": "Model not found"
+          },
+          "413": {
+            "description": "Request body is too large"
+          },
+          "415": {
+            "description": "Request content type is not JSON"
+          },
+          "500": {
+            "description": "Model registry failure"
           }
         }
       }
@@ -978,6 +1013,15 @@
         "responses": {
           "200": {
             "description": "Auto-tune result with recommended settings"
+          },
+          "400": {
+            "description": "Invalid tuning request"
+          },
+          "413": {
+            "description": "Request body is too large"
+          },
+          "415": {
+            "description": "Request content type is not JSON"
           },
           "500": {
             "description": "Tuning failed"
@@ -1003,7 +1047,7 @@
         },
         "responses": {
           "200": {
-            "description": "Model unloaded successfully",
+            "description": "Model unloaded or already unloaded",
             "content": {
               "application/json": {
                 "schema": {
@@ -1013,14 +1057,22 @@
             }
           },
           "400": {
-            "description": "Failed to unload model",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ModelStatusResponse"
-                }
-              }
-            }
+            "description": "Invalid request or model cannot be unloaded"
+          },
+          "404": {
+            "description": "Model not found"
+          },
+          "409": {
+            "description": "Model state conflicts with the operation"
+          },
+          "413": {
+            "description": "Request body is too large"
+          },
+          "415": {
+            "description": "Request content type is not JSON"
+          },
+          "500": {
+            "description": "Model registry failure"
           }
         }
       }
@@ -1425,16 +1477,6 @@
               }
             }
           },
-          "422": {
-            "description": "Request body is invalid",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/LoraAdapterErrorResponse"
-                }
-              }
-            }
-          },
           "500": {
             "description": "Internal server error",
             "content": {
@@ -1745,6 +1787,21 @@
           }
         }
       },
+      "AnthropicJsonOutputFormat": {
+        "type": "object",
+        "required": [
+          "type",
+          "schema"
+        ],
+        "properties": {
+          "schema": {
+            "type": "object"
+          },
+          "type": {
+            "type": "string"
+          }
+        }
+      },
       "AnthropicMessage": {
         "type": "object",
         "required": [
@@ -1976,6 +2033,16 @@
           "model": {
             "type": "string"
           },
+          "output_config": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/AnthropicOutputConfig"
+              }
+            ]
+          },
           "presence_penalty": {
             "type": [
               "number",
@@ -1990,7 +2057,7 @@
               },
               {
                 "$ref": "#/components/schemas/ReasoningEffort",
-                "description": "mistral.rs extension accepting off, low, medium, high, or xhigh. \"none\" aliases \"off\"."
+                "description": "mistral.rs extension for local reasoning effort. \"none\" aliases \"off\"; \"max\" aliases \"xhigh\"."
               }
             ]
           },
@@ -2117,6 +2184,27 @@
           }
         }
       },
+      "AnthropicOutputConfig": {
+        "type": "object",
+        "properties": {
+          "effort": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "format": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/AnthropicJsonOutputFormat"
+              }
+            ]
+          }
+        }
+      },
       "AnthropicResponseContentBlock": {
         "type": "object",
         "required": [
@@ -2136,6 +2224,12 @@
             ]
           },
           "name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "signature": {
             "type": [
               "string",
               "null"
@@ -2322,6 +2416,12 @@
             ],
             "minimum": 0
           },
+          "display": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "type": {
             "type": "string"
           }
@@ -2412,9 +2512,19 @@
         "type": "object",
         "required": [
           "input_tokens",
+          "cache_creation_input_tokens",
+          "cache_read_input_tokens",
           "output_tokens"
         ],
         "properties": {
+          "cache_creation_input_tokens": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "cache_read_input_tokens": {
+            "type": "integer",
+            "minimum": 0
+          },
           "input_tokens": {
             "type": "integer",
             "minimum": 0
@@ -2498,7 +2608,7 @@
         "properties": {
           "status": {
             "type": "string",
-            "description": "\"resolved\", \"queued\", or \"not_found\"."
+            "description": "\"resolved\" or \"queued\"."
           }
         }
       },
@@ -2747,6 +2857,18 @@
             "description": "Permission policy for agentic tools.",
             "example": null
           },
+          "chat_template_kwargs": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "description": "vLLM-style template variables; `enable_thinking` and `reasoning_effort` map onto the fields above.",
+            "additionalProperties": {},
+            "propertyNames": {
+              "type": "string"
+            },
+            "example": null
+          },
           "code_execution_permission": {
             "type": [
               "string",
@@ -2951,6 +3073,16 @@
                 "description": "Force plain text or JSON-schema constrained output."
               }
             ]
+          },
+          "seed": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Seed for deterministic request-scoped sampling.",
+            "example": null,
+            "minimum": 0
           },
           "session_id": {
             "type": [
@@ -3409,6 +3541,16 @@
             "description": "Multiplicative repetition penalty; 1.0 disables it.",
             "example": null
           },
+          "seed": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Seed for deterministic request-scoped sampling.",
+            "example": null,
+            "minimum": 0
+          },
           "stop": {
             "oneOf": [
               {
@@ -3600,6 +3742,16 @@
           "prompt_tokens": {
             "type": "integer",
             "minimum": 0
+          },
+          "prompt_tokens_details": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/PromptTokensDetailsResponse"
+              }
+            ]
           },
           "total_completion_time_sec": {
             "type": "number",
@@ -4468,7 +4620,7 @@
               "string",
               "null"
             ],
-            "description": "Reasoning emitted with an assistant message."
+            "description": "Reasoning emitted with an assistant message (`reasoning` is the OpenAI-compatible alias)."
           },
           "role": {
             "type": "string",
@@ -4637,10 +4789,7 @@
         "enum": [
           "loaded",
           "unloaded",
-          "reloading",
-          "not_found",
-          "no_loader_config",
-          "internal_error"
+          "reloading"
         ]
       },
       "ModelStatusResponse": {
@@ -4651,13 +4800,6 @@
           "status"
         ],
         "properties": {
-          "error": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "Error message when status indicates an error condition"
-          },
           "model_id": {
             "type": "string",
             "example": "my-model"
@@ -5325,6 +5467,15 @@
                 "description": "Response format (legacy, prefer `text` field)"
               }
             ]
+          },
+          "seed": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Seed for deterministic request-scoped sampling",
+            "minimum": 0
           },
           "stop": {
             "oneOf": [
@@ -6319,12 +6470,22 @@
             "description": "Error event",
             "required": [
               "sequence_number",
-              "error",
+              "code",
+              "message",
               "type"
             ],
             "properties": {
-              "error": {
-                "$ref": "#/components/schemas/ResponseError"
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "param": {
+                "type": [
+                  "string",
+                  "null"
+                ]
               },
               "sequence_number": {
                 "type": "integer",
@@ -6660,6 +6821,19 @@
           }
         }
       },
+      "PromptTokensDetailsResponse": {
+        "type": "object",
+        "required": [
+          "cached_tokens"
+        ],
+        "properties": {
+          "cached_tokens": {
+            "type": "integer",
+            "description": "Prompt tokens served from the prefix cache, not recomputed.",
+            "minimum": 0
+          }
+        }
+      },
       "ReIsqRequest": {
         "type": "object",
         "required": [
@@ -6726,24 +6900,17 @@
         "type": "object",
         "description": "Error information for a response",
         "required": [
-          "type",
+          "code",
           "message"
         ],
         "properties": {
           "code": {
-            "type": [
-              "string",
-              "null"
-            ],
+            "type": "string",
             "description": "Error code"
           },
           "message": {
             "type": "string",
             "description": "Error message"
-          },
-          "type": {
-            "type": "string",
-            "description": "Error type"
           }
         }
       },
@@ -7468,6 +7635,16 @@
                 "description": "Force plain text or JSON-schema constrained output."
               }
             ]
+          },
+          "seed": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Seed for deterministic request-scoped sampling.",
+            "example": null,
+            "minimum": 0
           },
           "stop": {
             "oneOf": [

@@ -394,6 +394,9 @@ impl MultimodalModel for Model {
             packed_layout: None,
         })
     }
+    fn encoder_cache(&self) -> Option<&Mutex<EncoderCacheManager>> {
+        Some(&self.encoder_cache)
+    }
     fn encoder_cache_counters(
         &self,
     ) -> Option<(

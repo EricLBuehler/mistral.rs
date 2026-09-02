@@ -179,7 +179,10 @@ pub(crate) fn apply_chat_template(
     let chat_template = pipeline
         .get_chat_template()
         .with_context(|| "`apply_chat_template` expects the pipeline to have a chat template.")?;
-    let template = chat_template.chat_template.as_ref().unwrap();
+    let template = chat_template
+        .chat_template
+        .as_ref()
+        .with_context(|| "The selected model does not define a chat template.")?;
 
     let bos_tok = chat_template.bos_token.as_ref().map(extract_token_string);
     let eos_tok = chat_template.eos_token.as_ref().map(extract_token_string);

@@ -13,7 +13,8 @@ use candle_nn::{
 use float8::F8E4M3;
 use half::{bf16, f16};
 use mistralrs_quant::{
-    should_apply_immediate_isq, ColumnParallelLayer, Convolution, QuantMethod, QuantMethodConfig,
+    should_apply_immediate_isq, ActivationQuantizationScheme, ActivationScaleLayout,
+    ColumnParallelLayer, Convolution, QuantMethod, QuantMethodConfig, QuantizedActivation,
     QuantizedConfig, ReplicatedLayer, RowParallelLayer, ShardedVarBuilder, UnquantLinear,
 };
 use serde::{Deserialize, Serialize};
@@ -325,6 +326,10 @@ impl RmsNorm {
         self.eps
     }
 
+    pub fn forward_add_rms_norm(&self, x: &Tensor, residual: &Tensor) -> Result<(Tensor, Tensor)> {
+        rms_norm_forward_add(x, residual, &self.weight, self.eps)
+    }
+
     pub fn forward_residual(&self, x: &Tensor, residual: &Tensor) -> Result<Tensor> {
         rms_norm_forward_residual(x, residual, &self.weight, self.eps, None)
     }
@@ -372,6 +377,28 @@ impl RmsNorm {
             next_norm.eps,
         )
     }
+}
+
+fn rms_norm_forward_add(
+    x: &Tensor,
+    residual: &Tensor,
+    weight: &Tensor,
+    eps: f64,
+) -> Result<(Tensor, Tensor)> {
+    #[cfg(feature = "cuda")]
+    if x.device().is_cuda()
+        && residual.device().same_device(x.device())
+        && weight.device().same_device(x.device())
+        && x.dtype() == residual.dtype()
+        && x.dtype() == weight.dtype()
+        && matches!(x.dtype(), DType::BF16 | DType::F16 | DType::F32)
+    {
+        return crate::ops::cuda_add_rms_norm(x, residual, weight, eps as f32);
+    }
+
+    let sum = (x + residual)?;
+    let normed = candle_nn::ops::rms_norm(&sum.contiguous()?, weight, eps as f32)?;
+    Ok((sum, normed))
 }
 
 impl Module for RmsNorm {
@@ -504,6 +531,10 @@ impl GemmaRmsNorm {
 
     pub fn eps(&self) -> f64 {
         self.eps
+    }
+
+    pub fn forward_add_rms_norm(&self, x: &Tensor, residual: &Tensor) -> Result<(Tensor, Tensor)> {
+        rms_norm_forward_add(x, residual, &self.weight, self.eps)
     }
 
     pub fn forward_residual(&self, x: &Tensor, residual: &Tensor) -> Result<Tensor> {
@@ -1639,27 +1670,37 @@ impl Qwen2VLRotaryEmbedding {
 #[derive(Debug, Clone)]
 pub struct Qwen3VLRotaryEmbedding {
     inv_freq: Tensor,
+    attention_factor: f32,
     /// Precomputed interleave indices for H (dim=1, offset=1) and W (dim=2, offset=2).
     /// Stored as (indices_1d, dim_idx) pairs. Created once at init to avoid CPU->GPU sync per step.
     interleave_indices: Vec<(Tensor, usize)>,
 }
 
 impl Qwen3VLRotaryEmbedding {
-    pub fn new(
-        base: f32,
-        head_dim: usize,
-        device: &Device,
-        mrope_section: Vec<usize>,
-    ) -> Result<Self> {
-        let inv_freq: Vec<_> = (0..head_dim)
-            .step_by(2)
-            .map(|i| 1f32 / base.powf(i as f32 / head_dim as f32))
-            .collect();
-        let inv_freq_len = inv_freq.len();
-        let inv_freq = Tensor::from_vec(inv_freq, (inv_freq_len,), device)?.to_dtype(DType::F32)?;
+    fn finish_cos_sin(
+        &self,
+        mut cos: Tensor,
+        mut sin: Tensor,
+        dtype: DType,
+    ) -> Result<(Tensor, Tensor)> {
+        if self.attention_factor != 1.0 {
+            cos = (cos * self.attention_factor as f64)?;
+            sin = (sin * self.attention_factor as f64)?;
+        }
+        Ok((
+            cos.to_dtype(dtype)?.contiguous()?,
+            sin.to_dtype(dtype)?.contiguous()?,
+        ))
+    }
 
-        // Precompute interleave index tensors for H (dim=1, offset=1) and W (dim=2, offset=2)
-        // to avoid CPU->GPU sync from Tensor::from_vec on every decode step.
+    fn interleave_indices(
+        head_dim: usize,
+        mrope_section: &[usize],
+        device: &Device,
+    ) -> Result<Vec<(Tensor, usize)>> {
+        if mrope_section.len() != 3 {
+            candle_core::bail!("Qwen3 MRoPE requires three sections");
+        }
         let half_dim = head_dim / 2;
         let mut interleave_indices = Vec::new();
         for (dim_idx, offset) in [(1usize, 1usize), (2usize, 2usize)] {
@@ -1675,9 +1716,43 @@ impl Qwen3VLRotaryEmbedding {
                 interleave_indices.push((idx_tensor, dim_idx));
             }
         }
+        Ok(interleave_indices)
+    }
+
+    pub fn new(
+        base: f32,
+        head_dim: usize,
+        device: &Device,
+        mrope_section: Vec<usize>,
+    ) -> Result<Self> {
+        let inv_freq: Vec<_> = (0..head_dim)
+            .step_by(2)
+            .map(|i| 1f32 / base.powf(i as f32 / head_dim as f32))
+            .collect();
+        let inv_freq_len = inv_freq.len();
+        let inv_freq = Tensor::from_vec(inv_freq, (inv_freq_len,), device)?.to_dtype(DType::F32)?;
+
+        let interleave_indices = Self::interleave_indices(head_dim, &mrope_section, device)?;
 
         Ok(Self {
             inv_freq,
+            attention_factor: 1.0,
+            interleave_indices,
+        })
+    }
+
+    pub fn new_yarn(
+        cfg: &YarnRopeConfig,
+        device: &Device,
+        mrope_section: Vec<usize>,
+    ) -> Result<Self> {
+        let (inv_freq, attention_factor) = yarn_inv_freq_and_attention_factor(cfg, device)?;
+        let inv_freq = inv_freq.to_dtype(DType::F32)?;
+        let interleave_indices = Self::interleave_indices(cfg.head_dim, &mrope_section, device)?;
+
+        Ok(Self {
+            inv_freq,
+            attention_factor,
             interleave_indices,
         })
     }
@@ -1708,18 +1783,51 @@ impl Qwen3VLRotaryEmbedding {
         for (idx_tensor, dim_idx) in &self.interleave_indices {
             let freqs_dim = freqs.i(*dim_idx)?.contiguous()?;
             let num_indices = idx_tensor.dim(0)?;
+            // broadcast + one copy; repeat() would launch one copy kernel per (batch, position)
             let idx_expanded = idx_tensor
                 .reshape((1, 1, num_indices))?
-                .repeat((batch, seq_len, 1))?;
+                .broadcast_as((batch, seq_len, num_indices))?
+                .contiguous()?;
             let src_vals = freqs_dim.gather(&idx_expanded, D::Minus1)?;
             freqs_t = freqs_t.scatter(&idx_expanded, &src_vals, D::Minus1)?;
         }
 
         // cos/sin from freqs_t -> (batch, seq_len, head_dim/2)
         // candle's rope() expects half-dim cos/sin and handles both halves internally
-        let cos = freqs_t.cos()?.to_dtype(dtype)?.contiguous()?;
-        let sin = freqs_t.sin()?.to_dtype(dtype)?.contiguous()?;
-        Ok((cos, sin))
+        self.finish_cos_sin(freqs_t.cos()?, freqs_t.sin()?, dtype)
+    }
+
+    pub fn compute_text_cos_sin(
+        &self,
+        position_ids: &Tensor,
+        dtype: DType,
+    ) -> Result<(Tensor, Tensor)> {
+        let (batch, seq_len) = position_ids.dims2()?;
+        #[cfg(not(feature = "cuda"))]
+        let _ = (batch, seq_len);
+        #[cfg(feature = "cuda")]
+        {
+            let positions = position_ids.flatten_all()?.to_dtype(DType::U32)?;
+            let rope_dtype = if self.attention_factor == 1.0 {
+                dtype
+            } else {
+                DType::F32
+            };
+            if let Some((cos, sin)) =
+                crate::ops::try_cuda_rope_sincos_positions(&positions, &self.inv_freq, rope_dtype)?
+            {
+                let width = self.inv_freq.dim(0)?;
+                return self.finish_cos_sin(
+                    cos.reshape((batch, seq_len, width))?,
+                    sin.reshape((batch, seq_len, width))?,
+                    dtype,
+                );
+            }
+        }
+        let positions = position_ids.to_dtype(DType::F32)?.unsqueeze(D::Minus1)?;
+        let inv_freq = self.inv_freq.reshape((1, 1, self.inv_freq.dim(0)?))?;
+        let freqs = positions.broadcast_mul(&inv_freq)?;
+        self.finish_cos_sin(freqs.cos()?, freqs.sin()?, dtype)
     }
 
     pub fn forward(
@@ -1737,7 +1845,7 @@ impl Qwen3VLRotaryEmbedding {
     #[allow(clippy::too_many_arguments)]
     pub fn forward_qk_norm(
         &self,
-        (cos, sin): &(Tensor, Tensor),
+        cos_sin: &(Tensor, Tensor),
         q: &Tensor,
         k: &Tensor,
         q_weight: &Tensor,
@@ -1745,7 +1853,33 @@ impl Qwen3VLRotaryEmbedding {
         q_eps: f64,
         k_eps: f64,
     ) -> Result<(Tensor, Tensor)> {
-        qk_rms_norm_mrope(q, k, q_weight, k_weight, q_eps, k_eps, cos, sin, true)
+        self.forward_qk_norm_layout(cos_sin, q, k, q_weight, k_weight, q_eps, k_eps, false)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn forward_qk_norm_layout(
+        &self,
+        (cos, sin): &(Tensor, Tensor),
+        q: &Tensor,
+        k: &Tensor,
+        q_weight: &Tensor,
+        k_weight: &Tensor,
+        q_eps: f64,
+        k_eps: f64,
+        tokens_first: bool,
+    ) -> Result<(Tensor, Tensor)> {
+        qk_rms_norm_mrope_layout(
+            q,
+            k,
+            q_weight,
+            k_weight,
+            q_eps,
+            k_eps,
+            cos,
+            sin,
+            true,
+            tokens_first,
+        )
     }
 }
 
@@ -2554,6 +2688,7 @@ pub struct RotaryEmbedding {
     is_gpt_neox: bool,
 }
 
+#[derive(Debug, Clone)]
 pub struct YarnRopeConfig {
     pub base: f32,
     pub head_dim: usize,
@@ -2564,6 +2699,64 @@ pub struct YarnRopeConfig {
     pub beta_slow: f32,
     pub mscale: f32,
     pub mscale_all_dim: f32,
+    pub attention_factor: Option<f32>,
+}
+
+pub(crate) fn yarn_inv_freq_and_attention_factor(
+    cfg: &YarnRopeConfig,
+    device: &Device,
+) -> Result<(Tensor, f32)> {
+    if !cfg.base.is_finite() || cfg.base <= 0.0 {
+        candle_core::bail!("YaRN base must be finite and positive");
+    }
+    if cfg.head_dim == 0 || !cfg.head_dim.is_multiple_of(2) {
+        candle_core::bail!("YaRN head dimension must be positive and even");
+    }
+    if !cfg.factor.is_finite() || cfg.factor <= 0.0 {
+        candle_core::bail!("YaRN factor must be finite and positive");
+    }
+    if cfg.original_max_position_embeddings == 0 {
+        candle_core::bail!("YaRN original context length must be positive");
+    }
+    if !cfg.beta_fast.is_finite()
+        || cfg.beta_fast <= 0.0
+        || !cfg.beta_slow.is_finite()
+        || cfg.beta_slow <= 0.0
+    {
+        candle_core::bail!("YaRN beta values must be finite and positive");
+    }
+
+    let freq_extra = (0..cfg.head_dim)
+        .step_by(2)
+        .map(|i| 1f32 / cfg.base.powf(i as f32 / cfg.head_dim as f32))
+        .collect::<Vec<_>>();
+    let freq_inter = (0..cfg.head_dim)
+        .step_by(2)
+        .map(|i| 1f32 / (cfg.factor * cfg.base.powf(i as f32 / cfg.head_dim as f32)))
+        .collect::<Vec<_>>();
+    let freq_len = freq_extra.len();
+    let freq_extra = Tensor::from_vec(freq_extra, freq_len, device)?;
+    let freq_inter = Tensor::from_vec(freq_inter, freq_len, device)?;
+    let (low, high) = DeepSeekV2RotaryEmbedding::yarn_find_correction_range(
+        cfg.beta_fast,
+        cfg.beta_slow,
+        cfg.head_dim,
+        cfg.base,
+        cfg.original_max_position_embeddings,
+    );
+    let inv_freq_mask =
+        (1. - DeepSeekV2RotaryEmbedding::yarn_linear_ramp_mask(low, high, freq_len, device)?)?;
+    let inv_freq = freq_inter
+        .broadcast_mul(&(1. - &inv_freq_mask)?)?
+        .broadcast_add(&freq_extra.broadcast_mul(&inv_freq_mask)?)?;
+    let attention_factor = cfg.attention_factor.unwrap_or_else(|| {
+        DeepSeekV2RotaryEmbedding::yarn_get_mscale(cfg.factor, cfg.mscale)
+            / DeepSeekV2RotaryEmbedding::yarn_get_mscale(cfg.factor, cfg.mscale_all_dim)
+    });
+    if !attention_factor.is_finite() || attention_factor <= 0.0 {
+        candle_core::bail!("YaRN attention factor must be finite and positive");
+    }
+    Ok((inv_freq, attention_factor))
 }
 
 fn post_rope_output(mut x: Tensor) -> Result<Tensor> {
@@ -2766,8 +2959,37 @@ pub fn qk_rms_norm_mrope(
     sin: &Tensor,
     is_gpt_neox: bool,
 ) -> Result<(Tensor, Tensor)> {
+    qk_rms_norm_mrope_layout(
+        q,
+        k,
+        q_weight,
+        k_weight,
+        q_eps,
+        k_eps,
+        cos,
+        sin,
+        is_gpt_neox,
+        false,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn qk_rms_norm_mrope_layout(
+    q: &Tensor,
+    k: &Tensor,
+    q_weight: &Tensor,
+    k_weight: &Tensor,
+    q_eps: f64,
+    k_eps: f64,
+    cos: &Tensor,
+    sin: &Tensor,
+    is_gpt_neox: bool,
+    tokens_first: bool,
+) -> Result<(Tensor, Tensor)> {
     let (batch, _, seq_len, _) = q.dims4()?;
     let (cos, sin) = flattened_mrope_cache(cos, sin, batch, seq_len, q)?;
+    #[cfg(not(feature = "cuda"))]
+    let _ = tokens_first;
 
     #[cfg(feature = "cuda")]
     if let Some((q, Some(k))) = crate::ops::try_cuda_qk_rms_norm_rope(
@@ -2780,8 +3002,17 @@ pub fn qk_rms_norm_mrope(
         &cos,
         &sin,
         is_gpt_neox,
+        if tokens_first {
+            crate::ops::QkRopeOutputLayout::TokensFirst
+        } else {
+            crate::ops::QkRopeOutputLayout::HeadsFirst
+        },
     )? {
-        return Ok((q, k));
+        return if tokens_first {
+            Ok((q.transpose(1, 2)?, k.transpose(1, 2)?))
+        } else {
+            Ok((q, k))
+        };
     }
 
     let q = candle_nn::ops::rms_norm(&q.contiguous()?, q_weight, q_eps as f32)?;
@@ -2824,40 +3055,12 @@ impl RotaryEmbedding {
         is_gpt_neox: bool,
         dtype: DType,
     ) -> Result<Self> {
-        let freq_extra = (0..cfg.head_dim)
-            .step_by(2)
-            .map(|i| 1f32 / cfg.base.powf(i as f32 / cfg.head_dim as f32))
-            .collect::<Vec<_>>();
-        let freq_inter = (0..cfg.head_dim)
-            .step_by(2)
-            .map(|i| 1f32 / (cfg.factor * cfg.base.powf(i as f32 / cfg.head_dim as f32)))
-            .collect::<Vec<_>>();
-        let freq_len = freq_extra.len();
-        let freq_extra = Tensor::from_vec(freq_extra, (1, freq_len), device)?;
-        let freq_inter = Tensor::from_vec(freq_inter, (1, freq_len), device)?;
-        let (low, high) = DeepSeekV2RotaryEmbedding::yarn_find_correction_range(
-            cfg.beta_fast,
-            cfg.beta_slow,
-            cfg.head_dim,
-            cfg.base,
-            cfg.original_max_position_embeddings,
-        );
-        let inv_freq_mask = (1.
-            - DeepSeekV2RotaryEmbedding::yarn_linear_ramp_mask(
-                low,
-                high,
-                cfg.head_dim / 2,
-                device,
-            )?)?;
-        let inv_freq = freq_inter
-            .broadcast_mul(&(1. - &inv_freq_mask)?)?
-            .broadcast_add(&freq_extra.broadcast_mul(&inv_freq_mask)?)?;
+        let (inv_freq, mscale) = yarn_inv_freq_and_attention_factor(cfg, device)?;
+        let inv_freq = inv_freq.reshape((1, cfg.head_dim / 2))?;
         let t = Tensor::arange(0u32, cfg.max_position_embeddings as u32, device)?
             .to_dtype(DType::F32)?
             .reshape((cfg.max_position_embeddings, 1))?;
         let freqs = t.matmul(&inv_freq)?;
-        let mscale = DeepSeekV2RotaryEmbedding::yarn_get_mscale(cfg.factor, cfg.mscale)
-            / DeepSeekV2RotaryEmbedding::yarn_get_mscale(cfg.factor, cfg.mscale_all_dim);
         Ok(Self {
             sin: (freqs.sin()? * mscale as f64)?.to_dtype(dtype)?,
             cos: (freqs.cos()? * mscale as f64)?.to_dtype(dtype)?,
@@ -3413,23 +3616,42 @@ impl Mlp {
         bias: bool,
         comm: &Arc<mistralrs_quant::Comm>,
     ) -> Result<Self> {
-        let gate = ColumnParallelLayer::new(
+        let packed = ColumnParallelLayer::new_packed(
             hidden_size,
-            intermediate_size,
+            &[intermediate_size, intermediate_size],
+            &["gate_proj", "up_proj"],
             quantization_config,
             bias,
             comm,
-            vb.pp("gate_proj"),
+            None,
+            vb.clone(),
         )?;
-        let up = ColumnParallelLayer::new(
-            hidden_size,
-            intermediate_size,
-            quantization_config,
-            bias,
-            comm,
-            vb.pp("up_proj"),
-        )?;
-        let merged_gate_up = crate::ops::MergedDenseProjection::new(&[gate.clone(), up.clone()])?;
+        let (gate, up, merged_gate_up) = match &packed {
+            Some(group) => (
+                group.constituents[0].clone(),
+                group.constituents[1].clone(),
+                Some(crate::ops::MergedDenseProjection::from_packed(group)),
+            ),
+            None => (
+                ColumnParallelLayer::new(
+                    hidden_size,
+                    intermediate_size,
+                    quantization_config,
+                    bias,
+                    comm,
+                    vb.pp("gate_proj"),
+                )?,
+                ColumnParallelLayer::new(
+                    hidden_size,
+                    intermediate_size,
+                    quantization_config,
+                    bias,
+                    comm,
+                    vb.pp("up_proj"),
+                )?,
+                None,
+            ),
+        };
 
         Ok(Self {
             gate,
@@ -3458,19 +3680,37 @@ impl Mlp {
         comm: &Arc<mistralrs_quant::Comm>,
     ) -> Result<Self> {
         assert!(chunks == 2, "Only gate_up_proj merge is supported!");
-        let gate_up_projs = ColumnParallelLayer::new_merged(
+        let packed = ColumnParallelLayer::new_packed_from_fused(
             hidden_size,
             intermediate_size * 2,
             2,
             quantization_config,
-            false,
             comm,
             vb.pp("gate_up_proj"),
         )?;
-
-        let gate = gate_up_projs[0].to_owned();
-        let up = gate_up_projs[1].to_owned();
-        let merged_gate_up = crate::ops::MergedDenseProjection::new(&[gate.clone(), up.clone()])?;
+        let (gate, up, merged_gate_up) = match &packed {
+            Some(group) => (
+                group.constituents[0].clone(),
+                group.constituents[1].clone(),
+                Some(crate::ops::MergedDenseProjection::from_packed(group)),
+            ),
+            None => {
+                let gate_up_projs = ColumnParallelLayer::new_merged(
+                    hidden_size,
+                    intermediate_size * 2,
+                    2,
+                    quantization_config,
+                    false,
+                    comm,
+                    vb.pp("gate_up_proj"),
+                )?;
+                (
+                    gate_up_projs[0].to_owned(),
+                    gate_up_projs[1].to_owned(),
+                    None,
+                )
+            }
+        };
 
         Ok(Self {
             gate,
@@ -3498,30 +3738,98 @@ impl Mlp {
         Self::new(vb, params[0], params[1], &None, act, comm)
     }
 
+    fn forward_packed_gate_up(&self, gate_up: Tensor) -> Result<Tensor> {
+        let split_size = gate_up.dim(D::Minus1)? / 2;
+        if let Some(output) = crate::ops::try_fused_split_glu_quantized_forward(
+            &gate_up,
+            split_size,
+            self.act,
+            &*self.down,
+        )? {
+            Ok(output)
+        } else {
+            let inter = crate::ops::split_mul_and_act(&gate_up, split_size, self.act)?;
+            self.down.forward(&inter)
+        }
+    }
+
+    pub fn activation_quantization_scheme_for(
+        &self,
+        xs: &Tensor,
+    ) -> Option<ActivationQuantizationScheme> {
+        if let Some(merged_gate_up) = &self.merged_gate_up {
+            return merged_gate_up.activation_quantization_scheme_for(xs);
+        }
+        let scheme = self.gate.activation_quantization_scheme_for(xs)?;
+        (self.up.activation_quantization_scheme_for(xs) == Some(scheme)).then_some(scheme)
+    }
+
+    pub fn preferred_activation_scale_layout_for(
+        &self,
+        xs: &Tensor,
+    ) -> Option<ActivationScaleLayout> {
+        if let Some(merged_gate_up) = &self.merged_gate_up {
+            return merged_gate_up.preferred_activation_scale_layout_for(xs);
+        }
+        let layout = self.gate.preferred_activation_scale_layout_for(xs)?;
+        (self.up.preferred_activation_scale_layout_for(xs) == Some(layout)).then_some(layout)
+    }
+
+    pub fn forward_quantized(&self, activation: &QuantizedActivation) -> Result<Tensor> {
+        if let Some(merged_gate_up) = &self.merged_gate_up {
+            let gate_up = merged_gate_up.forward_quantized_packed(activation)?;
+            return self.forward_packed_gate_up(gate_up);
+        }
+        let gate = self.gate.forward_quantized(activation)?;
+        let up = self.up.forward_quantized(activation)?;
+        let inter = crate::ops::mul_and_act(&gate, &up, self.act)?;
+        self.down.forward(&inter)
+    }
+
+    pub fn forward_with_add_rms_norm(
+        &self,
+        branch: &Tensor,
+        residual: &Tensor,
+        norm: &GemmaRmsNorm,
+    ) -> Result<(Tensor, Tensor)> {
+        let layout = self.preferred_activation_scale_layout_for(branch);
+        if let Some(layout @ ActivationScaleLayout::GroupMajor { .. }) = layout {
+            let scheme = self
+                .activation_quantization_scheme_for(branch)
+                .expect("activation scale layout requires a quantization scheme");
+            let fused = mistralrs_quant::fused_add_rms_norm_quantized(
+                branch,
+                residual,
+                norm.weight(),
+                norm.eps() as f32,
+                scheme,
+                layout,
+            )?;
+            let (residual, activation) = fused.into_parts();
+            let output = self.forward_quantized(&activation)?;
+            Ok((residual, output))
+        } else {
+            let (residual, normalized) = norm.forward_add_rms_norm(branch, residual)?;
+            let output = self.forward(&normalized)?;
+            Ok((residual, output))
+        }
+    }
+
     pub fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        let res = if let (true, Some(merged_gate_up)) =
-            (self.can_use_merged_gate_up(), &self.merged_gate_up)
-        {
-            let mut gate_up = merged_gate_up.forward(xs)?.into_iter();
-            let gate = gate_up.next().unwrap();
-            let up = gate_up.next().unwrap();
-            let inter = crate::ops::mul_and_act(&gate, &up, self.act)?;
-            self.down.forward(&inter)?
+        let res = if let Some(merged_gate_up) = &self.merged_gate_up {
+            if let Some(gate_up) = merged_gate_up.forward_packed(xs)? {
+                self.forward_packed_gate_up(gate_up)?
+            } else {
+                let mut gate_up = merged_gate_up.forward(xs)?.into_iter();
+                let gate = gate_up.next().unwrap();
+                let up = gate_up.next().unwrap();
+                let inter = crate::ops::mul_and_act(&gate, &up, self.act)?;
+                self.down.forward(&inter)?
+            }
         } else {
             crate::ops::quantized_ffn(xs, &*self.gate, &*self.up, &*self.down, self.act)?
         };
         Ok(res)
-    }
-
-    fn can_use_merged_gate_up(&self) -> bool {
-        #[cfg(feature = "cuda")]
-        {
-            self.gate.get_qtensor().is_none() && self.up.get_qtensor().is_none()
-        }
-        #[cfg(not(feature = "cuda"))]
-        {
-            true
-        }
     }
 }
 
@@ -3559,13 +3867,12 @@ impl MlpLayer for Mlp {
             self.down.clone()
         };
 
-        let merged_gate_up = crate::ops::MergedDenseProjection::new(&[gate.clone(), up.clone()])?;
-
         Ok(Box::new(Self {
             gate,
             up,
             down,
-            merged_gate_up,
+            // Delta-modified copies no longer alias the packed weight; run the projections separately
+            merged_gate_up: None,
             act: self.act,
             params: self.params.clone(),
         }))
@@ -3701,7 +4008,11 @@ impl Module for ScaledEmbedding {
 
 #[cfg(test)]
 mod tests {
-    use super::{contains_tensor_or_weight_source_with, use_legacy_tied_uqff_head};
+    use super::{
+        contains_tensor_or_weight_source_with, use_legacy_tied_uqff_head,
+        yarn_inv_freq_and_attention_factor, Qwen3VLRotaryEmbedding, YarnRopeConfig,
+    };
+    use candle_core::{DType, Device, Tensor};
     use std::collections::HashSet;
 
     #[test]
@@ -3744,5 +4055,179 @@ mod tests {
             "embed_tokens.weight",
             |name| name == "embed_tokens.weight",
         ));
+    }
+
+    #[test]
+    fn qwen_mrope_yarn_factor_one_matches_default() -> candle_core::Result<()> {
+        let device = Device::Cpu;
+        let sections = vec![1, 1, 2];
+        let default = Qwen3VLRotaryEmbedding::new(10_000.0, 8, &device, sections.clone())?;
+        let yarn = Qwen3VLRotaryEmbedding::new_yarn(
+            &YarnRopeConfig {
+                base: 10_000.0,
+                head_dim: 8,
+                max_position_embeddings: 128,
+                original_max_position_embeddings: 128,
+                factor: 1.0,
+                beta_fast: 32.0,
+                beta_slow: 1.0,
+                mscale: 1.0,
+                mscale_all_dim: 0.0,
+                attention_factor: None,
+            },
+            &device,
+            sections,
+        )?;
+        let position_ids =
+            Tensor::from_vec(vec![0u32, 1, 2, 0, 1, 2, 0, 1, 2], (3, 1, 3), &device)?;
+        let (default_cos, default_sin) = default.compute_cos_sin(&position_ids, DType::F32)?;
+        let (yarn_cos, yarn_sin) = yarn.compute_cos_sin(&position_ids, DType::F32)?;
+        for (default, yarn) in default_cos
+            .flatten_all()?
+            .to_vec1::<f32>()?
+            .into_iter()
+            .zip(yarn_cos.flatten_all()?.to_vec1::<f32>()?)
+        {
+            assert!((default - yarn).abs() < 1e-6);
+        }
+        for (default, yarn) in default_sin
+            .flatten_all()?
+            .to_vec1::<f32>()?
+            .into_iter()
+            .zip(yarn_sin.flatten_all()?.to_vec1::<f32>()?)
+        {
+            assert!((default - yarn).abs() < 1e-6);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn qwen_text_rope_matches_repeated_mrope() -> candle_core::Result<()> {
+        let device = Device::Cpu;
+        let rope = Qwen3VLRotaryEmbedding::new_yarn(
+            &YarnRopeConfig {
+                base: 10_000.0,
+                head_dim: 8,
+                max_position_embeddings: 512,
+                original_max_position_embeddings: 128,
+                factor: 4.0,
+                beta_fast: 32.0,
+                beta_slow: 1.0,
+                mscale: 1.0,
+                mscale_all_dim: 0.0,
+                attention_factor: None,
+            },
+            &device,
+            vec![1, 1, 2],
+        )?;
+        let text_positions = Tensor::from_vec(vec![0u32, 1, 2, 17, 31, 63], (2, 3), &device)?;
+        let repeated_positions = text_positions.unsqueeze(0)?.repeat((3, 1, 1))?;
+        let (expected_cos, expected_sin) = rope.compute_cos_sin(&repeated_positions, DType::F32)?;
+        let (actual_cos, actual_sin) = rope.compute_text_cos_sin(&text_positions, DType::F32)?;
+
+        assert_eq!(actual_cos.dims(), &[2, 3, 4]);
+        assert_eq!(actual_sin.dims(), &[2, 3, 4]);
+        for (expected, actual) in expected_cos
+            .flatten_all()?
+            .to_vec1::<f32>()?
+            .into_iter()
+            .zip(actual_cos.flatten_all()?.to_vec1::<f32>()?)
+        {
+            assert!((expected - actual).abs() < 1e-5);
+        }
+        for (expected, actual) in expected_sin
+            .flatten_all()?
+            .to_vec1::<f32>()?
+            .into_iter()
+            .zip(actual_sin.flatten_all()?.to_vec1::<f32>()?)
+        {
+            assert!((expected - actual).abs() < 1e-5);
+        }
+        Ok(())
+    }
+
+    #[cfg(feature = "cuda")]
+    #[test]
+    #[ignore = "requires CUDA"]
+    fn qwen_cuda_text_rope_matches_repeated_mrope() -> candle_core::Result<()> {
+        let device = Device::new_cuda(0)?;
+        let rope = Qwen3VLRotaryEmbedding::new_yarn(
+            &YarnRopeConfig {
+                base: 10_000_000.0,
+                head_dim: 128,
+                max_position_embeddings: 1_000_000,
+                original_max_position_embeddings: 262_144,
+                factor: 4.0,
+                beta_fast: 32.0,
+                beta_slow: 1.0,
+                mscale: 1.0,
+                mscale_all_dim: 0.0,
+                attention_factor: None,
+            },
+            &device,
+            vec![11, 11, 42],
+        )?;
+        let text_positions = Tensor::from_vec(
+            vec![0u32, 63, 65_535, 100_000, 500_000, 890_000],
+            (2, 3),
+            &device,
+        )?;
+        let repeated_positions = text_positions.unsqueeze(0)?.repeat((3, 1, 1))?;
+        for (dtype, tolerance) in [(DType::F32, 2e-3f32), (DType::BF16, 2e-2f32)] {
+            let (expected_cos, expected_sin) = rope.compute_cos_sin(&repeated_positions, dtype)?;
+            let (actual_cos, actual_sin) = rope.compute_text_cos_sin(&text_positions, dtype)?;
+            device.synchronize()?;
+            for (expected, actual) in expected_cos
+                .to_dtype(DType::F32)?
+                .flatten_all()?
+                .to_vec1::<f32>()?
+                .into_iter()
+                .zip(
+                    actual_cos
+                        .to_dtype(DType::F32)?
+                        .flatten_all()?
+                        .to_vec1::<f32>()?,
+                )
+            {
+                assert!((expected - actual).abs() < tolerance);
+            }
+            for (expected, actual) in expected_sin
+                .to_dtype(DType::F32)?
+                .flatten_all()?
+                .to_vec1::<f32>()?
+                .into_iter()
+                .zip(
+                    actual_sin
+                        .to_dtype(DType::F32)?
+                        .flatten_all()?
+                        .to_vec1::<f32>()?,
+                )
+            {
+                assert!((expected - actual).abs() < tolerance);
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn yarn_uses_hf_default_attention_factor() -> candle_core::Result<()> {
+        let (_, attention_factor) = yarn_inv_freq_and_attention_factor(
+            &YarnRopeConfig {
+                base: 10_000.0,
+                head_dim: 8,
+                max_position_embeddings: 512,
+                original_max_position_embeddings: 128,
+                factor: 4.0,
+                beta_fast: 32.0,
+                beta_slow: 1.0,
+                mscale: 1.0,
+                mscale_all_dim: 0.0,
+                attention_factor: None,
+            },
+            &Device::Cpu,
+        )?;
+        let expected = 1.0 + 0.1 * 4.0f32.ln();
+        assert!((attention_factor - expected).abs() < 1e-6);
+        Ok(())
     }
 }

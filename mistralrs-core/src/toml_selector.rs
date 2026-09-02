@@ -687,12 +687,18 @@ struct TomlLoaderInnerParams {
     no_kv_cache: bool,
     tokenizer_json: Option<String>,
     jinja_explicit: Option<String>,
+    encoder_cache_memory_bytes: Option<usize>,
+    max_model_len: Option<usize>,
+    hf_config_overrides: Option<crate::HfConfigOverrides>,
 }
 
 pub struct TomlLoaderArgs {
     pub chat_template: Option<String>,
     pub no_kv_cache: bool,
     pub jinja_explicit: Option<String>,
+    pub encoder_cache_memory_bytes: Option<usize>,
+    pub max_model_len: Option<usize>,
+    pub hf_config_overrides: Option<crate::HfConfigOverrides>,
 }
 
 pub fn get_toml_selected_model_dtype(model: &TomlSelector) -> ModelDType {
@@ -803,6 +809,27 @@ fn loader_from_selected(
     args: TomlLoaderInnerParams,
     model: TomlModelSelected,
 ) -> anyhow::Result<Box<dyn Loader>> {
+    let supports_hf_config_overrides = matches!(
+        &model,
+        TomlModelSelected::Plain { .. }
+            | TomlModelSelected::Lora { .. }
+            | TomlModelSelected::XLora { .. }
+            | TomlModelSelected::MultimodalPlain { .. }
+    );
+    if args.hf_config_overrides.is_some() && !supports_hf_config_overrides {
+        anyhow::bail!("HF config overrides are supported only for text and multimodal models");
+    }
+    let supports_max_model_len = supports_hf_config_overrides
+        || matches!(
+            &model,
+            TomlModelSelected::GGUF { .. }
+                | TomlModelSelected::LoraGGUF { .. }
+                | TomlModelSelected::XLoraGGUF { .. }
+        );
+    if args.max_model_len.is_some() && !supports_max_model_len {
+        anyhow::bail!("max_model_len is not supported by this model format");
+    }
+
     let loader: Box<dyn Loader> = match model {
         TomlModelSelected::Plain {
             model_id,
@@ -831,6 +858,8 @@ fn loader_from_selected(
                 imatrix,
                 calibration_file,
                 hf_cache_path,
+                hf_config_overrides: args.hf_config_overrides.clone(),
+                max_model_len: args.max_model_len,
                 matformer_config_path: None,
                 matformer_slice_name: None,
             },
@@ -868,6 +897,8 @@ fn loader_from_selected(
                 imatrix: None,
                 calibration_file: None,
                 hf_cache_path,
+                hf_config_overrides: args.hf_config_overrides.clone(),
+                max_model_len: args.max_model_len,
                 matformer_config_path: None,
                 matformer_slice_name: None,
             },
@@ -913,6 +944,8 @@ fn loader_from_selected(
                 imatrix: None,
                 calibration_file: None,
                 hf_cache_path,
+                hf_config_overrides: args.hf_config_overrides.clone(),
+                max_model_len: args.max_model_len,
                 matformer_config_path: None,
                 matformer_slice_name: None,
             },
@@ -959,14 +992,15 @@ fn loader_from_selected(
                     imatrix,
                     calibration_file,
                     max_edge,
-                    max_model_len: None,
+                    max_model_len: args.max_model_len,
                     hf_cache_path,
                     matformer_config_path,
                     matformer_slice_name,
                 },
                 args.no_kv_cache,
                 args.jinja_explicit,
-            );
+            )
+            .with_encoder_cache_memory_bytes(args.encoder_cache_memory_bytes);
             if let Some(mmproj_filename) = mmproj_filename {
                 builder = builder.with_mmproj_files(
                     mmproj_filename
@@ -1006,6 +1040,7 @@ fn loader_from_selected(
             args.no_kv_cache,
             args.jinja_explicit,
         )
+        .with_encoder_cache_memory_bytes(args.encoder_cache_memory_bytes)
         .with_xlora(
             xlora_model_id,
             serde_json::from_reader(
@@ -1039,6 +1074,7 @@ fn loader_from_selected(
             args.no_kv_cache,
             args.jinja_explicit,
         )
+        .with_encoder_cache_memory_bytes(args.encoder_cache_memory_bytes)
         .with_lora(
             adapters_model_id,
             serde_json::from_reader(
@@ -1164,7 +1200,8 @@ fn loader_from_selected(
                         .collect::<Vec<_>>()
                 }),
                 max_edge,
-                max_model_len: None,
+                max_model_len: args.max_model_len,
+                hf_config_overrides: args.hf_config_overrides.clone(),
                 calibration_file,
                 imatrix,
                 hf_cache_path,
@@ -1177,6 +1214,7 @@ fn loader_from_selected(
             Some(model_id),
             args.jinja_explicit,
         )
+        .with_encoder_cache_memory_bytes(args.encoder_cache_memory_bytes)
         .build(arch),
         TomlModelSelected::Embedding {
             model_id,
@@ -1218,6 +1256,9 @@ impl TryInto<Box<dyn Loader>> for (TomlSelector, TomlLoaderArgs) {
             no_kv_cache: args.no_kv_cache,
             tokenizer_json: selector.tokenizer_json,
             jinja_explicit: args.jinja_explicit,
+            encoder_cache_memory_bytes: args.encoder_cache_memory_bytes,
+            max_model_len: args.max_model_len,
+            hf_config_overrides: args.hf_config_overrides,
         };
         if selector.speculative.is_some() {
             anyhow::bail!(
@@ -1567,6 +1608,9 @@ mod tests {
                 chat_template: None,
                 no_kv_cache: false,
                 jinja_explicit: None,
+                encoder_cache_memory_bytes: None,
+                max_model_len: None,
+                hf_config_overrides: None,
             },
         )
             .try_into();

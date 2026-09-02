@@ -471,7 +471,7 @@ impl GgufWeightSource {
         let data = self.archive.tensor_data(name)?;
         let block_count = info.elem_count()? / 32;
         let mut values = Vec::with_capacity(block_count * if scales { 1 } else { 16 });
-        for block in data.bytes().chunks_exact(17) {
+        for block in data.bytes().as_chunks::<17>().0 {
             if scales {
                 values.push(block[0]);
             } else {
@@ -1454,7 +1454,7 @@ mod tests {
 
     fn native_mxfp4_blocks(data: &[u8]) -> Vec<u8> {
         let mut blocks = Vec::new();
-        for block in data.chunks_exact(17) {
+        for block in data.as_chunks::<17>().0 {
             for index in (0..32).step_by(2) {
                 let nibble = |index: usize| {
                     if index < 16 {
@@ -1940,11 +1940,15 @@ mod tests {
         let expected_gate_blocks = native_mxfp4_blocks(&gate_data);
         let expected_up_blocks = native_mxfp4_blocks(&up_data);
         let expected_gate_scales = gate_data
-            .chunks_exact(17)
+            .as_chunks::<17>()
+            .0
+            .iter()
             .map(|block| block[0])
             .collect::<Vec<_>>();
         let expected_up_scales = up_data
-            .chunks_exact(17)
+            .as_chunks::<17>()
+            .0
+            .iter()
             .map(|block| block[0])
             .collect::<Vec<_>>();
 
@@ -1969,7 +1973,7 @@ mod tests {
             -6.0,
         ];
         let mut expected_dequantized = Vec::new();
-        for block in gate_data.chunks_exact(17) {
+        for block in gate_data.as_chunks::<17>().0 {
             let scale = f32::from_bits(u32::from(block[0]) << 23);
             for packed in &block[1..] {
                 expected_dequantized.push(fp4[(packed & 0x0f) as usize] * scale);

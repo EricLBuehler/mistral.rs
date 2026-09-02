@@ -2,19 +2,22 @@ use crate::paged_attention::block_hash::MultimodalKind;
 use crate::{
     device_map::DeviceMapper,
     pipeline::{
+        recurrent_batch_kind_for_input,
         text_models_inputs_processor::{
             self, get_completion_input, get_prompt_input, PagedAttentionMeta,
         },
-        InputProcessorOutput, InputsProcessor, InputsProcessorType, MessagesAction, Processor,
+        InputProcessorOutput, InputsProcessor, InputsProcessorType, InputsProcessorValidationError,
+        MessagesAction, Processor,
     },
     sequence::{find_placeholder_delimited_ranges, Sequence},
     vision_models::{
         image_processor::{ImagePreProcessor, PreprocessedImages},
         preprocessor_config::{PreProcessorConfig, ToFilter},
         qwen2vl::{
-            expand_media_placeholders, media_data_cached_offset, packed_layout, prompt_mrope,
-            select_media_batch, select_media_view, shift_media_spans, split_media_pixels,
-            validated_mm_features, video_hashes, PromptMropeConfig,
+            apply_mrope_position_deltas, expand_media_placeholders, media_data_cached_offset,
+            packed_layout, prompt_mrope, select_media_batch, select_media_view, shift_media_spans,
+            split_media_pixels, validate_qwen_media_dimensions, validated_mm_features,
+            video_hashes, PromptMropeConfig,
         },
         ModelInputs,
     },
@@ -29,6 +32,24 @@ use std::{any::Any, sync::Arc};
 use tokenizers::Tokenizer;
 
 use super::Qwen2_5VLVisionSpecificArgs;
+
+fn qwen2_5_decode_args(input_ids: &Tensor, seqlens: Vec<usize>) -> Qwen2_5VLVisionSpecificArgs {
+    Qwen2_5VLVisionSpecificArgs {
+        input_ids_full: input_ids.clone(),
+        pixel_values_videos: None,
+        image_grid_thw: None,
+        video_grid_thw: None,
+        rope_img_grid_thw: None,
+        rope_vid_grid_thw: None,
+        seqlens,
+        continuous_img_pad: Vec::new(),
+        continuous_vid_pad: Vec::new(),
+        image_hashes: Vec::new(),
+        video_hashes: Vec::new(),
+        packed_layout: None,
+        prompt_position_ids: None,
+    }
+}
 
 // Input processor
 struct Qwen2_5VLImageProcessor {
@@ -115,6 +136,35 @@ impl InputsProcessor for Qwen2_5VLImageProcessor {
             .any(|seq| seq.has_images() || seq.has_videos())
         {
             return Ok(());
+        }
+
+        let resize_factor = if config.do_resize.is_none_or(|resize| resize) {
+            config
+                .patch_size
+                .zip(config.merge_size)
+                .and_then(|(patch_size, merge_size)| patch_size.checked_mul(merge_size))
+                .filter(|factor| *factor > 0)
+        } else {
+            None
+        };
+        for seq in input_seqs.iter() {
+            if let Some(images) = seq.images() {
+                validate_qwen_media_dimensions(
+                    images,
+                    resize_factor.filter(|_| self.max_edge.is_none()),
+                )?;
+            }
+            if let Some(videos) = seq.videos() {
+                for video in videos {
+                    if video.frames.is_empty() {
+                        return Err(InputsProcessorValidationError(
+                            "Qwen video inputs must contain at least one frame".to_string(),
+                        )
+                        .into());
+                    }
+                    validate_qwen_media_dimensions(&video.frames, resize_factor)?;
+                }
+            }
         }
 
         let mut detok_seqs = tokenizer
@@ -322,6 +372,56 @@ impl InputsProcessor for Qwen2_5VLImageProcessor {
         if no_kv_cache {
             return Err(anyhow::Error::msg("Vision model must have kv cache."));
         }
+        if !is_prompt {
+            let text_models_inputs_processor::InnerInputProcessorOutput {
+                inputs:
+                    text_models_inputs_processor::InputMetadata {
+                        input,
+                        positions,
+                        context_lens,
+                        position_ids,
+                        paged_attn_meta,
+                        flash_meta,
+                    },
+                seq_indices,
+            } = get_completion_input(
+                input_seqs
+                    .iter()
+                    .map(|seq| seq.get_toks())
+                    .collect::<Vec<_>>(),
+                input_seqs,
+                device,
+                no_kv_cache,
+                last_n_context_len,
+                return_raw_logits,
+                paged_attn_metadata.as_mut(),
+                mapper,
+                sliding_window,
+            )
+            .unwrap();
+            let position_ids = apply_mrope_position_deltas(position_ids, input_seqs)?;
+            let args =
+                qwen2_5_decode_args(&input, input_seqs.iter().map(|seq| seq.len()).collect());
+            let inputs: Box<dyn Any> = Box::new(ModelInputs {
+                input_ids: input,
+                seqlen_offsets: positions,
+                context_lens,
+                position_ids,
+                pixel_values: None,
+                model_specific_args: Box::new(args),
+                paged_attn_meta,
+                flash_meta,
+                recurrent_batch_kind: recurrent_batch_kind_for_input(
+                    false,
+                    crate::speculative::staging::staged_batch_width(input_seqs).is_some(),
+                ),
+                adapter_leases: crate::vision_models::adapter_leases(input_seqs, &seq_indices),
+            });
+            return Ok(InputProcessorOutput {
+                inputs,
+                seq_indices,
+            });
+        }
         let Some(tokenizer) = tokenizer else {
             return Err(anyhow::Error::msg(
                 "MLlamaInputProcessor requires a specified tokenizer.",
@@ -334,6 +434,13 @@ impl InputsProcessor for Qwen2_5VLImageProcessor {
         let has_media = input_seqs
             .iter()
             .any(|seq| seq.has_images() || seq.has_videos());
+        for seq in input_seqs.iter_mut() {
+            if seq.multimodal.rope_img_grid_thw.is_none()
+                && seq.multimodal.rope_vid_grid_thw.is_none()
+            {
+                seq.multimodal.mrope_position_delta = None;
+            }
+        }
         let mut image_item_counts = vec![0usize; input_seqs.len()];
         let mut video_item_counts = vec![0usize; input_seqs.len()];
 
@@ -829,7 +936,6 @@ impl InputsProcessor for Qwen2_5VLImageProcessor {
         } else {
             None
         };
-
         let inputs: Box<dyn Any> = Box::new(ModelInputs {
             input_ids: input,
             seqlen_offsets: positions,
@@ -1094,6 +1200,30 @@ impl ImagePreProcessor for Qwen2_5VLImageProcessor {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn decode_args_only_retain_current_tokens() -> Result<()> {
+        let input_ids = Tensor::new(&[[7u32], [9]], &Device::Cpu)?;
+        let args = qwen2_5_decode_args(&input_ids, vec![100, 200]);
+
+        assert_eq!(
+            args.input_ids_full.to_vec2::<u32>()?,
+            vec![vec![7], vec![9]]
+        );
+        assert_eq!(args.seqlens, vec![100, 200]);
+        assert!(args.pixel_values_videos.is_none());
+        assert!(args.image_grid_thw.is_none());
+        assert!(args.video_grid_thw.is_none());
+        assert!(args.rope_img_grid_thw.is_none());
+        assert!(args.rope_vid_grid_thw.is_none());
+        assert!(args.continuous_img_pad.is_empty());
+        assert!(args.continuous_vid_pad.is_empty());
+        assert!(args.image_hashes.is_empty());
+        assert!(args.video_hashes.is_empty());
+        assert!(args.packed_layout.is_none());
+        assert!(args.prompt_position_ids.is_none());
+        Ok(())
+    }
 
     #[test]
     fn split_pixels_rejects_grid_mismatch() -> Result<()> {

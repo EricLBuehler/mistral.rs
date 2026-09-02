@@ -77,35 +77,17 @@ pub struct OutputTokensDetails {
 /// Error information for a response
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct ResponseError {
-    /// Error type
-    #[serde(rename = "type")]
-    pub error_type: String,
     /// Error code
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub code: Option<String>,
+    pub code: String,
     /// Error message
     pub message: String,
 }
 
 impl ResponseError {
     /// Create a new ResponseError
-    pub fn new(error_type: impl Into<String>, message: impl Into<String>) -> Self {
+    pub fn new(code: impl Into<String>, message: impl Into<String>) -> Self {
         Self {
-            error_type: error_type.into(),
-            code: None,
-            message: message.into(),
-        }
-    }
-
-    /// Create a new ResponseError with a code
-    pub fn with_code(
-        error_type: impl Into<String>,
-        code: impl Into<String>,
-        message: impl Into<String>,
-    ) -> Self {
-        Self {
-            error_type: error_type.into(),
-            code: Some(code.into()),
+            code: code.into(),
             message: message.into(),
         }
     }
@@ -505,4 +487,23 @@ pub struct SpecificToolChoice {
 pub struct SpecificFunctionChoice {
     /// Name of the function
     pub name: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn response_error_matches_openai_shape() {
+        let error = ResponseError::new("server_error", "The request failed.");
+
+        assert_eq!(
+            serde_json::to_value(error).unwrap(),
+            json!({
+                "code": "server_error",
+                "message": "The request failed."
+            })
+        );
+    }
 }

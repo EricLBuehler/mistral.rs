@@ -3,7 +3,7 @@ title: Stream chat responses from Rust
 description: Handle Response variants, errors, tool progress events, cancellation, and task spawning with stream_chat_request.
 ---
 
-`stream_chat_request` returns a value implementing `futures::Stream<Item = Response>`. The minimal loop is in [getting started](/mistral.rs/guides/rust/getting-started/#streaming); this guide covers the variant taxonomy and production patterns.
+`stream_chat_request` returns a value implementing `futures::Stream<Item = Response>`. The minimal loop is in [getting started](/guides/rust/getting-started/#streaming); this guide covers the variant taxonomy and production patterns.
 
 ## Handling every variant
 
@@ -49,11 +49,11 @@ while let Some(item) = stream.next().await {
 - `Response::ModelError`: model-level failure, accompanied by the partial response built so far.
 - `Response::AgenticToolCallProgress`, `Response::AgenticToolApprovalRequired`, `Response::File`: emitted when server-side tools run mid-stream (next section).
 
-The example uses `_ => {}` for brevity; production code should match the agentic variants explicitly. Full example: [streaming](/mistral.rs/examples/rust/getting-started/streaming/), [error-handling](/mistral.rs/examples/rust/advanced/error-handling/).
+The example uses `_ => {}` for brevity; production code should match the agentic variants explicitly. Full example: [streaming](/examples/rust/getting-started/streaming/), [error-handling](/examples/rust/advanced/error-handling/).
 
 ## Streaming with tool calls
 
-When the [agentic loop](/mistral.rs/guides/agents/build-an-agent/) executes a tool mid-stream (web search, code execution, shell, [MCP (Model Context Protocol)](/mistral.rs/guides/agents/connect-mcp-server/) tools), the stream interleaves progress events with content chunks, in stream order:
+When the [agentic loop](/guides/agents/build-an-agent/) executes a tool mid-stream (web search, code execution, shell, [MCP (Model Context Protocol)](/guides/agents/connect-mcp-server/) tools), the stream interleaves progress events with content chunks, in stream order:
 
 ```rust
 use mistralrs::core::AgenticToolCallPhase;

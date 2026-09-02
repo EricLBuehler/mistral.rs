@@ -1,30 +1,107 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, sync::Once};
 
 use candle_core::{DType, Device, DeviceLocation, Result, Tensor};
 #[cfg(all(feature = "cuda", target_family = "unix"))]
 use mistralrs_paged_attn::{
-    flashinfer_decode, gather_kv_cache_flashinfer, reshape_and_cache_flashinfer,
-    FlashInferDecodeScratch,
+    fa3_fp8_decode, flashinfer_decode, gather_kv_cache_flashinfer, reshape_and_cache_flashinfer,
+    Fa3DecodeParams, FlashInferDecodeScratch, KvCacheScales as FlashInferKvCacheScales,
+    DEFAULT_FP8_KV_CACHE_SCALES,
 };
-use mistralrs_paged_attn::{kv_scale_update, paged_attention, reshape_and_cache};
-
-const KV_SCALE_UPDATE_ITERATION: i32 = 128;
-use std::sync::atomic::{AtomicI32, Ordering};
+use mistralrs_paged_attn::{paged_attention, reshape_and_cache};
 
 #[cfg(all(feature = "cuda", target_family = "unix"))]
 use crate::attention::sliding_window_left;
+#[cfg(all(feature = "cuda", target_family = "unix"))]
+use crate::flashinfer::{
+    fa3_device_num_sm, fa3_prefill_cache_num_sm, with_fa3_prefill_workspace, Fa3DecodeScheduleKey,
+    Fa3DecodeView, Fa3PagedScheduleShape,
+};
 use crate::{
     attention::{AttentionMask, SdpaParams},
     layers::Sdpa,
     paged_attention::{
         block_aligned_sliding_window_start,
-        plan::{DecodePlan, DecodePlanInput, PrefixPrefillPlan, PrefixPrefillPlanInput},
-        AttentionBackendKind, _PAD_SLOT_ID,
+        plan::{
+            gather_prefill_workspace_for_lengths, DecodePlan, DecodePlanInput,
+            GatherPrefillWorkspaceRequest, PrefixPrefillPlan, PrefixPrefillPlanInput,
+        },
+        AttentionBackendKind, Fp8AttentionScales, _PAD_SLOT_ID,
     },
     pipeline::text_models_inputs_processor::{
         FlashKMeta, FlashParams, PagedAttentionInputMetadata,
     },
 };
+
+static UNCALIBRATED_FP8_ATTENTION_WARNING: Once = Once::new();
+
+#[cfg(all(feature = "cuda", target_family = "unix"))]
+#[derive(Clone, Copy)]
+struct Fa3DecodeCandidate {
+    key: Fa3DecodeScheduleKey,
+    query_dtype: DType,
+    query_contiguous: bool,
+    key_cache_dtype: DType,
+    value_cache_dtype: DType,
+    mask_is_none: bool,
+    shapes_match: bool,
+    has_alibi: bool,
+    has_sinks: bool,
+    has_softcap: bool,
+    has_sliding_window: bool,
+    has_noncausal_mm_context: bool,
+}
+
+#[cfg(all(feature = "cuda", target_family = "unix"))]
+impl Fa3DecodeCandidate {
+    fn schedule_key(self) -> Option<Fa3DecodeScheduleKey> {
+        (self.query_dtype == DType::BF16
+            && self.query_contiguous
+            && self.key_cache_dtype == DType::F8E4M3
+            && self.value_cache_dtype == DType::F8E4M3
+            && self.mask_is_none
+            && self.shapes_match
+            && !self.has_alibi
+            && !self.has_sinks
+            && !self.has_softcap
+            && !self.has_sliding_window
+            && !self.has_noncausal_mm_context
+            && self.key.supported())
+        .then_some(self.key)
+    }
+}
+
+#[cfg(all(feature = "cuda", target_family = "unix"))]
+#[derive(Clone, Copy)]
+struct FlashInferDecodeCall<'call, 'ctx> {
+    ctx: &'call PagedForwardCtx<'ctx>,
+    query: &'call Tensor,
+    key_cache: &'call Tensor,
+    value_cache: &'call Tensor,
+    dev: &'call DeviceLocation,
+    attention_mask: &'call AttentionMask,
+}
+
+#[derive(Clone, Copy)]
+struct CacheScales<'a> {
+    #[cfg(all(feature = "cuda", target_family = "unix"))]
+    attention: Fp8AttentionScales,
+    k: Option<&'a Tensor>,
+    v: Option<&'a Tensor>,
+}
+
+impl CacheScales<'_> {
+    #[cfg(all(feature = "cuda", target_family = "unix"))]
+    fn flashinfer(self, key_cache: &Tensor) -> FlashInferKvCacheScales {
+        if key_cache.dtype() == DType::F8E4M3 {
+            FlashInferKvCacheScales {
+                k: self.attention.k,
+                v: self.attention.v,
+            }
+        } else {
+            DEFAULT_FP8_KV_CACHE_SCALES
+        }
+    }
+}
 
 fn resolve_tensor_for_device(
     tensors: &HashMap<candle_core::DeviceLocation, Tensor>,
@@ -40,13 +117,27 @@ fn resolve_tensor_for_device(
     candle_core::bail!("Missing {what} tensor for {:?}", device.location())
 }
 
+fn checked_sequence_token_count(lengths: &[usize]) -> Result<usize> {
+    let total = lengths.iter().try_fold(0usize, |total, &len| {
+        total
+            .checked_add(len)
+            .ok_or_else(|| candle_core::Error::msg("sequence token count overflow"))
+    })?;
+    i32::try_from(total)
+        .map_err(|_| candle_core::Error::msg("sequence token count exceeds kernel i32 limit"))?;
+    Ok(total)
+}
+
 fn cumulative_seqlens_from_lengths(lengths: &[usize], device: &Device) -> Result<Tensor> {
+    let expected_total = checked_sequence_token_count(lengths)?;
     let mut cumulative = Vec::with_capacity(lengths.len() + 1);
+    let mut total = 0usize;
     cumulative.push(0u32);
     for &len in lengths {
-        #[allow(clippy::cast_possible_truncation)]
-        cumulative.push(cumulative.last().copied().unwrap_or(0) + len as u32);
+        total += len;
+        cumulative.push(u32::try_from(total).map_err(candle_core::Error::wrap)?);
     }
+    debug_assert_eq!(total, expected_total);
     Tensor::new(&cumulative[..], &Device::Cpu)?.to_device(device)
 }
 
@@ -79,40 +170,82 @@ fn cache_kv_shape(key_cache: &Tensor, value_cache: &Tensor) -> Result<(usize, us
     }
 }
 
-fn cache_input_is_packed(tensor: &Tensor) -> Result<bool> {
-    let (_, heads, head_size) = tensor.dims3()?;
+fn cache_input_shape(tensor: &Tensor) -> Result<(usize, usize, usize)> {
+    match *tensor.dims() {
+        [tokens, heads, head_size] => Ok((tokens, heads, head_size)),
+        [batch, seq_len, heads, head_size] => Ok((
+            batch
+                .checked_mul(seq_len)
+                .ok_or_else(|| candle_core::Error::msg("cache input token count overflow"))?,
+            heads,
+            head_size,
+        )),
+        _ => candle_core::bail!(
+            "cache input must have shape [tokens, heads, head_size] or [batch, seq_len, heads, head_size], got {:?}",
+            tensor.shape()
+        ),
+    }
+}
+
+fn cache_input_can_write_directly(tensor: &Tensor) -> Result<bool> {
+    let (_, heads, head_size) = cache_input_shape(tensor)?;
+    let dims = tensor.dims();
     let stride = tensor.stride();
-    Ok(stride[2] == 1 && stride[1] == head_size && stride[0] == heads * head_size)
+    let row_stride = match *dims {
+        [_, _, _] => stride[0],
+        [batch, seq_len, _, _] => {
+            if !cfg!(all(feature = "cuda", target_family = "unix")) {
+                return Ok(false);
+            }
+            let row_stride = if seq_len == 1 { stride[0] } else { stride[1] };
+            if batch > 1 && seq_len > 1 && stride[0] != seq_len.saturating_mul(row_stride) {
+                return Ok(false);
+            }
+            row_stride
+        }
+        _ => unreachable!(),
+    };
+    Ok(stride[stride.len() - 1] == 1
+        && stride[stride.len() - 2] == head_size
+        && row_stride >= heads.saturating_mul(head_size))
 }
 
 fn write_kv_cache(
     key: &Tensor,
     value: &Tensor,
-    k_scale: Option<&Tensor>,
-    v_scale: Option<&Tensor>,
+    scales: CacheScales<'_>,
     key_cache: &mut Tensor,
     value_cache: &mut Tensor,
     slot_mapping: &Tensor,
 ) -> Result<()> {
     let key_packed;
-    let key = if cache_input_is_packed(key)? {
+    let key = if cache_input_can_write_directly(key)? {
         key
     } else {
-        key_packed = key.contiguous()?;
+        key_packed = key.force_contiguous()?.reshape(cache_input_shape(key)?)?;
         &key_packed
     };
     let value_packed;
-    let value = if cache_input_is_packed(value)? {
+    let value = if cache_input_can_write_directly(value)? {
         value
     } else {
-        value_packed = value.contiguous()?;
+        value_packed = value
+            .force_contiguous()?
+            .reshape(cache_input_shape(value)?)?;
         &value_packed
     };
     match AttentionBackendKind::from_cache(key_cache, value_cache) {
         AttentionBackendKind::FlashInfer => {
             #[cfg(all(feature = "cuda", target_family = "unix"))]
             {
-                reshape_and_cache_flashinfer(key, value, key_cache, value_cache, slot_mapping)
+                reshape_and_cache_flashinfer(
+                    key,
+                    value,
+                    key_cache,
+                    value_cache,
+                    slot_mapping,
+                    scales.flashinfer(key_cache),
+                )
             }
             #[cfg(not(all(feature = "cuda", target_family = "unix")))]
             {
@@ -122,8 +255,8 @@ fn write_kv_cache(
         AttentionBackendKind::Standard => reshape_and_cache(
             key,
             value,
-            k_scale,
-            v_scale,
+            scales.k,
+            scales.v,
             key_cache,
             value_cache,
             slot_mapping,
@@ -134,17 +267,25 @@ fn write_kv_cache(
 fn gather_kv_cache_for_layout(
     key_cache: &Tensor,
     value_cache: &Tensor,
-    k_scale: Option<&Tensor>,
-    v_scale: Option<&Tensor>,
+    scales: CacheScales<'_>,
     block_tables: &Tensor,
     cu_kv: &Tensor,
+    num_tokens: usize, // Must equal cu_kv[-1].
     dtype: DType,
 ) -> Result<(Tensor, Tensor)> {
     match AttentionBackendKind::from_cache(key_cache, value_cache) {
         AttentionBackendKind::FlashInfer => {
             #[cfg(all(feature = "cuda", target_family = "unix"))]
             {
-                gather_kv_cache_flashinfer(key_cache, value_cache, block_tables, cu_kv, dtype)
+                gather_kv_cache_flashinfer(
+                    key_cache,
+                    value_cache,
+                    block_tables,
+                    cu_kv,
+                    num_tokens,
+                    dtype,
+                    scales.flashinfer(key_cache),
+                )
             }
             #[cfg(not(all(feature = "cuda", target_family = "unix")))]
             {
@@ -154,10 +295,11 @@ fn gather_kv_cache_for_layout(
         AttentionBackendKind::Standard => mistralrs_paged_attn::gather_kv_cache(
             key_cache,
             value_cache,
-            k_scale,
-            v_scale,
+            scales.k,
+            scales.v,
             block_tables,
             cu_kv,
+            num_tokens,
             dtype,
         ),
     }
@@ -652,25 +794,79 @@ impl PagedForwardCtx<'_> {
 
 pub struct PagedAttention {
     alibi_slopes: Option<Tensor>,
-    k_scale: Option<Tensor>,
-    v_scale: Option<Tensor>,
-    kv_updated_times: AtomicI32,
+    fp8_attention_scales: Fp8AttentionScales,
+    fp8_attention_scales_calibrated: bool,
+    // read only in the cuda FA3 path
+    #[allow(dead_code)]
+    fp8_q_scale: Tensor,
+    fp8_k_scale: Tensor,
+    fp8_v_scale: Tensor,
+}
+
+#[allow(dead_code)]
+impl PagedAttention {
+    pub fn fp8_attention_scales(&self) -> Fp8AttentionScales {
+        self.fp8_attention_scales
+    }
+
+    pub fn has_calibrated_fp8_attention_scales(&self) -> bool {
+        self.fp8_attention_scales_calibrated
+    }
 }
 
 impl PagedAttention {
     pub fn new(head_dim: usize, device: &Device, alibi_slopes: Option<Vec<f32>>) -> Result<Self> {
+        Self::new_with_fp8_attention_scales(head_dim, device, alibi_slopes, None)
+    }
+
+    pub fn new_with_fp8_attention_scales(
+        head_dim: usize,
+        device: &Device,
+        alibi_slopes: Option<Vec<f32>>,
+        fp8_attention_scales: Option<Fp8AttentionScales>,
+    ) -> Result<Self> {
         let alibi_slopes = if let Some(alibi_slopes) = alibi_slopes {
             assert_eq!(alibi_slopes.len(), head_dim);
             Some(Tensor::new(alibi_slopes, device)?)
         } else {
             None
         };
+        let fp8_attention_scales_calibrated = fp8_attention_scales.is_some();
+        let fp8_attention_scales = fp8_attention_scales.unwrap_or_default().validate()?;
         Ok(Self {
             alibi_slopes,
-            k_scale: Some(Tensor::new(1f32, device)?),
-            v_scale: Some(Tensor::new(1f32, device)?),
-            kv_updated_times: AtomicI32::new(0),
+            fp8_attention_scales,
+            fp8_attention_scales_calibrated,
+            fp8_q_scale: Tensor::new(fp8_attention_scales.q, device)?,
+            fp8_k_scale: Tensor::new(fp8_attention_scales.k, device)?,
+            fp8_v_scale: Tensor::new(fp8_attention_scales.v, device)?,
         })
+    }
+
+    #[cfg(test)]
+    fn fp8_scale_tensors(&self) -> [&Tensor; 3] {
+        [&self.fp8_q_scale, &self.fp8_k_scale, &self.fp8_v_scale]
+    }
+
+    fn cache_scales<'a>(&'a self, key_cache: &Tensor) -> CacheScales<'a> {
+        let (k, v) = if key_cache.dtype() == DType::F8E4M3 {
+            if !self.fp8_attention_scales_calibrated {
+                UNCALIBRATED_FP8_ATTENTION_WARNING.call_once(|| {
+                    tracing::warn!(
+                        "FP8 KV cache is using uncalibrated unit Q/K/V scales; load offline q_scale, k_scale, and v_scale for calibrated serving"
+                    );
+                });
+            }
+            (Some(&self.fp8_k_scale), Some(&self.fp8_v_scale))
+        } else {
+            (None, None)
+        };
+        CacheScales {
+            #[cfg(all(feature = "cuda", target_family = "unix"))]
+            attention: self.fp8_attention_scales,
+            k,
+            v,
+        }
     }
 
     /// Gather a batch of sequences' full KV from the paged cache into one contiguous
@@ -724,14 +920,17 @@ impl PagedAttention {
                 .collect::<candle_core::Result<_>>()?;
             block_tables.index_select(&Tensor::from_vec(row_idx, (num_seqs,), device)?, 0)?
         };
-        let cu_kv = cumulative_seqlens_from_lengths(&vec![kv_len; num_seqs], device)?;
+        let kv_lens = vec![kv_len; num_seqs];
+        let num_tokens = checked_sequence_token_count(&kv_lens)?;
+        let cu_kv = cumulative_seqlens_from_lengths(&kv_lens, device)?;
+        let scales = self.cache_scales(key_cache);
         let (k, v) = gather_kv_cache_for_layout(
             key_cache,
             value_cache,
-            self.k_scale.as_ref(),
-            self.v_scale.as_ref(),
+            scales,
             &table,
             &cu_kv,
+            num_tokens,
             dtype,
         )?;
         // Packed [num_seqs * kv_len, kv_heads, head_size] -> [num_seqs, kv_heads, kv_len, hd].
@@ -742,27 +941,6 @@ impl PagedAttention {
                 .contiguous()
         };
         Ok((unpack(k)?, unpack(v)?))
-    }
-
-    fn update_kv_scale_if_needed(
-        &self,
-        tensors: PagedForwardTensors<'_>,
-        key_cache: Option<&Tensor>,
-        write_cache: bool,
-    ) -> Result<()> {
-        if write_cache {
-            if let (Some(k_scale), Some(v_scale), Some(key_cache)) =
-                (&self.k_scale, &self.v_scale, key_cache)
-            {
-                if self.kv_updated_times.load(Ordering::Relaxed) < KV_SCALE_UPDATE_ITERATION
-                    && key_cache.dtype() == DType::F8E4M3
-                {
-                    kv_scale_update(tensors.key, tensors.value, k_scale, v_scale)?;
-                    self.kv_updated_times.fetch_add(1, Ordering::Relaxed);
-                }
-            }
-        }
-        Ok(())
     }
 
     fn build_forward_ctx<'a>(&self, setup: PagedForwardSetup<'a>) -> Result<PagedForwardCtx<'a>> {
@@ -855,23 +1033,15 @@ impl PagedAttention {
             ))
         })?;
         if write_cache && key_cache.as_ref().is_some_and(|_| value_cache.is_some()) {
-            let k_flat = tensors.key.transpose(1, 2)?.reshape((
-                (),
-                ctx.dims.key_value_heads,
-                ctx.dims.head_size,
-            ))?;
-            let v_flat = tensors.value.transpose(1, 2)?.reshape((
-                (),
-                ctx.dims.key_value_heads,
-                ctx.dims.head_size,
-            ))?;
+            let k_flat = tensors.key.transpose(1, 2)?;
+            let v_flat = tensors.value.transpose(1, 2)?;
             let key_cache = key_cache.as_mut().unwrap();
             let value_cache = value_cache.as_mut().unwrap();
+            let scales = self.cache_scales(key_cache);
             write_kv_cache(
                 &k_flat,
                 &v_flat,
-                self.k_scale.as_ref(),
-                self.v_scale.as_ref(),
+                scales,
                 key_cache,
                 value_cache,
                 &ctx.slot_mapping,
@@ -940,6 +1110,7 @@ impl PagedAttention {
         } else {
             cumulative_seqlens_from_lengths(&kv_lens, device)?
         };
+        let num_kv_tokens = checked_sequence_token_count(&kv_lens)?;
         let query_layout_is_dense =
             query_layout_is_dense(&query_lens, ctx.dims.batch_size, ctx.dims.seq_len);
         let declared_causal = ctx.flash_params.map_or(
@@ -957,9 +1128,23 @@ impl PagedAttention {
             key_cache.as_ref().unwrap(),
             value_cache.as_ref().unwrap(),
         );
-        let prefill_plan = PrefixPrefillPlan::choose(PrefixPrefillPlanInput {
+        #[cfg(all(feature = "cuda", target_family = "unix"))]
+        let fa3_supported = fa3_prefill_cache_num_sm(
+            key_cache.as_ref().unwrap(),
+            value_cache.as_ref().unwrap(),
+            ctx.dims.attention_heads,
+            ctx.dims.key_value_heads,
+            ctx.dims.head_size,
+            block_size,
+        )?
+        .is_some();
+        #[cfg(not(all(feature = "cuda", target_family = "unix")))]
+        let fa3_supported = false;
+        let prefill_plan_input = PrefixPrefillPlanInput {
             device_is_cuda: tensors.query.device().is_cuda(),
             dtype: tensors.query.dtype(),
+            cache_dtype: key_cache.as_ref().unwrap().dtype(),
+            has_alibi: ctx.alibi_slopes.is_some(),
             has_sinks: ctx.sdpa_params.sinks.is_some(),
             has_custom_mask: tensors.attention_mask.is_custom(),
             causality_known,
@@ -967,10 +1152,53 @@ impl PagedAttention {
             has_softcap: ctx.sdpa_params.softcap.is_some(),
             has_sliding_window: ctx.sdpa_params.sliding_window.is_some(),
             query_layout_is_dense,
+            query_len: ctx.dims.seq_len,
+            q_heads: ctx.dims.attention_heads,
+            kv_heads: ctx.dims.key_value_heads,
+            writes_cache: write_cache,
+            is_causal: prefix_causal,
+            has_noncausal_mm_context: mm_prefix_ranges.is_some(),
+            fa3_supported,
             block_size,
             attention_backend,
-        });
+        };
+        let prefill_plan = PrefixPrefillPlan::choose(prefill_plan_input);
+        if matches!(prefill_plan, PrefixPrefillPlan::GatherSdpa) {
+            if let Some(limit) = ctx.input_metadata.prefix_gather_workspace_limit {
+                let v_head_dim =
+                    tensors.value.dims().last().copied().ok_or_else(|| {
+                        candle_core::Error::msg("value tensor has no head dimension")
+                    })?;
+                let required =
+                    gather_prefill_workspace_for_lengths(GatherPrefillWorkspaceRequest {
+                        query_lens: &query_lens,
+                        kv_lens: &kv_lens,
+                        q_heads: ctx.dims.attention_heads,
+                        kv_heads: ctx.dims.key_value_heads,
+                        k_head_dim: ctx.dims.head_size,
+                        v_head_dim,
+                        dtype: tensors.query.dtype(),
+                        plan_input: prefill_plan_input,
+                    })?;
+                if required > limit {
+                    candle_core::bail!(
+                        "prompt KV gather requires {required} bytes, exceeding its preflight workspace limit of {limit} bytes"
+                    );
+                }
+            }
+        }
         match prefill_plan {
+            #[cfg(all(feature = "cuda", target_family = "unix"))]
+            PrefixPrefillPlan::Fa3Fp8Paged => {
+                let output = self.run_fa3_paged_prefill(
+                    ctx,
+                    tensors.query,
+                    key_cache.as_ref().unwrap(),
+                    value_cache.as_ref().unwrap(),
+                    prefix_causal,
+                )?;
+                return prefix_attention_output_layout(output, tensors.attention_mask).map(Some);
+            }
             #[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
             PrefixPrefillPlan::FlashAttentionPaged => {
                 let output = self.run_flash_attention_paged_prefill(
@@ -995,13 +1223,15 @@ impl PagedAttention {
             && mm_prefix_ranges.is_none()
             && query_lens.len() == 1;
 
+        let key_cache_ref = key_cache.as_ref().unwrap();
+        let scales = self.cache_scales(key_cache_ref);
         let (k_gathered, v_gathered) = gather_kv_cache_for_layout(
-            key_cache.as_ref().unwrap(),
+            key_cache_ref,
             value_cache.as_ref().unwrap(),
-            self.k_scale.as_ref(),
-            self.v_scale.as_ref(),
+            scales,
             block_tables,
             &cu_kv,
+            num_kv_tokens,
             tensors.query.dtype(),
         )?;
         let max_kv = kv_lens.iter().copied().max().unwrap_or(0);
@@ -1212,6 +1442,87 @@ impl PagedAttention {
         prefix_attention_output_layout(output, tensors.attention_mask).map(Some)
     }
 
+    #[cfg(all(feature = "cuda", target_family = "unix"))]
+    fn run_fa3_paged_prefill(
+        &self,
+        ctx: &PagedForwardCtx<'_>,
+        query: &Tensor,
+        key_cache: &Tensor,
+        value_cache: &Tensor,
+        causal: bool,
+    ) -> Result<Tensor> {
+        let metadata = ctx
+            .input_metadata
+            .flashinfer
+            .as_ref()
+            .ok_or_else(|| candle_core::Error::msg("FA3 prefill metadata is missing"))?;
+        let num_sm = fa3_device_num_sm(query.device())
+            .ok_or_else(|| candle_core::Error::msg("FA3 prefill requires an SM90 CUDA device"))?;
+        let (num_pages, kv_heads, page_size, head_dim) = key_cache.dims4()?;
+        if num_pages == 0
+            || value_cache.dims4()? != key_cache.dims4()?
+            || query.dims4()?
+                != (
+                    ctx.dims.batch_size,
+                    ctx.dims.attention_heads,
+                    ctx.dims.seq_len,
+                    head_dim,
+                )
+        {
+            candle_core::bail!("FA3 prefill cache/query shape invariant failed");
+        }
+        let key = (Fa3PagedScheduleShape {
+            device: query.device().location(),
+            view: Fa3DecodeView::Logical,
+            batch: ctx.dims.batch_size,
+            query_len: ctx.dims.seq_len,
+            causal,
+            q_heads: ctx.dims.attention_heads,
+            kv_heads,
+            head_dim,
+            page_size,
+        })
+        .prefill_schedule_key(num_sm)
+        .ok_or_else(|| candle_core::Error::msg("FA3 prefill schedule invariant failed"))?;
+        let query = query
+            .transpose(1, 2)?
+            .reshape((
+                ctx.dims.batch_size.saturating_mul(ctx.dims.seq_len),
+                ctx.dims.attention_heads,
+                ctx.dims.head_size,
+            ))?
+            .contiguous()?;
+        let output =
+            with_fa3_prefill_workspace(metadata, key, key_cache, query.device(), |buffers| {
+                fa3_fp8_decode(Fa3DecodeParams {
+                    query: &query,
+                    quantized_query: &buffers.query,
+                    key_cache,
+                    value_cache,
+                    page_table: &buffers.page_table,
+                    seqused_k: &buffers.seqused_k,
+                    cu_seqlens_q: &buffers.cu_seqlens_q,
+                    scheduler_metadata: &buffers.scheduler_metadata,
+                    output_accum: &buffers.output_accum,
+                    lse_accum: &buffers.lse_accum,
+                    output_lse: &buffers.output_lse,
+                    q_descale: &self.fp8_q_scale,
+                    k_descale: &self.fp8_k_scale,
+                    v_descale: &self.fp8_v_scale,
+                    schedule: buffers.schedule(key)?,
+                    softmax_scale: ctx.sdpa_params.softmax_scale,
+                })
+            })?;
+        output
+            .reshape((
+                ctx.dims.batch_size,
+                ctx.dims.seq_len,
+                ctx.dims.attention_heads,
+                ctx.dims.head_size,
+            ))?
+            .transpose(1, 2)
+    }
+
     #[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
     #[allow(clippy::too_many_arguments)]
     fn run_flash_attention_paged_prefill(
@@ -1317,35 +1628,15 @@ impl PagedAttention {
         };
 
         if write_cache && key_cache.as_ref().is_some_and(|_| value_cache.is_some()) {
-            let (key, value) = if ctx.dims.seq_len > 1 {
-                let k = tensors.key.transpose(1, 2)?.reshape((
-                    (),
-                    ctx.dims.key_value_heads,
-                    ctx.dims.head_size,
-                ))?;
-                let v = tensors.value.transpose(1, 2)?.reshape((
-                    (),
-                    ctx.dims.key_value_heads,
-                    ctx.dims.head_size,
-                ))?;
-                (k, v)
-            } else {
-                (
-                    tensors
-                        .key
-                        .reshape(((), ctx.dims.key_value_heads, ctx.dims.head_size))?,
-                    tensors
-                        .value
-                        .reshape(((), ctx.dims.key_value_heads, ctx.dims.head_size))?,
-                )
-            };
+            let key = tensors.key.transpose(1, 2)?;
+            let value = tensors.value.transpose(1, 2)?;
             let key_cache = key_cache.as_mut().unwrap();
             let value_cache = value_cache.as_mut().unwrap();
+            let scales = self.cache_scales(key_cache);
             write_kv_cache(
                 &key,
                 &value,
-                self.k_scale.as_ref(),
-                self.v_scale.as_ref(),
+                scales,
                 key_cache,
                 value_cache,
                 &ctx.slot_mapping,
@@ -1374,33 +1665,10 @@ impl PagedAttention {
                 .reshape(((), ctx.dims.attention_heads, ctx.dims.head_size))?
         };
         let (key, value) = if write_cache {
-            if ctx.dims.seq_len > 1 {
-                (
-                    Some(tensors.key.transpose(1, 2)?.reshape((
-                        (),
-                        ctx.dims.key_value_heads,
-                        ctx.dims.head_size,
-                    ))?),
-                    Some(tensors.value.transpose(1, 2)?.reshape((
-                        (),
-                        ctx.dims.key_value_heads,
-                        ctx.dims.head_size,
-                    ))?),
-                )
-            } else {
-                (
-                    Some(tensors.key.reshape((
-                        (),
-                        ctx.dims.key_value_heads,
-                        ctx.dims.head_size,
-                    ))?),
-                    Some(tensors.value.reshape((
-                        (),
-                        ctx.dims.key_value_heads,
-                        ctx.dims.head_size,
-                    ))?),
-                )
-            }
+            (
+                Some(tensors.key.transpose(1, 2)?),
+                Some(tensors.value.transpose(1, 2)?),
+            )
         } else {
             (None, None)
         };
@@ -1408,11 +1676,11 @@ impl PagedAttention {
         if write_cache && key_cache.as_ref().is_some_and(|_| value_cache.is_some()) {
             let key_cache = key_cache.as_mut().unwrap();
             let value_cache = value_cache.as_mut().unwrap();
+            let scales = self.cache_scales(key_cache);
             write_kv_cache(
                 key.as_ref().unwrap(),
                 value.as_ref().unwrap(),
-                self.k_scale.as_ref(),
-                self.v_scale.as_ref(),
+                scales,
                 key_cache,
                 value_cache,
                 &ctx.slot_mapping,
@@ -1449,9 +1717,14 @@ impl PagedAttention {
                 tensors.attention_mask,
             ),
             #[cfg(all(feature = "cuda", target_family = "unix"))]
-            DecodePlan::FlashInfer(plan) => {
-                self.run_flashinfer_decode(ctx, &query, key_cache_ref, value_cache_ref, &dev, plan)
-            }
+            DecodePlan::FlashInfer(_) => self.run_flashinfer_decode(FlashInferDecodeCall {
+                ctx,
+                query: &query,
+                key_cache: key_cache_ref,
+                value_cache: value_cache_ref,
+                dev: &dev,
+                attention_mask: tensors.attention_mask,
+            }),
             DecodePlan::PagedAttention => {
                 self.run_standard_paged_decode(ctx, &query, key_cache_ref, value_cache_ref, &dev)
             }
@@ -1489,14 +1762,16 @@ impl PagedAttention {
             }
         };
         let query_rows = decode_query_rows(query, &kv_lens)?;
+        let num_kv_tokens = checked_sequence_token_count(&kv_lens)?;
         let cu_kv = cumulative_seqlens_from_lengths(&kv_lens, query.device())?;
+        let scales = self.cache_scales(key_cache);
         let (k_gathered, v_gathered) = gather_kv_cache_for_layout(
             key_cache,
             value_cache,
-            self.k_scale.as_ref(),
-            self.v_scale.as_ref(),
+            scales,
             block_tables,
             &cu_kv,
+            num_kv_tokens,
             query.dtype(),
         )?;
         let q_4d = query.reshape((query_rows, ctx.dims.attention_heads, 1, ctx.dims.head_size))?;
@@ -1583,15 +1858,106 @@ impl PagedAttention {
     }
 
     #[cfg(all(feature = "cuda", target_family = "unix"))]
-    fn run_flashinfer_decode(
-        &self,
-        ctx: &PagedForwardCtx<'_>,
-        query: &Tensor,
-        key_cache: &Tensor,
-        value_cache: &Tensor,
-        dev: &DeviceLocation,
-        _flashinfer_plan: crate::flashinfer::FlashInferDecodePlan,
-    ) -> Result<Tensor> {
+    fn try_run_fa3_decode(&self, call: FlashInferDecodeCall<'_, '_>) -> Result<Option<Tensor>> {
+        let FlashInferDecodeCall {
+            ctx,
+            query,
+            key_cache,
+            value_cache,
+            dev,
+            attention_mask,
+        } = call;
+        let (_, kv_heads, page_size, head_dim) = key_cache.dims4()?;
+        let Some(key) = (Fa3PagedScheduleShape {
+            device: *dev,
+            view: Fa3DecodeView::Logical,
+            batch: ctx.dims.batch_size,
+            query_len: ctx.dims.seq_len,
+            causal: ctx.dims.seq_len > 1,
+            q_heads: ctx.dims.attention_heads,
+            kv_heads,
+            head_dim,
+            page_size,
+        })
+        .decode_schedule_key() else {
+            return Ok(None);
+        };
+        let Some(key) = (Fa3DecodeCandidate {
+            key,
+            query_dtype: query.dtype(),
+            query_contiguous: query.is_contiguous(),
+            key_cache_dtype: key_cache.dtype(),
+            value_cache_dtype: value_cache.dtype(),
+            mask_is_none: attention_mask.is_none(),
+            shapes_match: value_cache.dims4()? == key_cache.dims4()?
+                && query.dims3()?
+                    == (
+                        ctx.dims.batch_size.saturating_mul(ctx.dims.seq_len),
+                        ctx.dims.attention_heads,
+                        head_dim,
+                    ),
+            has_alibi: ctx.alibi_slopes.is_some(),
+            has_sinks: ctx.sdpa_params.sinks.is_some(),
+            has_softcap: ctx.sdpa_params.softcap.is_some(),
+            has_sliding_window: ctx.sdpa_params.sliding_window.is_some(),
+            has_noncausal_mm_context: ctx.has_noncausal_mm_context(),
+        })
+        .schedule_key() else {
+            return Ok(None);
+        };
+        let Some(buffers) = ctx
+            .input_metadata
+            .flashinfer
+            .as_ref()
+            .and_then(|metadata| metadata.fa3_decode_buffers(&key))
+        else {
+            return Ok(None);
+        };
+        let output = fa3_fp8_decode(Fa3DecodeParams {
+            query,
+            quantized_query: &buffers.query,
+            key_cache,
+            value_cache,
+            page_table: &buffers.page_table,
+            seqused_k: &buffers.seqused_k,
+            cu_seqlens_q: &buffers.cu_seqlens_q,
+            scheduler_metadata: &buffers.scheduler_metadata,
+            output_accum: &buffers.output_accum,
+            lse_accum: &buffers.lse_accum,
+            output_lse: &buffers.output_lse,
+            q_descale: &self.fp8_q_scale,
+            k_descale: &self.fp8_k_scale,
+            v_descale: &self.fp8_v_scale,
+            schedule: buffers.schedule(key)?,
+            softmax_scale: ctx.sdpa_params.softmax_scale,
+        })
+        .map_err(|err| {
+            err.context(format!(
+                "FA3 FP8 decode failed: batch={} query_len={} qo_heads={} kv_heads={} head_size={} page_size={}",
+                ctx.dims.batch_size,
+                ctx.dims.seq_len,
+                ctx.dims.attention_heads,
+                kv_heads,
+                head_dim,
+                page_size,
+            ))
+        })?;
+        Ok(Some(output))
+    }
+
+    #[cfg(all(feature = "cuda", target_family = "unix"))]
+    fn run_flashinfer_decode(&self, call: FlashInferDecodeCall<'_, '_>) -> Result<Tensor> {
+        if let Some(output) = self.try_run_fa3_decode(call)? {
+            return Ok(output);
+        }
+        let FlashInferDecodeCall {
+            ctx,
+            query,
+            key_cache,
+            value_cache,
+            dev,
+            ..
+        } = call;
         let fi_meta = ctx
             .input_metadata
             .flashinfer
@@ -1603,6 +1969,7 @@ impl PagedAttention {
             query,
             key_cache,
             value_cache,
+            self.cache_scales(key_cache).flashinfer(key_cache),
             fi_meta.paged_kv_indptr,
             fi_meta.paged_kv_indices,
             fi_meta.paged_kv_last_page_len,
@@ -1639,10 +2006,11 @@ impl PagedAttention {
         value_cache: &Tensor,
         dev: &DeviceLocation,
     ) -> Result<Tensor> {
+        let scales = self.cache_scales(key_cache);
         paged_attention(
             query,
-            self.k_scale.as_ref(),
-            self.v_scale.as_ref(),
+            scales.k,
+            scales.v,
             key_cache,
             value_cache,
             ctx.block_tables(dev).unwrap(),
@@ -1679,7 +2047,6 @@ impl PagedAttention {
             value,
             attention_mask,
         };
-        self.update_kv_scale_if_needed(tensors, key_cache.as_ref(), write_cache)?;
         let donor_cache_shape = if write_cache {
             None
         } else {
@@ -1835,6 +2202,188 @@ impl PagedAttention {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use candle_core::D;
+
+    #[test]
+    fn cumulative_seqlens_match_checked_host_token_count() -> Result<()> {
+        let lengths = [3usize, 0, 5];
+        let num_tokens = checked_sequence_token_count(&lengths)?;
+        let cu_seqlens = cumulative_seqlens_from_lengths(&lengths, &Device::Cpu)?;
+
+        assert_eq!(num_tokens, 8);
+        assert_eq!(cu_seqlens.to_vec1::<u32>()?, vec![0, 3, 3, 8]);
+        Ok(())
+    }
+
+    #[test]
+    fn checked_sequence_token_count_rejects_invalid_kernel_sizes() {
+        let kernel_limit = usize::try_from(i32::MAX).unwrap();
+        assert!(checked_sequence_token_count(&[kernel_limit, 1]).is_err());
+        assert!(checked_sequence_token_count(&[usize::MAX, 1]).is_err());
+    }
+
+    #[cfg(all(feature = "cuda", target_family = "unix"))]
+    fn supported_fa3_decode_candidate() -> Fa3DecodeCandidate {
+        Fa3DecodeCandidate {
+            key: Fa3PagedScheduleShape {
+                device: DeviceLocation::Cuda { gpu_id: 0 },
+                view: Fa3DecodeView::Logical,
+                batch: 8,
+                query_len: 1,
+                causal: false,
+                q_heads: 16,
+                kv_heads: 4,
+                head_dim: 256,
+                page_size: 32,
+            }
+            .decode_schedule_key()
+            .expect("supported FA3 decode schedule"),
+            query_dtype: DType::BF16,
+            query_contiguous: true,
+            key_cache_dtype: DType::F8E4M3,
+            value_cache_dtype: DType::F8E4M3,
+            mask_is_none: true,
+            shapes_match: true,
+            has_alibi: false,
+            has_sinks: false,
+            has_softcap: false,
+            has_sliding_window: false,
+            has_noncausal_mm_context: false,
+        }
+    }
+
+    #[cfg(all(feature = "cuda", target_family = "unix"))]
+    #[test]
+    fn fa3_decode_candidate_requires_supported_full_decode() {
+        let supported = supported_fa3_decode_candidate();
+        assert_eq!(supported.schedule_key(), Some(supported.key));
+
+        macro_rules! reject {
+            ($field:ident, $value:expr) => {{
+                let mut candidate = supported;
+                candidate.$field = $value;
+                assert!(candidate.schedule_key().is_none());
+            }};
+        }
+
+        reject!(query_dtype, DType::F16);
+        reject!(query_contiguous, false);
+        reject!(key_cache_dtype, DType::BF16);
+        reject!(value_cache_dtype, DType::BF16);
+        reject!(mask_is_none, false);
+        reject!(shapes_match, false);
+        reject!(has_alibi, true);
+        reject!(has_sinks, true);
+        reject!(has_softcap, true);
+        reject!(has_sliding_window, true);
+        reject!(has_noncausal_mm_context, true);
+
+        let mut unsupported_shape = supported;
+        unsupported_shape.key.head_dim = 128;
+        assert!(unsupported_shape.schedule_key().is_none());
+
+        let mut speculative = supported;
+        speculative.key.query_len = 8;
+        speculative.key.causal = true;
+        assert_eq!(speculative.schedule_key(), Some(speculative.key));
+    }
+
+    #[cfg(all(feature = "cuda", target_family = "unix"))]
+    #[test]
+    fn fa3_decode_schedule_lookup_is_exact() {
+        let candidate = supported_fa3_decode_candidate();
+        let schedules = HashMap::from([(candidate.key, ())]);
+        assert!(schedules.contains_key(&candidate.schedule_key().unwrap()));
+
+        let mut different_batch = candidate;
+        different_batch.key.batch /= 2;
+        assert!(!schedules.contains_key(&different_batch.schedule_key().unwrap()));
+
+        let mut different_heads = candidate;
+        different_heads.key.q_heads /= 2;
+        assert!(!schedules.contains_key(&different_heads.schedule_key().unwrap()));
+
+        let mut different_query = candidate;
+        different_query.key.query_len = 8;
+        different_query.key.causal = true;
+        assert!(!schedules.contains_key(&different_query.schedule_key().unwrap()));
+    }
+
+    #[test]
+    fn owns_validated_fp8_attention_scales() -> Result<()> {
+        let scales = Fp8AttentionScales {
+            q: 0.25,
+            k: 0.5,
+            v: 0.75,
+        };
+        let attention =
+            PagedAttention::new_with_fp8_attention_scales(128, &Device::Cpu, None, Some(scales))?;
+        assert_eq!(attention.fp8_attention_scales(), scales);
+        assert!(attention.has_calibrated_fp8_attention_scales());
+        let [q_scale, k_scale, v_scale] = attention.fp8_scale_tensors();
+        assert_eq!(q_scale.to_scalar::<f32>()?, scales.q);
+        assert_eq!(k_scale.to_scalar::<f32>()?, scales.k);
+        assert_eq!(v_scale.to_scalar::<f32>()?, scales.v);
+        #[cfg(all(feature = "cuda", target_family = "unix"))]
+        {
+            let fp8_cache = Tensor::zeros((1,), DType::F8E4M3, &Device::Cpu)?;
+            let flashinfer_scales = attention.cache_scales(&fp8_cache).flashinfer(&fp8_cache);
+            assert_eq!(flashinfer_scales.k, scales.k);
+            assert_eq!(flashinfer_scales.v, scales.v);
+        }
+
+        let default = PagedAttention::new(128, &Device::Cpu, None)?;
+        assert_eq!(default.fp8_attention_scales(), Fp8AttentionScales::UNIT);
+        assert!(!default.has_calibrated_fp8_attention_scales());
+
+        assert!(PagedAttention::new_with_fp8_attention_scales(
+            128,
+            &Device::Cpu,
+            None,
+            Some(Fp8AttentionScales {
+                q: 1.0,
+                k: 0.0,
+                v: 1.0,
+            }),
+        )
+        .is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn cache_write_accepts_row_strided_dense_heads() -> Result<()> {
+        let packed = Tensor::zeros((2, 3, 16), DType::F32, &Device::Cpu)?;
+        let row_strided = packed.narrow(D::Minus1, 4, 8)?.unfold(D::Minus1, 4, 4)?;
+        assert_eq!(row_strided.dims(), &[2, 3, 2, 4]);
+        assert_eq!(row_strided.stride(), &[48, 16, 4, 1]);
+        assert_eq!(cache_input_shape(&row_strided)?, (6, 2, 4));
+        assert_eq!(
+            cache_input_can_write_directly(&row_strided)?,
+            cfg!(all(feature = "cuda", target_family = "unix"))
+        );
+
+        let row_strided = packed
+            .narrow(1, 0, 1)?
+            .squeeze(1)?
+            .narrow(D::Minus1, 4, 8)?
+            .unfold(D::Minus1, 4, 4)?;
+        assert_eq!(row_strided.stride(), &[48, 4, 1]);
+        assert!(cache_input_can_write_directly(&row_strided)?);
+        Ok(())
+    }
+
+    #[test]
+    fn cache_write_packs_singleton_token_stride() -> Result<()> {
+        let source = Tensor::zeros((8, 1, 128), DType::F32, &Device::Cpu)?;
+        let singleton = source.transpose(0, 1)?;
+        assert_eq!(singleton.dims(), &[1, 8, 128]);
+        assert!(!cache_input_can_write_directly(&singleton)?);
+
+        let packed = singleton.force_contiguous()?;
+        assert_eq!(packed.stride(), &[1024, 128, 1]);
+        assert!(cache_input_can_write_directly(&packed)?);
+        Ok(())
+    }
 
     #[test]
     fn varlen_segments_partition_each_logical_query() {

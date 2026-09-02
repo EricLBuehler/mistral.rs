@@ -14,7 +14,10 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use crate::gdn::{GatedDeltaNet, GdnConfig, GdnInputProjectionKind, GdnLayerCache, GdnVHeadLayout};
+use crate::gdn::{
+    try_forward_grouped_packed_gdn, GatedDeltaNet, GdnConfig, GdnInputProjectionKind,
+    GdnLayerCache, GdnStateDType, GdnVHeadLayout, PackedGdnLayout,
+};
 use crate::{
     amoe::AnyMoeBaseModelMixin,
     attention::{AttentionMask, SdpaParams},
@@ -71,6 +74,8 @@ pub struct Config {
     pub linear_value_head_dim: usize,
     pub linear_num_key_heads: usize,
     pub linear_num_value_heads: usize,
+    #[serde(default)]
+    pub mamba_ssm_dtype: GdnStateDType,
     // MoE config
     #[serde(default = "default_decoder_sparse_step")]
     pub decoder_sparse_step: usize,
@@ -357,6 +362,14 @@ impl FullAttention {
         };
 
         // Apply output gate: y = y * sigmoid(gate)
+        if let Some(res) = crate::ops::try_fused_gated_projection(
+            &gate,
+            &y,
+            crate::layers::Activation::Sigmoid,
+            &*self.o_proj,
+        )? {
+            return Ok(res);
+        }
         let gate = candle_nn::ops::sigmoid(&gate.to_dtype(y.dtype())?)?;
         y = y.broadcast_mul(&gate)?;
 
@@ -614,7 +627,7 @@ impl DecoderLayer {
         x: &Tensor,
         cache: &mut GdnLayerCache,
         batch_kind: RecurrentBatchKind,
-        packed_query_lens: Option<&[usize]>,
+        packed_layout: Option<&PackedGdnLayout>,
     ) -> Result<Tensor> {
         let gdn = match &self.layer_impl {
             LayerImpl::LinearAttention(gdn) => gdn,
@@ -622,7 +635,8 @@ impl DecoderLayer {
         };
         let residual = x;
         let x = self.input_layernorm.forward(x)?;
-        let gdn_out = if let Some(query_lens) = packed_query_lens {
+        let gdn_out = if let Some(layout) = packed_layout {
+            let query_lens = layout.query_lens();
             if batch_kind != RecurrentBatchKind::Prefill {
                 candle_core::bail!("Qwen3-Next packed GDN cannot run a decode batch");
             }
@@ -650,26 +664,34 @@ impl DecoderLayer {
                 );
             }
 
-            let mut outputs = Vec::with_capacity(segments.len());
-            let mut next_conv_states = Vec::with_capacity(segments.len());
-            let mut next_recurrent_states = Vec::with_capacity(segments.len());
-            for segment in segments {
-                let segment_x =
-                    x.narrow(1, segment.token_range.start, segment.token_range.len())?;
-                let mut segment_cache = GdnLayerCache {
-                    conv_state: cache.conv_state.narrow(0, segment.state_index, 1)?,
-                    recurrent_state: cache.recurrent_state.narrow(0, segment.state_index, 1)?,
-                };
-                outputs.push(mistralrs_quant::with_lora_execution_row_range(
-                    segment.token_range.clone(),
-                    || gdn.forward(&segment_x, &mut segment_cache, RecurrentBatchKind::Prefill),
-                )?);
-                next_conv_states.push(segment_cache.conv_state);
-                next_recurrent_states.push(segment_cache.recurrent_state);
+            if let Some(output) = try_forward_grouped_packed_gdn(gdn, &x, cache, layout)? {
+                output
+            } else {
+                let mut outputs = Vec::with_capacity(segments.len());
+                let mut next_conv_states = Vec::with_capacity(segments.len());
+                let mut next_recurrent_states = Vec::with_capacity(segments.len());
+                for segment in segments {
+                    let segment_x =
+                        x.narrow(1, segment.token_range.start, segment.token_range.len())?;
+                    let mut segment_cache = GdnLayerCache {
+                        conv_state: cache.conv_state.narrow(0, segment.state_index, 1)?,
+                        recurrent_state: cache.recurrent_state.narrow(0, segment.state_index, 1)?,
+                        state_layout: cache.state_layout,
+                        slots: None,
+                        pending_transitions: None,
+                        deferred_state: None,
+                    };
+                    outputs.push(mistralrs_quant::with_lora_execution_row_range(
+                        segment.token_range.clone(),
+                        || gdn.forward(&segment_x, &mut segment_cache, RecurrentBatchKind::Prefill),
+                    )?);
+                    next_conv_states.push(segment_cache.conv_state);
+                    next_recurrent_states.push(segment_cache.recurrent_state);
+                }
+                cache.conv_state = Tensor::cat(&next_conv_states, 0)?;
+                cache.recurrent_state = Tensor::cat(&next_recurrent_states, 0)?;
+                Tensor::cat(&outputs, 1)?
             }
-            cache.conv_state = Tensor::cat(&next_conv_states, 0)?;
-            cache.recurrent_state = Tensor::cat(&next_recurrent_states, 0)?;
-            Tensor::cat(&outputs, 1)?
         } else {
             gdn.forward(&x, cache, batch_kind)?
         };
@@ -889,12 +911,12 @@ impl Model {
             recurrent: RecurrentLayerConfig {
                 conv_dim: cfg.linear_conv_dim(),
                 conv_width: cfg.linear_conv_kernel_dim,
-                state_dims: vec![
-                    cfg.linear_num_value_heads,
-                    cfg.linear_key_head_dim,
-                    cfg.linear_value_head_dim,
-                ],
-                recurrent_dtype: Some(DType::F32),
+                state: crate::kv_cache::RecurrentStateSpec::Gdn {
+                    heads: cfg.linear_num_value_heads,
+                    key_dim: cfg.linear_key_head_dim,
+                    value_dim: cfg.linear_value_head_dim,
+                },
+                recurrent_dtype: Some(cfg.mamba_ssm_dtype.dtype()),
             },
         };
         let layer_devices = (0..hybrid_cache_config.layer_types.len())
@@ -953,16 +975,17 @@ impl Model {
             .layer_types
             .iter()
             .any(|lt| matches!(lt, LayerType::LinearAttention));
-        let packed_query_lens = if ctx.flash_params().packed {
-            Some(
-                ctx.paged_input_metadata()
-                    .and_then(|metadata| metadata.query_lens.clone())
-                    .ok_or_else(|| {
-                        candle_core::Error::msg(
-                            "Qwen3-Next packed GDN requires logical query lengths",
-                        )
-                    })?,
-            )
+        let packed_layout = if ctx.flash_params().packed {
+            let query_lens = ctx
+                .paged_input_metadata()
+                .and_then(|metadata| metadata.query_lens.clone())
+                .ok_or_else(|| {
+                    candle_core::Error::msg("Qwen3-Next packed GDN requires logical query lengths")
+                })?;
+            Some(PackedGdnLayout::new(
+                query_lens,
+                ctx.flash_params().cumulative_seqlens_q.clone(),
+            )?)
         } else {
             None
         };
@@ -972,7 +995,8 @@ impl Model {
             );
         }
         if has_linear_attention {
-            if let Some(query_lens) = packed_query_lens.as_deref() {
+            if let Some(layout) = packed_layout.as_ref() {
+                let query_lens = layout.query_lens();
                 if !ctx.is_first_prompt_chunk() {
                     candle_core::bail!("Qwen3-Next packed GDN requires the first prompt chunk");
                 }
@@ -1058,30 +1082,28 @@ impl Model {
                         })?;
                     if let Some(HybridLayerCache::Recurrent(pool)) = hybrid_cache.get_mut(layer_idx)
                     {
-                        let conv_state = pool.gather_conv_state(&indices)?;
-                        let recurrent_state = pool.gather_recurrent_state(&indices)?;
-
-                        let mut gdn_cache = GdnLayerCache {
-                            conv_state,
-                            recurrent_state,
+                        // Packed prefill slices the gathered rows per logical sequence
+                        let mut gdn_cache = if packed_layout.is_some() {
+                            GdnLayerCache::gathered(
+                                pool.gather_conv_state(&indices)?,
+                                pool.gather_recurrent_state(&indices)?,
+                                pool.state_layout(),
+                            )
+                        } else {
+                            GdnLayerCache::checkout(pool, &indices)?
                         };
 
                         x = layer.forward_linear(
                             &x,
                             &mut gdn_cache,
                             recurrent_metadata.batch_kind(),
-                            packed_query_lens.as_deref(),
+                            packed_layout.as_ref(),
                         )?;
 
-                        pool.scatter_conv_state_with_host_indices(
+                        gdn_cache.commit(
+                            pool,
                             &indices,
                             recurrent_metadata.state_indices_host(),
-                            &gdn_cache.conv_state,
-                        )?;
-                        pool.scatter_recurrent_state_with_host_indices(
-                            &indices,
-                            recurrent_metadata.state_indices_host(),
-                            &gdn_cache.recurrent_state,
                         )?;
                     } else {
                         candle_core::bail!(

@@ -1,4 +1,4 @@
-use candle_core::{Device, Result, Tensor};
+use candle_core::{DType, Device, Result, Tensor};
 use mistralrs_quant::{
     Comm, LoraLinearSpec, QuantMethod, ReplicatedLayer, RowParallelLayer, Shard, ShardedVarBuilder,
 };
@@ -217,67 +217,133 @@ impl GdnWeights {
                     dims.num_v_heads,
                     split_lora_maps.as_ref().map(|maps| maps.heads.clone()),
                 )?;
+                let packed_qkv_z = ReplicatedLayer::new_packed(
+                    &[qkv_spec.clone(), z_spec.clone()],
+                    &["in_proj_qkv", "in_proj_z"],
+                    cfg.quantization_config(),
+                    false,
+                    vb_la.clone(),
+                )?;
+                let (in_proj_qkv, in_proj_z, merged_qkv_z) = match &packed_qkv_z {
+                    Some(group) => (
+                        group.constituents[0].clone(),
+                        group.constituents[1].clone(),
+                        Some(crate::ops::MergedDenseProjection::from_packed(group)),
+                    ),
+                    None => (
+                        ReplicatedLayer::new_with_lora_spec(
+                            qkv_spec,
+                            cfg.quantization_config(),
+                            false,
+                            vb_la.pp("in_proj_qkv"),
+                        )?,
+                        ReplicatedLayer::new_with_lora_spec(
+                            z_spec,
+                            cfg.quantization_config(),
+                            false,
+                            vb_la.pp("in_proj_z"),
+                        )?,
+                        None,
+                    ),
+                };
+                let packed_b_a = ReplicatedLayer::new_packed(
+                    &[b_spec.clone(), a_spec.clone()],
+                    &["in_proj_b", "in_proj_a"],
+                    cfg.quantization_config(),
+                    false,
+                    vb_la.clone(),
+                )?;
+                let (in_proj_b, in_proj_a, merged_b_a) = match &packed_b_a {
+                    Some(group) => (
+                        group.constituents[0].clone(),
+                        group.constituents[1].clone(),
+                        Some(crate::ops::MergedDenseProjection::from_packed(group)),
+                    ),
+                    None => (
+                        ReplicatedLayer::new_with_lora_spec(
+                            b_spec,
+                            cfg.quantization_config(),
+                            false,
+                            vb_la.pp("in_proj_b"),
+                        )?,
+                        ReplicatedLayer::new_with_lora_spec(
+                            a_spec,
+                            cfg.quantization_config(),
+                            false,
+                            vb_la.pp("in_proj_a"),
+                        )?,
+                        None,
+                    ),
+                };
                 GdnInputProjection::Split {
-                    in_proj_qkv: ReplicatedLayer::new_with_lora_spec(
-                        qkv_spec,
-                        cfg.quantization_config(),
-                        false,
-                        vb_la.pp("in_proj_qkv"),
-                    )?,
-                    in_proj_z: ReplicatedLayer::new_with_lora_spec(
-                        z_spec,
-                        cfg.quantization_config(),
-                        false,
-                        vb_la.pp("in_proj_z"),
-                    )?,
-                    in_proj_b: ReplicatedLayer::new_with_lora_spec(
-                        b_spec,
-                        cfg.quantization_config(),
-                        false,
-                        vb_la.pp("in_proj_b"),
-                    )?,
-                    in_proj_a: ReplicatedLayer::new_with_lora_spec(
-                        a_spec,
-                        cfg.quantization_config(),
-                        false,
-                        vb_la.pp("in_proj_a"),
-                    )?,
+                    in_proj_qkv,
+                    in_proj_z,
+                    in_proj_b,
+                    in_proj_a,
+                    merged_qkv_z,
+                    merged_b_a,
                 }
             }
-            GdnInputProjectionKind::SplitQkvzGroupedBa => GdnInputProjection::SplitQkvzGroupedBa {
-                in_proj_qkv: ReplicatedLayer::new(
-                    dims.hidden_size,
-                    dims.conv_dim,
+            GdnInputProjectionKind::SplitQkvzGroupedBa => {
+                let qkv_spec = LoraLinearSpec::replicated(dims.hidden_size, dims.conv_dim);
+                let z_spec = LoraLinearSpec::replicated(dims.hidden_size, dims.value_dim);
+                let packed_qkv_z = ReplicatedLayer::new_packed(
+                    &[qkv_spec, z_spec],
+                    &["in_proj_qkv", "in_proj_z"],
                     cfg.quantization_config(),
                     false,
-                    vb_la.pp("in_proj_qkv"),
-                )?,
-                in_proj_z: ReplicatedLayer::new(
-                    dims.hidden_size,
-                    dims.value_dim,
-                    cfg.quantization_config(),
-                    false,
-                    vb_la.pp("in_proj_z"),
-                )?,
-                in_proj_ba: ReplicatedLayer::new(
-                    dims.hidden_size,
-                    dims.ba_out_dim(),
-                    cfg.quantization_config(),
-                    false,
-                    vb_la.pp("in_proj_ba"),
-                )?,
-            },
+                    vb_la.clone(),
+                )?;
+                let (in_proj_qkv, in_proj_z, merged_qkv_z) = match &packed_qkv_z {
+                    Some(group) => (
+                        group.constituents[0].clone(),
+                        group.constituents[1].clone(),
+                        Some(crate::ops::MergedDenseProjection::from_packed(group)),
+                    ),
+                    None => (
+                        ReplicatedLayer::new(
+                            dims.hidden_size,
+                            dims.conv_dim,
+                            cfg.quantization_config(),
+                            false,
+                            vb_la.pp("in_proj_qkv"),
+                        )?,
+                        ReplicatedLayer::new(
+                            dims.hidden_size,
+                            dims.value_dim,
+                            cfg.quantization_config(),
+                            false,
+                            vb_la.pp("in_proj_z"),
+                        )?,
+                        None,
+                    ),
+                };
+                GdnInputProjection::SplitQkvzGroupedBa {
+                    in_proj_qkv,
+                    in_proj_z,
+                    in_proj_ba: ReplicatedLayer::new(
+                        dims.hidden_size,
+                        dims.ba_out_dim(),
+                        cfg.quantization_config(),
+                        false,
+                        vb_la.pp("in_proj_ba"),
+                    )?,
+                    merged_qkv_z,
+                }
+            }
         };
         let conv1d_weight = move_to_target(
             vb_la.get((dims.conv_dim, 1, dims.conv_kernel_size), "conv1d.weight")?,
             isq_target_device.as_ref(),
         )?;
+        // The recurrence consumes these in f32 every step; A_log is f32 in the checkpoint anyway
+        let vb_f32 = vb_la.clone().set_dtype(DType::F32);
         let dt_bias = move_to_target(
-            vb_la.get(dims.num_v_heads, "dt_bias")?,
+            vb_f32.get(dims.num_v_heads, "dt_bias")?,
             isq_target_device.as_ref(),
         )?;
         let a_log = move_to_target(
-            vb_la.get(dims.num_v_heads, "A_log")?,
+            vb_f32.get(dims.num_v_heads, "A_log")?,
             isq_target_device.as_ref(),
         )?;
 

@@ -14,7 +14,7 @@ use crate::{
     AgentPermission, AgentToolApprovalHandler, CodeExecutionPermission, CustomLogitsProcessor,
     DiffusionGenerationParams, Tool,
 };
-use std::{fmt::Debug, path::PathBuf, sync::Arc};
+use std::{fmt::Debug, path::PathBuf, sync::Arc, time::Instant};
 use tokio::sync::mpsc::Sender;
 
 pub type LlguidanceGrammar = llguidance::api::TopLevelGrammar;
@@ -415,12 +415,18 @@ impl WebSearchOptions {
 pub struct NormalRequest {
     pub messages: RequestMessage,
     pub sampling_params: SamplingParams,
+    /// Initializes an independent sampling stream for every generated choice.
+    #[serde(default)]
+    pub seed: Option<u64>,
     #[serde(default = "default_responder")]
     #[serde(skip)]
     pub response: Sender<Response>,
     pub return_logprobs: bool,
     pub is_streaming: bool,
     pub id: usize,
+    #[doc(hidden)]
+    #[serde(skip)]
+    pub queued_at: Option<Instant>,
     pub constraint: Constraint,
     pub suffix: Option<String>,
     pub tools: Option<Vec<Tool>>,
@@ -467,6 +473,26 @@ pub struct NormalRequest {
 }
 
 impl NormalRequest {
+    pub(crate) fn response_is_closed(&self) -> bool {
+        self.response.is_closed()
+    }
+
+    pub(crate) fn mark_enqueued(&mut self) {
+        self.mark_enqueued_at(Instant::now());
+    }
+
+    fn mark_enqueued_at(&mut self, now: Instant) {
+        self.queued_at.get_or_insert(now);
+    }
+
+    pub(crate) fn take_queue_duration(&mut self) -> Option<std::time::Duration> {
+        self.take_queue_duration_at(Instant::now())
+    }
+
+    fn take_queue_duration_at(&mut self, now: Instant) -> Option<std::time::Duration> {
+        self.queued_at.take().map(|queued_at| now - queued_at)
+    }
+
     pub fn new_simple(
         messages: RequestMessage,
         sampling_params: SamplingParams,
@@ -478,8 +504,10 @@ impl NormalRequest {
         Self {
             messages,
             sampling_params,
+            seed: None,
             response,
             id,
+            queued_at: None,
             tools,
             tool_choice,
             return_logprobs: false,
@@ -707,6 +735,7 @@ mod tests {
         );
         let generation = crate::AdapterGenerationId::from_bytes([7; 32]);
         request.adapter = Some(AdapterSelection::generation(generation));
+        request.mark_enqueued();
 
         let serialized = serde_json::to_string(&Request::Normal(Box::new(request))).unwrap();
         let Request::Normal(request) = serde_json::from_str::<Request>(&serialized).unwrap() else {
@@ -718,6 +747,36 @@ mod tests {
                 .as_ref()
                 .and_then(AdapterSelection::resolved_generation),
             Some(generation)
+        );
+        assert!(request.queued_at.is_none());
+    }
+
+    #[test]
+    fn queue_duration_preserves_ingress_time_and_is_consumed_once() {
+        let (response, _) = tokio::sync::mpsc::channel(1);
+        let mut request = NormalRequest::new_simple(
+            RequestMessage::Completion {
+                text: "hello".to_string(),
+                echo_prompt: false,
+                best_of: None,
+            },
+            SamplingParams::neutral(),
+            response,
+            0,
+            None,
+            None,
+        );
+        let ingress = Instant::now();
+        request.mark_enqueued_at(ingress);
+        request.mark_enqueued_at(ingress + std::time::Duration::from_secs(1));
+
+        assert_eq!(
+            request.take_queue_duration_at(ingress + std::time::Duration::from_secs(2)),
+            Some(std::time::Duration::from_secs(2))
+        );
+        assert_eq!(
+            request.take_queue_duration_at(ingress + std::time::Duration::from_secs(3)),
+            None
         );
     }
 }

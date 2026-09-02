@@ -576,6 +576,9 @@ impl MultimodalModel for Gemma3nModel {
     fn model_config(&self) -> Arc<dyn ModelConfigLike + Send + Sync> {
         self.language_model.model_config_like()
     }
+    fn encoder_cache(&self) -> Option<&Mutex<EncoderCacheManager>> {
+        Some(&self.encoder_cache)
+    }
     fn encoder_cache_counters(
         &self,
     ) -> Option<(

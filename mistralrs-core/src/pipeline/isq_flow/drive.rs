@@ -19,7 +19,9 @@ use super::harvest_imatrix;
 
 pub(crate) trait CalibrationDrive {
     fn calibration_forward(&self, inputs: &InputMetadata) -> candle_core::Result<()>;
-    fn reset_cache(&self) {}
+    fn reset_cache(&self) -> candle_core::Result<()> {
+        Ok(())
+    }
     fn sliding_window(&self) -> Option<usize> {
         None
     }
@@ -41,8 +43,8 @@ impl CalibrationDrive for NormalCalibrationDrive<'_> {
         Ok(())
     }
 
-    fn reset_cache(&self) {
-        reset_either_cache(self.0.cache());
+    fn reset_cache(&self) -> candle_core::Result<()> {
+        reset_either_cache(self.0.cache())
     }
 
     fn sliding_window(&self) -> Option<usize> {
@@ -69,8 +71,8 @@ impl CalibrationDrive for MultimodalCalibrationDrive<'_> {
         Ok(())
     }
 
-    fn reset_cache(&self) {
-        reset_either_cache(self.0.cache());
+    fn reset_cache(&self) -> candle_core::Result<()> {
+        reset_either_cache(self.0.cache())
     }
 
     fn sliding_window(&self) -> Option<usize> {
@@ -88,7 +90,7 @@ impl CalibrationDrive for EmbeddingCalibrationDrive<'_> {
     }
 }
 
-fn reset_either_cache(cache: &EitherCache) {
+fn reset_either_cache(cache: &EitherCache) -> candle_core::Result<()> {
     match cache {
         EitherCache::Full(full) => {
             for layer in &mut *full.lock() {
@@ -101,9 +103,10 @@ fn reset_either_cache(cache: &EitherCache) {
             }
         }
         EitherCache::Hybrid(hybrid) => {
-            hybrid.lock().unwrap().reset();
+            hybrid.lock().unwrap().reset()?;
         }
     }
+    Ok(())
 }
 
 pub(crate) struct CalibrationCtx<'a> {
@@ -166,7 +169,7 @@ pub(crate) fn resolve_imatrix_map(
                 false,
             )?;
             drive.calibration_forward(&inputs)?;
-            drive.reset_cache();
+            drive.reset_cache()?;
 
             info!(
                 "Processed chunk {}/{n_chunks} ({chunk_len} tokens), {:.2}s",

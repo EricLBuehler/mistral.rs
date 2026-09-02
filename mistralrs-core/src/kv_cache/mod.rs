@@ -15,9 +15,16 @@ mod rotating_cache;
 mod single_cache;
 
 pub use full_cache::{EitherCache, LayerCaches};
+#[cfg(feature = "cuda")]
+pub(crate) use hybrid_cache::RecurrentCheckpointStateSnapshot;
+#[cfg(feature = "cuda")]
+pub(crate) use hybrid_cache::GDN_PENDING_KEY_BANK_COUNT;
+pub(crate) use hybrid_cache::{
+    GdnDeferredStatePool, GdnDeferredStateSpec, GdnPendingTransitionPool, GdnPendingTransitionSpec,
+};
 pub use hybrid_cache::{
     HybridCache, HybridCacheConfig, HybridLayerCache, HybridLayerType, RecurrentLayerConfig,
-    RecurrentStateSnapshot,
+    RecurrentStateLayout, RecurrentStatePool, RecurrentStateSnapshot, RecurrentStateSpec,
 };
 pub use rotating_cache::{RotatingCache, RotatingCacheSnapshot};
 pub use single_cache::{SingleCache, SingleCacheSnapshot};
@@ -28,7 +35,7 @@ pub trait CacheManager<T: CacheManagerMixin + MetadataMixin + ?Sized> {
         pipeline: &T,
         seqs: &mut [&mut crate::sequence::Sequence],
         modify_draft_cache: bool,
-    );
+    ) -> Result<()>;
     fn clone_out_cache(&self, pipeline: &T, seqs: &mut [&mut Sequence], modify_draft_cache: bool);
     fn set_none_cache(
         &self,
@@ -36,7 +43,7 @@ pub trait CacheManager<T: CacheManagerMixin + MetadataMixin + ?Sized> {
         seqs: &mut [&mut Sequence],
         modify_draft_cache: bool,
         load_preallocated_cache: bool,
-    );
+    ) -> Result<()>;
 }
 
 #[derive(Debug, Clone)]
@@ -481,7 +488,7 @@ impl<T: CacheManagerMixin + MetadataMixin + ?Sized> CacheManager<T> for NormalCa
         pipeline: &T,
         seqs: &mut [&mut crate::sequence::Sequence],
         modify_draft_cache: bool,
-    ) {
+    ) -> Result<()> {
         let mut new_k_cache = Vec::new();
         let mut new_v_cache = Vec::new();
 
@@ -622,6 +629,7 @@ impl<T: CacheManagerMixin + MetadataMixin + ?Sized> CacheManager<T> for NormalCa
             }
         }
         *pipeline.cache().normal() = NormalCache(caches);
+        Ok(())
     }
     fn clone_out_cache(&self, pipeline: &T, seqs: &mut [&mut Sequence], modify_draft_cache: bool) {
         let all_cache = pipeline.cache().normal();
@@ -726,12 +734,12 @@ impl<T: CacheManagerMixin + MetadataMixin + ?Sized> CacheManager<T> for NormalCa
         seqs: &mut [&mut Sequence],
         _modify_draft_cache: bool,
         load_preallocated_cache: bool,
-    ) {
+    ) -> Result<()> {
         if seqs.iter().any(|seq| seq.preallocated_cache().is_none()) {
             for layer in pipeline.cache().normal().0.iter_mut() {
                 layer.reset();
             }
-            return;
+            return Ok(());
         }
 
         let layer_devices = pipeline.device_mapper().map(|device_mapper| {
@@ -853,6 +861,7 @@ impl<T: CacheManagerMixin + MetadataMixin + ?Sized> CacheManager<T> for NormalCa
                 KvCache::Rotating { .. } | KvCache::Shared { .. } => unreachable!(),
             }
         }
+        Ok(())
     }
 }
 
@@ -1076,7 +1085,7 @@ impl<T: CacheManagerMixin + MetadataMixin + ?Sized> CacheManager<T> for FullCach
         pipeline: &T,
         seqs: &mut [&mut crate::sequence::Sequence],
         modify_draft_cache: bool,
-    ) {
+    ) -> Result<()> {
         if modify_draft_cache {
             clone_in_cache(
                 pipeline.get_metadata().num_hidden_layers,
@@ -1084,7 +1093,7 @@ impl<T: CacheManagerMixin + MetadataMixin + ?Sized> CacheManager<T> for FullCach
                 seqs,
                 SeqCache::Draft,
             );
-            return;
+            return Ok(());
         }
         clone_in_cache(
             pipeline.get_metadata().num_hidden_layers,
@@ -1107,6 +1116,7 @@ impl<T: CacheManagerMixin + MetadataMixin + ?Sized> CacheManager<T> for FullCach
                 .get_scalings_cache()
                 .clone_from(seqs[0].scaling_cache());
         }
+        Ok(())
     }
 
     fn clone_out_cache(
@@ -1151,7 +1161,7 @@ impl<T: CacheManagerMixin + MetadataMixin + ?Sized> CacheManager<T> for FullCach
         _seqs: &mut [&mut Sequence],
         modify_draft_cache: bool,
         _load_preallocated_cache: bool,
-    ) {
+    ) -> Result<()> {
         let mut new_cache = Vec::new();
         for _ in 0..pipeline.get_metadata().num_hidden_layers {
             new_cache.push(None);
@@ -1163,6 +1173,7 @@ impl<T: CacheManagerMixin + MetadataMixin + ?Sized> CacheManager<T> for FullCach
         if pipeline.cache().full().is_xlora() {
             *pipeline.cache().full().xlora_lock() = new_cache;
         }
+        Ok(())
     }
 }
 
@@ -1183,72 +1194,23 @@ impl<T: CacheManagerMixin + MetadataMixin + ?Sized> CacheManager<T> for HybridCa
         pipeline: &T,
         seqs: &mut [&mut crate::sequence::Sequence],
         modify_draft_cache: bool,
-    ) {
+    ) -> Result<()> {
         let mut hybrid_cache = pipeline.cache().hybrid();
         let num_layers = hybrid_cache.num_layers();
-
-        // Build state_indices for recurrent layers from sequences' recurrent_state_idx
-        // Find the device from the first recurrent layer's pool
-        let recurrent_device = hybrid_cache.caches.iter().find_map(|c| {
-            if let HybridLayerCache::Recurrent(pool) = c {
-                Some(pool.device().clone())
-            } else {
-                None
-            }
-        });
-
-        // Ensure every sequence has a recurrent slot when using hybrid cache.
-        let mut state_index_allocation_failed = false;
-        let mut newly_allocated = Vec::new();
-        for (seq_idx, seq) in seqs.iter_mut().enumerate() {
-            if seq.recurrent_state_idx().is_none() {
-                if let Some(slot_idx) = hybrid_cache.allocate_seq() {
-                    seq.set_recurrent_state_idx(Some(slot_idx));
-                    newly_allocated.push((seq_idx, slot_idx));
-                } else {
-                    tracing::warn!(
-                        "Failed to allocate recurrent state slot for sequence {}, hybrid forward will fail for this batch.",
-                        seq.id()
-                    );
-                    state_index_allocation_failed = true;
-                    break;
-                }
-            }
-        }
-        if state_index_allocation_failed {
-            for (seq_idx, slot_idx) in newly_allocated {
-                seqs[seq_idx].set_recurrent_state_idx(None);
-                hybrid_cache.free_seq(slot_idx);
-            }
-        }
-
-        if let Some(device) = recurrent_device {
-            if state_index_allocation_failed {
-                hybrid_cache.set_state_indices(None);
-            } else {
-                // Build state_indices tensor from sequences
-                let mut indices = Vec::with_capacity(seqs.len());
-                for seq in seqs.iter() {
-                    if let Some(idx) = seq.recurrent_state_idx() {
-                        #[allow(clippy::cast_possible_truncation)]
-                        indices.push(idx as u32);
-                    } else {
-                        tracing::warn!(
-                            "Sequence {} missing recurrent_state_idx during hybrid clone_in_cache.",
+        let sequence_slots = seqs
+            .iter()
+            .map(|seq| {
+                seq.recurrent_state_idx()
+                    .map(|slot_idx| (*seq.id(), slot_idx))
+                    .ok_or_else(|| {
+                        candle_core::Error::msg(format!(
+                            "hybrid sequence {} has no recurrent state slot",
                             seq.id()
-                        );
-                        hybrid_cache.set_state_indices(None);
-                        return;
-                    }
-                }
-                if let Ok(state_indices) = Tensor::from_vec(indices.clone(), (seqs.len(),), &device)
-                {
-                    hybrid_cache.set_state_indices_with_host(Some(state_indices), Some(indices));
-                } else {
-                    hybrid_cache.set_state_indices(None);
-                }
-            }
-        }
+                        ))
+                    })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        hybrid_cache.install_sequence_state_indices(&sequence_slots)?;
 
         // For attention layers, we still need to batch KV caches
         for layer_idx in 0..num_layers {
@@ -1281,14 +1243,14 @@ impl<T: CacheManagerMixin + MetadataMixin + ?Sized> CacheManager<T> for HybridCa
                     // cat/clone of narrow'd views may be non-contiguous;
                     // all_data must be contiguous for slice_set in SingleCache::append.
                     let batched_k = if k_tensors.len() > 1 {
-                        Tensor::cat(&k_tensors, 0).unwrap()
+                        Tensor::cat(&k_tensors, 0)?
                     } else {
-                        k_tensors[0].contiguous().unwrap()
+                        k_tensors[0].contiguous()?
                     };
                     let batched_v = if v_tensors.len() > 1 {
-                        Tensor::cat(&v_tensors, 0).unwrap()
+                        Tensor::cat(&v_tensors, 0)?
                     } else {
-                        v_tensors[0].contiguous().unwrap()
+                        v_tensors[0].contiguous()?
                     };
 
                     if let Some(ref template) = template_cache {
@@ -1317,6 +1279,7 @@ impl<T: CacheManagerMixin + MetadataMixin + ?Sized> CacheManager<T> for HybridCa
             // For recurrent layers: No copying needed!
             // The pool is accessed directly via state_indices during forward.
         }
+        Ok(())
     }
 
     fn clone_out_cache(&self, pipeline: &T, seqs: &mut [&mut Sequence], modify_draft_cache: bool) {
@@ -1389,8 +1352,22 @@ impl<T: CacheManagerMixin + MetadataMixin + ?Sized> CacheManager<T> for HybridCa
         seqs: &mut [&mut Sequence],
         modify_draft_cache: bool,
         _load_preallocated_cache: bool,
-    ) {
-        // Reset attention KV caches in sequences
+    ) -> Result<()> {
+        let sequence_slots = seqs
+            .iter()
+            .map(|seq| {
+                seq.recurrent_state_idx()
+                    .map(|slot_idx| (*seq.id(), slot_idx))
+                    .ok_or_else(|| {
+                        candle_core::Error::msg(format!(
+                            "hybrid sequence {} has no recurrent state slot",
+                            seq.id()
+                        ))
+                    })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let mut hybrid_cache = pipeline.cache().hybrid();
+        hybrid_cache.validate_sequence_slots(&sequence_slots)?;
         for seq in seqs.iter_mut() {
             let seq_cache = if modify_draft_cache {
                 seq.normal_draft_cache()
@@ -1401,32 +1378,13 @@ impl<T: CacheManagerMixin + MetadataMixin + ?Sized> CacheManager<T> for HybridCa
                 kv.reset();
             }
         }
-        // Reset the hybrid cache (including recurrent state pools)
-        let mut hybrid_cache = pipeline.cache().hybrid();
-        hybrid_cache.reset();
-
-        // Build state_indices so the forward pass can access recurrent pool states.
-        // Sequences already have slots allocated from add_request.
-        let recurrent_device = hybrid_cache.caches.iter().find_map(|c| {
-            if let HybridLayerCache::Recurrent(pool) = c {
-                Some(pool.device().clone())
-            } else {
-                None
-            }
-        });
-        if let Some(device) = recurrent_device {
-            #[allow(clippy::cast_possible_truncation)]
-            let indices: Vec<u32> = seqs
-                .iter()
-                .filter_map(|seq| seq.recurrent_state_idx().map(|idx| idx as u32))
-                .collect();
-            if indices.len() == seqs.len() {
-                if let Ok(state_indices) = Tensor::from_vec(indices.clone(), (seqs.len(),), &device)
-                {
-                    hybrid_cache.set_state_indices_with_host(Some(state_indices), Some(indices));
-                }
-            }
-        }
+        let slots = sequence_slots
+            .iter()
+            .map(|&(_, slot_idx)| slot_idx)
+            .collect::<Vec<_>>();
+        hybrid_cache.reset_attention_and_slots(&slots)?;
+        hybrid_cache.install_sequence_state_indices(&sequence_slots)?;
+        Ok(())
     }
 }
 

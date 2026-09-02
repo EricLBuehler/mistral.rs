@@ -16,7 +16,8 @@ use crate::{
         text_models_inputs_processor::{
             self, get_completion_input, get_prompt_input, PagedAttentionMeta,
         },
-        InputProcessorOutput, InputsProcessor, InputsProcessorType, MessagesAction, Processor,
+        InputProcessorOutput, InputsProcessor, InputsProcessorType, InputsProcessorValidationError,
+        MessagesAction, Processor,
     },
     request::ReasoningEffort,
     sequence::{find_image_placeholder_ranges, Sequence},
@@ -165,24 +166,28 @@ fn idefics2_mm_features(
     image_hashes: &[u64],
     subimages_per_image: usize,
     image_seq_len: usize,
-) -> Result<Vec<MultiModalFeature>> {
+) -> anyhow::Result<Vec<MultiModalFeature>> {
     if subimages_per_image == 0 {
-        candle_core::bail!("Idefics2 image must have at least one encoder input");
+        anyhow::bail!("Idefics2 image must have at least one encoder input");
     }
     let ranges = image_token_ranges(tokens, image_token_id);
     if ranges.iter().any(|range| range.len() != image_seq_len) {
-        candle_core::bail!("Idefics2 image placeholder has an unexpected length");
+        return Err(InputsProcessorValidationError(
+            "Idefics2 image placeholder has an unexpected length".to_string(),
+        )
+        .into());
     }
     let expected_ranges = image_hashes
         .len()
         .checked_mul(subimages_per_image)
         .ok_or_else(|| candle_core::Error::msg("Idefics2 image count overflow"))?;
     if ranges.len() != expected_ranges {
-        candle_core::bail!(
+        return Err(InputsProcessorValidationError(format!(
             "Idefics2 has {} image placeholder spans but {} encoder inputs",
             ranges.len(),
             expected_ranges
-        );
+        ))
+        .into());
     }
 
     image_hashes
@@ -871,8 +876,13 @@ mod tests {
 
     #[test]
     fn malformed_placeholder_cardinality_is_rejected() {
-        assert!(idefics2_mm_features(&[7, 7, 1, 7, 7], 7, &[11], 1, 2).is_err());
-        assert!(idefics2_mm_features(&[7, 1], 7, &[11], 1, 2).is_err());
+        let cardinality = idefics2_mm_features(&[7, 7, 1, 7, 7], 7, &[11], 1, 2).unwrap_err();
+        let length = idefics2_mm_features(&[7, 1], 7, &[11], 1, 2).unwrap_err();
+        let internal = idefics2_mm_features(&[7, 7], 7, &[11], 0, 2).unwrap_err();
+
+        assert!(cardinality.is::<InputsProcessorValidationError>());
+        assert!(length.is::<InputsProcessorValidationError>());
+        assert!(!internal.is::<InputsProcessorValidationError>());
     }
 
     #[test]

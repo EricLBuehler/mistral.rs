@@ -24,7 +24,10 @@ use crate::{
     },
     vision_models::{
         multimodal_layout::PackedMultimodalLayout,
-        qwen3_vl::{vision::Qwen3VLVisionModel, Qwen3VLVisionSpecificArgs},
+        qwen3_vl::{
+            concatenate_visual_items, vision::Qwen3VLVisionModel, Qwen3VLVisionSpecificArgs,
+            VisualEncoder,
+        },
     },
 };
 
@@ -51,6 +54,10 @@ pub struct Qwen3_5Model {
     encoder_cache: Arc<Mutex<EncoderCacheManager>>,
     // Draft tokens per speculative step; 0 while MTP is not attached
     pub(super) mtp_n_predict: std::sync::atomic::AtomicUsize,
+    // Draft-only lm_head at the base ISQ type; the target verifies with the promoted head
+    pub(super) draft_lm_head: Mutex<Option<std::sync::Arc<dyn mistralrs_quant::QuantMethod>>>,
+    // External DFlash block-diffusion drafter, replacing the built-in MTP head when attached
+    pub(super) dflash: Mutex<Option<std::sync::Arc<crate::speculative::DFlashDraftModel>>>,
     pending_prompt_tails: Mutex<std::collections::HashMap<usize, speculative::PendingPromptTail>>,
 }
 
@@ -96,6 +103,8 @@ impl Qwen3_5Model {
             vision_end_token_id: cfg.vision_end_token_id,
             encoder_cache: Arc::new(Mutex::new(EncoderCacheManager::new(32))),
             mtp_n_predict: std::sync::atomic::AtomicUsize::new(0),
+            draft_lm_head: Mutex::new(None),
+            dflash: Mutex::new(None),
             pending_prompt_tails: Mutex::new(std::collections::HashMap::new()),
         })
     }
@@ -121,18 +130,17 @@ impl Qwen3_5Model {
         ctx: &ModelForwardContext<'_>,
     ) -> Result<Tensor> {
         let seqlen_offsets = ctx.seqlen_offsets();
-        let mut attention_mask = CausalMasker.make_causal_mask(
-            input_ids,
-            &seqlen_offsets as &dyn PastKvLenCache,
-            self.text.dtype,
-            &CausalMaskConfig {
-                sliding_window: self.text.cfg.sliding_window,
-                ..Default::default()
-            },
-        )?;
-        let is_first_chunk = ctx.is_first_prompt_chunk();
-        attention_mask = if is_first_chunk {
-            attention_mask
+        // Later chunks and decode rows attend through the paged cache, so only the first chunk needs a mask
+        let attention_mask = if ctx.is_first_prompt_chunk() {
+            CausalMasker.make_causal_mask(
+                input_ids,
+                &seqlen_offsets as &dyn PastKvLenCache,
+                self.text.dtype,
+                &CausalMaskConfig {
+                    sliding_window: self.text.cfg.sliding_window,
+                    ..Default::default()
+                },
+            )?
         } else {
             AttentionMask::None
         };
@@ -187,117 +195,18 @@ impl Qwen3_5Model {
                 pixel_values = pixel_values.reshape(((), last_dim))?;
             }
 
-            let (image_embeds, deepstack_image_embeds) = if !image_hashes.is_empty() {
-                let n_images = image_hashes.len();
-                let grid_data = image_grid_thw_ref.to_vec2::<u32>()?;
-                let patches_per_image: Vec<usize> = grid_data
-                    .iter()
-                    .map(|row| row[0] as usize * row[1] as usize * row[2] as usize)
-                    .collect();
-                let merge = self.spatial_merge_size;
-                let output_tokens_per_image: Vec<usize> = grid_data
-                    .iter()
-                    .map(|row| {
-                        (row[0] as usize) * (row[1] as usize / merge) * (row[2] as usize / merge)
-                    })
-                    .collect();
-
-                let mut per_image: Vec<Option<Vec<Tensor>>> = vec![None; n_images];
-                let mut miss_indices = Vec::new();
-                {
-                    let mut guard = self
-                        .encoder_cache
-                        .lock()
-                        .expect("encoder cache lock poisoned");
-                    for (i, &hash) in image_hashes.iter().enumerate() {
-                        if let Some(cached) = guard.get(CacheModality::Image, hash) {
-                            per_image[i] = Some(cached);
-                        } else {
-                            miss_indices.push(i);
-                        }
-                    }
-                }
-
-                if miss_indices.is_empty() {
-                    let main_parts: Vec<Tensor> = per_image
-                        .iter()
-                        .map(|o| o.as_ref().unwrap()[0].clone())
-                        .collect();
-                    let image_embeds = Tensor::cat(&main_parts, 0)?;
-                    let n_ds_layers = per_image[0].as_ref().unwrap().len() - 1;
-                    let mut deepstack_layers = Vec::with_capacity(n_ds_layers);
-                    for layer_idx in 0..n_ds_layers {
-                        let layer_parts: Vec<Tensor> = per_image
-                            .iter()
-                            .map(|o| o.as_ref().unwrap()[1 + layer_idx].clone())
-                            .collect();
-                        deepstack_layers.push(Tensor::cat(&layer_parts, 0)?);
-                    }
-                    (image_embeds, deepstack_layers)
-                } else {
-                    let mut miss_pixel_slices = Vec::new();
-                    let mut miss_grid_rows = Vec::new();
-                    let mut pv_offset = 0usize;
-                    for (i, &n_patches) in patches_per_image.iter().enumerate() {
-                        if miss_indices.contains(&i) {
-                            miss_pixel_slices.push(pixel_values.narrow(0, pv_offset, n_patches)?);
-                            miss_grid_rows.push(image_grid_thw_ref.i(i)?);
-                        }
-                        pv_offset += n_patches;
-                    }
-                    let miss_pixels = Tensor::cat(&miss_pixel_slices, 0)?;
-                    let miss_grid = Tensor::stack(&miss_grid_rows, 0)?;
-
-                    let (encoded_main, encoded_ds) =
-                        self.vision.forward(&miss_pixels, &miss_grid)?;
-
-                    let miss_output_tokens: Vec<usize> = miss_indices
-                        .iter()
-                        .map(|&i| output_tokens_per_image[i])
-                        .collect();
-
-                    let mut enc_offset = 0usize;
-                    {
-                        let mut guard = self
-                            .encoder_cache
-                            .lock()
-                            .expect("encoder cache lock poisoned");
-                        for (j, &orig_idx) in miss_indices.iter().enumerate() {
-                            let n_out = miss_output_tokens[j];
-                            let single_main = encoded_main.narrow(0, enc_offset, n_out)?;
-                            let mut cache_entry = vec![single_main.clone()];
-                            for ds_layer in &encoded_ds {
-                                let single_ds = ds_layer.narrow(0, enc_offset, n_out)?;
-                                cache_entry.push(single_ds.clone());
-                            }
-                            enc_offset += n_out;
-                            guard.insert(
-                                CacheModality::Image,
-                                image_hashes[orig_idx],
-                                cache_entry.clone(),
-                            );
-                            per_image[orig_idx] = Some(cache_entry);
-                        }
-                    }
-
-                    let main_parts: Vec<Tensor> = per_image
-                        .iter()
-                        .map(|o| o.as_ref().unwrap()[0].clone())
-                        .collect();
-                    let image_embeds = Tensor::cat(&main_parts, 0)?;
-                    let n_ds_layers = per_image[0].as_ref().unwrap().len() - 1;
-                    let mut deepstack_layers = Vec::with_capacity(n_ds_layers);
-                    for layer_idx in 0..n_ds_layers {
-                        let layer_parts: Vec<Tensor> = per_image
-                            .iter()
-                            .map(|o| o.as_ref().unwrap()[1 + layer_idx].clone())
-                            .collect();
-                        deepstack_layers.push(Tensor::cat(&layer_parts, 0)?);
-                    }
-                    (image_embeds, deepstack_layers)
-                }
-            } else {
+            let (image_embeds, deepstack_image_embeds) = if image_hashes.is_empty() {
                 self.vision.forward(&pixel_values, image_grid_thw_ref)?
+            } else {
+                let per_image =
+                    VisualEncoder::new(&self.vision, &self.encoder_cache, self.spatial_merge_size)
+                        .encode(
+                            &pixel_values,
+                            image_grid_thw_ref,
+                            image_hashes,
+                            CacheModality::Image,
+                        )?;
+                concatenate_visual_items(&per_image)?
             };
 
             let image_embeds = image_embeds.to_device(&device)?.to_dtype(self.text.dtype)?;
@@ -348,8 +257,19 @@ impl Qwen3_5Model {
                 let last_dim = pixel_values.dim(ndim - 1)?;
                 pixel_values = pixel_values.reshape(((), last_dim))?;
             }
-            let (video_embeds, deepstack_video_embeds) =
-                self.vision.forward(&pixel_values, video_grid_thw_ref)?;
+            let (video_embeds, deepstack_video_embeds) = if video_hashes.is_empty() {
+                self.vision.forward(&pixel_values, video_grid_thw_ref)?
+            } else {
+                let per_video =
+                    VisualEncoder::new(&self.vision, &self.encoder_cache, self.spatial_merge_size)
+                        .encode(
+                            &pixel_values,
+                            video_grid_thw_ref,
+                            video_hashes,
+                            CacheModality::Video,
+                        )?;
+                concatenate_visual_items(&per_video)?
+            };
             let video_embeds = video_embeds.to_device(&device)?.to_dtype(self.text.dtype)?;
             let deepstack_video_embeds = deepstack_video_embeds
                 .into_iter()
@@ -452,7 +372,13 @@ impl Qwen3_5Model {
         };
 
         let position_ids = if rope_img_grid_thw.is_none() && rope_vid_grid_thw.is_none() {
-            crate::vision_models::text_decode_mrope_position_ids_from_context(input_ids, ctx)?
+            match crate::vision_models::text_decode_position_ids_from_context(input_ids, ctx)? {
+                Some(position_ids) => Some(position_ids),
+                None => Some(crate::vision_models::text_position_ids(
+                    input_ids,
+                    seqlen_offsets,
+                )?),
+            }
         } else {
             None
         };
@@ -583,18 +509,16 @@ impl MultimodalModel for Qwen3_5Model {
     fn supports_cuda_decode_graphs_for_args(&self, model_specific_args: &dyn Any) -> bool {
         model_specific_args
             .downcast_ref::<Qwen3VLVisionSpecificArgs>()
-            .is_some_and(|args| {
-                args.rope_img_grid_thw.is_none() && args.rope_vid_grid_thw.is_none()
-            })
+            .is_some()
     }
     fn config(&self) -> &ModelConfigMetadata {
         &self.text.cfg
     }
     fn model_config(&self) -> Arc<dyn ModelConfigLike + Send + Sync> {
-        Arc::new(HybridPagedKvCacheConfig::new(
-            self.text.cfg.clone(),
-            self.text.paged_kv_layers(),
-        ))
+        Arc::new(
+            HybridPagedKvCacheConfig::new(self.text.cfg.clone(), self.text.paged_kv_layers())
+                .with_uniform_prefix_prefill_attention_features(Default::default()),
+        )
     }
     fn default_model_specific_args(&self, input_ids: &Tensor) -> Box<dyn Any> {
         let (batch_size, seq_len) = input_ids.dims2().expect("input ids must be rank 2");
@@ -613,6 +537,9 @@ impl MultimodalModel for Qwen3_5Model {
             packed_layout: None,
             prompt_position_ids: None,
         })
+    }
+    fn encoder_cache(&self) -> Option<&Mutex<EncoderCacheManager>> {
+        Some(&self.encoder_cache)
     }
     fn encoder_cache_counters(
         &self,

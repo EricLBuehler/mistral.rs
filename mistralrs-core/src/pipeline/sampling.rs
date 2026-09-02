@@ -6,11 +6,14 @@ use rand::distr::{Distribution, Uniform};
 use rand_isaac::Isaac64Rng;
 
 #[cfg(feature = "cuda")]
-use crate::sampler::CudaBatchSamplingKind;
+use crate::sampler::{
+    CudaBatchSamplingKind, CudaBatchSamplingPlan, CudaTop1BatchSubmission, CudaTopKBatchSubmission,
+    Sampler,
+};
 use crate::{
     prefix_cacher::PrefixCacheManagerV2,
     sampler::Logprobs,
-    sequence::{Sequence, SequenceRecognizer, SequenceState, StopReason},
+    sequence::{Sequence, SequenceRecognizer, SequenceState, StopReason, StreamingEmission},
     tools::ToolCallState,
 };
 
@@ -36,7 +39,7 @@ fn parse_text_and_tool_calls(
     let Some(state) = state else {
         return Ok((Some(raw_text.to_string()), Vec::new()));
     };
-    let parsed = state.finalize_for_response(raw_text, None, None)?;
+    let parsed = state.finalize_for_response(raw_text, None, None, None)?;
     Ok((parsed.content, parsed.tool_calls))
 }
 
@@ -53,7 +56,8 @@ fn parse_streaming_text_and_tool_calls(
             Vec::new(),
         ));
     };
-    let parsed = state.parse_streaming(content_delta, raw_delta, has_reasoning_parser, false)?;
+    let parsed =
+        state.parse_streaming(content_delta, raw_delta, None, has_reasoning_parser, false)?;
     Ok((parsed.content, parsed.tool_calls))
 }
 
@@ -100,6 +104,87 @@ fn activate_required_tool_call_grammar(
     }
 }
 
+fn append_hidden_stop(mut text: Option<String>, hidden_stop: Option<&str>) -> Option<String> {
+    if let (Some(text), Some(hidden_stop)) = (&mut text, hidden_stop) {
+        text.push_str(hidden_stop);
+    }
+    text
+}
+
+fn response_stop_sequence(reason: Option<StopReason>, hidden_stop: Option<&str>) -> Option<String> {
+    match reason {
+        Some(StopReason::StopString { .. }) => hidden_stop.map(str::to_string),
+        _ => None,
+    }
+}
+
+// With a think-tag parser, only content outside the think block counts as tool text.
+fn tool_detection_text(seq: &Sequence, hidden_stop: Option<&str>) -> Option<String> {
+    let text = if seq.reasoning_mode().is_some() {
+        seq.get_response_content()
+    } else {
+        seq.peek_delta().ok().flatten()
+    };
+    append_hidden_stop(text, hidden_stop)
+}
+
+fn streaming_response_logprob(emission: &StreamingEmission) -> crate::ResponseLogprob {
+    crate::ResponseLogprob {
+        token: emission
+            .logprobs
+            .bytes
+            .clone()
+            .unwrap_or_else(|| String::from_utf8_lossy(&emission.bytes).to_string()),
+        bytes: Some(emission.bytes.clone()),
+        logprob: emission.logprobs.logprob,
+        top_logprobs: emission
+            .logprobs
+            .top_logprobs
+            .clone()
+            .expect("requested logprobs must include top logprobs"),
+    }
+}
+
+pub(crate) fn cache_finished_sequence(
+    this: &dyn Pipeline,
+    prefix_cacher: &mut PrefixCacheManagerV2,
+    seq: &mut Sequence,
+) -> Result<()> {
+    if !prefix_cacher.accepts_sequence_cache() {
+        return Ok(());
+    }
+    let recurrent_snapshots = if this.cache().is_hybrid() {
+        let Some(idx) = seq.recurrent_state_idx() else {
+            tracing::warn!(
+                sequence_id = seq.id(),
+                "Skipping hybrid prefix cache entry without recurrent state"
+            );
+            return Ok(());
+        };
+        this.flush_recurrent_speculative_transitions(&[*seq.id()])?;
+        match this
+            .cache()
+            .hybrid()
+            .snapshot_recurrent_state(*seq.id(), idx)
+        {
+            Ok(snapshots) => Some(snapshots),
+            Err(error) => {
+                tracing::warn!(
+                    sequence_id = seq.id(),
+                    %error,
+                    "Skipping hybrid prefix cache entry after recurrent snapshot failure"
+                );
+                return Ok(());
+            }
+        }
+    } else {
+        None
+    };
+    prefix_cacher.add_sequence(seq, recurrent_snapshots);
+    prefix_cacher.evict_caches()?;
+    Ok(())
+}
+
 pub(crate) async fn finish_or_add_toks_to_seq(
     this: &dyn Pipeline,
     prefix_cacher: &mut PrefixCacheManagerV2,
@@ -108,7 +193,7 @@ pub(crate) async fn finish_or_add_toks_to_seq(
     eos_tok: Option<&[u32]>,
     use_prefix_cacher: bool,
 ) -> Result<()> {
-    let mut is_done = seq.is_done(logprobs.token, eos_tok, this.get_metadata().max_seq_len);
+    let is_done = seq.is_done(logprobs.token, eos_tok, this.get_metadata().max_seq_len);
     let metadata = this.get_metadata();
     let tok_env = metadata.tok_env().ok_or(candle_core::Error::Msg(
         "`finish_or_add_toks_to_seq` requires the pipeline to have a token trie".to_string(),
@@ -120,11 +205,17 @@ pub(crate) async fn finish_or_add_toks_to_seq(
     let completion_bytes = tok_env
         .tok_trie()
         .decode_ext(&[logprobs.token], include_special);
-    seq.add_token(logprobs.clone(), completion_bytes, &is_done);
+    let mut is_done = seq.add_token(logprobs.clone(), completion_bytes, is_done);
+    let hidden_stop = match is_done {
+        Some(StopReason::StopString {
+            stop_string_idx, ..
+        }) => Some(seq.stop_strings()[stop_string_idx].clone()),
+        _ => None,
+    };
 
     // If we can have a tool and we got a tool, stop the sequence early.
     // Doesn't conflict with the logic below because it does the same thing anyway.
-    if let Ok(Some(d)) = seq.peek_delta() {
+    if let Some(d) = tool_detection_text(seq, hidden_stop.as_deref()) {
         if let Some(ref mut state) = seq.tool_call_state {
             let (_tool_use_still_possible, tool_use_is_done) = state.prefix_status(d.as_str())?;
 
@@ -147,7 +238,7 @@ pub(crate) async fn finish_or_add_toks_to_seq(
     // the tool call prefix from earlier generation, which would spuriously
     // re-activate the grammar on a completed sequence.
     if matches!(seq.recognizer, SequenceRecognizer::None) && is_done.is_none() {
-        let text = seq.peek_delta().ok().flatten();
+        let text = tool_detection_text(seq, None);
         let grm = seq
             .tool_call_state
             .as_mut()
@@ -174,11 +265,15 @@ pub(crate) async fn finish_or_add_toks_to_seq(
         }
     }
 
+    if is_done.is_some() {
+        seq.flush_stop_pending_bytes();
+    }
+
     // Handle streaming requests
     if seq.get_mut_group().is_streaming {
         let mut tool_use_still_possible = false;
         let mut tool_use_is_done = false;
-        if let Ok(Some(d)) = seq.peek_delta() {
+        if let Some(d) = tool_detection_text(seq, hidden_stop.as_deref()) {
             if let Some(ref state) = seq.tool_call_state {
                 (tool_use_still_possible, tool_use_is_done) = state.prefix_status(d.as_str())?;
             }
@@ -192,12 +287,28 @@ pub(crate) async fn finish_or_add_toks_to_seq(
             if is_done.is_some() && seq.has_reasoning_state() {
                 seq.finalize_reasoning();
             }
-            let delta_result = if is_done.is_some() {
+            let mut streaming_emissions = if seq.return_logprobs() {
+                seq.take_ready_streaming_emissions(is_done.is_some())
+            } else {
+                Vec::new()
+            };
+            let delta_result = if seq.return_logprobs() {
+                if streaming_emissions.is_empty() && is_done.is_none() {
+                    Ok(None)
+                } else {
+                    Ok(Some(
+                        streaming_emissions
+                            .iter()
+                            .map(|emission| emission.text.as_str())
+                            .collect::<String>(),
+                    ))
+                }
+            } else if is_done.is_some() {
                 Ok(Some(seq.get_final_delta()))
             } else {
                 seq.get_delta()
             };
-            if let Some(delta) = crate::handle_seq_error_stateaware_ok!(delta_result, seq) {
+            if let Some(mut delta) = crate::handle_seq_error_stateaware_ok!(delta_result, seq) {
                 if seq.get_mut_group().is_chat {
                     let has_external_reasoning_parser = seq.reasoning_mode().is_some();
                     let has_reasoning_parser = seq.has_reasoning_state();
@@ -213,9 +324,18 @@ pub(crate) async fn finish_or_add_toks_to_seq(
                     };
 
                     let tool_calls = if let Some(state) = seq.tool_call_state.as_mut() {
+                        let parser_text = hidden_stop.as_deref().and_then(|hidden_stop| {
+                            append_hidden_stop(
+                                content_delta.clone().or_else(|| {
+                                    (!has_external_reasoning_parser).then(|| delta.clone())
+                                }),
+                                Some(hidden_stop),
+                            )
+                        });
                         let parsed = state.parse_streaming(
                             content_delta.take(),
                             delta.as_str(),
+                            parser_text.as_deref(),
                             has_external_reasoning_parser,
                             is_done.is_some(),
                         )?;
@@ -230,44 +350,113 @@ pub(crate) async fn finish_or_add_toks_to_seq(
                         Vec::new()
                     };
 
-                    seq.add_streaming_chunk_choice_to_group(crate::ChunkChoice {
-                        delta: crate::Delta {
-                            content: fixup_sentencepiece!(Option content_delta),
-                            role: "assistant".to_string(),
-                            tool_calls: Some(tool_calls).filter(|v| !v.is_empty()),
-                            reasoning_content: reasoning_delta,
-                        },
-                        index: seq.get_response_index(),
-                        finish_reason: is_done.map(|x| x.to_string()),
-                        logprobs: if seq.return_logprobs() {
-                            Some(crate::ResponseLogprob {
-                                token: delta,
-                                bytes: logprobs.bytes.clone().map(|b| b.into_bytes()),
-                                logprob: logprobs.logprob,
-                                top_logprobs: logprobs.top_logprobs.unwrap().clone(),
-                            })
+                    if is_done.is_some() && !seq.stop_strings().is_empty() {
+                        seq.flush_stop_pending_bytes();
+                        if seq.return_logprobs() {
+                            let tail = seq.take_ready_streaming_emissions(true);
+                            for emission in &tail {
+                                delta.push_str(&emission.text);
+                            }
+                            streaming_emissions.extend(tail);
                         } else {
-                            None
-                        },
-                    });
-                } else {
-                    seq.add_streaming_completion_chunk_choice_to_group(
-                        crate::CompletionChunkChoice {
-                            text: fixup_sentencepiece!(delta),
-                            index: seq.get_response_index(),
-                            finish_reason: is_done.map(|x| x.to_string()),
-                            logprobs: if seq.return_logprobs() {
-                                Some(crate::ResponseLogprob {
-                                    token: delta,
-                                    bytes: logprobs.bytes.clone().map(|b| b.into_bytes()),
-                                    logprob: logprobs.logprob,
-                                    top_logprobs: logprobs.top_logprobs.unwrap().clone(),
-                                })
-                            } else {
-                                None
+                            delta.push_str(&seq.get_final_delta());
+                        }
+                    }
+
+                    let aligned_content = reasoning_delta.is_none()
+                        && tool_calls.is_empty()
+                        && content_delta.as_deref() == Some(delta.as_str());
+                    if seq.return_logprobs() && aligned_content && !streaming_emissions.is_empty() {
+                        let emission_count = streaming_emissions.len();
+                        for (idx, emission) in streaming_emissions.iter().enumerate() {
+                            seq.add_streaming_chunk_choice_to_group(crate::ChunkChoice {
+                                delta: crate::Delta {
+                                    content: Some(fixup_sentencepiece!(emission.text)),
+                                    role: "assistant".to_string(),
+                                    tool_calls: None,
+                                    reasoning_content: None,
+                                },
+                                index: seq.get_response_index(),
+                                finish_reason: if idx + 1 == emission_count {
+                                    is_done.map(|reason| reason.to_string())
+                                } else {
+                                    None
+                                },
+                                stop_sequence: if idx + 1 == emission_count {
+                                    response_stop_sequence(is_done, hidden_stop.as_deref())
+                                } else {
+                                    None
+                                },
+                                logprobs: Some(streaming_response_logprob(emission)),
+                            });
+                        }
+                    } else {
+                        if seq.return_logprobs() {
+                            for emission in &streaming_emissions {
+                                seq.add_streaming_chunk_choice_to_group(crate::ChunkChoice {
+                                    delta: crate::Delta {
+                                        content: None,
+                                        role: "assistant".to_string(),
+                                        tool_calls: None,
+                                        reasoning_content: None,
+                                    },
+                                    index: seq.get_response_index(),
+                                    finish_reason: None,
+                                    stop_sequence: None,
+                                    logprobs: Some(streaming_response_logprob(emission)),
+                                });
+                            }
+                        }
+                        seq.add_streaming_chunk_choice_to_group(crate::ChunkChoice {
+                            delta: crate::Delta {
+                                content: fixup_sentencepiece!(Option content_delta),
+                                role: "assistant".to_string(),
+                                tool_calls: Some(tool_calls).filter(|v| !v.is_empty()),
+                                reasoning_content: reasoning_delta,
                             },
-                        },
-                    );
+                            index: seq.get_response_index(),
+                            finish_reason: is_done.map(|reason| reason.to_string()),
+                            stop_sequence: response_stop_sequence(is_done, hidden_stop.as_deref()),
+                            logprobs: None,
+                        });
+                    }
+                } else {
+                    if seq.return_logprobs() {
+                        let emission_count = streaming_emissions.len();
+                        for (idx, emission) in streaming_emissions.iter().enumerate() {
+                            seq.add_streaming_completion_chunk_choice_to_group(
+                                crate::CompletionChunkChoice {
+                                    text: fixup_sentencepiece!(emission.text),
+                                    index: seq.get_response_index(),
+                                    finish_reason: if idx + 1 == emission_count {
+                                        is_done.map(|reason| reason.to_string())
+                                    } else {
+                                        None
+                                    },
+                                    logprobs: Some(streaming_response_logprob(emission)),
+                                },
+                            );
+                        }
+                        if streaming_emissions.is_empty() && is_done.is_some() {
+                            seq.add_streaming_completion_chunk_choice_to_group(
+                                crate::CompletionChunkChoice {
+                                    text: String::new(),
+                                    index: seq.get_response_index(),
+                                    finish_reason: is_done.map(|reason| reason.to_string()),
+                                    logprobs: None,
+                                },
+                            );
+                        }
+                    } else {
+                        seq.add_streaming_completion_chunk_choice_to_group(
+                            crate::CompletionChunkChoice {
+                                text: fixup_sentencepiece!(delta),
+                                index: seq.get_response_index(),
+                                finish_reason: is_done.map(|x| x.to_string()),
+                                logprobs: None,
+                            },
+                        );
+                    }
                 }
             }
 
@@ -300,14 +489,7 @@ pub(crate) async fn finish_or_add_toks_to_seq(
         // to ensure sequence completes even when tool detection thinks output might be a tool call
         if let Some(reason) = is_done {
             if use_prefix_cacher {
-                let recurrent_snapshots = if this.cache().is_hybrid() {
-                    seq.recurrent_state_idx()
-                        .and_then(|idx| this.cache().hybrid().snapshot_recurrent_state(idx).ok())
-                } else {
-                    None
-                };
-                prefix_cacher.add_sequence(seq, recurrent_snapshots);
-                prefix_cacher.evict_caches()?;
+                cache_finished_sequence(this, prefix_cacher, seq)?;
             }
             seq.set_state(crate::sequence::SequenceState::Done(reason));
             this.reset_non_granular_state();
@@ -359,18 +541,12 @@ pub(crate) async fn finish_or_add_toks_to_seq(
                 | crate::sequence::StopReason::ModelLength(_)
                 | crate::sequence::StopReason::Eos
                 | crate::sequence::StopReason::StopTok(_)
+                | crate::sequence::StopReason::StopString { .. }
                 | crate::sequence::StopReason::Canceled
                 | crate::sequence::StopReason::ToolCalls => {
                     String::from_utf8_lossy(seq.completion_bytes())
                         .trim_start()
                         .to_string()
-                }
-                crate::sequence::StopReason::StopString {
-                    completion_bytes_pos,
-                    ..
-                } => {
-                    let txt = String::from_utf8_lossy(seq.completion_bytes());
-                    txt[..completion_bytes_pos].trim_start().to_string()
                 }
                 crate::sequence::StopReason::GeneratedImage
                 | crate::sequence::StopReason::GeneratedSpeech => {
@@ -380,8 +556,9 @@ pub(crate) async fn finish_or_add_toks_to_seq(
 
             if seq.get_mut_group().is_chat {
                 let has_reasoning_state = seq.has_reasoning_state();
+                // An unclosed think block leaves no content; never fall back to the raw text
                 let parsed_content = if has_reasoning_state {
-                    seq.get_response_content()
+                    seq.get_response_content().or_else(|| Some(String::new()))
                 } else {
                     None
                 };
@@ -391,7 +568,20 @@ pub(crate) async fn finish_or_add_toks_to_seq(
                     None
                 };
                 let parsed = if let Some(state) = seq.tool_call_state.as_mut() {
-                    state.finalize_for_response(text.as_str(), parsed_content, reasoning_content)?
+                    let parser_text = hidden_stop.as_deref().map(|hidden_stop| {
+                        let mut parser_text = parsed_content
+                            .as_ref()
+                            .cloned()
+                            .unwrap_or_else(|| text.clone());
+                        parser_text.push_str(hidden_stop);
+                        parser_text
+                    });
+                    state.finalize_for_response(
+                        text.as_str(),
+                        parsed_content,
+                        reasoning_content,
+                        parser_text.as_deref(),
+                    )?
                 } else {
                     crate::tools::state::ToolCallParse {
                         content: parsed_content.or_else(|| Some(text.clone())),
@@ -411,6 +601,7 @@ pub(crate) async fn finish_or_add_toks_to_seq(
 
                 let choice = crate::Choice {
                     finish_reason: fixup_sentencepiece!(reason),
+                    stop_sequence: response_stop_sequence(Some(reason), hidden_stop.as_deref()),
                     index: seq.get_response_index(),
                     message: crate::ResponseMessage {
                         content: text_new,
@@ -432,14 +623,7 @@ pub(crate) async fn finish_or_add_toks_to_seq(
             }
 
             if use_prefix_cacher {
-                let recurrent_snapshots = if this.cache().is_hybrid() {
-                    seq.recurrent_state_idx()
-                        .and_then(|idx| this.cache().hybrid().snapshot_recurrent_state(idx).ok())
-                } else {
-                    None
-                };
-                prefix_cacher.add_sequence(seq, recurrent_snapshots);
-                prefix_cacher.evict_caches()?;
+                cache_finished_sequence(this, prefix_cacher, seq)?;
             }
 
             // Ensure timing info is synced to group before sending response
@@ -541,8 +725,71 @@ pub async fn sample_and_add_toks(
     disable_eos_stop: bool,
     rng: Arc<std::sync::Mutex<Isaac64Rng>>,
 ) -> Result<()> {
+    sample_and_add_toks_inner(
+        this,
+        seqs,
+        CausalLogitsBatch::PerSequence(logits_seq),
+        prefix_cacher,
+        disable_eos_stop,
+        rng,
+    )
+    .await
+}
+
+pub async fn sample_and_add_toks_batched(
+    this: &dyn Pipeline,
+    seqs: &mut [&mut Sequence],
+    logits: Tensor,
+    prefix_cacher: &mut PrefixCacheManagerV2,
+    disable_eos_stop: bool,
+    rng: Arc<std::sync::Mutex<Isaac64Rng>>,
+) -> Result<()> {
+    sample_and_add_toks_inner(
+        this,
+        seqs,
+        CausalLogitsBatch::Batched(logits),
+        prefix_cacher,
+        disable_eos_stop,
+        rng,
+    )
+    .await
+}
+
+enum CausalLogitsBatch {
+    PerSequence(Vec<Tensor>),
+    Batched(Tensor),
+}
+
+impl CausalLogitsBatch {
+    fn len(&self) -> Result<usize> {
+        match self {
+            Self::PerSequence(logits) => Ok(logits.len()),
+            Self::Batched(logits) => logits.dim(0),
+        }
+    }
+
+    fn into_cpu_rows(self) -> Result<Vec<Tensor>> {
+        match self {
+            Self::PerSequence(logits) => coalesce_batch_logits_to_cpu(logits),
+            Self::Batched(logits) => {
+                let batch = logits.dim(0)?;
+                let logits = logits.to_device(&candle_core::Device::Cpu)?;
+                (0..batch).map(|idx| logits.i(idx)).collect()
+            }
+        }
+    }
+}
+
+async fn sample_and_add_toks_inner(
+    this: &dyn Pipeline,
+    seqs: &mut [&mut Sequence],
+    logits: CausalLogitsBatch,
+    prefix_cacher: &mut PrefixCacheManagerV2,
+    disable_eos_stop: bool,
+    rng: Arc<std::sync::Mutex<Isaac64Rng>>,
+) -> Result<()> {
     let seqs_len = seqs.len();
-    debug_assert_eq!(logits_seq.len(), seqs_len);
+    debug_assert_eq!(logits.len()?, seqs_len);
 
     let use_async_pool = seqs_len > 1;
     let metadata = this.get_metadata();
@@ -550,10 +797,10 @@ pub async fn sample_and_add_toks(
     let max_model_len = metadata.max_seq_len;
     let eos_toks = metadata.eos_tok.clone();
 
-    let sampled_vec = match try_sample_batch_cuda(&logits_seq, seqs, &rng)? {
+    let sampled_vec = match try_sample_batch_cuda(&logits, seqs, &rng)? {
         Some(sampled) => sampled,
         None => {
-            let logits_seq = coalesce_batch_logits_to_cpu(logits_seq)?;
+            let logits_seq = logits.into_cpu_rows()?;
             let sampling_futures: Vec<_> = std::iter::zip(logits_seq, seqs.iter_mut())
                 .map(|(logits_per_seq, seq)| {
                     let return_logprobs = seq.return_logprobs();
@@ -618,6 +865,329 @@ pub(crate) fn can_sample_batch_cuda(seqs: &[&mut Sequence]) -> bool {
     }
 }
 
+#[cfg(feature = "cuda")]
+enum CudaTokenBatchSubmissionInner {
+    Top1(CudaTop1BatchSubmission),
+    TopK(CudaTopKBatchSubmission),
+}
+
+#[cfg(feature = "cuda")]
+pub(crate) struct CudaTokenBatchSubmission {
+    inner: CudaTokenBatchSubmissionInner,
+}
+
+#[cfg(feature = "cuda")]
+impl CudaTokenBatchSubmission {
+    pub(crate) fn batch_size(&self) -> usize {
+        match &self.inner {
+            CudaTokenBatchSubmissionInner::Top1(inner) => inner.batch_size(),
+            CudaTokenBatchSubmissionInner::TopK(inner) => inner.batch_size(),
+        }
+    }
+
+    pub(crate) fn wait_on(
+        &self,
+        stream: &Arc<candle_core::cuda_backend::cudarc::driver::CudaStream>,
+    ) -> Result<()> {
+        match &self.inner {
+            CudaTokenBatchSubmissionInner::Top1(inner) => inner.wait_on(stream),
+            CudaTokenBatchSubmissionInner::TopK(inner) => inner.wait_on(stream),
+        }
+    }
+
+    pub(crate) fn release_after(
+        &self,
+        stream: &Arc<candle_core::cuda_backend::cudarc::driver::CudaStream>,
+    ) -> Result<()> {
+        match &self.inner {
+            CudaTokenBatchSubmissionInner::Top1(inner) => inner.release_after(stream),
+            CudaTokenBatchSubmissionInner::TopK(inner) => inner.release_after(stream),
+        }
+    }
+
+    pub(crate) fn complete(self) -> Result<Vec<u32>> {
+        match self.inner {
+            CudaTokenBatchSubmissionInner::Top1(inner) => Ok(inner.complete()?.token_ids),
+            CudaTokenBatchSubmissionInner::TopK(inner) => inner.complete(),
+        }
+    }
+}
+
+#[cfg(feature = "cuda")]
+struct CudaTokenBatchPlan {
+    sampler: Arc<Sampler>,
+    topk_params: Option<Vec<crate::ops::CudaTopKSamplingParams>>,
+}
+
+#[cfg(feature = "cuda")]
+fn cuda_token_sampling_plan(seq: &Sequence) -> Option<CudaBatchSamplingPlan> {
+    if !matches!(&seq.recognizer, SequenceRecognizer::None)
+        || seq.tool_call_state.is_some()
+        || seq.sampling_logprob_required()
+        || seq.active_staged_speculative_len() != 0
+    {
+        return None;
+    }
+    seq.sampler()
+        .cuda_resident_sampling_plan(seq.return_logprobs())
+}
+
+#[cfg(feature = "cuda")]
+fn prepare_cuda_token_batch(
+    seqs: &[&mut Sequence],
+    rng: &Arc<std::sync::Mutex<Isaac64Rng>>,
+) -> Option<CudaTokenBatchPlan> {
+    let mut sampler = None;
+    let mut needs_topk = false;
+    for seq in seqs {
+        if seq.is_finished_paged_attn() {
+            continue;
+        }
+        let plan = cuda_token_sampling_plan(seq)?;
+        needs_topk |= !plan.kind.is_argmax();
+        sampler.get_or_insert_with(|| seq.sampler());
+    }
+    let sampler = sampler?;
+    if !needs_topk {
+        return Some(CudaTokenBatchPlan {
+            sampler,
+            topk_params: None,
+        });
+    }
+
+    let mut fallback_rng = None;
+    let mut topk_params = Vec::with_capacity(seqs.len());
+    for seq in seqs {
+        if seq.is_finished_paged_attn() {
+            topk_params.push(crate::ops::CudaTopKSamplingParams {
+                inverse_temperature: 1.0,
+                top_k: 1,
+                top_p: 1.0,
+                min_p: 0.0,
+                uniform: 0.0,
+            });
+            continue;
+        }
+        let plan =
+            cuda_token_sampling_plan(seq).expect("live resident sampling plan was validated above");
+        let top_k = match plan.kind {
+            CudaBatchSamplingKind::Greedy => 1,
+            CudaBatchSamplingKind::TopK { k } => k,
+            CudaBatchSamplingKind::Categorical => {
+                unreachable!("resident sampling excludes categorical plans")
+            }
+        };
+        let uniform = if plan.kind.is_argmax() {
+            0.0
+        } else {
+            let sequence_rng = seq.sampling_rng(rng);
+            if Arc::ptr_eq(&sequence_rng, rng) {
+                let rng = fallback_rng
+                    .get_or_insert_with(|| rng.lock().expect("could not lock rng mutex"));
+                Sampler::draw_cuda_resident_uniform(rng)
+            } else {
+                let mut rng = sequence_rng.lock().expect("could not lock rng mutex");
+                Sampler::draw_cuda_resident_uniform(&mut rng)
+            }
+        };
+        topk_params.push(crate::ops::CudaTopKSamplingParams {
+            inverse_temperature: plan.inverse_temperature,
+            top_k,
+            top_p: plan.top_p,
+            min_p: plan.min_p,
+            uniform,
+        });
+    }
+    Some(CudaTokenBatchPlan {
+        sampler,
+        topk_params: Some(topk_params),
+    })
+}
+
+#[cfg(feature = "cuda")]
+fn try_submit_cuda_token_batch_inner(
+    logits: &Tensor,
+    seqs: &[&mut Sequence],
+    resident_input: Option<&Tensor>,
+    rng: &Arc<std::sync::Mutex<Isaac64Rng>>,
+) -> Result<Option<CudaTokenBatchSubmission>> {
+    if !can_submit_cuda_token_batch_seqs(seqs) || !logits.device().is_cuda() {
+        return Ok(None);
+    }
+
+    let logits = final_batched_logits(logits)?;
+    if logits.dim(0)? != seqs.len() {
+        return Ok(None);
+    }
+    let Some(plan) = prepare_cuda_token_batch(seqs, rng) else {
+        return Ok(None);
+    };
+    let inner = match (plan.topk_params, resident_input) {
+        (None, Some(resident_input)) => CudaTokenBatchSubmissionInner::Top1(
+            plan.sampler
+                .submit_cuda_top1_batch_into(&logits, resident_input)?,
+        ),
+        (None, None) => {
+            CudaTokenBatchSubmissionInner::Top1(plan.sampler.submit_cuda_top1_batch_owned(&logits)?)
+        }
+        (Some(params), Some(resident_input)) => CudaTokenBatchSubmissionInner::TopK(
+            plan.sampler
+                .submit_cuda_topk_batch_into(&logits, resident_input, &params)?,
+        ),
+        (Some(params), None) => CudaTokenBatchSubmissionInner::TopK(
+            plan.sampler
+                .submit_cuda_topk_batch_owned(&logits, &params)?,
+        ),
+    };
+    Ok(Some(CudaTokenBatchSubmission { inner }))
+}
+
+#[cfg(feature = "cuda")]
+pub(crate) fn try_submit_cuda_token_batch(
+    logits: &Tensor,
+    seqs: &[&mut Sequence],
+    resident_input: &Tensor,
+    rng: &Arc<std::sync::Mutex<Isaac64Rng>>,
+) -> Result<Option<CudaTokenBatchSubmission>> {
+    try_submit_cuda_token_batch_inner(logits, seqs, Some(resident_input), rng)
+}
+
+#[cfg(feature = "cuda")]
+pub(crate) fn try_submit_cuda_token_batch_owned(
+    logits: &Tensor,
+    seqs: &[&mut Sequence],
+    rng: &Arc<std::sync::Mutex<Isaac64Rng>>,
+) -> Result<Option<CudaTokenBatchSubmission>> {
+    try_submit_cuda_token_batch_inner(logits, seqs, None, rng)
+}
+
+pub(crate) fn can_submit_cuda_token_batch_seqs(seqs: &[&mut Sequence]) -> bool {
+    #[cfg(feature = "cuda")]
+    {
+        let mut has_live_sequence = false;
+        for seq in seqs {
+            if seq.is_finished_paged_attn() {
+                continue;
+            }
+            has_live_sequence = true;
+            if cuda_token_sampling_plan(seq).is_none() {
+                return false;
+            }
+        }
+        has_live_sequence
+    }
+    #[cfg(not(feature = "cuda"))]
+    {
+        let _ = seqs;
+        false
+    }
+}
+
+pub(crate) fn can_launch_one_token_lookahead(seqs: &[&mut Sequence], max_model_len: usize) -> bool {
+    !seqs.is_empty()
+        && seqs.iter().all(|seq| {
+            !seq.is_finished_paged_attn()
+                && one_token_stays_within_limits(
+                    seq.generated_len(),
+                    seq.max_generation_len(max_model_len),
+                    seq.get_toks().len(),
+                    max_model_len,
+                )
+        })
+}
+
+fn one_token_stays_within_limits(
+    generated_len: usize,
+    max_generation_len: usize,
+    sequence_len: usize,
+    max_model_len: usize,
+) -> bool {
+    generated_len.saturating_add(1) < max_generation_len && sequence_len < max_model_len
+}
+
+#[cfg(any(feature = "cuda", test))]
+fn validate_token_batch_cardinality(
+    sequence_count: usize,
+    token_count: usize,
+    commit_count: usize,
+) -> Result<()> {
+    if token_count != sequence_count || commit_count != sequence_count {
+        candle_core::bail!(
+            "CUDA token completion rows do not match the active batch: tokens={token_count}, commits={commit_count}, sequences={sequence_count}"
+        );
+    }
+    Ok(())
+}
+
+#[cfg(feature = "cuda")]
+pub(crate) fn cuda_token_batch_will_finish(
+    this: &dyn Pipeline,
+    seqs: &[&mut Sequence],
+    token_ids: &[u32],
+    commit_rows: &[bool],
+    disable_eos_stop: bool,
+) -> Result<bool> {
+    let metadata = this.get_metadata();
+    cuda_token_batch_will_finish_with_metadata(
+        seqs,
+        token_ids,
+        commit_rows,
+        &metadata.eos_tok,
+        metadata.max_seq_len,
+        disable_eos_stop,
+    )
+}
+
+#[cfg(any(feature = "cuda", test))]
+fn cuda_token_batch_will_finish_with_metadata(
+    seqs: &[&mut Sequence],
+    token_ids: &[u32],
+    commit_rows: &[bool],
+    eos_tokens: &[u32],
+    max_model_len: usize,
+    disable_eos_stop: bool,
+) -> Result<bool> {
+    validate_token_batch_cardinality(seqs.len(), token_ids.len(), commit_rows.len())?;
+    Ok(seqs
+        .iter()
+        .zip(token_ids)
+        .zip(commit_rows)
+        .any(|((seq, token), commit)| {
+            if !*commit {
+                return false;
+            }
+            let eos_tokens = seq.effective_eos_tokens(eos_tokens, disable_eos_stop);
+            seq.is_done(*token, eos_tokens, max_model_len).is_some()
+        }))
+}
+
+#[cfg(feature = "cuda")]
+pub(crate) async fn finish_cuda_token_batch(
+    this: &dyn Pipeline,
+    seqs: &mut [&mut Sequence],
+    token_ids: Vec<u32>,
+    commit_rows: &[bool],
+    prefix_cacher: &mut PrefixCacheManagerV2,
+    disable_eos_stop: bool,
+) -> Result<()> {
+    validate_token_batch_cardinality(seqs.len(), token_ids.len(), commit_rows.len())?;
+    let metadata = this.get_metadata();
+    for ((token, commit), seq) in token_ids.into_iter().zip(commit_rows).zip(seqs.iter_mut()) {
+        if !*commit {
+            continue;
+        }
+        let next_token = Logprobs {
+            token,
+            logprob: 0.0,
+            top_logprobs: None,
+            bytes: None,
+        };
+        let eos_tok = seq.effective_eos_tokens(&metadata.eos_tok, disable_eos_stop);
+        finish_or_add_toks_to_seq(this, prefix_cacher, seq, next_token, eos_tok, true).await?;
+    }
+    Ok(())
+}
+
 fn final_logits_row(logits: &Tensor) -> Result<Tensor> {
     logits.squeeze(0)?.squeeze(0)
 }
@@ -635,6 +1205,19 @@ fn stack_final_logits(logits: &[Tensor]) -> Result<Tensor> {
         .to_dtype(DType::F32)
 }
 
+#[cfg(any(feature = "cuda", test))]
+fn final_batched_logits(logits: &Tensor) -> Result<Tensor> {
+    let dims = logits.dims();
+    if dims.len() < 2 || dims[1..dims.len() - 1].iter().any(|&dim| dim != 1) {
+        candle_core::bail!(
+            "batched causal logits must have shape [batch, ..., vocab] with singleton middle dimensions, got {dims:?}"
+        );
+    }
+    logits
+        .contiguous()?
+        .reshape((dims[0], dims[dims.len() - 1]))
+}
+
 fn coalesce_batch_logits_to_cpu(logits: Vec<Tensor>) -> Result<Vec<Tensor>> {
     if logits.len() <= 1 || logits.iter().all(|logits| logits.device().is_cpu()) {
         return Ok(logits);
@@ -647,16 +1230,27 @@ fn coalesce_batch_logits_to_cpu(logits: Vec<Tensor>) -> Result<Vec<Tensor>> {
 
 #[cfg(feature = "cuda")]
 fn try_sample_batch_cuda(
-    logits: &[Tensor],
+    logits: &CausalLogitsBatch,
     seqs: &[&mut Sequence],
     rng: &Arc<std::sync::Mutex<Isaac64Rng>>,
 ) -> Result<Option<Vec<Result<Logprobs>>>> {
-    if logits.is_empty()
-        || logits.len() != seqs.len()
-        || logits.iter().any(|logits| !logits.device().is_cuda())
-    {
-        return Ok(None);
-    }
+    let logits = match logits {
+        CausalLogitsBatch::PerSequence(logits) => {
+            if logits.is_empty()
+                || logits.len() != seqs.len()
+                || logits.iter().any(|logits| !logits.device().is_cuda())
+            {
+                return Ok(None);
+            }
+            stack_final_logits(logits)?
+        }
+        CausalLogitsBatch::Batched(logits) => {
+            if logits.dim(0)? != seqs.len() || !logits.device().is_cuda() {
+                return Ok(None);
+            }
+            final_batched_logits(logits)?
+        }
+    };
 
     let mut samplers_and_plans = Vec::with_capacity(seqs.len());
     let mut sampling_logprob_required = false;
@@ -679,20 +1273,18 @@ fn try_sample_batch_cuda(
     if samplers_and_plans
         .iter()
         .any(|(_, plan)| matches!(plan.kind, CudaBatchSamplingKind::Categorical) != categorical)
-        || logits.len() == 1 && !categorical
+        || seqs.len() == 1 && !categorical
     {
         return Ok(None);
     }
 
-    let logits = stack_final_logits(logits)?;
     let all_argmax = samplers_and_plans
         .iter()
         .all(|(_, plan)| plan.kind.is_argmax());
     if all_argmax && !sampling_logprob_required {
-        let output = crate::ops::cuda_top1_logits_f32_packed_batched(&logits)?;
-        let packed = output.packed.to_vec2::<f32>()?;
+        let packed = samplers_and_plans[0].0.sample_cuda_top1_batch(&logits)?;
         let sampled = std::iter::zip(packed, samplers_and_plans)
-            .map(|(row, (sampler, _))| sampler.sample_cuda_top1_row(&row))
+            .map(|(row, (sampler, _))| sampler.sample_cuda_top1_row(row.as_slice()))
             .collect();
         return Ok(Some(sampled));
     }
@@ -701,20 +1293,22 @@ fn try_sample_batch_cuda(
         .iter()
         .map(|(_, plan)| plan.inverse_temperature)
         .collect::<Vec<_>>();
-    let inverse_temperatures = Tensor::from_vec(
-        inverse_temperatures,
-        samplers_and_plans.len(),
-        logits.device(),
-    )?;
 
     if categorical {
+        let inverse_temperatures = Tensor::from_vec(
+            inverse_temperatures,
+            samplers_and_plans.len(),
+            logits.device(),
+        )?;
         let uniform = Uniform::new(0.0f32, 1.0f32).expect("valid unit uniform distribution");
-        let uniforms = {
-            let mut rng = rng.lock().expect("could not lock rng mutex");
-            (0..samplers_and_plans.len())
-                .map(|_| uniform.sample(&mut *rng))
-                .collect::<Vec<_>>()
-        };
+        let uniforms = seqs
+            .iter()
+            .map(|seq| {
+                let rng = seq.sampling_rng(rng);
+                let mut rng = rng.lock().expect("could not lock rng mutex");
+                uniform.sample(&mut *rng)
+            })
+            .collect::<Vec<_>>();
         let uniforms = Tensor::from_vec(uniforms, samplers_and_plans.len(), logits.device())?;
         let output = crate::ops::cuda_categorical_logits_f32_packed_batched(
             &logits,
@@ -737,22 +1331,45 @@ fn try_sample_batch_cuda(
         })
         .max()
         .expect("batch is non-empty");
-    let output =
-        crate::ops::cuda_topk_logits_f32_packed_batched(&logits, common_k, &inverse_temperatures)?;
-    let packed = output.packed.to_vec2::<f32>()?;
-    let mut rng = rng.lock().expect("could not lock rng mutex");
-    Ok(Some(
-        std::iter::zip(packed, samplers_and_plans)
-            .map(|(row, (sampler, plan))| {
-                sampler.sample_cuda_topk_packed_row(&row, output.k, plan, &mut rng)
-            })
-            .collect(),
-    ))
+    if !sampling_logprob_required {
+        let output = crate::ops::cuda_topk_ranked_packed_batched(&logits, common_k)?;
+        let packed = output.packed.to_vec2::<f32>()?;
+        Ok(Some(
+            std::iter::zip(std::iter::zip(packed, samplers_and_plans), seqs.iter())
+                .map(|((row, (sampler, plan)), seq)| {
+                    let rng = seq.sampling_rng(rng);
+                    let mut rng = rng.lock().expect("could not lock rng mutex");
+                    sampler.sample_cuda_ranked_topk_packed_row(&row, output.k, plan, &mut rng)
+                })
+                .collect(),
+        ))
+    } else {
+        let inverse_temperatures = Tensor::from_vec(
+            inverse_temperatures,
+            samplers_and_plans.len(),
+            logits.device(),
+        )?;
+        let output = crate::ops::cuda_topk_logits_f32_packed_batched(
+            &logits,
+            common_k,
+            &inverse_temperatures,
+        )?;
+        let packed = output.packed.to_vec2::<f32>()?;
+        Ok(Some(
+            std::iter::zip(std::iter::zip(packed, samplers_and_plans), seqs.iter())
+                .map(|((row, (sampler, plan)), seq)| {
+                    let rng = seq.sampling_rng(rng);
+                    let mut rng = rng.lock().expect("could not lock rng mutex");
+                    sampler.sample_cuda_topk_packed_row(&row, output.k, plan, &mut rng)
+                })
+                .collect(),
+        ))
+    }
 }
 
 #[cfg(not(feature = "cuda"))]
 fn try_sample_batch_cuda(
-    _logits: &[Tensor],
+    _logits: &CausalLogitsBatch,
     _seqs: &[&mut Sequence],
     _rng: &Arc<std::sync::Mutex<Isaac64Rng>>,
 ) -> Result<Option<Vec<Result<Logprobs>>>> {
@@ -774,11 +1391,13 @@ pub async fn sample_sequence(
     multiple_sequences: bool,
 ) -> Result<Logprobs> {
     activate_required_tool_call_grammar(seq, llg_factory.as_ref(), max_model_len, false);
+    let rng = seq.sampling_rng(&rng);
 
     let logits = logits.squeeze(0)?.squeeze(0)?.to_dtype(DType::F32)?;
 
     let sampler = seq.sampler();
     let ctx_clone = seq.get_toks().to_vec();
+    let prompt_len = seq.prompt_tokens();
     let rng_clone = rng.clone();
     let logits_clone = logits.clone();
     let first_lobprobs_response = if use_async_pool {
@@ -786,6 +1405,7 @@ pub async fn sample_sequence(
             sampler.sample(
                 logits_clone,
                 &ctx_clone,
+                prompt_len,
                 return_logprobs,
                 rng_clone,
                 sample_speculative,
@@ -797,6 +1417,7 @@ pub async fn sample_sequence(
         sampler.sample(
             logits_clone,
             &ctx_clone,
+            prompt_len,
             return_logprobs,
             rng_clone,
             sample_speculative,
@@ -813,12 +1434,17 @@ pub async fn sample_sequence(
 
     let bias_if_not_allowed = match &mut seq.recognizer {
         SequenceRecognizer::Llguidance(ref mut llg) => {
-            if !llg.is_stopped()
-                && llg
-                    .validate_tokens(&[first_lobprobs_response.token])
-                    .unwrap_or(0)
-                    == 1
-                && !stop_token_requires_tool
+            // llguidance's EOS is <|endoftext|>-style; turn enders like <|im_end|> must pass once the grammar could stop
+            let grammar_can_stop =
+                llg.is_stopped() || llg.is_accepting().map_err(candle_core::Error::msg)?;
+            let is_model_eos = |token: u32| eos_tok.is_some_and(|eos| eos.contains(&token));
+            if !stop_token_requires_tool
+                && (grammar_can_stop && is_model_eos(first_lobprobs_response.token)
+                    || !llg.is_stopped()
+                        && llg
+                            .validate_tokens(&[first_lobprobs_response.token])
+                            .unwrap_or(0)
+                            == 1)
             {
                 None
             } else {
@@ -833,6 +1459,13 @@ pub async fn sample_sequence(
                             acc[idx] = 0.0;
                         }
                     });
+                    if grammar_can_stop && !stop_token_requires_tool {
+                        for token in eos_tok.unwrap_or_default() {
+                            if let Some(slot) = acc.get_mut(*token as usize) {
+                                *slot = 0.0;
+                            }
+                        }
+                    }
 
                     Some(acc)
                 }
@@ -852,6 +1485,7 @@ pub async fn sample_sequence(
                     sampler.sample(
                         new_logits,
                         &ctx_clone,
+                        prompt_len,
                         return_logprobs,
                         rng_clone,
                         sample_speculative,
@@ -863,6 +1497,7 @@ pub async fn sample_sequence(
                 sampler.sample(
                     new_logits,
                     &ctx_clone,
+                    prompt_len,
                     return_logprobs,
                     rng_clone,
                     sample_speculative,
@@ -875,7 +1510,10 @@ pub async fn sample_sequence(
 
     match seq.recognizer {
         SequenceRecognizer::Llguidance(ref mut llg) => {
-            if !llg.is_stopped() {
+            let ends_turn = eos_tok
+                .is_some_and(|eos| eos.contains(&second_logprobs_response.token))
+                && llg.is_accepting().map_err(candle_core::Error::msg)?;
+            if !llg.is_stopped() && !ends_turn {
                 llg.consume_token(second_logprobs_response.token)
                     .map_err(candle_core::Error::msg)?;
             }
@@ -900,9 +1538,205 @@ pub async fn sample_sequence(
 #[cfg(test)]
 mod tests {
     use mistralrs_mcp::{Function, Tool, ToolType};
+    #[cfg(feature = "cuda")]
+    use rand::RngCore;
+    use rand::SeedableRng;
+    use std::{collections::HashMap, sync::Arc};
+    use tokio::sync::{mpsc::channel, Mutex};
 
     use super::*;
     use crate::tools::{ToolCallState, ToolChoice};
+    use crate::{
+        sampler::Sampler,
+        sequence::{SeqStepType, SequenceGroup},
+    };
+
+    fn terminal_test_sequence(
+        stop_tokens: Vec<u32>,
+        max_len: Option<usize>,
+        ignore_eos: bool,
+    ) -> Sequence {
+        let (tx, _rx) = channel(1);
+        let sampler = Sampler::new(
+            None,
+            0,
+            None,
+            None,
+            None,
+            None,
+            None,
+            32,
+            1.0,
+            0.0,
+            HashMap::new(),
+            vec![],
+        )
+        .unwrap();
+        let group = Arc::new(Mutex::new(SequenceGroup::new(1, false, true, None)));
+        Sequence::new_waiting(
+            vec![1, 2, 3],
+            "prompt".to_string(),
+            0,
+            0,
+            0,
+            tx,
+            sampler,
+            stop_tokens,
+            vec![],
+            max_len,
+            false,
+            false,
+            group,
+            0,
+            0,
+            SequenceRecognizer::None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            SeqStepType::PromptAndDecode,
+            None,
+            None,
+            None,
+            false,
+            ignore_eos,
+            vec![],
+            None,
+        )
+    }
+
+    fn sampled_test_sequence(seed: u64, top_k: i64, top_p: f64) -> Sequence {
+        let (tx, _rx) = channel(1);
+        let sampler = Sampler::new(
+            Some(1.0),
+            0,
+            None,
+            None,
+            None,
+            None,
+            None,
+            top_k,
+            top_p,
+            0.0,
+            HashMap::new(),
+            vec![],
+        )
+        .unwrap();
+        let group = Arc::new(Mutex::new(SequenceGroup::new(1, false, true, None)));
+        Sequence::new_waiting(
+            vec![1, 2, 3],
+            "prompt".to_string(),
+            0,
+            0,
+            0,
+            tx,
+            sampler,
+            vec![],
+            vec![],
+            None,
+            false,
+            false,
+            group,
+            0,
+            0,
+            SequenceRecognizer::None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            SeqStepType::PromptAndDecode,
+            None,
+            None,
+            None,
+            false,
+            false,
+            vec![],
+            Some(seed),
+        )
+    }
+
+    fn stochastic_test_sequence(seed: u64) -> Sequence {
+        sampled_test_sequence(seed, -1, 1.0)
+    }
+
+    async fn sample_test_token(
+        seq: &mut Sequence,
+        fallback: Arc<std::sync::Mutex<Isaac64Rng>>,
+    ) -> u32 {
+        let logits = Tensor::from_vec(
+            vec![0.1f32, 0.2, 0.3, 0.4],
+            (1, 1, 4),
+            &candle_core::Device::Cpu,
+        )
+        .unwrap();
+        sample_sequence(
+            logits, seq, false, None, None, 1024, fallback, false, false, false,
+        )
+        .await
+        .unwrap()
+        .token
+    }
+
+    #[tokio::test]
+    async fn seeded_sampling_is_independent_of_sequence_order() {
+        let fallback = || Arc::new(std::sync::Mutex::new(Isaac64Rng::seed_from_u64(999)));
+        let (mut first_a, mut first_b) =
+            (stochastic_test_sequence(42), stochastic_test_sequence(43));
+        let a_then_b = (
+            sample_test_token(&mut first_a, fallback()).await,
+            sample_test_token(&mut first_b, fallback()).await,
+        );
+
+        let (mut second_a, mut second_b) =
+            (stochastic_test_sequence(42), stochastic_test_sequence(43));
+        let b = sample_test_token(&mut second_b, fallback()).await;
+        let a = sample_test_token(&mut second_a, fallback()).await;
+
+        assert_eq!(a_then_b, (a, b));
+    }
+
+    #[cfg(feature = "cuda")]
+    #[test]
+    fn resident_batch_plan_draws_once_only_for_sampled_rows() {
+        let fallback = Arc::new(std::sync::Mutex::new(Isaac64Rng::seed_from_u64(999)));
+        let mut sampled = sampled_test_sequence(42, 20, 0.95);
+        let mut reference = Isaac64Rng::seed_from_u64(42);
+        let expected_uniform = Sampler::draw_cuda_resident_uniform(&mut reference);
+        let expected_next = reference.next_u64();
+
+        let plan = prepare_cuda_token_batch(&[&mut sampled], &fallback).unwrap();
+        let params = plan.topk_params.unwrap();
+        assert_eq!(params.len(), 1);
+        assert_eq!(params[0].inverse_temperature, 1.0);
+        assert_eq!(params[0].top_k, 20);
+        assert_eq!(params[0].top_p, 0.95);
+        assert_eq!(params[0].min_p, 0.0);
+        assert_eq!(params[0].uniform, expected_uniform);
+        assert_eq!(
+            sampled.sampling_rng(&fallback).lock().unwrap().next_u64(),
+            expected_next
+        );
+
+        let mut greedy = sampled_test_sequence(43, 1, 0.95);
+        let plan = prepare_cuda_token_batch(&[&mut greedy], &fallback).unwrap();
+        assert!(plan.topk_params.is_none());
+        let mut reference = Isaac64Rng::seed_from_u64(43);
+        assert_eq!(
+            greedy.sampling_rng(&fallback).lock().unwrap().next_u64(),
+            reference.next_u64()
+        );
+
+        let mut categorical = stochastic_test_sequence(44);
+        assert!(!can_submit_cuda_token_batch_seqs(&[&mut categorical]));
+    }
 
     fn weather_tool() -> Tool {
         Tool {
@@ -986,6 +1820,103 @@ mod tests {
         assert_eq!(
             packed,
             vec![vec![8.0, 9.0, 10.0, 11.0], vec![0.0, 1.0, 2.0, 3.0]]
+        );
+    }
+
+    #[test]
+    fn final_batched_logits_flattens_singleton_axes() {
+        let logits = Tensor::from_vec(
+            vec![0.0f32, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0],
+            (2, 1, 1, 4),
+            &candle_core::Device::Cpu,
+        )
+        .unwrap();
+
+        let packed = final_batched_logits(&logits)
+            .unwrap()
+            .to_vec2::<f32>()
+            .unwrap();
+
+        assert_eq!(
+            packed,
+            vec![vec![0.0, 1.0, 2.0, 3.0], vec![4.0, 5.0, 6.0, 7.0]]
+        );
+    }
+
+    #[test]
+    fn final_batched_logits_preserves_dtype() {
+        let logits = Tensor::zeros((2, 1, 1, 4), DType::BF16, &candle_core::Device::Cpu).unwrap();
+
+        let packed = final_batched_logits(&logits).unwrap();
+
+        assert_eq!(packed.dtype(), DType::BF16);
+    }
+
+    #[test]
+    fn lookahead_stops_before_known_length_boundaries() {
+        assert!(one_token_stays_within_limits(4, 8, 12, 16));
+        assert!(!one_token_stays_within_limits(7, 8, 12, 16));
+        assert!(!one_token_stays_within_limits(4, 8, 16, 16));
+    }
+
+    #[test]
+    fn greedy_terminal_prediction_matches_sequence_stop_rules() {
+        let mut seq = terminal_test_sequence(vec![], None, false);
+        let seqs = [&mut seq];
+        assert!(cuda_token_batch_will_finish_with_metadata(
+            &seqs,
+            &[42],
+            &[true],
+            &[42],
+            1024,
+            false,
+        )
+        .unwrap());
+        assert!(!cuda_token_batch_will_finish_with_metadata(
+            &seqs,
+            &[42],
+            &[true],
+            &[42],
+            1024,
+            true,
+        )
+        .unwrap());
+
+        let mut seq = terminal_test_sequence(vec![9], None, false);
+        let seqs = [&mut seq];
+        assert!(
+            cuda_token_batch_will_finish_with_metadata(&seqs, &[9], &[true], &[], 1024, false,)
+                .unwrap()
+        );
+        assert!(!cuda_token_batch_will_finish_with_metadata(
+            &seqs,
+            &[9],
+            &[false],
+            &[],
+            1024,
+            false,
+        )
+        .unwrap());
+
+        let mut seq = terminal_test_sequence(vec![], Some(1), false);
+        let seqs = [&mut seq];
+        assert!(
+            cuda_token_batch_will_finish_with_metadata(&seqs, &[7], &[true], &[], 1024, false,)
+                .unwrap()
+        );
+    }
+
+    #[test]
+    fn greedy_terminal_prediction_rejects_mismatched_rows() {
+        let mut seq = terminal_test_sequence(vec![], None, false);
+        let seqs = [&mut seq];
+        assert!(
+            cuda_token_batch_will_finish_with_metadata(&seqs, &[], &[true], &[], 1024, false,)
+                .is_err()
+        );
+        assert!(
+            cuda_token_batch_will_finish_with_metadata(&seqs, &[7], &[], &[], 1024, false,)
+                .is_err()
         );
     }
 }

@@ -414,6 +414,7 @@ pub enum Which {
         hf_cache_path = None,
         matformer_config_path = None,
         matformer_slice_name = None,
+        encoder_cache_memory_bytes = None,
     ))]
     #[allow(clippy::upper_case_acronyms)]
     GGUF {
@@ -438,6 +439,7 @@ pub enum Which {
         hf_cache_path: Option<PathBuf>,
         matformer_config_path: Option<PathBuf>,
         matformer_slice_name: Option<String>,
+        encoder_cache_memory_bytes: Option<usize>,
     },
 
     #[pyo3(constructor = (
@@ -574,6 +576,7 @@ pub enum Which {
         matformer_config_path = None,
         matformer_slice_name = None,
         organization = None,
+        encoder_cache_memory_bytes = None,
     ))]
     MultimodalPlain {
         model_id: String,
@@ -591,6 +594,7 @@ pub enum Which {
         matformer_config_path: Option<PathBuf>,
         matformer_slice_name: Option<String>,
         organization: Option<IsqOrganization>,
+        encoder_cache_memory_bytes: Option<usize>,
     },
 
     #[pyo3(constructor = (
@@ -634,5 +638,6 @@ mod tests {
         ));
         assert!(signature.contains("tokenizer_json=None"));
         assert!(signature.contains("mmproj_filename=None"));
+        assert!(signature.contains("encoder_cache_memory_bytes=None"));
     }
 }

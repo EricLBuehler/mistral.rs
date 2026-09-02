@@ -388,6 +388,9 @@ impl MultimodalModel for Llama4Model {
             packed_prefill: false,
         })
     }
+    fn encoder_cache(&self) -> Option<&Mutex<EncoderCacheManager>> {
+        Some(&self.encoder_cache)
+    }
     fn encoder_cache_counters(
         &self,
     ) -> Option<(

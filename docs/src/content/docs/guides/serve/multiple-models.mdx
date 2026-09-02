@@ -34,7 +34,7 @@ quant = "4"
 
 `quant = "4"` has the same behavior as `--quant 4`: it selects a matching artifact for a GGUF
 repository. For other repositories, it prefers a prebuilt UQFF and falls back to 4-bit
-[ISQ (in-situ quantization)](/mistral.rs/reference/quantization-types/) during loading. Use
+[ISQ (in-situ quantization)](/reference/quantization-types/) during loading. Use
 `isq = "4"` to force ISQ, or omit both settings to load at the source precision.
 
 Start with `from-config`:
@@ -111,11 +111,11 @@ The id is the model's `model_id`, or its alias when added with `add_model_with_a
 curl http://localhost:1234/v1/models
 ```
 
-Each entry includes `id`, `object`, `created`, `owned_by`, plus optional `status` (`loaded`/`unloaded`/`reloading`), `tools_available`, and `mcp_tools_count`/`mcp_servers_connected` for [MCP (Model Context Protocol)](/mistral.rs/guides/agents/connect-mcp-server/) servers.
+Each entry includes `id`, `object`, `created`, `owned_by`, plus optional `status` (`loaded`/`unloaded`/`reloading`), `tools_available`, and `mcp_tools_count`/`mcp_servers_connected` for [MCP (Model Context Protocol)](/guides/agents/connect-mcp-server/) servers.
 
 ## Unloading and reloading on demand
 
-`POST /v1/models/unload` frees a model's memory, `POST /v1/models/reload` brings it back, and `POST /v1/models/status` queries its state; each takes `{"model_id": "..."}`. Request and response schemas are in the [generated HTTP API reference](/mistral.rs/reference/http-api-generated/).
+`POST /v1/models/unload` frees a model's memory, `POST /v1/models/reload` brings it back, and `POST /v1/models/status` queries its state; each takes `{"model_id": "..."}`. Request and response schemas are in the [generated HTTP API reference](/reference/http-api-generated/).
 
 ## Multi-model from code (Rust)
 

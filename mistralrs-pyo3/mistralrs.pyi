@@ -142,7 +142,7 @@ class ChatCompletionRequest:
       `AgentToolApproval`. Return `True`, `False`, or
       `AgentToolApprovalDecision`.
 
-    See [agent permissions](/mistral.rs/guides/agents/permissions-and-approvals/)
+    See [agent permissions](/guides/agents/permissions-and-approvals/)
     for the shared CLI, HTTP, Python, and Rust behavior.
 
     `reasoning_effort` accepts `off`, `low`, `medium`, `high`, and `xhigh`; `none`
@@ -584,6 +584,7 @@ class Which(Enum):
         hf_cache_path: str | None = field(default=None, kw_only=True)
         matformer_config_path: str | None = field(default=None, kw_only=True)
         matformer_slice_name: str | None = field(default=None, kw_only=True)
+        encoder_cache_memory_bytes: int | None = field(default=None, kw_only=True)
 
     @dataclass
     class XLoraGGUF:
@@ -670,6 +671,7 @@ class Which(Enum):
         matformer_config_path: str | None = None
         matformer_slice_name: str | None = None
         organization: IsqOrganization | None = None
+        encoder_cache_memory_bytes: int | None = None
 
     @dataclass
     class DiffusionPlain:

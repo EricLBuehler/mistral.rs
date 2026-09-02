@@ -1,11 +1,22 @@
 use candle_core::{DType, Device, Result, Tensor};
 
+use crate::kv_cache::{
+    GdnDeferredStatePool, GdnPendingTransitionPool, RecurrentStateLayout, RecurrentStatePool,
+};
+
 use super::config::{GdnConfig, GdnDims};
 
+/// Per-layer GDN state handed to the kernels. Gathered: `conv_state` `[B, conv_dim, k]` and
+/// `recurrent_state` `[B, H, K, V]` hold this batch's rows. Pooled (`slots` set): they are the whole
+/// recurrent state pool and `slots` is the `[B]` u32 row table, so CUDA kernels update it in place.
 #[derive(Debug)]
 pub struct GdnLayerCache {
     pub conv_state: Tensor,
     pub recurrent_state: Tensor,
+    pub state_layout: RecurrentStateLayout,
+    pub slots: Option<Tensor>,
+    pub(crate) pending_transitions: Option<GdnPendingTransitionPool>,
+    pub(crate) deferred_state: Option<GdnDeferredStatePool>,
 }
 
 #[allow(dead_code)]
@@ -18,10 +29,76 @@ impl GdnLayerCache {
             DType::F32,
             device,
         )?;
-        Ok(Self {
+        Ok(Self::gathered(
             conv_state,
             recurrent_state,
-        })
+            RecurrentStateLayout::GdnKeyMajor,
+        ))
+    }
+
+    pub fn gathered(
+        conv_state: Tensor,
+        recurrent_state: Tensor,
+        state_layout: RecurrentStateLayout,
+    ) -> Self {
+        Self {
+            conv_state,
+            recurrent_state,
+            state_layout,
+            slots: None,
+            pending_transitions: None,
+            deferred_state: None,
+        }
+    }
+
+    pub fn pooled(
+        conv_state: Tensor,
+        recurrent_state: Tensor,
+        state_layout: RecurrentStateLayout,
+        slots: Tensor,
+    ) -> Self {
+        Self {
+            conv_state,
+            recurrent_state,
+            state_layout,
+            slots: Some(slots),
+            pending_transitions: None,
+            deferred_state: None,
+        }
+    }
+
+    /// Check out the rows `indices` of `pool` for one layer forward. On CUDA the kernels update the
+    /// pool in place through the slot table; elsewhere this is a gathered copy that `commit` scatters back.
+    pub fn checkout(pool: &RecurrentStatePool, indices: &Tensor) -> Result<Self> {
+        if pool.device().is_cuda() {
+            let mut cache = Self::pooled(
+                pool.conv_state.clone(),
+                pool.recurrent_state.clone(),
+                pool.state_layout(),
+                indices.clone(),
+            );
+            cache.pending_transitions = pool.pending_transitions().cloned();
+            cache.deferred_state = pool.deferred_state().cloned();
+            return Ok(cache);
+        }
+        Ok(Self::gathered(
+            pool.gather_conv_state(indices)?,
+            pool.gather_recurrent_state(indices)?,
+            pool.state_layout(),
+        ))
+    }
+
+    pub fn commit(
+        self,
+        pool: &mut RecurrentStatePool,
+        indices: &Tensor,
+        host_indices: Option<&[u32]>,
+    ) -> Result<()> {
+        if self.slots.is_some() {
+            return Ok(());
+        }
+        pool.scatter_conv_state_with_host_indices(indices, host_indices, &self.conv_state)?;
+        pool.scatter_recurrent_state_with_host_indices(indices, host_indices, &self.recurrent_state)
     }
 
     pub fn reset(&mut self) -> Result<()> {
@@ -36,6 +113,10 @@ impl Clone for GdnLayerCache {
         Self {
             conv_state: self.conv_state.clone(),
             recurrent_state: self.recurrent_state.clone(),
+            state_layout: self.state_layout,
+            slots: self.slots.clone(),
+            pending_transitions: self.pending_transitions.clone(),
+            deferred_state: self.deferred_state.clone(),
         }
     }
 }

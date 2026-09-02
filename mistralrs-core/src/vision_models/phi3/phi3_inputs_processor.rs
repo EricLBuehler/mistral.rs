@@ -16,8 +16,8 @@ use crate::{
         text_models_inputs_processor::{
             self, get_completion_input, get_prompt_input, PagedAttentionMeta,
         },
-        InputProcessorOutput, InputsProcessor, InputsProcessorType, MessagesAction, Processor,
-        ProcessorCreator,
+        InputProcessorOutput, InputsProcessor, InputsProcessorType, InputsProcessorValidationError,
+        MessagesAction, Processor, ProcessorCreator,
     },
     sequence::{build_mm_features_from_ranges, Sequence},
 };
@@ -66,20 +66,30 @@ fn phi3_prompt_tokens(
                 .split('|')
                 .nth(1)
                 .and_then(|tag| tag.split('_').nth(1))
-                .ok_or_else(|| anyhow::Error::msg("Phi3 image tag is malformed"))?
+                .ok_or_else(|| {
+                    InputsProcessorValidationError("Phi3 image tag is malformed".to_string())
+                })?
                 .parse::<usize>()
-                .map_err(|_| anyhow::Error::msg("Phi3 image id is not an integer"))
+                .map_err(|_| {
+                    anyhow::Error::from(InputsProcessorValidationError(
+                        "Phi3 image id is not an integer".to_string(),
+                    ))
+                })
         })
         .collect::<anyhow::Result<Vec<_>>>()?;
     if image_ids.len() != image_token_counts.len() {
-        anyhow::bail!(
+        return Err(InputsProcessorValidationError(format!(
             "Phi3 prompt has {} image tags but {} images",
             image_ids.len(),
             image_token_counts.len()
-        );
+        ))
+        .into());
     }
     if image_ids.iter().copied().ne(1..=image_token_counts.len()) {
-        anyhow::bail!("Phi3 image ids must appear once in ascending order starting at 1");
+        return Err(InputsProcessorValidationError(
+            "Phi3 image ids must appear once in ascending order starting at 1".to_string(),
+        )
+        .into());
     }
 
     let splits = image_tag_splitter
@@ -87,7 +97,10 @@ fn phi3_prompt_tokens(
         .map(|span| &detokenized[span.range()])
         .collect::<Vec<_>>();
     if splits.len() != image_ids.len() + 1 {
-        anyhow::bail!("Phi3 prompt image split count is inconsistent");
+        return Err(InputsProcessorValidationError(
+            "Phi3 prompt image split count is inconsistent".to_string(),
+        )
+        .into());
     }
     let prompt_chunks = tokenizer
         .encode_batch(splits, true)

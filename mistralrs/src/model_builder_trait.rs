@@ -354,6 +354,17 @@ pub(crate) fn default_scheduler_config(max_num_seqs: usize) -> anyhow::Result<Sc
     })
 }
 
+fn paged_attn_with_serving_capacity(
+    config: Option<PagedAttentionConfig>,
+    max_num_seqs: usize,
+    recurrent_prefix_capacity: usize,
+) -> anyhow::Result<Option<PagedAttentionConfig>> {
+    Ok(config
+        .map(|config| config.with_serving_capacity(max_num_seqs))
+        .transpose()?
+        .map(|config| config.with_recurrent_prefix_capacity(recurrent_prefix_capacity)))
+}
+
 pub(crate) async fn scheduler_config_from_pipeline<P>(
     pipeline: &Arc<Mutex<P>>,
     paged_attn_requested: bool,
@@ -373,6 +384,10 @@ where
         {
             return Ok(SchedulerConfig::PagedAttentionMeta {
                 max_num_seqs,
+                max_num_batched_tokens: mistralrs_core::DEFAULT_MAX_NUM_BATCHED_TOKENS,
+                max_prefill_chunk_tokens: mistralrs_core::DEFAULT_MAX_PREFILL_CHUNK_TOKENS,
+                max_decode_steps_before_prefill:
+                    mistralrs_core::DEFAULT_MAX_DECODE_STEPS_BEFORE_PREFILL,
                 config,
             });
         }
@@ -412,10 +427,18 @@ pub(crate) fn join_path_list(paths: Option<&[PathBuf]>, delimiter: &str) -> Opti
 }
 
 pub(crate) async fn build_pipeline_from_text_loader(
-    builder: crate::TextModelBuilder,
+    mut builder: crate::TextModelBuilder,
     loader: Box<dyn mistralrs_core::Loader>,
 ) -> anyhow::Result<(Arc<Mutex<dyn Pipeline>>, SchedulerConfig, AddModelConfig)> {
     use mistralrs_core::*;
+
+    let mtp_runtime = MtpRuntimeConfig::new(builder.prefix_cache_n.unwrap_or(0));
+
+    builder.paged_attn_cfg = paged_attn_with_serving_capacity(
+        builder.paged_attn_cfg,
+        builder.max_num_seqs,
+        builder.prefix_cache_n.unwrap_or(0),
+    )?;
 
     let engine_config = build_engine_config(
         builder.throughput_logging,
@@ -427,6 +450,13 @@ pub(crate) async fn build_pipeline_from_text_loader(
     );
     let mcp_client_config = builder.mcp_client_config.clone();
     let device = resolve_device(builder.force_cpu, builder.device.clone())?;
+    builder.paged_attn_cfg = reserve_external_mtp_memory_with_runtime(
+        builder.paged_attn_cfg,
+        builder.mtp_config.as_ref(),
+        mtp_runtime,
+        &builder.dtype,
+        &device,
+    )?;
     let isq_type = resolve_isq_type(builder.isq.as_ref(), &device)?;
     let device_map_setting =
         builder
@@ -451,7 +481,7 @@ pub(crate) async fn build_pipeline_from_text_loader(
         pipeline
             .lock()
             .await
-            .attach_speculative(SpeculativeConfig::Mtp(mtp_config))?;
+            .attach_speculative_with_runtime(SpeculativeConfig::Mtp(mtp_config), mtp_runtime)?;
     }
 
     let scheduler_config =
@@ -470,10 +500,18 @@ pub(crate) async fn build_pipeline_from_text_loader(
 }
 
 pub(crate) async fn build_pipeline_from_gguf_loader(
-    builder: crate::GgufModelBuilder,
+    mut builder: crate::GgufModelBuilder,
     loader: Box<dyn mistralrs_core::Loader>,
 ) -> anyhow::Result<(Arc<Mutex<dyn Pipeline>>, SchedulerConfig, AddModelConfig)> {
     use mistralrs_core::*;
+
+    let mtp_runtime = MtpRuntimeConfig::new(builder.prefix_cache_n.unwrap_or(0));
+
+    builder.paged_attn_cfg = paged_attn_with_serving_capacity(
+        builder.paged_attn_cfg,
+        builder.max_num_seqs,
+        builder.prefix_cache_n.unwrap_or(0),
+    )?;
 
     let engine_config = build_engine_config(
         builder.throughput_logging,
@@ -484,6 +522,13 @@ pub(crate) async fn build_pipeline_from_gguf_loader(
         builder.prefix_cache_n,
     );
     let device = resolve_device(builder.force_cpu, builder.device.clone())?;
+    builder.paged_attn_cfg = reserve_external_mtp_memory_with_runtime(
+        builder.paged_attn_cfg,
+        builder.mtp_config.as_ref(),
+        mtp_runtime,
+        &builder.dtype,
+        &device,
+    )?;
     let default_device_map = if builder.mmproj_files.is_some() {
         AutoDeviceMapParams::default_multimodal()
     } else {
@@ -510,7 +555,7 @@ pub(crate) async fn build_pipeline_from_gguf_loader(
         pipeline
             .lock()
             .await
-            .attach_speculative(SpeculativeConfig::Mtp(mtp_config))?;
+            .attach_speculative_with_runtime(SpeculativeConfig::Mtp(mtp_config), mtp_runtime)?;
     }
 
     let scheduler_config =
@@ -577,9 +622,17 @@ pub async fn build_model_from_pipeline(
 /// Build a text model pipeline from a TextModelBuilder.
 /// Returns the pipeline, scheduler config, and AddModelConfig needed for Model creation.
 pub async fn build_text_pipeline(
-    builder: crate::TextModelBuilder,
+    mut builder: crate::TextModelBuilder,
 ) -> anyhow::Result<(Arc<Mutex<dyn Pipeline>>, SchedulerConfig, AddModelConfig)> {
     use mistralrs_core::*;
+
+    let mtp_runtime = MtpRuntimeConfig::new(builder.prefix_cache_n.unwrap_or(0));
+
+    builder.paged_attn_cfg = paged_attn_with_serving_capacity(
+        builder.paged_attn_cfg,
+        builder.max_num_seqs,
+        builder.prefix_cache_n.unwrap_or(0),
+    )?;
 
     let config = NormalSpecificConfig {
         topology: builder.topology.clone(),
@@ -589,6 +642,8 @@ pub async fn build_text_pipeline(
         imatrix: builder.imatrix.clone(),
         calibration_file: builder.calibration_file.clone(),
         hf_cache_path: builder.hf_cache_path.clone(),
+        hf_config_overrides: builder.hf_config_overrides.clone(),
+        max_model_len: builder.max_model_len,
         matformer_config_path: builder.matformer_config_path.clone(),
         matformer_slice_name: builder.matformer_slice_name.clone(),
     };
@@ -612,6 +667,13 @@ pub async fn build_text_pipeline(
     .build(builder.loader_type.clone())?;
 
     let device = resolve_device(builder.force_cpu, None)?;
+    builder.paged_attn_cfg = reserve_external_mtp_memory_with_runtime(
+        builder.paged_attn_cfg,
+        builder.mtp_config.as_ref(),
+        mtp_runtime,
+        &builder.dtype,
+        &device,
+    )?;
     let isq_type = resolve_isq_type(builder.isq.as_ref(), &device)?;
 
     let pipeline = loader.load_model_from_hf(
@@ -631,7 +693,7 @@ pub async fn build_text_pipeline(
         pipeline
             .lock()
             .await
-            .attach_speculative(SpeculativeConfig::Mtp(mtp_config))?;
+            .attach_speculative_with_runtime(SpeculativeConfig::Mtp(mtp_config), mtp_runtime)?;
     }
 
     let scheduler_config = scheduler_config_from_pipeline(
@@ -687,8 +749,10 @@ pub async fn build_text_pipeline(
         silent: !builder.with_logging,
         chat_template: builder.chat_template.clone(),
         jinja_explicit: builder.jinja_explicit.clone(),
-        max_model_len: None,
+        max_model_len: builder.max_model_len,
+        hf_config_overrides: builder.hf_config_overrides.clone(),
         mtp_config: builder.mtp_config.clone(),
+        encoder_cache_memory_bytes: None,
     };
 
     let add_model_config = AddModelConfig {
@@ -705,9 +769,17 @@ pub async fn build_text_pipeline(
 /// Build a multimodal model pipeline from a MultimodalModelBuilder.
 /// Returns the pipeline, scheduler config, and AddModelConfig needed for Model creation.
 pub async fn build_multimodal_pipeline(
-    builder: crate::MultimodalModelBuilder,
+    mut builder: crate::MultimodalModelBuilder,
 ) -> anyhow::Result<(Arc<Mutex<dyn Pipeline>>, SchedulerConfig, AddModelConfig)> {
     use mistralrs_core::*;
+
+    let mtp_runtime = MtpRuntimeConfig::new(builder.prefix_cache_n.unwrap_or(0));
+
+    builder.paged_attn_cfg = paged_attn_with_serving_capacity(
+        builder.paged_attn_cfg,
+        builder.max_num_seqs,
+        builder.prefix_cache_n.unwrap_or(0),
+    )?;
 
     let config = MultimodalSpecificConfig {
         topology: builder.topology.clone(),
@@ -715,6 +787,7 @@ pub async fn build_multimodal_pipeline(
         from_uqff: builder.from_uqff.clone(),
         max_edge: builder.max_edge,
         max_model_len: builder.max_model_len,
+        hf_config_overrides: builder.hf_config_overrides.clone(),
         calibration_file: builder.calibration_file.clone(),
         imatrix: builder.imatrix.clone(),
         hf_cache_path: builder.hf_cache_path.clone(),
@@ -738,9 +811,17 @@ pub async fn build_multimodal_pipeline(
             .as_ref()
             .is_some_and(MtpConfig::is_builtin),
     )
+    .with_encoder_cache_memory_bytes(builder.encoder_cache_memory_bytes)
     .build(builder.loader_type.clone());
 
     let device = resolve_device(builder.force_cpu, None)?;
+    builder.paged_attn_cfg = reserve_external_mtp_memory_with_runtime(
+        builder.paged_attn_cfg,
+        builder.mtp_config.as_ref(),
+        mtp_runtime,
+        &builder.dtype,
+        &device,
+    )?;
     let isq_type = resolve_isq_type(builder.isq.as_ref(), &device)?;
 
     let pipeline = loader.load_model_from_hf(
@@ -762,7 +843,7 @@ pub async fn build_multimodal_pipeline(
         pipeline
             .lock()
             .await
-            .attach_speculative(SpeculativeConfig::Mtp(mtp_config))?;
+            .attach_speculative_with_runtime(SpeculativeConfig::Mtp(mtp_config), mtp_runtime)?;
     }
 
     let scheduler_config = scheduler_config_from_pipeline(
@@ -824,7 +905,9 @@ pub async fn build_multimodal_pipeline(
         chat_template: builder.chat_template.clone(),
         jinja_explicit: builder.jinja_explicit.clone(),
         max_model_len: builder.max_model_len,
+        hf_config_overrides: builder.hf_config_overrides.clone(),
         mtp_config: builder.mtp_config.clone(),
+        encoder_cache_memory_bytes: builder.encoder_cache_memory_bytes,
     };
 
     let add_model_config = AddModelConfig {
@@ -841,9 +924,17 @@ pub async fn build_multimodal_pipeline(
 /// Build a GGUF model pipeline from a GgufModelBuilder.
 /// Returns the pipeline, scheduler config, and AddModelConfig needed for Model creation.
 pub async fn build_gguf_pipeline(
-    builder: crate::GgufModelBuilder,
+    mut builder: crate::GgufModelBuilder,
 ) -> anyhow::Result<(Arc<Mutex<dyn Pipeline>>, SchedulerConfig, AddModelConfig)> {
     use mistralrs_core::*;
+
+    let mtp_runtime = MtpRuntimeConfig::new(builder.prefix_cache_n.unwrap_or(0));
+
+    builder.paged_attn_cfg = paged_attn_with_serving_capacity(
+        builder.paged_attn_cfg,
+        builder.max_num_seqs,
+        builder.prefix_cache_n.unwrap_or(0),
+    )?;
 
     let config = GGUFSpecificConfig {
         topology: builder.topology.clone(),
@@ -868,7 +959,8 @@ pub async fn build_gguf_pipeline(
         config,
         builder.no_kv_cache,
         builder.jinja_explicit.clone(),
-    );
+    )
+    .with_encoder_cache_memory_bytes(builder.encoder_cache_memory_bytes);
     if let Some(mmproj_files) = builder.mmproj_files.clone() {
         loader_builder = loader_builder.with_mmproj_files(mmproj_files);
     }
@@ -881,6 +973,13 @@ pub async fn build_gguf_pipeline(
     let loader = loader_builder.build();
 
     let device = resolve_device(builder.force_cpu, builder.device.clone())?;
+    builder.paged_attn_cfg = reserve_external_mtp_memory_with_runtime(
+        builder.paged_attn_cfg,
+        builder.mtp_config.as_ref(),
+        mtp_runtime,
+        &builder.dtype,
+        &device,
+    )?;
     let default_device_map = if builder.mmproj_files.is_some() {
         AutoDeviceMapParams::default_multimodal()
     } else {
@@ -905,7 +1004,7 @@ pub async fn build_gguf_pipeline(
         pipeline
             .lock()
             .await
-            .attach_speculative(SpeculativeConfig::Mtp(mtp_config))?;
+            .attach_speculative_with_runtime(SpeculativeConfig::Mtp(mtp_config), mtp_runtime)?;
     }
 
     let scheduler_config = scheduler_config_from_pipeline(
@@ -997,7 +1096,9 @@ pub async fn build_gguf_pipeline(
         chat_template: builder.chat_template.clone(),
         jinja_explicit: builder.jinja_explicit.clone(),
         max_model_len: builder.max_model_len,
+        hf_config_overrides: None,
         mtp_config: builder.mtp_config.clone(),
+        encoder_cache_memory_bytes: builder.encoder_cache_memory_bytes,
     };
 
     let add_model_config = AddModelConfig {
@@ -1058,7 +1159,9 @@ pub async fn build_diffusion_pipeline(
         chat_template: None,
         jinja_explicit: None,
         max_model_len: None,
+        hf_config_overrides: None,
         mtp_config: None,
+        encoder_cache_memory_bytes: None,
     };
 
     let add_model_config = AddModelConfig {
@@ -1125,7 +1228,9 @@ pub async fn build_speech_pipeline(
         chat_template: None,
         jinja_explicit: None,
         max_model_len: None,
+        hf_config_overrides: None,
         mtp_config: None,
+        encoder_cache_memory_bytes: None,
     };
 
     let add_model_config = AddModelConfig {
@@ -1221,7 +1326,9 @@ pub async fn build_embedding_pipeline(
         chat_template: None,
         jinja_explicit: None,
         max_model_len: None,
+        hf_config_overrides: None,
         mtp_config: None,
+        encoder_cache_memory_bytes: None,
     };
 
     let add_model_config = AddModelConfig {
@@ -1239,9 +1346,17 @@ pub async fn build_embedding_pipeline(
 /// This uses `AutoLoaderBuilder` to detect the model type (text, multimodal, embedding, etc.)
 /// from the model's config.json, similar to the CLI `run` command.
 pub async fn build_auto_pipeline(
-    builder: crate::ModelBuilder,
+    mut builder: crate::ModelBuilder,
 ) -> anyhow::Result<(Arc<Mutex<dyn Pipeline>>, SchedulerConfig, AddModelConfig)> {
     use mistralrs_core::*;
+
+    let mtp_runtime = MtpRuntimeConfig::new(builder.prefix_cache_n.unwrap_or(0));
+
+    builder.paged_attn_cfg = paged_attn_with_serving_capacity(
+        builder.paged_attn_cfg,
+        builder.max_num_seqs,
+        builder.prefix_cache_n.unwrap_or(0),
+    )?;
 
     let normal_config = NormalSpecificConfig {
         topology: builder.topology.clone(),
@@ -1251,6 +1366,8 @@ pub async fn build_auto_pipeline(
         imatrix: builder.imatrix.clone(),
         calibration_file: builder.calibration_file.clone(),
         hf_cache_path: builder.hf_cache_path.clone(),
+        hf_config_overrides: builder.hf_config_overrides.clone(),
+        max_model_len: builder.max_model_len,
         matformer_config_path: builder.matformer_config_path.clone(),
         matformer_slice_name: builder.matformer_slice_name.clone(),
     };
@@ -1260,7 +1377,8 @@ pub async fn build_auto_pipeline(
         write_uqff: builder.write_uqff.clone(),
         from_uqff: builder.from_uqff.clone(),
         max_edge: builder.max_edge,
-        max_model_len: None,
+        max_model_len: builder.max_model_len,
+        hf_config_overrides: builder.hf_config_overrides.clone(),
         calibration_file: builder.calibration_file.clone(),
         imatrix: builder.imatrix.clone(),
         hf_cache_path: builder.hf_cache_path.clone(),
@@ -1289,7 +1407,8 @@ pub async fn build_auto_pipeline(
         builder.model_id.clone(),
         builder.no_kv_cache,
         builder.jinja_explicit.clone(),
-    );
+    )
+    .with_encoder_cache_memory_bytes(builder.encoder_cache_memory_bytes);
     let auto_builder = if let Some(ref path) = builder.hf_cache_path {
         auto_builder.hf_cache_path(path.clone())
     } else {
@@ -1305,6 +1424,13 @@ pub async fn build_auto_pipeline(
         .build();
 
     let device = resolve_device(builder.force_cpu, builder.device.clone())?;
+    builder.paged_attn_cfg = reserve_external_mtp_memory_with_runtime(
+        builder.paged_attn_cfg,
+        builder.mtp_config.as_ref(),
+        mtp_runtime,
+        &builder.dtype,
+        &device,
+    )?;
     let isq_type = resolve_isq_type(builder.isq.as_ref(), &device)?;
 
     let pipeline = loader.load_model_from_hf(
@@ -1324,7 +1450,7 @@ pub async fn build_auto_pipeline(
         pipeline
             .lock()
             .await
-            .attach_speculative(SpeculativeConfig::Mtp(mtp_config))?;
+            .attach_speculative_with_runtime(SpeculativeConfig::Mtp(mtp_config), mtp_runtime)?;
     }
 
     let scheduler_config = scheduler_config_from_pipeline(
@@ -1382,8 +1508,10 @@ pub async fn build_auto_pipeline(
         silent: !builder.with_logging,
         chat_template: builder.chat_template.clone(),
         jinja_explicit: builder.jinja_explicit.clone(),
-        max_model_len: None,
+        max_model_len: builder.max_model_len,
+        hf_config_overrides: builder.hf_config_overrides.clone(),
         mtp_config: builder.mtp_config.clone(),
+        encoder_cache_memory_bytes: builder.encoder_cache_memory_bytes,
     };
 
     let add_model_config = AddModelConfig {

@@ -2126,7 +2126,9 @@ impl GraniteMoeHybrid {
             recurrent: RecurrentLayerConfig {
                 conv_dim: cfg.mamba_conv_dim(),
                 conv_width: cfg.mamba_d_conv,
-                state_dims: vec![cfg.mamba_n_heads(), cfg.mamba_d_head(), cfg.mamba_d_state],
+                state: crate::kv_cache::RecurrentStateSpec::Opaque {
+                    dims: vec![cfg.mamba_n_heads(), cfg.mamba_d_head(), cfg.mamba_d_state],
+                },
                 recurrent_dtype: None,
             },
         };

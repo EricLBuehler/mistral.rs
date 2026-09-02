@@ -327,8 +327,8 @@ pub struct Message {
     pub tool_calls: Option<Vec<ToolCall>>,
     /// Tool call ID this message is responding to (for tool messages)
     pub tool_call_id: Option<String>,
-    /// Reasoning emitted with an assistant message.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Reasoning emitted with an assistant message (`reasoning` is the OpenAI-compatible alias).
+    #[serde(default, alias = "reasoning", skip_serializing_if = "Option::is_none")]
     pub reasoning_content: Option<String>,
 }
 
@@ -1175,6 +1175,9 @@ pub struct ChatCompletionRequest {
     #[serde(default)]
     #[schema(example = false)]
     pub ignore_eos: bool,
+    /// Seed for deterministic request-scoped sampling.
+    #[schema(example = json!(Option::None::<u64>))]
+    pub seed: Option<u64>,
     /// Sampling temperature; higher values increase randomness.
     #[schema(example = 0.7)]
     pub temperature: Option<f64>,
@@ -1248,6 +1251,9 @@ pub struct ChatCompletionRequest {
     #[schema(value_type = Option<ReasoningEffort>)]
     #[schema(example = json!(Option::None::<String>))]
     pub reasoning_effort: Option<String>,
+    /// vLLM-style template variables; `enable_thinking` and `reasoning_effort` map onto the fields above.
+    #[schema(example = json!(Option::None::<HashMap<String, Value>>))]
+    pub chat_template_kwargs: Option<HashMap<String, Value>>,
     /// Maximum number of tool-call rounds the server will auto-execute.
     #[schema(example = json!(Option::None::<usize>))]
     pub max_tool_rounds: Option<usize>,
@@ -1315,10 +1321,17 @@ pub struct ModelObjects {
 }
 
 #[derive(Debug, ToSchema)]
+pub struct PromptTokensDetailsResponse {
+    /// Prompt tokens served from the prefix cache, not recomputed.
+    pub cached_tokens: usize,
+}
+
+#[derive(Debug, ToSchema)]
 pub struct CompletionUsageResponse {
     pub completion_tokens: usize,
     pub prompt_tokens: usize,
     pub total_tokens: usize,
+    pub prompt_tokens_details: Option<PromptTokensDetailsResponse>,
     pub avg_tok_per_sec: f32,
     pub avg_prompt_tok_per_sec: f32,
     pub avg_compl_tok_per_sec: f32,
@@ -1478,6 +1491,9 @@ pub struct CompletionRequest {
     #[serde(default)]
     #[schema(example = false)]
     pub ignore_eos: bool,
+    /// Seed for deterministic request-scoped sampling.
+    #[schema(example = json!(Option::None::<u64>))]
+    pub seed: Option<u64>,
     /// Stream the response as server-sent events.
     pub stream: Option<bool>,
     /// Sampling temperature; higher values increase randomness.
@@ -1880,6 +1896,9 @@ pub struct ResponsesCreateRequest {
     #[serde(default = "default_false")]
     #[schema(example = false)]
     pub ignore_eos: bool,
+    /// Seed for deterministic request-scoped sampling.
+    #[schema(example = json!(Option::None::<u64>))]
+    pub seed: Option<u64>,
     /// Sampling temperature; higher values increase randomness.
     #[schema(example = 0.7)]
     pub temperature: Option<f64>,
@@ -2114,6 +2133,20 @@ mod tests {
         assert!(chat.ignore_eos);
         assert!(completion.ignore_eos);
         assert!(responses.ignore_eos);
+    }
+
+    #[test]
+    fn generation_requests_accept_sampling_seed() {
+        let chat: ChatCompletionRequest =
+            serde_json::from_value(json!({"messages": "hello", "seed": 42})).unwrap();
+        let completion: CompletionRequest =
+            serde_json::from_value(json!({"prompt": "hello", "seed": 43})).unwrap();
+        let responses: ResponsesCreateRequest =
+            serde_json::from_value(json!({"input": "hello", "seed": 44})).unwrap();
+
+        assert_eq!(chat.seed, Some(42));
+        assert_eq!(completion.seed, Some(43));
+        assert_eq!(responses.seed, Some(44));
     }
 
     #[test]

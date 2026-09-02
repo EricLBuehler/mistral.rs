@@ -5,7 +5,7 @@ description: Running FLUX and similar image-generation models through the mistra
 
 import { Tabs, TabItem } from '@astrojs/starlight/components';
 
-mistral.rs serves diffusion models through `POST /v1/images/generations`. The main supported model is FLUX; see the [supported models reference](/mistral.rs/reference/supported-models/).
+mistral.rs serves diffusion models through `POST /v1/images/generations`. The main supported model is FLUX; see the [supported models reference](/reference/supported-models/).
 
 ## Running FLUX
 
@@ -112,7 +112,7 @@ println!("{}", response.data[0].url.as_ref().unwrap());
 
 FLUX is memory-hungry at native precision: the model is roughly 12B parameters, and the T5 XXL text encoder adds a large memory footprint. For low-memory hosts, use the `FluxOffloaded` loader (SDK only) from the [Running FLUX](#running-flux) table.
 
-Diffusion models do not support [ISQ (in-situ quantization)](/mistral.rs/reference/quantization-types/). Load them at native precision instead of passing `--quant` or `--isq`; they are generally more sensitive to quantization than language models.
+Diffusion models do not support [ISQ (in-situ quantization)](/reference/quantization-types/). Load them at native precision instead of passing `--quant` or `--isq`; they are generally more sensitive to quantization than language models.
 
 ## Output handling
 

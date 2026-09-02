@@ -87,7 +87,11 @@ pub(crate) fn spawn_pending_isq(
     params: &ImmediateIsqParams,
     module_key: String,
 ) -> Arc<PendingIsqLayer> {
-    let guard = params.guard.clone().with_module_key(module_key.clone());
+    let guard = params
+        .guard
+        .clone()
+        .with_module_key(module_key.clone())
+        .with_consumer(IsqConsumer::ImmediateLoad);
     let request = IsqRequest {
         ty,
         device: device.clone(),
@@ -214,7 +218,8 @@ pub fn requantize_tracked(
         let mut guard = guard
             .clone()
             .with_module_key(module.key.clone())
-            .with_requested(ty.to_string());
+            .with_requested(ty.to_string())
+            .with_consumer(consumer);
         if let Some(report) = &report {
             guard = guard.with_report(report.clone());
         }

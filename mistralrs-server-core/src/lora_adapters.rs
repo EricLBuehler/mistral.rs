@@ -22,7 +22,10 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use utoipa::{IntoParams, ToSchema};
 
-use crate::types::ExtractedMistralRsState;
+use crate::{
+    handler_core::{ApiError, ApiErrorKind, INTERNAL_ERROR_MESSAGE, SERVICE_UNAVAILABLE_MESSAGE},
+    types::ExtractedMistralRsState,
+};
 
 pub const ALLOW_RUNTIME_LORA_UPDATING_ENV: &str = "MISTRALRS_ALLOW_RUNTIME_LORA_UPDATING";
 pub const LORA_ADAPTER_ROOT_ENV: &str = "MISTRALRS_LORA_ADAPTER_ROOT";
@@ -149,17 +152,19 @@ pub(crate) fn resolve_lora_adapter_model(
     state: &MistralRs,
     model: &mut String,
     adapter: &mut Option<crate::openai::AdapterSelection>,
-) -> Result<(), String> {
+) -> Result<(), ApiError> {
     if model == DEFAULT_MODEL_ID
         || state
             .model_exists(model)
-            .map_err(|error| error.to_string())?
+            .map_err(|error| ApiError::from_error(&error, ApiErrorKind::Internal))?
     {
         return Ok(());
     }
 
-    let models = list_lora_adapter_models(state).map_err(|error| error.to_string())?;
+    let models = list_lora_adapter_models(state)
+        .map_err(|error| ApiError::from_error(&error, ApiErrorKind::Internal))?;
     resolve_lora_adapter_model_from_models(&models, model, adapter)
+        .map_err(ApiError::invalid_request)
 }
 
 /// Controls exposure and filesystem access for runtime LoRA management routes.
@@ -350,12 +355,9 @@ fn adapter_filesystem_error(description: &str, error: std::io::Error) -> LoraAda
             (StatusCode::BAD_REQUEST, "invalid_adapter_path")
         }
         std::io::ErrorKind::InvalidData | std::io::ErrorKind::InvalidInput => {
-            (StatusCode::UNPROCESSABLE_ENTITY, "invalid_adapter_path")
+            (StatusCode::BAD_REQUEST, "invalid_adapter_path")
         }
-        _ => (
-            StatusCode::SERVICE_UNAVAILABLE,
-            "adapter_storage_unavailable",
-        ),
+        _ => (StatusCode::INTERNAL_SERVER_ERROR, "internal_error"),
     };
     LoraAdapterApiError::new(
         status,
@@ -554,11 +556,16 @@ impl LoraAdapterApiError {
         } else {
             "invalid_request_error"
         };
+        let message = match status {
+            StatusCode::SERVICE_UNAVAILABLE => SERVICE_UNAVAILABLE_MESSAGE.to_string(),
+            status if status.is_server_error() => INTERNAL_ERROR_MESSAGE.to_string(),
+            _ => message.into(),
+        };
         Self {
             status,
             body: LoraAdapterErrorResponse {
                 error: LoraAdapterErrorBody {
-                    message: message.into(),
+                    message,
                     error_type: error_type.to_string(),
                     code: code.to_string(),
                 },
@@ -584,8 +591,12 @@ impl LoraAdapterApiError {
                 "invalid_model_operation",
                 error.to_string(),
             ),
+            error @ MistralRsError::SenderPoisoned => Self::new(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "service_unavailable",
+                error.to_string(),
+            ),
             error @ MistralRsError::EnginePoisoned
-            | error @ MistralRsError::SenderPoisoned
             | error @ MistralRsError::ReloadFailed(_)
             | error @ MistralRsError::Other(_) => Self::new(
                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -596,12 +607,17 @@ impl LoraAdapterApiError {
     }
 
     fn json_rejection(error: JsonRejection) -> Self {
-        let status = error.status();
-        let code = match status {
+        let rejection_status = error.status();
+        let code = match rejection_status {
             StatusCode::PAYLOAD_TOO_LARGE => "request_body_too_large",
             StatusCode::UNSUPPORTED_MEDIA_TYPE => "invalid_content_type",
             StatusCode::UNPROCESSABLE_ENTITY => "invalid_request_body",
             _ => "malformed_json",
+        };
+        let status = if rejection_status == StatusCode::UNPROCESSABLE_ENTITY {
+            StatusCode::BAD_REQUEST
+        } else {
+            rejection_status
         };
         Self::new(status, code, error.body_text())
     }
@@ -648,9 +664,7 @@ impl LoraAdapterApiError {
             LoraAdapterError::InvalidRuntimeConfig(_) => {
                 (StatusCode::INTERNAL_SERVER_ERROR, "invalid_lora_runtime")
             }
-            LoraAdapterError::SizeOverflow => {
-                (StatusCode::UNPROCESSABLE_ENTITY, "invalid_lora_adapter")
-            }
+            LoraAdapterError::SizeOverflow => (StatusCode::BAD_REQUEST, "invalid_lora_adapter"),
             LoraAdapterError::FileTooLarge { .. } => {
                 (StatusCode::PAYLOAD_TOO_LARGE, "lora_adapter_file_too_large")
             }
@@ -672,17 +686,13 @@ impl LoraAdapterApiError {
                         | std::io::ErrorKind::UnexpectedEof
                 ) =>
             {
-                (StatusCode::UNPROCESSABLE_ENTITY, "invalid_lora_adapter")
+                (StatusCode::BAD_REQUEST, "invalid_lora_adapter")
             }
-            LoraAdapterError::Io { .. } => {
-                (StatusCode::SERVICE_UNAVAILABLE, "lora_storage_unavailable")
-            }
+            LoraAdapterError::Io { .. } => (StatusCode::INTERNAL_SERVER_ERROR, "internal_error"),
             LoraAdapterError::Config { .. } | LoraAdapterError::Format(_) => {
-                (StatusCode::UNPROCESSABLE_ENTITY, "invalid_lora_adapter")
+                (StatusCode::BAD_REQUEST, "invalid_lora_adapter")
             }
-            LoraAdapterError::Load(_) => {
-                (StatusCode::SERVICE_UNAVAILABLE, "lora_device_load_failed")
-            }
+            LoraAdapterError::Load(_) => (StatusCode::INTERNAL_SERVER_ERROR, "internal_error"),
             LoraAdapterError::Task(_) => {
                 (StatusCode::INTERNAL_SERVER_ERROR, "lora_load_task_failed")
             }
@@ -762,7 +772,6 @@ fn validate_alias(alias: &str) -> Result<(), LoraAdapterApiError> {
         (status = 409, description = "LoRA runtime is unavailable or at capacity", body = LoraAdapterErrorResponse),
         (status = 413, description = "Adapter input files exceed the configured safety limit", body = LoraAdapterErrorResponse),
         (status = 415, description = "Request content type is not JSON", body = LoraAdapterErrorResponse),
-        (status = 422, description = "Adapter files are invalid or unsupported", body = LoraAdapterErrorResponse),
         (status = 429, description = "Another adapter load is already in progress", body = LoraAdapterErrorResponse),
         (status = 503, description = "Adapter storage or model device is unavailable", body = LoraAdapterErrorResponse),
         (status = 500, description = "Adapter loading task failed", body = LoraAdapterErrorResponse)
@@ -840,7 +849,6 @@ fn lora_load_policy(
         (status = 409, description = "LoRA runtime is unavailable", body = LoraAdapterErrorResponse),
         (status = 413, description = "Request body exceeds the configured limit", body = LoraAdapterErrorResponse),
         (status = 415, description = "Request content type is not JSON", body = LoraAdapterErrorResponse),
-        (status = 422, description = "Request body is invalid", body = LoraAdapterErrorResponse),
         (status = 500, description = "Internal server error", body = LoraAdapterErrorResponse)
     )
 )]
@@ -1163,7 +1171,7 @@ mod tests {
             .await
             .unwrap_err();
         let error = LoraAdapterApiError::json_rejection(rejection);
-        assert_eq!(error.status, StatusCode::UNPROCESSABLE_ENTITY);
+        assert_eq!(error.status, StatusCode::BAD_REQUEST);
         assert_eq!(error.body.error.code, "invalid_request_body");
 
         let request = Request::builder()
@@ -1261,7 +1269,7 @@ mod tests {
                 std::io::Error::other("disk failure"),
             )
             .status,
-            StatusCode::SERVICE_UNAVAILABLE
+            StatusCode::INTERNAL_SERVER_ERROR
         );
         assert_eq!(
             adapter_filesystem_error(

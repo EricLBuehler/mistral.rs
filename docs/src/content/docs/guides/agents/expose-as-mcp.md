@@ -3,7 +3,7 @@ title: Expose mistralrs as an MCP server
 description: Serve the loaded model as an MCP tool other agents can call.
 ---
 
-mistral.rs can expose the loaded model as an [MCP (Model Context Protocol)](/mistral.rs/guides/agents/connect-mcp-server/) server: a `chat` tool over JSON-RPC 2.0 that any MCP client can call.
+mistral.rs can expose the loaded model as an [MCP (Model Context Protocol)](/guides/agents/connect-mcp-server/) server: a `chat` tool over JSON-RPC 2.0 that any MCP client can call.
 
 ```bash
 mistralrs serve -m Qwen/Qwen3-4B --mcp-port 4321
@@ -16,7 +16,7 @@ mistralrs serve -m Qwen/Qwen3-4B --mcp-port 4321
 - `--mcp-port` must differ from `--port`.
 - The bind is validated at startup, so failures surface before serving.
 
-In a [TOML config](/mistral.rs/reference/cli-toml-config/), the equivalent is `mcp_port` under `[server]`:
+In a [TOML config](/reference/cli-toml-config/), the equivalent is `mcp_port` under `[server]`:
 
 ```toml
 command = "serve"
@@ -39,7 +39,7 @@ Anything else returns JSON-RPC error -32601 (method not found). A body with `jso
 
 ## The chat tool
 
-You can pass any OpenAI [`ChatCompletionRequest`](/mistral.rs/reference/http-api/) field in `arguments`; the advertised schema only documents the common ones. The schema:
+You can pass any OpenAI [`ChatCompletionRequest`](/reference/http-api/) field in `arguments`; the advertised schema only documents the common ones. The schema:
 
 - Requires `messages`: an array of `{role, content}` objects with roles `user`, `assistant`, or `system`.
 - Documents `max_tokens` and `temperature`.
@@ -74,5 +74,5 @@ The MCP endpoint has no built-in authentication. For non-localhost use, place an
 
 ## See also
 
-- [Connect to an MCP server](/mistral.rs/guides/agents/connect-mcp-server/): the opposite direction, using external MCP tools from mistral.rs.
-- [Serve CLI reference](/mistral.rs/reference/cli/serve/).
+- [Connect to an MCP server](/guides/agents/connect-mcp-server/): the opposite direction, using external MCP tools from mistral.rs.
+- [Serve CLI reference](/reference/cli/serve/).

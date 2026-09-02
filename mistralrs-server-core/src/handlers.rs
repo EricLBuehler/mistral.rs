@@ -1,18 +1,18 @@
 //! ## General mistral.rs server route handlers.
 
-use anyhow::Result;
-use axum::extract::Path;
-use axum::extract::{Json, State};
+use axum::extract::{rejection::JsonRejection, Json, Path, State};
 use axum::http::StatusCode;
+use axum::response::{IntoResponse, Response};
 use mistralrs_core::{
     auto_tune, collect_system_info, parse_isq_value, run_doctor, AutoDeviceMapParams,
-    AutoTuneRequest, AutoTuneResult, MistralRs, MistralRsError, ModelDType, ModelSelected,
+    AutoTuneRequest, MistralRs, MistralRsError, ModelDType, ModelSelected,
     ModelStatus as CoreModelStatus, Request, SerializedSession, TokenSource, TuneProfile,
 };
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
 use crate::{
+    handler_core::{openai_error_from_error, openai_error_response, ApiError, ApiErrorKind},
     lora_adapters::list_lora_adapter_models,
     openai::{ModelObject, ModelObjects},
     types::ExtractedMistralRsState,
@@ -40,38 +40,49 @@ impl From<TuneProfileRequest> for TuneProfile {
   get,
   tag = "Mistral.rs",
   path = "/v1/models",
-  responses((status = 200, description = "Served model info", body = ModelObjects))
+  responses(
+    (status = 200, description = "Served model info", body = ModelObjects),
+    (status = 500, description = "Failed to inspect the model registry")
+  )
 )]
-pub async fn models(State(state): ExtractedMistralRsState) -> Json<ModelObjects> {
+pub async fn models(State(state): ExtractedMistralRsState) -> Response {
     let mut model_objects = Vec::new();
 
-    // Add "default" as a special model option
-    model_objects.push(ModelObject {
-        id: "default".to_string(),
-        object: "model",
-        created: state.get_creation_time(),
-        owned_by: "local",
-        root: Some("default".to_string()),
-        parent: None,
-        adapter_generation: None,
-        status: None,
-        tools_available: None,
-        mcp_tools_count: None,
-        mcp_servers_connected: None,
-    });
+    let models_with_status = match state.list_models_with_status() {
+        Ok(models) => models,
+        Err(error) => return openai_error_from_error(&error, ApiErrorKind::Internal),
+    };
 
-    // Get all models with their status (loaded, unloaded, reloading)
-    let models_with_status = state.list_models_with_status().unwrap_or_default();
+    if !models_with_status.is_empty() {
+        model_objects.push(ModelObject {
+            id: "default".to_string(),
+            object: "model",
+            created: state.get_creation_time(),
+            owned_by: "local",
+            root: Some("default".to_string()),
+            parent: None,
+            adapter_generation: None,
+            status: None,
+            tools_available: None,
+            mcp_tools_count: None,
+            mcp_servers_connected: None,
+        });
+    }
 
     for (model_id, status) in models_with_status {
-        // Get model-specific information (only available for loaded models)
         let (tools_available, mcp_tools_count, mcp_servers_connected) =
             if status == CoreModelStatus::Loaded {
-                let tools_count = state.get_tools_count(Some(&model_id)).unwrap_or(0);
-                let has_mcp = state.has_mcp_client(Some(&model_id)).unwrap_or(false);
+                let tools_count = match state.get_tools_count(Some(&model_id)) {
+                    Ok(count) => count,
+                    Err(_) => return openai_error_response(ApiError::internal()),
+                };
+                let has_mcp = match state.has_mcp_client(Some(&model_id)) {
+                    Ok(has_mcp) => has_mcp,
+                    Err(_) => return openai_error_response(ApiError::internal()),
+                };
 
                 if has_mcp || tools_count > 0 {
-                    (Some(tools_count > 0), Some(tools_count), Some(1)) // Simplified MCP info
+                    (Some(tools_count > 0), Some(tools_count), Some(1))
                 } else {
                     (None, None, None)
                 }
@@ -94,7 +105,11 @@ pub async fn models(State(state): ExtractedMistralRsState) -> Json<ModelObjects>
         });
     }
 
-    for adapter_model in list_lora_adapter_models(&state).unwrap_or_default() {
+    let adapter_models = match list_lora_adapter_models(&state) {
+        Ok(models) => models,
+        Err(error) => return openai_error_from_error(&error, ApiErrorKind::Internal),
+    };
+    for adapter_model in adapter_models {
         model_objects.push(ModelObject {
             root: Some(adapter_model.adapter.alias.clone()),
             id: adapter_model.id,
@@ -114,6 +129,7 @@ pub async fn models(State(state): ExtractedMistralRsState) -> Json<ModelObjects>
         object: "list",
         data: model_objects,
     })
+    .into_response()
 }
 
 #[utoipa::path(
@@ -157,17 +173,42 @@ pub struct ReIsqRequest {
   tag = "Mistral.rs",
   path = "/re_isq",
   request_body = ReIsqRequest,
-  responses((status = 200, description = "Reapply ISQ to a model that was loaded with ISQ."))
+  responses(
+    (status = 200, description = "Reapply ISQ to a model that was loaded with ISQ."),
+    (status = 400, description = "Invalid ISQ type"),
+    (status = 500, description = "Failed to dispatch the ISQ request")
+  )
 )]
 pub async fn re_isq(
     State(state): ExtractedMistralRsState,
-    Json(request): Json<ReIsqRequest>,
-) -> Result<String, String> {
+    payload: Result<Json<ReIsqRequest>, JsonRejection>,
+) -> Response {
+    let request = match payload {
+        Ok(Json(request)) => request,
+        Err(error) => return openai_error_response(ApiError::from_json_rejection(error)),
+    };
     let repr = format!("Re ISQ: {:?}", request.ggml_type);
     MistralRs::maybe_log_request(state.clone(), repr.clone());
-    let request = Request::ReIsq(parse_isq_value(&request.ggml_type, None)?);
-    state.get_sender(None).unwrap().send(request).await.unwrap();
-    Ok(repr)
+    let level = match parse_isq_value(&request.ggml_type, None) {
+        Ok(level) => level,
+        Err(error) => {
+            return openai_error_response(ApiError::new(
+                ApiErrorKind::InvalidRequest,
+                error,
+                Some("invalid_isq"),
+                Some("ggml_type"),
+            ));
+        }
+    };
+    let sender = match state.get_sender(None) {
+        Ok(sender) => sender,
+        Err(error) => return openai_error_from_error(&error, ApiErrorKind::Internal),
+    };
+    if let Err(error) = sender.send(Request::ReIsq(level)).await {
+        tracing::error!(%error, "failed to dispatch ISQ request");
+        return openai_error_response(ApiError::internal());
+    }
+    (StatusCode::OK, repr).into_response()
 }
 
 /// Request body for applying online calibration.
@@ -181,17 +222,27 @@ pub struct CalibrationApplyRequest {
 async fn send_calibration(
     state: &crate::types::SharedMistralRsState,
     action: mistralrs_core::CalibrationAction,
-) -> Result<axum::Json<mistralrs_core::CalibrationStatus>, String> {
+) -> Response {
     let (tx, mut rx) = tokio::sync::mpsc::channel(1);
     let request = Request::Calibration(mistralrs_core::CalibrationRequest {
         action,
         response: tx,
     });
-    state.get_sender(None).unwrap().send(request).await.unwrap();
+    let sender = match state.get_sender(None) {
+        Ok(sender) => sender,
+        Err(error) => return openai_error_from_error(&error, ApiErrorKind::Internal),
+    };
+    if let Err(error) = sender.send(request).await {
+        tracing::error!(%error, "failed to dispatch calibration request");
+        return openai_error_response(ApiError::internal());
+    }
     match rx.recv().await {
-        Some(Ok(status)) => Ok(axum::Json(status)),
-        Some(Err(e)) => Err(e.to_string()),
-        None => Err("Engine closed the calibration channel.".to_string()),
+        Some(Ok(status)) => Json(status).into_response(),
+        Some(Err(error)) => {
+            MistralRs::maybe_log_error(state.clone(), error.as_ref());
+            openai_error_response(ApiError::internal())
+        }
+        None => openai_error_response(ApiError::internal()),
     }
 }
 
@@ -201,9 +252,7 @@ async fn send_calibration(
   path = "/calibration/start",
   responses((status = 200, description = "Begin collecting activation statistics from live traffic.", body = mistralrs_core::CalibrationStatus))
 )]
-pub async fn calibration_start(
-    State(state): ExtractedMistralRsState,
-) -> Result<axum::Json<mistralrs_core::CalibrationStatus>, String> {
+pub async fn calibration_start(State(state): ExtractedMistralRsState) -> Response {
     MistralRs::maybe_log_request(state.clone(), "Calibration start".to_string());
     send_calibration(&state, mistralrs_core::CalibrationAction::Start).await
 }
@@ -214,9 +263,7 @@ pub async fn calibration_start(
   path = "/calibration/status",
   responses((status = 200, description = "Per-layer calibration collection progress.", body = mistralrs_core::CalibrationStatus))
 )]
-pub async fn calibration_status(
-    State(state): ExtractedMistralRsState,
-) -> Result<axum::Json<mistralrs_core::CalibrationStatus>, String> {
+pub async fn calibration_status(State(state): ExtractedMistralRsState) -> Response {
     send_calibration(&state, mistralrs_core::CalibrationAction::Status).await
 }
 
@@ -229,8 +276,12 @@ pub async fn calibration_status(
 )]
 pub async fn calibration_apply(
     State(state): ExtractedMistralRsState,
-    Json(request): Json<CalibrationApplyRequest>,
-) -> Result<axum::Json<mistralrs_core::CalibrationStatus>, String> {
+    payload: Result<Json<CalibrationApplyRequest>, JsonRejection>,
+) -> Response {
+    let request = match payload {
+        Ok(Json(request)) => request,
+        Err(error) => return openai_error_response(ApiError::from_json_rejection(error)),
+    };
     MistralRs::maybe_log_request(state.clone(), "Calibration apply".to_string());
     send_calibration(
         &state,
@@ -255,11 +306,6 @@ pub enum ModelStatus {
     Loaded,
     Unloaded,
     Reloading,
-    NotFound,
-    /// Model doesn't have loader config for reload
-    NoLoaderConfig,
-    /// Internal error (e.g., lock poisoned)
-    InternalError,
 }
 
 /// Response for model status operations
@@ -268,9 +314,56 @@ pub struct ModelStatusResponse {
     #[schema(example = "my-model")]
     pub model_id: String,
     pub status: ModelStatus,
-    /// Error message when status indicates an error condition
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub error: Option<String>,
+}
+
+fn model_operation_request(
+    payload: Result<Json<ModelOperationRequest>, JsonRejection>,
+) -> Result<ModelOperationRequest, ApiError> {
+    payload
+        .map(|Json(request)| request)
+        .map_err(ApiError::from_json_rejection)
+}
+
+fn model_status_response(model_id: String, status: ModelStatus) -> Response {
+    Json(ModelStatusResponse { model_id, status }).into_response()
+}
+
+fn unload_model_result(model_id: String, result: Result<(), MistralRsError>) -> Response {
+    match result {
+        Ok(()) | Err(MistralRsError::ModelAlreadyUnloaded(_)) => {
+            model_status_response(model_id, ModelStatus::Unloaded)
+        }
+        Err(error) => openai_error_from_error(&error, ApiErrorKind::Internal),
+    }
+}
+
+fn reload_model_result(model_id: String, result: Result<(), MistralRsError>) -> Response {
+    match result {
+        Ok(()) | Err(MistralRsError::ModelAlreadyLoaded(_)) => {
+            model_status_response(model_id, ModelStatus::Loaded)
+        }
+        Err(error) => openai_error_from_error(&error, ApiErrorKind::Internal),
+    }
+}
+
+fn get_model_status_result(
+    model_id: String,
+    result: Result<Option<CoreModelStatus>, MistralRsError>,
+) -> Response {
+    match result {
+        Ok(Some(CoreModelStatus::Loaded)) => model_status_response(model_id, ModelStatus::Loaded),
+        Ok(Some(CoreModelStatus::Unloaded)) => {
+            model_status_response(model_id, ModelStatus::Unloaded)
+        }
+        Ok(Some(CoreModelStatus::Reloading)) => {
+            model_status_response(model_id, ModelStatus::Reloading)
+        }
+        Ok(None) => openai_error_from_error(
+            &MistralRsError::ModelNotFound(model_id),
+            ApiErrorKind::Internal,
+        ),
+        Err(error) => openai_error_from_error(&error, ApiErrorKind::Internal),
+    }
 }
 
 #[utoipa::path(
@@ -279,35 +372,26 @@ pub struct ModelStatusResponse {
   path = "/v1/models/unload",
   request_body = ModelOperationRequest,
   responses(
-    (status = 200, description = "Model unloaded successfully", body = ModelStatusResponse),
-    (status = 400, description = "Failed to unload model", body = ModelStatusResponse)
+    (status = 200, description = "Model unloaded or already unloaded", body = ModelStatusResponse),
+    (status = 400, description = "Invalid request or model cannot be unloaded"),
+    (status = 404, description = "Model not found"),
+    (status = 409, description = "Model state conflicts with the operation"),
+    (status = 413, description = "Request body is too large"),
+    (status = 415, description = "Request content type is not JSON"),
+    (status = 500, description = "Model registry failure")
   )
 )]
 pub async fn unload_model(
     State(state): ExtractedMistralRsState,
-    Json(request): Json<ModelOperationRequest>,
-) -> Json<ModelStatusResponse> {
+    payload: Result<Json<ModelOperationRequest>, JsonRejection>,
+) -> Response {
+    let request = match model_operation_request(payload) {
+        Ok(request) => request,
+        Err(error) => return openai_error_response(error),
+    };
     let model_id = request.model_id;
-    match state.unload_model(&model_id) {
-        Ok(()) => Json(ModelStatusResponse {
-            model_id,
-            status: ModelStatus::Unloaded,
-            error: None,
-        }),
-        Err(e) => {
-            let (status, error) = match &e {
-                MistralRsError::ModelNotFound(_) => (ModelStatus::NotFound, None),
-                MistralRsError::ModelAlreadyUnloaded(_) => (ModelStatus::Unloaded, None),
-                MistralRsError::NoLoaderConfig(_) => (ModelStatus::NoLoaderConfig, None),
-                _ => (ModelStatus::InternalError, Some(e.to_string())),
-            };
-            Json(ModelStatusResponse {
-                model_id,
-                status,
-                error,
-            })
-        }
-    }
+    let result = state.unload_model(&model_id);
+    unload_model_result(model_id, result)
 }
 
 #[utoipa::path(
@@ -316,38 +400,26 @@ pub async fn unload_model(
   path = "/v1/models/reload",
   request_body = ModelOperationRequest,
   responses(
-    (status = 200, description = "Model reloaded successfully", body = ModelStatusResponse),
-    (status = 400, description = "Failed to reload model", body = ModelStatusResponse)
+    (status = 200, description = "Model reloaded or already loaded", body = ModelStatusResponse),
+    (status = 400, description = "Invalid request or model cannot be reloaded"),
+    (status = 404, description = "Model not found"),
+    (status = 409, description = "Model state conflicts with the operation"),
+    (status = 413, description = "Request body is too large"),
+    (status = 415, description = "Request content type is not JSON"),
+    (status = 500, description = "Model reload failure")
   )
 )]
 pub async fn reload_model(
     State(state): ExtractedMistralRsState,
-    Json(request): Json<ModelOperationRequest>,
-) -> Json<ModelStatusResponse> {
+    payload: Result<Json<ModelOperationRequest>, JsonRejection>,
+) -> Response {
+    let request = match model_operation_request(payload) {
+        Ok(request) => request,
+        Err(error) => return openai_error_response(error),
+    };
     let model_id = request.model_id;
-    match state.reload_model(&model_id).await {
-        Ok(()) => Json(ModelStatusResponse {
-            model_id,
-            status: ModelStatus::Loaded,
-            error: None,
-        }),
-        Err(e) => {
-            let (status, error) = match &e {
-                MistralRsError::ModelNotFound(_) => (ModelStatus::NotFound, None),
-                MistralRsError::ModelReloading(_) => (ModelStatus::Reloading, None),
-                MistralRsError::ModelAlreadyLoaded(_) => (ModelStatus::Loaded, None),
-                MistralRsError::ReloadFailed(msg) => {
-                    (ModelStatus::InternalError, Some(msg.clone()))
-                }
-                _ => (ModelStatus::InternalError, Some(e.to_string())),
-            };
-            Json(ModelStatusResponse {
-                model_id,
-                status,
-                error,
-            })
-        }
-    }
+    let result = state.reload_model(&model_id).await;
+    reload_model_result(model_id, result)
 }
 
 #[utoipa::path(
@@ -357,38 +429,24 @@ pub async fn reload_model(
   request_body = ModelOperationRequest,
   responses(
     (status = 200, description = "Model status", body = ModelStatusResponse),
-    (status = 404, description = "Model not found", body = ModelStatusResponse)
+    (status = 400, description = "Invalid request"),
+    (status = 404, description = "Model not found"),
+    (status = 413, description = "Request body is too large"),
+    (status = 415, description = "Request content type is not JSON"),
+    (status = 500, description = "Model registry failure")
   )
 )]
 pub async fn get_model_status(
     State(state): ExtractedMistralRsState,
-    Json(request): Json<ModelOperationRequest>,
-) -> Json<ModelStatusResponse> {
+    payload: Result<Json<ModelOperationRequest>, JsonRejection>,
+) -> Response {
+    let request = match model_operation_request(payload) {
+        Ok(request) => request,
+        Err(error) => return openai_error_response(error),
+    };
     let model_id = request.model_id;
-    match state.get_model_status(&model_id) {
-        Ok(Some(core_status)) => {
-            let status = match core_status {
-                CoreModelStatus::Loaded => ModelStatus::Loaded,
-                CoreModelStatus::Unloaded => ModelStatus::Unloaded,
-                CoreModelStatus::Reloading => ModelStatus::Reloading,
-            };
-            Json(ModelStatusResponse {
-                model_id,
-                status,
-                error: None,
-            })
-        }
-        Ok(None) => Json(ModelStatusResponse {
-            model_id,
-            status: ModelStatus::NotFound,
-            error: None,
-        }),
-        Err(e) => Json(ModelStatusResponse {
-            model_id,
-            status: ModelStatus::InternalError,
-            error: Some(e.to_string()),
-        }),
-    }
+    let result = state.get_model_status(&model_id);
+    get_model_status_result(model_id, result)
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
@@ -434,25 +492,48 @@ pub struct TuneModelRequest {
   request_body = TuneModelRequest,
   responses(
     (status = 200, description = "Auto-tune result with recommended settings"),
+    (status = 400, description = "Invalid tuning request"),
+    (status = 413, description = "Request body is too large"),
+    (status = 415, description = "Request content type is not JSON"),
     (status = 500, description = "Tuning failed")
   )
 )]
-pub async fn tune_model(
-    Json(request): Json<TuneModelRequest>,
-) -> Result<Json<AutoTuneResult>, String> {
+pub async fn tune_model(payload: Result<Json<TuneModelRequest>, JsonRejection>) -> Response {
+    let request = match payload {
+        Ok(Json(request)) => request,
+        Err(error) => return openai_error_response(ApiError::from_json_rejection(error)),
+    };
     let token_source = match request.token_source {
-        Some(value) => value
-            .parse()
-            .map_err(|err| format!("Invalid token_source: {err}"))?,
+        Some(value) => match value.parse() {
+            Ok(token_source) => token_source,
+            Err(error) => {
+                return openai_error_response(ApiError::new(
+                    ApiErrorKind::InvalidRequest,
+                    format!("Invalid token_source: {error}"),
+                    Some("invalid_token_source"),
+                    Some("token_source"),
+                ));
+            }
+        },
         None => TokenSource::CacheToken,
     };
 
-    let dtype = request
+    let dtype = match request
         .dtype
         .as_deref()
         .unwrap_or("auto")
         .parse::<ModelDType>()
-        .map_err(|err| format!("Invalid dtype: {err}"))?;
+    {
+        Ok(dtype) => dtype,
+        Err(error) => {
+            return openai_error_response(ApiError::new(
+                ApiErrorKind::InvalidRequest,
+                format!("Invalid dtype: {error}"),
+                Some("invalid_dtype"),
+                Some("dtype"),
+            ));
+        }
+    };
 
     let max_seq_len = request
         .max_seq_len
@@ -482,9 +563,17 @@ pub async fn tune_model(
     };
 
     let requested_isq = match request.requested_isq {
-        Some(value) => {
-            Some(parse_isq_value(&value, None).map_err(|err| format!("Invalid isq value: {err}"))?)
-        }
+        Some(value) => match parse_isq_value(&value, None) {
+            Ok(value) => Some(value),
+            Err(error) => {
+                return openai_error_response(ApiError::new(
+                    ApiErrorKind::InvalidRequest,
+                    format!("Invalid isq value: {error}"),
+                    Some("invalid_isq"),
+                    Some("requested_isq"),
+                ));
+            }
+        },
         None => None,
     };
 
@@ -500,9 +589,13 @@ pub async fn tune_model(
         requested_isq,
     };
 
-    auto_tune(tune_request)
-        .map(Json)
-        .map_err(|err| err.to_string())
+    match auto_tune(tune_request) {
+        Ok(result) => Json(result).into_response(),
+        Err(error) => {
+            tracing::error!(%error, "model auto-tuning failed");
+            openai_error_response(ApiError::internal())
+        }
+    }
 }
 
 /// GET `/v1/sessions/{session_id}`. 404 if the session doesn't exist.
@@ -519,14 +612,16 @@ pub async fn tune_model(
 pub async fn get_session(
     State(state): ExtractedMistralRsState,
     Path(session_id): Path<String>,
-) -> Result<Json<SerializedSession>, (StatusCode, String)> {
+) -> Response {
     match state.export_session(None, &session_id) {
-        Ok(Some(session)) => Ok(Json(session)),
-        Ok(None) => Err((
-            StatusCode::NOT_FOUND,
-            format!("Session {session_id} not found"),
+        Ok(Some(session)) => Json(session).into_response(),
+        Ok(None) => openai_error_response(ApiError::new(
+            ApiErrorKind::NotFound,
+            format!("Session '{session_id}' was not found."),
+            Some("session_not_found"),
+            Some("session_id"),
         )),
-        Err(e) => Err((StatusCode::INTERNAL_SERVER_ERROR, e.to_string())),
+        Err(error) => openai_error_from_error(&error, ApiErrorKind::Internal),
     }
 }
 
@@ -545,12 +640,22 @@ pub async fn get_session(
 pub async fn put_session(
     State(state): ExtractedMistralRsState,
     Path(session_id): Path<String>,
-    Json(session): Json<SerializedSession>,
-) -> Result<StatusCode, (StatusCode, String)> {
-    state
-        .import_session(None, session_id, session)
-        .map(|()| StatusCode::OK)
-        .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))
+    payload: Result<Json<SerializedSession>, JsonRejection>,
+) -> Response {
+    let session = match payload {
+        Ok(Json(session)) => session,
+        Err(error) => return openai_error_response(ApiError::from_json_rejection(error)),
+    };
+    match state.import_session(None, session_id, session) {
+        Ok(()) => StatusCode::OK.into_response(),
+        Err(MistralRsError::Other(message)) => openai_error_response(ApiError::new(
+            ApiErrorKind::InvalidRequest,
+            message,
+            Some("invalid_session"),
+            None,
+        )),
+        Err(error) => openai_error_from_error(&error, ApiErrorKind::Internal),
+    }
 }
 
 /// DELETE `/v1/sessions/{session_id}`. Idempotent: returns 200 either way.
@@ -564,9 +669,122 @@ pub async fn put_session(
 pub async fn delete_session(
     State(state): ExtractedMistralRsState,
     Path(session_id): Path<String>,
-) -> Result<StatusCode, (StatusCode, String)> {
-    state
-        .delete_session(None, &session_id)
-        .map(|_| StatusCode::OK)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
+) -> Response {
+    match state.delete_session(None, &session_id) {
+        Ok(_) => StatusCode::OK.into_response(),
+        Err(error) => openai_error_from_error(&error, ApiErrorKind::Internal),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use axum::{
+        body::{to_bytes, Body},
+        extract::FromRequest,
+        http::Request as HttpRequest,
+    };
+
+    use super::*;
+
+    #[test]
+    fn unload_model_results_use_operation_statuses() {
+        assert_eq!(
+            unload_model_result("model".to_string(), Ok(())).status(),
+            StatusCode::OK
+        );
+        assert_eq!(
+            unload_model_result(
+                "model".to_string(),
+                Err(MistralRsError::ModelAlreadyUnloaded("model".to_string())),
+            )
+            .status(),
+            StatusCode::OK
+        );
+        assert_eq!(
+            unload_model_result(
+                "missing".to_string(),
+                Err(MistralRsError::ModelNotFound("missing".to_string())),
+            )
+            .status(),
+            StatusCode::NOT_FOUND
+        );
+        assert_eq!(
+            unload_model_result(
+                "model".to_string(),
+                Err(MistralRsError::NoLoaderConfig("model".to_string())),
+            )
+            .status(),
+            StatusCode::BAD_REQUEST
+        );
+        assert_eq!(
+            unload_model_result(
+                "model".to_string(),
+                Err(MistralRsError::ModelReloading("model".to_string())),
+            )
+            .status(),
+            StatusCode::CONFLICT
+        );
+        assert_eq!(
+            unload_model_result("model".to_string(), Err(MistralRsError::EnginePoisoned),).status(),
+            StatusCode::INTERNAL_SERVER_ERROR
+        );
+    }
+
+    #[test]
+    fn reload_and_status_results_preserve_idempotency() {
+        assert_eq!(
+            reload_model_result(
+                "model".to_string(),
+                Err(MistralRsError::ModelAlreadyLoaded("model".to_string())),
+            )
+            .status(),
+            StatusCode::OK
+        );
+        assert_eq!(
+            reload_model_result(
+                "model".to_string(),
+                Err(MistralRsError::ModelReloading("model".to_string())),
+            )
+            .status(),
+            StatusCode::CONFLICT
+        );
+        assert_eq!(
+            get_model_status_result("missing".to_string(), Ok(None)).status(),
+            StatusCode::NOT_FOUND
+        );
+        assert_eq!(
+            get_model_status_result("model".to_string(), Ok(Some(CoreModelStatus::Reloading)),)
+                .status(),
+            StatusCode::OK
+        );
+    }
+
+    #[tokio::test]
+    async fn lifecycle_json_rejections_use_openai_statuses() {
+        let request = HttpRequest::builder()
+            .header(axum::http::header::CONTENT_TYPE, "application/json")
+            .body(Body::from("{}"))
+            .unwrap();
+        let rejection = Json::<ModelOperationRequest>::from_request(request, &())
+            .await
+            .unwrap_err();
+        let error = model_operation_request(Err(rejection)).unwrap_err();
+
+        assert_eq!(error.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(error.code.as_deref(), Some("invalid_request_body"));
+    }
+
+    #[tokio::test]
+    async fn internal_model_errors_do_not_expose_details() {
+        let response = reload_model_result(
+            "model".to_string(),
+            Err(MistralRsError::ReloadFailed("private failure".to_string())),
+        );
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let body = String::from_utf8(body.to_vec()).unwrap();
+        assert!(!body.contains("private failure"));
+        assert!(body.contains("Internal server error"));
+    }
 }

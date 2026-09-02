@@ -80,6 +80,9 @@ template <typename CACHE_T, typename OUT_T>
     }
   }
   const int batch_id = lo;
+  if (batch_id >= num_seqs) {
+    return;
+  }
 
   const int batch_offset = token_id - cu_seq_lens[batch_id];
   const int block_table_id = batch_offset / block_size;

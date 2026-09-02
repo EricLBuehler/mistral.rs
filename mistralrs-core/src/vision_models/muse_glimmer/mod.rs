@@ -381,6 +381,9 @@ impl MultimodalModel for MuseGlimmerModel {
         &self.text.cfg
     }
 
+    fn encoder_cache(&self) -> Option<&Mutex<EncoderCacheManager>> {
+        Some(&self.encoder_cache)
+    }
     fn encoder_cache_counters(
         &self,
     ) -> Option<(

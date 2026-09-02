@@ -91,6 +91,8 @@ impl AnyMoeModelBuilder {
                     imatrix: None,
                     calibration_file: None,
                     hf_cache_path: base.hf_cache_path,
+                    hf_config_overrides: base.hf_config_overrides,
+                    max_model_len: base.max_model_len,
                     matformer_config_path: None,
                     matformer_slice_name: None,
                 };

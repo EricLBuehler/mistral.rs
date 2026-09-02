@@ -98,7 +98,7 @@ runner = Runner(
 </TabItem>
 </Tabs>
 
-For per-layer or per-tensor placement, use the [topology guide](/mistral.rs/guides/perf/topology/).
+For per-layer or per-tensor placement, use the [topology guide](/guides/perf/topology/).
 
 ### Performance notes
 
@@ -126,7 +126,7 @@ global world size = local TP size * number of nodes
 
 The global tensor-parallel size must satisfy the same head-divisibility constraints as single-machine TP. Incompatible sizes fail at startup; mistral.rs does not automatically drop ranks.
 
-The head node distributes the NCCL id to workers over TCP, then all ranks join one communicator. The variable roles (`MISTRALRS_MN_GLOBAL_WORLD_SIZE`, `MISTRALRS_MN_LOCAL_WORLD_SIZE`, head vs worker settings) are documented in the [environment variable reference](/mistral.rs/reference/environment-variables/). Do not set `MISTRALRS_NO_NCCL` or `RING_CONFIG` in this mode.
+The head node distributes the NCCL id to workers over TCP, then all ranks join one communicator. The variable roles (`MISTRALRS_MN_GLOBAL_WORLD_SIZE`, `MISTRALRS_MN_LOCAL_WORLD_SIZE`, head vs worker settings) are documented in the [environment variable reference](/reference/environment-variables/). Do not set `MISTRALRS_NO_NCCL` or `RING_CONFIG` in this mode.
 
 Two nodes, four GPUs per node:
 
@@ -190,5 +190,5 @@ The ring backend reads its configuration from a JSON file pointed to by the `RIN
 
 ## See also
 
-- [Topology](/mistral.rs/guides/perf/topology/): per-layer and per-tensor placement on one host.
-- [Environment variables](/mistral.rs/reference/environment-variables/): full `MISTRALRS_MN_*`, `MISTRALRS_NO_NCCL`, and `RING_CONFIG` registry.
+- [Topology](/guides/perf/topology/): per-layer and per-tensor placement on one host.
+- [Environment variables](/reference/environment-variables/): full `MISTRALRS_MN_*`, `MISTRALRS_NO_NCCL`, and `RING_CONFIG` registry.

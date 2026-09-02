@@ -21,7 +21,7 @@ mistralrs run --agent -m google/gemma-4-E4B-it --agent-permission ask
 
 `code_execution_permission` and `--code-exec-permission` are compatibility aliases for code-execution-focused apps; prefer `agent_permission` for new code.
 
-Permissioning is separate from sandboxing. Permission mode decides whether an action may start; the [sandbox](/mistral.rs/reference/sandbox/) controls what generated code and shell commands can access after they start.
+Permissioning is separate from sandboxing. Permission mode decides whether an action may start; the [sandbox](/reference/sandbox/) controls what generated code and shell commands can access after they start.
 
 All five surfaces (CLI, built-in UI, HTTP, Python, Rust) expose the same approval semantics:
 
@@ -88,7 +88,7 @@ Resolve it with `POST /v1/agent/approvals/{approval_id}`:
 
 `decision` is `approve` or `deny`. A deny response may include `message`, which is returned to the model as the tool result. `remember_for_session: true` on an approve is the HTTP version of "always for this chat": later actions in the same `session_id` do not ask again.
 
-The approval endpoint returns `{"status":"resolved"}`, `{"status":"queued"}`, or `{"status":"not_found"}` (the last with HTTP 404). See the [HTTP API reference](/mistral.rs/reference/http-api/) for the exact wire schema and the [HTTP approval example](/mistral.rs/examples/server/code-execution-approval/) for a complete client.
+The approval endpoint returns `{"status":"resolved"}`, `{"status":"queued"}`, or `{"status":"not_found"}` (the last with HTTP 404). See the [HTTP API reference](/reference/http-api/) for the exact wire schema and the [HTTP approval example](/examples/server/code-execution-approval/) for a complete client.
 
 </TabItem>
 <TabItem label="Python">
@@ -132,7 +132,7 @@ request = ChatCompletionRequest(
 )
 ```
 
-[Full example](/mistral.rs/examples/python/code-execution-approval/)
+[Full example](/examples/python/code-execution-approval/)
 
 </TabItem>
 <TabItem label="Rust">
@@ -172,7 +172,7 @@ let request = RequestBuilder::from(messages)
 
 Both callback forms use the same approval semantics. If an approval handler fails, the action is denied.
 
-[Full example](/mistral.rs/examples/rust/advanced/code-execution-approval/)
+[Full example](/examples/rust/advanced/code-execution-approval/)
 
 </TabItem>
 </Tabs>

@@ -7,8 +7,8 @@ mistral.rs can act as a local-first runtime for agent applications. A single run
 
 - Model generation (chat-completion responses and chunks).
 - Server-side tool execution.
-- Python code execution, [sandboxed by default](/mistral.rs/reference/sandbox/) on Linux and macOS.
-- Shell execution, [sandboxed by default](/mistral.rs/reference/sandbox/) on Linux and macOS.
+- Python code execution, [sandboxed by default](/reference/sandbox/) on Linux and macOS.
+- Shell execution, [sandboxed by default](/reference/sandbox/) on Linux and macOS.
 - OpenAI-compatible Skills.
 - OpenAI-compatible file inputs.
 - Web search.
@@ -20,12 +20,12 @@ The most complete app-facing event stream today is `/v1/chat/completions` with `
 | Runtime part | What mistral.rs provides |
 |---|---|
 | Model output | Chat-completion responses and streaming chunks. |
-| Tool execution | Built-in search, code execution, shell, OpenAI-compatible Skills, [MCP (Model Context Protocol)](/mistral.rs/guides/agents/connect-mcp-server/) tools, callbacks, or HTTP tool dispatch. |
+| Tool execution | Built-in search, code execution, shell, OpenAI-compatible Skills, [MCP (Model Context Protocol)](/guides/agents/connect-mcp-server/) tools, callbacks, or HTTP tool dispatch. |
 | Generated media | Captured images and video frames from tools as base64 fields. |
 | Files | User-provided input files plus generated output files in the same `/v1/files` registry. |
 | Session state | Reusable `session_id` values for multi-turn tool and code state. |
 
-Use this when an app wants inference and tool execution in one process rather than running its own tool loop around a model server. Built-in runtime tools are [strict by default](/mistral.rs/guides/agents/tool-calling-basics/#strict-tool-calling); whether an action may run at all is governed by [permissions and approvals](/mistral.rs/guides/agents/permissions-and-approvals/).
+Use this when an app wants inference and tool execution in one process rather than running its own tool loop around a model server. Built-in runtime tools are [strict by default](/guides/agents/tool-calling-basics/#strict-tool-calling); whether an action may run at all is governed by [permissions and approvals](/guides/agents/permissions-and-approvals/).
 
 ## How the loop runs
 
@@ -49,7 +49,7 @@ Each round:
 6. The message history is extended with the assistant's tool-call message and a `tool`-role response, so the next inference pass sees the outcome.
 7. If the round counter reaches the cap, the loop exits without another tool opportunity.
 
-The cap and dispatch URL are configured on the [tool calling page](/mistral.rs/guides/agents/tool-calling-basics/#configuring-the-tool-loop). At termination, the expanded message list is written back to the [session](/mistral.rs/guides/agents/persist-sessions/), so the next request with the same session id sees the synthesized tool messages as history.
+The cap and dispatch URL are configured on the [tool calling page](/guides/agents/tool-calling-basics/#configuring-the-tool-loop). At termination, the expanded message list is written back to the [session](/guides/agents/persist-sessions/), so the next request with the same session id sees the synthesized tool messages as history.
 
 ## HTTP run stream
 
@@ -59,7 +59,7 @@ Start a server with the tools your app is allowed to use:
 mistralrs serve --agent -m google/gemma-4-E4B-it
 ```
 
-(`--agent` enables search, code execution, and shell; see [build an agent](/mistral.rs/guides/agents/build-an-agent/).)
+(`--agent` enables search, code execution, and shell; see [build an agent](/guides/agents/build-an-agent/).)
 
 Send a streaming chat-completions request:
 
@@ -91,7 +91,7 @@ Complete events carry tool-type-specific payloads:
 - Web search: `query`, `results_count`.
 - Custom tools: `arguments`, `content`.
 
-The full event tables are in the [HTTP API reference](/mistral.rs/reference/http-api/). Non-streaming responses include the same information as an `agentic_tool_calls` array.
+The full event tables are in the [HTTP API reference](/reference/http-api/). Non-streaming responses include the same information as an `agentic_tool_calls` array.
 
 ## Files
 
@@ -119,7 +119,7 @@ Responses follows the OpenAI artifact shape: produced files are attached to assi
 
 User-provided files use OpenAI-compatible request shapes: upload with `POST /v1/files`, reference `file_id`, or attach inline `file_data`. Responses also supports `input_file.file_url`.
 
-Text-like UTF-8 input files get bounded decoded previews. When agentic tools are active, the model can request additional slices if the preview is not enough. Binary files are metadata-only in prompt context, but are still downloadable and mounted into shell/code workdirs when those tools are active. See [OpenAI-compatible file inputs](/mistral.rs/guides/agents/file-inputs/).
+Text-like UTF-8 input files get bounded decoded previews. When agentic tools are active, the model can request additional slices if the preview is not enough. Binary files are metadata-only in prompt context, but are still downloadable and mounted into shell/code workdirs when those tools are active. See [OpenAI-compatible file inputs](/guides/agents/file-inputs/).
 
 Behavior worth designing around:
 
@@ -127,11 +127,11 @@ Behavior worth designing around:
 - Context preview: input files expose decoded text previews of up to **4096 chars per file** and **32768 chars per request**. Agent-produced text outputs expose a **1024-byte** preview. Agentic runs can inspect more text when the relevant file-access tool is available.
 - Undeclared outputs: the Python executor and shell tools accept an `outputs` parameter for files the model wrote but the request did not declare. Shell also advertises `mistralrs_surface_outputs`, which lets the model surface files created in earlier shell calls. Files declared via `request.files` are surfaced regardless; missing declared files come back as error placeholders. Files written but not named in `outputs`, `mistralrs_surface_outputs`, or `request.files` remain internal to the session.
 
-The exact file schema, metadata endpoint, and content-endpoint status codes are in the [HTTP API reference](/mistral.rs/reference/http-api/).
+The exact file schema, metadata endpoint, and content-endpoint status codes are in the [HTTP API reference](/reference/http-api/).
 
 ## Sessions
 
-Use `session_id` when your app needs continuity across requests: message history, tool records, media, and code-execution state. Session behavior, the export/import/delete endpoints, and lifetime rules live in [persist sessions](/mistral.rs/guides/agents/persist-sessions/).
+Use `session_id` when your app needs continuity across requests: message history, tool records, media, and code-execution state. Session behavior, the export/import/delete endpoints, and lifetime rules live in [persist sessions](/guides/agents/persist-sessions/).
 
 ## SDK boundaries
 
@@ -142,8 +142,8 @@ Use `session_id` when your app needs continuity across requests: message history
 | Python SDK | Supports request input files via `InputFile`, plus agentic requests, callbacks, code execution, shell, local skill mounts, and sessions. The streaming iterator currently yields model chunks; use HTTP SSE for the full timeline. |
 | Web UI | Renders code execution, shell, search, reasoning blocks, generated media, and approval cards inline. |
 
-Full examples: [Rust file inputs](/mistral.rs/examples/rust/advanced/file-inputs/), [Python file inputs](/mistral.rs/examples/python/file-inputs/), [server file inputs](/mistral.rs/examples/server/file-inputs/), [Rust agent](/mistral.rs/examples/rust/advanced/agent/), [Rust agent streaming](/mistral.rs/examples/rust/advanced/agent-streaming/), [Python agentic tools](/mistral.rs/examples/python/agentic-tools/), [HTTP tool rounds](/mistral.rs/examples/server/agentic-tool-rounds/), and [server Skills](/mistral.rs/examples/server/skills/).
+Full examples: [Rust file inputs](/examples/rust/advanced/file-inputs/), [Python file inputs](/examples/python/file-inputs/), [server file inputs](/examples/server/file-inputs/), [Rust agent](/examples/rust/advanced/agent/), [Rust agent streaming](/examples/rust/advanced/agent-streaming/), [Python agentic tools](/examples/python/agentic-tools/), [HTTP tool rounds](/examples/server/agentic-tool-rounds/), and [server Skills](/examples/server/skills/).
 
 ## Security
 
-Code and shell execution run with the permissions of the configured subprocess, inside the [sandbox](/mistral.rs/reference/sandbox/) where enabled. Agent mode defaults to the `developer` sandbox profile, which keeps writes scoped to the session workdir while allowing common local toolchains to run. For untrusted workloads, set `profile = "restricted"` and tighter `network` settings in the [TOML config](/mistral.rs/reference/cli-toml-config/#sandbox-section), or use the matching CLI flags. Use `agent_permission: "ask"` or `"deny"` when an app needs tighter control over server-executed actions; a server-wide `ask` or `deny` cannot be loosened by the request (see [permissions and approvals](/mistral.rs/guides/agents/permissions-and-approvals/)). For untrusted users, run mistral.rs in a container or VM, use a low-privilege user, and constrain network access.
+Code and shell execution run with the permissions of the configured subprocess, inside the [sandbox](/reference/sandbox/) where enabled. Agent mode defaults to the `developer` sandbox profile, which keeps writes scoped to the session workdir while allowing common local toolchains to run. For untrusted workloads, set `profile = "restricted"` and tighter `network` settings in the [TOML config](/reference/cli-toml-config/#sandbox-section), or use the matching CLI flags. Use `agent_permission: "ask"` or `"deny"` when an app needs tighter control over server-executed actions; a server-wide `ask` or `deny` cannot be loosened by the request (see [permissions and approvals](/guides/agents/permissions-and-approvals/)). For untrusted users, run mistral.rs in a container or VM, use a low-privilege user, and constrain network access.

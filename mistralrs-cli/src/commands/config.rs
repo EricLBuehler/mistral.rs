@@ -6,7 +6,7 @@ use tracing::info;
 
 use mistralrs_core::initialize_logging;
 use mistralrs_server_core::{
-    metrics::{observe_http, ObservabilityState},
+    metrics::{install_prometheus_recorder, observe_http, ObservabilityState},
     mistralrs_for_server_builder::{MistralRsForServerBuilder, ModelConfig},
     mistralrs_server_router_builder::{MistralRsServerRouterBuilder, DEFAULT_MAX_BODY_LIMIT},
 };
@@ -46,6 +46,9 @@ async fn run_serve_config(cfg: crate::config::ServeConfig) -> Result<()> {
         default_model_id,
     } = cfg;
 
+    if server.observability_config().metrics {
+        install_prometheus_recorder();
+    }
     let global = global.to_global_options()?;
     apply_agent_mode(&mut runtime);
     validate_agent_options(&runtime)?;
@@ -64,6 +67,9 @@ async fn run_serve_config(cfg: crate::config::ServeConfig) -> Result<()> {
 
     let mut builder = MistralRsForServerBuilder::new()
         .with_max_seqs(runtime.max_seqs)
+        .with_max_num_batched_tokens(runtime.max_num_batched_tokens)
+        .with_max_prefill_chunk_tokens(runtime.max_prefill_chunk_tokens)
+        .with_max_decode_steps_before_prefill(runtime.max_decode_steps_before_prefill)
         .with_no_kv_cache(runtime.no_kv_cache)
         .with_token_source(global.token_source)
         .with_interactive_mode(false)
@@ -233,6 +239,9 @@ async fn run_run_config(cfg: crate::config::RunConfig) -> Result<()> {
 
     let mut builder = MistralRsForServerBuilder::new()
         .with_max_seqs(runtime.max_seqs)
+        .with_max_num_batched_tokens(runtime.max_num_batched_tokens)
+        .with_max_prefill_chunk_tokens(runtime.max_prefill_chunk_tokens)
+        .with_max_decode_steps_before_prefill(runtime.max_decode_steps_before_prefill)
         .with_no_kv_cache(runtime.no_kv_cache)
         .with_token_source(global.token_source)
         .with_interactive_mode(true)
@@ -364,6 +373,12 @@ async fn build_model_configs(
 
         let resolved_loader_id = crate::commands::serve::model_id_of(&model_type);
         let mut config = ModelConfig::new(entry.model_id.clone(), model_selected);
+        if let Some(max_model_len) = entry.max_model_len {
+            config = config.with_max_model_len(max_model_len);
+        }
+        if let Some(overrides) = entry.hf_overrides.clone() {
+            config = config.with_hf_config_overrides(overrides);
+        }
         if resolved_loader_id != entry.model_id {
             config = config.with_alias(entry.model_id.clone());
         }
@@ -382,6 +397,11 @@ async fn build_model_configs(
 
         if let Some(isq) = crate::commands::serve::extract_isq_setting(&model_type) {
             config = config.with_in_situ_quant(isq);
+        }
+        if let Some(max_bytes) =
+            crate::commands::serve::extract_encoder_cache_memory_bytes(&model_type)?
+        {
+            config = config.with_encoder_cache_memory_bytes(max_bytes);
         }
 
         configs.push(config);

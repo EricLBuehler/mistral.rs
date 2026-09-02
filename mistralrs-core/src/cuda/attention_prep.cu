@@ -2,6 +2,10 @@
 #include "cuda_fp16.h"
 #include <stdint.h>
 
+constexpr float AP_INV_TWO_PI = 0.15915494309189533577f;
+constexpr float AP_TWO_PI_HI = 6.28125f;
+constexpr float AP_TWO_PI_LO = 0.00193530717958647693f;
+
 template <typename T> __device__ __forceinline__ float ap_to_float(T value) {
   return static_cast<float>(value);
 }
@@ -29,6 +33,30 @@ template <>
 __device__ __forceinline__ __nv_bfloat16
 ap_from_float<__nv_bfloat16>(float value) {
   return __float2bfloat16(value);
+}
+
+template <typename T>
+__global__ void rope_sincos_positions_kernel(
+    const uint32_t *__restrict__ positions,
+    const float *__restrict__ inv_freq, T *__restrict__ cos_out,
+    T *__restrict__ sin_out, const int width, const int64_t elements) {
+  const int64_t index =
+      static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+  if (index >= elements) {
+    return;
+  }
+
+  const int row = static_cast<int>(index / width);
+  const int column = static_cast<int>(index % width);
+  const float angle = static_cast<float>(positions[row]) * inv_freq[column];
+  const float periods = nearbyintf(angle * AP_INV_TWO_PI);
+  float reduced = fmaf(-periods, AP_TWO_PI_HI, angle);
+  reduced = fmaf(-periods, AP_TWO_PI_LO, reduced);
+  float sin_value;
+  float cos_value;
+  sincosf(reduced, &sin_value, &cos_value);
+  cos_out[index] = ap_from_float<T>(cos_value);
+  sin_out[index] = ap_from_float<T>(sin_value);
 }
 
 template <typename T, bool IS_NEOX>
@@ -126,7 +154,7 @@ __global__ void qk_rms_norm_rope_kernel(
     const int64_t k_stride_s, const int64_t k_stride_d, const int batch,
     const int q_heads, const int k_heads, const int seq_len, const int head_dim,
     const int rot_dim, const int cos_batch_stride, const float q_eps,
-    const float k_eps) {
+    const float k_eps, const bool output_token_major) {
   __shared__ float reduce[1024];
 
   const int q_rows = batch * q_heads * seq_len;
@@ -149,7 +177,12 @@ __global__ void qk_rms_norm_rope_kernel(
     const int64_t src_base = static_cast<int64_t>(batch_idx) * q_stride_b +
                              static_cast<int64_t>(head) * q_stride_h +
                              static_cast<int64_t>(seq) * q_stride_s;
-    T *dst = q_out + static_cast<int64_t>(row) * head_dim;
+    const int64_t dst_row =
+        output_token_major
+            ? (static_cast<int64_t>(batch_idx) * seq_len + seq) * q_heads +
+                  head
+            : row;
+    T *dst = q_out + dst_row * head_dim;
     write_norm_rope_row<T, IS_NEOX>(q, q_weight, cos_row_ptr, sin_row_ptr, dst,
                                     src_base, q_stride_d, head_dim, rot_dim,
                                     q_eps, reduce);
@@ -157,7 +190,12 @@ __global__ void qk_rms_norm_rope_kernel(
     const int64_t src_base = static_cast<int64_t>(batch_idx) * k_stride_b +
                              static_cast<int64_t>(head) * k_stride_h +
                              static_cast<int64_t>(seq) * k_stride_s;
-    T *dst = k_out + static_cast<int64_t>(local_row) * head_dim;
+    const int64_t dst_row =
+        output_token_major
+            ? (static_cast<int64_t>(batch_idx) * seq_len + seq) * k_heads +
+                  head
+            : local_row;
+    T *dst = k_out + dst_row * head_dim;
     write_norm_rope_row<T, IS_NEOX>(k, k_weight, cos_row_ptr, sin_row_ptr, dst,
                                     src_base, k_stride_d, head_dim, rot_dim,
                                     k_eps, reduce);
@@ -293,7 +331,8 @@ void launch_qk_rms_norm_rope(const void *q, const void *k, const void *q_weight,
                              const int k_heads, const int seq_len,
                              const int head_dim, const int rot_dim,
                              const int cos_batch_stride, const float q_eps,
-                             const float k_eps, int64_t stream) {
+                             const float k_eps, const bool output_token_major,
+                             int64_t stream) {
   if (batch <= 0 || q_heads <= 0 || seq_len <= 0 || head_dim <= 0 ||
       rot_dim <= 0) {
     return;
@@ -318,7 +357,7 @@ void launch_qk_rms_norm_rope(const void *q, const void *k, const void *q_weight,
       reinterpret_cast<T *>(k_out), q_stride_b, q_stride_h, q_stride_s,
       q_stride_d, k_stride_b, k_stride_h, k_stride_s, k_stride_d, batch,
       q_heads, k_heads, seq_len, head_dim, rot_dim, cos_batch_stride, q_eps,
-      k_eps);
+      k_eps, output_token_major);
 }
 
 template <typename T, bool IS_NEOX>
@@ -358,6 +397,24 @@ void launch_qk_rms_norm_rope_positions(
           q_stride_b, q_stride_h, q_stride_s, q_stride_d, k_stride_b,
           k_stride_h, k_stride_s, k_stride_d, batch, q_heads, k_heads, seq_len,
           head_dim, rot_dim, q_eps, k_eps);
+}
+
+template <typename T>
+void launch_rope_sincos_positions(const void *positions, const void *inv_freq,
+                                  void *cos_out, void *sin_out, const int rows,
+                                  const int width, int64_t stream) {
+  if (rows <= 0 || width <= 0) {
+    return;
+  }
+
+  constexpr int block = 256;
+  const int64_t elements = static_cast<int64_t>(rows) * width;
+  const int grid = static_cast<int>((elements + block - 1) / block);
+  const cudaStream_t custream = (cudaStream_t)stream;
+  rope_sincos_positions_kernel<T><<<grid, block, 0, custream>>>(
+      reinterpret_cast<const uint32_t *>(positions),
+      reinterpret_cast<const float *>(inv_freq), reinterpret_cast<T *>(cos_out),
+      reinterpret_cast<T *>(sin_out), width, elements);
 }
 
 template <typename T, bool IS_NEOX>
@@ -414,26 +471,30 @@ extern "C" void qk_rms_norm_rope(
     const int64_t k_stride_s, const int64_t k_stride_d, const int batch,
     const int q_heads, const int k_heads, const int seq_len, const int head_dim,
     const int rot_dim, const int cos_batch_stride, const float q_eps,
-    const float k_eps, const int is_neox, const int dtype, int64_t stream) {
+    const float k_eps, const int is_neox, const int dtype,
+    const int output_token_major, int64_t stream) {
   if (is_neox) {
     if (dtype == 0) {
       launch_qk_rms_norm_rope<__half, true>(
           q, k, q_weight, k_weight, cos, sin, q_out, k_out, q_stride_b,
           q_stride_h, q_stride_s, q_stride_d, k_stride_b, k_stride_h,
           k_stride_s, k_stride_d, batch, q_heads, k_heads, seq_len, head_dim,
-          rot_dim, cos_batch_stride, q_eps, k_eps, stream);
+          rot_dim, cos_batch_stride, q_eps, k_eps, output_token_major != 0,
+          stream);
     } else if (dtype == 1) {
       launch_qk_rms_norm_rope<__nv_bfloat16, true>(
           q, k, q_weight, k_weight, cos, sin, q_out, k_out, q_stride_b,
           q_stride_h, q_stride_s, q_stride_d, k_stride_b, k_stride_h,
           k_stride_s, k_stride_d, batch, q_heads, k_heads, seq_len, head_dim,
-          rot_dim, cos_batch_stride, q_eps, k_eps, stream);
+          rot_dim, cos_batch_stride, q_eps, k_eps, output_token_major != 0,
+          stream);
     } else if (dtype == 2) {
       launch_qk_rms_norm_rope<float, true>(
           q, k, q_weight, k_weight, cos, sin, q_out, k_out, q_stride_b,
           q_stride_h, q_stride_s, q_stride_d, k_stride_b, k_stride_h,
           k_stride_s, k_stride_d, batch, q_heads, k_heads, seq_len, head_dim,
-          rot_dim, cos_batch_stride, q_eps, k_eps, stream);
+          rot_dim, cos_batch_stride, q_eps, k_eps, output_token_major != 0,
+          stream);
     }
   } else {
     if (dtype == 0) {
@@ -441,19 +502,22 @@ extern "C" void qk_rms_norm_rope(
           q, k, q_weight, k_weight, cos, sin, q_out, k_out, q_stride_b,
           q_stride_h, q_stride_s, q_stride_d, k_stride_b, k_stride_h,
           k_stride_s, k_stride_d, batch, q_heads, k_heads, seq_len, head_dim,
-          rot_dim, cos_batch_stride, q_eps, k_eps, stream);
+          rot_dim, cos_batch_stride, q_eps, k_eps, output_token_major != 0,
+          stream);
     } else if (dtype == 1) {
       launch_qk_rms_norm_rope<__nv_bfloat16, false>(
           q, k, q_weight, k_weight, cos, sin, q_out, k_out, q_stride_b,
           q_stride_h, q_stride_s, q_stride_d, k_stride_b, k_stride_h,
           k_stride_s, k_stride_d, batch, q_heads, k_heads, seq_len, head_dim,
-          rot_dim, cos_batch_stride, q_eps, k_eps, stream);
+          rot_dim, cos_batch_stride, q_eps, k_eps, output_token_major != 0,
+          stream);
     } else if (dtype == 2) {
       launch_qk_rms_norm_rope<float, false>(
           q, k, q_weight, k_weight, cos, sin, q_out, k_out, q_stride_b,
           q_stride_h, q_stride_s, q_stride_d, k_stride_b, k_stride_h,
           k_stride_s, k_stride_d, batch, q_heads, k_heads, seq_len, head_dim,
-          rot_dim, cos_batch_stride, q_eps, k_eps, stream);
+          rot_dim, cos_batch_stride, q_eps, k_eps, output_token_major != 0,
+          stream);
     }
   }
 }
@@ -508,6 +572,23 @@ extern "C" void qk_rms_norm_rope_positions(
           k_stride_h, k_stride_s, k_stride_d, batch, q_heads, k_heads, seq_len,
           head_dim, rot_dim, q_eps, k_eps, stream);
     }
+  }
+}
+
+extern "C" void rope_sincos_positions(const void *positions,
+                                       const void *inv_freq, void *cos_out,
+                                       void *sin_out, const int rows,
+                                       const int width, const int dtype,
+                                       int64_t stream) {
+  if (dtype == 0) {
+    launch_rope_sincos_positions<__half>(positions, inv_freq, cos_out, sin_out,
+                                         rows, width, stream);
+  } else if (dtype == 1) {
+    launch_rope_sincos_positions<__nv_bfloat16>(
+        positions, inv_freq, cos_out, sin_out, rows, width, stream);
+  } else if (dtype == 2) {
+    launch_rope_sincos_positions<float>(positions, inv_freq, cos_out, sin_out,
+                                        rows, width, stream);
   }
 }
 

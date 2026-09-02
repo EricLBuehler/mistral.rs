@@ -16,7 +16,7 @@ curl http://localhost:1234/v1/chat/completions -H "Content-Type: application/jso
 }'
 ```
 
-If a request sets no `temperature`, decoding is greedy: the most likely token is always picked and the probability filters below never run.
+Fields a request leaves unset fall back to the model's `generation_config.json` (temperature, top-k, top-p, min-p, repetition penalty). Without such defaults the engine samples at temperature 1.0 with no filters. Send `temperature: 0` (or `top_k: 1`) for greedy decoding.
 
 ## Application order
 
@@ -139,4 +139,4 @@ let request = RequestBuilder::new()
 
 ## Seeds
 
-The random seed is set at engine startup, not per request: `--seed` on the CLI, `seed=` on the Python `Runner`. With the same seed, prompt, and parameters, output is reproducible.
+The engine-wide random seed is set with `--seed` on the CLI or `seed=` on the Python `Runner`. OpenAI-compatible generation requests can instead provide `seed` for a deterministic request-scoped stream. Each choice in an `n > 1` request receives a distinct deterministic stream.

@@ -54,6 +54,8 @@ pub struct ModelBuilder {
     pub(crate) tokenizer_json: Option<String>,
     pub(crate) device_mapping: Option<DeviceMapSetting>,
     pub(crate) hf_cache_path: Option<PathBuf>,
+    pub(crate) hf_config_overrides: Option<HfConfigOverrides>,
+    pub(crate) max_model_len: Option<usize>,
     pub(crate) search_embedding_model: Option<SearchEmbeddingModel>,
     pub(crate) search_callback: Option<Arc<SearchCallback>>,
     pub(crate) tool_callbacks: HashMap<String, ToolCallbackWithTool>,
@@ -79,6 +81,7 @@ pub struct ModelBuilder {
     pub(crate) mcp_client_config: Option<McpClientConfig>,
     pub(crate) code_exec_config: Option<mistralrs_core::CodeExecutionConfig>,
     pub(crate) shell_config: Option<mistralrs_core::ShellConfig>,
+    pub(crate) encoder_cache_memory_bytes: Option<usize>,
 }
 
 impl ModelBuilder {
@@ -113,6 +116,8 @@ impl ModelBuilder {
             jinja_explicit: None,
             throughput_logging: false,
             hf_cache_path: None,
+            hf_config_overrides: None,
+            max_model_len: None,
             search_embedding_model: None,
             search_callback: None,
             tool_callbacks: HashMap::new(),
@@ -126,6 +131,7 @@ impl ModelBuilder {
             mcp_client_config: None,
             code_exec_config: None,
             shell_config: None,
+            encoder_cache_memory_bytes: None,
         }
     }
 
@@ -161,6 +167,28 @@ impl ModelBuilder {
     /// Only applies to multimodal models that support this (e.g., Qwen2-VL, Idefics 2).
     pub fn with_max_edge(mut self, max_edge: u32) -> Self {
         self.max_edge = Some(max_edge);
+        self
+    }
+
+    /// Set recursively merged Hugging Face config.json overrides.
+    pub fn with_hf_config_overrides(mut self, overrides: HfConfigOverrides) -> Self {
+        self.hf_config_overrides = Some(overrides);
+        self
+    }
+
+    /// Set the runtime model context length.
+    pub fn with_max_model_len(mut self, max_model_len: usize) -> Self {
+        assert!(max_model_len > 0, "maximum model length must be nonzero");
+        self.max_model_len = Some(max_model_len);
+        self
+    }
+
+    pub fn with_encoder_cache_memory_bytes(mut self, max_bytes: usize) -> Self {
+        assert!(
+            max_bytes > 0,
+            "encoder cache memory capacity must be nonzero"
+        );
+        self.encoder_cache_memory_bytes = Some(max_bytes);
         self
     }
 
