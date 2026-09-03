@@ -965,7 +965,7 @@ impl MLlamaTextModel {
         hidden_states = hidden_states.to_device(&self.device)?;
         hidden_states = self.norm.forward(&hidden_states)?;
 
-        hidden_states = self.lm_head.forward(&ctx.logits(&hidden_states)?)?;
+        hidden_states = ctx.lm_head(&*self.lm_head, &ctx.logits(&hidden_states)?)?;
 
         Ok(hidden_states)
     }

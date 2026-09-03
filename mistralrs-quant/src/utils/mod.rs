@@ -11,8 +11,10 @@ pub use ops::flash_attn_sinks_varlen_metal;
 pub(crate) use ops::fused_glu_quantized_bf16;
 #[cfg(all(
     feature = "cuda",
-    has_cutlass_fp8_sm90_kernels,
-    has_deepgemm_fp8_sm90_provider
+    any(
+        all(has_cutlass_fp8_sm90_kernels, has_deepgemm_fp8_sm90_provider),
+        all(has_blockwise_fp8_kernels, feature = "cutile")
+    )
 ))]
 pub(crate) use ops::fused_split_glu_quantized_bf16;
 #[cfg(feature = "cuda")]

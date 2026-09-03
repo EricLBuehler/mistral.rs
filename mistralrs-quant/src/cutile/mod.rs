@@ -1,11 +1,20 @@
 //! cuTile CUDA kernels, launch wrappers, and JIT warmup.
 
 pub mod context;
+mod fp8_gemm;
 mod fused_moe;
+mod gdn_prefill;
 mod routed_lora;
 mod warmup;
 
+pub use fp8_gemm::{
+    cutile_fp8_gemm, fp8_gemm_supported, register_fp8_gemm_shape, FP8_GEMM_BLOCK_ROWS,
+};
 pub use fused_moe::{cutile_grouped_gemm, register_moe_shape};
+pub use gdn_prefill::{
+    cutile_gdn_prefill, gdn_prefill_supported, GdnPrefillArgs, GDN_PREFILL_CHUNK,
+    GDN_PREFILL_HEAD_DIM,
+};
 pub use routed_lora::{
     cached_cutile_routed_lora_config, cutile_routed_lora_candidate_configs,
     selected_cutile_routed_lora_config, set_cutile_routed_lora_tuned_config,
@@ -60,6 +69,19 @@ pub fn device_compute_capability(dev: &candle_core::CudaDevice) -> (i32, i32) {
 
 pub fn device_compute_major(dev: &candle_core::CudaDevice) -> i32 {
     device_compute_capability(dev).0
+}
+
+pub fn device_multiprocessor_count(dev: &candle_core::CudaDevice) -> usize {
+    use candle_core::cuda::cudarc::driver::{result, sys};
+    let cu_device = dev.cuda_stream().context().cu_device();
+    let count = unsafe {
+        result::device::get_attribute(
+            cu_device,
+            sys::CUdevice_attribute::CU_DEVICE_ATTRIBUTE_MULTIPROCESSOR_COUNT,
+        )
+    }
+    .unwrap_or(1);
+    usize::try_from(count).unwrap_or(1).max(1)
 }
 
 pub fn device_supported(dev: &candle_core::CudaDevice) -> bool {

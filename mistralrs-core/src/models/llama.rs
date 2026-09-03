@@ -514,7 +514,7 @@ impl Llama {
         let x = x.to_device(&self.device)?;
         let x = self.ln_f.forward(&x)?;
         let x = ctx.logits(&x)?;
-        self.lm_head.forward(&x)
+        ctx.lm_head(&*self.lm_head, &x)
     }
 
     pub fn residual_tensors_m(&self, uvb_m: UnVarBuilder) -> Vec<(String, Tensor)> {

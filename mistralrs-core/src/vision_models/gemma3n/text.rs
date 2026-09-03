@@ -1918,7 +1918,7 @@ impl TextModel {
         } else {
             ctx.logits(&xs)?
         };
-        xs = self.lm_head.forward(&xs)?;
+        xs = ctx.lm_head(&*self.lm_head, &xs)?;
 
         if let Some(final_logit_softcapping) = self.final_logit_softcapping {
             let dtype = xs.dtype();

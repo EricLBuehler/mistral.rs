@@ -1035,7 +1035,7 @@ impl DeepSeekV3 {
         let xs = xs.to_device(&self.device)?;
         let xs = xs.apply(&self.norm)?;
         let xs = ctx.logits(&xs)?;
-        self.lm_head.forward(&xs)
+        ctx.lm_head(&*self.lm_head, &xs)
     }
 }
 

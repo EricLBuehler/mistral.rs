@@ -216,6 +216,7 @@ fn main() -> Result<(), String> {
                 "marlin_*.cu",
                 "*_fp8.cu",
                 "*_fp8_gemm.cu",
+                "*_fp8_mma.cu",
                 "*_wmma.cu",
                 "moe_data.cu",
                 "grouped_mm_*.cu",
