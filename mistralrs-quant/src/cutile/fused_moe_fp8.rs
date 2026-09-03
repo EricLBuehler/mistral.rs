@@ -398,14 +398,16 @@ pub fn fp8_moe_supported(dev: &CudaDevice, hidden: usize, inter: usize) -> bool 
 }
 
 // Measured on GB10 (see the tile sweep test): 64x64 tiles with a 16-row group swizzle run the
-// 4k-token regime 1.5x faster than 128x128, while below ~96 tokens thin 16-row tiles lose nothing.
+// 4k-token regime 1.5x faster than 128x128; below ~96 tokens the kernel is HBM-bound on expert
+// slabs, where thin 16x64 tiles with a small swizzle are never slower and 8% faster when a batch
+// of similar prompts piles 32 rows onto the same experts.
 fn fp8_config(m: usize, _num_experts: usize) -> MoeTileConfig {
     let small = m <= 96;
     MoeTileConfig {
         bm: if small { 16 } else { 64 },
-        bn: if small { 128 } else { 64 },
+        bn: 64,
         bk: FP8_MOE_GROUP as i32,
-        group_m: if small { 1 } else { 16 },
+        group_m: if small { 8 } else { 16 },
     }
 }
 
@@ -799,22 +801,41 @@ mod tests {
         let Device::Cuda(cuda) = &dev else {
             unreachable!()
         };
-        let gate_up = Tensor::zeros((experts, 2 * inter, hidden), DType::F8E4M3, &dev)?;
-        let gate_up_scales = Tensor::ones(
-            (experts, 2 * inter / FP8_MOE_GROUP, hidden / FP8_MOE_GROUP),
-            DType::F32,
-            &dev,
-        )?;
-        let down = Tensor::zeros((experts, hidden, inter), DType::F8E4M3, &dev)?;
-        let down_scales = Tensor::ones(
-            (experts, hidden / FP8_MOE_GROUP, inter / FP8_MOE_GROUP),
-            DType::F32,
-            &dev,
-        )?;
+        // CUTILE_MOE_TUNE_LAYERS distinct weight sets rotate per iteration so decode-sized runs read cold from HBM
+        let layers: usize = std::env::var("CUTILE_MOE_TUNE_LAYERS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(1)
+            .max(1);
+        let weights = (0..layers)
+            .map(|_| -> Result<_> {
+                let gate_up = Tensor::zeros((experts, 2 * inter, hidden), DType::F8E4M3, &dev)?;
+                let gate_up_scales = Tensor::ones(
+                    (experts, 2 * inter / FP8_MOE_GROUP, hidden / FP8_MOE_GROUP),
+                    DType::F32,
+                    &dev,
+                )?;
+                let down = Tensor::zeros((experts, hidden, inter), DType::F8E4M3, &dev)?;
+                let down_scales = Tensor::ones(
+                    (experts, hidden / FP8_MOE_GROUP, inter / FP8_MOE_GROUP),
+                    DType::F32,
+                    &dev,
+                )?;
+                Ok((gate_up, gate_up_scales, down, down_scales))
+            })
+            .collect::<Result<Vec<_>>>()?;
         let num_valid = tokens * top_k;
-        // pseudo-random routing with mild imbalance, like real traffic
+        // pseudo-random routing with mild imbalance, like real traffic; CUTILE_MOE_TUNE_HOT routes every
+        // token to the same top_k experts, like a batch of identical greedy prompts
+        let hot = std::env::var("CUTILE_MOE_TUNE_HOT").is_ok();
         let ids: Vec<u32> = (0..num_valid)
-            .map(|i| (((i * 2654435761usize) >> 7) % experts) as u32)
+            .map(|i| {
+                if hot {
+                    (i % top_k) as u32
+                } else {
+                    (((i * 2654435761usize) >> 7) % experts) as u32
+                }
+            })
             .collect();
         let mut topk_ids = unsafe { cuda.alloc::<u32>(num_valid)? };
         cuda.memcpy_htod(&ids, &mut topk_ids)?;
@@ -835,8 +856,15 @@ mod tests {
             (64, 64, 16),
             (64, 64, 32),
             (32, 64, 8),
+            (32, 128, 1),
+            (32, 128, 8),
+            (32, 128, 16),
             (16, 64, 8),
+            (16, 64, 16),
             (16, 128, 1),
+            (16, 128, 8),
+            (16, 128, 16),
+            (16, 128, 32),
         ] {
             let cfg = MoeTileConfig {
                 bm,
@@ -846,12 +874,27 @@ mod tests {
             };
             let (sids, eids, ntpp, em) =
                 moe_align(&topk_ids, tokens, experts, top_k, cfg.bm, cuda)?;
-            let run = |compile_only: bool| -> Result<()> {
+            // CUTILE_MOE_TUNE_TIGHT_EM sizes the grid from the actual padded row count instead of the
+            // graph-capturable worst case, to measure what the empty tiles cost
+            let em = if std::env::var("CUTILE_MOE_TUNE_TIGHT_EM").is_ok() {
+                let mut ids = vec![0u32; num_valid];
+                cuda.memcpy_dtoh(&topk_ids, &mut ids)?;
+                let mut counts = vec![0usize; experts];
+                for id in ids {
+                    counts[id as usize] += 1;
+                }
+                let bm = cfg.bm as usize;
+                counts.iter().map(|c| c.div_ceil(bm) * bm).sum::<usize>()
+            } else {
+                em
+            };
+            let run = |compile_only: bool, layer: usize| -> Result<()> {
+                let (gate_up, gate_up_scales, down, down_scales) = &weights[layer];
                 grouped_gemm_fp8(
                     &a1,
                     &a1_scales,
-                    &gate_up,
-                    &gate_up_scales,
+                    gate_up,
+                    gate_up_scales,
                     &sids,
                     &eids,
                     &ntpp,
@@ -867,8 +910,8 @@ mod tests {
                 grouped_gemm_fp8(
                     &a2,
                     &a2_scales,
-                    &down,
-                    &down_scales,
+                    down,
+                    down_scales,
                     &sids,
                     &eids,
                     &ntpp,
@@ -883,13 +926,13 @@ mod tests {
                 )?;
                 Ok(())
             };
-            run(true)?;
-            run(false)?;
+            run(true, 0)?;
+            run(false, 0)?;
             dev.synchronize()?;
-            let iters = 10;
+            let iters = 10 * layers;
             let start = std::time::Instant::now();
-            for _ in 0..iters {
-                run(false)?;
+            for i in 0..iters {
+                run(false, i % layers)?;
             }
             dev.synchronize()?;
             let ms = start.elapsed().as_secs_f64() * 1e3 / iters as f64;
