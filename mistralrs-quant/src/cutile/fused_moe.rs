@@ -15,8 +15,12 @@ use std::sync::{Mutex, OnceLock};
 use crate::moe::cuda::{moe_align, moe_align_em};
 use crate::utils::{slice_ptr_mut_on_stream, slice_ptr_on_stream};
 
+use super::tune::{
+    buckets_from_breakpoints, tune, Bucket, TuneMode, TuneRequest, TuneRouting, TunedTable,
+    HOT_ROUTING_TOKENS, TUNE_ITERS, TUNE_WEIGHT_SETS,
+};
 use super::warmup::CutileKernel;
-use super::{catch_cutile_panic, context, get_default_config, MoeTileConfig};
+use super::{catch_cutile_panic, context, get_default_config, MoeShapeKey, MoeTileConfig};
 
 #[cutile::module]
 pub mod fused_moe {
@@ -442,31 +446,166 @@ struct MoeWarmupEntry {
     inter: usize,
 }
 
-static MOE_SHAPES: OnceLock<Mutex<Vec<MoeWarmupEntry>>> = OnceLock::new();
+impl MoeWarmupEntry {
+    fn shape_key(&self) -> MoeShapeKey {
+        MoeShapeKey {
+            hidden: self.hidden,
+            inter: self.inter,
+            num_experts: self.num_experts,
+            top_k: self.top_k,
+        }
+    }
+}
 
-/// Register a model's MoE weights so warmup compiles the exact kernel keys hit at inference.
-/// Deduped by (hidden, inter, num_experts, top_k); weights are Arc clones, not copies.
+static MOE_SHAPES: OnceLock<Mutex<Vec<Vec<MoeWarmupEntry>>>> = OnceLock::new();
+
+/// Register a model's MoE weights so warmup tunes and compiles the exact kernel keys hit at
+/// inference. Grouped by (hidden, inter, num_experts, top_k), keeping up to `TUNE_WEIGHT_SETS`
+/// layers per shape; weights are Arc clones, not copies.
 pub fn register_moe_shape(gate_up_w: Tensor, down_w: Tensor, num_experts: usize, top_k: usize) {
     let (Ok(hidden), Ok(inter)) = (gate_up_w.dim(2), down_w.dim(2)) else {
         return;
     };
-    let mut shapes = MOE_SHAPES
-        .get_or_init(|| Mutex::new(Vec::new()))
-        .lock()
-        .unwrap();
-    if shapes.iter().any(|e| {
-        e.hidden == hidden && e.inter == inter && e.num_experts == num_experts && e.top_k == top_k
-    }) {
-        return;
-    }
-    shapes.push(MoeWarmupEntry {
+    let entry = MoeWarmupEntry {
         gate_up_w,
         down_w,
         num_experts,
         top_k,
         hidden,
         inter,
-    });
+    };
+    let mut shapes = MOE_SHAPES
+        .get_or_init(|| Mutex::new(Vec::new()))
+        .lock()
+        .unwrap();
+    let key = entry.shape_key();
+    if let Some(sets) = shapes.iter_mut().find(|sets| sets[0].shape_key() == key) {
+        if sets.len() < TUNE_WEIGHT_SETS {
+            sets.push(entry);
+        }
+        return;
+    }
+    shapes.push(vec![entry]);
+}
+
+const TUNE_KERNEL: &str = "fused_moe";
+/// Bump when the kernel or the candidate lists change so cached winners are re-measured.
+const TUNE_VERSION: u32 = 1;
+/// Token counts where `get_default_config` changes tiles; `group_m` flips once m reaches 129*E.
+const POLICY_BREAKPOINTS: [usize; 4] = [32, 64, 96, 512];
+const GROUP_M_TOKENS_PER_EXPERT: usize = 129;
+/// Prefill-sized buckets are timed at one chunk of a long prompt rather than at their upper end.
+const PREFILL_PROBE_TOKENS: usize = 4096;
+
+static TUNED: TunedTable<MoeShapeKey, MoeTileConfig> = TunedTable::new();
+
+fn bf16_config(m: usize, shape: MoeShapeKey) -> MoeTileConfig {
+    TUNED
+        .get(shape, m)
+        .unwrap_or_else(|| get_default_config(m, shape.num_experts))
+}
+
+fn bf16_buckets(num_experts: usize) -> Vec<Bucket> {
+    let mut breakpoints = POLICY_BREAKPOINTS.to_vec();
+    breakpoints.push(GROUP_M_TOKENS_PER_EXPERT * num_experts.max(1) - 1);
+    buckets_from_breakpoints(&breakpoints, PREFILL_PROBE_TOKENS, PREFILL_PROBE_TOKENS)
+}
+
+fn bf16_candidates(bucket: Bucket) -> Vec<MoeTileConfig> {
+    let tiles: &[(i32, i32, i32, i32)] = if bucket.upper <= HOT_ROUTING_TOKENS {
+        &[
+            (16, 64, 128, 8),
+            (16, 128, 128, 1),
+            (32, 64, 128, 8),
+            (32, 128, 128, 1),
+        ]
+    } else {
+        &[
+            (64, 64, 64, 16),
+            (64, 128, 64, 16),
+            (128, 128, 64, 16),
+            (128, 128, 64, 1),
+            (64, 64, 128, 8),
+            (64, 128, 128, 8),
+            (128, 64, 64, 8),
+        ]
+    };
+    tiles
+        .iter()
+        .map(|&(bm, bn, bk, group_m)| MoeTileConfig {
+            bm,
+            bn,
+            bk,
+            group_m,
+        })
+        .collect()
+}
+
+/// Milliseconds for both grouped GEMMs at `m` tokens with `cfg`, rotating through `sets`.
+fn time_bf16_config(
+    dev: &CudaDevice,
+    sets: &[MoeWarmupEntry],
+    m: usize,
+    cfg: MoeTileConfig,
+    routing: TuneRouting,
+) -> Result<f64> {
+    let device = Device::Cuda(dev.clone());
+    let first = &sets[0];
+    let (experts, top_k) = (first.num_experts, first.top_k);
+    let num_valid = m * top_k;
+    let ids = routing.expert_ids(m, top_k, experts);
+    let mut topk_ids = unsafe { dev.alloc::<u32>(num_valid)? };
+    dev.memcpy_htod(&ids, &mut topk_ids)?;
+    let (sids, eids, ntpp, em) = moe_align(&topk_ids, m, experts, top_k, cfg.bm, dev)?;
+    let a1 = Tensor::zeros((m, first.hidden), DType::BF16, &device)?;
+    let a2 = Tensor::zeros((num_valid, first.inter), DType::BF16, &device)?;
+    let mut tw = unsafe { dev.alloc::<f32>(num_valid)? };
+    dev.memcpy_htod(&vec![0f32; num_valid], &mut tw)?;
+    let run = |compile_only: bool, w: &MoeWarmupEntry| -> Result<()> {
+        cutile_grouped_gemm_inner(
+            &a1,
+            &w.gate_up_w,
+            &sids,
+            &eids,
+            &ntpp,
+            None,
+            em,
+            num_valid,
+            top_k,
+            false,
+            cfg,
+            dev,
+            compile_only,
+        )?;
+        cutile_grouped_gemm_inner(
+            &a2,
+            &w.down_w,
+            &sids,
+            &eids,
+            &ntpp,
+            Some(&tw),
+            em,
+            num_valid,
+            1,
+            true,
+            cfg,
+            dev,
+            compile_only,
+        )?;
+        Ok(())
+    };
+    run(true, first)?;
+    for w in sets {
+        run(false, w)?;
+    }
+    device.synchronize()?;
+    let iters = TUNE_ITERS * sets.len();
+    let start = std::time::Instant::now();
+    for i in 0..iters {
+        run(false, &sets[i % sets.len()])?;
+    }
+    device.synchronize()?;
+    Ok(start.elapsed().as_secs_f64() * 1e3 / iters as f64)
 }
 
 fn div_hint_class(x: i32) -> i32 {
@@ -494,14 +633,16 @@ fn div_hint_class(x: i32) -> i32 {
 // Full specialization is kept rather than collapsed to one kernel (CompileOptions::max_divisibility(1)),
 // which would also drop the pointer-alignment vectorization.
 fn warmup_token_counts(entry: &MoeWarmupEntry) -> Vec<usize> {
-    warmup_token_counts_for(entry.num_experts, entry.top_k, get_default_config)
+    let key = entry.shape_key();
+    warmup_token_counts_for(entry.num_experts, entry.top_k, |m| bf16_config(m, key))
 }
 
-/// The same closed key enumeration for any tile-config policy (the FP8 kernel pins BK).
+/// The same closed key enumeration for any tile-config policy that only changes at the
+/// breakpoints above (the FP8 kernel pins BK; tuned tables keep the breakpoints).
 pub(super) fn warmup_token_counts_for(
     num_experts: usize,
     top_k: usize,
-    config: fn(usize, usize) -> MoeTileConfig,
+    config: impl Fn(usize) -> MoeTileConfig,
 ) -> Vec<usize> {
     let e = num_experts.max(1);
     let k = top_k;
@@ -526,7 +667,7 @@ pub(super) fn warmup_token_counts_for(
     let mut seen = HashSet::new();
     let mut reps = Vec::new();
     for m in probes {
-        let cfg = config(m, e);
+        let cfg = config(m);
         let em = moe_align_em(m, k, e, cfg.bm as usize);
         // sig mirrors the cuTile cache key for this launch, so distinct sigs == distinct kernels.
         let sig = (
@@ -545,17 +686,36 @@ pub(super) fn warmup_token_counts_for(
 }
 
 fn warmup_moe_kernels_uncached(dev: &CudaDevice) -> Result<()> {
-    let entries: Vec<MoeWarmupEntry> = MOE_SHAPES
+    let shapes: Vec<Vec<MoeWarmupEntry>> = MOE_SHAPES
         .get_or_init(|| Mutex::new(Vec::new()))
         .lock()
         .unwrap()
         .clone();
-    if entries.is_empty() {
+    if shapes.is_empty() {
         return Ok(());
     }
-    let plan: Vec<(MoeWarmupEntry, Vec<usize>)> = entries
+    let mode = TuneMode::from_env();
+    for sets in &shapes {
+        let key = sets[0].shape_key();
+        let buckets = bf16_buckets(key.num_experts);
+        let fallback = |m: usize| get_default_config(m, key.num_experts);
+        let request = TuneRequest {
+            kernel: TUNE_KERNEL,
+            version: TUNE_VERSION,
+            shape: key.to_string(),
+            buckets: &buckets,
+            fallback: &fallback,
+            candidates: &bf16_candidates,
+        };
+        let tuned = tune(dev, mode, &request, |m, cfg| {
+            time_bf16_config(dev, sets, m, cfg, TuneRouting::for_tokens(m))
+        });
+        TUNED.set(key, &tuned);
+    }
+    let plan: Vec<(MoeWarmupEntry, Vec<usize>)> = shapes
         .into_iter()
-        .map(|e| {
+        .map(|sets| {
+            let e = sets[0].clone();
             let ms = warmup_token_counts(&e);
             (e, ms)
         })
@@ -592,7 +752,7 @@ fn warmup_shape(dev: &CudaDevice, entry: &MoeWarmupEntry, m: usize) -> Result<()
     let topk = entry.top_k;
     let num_experts = entry.num_experts;
     let num_valid = m * topk;
-    let cfg = get_default_config(m, num_experts);
+    let cfg = bf16_config(m, entry.shape_key());
 
     let topk_ids_host = vec![0u32; num_valid];
     let mut topk_ids = unsafe { dev.alloc::<u32>(num_valid)? };

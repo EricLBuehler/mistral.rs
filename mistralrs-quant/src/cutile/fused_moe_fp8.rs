@@ -19,8 +19,11 @@ use crate::utils::{fused_split_glu_quantized_bf16, slice_ptr_mut_on_stream, slic
 use crate::GluActivationType;
 
 use super::fused_moe::warmup_token_counts_for;
+use super::tune::{
+    tune, Bucket, TuneMode, TuneRequest, TuneRouting, TunedTable, TUNE_ITERS, TUNE_WEIGHT_SETS,
+};
 use super::warmup::CutileKernel;
-use super::{catch_cutile_panic, context, MoeTileConfig};
+use super::{catch_cutile_panic, context, MoeShapeKey, MoeTileConfig};
 
 /// Scale group along K and N; the kernel steps K one group at a time so every partial product is
 /// scaled by a single (row, group) pair before it joins the accumulator.
@@ -388,6 +391,15 @@ impl CutileFp8MoeWeights {
     pub fn inter(&self) -> usize {
         self.down.dim(2).expect("validated at construction")
     }
+
+    pub fn shape_key(&self) -> MoeShapeKey {
+        MoeShapeKey {
+            hidden: self.hidden(),
+            inter: self.inter(),
+            num_experts: self.num_experts,
+            top_k: self.top_k,
+        }
+    }
 }
 
 /// Whether this device and expert shape can run the cuTile FP8 MoE.
@@ -397,18 +409,156 @@ pub fn fp8_moe_supported(dev: &CudaDevice, hidden: usize, inter: usize) -> bool 
         && inter.is_multiple_of(FP8_MOE_GROUP)
 }
 
+const TUNE_KERNEL: &str = "fused_moe_fp8";
+/// Bump when the kernel or the candidate lists change so cached winners are re-measured.
+const TUNE_VERSION: u32 = 1;
+/// Token counts where the launch policy may change; the warmup key enumeration probes around them.
+const DECODE_TOKENS: usize = 96;
+const CHUNK_TOKENS: usize = 512;
+/// Decode is timed at a serving-sized batch, prefill at a full chunk of a long prompt.
+const DECODE_PROBE_TOKENS: usize = 32;
+const PREFILL_PROBE_TOKENS: usize = 4096;
+static TUNED: TunedTable<MoeShapeKey, MoeTileConfig> = TunedTable::new();
+
 // Measured on GB10 (see the tile sweep test): 64x64 tiles with a 16-row group swizzle run the
 // 4k-token regime 1.5x faster than 128x128; below ~96 tokens the kernel is HBM-bound on expert
 // slabs, where thin 16x64 tiles with a small swizzle are never slower and 8% faster when a batch
 // of similar prompts piles 32 rows onto the same experts.
-fn fp8_config(m: usize, _num_experts: usize) -> MoeTileConfig {
-    let small = m <= 96;
+fn fp8_policy(m: usize) -> MoeTileConfig {
+    let small = m <= DECODE_TOKENS;
     MoeTileConfig {
         bm: if small { 16 } else { 64 },
         bn: 64,
         bk: FP8_MOE_GROUP as i32,
         group_m: if small { 8 } else { 16 },
     }
+}
+
+fn fp8_config(m: usize, shape: MoeShapeKey) -> MoeTileConfig {
+    TUNED.get(shape, m).unwrap_or_else(|| fp8_policy(m))
+}
+
+fn fp8_buckets() -> [Bucket; 3] {
+    [
+        Bucket {
+            upper: DECODE_TOKENS,
+            probe: DECODE_PROBE_TOKENS,
+        },
+        Bucket {
+            upper: CHUNK_TOKENS,
+            probe: CHUNK_TOKENS,
+        },
+        Bucket {
+            upper: usize::MAX,
+            probe: PREFILL_PROBE_TOKENS,
+        },
+    ]
+}
+
+fn fp8_candidates(bucket: Bucket) -> Vec<MoeTileConfig> {
+    let tiles: &[(i32, i32, i32)] = if bucket.upper <= DECODE_TOKENS {
+        &[
+            (16, 64, 8),
+            (16, 64, 16),
+            (16, 128, 1),
+            (16, 128, 8),
+            (32, 64, 8),
+        ]
+    } else {
+        &[
+            (64, 64, 16),
+            (64, 64, 8),
+            (64, 64, 32),
+            (64, 128, 8),
+            (128, 64, 8),
+            (32, 64, 8),
+        ]
+    };
+    tiles
+        .iter()
+        .map(|&(bm, bn, group_m)| MoeTileConfig {
+            bm,
+            bn,
+            bk: FP8_MOE_GROUP as i32,
+            group_m,
+        })
+        .collect()
+}
+
+/// Milliseconds for both grouped GEMMs at `m` tokens with `cfg`, rotating through `sets`.
+pub(super) fn time_fp8_config(
+    dev: &CudaDevice,
+    sets: &[CutileFp8MoeWeights],
+    m: usize,
+    cfg: MoeTileConfig,
+    routing: TuneRouting,
+) -> Result<f64> {
+    let device = Device::Cuda(dev.clone());
+    let first = &sets[0];
+    let (hidden, inter) = (first.hidden(), first.inter());
+    let (experts, top_k) = (first.num_experts, first.top_k);
+    let num_valid = m * top_k;
+    let ids = routing.expert_ids(m, top_k, experts);
+    let mut topk_ids = unsafe { dev.alloc::<u32>(num_valid)? };
+    dev.memcpy_htod(&ids, &mut topk_ids)?;
+    let (sids, eids, ntpp, em) = moe_align(&topk_ids, m, experts, top_k, cfg.bm, dev)?;
+    let token_rows = m.div_ceil(FP8_MOE_GROUP) * FP8_MOE_GROUP;
+    let a1 = Tensor::zeros((token_rows, hidden), DType::F8E4M3, &device)?;
+    let a1_scales = Tensor::zeros((hidden / FP8_MOE_GROUP, token_rows), DType::F32, &device)?;
+    let valid_rows = num_valid.div_ceil(FP8_MOE_GROUP) * FP8_MOE_GROUP;
+    let a2 = Tensor::zeros((valid_rows, inter), DType::F8E4M3, &device)?;
+    let a2_scales = Tensor::zeros((inter / FP8_MOE_GROUP, valid_rows), DType::F32, &device)?;
+    let mut tw = unsafe { dev.alloc::<f32>(num_valid)? };
+    dev.memcpy_htod(&vec![0f32; num_valid], &mut tw)?;
+    let run = |compile_only: bool, w: &CutileFp8MoeWeights| -> Result<()> {
+        grouped_gemm_fp8(
+            &a1,
+            &a1_scales,
+            &w.gate_up,
+            &w.gate_up_scales,
+            &sids,
+            &eids,
+            &ntpp,
+            None,
+            em,
+            num_valid,
+            top_k,
+            false,
+            cfg,
+            dev,
+            compile_only,
+        )?;
+        grouped_gemm_fp8(
+            &a2,
+            &a2_scales,
+            &w.down,
+            &w.down_scales,
+            &sids,
+            &eids,
+            &ntpp,
+            Some(&tw),
+            em,
+            num_valid,
+            1,
+            true,
+            cfg,
+            dev,
+            compile_only,
+        )?;
+        Ok(())
+    };
+    run(true, first)?;
+    for w in sets {
+        run(false, w)?;
+    }
+    device.synchronize()?;
+    let iters = TUNE_ITERS * sets.len();
+    let start = std::time::Instant::now();
+    for i in 0..iters {
+        run(false, &sets[i % sets.len()])?;
+    }
+    device.synchronize()?;
+    Ok(start.elapsed().as_secs_f64() * 1e3 / iters as f64)
 }
 
 /// Routing tensors as contiguous device slices starting at offset zero, as the kernels expect.
@@ -443,7 +593,7 @@ pub fn cutile_fused_moe_fp8(
     if topk_ids.dims2()? != (num_tokens, top_k) || topk_weights.dims2()? != (num_tokens, top_k) {
         candle_core::bail!("cuTile FP8 MoE routing shapes do not match the input")
     }
-    let cfg = fp8_config(num_tokens, weights.num_experts);
+    let cfg = fp8_config(num_tokens, weights.shape_key());
     let topk_ids = routing_slice::<u32>(topk_ids)?;
     let (ids_storage, _) = topk_ids.storage_and_layout();
     let Storage::Cuda(ids_cuda) = &*ids_storage else {
@@ -647,30 +797,30 @@ fn grouped_gemm_fp8(
     )))
 }
 
-static FP8_MOE_SHAPES: OnceLock<Mutex<Vec<CutileFp8MoeWeights>>> = OnceLock::new();
+static FP8_MOE_SHAPES: OnceLock<Mutex<Vec<Vec<CutileFp8MoeWeights>>>> = OnceLock::new();
 
-/// Register a model's FP8 experts so warmup compiles the kernel keys the forward will launch.
+/// Register a model's FP8 experts so warmup tunes and compiles the kernel keys the forward will
+/// launch. Up to `TUNE_WEIGHT_SETS` layers of the same shape are kept as weight handles.
 pub fn register_moe_fp8_shape(weights: &CutileFp8MoeWeights) {
     let mut shapes = FP8_MOE_SHAPES
         .get_or_init(|| Mutex::new(Vec::new()))
         .lock()
         .unwrap();
-    if shapes.iter().any(|w| {
-        w.hidden() == weights.hidden()
-            && w.inter() == weights.inter()
-            && w.num_experts == weights.num_experts
-            && w.top_k == weights.top_k
-    }) {
+    let key = weights.shape_key();
+    if let Some(sets) = shapes.iter_mut().find(|sets| sets[0].shape_key() == key) {
+        if sets.len() < TUNE_WEIGHT_SETS {
+            sets.push(weights.clone());
+        }
         return;
     }
-    shapes.push(weights.clone());
+    shapes.push(vec![weights.clone()]);
 }
 
 fn warmup_shape(dev: &CudaDevice, weights: &CutileFp8MoeWeights, m: usize) -> Result<()> {
     let device = Device::Cuda(dev.clone());
     let top_k = weights.top_k;
     let num_valid = m * top_k;
-    let cfg = fp8_config(m, weights.num_experts);
+    let cfg = fp8_config(m, weights.shape_key());
     let mut topk_ids = unsafe { dev.alloc::<u32>(num_valid)? };
     dev.memcpy_htod(&vec![0u32; num_valid], &mut topk_ids)?;
     let (sids, eids, ntpp, em) = moe_align(&topk_ids, m, weights.num_experts, top_k, cfg.bm, dev)?;
@@ -732,18 +882,37 @@ pub static FUSED_MOE_FP8: FusedMoeFp8Kernel = FusedMoeFp8Kernel;
 
 impl CutileKernel for FusedMoeFp8Kernel {
     fn warm(&self, dev: &CudaDevice) -> Result<()> {
-        let entries: Vec<CutileFp8MoeWeights> = FP8_MOE_SHAPES
+        let shapes: Vec<Vec<CutileFp8MoeWeights>> = FP8_MOE_SHAPES
             .get_or_init(|| Mutex::new(Vec::new()))
             .lock()
             .unwrap()
             .clone();
-        if entries.is_empty() {
+        if shapes.is_empty() {
             return Ok(());
         }
-        let plan: Vec<(CutileFp8MoeWeights, Vec<usize>)> = entries
+        let mode = TuneMode::from_env();
+        let buckets = fp8_buckets();
+        for sets in &shapes {
+            let key = sets[0].shape_key();
+            let request = TuneRequest {
+                kernel: TUNE_KERNEL,
+                version: TUNE_VERSION,
+                shape: key.to_string(),
+                buckets: &buckets,
+                fallback: &fp8_policy,
+                candidates: &fp8_candidates,
+            };
+            let tuned = tune(dev, mode, &request, |m, cfg| {
+                time_fp8_config(dev, sets, m, cfg, TuneRouting::for_tokens(m))
+            });
+            TUNED.set(key, &tuned);
+        }
+        let plan: Vec<(CutileFp8MoeWeights, Vec<usize>)> = shapes
             .into_iter()
-            .map(|w| {
-                let ms = warmup_token_counts_for(w.num_experts, w.top_k, fp8_config);
+            .map(|sets| {
+                let w = sets[0].clone();
+                let key = w.shape_key();
+                let ms = warmup_token_counts_for(w.num_experts, w.top_k, |m| fp8_config(m, key));
                 (w, ms)
             })
             .collect();
@@ -784,31 +953,35 @@ mod tests {
     }
 
     // Times the two grouped GEMMs on real expert shapes per tile config; set CUTILE_MOE_TUNE to
-    // "tokens,hidden,inter,experts,topk" to override the Qwen3-30B-A3B defaults.
+    // "tokens,hidden,inter,experts,topk" to override the Qwen3-30B-A3B defaults, CUTILE_MOE_TUNE_HOT
+    // to route every token to the same experts, and CUTILE_MOE_TUNE_LAYERS to rotate that many
+    // distinct weight sets so decode-sized runs read cold from HBM.
     #[test]
     #[ignore = "benchmark; requires a CUDA device with cuTile support"]
     fn cutile_fused_moe_fp8_tile_sweep() -> Result<()> {
-        use super::{grouped_gemm_fp8, MoeTileConfig};
-        use crate::blockwise_fp8::mma::quantize_activation_padded;
-        use crate::moe::cuda::moe_align;
+        use super::{time_fp8_config, MoeTileConfig, TuneRouting};
 
         let spec: Vec<usize> = std::env::var("CUTILE_MOE_TUNE")
             .ok()
             .map(|v| v.split(',').map(|x| x.parse().unwrap()).collect())
             .unwrap_or_else(|| vec![4096, 2048, 768, 128, 8]);
         let (tokens, hidden, inter, experts, top_k) = (spec[0], spec[1], spec[2], spec[3], spec[4]);
-        let dev = Device::new_cuda(0)?;
-        let Device::Cuda(cuda) = &dev else {
-            unreachable!()
+        let routing = if std::env::var("CUTILE_MOE_TUNE_HOT").is_ok() {
+            TuneRouting::Hot
+        } else {
+            TuneRouting::Spread
         };
-        // CUTILE_MOE_TUNE_LAYERS distinct weight sets rotate per iteration so decode-sized runs read cold from HBM
         let layers: usize = std::env::var("CUTILE_MOE_TUNE_LAYERS")
             .ok()
             .and_then(|v| v.parse().ok())
             .unwrap_or(1)
             .max(1);
-        let weights = (0..layers)
-            .map(|_| -> Result<_> {
+        let dev = Device::new_cuda(0)?;
+        let Device::Cuda(cuda) = &dev else {
+            unreachable!()
+        };
+        let sets = (0..layers)
+            .map(|_| {
                 let gate_up = Tensor::zeros((experts, 2 * inter, hidden), DType::F8E4M3, &dev)?;
                 let gate_up_scales = Tensor::ones(
                     (experts, 2 * inter / FP8_MOE_GROUP, hidden / FP8_MOE_GROUP),
@@ -821,33 +994,10 @@ mod tests {
                     DType::F32,
                     &dev,
                 )?;
-                Ok((gate_up, gate_up_scales, down, down_scales))
+                CutileFp8MoeWeights::new(gate_up, gate_up_scales, down, down_scales, experts, top_k)
             })
             .collect::<Result<Vec<_>>>()?;
-        let num_valid = tokens * top_k;
-        // pseudo-random routing with mild imbalance, like real traffic; CUTILE_MOE_TUNE_HOT routes every
-        // token to the same top_k experts, like a batch of identical greedy prompts
-        let hot = std::env::var("CUTILE_MOE_TUNE_HOT").is_ok();
-        let ids: Vec<u32> = (0..num_valid)
-            .map(|i| {
-                if hot {
-                    (i % top_k) as u32
-                } else {
-                    (((i * 2654435761usize) >> 7) % experts) as u32
-                }
-            })
-            .collect();
-        let mut topk_ids = unsafe { cuda.alloc::<u32>(num_valid)? };
-        cuda.memcpy_htod(&ids, &mut topk_ids)?;
-        let mut tw = unsafe { cuda.alloc::<f32>(num_valid)? };
-        cuda.memcpy_htod(&vec![0.5f32; num_valid], &mut tw)?;
-        let token_rows = tokens.div_ceil(FP8_MOE_GROUP) * FP8_MOE_GROUP;
-        let x = Tensor::zeros((tokens, hidden), DType::BF16, &dev)?;
-        let (a1, a1_scales) = quantize_activation_padded(&x, token_rows)?;
-        let valid_rows = num_valid.div_ceil(FP8_MOE_GROUP) * FP8_MOE_GROUP;
-        let a2 = Tensor::zeros((valid_rows, inter), DType::F8E4M3, &dev)?;
-        let a2_scales = Tensor::ones((inter / FP8_MOE_GROUP, valid_rows), DType::F32, &dev)?;
-        let flops = 2.0 * (num_valid as f64) * (hidden as f64) * (3 * inter) as f64;
+        let flops = 2.0 * (tokens * top_k) as f64 * (hidden as f64) * (3 * inter) as f64;
         for (bm, bn, group_m) in [
             (128, 128, 1),
             (128, 64, 8),
@@ -872,70 +1022,7 @@ mod tests {
                 bk: FP8_MOE_GROUP as i32,
                 group_m,
             };
-            let (sids, eids, ntpp, em) =
-                moe_align(&topk_ids, tokens, experts, top_k, cfg.bm, cuda)?;
-            // CUTILE_MOE_TUNE_TIGHT_EM sizes the grid from the actual padded row count instead of the
-            // graph-capturable worst case, to measure what the empty tiles cost
-            let em = if std::env::var("CUTILE_MOE_TUNE_TIGHT_EM").is_ok() {
-                let mut ids = vec![0u32; num_valid];
-                cuda.memcpy_dtoh(&topk_ids, &mut ids)?;
-                let mut counts = vec![0usize; experts];
-                for id in ids {
-                    counts[id as usize] += 1;
-                }
-                let bm = cfg.bm as usize;
-                counts.iter().map(|c| c.div_ceil(bm) * bm).sum::<usize>()
-            } else {
-                em
-            };
-            let run = |compile_only: bool, layer: usize| -> Result<()> {
-                let (gate_up, gate_up_scales, down, down_scales) = &weights[layer];
-                grouped_gemm_fp8(
-                    &a1,
-                    &a1_scales,
-                    gate_up,
-                    gate_up_scales,
-                    &sids,
-                    &eids,
-                    &ntpp,
-                    None,
-                    em,
-                    num_valid,
-                    top_k,
-                    false,
-                    cfg,
-                    cuda,
-                    compile_only,
-                )?;
-                grouped_gemm_fp8(
-                    &a2,
-                    &a2_scales,
-                    down,
-                    down_scales,
-                    &sids,
-                    &eids,
-                    &ntpp,
-                    Some(&tw),
-                    em,
-                    num_valid,
-                    1,
-                    true,
-                    cfg,
-                    cuda,
-                    compile_only,
-                )?;
-                Ok(())
-            };
-            run(true, 0)?;
-            run(false, 0)?;
-            dev.synchronize()?;
-            let iters = 10 * layers;
-            let start = std::time::Instant::now();
-            for i in 0..iters {
-                run(false, i % layers)?;
-            }
-            dev.synchronize()?;
-            let ms = start.elapsed().as_secs_f64() * 1e3 / iters as f64;
+            let ms = time_fp8_config(cuda, &sets, tokens, cfg, routing)?;
             eprintln!(
                 "bm={bm} bn={bn} group_m={group_m}: {ms:.3} ms per layer, {:.1} TFLOPS",
                 flops / ms / 1e9

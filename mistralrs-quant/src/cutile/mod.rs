@@ -6,6 +6,7 @@ mod fused_moe;
 mod fused_moe_fp8;
 mod gdn_prefill;
 mod routed_lora;
+mod tune;
 mod warmup;
 
 pub use fp8_gemm::{
@@ -28,6 +29,7 @@ pub use routed_lora::{
     CutileRoutedLoraShapeKey, CutileRoutedLoraStatus, CutileRoutedLoraTuningKey,
     CutileRoutedLoraUnsupported, CUTILE_ROUTED_LORA_MAX_RANK,
 };
+pub use tune::{TuneMode, TUNE_CACHE_ENV, TUNE_MODE_ENV};
 pub use warmup::warmup_moe_kernels;
 
 fn panic_message(payload: Box<dyn std::any::Any + Send>) -> String {
@@ -234,12 +236,37 @@ mod tests {
 }
 
 /// Launch tile config for the grouped GEMM, computed once from the token count and reused for both GEMMs (`bm` is the `moe_align` block size).
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct MoeTileConfig {
     pub bm: i32,
     pub bn: i32,
     pub bk: i32,
     pub group_m: i32,
+}
+
+impl std::fmt::Display for MoeTileConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}x{}x{} g{}", self.bm, self.bn, self.bk, self.group_m)
+    }
+}
+
+/// What distinguishes one MoE expert shape from another for warmup and tuning.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct MoeShapeKey {
+    pub hidden: usize,
+    pub inter: usize,
+    pub num_experts: usize,
+    pub top_k: usize,
+}
+
+impl std::fmt::Display for MoeShapeKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "e{}_h{}_i{}_k{}",
+            self.num_experts, self.hidden, self.inter, self.top_k
+        )
+    }
 }
 
 pub const fn get_default_config(m: usize, num_experts: usize) -> MoeTileConfig {
