@@ -494,8 +494,17 @@ fn div_hint_class(x: i32) -> i32 {
 // Full specialization is kept rather than collapsed to one kernel (CompileOptions::max_divisibility(1)),
 // which would also drop the pointer-alignment vectorization.
 fn warmup_token_counts(entry: &MoeWarmupEntry) -> Vec<usize> {
-    let e = entry.num_experts.max(1);
-    let k = entry.top_k;
+    warmup_token_counts_for(entry.num_experts, entry.top_k, get_default_config)
+}
+
+/// The same closed key enumeration for any tile-config policy (the FP8 kernel pins BK).
+pub(super) fn warmup_token_counts_for(
+    num_experts: usize,
+    top_k: usize,
+    config: fn(usize, usize) -> MoeTileConfig,
+) -> Vec<usize> {
+    let e = num_experts.max(1);
+    let k = top_k;
     // m values where the generics can change; 129*e - 1 is the last m with group_m=1.
     let mut bps = vec![32usize, 64, 96, 512, 129 * e - 1];
     bps.sort_unstable();
@@ -517,7 +526,7 @@ fn warmup_token_counts(entry: &MoeWarmupEntry) -> Vec<usize> {
     let mut seen = HashSet::new();
     let mut reps = Vec::new();
     for m in probes {
-        let cfg = get_default_config(m, e);
+        let cfg = config(m, e);
         let em = moe_align_em(m, k, e, cfg.bm as usize);
         // sig mirrors the cuTile cache key for this launch, so distinct sigs == distinct kernels.
         let sig = (
