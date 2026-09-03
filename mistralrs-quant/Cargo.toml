@@ -42,7 +42,7 @@ hf-hub.workspace = true
 tokio.workspace = true
 futures.workspace = true
 sysinfo.workspace = true
-cutile = { workspace = true, optional = true }
+cutile = { workspace = true, optional = true, features = ["experimental-tune"] }
 mistralrs-metal-compile = { workspace = true, optional = true, features = ["metal"] }
 
 [features]

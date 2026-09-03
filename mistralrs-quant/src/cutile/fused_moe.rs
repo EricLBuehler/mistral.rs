@@ -9,7 +9,8 @@ use cutile::cuda_core::sys::CUdeviceptr;
 use cutile::tile_kernel::TileKernel;
 use half::bf16;
 use indicatif::{ProgressBar, ProgressStyle};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 use std::sync::{Mutex, OnceLock};
 
 use crate::moe::cuda::{moe_align, moe_align_em};
@@ -17,8 +18,8 @@ use crate::utils::{slice_ptr_mut_on_stream, slice_ptr_on_stream};
 
 use super::split_k::reduce_split_k;
 use super::tune::{
-    buckets_from_breakpoints, tune, Bucket, TuneMode, TuneRequest, TuneRouting, TunedTable,
-    HOT_ROUTING_TOKENS, TUNE_ITERS, TUNE_WEIGHT_SETS,
+    buckets_from_breakpoints, cutile_error, tune, Bucket, Prepared, Space, TuneMode, TuneRequest,
+    TuneRouting, TunedTable, HOT_ROUTING_TOKENS, TUNE_WEIGHT_SETS,
 };
 use super::warmup::CutileKernel;
 use super::{catch_cutile_panic, context, get_default_config, MoeShapeKey, MoeTileConfig};
@@ -645,13 +646,6 @@ pub fn register_moe_shape(gate_up_w: Tensor, down_w: Tensor, num_experts: usize,
 }
 
 const TUNE_KERNEL: &str = "fused_moe";
-/// Bump when the kernel or the candidate lists change so cached winners are re-measured.
-const TUNE_VERSION: u32 = 2;
-/// Knob values the tuner descends over after picking tiles.
-const LATENCIES: [i32; 3] = [0, 2, 4];
-const WARPS: [i32; 3] = [0, 4, 8];
-const OCCUPANCIES: [i32; 2] = [0, 2];
-const SPLITS: [i32; 3] = [1, 2, 4];
 /// Token counts where `get_default_config` changes tiles; `group_m` flips once m reaches 129*E.
 const POLICY_BREAKPOINTS: [usize; 4] = [32, 64, 96, 512];
 const GROUP_M_TOKENS_PER_EXPERT: usize = 129;
@@ -672,132 +666,187 @@ fn bf16_buckets(num_experts: usize) -> Vec<Bucket> {
     buckets_from_breakpoints(&breakpoints, PREFILL_PROBE_TOKENS, PREFILL_PROBE_TOKENS)
 }
 
-fn bf16_candidates(bucket: Bucket) -> Vec<MoeTileConfig> {
-    let tiles: &[(i32, i32, i32, i32)] = if bucket.upper <= HOT_ROUTING_TOKENS {
+/// The search space for one bucket: tile shapes as a grid, then the knobs one axis at a time;
+/// split-K only where K is whole tiles that the split divides, for both GEMMs.
+fn bf16_space(bucket: Bucket, shape: MoeShapeKey) -> Space {
+    let tiles: &[[i64; 4]] = if bucket.upper <= HOT_ROUTING_TOKENS {
         &[
-            (16, 64, 128, 8),
-            (16, 128, 128, 1),
-            (32, 64, 128, 8),
-            (32, 128, 128, 1),
+            [16, 64, 128, 8],
+            [16, 128, 128, 1],
+            [32, 64, 128, 8],
+            [32, 128, 128, 1],
         ]
     } else {
         &[
-            (64, 64, 64, 16),
-            (64, 128, 64, 16),
-            (128, 128, 64, 16),
-            (128, 128, 64, 1),
-            (64, 64, 128, 8),
-            (64, 128, 128, 8),
-            (128, 64, 64, 8),
+            [64, 64, 64, 16],
+            [64, 128, 64, 16],
+            [128, 128, 64, 16],
+            [128, 128, 64, 1],
+            [64, 64, 128, 8],
+            [64, 128, 128, 8],
+            [128, 64, 64, 8],
         ]
     };
-    tiles
-        .iter()
-        .map(|&(bm, bn, bk, group_m)| MoeTileConfig::tiles(bm, bn, bk, group_m))
-        .collect()
+    let ks = [shape.hidden as i64, shape.inter as i64];
+    Space::new()
+        .joint(["bm", "bn", "bk", "group_m"], tiles.iter().copied())
+        .axis("latency", [0, 2, 4])
+        .axis("warps", [0, 4, 8])
+        .axis("occupancy", [0, 2])
+        .axis("split_k", [1, 2, 4])
+        .constrain(move |c| {
+            let (Some(bk), Some(s)) = (c.int("bk"), c.int("split_k")) else {
+                return false;
+            };
+            ks.iter().all(|&k| k % bk == 0 && (k / bk) % s == 0)
+        })
+        .policy(get_default_config(bucket.probe, shape.num_experts).to_config())
 }
 
-/// Knob axes the tuner descends after picking tiles; split-K only where both GEMMs' K tiles divide.
-fn bf16_refine(shape: MoeShapeKey) -> Vec<Box<dyn Fn(MoeTileConfig) -> Vec<MoeTileConfig>>> {
-    vec![
-        Box::new(|cfg| {
-            LATENCIES
-                .iter()
-                .map(|&latency| MoeTileConfig { latency, ..cfg })
-                .collect()
-        }),
-        Box::new(|cfg| {
-            WARPS
-                .iter()
-                .map(|&warps| MoeTileConfig { warps, ..cfg })
-                .collect()
-        }),
-        Box::new(|cfg| {
-            OCCUPANCIES
-                .iter()
-                .map(|&occupancy| MoeTileConfig { occupancy, ..cfg })
-                .collect()
-        }),
-        Box::new(move |cfg| {
-            let bk = cfg.bk as usize;
-            SPLITS
-                .iter()
-                .filter(|&&split_k| {
-                    [shape.hidden, shape.inter]
-                        .iter()
-                        .all(|&k| k.is_multiple_of(bk) && (k / bk).is_multiple_of(split_k as usize))
-                })
-                .map(|&split_k| MoeTileConfig { split_k, ..cfg })
-                .collect()
-        }),
-    ]
+/// Expert-aligned routing for one probe, shared by every candidate with the same block size.
+pub(super) struct MoeAlign {
+    pub sids: CudaSlice<i32>,
+    pub eids: CudaSlice<i32>,
+    pub ntpp: CudaSlice<i32>,
+    pub em: usize,
 }
 
-/// Milliseconds for both grouped GEMMs at `m` tokens with `cfg`, rotating through `sets`.
-fn time_bf16_config(
-    dev: &CudaDevice,
-    sets: &[MoeWarmupEntry],
-    m: usize,
-    cfg: MoeTileConfig,
-    routing: TuneRouting,
-) -> Result<f64> {
-    let device = Device::Cuda(dev.clone());
-    let first = &sets[0];
-    let (experts, top_k) = (first.num_experts, first.top_k);
-    let num_valid = m * top_k;
-    let ids = routing.expert_ids(m, top_k, experts);
-    let mut topk_ids = unsafe { dev.alloc::<u32>(num_valid)? };
-    dev.memcpy_htod(&ids, &mut topk_ids)?;
-    let (sids, eids, ntpp, em) = moe_align(&topk_ids, m, experts, top_k, cfg.bm, dev)?;
-    let a1 = Tensor::zeros((m, first.hidden), DType::BF16, &device)?;
-    let a2 = Tensor::zeros((num_valid, first.inter), DType::BF16, &device)?;
-    let mut tw = unsafe { dev.alloc::<f32>(num_valid)? };
-    dev.memcpy_htod(&vec![0f32; num_valid], &mut tw)?;
-    let run = |compile_only: bool, w: &MoeWarmupEntry| -> Result<()> {
-        cutile_grouped_gemm_inner(
-            &a1,
-            &w.gate_up_w,
-            &sids,
-            &eids,
-            &ntpp,
-            None,
+impl MoeAlign {
+    pub(super) fn build(
+        dev: &CudaDevice,
+        topk_ids: &CudaSlice<u32>,
+        m: usize,
+        num_experts: usize,
+        top_k: usize,
+        bm: i32,
+    ) -> Result<Self> {
+        let (sids, eids, ntpp, em) = moe_align(topk_ids, m, num_experts, top_k, bm, dev)?;
+        Ok(Self {
+            sids,
+            eids,
+            ntpp,
             em,
-            num_valid,
-            top_k,
-            false,
-            cfg,
-            dev,
-            compile_only,
-        )?;
-        cutile_grouped_gemm_inner(
-            &a2,
-            &w.down_w,
-            &sids,
-            &eids,
-            &ntpp,
-            Some(&tw),
-            em,
-            num_valid,
-            1,
-            true,
-            cfg,
-            dev,
-            compile_only,
-        )?;
-        Ok(())
-    };
-    run(true, first)?;
-    for w in sets {
-        run(false, w)?;
+        })
     }
-    device.synchronize()?;
-    let iters = TUNE_ITERS * sets.len();
-    let start = std::time::Instant::now();
-    for i in 0..iters {
-        run(false, &sets[i % sets.len()])?;
+}
+
+/// Synthetic operands for one probe token count, built once so every candidate sees the same
+/// inputs and the gate compares like with like.
+struct Bf16Operands {
+    a1: Tensor,
+    a2: Tensor,
+    tw: Arc<CudaSlice<f32>>,
+    topk_ids: Arc<CudaSlice<u32>>,
+    num_valid: usize,
+    align: HashMap<i32, Arc<MoeAlign>>,
+}
+
+/// Prepares timed launch sets for the tuner, rotating through the registered weight sets.
+struct Bf16Tuner {
+    dev: CudaDevice,
+    sets: Vec<MoeWarmupEntry>,
+    routing: Option<TuneRouting>,
+    operands: HashMap<usize, Bf16Operands>,
+}
+
+impl Bf16Tuner {
+    fn new(dev: &CudaDevice, sets: &[MoeWarmupEntry]) -> Self {
+        Self {
+            dev: dev.clone(),
+            sets: sets.to_vec(),
+            routing: None,
+            operands: HashMap::new(),
+        }
     }
-    device.synchronize()?;
-    Ok(start.elapsed().as_secs_f64() * 1e3 / iters as f64)
+
+    fn operands(&mut self, m: usize) -> Result<&mut Bf16Operands> {
+        if !self.operands.contains_key(&m) {
+            let device = Device::Cuda(self.dev.clone());
+            let first = &self.sets[0];
+            let num_valid = m * first.top_k;
+            let routing = self.routing.unwrap_or_else(|| TuneRouting::for_tokens(m));
+            let ids = routing.expert_ids(m, first.top_k, first.num_experts);
+            let mut topk_ids = unsafe { self.dev.alloc::<u32>(num_valid)? };
+            self.dev.memcpy_htod(&ids, &mut topk_ids)?;
+            let mut tw = unsafe { self.dev.alloc::<f32>(num_valid)? };
+            self.dev.memcpy_htod(&vec![0.5f32; num_valid], &mut tw)?;
+            let a1 =
+                Tensor::rand(-1f32, 1f32, (m, first.hidden), &device)?.to_dtype(DType::BF16)?;
+            let a2 = Tensor::rand(-1f32, 1f32, (num_valid, first.inter), &device)?
+                .to_dtype(DType::BF16)?;
+            self.operands.insert(
+                m,
+                Bf16Operands {
+                    a1,
+                    a2,
+                    tw: Arc::new(tw),
+                    topk_ids: Arc::new(topk_ids),
+                    num_valid,
+                    align: HashMap::new(),
+                },
+            );
+        }
+        Ok(self.operands.get_mut(&m).expect("inserted above"))
+    }
+
+    fn prepare(&mut self, m: usize, cfg: MoeTileConfig) -> Result<Prepared> {
+        let dev = self.dev.clone();
+        let sets = self.sets.clone();
+        let (experts, top_k) = (sets[0].num_experts, sets[0].top_k);
+        let ops = self.operands(m)?;
+        if !ops.align.contains_key(&cfg.bm) {
+            let align = MoeAlign::build(&dev, &ops.topk_ids, m, experts, top_k, cfg.bm)?;
+            ops.align.insert(cfg.bm, Arc::new(align));
+        }
+        let align = ops.align[&cfg.bm].clone();
+        let (a1, a2, tw, num_valid) = (
+            ops.a1.clone(),
+            ops.a2.clone(),
+            ops.tw.clone(),
+            ops.num_valid,
+        );
+        let launch = move |w: &MoeWarmupEntry, compile_only: bool| -> Result<Tensor> {
+            cutile_grouped_gemm_inner(
+                &a1,
+                &w.gate_up_w,
+                &align.sids,
+                &align.eids,
+                &align.ntpp,
+                None,
+                align.em,
+                num_valid,
+                top_k,
+                false,
+                cfg,
+                &dev,
+                compile_only,
+            )?;
+            cutile_grouped_gemm_inner(
+                &a2,
+                &w.down_w,
+                &align.sids,
+                &align.eids,
+                &align.ntpp,
+                Some(&tw),
+                align.em,
+                num_valid,
+                1,
+                true,
+                cfg,
+                &dev,
+                compile_only,
+            )
+        };
+        launch(&sets[0], true)?;
+        let sample = launch(&sets[0], false)?;
+        let mut next = 0usize;
+        let run = Box::new(move |_: &Arc<cutile::cuda_core::Stream>| {
+            let w = &sets[next % sets.len()];
+            next += 1;
+            launch(w, false).map(|_| ()).map_err(cutile_error)
+        });
+        Ok(Prepared { run, sample })
+    }
 }
 
 fn div_hint_class(x: i32) -> i32 {
@@ -887,23 +936,20 @@ fn warmup_moe_kernels_uncached(dev: &CudaDevice) -> Result<()> {
     for sets in &shapes {
         let key = sets[0].shape_key();
         let buckets = bf16_buckets(key.num_experts);
-        let fallback = |m: usize| get_default_config(m, key.num_experts);
-        let refine = bf16_refine(key);
-        let refine: Vec<&dyn Fn(MoeTileConfig) -> Vec<MoeTileConfig>> =
-            refine.iter().map(|axis| axis.as_ref()).collect();
         let request = TuneRequest {
             kernel: TUNE_KERNEL,
-            version: TUNE_VERSION,
+            source_hash: fused_moe::_SOURCE_HASH,
             shape: key.to_string(),
             buckets: &buckets,
-            fallback: &fallback,
-            candidates: &bf16_candidates,
-            refine: &refine,
+            space: &|bucket| bf16_space(bucket, key),
         };
-        let tuned = tune(dev, mode, &request, |m, cfg| {
-            time_bf16_config(dev, sets, m, cfg, TuneRouting::for_tokens(m))
+        let mut tuner = Bf16Tuner::new(dev, sets);
+        let tuned = tune(dev, mode, &request, |m, config| {
+            let cfg = MoeTileConfig::from_config(config)
+                .ok_or_else(|| candle_core::Error::Msg("config outside the space".into()))?;
+            tuner.prepare(m, cfg)
         });
-        TUNED.set(key, &tuned);
+        TUNED.set(key, &tuned, MoeTileConfig::from_config);
     }
     let plan: Vec<(MoeWarmupEntry, Vec<usize>)> = shapes
         .into_iter()

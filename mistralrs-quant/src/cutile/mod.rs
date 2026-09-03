@@ -281,6 +281,35 @@ impl MoeTileConfig {
         }
     }
 
+    pub fn to_config(&self) -> cutile::tune::Config {
+        tune::config([
+            ("bm", i64::from(self.bm)),
+            ("bn", i64::from(self.bn)),
+            ("bk", i64::from(self.bk)),
+            ("group_m", i64::from(self.group_m)),
+            ("split_k", i64::from(self.split_k)),
+            ("latency", i64::from(self.latency)),
+            ("warps", i64::from(self.warps)),
+            ("occupancy", i64::from(self.occupancy)),
+            ("cluster", i64::from(self.cluster)),
+        ])
+    }
+
+    pub fn from_config(config: &cutile::tune::Config) -> Option<Self> {
+        let int = |key: &str| config.int(key).and_then(|v| i32::try_from(v).ok());
+        Some(Self {
+            bm: int("bm")?,
+            bn: int("bn")?,
+            bk: int("bk")?,
+            group_m: int("group_m")?,
+            split_k: int("split_k")?,
+            latency: int("latency")?,
+            warps: int("warps")?,
+            occupancy: int("occupancy")?,
+            cluster: int("cluster")?,
+        })
+    }
+
     pub fn compile_options(&self) -> cutile::tile_kernel::CompileOptions {
         let mut options = cutile::tile_kernel::CompileOptions::new();
         if self.warps > 0 {
