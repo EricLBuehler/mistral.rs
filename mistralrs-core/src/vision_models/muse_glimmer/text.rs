@@ -619,7 +619,7 @@ impl TextModel {
         let xs = xs.to_device(&self.device)?.apply(&self.norm)?;
         let xs = ctx.logits(&xs)?;
         transform_output_logits(
-            &self.lm_head.forward(&xs)?,
+            &ctx.lm_head(&*self.lm_head, &xs)?,
             self.output_multiplier,
             self.final_logit_softcapping,
         )

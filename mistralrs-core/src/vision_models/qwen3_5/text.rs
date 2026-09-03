@@ -2626,7 +2626,7 @@ impl Qwen3_5TextModel {
                     taps,
                 });
             }
-            self.lm_head.forward(&xs)
+            ctx.lm_head(&*self.lm_head, &xs)
         })();
         forward_result
     }

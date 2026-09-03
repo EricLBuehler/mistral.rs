@@ -142,7 +142,7 @@ fn finish_dynamic_lora_runtime(
     Ok(runtime)
 }
 
-use mistralrs_quant::IsqType;
+use mistralrs_quant::{IsqType, QuantMethod};
 pub use multimodal::{MultimodalLoader, MultimodalLoaderBuilder, MultimodalSpecificConfig};
 pub use normal::{NormalLoader, NormalLoaderBuilder, NormalSpecificConfig};
 pub(crate) use paths::{
@@ -696,6 +696,13 @@ impl<'a> ForwardCache<'a> {
         }
     }
 
+    pub(crate) fn needs_logits(&self) -> bool {
+        match self {
+            Self::Paged { metadata, .. } => metadata.needs_logits,
+            Self::Normal(_) | Self::None => true,
+        }
+    }
+
     pub(crate) fn normal_mut(&mut self) -> Option<&mut [KvCache]> {
         match self {
             Self::Normal(cache) => Some(cache),
@@ -977,6 +984,27 @@ impl<'a> ModelForwardContext<'a> {
 
     pub(crate) fn is_final_prompt_chunk(&self) -> bool {
         self.cache.is_final_prompt_chunk()
+    }
+
+    pub(crate) fn needs_logits(&self) -> bool {
+        self.cache.needs_logits()
+    }
+
+    /// Runs `head` on the selected rows, or returns a rank-preserving placeholder when the pipeline
+    /// discards this forward's logits.
+    pub(crate) fn lm_head(
+        &self,
+        head: &dyn QuantMethod,
+        xs: &Tensor,
+    ) -> candle_core::Result<Tensor> {
+        if self.needs_logits() {
+            return head.forward(xs);
+        }
+        let mut dims = xs.dims().to_vec();
+        *dims
+            .last_mut()
+            .expect("selected hidden states have a feature axis") = 1;
+        Tensor::zeros(dims, xs.dtype(), xs.device())
     }
 
     pub(crate) fn mask_cache<'b>(&'b self, normal_cache: &'b [KvCache]) -> ForwardMaskCache<'b> {
@@ -2426,6 +2454,8 @@ pub trait Pipeline:
                             let mut chunk_metadata = metadata.clone();
                             chunk_metadata.prompt_chunk_attention_policy = attention_policy;
                             chunk_metadata.is_final_prompt_chunk = is_final_prompt_chunk;
+                            chunk_metadata.needs_logits =
+                                is_final_prompt_chunk || return_raw_logits;
                             let mut active_input_seqs = input_seqs
                                 .iter_mut()
                                 .enumerate()

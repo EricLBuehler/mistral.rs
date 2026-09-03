@@ -755,7 +755,7 @@ impl TextModel {
         let xs = xs.to_device(&self.device)?;
         let xs = xs.apply(&self.norm)?;
         let xs = ctx.logits(&xs)?;
-        let mut xs = self.lm_head.forward(&xs)?;
+        let mut xs = ctx.lm_head(&*self.lm_head, &xs)?;
 
         if let Some(final_logit_softcapping) = self.final_logit_softcapping {
             let dtype = xs.dtype();

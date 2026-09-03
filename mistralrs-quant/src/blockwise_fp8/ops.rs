@@ -1648,7 +1648,11 @@ fn fused_add_rms_norm_quantized_impl(
         } else {
             None
         };
-        let mut quantized_output = unsafe { device.alloc::<F8E4M3>(elements)? };
+        // padded to the scale stride so group-major GEMMs can read whole aligned row blocks
+        let quantized_elements = scale_stride_m.checked_mul(columns).ok_or_else(|| {
+            candle_core::Error::msg("fused RMSNorm FP8 quantized size overflows usize")
+        })?;
+        let mut quantized_output = unsafe { device.alloc::<F8E4M3>(quantized_elements)? };
         let mut scales = unsafe { device.alloc::<f32>(scale_storage_elements)? };
 
         let (input_storage, input_tensor_layout) = input.storage_and_layout();
@@ -1747,8 +1751,9 @@ fn fused_add_rms_norm_quantized_impl(
                 quantized_output,
                 device.clone(),
             )),
-            Shape::from_dims(&[rows, columns]),
-        ));
+            Shape::from_dims(&[scale_stride_m, columns]),
+        ))
+        .narrow(0, 0, rows)?;
         let scales = Tensor::from((
             Storage::Cuda(CudaStorage::wrap_cuda_slice(scales, device.clone())),
             Shape::from_dims(&[scale_groups, scale_stride_m]),

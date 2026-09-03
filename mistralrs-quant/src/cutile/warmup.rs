@@ -9,9 +9,13 @@ pub(super) trait CutileKernel {
     fn warm(&self, dev: &CudaDevice) -> Result<()>;
 }
 
-/// Every cuTile kernel to warm. One today; add a line per new kernel.
-fn registered() -> [&'static dyn CutileKernel; 1] {
-    [&super::fused_moe::FUSED_MOE]
+/// Every cuTile kernel to warm; add a line per new kernel.
+fn registered() -> [&'static dyn CutileKernel; 3] {
+    [
+        &super::fused_moe::FUSED_MOE,
+        &super::fp8_gemm::FP8_GEMM,
+        &super::gdn_prefill::GDN_PREFILL,
+    ]
 }
 
 static WARMED_LOCATIONS: OnceLock<Mutex<HashSet<DeviceLocation>>> = OnceLock::new();

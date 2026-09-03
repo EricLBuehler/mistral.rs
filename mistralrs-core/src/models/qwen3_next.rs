@@ -1119,7 +1119,7 @@ impl Model {
 
         let x = ctx.logits(&x)?;
 
-        let logits = self.lm_head.forward(&x)?;
+        let logits = ctx.lm_head(&*self.lm_head, &x)?;
 
         Ok(logits)
     }

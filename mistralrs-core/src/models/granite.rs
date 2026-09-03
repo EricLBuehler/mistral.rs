@@ -2333,7 +2333,7 @@ impl GraniteMoeHybrid {
         let x = self.ln_f.forward(&x)?;
         let x = ctx.logits(&x)?;
 
-        let mut logits = self.lm_head.forward(&x)?;
+        let mut logits = ctx.lm_head(&*self.lm_head, &x)?;
 
         // Scale logits
         logits = scale_tensor(logits, self.logits_scaling)?;

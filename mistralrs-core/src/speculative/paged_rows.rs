@@ -206,6 +206,7 @@ pub(crate) fn make_paged_rows_metadata(
         full_max_context_len: Some(context_lens.iter().copied().max().unwrap_or(0)),
         is_first_prompt_chunk: false,
         is_final_prompt_chunk: true,
+        needs_logits: true,
         prompt_chunk_attention_policy:
             crate::paged_attention::block_hash::MultimodalAttentionPolicy::Causal,
         has_noncausal_mm_context: false,

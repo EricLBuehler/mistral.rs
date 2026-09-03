@@ -1606,15 +1606,15 @@ extern "C" void causal_conv1d_full(const void *x, const void *weight,
   }
 }
 
-template <typename T>
+template <typename T, typename OutT>
 __global__ void gdn_prepare_recurrence_kernel(
     const T *__restrict__ mixed_qkv, const T *__restrict__ b,
     const T *__restrict__ a, const float *__restrict__ a_log,
-    const float *__restrict__ dt_bias, float *__restrict__ q_out,
-    float *__restrict__ k_out, float *__restrict__ v_out,
+    const float *__restrict__ dt_bias, OutT *__restrict__ q_out,
+    OutT *__restrict__ k_out, OutT *__restrict__ v_out,
     float *__restrict__ g_out, float *__restrict__ beta_out, int batch_size,
-    int seq_len, int num_k_heads, int num_v_heads, int head_k_dim,
-    int head_v_dim, int tiled_v_heads) {
+    int seq_len, int token_stride, int num_k_heads, int num_v_heads,
+    int head_k_dim, int head_v_dim, int tiled_v_heads) {
   const int token_head = blockIdx.x;
   const int hv = token_head % num_v_heads;
   const int token = token_head / num_v_heads;
@@ -1673,48 +1673,70 @@ __global__ void gdn_prepare_recurrence_kernel(
                              ? a_val
                              : (a_val > 0.0f ? a_val + log1pf(expf(-a_val))
                                              : log1pf(expf(a_val)));
-    beta_out[(size_t)bh * seq_len + t] = 1.0f / (1.0f + expf(-b_val));
-    g_out[(size_t)bh * seq_len + t] = -expf(a_log[hv]) * softplus_val;
+    beta_out[(size_t)bh * token_stride + t] = 1.0f / (1.0f + expf(-b_val));
+    g_out[(size_t)bh * token_stride + t] = -expf(a_log[hv]) * softplus_val;
   }
   __syncthreads();
 
-  float *q_dst = q_out + ((size_t)bh * seq_len + t) * head_k_dim;
-  float *k_dst = k_out + ((size_t)bh * seq_len + t) * head_k_dim;
-  float *v_dst = v_out + ((size_t)bh * seq_len + t) * head_v_dim;
+  OutT *q_dst = q_out + ((size_t)bh * token_stride + t) * head_k_dim;
+  OutT *k_dst = k_out + ((size_t)bh * token_stride + t) * head_k_dim;
+  OutT *v_dst = v_out + ((size_t)bh * token_stride + t) * head_v_dim;
 
   for (int d = tid; d < head_k_dim; d += blockDim.x) {
     float q_val = (float)row[hk * head_k_dim + d];
     float k_val = (float)row[key_dim + hk * head_k_dim + d];
-    q_dst[d] = q_val * q_mul;
-    k_dst[d] = k_val * k_mul;
+    q_dst[d] = (OutT)(q_val * q_mul);
+    k_dst[d] = (OutT)(k_val * k_mul);
   }
 
   for (int d = tid; d < head_v_dim; d += blockDim.x) {
-    v_dst[d] = (float)row[2 * key_dim + hv * head_v_dim + d];
+    v_dst[d] = (OutT)(float)row[2 * key_dim + hv * head_v_dim + d];
   }
+}
+
+template <typename T, typename OutT>
+static void launch_gdn_prepare_recurrence(
+    const void *mixed_qkv, const void *b, const void *a, const float *a_log,
+    const float *dt_bias, void *q_out, void *k_out, void *v_out, float *g_out,
+    float *beta_out, int batch_size, int seq_len, int token_stride,
+    int num_k_heads, int num_v_heads, int head_k_dim, int head_v_dim,
+    int tiled_v_heads, cudaStream_t stream) {
+  dim3 block(256);
+  dim3 grid(batch_size * seq_len * num_v_heads);
+  gdn_prepare_recurrence_kernel<T, OutT><<<grid, block, 0, stream>>>(
+      (const T *)mixed_qkv, (const T *)b, (const T *)a, a_log, dt_bias,
+      (OutT *)q_out, (OutT *)k_out, (OutT *)v_out, g_out, beta_out, batch_size,
+      seq_len, token_stride, num_k_heads, num_v_heads, head_k_dim, head_v_dim,
+      tiled_v_heads);
 }
 
 extern "C" void gdn_prepare_recurrence(
     const void *mixed_qkv, const void *b, const void *a, const float *a_log,
-    const float *dt_bias, float *q_out, float *k_out, float *v_out,
-    float *g_out, float *beta_out, int batch_size, int seq_len, int num_k_heads,
-    int num_v_heads, int head_k_dim, int head_v_dim, int tiled_v_heads,
-    int dtype, int64_t stream) {
+    const float *dt_bias, void *q_out, void *k_out, void *v_out, float *g_out,
+    float *beta_out, int batch_size, int seq_len, int token_stride,
+    int num_k_heads, int num_v_heads, int head_k_dim, int head_v_dim,
+    int tiled_v_heads, int dtype, int out_bf16, int64_t stream) {
   const cudaStream_t custream = (cudaStream_t)stream;
-  dim3 block(256);
-  dim3 grid(batch_size * seq_len * num_v_heads);
-
-  if (dtype == 0) {
-    gdn_prepare_recurrence_kernel<__half><<<grid, block, 0, custream>>>(
-        (const __half *)mixed_qkv, (const __half *)b, (const __half *)a, a_log,
-        dt_bias, q_out, k_out, v_out, g_out, beta_out, batch_size, seq_len,
-        num_k_heads, num_v_heads, head_k_dim, head_v_dim, tiled_v_heads);
+  if (dtype == 0 && out_bf16) {
+    launch_gdn_prepare_recurrence<__half, __nv_bfloat16>(
+        mixed_qkv, b, a, a_log, dt_bias, q_out, k_out, v_out, g_out, beta_out,
+        batch_size, seq_len, token_stride, num_k_heads, num_v_heads,
+        head_k_dim, head_v_dim, tiled_v_heads, custream);
+  } else if (dtype == 0) {
+    launch_gdn_prepare_recurrence<__half, float>(
+        mixed_qkv, b, a, a_log, dt_bias, q_out, k_out, v_out, g_out, beta_out,
+        batch_size, seq_len, token_stride, num_k_heads, num_v_heads,
+        head_k_dim, head_v_dim, tiled_v_heads, custream);
+  } else if (out_bf16) {
+    launch_gdn_prepare_recurrence<__nv_bfloat16, __nv_bfloat16>(
+        mixed_qkv, b, a, a_log, dt_bias, q_out, k_out, v_out, g_out, beta_out,
+        batch_size, seq_len, token_stride, num_k_heads, num_v_heads,
+        head_k_dim, head_v_dim, tiled_v_heads, custream);
   } else {
-    gdn_prepare_recurrence_kernel<__nv_bfloat16><<<grid, block, 0, custream>>>(
-        (const __nv_bfloat16 *)mixed_qkv, (const __nv_bfloat16 *)b,
-        (const __nv_bfloat16 *)a, a_log, dt_bias, q_out, k_out, v_out, g_out,
-        beta_out, batch_size, seq_len, num_k_heads, num_v_heads, head_k_dim,
-        head_v_dim, tiled_v_heads);
+    launch_gdn_prepare_recurrence<__nv_bfloat16, float>(
+        mixed_qkv, b, a, a_log, dt_bias, q_out, k_out, v_out, g_out, beta_out,
+        batch_size, seq_len, token_stride, num_k_heads, num_v_heads,
+        head_k_dim, head_v_dim, tiled_v_heads, custream);
   }
 }
 
