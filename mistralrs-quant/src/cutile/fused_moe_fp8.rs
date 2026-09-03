@@ -20,7 +20,7 @@ use crate::GluActivationType;
 
 use super::fused_moe::warmup_token_counts_for;
 use super::warmup::CutileKernel;
-use super::{catch_cutile_panic, context, get_default_config, MoeTileConfig};
+use super::{catch_cutile_panic, context, MoeTileConfig};
 
 /// Scale group along K and N; the kernel steps K one group at a time so every partial product is
 /// scaled by a single (row, group) pair before it joins the accumulator.
@@ -397,10 +397,16 @@ pub fn fp8_moe_supported(dev: &CudaDevice, hidden: usize, inter: usize) -> bool 
         && inter.is_multiple_of(FP8_MOE_GROUP)
 }
 
-fn fp8_config(m: usize, num_experts: usize) -> MoeTileConfig {
-    let mut cfg = get_default_config(m, num_experts);
-    cfg.bk = FP8_MOE_GROUP as i32;
-    cfg
+// Measured on GB10 (see the tile sweep test): 64x64 tiles with a 16-row group swizzle run the
+// 4k-token regime 1.5x faster than 128x128, while below ~96 tokens thin 16-row tiles lose nothing.
+fn fp8_config(m: usize, _num_experts: usize) -> MoeTileConfig {
+    let small = m <= 96;
+    MoeTileConfig {
+        bm: if small { 16 } else { 64 },
+        bn: if small { 128 } else { 64 },
+        bk: FP8_MOE_GROUP as i32,
+        group_m: if small { 1 } else { 16 },
+    }
 }
 
 /// Routing tensors as contiguous device slices starting at offset zero, as the kernels expect.
@@ -773,6 +779,126 @@ mod tests {
 
     fn silu(x: f32) -> f32 {
         x / (1.0 + (-x).exp())
+    }
+
+    // Times the two grouped GEMMs on real expert shapes per tile config; set CUTILE_MOE_TUNE to
+    // "tokens,hidden,inter,experts,topk" to override the Qwen3-30B-A3B defaults.
+    #[test]
+    #[ignore = "benchmark; requires a CUDA device with cuTile support"]
+    fn cutile_fused_moe_fp8_tile_sweep() -> Result<()> {
+        use super::{grouped_gemm_fp8, MoeTileConfig};
+        use crate::blockwise_fp8::mma::quantize_activation_padded;
+        use crate::moe::cuda::moe_align;
+
+        let spec: Vec<usize> = std::env::var("CUTILE_MOE_TUNE")
+            .ok()
+            .map(|v| v.split(',').map(|x| x.parse().unwrap()).collect())
+            .unwrap_or_else(|| vec![4096, 2048, 768, 128, 8]);
+        let (tokens, hidden, inter, experts, top_k) = (spec[0], spec[1], spec[2], spec[3], spec[4]);
+        let dev = Device::new_cuda(0)?;
+        let Device::Cuda(cuda) = &dev else {
+            unreachable!()
+        };
+        let gate_up = Tensor::zeros((experts, 2 * inter, hidden), DType::F8E4M3, &dev)?;
+        let gate_up_scales = Tensor::ones(
+            (experts, 2 * inter / FP8_MOE_GROUP, hidden / FP8_MOE_GROUP),
+            DType::F32,
+            &dev,
+        )?;
+        let down = Tensor::zeros((experts, hidden, inter), DType::F8E4M3, &dev)?;
+        let down_scales = Tensor::ones(
+            (experts, hidden / FP8_MOE_GROUP, inter / FP8_MOE_GROUP),
+            DType::F32,
+            &dev,
+        )?;
+        let num_valid = tokens * top_k;
+        // pseudo-random routing with mild imbalance, like real traffic
+        let ids: Vec<u32> = (0..num_valid)
+            .map(|i| (((i * 2654435761usize) >> 7) % experts) as u32)
+            .collect();
+        let mut topk_ids = unsafe { cuda.alloc::<u32>(num_valid)? };
+        cuda.memcpy_htod(&ids, &mut topk_ids)?;
+        let mut tw = unsafe { cuda.alloc::<f32>(num_valid)? };
+        cuda.memcpy_htod(&vec![0.5f32; num_valid], &mut tw)?;
+        let token_rows = tokens.div_ceil(FP8_MOE_GROUP) * FP8_MOE_GROUP;
+        let x = Tensor::zeros((tokens, hidden), DType::BF16, &dev)?;
+        let (a1, a1_scales) = quantize_activation_padded(&x, token_rows)?;
+        let valid_rows = num_valid.div_ceil(FP8_MOE_GROUP) * FP8_MOE_GROUP;
+        let a2 = Tensor::zeros((valid_rows, inter), DType::F8E4M3, &dev)?;
+        let a2_scales = Tensor::ones((inter / FP8_MOE_GROUP, valid_rows), DType::F32, &dev)?;
+        let flops = 2.0 * (num_valid as f64) * (hidden as f64) * (3 * inter) as f64;
+        for (bm, bn, group_m) in [
+            (128, 128, 1),
+            (128, 64, 8),
+            (64, 128, 8),
+            (64, 64, 8),
+            (64, 64, 16),
+            (64, 64, 32),
+            (32, 64, 8),
+            (16, 64, 8),
+            (16, 128, 1),
+        ] {
+            let cfg = MoeTileConfig {
+                bm,
+                bn,
+                bk: FP8_MOE_GROUP as i32,
+                group_m,
+            };
+            let (sids, eids, ntpp, em) =
+                moe_align(&topk_ids, tokens, experts, top_k, cfg.bm, cuda)?;
+            let run = |compile_only: bool| -> Result<()> {
+                grouped_gemm_fp8(
+                    &a1,
+                    &a1_scales,
+                    &gate_up,
+                    &gate_up_scales,
+                    &sids,
+                    &eids,
+                    &ntpp,
+                    None,
+                    em,
+                    num_valid,
+                    top_k,
+                    false,
+                    cfg,
+                    cuda,
+                    compile_only,
+                )?;
+                grouped_gemm_fp8(
+                    &a2,
+                    &a2_scales,
+                    &down,
+                    &down_scales,
+                    &sids,
+                    &eids,
+                    &ntpp,
+                    Some(&tw),
+                    em,
+                    num_valid,
+                    1,
+                    true,
+                    cfg,
+                    cuda,
+                    compile_only,
+                )?;
+                Ok(())
+            };
+            run(true)?;
+            run(false)?;
+            dev.synchronize()?;
+            let iters = 10;
+            let start = std::time::Instant::now();
+            for _ in 0..iters {
+                run(false)?;
+            }
+            dev.synchronize()?;
+            let ms = start.elapsed().as_secs_f64() * 1e3 / iters as f64;
+            eprintln!(
+                "bm={bm} bn={bn} group_m={group_m}: {ms:.3} ms per layer, {:.1} TFLOPS",
+                flops / ms / 1e9
+            );
+        }
+        Ok(())
     }
 
     #[test]
