@@ -149,6 +149,9 @@ pub struct TuneRequest<'a, C> {
     pub buckets: &'a [Bucket],
     pub fallback: &'a dyn Fn(usize) -> C,
     pub candidates: &'a dyn Fn(Bucket) -> Vec<C>,
+    /// Knob axes explored one at a time from the tile winner (coordinate descent); each maps a
+    /// config to its variants along that axis.
+    pub refine: &'a [&'a dyn Fn(C) -> Vec<C>],
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -198,20 +201,18 @@ where
         let key = cache_key(&device_key, request, label);
         if mode == TuneMode::Auto {
             if let Some(entry) = cache().lock().unwrap().get::<C>(&key) {
-                // a config outside today's candidate list means the list changed without a version bump
-                if entry.config == fallback || candidates.contains(&entry.config) {
-                    results.push(Tuned {
-                        bucket,
-                        config: entry.config,
-                        source: Source::Cache,
-                        ms: entry.ms,
-                        fallback_ms: entry.fallback_ms,
-                    });
-                    continue;
-                }
+                results.push(Tuned {
+                    bucket,
+                    config: entry.config,
+                    source: Source::Cache,
+                    ms: entry.ms,
+                    fallback_ms: entry.fallback_ms,
+                });
+                continue;
             }
         }
-        let fallback_ms = match best_of(&mut time, bucket.probe, fallback) {
+        let mut probe = |config: C| best_of(&mut time, bucket.probe, config);
+        let fallback_ms = match probe(fallback) {
             Ok(ms) => ms,
             Err(err) => {
                 tracing::warn!(
@@ -229,21 +230,21 @@ where
                 continue;
             }
         };
-        let mut timings = Vec::with_capacity(candidates.len());
-        for candidate in candidates {
-            if candidate == fallback {
-                continue;
-            }
-            match best_of(&mut time, bucket.probe, candidate) {
-                Ok(ms) => timings.push((candidate, ms)),
-                Err(err) => tracing::debug!(
-                    "cuTile autotune {} {}: candidate {candidate} skipped: {err}",
-                    request.kernel,
-                    request.shape
-                ),
-            }
-        }
-        let (config, ms) = select(fallback, fallback_ms, &timings);
+        let skipped = |config: C, err: candle_core::Error| {
+            tracing::debug!(
+                "cuTile autotune {} {}: candidate {config} skipped: {err}",
+                request.kernel,
+                request.shape
+            )
+        };
+        let (config, ms) = search(
+            fallback,
+            fallback_ms,
+            &candidates,
+            request.refine,
+            &mut probe,
+            &skipped,
+        );
         cache().lock().unwrap().insert(
             key,
             Entry {
@@ -276,12 +277,43 @@ fn best_of<C: Copy>(
     Ok(best)
 }
 
-/// The fastest candidate wins only when it beats the policy by `MIN_GAIN`; otherwise the policy stays.
-fn select<C: Copy>(fallback: C, fallback_ms: f64, timings: &[(C, f64)]) -> (C, f64) {
+/// Grid search over the tile candidates against the policy, then coordinate descent along each
+/// knob axis from the winner. Every step keeps the incumbent unless a variant beats it by `MIN_GAIN`.
+fn search<C: Copy + PartialEq>(
+    fallback: C,
+    fallback_ms: f64,
+    candidates: &[C],
+    refine: &[&dyn Fn(C) -> Vec<C>],
+    probe: &mut impl FnMut(C) -> Result<f64>,
+    skipped: &impl Fn(C, candle_core::Error),
+) -> (C, f64) {
+    let mut time_all = |variants: &[C], incumbent: C| -> Vec<(C, f64)> {
+        let mut timings = Vec::with_capacity(variants.len());
+        for &variant in variants {
+            if variant == incumbent {
+                continue;
+            }
+            match probe(variant) {
+                Ok(ms) => timings.push((variant, ms)),
+                Err(err) => skipped(variant, err),
+            }
+        }
+        timings
+    };
+    let (mut config, mut ms) = select(fallback, fallback_ms, &time_all(candidates, fallback));
+    for axis in refine {
+        let variants = axis(config);
+        (config, ms) = select(config, ms, &time_all(&variants, config));
+    }
+    (config, ms)
+}
+
+/// The fastest candidate wins only when it beats the incumbent by `MIN_GAIN`; otherwise the incumbent stays.
+fn select<C: Copy>(incumbent: C, incumbent_ms: f64, timings: &[(C, f64)]) -> (C, f64) {
     let best = timings.iter().copied().min_by(|a, b| a.1.total_cmp(&b.1));
     match best {
-        Some((config, ms)) if ms < fallback_ms * (1.0 - MIN_GAIN) => (config, ms),
-        _ => (fallback, fallback_ms),
+        Some((config, ms)) if ms < incumbent_ms * (1.0 - MIN_GAIN) => (config, ms),
+        _ => (incumbent, incumbent_ms),
     }
 }
 
@@ -550,6 +582,46 @@ mod tests {
         let timings = [(2u8, 0.96), (3u8, 0.90)];
         assert_eq!(select(1u8, 1.0, &timings), (3, 0.90));
         assert_eq!(select(1u8, 1.0, &[]), (1, 1.0));
+    }
+
+    #[test]
+    fn search_descends_each_knob_axis_from_the_tile_winner() {
+        // (tile, knob): tile 2 is fastest, knob 1 then improves it, knob 2 is a regression
+        let cost = |c: (u8, u8)| -> f64 {
+            let tile = match c.0 {
+                1 => 1.0,
+                2 => 0.8,
+                _ => 0.9,
+            };
+            tile * match c.1 {
+                1 => 0.9,
+                2 => 1.5,
+                _ => 1.0,
+            }
+        };
+        let mut calls = 0;
+        let mut probe = |c: (u8, u8)| {
+            calls += 1;
+            if c == (3, 0) {
+                candle_core::bail!("unsupported")
+            }
+            Ok(cost(c))
+        };
+        let knobs = |c: (u8, u8)| vec![(c.0, 0), (c.0, 1), (c.0, 2)];
+        type Axis<'a> = &'a dyn Fn((u8, u8)) -> Vec<(u8, u8)>;
+        let refine: [Axis; 1] = [&knobs];
+        let (config, ms) = search(
+            (1, 0),
+            cost((1, 0)),
+            &[(1, 0), (2, 0), (3, 0)],
+            &refine,
+            &mut probe,
+            &|_, _| {},
+        );
+        assert_eq!(config, (2, 1));
+        assert!((ms - cost((2, 1))).abs() < 1e-9);
+        // fallback is never re-timed, the failing candidate is skipped, the incumbent knob is skipped
+        assert_eq!(calls, 2 + 2);
     }
 
     #[test]

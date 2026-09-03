@@ -6,6 +6,7 @@ mod fused_moe;
 mod fused_moe_fp8;
 mod gdn_prefill;
 mod routed_lora;
+mod split_k;
 mod tune;
 mod warmup;
 
@@ -235,18 +236,81 @@ mod tests {
     }
 }
 
-/// Launch tile config for the grouped GEMM, computed once from the token count and reused for both GEMMs (`bm` is the `moe_align` block size).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+/// Launch config for the grouped MoE GEMMs, computed once from the token count and reused for both
+/// GEMMs (`bm` is the `moe_align` block size). The knobs past `group_m` default to "let the
+/// compiler decide" and exist for the autotuner to sweep.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub struct MoeTileConfig {
     pub bm: i32,
     pub bn: i32,
     pub bk: i32,
     pub group_m: i32,
+    /// K-range splits per output tile; partials reduce in a second pass when above 1.
+    #[serde(default = "default_split_k")]
+    pub split_k: i32,
+    /// Software-pipelining latency hint on the operand loads; 0 leaves it to the compiler.
+    #[serde(default)]
+    pub latency: i32,
+    /// Worker warps per CTA; 0 leaves it to the compiler.
+    #[serde(default)]
+    pub warps: i32,
+    /// Target CTAs per SM; 0 leaves it to the compiler.
+    #[serde(default)]
+    pub occupancy: i32,
+    /// CTAs per cluster; 0 leaves it to the compiler.
+    #[serde(default)]
+    pub cluster: i32,
+}
+
+fn default_split_k() -> i32 {
+    1
+}
+
+impl MoeTileConfig {
+    pub const fn tiles(bm: i32, bn: i32, bk: i32, group_m: i32) -> Self {
+        Self {
+            bm,
+            bn,
+            bk,
+            group_m,
+            split_k: 1,
+            latency: 0,
+            warps: 0,
+            occupancy: 0,
+            cluster: 0,
+        }
+    }
+
+    pub fn compile_options(&self) -> cutile::tile_kernel::CompileOptions {
+        let mut options = cutile::tile_kernel::CompileOptions::new();
+        if self.warps > 0 {
+            options = options.num_worker_warps_per_cta(self.warps);
+        }
+        if self.occupancy > 0 {
+            options = options.occupancy(self.occupancy);
+        }
+        if self.cluster > 0 {
+            options = options.num_cta_in_cga(self.cluster);
+        }
+        options
+    }
 }
 
 impl std::fmt::Display for MoeTileConfig {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}x{}x{} g{}", self.bm, self.bn, self.bk, self.group_m)
+        write!(f, "{}x{}x{} g{}", self.bm, self.bn, self.bk, self.group_m)?;
+        for (label, value, default) in [
+            ("s", self.split_k, 1),
+            ("l", self.latency, 0),
+            ("w", self.warps, 0),
+            ("o", self.occupancy, 0),
+            ("c", self.cluster, 0),
+        ] {
+            if value != default {
+                write!(f, " {label}{value}")?;
+            }
+        }
+        Ok(())
     }
 }
 
@@ -283,10 +347,5 @@ pub const fn get_default_config(m: usize, num_experts: usize) -> MoeTileConfig {
     let bk = if m <= 64 { 128 } else { 64 };
     let num_experts = if num_experts == 0 { 1 } else { num_experts };
     let group_m = if m / num_experts > 128 { 16 } else { 1 };
-    MoeTileConfig {
-        bm,
-        bn,
-        bk,
-        group_m,
-    }
+    MoeTileConfig::tiles(bm, bn, bk, group_m)
 }

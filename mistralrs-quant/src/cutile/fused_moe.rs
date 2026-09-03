@@ -15,6 +15,7 @@ use std::sync::{Mutex, OnceLock};
 use crate::moe::cuda::{moe_align, moe_align_em};
 use crate::utils::{slice_ptr_mut_on_stream, slice_ptr_on_stream};
 
+use super::split_k::reduce_split_k;
 use super::tune::{
     buckets_from_breakpoints, tune, Bucket, TuneMode, TuneRequest, TuneRouting, TunedTable,
     HOT_ROUTING_TOKENS, TUNE_ITERS, TUNE_WEIGHT_SETS,
@@ -40,8 +41,11 @@ pub mod fused_moe {
         const GROUP_M: i32,
         const TOP_K: i32,             // model top-k for gate_up, 1 for down
         const MUL_ROUTED_WEIGHT: i32, // 0 / 1
+        const SPLIT_K: i32, // K ranges per output tile; partials go to partial_ptr when > 1
+        const LATENCY: i32, // operand-load pipelining hint, 0 = compiler default
     >(
         out_ptr: *mut bf16,                   // C: [num_valid_tokens, N], stride (N, 1)
+        partial_ptr: *mut f32,                // [SPLIT_K, num_valid_tokens, N]
         a_ptr: *mut bf16,                     // A: [num_a_rows, K], stride (K, 1)
         b_ptr: *mut bf16,                     // B: [E, N, K], stride (N*K, K, 1)
         sorted_token_ids_ptr: *mut i32,       // [EM]
@@ -53,7 +57,9 @@ pub mod fused_moe {
         em: i32,
         num_valid_tokens: i32,
     ) {
-        let pid: i32 = get_tile_block_id().0;
+        let pid_all: i32 = get_tile_block_id().0;
+        let split: i32 = pid_all % SPLIT_K;
+        let pid: i32 = pid_all / SPLIT_K;
         let num_pid_m: i32 = ceil_div(em, BM);
         let num_pid_n: i32 = ceil_div(n_size, BN);
         let num_pid_in_group: i32 = GROUP_M * num_pid_n;
@@ -150,18 +156,40 @@ pub mod fused_moe {
             let cnb_row: Tile<bool, { [1, BN] }> = cn_inb.reshape(const_shape![1, BN]);
             let cnb_2d: Tile<bool, { [BM, BN] }> = cnb_row.broadcast(const_shape![BM, BN]);
             let c_mask: Tile<bool, { [BM, BN] }> = tm_2d & cnb_2d;
+            let p_base0: PointerTile<*mut f32, { [] }> = pointer_to_tile(partial_ptr);
+            let p_base1: PointerTile<*mut f32, { [1, 1] }> = p_base0.reshape(const_shape![1, 1]);
+            let p_base2: PointerTile<*mut f32, { [BM, BN] }> =
+                p_base1.broadcast(const_shape![BM, BN]);
+            let slice_off: Tile<i32, { [BM, BN] }> =
+                broadcast_scalar(split * (num_valid_tokens * n_size), const_shape![BM, BN]);
+            let p_ptrs: PointerTile<*mut f32, { [BM, BN] }> =
+                p_base2.offset_tile(c_off + slice_off);
 
             if off_experts == -1 {
-                let zeros: Tile<bf16, { [BM, BN] }> = constant(bf16::ZERO, const_shape![BM, BN]);
-                store_ptr_tko(
-                    c_ptrs,
-                    zeros,
-                    ordering::Weak,
-                    None::<scope::TileBlock>,
-                    Some(c_mask),
-                    None,
-                    Latency::<0>,
-                );
+                if SPLIT_K > 1 {
+                    let zeros: Tile<f32, { [BM, BN] }> = constant(0.0f32, const_shape![BM, BN]);
+                    store_ptr_tko(
+                        p_ptrs,
+                        zeros,
+                        ordering::Weak,
+                        None::<scope::TileBlock>,
+                        Some(c_mask),
+                        None,
+                        Latency::<0>,
+                    );
+                } else {
+                    let zeros: Tile<bf16, { [BM, BN] }> =
+                        constant(bf16::ZERO, const_shape![BM, BN]);
+                    store_ptr_tko(
+                        c_ptrs,
+                        zeros,
+                        ordering::Weak,
+                        None::<scope::TileBlock>,
+                        Some(c_mask),
+                        None,
+                        Latency::<0>,
+                    );
+                }
             } else {
                 // offs_bn = offs_cn % N bounds B reads on the last N-tile; manual modulo (cuTile remi won't serialize).
                 let n_tile: Tile<i32, { [BN] }> = broadcast_scalar(n_size, const_shape![BN]);
@@ -211,8 +239,16 @@ pub mod fused_moe {
                 let b_step: Tile<i32, { [BK, BN] }> = broadcast_scalar(BK, const_shape![BK, BN]);
 
                 let mut acc: Tile<f32, { [BM, BN] }> = constant(0.0f32, const_shape![BM, BN]);
-                let kt: i32 = ceil_div(k_size, BK);
-                for kk in 0i32..kt {
+                // split-K needs K a multiple of BK (host-checked), so each range is whole tiles
+                let kt: i32 = ceil_div(k_size, BK) / SPLIT_K;
+                let k_begin: i32 = split * kt;
+                let a_skip: Tile<i32, { [BM, BK] }> =
+                    broadcast_scalar(k_begin * BK, const_shape![BM, BK]);
+                let b_skip: Tile<i32, { [BK, BN] }> =
+                    broadcast_scalar(k_begin * BK, const_shape![BK, BN]);
+                a_ptrs = a_ptrs.offset_tile(a_skip);
+                b_ptrs = b_ptrs.offset_tile(b_skip);
+                for kk in k_begin..k_begin + kt {
                     let base_k: Tile<i32, { [BK] }> = broadcast_scalar(kk * BK, const_shape![BK]);
                     let offs_k: Tile<i32, { [BK] }> = iota_k + base_k;
                     let k_size_t: Tile<i32, { [BK] }> = broadcast_scalar(k_size, const_shape![BK]);
@@ -229,24 +265,97 @@ pub mod fused_moe {
                     let b_n_mask: Tile<bool, { [BK, BN] }> =
                         b_n_mask_row.broadcast(const_shape![BK, BN]);
                     let b_mask: Tile<bool, { [BK, BN] }> = b_k_mask & b_n_mask;
-                    let (a_load, _): (Tile<bf16, { [BM, BK] }>, Token) = load_ptr_tko(
-                        a_ptrs,
-                        ordering::Weak,
-                        None::<scope::TileBlock>,
-                        Some(a_mask),
-                        None,
-                        None,
-                        Latency::<0>,
-                    );
-                    let (b_load, _): (Tile<bf16, { [BK, BN] }>, Token) = load_ptr_tko(
-                        b_ptrs,
-                        ordering::Weak,
-                        None::<scope::TileBlock>,
-                        Some(b_mask),
-                        None,
-                        None,
-                        Latency::<0>,
-                    );
+                    // the latency hint is a type-level literal, so the generic picks among fixed values
+                    let a_load: Tile<bf16, { [BM, BK] }> = if LATENCY >= 4 {
+                        let (t, _): (Tile<bf16, { [BM, BK] }>, Token) = load_ptr_tko(
+                            a_ptrs,
+                            ordering::Weak,
+                            None::<scope::TileBlock>,
+                            Some(a_mask),
+                            None,
+                            None,
+                            Latency::<4>,
+                        );
+                        t
+                    } else if LATENCY >= 2 {
+                        let (t, _): (Tile<bf16, { [BM, BK] }>, Token) = load_ptr_tko(
+                            a_ptrs,
+                            ordering::Weak,
+                            None::<scope::TileBlock>,
+                            Some(a_mask),
+                            None,
+                            None,
+                            Latency::<2>,
+                        );
+                        t
+                    } else if LATENCY == 1 {
+                        let (t, _): (Tile<bf16, { [BM, BK] }>, Token) = load_ptr_tko(
+                            a_ptrs,
+                            ordering::Weak,
+                            None::<scope::TileBlock>,
+                            Some(a_mask),
+                            None,
+                            None,
+                            Latency::<1>,
+                        );
+                        t
+                    } else {
+                        let (t, _): (Tile<bf16, { [BM, BK] }>, Token) = load_ptr_tko(
+                            a_ptrs,
+                            ordering::Weak,
+                            None::<scope::TileBlock>,
+                            Some(a_mask),
+                            None,
+                            None,
+                            Latency::<0>,
+                        );
+                        t
+                    };
+                    let b_load: Tile<bf16, { [BK, BN] }> = if LATENCY >= 4 {
+                        let (t, _): (Tile<bf16, { [BK, BN] }>, Token) = load_ptr_tko(
+                            b_ptrs,
+                            ordering::Weak,
+                            None::<scope::TileBlock>,
+                            Some(b_mask),
+                            None,
+                            None,
+                            Latency::<4>,
+                        );
+                        t
+                    } else if LATENCY >= 2 {
+                        let (t, _): (Tile<bf16, { [BK, BN] }>, Token) = load_ptr_tko(
+                            b_ptrs,
+                            ordering::Weak,
+                            None::<scope::TileBlock>,
+                            Some(b_mask),
+                            None,
+                            None,
+                            Latency::<2>,
+                        );
+                        t
+                    } else if LATENCY == 1 {
+                        let (t, _): (Tile<bf16, { [BK, BN] }>, Token) = load_ptr_tko(
+                            b_ptrs,
+                            ordering::Weak,
+                            None::<scope::TileBlock>,
+                            Some(b_mask),
+                            None,
+                            None,
+                            Latency::<1>,
+                        );
+                        t
+                    } else {
+                        let (t, _): (Tile<bf16, { [BK, BN] }>, Token) = load_ptr_tko(
+                            b_ptrs,
+                            ordering::Weak,
+                            None::<scope::TileBlock>,
+                            Some(b_mask),
+                            None,
+                            None,
+                            Latency::<0>,
+                        );
+                        t
+                    };
                     let a_zero: Tile<bf16, { [BM, BK] }> =
                         constant(bf16::ZERO, const_shape![BM, BK]);
                     let b_zero: Tile<bf16, { [BK, BN] }> =
@@ -279,16 +388,28 @@ pub mod fused_moe {
                     acc = acc * moe_w_2d;
                 }
 
-                let acc_bf: Tile<bf16, { [BM, BN] }> = convert_tile(acc);
-                store_ptr_tko(
-                    c_ptrs,
-                    acc_bf,
-                    ordering::Weak,
-                    None::<scope::TileBlock>,
-                    Some(c_mask),
-                    None,
-                    Latency::<0>,
-                );
+                if SPLIT_K > 1 {
+                    store_ptr_tko(
+                        p_ptrs,
+                        acc,
+                        ordering::Weak,
+                        None::<scope::TileBlock>,
+                        Some(c_mask),
+                        None,
+                        Latency::<0>,
+                    );
+                } else {
+                    let acc_bf: Tile<bf16, { [BM, BN] }> = convert_tile(acc);
+                    store_ptr_tko(
+                        c_ptrs,
+                        acc_bf,
+                        ordering::Weak,
+                        None::<scope::TileBlock>,
+                        Some(c_mask),
+                        None,
+                        Latency::<0>,
+                    );
+                }
             }
         }
     }
@@ -382,9 +503,37 @@ fn cutile_grouped_gemm_inner(
         }
     };
 
+    let splits = cfg.split_k.max(1) as usize;
+    if splits > 1
+        && (!k_size.is_multiple_of(cfg.bk as usize)
+            || !(k_size / cfg.bk as usize).is_multiple_of(splits))
+    {
+        candle_core::bail!(
+            "cuTile MoE split_k {splits} does not divide K={k_size} in {} tiles",
+            cfg.bk
+        )
+    }
+    let numel = num_valid_tokens * n_size;
+    let mut partial = if splits > 1 {
+        Some(unsafe { dev.alloc::<f32>(splits * numel)? })
+    } else {
+        None
+    };
+    let partial_guard;
+    let partial_addr = match partial.as_mut() {
+        Some(buf) => {
+            let (addr, guard) = slice_ptr_mut_on_stream(buf, 0, &stream);
+            partial_guard = Some(guard);
+            addr
+        }
+        None => {
+            partial_guard = None;
+            0
+        }
+    };
     let num_pid_m = em.div_ceil(cfg.bm as usize);
     let num_pid_n = n_size.div_ceil(cfg.bn as usize);
-    let grid_x = (num_pid_m * num_pid_n) as u32;
+    let grid_x = (num_pid_m * num_pid_n * splits) as u32;
 
     let generics = vec![
         cfg.bm.to_string(),
@@ -393,12 +542,15 @@ fn cutile_grouped_gemm_inner(
         cfg.group_m.to_string(),
         (top_k as i32).to_string(),
         (if mul_routed_weight { 1 } else { 0 }).to_string(),
+        (splits as i32).to_string(),
+        cfg.latency.to_string(),
     ];
 
     let cutile_stream = context::stream(dev);
     let launcher = unsafe {
         fused_moe::fused_moe_kernel(
             DevicePointer::<bf16>::from_cu_deviceptr(out_addr as CUdeviceptr),
+            DevicePointer::<f32>::from_cu_deviceptr(partial_addr as CUdeviceptr),
             DevicePointer::<bf16>::from_cu_deviceptr(a_addr as CUdeviceptr),
             DevicePointer::<bf16>::from_cu_deviceptr(b_addr as CUdeviceptr),
             DevicePointer::<i32>::from_cu_deviceptr(sids_addr as CUdeviceptr),
@@ -412,7 +564,8 @@ fn cutile_grouped_gemm_inner(
         )
     }
     .generics(generics)
-    .grid((grid_x, 1, 1));
+    .grid((grid_x, 1, 1))
+    .compile_options(cfg.compile_options());
 
     if compile_only {
         catch_cutile_panic("fused MoE kernel compile", || {
@@ -427,7 +580,10 @@ fn cutile_grouped_gemm_inner(
                 .map_err(|e| candle_core::Error::Msg(format!("cutile fused_moe launch: {e:?}")))
         })?;
     }
-    drop((out_guard, tw_guard));
+    drop((out_guard, tw_guard, partial_guard));
+    if let Some(partial) = &partial {
+        reduce_split_k(partial, &mut out, splits as i32, numel, dev, compile_only)?;
+    }
 
     let storage = candle_core::CudaStorage::wrap_cuda_slice(out, dev.clone());
     Ok(Tensor::from((
@@ -490,7 +646,12 @@ pub fn register_moe_shape(gate_up_w: Tensor, down_w: Tensor, num_experts: usize,
 
 const TUNE_KERNEL: &str = "fused_moe";
 /// Bump when the kernel or the candidate lists change so cached winners are re-measured.
-const TUNE_VERSION: u32 = 1;
+const TUNE_VERSION: u32 = 2;
+/// Knob values the tuner descends over after picking tiles.
+const LATENCIES: [i32; 3] = [0, 2, 4];
+const WARPS: [i32; 3] = [0, 4, 8];
+const OCCUPANCIES: [i32; 2] = [0, 2];
+const SPLITS: [i32; 3] = [1, 2, 4];
 /// Token counts where `get_default_config` changes tiles; `group_m` flips once m reaches 129*E.
 const POLICY_BREAKPOINTS: [usize; 4] = [32, 64, 96, 512];
 const GROUP_M_TOKENS_PER_EXPERT: usize = 129;
@@ -532,13 +693,44 @@ fn bf16_candidates(bucket: Bucket) -> Vec<MoeTileConfig> {
     };
     tiles
         .iter()
-        .map(|&(bm, bn, bk, group_m)| MoeTileConfig {
-            bm,
-            bn,
-            bk,
-            group_m,
-        })
+        .map(|&(bm, bn, bk, group_m)| MoeTileConfig::tiles(bm, bn, bk, group_m))
         .collect()
+}
+
+/// Knob axes the tuner descends after picking tiles; split-K only where both GEMMs' K tiles divide.
+fn bf16_refine(shape: MoeShapeKey) -> Vec<Box<dyn Fn(MoeTileConfig) -> Vec<MoeTileConfig>>> {
+    vec![
+        Box::new(|cfg| {
+            LATENCIES
+                .iter()
+                .map(|&latency| MoeTileConfig { latency, ..cfg })
+                .collect()
+        }),
+        Box::new(|cfg| {
+            WARPS
+                .iter()
+                .map(|&warps| MoeTileConfig { warps, ..cfg })
+                .collect()
+        }),
+        Box::new(|cfg| {
+            OCCUPANCIES
+                .iter()
+                .map(|&occupancy| MoeTileConfig { occupancy, ..cfg })
+                .collect()
+        }),
+        Box::new(move |cfg| {
+            let bk = cfg.bk as usize;
+            SPLITS
+                .iter()
+                .filter(|&&split_k| {
+                    [shape.hidden, shape.inter]
+                        .iter()
+                        .all(|&k| k.is_multiple_of(bk) && (k / bk).is_multiple_of(split_k as usize))
+                })
+                .map(|&split_k| MoeTileConfig { split_k, ..cfg })
+                .collect()
+        }),
+    ]
 }
 
 /// Milliseconds for both grouped GEMMs at `m` tokens with `cfg`, rotating through `sets`.
@@ -671,10 +863,7 @@ pub(super) fn warmup_token_counts_for(
         let em = moe_align_em(m, k, e, cfg.bm as usize);
         // sig mirrors the cuTile cache key for this launch, so distinct sigs == distinct kernels.
         let sig = (
-            cfg.bm,
-            cfg.bn,
-            cfg.bk,
-            cfg.group_m,
+            cfg,
             div_hint_class(em as i32),
             div_hint_class((k * m) as i32),
         );
@@ -699,6 +888,9 @@ fn warmup_moe_kernels_uncached(dev: &CudaDevice) -> Result<()> {
         let key = sets[0].shape_key();
         let buckets = bf16_buckets(key.num_experts);
         let fallback = |m: usize| get_default_config(m, key.num_experts);
+        let refine = bf16_refine(key);
+        let refine: Vec<&dyn Fn(MoeTileConfig) -> Vec<MoeTileConfig>> =
+            refine.iter().map(|axis| axis.as_ref()).collect();
         let request = TuneRequest {
             kernel: TUNE_KERNEL,
             version: TUNE_VERSION,
@@ -706,6 +898,7 @@ fn warmup_moe_kernels_uncached(dev: &CudaDevice) -> Result<()> {
             buckets: &buckets,
             fallback: &fallback,
             candidates: &bf16_candidates,
+            refine: &refine,
         };
         let tuned = tune(dev, mode, &request, |m, cfg| {
             time_bf16_config(dev, sets, m, cfg, TuneRouting::for_tokens(m))
