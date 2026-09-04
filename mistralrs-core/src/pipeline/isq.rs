@@ -1269,6 +1269,7 @@ pub(crate) fn sanitize_quantized_weight_source_config(config: &str) -> Result<St
         match value {
             serde_json::Value::Object(object) => {
                 object.remove("quantization_config");
+                object.remove("compression_config");
                 for value in object.values_mut() {
                     remove_source_quantization(value);
                 }
@@ -1586,9 +1587,11 @@ mod tests {
             "_mistralrs_gdn_v_head_layout": "tiled",
             "_mistralrs_qk_rope_layout": "adjacent",
             "quantization_config": {"quant_method": "gptq", "bits": 4},
+            "compression_config": {"quant_method": "compressed-tensors"},
             "text_config": {
                 "hidden_size": 128,
-                "quantization_config": {"quant_method": "fp8"}
+                "quantization_config": {"quant_method": "fp8"},
+                "compression_config": {"quant_method": "compressed-tensors"}
             },
             "submodels": [
                 {"quantization_config": {"quant_method": "awq"}, "layers": 2}
@@ -1604,9 +1607,11 @@ mod tests {
         assert_eq!(sanitized["text_config"]["hidden_size"], 128);
         assert_eq!(sanitized["submodels"][0]["layers"], 2);
         assert!(sanitized.get("quantization_config").is_none());
+        assert!(sanitized.get("compression_config").is_none());
         assert!(sanitized["text_config"]
             .get("quantization_config")
             .is_none());
+        assert!(sanitized["text_config"].get("compression_config").is_none());
         assert!(sanitized["submodels"][0]
             .get("quantization_config")
             .is_none());

@@ -10,16 +10,24 @@ pub(super) trait CutileKernel {
 }
 
 /// Every cuTile kernel to warm; add a line per new kernel.
-fn registered() -> [&'static dyn CutileKernel; 4] {
+fn registered() -> [&'static dyn CutileKernel; 6] {
     [
         &super::fused_moe::FUSED_MOE,
         &super::fused_moe_fp8::FUSED_MOE_FP8,
         &super::fp8_gemm::FP8_GEMM,
+        &super::fp8_w8a8::FP8_W8A8,
+        &super::fp8_w8a16::FP8_W8A16,
         &super::gdn_prefill::GDN_PREFILL,
     ]
 }
 
 static WARMED_LOCATIONS: OnceLock<Mutex<HashSet<DeviceLocation>>> = OnceLock::new();
+
+pub(super) fn mark_dirty() {
+    if let Some(warmed) = WARMED_LOCATIONS.get() {
+        warmed.lock().unwrap().clear();
+    }
+}
 
 /// Warm every registered cuTile kernel once per device.
 pub fn warmup_moe_kernels(device: &Device) -> Result<()> {

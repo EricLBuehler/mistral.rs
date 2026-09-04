@@ -5,15 +5,13 @@ use candle_nn::Linear;
 
 use crate::{
     blockwise_fp8::{
-        blockwise_fp8_linear_b, blockwise_fp8_module_kind, blockwise_fp8_moe,
-        scale_shard_from_weight_shard, BlockwiseFp8ModuleKind,
+        blockwise_fp8_module_kind, blockwise_fp8_moe, scale_shard_from_weight_shard,
+        BlockwiseFp8ModuleKind,
     },
     distributed,
     gptq::gptq_linear,
     lora::maybe_wrap_dynamic_lora_with_key,
-    make_dummy_or_error, maybe_wrap_dynamic_lora,
-    pertensor_fp8::pertensor_fp8_linear_b,
-    should_apply_immediate_isq,
+    make_dummy_or_error, maybe_wrap_dynamic_lora, should_apply_immediate_isq,
     utils::isq::apply_immediate_isq_sharded,
     ActivationQuantizationScheme, ActivationScaleLayout, AfqLayer, BlockwiseFP8Linear, BnbLinear,
     DistributedKind, LoraLinearSpec, LoraSiteKey, MXFP4Layer, QuantMethod, QuantMethodConfig,
@@ -457,6 +455,12 @@ fn load_packed_weights(
             let Some(weight_block_size) = weight_block_size else {
                 return Ok(None);
             };
+            if builders
+                .iter()
+                .any(|builder| builder.contains_tensor("weight_scale"))
+            {
+                return Ok(None);
+            }
             let module_kinds = builders
                 .iter()
                 .map(|builder| blockwise_fp8_module_kind(config, builder))
@@ -497,11 +501,8 @@ fn load_packed_weights(
                             "expected nonzero FP8 weight block dimensions, got {weight_block_size:?}"
                         );
                     }
-                    if fmt.as_deref().is_some_and(|fmt| fmt != "e4m3") {
-                        candle_core::bail!(
-                            "unsupported blockwise FP8 format {fmt:?}; expected `e4m3`"
-                        );
-                    }
+                    crate::fp8_config::validate_e4m3(fmt.as_deref())
+                        .map_err(candle_core::Error::msg)?;
                     PackedWeightKind::BlockwiseFp8 {
                         block_size: [row_block, col_block],
                         activation_scheme: *activation_scheme,
@@ -807,30 +808,16 @@ impl RowParallelLayer {
                 QuantizedConfig::GptqAwq { .. } => {
                     gptq_linear(in_dim, out_dim, quant_conf, vb.clone())?
                 }
-                QuantizedConfig::Fp8 {
-                    weight_block_size, ..
-                } => {
-                    // NOTE: no bias for fp8 as it might be parallelized
-                    if weight_block_size.is_some() {
-                        blockwise_fp8_linear_b(
-                            in_dim,
-                            out_dim,
-                            quant_conf,
-                            false,
-                            shard,
-                            vb.clone(),
-                        )?
-                    } else {
-                        pertensor_fp8_linear_b(
-                            in_dim,
-                            out_dim,
-                            quant_conf,
-                            false,
-                            shard,
-                            vb.clone(),
-                        )?
-                    }
-                }
+                QuantizedConfig::Fp8 { .. }
+                | QuantizedConfig::CompressedTensors { .. }
+                | QuantizedConfig::ModelOpt { .. } => crate::fp8_config::fp8_checkpoint_linear_b(
+                    in_dim,
+                    out_dim,
+                    quant_conf,
+                    false,
+                    shard,
+                    vb.clone(),
+                )?,
                 QuantizedConfig::Bitsandbytes { .. } => {
                     Arc::new(BnbLinear::linear_b(in_dim, out_dim, bias, vb.clone())?) as Arc<_>
                 }
@@ -1266,30 +1253,16 @@ impl ColumnParallelLayer {
                 QuantizedConfig::GptqAwq { .. } => {
                     gptq_linear(in_dim, out_dim, quant_conf, vb.clone())?
                 }
-                QuantizedConfig::Fp8 {
-                    weight_block_size, ..
-                } => {
-                    // NOTE: no bias for fp8 as it might be parallelized
-                    if weight_block_size.is_some() {
-                        blockwise_fp8_linear_b(
-                            in_dim,
-                            out_dim,
-                            quant_conf,
-                            false,
-                            shard,
-                            vb.clone(),
-                        )?
-                    } else {
-                        pertensor_fp8_linear_b(
-                            in_dim,
-                            out_dim,
-                            quant_conf,
-                            false,
-                            shard,
-                            vb.clone(),
-                        )?
-                    }
-                }
+                QuantizedConfig::Fp8 { .. }
+                | QuantizedConfig::CompressedTensors { .. }
+                | QuantizedConfig::ModelOpt { .. } => crate::fp8_config::fp8_checkpoint_linear_b(
+                    in_dim,
+                    out_dim,
+                    quant_conf,
+                    false,
+                    shard,
+                    vb.clone(),
+                )?,
                 QuantizedConfig::Bitsandbytes { .. } => {
                     Arc::new(BnbLinear::linear_b(in_dim, out_dim, bias, vb.clone())?) as Arc<_>
                 }
@@ -1918,29 +1891,16 @@ impl ReplicatedLayer {
                 QuantizedConfig::GptqAwq { .. } => {
                     gptq_linear(in_dim, out_dim, quant_conf, vb.clone())?
                 }
-                QuantizedConfig::Fp8 {
-                    weight_block_size, ..
-                } => {
-                    if weight_block_size.is_some() {
-                        blockwise_fp8_linear_b(
-                            in_dim,
-                            out_dim,
-                            quant_conf,
-                            bias,
-                            Default::default(),
-                            vb.clone(),
-                        )?
-                    } else {
-                        pertensor_fp8_linear_b(
-                            in_dim,
-                            out_dim,
-                            quant_conf,
-                            bias,
-                            Default::default(),
-                            vb.clone(),
-                        )?
-                    }
-                }
+                QuantizedConfig::Fp8 { .. }
+                | QuantizedConfig::CompressedTensors { .. }
+                | QuantizedConfig::ModelOpt { .. } => crate::fp8_config::fp8_checkpoint_linear_b(
+                    in_dim,
+                    out_dim,
+                    quant_conf,
+                    bias,
+                    Default::default(),
+                    vb.clone(),
+                )?,
                 QuantizedConfig::Bitsandbytes { .. } => {
                     Arc::new(BnbLinear::linear_b(in_dim, out_dim, bias, vb.clone())?) as Arc<_>
                 }
@@ -2147,29 +2107,16 @@ impl ReplicatedLayer {
                 QuantizedConfig::GptqAwq { .. } => {
                     gptq_linear(in_dim, out_dim, quant_conf, vb.clone())?
                 }
-                QuantizedConfig::Fp8 {
-                    weight_block_size, ..
-                } => {
-                    if weight_block_size.is_some() {
-                        blockwise_fp8_linear_b(
-                            in_dim,
-                            out_dim,
-                            quant_conf,
-                            bias,
-                            Default::default(),
-                            vb.clone(),
-                        )?
-                    } else {
-                        pertensor_fp8_linear_b(
-                            in_dim,
-                            out_dim,
-                            quant_conf,
-                            bias,
-                            Default::default(),
-                            vb.clone(),
-                        )?
-                    }
-                }
+                QuantizedConfig::Fp8 { .. }
+                | QuantizedConfig::CompressedTensors { .. }
+                | QuantizedConfig::ModelOpt { .. } => crate::fp8_config::fp8_checkpoint_linear_b(
+                    in_dim,
+                    out_dim,
+                    quant_conf,
+                    bias,
+                    Default::default(),
+                    vb.clone(),
+                )?,
                 QuantizedConfig::Bitsandbytes { .. } => {
                     Arc::new(BnbLinear::linear_b(in_dim, out_dim, bias, vb.clone())?) as Arc<_>
                 }
@@ -3248,7 +3195,7 @@ mod tests {
         let config = Some(QuantizedConfig::Fp8 {
             weight_block_size: Some(vec![2, 2]),
             activation_scheme: Some(Fp8ActivationScheme::Dynamic),
-            fmt: Some("e4m3".to_string()),
+            fmt: Some("e4m3fn".to_string()),
             modules_to_not_convert: Vec::new(),
         });
         let comm = Arc::new(Comm::from_device(Id::new(), &device, 0, 1)?);
@@ -3283,6 +3230,42 @@ mod tests {
             canonical.iter().map(|row| row[0]).collect::<Vec<_>>(),
             vec![1., 1., 2., 2., 3., 3., 4., 4.]
         );
+        Ok(())
+    }
+
+    #[test]
+    fn packed_blockwise_fp8_weight_scale_alias_falls_back() -> candle_core::Result<()> {
+        let device = Device::Cpu;
+        let tensors = HashMap::from([
+            (
+                "q.weight".to_string(),
+                Tensor::ones((4, 4), DType::F8E4M3, &device)?,
+            ),
+            (
+                "q.weight_scale".to_string(),
+                Tensor::ones((2, 2), DType::F32, &device)?,
+            ),
+        ]);
+        let vb = ShardedSafeTensors::wrap(tensors, DType::BF16, device.clone());
+        let config = Some(QuantizedConfig::Fp8 {
+            weight_block_size: Some(vec![2, 2]),
+            activation_scheme: Some(Fp8ActivationScheme::Dynamic),
+            fmt: Some("e4m3".to_string()),
+            modules_to_not_convert: Vec::new(),
+        });
+        let comm = Arc::new(Comm::from_device(Id::new(), &device, 0, 1)?);
+        assert!(ColumnParallelLayer::new_packed(
+            4,
+            &[4],
+            &["q"],
+            &config,
+            false,
+            &comm,
+            None,
+            vb.clone(),
+        )?
+        .is_none());
+        ColumnParallelLayer::new(4, 4, &config, false, &comm, vb.pp("q"))?;
         Ok(())
     }
 

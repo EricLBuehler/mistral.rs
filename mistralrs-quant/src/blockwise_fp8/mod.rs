@@ -27,10 +27,10 @@ use crate::GluActivationType;
 use crate::{
     generate_isq, generate_isq_imatrix,
     hqq::{ISQ_HQQ_DEFAULT_OPT_STEPS, ISQ_HQQ_GROUP_SIZE},
-    make_dummy_or_error, ActivationQuantizationScheme, ActivationScaleLayout, AfqBits,
-    AfqGroupSize, AfqLayer, FP8Linear, Fp8ActivationScheme, GgufMatMul, HqqAxis, HqqBits,
-    HqqConfig, HqqLayer, IsqType, QuantMethod, QuantMethodConfig, QuantizeOntoGuard,
-    QuantizedActivation, QuantizedConfig, QuantizedSerde, Shard, ShardedVarBuilder, UnquantLinear,
+    ActivationQuantizationScheme, ActivationScaleLayout, AfqBits, AfqGroupSize, AfqLayer,
+    FP8Linear, Fp8ActivationScheme, GgufMatMul, HqqAxis, HqqBits, HqqConfig, HqqLayer, IsqType,
+    QuantMethod, QuantMethodConfig, QuantizeOntoGuard, QuantizedActivation, QuantizedConfig,
+    QuantizedSerde, Shard, ShardedVarBuilder, UnquantLinear,
 };
 
 #[derive(Debug)]
@@ -47,6 +47,8 @@ pub struct BlockwiseFP8Linear {
 #[derive(Clone, Debug)]
 enum BlockwiseFp8Provider {
     Legacy,
+    #[cfg(all(feature = "cuda", feature = "cutile"))]
+    CutileW8A16,
     #[cfg(all(feature = "cuda", has_cutlass_fp8_sm90_kernels))]
     CutlassSm90,
     #[cfg(all(feature = "cuda", has_deepgemm_fp8_sm90_provider))]
@@ -70,6 +72,8 @@ impl BlockwiseFp8Provider {
     fn supports_shared_activation(&self) -> bool {
         match self {
             Self::Legacy => false,
+            #[cfg(all(feature = "cuda", feature = "cutile"))]
+            Self::CutileW8A16 => false,
             #[cfg(all(feature = "cuda", has_cutlass_fp8_sm90_kernels))]
             Self::CutlassSm90 => true,
             #[cfg(all(feature = "cuda", has_deepgemm_fp8_sm90_provider))]
@@ -94,6 +98,24 @@ impl BlockwiseFP8Linear {
 
     fn prepare_provider(&mut self) -> Result<()> {
         self.provider = BlockwiseFp8Provider::Legacy;
+        #[cfg(all(feature = "cuda", feature = "cutile"))]
+        if self.activation_scheme.is_none()
+            && self.weight_block_size == [128, 128]
+            && matches!(self.dequant_dtype, DType::BF16 | DType::F16)
+        {
+            if let (Device::Cuda(dev), Ok((n, k))) = (self.weight.device(), self.weight.dims2()) {
+                if crate::cutile::fp8_w8a16_supported(dev, n, k, self.dequant_dtype) {
+                    crate::cutile::register_fp8_w8a16_shape(
+                        &self.weight,
+                        &self.weight_scale_inv,
+                        crate::Fp8WeightScaleLayout::Block([128, 128]),
+                        self.dequant_dtype,
+                    );
+                    self.provider = BlockwiseFp8Provider::CutileW8A16;
+                    return Ok(());
+                }
+            }
+        }
         if self.activation_scheme != Some(Fp8ActivationScheme::Dynamic) {
             return Ok(());
         }
@@ -272,6 +294,49 @@ impl QuantMethod for BlockwiseFP8Linear {
     }
 
     fn forward_raw(&self, x: &Tensor) -> Result<Tensor> {
+        #[cfg(all(feature = "cuda", feature = "cutile"))]
+        if matches!(self.provider, BlockwiseFp8Provider::CutileW8A16)
+            && matches!(x.dtype(), DType::BF16 | DType::F16)
+        {
+            let original_shape = x.dims().to_vec();
+            let features = original_shape
+                .last()
+                .copied()
+                .ok_or_else(|| candle_core::Error::msg("FP8 activation cannot be scalar"))?;
+            let rows = original_shape[..original_shape.len() - 1]
+                .iter()
+                .try_fold(1usize, |rows, dim| rows.checked_mul(*dim))
+                .ok_or_else(|| candle_core::Error::msg("FP8 activation shape overflows usize"))?;
+            let (output_features, weight_features) = self.weight.dims2()?;
+            if features != weight_features {
+                candle_core::bail!(
+                    "FP8 activation K={features} does not match weight K={weight_features}"
+                )
+            }
+            if !x.device().same_device(self.weight.device()) {
+                candle_core::bail!("FP8 weight and activation must be on the same device")
+            }
+            if rows == 0 {
+                let mut output_shape = original_shape[..original_shape.len() - 1].to_vec();
+                output_shape.push(output_features);
+                return Tensor::zeros(output_shape, x.dtype(), x.device());
+            }
+            let input = x.reshape((rows, features))?;
+            let result = crate::cutile::cutile_fp8_w8a16(
+                &input,
+                &self.weight,
+                &self.weight_scale_inv,
+                crate::Fp8WeightScaleLayout::Block([128, 128]),
+            )?;
+            let mut output_shape = original_shape[..original_shape.len() - 1].to_vec();
+            output_shape.push(result.dim(1)?);
+            let result = result.reshape(output_shape)?;
+            return match &self.bias {
+                Some(bias) => result.broadcast_add(bias),
+                None => Ok(result),
+            };
+        }
+
         #[cfg(all(
             feature = "cuda",
             has_cutlass_fp8_sm90_kernels,
@@ -1046,82 +1111,6 @@ pub fn blockwise_fp8_moe(
     Ok(Arc::new(layer))
 }
 
-pub fn blockwise_fp8_linear_b(
-    in_dim: usize,
-    out_dim: usize,
-    config: &QuantizedConfig,
-    bias: bool,
-    hints: Shard,
-    vb: ShardedVarBuilder,
-) -> Result<Arc<dyn QuantMethod>> {
-    let QuantizedConfig::Fp8 {
-        weight_block_size,
-        activation_scheme,
-        fmt,
-        ..
-    } = config
-    else {
-        candle_core::bail!("Unexpected quantization config.")
-    };
-
-    match blockwise_fp8_module_kind(config, &vb)? {
-        BlockwiseFp8ModuleKind::Missing => {
-            return make_dummy_or_error("blockwise_fp8_linear", &vb, &["weight"]);
-        }
-        BlockwiseFp8ModuleKind::Unquantized => {
-            return unquantized_linear_b_with_hints(in_dim, out_dim, bias, hints, vb);
-        }
-        BlockwiseFp8ModuleKind::Quantized => {}
-    }
-
-    // Blockwise FP8 requires weight_block_size to be set
-    let Some(weight_block_size) = weight_block_size else {
-        candle_core::bail!("Blockwise FP8 requires weight_block_size to be set. Use per-tensor FP8 for models without block sizes.")
-    };
-    if weight_block_size.len() != 2 {
-        candle_core::bail!("Expected weight_block_size to have length 2, got {weight_block_size:?}")
-    }
-    if weight_block_size.contains(&0) {
-        candle_core::bail!("Expected nonzero weight_block_size, got {weight_block_size:?}")
-    }
-    if fmt.as_deref().is_some_and(|fmt| fmt != "e4m3") {
-        candle_core::bail!("Unsupported blockwise FP8 format {fmt:?}; expected `e4m3`")
-    }
-
-    let scale_hints = scale_shard_from_weight_shard(
-        [out_dim, in_dim],
-        [weight_block_size[0], weight_block_size[1]],
-        hints,
-    )?;
-    let weight = vb.get_with_hints_dtype((out_dim, in_dim), "weight", hints, DType::F8E4M3)?;
-    let weight_scale_inv = vb.get_with_hints_dtype(
-        (
-            out_dim.div_ceil(weight_block_size[0]),
-            in_dim.div_ceil(weight_block_size[1]),
-        ),
-        "weight_scale_inv",
-        scale_hints,
-        DType::F32,
-    )?;
-    let bias = if bias {
-        Some(vb.get((out_dim,), "bias")?)
-    } else {
-        None
-    };
-
-    let mut layer = BlockwiseFP8Linear {
-        weight,
-        weight_block_size: weight_block_size.clone(),
-        weight_scale_inv,
-        bias,
-        dequant_dtype: vb.dtype(),
-        activation_scheme: *activation_scheme,
-        provider: BlockwiseFp8Provider::Legacy,
-    };
-    layer.prepare_provider()?;
-    Ok(Arc::new(layer))
-}
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum BlockwiseFp8ModuleKind {
     Missing,
@@ -1187,24 +1176,6 @@ fn canonical_language_model_module_path(path: &str) -> Cow<'_, str> {
         }
     }
     Cow::Borrowed(path)
-}
-
-fn unquantized_linear_b_with_hints(
-    in_dim: usize,
-    out_dim: usize,
-    bias: bool,
-    hints: Shard,
-    vb: ShardedVarBuilder,
-) -> Result<Arc<dyn QuantMethod>> {
-    let weight = vb.get_with_hints((out_dim, in_dim), "weight", hints)?;
-    let bias = if bias {
-        Some(vb.get((out_dim,), "bias")?)
-    } else {
-        None
-    };
-    Ok(Arc::new(UnquantLinear::new(
-        QuantMethodConfig::Unquantized(Linear::new(weight, bias)),
-    )?))
 }
 
 pub(crate) fn scale_shard_from_weight_shard(
@@ -1619,6 +1590,29 @@ mod tests {
             BlockwiseFp8Provider::TensorCoreGemv
         ));
         Ok(layer)
+    }
+
+    #[cfg(all(feature = "cuda", has_blockwise_fp8_kernels, feature = "cutile"))]
+    #[test]
+    #[ignore = "requires a CUDA device with cuTile support"]
+    fn cutile_w8a16_preserves_empty_leading_dimensions() -> Result<()> {
+        const FEATURES: usize = 256;
+
+        let device = Device::new_cuda(0)?;
+        let weight = Tensor::zeros((FEATURES, FEATURES), DType::BF16, &device)?;
+        let (weight, weight_scale_inv) = ops::fp8_blockwise_quantize(&weight, vec![128, 128])?;
+        let layer = BlockwiseFP8Linear::new(QuantMethodConfig::BlockwiseFP8 {
+            weight,
+            weight_scale_inv,
+            bias: None,
+            dequant_dtype: DType::BF16,
+            weight_block_size: vec![128, 128],
+            activation_scheme: None,
+        })?;
+        assert!(matches!(layer.provider, BlockwiseFp8Provider::CutileW8A16));
+        let output = layer.forward(&Tensor::zeros((2, 0, FEATURES), DType::BF16, &device)?)?;
+        assert_eq!(output.dims(), [2, 0, FEATURES]);
+        Ok(())
     }
 
     #[cfg(all(feature = "cuda", has_blockwise_fp8_kernels, feature = "cutile"))]
@@ -2222,7 +2216,7 @@ mod tests {
             Tensor::zeros((8, 4), DType::F32, &Device::Cpu)?,
         );
         let vb = ShardedSafeTensors::wrap(tensors, DType::F32, Device::Cpu).pp("foo");
-        let layer = blockwise_fp8_linear_b(
+        let layer = crate::fp8_config::fp8_checkpoint_linear_b(
             4,
             8,
             &fp8_config(&["foo"]),
@@ -2249,7 +2243,7 @@ mod tests {
             .pp("model")
             .pp("language_model")
             .pp("embed_tokens");
-        let layer = blockwise_fp8_linear_b(
+        let layer = crate::fp8_config::fp8_checkpoint_linear_b(
             4,
             8,
             &fp8_config(&["model.embed_tokens"]),
@@ -2273,9 +2267,16 @@ mod tests {
             Tensor::zeros((8, 4), DType::F32, &Device::Cpu)?,
         );
         let vb = ShardedSafeTensors::wrap(tensors, DType::F32, Device::Cpu).pp("foo");
-        let err = blockwise_fp8_linear_b(4, 8, &fp8_config(&["bar"]), false, Shard::default(), vb)
-            .unwrap_err();
-        assert!(err.to_string().contains("not listed"));
+        let err = crate::fp8_config::fp8_checkpoint_linear_b(
+            4,
+            8,
+            &fp8_config(&["bar"]),
+            false,
+            Shard::default(),
+            vb,
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("missing FP8 weight scale"));
         Ok(())
     }
 }

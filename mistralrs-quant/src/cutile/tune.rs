@@ -395,7 +395,12 @@ pub fn tune(
     let mut measured_any = false;
     for ((&bucket, label), space) in request.buckets.iter().zip(&labels).zip(&spaces) {
         let policy = policy_of(space);
-        if let Some(entry) = record.get(label) {
+        let candidates = space.configs();
+        if let Some(entry) = record.get(label).filter(|entry| {
+            candidates
+                .iter()
+                .any(|candidate| candidate == &entry.config)
+        }) {
             results.push(Tuned {
                 bucket,
                 config: entry.config.clone(),
@@ -404,6 +409,12 @@ pub fn tune(
                 policy_ms: 0.0,
             });
             continue;
+        }
+        if record.get(label).is_some() {
+            tracing::info!(
+                "cuTile autotune {} {label}: cached config is outside the current search space",
+                workspace.kernel
+            );
         }
         let reference = match prepare(bucket.probe, &policy) {
             Ok(prepared) => prepared.sample,
@@ -417,7 +428,7 @@ pub fn tune(
             }
         };
         let output = Autotuner::new(&workspace.kernel)
-            .configs(space.configs())
+            .configs(candidates)
             .bench(bench_options())
             .budget(BUCKET_BUDGET)
             .run_with(Descent { space }, &stream, |_, candidate| {

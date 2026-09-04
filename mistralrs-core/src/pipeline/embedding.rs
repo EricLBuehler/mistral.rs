@@ -231,7 +231,10 @@ impl Loader for EmbeddingLoader {
         mut paged_attn_config: Option<PagedAttentionConfig>,
     ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
         let _progress_guard = ProgressScopeGuard::new(silent);
-        let config = std::fs::read_to_string(paths.get_config_filename())?;
+        let config = super::loaders::load_model_config(
+            paths.get_config_filename(),
+            self.config.from_uqff.is_none(),
+        )?;
         let config = if self.config.from_uqff.is_some() {
             super::isq::sanitize_quantized_weight_source_config(&config)?
         } else {

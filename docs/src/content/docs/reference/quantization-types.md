@@ -98,16 +98,36 @@ Supported for GGUF compatibility:
 
 ### FP8
 
-E4M3 FP8 can be produced with ISQ or loaded directly from a checkpoint whose
-`quantization_config` declares per-tensor or block-scaled FP8 weights. Published block-FP8
-checkpoints keep their scale tensors, activation scheme, format, and exclusion list intact.
+E4M3 FP8 can be produced with ISQ or loaded directly from native FP8, compressed-tensors, and
+NVIDIA ModelOpt checkpoints. The checkpoint adapters normalize tensor names, scale shapes, target
+rules, exclusions, and tensor-parallel shards into the same linear runtime schemes. The
+compressed-tensors metadata may use either `quantization_config` or the legacy
+`compression_config` key.
 
-On Hopper, 128x128 block-scaled weights with dynamic 1x128 activation scaling use the SM90
-CUTLASS W8A8 provider. Fused projections quantize their shared input once. On cuTile builds
-(Ampere, Ada, and Blackwell), the same layout runs through a tensor-core GEMV for decode and a
-cuTile grouped GEMM for prefill, and MoE checkpoints whose experts carry per-expert 128x128 scales
-run their experts through a cuTile blockwise FP8 grouped GEMM with dynamic activation scaling.
-Other supported CUDA devices and layouts use the portable FP8 providers. F8Q8 is CPU-only.
+| Checkpoint format | Supported dense linear schemes |
+|---|---|
+| Native `quant_method: "fp8"` | Tensor-scaled W8A16, static or dynamic tensor-scaled W8A8, and 128x128 weight with dynamic 1x128 activation scaling |
+| compressed-tensors | Symmetric E4M3 W8A16 with tensor, channel, or block weight scales; static tensor W8A8; dynamic per-token tensor/channel W8A8; and dynamic block W8A8 |
+| ModelOpt | `FP8`, `FP8_PER_CHANNEL_PER_TOKEN`, `FP8_PB_WO`, and `MIXED_PRECISION` configurations composed of these schemes and unquantized layers |
+
+Weight scales may be stored as `weight_scale` or `weight_scale_inv`; both names contain the
+dequantization multiplier. Static activation scales may be stored as `input_scale` or
+`activation_scale`. Scalar, channel `[N]`/`[N, 1]`, block `[N/128, K/128]`, and ModelOpt block
+`[N/128, 1, K/128, 1]` layouts are normalized automatically. Older ModelOpt repositories that
+place their configuration in `hf_quant_config.json` are also detected.
+
+On cuTile builds, W8A16 keeps E4M3 weights resident and converts each weight tile to BF16 or F16
+inside the GEMM. Tensor and channel W8A8 use dedicated CUDA static-tensor or dynamic per-token
+activation quantizers followed by a cuTile FP8 GEMM. The existing 128x128 block W8A8 providers
+remain available, including CUTLASS and cuTile paths. Tensor and channel schemes use a cached
+dequantized-weight A16 matmul when their accelerated CUDA path is unavailable; this fallback does
+not emulate activation quantize/dequantize rounding.
+
+The checkpoint adapters currently cover dense projections and recognized `gate_up_proj`/`qkv_proj`
+fusions. Partitioned tensor scales require equal-size fused chunks that the model loader exposes as
+separate output shards. Direct fused linears with a vector of scales, MXFP8, E5M2/FNUZ, asymmetric
+FP8, output-activation quantization, FP8 KV cache checkpoint metadata, and checkpoint-specific MoE
+scale layouts are separate formats.
 
 | Type | Bits | Layout |
 |---|---|---|
