@@ -177,6 +177,7 @@ fn main() {
                     "https://github.com/flashinfer-ai/flashinfer.git",
                     FLASHINFER_GDN_COMMIT,
                     vec!["include"],
+                    vec![],
                     false,
                 );
             if let Some(cuda_nvcc_flags_env) = CUDA_NVCC_FLAGS {
