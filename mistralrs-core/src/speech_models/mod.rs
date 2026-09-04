@@ -1,16 +1,20 @@
 mod bs1770;
 mod dia;
+mod pockettts;
 pub mod utils;
 
 use std::{str::FromStr, sync::Arc};
 
 pub use dia::{DiaConfig, DiaPipeline};
+pub use pockettts::{PocketTtsConfig, PocketTtsPipeline};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, strum::EnumIter)]
 pub enum SpeechLoaderType {
     #[serde(rename = "dia")]
     Dia,
+    #[serde(rename = "pockettts")]
+    PocketTts,
 }
 
 impl FromStr for SpeechLoaderType {
@@ -18,12 +22,16 @@ impl FromStr for SpeechLoaderType {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
             "dia" => Ok(Self::Dia),
+            "pockettts" => Ok(Self::PocketTts),
             a => Err(format!(
-                "Unknown architecture `{a}`. Possible architectures: `dia`."
+                "Unknown architecture `{a}`. Possible architectures: `dia`, `pockettts`."
             )),
         }
     }
 }
+
+/// Marker file that identifies a pocket-tts repo (which ships no `config.json`).
+pub const POCKETTTS_WEIGHTS_FILE: &str = "tts_b6369a24.safetensors";
 
 impl SpeechLoaderType {
     /// Auto-detect speech loader type from a config.json string.
@@ -31,6 +39,18 @@ impl SpeechLoaderType {
     pub fn auto_detect_from_config(config: &str) -> Option<Self> {
         if serde_json::from_str::<DiaConfig>(config).is_ok() {
             return Some(Self::Dia);
+        }
+        None
+    }
+
+    /// Auto-detect speech loader type from the repo file list, for models that ship no
+    /// `config.json` (e.g. pocket-tts). Extend this when adding new such pipelines.
+    pub fn auto_detect_from_files(files: &[String]) -> Option<Self> {
+        if files
+            .iter()
+            .any(|f| f.rsplit('/').next() == Some(POCKETTTS_WEIGHTS_FILE))
+        {
+            return Some(Self::PocketTts);
         }
         None
     }
@@ -45,6 +65,11 @@ pub enum SpeechGenerationConfig {
         top_p: f32,
         top_k: Option<usize>,
     },
+    PocketTts {
+        temperature: f32,
+        lsd_decode_steps: usize,
+        eos_threshold: f32,
+    },
 }
 
 impl SpeechGenerationConfig {
@@ -56,6 +81,11 @@ impl SpeechGenerationConfig {
                 temperature: 1.3,
                 top_p: 0.95,
                 top_k: Some(35),
+            },
+            SpeechLoaderType::PocketTts => Self::PocketTts {
+                temperature: 0.7,
+                lsd_decode_steps: 1,
+                eos_threshold: -4.0,
             },
         }
     }
