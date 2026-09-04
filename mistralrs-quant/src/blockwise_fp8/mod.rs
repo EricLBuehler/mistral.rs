@@ -160,7 +160,7 @@ impl BlockwiseFP8Linear {
             #[cfg(feature = "cutile")]
             if let (Device::Cuda(dev), Ok((n, k))) = (self.weight.device(), self.weight.dims2()) {
                 if crate::cutile::fp8_gemm_supported(dev, n, k) {
-                    crate::cutile::register_fp8_gemm_shape(n, k);
+                    crate::cutile::register_fp8_gemm_shape(&self.weight, &self.weight_scale_inv);
                 }
             }
             TENSOR_CORE_GEMV_PROVIDER_LOG.call_once(|| {

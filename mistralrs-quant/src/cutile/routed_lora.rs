@@ -6,7 +6,9 @@ use std::collections::{hash_map::DefaultHasher, HashMap, VecDeque};
 use std::hash::{Hash, Hasher};
 use std::sync::{Mutex, OnceLock};
 
-use candle_core::{cuda::cudarc::driver::CudaSlice, CudaDevice, DType, Result};
+use candle_core::{
+    cuda::cudarc::driver::CudaSlice, CudaDevice, CudaStorage, DType, Result, Shape, Storage, Tensor,
+};
 use cutile::cuda_async::device_buffer::DevicePointer;
 use cutile::cuda_async::device_operation::DeviceOp;
 use cutile::cuda_core::sys::CUdeviceptr;
@@ -23,6 +25,8 @@ use crate::lora::{
 };
 use crate::utils::{slice_ptr_mut_on_stream, slice_ptr_on_stream};
 
+use super::tune::{config, cutile_error, tune, Bucket, Prepared, Space, TuneMode, TuneRequest};
+
 use super::{
     catch_cutile_panic, context, device_compute_capability, device_supported, jit_available,
 };
@@ -32,7 +36,7 @@ pub const CUTILE_ROUTED_LORA_MAX_RANK: usize = 128;
 const MIN_BLOCK_R: usize = 16;
 const TARGET_CTA_PER_SM: usize = 2;
 const MAX_N_AXIS_GROUPS: usize = 8;
-const AUTOTUNE_TIMED_RUNS: usize = 3;
+const TUNE_KERNEL: &str = "routed_lora";
 const TUNING_CACHE_CAPACITY: usize = 256;
 const TUNING_LOCK_SHARDS: usize = 64;
 const I32_INDEXABLE_ELEMENTS: usize = i32::MAX as usize + 1;
@@ -481,6 +485,38 @@ pub struct CutileRoutedLoraConfig {
     pub block_n: i32,
     pub n_axis_groups: i32,
     pub optimization_hint: CutileRoutedLoraOptimizationHint,
+}
+
+impl CutileRoutedLoraConfig {
+    fn to_config(self) -> cutile::tune::Config {
+        let hint = match self.optimization_hint {
+            CutileRoutedLoraOptimizationHint::Balanced => 0,
+            CutileRoutedLoraOptimizationHint::HighOccupancy => 1,
+            CutileRoutedLoraOptimizationHint::Cluster2 => 2,
+        };
+        config([
+            ("block_k", i64::from(self.block_k)),
+            ("block_n", i64::from(self.block_n)),
+            ("n_axis_groups", i64::from(self.n_axis_groups)),
+            ("hint", hint),
+        ])
+    }
+
+    fn from_config(config: &cutile::tune::Config) -> Option<Self> {
+        let int = |key: &str| config.int(key).and_then(|v| i32::try_from(v).ok());
+        let optimization_hint = match int("hint")? {
+            0 => CutileRoutedLoraOptimizationHint::Balanced,
+            1 => CutileRoutedLoraOptimizationHint::HighOccupancy,
+            2 => CutileRoutedLoraOptimizationHint::Cluster2,
+            _ => return None,
+        };
+        Some(Self {
+            block_k: int("block_k")?,
+            block_n: int("block_n")?,
+            n_axis_groups: int("n_axis_groups")?,
+            optimization_hint,
+        })
+    }
 }
 
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
@@ -1211,6 +1247,93 @@ unsafe fn prepare_config_on_thread(
     Ok(())
 }
 
+/// The candidate tiles as a grid with the heuristic first, then the optimization hint as an axis.
+fn lora_space(key: CutileRoutedLoraTuningKey) -> Space {
+    let candidates = cutile_routed_lora_candidate_configs(key);
+    let tiles: Vec<[i64; 3]> = candidates
+        .iter()
+        .map(|c| {
+            [
+                i64::from(c.block_k),
+                i64::from(c.block_n),
+                i64::from(c.n_axis_groups),
+            ]
+        })
+        .collect();
+    let mut space = Space::new()
+        .joint(["block_k", "block_n", "n_axis_groups"], tiles)
+        .axis("hint", [0, 1, 2])
+        .constrain(move |c| {
+            CutileRoutedLoraConfig::from_config(c).is_some_and(|config| valid_config(key, config))
+        });
+    if let Some(policy) = candidates.first() {
+        space = space.policy(policy.to_config());
+    }
+    space
+}
+
+/// Record name for a route/block bucket: the readable dimensions plus a hash of the whole shape key.
+fn record_shape(key: CutileRoutedLoraTuningKey) -> String {
+    let mut hasher = DefaultHasher::new();
+    key.shape.hash(&mut hasher);
+    format!(
+        "e{}_a{}_i{}_o{}_r{}_s{}_routes{}_blocks{}_{:08x}",
+        key.shape.num_experts,
+        key.shape.num_adapter_slots,
+        key.shape.input_features,
+        key.shape.output_features,
+        key.shape.max_rank,
+        key.shape.num_slices,
+        key.shape.num_routes,
+        key.shape.max_blocks,
+        hasher.finish() as u32
+    )
+}
+
+/// One candidate's launch into a fresh scratch output: the sample is the written region, the run
+/// resets and relaunches. Every candidate of a search shares the routing and inputs of the request
+/// that triggered it.
+unsafe fn prepare_candidate(
+    dev: &CudaDevice,
+    layout: RoutedLoraMetadataLayout,
+    addresses: KernelAddresses,
+    launch: CutileRoutedLoraLaunch,
+    config: CutileRoutedLoraConfig,
+) -> Result<Prepared> {
+    let (mut scratch, scratch_offset) = unsafe { tuning_scratch(dev, layout, launch) }?;
+    let device = dev.clone();
+    let run_once = move |scratch: &mut CudaSlice<bf16>| -> Result<()> {
+        let stream = device.cuda_stream();
+        stream
+            .memset_zeros(scratch)
+            .map_err(|error| driver_error("scratch reset", error))?;
+        let (scratch_address, scratch_guard) =
+            slice_ptr_mut_on_stream(scratch, scratch_offset, &stream);
+        let scratch_launch = CutileRoutedLoraLaunch {
+            output: scratch_address,
+            ..launch
+        };
+        let launched = unsafe { launch_config(&device, layout, addresses, scratch_launch, config) };
+        drop(scratch_guard);
+        launched
+    };
+    run_once(&mut scratch)?;
+    let elements = tuning_output_elements(layout, launch)?;
+    let mut sample = unsafe { dev.alloc::<bf16>(elements)? };
+    dev.memcpy_dtod(
+        &scratch.slice(scratch_offset..scratch_offset + elements),
+        &mut sample,
+    )?;
+    let sample = Tensor::from((
+        Storage::Cuda(CudaStorage::wrap_cuda_slice(sample, dev.clone())),
+        Shape::from_dims(&[elements]),
+    ));
+    let run = Box::new(move |_: &std::sync::Arc<cutile::cuda_core::Stream>| {
+        run_once(&mut scratch).map_err(cutile_error)
+    });
+    Ok(Prepared { run, sample })
+}
+
 unsafe fn autotune_config(
     dev: &CudaDevice,
     layout: RoutedLoraMetadataLayout,
@@ -1240,99 +1363,44 @@ unsafe fn autotune_config(
 
     let stream = dev.cuda_stream();
     let mut state = CutileAutotuneState::FallbackSafe;
-    let (mut scratch, scratch_offset) =
-        unsafe { tuning_scratch(dev, layout, launch) }.map_err(|error| state.failure(error))?;
-    let mut best = None;
-    let mut last_error = None;
-    for config in cutile_routed_lora_candidate_configs(key) {
-        stream
-            .memset_zeros(&mut scratch)
-            .map_err(|error| state.failure(driver_error("scratch reset", error)))?;
-        let (scratch_address, scratch_guard) =
-            slice_ptr_mut_on_stream(&mut scratch, scratch_offset, &stream);
-        let scratch_launch = CutileRoutedLoraLaunch {
-            output: scratch_address,
-            ..launch
-        };
-        match launch_config(dev, layout, addresses, scratch_launch, config) {
-            Ok(()) => state.mark_scratch_launch(),
-            Err(error) => {
-                drop(scratch_guard);
-                last_error = Some(error.to_string());
-                continue;
-            }
-        }
-        drop(scratch_guard);
-        let completion = stream
-            .record_event(None)
-            .map_err(|error| state.failure(driver_error("warmup event", error)))?;
-        completion
-            .synchronize()
-            .map_err(|error| state.failure(driver_error("warmup synchronization", error)))?;
-        state.mark_synchronized();
-
-        let mut timings = Vec::with_capacity(AUTOTUNE_TIMED_RUNS);
-        let mut failed = false;
-        for _ in 0..AUTOTUNE_TIMED_RUNS {
-            stream
-                .memset_zeros(&mut scratch)
-                .map_err(|error| state.failure(driver_error("scratch reset", error)))?;
-            let (scratch_address, scratch_guard) =
-                slice_ptr_mut_on_stream(&mut scratch, scratch_offset, &stream);
-            let scratch_launch = CutileRoutedLoraLaunch {
-                output: scratch_address,
-                ..launch
-            };
-            let start = stream
-                .record_event(Some(
-                    candle_core::cuda::cudarc::driver::sys::CUevent_flags::CU_EVENT_DEFAULT,
-                ))
-                .map_err(|error| state.failure(driver_error("start event", error)))?;
-            if let Err(error) = launch_config(dev, layout, addresses, scratch_launch, config) {
-                last_error = Some(error.to_string());
-                failed = true;
-                drop(scratch_guard);
-                break;
-            }
-            state.mark_scratch_launch();
-            let end = stream
-                .record_event(Some(
-                    candle_core::cuda::cudarc::driver::sys::CUevent_flags::CU_EVENT_DEFAULT,
-                ))
-                .map_err(|error| state.failure(driver_error("end event", error)))?;
-            drop(scratch_guard);
-            let elapsed_ms = start
-                .elapsed_ms(&end)
-                .map_err(|error| state.failure(driver_error("event timing", error)))?;
-            state.mark_synchronized();
-            timings.push(elapsed_ms);
-        }
-        if failed {
-            continue;
-        }
-        timings.sort_by(f32::total_cmp);
-        let elapsed_ms = timings[timings.len() / 2];
-        if best
-            .as_ref()
-            .is_none_or(|(_, best_ms)| elapsed_ms < *best_ms)
-        {
-            best = Some((config, elapsed_ms));
-        }
-    }
-    let Some((config, elapsed_ms)) = best else {
-        return Err(state.failure(candle_core::Error::msg(format!(
-            "all cuTile routed LoRA autotune candidates failed: {}",
-            last_error.unwrap_or_else(|| "no candidates".to_string())
-        ))));
+    let buckets = [Bucket {
+        upper: usize::MAX,
+        probe: key.shape.num_routes,
+    }];
+    let request = TuneRequest {
+        kernel: TUNE_KERNEL,
+        source_hash: routed_lora_kernel::_SOURCE_HASH,
+        shape: record_shape(bucket_key),
+        buckets: &buckets,
+        space: &|_| lora_space(key),
     };
-    mark_config_prepared(prepared_key(key, addresses, launch), config);
+    // candidates launch into scratch until the stream drains, so a failure in between is not yet safe
+    state.mark_scratch_launch();
+    let tuned = tune(dev, TuneMode::from_env(), &request, |_, candidate| {
+        let config = CutileRoutedLoraConfig::from_config(candidate)
+            .ok_or_else(|| candle_core::Error::msg("config outside the space"))?;
+        unsafe { prepare_candidate(dev, layout, addresses, launch, config) }
+    });
+    stream
+        .synchronize()
+        .map_err(|error| state.failure(driver_error("tuning synchronization", error)))?;
+    state.mark_synchronized();
+    let config = tuned
+        .first()
+        .and_then(|t| CutileRoutedLoraConfig::from_config(&t.config))
+        .ok_or_else(|| {
+            state.failure(candle_core::Error::msg(
+                "all cuTile routed LoRA autotune candidates failed",
+            ))
+        })?;
+    prepare_config_on_thread(dev, layout, key, addresses, launch, config)?;
     let mut cache = config_cache().lock().unwrap();
     if let Some(existing) = cache.get(&key).copied() {
         drop(cache);
         prepare_config_on_thread(dev, layout, key, addresses, launch, existing)?;
         return Ok(existing);
     }
-    tracing::debug!(?config, elapsed_ms, "autotuned cuTile routed LoRA kernel");
+    tracing::debug!(?config, "autotuned cuTile routed LoRA kernel");
     cache.insert(key, config);
     drop(cache);
     bucket_config_cache()

@@ -1,5 +1,6 @@
 //! Persistent blockwise FP8 W8A8 GEMM: 128x128 weight scales, 1x128 activation scales, BF16 output.
 
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock};
 
 use candle_core::{CudaDevice, CudaStorage, DType, Result, Shape, Storage, Tensor};
@@ -7,20 +8,26 @@ use cutile::core::f8e4m3fn;
 use cutile::cuda_async::device_operation::DeviceOp;
 use cutile::cuda_core::sys::CUdeviceptr;
 use cutile::tensor::IntoPartition;
-use cutile::tile_kernel::TileKernel;
+use cutile::tile_kernel::{CompileOptions, TileKernel};
 use float8::F8E4M3;
 use half::bf16;
 
+use super::tune::{
+    buckets_from_breakpoints, config, cutile_error, tune, Bucket, Prepared, Space, TuneMode,
+    TuneRequest, TunedTable, TUNE_WEIGHT_SETS,
+};
 use super::warmup::CutileKernel;
 use super::{catch_cutile_panic, context, device_multiprocessor_count, jit_available};
+use crate::blockwise_fp8::mma::quantize_activation_padded;
 use crate::utils::{slice_ptr_mut_on_stream, slice_ptr_on_stream};
 
 pub const FP8_GEMM_BLOCK_ROWS: usize = 128;
 const BLOCK_COLS: usize = 128;
 const GROUP_SIZE: usize = 128;
-const MAP_GROUP_M: usize = 8;
-const MAP_GROUP_N: usize = 1;
-const TILE_BLOCKS_PER_SM: usize = 2;
+const TUNE_KERNEL: &str = "fp8_gemm";
+/// Row counts where the launch policy may change; the GEMV handles anything below the first.
+const ROW_BREAKPOINTS: [usize; 2] = [128, 512];
+const PREFILL_PROBE_ROWS: usize = 4096;
 
 // Bounded partitions are deprecated in cutile 0.3 but plain indexed loads compile to checked loads
 // that run 3x slower on sm_121.
@@ -45,6 +52,7 @@ mod kernels {
         const BN: i32,
         const BK: i32,
         const MAP_SHAPE: [i32; 2],
+        const LATENCY: i32, // operand-load pipelining hint, 0 = compiler default
     >(
         mut y: MappedPartitionMut<bf16, { [BM, BN] }, MAP_SHAPE>,
         x: &Tensor<f8e4m3fn, { [-1, -1] }>,
@@ -66,8 +74,17 @@ mod kernels {
             let (bid_m, bid_n) = out_idx.components();
             let mut acc: Tile<f32, { [BM, BN] }> = constant(0.0f32, const_shape![BM, BN]);
             for kg in k {
-                let xt: Tile<f8e4m3fn, { [BM, BK] }> = px.load(coord((bid_m, kg)));
-                let wt: Tile<f8e4m3fn, { [BN, BK] }> = pw.load(coord((bid_n, kg)));
+                // a zero latency hint is rejected by tileiras, so 0 means the plain load
+                let xt: Tile<f8e4m3fn, { [BM, BK] }> = if LATENCY > 0 {
+                    px.load_pipelined::<LATENCY>(coord((bid_m, kg)))
+                } else {
+                    px.load(coord((bid_m, kg)))
+                };
+                let wt: Tile<f8e4m3fn, { [BN, BK] }> = if LATENCY > 0 {
+                    pw.load_pipelined::<LATENCY>(coord((bid_n, kg)))
+                } else {
+                    pw.load(coord((bid_n, kg)))
+                };
                 let wtt: Tile<f8e4m3fn, { [BK, BN] }> = permute(wt, transpose);
                 let zero: Tile<f32, { [BM, BN] }> = constant(0.0f32, const_shape![BM, BN]);
                 let part: Tile<f32, { [BM, BN] }> = mmaf(xt, wtt, zero);
@@ -84,20 +101,143 @@ mod kernels {
     }
 }
 
+/// Launch config: the row tile, the swizzle map over output tiles, persistent tile blocks per SM,
+/// and the knobs the autotuner sweeps. The column tile is pinned to one weight-scale column.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct Fp8GemmConfig {
+    pub bm: i32,
+    pub map_m: i32,
+    pub map_n: i32,
+    pub blocks_per_sm: i32,
+    pub latency: i32,
+    pub warps: i32,
+    pub occupancy: i32,
+    pub cluster: i32,
+}
+
+/// Measured on GB10: 128-row tiles with an 8x1 swizzle and two persistent blocks per SM.
+const POLICY: Fp8GemmConfig = Fp8GemmConfig {
+    bm: 128,
+    map_m: 8,
+    map_n: 1,
+    blocks_per_sm: 2,
+    latency: 0,
+    warps: 0,
+    occupancy: 0,
+    cluster: 0,
+};
+
+impl Fp8GemmConfig {
+    fn to_config(self) -> cutile::tune::Config {
+        config([
+            ("bm", i64::from(self.bm)),
+            ("map_m", i64::from(self.map_m)),
+            ("map_n", i64::from(self.map_n)),
+            ("blocks_per_sm", i64::from(self.blocks_per_sm)),
+            ("latency", i64::from(self.latency)),
+            ("warps", i64::from(self.warps)),
+            ("occupancy", i64::from(self.occupancy)),
+            ("cluster", i64::from(self.cluster)),
+        ])
+    }
+
+    fn from_config(config: &cutile::tune::Config) -> Option<Self> {
+        let int = |key: &str| config.int(key).and_then(|v| i32::try_from(v).ok());
+        Some(Self {
+            bm: int("bm")?,
+            map_m: int("map_m")?,
+            map_n: int("map_n")?,
+            blocks_per_sm: int("blocks_per_sm")?,
+            latency: int("latency")?,
+            warps: int("warps")?,
+            occupancy: int("occupancy")?,
+            cluster: int("cluster")?,
+        })
+    }
+
+    fn compile_options(self) -> CompileOptions {
+        let mut options = CompileOptions::new();
+        if self.warps > 0 {
+            options = options.num_worker_warps_per_cta(self.warps);
+        }
+        if self.occupancy > 0 {
+            options = options.occupancy(self.occupancy);
+        }
+        if self.cluster > 0 {
+            options = options.num_cta_in_cga(self.cluster);
+        }
+        options
+    }
+}
+
+/// Output features and input features of a registered weight.
+type GemmShape = (usize, usize);
+
+static TUNED: TunedTable<GemmShape, Fp8GemmConfig> = TunedTable::new();
+
+fn gemm_config(shape: GemmShape, rows: usize) -> Fp8GemmConfig {
+    TUNED.get(shape, rows).unwrap_or(POLICY)
+}
+
+fn gemm_space(bucket: Bucket) -> Space {
+    let _ = bucket;
+    Space::new()
+        .joint(["bm"], [[128], [64]])
+        .joint(["map_m", "map_n"], [[8, 1], [4, 1], [1, 1]])
+        .axis("blocks_per_sm", [2, 1, 4])
+        .axis("latency", [0, 2, 4])
+        .axis("warps", [0, 4, 8])
+        .axis("occupancy", [0, 4])
+        .axis("cluster", [0, 2])
+        .policy(POLICY.to_config())
+}
+
+fn gemm_buckets() -> Vec<Bucket> {
+    buckets_from_breakpoints(&ROW_BREAKPOINTS, PREFILL_PROBE_ROWS, PREFILL_PROBE_ROWS)
+}
+
 pub struct Fp8GemmKernel;
 
 pub(super) static FP8_GEMM: Fp8GemmKernel = Fp8GemmKernel;
 
-static SHAPES: OnceLock<Mutex<Vec<(usize, usize)>>> = OnceLock::new();
+#[derive(Clone)]
+struct GemmWeights {
+    weight: Tensor,
+    scales: Tensor,
+}
 
-pub fn register_fp8_gemm_shape(output_features: usize, input_features: usize) {
+impl GemmWeights {
+    fn shape(&self) -> Result<GemmShape> {
+        self.weight.dims2()
+    }
+}
+
+static SHAPES: OnceLock<Mutex<Vec<Vec<GemmWeights>>>> = OnceLock::new();
+
+/// Register a linear layer's FP8 weight so warmup tunes and compiles the kernel keys the forward
+/// will launch. Up to `TUNE_WEIGHT_SETS` layers of the same shape are kept as weight handles.
+pub fn register_fp8_gemm_shape(weight: &Tensor, weight_scales: &Tensor) {
+    let entry = GemmWeights {
+        weight: weight.clone(),
+        scales: weight_scales.clone(),
+    };
+    let Ok(shape) = entry.shape() else {
+        return;
+    };
     let mut shapes = SHAPES
         .get_or_init(|| Mutex::new(Vec::new()))
         .lock()
         .unwrap();
-    if !shapes.contains(&(output_features, input_features)) {
-        shapes.push((output_features, input_features));
+    if let Some(sets) = shapes
+        .iter_mut()
+        .find(|sets| sets[0].shape().ok() == Some(shape))
+    {
+        if sets.len() < TUNE_WEIGHT_SETS {
+            sets.push(entry);
+        }
+        return;
     }
+    shapes.push(vec![entry]);
 }
 
 pub fn fp8_gemm_supported(dev: &CudaDevice, output_features: usize, input_features: usize) -> bool {
@@ -129,7 +269,8 @@ pub fn cutile_fp8_gemm(
         weight,
         weight_scales,
     };
-    launch(&operands, dev, false)
+    let cfg = gemm_config(weight.dims2()?, activation.dim(0)?);
+    launch(&operands, cfg, dev, false)
 }
 
 /// Rows an activation view's storage can supply past its start offset.
@@ -142,7 +283,12 @@ fn activation_storage_rows(activation: &Tensor) -> Result<usize> {
     Ok((cuda.as_cuda_slice::<F8E4M3>()?.len() - layout.start_offset()) / k)
 }
 
-fn launch(operands: &GemmOperands<'_>, dev: &CudaDevice, compile_only: bool) -> Result<Tensor> {
+fn launch(
+    operands: &GemmOperands<'_>,
+    cfg: Fp8GemmConfig,
+    dev: &CudaDevice,
+    compile_only: bool,
+) -> Result<Tensor> {
     let (logical_rows, k) = operands.activation.dims2()?;
     let (groups_dim, rows) = operands.activation_scales.dims2()?;
     let (n, weight_k) = operands.weight.dims2()?;
@@ -168,6 +314,13 @@ fn launch(operands: &GemmOperands<'_>, dev: &CudaDevice, compile_only: bool) -> 
     }
     if groups_dim != groups || operands.weight_scales.dims2()? != (n / BLOCK_COLS, groups) {
         candle_core::bail!("cuTile FP8 GEMM scale shapes do not match the operands")
+    }
+    let bm = usize::try_from(cfg.bm).unwrap_or(0);
+    if bm == 0 || !FP8_GEMM_BLOCK_ROWS.is_multiple_of(bm) {
+        candle_core::bail!(
+            "cuTile FP8 GEMM row tile {} must divide {FP8_GEMM_BLOCK_ROWS}",
+            cfg.bm
+        )
     }
     let stream = dev.cuda_stream();
     let ordinal = stream.context().ordinal();
@@ -256,23 +409,25 @@ fn launch(operands: &GemmOperands<'_>, dev: &CudaDevice, compile_only: bool) -> 
         );
         (y, x, w, xs, ws)
     };
-    let tiles = (rows / FP8_GEMM_BLOCK_ROWS) * (n / BLOCK_COLS);
-    let tile_blocks =
-        (TILE_BLOCKS_PER_SM * device_multiprocessor_count(dev)).clamp(1, tiles) as u32;
+    let tiles = (rows / bm) * (n / BLOCK_COLS);
+    let blocks_per_sm = usize::try_from(cfg.blocks_per_sm).unwrap_or(1).max(1);
+    let tile_blocks = (blocks_per_sm * device_multiprocessor_count(dev)).clamp(1, tiles) as u32;
     let mapped = y
-        .partition([FP8_GEMM_BLOCK_ROWS, BLOCK_COLS])
-        .map([MAP_GROUP_M, MAP_GROUP_N], tile_blocks);
+        .partition([bm, BLOCK_COLS])
+        .map([cfg.map_m as usize, cfg.map_n as usize], tile_blocks);
     let generics = vec![
-        FP8_GEMM_BLOCK_ROWS.to_string(),
+        cfg.bm.to_string(),
         BLOCK_COLS.to_string(),
         GROUP_SIZE.to_string(),
-        MAP_GROUP_M.to_string(),
-        MAP_GROUP_N.to_string(),
+        cfg.map_m.to_string(),
+        cfg.map_n.to_string(),
+        cfg.latency.to_string(),
     ];
     let cutile_stream = context::stream(dev);
     let launcher =
         kernels::fp8_blockwise_gemm(mapped, Arc::new(x), Arc::new(w), Arc::new(xs), Arc::new(ws))
-            .generics(generics);
+            .generics(generics)
+            .compile_options(cfg.compile_options());
     if compile_only {
         catch_cutile_panic("FP8 GEMM compile", || {
             launcher
@@ -293,9 +448,57 @@ fn launch(operands: &GemmOperands<'_>, dev: &CudaDevice, compile_only: bool) -> 
     )))
 }
 
+/// Prepares timed launch sets for the tuner, rotating through the registered weights of a shape.
+struct GemmTuner {
+    dev: CudaDevice,
+    sets: Vec<GemmWeights>,
+    operands: HashMap<usize, (Tensor, Tensor)>,
+}
+
+impl GemmTuner {
+    fn new(dev: &CudaDevice, sets: &[GemmWeights]) -> Self {
+        Self {
+            dev: dev.clone(),
+            sets: sets.to_vec(),
+            operands: HashMap::new(),
+        }
+    }
+
+    fn prepare(&mut self, rows: usize, cfg: Fp8GemmConfig) -> Result<Prepared> {
+        let dev = self.dev.clone();
+        let sets = self.sets.clone();
+        let (_, k) = sets[0].shape()?;
+        if let std::collections::hash_map::Entry::Vacant(slot) = self.operands.entry(rows) {
+            let device = candle_core::Device::Cuda(dev.clone());
+            let padded = rows.div_ceil(FP8_GEMM_BLOCK_ROWS) * FP8_GEMM_BLOCK_ROWS;
+            let x = Tensor::rand(-1f32, 1f32, (rows, k), &device)?.to_dtype(DType::BF16)?;
+            slot.insert(quantize_activation_padded(&x, padded)?);
+        }
+        let (activation, activation_scales) = self.operands[&rows].clone();
+        let launch = move |w: &GemmWeights, compile_only: bool| -> Result<Tensor> {
+            let operands = GemmOperands {
+                activation: &activation,
+                activation_scales: &activation_scales,
+                weight: &w.weight,
+                weight_scales: &w.scales,
+            };
+            launch(&operands, cfg, &dev, compile_only)
+        };
+        launch(&sets[0], true)?;
+        let sample = launch(&sets[0], false)?;
+        let mut next = 0usize;
+        let run = Box::new(move |_: &Arc<cutile::cuda_core::Stream>| {
+            let w = &sets[next % sets.len()];
+            next += 1;
+            launch(w, false).map(|_| ()).map_err(cutile_error)
+        });
+        Ok(Prepared { run, sample })
+    }
+}
+
 impl CutileKernel for Fp8GemmKernel {
     fn warm(&self, dev: &CudaDevice) -> Result<()> {
-        let shapes = SHAPES
+        let shapes: Vec<Vec<GemmWeights>> = SHAPES
             .get_or_init(|| Mutex::new(Vec::new()))
             .lock()
             .unwrap()
@@ -303,23 +506,45 @@ impl CutileKernel for Fp8GemmKernel {
         if shapes.is_empty() {
             return Ok(());
         }
+        let mode = TuneMode::from_env();
+        let buckets = gemm_buckets();
+        for sets in &shapes {
+            let shape = sets[0].shape()?;
+            let request = TuneRequest {
+                kernel: TUNE_KERNEL,
+                source_hash: kernels::_SOURCE_HASH,
+                shape: format!("n{}_k{}", shape.0, shape.1),
+                buckets: &buckets,
+                space: &gemm_space,
+            };
+            let mut tuner = GemmTuner::new(dev, sets);
+            let tuned = tune(dev, mode, &request, |rows, candidate| {
+                let cfg = Fp8GemmConfig::from_config(candidate)
+                    .ok_or_else(|| candle_core::Error::Msg("config outside the space".into()))?;
+                tuner.prepare(rows, cfg)
+            });
+            TUNED.set(shape, &tuned, Fp8GemmConfig::from_config);
+        }
         tracing::info!("Warming {} cuTile FP8 GEMM kernels.", shapes.len());
         let device = candle_core::Device::Cuda(dev.clone());
-        for (n, k) in shapes {
-            let rows = FP8_GEMM_BLOCK_ROWS;
-            let activation = Tensor::zeros((rows, k), DType::F8E4M3, &device)?;
-            let activation_scales = Tensor::zeros((k / GROUP_SIZE, rows), DType::F32, &device)?;
-            let weight = Tensor::zeros((n, k), DType::F8E4M3, &device)?;
-            let weight_scales =
-                Tensor::zeros((n / BLOCK_COLS, k / GROUP_SIZE), DType::F32, &device)?;
-            let operands = GemmOperands {
-                activation: &activation,
-                activation_scales: &activation_scales,
-                weight: &weight,
-                weight_scales: &weight_scales,
-            };
-            if let Err(err) = launch(&operands, dev, true) {
-                tracing::warn!("cuTile FP8 GEMM warmup failed (n={n} k={k}): {err}");
+        for sets in &shapes {
+            let (n, k) = sets[0].shape()?;
+            for bucket in &buckets {
+                let rows = bucket.probe.div_ceil(FP8_GEMM_BLOCK_ROWS) * FP8_GEMM_BLOCK_ROWS;
+                let activation = Tensor::zeros((rows, k), DType::F8E4M3, &device)?;
+                let activation_scales = Tensor::zeros((k / GROUP_SIZE, rows), DType::F32, &device)?;
+                let operands = GemmOperands {
+                    activation: &activation,
+                    activation_scales: &activation_scales,
+                    weight: &sets[0].weight,
+                    weight_scales: &sets[0].scales,
+                };
+                let cfg = gemm_config((n, k), bucket.probe);
+                if let Err(err) = launch(&operands, cfg, dev, true) {
+                    tracing::warn!(
+                        "cuTile FP8 GEMM warmup failed (n={n} k={k} rows={rows}): {err}"
+                    );
+                }
             }
         }
         Ok(())
@@ -330,8 +555,9 @@ impl CutileKernel for Fp8GemmKernel {
 mod tests {
     use candle_core::{DType, Device, Result, Tensor};
 
-    use super::{cutile_fp8_gemm, FP8_GEMM_BLOCK_ROWS};
+    use super::{cutile_fp8_gemm, Fp8GemmConfig, FP8_GEMM_BLOCK_ROWS, POLICY, TUNED};
     use crate::blockwise_fp8::{mma, ops};
+    use crate::cutile::tune::{Bucket, Source, Tuned};
 
     const GROUP_SIZE: usize = 128;
 
@@ -407,7 +633,29 @@ mod tests {
             DType::F32,
         )?
         .to_device(&Device::Cpu)?;
-        for rows in [33usize, 128, 300] {
+        // the second pass forces a tuned config through the table, as the tuner would
+        let forced = Fp8GemmConfig {
+            bm: 64,
+            map_m: 4,
+            blocks_per_sm: 1,
+            latency: 2,
+            ..POLICY
+        };
+        for (pass, rows) in [(0, 33usize), (0, 128), (0, 300), (1, 300)] {
+            TUNED.set(
+                (N, K),
+                &[Tuned {
+                    bucket: Bucket {
+                        upper: usize::MAX,
+                        probe: rows,
+                    },
+                    config: if pass == 1 { forced } else { POLICY }.to_config(),
+                    source: Source::Measured,
+                    ms: 0.0,
+                    policy_ms: 0.0,
+                }],
+                Fp8GemmConfig::from_config,
+            );
             let padded_rows = rows.div_ceil(FP8_GEMM_BLOCK_ROWS) * FP8_GEMM_BLOCK_ROWS;
             let x = Tensor::from_vec(patterned(rows * K, rows, 3.0, -0.2), (rows, K), &dev)?
                 .to_dtype(DType::BF16)?;
@@ -439,9 +687,10 @@ mod tests {
             let max_reference = reference.abs()?.max_all()?.to_scalar::<f32>()?;
             assert!(
                 max_error <= 1.0e-2 * max_reference,
-                "rows={rows}: max error {max_error} vs reference {max_reference}"
+                "rows={rows} pass={pass}: max error {max_error} vs reference {max_reference}"
             );
         }
+        TUNED.set((N, K), &[], Fp8GemmConfig::from_config);
         Ok(())
     }
 }

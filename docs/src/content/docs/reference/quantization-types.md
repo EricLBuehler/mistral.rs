@@ -103,8 +103,11 @@ E4M3 FP8 can be produced with ISQ or loaded directly from a checkpoint whose
 checkpoints keep their scale tensors, activation scheme, format, and exclusion list intact.
 
 On Hopper, 128x128 block-scaled weights with dynamic 1x128 activation scaling use the SM90
-CUTLASS W8A8 provider. Fused projections quantize their shared input once. Other supported CUDA
-devices and layouts use the portable FP8 providers. F8Q8 is CPU-only.
+CUTLASS W8A8 provider. Fused projections quantize their shared input once. On cuTile builds
+(Ampere, Ada, and Blackwell), the same layout runs through a tensor-core GEMV for decode and a
+cuTile grouped GEMM for prefill, and MoE checkpoints whose experts carry per-expert 128x128 scales
+run their experts through a cuTile blockwise FP8 grouped GEMM with dynamic activation scaling.
+Other supported CUDA devices and layouts use the portable FP8 providers. F8Q8 is CPU-only.
 
 | Type | Bits | Layout |
 |---|---|---|

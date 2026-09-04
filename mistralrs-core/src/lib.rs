@@ -1231,6 +1231,11 @@ impl MistralRs {
                 let rt = build_engine_runtime();
                 rt.block_on(async move {
                     file_store_for_engine.spawn_cleanup_task();
+                    // cuTile warmup stays on this thread (thread-local JIT cache) and precedes graph capture
+                    #[cfg(feature = "cutile")]
+                    if let Err(err) = mistralrs_quant::cutile::warmup_moe_kernels(&warmup_device) {
+                        warn!("Failed to warm up cuTile MoE kernels: {err}");
+                    }
                     let engine = match Engine::new(
                         tx_for_engine,
                         rx,
@@ -1257,10 +1262,6 @@ impl MistralRs {
                             return;
                         }
                     };
-                    #[cfg(feature = "cutile")]
-                    if let Err(err) = mistralrs_quant::cutile::warmup_moe_kernels(&warmup_device) {
-                        warn!("Failed to warm up cuTile MoE kernels: {err}");
-                    }
                     Arc::new(engine).run().await;
                 })
             });
@@ -1270,6 +1271,11 @@ impl MistralRs {
                 let rt = build_engine_runtime();
                 rt.block_on(async move {
                     file_store_for_engine.spawn_cleanup_task();
+                    // cuTile warmup stays on this thread (thread-local JIT cache) and precedes graph capture
+                    #[cfg(feature = "cutile")]
+                    if let Err(err) = mistralrs_quant::cutile::warmup_moe_kernels(&warmup_device) {
+                        warn!("Failed to warm up cuTile MoE kernels: {err}");
+                    }
                     let engine = match Engine::new(
                         tx_for_engine,
                         rx,
@@ -1296,10 +1302,6 @@ impl MistralRs {
                             return;
                         }
                     };
-                    #[cfg(feature = "cutile")]
-                    if let Err(err) = mistralrs_quant::cutile::warmup_moe_kernels(&warmup_device) {
-                        warn!("Failed to warm up cuTile MoE kernels: {err}");
-                    }
                     Arc::new(engine).run().await;
                 })
             }

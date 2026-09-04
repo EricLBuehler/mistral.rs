@@ -3,14 +3,21 @@
 pub mod context;
 mod fp8_gemm;
 mod fused_moe;
+mod fused_moe_fp8;
 mod gdn_prefill;
 mod routed_lora;
+mod split_k;
+mod tune;
 mod warmup;
 
 pub use fp8_gemm::{
     cutile_fp8_gemm, fp8_gemm_supported, register_fp8_gemm_shape, FP8_GEMM_BLOCK_ROWS,
 };
 pub use fused_moe::{cutile_grouped_gemm, register_moe_shape};
+pub use fused_moe_fp8::{
+    cutile_fused_moe_fp8, fp8_moe_supported, register_moe_fp8_shape, CutileFp8MoeWeights,
+    FP8_MOE_GROUP,
+};
 pub use gdn_prefill::{
     cutile_gdn_prefill, gdn_prefill_supported, GdnPrefillArgs, GDN_PREFILL_CHUNK,
     GDN_PREFILL_HEAD_DIM,
@@ -23,6 +30,7 @@ pub use routed_lora::{
     CutileRoutedLoraShapeKey, CutileRoutedLoraStatus, CutileRoutedLoraTuningKey,
     CutileRoutedLoraUnsupported, CUTILE_ROUTED_LORA_MAX_RANK,
 };
+pub use tune::{TuneMode, TUNE_CACHE_ENV, TUNE_MODE_ENV};
 pub use warmup::warmup_moe_kernels;
 
 fn panic_message(payload: Box<dyn std::any::Any + Send>) -> String {
@@ -228,13 +236,130 @@ mod tests {
     }
 }
 
-/// Launch tile config for the grouped GEMM, computed once from the token count and reused for both GEMMs (`bm` is the `moe_align` block size).
-#[derive(Clone, Copy)]
+/// Launch config for the grouped MoE GEMMs, computed once from the token count and reused for both
+/// GEMMs (`bm` is the `moe_align` block size). The knobs past `group_m` default to "let the
+/// compiler decide" and exist for the autotuner to sweep.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub struct MoeTileConfig {
     pub bm: i32,
     pub bn: i32,
     pub bk: i32,
     pub group_m: i32,
+    /// K-range splits per output tile; partials reduce in a second pass when above 1.
+    #[serde(default = "default_split_k")]
+    pub split_k: i32,
+    /// Software-pipelining latency hint on the operand loads; 0 leaves it to the compiler.
+    #[serde(default)]
+    pub latency: i32,
+    /// Worker warps per CTA; 0 leaves it to the compiler.
+    #[serde(default)]
+    pub warps: i32,
+    /// Target CTAs per SM; 0 leaves it to the compiler.
+    #[serde(default)]
+    pub occupancy: i32,
+    /// CTAs per cluster; 0 leaves it to the compiler.
+    #[serde(default)]
+    pub cluster: i32,
+}
+
+fn default_split_k() -> i32 {
+    1
+}
+
+impl MoeTileConfig {
+    pub const fn tiles(bm: i32, bn: i32, bk: i32, group_m: i32) -> Self {
+        Self {
+            bm,
+            bn,
+            bk,
+            group_m,
+            split_k: 1,
+            latency: 0,
+            warps: 0,
+            occupancy: 0,
+            cluster: 0,
+        }
+    }
+
+    pub fn to_config(&self) -> cutile::tune::Config {
+        tune::config([
+            ("bm", i64::from(self.bm)),
+            ("bn", i64::from(self.bn)),
+            ("bk", i64::from(self.bk)),
+            ("group_m", i64::from(self.group_m)),
+            ("split_k", i64::from(self.split_k)),
+            ("latency", i64::from(self.latency)),
+            ("warps", i64::from(self.warps)),
+            ("occupancy", i64::from(self.occupancy)),
+            ("cluster", i64::from(self.cluster)),
+        ])
+    }
+
+    pub fn from_config(config: &cutile::tune::Config) -> Option<Self> {
+        let int = |key: &str| config.int(key).and_then(|v| i32::try_from(v).ok());
+        Some(Self {
+            bm: int("bm")?,
+            bn: int("bn")?,
+            bk: int("bk")?,
+            group_m: int("group_m")?,
+            split_k: int("split_k")?,
+            latency: int("latency")?,
+            warps: int("warps")?,
+            occupancy: int("occupancy")?,
+            cluster: int("cluster")?,
+        })
+    }
+
+    pub fn compile_options(&self) -> cutile::tile_kernel::CompileOptions {
+        let mut options = cutile::tile_kernel::CompileOptions::new();
+        if self.warps > 0 {
+            options = options.num_worker_warps_per_cta(self.warps);
+        }
+        if self.occupancy > 0 {
+            options = options.occupancy(self.occupancy);
+        }
+        if self.cluster > 0 {
+            options = options.num_cta_in_cga(self.cluster);
+        }
+        options
+    }
+}
+
+impl std::fmt::Display for MoeTileConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}x{}x{} g{}", self.bm, self.bn, self.bk, self.group_m)?;
+        for (label, value, default) in [
+            ("s", self.split_k, 1),
+            ("l", self.latency, 0),
+            ("w", self.warps, 0),
+            ("o", self.occupancy, 0),
+            ("c", self.cluster, 0),
+        ] {
+            if value != default {
+                write!(f, " {label}{value}")?;
+            }
+        }
+        Ok(())
+    }
+}
+
+/// What distinguishes one MoE expert shape from another for warmup and tuning.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct MoeShapeKey {
+    pub hidden: usize,
+    pub inter: usize,
+    pub num_experts: usize,
+    pub top_k: usize,
+}
+
+impl std::fmt::Display for MoeShapeKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "e{}_h{}_i{}_k{}",
+            self.num_experts, self.hidden, self.inter, self.top_k
+        )
+    }
 }
 
 pub const fn get_default_config(m: usize, num_experts: usize) -> MoeTileConfig {
@@ -251,10 +376,5 @@ pub const fn get_default_config(m: usize, num_experts: usize) -> MoeTileConfig {
     let bk = if m <= 64 { 128 } else { 64 };
     let num_experts = if num_experts == 0 { 1 } else { num_experts };
     let group_m = if m / num_experts > 128 { 16 } else { 1 };
-    MoeTileConfig {
-        bm,
-        bn,
-        bk,
-        group_m,
-    }
+    MoeTileConfig::tiles(bm, bn, bk, group_m)
 }

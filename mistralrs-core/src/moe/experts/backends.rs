@@ -120,6 +120,101 @@ impl CutlassExpertsWeights {
     }
 }
 
+/// Blockwise FP8 experts on the cuTile fused MoE.
+#[cfg(feature = "cutile")]
+pub(super) struct CutileFp8ExpertsWeights {
+    w: mistralrs_quant::cutile::CutileFp8MoeWeights,
+}
+
+#[cfg(feature = "cutile")]
+impl CutileFp8ExpertsWeights {
+    /// `None` when the checkpoint, device, or configuration is not one this backend serves.
+    pub(super) fn try_from_checkpoint(
+        cfg: &MoEExpertsConfig,
+        experts_vb: &ShardedVarBuilder,
+        comm: &Arc<mistralrs_quant::Comm>,
+        quantization_config: &Option<QuantizedConfig>,
+        act: Activation,
+    ) -> Result<Option<Self>> {
+        use mistralrs_quant::cutile::{fp8_moe_supported, FP8_MOE_GROUP};
+        let Some(QuantizedConfig::Fp8 {
+            weight_block_size: Some(block),
+            activation_scheme,
+            ..
+        }) = quantization_config
+        else {
+            return Ok(None);
+        };
+        if block.as_slice() != [FP8_MOE_GROUP, FP8_MOE_GROUP]
+            || *activation_scheme != Some(mistralrs_quant::Fp8ActivationScheme::Dynamic)
+            || comm.world_size() > 1
+            || super::config::gated_act(act).is_err()
+            || !matches!(
+                super::config::MoEExpertsBackend::from_env(),
+                None | Some(super::config::MoEExpertsBackend::Cutile)
+            )
+        {
+            return Ok(None);
+        }
+        let Device::Cuda(dev) = experts_vb.device() else {
+            return Ok(None);
+        };
+        if !mistralrs_quant::cutile::device_supported(dev)
+            || !fp8_moe_supported(dev, cfg.hidden_size, cfg.moe_intermediate_size)
+        {
+            return Ok(None);
+        }
+        let ckpt = ExpertCheckpoint::new(cfg, experts_vb.clone(), comm)?;
+        let Some((gate_up, gate_up_scales, down, down_scales)) =
+            ckpt.stacked_enk_fp8(FP8_MOE_GROUP)?
+        else {
+            return Ok(None);
+        };
+        let w = mistralrs_quant::cutile::CutileFp8MoeWeights::new(
+            gate_up,
+            gate_up_scales,
+            down,
+            down_scales,
+            cfg.num_experts,
+            cfg.num_experts_per_tok,
+        )?;
+        mistralrs_quant::cutile::register_moe_fp8_shape(&w);
+        mistralrs_quant::log::once_log_info(
+            "MoE experts backend: cuTile blockwise FP8 grouped GEMM",
+        );
+        Ok(Some(Self { w }))
+    }
+
+    pub(super) fn forward_impl(
+        &self,
+        forward: &MoEForward,
+        config: MoEForwardConfig,
+    ) -> Result<Tensor> {
+        if forward.lora.is_some() {
+            candle_core::bail!("dynamic LoRA is not supported on cuTile FP8 experts");
+        }
+        let activation = match config.act {
+            Activation::Silu => mistralrs_quant::GluActivationType::Silu,
+            Activation::NewGelu | Activation::GeluPytorchTanh => {
+                mistralrs_quant::GluActivationType::Gelu
+            }
+            other => {
+                candle_core::bail!("activation {other:?} is not supported by cuTile FP8 experts")
+            }
+        };
+        let dev = forward.xs_flat.device().as_cuda_device()?;
+        let xs = forward.xs_flat.to_dtype(DType::BF16)?;
+        mistralrs_quant::cutile::cutile_fused_moe_fp8(
+            &xs,
+            &self.w,
+            forward.topk_ids,
+            forward.topk_weights,
+            activation,
+            dev,
+        )
+    }
+}
+
 #[cfg(feature = "cutile")]
 impl CutileExpertsWeights {
     pub(super) fn from_checkpoint(ckpt: &ExpertCheckpoint) -> Result<CutileExpertsWeights> {
