@@ -271,6 +271,60 @@ extern "C" {
         stream: candle_core::cuda::cudarc::driver::sys::CUstream,
     );
 
+    pub(crate) fn launch_quant_fp8_rowwise_kernel_f32(
+        input: *const f32,
+        output: *mut F8E4M3,
+        scales: *mut f32,
+        rows: i32,
+        columns: i32,
+        row_stride: i32,
+        stream: candle_core::cuda::cudarc::driver::sys::CUstream,
+    ) -> i32;
+
+    pub(crate) fn launch_quant_fp8_rowwise_kernel_f16(
+        input: *const f16,
+        output: *mut F8E4M3,
+        scales: *mut f32,
+        rows: i32,
+        columns: i32,
+        row_stride: i32,
+        stream: candle_core::cuda::cudarc::driver::sys::CUstream,
+    ) -> i32;
+
+    pub(crate) fn launch_quant_fp8_rowwise_kernel_bf16(
+        input: *const bf16,
+        output: *mut F8E4M3,
+        scales: *mut f32,
+        rows: i32,
+        columns: i32,
+        row_stride: i32,
+        stream: candle_core::cuda::cudarc::driver::sys::CUstream,
+    ) -> i32;
+
+    pub(crate) fn launch_quant_fp8_static_kernel_f32(
+        input: *const f32,
+        scale: *const f32,
+        output: *mut F8E4M3,
+        elements: usize,
+        stream: candle_core::cuda::cudarc::driver::sys::CUstream,
+    ) -> i32;
+
+    pub(crate) fn launch_quant_fp8_static_kernel_f16(
+        input: *const f16,
+        scale: *const f32,
+        output: *mut F8E4M3,
+        elements: usize,
+        stream: candle_core::cuda::cudarc::driver::sys::CUstream,
+    ) -> i32;
+
+    pub(crate) fn launch_quant_fp8_static_kernel_bf16(
+        input: *const bf16,
+        scale: *const f32,
+        output: *mut F8E4M3,
+        elements: usize,
+        stream: candle_core::cuda::cudarc::driver::sys::CUstream,
+    ) -> i32;
+
     // FP8 Matmul kernels (for forward method)
     pub(crate) fn launch_fp8_matmul_f16(
         input: *const f16,

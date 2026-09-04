@@ -2,6 +2,8 @@
 
 pub mod context;
 mod fp8_gemm;
+mod fp8_w8a16;
+mod fp8_w8a8;
 mod fused_moe;
 mod fused_moe_fp8;
 mod gdn_prefill;
@@ -12,6 +14,10 @@ mod warmup;
 
 pub use fp8_gemm::{
     cutile_fp8_gemm, fp8_gemm_supported, register_fp8_gemm_shape, FP8_GEMM_BLOCK_ROWS,
+};
+pub use fp8_w8a16::{cutile_fp8_w8a16, fp8_w8a16_supported, register_fp8_w8a16_shape};
+pub use fp8_w8a8::{
+    cutile_fp8_w8a8, fp8_w8a8_supported, register_fp8_w8a8_shape, CutileFp8W8A8Args, Fp8W8A8Scheme,
 };
 pub use fused_moe::{cutile_grouped_gemm, register_moe_shape};
 pub use fused_moe_fp8::{

@@ -58,8 +58,127 @@ use crate::{
 use super::{paths::AdapterPaths, Pipeline};
 
 pub(crate) const QK_ROPE_LAYOUT_CONFIG_KEY: &str = "_mistralrs_qk_rope_layout";
+const LEGACY_MODEL_OPT_CONFIG: &str = "hf_quant_config.json";
 /// Set on the model config JSON when the checkpoint's built-in MTP head should be loaded.
 pub const MTP_CONFIG_KEY: &str = "_mistralrs_mtp";
+
+pub(crate) fn load_model_config(
+    config_path: &std::path::Path,
+    use_checkpoint_quantization: bool,
+) -> Result<String> {
+    let config = std::fs::read_to_string(config_path)?;
+    if !use_checkpoint_quantization {
+        return Ok(config);
+    }
+    let config = normalize_compression_config(&config)?;
+    let Some(parent) = config_path.parent() else {
+        return Ok(config);
+    };
+    let model_opt_path = parent.join(LEGACY_MODEL_OPT_CONFIG);
+    if !model_opt_path.is_file() {
+        return Ok(config);
+    }
+    let model_opt = std::fs::read_to_string(model_opt_path)?;
+    inject_legacy_model_opt_config(&config, &model_opt)
+}
+
+fn normalize_compression_config(config: &str) -> Result<String> {
+    let mut value: serde_json::Value = serde_json::from_str(config)?;
+    if canonicalize_quantization_config(&mut value)? {
+        Ok(serde_json::to_string(&value)?)
+    } else {
+        Ok(config.to_string())
+    }
+}
+
+fn canonicalize_quantization_config(value: &mut serde_json::Value) -> Result<bool> {
+    let object = value
+        .as_object_mut()
+        .ok_or_else(|| anyhow::anyhow!("model config must be a JSON object"))?;
+    let root_quantization = object
+        .get("quantization_config")
+        .filter(|value| !value.is_null())
+        .cloned();
+    let text_quantization = object
+        .get("text_config")
+        .and_then(serde_json::Value::as_object)
+        .and_then(|text| text.get("quantization_config"))
+        .filter(|value| !value.is_null())
+        .cloned();
+    let compression = object
+        .get("compression_config")
+        .filter(|value| !value.is_null())
+        .cloned();
+    let text_compression = object
+        .get("text_config")
+        .and_then(serde_json::Value::as_object)
+        .and_then(|text| text.get("compression_config"))
+        .filter(|value| !value.is_null())
+        .cloned();
+    let Some(effective) = root_quantization
+        .or(text_quantization)
+        .or(compression)
+        .or(text_compression)
+    else {
+        return Ok(false);
+    };
+
+    let mut changed = false;
+    if object
+        .get("quantization_config")
+        .is_none_or(serde_json::Value::is_null)
+    {
+        object.insert("quantization_config".to_string(), effective.clone());
+        changed = true;
+    }
+    if let Some(text) = object
+        .get_mut("text_config")
+        .and_then(serde_json::Value::as_object_mut)
+    {
+        if text.get("quantization_config") != Some(&effective) {
+            text.insert("quantization_config".to_string(), effective);
+            changed = true;
+        }
+    }
+    Ok(changed)
+}
+
+fn inject_legacy_model_opt_config(config: &str, model_opt: &str) -> Result<String> {
+    let mut config_value: serde_json::Value = serde_json::from_str(config)?;
+    let canonicalized = canonicalize_quantization_config(&mut config_value)?;
+    let config_object = config_value
+        .as_object_mut()
+        .ok_or_else(|| anyhow::anyhow!("model config must be a JSON object"))?;
+    let embedded = config_object
+        .get("quantization_config")
+        .filter(|value| !value.is_null())
+        .cloned();
+    if embedded.as_ref().is_some_and(|value| {
+        !value
+            .get("quant_method")
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|method| method.to_ascii_lowercase().starts_with("modelopt"))
+    }) {
+        return if canonicalized {
+            Ok(serde_json::to_string(&config_value)?)
+        } else {
+            Ok(config.to_string())
+        };
+    }
+
+    let model_opt_value: serde_json::Value = serde_json::from_str(model_opt)?;
+    let quantization = match embedded.as_ref() {
+        Some(embedded) => QuantizedConfig::from_modelopt_configs(Some(embedded), &model_opt_value),
+        None => QuantizedConfig::from_modelopt_config(&model_opt_value),
+    }
+    .map_err(anyhow::Error::msg)?;
+    config_object.insert(
+        "quantization_config".to_string(),
+        serde_json::to_value(quantization)?,
+    );
+    canonicalize_quantization_config(&mut config_value)?;
+    Ok(serde_json::to_string(&config_value)?)
+}
 
 pub(crate) fn inject_mtp_config_flag(config: &str) -> anyhow::Result<String> {
     let mut config: serde_json::Value = serde_json::from_str(config)?;
@@ -810,6 +929,205 @@ pub trait Loader: Send + Sync {
 #[cfg(test)]
 mod auto_device_map_quantization_tests {
     use super::*;
+
+    #[test]
+    fn legacy_model_opt_config_is_embedded() -> Result<()> {
+        let config = r#"{"model_type":"llama"}"#;
+        let legacy = r#"{
+            "producer":{"name":"modelopt","version":"0.19.0"},
+            "quantization":{"quant_algo":"FP8","exclude_modules":["lm_head"]}
+        }"#;
+        let merged: serde_json::Value =
+            serde_json::from_str(&inject_legacy_model_opt_config(config, legacy)?)?;
+        let quantization = &merged["quantization_config"];
+        assert_eq!(quantization["quant_method"], "modelopt");
+        assert_eq!(quantization["quantization"]["quant_algo"], "FP8");
+        assert_eq!(merged["model_type"], "llama");
+        assert_eq!(
+            QuantizationConfigShim::get_quant_config_pack_factor(&merged.to_string(), DType::BF16)?,
+            IsqType::F8E4M3.pack_factor(DType::BF16)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn compression_config_alias_is_loaded_with_explicit_precedence() -> Result<()> {
+        let compressed = serde_json::json!({
+            "format": "float-quantized",
+            "config_groups": {
+                "group_0": {
+                    "targets": ["Linear"],
+                    "weights": {
+                        "dynamic": false,
+                        "num_bits": 8,
+                        "strategy": "tensor",
+                        "symmetric": true,
+                        "type": "float"
+                    }
+                }
+            }
+        });
+        let dir = tempfile::tempdir()?;
+        let config_path = dir.path().join("config.json");
+        std::fs::write(
+            &config_path,
+            serde_json::to_vec(&serde_json::json!({
+                "model_type": "llama",
+                "compression_config": compressed
+            }))?,
+        )?;
+        let loaded: serde_json::Value =
+            serde_json::from_str(&load_model_config(&config_path, true)?)?;
+        let quantized: QuantizedConfig =
+            serde_json::from_value(loaded["quantization_config"].clone())?;
+        assert!(matches!(
+            quantized,
+            QuantizedConfig::CompressedTensors { .. }
+        ));
+
+        let explicit = serde_json::json!({"quant_method": "fp8"});
+        let normalized: serde_json::Value = serde_json::from_str(&normalize_compression_config(
+            &serde_json::json!({
+                "quantization_config": explicit,
+                "compression_config": compressed,
+                "text_config": {"compression_config": compressed}
+            })
+            .to_string(),
+        )?)?;
+        assert_eq!(normalized["quantization_config"], explicit);
+        assert_eq!(normalized["text_config"]["quantization_config"], explicit);
+
+        let conflicting = serde_json::json!({"quant_method": "fp8", "activation_scheme": "static"});
+        let normalized: serde_json::Value = serde_json::from_str(&normalize_compression_config(
+            &serde_json::json!({
+                "quantization_config": explicit,
+                "text_config": {"quantization_config": conflicting}
+            })
+            .to_string(),
+        )?)?;
+        assert_eq!(normalized["quantization_config"], explicit);
+        assert_eq!(normalized["text_config"]["quantization_config"], explicit);
+
+        let nested = serde_json::json!({"quant_method": "fp8", "activation_scheme": "dynamic"});
+        let normalized: serde_json::Value = serde_json::from_str(&normalize_compression_config(
+            &serde_json::json!({
+                "compression_config": compressed,
+                "text_config": {"quantization_config": nested}
+            })
+            .to_string(),
+        )?)?;
+        assert_eq!(normalized["quantization_config"], nested);
+        assert_eq!(normalized["text_config"]["quantization_config"], nested);
+
+        let normalized: serde_json::Value = serde_json::from_str(&normalize_compression_config(
+            &serde_json::json!({
+                "text_config": {"compression_config": compressed}
+            })
+            .to_string(),
+        )?)?;
+        assert_eq!(
+            normalized["quantization_config"]["format"],
+            "float-quantized"
+        );
+        assert_eq!(
+            normalized["text_config"]["quantization_config"],
+            normalized["quantization_config"]
+        );
+        let merged: serde_json::Value = serde_json::from_str(&inject_legacy_model_opt_config(
+            &serde_json::json!({
+                "text_config": {"compression_config": compressed}
+            })
+            .to_string(),
+            r#"{"quantization":{"quant_algo":"FP8"}}"#,
+        )?)?;
+        assert_eq!(merged["quantization_config"]["format"], "float-quantized");
+        Ok(())
+    }
+
+    #[test]
+    fn uqff_config_loading_skips_checkpoint_quantization_metadata() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let config_path = dir.path().join("config.json");
+        let config = r#"{"model_type":"llama","compression_config":{"unsupported":true}}"#;
+        std::fs::write(&config_path, config)?;
+        std::fs::write(dir.path().join(LEGACY_MODEL_OPT_CONFIG), "not json")?;
+        assert_eq!(load_model_config(&config_path, false)?, config);
+        Ok(())
+    }
+
+    #[test]
+    fn embedded_quantization_config_wins_over_legacy_model_opt() -> Result<()> {
+        let config = r#"{"quantization_config":{"quant_method":"fp8"}}"#;
+        let legacy = r#"{"quantization":{"quant_algo":"FP8"}}"#;
+        assert_eq!(inject_legacy_model_opt_config(config, legacy)?, config);
+        Ok(())
+    }
+
+    #[test]
+    fn embedded_model_opt_fields_override_legacy_config() -> Result<()> {
+        let config = r#"{
+            "quantization_config": {
+                "quant_method": "modelopt",
+                "quant_algo": "FP8_PER_CHANNEL_PER_TOKEN",
+                "ignore": ["new_head"]
+            }
+        }"#;
+        let legacy = r#"{
+            "producer":{"name":"modelopt","version":"legacy"},
+            "quantization":{"quant_algo":"FP8","exclude_modules":["old_head"]}
+        }"#;
+        let merged: serde_json::Value =
+            serde_json::from_str(&inject_legacy_model_opt_config(config, legacy)?)?;
+        let quantization = &merged["quantization_config"];
+        assert_eq!(quantization["quant_method"], "modelopt");
+        assert_eq!(quantization["quant_algo"], "FP8_PER_CHANNEL_PER_TOKEN");
+        assert_eq!(quantization["ignore"], serde_json::json!(["new_head"]));
+        assert_eq!(quantization["producer"]["version"], "legacy");
+        Ok(())
+    }
+
+    #[test]
+    fn legacy_model_opt_config_is_propagated_to_text_config() -> Result<()> {
+        let config = r#"{"model_type":"test","text_config":{"hidden_size":128}}"#;
+        let legacy = r#"{"quantization":{"quant_algo":"FP8"}}"#;
+        let merged: serde_json::Value =
+            serde_json::from_str(&inject_legacy_model_opt_config(config, legacy)?)?;
+        assert_eq!(
+            merged["text_config"]["quantization_config"],
+            merged["quantization_config"]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn nested_model_opt_config_is_merged_and_propagated() -> Result<()> {
+        let config = r#"{
+            "model_type":"test",
+            "text_config":{"quantization_config":{
+                "quant_method":"modelopt",
+                "quant_algo":"FP8_PER_CHANNEL_PER_TOKEN"
+            }}
+        }"#;
+        let legacy = r#"{
+            "producer":{"name":"modelopt","version":"0.19.0"},
+            "quantization":{"quant_algo":"FP8"}
+        }"#;
+        let merged: serde_json::Value =
+            serde_json::from_str(&inject_legacy_model_opt_config(config, legacy)?)?;
+        assert_eq!(
+            merged["quantization_config"]["quant_algo"],
+            "FP8_PER_CHANNEL_PER_TOKEN"
+        );
+        assert_eq!(
+            merged["quantization_config"]["producer"]["version"],
+            "0.19.0"
+        );
+        assert_eq!(
+            merged["text_config"]["quantization_config"],
+            merged["quantization_config"]
+        );
+        Ok(())
+    }
 
     #[test]
     fn qk_rope_layout_marker_round_trips() -> Result<()> {

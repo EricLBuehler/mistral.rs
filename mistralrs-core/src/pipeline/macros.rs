@@ -69,6 +69,10 @@ macro_rules! get_paths {
             tracing::trace!("Loading `config.json` at `{}`", $this.model_id);
             $crate::api_get_file!(api, "config.json", model_id, &revision)
         };
+        if dir_list.contains(&"hf_quant_config.json".to_string()) {
+            tracing::trace!("Loading `hf_quant_config.json` at `{}`", $this.model_id);
+            let _ = $crate::api_get_file!(api, "hf_quant_config.json", model_id, &revision);
+        }
         let filenames = get_model_paths(
             revision.clone(),
             &$token_source,
@@ -239,6 +243,10 @@ macro_rules! get_embedding_paths {
             tracing::trace!("Loading `config.json` at `{}`", $this.model_id);
             $crate::api_get_file!(api, "config.json", model_id, &revision)
         };
+        if emb_dir_list.contains(&"hf_quant_config.json".to_string()) {
+            tracing::trace!("Loading `hf_quant_config.json` at `{}`", $this.model_id);
+            let _ = $crate::api_get_file!(api, "hf_quant_config.json", model_id, &revision);
+        }
         let filenames = get_model_paths(
             revision.clone(),
             &$token_source,
