@@ -52,5 +52,20 @@ Run `mistralrs doctor` to check cuTile availability for every detected GPU. See 
 `CUTILE_TILEIRAS_PATH` selects a specific `tileiras` binary and takes precedence over
 `CUDA_TOOLKIT_PATH` and automatic discovery.
 
+## Autotuning
+
+cuTile kernels are JIT-compiled for the GPU in the machine, so their launch configs are measured
+there too. The first time a model loads, the warmup step times candidate tile shapes and compiler
+knobs for each MoE expert shape and FP8 GEMM shape, about a minute for a large MoE model, and
+records the winners under `cutile_tune` in the mistral.rs cache directory. Later loads reuse a
+record whose provenance matches: the kernel source, the GPU architecture, the `tileiras` build,
+and the candidate set. A record that no longer matches is re-measured, never approximated. Routed
+LoRA tunes each route bucket the first time it is launched and persists the result the same way.
+
+Every candidate is checked against the built-in policy config's output before it is timed, and a
+winner replaces the policy only when it is measurably faster, so tuning can only leave a machine
+where it started or better. `MISTRALRS_CUTILE_TUNE=off` keeps the built-in policies,
+`force` re-measures, and `MISTRALRS_CUTILE_TUNE_CACHE` moves the records directory.
+
 See also: [environment variables](/reference/environment-variables/),
 [cargo features](/reference/cargo-features/).
