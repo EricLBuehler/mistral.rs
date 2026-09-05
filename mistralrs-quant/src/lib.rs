@@ -38,6 +38,7 @@ mod lora;
 #[cfg(feature = "cuda")]
 pub mod moe;
 mod mxfp4;
+pub mod nvfp4;
 mod pending_layer;
 mod pertensor_fp8;
 pub mod rotary;
@@ -153,8 +154,9 @@ pub use dummy::{DummyLayer, DummyLayerInfo};
 pub use f8q8::F8Q8Linear;
 pub use fp8::FP8Linear;
 pub use fp8_config::{
-    Fp8ActivationMode, Fp8CheckpointDialect, Fp8Config, Fp8LinearSpec, Fp8ScaleNames,
-    Fp8WeightScaleLayout,
+    CheckpointDialect, CheckpointLinearSpec, CheckpointQuantConfig, Fp8ActivationMode,
+    Fp8LinearSpec, Fp8ScaleNames, Fp8WeightScaleLayout, Nvfp4ActivationMode, Nvfp4LinearSpec,
+    Nvfp4ScaleNames, ScaleConvention, NVFP4_BLOCK_SIZE,
 };
 #[cfg(feature = "cuda")]
 pub use gemv::gemv;
@@ -211,6 +213,7 @@ pub use lora::{
     RoutedLoraCudaWeightTable, RoutedLoraDirectLaunch, RoutedLoraGroupedLaunch,
 };
 pub use mxfp4::MXFP4Layer;
+pub use nvfp4::{Nvfp4Layer, Nvfp4LayerParts};
 pub use pending_layer::{pending_isq_channel, PendingIsqLayer};
 pub use pertensor_fp8::{fp8_w8a16_linear, fp8_w8a8_linear, Fp8W8A8LinearArgs, PerTensorFP8Linear};
 pub use unquantized::UnquantLinear;
@@ -522,14 +525,14 @@ pub enum QuantizedConfig {
     #[serde(rename = "compressed-tensors")]
     CompressedTensors {
         #[serde(skip_serializing)]
-        config: Fp8Config,
+        config: CheckpointQuantConfig,
         #[serde(flatten)]
         raw: serde_json::Map<String, serde_json::Value>,
     },
     #[serde(rename = "modelopt")]
     ModelOpt {
         #[serde(skip_serializing)]
-        config: Fp8Config,
+        config: CheckpointQuantConfig,
         #[serde(flatten)]
         raw: serde_json::Map<String, serde_json::Value>,
     },
@@ -601,7 +604,7 @@ impl<'de> Deserialize<'de> for QuantizedConfig {
                         modules_to_not_convert.push(module);
                     }
                 }
-                Fp8Config::native(
+                CheckpointQuantConfig::native(
                     raw.weight_block_size.as_deref(),
                     raw.activation_scheme,
                     raw.fmt.as_deref(),
@@ -617,14 +620,14 @@ impl<'de> Deserialize<'de> for QuantizedConfig {
             }
             Some(m) if m == "compressed-tensors" || m == "compressed_tensors" => {
                 Ok(QuantizedConfig::CompressedTensors {
-                    config: Fp8Config::compressed_tensors(&value)
+                    config: CheckpointQuantConfig::compressed_tensors(&value)
                         .map_err(serde::de::Error::custom)?,
                     raw: raw_quantization_config(&value).map_err(serde::de::Error::custom)?,
                 })
             }
             Some(m) if m.to_ascii_lowercase().starts_with("modelopt") => {
                 Ok(QuantizedConfig::ModelOpt {
-                    config: Fp8Config::model_opt(&value).map_err(serde::de::Error::custom)?,
+                    config: CheckpointQuantConfig::model_opt(&value).map_err(serde::de::Error::custom)?,
                     raw: raw_quantization_config(&value).map_err(serde::de::Error::custom)?,
                 })
             }
@@ -645,7 +648,7 @@ impl<'de> Deserialize<'de> for QuantizedConfig {
             }
             None if value.get("config_groups").is_some() => {
                 Ok(QuantizedConfig::CompressedTensors {
-                    config: Fp8Config::compressed_tensors(&value)
+                    config: CheckpointQuantConfig::compressed_tensors(&value)
                         .map_err(serde::de::Error::custom)?,
                     raw: raw_quantization_config(&value).map_err(serde::de::Error::custom)?,
                 })
@@ -671,7 +674,7 @@ impl<'de> Deserialize<'de> for QuantizedConfig {
 impl QuantizedConfig {
     pub fn from_modelopt_config(config: &serde_json::Value) -> std::result::Result<Self, String> {
         Ok(Self::ModelOpt {
-            config: Fp8Config::model_opt(config)?,
+            config: CheckpointQuantConfig::model_opt(config)?,
             raw: raw_quantization_config(config)?,
         })
     }
@@ -680,21 +683,21 @@ impl QuantizedConfig {
         embedded: Option<&serde_json::Value>,
         external: &serde_json::Value,
     ) -> std::result::Result<Self, String> {
-        let merged = Fp8Config::model_opt_merged_value(embedded, external)?;
+        let merged = CheckpointQuantConfig::model_opt_merged_value(embedded, external)?;
         Ok(Self::ModelOpt {
-            config: Fp8Config::model_opt(&merged)?,
+            config: CheckpointQuantConfig::model_opt(&merged)?,
             raw: raw_quantization_config(&merged)?,
         })
     }
 
-    pub fn resolve_fp8(&self, prefix: &str) -> Result<Option<Fp8LinearSpec>> {
+    pub fn resolve_checkpoint(&self, prefix: &str) -> Result<Option<CheckpointLinearSpec>> {
         match self {
             Self::Fp8 {
                 weight_block_size,
                 activation_scheme,
                 fmt,
                 modules_to_not_convert,
-            } => Fp8Config::native(
+            } => CheckpointQuantConfig::native(
                 weight_block_size.as_deref(),
                 *activation_scheme,
                 fmt.as_deref(),
@@ -710,6 +713,16 @@ impl QuantizedConfig {
         }
     }
 
+    pub fn resolve_fp8(&self, prefix: &str) -> Result<Option<Fp8LinearSpec>> {
+        match self.resolve_checkpoint(prefix)? {
+            Some(CheckpointLinearSpec::Fp8(spec)) => Ok(Some(spec)),
+            Some(CheckpointLinearSpec::Nvfp4(_)) => {
+                candle_core::bail!("NVFP4 layer `{prefix}` requires the NVFP4 loader")
+            }
+            None => Ok(None),
+        }
+    }
+
     pub fn name(&self) -> &'static str {
         match self {
             Self::GptqAwq { .. } => "gptq",
@@ -722,11 +735,17 @@ impl QuantizedConfig {
         }
     }
 
-    pub fn get_bits_name(&self, _vb: &ShardedVarBuilder) -> String {
+    pub fn get_bits_name(&self, vb: &ShardedVarBuilder) -> String {
         match self {
             Self::GptqAwq { bits, .. } => format!("{bits} bits"),
             Self::Fp8 { .. } => "8 bits".to_string(),
-            Self::CompressedTensors { .. } | Self::ModelOpt { .. } => "8 bits".to_string(),
+            Self::CompressedTensors { .. } | Self::ModelOpt { .. } => {
+                match self.resolve_checkpoint(&vb.prefix()) {
+                    Ok(Some(CheckpointLinearSpec::Nvfp4(_))) => "4 bits".to_string(),
+                    Ok(Some(CheckpointLinearSpec::Fp8(_))) => "8 bits".to_string(),
+                    _ => "unquantized".to_string(),
+                }
+            }
             Self::Bitsandbytes {
                 bnb_4bit_quant_type: Some(_),
             } => "4 bits".to_string(),
@@ -751,9 +770,7 @@ impl QuantizedConfig {
                 other => panic!("Unexpected bits in `pack_factor` {other}"),
             },
             Self::Fp8 { .. } => IsqType::F8E4M3.pack_factor(dtype),
-            Self::CompressedTensors { .. } | Self::ModelOpt { .. } => {
-                IsqType::F8E4M3.pack_factor(dtype)
-            }
+            Self::CompressedTensors { .. } | Self::ModelOpt { .. } => 1,
             Self::Bitsandbytes {
                 bnb_4bit_quant_type: Some(_),
             } => IsqType::Q4K.pack_factor(dtype),
@@ -2728,7 +2745,7 @@ pub fn linear_no_bias(
             QuantizedConfig::GptqAwq { .. } => gptq_linear(in_dim, out_dim, quant_conf, vb)?,
             QuantizedConfig::Fp8 { .. }
             | QuantizedConfig::CompressedTensors { .. }
-            | QuantizedConfig::ModelOpt { .. } => fp8_config::fp8_checkpoint_linear_b(
+            | QuantizedConfig::ModelOpt { .. } => fp8_config::checkpoint_linear_b(
                 in_dim,
                 out_dim,
                 quant_conf,
@@ -2794,7 +2811,7 @@ pub fn linear(
             QuantizedConfig::GptqAwq { .. } => gptq_linear(in_dim, out_dim, quant_conf, vb)?,
             QuantizedConfig::Fp8 { .. }
             | QuantizedConfig::CompressedTensors { .. }
-            | QuantizedConfig::ModelOpt { .. } => fp8_config::fp8_checkpoint_linear_b(
+            | QuantizedConfig::ModelOpt { .. } => fp8_config::checkpoint_linear_b(
                 in_dim,
                 out_dim,
                 quant_conf,

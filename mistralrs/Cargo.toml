@@ -102,6 +102,11 @@ name = "isq"
 path = "examples/quantization/isq/main.rs"
 
 [[example]]
+name = "nvfp4"
+path = "examples/quantization/nvfp4/main.rs"
+required-features = ["cutile"]
+
+[[example]]
 name = "imatrix"
 path = "examples/quantization/imatrix/main.rs"
 
@@ -275,6 +280,7 @@ no-default-features = true
 [features]
 # NVIDIA CUDA GPU support
 cuda = ["mistralrs-core/cuda"]
+cutile = ["cuda", "mistralrs-core/cutile"]
 # cuDNN acceleration (requires cuda)
 cudnn = ["mistralrs-core/cudnn"]
 # Apple Metal GPU support (macOS/iOS)

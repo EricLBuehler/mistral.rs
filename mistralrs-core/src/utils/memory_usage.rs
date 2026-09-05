@@ -80,7 +80,8 @@ impl MemoryUsage {
     pub fn query(&self, device: &Device) -> Result<DeviceMemory> {
         match device {
             Device::Cpu => {
-                let sys = System::new_all();
+                let mut sys = System::new();
+                sys.refresh_memory();
                 Ok(DeviceMemory::Discrete {
                     total: usize::try_from(sys.total_memory())?,
                     free: usize::try_from(sys.available_memory())?,
@@ -89,7 +90,8 @@ impl MemoryUsage {
             #[cfg(feature = "cuda")]
             Device::Cuda(dev) => {
                 if super::normal::is_integrated_gpu(device) {
-                    let sys = System::new_all();
+                    let mut sys = System::new();
+                    sys.refresh_memory();
                     let total_bytes = usize::try_from(sys.total_memory())?;
                     let avail_bytes = usize::try_from(sys.available_memory())?;
                     let fraction = igpu_memory_fraction();

@@ -7,6 +7,9 @@ mod fp8_w8a8;
 mod fused_moe;
 mod fused_moe_fp8;
 mod gdn_prefill;
+mod nvfp4;
+mod nvfp4_gemv;
+mod nvfp4_matmul;
 mod routed_lora;
 mod split_k;
 mod tune;
@@ -27,6 +30,10 @@ pub use fused_moe_fp8::{
 pub use gdn_prefill::{
     cutile_gdn_prefill, gdn_prefill_supported, GdnPrefillArgs, GDN_PREFILL_CHUNK,
     GDN_PREFILL_HEAD_DIM,
+};
+pub use nvfp4::{
+    cutile_nvfp4, cutile_nvfp4_gather, nvfp4_supported, register_nvfp4_routing,
+    register_nvfp4_shape, Nvfp4GemmArgs,
 };
 pub use routed_lora::{
     cached_cutile_routed_lora_config, cutile_routed_lora_candidate_configs,
@@ -144,6 +151,7 @@ fn tileiras_version_supported(output: &str) -> bool {
 
 #[derive(Debug)]
 struct TileirasCapabilities {
+    version: (u32, u32),
     targets: Vec<i32>,
 }
 
@@ -183,7 +191,10 @@ fn tileiras_capabilities() -> Option<&'static TileirasCapabilities> {
             if targets.is_empty() {
                 return None;
             }
-            Some(TileirasCapabilities { targets })
+            Some(TileirasCapabilities {
+                version: parse_tileiras_version(&version)?,
+                targets,
+            })
         })
         .as_ref()
 }

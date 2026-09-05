@@ -743,6 +743,12 @@ impl FastExpertsWeights {
         vb: ShardedVarBuilder,
         quantization_config: &Option<QuantizedConfig>,
     ) -> Result<FastExpertsWeights> {
+        #[cfg(feature = "cutile")]
+        mistralrs_quant::cutile::register_nvfp4_routing(
+            vb.device(),
+            cfg.num_experts,
+            cfg.num_experts_per_tok,
+        )?;
         let experts_vb = vb.pp("experts");
         let read_vb = if should_stage_prequantized_on_cpu(&experts_vb) && !vb.device().is_cpu() {
             vb.set_device(Device::Cpu)
@@ -1143,6 +1149,17 @@ impl FastExpertsWeights {
         }
     }
 
+    fn uses_flattened_gather(&self, device: &Device) -> bool {
+        device.is_cuda()
+            || [
+                &self.fused_gate_proj,
+                &self.fused_up_proj,
+                &self.fused_down_proj,
+            ]
+            .iter()
+            .any(|projection| projection.name() == "NVFP4")
+    }
+
     pub(super) fn forward_gather(
         &self,
         forward: &MoEForward,
@@ -1154,7 +1171,7 @@ impl FastExpertsWeights {
             .process_routed_stats(forward.xs_flat, ids)?;
         self.fused_up_proj
             .process_routed_stats(forward.xs_flat, ids)?;
-        let ys = if forward.xs.device().is_cuda() {
+        let ys = if self.uses_flattened_gather(forward.xs.device()) {
             let xs =
                 forward
                     .xs_flat
@@ -1213,7 +1230,7 @@ impl FastExpertsWeights {
         self.fused_up_proj
             .process_routed_stats(forward.xs_flat, ids)?;
 
-        let (gather_input, gather_ids) = if forward.xs.device().is_cuda() {
+        let (gather_input, gather_ids) = if self.uses_flattened_gather(forward.xs.device()) {
             (
                 forward
                     .xs_flat
@@ -1249,7 +1266,7 @@ impl FastExpertsWeights {
         let down_input = crate::ops::mul_and_act(&gate, &up, config.act)?;
         self.fused_down_proj
             .process_routed_stats(&down_input, ids)?;
-        let down_base = if forward.xs.device().is_cuda() {
+        let down_base = if self.uses_flattened_gather(forward.xs.device()) {
             self.fused_down_proj.gather_forward(&down_input, ids)?
         } else {
             self.fused_down_proj.gather_forward(
@@ -1825,6 +1842,89 @@ mod immediate_isq_tests {
         );
         for module in modules {
             module.ct.resolve()?;
+        }
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod nvfp4_tests {
+    use super::*;
+    use crate::layers::Activation;
+    use crate::moe::experts::forward::MoEForwardShape;
+    use mistralrs_quant::{Nvfp4ActivationMode, Nvfp4Layer, Nvfp4LayerParts};
+
+    const FEATURES: usize = 16;
+    const EXPERTS: usize = 2;
+    const TOKENS: usize = 2;
+    const TOPK: usize = 2;
+
+    fn projection(values: [f32; EXPERTS], quantized: bool) -> Result<Arc<dyn QuantMethod>> {
+        let device = &Device::Cpu;
+        let globals = Tensor::from_vec(
+            values
+                .into_iter()
+                .flat_map(|value| std::iter::repeat_n(value, FEATURES))
+                .collect::<Vec<_>>(),
+            (EXPERTS, FEATURES),
+            device,
+        )?;
+        if quantized {
+            Ok(Arc::new(Nvfp4Layer::from_parts(Nvfp4LayerParts {
+                weight: Tensor::full(0x22u8, (EXPERTS, FEATURES, FEATURES / 2), device)?,
+                scales: Tensor::ones((EXPERTS, FEATURES, 1), DType::F8E4M3, device)?,
+                global_scales: globals,
+                input_scale: None,
+                activation: Nvfp4ActivationMode::None,
+                bias: None,
+                dtype: DType::F32,
+            })?))
+        } else {
+            Ok(Arc::new(UnquantLinear::new(
+                QuantMethodConfig::Unquantized(Linear::new(
+                    globals
+                        .unsqueeze(2)?
+                        .broadcast_as((EXPERTS, FEATURES, FEATURES))?
+                        .contiguous()?,
+                    None,
+                )),
+            )?))
+        }
+    }
+
+    #[test]
+    fn cpu_gather_combines_nvfp4_and_unquantized_projections() -> Result<()> {
+        let device = &Device::Cpu;
+        let mut input = vec![0f32; TOKENS * FEATURES];
+        input[0] = 1.0;
+        input[FEATURES] = 2.0;
+        let xs = Tensor::from_vec(input, (1, TOKENS, FEATURES), device)?;
+        let xs_flat = xs.reshape((TOKENS, FEATURES))?;
+        let ids = Tensor::new(&[[0u32, 1], [1, 0]], device)?;
+        let weights = Tensor::new(&[[0.25f32, 0.75], [0.75, 0.25]], device)?;
+        let forward = MoEForward {
+            xs: &xs,
+            xs_flat: &xs_flat,
+            topk_weights: &weights,
+            topk_ids: &ids,
+            original_dtype: DType::F32,
+            shape: MoEForwardShape::new(1, TOKENS, FEATURES),
+            lora: None,
+        };
+        let config = MoEForwardConfig {
+            num_experts: EXPERTS,
+            num_experts_per_tok: TOPK,
+            act: Activation::Relu,
+        };
+        for quantized_projection in 0..3 {
+            let experts = FastExpertsWeights {
+                fused_gate_proj: projection([1.0, 2.0], quantized_projection == 0)?,
+                fused_up_proj: projection([3.0, 4.0], quantized_projection == 1)?,
+                fused_down_proj: projection([1.0, 2.0], quantized_projection == 2)?,
+                sharded: false,
+            };
+            let output = experts.forward_gather(&forward, config)?.to_vec2::<f32>()?;
+            assert_eq!(output, vec![vec![204.0; FEATURES], vec![816.0; FEATURES]]);
         }
         Ok(())
     }

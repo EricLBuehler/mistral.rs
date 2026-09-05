@@ -94,3 +94,7 @@ mistralrs-metal-compile = { workspace = true, optional = true }
 
 [dev-dependencies]
 tempfile.workspace = true
+
+[[example]]
+name = "nvfp4_bench"
+required-features = ["cuda", "cutile"]

@@ -10,13 +10,14 @@ pub(super) trait CutileKernel {
 }
 
 /// Every cuTile kernel to warm; add a line per new kernel.
-fn registered() -> [&'static dyn CutileKernel; 6] {
+fn registered() -> [&'static dyn CutileKernel; 7] {
     [
         &super::fused_moe::FUSED_MOE,
         &super::fused_moe_fp8::FUSED_MOE_FP8,
         &super::fp8_gemm::FP8_GEMM,
         &super::fp8_w8a8::FP8_W8A8,
         &super::fp8_w8a16::FP8_W8A16,
+        &super::nvfp4::NVFP4,
         &super::gdn_prefill::GDN_PREFILL,
     ]
 }
