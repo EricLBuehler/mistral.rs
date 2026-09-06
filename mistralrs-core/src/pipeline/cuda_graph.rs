@@ -386,7 +386,8 @@ impl Drop for CudaGraphEventGuard {
 }
 
 struct MemoryPoolScopeState {
-    guards: usize,
+    graph_guards: usize,
+    engine_retainers: usize,
     release_threshold: u64,
 }
 
@@ -2425,24 +2426,110 @@ impl Drop for CudaGraphMemoryPoolGuard {
             tracing::warn!("CUDA graph memory pool scope disappeared before restoration");
             return;
         };
-        scope.guards = scope
-            .guards
+        scope.graph_guards = scope
+            .graph_guards
             .checked_sub(1)
             .expect("CUDA graph memory pool guard underflow");
-        if scope.guards != 0 {
+        if scope.graph_guards != 0 {
             return;
         }
-        let release_threshold = scope.release_threshold;
-        let pool_ptr = pool as sys::CUmemoryPool;
-        if let Err(err) = set_memory_pool_release_threshold(pool_ptr, release_threshold) {
-            tracing::warn!("Failed to restore CUDA graph memory pool threshold: {err:?}");
+        let restore_threshold = scope.engine_retainers == 0;
+        if restore_threshold {
+            let pool_ptr = pool as sys::CUmemoryPool;
+            if let Err(err) = set_memory_pool_release_threshold(pool_ptr, scope.release_threshold) {
+                tracing::warn!("Failed to restore CUDA graph memory pool threshold: {err:?}");
+            }
         }
         let _ = self.stream.synchronize();
         if let Err(err) = trim_cuda_graph_memory_bound(&self.stream) {
             tracing::warn!("Failed to trim CUDA graph memory after capture: {err:?}");
         }
+        if restore_threshold {
+            scopes.remove(&pool);
+        }
+    }
+}
+
+#[must_use]
+pub(crate) struct CudaMemoryPoolRetention {
+    stream: Arc<CudaStream>,
+    pool: Option<usize>,
+}
+
+impl Drop for CudaMemoryPoolRetention {
+    fn drop(&mut self) {
+        let Some(pool) = self.pool else { return };
+        if let Err(err) = self.stream.context().bind_to_thread() {
+            tracing::warn!(
+                "Failed to bind CUDA context while releasing memory pool retention: {err}"
+            );
+        }
+        let scopes = CUDA_GRAPH_MEMORY_POOL_SCOPES.get_or_init(Default::default);
+        let mut scopes = scopes
+            .lock()
+            .expect("CUDA graph memory pool scopes poisoned");
+        let Some(scope) = scopes.get_mut(&pool) else {
+            tracing::warn!("CUDA memory pool retention disappeared before restoration");
+            return;
+        };
+        scope.engine_retainers = scope
+            .engine_retainers
+            .checked_sub(1)
+            .expect("CUDA memory pool retention underflow");
+        if scope.engine_retainers != 0 || scope.graph_guards != 0 {
+            return;
+        }
+        if let Err(err) =
+            set_memory_pool_release_threshold(pool as sys::CUmemoryPool, scope.release_threshold)
+        {
+            tracing::warn!("Failed to restore CUDA memory pool retention threshold: {err:?}");
+        }
         scopes.remove(&pool);
     }
+}
+
+fn memory_pool_scope(
+    scopes: &mut HashMap<usize, MemoryPoolScopeState>,
+    pool: sys::CUmemoryPool,
+) -> candle_core::Result<&mut MemoryPoolScopeState> {
+    use std::collections::hash_map::Entry;
+
+    Ok(match scopes.entry(pool as usize) {
+        Entry::Occupied(scope) => scope.into_mut(),
+        Entry::Vacant(entry) => {
+            let release_threshold = memory_pool_release_threshold(pool)?;
+            set_memory_pool_release_threshold(pool, u64::MAX)?;
+            entry.insert(MemoryPoolScopeState {
+                graph_guards: 0,
+                engine_retainers: 0,
+                release_threshold,
+            })
+        }
+    })
+}
+
+pub(crate) fn retain_cuda_memory_pool(
+    stream: &Arc<CudaStream>,
+) -> candle_core::Result<CudaMemoryPoolRetention> {
+    let pool = if stream.context().has_async_alloc() {
+        let pool = cuda_memory_pool(stream)?;
+        let scopes = CUDA_GRAPH_MEMORY_POOL_SCOPES.get_or_init(Default::default);
+        let mut scopes = scopes
+            .lock()
+            .expect("CUDA graph memory pool scopes poisoned");
+        let scope = memory_pool_scope(&mut scopes, pool)?;
+        scope.engine_retainers = scope
+            .engine_retainers
+            .checked_add(1)
+            .expect("CUDA memory pool retention overflow");
+        Some(pool as usize)
+    } else {
+        None
+    };
+    Ok(CudaMemoryPoolRetention {
+        stream: stream.clone(),
+        pool,
+    })
 }
 
 fn memory_pool_release_threshold(pool: sys::CUmemoryPool) -> candle_core::Result<u64> {
@@ -2506,7 +2593,9 @@ pub(crate) fn cuda_graph_memory_pool_scope_active(device: &Device) -> candle_cor
     let scopes = scopes
         .lock()
         .expect("CUDA graph memory pool scopes poisoned");
-    Ok(scopes.contains_key(&pool))
+    Ok(scopes
+        .get(&pool)
+        .is_some_and(|scope| scope.graph_guards != 0))
 }
 
 fn trim_cuda_graph_memory_bound(stream: &Arc<CudaStream>) -> candle_core::Result<()> {
@@ -2554,7 +2643,10 @@ pub(crate) fn trim_cuda_graph_memory(stream: &Arc<CudaStream>) -> candle_core::R
     let scopes = scopes
         .lock()
         .expect("CUDA graph memory pool scopes poisoned");
-    if scopes.contains_key(&pool) {
+    if scopes
+        .get(&pool)
+        .is_some_and(|scope| scope.graph_guards != 0)
+    {
         return Ok(());
     }
     stream
@@ -2580,22 +2672,11 @@ pub(crate) fn prepare_cuda_graph_memory_pool(
     let mut scopes = scopes
         .lock()
         .expect("CUDA graph memory pool scopes poisoned");
-    if let Some(scope) = scopes.get_mut(&pool_key) {
-        scope.guards = scope
-            .guards
-            .checked_add(1)
-            .expect("CUDA graph memory pool guard overflow");
-    } else {
-        let release_threshold = memory_pool_release_threshold(pool)?;
-        set_memory_pool_release_threshold(pool, u64::MAX)?;
-        scopes.insert(
-            pool_key,
-            MemoryPoolScopeState {
-                guards: 1,
-                release_threshold,
-            },
-        );
-    }
+    let scope = memory_pool_scope(&mut scopes, pool)?;
+    scope.graph_guards = scope
+        .graph_guards
+        .checked_add(1)
+        .expect("CUDA graph memory pool guard overflow");
     drop(scopes);
 
     let guard = CudaGraphMemoryPoolGuard {
@@ -3946,15 +4027,197 @@ mod tests {
 
         let mut next_bucket_rows = (*rows).clone();
         next_bucket_rows.block_tables =
-            BlockTableSnapshot::from_owned_sequence_tables(vec![(1..=17).collect()], 1);
-        next_bucket_rows.context_lens = vec![513];
-        next_bucket_rows.full_context_lens = vec![513];
+            BlockTableSnapshot::from_owned_sequence_tables(vec![(1..=65).collect()], 1);
+        next_bucket_rows.context_lens = vec![2049];
+        next_bucket_rows.full_context_lens = vec![2049];
         let next_bucket = Arc::new(next_bucket_rows).build_graph_staged().unwrap();
         let next_bucket_key =
             CudaDecodeGraphKey::new(&input_ids, &next_bucket, 32, RecurrentBatchKind::Decode)
                 .unwrap();
         assert_ne!(staged_key, next_bucket_key);
         assert!(staged_key.has_same_spec_state_shape(&next_bucket_key));
+    }
+
+    const DECODE_CONTEXT_TEST_PAGE_SIZE: usize = 32;
+    const DECODE_CONTEXT_TEST_MAX_BATCH: usize = 64;
+    const DECODE_CONTEXT_TEST_FLOOR: usize = 2048;
+    const DECODE_CONTEXT_TEST_MAX_CONTEXT: usize = 128 * 1024;
+    const DECODE_CONTEXT_TEST_KV_HEADS: usize = 8;
+
+    fn decode_context_rows(batch: usize, context: usize) -> DecodePagedRows {
+        DecodePagedRows {
+            slot_mappings: vec![vec![_PAD_SLOT_ID]; batch],
+            block_tables: BlockTableSnapshot::from_owned_sequence_tables(
+                vec![vec![0; context.div_ceil(DECODE_CONTEXT_TEST_PAGE_SIZE)]; batch],
+                1,
+            ),
+            context_lens: vec![context; batch],
+            full_context_lens: vec![context; batch],
+            query_len: 1,
+            block_size: DECODE_CONTEXT_TEST_PAGE_SIZE,
+            use_standard_metadata: false,
+            max_paged_context_len: DECODE_CONTEXT_TEST_MAX_CONTEXT,
+            sliding_window: None,
+            decode_window: 1,
+            devices: vec![Device::Cpu],
+            num_kv_heads: DECODE_CONTEXT_TEST_KV_HEADS,
+        }
+    }
+
+    fn decode_context_key(rows: DecodePagedRows) -> CudaDecodeGraphKey {
+        let inputs =
+            Tensor::zeros((rows.slot_mappings.len(), 1), DType::U32, &Device::Cpu).unwrap();
+        let metadata = Arc::new(rows).build_graph_staged().unwrap();
+        CudaDecodeGraphKey::new(
+            &inputs,
+            &metadata,
+            DECODE_CONTEXT_TEST_PAGE_SIZE,
+            RecurrentBatchKind::Decode,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn startup_context_keys_cover_changed_admission_and_drain_batches() {
+        let startup = cuda_graph_precapture_batches(CudaGraphComponent::Target, 1)
+            .filter(|batch| *batch <= DECODE_CONTEXT_TEST_MAX_BATCH)
+            .map(|batch| decode_context_key(decode_context_rows(1, 1).padded(batch)))
+            .collect::<Vec<_>>();
+        let even_warmup = [
+            2, 6, 10, 14, 18, 22, 26, 30, 32, 30, 26, 22, 18, 14, 10, 6, 2,
+        ];
+        let odd_measured = [
+            1, 5, 9, 13, 17, 21, 25, 29, 32, 31, 27, 23, 19, 15, 11, 7, 3,
+        ];
+        for batch in even_warmup.into_iter().chain(odd_measured) {
+            let bucket = cuda_graph_batch_bucket(CudaGraphComponent::Target, 1, batch).unwrap();
+            for context in [
+                1,
+                128,
+                512,
+                513,
+                1024,
+                1025,
+                1151,
+                1536,
+                DECODE_CONTEXT_TEST_FLOOR,
+            ] {
+                let rows = decode_context_rows(batch, context).padded(bucket);
+                assert!(startup.contains(&decode_context_key(rows)));
+            }
+        }
+        assert_eq!(startup.len(), 22);
+        assert!(!startup.contains(&decode_context_key(decode_context_rows(
+            32,
+            DECODE_CONTEXT_TEST_FLOOR + 1
+        ))));
+    }
+
+    #[test]
+    fn decode_context_floor_preserves_live_csr_splits_and_pad_slots() {
+        let mut live_rows = decode_context_rows(3, 1025);
+        live_rows.slot_mappings = vec![vec![1024]; 3];
+        let rows = Arc::new(live_rows.padded(8));
+        let metadata = rows.build_materialized().unwrap();
+        let view = &metadata.flashinfer.as_ref().unwrap().views.logical;
+        let location = Device::Cpu.location();
+        let indptr = view.paged_kv.indptr[&location].to_vec1::<i32>().unwrap();
+        assert_eq!(indptr, (0..=8).map(|row| row * 33).collect::<Vec<_>>());
+        assert_eq!(
+            view.paged_kv.indices[&location].dims(),
+            &[8 * (DECODE_CONTEXT_TEST_FLOOR / DECODE_CONTEXT_TEST_PAGE_SIZE)]
+        );
+        assert_eq!(
+            view.paged_kv.last_page_len[&location]
+                .to_vec1::<i32>()
+                .unwrap(),
+            vec![1; 8]
+        );
+        let chunk = view.tile_plan.kv_chunk_size[&location]
+            .to_vec1::<i32>()
+            .unwrap()[0];
+        let chunks_per_row = 1025usize.div_ceil(chunk as usize);
+        let ends = view.tile_plan.o_indptr[&location].to_vec1::<i32>().unwrap();
+        assert_eq!(
+            ends,
+            (0..=8)
+                .map(|row| (row * chunks_per_row) as i32)
+                .collect::<Vec<_>>()
+        );
+        let mask = view.tile_plan.block_valid_mask[&location]
+            .to_vec1::<u8>()
+            .unwrap();
+        assert_eq!(mask.len(), 8 * 8);
+        assert!(mask[..8 * chunks_per_row].iter().all(|valid| *valid == 1));
+        assert!(mask[8 * chunks_per_row..].iter().all(|valid| *valid == 0));
+        assert_eq!(rows.slot_mappings[..3], vec![vec![1024]; 3]);
+        assert!(rows.slot_mappings[3..]
+            .iter()
+            .all(|row| row == &[_PAD_SLOT_ID]));
+        assert_eq!(
+            decode_context_key((*rows).clone()),
+            decode_context_key(decode_context_rows(1, 1).padded(8))
+        );
+    }
+
+    #[test]
+    fn decode_context_floor_preserves_sliding_and_full_capacities() {
+        let mut startup = decode_context_rows(1, 1);
+        startup.sliding_window = Some(128);
+        let mut live = decode_context_rows(1, 1025);
+        live.sliding_window = Some(128);
+        live.context_lens = vec![129];
+        assert_eq!(
+            decode_context_key(startup),
+            decode_context_key(live.clone())
+        );
+        let metadata = Arc::new(live).build_materialized().unwrap();
+        let views = &metadata.flashinfer.as_ref().unwrap().views;
+        let location = Device::Cpu.location();
+        let sliding = views.sliding.as_ref().unwrap();
+        assert_eq!(sliding.paged_kv.indices[&location].dims(), &[5]);
+        assert_eq!(
+            views.logical.paged_kv.indices[&location].dims(),
+            &[DECODE_CONTEXT_TEST_FLOOR / DECODE_CONTEXT_TEST_PAGE_SIZE]
+        );
+        assert_eq!(
+            sliding.paged_kv.indptr[&location].to_vec1::<i32>().unwrap(),
+            vec![0, 5]
+        );
+        assert_eq!(
+            views.logical.paged_kv.indptr[&location]
+                .to_vec1::<i32>()
+                .unwrap(),
+            vec![0, 33]
+        );
+    }
+
+    #[test]
+    fn decode_context_floor_respects_small_caps_and_standard_metadata() {
+        let mut short = decode_context_rows(1, 1);
+        short.max_paged_context_len = 1024;
+        let short_key = decode_context_key(short.clone());
+        let mut later = decode_context_rows(1, 1024);
+        later.max_paged_context_len = 1024;
+        assert_eq!(short_key, decode_context_key(later));
+        let mut standard = short.clone();
+        standard.use_standard_metadata = true;
+        let mut standard_later = decode_context_rows(1, 1025);
+        standard_later.use_standard_metadata = true;
+        standard_later.max_paged_context_len = 1024;
+        assert_ne!(
+            decode_context_key(standard),
+            decode_context_key(standard_later)
+        );
+        let mut staged_decode = short;
+        staged_decode.decode_window = 2;
+        let mut staged_later = decode_context_rows(1, 1025);
+        staged_later.decode_window = 2;
+        staged_later.max_paged_context_len = 1024;
+        assert_ne!(
+            decode_context_key(staged_decode),
+            decode_context_key(staged_later)
+        );
     }
 
     #[test]
@@ -4163,6 +4426,59 @@ mod tests {
 
     #[test]
     #[ignore = "requires a CUDA device"]
+    fn engine_memory_pool_retention_coordinates_nested_graph_scopes() -> anyhow::Result<()> {
+        let device = Device::new_cuda(0)?;
+        let alias = Device::new_cuda(0)?;
+        let stream = device.as_cuda_device()?.cuda_stream();
+        let alias_stream = alias.as_cuda_device()?.cuda_stream();
+        let pool = cuda_memory_pool(&stream)?;
+        assert_eq!(cuda_memory_pool(&alias_stream)?, pool);
+        let original = memory_pool_release_threshold(pool)?;
+
+        for graph_first in [false, true] {
+            for engines_drop_first in [false, true] {
+                let prior_graph = graph_first
+                    .then(|| prepare_cuda_graph_memory_pool(&stream))
+                    .transpose()?;
+                let first = retain_cuda_memory_pool(&stream)?;
+                let second = retain_cuda_memory_pool(&alias_stream)?;
+                assert_eq!(memory_pool_release_threshold(pool)?, u64::MAX);
+                assert_eq!(cuda_graph_memory_pool_scope_active(&device)?, graph_first);
+                let outer = match prior_graph {
+                    Some(guard) => guard,
+                    None => prepare_cuda_graph_memory_pool(&stream)?,
+                };
+                let inner = prepare_cuda_graph_memory_pool(&alias_stream)?;
+                assert!(cuda_graph_memory_pool_scope_active(&alias)?);
+
+                if engines_drop_first {
+                    drop(second);
+                    assert_eq!(memory_pool_release_threshold(pool)?, u64::MAX);
+                    drop(first);
+                    assert_eq!(memory_pool_release_threshold(pool)?, u64::MAX);
+                    drop(outer);
+                    assert!(cuda_graph_memory_pool_scope_active(&device)?);
+                    assert_eq!(memory_pool_release_threshold(pool)?, u64::MAX);
+                    drop(inner);
+                } else {
+                    drop(outer);
+                    assert!(cuda_graph_memory_pool_scope_active(&device)?);
+                    drop(inner);
+                    assert!(!cuda_graph_memory_pool_scope_active(&device)?);
+                    assert_eq!(memory_pool_release_threshold(pool)?, u64::MAX);
+                    drop(first);
+                    assert_eq!(memory_pool_release_threshold(pool)?, u64::MAX);
+                    drop(second);
+                }
+                assert!(!cuda_graph_memory_pool_scope_active(&device)?);
+                assert_eq!(memory_pool_release_threshold(pool)?, original);
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    #[ignore = "requires a CUDA device"]
     fn graph_memory_cleanup_returns_allocator_to_baseline() -> anyhow::Result<()> {
         let device = Device::new_cuda(0)?;
         let stream = device.as_cuda_device()?.cuda_stream();
@@ -4172,6 +4488,9 @@ mod tests {
         let used_before = cuda_graph_memory_attribute(&stream, used_attribute)?;
         let reserved_before = cuda_graph_memory_attribute(&stream, reserved_attribute)?;
 
+        let pool = cuda_memory_pool(&stream)?;
+        let original = memory_pool_release_threshold(pool)?;
+        let retention = retain_cuda_memory_pool(&stream)?;
         let guard = prepare_cuda_graph_memory_pool(&stream)?;
         let input = Var::from_tensor(&Tensor::from_vec(vec![1f32, 2.0], 2, &device)?)?;
         let restore_event_tracking = disable_event_tracking_for_capture(&stream);
@@ -4187,6 +4506,8 @@ mod tests {
         stream.synchronize()?;
         drop(graph);
         drop(guard);
+        assert!(!cuda_graph_memory_pool_scope_active(&device)?);
+        assert_eq!(memory_pool_release_threshold(pool)?, u64::MAX);
 
         trim_cuda_graph_memory(&stream)?;
         assert_eq!(
@@ -4197,6 +4518,8 @@ mod tests {
             cuda_graph_memory_attribute(&stream, reserved_attribute)?,
             reserved_before
         );
+        drop(retention);
+        assert_eq!(memory_pool_release_threshold(pool)?, original);
         Ok(())
     }
 

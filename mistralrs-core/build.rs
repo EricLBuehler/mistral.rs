@@ -23,6 +23,19 @@ fn cuda_build_dir(out_dir: &std::path::Path, component: &str) -> std::path::Path
 }
 
 #[cfg(feature = "cuda")]
+fn prepare_cuda_archive(path: std::path::PathBuf) -> std::path::PathBuf {
+    if std::env::var_os(CUDA_BUILD_ROOT_ENV).is_some() {
+        // Shared objects can be newer than this Cargo build directory's archive.
+        match std::fs::remove_file(&path) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => panic!("failed to refresh CUDA archive {}: {error}", path.display()),
+        }
+    }
+    path
+}
+
+#[cfg(feature = "cuda")]
 fn cuda_header_hash(dir: &std::path::Path) -> std::io::Result<u64> {
     fn update(hash: &mut u64, bytes: &[u8]) {
         for byte in bytes {
@@ -138,7 +151,7 @@ fn main() {
         };
 
         builder
-            .build_lib(out_file)
+            .build_lib(prepare_cuda_archive(out_file))
             .expect("Build mistral-core failed!");
         println!("cargo:rustc-link-search={}", out_dir.display());
         println!("cargo:rustc-link-lib=mistralrscuda");
@@ -186,7 +199,9 @@ fn main() {
                     .arg(cuda_nvcc_flags_env);
             }
             flashinfer_gdn
-                .build_lib(out_dir.join("libmistralrsflashinfergdn.a"))
+                .build_lib(prepare_cuda_archive(
+                    out_dir.join("libmistralrsflashinfergdn.a"),
+                ))
                 .expect("Build FlashInfer GDN provider failed!");
             println!("cargo:rustc-link-lib=mistralrsflashinfergdn");
         } else if compute_cap == 90

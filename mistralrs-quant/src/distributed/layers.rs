@@ -308,8 +308,25 @@ impl QuantMethod for RuntimeOutputLinear {
         self.inner.preferred_activation_scale_layout_for(a)
     }
 
+    fn nvfp4_input_calibration(&self) -> Option<crate::Nvfp4InputCalibration<'_>> {
+        self.inner.nvfp4_input_calibration()
+    }
+
+    fn activation_quantization_global_scale(&self) -> Option<f32> {
+        self.inner.activation_quantization_global_scale()
+    }
+
     fn quantize_activation(&self, a: &Tensor) -> Result<QuantizedActivation> {
         self.inner.quantize_activation(a)
+    }
+
+    fn try_quantize_glu(
+        &self,
+        gate: &Tensor,
+        value: &Tensor,
+        activation: crate::GluActivationType,
+    ) -> Result<Option<QuantizedActivation>> {
+        self.inner.try_quantize_glu(gate, value, activation)
     }
 
     fn forward_quantized(&self, a: &QuantizedActivation) -> Result<Tensor> {
@@ -437,11 +454,58 @@ fn load_packed_weights(
     }
 
     let builders = names.iter().map(|name| vb.pp(name)).collect::<Vec<_>>();
-    if builders.iter().any(|builder| {
-        should_apply_immediate_isq(builder)
-            || builder.weight_source().is_some()
-            || !builder.contains_tensor("weight")
-    }) {
+    if builders
+        .iter()
+        .any(|builder| should_apply_immediate_isq(builder) || builder.weight_source().is_some())
+    {
+        return Ok(None);
+    }
+    if let Some(
+        config @ (QuantizedConfig::ModelOpt { .. } | QuantizedConfig::CompressedTensors { .. }),
+    ) = config
+    {
+        if output_layouts.iter().any(|layout| !layout.is_identity()) {
+            return Ok(None);
+        }
+        let mut specs = Vec::with_capacity(builders.len());
+        for (((builder, &out_dim), &shard), layout) in builders
+            .iter()
+            .zip(out_dims)
+            .zip(shards)
+            .zip(output_layouts)
+        {
+            layout.local_runtime_to_canonical(out_dim, shard)?;
+            let Some(crate::CheckpointLinearSpec::Nvfp4(spec)) =
+                config.resolve_checkpoint(&builder.prefix())?
+            else {
+                return Ok(None);
+            };
+            if !builder.contains_tensor(spec.scale_names.weight) {
+                return Ok(None);
+            }
+            specs.push(spec);
+        }
+        let layers = builders
+            .iter()
+            .zip(out_dims)
+            .zip(shards)
+            .zip(specs)
+            .map(|(((builder, &out_dim), &shard), spec)| {
+                crate::Nvfp4Layer::load(in_dim, out_dim, spec, false, shard, builder.clone())
+            })
+            .collect::<Result<Vec<_>>>()?;
+        return Ok(
+            crate::Nvfp4Layer::merge(layers)?.map(|group| PackedWeights {
+                packed: group.packed,
+                constituents: group.constituents,
+                rows: group.rows_per_rank,
+            }),
+        );
+    }
+    if builders
+        .iter()
+        .any(|builder| !builder.contains_tensor("weight"))
+    {
         return Ok(None);
     }
 
@@ -1029,8 +1093,25 @@ impl QuantMethod for RowParallelLayer {
         self.weight.preferred_activation_scale_layout_for(a)
     }
 
+    fn nvfp4_input_calibration(&self) -> Option<crate::Nvfp4InputCalibration<'_>> {
+        self.weight.nvfp4_input_calibration()
+    }
+
+    fn activation_quantization_global_scale(&self) -> Option<f32> {
+        self.weight.activation_quantization_global_scale()
+    }
+
     fn quantize_activation(&self, a: &Tensor) -> Result<QuantizedActivation> {
         self.weight.quantize_activation(a)
+    }
+
+    fn try_quantize_glu(
+        &self,
+        gate: &Tensor,
+        value: &Tensor,
+        activation: crate::GluActivationType,
+    ) -> Result<Option<QuantizedActivation>> {
+        self.weight.try_quantize_glu(gate, value, activation)
     }
 
     fn forward_quantized(&self, a: &QuantizedActivation) -> Result<Tensor> {
@@ -1689,8 +1770,25 @@ impl QuantMethod for ColumnParallelLayer {
         self.weight.preferred_activation_scale_layout_for(a)
     }
 
+    fn nvfp4_input_calibration(&self) -> Option<crate::Nvfp4InputCalibration<'_>> {
+        self.weight.nvfp4_input_calibration()
+    }
+
+    fn activation_quantization_global_scale(&self) -> Option<f32> {
+        self.weight.activation_quantization_global_scale()
+    }
+
     fn quantize_activation(&self, a: &Tensor) -> Result<QuantizedActivation> {
         self.weight.quantize_activation(a)
+    }
+
+    fn try_quantize_glu(
+        &self,
+        gate: &Tensor,
+        value: &Tensor,
+        activation: crate::GluActivationType,
+    ) -> Result<Option<QuantizedActivation>> {
+        self.weight.try_quantize_glu(gate, value, activation)
     }
 
     fn forward_quantized(&self, a: &QuantizedActivation) -> Result<Tensor> {
@@ -2234,8 +2332,25 @@ impl QuantMethod for ReplicatedLayer {
         self.0.preferred_activation_scale_layout_for(a)
     }
 
+    fn nvfp4_input_calibration(&self) -> Option<crate::Nvfp4InputCalibration<'_>> {
+        self.0.nvfp4_input_calibration()
+    }
+
+    fn activation_quantization_global_scale(&self) -> Option<f32> {
+        self.0.activation_quantization_global_scale()
+    }
+
     fn quantize_activation(&self, a: &Tensor) -> Result<QuantizedActivation> {
         self.0.quantize_activation(a)
+    }
+
+    fn try_quantize_glu(
+        &self,
+        gate: &Tensor,
+        value: &Tensor,
+        activation: crate::GluActivationType,
+    ) -> Result<Option<QuantizedActivation>> {
+        self.0.try_quantize_glu(gate, value, activation)
     }
 
     fn forward_quantized(&self, a: &QuantizedActivation) -> Result<Tensor> {
@@ -3159,6 +3274,8 @@ mod tests {
     #[derive(Debug)]
     struct SharedActivationWeight {
         output: Tensor,
+        active_lora: bool,
+        tracking_stats: bool,
     }
 
     impl QuantizedSerde for SharedActivationWeight {
@@ -3198,8 +3315,34 @@ mod tests {
             )
         }
 
+        fn try_quantize_glu(
+            &self,
+            gate: &Tensor,
+            value: &Tensor,
+            activation: crate::GluActivationType,
+        ) -> candle_core::Result<Option<QuantizedActivation>> {
+            assert!(
+                !self.active_lora && !self.tracking_stats,
+                "guarded projection reached fused quantization"
+            );
+            if gate.shape() != value.shape()
+                || !matches!(activation, crate::GluActivationType::Relu)
+            {
+                return Ok(None);
+            }
+            self.quantize_activation(gate).map(Some)
+        }
+
         fn forward_quantized(&self, _a: &QuantizedActivation) -> candle_core::Result<Tensor> {
             Ok(self.output.clone())
+        }
+
+        fn is_dynamic_lora_active(&self) -> bool {
+            self.active_lora
+        }
+
+        fn stats_snapshot(&self) -> Option<(usize, usize)> {
+            self.tracking_stats.then_some((1, 1))
         }
 
         fn quantized_act_type(&self) -> Option<DType> {
@@ -3365,7 +3508,11 @@ mod tests {
     fn distributed_wrappers_preserve_shared_activation_forwarding() -> candle_core::Result<()> {
         let device = Device::Cpu;
         let output = Tensor::from_vec(vec![1f32, 2.], (1, 2), &device)?;
-        let weight = Arc::new(SharedActivationWeight { output }) as Arc<dyn QuantMethod>;
+        let weight = Arc::new(SharedActivationWeight {
+            output,
+            active_lora: false,
+            tracking_stats: false,
+        }) as Arc<dyn QuantMethod>;
         let bias = Tensor::from_vec(vec![3f32, 4.], (2,), &device)?;
         let comm = Arc::new(Comm::from_device(Id::new(), &device, 0, 1)?);
         let activation_input = Tensor::zeros((1, 4), DType::BF16, &device)?;
@@ -3392,6 +3539,28 @@ mod tests {
             );
         }
 
+        for layer in [&row as &dyn QuantMethod, &column, &replicated] {
+            let activation = layer
+                .try_quantize_glu(
+                    &activation_input,
+                    &activation_input,
+                    crate::GluActivationType::Relu,
+                )?
+                .expect("wrapper must preserve optional quantization capability");
+            assert_eq!(activation.source_shape(), activation_input.dims());
+            assert_eq!(
+                layer.forward_quantized(&activation)?.to_vec2::<f32>()?,
+                layer.forward(&activation_input)?.to_vec2::<f32>()?
+            );
+            assert!(layer
+                .try_quantize_glu(
+                    &activation_input,
+                    &activation_input,
+                    crate::GluActivationType::Gelu,
+                )?
+                .is_none());
+        }
+
         let activation = row.quantize_activation(&activation_input)?;
         assert_eq!(
             row.forward_quantized(&activation)?.to_vec2::<f32>()?,
@@ -3407,6 +3576,30 @@ mod tests {
                 .to_vec2::<f32>()?,
             vec![vec![1., 2.]]
         );
+        Ok(())
+    }
+
+    #[cfg(feature = "cuda")]
+    #[test]
+    fn fused_glu_wrapper_guards_preserve_lora_and_stats_inputs() -> candle_core::Result<()> {
+        let device = Device::new_cuda(0)?;
+        let input = Tensor::zeros((2, 4), DType::BF16, &device)?;
+        let output = Tensor::zeros((2, 2), DType::BF16, &device)?;
+        for (active_lora, tracking_stats) in [(true, false), (false, true)] {
+            let weight = Arc::new(SharedActivationWeight {
+                output: output.clone(),
+                active_lora,
+                tracking_stats,
+            }) as Arc<dyn QuantMethod>;
+            let column = ColumnParallelLayer { weight, bias: None };
+            assert!(crate::try_forward_fused_quantized_glu(
+                &input,
+                &input,
+                &column,
+                crate::GluActivationType::Relu,
+            )?
+            .is_none());
+        }
         Ok(())
     }
 

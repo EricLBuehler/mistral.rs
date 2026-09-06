@@ -1,5 +1,6 @@
 #[cfg(feature = "cuda")]
 const CUTLASS_COMMIT: &str = "7127592069c2fe01b041e174ba4345ef9b279671";
+const NVFP4_CUTLASS_COMMIT: &str = "b46b16d003484063bca4ed365e44095c4c6ed633";
 #[cfg(feature = "cuda")]
 const DEEPGEMM_CUTLASS_COMMIT: &str = "f3fde58372d33e9a5650ba7b80fc48b3b49d40c8";
 #[cfg(feature = "cuda")]
@@ -37,6 +38,19 @@ fn cuda_build_dir(out_dir: &std::path::Path, component: &str) -> std::path::Path
     let build_dir = std::path::PathBuf::from(root).join("quant").join(component);
     std::fs::create_dir_all(&build_dir).expect("failed to create shared CUDA build directory");
     build_dir
+}
+
+#[cfg(feature = "cuda")]
+fn prepare_cuda_archive(path: std::path::PathBuf) -> std::path::PathBuf {
+    if std::env::var_os(CUDA_BUILD_ROOT_ENV).is_some() {
+        // Shared objects can be newer than this Cargo build directory's archive.
+        match std::fs::remove_file(&path) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => panic!("failed to refresh CUDA archive {}: {error}", path.display()),
+        }
+    }
+    path
 }
 
 #[cfg(feature = "cuda")]
@@ -115,6 +129,16 @@ fn cutile_supported_for_build_cuda(major: usize, minor: usize, compute_cap: usiz
         || (compute_cap >= 100 && cuda_code >= 1302)
 }
 
+#[cfg(feature = "cuda")]
+fn nvfp4_cutlass_supported_for_build(
+    cuda_version: (usize, usize),
+    compute_cap: usize,
+    cutile: bool,
+    target: &str,
+) -> bool {
+    cuda_version == (13, 3) && compute_cap == 121 && cutile && target.contains("linux")
+}
+
 fn main() -> Result<(), String> {
     // Declare expected cfg values for check-cfg lint
     println!("cargo::rustc-check-cfg=cfg(has_marlin_kernels)");
@@ -126,6 +150,7 @@ fn main() -> Result<(), String> {
     println!("cargo::rustc-check-cfg=cfg(has_mxfp4_kernels)");
     println!("cargo::rustc-check-cfg=cfg(has_mxfp4_wmma_kernels)");
     println!("cargo::rustc-check-cfg=cfg(has_cutlass_moe_kernels)");
+    println!("cargo::rustc-check-cfg=cfg(has_nvfp4_cutlass_sm121_kernels)");
     println!("cargo::rustc-check-cfg=cfg(cuda_ge_13000)");
 
     #[cfg(feature = "cuda")]
@@ -229,6 +254,7 @@ fn main() -> Result<(), String> {
         if !cutlass_fp8_sm90 {
             excluded_files.push("*_cutlass_sm90.cu");
         }
+        excluded_files.push("nvfp4_cutlass.cu");
         builder = builder.exclude(&excluded_files);
         let cutlass_commit =
             std::env::var(CUTLASS_COMMIT_ENV).unwrap_or_else(|_| CUTLASS_COMMIT.to_string());
@@ -253,7 +279,7 @@ fn main() -> Result<(), String> {
             out_dir.join("libmistralrsquant.a")
         };
         builder
-            .build_lib(out_file)
+            .build_lib(prepare_cuda_archive(out_file))
             .expect("Build mistral quant lib failed!");
         if deepgemm_fp8_sm90 {
             let deepgemm_source_hash_arg =
@@ -273,8 +299,43 @@ fn main() -> Result<(), String> {
                     .arg(cuda_nvcc_flags_env);
             }
             deepgemm_builder
-                .build_lib(out_dir.join("libmistralrsdeepgemm.a"))
+                .build_lib(prepare_cuda_archive(out_dir.join("libmistralrsdeepgemm.a")))
                 .expect("Build mistral DeepGEMM provider failed!");
+        }
+        if nvfp4_cutlass_supported_for_build(
+            (cuda_major, cuda_minor),
+            compute_cap,
+            cfg!(feature = "cutile"),
+            &target,
+        ) {
+            let nvfp4_build_dir = cuda_build_dir(&out_dir, "nvfp4-cutlass");
+            let nvfp4_cutlass_commit = std::env::var(CUTLASS_COMMIT_ENV)
+                .unwrap_or_else(|_| NVFP4_CUTLASS_COMMIT.to_string());
+            let mut nvfp4_builder = cudaforge::KernelBuilder::new()
+                .out_dir(&nvfp4_build_dir)
+                .source_files(["kernels/nvfp4_cutlass/nvfp4_cutlass.cu"])
+                .watch(["kernels/nvfp4_cutlass"])
+                .compute_cap_arch("121a")
+                .with_compute_override_arch("nvfp4_cutlass.cu", "121a")
+                .arg("-std=c++17")
+                .arg("-O3")
+                .arg("--expt-relaxed-constexpr")
+                .arg("--expt-extended-lambda")
+                .arg("--fmad=false")
+                .arg("--compiler-options")
+                .arg("-fPIC")
+                .arg(&header_hash_arg)
+                .with_cutlass(Some(&nvfp4_cutlass_commit));
+            if let Some(cuda_nvcc_flags_env) = CUDA_NVCC_FLAGS {
+                nvfp4_builder = nvfp4_builder
+                    .arg("--compiler-options")
+                    .arg(cuda_nvcc_flags_env);
+            }
+            nvfp4_builder
+                .build_lib(prepare_cuda_archive(out_dir.join("libmistralrsnvfp4.a")))
+                .expect("Build mistral NVFP4 provider failed!");
+            println!("cargo:rustc-cfg=has_nvfp4_cutlass_sm121_kernels");
+            println!("cargo:rustc-link-lib=mistralrsnvfp4");
         }
         println!("cargo:rustc-link-search={}", out_dir.display());
         println!("cargo:rustc-link-lib=mistralrsquant");

@@ -142,6 +142,15 @@ impl QuantMethod for UnquantLinear {
 
         self.stats.process(a)?;
 
+        #[cfg(feature = "cuda")]
+        if crate::gemv::should_use_wide_gemv(a, &self.w) {
+            let output = crate::gemv::gemv(a, &self.w, None)?;
+            return match self.b.as_ref() {
+                Some(bias) => output.broadcast_add(bias),
+                None => Ok(output),
+            };
+        }
+
         if a.device().is_cuda() && a.rank() > 2 {
             return self.forward_cuda_gemm(a);
         }
@@ -923,3 +932,6 @@ mod tests {
         Ok(())
     }
 }
+
+#[cfg(all(test, feature = "cuda"))]
+mod wide_gemv_tests;

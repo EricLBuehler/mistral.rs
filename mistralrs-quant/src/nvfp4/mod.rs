@@ -9,10 +9,34 @@ use crate::{
     QuantizedSerde, ScaleConvention, Shard, ShardedVarBuilder, NVFP4_BLOCK_SIZE,
 };
 
+#[cfg(all(feature = "cuda", feature = "cutile", has_nvfp4_cutlass_sm121_kernels))]
+pub(crate) mod cutlass;
+
+#[cfg(all(
+    test,
+    feature = "cuda",
+    feature = "cutile",
+    has_nvfp4_cutlass_sm121_kernels
+))]
+mod cutlass_tests;
+
+#[cfg(all(
+    test,
+    feature = "cuda",
+    feature = "cutile",
+    has_nvfp4_cutlass_sm121_kernels
+))]
+mod cutlass_random_tests;
+
 const FP4_VALUES: [f32; 8] = [0.0, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0];
 const FP4_MAX: f32 = 6.0;
 const FP8_MAX: f32 = 448.0;
 const VALUES_PER_BYTE: usize = 2;
+pub(crate) const NVFP4_ACTIVATION_SCHEME: crate::ActivationQuantizationScheme =
+    crate::ActivationQuantizationScheme {
+        dtype: DType::U8,
+        block_shape: [1, NVFP4_BLOCK_SIZE],
+    };
 
 #[derive(Debug)]
 pub struct Nvfp4LayerParts {
@@ -32,6 +56,23 @@ pub struct Nvfp4LayerParts {
 #[derive(Debug)]
 pub struct Nvfp4Layer {
     parts: Nvfp4LayerParts,
+    input_global_scale: Option<f32>,
+    // Value equality is safe only for private calibration allocations.
+    input_scale_immutable: bool,
+    #[cfg(all(feature = "cuda", feature = "cutile", has_nvfp4_cutlass_sm121_kernels))]
+    native: Option<cutlass::State>,
+}
+
+#[derive(Clone, Copy)]
+#[doc(hidden)]
+pub struct Nvfp4InputCalibration<'a> {
+    layer: &'a Nvfp4Layer,
+}
+
+impl Nvfp4InputCalibration<'_> {
+    pub(crate) fn matches(self, other: Self) -> bool {
+        self.layer.shares_input_calibration(other.layer)
+    }
 }
 
 impl Nvfp4Layer {
@@ -47,10 +88,13 @@ impl Nvfp4Layer {
                 dequant_scale(value, ScaleConvention::Dequantize)?;
             }
         }
-        Self::from_normalized_parts(parts)
+        Self::from_normalized_parts(parts, false)
     }
 
-    fn from_normalized_parts(mut parts: Nvfp4LayerParts) -> Result<Self> {
+    fn from_normalized_parts(
+        mut parts: Nvfp4LayerParts,
+        input_scale_immutable: bool,
+    ) -> Result<Self> {
         let dims = parts.weight.dims();
         if !matches!(dims.len(), 2 | 3) || parts.weight.dtype() != DType::U8 {
             candle_core::bail!("NVFP4 weights must be rank-2 or rank-3 packed U8 tensors");
@@ -124,19 +168,50 @@ impl Nvfp4Layer {
             }
         }
         parts.weight = parts.weight.contiguous()?;
-        parts.scales = parts.scales.contiguous()?;
+        parts.scales = crate::utils::contiguous_fp8(&parts.scales)?;
         parts.global_scales = parts.global_scales.contiguous()?;
         parts.input_scale = parts
             .input_scale
             .map(|scale| scale.contiguous())
             .transpose()?;
         parts.bias = parts.bias.map(|bias| bias.contiguous()).transpose()?;
-        let layer = Self { parts };
+        let input_global_scale = if parts.weight.rank() == 2 {
+            parts
+                .input_scale
+                .as_ref()
+                .map(Tensor::to_scalar::<f32>)
+                .transpose()?
+        } else {
+            None
+        };
+        #[cfg(all(feature = "cuda", feature = "cutile", has_nvfp4_cutlass_sm121_kernels))]
+        let native = cutlass::State::new(&parts)?;
+        let layer = Self {
+            parts,
+            input_global_scale,
+            input_scale_immutable,
+            #[cfg(all(feature = "cuda", feature = "cutile", has_nvfp4_cutlass_sm121_kernels))]
+            native,
+        };
         #[cfg(all(feature = "cuda", feature = "cutile"))]
         if layer.parts.weight.device().is_cuda() {
-            crate::cutile::register_nvfp4_shape(layer.gemm_args(), layer.parts.dtype);
+            crate::cutile::register_nvfp4_shape(layer.gemm_args(), layer.parts.dtype)?;
         }
         Ok(layer)
+    }
+
+    fn shares_input_calibration(&self, other: &Self) -> bool {
+        if self.input_global_scale != other.input_global_scale {
+            return false;
+        }
+        match (&self.parts.input_scale, &other.parts.input_scale) {
+            (None, None) => true,
+            (Some(left), Some(right)) => {
+                left.id() == right.id()
+                    || (self.input_scale_immutable && other.input_scale_immutable)
+            }
+            _ => false,
+        }
     }
 
     pub fn load(
@@ -294,15 +369,94 @@ impl Nvfp4Layer {
         } else {
             None
         };
-        Self::from_normalized_parts(Nvfp4LayerParts {
-            weight,
-            scales,
-            global_scales,
-            input_scale,
-            activation: spec.activation,
-            bias,
-            dtype: vb.dtype(),
-        })
+        Self::from_normalized_parts(
+            Nvfp4LayerParts {
+                weight,
+                scales,
+                global_scales,
+                input_scale,
+                activation: spec.activation,
+                bias,
+                dtype: vb.dtype(),
+            },
+            true,
+        )
+    }
+
+    pub(crate) fn merge(layers: Vec<Self>) -> Result<Option<crate::PackedLinear>> {
+        let Some(first) = layers.first() else {
+            return Ok(None);
+        };
+        if first.parts.weight.rank() != 2 {
+            return Ok(None);
+        }
+        let input_dim = first.parts.weight.dim(1)?;
+        for layer in &layers {
+            if layer.parts.weight.rank() != 2
+                || layer.parts.weight.dim(1)? != input_dim
+                || layer.parts.activation != first.parts.activation
+                || layer.parts.dtype != first.parts.dtype
+                || layer.parts.bias.is_some()
+                || !layer
+                    .parts
+                    .weight
+                    .device()
+                    .same_device(first.parts.weight.device())
+            {
+                return Ok(None);
+            }
+            if !first.shares_input_calibration(layer) {
+                return Ok(None);
+            }
+        }
+        let tensors = |select: fn(&Nvfp4LayerParts) -> &Tensor| {
+            Tensor::cat(
+                &layers
+                    .iter()
+                    .map(|layer| select(&layer.parts))
+                    .collect::<Vec<_>>(),
+                0,
+            )
+        };
+        let packed = Self::from_normalized_parts(
+            Nvfp4LayerParts {
+                weight: tensors(|p| &p.weight)?,
+                scales: tensors(|p| &p.scales)?,
+                global_scales: tensors(|p| &p.global_scales)?,
+                input_scale: first.parts.input_scale.clone(),
+                activation: first.parts.activation,
+                bias: None,
+                dtype: first.parts.dtype,
+            },
+            layers.iter().all(|layer| layer.input_scale_immutable),
+        )?;
+        let rows_per_rank = layers
+            .iter()
+            .map(|layer| layer.parts.weight.dim(0))
+            .collect::<Result<Vec<_>>>()?;
+        let mut constituents = Vec::with_capacity(layers.len());
+        let mut offset = 0;
+        for &rows in &rows_per_rank {
+            let layer = Self::from_normalized_parts(
+                Nvfp4LayerParts {
+                    weight: packed.parts.weight.narrow(0, offset, rows)?,
+                    scales: packed.parts.scales.narrow(0, offset, rows)?,
+                    global_scales: packed.parts.global_scales.narrow(0, offset, rows)?,
+                    input_scale: packed.parts.input_scale.clone(),
+                    activation: packed.parts.activation,
+                    bias: None,
+                    dtype: packed.parts.dtype,
+                },
+                packed.input_scale_immutable,
+            )?;
+            constituents.push(Arc::new(layer) as Arc<dyn QuantMethod>);
+            offset += rows;
+        }
+        Ok(Some(crate::PackedLinear {
+            packed: Arc::new(packed),
+            constituents,
+            rows_per_rank,
+        }))
     }
 
     pub fn stack(layers: Vec<Self>) -> Result<Self> {
@@ -352,15 +506,18 @@ impl Nvfp4Layer {
         } else {
             None
         };
-        Self::from_normalized_parts(Nvfp4LayerParts {
-            weight: tensors(|p| &p.weight)?,
-            scales: tensors(|p| &p.scales)?,
-            global_scales: tensors(|p| &p.global_scales)?,
-            input_scale,
-            activation,
-            bias,
-            dtype,
-        })
+        Self::from_normalized_parts(
+            Nvfp4LayerParts {
+                weight: tensors(|p| &p.weight)?,
+                scales: tensors(|p| &p.scales)?,
+                global_scales: tensors(|p| &p.global_scales)?,
+                input_scale,
+                activation,
+                bias,
+                dtype,
+            },
+            layers.iter().all(|layer| layer.input_scale_immutable),
+        )
     }
 
     #[cfg(all(feature = "cuda", feature = "cutile"))]
@@ -373,6 +530,43 @@ impl Nvfp4Layer {
         }
     }
 
+    #[cfg(all(feature = "cuda", feature = "cutile"))]
+    fn forward_cuda(&self, x: &Tensor) -> Result<Tensor> {
+        #[cfg(has_nvfp4_cutlass_sm121_kernels)]
+        if let Some(native) = &self.native {
+            if native.supports(x.dim(0)?, x.dtype()) {
+                let (packed, scales) = crate::cutile::cutile_nvfp4_quantize(
+                    x,
+                    self.parts.input_scale.as_ref().unwrap(),
+                )?;
+                let scales = cutlass::swizzle_scales(&scales)?;
+                return native.forward(&packed, &scales, x.dtype(), self.gemm_args());
+            }
+        }
+        crate::cutile::cutile_nvfp4(x, self.gemm_args())
+    }
+
+    #[cfg(all(feature = "cuda", feature = "cutile"))]
+    fn forward_quantized_cuda(&self, activation: &crate::QuantizedActivation) -> Result<Tensor> {
+        #[cfg(has_nvfp4_cutlass_sm121_kernels)]
+        if let Some(native) = &self.native {
+            if native.supports(activation.quantized().dim(0)?, activation.source_dtype()) {
+                return native.forward(
+                    activation.quantized(),
+                    &cutlass::swizzle_scales(activation.scales())?,
+                    activation.source_dtype(),
+                    self.gemm_args(),
+                );
+            }
+        }
+        crate::cutile::cutile_nvfp4_prequantized(
+            activation.quantized(),
+            activation.scales(),
+            activation.source_dtype(),
+            self.gemm_args(),
+        )
+    }
+
     fn logical_shape(&self) -> Vec<usize> {
         let mut shape = self.parts.weight.dims().to_vec();
         *shape.last_mut().unwrap() *= VALUES_PER_BYTE;
@@ -380,20 +574,23 @@ impl Nvfp4Layer {
     }
 
     fn expert(&self, id: usize) -> Result<Self> {
-        Self::from_normalized_parts(Nvfp4LayerParts {
-            weight: self.parts.weight.i(id)?,
-            scales: self.parts.scales.i(id)?,
-            global_scales: self.parts.global_scales.i(id)?,
-            input_scale: self
-                .parts
-                .input_scale
-                .as_ref()
-                .map(|t| t.i(id))
-                .transpose()?,
-            activation: self.parts.activation,
-            bias: self.parts.bias.as_ref().map(|t| t.i(id)).transpose()?,
-            dtype: self.parts.dtype,
-        })
+        Self::from_normalized_parts(
+            Nvfp4LayerParts {
+                weight: self.parts.weight.i(id)?,
+                scales: self.parts.scales.i(id)?,
+                global_scales: self.parts.global_scales.i(id)?,
+                input_scale: self
+                    .parts
+                    .input_scale
+                    .as_ref()
+                    .map(|t| t.i(id))
+                    .transpose()?,
+                activation: self.parts.activation,
+                bias: self.parts.bias.as_ref().map(|t| t.i(id)).transpose()?,
+                dtype: self.parts.dtype,
+            },
+            self.input_scale_immutable,
+        )
     }
 
     fn reference_forward(&self, x: &Tensor) -> Result<Tensor> {
@@ -541,7 +738,7 @@ impl QuantMethod for Nvfp4Layer {
             let k = x.dim(D::Minus1)?;
             let rows = x.elem_count() / k;
             let x_flat = x.contiguous()?.reshape((rows, k))?;
-            let output = crate::cutile::cutile_nvfp4(&x_flat, self.gemm_args())?;
+            let output = self.forward_cuda(&x_flat)?;
             let output = match &self.parts.bias {
                 Some(bias) => output.broadcast_add(bias)?,
                 None => output,
@@ -636,6 +833,142 @@ impl QuantMethod for Nvfp4Layer {
         Tensor::cat(&outputs, 0)?.reshape(output_shape)
     }
 
+    fn activation_quantization_scheme_for(
+        &self,
+        x: &Tensor,
+    ) -> Option<crate::ActivationQuantizationScheme> {
+        if !x.device().is_cuda()
+            || !matches!(x.dtype(), DType::BF16 | DType::F16)
+            || self.parts.weight.rank() != 2
+            || self.input_global_scale.is_none()
+            || self.validate_input(x, 2).is_err()
+            || x.elem_count() / x.dim(D::Minus1).ok()? <= 1
+        {
+            return None;
+        }
+        Some(NVFP4_ACTIVATION_SCHEME)
+    }
+
+    fn nvfp4_input_calibration(&self) -> Option<Nvfp4InputCalibration<'_>> {
+        Some(Nvfp4InputCalibration { layer: self })
+    }
+
+    fn activation_quantization_global_scale(&self) -> Option<f32> {
+        self.input_global_scale
+    }
+
+    fn quantize_activation(&self, x: &Tensor) -> Result<crate::QuantizedActivation> {
+        if self.activation_quantization_scheme_for(x).is_none() {
+            candle_core::bail!(
+                "NVFP4 shared activation requires CUDA W4A4 with more than one input row"
+            );
+        }
+        #[cfg(all(feature = "cuda", feature = "cutile"))]
+        {
+            let source = x.contiguous()?;
+            let k = source.dim(D::Minus1)?;
+            let rows = source.elem_count() / k;
+            let (packed, scales) = crate::cutile::cutile_nvfp4_quantize(
+                &source.reshape((rows, k))?,
+                self.parts.input_scale.as_ref().unwrap(),
+            )?;
+            crate::QuantizedActivation::new_nvfp4(
+                packed,
+                scales,
+                &source,
+                self.input_global_scale.unwrap(),
+            )
+        }
+        #[cfg(not(all(feature = "cuda", feature = "cutile")))]
+        candle_core::bail!("NVFP4 shared activation requires CUDA and cuTile");
+    }
+
+    fn forward_quantized(&self, activation: &crate::QuantizedActivation) -> Result<Tensor> {
+        let (rows, packed_k) = activation.quantized().dims2()?;
+        if activation.scheme() != NVFP4_ACTIVATION_SCHEME
+            || self.input_global_scale.is_none()
+            || activation.global_scale() != self.input_global_scale
+            || self.parts.weight.rank() != 2
+            || self.parts.weight.dim(1)? != packed_k
+            || !activation
+                .quantized()
+                .device()
+                .same_device(self.parts.weight.device())
+            || !activation.quantized().device().is_cuda()
+            || rows <= 1
+        {
+            candle_core::bail!("NVFP4 shared activation does not match this projection's calibration or input shape");
+        }
+        #[cfg(all(feature = "cuda", feature = "cutile"))]
+        {
+            let output = self.forward_quantized_cuda(activation)?;
+            let output = match &self.parts.bias {
+                Some(bias) => output.broadcast_add(bias)?,
+                None => output,
+            };
+            let mut shape = activation.source_shape().to_vec();
+            *shape.last_mut().unwrap() = self.parts.weight.dim(0)?;
+            output.reshape(shape)
+        }
+        #[cfg(not(all(feature = "cuda", feature = "cutile")))]
+        candle_core::bail!("NVFP4 shared activation requires CUDA and cuTile");
+    }
+
+    #[cfg(all(feature = "cuda", feature = "cutile"))]
+    fn try_quantize_glu(
+        &self,
+        gate: &Tensor,
+        value: &Tensor,
+        activation: crate::GluActivationType,
+    ) -> Result<Option<crate::QuantizedActivation>> {
+        if self.is_dynamic_lora_active()
+            || self.stats_snapshot().is_some()
+            || self.activation_quantization_scheme_for(gate) != Some(NVFP4_ACTIVATION_SCHEME)
+        {
+            return Ok(None);
+        }
+        let Some((packed, scales)) = crate::cutile::cutile_nvfp4_glu(
+            crate::cutile::GluQuantArgs {
+                gate,
+                value,
+                activation_global_scale: self.parts.input_scale.as_ref().unwrap(),
+                activation,
+            },
+            false,
+        )?
+        else {
+            return Ok(None);
+        };
+        crate::QuantizedActivation::new_nvfp4(
+            packed,
+            scales,
+            gate,
+            self.input_global_scale.unwrap(),
+        )
+        .map(Some)
+    }
+
+    #[cfg(all(feature = "cuda", feature = "cutile"))]
+    fn try_forward_fused_split_glu(
+        &self,
+        input: &Tensor,
+        split_size: usize,
+        activation: crate::GluActivationType,
+    ) -> Result<Option<Tensor>> {
+        let Some(packed_features) = split_size.checked_mul(2) else {
+            return Ok(None);
+        };
+        if split_size == 0 || input.dims().last().copied() != Some(packed_features) {
+            return Ok(None);
+        }
+        let gate = input.narrow(D::Minus1, 0, split_size)?;
+        let value = input.narrow(D::Minus1, split_size, split_size)?;
+        let Some(quantized) = self.try_quantize_glu(&gate, &value, activation)? else {
+            return Ok(None);
+        };
+        self.forward_quantized(&quantized).map(Some)
+    }
+
     fn quantized_act_type(&self) -> Option<DType> {
         None
     }
@@ -671,25 +1004,28 @@ impl QuantMethod for Nvfp4Layer {
         guard: QuantizeOntoGuard,
     ) -> Result<Arc<dyn QuantMethod>> {
         if dtype.is_none() {
-            return Ok(Arc::new(Self::from_normalized_parts(Nvfp4LayerParts {
-                weight: self.parts.weight.to_device(&device)?,
-                scales: self.parts.scales.to_device(&device)?,
-                global_scales: self.parts.global_scales.to_device(&device)?,
-                input_scale: self
-                    .parts
-                    .input_scale
-                    .as_ref()
-                    .map(|t| t.to_device(&device))
-                    .transpose()?,
-                activation: self.parts.activation,
-                bias: self
-                    .parts
-                    .bias
-                    .as_ref()
-                    .map(|t| t.to_device(&device))
-                    .transpose()?,
-                dtype: self.parts.dtype,
-            })?));
+            return Ok(Arc::new(Self::from_normalized_parts(
+                Nvfp4LayerParts {
+                    weight: self.parts.weight.to_device(&device)?,
+                    scales: self.parts.scales.to_device(&device)?,
+                    global_scales: self.parts.global_scales.to_device(&device)?,
+                    input_scale: self
+                        .parts
+                        .input_scale
+                        .as_ref()
+                        .map(|t| t.to_device(&device))
+                        .transpose()?,
+                    activation: self.parts.activation,
+                    bias: self
+                        .parts
+                        .bias
+                        .as_ref()
+                        .map(|t| t.to_device(&device))
+                        .transpose()?,
+                    dtype: self.parts.dtype,
+                },
+                self.input_scale_immutable,
+            )?));
         }
         Arc::new(crate::UnquantLinear::new(QuantMethodConfig::Unquantized(
             Linear::new(self.dequantize_w()?, self.parts.bias.clone()),
@@ -736,6 +1072,170 @@ mod tests {
         assert!(layer.parts.scales.is_contiguous());
         assert!(layer.parts.global_scales.is_contiguous());
         assert!(layer.parts.bias.as_ref().unwrap().is_contiguous());
+        Ok(())
+    }
+
+    fn public_calibrated_layer(scale: Tensor) -> Result<Nvfp4Layer> {
+        Nvfp4Layer::from_parts(Nvfp4LayerParts {
+            weight: Tensor::full(0x22u8, (2, NVFP4_BLOCK_SIZE / 2), &Device::Cpu)?,
+            scales: Tensor::ones((2, 1), DType::F8E4M3, &Device::Cpu)?,
+            global_scales: Tensor::ones(2, DType::F32, &Device::Cpu)?,
+            input_scale: Some(scale),
+            activation: Nvfp4ActivationMode::DynamicBlock,
+            bias: None,
+            dtype: DType::F32,
+        })
+    }
+
+    fn checkpoint_calibrated_layer(model_opt: bool, scale: Tensor) -> Result<Nvfp4Layer> {
+        const PREFIX: &str = "model.layers.0.self_attn.q_proj";
+        let config = if model_opt {
+            serde_json::json!({"quant_method": "modelopt", "quant_algo": "NVFP4", "group_size": 16})
+        } else {
+            let weights = serde_json::json!({"num_bits": 4, "type": "float", "strategy": "tensor_group", "group_size": 16, "dynamic": false, "symmetric": true});
+            let mut activation = weights.clone();
+            activation["dynamic"] = serde_json::json!("local");
+            serde_json::json!({"quant_method": "compressed-tensors", "format": "nvfp4-pack-quantized", "config_groups": {"group_0": {"targets": ["Linear"], "weights": weights, "input_activations": activation}}})
+        };
+        let config: crate::QuantizedConfig = serde_json::from_value(config).unwrap();
+        let Some(crate::CheckpointLinearSpec::Nvfp4(spec)) = config.resolve_checkpoint(PREFIX)?
+        else {
+            panic!("fixture must resolve NVFP4");
+        };
+        let tensors = std::collections::HashMap::from([
+            (
+                format!("{PREFIX}.{}", spec.scale_names.weight),
+                Tensor::full(0x22u8, (2, NVFP4_BLOCK_SIZE / 2), &Device::Cpu)?,
+            ),
+            (
+                format!("{PREFIX}.{}", spec.scale_names.block_scale),
+                Tensor::ones((2, 1), DType::F8E4M3, &Device::Cpu)?,
+            ),
+            (
+                format!("{PREFIX}.{}", spec.scale_names.global_scale),
+                Tensor::new(1f32, &Device::Cpu)?,
+            ),
+            (
+                format!("{PREFIX}.{}", spec.scale_names.activation_scale.unwrap()),
+                scale,
+            ),
+        ]);
+        Nvfp4Layer::load(
+            NVFP4_BLOCK_SIZE,
+            2,
+            spec,
+            false,
+            Shard::default(),
+            crate::ShardedSafeTensors::wrap(tensors, DType::F32, Device::Cpu).pp(PREFIX),
+        )
+    }
+
+    #[test]
+    fn shared_calibration_rejects_independent_mutable_aliases() -> Result<()> {
+        let live = Tensor::new(1f32, &Device::Cpu)?;
+        let separate = Tensor::new(1f32, &Device::Cpu)?;
+        let first = public_calibrated_layer(live.clone())?;
+        let same = public_calibrated_layer(live.clone())?;
+        let independent = public_calibrated_layer(separate.clone())?;
+        assert!(first.shares_input_calibration(&same));
+        assert!(!first.shares_input_calibration(&independent));
+        separate
+            .reshape(1)?
+            .slice_set(&Tensor::new(&[2f32], &Device::Cpu)?, 0, 0)?;
+        assert_eq!(independent.input_global_scale, Some(1.0));
+        assert_eq!(
+            independent
+                .parts
+                .input_scale
+                .as_ref()
+                .unwrap()
+                .to_scalar::<f32>()?,
+            2.0
+        );
+        assert!(!first.shares_input_calibration(&independent));
+        assert!(Nvfp4Layer::merge(vec![first, independent])?.is_none());
+        live.reshape(1)?
+            .slice_set(&Tensor::new(&[3f32], &Device::Cpu)?, 0, 0)?;
+        let first = public_calibrated_layer(live.clone())?;
+        let second = public_calibrated_layer(live)?;
+        let packed = Nvfp4Layer::merge(vec![first, second])?.unwrap();
+        let a = packed.constituents[0].nvfp4_input_calibration().unwrap();
+        let b = packed.constituents[1].nvfp4_input_calibration().unwrap();
+        assert!(a.matches(b));
+        Ok(())
+    }
+
+    #[test]
+    fn checkpoint_owned_calibration_remains_compatible_after_source_mutation() -> Result<()> {
+        for model_opt in [true, false] {
+            let source = Tensor::new(1f32, &Device::Cpu)?;
+            let first = checkpoint_calibrated_layer(model_opt, source.clone())?;
+            let second = checkpoint_calibrated_layer(model_opt, Tensor::new(1f32, &Device::Cpu)?)?;
+            let unequal = checkpoint_calibrated_layer(model_opt, Tensor::new(2f32, &Device::Cpu)?)?;
+            assert!(first.input_scale_immutable && second.input_scale_immutable);
+            assert_ne!(first.parts.input_scale.as_ref().unwrap().id(), source.id());
+            assert!(first.shares_input_calibration(&second));
+            assert!(!first.shares_input_calibration(&unequal));
+            let input = Tensor::ones((2, NVFP4_BLOCK_SIZE), DType::F32, &Device::Cpu)?;
+            let before = first.forward(&input)?.to_vec2::<f32>()?;
+            source
+                .reshape(1)?
+                .slice_set(&Tensor::new(&[2f32], &Device::Cpu)?, 0, 0)?;
+            assert_eq!(
+                first
+                    .parts
+                    .input_scale
+                    .as_ref()
+                    .unwrap()
+                    .to_scalar::<f32>()?,
+                1.0
+            );
+            assert_eq!(first.forward(&input)?.to_vec2::<f32>()?, before);
+            let merged = Nvfp4Layer::merge(vec![first, second])?.unwrap();
+            assert!(merged.constituents[0]
+                .nvfp4_input_calibration()
+                .unwrap()
+                .matches(merged.constituents[1].nvfp4_input_calibration().unwrap()));
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn calibration_provenance_survives_stack_expert_and_device_clone() -> Result<()> {
+        let loaded = || checkpoint_calibrated_layer(true, Tensor::new(1f32, &Device::Cpu)?);
+        let known = Nvfp4Layer::stack(vec![loaded()?, loaded()?])?;
+        assert!(known.expert(0)?.input_scale_immutable);
+        assert!(known.expert(0)?.shares_input_calibration(&known.expert(1)?));
+        let mixed = Nvfp4Layer::stack(vec![
+            loaded()?,
+            public_calibrated_layer(Tensor::new(1f32, &Device::Cpu)?)?,
+        ])?;
+        assert!(!mixed.expert(0)?.input_scale_immutable);
+        assert!(!mixed.expert(0)?.shares_input_calibration(&mixed.expert(1)?));
+        let reference = loaded()?;
+        let copy = Arc::new(loaded()?).apply_isq(
+            None,
+            Device::Cpu,
+            &AtomicUsize::new(0),
+            None,
+            QuantizeOntoGuard::new(),
+        )?;
+        assert!(reference
+            .nvfp4_input_calibration()
+            .unwrap()
+            .matches(copy.nvfp4_input_calibration().unwrap()));
+        let unknown = Arc::new(public_calibrated_layer(Tensor::new(1f32, &Device::Cpu)?)?)
+            .apply_isq(
+                None,
+                Device::Cpu,
+                &AtomicUsize::new(0),
+                None,
+                QuantizeOntoGuard::new(),
+            )?;
+        assert!(!reference
+            .nvfp4_input_calibration()
+            .unwrap()
+            .matches(unknown.nvfp4_input_calibration().unwrap()));
         Ok(())
     }
 }

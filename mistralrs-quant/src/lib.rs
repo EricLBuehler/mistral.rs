@@ -213,7 +213,7 @@ pub use lora::{
     RoutedLoraCudaWeightTable, RoutedLoraDirectLaunch, RoutedLoraGroupedLaunch,
 };
 pub use mxfp4::MXFP4Layer;
-pub use nvfp4::{Nvfp4Layer, Nvfp4LayerParts};
+pub use nvfp4::{Nvfp4InputCalibration, Nvfp4Layer, Nvfp4LayerParts};
 pub use pending_layer::{pending_isq_channel, PendingIsqLayer};
 pub use pertensor_fp8::{fp8_w8a16_linear, fp8_w8a8_linear, Fp8W8A8LinearArgs, PerTensorFP8Linear};
 pub use unquantized::UnquantLinear;
@@ -1573,6 +1573,7 @@ pub struct QuantizedActivation {
     source_dtype: DType,
     scheme: ActivationQuantizationScheme,
     scale_layout: ActivationScaleLayout,
+    global_scale: Option<f32>,
 }
 
 impl QuantizedActivation {
@@ -1663,7 +1664,53 @@ impl QuantizedActivation {
             source_dtype,
             scheme,
             scale_layout,
+            global_scale: None,
         })
+    }
+
+    pub fn new_nvfp4(
+        quantized: Tensor,
+        scales: Tensor,
+        source: &Tensor,
+        global_scale: f32,
+    ) -> Result<Self> {
+        if source.rank() < 2 || !matches!(source.dtype(), DType::BF16 | DType::F16) {
+            candle_core::bail!("NVFP4 activation source must be rank >= 2 and BF16 or F16");
+        }
+        let columns = source.dim(candle_core::D::Minus1)?;
+        if columns == 0 || !columns.is_multiple_of(NVFP4_BLOCK_SIZE) {
+            candle_core::bail!(
+                "NVFP4 activation columns must be a nonzero multiple of {NVFP4_BLOCK_SIZE}"
+            );
+        }
+        let rows = source.elem_count() / columns;
+        if quantized.dtype() != DType::U8 || quantized.dims() != [rows, columns / 2] {
+            candle_core::bail!("NVFP4 activation values must be packed U8 [rows, columns / 2]");
+        }
+        if scales.dtype() != DType::F8E4M3 || scales.dims() != [rows, columns / NVFP4_BLOCK_SIZE] {
+            candle_core::bail!("NVFP4 activation block scales must be E4M3 [rows, columns / 16]");
+        }
+        if !quantized.device().same_device(source.device())
+            || !scales.device().same_device(source.device())
+        {
+            candle_core::bail!("NVFP4 activation tensors must be on the same device");
+        }
+        if !global_scale.is_finite() || global_scale <= 0.0 {
+            candle_core::bail!("NVFP4 activation global scale must be finite and positive");
+        }
+        Ok(Self {
+            quantized,
+            scales,
+            source_shape: source.dims().to_vec(),
+            source_dtype: source.dtype(),
+            scheme: nvfp4::NVFP4_ACTIVATION_SCHEME,
+            scale_layout: ActivationScaleLayout::RowMajor,
+            global_scale: Some(global_scale),
+        })
+    }
+
+    pub fn global_scale(&self) -> Option<f32> {
+        self.global_scale
     }
 
     pub fn quantized(&self) -> &Tensor {
@@ -1838,6 +1885,15 @@ pub trait QuantMethod: Send + Sync + Debug + QuantizedSerde {
             .map(|_| ActivationScaleLayout::RowMajor)
     }
 
+    #[doc(hidden)]
+    fn nvfp4_input_calibration(&self) -> Option<Nvfp4InputCalibration<'_>> {
+        None
+    }
+
+    fn activation_quantization_global_scale(&self) -> Option<f32> {
+        None
+    }
+
     fn quantize_activation(&self, _a: &Tensor) -> Result<QuantizedActivation> {
         candle_core::bail!("{} does not support activation quantization", self.name())
     }
@@ -1847,6 +1903,15 @@ pub trait QuantMethod: Send + Sync + Debug + QuantizedSerde {
             "{} does not support prequantized activation input",
             self.name()
         )
+    }
+
+    fn try_quantize_glu(
+        &self,
+        _gate: &Tensor,
+        _value: &Tensor,
+        _activation: GluActivationType,
+    ) -> Result<Option<QuantizedActivation>> {
+        Ok(None)
     }
 
     #[cfg(feature = "cuda")]
@@ -1942,12 +2007,26 @@ pub fn try_forward_with_shared_quantized_activation(
     if first.preferred_activation_scale_layout_for(a) != Some(ActivationScaleLayout::RowMajor) {
         return Ok(None);
     }
+    let global_scale = first.activation_quantization_global_scale();
     if methods.iter().skip(1).any(|method| {
         method.activation_quantization_scheme_for(a) != Some(scheme)
+            || method.activation_quantization_global_scale() != global_scale
             || method.preferred_activation_scale_layout_for(a)
                 != Some(ActivationScaleLayout::RowMajor)
     }) {
         return Ok(None);
+    }
+    if scheme == nvfp4::NVFP4_ACTIVATION_SCHEME {
+        let Some(calibration) = first.nvfp4_input_calibration() else {
+            return Ok(None);
+        };
+        if methods.iter().skip(1).any(|method| {
+            method
+                .nvfp4_input_calibration()
+                .is_none_or(|other| !calibration.matches(other))
+        }) {
+            return Ok(None);
+        }
     }
     let activation = first.quantize_activation(a)?;
     if activation.scheme() != scheme {
@@ -1956,6 +2035,11 @@ pub fn try_forward_with_shared_quantized_activation(
             first.name(),
             activation.scheme(),
             scheme
+        );
+    }
+    if activation.global_scale() != global_scale {
+        candle_core::bail!(
+            "shared activation quantizer returned a different calibrated global scale"
         );
     }
     if activation.scale_layout() != ActivationScaleLayout::RowMajor {
@@ -1980,14 +2064,20 @@ pub fn try_forward_fused_quantized_glu(
 ) -> Result<Option<Tensor>> {
     #[cfg(feature = "cuda")]
     {
-        if gate.dtype() != DType::BF16
-            || value.dtype() != DType::BF16
+        if !matches!(gate.dtype(), DType::BF16 | DType::F16)
+            || gate.dtype() != value.dtype()
             || gate.shape() != value.shape()
             || !gate.device().same_device(value.device())
             || !gate.device().is_cuda()
             || projection.is_dynamic_lora_active()
             || projection.stats_snapshot().is_some()
         {
+            return Ok(None);
+        }
+        if let Some(quantized) = projection.try_quantize_glu(gate, value, activation)? {
+            return projection.forward_quantized(&quantized).map(Some);
+        }
+        if gate.dtype() != DType::BF16 {
             return Ok(None);
         }
         let Some(scheme) = projection.activation_quantization_scheme_for(value) else {
@@ -2080,6 +2170,10 @@ pub fn try_fused_quantized_ffn(
         let [gate_out, up_out]: [Tensor; 2] = outputs.try_into().map_err(|_| {
             candle_core::Error::msg("shared gate/up projection returned the wrong output count")
         })?;
+        if let Some(output) = try_forward_fused_quantized_glu(&gate_out, &up_out, down, activation)?
+        {
+            return Ok(Some(output));
+        }
         let intermediate = fused_glu(&gate_out, &up_out, activation)?;
         return Ok(Some(down.forward(&intermediate)?));
     }
@@ -2868,7 +2962,7 @@ mod tests {
     use super::*;
 
     #[derive(Debug)]
-    struct SharedActivationProbe;
+    struct SharedActivationProbe(Option<f32>);
 
     impl QuantizedSerde for SharedActivationProbe {
         fn name(&self) -> &'static str {
@@ -2878,7 +2972,7 @@ mod tests {
 
     impl QuantMethod for SharedActivationProbe {
         fn new(_method: QuantMethodConfig) -> Result<Self> {
-            Ok(Self)
+            Ok(Self(None))
         }
 
         fn dequantize_w(&self) -> Result<Tensor> {
@@ -2894,6 +2988,10 @@ mod tests {
                 dtype: DType::F8E4M3,
                 block_shape: [1, 4],
             })
+        }
+
+        fn activation_quantization_global_scale(&self) -> Option<f32> {
+            self.0
         }
 
         fn quantize_activation(&self, _a: &Tensor) -> Result<QuantizedActivation> {
@@ -2929,10 +3027,53 @@ mod tests {
     }
 
     #[test]
+    fn shared_activation_requires_matching_global_calibration() -> Result<()> {
+        let input = Tensor::zeros((2, 4), DType::BF16, &Device::Cpu)?;
+        let first = SharedActivationProbe(Some(0.25));
+        let second = SharedActivationProbe(Some(0.5));
+        assert!(
+            try_forward_with_shared_quantized_activation(&input, &[&first, &second])?.is_none()
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn packed_nvfp4_activation_keeps_logical_shape_and_rejects_wrong_scales() -> Result<()> {
+        const ROWS: usize = 2;
+        let source = Tensor::zeros((ROWS, 1, NVFP4_BLOCK_SIZE), DType::BF16, &Device::Cpu)?;
+        let packed = Tensor::zeros((ROWS, NVFP4_BLOCK_SIZE / 2), DType::U8, &Device::Cpu)?;
+        let scales = Tensor::ones((ROWS, 1), DType::F8E4M3, &Device::Cpu)?;
+        let activation =
+            QuantizedActivation::new_nvfp4(packed.clone(), scales.clone(), &source, 0.25)?;
+        assert_eq!(activation.source_shape(), source.dims());
+        assert_eq!(activation.quantized().dims(), &[ROWS, NVFP4_BLOCK_SIZE / 2]);
+        assert_eq!(activation.global_scale(), Some(0.25));
+        assert!(QuantizedActivation::new_nvfp4(
+            packed.clone(),
+            scales.to_dtype(DType::F32)?,
+            &source,
+            0.25
+        )
+        .is_err());
+        assert!(QuantizedActivation::new_nvfp4(packed, scales, &source, f32::NAN).is_err());
+        Ok(())
+    }
+
+    #[test]
     fn shared_activation_falls_back_for_unsupported_input_dtype() -> Result<()> {
         let input = Tensor::zeros((1, 4), DType::F32, &Device::Cpu)?;
-        let method = SharedActivationProbe;
+        let method = SharedActivationProbe(None);
         assert!(try_forward_with_shared_quantized_activation(&input, &[&method])?.is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn fused_glu_quantization_defaults_to_fallback() -> Result<()> {
+        let input = Tensor::zeros((2, 16), DType::BF16, &Device::Cpu)?;
+        let method = SharedActivationProbe(None);
+        assert!(method
+            .try_quantize_glu(&input, &input, GluActivationType::Relu)?
+            .is_none());
         Ok(())
     }
 
@@ -2940,7 +3081,7 @@ mod tests {
     fn fused_quantized_glu_falls_back_off_cuda() -> Result<()> {
         let gate = Tensor::zeros((3, 4), DType::BF16, &Device::Cpu)?;
         let value = Tensor::ones((3, 4), DType::BF16, &Device::Cpu)?;
-        let method = SharedActivationProbe;
+        let method = SharedActivationProbe(None);
         assert!(try_forward_fused_quantized_glu(
             &gate,
             &value,

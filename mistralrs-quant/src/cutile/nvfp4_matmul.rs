@@ -99,8 +99,9 @@ mod kernels {
         const SK: i32,
         const A4: bool,
         const LATENCY: i32,
+        const GROUP_M: i32,
     >(
-        mut y: MappedPartitionMut<bf16, { [BM, BN] }, { [1, 1] }>,
+        mut y: MappedPartitionMut<bf16, { [BM, BN] }, { [GROUP_M, 1] }>,
         x: &Tensor<bf16, { [-1, -1] }>,
         q: &Tensor<f4e2m1fnx2, { [-1, -1] }>,
         qs: &Tensor<f8e4m3fn, { [-1, -1] }>,
@@ -251,8 +252,9 @@ mod kernels {
         const SK: i32,
         const A4: bool,
         const LATENCY: i32,
+        const GROUP_M: i32,
     >(
-        mut y: MappedPartitionMut<f16, { [BM, BN] }, { [1, 1] }>,
+        mut y: MappedPartitionMut<f16, { [BM, BN] }, { [GROUP_M, 1] }>,
         x: &Tensor<f16, { [-1, -1] }>,
         q: &Tensor<f4e2m1fnx2, { [-1, -1] }>,
         qs: &Tensor<f8e4m3fn, { [-1, -1] }>,
@@ -905,9 +907,10 @@ mod kernels {
     }
 }
 
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex, OnceLock};
 
-use candle_core::{CudaStorage, DType, Device, Result, Shape, Storage, Tensor};
+use candle_core::{CudaDevice, CudaStorage, DType, Device, Result, Shape, Storage, Tensor};
 use cutile::core::{f4e2m1fnx2, f8e4m3fn};
 use cutile::cuda_async::device_buffer::DevicePointer;
 use cutile::cuda_async::device_operation::DeviceOp;
@@ -918,7 +921,7 @@ use float8::F8E4M3;
 use half::{bf16, f16};
 
 use super::nvfp4::Nvfp4GemmArgs;
-use super::{catch_cutile_panic, context, device_multiprocessor_count};
+use super::{catch_cutile_panic, context, device_compute_major, device_multiprocessor_count};
 use crate::utils::{slice_ptr_mut_on_stream, slice_ptr_on_stream};
 
 const BLOCK_SIZE: usize = 16;
@@ -926,6 +929,8 @@ const QUANT_ROWS: usize = 4;
 const QUANT_K: usize = 256;
 const SMALL_MATMUL_ROWS: usize = 16;
 const SMALL_MATMUL_COLUMNS: usize = 64;
+const MEDIUM_MATMUL_ROWS: usize = 32;
+const MEDIUM_MATMUL_COLUMNS: usize = 64;
 const MATMUL_ROWS: usize = 64;
 const MATMUL_COLUMNS: usize = 128;
 const MATMUL_K: usize = 256;
@@ -933,26 +938,241 @@ const WIDE_MATMUL_ROWS: usize = 128;
 const WIDE_MATMUL_COLUMNS: usize = 64;
 const WIDE_MATMUL_MIN_K: usize = 8192;
 const WIDE_MATMUL_MIN_N: usize = 4096;
+const GROUPED_MATMUL_MIN_K: usize = 4096;
+const GROUPED_MATMUL_ROWS: usize = 8;
+const GROUPED_MATMUL_COMPUTE_MAJOR: i32 = 12;
 const LOAD_LATENCY: usize = 3;
 const BLOCKS_PER_SM: usize = 2;
+const WORKER_HINT_MIN_N: usize = 1024;
+const WORKER_HINT_WARPS: i32 = 16;
 
-pub(super) fn launch(x: &Tensor, args: Nvfp4GemmArgs<'_>, compile_only: bool) -> Result<Tensor> {
-    let (m, k) = x.dims2()?;
-    let (n, packed_k) = args.weights.dims2()?;
-    let (bm, bn) = if m <= SMALL_MATMUL_ROWS {
-        (SMALL_MATMUL_ROWS, SMALL_MATMUL_COLUMNS)
+#[derive(Clone, Copy)]
+pub(super) struct MatmulDevice {
+    pub(super) compute_major: i32,
+    pub(super) l2_bytes: usize,
+}
+
+fn matmul_device(dev: &CudaDevice) -> MatmulDevice {
+    use candle_core::cuda::cudarc::driver::{result, sys};
+
+    static DEVICES: OnceLock<Mutex<HashMap<i32, MatmulDevice>>> = OnceLock::new();
+    let cu_device = dev.cuda_stream().context().cu_device();
+    *DEVICES
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+        .unwrap()
+        .entry(cu_device)
+        .or_insert_with(|| MatmulDevice {
+            compute_major: device_compute_major(dev),
+            l2_bytes: unsafe {
+                result::device::get_attribute(
+                    cu_device,
+                    sys::CUdevice_attribute::CU_DEVICE_ATTRIBUTE_L2_CACHE_SIZE,
+                )
+            }
+            .unwrap_or(0) as usize,
+        })
+}
+
+pub(super) fn dense_geometry(
+    m: usize,
+    n: usize,
+    k: usize,
+    a4: bool,
+    device: MatmulDevice,
+) -> (usize, usize, usize) {
+    if a4
+        && device.compute_major == GROUPED_MATMUL_COMPUTE_MAJOR
+        && m >= WIDE_MATMUL_ROWS
+        && n >= WIDE_MATMUL_MIN_N
+        && k >= GROUPED_MATMUL_MIN_K
+        && device.l2_bytes > 0
+        && n * k / 2 + n * k / BLOCK_SIZE > device.l2_bytes
+    {
+        // Grouping M tiles reuses weights that would otherwise be evicted between rows.
+        (WIDE_MATMUL_ROWS, WIDE_MATMUL_COLUMNS, GROUPED_MATMUL_ROWS)
+    } else if m <= SMALL_MATMUL_ROWS {
+        (SMALL_MATMUL_ROWS, SMALL_MATMUL_COLUMNS, 1)
+    } else if m <= MEDIUM_MATMUL_ROWS && dense_worker_warps(m, n, k, a4, device).is_some() {
+        (MEDIUM_MATMUL_ROWS, MEDIUM_MATMUL_COLUMNS, 1)
     } else if m >= WIDE_MATMUL_ROWS && n >= WIDE_MATMUL_MIN_N && k >= WIDE_MATMUL_MIN_K {
-        (WIDE_MATMUL_ROWS, WIDE_MATMUL_COLUMNS)
+        (WIDE_MATMUL_ROWS, WIDE_MATMUL_COLUMNS, 1)
     } else {
-        (MATMUL_ROWS, MATMUL_COLUMNS)
-    };
-    let Device::Cuda(dev) = x.device() else {
-        candle_core::bail!("cuTile NVFP4 matmul requires CUDA tensors")
-    };
+        (MATMUL_ROWS, MATMUL_COLUMNS, 1)
+    }
+}
+
+pub(super) fn dense_worker_warps(
+    m: usize,
+    n: usize,
+    k: usize,
+    a4: bool,
+    device: MatmulDevice,
+) -> Option<i32> {
+    (device.compute_major == GROUPED_MATMUL_COMPUTE_MAJOR
+        && a4
+        && (m >= WIDE_MATMUL_ROWS || (SMALL_MATMUL_ROWS < m && m <= MEDIUM_MATMUL_ROWS))
+        && n >= WORKER_HINT_MIN_N
+        && k >= GROUPED_MATMUL_MIN_K)
+        .then_some(WORKER_HINT_WARPS)
+}
+
+pub(super) fn quantize(
+    x: &Tensor,
+    activation_global: &Tensor,
+    compile_only: bool,
+) -> Result<(Tensor, Tensor)> {
+    let (m, k) = x.dims2()?;
+    let dev = x.device().as_cuda_device()?;
     let stream = dev.cuda_stream();
     let ordinal = stream.context().ordinal();
     let cutile_stream = context::stream(dev);
     let (x_storage, x_layout) = x.storage_and_layout();
+    let (ag_storage, ag_layout) = activation_global.storage_and_layout();
+    let (Storage::Cuda(x_cuda), Storage::Cuda(ag_cuda)) = (&*x_storage, &*ag_storage) else {
+        candle_core::bail!("cuTile NVFP4 quantization requires CUDA tensors");
+    };
+    let (ag_addr, _ag_guard) = slice_ptr_on_stream(
+        ag_cuda.as_cuda_slice::<f32>()?,
+        ag_layout.start_offset(),
+        &stream,
+    );
+    let ag = Arc::new(unsafe {
+        cutile::tensor::Tensor::<f32>::borrow_raw_parts(
+            ag_addr as CUdeviceptr,
+            ordinal,
+            vec![1],
+            vec![1],
+        )
+    });
+    let mut packed = unsafe { dev.alloc::<u8>(m * k / 2)? };
+    let mut scales = unsafe { dev.alloc::<F8E4M3>(m * k / BLOCK_SIZE)? };
+    let (q_addr, q_guard) = slice_ptr_mut_on_stream(&mut packed, 0, &stream);
+    let (s_addr, s_guard) = slice_ptr_mut_on_stream(&mut scales, 0, &stream);
+    let q = unsafe {
+        cutile::tensor::Tensor::<f4e2m1fnx2>::borrow_raw_parts(
+            q_addr as CUdeviceptr,
+            ordinal,
+            vec![m as i32, (k / 2) as i32],
+            vec![(k / 2) as i32, 1],
+        )
+    };
+    let blocks = (BLOCKS_PER_SM * device_multiprocessor_count(dev)) as u32;
+    let generic = vec![
+        QUANT_ROWS.to_string(),
+        QUANT_K.to_string(),
+        (QUANT_K / 2).to_string(),
+        (QUANT_K / BLOCK_SIZE).to_string(),
+    ];
+    macro_rules! run {
+        ($dtype:ty, $kernel:path) => {{
+            let (x_addr, _x_guard) = slice_ptr_on_stream(
+                x_cuda.as_cuda_slice::<$dtype>()?,
+                x_layout.start_offset(),
+                &stream,
+            );
+            let input = Arc::new(unsafe {
+                cutile::tensor::Tensor::<$dtype>::borrow_raw_parts(
+                    x_addr as CUdeviceptr,
+                    ordinal,
+                    vec![m as i32, k as i32],
+                    vec![k as i32, 1],
+                )
+            });
+            let mapped = q.partition([QUANT_ROWS, QUANT_K / 2]).map(
+                [1, 1],
+                blocks.min((m.div_ceil(QUANT_ROWS) * k.div_ceil(QUANT_K)) as u32),
+            );
+            let launcher = unsafe {
+                $kernel(
+                    mapped,
+                    DevicePointer::<f8e4m3fn>::from_cu_deviceptr(s_addr as CUdeviceptr),
+                    m as i32,
+                    (k / BLOCK_SIZE) as i32,
+                    input,
+                    ag,
+                )
+            }
+            .generics(generic);
+            if compile_only {
+                catch_cutile_panic("NVFP4 quantization compile", || {
+                    launcher.compile_on(&cutile_stream).map_err(|error| {
+                        candle_core::Error::msg(format!(
+                            "cuTile NVFP4 quantization compile failed: {error:?}"
+                        ))
+                    })
+                })?;
+            } else {
+                catch_cutile_panic("NVFP4 quantization launch", || unsafe {
+                    launcher.async_on(&cutile_stream).map_err(|error| {
+                        candle_core::Error::msg(format!(
+                            "cuTile NVFP4 quantization launch failed: {error:?}"
+                        ))
+                    })
+                })?;
+            }
+        }};
+    }
+    match x.dtype() {
+        DType::BF16 => run!(bf16, kernels::quantize_bf16),
+        DType::F16 => run!(f16, kernels::quantize_f16),
+        dtype => candle_core::bail!("cuTile NVFP4 quantization does not support {dtype:?}"),
+    }
+    drop(q_guard);
+    drop(s_guard);
+    Ok((
+        Tensor::from((
+            Storage::Cuda(CudaStorage::wrap_cuda_slice(packed, dev.clone())),
+            Shape::from_dims(&[m, k / 2]),
+        )),
+        Tensor::from((
+            Storage::Cuda(CudaStorage::wrap_cuda_slice(scales, dev.clone())),
+            Shape::from_dims(&[m, k / BLOCK_SIZE]),
+        )),
+    ))
+}
+
+pub(super) fn launch(x: &Tensor, args: Nvfp4GemmArgs<'_>, compile_only: bool) -> Result<Tensor> {
+    if let Some(global) = args.activation_global_scale {
+        let (packed, scales) = quantize(x, global, compile_only)?;
+        launch_prequantized(&packed, &scales, x.dtype(), args, compile_only)
+    } else {
+        launch_inner(Some(x), None, x.dtype(), args, compile_only)
+    }
+}
+
+pub(super) fn launch_prequantized(
+    packed: &Tensor,
+    scales: &Tensor,
+    dtype: DType,
+    args: Nvfp4GemmArgs<'_>,
+    compile_only: bool,
+) -> Result<Tensor> {
+    launch_inner(None, Some((packed, scales)), dtype, args, compile_only)
+}
+
+fn launch_inner(
+    x: Option<&Tensor>,
+    prequantized: Option<(&Tensor, &Tensor)>,
+    dtype: DType,
+    args: Nvfp4GemmArgs<'_>,
+    compile_only: bool,
+) -> Result<Tensor> {
+    let (m, k) = match prequantized {
+        Some((packed, _)) => {
+            let (m, packed_k) = packed.dims2()?;
+            (m, packed_k * 2)
+        }
+        None => x.unwrap().dims2()?,
+    };
+    let (n, packed_k) = args.weights.dims2()?;
+    let dev = args.weights.device().as_cuda_device()?;
+    let a4 = prequantized.is_some();
+    let device = matmul_device(dev);
+    let (bm, bn, group_m) = dense_geometry(m, n, k, a4, device);
+    let stream = dev.cuda_stream();
+    let ordinal = stream.context().ordinal();
+    let cutile_stream = context::stream(dev);
     let (w_storage, w_layout) = args.weights.storage_and_layout();
     let (s_storage, s_layout) = args.weight_scales.storage_and_layout();
     let (wg_storage, wg_layout) = args.weight_global_scale.storage_and_layout();
@@ -961,20 +1181,13 @@ pub(super) fn launch(x: &Tensor, args: Nvfp4GemmArgs<'_>, compile_only: bool) ->
         .unwrap_or(args.weight_global_scale);
     let (ag_storage, ag_layout) = activation_global.storage_and_layout();
     let (
-        Storage::Cuda(x_cuda),
         Storage::Cuda(w_cuda),
         Storage::Cuda(s_cuda),
         Storage::Cuda(wg_cuda),
         Storage::Cuda(ag_cuda),
-    ) = (
-        &*x_storage,
-        &*w_storage,
-        &*s_storage,
-        &*wg_storage,
-        &*ag_storage,
-    )
+    ) = (&*w_storage, &*s_storage, &*wg_storage, &*ag_storage)
     else {
-        candle_core::bail!("cuTile NVFP4 matmul operands must be CUDA tensors")
+        candle_core::bail!("cuTile NVFP4 matmul operands must be CUDA tensors");
     };
     let (w_addr, _w_guard) = slice_ptr_on_stream(
         w_cuda.as_cuda_slice::<u8>()?,
@@ -996,40 +1209,105 @@ pub(super) fn launch(x: &Tensor, args: Nvfp4GemmArgs<'_>, compile_only: bool) ->
         ag_layout.start_offset(),
         &stream,
     );
-    let w = unsafe {
+    let (packed, scales) = match prequantized {
+        Some((packed, scales)) => (packed.clone(), scales.clone()),
+        None => (
+            Tensor::from((
+                Storage::Cuda(CudaStorage::wrap_cuda_slice(
+                    unsafe { dev.alloc::<u8>(1)? },
+                    dev.clone(),
+                )),
+                Shape::from_dims(&[1, 1]),
+            )),
+            Tensor::from((
+                Storage::Cuda(CudaStorage::wrap_cuda_slice(
+                    unsafe { dev.alloc::<F8E4M3>(1)? },
+                    dev.clone(),
+                )),
+                Shape::from_dims(&[1, 1]),
+            )),
+        ),
+    };
+    let (q_storage, q_layout) = packed.storage_and_layout();
+    let (qs_storage, qs_layout) = scales.storage_and_layout();
+    let (Storage::Cuda(q_cuda), Storage::Cuda(qs_cuda)) = (&*q_storage, &*qs_storage) else {
+        candle_core::bail!("cuTile NVFP4 activations must be CUDA tensors");
+    };
+    let (q_addr, _q_guard) = slice_ptr_on_stream(
+        q_cuda.as_cuda_slice::<u8>()?,
+        q_layout.start_offset(),
+        &stream,
+    );
+    let (qs_addr, _qs_guard) = slice_ptr_on_stream(
+        qs_cuda.as_cuda_slice::<F8E4M3>()?,
+        qs_layout.start_offset(),
+        &stream,
+    );
+    let w = Arc::new(unsafe {
         cutile::tensor::Tensor::<f4e2m1fnx2>::borrow_raw_parts(
             w_addr as CUdeviceptr,
             ordinal,
             vec![n as i32, packed_k as i32],
             vec![packed_k as i32, 1],
         )
-    };
-    let ws = unsafe {
+    });
+    let ws = Arc::new(unsafe {
         cutile::tensor::Tensor::<f8e4m3fn>::borrow_raw_parts(
             s_addr as CUdeviceptr,
             ordinal,
             vec![n as i32, (k / BLOCK_SIZE) as i32],
             vec![(k / BLOCK_SIZE) as i32, 1],
         )
-    };
-    let wg = unsafe {
+    });
+    let wg = Arc::new(unsafe {
         cutile::tensor::Tensor::<f32>::borrow_raw_parts(
             wg_addr as CUdeviceptr,
             ordinal,
             vec![n as i32],
             vec![1],
         )
-    };
-    let ag = unsafe {
+    });
+    let ag = Arc::new(unsafe {
         cutile::tensor::Tensor::<f32>::borrow_raw_parts(
             ag_addr as CUdeviceptr,
             ordinal,
             vec![1],
             vec![1],
         )
-    };
+    });
+    let q = Arc::new(unsafe {
+        cutile::tensor::Tensor::<f4e2m1fnx2>::borrow_raw_parts(
+            q_addr as CUdeviceptr,
+            ordinal,
+            if a4 {
+                vec![m as i32, packed_k as i32]
+            } else {
+                vec![1, 1]
+            },
+            if a4 {
+                vec![packed_k as i32, 1]
+            } else {
+                vec![1, 1]
+            },
+        )
+    });
+    let qs = Arc::new(unsafe {
+        cutile::tensor::Tensor::<f8e4m3fn>::borrow_raw_parts(
+            qs_addr as CUdeviceptr,
+            ordinal,
+            if a4 {
+                vec![m as i32, (k / BLOCK_SIZE) as i32]
+            } else {
+                vec![1, 1]
+            },
+            if a4 {
+                vec![(k / BLOCK_SIZE) as i32, 1]
+            } else {
+                vec![1, 1]
+            },
+        )
+    });
     let blocks = (BLOCKS_PER_SM * device_multiprocessor_count(dev)) as u32;
-    let a4 = args.activation_global_scale.is_some();
     let generic = vec![
         bm.to_string(),
         bn.to_string(),
@@ -1038,164 +1316,59 @@ pub(super) fn launch(x: &Tensor, args: Nvfp4GemmArgs<'_>, compile_only: bool) ->
         (MATMUL_K / BLOCK_SIZE).to_string(),
         a4.to_string(),
         LOAD_LATENCY.to_string(),
+        group_m.to_string(),
     ];
-    let quant_generic = vec![
-        QUANT_ROWS.to_string(),
-        QUANT_K.to_string(),
-        (QUANT_K / 2).to_string(),
-        (QUANT_K / BLOCK_SIZE).to_string(),
-    ];
-
-    macro_rules! dispatch {
-        ($launcher:expr, $generic:expr) => {{
-            let launcher = $launcher.generics($generic);
-            if compile_only {
-                catch_cutile_panic("NVFP4 matmul compile", || {
-                    launcher.compile_on(&cutile_stream).map_err(|error| {
-                        candle_core::Error::Msg(format!(
-                            "cuTile NVFP4 matmul compile failed: {error:?}"
-                        ))
-                    })
-                })?;
-            } else {
-                catch_cutile_panic("NVFP4 matmul launch", || unsafe {
-                    launcher.async_on(&cutile_stream).map_err(|error| {
-                        candle_core::Error::Msg(format!(
-                            "cuTile NVFP4 matmul launch failed: {error:?}"
-                        ))
-                    })
-                })?;
-            }
-        }};
-    }
+    let options = if let Some(warps) = dense_worker_warps(m, n, k, a4, device) {
+        cutile::cutile_compiler::compiler::utils::CompileOptions::default()
+            .num_worker_warps_per_cta(warps)
+    } else {
+        cutile::cutile_compiler::compiler::utils::CompileOptions::default()
+    };
     macro_rules! run {
-        ($dtype:ty, $quant:path, $matmul:path) => {{
-            let (x_addr, _x_guard) = slice_ptr_on_stream(
-                x_cuda.as_cuda_slice::<$dtype>()?,
-                x_layout.start_offset(),
-                &stream,
-            );
-            let x = Arc::new(unsafe {
+        ($dtype:ty, $kernel:path) => {{
+            let input_storage = x.map(Tensor::storage_and_layout);
+            let (x_addr, _input_guard) = if a4 {
+                // A4 never reads its A16 operand; the F32 calibration scalar owns this two-byte view.
+                (ag_addr, None)
+            } else {
+                let (storage, layout) = input_storage.as_ref().unwrap();
+                let Storage::Cuda(storage) = &**storage else {
+                    candle_core::bail!("cuTile NVFP4 matmul input must be CUDA");
+                };
+                let (address, guard) = slice_ptr_on_stream(storage.as_cuda_slice::<$dtype>()?, layout.start_offset(), &stream);
+                (address, Some(guard))
+            };
+            let input = Arc::new(unsafe {
                 cutile::tensor::Tensor::<$dtype>::borrow_raw_parts(
-                    x_addr as CUdeviceptr,
-                    ordinal,
-                    vec![m as i32, k as i32],
-                    vec![k as i32, 1],
+                    x_addr as CUdeviceptr, ordinal,
+                    if a4 { vec![1, 1] } else { vec![m as i32, k as i32] },
+                    if a4 { vec![1, 1] } else { vec![k as i32, 1] },
                 )
             });
-            let ag = Arc::new(ag);
             let mut output = unsafe { dev.alloc::<$dtype>(m * n)? };
             let (out_addr, out_guard) = slice_ptr_mut_on_stream(&mut output, 0, &stream);
             let y = unsafe {
-                cutile::tensor::Tensor::<$dtype>::borrow_raw_parts(
-                    out_addr as CUdeviceptr,
-                    ordinal,
-                    vec![m as i32, n as i32],
-                    vec![n as i32, 1],
-                )
+                cutile::tensor::Tensor::<$dtype>::borrow_raw_parts(out_addr as CUdeviceptr, ordinal, vec![m as i32, n as i32], vec![n as i32, 1])
             };
-            let mut packed = unsafe { dev.alloc::<u8>(if a4 { m * packed_k } else { 1 })? };
-            let mut scales =
-                unsafe { dev.alloc::<F8E4M3>(if a4 { m * k / BLOCK_SIZE } else { 1 })? };
-            let (q_addr, q_guard) = slice_ptr_mut_on_stream(&mut packed, 0, &stream);
-            let (qs_addr, qs_guard) = slice_ptr_mut_on_stream(&mut scales, 0, &stream);
-            let q = unsafe {
-                cutile::tensor::Tensor::<f4e2m1fnx2>::borrow_raw_parts(
-                    q_addr as CUdeviceptr,
-                    ordinal,
-                    if a4 {
-                        vec![m as i32, packed_k as i32]
-                    } else {
-                        vec![1, 1]
-                    },
-                    if a4 {
-                        vec![packed_k as i32, 1]
-                    } else {
-                        vec![1, 1]
-                    },
-                )
-            };
-            let qs = unsafe {
-                cutile::tensor::Tensor::<f8e4m3fn>::borrow_raw_parts(
-                    qs_addr as CUdeviceptr,
-                    ordinal,
-                    if a4 {
-                        vec![m as i32, (k / BLOCK_SIZE) as i32]
-                    } else {
-                        vec![1, 1]
-                    },
-                    if a4 {
-                        vec![(k / BLOCK_SIZE) as i32, 1]
-                    } else {
-                        vec![1, 1]
-                    },
-                )
-            };
-            let q_read = Arc::new(unsafe {
-                cutile::tensor::Tensor::<f4e2m1fnx2>::borrow_raw_parts(
-                    q_addr as CUdeviceptr,
-                    ordinal,
-                    if a4 {
-                        vec![m as i32, packed_k as i32]
-                    } else {
-                        vec![1, 1]
-                    },
-                    if a4 {
-                        vec![packed_k as i32, 1]
-                    } else {
-                        vec![1, 1]
-                    },
-                )
-            });
-            let qs_read = Arc::new(qs);
-            if a4 {
-                let quant = q.partition([QUANT_ROWS, QUANT_K / 2]).map(
-                    [1, 1],
-                    blocks.min((m.div_ceil(QUANT_ROWS) * k.div_ceil(QUANT_K)) as u32),
-                );
-                dispatch!(
-                    unsafe {
-                        $quant(
-                            quant,
-                            DevicePointer::<f8e4m3fn>::from_cu_deviceptr(qs_addr as CUdeviceptr),
-                            m as i32,
-                            (k / BLOCK_SIZE) as i32,
-                            x.clone(),
-                            ag.clone(),
-                        )
-                    },
-                    quant_generic
-                );
+            let mapped = y.partition([bm, bn]).map([group_m, 1], blocks.min((m.div_ceil(bm) * n.div_ceil(bn)) as u32));
+            let launcher = $kernel(mapped, input, q, qs, w, ws, wg, ag).generics(generic).compile_options(options);
+            if compile_only {
+                catch_cutile_panic("NVFP4 matmul compile", || {
+                    launcher.compile_on(&cutile_stream).map_err(|error| candle_core::Error::msg(format!("cuTile NVFP4 matmul compile failed: {error:?}")))
+                })?;
+            } else {
+                catch_cutile_panic("NVFP4 matmul launch", || unsafe {
+                    launcher.async_on(&cutile_stream).map_err(|error| candle_core::Error::msg(format!("cuTile NVFP4 matmul launch failed: {error:?}")))
+                })?;
             }
-            let mapped = y
-                .partition([bm, bn])
-                .map([1, 1], blocks.min((m.div_ceil(bm) * n.div_ceil(bn)) as u32));
-            dispatch!(
-                $matmul(
-                    mapped,
-                    x,
-                    q_read,
-                    qs_read,
-                    Arc::new(w),
-                    Arc::new(ws),
-                    Arc::new(wg),
-                    ag
-                ),
-                generic
-            );
-            drop(q_guard);
-            drop(qs_guard);
             drop(out_guard);
-            Tensor::from((
-                Storage::Cuda(CudaStorage::wrap_cuda_slice(output, dev.clone())),
-                Shape::from_dims(&[m, n]),
-            ))
+            Ok(Tensor::from((Storage::Cuda(CudaStorage::wrap_cuda_slice(output, dev.clone())), Shape::from_dims(&[m, n]))))
         }};
     }
-    match x.dtype() {
-        DType::BF16 => Ok(run!(bf16, kernels::quantize_bf16, kernels::matmul_bf16)),
-        DType::F16 => Ok(run!(f16, kernels::quantize_f16, kernels::matmul_f16)),
-        dtype => candle_core::bail!("cuTile NVFP4 matmul does not support {dtype:?} activations"),
+    match dtype {
+        DType::BF16 => run!(bf16, kernels::matmul_bf16),
+        DType::F16 => run!(f16, kernels::matmul_f16),
+        dtype => candle_core::bail!("cuTile NVFP4 matmul does not support {dtype:?}"),
     }
 }
 

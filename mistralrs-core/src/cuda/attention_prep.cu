@@ -2,6 +2,9 @@
 #include "cuda_fp16.h"
 #include <stdint.h>
 
+constexpr int AP_WARP_SIZE = 32;
+constexpr unsigned AP_FULL_WARP_MASK = 0xffffffffu;
+
 constexpr float AP_INV_TWO_PI = 0.15915494309189533577f;
 constexpr float AP_TWO_PI_HI = 6.28125f;
 constexpr float AP_TWO_PI_LO = 0.00193530717958647693f;
@@ -59,6 +62,39 @@ __global__ void rope_sincos_positions_kernel(
   sin_out[index] = ap_from_float<T>(sin_value);
 }
 
+__device__ __forceinline__ float
+ap_reduce_sum(float sum, volatile float *__restrict__ reduce) {
+  const int tid = threadIdx.x;
+  reduce[tid] = sum;
+  __syncthreads();
+
+  for (int stride = blockDim.x / 2; stride > AP_WARP_SIZE; stride >>= 1) {
+    if (tid < stride) {
+      reduce[tid] += reduce[tid + stride];
+    }
+    __syncthreads();
+  }
+
+  if (tid < AP_WARP_SIZE) {
+    sum = reduce[tid];
+    if (blockDim.x > AP_WARP_SIZE) {
+      sum += reduce[tid + AP_WARP_SIZE];
+    }
+    for (int stride = AP_WARP_SIZE / 2; stride > 0; stride >>= 1) {
+      const float peer =
+          __shfl_down_sync(AP_FULL_WARP_MASK, sum, stride, AP_WARP_SIZE);
+      if (tid < stride) {
+        sum += peer;
+      }
+    }
+    if (tid == 0) {
+      reduce[0] = sum;
+    }
+  }
+  __syncthreads();
+  return reduce[0];
+}
+
 template <typename T, bool IS_NEOX>
 __device__ __forceinline__ void write_norm_rope_row(
     const T *__restrict__ src, const T *__restrict__ weight,
@@ -71,17 +107,8 @@ __device__ __forceinline__ void write_norm_rope_row(
     const float value = ap_to_float(src[src_base + col * src_stride_d]);
     sum += value * value;
   }
-  reduce[tid] = sum;
-  __syncthreads();
-
-  for (int stride = blockDim.x / 2; stride > 0; stride >>= 1) {
-    if (tid < stride) {
-      reduce[tid] += reduce[tid + stride];
-    }
-    __syncthreads();
-  }
-
-  const float inv_rms = rsqrtf(reduce[0] / static_cast<float>(head_dim) + eps);
+  const float total = ap_reduce_sum(sum, reduce);
+  const float inv_rms = rsqrtf(total / static_cast<float>(head_dim) + eps);
 
   for (int rot_offset = tid; rot_offset < rot_dim; rot_offset += blockDim.x) {
     int x_idx;
@@ -125,17 +152,8 @@ write_norm_row(const T *__restrict__ src, const T *__restrict__ weight,
     const float value = ap_to_float(src[src_base + col * src_stride_d]);
     sum += value * value;
   }
-  reduce[tid] = sum;
-  __syncthreads();
-
-  for (int stride = blockDim.x / 2; stride > 0; stride >>= 1) {
-    if (tid < stride) {
-      reduce[tid] += reduce[tid + stride];
-    }
-    __syncthreads();
-  }
-
-  const float inv_rms = rsqrtf(reduce[0] / static_cast<float>(head_dim) + eps);
+  const float total = ap_reduce_sum(sum, reduce);
+  const float inv_rms = rsqrtf(total / static_cast<float>(head_dim) + eps);
   for (int col = tid; col < head_dim; col += blockDim.x) {
     const float value = ap_to_float(src[src_base + col * src_stride_d]) *
                         inv_rms * ap_to_float(weight[col]);
@@ -213,7 +231,8 @@ __global__ void qk_rms_norm_rope_positions_kernel(
     const int64_t k_stride_b, const int64_t k_stride_h,
     const int64_t k_stride_s, const int64_t k_stride_d, const int batch,
     const int q_heads, const int k_heads, const int seq_len, const int head_dim,
-    const int rot_dim, const float q_eps, const float k_eps) {
+    const int rot_dim, const float q_eps, const float k_eps,
+    const bool output_token_major) {
   __shared__ float reduce[1024];
 
   const int q_rows = batch * q_heads * seq_len;
@@ -222,10 +241,12 @@ __global__ void qk_rms_norm_rope_positions_kernel(
   const int local_row = is_q ? row : row - q_rows;
   const int heads = is_q ? q_heads : k_heads;
 
-  const int seq = local_row % seq_len;
-  const int tmp = local_row / seq_len;
-  const int head = tmp % heads;
-  const int batch_idx = tmp / heads;
+  const int inner = output_token_major ? heads : seq_len;
+  const int outer = output_token_major ? seq_len : heads;
+  const int tmp = local_row / inner;
+  const int seq = output_token_major ? tmp % outer : local_row % inner;
+  const int head = output_token_major ? local_row % inner : tmp % outer;
+  const int batch_idx = tmp / outer;
 
   const uint32_t pos = positions[batch_idx * seq_len + seq];
   const T *cos_row_ptr = cos + static_cast<int64_t>(pos) * rot_dim;
@@ -369,7 +390,8 @@ void launch_qk_rms_norm_rope_positions(
     const int64_t k_stride_b, const int64_t k_stride_h,
     const int64_t k_stride_s, const int64_t k_stride_d, const int batch,
     const int q_heads, const int k_heads, const int seq_len, const int head_dim,
-    const int rot_dim, const float q_eps, const float k_eps, int64_t stream) {
+    const int rot_dim, const float q_eps, const float k_eps,
+    const bool output_token_major, int64_t stream) {
   if (batch <= 0 || q_heads <= 0 || seq_len <= 0 || head_dim <= 0 ||
       rot_dim <= 0) {
     return;
@@ -396,7 +418,7 @@ void launch_qk_rms_norm_rope_positions(
           reinterpret_cast<T *>(q_out), reinterpret_cast<T *>(k_out),
           q_stride_b, q_stride_h, q_stride_s, q_stride_d, k_stride_b,
           k_stride_h, k_stride_s, k_stride_d, batch, q_heads, k_heads, seq_len,
-          head_dim, rot_dim, q_eps, k_eps);
+          head_dim, rot_dim, q_eps, k_eps, output_token_major);
 }
 
 template <typename T>
@@ -531,26 +553,26 @@ extern "C" void qk_rms_norm_rope_positions(
     const int64_t k_stride_s, const int64_t k_stride_d, const int batch,
     const int q_heads, const int k_heads, const int seq_len, const int head_dim,
     const int rot_dim, const float q_eps, const float k_eps, const int is_neox,
-    const int dtype, int64_t stream) {
+    const int dtype, const int output_token_major, int64_t stream) {
   if (is_neox) {
     if (dtype == 0) {
       launch_qk_rms_norm_rope_positions<__half, true>(
           q, k, q_weight, k_weight, cos, sin, positions, q_out, k_out,
           q_stride_b, q_stride_h, q_stride_s, q_stride_d, k_stride_b,
           k_stride_h, k_stride_s, k_stride_d, batch, q_heads, k_heads, seq_len,
-          head_dim, rot_dim, q_eps, k_eps, stream);
+          head_dim, rot_dim, q_eps, k_eps, output_token_major != 0, stream);
     } else if (dtype == 1) {
       launch_qk_rms_norm_rope_positions<__nv_bfloat16, true>(
           q, k, q_weight, k_weight, cos, sin, positions, q_out, k_out,
           q_stride_b, q_stride_h, q_stride_s, q_stride_d, k_stride_b,
           k_stride_h, k_stride_s, k_stride_d, batch, q_heads, k_heads, seq_len,
-          head_dim, rot_dim, q_eps, k_eps, stream);
+          head_dim, rot_dim, q_eps, k_eps, output_token_major != 0, stream);
     } else if (dtype == 2) {
       launch_qk_rms_norm_rope_positions<float, true>(
           q, k, q_weight, k_weight, cos, sin, positions, q_out, k_out,
           q_stride_b, q_stride_h, q_stride_s, q_stride_d, k_stride_b,
           k_stride_h, k_stride_s, k_stride_d, batch, q_heads, k_heads, seq_len,
-          head_dim, rot_dim, q_eps, k_eps, stream);
+          head_dim, rot_dim, q_eps, k_eps, output_token_major != 0, stream);
     }
   } else {
     if (dtype == 0) {
@@ -558,19 +580,19 @@ extern "C" void qk_rms_norm_rope_positions(
           q, k, q_weight, k_weight, cos, sin, positions, q_out, k_out,
           q_stride_b, q_stride_h, q_stride_s, q_stride_d, k_stride_b,
           k_stride_h, k_stride_s, k_stride_d, batch, q_heads, k_heads, seq_len,
-          head_dim, rot_dim, q_eps, k_eps, stream);
+          head_dim, rot_dim, q_eps, k_eps, output_token_major != 0, stream);
     } else if (dtype == 1) {
       launch_qk_rms_norm_rope_positions<__nv_bfloat16, false>(
           q, k, q_weight, k_weight, cos, sin, positions, q_out, k_out,
           q_stride_b, q_stride_h, q_stride_s, q_stride_d, k_stride_b,
           k_stride_h, k_stride_s, k_stride_d, batch, q_heads, k_heads, seq_len,
-          head_dim, rot_dim, q_eps, k_eps, stream);
+          head_dim, rot_dim, q_eps, k_eps, output_token_major != 0, stream);
     } else if (dtype == 2) {
       launch_qk_rms_norm_rope_positions<float, false>(
           q, k, q_weight, k_weight, cos, sin, positions, q_out, k_out,
           q_stride_b, q_stride_h, q_stride_s, q_stride_d, k_stride_b,
           k_stride_h, k_stride_s, k_stride_d, batch, q_heads, k_heads, seq_len,
-          head_dim, rot_dim, q_eps, k_eps, stream);
+          head_dim, rot_dim, q_eps, k_eps, output_token_major != 0, stream);
     }
   }
 }

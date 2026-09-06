@@ -716,3 +716,232 @@ fn stacked_checkpoint_shards_preserve_expert_scale_boundaries() -> Result<()> {
     }
     Ok(())
 }
+
+fn packed_tensors(
+    format: Format,
+    a4: bool,
+    input_scales: [f32; 2],
+) -> Result<HashMap<String, Tensor>> {
+    let spec = format.spec(a4)?;
+    let mut tensors = HashMap::new();
+    for (index, projection) in ["first", "second"].into_iter().enumerate() {
+        for (name, tensor) in format.tensors(a4)? {
+            let suffix = name.strip_prefix(PREFIX).unwrap();
+            tensors.insert(format!("{projection}{suffix}"), tensor);
+        }
+        let globals = [
+            GLOBAL_SCALE,
+            GLOBAL_SCALE / 2.0,
+            GLOBAL_SCALE * 2.0,
+            GLOBAL_SCALE * 4.0,
+        ]
+        .map(|value| value * (index + 1) as f32);
+        tensors.insert(
+            format!("{projection}.{}", spec.scale_names.global_scale),
+            Tensor::from_vec(format.globals(&globals), OUTPUT_DIM, &Device::Cpu)?,
+        );
+        if let Some(name) = spec.scale_names.activation_scale {
+            tensors.insert(
+                format!("{projection}.{name}"),
+                Tensor::from_vec(format.globals(&[input_scales[index]]), 1, &Device::Cpu)?,
+            );
+        }
+    }
+    Ok(tensors)
+}
+
+#[test]
+fn packed_nvfp4_preserves_output_shards_and_row_global_scales() -> Result<()> {
+    use mistralrs_quant::{ColumnParallelLayer, Comm, Id, LoraLayerRegistry};
+    use std::sync::Arc;
+
+    let device = Device::Cpu;
+    let comm = Arc::new(Comm::from_device(Id::new(), &device, 0, 1)?);
+    let shards = [
+        Shard::Offset {
+            dim: 0,
+            offset: 0,
+            len: OUTPUT_DIM,
+        },
+        Shard::Simple {
+            dim: 0,
+            rank: 1,
+            world_size: 2,
+        },
+    ];
+    let input = Tensor::from_vec(
+        TIE_INPUT.repeat(2 * INPUT_DIM / TIE_INPUT.len()),
+        (2, 1, INPUT_DIM),
+        &device,
+    )?;
+    for format in [Format::ModelOpt, Format::CompressedTensors] {
+        for a4 in [false, true] {
+            let config = Some(format.config(a4)?);
+            let registry = Arc::new(LoraLayerRegistry::new());
+            let vb = ShardedSafeTensors::wrap(
+                packed_tensors(format, a4, [INPUT_SCALE; 2])?,
+                DType::F32,
+                device.clone(),
+            )
+            .with_lora_registry(registry.clone());
+            let group = ColumnParallelLayer::new_packed(
+                INPUT_DIM,
+                &[OUTPUT_DIM; 2],
+                &["first", "second"],
+                &config,
+                false,
+                &comm,
+                Some(&shards),
+                vb.clone(),
+            )?
+            .expect("compatible NVFP4 projections should pack");
+            assert_eq!(group.rows_per_rank, [OUTPUT_DIM, OUTPUT_DIM / 2]);
+            assert_eq!(registry.sites().len(), 2);
+            let output = group.packed.forward(&input)?;
+            let weights = group.packed.dequantize_w()?;
+            let mut offset = 0;
+            for (index, projection) in ["first", "second"].into_iter().enumerate() {
+                let original = Nvfp4Layer::load(
+                    INPUT_DIM,
+                    OUTPUT_DIM,
+                    format.spec(a4)?,
+                    false,
+                    shards[index],
+                    vb.pp(projection),
+                )?;
+                let rows = group.rows_per_rank[index];
+                assert_eq!(
+                    original.forward(&input)?.to_vec3::<f32>()?,
+                    output.narrow(2, offset, rows)?.to_vec3::<f32>()?,
+                );
+                assert_eq!(
+                    original.dequantize_w()?.to_vec2::<f32>()?,
+                    weights.narrow(0, offset, rows)?.to_vec2::<f32>()?,
+                );
+                assert_eq!(
+                    group.constituents[index]
+                        .forward(&input)?
+                        .to_vec3::<f32>()?,
+                    original.forward(&input)?.to_vec3::<f32>()?,
+                );
+                offset += rows;
+            }
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn packed_nvfp4_falls_back_for_distinct_calibrated_input_scales() -> Result<()> {
+    use mistralrs_quant::{ColumnParallelLayer, Comm, Id};
+    use std::sync::Arc;
+
+    let device = Device::Cpu;
+    let comm = Arc::new(Comm::from_device(Id::new(), &device, 0, 1)?);
+    for format in [Format::ModelOpt, Format::CompressedTensors] {
+        let vb = ShardedSafeTensors::wrap(
+            packed_tensors(format, true, [INPUT_SCALE, INPUT_SCALE * 2.0])?,
+            DType::F32,
+            device.clone(),
+        );
+        assert!(ColumnParallelLayer::new_packed(
+            INPUT_DIM,
+            &[OUTPUT_DIM; 2],
+            &["first", "second"],
+            &Some(format.config(true)?),
+            false,
+            &comm,
+            None,
+            vb,
+        )?
+        .is_none());
+    }
+    Ok(())
+}
+
+#[test]
+fn packed_nvfp4_keeps_exclusions_and_output_layout_fallbacks() -> Result<()> {
+    use mistralrs_quant::{ColumnParallelLayer, Comm, Id, PackedOutputLayout};
+    use std::sync::Arc;
+
+    let device = Device::Cpu;
+    let comm = Arc::new(Comm::from_device(Id::new(), &device, 0, 1)?);
+    let tensors = packed_tensors(Format::ModelOpt, false, [INPUT_SCALE; 2])?;
+    let vb = ShardedSafeTensors::wrap(tensors.clone(), DType::F32, device.clone());
+    let layout = PackedOutputLayout::from_runtime_to_canonical(vec![1, 0, 2, 3])?;
+    assert!(ColumnParallelLayer::new_packed_with_output_layouts(
+        INPUT_DIM,
+        &[OUTPUT_DIM; 2],
+        &["first", "second"],
+        &[layout.clone(), layout],
+        &Some(Format::ModelOpt.config(false)?),
+        false,
+        &comm,
+        None,
+        vb,
+    )?
+    .is_none());
+    let config = serde_json::from_value::<QuantizedConfig>(json!({
+        "quant_method": "modelopt", "quant_algo": "W4A16_NVFP4", "group_size": 16,
+        "exclude_modules": ["second"]
+    }))
+    .map_err(candle_core::Error::msg)?;
+    assert!(ColumnParallelLayer::new_packed(
+        INPUT_DIM,
+        &[OUTPUT_DIM; 2],
+        &["first", "second"],
+        &Some(config),
+        false,
+        &comm,
+        None,
+        ShardedSafeTensors::wrap(tensors, DType::F32, device),
+    )?
+    .is_none());
+    Ok(())
+}
+
+#[test]
+fn packed_nvfp4_validates_identity_layout_lengths_and_output_shards() -> Result<()> {
+    use mistralrs_quant::{ColumnParallelLayer, Comm, Id, PackedOutputLayout};
+    use std::sync::Arc;
+    let device = Device::Cpu;
+    let comm = Arc::new(Comm::from_device(Id::new(), &device, 0, 1)?);
+    let vb = ShardedSafeTensors::wrap(
+        packed_tensors(Format::ModelOpt, false, [INPUT_SCALE; 2])?,
+        DType::F32,
+        device,
+    );
+    let config = Some(Format::ModelOpt.config(false)?);
+    assert!(ColumnParallelLayer::new_packed_with_output_layouts(
+        INPUT_DIM,
+        &[OUTPUT_DIM; 2],
+        &["first", "second"],
+        &[
+            PackedOutputLayout::identity(OUTPUT_DIM / 2),
+            PackedOutputLayout::identity(OUTPUT_DIM)
+        ],
+        &config,
+        false,
+        &comm,
+        None,
+        vb.clone(),
+    )
+    .is_err());
+    let input_shard = Shard::Simple {
+        dim: 1,
+        rank: 0,
+        world_size: 2,
+    };
+    assert!(ColumnParallelLayer::new_packed(
+        INPUT_DIM,
+        &[OUTPUT_DIM; 2],
+        &["first", "second"],
+        &config,
+        false,
+        &comm,
+        Some(&[input_shard; 2]),
+        vb,
+    )
+    .is_err());
+    Ok(())
+}

@@ -182,6 +182,21 @@ batches use tiled matrix multiplication; W4A4 activations are quantized once and
 output tiles. Packed checkpoint tensors are made contiguous during loading. Kernel compilation is
 warmed before CUDA graph capture.
 
+On SM 12.1 with CUDA 13.3, eligible large dense W4A4 projections use CUTLASS with BF16 or F16
+outputs. Weight scales are prepared during loading, and activation scales are converted for each
+native matrix multiplication. Eligible decode batches use a weight-first tile when packed weights
+and block scales fill at least the GPU L2 cache. Selection depends on hardware and matrix
+dimensions; output rounding still happens before bias addition.
+
+Compatible projections can share packed weights and quantized activations through the common
+projection loader. W4A4 projections share an activation buffer only when their normalized calibrated
+input scales match exactly. Each output row retains its own weight scale. These optimizations apply
+to supported ModelOpt and compressed-tensors checkpoints without model-specific configuration.
+
+Compatible gated feed-forward projections fuse activation, multiplication, and NVFP4 quantization
+for both packed and separate gate/up outputs. SiLU, ReLU, and sigmoid preserve the activation and
+product rounding of the unfused path; other activations use the existing path.
+
 To measure decode, prefill, and expert projections on your GPU:
 
 ```bash

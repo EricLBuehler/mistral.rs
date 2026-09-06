@@ -113,6 +113,10 @@ CUDA prompts are chunked from the batch-wide token budget. The per-sequence chun
 divided by the admitted prompt batch size, so peak prefill work stays bounded as concurrency grows.
 Chunking is internal and does not change the visible prompt, logits, or generated text.
 
+CUDA engines retain freed scratch allocations for reuse across forward passes. Memory maintenance
+trims excess cached allocations while idle and under memory pressure. Reserved CUDA memory can
+therefore include reusable scratch space as well as live tensors.
+
 `f8e4m3` stores K and V at half the bytes of BF16. CUDA accepts FP16, BF16, or FP32 activations and
 converts at cache-write time; FlashInfer decode applies the K scale to logits and the V scale to
 outputs without gathering a full-precision cache. Scales are immutable for the cache lifetime, so
@@ -162,6 +166,8 @@ If any condition is not met, mistral.rs runs the normal CUDA path.
 <summary>Capture and replay internals</summary>
 
 The first time a decode shape is seen, mistral.rs runs a normal warmup forward, captures a graph for that shape, uploads it, and caches it. Later matching decode steps copy the current input ids and paged-attention metadata into graph-owned buffers and replay the graph.
+
+Supported pipelines also capture common batch sizes during startup. Ordinary single-token FlashInfer decode reserves metadata capacity through 2048 context tokens, bounded by the available cache and sliding window. This lets startup graphs handle changing admission and drain batches within that capacity. It adds a bounded amount of attention scratch memory; longer contexts can still require another capture.
 
 The decode graph cache holds a small number of recent graph entries. New batch sizes, tensor shapes, or metadata layouts can trigger another capture.
 

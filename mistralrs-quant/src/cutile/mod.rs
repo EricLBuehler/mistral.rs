@@ -9,6 +9,7 @@ mod fused_moe_fp8;
 mod gdn_prefill;
 mod nvfp4;
 mod nvfp4_gemv;
+mod nvfp4_glu;
 mod nvfp4_matmul;
 mod routed_lora;
 mod split_k;
@@ -32,9 +33,10 @@ pub use gdn_prefill::{
     GDN_PREFILL_HEAD_DIM,
 };
 pub use nvfp4::{
-    cutile_nvfp4, cutile_nvfp4_gather, nvfp4_supported, register_nvfp4_routing,
-    register_nvfp4_shape, Nvfp4GemmArgs,
+    cutile_nvfp4, cutile_nvfp4_gather, cutile_nvfp4_prequantized, cutile_nvfp4_quantize,
+    nvfp4_supported, register_nvfp4_routing, register_nvfp4_shape, Nvfp4GemmArgs,
 };
+pub(crate) use nvfp4_glu::{launch as cutile_nvfp4_glu, GluQuantArgs};
 pub use routed_lora::{
     cached_cutile_routed_lora_config, cutile_routed_lora_candidate_configs,
     selected_cutile_routed_lora_config, set_cutile_routed_lora_tuned_config,
