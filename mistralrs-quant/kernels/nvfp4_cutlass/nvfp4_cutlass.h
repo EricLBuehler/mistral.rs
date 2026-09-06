@@ -53,21 +53,25 @@ typedef struct mistralrs_nvfp4_resources {
 const char *mistralrs_nvfp4_error_string(int status);
 
 /* Prepare outside capture; the requested device must already be current. */
-int mistralrs_nvfp4_prepare(int32_t device, int32_t dtype, int32_t kernel, mistralrs_nvfp4_resources *resources);
-int mistralrs_nvfp4_workspace_size(const mistralrs_nvfp4_context *context, const mistralrs_nvfp4_shape *shape,
+int mistralrs_nvfp4_prepare(int32_t device, int32_t dtype, int32_t kernel,
+                            mistralrs_nvfp4_resources *resources);
+int mistralrs_nvfp4_workspace_size(const mistralrs_nvfp4_context *context,
+                                   const mistralrs_nvfp4_shape *shape,
                                    size_t *bytes);
 
-/* The current device, stream, and all buffers must match the prepared context. */
-/* Caller-owned operand/workspace storage must outlive eager work and graph replay. */
-/* A/W/scales/output/workspace require 16-byte alignment; globals require 4-byte alignment. */
-/* Output is RN_dtype((FP32_acc * weight_global[n]) * activation_global[0]); bias is external. */
+// The device, stream, and buffers must match the prepared context.
+// Operands and workspace must outlive eager work and graph replay.
+// Align A/W/scales/output/workspace to 16 bytes and global scales to 4 bytes.
+// Output is RN_dtype((FP32_acc * weight_global[n]) * activation_global[0]).
+// Bias is applied separately.
 int mistralrs_nvfp4_gemm(const mistralrs_nvfp4_launch *launch);
 
-/* The swizzle preserves bytes and zeroes padding; source and destination must not overlap. */
+// Swizzling preserves bytes and zeroes padding; the buffers must not overlap.
 int mistralrs_nvfp4_scale_bytes(int32_t rows, int32_t k, size_t *bytes);
-int mistralrs_nvfp4_swizzle_host(const void *source, void *dest, int32_t rows, int32_t k, size_t dest_bytes);
-int mistralrs_nvfp4_swizzle_cuda(const void *source, void *dest, int32_t rows, int32_t k, size_t dest_bytes,
-                                 void *stream);
+int mistralrs_nvfp4_swizzle_host(const void *source, void *dest, int32_t rows,
+                                 int32_t k, size_t dest_bytes);
+int mistralrs_nvfp4_swizzle_cuda(const void *source, void *dest, int32_t rows,
+                                 int32_t k, size_t dest_bytes, void *stream);
 
 #ifdef __cplusplus
 }

@@ -351,18 +351,16 @@ fn nvfp4_medium_decode_warmup_supports_offset_views_and_graph_replay() -> Result
             }
             return Err(candle_core::Error::msg(error.to_string()));
         }
-        let captured = (|| -> Result<_> {
-            MEDIUM_GRAPH_ROWS
-                .into_iter()
-                .map(|rows| {
-                    let input = x.narrow(0, 0, rows)?;
-                    let ordinary = cutile_nvfp4(&input, args)?;
-                    let (packed, scales) = cutile_nvfp4_quantize(&input, &activation_global)?;
-                    let shared = cutile_nvfp4_prequantized(&packed, &scales, dtype, args)?;
-                    Ok((rows, ordinary, shared))
-                })
-                .collect::<Result<Vec<_>>>()
-        })();
+        let captured = MEDIUM_GRAPH_ROWS
+            .into_iter()
+            .map(|rows| {
+                let input = x.narrow(0, 0, rows)?;
+                let ordinary = cutile_nvfp4(&input, args)?;
+                let (packed, scales) = cutile_nvfp4_quantize(&input, &activation_global)?;
+                let shared = cutile_nvfp4_prequantized(&packed, &scales, dtype, args)?;
+                Ok((rows, ordinary, shared))
+            })
+            .collect::<Result<Vec<_>>>();
         let graph = stream.end_capture(
             sys::CUgraphInstantiate_flags::CUDA_GRAPH_INSTANTIATE_FLAG_AUTO_FREE_ON_LAUNCH,
         );

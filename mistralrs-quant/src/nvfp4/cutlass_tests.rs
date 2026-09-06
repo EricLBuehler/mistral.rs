@@ -68,7 +68,7 @@ fn rounded(value: f32, dtype: DType) -> f32 {
 }
 
 fn activation_code(row: usize, column: usize) -> usize {
-    if column % BLOCK == 0 {
+    if column.is_multiple_of(BLOCK) {
         FP4.len() / 2 - 1
     } else {
         coordinate(row, column) % FP4.len()
@@ -76,7 +76,7 @@ fn activation_code(row: usize, column: usize) -> usize {
 }
 
 fn activation_scale(row: usize, group: usize) -> f32 {
-    if coordinate(row, group + 17) % 2 == 0 {
+    if coordinate(row, group + 17).is_multiple_of(2) {
         0.5
     } else {
         1.0
@@ -84,7 +84,7 @@ fn activation_scale(row: usize, group: usize) -> f32 {
 }
 
 fn reduction_scale(group: usize) -> f32 {
-    if coordinate(13, group) % 2 == 0 {
+    if coordinate(13, group).is_multiple_of(2) {
         0.5
     } else {
         1.0
@@ -92,7 +92,7 @@ fn reduction_scale(group: usize) -> f32 {
 }
 
 fn reduction_sign(group: usize) -> f32 {
-    if coordinate(19, group) % 2 == 0 {
+    if coordinate(19, group).is_multiple_of(2) {
         1.0
     } else {
         -1.0
@@ -150,7 +150,7 @@ impl Fixture {
         let weight_rows = (0..columns)
             .map(|column| WeightRow {
                 codes: [weight_code(column, 3), weight_code(column, 7)],
-                scale: if coordinate(column, 5) % 2 == 0 {
+                scale: if coordinate(column, 5).is_multiple_of(2) {
                     0.5
                 } else {
                     1.0

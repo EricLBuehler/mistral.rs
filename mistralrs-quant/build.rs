@@ -1,5 +1,6 @@
 #[cfg(feature = "cuda")]
 const CUTLASS_COMMIT: &str = "7127592069c2fe01b041e174ba4345ef9b279671";
+#[cfg(feature = "cuda")]
 const NVFP4_CUTLASS_COMMIT: &str = "b46b16d003484063bca4ed365e44095c4c6ed633";
 #[cfg(feature = "cuda")]
 const DEEPGEMM_CUTLASS_COMMIT: &str = "f3fde58372d33e9a5650ba7b80fc48b3b49d40c8";

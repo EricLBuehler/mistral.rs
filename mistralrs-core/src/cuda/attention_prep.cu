@@ -39,10 +39,11 @@ ap_from_float<__nv_bfloat16>(float value) {
 }
 
 template <typename T>
-__global__ void rope_sincos_positions_kernel(
-    const uint32_t *__restrict__ positions,
-    const float *__restrict__ inv_freq, T *__restrict__ cos_out,
-    T *__restrict__ sin_out, const int width, const int64_t elements) {
+__global__ void
+rope_sincos_positions_kernel(const uint32_t *__restrict__ positions,
+                             const float *__restrict__ inv_freq,
+                             T *__restrict__ cos_out, T *__restrict__ sin_out,
+                             const int width, const int64_t elements) {
   const int64_t index =
       static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
   if (index >= elements) {
@@ -197,8 +198,7 @@ __global__ void qk_rms_norm_rope_kernel(
                              static_cast<int64_t>(seq) * q_stride_s;
     const int64_t dst_row =
         output_token_major
-            ? (static_cast<int64_t>(batch_idx) * seq_len + seq) * q_heads +
-                  head
+            ? (static_cast<int64_t>(batch_idx) * seq_len + seq) * q_heads + head
             : row;
     T *dst = q_out + dst_row * head_dim;
     write_norm_rope_row<T, IS_NEOX>(q, q_weight, cos_row_ptr, sin_row_ptr, dst,
@@ -210,8 +210,7 @@ __global__ void qk_rms_norm_rope_kernel(
                              static_cast<int64_t>(seq) * k_stride_s;
     const int64_t dst_row =
         output_token_major
-            ? (static_cast<int64_t>(batch_idx) * seq_len + seq) * k_heads +
-                  head
+            ? (static_cast<int64_t>(batch_idx) * seq_len + seq) * k_heads + head
             : local_row;
     T *dst = k_out + dst_row * head_dim;
     write_norm_rope_row<T, IS_NEOX>(k, k_weight, cos_row_ptr, sin_row_ptr, dst,
@@ -341,19 +340,16 @@ __global__ void qkv_rms_norm_rope_positions_kernel(
 }
 
 template <typename T, bool IS_NEOX>
-void launch_qk_rms_norm_rope(const void *q, const void *k, const void *q_weight,
-                             const void *k_weight, const void *cos,
-                             const void *sin, void *q_out, void *k_out,
-                             const int64_t q_stride_b, const int64_t q_stride_h,
-                             const int64_t q_stride_s, const int64_t q_stride_d,
-                             const int64_t k_stride_b, const int64_t k_stride_h,
-                             const int64_t k_stride_s, const int64_t k_stride_d,
-                             const int batch, const int q_heads,
-                             const int k_heads, const int seq_len,
-                             const int head_dim, const int rot_dim,
-                             const int cos_batch_stride, const float q_eps,
-                             const float k_eps, const bool output_token_major,
-                             int64_t stream) {
+void launch_qk_rms_norm_rope(
+    const void *q, const void *k, const void *q_weight, const void *k_weight,
+    const void *cos, const void *sin, void *q_out, void *k_out,
+    const int64_t q_stride_b, const int64_t q_stride_h,
+    const int64_t q_stride_s, const int64_t q_stride_d,
+    const int64_t k_stride_b, const int64_t k_stride_h,
+    const int64_t k_stride_s, const int64_t k_stride_d, const int batch,
+    const int q_heads, const int k_heads, const int seq_len, const int head_dim,
+    const int rot_dim, const int cos_batch_stride, const float q_eps,
+    const float k_eps, const bool output_token_major, int64_t stream) {
   if (batch <= 0 || q_heads <= 0 || seq_len <= 0 || head_dim <= 0 ||
       rot_dim <= 0) {
     return;
@@ -598,16 +594,16 @@ extern "C" void qk_rms_norm_rope_positions(
 }
 
 extern "C" void rope_sincos_positions(const void *positions,
-                                       const void *inv_freq, void *cos_out,
-                                       void *sin_out, const int rows,
-                                       const int width, const int dtype,
-                                       int64_t stream) {
+                                      const void *inv_freq, void *cos_out,
+                                      void *sin_out, const int rows,
+                                      const int width, const int dtype,
+                                      int64_t stream) {
   if (dtype == 0) {
     launch_rope_sincos_positions<__half>(positions, inv_freq, cos_out, sin_out,
                                          rows, width, stream);
   } else if (dtype == 1) {
-    launch_rope_sincos_positions<__nv_bfloat16>(
-        positions, inv_freq, cos_out, sin_out, rows, width, stream);
+    launch_rope_sincos_positions<__nv_bfloat16>(positions, inv_freq, cos_out,
+                                                sin_out, rows, width, stream);
   } else if (dtype == 2) {
     launch_rope_sincos_positions<float>(positions, inv_freq, cos_out, sin_out,
                                         rows, width, stream);

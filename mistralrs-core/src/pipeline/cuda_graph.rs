@@ -4141,7 +4141,7 @@ mod tests {
         assert_eq!(
             ends,
             (0..=8)
-                .map(|row| (row * chunks_per_row) as i32)
+                .map(|row| i32::try_from(row * chunks_per_row).unwrap())
                 .collect::<Vec<_>>()
         );
         let mask = view.tile_plan.block_valid_mask[&location]

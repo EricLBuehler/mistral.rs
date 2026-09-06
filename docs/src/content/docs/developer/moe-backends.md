@@ -5,9 +5,9 @@ description: Install the optional cuTile runtime tool for supported NVIDIA GPUs.
 
 Supported CUDA builds can use cuTile acceleration for MoE, quantized linear, and routed LoRA workloads. The installer
 selects a cuTile-capable binary automatically when one matches the GPU and driver. NVIDIA's
-`tileiras` tool is installed separately. mistral.rs checks it automatically and continues without
-cuTile when the requirements are not met. Source builds use the workspace-pinned cuTile Rust 0.3.0
-release.
+`tileiras` tool is installed separately. mistral.rs checks it automatically and uses other backends
+for workloads with a supported fallback. NVFP4 CUDA inference requires cuTile and reports an error
+when its requirements are not met. Source builds use the workspace-pinned cuTile Rust 0.3.0 release.
 
 ## Install tileiras
 

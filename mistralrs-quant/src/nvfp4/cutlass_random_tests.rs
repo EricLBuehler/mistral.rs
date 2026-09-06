@@ -61,7 +61,7 @@ fn host_upper_bound(value: f64) -> f64 {
 
 fn fp4_value(packed: &[u8], index: usize) -> f64 {
     let byte = packed[index / PACK];
-    let code = if index % PACK == 0 {
+    let code = if index.is_multiple_of(PACK) {
         byte & 0xf
     } else {
         byte >> 4
@@ -234,7 +234,9 @@ fn native_decode_arbitrary_data_matches_cutile_and_sampled_fp64_bounds() -> Resu
                 .all(|value| value.is_finite() && *value > 0.0));
             let weight_max: Vec<f64> = host
                 .weight_scales
-                .chunks_exact(SCALE_COLUMNS)
+                .as_chunks::<SCALE_COLUMNS>()
+                .0
+                .iter()
                 .map(|scales| {
                     scales
                         .iter()

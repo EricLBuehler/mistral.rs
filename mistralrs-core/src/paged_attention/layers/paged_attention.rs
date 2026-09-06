@@ -2923,7 +2923,9 @@ mod mixed_cached_prefix_tests {
                     let token = i / (q_heads * HEAD_DIM);
                     let head = (i / HEAD_DIM) % q_heads;
                     let dim = i % HEAD_DIM;
-                    ((token * 31 + head * 17 + dim * 13) % 61) as f32 / 32.0 - 30.0 / 32.0
+                    f32::from(u8::try_from((token * 31 + head * 17 + dim * 13) % 61).unwrap())
+                        / 32.0
+                        - 30.0 / 32.0
                 })
                 .collect::<Vec<_>>();
             let query_row = q_heads * HEAD_DIM;
@@ -2957,7 +2959,7 @@ mod mixed_cached_prefix_tests {
                 let pages = &PHYSICAL_BLOCKS[next_block..next_block + page_count];
                 next_block += page_count;
                 for (logical, &physical) in pages.iter().enumerate() {
-                    table[sequence * table_width + logical] = physical as u32;
+                    table[sequence * table_width + logical] = u32::try_from(physical).unwrap();
                 }
                 let mut sequence_keys = Vec::with_capacity(kv_len * KV_HEADS * HEAD_DIM);
                 let mut sequence_values = Vec::with_capacity(kv_len * KV_HEADS * HEAD_DIM);
@@ -2968,13 +2970,19 @@ mod mixed_cached_prefix_tests {
                     }
                     for head in 0..KV_HEADS {
                         for dim in 0..HEAD_DIM {
-                            let key = ((sequence * 19 + token * 7 + head * 11 + dim * 3) % 59)
-                                as f32
-                                / 64.0
+                            let key = f32::from(
+                                u8::try_from(
+                                    (sequence * 19 + token * 7 + head * 11 + dim * 3) % 59,
+                                )
+                                .unwrap(),
+                            ) / 64.0
                                 - 29.0 / 64.0;
-                            let value = ((sequence * 29 + token * 13 + head * 7 + dim * 5) % 67)
-                                as f32
-                                / 64.0
+                            let value = f32::from(
+                                u8::try_from(
+                                    (sequence * 29 + token * 13 + head * 7 + dim * 5) % 67,
+                                )
+                                .unwrap(),
+                            ) / 64.0
                                 - 33.0 / 64.0;
                             let cache_index = ((physical * KV_HEADS + head) * BLOCK_SIZE
                                 + token % BLOCK_SIZE)
@@ -3072,7 +3080,10 @@ mod mixed_cached_prefix_tests {
             metadata.context_lens = Some(HashMap::from([(
                 location,
                 Tensor::from_vec(
-                    kv_lens.iter().map(|&n| n as u32).collect::<Vec<_>>(),
+                    kv_lens
+                        .iter()
+                        .map(|&n| u32::try_from(n).unwrap())
+                        .collect::<Vec<_>>(),
                     (sequences.len(),),
                     &self.device,
                 )?,
@@ -3100,7 +3111,7 @@ mod mixed_cached_prefix_tests {
             metadata.prefill_head_dim = HEAD_DIM;
             let mut flash = FlashParams::empty(true);
             flash.packed = true;
-            flash.max_q = query_lens.iter().copied().max().unwrap() as u32;
+            flash.max_q = u32::try_from(query_lens.iter().copied().max().unwrap()).unwrap();
             flash.cumulative_seqlens_q = HashMap::from([(location, cu_q.clone())]);
             flash.logical_k = FlashKMeta {
                 max: flash.max_q,
@@ -3108,7 +3119,7 @@ mod mixed_cached_prefix_tests {
             };
             let params = SdpaParams {
                 n_kv_groups: self.groups,
-                softmax_scale: 1.0 / (HEAD_DIM as f32).sqrt(),
+                softmax_scale: 1.0 / f32::from(u16::try_from(HEAD_DIM).unwrap()).sqrt(),
                 softcap: None,
                 sliding_window: None,
                 sinks: None,
@@ -3134,7 +3145,7 @@ mod mixed_cached_prefix_tests {
         }
 
         fn reference(&self) -> Vec<f64> {
-            let scale = f64::from(1.0 / (HEAD_DIM as f32).sqrt());
+            let scale = f64::from(1.0 / f32::from(u16::try_from(HEAD_DIM).unwrap()).sqrt());
             let mut result = Vec::with_capacity(self.query_data.len());
             let mut query_offset = 0;
             for (sequence, (&kv_len, &query_len)) in

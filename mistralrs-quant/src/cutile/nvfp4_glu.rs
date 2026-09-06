@@ -14,9 +14,9 @@ mod kernels {
     const FP8_MAX: f32 = 448.0;
     const SILU: i32 = 0;
     const RELU: i32 = 2;
-    const LOG2_E: f32 = 1.442_695;
+    const LOG2_E: f32 = std::f32::consts::LOG2_E;
 
-    #[cutile::entry(unchecked_accesses = true)] 
+    #[cutile::entry(unchecked_accesses = true)]
     unsafe fn quantize_bf16<
         const BM: i32,
         const BK: i32,

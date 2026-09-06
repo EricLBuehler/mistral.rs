@@ -24,7 +24,7 @@
 
 #ifndef USE_ROCM
 inline cudaError_t VLLM_EnsureMaxDynamicSharedMemorySize(const void *func,
-                                                       int val) {
+                                                         int val) {
   static std::mutex mutex;
   std::lock_guard<std::mutex> lock(mutex);
   cudaFuncAttributes attributes;
