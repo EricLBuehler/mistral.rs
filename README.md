@@ -248,6 +248,21 @@ For complete documentation, see the **[Documentation](https://docs.mistralrs.dev
 - [Troubleshooting](https://docs.mistralrs.dev/reference/troubleshooting/) - Common issues and solutions
 - [Environment variables](https://docs.mistralrs.dev/reference/environment-variables/) - Environment variables for configuration
 
+## Citation
+
+If you use mistral.rs in your research, please cite:
+
+```bibtex
+@misc{mistralrs,
+  author = {Buehler, Eric},
+  title = {{mistral.rs}: Fast, flexible {LLM} inference},
+  year = {2024},
+  url = {https://github.com/EricLBuehler/mistral.rs}
+}
+```
+
+Citation metadata is available in [CITATION.cff](CITATION.cff).
+
 ## Contributing
 
 Contributions welcome! Please [open an issue](https://github.com/EricLBuehler/mistral.rs/issues) to discuss new features or report bugs. If you want to add a new model, please contact us via an issue and we can coordinate.
