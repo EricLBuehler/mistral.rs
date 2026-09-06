@@ -83,6 +83,7 @@ pub(super) struct PromptMemoryStatus {
 
 struct MaintainedDevice {
     device: Device,
+    _retention: Option<crate::pipeline::cuda_graph::CudaMemoryPoolRetention>,
     last_trim: Option<Instant>,
     capture_deferred: bool,
 }
@@ -97,8 +98,26 @@ impl CudaMemoryPoolMaintenance {
             .into_iter()
             .map(|device| {
                 record_pending(&device, false);
+                let retention = match &device {
+                    Device::Cuda(cuda) => {
+                        match crate::pipeline::cuda_graph::retain_cuda_memory_pool(
+                            &cuda.cuda_stream(),
+                        ) {
+                            Ok(retention) => Some(retention),
+                            Err(err) => {
+                                tracing::warn!(
+                                    "Failed to retain CUDA memory pool on {}: {err}",
+                                    device.device_pretty_repr()
+                                );
+                                None
+                            }
+                        }
+                    }
+                    _ => None,
+                };
                 MaintainedDevice {
                     device,
+                    _retention: retention,
                     last_trim: None,
                     capture_deferred: false,
                 }
@@ -496,6 +515,7 @@ mod tests {
     };
 
     const GIB: usize = 1024 * 1024 * 1024;
+    const IDLE_TRIM_TEST_WARM_CACHE_MULTIPLIER: usize = 3;
 
     fn snapshot(available: usize, reserved: usize, used: usize) -> CudaAllocatorSnapshot {
         CudaAllocatorSnapshot {
@@ -514,6 +534,86 @@ mod tests {
                 used_high: 0,
             }),
         }
+    }
+
+    #[test]
+    #[ignore = "requires a CUDA device"]
+    fn engine_retention_preserves_maintenance_and_last_owner_restoration() -> anyhow::Result<()> {
+        let device = Device::new_cuda(0)?;
+        let alias = Device::new_cuda(0)?;
+        let threshold = |device: &Device| -> anyhow::Result<u64> {
+            Ok(MemoryUsage
+                .query_cuda_allocator(device)?
+                .expect("CUDA allocator snapshot exists")
+                .async_pool
+                .expect("CUDA async allocator is supported")
+                .release_threshold
+                .try_into()?)
+        };
+        let original = threshold(&device)?;
+        for reverse_drop in [false, true] {
+            let mut first = CudaMemoryPoolMaintenance::new(vec![device.clone()]);
+            let mut second = CudaMemoryPoolMaintenance::new(vec![alias.clone()]);
+            assert!(first.devices[0]._retention.is_some());
+            assert!(second.devices[0]._retention.is_some());
+            assert_eq!(threshold(&device)?, u64::MAX);
+            assert_eq!(threshold(&alias)?, u64::MAX);
+            for maintenance in [&mut first, &mut second] {
+                for point in [
+                    MaintenancePoint::PromptPreflight,
+                    MaintenancePoint::PromptBoundary,
+                    MaintenancePoint::Idle,
+                ] {
+                    let outcome = maintenance.maintain(point, 0);
+                    assert!(!outcome.capture_active);
+                    assert!(!outcome.reclaim_deferred);
+                    assert!(!outcome.maintenance_failed);
+                }
+            }
+            if !reverse_drop {
+                let snapshot = MemoryUsage
+                    .query_cuda_allocator(&device)?
+                    .expect("CUDA allocator snapshot exists");
+                let thresholds = PressureThresholds::from_snapshot(snapshot);
+                let scratch_bytes = thresholds.warm_cache * IDLE_TRIM_TEST_WARM_CACHE_MULTIPLIER;
+                anyhow::ensure!(
+                    snapshot.available >= scratch_bytes.saturating_add(thresholds.base_free),
+                    "idle trim test needs scratch capacity without CUDA memory pressure"
+                );
+                let used_before = snapshot.async_pool.unwrap().current.used;
+                let cuda = device.as_cuda_device()?;
+                let scratch = unsafe { cuda.alloc::<u8>(scratch_bytes) }?;
+                drop(scratch);
+                cuda.cuda_stream().synchronize()?;
+                let before = MemoryUsage
+                    .query_cuda_allocator(&device)?
+                    .expect("CUDA allocator snapshot exists")
+                    .async_pool
+                    .unwrap();
+                assert_eq!(before.current.used, used_before);
+                assert!(before.current.cached() > thresholds.warm_cache * IDLE_RECLAIM_MULTIPLIER);
+                first.when_idle();
+                let after = MemoryUsage
+                    .query_cuda_allocator(&device)?
+                    .expect("CUDA allocator snapshot exists")
+                    .async_pool
+                    .unwrap();
+                assert!(after.current.cached() < before.current.cached());
+                assert_eq!(after.current.used, before.current.used);
+                assert_eq!(threshold(&device)?, u64::MAX);
+            }
+            if reverse_drop {
+                drop(second);
+                assert_eq!(threshold(&device)?, u64::MAX);
+                drop(first);
+            } else {
+                drop(first);
+                assert_eq!(threshold(&alias)?, u64::MAX);
+                drop(second);
+            }
+            assert_eq!(threshold(&device)?, original);
+        }
+        Ok(())
     }
 
     #[test]

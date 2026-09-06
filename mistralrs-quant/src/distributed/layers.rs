@@ -308,8 +308,25 @@ impl QuantMethod for RuntimeOutputLinear {
         self.inner.preferred_activation_scale_layout_for(a)
     }
 
+    fn nvfp4_input_calibration(&self) -> Option<crate::Nvfp4InputCalibration<'_>> {
+        self.inner.nvfp4_input_calibration()
+    }
+
+    fn activation_quantization_global_scale(&self) -> Option<f32> {
+        self.inner.activation_quantization_global_scale()
+    }
+
     fn quantize_activation(&self, a: &Tensor) -> Result<QuantizedActivation> {
         self.inner.quantize_activation(a)
+    }
+
+    fn try_quantize_glu(
+        &self,
+        gate: &Tensor,
+        value: &Tensor,
+        activation: crate::GluActivationType,
+    ) -> Result<Option<QuantizedActivation>> {
+        self.inner.try_quantize_glu(gate, value, activation)
     }
 
     fn forward_quantized(&self, a: &QuantizedActivation) -> Result<Tensor> {
@@ -437,11 +454,58 @@ fn load_packed_weights(
     }
 
     let builders = names.iter().map(|name| vb.pp(name)).collect::<Vec<_>>();
-    if builders.iter().any(|builder| {
-        should_apply_immediate_isq(builder)
-            || builder.weight_source().is_some()
-            || !builder.contains_tensor("weight")
-    }) {
+    if builders
+        .iter()
+        .any(|builder| should_apply_immediate_isq(builder) || builder.weight_source().is_some())
+    {
+        return Ok(None);
+    }
+    if let Some(
+        config @ (QuantizedConfig::ModelOpt { .. } | QuantizedConfig::CompressedTensors { .. }),
+    ) = config
+    {
+        if output_layouts.iter().any(|layout| !layout.is_identity()) {
+            return Ok(None);
+        }
+        let mut specs = Vec::with_capacity(builders.len());
+        for (((builder, &out_dim), &shard), layout) in builders
+            .iter()
+            .zip(out_dims)
+            .zip(shards)
+            .zip(output_layouts)
+        {
+            layout.local_runtime_to_canonical(out_dim, shard)?;
+            let Some(crate::CheckpointLinearSpec::Nvfp4(spec)) =
+                config.resolve_checkpoint(&builder.prefix())?
+            else {
+                return Ok(None);
+            };
+            if !builder.contains_tensor(spec.scale_names.weight) {
+                return Ok(None);
+            }
+            specs.push(spec);
+        }
+        let layers = builders
+            .iter()
+            .zip(out_dims)
+            .zip(shards)
+            .zip(specs)
+            .map(|(((builder, &out_dim), &shard), spec)| {
+                crate::Nvfp4Layer::load(in_dim, out_dim, spec, false, shard, builder.clone())
+            })
+            .collect::<Result<Vec<_>>>()?;
+        return Ok(
+            crate::Nvfp4Layer::merge(layers)?.map(|group| PackedWeights {
+                packed: group.packed,
+                constituents: group.constituents,
+                rows: group.rows_per_rank,
+            }),
+        );
+    }
+    if builders
+        .iter()
+        .any(|builder| !builder.contains_tensor("weight"))
+    {
         return Ok(None);
     }
 
@@ -810,7 +874,7 @@ impl RowParallelLayer {
                 }
                 QuantizedConfig::Fp8 { .. }
                 | QuantizedConfig::CompressedTensors { .. }
-                | QuantizedConfig::ModelOpt { .. } => crate::fp8_config::fp8_checkpoint_linear_b(
+                | QuantizedConfig::ModelOpt { .. } => crate::fp8_config::checkpoint_linear_b(
                     in_dim,
                     out_dim,
                     quant_conf,
@@ -1029,8 +1093,25 @@ impl QuantMethod for RowParallelLayer {
         self.weight.preferred_activation_scale_layout_for(a)
     }
 
+    fn nvfp4_input_calibration(&self) -> Option<crate::Nvfp4InputCalibration<'_>> {
+        self.weight.nvfp4_input_calibration()
+    }
+
+    fn activation_quantization_global_scale(&self) -> Option<f32> {
+        self.weight.activation_quantization_global_scale()
+    }
+
     fn quantize_activation(&self, a: &Tensor) -> Result<QuantizedActivation> {
         self.weight.quantize_activation(a)
+    }
+
+    fn try_quantize_glu(
+        &self,
+        gate: &Tensor,
+        value: &Tensor,
+        activation: crate::GluActivationType,
+    ) -> Result<Option<QuantizedActivation>> {
+        self.weight.try_quantize_glu(gate, value, activation)
     }
 
     fn forward_quantized(&self, a: &QuantizedActivation) -> Result<Tensor> {
@@ -1255,7 +1336,7 @@ impl ColumnParallelLayer {
                 }
                 QuantizedConfig::Fp8 { .. }
                 | QuantizedConfig::CompressedTensors { .. }
-                | QuantizedConfig::ModelOpt { .. } => crate::fp8_config::fp8_checkpoint_linear_b(
+                | QuantizedConfig::ModelOpt { .. } => crate::fp8_config::checkpoint_linear_b(
                     in_dim,
                     out_dim,
                     quant_conf,
@@ -1689,8 +1770,25 @@ impl QuantMethod for ColumnParallelLayer {
         self.weight.preferred_activation_scale_layout_for(a)
     }
 
+    fn nvfp4_input_calibration(&self) -> Option<crate::Nvfp4InputCalibration<'_>> {
+        self.weight.nvfp4_input_calibration()
+    }
+
+    fn activation_quantization_global_scale(&self) -> Option<f32> {
+        self.weight.activation_quantization_global_scale()
+    }
+
     fn quantize_activation(&self, a: &Tensor) -> Result<QuantizedActivation> {
         self.weight.quantize_activation(a)
+    }
+
+    fn try_quantize_glu(
+        &self,
+        gate: &Tensor,
+        value: &Tensor,
+        activation: crate::GluActivationType,
+    ) -> Result<Option<QuantizedActivation>> {
+        self.weight.try_quantize_glu(gate, value, activation)
     }
 
     fn forward_quantized(&self, a: &QuantizedActivation) -> Result<Tensor> {
@@ -1893,7 +1991,7 @@ impl ReplicatedLayer {
                 }
                 QuantizedConfig::Fp8 { .. }
                 | QuantizedConfig::CompressedTensors { .. }
-                | QuantizedConfig::ModelOpt { .. } => crate::fp8_config::fp8_checkpoint_linear_b(
+                | QuantizedConfig::ModelOpt { .. } => crate::fp8_config::checkpoint_linear_b(
                     in_dim,
                     out_dim,
                     quant_conf,
@@ -2109,7 +2207,7 @@ impl ReplicatedLayer {
                 }
                 QuantizedConfig::Fp8 { .. }
                 | QuantizedConfig::CompressedTensors { .. }
-                | QuantizedConfig::ModelOpt { .. } => crate::fp8_config::fp8_checkpoint_linear_b(
+                | QuantizedConfig::ModelOpt { .. } => crate::fp8_config::checkpoint_linear_b(
                     in_dim,
                     out_dim,
                     quant_conf,
@@ -2234,8 +2332,25 @@ impl QuantMethod for ReplicatedLayer {
         self.0.preferred_activation_scale_layout_for(a)
     }
 
+    fn nvfp4_input_calibration(&self) -> Option<crate::Nvfp4InputCalibration<'_>> {
+        self.0.nvfp4_input_calibration()
+    }
+
+    fn activation_quantization_global_scale(&self) -> Option<f32> {
+        self.0.activation_quantization_global_scale()
+    }
+
     fn quantize_activation(&self, a: &Tensor) -> Result<QuantizedActivation> {
         self.0.quantize_activation(a)
+    }
+
+    fn try_quantize_glu(
+        &self,
+        gate: &Tensor,
+        value: &Tensor,
+        activation: crate::GluActivationType,
+    ) -> Result<Option<QuantizedActivation>> {
+        self.0.try_quantize_glu(gate, value, activation)
     }
 
     fn forward_quantized(&self, a: &QuantizedActivation) -> Result<Tensor> {
@@ -2329,6 +2444,116 @@ impl QuantizedSerde for ReplicatedLayer {
     }
 }
 
+struct CheckpointExpertLoad<'a> {
+    config: &'a QuantizedConfig,
+    experts_vb: &'a ShardedVarBuilder,
+    num_experts: usize,
+}
+
+impl CheckpointExpertLoad<'_> {
+    fn projection(
+        &self,
+        in_dim: usize,
+        out_dim: usize,
+        name: &str,
+    ) -> Result<Arc<dyn QuantMethod>> {
+        use crate::fp8_config::{CheckpointLinearSpec, Fp8ActivationMode, Fp8WeightScaleLayout};
+
+        let builders = (0..self.num_experts)
+            .map(|expert| self.experts_vb.pp(expert).pp(name))
+            .collect::<Vec<_>>();
+        let specs = builders
+            .iter()
+            .map(|vb| self.config.resolve_checkpoint(&vb.prefix()))
+            .collect::<Result<Vec<_>>>()?;
+        let Some(first) = specs.first() else {
+            candle_core::bail!("Checkpoint expert loading requires at least one expert");
+        };
+        if specs.iter().any(|spec| spec != first) {
+            candle_core::bail!(
+                "Checkpoint experts at `{}.*.{name}` require the same quantization format and activation scheme within each projection",
+                self.experts_vb.prefix()
+            );
+        }
+
+        match first {
+            Some(CheckpointLinearSpec::Nvfp4(spec)) => {
+                let layers = builders
+                    .into_iter()
+                    .map(|vb| {
+                        crate::nvfp4::Nvfp4Layer::load(
+                            in_dim,
+                            out_dim,
+                            *spec,
+                            false,
+                            Shard::default(),
+                            vb,
+                        )
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                Ok(Arc::new(crate::nvfp4::Nvfp4Layer::stack(layers)?))
+            }
+            Some(CheckpointLinearSpec::Fp8(spec)) => {
+                let Fp8WeightScaleLayout::Block(block_size) = spec.weight_scale else {
+                    candle_core::bail!(
+                        "Checkpoint FP8 experts at `{}.*.{name}` require blockwise weight scales",
+                        self.experts_vb.prefix()
+                    );
+                };
+                let activation_scheme = match spec.activation {
+                    Fp8ActivationMode::None => None,
+                    Fp8ActivationMode::DynamicBlock(_) => Some(crate::Fp8ActivationScheme::Dynamic),
+                    _ => candle_core::bail!(
+                        "Checkpoint FP8 experts at `{}.*.{name}` do not support {:?} activation quantization",
+                        self.experts_vb.prefix(),
+                        spec.activation
+                    ),
+                };
+                let mut weights = Vec::with_capacity(self.num_experts);
+                let mut scales = Vec::with_capacity(self.num_experts);
+                for vb in builders {
+                    let scale_name = spec.scale_names.weight_name(&vb)?;
+                    let scale_shape = vb
+                        .tensor_shape(scale_name)
+                        .map(<[usize]>::to_vec)
+                        .unwrap_or(spec.weight_scale.logical_shape([out_dim, in_dim])?);
+                    weights.push(vb.get_with_hints_dtype(
+                        (out_dim, in_dim),
+                        "weight",
+                        Shard::default(),
+                        DType::F8E4M3,
+                    )?);
+                    scales.push(spec.weight_scale.normalize(
+                        vb.get_with_hints_dtype(
+                            scale_shape,
+                            scale_name,
+                            Shard::default(),
+                            DType::F32,
+                        )?,
+                        [out_dim, in_dim],
+                    )?);
+                }
+                blockwise_fp8_moe(
+                    Tensor::stack(&weights, 0)?,
+                    Tensor::stack(&scales, 0)?,
+                    block_size.to_vec(),
+                    activation_scheme,
+                    self.experts_vb.dtype(),
+                )
+            }
+            None => {
+                let weights = builders
+                    .iter()
+                    .map(|vb| vb.get((out_dim, in_dim), "weight"))
+                    .collect::<Result<Vec<_>>>()?;
+                Ok(Arc::new(UnquantLinear::new(
+                    QuantMethodConfig::Unquantized(Linear::new(Tensor::stack(&weights, 0)?, None)),
+                )?))
+            }
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct PreQuantizedExperts {
     pub fused_gate_proj: Arc<dyn QuantMethod>,
@@ -2384,6 +2609,20 @@ impl PreQuantizedExperts {
             )?;
 
             (fused_gate_proj, fused_up_proj, fused_down_proj)
+        } else if matches!(
+            quantization_config,
+            Some(QuantizedConfig::ModelOpt { .. } | QuantizedConfig::CompressedTensors { .. })
+        ) {
+            let loader = CheckpointExpertLoad {
+                config: quantization_config.as_ref().unwrap(),
+                experts_vb: &experts_vb,
+                num_experts,
+            };
+            (
+                loader.projection(hidden_size, moe_intermediate_size, "gate_proj")?,
+                loader.projection(hidden_size, moe_intermediate_size, "up_proj")?,
+                loader.projection(moe_intermediate_size, hidden_size, "down_proj")?,
+            )
         } else if is_stacked_format
             && matches!(&quantization_config, Some(QuantizedConfig::Fp8 { .. }))
         {
@@ -2669,7 +2908,7 @@ impl PreQuantizedExperts {
             (fused_gate_proj, fused_up_proj, fused_down_proj)
         } else {
             candle_core::bail!(
-                "PreQuantizedExperts loads pre-quantized expert formats only (AFQ, blockwise FP8, MXFP4)."
+                "PreQuantizedExperts loads pre-quantized expert formats only (AFQ, blockwise FP8, NVFP4, MXFP4)."
             );
         };
 
@@ -2780,9 +3019,263 @@ mod tests {
         UnquantLinear,
     };
 
+    #[test]
+    fn modelopt_nvfp4_experts_preserve_scales_and_excluded_projections() -> candle_core::Result<()>
+    {
+        const HIDDEN: usize = 16;
+        const INTERMEDIATE: usize = 16;
+        const EXPERTS: usize = 2;
+
+        let device = Device::Cpu;
+        let config = serde_json::from_value::<QuantizedConfig>(serde_json::json!({
+            "quant_method": "modelopt",
+            "quant_algo": "W4A16_NVFP4",
+            "group_size": 16,
+            "exclude_modules": [
+                "model.layers.0.mlp.experts.*.up_proj",
+                "model.layers.0.mlp.shared_experts"
+            ]
+        }))
+        .map_err(candle_core::Error::msg)?;
+        let mut tensors = HashMap::new();
+        for (expert, global_scale) in [2f32, 4.].into_iter().enumerate() {
+            for projection in ["gate_proj", "down_proj"] {
+                let prefix = format!("model.layers.0.mlp.experts.{expert}.{projection}");
+                tensors.insert(
+                    format!("{prefix}.weight"),
+                    Tensor::full(0x22u8, (INTERMEDIATE, HIDDEN / 2), &device)?,
+                );
+                tensors.insert(
+                    format!("{prefix}.weight_scale"),
+                    Tensor::ones((INTERMEDIATE, 1), DType::F8E4M3, &device)?,
+                );
+                tensors.insert(
+                    format!("{prefix}.weight_scale_2"),
+                    Tensor::new(global_scale, &device)?,
+                );
+            }
+            tensors.insert(
+                format!("model.layers.0.mlp.experts.{expert}.up_proj.weight"),
+                Tensor::full(global_scale + 1., (INTERMEDIATE, HIDDEN), &device)?,
+            );
+        }
+        tensors.insert(
+            "model.layers.0.mlp.shared_experts.gate_proj.weight".to_string(),
+            Tensor::full(7f32, (INTERMEDIATE, HIDDEN), &device)?,
+        );
+        let vb = ShardedSafeTensors::wrap(tensors, DType::F32, device).pp("model.layers.0.mlp");
+        let shared = crate::fp8_config::checkpoint_linear_b(
+            HIDDEN,
+            INTERMEDIATE,
+            &config,
+            false,
+            Shard::default(),
+            vb.pp("shared_experts.gate_proj"),
+        )?;
+        let experts =
+            super::PreQuantizedExperts::new(HIDDEN, INTERMEDIATE, EXPERTS, &Some(config), vb)?;
+        for projection in [&experts.fused_gate_proj, &experts.fused_down_proj] {
+            let values = projection
+                .dequantize_w()?
+                .to_dtype(DType::F32)?
+                .to_vec3::<f32>()?;
+            for (values, expected) in values.iter().zip([2f32, 4.]) {
+                assert!(values.iter().flatten().all(|value| *value == expected));
+            }
+        }
+        let up = experts.fused_up_proj.dequantize_w()?.to_vec3::<f32>()?;
+        for (values, expected) in up.iter().zip([3f32, 5.]) {
+            assert!(values.iter().flatten().all(|value| *value == expected));
+        }
+        assert!(shared
+            .dequantize_w()?
+            .to_vec2::<f32>()?
+            .iter()
+            .flatten()
+            .all(|value| *value == 7.));
+        Ok(())
+    }
+
+    #[test]
+    fn compressed_tensors_nvfp4_experts_use_reciprocal_global_scales() -> candle_core::Result<()> {
+        const HIDDEN: usize = 16;
+        const EXPERTS: usize = 2;
+
+        let device = Device::Cpu;
+        let config = serde_json::from_value::<QuantizedConfig>(serde_json::json!({
+            "quant_method": "compressed-tensors",
+            "format": "nvfp4-pack-quantized",
+            "config_groups": {
+                "group_0": {
+                    "targets": ["Linear"],
+                    "weights": {
+                        "num_bits": 4,
+                        "type": "float",
+                        "strategy": "tensor_group",
+                        "group_size": 16,
+                        "dynamic": false,
+                        "symmetric": true
+                    },
+                    "input_activations": null
+                }
+            }
+        }))
+        .map_err(candle_core::Error::msg)?;
+        let mut tensors = HashMap::new();
+        for (expert, global_scale) in [2f32, 4.].into_iter().enumerate() {
+            for projection in ["gate_proj", "up_proj", "down_proj"] {
+                let prefix = format!("model.layers.0.mlp.experts.{expert}.{projection}");
+                tensors.insert(
+                    format!("{prefix}.weight_packed"),
+                    Tensor::full(0x22u8, (HIDDEN, HIDDEN / 2), &device)?,
+                );
+                tensors.insert(
+                    format!("{prefix}.weight_scale"),
+                    Tensor::ones((HIDDEN, 1), DType::F8E4M3, &device)?,
+                );
+                tensors.insert(
+                    format!("{prefix}.weight_global_scale"),
+                    Tensor::new(&[global_scale], &device)?,
+                );
+            }
+        }
+        let vb = ShardedSafeTensors::wrap(tensors, DType::F32, device).pp("model.layers.0.mlp");
+        let experts = super::PreQuantizedExperts::new(HIDDEN, HIDDEN, EXPERTS, &Some(config), vb)?;
+        for projection in [
+            &experts.fused_gate_proj,
+            &experts.fused_up_proj,
+            &experts.fused_down_proj,
+        ] {
+            let values = projection
+                .dequantize_w()?
+                .to_dtype(DType::F32)?
+                .to_vec3::<f32>()?;
+            for (values, expected) in values.iter().zip([0.5f32, 0.25]) {
+                assert!(values.iter().flatten().all(|value| *value == expected));
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn nvfp4_tensor_parallel_shards_preserve_fused_global_scale_groups() -> candle_core::Result<()>
+    {
+        const INPUT: usize = 32;
+        const OUTPUT: usize = 4;
+        const WORLD_SIZE: usize = 2;
+
+        let device = Device::Cpu;
+        let config = Some(
+            serde_json::from_value::<QuantizedConfig>(serde_json::json!({
+                "quant_method": "compressed-tensors",
+                "format": "nvfp4-pack-quantized",
+                "config_groups": {
+                    "group_0": {
+                        "targets": ["Linear"],
+                        "weights": {
+                            "num_bits": 4,
+                            "type": "float",
+                            "strategy": "tensor_group",
+                            "group_size": 16,
+                            "dynamic": false,
+                            "symmetric": true
+                        },
+                        "input_activations": null
+                    }
+                }
+            }))
+            .map_err(candle_core::Error::msg)?,
+        );
+        let tensors = HashMap::from([
+            (
+                "gate_up_proj.weight_packed".to_string(),
+                Tensor::full(0x22u8, (OUTPUT, INPUT / 2), &device)?,
+            ),
+            (
+                "gate_up_proj.weight_scale".to_string(),
+                Tensor::new(&[[1f32, 2.], [3., 4.], [5., 6.], [7., 8.]], &device)?
+                    .to_dtype(DType::F8E4M3)?,
+            ),
+            (
+                "gate_up_proj.weight_global_scale".to_string(),
+                Tensor::new(&[2f32, 4.], &device)?,
+            ),
+        ]);
+        let vb = ShardedSafeTensors::wrap(tensors, DType::F32, device.clone()).pp("gate_up_proj");
+        let comm = Arc::new(Comm::from_device(Id::new(), &device, 1, WORLD_SIZE)?);
+        let column = ColumnParallelLayer::new_with_shard(
+            INPUT,
+            OUTPUT,
+            &config,
+            false,
+            &comm,
+            Shard::Simple {
+                dim: 0,
+                rank: 1,
+                world_size: WORLD_SIZE,
+            },
+            vb.clone(),
+        )?;
+        let column = column
+            .dequantize_w()?
+            .to_dtype(DType::F32)?
+            .to_vec2::<f32>()?;
+        assert_eq!(column.len(), OUTPUT / WORLD_SIZE);
+        for (values, expected) in column.iter().zip([[1.25f32, 1.5], [1.75, 2.]]) {
+            for (block, expected) in values
+                .as_chunks::<{ INPUT / WORLD_SIZE }>()
+                .0
+                .iter()
+                .zip(expected)
+            {
+                assert!(block.iter().all(|value| *value == expected));
+            }
+        }
+        // CPU communicators always report one rank, so pass the input shard directly.
+        let row = crate::fp8_config::checkpoint_linear_b(
+            INPUT,
+            OUTPUT,
+            config.as_ref().unwrap(),
+            false,
+            Shard::Simple {
+                dim: 1,
+                rank: 1,
+                world_size: WORLD_SIZE,
+            },
+            vb,
+        )?;
+        let row = row.dequantize_w()?.to_dtype(DType::F32)?.to_vec2::<f32>()?;
+        assert_eq!(row.len(), OUTPUT);
+        for (values, expected) in row.iter().zip([1f32, 2., 1.5, 2.]) {
+            assert_eq!(values.len(), INPUT / WORLD_SIZE);
+            assert!(values.iter().all(|value| *value == expected));
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn checkpoint_experts_reject_mixed_precision_within_projection() -> candle_core::Result<()> {
+        let config = serde_json::from_value::<QuantizedConfig>(serde_json::json!({
+            "quant_method": "modelopt",
+            "quant_algo": "W4A16_NVFP4",
+            "group_size": 16,
+            "exclude_modules": ["model.layers.0.mlp.experts.1.gate_proj"]
+        }))
+        .map_err(candle_core::Error::msg)?;
+        let vb = ShardedSafeTensors::wrap(HashMap::new(), DType::F32, Device::Cpu)
+            .pp("model.layers.0.mlp");
+        let error = super::PreQuantizedExperts::new(16, 16, 2, &Some(config), vb)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("require the same quantization format and activation scheme"));
+        Ok(())
+    }
+
     #[derive(Debug)]
     struct SharedActivationWeight {
         output: Tensor,
+        active_lora: bool,
+        tracking_stats: bool,
     }
 
     impl QuantizedSerde for SharedActivationWeight {
@@ -2822,8 +3315,34 @@ mod tests {
             )
         }
 
+        fn try_quantize_glu(
+            &self,
+            gate: &Tensor,
+            value: &Tensor,
+            activation: crate::GluActivationType,
+        ) -> candle_core::Result<Option<QuantizedActivation>> {
+            assert!(
+                !self.active_lora && !self.tracking_stats,
+                "guarded projection reached fused quantization"
+            );
+            if gate.shape() != value.shape()
+                || !matches!(activation, crate::GluActivationType::Relu)
+            {
+                return Ok(None);
+            }
+            self.quantize_activation(gate).map(Some)
+        }
+
         fn forward_quantized(&self, _a: &QuantizedActivation) -> candle_core::Result<Tensor> {
             Ok(self.output.clone())
+        }
+
+        fn is_dynamic_lora_active(&self) -> bool {
+            self.active_lora
+        }
+
+        fn stats_snapshot(&self) -> Option<(usize, usize)> {
+            self.tracking_stats.then_some((1, 1))
         }
 
         fn quantized_act_type(&self) -> Option<DType> {
@@ -2989,7 +3508,11 @@ mod tests {
     fn distributed_wrappers_preserve_shared_activation_forwarding() -> candle_core::Result<()> {
         let device = Device::Cpu;
         let output = Tensor::from_vec(vec![1f32, 2.], (1, 2), &device)?;
-        let weight = Arc::new(SharedActivationWeight { output }) as Arc<dyn QuantMethod>;
+        let weight = Arc::new(SharedActivationWeight {
+            output,
+            active_lora: false,
+            tracking_stats: false,
+        }) as Arc<dyn QuantMethod>;
         let bias = Tensor::from_vec(vec![3f32, 4.], (2,), &device)?;
         let comm = Arc::new(Comm::from_device(Id::new(), &device, 0, 1)?);
         let activation_input = Tensor::zeros((1, 4), DType::BF16, &device)?;
@@ -3016,6 +3539,28 @@ mod tests {
             );
         }
 
+        for layer in [&row as &dyn QuantMethod, &column, &replicated] {
+            let activation = layer
+                .try_quantize_glu(
+                    &activation_input,
+                    &activation_input,
+                    crate::GluActivationType::Relu,
+                )?
+                .expect("wrapper must preserve optional quantization capability");
+            assert_eq!(activation.source_shape(), activation_input.dims());
+            assert_eq!(
+                layer.forward_quantized(&activation)?.to_vec2::<f32>()?,
+                layer.forward(&activation_input)?.to_vec2::<f32>()?
+            );
+            assert!(layer
+                .try_quantize_glu(
+                    &activation_input,
+                    &activation_input,
+                    crate::GluActivationType::Gelu,
+                )?
+                .is_none());
+        }
+
         let activation = row.quantize_activation(&activation_input)?;
         assert_eq!(
             row.forward_quantized(&activation)?.to_vec2::<f32>()?,
@@ -3031,6 +3576,30 @@ mod tests {
                 .to_vec2::<f32>()?,
             vec![vec![1., 2.]]
         );
+        Ok(())
+    }
+
+    #[cfg(feature = "cuda")]
+    #[test]
+    fn fused_glu_wrapper_guards_preserve_lora_and_stats_inputs() -> candle_core::Result<()> {
+        let device = Device::new_cuda(0)?;
+        let input = Tensor::zeros((2, 4), DType::BF16, &device)?;
+        let output = Tensor::zeros((2, 2), DType::BF16, &device)?;
+        for (active_lora, tracking_stats) in [(true, false), (false, true)] {
+            let weight = Arc::new(SharedActivationWeight {
+                output: output.clone(),
+                active_lora,
+                tracking_stats,
+            }) as Arc<dyn QuantMethod>;
+            let column = ColumnParallelLayer { weight, bias: None };
+            assert!(crate::try_forward_fused_quantized_glu(
+                &input,
+                &input,
+                &column,
+                crate::GluActivationType::Relu,
+            )?
+            .is_none());
+        }
         Ok(())
     }
 

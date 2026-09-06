@@ -365,6 +365,7 @@ extern "C" {
         k_eps: f32,
         is_neox: i32,
         dtype: i32,
+        output_token_major: i32,
         stream: i64,
     );
 

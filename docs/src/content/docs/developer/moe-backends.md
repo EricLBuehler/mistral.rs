@@ -3,11 +3,11 @@ title: cuTile setup
 description: Install the optional cuTile runtime tool for supported NVIDIA GPUs.
 ---
 
-Supported CUDA builds can use cuTile acceleration for MoE and routed LoRA workloads. The installer
+Supported CUDA builds can use cuTile acceleration for MoE, quantized linear, and routed LoRA workloads. The installer
 selects a cuTile-capable binary automatically when one matches the GPU and driver. NVIDIA's
-`tileiras` tool is installed separately. mistral.rs checks it automatically and continues without
-cuTile when the requirements are not met. Source builds use the workspace-pinned cuTile Rust 0.3.0
-release.
+`tileiras` tool is installed separately. mistral.rs checks it automatically and uses other backends
+for workloads with a supported fallback. NVFP4 CUDA inference requires cuTile and reports an error
+when its requirements are not met. Source builds use the workspace-pinned cuTile Rust 0.3.0 release.
 
 ## Install tileiras
 
@@ -17,7 +17,8 @@ For Ampere, Ada, and Blackwell, install NVIDIA's cuTile package:
 python3 -m pip install --upgrade "cuda-tile[tileiras]"
 ```
 
-Hopper requires the CUDA 13.3 or newer toolkit components:
+cuTile on Hopper, and [NVFP4 inference](/reference/quantization-types/#nvfp4) on Blackwell, require
+the CUDA 13.3 or newer toolkit components:
 
 ```bash
 python3 -m pip install --upgrade "cuda-toolkit[tileiras,nvvm,nvcc]>=13.3"
@@ -44,7 +45,8 @@ Run `mistralrs doctor` to check cuTile availability for every detected GPU. See 
 - Ampere and Ada require CUDA 13.2 or newer.
 - Hopper requires CUDA 13.3 or newer.
 - Blackwell requires CUDA 13.2 or newer for source builds. cuTile 0.3 can emit CUDA 13.1 Tile IR,
-  but its published CUDA bindings require CUDA 13.2 or newer headers.
+  but its published CUDA bindings require CUDA 13.2 or newer headers. NVFP4 kernels require CUDA
+  13.3 or newer, including `tileiras`.
 - The `tileiras` installation must support the active GPU.
 - The mistral.rs binary must include the `cutile` feature.
 - Source builds require `libclang` because cuTile generates CUDA bindings during the build.

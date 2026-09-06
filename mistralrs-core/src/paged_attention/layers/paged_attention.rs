@@ -2868,3 +2868,414 @@ mod tests {
         assert_eq!(mask[3], vec![0.0; 6]);
     }
 }
+
+#[cfg(all(test, feature = "cuda", feature = "flash-attn", target_family = "unix"))]
+mod mixed_cached_prefix_tests {
+    use super::*;
+    use std::ops::Range;
+
+    const QUERY_LENS: [usize; 3] = [1, 1, 5];
+    const KV_CASES: [[usize; 3]; 2] = [[11, 9, 5], [65, 39, 37]];
+    const GROUP_RATIOS: [usize; 5] = [1, 2, 3, 5, 8];
+    const KV_HEADS: usize = 2;
+    const HEAD_DIM: usize = 128;
+    const BLOCK_SIZE: usize = 32;
+    const POOL_BLOCKS: usize = 13;
+    const PHYSICAL_BLOCKS: [usize; 7] = [9, 2, 11, 5, 1, 8, 3];
+    const QUERY_GUARD_ROWS: usize = 1;
+    const QUERY_SENTINEL: f32 = 8.0;
+    const KEY_SENTINEL: f32 = 16.0;
+    const VALUE_SENTINEL: f32 = -32.0;
+    const BF16_ABS_TOLERANCE: f64 = 0.004;
+    const F16_ABS_TOLERANCE: f64 = 0.0006;
+
+    struct Fixture {
+        device: Device,
+        dtype: DType,
+        groups: usize,
+        q_heads: usize,
+        kv_lens: [usize; 3],
+        query_storage: Tensor,
+        query_storage_expected: Vec<f32>,
+        query_data: Vec<f32>,
+        keys: Vec<Vec<f32>>,
+        values: Vec<Vec<f32>>,
+        new_keys: Tensor,
+        new_values: Tensor,
+        block_tables: Tensor,
+        slots: Tensor,
+        initial_keys: Vec<f32>,
+        initial_values: Vec<f32>,
+        expected_keys: Vec<f32>,
+        expected_values: Vec<f32>,
+    }
+
+    fn host_f32(tensor: &Tensor) -> Result<Vec<f32>> {
+        tensor.to_dtype(DType::F32)?.flatten_all()?.to_vec1::<f32>()
+    }
+
+    impl Fixture {
+        fn new(device: &Device, dtype: DType, groups: usize, kv_lens: [usize; 3]) -> Result<Self> {
+            let q_heads = KV_HEADS * groups;
+            let query_tokens = QUERY_LENS.iter().sum::<usize>();
+            let query_data = (0..query_tokens * q_heads * HEAD_DIM)
+                .map(|i| {
+                    let token = i / (q_heads * HEAD_DIM);
+                    let head = (i / HEAD_DIM) % q_heads;
+                    let dim = i % HEAD_DIM;
+                    f32::from(u8::try_from((token * 31 + head * 17 + dim * 13) % 61).unwrap())
+                        / 32.0
+                        - 30.0 / 32.0
+                })
+                .collect::<Vec<_>>();
+            let query_row = q_heads * HEAD_DIM;
+            let mut query_storage_expected =
+                vec![QUERY_SENTINEL; (query_tokens + 2 * QUERY_GUARD_ROWS) * query_row];
+            let query_start = QUERY_GUARD_ROWS * query_row;
+            query_storage_expected[query_start..query_start + query_data.len()]
+                .copy_from_slice(&query_data);
+            let query_storage = Tensor::from_vec(
+                query_storage_expected.clone(),
+                (query_tokens + 2 * QUERY_GUARD_ROWS, q_heads, HEAD_DIM),
+                device,
+            )?
+            .to_dtype(dtype)?;
+            let cache_elements = POOL_BLOCKS * KV_HEADS * BLOCK_SIZE * HEAD_DIM;
+            let mut initial_keys = vec![KEY_SENTINEL; cache_elements];
+            let mut initial_values = vec![VALUE_SENTINEL; cache_elements];
+            let mut expected_keys = initial_keys.clone();
+            let mut expected_values = initial_values.clone();
+            let mut keys = Vec::new();
+            let mut values = Vec::new();
+            let mut new_keys = Vec::new();
+            let mut new_values = Vec::new();
+            let mut slots = Vec::new();
+            let table_width = kv_lens.iter().copied().max().unwrap().div_ceil(BLOCK_SIZE);
+            let mut table = vec![0u32; QUERY_LENS.len() * table_width];
+            let mut next_block = 0;
+            for (sequence, (&kv_len, &query_len)) in kv_lens.iter().zip(&QUERY_LENS).enumerate() {
+                let cached = kv_len - query_len;
+                let page_count = kv_len.div_ceil(BLOCK_SIZE);
+                let pages = &PHYSICAL_BLOCKS[next_block..next_block + page_count];
+                next_block += page_count;
+                for (logical, &physical) in pages.iter().enumerate() {
+                    table[sequence * table_width + logical] = u32::try_from(physical).unwrap();
+                }
+                let mut sequence_keys = Vec::with_capacity(kv_len * KV_HEADS * HEAD_DIM);
+                let mut sequence_values = Vec::with_capacity(kv_len * KV_HEADS * HEAD_DIM);
+                for token in 0..kv_len {
+                    let physical = pages[token / BLOCK_SIZE];
+                    if token >= cached {
+                        slots.push((physical * BLOCK_SIZE + token % BLOCK_SIZE) as i64);
+                    }
+                    for head in 0..KV_HEADS {
+                        for dim in 0..HEAD_DIM {
+                            let key = f32::from(
+                                u8::try_from(
+                                    (sequence * 19 + token * 7 + head * 11 + dim * 3) % 59,
+                                )
+                                .unwrap(),
+                            ) / 64.0
+                                - 29.0 / 64.0;
+                            let value = f32::from(
+                                u8::try_from(
+                                    (sequence * 29 + token * 13 + head * 7 + dim * 5) % 67,
+                                )
+                                .unwrap(),
+                            ) / 64.0
+                                - 33.0 / 64.0;
+                            let cache_index = ((physical * KV_HEADS + head) * BLOCK_SIZE
+                                + token % BLOCK_SIZE)
+                                * HEAD_DIM
+                                + dim;
+                            expected_keys[cache_index] = key;
+                            expected_values[cache_index] = value;
+                            if token < cached {
+                                initial_keys[cache_index] = key;
+                                initial_values[cache_index] = value;
+                            } else {
+                                new_keys.push(key);
+                                new_values.push(value);
+                            }
+                            sequence_keys.push(key);
+                            sequence_values.push(value);
+                        }
+                    }
+                }
+                keys.push(sequence_keys);
+                values.push(sequence_values);
+            }
+            Ok(Self {
+                device: device.clone(),
+                dtype,
+                groups,
+                q_heads,
+                kv_lens,
+                query_storage,
+                query_storage_expected,
+                query_data,
+                keys,
+                values,
+                new_keys: Tensor::from_vec(new_keys, (query_tokens, KV_HEADS, HEAD_DIM), device)?
+                    .to_dtype(dtype)?,
+                new_values: Tensor::from_vec(
+                    new_values,
+                    (query_tokens, KV_HEADS, HEAD_DIM),
+                    device,
+                )?
+                .to_dtype(dtype)?,
+                block_tables: Tensor::from_vec(table, (QUERY_LENS.len(), table_width), device)?,
+                slots: Tensor::from_vec(slots, (query_tokens,), device)?,
+                initial_keys,
+                initial_values,
+                expected_keys,
+                expected_values,
+            })
+        }
+
+        fn cache(&self) -> Result<(Tensor, Tensor)> {
+            let shape = (POOL_BLOCKS, KV_HEADS, BLOCK_SIZE, HEAD_DIM);
+            Ok((
+                Tensor::from_vec(self.initial_keys.clone(), shape, &self.device)?
+                    .to_dtype(self.dtype)?,
+                Tensor::from_vec(self.initial_values.clone(), shape, &self.device)?
+                    .to_dtype(self.dtype)?,
+            ))
+        }
+
+        fn forward(
+            &self,
+            attention: &PagedAttention,
+            cache: &(Tensor, Tensor),
+            sequences: Range<usize>,
+        ) -> Result<Tensor> {
+            let query_lens = &QUERY_LENS[sequences.clone()];
+            let kv_lens = &self.kv_lens[sequences.clone()];
+            let query_offset = QUERY_LENS[..sequences.start].iter().sum::<usize>();
+            let tokens = query_lens.iter().sum::<usize>();
+            let query = self
+                .query_storage
+                .narrow(0, QUERY_GUARD_ROWS + query_offset, tokens)?
+                .unsqueeze(0)?
+                .transpose(1, 2)?;
+            let key = self
+                .new_keys
+                .narrow(0, query_offset, tokens)?
+                .unsqueeze(0)?
+                .transpose(1, 2)?;
+            let value = self
+                .new_values
+                .narrow(0, query_offset, tokens)?
+                .unsqueeze(0)?
+                .transpose(1, 2)?;
+            let cu_q = cumulative_seqlens_from_lengths(query_lens, &self.device)?;
+            let cu_kv = cumulative_seqlens_from_lengths(kv_lens, &self.device)?;
+            let location = self.device.location();
+            let mut metadata = PagedAttentionInputMetadata::dummy(&self.device)?;
+            metadata.block_tables = Some(HashMap::from([(
+                location,
+                self.block_tables
+                    .narrow(0, sequences.start, sequences.len())?,
+            )]));
+            metadata.context_lens = Some(HashMap::from([(
+                location,
+                Tensor::from_vec(
+                    kv_lens
+                        .iter()
+                        .map(|&n| u32::try_from(n).unwrap())
+                        .collect::<Vec<_>>(),
+                    (sequences.len(),),
+                    &self.device,
+                )?,
+            )]));
+            metadata.block_size = Some(BLOCK_SIZE);
+            metadata.paged_context_lens_cpu = Some(kv_lens.to_vec());
+            metadata.max_context_len = kv_lens.iter().copied().max();
+            metadata.slot_mappings =
+                HashMap::from([(location, self.slots.narrow(0, query_offset, tokens)?)]);
+            metadata.is_first_prompt_chunk = false;
+            metadata.num_cached_tokens = Some(
+                kv_lens
+                    .iter()
+                    .zip(query_lens)
+                    .map(|(&k, &q)| k - q)
+                    .collect(),
+            );
+            metadata.query_lens = Some(query_lens.to_vec());
+            metadata.cu_seqlens_q = Some(HashMap::from([(location, cu_q.clone())]));
+            metadata.cu_seqlens_kv = Some(HashMap::from([(location, cu_kv)]));
+            // A successful call must use direct paged attention, not a gathered fallback.
+            metadata.prefix_gather_workspace_limit = Some(0);
+            metadata.prefill_attention_heads = self.q_heads;
+            metadata.prefill_key_value_heads = KV_HEADS;
+            metadata.prefill_head_dim = HEAD_DIM;
+            let mut flash = FlashParams::empty(true);
+            flash.packed = true;
+            flash.max_q = u32::try_from(query_lens.iter().copied().max().unwrap()).unwrap();
+            flash.cumulative_seqlens_q = HashMap::from([(location, cu_q.clone())]);
+            flash.logical_k = FlashKMeta {
+                max: flash.max_q,
+                cumulative_seqlens: HashMap::from([(location, cu_q)]),
+            };
+            let params = SdpaParams {
+                n_kv_groups: self.groups,
+                softmax_scale: 1.0 / f32::from(u16::try_from(HEAD_DIM).unwrap()).sqrt(),
+                softcap: None,
+                sliding_window: None,
+                sinks: None,
+            };
+            assert!(query_layout_is_dense(query_lens, 1, tokens));
+            assert_eq!(
+                AttentionBackendKind::from_cache(&cache.0, &cache.1),
+                AttentionBackendKind::FlashInfer
+            );
+            let output = attention.forward(
+                &query,
+                &key,
+                &value,
+                &AttentionMask::None,
+                Some(cache.0.clone()),
+                Some(cache.1.clone()),
+                &metadata,
+                &params,
+                Some(&flash),
+            )?;
+            assert_eq!(output.dims(), &[1, tokens, self.q_heads, HEAD_DIM]);
+            output.squeeze(0)
+        }
+
+        fn reference(&self) -> Vec<f64> {
+            let scale = f64::from(1.0 / f32::from(u16::try_from(HEAD_DIM).unwrap()).sqrt());
+            let mut result = Vec::with_capacity(self.query_data.len());
+            let mut query_offset = 0;
+            for (sequence, (&kv_len, &query_len)) in
+                self.kv_lens.iter().zip(&QUERY_LENS).enumerate()
+            {
+                for local_query in 0..query_len {
+                    let visible = kv_len - query_len + local_query + 1;
+                    for head in 0..self.q_heads {
+                        let kv_head = head / self.groups;
+                        let query_start =
+                            ((query_offset + local_query) * self.q_heads + head) * HEAD_DIM;
+                        let mut scores = Vec::with_capacity(visible);
+                        for token in 0..visible {
+                            let key_start = (token * KV_HEADS + kv_head) * HEAD_DIM;
+                            let dot = (0..HEAD_DIM)
+                                .map(|dim| {
+                                    f64::from(self.query_data[query_start + dim])
+                                        * f64::from(self.keys[sequence][key_start + dim])
+                                })
+                                .sum::<f64>();
+                            scores.push(dot * scale);
+                        }
+                        let maximum = scores.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+                        let probabilities = scores
+                            .iter()
+                            .map(|&score| (score - maximum).exp())
+                            .collect::<Vec<_>>();
+                        let denominator = probabilities.iter().sum::<f64>();
+                        for dim in 0..HEAD_DIM {
+                            let weighted = probabilities
+                                .iter()
+                                .enumerate()
+                                .map(|(token, probability)| {
+                                    probability
+                                        * f64::from(
+                                            self.values[sequence]
+                                                [(token * KV_HEADS + kv_head) * HEAD_DIM + dim],
+                                        )
+                                })
+                                .sum::<f64>();
+                            result.push(weighted / denominator);
+                        }
+                    }
+                }
+                query_offset += query_len;
+            }
+            result
+        }
+
+        fn validate_cache(&self, cache: &(Tensor, Tensor)) -> Result<()> {
+            for (name, actual, expected) in [
+                ("key", &cache.0, &self.expected_keys),
+                ("value", &cache.1, &self.expected_values),
+            ] {
+                let actual = host_f32(actual)?;
+                assert_eq!(actual.len(), expected.len());
+                for (index, (&actual, &expected)) in actual.iter().zip(expected.iter()).enumerate()
+                {
+                    assert_eq!(
+                        actual.to_bits(),
+                        expected.to_bits(),
+                        "{name} cache/sentinel index {index}"
+                    );
+                }
+            }
+            let query = host_f32(&self.query_storage)?;
+            for (index, (&actual, &expected)) in
+                query.iter().zip(&self.query_storage_expected).enumerate()
+            {
+                assert_eq!(
+                    actual.to_bits(),
+                    expected.to_bits(),
+                    "query input/sentinel index {index}"
+                );
+            }
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn cuda_mixed_cached_prefix_packed_paged_attention_matches_individual_and_reference(
+    ) -> Result<()> {
+        let device = Device::new_cuda(0)?;
+        let attention = PagedAttention::new(HEAD_DIM, &device, None)?;
+        for dtype in [DType::BF16, DType::F16] {
+            let tolerance = if dtype == DType::BF16 {
+                BF16_ABS_TOLERANCE
+            } else {
+                F16_ABS_TOLERANCE
+            };
+            for groups in GROUP_RATIOS {
+                for kv_lens in KV_CASES {
+                    let fixture = Fixture::new(&device, dtype, groups, kv_lens)?;
+                    let mixed_cache = fixture.cache()?;
+                    let mixed = host_f32(&fixture.forward(
+                        &attention,
+                        &mixed_cache,
+                        0..QUERY_LENS.len(),
+                    )?)?;
+                    fixture.validate_cache(&mixed_cache)?;
+                    let separate_cache = fixture.cache()?;
+                    let mut separate = Vec::with_capacity(mixed.len());
+                    for sequence in 0..QUERY_LENS.len() {
+                        separate.extend(host_f32(&fixture.forward(
+                            &attention,
+                            &separate_cache,
+                            sequence..sequence + 1,
+                        )?)?);
+                    }
+                    fixture.validate_cache(&separate_cache)?;
+                    let reference = fixture.reference();
+                    assert_eq!(mixed.len(), reference.len());
+                    assert_eq!(separate.len(), reference.len());
+                    for (index, ((&mixed, &separate), &reference)) in
+                        mixed.iter().zip(&separate).zip(&reference).enumerate()
+                    {
+                        assert!(
+                            mixed.is_finite() && separate.is_finite() && reference.is_finite(),
+                            "nonfinite {dtype:?} groups={groups} kv={kv_lens:?} index={index}"
+                        );
+                        assert!((f64::from(mixed) - reference).abs() <= tolerance,
+                                "mixed/reference {dtype:?} groups={groups} kv={kv_lens:?} index={index}: {mixed} vs {reference}");
+                        assert!((f64::from(separate) - reference).abs() <= tolerance,
+                                "separate/reference {dtype:?} groups={groups} kv={kv_lens:?} index={index}: {separate} vs {reference}");
+                        assert!((f64::from(mixed) - f64::from(separate)).abs() <= tolerance,
+                                "mixed/separate {dtype:?} groups={groups} kv={kv_lens:?} index={index}: {mixed} vs {separate}");
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+}

@@ -187,8 +187,21 @@ impl QuantMethod for PendingIsqLayer {
             .preferred_activation_scale_layout_for(a)
     }
 
+    fn activation_quantization_global_scale(&self) -> Option<f32> {
+        self.resolve().ok()?.activation_quantization_global_scale()
+    }
+
     fn quantize_activation(&self, a: &Tensor) -> Result<QuantizedActivation> {
         self.resolve()?.quantize_activation(a)
+    }
+
+    fn try_quantize_glu(
+        &self,
+        gate: &Tensor,
+        value: &Tensor,
+        activation: crate::GluActivationType,
+    ) -> Result<Option<QuantizedActivation>> {
+        self.resolve()?.try_quantize_glu(gate, value, activation)
     }
 
     fn forward_quantized(&self, a: &QuantizedActivation) -> Result<Tensor> {

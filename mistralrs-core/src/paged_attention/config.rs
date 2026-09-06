@@ -460,9 +460,9 @@ mod tests {
         let config = ModelConfigMetadata {
             max_seq_len: 32_768,
             num_layers: 24,
-            hidden_size: 896,
+            hidden_size: 1152,
             num_kv_heads: 2,
-            num_attn_heads: 14,
+            num_attn_heads: 18,
             sliding_window: None,
             k_head_dim: 64,
             v_head_dim: 64,

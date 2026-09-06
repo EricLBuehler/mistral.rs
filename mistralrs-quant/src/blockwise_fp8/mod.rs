@@ -2216,7 +2216,7 @@ mod tests {
             Tensor::zeros((8, 4), DType::F32, &Device::Cpu)?,
         );
         let vb = ShardedSafeTensors::wrap(tensors, DType::F32, Device::Cpu).pp("foo");
-        let layer = crate::fp8_config::fp8_checkpoint_linear_b(
+        let layer = crate::fp8_config::checkpoint_linear_b(
             4,
             8,
             &fp8_config(&["foo"]),
@@ -2243,7 +2243,7 @@ mod tests {
             .pp("model")
             .pp("language_model")
             .pp("embed_tokens");
-        let layer = crate::fp8_config::fp8_checkpoint_linear_b(
+        let layer = crate::fp8_config::checkpoint_linear_b(
             4,
             8,
             &fp8_config(&["model.embed_tokens"]),
@@ -2267,7 +2267,7 @@ mod tests {
             Tensor::zeros((8, 4), DType::F32, &Device::Cpu)?,
         );
         let vb = ShardedSafeTensors::wrap(tensors, DType::F32, Device::Cpu).pp("foo");
-        let err = crate::fp8_config::fp8_checkpoint_linear_b(
+        let err = crate::fp8_config::checkpoint_linear_b(
             4,
             8,
             &fp8_config(&["bar"]),

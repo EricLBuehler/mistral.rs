@@ -8,6 +8,9 @@ use candle_core::{DType, Result as CandleResult, Tensor};
 use candle_nn::Linear;
 
 const FP8_BITS: u64 = 8;
+const NVFP4_BITS: u64 = 4;
+pub const NVFP4_BLOCK_SIZE: usize = 16;
+const NVFP4_COMPRESSED_FORMAT: &str = "nvfp4-pack-quantized";
 const MODEL_OPT_BLOCK_SIZE: usize = 128;
 const FP8_WEIGHT_SCALE_ALIASES: &[&str] = &["weight_scale", "weight_scale_inv"];
 const MODEL_OPT_LEGACY_VISION_EXCLUSIONS: &[&str] =
@@ -15,7 +18,7 @@ const MODEL_OPT_LEGACY_VISION_EXCLUSIONS: &[&str] =
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize)]
 #[serde(rename_all = "snake_case")]
-pub enum Fp8CheckpointDialect {
+pub enum CheckpointDialect {
     Native,
     CompressedTensors,
     ModelOpt,
@@ -109,7 +112,7 @@ impl Fp8ScaleNames {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize)]
 pub struct Fp8LinearSpec {
-    pub dialect: Fp8CheckpointDialect,
+    pub dialect: CheckpointDialect,
     pub weight_scale: Fp8WeightScaleLayout,
     pub activation: Fp8ActivationMode,
     pub scale_names: Fp8ScaleNames,
@@ -117,22 +120,22 @@ pub struct Fp8LinearSpec {
 
 impl Fp8LinearSpec {
     fn new(
-        dialect: Fp8CheckpointDialect,
+        dialect: CheckpointDialect,
         weight_scale: Fp8WeightScaleLayout,
         activation: Fp8ActivationMode,
     ) -> Self {
         let weight: &'static [&'static str] = match (dialect, weight_scale) {
-            (Fp8CheckpointDialect::Native, Fp8WeightScaleLayout::Block(_)) => {
+            (CheckpointDialect::Native, Fp8WeightScaleLayout::Block(_)) => {
                 &["weight_scale_inv", "weight_scale"]
             }
-            (Fp8CheckpointDialect::Native, _)
-            | (Fp8CheckpointDialect::CompressedTensors, _)
-            | (Fp8CheckpointDialect::ModelOpt, _) => &["weight_scale", "weight_scale_inv"],
+            (CheckpointDialect::Native, _)
+            | (CheckpointDialect::CompressedTensors, _)
+            | (CheckpointDialect::ModelOpt, _) => &["weight_scale", "weight_scale_inv"],
         };
         let scale_activation: &'static [&'static str] = match activation {
             Fp8ActivationMode::StaticTensor => match dialect {
-                Fp8CheckpointDialect::Native => &["input_scale", "activation_scale"],
-                Fp8CheckpointDialect::CompressedTensors | Fp8CheckpointDialect::ModelOpt => {
+                CheckpointDialect::Native => &["input_scale", "activation_scale"],
+                CheckpointDialect::CompressedTensors | CheckpointDialect::ModelOpt => {
                     &["input_scale", "activation_scale"]
                 }
             },
@@ -165,17 +168,88 @@ impl Fp8LinearSpec {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Nvfp4ActivationMode {
+    None,
+    DynamicBlock,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ScaleConvention {
+    Dequantize,
+    Quantize,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize)]
+pub struct Nvfp4ScaleNames {
+    pub weight: &'static str,
+    pub block_scale: &'static str,
+    pub global_scale: &'static str,
+    pub activation_scale: Option<&'static str>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize)]
+pub struct Nvfp4LinearSpec {
+    pub dialect: CheckpointDialect,
+    pub activation: Nvfp4ActivationMode,
+    pub scale_names: Nvfp4ScaleNames,
+    pub global_scale: ScaleConvention,
+}
+
+impl Nvfp4LinearSpec {
+    fn model_opt(activation: Nvfp4ActivationMode) -> Self {
+        Self {
+            dialect: CheckpointDialect::ModelOpt,
+            activation,
+            scale_names: Nvfp4ScaleNames {
+                weight: "weight",
+                block_scale: "weight_scale",
+                global_scale: "weight_scale_2",
+                activation_scale: (activation == Nvfp4ActivationMode::DynamicBlock)
+                    .then_some("input_scale"),
+            },
+            global_scale: ScaleConvention::Dequantize,
+        }
+    }
+
+    fn compressed_tensors(activation: Nvfp4ActivationMode) -> Self {
+        Self {
+            dialect: CheckpointDialect::CompressedTensors,
+            activation,
+            scale_names: Nvfp4ScaleNames {
+                weight: "weight_packed",
+                block_scale: "weight_scale",
+                global_scale: "weight_global_scale",
+                activation_scale: (activation == Nvfp4ActivationMode::DynamicBlock)
+                    .then_some("input_global_scale"),
+            },
+            // compressed-tensors' ModelOpt converter reciprocates both global scales.
+            global_scale: ScaleConvention::Quantize,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CheckpointLinearSpec {
+    Fp8(Fp8LinearSpec),
+    Nvfp4(Nvfp4LinearSpec),
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
-enum Fp8Target {
+enum CheckpointTarget {
     Linear,
     Exact(String),
+    Module(String),
     Contains(String),
     Regex(String),
     Glob(String),
 }
 
-impl Fp8Target {
+impl CheckpointTarget {
     fn compressed_tensors(raw: &str) -> Result<Self, String> {
         if raw == "Linear" {
             return Ok(Self::Linear);
@@ -200,9 +274,15 @@ impl Fp8Target {
         match self {
             Self::Linear => true,
             Self::Exact(target) => target == prefix,
+            Self::Module(target) => {
+                target == prefix
+                    || prefix
+                        .strip_prefix(target)
+                        .is_some_and(|suffix| suffix.starts_with('.'))
+            }
             Self::Contains(target) => prefix.contains(target),
             Self::Regex(pattern) | Self::Glob(pattern) => Regex::new(pattern)
-                .expect("FP8 target regex is validated during config parsing")
+                .expect("checkpoint target regex is validated during config parsing")
                 .is_match(prefix),
         }
     }
@@ -210,80 +290,90 @@ impl Fp8Target {
     fn priority(&self) -> usize {
         match self {
             Self::Exact(_) => 0,
-            Self::Contains(_) | Self::Regex(_) | Self::Glob(_) => 1,
+            Self::Module(_) | Self::Contains(_) | Self::Regex(_) | Self::Glob(_) => 1,
             Self::Linear => 2,
         }
     }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
-struct Fp8ConfigRule {
-    targets: Vec<Fp8Target>,
-    resolution: Fp8RuleResolution,
+struct CheckpointConfigRule {
+    targets: Vec<CheckpointTarget>,
+    resolution: CheckpointRuleResolution,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
-enum Fp8RuleResolution {
-    Fp8(Fp8LinearSpec),
+enum CheckpointRuleResolution {
+    Quantized(CheckpointLinearSpec),
     Unquantized,
     Unsupported(String),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Fp8DirectResolution {
+enum CheckpointDirectResolution {
     NoMatch,
-    Resolved(Option<Fp8LinearSpec>),
+    Resolved(Option<CheckpointLinearSpec>),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
-pub struct Fp8Config {
-    dialect: Fp8CheckpointDialect,
-    rules: Vec<Fp8ConfigRule>,
-    ignore: Vec<Fp8Target>,
+pub struct CheckpointQuantConfig {
+    dialect: CheckpointDialect,
+    rules: Vec<CheckpointConfigRule>,
+    ignore: Vec<CheckpointTarget>,
 }
 
-impl Fp8Config {
-    pub fn dialect(&self) -> Fp8CheckpointDialect {
+impl CheckpointQuantConfig {
+    pub fn dialect(&self) -> CheckpointDialect {
         self.dialect
     }
 
-    pub fn resolve(&self, prefix: &str) -> Option<Fp8LinearSpec> {
+    pub fn resolve(&self, prefix: &str) -> Option<CheckpointLinearSpec> {
         self.resolve_checked(prefix).ok().flatten()
     }
 
-    pub(crate) fn resolve_checked(&self, prefix: &str) -> Result<Option<Fp8LinearSpec>, String> {
-        match self.resolve_state_checked(prefix)? {
-            Fp8DirectResolution::NoMatch => Ok(None),
-            Fp8DirectResolution::Resolved(spec) => Ok(spec),
+    pub fn resolve_fp8(&self, prefix: &str) -> Result<Option<Fp8LinearSpec>, String> {
+        match self.resolve_checked(prefix)? {
+            Some(CheckpointLinearSpec::Fp8(spec)) => Ok(Some(spec)),
+            Some(CheckpointLinearSpec::Nvfp4(_)) => Err(format!(
+                "module `{prefix}` uses NVFP4, but an FP8 specification was requested"
+            )),
+            None => Ok(None),
         }
     }
 
-    fn resolve_state_checked(&self, prefix: &str) -> Result<Fp8DirectResolution, String> {
+    pub fn resolve_checked(&self, prefix: &str) -> Result<Option<CheckpointLinearSpec>, String> {
+        match self.resolve_state_checked(prefix)? {
+            CheckpointDirectResolution::NoMatch => Ok(None),
+            CheckpointDirectResolution::Resolved(spec) => Ok(spec),
+        }
+    }
+
+    fn resolve_state_checked(&self, prefix: &str) -> Result<CheckpointDirectResolution, String> {
         let prefixes = prefix_candidates(prefix);
         if self
             .ignore
             .iter()
             .any(|target| prefixes.iter().any(|prefix| target.matches(prefix)))
         {
-            return Ok(Fp8DirectResolution::Resolved(None));
+            return Ok(CheckpointDirectResolution::Resolved(None));
         }
         let exact = self.resolve_rules_at_priority(prefix, &prefixes, 0)?;
-        if exact != Fp8DirectResolution::NoMatch {
+        if exact != CheckpointDirectResolution::NoMatch {
             return Ok(exact);
         }
         if let Some(constituents) = fused_constituents(prefix) {
             let fused = self.resolve_fused_state(&constituents)?;
-            if fused != Fp8DirectResolution::NoMatch {
+            if fused != CheckpointDirectResolution::NoMatch {
                 return Ok(fused);
             }
         }
         for priority in 1..3 {
             let resolved = self.resolve_rules_at_priority(prefix, &prefixes, priority)?;
-            if resolved != Fp8DirectResolution::NoMatch {
+            if resolved != CheckpointDirectResolution::NoMatch {
                 return Ok(resolved);
             }
         }
-        Ok(Fp8DirectResolution::NoMatch)
+        Ok(CheckpointDirectResolution::NoMatch)
     }
 
     fn resolve_rules_at_priority(
@@ -291,47 +381,51 @@ impl Fp8Config {
         prefix: &str,
         prefixes: &[String],
         priority: usize,
-    ) -> Result<Fp8DirectResolution, String> {
+    ) -> Result<CheckpointDirectResolution, String> {
         for rule in &self.rules {
             if rule.targets.iter().any(|target| {
                 target.priority() == priority
                     && prefixes.iter().any(|prefix| target.matches(prefix))
             }) {
                 return match &rule.resolution {
-                    Fp8RuleResolution::Fp8(spec) => Ok(Fp8DirectResolution::Resolved(Some(*spec))),
-                    Fp8RuleResolution::Unquantized => Ok(Fp8DirectResolution::Resolved(None)),
-                    Fp8RuleResolution::Unsupported(reason) => Err(format!(
+                    CheckpointRuleResolution::Quantized(spec) => {
+                        Ok(CheckpointDirectResolution::Resolved(Some(*spec)))
+                    }
+                    CheckpointRuleResolution::Unquantized => {
+                        Ok(CheckpointDirectResolution::Resolved(None))
+                    }
+                    CheckpointRuleResolution::Unsupported(reason) => Err(format!(
                         "unsupported quantization scheme for `{prefix}`: {reason}"
                     )),
                 };
             }
         }
-        Ok(Fp8DirectResolution::NoMatch)
+        Ok(CheckpointDirectResolution::NoMatch)
     }
 
     pub fn resolve_fused<S: AsRef<str>>(
         &self,
         prefixes: &[S],
-    ) -> Result<Option<Fp8LinearSpec>, String> {
+    ) -> Result<Option<CheckpointLinearSpec>, String> {
         match self.resolve_fused_state(prefixes)? {
-            Fp8DirectResolution::NoMatch => Ok(None),
-            Fp8DirectResolution::Resolved(spec) => Ok(spec),
+            CheckpointDirectResolution::NoMatch => Ok(None),
+            CheckpointDirectResolution::Resolved(spec) => Ok(spec),
         }
     }
 
     fn resolve_fused_state<S: AsRef<str>>(
         &self,
         prefixes: &[S],
-    ) -> Result<Fp8DirectResolution, String> {
+    ) -> Result<CheckpointDirectResolution, String> {
         let Some((first, rest)) = prefixes.split_first() else {
-            return Ok(Fp8DirectResolution::NoMatch);
+            return Ok(CheckpointDirectResolution::NoMatch);
         };
         let resolved = self.resolve_state_checked(first.as_ref())?;
         for prefix in rest {
             let next = self.resolve_state_checked(prefix.as_ref())?;
             if next != resolved {
                 return Err(format!(
-                    "fused FP8 projection has different schemes for `{}` and `{}`",
+                    "fused quantized projection has different schemes for `{}` and `{}`",
                     first.as_ref(),
                     prefix.as_ref()
                 ));
@@ -362,18 +456,16 @@ impl Fp8Config {
             None => Fp8ActivationMode::None,
         };
         Ok(Self {
-            dialect: Fp8CheckpointDialect::Native,
-            rules: vec![Fp8ConfigRule {
-                targets: vec![Fp8Target::Linear],
-                resolution: Fp8RuleResolution::Fp8(Fp8LinearSpec::new(
-                    Fp8CheckpointDialect::Native,
-                    weight_scale,
-                    activation,
+            dialect: CheckpointDialect::Native,
+            rules: vec![CheckpointConfigRule {
+                targets: vec![CheckpointTarget::Linear],
+                resolution: CheckpointRuleResolution::Quantized(CheckpointLinearSpec::Fp8(
+                    Fp8LinearSpec::new(CheckpointDialect::Native, weight_scale, activation),
                 )),
             }],
             ignore: modules_to_not_convert
                 .iter()
-                .map(|target| Fp8Target::Exact(target.clone()))
+                .map(|target| CheckpointTarget::Exact(target.clone()))
                 .collect(),
         })
     }
@@ -389,41 +481,44 @@ impl Fp8Config {
                 "compressed-tensors quantization config requires `config_groups`".to_string()
             })?;
         let mut rules = Vec::new();
-        let mut has_fp8 = false;
+        let mut has_quantized = false;
         let mut groups = groups.iter().collect::<Vec<_>>();
         groups.sort_by(|(left, _), (right, _)| natural_group_cmp(left, right));
         for (name, group) in groups {
             let group = group.as_object().ok_or_else(|| {
                 format!("compressed-tensors config group `{name}` must be an object")
             })?;
-            let resolution = compressed_tensors_spec(group, name)?;
-            has_fp8 |= matches!(&resolution, Fp8RuleResolution::Fp8(_));
+            let format = group.get("format").or_else(|| object.get("format"));
+            let resolution = compressed_tensors_spec(group, name, format.and_then(Value::as_str))?;
+            has_quantized |= matches!(&resolution, CheckpointRuleResolution::Quantized(_));
             let targets = string_array(
                 group.get("targets"),
                 &format!("config_groups.{name}.targets"),
             )?
             .into_iter()
-            .map(|target| Fp8Target::compressed_tensors(&target))
+            .map(|target| CheckpointTarget::compressed_tensors(&target))
             .collect::<Result<Vec<_>, _>>()?;
             if targets.is_empty() {
                 return Err(format!(
                     "compressed-tensors config group `{name}` requires at least one target"
                 ));
             }
-            rules.push(Fp8ConfigRule {
+            rules.push(CheckpointConfigRule {
                 targets,
                 resolution,
             });
         }
-        if !has_fp8 {
-            return Err("compressed-tensors config contains no supported FP8 groups".to_string());
+        if !has_quantized {
+            return Err(
+                "compressed-tensors config contains no supported FP8 or NVFP4 groups".to_string(),
+            );
         }
         let ignore = optional_string_array(object.get("ignore"), "ignore")?
             .into_iter()
-            .map(|target| Fp8Target::compressed_tensors(&target))
+            .map(|target| CheckpointTarget::compressed_tensors(&target))
             .collect::<Result<Vec<_>, _>>()?;
         Ok(Self {
-            dialect: Fp8CheckpointDialect::CompressedTensors,
+            dialect: CheckpointDialect::CompressedTensors,
             rules,
             ignore,
         })
@@ -446,12 +541,12 @@ impl Fp8Config {
         let ignore_value = config.get("exclude_modules").or_else(|| root.get("ignore"));
         let mut ignore = optional_string_array(ignore_value, "exclude_modules or ignore")?
             .into_iter()
-            .map(|target| Fp8Target::model_opt(&target))
+            .map(|target| CheckpointTarget::model_opt(&target))
             .collect::<Result<Vec<_>, _>>()?;
         ignore.extend(
             MODEL_OPT_LEGACY_VISION_EXCLUSIONS
                 .iter()
-                .map(|target| Fp8Target::Contains((*target).to_string())),
+                .map(|target| CheckpointTarget::Contains((*target).to_string())),
         );
 
         let rules = if algorithm == "MIXED_PRECISION" {
@@ -463,7 +558,7 @@ impl Fp8Config {
                     "ModelOpt MIXED_PRECISION config requires `quantized_layers`".to_string()
                 })?;
             let mut rules = Vec::new();
-            let mut has_fp8 = false;
+            let mut has_quantized = false;
             for (prefix, layer) in layers {
                 let layer = layer.as_object().ok_or_else(|| {
                     format!("ModelOpt quantized layer `{prefix}` must be an object")
@@ -475,35 +570,44 @@ impl Fp8Config {
                         format!("ModelOpt quantized layer `{prefix}` requires `quant_algo`")
                     })?
                     .to_ascii_uppercase();
+                let target = if prefix.ends_with(".experts") {
+                    CheckpointTarget::Module(prefix.clone())
+                } else {
+                    CheckpointTarget::Exact(prefix.clone())
+                };
                 match algorithm.as_str() {
-                    "NONE" | "UNQUANTIZED" => rules.push(Fp8ConfigRule {
-                        targets: vec![Fp8Target::Exact(prefix.clone())],
-                        resolution: Fp8RuleResolution::Unquantized,
+                    "NONE" | "UNQUANTIZED" => rules.push(CheckpointConfigRule {
+                        targets: vec![target],
+                        resolution: CheckpointRuleResolution::Unquantized,
                     }),
                     _ => {
-                        has_fp8 = true;
-                        rules.push(Fp8ConfigRule {
-                            targets: vec![Fp8Target::Exact(prefix.clone())],
-                            resolution: Fp8RuleResolution::Fp8(model_opt_spec(&algorithm)?),
+                        has_quantized = true;
+                        rules.push(CheckpointConfigRule {
+                            targets: vec![target],
+                            resolution: CheckpointRuleResolution::Quantized(model_opt_spec(
+                                &algorithm,
+                                layer.get("group_size").or_else(|| config.get("group_size")),
+                            )?),
                         });
                     }
                 }
             }
-            if !has_fp8 {
+            if !has_quantized {
                 return Err(
-                    "ModelOpt MIXED_PRECISION config contains no supported FP8 layers".to_string(),
+                    "ModelOpt MIXED_PRECISION config contains no supported FP8 or NVFP4 layers"
+                        .to_string(),
                 );
             }
             rules
         } else {
-            let spec = model_opt_spec(&algorithm)?;
-            vec![Fp8ConfigRule {
-                targets: vec![Fp8Target::Linear],
-                resolution: Fp8RuleResolution::Fp8(spec),
+            let spec = model_opt_spec(&algorithm, config.get("group_size"))?;
+            vec![CheckpointConfigRule {
+                targets: vec![CheckpointTarget::Linear],
+                resolution: CheckpointRuleResolution::Quantized(spec),
             }]
         };
         Ok(Self {
-            dialect: Fp8CheckpointDialect::ModelOpt,
+            dialect: CheckpointDialect::ModelOpt,
             rules,
             ignore,
         })
@@ -532,7 +636,7 @@ impl Fp8Config {
     }
 }
 
-pub(crate) fn fp8_checkpoint_linear_b(
+pub(crate) fn checkpoint_linear_b(
     in_dim: usize,
     out_dim: usize,
     config: &crate::QuantizedConfig,
@@ -540,6 +644,9 @@ pub(crate) fn fp8_checkpoint_linear_b(
     hints: crate::Shard,
     vb: crate::ShardedVarBuilder,
 ) -> CandleResult<Arc<dyn crate::QuantMethod>> {
+    if let Some(CheckpointLinearSpec::Nvfp4(spec)) = config.resolve_checkpoint(&vb.prefix())? {
+        return crate::nvfp4::Nvfp4Layer::linear_b(in_dim, out_dim, spec, bias, hints, vb);
+    }
     let Some(spec) = config.resolve_fp8(&vb.prefix())? else {
         if matches!(config, crate::QuantizedConfig::Fp8 { .. })
             && resolve_scale_name(&vb, FP8_WEIGHT_SCALE_ALIASES, "weight")?.is_some()
@@ -823,11 +930,20 @@ fn remap_shard(shard: crate::Shard, dim: usize) -> CandleResult<crate::Shard> {
 fn compressed_tensors_spec(
     group: &serde_json::Map<String, Value>,
     name: &str,
-) -> Result<Fp8RuleResolution, String> {
+    format: Option<&str>,
+) -> Result<CheckpointRuleResolution, String> {
     let weights = group
         .get("weights")
         .and_then(Value::as_object)
         .ok_or_else(|| format!("compressed-tensors config group `{name}` requires `weights`"))?;
+    if weights.get("type").and_then(Value::as_str) == Some("float")
+        && weights.get("num_bits").and_then(Value::as_u64) == Some(NVFP4_BITS)
+        && format == Some(NVFP4_COMPRESSED_FORMAT)
+    {
+        return compressed_tensors_nvfp4_spec(group, weights, name)
+            .map(CheckpointLinearSpec::Nvfp4)
+            .map(CheckpointRuleResolution::Quantized);
+    }
     if weights.get("type").and_then(Value::as_str) != Some("float")
         || weights.get("num_bits").and_then(Value::as_u64) != Some(FP8_BITS)
     {
@@ -839,7 +955,7 @@ fn compressed_tensors_spec(
             .get("num_bits")
             .and_then(Value::as_u64)
             .map_or_else(|| "unspecified".to_string(), |bits| bits.to_string());
-        return Ok(Fp8RuleResolution::Unsupported(format!(
+        return Ok(CheckpointRuleResolution::Unsupported(format!(
             "compressed-tensors group `{name}` uses {bits}-bit `{weight_type}` weights"
         )));
     }
@@ -952,14 +1068,108 @@ fn compressed_tensors_spec(
             "compressed-tensors FP8 group `{name}` requires blockwise weights for blockwise activations"
         ));
     }
-    Ok(Fp8RuleResolution::Fp8(Fp8LinearSpec::new(
-        Fp8CheckpointDialect::CompressedTensors,
-        weight_scale,
-        activation,
-    )))
+    Ok(CheckpointRuleResolution::Quantized(
+        CheckpointLinearSpec::Fp8(Fp8LinearSpec::new(
+            CheckpointDialect::CompressedTensors,
+            weight_scale,
+            activation,
+        )),
+    ))
 }
 
-fn model_opt_spec(algorithm: &str) -> Result<Fp8LinearSpec, String> {
+fn compressed_tensors_nvfp4_spec(
+    group: &serde_json::Map<String, Value>,
+    weights: &serde_json::Map<String, Value>,
+    name: &str,
+) -> Result<Nvfp4LinearSpec, String> {
+    validate_nvfp4_args(weights, name, "weight")?;
+    if weights.get("dynamic").and_then(Value::as_bool) != Some(false) {
+        return Err(format!(
+            "compressed-tensors NVFP4 group `{name}` requires static weights"
+        ));
+    }
+    if group
+        .get("output_activations")
+        .is_some_and(|value| !value.is_null())
+    {
+        return Err(format!(
+            "compressed-tensors NVFP4 group `{name}` uses unsupported output activation quantization"
+        ));
+    }
+    let activation = match group.get("input_activations") {
+        None | Some(Value::Null) => Nvfp4ActivationMode::None,
+        Some(value) => {
+            let input = value.as_object().ok_or_else(|| {
+                format!("compressed-tensors input activations in group `{name}` must be an object")
+            })?;
+            validate_nvfp4_args(input, name, "activation")?;
+            if input.get("dynamic").and_then(Value::as_str) != Some("local") {
+                return Err(format!(
+                    "compressed-tensors NVFP4 group `{name}` requires dynamic=local activations with a calibrated global scale"
+                ));
+            }
+            Nvfp4ActivationMode::DynamicBlock
+        }
+    };
+    Ok(Nvfp4LinearSpec::compressed_tensors(activation))
+}
+
+fn validate_nvfp4_args(
+    args: &serde_json::Map<String, Value>,
+    name: &str,
+    kind: &str,
+) -> Result<(), String> {
+    if args.get("type").and_then(Value::as_str) != Some("float")
+        || args.get("num_bits").and_then(Value::as_u64) != Some(NVFP4_BITS)
+        || args.get("strategy").and_then(Value::as_str) != Some("tensor_group")
+        || args.get("group_size").and_then(Value::as_u64) != Some(NVFP4_BLOCK_SIZE as u64)
+    {
+        return Err(format!(
+            "compressed-tensors NVFP4 group `{name}` requires 4-bit float {kind}s with tensor_group strategy and group_size={NVFP4_BLOCK_SIZE}"
+        ));
+    }
+    if args.get("symmetric").and_then(Value::as_bool) == Some(false) {
+        return Err(format!(
+            "compressed-tensors NVFP4 group `{name}` requires symmetric {kind}s"
+        ));
+    }
+    if let Some(dtype) = args.get("scale_dtype").filter(|value| !value.is_null()) {
+        let dtype = dtype
+            .as_str()
+            .ok_or_else(|| format!("NVFP4 {kind} scale_dtype must be a string"))?;
+        validate_e4m3(Some(dtype)).map_err(|_| {
+            format!(
+            "compressed-tensors NVFP4 group `{name}` requires E4M3FN {kind} scales, got `{dtype}`"
+        )
+        })?;
+    }
+    if args.get("actorder").is_some_and(|value| !value.is_null()) {
+        return Err(format!(
+            "compressed-tensors NVFP4 group `{name}` does not support activation ordering"
+        ));
+    }
+    Ok(())
+}
+
+fn model_opt_spec(
+    algorithm: &str,
+    group_size: Option<&Value>,
+) -> Result<CheckpointLinearSpec, String> {
+    if matches!(algorithm, "NVFP4" | "W4A16_NVFP4") {
+        if group_size.is_some_and(|value| value.as_u64() != Some(NVFP4_BLOCK_SIZE as u64)) {
+            return Err(format!(
+                "ModelOpt {algorithm} requires group_size={NVFP4_BLOCK_SIZE}"
+            ));
+        }
+        let activation = if algorithm == "NVFP4" {
+            Nvfp4ActivationMode::DynamicBlock
+        } else {
+            Nvfp4ActivationMode::None
+        };
+        return Ok(CheckpointLinearSpec::Nvfp4(Nvfp4LinearSpec::model_opt(
+            activation,
+        )));
+    }
     let (weight_scale, activation) = match algorithm {
         "FP8" => (
             Fp8WeightScaleLayout::Tensor,
@@ -975,11 +1185,11 @@ fn model_opt_spec(algorithm: &str) -> Result<Fp8LinearSpec, String> {
         ),
         other => return Err(format!("unsupported ModelOpt mixed algorithm `{other}`")),
     };
-    Ok(Fp8LinearSpec::new(
-        Fp8CheckpointDialect::ModelOpt,
+    Ok(CheckpointLinearSpec::Fp8(Fp8LinearSpec::new(
+        CheckpointDialect::ModelOpt,
         weight_scale,
         activation,
-    ))
+    )))
 }
 
 fn model_opt_fields(value: &Value) -> Result<serde_json::Map<String, Value>, String> {
@@ -1222,9 +1432,218 @@ mod tests {
         })
     }
 
+    fn ct_nvfp4_args(dynamic: Value) -> Value {
+        json!({
+            "dynamic": dynamic,
+            "num_bits": 4,
+            "strategy": "tensor_group",
+            "group_size": 16,
+            "symmetric": true,
+            "type": "float",
+            "scale_dtype": "torch.float8_e4m3fn"
+        })
+    }
+
+    #[test]
+    fn compressed_tensors_nvfp4_preserves_activation_contract_and_scale_convention() {
+        for (input, activation, scale_name) in [
+            (Value::Null, Nvfp4ActivationMode::None, None),
+            (
+                ct_nvfp4_args(json!("local")),
+                Nvfp4ActivationMode::DynamicBlock,
+                Some("input_global_scale"),
+            ),
+        ] {
+            let config = CheckpointQuantConfig::compressed_tensors(&json!({
+                "format": "nvfp4-pack-quantized",
+                "config_groups": {
+                    "group_0": {
+                        "targets": ["Linear"],
+                        "weights": ct_nvfp4_args(json!(false)),
+                        "input_activations": input
+                    }
+                },
+                "ignore": ["lm_head"]
+            }))
+            .unwrap();
+            let Some(CheckpointLinearSpec::Nvfp4(spec)) = config.resolve_checked("layer").unwrap()
+            else {
+                panic!("expected NVFP4");
+            };
+            assert_eq!(spec.activation, activation);
+            assert_eq!(spec.global_scale, ScaleConvention::Quantize);
+            assert_eq!(spec.scale_names.weight, "weight_packed");
+            assert_eq!(spec.scale_names.block_scale, "weight_scale");
+            assert_eq!(spec.scale_names.global_scale, "weight_global_scale");
+            assert_eq!(spec.scale_names.activation_scale, scale_name);
+            assert!(config
+                .resolve_fp8("layer")
+                .unwrap_err()
+                .contains("uses NVFP4"));
+            assert_eq!(config.resolve_checked("lm_head").unwrap(), None);
+        }
+    }
+
+    #[test]
+    fn compressed_tensors_mixed_fp8_nvfp4_targets_and_fused_conflicts() {
+        let config = CheckpointQuantConfig::compressed_tensors(&json!({
+            "format": "mixed-precision",
+            "config_groups": {
+                "group_0": {"targets": ["Linear"], "weights": ct_args("channel")},
+                "group_1": {
+                    "format": "nvfp4-pack-quantized",
+                    "targets": ["re:.*mlp\\.(gate|up)_proj$"],
+                    "weights": ct_nvfp4_args(json!(false))
+                },
+                "group_2": {
+                    "targets": ["model.layers.1.mlp.up_proj"],
+                    "weights": ct_args("tensor")
+                }
+            }
+        }))
+        .unwrap();
+        assert!(matches!(
+            config
+                .resolve_checked("model.layers.0.mlp.gate_up_proj")
+                .unwrap(),
+            Some(CheckpointLinearSpec::Nvfp4(_))
+        ));
+        assert!(matches!(
+            config
+                .resolve_checked("model.layers.0.self_attn.q_proj")
+                .unwrap(),
+            Some(CheckpointLinearSpec::Fp8(_))
+        ));
+        assert!(config
+            .resolve_checked("model.layers.1.mlp.gate_up_proj")
+            .unwrap_err()
+            .contains("different schemes"));
+    }
+
+    #[test]
+    fn compressed_tensors_nvfp4_rejects_incompatible_quantization_contracts() {
+        let base = json!({
+            "format": "nvfp4-pack-quantized",
+            "config_groups": {"group_0": {
+                "targets": ["Linear"],
+                "weights": ct_nvfp4_args(json!(false)),
+                "input_activations": ct_nvfp4_args(json!("local"))
+            }}
+        });
+        for (kind, field, value, expected) in [
+            ("weights", "group_size", json!(32), "group_size=16"),
+            ("weights", "dynamic", json!(true), "static weights"),
+            (
+                "weights",
+                "scale_dtype",
+                json!("torch.float8_e8m0fnu"),
+                "E4M3FN",
+            ),
+            ("weights", "symmetric", json!(false), "symmetric weights"),
+            (
+                "input_activations",
+                "dynamic",
+                json!(true),
+                "calibrated global scale",
+            ),
+            (
+                "input_activations",
+                "num_bits",
+                json!(8),
+                "4-bit float activations",
+            ),
+        ] {
+            let mut value_config = base.clone();
+            value_config["config_groups"]["group_0"][kind][field] = value;
+            assert!(CheckpointQuantConfig::compressed_tensors(&value_config)
+                .unwrap_err()
+                .contains(expected));
+        }
+    }
+
+    #[test]
+    fn model_opt_nvfp4_preserves_activation_contract_and_scale_convention() {
+        for (algorithm, activation, scale_name) in [
+            (
+                "NVFP4",
+                Nvfp4ActivationMode::DynamicBlock,
+                Some("input_scale"),
+            ),
+            ("W4A16_NVFP4", Nvfp4ActivationMode::None, None),
+        ] {
+            let config = CheckpointQuantConfig::model_opt(&json!({
+                "quantization": {
+                    "quant_algo": algorithm,
+                    "group_size": 16,
+                    "exclude_modules": ["lm_head"]
+                }
+            }))
+            .unwrap();
+            let Some(CheckpointLinearSpec::Nvfp4(spec)) = config.resolve_checked("layer").unwrap()
+            else {
+                panic!("expected NVFP4");
+            };
+            assert_eq!(spec.activation, activation);
+            assert_eq!(spec.global_scale, ScaleConvention::Dequantize);
+            assert_eq!(spec.scale_names.weight, "weight");
+            assert_eq!(spec.scale_names.global_scale, "weight_scale_2");
+            assert_eq!(spec.scale_names.activation_scale, scale_name);
+            assert_eq!(config.resolve_checked("lm_head").unwrap(), None);
+        }
+        assert!(CheckpointQuantConfig::model_opt(&json!({
+            "quant_algo": "NVFP4", "group_size": 32
+        }))
+        .unwrap_err()
+        .contains("group_size=16"));
+    }
+
+    #[test]
+    fn model_opt_mixed_expert_container_targets_preserve_exact_overrides() {
+        let config = CheckpointQuantConfig::model_opt(&json!({
+            "quant_algo": "MIXED_PRECISION",
+            "quantized_layers": {
+                "model.language_model.layers.0.mlp.experts": {
+                    "quant_algo": "W4A16_NVFP4", "group_size": 16
+                },
+                "model.language_model.layers.0.mlp.experts.1.up_proj": {"quant_algo": "FP8"},
+                "model.language_model.layers.0.self_attn.q_proj": {"quant_algo": "FP8"}
+            },
+            "ignore": ["*.experts.2.*"]
+        }))
+        .unwrap();
+        assert!(matches!(
+            config
+                .resolve_checked("model.layers.0.mlp.experts.0.gate_up_proj")
+                .unwrap(),
+            Some(CheckpointLinearSpec::Nvfp4(_))
+        ));
+        assert!(matches!(
+            config
+                .resolve_checked("model.layers.0.mlp.experts.1.up_proj")
+                .unwrap(),
+            Some(CheckpointLinearSpec::Fp8(_))
+        ));
+        assert!(config
+            .resolve_checked("model.layers.0.mlp.experts.1.gate_up_proj")
+            .unwrap_err()
+            .contains("different schemes"));
+        assert_eq!(
+            config
+                .resolve_checked("model.layers.0.mlp.experts.2.gate_proj")
+                .unwrap(),
+            None
+        );
+        assert_eq!(
+            config
+                .resolve_checked("model.layers.0.mlp.experts_extra.0.gate_proj")
+                .unwrap(),
+            None
+        );
+    }
+
     #[test]
     fn compressed_tensors_resolves_channel_dynamic_and_ignore() {
-        let config = Fp8Config::compressed_tensors(&json!({
+        let config = CheckpointQuantConfig::compressed_tensors(&json!({
             "format": "float-quantized",
             "config_groups": {
                 "group_0": {
@@ -1243,16 +1662,19 @@ mod tests {
         }))
         .unwrap();
 
-        let spec = config.resolve("model.layers.0.self_attn.q_proj").unwrap();
+        let spec = config
+            .resolve_fp8("model.layers.0.self_attn.q_proj")
+            .unwrap()
+            .unwrap();
         assert_eq!(spec.weight_scale, Fp8WeightScaleLayout::Channel);
         assert_eq!(spec.activation, Fp8ActivationMode::DynamicToken);
         assert_eq!(spec.scale_names.weight[0], "weight_scale");
-        assert_eq!(config.resolve("lm_head"), None);
+        assert_eq!(config.resolve_fp8("lm_head").unwrap(), None);
     }
 
     #[test]
     fn compressed_tensors_resolves_block_and_regex_targets() {
-        let config = Fp8Config::compressed_tensors(&json!({
+        let config = CheckpointQuantConfig::compressed_tensors(&json!({
             "format": "mixed-precision",
             "config_groups": {
                 "group_0": {
@@ -1283,15 +1705,18 @@ mod tests {
         }))
         .unwrap();
 
-        let spec = config.resolve("model.layers.2.self_attn.q_proj").unwrap();
+        let spec = config
+            .resolve_fp8("model.layers.2.self_attn.q_proj")
+            .unwrap()
+            .unwrap();
         assert_eq!(spec.weight_scale, Fp8WeightScaleLayout::Block([128, 128]));
         assert_eq!(spec.activation, Fp8ActivationMode::DynamicBlock(128));
-        assert_eq!(config.resolve("model.layers.2.mlp.gate_proj"), None);
+        assert!(config.resolve_fp8("model.layers.2.mlp.gate_proj").is_err());
     }
 
     #[test]
     fn compressed_tensors_resolves_w8a16() {
-        let config = Fp8Config::compressed_tensors(&json!({
+        let config = CheckpointQuantConfig::compressed_tensors(&json!({
             "format": "float-quantized",
             "config_groups": {
                 "group_0": {
@@ -1302,14 +1727,17 @@ mod tests {
             }
         }))
         .unwrap();
-        let spec = config.resolve("model.layers.0.mlp.down_proj").unwrap();
+        let spec = config
+            .resolve_fp8("model.layers.0.mlp.down_proj")
+            .unwrap()
+            .unwrap();
         assert_eq!(spec.activation, Fp8ActivationMode::None);
         assert_eq!(spec.weight_scale, Fp8WeightScaleLayout::Tensor);
     }
 
     #[test]
     fn compressed_tensors_exact_target_precedes_linear_class() {
-        let config = Fp8Config::compressed_tensors(&json!({
+        let config = CheckpointQuantConfig::compressed_tensors(&json!({
             "format": "float-quantized",
             "config_groups": {
                 "group_0": {
@@ -1325,7 +1753,8 @@ mod tests {
         .unwrap();
         assert_eq!(
             config
-                .resolve("model.layers.0.self_attn.q_proj")
+                .resolve_fp8("model.layers.0.self_attn.q_proj")
+                .unwrap()
                 .unwrap()
                 .weight_scale,
             Fp8WeightScaleLayout::Channel
@@ -1334,7 +1763,7 @@ mod tests {
 
     #[test]
     fn compressed_tensors_non_fp8_target_shadows_linear_fp8() {
-        let config = Fp8Config::compressed_tensors(&json!({
+        let config = CheckpointQuantConfig::compressed_tensors(&json!({
             "format": "mixed-precision",
             "config_groups": {
                 "group_0": {
@@ -1359,17 +1788,20 @@ mod tests {
             }
         }))
         .unwrap();
-        assert_eq!(config.resolve("model.layers.0.mlp.down_proj"), None);
+        assert!(config.resolve_fp8("model.layers.0.mlp.down_proj").is_err());
         assert!(config
-            .resolve_checked("model.layers.0.mlp.down_proj")
+            .resolve_fp8("model.layers.0.mlp.down_proj")
             .unwrap_err()
             .contains("4-bit `int` weights"));
-        assert!(config.resolve("model.layers.0.mlp.up_proj").is_some());
+        assert!(config
+            .resolve_fp8("model.layers.0.mlp.up_proj")
+            .unwrap()
+            .is_some());
     }
 
     #[test]
     fn compressed_tensors_uses_natural_group_order() {
-        let config = Fp8Config::compressed_tensors(&json!({
+        let config = CheckpointQuantConfig::compressed_tensors(&json!({
             "config_groups": {
                 "group_10": {
                     "targets": ["re:.*q_proj$"],
@@ -1384,7 +1816,8 @@ mod tests {
         .unwrap();
         assert_eq!(
             config
-                .resolve("model.layers.0.self_attn.q_proj")
+                .resolve_fp8("model.layers.0.self_attn.q_proj")
+                .unwrap()
                 .unwrap()
                 .weight_scale,
             Fp8WeightScaleLayout::Tensor
@@ -1393,7 +1826,7 @@ mod tests {
 
     #[test]
     fn compressed_tensors_fused_projection_propagates_unsupported_constituent() {
-        let config = Fp8Config::compressed_tensors(&json!({
+        let config = CheckpointQuantConfig::compressed_tensors(&json!({
             "config_groups": {
                 "group_0": {
                     "targets": ["model.layers.0.mlp.gate_proj"],
@@ -1413,14 +1846,14 @@ mod tests {
         }))
         .unwrap();
         let error = config
-            .resolve_checked("model.layers.0.mlp.gate_up_proj")
+            .resolve_fp8("model.layers.0.mlp.gate_up_proj")
             .unwrap_err();
         assert!(error.contains("4-bit `float` weights"));
     }
 
     #[test]
     fn compressed_tensors_rejects_output_activation_quantization() {
-        let error = Fp8Config::compressed_tensors(&json!({
+        let error = CheckpointQuantConfig::compressed_tensors(&json!({
             "format": "float-quantized",
             "config_groups": {
                 "group_0": {
@@ -1436,7 +1869,7 @@ mod tests {
 
     #[test]
     fn compressed_tensors_rejects_asymmetric_fp8_activations() {
-        let error = Fp8Config::compressed_tensors(&json!({
+        let error = CheckpointQuantConfig::compressed_tensors(&json!({
             "config_groups": {
                 "group_0": {
                     "targets": ["Linear"],
@@ -1457,7 +1890,7 @@ mod tests {
 
     #[test]
     fn compressed_tensors_rejects_block_activations_with_non_block_weights() {
-        let error = Fp8Config::compressed_tensors(&json!({
+        let error = CheckpointQuantConfig::compressed_tensors(&json!({
             "config_groups": {
                 "group_0": {
                     "targets": ["Linear"],
@@ -1496,12 +1929,15 @@ mod tests {
                 Fp8ActivationMode::None,
             ),
         ] {
-            let config = Fp8Config::model_opt(&json!({
+            let config = CheckpointQuantConfig::model_opt(&json!({
                 "quant_method": "modelopt",
                 "quant_algo": algorithm
             }))
             .unwrap();
-            let spec = config.resolve("model.layers.0.mlp.gate_proj").unwrap();
+            let spec = config
+                .resolve_fp8("model.layers.0.mlp.gate_proj")
+                .unwrap()
+                .unwrap();
             assert_eq!(spec.weight_scale, weight);
             assert_eq!(spec.activation, activation);
             assert_eq!(spec.scale_names.weight[0], "weight_scale");
@@ -1510,7 +1946,7 @@ mod tests {
 
     #[test]
     fn model_opt_mixed_precision_resolves_per_layer() {
-        let config = Fp8Config::model_opt(&json!({
+        let config = CheckpointQuantConfig::model_opt(&json!({
             "quant_method": "modelopt",
             "quant_algo": "MIXED_PRECISION",
             "ignore": ["mtp*"],
@@ -1526,25 +1962,33 @@ mod tests {
 
         assert_eq!(
             config
-                .resolve("model.layers.0.self_attn.q_proj")
+                .resolve_fp8("model.layers.0.self_attn.q_proj")
+                .unwrap()
                 .unwrap()
                 .weight_scale,
             Fp8WeightScaleLayout::Tensor
         );
         assert_eq!(
             config
-                .resolve("model.layers.0.self_attn.k_proj")
+                .resolve_fp8("model.layers.0.self_attn.k_proj")
+                .unwrap()
                 .unwrap()
                 .weight_scale,
             Fp8WeightScaleLayout::Channel
         );
-        assert_eq!(config.resolve("model.layers.0.mlp.gate_proj"), None);
-        assert_eq!(config.resolve("mtp.layers.0.self_attn.q_proj"), None);
+        assert_eq!(
+            config.resolve_fp8("model.layers.0.mlp.gate_proj").unwrap(),
+            None
+        );
+        assert_eq!(
+            config.resolve_fp8("mtp.layers.0.self_attn.q_proj").unwrap(),
+            None
+        );
     }
 
     #[test]
     fn model_opt_mixed_precision_resolves_fused_projection_constituents() {
-        let config = Fp8Config::model_opt(&json!({
+        let config = CheckpointQuantConfig::model_opt(&json!({
             "quant_method": "modelopt",
             "quant_algo": "MIXED_PRECISION",
             "quantized_layers": {
@@ -1574,7 +2018,7 @@ mod tests {
 
         assert_eq!(
             config
-                .resolve_checked("model.layers.0.mlp.gate_up_proj")
+                .resolve_fp8("model.layers.0.mlp.gate_up_proj")
                 .unwrap()
                 .unwrap()
                 .activation,
@@ -1582,19 +2026,19 @@ mod tests {
         );
         assert_eq!(
             config
-                .resolve_checked("model.layers.0.self_attn.qkv_proj")
+                .resolve_fp8("model.layers.0.self_attn.qkv_proj")
                 .unwrap()
                 .unwrap()
                 .activation,
             Fp8ActivationMode::DynamicToken
         );
         assert!(config
-            .resolve_checked("model.layers.1.mlp.gate_up_proj")
+            .resolve_fp8("model.layers.1.mlp.gate_up_proj")
             .unwrap_err()
             .contains("different schemes"));
         assert_eq!(
             config
-                .resolve_checked("model.layers.2.mlp.gate_up_proj")
+                .resolve_fp8("model.layers.2.mlp.gate_up_proj")
                 .unwrap()
                 .unwrap()
                 .weight_scale,
@@ -1604,20 +2048,20 @@ mod tests {
 
     #[test]
     fn model_opt_mixed_precision_rejects_unsupported_algorithms() {
-        let error = Fp8Config::model_opt(&json!({
+        let error = CheckpointQuantConfig::model_opt(&json!({
             "quant_method": "modelopt",
             "quant_algo": "MIXED_PRECISION",
             "quantized_layers": {
-                "model.layers.0.mlp.gate_proj": {"quant_algo": "NVFP4"}
+                "model.layers.0.mlp.gate_proj": {"quant_algo": "W4A8_NVFP4_FP8"}
             }
         }))
         .unwrap_err();
-        assert!(error.contains("NVFP4"));
+        assert!(error.contains("W4A8_NVFP4_FP8"));
     }
 
     #[test]
-    fn model_opt_mixed_precision_requires_an_fp8_layer() {
-        let error = Fp8Config::model_opt(&json!({
+    fn model_opt_mixed_precision_requires_a_supported_layer() {
+        let error = CheckpointQuantConfig::model_opt(&json!({
             "quant_method": "modelopt",
             "quant_algo": "MIXED_PRECISION",
             "quantized_layers": {
@@ -1625,12 +2069,12 @@ mod tests {
             }
         }))
         .unwrap_err();
-        assert!(error.contains("no supported FP8 layers"));
+        assert!(error.contains("no supported FP8 or NVFP4 layers"));
     }
 
     #[test]
     fn legacy_model_opt_quantization_object_is_supported() {
-        let config = Fp8Config::model_opt(&json!({
+        let config = CheckpointQuantConfig::model_opt(&json!({
             "producer": {"name": "modelopt"},
             "quantization": {
                 "quant_algo": "FP8_PER_CHANNEL_PER_TOKEN",
@@ -1638,10 +2082,11 @@ mod tests {
             }
         }))
         .unwrap();
-        assert_eq!(config.resolve("lm_head"), None);
+        assert_eq!(config.resolve_fp8("lm_head").unwrap(), None);
         assert_eq!(
             config
-                .resolve("model.layers.0.mlp.up_proj")
+                .resolve_fp8("model.layers.0.mlp.up_proj")
+                .unwrap()
                 .unwrap()
                 .weight_scale,
             Fp8WeightScaleLayout::Channel
@@ -1651,7 +2096,7 @@ mod tests {
             "model.vision_model.encoder.layers.0.mlp.fc1",
             "model.vit_large_projector.linear_1",
         ] {
-            assert_eq!(config.resolve(prefix), None);
+            assert_eq!(config.resolve_fp8(prefix).unwrap(), None);
         }
     }
 
@@ -1669,11 +2114,12 @@ mod tests {
             "quant_algo": "FP8_PER_CHANNEL_PER_TOKEN",
             "ignore": ["lm_head"]
         });
-        let config = Fp8Config::model_opt_merged(Some(&embedded), &external).unwrap();
-        assert_eq!(config.resolve("lm_head"), None);
+        let config = CheckpointQuantConfig::model_opt_merged(Some(&embedded), &external).unwrap();
+        assert_eq!(config.resolve_fp8("lm_head").unwrap(), None);
         assert_eq!(
             config
-                .resolve("model.layers.0.mlp.up_proj")
+                .resolve_fp8("model.layers.0.mlp.up_proj")
+                .unwrap()
                 .unwrap()
                 .weight_scale,
             Fp8WeightScaleLayout::Channel
@@ -1736,7 +2182,7 @@ mod tests {
             .is_err());
 
         let spec = Fp8LinearSpec::new(
-            Fp8CheckpointDialect::ModelOpt,
+            CheckpointDialect::ModelOpt,
             Fp8WeightScaleLayout::Tensor,
             Fp8ActivationMode::StaticTensor,
         );
@@ -1752,16 +2198,19 @@ mod tests {
 
     #[test]
     fn native_config_canonicalizes_language_model_prefixes() {
-        let config = Fp8Config::native(
+        let config = CheckpointQuantConfig::native(
             None,
             None,
             Some("e4m3"),
             &["model.language_model.embed_tokens".to_string()],
         )
         .unwrap();
-        assert_eq!(config.resolve("model.embed_tokens"), None);
-        assert!(config.resolve("model.layers.0.mlp.up_proj").is_some());
-        assert!(Fp8Config::native(None, None, Some("e5m2"), &[]).is_err());
+        assert_eq!(config.resolve_fp8("model.embed_tokens").unwrap(), None);
+        assert!(config
+            .resolve_fp8("model.layers.0.mlp.up_proj")
+            .unwrap()
+            .is_some());
+        assert!(CheckpointQuantConfig::native(None, None, Some("e5m2"), &[]).is_err());
     }
 
     #[test]
@@ -1776,8 +2225,8 @@ mod tests {
             candle_core::Device::Cpu,
         )
         .pp("layer");
-        let config = Fp8Config::native(None, None, None, &[]).unwrap();
-        let spec = config.resolve("layer").unwrap();
+        let config = CheckpointQuantConfig::native(None, None, None, &[]).unwrap();
+        let spec = config.resolve_fp8("layer").unwrap().unwrap();
         assert!(spec.scale_names.weight_name(&vb).is_err());
     }
 
@@ -1799,8 +2248,7 @@ mod tests {
             fmt: None,
             modules_to_not_convert: Vec::new(),
         };
-        let layer =
-            fp8_checkpoint_linear_b(2, 2, &permissive, false, Default::default(), vb.clone())?;
+        let layer = checkpoint_linear_b(2, 2, &permissive, false, Default::default(), vb.clone())?;
         assert_eq!(layer.dequantize_w()?.dtype(), DType::F32);
 
         let explicit = crate::QuantizedConfig::Fp8 {
@@ -1809,7 +2257,7 @@ mod tests {
             fmt: None,
             modules_to_not_convert: vec!["lm_head".to_string()],
         };
-        let error = fp8_checkpoint_linear_b(2, 2, &explicit, false, Default::default(), vb)
+        let error = checkpoint_linear_b(2, 2, &explicit, false, Default::default(), vb)
             .expect_err("a non-excluded native FP8 module must have a scale");
         assert!(error.to_string().contains("missing FP8 weight scale"));
         Ok(())
@@ -1839,7 +2287,7 @@ mod tests {
             fmt: None,
             modules_to_not_convert: vec!["layer".to_string()],
         };
-        let error = fp8_checkpoint_linear_b(2, 2, &config, false, Default::default(), vb)
+        let error = checkpoint_linear_b(2, 2, &config, false, Default::default(), vb)
             .expect_err("an excluded native module must not retain a scale");
         assert!(error
             .to_string()
@@ -1869,7 +2317,7 @@ mod tests {
             }
         }))
         .unwrap();
-        let error = fp8_checkpoint_linear_b(2, 2, &config, false, Default::default(), vb)
+        let error = checkpoint_linear_b(2, 2, &config, false, Default::default(), vb)
             .expect_err("a compressed-tensors FP8 target must have a scale");
         assert!(error.to_string().contains("missing FP8 weight scale"));
         Ok(())
@@ -1910,7 +2358,7 @@ mod tests {
         .unwrap();
 
         for (rank, expected) in [(0, 2f32), (1, 2f32), (2, 3f32), (3, 3f32)] {
-            let layer = fp8_checkpoint_linear_b(
+            let layer = checkpoint_linear_b(
                 K,
                 N,
                 &config,

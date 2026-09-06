@@ -1,9 +1,11 @@
 ---
 title: Quantization types
-description: Supported runtime ISQ formats, numeric shorthands, and backend constraints.
+description: Supported runtime ISQ and pretrained checkpoint formats, numeric shorthands, and backend constraints.
 ---
 
-ISQ (in-situ quantization) types supported by mistral.rs. For format selection guidance and underlying tradeoffs, see the [quantization guide](/guides/quantization/quantize-a-model/).
+Quantization types supported by mistral.rs, including ISQ (in-situ quantization) and pretrained
+checkpoints. For format selection guidance and underlying tradeoffs, see the
+[quantization guide](/guides/quantization/quantize-a-model/).
 
 For `run`, `serve`, and `bench`:
 
@@ -108,7 +110,7 @@ compressed-tensors metadata may use either `quantization_config` or the legacy
 |---|---|
 | Native `quant_method: "fp8"` | Tensor-scaled W8A16, static or dynamic tensor-scaled W8A8, and 128x128 weight with dynamic 1x128 activation scaling |
 | compressed-tensors | Symmetric E4M3 W8A16 with tensor, channel, or block weight scales; static tensor W8A8; dynamic per-token tensor/channel W8A8; and dynamic block W8A8 |
-| ModelOpt | `FP8`, `FP8_PER_CHANNEL_PER_TOKEN`, `FP8_PB_WO`, and `MIXED_PRECISION` configurations composed of these schemes and unquantized layers |
+| ModelOpt | `FP8`, `FP8_PER_CHANNEL_PER_TOKEN`, `FP8_PB_WO`, and `MIXED_PRECISION` configurations combining supported FP8, [NVFP4](#nvfp4), and unquantized layers |
 
 Weight scales may be stored as `weight_scale` or `weight_scale_inv`; both names contain the
 dequantization multiplier. Static activation scales may be stored as `input_scale` or
@@ -133,6 +135,78 @@ scale layouts are separate formats.
 |---|---|---|
 | `fp8` | 8 | E4M3 (4-bit exponent, 3-bit mantissa) |
 | `f8q8` | 8 | CPU-only F8Q8 weights |
+
+### NVFP4
+
+Load pretrained NVFP4 safetensors checkpoints directly. NVFP4 stores two E2M1 values per byte,
+with an E4M3 scale per 16 weights and a separate FP32 global scale.
+
+| Checkpoint format | Supported schemes |
+|---|---|
+| NVIDIA ModelOpt | `NVFP4` (W4A4), `W4A16_NVFP4`, and `MIXED_PRECISION` combining supported FP8/NVFP4 schemes and unquantized layers |
+| compressed-tensors `nvfp4-pack-quantized` | Symmetric `tensor_group` weights with `group_size: 16`; W4A16 or calibrated W4A4 with `dynamic: "local"` input activations |
+
+W4A16 preserves BF16/F16 activations. W4A4 quantizes activation blocks to E2M1 using the
+checkpoint's calibrated global scale. The loader preserves this choice, including mixed checkpoints,
+and reads older ModelOpt metadata from `hf_quant_config.json`. ModelOpt uses `weight_scale_2` and
+`input_scale`; compressed-tensors uses reciprocal `weight_global_scale` and `input_global_scale`.
+These conventions are normalized during loading.
+
+Accelerated inference requires an NVIDIA Blackwell GPU, CUDA 13.3 or newer, a compatible `tileiras`,
+and a binary built with `cuda,cutile`. Use BF16 or F16 model dtype. With CUDA 13.3 selected in the
+build and runtime environment, load [NVIDIA's Qwen3-14B-NVFP4 checkpoint](https://huggingface.co/nvidia/Qwen3-14B-NVFP4):
+
+```bash
+cargo install --path mistralrs-cli --features cuda,cutile
+mistralrs run -m nvidia/Qwen3-14B-NVFP4 --dtype bf16
+```
+
+The model config selects NVFP4 automatically; omit `--quant` and `--isq`. See
+[cuTile setup](/developer/moe-backends/) for toolkit selection and installation.
+
+The Rust API and Python source builds also expose the `cutile` feature. Run the Rust example with:
+
+```bash
+cargo run --release -p mistralrs --example nvfp4 --features cuda,cutile
+```
+
+For a [Python source build](/developer/from-source/#python-wheels), run
+`maturin develop --release --features cuda,cutile` from `mistralrs-pyo3`.
+
+Dense and MoE projections are supported. Experts within each projection must share a quantization
+scheme, and input-dimension shards must align to 16 weights. NVFP4 creation through ISQ, NVFP4 UQFF
+serialization, and NVFP4 GGUF loading are not supported.
+
+The CUDA backend uses a dedicated matrix-vector kernel for small decode batches. Larger dense
+batches use tiled matrix multiplication; W4A4 activations are quantized once and reused across
+output tiles. Packed checkpoint tensors are made contiguous during loading. Kernel compilation is
+warmed before CUDA graph capture.
+
+On SM 12.1 with CUDA 13.3, eligible large dense W4A4 projections use CUTLASS with BF16 or F16
+outputs. Weight scales are prepared during loading, and activation scales are converted for each
+native matrix multiplication. Eligible decode batches use a weight-first tile when packed weights
+and block scales fill at least the GPU L2 cache. Selection depends on hardware and matrix
+dimensions; output rounding still happens before bias addition.
+
+Compatible projections can share packed weights and quantized activations through the common
+projection loader. W4A4 projections share an activation buffer only when their normalized calibrated
+input scales match exactly. Each output row retains its own weight scale. These optimizations apply
+to supported ModelOpt and compressed-tensors checkpoints without model-specific configuration.
+
+Compatible gated feed-forward projections fuse activation, multiplication, and NVFP4 quantization
+for both packed and separate gate/up outputs. SiLU, ReLU, and sigmoid preserve the activation and
+product rounding of the unfused path; other activations use the existing path.
+
+To measure decode, prefill, and expert projections on your GPU:
+
+```bash
+cargo run --release -p mistralrs-quant --features cuda,cutile --example nvfp4_bench -- --graph
+```
+
+The benchmark checks its outputs and emits JSON with median GPU and host latency. Use
+`--suite decode`, `--suite dense`, or `--suite moe` to select cases, `--f16` for FP16, and
+`--w4a16` to preserve activations. Repeated projections can benefit from the GPU cache; measure
+full-model generation separately when comparing inference throughput.
 
 ### MXFP4
 
