@@ -308,6 +308,7 @@ class DiffusionArchitecture(Enum):
 @dataclass
 class SpeechLoaderType(Enum):
     Dia = "Dia"
+    PocketTts = "PocketTts"
 
 @dataclass
 class IsqOrganization(Enum):
