@@ -21,10 +21,12 @@ pub(crate) use hybrid_cache::RecurrentCheckpointStateSnapshot;
 pub(crate) use hybrid_cache::GDN_PENDING_KEY_BANK_COUNT;
 pub(crate) use hybrid_cache::{
     GdnDeferredStatePool, GdnDeferredStateSpec, GdnPendingTransitionPool, GdnPendingTransitionSpec,
+    INITIAL_RECURRENT_POOL_CAPACITY,
 };
 pub use hybrid_cache::{
-    HybridCache, HybridCacheConfig, HybridLayerCache, HybridLayerType, RecurrentLayerConfig,
-    RecurrentStateLayout, RecurrentStatePool, RecurrentStateSnapshot, RecurrentStateSpec,
+    HybridAuxiliarySnapshot, HybridAuxiliaryState, HybridCache, HybridCacheConfig,
+    HybridLayerCache, HybridLayerType, RecurrentLayerConfig, RecurrentStateLayout,
+    RecurrentStatePool, RecurrentStateSnapshot, RecurrentStateSpec,
 };
 pub use rotating_cache::{RotatingCache, RotatingCacheSnapshot};
 pub use single_cache::{SingleCache, SingleCacheSnapshot};

@@ -934,6 +934,7 @@ impl Engine {
                 Some(MatchingCache::Normal {
                     normal,
                     recurrent_snapshots,
+                    auxiliary_snapshots,
                     images_to_keep,
                     audios_to_keep,
                     video_frames_to_keep,
@@ -946,18 +947,58 @@ impl Engine {
 
                     if let Some(snapshots) = recurrent_snapshots {
                         if let Some(slot_idx) = seq.recurrent_state_idx() {
-                            let restore_result = {
+                            let restore_result = (|| -> candle_core::Result<()> {
                                 let pipeline = get_mut_arcmutex!(self.pipeline);
                                 if pipeline.cache().is_hybrid() {
-                                    pipeline.cache().hybrid().restore_recurrent_state(
-                                        *seq.id(),
-                                        slot_idx,
-                                        &snapshots,
-                                    )
+                                    if let Some(auxiliary) = auxiliary_snapshots.as_deref() {
+                                        pipeline
+                                            .cache()
+                                            .hybrid()
+                                            .validate_auxiliary_restore(slot_idx, auxiliary)?;
+                                    }
+                                    let previous_recurrent = pipeline
+                                        .cache()
+                                        .hybrid()
+                                        .snapshot_recurrent_state(*seq.id(), slot_idx);
+                                    let recurrent_result = pipeline
+                                        .cache()
+                                        .hybrid()
+                                        .restore_recurrent_state(*seq.id(), slot_idx, &snapshots);
+                                    match (recurrent_result, auxiliary_snapshots.as_deref()) {
+                                        (Ok(()), Some(auxiliary)) => {
+                                            if let Err(error) = pipeline
+                                                .cache()
+                                                .hybrid()
+                                                .restore_auxiliary_state(slot_idx, auxiliary)
+                                            {
+                                                if let Ok(previous) = previous_recurrent {
+                                                    if let Err(rollback_error) = pipeline
+                                                        .cache()
+                                                        .hybrid()
+                                                        .restore_recurrent_state(
+                                                            *seq.id(),
+                                                            slot_idx,
+                                                            &previous,
+                                                        )
+                                                    {
+                                                        tracing::error!(
+                                                            %rollback_error,
+                                                            "Failed to roll back recurrent state after auxiliary restore failure"
+                                                        );
+                                                    }
+                                                }
+                                                Err(error)
+                                            } else {
+                                                Ok(())
+                                            }
+                                        }
+                                        (Ok(()), None) => Ok(()),
+                                        (Err(error), _) => Err(error),
+                                    }
                                 } else {
                                     Ok(())
                                 }
-                            };
+                            })();
                             if let Err(err) = restore_result {
                                 let pipeline = get_mut_arcmutex!(self.pipeline);
                                 if pipeline.cache().is_hybrid() {

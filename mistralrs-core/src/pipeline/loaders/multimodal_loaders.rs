@@ -20,7 +20,9 @@ use serde::Deserialize;
 
 use self::minicpmo::{MiniCpmOConfig, MiniCpmOModel, MiniCpmOProcessor};
 
-use super::{DeviceMappedModelLoader, NonMappedSubModel, NormalLoadingMetadata};
+use super::{
+    ContextMemoryEstimate, DeviceMappedModelLoader, NonMappedSubModel, NormalLoadingMetadata,
+};
 use crate::amoe::AnyMoeBaseModelMixin;
 use crate::attention::ATTENTION_CHUNK_SIZE;
 use crate::block_diffusion::BlockDiffusionMixin;
@@ -304,6 +306,8 @@ pub enum MultimodalLoaderType {
     Qwen3_5,
     #[serde(rename = "qwen3_5moe")]
     Qwen3_5Moe,
+    #[serde(rename = "qwen4exp")]
+    Qwen4Exp,
     #[serde(rename = "voxtral")]
     Voxtral,
     #[serde(rename = "gemma4")]
@@ -343,6 +347,7 @@ impl MultimodalLoaderType {
             "Qwen3VLMoeForConditionalGeneration" => Ok(Self::Qwen3VLMoE),
             "Qwen3_5ForConditionalGeneration" => Ok(Self::Qwen3_5),
             "Qwen3_5MoeForConditionalGeneration" => Ok(Self::Qwen3_5Moe),
+            "Qwen4ExpForConditionalGeneration" => Ok(Self::Qwen4Exp),
             "VoxtralRealtimeForConditionalGeneration" => Ok(Self::Voxtral),
             other => anyhow::bail!(
                 "Unsupported Hugging Face Transformers -CausalLM model class `{other}`. Please raise an issue."
@@ -377,8 +382,9 @@ impl FromStr for MultimodalLoaderType {
             "qwen3vlmoe" => Ok(Self::Qwen3VLMoE),
             "qwen3_5" => Ok(Self::Qwen3_5),
             "qwen3_5moe" => Ok(Self::Qwen3_5Moe),
+            "qwen4exp" => Ok(Self::Qwen4Exp),
             "voxtral" => Ok(Self::Voxtral),
-            a => Err(format!("Unknown architecture `{a}`. Possible architectures: `phi3v`, `idefics2`, `llava_next`, `llava`, `lfm2vl`, `vllama`, `qwen2vl`, `idefics3`, `minicpmo`, `phi4mm`, `qwen2_5vl`, `gemma3`, `mistral3`, `llama4`, `gemma3n`, `gemma4`, `muse_glimmer`, `qwen3vl`, `qwen3vlmoe`, `qwen3_5`, `qwen3_5moe`, `voxtral`, `diffusiongemma`.")),
+            a => Err(format!("Unknown architecture `{a}`. Possible architectures: `phi3v`, `idefics2`, `llava_next`, `llava`, `lfm2vl`, `vllama`, `qwen2vl`, `idefics3`, `minicpmo`, `phi4mm`, `qwen2_5vl`, `gemma3`, `mistral3`, `llama4`, `gemma3n`, `gemma4`, `muse_glimmer`, `qwen3vl`, `qwen3vlmoe`, `qwen3_5`, `qwen3_5moe`, `qwen4exp`, `voxtral`, `diffusiongemma`.")),
         }
     }
 }
@@ -405,6 +411,7 @@ impl std::fmt::Display for MultimodalLoaderType {
             MultimodalLoaderType::Qwen3VLMoE => "qwen3vlmoe",
             MultimodalLoaderType::Qwen3_5 => "qwen3_5",
             MultimodalLoaderType::Qwen3_5Moe => "qwen3_5moe",
+            MultimodalLoaderType::Qwen4Exp => "qwen4exp",
             MultimodalLoaderType::Voxtral => "voxtral",
             MultimodalLoaderType::Gemma4 => "gemma4",
             MultimodalLoaderType::MuseGlimmer => "muse_glimmer",
@@ -466,6 +473,7 @@ impl AutoMultimodalLoader {
             MultimodalLoaderType::Qwen3VLMoE => Box::new(Qwen3VLMoELoader),
             MultimodalLoaderType::Qwen3_5 => Box::new(Qwen3_5Loader),
             MultimodalLoaderType::Qwen3_5Moe => Box::new(Qwen3_5MoeLoader),
+            MultimodalLoaderType::Qwen4Exp => Box::new(Qwen4ExpLoader),
             MultimodalLoaderType::Voxtral => Box::new(VoxtralLoader),
             MultimodalLoaderType::Gemma4 => Box::new(Gemma4Loader),
             MultimodalLoaderType::MuseGlimmer => Box::new(MuseGlimmerLoader),
@@ -6973,6 +6981,325 @@ impl MultimodalModelLoader for Qwen3_5Loader {
     }
 }
 
+pub struct Qwen4ExpLoader;
+
+pub struct Qwen4ExpPrefixer;
+
+impl MultimodalPromptPrefixer for Qwen4ExpPrefixer {
+    // No-op: the chat template handles image tokens when it sees {"type": "image"}
+    // entries in the content, matching the Qwen3-VL family.
+}
+
+impl MultimodalModelLoader for Qwen4ExpLoader {
+    fn runtime_config<'a>(
+        &self,
+        config: &'a str,
+        max_model_len: Option<usize>,
+    ) -> Result<Cow<'a, str>> {
+        super::reject_mtp_config(config, "Qwen4Exp")?;
+        match max_model_len {
+            // The Qwen4Exp text config carries the same `text_config.max_position_embeddings`
+            // field the Qwen3.5 helper edits, so the helper is reused.
+            Some(max_model_len) => Ok(Cow::Owned(
+                crate::vision_models::qwen3_5::config::apply_max_model_len(config, max_model_len)?,
+            )),
+            None => Ok(Cow::Borrowed(config)),
+        }
+    }
+
+    fn load(
+        &self,
+        config: &str,
+        vb: ShardedVarBuilder,
+        normal_loading_metadata: NormalLoadingMetadata,
+        attention_mechanism: AttentionImplementation,
+    ) -> Result<Box<dyn MultimodalModel + Send + Sync>> {
+        super::reject_mtp_config(config, "Qwen4Exp")?;
+        let cfg: crate::models::qwen4_exp::multimodal::MultimodalConfig =
+            serde_json::from_str(config)?;
+        Ok(Box::new(
+            crate::models::qwen4_exp::multimodal::Qwen4ExpModel::new(
+                &cfg,
+                vb,
+                self.is_gptx_for(config, &normal_loading_metadata)?,
+                normal_loading_metadata,
+                attention_mechanism,
+            )?,
+        ))
+    }
+
+    fn is_gptx(&self, _config: &str) -> bool {
+        true
+    }
+
+    fn get_config_repr(&self, config: &str) -> Result<Box<dyn Debug>> {
+        let config: crate::models::qwen4_exp::multimodal::MultimodalConfig =
+            serde_json::from_str(config)?;
+        Ok(Box::new(config))
+    }
+
+    fn get_processor(
+        &self,
+        _model_config: &str,
+        _processor_config: Option<ProcessorConfig>,
+        _preprocessor_config: PreProcessorConfig,
+        max_edge: Option<u32>,
+    ) -> Arc<dyn Processor + Send + Sync> {
+        Arc::new(crate::vision_models::qwen3_vl::Qwen3VLProcessor::new(
+            max_edge,
+        ))
+    }
+
+    fn supports_paged_attention(&self, _config: &str) -> bool {
+        // The Qwen4Exp decoder fails closed on paged attention.
+        false
+    }
+
+    fn supports_encoder_cache(&self, _config: &str) -> bool {
+        true
+    }
+
+    fn supports_prefix_cacher(&self, _config: &str) -> bool {
+        true
+    }
+
+    fn prefixer(&self, _config: &str) -> Arc<dyn MultimodalPromptPrefixer> {
+        Arc::new(Qwen4ExpPrefixer)
+    }
+
+    fn video_frame_sampling(&self, _config: &str) -> crate::VideoFrameSampling {
+        QWEN3_VIDEO_SAMPLING
+    }
+
+    fn modalities(&self, _config: &str) -> Result<Modalities> {
+        // Video inputs fail closed until their position and PLE behavior is validated.
+        Ok(Modalities {
+            input: vec![SupportedModality::Text, SupportedModality::Vision],
+            output: vec![SupportedModality::Text],
+        })
+    }
+}
+
+impl IsqModelLoader for Qwen4ExpLoader {
+    fn promoted_isq_predicates(&self, config: &str) -> Result<Vec<Regex>> {
+        // The multimodal text model loads through the same tensor paths as the normal
+        // Qwen4Exp GGUF path, so the ISQ predicates are shared. The normal loader
+        // deliberately excludes `per_layer_token_embd.weight`.
+        super::normal_loaders::Qwen4ExpLoader.promoted_isq_predicates(config)
+    }
+
+    fn isq_layer_regexes(&self, config: &str) -> Result<Vec<Regex>> {
+        super::normal_loaders::Qwen4ExpLoader.isq_layer_regexes(config)
+    }
+}
+
+type MultimodalQwen4ExpConfig = crate::models::qwen4_exp::multimodal::MultimodalConfig;
+
+impl DeviceMappedModelLoader for Qwen4ExpLoader {
+    fn mapped_max_act_size_elems(
+        &self,
+        config: &str,
+        params: &AutoDeviceMapParams,
+    ) -> Result<usize> {
+        let AutoDeviceMapParams::Multimodal {
+            max_seq_len,
+            max_batch_size,
+            max_image_shape,
+            max_num_images,
+        } = params
+        else {
+            anyhow::bail!("Expected multimodal AutoDeviceMapParams for this model!")
+        };
+        let cfg: MultimodalQwen4ExpConfig = serde_json::from_str(config)?;
+        let img_seq_len = {
+            let cfg = &cfg.vision_config;
+            let grid_t = 1;
+            let grid_h = (max_image_shape.0 / cfg.patch_size) / cfg.spatial_merge_size;
+            let grid_w = (max_image_shape.1 / cfg.patch_size) / cfg.spatial_merge_size;
+            grid_t * grid_h * grid_w * max_num_images
+        };
+        let max_text_attn = {
+            let cfg = &cfg.text_config;
+            let max_seq_len = img_seq_len + max_seq_len.min(&ATTENTION_CHUNK_SIZE);
+            max_batch_size * cfg.num_attention_heads * max_seq_len * max_seq_len
+        };
+        Ok(max_text_attn)
+    }
+
+    fn non_mapped_max_act_size_elems(
+        &self,
+        config: &str,
+        params: &AutoDeviceMapParams,
+    ) -> Result<usize> {
+        let AutoDeviceMapParams::Multimodal {
+            max_seq_len: _,
+            max_batch_size,
+            max_image_shape,
+            max_num_images,
+        } = params
+        else {
+            anyhow::bail!("Expected multimodal AutoDeviceMapParams for this model!")
+        };
+        let cfg: MultimodalQwen4ExpConfig = serde_json::from_str(config)?;
+        let img_seq_len = {
+            let cfg = &cfg.vision_config;
+            let grid_t = 1;
+            let grid_h = max_image_shape.0 / cfg.patch_size;
+            let grid_w = max_image_shape.1 / cfg.patch_size;
+            grid_t * grid_h * grid_w
+        };
+        let max_vision_attn = {
+            let cfg = &cfg.vision_config;
+            (max_batch_size * max_num_images) * cfg.num_heads * img_seq_len * img_seq_len
+        };
+        Ok(max_vision_attn)
+    }
+
+    fn non_mapped_size_in_bytes(
+        &self,
+        config: &str,
+        dtype: DType,
+        weight_pack_factor: usize,
+        quantization: Option<&super::AutoDeviceMapQuantization<'_>>,
+        matformer_config: Option<&MatformerSliceConfig>,
+    ) -> Result<usize> {
+        // The text-side non-mapped weights (embeddings, final HC mixer, and the logical
+        // PLE table rows) match the normal Qwen4Exp estimates; the vision mergers are
+        // added on top.
+        let cfg: MultimodalQwen4ExpConfig = serde_json::from_str(config)?;
+        let text_json = text_config_json(config)?;
+        let text = super::normal_loaders::Qwen4ExpLoader.non_mapped_size_in_bytes(
+            &text_json,
+            dtype,
+            weight_pack_factor,
+            quantization,
+            matformer_config,
+        )?;
+        let vision_cfg = &cfg.vision_config;
+        let hidden_size = vision_cfg.hidden_size * vision_cfg.spatial_merge_size.pow(2);
+        let mlp0 = hidden_size * hidden_size + hidden_size;
+        let mlp2 = hidden_size * vision_cfg.out_hidden_size + vision_cfg.out_hidden_size;
+        let ln_q = vision_cfg.hidden_size + bias_if!(true, vision_cfg.hidden_size);
+        let patch_merger = mlp0 + mlp2 + ln_q;
+        let deepstack = vision_cfg.deepstack_visual_indexes.len()
+            * (mlp0 + mlp2 + hidden_size + bias_if!(true, hidden_size));
+        Ok(text + (patch_merger + deepstack) * dtype.size_in_bytes())
+    }
+
+    fn layer_sizes_in_bytes(
+        &self,
+        config: &str,
+        dtype: DType,
+        weight_pack_factor: usize,
+        matformer_config: Option<&MatformerSliceConfig>,
+    ) -> Result<Vec<usize>> {
+        // Per-layer text weights match the normal Qwen4Exp estimates exactly.
+        let text_json = text_config_json(config)?;
+        super::normal_loaders::Qwen4ExpLoader.layer_sizes_in_bytes(
+            &text_json,
+            dtype,
+            weight_pack_factor,
+            matformer_config,
+        )
+    }
+
+    fn num_layers(&self, config: &str) -> Result<usize> {
+        let cfg: MultimodalQwen4ExpConfig = serde_json::from_str(config)?;
+        Ok(cfg.text_config.num_hidden_layers)
+    }
+
+    fn layer_auxiliary_cache_size_in_bytes(
+        &self,
+        config: &str,
+        dtype: DType,
+        params: &AutoDeviceMapParams,
+    ) -> Result<Vec<usize>> {
+        let text_json = text_config_json(config)?;
+        let text_params = qwen4exp_text_map_params(params)?;
+        super::normal_loaders::Qwen4ExpLoader.layer_auxiliary_cache_size_in_bytes(
+            &text_json,
+            dtype,
+            &text_params,
+        )
+    }
+
+    fn non_mapped_context_size_in_bytes(
+        &self,
+        config: &str,
+        dtype: DType,
+        params: &AutoDeviceMapParams,
+    ) -> Result<usize> {
+        let text_json = text_config_json(config)?;
+        let text_params = qwen4exp_text_map_params(params)?;
+        super::normal_loaders::Qwen4ExpLoader.non_mapped_context_size_in_bytes(
+            &text_json,
+            dtype,
+            &text_params,
+        )
+    }
+
+    fn mapped_context_workspace_size_in_bytes(
+        &self,
+        config: &str,
+        dtype: DType,
+        params: &AutoDeviceMapParams,
+    ) -> Result<usize> {
+        let text_json = text_config_json(config)?;
+        let text_params = qwen4exp_text_map_params(params)?;
+        super::normal_loaders::Qwen4ExpLoader.mapped_context_workspace_size_in_bytes(
+            &text_json,
+            dtype,
+            &text_params,
+        )
+    }
+
+    fn context_memory_estimates(
+        &self,
+        config: &str,
+        dtype: DType,
+        params: &AutoDeviceMapParams,
+    ) -> Result<Vec<ContextMemoryEstimate>> {
+        let text_json = text_config_json(config)?;
+        let text_params = qwen4exp_text_map_params(params)?;
+        super::normal_loaders::Qwen4ExpLoader.context_memory_estimates(
+            &text_json,
+            dtype,
+            &text_params,
+        )
+    }
+
+    fn model_config(&self, config: &str) -> Result<Box<dyn ModelConfigLike>> {
+        let text_json = text_config_json(config)?;
+        super::normal_loaders::Qwen4ExpLoader.model_config(&text_json)
+    }
+}
+
+fn qwen4exp_text_map_params(params: &AutoDeviceMapParams) -> Result<AutoDeviceMapParams> {
+    let AutoDeviceMapParams::Multimodal {
+        max_seq_len,
+        max_batch_size,
+        ..
+    } = params
+    else {
+        anyhow::bail!("Expected multimodal AutoDeviceMapParams for this model!")
+    };
+    Ok(AutoDeviceMapParams::Text {
+        max_seq_len: *max_seq_len,
+        max_batch_size: *max_batch_size,
+    })
+}
+
+/// Extract the `text_config` object from a Qwen4Exp multimodal config as JSON so the
+/// normal Qwen4Exp loader's text-side estimates can consume it.
+fn text_config_json(config: &str) -> Result<String> {
+    let value: serde_json::Value = serde_json::from_str(config)?;
+    let text_config = value
+        .get("text_config")
+        .ok_or_else(|| anyhow::anyhow!("Qwen4Exp multimodal config requires `text_config`"))?;
+    serde_json::to_string(text_config)
+        .map_err(|e| anyhow::anyhow!("Failed to serialize Qwen4Exp multimodal `text_config`: {e}"))
+}
+
 impl IsqModelLoader for Qwen3_5Loader {
     fn promoted_isq_predicates(&self, _config: &str) -> Result<Vec<Regex>> {
         Ok(vec![
@@ -9669,6 +9996,51 @@ mod tests {
     }
 
     #[test]
+    fn qwen4exp_multimodal_delegates_auxiliary_context_estimates() -> Result<()> {
+        let text: serde_json::Value =
+            serde_json::from_str(crate::models::qwen4_exp::config::tests::OFFICIAL_TEXT_CONFIG)?;
+        let config = serde_json::json!({
+            "text_config": text,
+            "vision_config": {},
+            "image_token_id": 248056,
+            "video_token_id": 248057,
+            "vision_start_token_id": 248053,
+            "vision_end_token_id": 248054
+        })
+        .to_string();
+        let multimodal_params = AutoDeviceMapParams::Multimodal {
+            max_seq_len: 8,
+            max_batch_size: 2,
+            max_image_shape: (224, 224),
+            max_num_images: 1,
+        };
+        let text_params = AutoDeviceMapParams::Text {
+            max_seq_len: 8,
+            max_batch_size: 2,
+        };
+        let text_config = text_config_json(&config)?;
+
+        assert_eq!(
+            Qwen4ExpLoader.layer_auxiliary_cache_size_in_bytes(
+                &config,
+                DType::F16,
+                &multimodal_params,
+            )?,
+            crate::pipeline::loaders::normal_loaders::Qwen4ExpLoader
+                .layer_auxiliary_cache_size_in_bytes(&text_config, DType::F16, &text_params,)?
+        );
+        assert_eq!(
+            Qwen4ExpLoader.context_memory_estimates(&config, DType::F16, &multimodal_params,)?,
+            crate::pipeline::loaders::normal_loaders::Qwen4ExpLoader.context_memory_estimates(
+                &text_config,
+                DType::F16,
+                &text_params,
+            )?
+        );
+        Ok(())
+    }
+
+    #[test]
     fn qwen3_vl_family_reports_video_input() -> Result<()> {
         let expected_input = vec![
             SupportedModality::Text,
@@ -10385,6 +10757,25 @@ mod tests {
                 )
                 .unwrap());
         }
+    }
+
+    #[test]
+    fn qwen4exp_enables_prefix_caching_without_paged_attention() {
+        let loader = Qwen4ExpLoader;
+        assert!(!loader.supports_paged_attention(""));
+        assert!(loader.supports_prefix_cacher(""));
+    }
+
+    #[test]
+    fn qwen4exp_multimodal_runtime_config_rejects_mtp_before_loading_weights() {
+        let config = crate::pipeline::loaders::inject_mtp_config_flag(
+            r#"{"architectures":["Qwen4ExpForConditionalGeneration"]}"#,
+        )
+        .unwrap();
+        let error = Qwen4ExpLoader.runtime_config(&config, None).unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("Qwen4Exp does not support built-in MTP or draft-model loading"));
     }
 
     #[test]

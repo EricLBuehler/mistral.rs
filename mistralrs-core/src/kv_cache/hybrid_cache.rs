@@ -8,7 +8,9 @@
 //! each sequence in the current batch to its slot in the pool.
 
 use candle_core::{DType, Device, DeviceLocation, IndexOp, Result, Tensor};
+use std::any::Any;
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
 use super::KvCache;
 use crate::layers_masker::PastKvLenCache;
@@ -467,6 +469,7 @@ pub struct RecurrentStatePool {
 /// Initial pool capacity before dynamic growth: the pre-captured CUDA graph batch range plus the
 /// graph pad slot, so growth (which invalidates captured graphs) only happens past that.
 const INITIAL_POOL_CAPACITY: usize = 9;
+pub(crate) const INITIAL_RECURRENT_POOL_CAPACITY: usize = INITIAL_POOL_CAPACITY;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum RecurrentSlotOwner {
@@ -1044,6 +1047,54 @@ pub struct RecurrentBatchMapping {
     pub physical_slots: Vec<u32>,
 }
 
+/// Auxiliary per-sequence state owned by a hybrid-cache consumer and keyed by the same
+/// recurrent state slots as the cache's pools.
+///
+/// Registered handlers are invoked by the cache's lifecycle operations so auxiliary state
+/// cannot outlive the slot it is keyed by: per-slot reset and release clear the matching
+/// slot and a global reset clears every slot. Handlers run before the cache mutates its
+/// own state, so a failing handler aborts the operation without touching the recurrent
+/// pools or attention caches. Qwen4Exp QSA attention caches and PLE hashing/convolution
+/// state use this contract; reset and release currently both drop the sequence's state
+/// because that state reinitializes on demand, but they stay distinct so prefix-cache
+/// restore can later reset a slot to a captured state instead.
+pub type HybridAuxiliarySnapshot = Arc<dyn Any + Send + Sync>;
+
+pub trait HybridAuxiliaryState: Send + Sync + std::fmt::Debug {
+    /// Capture one slot without changing it.
+    fn snapshot_slot(&self, slot_idx: usize) -> Result<HybridAuxiliarySnapshot>;
+
+    /// Validate snapshot compatibility without changing the slot.
+    fn validate_restore_slot(
+        &self,
+        slot_idx: usize,
+        snapshot: &HybridAuxiliarySnapshot,
+    ) -> Result<()>;
+
+    /// Restore a snapshot after every registered handler has passed validation.
+    fn restore_slot(&self, slot_idx: usize, snapshot: &HybridAuxiliarySnapshot) -> Result<()>;
+
+    /// Reset one slot's auxiliary state to its freshly-initialized form.
+    fn reset_slot(&self, slot_idx: usize) -> Result<()>;
+
+    /// Release one slot's auxiliary state entirely, as when its sequence finishes.
+    fn release_slot(&self, slot_idx: usize) -> Result<()>;
+
+    /// Validate a truncation without mutating state. Implementations must guarantee that
+    /// `truncate_slot` succeeds after this returns while the cache remains exclusively held.
+    fn validate_truncate_slot(&self, _slot_idx: usize, _len: usize) -> Result<()> {
+        candle_core::bail!("this hybrid auxiliary state does not support truncation")
+    }
+
+    /// Truncate one slot after every registered state has passed validation.
+    fn truncate_slot(&self, _slot_idx: usize, _len: usize) -> Result<()> {
+        candle_core::bail!("this hybrid auxiliary state does not support truncation")
+    }
+
+    /// Clear every slot's auxiliary state, as in a global cache reset.
+    fn clear(&self) -> Result<()>;
+}
+
 /// Hybrid cache that stores per-layer caches for mixed attention/recurrent models
 ///
 /// For continuous batching:
@@ -1072,6 +1123,9 @@ pub struct HybridCache {
     recurrent_storage_locked: bool,
     // Scratch slot CUDA graph pad rows write into; allocated on first use, dropped on reset
     graph_pad_slot: Option<usize>,
+    // Consumer-owned auxiliary state (e.g. Qwen4Exp QSA caches and PLE state) keyed by the
+    // same recurrent state slots; notified by the reset and release lifecycle below.
+    auxiliary_states: Vec<Arc<dyn HybridAuxiliaryState>>,
 }
 
 impl HybridCache {
@@ -1134,9 +1188,107 @@ impl HybridCache {
             recurrent_storage_generation: 0,
             recurrent_storage_locked: false,
             graph_pad_slot: None,
+            auxiliary_states: Vec::new(),
         };
         cache.publish_recurrent_slot_metrics();
         Ok(cache)
+    }
+
+    /// Register auxiliary sequence state (e.g. Qwen4Exp QSA attention caches or PLE
+    /// hashing/convolution state) that is keyed by this cache's recurrent state slots.
+    pub fn register_auxiliary_state(&mut self, state: Arc<dyn HybridAuxiliaryState>) {
+        self.auxiliary_states.push(state);
+    }
+
+    pub fn auxiliary_state_count(&self) -> usize {
+        self.auxiliary_states.len()
+    }
+
+    fn notify_auxiliary_reset_slot(&self, slot_idx: usize) -> Result<()> {
+        for state in &self.auxiliary_states {
+            state.reset_slot(slot_idx)?;
+        }
+        Ok(())
+    }
+
+    fn notify_auxiliary_release_slot(&self, slot_idx: usize) -> Result<()> {
+        for state in &self.auxiliary_states {
+            state.release_slot(slot_idx)?;
+        }
+        Ok(())
+    }
+
+    fn notify_auxiliary_clear(&self) -> Result<()> {
+        for state in &self.auxiliary_states {
+            state.clear()?;
+        }
+        Ok(())
+    }
+
+    pub fn snapshot_auxiliary_state(
+        &self,
+        slot_idx: usize,
+    ) -> Result<Vec<HybridAuxiliarySnapshot>> {
+        self.ensure_recurrent_slot_allocated(slot_idx)?;
+        self.auxiliary_states
+            .iter()
+            .map(|state| state.snapshot_slot(slot_idx))
+            .collect()
+    }
+
+    pub fn validate_auxiliary_restore(
+        &self,
+        slot_idx: usize,
+        snapshots: &[HybridAuxiliarySnapshot],
+    ) -> Result<()> {
+        self.ensure_recurrent_slot_allocated(slot_idx)?;
+        if snapshots.len() != self.auxiliary_states.len() {
+            candle_core::bail!(
+                "hybrid auxiliary snapshot count mismatch: got {}, expected {}",
+                snapshots.len(),
+                self.auxiliary_states.len()
+            );
+        }
+        for (state, snapshot) in self.auxiliary_states.iter().zip(snapshots) {
+            state.validate_restore_slot(slot_idx, snapshot)?;
+        }
+        Ok(())
+    }
+
+    pub fn restore_auxiliary_state(
+        &self,
+        slot_idx: usize,
+        snapshots: &[HybridAuxiliarySnapshot],
+    ) -> Result<()> {
+        self.validate_auxiliary_restore(slot_idx, snapshots)?;
+        let previous = self.snapshot_auxiliary_state(slot_idx)?;
+        for (index, (state, snapshot)) in self.auxiliary_states.iter().zip(snapshots).enumerate() {
+            if let Err(error) = state.restore_slot(slot_idx, snapshot) {
+                for (rollback_state, rollback_snapshot) in self.auxiliary_states[..index]
+                    .iter()
+                    .zip(&previous[..index])
+                {
+                    rollback_state.restore_slot(slot_idx, rollback_snapshot)?;
+                }
+                return Err(error);
+            }
+        }
+        Ok(())
+    }
+
+    /// Truncate every registered auxiliary state for one logical sequence slot.
+    ///
+    /// Validation is completed for all handlers before any handler mutates state, preventing
+    /// an unsupported length in one component from partially truncating another component.
+    pub fn truncate_auxiliary_slot_to(&self, slot_idx: usize, len: usize) -> Result<()> {
+        self.ensure_recurrent_slot_allocated(slot_idx)?;
+        for state in &self.auxiliary_states {
+            state.validate_truncate_slot(slot_idx, len)?;
+        }
+        for state in &self.auxiliary_states {
+            state.truncate_slot(slot_idx, len)?;
+        }
+        Ok(())
     }
 
     /// Slot reserved for CUDA graph pad rows; never handed to a sequence while it lives.
@@ -1991,6 +2143,7 @@ impl HybridCache {
         }
 
         self.ensure_recurrent_slot_owned(slot_idx, RecurrentSlotOwner::Sequence(sequence_id))?;
+        self.notify_auxiliary_release_slot(slot_idx)?;
         for cache in &mut self.caches {
             if let HybridLayerCache::Recurrent(pool) = cache {
                 pool.clear_pending_transition_slot(slot_idx)?;
@@ -2021,6 +2174,7 @@ impl HybridCache {
     /// Reset a specific sequence's state in all recurrent layers.
     pub fn reset_seq(&mut self, sequence_id: usize, slot_idx: usize) -> Result<()> {
         self.ensure_recurrent_slot_owned(slot_idx, RecurrentSlotOwner::Sequence(sequence_id))?;
+        self.notify_auxiliary_reset_slot(slot_idx)?;
         self.initialized_slots[slot_idx] = false;
         let slot_is_pristine = self.pristine_zero_slots[slot_idx];
         self.pristine_zero_slots[slot_idx] = false;
@@ -2054,6 +2208,7 @@ impl HybridCache {
         {
             candle_core::bail!("cannot reset recurrent storage while sequence slots are allocated");
         }
+        self.notify_auxiliary_clear()?;
         let physical_lanes = self.physical_checkpoint_lanes();
         let storage = self
             .caches
@@ -2095,6 +2250,9 @@ impl HybridCache {
     pub fn reset_attention_and_slots(&mut self, slots: &[usize]) -> Result<()> {
         for &slot in slots {
             self.ensure_recurrent_slot_allocated(slot)?;
+        }
+        for &slot in slots {
+            self.notify_auxiliary_reset_slot(slot)?;
         }
         for &slot in slots {
             self.initialized_slots[slot] = false;
@@ -2416,6 +2574,267 @@ mod tests {
                 recurrent_dtype: Some(DType::F32),
             },
         }
+    }
+
+    #[derive(Default, Debug)]
+    struct RecordingAuxiliary {
+        calls: std::sync::Mutex<Vec<String>>,
+    }
+
+    impl RecordingAuxiliary {
+        fn recorded(&self) -> Vec<String> {
+            self.calls.lock().unwrap().clone()
+        }
+    }
+
+    impl HybridAuxiliaryState for RecordingAuxiliary {
+        fn snapshot_slot(&self, slot_idx: usize) -> Result<HybridAuxiliarySnapshot> {
+            Ok(Arc::new(slot_idx))
+        }
+
+        fn validate_restore_slot(
+            &self,
+            _slot_idx: usize,
+            snapshot: &HybridAuxiliarySnapshot,
+        ) -> Result<()> {
+            snapshot.downcast_ref::<usize>().ok_or_else(|| {
+                candle_core::Error::msg("recording auxiliary snapshot type mismatch")
+            })?;
+            Ok(())
+        }
+
+        fn restore_slot(&self, slot_idx: usize, snapshot: &HybridAuxiliarySnapshot) -> Result<()> {
+            self.validate_restore_slot(slot_idx, snapshot)?;
+            self.calls
+                .lock()
+                .unwrap()
+                .push(format!("restore:{slot_idx}"));
+            Ok(())
+        }
+
+        fn reset_slot(&self, slot_idx: usize) -> Result<()> {
+            self.calls.lock().unwrap().push(format!("reset:{slot_idx}"));
+            Ok(())
+        }
+
+        fn release_slot(&self, slot_idx: usize) -> Result<()> {
+            self.calls
+                .lock()
+                .unwrap()
+                .push(format!("release:{slot_idx}"));
+            Ok(())
+        }
+
+        fn validate_truncate_slot(&self, slot_idx: usize, len: usize) -> Result<()> {
+            self.calls
+                .lock()
+                .unwrap()
+                .push(format!("validate_truncate:{slot_idx}:{len}"));
+            Ok(())
+        }
+
+        fn truncate_slot(&self, slot_idx: usize, len: usize) -> Result<()> {
+            self.calls
+                .lock()
+                .unwrap()
+                .push(format!("truncate:{slot_idx}:{len}"));
+            Ok(())
+        }
+
+        fn clear(&self) -> Result<()> {
+            self.calls.lock().unwrap().push("clear".to_string());
+            Ok(())
+        }
+    }
+
+    #[derive(Default, Debug)]
+    struct FailingAuxiliary;
+
+    impl HybridAuxiliaryState for FailingAuxiliary {
+        fn snapshot_slot(&self, slot_idx: usize) -> Result<HybridAuxiliarySnapshot> {
+            Ok(Arc::new(slot_idx))
+        }
+
+        fn validate_restore_slot(
+            &self,
+            _slot_idx: usize,
+            _snapshot: &HybridAuxiliarySnapshot,
+        ) -> Result<()> {
+            candle_core::bail!("auxiliary restore validation failure")
+        }
+
+        fn restore_slot(
+            &self,
+            _slot_idx: usize,
+            _snapshot: &HybridAuxiliarySnapshot,
+        ) -> Result<()> {
+            candle_core::bail!("auxiliary restore failure")
+        }
+
+        fn reset_slot(&self, _slot_idx: usize) -> Result<()> {
+            candle_core::bail!("auxiliary reset failure");
+        }
+
+        fn release_slot(&self, _slot_idx: usize) -> Result<()> {
+            candle_core::bail!("auxiliary release failure");
+        }
+
+        fn clear(&self) -> Result<()> {
+            candle_core::bail!("auxiliary clear failure");
+        }
+    }
+
+    fn recording_cache(auxiliary: Arc<dyn HybridAuxiliaryState>) -> Result<HybridCache> {
+        let devices = vec![Device::Cpu, Device::Cpu];
+        let mut cache = HybridCache::new(
+            config(vec![HybridLayerType::Recurrent, HybridLayerType::Recurrent]),
+            DType::F32,
+            &devices,
+        )?;
+        cache.register_auxiliary_state(auxiliary);
+        Ok(cache)
+    }
+
+    #[test]
+    fn auxiliary_state_tracks_slot_lifecycle() -> Result<()> {
+        let auxiliary = Arc::new(RecordingAuxiliary::default());
+        let mut cache = recording_cache(Arc::clone(&auxiliary) as Arc<dyn HybridAuxiliaryState>)?;
+        assert_eq!(cache.auxiliary_state_count(), 1);
+
+        let slot = cache.allocate_seq(7)?;
+        cache.reset_seq(7, slot)?;
+        assert_eq!(auxiliary.recorded(), vec![format!("reset:{slot}")]);
+
+        assert!(cache.release_seq(7, slot)?);
+        assert_eq!(
+            auxiliary.recorded(),
+            vec![format!("reset:{slot}"), format!("release:{slot}")]
+        );
+
+        // A repeated release for an already-released slot must not notify again.
+        assert!(!cache.release_seq(7, slot)?);
+        assert_eq!(
+            auxiliary.recorded(),
+            vec![format!("reset:{slot}"), format!("release:{slot}")]
+        );
+
+        // The global reset clears every registered auxiliary state.
+        cache.reset()?;
+        assert_eq!(
+            auxiliary.recorded(),
+            vec![
+                format!("reset:{slot}"),
+                format!("release:{slot}"),
+                "clear".to_string()
+            ]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn reset_attention_and_slots_notifies_auxiliary_reset() -> Result<()> {
+        let auxiliary = Arc::new(RecordingAuxiliary::default());
+        let mut cache = recording_cache(Arc::clone(&auxiliary) as Arc<dyn HybridAuxiliaryState>)?;
+
+        let slot = cache.allocate_seq(5)?;
+        cache.reset_attention_and_slots(&[slot])?;
+        assert_eq!(auxiliary.recorded(), vec![format!("reset:{slot}")]);
+        Ok(())
+    }
+
+    #[test]
+    fn auxiliary_snapshots_restore_every_handler() -> Result<()> {
+        let first = Arc::new(RecordingAuxiliary::default());
+        let second = Arc::new(RecordingAuxiliary::default());
+        let mut cache = recording_cache(Arc::clone(&first) as Arc<dyn HybridAuxiliaryState>)?;
+        cache.register_auxiliary_state(Arc::clone(&second) as Arc<dyn HybridAuxiliaryState>);
+        let slot = cache.allocate_seq(9)?;
+
+        let snapshots = cache.snapshot_auxiliary_state(slot)?;
+        cache.restore_auxiliary_state(slot, &snapshots)?;
+        assert_eq!(first.recorded(), vec![format!("restore:{slot}")]);
+        assert_eq!(second.recorded(), first.recorded());
+        Ok(())
+    }
+
+    #[test]
+    fn auxiliary_restore_validation_fails_before_any_mutation() -> Result<()> {
+        let recording = Arc::new(RecordingAuxiliary::default());
+        let mut cache = recording_cache(Arc::clone(&recording) as Arc<dyn HybridAuxiliaryState>)?;
+        cache.register_auxiliary_state(Arc::new(FailingAuxiliary));
+        let slot = cache.allocate_seq(9)?;
+        let snapshots = cache.snapshot_auxiliary_state(slot)?;
+
+        assert!(cache.restore_auxiliary_state(slot, &snapshots).is_err());
+        assert!(recording.recorded().is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn auxiliary_truncation_validates_every_handler_before_mutation() -> Result<()> {
+        let first = Arc::new(RecordingAuxiliary::default());
+        let second = Arc::new(RecordingAuxiliary::default());
+        let mut cache = recording_cache(Arc::clone(&first) as Arc<dyn HybridAuxiliaryState>)?;
+        cache.register_auxiliary_state(Arc::clone(&second) as Arc<dyn HybridAuxiliaryState>);
+        let slot = cache.allocate_seq(9)?;
+
+        cache.truncate_auxiliary_slot_to(slot, 3)?;
+        assert_eq!(
+            first.recorded(),
+            vec![
+                format!("validate_truncate:{slot}:3"),
+                format!("truncate:{slot}:3")
+            ]
+        );
+        assert_eq!(second.recorded(), first.recorded());
+        Ok(())
+    }
+
+    #[test]
+    fn unsupported_auxiliary_truncation_fails_before_other_state_mutates() -> Result<()> {
+        let recording = Arc::new(RecordingAuxiliary::default());
+        let mut cache = recording_cache(Arc::clone(&recording) as Arc<dyn HybridAuxiliaryState>)?;
+        cache.register_auxiliary_state(Arc::new(FailingAuxiliary));
+        let slot = cache.allocate_seq(9)?;
+
+        assert!(cache.truncate_auxiliary_slot_to(slot, 3).is_err());
+        assert_eq!(
+            recording.recorded(),
+            vec![format!("validate_truncate:{slot}:3")]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn auxiliary_failure_aborts_slot_lifecycle_without_cache_mutation() -> Result<()> {
+        let devices = vec![Device::Cpu, Device::Cpu];
+        let mut cache = HybridCache::new(
+            config(vec![HybridLayerType::Recurrent, HybridLayerType::Recurrent]),
+            DType::F32,
+            &devices,
+        )?;
+        cache.register_auxiliary_state(Arc::new(FailingAuxiliary));
+
+        let slot = cache.allocate_seq(3)?;
+        assert!(cache.reset_seq(3, slot).is_err());
+        assert!(cache.release_seq(3, slot).is_err());
+        // No cache state was mutated: the slot is still owned and initialized.
+        cache.validate_sequence_slots(&[(3, slot)])?;
+        Ok(())
+    }
+
+    #[test]
+    fn auxiliary_clear_failure_aborts_global_reset() -> Result<()> {
+        let devices = vec![Device::Cpu, Device::Cpu];
+        let mut cache = HybridCache::new(
+            config(vec![HybridLayerType::Recurrent, HybridLayerType::Recurrent]),
+            DType::F32,
+            &devices,
+        )?;
+        cache.register_auxiliary_state(Arc::new(FailingAuxiliary));
+        let error = cache.reset().unwrap_err();
+        assert!(error.to_string().contains("auxiliary clear failure"));
+        Ok(())
     }
 
     #[test]
@@ -3592,6 +4011,19 @@ mod tests {
     }
 
     #[test]
+    fn recurrent_checkpoint_snapshot_restores_auxiliary_state() -> Result<()> {
+        let auxiliary = Arc::new(RecordingAuxiliary::default());
+        let mut cache = recording_cache(Arc::clone(&auxiliary) as Arc<dyn HybridAuxiliaryState>)?;
+        let slot = cache.allocate_seq(10)?;
+        let snapshot = cache.snapshot_recurrent_checkpoint_state(slot)?;
+        assert_eq!(snapshot.auxiliary_states.len(), 1);
+
+        cache.restore_recurrent_checkpoint_state(slot, &snapshot)?;
+        assert_eq!(auxiliary.recorded(), vec![format!("restore:{slot}")]);
+        Ok(())
+    }
+
+    #[test]
     fn transition_snapshot_restore_uses_the_single_physical_row() -> Result<()> {
         let mut cache = HybridCache::new(
             config(vec![HybridLayerType::Recurrent]),
@@ -3614,6 +4046,7 @@ mod tests {
         }
 
         let snapshot = cache.snapshot_recurrent_checkpoint_state(slot)?;
+        assert!(snapshot.auxiliary_states.is_empty());
         assert_eq!(snapshot.checkpoint_lanes, 8);
         assert_eq!(
             snapshot.speculative_storage,
@@ -3902,9 +4335,10 @@ pub struct RecurrentStateSnapshot {
 }
 
 #[cfg(any(feature = "cuda", test))]
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub(crate) struct RecurrentCheckpointStateSnapshot {
     states: Vec<RecurrentStateSnapshot>,
+    auxiliary_states: Vec<HybridAuxiliarySnapshot>,
     checkpoint_lanes: usize,
     speculative_storage: RecurrentSpeculativeStorage,
     committed_lane: usize,
@@ -4038,6 +4472,7 @@ impl HybridCache {
         }
         Ok(RecurrentCheckpointStateSnapshot {
             states,
+            auxiliary_states: self.snapshot_auxiliary_state(slot_idx)?,
             checkpoint_lanes: self.checkpoint_lanes,
             speculative_storage: self.speculative_storage,
             committed_lane,
@@ -4097,6 +4532,8 @@ impl HybridCache {
                 candle_core::bail!("recurrent checkpoint snapshot must contain its active lane");
             }
         }
+        self.validate_auxiliary_restore(slot_idx, &snapshot.auxiliary_states)?;
+        let previous_auxiliary = self.snapshot_auxiliary_state(slot_idx)?;
 
         let physical_slot = self.physical_slot(slot_idx, snapshot.committed_lane)?;
         let physical_slot = u32::try_from(physical_slot).map_err(|_| {
@@ -4133,6 +4570,15 @@ impl HybridCache {
                 .is_some_and(|slots| slots.contains(&logical_slot))
         {
             self.refresh_current_batch_mapping()?;
+        }
+        if let Err(error) = self.restore_auxiliary_state(slot_idx, &snapshot.auxiliary_states) {
+            if let Err(rollback_error) = self.restore_auxiliary_state(slot_idx, &previous_auxiliary)
+            {
+                return Err(candle_core::Error::msg(format!(
+                    "hybrid checkpoint auxiliary restore failed: {error}; auxiliary rollback failed: {rollback_error}"
+                )));
+            }
+            return Err(error);
         }
         Ok(())
     }

@@ -153,7 +153,7 @@ pub(crate) fn cache_finished_sequence(
     if !prefix_cacher.accepts_sequence_cache() {
         return Ok(());
     }
-    let recurrent_snapshots = if this.cache().is_hybrid() {
+    let (recurrent_snapshots, auxiliary_snapshots) = if this.cache().is_hybrid() {
         let Some(idx) = seq.recurrent_state_idx() else {
             tracing::warn!(
                 sequence_id = seq.id(),
@@ -167,7 +167,20 @@ pub(crate) fn cache_finished_sequence(
             .hybrid()
             .snapshot_recurrent_state(*seq.id(), idx)
         {
-            Ok(snapshots) => Some(snapshots),
+            Ok(snapshots) => {
+                let auxiliary = match this.cache().hybrid().snapshot_auxiliary_state(idx) {
+                    Ok(snapshots) => snapshots,
+                    Err(error) => {
+                        tracing::warn!(
+                            sequence_id = seq.id(),
+                            %error,
+                            "Skipping hybrid prefix cache entry after auxiliary snapshot failure"
+                        );
+                        return Ok(());
+                    }
+                };
+                (Some(snapshots), Some(auxiliary))
+            }
             Err(error) => {
                 tracing::warn!(
                     sequence_id = seq.id(),
@@ -178,9 +191,9 @@ pub(crate) fn cache_finished_sequence(
             }
         }
     } else {
-        None
+        (None, None)
     };
-    prefix_cacher.add_sequence(seq, recurrent_snapshots);
+    prefix_cacher.add_sequence(seq, recurrent_snapshots, auxiliary_snapshots);
     prefix_cacher.evict_caches()?;
     Ok(())
 }

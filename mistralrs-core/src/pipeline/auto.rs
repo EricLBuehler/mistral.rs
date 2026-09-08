@@ -222,6 +222,8 @@ impl AutoLoaderBuilder {
 struct AutoConfig {
     #[serde(default)]
     architectures: Vec<String>,
+    #[serde(default)]
+    model_type: Option<String>,
 }
 
 struct ConfigArtifacts {
@@ -231,6 +233,7 @@ struct ConfigArtifacts {
     remote_access_issue: Option<RemoteAccessIssue>,
 }
 
+#[derive(Debug, PartialEq)]
 enum Detected {
     Normal(NormalLoaderType),
     Multimodal(MultimodalLoaderType),
@@ -449,15 +452,27 @@ impl AutoLoader {
             }
         })?;
         let cfg: AutoConfig = serde_json::from_str(config)?;
-        if cfg.architectures.len() != 1 {
-            anyhow::bail!("Expected exactly one architecture in config");
+        if cfg.architectures.len() > 1 {
+            anyhow::bail!("Expected at most one architecture in config");
         }
-        let name = &cfg.architectures[0];
-        if let Ok(tp) = MultimodalLoaderType::from_causal_lm_name(name) {
-            return Ok(Detected::Multimodal(tp));
+        if let Some(name) = cfg.architectures.first() {
+            if let Ok(tp) = MultimodalLoaderType::from_causal_lm_name(name) {
+                return Ok(Detected::Multimodal(tp));
+            }
+            let tp = NormalLoaderType::from_causal_lm_name(name)?;
+            return Ok(Detected::Normal(tp));
         }
-        let tp = NormalLoaderType::from_causal_lm_name(name)?;
-        Ok(Detected::Normal(tp))
+
+        match cfg.model_type.as_deref() {
+            Some("qwen4_exp") => Ok(Detected::Multimodal(MultimodalLoaderType::Qwen4Exp)),
+            Some("qwen4_exp_text") => Ok(Detected::Normal(NormalLoaderType::Qwen4Exp)),
+            Some(model_type) => anyhow::bail!(
+                "Auto loader could not determine an architecture from model_type `{model_type}`"
+            ),
+            None => anyhow::bail!(
+                "Auto loader requires exactly one architecture or a recognized model_type in config"
+            ),
+        }
     }
 
     fn ensure_loader(&self, detected: Detected) -> Result<()> {
@@ -655,6 +670,49 @@ mod tests {
             max_model_len: None,
             dynamic_lora_enabled: true,
         }
+    }
+
+    fn artifacts(config: &str) -> ConfigArtifacts {
+        ConfigArtifacts {
+            contents: Some(config.to_string()),
+            sentence_transformers_present: false,
+            repo_files: Vec::new(),
+            remote_access_issue: None,
+        }
+    }
+
+    #[test]
+    fn qwen4exp_auto_detection_accepts_architectures_and_model_types() {
+        for (config, expected) in [
+            (
+                r#"{"architectures":["Qwen4ExpForCausalLM"]}"#,
+                Detected::Normal(NormalLoaderType::Qwen4Exp),
+            ),
+            (
+                r#"{"architectures":["Qwen4ExpForConditionalGeneration"]}"#,
+                Detected::Multimodal(MultimodalLoaderType::Qwen4Exp),
+            ),
+            (
+                r#"{"model_type":"qwen4_exp_text"}"#,
+                Detected::Normal(NormalLoaderType::Qwen4Exp),
+            ),
+            (
+                r#"{"model_type":"qwen4_exp"}"#,
+                Detected::Multimodal(MultimodalLoaderType::Qwen4Exp),
+            ),
+        ] {
+            assert_eq!(detector().detect(&artifacts(config)).unwrap(), expected);
+        }
+    }
+
+    #[test]
+    fn qwen4exp_architecture_takes_precedence_over_model_type_alias() {
+        let detected = detector()
+            .detect(&artifacts(
+                r#"{"architectures":["Qwen4ExpForCausalLM"],"model_type":"qwen4_exp"}"#,
+            ))
+            .unwrap();
+        assert_eq!(detected, Detected::Normal(NormalLoaderType::Qwen4Exp));
     }
 
     #[test]

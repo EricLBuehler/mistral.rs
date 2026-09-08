@@ -1,8 +1,8 @@
 use crate::NormalLoaderType;
 use std::{error::Error, fmt, str::FromStr};
 
-pub(crate) const NORMAL_LOADER_TYPE_COUNT: usize = 26;
-pub(crate) const CANONICAL_GGUF_ARCHITECTURE_COUNT: usize = 26;
+pub(crate) const NORMAL_LOADER_TYPE_COUNT: usize = 27;
+pub(crate) const CANONICAL_GGUF_ARCHITECTURE_COUNT: usize = 27;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum CanonicalGgufArchitecture {
@@ -17,6 +17,7 @@ pub(crate) enum CanonicalGgufArchitecture {
     Qwen3,
     Qwen3Moe,
     Qwen3Next,
+    Qwen4Exp,
     Qwen35,
     Qwen35Moe,
     Starcoder2,
@@ -48,6 +49,7 @@ impl CanonicalGgufArchitecture {
             Self::Qwen3 => "qwen3",
             Self::Qwen3Moe => "qwen3moe",
             Self::Qwen3Next => "qwen3next",
+            Self::Qwen4Exp => "qwen4exp",
             Self::Qwen35 => "qwen35",
             Self::Qwen35Moe => "qwen35moe",
             Self::Starcoder2 => "starcoder2",
@@ -89,6 +91,7 @@ impl FromStr for CanonicalGgufArchitecture {
             "qwen3" => Ok(Self::Qwen3),
             "qwen3moe" => Ok(Self::Qwen3Moe),
             "qwen3next" => Ok(Self::Qwen3Next),
+            "qwen4exp" => Ok(Self::Qwen4Exp),
             "qwen35" => Ok(Self::Qwen35),
             "qwen35moe" => Ok(Self::Qwen35Moe),
             "starcoder2" => Ok(Self::Starcoder2),
@@ -372,6 +375,22 @@ const QWEN3_NEXT_METADATA: &[&str] = &[
     "{arch}.ssm.inner_size",
     "{arch}.ssm.state_size",
 ];
+const QWEN4_EXP_METADATA: &[&str] = &[
+    "{arch}.expert_count",
+    "{arch}.expert_used_count",
+    "{arch}.rope.dimension_sections",
+    "{arch}.ssm.conv_kernel",
+    "{arch}.ssm.group_count",
+    "{arch}.ssm.inner_size",
+    "{arch}.ssm.state_size",
+    "{arch}.ssm.time_step_rank",
+    "{arch}.hyper_connection.count",
+    "{arch}.hyper_connection.low_rank",
+    "{arch}.attention.indexer.head_count",
+    "{arch}.attention.indexer.key_length",
+    "{arch}.attention.indexer.top_k",
+    "{arch}.attention.compress_ratios",
+];
 const QWEN35_METADATA: &[&str] = &[
     "{arch}.full_attention_interval",
     "{arch}.rope.dimension_sections",
@@ -407,6 +426,27 @@ const QWEN35_MOE_TENSORS: &[&str] = &[
     ".ssm_beta.",
 ];
 const QWEN35_TENSORS: &[&str] = &[".ssm_a", ".ssm_conv1d.", ".ssm_alpha.", ".ssm_beta."];
+const QWEN4_EXP_TENSORS: &[&str] = &[
+    "output_hc_norm.weight",
+    "output_hc_down.weight",
+    "output_hc_up.weight",
+    ".hc_attn_norm.",
+    ".hc_attn_down.",
+    ".hc_attn_up.",
+    ".hc_attn_inject.",
+    ".hc_ffn_norm.",
+    ".hc_ffn_down.",
+    ".hc_ffn_up.",
+    ".hc_ffn_inject.",
+    ".indexer.q_proj.",
+    ".indexer.k_proj.",
+    ".ssm_a",
+    ".ssm_conv1d.",
+    ".ffn_gate_inp.",
+    ".ffn_gate_exps.",
+    ".ffn_up_exps.",
+    ".ffn_down_exps.",
+];
 const SHORTCONV_TENSORS: &[&str] = &[".shortconv.conv.", ".shortconv.in_proj."];
 
 const GLM_MROPE_UNSUPPORTED: &[&str] = &["{arch}.rope.dimension_sections"];
@@ -426,6 +466,10 @@ const QWEN2_LOADERS: &[NormalLoaderType] = &[NormalLoaderType::Qwen2];
 const QWEN3_LOADERS: &[NormalLoaderType] = &[NormalLoaderType::Qwen3];
 const QWEN3_MOE_LOADERS: &[NormalLoaderType] = &[NormalLoaderType::Qwen3Moe];
 const QWEN3_NEXT_LOADERS: &[NormalLoaderType] = &[NormalLoaderType::Qwen3Next];
+// The qwen4exp loader synthesizes the native config, but loading stays fail-closed: its
+// model adapter is deliberately unregistered until the dedicated model implementation and
+// tensor bindings exist.
+const QWEN4_EXP_LOADERS: &[NormalLoaderType] = &[NormalLoaderType::Qwen4Exp];
 const QWEN35_LOADERS: &[NormalLoaderType] = &[NormalLoaderType::Qwen3_5];
 const STARCODER2_LOADERS: &[NormalLoaderType] = &[NormalLoaderType::Starcoder2];
 const DEEPSEEK2_LOADERS: &[NormalLoaderType] = &[
@@ -530,6 +574,14 @@ pub(crate) const GGUF_SCHEMAS: &[GgufSchema; CANONICAL_GGUF_ARCHITECTURE_COUNT] 
         rope_pairing: RopePairing::HalfSplit,
         required_metadata: QWEN3_NEXT_METADATA,
         required_tensors: SSM_TENSORS,
+        unsupported_metadata: NO_REQUIREMENTS,
+    },
+    GgufSchema {
+        architecture: CanonicalGgufArchitecture::Qwen4Exp,
+        compatible_loaders: QWEN4_EXP_LOADERS,
+        rope_pairing: RopePairing::HalfSplit,
+        required_metadata: QWEN4_EXP_METADATA,
+        required_tensors: QWEN4_EXP_TENSORS,
         unsupported_metadata: NO_REQUIREMENTS,
     },
     GgufSchema {
@@ -654,6 +706,8 @@ pub(crate) const GGUF_SCHEMAS: &[GgufSchema; CANONICAL_GGUF_ARCHITECTURE_COUNT] 
     },
 ];
 
+// Every normal loader has a registered model adapter; the qwen4exp loader synthesizes its
+// native config and binds the converter's tensor inventory.
 pub(crate) const NORMAL_MODEL_ADAPTERS: &[NativeModelAdapter; NORMAL_LOADER_TYPE_COUNT] = &[
     NativeModelAdapter {
         loader: NormalLoaderType::Mistral,
@@ -856,6 +910,15 @@ pub(crate) const NORMAL_MODEL_ADAPTERS: &[NativeModelAdapter; NORMAL_LOADER_TYPE
             GgufLayout::SqueezedShortConv,
         ],
     },
+    NativeModelAdapter {
+        loader: NormalLoaderType::Qwen4Exp,
+        architectures: &[CanonicalGgufArchitecture::Qwen4Exp],
+        layouts: &[
+            GgufLayout::Direct,
+            GgufLayout::StackedExperts,
+            GgufLayout::ShiftedRmsNorm,
+        ],
+    },
 ];
 
 impl GgufSchema {
@@ -997,6 +1060,9 @@ pub(crate) fn resolve_native_adapter(
         });
     }
 
+    if schema.compatible_loaders.is_empty() {
+        return Err(NormalGgufRegistryError::NoAdapter(descriptor.architecture));
+    }
     if schema.compatible_loaders.len() != 1 {
         return Err(NormalGgufRegistryError::AmbiguousArchitecture {
             architecture: descriptor.architecture,
@@ -1151,6 +1217,34 @@ mod tests {
             );
         }
         assert!("qwen3_moe".parse::<CanonicalGgufArchitecture>().is_err());
+        assert_eq!(
+            "QwEn4ExP".parse::<CanonicalGgufArchitecture>().unwrap(),
+            CanonicalGgufArchitecture::Qwen4Exp
+        );
+    }
+
+    #[test]
+    fn qwen4exp_schema_requires_hyper_connections_and_resolves_its_adapter() {
+        let schema = schema_for(CanonicalGgufArchitecture::Qwen4Exp);
+        let (metadata, tensors) = valid_fixture(schema, &[], &[]);
+        let descriptor = descriptor_from_fixture(schema, &metadata, &tensors);
+        let resolved = resolve_native_adapter(&descriptor, None).unwrap();
+        assert_eq!(resolved.adapter.loader, NormalLoaderType::Qwen4Exp);
+
+        let missing_hc_count = metadata
+            .iter()
+            .filter(|key| key.as_str() != "qwen4exp.hyper_connection.count")
+            .cloned()
+            .collect::<Vec<_>>();
+        let descriptor = descriptor_from_fixture(schema, &missing_hc_count, &tensors);
+        let error = schema.validate(&descriptor).unwrap_err();
+        assert!(matches!(
+            error,
+            NormalGgufRegistryError::MissingMetadata {
+                architecture: CanonicalGgufArchitecture::Qwen4Exp,
+                pattern: "{arch}.hyper_connection.count"
+            }
+        ));
     }
 
     #[test]

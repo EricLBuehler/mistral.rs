@@ -90,6 +90,34 @@ fn bind_root_tensors(
             "model.embedding_norm.weight",
             "token_embd_norm.weight",
         ),
+        NormalLoaderType::Qwen4Exp => {
+            // The final hyper-connection mixer carries the output norm, and the converter
+            // stores the folded gammas as ordinary weights.
+            bind(
+                archive,
+                bindings,
+                "model.hc_head.norm.weight",
+                "output_hc_norm.weight",
+            );
+            bind(
+                archive,
+                bindings,
+                "model.hc_head.down.weight",
+                "output_hc_down.weight",
+            );
+            bind(
+                archive,
+                bindings,
+                "model.hc_head.up.weight",
+                "output_hc_up.weight",
+            );
+            bind(
+                archive,
+                bindings,
+                "model.per_layer_token_embd.weight",
+                "per_layer_token_embd.weight",
+            );
+        }
         _ if archive.contains_tensor("output_norm.weight") => {
             bindings.insert(
                 "model.norm.weight",
@@ -155,19 +183,19 @@ fn bind_block_tensor(
             NormalLoaderType::GLM4 => format!("{p}.post_mlp_layernorm.{suffix}"),
             _ => return Ok(()),
         }),
-        "attn_q" if !matches!(loader, NormalLoaderType::Phi3) => {
+        "attn_q" if !matches!(loader, NormalLoaderType::Phi3 | NormalLoaderType::Qwen4Exp) => {
             Some(format!("{p}.self_attn.q_proj.{suffix}"))
         }
-        "attn_k" if !matches!(loader, NormalLoaderType::Phi3) => {
+        "attn_k" if !matches!(loader, NormalLoaderType::Phi3 | NormalLoaderType::Qwen4Exp) => {
             Some(format!("{p}.self_attn.k_proj.{suffix}"))
         }
-        "attn_v" if !matches!(loader, NormalLoaderType::Phi3) => {
+        "attn_v" if !matches!(loader, NormalLoaderType::Phi3 | NormalLoaderType::Qwen4Exp) => {
             Some(format!("{p}.self_attn.v_proj.{suffix}"))
         }
         "attn_qkv" if matches!(loader, NormalLoaderType::Phi3) => {
             Some(format!("{p}.self_attn.qkv_proj.{suffix}"))
         }
-        "attn_output" => Some(format!(
+        "attn_output" if !matches!(loader, NormalLoaderType::Qwen4Exp) => Some(format!(
             "{p}.self_attn.{}.{suffix}",
             if matches!(loader, NormalLoaderType::Phi2) {
                 "dense"
@@ -177,8 +205,12 @@ fn bind_block_tensor(
                 "o_proj"
             }
         )),
-        "attn_q_norm" => Some(format!("{p}.self_attn.{}.{suffix}", q_norm_name(loader))),
-        "attn_k_norm" => Some(format!("{p}.self_attn.{}.{suffix}", k_norm_name(loader))),
+        "attn_q_norm" if !matches!(loader, NormalLoaderType::Qwen4Exp) => {
+            Some(format!("{p}.self_attn.{}.{suffix}", q_norm_name(loader)))
+        }
+        "attn_k_norm" if !matches!(loader, NormalLoaderType::Qwen4Exp) => {
+            Some(format!("{p}.self_attn.{}.{suffix}", k_norm_name(loader)))
+        }
         "attn_sinks" => Some(format!("{p}.self_attn.sinks")),
         "ffn_gate" if !matches!(loader, NormalLoaderType::GraniteMoeHybrid) => {
             dense_mlp_target(loader, &p, "gate", suffix)
@@ -230,23 +262,60 @@ fn bind_block_tensor(
         "shortconv.in_proj" => Some(format!("{p}.conv.in_proj.{suffix}")),
         "shortconv.out_proj" => Some(format!("{p}.conv.out_proj.{suffix}")),
         "shortconv.conv" => Some(format!("{p}.conv.conv.{suffix}")),
-        "ssm_in" if !matches!(loader, NormalLoaderType::Qwen3Next) => {
+        "ssm_in"
+            if !matches!(
+                loader,
+                NormalLoaderType::Qwen3Next | NormalLoaderType::Qwen4Exp
+            ) =>
+        {
             Some(format!("{p}.mamba.in_proj.{suffix}"))
         }
-        "ssm_conv1d" if !matches!(loader, NormalLoaderType::Qwen3Next) => {
+        "ssm_conv1d"
+            if !matches!(
+                loader,
+                NormalLoaderType::Qwen3Next | NormalLoaderType::Qwen4Exp
+            ) =>
+        {
             Some(format!("{p}.mamba.conv1d.{suffix}"))
         }
-        "ssm_dt" if !matches!(loader, NormalLoaderType::Qwen3Next) => {
+        "ssm_dt"
+            if !matches!(
+                loader,
+                NormalLoaderType::Qwen3Next | NormalLoaderType::Qwen4Exp
+            ) =>
+        {
             Some(format!("{p}.mamba.dt_bias"))
         }
-        "ssm_a" if !matches!(loader, NormalLoaderType::Qwen3Next) => {
+        "ssm_a"
+            if !matches!(
+                loader,
+                NormalLoaderType::Qwen3Next | NormalLoaderType::Qwen4Exp
+            ) =>
+        {
             Some(format!("{p}.mamba.A_log"))
         }
-        "ssm_d" if !matches!(loader, NormalLoaderType::Qwen3Next) => Some(format!("{p}.mamba.D")),
-        "ssm_norm" if !matches!(loader, NormalLoaderType::Qwen3Next) => {
+        "ssm_d"
+            if !matches!(
+                loader,
+                NormalLoaderType::Qwen3Next | NormalLoaderType::Qwen4Exp
+            ) =>
+        {
+            Some(format!("{p}.mamba.D"))
+        }
+        "ssm_norm"
+            if !matches!(
+                loader,
+                NormalLoaderType::Qwen3Next | NormalLoaderType::Qwen4Exp
+            ) =>
+        {
             Some(format!("{p}.mamba.norm.{suffix}"))
         }
-        "ssm_out" if !matches!(loader, NormalLoaderType::Qwen3Next) => {
+        "ssm_out"
+            if !matches!(
+                loader,
+                NormalLoaderType::Qwen3Next | NormalLoaderType::Qwen4Exp
+            ) =>
+        {
             Some(format!("{p}.mamba.out_proj.{suffix}"))
         }
         _ => None,
@@ -259,7 +328,14 @@ fn bind_block_tensor(
         if role == "ffn_gate_inp" && matches!(loader, NormalLoaderType::HunYuanMoEV1) {
             binding = binding.cast(DType::F32);
         }
-        if role == "ffn_gate_inp_shexp" && matches!(loader, NormalLoaderType::Qwen3Next) {
+        if role == "ffn_gate_inp_shexp"
+            && matches!(
+                loader,
+                NormalLoaderType::Qwen3Next | NormalLoaderType::Qwen4Exp
+            )
+        {
+            // The shared expert gate may be stored as a 1-D vector or a [1, hidden] row;
+            // accept both so re-quantized checkpoints interoperate.
             let shape = archive.tensor_info(source)?.shape();
             if shape.len() == 1 {
                 binding = binding.reshape(vec![1, shape[0]]);
@@ -312,6 +388,7 @@ fn bind_composite_tensors(
                 bind_deepseek_kv_b(archive, layer, bindings)?;
             }
             NormalLoaderType::Qwen3Next => bind_qwen3_next(archive, architecture, layer, bindings)?,
+            NormalLoaderType::Qwen4Exp => bind_qwen4_exp(archive, architecture, layer, bindings)?,
             NormalLoaderType::GptOss => bind_gpt_oss(archive, layer, bindings)?,
             NormalLoaderType::GraniteMoeHybrid => bind_granite(archive, layer, bindings),
             _ => {}
@@ -545,6 +622,242 @@ fn bind_qwen3_next(
             GgufTensorBinding::tensor(a).affine(-1.0, 0.0).log(),
         );
     }
+    Ok(())
+}
+
+/// Bind the qwen4exp converter inventory to the decoder's module paths: hyper-connections,
+/// the interleaved query/gate full-attention Q tensor, the indexer, split GDN projections,
+/// and the per-layer PLE tensors. The converter stores the hyper-connection gammas and the
+/// PLE/indexer norms as ordinary weights; the attention Q/K norms keep the zero-centered
+/// convention Qwen3-Next uses, and `ssm_a` stores `-exp(A_log)`.
+fn bind_qwen4_exp(
+    archive: &GgufArchive,
+    architecture: CanonicalGgufArchitecture,
+    layer: usize,
+    bindings: &mut GgufBindingMap,
+) -> Result<()> {
+    let _ = architecture;
+    let p = format!("model.layers.{layer}");
+    let block = format!("blk.{layer}");
+
+    for (native, canonical) in [
+        ("hc_attn.norm.weight", "hc_attn_norm.weight"),
+        ("hc_attn.down.weight", "hc_attn_down.weight"),
+        ("hc_attn.up.weight", "hc_attn_up.weight"),
+        ("hc_attn.inject.weight", "hc_attn_inject.weight"),
+        ("hc_ffn.norm.weight", "hc_ffn_norm.weight"),
+        ("hc_ffn.down.weight", "hc_ffn_down.weight"),
+        ("hc_ffn.up.weight", "hc_ffn_up.weight"),
+        ("hc_ffn.inject.weight", "hc_ffn_inject.weight"),
+        // The fused Q tensor carries the converter's per-head interleaved query/gate
+        // layout, which the model consumes directly.
+        ("self_attn.attn.q_proj.weight", "attn_q.weight"),
+        ("self_attn.attn.k_proj.weight", "attn_k.weight"),
+        ("self_attn.attn.v_proj.weight", "attn_v.weight"),
+        ("self_attn.attn.o_proj.weight", "attn_output.weight"),
+        ("self_attn.indexer.q_proj.weight", "indexer.q_proj.weight"),
+        ("self_attn.indexer.k_proj.weight", "indexer.k_proj.weight"),
+        ("self_attn.indexer.q_norm.weight", "indexer.q_norm.weight"),
+        ("self_attn.indexer.k_norm.weight", "indexer.k_norm.weight"),
+        ("ple.key.weight", "ple_key.weight"),
+        ("ple.value.weight", "ple_value.weight"),
+        ("ple.norm_key.weight", "ple_norm_key.weight"),
+        ("ple.norm_query.weight", "ple_norm_query.weight"),
+        ("ple.norm_conv.weight", "ple_norm_conv.weight"),
+        ("ple.conv1d.weight", "ple_conv1d.weight"),
+    ] {
+        bind_named(
+            archive,
+            bindings,
+            format!("{p}.{native}"),
+            format!("{block}.{canonical}"),
+        );
+    }
+
+    for (native, canonical) in [
+        ("self_attn.attn.q_norm.weight", "attn_q_norm.weight"),
+        ("self_attn.attn.k_norm.weight", "attn_k_norm.weight"),
+    ] {
+        let source = format!("{block}.{canonical}");
+        if archive.contains_tensor(&source) {
+            bindings.insert(
+                format!("{p}.{native}"),
+                GgufTensorBinding::tensor(&source).affine(1.0, -1.0),
+            );
+        }
+    }
+
+    // Split GDN projections mirror the Qwen3-Next bindings, including the ssm_a decay
+    // transform and the convolution reshape.
+    let gdn = format!("{p}.linear_attn");
+    for (native, canonical) in [
+        ("in_proj_qkv.weight", "attn_qkv.weight"),
+        ("in_proj_z.weight", "attn_gate.weight"),
+        ("in_proj_b.weight", "ssm_beta.weight"),
+        ("in_proj_a.weight", "ssm_alpha.weight"),
+        ("dt_bias", "ssm_dt.bias"),
+        ("norm.weight", "ssm_norm.weight"),
+        ("out_proj.weight", "ssm_out.weight"),
+    ] {
+        bind_named(
+            archive,
+            bindings,
+            format!("{gdn}.{native}"),
+            format!("{block}.{canonical}"),
+        );
+    }
+    let conv = format!("{block}.ssm_conv1d.weight");
+    if archive.contains_tensor(&conv) {
+        let shape = archive.tensor_info(&conv)?.shape();
+        let binding = if shape.len() == 2 {
+            GgufTensorBinding::tensor(&conv).reshape(vec![shape[0], 1, shape[1]])
+        } else {
+            GgufTensorBinding::tensor(&conv)
+        };
+        bindings.insert(format!("{gdn}.conv1d.weight"), binding);
+    }
+    let a = format!("{block}.ssm_a");
+    if archive.contains_tensor(&a) {
+        bindings.insert(
+            format!("{gdn}.A_log"),
+            GgufTensorBinding::tensor(a).affine(-1.0, 0.0).log(),
+        );
+    }
+    validate_qwen4exp_layer_inventory(archive, layer)?;
+    Ok(())
+}
+
+/// Reject partial per-layer inventories before weight loading: every qwen4exp layer needs a
+/// complete hyper-connection and MoE set plus exactly one complete branch (QSA full attention
+/// or GDN), and any PLE layer must carry its complete six-tensor set.
+fn validate_qwen4exp_layer_inventory(archive: &GgufArchive, layer: usize) -> Result<()> {
+    let block = format!("blk.{layer}");
+    let missing = |suffixes: &[&str]| -> Vec<String> {
+        suffixes
+            .iter()
+            .map(|suffix| format!("{block}.{suffix}"))
+            .filter(|name| !archive.contains_tensor(name))
+            .collect()
+    };
+    let present = |suffixes: &[&str]| -> Vec<String> {
+        suffixes
+            .iter()
+            .map(|suffix| format!("{block}.{suffix}"))
+            .filter(|name| archive.contains_tensor(name))
+            .collect()
+    };
+
+    let missing_hc = missing(&[
+        "hc_attn_norm.weight",
+        "hc_attn_down.weight",
+        "hc_attn_up.weight",
+        "hc_attn_inject.weight",
+        "hc_ffn_norm.weight",
+        "hc_ffn_down.weight",
+        "hc_ffn_up.weight",
+        "hc_ffn_inject.weight",
+    ]);
+    if !missing_hc.is_empty() {
+        bail!(
+            "qwen4exp layer {block} is missing its hyper-connection tensors: {}",
+            missing_hc.join(", ")
+        );
+    }
+
+    let missing_moe = missing(&[
+        "ffn_gate_inp.weight",
+        "ffn_gate_exps.weight",
+        "ffn_up_exps.weight",
+        "ffn_down_exps.weight",
+        "ffn_gate_shexp.weight",
+        "ffn_up_shexp.weight",
+        "ffn_down_shexp.weight",
+        "ffn_gate_inp_shexp.weight",
+    ]);
+    if !missing_moe.is_empty() {
+        bail!(
+            "qwen4exp layer {block} is missing its MoE tensors: {}",
+            missing_moe.join(", ")
+        );
+    }
+
+    let ple_suffixes = [
+        "ple_key.weight",
+        "ple_value.weight",
+        "ple_norm_key.weight",
+        "ple_norm_query.weight",
+        "ple_norm_conv.weight",
+        "ple_conv1d.weight",
+    ];
+    let any_ple = ple_suffixes
+        .iter()
+        .any(|suffix| archive.contains_tensor(&format!("{block}.{suffix}")));
+    if any_ple {
+        let missing_ple = missing(&ple_suffixes);
+        if !missing_ple.is_empty() {
+            bail!(
+                "qwen4exp layer {block} has a partial PLE inventory; missing: {}",
+                missing_ple.join(", ")
+            );
+        }
+    }
+
+    let qsa_suffixes = [
+        "attn_q.weight",
+        "attn_k.weight",
+        "attn_v.weight",
+        "attn_output.weight",
+        "attn_q_norm.weight",
+        "attn_k_norm.weight",
+        "indexer.q_proj.weight",
+        "indexer.k_proj.weight",
+        "indexer.q_norm.weight",
+        "indexer.k_norm.weight",
+    ];
+    let gdn_suffixes = [
+        "attn_qkv.weight",
+        "attn_gate.weight",
+        "ssm_beta.weight",
+        "ssm_alpha.weight",
+        "ssm_dt.bias",
+        "ssm_a",
+        "ssm_norm.weight",
+        "ssm_out.weight",
+        "ssm_conv1d.weight",
+    ];
+    let missing_qsa = missing(&qsa_suffixes);
+    let missing_gdn = missing(&gdn_suffixes);
+    match (missing_qsa.is_empty(), missing_gdn.is_empty()) {
+        (true, true) => bail!(
+            "qwen4exp layer {block} contains both complete QSA and GDN branch inventories; exactly one branch set is expected per layer"
+        ),
+        (false, false) => bail!(
+            "qwen4exp layer {block} has no complete branch inventory; missing QSA tensors [{}] and missing GDN tensors [{}]",
+            missing_qsa.join(", "),
+            missing_gdn.join(", ")
+        ),
+        // QSA-complete layers are full-attention layers and must not carry stray GDN
+        // tensors; GDN-complete layers must not carry stray QSA tensors.
+        (true, false) => {
+            let unexpected = present(&gdn_suffixes);
+            if !unexpected.is_empty() {
+                bail!(
+                    "qwen4exp layer {block} is a full-attention layer but also contains GDN tensors: {}",
+                    unexpected.join(", ")
+                );
+            }
+        }
+        (false, true) => {
+            let unexpected = present(&qsa_suffixes);
+            if !unexpected.is_empty() {
+                bail!(
+                    "qwen4exp layer {block} is a GDN layer but also contains QSA tensors: {}",
+                    unexpected.join(", ")
+                );
+            }
+        }
+    }
+
     Ok(())
 }
 
@@ -794,7 +1107,7 @@ fn shared_expert_target(
     let module = match loader {
         NormalLoaderType::GLM4Moe | NormalLoaderType::GLM4MoeLite => "shared_experts",
         NormalLoaderType::HunYuanMoEV1 => "shared_mlp",
-        NormalLoaderType::Qwen3Next => "shared_expert",
+        NormalLoaderType::Qwen3Next | NormalLoaderType::Qwen4Exp => "shared_expert",
         _ => "shared_experts",
     };
     format!("{p}.mlp.{module}.{projection}_proj.{suffix}")
@@ -979,9 +1292,273 @@ mod tests {
     }
 
     #[test]
-    fn fused_qkv_default_head_dimension_is_exact() {
-        assert_eq!(fused_qkv_default_head_dim(4096, 32).unwrap(), 128);
-        assert!(fused_qkv_default_head_dim(4096, 0).is_err());
-        assert!(fused_qkv_default_head_dim(4097, 32).is_err());
+    fn fused_qkv_default_head_dimension_is_exact() -> Result<()> {
+        assert_eq!(fused_qkv_default_head_dim(32, 4)?, 8);
+        assert!(fused_qkv_default_head_dim(32, 5).is_err());
+        Ok(())
+    }
+
+    /// A minimal two-block qwen4exp archive: blk.0 is a GDN+PLE layer, blk.1 a
+    /// full-attention layer, so every binder branch is exercised.
+    fn qwen4exp_test_archive() -> Result<(tempfile::NamedTempFile, GgufArchive)> {
+        qwen4exp_test_archive_omitting(&[])
+    }
+
+    fn qwen4exp_test_archive_omitting(
+        omit: &[&str],
+    ) -> Result<(tempfile::NamedTempFile, GgufArchive)> {
+        use candle_core::quantized::{gguf_file, GgmlDType, QTensor};
+        use candle_core::{Device, Tensor};
+        use std::io::Write as _;
+        use tempfile::NamedTempFile;
+
+        let mut file = NamedTempFile::new()?;
+        let metadata: Vec<(String, gguf_file::Value)> =
+            vec![("qwen4exp.block_count".to_string(), gguf_file::Value::U32(2))];
+        let metadata = metadata
+            .iter()
+            .map(|(key, value)| (key.as_str(), value))
+            .collect::<Vec<_>>();
+        let tensor = |shape: &[usize]| -> QTensor {
+            let dense = Tensor::zeros(shape, DType::F32, &Device::Cpu).expect("test tensor");
+            QTensor::quantize(&dense, GgmlDType::F32).expect("test tensor")
+        };
+        let tensors = [
+            ("token_embd.weight", tensor(&[4, 2])),
+            ("output.weight", tensor(&[4, 2])),
+            ("output_hc_norm.weight", tensor(&[4])),
+            ("output_hc_down.weight", tensor(&[2, 4])),
+            ("output_hc_up.weight", tensor(&[4, 2])),
+            ("per_layer_token_embd.weight", tensor(&[3, 2])),
+            // blk.0: GDN + PLE layer.
+            ("blk.0.hc_attn_norm.weight", tensor(&[4])),
+            ("blk.0.hc_attn_down.weight", tensor(&[2, 4])),
+            ("blk.0.hc_attn_up.weight", tensor(&[4, 2])),
+            ("blk.0.hc_attn_inject.weight", tensor(&[2, 4])),
+            ("blk.0.hc_ffn_norm.weight", tensor(&[4])),
+            ("blk.0.hc_ffn_down.weight", tensor(&[2, 4])),
+            ("blk.0.hc_ffn_up.weight", tensor(&[4, 2])),
+            ("blk.0.hc_ffn_inject.weight", tensor(&[2, 4])),
+            ("blk.0.attn_qkv.weight", tensor(&[12, 2])),
+            ("blk.0.attn_gate.weight", tensor(&[4, 2])),
+            ("blk.0.ssm_beta.weight", tensor(&[4, 2])),
+            ("blk.0.ssm_alpha.weight", tensor(&[4, 2])),
+            ("blk.0.ssm_dt.bias", tensor(&[4])),
+            ("blk.0.ssm_a", tensor(&[4])),
+            ("blk.0.ssm_norm.weight", tensor(&[2])),
+            ("blk.0.ssm_out.weight", tensor(&[2, 4])),
+            ("blk.0.ssm_conv1d.weight", tensor(&[3, 12])),
+            ("blk.0.ffn_gate_inp.weight", tensor(&[2, 2])),
+            ("blk.0.ffn_gate_exps.weight", tensor(&[2, 4, 2])),
+            ("blk.0.ffn_up_exps.weight", tensor(&[2, 4, 2])),
+            ("blk.0.ffn_down_exps.weight", tensor(&[2, 2, 4])),
+            ("blk.0.ffn_gate_inp_shexp.weight", tensor(&[2])),
+            ("blk.0.ffn_gate_shexp.weight", tensor(&[4, 2])),
+            ("blk.0.ffn_up_shexp.weight", tensor(&[4, 2])),
+            ("blk.0.ffn_down_shexp.weight", tensor(&[2, 4])),
+            ("blk.0.ple_key.weight", tensor(&[4, 2])),
+            ("blk.0.ple_value.weight", tensor(&[2, 2])),
+            ("blk.0.ple_norm_key.weight", tensor(&[4])),
+            ("blk.0.ple_norm_query.weight", tensor(&[4])),
+            ("blk.0.ple_norm_conv.weight", tensor(&[4])),
+            ("blk.0.ple_conv1d.weight", tensor(&[3, 4])),
+            // blk.1: full-attention layer.
+            ("blk.1.hc_attn_norm.weight", tensor(&[4])),
+            ("blk.1.hc_attn_down.weight", tensor(&[2, 4])),
+            ("blk.1.hc_attn_up.weight", tensor(&[4, 2])),
+            ("blk.1.hc_attn_inject.weight", tensor(&[2, 4])),
+            ("blk.1.hc_ffn_norm.weight", tensor(&[4])),
+            ("blk.1.hc_ffn_down.weight", tensor(&[2, 4])),
+            ("blk.1.hc_ffn_up.weight", tensor(&[4, 2])),
+            ("blk.1.hc_ffn_inject.weight", tensor(&[2, 4])),
+            ("blk.1.attn_q.weight", tensor(&[8, 2])),
+            ("blk.1.attn_k.weight", tensor(&[4, 2])),
+            ("blk.1.attn_v.weight", tensor(&[4, 2])),
+            ("blk.1.attn_output.weight", tensor(&[2, 4])),
+            ("blk.1.attn_q_norm.weight", tensor(&[2])),
+            ("blk.1.attn_k_norm.weight", tensor(&[2])),
+            ("blk.1.indexer.q_proj.weight", tensor(&[2, 2])),
+            ("blk.1.indexer.k_proj.weight", tensor(&[2, 2])),
+            ("blk.1.indexer.q_norm.weight", tensor(&[2])),
+            ("blk.1.indexer.k_norm.weight", tensor(&[2])),
+            ("blk.1.ffn_gate_inp.weight", tensor(&[2, 2])),
+            ("blk.1.ffn_gate_exps.weight", tensor(&[2, 4, 2])),
+            ("blk.1.ffn_up_exps.weight", tensor(&[2, 4, 2])),
+            ("blk.1.ffn_down_exps.weight", tensor(&[2, 2, 4])),
+            ("blk.1.ffn_gate_inp_shexp.weight", tensor(&[2])),
+            ("blk.1.ffn_gate_shexp.weight", tensor(&[4, 2])),
+            ("blk.1.ffn_up_shexp.weight", tensor(&[4, 2])),
+            ("blk.1.ffn_down_shexp.weight", tensor(&[2, 4])),
+        ];
+        let tensors = tensors
+            .iter()
+            .filter(|(name, _)| !omit.contains(name))
+            .map(|(name, tensor)| (*name, tensor))
+            .collect::<Vec<_>>();
+        gguf_file::write(file.as_file_mut(), &metadata, &tensors)?;
+        file.as_file_mut().flush()?;
+        let archive = GgufArchive::open_file(file.path())?;
+        Ok((file, archive))
+    }
+
+    #[test]
+    fn qwen4exp_bindings_map_the_full_inventory() -> Result<()> {
+        let (file, archive) = qwen4exp_test_archive()?;
+        let _keep_file_alive = file;
+        let bindings = build_normal_bindings(
+            &archive,
+            &NormalLoaderType::Qwen4Exp,
+            CanonicalGgufArchitecture::Qwen4Exp,
+        )?;
+
+        // Root tensors.
+        assert_eq!(
+            bindings.get("model.hc_head.norm.weight"),
+            Some(&GgufTensorBinding::tensor("output_hc_norm.weight"))
+        );
+        assert_eq!(
+            bindings.get("model.hc_head.down.weight"),
+            Some(&GgufTensorBinding::tensor("output_hc_down.weight"))
+        );
+        assert_eq!(
+            bindings.get("model.per_layer_token_embd.weight"),
+            Some(&GgufTensorBinding::tensor("per_layer_token_embd.weight"))
+        );
+        assert!(bindings.get("model.norm.weight").is_none());
+
+        // GDN layer: split projections, decay transform, and convolution reshape.
+        assert_eq!(
+            bindings.get("model.layers.0.linear_attn.in_proj_qkv.weight"),
+            Some(&GgufTensorBinding::tensor("blk.0.attn_qkv.weight"))
+        );
+        assert_eq!(
+            bindings.get("model.layers.0.linear_attn.in_proj_z.weight"),
+            Some(&GgufTensorBinding::tensor("blk.0.attn_gate.weight"))
+        );
+        assert_eq!(
+            bindings.get("model.layers.0.linear_attn.in_proj_b.weight"),
+            Some(&GgufTensorBinding::tensor("blk.0.ssm_beta.weight"))
+        );
+        assert_eq!(
+            bindings.get("model.layers.0.linear_attn.in_proj_a.weight"),
+            Some(&GgufTensorBinding::tensor("blk.0.ssm_alpha.weight"))
+        );
+        assert_eq!(
+            bindings.get("model.layers.0.linear_attn.dt_bias"),
+            Some(&GgufTensorBinding::tensor("blk.0.ssm_dt.bias"))
+        );
+        assert_eq!(
+            bindings.get("model.layers.0.linear_attn.norm.weight"),
+            Some(&GgufTensorBinding::tensor("blk.0.ssm_norm.weight"))
+        );
+        assert_eq!(
+            bindings.get("model.layers.0.linear_attn.out_proj.weight"),
+            Some(&GgufTensorBinding::tensor("blk.0.ssm_out.weight"))
+        );
+        assert_eq!(
+            bindings.get("model.layers.0.linear_attn.conv1d.weight"),
+            Some(&GgufTensorBinding::tensor("blk.0.ssm_conv1d.weight").reshape(vec![3, 1, 12]))
+        );
+        assert_eq!(
+            bindings.get("model.layers.0.linear_attn.A_log"),
+            Some(
+                &GgufTensorBinding::tensor("blk.0.ssm_a")
+                    .affine(-1.0, 0.0)
+                    .log()
+            )
+        );
+
+        // Hyper-connections and PLE use plain gamma storage.
+        assert_eq!(
+            bindings.get("model.layers.0.hc_attn.norm.weight"),
+            Some(&GgufTensorBinding::tensor("blk.0.hc_attn_norm.weight"))
+        );
+        assert_eq!(
+            bindings.get("model.layers.0.hc_ffn.inject.weight"),
+            Some(&GgufTensorBinding::tensor("blk.0.hc_ffn_inject.weight"))
+        );
+        assert_eq!(
+            bindings.get("model.layers.0.ple.key.weight"),
+            Some(&GgufTensorBinding::tensor("blk.0.ple_key.weight"))
+        );
+        assert_eq!(
+            bindings.get("model.layers.0.ple.norm_conv.weight"),
+            Some(&GgufTensorBinding::tensor("blk.0.ple_norm_conv.weight"))
+        );
+
+        // MoE bindings flow through the shared target helpers.
+        assert_eq!(
+            bindings.get("model.layers.0.mlp.gate.weight"),
+            Some(&GgufTensorBinding::tensor("blk.0.ffn_gate_inp.weight"))
+        );
+        assert_eq!(
+            bindings.get("model.layers.0.mlp.experts.gate_proj.weight"),
+            Some(&GgufTensorBinding::tensor("blk.0.ffn_gate_exps.weight"))
+        );
+        assert_eq!(
+            bindings.get("model.layers.0.mlp.experts.down_proj.weight"),
+            Some(&GgufTensorBinding::tensor("blk.0.ffn_down_exps.weight"))
+        );
+        assert_eq!(
+            bindings.get("model.layers.0.mlp.shared_expert.gate_proj.weight"),
+            Some(&GgufTensorBinding::tensor("blk.0.ffn_gate_shexp.weight"))
+        );
+        assert_eq!(
+            bindings.get("model.layers.0.mlp.shared_expert_gate.weight"),
+            Some(&GgufTensorBinding::tensor("blk.0.ffn_gate_inp_shexp.weight").reshape(vec![1, 2]))
+        );
+
+        // Full-attention layer: fused query/gate Q and zero-centered Q/K norms.
+        assert_eq!(
+            bindings.get("model.layers.1.self_attn.attn.q_proj.weight"),
+            Some(&GgufTensorBinding::tensor("blk.1.attn_q.weight"))
+        );
+        assert_eq!(
+            bindings.get("model.layers.1.self_attn.attn.o_proj.weight"),
+            Some(&GgufTensorBinding::tensor("blk.1.attn_output.weight"))
+        );
+        assert_eq!(
+            bindings.get("model.layers.1.self_attn.attn.q_norm.weight"),
+            Some(&GgufTensorBinding::tensor("blk.1.attn_q_norm.weight").affine(1.0, -1.0))
+        );
+        assert_eq!(
+            bindings.get("model.layers.1.self_attn.attn.k_norm.weight"),
+            Some(&GgufTensorBinding::tensor("blk.1.attn_k_norm.weight").affine(1.0, -1.0))
+        );
+        assert_eq!(
+            bindings.get("model.layers.1.self_attn.indexer.q_proj.weight"),
+            Some(&GgufTensorBinding::tensor("blk.1.indexer.q_proj.weight"))
+        );
+        assert_eq!(
+            bindings.get("model.layers.1.self_attn.indexer.k_norm.weight"),
+            Some(&GgufTensorBinding::tensor("blk.1.indexer.k_norm.weight"))
+        );
+        // Generic arms must not leak qwen3next-style paths for qwen4exp.
+        assert!(bindings
+            .get("model.layers.1.self_attn.q_proj.weight")
+            .is_none());
+        assert!(bindings
+            .get("model.layers.0.linear_attn.in_proj_qkvz.weight")
+            .is_none());
+        assert!(bindings.get("model.layers.0.mamba.A_log").is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn qwen4exp_bindings_reject_partial_layer_inventories() -> Result<()> {
+        let (file, archive) = qwen4exp_test_archive_omitting(&["blk.1.indexer.k_norm.weight"])?;
+        let _keep_file_alive = file;
+        let error = build_normal_bindings(
+            &archive,
+            &NormalLoaderType::Qwen4Exp,
+            CanonicalGgufArchitecture::Qwen4Exp,
+        )
+        .err()
+        .expect("partial inventory must fail binding");
+        assert!(
+            error.to_string().contains("blk.1.indexer.k_norm.weight"),
+            "unexpected inventory error: {error}"
+        );
+        Ok(())
     }
 }

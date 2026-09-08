@@ -27,6 +27,14 @@ impl GdnStateDType {
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
+pub enum GdnOutputGate {
+    #[default]
+    Silu,
+    Sigmoid,
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum GdnVHeadLayout {
     #[default]
     Grouped,
@@ -52,6 +60,9 @@ pub trait GdnConfig {
     fn linear_num_key_heads(&self) -> usize;
     fn linear_num_value_heads(&self) -> usize;
     fn quantization_config(&self) -> &Option<QuantizedConfig>;
+    fn output_gate(&self) -> GdnOutputGate {
+        GdnOutputGate::Silu
+    }
     fn v_head_layout(&self) -> GdnVHeadLayout {
         GdnVHeadLayout::Grouped
     }

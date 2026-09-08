@@ -408,6 +408,7 @@ impl Loader for EmbeddingLoader {
                 layer_sizes_in_bytes,
                 non_mapped_size_in_bytes,
                 total_model_size_in_bytes,
+                None,
                 &available_devices,
                 dtype,
                 &params,
