@@ -1,0 +1,13 @@
+{
+  "llama3-3b": {
+    "Plain": {
+      "model_id": "meta-llama/Llama-3.2-3B-Instruct"
+    }
+  },
+  "qwen3-4b": {
+    "Plain": {
+      "model_id": "Qwen/Qwen3-4B"
+    },
+    "in_situ_quant": "4"
+  }
+}

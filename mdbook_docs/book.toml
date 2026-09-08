@@ -1,0 +1,5 @@
+[book]
+authors = ["Eric Buehler"]
+language = "en"
+src = "src"
+title = "mistral.rs"
