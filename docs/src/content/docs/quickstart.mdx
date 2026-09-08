@@ -14,7 +14,7 @@ mistral.rs is a single binary: `mistralrs run` chats with a model in your termin
 
 ```bash
 # 1. Install: downloads a prebuilt binary for your platform (or builds from source if none matches)
-curl --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/EricLBuehler/mistral.rs/master/install.sh | sh
+curl -fsSL https://mistralrs.dev/install.sh | sh
 
 # 2. Chat: downloads the weights on first run
 mistralrs run --quant 4 -m Qwen/Qwen3-4B
@@ -28,7 +28,7 @@ mistralrs serve --quant 4 -m Qwen/Qwen3-4B
 
 ```powershell
 # 1. Install from PowerShell (downloads a prebuilt binary, or builds from source)
-irm https://raw.githubusercontent.com/EricLBuehler/mistral.rs/master/install.ps1 | iex
+irm https://mistralrs.dev/install.ps1 | iex
 
 # 2. Chat: downloads the weights on first run
 mistralrs run --quant 4 -m Qwen/Qwen3-4B
