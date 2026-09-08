@@ -511,7 +511,22 @@ pub fn gptq_linear(
     } else {
         None
     };
-    let workspace = Tensor::zeros(out_dim / pack_factor!(bits), DType::U32, vb.device())?;
+    // Marlin's reduction locks buffer must hold (out_dim / min_thread_n) * max_par
+    // int32 entries (min_thread_n = 64, max_par = 16 in the kernel), i.e. out_dim/4 —
+    // matching vLLM's MarlinWorkspace. The old `out_dim / pack_factor` sizing only
+    // happens to be correct for 8-bit (pack_factor 4 -> out_dim/4); for 4-bit
+    // (pack_factor 8 -> out_dim/8) it under-allocates by 2x, so marlin writes its
+    // cross-block reduction locks out of bounds. Depending on GPU memory layout this
+    // is either silent corruption (overrun lands in an adjacent allocation -> garbage
+    // output) or CUDA_ERROR_ILLEGAL_ADDRESS (overrun crosses a page boundary, seen on
+    // A100/sm_80). Size it correctly for every bit width.
+    const MARLIN_MIN_THREAD_N: usize = 64;
+    const MARLIN_MAX_PAR: usize = 16;
+    let workspace = Tensor::zeros(
+        out_dim.div_ceil(MARLIN_MIN_THREAD_N) * MARLIN_MAX_PAR,
+        DType::U32,
+        vb.device(),
+    )?;
 
     let config = if marlin_format {
         QuantMethodConfig::GptqAwq {
