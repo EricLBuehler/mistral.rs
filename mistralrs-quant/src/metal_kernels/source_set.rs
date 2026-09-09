@@ -9,6 +9,7 @@ mistralrs_metal_compile::metal_source_set! {
         "f8q8",
         "flash_attn",
         "fused_glu",
+        "gguf_moe",
         "hqq_dequantize",
         "hqq_bitpack",
         "moe",

@@ -428,7 +428,7 @@ impl QuantizedSerde for GgufMmapMatMul {
     }
 }
 
-fn elem_count(dims: &[usize]) -> Result<usize> {
+pub(super) fn elem_count(dims: &[usize]) -> Result<usize> {
     dims.iter().try_fold(1usize, |count, &dim| {
         count
             .checked_mul(dim)
@@ -436,7 +436,7 @@ fn elem_count(dims: &[usize]) -> Result<usize> {
     })
 }
 
-fn packed_byte_len(elements: usize, dtype: GgmlDType) -> Result<usize> {
+pub(super) fn packed_byte_len(elements: usize, dtype: GgmlDType) -> Result<usize> {
     if !elements.is_multiple_of(dtype.block_size()) {
         candle_core::bail!(
             "GGUF row has {elements} elements, not divisible by {:?} block size {}",
@@ -518,7 +518,7 @@ fn dequantize_typed<T: GgmlType>(bytes: &[u8], output: &mut [f32]) -> Result<()>
     Ok(())
 }
 
-fn dequantize(dtype: GgmlDType, bytes: &[u8], output: &mut [f32]) -> Result<()> {
+pub(super) fn dequantize(dtype: GgmlDType, bytes: &[u8], output: &mut [f32]) -> Result<()> {
     match dtype {
         GgmlDType::F32 => dequantize_typed::<f32>(bytes, output),
         GgmlDType::F16 => dequantize_typed::<f16>(bytes, output),

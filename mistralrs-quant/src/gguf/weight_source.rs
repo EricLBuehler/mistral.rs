@@ -538,6 +538,20 @@ impl GgufWeightSource {
             );
         }
         let range = shard_range(shard, &dims)?;
+        #[cfg(feature = "metal")]
+        if range.is_none() && dims.len() == 3 && device.is_metal() {
+            // Stacked routed experts: keep the packed bytes resident on the
+            // device and gather with the bounded indexed-MoE kernel. An owned
+            // quantized stack here would fall back to fully dequantizing every
+            // expert on the device and exhaust its memory.
+            let bias = self.load_bias(key, device, None, dims.len())?;
+            return Ok(Arc::new(super::metal_moe::GgufMetalExperts::new_from_archive(
+                &self.archive,
+                source_name,
+                bias,
+                device,
+            )?));
+        }
         if device.is_cpu() && range.is_none() {
             let bias = self.load_bias(key, device, range, dims.len())?;
             return Ok(Arc::new(GgufMmapMatMul::new(

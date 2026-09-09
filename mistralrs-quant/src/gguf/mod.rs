@@ -8,6 +8,8 @@ pub mod fast_mmq;
 pub mod fast_mmvq;
 #[cfg(feature = "cuda")]
 mod ffi;
+#[cfg(feature = "metal")]
+pub mod metal_moe;
 mod mmap;
 #[cfg(all(feature = "cuda", has_marlin_kernels))]
 mod packed_affine;
