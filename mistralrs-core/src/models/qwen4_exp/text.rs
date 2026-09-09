@@ -1788,47 +1788,83 @@ pub(crate) mod tests {
         config
     }
 
-    fn weight(shape: (usize, usize), seed: usize) -> Result<Tensor> {
+    fn weight(device: &Device, shape: (usize, usize), seed: usize) -> Result<Tensor> {
         let (rows, cols) = shape;
         let mut data = Vec::with_capacity(rows * cols);
         for index in 0..rows * cols {
             // Small deterministic values keep the tiny F32 reference well-conditioned.
             data.push((((index * 2_654_435_761 + seed) % 2_000) as f32 / 1_000.0) - 1.0);
         }
-        Tensor::from_vec(data, (rows, cols), &Device::Cpu)
+        Tensor::from_vec(data, (rows, cols), device)
     }
 
-    fn weight1(length: usize, seed: usize) -> Result<Tensor> {
-        weight((1, length), seed)?.reshape((length,))
+    fn weight1(device: &Device, length: usize, seed: usize) -> Result<Tensor> {
+        weight(device, (1, length), seed)?.reshape((length,))
     }
 
-    fn weight3(shape: (usize, usize, usize), seed: usize) -> Result<Tensor> {
+    fn weight3(device: &Device, shape: (usize, usize, usize), seed: usize) -> Result<Tensor> {
         let (rows, cols, depth) = shape;
         let mut data = Vec::with_capacity(rows * cols * depth);
         for index in 0..rows * cols * depth {
             data.push((((index * 2_654_435_761 + seed) % 2_000) as f32 / 1_000.0) - 1.0);
         }
-        Tensor::from_vec(data, (rows, cols, depth), &Device::Cpu)
+        Tensor::from_vec(data, (rows, cols, depth), device)
     }
 
     /// The raw tensor map behind [`fixture_builder`], so sibling test modules can merge in
     /// additional tensors (for example the multimodal vision tower) before wrapping.
     pub(crate) fn fixture_tensors(cfg: &Config) -> Result<HashMap<String, Tensor>> {
+        fixture_tensors_on(cfg, &Device::Cpu)
+    }
+
+    /// Device-parametrized variant of [`fixture_tensors`] so the same tiny fixture can be
+    /// built on an accelerator for backend-parity tests.
+    pub(crate) fn fixture_tensors_on(
+        cfg: &Config,
+        device: &Device,
+    ) -> Result<HashMap<String, Tensor>> {
         let mut tensors = HashMap::new();
-        build_fixture_tensors(cfg, &mut tensors)?;
+        build_fixture_tensors(cfg, device, &mut tensors)?;
         Ok(tensors)
     }
 
     /// Build every tensor the bring-up decoder reads, mirroring the planned GGUF binding names.
     pub(crate) fn fixture_builder(cfg: &Config) -> Result<ShardedVarBuilder> {
+        fixture_builder_on(cfg, &Device::Cpu)
+    }
+
+    /// Device-parametrized variant of [`fixture_builder`].
+    pub(crate) fn fixture_builder_on(cfg: &Config, device: &Device) -> Result<ShardedVarBuilder> {
         Ok(ShardedSafeTensors::wrap(
-            fixture_tensors(cfg)?,
+            fixture_tensors_on(cfg, device)?,
             DType::F32,
-            Device::Cpu,
+            device.clone(),
         ))
     }
 
-    fn build_fixture_tensors(cfg: &Config, tensors: &mut HashMap<String, Tensor>) -> Result<()> {
+    /// Dtype-parametrized variant of [`fixture_builder_on`] so backend-parity tests can
+    /// exercise F16/BF16 quantized projection paths. Every fixture tensor is rounded to
+    /// the target dtype identically on both devices, so cross-device comparisons stay
+    /// valid while the recurrent state keeps its config-selected F32 dtype exactly like
+    /// the official BF16 checkpoint.
+    #[cfg(feature = "metal")]
+    pub(crate) fn fixture_builder_with_dtype(
+        cfg: &Config,
+        device: &Device,
+        dtype: DType,
+    ) -> Result<ShardedVarBuilder> {
+        let tensors = fixture_tensors_on(cfg, device)?
+            .into_iter()
+            .map(|(name, tensor)| Ok((name, tensor.to_dtype(dtype)?)))
+            .collect::<Result<HashMap<_, _>>>()?;
+        Ok(ShardedSafeTensors::wrap(tensors, dtype, device.clone()))
+    }
+
+    fn build_fixture_tensors(
+        cfg: &Config,
+        device: &Device,
+        tensors: &mut HashMap<String, Tensor>,
+    ) -> Result<()> {
         let hidden = cfg.hidden_size;
         let wide = cfg.hc_count * hidden;
         let lowrank = cfg.hc_lowrank;
@@ -1849,19 +1885,22 @@ pub(crate) mod tests {
         macro_rules! put_1d {
             ($name:expr, $length:expr) => {{
                 seed += 1;
-                tensors.insert($name.to_string(), weight1($length, seed)?);
+                tensors.insert($name.to_string(), weight1(device, $length, seed)?);
             }};
         }
         macro_rules! put_2d {
             ($name:expr, $rows:expr, $cols:expr) => {{
                 seed += 1;
-                tensors.insert($name.to_string(), weight(($rows, $cols), seed)?);
+                tensors.insert($name.to_string(), weight(device, ($rows, $cols), seed)?);
             }};
         }
         macro_rules! put_3d {
             ($name:expr, $rows:expr, $cols:expr, $depth:expr) => {{
                 seed += 1;
-                tensors.insert($name.to_string(), weight3(($rows, $cols, $depth), seed)?);
+                tensors.insert(
+                    $name.to_string(),
+                    weight3(device, ($rows, $cols, $depth), seed)?,
+                );
             }};
         }
 
@@ -1991,11 +2030,19 @@ pub(crate) mod tests {
     }
 
     pub(crate) fn loading_metadata(layer_count: usize) -> Result<NormalLoadingMetadata> {
-        let mapper = DeviceMapSetting::dummy().into_mapper(layer_count, &Device::Cpu, None, &[])?;
+        loading_metadata_on(layer_count, &Device::Cpu)
+    }
+
+    /// Device-parametrized variant of [`loading_metadata`].
+    pub(crate) fn loading_metadata_on(
+        layer_count: usize,
+        device: &Device,
+    ) -> Result<NormalLoadingMetadata> {
+        let mapper = DeviceMapSetting::dummy().into_mapper(layer_count, device, None, &[])?;
         Ok(NormalLoadingMetadata {
             mapper,
             loading_isq: false,
-            real_device: Device::Cpu,
+            real_device: device.clone(),
             multi_progress: Arc::new(MultiProgress::new()),
             matformer_slicing_config: None,
             rope_pairing: None,
@@ -2003,19 +2050,25 @@ pub(crate) mod tests {
     }
 
     fn build_model(cfg: &Config, vb: ShardedVarBuilder) -> Result<Model> {
-        build_model_mechanism(cfg, vb, AttentionImplementation::Eager)
+        build_model_mechanism(cfg, vb, AttentionImplementation::Eager, &Device::Cpu)
+    }
+
+    #[allow(dead_code)]
+    fn build_model_on(cfg: &Config, vb: ShardedVarBuilder, device: &Device) -> Result<Model> {
+        build_model_mechanism(cfg, vb, AttentionImplementation::Eager, device)
     }
 
     fn build_model_mechanism(
         cfg: &Config,
         vb: ShardedVarBuilder,
         attention_mechanism: AttentionImplementation,
+        device: &Device,
     ) -> Result<Model> {
         Model::new(
             cfg,
             vb,
             true,
-            loading_metadata(cfg.num_hidden_layers)?,
+            loading_metadata_on(cfg.num_hidden_layers, device)?,
             attention_mechanism,
         )
     }
@@ -2029,9 +2082,33 @@ pub(crate) mod tests {
         position_ids: &[usize],
         kind: RecurrentBatchKind,
     ) -> Result<Tensor> {
+        run_forward_on(
+            model,
+            tokens,
+            batch,
+            seqlen_offsets,
+            context_lens,
+            position_ids,
+            kind,
+            &Device::Cpu,
+        )
+    }
+
+    /// Device-parametrized variant of [`run_forward`].
+    #[allow(clippy::too_many_arguments, dead_code)]
+    fn run_forward_on(
+        model: &Model,
+        tokens: &[u32],
+        batch: usize,
+        seqlen_offsets: &[usize],
+        context_lens: &[(usize, usize)],
+        position_ids: &[usize],
+        kind: RecurrentBatchKind,
+        device: &Device,
+    ) -> Result<Tensor> {
         let flash = FlashParams::empty(true);
         let host: Vec<u32> = (0..batch as u32).collect();
-        let indices = Tensor::from_vec(host.clone(), (batch,), &Device::Cpu)?;
+        let indices = Tensor::from_vec(host.clone(), (batch,), device)?;
         // The pipeline normally populates the cache's batch state indices in clone_in_cache;
         // tests set them directly before forward.
         model
@@ -2042,7 +2119,7 @@ pub(crate) mod tests {
             ModelForwardContext::new(seqlen_offsets, context_lens, position_ids, None, &flash)
                 .with_recurrent_metadata(Some(RecurrentMetadata::new(kind, indices, None)));
         let seq_len = tokens.len() / batch;
-        let input = Tensor::from_vec(tokens.to_vec(), (batch, seq_len), &Device::Cpu)?;
+        let input = Tensor::from_vec(tokens.to_vec(), (batch, seq_len), device)?;
         model.forward(&input, &mut ctx)
     }
 
@@ -2223,6 +2300,130 @@ pub(crate) mod tests {
             );
         }
         Ok(())
+    }
+
+    /// Metal-vs-CPU logit parity through the full decoder at the given fixture dtype.
+    /// F32 establishes the tight Completion Phase 5 reference; F16/BF16 exercise the
+    /// quantized projection paths, including the fused Metal sigmoid gated RMS norm and
+    /// PLE depthwise convolution kernels, which only dispatch for those dtypes. Both
+    /// fixtures round the identical F32 seeds to the target dtype, so any divergence is
+    /// device execution, not weight mismatch. Skips cleanly when no Metal device is
+    /// present.
+    #[cfg(feature = "metal")]
+    fn metal_forward_parity_with_dtype(dtype: DType, tolerance: f32) -> Result<()> {
+        let Ok(device) = Device::new_metal(0) else {
+            return Ok(());
+        };
+        let config = tiny_config();
+        config.validate()?;
+        let cpu_model = build_model(
+            &config,
+            fixture_builder_with_dtype(&config, &Device::Cpu, dtype)?,
+        )?;
+        let metal_model = build_model_on(
+            &config,
+            fixture_builder_with_dtype(&config, &device, dtype)?,
+            &device,
+        )?;
+
+        fn max_abs_diff(lhs: &Tensor, rhs: &Tensor) -> Result<f32> {
+            let lhs = lhs
+                .to_device(&Device::Cpu)?
+                .to_dtype(DType::F32)?
+                .flatten_all()?
+                .to_vec1::<f32>()?;
+            let rhs = rhs
+                .to_device(&Device::Cpu)?
+                .to_dtype(DType::F32)?
+                .flatten_all()?
+                .to_vec1::<f32>()?;
+            assert_eq!(lhs.len(), rhs.len());
+            Ok(lhs
+                .iter()
+                .zip(rhs.iter())
+                .map(|(a, b)| (a - b).abs())
+                .fold(0.0f32, f32::max))
+        }
+
+        let cpu_prefill = run_forward(
+            &cpu_model,
+            &[3, 5, 7],
+            1,
+            &[0],
+            &[(0, 3)],
+            &[3],
+            RecurrentBatchKind::Prefill,
+        )?;
+        let metal_prefill = run_forward_on(
+            &metal_model,
+            &[3, 5, 7],
+            1,
+            &[0],
+            &[(0, 3)],
+            &[3],
+            RecurrentBatchKind::Prefill,
+            &device,
+        )?;
+        assert_eq!(cpu_prefill.dims(), metal_prefill.dims());
+        let prefill_diff = max_abs_diff(&cpu_prefill, &metal_prefill)?;
+
+        let cpu_decode = run_forward(
+            &cpu_model,
+            &[9],
+            1,
+            &[3],
+            &[(0, 1)],
+            &[4],
+            RecurrentBatchKind::Decode,
+        )?;
+        let metal_decode = run_forward_on(
+            &metal_model,
+            &[9],
+            1,
+            &[3],
+            &[(0, 1)],
+            &[4],
+            RecurrentBatchKind::Decode,
+            &device,
+        )?;
+        assert_eq!(cpu_decode.dims(), metal_decode.dims());
+        let decode_diff = max_abs_diff(&cpu_decode, &metal_decode)?;
+
+        assert!(
+            prefill_diff < tolerance,
+            "Metal prefill logits diverge from CPU by {prefill_diff} at {dtype:?} (tolerance {tolerance})"
+        );
+        assert!(
+            decode_diff < tolerance,
+            "Metal decode logits diverge from CPU by {decode_diff} at {dtype:?} (tolerance {tolerance})"
+        );
+        Ok(())
+    }
+
+    /// Completion Phase 5 bring-up: the full decoder (HC, GDN sigmoid norm path, QSA
+    /// sparse attention, MoE) on Metal must track the CPU reference logits.
+    #[cfg(feature = "metal")]
+    #[test]
+    fn metal_model_forward_matches_cpu_reference() -> Result<()> {
+        metal_forward_parity_with_dtype(DType::F32, 1e-3)
+    }
+
+    /// Completion Phase 5: the F16 fixture parity run covers the quantized projection
+    /// paths plus the fused Metal kernels (sigmoid gated RMS norm, PLE depthwise
+    /// convolution) that only dispatch for F16/BF16, with F32 recurrent state exactly
+    /// like the official BF16 checkpoint.
+    #[cfg(feature = "metal")]
+    #[test]
+    fn metal_model_forward_matches_cpu_reference_f16() -> Result<()> {
+        metal_forward_parity_with_dtype(DType::F16, 5e-2)
+    }
+
+    /// Completion Phase 5: the BF16 fixture parity run mirrors the F16 case at the
+    /// established looser BF16 tolerance.
+    #[cfg(feature = "metal")]
+    #[test]
+    fn metal_model_forward_matches_cpu_reference_bf16() -> Result<()> {
+        metal_forward_parity_with_dtype(DType::BF16, 2e-1)
     }
 
     #[test]
@@ -2848,6 +3049,7 @@ pub(crate) mod tests {
             &config,
             fixture_builder(&config)?,
             AttentionImplementation::PagedAttention,
+            &Device::Cpu,
         )
         .err()
         .expect("expected paged-attention construction failure");

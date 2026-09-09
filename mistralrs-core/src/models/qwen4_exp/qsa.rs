@@ -8,6 +8,34 @@ use mistralrs_quant::{QuantMethod, ReplicatedLayer, ShardedVarBuilder};
 use super::config::Config;
 use crate::attention::{Sdpa, SdpaParams};
 
+/// Selected visible cache rows for one query token, either as host indices
+/// (host selector path) or as a device U32 row-index tensor (Metal top-k path).
+#[derive(Debug, Clone)]
+pub(crate) enum QsaSelection {
+    Host(Vec<u32>),
+    Device(Tensor),
+}
+
+impl QsaSelection {
+    /// Rows for a visible history with no complete blocks: the incomplete
+    /// tail alone, in natural order.
+    fn tail_only(
+        visible_len: usize,
+        device_selection: bool,
+        device: &candle_core::Device,
+    ) -> Result<Self> {
+        if device_selection {
+            Ok(Self::Device(Tensor::arange(
+                0u32,
+                visible_len as u32,
+                device,
+            )?))
+        } else {
+            Ok(Self::Host((0..visible_len as u32).collect()))
+        }
+    }
+}
+
 #[derive(Clone)]
 pub(crate) struct QsaSequenceSnapshot {
     raw_keys: Option<Tensor>,
@@ -1109,13 +1137,7 @@ impl QsaKvGather {
         })
     }
 
-    /// Gather selected cache rows into bounded contiguous per-query workspaces.
-    pub(crate) fn gather(
-        &self,
-        keys: &Tensor,
-        values: &Tensor,
-        selections: &[Vec<u32>],
-    ) -> Result<Vec<(Tensor, Tensor)>> {
+    fn validate_cache(&self, keys: &Tensor, values: &Tensor) -> Result<()> {
         let (key_heads, key_tokens, key_dim) = keys.dims3()?;
         let (value_heads, value_tokens, value_dim) = values.dims3()?;
         if key_heads != self.kv_heads
@@ -1138,6 +1160,18 @@ impl QsaKvGather {
         {
             candle_core::bail!("Qwen4Exp QSA K/V gather requires matching cache dtype and device");
         }
+        Ok(())
+    }
+
+    /// Gather selected cache rows into bounded contiguous per-query workspaces.
+    pub(crate) fn gather(
+        &self,
+        keys: &Tensor,
+        values: &Tensor,
+        selections: &[Vec<u32>],
+    ) -> Result<Vec<(Tensor, Tensor)>> {
+        self.validate_cache(keys, values)?;
+        let cache_tokens = keys.dim(1)?;
         for selected in selections {
             if selected.is_empty() || selected.len() > self.max_selected_tokens {
                 candle_core::bail!(
@@ -1146,9 +1180,9 @@ impl QsaKvGather {
                     selected.len()
                 );
             }
-            if selected.iter().any(|row| *row as usize >= key_tokens) {
+            if selected.iter().any(|row| *row as usize >= cache_tokens) {
                 candle_core::bail!(
-                    "Qwen4Exp QSA K/V gather row is outside the cache length {key_tokens}"
+                    "Qwen4Exp QSA K/V gather row is outside the cache length {cache_tokens}"
                 );
             }
         }
@@ -1163,6 +1197,89 @@ impl QsaKvGather {
                 ))
             })
             .collect()
+    }
+
+    /// Gather using device U32 row-index tensors produced by the Metal top-k
+    /// path. Index values are guaranteed in-bounds by construction: the top-k
+    /// kernel emits block indices below its validated column count and
+    /// `expand_ranked_blocks` only appends rows inside the visible history.
+    pub(crate) fn gather_with_device_indices(
+        &self,
+        keys: &Tensor,
+        values: &Tensor,
+        indices: &[&Tensor],
+    ) -> Result<Vec<(Tensor, Tensor)>> {
+        self.validate_cache(keys, values)?;
+        for selected in indices {
+            if selected.dims().len() != 1 || selected.dtype() != DType::U32 {
+                candle_core::bail!(
+                    "Qwen4Exp QSA device selection indices must be rank-1 U32, got {:?}",
+                    selected.dims()
+                );
+            }
+            if selected.device().location() != keys.device().location() {
+                candle_core::bail!(
+                    "Qwen4Exp QSA device selection indices must live on the cache device"
+                );
+            }
+            let len = selected.dim(0)?;
+            if len == 0 || len > self.max_selected_tokens {
+                candle_core::bail!(
+                    "Qwen4Exp QSA K/V gather requires 1..={} selected rows, got {len}",
+                    self.max_selected_tokens
+                );
+            }
+        }
+
+        indices
+            .iter()
+            .map(|selected| {
+                Ok((
+                    keys.index_select(selected, 1)?.contiguous()?,
+                    values.index_select(selected, 1)?.contiguous()?,
+                ))
+            })
+            .collect()
+    }
+
+    /// Gather from the indexer's selections, matching the host or device
+    /// selection mode the producing chunk used.
+    pub(crate) fn gather_selected(
+        &self,
+        keys: &Tensor,
+        values: &Tensor,
+        selections: &[QsaSelection],
+    ) -> Result<Vec<(Tensor, Tensor)>> {
+        let host_only = selections
+            .iter()
+            .all(|selection| matches!(selection, QsaSelection::Host(_)));
+        let device_only = selections
+            .iter()
+            .all(|selection| matches!(selection, QsaSelection::Device(_)));
+        if !host_only && !device_only {
+            candle_core::bail!(
+                "Qwen4Exp QSA selections must be uniformly host or device indices within one chunk"
+            );
+        }
+        if host_only {
+            let rows = selections
+                .iter()
+                .map(|selection| match selection {
+                    QsaSelection::Host(rows) => rows.clone(),
+                    QsaSelection::Device(_) => unreachable!("checked host-only above"),
+                })
+                .collect::<Vec<_>>();
+            self.gather(keys, values, &rows)
+        } else {
+            let tensors = selections
+                .iter()
+                .map(|selection| match selection {
+                    QsaSelection::Device(tensor) => tensor,
+                    QsaSelection::Host(_) => unreachable!("checked device-only above"),
+                })
+                .collect::<Vec<_>>();
+            self.gather_with_device_indices(keys, values, &tensors)
+        }
     }
 }
 
@@ -1322,6 +1439,35 @@ impl QsaIndexer {
         cos: &Tensor,
         sin: &Tensor,
     ) -> Result<Vec<Vec<u32>>> {
+        self.process_chunk_selected(sequence_id, hidden, positions, cos, sin)?
+            .into_iter()
+            .map(|selection| match selection {
+                QsaSelection::Host(rows) => Ok(rows),
+                QsaSelection::Device(_) => Err(Error::msg(
+                    "Qwen4Exp QSA host selection returned device rows",
+                )),
+            })
+            .collect()
+    }
+
+    /// Whether the Metal device top-k path may serve chunks on this device.
+    pub(crate) fn device_topk_supported(&self, device: &candle_core::Device) -> bool {
+        device.is_metal()
+    }
+
+    /// Append one sequence chunk, selecting visible cache rows independently
+    /// for every query through the Metal top-k path when the device supports
+    /// it and the chunk's widest visible history fits the kernel column
+    /// budget; otherwise the deterministic host selector runs. Both modes
+    /// produce the exact same ranked row order.
+    pub(crate) fn process_chunk_selected(
+        &mut self,
+        sequence_id: usize,
+        hidden: &Tensor,
+        positions: &[u32],
+        cos: &Tensor,
+        sin: &Tensor,
+    ) -> Result<Vec<QsaSelection>> {
         let (batch, tokens, _) = hidden.dims3()?;
         if batch != 1 || positions.len() != tokens {
             candle_core::bail!(
@@ -1330,6 +1476,8 @@ impl QsaIndexer {
             );
         }
 
+        let device = hidden.device();
+        let mut device_selection = self.device_topk_supported(device);
         let (queries, raw_keys) = self.projection.project(hidden)?;
         let raw_keys = raw_keys.squeeze(0)?;
         let previous_len = self
@@ -1337,6 +1485,10 @@ impl QsaIndexer {
             .get(sequence_id)
             .map(|(_, positions)| positions.len())
             .unwrap_or(0);
+        let max_complete_blocks = previous_len.saturating_add(tokens) / self.scorer.compress_ratio;
+        if device_selection && max_complete_blocks > crate::metal::qwen4exp::QSA_TOPK_MAX_COLUMNS {
+            device_selection = false;
+        }
         let snapshot = self.cache.snapshot(sequence_id);
         let result = (|| {
             self.cache.append(sequence_id, &raw_keys, positions)?;
@@ -1355,9 +1507,12 @@ impl QsaIndexer {
                 }
                 let visible_keys = cached_keys.narrow(0, 0, visible_len)?;
                 let complete_blocks = visible_len / self.scorer.compress_ratio;
-                let visible_rows = (0..visible_len as u32).collect::<Vec<_>>();
                 if complete_blocks == 0 {
-                    selections.push(self.selector.select(&visible_rows, &[])?);
+                    selections.push(QsaSelection::tail_only(
+                        visible_len,
+                        device_selection,
+                        cached_keys.device(),
+                    )?);
                     continue;
                 }
 
@@ -1374,8 +1529,26 @@ impl QsaIndexer {
                 let (query, pooled) =
                     self.rotary
                         .apply(&query, &pooled, position, &block_positions, cos, sin)?;
-                let scores = self.scorer.score(&query, &pooled)?.to_vec1::<f32>()?;
-                selections.push(self.selector.select(&visible_rows, &scores)?);
+                let scores = self.scorer.score(&query, &pooled)?;
+                if device_selection {
+                    let selected_blocks = complete_blocks.min(self.selector.max_selected_blocks());
+                    let ranked = crate::metal::qwen4exp::qsa_topk_indices_metal(
+                        &scores.unsqueeze(0)?,
+                        selected_blocks,
+                    )?
+                    .squeeze(0)?;
+                    selections.push(QsaSelection::Device(self.selector.expand_ranked_blocks(
+                        &ranked,
+                        complete_blocks,
+                        visible_len,
+                    )?));
+                } else {
+                    let visible_rows = (0..visible_len as u32).collect::<Vec<_>>();
+                    let scores = scores.to_vec1::<f32>()?;
+                    selections.push(QsaSelection::Host(
+                        self.selector.select(&visible_rows, &scores)?,
+                    ));
+                }
             }
             Ok(selections)
         })();
@@ -1395,6 +1568,29 @@ impl QsaIndexer {
         cos: &Tensor,
         sin: &Tensor,
     ) -> Result<Vec<Vec<u32>>> {
+        self.process_chunk_with_position_tables_selected(sequence_id, hidden, positions, cos, sin)?
+            .into_iter()
+            .map(|selection| match selection {
+                QsaSelection::Host(rows) => Ok(rows),
+                QsaSelection::Device(_) => Err(Error::msg(
+                    "Qwen4Exp QSA host selection returned device rows",
+                )),
+            })
+            .collect()
+    }
+
+    /// Append one sequence with per-token sectioned MRoPE tables, selecting
+    /// cache rows through the Metal top-k path when supported; otherwise the
+    /// deterministic host selector runs. Both modes produce the exact same
+    /// ranked row order.
+    fn process_chunk_with_position_tables_selected(
+        &mut self,
+        sequence_id: usize,
+        hidden: &Tensor,
+        positions: &[u32],
+        cos: &Tensor,
+        sin: &Tensor,
+    ) -> Result<Vec<QsaSelection>> {
         let (batch, tokens, _) = hidden.dims3()?;
         let half = self.rotary.rotary_dim / 2;
         if batch != 1
@@ -1404,6 +1600,8 @@ impl QsaIndexer {
         {
             candle_core::bail!("Qwen4Exp QSA indexer received incompatible sectioned MRoPE inputs");
         }
+        let device = hidden.device();
+        let mut device_selection = self.device_topk_supported(device);
         let (queries, raw_keys) = self.projection.project(hidden)?;
         let raw_keys = raw_keys.squeeze(0)?;
         let previous_len = self
@@ -1411,6 +1609,22 @@ impl QsaIndexer {
             .get(sequence_id)
             .map(|(_, positions)| positions.len())
             .unwrap_or(0);
+        let max_complete_blocks = previous_len.saturating_add(tokens) / self.scorer.compress_ratio;
+        if device_selection && max_complete_blocks > crate::metal::qwen4exp::QSA_TOPK_MAX_COLUMNS {
+            device_selection = false;
+        }
+        // Sequential block-start row indices, shared by every token's key
+        // rotation; the incomplete per-token prefixes are narrowed views.
+        let chunk_block_starts = if device_selection && max_complete_blocks > 0 {
+            Some(Tensor::arange_step(
+                0u32,
+                (max_complete_blocks * self.scorer.compress_ratio) as u32,
+                self.scorer.compress_ratio as u32,
+                device,
+            )?)
+        } else {
+            None
+        };
         let snapshot = self.cache.snapshot(sequence_id);
         let result = (|| {
             self.cache
@@ -1429,9 +1643,12 @@ impl QsaIndexer {
                     candle_core::bail!("Qwen4Exp QSA cache is too large for row indices");
                 }
                 let complete_blocks = visible_len / self.scorer.compress_ratio;
-                let visible_rows = (0..visible_len as u32).collect::<Vec<_>>();
                 if complete_blocks == 0 {
-                    selections.push(self.selector.select(&visible_rows, &[])?);
+                    selections.push(QsaSelection::tail_only(
+                        visible_len,
+                        device_selection,
+                        cached_keys.device(),
+                    )?);
                     continue;
                 }
                 let pooled = self.projection.normalize_pooled_keys(
@@ -1439,11 +1656,16 @@ impl QsaIndexer {
                         .scorer
                         .pool_complete_blocks(&cached_keys.narrow(0, 0, visible_len)?)?,
                 )?;
-                let block_indices = (0..complete_blocks)
-                    .map(|block| (block * self.scorer.compress_ratio) as u32)
-                    .collect::<Vec<_>>();
-                let block_indices =
-                    Tensor::from_slice(&block_indices, complete_blocks, cached_cos.device())?;
+                let block_indices = match chunk_block_starts.as_ref() {
+                    Some(starts) => starts.narrow(0, 0, complete_blocks)?,
+                    None => Tensor::from_slice(
+                        &(0..complete_blocks)
+                            .map(|block| (block * self.scorer.compress_ratio) as u32)
+                            .collect::<Vec<_>>(),
+                        complete_blocks,
+                        cached_cos.device(),
+                    )?,
+                };
                 let query = queries
                     .narrow(0, 0, 1)?
                     .narrow(1, token, 1)?
@@ -1456,8 +1678,26 @@ impl QsaIndexer {
                 let (query, pooled) = self.rotary.apply_position_tables(
                     &query, &pooled, &query_cos, &query_sin, &key_cos, &key_sin,
                 )?;
-                let scores = self.scorer.score(&query, &pooled)?.to_vec1::<f32>()?;
-                selections.push(self.selector.select(&visible_rows, &scores)?);
+                let scores = self.scorer.score(&query, &pooled)?;
+                if device_selection {
+                    let selected_blocks = complete_blocks.min(self.selector.max_selected_blocks());
+                    let ranked = crate::metal::qwen4exp::qsa_topk_indices_metal(
+                        &scores.unsqueeze(0)?,
+                        selected_blocks,
+                    )?
+                    .squeeze(0)?;
+                    selections.push(QsaSelection::Device(self.selector.expand_ranked_blocks(
+                        &ranked,
+                        complete_blocks,
+                        visible_len,
+                    )?));
+                } else {
+                    let visible_rows = (0..visible_len as u32).collect::<Vec<_>>();
+                    let scores = scores.to_vec1::<f32>()?;
+                    selections.push(QsaSelection::Host(
+                        self.selector.select(&visible_rows, &scores)?,
+                    ));
+                }
             }
             Ok(selections)
         })();
@@ -1723,13 +1963,13 @@ impl QsaAttention {
                 .append(sequence_id, &key.squeeze(0)?, &value.squeeze(0)?)?;
             let selections =
                 self.indexer
-                    .process_chunk(sequence_id, hidden, positions, cos, sin)?;
+                    .process_chunk_selected(sequence_id, hidden, positions, cos, sin)?;
             let (cached_keys, cached_values) = self.kv_cache.get(sequence_id).ok_or_else(|| {
                 Error::msg("Qwen4Exp QSA main K/V cache entry disappeared after append")
             })?;
-            let gathered = self
-                .kv_gather
-                .gather(cached_keys, cached_values, &selections)?;
+            let gathered =
+                self.kv_gather
+                    .gather_selected(cached_keys, cached_values, &selections)?;
             let attended = self.attention.forward(&query, &gathered)?;
             let attended = attended.squeeze(0)?.transpose(0, 1)?.reshape((
                 1,
@@ -1777,7 +2017,7 @@ impl QsaAttention {
             let (query, key) = self.rotary.apply_position_tables(&query, &key, cos, sin)?;
             self.kv_cache
                 .append(sequence_id, &key.squeeze(0)?, &value.squeeze(0)?)?;
-            let selections = self.indexer.process_chunk_with_position_tables(
+            let selections = self.indexer.process_chunk_with_position_tables_selected(
                 sequence_id,
                 hidden,
                 positions,
@@ -1787,9 +2027,9 @@ impl QsaAttention {
             let (cached_keys, cached_values) = self.kv_cache.get(sequence_id).ok_or_else(|| {
                 Error::msg("Qwen4Exp QSA main K/V cache entry disappeared after append")
             })?;
-            let gathered = self
-                .kv_gather
-                .gather(cached_keys, cached_values, &selections)?;
+            let gathered =
+                self.kv_gather
+                    .gather_selected(cached_keys, cached_values, &selections)?;
             let attended = self.attention.forward(&query, &gathered)?;
             let attended = attended.squeeze(0)?.transpose(0, 1)?.reshape((
                 1,
@@ -1925,6 +2165,85 @@ impl QsaBlockSelector {
         selected.extend_from_slice(&visible_tokens[tail_start..]);
         Ok(selected)
     }
+
+    /// Maximum number of complete blocks the token budget can select.
+    pub(crate) fn max_selected_blocks(&self) -> usize {
+        self.token_budget / self.compress_ratio
+    }
+
+    /// Expand device-ranked block indices into selected cache-row indices plus
+    /// the visible incomplete tail, on the ranked tensor's device.
+    ///
+    /// `ranked_blocks` holds U32 block indices already ordered by the host
+    /// selector's total order (score descending, earlier block on ties); it is
+    /// the top-k prefix, so `complete_blocks` carries the full visible block
+    /// count separately. The budget truncates the ranked prefix before each
+    /// block is expanded into its `compress_ratio` consecutive rows; the tail
+    /// rows `[complete_blocks * compress_ratio, visible_len)` are appended in
+    /// natural order, reproducing `select` exactly without host materialization.
+    pub(crate) fn expand_ranked_blocks(
+        &self,
+        ranked_blocks: &Tensor,
+        complete_blocks: usize,
+        visible_len: usize,
+    ) -> Result<Tensor> {
+        if ranked_blocks.dtype() != DType::U32 || ranked_blocks.dims().len() != 1 {
+            candle_core::bail!(
+                "Qwen4Exp QSA ranked block indices must be rank-1 U32, got {:?}",
+                ranked_blocks.dims()
+            );
+        }
+        if visible_len > u32::MAX as usize {
+            candle_core::bail!("Qwen4Exp QSA cache is too large for row indices");
+        }
+        if ranked_blocks.dim(0)? > complete_blocks {
+            candle_core::bail!(
+                "Qwen4Exp QSA ranked prefix holds {} blocks beyond the {} complete visible blocks",
+                ranked_blocks.dim(0)?,
+                complete_blocks
+            );
+        }
+        let device = ranked_blocks.device();
+        let tail_start = complete_blocks
+            .checked_mul(self.compress_ratio)
+            .ok_or_else(|| Error::msg("Qwen4Exp QSA tail offset overflow"))?;
+        if tail_start > visible_len {
+            candle_core::bail!(
+                "Qwen4Exp QSA ranked blocks cover {tail_start} tokens beyond the {visible_len}-token visible history"
+            );
+        }
+        let tail_len = visible_len - tail_start;
+        // Never allocate an empty tail tensor: zero-sized Metal buffers fail
+        // at resource creation.
+        let tail = if tail_len > 0 {
+            Some(Tensor::arange(
+                tail_start as u32,
+                visible_len as u32,
+                device,
+            )?)
+        } else {
+            None
+        };
+        let selected_blocks = complete_blocks.min(self.max_selected_blocks());
+        if selected_blocks == 0 {
+            return match tail {
+                Some(tail) => Ok(tail),
+                None => Tensor::zeros((0,), DType::U32, device),
+            };
+        }
+        let ranked = ranked_blocks.narrow(0, 0, selected_blocks)?;
+        let starts = ranked
+            .unsqueeze(1)?
+            .broadcast_mul(&Tensor::new(self.compress_ratio as u32, device)?)?;
+        let offsets = Tensor::arange(0u32, self.compress_ratio as u32, device)?;
+        let rows = starts
+            .broadcast_add(&offsets.unsqueeze(0)?)?
+            .flatten_from(0)?;
+        match tail {
+            Some(tail) => Tensor::cat(&[&rows, &tail], 0),
+            None => Ok(rows),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -1940,8 +2259,7 @@ mod tests {
         )?))
     }
 
-    fn indexer_projection() -> Result<QsaIndexerProjection> {
-        let device = &Device::Cpu;
+    fn indexer_projection_on(device: &Device) -> Result<QsaIndexerProjection> {
         Ok(QsaIndexerProjection {
             query: projection(Tensor::from_slice(
                 &[1.0f32, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0, -1.0],
@@ -1962,14 +2280,22 @@ mod tests {
         })
     }
 
-    fn indexer() -> Result<QsaIndexer> {
+    fn indexer_projection() -> Result<QsaIndexerProjection> {
+        indexer_projection_on(&Device::Cpu)
+    }
+
+    fn indexer_on(device: &Device) -> Result<QsaIndexer> {
         Ok(QsaIndexer {
-            projection: indexer_projection()?,
+            projection: indexer_projection_on(device)?,
             scorer: QsaIndexerScorer::new(2, 2, 2)?,
             rotary: QsaIndexerRotary::new(2, 2)?,
             selector: QsaBlockSelector::new(2, 2)?,
             cache: QsaSequenceCache::new(2)?,
         })
+    }
+
+    fn indexer() -> Result<QsaIndexer> {
+        indexer_on(&Device::Cpu)
     }
 
     fn main_projection(layout: QsaQueryGateLayout) -> Result<QsaMainProjection> {
@@ -3288,5 +3614,209 @@ mod tests {
         let nan = selector.select(&[1, 2], &[f32::NAN]).unwrap_err();
         assert!(nan.to_string().contains("must not contain NaN"));
         Ok(())
+    }
+
+    #[test]
+    fn ranked_block_expansion_matches_host_selection() -> Result<()> {
+        let device = &Device::Cpu;
+        // compress_ratio 4, budget 16 -> four selectable blocks; the visible
+        // history has four complete blocks plus a two-token tail.
+        let selector = QsaBlockSelector::new(4, 16)?;
+        let visible: Vec<u32> = (0..18).collect();
+        let scores = [1.0f32, 5.0, 3.0, 3.0];
+        let host = selector.select(&visible, &scores)?;
+        // Host ranking: block 1, then the exact 3.0 tie earlier-block-first,
+        // then block 0.
+        let ranked = Tensor::from_slice(&[1u32, 2, 3, 0], 4, device)?;
+        let expanded = selector.expand_ranked_blocks(&ranked, 4, 18)?;
+        assert_eq!(expanded.to_vec1::<u32>()?, host);
+
+        // A budget covering only two blocks truncates the ranked prefix the
+        // same way the host selector does, and the tail still starts after
+        // every complete block rather than after the truncated prefix.
+        let selector8 = QsaBlockSelector::new(4, 8)?;
+        let truncated = Tensor::from_slice(&[1u32, 2], 2, device)?;
+        assert_eq!(
+            selector8
+                .expand_ranked_blocks(&truncated, 4, 18)?
+                .to_vec1::<u32>()?,
+            selector8.select(&visible, &scores)?
+        );
+
+        // An empty ranked prefix leaves the natural-order tail alone.
+        let empty = Tensor::zeros((0,), candle_core::DType::U32, device)?;
+        assert_eq!(
+            selector
+                .expand_ranked_blocks(&empty, 0, 6)?
+                .to_vec1::<u32>()?,
+            vec![0, 1, 2, 3, 4, 5]
+        );
+        Ok(())
+    }
+
+    #[cfg(feature = "metal")]
+    mod metal_topk {
+        use super::*;
+
+        fn ranked_reference(scores: &[f32], k: usize) -> Vec<u32> {
+            let mut ranked: Vec<usize> = (0..scores.len()).collect();
+            ranked.sort_by(|&left, &right| {
+                scores[right]
+                    .total_cmp(&scores[left])
+                    .then(left.cmp(&right))
+            });
+            ranked
+                .into_iter()
+                .take(k)
+                .map(|index| index as u32)
+                .collect()
+        }
+
+        fn run_topk(device: &Device, rows: &[&[f32]], k: usize) -> Result<Vec<Vec<u32>>> {
+            let ncols = rows[0].len();
+            let mut flat = Vec::new();
+            for row in rows {
+                flat.extend_from_slice(row);
+            }
+            let scores = Tensor::from_slice(&flat, (rows.len(), ncols), device)?;
+            let output = crate::metal::qwen4exp::qsa_topk_indices_metal(&scores, k)?;
+            assert_eq!(output.dims(), [rows.len(), k]);
+            assert_eq!(output.dtype(), candle_core::DType::U32);
+            let ranked = output.to_vec2::<u32>()?;
+            Ok(ranked)
+        }
+
+        #[test]
+        fn metal_topk_matches_host_ranking_with_exact_ties() -> Result<()> {
+            let Ok(device) = Device::new_metal(0) else {
+                return Ok(());
+            };
+            // Non-power-of-two width with many exact ties: every 0.5 and 0.25
+            // must come back in earlier-index order like the host selector.
+            let row = [
+                0.5f32, 0.5, 0.25, 0.5, -1.0, 0.5, 0.0, 0.25, 0.5, -1.0, 0.5, 0.0, 3.0, 0.25, 0.5,
+                0.0, -2.0, 3.0, 0.5, 0.25, 1.0, 0.5,
+            ];
+            for k in [1usize, 5, 13, row.len()] {
+                let output = run_topk(&device, &[&row], k)?;
+                assert_eq!(output[0], ranked_reference(&row, k));
+            }
+            Ok(())
+        }
+
+        #[test]
+        fn metal_topk_handles_multiple_rows_and_full_width() -> Result<()> {
+            let Ok(device) = Device::new_metal(0) else {
+                return Ok(());
+            };
+            let row_a = [0.25f32, -1.0, 2.0, 2.0, 0.0, -1.0, 7.5, 2.0, 0.25, 0.0];
+            let row_b = [0.0f32; 10];
+            let output = run_topk(&device, &[&row_a, &row_b], 10)?;
+            assert_eq!(output[0], ranked_reference(&row_a, 10));
+            assert_eq!(output[1], ranked_reference(&row_b, 10));
+            Ok(())
+        }
+
+        #[test]
+        fn metal_topk_orders_non_finite_scores_like_total_cmp() -> Result<()> {
+            let Ok(device) = Device::new_metal(0) else {
+                return Ok(());
+            };
+            // total_cmp descending places the positive NaN above +inf, and
+            // +0.0 above -0.0; the host path rejects these scores outright,
+            // while the device path stays deterministic on degenerate input.
+            let row = [f32::NEG_INFINITY, f32::NAN, f32::INFINITY, 0.0, -0.0f32];
+            let output = run_topk(&device, &[&row], row.len())?;
+            assert_eq!(output[0], vec![1u32, 2, 3, 4, 0]);
+            Ok(())
+        }
+
+        #[test]
+        fn metal_topk_rejects_unsupported_inventory() -> Result<()> {
+            let Ok(device) = Device::new_metal(0) else {
+                return Ok(());
+            };
+            let wide = Tensor::zeros(
+                (1, crate::metal::qwen4exp::QSA_TOPK_MAX_COLUMNS + 1),
+                candle_core::DType::F32,
+                &device,
+            )?;
+            let error = crate::metal::qwen4exp::qsa_topk_indices_metal(&wide, 1).unwrap_err();
+            assert!(error.to_string().contains("use the host selector"));
+
+            let scores = Tensor::from_slice(&[1.0f32, 2.0], (1, 2), &device)?;
+            let zero_k = crate::metal::qwen4exp::qsa_topk_indices_metal(&scores, 0).unwrap_err();
+            assert!(zero_k.to_string().contains("outside 1..=2"));
+            let big_k = crate::metal::qwen4exp::qsa_topk_indices_metal(&scores, 3).unwrap_err();
+            assert!(big_k.to_string().contains("outside 1..=2"));
+
+            let half = scores.to_dtype(candle_core::DType::F16)?;
+            let wrong_dtype = crate::metal::qwen4exp::qsa_topk_indices_metal(&half, 1).unwrap_err();
+            assert!(wrong_dtype.to_string().contains("must be F32"));
+            Ok(())
+        }
+
+        #[test]
+        fn metal_device_topk_selections_match_host_selections() -> Result<()> {
+            let Ok(device) = Device::new_metal(0) else {
+                return Ok(());
+            };
+            let mut host = indexer_on(&Device::Cpu)?;
+            let mut accelerated = indexer_on(&device)?;
+
+            let hidden = Tensor::from_slice(
+                &[3.0f32, 4.0, 1.0, 2.0, 5.0, 6.0, -1.0, -2.0],
+                (1, 4, 2),
+                &Device::Cpu,
+            )?;
+            let hidden_metal = hidden.to_device(&device)?;
+            let positions = [0u32, 1, 2, 3];
+            let cos = Tensor::from_slice(&[1.0f32, 0.0, -1.0, 0.0], (4, 1), &Device::Cpu)?;
+            let sin = Tensor::from_slice(&[0.0f32, 1.0, 0.0, 1.0], (4, 1), &Device::Cpu)?;
+            let cos_metal = cos.to_device(&device)?;
+            let sin_metal = sin.to_device(&device)?;
+
+            let host_rows = host.process_chunk(9, &hidden, &positions, &cos, &sin)?;
+            let device_rows = accelerated.process_chunk_selected(
+                9,
+                &hidden_metal,
+                &positions,
+                &cos_metal,
+                &sin_metal,
+            )?;
+            assert_eq!(device_rows.len(), host_rows.len());
+            for (token, selection) in device_rows.iter().enumerate() {
+                let QsaSelection::Device(tensor) = selection else {
+                    panic!("metal chunk must produce device selections");
+                };
+                assert_eq!(
+                    tensor.to_vec1::<u32>()?,
+                    host_rows[token],
+                    "device selection diverged from the host selector at token {token}"
+                );
+            }
+
+            // Decode continues over the grown cache with the same parity.
+            let decode_hidden = Tensor::from_slice(&[7.0f32, 8.0], (1, 1, 2), &Device::Cpu)?;
+            let decode_hidden_metal = decode_hidden.to_device(&device)?;
+            let decode_cos =
+                Tensor::from_slice(&[1.0f32, 0.0, -1.0, 0.0, 0.5], (5, 1), &Device::Cpu)?;
+            let decode_sin =
+                Tensor::from_slice(&[0.0f32, 1.0, 0.0, 1.0, 0.5], (5, 1), &Device::Cpu)?;
+            let decode_host =
+                host.process_chunk(9, &decode_hidden, &[4], &decode_cos, &decode_sin)?;
+            let decode_device = accelerated.process_chunk_selected(
+                9,
+                &decode_hidden_metal,
+                &[4],
+                &decode_cos.to_device(&device)?,
+                &decode_sin.to_device(&device)?,
+            )?;
+            let QsaSelection::Device(tensor) = &decode_device[0] else {
+                panic!("metal decode must produce device selections");
+            };
+            assert_eq!(tensor.to_vec1::<u32>()?, decode_host[0]);
+            Ok(())
+        }
     }
 }

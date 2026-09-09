@@ -331,6 +331,30 @@ impl PleConvState {
         Ok(output)
     }
 
+    /// Completion Phase 7: route the stateful convolution through the fused Metal
+    /// kernel when the concatenated state qualifies — Metal device, supported
+    /// matching dtypes, contiguous inputs, and at least one output token. The
+    /// composed Candle path stays byte-for-byte identical for every other input.
+    fn use_metal_fast_path(state_and_input: &Tensor, kernel: &Tensor, token_count: usize) -> bool {
+        #[cfg(feature = "metal")]
+        {
+            if token_count > 0
+                && state_and_input.device().is_metal()
+                && state_and_input.dtype() == kernel.dtype()
+                && matches!(
+                    state_and_input.dtype(),
+                    DType::F32 | DType::F16 | DType::BF16
+                )
+                && state_and_input.is_contiguous()
+                && kernel.is_contiguous()
+            {
+                return true;
+            }
+        }
+        let _ = (state_and_input, kernel, token_count);
+        false
+    }
+
     pub(crate) fn forward_tensor_chunk(
         &mut self,
         sequence_id: usize,
@@ -379,22 +403,38 @@ impl PleConvState {
         )?
         .to_dtype(input.dtype())?;
         let state_and_input = Tensor::cat(&[history, input.clone()], 0)?;
-        let mut outputs = Vec::with_capacity(token_count);
-        for token in 0..token_count {
-            let mut taps = Vec::with_capacity(self.kernel_size);
-            for tap in 0..self.kernel_size {
-                let lookback = (self.kernel_size - 1 - tap) * self.dilation;
-                taps.push(state_and_input.narrow(0, self.history_tokens + token - lookback, 1)?);
-            }
-            let window = Tensor::cat(&taps, 0)?;
-            outputs.push((window * kernel)?.sum(0)?);
-        }
-        let output = if outputs.is_empty() {
-            Tensor::zeros((0, self.channels), input.dtype(), input.device())?
+        let output = if Self::use_metal_fast_path(&state_and_input, kernel, token_count) {
+            // Completion Phase 7: one fused kernel replaces the per-token
+            // narrow/cat/mul/sum loop plus the separate SiLU launch.
+            crate::metal::qwen4exp::ple_conv1d_metal(
+                &state_and_input,
+                kernel,
+                self.history_tokens,
+                self.kernel_size,
+                self.dilation,
+            )?
         } else {
-            Tensor::stack(&outputs, 0)?
+            let mut outputs = Vec::with_capacity(token_count);
+            for token in 0..token_count {
+                let mut taps = Vec::with_capacity(self.kernel_size);
+                for tap in 0..self.kernel_size {
+                    let lookback = (self.kernel_size - 1 - tap) * self.dilation;
+                    taps.push(state_and_input.narrow(
+                        0,
+                        self.history_tokens + token - lookback,
+                        1,
+                    )?);
+                }
+                let window = Tensor::cat(&taps, 0)?;
+                outputs.push((window * kernel)?.sum(0)?);
+            }
+            let stacked = if outputs.is_empty() {
+                Tensor::zeros((0, self.channels), input.dtype(), input.device())?
+            } else {
+                Tensor::stack(&outputs, 0)?
+            };
+            candle_nn::ops::silu(&stacked)?
         };
-        let output = candle_nn::ops::silu(&output)?;
 
         let keep_from = state_and_input.dim(0)?.saturating_sub(self.history_tokens);
         let updated = state_and_input
@@ -1606,5 +1646,196 @@ mod tests {
         let hasher = PleHasher::new(&config).unwrap();
         let error = hasher.rows_for_tokens(&[1, 2], &[Some(1)]).unwrap_err();
         assert!(error.to_string().contains("expected 4 predecessor entries"));
+    }
+
+    /// Completion Phase 7: the fused Metal PLE convolution must track the composed
+    /// CPU reference through outputs and the F32 convolution history, including a
+    /// decode continuation over carried state. Skips cleanly when no Metal device
+    /// is present.
+    #[cfg(feature = "metal")]
+    #[test]
+    fn metal_convolution_matches_cpu_reference() -> Result<()> {
+        let Ok(device) = candle_core::Device::new_metal(0) else {
+            return Ok(());
+        };
+        const KERNEL: usize = 3;
+        const DILATION: usize = 2;
+        const CHANNELS: usize = 4;
+        let kernel_values: Vec<f32> = (0..KERNEL * CHANNELS)
+            .map(|index| ((index % 7) as f32 - 3.0) / 4.0)
+            .collect();
+        let input_values: Vec<f32> = (0..5 * CHANNELS)
+            .map(|index| ((index % 11) as f32 - 5.0) / 2.0)
+            .collect();
+
+        let mut cpu = PleConvState::new(KERNEL, DILATION, CHANNELS)?;
+        let mut gpu = PleConvState::new(KERNEL, DILATION, CHANNELS)?;
+        for chunk_tokens in [5usize, 1usize] {
+            let rows = &input_values[..chunk_tokens * CHANNELS];
+            let cpu_kernel = Tensor::from_vec(
+                kernel_values.clone(),
+                (KERNEL, CHANNELS),
+                &candle_core::Device::Cpu,
+            )?;
+            let cpu_input = Tensor::from_vec(
+                rows.to_vec(),
+                (chunk_tokens, CHANNELS),
+                &candle_core::Device::Cpu,
+            )?;
+            let cpu_output = cpu.forward_tensor_chunk(0, &cpu_input, &cpu_kernel)?;
+            let gpu_output = gpu.forward_tensor_chunk(
+                0,
+                &cpu_input.to_device(&device)?,
+                &cpu_kernel.to_device(&device)?,
+            )?;
+
+            let cpu_vec = cpu_output.flatten_all()?.to_vec1::<f32>()?;
+            let gpu_vec = gpu_output
+                .to_device(&candle_core::Device::Cpu)?
+                .flatten_all()?
+                .to_vec1::<f32>()?;
+            assert_eq!(cpu_vec.len(), gpu_vec.len());
+            for (index, (cpu_value, gpu_value)) in cpu_vec.iter().zip(gpu_vec.iter()).enumerate() {
+                assert!(
+                    (cpu_value - gpu_value).abs() < 1e-5,
+                    "chunk {chunk_tokens} element {index}: cpu={cpu_value}, metal={gpu_value}"
+                );
+            }
+
+            let cpu_history = cpu.snapshot(0).history;
+            let gpu_history = gpu.snapshot(0).history;
+            assert_eq!(cpu_history.len(), gpu_history.len());
+            for (index, (cpu_value, gpu_value)) in
+                cpu_history.iter().zip(gpu_history.iter()).enumerate()
+            {
+                assert!(
+                    (cpu_value - gpu_value).abs() < 1e-6,
+                    "chunk {chunk_tokens} history element {index}: cpu={cpu_value}, metal={gpu_value}"
+                );
+            }
+        }
+        Ok(())
+    }
+
+    /// Direct-kernel coverage mirroring the GDN and hyper-connection Metal tests: the
+    /// fused PLE convolution kernel must track an F32 reference computed over
+    /// identical quantized values, and mismatched kernel inventories must fail
+    /// closed. Skips cleanly when no Metal device is present.
+    #[cfg(feature = "metal")]
+    mod metal_tests {
+        use super::*;
+        use crate::metal::qwen4exp::ple_conv1d_metal;
+
+        const TOKENS: usize = 5;
+        const HISTORY: usize = 4; // (KERNEL - 1) * DILATION
+        const KERNEL: usize = 3;
+        const DILATION: usize = 2;
+        const CHANNELS: usize = 4;
+
+        /// The reference tap order from `PleConvState::forward_chunk`, with the
+        /// F32 SiLU output activation.
+        fn reference_conv1d(input: &[f32], kernel: &[f32]) -> Vec<f32> {
+            let mut output = Vec::with_capacity(TOKENS * CHANNELS);
+            for token in 0..TOKENS {
+                for channel in 0..CHANNELS {
+                    let mut value = 0.0f32;
+                    for tap in 0..KERNEL {
+                        let lookback = (KERNEL - 1 - tap) * DILATION;
+                        let row = HISTORY + token - lookback;
+                        value += input[row * CHANNELS + channel] * kernel[tap * CHANNELS + channel];
+                    }
+                    output.push(value / (1.0 + (-value).exp()));
+                }
+            }
+            output
+        }
+
+        fn assert_metal_kernel_matches_reference(dtype: DType, tolerance: f32) -> Result<()> {
+            let Ok(device) = candle_core::Device::new_metal(0) else {
+                return Ok(());
+            };
+            let state_values: Vec<f32> = (0..(HISTORY + TOKENS) * CHANNELS)
+                .map(|index| ((index % 11) as f32 - 5.0) / 2.0)
+                .collect();
+            let kernel_values: Vec<f32> = (0..KERNEL * CHANNELS)
+                .map(|index| ((index % 7) as f32 - 3.0) / 4.0)
+                .collect();
+
+            // Quantize to the activation dtype, then read the same quantized values
+            // back in F32 so the reference uses identical inputs.
+            let state_quant = Tensor::from_vec(
+                state_values,
+                (HISTORY + TOKENS, CHANNELS),
+                &candle_core::Device::Cpu,
+            )?
+            .to_dtype(dtype)?;
+            let kernel_quant =
+                Tensor::from_vec(kernel_values, (KERNEL, CHANNELS), &candle_core::Device::Cpu)?
+                    .to_dtype(dtype)?;
+            let state_reference = state_quant
+                .to_dtype(DType::F32)?
+                .flatten_all()?
+                .to_vec1::<f32>()?;
+            let kernel_reference = kernel_quant
+                .to_dtype(DType::F32)?
+                .flatten_all()?
+                .to_vec1::<f32>()?;
+
+            let output = ple_conv1d_metal(
+                &state_quant.to_device(&device)?,
+                &kernel_quant.to_device(&device)?,
+                HISTORY,
+                KERNEL,
+                DILATION,
+            )?;
+            assert_eq!(output.dims(), [TOKENS, CHANNELS]);
+            let actual = output
+                .to_device(&candle_core::Device::Cpu)?
+                .to_dtype(DType::F32)?
+                .flatten_all()?
+                .to_vec1::<f32>()?;
+
+            let expected = reference_conv1d(&state_reference, &kernel_reference);
+            for (index, (actual, expected)) in actual.iter().zip(expected.iter()).enumerate() {
+                assert!(
+                    (actual - expected).abs() <= tolerance,
+                    "element {index}: actual={actual}, expected={expected}, tolerance={tolerance}"
+                );
+            }
+            Ok(())
+        }
+
+        #[test]
+        fn metal_ple_conv1d_matches_f16_reference() -> Result<()> {
+            assert_metal_kernel_matches_reference(DType::F16, 2e-3)
+        }
+
+        #[test]
+        fn metal_ple_conv1d_matches_bf16_reference() -> Result<()> {
+            assert_metal_kernel_matches_reference(DType::BF16, 2e-2)
+        }
+
+        /// A kernel inventory that does not match the declared `[kernel_size,
+        /// channels]` shape must fail closed instead of reading out of bounds.
+        #[test]
+        fn metal_ple_conv1d_rejects_mismatched_kernel_shape() -> Result<()> {
+            let Ok(device) = candle_core::Device::new_metal(0) else {
+                return Ok(());
+            };
+            let state = Tensor::zeros(
+                (HISTORY + TOKENS, CHANNELS),
+                DType::F32,
+                &candle_core::Device::Cpu,
+            )?
+            .to_device(&device)?;
+            let undersized = Tensor::zeros(KERNEL - 1, DType::F32, &device)?;
+            let error = ple_conv1d_metal(&state, &undersized, HISTORY, KERNEL, DILATION)
+                .expect_err("mismatched kernel shape must be rejected");
+            assert!(
+                error.to_string().contains("kernel shape"),
+                "unexpected error: {error}"
+            );
+            Ok(())
+        }
     }
 }

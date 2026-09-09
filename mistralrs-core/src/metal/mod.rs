@@ -1,4 +1,5 @@
 pub mod gdn;
+pub mod qwen4exp;
 pub mod ssm;
 
 use candle_core::{Device, Result};

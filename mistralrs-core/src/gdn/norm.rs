@@ -75,6 +75,31 @@ impl RmsNormGated {
             return crate::cuda::gdn::rmsnorm_gated_cuda(x, gate, &self.weight, self.eps);
         }
 
+        #[cfg(feature = "metal")]
+        if x.device().is_metal()
+            && (2..=4).contains(&x.rank())
+            && (2..=4).contains(&gate.rank())
+            && gate.elem_count() == x.elem_count()
+            && x.dim(D::Minus1)? == self.weight.elem_count()
+            && gate.dtype() == x.dtype()
+            && self.weight.dtype() == x.dtype()
+            && matches!(x.dtype(), DType::F16 | DType::BF16)
+            && x.is_contiguous()
+            && gate.is_contiguous()
+            && self.weight.is_contiguous()
+        {
+            // Unlike the CUDA fused kernel, the Metal kernel accepts both gate
+            // activations, so sigmoid-gated (Qwen4Exp) GDN runs fused here too.
+            // Non-contiguous inputs keep the composed fallback below.
+            return crate::metal::gdn::rmsnorm_gated_metal(
+                x,
+                gate,
+                &self.weight,
+                self.eps,
+                self.output_gate,
+            );
+        }
+
         let dtype = x.dtype();
         let x = x.to_dtype(DType::F32)?;
         let gate = gate.reshape(x.shape().clone())?.to_dtype(DType::F32)?;
@@ -173,5 +198,208 @@ mod tests {
     #[test]
     fn sigmoid_gated_rms_norm_matches_bf16_reference() -> Result<()> {
         assert_sigmoid_gate_matches_reference(DType::BF16, 2e-2)
+    }
+
+    #[cfg(feature = "metal")]
+    mod metal_tests {
+        use super::*;
+
+        /// F32 reference over already-quantized inputs, mirroring the CPU
+        /// reference helper above for either output-gate activation.
+        fn reference_gated_rmsnorm(
+            x: &[f32],
+            gate: &[f32],
+            weight: &[f32],
+            rows: usize,
+            hidden: usize,
+            eps: f32,
+            silu: bool,
+        ) -> Vec<f32> {
+            let mut expected = Vec::with_capacity(x.len());
+            for row in 0..rows {
+                let start = row * hidden;
+                let variance = x[start..start + hidden]
+                    .iter()
+                    .map(|value| value * value)
+                    .sum::<f32>()
+                    / hidden as f32;
+                let inv_rms = (variance + eps).sqrt().recip();
+                for (column, &weight) in weight.iter().enumerate() {
+                    let index = start + column;
+                    let gate = gate[index];
+                    let activation = if silu {
+                        gate / (1.0 + (-gate).exp())
+                    } else {
+                        1.0 / (1.0 + (-gate).exp())
+                    };
+                    expected.push(x[index] * inv_rms * weight * activation);
+                }
+            }
+            expected
+        }
+
+        fn assert_metal_fused_matches_reference(
+            output_gate: GdnOutputGate,
+            dtype: DType,
+            tolerance: f32,
+        ) -> Result<()> {
+            let Ok(device) = Device::new_metal(0) else {
+                // No Metal device on this host; the fused path cannot run.
+                return Ok(());
+            };
+
+            let rows = 2;
+            let hidden = 8;
+            let eps = 1e-6;
+            let x_values: Vec<f32> = (0..rows * hidden)
+                .map(|index| ((index % 17) as f32 - 8.0) / 4.0)
+                .collect();
+            let gate_values: Vec<f32> = (0..rows * hidden)
+                .map(|index| (((index * 7) % 23) as f32 - 11.0) / 3.0)
+                .collect();
+            let weight_values: Vec<f32> = (0..hidden)
+                .map(|index| ((index % 5) as f32 - 2.0) / 2.0 + 0.25)
+                .collect();
+
+            // Quantize to the activation dtype, then read the same quantized
+            // values back in F32 so the reference uses identical inputs.
+            let x_quant =
+                Tensor::from_slice(&x_values, (rows, hidden), &Device::Cpu)?.to_dtype(dtype)?;
+            let gate_quant =
+                Tensor::from_slice(&gate_values, (rows, hidden), &Device::Cpu)?.to_dtype(dtype)?;
+            let weight_quant =
+                Tensor::from_slice(&weight_values, hidden, &Device::Cpu)?.to_dtype(dtype)?;
+            let x_reference = x_quant
+                .to_dtype(DType::F32)?
+                .flatten_all()?
+                .to_vec1::<f32>()?;
+            let gate_reference = gate_quant
+                .to_dtype(DType::F32)?
+                .flatten_all()?
+                .to_vec1::<f32>()?;
+            let weight_reference = weight_quant
+                .to_dtype(DType::F32)?
+                .flatten_all()?
+                .to_vec1::<f32>()?;
+
+            let actual = crate::metal::gdn::rmsnorm_gated_metal(
+                &x_quant.to_device(&device)?,
+                &gate_quant.to_device(&device)?,
+                &weight_quant.to_device(&device)?,
+                eps,
+                output_gate,
+            )?
+            .to_device(&Device::Cpu)?
+            .to_dtype(DType::F32)?
+            .flatten_all()?
+            .to_vec1::<f32>()?;
+
+            let expected = reference_gated_rmsnorm(
+                &x_reference,
+                &gate_reference,
+                &weight_reference,
+                rows,
+                hidden,
+                eps as f32,
+                output_gate == GdnOutputGate::Silu,
+            );
+            for (index, (actual, expected)) in actual.iter().zip(expected.iter()).enumerate() {
+                assert!(
+                    (actual - expected).abs() <= tolerance,
+                    "element {index}: actual={actual}, expected={expected}, tolerance={tolerance}"
+                );
+            }
+            Ok(())
+        }
+
+        #[test]
+        fn metal_fused_silu_rmsnorm_matches_f16_reference() -> Result<()> {
+            assert_metal_fused_matches_reference(GdnOutputGate::Silu, DType::F16, 2e-3)
+        }
+
+        #[test]
+        fn metal_fused_silu_rmsnorm_matches_bf16_reference() -> Result<()> {
+            assert_metal_fused_matches_reference(GdnOutputGate::Silu, DType::BF16, 2e-2)
+        }
+
+        #[test]
+        fn metal_fused_sigmoid_rmsnorm_matches_f16_reference() -> Result<()> {
+            assert_metal_fused_matches_reference(GdnOutputGate::Sigmoid, DType::F16, 2e-3)
+        }
+
+        #[test]
+        fn metal_fused_sigmoid_rmsnorm_matches_bf16_reference() -> Result<()> {
+            assert_metal_fused_matches_reference(GdnOutputGate::Sigmoid, DType::BF16, 2e-2)
+        }
+
+        #[test]
+        fn metal_forward_uses_fused_path_for_rank4_gdn_shapes() -> Result<()> {
+            let Ok(device) = Device::new_metal(0) else {
+                return Ok(());
+            };
+            let hidden = 4;
+            let eps = 1e-6;
+            // Production GDN norm shape: [batch, seq, heads, head_dim].
+            let x_values: Vec<f32> = (0..16)
+                .map(|index| ((index % 11) as f32 - 5.0) / 3.0)
+                .collect();
+            let gate_values: Vec<f32> = (0..16)
+                .map(|index| (((index * 5) % 13) as f32 - 6.0) / 2.0)
+                .collect();
+            let weight_values: Vec<f32> = (0..hidden)
+                .map(|index| (index as f32) / 4.0 - 0.25)
+                .collect();
+
+            let x_quant = Tensor::from_slice(&x_values, (1, 2, 2, hidden), &Device::Cpu)?
+                .to_dtype(DType::F16)?;
+            let gate_quant = Tensor::from_slice(&gate_values, (1, 2, 2, hidden), &Device::Cpu)?
+                .to_dtype(DType::F16)?;
+            let weight_quant =
+                Tensor::from_slice(&weight_values, hidden, &Device::Cpu)?.to_dtype(DType::F16)?;
+            let x_reference = x_quant
+                .to_dtype(DType::F32)?
+                .flatten_all()?
+                .to_vec1::<f32>()?;
+            let gate_reference = gate_quant
+                .to_dtype(DType::F32)?
+                .flatten_all()?
+                .to_vec1::<f32>()?;
+            let weight_reference = weight_quant
+                .to_dtype(DType::F32)?
+                .flatten_all()?
+                .to_vec1::<f32>()?;
+
+            let norm = RmsNormGated::from_parts_with_gate(
+                weight_quant.to_device(&device)?,
+                eps,
+                GdnOutputGate::Sigmoid,
+            );
+            let actual = norm
+                .forward(
+                    &x_quant.to_device(&device)?,
+                    &gate_quant.to_device(&device)?,
+                )?
+                .to_device(&Device::Cpu)?
+                .to_dtype(DType::F32)?
+                .flatten_all()?
+                .to_vec1::<f32>()?;
+
+            let expected = reference_gated_rmsnorm(
+                &x_reference,
+                &gate_reference,
+                &weight_reference,
+                4,
+                hidden,
+                eps as f32,
+                false,
+            );
+            for (index, (actual, expected)) in actual.iter().zip(expected.iter()).enumerate() {
+                assert!(
+                    (actual - expected).abs() <= 2e-3,
+                    "element {index}: actual={actual}, expected={expected}"
+                );
+            }
+            Ok(())
+        }
     }
 }

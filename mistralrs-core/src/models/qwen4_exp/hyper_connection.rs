@@ -78,13 +78,8 @@ impl GatedResidual {
         }
         let wide_size = self.hc_count * self.hidden_size;
         let dtype = residual.dtype();
-        let residual_f32 = residual.to_dtype(DType::F32)?;
-        let variance = residual_f32.sqr()?.mean_keepdim(D::Minus1)?;
-        let normalized = residual_f32.broadcast_div(&(variance + self.norm_eps)?.sqrt()?)?;
-        let flattened = normalized
-            .reshape((batch, tokens, wide_size))?
-            .broadcast_mul(&self.norm_weight.to_dtype(DType::F32)?)?
-            .to_dtype(dtype)?;
+        let flattened = self.normalized_flattened(residual, batch, tokens, wide_size, dtype)?;
+
         let low_rank =
             candle_nn::ops::silu(&(self.down.forward(&flattened)? / self.hc_count as f64)?)?;
         let gate = candle_nn::ops::sigmoid(&self.up.forward(&low_rank)?)?;
@@ -101,6 +96,44 @@ impl GatedResidual {
             .map(|projection| projection.forward(&flattened))
             .transpose()?;
         Ok((mixed?, injection))
+    }
+
+    /// Per-stream RMS normalization plus the flattened gamma multiply, emitting the
+    /// projection input in the flattened `[batch, tokens, hc_count * hidden]` layout
+    /// with the activation dtype preserved.
+    ///
+    /// Uses the fused Metal kernel when the inputs qualify (one kernel instead of the
+    /// composed cast/sqr/mean/sqrt/div/mul chain); the grouped and flattened layouts are
+    /// row-major identical, so the kernel writes the same flat offsets. Everything else
+    /// keeps the composed Candle path.
+    fn normalized_flattened(
+        &self,
+        residual: &Tensor,
+        batch: usize,
+        tokens: usize,
+        wide_size: usize,
+        dtype: DType,
+    ) -> Result<Tensor> {
+        #[cfg(feature = "metal")]
+        if residual.device().is_metal()
+            && residual.is_contiguous()
+            && self.norm_weight.is_contiguous()
+            && self.norm_weight.dtype() == dtype
+            && matches!(dtype, DType::F32 | DType::F16 | DType::BF16)
+        {
+            return crate::metal::qwen4exp::hc_rmsnorm_flatten_metal(
+                residual,
+                &self.norm_weight,
+                self.norm_eps,
+            );
+        }
+        let residual_f32 = residual.to_dtype(DType::F32)?;
+        let variance = residual_f32.sqr()?.mean_keepdim(D::Minus1)?;
+        let normalized = residual_f32.broadcast_div(&(variance + self.norm_eps)?.sqrt()?)?;
+        normalized
+            .reshape((batch, tokens, wide_size))?
+            .broadcast_mul(&self.norm_weight.to_dtype(DType::F32)?)?
+            .to_dtype(dtype)
     }
 
     /// Flattened-stream RMS gamma, exposed for ISQ residual handling.
@@ -145,7 +178,10 @@ mod tests {
     }
 
     fn gated_residual() -> Result<GatedResidual> {
-        let device = &Device::Cpu;
+        gated_residual_on(&Device::Cpu)
+    }
+
+    fn gated_residual_on(device: &Device) -> Result<GatedResidual> {
         Ok(GatedResidual {
             norm_weight: Tensor::ones(4, DType::F32, device)?,
             norm_eps: 1e-6,
@@ -206,5 +242,174 @@ mod tests {
             .to_vec1::<f32>()?;
         assert_eq!(actual, vec![1.5, 1.0, 3.5, 3.0]);
         Ok(())
+    }
+
+    /// Completion Phase 7: the fused Metal hyper-connection norm/flatten prefix must
+    /// track the composed CPU reference through the full mixer. Skips cleanly when no
+    /// Metal device is present.
+    #[cfg(feature = "metal")]
+    #[test]
+    fn metal_mix_matches_cpu_reference() -> Result<()> {
+        let Ok(device) = Device::new_metal(0) else {
+            return Ok(());
+        };
+        let cpu_component = gated_residual()?;
+        let metal_component = gated_residual_on(&device)?;
+
+        for (batch, tokens) in [(1usize, 1usize), (2usize, 3usize)] {
+            let residual = Tensor::from_vec(
+                (0..batch * tokens * 4)
+                    .map(|index| ((index % 13) as f32 - 6.0) / 3.0)
+                    .collect::<Vec<f32>>(),
+                (batch, tokens, 2, 2),
+                &Device::Cpu,
+            )?;
+            let (cpu_mixed, cpu_injection) = cpu_component.mix(&residual)?;
+            let (metal_mixed, metal_injection) =
+                metal_component.mix(&residual.to_device(&device)?)?;
+
+            let cpu_vec = cpu_mixed.flatten_all()?.to_vec1::<f32>()?;
+            let metal_vec = metal_mixed
+                .to_device(&Device::Cpu)?
+                .flatten_all()?
+                .to_vec1::<f32>()?;
+            assert_eq!(cpu_vec.len(), metal_vec.len());
+            for (cpu, metal) in cpu_vec.iter().zip(metal_vec.iter()) {
+                assert!(
+                    (cpu - metal).abs() < 1e-5,
+                    "mixed: cpu={cpu}, metal={metal}"
+                );
+            }
+
+            let cpu_inj = cpu_injection.unwrap().flatten_all()?.to_vec1::<f32>()?;
+            let metal_inj = metal_injection
+                .unwrap()
+                .to_device(&Device::Cpu)?
+                .flatten_all()?
+                .to_vec1::<f32>()?;
+            assert_eq!(cpu_inj.len(), metal_inj.len());
+            for (cpu, metal) in cpu_inj.iter().zip(metal_inj.iter()) {
+                assert!(
+                    (cpu - metal).abs() < 1e-5,
+                    "injection: cpu={cpu}, metal={metal}"
+                );
+            }
+        }
+        Ok(())
+    }
+
+    /// Direct-kernel coverage mirroring the GDN gated-RMS-norm metal tests: the fused
+    /// norm/flatten kernel must track an F32 reference computed over identical quantized
+    /// values, and the flattened gamma must stay `streams * hidden` wide (regression for
+    /// the weight-inventory guard). Skips cleanly when no Metal device is present.
+    #[cfg(feature = "metal")]
+    mod metal_tests {
+        use super::*;
+        use crate::metal::qwen4exp::hc_rmsnorm_flatten_metal;
+
+        const ROWS: usize = 2;
+        const STREAMS: usize = 2;
+        const HIDDEN: usize = 4;
+        const WIDE: usize = STREAMS * HIDDEN;
+
+        /// Per-(row, stream) F32 RMS normalization plus the flattened gamma, matching
+        /// the composed path exactly.
+        fn reference_hc_rmsnorm_flatten(x: &[f32], weight: &[f32], eps: f32) -> Vec<f32> {
+            let mut expected = Vec::with_capacity(x.len());
+            for row in 0..ROWS {
+                for stream in 0..STREAMS {
+                    let start = (row * STREAMS + stream) * HIDDEN;
+                    let variance =
+                        x[start..start + HIDDEN].iter().map(|v| v * v).sum::<f32>() / HIDDEN as f32;
+                    let inv_rms = (variance + eps).sqrt().recip();
+                    for column in 0..HIDDEN {
+                        expected
+                            .push(x[start + column] * inv_rms * weight[stream * HIDDEN + column]);
+                    }
+                }
+            }
+            expected
+        }
+
+        fn assert_metal_kernel_matches_reference(dtype: DType, tolerance: f32) -> Result<()> {
+            let Ok(device) = Device::new_metal(0) else {
+                return Ok(());
+            };
+            let eps = 1e-6;
+            let x_values: Vec<f32> = (0..ROWS * WIDE)
+                .map(|index| ((index % 13) as f32 - 6.0) / 3.0)
+                .collect();
+            let weight_values: Vec<f32> = (0..WIDE)
+                .map(|index| ((index % 5) as f32 - 2.0) / 2.0 + 0.25)
+                .collect();
+
+            // Quantize to the activation dtype, then read the same quantized values back
+            // in F32 so the reference uses identical inputs.
+            let x_quant = Tensor::from_vec(x_values, (ROWS, STREAMS, HIDDEN), &Device::Cpu)?
+                .to_dtype(dtype)?;
+            let weight_quant =
+                Tensor::from_vec(weight_values, WIDE, &Device::Cpu)?.to_dtype(dtype)?;
+            let x_reference = x_quant
+                .to_dtype(DType::F32)?
+                .flatten_all()?
+                .to_vec1::<f32>()?;
+            let weight_reference = weight_quant
+                .to_dtype(DType::F32)?
+                .flatten_all()?
+                .to_vec1::<f32>()?;
+
+            let output = hc_rmsnorm_flatten_metal(
+                &x_quant.to_device(&device)?,
+                &weight_quant.to_device(&device)?,
+                eps,
+            )?;
+            // The kernel emits the projection input in the flattened layout.
+            assert_eq!(output.dims(), [ROWS, WIDE]);
+            let actual = output
+                .to_device(&Device::Cpu)?
+                .to_dtype(DType::F32)?
+                .flatten_all()?
+                .to_vec1::<f32>()?;
+
+            let expected =
+                reference_hc_rmsnorm_flatten(&x_reference, &weight_reference, eps as f32);
+            for (index, (actual, expected)) in actual.iter().zip(expected.iter()).enumerate() {
+                assert!(
+                    (actual - expected).abs() <= tolerance,
+                    "element {index}: actual={actual}, expected={expected}, tolerance={tolerance}"
+                );
+            }
+            Ok(())
+        }
+
+        #[test]
+        fn metal_hc_rmsnorm_flatten_matches_f16_reference() -> Result<()> {
+            assert_metal_kernel_matches_reference(DType::F16, 2e-3)
+        }
+
+        #[test]
+        fn metal_hc_rmsnorm_flatten_matches_bf16_reference() -> Result<()> {
+            assert_metal_kernel_matches_reference(DType::BF16, 2e-2)
+        }
+
+        /// The flattened gamma is `streams * hidden` wide and indexed by stream, not the
+        /// full residual element count; a mismatched gamma must fail closed.
+        #[test]
+        fn metal_hc_rmsnorm_flatten_rejects_undersized_gamma() -> Result<()> {
+            let Ok(device) = Device::new_metal(0) else {
+                return Ok(());
+            };
+            let residual = Tensor::zeros((ROWS, STREAMS, HIDDEN), DType::F32, &device)?;
+            let undersized = Tensor::zeros(HIDDEN, DType::F32, &device)?;
+            let error = hc_rmsnorm_flatten_metal(&residual, &undersized, 1e-6)
+                .expect_err("undersized flattened gamma must be rejected");
+            assert!(
+                error
+                    .to_string()
+                    .contains("incompatible residual/weight shapes"),
+                "unexpected error: {error}"
+            );
+            Ok(())
+        }
     }
 }
