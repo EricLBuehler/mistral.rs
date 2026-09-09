@@ -19,16 +19,18 @@ pub enum MetalPlatform {
     MacOS,
     Ios,
     TvOS,
+    VisionOS,
 }
 
 impl MetalPlatform {
-    const ALL: [Self; 3] = [Self::MacOS, Self::Ios, Self::TvOS];
+    const ALL: [Self; 4] = [Self::MacOS, Self::Ios, Self::TvOS, Self::VisionOS];
 
     fn sdk(self) -> &'static str {
         match self {
             Self::MacOS => "macosx",
             Self::Ios => "iphoneos",
             Self::TvOS => "appletvos",
+            Self::VisionOS => "xros",
         }
     }
 
@@ -37,6 +39,7 @@ impl MetalPlatform {
             Self::MacOS => "",
             Self::Ios => "_ios",
             Self::TvOS => "_tvos",
+            Self::VisionOS => "_visionos",
         }
     }
 
@@ -45,7 +48,17 @@ impl MetalPlatform {
             "macos" | "macosx" => Some(Self::MacOS),
             "ios" | "iphoneos" => Some(Self::Ios),
             "tvos" | "appletvos" => Some(Self::TvOS),
+            "visionos" | "xros" => Some(Self::VisionOS),
             _ => None,
+        }
+    }
+
+    // visionOS only supports Metal starting with Metal 4 on visionOS 26+, unlike the
+    // metal3.1 baseline used elsewhere. https://support.apple.com/en-us/102894
+    fn metal_std(self, base_std: &'static str) -> &'static str {
+        match self {
+            Self::VisionOS => "metal4.0",
+            _ => base_std,
         }
     }
 }
@@ -174,7 +187,12 @@ pub fn compile_runtime_library(
     let main_source = build_runtime_source(config)?;
     let compile_options = {
         let opts = MTLCompileOptions::new();
+        // Must match the -std=metal* flags used in build.rs for precompiled metallibs.
+        // visionOS only supports Metal starting at Metal 4.0. https://support.apple.com/en-us/102894
+        #[cfg(not(target_os = "visionos"))]
         opts.setLanguageVersion(MTLLanguageVersion::Version3_1);
+        #[cfg(target_os = "visionos")]
+        opts.setLanguageVersion(MTLLanguageVersion::Version4_0);
         opts.setMathMode(MTLMathMode::Fast);
         opts
     };
@@ -259,7 +277,9 @@ fn selected_platforms() -> Result<Vec<MetalPlatform>, String> {
             return Ok(MetalPlatform::ALL.to_vec());
         }
         let platform = MetalPlatform::parse(token).ok_or_else(|| {
-            format!("Invalid {PLATFORMS_ENV} entry `{token}`; expected macos, ios, tvos, or all")
+            format!(
+                "Invalid {PLATFORMS_ENV} entry `{token}`; expected macos, ios, tvos, visionos, or all"
+            )
         })?;
         if !platforms.contains(&platform) {
             platforms.push(platform);
@@ -268,7 +288,7 @@ fn selected_platforms() -> Result<Vec<MetalPlatform>, String> {
 
     if platforms.is_empty() {
         Err(format!(
-            "{PLATFORMS_ENV} must contain macos, ios, tvos, or all"
+            "{PLATFORMS_ENV} must contain macos, ios, tvos, visionos, or all"
         ))
     } else {
         Ok(platforms)
@@ -298,6 +318,7 @@ fn target_platform() -> Result<Option<MetalPlatform>, String> {
         "macos" => Some(MetalPlatform::MacOS),
         "ios" => Some(MetalPlatform::Ios),
         "tvos" => Some(MetalPlatform::TvOS),
+        "visionos" => Some(MetalPlatform::VisionOS),
         _ => None,
     })
 }
@@ -317,12 +338,14 @@ fn compile_platform(config: &MetalSourceSet, platform: MetalPlatform) -> Result<
     let working_directory = out_dir.to_string_lossy().to_string();
     let sources = current_dir.join(config.source_dir);
 
+    let metal_std = platform.metal_std(config.metal_std);
+
     let mut compile_air_cmd = Command::new("xcrun");
     compile_air_cmd
         .arg("--sdk")
         .arg(platform.sdk())
         .arg("metal")
-        .arg(format!("-std={}", config.metal_std))
+        .arg(format!("-std={metal_std}"))
         .arg(format!("-working-directory={working_directory}"))
         .arg("-Wall")
         .arg("-Wextra")
@@ -340,7 +363,7 @@ fn compile_platform(config: &MetalSourceSet, platform: MetalPlatform) -> Result<
         .arg("--sdk")
         .arg(platform.sdk())
         .arg("metal")
-        .arg(format!("-std={}", config.metal_std))
+        .arg(format!("-std={metal_std}"))
         .arg("-o")
         .arg(&metallib);
     for metal_file in config.metal_sources.iter().chain(config.header_sources) {
