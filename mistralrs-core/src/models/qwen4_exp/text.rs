@@ -25,6 +25,8 @@
 //! this model must not be presented as fully validated support for real Qwen3.8 Flash Next
 //! checkpoints.
 
+#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+
 use std::sync::{Arc, Mutex};
 
 use candle_core::{DType, Device, Module, Result, Tensor};
@@ -170,14 +172,11 @@ pub(crate) fn sectioned_interleaved_mrope_tables(
 /// conventions (fused `qkvz`+`ba`, split `qkv`/`z`/`b`/`a`, or split QKV with grouped B/A).
 fn gdn_input_projection_kind(vb: &ShardedVarBuilder) -> GdnInputProjectionKind {
     // GGUF qwen4exp archives split the fused qkvz/ba projections into qkv/z/b/a parts.
-    if contains_tensor_or_weight_source(vb, "in_proj_qkv.weight")
-        && contains_tensor_or_weight_source(vb, "in_proj_z.weight")
-        && contains_tensor_or_weight_source(vb, "in_proj_b.weight")
-        && contains_tensor_or_weight_source(vb, "in_proj_a.weight")
-    {
-        GdnInputProjectionKind::Split
-    } else if contains_tensor_or_weight_source(vb, "in_proj_ba.weight")
-        && contains_tensor_or_weight_source(vb, "in_proj_a.weight")
+    if contains_tensor_or_weight_source(vb, "in_proj_a.weight")
+        && (contains_tensor_or_weight_source(vb, "in_proj_qkv.weight")
+            || contains_tensor_or_weight_source(vb, "in_proj_z.weight")
+            || contains_tensor_or_weight_source(vb, "in_proj_b.weight")
+            || contains_tensor_or_weight_source(vb, "in_proj_ba.weight"))
     {
         GdnInputProjectionKind::Split
     } else if contains_tensor_or_weight_source(vb, "in_proj_qkv.weight") {
@@ -316,7 +315,7 @@ impl SparseMoeBlock {
     }
 }
 
-#[allow(dead_code)]
+#[allow(dead_code, clippy::large_enum_variant)]
 enum DecoderBranch {
     Linear(GatedDeltaNet),
     Attention(Arc<Mutex<QsaAttention>>),
@@ -1472,7 +1471,6 @@ impl Model {
             .iter()
             .copied()
             .zip(chunk_hidden.iter())
-            .map(|(sequence_id, hidden)| (sequence_id, hidden))
             .collect::<Vec<_>>();
         let token_chunks = sequence_ids
             .iter()
@@ -2050,6 +2048,7 @@ pub(crate) mod tests {
 
     /// Run one forward with the given recurrent state slots installed as the batch's
     /// physical state indices, mirroring how the engine keys QSA and PLE state by slot.
+    #[allow(clippy::too_many_arguments)]
     fn run_forward_with_slots(
         model: &Model,
         tokens: &[u32],

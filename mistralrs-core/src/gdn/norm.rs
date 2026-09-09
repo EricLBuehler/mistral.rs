@@ -144,10 +144,10 @@ mod tests {
                 .sum::<f32>()
                 / 4.0;
             let inv_rms = (variance + eps as f32).sqrt().recip();
-            for column in 0..4 {
+            for (column, &weight) in quantized_weight.iter().enumerate() {
                 let index = start + column;
                 let sigmoid = 1.0 / (1.0 + (-quantized_gate[index]).exp());
-                expected.push(quantized_x[index] * inv_rms * quantized_weight[column] * sigmoid);
+                expected.push(quantized_x[index] * inv_rms * weight * sigmoid);
             }
         }
 

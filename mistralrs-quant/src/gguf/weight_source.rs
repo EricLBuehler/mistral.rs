@@ -366,10 +366,9 @@ impl GgufWeightSource {
         device: &Device,
     ) -> Result<Tensor> {
         let binding = self.binding(native_name)?;
-        Ok(self
-            .materialize_binding(binding, device)?
+        self.materialize_binding(binding, device)?
             .to_dtype(dtype)?
-            .contiguous()?)
+            .contiguous()
     }
 
     pub fn sharded_var_builder(self: &Arc<Self>, device: Device) -> ShardedVarBuilder {

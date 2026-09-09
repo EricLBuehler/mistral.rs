@@ -7510,9 +7510,9 @@ mod tests {
         assert_eq!(values.dims(), &[rows, k]);
         assert_eq!(indices.dims(), &[rows, k]);
         let expected_indices: Vec<Vec<u32>> = (0..rows)
-            .map(|row| {
+            .map(|_row| {
                 (0..k)
-                    .map(|offset| ((cols - 1 - offset) as u32))
+                    .map(|offset| (cols - 1 - offset) as u32)
                     .collect::<Vec<_>>()
             })
             .collect();
@@ -7520,7 +7520,7 @@ mod tests {
         let values_host = values.to_vec2::<f32>()?;
         for (row, values_row) in values_host.iter().enumerate() {
             for (offset, value) in values_row.iter().enumerate() {
-                let expected = ((row * cols + cols - 1 - offset) as f32);
+                let expected = (row * cols + cols - 1 - offset) as f32;
                 assert_eq!(*value, expected, "row {row} offset {offset}");
             }
         }

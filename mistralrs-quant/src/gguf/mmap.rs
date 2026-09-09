@@ -451,7 +451,7 @@ fn packed_byte_len(elements: usize, dtype: GgmlDType) -> Result<usize> {
 }
 
 fn validate_typed_data(dtype: GgmlDType, bytes: &[u8]) -> Result<()> {
-    if bytes.len() % dtype.type_size() != 0 {
+    if !bytes.len().is_multiple_of(dtype.type_size()) {
         candle_core::bail!(
             "GGUF {:?} storage has {} bytes, not divisible by type size {}",
             dtype,
@@ -460,14 +460,16 @@ fn validate_typed_data(dtype: GgmlDType, bytes: &[u8]) -> Result<()> {
         );
     }
     let alignment = super::archive::ggml_dtype_alignment(dtype);
-    if (bytes.as_ptr() as usize) % alignment != 0 {
+    if !(bytes.as_ptr() as usize).is_multiple_of(alignment) {
         candle_core::bail!("GGUF mmap storage for {dtype:?} is not aligned to {alignment} bytes");
     }
     Ok(())
 }
 
 fn typed<T>(bytes: &[u8]) -> Result<&[T]> {
-    if bytes.len() % size_of::<T>() != 0 || (bytes.as_ptr() as usize) % align_of::<T>() != 0 {
+    if !bytes.len().is_multiple_of(size_of::<T>())
+        || !(bytes.as_ptr() as usize).is_multiple_of(align_of::<T>())
+    {
         candle_core::bail!("invalid or unaligned GGUF storage for typed kernel dispatch");
     }
     // SAFETY: GGUF dtype validation guarantees both exact element size and alignment.

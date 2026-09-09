@@ -1553,8 +1553,7 @@ mod tests {
             &NormalLoaderType::Qwen4Exp,
             CanonicalGgufArchitecture::Qwen4Exp,
         )
-        .err()
-        .expect("partial inventory must fail binding");
+        .expect_err("partial inventory must fail binding");
         assert!(
             error.to_string().contains("blk.1.indexer.k_norm.weight"),
             "unexpected inventory error: {error}"

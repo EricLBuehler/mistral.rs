@@ -2174,7 +2174,7 @@ fn qwen4exp_layer_types(
         }
         let recurrent = values
             .iter()
-            .map(|value| value_bool(value))
+            .map(value_bool)
             .collect::<Option<Vec<_>>>()
             .ok_or_else(|| {
                 NormalConfigSynthesisError::new(format!(
@@ -2288,7 +2288,7 @@ fn qwen4exp_ple_config(
             "GGUF PLE hash arrays must contain at least {ngram_size} multipliers and exactly {head_count} head offsets and vocabulary sizes"
         )));
     }
-    if head_vocab_sizes.iter().any(|size| *size == 0) {
+    if head_vocab_sizes.contains(&0) {
         return Err(NormalConfigSynthesisError::new(
             "GGUF PLE head vocabulary sizes must be non-zero",
         ));
@@ -3568,7 +3568,7 @@ mod tests {
             &mut metadata,
             architecture,
             "attention.layer_norm_rms_epsilon",
-            9.999_999_974_752_427e-7,
+            1e-6,
         );
         insert_u32(&mut metadata, architecture, "rope.dimension_count", 64);
         insert_f32(&mut metadata, architecture, "rope.freq_base", 10_000_000.0);

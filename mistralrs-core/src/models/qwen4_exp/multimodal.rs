@@ -8,6 +8,8 @@
 //! batches. Video inputs and deepstack visual embeds fail closed until their
 //! position and PLE behavior is validated against the reference.
 
+#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+
 use std::{
     any::Any,
     sync::{Arc, Mutex},

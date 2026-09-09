@@ -1,3 +1,5 @@
+#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+
 use std::{collections::HashMap, sync::Arc};
 
 use candle_core::{DType, Error, Result, Tensor, D};
@@ -15,9 +17,11 @@ pub(crate) struct QsaSequenceSnapshot {
     head_dim: usize,
 }
 
+type QsaSequenceEntry = (Tensor, Vec<u32>, Option<Tensor>, Option<Tensor>);
+
 #[allow(dead_code)]
 pub(crate) struct QsaSequenceCache {
-    sequences: HashMap<usize, (Tensor, Vec<u32>, Option<Tensor>, Option<Tensor>)>,
+    sequences: HashMap<usize, QsaSequenceEntry>,
     head_dim: usize,
 }
 
@@ -161,10 +165,10 @@ impl QsaSequenceCache {
         if keys.dim(0)? != positions.len()
             || cos
                 .as_ref()
-                .map_or(false, |table| table.dim(0).ok() != Some(positions.len()))
+                .is_some_and(|table| table.dim(0).ok() != Some(positions.len()))
             || sin
                 .as_ref()
-                .map_or(false, |table| table.dim(0).ok() != Some(positions.len()))
+                .is_some_and(|table| table.dim(0).ok() != Some(positions.len()))
             || cos.is_some() != sin.is_some()
         {
             candle_core::bail!(
@@ -1342,7 +1346,7 @@ impl QsaIndexer {
                 .ok_or_else(|| Error::msg("Qwen4Exp QSA cache entry disappeared after append"))?;
             let mut selections = Vec::with_capacity(tokens);
 
-            for token in 0..tokens {
+            for (token, position) in (0..tokens).zip(positions.iter().copied()) {
                 let visible_len = previous_len
                     .checked_add(token + 1)
                     .ok_or_else(|| Error::msg("Qwen4Exp QSA visible length overflow"))?;
@@ -1367,14 +1371,9 @@ impl QsaIndexer {
                     .narrow(1, token, 1)?
                     .squeeze(0)?
                     .squeeze(0)?;
-                let (query, pooled) = self.rotary.apply(
-                    &query,
-                    &pooled,
-                    positions[token],
-                    &block_positions,
-                    cos,
-                    sin,
-                )?;
+                let (query, pooled) =
+                    self.rotary
+                        .apply(&query, &pooled, position, &block_positions, cos, sin)?;
                 let scores = self.scorer.score(&query, &pooled)?.to_vec1::<f32>()?;
                 selections.push(self.selector.select(&visible_rows, &scores)?);
             }

@@ -224,7 +224,7 @@ fn normalize_qwen4exp_multimodal_config(archive: &GgufArchive, config: &str) -> 
         // `ple_layer_ids` is 1-based (the official checkpoint declares `[2]` for block 1).
         // The GGUF metadata is authoritative for GGUF loading because it agrees with the
         // tensor names, so it overrides the config value; otherwise PLE would inject at the
-        // wrong layer and the binding would fail or, worse, silently mis-inject.
+        // wrong layer and the binding would fail or, worse, silently misinject.
         let layers = metadata_usize_values(archive, &format!("{architecture}.ple.layers"))?
             .with_context(|| {
                 "Qwen4Exp multimodal GGUF metadata `ple.layers` must be an integer array"

@@ -1,3 +1,5 @@
+#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+
 use mistralrs_quant::QuantizedConfig;
 use serde::Deserialize;
 

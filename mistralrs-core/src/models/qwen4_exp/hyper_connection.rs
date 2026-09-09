@@ -1,3 +1,5 @@
+#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+
 use std::sync::Arc;
 
 use candle_core::{DType, Result, Tensor, D};
