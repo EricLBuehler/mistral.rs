@@ -259,6 +259,21 @@ impl PrefixCacheManagerV2 {
         !self.no_prefix_cache && !self.has_paged_attention
     }
 
+    /// Test-only view into the non-paged prefix cache: returns the number of recurrent and
+    /// auxiliary snapshots stored for `tokens`, or `None` when no entry is cached.
+    #[cfg(test)]
+    pub(crate) fn cached_hybrid_prefix_state_lens_for_test(
+        &self,
+        tokens: &[u32],
+    ) -> Option<(usize, usize)> {
+        let element = self.caches.get(&CacheKey::new(tokens.to_vec(), None))?;
+        let recurrent = element.recurrent_snapshots.as_ref()?;
+        Some((
+            recurrent.snapshots.len(),
+            recurrent.auxiliary_snapshots.len(),
+        ))
+    }
+
     pub(crate) fn attach_paged_block_retention(&mut self, retention: PrefixBlockRetention) {
         assert!(
             self.paged_recurrent_caches.is_empty(),
