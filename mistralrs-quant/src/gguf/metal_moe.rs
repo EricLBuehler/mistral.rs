@@ -12,8 +12,8 @@
 use std::sync::{atomic::AtomicUsize, Arc};
 
 use candle_core::{
-    backend::BackendStorage,
-    quantized::GgmlDType, D, DType, Device, MetalStorage, Result, Shape, Storage, Tensor,
+    backend::BackendStorage, quantized::GgmlDType, DType, Device, MetalStorage, Result, Shape,
+    Storage, Tensor, D,
 };
 
 use super::{archive::GgufArchive, mmap};
@@ -68,9 +68,7 @@ impl GgufMetalExperts {
     ) -> Result<Self> {
         let name = tensor_name.unwrap_or("<stacked-expert-bytes>");
         let [experts, n, k] = dims.as_slice() else {
-            candle_core::bail!(
-                "stacked-expert GGUF tensor `{name}` must be rank 3, got {dims:?}"
-            );
+            candle_core::bail!("stacked-expert GGUF tensor `{name}` must be rank 3, got {dims:?}");
         };
         let (experts, n, k) = (*experts, *n, *k);
         if experts == 0 || n == 0 || k == 0 {
@@ -87,10 +85,10 @@ impl GgufMetalExperts {
                     );
                 }
             }
-            GgmlDType::Q8_0 => {
+            GgmlDType::Q4_0 | GgmlDType::Q8_0 => {
                 if !k.is_multiple_of(32) {
                     candle_core::bail!(
-                        "stacked-expert GGUF tensor `{name}` uses Q8_0 with K={k}; \
+                        "stacked-expert GGUF tensor `{name}` uses {dtype:?} with K={k}; \
                          the Metal indexed-MoE kernel requires K divisible by 32"
                     );
                 }
@@ -99,7 +97,7 @@ impl GgufMetalExperts {
                 "stacked-expert GGUF tensor `{name}` uses {other:?}, which has no bounded Metal \
                  indexed-MoE kernel; routed experts would be fully dequantized on the device. \
                  Load with `--cpu` so the experts stay mmap-backed, or use a quant whose routed \
-                 experts use Q2_K, Q4_K, Q6_K, or Q8_0"
+                 experts use Q2_K, Q4_0, Q4_K, Q6_K, or Q8_0"
             ),
         }
         if !matches!(bytes.device(), Device::Metal(_)) {
@@ -196,9 +194,7 @@ impl GgufMetalExperts {
         let flat_ids = ids2.to_dtype(DType::U32)?.contiguous()?.flatten_all()?;
         let max_id = flat_ids.max(D::Minus1)?.to_scalar::<u32>()? as usize;
         if max_id >= experts {
-            candle_core::bail!(
-                "GGUF expert index {max_id} is out of range for {experts} experts"
-            );
+            candle_core::bail!("GGUF expert index {max_id} is out of range for {experts} experts");
         }
         let pairs = flat_ids.elem_count();
         let x = x3.to_dtype(DType::F32)?.contiguous()?;
@@ -223,11 +219,8 @@ impl GgufMetalExperts {
         let out_buffer = {
             let encoder = device.command_encoder()?;
             encoder.set_label("gguf-indexed-moe-gemv");
-            let out_buffer = device.new_buffer(
-                pairs * n,
-                DType::F32,
-                "gguf-indexed-moe-gemv-out",
-            )?;
+            let out_buffer =
+                device.new_buffer(pairs * n, DType::F32, "gguf-indexed-moe-gemv-out")?;
             metal_kernels::call_indexed_moe_gemv(
                 device.device(),
                 &encoder,
@@ -327,9 +320,7 @@ impl QuantMethod for GgufMetalExperts {
     }
 
     fn add_delta_w(&self, _delta: &Tensor) -> Result<Arc<dyn QuantMethod>> {
-        candle_core::bail!(
-            "LoRA deltas on Metal-resident stacked GGUF experts are not supported"
-        )
+        candle_core::bail!("LoRA deltas on Metal-resident stacked GGUF experts are not supported")
     }
 
     fn apply_isq(
@@ -423,7 +414,10 @@ mod metal_tests {
             bias,
             Some("blk.0.test_exps.weight"),
         )?;
-        let reference = quantized.dequantize(&Device::Cpu)?.flatten_all()?.to_vec1::<f32>()?;
+        let reference = quantized
+            .dequantize(&Device::Cpu)?
+            .flatten_all()?
+            .to_vec1::<f32>()?;
         Ok(Fixture {
             method,
             reference,
@@ -484,7 +478,13 @@ mod metal_tests {
         let Some(device) = metal_device() else {
             return Ok(());
         };
-        for dtype in [GgmlDType::Q2K, GgmlDType::Q4K, GgmlDType::Q6K, GgmlDType::Q8_0] {
+        for dtype in [
+            GgmlDType::Q2K,
+            GgmlDType::Q4_0,
+            GgmlDType::Q4K,
+            GgmlDType::Q6K,
+            GgmlDType::Q8_0,
+        ] {
             let (experts, n, k) = (5usize, 48usize, 256usize);
             let fixture = fixture(dtype, experts, n, k, &device, None)?;
             let tokens = 5usize;
@@ -535,7 +535,10 @@ mod metal_tests {
         assert_close(&out, &expected, 2e-3)?;
 
         // Single-token decode.
-        let x = x_cpu.narrow(0, 0, 1)?.reshape((1, 1, k))?.to_device(&device)?;
+        let x = x_cpu
+            .narrow(0, 0, 1)?
+            .reshape((1, 1, k))?
+            .to_device(&device)?;
         let ids = Tensor::from_vec(vec![2u32, 0], (1, topk), &device)?;
         let out = fixture.method.gather_forward_raw(&x, &ids)?;
         assert_eq!(out.dims(), &[1, topk, n]);
@@ -576,14 +579,7 @@ mod metal_tests {
         let (experts, n, k) = (3usize, 24usize, 256usize);
         let bias_cpu = patterned(experts, n, 55)?;
         let bias = bias_cpu.to_device(&device)?;
-        let fixture = fixture(
-            GgmlDType::Q8_0,
-            experts,
-            n,
-            k,
-            &device,
-            Some(bias),
-        )?;
+        let fixture = fixture(GgmlDType::Q8_0, experts, n, k, &device, Some(bias))?;
         let tokens = 3usize;
         let topk = 2usize;
         let x_cpu = patterned(tokens, k, 61)?;
@@ -608,10 +604,11 @@ mod metal_tests {
             return;
         };
         let bytes = Tensor::from_vec(vec![0u8; 1024], (1024,), &device).unwrap();
-        let err = GgufMetalExperts::new(GgmlDType::Q3K, vec![2, 4, 256], bytes, None, None)
-            .unwrap_err();
+        let err =
+            GgufMetalExperts::new(GgmlDType::Q3K, vec![2, 4, 256], bytes, None, None).unwrap_err();
         assert!(
-            err.to_string().contains("no bounded Metal indexed-MoE kernel"),
+            err.to_string()
+                .contains("no bounded Metal indexed-MoE kernel"),
             "{err}"
         );
     }
@@ -625,6 +622,10 @@ mod metal_tests {
         let err =
             GgufMetalExperts::new(GgmlDType::Q2K, vec![1, 4, 128], bytes, None, None).unwrap_err();
         assert!(err.to_string().contains("divisible by 256"), "{err}");
+        let bytes = Tensor::from_vec(vec![0u8; 16], (16,), &device).unwrap();
+        let err =
+            GgufMetalExperts::new(GgmlDType::Q4_0, vec![1, 4, 48], bytes, None, None).unwrap_err();
+        assert!(err.to_string().contains("divisible by 32"), "{err}");
     }
 
     #[test]
@@ -652,11 +653,8 @@ mod metal_tests {
         // dequantizing the whole stack on the device.
         let w = patterned(3 * 8, 256, 3)?.reshape((3, 8, 256))?;
         let qt_cpu = candle_core::quantized::QTensor::quantize(&w, GgmlDType::Q3K)?;
-        let storage = candle_core::quantized::QStorage::from_data(
-            qt_cpu.data()?,
-            &device,
-            GgmlDType::Q3K,
-        )?;
+        let storage =
+            candle_core::quantized::QStorage::from_data(qt_cpu.data()?, &device, GgmlDType::Q3K)?;
         let qt = candle_core::quantized::QTensor::new(storage, vec![3, 8, 256])?;
         let method = GgufMatMul::from_qtensor(qt, None);
         let x = patterned(2, 256, 5)?.to_device(&device)?;

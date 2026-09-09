@@ -200,6 +200,7 @@ pub fn call_indexed_moe_gemv(
 ) -> Result<(), MetalKernelError> {
     let name = match ggml_dtype {
         GgmlDType::Q2K => "indexed_moe_gemv_q2_k",
+        GgmlDType::Q4_0 => "indexed_moe_gemv_q4_0",
         GgmlDType::Q4K => "indexed_moe_gemv_q4_k",
         GgmlDType::Q6K => "indexed_moe_gemv_q6_k",
         GgmlDType::Q8_0 => "indexed_moe_gemv_q8_0",
@@ -210,11 +211,9 @@ pub fn call_indexed_moe_gemv(
     }
     // The kernel decodes `pair = gid / n` from the flattened grid, so the total
     // output count must stay representable in the scalar grid position.
-    let outputs = pairs
-        .checked_mul(n)
-        .ok_or_else(|| MetalKernelError::FailedToCreatePipeline(
-            "indexed MoE gemv grid overflow".to_string(),
-        ))?;
+    let outputs = pairs.checked_mul(n).ok_or_else(|| {
+        MetalKernelError::FailedToCreatePipeline("indexed MoE gemv grid overflow".to_string())
+    })?;
     if outputs > u32::MAX as usize {
         return Err(MetalKernelError::FailedToCreatePipeline(format!(
             "indexed MoE gemv output size {outputs} (pairs={pairs} x n={n}) exceeds the \

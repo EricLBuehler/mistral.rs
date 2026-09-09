@@ -545,12 +545,14 @@ impl GgufWeightSource {
             // quantized stack here would fall back to fully dequantizing every
             // expert on the device and exhaust its memory.
             let bias = self.load_bias(key, device, None, dims.len())?;
-            return Ok(Arc::new(super::metal_moe::GgufMetalExperts::new_from_archive(
-                &self.archive,
-                source_name,
-                bias,
-                device,
-            )?));
+            return Ok(Arc::new(
+                super::metal_moe::GgufMetalExperts::new_from_archive(
+                    &self.archive,
+                    source_name,
+                    bias,
+                    device,
+                )?,
+            ));
         }
         if device.is_cpu() && range.is_none() {
             let bias = self.load_bias(key, device, range, dims.len())?;

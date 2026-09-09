@@ -271,3 +271,53 @@ static inline float half_from_bytes(device const uint8_t *p) {
 
     out[(uint64_t)pair * (uint)n + row] = simd_sum(acc);
 }
+
+// ---- Q4_0 -----------------------------------------------------------------
+//
+// Block (18 bytes): d f16, qs[16] u8 of nibbles. 32 elements per block.
+// Element `i < 16` is the low nibble of byte `i`, element `i + 16` is the high
+// nibble of byte `i` (candle/GGML `block_q4_0` convention). The value
+// `d * (q - 8)` is accumulated as `d * (sum(q*y) - 8 * sum(y))`, matching the
+// K-quant kernels' separated sum/correction form.
+[[kernel]] void indexed_moe_gemv_q4_0(
+    device const uint8_t *weights [[buffer(0)]],
+    device const float *x [[buffer(1)]],
+    device const uint32_t *ids [[buffer(2)]],
+    device float *out [[buffer(3)]],
+    constant int32_t &n [[buffer(4)]],
+    constant int32_t &k [[buffer(5)]],
+    constant int32_t &topk [[buffer(6)]],
+    constant int32_t &x_per_pair [[buffer(7)]],
+    uint gid [[threadgroup_position_in_grid]],
+    uint tiisg [[thread_index_in_simdgroup]],
+    uint tgsz [[threads_per_threadgroup]]) {
+
+    const uint pair = gid / (uint)n;
+    const uint row = gid % (uint)n;
+    const uint expert = ids[pair];
+    const uint token = x_per_pair != 0 ? pair : pair / (uint)topk;
+    const uint nb = (uint)k / 32;
+
+    device const uint8_t *row_ptr =
+        weights + ((uint64_t)expert * (uint)n + row) * ((uint64_t)nb * 18);
+    device const float *x_row = x + (uint64_t)token * (uint)k;
+
+    float acc = 0.0f;
+    for (uint blk = tiisg; blk < nb; blk += tgsz) {
+        device const uint8_t *b = row_ptr + (uint64_t)blk * 18;
+        const float d = half_from_bytes(b);
+        device const uint8_t *qs = b + 2;
+        device const float *y = x_row + (uint64_t)blk * 32;
+        float dsum = 0.0f;
+        float msum = 0.0f;
+        for (uint i = 0; i < 16; ++i) {
+            const float y0 = y[i];
+            const float y1 = y[i + 16];
+            dsum += y0 * (float)(qs[i] & 0xF) + y1 * (float)(qs[i] >> 4);
+            msum += y0 + y1;
+        }
+        acc += d * (dsum - 8.0f * msum);
+    }
+
+    out[(uint64_t)pair * (uint)n + row] = simd_sum(acc);
+}

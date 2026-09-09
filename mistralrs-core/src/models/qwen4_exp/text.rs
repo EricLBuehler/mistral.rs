@@ -644,12 +644,18 @@ impl Model {
             }
             // ReplicatedLayer stores weights as (out, in), so the table loads with
             // `table_rows` rows of width `head_dim` for the embedding row gather.
+            // The table is always pinned CPU/mmap-backed regardless of the device
+            // mapping so partial-offload runs never upload the entire table to an
+            // accelerator; `PleEmbedding` transfers only the gathered rows to the
+            // layer's compute device.
             let table = ReplicatedLayer::new(
                 head_dim,
                 table_rows,
                 &cfg.quantization_config,
                 false,
-                mapper.set_nm_device(vb_m.pp("per_layer_token_embd"), loading_isq),
+                mapper
+                    .set_nm_device(vb_m.pp("per_layer_token_embd"), loading_isq)
+                    .set_device(Device::Cpu),
             )?;
             Some(PleModules {
                 hasher,
