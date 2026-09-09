@@ -5,7 +5,7 @@ use std::{any::Any, collections::HashSet, sync::Arc};
 use tracing::info;
 
 use crate::{
-    kv_cache::RecurrentStateSnapshot,
+    kv_cache::{HybridAuxiliarySnapshot, RecurrentStateSnapshot},
     paged_attention::{
         block_hash::{BlockHash, MultiModalFeature, MultimodalKind},
         block_pool::{PrefixBlockRetention, PrefixBlockRetentionLease},
@@ -82,6 +82,7 @@ struct CacheElement {
 struct CachedRecurrentState {
     len: usize,
     snapshots: Vec<RecurrentStateSnapshot>,
+    auxiliary_snapshots: Vec<HybridAuxiliarySnapshot>,
 }
 
 impl CacheElement {
@@ -210,6 +211,7 @@ pub enum MatchingCache {
     Normal {
         normal: Vec<Option<KvCache>>,
         recurrent_snapshots: Option<Vec<RecurrentStateSnapshot>>,
+        auxiliary_snapshots: Option<Vec<HybridAuxiliarySnapshot>>,
         images_to_keep: usize,
         audios_to_keep: usize,
         video_frames_to_keep: usize,
@@ -255,6 +257,21 @@ impl PrefixCacheManagerV2 {
 
     pub fn accepts_sequence_cache(&self) -> bool {
         !self.no_prefix_cache && !self.has_paged_attention
+    }
+
+    /// Test-only view into the non-paged prefix cache: returns the number of recurrent and
+    /// auxiliary snapshots stored for `tokens`, or `None` when no entry is cached.
+    #[cfg(test)]
+    pub(crate) fn cached_hybrid_prefix_state_lens_for_test(
+        &self,
+        tokens: &[u32],
+    ) -> Option<(usize, usize)> {
+        let element = self.caches.get(&CacheKey::new(tokens.to_vec(), None))?;
+        let recurrent = element.recurrent_snapshots.as_ref()?;
+        Some((
+            recurrent.snapshots.len(),
+            recurrent.auxiliary_snapshots.len(),
+        ))
     }
 
     pub(crate) fn attach_paged_block_retention(&mut self, retention: PrefixBlockRetention) {
@@ -366,6 +383,7 @@ impl PrefixCacheManagerV2 {
         &mut self,
         seq: &mut Sequence,
         recurrent_snapshots: Option<Vec<RecurrentStateSnapshot>>,
+        auxiliary_snapshots: Option<Vec<HybridAuxiliarySnapshot>>,
     ) {
         // Do not cache if prefix caching disabled
         if self.no_prefix_cache {
@@ -385,6 +403,7 @@ impl PrefixCacheManagerV2 {
                     .min()
                     .unwrap_or(0),
                 snapshots,
+                auxiliary_snapshots: auxiliary_snapshots.unwrap_or_default(),
             });
 
             self.caches.insert(
@@ -880,6 +899,10 @@ impl PrefixCacheManagerV2 {
             }
             return Ok(Some(MatchingCache::Normal {
                 normal: cache.cache,
+                auxiliary_snapshots: cache
+                    .recurrent_snapshots
+                    .as_ref()
+                    .map(|state| state.auxiliary_snapshots.clone()),
                 recurrent_snapshots: cache.recurrent_snapshots.map(|state| state.snapshots),
                 images_to_keep,
                 audios_to_keep,
@@ -1522,6 +1545,49 @@ mod tests {
     }
 
     #[test]
+    fn hybrid_prefix_hit_preserves_auxiliary_snapshots() -> candle_core::Result<()> {
+        let mut prefix_cacher = PrefixCacheManagerV2::new(1, false, false);
+        prefix_cacher.caches.insert(
+            vec![1, 2, 3, 4].into(),
+            CacheElement {
+                cache: vec![Some(make_normal_kv_cache(4)?)],
+                recurrent_snapshots: Some(CachedRecurrentState {
+                    len: 4,
+                    snapshots: vec![make_recurrent_snapshot()?],
+                    auxiliary_snapshots: vec![Arc::new(17usize)],
+                }),
+                audio_hashes: None,
+                image_hashes: None,
+                video_hashes: None,
+            },
+        );
+
+        let hit = prefix_cacher.search_for_matching_cache(
+            &[1, 2, 3, 4, 5],
+            None,
+            &[],
+            None,
+            None,
+            None,
+        )?;
+        let Some(MatchingCache::Normal {
+            recurrent_snapshots,
+            auxiliary_snapshots,
+            offset,
+            ..
+        }) = hit
+        else {
+            panic!("expected hybrid prefix-cache hit");
+        };
+        assert_eq!(offset, 4);
+        assert!(recurrent_snapshots.is_some());
+        let auxiliary = auxiliary_snapshots.expect("auxiliary snapshots");
+        assert_eq!(auxiliary.len(), 1);
+        assert_eq!(auxiliary[0].downcast_ref::<usize>(), Some(&17));
+        Ok(())
+    }
+
+    #[test]
     fn hybrid_snapshot_only_matches_its_exact_boundary() -> candle_core::Result<()> {
         let mut prefix_cacher = PrefixCacheManagerV2::new(1, false, false);
         prefix_cacher.caches.insert(
@@ -1531,6 +1597,7 @@ mod tests {
                 recurrent_snapshots: Some(CachedRecurrentState {
                     len: 8,
                     snapshots: vec![make_recurrent_snapshot()?],
+                    auxiliary_snapshots: Vec::new(),
                 }),
                 audio_hashes: None,
                 image_hashes: None,

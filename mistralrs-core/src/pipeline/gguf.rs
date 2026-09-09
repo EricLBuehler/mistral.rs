@@ -28,8 +28,8 @@ use crate::gguf::{
     },
     normal_registry::{resolve_native_adapter, GgufDescriptor, RopePairing},
     qwen_multimodal_bindings::{
-        build_qwen_multimodal_bindings, normalize_qwen_multimodal_config,
-        qwen_multimodal_loader_type,
+        build_qwen4exp_multimodal_bindings, build_qwen_multimodal_bindings,
+        normalize_qwen_multimodal_config, qwen_multimodal_loader_type,
     },
     validate_external_gguf_tokenizer, GgufTokenizerConversion,
 };
@@ -126,6 +126,27 @@ fn requires_multimodal_projector(architecture: &str) -> bool {
         .any(|candidate| candidate.eq_ignore_ascii_case(architecture))
 }
 
+fn validate_qwen4exp_target_files(architecture: &str, paths: &[PathBuf]) -> Result<()> {
+    if !architecture.eq_ignore_ascii_case("qwen4exp") {
+        return Ok(());
+    }
+    if let Some(path) = paths.iter().find(|path| {
+        path.components().any(|component| {
+            component.as_os_str().to_str().is_some_and(|component| {
+                component
+                    .split(|ch: char| !ch.is_ascii_alphanumeric())
+                    .any(|token| token.eq_ignore_ascii_case("mtp"))
+            })
+        })
+    }) {
+        bail!(
+            "Qwen4Exp MTP artifact `{}` cannot be loaded as a target model shard; select only the base Qwen3.8 Flash Next GGUF shards",
+            path.display()
+        );
+    }
+    Ok(())
+}
+
 enum Model {
     XLoraLlama(XLoraQLlama),
     XLoraPhi3(XLoraQPhi3),
@@ -208,10 +229,11 @@ struct NativeMultimodalLoadArgs<'a> {
 
 fn prepare_native_multimodal_config(
     loader_type: &MultimodalLoaderType,
+    archive: &mistralrs_quant::GgufArchive,
     config: &str,
 ) -> Result<String> {
     let config = super::isq::sanitize_quantized_weight_source_config(config)?;
-    let config = normalize_qwen_multimodal_config(loader_type, &config)?;
+    let config = normalize_qwen_multimodal_config(loader_type, archive, &config)?;
     normalize_muse_glimmer_config(loader_type, &config)
 }
 
@@ -586,6 +608,7 @@ impl GGUFLoader {
             }
             None => bail!("GGUF metadata is missing `general.architecture`"),
         };
+        validate_qwen4exp_target_files(architecture, paths.get_weight_filenames())?;
         if architecture.eq_ignore_ascii_case("gemma3") {
             return self.load_native_gemma3_text(
                 archive,
@@ -835,6 +858,7 @@ impl GGUFLoader {
             }
             None => bail!("GGUF metadata is missing `general.architecture`"),
         };
+        validate_qwen4exp_target_files(&architecture, paths.get_weight_filenames())?;
         let mmproj = mistralrs_quant::GgufArchive::open_components(mmproj_paths)?;
         archive.merge_components(mmproj)?;
         let archive = Arc::new(archive);
@@ -848,6 +872,13 @@ impl GGUFLoader {
             "qwen2vl" | "qwen3vl" | "qwen3vlmoe" | "qwen35" | "qwen35moe" => (
                 qwen_multimodal_loader_type(&archive)?,
                 build_qwen_multimodal_bindings(&archive)?,
+                RopePairing::HalfSplit,
+            ),
+            // qwen4exp reuses the normal qwen4exp text bindings and adds the Qwen3-VL
+            // vision mappings; the family check also requires the qwen3vl projector.
+            "qwen4exp" => (
+                MultimodalLoaderType::Qwen4Exp,
+                build_qwen4exp_multimodal_bindings(&archive)?,
                 RopePairing::HalfSplit,
             ),
             architecture => {
@@ -871,6 +902,7 @@ impl GGUFLoader {
         }
         let config = prepare_native_multimodal_config(
             &loader_type,
+            &archive,
             &fs::read_to_string(paths.get_config_filename())?,
         )?;
         let config = stamp_qk_rope_layout(&config, rope_pairing)?;
@@ -1585,8 +1617,8 @@ mod tests {
     use super::{
         preferred_hf_config, prepare_native_multimodal_config, requires_multimodal_projector,
         resolve_tokenizer_candidate, validate_legacy_gguf_adapter_qk_layout,
-        validate_native_dynamic_lora, DynamicLoraConfig, GGUFSpecificConfig,
-        GgufTokenizerConversion, TokenizerFallback,
+        validate_native_dynamic_lora, validate_qwen4exp_target_files, DynamicLoraConfig,
+        GGUFSpecificConfig, GgufTokenizerConversion, TokenizerFallback,
     };
     use crate::{
         gdn::GDN_V_HEAD_LAYOUT_CONFIG_KEY,
@@ -1603,6 +1635,52 @@ mod tests {
             eos: Some(marker.to_string()),
             unk: None,
         }
+    }
+
+    /// A minimal one-tensor GGUF archive carrying only the architecture metadata, for
+    /// multimodal config normalization tests that do not consult tensor inventory.
+    fn minimal_gguf_archive(
+        architecture: &str,
+    ) -> anyhow::Result<(
+        tempfile::NamedTempFile,
+        std::sync::Arc<mistralrs_quant::GgufArchive>,
+    )> {
+        use candle_core::quantized::{gguf_file, GgmlDType, QTensor};
+        use std::sync::Arc;
+        let weight = QTensor::quantize(
+            &candle_core::Tensor::ones((4, 4), candle_core::DType::F32, &candle_core::Device::Cpu)?,
+            GgmlDType::F32,
+        )?;
+        let metadata = [(
+            "general.architecture".to_string(),
+            gguf_file::Value::String(architecture.to_string()),
+        )];
+        let metadata = metadata
+            .iter()
+            .map(|(key, value)| (key.as_str(), value))
+            .collect::<Vec<_>>();
+        let mut file = tempfile::NamedTempFile::new()?;
+        gguf_file::write(file.as_file_mut(), &metadata, &[("blk.0.weight", &weight)])?;
+        use std::io::Write as _;
+        file.as_file_mut().flush()?;
+        let archive = Arc::new(mistralrs_quant::GgufArchive::open_file(file.path())?);
+        Ok((file, archive))
+    }
+
+    #[test]
+    fn qwen4exp_rejects_only_mtp_target_paths() {
+        let qwen_mtp = [PathBuf::from("MTP/Qwen3.8-Flash-Next-Q4_K_M.gguf")];
+        let error = validate_qwen4exp_target_files("qwen4exp", &qwen_mtp).unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("cannot be loaded as a target model shard"));
+
+        assert!(validate_qwen4exp_target_files("llama", &qwen_mtp).is_ok());
+        assert!(validate_qwen4exp_target_files(
+            "qwen4exp",
+            &[PathBuf::from("Qwen3.8-Flash-Next-Q4_K_M.gguf")],
+        )
+        .is_ok());
     }
 
     #[test]
@@ -1677,7 +1755,8 @@ mod tests {
             MultimodalLoaderType::Qwen3_5,
             MultimodalLoaderType::Qwen3_5Moe,
         ] {
-            let config = prepare_native_multimodal_config(&loader_type, raw).unwrap();
+            let (_file, archive) = minimal_gguf_archive("test_arch").unwrap();
+            let config = prepare_native_multimodal_config(&loader_type, &archive, raw).unwrap();
             let config: serde_json::Value = serde_json::from_str(&config).unwrap();
             assert!(config["quantization_config"].is_null(), "{loader_type:?}");
             assert!(

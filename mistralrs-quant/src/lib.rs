@@ -81,6 +81,12 @@ pub trait QuantizedWeightSource: Send + Sync {
     fn pack_factor(&self, dtype: DType) -> Result<usize>;
 
     fn pack_factor_for(&self, key: &str, dtype: DType) -> Result<Option<usize>>;
+
+    /// Anonymous CPU bytes retained after loading file-backed weights. `None`
+    /// means ordinary capacity accounting must include every weight byte.
+    fn cpu_resident_weight_bytes(&self) -> Option<usize> {
+        None
+    }
 }
 
 impl<T: QuantizedWeightSource + ?Sized> QuantizedWeightSource for Arc<T> {
@@ -111,6 +117,10 @@ impl<T: QuantizedWeightSource + ?Sized> QuantizedWeightSource for Arc<T> {
 
     fn pack_factor_for(&self, key: &str, dtype: DType) -> Result<Option<usize>> {
         (**self).pack_factor_for(key, dtype)
+    }
+
+    fn cpu_resident_weight_bytes(&self) -> Option<usize> {
+        (**self).cpu_resident_weight_bytes()
     }
 }
 

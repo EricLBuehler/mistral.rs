@@ -176,7 +176,7 @@ pub fn compute_beta_g(
     }
 
     #[cfg(feature = "metal")]
-    if b.device().is_metal() {
+    if b.device().is_metal() && matches!(b.dtype(), DType::F16 | DType::BF16) {
         let b_flat = b.contiguous()?.flatten_all()?;
         let a_flat = a.contiguous()?.flatten_all()?;
         let a_log_f32 = a_log.to_dtype(DType::F32)?.contiguous()?;
@@ -873,7 +873,7 @@ fn causal_conv1d_update(
     let x_t = x.transpose(1, 2)?.contiguous()?;
 
     #[cfg(feature = "metal")]
-    if x_t.device().is_metal() {
+    if x_t.device().is_metal() && matches!(x_t.dtype(), DType::F16 | DType::BF16) {
         let weight = conv1d_weight
             .squeeze(1)?
             .to_dtype(x_t.dtype())?
@@ -900,7 +900,9 @@ fn causal_conv1d_update(
     let total_len = hidden_new.dim(2)?;
     for i in (total_len - seq_len)..total_len {
         let window = hidden_new.narrow(2, i + 1 - dims.conv_kernel_size, dims.conv_kernel_size)?;
-        let out = (window * weight.unsqueeze(0)?)?.sum(D::Minus1)?;
+        let out = window
+            .broadcast_mul(&weight.unsqueeze(0)?)?
+            .sum(D::Minus1)?;
         conv_outputs.push(out);
     }
     candle_nn::ops::silu(&Tensor::stack(&conv_outputs, 2)?)?.transpose(1, 2)
@@ -995,7 +997,7 @@ fn causal_conv1d_full(
     let x_t = x.transpose(1, 2)?.contiguous()?;
 
     #[cfg(feature = "metal")]
-    if x_t.device().is_metal() {
+    if x_t.device().is_metal() && matches!(x_t.dtype(), DType::F16 | DType::BF16) {
         let weight = conv1d_weight
             .squeeze(1)?
             .to_dtype(x_t.dtype())?
@@ -1039,7 +1041,9 @@ fn causal_conv1d_full(
     let mut conv_outputs = Vec::with_capacity(seq_len);
     for i in 0..seq_len {
         let window = padded_t.narrow(2, i, dims.conv_kernel_size)?;
-        let out = (window * weight.unsqueeze(0)?)?.sum(D::Minus1)?;
+        let out = window
+            .broadcast_mul(&weight.unsqueeze(0)?)?
+            .sum(D::Minus1)?;
         conv_outputs.push(out);
     }
     candle_nn::ops::silu(&Tensor::stack(&conv_outputs, 2)?)?.transpose(1, 2)
@@ -1939,5 +1943,183 @@ mod tests {
         run_decode_case(dims(2, 4, 5, 3), 2)?;
         run_decode_case(dims(3, 3, 4, 2), 1)?;
         run_decode_case(dims_with_layout(2, 4, 5, 3, GdnVHeadLayout::Tiled), 2)
+    }
+
+    // Metal F32 fallback coverage: the fused Metal gating and convolution kernels only
+    // support F16/BF16, so F32 inputs must fall back to the composed paths and still
+    // match the CPU reference instead of erroring on the unsupported fused kernel.
+
+    fn metal_test_device() -> Option<Device> {
+        Device::new_metal(0).ok()
+    }
+
+    #[test]
+    fn metal_f32_compute_beta_g_matches_reference() -> CandleResult<()> {
+        let Some(device) = metal_test_device() else {
+            return Ok(());
+        };
+        let batch_size = 2;
+        let seq_len = 3;
+        let num_v_heads = 4;
+        let b_cpu = Tensor::from_vec(
+            patterned(batch_size * seq_len * num_v_heads, 41, 0.2, 0.05),
+            (batch_size, seq_len, num_v_heads),
+            &Device::Cpu,
+        )?;
+        let a_cpu = Tensor::from_vec(
+            patterned(batch_size * seq_len * num_v_heads, 42, 0.15, -0.1),
+            (batch_size, seq_len, num_v_heads),
+            &Device::Cpu,
+        )?;
+        let a_log_cpu = Tensor::from_vec(
+            patterned(num_v_heads, 43, 0.1, -0.3),
+            (num_v_heads,),
+            &Device::Cpu,
+        )?;
+        let dt_bias_cpu = Tensor::from_vec(
+            patterned(num_v_heads, 44, 0.1, 0.2),
+            (num_v_heads,),
+            &Device::Cpu,
+        )?;
+
+        let (beta, g) = compute_beta_g(
+            &b_cpu.to_device(&device)?,
+            &a_cpu.to_device(&device)?,
+            &a_log_cpu.to_device(&device)?,
+            &dt_bias_cpu.to_device(&device)?,
+            DType::F32,
+        )?;
+        let (beta_ref, g_ref) =
+            compute_beta_g_cpu(&b_cpu, &a_cpu, &a_log_cpu, &dt_bias_cpu, DType::F32)?;
+
+        assert_close(&beta.to_device(&Device::Cpu)?, &beta_ref)?;
+        assert_close(&g.to_device(&Device::Cpu)?, &g_ref)
+    }
+
+    fn cache_on(
+        initial_state: &Tensor,
+        recurrent_state: &Tensor,
+        device: &Device,
+    ) -> CandleResult<GdnLayerCache> {
+        Ok(GdnLayerCache {
+            conv_state: initial_state.to_device(device)?,
+            recurrent_state: recurrent_state.to_device(device)?,
+            state_layout: RecurrentStateLayout::GdnKeyMajor,
+            slots: None,
+            pending_transitions: None,
+            deferred_state: None,
+        })
+    }
+
+    #[test]
+    fn metal_f32_causal_conv1d_update_matches_reference() -> CandleResult<()> {
+        let Some(device) = metal_test_device() else {
+            return Ok(());
+        };
+        let dims = dims(2, 4, 5, 3);
+        let batch_size = 2;
+        let x_cpu = Tensor::from_vec(
+            patterned(batch_size * dims.conv_dim, 51, 0.08, 0.01),
+            (batch_size, 1, dims.conv_dim),
+            &Device::Cpu,
+        )?;
+        let weight_cpu = Tensor::from_vec(
+            patterned(dims.conv_dim * dims.conv_kernel_size, 52, 0.05, -0.01),
+            (dims.conv_dim, 1, dims.conv_kernel_size),
+            &Device::Cpu,
+        )?;
+        let initial_state_cpu = Tensor::from_vec(
+            patterned(
+                batch_size * dims.conv_dim * dims.conv_kernel_size,
+                53,
+                0.03,
+                0.0,
+            ),
+            (batch_size, dims.conv_dim, dims.conv_kernel_size),
+            &Device::Cpu,
+        )?;
+        let recurrent_state_cpu = Tensor::zeros(
+            (
+                batch_size,
+                dims.num_v_heads,
+                dims.head_k_dim,
+                dims.head_v_dim,
+            ),
+            DType::F32,
+            &Device::Cpu,
+        )?;
+
+        let mut metal_cache = cache_on(&initial_state_cpu, &recurrent_state_cpu, &device)?;
+        let mut reference_cache = cache_on(&initial_state_cpu, &recurrent_state_cpu, &Device::Cpu)?;
+        let metal = causal_conv1d_update(
+            &x_cpu.to_device(&device)?,
+            &weight_cpu.to_device(&device)?,
+            &dims,
+            &mut metal_cache,
+        )?;
+        let reference =
+            causal_conv1d_update_reference(&x_cpu, &weight_cpu, &dims, &mut reference_cache)?;
+
+        assert_close(&metal.to_device(&Device::Cpu)?, &reference)?;
+        assert_close(
+            &metal_cache.conv_state.to_device(&Device::Cpu)?,
+            &reference_cache.conv_state,
+        )
+    }
+
+    #[test]
+    fn metal_f32_causal_conv1d_full_matches_reference() -> CandleResult<()> {
+        let Some(device) = metal_test_device() else {
+            return Ok(());
+        };
+        let dims = dims(2, 4, 5, 3);
+        let batch_size = 2;
+        let seq_len = 5;
+        let x_cpu = Tensor::from_vec(
+            patterned(batch_size * seq_len * dims.conv_dim, 61, 0.08, 0.01),
+            (batch_size, seq_len, dims.conv_dim),
+            &Device::Cpu,
+        )?;
+        let weight_cpu = Tensor::from_vec(
+            patterned(dims.conv_dim * dims.conv_kernel_size, 62, 0.05, -0.01),
+            (dims.conv_dim, 1, dims.conv_kernel_size),
+            &Device::Cpu,
+        )?;
+        let initial_state_cpu = Tensor::from_vec(
+            patterned(
+                batch_size * dims.conv_dim * dims.conv_kernel_size,
+                63,
+                0.03,
+                0.0,
+            ),
+            (batch_size, dims.conv_dim, dims.conv_kernel_size),
+            &Device::Cpu,
+        )?;
+        let recurrent_state_cpu = Tensor::zeros(
+            (
+                batch_size,
+                dims.num_v_heads,
+                dims.head_k_dim,
+                dims.head_v_dim,
+            ),
+            DType::F32,
+            &Device::Cpu,
+        )?;
+
+        let mut metal_cache = cache_on(&initial_state_cpu, &recurrent_state_cpu, &device)?;
+        let mut cpu_cache = cache_on(&initial_state_cpu, &recurrent_state_cpu, &Device::Cpu)?;
+        let metal = causal_conv1d_full(
+            &x_cpu.to_device(&device)?,
+            &weight_cpu.to_device(&device)?,
+            &dims,
+            &mut metal_cache,
+        )?;
+        let cpu = causal_conv1d_full(&x_cpu, &weight_cpu, &dims, &mut cpu_cache)?;
+
+        assert_close(&metal.to_device(&Device::Cpu)?, &cpu)?;
+        assert_close(
+            &metal_cache.conv_state.to_device(&Device::Cpu)?,
+            &cpu_cache.conv_state,
+        )
     }
 }

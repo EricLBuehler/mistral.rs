@@ -8,6 +8,7 @@ pub mod fast_mmq;
 pub mod fast_mmvq;
 #[cfg(feature = "cuda")]
 mod ffi;
+mod mmap;
 #[cfg(all(feature = "cuda", has_marlin_kernels))]
 mod packed_affine;
 mod weight_source;
@@ -51,7 +52,7 @@ pub struct GgufMatMul {
     _gguf_affine_reservation: Option<packed_affine::Reservation>,
 }
 
-fn ggml_dtype_to_uqff_code(dtype: GgmlDType) -> u32 {
+pub(crate) fn ggml_dtype_to_uqff_code(dtype: GgmlDType) -> u32 {
     match dtype {
         GgmlDType::F32 => 0,
         GgmlDType::F16 => 1,

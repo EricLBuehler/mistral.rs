@@ -153,7 +153,7 @@ pub(crate) fn cache_finished_sequence(
     if !prefix_cacher.accepts_sequence_cache() {
         return Ok(());
     }
-    let recurrent_snapshots = if this.cache().is_hybrid() {
+    let (recurrent_snapshots, auxiliary_snapshots) = if this.cache().is_hybrid() {
         let Some(idx) = seq.recurrent_state_idx() else {
             tracing::warn!(
                 sequence_id = seq.id(),
@@ -162,12 +162,12 @@ pub(crate) fn cache_finished_sequence(
             return Ok(());
         };
         this.flush_recurrent_speculative_transitions(&[*seq.id()])?;
-        match this
-            .cache()
-            .hybrid()
-            .snapshot_recurrent_state(*seq.id(), idx)
-        {
-            Ok(snapshots) => Some(snapshots),
+        // Both snapshots must be captured under a single cache guard: the pipeline cache
+        // mutex is not reentrant, so locking it again while the recurrent snapshot guard
+        // from this scope is still alive would deadlock the engine thread.
+        let hybrid_cache = this.cache().hybrid();
+        let recurrent_snapshots = match hybrid_cache.snapshot_recurrent_state(*seq.id(), idx) {
+            Ok(snapshots) => snapshots,
             Err(error) => {
                 tracing::warn!(
                     sequence_id = seq.id(),
@@ -176,11 +176,23 @@ pub(crate) fn cache_finished_sequence(
                 );
                 return Ok(());
             }
-        }
+        };
+        let auxiliary_snapshots = match hybrid_cache.snapshot_auxiliary_state(idx) {
+            Ok(snapshots) => snapshots,
+            Err(error) => {
+                tracing::warn!(
+                    sequence_id = seq.id(),
+                    %error,
+                    "Skipping hybrid prefix cache entry after auxiliary snapshot failure"
+                );
+                return Ok(());
+            }
+        };
+        (Some(recurrent_snapshots), Some(auxiliary_snapshots))
     } else {
-        None
+        (None, None)
     };
-    prefix_cacher.add_sequence(seq, recurrent_snapshots);
+    prefix_cacher.add_sequence(seq, recurrent_snapshots, auxiliary_snapshots);
     prefix_cacher.evict_caches()?;
     Ok(())
 }
@@ -1555,6 +1567,7 @@ mod tests {
         stop_tokens: Vec<u32>,
         max_len: Option<usize>,
         ignore_eos: bool,
+        layers: usize,
     ) -> Sequence {
         let (tx, _rx) = channel(1);
         let sampler = Sampler::new(
@@ -1578,7 +1591,7 @@ mod tests {
             "prompt".to_string(),
             0,
             0,
-            0,
+            layers,
             tx,
             sampler,
             stop_tokens,
@@ -1861,7 +1874,7 @@ mod tests {
 
     #[test]
     fn greedy_terminal_prediction_matches_sequence_stop_rules() {
-        let mut seq = terminal_test_sequence(vec![], None, false);
+        let mut seq = terminal_test_sequence(vec![], None, false, 0);
         let seqs = [&mut seq];
         assert!(cuda_token_batch_will_finish_with_metadata(
             &seqs,
@@ -1882,7 +1895,7 @@ mod tests {
         )
         .unwrap());
 
-        let mut seq = terminal_test_sequence(vec![9], None, false);
+        let mut seq = terminal_test_sequence(vec![9], None, false, 0);
         let seqs = [&mut seq];
         assert!(
             cuda_token_batch_will_finish_with_metadata(&seqs, &[9], &[true], &[], 1024, false,)
@@ -1898,7 +1911,7 @@ mod tests {
         )
         .unwrap());
 
-        let mut seq = terminal_test_sequence(vec![], Some(1), false);
+        let mut seq = terminal_test_sequence(vec![], Some(1), false, 0);
         let seqs = [&mut seq];
         assert!(
             cuda_token_batch_will_finish_with_metadata(&seqs, &[7], &[true], &[], 1024, false,)
@@ -1908,7 +1921,7 @@ mod tests {
 
     #[test]
     fn greedy_terminal_prediction_rejects_mismatched_rows() {
-        let mut seq = terminal_test_sequence(vec![], None, false);
+        let mut seq = terminal_test_sequence(vec![], None, false, 0);
         let seqs = [&mut seq];
         assert!(
             cuda_token_batch_will_finish_with_metadata(&seqs, &[], &[true], &[], 1024, false,)
@@ -1918,5 +1931,250 @@ mod tests {
             cuda_token_batch_will_finish_with_metadata(&seqs, &[7], &[], &[], 1024, false,)
                 .is_err()
         );
+    }
+
+    #[derive(Debug, Default)]
+    struct RecordingAuxiliaryState {
+        snapshot_slots: std::sync::Mutex<Vec<usize>>,
+    }
+
+    impl crate::kv_cache::HybridAuxiliaryState for RecordingAuxiliaryState {
+        fn snapshot_slot(
+            &self,
+            slot_idx: usize,
+        ) -> Result<crate::kv_cache::HybridAuxiliarySnapshot> {
+            self.snapshot_slots.lock().unwrap().push(slot_idx);
+            Ok(Arc::new(format!("snapshot:{slot_idx}")))
+        }
+
+        fn validate_restore_slot(
+            &self,
+            _slot_idx: usize,
+            _snapshot: &crate::kv_cache::HybridAuxiliarySnapshot,
+        ) -> Result<()> {
+            Ok(())
+        }
+
+        fn restore_slot(
+            &self,
+            _slot_idx: usize,
+            _snapshot: &crate::kv_cache::HybridAuxiliarySnapshot,
+        ) -> Result<()> {
+            Ok(())
+        }
+
+        fn reset_slot(&self, _slot_idx: usize) -> Result<()> {
+            Ok(())
+        }
+
+        fn release_slot(&self, _slot_idx: usize) -> Result<()> {
+            Ok(())
+        }
+
+        fn clear(&self) -> Result<()> {
+            Ok(())
+        }
+    }
+
+    /// Minimal pipeline stub whose only job is to expose a hybrid cache, so
+    /// `cache_finished_sequence` can be exercised end to end.
+    struct HybridCachePipelineStub {
+        cache: crate::kv_cache::EitherCache,
+        device: candle_core::Device,
+        metadata: Arc<crate::pipeline::GeneralMetadata>,
+    }
+
+    impl crate::pipeline::CacheManagerMixin for HybridCachePipelineStub {
+        fn clone_in_cache(&self, _seqs: &mut [&mut Sequence]) -> candle_core::Result<()> {
+            Ok(())
+        }
+
+        fn clone_out_cache(&self, _seqs: &mut [&mut Sequence]) {}
+
+        fn set_none_cache(
+            &self,
+            _seqs: &mut [&mut Sequence],
+            _reset_non_granular: bool,
+            _modify_draft_cache: bool,
+            _load_preallocated_cache: bool,
+        ) -> candle_core::Result<()> {
+            Ok(())
+        }
+
+        fn cache(&self) -> &crate::kv_cache::EitherCache {
+            &self.cache
+        }
+    }
+
+    impl crate::pipeline::IsqPipelineMixin for HybridCachePipelineStub {
+        fn re_isq_model(&mut self, _dtype: mistralrs_quant::IsqType) -> anyhow::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl crate::pipeline::AnyMoePipelineMixin for HybridCachePipelineStub {}
+
+    impl crate::pipeline::MetadataMixin for HybridCachePipelineStub {
+        fn device(&self) -> candle_core::Device {
+            self.device.clone()
+        }
+
+        fn tokenizer(&self) -> Option<Arc<tokenizers::Tokenizer>> {
+            None
+        }
+
+        fn name(&self) -> String {
+            "hybrid-cache-regression-stub".to_string()
+        }
+
+        fn reset_non_granular_state(&self) {}
+
+        fn get_metadata(&self) -> Arc<crate::pipeline::GeneralMetadata> {
+            Arc::clone(&self.metadata)
+        }
+
+        fn device_mapper(&self) -> Option<&dyn crate::device_map::DeviceMapper> {
+            None
+        }
+    }
+
+    impl crate::pipeline::PreProcessingMixin for HybridCachePipelineStub {
+        fn get_chat_template(&self) -> Option<Arc<crate::pipeline::chat_template::ChatTemplate>> {
+            None
+        }
+
+        fn get_input_processor_config(&self) -> Option<Arc<dyn std::any::Any>> {
+            None
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl crate::pipeline::Pipeline for HybridCachePipelineStub {
+        fn forward_inputs(
+            &mut self,
+            _inputs: Box<dyn std::any::Any>,
+            _return_raw_logits: bool,
+        ) -> std::result::Result<crate::pipeline::ForwardInputsResult, candle_core::Error> {
+            unimplemented!("not exercised by cache_finished_sequence")
+        }
+
+        async fn sample_causal_gen(
+            &self,
+            _seqs: &mut [&mut Sequence],
+            _logits: Vec<Tensor>,
+            _prefix_cacher: &mut crate::prefix_cacher::PrefixCacheManagerV2,
+            _disable_eos_stop: bool,
+            _rng: Arc<std::sync::Mutex<rand_isaac::Isaac64Rng>>,
+        ) -> std::result::Result<(), candle_core::Error> {
+            unimplemented!("not exercised by cache_finished_sequence")
+        }
+
+        fn category(&self) -> crate::pipeline::ModelCategory {
+            crate::pipeline::ModelCategory::Text
+        }
+    }
+
+    /// Regression test: `cache_finished_sequence` must capture the recurrent and auxiliary
+    /// snapshots under a single hybrid-cache lock. The pipeline cache mutex is not
+    /// reentrant, and re-acquiring it inside the recurrent-snapshot branch deadlocked the
+    /// engine thread whenever a hybrid sequence finished (hang at the startup dummy run).
+    #[test]
+    fn cache_finished_sequence_hybrid_snapshots_do_not_deadlock() {
+        let auxiliary = Arc::new(RecordingAuxiliaryState::default());
+        let devices = vec![candle_core::Device::Cpu, candle_core::Device::Cpu];
+        let mut hybrid = crate::kv_cache::HybridCache::new(
+            crate::kv_cache::HybridCacheConfig {
+                layer_types: vec![
+                    crate::kv_cache::HybridLayerType::Recurrent,
+                    crate::kv_cache::HybridLayerType::Recurrent,
+                ],
+                max_seq_len: 32,
+                recurrent: crate::kv_cache::RecurrentLayerConfig {
+                    conv_dim: 2,
+                    conv_width: 3,
+                    state: crate::kv_cache::RecurrentStateSpec::Opaque { dims: vec![2, 2] },
+                    recurrent_dtype: None,
+                },
+            },
+            DType::F32,
+            &devices,
+        )
+        .unwrap();
+        hybrid.register_auxiliary_state(
+            Arc::clone(&auxiliary) as Arc<dyn crate::kv_cache::HybridAuxiliaryState>
+        );
+
+        let metadata = Arc::new(crate::pipeline::GeneralMetadata {
+            max_seq_len: 4096,
+            llg_factory: None,
+            no_kv_cache: false,
+            no_prefix_cache: false,
+            num_hidden_layers: 2,
+            eos_tok: vec![],
+            kind: crate::pipeline::ModelKind::Normal,
+            is_xlora: false,
+            activation_dtype: DType::F32,
+            sliding_window: None,
+            cache_config: None,
+            cache_engine: None,
+            model_metadata: None,
+            modalities: crate::pipeline::Modalities {
+                input: vec![],
+                output: vec![crate::pipeline::SupportedModality::Text],
+            },
+            loaded_for_uqff_write: false,
+        });
+        let pipeline = Arc::new(HybridCachePipelineStub {
+            cache: crate::kv_cache::EitherCache::Hybrid(Arc::new(std::sync::Mutex::new(hybrid))),
+            device: candle_core::Device::Cpu,
+            metadata,
+        });
+
+        let mut seq = terminal_test_sequence(vec![], None, false, 2);
+        let slot = match &pipeline.cache {
+            crate::kv_cache::EitherCache::Hybrid(cache) => {
+                cache.lock().unwrap().allocate_seq(*seq.id()).unwrap()
+            }
+            _ => unreachable!("stub is built with a hybrid cache"),
+        };
+        seq.set_recurrent_state_idx(Some(slot));
+        let seq_toks = seq.get_toks().to_vec();
+
+        let mut prefix_cacher = crate::prefix_cacher::PrefixCacheManagerV2::new(4, false, false);
+
+        // Run on a separate thread so a deadlock surfaces as a join timeout instead of
+        // hanging the whole test binary.
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        let thread_pipeline = Arc::clone(&pipeline);
+        let handle = std::thread::spawn(move || {
+            let result =
+                cache_finished_sequence(thread_pipeline.as_ref(), &mut prefix_cacher, &mut seq);
+            let _ = done_tx.send((result, prefix_cacher));
+        });
+
+        let (result, prefix_cacher) = match done_rx.recv_timeout(std::time::Duration::from_secs(30))
+        {
+            Ok(outcome) => outcome,
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => panic!(
+                "cache_finished_sequence deadlocked: the hybrid cache mutex was re-acquired while already held"
+            ),
+            Err(err) => panic!("cache_finished_sequence thread did not report a result: {err}"),
+        };
+        result.expect("cache_finished_sequence should succeed");
+
+        // One snapshot per recurrent layer and one per registered auxiliary state must
+        // both reach the prefix cache entry.
+        let (recurrent_snapshots, auxiliary_snapshots) = prefix_cacher
+            .cached_hybrid_prefix_state_lens_for_test(&seq_toks)
+            .expect("finished sequence should be cached");
+        assert_eq!(recurrent_snapshots, 2);
+        assert_eq!(auxiliary_snapshots, 1);
+        assert_eq!(
+            *auxiliary.snapshot_slots.lock().unwrap(),
+            vec![slot],
+            "auxiliary snapshot must be captured exactly once for the sequence slot"
+        );
+
+        handle.join().expect("worker thread panicked");
     }
 }

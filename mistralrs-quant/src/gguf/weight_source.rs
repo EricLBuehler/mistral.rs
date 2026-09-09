@@ -5,6 +5,7 @@ use candle_nn::{var_builder::SimpleBackend, Linear};
 
 use super::{
     archive::{qtensor_from_gguf_data, GgufArchive, GgufEndian},
+    mmap::GgufMmapMatMul,
     GgufMatMul,
 };
 use crate::{
@@ -537,6 +538,14 @@ impl GgufWeightSource {
             );
         }
         let range = shard_range(shard, &dims)?;
+        if device.is_cpu() && range.is_none() {
+            let bias = self.load_bias(key, device, range, dims.len())?;
+            return Ok(Arc::new(GgufMmapMatMul::new(
+                self.archive.clone(),
+                source_name,
+                bias,
+            )?));
+        }
         let weight = if let Some((dim, start, len)) = range {
             let shard_info = &self.archive.shards()[info.shard_index()];
             if shard_info.endian() != GgufEndian::Little {
@@ -886,6 +895,27 @@ impl QuantizedWeightSource for GgufWeightSource {
         };
         self.binding_pack_factor(&weight_name, binding, dtype)
             .map(Some)
+    }
+
+    fn cpu_resident_weight_bytes(&self) -> Option<usize> {
+        let mut total = 0usize;
+        for (native_name, binding) in &self.bindings {
+            let shape = self.shapes.get(native_name)?;
+            let direct_mmap = shape.len() >= 2
+                && binding.direct_tensor().is_some_and(|source_name| {
+                    self.archive
+                        .tensor_info(source_name)
+                        .is_ok_and(|info| !matches!(info.dtype().raw(), 0 | 1 | 30))
+                });
+            if direct_mmap {
+                continue;
+            }
+            let bytes = checked_elem_count(shape)
+                .ok()?
+                .checked_mul(self.output_dtypes.get(native_name)?.size_in_bytes())?;
+            total = total.checked_add(bytes)?;
+        }
+        Some(total)
     }
 }
 
@@ -1670,6 +1700,14 @@ mod tests {
         let archive = Arc::new(GgufArchive::open_file(file.path())?);
         let bindings = GgufBindingMap::new()
             .with_binding(
+                "model.experts.direct.weight",
+                GgufTensorBinding::tensor("experts.gate.weight"),
+            )
+            .with_binding(
+                "model.experts.direct.bias",
+                GgufTensorBinding::tensor("experts.gate.bias"),
+            )
+            .with_binding(
                 "model.experts.gate_up.weight",
                 GgufTensorBinding::concat(
                     vec![
@@ -1697,26 +1735,46 @@ mod tests {
         Ok((file, source, expected, expected_bias))
     }
 
-    fn assert_close(lhs: &Tensor, rhs: &Tensor) -> Result<()> {
+    fn assert_close_with_tolerance(lhs: &Tensor, rhs: &Tensor, tolerance: f32) -> Result<()> {
         assert_eq!(lhs.dims(), rhs.dims());
         let max_diff = (lhs - rhs)?.abs()?.max_all()?.to_scalar::<f32>()?;
-        assert!(max_diff <= 0.003, "max diff {max_diff}");
+        assert!(max_diff <= tolerance, "max diff {max_diff}");
         Ok(())
+    }
+
+    fn assert_close(lhs: &Tensor, rhs: &Tensor) -> Result<()> {
+        assert_close_with_tolerance(lhs, rhs, 0.003)
     }
 
     #[test]
     fn direct_bindings_stay_packed_and_shard_before_loading() -> Result<()> {
         let (_file, source, expected, _) = test_source()?;
+        assert!(source.cpu_resident_weight_bytes().unwrap() > 0);
 
         let full = source
             .load_linear("model.linear", &Device::Cpu, Shard::default())?
             .unwrap();
-        assert_eq!(
-            full.get_qtensor().unwrap().shape().dims(),
-            [OUT_DIM, IN_DIM]
-        );
+        assert_eq!(full.name(), "gguf");
+        assert!(full.get_qtensor().is_none());
         assert!(full.has_bias());
         assert_close(&full.dequantize_w()?, &expected)?;
+        let input = patterned(3, IN_DIM, 23)?.reshape((1, 3, IN_DIM))?;
+        let bias = Tensor::from_vec(vec![0.25f32, 0.5, 0.75, 1.0], OUT_DIM, &Device::Cpu)?;
+        let owned = GgufMatMul::from_qtensor(
+            source
+                .archive()
+                .load_qtensor("blk.0.weight", &Device::Cpu)?,
+            Some(bias),
+        );
+        assert_close(&full.forward(&input)?, &owned.forward(&input)?)?;
+        let ids = Tensor::from_vec(vec![3u32, 0, 2], (1, 3), &Device::Cpu)?;
+        let expected_embedding = expected
+            .index_select(&ids.flatten_all()?, 0)?
+            .reshape((1, 3, IN_DIM))?;
+        assert_close(
+            &full.embedding_forward(&ids, DType::F32)?,
+            &expected_embedding,
+        )?;
 
         let output_shard = source
             .load_linear(
@@ -1772,6 +1830,7 @@ mod tests {
         let with_weight_suffix = source
             .load_linear("model.linear.weight", &Device::Cpu, Shard::default())?
             .unwrap();
+        assert_eq!(with_weight_suffix.name(), "gguf");
         assert!(with_weight_suffix.has_bias());
 
         let float = source
@@ -1788,6 +1847,7 @@ mod tests {
         );
         let uniform =
             GgufWeightSource::new(source.archive().clone(), &uniform_bindings, DType::F32)?;
+        assert_eq!(uniform.cpu_resident_weight_bytes(), Some(0));
         assert_eq!(uniform.pack_factor(DType::F32)?, 7);
 
         let multimodal_bindings = GgufBindingMap::new()
@@ -1829,6 +1889,31 @@ mod tests {
         assert_eq!(stacked.dequantize_w()?.dims(), [2, OUT_DIM, IN_DIM]);
         assert!(stacked.get_qtensor().is_none());
         Ok(())
+    }
+
+    #[test]
+    fn direct_rank_three_experts_stay_mmap_backed() -> Result<()> {
+        let (_file, source, _, _) = expert_source()?;
+        let layer = source
+            .load_linear("model.experts.direct", &Device::Cpu, Shard::default())?
+            .unwrap();
+        assert_eq!(layer.name(), "gguf");
+        assert!(layer.get_qtensor().is_none());
+
+        let input = patterned(2, IN_DIM, 31)?.reshape((2, 1, IN_DIM))?;
+        let indices = Tensor::from_vec(vec![0u32, 2, 1, 0], (2, 2), &Device::Cpu)?;
+        let weight = source
+            .archive()
+            .load_qtensor("experts.gate.weight", &Device::Cpu)?;
+        let bias = source.materialize_tensor("model.experts.direct.bias", &Device::Cpu)?;
+        let owned = GgufMatMul::from_qtensor(weight, Some(bias));
+        // The owned aarch64 path uses Candle's private repacked expert kernel;
+        // mmap storage uses the public canonical GGML kernel with different rounding.
+        assert_close_with_tolerance(
+            &layer.gather_forward(&input, &indices)?,
+            &owned.gather_forward(&input, &indices)?,
+            0.15,
+        )
     }
 
     #[test]

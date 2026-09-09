@@ -43,7 +43,7 @@ pub(crate) struct NormalConfigBuilder {
     build: BuilderFn,
 }
 
-pub(crate) const NORMAL_CONFIG_BUILDERS: &[NormalConfigBuilder; 26] = &[
+pub(crate) const NORMAL_CONFIG_BUILDERS: &[NormalConfigBuilder; 27] = &[
     NormalConfigBuilder {
         loader: NormalLoaderType::Mistral,
         build: build_mistral,
@@ -147,6 +147,10 @@ pub(crate) const NORMAL_CONFIG_BUILDERS: &[NormalConfigBuilder; 26] = &[
     NormalConfigBuilder {
         loader: NormalLoaderType::Lfm2Moe,
         build: build_lfm2_moe,
+    },
+    NormalConfigBuilder {
+        loader: NormalLoaderType::Qwen4Exp,
+        build: build_qwen4_exp,
     },
 ];
 
@@ -635,6 +639,15 @@ impl<'a> MetadataView<'a> {
         })
     }
 
+    fn required_u64_values(&self, suffix: &str) -> SynthesisResult<Vec<u64>> {
+        let key = self.key(suffix);
+        values_u64(self.required_value(suffix)?).ok_or_else(|| {
+            NormalConfigSynthesisError::new(format!(
+                "GGUF metadata `{key}` must be an integer or integer array"
+            ))
+        })
+    }
+
     fn per_layer_usize(
         &self,
         suffix: &str,
@@ -821,6 +834,21 @@ impl<'a> MetadataView<'a> {
         u32::try_from(value).map(Some).map_err(|_| {
             NormalConfigSynthesisError::new(format!(
                 "GGUF metadata `{key}` value {value} does not fit a token id"
+            ))
+        })
+    }
+
+    fn required_token_id(&self, suffix: &str) -> SynthesisResult<u32> {
+        let value = value_u64(self.required_value(suffix)?).ok_or_else(|| {
+            NormalConfigSynthesisError::new(format!(
+                "GGUF metadata `{}` must be a non-negative integer",
+                self.key(suffix)
+            ))
+        })?;
+        u32::try_from(value).map_err(|_| {
+            NormalConfigSynthesisError::new(format!(
+                "GGUF metadata `{}` value {value} does not fit a token id",
+                self.key(suffix)
             ))
         })
     }
@@ -1052,6 +1080,13 @@ fn values_usize(value: &GgufValue) -> Option<Vec<usize>> {
     match value {
         GgufValue::Array(values) => values.iter().map(value_usize).collect(),
         _ => value_usize(value).map(|value| vec![value]),
+    }
+}
+
+fn values_u64(value: &GgufValue) -> Option<Vec<u64>> {
+    match value {
+        GgufValue::Array(values) => values.iter().map(value_u64).collect(),
+        _ => value_u64(value).map(|value| vec![value]),
     }
 }
 
@@ -1896,6 +1931,393 @@ fn build_qwen35(metadata: &MetadataView<'_>) -> SynthesisResult<JsonValue> {
     Ok(JsonValue::Object(config))
 }
 
+/// Qwen4Exp reference block compression: four tokens per QSA block, as recorded by the
+/// authoritative conversion of this architecture. Some re-quantized checkpoints emit an
+/// all-zero placeholder `attention.compress_ratios` array instead.
+const QWEN4_EXP_REFERENCE_COMPRESS_RATIO: usize = 4;
+
+fn build_qwen4_exp(metadata: &MetadataView<'_>) -> SynthesisResult<JsonValue> {
+    reject_unsupported_rope_scaling(metadata, "Qwen4Exp")?;
+    // Qwen4Exp checkpoints are pure MoE and omit the dense `feed_forward_length`; the
+    // routed expert width stands in for the standard intermediate size.
+    let moe_intermediate_size = metadata.required_uniform_usize("expert_feed_forward_length")?;
+    let shared_expert_intermediate_size = metadata
+        .optional_usize("expert_shared_feed_forward_length")?
+        .unwrap_or(moe_intermediate_size);
+    let fields =
+        StandardFields::read_with_intermediate_size(metadata, None, moe_intermediate_size)?;
+    let rotary_dim = metadata.required_usize("rope.dimension_count")?;
+    let partial_rotary_factor = ratio_f64(
+        metadata,
+        "partial_rotary_factor",
+        rotary_dim,
+        fields.head_dim,
+    )?;
+    if rotary_dim == 0 || rotary_dim > fields.head_dim || !rotary_dim.is_multiple_of(2) {
+        return Err(NormalConfigSynthesisError::new(format!(
+            "GGUF metadata `{}` must be positive, even, and no larger than head dimension {}",
+            metadata.key("rope.dimension_count"),
+            fields.head_dim
+        )));
+    }
+    if !fields.rope_theta.is_finite() || fields.rope_theta <= 0.0 {
+        return Err(NormalConfigSynthesisError::new(format!(
+            "GGUF metadata `{}` must be finite and positive",
+            metadata.key("rope.freq_base")
+        )));
+    }
+    let mut mrope_section = metadata.required_usize_values("rope.dimension_sections")?;
+    while mrope_section.last() == Some(&0) {
+        mrope_section.pop();
+    }
+    if mrope_section.len() != 3 || mrope_section.contains(&0) {
+        return Err(NormalConfigSynthesisError::new(format!(
+            "GGUF metadata `{}` must contain three non-zero MRoPE sections",
+            metadata.key("rope.dimension_sections")
+        )));
+    }
+    let section_width = mrope_section.iter().try_fold(0usize, |sum, width| {
+        sum.checked_add(*width)
+            .ok_or_else(|| NormalConfigSynthesisError::new("Qwen4Exp MRoPE section width overflow"))
+    })?;
+    if section_width.checked_mul(2) != Some(rotary_dim) {
+        return Err(NormalConfigSynthesisError::new(format!(
+            "GGUF metadata `{}` spans {} rotary dimensions, expected {rotary_dim}",
+            metadata.key("rope.dimension_sections"),
+            section_width.saturating_mul(2)
+        )));
+    }
+    let (layer_types, full_attention_interval) =
+        qwen4exp_layer_types(metadata, fields.num_hidden_layers)?;
+    let value_head_count = metadata.required_usize("ssm.time_step_rank")?;
+    let key_head_count = metadata.required_usize("ssm.group_count")?;
+    if key_head_count == 0
+        || value_head_count == 0
+        || !value_head_count.is_multiple_of(key_head_count)
+    {
+        return Err(NormalConfigSynthesisError::new(format!(
+            "Qwen4Exp has incompatible GDN head counts: {key_head_count} key and {value_head_count} value"
+        )));
+    }
+    let value_head_dim = exact_div(
+        metadata,
+        "linear_value_head_dim",
+        metadata.required_usize("ssm.inner_size")?,
+        value_head_count,
+    )?;
+    let num_experts = metadata.required_usize("expert_count")?;
+    let num_experts_per_tok = metadata.required_usize("expert_used_count")?;
+    if num_experts == 0 || num_experts_per_tok == 0 || num_experts_per_tok > num_experts {
+        return Err(NormalConfigSynthesisError::new(format!(
+            "Qwen4Exp expert routing is invalid: {num_experts_per_tok} of {num_experts} experts"
+        )));
+    }
+    let hc_count = metadata.required_usize("hyper_connection.count")?;
+    if hc_count <= 1 {
+        return Err(NormalConfigSynthesisError::new(format!(
+            "GGUF metadata `{}` must be greater than one, got {hc_count}",
+            metadata.key("hyper_connection.count")
+        )));
+    }
+    let hc_lowrank = metadata.required_usize("hyper_connection.low_rank")?;
+    if hc_lowrank == 0 {
+        return Err(NormalConfigSynthesisError::new(format!(
+            "GGUF metadata `{}` must be greater than zero",
+            metadata.key("hyper_connection.low_rank")
+        )));
+    }
+    let indexer_n_heads = metadata.required_usize("attention.indexer.head_count")?;
+    if indexer_n_heads == 0 {
+        return Err(NormalConfigSynthesisError::new(format!(
+            "GGUF metadata `{}` must be greater than zero",
+            metadata.key("attention.indexer.head_count")
+        )));
+    }
+    let indexer_head_dim = metadata.required_usize("attention.indexer.key_length")?;
+    let indexer_budget = metadata.required_usize("attention.indexer.top_k")?;
+    if indexer_budget == 0 {
+        return Err(NormalConfigSynthesisError::new(format!(
+            "GGUF metadata `{}` must be greater than zero",
+            metadata.key("attention.indexer.top_k")
+        )));
+    }
+    let compress_ratios = metadata.required_usize_values("attention.compress_ratios")?;
+    if compress_ratios.len() != fields.num_hidden_layers {
+        return Err(NormalConfigSynthesisError::new(format!(
+            "GGUF metadata `{}` has {} entries for {} layers",
+            metadata.key("attention.compress_ratios"),
+            compress_ratios.len(),
+            fields.num_hidden_layers
+        )));
+    }
+    // Recurrent layers record a zero compression ratio; the remaining entries carry the
+    // indexer's block compression width for each full-attention layer.
+    let attention_ratios: Vec<usize> = compress_ratios
+        .iter()
+        .copied()
+        .filter(|ratio| *ratio != 0)
+        .collect();
+    let full_attention_layers = layer_types
+        .iter()
+        .filter(|layer| **layer == "full_attention")
+        .count();
+    let indexer_compress_ratio = if attention_ratios.is_empty() && full_attention_layers > 0 {
+        // Some re-quantized checkpoints emit an all-zero placeholder array even though
+        // the tensor inventory proves the full-attention layers exist. Fall back to the
+        // architecture's reference block compression, loudly.
+        tracing::warn!(
+            "GGUF metadata `{}` is all zeros; falling back to the Qwen4Exp reference compression ratio {}",
+            metadata.key("attention.compress_ratios"),
+            QWEN4_EXP_REFERENCE_COMPRESS_RATIO
+        );
+        QWEN4_EXP_REFERENCE_COMPRESS_RATIO
+    } else {
+        if attention_ratios.len() != full_attention_layers {
+            return Err(NormalConfigSynthesisError::new(format!(
+                "GGUF metadata `{}` lists {} full-attention compression ratios, but the layer pattern derives {full_attention_layers}",
+                metadata.key("attention.compress_ratios"),
+                attention_ratios.len()
+            )));
+        }
+        let ratio = uniform_value(metadata, "attention.compress_ratios", &attention_ratios)?;
+        if ratio == 0 {
+            return Err(NormalConfigSynthesisError::new(format!(
+                "GGUF metadata `{}` must list a non-zero compression ratio on every full-attention layer",
+                metadata.key("attention.compress_ratios")
+            )));
+        }
+        ratio
+    };
+
+    let mut config = fields.rms_json();
+    config.remove("sliding_window");
+    config.remove("rope_theta");
+    config.insert("hidden_act".into(), json!("silu"));
+    config.insert("head_dim".into(), json!(fields.head_dim));
+    config.insert(
+        "rope_parameters".into(),
+        json!({
+            "rope_theta": fields.rope_theta,
+            "mrope_section": mrope_section,
+            "partial_rotary_factor": partial_rotary_factor,
+            "mrope_interleaved": true,
+        }),
+    );
+    config.insert("moe_intermediate_size".into(), json!(moe_intermediate_size));
+    config.insert(
+        "shared_expert_intermediate_size".into(),
+        json!(shared_expert_intermediate_size),
+    );
+    config.insert("num_experts".into(), json!(num_experts));
+    config.insert("num_experts_per_tok".into(), json!(num_experts_per_tok));
+    config.insert(
+        "norm_topk_prob".into(),
+        json!(metadata
+            .optional_bool("expert_weights_norm")?
+            .unwrap_or(true)),
+    );
+    config.insert(
+        "full_attention_interval".into(),
+        json!(full_attention_interval),
+    );
+    config.insert("layer_types".into(), json!(layer_types));
+    config.insert(
+        "linear_conv_kernel_dim".into(),
+        json!(metadata.required_usize("ssm.conv_kernel")?),
+    );
+    config.insert(
+        "linear_key_head_dim".into(),
+        json!(metadata.required_usize("ssm.state_size")?),
+    );
+    config.insert("linear_value_head_dim".into(), json!(value_head_dim));
+    config.insert("linear_num_key_heads".into(), json!(key_head_count));
+    config.insert("linear_num_value_heads".into(), json!(value_head_count));
+    config.insert("hc_count".into(), json!(hc_count));
+    config.insert("hc_lowrank".into(), json!(hc_lowrank));
+    config.insert("indexer_n_heads".into(), json!(indexer_n_heads));
+    // The converter emits a single indexer key head; the model requires exactly one.
+    config.insert("indexer_kv_heads".into(), json!(1));
+    config.insert("indexer_head_dim".into(), json!(indexer_head_dim));
+    config.insert("indexer_budget".into(), json!(indexer_budget));
+    config.insert(
+        "indexer_compress_ratio".into(),
+        json!(indexer_compress_ratio),
+    );
+    config.insert("output_gate_type".into(), json!("sigmoid"));
+    if let Some(ple) = qwen4exp_ple_config(metadata, fields.num_hidden_layers)? {
+        for (key, value) in ple {
+            config.insert(key, value);
+        }
+    }
+    Ok(JsonValue::Object(config))
+}
+
+/// Derive per-layer types either from the converter's `attention.recurrent_layers` boolean
+/// array or from the `full_attention_interval` pattern, which must stay uniform because the
+/// native config cannot represent an irregular layout.
+fn qwen4exp_layer_types(
+    metadata: &MetadataView<'_>,
+    layer_count: usize,
+) -> SynthesisResult<(Vec<&'static str>, usize)> {
+    if let Some(value) = metadata.value("attention.recurrent_layers") {
+        let key = metadata.key("attention.recurrent_layers");
+        let GgufValue::Array(values) = value else {
+            return Err(NormalConfigSynthesisError::new(format!(
+                "GGUF metadata `{key}` must be a boolean array"
+            )));
+        };
+        if values.len() != layer_count {
+            return Err(NormalConfigSynthesisError::new(format!(
+                "GGUF metadata `{key}` has {} entries for {layer_count} layers",
+                values.len()
+            )));
+        }
+        let recurrent = values
+            .iter()
+            .map(value_bool)
+            .collect::<Option<Vec<_>>>()
+            .ok_or_else(|| {
+                NormalConfigSynthesisError::new(format!(
+                    "GGUF metadata `{key}` must contain only booleans"
+                ))
+            })?;
+        let interval = recurrent
+            .iter()
+            .position(|is_recurrent| !is_recurrent)
+            .ok_or_else(|| {
+                NormalConfigSynthesisError::new(format!(
+                    "GGUF metadata `{key}` lists no full-attention layer"
+                ))
+            })?
+            + 1;
+        if recurrent
+            .iter()
+            .enumerate()
+            .any(|(layer, is_recurrent)| *is_recurrent != ((layer + 1) % interval != 0))
+        {
+            return Err(NormalConfigSynthesisError::new(format!(
+                "Native Qwen4Exp config cannot represent the per-layer `{key}` pattern; every {interval}th layer must be a full-attention layer"
+            )));
+        }
+        let layer_types = recurrent
+            .into_iter()
+            .map(|is_recurrent| {
+                if is_recurrent {
+                    "linear_attention"
+                } else {
+                    "full_attention"
+                }
+            })
+            .collect::<Vec<_>>();
+        return Ok((layer_types, interval));
+    }
+    let interval = metadata
+        .optional_usize("full_attention_interval")?
+        .unwrap_or(4);
+    if interval == 0 || interval > layer_count {
+        return Err(NormalConfigSynthesisError::new(format!(
+            "Qwen4Exp full attention interval {interval} is invalid for {layer_count} layers"
+        )));
+    }
+    let layer_types = (0..layer_count)
+        .map(|layer| {
+            if (layer + 1) % interval == 0 {
+                "full_attention"
+            } else {
+                "linear_attention"
+            }
+        })
+        .collect::<Vec<_>>();
+    Ok((layer_types, interval))
+}
+
+/// Build the PLE configuration entries from 64-bit GGUF metadata; the hash constants are
+/// carried as integers end to end and never pass through floating point.
+fn qwen4exp_ple_config(
+    metadata: &MetadataView<'_>,
+    layer_count: usize,
+) -> SynthesisResult<Option<JsonMap<String, JsonValue>>> {
+    let Some(value) = metadata.value("ple.layers") else {
+        return Ok(None);
+    };
+    let layers = values_usize(value).ok_or_else(|| {
+        NormalConfigSynthesisError::new(format!(
+            "GGUF metadata `{}` must be an integer array of layer ids",
+            metadata.key("ple.layers")
+        ))
+    })?;
+    if layers.len() != 1 {
+        return Err(NormalConfigSynthesisError::new(format!(
+            "Qwen4Exp supports at most one PLE layer, but `{}` lists {} layers",
+            metadata.key("ple.layers"),
+            layers.len()
+        )));
+    }
+    let layer = layers[0];
+    if layer >= layer_count {
+        return Err(NormalConfigSynthesisError::new(format!(
+            "PLE layer {layer} is out of range for {layer_count} layers"
+        )));
+    }
+    let ngram_size = metadata.required_usize("ple.ngram_size")?;
+    if !(2..=4).contains(&ngram_size) {
+        return Err(NormalConfigSynthesisError::new(format!(
+            "GGUF metadata `{}` n-gram size {ngram_size} is out of range",
+            metadata.key("ple.ngram_size")
+        )));
+    }
+    let heads_per_ngram = metadata.required_usize("ple.heads_per_ngram")?;
+    let conv_kernel = metadata.required_usize("ple.conv_kernel")?;
+    let embed_dim = metadata.required_usize("embedding_length_per_layer_input")?;
+    if heads_per_ngram == 0 || conv_kernel == 0 || embed_dim == 0 {
+        return Err(NormalConfigSynthesisError::new(
+            "Qwen4Exp PLE heads per n-gram, convolution kernel, and embedding width must be non-zero",
+        ));
+    }
+    let head_count = (ngram_size - 1)
+        .checked_mul(heads_per_ngram)
+        .ok_or_else(|| NormalConfigSynthesisError::new("Qwen4Exp PLE head count overflow"))?;
+    let multipliers = metadata.required_u64_values("ple.layer_multipliers")?;
+    let head_offsets = metadata.required_u64_values("ple.head_offsets")?;
+    let head_vocab_sizes = metadata.required_u64_values("ple.head_vocab_sizes")?;
+    if multipliers.len() < ngram_size
+        || head_offsets.len() != head_count
+        || head_vocab_sizes.len() != head_count
+    {
+        return Err(NormalConfigSynthesisError::new(format!(
+            "GGUF PLE hash arrays must contain at least {ngram_size} multipliers and exactly {head_count} head offsets and vocabulary sizes"
+        )));
+    }
+    if head_vocab_sizes.contains(&0) {
+        return Err(NormalConfigSynthesisError::new(
+            "GGUF PLE head vocabulary sizes must be non-zero",
+        ));
+    }
+
+    // `embedding_length_per_layer_input` carries the per-head table row width; the
+    // model config's `ple_embed_dim` is the total concatenated width across all heads.
+    let ple_embed_dim = embed_dim
+        .checked_mul(head_count)
+        .ok_or_else(|| NormalConfigSynthesisError::new("Qwen4Exp PLE embedding width overflow"))?;
+    let mut ple = JsonMap::new();
+    ple.insert("ple_layer_ids".into(), json!([layer]));
+    ple.insert("ple_embed_dim".into(), json!(ple_embed_dim));
+    ple.insert("ple_conv_kernel_size".into(), json!(conv_kernel));
+    ple.insert("ngram_size".into(), json!(ngram_size));
+    ple.insert("heads_per_ngram".into(), json!(heads_per_ngram));
+    ple.insert("ple_layer_multipliers".into(), json!(multipliers));
+    ple.insert("ple_head_offsets".into(), json!(head_offsets));
+    ple.insert("ple_head_vocab_sizes".into(), json!(head_vocab_sizes));
+    ple.insert(
+        "eos_token_id".into(),
+        json!(metadata.required_token_id("ple.eos_token_id")?),
+    );
+    if let Some(image_token_id) = metadata.optional_token_id(&metadata.key("ple.image_token_id"))? {
+        ple.insert("image_token_id".into(), json!(image_token_id));
+    }
+    Ok(Some(ple))
+}
+
 fn build_lfm2(metadata: &MetadataView<'_>) -> SynthesisResult<JsonValue> {
     build_lfm(metadata, false)
 }
@@ -2560,6 +2982,18 @@ mod tests {
         );
     }
 
+    fn insert_u64_array(
+        metadata: &mut HashMap<String, GgufValue>,
+        architecture: CanonicalGgufArchitecture,
+        suffix: &str,
+        values: &[u64],
+    ) {
+        metadata.insert(
+            format!("{}.{suffix}", architecture.as_str()),
+            GgufValue::Array(values.iter().copied().map(GgufValue::U64).collect()),
+        );
+    }
+
     fn is_moe(loader: &NormalLoaderType) -> bool {
         matches!(
             loader,
@@ -2573,6 +3007,7 @@ mod tests {
                 | NormalLoaderType::GptOss
                 | NormalLoaderType::HunYuanMoEV1
                 | NormalLoaderType::Qwen3Next
+                | NormalLoaderType::Qwen4Exp
                 | NormalLoaderType::Lfm2Moe
         )
     }
@@ -2685,6 +3120,7 @@ mod tests {
             loader,
             NormalLoaderType::Qwen3Next
                 | NormalLoaderType::Qwen3_5
+                | NormalLoaderType::Qwen4Exp
                 | NormalLoaderType::GraniteMoeHybrid
         ) {
             insert_u32(&mut metadata, architecture, "ssm.conv_kernel", 4);
@@ -2724,6 +3160,95 @@ mod tests {
                         .map(str::to_string),
                 );
             }
+        }
+
+        if matches!(loader, NormalLoaderType::Qwen4Exp) {
+            insert_u32(&mut metadata, architecture, "hyper_connection.count", 4);
+            insert_u32(
+                &mut metadata,
+                architecture,
+                "hyper_connection.low_rank",
+                128,
+            );
+            insert_u32(
+                &mut metadata,
+                architecture,
+                "attention.indexer.head_count",
+                4,
+            );
+            insert_u32(
+                &mut metadata,
+                architecture,
+                "attention.indexer.key_length",
+                64,
+            );
+            insert_u32(&mut metadata, architecture, "attention.indexer.top_k", 8);
+            insert_u32_array(
+                &mut metadata,
+                architecture,
+                "attention.compress_ratios",
+                &[0, 0, 0, 4],
+            );
+            insert_u32_array(
+                &mut metadata,
+                architecture,
+                "rope.dimension_sections",
+                &[12, 12, 8, 0],
+            );
+            insert_u32_array(&mut metadata, architecture, "ple.layers", &[2]);
+            insert_u32(&mut metadata, architecture, "ple.ngram_size", 3);
+            insert_u32(&mut metadata, architecture, "ple.heads_per_ngram", 2);
+            insert_u32(&mut metadata, architecture, "ple.conv_kernel", 4);
+            insert_u32(&mut metadata, architecture, "ple.eos_token_id", 15);
+            insert_u32(
+                &mut metadata,
+                architecture,
+                "embedding_length_per_layer_input",
+                16,
+            );
+            insert_u64_array(
+                &mut metadata,
+                architecture,
+                "ple.layer_multipliers",
+                &[
+                    11_400_714_819_323_198_485,
+                    1_402_946_736_689_701_972,
+                    1_609_587_929_392_839_161,
+                ],
+            );
+            insert_u64_array(
+                &mut metadata,
+                architecture,
+                "ple.head_offsets",
+                &[0, 100, 200, 300],
+            );
+            insert_u64_array(
+                &mut metadata,
+                architecture,
+                "ple.head_vocab_sizes",
+                &[100, 100, 100, 100],
+            );
+            tensors.extend(
+                [
+                    "output_hc_norm.weight",
+                    "output_hc_down.weight",
+                    "output_hc_up.weight",
+                    "blk.0.hc_attn_norm.weight",
+                    "blk.0.hc_attn_down.weight",
+                    "blk.0.hc_attn_up.weight",
+                    "blk.0.hc_attn_inject.weight",
+                    "blk.0.hc_ffn_norm.weight",
+                    "blk.0.hc_ffn_down.weight",
+                    "blk.0.hc_ffn_up.weight",
+                    "blk.0.hc_ffn_inject.weight",
+                    "blk.1.ssm_a.weight",
+                    "blk.1.ssm_conv1d.weight",
+                    "blk.3.indexer.q_proj.weight",
+                    "blk.3.indexer.k_proj.weight",
+                ]
+                .into_iter()
+                .map(str::to_string),
+            );
         }
 
         if matches!(loader, NormalLoaderType::Lfm2 | NormalLoaderType::Lfm2Moe) {
@@ -2768,7 +3293,12 @@ mod tests {
         HashMap<String, GgufValue>,
         Vec<String>,
     ) {
-        let architecture = registry_adapter(loader).unwrap().architectures[0];
+        // qwen4exp has no registered adapter yet, so its fixture names the canonical
+        // architecture directly.
+        let architecture = match loader {
+            NormalLoaderType::Qwen4Exp => CanonicalGgufArchitecture::Qwen4Exp,
+            _ => registry_adapter(loader).unwrap().architectures[0],
+        };
         let (metadata, tensors) = fixture(loader, architecture);
         (architecture, metadata, tensors)
     }
@@ -2842,6 +3372,9 @@ mod tests {
             NormalLoaderType::Lfm2 | NormalLoaderType::Lfm2Moe => {
                 assert_deserializes::<models::lfm2::Config>(loader, config)
             }
+            NormalLoaderType::Qwen4Exp => {
+                assert_deserializes::<models::qwen4_exp::config::Config>(loader, config)
+            }
         }
     }
 
@@ -2852,6 +3385,7 @@ mod tests {
             NORMAL_CONFIG_BUILDERS.len()
         );
         assert_eq!(NORMAL_MODEL_ADAPTERS.len(), NORMAL_CONFIG_BUILDERS.len());
+        assert!(registry_adapter(&NormalLoaderType::Qwen4Exp).is_some());
 
         let mut builders = HashSet::new();
         for builder in NORMAL_CONFIG_BUILDERS {
@@ -2882,6 +3416,390 @@ mod tests {
             );
             assert_native_config_deserializes(&loader, config);
         }
+    }
+
+    #[test]
+    fn qwen4exp_synthesizes_official_shape_config() {
+        let loader = NormalLoaderType::Qwen4Exp;
+        let (_, metadata, tensors) = default_fixture(&loader);
+        let config = synthesize_normal_config_value(&loader, &metadata, &tensors).unwrap();
+
+        assert_eq!(config["architectures"], json!(["Qwen4ExpForCausalLM"]));
+        assert_eq!(config["model_type"], "qwen4_exp");
+        assert_eq!(config["hidden_act"], "silu");
+        assert_eq!(config["output_gate_type"], "sigmoid");
+        assert_eq!(config["hc_count"], 4);
+        assert_eq!(config["hc_lowrank"], 128);
+        assert_eq!(config["indexer_n_heads"], 4);
+        assert_eq!(config["indexer_kv_heads"], 1);
+        assert_eq!(config["indexer_head_dim"], 64);
+        assert_eq!(config["indexer_budget"], 8);
+        assert_eq!(config["indexer_compress_ratio"], 4);
+        assert_eq!(
+            config["layer_types"],
+            json!([
+                "linear_attention",
+                "linear_attention",
+                "linear_attention",
+                "full_attention"
+            ])
+        );
+        assert_eq!(config["full_attention_interval"], 4);
+        assert_eq!(config["linear_key_head_dim"], 64);
+        assert_eq!(config["linear_value_head_dim"], 128);
+        assert_eq!(config["linear_num_key_heads"], 4);
+        assert_eq!(config["linear_num_value_heads"], 8);
+        assert_eq!(config["num_experts"], 8);
+        assert_eq!(config["num_experts_per_tok"], 2);
+        assert_eq!(config["moe_intermediate_size"], 1024);
+        assert_eq!(config["shared_expert_intermediate_size"], 512);
+        // PLE hash constants are carried as integers end to end and stay bit-exact.
+        assert_eq!(
+            config["ple_layer_multipliers"],
+            json!([
+                11_400_714_819_323_198_485u64,
+                1_402_946_736_689_701_972u64,
+                1_609_587_929_392_839_161u64
+            ])
+        );
+        assert_eq!(config["ple_head_offsets"], json!([0u64, 100, 200, 300]));
+        assert_eq!(
+            config["ple_head_vocab_sizes"],
+            json!([100u64, 100, 100, 100])
+        );
+        assert_eq!(config["ple_layer_ids"], json!([2]));
+        assert_eq!(config["ple_embed_dim"], 64);
+        assert_eq!(config["ple_conv_kernel_size"], 4);
+        assert_eq!(config["ngram_size"], 3);
+        assert_eq!(config["heads_per_ngram"], 2);
+        assert_eq!(config["eos_token_id"], 15);
+
+        let config: models::qwen4_exp::config::Config = serde_json::from_value(config).unwrap();
+        config.validate().unwrap();
+        assert_eq!(config.ple_layer_multipliers[0], 11_400_714_819_323_198_485);
+        assert!(config.ple_layer_multipliers[0] > (1u64 << 53));
+    }
+
+    #[test]
+    fn qwen4exp_rejects_non_uniform_compress_ratios() {
+        let loader = NormalLoaderType::Qwen4Exp;
+        let (architecture, mut metadata, tensors) = default_fixture(&loader);
+        insert_u32(&mut metadata, architecture, "full_attention_interval", 2);
+        insert_u32_array(
+            &mut metadata,
+            architecture,
+            "attention.compress_ratios",
+            &[0, 4, 0, 3],
+        );
+        let error = synthesize_normal_config_value(&loader, &metadata, &tensors).unwrap_err();
+        assert!(error.to_string().contains("attention.compress_ratios"));
+    }
+
+    #[test]
+    fn qwen4exp_rejects_multiple_ple_layers() {
+        let loader = NormalLoaderType::Qwen4Exp;
+        let (architecture, mut metadata, tensors) = default_fixture(&loader);
+        insert_u32_array(&mut metadata, architecture, "ple.layers", &[0, 2]);
+        let error = synthesize_normal_config_value(&loader, &metadata, &tensors).unwrap_err();
+        assert!(error.to_string().contains("at most one PLE layer"));
+    }
+
+    #[test]
+    fn qwen4exp_derives_layer_types_from_recurrent_layers() {
+        let loader = NormalLoaderType::Qwen4Exp;
+        let (architecture, mut metadata, tensors) = default_fixture(&loader);
+        metadata.insert(
+            format!("{}.attention.recurrent_layers", architecture.as_str()),
+            GgufValue::Array(vec![
+                GgufValue::Bool(true),
+                GgufValue::Bool(true),
+                GgufValue::Bool(true),
+                GgufValue::Bool(false),
+            ]),
+        );
+        let config = synthesize_normal_config_value(&loader, &metadata, &tensors).unwrap();
+        assert_eq!(
+            config["layer_types"],
+            json!([
+                "linear_attention",
+                "linear_attention",
+                "linear_attention",
+                "full_attention"
+            ])
+        );
+    }
+
+    #[test]
+    fn qwen4exp_rejects_irregular_recurrent_layers() {
+        let loader = NormalLoaderType::Qwen4Exp;
+        let (architecture, mut metadata, tensors) = default_fixture(&loader);
+        metadata.insert(
+            format!("{}.attention.recurrent_layers", architecture.as_str()),
+            GgufValue::Array(vec![
+                GgufValue::Bool(false),
+                GgufValue::Bool(true),
+                GgufValue::Bool(true),
+                GgufValue::Bool(true),
+            ]),
+        );
+        let error = synthesize_normal_config_value(&loader, &metadata, &tensors).unwrap_err();
+        assert!(error.to_string().contains("cannot represent the per-layer"));
+    }
+
+    #[test]
+    fn qwen4exp_synthesizes_real_unsloth_checkpoint_metadata() {
+        let loader = NormalLoaderType::Qwen4Exp;
+        let architecture = CanonicalGgufArchitecture::Qwen4Exp;
+        let mut metadata = HashMap::new();
+        metadata.insert(
+            "general.architecture".to_string(),
+            GgufValue::String(architecture.as_str().to_string()),
+        );
+        // Captured from unsloth/Qwen3.8-Flash-Next-GGUF (UD-Q2_K_XL shard 1 metadata).
+        insert_u32(&mut metadata, architecture, "block_count", 48);
+        insert_u32(&mut metadata, architecture, "context_length", 262_144);
+        insert_u32(&mut metadata, architecture, "embedding_length", 2_560);
+        insert_u32(&mut metadata, architecture, "vocab_size", 248_320);
+        insert_u32(&mut metadata, architecture, "attention.head_count", 24);
+        insert_u32(&mut metadata, architecture, "attention.head_count_kv", 2);
+        insert_u32(&mut metadata, architecture, "attention.key_length", 256);
+        insert_u32(&mut metadata, architecture, "attention.value_length", 256);
+        insert_f32(
+            &mut metadata,
+            architecture,
+            "attention.layer_norm_rms_epsilon",
+            1e-6,
+        );
+        insert_u32(&mut metadata, architecture, "rope.dimension_count", 64);
+        insert_f32(&mut metadata, architecture, "rope.freq_base", 10_000_000.0);
+        insert_u32_array(
+            &mut metadata,
+            architecture,
+            "rope.dimension_sections",
+            &[11, 11, 10, 0],
+        );
+        insert_u32(&mut metadata, architecture, "expert_count", 512);
+        insert_u32(&mut metadata, architecture, "expert_used_count", 10);
+        insert_u32(
+            &mut metadata,
+            architecture,
+            "expert_feed_forward_length",
+            640,
+        );
+        insert_u32(
+            &mut metadata,
+            architecture,
+            "expert_shared_feed_forward_length",
+            640,
+        );
+        insert_u32(&mut metadata, architecture, "ssm.conv_kernel", 4);
+        insert_u32(&mut metadata, architecture, "ssm.state_size", 128);
+        insert_u32(&mut metadata, architecture, "ssm.group_count", 16);
+        insert_u32(&mut metadata, architecture, "ssm.time_step_rank", 48);
+        insert_u32(&mut metadata, architecture, "ssm.inner_size", 6_144);
+        insert_u32(&mut metadata, architecture, "full_attention_interval", 4);
+        insert_u32(&mut metadata, architecture, "hyper_connection.count", 4);
+        insert_u32(
+            &mut metadata,
+            architecture,
+            "hyper_connection.low_rank",
+            320,
+        );
+        insert_u32(
+            &mut metadata,
+            architecture,
+            "attention.indexer.head_count",
+            4,
+        );
+        insert_u32(
+            &mut metadata,
+            architecture,
+            "attention.indexer.key_length",
+            128,
+        );
+        insert_u32(
+            &mut metadata,
+            architecture,
+            "attention.indexer.top_k",
+            2_048,
+        );
+        let compress_ratios: Vec<u32> = (0..48)
+            .map(|layer| if (layer + 1) % 4 == 0 { 4 } else { 0 })
+            .collect();
+        insert_u32_array(
+            &mut metadata,
+            architecture,
+            "attention.compress_ratios",
+            &compress_ratios,
+        );
+        insert_u32_array(&mut metadata, architecture, "ple.layers", &[1]);
+        insert_u32(&mut metadata, architecture, "ple.ngram_size", 3);
+        insert_u32(&mut metadata, architecture, "ple.heads_per_ngram", 8);
+        insert_u32(&mut metadata, architecture, "ple.conv_kernel", 4);
+        insert_u32(&mut metadata, architecture, "ple.eos_token_id", 248_044);
+        insert_u32(&mut metadata, architecture, "ple.image_token_id", 248_056);
+        insert_u32(
+            &mut metadata,
+            architecture,
+            "embedding_length_per_layer_input",
+            160,
+        );
+        insert_u64_array(
+            &mut metadata,
+            architecture,
+            "ple.layer_multipliers",
+            &[23_703_573_157_769, 20_109_073_645_365, 8_052_911_324_071],
+        );
+        insert_u64_array(
+            &mut metadata,
+            architecture,
+            "ple.head_offsets",
+            &[
+                0,
+                20_000_003,
+                40_000_026,
+                60_000_059,
+                80_000_106,
+                100_000_165,
+                120_000_228,
+                140_000_297,
+                160_000_374,
+                180_000_455,
+                200_000_548,
+                220_000_655,
+                240_000_802,
+                260_000_955,
+                280_001_114,
+                300_001_275,
+            ],
+        );
+        insert_u64_array(
+            &mut metadata,
+            architecture,
+            "ple.head_vocab_sizes",
+            &[
+                20_000_003, 20_000_023, 20_000_033, 20_000_047, 20_000_059, 20_000_063, 20_000_069,
+                20_000_077, 20_000_081, 20_000_093, 20_000_107, 20_000_147, 20_000_153, 20_000_159,
+                20_000_161, 20_000_171,
+            ],
+        );
+        // Marker tensors that schema validation requires for `qwen4exp`, using the real
+        // Unsloth shard names.
+        let tensors = vec![
+            "token_embd.weight".to_string(),
+            "output.weight".to_string(),
+            "output_hc_norm.weight".to_string(),
+            "output_hc_down.weight".to_string(),
+            "output_hc_up.weight".to_string(),
+            "per_layer_token_embd.weight".to_string(),
+            "blk.0.hc_attn_norm.weight".to_string(),
+            "blk.0.hc_attn_down.weight".to_string(),
+            "blk.0.hc_attn_up.weight".to_string(),
+            "blk.0.hc_attn_inject.weight".to_string(),
+            "blk.0.hc_ffn_norm.weight".to_string(),
+            "blk.0.hc_ffn_down.weight".to_string(),
+            "blk.0.hc_ffn_up.weight".to_string(),
+            "blk.0.hc_ffn_inject.weight".to_string(),
+            "blk.3.indexer.q_proj.weight".to_string(),
+            "blk.3.indexer.k_proj.weight".to_string(),
+            "blk.0.ssm_a".to_string(),
+            "blk.0.ssm_conv1d.weight".to_string(),
+            "blk.0.ffn_gate_inp.weight".to_string(),
+            "blk.0.ffn_gate_exps.weight".to_string(),
+            "blk.0.ffn_up_exps.weight".to_string(),
+            "blk.0.ffn_down_exps.weight".to_string(),
+        ];
+
+        let config = synthesize_normal_config_value(&loader, &metadata, &tensors).unwrap();
+        assert_eq!(config["hidden_size"], 2_560);
+        assert_eq!(config["num_hidden_layers"], 48);
+        assert_eq!(config["num_attention_heads"], 24);
+        assert_eq!(config["num_key_value_heads"], 2);
+        assert_eq!(config["head_dim"], 256);
+        assert_eq!(config["intermediate_size"], 640);
+        assert_eq!(config["moe_intermediate_size"], 640);
+        assert_eq!(config["shared_expert_intermediate_size"], 640);
+        assert_eq!(config["num_experts"], 512);
+        assert_eq!(config["num_experts_per_tok"], 10);
+        assert_eq!(config["hc_count"], 4);
+        assert_eq!(config["hc_lowrank"], 320);
+        assert_eq!(config["indexer_n_heads"], 4);
+        assert_eq!(config["indexer_kv_heads"], 1);
+        assert_eq!(config["indexer_head_dim"], 128);
+        assert_eq!(config["indexer_budget"], 2_048);
+        assert_eq!(config["indexer_compress_ratio"], 4);
+        assert_eq!(config["full_attention_interval"], 4);
+        let expected_layer_types: Vec<String> = (0..48)
+            .map(|layer| {
+                if (layer + 1) % 4 == 0 {
+                    "full_attention".to_string()
+                } else {
+                    "linear_attention".to_string()
+                }
+            })
+            .collect();
+        assert_eq!(config["layer_types"], json!(expected_layer_types));
+        assert_eq!(config["linear_key_head_dim"], 128);
+        assert_eq!(config["linear_value_head_dim"], 128);
+        assert_eq!(config["linear_num_key_heads"], 16);
+        assert_eq!(config["linear_num_value_heads"], 48);
+        assert_eq!(config["ple_layer_ids"], json!([1]));
+        assert_eq!(config["ple_embed_dim"], 2_560);
+        assert_eq!(config["ple_conv_kernel_size"], 4);
+        assert_eq!(config["ngram_size"], 3);
+        assert_eq!(config["heads_per_ngram"], 8);
+        assert_eq!(config["eos_token_id"], 248_044);
+        assert_eq!(config["image_token_id"], 248_056);
+        assert_eq!(
+            config["ple_layer_multipliers"],
+            json!([
+                23_703_573_157_769u64,
+                20_109_073_645_365u64,
+                8_052_911_324_071u64
+            ])
+        );
+        assert_eq!(
+            config["rope_parameters"]["mrope_section"],
+            json!([11, 11, 10])
+        );
+        assert_eq!(config["rope_parameters"]["rope_theta"], json!(10_000_000.0));
+        assert_eq!(
+            config["rope_parameters"]["partial_rotary_factor"],
+            json!(0.25)
+        );
+
+        let config: models::qwen4_exp::config::Config = serde_json::from_value(config).unwrap();
+        config.validate().unwrap();
+        assert_eq!(config.hidden_size, 2_560);
+        assert_eq!(config.head_dim, 256);
+        assert_eq!(config.num_hidden_layers, 48);
+        assert_eq!(config.ple_embed_dim, 2_560);
+        assert_eq!(config.ple_layer_multipliers[0], 23_703_573_157_769);
+        assert_eq!(config.layer_types.len(), 48);
+    }
+
+    #[test]
+    fn qwen4exp_falls_back_when_compress_ratios_all_zero() {
+        let loader = NormalLoaderType::Qwen4Exp;
+        let (architecture, mut metadata, tensors) = default_fixture(&loader);
+        insert_u32_array(
+            &mut metadata,
+            architecture,
+            "attention.compress_ratios",
+            &[0, 0, 0, 0],
+        );
+        let config = synthesize_normal_config_value(&loader, &metadata, &tensors).unwrap();
+        assert_eq!(config["indexer_compress_ratio"], 4);
+        assert_eq!(config["full_attention_interval"], 4);
+        assert_eq!(
+            config["layer_types"],
+            json!([
+                "linear_attention",
+                "linear_attention",
+                "linear_attention",
+                "full_attention"
+            ])
+        );
     }
 
     #[test]
@@ -3163,7 +4081,12 @@ mod tests {
                 normal_loader_hint_from_external_config(&raw).unwrap(),
                 Some(loader.clone())
             );
-            let gguf_architecture = registry_adapter(&loader).unwrap().architectures[0];
+            // qwen4exp has no registered adapter yet; external normalization is not
+            // meaningful until the dedicated loader implementation exists.
+            let Some(adapter) = registry_adapter(&loader) else {
+                continue;
+            };
+            let gguf_architecture = adapter.architectures[0];
             let normalized: JsonValue = serde_json::from_str(
                 &normalize_external_normal_config(&loader, gguf_architecture, &raw).unwrap(),
             )

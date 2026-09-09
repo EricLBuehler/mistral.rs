@@ -3,8 +3,9 @@ use std::collections::{BTreeSet, HashMap};
 use anyhow::{bail, Context, Result};
 use candle_core::quantized::gguf_file::Value;
 use mistralrs_quant::{GgufArchive, GgufBindingMap, GgufTensorBinding};
+use serde_json::json;
 
-use crate::{gdn::GDN_V_HEAD_LAYOUT_CONFIG_KEY, pipeline::MultimodalLoaderType};
+use crate::{gdn::GDN_V_HEAD_LAYOUT_CONFIG_KEY, pipeline::MultimodalLoaderType, NormalLoaderType};
 
 const GENERAL_ARCHITECTURE: &str = "general.architecture";
 const PROJECTOR_TYPE: &str = "clip.projector_type";
@@ -23,6 +24,7 @@ enum QwenMultimodalFamily {
     Qwen3VlMoe,
     Qwen35,
     Qwen35Moe,
+    Qwen4Exp,
 }
 
 impl QwenMultimodalFamily {
@@ -34,13 +36,14 @@ impl QwenMultimodalFamily {
             Self::Qwen3VlMoe => MultimodalLoaderType::Qwen3VLMoE,
             Self::Qwen35 => MultimodalLoaderType::Qwen3_5,
             Self::Qwen35Moe => MultimodalLoaderType::Qwen3_5Moe,
+            Self::Qwen4Exp => MultimodalLoaderType::Qwen4Exp,
         }
     }
 
     fn uses_qwen3_vision(self) -> bool {
         matches!(
             self,
-            Self::Qwen3Vl | Self::Qwen3VlMoe | Self::Qwen35 | Self::Qwen35Moe
+            Self::Qwen3Vl | Self::Qwen3VlMoe | Self::Qwen35 | Self::Qwen35Moe | Self::Qwen4Exp
         )
     }
 
@@ -153,8 +156,12 @@ pub(crate) fn build_qwen_multimodal_bindings(archive: &GgufArchive) -> Result<Gg
 
 pub(crate) fn normalize_qwen_multimodal_config(
     loader_type: &MultimodalLoaderType,
+    archive: &GgufArchive,
     config: &str,
 ) -> Result<String> {
+    if matches!(loader_type, MultimodalLoaderType::Qwen4Exp) {
+        return normalize_qwen4exp_multimodal_config(archive, config);
+    }
     if !matches!(
         loader_type,
         MultimodalLoaderType::Qwen3_5 | MultimodalLoaderType::Qwen3_5Moe
@@ -179,6 +186,125 @@ pub(crate) fn normalize_qwen_multimodal_config(
     serde_json::to_string(&config).context("Failed to serialize Qwen3.5 multimodal config")
 }
 
+/// Prepare the original Qwen3.8-Flash-Next `config.json` for the Qwen4Exp multimodal wrapper.
+///
+/// The official Transformers `text_config` omits two groups the native config requires:
+/// the MoE routing normalization flag (Transformers derives it at runtime) and the resolved
+/// PLE n-gram hash constants (Transformers computes them from the vocabulary sizing fields,
+/// while the GGUF converter materialized the exact values as metadata). This injects the
+/// routing default and the authoritative bit-exact 64-bit PLE constants from the GGUF
+/// metadata so the config deserializes into the validated Qwen4Exp text config unchanged.
+fn normalize_qwen4exp_multimodal_config(archive: &GgufArchive, config: &str) -> Result<String> {
+    let architecture = metadata_string(archive, GENERAL_ARCHITECTURE)?
+        .context("GGUF metadata is missing `general.architecture`")?
+        .to_string();
+    let mut config: serde_json::Value =
+        serde_json::from_str(config).context("Qwen4Exp multimodal config is not valid JSON")?;
+    let config = config
+        .as_object_mut()
+        .context("Qwen4Exp multimodal config requires a JSON object")?;
+    config.insert("quantization_config".to_string(), serde_json::Value::Null);
+    let text_config = config
+        .get_mut("text_config")
+        .and_then(serde_json::Value::as_object_mut)
+        .context("Qwen4Exp multimodal config requires an object-valued `text_config`")?;
+    text_config.insert("quantization_config".to_string(), serde_json::Value::Null);
+    if !text_config.contains_key("norm_topk_prob") {
+        // Matches the GGUF synthesis default: softmax top-k with renormalization unless the
+        // metadata explicitly says otherwise.
+        let norm = metadata_bool(archive, &format!("{architecture}.expert_weights_norm"))?;
+        text_config.insert("norm_topk_prob".to_string(), serde_json::Value::Bool(norm));
+    }
+    let has_ple = archive
+        .metadata_value(&format!("{architecture}.ple.layers"))
+        .is_some_and(|value| matches!(value, Value::Array(values) if !values.is_empty()));
+    if has_ple {
+        // The GGUF converter stores the PLE layer as a 0-based block id (`ple.layers`
+        // alongside `blk.N.ple_*` tensors), while the original Transformers config's
+        // `ple_layer_ids` is 1-based (the official checkpoint declares `[2]` for block 1).
+        // The GGUF metadata is authoritative for GGUF loading because it agrees with the
+        // tensor names, so it overrides the config value; otherwise PLE would inject at the
+        // wrong layer and the binding would fail or, worse, silently misinject.
+        let layers = metadata_usize_values(archive, &format!("{architecture}.ple.layers"))?
+            .with_context(|| {
+                "Qwen4Exp multimodal GGUF metadata `ple.layers` must be an integer array"
+            })?;
+        text_config.insert("ple_layer_ids".to_string(), json!(layers));
+        if !text_config.contains_key("ple_layer_multipliers") {
+            for (config_key, metadata_key) in [
+                ("ple_layer_multipliers", "ple.layer_multipliers"),
+                ("ple_head_offsets", "ple.head_offsets"),
+                ("ple_head_vocab_sizes", "ple.head_vocab_sizes"),
+            ] {
+                let values = metadata_u64_values(
+                    archive,
+                    &format!("{architecture}.{metadata_key}"),
+                )?
+                .with_context(|| {
+                    format!("Qwen4Exp multimodal GGUF metadata `{metadata_key}` is required for PLE layers")
+                })?;
+                text_config.insert(
+                    config_key.to_string(),
+                    serde_json::Value::Array(
+                        values.into_iter().map(|v| json!(v)).collect::<Vec<_>>(),
+                    ),
+                );
+            }
+        }
+    }
+    serde_json::to_string(&config).context("Failed to serialize Qwen4Exp multimodal config")
+}
+
+fn metadata_bool(archive: &GgufArchive, key: &str) -> Result<bool> {
+    match archive.metadata_value(key) {
+        Some(Value::Bool(value)) => Ok(*value),
+        Some(_) => bail!("GGUF metadata `{key}` must be a boolean"),
+        None => Ok(true),
+    }
+}
+
+fn metadata_u64_values(archive: &GgufArchive, key: &str) -> Result<Option<Vec<u64>>> {
+    let Some(value) = archive.metadata_value(key) else {
+        return Ok(None);
+    };
+    let value_u64 = |value: &Value| -> Option<u64> {
+        match value {
+            Value::U8(v) => Some(u64::from(*v)),
+            Value::U16(v) => Some(u64::from(*v)),
+            Value::U32(v) => Some(u64::from(*v)),
+            Value::U64(v) => Some(*v),
+            Value::I8(v) => u64::try_from(*v).ok(),
+            Value::I16(v) => u64::try_from(*v).ok(),
+            Value::I32(v) => u64::try_from(*v).ok(),
+            Value::I64(v) => u64::try_from(*v).ok(),
+            _ => None,
+        }
+    };
+    let Value::Array(values) = value else {
+        return Ok(value_u64(value).map(|v| vec![v]));
+    };
+    let converted = values
+        .iter()
+        .map(value_u64)
+        .collect::<Option<Vec<_>>>()
+        .with_context(|| format!("GGUF metadata `{key}` must be an unsigned integer array"))?;
+    Ok(Some(converted))
+}
+
+fn metadata_usize_values(archive: &GgufArchive, key: &str) -> Result<Option<Vec<usize>>> {
+    let values = metadata_u64_values(archive, key)?;
+    let converted = values
+        .map(|values| {
+            values
+                .into_iter()
+                .map(usize::try_from)
+                .collect::<std::result::Result<Vec<_>, _>>()
+                .with_context(|| format!("GGUF metadata `{key}` values must fit in usize"))
+        })
+        .transpose()?;
+    Ok(converted)
+}
+
 pub(crate) fn build_qwen35_text_bindings(archive: &GgufArchive) -> Result<GgufBindingMap> {
     let architecture = metadata_string(archive, GENERAL_ARCHITECTURE)?
         .context("GGUF metadata is missing `general.architecture`")?;
@@ -193,6 +319,27 @@ pub(crate) fn build_qwen35_text_bindings(archive: &GgufArchive) -> Result<GgufBi
         Some(read_gdn_metadata(archive)?),
         &mut bindings,
     )?;
+    Ok(bindings)
+}
+
+/// Bind a `qwen4exp` multimodal archive.
+///
+/// The text model is the shared Qwen4Exp implementation loaded with the same module
+/// paths as the normal GGUF path, so the text bindings are exactly the normal
+/// qwen4exp bindings (hyper-connections, QSA, GDN, MoE, and the per-layer PLE
+/// tensors). The Qwen3-VL vision tower reuses the existing mappings. Requires the
+/// Qwen3-VL projector metadata and keeps the PLE table binding from the normal path
+/// so ISQ and device mapping treat it identically.
+pub(crate) fn build_qwen4exp_multimodal_bindings(archive: &GgufArchive) -> Result<GgufBindingMap> {
+    qwen_family(archive)?;
+    let mut bindings = super::normal_bindings::build_normal_bindings(
+        archive,
+        &NormalLoaderType::Qwen4Exp,
+        super::normal_registry::CanonicalGgufArchitecture::Qwen4Exp,
+    )?;
+    let inventory = TensorInventory::from_archive(archive);
+    let deepstack_layers = metadata_bool_indices(archive, DEEPSTACK_LAYERS)?;
+    bind_qwen3_vision(&inventory, deepstack_layers.as_deref(), &mut bindings)?;
     Ok(bindings)
 }
 
@@ -231,6 +378,10 @@ fn qwen_family_from_names(
         "qwen35moe" => {
             require_projector(projector, QWEN3VL_PROJECTOR)?;
             QwenMultimodalFamily::Qwen35Moe
+        }
+        "qwen4exp" => {
+            require_projector(projector, QWEN3VL_PROJECTOR)?;
+            QwenMultimodalFamily::Qwen4Exp
         }
         other => bail!("unsupported Qwen multimodal GGUF architecture `{other}`"),
     };
@@ -915,6 +1066,40 @@ mod tests {
     }
 
     #[test]
+    fn qwen4exp_family_requires_qwen3vl_projector() -> Result<()> {
+        assert_eq!(
+            qwen_family_from_names("qwen4exp", Some(QWEN3VL_PROJECTOR))?,
+            QwenMultimodalFamily::Qwen4Exp
+        );
+        assert!(qwen_family_from_names("qwen4exp", None).is_err());
+        assert!(qwen_family_from_names("qwen4exp", Some(QWEN25VL_PROJECTOR)).is_err());
+        // The qwen4exp multimodal family reuses the Qwen3-VL vision mappings.
+        assert!(QwenMultimodalFamily::Qwen4Exp.uses_qwen3_vision());
+        assert!(QwenMultimodalFamily::Qwen4Exp.uses_language_model_prefix());
+        Ok(())
+    }
+
+    #[test]
+    fn qwen4exp_multimodal_loader_type_mappings() {
+        assert_eq!(
+            QwenMultimodalFamily::Qwen4Exp.loader_type(),
+            MultimodalLoaderType::Qwen4Exp
+        );
+        assert_eq!(
+            "qwen4exp"
+                .parse::<MultimodalLoaderType>()
+                .expect("qwen4exp parses"),
+            MultimodalLoaderType::Qwen4Exp
+        );
+        assert_eq!(MultimodalLoaderType::Qwen4Exp.to_string(), "qwen4exp");
+        assert_eq!(
+            MultimodalLoaderType::from_causal_lm_name("Qwen4ExpForConditionalGeneration")
+                .expect("conditional-generation architecture maps"),
+            MultimodalLoaderType::Qwen4Exp
+        );
+    }
+
+    #[test]
     fn architecture_and_projector_select_exact_loaders() -> Result<()> {
         let cases = [
             (
@@ -1324,16 +1509,12 @@ mod tests {
                     .unwrap();
 
                 assert_eq!(layer.name(), "gguf", "{architecture} {projection}");
-                let qweight = layer
-                    .get_qtensor()
-                    .unwrap_or_else(|| panic!("{architecture} {projection} did not stay packed"));
-                assert_eq!(
-                    qweight.dtype(),
-                    GgmlDType::Q4K,
-                    "{architecture} {projection}"
+                assert!(
+                    layer.get_qtensor().is_none(),
+                    "{architecture} {projection} copied its mmap-backed CPU weight"
                 );
                 assert_eq!(
-                    qweight.shape().dims(),
+                    layer.dequantize_w()?.dims(),
                     expected_shape,
                     "{architecture} {projection}"
                 );
@@ -1342,14 +1523,38 @@ mod tests {
         Ok(())
     }
 
+    /// A minimal one-tensor archive with just the architecture metadata, for config
+    /// normalization tests that only consult GGUF metadata.
+    fn minimal_gguf_archive(architecture: &str) -> Result<(NamedTempFile, Arc<GgufArchive>)> {
+        let tensor = QTensor::quantize(
+            &Tensor::ones((4, 4), DType::F32, &Device::Cpu)?,
+            GgmlDType::F32,
+        )?;
+        let metadata = [(
+            GENERAL_ARCHITECTURE.to_string(),
+            Value::String(architecture.to_string()),
+        )];
+        let metadata = metadata
+            .iter()
+            .map(|(key, value)| (key.as_str(), value))
+            .collect::<Vec<_>>();
+        let mut file = NamedTempFile::new()?;
+        gguf_file::write(file.as_file_mut(), &metadata, &[("blk.0.weight", &tensor)])?;
+        file.as_file_mut().flush()?;
+        let archive = Arc::new(GgufArchive::open_file(file.path())?);
+        Ok((file, archive))
+    }
+
     #[test]
     fn qwen35_multimodal_config_selects_tiled_gdn() -> Result<()> {
         for loader_type in [
             MultimodalLoaderType::Qwen3_5,
             MultimodalLoaderType::Qwen3_5Moe,
         ] {
+            let (_file, archive) = minimal_gguf_archive("qwen35")?;
             let config = normalize_qwen_multimodal_config(
                 &loader_type,
+                &archive,
                 r#"{"text_config":{"_mistralrs_gdn_v_head_layout":"grouped"}}"#,
             )?;
             let config: serde_json::Value = serde_json::from_str(&config)?;
@@ -1365,8 +1570,10 @@ mod tests {
             ("qwen35", MultimodalLoaderType::Qwen3_5),
             ("qwen35moe", MultimodalLoaderType::Qwen3_5Moe),
         ] {
+            let (_file, normalize_archive) = minimal_gguf_archive(architecture)?;
             let config = normalize_qwen_multimodal_config(
                 &loader_type,
+                &normalize_archive,
                 &format!(
                     r#"{{"quantization_config":{quantization_config},"text_config":{{"quantization_config":{quantization_config}}}}}"#
                 ),
@@ -1407,15 +1614,120 @@ mod tests {
     #[test]
     fn qwen_multimodal_config_normalization_is_scoped() -> Result<()> {
         let config = r#"{"text_config":{}}"#;
+        let (_file, qwen3vl_archive) = minimal_gguf_archive("qwen3vl")?;
         assert_eq!(
-            normalize_qwen_multimodal_config(&MultimodalLoaderType::Qwen3VL, config)?,
+            normalize_qwen_multimodal_config(
+                &MultimodalLoaderType::Qwen3VL,
+                &qwen3vl_archive,
+                config
+            )?,
             config
         );
+        let (_file, qwen35_archive) = minimal_gguf_archive("qwen35")?;
         assert!(normalize_qwen_multimodal_config(
             &MultimodalLoaderType::Qwen3_5,
+            &qwen35_archive,
             r#"{"text_config":null}"#,
         )
         .is_err());
+        Ok(())
+    }
+
+    /// The official Qwen3.8-Flash-Next `config.json` omits the routing normalization flag and
+    /// the resolved PLE hash constants; normalization must inject the GGUF metadata values
+    /// bit-exactly and leave any explicitly configured values untouched.
+    #[test]
+    fn qwen4exp_multimodal_config_injects_gguf_metadata() -> Result<()> {
+        let multipliers = [23703573157769u64, 20109073645365, 8052911324071];
+        let offsets = [0u64, 2000096, 4000192];
+        let vocab_sizes = [2000096u64, 2000096, 2000096];
+        let tensor = QTensor::quantize(
+            &Tensor::ones((4, 4), DType::F32, &Device::Cpu)?,
+            GgmlDType::F32,
+        )?;
+        let metadata = [
+            (
+                GENERAL_ARCHITECTURE.to_string(),
+                Value::String("qwen4exp".to_string()),
+            ),
+            (
+                "qwen4exp.ple.layers".to_string(),
+                Value::Array(vec![Value::U32(1)]),
+            ),
+            (
+                "qwen4exp.ple.layer_multipliers".to_string(),
+                Value::Array(multipliers.iter().map(|v| Value::U64(*v)).collect()),
+            ),
+            (
+                "qwen4exp.ple.head_offsets".to_string(),
+                Value::Array(offsets.iter().map(|v| Value::U64(*v)).collect()),
+            ),
+            (
+                "qwen4exp.ple.head_vocab_sizes".to_string(),
+                Value::Array(vocab_sizes.iter().map(|v| Value::U64(*v)).collect()),
+            ),
+        ];
+        let metadata = metadata
+            .iter()
+            .map(|(key, value)| (key.as_str(), value))
+            .collect::<Vec<_>>();
+        let mut file = NamedTempFile::new()?;
+        gguf_file::write(file.as_file_mut(), &metadata, &[("blk.0.weight", &tensor)])?;
+        file.as_file_mut().flush()?;
+        let archive = Arc::new(GgufArchive::open_file(file.path())?);
+
+        let official_style = r#"{
+            "architectures":["Qwen4ExpForConditionalGeneration"],
+            "image_token_id": 248056,
+            "text_config":{"hidden_size":2560,"num_experts":512,"ple_layer_ids":[2]}
+        }"#;
+        let config = normalize_qwen_multimodal_config(
+            &MultimodalLoaderType::Qwen4Exp,
+            &archive,
+            official_style,
+        )?;
+        let config: serde_json::Value = serde_json::from_str(&config)?;
+        assert_eq!(config["quantization_config"], serde_json::Value::Null);
+        assert_eq!(
+            config["text_config"]["quantization_config"],
+            serde_json::Value::Null
+        );
+        assert_eq!(config["text_config"]["norm_topk_prob"], json!(true));
+        // The 1-based Transformers `ple_layer_ids: [2]` must be overridden by the 0-based
+        // GGUF block id (`ple.layers` here declares block 1) so PLE injects at the layer
+        // that owns the `blk.N.ple_*` tensors.
+        assert_eq!(config["text_config"]["ple_layer_ids"], json!([1]));
+        assert_eq!(
+            config["text_config"]["ple_layer_multipliers"],
+            json!(multipliers)
+        );
+        assert_eq!(config["text_config"]["ple_head_offsets"], json!(offsets));
+        assert_eq!(
+            config["text_config"]["ple_head_vocab_sizes"],
+            json!(vocab_sizes)
+        );
+
+        // An explicitly configured routing flag must survive normalization.
+        let explicit = r#"{"text_config":{"norm_topk_prob":false}}"#;
+        let config =
+            normalize_qwen_multimodal_config(&MultimodalLoaderType::Qwen4Exp, &archive, explicit)?;
+        let config: serde_json::Value = serde_json::from_str(&config)?;
+        assert_eq!(config["text_config"]["norm_topk_prob"], json!(false));
+        Ok(())
+    }
+
+    /// A qwen4exp GGUF without PLE layers must not inject PLE arrays into the config.
+    #[test]
+    fn qwen4exp_multimodal_config_without_ple_stays_unchanged() -> Result<()> {
+        let (_file, archive) = minimal_gguf_archive("qwen4exp")?;
+        let config = normalize_qwen_multimodal_config(
+            &MultimodalLoaderType::Qwen4Exp,
+            &archive,
+            r#"{"text_config":{"hidden_size":8,"norm_topk_prob":true}}"#,
+        )?;
+        let config: serde_json::Value = serde_json::from_str(&config)?;
+        assert!(config["text_config"].get("ple_layer_multipliers").is_none());
+        assert_eq!(config["text_config"]["norm_topk_prob"], json!(true));
         Ok(())
     }
 
