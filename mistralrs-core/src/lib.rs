@@ -30,15 +30,6 @@ use std::{
 use tokio::sync::mpsc::{channel, Sender};
 use tracing::{debug, info, warn};
 
-fn build_engine_runtime() -> Runtime {
-    tokio::runtime::Builder::new_multi_thread()
-        .enable_all()
-        .worker_threads(candle_core::utils::get_num_threads())
-        .on_thread_start(candle_core::utils::set_thread_affinity)
-        .build()
-        .unwrap()
-}
-
 pub const MISTRALRS_GIT_REVISION: &str = match option_env!("MISTRALRS_GIT_REVISION") {
     Some(value) => value,
     None => "unknown",
@@ -69,6 +60,11 @@ mod embedding_models;
 mod flashinfer;
 mod kv_cache;
 mod search;
+mod shutdown;
+pub use shutdown::{MistralRsShutdownError, MistralRsShutdownFailure};
+
+#[cfg(test)]
+mod tests;
 
 mod model_selected;
 pub use model_selected::ModelSelected;
@@ -209,7 +205,6 @@ pub use speculative::{
     MtpDraftSamplingMethod, MtpRuntimeConfig, SpeculativeConfig,
 };
 pub use speech_models::{utils as speech_utils, SpeechGenerationConfig, SpeechLoaderType};
-use tokio::runtime::Runtime;
 use toml_selector::{TomlLoaderArgs, TomlSelector};
 pub use tools::{
     AllowedToolChoice, AllowedToolsMode, AllowedToolsToolChoice, AllowedToolsToolChoiceType,
@@ -409,14 +404,6 @@ impl EngineInstance {
     fn terminate(&self) {
         let _ = self.sender.try_send(Request::Terminate);
     }
-
-    fn join(&mut self) {
-        if let Some(handle) = self.engine_handler.take() {
-            if handle.join().is_err() {
-                warn!("Engine thread panicked during shutdown.");
-            }
-        }
-    }
 }
 
 /// The MistralRs struct handles sending requests to multiple engines.
@@ -436,6 +423,7 @@ impl EngineInstance {
 ///
 /// Use scope-based lock management and explicit `drop()` calls.
 pub struct MistralRs {
+    shutdown: shutdown::Shutdown,
     engines: RwLock<HashMap<String, EngineInstance>>,
     /// Models that have been unloaded but can be reloaded on demand
     unloaded_models: RwLock<HashMap<String, UnloadedModelState>>,
@@ -487,6 +475,12 @@ impl std::fmt::Display for ModelStatus {
 
 #[derive(Debug, thiserror::Error)]
 pub enum MistralRsError {
+    /// The engine owner has closed admission and cannot create or restart engines.
+    #[error("engine is shutting down")]
+    ShuttingDown,
+    /// A retired engine failed to close; the actual thread join has been attempted.
+    #[error(transparent)]
+    Shutdown(MistralRsShutdownError),
     #[error("engine state lock is poisoned")]
     EnginePoisoned,
     #[error("request engine is unavailable")]
@@ -1143,27 +1137,11 @@ impl MistralRs {
     }
 
     pub async fn shutdown(self: Arc<Self>) -> Result<(), String> {
-        let mut this =
-            Arc::try_unwrap(self).map_err(|_| "Cannot shutdown while MistralRs is shared")?;
-        let engines = this
-            .engines
-            .get_mut()
-            .map_err(|_| "Failed to get mutable access to engines during shutdown")?;
-        let mut engines = std::mem::take(engines);
-
-        let senders = engines
-            .values()
-            .map(|engine| engine.sender.clone())
-            .collect::<Vec<_>>();
-        for sender in senders {
-            let _ = sender.send(Request::Terminate).await;
-        }
-
-        for engine in engines.values_mut() {
-            engine.join();
-        }
-
-        Ok(())
+        shutdown::ensure_not_engine_thread().map_err(|error| error.to_string())?;
+        tokio::task::spawn_blocking(move || self.shutdown_blocking())
+            .await
+            .map_err(|_| "Engine shutdown task failed".to_string())?
+            .map_err(|error| error.to_string())
     }
 
     /// Create an engine instance with the given configuration
@@ -1225,10 +1203,11 @@ impl MistralRs {
         // Propagate Engine::new's outcome so a creation failure is a clean load error, not a zombie-engine panic.
         let (ready_tx, ready_rx) = std::sync::mpsc::sync_channel::<Result<(), String>>(1);
         let engine_handler = thread::spawn(move || {
+            let _engine_thread = shutdown::EngineThreadScope::enter();
             candle_core::utils::init_global_threadpool();
             #[cfg(feature = "metal")]
             objc::rc::autoreleasepool(move || {
-                let rt = build_engine_runtime();
+                let rt = shutdown::engine_runtime().unwrap();
                 rt.block_on(async move {
                     file_store_for_engine.spawn_cleanup_task();
                     // cuTile warmup precedes graph capture.
@@ -1268,7 +1247,7 @@ impl MistralRs {
 
             #[cfg(not(feature = "metal"))]
             {
-                let rt = build_engine_runtime();
+                let rt = shutdown::engine_runtime().unwrap();
                 rt.block_on(async move {
                     file_store_for_engine.spawn_cleanup_task();
                     // cuTile warmup precedes graph capture.
@@ -1307,15 +1286,7 @@ impl MistralRs {
             }
         });
 
-        // Wait for the engine thread to report whether Engine::new succeeded
-        // Propagate failures here instead of leaving a dead engine that looks loaded and then panics on the first request.
-        match ready_rx.recv() {
-            Ok(Ok(())) => {}
-            Ok(Err(e)) => return Err(format!("Engine creation failed: {e}")),
-            Err(_) => return Err("Engine thread exited before reporting readiness".to_string()),
-        }
-
-        Ok(EngineInstance {
+        let engine_instance = EngineInstance {
             sender: tx,
             engine_handler: Some(engine_handler),
             reboot_state,
@@ -1325,7 +1296,22 @@ impl MistralRs {
             logger,
             session_store,
             file_store,
-        })
+        };
+
+        // Readiness failures still own a native worker and its runtime until the actual join.
+        let creation_error = match ready_rx.recv() {
+            Ok(Ok(())) => return Ok(engine_instance),
+            Ok(Err(error)) => format!("Engine creation failed: {error}"),
+            Err(_) => "Engine thread exited before reporting readiness".to_string(),
+        };
+        let failures = shutdown::retire_engine(engine_instance);
+        if failures.is_empty() {
+            Err(creation_error)
+        } else {
+            Err(format!(
+                "{creation_error}; engine shutdown failed: {failures:?}"
+            ))
+        }
     }
 
     /// Initialize MCP and code-execution tool callbacks and merge them into `tool_callbacks`.
@@ -1676,7 +1662,10 @@ impl MistralRs {
                 }));
                 debug!("Beginning dummy run.");
                 let start = Instant::now();
-                clone_sender.blocking_send(req).unwrap();
+                if clone_sender.blocking_send(req).is_err() {
+                    warn!("Dummy run could not reach the engine");
+                    return;
+                }
 
                 // Drain all responses from the channel until it's closed
                 let mut received_any = false;
@@ -1704,6 +1693,7 @@ impl MistralRs {
         engines.insert(id.clone(), engine_instance);
 
         Arc::new(Self {
+            shutdown: shutdown::Shutdown::default(),
             engines: RwLock::new(engines),
             unloaded_models: RwLock::new(HashMap::new()),
             reloading_models: RwLock::new(HashSet::new()),
@@ -1721,45 +1711,51 @@ impl MistralRs {
 
     /// Attempts to reboot a specific engine by model_id
     fn reboot_engine(&self, model_id: &str) -> Result<(), MistralRsError> {
+        let _operation = self.begin_model_operation(model_id)?;
         let mut engines = self.engines.write().map_err(|_| {
             tracing::warn!("Couldn't get write lock on engines during reboot attempt");
             MistralRsError::EnginePoisoned
         })?;
 
-        if let Some(engine_instance) = engines.get(model_id) {
-            if !engine_instance.is_finished() {
-                tracing::info!("Engine {} already running, returning ok", model_id);
-                return Ok(());
-            }
-
-            let reboot_state = engine_instance.reboot_state.clone();
-            let engine_config = EngineConfig {
-                no_kv_cache: reboot_state.no_kv_cache,
-                no_prefix_cache: reboot_state.no_prefix_cache,
-                prefix_cache_n: reboot_state.prefix_cache_n,
-                disable_eos_stop: reboot_state.disable_eos_stop,
-                throughput_logging_enabled: reboot_state.throughput_logging_enabled,
-                search_embedding_model: reboot_state.search_embedding_model,
-                search_callback: reboot_state.search_callback.clone(),
-                tool_callbacks: reboot_state.tool_callbacks.clone(),
-            };
-            let new_engine_instance = Self::create_engine_instance(
-                reboot_state.pipeline.clone(),
-                reboot_state.method.clone(),
-                engine_config,
-                reboot_state,
-            )
-            .map_err(|e| {
-                tracing::error!("Failed to create new engine instance: {}", e);
-                MistralRsError::EnginePoisoned
-            })?;
-
-            engines.insert(model_id.to_string(), new_engine_instance);
-            tracing::info!("Successfully rebooted engine {}", model_id);
-            Ok(())
-        } else {
-            Err(MistralRsError::EnginePoisoned)
+        let engine_instance = engines
+            .get(model_id)
+            .ok_or(MistralRsError::EnginePoisoned)?;
+        if !engine_instance.is_finished() {
+            tracing::info!("Engine {} already running, returning ok", model_id);
+            return Ok(());
         }
+        let reboot_state = engine_instance.reboot_state.clone();
+        let retired = engines
+            .remove(model_id)
+            .ok_or(MistralRsError::EnginePoisoned)?;
+        drop(engines);
+        self.shutdown
+            .record(shutdown::retire_engine(retired))
+            .map_err(MistralRsError::Shutdown)?;
+
+        let engine_config = EngineConfig {
+            no_kv_cache: reboot_state.no_kv_cache,
+            no_prefix_cache: reboot_state.no_prefix_cache,
+            prefix_cache_n: reboot_state.prefix_cache_n,
+            disable_eos_stop: reboot_state.disable_eos_stop,
+            throughput_logging_enabled: reboot_state.throughput_logging_enabled,
+            search_embedding_model: reboot_state.search_embedding_model,
+            search_callback: reboot_state.search_callback.clone(),
+            tool_callbacks: reboot_state.tool_callbacks.clone(),
+        };
+        let new_engine_instance = Self::create_engine_instance(
+            reboot_state.pipeline.clone(),
+            reboot_state.method.clone(),
+            engine_config,
+            reboot_state,
+        )
+        .map_err(|e| {
+            tracing::error!("Failed to create new engine instance: {}", e);
+            MistralRsError::EnginePoisoned
+        })?;
+        self.insert_engine(model_id, new_engine_instance)?;
+        tracing::info!("Successfully rebooted engine {}", model_id);
+        Ok(())
     }
 
     fn engine_dead(&self, model_id: &str) -> Result<bool, MistralRsError> {
@@ -1778,6 +1774,7 @@ impl MistralRs {
     /// Get sender for a specific model. If model_id is None, uses default engine.
     /// If the model is unloaded, it will be automatically reloaded before returning the sender.
     pub fn get_sender(&self, model_id: Option<&str>) -> Result<Sender<Request>, MistralRsError> {
+        let _admission = self.shutdown.enter()?;
         let resolved_model_id = self.resolve_alias_or_default(model_id)?;
 
         // Check if model is loaded
@@ -2235,15 +2232,10 @@ impl MistralRs {
         method: SchedulerConfig,
         config: AddModelConfig,
     ) -> Result<(), String> {
-        {
-            let reloading = self
-                .reloading_models
-                .read()
-                .map_err(|_| "Failed to acquire read lock on reloading_models")?;
-            if reloading.contains(&model_id) {
-                return Err(format!("Model {model_id} is currently reloading"));
-            }
-        }
+        let _admission = self.shutdown.enter().map_err(|error| error.to_string())?;
+        let _operation = self
+            .begin_model_operation(&model_id)
+            .map_err(|error| error.to_string())?;
         {
             let engines = self
                 .engines
@@ -2303,14 +2295,12 @@ impl MistralRs {
         let engine_instance =
             Self::create_engine_instance(pipeline, method, engine_config, reboot_state)?;
 
-        let mut engines = self
-            .engines
-            .write()
-            .map_err(|_| "Failed to acquire write lock on engines")?;
-        engines.insert(model_id.clone(), engine_instance);
+        let first_model = self
+            .insert_engine(&model_id, engine_instance)
+            .map_err(|error| error.to_string())?;
 
         // If this is the first model, set it as default
-        if engines.len() == 1 {
+        if first_model {
             let mut default_lock = self
                 .default_engine_id
                 .write()
@@ -2324,7 +2314,11 @@ impl MistralRs {
 
     /// Remove a model engine from the MistralRs instance
     pub fn remove_model(&self, model_id: &str) -> Result<(), String> {
+        let _admission = self.shutdown.enter().map_err(|error| error.to_string())?;
         let resolved_model_id = self.resolve_alias(model_id).map_err(|e| e.to_string())?;
+        let _operation = self
+            .begin_model_operation(&resolved_model_id)
+            .map_err(|error| error.to_string())?;
         let mut engines = self
             .engines
             .write()
@@ -2334,32 +2328,31 @@ impl MistralRs {
             return Err("Cannot remove the last model from MistralRs".to_string());
         }
 
+        // Acquire metadata locks before removing the only owner of the native worker.
+        let mut default_lock = self
+            .default_engine_id
+            .write()
+            .map_err(|_| "Failed to acquire write lock on default_engine_id")?;
+        let mut aliases = self
+            .model_aliases
+            .write()
+            .map_err(|_| "Failed to acquire write lock on model_aliases")?;
         if let Some(engine_instance) = engines.remove(&resolved_model_id) {
-            // Send terminate signal to the engine
-            let _ = engine_instance.sender.blocking_send(Request::Terminate);
-
             // If this was the default engine, set a new default
-            let mut default_lock = self
-                .default_engine_id
-                .write()
-                .map_err(|_| "Failed to acquire write lock on default_engine_id")?;
             if let Some(ref default_id) = *default_lock {
                 if default_id == &resolved_model_id {
                     // Set the first available engine as the new default
                     *default_lock = engines.keys().next().cloned();
                 }
             }
+            // Remove any aliases pointing to the removed model
+            aliases.retain(|_, target| target != &resolved_model_id);
+            drop(aliases);
             drop(default_lock);
             drop(engines);
-
-            // Remove any aliases pointing to the removed model
-            let mut aliases = self
-                .model_aliases
-                .write()
-                .map_err(|_| "Failed to acquire write lock on model_aliases")?;
-            aliases.retain(|_, target| target != &resolved_model_id);
-
-            Ok(())
+            self.shutdown
+                .record(shutdown::retire_engine(engine_instance))
+                .map_err(|error| error.to_string())
         } else {
             Err(format!("Model {resolved_model_id} not found"))
         }
@@ -2582,7 +2575,9 @@ impl MistralRs {
     /// Note: The model must have been added with a `ModelLoaderConfig` for auto-reload to work.
     /// Models added via `MistralRsBuilder` without explicit loader config cannot be reloaded.
     pub fn unload_model(&self, model_id: &str) -> Result<(), MistralRsError> {
+        let _admission = self.shutdown.enter()?;
         let resolved_model_id = self.resolve_alias(model_id)?;
+        let _operation = self.begin_model_operation(&resolved_model_id)?;
         // Check if already unloaded
         {
             let unloaded = self
@@ -2611,9 +2606,6 @@ impl MistralRs {
             .loader_config
             .clone()
             .ok_or_else(|| MistralRsError::NoLoaderConfig(resolved_model_id.clone()))?;
-        let engine_instance = engines
-            .remove(&resolved_model_id)
-            .expect("engine was present while holding the write lock");
 
         // Create the unloaded state
         let unloaded_state = UnloadedModelState {
@@ -2634,10 +2626,21 @@ impl MistralRs {
             mistralrs_config: engine_instance.config.clone(),
         };
 
-        // Send terminate signal to the engine
-        let _ = engine_instance.sender.try_send(Request::Terminate);
-
+        let mut default_lock = self
+            .default_engine_id
+            .write()
+            .map_err(|_| MistralRsError::EnginePoisoned)?;
+        let engine_instance = engines
+            .remove(&resolved_model_id)
+            .ok_or_else(|| MistralRsError::ModelNotFound(resolved_model_id.clone()))?;
+        if default_lock.as_deref() == Some(&resolved_model_id) {
+            *default_lock = engines.keys().next().cloned();
+        }
+        drop(default_lock);
         drop(engines);
+        self.shutdown
+            .record(shutdown::retire_engine(engine_instance))
+            .map_err(MistralRsError::Shutdown)?;
 
         // Store the unloaded state
         let mut unloaded = self
@@ -2646,22 +2649,6 @@ impl MistralRs {
             .map_err(|_| MistralRsError::EnginePoisoned)?;
         unloaded.insert(resolved_model_id.to_string(), unloaded_state);
 
-        // Update default if needed
-        let mut default_lock = self
-            .default_engine_id
-            .write()
-            .map_err(|_| MistralRsError::EnginePoisoned)?;
-        if let Some(ref default_id) = *default_lock {
-            if default_id == &resolved_model_id {
-                // Set the first available engine as the new default
-                let engines = self
-                    .engines
-                    .read()
-                    .map_err(|_| MistralRsError::EnginePoisoned)?;
-                *default_lock = engines.keys().next().cloned();
-            }
-        }
-
         info!("Model {} unloaded successfully", resolved_model_id);
         Ok(())
     }
@@ -2669,26 +2656,9 @@ impl MistralRs {
     /// Manually reload a previously unloaded model.
     /// This is also called automatically by `get_sender()` when a request targets an unloaded model.
     pub async fn reload_model(&self, model_id: &str) -> Result<(), MistralRsError> {
+        let _admission = self.shutdown.enter()?;
         let resolved_model_id = self.resolve_alias(model_id)?;
-        // Check if already reloading
-        {
-            let reloading = self
-                .reloading_models
-                .read()
-                .map_err(|_| MistralRsError::EnginePoisoned)?;
-            if reloading.contains(&resolved_model_id) {
-                return Err(MistralRsError::ModelReloading(resolved_model_id.clone()));
-            }
-        }
-
-        // Mark as reloading
-        {
-            let mut reloading = self
-                .reloading_models
-                .write()
-                .map_err(|_| MistralRsError::EnginePoisoned)?;
-            reloading.insert(resolved_model_id.clone());
-        }
+        let _operation = self.begin_model_operation(&resolved_model_id)?;
 
         // Get the unloaded state
         let unloaded_state = {
@@ -2703,20 +2673,8 @@ impl MistralRs {
         };
 
         // Attempt to reload
-        let result = self
-            .do_reload_model(&resolved_model_id, unloaded_state)
-            .await;
-
-        // Remove from reloading set
-        {
-            let mut reloading = self
-                .reloading_models
-                .write()
-                .map_err(|_| MistralRsError::EnginePoisoned)?;
-            reloading.remove(&resolved_model_id);
-        }
-
-        result
+        self.do_reload_model(&resolved_model_id, unloaded_state)
+            .await
     }
 
     /// Internal method to perform the actual model reload
@@ -2818,14 +2776,8 @@ impl MistralRs {
         )
         .map_err(|e| MistralRsError::ReloadFailed(format!("Failed to create engine: {e}")))?;
 
-        // Add to engines map
-        {
-            let mut engines = self
-                .engines
-                .write()
-                .map_err(|_| MistralRsError::EnginePoisoned)?;
-            engines.insert(model_id.to_string(), engine_instance);
-        }
+        // Register the new owner, or join it if registration fails.
+        self.insert_engine(model_id, engine_instance)?;
 
         // Remove from unloaded map
         {
@@ -2961,75 +2913,5 @@ impl MistralRs {
         }
 
         Ok(result)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::panic::{catch_unwind, AssertUnwindSafe};
-
-    fn empty_state() -> MistralRs {
-        MistralRs {
-            engines: RwLock::new(HashMap::new()),
-            unloaded_models: RwLock::new(HashMap::new()),
-            reloading_models: RwLock::new(HashSet::new()),
-            default_engine_id: RwLock::new(None),
-            model_aliases: RwLock::new(HashMap::new()),
-            log: None,
-            id: "test".to_string(),
-            creation_time: 0,
-            next_request_id: Mutex::new(RefCell::new(1)),
-        }
-    }
-
-    #[test]
-    fn missing_default_sender_is_model_not_found() {
-        assert!(matches!(
-            empty_state().get_sender(None),
-            Err(MistralRsError::ModelNotFound(model)) if model == "default"
-        ));
-        assert!(matches!(
-            empty_state().get_sender(Some("wrong-model")),
-            Err(MistralRsError::ModelNotFound(model)) if model == "wrong-model"
-        ));
-    }
-
-    #[test]
-    fn reloading_sender_preserves_model_state_error() {
-        let state = empty_state();
-        state
-            .reloading_models
-            .write()
-            .unwrap()
-            .insert("model".to_string());
-        assert!(matches!(
-            state.get_sender(Some("model")),
-            Err(MistralRsError::ModelReloading(model)) if model == "model"
-        ));
-    }
-
-    #[test]
-    fn fallible_file_helpers_preserve_poisoned_engine_error() {
-        let state = empty_state();
-
-        let result = catch_unwind(AssertUnwindSafe(|| {
-            let _guard = state.engines.write().unwrap();
-            panic!("poison engines lock");
-        }));
-        assert!(result.is_err());
-
-        assert!(matches!(
-            state.try_find_file("file-id"),
-            Err(MistralRsError::EnginePoisoned)
-        ));
-        assert!(matches!(
-            state.try_list_files(),
-            Err(MistralRsError::EnginePoisoned)
-        ));
-        assert!(matches!(
-            state.try_remove_file("file-id"),
-            Err(MistralRsError::EnginePoisoned)
-        ));
     }
 }
