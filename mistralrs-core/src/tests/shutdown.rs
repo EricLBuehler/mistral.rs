@@ -1,8 +1,7 @@
 use std::{
-    collections::{HashMap, HashSet},
     sync::{
         atomic::{AtomicUsize, Ordering},
-        mpsc, Arc, Mutex, RwLock,
+        mpsc, Arc,
     },
     thread,
     time::Duration,
@@ -10,8 +9,10 @@ use std::{
 
 use crate::{
     shutdown::{engine_runtime, join_engines, EngineThreadScope, RetiringEngine, Shutdown},
-    MistralRs, MistralRsError, MistralRsShutdownFailure, Request,
+    MistralRsError, MistralRsShutdownFailure, Request,
 };
+
+use super::empty_state;
 
 const DEADLINE: Duration = Duration::from_secs(5);
 
@@ -245,18 +246,7 @@ fn a_management_retirement_failure_fences_replacement_engines() {
 
 #[test]
 fn model_operation_reservation_is_atomic_and_released_on_early_return() {
-    let models = MistralRs {
-        shutdown: Shutdown::default(),
-        engines: RwLock::new(HashMap::new()),
-        unloaded_models: RwLock::new(HashMap::new()),
-        reloading_models: RwLock::new(HashSet::new()),
-        default_engine_id: RwLock::new(None),
-        model_aliases: RwLock::new(HashMap::new()),
-        log: None,
-        id: "test".to_string(),
-        creation_time: 0,
-        next_request_id: Mutex::new(std::cell::RefCell::new(0)),
-    };
+    let models = empty_state();
     let operation = models
         .begin_model_operation("test")
         .expect("reserve operation");
@@ -267,4 +257,126 @@ fn model_operation_reservation_is_atomic_and_released_on_early_return() {
     drop(operation);
     assert!(models.begin_model_operation("test").is_ok());
     assert!(models.shutdown_blocking().is_ok());
+}
+
+#[tokio::test]
+async fn asynchronous_shutdown_joins_a_shared_owner_and_reuses_the_blocking_result() {
+    let models = Arc::new(empty_state());
+    let (first, second) = tokio::join!(models.clone().shutdown(), models.clone().shutdown());
+    assert!(first.is_ok());
+    assert!(second.is_ok());
+    assert!(models.shutdown_blocking().is_ok());
+    assert!(matches!(
+        models.get_sender(None),
+        Err(MistralRsError::ShuttingDown)
+    ));
+}
+
+#[tokio::test]
+async fn asynchronous_shutdown_retains_native_failures_for_blocking_waiters() {
+    let models = Arc::new(empty_state());
+    models
+        .shutdown
+        .record(vec![MistralRsShutdownFailure::EnginePanicked])
+        .expect_err("retirement failed before explicit shutdown");
+    let (first, second) = tokio::join!(models.clone().shutdown(), models.clone().shutdown());
+    assert_eq!(first, second);
+    let first_error = models.shutdown_blocking().expect_err("retained failure");
+    let second_error = models
+        .shutdown_blocking()
+        .expect_err("same retained failure");
+    assert_eq!(first, Err(first_error.to_string()));
+    assert!(std::ptr::eq(
+        first_error.failures(),
+        second_error.failures()
+    ));
+}
+
+#[tokio::test]
+async fn cancelling_an_async_shutdown_waiter_preserves_the_in_progress_close() {
+    let models = Arc::new(empty_state());
+    let admission = models.shutdown.enter().expect("admitted management call");
+    let waiter = tokio::spawn(models.clone().shutdown());
+    let observer = models.clone();
+    assert!(
+        tokio::task::spawn_blocking(move || observer.shutdown.wait_for_shutdown(DEADLINE))
+            .await
+            .expect("shutdown observer")
+    );
+    waiter.abort();
+    assert!(waiter.await.expect_err("cancelled waiter").is_cancelled());
+    assert!(matches!(
+        models.get_sender(None),
+        Err(MistralRsError::ShuttingDown)
+    ));
+    drop(admission);
+    tokio::time::timeout(DEADLINE, models.clone().shutdown())
+        .await
+        .expect("the original close completes")
+        .expect("retained successful close");
+    assert!(models.shutdown_blocking().is_ok());
+}
+
+#[test]
+fn asynchronous_shutdown_rejects_native_threads_before_the_blocking_handoff() {
+    let runtime = engine_runtime().expect("native runtime");
+    let models = Arc::new(empty_state());
+    let native_models = models.clone();
+    let failure = runtime
+        .block_on(runtime.spawn(async move { native_models.shutdown().await }))
+        .expect("native async worker")
+        .expect_err("native runtime must not wait for its own shutdown");
+    assert!(failure.contains(&MistralRsShutdownFailure::EngineThreadCannotJoin.to_string()));
+    assert!(models.shutdown_blocking().is_ok());
+}
+
+#[test]
+fn a_closed_termination_channel_still_joins_the_native_thread() {
+    let drops = Arc::new(AtomicUsize::new(0));
+    let (sender, requests) = tokio::sync::mpsc::channel(1);
+    drop(requests);
+    let (release, released) = mpsc::channel();
+    let native = thread::spawn(move || {
+        released
+            .recv_timeout(DEADLINE)
+            .expect("release native worker");
+    });
+    let engine = RetiringEngine::new(
+        sender,
+        Some(native),
+        Resources {
+            drops: drops.clone(),
+            panic: false,
+        },
+    );
+    let (healthy, healthy_terminated, healthy_release) = worker(drops.clone(), false, false);
+    let shutdown = Arc::new(Shutdown::default());
+    let (done, completed) = mpsc::channel();
+    let waiter = {
+        let shutdown = shutdown.clone();
+        thread::spawn(move || {
+            let result = shutdown.run(|| join_engines(vec![engine, healthy]));
+            done.send(()).expect("shutdown observer");
+            result
+        })
+    };
+    healthy_terminated
+        .recv_timeout(DEADLINE)
+        .expect("later engine signalled after the closed channel was attempted");
+    assert_eq!(drops.load(Ordering::SeqCst), 0);
+    assert!(matches!(
+        completed.try_recv(),
+        Err(mpsc::TryRecvError::Empty)
+    ));
+    release.send(()).expect("release native worker");
+    healthy_release.send(()).expect("release healthy worker");
+    let failure = waiter
+        .join()
+        .expect("shutdown owner")
+        .expect_err("closed channel");
+    assert_eq!(
+        failure.failures(),
+        &[MistralRsShutdownFailure::TerminateChannelClosed]
+    );
+    assert_eq!(drops.load(Ordering::SeqCst), 2);
 }
