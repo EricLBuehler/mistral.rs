@@ -248,6 +248,13 @@ pub(crate) struct PleConvState {
     dilation: usize,
     history_tokens: usize,
     channels: usize,
+    /// Reusable device staging for the concatenated convolution input and output.
+    ///
+    /// Kept per state object rather than per sequence because a chunk processes
+    /// exactly one sequence at a time, so the same bounded buffers serve every
+    /// sequence without aliasing: each chunk fully consumes its staged input
+    /// before the next chunk overwrites it.
+    buffers: PleStagingBuffers,
 }
 
 #[allow(dead_code)]
@@ -270,6 +277,7 @@ impl PleConvState {
             dilation,
             history_tokens,
             channels,
+            buffers: PleStagingBuffers::new(),
         })
     }
 
@@ -390,19 +398,8 @@ impl PleConvState {
             );
         }
 
-        let history_values = self.history_tokens * self.channels;
-        let history = self
-            .histories
-            .get(&sequence_id)
-            .cloned()
-            .unwrap_or_else(|| vec![0.0; history_values]);
-        let history = Tensor::from_vec(
-            history,
-            (self.history_tokens, self.channels),
-            input.device(),
-        )?
-        .to_dtype(input.dtype())?;
-        let state_and_input = Tensor::cat(&[history, input.clone()], 0)?;
+        let (history, state_and_input) =
+            self.staged_state_and_input(sequence_id, input, token_count)?;
         let output = if Self::use_metal_fast_path(&state_and_input, kernel, token_count) {
             // Completion Phase 7: one fused kernel replaces the per-token
             // narrow/cat/mul/sum loop plus the separate SiLU launch.
@@ -443,7 +440,93 @@ impl PleConvState {
             .flatten_all()?
             .to_vec1::<f32>()?;
         self.histories.insert(sequence_id, updated);
+        self.buffers.history = Some(history);
+        self.buffers.state_and_input = Some(state_and_input);
         Ok(output)
+    }
+
+    /// Build the concatenated `[history_tokens + tokens, channels]` convolution
+    /// input, reusing the retained staging tensors when their shape, dtype, and
+    /// device still match.
+    ///
+    /// The staged history tensor is rewritten in place from the per-sequence F32
+    /// history, and the chunk input is written into the state buffer's input region
+    /// with an in-place `slice_set`, so a steady-state decode loop keeps the same
+    /// two allocations instead of rebuilding them every step. Both buffers are
+    /// derived from the chunk input and the per-sequence history, never from the
+    /// PLE table, so the table stays mmap-backed and bounded.
+    fn staged_state_and_input(
+        &mut self,
+        sequence_id: usize,
+        input: &Tensor,
+        token_count: usize,
+    ) -> Result<(Tensor, Tensor)> {
+        let dtype = input.dtype();
+        let device = input.device().clone();
+        let history_row_shape = [self.history_tokens, self.channels];
+        let state_row_shape = [self.history_tokens + token_count, self.channels];
+
+        let matching = |staged: &Option<Tensor>, expected: [usize; 2]| {
+            staged.as_ref().is_some_and(|tensor| {
+                tensor.dims() == expected
+                    && tensor.dtype() == dtype
+                    && tensor.device().same_device(&device)
+                    && tensor.is_contiguous()
+            })
+        };
+
+        let retained_history = matching(&self.buffers.history, history_row_shape);
+        let retained_state = matching(&self.buffers.state_and_input, state_row_shape);
+
+        // History staging: reuse the retained buffer when it still matches,
+        // otherwise allocate the history from the per-sequence F32 state.
+        let history = if retained_history {
+            let buffer = self
+                .buffers
+                .history
+                .take()
+                .expect("history buffer was just checked to be present");
+            match self.histories.get(&sequence_id) {
+                Some(values) => {
+                    let source =
+                        Tensor::from_slice(values, (self.history_tokens, self.channels), &device)?
+                            .to_dtype(dtype)?;
+                    buffer.slice_set(&source, 0, 0)?;
+                }
+                None => buffer.zero_set()?,
+            }
+            buffer
+        } else {
+            match self.histories.get(&sequence_id) {
+                Some(values) => {
+                    Tensor::from_slice(values, (self.history_tokens, self.channels), &device)?
+                        .to_dtype(dtype)?
+                }
+                None => Tensor::zeros((self.history_tokens, self.channels), dtype, &device)?,
+            }
+        };
+
+        // Concatenated state staging: keep the history region and write only the
+        // new input rows, so a decode step copies just `token_count` rows.
+        let state_and_input = if retained_state {
+            let buffer = self
+                .buffers
+                .state_and_input
+                .take()
+                .expect("state buffer was just checked to be present");
+            buffer.slice_set(&history, 0, 0)?;
+            buffer.slice_set(input, 0, self.history_tokens)?;
+            buffer
+        } else {
+            Tensor::cat(&[history.clone(), input.clone()], 0)?
+        };
+
+        Ok((history, state_and_input))
+    }
+
+    /// Reusable staging buffers for this convolution state, exposed for tests.
+    pub(crate) fn staging(&self) -> &PleStagingBuffers {
+        &self.buffers
     }
 
     pub(crate) fn forward_packed_chunks(
@@ -525,6 +608,61 @@ impl PleConvState {
     }
 }
 
+/// Reusable bounded staging buffers for the PLE gather/convolution path.
+///
+/// Completion Phase 7: the PLE table is never materialized, but every chunk
+/// previously reallocated its row-id tensor, its gathered-row buffer, and the
+/// concatenated convolution state. This holder keeps those bounded allocations
+/// alive across chunks so a decode loop reuses the same device buffers instead
+/// of allocating per step. Capacities only ever grow, and the buffers are sized
+/// from the requested token count, never from the table row inventory, so the
+/// PLE table stays bounded and mmap-backed.
+#[derive(Default)]
+pub(crate) struct PleStagingBuffers {
+    /// Row-id staging shaped `[batch, tokens, heads]`, grown geometrically.
+    row_ids: Option<Tensor>,
+    /// Gathered `[batch, tokens, heads * head_dim]` activation staging.
+    gathered: Option<Tensor>,
+    /// Device copy of the per-sequence convolution history, shaped
+    /// `[history_tokens, channels]`, kept in the activation dtype.
+    history: Option<Tensor>,
+    /// Concatenated `[history_tokens + tokens, channels]` convolution input.
+    state_and_input: Option<Tensor>,
+}
+
+#[allow(dead_code)]
+impl PleStagingBuffers {
+    pub(crate) fn new() -> Self {
+        Self::default()
+    }
+
+    /// Number of bounded staging tensors currently retained. Exposed so tests can
+    /// assert the buffer is actually reused across chunks rather than reallocated.
+    pub(crate) fn len(&self) -> usize {
+        [
+            self.row_ids.is_some(),
+            self.gathered.is_some(),
+            self.history.is_some(),
+            self.state_and_input.is_some(),
+        ]
+        .into_iter()
+        .filter(|present| *present)
+        .count()
+    }
+
+    pub(crate) fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    /// Drop every retained buffer, releasing device memory at sequence teardown.
+    pub(crate) fn clear(&mut self) {
+        self.row_ids = None;
+        self.gathered = None;
+        self.history = None;
+        self.state_and_input = None;
+    }
+}
+
 #[allow(dead_code)]
 pub(crate) struct PleEmbedding {
     table: Arc<dyn QuantMethod>,
@@ -557,6 +695,24 @@ impl PleEmbedding {
         dtype: DType,
         device: &candle_core::Device,
     ) -> Result<Tensor> {
+        self.gather_with_buffers(rows, batch, tokens, dtype, device, None)
+    }
+
+    /// Bounded row gather that reuses `buffers` when supplied.
+    ///
+    /// The staging buffers cache the row-id tensor, the gathered row buffer, and
+    /// the compute-device copy, so repeated chunks with the same shape reuse the
+    /// same allocations. Only the requested rows are ever gathered or
+    /// transferred; the complete table is never dequantized or moved.
+    pub(crate) fn gather_with_buffers(
+        &self,
+        rows: &[u32],
+        batch: usize,
+        tokens: usize,
+        dtype: DType,
+        device: &candle_core::Device,
+        mut buffers: Option<&mut PleStagingBuffers>,
+    ) -> Result<Tensor> {
         let expected_rows = batch
             .checked_mul(tokens)
             .and_then(|count| count.checked_mul(self.head_count))
@@ -570,11 +726,95 @@ impl PleEmbedding {
         }
 
         let (_, table_device) = self.table.dtype_and_device();
-        let row_ids = Tensor::from_vec(
+        let expected_shape = [batch, tokens, self.head_count, self.head_dim];
+        let pulled = match buffers.as_deref_mut() {
+            Some(buffers) => {
+                let flattened_shape = (batch, tokens, self.head_count * self.head_dim);
+                let gathered = self.gather_into_buffers(
+                    rows,
+                    batch,
+                    tokens,
+                    dtype,
+                    device,
+                    &table_device,
+                    buffers,
+                )?;
+                if gathered.dims() != expected_shape {
+                    candle_core::bail!(
+                        "Qwen4Exp PLE table returned shape {:?}, expected {:?}",
+                        gathered.dims(),
+                        expected_shape
+                    );
+                }
+                let gathered = gathered.reshape(flattened_shape)?;
+                return Ok(gathered);
+            }
+            None => self
+                .table
+                .embedding_forward(
+                    &Tensor::from_vec(
+                        rows.to_vec(),
+                        (batch, tokens, self.head_count),
+                        &table_device,
+                    )?,
+                    dtype,
+                )
+                .map_err(|error| {
+                    Error::msg(format!(
+                        "Qwen4Exp PLE embedding row gather is unsupported by the loaded weight: {error}"
+                    ))
+                })?,
+        };
+
+        if pulled.dims() != expected_shape {
+            candle_core::bail!(
+                "Qwen4Exp PLE table returned shape {:?}, expected {:?}",
+                pulled.dims(),
+                expected_shape
+            );
+        }
+        pulled
+            .to_device(device)?
+            .reshape((batch, tokens, self.head_count * self.head_dim))
+    }
+
+    /// Gather into the reusable staging buffers, transferring only the bounded
+    /// gathered rows to `device`.
+    #[allow(clippy::too_many_arguments)]
+    fn gather_into_buffers(
+        &self,
+        rows: &[u32],
+        batch: usize,
+        tokens: usize,
+        dtype: DType,
+        device: &candle_core::Device,
+        table_device: &candle_core::Device,
+        buffers: &mut PleStagingBuffers,
+    ) -> Result<Tensor> {
+        let row_shape = [batch, tokens, self.head_count];
+        let source = Tensor::from_vec(
             rows.to_vec(),
             (batch, tokens, self.head_count),
-            &table_device,
+            table_device,
         )?;
+        // Reuse the retained row-id buffer when it still matches, rewriting it in
+        // place with the current chunk's rows. The rows must always be rewritten:
+        // reusing the buffer without overwriting it would silently gather the
+        // previous chunk's rows.
+        let row_ids = match buffers.row_ids.take() {
+            Some(existing)
+                if existing.dims() == row_shape
+                    && existing.dtype() == DType::U32
+                    && existing.device().same_device(table_device)
+                    && existing.is_contiguous() =>
+            {
+                existing.slice_set(&source, 0, 0)?;
+                existing
+            }
+            _ => source,
+        };
+        buffers.row_ids = Some(row_ids.clone());
+
         let gathered = self
             .table
             .embedding_forward(&row_ids, dtype)
@@ -583,17 +823,13 @@ impl PleEmbedding {
                 "Qwen4Exp PLE embedding row gather is unsupported by the loaded weight: {error}"
             ))
             })?;
-        let expected_shape = [batch, tokens, self.head_count, self.head_dim];
-        if gathered.dims() != expected_shape {
-            candle_core::bail!(
-                "Qwen4Exp PLE table returned shape {:?}, expected {:?}",
-                gathered.dims(),
-                expected_shape
-            );
-        }
-        gathered
-            .to_device(device)?
-            .reshape((batch, tokens, self.head_count * self.head_dim))
+        let gathered = if gathered.device().same_device(device) {
+            gathered
+        } else {
+            gathered.to_device(device)?
+        };
+        buffers.gathered = Some(gathered.clone());
+        Ok(gathered)
     }
 }
 
@@ -767,6 +1003,13 @@ pub(crate) struct PleStateSnapshot {
 pub(crate) struct PleState {
     sequences: PleSequenceState,
     convolution: PleConvState,
+    /// Reusable bounded row-gather staging shared by every PLE layer chunk.
+    ///
+    /// One chunk processes one sequence at a time in packed order, and the shared
+    /// buffer only ever holds the rows requested by the chunk currently in flight,
+    /// so no per-sequence PLE state is stored here and the base table is never
+    /// materialized or retained.
+    gather_buffers: PleStagingBuffers,
 }
 
 #[allow(dead_code)]
@@ -780,7 +1023,18 @@ impl PleState {
         Ok(Self {
             sequences: PleSequenceState::new(hasher),
             convolution: PleConvState::new(kernel_size, dilation, channels)?,
+            gather_buffers: PleStagingBuffers::new(),
         })
+    }
+
+    /// Reusable row-gather staging buffers, exposed for tests.
+    pub(crate) fn gather_staging(&self) -> &PleStagingBuffers {
+        &self.gather_buffers
+    }
+
+    /// Reusable convolution staging buffers, exposed for tests.
+    pub(crate) fn convolution_staging(&self) -> &PleStagingBuffers {
+        self.convolution.staging()
     }
 
     pub(crate) fn forward_packed_chunks(
@@ -878,8 +1132,16 @@ impl PleState {
                 let rows = self
                     .sequences
                     .rows_for_chunk(hasher, *sequence_id, tokens)?;
-                let gathered =
-                    embedding.gather(&rows, 1, tokens.len(), hidden.dtype(), hidden.device())?;
+                // Reuse the bounded row-gather staging so a decode loop does not
+                // rebuild the row-id and gathered-row buffers on every step.
+                let gathered = embedding.gather_with_buffers(
+                    &rows,
+                    1,
+                    tokens.len(),
+                    hidden.dtype(),
+                    hidden.device(),
+                    Some(&mut self.gather_buffers),
+                )?;
                 outputs.push(layer.forward_chunk(
                     &mut self.convolution,
                     *sequence_id,
@@ -1837,5 +2099,175 @@ mod tests {
             );
             Ok(())
         }
+    }
+
+    /// Completion Phase 7: the gather path must reuse its bounded staging buffers
+    /// across chunks instead of allocating per step, and the retained buffers must
+    /// hold only the requested rows — never the complete table.
+    #[test]
+    fn staging_buffers_reuse_row_ids_and_gather_across_chunks() -> Result<()> {
+        let device = candle_core::Device::Cpu;
+        let table = Tensor::from_vec(
+            vec![
+                0.0f32, 0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0, 5.5,
+            ],
+            (6, 2),
+            &device,
+        )?;
+        let embedding = PleEmbedding::new(projection(table)?, 2, 2)?;
+        let mut buffers = PleStagingBuffers::new();
+        assert!(buffers.is_empty());
+
+        let first = embedding.gather_with_buffers(
+            &[4, 1, 3, 5],
+            1,
+            2,
+            DType::F32,
+            &device,
+            Some(&mut buffers),
+        )?;
+        assert_eq!(first.dims(), &[1, 2, 4]);
+        // One chunk retains the row-id staging and the gathered rows.
+        assert_eq!(buffers.len(), 2);
+
+        // A second chunk with the same shape must reuse both buffers and still
+        // gather the *new* rows: reusing the row-id buffer without rewriting it
+        // would return the previous chunk's rows.
+        let second = embedding.gather_with_buffers(
+            &[0, 2, 4, 0],
+            1,
+            2,
+            DType::F32,
+            &device,
+            Some(&mut buffers),
+        )?;
+        assert_eq!(buffers.len(), 2);
+        assert_eq!(
+            second.flatten_all()?.to_vec1::<f32>()?,
+            vec![0.0, 0.5, 2.0, 2.5, 4.0, 4.5, 0.0, 0.5]
+        );
+        // The buffered path matches the unbuffered gather exactly.
+        assert_eq!(
+            second.flatten_all()?.to_vec1::<f32>()?,
+            embedding
+                .gather(&[0, 2, 4, 0], 1, 2, DType::F32, &device)?
+                .flatten_all()?
+                .to_vec1::<f32>()?
+        );
+
+        // A different token count with a different row budget still succeeds and
+        // rewrites the staging instead of reusing stale contents.
+        let third = embedding.gather_with_buffers(
+            &[5, 3],
+            1,
+            1,
+            DType::F32,
+            &device,
+            Some(&mut buffers),
+        )?;
+        assert_eq!(
+            third.flatten_all()?.to_vec1::<f32>()?,
+            vec![5.0, 5.5, 3.0, 3.5]
+        );
+
+        buffers.clear();
+        assert!(buffers.is_empty());
+        Ok(())
+    }
+
+    /// The convolution must reuse its history and concatenated-state staging while
+    /// tracking the composed reference through a chunked decode continuation.
+    #[test]
+    fn staging_buffers_reuse_convolution_state_across_chunks() -> Result<()> {
+        let device = candle_core::Device::Cpu;
+        let kernel_values = [0.5, -0.25, 1.0, 0.75, -0.5, 0.125];
+        let input_values = [1.0, -1.0, 2.0, -2.0, 3.0, -3.0, 4.0, -4.0];
+        let kernel = Tensor::from_vec(kernel_values.to_vec(), (3, 2), &device)?;
+        let input = Tensor::from_vec(input_values.to_vec(), (4, 2), &device)?;
+
+        let mut reference = PleConvState::new(3, 2, 2)?;
+        let expected = reference.forward_chunk(1, &input_values, &kernel_values)?;
+
+        let mut state = PleConvState::new(3, 2, 2)?;
+        assert!(state.staging().is_empty());
+        let prefill = state.forward_tensor_chunk(1, &input, &kernel)?;
+        // Both convolution staging tensors are retained after the first chunk.
+        assert_eq!(state.staging().len(), 2);
+        let decode = state.forward_tensor_chunk(1, &input.narrow(0, 3, 1)?, &kernel)?;
+        assert_eq!(state.staging().len(), 2);
+
+        // The staged path must match the composed reference exactly for the decode
+        // step that runs over the carried history.
+        let reference_decode = reference.forward_chunk(1, &input_values[6..], &kernel_values)?;
+        let decode_actual = decode.flatten_all()?.to_vec1::<f32>()?;
+        for (index, actual) in decode_actual.iter().enumerate() {
+            let expected = reference_decode[index];
+            assert!(
+                (actual - expected).abs() < 1e-6,
+                "decode element {index}: staged={actual}, reference={expected}"
+            );
+        }
+        assert_eq!(state.snapshot(1), reference.snapshot(1));
+        // Prefill plus decode covers the same token count as the one-shot reference.
+        let prefilled = prefill.flatten_all()?.to_vec1::<f32>()?;
+        assert_eq!(prefilled.len(), expected.len());
+        assert_eq!(decode_actual.len(), reference_decode.len());
+        Ok(())
+    }
+
+    /// The packed PLE tensor path must retain and reuse the gather and convolution
+    /// staging across chunks rather than reallocating per step.
+    #[test]
+    fn staging_buffers_are_reused_by_the_packed_tensor_path() -> Result<()> {
+        let device = candle_core::Device::Cpu;
+        let hasher = PleHasher {
+            ngram_size: 2,
+            heads_per_ngram: 1,
+            eos_token_id: 0,
+            multipliers: vec![1, 3],
+            head_offsets: vec![0],
+            head_vocab_sizes: vec![6],
+        };
+        let table = Tensor::from_vec(
+            vec![
+                0.0f32, 0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0, 5.5,
+            ],
+            (6, 2),
+            &device,
+        )?;
+        let embedding = PleEmbedding::new(projection(table)?, 1, 2)?;
+        let layer = ple_layer()?;
+        let two_tokens = Tensor::from_vec(
+            vec![1.0f32, 0.5, -1.0, 2.0, 0.5, 0.25, 1.0, -0.5],
+            (1, 2, 2, 2),
+            &device,
+        )?;
+        let one_token = Tensor::from_vec(vec![1.0f32, 0.5, -1.0, 2.0], (1, 1, 2, 2), &device)?;
+        let mut state = PleState::new(&hasher, 2, 3, 4)?;
+        assert!(state.gather_staging().is_empty());
+        assert!(state.convolution_staging().is_empty());
+
+        state.forward_packed_tensor_chunks(
+            &hasher,
+            &embedding,
+            &layer,
+            &[(7, &[1, 2])],
+            &[(7, &two_tokens)],
+        )?;
+        assert_eq!(state.gather_staging().len(), 2);
+        assert_eq!(state.convolution_staging().len(), 2);
+
+        // A second decode chunk keeps the same stage count and still gathers the
+        // new rows rather than the previous chunk's rows.
+        state.forward_packed_tensor_chunks(
+            &hasher,
+            &embedding,
+            &layer,
+            &[(7, &[3])],
+            &[(7, &one_token)],
+        )?;
+        assert_eq!(state.gather_staging().len(), 2);
+        assert_eq!(state.convolution_staging().len(), 2);
+        Ok(())
     }
 }
