@@ -215,6 +215,16 @@ fn normalize_qwen4exp_multimodal_config(archive: &GgufArchive, config: &str) -> 
         let norm = metadata_bool(archive, &format!("{architecture}.expert_weights_norm"))?;
         text_config.insert("norm_topk_prob".to_string(), serde_json::Value::Bool(norm));
     }
+    if !text_config.contains_key("_mistralrs_gdn_v_head_layout") {
+        // The converter's GDN value heads follow llama.cpp's ggml-repeat tiling (value head
+        // j pairs with key head j mod num_key_heads), matching `build_qwen4_exp`. The official
+        // Transformers config does not carry the runtime layout key, and the serde default
+        // (Grouped) pairs heads incorrectly, which corrupts every GDN layer.
+        text_config.insert(
+            "_mistralrs_gdn_v_head_layout".to_string(),
+            serde_json::Value::String("tiled".to_string()),
+        );
+    }
     let has_ple = archive
         .metadata_value(&format!("{architecture}.ple.layers"))
         .is_some_and(|value| matches!(value, Value::Array(values) if !values.is_empty()));
@@ -1705,6 +1715,13 @@ mod tests {
         assert_eq!(
             config["text_config"]["ple_head_vocab_sizes"],
             json!(vocab_sizes)
+        );
+        // The official config carries no runtime GDN value-head layout; normalization must
+        // inject the converter's tiled ordering (matching `build_qwen4_exp`) because the
+        // Grouped serde default pairs recurrence heads incorrectly.
+        assert_eq!(
+            config["text_config"]["_mistralrs_gdn_v_head_layout"],
+            json!("tiled")
         );
 
         // An explicitly configured routing flag must survive normalization.

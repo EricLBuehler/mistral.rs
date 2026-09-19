@@ -1323,4 +1323,75 @@ mod tests {
 
         Ok(())
     }
+
+    /// Tokenizer alignment against llama.cpp for the real Qwen4Exp checkpoint.
+    ///
+    /// The reference vectors were captured from brew llama.cpp b10964-b29c606e2
+    /// (`llama-completion --verbose-prompt`) over the
+    /// `orcarouter/Qwen3.8-Flash-Next-Uncensored-GGUF` Q2_K snapshot:
+    /// the chat template rendered `<|im_start|>user\nThe capital of France
+    /// is<|im_end|>\n<|im_start|>assistant\n` and llama.cpp tokenized it as the
+    /// 13 IDs asserted below. Run with `--ignored --nocapture`.
+    #[test]
+    #[ignore = "requires the local orcarouter Qwen3.8-Flash-Next GGUF snapshot"]
+    fn qwen4exp_orcarouter_tokenizer_matches_llamacpp_reference() -> Result<()> {
+        const SNAPSHOT: &str = "/Users/wiking/.cache/huggingface/hub/models--orcarouter--Qwen3.8-Flash-Next-Uncensored-GGUF/snapshots/d2e41a316ee631cf17f83c8827800c836d30cbe6";
+        let dir = std::env::var("MISTRALRS_QWEN4EXP_GGUF_DIR").unwrap_or_else(|_| SNAPSHOT.into());
+        let mut shards: Vec<std::path::PathBuf> = std::fs::read_dir(&dir)
+            .map_err(anyhow::Error::msg)?
+            .filter_map(|entry| entry.ok().map(|e| e.path()))
+            .filter(|path| {
+                path.extension().is_some_and(|ext| ext == "gguf")
+                    && !path
+                        .file_name()
+                        .is_some_and(|name| name.to_string_lossy().contains("mmproj"))
+            })
+            .collect();
+        shards.sort();
+        anyhow::ensure!(!shards.is_empty(), "no target GGUF shards under {dir}");
+
+        let archive = mistralrs_quant::GgufArchive::open(&shards)?;
+        let converted = convert_gguf_metadata_to_hf_tokenizer(archive.metadata())?;
+        let tokenizer = &converted.tokenizer;
+
+        let rendered =
+            "<|im_start|>user\nThe capital of France is<|im_end|>\n<|im_start|>assistant\n";
+        const LLAMACPP_REFERENCE: [u32; 13] = [
+            248045, // <|im_start|>
+            846,    // user
+            198,    // \n
+            760,    // The
+            6511,   // ' capital'
+            314,    // ' of'
+            9338,   // ' France'
+            369,    // ' is'
+            248046, // <|im_end|>
+            198,    // \n
+            248045, // <|im_start|>
+            74455,  // assistant
+            198,    // \n
+        ];
+        let encoding = tokenizer
+            .encode_fast(rendered, false)
+            .map_err(anyhow::Error::msg)?;
+        let ids = encoding.get_ids();
+        assert_eq!(
+            ids, LLAMACPP_REFERENCE,
+            "mistral.rs tokenization diverges from the llama.cpp reference for the rendered prompt"
+        );
+
+        for passage in [
+            "The capital of France is",
+            "hello  world",
+            "Version 1234 released! I'll test 42 things.\n\tDone\u{1f680}",
+            "你好世界 \u{e9}e\u{301}",
+        ] {
+            let encoded = tokenizer
+                .encode_fast(passage, false)
+                .map_err(anyhow::Error::msg)?;
+            println!("{passage:?} -> {:?}", encoded.get_ids());
+        }
+
+        Ok(())
+    }
 }

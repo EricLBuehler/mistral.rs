@@ -2144,6 +2144,11 @@ fn build_qwen4_exp(metadata: &MetadataView<'_>) -> SynthesisResult<JsonValue> {
         json!(indexer_compress_ratio),
     );
     config.insert("output_gate_type".into(), json!("sigmoid"));
+    // The converter's GDN value heads follow llama.cpp's ggml-repeat tiling: value
+    // head j pairs with key head (j mod num_key_heads). Without this key the config
+    // deserializes to the Grouped serde default and the recurrence pairs heads
+    // incorrectly, which diverges from llama.cpp starting at the first GDN layer.
+    config.insert("_mistralrs_gdn_v_head_layout".into(), json!("tiled"));
     if let Some(ple) = qwen4exp_ple_config(metadata, fields.num_hidden_layers)? {
         for (key, value) in ple {
             config.insert(key, value);

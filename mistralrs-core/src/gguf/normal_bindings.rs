@@ -674,16 +674,17 @@ fn bind_qwen4_exp(
         );
     }
 
+    // The converter folds the zero-centered attention q/k gammas to ordinary
+    // `1 + w` values in the GGUF (verified against the real checkpoint:
+    // means ~1.28), the same direct-multiply convention as every other
+    // qwen4exp norm, so they bind without an affine transform.
     for (native, canonical) in [
         ("self_attn.attn.q_norm.weight", "attn_q_norm.weight"),
         ("self_attn.attn.k_norm.weight", "attn_k_norm.weight"),
     ] {
         let source = format!("{block}.{canonical}");
         if archive.contains_tensor(&source) {
-            bindings.insert(
-                format!("{p}.{native}"),
-                GgufTensorBinding::tensor(&source).affine(1.0, -1.0),
-            );
+            bindings.insert(format!("{p}.{native}"), GgufTensorBinding::tensor(&source));
         }
     }
 
@@ -1508,7 +1509,8 @@ mod tests {
             Some(&GgufTensorBinding::tensor("blk.0.ffn_gate_inp_shexp.weight").reshape(vec![1, 2]))
         );
 
-        // Full-attention layer: fused query/gate Q and zero-centered Q/K norms.
+        // Full-attention layer: fused query/gate Q. The Q/K norms are stored as the
+        // converter's folded `1 + w` ordinary gammas, bound without a transform.
         assert_eq!(
             bindings.get("model.layers.1.self_attn.attn.q_proj.weight"),
             Some(&GgufTensorBinding::tensor("blk.1.attn_q.weight"))
@@ -1519,11 +1521,11 @@ mod tests {
         );
         assert_eq!(
             bindings.get("model.layers.1.self_attn.attn.q_norm.weight"),
-            Some(&GgufTensorBinding::tensor("blk.1.attn_q_norm.weight").affine(1.0, -1.0))
+            Some(&GgufTensorBinding::tensor("blk.1.attn_q_norm.weight"))
         );
         assert_eq!(
             bindings.get("model.layers.1.self_attn.attn.k_norm.weight"),
-            Some(&GgufTensorBinding::tensor("blk.1.attn_k_norm.weight").affine(1.0, -1.0))
+            Some(&GgufTensorBinding::tensor("blk.1.attn_k_norm.weight"))
         );
         assert_eq!(
             bindings.get("model.layers.1.self_attn.indexer.q_proj.weight"),
