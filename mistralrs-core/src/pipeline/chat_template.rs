@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use anyhow::Result;
 use either::Either;
@@ -25,6 +25,8 @@ const HARMONY_ALTERNATE_EOS: &[&str] = &[
     "<|start|>",   // Harmony
     "<|channel|>", // Harmony
 ];
+
+const MAX_TOJSON_INDENT: usize = 256;
 
 #[allow(dead_code)]
 #[derive(Debug, Deserialize, Serialize)]
@@ -370,54 +372,194 @@ impl GenerationConfig {
 }
 
 fn tojson(value: Value, kwargs: Kwargs) -> Result<Value, Error> {
-    if let Ok(indent) = kwargs.get::<usize>("indent") {
-        // Cap the indent: it feeds `b" ".repeat(indent)`, so an attacker-controlled template could request a huge allocation or capacity-overflow panic.
-        const MAX_INDENT: usize = 256;
-        if indent > MAX_INDENT {
-            return Err(Error::new(
-                ErrorKind::InvalidOperation,
-                format!("tojson `indent` of {indent} exceeds the maximum of {MAX_INDENT}"),
-            ));
-        }
-        let mut buf = Vec::new();
-        let repeat = b" ".repeat(indent);
-        let formatter = serde_json::ser::PrettyFormatter::with_indent(&repeat);
-        let mut ser = serde_json::Serializer::with_formatter(&mut buf, formatter);
-        value.serialize(&mut ser).map_err(|err| {
+    let sort_keys = kwargs.get::<Option<bool>>("sort_keys")?.unwrap_or(false);
+    let ensure_ascii = kwargs.get::<Option<bool>>("ensure_ascii")?.unwrap_or(false);
+    let indent = tojson_indent(kwargs.get::<Option<Value>>("indent")?)?;
+    let separators = tojson_separators(kwargs.get::<Option<Vec<String>>>("separators")?)?;
+
+    let json = if sort_keys {
+        let mut value = serde_json::to_value(value).map_err(|err| {
             Error::new(ErrorKind::BadSerialization, "cannot serialize to JSON").with_source(err)
         })?;
-        String::from_utf8(buf).map_err(|err| {
-            Error::new(ErrorKind::BadSerialization, "cannot serialize to JSON").with_source(err)
-        })
+        sort_json_keys(&mut value);
+        serialize_json(&value, indent.as_deref(), separators.as_ref())?
     } else {
-        // Python's json.dumps default separators, which is what HF templates were rendered with
-        let mut buf = Vec::new();
-        let mut ser = serde_json::Serializer::with_formatter(&mut buf, PythonCompactFormatter);
-        value.serialize(&mut ser).map_err(|err| {
-            Error::new(ErrorKind::BadSerialization, "cannot serialize to JSON").with_source(err)
-        })?;
-        String::from_utf8(buf).map_err(|err| {
-            Error::new(ErrorKind::BadSerialization, "cannot serialize to JSON").with_source(err)
-        })
-    }
-    .map_err(|err| {
-        Error::new(ErrorKind::InvalidOperation, "cannot serialize to JSON").with_source(err)
-    })
-    // HF's tojson does not HTML-escape, so neither can we without changing the prompt
-    .map(Value::from_safe_string)
+        serialize_json(&value, indent.as_deref(), separators.as_ref())?
+    };
+
+    let json = if ensure_ascii {
+        escape_non_ascii_json_strings(&json)
+    } else {
+        json
+    };
+
+    Ok(Value::from_safe_string(json))
 }
 
-#[derive(Default)]
-struct PythonCompactFormatter;
+fn tojson_separators(separators: Option<Vec<String>>) -> Result<Option<JsonSeparators>, Error> {
+    let Some(separators) = separators else {
+        return Ok(None);
+    };
 
-impl serde_json::ser::Formatter for PythonCompactFormatter {
+    let [item, key]: [String; 2] = separators.try_into().map_err(|_| {
+        Error::new(
+            ErrorKind::InvalidOperation,
+            "tojson `separators` must contain exactly two strings",
+        )
+    })?;
+    Ok(Some(JsonSeparators {
+        item: item.into_bytes(),
+        key: key.into_bytes(),
+    }))
+}
+
+fn tojson_indent(indent: Option<Value>) -> Result<Option<Vec<u8>>, Error> {
+    let Some(indent) = indent else {
+        return Ok(None);
+    };
+
+    if indent.is_none() {
+        return Ok(None);
+    }
+
+    if let Some(indent) = indent.as_usize() {
+        if indent > MAX_TOJSON_INDENT {
+            return Err(Error::new(
+                ErrorKind::InvalidOperation,
+                format!("tojson `indent` of {indent} exceeds the maximum of {MAX_TOJSON_INDENT}"),
+            ));
+        }
+        return Ok(Some(b" ".repeat(indent)));
+    }
+
+    if let Some(indent) = indent.as_str() {
+        return Ok(Some(indent.as_bytes().to_vec()));
+    }
+
+    Err(Error::new(
+        ErrorKind::InvalidOperation,
+        "tojson `indent` must be an integer, string, or none",
+    ))
+}
+
+fn sort_json_keys(value: &mut serde_json::Value) {
+    match value {
+        serde_json::Value::Array(values) => {
+            for value in values {
+                sort_json_keys(value);
+            }
+        }
+        serde_json::Value::Object(map) => {
+            let sorted = std::mem::take(map)
+                .into_iter()
+                .map(|(key, mut value)| {
+                    sort_json_keys(&mut value);
+                    (key, value)
+                })
+                .collect::<BTreeMap<_, _>>();
+            *map = sorted.into_iter().collect();
+        }
+        _ => {}
+    }
+}
+
+fn serialize_json(
+    value: &impl Serialize,
+    indent: Option<&[u8]>,
+    separators: Option<&JsonSeparators>,
+) -> Result<String, Error> {
+    let mut buf = Vec::new();
+    match indent {
+        Some(indent) => {
+            let formatter = PythonPrettyFormatter {
+                indent,
+                item_separator: separators
+                    .map_or(&b","[..], |separators| separators.item.as_slice()),
+                key_separator: separators
+                    .map_or(&b": "[..], |separators| separators.key.as_slice()),
+                current_indent: 0,
+                has_value: false,
+            };
+            let mut serializer = serde_json::Serializer::with_formatter(&mut buf, formatter);
+            value.serialize(&mut serializer)
+        }
+        None => {
+            let formatter = PythonCompactFormatter {
+                item_separator: separators
+                    .map_or(&b", "[..], |separators| separators.item.as_slice()),
+                key_separator: separators
+                    .map_or(&b": "[..], |separators| separators.key.as_slice()),
+            };
+            let mut serializer = serde_json::Serializer::with_formatter(&mut buf, formatter);
+            value.serialize(&mut serializer)
+        }
+    }
+    .map_err(|err| {
+        Error::new(ErrorKind::BadSerialization, "cannot serialize to JSON").with_source(err)
+    })?;
+
+    String::from_utf8(buf).map_err(|err| {
+        Error::new(ErrorKind::BadSerialization, "cannot serialize to JSON").with_source(err)
+    })
+}
+
+fn escape_non_ascii_json_strings(json: &str) -> String {
+    let mut escaped = String::with_capacity(json.len());
+    let mut in_string = false;
+    let mut after_escape = false;
+
+    for character in json.chars() {
+        if after_escape {
+            escaped.push(character);
+            after_escape = false;
+        } else if in_string && character == '\\' {
+            escaped.push(character);
+            after_escape = true;
+        } else if character == '"' {
+            escaped.push(character);
+            in_string = !in_string;
+        } else if in_string && !character.is_ascii() {
+            push_unicode_escape(&mut escaped, character);
+        } else {
+            escaped.push(character);
+        }
+    }
+
+    escaped
+}
+
+fn push_unicode_escape(output: &mut String, character: char) {
+    for code_unit in character.encode_utf16(&mut [0; 2]) {
+        output.push_str("\\u");
+        for shift in [12, 8, 4, 0] {
+            let digit = ((*code_unit >> shift) & 0xF) as u8;
+            output.push(char::from(if digit < 10 {
+                b'0' + digit
+            } else {
+                b'a' + digit - 10
+            }));
+        }
+    }
+}
+
+struct JsonSeparators {
+    item: Vec<u8>,
+    key: Vec<u8>,
+}
+
+struct PythonCompactFormatter<'a> {
+    item_separator: &'a [u8],
+    key_separator: &'a [u8],
+}
+
+impl serde_json::ser::Formatter for PythonCompactFormatter<'_> {
     fn begin_array_value<W: std::io::Write + ?Sized>(
         &mut self,
         writer: &mut W,
         first: bool,
     ) -> std::io::Result<()> {
         if !first {
-            writer.write_all(b", ")?;
+            writer.write_all(self.item_separator)?;
         }
         Ok(())
     }
@@ -428,7 +570,7 @@ impl serde_json::ser::Formatter for PythonCompactFormatter {
         first: bool,
     ) -> std::io::Result<()> {
         if !first {
-            writer.write_all(b", ")?;
+            writer.write_all(self.item_separator)?;
         }
         Ok(())
     }
@@ -437,8 +579,106 @@ impl serde_json::ser::Formatter for PythonCompactFormatter {
         &mut self,
         writer: &mut W,
     ) -> std::io::Result<()> {
-        writer.write_all(b": ")
+        writer.write_all(self.key_separator)
     }
+}
+
+struct PythonPrettyFormatter<'a> {
+    current_indent: usize,
+    has_value: bool,
+    indent: &'a [u8],
+    item_separator: &'a [u8],
+    key_separator: &'a [u8],
+}
+
+impl serde_json::ser::Formatter for PythonPrettyFormatter<'_> {
+    fn begin_array<W: std::io::Write + ?Sized>(&mut self, writer: &mut W) -> std::io::Result<()> {
+        self.current_indent += 1;
+        self.has_value = false;
+        writer.write_all(b"[")
+    }
+
+    fn end_array<W: std::io::Write + ?Sized>(&mut self, writer: &mut W) -> std::io::Result<()> {
+        self.current_indent -= 1;
+        if self.has_value {
+            writer.write_all(b"\n")?;
+            write_indent(writer, self.current_indent, self.indent)?;
+        }
+        writer.write_all(b"]")
+    }
+
+    fn begin_array_value<W: std::io::Write + ?Sized>(
+        &mut self,
+        writer: &mut W,
+        first: bool,
+    ) -> std::io::Result<()> {
+        if !first {
+            writer.write_all(self.item_separator)?;
+        }
+        writer.write_all(b"\n")?;
+        write_indent(writer, self.current_indent, self.indent)
+    }
+
+    fn end_array_value<W: std::io::Write + ?Sized>(
+        &mut self,
+        _writer: &mut W,
+    ) -> std::io::Result<()> {
+        self.has_value = true;
+        Ok(())
+    }
+
+    fn begin_object<W: std::io::Write + ?Sized>(&mut self, writer: &mut W) -> std::io::Result<()> {
+        self.current_indent += 1;
+        self.has_value = false;
+        writer.write_all(b"{")
+    }
+
+    fn end_object<W: std::io::Write + ?Sized>(&mut self, writer: &mut W) -> std::io::Result<()> {
+        self.current_indent -= 1;
+        if self.has_value {
+            writer.write_all(b"\n")?;
+            write_indent(writer, self.current_indent, self.indent)?;
+        }
+        writer.write_all(b"}")
+    }
+
+    fn begin_object_key<W: std::io::Write + ?Sized>(
+        &mut self,
+        writer: &mut W,
+        first: bool,
+    ) -> std::io::Result<()> {
+        if !first {
+            writer.write_all(self.item_separator)?;
+        }
+        writer.write_all(b"\n")?;
+        write_indent(writer, self.current_indent, self.indent)
+    }
+
+    fn begin_object_value<W: std::io::Write + ?Sized>(
+        &mut self,
+        writer: &mut W,
+    ) -> std::io::Result<()> {
+        writer.write_all(self.key_separator)
+    }
+
+    fn end_object_value<W: std::io::Write + ?Sized>(
+        &mut self,
+        _writer: &mut W,
+    ) -> std::io::Result<()> {
+        self.has_value = true;
+        Ok(())
+    }
+}
+
+fn write_indent<W: std::io::Write + ?Sized>(
+    writer: &mut W,
+    count: usize,
+    indent: &[u8],
+) -> std::io::Result<()> {
+    for _ in 0..count {
+        writer.write_all(indent)?;
+    }
+    Ok(())
 }
 
 fn strftime_now(fmt: String) -> Result<String, minijinja::Error> {
@@ -1444,5 +1684,65 @@ mod tests {
         assert_eq!(defaults.max_new_tokens, None);
         assert_eq!(defaults.max_length, None);
         assert_eq!(defaults.suppress_tokens, None);
+    }
+    fn render_tojson(template: &str) -> String {
+        apply_chat_template_to(
+            vec![],
+            false,
+            None,
+            None,
+            &ChatTemplateValue(Either::Left(template.to_owned())),
+            None,
+            None,
+            None,
+            vec![],
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn tojson_sorts_keys_when_requested() {
+        assert_eq!(
+            render_tojson("{{ {'b':1,'a':2}|tojson(sort_keys=True) }}"),
+            r#"{"a": 2, "b": 1}"#
+        );
+    }
+
+    #[test]
+    fn tojson_escapes_non_ascii_when_requested() {
+        assert_eq!(
+            render_tojson("{{ {'a':'é'}|tojson(ensure_ascii=True) }}"),
+            r#"{"a": "\u00e9"}"#
+        );
+    }
+
+    #[test]
+    fn tojson_accepts_string_indent() {
+        assert_eq!(
+            render_tojson("{{ {'a':[1,2]}|tojson(indent='\t') }}"),
+            "{\n\t\"a\": [\n\t\t1,\n\t\t2\n\t]\n}"
+        );
+    }
+
+    #[test]
+    fn tojson_uses_custom_separators() {
+        assert_eq!(
+            render_tojson("{{ {'a':[1,2],'b':3}|tojson(separators=(',', ':')) }}"),
+            r#"{"a":[1,2],"b":3}"#
+        );
+        assert_eq!(
+            render_tojson("{{ {'a':[1,2]}|tojson(indent='\t',separators=(';', '=')) }}"),
+            "{\n\t\"a\"=[\n\t\t1;\n\t\t2\n\t]\n}"
+        );
+    }
+
+    #[test]
+    fn tojson_combines_options() {
+        assert_eq!(
+            render_tojson(
+                "{{ {'z':{'b':'é','a':2},'a':0}|tojson(sort_keys=True,ensure_ascii=True,indent='\t') }}"
+            ),
+            "{\n\t\"a\": 0,\n\t\"z\": {\n\t\t\"a\": 2,\n\t\t\"b\": \"\\u00e9\"\n\t}\n}"
+        );
     }
 }
