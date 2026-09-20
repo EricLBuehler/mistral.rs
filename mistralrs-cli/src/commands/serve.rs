@@ -1049,9 +1049,37 @@ pub(crate) async fn apply_quant_resolution(
         let format = model_format_mut(model_type)
             .context("GGUF artifacts are not supported for this model type")?;
         if format.mmproj.is_none()
+            && !format.mmproj_disabled
             && (is_confident_gguf_repo || is_explicit_multimodal || format.direct_file_only)
         {
-            if let Some(projector) = crate::commands::quant::resolve_gguf_projector(files, dtype)? {
+            // Only filter when the auto-selection is our own guess: an explicit `multimodal`
+            // model type means the user already asserted this model is multimodal, so trust it.
+            let filtered;
+            let candidates = if !is_explicit_multimodal {
+                let local_root = Path::new(&model_id);
+                match (format.quantized_file.as_deref(), local_root.is_dir()) {
+                    (Some(model_file), true) => {
+                        filtered = crate::commands::quant::filter_projector_candidates(
+                            local_root, files, model_file,
+                        );
+                        filtered.as_slice()
+                    }
+                    _ => files.as_slice(),
+                }
+            } else {
+                files.as_slice()
+            };
+            if candidates.len() != files.len() {
+                warn!(
+                    "GGUF: directory scan found {} projector-looking file(s) that don't match \
+                     `{model_id}`'s architecture; ignoring them and loading text-only. Pass \
+                     `--mmproj <file>` to attach one explicitly",
+                    files.len() - candidates.len()
+                );
+            }
+            if let Some(projector) =
+                crate::commands::quant::resolve_gguf_projector(candidates, dtype)?
+            {
                 info!(
                     "GGUF: selected {} projector `{}`",
                     projector.label,
@@ -1880,6 +1908,235 @@ mod tests {
             unreachable!()
         };
         assert_eq!(format.mmproj.as_deref(), Some("chosen-mmproj-F16.gguf"));
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    /// Writes a real, minimal (metadata-only, zero tensors) GGUF file so the projector
+    /// compatibility gate has an actual `general.architecture` / projector-type to read,
+    /// matching what mistral.rs issue #2421 needs to reproduce.
+    fn write_minimal_gguf(path: &std::path::Path, metadata: &[(&str, &str)]) {
+        use candle_core::quantized::gguf_file::Value;
+        let values: Vec<(String, Value)> = metadata
+            .iter()
+            .map(|(k, v)| (k.to_string(), Value::String(v.to_string())))
+            .collect();
+        let refs: Vec<(&str, &Value)> = values.iter().map(|(k, v)| (k.as_str(), v)).collect();
+        let mut file = fs::File::create(path).unwrap();
+        candle_core::quantized::gguf_file::write(&mut file, &refs, &[]).unwrap();
+    }
+
+    #[tokio::test]
+    async fn local_gguf_ignores_unrelated_projector_architecture() {
+        // Reproduces mistral.rs issue #2421: a text-only qwen2 GGUF sitting next to an
+        // unrelated (idefics3, i.e. llama-arch-only) projector in the same flat directory
+        // must not have that projector auto-attached.
+        let root = std::env::temp_dir().join(format!("mistralrs-gguf-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&root).unwrap();
+        write_minimal_gguf(
+            &root.join("qwen2.5-0.5b-instruct-q4_k_m.gguf"),
+            &[("general.architecture", "qwen2")],
+        );
+        write_minimal_gguf(
+            &root.join("mmproj-F16.gguf"),
+            &[
+                ("general.architecture", "clip"),
+                ("clip.vision.projector_type", "idefics3"),
+            ],
+        );
+
+        let mut model = test_model();
+        model.model_id = root.to_string_lossy().into_owned();
+        let mut model_type = ModelType::Auto {
+            model,
+            format: FormatOptions {
+                quantized_file: Some("qwen2.5-0.5b-instruct-q4_k_m.gguf".to_string()),
+                ..FormatOptions::default()
+            },
+            adapter: AdapterOptions::default(),
+            quantization: QuantizationOptions::default(),
+            device: DeviceOptions::default(),
+            cache: crate::args::CacheOptions::default(),
+            multimodal: MultimodalOptions::default(),
+        };
+
+        apply_quant_resolution(
+            &mut model_type,
+            &mistralrs_core::TokenSource::None,
+            &MatformerSelection::default(),
+        )
+        .await
+        .unwrap();
+
+        let ModelType::Auto { format, .. } = model_type else {
+            unreachable!()
+        };
+        assert_eq!(format.format, Some(ModelFormat::Gguf));
+        assert_eq!(
+            format.quantized_file.as_deref(),
+            Some("qwen2.5-0.5b-instruct-q4_k_m.gguf")
+        );
+        assert!(
+            format.mmproj.is_none(),
+            "an idefics3 projector must never auto-attach to a qwen2 text model"
+        );
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn local_gguf_still_attaches_a_genuinely_compatible_projector() {
+        // Regression guard: the architecture gate must not break real multimodal pairings.
+        let root = std::env::temp_dir().join(format!("mistralrs-gguf-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&root).unwrap();
+        write_minimal_gguf(
+            &root.join("model.gguf"),
+            &[("general.architecture", "llama")],
+        );
+        write_minimal_gguf(
+            &root.join("mmproj-F16.gguf"),
+            &[
+                ("general.architecture", "clip"),
+                ("clip.vision.projector_type", "idefics3"),
+            ],
+        );
+
+        let mut model = test_model();
+        model.model_id = root.to_string_lossy().into_owned();
+        let mut model_type = ModelType::Auto {
+            model,
+            format: FormatOptions {
+                quantized_file: Some("model.gguf".to_string()),
+                ..FormatOptions::default()
+            },
+            adapter: AdapterOptions::default(),
+            quantization: QuantizationOptions::default(),
+            device: DeviceOptions::default(),
+            cache: crate::args::CacheOptions::default(),
+            multimodal: MultimodalOptions::default(),
+        };
+
+        apply_quant_resolution(
+            &mut model_type,
+            &mistralrs_core::TokenSource::None,
+            &MatformerSelection::default(),
+        )
+        .await
+        .unwrap();
+
+        let ModelType::Auto { format, .. } = model_type else {
+            unreachable!()
+        };
+        assert_eq!(format.mmproj.as_deref(), Some("mmproj-F16.gguf"));
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn local_gguf_incompatible_projector_does_not_cause_ambiguity() {
+        // Second symptom from issue #2421: with an unrelated projector also present, directory
+        // scanning used to hard-error as "ambiguous" instead of ignoring the unrelated one.
+        let root = std::env::temp_dir().join(format!("mistralrs-gguf-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&root).unwrap();
+        write_minimal_gguf(
+            &root.join("model.gguf"),
+            &[("general.architecture", "llama")],
+        );
+        write_minimal_gguf(
+            &root.join("mmproj-idefics3-F16.gguf"),
+            &[
+                ("general.architecture", "clip"),
+                ("clip.vision.projector_type", "idefics3"),
+            ],
+        );
+        write_minimal_gguf(
+            &root.join("mmproj-pixtral-F16.gguf"),
+            &[
+                ("general.architecture", "clip"),
+                ("clip.vision.projector_type", "pixtral"),
+            ],
+        );
+
+        let mut model = test_model();
+        model.model_id = root.to_string_lossy().into_owned();
+        let mut model_type = ModelType::Auto {
+            model,
+            format: FormatOptions {
+                quantized_file: Some("model.gguf".to_string()),
+                ..FormatOptions::default()
+            },
+            adapter: AdapterOptions::default(),
+            quantization: QuantizationOptions::default(),
+            device: DeviceOptions::default(),
+            cache: crate::args::CacheOptions::default(),
+            multimodal: MultimodalOptions::default(),
+        };
+
+        apply_quant_resolution(
+            &mut model_type,
+            &mistralrs_core::TokenSource::None,
+            &MatformerSelection::default(),
+        )
+        .await
+        .unwrap();
+
+        let ModelType::Auto { format, .. } = model_type else {
+            unreachable!()
+        };
+        assert_eq!(
+            format.mmproj.as_deref(),
+            Some("mmproj-idefics3-F16.gguf"),
+            "pixtral projector requires mistral3, so only the idefics3 one is a real candidate"
+        );
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn mmproj_none_disables_auto_selection_even_with_a_compatible_projector() {
+        let root = std::env::temp_dir().join(format!("mistralrs-gguf-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&root).unwrap();
+        write_minimal_gguf(
+            &root.join("model.gguf"),
+            &[("general.architecture", "llama")],
+        );
+        write_minimal_gguf(
+            &root.join("mmproj-F16.gguf"),
+            &[
+                ("general.architecture", "clip"),
+                ("clip.vision.projector_type", "idefics3"),
+            ],
+        );
+
+        let mut model = test_model();
+        model.model_id = root.to_string_lossy().into_owned();
+        let mut model_type = ModelType::Auto {
+            model,
+            format: FormatOptions {
+                quantized_file: Some("model.gguf".to_string()),
+                mmproj: Some("none".to_string()),
+                ..FormatOptions::default()
+            },
+            adapter: AdapterOptions::default(),
+            quantization: QuantizationOptions::default(),
+            device: DeviceOptions::default(),
+            cache: crate::args::CacheOptions::default(),
+            multimodal: MultimodalOptions::default(),
+        };
+
+        apply_quant_resolution(
+            &mut model_type,
+            &mistralrs_core::TokenSource::None,
+            &MatformerSelection::default(),
+        )
+        .await
+        .unwrap();
+
+        let ModelType::Auto { format, .. } = model_type else {
+            unreachable!()
+        };
+        assert!(format.mmproj.is_none());
+        assert!(format.mmproj_disabled);
 
         fs::remove_dir_all(root).unwrap();
     }

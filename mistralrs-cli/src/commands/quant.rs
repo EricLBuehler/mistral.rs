@@ -8,8 +8,8 @@ use anyhow::{anyhow, Result};
 use tracing::{debug, info, warn};
 
 pub(crate) use gguf_discovery::{
-    has_gguf_model_files, list_local_files_recursive, list_local_gguf_companions,
-    resolve_gguf_projector, resolve_gguf_quant,
+    filter_projector_candidates, has_gguf_model_files, list_local_files_recursive,
+    list_local_gguf_companions, resolve_gguf_projector, resolve_gguf_quant,
 };
 
 use mistralrs_core::{

@@ -141,7 +141,7 @@ pub use files::{
     RequestedFile, FILE_PURPOSE_AGENT_OUTPUT, FILE_PURPOSE_USER_DATA, MODEL_INLINE_BYTES,
     WIRE_EMBED_LIMIT_BYTES,
 };
-pub use gguf::{GGUFArchitecture, GGUF_MULTI_FILE_DELIMITER};
+pub use gguf::{gguf_architecture_accepts_projector, GGUFArchitecture, GGUF_MULTI_FILE_DELIMITER};
 pub use mistralrs_audio::AudioInput;
 pub use mistralrs_code_exec::{
     CodeExecutionApproval, CodeExecutionApprovalCallback, CodeExecutionConfig, ShellConfig,

@@ -30,6 +30,42 @@ use std::str::FromStr;
 
 pub const GGUF_MULTI_FILE_DELIMITER: &str = ";";
 
+/// Direct-dispatch architectures in `pipeline::gguf::load_native_multimodal` that don't go
+/// through `multimodal_vision_registry::family_from_names` (they don't need the projector's
+/// own `clip.vision.projector_type` / `clip.audio.projector_type` to disambiguate).
+/// Keep in sync with the `match architecture.as_str()` arm there.
+const DIRECT_MULTIMODAL_ARCHITECTURES: &[&str] = &[
+    "gemma4",
+    "qwen2vl",
+    "qwen3vl",
+    "qwen3vlmoe",
+    "qwen35",
+    "qwen35moe",
+];
+
+/// Whether a `general.architecture` / projector-type pairing from GGUF metadata would actually
+/// be accepted by the native multimodal GGUF loader. Used by callers (e.g. the CLI's directory
+/// scan for a companion `mmproj*.gguf`) that want to predict, without loading the model, whether
+/// attaching a given projector to a given base model is meaningful, rather than just present in
+/// the same directory.
+pub fn gguf_architecture_accepts_projector(
+    architecture: &str,
+    vision_projector_type: Option<&str>,
+    audio_projector_type: Option<&str>,
+) -> bool {
+    let architecture = architecture.to_ascii_lowercase();
+    if DIRECT_MULTIMODAL_ARCHITECTURES.contains(&architecture.as_str()) {
+        return true;
+    }
+    let family_matches = |projector: Option<&str>| {
+        multimodal_vision_registry::family_from_names(&architecture, projector)
+            .ok()
+            .flatten()
+            .is_some()
+    };
+    family_matches(vision_projector_type) || family_matches(audio_projector_type)
+}
+
 #[derive(Debug, EnumString, Clone, Copy, strum::Display)]
 #[strum(serialize_all = "lowercase")]
 pub enum GGUFArchitecture {
@@ -59,5 +95,57 @@ impl GGUFArchitecture {
         Self::from_str(&value.as_ref().to_ascii_lowercase())
             .with_context(|| format!("Unknown GGUF architecture `{value}`"))
             .map_err(anyhow::Error::msg)
+    }
+}
+
+#[cfg(test)]
+mod projector_compat_tests {
+    use super::gguf_architecture_accepts_projector;
+
+    #[test]
+    fn direct_dispatch_architectures_accept_any_projector_claim() {
+        assert!(gguf_architecture_accepts_projector("gemma4", None, None));
+        assert!(gguf_architecture_accepts_projector("qwen2vl", None, None));
+        assert!(gguf_architecture_accepts_projector("QWEN3VL", None, None));
+    }
+
+    #[test]
+    fn matched_family_pairing_is_accepted() {
+        assert!(gguf_architecture_accepts_projector(
+            "llama",
+            Some("idefics3"),
+            None
+        ));
+        assert!(gguf_architecture_accepts_projector(
+            "mistral3",
+            Some("pixtral"),
+            None
+        ));
+        assert!(gguf_architecture_accepts_projector(
+            "gemma3",
+            Some("gemma3"),
+            None
+        ));
+    }
+
+    #[test]
+    fn mismatched_family_pairing_is_rejected() {
+        // The exact repro from mistral.rs issue #2421: a text-only qwen2 GGUF sitting next
+        // to an unrelated idefics3 (llama-arch) projector in the same directory.
+        assert!(!gguf_architecture_accepts_projector(
+            "qwen2",
+            Some("idefics3"),
+            None
+        ));
+        assert!(!gguf_architecture_accepts_projector("qwen2", None, None));
+    }
+
+    #[test]
+    fn unknown_projector_type_is_rejected() {
+        assert!(!gguf_architecture_accepts_projector(
+            "llama",
+            Some("some-future-projector"),
+            None
+        ));
     }
 }
