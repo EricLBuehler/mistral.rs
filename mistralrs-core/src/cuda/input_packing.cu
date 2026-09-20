@@ -1,15 +1,13 @@
 #include <cuda_runtime.h>
 #include <cstdint>
 
-namespace {
-
 constexpr int kPackedRowsPerLaunch = 64;
 
 struct PackedInputRows {
   const uint32_t *values[kPackedRowsPerLaunch];
 };
 
-__global__ void pack_completion_input_kernel(const uint32_t *host,
+extern "C" __global__ void pack_completion_input_kernel(const uint32_t *host,
                                              PackedInputRows staged,
                                              uint32_t *output, int rows,
                                              int host_width,
@@ -28,7 +26,7 @@ __global__ void pack_completion_input_kernel(const uint32_t *host,
                       : staged.values[row][column - host_width];
 }
 
-__global__ void pad_decode_input_kernel(const uint32_t *input,
+extern "C" __global__ void pad_decode_input_kernel(const uint32_t *input,
                                         uint32_t *output, int input_rows,
                                         int output_rows, int width) {
   const int64_t index =
@@ -41,8 +39,6 @@ __global__ void pad_decode_input_kernel(const uint32_t *input,
   const int column = static_cast<int>(index - static_cast<int64_t>(row) * width);
   const int source_row = row < input_rows ? row : 0;
   output[index] = input[static_cast<int64_t>(source_row) * width + column];
-}
-
 }
 
 extern "C" int pack_completion_input_u32(
