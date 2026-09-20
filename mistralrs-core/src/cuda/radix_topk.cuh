@@ -550,7 +550,7 @@ inline cudaError_t launch_vec(const T *input, float *packed_output, int nrows,
   void *args[] = {&input,          &packed_output, &nrows,
                   &ncols,          &top_k,          &states,
                   &chunk_size,     &ctas_per_group};
-  status = cudaLaunchCooperativeKernel(kernel, dim3(total_ctas),
+  status = cudaLaunchCooperativeKernel((const void*)kernel, dim3(total_ctas),
                                        dim3(kBlockThreads), args, smem_size,
                                        stream);
   if (status != cudaSuccess) {
