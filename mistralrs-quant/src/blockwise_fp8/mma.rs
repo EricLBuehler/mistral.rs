@@ -114,6 +114,7 @@ pub(super) fn quantize_activation(
 
 /// Quantizes into `padded_rows` zero-filled rows with group-major scales `[K/128, padded_rows]`,
 /// the operand shape the cuTile FP8 GEMM consumes.
+#[allow(dead_code)]
 pub(crate) fn quantize_activation_padded(
     x: &Tensor,
     padded_rows: usize,
