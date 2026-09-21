@@ -12,6 +12,13 @@ use tracing::{trace, warn};
 
 use crate::{tools::ToolCallFormat, MessageContent, ModelGenerationDefaults, Tool};
 
+const GGUF_SAMPLING_TEMP: &str = "general.sampling.temp";
+const GGUF_SAMPLING_TOP_K: &str = "general.sampling.top_k";
+const GGUF_SAMPLING_TOP_P: &str = "general.sampling.top_p";
+const GGUF_SAMPLING_MIN_P: &str = "general.sampling.min_p";
+const GGUF_SAMPLING_PENALTY_REPEAT: &str = "general.sampling.penalty_repeat";
+const GGUF_FLOAT_ROUND: f64 = 1e6; // f32 metadata such as 0.95 widens to 0.9499999880790710
+
 const SUPPORTED_ALTERNATE_EOS: &[&str] = &[
     "<|im_end|>",      // Handle ChatML case
     "<end_of_turn>",   // Handle Gemma2 chat case
@@ -316,6 +323,42 @@ impl GenerationConfig {
         conf.max_new_tokens = None;
         conf.max_length = None;
         Some(conf)
+    }
+
+    /// Sampling defaults a GGUF file declares under `general.sampling.*`, which llama.cpp also treats as defaults.
+    pub fn from_gguf_metadata(
+        metadata: &HashMap<String, candle_core::quantized::gguf_file::Value>,
+    ) -> Option<Self> {
+        use candle_core::quantized::gguf_file::Value as Gguf;
+        let float = |key: &str| {
+            let value = match metadata.get(key)? {
+                Gguf::F32(v) => f64::from(*v),
+                Gguf::F64(v) => *v,
+                _ => return None,
+            };
+            Some((value * GGUF_FLOAT_ROUND).round() / GGUF_FLOAT_ROUND)
+        };
+        let top_k = match metadata.get(GGUF_SAMPLING_TOP_K) {
+            Some(Gguf::U32(v)) => usize::try_from(*v).ok(),
+            Some(Gguf::I32(v)) => usize::try_from(*v).ok(),
+            Some(Gguf::U64(v)) => usize::try_from(*v).ok(),
+            Some(Gguf::I64(v)) => usize::try_from(*v).ok(),
+            _ => None,
+        };
+        let conf = Self {
+            bos_token_id: None,
+            eos_token_id: None,
+            do_sample: None,
+            temperature: float(GGUF_SAMPLING_TEMP),
+            top_k,
+            top_p: float(GGUF_SAMPLING_TOP_P),
+            min_p: float(GGUF_SAMPLING_MIN_P),
+            repetition_penalty: float(GGUF_SAMPLING_PENALTY_REPEAT).map(|v| v as f32),
+            max_new_tokens: None,
+            max_length: None,
+            suppress_tokens: None,
+        };
+        conf.generation_defaults().is_some().then_some(conf)
     }
 
     pub(crate) fn validate_token_ids(&self, vocab_size: usize) -> Result<()> {
@@ -1219,6 +1262,30 @@ mod tests {
 
         assert_eq!(xhigh, "xhigh:xhigh:enabled");
         assert_eq!(off, "off:off:disabled");
+    }
+
+    #[test]
+    fn generation_config_reads_gguf_sampling_metadata() {
+        use candle_core::quantized::gguf_file::Value as Gguf;
+        let mut metadata = HashMap::new();
+        assert!(GenerationConfig::from_gguf_metadata(&metadata).is_none());
+        metadata.insert("general.sampling.top_k".to_string(), Gguf::U32(20));
+        metadata.insert("general.sampling.top_p".to_string(), Gguf::F32(0.95));
+        metadata.insert("general.sampling.temp".to_string(), Gguf::F32(1.0));
+        metadata.insert(
+            "general.sampling.penalty_repeat".to_string(),
+            Gguf::F32(1.1),
+        );
+        let defaults = GenerationConfig::from_gguf_metadata(&metadata)
+            .unwrap()
+            .generation_defaults()
+            .unwrap();
+        assert_eq!(defaults.top_k, Some(20));
+        assert_eq!(defaults.top_p, Some(0.95));
+        assert_eq!(defaults.temperature, Some(1.0));
+        assert_eq!(defaults.repetition_penalty, Some(1.1));
+        assert_eq!(defaults.min_p, None);
+        assert_eq!(defaults.max_new_tokens, None);
     }
 
     #[test]
