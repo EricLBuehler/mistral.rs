@@ -1,10 +1,19 @@
-use std::{collections::HashMap, sync::Arc};
+use std::{
+    collections::{HashMap, HashSet},
+    sync::Arc,
+};
 
 use candle_core::{quantized::GgmlDType, DType, Device, Error, Result, Shape, Tensor};
 use candle_nn::{var_builder::SimpleBackend, Linear};
 
+use rayon::prelude::*;
+
 use super::{
     archive::{qtensor_from_gguf_data, GgufArchive, GgufEndian},
+    hadamard::HadamardSpec,
+    pq2_0::{self, PQ2_0_BLOCK_BYTES, PQ2_0_BLOCK_ELEMS, PQ2_0_GGUF_TYPE},
+    ptq1_0::{self, PTQ1_0_BLOCK_BYTES, PTQ1_0_BLOCK_ELEMS, PTQ1_0_GGUF_TYPE},
+    ptq1_0_linear::Ptq1_0Linear,
     GgufMatMul,
 };
 use crate::{
@@ -271,6 +280,8 @@ pub struct GgufWeightSource {
     shapes: HashMap<String, Vec<usize>>,
     output_dtypes: HashMap<String, DType>,
     dtype: DType,
+    hadamard: Option<HadamardSpec>,
+    packed_ternary: bool,
 }
 
 struct PackedBinding {
@@ -325,13 +336,98 @@ impl GgufWeightSource {
             shapes.insert(native_name.clone(), shape);
             output_dtypes.insert(native_name, output_dtype);
         }
+        let hadamard = HadamardSpec::from_metadata(archive.metadata())?;
+        if let Some(spec) = &hadamard {
+            validate_hadamard_widths(&archive, spec)?;
+            validate_fold_coverage(&archive, spec, &bindings)?;
+        }
         Ok(Self {
             archive,
             bindings,
             shapes,
             output_dtypes,
             dtype,
+            hadamard,
+            packed_ternary: true,
         })
+    }
+
+    #[cfg(test)]
+    fn set_packed_ternary(&mut self, on: bool) {
+        self.packed_ternary = on;
+    }
+
+    /// Keeps PTQ1_0 blocks packed (fold applied to activations) for unsharded CPU and CUDA linears.
+    fn try_load_packed_ternary(
+        &self,
+        key: &str,
+        source_name: &str,
+        device: &Device,
+        shard: Shard,
+    ) -> Result<Option<Arc<dyn QuantMethod>>> {
+        let info = self.archive.tensor_info(source_name)?;
+        if !self.packed_ternary
+            || !(device.is_cpu() || (cfg!(feature = "cuda") && device.is_cuda()))
+            || info.dtype().raw() != PTQ1_0_GGUF_TYPE
+            || info.shape().len() != 2
+            || shard_range(shard, info.shape())?.is_some()
+        {
+            return Ok(None);
+        }
+        let width = info.shape()[1];
+        let transform = match &self.hadamard {
+            Some(spec) => spec.row_transform(source_name, width)?,
+            None => None,
+        };
+        #[cfg(feature = "cuda")]
+        if device.is_cuda() && transform.as_ref().is_some_and(|t| !t.supports_cuda()) {
+            return Ok(None);
+        }
+        let bias = self.load_bias(key, device, None, 2)?;
+        let layer = Ptq1_0Linear::new(
+            self.archive.clone(),
+            source_name,
+            transform,
+            bias,
+            self.dtype,
+            device,
+        )?;
+        Ok(Some(Arc::new(layer)))
+    }
+
+    /// Tensors that are decoded to dense floats at load instead of staying block-quantized.
+    fn is_decoded_on_load(&self, name: &str, raw_dtype: u32) -> bool {
+        matches!(raw_dtype, 0 | 1 | 30)
+            || is_prism_ternary(raw_dtype)
+            || self
+                .hadamard
+                .as_ref()
+                .is_some_and(|h| h.role(name).is_some())
+    }
+
+    fn materialize_source_tensor(&self, name: &str, device: &Device) -> Result<Tensor> {
+        let info = self.archive.tensor_info(name)?;
+        let raw = info.dtype().raw();
+        let role = self.hadamard.as_ref().filter(|h| h.role(name).is_some());
+        if role.is_none() && !is_prism_ternary(raw) {
+            return self.archive.load_qtensor(name, device)?.dequantize(device);
+        }
+        let shape = info.shape().to_vec();
+        let mut data = if is_prism_ternary(raw) {
+            decode_prism_ternary(raw, self.archive.tensor_data(name)?.bytes(), &shape)?
+        } else {
+            self.archive
+                .load_qtensor(name, &Device::Cpu)?
+                .dequantize(&Device::Cpu)?
+                .to_dtype(DType::F32)?
+                .flatten_all()?
+                .to_vec1::<f32>()?
+        };
+        if let Some(spec) = role {
+            let width = *shape.last().expect("GGUF tensors have at least one dim");
+            spec.apply(name, &mut data, width)?;
+        }
+        Tensor::from_vec(data, shape, &Device::Cpu)?.to_device(device)
     }
 
     pub fn archive(&self) -> &Arc<GgufArchive> {
@@ -391,10 +487,7 @@ impl GgufWeightSource {
 
     fn materialize_binding(&self, binding: &GgufTensorBinding, device: &Device) -> Result<Tensor> {
         match binding {
-            GgufTensorBinding::Tensor(name) => {
-                let tensor = self.archive.load_qtensor(name, device)?;
-                tensor.dequantize(device)
-            }
+            GgufTensorBinding::Tensor(name) => self.materialize_source_tensor(name, device),
             GgufTensorBinding::Mxfp4Blocks(name) => {
                 self.materialize_mxfp4_component(name, false, device)
             }
@@ -604,10 +697,10 @@ impl GgufWeightSource {
         match binding {
             GgufTensorBinding::Tensor(name) => {
                 let info = self.archive.tensor_info(name)?;
-                let dtype = info.dtype().candle_dtype()?;
-                if matches!(info.dtype().raw(), 0 | 1 | 30) {
+                if self.is_decoded_on_load(name, info.dtype().raw()) {
                     return Ok(None);
                 }
+                let dtype = info.dtype().candle_dtype()?;
                 Ok(Some(PackedBinding {
                     dtype,
                     dims: info.shape().to_vec(),
@@ -653,7 +746,7 @@ impl GgufWeightSource {
         match binding {
             GgufTensorBinding::Tensor(name) => {
                 let info = self.archive.tensor_info(name)?;
-                if matches!(info.dtype().raw(), 0 | 1 | 30) {
+                if self.is_decoded_on_load(name, info.dtype().raw()) {
                     Ok(None)
                 } else {
                     info.dtype().candle_dtype().map(Some)
@@ -724,7 +817,7 @@ impl GgufWeightSource {
         let resident_bytes = match binding.direct_tensor() {
             Some(source_name) => {
                 let info = self.archive.tensor_info(source_name)?;
-                if matches!(info.dtype().raw(), 0 | 1 | 30) {
+                if self.is_decoded_on_load(source_name, info.dtype().raw()) {
                     logical_elements
                         .checked_mul(dtype.size_in_bytes())
                         .ok_or_else(|| Error::msg("GGUF dense resident byte estimate overflow"))?
@@ -777,11 +870,16 @@ impl QuantizedWeightSource for GgufWeightSource {
         let Some(binding) = self.bindings.get(&weight_name) else {
             return Ok(None);
         };
+        if let Some(source_name) = binding.direct_tensor() {
+            if let Some(layer) = self.try_load_packed_ternary(key, source_name, device, shard)? {
+                return Ok(Some(layer));
+            }
+        }
         match binding.direct_tensor() {
             Some(source_name)
-                if matches!(
+                if self.is_decoded_on_load(
+                    source_name,
                     self.archive.tensor_info(source_name)?.dtype().raw(),
-                    0 | 1 | 30
                 ) =>
             {
                 self.load_dense_linear(key, binding, device, shard)
@@ -1060,6 +1158,111 @@ impl SimpleBackend for GgufTensorBackend {
     }
 }
 
+fn is_prism_ternary(raw_dtype: u32) -> bool {
+    matches!(raw_dtype, PQ2_0_GGUF_TYPE | PTQ1_0_GGUF_TYPE)
+}
+
+fn decode_prism_ternary(raw_dtype: u32, bytes: &[u8], shape: &[usize]) -> Result<Vec<f32>> {
+    let (block_elems, block_bytes) = match raw_dtype {
+        PQ2_0_GGUF_TYPE => (PQ2_0_BLOCK_ELEMS, PQ2_0_BLOCK_BYTES),
+        _ => (PTQ1_0_BLOCK_ELEMS, PTQ1_0_BLOCK_BYTES),
+    };
+    let width = *shape.last().unwrap_or(&0);
+    if width == 0 || !width.is_multiple_of(block_elems) {
+        candle_core::bail!(
+            "ternary GGUF tensor row width {width} is not a multiple of {block_elems}"
+        );
+    }
+    let elems: usize = shape.iter().product();
+    let row_bytes = width / block_elems * block_bytes;
+    if bytes.len() != elems / width * row_bytes {
+        candle_core::bail!(
+            "ternary GGUF tensor has {} bytes for shape {shape:?}",
+            bytes.len()
+        );
+    }
+    let mut out = vec![0f32; elems];
+    out.par_chunks_mut(width)
+        .zip(bytes.par_chunks(row_bytes))
+        .for_each(|(dst, src)| match raw_dtype {
+            PQ2_0_GGUF_TYPE => pq2_0::dequantize_row(src, dst),
+            _ => ptq1_0::dequantize_row(src, dst),
+        });
+    Ok(out)
+}
+
+const UNCONSUMED_FOLDS_SHOWN: usize = 3;
+
+fn collect_bound_tensors<'a>(binding: &'a GgufTensorBinding, names: &mut HashSet<&'a str>) {
+    use GgufTensorBinding as B;
+    match binding {
+        B::Tensor(name) | B::Mxfp4Blocks(name) | B::Mxfp4Scales(name) => {
+            names.insert(name);
+        }
+        B::Concat { inputs, .. } | B::Stack { inputs, .. } | B::Interleave { inputs, .. } => inputs
+            .iter()
+            .for_each(|input| collect_bound_tensors(input, names)),
+        B::Slice { input, .. }
+        | B::Transpose { input, .. }
+        | B::Permute { input, .. }
+        | B::Reshape { input, .. }
+        | B::Affine { input, .. }
+        | B::Log { input }
+        | B::InverseSoftplus { input }
+        | B::Cast { input, .. } => collect_bound_tensors(input, names),
+    }
+}
+
+/// A folded tensor missing from the file is an error; one that no binding consumes only warns.
+fn validate_fold_coverage(
+    archive: &GgufArchive,
+    spec: &HadamardSpec,
+    bindings: &HashMap<String, GgufTensorBinding>,
+) -> Result<()> {
+    let mut bound = HashSet::new();
+    bindings
+        .values()
+        .for_each(|binding| collect_bound_tensors(binding, &mut bound));
+    let mut unconsumed = Vec::new();
+    for name in spec.folded_names() {
+        if archive.tensor_info(name).is_err() {
+            candle_core::bail!(
+                "Hadamard tensor `{name}` is listed in the metadata but missing from the file"
+            );
+        }
+        if !bound.contains(name) {
+            unconsumed.push(name);
+        }
+    }
+    if !unconsumed.is_empty() {
+        let shown = unconsumed
+            .iter()
+            .take(UNCONSUMED_FOLDS_SHOWN)
+            .collect::<Vec<_>>();
+        tracing::warn!(
+            "{} Hadamard-folded tensors are not consumed by the model (e.g. {shown:?})",
+            unconsumed.len()
+        );
+    }
+    Ok(())
+}
+
+fn validate_hadamard_widths(archive: &GgufArchive, spec: &HadamardSpec) -> Result<()> {
+    for name in spec.folded_names() {
+        let Ok(info) = archive.tensor_info(name) else {
+            continue;
+        };
+        let width = info.shape().last().copied().unwrap_or(0);
+        if width == 0 || !width.is_multiple_of(spec.block_size()) {
+            candle_core::bail!(
+                "Hadamard tensor `{name}` width {width} is not a multiple of block {}",
+                spec.block_size()
+            );
+        }
+    }
+    Ok(())
+}
+
 fn validate_binding_storage(
     archive: &GgufArchive,
     binding: &GgufTensorBinding,
@@ -1068,7 +1271,7 @@ fn validate_binding_storage(
     match binding {
         GgufTensorBinding::Tensor(name) => {
             let dtype = archive.tensor_info(name)?.dtype();
-            if dtype.candle_dtype().is_err() {
+            if dtype.candle_dtype().is_err() && !is_prism_ternary(dtype.raw()) {
                 candle_core::bail!(
                     "GGUF tensor `{name}` uses dtype {} ({}) for native binding `{native_name}`; \
                      direct GGUF loading currently supports {DIRECT_GGUF_DTYPES}, while \
@@ -1347,6 +1550,385 @@ fn checked_elem_count(shape: &[usize]) -> Result<usize> {
 
 #[cfg(test)]
 mod tests {
+    const FOLD_BLOCK: usize = 128;
+    const FOLD_IN: usize = 256;
+    const FOLD_OUT: usize = 4;
+    const FOLD_TENSOR: &str = "blk.0.ffn_down.weight";
+    const PLAIN_TENSOR: &str = "blk.0.ffn_up.weight";
+    const EMBD_TENSOR: &str = "token_embd.weight";
+
+    fn kv_string(bytes: &mut Vec<u8>, key: &str, value: &str) {
+        push_key(bytes, key, 8);
+        bytes.extend_from_slice(&(value.len() as u64).to_le_bytes());
+        bytes.extend_from_slice(value.as_bytes());
+    }
+
+    fn push_key(bytes: &mut Vec<u8>, key: &str, ty: u32) {
+        bytes.extend_from_slice(&(key.len() as u64).to_le_bytes());
+        bytes.extend_from_slice(key.as_bytes());
+        bytes.extend_from_slice(&ty.to_le_bytes());
+    }
+
+    fn kv_u32(bytes: &mut Vec<u8>, key: &str, value: u32) {
+        push_key(bytes, key, 4);
+        bytes.extend_from_slice(&value.to_le_bytes());
+    }
+
+    fn kv_array(bytes: &mut Vec<u8>, key: &str, elem_ty: u32, elems: &[Vec<u8>]) {
+        push_key(bytes, key, 9);
+        bytes.extend_from_slice(&elem_ty.to_le_bytes());
+        bytes.extend_from_slice(&(elems.len() as u64).to_le_bytes());
+        elems.iter().for_each(|e| bytes.extend_from_slice(e));
+    }
+
+    fn string_elem(value: &str) -> Vec<u8> {
+        let mut out = (value.len() as u64).to_le_bytes().to_vec();
+        out.extend_from_slice(value.as_bytes());
+        out
+    }
+
+    fn test_signs() -> Vec<f32> {
+        (0..FOLD_IN)
+            .map(|i| if (i * 5 + i / 3) % 3 == 0 { -1.0 } else { 1.0 })
+            .collect()
+    }
+
+    fn test_trit_rows(seed: usize) -> Vec<u8> {
+        let mut data = Vec::new();
+        for row in 0..FOLD_OUT {
+            for blk in 0..FOLD_IN / PTQ1_0_BLOCK_ELEMS {
+                let mut codes = [0u8; PTQ1_0_BLOCK_ELEMS];
+                for (i, c) in codes.iter_mut().enumerate() {
+                    *c = ((i * 3 + row * 7 + blk * 11 + seed) % 3) as u8;
+                }
+                let scale = 0.25 * (1 + row + blk) as f32;
+                data.extend_from_slice(&ptq1_0::encode_block(&codes, scale));
+            }
+        }
+        data
+    }
+
+    fn fold_archive(with_fold: bool) -> Result<(NamedTempFile, Arc<GgufArchive>)> {
+        fold_archive_named(with_fold, FOLD_TENSOR)
+    }
+
+    fn fold_archive_named(
+        with_fold: bool,
+        listed_weight: &str,
+    ) -> Result<(NamedTempFile, Arc<GgufArchive>)> {
+        let mut kvs = Vec::new();
+        let mut kv_count = 0u64;
+        if with_fold {
+            kv_u32(&mut kvs, "prism.hadamard.version", 1);
+            kv_u32(&mut kvs, "prism.hadamard.block_size", FOLD_BLOCK as u32);
+            kv_string(
+                &mut kvs,
+                "prism.hadamard.transform",
+                "normalized-sylvester-walsh-hadamard",
+            );
+            kv_string(&mut kvs, "prism.hadamard.axis", "input-last-dimension");
+            kv_string(&mut kvs, "prism.hadamard.sign_mode", "explicit");
+            kv_array(
+                &mut kvs,
+                "prism.hadamard.weight_names",
+                8,
+                &[string_elem(listed_weight)],
+            );
+            kv_array(
+                &mut kvs,
+                "prism.hadamard.sign_widths",
+                4,
+                &[(FOLD_IN as u32).to_le_bytes().to_vec()],
+            );
+            let signs: Vec<Vec<u8>> = test_signs()
+                .iter()
+                .map(|s| (*s as i32).to_le_bytes().to_vec())
+                .collect();
+            kv_array(&mut kvs, "prism.hadamard.sign_values", 5, &signs);
+            kv_array(
+                &mut kvs,
+                "prism.hadamard.inverse_weight_names",
+                8,
+                &[string_elem(EMBD_TENSOR)],
+            );
+            kv_count = 9;
+        }
+        let tensors = [
+            (FOLD_TENSOR, test_trit_rows(0)),
+            (PLAIN_TENSOR, test_trit_rows(1)),
+            (EMBD_TENSOR, test_trit_rows(2)),
+        ];
+        let mut header = Vec::new();
+        header.extend_from_slice(b"GGUF");
+        header.extend_from_slice(&3u32.to_le_bytes());
+        header.extend_from_slice(&(tensors.len() as u64).to_le_bytes());
+        header.extend_from_slice(&kv_count.to_le_bytes());
+        header.extend_from_slice(&kvs);
+        let mut offset = 0u64;
+        for (name, data) in &tensors {
+            header.extend_from_slice(&(name.len() as u64).to_le_bytes());
+            header.extend_from_slice(name.as_bytes());
+            header.extend_from_slice(&2u32.to_le_bytes());
+            header.extend_from_slice(&(FOLD_IN as u64).to_le_bytes());
+            header.extend_from_slice(&(FOLD_OUT as u64).to_le_bytes());
+            header.extend_from_slice(&PTQ1_0_GGUF_TYPE.to_le_bytes());
+            header.extend_from_slice(&offset.to_le_bytes());
+            offset += align(data.len(), 32) as u64;
+        }
+        header.resize(align(header.len(), 32), 0);
+        for (_, data) in &tensors {
+            header.extend_from_slice(data);
+            header.resize(align(header.len(), 32), 0);
+        }
+        let mut file = NamedTempFile::new().map_err(Error::wrap)?;
+        file.as_file_mut().write_all(&header).map_err(Error::wrap)?;
+        file.as_file_mut().flush().map_err(Error::wrap)?;
+        let archive = Arc::new(GgufArchive::open_file(file.path())?);
+        Ok((file, archive))
+    }
+
+    fn fold_source(
+        with_fold: bool,
+        packed: bool,
+    ) -> Result<(NamedTempFile, Arc<GgufWeightSource>)> {
+        let (file, archive) = fold_archive(with_fold)?;
+        let bindings = GgufBindingMap::new()
+            .with_binding("model.down.weight", GgufTensorBinding::tensor(FOLD_TENSOR))
+            .with_binding("model.up.weight", GgufTensorBinding::tensor(PLAIN_TENSOR))
+            .with_binding("model.embd.weight", GgufTensorBinding::tensor(EMBD_TENSOR));
+        let mut source = GgufWeightSource::new(archive, &bindings, DType::F32)?;
+        source.set_packed_ternary(packed);
+        Ok((file, Arc::new(source)))
+    }
+
+    fn decoded(seed: usize) -> Vec<f32> {
+        let bytes = test_trit_rows(seed);
+        decode_prism_ternary(PTQ1_0_GGUF_TYPE, &bytes, &[FOLD_OUT, FOLD_IN]).unwrap()
+    }
+
+    #[test]
+    fn skipping_the_fold_changes_the_output() -> Result<()> {
+        let x: Vec<f32> = (0..FOLD_IN)
+            .map(|i| ((i * 13) % 17) as f32 / 8.0 - 1.0)
+            .collect();
+        let input = Tensor::from_vec(x, (1, FOLD_IN), &Device::Cpu)?;
+        let mut outputs = Vec::new();
+        for with_fold in [true, false] {
+            let (_file, source) = fold_source(with_fold, true)?;
+            let layer = source
+                .load_linear("model.down", &Device::Cpu, Shard::default())?
+                .unwrap();
+            outputs.push(layer.forward(&input)?.flatten_all()?.to_vec1::<f32>()?);
+        }
+        let diff: f32 = outputs[0]
+            .iter()
+            .zip(&outputs[1])
+            .map(|(a, b)| (a - b).abs())
+            .sum();
+        let norm: f32 = outputs[1].iter().map(|v| v.abs()).sum();
+        assert!(
+            diff > 0.1 * norm,
+            "fold barely changed the output: {diff} vs {norm}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn fold_listed_but_missing_from_file_is_refused() -> Result<()> {
+        let (_file, archive) = fold_archive_named(true, "blk.9.gone.weight")?;
+        let bindings = GgufBindingMap::new()
+            .with_binding("model.down.weight", GgufTensorBinding::tensor(FOLD_TENSOR));
+        let err = GgufWeightSource::new(archive, &bindings, DType::F32).unwrap_err();
+        assert!(err.to_string().contains("missing from the file"), "{err}");
+        Ok(())
+    }
+
+    #[test]
+    fn fold_not_consumed_by_any_binding_still_loads() -> Result<()> {
+        let (_file, archive) = fold_archive(true)?;
+        let bindings = GgufBindingMap::new()
+            .with_binding("model.up.weight", GgufTensorBinding::tensor(PLAIN_TENSOR));
+        GgufWeightSource::new(archive, &bindings, DType::F32)?;
+        Ok(())
+    }
+
+    #[test]
+    fn folded_ternary_linear_matches_runtime_fold_packed_and_dense() -> Result<()> {
+        for packed in [true, false] {
+            folded_linear_matches_runtime_fold(packed)?;
+        }
+        Ok(())
+    }
+
+    fn folded_linear_matches_runtime_fold(packed: bool) -> Result<()> {
+        let (_file, source) = fold_source(true, packed)?;
+        let stored = decoded(0);
+        let x: Vec<f32> = (0..FOLD_IN)
+            .map(|i| ((i * 13) % 17) as f32 / 8.0 - 1.0)
+            .collect();
+
+        let mut xt: Vec<f32> = x.iter().zip(test_signs()).map(|(a, s)| a * s).collect();
+        xt.as_chunks_mut::<FOLD_BLOCK>()
+            .0
+            .iter_mut()
+            .for_each(|b| super::super::hadamard::fwht_normalized(b));
+        let want: Vec<f32> = stored
+            .as_chunks::<FOLD_IN>()
+            .0
+            .iter()
+            .map(|row| row.iter().zip(&xt).map(|(w, a)| w * a).sum())
+            .collect();
+
+        let layer = source
+            .load_linear("model.down", &Device::Cpu, Shard::default())?
+            .unwrap();
+        let input = Tensor::from_vec(x, (1, FOLD_IN), &Device::Cpu)?;
+        let got = layer.forward(&input)?.flatten_all()?.to_vec1::<f32>()?;
+        assert_eq!(got.len(), FOLD_OUT);
+        for (g, w) in got.iter().zip(&want) {
+            assert!((g - w).abs() < 1e-3, "{g} vs {w}");
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn inverse_embedding_rows_agree_between_packed_and_dense() -> Result<()> {
+        let ids = Tensor::from_vec(vec![3u32, 0, 2, 2], (2, 2), &Device::Cpu)?;
+        let mut outputs = Vec::new();
+        for packed in [true, false] {
+            let (_file, source) = fold_source(true, packed)?;
+            let layer = source
+                .load_linear("model.embd", &Device::Cpu, Shard::default())?
+                .unwrap();
+            let rows = layer.embedding_forward(&ids, DType::F32)?;
+            assert_eq!(rows.dims(), [2, 2, FOLD_IN]);
+            outputs.push(rows.flatten_all()?.to_vec1::<f32>()?);
+        }
+        for (a, b) in outputs[0].iter().zip(&outputs[1]) {
+            assert!((a - b).abs() < 1e-4, "{a} vs {b}");
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn unfolded_names_and_folds_absent_from_metadata_decode_plainly() -> Result<()> {
+        for (with_fold, packed) in [(true, true), (true, false), (false, true), (false, false)] {
+            let (_file, source) = fold_source(with_fold, packed)?;
+            let layer = source
+                .load_linear("model.up", &Device::Cpu, Shard::default())?
+                .unwrap();
+            let got = layer.dequantize_w()?.flatten_all()?.to_vec1::<f32>()?;
+            assert_eq!(got, decoded(1));
+        }
+        Ok(())
+    }
+
+    const BONSAI_GGUF_ENV: &str = "BONSAI_GGUF";
+    const SAMPLE_WEIGHT: &str = "blk.3.attn_k.weight";
+    const TRIT_VALUES_PER_GROUP: usize = 3;
+
+    #[test]
+    #[ignore = "needs BONSAI_GGUF=<path to Ternary-Bonsai-2-27B-PTQ1_0.gguf>"]
+    fn real_bonsai_packed_matches_dense() -> Result<()> {
+        let path = std::env::var(BONSAI_GGUF_ENV).expect("BONSAI_GGUF is not set");
+        let mut outputs = Vec::new();
+        for packed in [true, false] {
+            let archive = Arc::new(GgufArchive::open_file(&path)?);
+            let bindings = GgufBindingMap::new()
+                .with_binding(
+                    "m.k.weight",
+                    GgufTensorBinding::tensor("blk.3.attn_k.weight"),
+                )
+                .with_binding(
+                    "m.out.weight",
+                    GgufTensorBinding::tensor("blk.0.ssm_out.weight"),
+                )
+                .with_binding(
+                    "m.embd.weight",
+                    GgufTensorBinding::tensor("token_embd.weight"),
+                );
+            let mut source = GgufWeightSource::new(archive, &bindings, DType::F32)?;
+            source.set_packed_ternary(packed);
+            let mut results = Vec::new();
+            for (key, width) in [("m.k", 5120usize), ("m.out", 6144)] {
+                let x: Vec<f32> = (0..2 * width)
+                    .map(|i| ((i * 31) % 97) as f32 / 48.0 - 1.0)
+                    .collect();
+                let input = Tensor::from_vec(x, (2, width), &Device::Cpu)?;
+                let layer = source
+                    .load_linear(key, &Device::Cpu, Shard::default())?
+                    .unwrap();
+                results.push(layer.forward(&input)?.flatten_all()?.to_vec1::<f32>()?);
+            }
+            let ids = Tensor::from_vec(vec![0u32, 1000, 248000], (3,), &Device::Cpu)?;
+            let embd = source
+                .load_linear("m.embd", &Device::Cpu, Shard::default())?
+                .unwrap();
+            results.push(
+                embd.embedding_forward(&ids, DType::F32)?
+                    .flatten_all()?
+                    .to_vec1::<f32>()?,
+            );
+            outputs.push(results);
+        }
+        for (packed, dense) in outputs[0].iter().zip(&outputs[1]) {
+            let scale = dense.iter().fold(0f32, |m, v| m.max(v.abs())).max(1e-6);
+            let worst = packed
+                .iter()
+                .zip(dense)
+                .fold(0f32, |m, (a, b)| m.max((a - b).abs()));
+            println!("max abs diff {worst} at scale {scale}");
+            assert!(worst <= 2e-3 * scale);
+        }
+        Ok(())
+    }
+
+    #[test]
+    #[ignore = "needs BONSAI_GGUF=<path to Ternary-Bonsai-2-27B-PTQ1_0.gguf>"]
+    fn real_bonsai_fold_decodes_and_unfolds() -> Result<()> {
+        let path = std::env::var(BONSAI_GGUF_ENV).expect("BONSAI_GGUF is not set");
+        let archive = GgufArchive::open_file(path)?;
+        let spec = HadamardSpec::from_metadata(archive.metadata())?.expect("no prism.hadamard.*");
+        assert_eq!(spec.block_size(), 1024);
+        for width in [5120usize, 6144, 17408] {
+            assert_eq!(spec.signs_for(width)?.len(), width);
+        }
+        validate_hadamard_widths(&archive, &spec)?;
+
+        let info = archive.tensor_info(SAMPLE_WEIGHT)?;
+        assert_eq!(info.dtype().raw(), PTQ1_0_GGUF_TYPE);
+        let shape = info.shape().to_vec();
+        let width = *shape.last().unwrap();
+        let stored = decode_prism_ternary(
+            PTQ1_0_GGUF_TYPE,
+            archive.tensor_data(SAMPLE_WEIGHT)?.bytes(),
+            &shape,
+        )?;
+        assert!(stored.iter().all(|v| v.is_finite()));
+        for group in stored.as_chunks::<PTQ1_0_BLOCK_ELEMS>().0 {
+            let scale = group.iter().fold(0f32, |m, v| m.max(v.abs()));
+            let mut distinct: Vec<f32> = group.to_vec();
+            distinct.sort_by(f32::total_cmp);
+            distinct.dedup();
+            assert!(distinct.len() <= TRIT_VALUES_PER_GROUP);
+            assert!(distinct.iter().all(|v| *v == 0.0 || v.abs() == scale));
+        }
+        let zeros = stored.iter().filter(|v| **v == 0.0).count();
+        println!(
+            "{SAMPLE_WEIGHT} shape {shape:?}, zero fraction {:.3}",
+            zeros as f64 / stored.len() as f64
+        );
+
+        let mut unfolded = stored.clone();
+        spec.apply(SAMPLE_WEIGHT, &mut unfolded, width)?;
+        for (a, b) in stored.chunks_exact(width).zip(unfolded.chunks_exact(width)) {
+            let norm = |r: &[f32]| r.iter().map(|v| (*v as f64).powi(2)).sum::<f64>().sqrt();
+            assert!((norm(a) - norm(b)).abs() <= 1e-3 * norm(a).max(1.0));
+        }
+        assert_ne!(stored, unfolded);
+        Ok(())
+    }
+
     use std::io::Write;
 
     use candle_core::quantized::{gguf_file, GgmlDType, QTensor};

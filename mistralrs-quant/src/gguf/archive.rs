@@ -22,6 +22,8 @@ use candle_core::{
 use half::{bf16, f16};
 use memmap2::{Mmap, MmapOptions};
 
+use super::{pq2_0::PQ2_0_GGUF_TYPE, ptq1_0::PTQ1_0_GGUF_TYPE};
+
 const DEFAULT_ALIGNMENT: usize = 32;
 const MAX_STRING_LENGTH: u64 = 1 << 30;
 const MAX_ARRAY_ELEMENTS: u64 = 1 << 30;
@@ -106,6 +108,8 @@ impl GgufDType {
             39 => "MXFP4",
             40 => "NVFP4",
             41 => "Q1_0",
+            PQ2_0_GGUF_TYPE => "PQ2_0",
+            PTQ1_0_GGUF_TYPE => "PTQ1_0",
             _ => "UNKNOWN",
         }
     }
@@ -115,7 +119,7 @@ impl GgufDType {
             0 | 1 | 24..=28 | 30 => Some(1),
             2 | 3 | 6..=9 | 20 | 39 => Some(32),
             40 => Some(64),
-            41 => Some(128),
+            41 | PQ2_0_GGUF_TYPE | PTQ1_0_GGUF_TYPE => Some(128),
             10..=19 | 21..=23 | 29 | 34 | 35 => Some(256),
             _ => None,
         }
@@ -155,6 +159,8 @@ impl GgufDType {
             39 => Some(17),
             40 => Some(36),
             41 => Some(18),
+            PQ2_0_GGUF_TYPE => Some(34),
+            PTQ1_0_GGUF_TYPE => Some(28),
             _ => None,
         }
     }
