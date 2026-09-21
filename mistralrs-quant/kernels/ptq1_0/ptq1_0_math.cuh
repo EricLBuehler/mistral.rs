@@ -21,7 +21,6 @@ constexpr int QH_START = 120;
 constexpr int DECODE_STEPS = 5;
 constexpr int FWHT_BLOCK = 1024;
 constexpr uint32_t LANE_MASK = 0x00FF00FFu;
-constexpr uint32_t ONES = 0x01010101u;
 
 // What one weight word contributes: `steps` groups of 4 consecutive weights at
 // elements elem_base + step * elem_stride.
@@ -61,16 +60,12 @@ PTQ1_0_HD uint32_t byte_perm(uint32_t x, uint32_t y, uint32_t sel) {
 #endif
 }
 
-PTQ1_0_HD uint32_t sub_bytes(uint32_t a, uint32_t b) {
-#ifdef __CUDA_ARCH__
-  return __vsub4(a, b);
-#else
-  uint32_t r = 0;
-  for (int i = 0; i < 4; ++i) {
-    r |= (((a >> (8 * i)) - (b >> (8 * i))) & 0xFFu) << (8 * i);
-  }
-  return r;
-#endif
+// Four digits 0..2 held one per byte, as the weights -1..1 in signed bytes.
+// digit + 0x7F never carries out of its byte, and flipping the top bit maps
+// 0x7F, 0x80, 0x81 to -1, 0, 1: two integer ops in place of a byte-wise
+// subtract.
+PTQ1_0_HD int digits_to_weights(uint32_t digits) {
+  return static_cast<int>((digits + 0x7F7F7F7Fu) ^ 0x80808080u);
 }
 
 PTQ1_0_HD int dot4(int a, int b, int c) {
@@ -106,8 +101,8 @@ PTQ1_0_HD int decode_digits(uint32_t &v_lo, uint32_t &v_hi, uint32_t mult) {
 
 // The same four trits as signed weights -1..1.
 PTQ1_0_HD int decode_step(uint32_t &v_lo, uint32_t &v_hi, uint32_t mult) {
-  return static_cast<int>(
-      sub_bytes(static_cast<uint32_t>(decode_digits(v_lo, v_hi, mult)), ONES));
+  return digits_to_weights(
+      static_cast<uint32_t>(decode_digits(v_lo, v_hi, mult)));
 }
 
 // The 8 qh weights as two dp4a groups (elements 120..123 and 124..127) of
@@ -117,9 +112,8 @@ PTQ1_0_HD void decode_qh(uint32_t word, int &first, int &second) {
   init_state(word, BLOCK_WORDS - 1, lo, hi);
   const uint32_t w1_lo = ((lo * 9u) & LANE_MASK) * 3u;
   const uint32_t w1_hi = ((lo * 27u) & LANE_MASK) * 3u;
-  first = static_cast<int>(
-      sub_bytes(byte_perm(lo * 3u, hi * 3u, 0x7531), ONES));
-  second = static_cast<int>(sub_bytes(byte_perm(w1_lo, w1_hi, 0x7531), ONES));
+  first = digits_to_weights(byte_perm(lo * 3u, hi * 3u, 0x7531));
+  second = digits_to_weights(byte_perm(w1_lo, w1_hi, 0x7531));
 }
 
 // Weight `e` (0..127) of a block as -1, 0 or 1, following the packed element

@@ -204,10 +204,10 @@ ptq1_0_matmul_bpl_kernel(const uint32_t *__restrict__ w,
     const uint32_t w0_hi = q0_hi * 3u;
     const uint32_t w1_lo = ((q0_lo * 9u) & ptq1_0::LANE_MASK) * 3u;
     const uint32_t w1_hi = ((q0_lo * 27u) & ptq1_0::LANE_MASK) * 3u;
-    const int qa = static_cast<int>(ptq1_0::sub_bytes(
-        ptq1_0::byte_perm(w0_lo, w0_hi, 0x7531), ptq1_0::ONES));
-    const int qb = static_cast<int>(ptq1_0::sub_bytes(
-        ptq1_0::byte_perm(w1_lo, w1_hi, 0x7531), ptq1_0::ONES));
+    const int qa =
+        ptq1_0::digits_to_weights(ptq1_0::byte_perm(w0_lo, w0_hi, 0x7531));
+    const int qb =
+        ptq1_0::digits_to_weights(ptq1_0::byte_perm(w1_lo, w1_hi, 0x7531));
 #pragma unroll
     for (int t = 0; t < TT; ++t) {
       const int2 xv = load8(t, b, 15);
