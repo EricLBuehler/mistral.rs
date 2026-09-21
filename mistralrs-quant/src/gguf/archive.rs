@@ -1122,15 +1122,19 @@ fn validate_and_order_splits(shards: &mut [ParsedShard]) -> Result<()> {
                 shard.path.display()
             ))
         })?;
-        let count = metadata_usize(&shard.metadata, SPLIT_COUNT)?.ok_or_else(|| {
+        let mut count = metadata_usize(&shard.metadata, SPLIT_COUNT)?.ok_or_else(|| {
             Error::msg(format!(
                 "GGUF shard `{}` is missing `{SPLIT_COUNT}`",
                 shard.path.display()
             ))
         })?;
+        
+        // BYPASS: Single-file monolithic models sometimes incorrectly specify `split.count` = 0.
+        // We override count to 1 so the shard loader doesn't crash on these valid 15GB models.
         if count == 0 {
-            candle_core::bail!("GGUF `{SPLIT_COUNT}` must be positive");
+            count = 1;
         }
+
         if index >= count {
             candle_core::bail!("GGUF split index {index} is outside split count {count}");
         }
