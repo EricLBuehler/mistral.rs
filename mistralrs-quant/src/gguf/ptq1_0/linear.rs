@@ -528,7 +528,7 @@ mod tests {
         let (bytes, _) = synthetic(out_dim, in_dim, 1);
         let transform = RowTransform::for_test(HadamardRole::Fold, in_dim, 11, false);
         let gpu = PackedWeights::upload(&bytes, Some(&transform), &dev)?;
-        for tokens in [1, 8, 59, 256] {
+        for tokens in [1, 2, 3, 4, 8, 59, 256] {
             let x = vec![0.5f32; tokens * in_dim];
             let input = Tensor::from_vec(x, (tokens, in_dim), &dev)?.to_dtype(DType::BF16)?;
             let secs = time(&|| gpu.matmul(&input, out_dim, in_dim))?;
@@ -536,6 +536,51 @@ mod tests {
                 "production kernel, tokens {tokens}: {:.3} ms, {:.1} GB/s of weights",
                 secs * 1e3,
                 bytes.len() as f64 / secs / 1e9
+            );
+        }
+        Ok(())
+    }
+
+    #[cfg(feature = "cuda")]
+    #[test]
+    #[ignore = "needs a CUDA device"]
+    fn cuda_batch_size_invariance() -> Result<()> {
+        use crate::gguf::ptq1_0::cuda::PackedWeights;
+
+        let (out_dim, in_dim, max_tokens) = (2048, 5120, 40);
+        let dev = Device::new_cuda(0)?;
+        let (bytes, x) = synthetic(out_dim, in_dim, max_tokens);
+        let transform = RowTransform::for_test(HadamardRole::Fold, in_dim, 11, false);
+        let gpu = PackedWeights::upload(&bytes, Some(&transform), &dev)?;
+        let run = |first: usize, rows: usize| -> Result<Vec<f32>> {
+            let data = x[first * in_dim..(first + rows) * in_dim].to_vec();
+            let input = Tensor::from_vec(data, (rows, in_dim), &dev)?;
+            gpu.matmul(&input, out_dim, in_dim)?
+                .flatten_all()?
+                .to_vec1::<f32>()
+        };
+        let alone = (0..max_tokens)
+            .map(|t| run(t, 1))
+            .collect::<Result<Vec<_>>>()?;
+        for tokens in [2, 3, 4, 8, 15, 16, 40] {
+            let batch = run(0, tokens)?;
+            let (mut differing, mut worst) = (0, 0f32);
+            for (t, want) in alone.iter().take(tokens).enumerate() {
+                let got = &batch[t * out_dim..(t + 1) * out_dim];
+                let diff = got
+                    .iter()
+                    .zip(want)
+                    .map(|(g, w)| (g - w).abs())
+                    .fold(0f32, f32::max);
+                differing += usize::from(
+                    got.iter()
+                        .zip(want)
+                        .any(|(g, w)| g.to_bits() != w.to_bits()),
+                );
+                worst = worst.max(diff);
+            }
+            eprintln!(
+                "batch invariance: {tokens:>2} tokens, {differing} of {tokens} rows differ from the single-token result, max abs diff {worst:.2e}"
             );
         }
         Ok(())
