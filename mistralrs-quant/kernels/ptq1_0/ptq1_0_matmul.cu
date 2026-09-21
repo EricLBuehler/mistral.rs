@@ -1,6 +1,5 @@
-// Prism ternary (PTQ1_0) matmul with the Hadamard weight fold applied to
-// activations. Activations are quantized to int8 (one scale per weight block)
-// so the dot product runs on dp4a.
+// Prism ternary (PTQ1_0) matmul with the Hadamard fold applied to activations,
+// which are quantized to int8 with one scale per weight block for dp4a.
 
 #include "cuda_bf16.h"
 #include "cuda_fp16.h"
@@ -21,9 +20,8 @@
 #define SCALE_WORD (ptq1_0::BLOCK_WORDS - 1) // scale is in its top half
 #define INT8_MAX_F 127.0f
 
-// One CTA per (FWHT_BLOCK columns, token): gather, signs and FWHT in shared
-// memory, then int8 quantization with one scale per 128 columns. Without
-// do_fwht it only quantizes.
+// One CTA per (FWHT_BLOCK columns, token): gather, signs, FWHT, then int8
+// quantize with one scale per 128 columns (only quantizes without do_fwht).
 template <typename T>
 static __global__ void
 ptq1_0_prepare_kernel(const T *__restrict__ x, const float *__restrict__ signs,
@@ -239,7 +237,7 @@ ptq1_0_matmul_bpl_kernel(const uint32_t *__restrict__ w,
   }
 }
 
-// Benchmark baseline: one warp per row, lane L owns word L % 7 of a block.
+// One warp per row; lane L owns word L % 7 of a block.
 template <typename OutT, int TT>
 static __global__ void
 ptq1_0_matmul_kernel(const uint32_t *__restrict__ w,
@@ -400,9 +398,8 @@ static void ptq1_0_launch_bpl(const void *x, const void *w, const void *signs,
           ncols_x, nrows_x, b_size);
 }
 
-// The thread-per-block kernel, one token per pass, wins for small batches;
-// the lane kernel is only the fallback for larger ones on GPUs without the
-// tensor-core GEMM. Activations are staged in shared memory when the row fits.
+// Thread-per-block kernel for small batches (activations staged in shared
+// memory when they fit); the lane kernel is the fallback for large ones.
 template <typename T>
 static void ptq1_0_launch(const void *x, const void *w, const void *signs,
                           const void *gather, void *scratch, void *dst,
@@ -487,42 +484,3 @@ PTQ1_0_LAUNCHER(bf16, __nv_bfloat16)
 PTQ1_0_EMBEDDING_LAUNCHER(f32, float)
 PTQ1_0_EMBEDDING_LAUNCHER(f16, __half)
 PTQ1_0_EMBEDDING_LAUNCHER(bf16, __nv_bfloat16)
-
-// Benchmark entry: 0 lane-role kernel, 1/2/3 thread-per-block with 1/2/4
-// tokens per pass, 4 the same with activations staged in shared memory (1 token
-// per pass); anything else the production dispatch.
-extern "C" void launch_ptq1_0_matmul_variant_bf16(
-    const void *x, const void *w, const void *signs, const void *gather,
-    void *scratch, void *dst, int ncols_x, int nrows_x, int b_size,
-    int do_fwht, int variant, void *stream) {
-  switch (variant) {
-  case 0:
-    ptq1_0_launch_lanes<__nv_bfloat16>(x, w, signs, gather, scratch, dst,
-                                       ncols_x, nrows_x, b_size, do_fwht,
-                                       stream);
-    break;
-  case 1:
-    ptq1_0_launch_bpl<__nv_bfloat16, 1, false>(
-        x, w, signs, gather, scratch, dst, ncols_x, nrows_x, b_size, do_fwht,
-        stream);
-    break;
-  case 2:
-    ptq1_0_launch_bpl<__nv_bfloat16, 2, false>(
-        x, w, signs, gather, scratch, dst, ncols_x, nrows_x, b_size, do_fwht,
-        stream);
-    break;
-  case 3:
-    ptq1_0_launch_bpl<__nv_bfloat16, 4, false>(
-        x, w, signs, gather, scratch, dst, ncols_x, nrows_x, b_size, do_fwht,
-        stream);
-    break;
-  case 4:
-    ptq1_0_launch_bpl<__nv_bfloat16, 1, true>(
-        x, w, signs, gather, scratch, dst, ncols_x, nrows_x, b_size, do_fwht,
-        stream);
-    break;
-  default:
-    ptq1_0_launch<__nv_bfloat16>(x, w, signs, gather, scratch, dst, ncols_x,
-                                 nrows_x, b_size, do_fwht, stream);
-  }
-}

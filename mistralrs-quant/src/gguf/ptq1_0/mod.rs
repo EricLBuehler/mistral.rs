@@ -1,4 +1,15 @@
 //! Prism ternary group-128 codec (ggml type 143): 5 trits/byte in `qs`, 4 trits/byte in `qh`, fp16 scale last.
+//!
+//! The CPU matmul, CUDA path and linear layer built on it are the submodules.
+
+mod cpu;
+#[cfg(feature = "cuda")]
+mod cuda;
+#[cfg(feature = "cuda")]
+mod ffi;
+mod linear;
+
+pub(super) use linear::Ptq1_0Linear;
 
 use half::f16;
 

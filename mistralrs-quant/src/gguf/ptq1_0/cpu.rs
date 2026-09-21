@@ -1,9 +1,10 @@
 //! Int8-activation CPU matmul over packed PTQ1_0 rows: a scalar reference and an AVX2 kernel that agree bit for bit.
 
+use std::cell::RefCell;
+
 use rayon::prelude::*;
 
-use super::ptq1_0::{block_scale, unpack_block_trits, PTQ1_0_BLOCK_BYTES, PTQ1_0_BLOCK_ELEMS};
-use super::ptq1_0_pool::{Chunks, Pool};
+use super::{block_scale, unpack_block_trits, PTQ1_0_BLOCK_BYTES, PTQ1_0_BLOCK_ELEMS};
 
 const INT8_MAX_F: f32 = 127.0;
 const LANES: usize = 8;
@@ -12,8 +13,8 @@ const VECS_PER_BLOCK: usize = PTQ1_0_BLOCK_ELEMS / VEC_BYTES;
 pub(super) const ROWS_PER_TASK: usize = 16;
 pub(super) const TOKEN_TILE: usize = 32;
 pub(super) const K_TILE_BLOCKS: usize = 8;
-/// Up to this many tokens the matmul runs on the spin-then-park pool; above it rayon amortizes its wake-up.
-pub(super) const POOL_MAX_TOKENS: usize = 4;
+/// Up to this many tokens the activation quantize stays serial; a parallel pass over so few blocks costs more than it saves.
+const SERIAL_QUANTIZE_MAX_TOKENS: usize = 4;
 const ROW_BLOCK: usize = 4;
 pub(super) const TOKEN_BLOCK: usize = 2;
 
@@ -49,7 +50,7 @@ fn quantize(xt: &[f32], in_dim: usize) -> Acts {
         sums: vec![0; n_blocks],
         blocks_per_row: in_dim / PTQ1_0_BLOCK_ELEMS,
     };
-    if xt.len() <= POOL_MAX_TOKENS * in_dim {
+    if xt.len() <= SERIAL_QUANTIZE_MAX_TOKENS * in_dim {
         for ((x, q), (scale, sum)) in xt
             .chunks(PTQ1_0_BLOCK_ELEMS)
             .zip(acts.q.iter_mut())
@@ -225,7 +226,7 @@ struct Scratch {
 }
 
 impl Scratch {
-    fn new() -> Self {
+    const fn new() -> Self {
         Self {
             tile: Vec::new(),
             scales: Vec::new(),
@@ -235,6 +236,10 @@ impl Scratch {
             xsums: Vec::new(),
         }
     }
+}
+
+thread_local! {
+    static SCRATCH: RefCell<Scratch> = const { RefCell::new(Scratch::new()) };
 }
 
 /// What one micro tile needs to know about the current row/token/k tiles.
@@ -465,30 +470,21 @@ pub(super) fn packed_matmul_with(
             }
         }
     };
-    if tokens <= POOL_MAX_TOKENS {
-        thread_local! {
-            static SCRATCH: std::cell::RefCell<Scratch> = std::cell::RefCell::new(Scratch::new());
-        }
-        let chunks = Chunks::new(&mut by_row, ROWS_PER_TASK * tokens);
-        Pool::global().run(out_dim.div_ceil(ROWS_PER_TASK), &|i| {
-            let start = i * ROWS_PER_TASK * row_bytes;
-            let rows = &bytes[start..(start + ROWS_PER_TASK * row_bytes).min(bytes.len())];
-            // SAFETY: task `i` is the only one touching output chunk `i`
-            let out = unsafe { chunks.get(i) };
-            SCRATCH.with(|sc| run_rows(&mut sc.borrow_mut(), out, rows));
-        });
-    } else {
-        by_row
-            .par_chunks_mut(ROWS_PER_TASK * tokens)
-            .zip(bytes.par_chunks(ROWS_PER_TASK * row_bytes))
-            .for_each_init(Scratch::new, |sc, (out, rows)| run_rows(sc, out, rows));
+    by_row
+        .par_chunks_mut(ROWS_PER_TASK * tokens)
+        .zip(bytes.par_chunks(ROWS_PER_TASK * row_bytes))
+        .for_each(|(out, rows)| SCRATCH.with_borrow_mut(|sc| run_rows(sc, out, rows)));
+    if tokens == 1 {
+        return by_row;
     }
     let mut out = vec![0f32; tokens * out_dim];
-    for (r, col) in by_row.chunks_exact(tokens).enumerate() {
-        for (t, v) in col.iter().enumerate() {
-            out[t * out_dim + r] = *v;
-        }
-    }
+    out.par_chunks_mut(out_dim)
+        .enumerate()
+        .for_each(|(t, dst)| {
+            for (r, v) in dst.iter_mut().enumerate() {
+                *v = by_row[r * tokens + t];
+            }
+        });
     out
 }
 

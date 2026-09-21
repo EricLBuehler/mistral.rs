@@ -7,13 +7,9 @@ use candle_nn::Linear;
 use rayon::prelude::*;
 
 #[cfg(feature = "cuda")]
-use super::ptq1_0_cuda::PackedWeights;
-use super::{
-    archive::GgufArchive,
-    hadamard::RowTransform,
-    ptq1_0::{dequantize_row, PTQ1_0_BLOCK_BYTES, PTQ1_0_BLOCK_ELEMS},
-    ptq1_0_cpu::packed_matmul,
-};
+use super::cuda::PackedWeights;
+use super::{cpu::packed_matmul, dequantize_row, PTQ1_0_BLOCK_BYTES, PTQ1_0_BLOCK_ELEMS};
+use crate::gguf::{archive::GgufArchive, hadamard::RowTransform};
 use crate::{
     IsqPlanParams, IsqRequest, IsqType, QuantMethod, QuantMethodConfig, QuantizeOntoGuard,
     QuantizedSerde, UnquantLinear,
@@ -124,6 +120,16 @@ impl QuantMethod for Ptq1_0Linear {
             };
         }
         Self::require_cpu(a)?;
+        if self
+            .transform
+            .as_ref()
+            .is_some_and(RowTransform::is_inverse)
+        {
+            candle_core::bail!(
+                "PTQ1_0 linear `{}`: inverse-role tensors only support embedding lookups",
+                self.name
+            );
+        }
         let dims = a.dims().to_vec();
         if dims.last() != Some(&self.in_dim) {
             candle_core::bail!("PTQ1_0 linear `{}` got input shape {dims:?}", self.name);
@@ -226,7 +232,7 @@ mod tests {
     use std::time::Instant;
 
     use super::{
-        super::ptq1_0_cpu::{K_TILE_BLOCKS, ROWS_PER_TASK, TOKEN_BLOCK, TOKEN_TILE},
+        super::cpu::{K_TILE_BLOCKS, ROWS_PER_TASK, TOKEN_BLOCK, TOKEN_TILE},
         *,
     };
     #[cfg(feature = "cuda")]
@@ -381,7 +387,7 @@ mod tests {
     #[test]
     #[ignore = "needs a CUDA device"]
     fn cuda_matches_cpu_packed() -> Result<()> {
-        use crate::gguf::ptq1_0_cuda::PackedWeights;
+        use crate::gguf::ptq1_0::cuda::PackedWeights;
 
         let dev = Device::new_cuda(0)?;
         let cases = [
@@ -393,6 +399,8 @@ mod tests {
             (2048, 12, false),
             (2048, 40, true),
             (3072, 300, true),
+            (45056, 1, false), // staged activations exceed the shared-memory budget
+            (45056, 4, false),
         ];
         for (in_dim, tokens, folded) in cases {
             let out_dim = ROWS_PER_TASK * 2 + 5;
@@ -438,7 +446,7 @@ mod tests {
     #[test]
     #[ignore = "needs a CUDA device"]
     fn cuda_embedding_matches_cpu() -> Result<()> {
-        use crate::gguf::ptq1_0_cuda::PackedWeights;
+        use crate::gguf::ptq1_0::cuda::PackedWeights;
 
         let dev = Device::new_cuda(0)?;
         let (vocab, width) = (50, 3072);
@@ -477,11 +485,9 @@ mod tests {
     #[test]
     #[ignore = "needs a CUDA device"]
     fn cuda_matmul_speed() -> Result<()> {
-        use crate::gguf::ptq1_0_cuda::PackedWeights;
+        use crate::gguf::ptq1_0::cuda::PackedWeights;
 
         const REPS: usize = 50;
-        const VARIANT_REL_ERR: f32 = 5e-3;
-        const VARIANTS: [(&str, i32); 3] = [("lanes", 0), ("bpl", 1), ("bpl smem", 4)];
         let dev = Device::new_cuda(0)?;
         let time = |f: &dyn Fn() -> Result<Tensor>| -> Result<f64> {
             f()?;
@@ -494,10 +500,7 @@ mod tests {
             Ok(start.elapsed().as_secs_f64() / REPS as f64)
         };
 
-        eprintln!(
-            "1 token, GB/s of weights; variants {:?}",
-            VARIANTS.map(|v| v.0)
-        );
+        eprintln!("production kernel, 1 token, GB/s of weights");
         let shapes = [
             (17408, 5120, "ffn gate/up"),
             (5120, 17408, "ffn down"),
@@ -513,90 +516,12 @@ mod tests {
             let transform = RowTransform::for_test(HadamardRole::Fold, in_dim, 11, false);
             let gpu = PackedWeights::upload(&bytes, Some(&transform), &dev)?;
             let input = Tensor::from_vec(x, (1, in_dim), &dev)?.to_dtype(DType::BF16)?;
-            let floats = |t: Tensor| -> Result<Vec<f32>> {
-                t.to_dtype(DType::F32)?.flatten_all()?.to_vec1::<f32>()
-            };
-            let baseline = floats(gpu.matmul_variant(&input, out_dim, 0)?)?;
-            let norm = baseline.iter().map(|v| v * v).sum::<f32>().sqrt();
-            let mut row = Vec::new();
-            for (_, variant) in VARIANTS {
-                let got = floats(gpu.matmul_variant(&input, out_dim, variant)?)?;
-                let err = got
-                    .iter()
-                    .zip(&baseline)
-                    .map(|(g, b)| (g - b).powi(2))
-                    .sum::<f32>()
-                    .sqrt();
-                // Different lane layouts reorder float partial sums, so kernels match to rounding.
-                assert!(
-                    err <= VARIANT_REL_ERR * norm,
-                    "{label} variant {variant}: {}",
-                    err / norm
-                );
-                let secs = time(&|| gpu.matmul_variant(&input, out_dim, variant))?;
-                row.push(format!("{:5.0}", bytes.len() as f64 / secs / 1e9));
-            }
+            let secs = time(&|| gpu.matmul(&input, out_dim, in_dim))?;
             eprintln!(
-                "{out_dim:>6} x {in_dim:<5} {label:<12} {:>6.1} MB  {}",
+                "{out_dim:>6} x {in_dim:<5} {label:<12} {:>6.1} MB  {:5.0}",
                 bytes.len() as f64 / 1e6,
-                row.join(" ")
+                bytes.len() as f64 / secs / 1e9
             );
-        }
-
-        eprintln!("token sweep, ms per matmul; lanes | bpl 1 token per pass | bpl 2 | bpl smem 1");
-        for (out_dim, in_dim) in [(17408, 5120), (5120, 17408)] {
-            let (bytes, _) = synthetic(out_dim, in_dim, 1);
-            let transform = RowTransform::for_test(HadamardRole::Fold, in_dim, 11, false);
-            let gpu = PackedWeights::upload(&bytes, Some(&transform), &dev)?;
-            for tokens in [1, 2, 3, 4, 6, 8, 16] {
-                let x = vec![0.5f32; tokens * in_dim];
-                let input = Tensor::from_vec(x, (tokens, in_dim), &dev)?.to_dtype(DType::BF16)?;
-                let mut cells = Vec::new();
-                for variant in [0, 1, 2, 4] {
-                    let secs = time(&|| gpu.matmul_variant(&input, out_dim, variant))?;
-                    cells.push(format!("{:6.3}", secs * 1e3));
-                }
-                eprintln!(
-                    "{out_dim:>6} x {in_dim:<5} tokens {tokens:>2}: {}",
-                    cells.join(" | ")
-                );
-            }
-        }
-
-        eprintln!("prefill sweep, ms per matmul; lanes | tensor-core gemm");
-        for (out_dim, in_dim) in [(17408, 5120), (5120, 17408)] {
-            let (bytes, _) = synthetic(out_dim, in_dim, 1);
-            let transform = RowTransform::for_test(HadamardRole::Fold, in_dim, 11, false);
-            let gpu = PackedWeights::upload(&bytes, Some(&transform), &dev)?;
-            for tokens in [16, 32, 64, 128, 256] {
-                let x = vec![0.5f32; tokens * in_dim];
-                let input = Tensor::from_vec(x, (tokens, in_dim), &dev)?.to_dtype(DType::BF16)?;
-                let lanes = time(&|| gpu.matmul_variant(&input, out_dim, 0))?;
-                let gemm = time(&|| gpu.matmul_variant(&input, out_dim, 5))?;
-                let floats = |t: Tensor| -> Result<Vec<f32>> {
-                    t.to_dtype(DType::F32)?.flatten_all()?.to_vec1::<f32>()
-                };
-                let want = floats(gpu.matmul_variant(&input, out_dim, 0)?)?;
-                let got = floats(gpu.matmul_variant(&input, out_dim, 5)?)?;
-                let norm = want.iter().map(|v| v * v).sum::<f32>().sqrt();
-                let err = got
-                    .iter()
-                    .zip(&want)
-                    .map(|(g, w)| (g - w).powi(2))
-                    .sum::<f32>()
-                    .sqrt();
-                assert!(
-                    err <= INT8_REL_ERR * norm,
-                    "gemm differs from the lane kernel at {tokens} tokens: {}",
-                    err / norm
-                );
-                eprintln!(
-                    "{out_dim:>6} x {in_dim:<5} tokens {tokens:>3}: {:7.3} | {:7.3}  ({:.1}x)",
-                    lanes * 1e3,
-                    gemm * 1e3,
-                    lanes / gemm
-                );
-            }
         }
 
         let (out_dim, in_dim) = (5120, 17408);

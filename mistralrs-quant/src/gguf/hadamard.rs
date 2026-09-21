@@ -80,6 +80,9 @@ impl HadamardSpec {
             Some(value) => string_set(value)?,
             None => HashSet::new(),
         };
+        if let Some(name) = weights.intersection(&inverse).next() {
+            candle_core::bail!("`{name}` is in both {KEY_WEIGHT_NAMES} and {KEY_INVERSE_NAMES}");
+        }
         let gdn_v_grouped = match metadata.get(KEY_GDN_V_GROUPED) {
             Some(value) => value.to_bool()?,
             None => false,
@@ -177,6 +180,10 @@ pub struct RowTransform {
 }
 
 impl RowTransform {
+    pub fn is_inverse(&self) -> bool {
+        self.role == HadamardRole::Inverse
+    }
+
     /// Dense equivalent of a stored `[rows, width]` weight: the offline form of `apply` on activations.
     pub fn unfold_weight(&self, data: &mut [f32]) {
         let width = self.signs.len();
@@ -222,11 +229,6 @@ impl RowTransform {
     #[cfg(feature = "cuda")]
     pub(crate) fn supports_cuda(&self) -> bool {
         self.block == CUDA_FWHT_BLOCK
-    }
-
-    #[cfg(feature = "cuda")]
-    pub(crate) fn is_inverse(&self) -> bool {
-        self.role == HadamardRole::Inverse
     }
 
     #[cfg(feature = "cuda")]
@@ -697,5 +699,10 @@ mod tests {
         bad_transform.retain(|(k, _)| *k != KEY_TRANSFORM);
         bad_transform.push((KEY_TRANSFORM, Value::String("other".into())));
         assert!(HadamardSpec::from_metadata(&meta(bad_transform)).is_err());
+
+        let mut both_roles = base_metadata(SIGN_MODE_IDENTITY);
+        both_roles.retain(|(k, _)| *k != KEY_WEIGHT_NAMES);
+        both_roles.push((KEY_WEIGHT_NAMES, strings(&["token_embd.weight"])));
+        assert!(HadamardSpec::from_metadata(&meta(both_roles)).is_err());
     }
 }

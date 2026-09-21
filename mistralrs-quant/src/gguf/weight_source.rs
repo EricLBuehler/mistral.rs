@@ -12,8 +12,7 @@ use super::{
     archive::{qtensor_from_gguf_data, GgufArchive, GgufEndian},
     hadamard::HadamardSpec,
     pq2_0::{self, PQ2_0_BLOCK_BYTES, PQ2_0_BLOCK_ELEMS, PQ2_0_GGUF_TYPE},
-    ptq1_0::{self, PTQ1_0_BLOCK_BYTES, PTQ1_0_BLOCK_ELEMS, PTQ1_0_GGUF_TYPE},
-    ptq1_0_linear::Ptq1_0Linear,
+    ptq1_0::{self, Ptq1_0Linear, PTQ1_0_BLOCK_BYTES, PTQ1_0_BLOCK_ELEMS, PTQ1_0_GGUF_TYPE},
     GgufMatMul,
 };
 use crate::{
@@ -393,6 +392,11 @@ impl GgufWeightSource {
             device,
         )?;
         Ok(Some(Arc::new(layer)))
+    }
+
+    /// PTQ1_0 matrices stay packed on CPU and CUDA (see `try_load_packed_ternary`), so they cost their block bytes.
+    fn stays_packed(&self, raw_dtype: u32, rank: usize) -> bool {
+        self.packed_ternary && raw_dtype == PTQ1_0_GGUF_TYPE && rank == 2
     }
 
     /// Tensors that are decoded to dense floats at load instead of staying block-quantized.
@@ -817,7 +821,9 @@ impl GgufWeightSource {
         let resident_bytes = match binding.direct_tensor() {
             Some(source_name) => {
                 let info = self.archive.tensor_info(source_name)?;
-                if self.is_decoded_on_load(source_name, info.dtype().raw()) {
+                if self.is_decoded_on_load(source_name, info.dtype().raw())
+                    && !self.stays_packed(info.dtype().raw(), info.shape().len())
+                {
                     logical_elements
                         .checked_mul(dtype.size_in_bytes())
                         .ok_or_else(|| Error::msg("GGUF dense resident byte estimate overflow"))?
@@ -1551,6 +1557,8 @@ fn checked_elem_count(shape: &[usize]) -> Result<usize> {
 #[cfg(test)]
 mod tests {
     const FOLD_BLOCK: usize = 128;
+    const INT8_REL_ERR: f32 = 2e-2; // packed path quantizes activations to int8
+    const DENSE_REL_ERR: f32 = 1e-5;
     const FOLD_IN: usize = 256;
     const FOLD_OUT: usize = 4;
     const FOLD_TENSOR: &str = "blk.0.ffn_down.weight";
@@ -1707,6 +1715,32 @@ mod tests {
     }
 
     #[test]
+    fn inverse_role_tensor_refuses_linear_forward() -> Result<()> {
+        let (_file, source) = fold_source(true, true)?;
+        let layer = source
+            .load_linear("model.embd", &Device::Cpu, Shard::default())?
+            .unwrap();
+        let input = Tensor::zeros((1, FOLD_IN), DType::F32, &Device::Cpu)?;
+        assert!(layer.forward(&input).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn packed_ternary_costs_its_block_bytes_in_the_size_estimate() -> Result<()> {
+        let binding = GgufTensorBinding::tensor(FOLD_TENSOR);
+        let packed_bytes = FOLD_OUT * FOLD_IN / PTQ1_0_BLOCK_ELEMS * PTQ1_0_BLOCK_BYTES;
+        let dense_bytes = FOLD_OUT * FOLD_IN * DType::BF16.size_in_bytes();
+        for (packed, want) in [(true, packed_bytes), (false, dense_bytes)] {
+            let (_file, source) = fold_source(true, packed)?;
+            let (elements, bytes) =
+                source.binding_storage("model.down.weight", &binding, DType::BF16)?;
+            assert_eq!(elements, FOLD_OUT * FOLD_IN);
+            assert_eq!(bytes, want, "packed {packed}");
+        }
+        Ok(())
+    }
+
+    #[test]
     fn skipping_the_fold_changes_the_output() -> Result<()> {
         let x: Vec<f32> = (0..FOLD_IN)
             .map(|i| ((i * 13) % 17) as f32 / 8.0 - 1.0)
@@ -1785,9 +1819,14 @@ mod tests {
         let input = Tensor::from_vec(x, (1, FOLD_IN), &Device::Cpu)?;
         let got = layer.forward(&input)?.flatten_all()?.to_vec1::<f32>()?;
         assert_eq!(got.len(), FOLD_OUT);
-        for (g, w) in got.iter().zip(&want) {
-            assert!((g - w).abs() < 1e-3, "{g} vs {w}");
-        }
+        let err: f32 = got.iter().zip(&want).map(|(g, w)| (g - w).powi(2)).sum();
+        let norm: f32 = want.iter().map(|w| w.powi(2)).sum();
+        let tolerance = if packed { INT8_REL_ERR } else { DENSE_REL_ERR };
+        assert!(
+            err.sqrt() <= tolerance * norm.sqrt(),
+            "packed {packed}: rel err {}",
+            err.sqrt() / norm.sqrt()
+        );
         Ok(())
     }
 
@@ -1871,14 +1910,18 @@ mod tests {
             );
             outputs.push(results);
         }
-        for (packed, dense) in outputs[0].iter().zip(&outputs[1]) {
-            let scale = dense.iter().fold(0f32, |m, v| m.max(v.abs())).max(1e-6);
-            let worst = packed
+        // the linears quantize activations to int8, the embedding lookup does not
+        let tolerances = [INT8_REL_ERR, INT8_REL_ERR, DENSE_REL_ERR];
+        for ((packed, dense), tolerance) in outputs[0].iter().zip(&outputs[1]).zip(tolerances) {
+            let norm = dense.iter().map(|v| v * v).sum::<f32>().sqrt().max(1e-6);
+            let err = packed
                 .iter()
                 .zip(dense)
-                .fold(0f32, |m, (a, b)| m.max((a - b).abs()));
-            println!("max abs diff {worst} at scale {scale}");
-            assert!(worst <= 2e-3 * scale);
+                .map(|(a, b)| (a - b).powi(2))
+                .sum::<f32>()
+                .sqrt();
+            println!("relative error {} (limit {tolerance})", err / norm);
+            assert!(err <= tolerance * norm);
         }
         Ok(())
     }
