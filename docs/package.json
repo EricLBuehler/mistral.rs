@@ -17,9 +17,12 @@
     "astro": "astro"
   },
   "dependencies": {
-    "@astrojs/starlight": "^0.40.0",
-    "astro": "^6.4.8",
-    "sharp": "^0.33.5",
-    "starlight-openapi": "^0.25.3"
+    "@astrojs/starlight": "^0.42.3",
+    "astro": "^7.3.4",
+    "sharp": "^0.35.4",
+    "starlight-openapi": "^0.26.2"
+  },
+  "overrides": {
+    "form-data": "^4.0.6"
   }
 }
