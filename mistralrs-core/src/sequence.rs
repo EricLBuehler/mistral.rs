@@ -5,6 +5,7 @@ use crate::{
     reasoning_parsers::{ReasoningMode, ReasoningParser},
     response::{ChatCompletionChunkResponse, Choice, ChunkChoice, Response, SYSTEM_FINGERPRINT},
     sampler::{Logprobs, Sampler},
+    special_text::{self, SpecialTextGuard},
     speculative::{SpeculativeProposalDistribution, SpeculativeTokens},
     AdapterGenerationId, AdapterLease, AudioInput, ChatCompletionResponse, PromptTokensDetails,
     Usage, VideoInput,
@@ -839,6 +840,8 @@ pub struct Sequence {
     // Tag-based reasoning parser.
     reasoning_parser: Option<Box<dyn ReasoningParser>>,
     reasoning_mode: Option<ReasoningMode>,
+
+    pub(crate) special_text_guard: Option<SpecialTextGuard>,
 }
 
 #[derive(Clone, Copy)]
@@ -971,6 +974,7 @@ impl Sequence {
             step_timing_kind: None,
             reasoning_parser: None,
             reasoning_mode: None,
+            special_text_guard: None,
         }
     }
 
@@ -1896,7 +1900,12 @@ impl Sequence {
         get_mut_group!(self).speech_pcms.push((pcm, rate, channels));
     }
 
-    pub fn add_choice_to_group(&self, choice: Choice) {
+    pub fn add_choice_to_group(&self, mut choice: Choice) {
+        special_text::restore_message(
+            &mut choice.message.content,
+            &mut choice.message.reasoning_content,
+            &mut choice.message.tool_calls,
+        );
         get_mut_group!(self).choices.push(choice);
         self.update_time_info();
     }
@@ -1914,6 +1923,7 @@ impl Sequence {
     }
 
     pub fn add_completion_choice_to_group(&self, mut choice: CompletionChoice) {
+        special_text::restore(&mut choice.text);
         choice.text = format!(
             "{}{}{}",
             self.prefix.as_deref().unwrap_or(""),
@@ -1934,12 +1944,18 @@ impl Sequence {
         get_mut_group!(self)
     }
 
-    pub fn add_streaming_chunk_choice_to_group(&self, chunk: ChunkChoice) {
+    pub fn add_streaming_chunk_choice_to_group(&self, mut chunk: ChunkChoice) {
+        special_text::restore_message(
+            &mut chunk.delta.content,
+            &mut chunk.delta.reasoning_content,
+            &mut chunk.delta.tool_calls,
+        );
         get_mut_group!(self).chat_streaming_chunks.push(chunk);
         self.update_time_info();
     }
 
-    pub fn add_streaming_completion_chunk_choice_to_group(&self, chunk: CompletionChunkChoice) {
+    pub fn add_streaming_completion_chunk_choice_to_group(&self, mut chunk: CompletionChunkChoice) {
+        special_text::restore(&mut chunk.text);
         get_mut_group!(self).completion_streaming_chunks.push(chunk);
         self.update_time_info();
     }

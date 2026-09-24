@@ -6,6 +6,7 @@ use indexmap::IndexMap;
 
 use crate::{
     request::ReasoningEffort,
+    special_text::{defuse_tool_output, SpecialStrings},
     vision_models::{preprocessor_config::PreProcessorConfig, processor_config::ProcessorConfig},
     MessageContent, Pipeline, Tool,
 };
@@ -136,7 +137,7 @@ pub(crate) fn apply_chat_template(
     action: MessagesAction,
     tools: Vec<Tool>,
 ) -> Result<String> {
-    let messages = match action {
+    let mut messages = match action {
         MessagesAction::Keep => messages,
         MessagesAction::KeepWithAudioAfterText => messages
             .into_iter()
@@ -175,6 +176,10 @@ pub(crate) fn apply_chat_template(
                 .collect()
         }
     };
+
+    if let Some(tokenizer) = pipeline.tokenizer() {
+        defuse_tool_output(&mut messages, &SpecialStrings::for_tokenizer(&tokenizer));
+    }
 
     let chat_template = pipeline
         .get_chat_template()
