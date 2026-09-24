@@ -15,6 +15,6 @@
   },
   "devDependencies": {
     "marked": "^18.0.11",
-    "vite": "8.0.13"
+    "vite": "8.0.16"
   }
 }
