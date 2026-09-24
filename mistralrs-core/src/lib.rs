@@ -95,6 +95,7 @@ mod perf_flags;
 mod pipeline;
 mod prefix_cacher;
 pub mod reasoning_parsers;
+pub mod remote_fetch;
 mod request;
 pub mod resource_plan;
 mod response;
