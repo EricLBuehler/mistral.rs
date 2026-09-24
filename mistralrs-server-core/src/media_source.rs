@@ -383,12 +383,23 @@ fn reject_private_ip(ip: IpAddr) -> Result<()> {
 fn is_global_ip(ip: IpAddr) -> bool {
     match ip {
         IpAddr::V4(ip) => is_global_ipv4(ip),
-        IpAddr::V6(ip) => {
-            if let Some(ip) = ip.to_ipv4_mapped() {
-                return is_global_ipv4(ip);
-            }
-            is_global_ipv6(ip)
-        }
+        IpAddr::V6(ip) => match embedded_ipv4(ip) {
+            Some(ip) => is_global_ipv4(ip),
+            None => is_global_ipv6(ip),
+        },
+    }
+}
+
+// mapped, IPv4-compatible, NAT64 and 6to4 addresses reach the embedded IPv4, so judge them by it
+fn embedded_ipv4(ip: Ipv6Addr) -> Option<Ipv4Addr> {
+    if let Some(ip) = ip.to_ipv4_mapped() {
+        return Some(ip);
+    }
+    let join = |hi: u16, lo: u16| Ipv4Addr::from((u32::from(hi) << 16) | u32::from(lo));
+    match ip.segments() {
+        [0x2002, hi, lo, ..] => Some(join(hi, lo)),
+        [0x0064, 0xff9b, 0, 0, 0, 0, hi, lo] | [0, 0, 0, 0, 0, 0, hi, lo] => Some(join(hi, lo)),
+        _ => None,
     }
 }
 
@@ -400,6 +411,7 @@ fn is_global_ipv4(ip: Ipv4Addr) -> bool {
         || ip.is_broadcast()
         || ip.is_unspecified()
         || ip.is_multicast()
+        || octets[0] == 0
         || matches!(octets, [100, 64..=127, _, _])
         || matches!(octets, [192, 0, 0, _])
         || matches!(octets, [192, 0, 2, _])
@@ -416,7 +428,9 @@ fn is_global_ipv6(ip: Ipv6Addr) -> bool {
         || ip.is_unique_local()
         || ip.is_unicast_link_local()
         || ip.is_multicast()
-        || segments[0] == 0x2001 && segments[1] == 0x0db8)
+        || segments[0] == 0x2001 && segments[1] == 0x0db8
+        // local-use NAT64 (RFC 8215) can embed the IPv4 at several offsets, so don't try to decode it
+        || segments[..3] == [0x0064, 0xff9b, 0x0001])
 }
 
 #[cfg(test)]
@@ -434,6 +448,28 @@ mod tests {
         ] {
             let url = Url::parse(source).unwrap();
             assert!(validate_remote_url(&url).await.is_err(), "{source}");
+        }
+    }
+
+    #[test]
+    fn rejects_ipv6_transition_addresses_for_internal_ipv4() {
+        for source in [
+            "64:ff9b::7f00:1",
+            "64:ff9b::a9fe:a9fe",
+            "64:ff9b:1::a9fe:a9fe",
+            "64:ff9b:1:a9fe:a9:fe00::",
+            "2002:7f00:1::",
+            "2002:a9fe:a9fe::",
+            "::7f00:1",
+            "::",
+            "::1",
+        ] {
+            let ip: IpAddr = source.parse().unwrap();
+            assert!(reject_private_ip(ip).is_err(), "{source}");
+        }
+        for source in ["2002:808:808::", "64:ff9b::101:101", "::ffff:8.8.8.8"] {
+            let ip: IpAddr = source.parse().unwrap();
+            assert!(is_global_ip(ip), "{source}");
         }
     }
 
