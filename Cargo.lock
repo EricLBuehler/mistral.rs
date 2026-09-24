@@ -141,7 +141,7 @@ version = "1.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "40c48f72fd53cd289104fc64099abca73db4166ad86ea0b4341abe65af83dadc"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -152,7 +152,7 @@ checksum = "291e6a250ff86cd4a820112fb8898808a366d8f9f58ce16d1f538353ad55747d"
 dependencies = [
  "anstyle",
  "once_cell_polyfill",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -643,7 +643,7 @@ checksum = "ade8366b8bd5ba243f0a58f036cc0ca8a2f069cff1a2351ef1cac6b083e16fc0"
 [[package]]
 name = "candle-core"
 version = "0.11.0"
-source = "git+https://github.com/huggingface/candle.git?rev=e65eb1de3cfe41008fc3acc99ed3f1c72a8d250f#e65eb1de3cfe41008fc3acc99ed3f1c72a8d250f"
+source = "git+https://github.com/huggingface/candle.git?rev=66a8cf184a5a519671454066b1b9efd446ec9f5c#66a8cf184a5a519671454066b1b9efd446ec9f5c"
 dependencies = [
  "accelerate-src",
  "byteorder",
@@ -676,7 +676,7 @@ dependencies = [
 [[package]]
 name = "candle-flash-attn-v3"
 version = "0.11.0"
-source = "git+https://github.com/huggingface/candle.git?rev=e65eb1de3cfe41008fc3acc99ed3f1c72a8d250f#e65eb1de3cfe41008fc3acc99ed3f1c72a8d250f"
+source = "git+https://github.com/huggingface/candle.git?rev=66a8cf184a5a519671454066b1b9efd446ec9f5c#66a8cf184a5a519671454066b1b9efd446ec9f5c"
 dependencies = [
  "anyhow",
  "candle-core",
@@ -689,7 +689,7 @@ dependencies = [
 [[package]]
 name = "candle-kernels"
 version = "0.11.0"
-source = "git+https://github.com/huggingface/candle.git?rev=e65eb1de3cfe41008fc3acc99ed3f1c72a8d250f#e65eb1de3cfe41008fc3acc99ed3f1c72a8d250f"
+source = "git+https://github.com/huggingface/candle.git?rev=66a8cf184a5a519671454066b1b9efd446ec9f5c#66a8cf184a5a519671454066b1b9efd446ec9f5c"
 dependencies = [
  "cudaforge",
 ]
@@ -697,7 +697,7 @@ dependencies = [
 [[package]]
 name = "candle-metal-kernels"
 version = "0.11.0"
-source = "git+https://github.com/huggingface/candle.git?rev=e65eb1de3cfe41008fc3acc99ed3f1c72a8d250f#e65eb1de3cfe41008fc3acc99ed3f1c72a8d250f"
+source = "git+https://github.com/huggingface/candle.git?rev=66a8cf184a5a519671454066b1b9efd446ec9f5c#66a8cf184a5a519671454066b1b9efd446ec9f5c"
 dependencies = [
  "block2",
  "half",
@@ -712,7 +712,7 @@ dependencies = [
 [[package]]
 name = "candle-nn"
 version = "0.11.0"
-source = "git+https://github.com/huggingface/candle.git?rev=e65eb1de3cfe41008fc3acc99ed3f1c72a8d250f#e65eb1de3cfe41008fc3acc99ed3f1c72a8d250f"
+source = "git+https://github.com/huggingface/candle.git?rev=66a8cf184a5a519671454066b1b9efd446ec9f5c#66a8cf184a5a519671454066b1b9efd446ec9f5c"
 dependencies = [
  "accelerate-src",
  "candle-core",
@@ -1256,9 +1256,9 @@ dependencies = [
 
 [[package]]
 name = "cudarc"
-version = "0.19.9"
+version = "0.19.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "804764d10e844da09765a7b2ca9641a0851523d1702efb0d7299d73e31b86e80"
+checksum = "7359bf1de037ddada72729c3acec9b040f3468400c6e9e740b01ba0cd2e89562"
 dependencies = [
  "float8",
  "half",
@@ -1651,7 +1651,7 @@ dependencies = [
  "libc",
  "option-ext",
  "redox_users 0.5.2",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -1851,7 +1851,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -3551,7 +3551,7 @@ dependencies = [
 
 [[package]]
 name = "mistralrs"
-version = "0.9.3"
+version = "0.9.4"
 dependencies = [
  "anyhow",
  "candle-core",
@@ -3577,7 +3577,7 @@ dependencies = [
 
 [[package]]
 name = "mistralrs-audio"
-version = "0.9.3"
+version = "0.9.4"
 dependencies = [
  "anyhow",
  "apodize",
@@ -3587,7 +3587,7 @@ dependencies = [
 
 [[package]]
 name = "mistralrs-cli"
-version = "0.9.3"
+version = "0.9.4"
 dependencies = [
  "anyhow",
  "axum",
@@ -3628,7 +3628,7 @@ dependencies = [
 
 [[package]]
 name = "mistralrs-code-exec"
-version = "0.9.3"
+version = "0.9.4"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -3646,7 +3646,7 @@ dependencies = [
 
 [[package]]
 name = "mistralrs-core"
-version = "0.9.3"
+version = "0.9.4"
 dependencies = [
  "accelerate-src",
  "ahash",
@@ -3755,7 +3755,7 @@ dependencies = [
 
 [[package]]
 name = "mistralrs-flash-attn"
-version = "0.9.3"
+version = "0.9.4"
 dependencies = [
  "anyhow",
  "candle-core",
@@ -3766,7 +3766,7 @@ dependencies = [
 
 [[package]]
 name = "mistralrs-macros"
-version = "0.9.3"
+version = "0.9.4"
 dependencies = [
  "darling 0.23.0",
  "proc-macro2",
@@ -3776,7 +3776,7 @@ dependencies = [
 
 [[package]]
 name = "mistralrs-mcp"
-version = "0.9.3"
+version = "0.9.4"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3798,7 +3798,7 @@ dependencies = [
 
 [[package]]
 name = "mistralrs-metal-compile"
-version = "0.9.3"
+version = "0.9.4"
 dependencies = [
  "candle-metal-kernels",
  "objc2-metal",
@@ -3806,7 +3806,7 @@ dependencies = [
 
 [[package]]
 name = "mistralrs-paged-attn"
-version = "0.9.3"
+version = "0.9.4"
 dependencies = [
  "anyhow",
  "candle-core",
@@ -3823,7 +3823,7 @@ dependencies = [
 
 [[package]]
 name = "mistralrs-pyo3"
-version = "0.9.3"
+version = "0.9.4"
 dependencies = [
  "accelerate-src",
  "anyhow",
@@ -3851,7 +3851,7 @@ dependencies = [
 
 [[package]]
 name = "mistralrs-quant"
-version = "0.9.3"
+version = "0.9.4"
 dependencies = [
  "bytemuck",
  "byteorder",
@@ -3890,7 +3890,7 @@ dependencies = [
 
 [[package]]
 name = "mistralrs-sandbox"
-version = "0.9.3"
+version = "0.9.4"
 dependencies = [
  "anyhow",
  "itoa",
@@ -3906,7 +3906,7 @@ dependencies = [
 
 [[package]]
 name = "mistralrs-server-core"
-version = "0.9.3"
+version = "0.9.4"
 dependencies = [
  "accelerate-src",
  "anyhow",
@@ -3942,7 +3942,7 @@ dependencies = [
 
 [[package]]
 name = "mistralrs-vision"
-version = "0.9.3"
+version = "0.9.4"
 dependencies = [
  "candle-core",
  "image",
@@ -4112,7 +4112,7 @@ version = "0.50.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7957b9740744892f114936ab4a57b3f487491bbeafaf8083688b16841a4240e5"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -5488,7 +5488,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys 0.11.0",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -5547,7 +5547,7 @@ dependencies = [
  "security-framework",
  "security-framework-sys",
  "webpki-root-certs",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -6146,7 +6146,7 @@ dependencies = [
  "cfg-if",
  "libc",
  "psm",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -6517,7 +6517,7 @@ dependencies = [
  "getrandom 0.3.4",
  "once_cell",
  "rustix 1.1.3",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -7579,7 +7579,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]

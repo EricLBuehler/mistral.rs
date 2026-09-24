@@ -1072,6 +1072,7 @@ mod tests {
         );
     }
 
+    #[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
     #[test]
     fn prompt_workspace_falls_back_for_ineligible_known_attention() {
         let model = workspace_model(Some(PrefixPrefillAttentionFeatures::default()));
@@ -1097,7 +1098,7 @@ mod tests {
         );
     }
 
-    #[cfg(all(feature = "cuda", target_family = "unix"))]
+    #[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
     #[test]
     fn prompt_workspace_matches_direct_fa3_availability() {
         let model = workspace_model(Some(PrefixPrefillAttentionFeatures::default()));

@@ -3299,6 +3299,10 @@ mod mtp_reservation_tests {
     #[test]
     fn external_mtp_checkpoint_bytes_are_added_to_the_cache_reservation() -> anyhow::Result<()> {
         let dir = tempdir()?;
+        std::fs::write(
+            dir.path().join("config.json"),
+            r#"{"architectures":["Qwen3ForCausalLM"]}"#,
+        )?;
         let path = dir.path().join("model.safetensors");
         let data = [0u8; 2];
         serialize_to_file(
