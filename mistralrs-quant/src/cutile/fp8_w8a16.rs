@@ -32,7 +32,6 @@ const PREFILL_PROBE_ROWS: usize = 1024;
 mod kernels {
     #![allow(deprecated)]
     use cutile::core::*;
-    use cutile::cutile_compiler;
 
     #[cutile::entry(
         unchecked_accesses = false,

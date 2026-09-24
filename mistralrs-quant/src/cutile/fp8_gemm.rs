@@ -35,7 +35,6 @@ const PREFILL_PROBE_ROWS: usize = 4096;
 mod kernels {
     #![allow(deprecated)]
     use cutile::core::*;
-    use cutile::cutile_compiler;
 
     // BN stays at one weight-scale column and BK at one scale group, so every k step is scaled by a
     // single (row, group) product before it joins the running accumulator.

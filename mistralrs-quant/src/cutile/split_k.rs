@@ -17,7 +17,6 @@ const REDUCE_BLOCK: i32 = 1024;
 #[cutile::module]
 pub mod split_k {
     use cutile::core::*;
-    use cutile::cutile_compiler;
 
     #[cutile::entry(unchecked_accesses = true)]
     pub unsafe fn split_k_reduce_kernel<const BLOCK: i32, const SPLITS: i32>(
