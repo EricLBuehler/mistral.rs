@@ -2681,7 +2681,7 @@
               "string",
               "null"
             ],
-            "description": "Optionally save the collected imatrix to this `.cimatrix` path before requantizing."
+            "description": "Optionally save the collected imatrix to this `.cimatrix` file name in the server's working directory."
           }
         }
       },

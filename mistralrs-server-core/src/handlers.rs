@@ -214,9 +214,25 @@ pub async fn re_isq(
 /// Request body for applying online calibration.
 #[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
 pub struct CalibrationApplyRequest {
-    /// Optionally save the collected imatrix to this `.cimatrix` path before requantizing.
+    /// Optionally save the collected imatrix to this `.cimatrix` file name in the server's working directory.
     #[serde(default)]
     pub save_cimatrix: Option<String>,
+}
+
+// remote clients only get a bare file name so the write can't leave the working directory
+fn http_save_cimatrix_path(name: &str) -> Result<std::path::PathBuf, ApiError> {
+    let path = std::path::Path::new(name);
+    let bare = !name.contains(['/', '\\'])
+        && matches!(
+            path.components().collect::<Vec<_>>().as_slice(),
+            [std::path::Component::Normal(_)]
+        );
+    if !bare {
+        return Err(ApiError::invalid_request(format!(
+            "`save_cimatrix` must be a bare file name, got `{name}`"
+        )));
+    }
+    Ok(path.to_path_buf())
 }
 
 async fn send_calibration(
@@ -282,12 +298,19 @@ pub async fn calibration_apply(
         Ok(Json(request)) => request,
         Err(error) => return openai_error_response(ApiError::from_json_rejection(error)),
     };
+    let save_cimatrix = match request
+        .save_cimatrix
+        .as_deref()
+        .map(http_save_cimatrix_path)
+        .transpose()
+    {
+        Ok(path) => path,
+        Err(error) => return openai_error_response(error),
+    };
     MistralRs::maybe_log_request(state.clone(), "Calibration apply".to_string());
     send_calibration(
         &state,
-        mistralrs_core::CalibrationAction::Apply {
-            save_cimatrix: request.save_cimatrix.map(std::path::PathBuf::from),
-        },
+        mistralrs_core::CalibrationAction::Apply { save_cimatrix },
     )
     .await
 }
@@ -685,6 +708,23 @@ mod tests {
     };
 
     use super::*;
+
+    #[test]
+    fn http_save_cimatrix_accepts_only_bare_file_names() {
+        assert!(http_save_cimatrix_path("traffic.cimatrix").is_ok());
+        for name in [
+            "/tmp/pwned.cimatrix",
+            "../../etc/escaped.cimatrix",
+            "subdir/traffic.cimatrix",
+            "subdir\\traffic.cimatrix",
+            "./traffic.cimatrix",
+            "..",
+            ".",
+            "",
+        ] {
+            assert!(http_save_cimatrix_path(name).is_err(), "{name:?}");
+        }
+    }
 
     #[test]
     fn unload_model_results_use_operation_statuses() {
