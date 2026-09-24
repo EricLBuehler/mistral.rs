@@ -282,8 +282,8 @@ fn typed_slice<'a, T>(xs: &'a [T], layout: &Layout, name: &'static str) -> Resul
     }
 }
 
-fn cpu_positions<'a>(
-    storage_and_layout: &'a Option<(std::sync::RwLockReadGuard<'a, Storage>, &'a Layout)>,
+fn cpu_positions<'a, G: std::ops::Deref<Target = Storage>>(
+    storage_and_layout: &'a Option<(G, &'a Layout)>,
 ) -> Result<Option<&'a [u32]>> {
     let Some((storage, layout)) = storage_and_layout else {
         return Ok(None);
