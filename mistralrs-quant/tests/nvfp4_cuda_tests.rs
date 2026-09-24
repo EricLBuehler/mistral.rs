@@ -2,7 +2,7 @@
 
 use candle_core::{DType, Device, Result, Tensor};
 use float8::F8E4M3;
-use mistralrs_quant::cutile::{cutile_nvfp4, cutile_nvfp4_gather, Nvfp4GemmArgs};
+use mistralrs_quant::cutile::{cutile_nvfp4, cutile_nvfp4_gather, nvfp4_supported, Nvfp4GemmArgs};
 
 const BLOCK_SIZE: usize = 16;
 const FP4_VALUES: [f32; 8] = [0.0, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0];
@@ -38,6 +38,12 @@ const GRAPH_EXPERTS: usize = 2;
 const GRAPH_TOPK: usize = 2;
 const EXTREME_SHAPE: (usize, usize, usize) = (3, 13, 32);
 const SATURATING_ACTIVATION: f32 = 2048.0;
+
+// NVFP4 needs a CUDA 13.3+ toolchain, so older CI lanes skip these instead of failing
+fn nvfp4_device() -> Result<Option<Device>> {
+    let device = Device::new_cuda(0)?;
+    Ok(nvfp4_supported(device.as_cuda_device()?).then_some(device))
+}
 const UNDERFLOW_ACTIVATION: f32 = 1.0e-6;
 const ROUNDING_GLOBAL: f32 = f32::from_bits(0x3b08_8889);
 const ROUNDING_SMALL_INPUT: f32 = 1.0 / 512.0;
@@ -261,7 +267,9 @@ impl Fixture {
 #[test]
 fn nvfp4_prefill_preserves_partial_tiles_and_groups() -> Result<()> {
     let _gpu_guard = CUDA_TEST_LOCK.lock().unwrap();
-    let device = Device::new_cuda(0)?;
+    let Some(device) = nvfp4_device()? else {
+        return Ok(());
+    };
     for dtype in [DType::BF16, DType::F16] {
         for rows in PREFILL_ROWS {
             Fixture::new(rows, PREFILL_N, PREFILL_K, dtype).check_columns(
@@ -290,7 +298,9 @@ fn nvfp4_medium_decode_warmup_supports_offset_views_and_graph_replay() -> Result
     };
 
     let _gpu_guard = CUDA_TEST_LOCK.lock().unwrap();
-    let device = Device::new_cuda(0)?;
+    let Some(device) = nvfp4_device()? else {
+        return Ok(());
+    };
     let stream = device.as_cuda_device()?.cuda_stream();
     let stored_n = MEDIUM_GRAPH_N + MEDIUM_GRAPH_WEIGHT_OFFSET;
     let columns = MEDIUM_GRAPH_COLUMNS.map(|column| column + MEDIUM_GRAPH_WEIGHT_OFFSET);
@@ -421,7 +431,9 @@ fn nvfp4_grouped_prefill_warmup_supports_graph_replay() -> Result<()> {
     use mistralrs_quant::cutile::{register_nvfp4_shape, warmup_moe_kernels};
 
     let _gpu_guard = CUDA_TEST_LOCK.lock().unwrap();
-    let device = Device::new_cuda(0)?;
+    let Some(device) = nvfp4_device()? else {
+        return Ok(());
+    };
     let stream = device.as_cuda_device()?.cuda_stream();
     let fixture = Fixture::new(GROUPED_GRAPH_ROWS, PREFILL_N, PREFILL_K, DType::BF16);
     let source = Tensor::from_vec(fixture.x.clone(), (GROUPED_GRAPH_ROWS, PREFILL_K), &device)?
@@ -505,7 +517,9 @@ fn nvfp4_grouped_prefill_warmup_supports_graph_replay() -> Result<()> {
 #[test]
 fn nvfp4_dense_matches_quantized_reference() -> Result<()> {
     let _gpu_guard = CUDA_TEST_LOCK.lock().unwrap();
-    let device = Device::new_cuda(0)?;
+    let Some(device) = nvfp4_device()? else {
+        return Ok(());
+    };
     for dtype in [DType::BF16, DType::F16] {
         for a4 in [false, true] {
             for (m, n, k) in DENSE_SHAPES {
@@ -519,7 +533,9 @@ fn nvfp4_dense_matches_quantized_reference() -> Result<()> {
 #[test]
 fn nvfp4_activation_scale_extremes_match_reference() -> Result<()> {
     let _gpu_guard = CUDA_TEST_LOCK.lock().unwrap();
-    let device = Device::new_cuda(0)?;
+    let Some(device) = nvfp4_device()? else {
+        return Ok(());
+    };
     let (rows, n, k) = EXTREME_SHAPE;
     for dtype in [DType::BF16, DType::F16] {
         let mut fixture = Fixture::new(rows, n, k, dtype);
@@ -546,7 +562,9 @@ fn nvfp4_activation_scale_extremes_match_reference() -> Result<()> {
 #[test]
 fn nvfp4_activation_rounding_boundary_matches_reference() -> Result<()> {
     let _gpu_guard = CUDA_TEST_LOCK.lock().unwrap();
-    let device = Device::new_cuda(0)?;
+    let Some(device) = nvfp4_device()? else {
+        return Ok(());
+    };
     for dtype in [DType::BF16, DType::F16] {
         for rows in [1, 5] {
             let mut fixture = Fixture::new(rows, 1, BLOCK_SIZE, dtype);
@@ -568,7 +586,9 @@ fn nvfp4_activation_rounding_boundary_matches_reference() -> Result<()> {
 #[test]
 fn nvfp4_gather_matches_selected_experts() -> Result<()> {
     let _gpu_guard = CUDA_TEST_LOCK.lock().unwrap();
-    let device = Device::new_cuda(0)?;
+    let Some(device) = nvfp4_device()? else {
+        return Ok(());
+    };
     for tokens in [GATHER_TOKENS, GROUPED_TOKENS] {
         let routes: Vec<_> = GATHER_ROUTES
             .into_iter()
@@ -683,7 +703,9 @@ fn nvfp4_warmup_supports_cuda_graph_replay() -> Result<()> {
         register_nvfp4_routing, register_nvfp4_shape, warmup_moe_kernels,
     };
 
-    let device = Device::new_cuda(0)?;
+    let Some(device) = nvfp4_device()? else {
+        return Ok(());
+    };
     let stream = device.as_cuda_device()?.cuda_stream();
     register_nvfp4_routing(&device, GRAPH_EXPERTS, GRAPH_TOPK)?;
     let fixture = Fixture::new(GRAPH_ROWS, GRAPH_N, GRAPH_K, DType::BF16);
@@ -846,7 +868,9 @@ fn nvfp4_merged_views_and_shared_activation_support_graph_replay() -> Result<()>
     use std::{collections::HashMap, sync::Arc};
 
     let _gpu_guard = CUDA_TEST_LOCK.lock().unwrap();
-    let device = Device::new_cuda(0)?;
+    let Some(device) = nvfp4_device()? else {
+        return Ok(());
+    };
     let stream = device.as_cuda_device()?.cuda_stream();
     let comm = Arc::new(Comm::from_device(Id::new(), &device, 0, 1)?);
     for dtype in [DType::BF16, DType::F16] {
@@ -1003,7 +1027,9 @@ fn nvfp4_prequantized_forward_materializes_strided_values_and_scales() -> Result
         Nvfp4ActivationMode, Nvfp4Layer, Nvfp4LayerParts, QuantMethod, QuantizedActivation,
     };
     let _gpu_guard = CUDA_TEST_LOCK.lock().unwrap();
-    let device = Device::new_cuda(0)?;
+    let Some(device) = nvfp4_device()? else {
+        return Ok(());
+    };
     for dtype in [DType::BF16, DType::F16] {
         let n = MERGED_FIRST_N + MERGED_SECOND_N;
         let fixture = Fixture::new(MERGED_ROWS, n, MERGED_K, dtype);
@@ -1060,7 +1086,9 @@ fn nvfp4_shared_activation_rejects_diverging_live_calibration() -> Result<()> {
         Nvfp4LayerParts, QuantMethod,
     };
     let _gpu_guard = CUDA_TEST_LOCK.lock().unwrap();
-    let device = Device::new_cuda(0)?;
+    let Some(device) = nvfp4_device()? else {
+        return Ok(());
+    };
     for dtype in [DType::BF16, DType::F16] {
         let n = MERGED_FIRST_N + MERGED_SECOND_N;
         let fixture = Fixture::new(MERGED_ROWS, n, MERGED_K, dtype);
