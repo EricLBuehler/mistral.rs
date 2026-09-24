@@ -10,6 +10,9 @@ use symphonia::core::{
     meta::MetadataOptions, probe::Hint,
 };
 
+// 30 minutes of 48 kHz stereo; compressed input can otherwise expand to tens of GB
+const MAX_DECODED_AUDIO_SAMPLES: usize = 48_000 * 2 * 30 * 60;
+
 /// Raw audio input consisting of PCM samples and a sample rate.
 #[derive(Clone, Debug, PartialEq)]
 pub struct AudioInput {
@@ -43,6 +46,10 @@ impl AudioInput {
 
     /// Decode audio bytes using `symphonia`.
     pub fn from_bytes(bytes: &[u8]) -> Result<Self> {
+        Self::from_bytes_limited(bytes, MAX_DECODED_AUDIO_SAMPLES)
+    }
+
+    fn from_bytes_limited(bytes: &[u8], max_samples: usize) -> Result<Self> {
         let cursor = std::io::Cursor::new(bytes.to_vec());
         let mss = MediaSourceStream::new(Box::new(cursor), Default::default());
         let hint = Hint::new();
@@ -72,6 +79,9 @@ impl AudioInput {
                     let mut buf =
                         SampleBuffer::<f32>::new(decoded.capacity() as u64, *decoded.spec());
                     buf.copy_interleaved_ref(decoded);
+                    if samples.len() + buf.samples().len() > max_samples {
+                        anyhow::bail!("audio exceeds the {max_samples} decoded sample limit");
+                    }
                     samples.extend_from_slice(buf.samples());
                 }
                 Err(symphonia::core::errors::Error::IoError(e))
@@ -208,6 +218,8 @@ mod tests {
         let input = AudioInput::from_bytes(&buffer).unwrap();
         assert_eq!(input.samples.len(), 80);
         assert_eq!(input.sample_rate, 8000);
+        assert!(AudioInput::from_bytes_limited(&buffer, 79).is_err());
+        assert!(AudioInput::from_bytes_limited(&buffer, 80).is_ok());
     }
 
     #[test]
