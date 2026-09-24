@@ -45,7 +45,6 @@ const POINTER_HINT_MAX_BYTES: usize = 16;
 #[cutile::module]
 mod routed_lora_kernel {
     use cutile::core::*;
-    use cutile::cutile_compiler;
 
     const DESCRIPTOR_BYTES: i32 = 40;
 

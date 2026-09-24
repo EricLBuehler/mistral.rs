@@ -28,7 +28,6 @@ const LARGE_MATRIX_MIN_ELEMENTS: usize = 32 * 1024 * 1024;
 #[cutile::module]
 mod kernels {
     use cutile::core::*;
-    use cutile::cutile_compiler;
 
     const BLOCK: i32 = 16;
     const FP4_MAX: f32 = 6.0;

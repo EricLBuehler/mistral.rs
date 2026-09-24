@@ -27,7 +27,6 @@ use super::{catch_cutile_panic, context, get_default_config, MoeShapeKey, MoeTil
 #[cutile::module]
 pub mod fused_moe {
     use cutile::core::*;
-    use cutile::cutile_compiler;
 
     #[cutile::entry(
         unchecked_accesses = true,

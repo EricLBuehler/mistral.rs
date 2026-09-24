@@ -13,7 +13,7 @@ use cutile::bench::BenchOptions;
 use cutile::cuda_core::Stream;
 use cutile::error::Error as CutileError;
 use cutile::tune::{
-    space_hash, Autotuner, Config, Oracle, ParamValue, Record, RecordEntry, Searcher, Trial,
+    space_hash, Autotuner, Config, Objective, ParamValue, Record, RecordEntry, Searcher, Trial,
     TrialState, Workspace,
 };
 use std::collections::{BTreeMap, HashMap};
@@ -503,8 +503,8 @@ struct Descent<'a> {
 }
 
 impl Searcher for Descent<'_> {
-    fn search(&mut self, oracle: &mut dyn Oracle) -> Vec<Trial> {
-        let configs: Vec<Config> = oracle.configs().to_vec();
+    fn search(&mut self, objective: &mut dyn Objective) -> Vec<Trial> {
+        let configs: Vec<Config> = objective.configs().to_vec();
         let index_of = |id: &str| configs.iter().position(|c| c.id == id);
         let mut trials = Vec::new();
         let mut visit =
@@ -514,10 +514,10 @@ impl Searcher for Descent<'_> {
                     let Some(index) = index_of(&candidate.id) else {
                         continue;
                     };
-                    if oracle.budget_remaining() == Some(Duration::ZERO) {
+                    if objective.budget_remaining() == Some(Duration::ZERO) {
                         break;
                     }
-                    let trial = oracle.measure(index);
+                    let trial = objective.measure(index);
                     if let Some(ms) = trial.median_ms() {
                         if best.as_ref().is_none_or(|(_, b)| ms < *b) {
                             best = Some((configs[index].clone(), ms));
@@ -776,17 +776,17 @@ mod tests {
         )
     }
 
-    struct FakeOracle {
+    struct FakeObjective {
         configs: Vec<Config>,
         visited: Vec<String>,
     }
 
-    impl Oracle for FakeOracle {
+    impl Objective for FakeObjective {
         fn configs(&self) -> &[Config] {
             &self.configs
         }
 
-        // cuTile's trial types are non-exhaustive, so a fake oracle builds them through serde
+        // cuTile's trial types are non-exhaustive, so a fake objective builds them through serde
         fn measure(&mut self, index: usize) -> Trial {
             let config = &self.configs[index];
             self.visited.push(config.id.clone());
@@ -913,14 +913,14 @@ mod tests {
     #[test]
     fn descent_visits_tiles_then_each_axis_from_the_winner() {
         let s = space();
-        let mut oracle = FakeOracle {
+        let mut objective = FakeObjective {
             configs: s.configs(),
             visited: Vec::new(),
         };
-        let trials = Descent { space: &s }.search(&mut oracle);
+        let trials = Descent { space: &s }.search(&mut objective);
         // three tiles, then the two knob variants of tile 2; the incumbent knob is not re-timed
         assert_eq!(
-            oracle.visited,
+            objective.visited,
             vec![
                 "knob=0,tile=1",
                 "knob=0,tile=2",
@@ -930,7 +930,7 @@ mod tests {
             ]
         );
         assert_eq!(trials.len(), 5);
-        let best = cutile::tune::best_config(oracle.configs(), &trials).unwrap();
+        let best = cutile::tune::best_config(objective.configs(), &trials).unwrap();
         assert_eq!(best.id, "knob=1,tile=2");
         assert_eq!(latest_median(&trials, "knob=0,tile=1"), Some(1.0));
         assert_eq!(samples(&trials, "knob=1,tile=2"), 5);

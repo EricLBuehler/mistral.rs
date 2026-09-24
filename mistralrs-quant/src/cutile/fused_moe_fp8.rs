@@ -35,7 +35,6 @@ pub const FP8_MOE_GROUP: usize = 128;
 #[cutile::module]
 pub mod fused_moe_fp8 {
     use cutile::core::*;
-    use cutile::cutile_compiler;
 
     // Same routing as the bf16 kernel: one tile block per (aligned token block, N tile). A rows are
     // gathered per token, B is the expert's [N, K] slab, and each BK = 128 step is scaled by the
