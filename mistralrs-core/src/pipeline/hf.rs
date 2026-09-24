@@ -19,6 +19,7 @@ use hf_hub::{
 use tokio::io::{AsyncReadExt, AsyncSeekExt};
 use tracing::{trace, warn};
 
+use crate::pipeline::oci;
 use crate::utils::tokens::get_token;
 
 /// Env variable that, when set to a truthy value, disables all network calls
@@ -323,6 +324,9 @@ pub async fn read_model_file_range(
     token_source: &crate::pipeline::TokenSource,
 ) -> Result<Vec<u8>> {
     let model_path = Path::new(model_id);
+    let resolved = oci::maybe_resolve(model_path)?;
+    let model_path = resolved.as_deref().unwrap_or(model_path);
+
     if model_path.exists() {
         return read_local_file_range(&model_path.join(file), range).await;
     }
@@ -582,6 +586,10 @@ pub(crate) fn list_repo_files(
     should_error: bool,
     revision: &str,
 ) -> Result<Vec<String>> {
+    // Once pulled, an `oci://` artifact is just a local directory.
+    let resolved = oci::maybe_resolve(model_id)?;
+    let model_id = resolved.as_deref().unwrap_or(model_id);
+
     if model_id.exists() {
         let listing = fs::read_dir(model_id).map_err(|err| {
             anyhow!(
@@ -646,6 +654,10 @@ pub(crate) async fn list_repo_files_async(
     should_error: bool,
     revision: &str,
 ) -> Result<Vec<String>> {
+    // Once pulled, an `oci://` artifact is just a local directory.
+    let resolved = oci::maybe_resolve(model_id)?;
+    let model_id = resolved.as_deref().unwrap_or(model_id);
+
     if model_id.exists() {
         let listing = fs::read_dir(model_id).map_err(|err| {
             anyhow!(
@@ -710,6 +722,9 @@ pub(crate) fn get_file(
     file: &str,
     revision: &str,
 ) -> Result<PathBuf> {
+    let resolved = oci::maybe_resolve(model_id)?;
+    let model_id = resolved.as_deref().unwrap_or(model_id);
+
     if model_id.exists() {
         let path = model_id.join(file);
         if !path.exists() {
@@ -741,6 +756,10 @@ pub(crate) fn try_get_file(
     file: &str,
     revision: &str,
 ) -> std::result::Result<Option<PathBuf>, ApiError> {
+    // Cannot surface a resolution error here, so fall through to the Hub path, which reports it.
+    let resolved = oci::maybe_resolve(model_id).ok().flatten();
+    let model_id = resolved.as_deref().unwrap_or(model_id);
+
     if model_id.exists() {
         let path = model_id.join(file);
         if path.exists() {
@@ -769,6 +788,10 @@ pub(crate) async fn try_get_file_async(
     file: &str,
     revision: &str,
 ) -> std::result::Result<Option<PathBuf>, AsyncApiError> {
+    // Cannot surface a resolution error here, so fall through to the Hub path, which reports it.
+    let resolved = oci::maybe_resolve(model_id).ok().flatten();
+    let model_id = resolved.as_deref().unwrap_or(model_id);
+
     if model_id.exists() {
         let path = model_id.join(file);
         if path.exists() {

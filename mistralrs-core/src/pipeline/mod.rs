@@ -22,6 +22,7 @@ mod loaders;
 mod macros;
 mod multimodal;
 mod normal;
+pub(crate) mod oci;
 mod paths;
 mod processing;
 pub(crate) mod prompt_chunks;
