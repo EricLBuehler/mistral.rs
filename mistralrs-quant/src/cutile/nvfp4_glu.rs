@@ -13,7 +13,9 @@ mod kernels {
     const FP8_MAX: f32 = 448.0;
     const SILU: i32 = 0;
     const RELU: i32 = 2;
-    const LOG2_E: f32 = std::f32::consts::LOG2_E;
+    // cuTile only folds literal consts, so spell out std::f32::consts::LOG2_E
+    #[allow(clippy::approx_constant)]
+    const LOG2_E: f32 = 1.442_695_040_888_963_4_f32;
 
     #[cutile::entry(unchecked_accesses = true)]
     unsafe fn quantize_bf16<
@@ -616,9 +618,17 @@ pub(super) fn warm_common(
 
 #[cfg(test)]
 mod tests {
+    use std::sync::PoisonError;
+
     use super::*;
 
     static CUDA_TEST_LOCK: Mutex<()> = Mutex::new(());
+
+    // NVFP4 needs a CUDA 13.3+ toolchain, so older CI lanes skip these instead of failing
+    fn nvfp4_device() -> Result<Option<Device>> {
+        let device = Device::new_cuda(0)?;
+        Ok(nvfp4_supported(device.as_cuda_device()?).then_some(device))
+    }
 
     const CASES: [(usize, usize, usize, usize); 6] = [
         (1, 16, 0, 0),
@@ -739,8 +749,12 @@ mod tests {
 
     #[test]
     fn fused_quantization_matches_separate_glu_for_tail_and_strided_inputs() -> Result<()> {
-        let _gpu_guard = CUDA_TEST_LOCK.lock().unwrap();
-        let device = Device::new_cuda(0)?;
+        let _gpu_guard = CUDA_TEST_LOCK
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        let Some(device) = nvfp4_device()? else {
+            return Ok(());
+        };
         for dtype in [DType::BF16, DType::F16] {
             for (rows, columns, padding, offset) in CASES {
                 let (gate, value) = fixture(rows, columns, padding, offset, dtype, &device)?;
@@ -761,8 +775,12 @@ mod tests {
     #[test]
     fn finite_16_bit_gate_patterns_match_separate_nonlinear_glu() -> Result<()> {
         const SIDE: usize = 256;
-        let _gpu_guard = CUDA_TEST_LOCK.lock().unwrap();
-        let device = Device::new_cuda(0)?;
+        let _gpu_guard = CUDA_TEST_LOCK
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        let Some(device) = nvfp4_device()? else {
+            return Ok(());
+        };
         let global = Tensor::from_vec(vec![2.0f32], 1, &device)?;
         for dtype in [DType::BF16, DType::F16] {
             let values: Vec<f32> = (0..=u16::MAX)
@@ -796,8 +814,12 @@ mod tests {
 
         const ROWS: usize = 33;
         const COLUMNS: usize = 272;
-        let _gpu_guard = CUDA_TEST_LOCK.lock().unwrap();
-        let device = Device::new_cuda(0)?;
+        let _gpu_guard = CUDA_TEST_LOCK
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        let Some(device) = nvfp4_device()? else {
+            return Ok(());
+        };
         let cuda = device.as_cuda_device()?;
         let stream = cuda.cuda_stream();
         let data: Vec<f32> = (0..ROWS * COLUMNS * 2)
@@ -884,8 +906,12 @@ mod tests {
     #[test]
     fn unregistered_stride_metadata_falls_back_until_explicitly_warmed() -> Result<()> {
         const COLUMNS: usize = 368;
-        let _gpu_guard = CUDA_TEST_LOCK.lock().unwrap();
-        let device = Device::new_cuda(0)?;
+        let _gpu_guard = CUDA_TEST_LOCK
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        let Some(device) = nvfp4_device()? else {
+            return Ok(());
+        };
         let (gate, value) = fixture(3, COLUMNS, 3, 1, DType::BF16, &device)?;
         let global = Tensor::from_vec(vec![0.0f32, 2.0], 2, &device)?.narrow(0, 1, 1)?;
         assert_eq!(global.layout().start_offset(), 1);
@@ -912,8 +938,12 @@ mod tests {
         const COLUMNS: usize = 80;
         const OUTPUT: usize = 7;
         const GLOBAL: f32 = 0.375;
-        let _gpu_guard = CUDA_TEST_LOCK.lock().unwrap();
-        let device = Device::new_cuda(0)?;
+        let _gpu_guard = CUDA_TEST_LOCK
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        let Some(device) = nvfp4_device()? else {
+            return Ok(());
+        };
         for dtype in [DType::BF16, DType::F16] {
             let weights = Tensor::from_vec(
                 vec![0x42u8; OUTPUT * COLUMNS / 2],
@@ -1046,8 +1076,12 @@ mod tests {
     fn common_packed_warmup_covers_contiguous_inputs_without_compiling() -> Result<()> {
         const ROWS: usize = 33;
         const COLUMNS: usize = 272;
-        let _gpu_guard = CUDA_TEST_LOCK.lock().unwrap();
-        let device = Device::new_cuda(0)?;
+        let _gpu_guard = CUDA_TEST_LOCK
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        let Some(device) = nvfp4_device()? else {
+            return Ok(());
+        };
         for dtype in [DType::BF16, DType::F16] {
             let (gate, value) = fixture(ROWS, COLUMNS, 0, 0, dtype, &device)?;
             let gate = gate.contiguous()?;
@@ -1083,8 +1117,12 @@ mod tests {
         const COLUMNS: usize = 272;
         const OUTPUT: usize = 7;
         const GLOBAL: f32 = 0.375;
-        let _gpu_guard = CUDA_TEST_LOCK.lock().unwrap();
-        let device = Device::new_cuda(0)?;
+        let _gpu_guard = CUDA_TEST_LOCK
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        let Some(device) = nvfp4_device()? else {
+            return Ok(());
+        };
         let cuda = device.as_cuda_device()?;
         let stream = cuda.cuda_stream();
         for dtype in [DType::BF16, DType::F16] {
