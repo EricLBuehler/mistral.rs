@@ -4,7 +4,7 @@ use mistralrs_quant::{
 };
 use std::sync::Arc;
 
-use crate::device_map::DeviceMapper;
+use crate::{device_map::DeviceMapper, layers::NormStorage};
 
 use super::config::{GdnConfig, GdnDims, GdnVHeadLayout};
 use super::norm::RmsNormGated;
@@ -332,10 +332,15 @@ impl GdnWeights {
                 }
             }
         };
-        let conv1d_weight = move_to_target(
-            vb_la.get((dims.conv_dim, 1, dims.conv_kernel_size), "conv1d.weight")?,
-            isq_target_device.as_ref(),
-        )?;
+        let conv1d_weight = if conv1d_is_channels_last(vb_la.tensor_shape("conv1d.weight")) {
+            vb_la
+                .get((dims.conv_dim, dims.conv_kernel_size, 1), "conv1d.weight")?
+                .transpose(1, 2)?
+                .contiguous()?
+        } else {
+            vb_la.get((dims.conv_dim, 1, dims.conv_kernel_size), "conv1d.weight")?
+        };
+        let conv1d_weight = move_to_target(conv1d_weight, isq_target_device.as_ref())?;
         // The recurrence consumes these in f32 every step; A_log is f32 in the checkpoint anyway
         let vb_f32 = vb_la.clone().set_dtype(DType::F32);
         let dt_bias = move_to_target(
@@ -375,6 +380,20 @@ impl GdnWeights {
             norm,
             out_proj,
         })
+    }
+}
+
+// MLX conversions store conv1d channels-last, the same signal mlx-lm uses to decide a checkpoint is already converted.
+fn conv1d_is_channels_last(shape: Option<&[usize]>) -> bool {
+    matches!(shape, Some([_, kernel, 1]) if *kernel > 1)
+}
+
+/// MLX conversions also bake the offset into `(1 + w)` norms, so the conv1d layout tells us how norms are stored.
+pub(crate) fn checkpoint_norm_storage(vb_linear_attn: &ShardedVarBuilder) -> NormStorage {
+    if conv1d_is_channels_last(vb_linear_attn.tensor_shape("conv1d.weight")) {
+        NormStorage::Scale
+    } else {
+        NormStorage::Offset
     }
 }
 

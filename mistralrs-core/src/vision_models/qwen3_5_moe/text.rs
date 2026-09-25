@@ -150,8 +150,10 @@ impl FullAttention {
         } else {
             None
         };
-        let q_norm = GemmaRmsNorm::new(head_dim, cfg.rms_norm_eps, vb_sa_norms.pp("q_norm"))?;
-        let k_norm = GemmaRmsNorm::new(head_dim, cfg.rms_norm_eps, vb_sa_norms.pp("k_norm"))?;
+        let q_norm = GemmaRmsNorm::new(head_dim, cfg.rms_norm_eps, vb_sa_norms.pp("q_norm"))?
+            .with_storage(cfg.norm_storage)?;
+        let k_norm = GemmaRmsNorm::new(head_dim, cfg.rms_norm_eps, vb_sa_norms.pp("k_norm"))?
+            .with_storage(cfg.norm_storage)?;
 
         Ok(Self {
             q_proj,
@@ -530,12 +532,30 @@ impl Qwen3_5MoeTextModel {
         let mapper = normal_loading_metadata.mapper;
         let vb_m = text_model_vb(vb.clone())?;
 
+        let mut cfg = cfg.clone();
+        if let Some(linear) = cfg
+            .layer_types()
+            .iter()
+            .position(|t| *t == LayerType::LinearAttention)
+        {
+            cfg.norm_storage = crate::gdn::checkpoint_norm_storage(
+                &vb_m.pp("layers").pp(linear).pp("linear_attn"),
+            );
+        }
+        let cfg = &cfg;
+        // MLX conversions nest the head under the language model like the rest of the text weights
+        let vb_head = if layers::contains_tensor_or_uqff(&vb, "language_model.lm_head.weight") {
+            vb.pp("language_model")
+        } else {
+            vb.clone()
+        };
+
         let embed_tokens = layers::embedding_with_legacy_tied_uqff(
             cfg.vocab_size,
             cfg.hidden_size,
             mapper.set_nm_device(vb_m.pp("embed_tokens"), normal_loading_metadata.loading_isq),
             tie.then(|| {
-                mapper.set_nm_device(vb.pp("lm_head"), normal_loading_metadata.loading_isq)
+                mapper.set_nm_device(vb_head.pp("lm_head"), normal_loading_metadata.loading_isq)
             }),
             &cfg.quantization_config,
         )?;
@@ -631,7 +651,8 @@ impl Qwen3_5MoeTextModel {
                 cfg.hidden_size,
                 cfg.rms_norm_eps,
                 mapper.set_device(layer_idx, vb_l.pp(layer_idx).pp("input_layernorm"), false),
-            )?;
+            )?
+            .with_storage(cfg.norm_storage)?;
             let post_attention_layernorm = GemmaRmsNorm::new(
                 cfg.hidden_size,
                 cfg.rms_norm_eps,
@@ -640,7 +661,8 @@ impl Qwen3_5MoeTextModel {
                     vb_l.pp(layer_idx).pp("post_attention_layernorm"),
                     false,
                 ),
-            )?;
+            )?
+            .with_storage(cfg.norm_storage)?;
 
             let moe = SparseMoeBlock::new(
                 cfg,
@@ -668,14 +690,15 @@ impl Qwen3_5MoeTextModel {
             cfg.hidden_size,
             cfg.rms_norm_eps,
             mapper.set_nm_device(vb_m.pp("norm"), false),
-        )?;
+        )?
+        .with_storage(cfg.norm_storage)?;
         let lm_head = if !tie {
             ReplicatedLayer::new(
                 cfg.hidden_size,
                 cfg.vocab_size,
                 &cfg.quantization_config,
                 false,
-                mapper.set_nm_device(vb.pp("lm_head"), normal_loading_metadata.loading_isq),
+                mapper.set_nm_device(vb_head.pp("lm_head"), normal_loading_metadata.loading_isq),
             )?
         } else {
             embed_tokens.clone()

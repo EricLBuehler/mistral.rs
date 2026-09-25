@@ -510,6 +510,16 @@ pub struct GemmaRmsNorm {
     weight: Tensor,
 }
 
+/// How a checkpoint stores a `(1 + w)` norm weight.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum NormStorage {
+    /// HF layout: the stored tensor is `w`.
+    #[default]
+    Offset,
+    /// MLX conversions bake the offset in: the stored tensor is `1 + w`.
+    Scale,
+}
+
 impl GemmaRmsNorm {
     pub fn new(size: usize, eps: f64, vb: ShardedVarBuilder) -> Result<Self> {
         let original_weight = vb.get(size, "weight")?;
@@ -519,6 +529,17 @@ impl GemmaRmsNorm {
             original_weight,
             weight,
         })
+    }
+
+    pub fn with_storage(self, storage: NormStorage) -> Result<Self> {
+        match storage {
+            NormStorage::Offset => Ok(self),
+            NormStorage::Scale => Ok(Self {
+                eps: self.eps,
+                weight: self.original_weight.clone(),
+                original_weight: (&self.original_weight - 1.0)?,
+            }),
+        }
     }
 
     pub fn weight(&self) -> &Tensor {
