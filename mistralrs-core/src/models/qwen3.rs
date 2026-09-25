@@ -475,10 +475,15 @@ impl Model {
             mapper.set_nm_device(vb_m.pp("norm"), false),
         )?;
         let lm_head = if !cfg.tie_word_embeddings {
+            // Standard GPTQ/AWQ Qwen3 checkpoints quantize only the transformer
+            // blocks and keep `lm_head` in full precision (a plain `lm_head.weight`,
+            // no qweight/qzeros/scales). Passing the model's quantization_config here
+            // makes the loader demand int4 lm_head tensors and fail to load. Load
+            // lm_head unquantized instead (matching gemma/starcoder2).
             ReplicatedLayer::new(
                 cfg.hidden_size,
                 cfg.vocab_size,
-                &cfg.quantization_config,
+                &None,
                 false,
                 mapper.set_nm_device(vb_lm_head, normal_loading_metadata.loading_isq),
             )?
