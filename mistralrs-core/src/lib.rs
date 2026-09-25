@@ -102,6 +102,7 @@ mod response;
 mod sampler;
 mod scheduler;
 mod sequence;
+mod special_text;
 pub mod speculative;
 mod speech_models;
 mod toml_selector;
