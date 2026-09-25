@@ -71,9 +71,16 @@ pub struct FormatOptions {
     #[arg(short = 'f', long)]
     pub quantized_file: Option<String>,
 
-    /// GGUF projector override; auto-selected when unambiguous (semicolon-separated for multiple)
+    /// GGUF projector override; auto-selected when unambiguous (semicolon-separated for multiple).
+    /// Pass `none` to disable auto-selection and force a text-only load, even if the model's
+    /// directory contains a projector file.
     #[arg(long)]
     pub mmproj: Option<String>,
+
+    #[doc(hidden)]
+    #[arg(skip)]
+    #[serde(skip)]
+    pub mmproj_disabled: bool,
 
     /// Optional model ID overriding configuration, tokenizer, and processor assets for a quantized model
     #[arg(long)]
@@ -92,6 +99,15 @@ pub struct FormatOptions {
 
 impl FormatOptions {
     pub(crate) fn normalize(&mut self) -> anyhow::Result<()> {
+        if self
+            .mmproj
+            .as_deref()
+            .is_some_and(|value| value.eq_ignore_ascii_case("none"))
+        {
+            self.mmproj = None;
+            self.mmproj_disabled = true;
+        }
+
         let mut format = self.format;
         if self.mmproj.is_some() {
             match format {
