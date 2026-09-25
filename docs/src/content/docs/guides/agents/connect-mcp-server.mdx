@@ -132,6 +132,40 @@ Remote servers can carry per-server auth and naming. A Hugging Face MCP entry, f
 
 `bearer_token` is sent as an `Authorization` header; `enabled: false` keeps an entry in the file without connecting it.
 
+## Hosted web search without an API key
+
+[Parallel Search MCP](https://docs.parallel.ai/integrations/mcp/search-mcp) provides web search and page extraction over Streamable HTTP. Anonymous access requires no Parallel account or API key and is rate limited.
+
+Save this as `parallel-mcp.json`:
+
+```json
+{
+  "servers": [
+    {
+      "id": "parallel",
+      "name": "Parallel Search",
+      "source": {
+        "type": "Http",
+        "url": "https://search.parallel.ai/mcp",
+        "timeout_secs": 30
+      },
+      "tool_prefix": "parallel"
+    }
+  ],
+  "auto_register_tools": true,
+  "tool_timeout_secs": 30,
+  "max_concurrent_calls": 4
+}
+```
+
+```bash
+mistralrs serve --mcp-config parallel-mcp.json -m <model>
+```
+
+The connection exposes `parallel_web_search` and `parallel_web_fetch`. Check `/v1/models` for `mcp_servers_connected: 1` and `mcp_tools_count: 2`, then ask the model to search for current information or extract a public page. This adds MCP tools; the built-in DuckDuckGo backend enabled by `--enable-search` is unchanged.
+
+Once connected, the model can invoke these tools automatically. Queries, requested URLs, and any supplied objectives or context go to Parallel under its [Customer Terms](https://parallel.ai/customer-terms) and [Privacy Policy](https://parallel.ai/privacy-policy). HTTP MCP requests identify the calling project with `mistralrs/<package version>` as the User-Agent, allowing aggregate usage measurement; custom `source.headers` can override it.
+
 ## Tool name prefix
 
 Each server's tools are exposed to the model as `<prefix>_<tool>` (separator is an underscore). The prefix is:
