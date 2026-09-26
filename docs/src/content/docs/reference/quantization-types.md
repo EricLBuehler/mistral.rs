@@ -237,3 +237,20 @@ mistralrs run --format plain -m <gptq-or-awq-repo>
 mistral.rs detects the quantization from the model's config. No `--quant` or `--isq` required.
 
 See the [quantization guide](/guides/quantization/quantize-a-model/) for format selection.
+
+## Prism ternary (GGUF)
+
+Not ISQ types, pre-quantized GGUF storage types. Load directly from a GGUF file that stores them:
+
+```bash
+mistralrs run --format gguf -m <repo> -f <file>
+```
+
+| Type | Block | Bytes per block | Bits per weight |
+|---|---|---|---|
+| `PTQ1_0` | 128 weights | 28 | 1.75 |
+| `PQ2_0` | 128 weights | 34 | 2.125 |
+
+Files may carry `prism.hadamard.*` metadata for a Hadamard fold on the weights, which is unfolded on
+load or applied to activations at run time. See [GGUF support](/reference/gguf-support/) for where each
+type stays packed.

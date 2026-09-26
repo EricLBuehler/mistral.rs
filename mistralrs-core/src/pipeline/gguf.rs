@@ -75,6 +75,7 @@ use tokenizers::Tokenizer;
 use tokio::sync::Mutex;
 use tracing::{debug, info, warn};
 
+const PRISM_HADAMARD_VERSION_KEY: &str = "prism.hadamard.version";
 const PROJECTOR_REQUIRED_ARCHITECTURES: &[&str] = &[
     "gemma3n",
     "gemma4",
@@ -1228,6 +1229,14 @@ impl Loader for GGUFLoader {
         }
         let mut readers = readers.iter_mut().collect::<Vec<_>>();
         let model = Content::from_readers(&mut readers)?;
+        if model
+            .get_metadata()
+            .contains_key(PRISM_HADAMARD_VERSION_KEY)
+        {
+            bail!(
+                "Hadamard-folded GGUF weights are only supported by the native GGUF loading path"
+            );
+        }
 
         if !silent {
             model.print_metadata()?;
