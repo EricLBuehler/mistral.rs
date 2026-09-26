@@ -59,10 +59,15 @@ type Pipelines = HashMap<(String, Option<ConstantValues>), ComputePipeline>;
 static LIBRARY: OnceLock<Library> = OnceLock::new();
 static GLOBAL_KERNELS: OnceLock<Kernels> = OnceLock::new();
 
-#[derive(Debug)]
-pub struct Kernels {
-    pipelines: RwLock<Pipelines>,
+// Process-wide: callers construct `Kernels` per dispatch, so a per-instance cache rebuilt pipelines every call.
+static PIPELINES: OnceLock<RwLock<Pipelines>> = OnceLock::new();
+
+fn pipelines() -> &'static RwLock<Pipelines> {
+    PIPELINES.get_or_init(|| RwLock::new(Pipelines::new()))
 }
+
+#[derive(Debug)]
+pub struct Kernels;
 
 impl Default for Kernels {
     fn default() -> Self {
@@ -76,8 +81,7 @@ impl Kernels {
     }
 
     pub fn new() -> Self {
-        let pipelines = RwLock::new(Pipelines::new());
-        Self { pipelines }
+        Self
     }
 
     /// Load the library from precompiled metallib, falling back to runtime compilation if needed.
@@ -152,12 +156,12 @@ impl Kernels {
     ) -> Result<ComputePipelineState, MetalKernelError> {
         let name_str = name.to_string();
         if constants.is_none() {
-            let pipelines = self.pipelines.read()?;
+            let pipelines = pipelines().read()?;
             if let Some(pipeline) = pipelines.get(&(name_str.clone(), None)) {
                 return Ok(pipeline.clone());
             }
         }
-        let mut pipelines = self.pipelines.write()?;
+        let mut pipelines = pipelines().write()?;
         let key = (name_str, constants);
         if let Some(pipeline) = pipelines.get(&key) {
             return Ok(pipeline.clone());
