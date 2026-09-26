@@ -5,6 +5,7 @@ use crate::kv_cache::{
 };
 
 use super::config::{GdnConfig, GdnDims};
+use crate::pipeline::RecurrentBatchKind;
 
 /// Per-layer GDN state handed to the kernels. Gathered: `conv_state` `[B, conv_dim, k]` and
 /// `recurrent_state` `[B, H, K, V]` hold this batch's rows. Pooled (`slots` set): they are the whole
@@ -67,10 +68,14 @@ impl GdnLayerCache {
         }
     }
 
-    /// Check out the rows `indices` of `pool` for one layer forward. On CUDA the kernels update the
-    /// pool in place through the slot table; elsewhere this is a gathered copy that `commit` scatters back.
-    pub fn checkout(pool: &RecurrentStatePool, indices: &Tensor) -> Result<Self> {
-        if pool.device().is_cuda() {
+    /// Check out the rows `indices` of `pool` for one layer forward. On CUDA, and for Metal decode, the kernels
+    /// update the pool in place through the slot table; elsewhere this is a gathered copy `commit` scatters back.
+    pub fn checkout(
+        pool: &RecurrentStatePool,
+        indices: &Tensor,
+        batch_kind: RecurrentBatchKind,
+    ) -> Result<Self> {
+        if pool.device().is_cuda() || metal_pooled_decode(pool, batch_kind) {
             let mut cache = Self::pooled(
                 pool.conv_state.clone(),
                 pool.recurrent_state.clone(),
@@ -119,4 +124,14 @@ impl Clone for GdnLayerCache {
             deferred_state: self.deferred_state.clone(),
         }
     }
+}
+
+// The pooled Metal kernels cover single-token decode over a key-major f32 state with K of 64 or 128.
+fn metal_pooled_decode(pool: &RecurrentStatePool, batch_kind: RecurrentBatchKind) -> bool {
+    batch_kind == RecurrentBatchKind::Decode
+        && pool.device().is_metal()
+        && pool.state_layout() == RecurrentStateLayout::GdnKeyMajor
+        && pool.recurrent_state.dtype() == DType::F32
+        && matches!(pool.conv_state.dtype(), DType::F16 | DType::BF16)
+        && matches!(pool.recurrent_state.dim(2), Ok(64 | 128))
 }

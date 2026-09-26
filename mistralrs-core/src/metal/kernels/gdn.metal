@@ -191,6 +191,69 @@ void gated_delta_rule_kernel_fallback<64, 256>(
     uint);
 
 // ============================================================================
+// Kernel 1a: pooled single-token decode
+//
+// Same V-tiled math as Kernel 1 for seq_len == 1, but the state lives in the recurrent pool and row
+// slots[bh / num_heads] is updated in place, so decode needs no gather/scatter of the state.
+// q,k: [BH, K]  v: [BH, V]  g,beta: [BH]  state pool: [P, H, K, V]  output: [BH, V]
+// ============================================================================
+
+template <int BK, int BV>
+[[kernel]] void gated_delta_rule_pooled_decode_kernel(
+    const device float *q [[buffer(0)]], const device float *k [[buffer(1)]],
+    const device float *v [[buffer(2)]], const device float *g [[buffer(3)]],
+    const device float *beta [[buffer(4)]], device float *state [[buffer(5)]],
+    device float *output [[buffer(6)]], constant int &v_dim [[buffer(7)]],
+    const device uint *slots [[buffer(8)]], constant int &num_heads [[buffer(9)]],
+    uint2 tgpig [[threadgroup_position_in_grid]],
+    uint tid [[thread_index_in_threadgroup]]) {
+  const int bh = tgpig.y;
+  const int v_idx = tgpig.x * BV + (int)tid;
+
+  threadgroup float k_buf[BK];
+  threadgroup float q_buf[BK];
+  for (int j = (int)tid; j < BK; j += BV) {
+    k_buf[j] = k[bh * BK + j];
+    q_buf[j] = q[bh * BK + j];
+  }
+  threadgroup_barrier(mem_flags::mem_threadgroup);
+  if (v_idx >= v_dim)
+    return;
+
+  const int b = bh / num_heads;
+  const int h = bh % num_heads;
+  device float *state_bh =
+      state + ((long)slots[b] * num_heads + h) * BK * v_dim;
+
+  const float decay = exp(g[bh]);
+  float s[BK];
+  float kv_mem = 0.0f;
+  for (int j = 0; j < BK; j++) {
+    s[j] = state_bh[j * v_dim + v_idx] * decay;
+    kv_mem = fma(s[j], k_buf[j], kv_mem);
+  }
+  const float delta = (v[bh * v_dim + v_idx] - kv_mem) * beta[bh];
+  float y = 0.0f;
+  for (int j = 0; j < BK; j++) {
+    s[j] = fma(k_buf[j], delta, s[j]);
+    y = fma(s[j], q_buf[j], y);
+    state_bh[j * v_dim + v_idx] = s[j];
+  }
+  output[bh * v_dim + v_idx] = y;
+}
+
+#define instantiate_gdn_pooled_decode(bk, bv)                                  \
+  template [[host_name("gated_delta_rule_pooled_decode_" #bk "_" #bv)]]       \
+  [[kernel]] void gated_delta_rule_pooled_decode_kernel<bk, bv>(               \
+      const device float *, const device float *, const device float *,        \
+      const device float *, const device float *, device float *,              \
+      device float *, constant int &, const device uint *, constant int &,     \
+      uint2, uint);
+
+instantiate_gdn_pooled_decode(128, 64)
+instantiate_gdn_pooled_decode(64, 64)
+
+// ============================================================================
 // Kernel 1b: chunked_gated_delta_rule_recurrence (prefill optimization)
 //
 // Processes prefill tokens in BT-token chunks instead of one at a time.
@@ -418,6 +481,48 @@ template <typename T>
 
 instantiate_conv1d_update(half);
 instantiate_conv1d_update(bfloat16_t);
+
+// Pooled variant: sequence b's conv state is pool row slots[b], shifted in place.
+template <typename T>
+[[kernel]] void causal_conv1d_update_pooled_kernel(
+    const device T *x [[buffer(0)]], const device T *weight [[buffer(1)]],
+    device T *conv_state [[buffer(2)]], device T *output [[buffer(3)]],
+    constant int &batch_size [[buffer(4)]],
+    constant int &conv_dim [[buffer(5)]],
+    constant int &kernel_size [[buffer(6)]],
+    const device uint *slots [[buffer(7)]],
+    uint2 gid [[thread_position_in_grid]]) {
+  const int ch = gid.x;
+  const int b = gid.y;
+
+  if (ch >= conv_dim || b >= batch_size)
+    return;
+
+  device T *cs = conv_state + ((long)slots[b] * conv_dim + ch) * kernel_size;
+  const device T *w = weight + ch * kernel_size;
+
+  for (int i = 0; i < kernel_size - 1; i++) {
+    cs[i] = cs[i + 1];
+  }
+  cs[kernel_size - 1] = x[b * conv_dim + ch];
+
+  float acc = 0.0f;
+  for (int i = 0; i < kernel_size; i++) {
+    acc += (float)cs[i] * (float)w[i];
+  }
+  const float sig = 1.0f / (1.0f + exp(-acc));
+  output[b * conv_dim + ch] = (T)(acc * sig);
+}
+
+#define instantiate_conv1d_update_pooled(type)                                 \
+  template [[host_name("causal_conv1d_update_pooled_" #type)]] [[kernel]]      \
+  void causal_conv1d_update_pooled_kernel<type>(                               \
+      const device type *, const device type *, device type *, device type *,  \
+      constant int &, constant int &, constant int &, const device uint *,     \
+      uint2);
+
+instantiate_conv1d_update_pooled(half);
+instantiate_conv1d_update_pooled(bfloat16_t);
 
 // ============================================================================
 // Kernel 2b: causal_conv1d_full (prefill path)

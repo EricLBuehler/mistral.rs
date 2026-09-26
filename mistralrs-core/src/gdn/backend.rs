@@ -666,6 +666,31 @@ fn recurrence_metal(
     let v_bh = prepare_kv_for_backend(v, dims, batch_size, seq_len, dims.head_v_dim)?;
     let g_bh = prepare_gate_for_backend(g, dims, batch_size, seq_len)?;
     let beta_bh = prepare_gate_for_backend(beta, dims, batch_size, seq_len)?;
+
+    if let Some(slots) = cache.slots.as_ref() {
+        if seq_len != 1 {
+            candle_core::bail!("pooled Metal GDN state only supports single-token decode");
+        }
+        let out = crate::metal::gdn::gated_delta_rule_pooled_decode_metal(
+            &q_bh.squeeze(1)?,
+            &k_bh.squeeze(1)?,
+            &v_bh.squeeze(1)?,
+            &g_bh.squeeze(1)?,
+            &beta_bh.squeeze(1)?,
+            &cache.recurrent_state,
+            slots,
+        )?;
+        let state_pool = cache.recurrent_state.clone();
+        return finish_recurrence(
+            RecurrenceOutput::BatchHeadMajor(out.unsqueeze(1)?),
+            state_pool,
+            dims,
+            batch_size,
+            seq_len,
+            cache,
+            dtype,
+        );
+    }
     let mut state_flat = prepare_state_for_backend(cache, dims, batch_size)?;
 
     let out_bh = if seq_len >= RECURRENCE_CHUNK_THRESHOLD {
@@ -878,6 +903,16 @@ fn causal_conv1d_update(
             .squeeze(1)?
             .to_dtype(x_t.dtype())?
             .contiguous()?;
+        if let Some(slots) = cache.slots.as_ref() {
+            return crate::metal::gdn::causal_conv1d_update_pooled_metal(
+                &x_t,
+                &weight,
+                &cache.conv_state,
+                slots,
+                dims.conv_kernel_size,
+            )?
+            .transpose(1, 2);
+        }
         let conv_state = cache.conv_state.contiguous()?;
         let (output, new_conv_state) = crate::metal::gdn::causal_conv1d_metal(
             &x_t,

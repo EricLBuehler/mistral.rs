@@ -314,6 +314,141 @@ pub fn chunked_gated_delta_rule_recurrence_metal(
 // Public API: causal_conv1d
 // ============================================================================
 
+/// Single-token decode against the recurrent pool: row `slots[b]` is updated in place.
+///
+/// q, k: [B*H, K]  v: [B*H, V]  g, beta: [B*H]  state_pool: [P, H, K, V] f32  slots: [B] u32
+/// Returns: output [B*H, V] f32
+#[cfg(feature = "metal")]
+pub fn gated_delta_rule_pooled_decode_metal(
+    q: &Tensor,
+    k: &Tensor,
+    v: &Tensor,
+    g: &Tensor,
+    beta: &Tensor,
+    state_pool: &Tensor,
+    slots: &Tensor,
+) -> Result<Tensor> {
+    const BV: usize = 64;
+    let q = q.contiguous()?;
+    let k = k.contiguous()?;
+    let v = v.contiguous()?;
+    let g = g.contiguous()?;
+    let beta = beta.contiguous()?;
+    let (bh, k_dim) = q.dims2()?;
+    let v_dim = v.dim(1)?;
+    let num_heads = state_pool.dim(1)?;
+    let Device::Metal(dev) = q.device() else {
+        candle_core::bail!("gated_delta_rule_pooled_decode_metal: expected Metal device");
+    };
+    let kernel_name = match k_dim {
+        128 => "gated_delta_rule_pooled_decode_128_64",
+        64 => "gated_delta_rule_pooled_decode_64_64",
+        _ => candle_core::bail!("gated_delta_rule_pooled_decode_metal: unsupported k_dim {k_dim}"),
+    };
+    let pipeline = load_pipeline(dev.device(), kernel_name)?;
+    let output = Tensor::zeros((bh, v_dim), DType::F32, q.device())?;
+
+    let (q_buf, q_off) = metal_buffer_and_offset(&q)?;
+    let (k_buf, k_off) = metal_buffer_and_offset(&k)?;
+    let (v_buf, v_off) = metal_buffer_and_offset(&v)?;
+    let (g_buf, g_off) = metal_buffer_and_offset(&g)?;
+    let (beta_buf, beta_off) = metal_buffer_and_offset(&beta)?;
+    let (state_buf, state_off) = metal_buffer_and_offset(state_pool)?;
+    let (out_buf, out_off) = metal_buffer_and_offset(&output)?;
+    let (slots_buf, slots_off) = metal_buffer_and_offset(slots)?;
+
+    let encoder = dev.command_encoder()?;
+    let encoder: &ComputeCommandEncoder = encoder.as_ref();
+    encoder.set_compute_pipeline_state(&pipeline);
+    encoder.set_input_buffer(0, Some(&q_buf), q_off);
+    encoder.set_input_buffer(1, Some(&k_buf), k_off);
+    encoder.set_input_buffer(2, Some(&v_buf), v_off);
+    encoder.set_input_buffer(3, Some(&g_buf), g_off);
+    encoder.set_input_buffer(4, Some(&beta_buf), beta_off);
+    encoder.set_output_buffer(5, Some(&state_buf), state_off);
+    encoder.set_output_buffer(6, Some(&out_buf), out_off);
+    encoder.set_bytes(7, &(v_dim as i32));
+    encoder.set_input_buffer(8, Some(&slots_buf), slots_off);
+    encoder.set_bytes(9, &(num_heads as i32));
+    encoder.dispatch_thread_groups(
+        MTLSize {
+            width: v_dim.div_ceil(BV),
+            height: bh,
+            depth: 1,
+        },
+        MTLSize {
+            width: BV,
+            height: 1,
+            depth: 1,
+        },
+    );
+    Ok(output)
+}
+
+/// Single-token conv update against the conv pool: row `slots[b]` is shifted in place.
+///
+/// x: [B, conv_dim, 1]  weight: [conv_dim, kernel_size]  conv_pool: [P, conv_dim, kernel_size]
+/// Returns: output [B, conv_dim, 1]
+#[cfg(feature = "metal")]
+pub fn causal_conv1d_update_pooled_metal(
+    x: &Tensor,
+    weight: &Tensor,
+    conv_pool: &Tensor,
+    slots: &Tensor,
+    kernel_size: usize,
+) -> Result<Tensor> {
+    const THREADS: usize = 256;
+    let x = x.contiguous()?;
+    let weight = weight.contiguous()?;
+    let type_suffix = match x.dtype() {
+        DType::F16 => "half",
+        DType::BF16 => "bfloat16_t",
+        dtype => {
+            candle_core::bail!("causal_conv1d_update_pooled_metal: unsupported dtype {dtype:?}")
+        }
+    };
+    let Device::Metal(dev) = x.device() else {
+        candle_core::bail!("causal_conv1d_update_pooled_metal: expected Metal device");
+    };
+    let (batch_size, conv_dim, _) = x.dims3()?;
+    let pipeline = load_pipeline(
+        dev.device(),
+        &format!("causal_conv1d_update_pooled_{type_suffix}"),
+    )?;
+    let output = Tensor::zeros((batch_size, conv_dim, 1), x.dtype(), x.device())?;
+
+    let (x_buf, x_off) = metal_buffer_and_offset(&x)?;
+    let (w_buf, w_off) = metal_buffer_and_offset(&weight)?;
+    let (cs_buf, cs_off) = metal_buffer_and_offset(conv_pool)?;
+    let (out_buf, out_off) = metal_buffer_and_offset(&output)?;
+    let (slots_buf, slots_off) = metal_buffer_and_offset(slots)?;
+
+    let encoder = dev.command_encoder()?;
+    let encoder: &ComputeCommandEncoder = encoder.as_ref();
+    encoder.set_compute_pipeline_state(&pipeline);
+    encoder.set_input_buffer(0, Some(&x_buf), x_off);
+    encoder.set_input_buffer(1, Some(&w_buf), w_off);
+    encoder.set_output_buffer(2, Some(&cs_buf), cs_off);
+    encoder.set_output_buffer(3, Some(&out_buf), out_off);
+    encoder.set_bytes(4, &(batch_size as i32));
+    encoder.set_bytes(5, &(conv_dim as i32));
+    encoder.set_bytes(6, &(kernel_size as i32));
+    encoder.set_input_buffer(7, Some(&slots_buf), slots_off);
+    encoder.dispatch_thread_groups(
+        MTLSize {
+            width: conv_dim.div_ceil(THREADS),
+            height: batch_size,
+            depth: 1,
+        },
+        MTLSize {
+            width: THREADS,
+            height: 1,
+            depth: 1,
+        },
+    );
+    Ok(output)
+}
+
 /// Causal conv1d on Metal (both update and full paths).
 ///
 /// x (update): [B, conv_dim, 1] or (full): [B, conv_dim, S]

@@ -877,7 +877,11 @@ impl Qwen3_5MoeTextModel {
                                 pool.state_layout(),
                             )
                         } else {
-                            GdnLayerCache::checkout(pool, &indices)?
+                            GdnLayerCache::checkout(
+                                pool,
+                                &indices,
+                                recurrent_metadata.batch_kind(),
+                            )?
                         };
 
                         xs = layer.forward_linear(
