@@ -350,6 +350,7 @@ impl GdnWeights {
         let norm = RmsNormGated::new(
             dims.head_v_dim,
             cfg.rms_norm_eps(),
+            cfg.output_gate_activation(),
             vb_la.pp("norm"),
             isq_target_device.as_ref(),
         )?;

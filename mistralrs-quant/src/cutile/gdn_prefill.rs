@@ -19,6 +19,7 @@ use crate::utils::{slice_ptr_mut_on_stream, slice_ptr_on_stream};
 pub const GDN_PREFILL_CHUNK: usize = 64;
 pub const GDN_PREFILL_HEAD_DIM: usize = 128;
 const KV_SIZE: usize = GDN_PREFILL_HEAD_DIM * GDN_PREFILL_HEAD_DIM;
+const GDN_SOLVE_BLOCK: usize = 16;
 
 // Ragged counts travel as f32: cuTile keys its JIT cache on the divisibility of every i32 scalar and
 // tensor dim, so with chunk-padded operands one compiled variant serves every sequence length.
@@ -27,13 +28,13 @@ mod kernels {
     use cutile::core::*;
 
     // w = A_inv (beta e^gcum k), u = A_inv (beta v) per (head, chunk), A_inv = (I + A)^-1 solved like
-    // FLA's solve_tril: forward substitution on the 16x16 diagonal blocks (compact [C, 16] rows), then
-    // the exact (I - N)(I + N^2) X_bd with N = X_bd A_off (N^4 = 0). tf32 tensor cores throughout:
-    // f32 mmaf lowers to CUDA cores (seconds per prefill) and a Neumann product in A explodes.
+    // FLA's solve_tril: f32 forward substitution on the 16x16 diagonal blocks, then the exact
+    // (I - N)(I + N^2) X_bd with N = X_bd A_off (N^4 = 0) on tf32 tensor cores: f32 mmaf lowers to CUDA
+    // cores (seconds per prefill) and a Neumann product in A explodes.
     #[cutile::entry(unchecked_accesses = false)]
-    unsafe fn gdn_wy<const C: i32, const K: i32, const V: i32>(
+    unsafe fn gdn_wy<const C: i32, const K: i32, const V: i32, const NB: i32>(
         w_ptr: *mut bf16,
-        u_ptr: *mut bf16,
+        u_ptr: *mut f32,
         k: &Tensor<bf16, { [-1, -1, -1] }>,
         v: &Tensor<bf16, { [-1, -1, -1] }>,
         g: &Tensor<f32, { [-1, -1] }>,
@@ -75,8 +76,6 @@ mod kernels {
         let kc_b: Tile<bf16, { [C, K] }> = kc3.reshape(const_shape![C, K]);
         let vc3: Tile<bf16, { [1, C, V] }> = pv.load([bh, c, 0]);
         let vc_b: Tile<bf16, { [C, V] }> = vc3.reshape(const_shape![C, V]);
-        let kc: Tile<f32, { [C, K] }> = convert_tile(kc_b);
-        let vc: Tile<f32, { [C, V] }> = convert_tile(vc_b);
         let g_row: Tile<f32, { [1, C] }> = pg.load([bh, c]);
         let b_row: Tile<f32, { [1, C] }> = pb.load([bh, c]);
         let g1: Tile<f32, { [C] }> = g_row.reshape(const_shape![C]);
@@ -99,42 +98,43 @@ mod kernels {
         let same_block: Tile<bool, { [C, C] }> = eq_tile(bi, bj);
         let a_bd: Tile<f32, { [C, C] }> = select(same_block, a_mat, zero_cc);
         let a_off: Tile<f32, { [C, C] }> = a_mat - a_bd;
-        let local_row: Tile<i32, { [C, C] }> = ii - bi * blk_cc;
-        let zero_cb: Tile<f32, { [C, 16] }> = constant(0.0f32, const_shape![C, 16]);
-        let one_cb: Tile<f32, { [C, 16] }> = constant(1.0f32, const_shape![C, 16]);
+        // elementwise on purpose: an mmaf carried through this loop miscompiles (block row 8 never updates)
+        let a_c3: Tile<f32, { [C, NB, 16] }> = a_bd.reshape(const_shape![C, NB, 16]);
+        let a_c: Tile<f32, { [C, 16] }> = reduce_sum(a_c3, 1i32);
+        let a_blk: Tile<f32, { [NB, 16, 16] }> = a_c.reshape(const_shape![NB, 16, 16]);
         let iota_b: Tile<i32, { [16] }> = iota(const_shape![16]);
-        let bcols_cb: Tile<i32, { [C, 16] }> = iota_b
-            .reshape(const_shape![1, 16])
-            .broadcast(const_shape![C, 16]);
-        let blk_c1: Tile<i32, { [C, 1] }> = broadcast_scalar(16i32, const_shape![C, 1]);
-        let local_c1: Tile<i32, { [C, 1] }> = ii_c1 - (ii_c1 / blk_c1) * blk_c1;
-        let local_cb: Tile<i32, { [C, 16] }> = local_c1.broadcast(const_shape![C, 16]);
-        let diag_cb: Tile<bool, { [C, 16] }> = eq_tile(local_cb, bcols_cb);
-        let mut x_c: Tile<f32, { [C, 16] }> = select(diag_cb, one_cb, zero_cb);
+        let r_blk: Tile<i32, { [NB, 16, 16] }> = iota_b
+            .reshape(const_shape![1, 16, 1])
+            .broadcast(const_shape![NB, 16, 16]);
+        let l_blk: Tile<i32, { [NB, 16, 16] }> = iota_b
+            .reshape(const_shape![1, 1, 16])
+            .broadcast(const_shape![NB, 16, 16]);
+        let zero_blk: Tile<f32, { [NB, 16, 16] }> = constant(0.0f32, const_shape![NB, 16, 16]);
+        let one_blk: Tile<f32, { [NB, 16, 16] }> = constant(1.0f32, const_shape![NB, 16, 16]);
+        let eye_blk: Tile<bool, { [NB, 16, 16] }> = eq_tile(r_blk, l_blk);
+        let mut x_blk: Tile<f32, { [NB, 16, 16] }> = select(eye_blk, one_blk, zero_blk);
         for step in 1i32..16 {
-            let step_cc: Tile<i32, { [C, C] }> = broadcast_scalar(step, const_shape![C, C]);
-            let rows: Tile<bool, { [C, C] }> = eq_tile(local_row, step_cc);
-            let a_rows: Tile<f32, { [C, C] }> = select(rows, a_bd, zero_cc);
-            let a_rows_m: Tile<tf32, { [C, C] }> = convert_tile(a_rows);
-            let x_c_m: Tile<tf32, { [C, 16] }> = convert_tile(x_c);
-            let upd: Tile<f32, { [C, 16] }> = mmaf(a_rows_m, x_c_m, zero_cb);
-            let x_next: Tile<f32, { [C, 16] }> = x_c - upd;
-            x_c = x_next;
+            let step_blk: Tile<i32, { [NB, 16, 16] }> =
+                broadcast_scalar(step, const_shape![NB, 16, 16]);
+            let at_step: Tile<bool, { [NB, 16, 16] }> = eq_tile(r_blk, step_blk);
+            let a_sel: Tile<f32, { [NB, 16, 16] }> = select(at_step, a_blk, zero_blk);
+            let a_row: Tile<f32, { [NB, 16] }> = reduce_sum(a_sel, 1i32);
+            let a_col: Tile<f32, { [NB, 16, 16] }> = a_row
+                .reshape(const_shape![NB, 16, 1])
+                .broadcast(const_shape![NB, 16, 16]);
+            let prod: Tile<f32, { [NB, 16, 16] }> = a_col * x_blk;
+            let upd: Tile<f32, { [NB, 16] }> = reduce_sum(prod, 1i32);
+            let upd_b: Tile<f32, { [NB, 16, 16] }> = upd
+                .reshape(const_shape![NB, 1, 16])
+                .broadcast(const_shape![NB, 16, 16]);
+            let x_next: Tile<f32, { [NB, 16, 16] }> = select(at_step, x_blk - upd_b, x_blk);
+            x_blk = x_next;
         }
-        // expand the compact solve: X_bd = same_block ? X_c P : 0 with P[l, c] = (c mod 16 == l)
-        let zero_bc: Tile<f32, { [16, C] }> = constant(0.0f32, const_shape![16, C]);
-        let one_bc: Tile<f32, { [16, C] }> = constant(1.0f32, const_shape![16, C]);
-        let blk_1c: Tile<i32, { [1, C] }> = broadcast_scalar(16i32, const_shape![1, C]);
-        let jmod_1c: Tile<i32, { [1, C] }> = jj_1c % blk_1c;
-        let jmod_bc: Tile<i32, { [16, C] }> = jmod_1c.broadcast(const_shape![16, C]);
-        let brow_bc: Tile<i32, { [16, C] }> = iota_b
-            .reshape(const_shape![16, 1])
-            .broadcast(const_shape![16, C]);
-        let p_mask: Tile<bool, { [16, C] }> = eq_tile(jmod_bc, brow_bc);
-        let p_mat: Tile<f32, { [16, C] }> = select(p_mask, one_bc, zero_bc);
-        let p_mat_m: Tile<tf32, { [16, C] }> = convert_tile(p_mat);
-        let x_c_m: Tile<tf32, { [C, 16] }> = convert_tile(x_c);
-        let x_wide: Tile<f32, { [C, C] }> = mmaf(x_c_m, p_mat_m, zero_cc);
+        let x_c: Tile<f32, { [C, 16] }> = x_blk.reshape(const_shape![C, 16]);
+        let x_wide: Tile<f32, { [C, C] }> = x_c
+            .reshape(const_shape![C, 1, 16])
+            .broadcast(const_shape![C, NB, 16])
+            .reshape(const_shape![C, C]);
         let x_bd: Tile<f32, { [C, C] }> = select(same_block, x_wide, zero_cc);
         let x_bd_m: Tile<tf32, { [C, C] }> = convert_tile(x_bd);
         let a_off_m: Tile<tf32, { [C, C] }> = convert_tile(a_off);
@@ -148,17 +148,20 @@ mod kernels {
         let p: Tile<f32, { [C, C] }> = mmaf(i_minus_n_m, i_plus_n2_m, zero_cc);
         let p_m: Tile<tf32, { [C, C] }> = convert_tile(p);
         let x: Tile<f32, { [C, C] }> = mmaf(p_m, x_bd_m, zero_cc);
-        let ainv_m: Tile<bf16, { [C, C] }> = convert_tile(x);
-        let egc: Tile<f32, { [C, 1] }> = exp(gcol);
-        let beta_cv: Tile<f32, { [C, V] }> = beta_col.broadcast(const_shape![C, V]);
-        let vb: Tile<f32, { [C, V] }> = vc * beta_cv;
-        let vb_m: Tile<bf16, { [C, V] }> = convert_tile(vb);
-        let u: Tile<f32, { [C, V] }> = mmaf(ainv_m, vb_m, zero_cv);
-        let bg: Tile<f32, { [C, 1] }> = beta_col * egc;
-        let bg_ck: Tile<f32, { [C, K] }> = bg.broadcast(const_shape![C, K]);
-        let kb: Tile<f32, { [C, K] }> = kc * bg_ck;
-        let kb_m: Tile<bf16, { [C, K] }> = convert_tile(kb);
-        let w: Tile<f32, { [C, K] }> = mmaf(ainv_m, kb_m, zero_ck);
+        // exact bf16 v/k operands, hi + lo coefficients: delta = u - w S cancels to ~0 on repetitive keys
+        let xb: Tile<f32, { [C, C] }> = x * b_row.broadcast(const_shape![C, C]);
+        let xb_hi: Tile<bf16, { [C, C] }> = convert_tile(xb);
+        let xb_hi_f: Tile<f32, { [C, C] }> = convert_tile(xb_hi);
+        let xb_lo: Tile<bf16, { [C, C] }> = convert_tile(xb - xb_hi_f);
+        let u_hi: Tile<f32, { [C, V] }> = mmaf(xb_hi, vc_b, zero_cv);
+        let u: Tile<f32, { [C, V] }> = mmaf(xb_lo, vc_b, u_hi);
+        let egc_1c: Tile<f32, { [1, C] }> = exp(grow);
+        let xg: Tile<f32, { [C, C] }> = xb * egc_1c.broadcast(const_shape![C, C]);
+        let xg_hi: Tile<bf16, { [C, C] }> = convert_tile(xg);
+        let xg_hi_f: Tile<f32, { [C, C] }> = convert_tile(xg_hi);
+        let xg_lo: Tile<bf16, { [C, C] }> = convert_tile(xg - xg_hi_f);
+        let w_hi: Tile<f32, { [C, K] }> = mmaf(xg_hi, kc_b, zero_ck);
+        let w: Tile<f32, { [C, K] }> = mmaf(xg_lo, kc_b, w_hi);
 
         let rows_c1: Tile<i32, { [C, 1] }> = iota_c.reshape(const_shape![C, 1]);
         let row0_ck: Tile<i32, { [C, K] }> = broadcast_scalar(idx * chunk, const_shape![C, K]);
@@ -189,14 +192,13 @@ mod kernels {
         let cols_cv: Tile<i32, { [C, V] }> = cols_1v.broadcast(const_shape![C, V]);
         let vdim_cv: Tile<i32, { [C, V] }> = broadcast_scalar(v_dim, const_shape![C, V]);
         let u_off: Tile<i32, { [C, V] }> = rows_cv * vdim_cv + cols_cv;
-        let u_p0: PointerTile<*mut bf16, { [] }> = pointer_to_tile(u_ptr);
-        let u_p1: PointerTile<*mut bf16, { [1, 1] }> = u_p0.reshape(const_shape![1, 1]);
-        let u_p2: PointerTile<*mut bf16, { [C, V] }> = u_p1.broadcast(const_shape![C, V]);
-        let u_ptrs: PointerTile<*mut bf16, { [C, V] }> = u_p2.offset_tile(u_off);
-        let u_b: Tile<bf16, { [C, V] }> = convert_tile(u);
+        let u_p0: PointerTile<*mut f32, { [] }> = pointer_to_tile(u_ptr);
+        let u_p1: PointerTile<*mut f32, { [1, 1] }> = u_p0.reshape(const_shape![1, 1]);
+        let u_p2: PointerTile<*mut f32, { [C, V] }> = u_p1.broadcast(const_shape![C, V]);
+        let u_ptrs: PointerTile<*mut f32, { [C, V] }> = u_p2.offset_tile(u_off);
         store_ptr_tko(
             u_ptrs,
-            u_b,
+            u,
             ordering::Weak,
             None::<scope::TileBlock>,
             None,
@@ -217,7 +219,7 @@ mod kernels {
         q: &Tensor<bf16, { [-1, -1, -1] }>,
         k: &Tensor<bf16, { [-1, -1, -1] }>,
         w: &Tensor<bf16, { [-1, -1] }>,
-        u: &Tensor<bf16, { [-1, -1] }>,
+        u: &Tensor<f32, { [-1, -1] }>,
         g: &Tensor<f32, { [-1, -1] }>,
         num_chunks_f: f32,
         chunk: i32,
@@ -327,14 +329,13 @@ mod kernels {
             for c in 0i32..num_chunks {
                 let idx: i32 = bh * num_chunks + c;
                 let wc_b: Tile<bf16, { [C, K] }> = pw.load([idx, 0]);
-                let uc_b: Tile<bf16, { [C, V] }> = pu.load([idx, 0]);
+                let uc: Tile<f32, { [C, V] }> = pu.load([idx, 0]);
                 let qc3: Tile<bf16, { [1, C, K] }> = pq.load([bh, c, 0]);
                 let qc_b: Tile<bf16, { [C, K] }> = qc3.reshape(const_shape![C, K]);
                 let kc3: Tile<bf16, { [1, C, K] }> = pk.load([bh, c, 0]);
                 let kc_b: Tile<bf16, { [C, K] }> = kc3.reshape(const_shape![C, K]);
                 let g_row: Tile<f32, { [1, C] }> = pg.load([bh, c]);
                 let s_m: Tile<bf16, { [K, V] }> = convert_tile(s);
-                let uc: Tile<f32, { [C, V] }> = convert_tile(uc_b);
                 let ws: Tile<f32, { [C, V] }> = mmaf(wc_b, s_m, zero_cv);
                 let delta: Tile<f32, { [C, V] }> = uc - ws;
                 let g1: Tile<f32, { [C] }> = g_row.reshape(const_shape![C]);
@@ -381,12 +382,12 @@ mod kernels {
                     exp(gtot_c.reshape(const_shape![C, 1]) - gcol);
                 let sdecay: Tile<f32, { [K, V] }> =
                     exp(gtot_k.reshape(const_shape![K, 1])).broadcast(const_shape![K, V]);
-                let kc: Tile<f32, { [C, K] }> = convert_tile(kc_b);
-                let kd: Tile<f32, { [C, K] }> = kc * decay_last.broadcast(const_shape![C, K]);
-                let kd_m: Tile<bf16, { [C, K] }> = convert_tile(kd);
-                let kdt_m: Tile<bf16, { [K, C] }> = permute(kd_m, transpose);
+                // decay rides on delta so the bf16 keys stay exact, else the carried state drifts
+                let dd: Tile<f32, { [C, V] }> = delta * decay_last.broadcast(const_shape![C, V]);
+                let dd_m: Tile<bf16, { [C, V] }> = convert_tile(dd);
+                let kt_m: Tile<bf16, { [K, C] }> = permute(kc_b, transpose);
                 let s_decayed: Tile<f32, { [K, V] }> = s * sdecay;
-                let s_new: Tile<f32, { [K, V] }> = mmaf(kdt_m, delta_b, s_decayed);
+                let s_new: Tile<f32, { [K, V] }> = mmaf(kt_m, dd_m, s_decayed);
                 s = s_new;
             }
             store_ptr_tko(
@@ -640,7 +641,7 @@ fn launch(args: &GdnPrefillArgs<'_>, dev: &CudaDevice, compile_only: bool) -> Re
     let stream = dev.cuda_stream();
     let ordinal = stream.context().ordinal();
     let mut w_buf = unsafe { dev.alloc::<bf16>(bh * padded * k_dim)? };
-    let mut u_buf = unsafe { dev.alloc::<bf16>(bh * padded * v_dim)? };
+    let mut u_buf = unsafe { dev.alloc::<f32>(bh * padded * v_dim)? };
     let mut delta_buf = unsafe { dev.alloc::<bf16>(bh * padded * v_dim)? };
     let mut out = unsafe { dev.alloc::<bf16>(args.batch_size * seq_len * args.num_heads * v_dim)? };
 
@@ -732,13 +733,13 @@ fn launch(args: &GdnPrefillArgs<'_>, dev: &CudaDevice, compile_only: bool) -> Re
     let g_t = Arc::new(borrow_2d::<f32>(bh, padded, g_addr, ordinal));
     let b_t = Arc::new(borrow_2d::<f32>(bh, padded, b_addr, ordinal));
     let w_t = Arc::new(borrow_2d::<tile_bf16>(bh * padded, k_dim, w_addr, ordinal));
-    let u_t = Arc::new(borrow_2d::<tile_bf16>(bh * padded, v_dim, u_addr, ordinal));
+    let u_t = Arc::new(borrow_2d::<f32>(bh * padded, v_dim, u_addr, ordinal));
     let d_t = Arc::new(borrow_2d::<tile_bf16>(bh * padded, v_dim, d_addr, ordinal));
     // SAFETY: every pointer names a live candle allocation that outlives the launches on this stream.
     let (w_ptr, u_ptr, d_ptr, o_ptr, s_ptr, r_ptr) = unsafe {
         (
             DevicePointer::<tile_bf16>::from_cu_deviceptr(w_addr as CUdeviceptr),
-            DevicePointer::<tile_bf16>::from_cu_deviceptr(u_addr as CUdeviceptr),
+            DevicePointer::<f32>::from_cu_deviceptr(u_addr as CUdeviceptr),
             DevicePointer::<tile_bf16>::from_cu_deviceptr(d_addr as CUdeviceptr),
             DevicePointer::<tile_bf16>::from_cu_deviceptr(o_addr as CUdeviceptr),
             DevicePointer::<f32>::from_cu_deviceptr(s_addr as CUdeviceptr),
@@ -750,6 +751,8 @@ fn launch(args: &GdnPrefillArgs<'_>, dev: &CudaDevice, compile_only: bool) -> Re
         GDN_PREFILL_HEAD_DIM.to_string(),
         GDN_PREFILL_HEAD_DIM.to_string(),
     ];
+    let mut wy_generics = generics.clone();
+    wy_generics.push((chunk / GDN_SOLVE_BLOCK).to_string());
     let nc = num_chunks as f32;
     let seq_len_f = seq_len as f32;
     let has_slots = if args.slots.is_some() { 1.0f32 } else { 0.0f32 };
@@ -769,7 +772,7 @@ fn launch(args: &GdnPrefillArgs<'_>, dev: &CudaDevice, compile_only: bool) -> Re
             v_dim as i32,
         )
     }
-    .generics(generics.clone())
+    .generics(wy_generics)
     .grid(((bh * num_chunks) as u32, 1, 1));
     let state = unsafe {
         kernels::gdn_state(
@@ -889,6 +892,14 @@ mod tests {
     use super::{cutile_gdn_prefill, GdnPrefillArgs, GDN_PREFILL_CHUNK, GDN_PREFILL_HEAD_DIM};
 
     const D: usize = GDN_PREFILL_HEAD_DIM;
+    const KEY_PERIOD: usize = 24;
+
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    enum Keys {
+        Random,
+        Correlated,
+        Periodic,
+    }
 
     struct Lcg(u64);
 
@@ -949,14 +960,18 @@ mod tests {
         };
         let mut rng = Lcg(11);
         // correlated keys with beta near 1 make (I + A)^-1 ill-conditioned like real activations
-        for (seq_len, correlated) in [
-            (1usize, false),
-            (64, false),
-            (100, false),
-            (193, false),
-            (64, true),
-            (200, true),
+        // periodic keys: an exactly repeating short key cycle with almost no decay, like long repetitive prompts
+        for (seq_len, keys) in [
+            (1usize, Keys::Random),
+            (64, Keys::Random),
+            (100, Keys::Random),
+            (193, Keys::Random),
+            (64, Keys::Correlated),
+            (200, Keys::Correlated),
+            (512, Keys::Periodic),
+            (4096, Keys::Periodic),
         ] {
+            let correlated = keys != Keys::Random;
             let bh = BATCH * HEADS;
             let round = |x: f32| bf16::from_f32(x).to_f32();
             let mut q = vec![0f32; bh * seq_len * D];
@@ -968,10 +983,17 @@ mod tests {
                 for d in 0..D {
                     q[row * D + d] = round((rng.next() - 0.5) / (D as f32).sqrt());
                     let noise = rng.next() - 0.5;
-                    let kv = if correlated {
-                        base[(row / seq_len) * D + d] + 0.3 * noise
-                    } else {
-                        noise
+                    let kv = match keys {
+                        Keys::Random => noise,
+                        Keys::Correlated => base[(row / seq_len) * D + d] + 0.3 * noise,
+                        Keys::Periodic => {
+                            let cycle_row =
+                                (row / seq_len) * KEY_PERIOD + (row % seq_len) % KEY_PERIOD;
+                            let mut state = cycle_row as u64 * 2654435761 + d as u64;
+                            state ^= state >> 13;
+                            state = state.wrapping_mul(0x5bd1e995);
+                            ((state >> 8) & 0xffff) as f32 / 65536.0 - 0.5
+                        }
                     };
                     k[row * D + d] = kv;
                     norm += kv * kv;
@@ -983,10 +1005,10 @@ mod tests {
                     v[row * D + j] = round(rng.next() - 0.5);
                 }
             }
-            let (g_scale, beta_floor) = if correlated {
-                (0.15, 0.85)
-            } else {
-                (0.05, 0.0)
+            let (g_scale, beta_floor) = match keys {
+                Keys::Random => (0.05, 0.0),
+                Keys::Correlated => (0.15, 0.85),
+                Keys::Periodic => (1.0e-4, 0.95),
             };
             let g: Vec<f32> = (0..bh * seq_len).map(|_| -g_scale * rng.next()).collect();
             let beta: Vec<f32> = (0..bh * seq_len)
@@ -1082,7 +1104,7 @@ mod tests {
                     .fold(0f32, f32::max);
                 let max_ref = out_ref.iter().map(|x| x.abs()).fold(0f32, f32::max);
                 assert!(
-                    max_err <= 2.0e-2 * max_ref.max(1.0e-2),
+                    max_err <= 1.5e-2 * max_ref.max(1.0e-2),
                     "seq_len={seq_len} correlated={correlated} bh={idx}: output error {max_err} vs {max_ref}"
                 );
                 let got_row = &state_host[row as usize * D * D..(row as usize + 1) * D * D];
@@ -1096,7 +1118,7 @@ mod tests {
                     }
                 }
                 assert!(
-                    state_err <= 2.0e-2 * state_max.max(1.0e-2),
+                    state_err <= 1.5e-2 * state_max.max(1.0e-2),
                     "seq_len={seq_len} correlated={correlated} bh={idx}: state error {state_err} vs {state_max}"
                 );
             }

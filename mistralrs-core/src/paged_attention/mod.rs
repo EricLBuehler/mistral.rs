@@ -31,6 +31,7 @@ pub use cache_engine::{CacheConfig, CacheEngine, PagedCacheType};
 use candle_core::{DType, Device};
 pub use config::{
     HybridPagedKvCacheConfig, KvCacheLayout, KvCacheTopology, ModelConfigLike, ModelConfigMetadata,
+    PrefixPrefillAttentionFeatures,
 };
 pub use kv_cache_manager::KVCacheManager;
 pub use layers::PagedAttention;

@@ -42,6 +42,21 @@ impl GdnVHeadLayout {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GdnGateActivation {
+    #[default]
+    Silu,
+    Sigmoid,
+}
+
+impl GdnGateActivation {
+    #[cfg(feature = "cuda")]
+    pub(crate) fn sigmoid_flag(self) -> i32 {
+        i32::from(self == Self::Sigmoid)
+    }
+}
+
 #[allow(dead_code)]
 pub trait GdnConfig {
     fn hidden_size(&self) -> usize;
@@ -54,6 +69,9 @@ pub trait GdnConfig {
     fn quantization_config(&self) -> &Option<QuantizedConfig>;
     fn v_head_layout(&self) -> GdnVHeadLayout {
         GdnVHeadLayout::Grouped
+    }
+    fn output_gate_activation(&self) -> GdnGateActivation {
+        GdnGateActivation::Silu
     }
 
     fn linear_key_dim(&self) -> usize {

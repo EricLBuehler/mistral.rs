@@ -3,23 +3,30 @@ use candle_core::{DType, Device, Result, Tensor, D};
 use mistralrs_quant::QuantizedActivation;
 use mistralrs_quant::ShardedVarBuilder;
 
+use super::config::GdnGateActivation;
 #[cfg(feature = "cuda")]
 use crate::cuda::gdn::GdnFp8OutputSpec;
 
 pub struct RmsNormGated {
     pub weight: Tensor,
     eps: f64,
+    activation: GdnGateActivation,
 }
 
 impl RmsNormGated {
     #[cfg(test)]
     pub(crate) fn from_parts(weight: Tensor, eps: f64) -> Self {
-        Self { weight, eps }
+        Self {
+            weight,
+            eps,
+            activation: GdnGateActivation::Silu,
+        }
     }
 
     pub fn new(
         size: usize,
         eps: f64,
+        activation: GdnGateActivation,
         vb: ShardedVarBuilder,
         isq_target_device: Option<&Device>,
     ) -> Result<Self> {
@@ -27,12 +34,20 @@ impl RmsNormGated {
         if let Some(target_dev) = isq_target_device {
             weight = weight.to_device(target_dev)?;
         }
-        Ok(Self { weight, eps })
+        Ok(Self {
+            weight,
+            eps,
+            activation,
+        })
     }
 
     #[cfg(feature = "cuda")]
     pub(crate) fn eps(&self) -> f64 {
         self.eps
+    }
+
+    pub(crate) fn activation(&self) -> GdnGateActivation {
+        self.activation
     }
 
     pub fn forward(&self, x: &Tensor, gate: &Tensor) -> Result<Tensor> {
@@ -46,13 +61,22 @@ impl RmsNormGated {
             && self.weight.dtype() == x.dtype()
             && matches!(x.dtype(), DType::F16 | DType::BF16)
         {
-            return crate::cuda::gdn::rmsnorm_gated_cuda(x, gate, &self.weight, self.eps);
+            return crate::cuda::gdn::rmsnorm_gated_cuda(
+                x,
+                gate,
+                &self.weight,
+                self.eps,
+                self.activation,
+            );
         }
 
         let dtype = x.dtype();
         let x = x.to_dtype(DType::F32)?;
         let gate = gate.reshape(x.shape().clone())?.to_dtype(DType::F32)?;
-        let gate = candle_nn::ops::silu(&gate)?;
+        let gate = match self.activation {
+            GdnGateActivation::Silu => candle_nn::ops::silu(&gate)?,
+            GdnGateActivation::Sigmoid => candle_nn::ops::sigmoid(&gate)?,
+        };
         let variance = x.sqr()?.mean_keepdim(D::Minus1)?;
         let normed = x.broadcast_div(&(variance + self.eps)?.sqrt()?)?;
         let out = normed
@@ -75,6 +99,7 @@ impl RmsNormGated {
             gate,
             &self.weight,
             self.eps,
+            self.activation,
             spec,
             num_v_heads,
             head_v_dim,

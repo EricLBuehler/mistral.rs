@@ -9,7 +9,7 @@ use super::{
     GeneralMetadata, IsqPipelineMixin, Loader, MetadataMixin, MiniCpmOLoader, ModelCategory,
     ModelKind, ModelPaths, MultimodalModel, MultimodalModelLoader, MultimodalPromptPrefixer,
     Phi4MMLoader, PreProcessingMixin, Processor, Qwen2VLLoader, Qwen3VLLoader, Qwen3VLMoELoader,
-    Qwen3_5Loader, Qwen3_5MoeLoader, TokenSource, VLlama4Loader, VLlamaLoader,
+    Qwen3_5Loader, Qwen3_5MoeLoader, Qwen4ExpLoader, TokenSource, VLlama4Loader, VLlamaLoader,
 };
 use super::{
     DiffusionGemmaLoader, Gemma3nLoader, Gemma4Loader, Idefics2Loader, Idefics3Loader, LLaVALoader,
@@ -390,6 +390,7 @@ impl MultimodalLoaderBuilder {
             Some(MultimodalLoaderType::Qwen3VLMoE) => Box::new(Qwen3VLMoELoader),
             Some(MultimodalLoaderType::Qwen3_5) => Box::new(Qwen3_5Loader),
             Some(MultimodalLoaderType::Qwen3_5Moe) => Box::new(Qwen3_5MoeLoader),
+            Some(MultimodalLoaderType::Qwen4Exp) => Box::new(Qwen4ExpLoader),
             Some(MultimodalLoaderType::Voxtral) => Box::new(VoxtralLoader),
             Some(MultimodalLoaderType::Gemma4) => Box::new(Gemma4Loader),
             Some(MultimodalLoaderType::MuseGlimmer) => Box::new(MuseGlimmerLoader),

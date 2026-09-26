@@ -344,6 +344,7 @@ pub struct ShardedVarBuilder {
     weight_source: Option<Arc<dyn QuantizedWeightSource>>,
     shapes: Option<Arc<HashMap<String, Vec<usize>>>>,
     lora_registry: Option<Arc<crate::LoraLayerRegistry>>,
+    raw_safetensors: Option<Arc<crate::safetensors::MmapedSafetensors>>,
 }
 
 impl ShardedVarBuilder {
@@ -354,7 +355,22 @@ impl ShardedVarBuilder {
             weight_source: None,
             shapes: None,
             lora_registry: None,
+            raw_safetensors: None,
         }
+    }
+
+    pub(crate) fn with_raw_safetensors(
+        mut self,
+        raw: Arc<crate::safetensors::MmapedSafetensors>,
+    ) -> Self {
+        self.raw_safetensors = Some(raw);
+        self
+    }
+
+    /// The memory-mapped checkpoint behind this builder, when it is plain safetensors. Holding it
+    /// keeps the mappings alive, so views into it stay valid.
+    pub fn raw_safetensors(&self) -> Option<Arc<crate::safetensors::MmapedSafetensors>> {
+        self.raw_safetensors.clone()
     }
 
     pub(crate) fn with_shapes(mut self, shapes: HashMap<String, Vec<usize>>) -> Self {
@@ -386,6 +402,7 @@ impl ShardedVarBuilder {
             weight_source: self.weight_source.clone(),
             shapes: self.shapes.clone(),
             lora_registry: self.lora_registry.clone(),
+            raw_safetensors: self.raw_safetensors.clone(),
         }
     }
 

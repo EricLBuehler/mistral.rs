@@ -1082,6 +1082,17 @@ impl HybridCache {
         dtype: candle_core::DType,
         layer_devices: &[Device],
     ) -> Result<Self> {
+        Self::new_with_recurrent_overrides(config, dtype, layer_devices, &HashMap::new())
+    }
+
+    /// Like `new`, but recurrent layers listed in `overrides` get their own state shapes instead of
+    /// `config.recurrent`. Their pools still share slot allocation, snapshots and resets.
+    pub fn new_with_recurrent_overrides(
+        config: HybridCacheConfig,
+        dtype: candle_core::DType,
+        layer_devices: &[Device],
+        overrides: &HashMap<usize, RecurrentLayerConfig>,
+    ) -> Result<Self> {
         if layer_devices.len() != config.layer_types.len() {
             candle_core::bail!(
                 "Hybrid cache has {} layers but {} layer devices",
@@ -1091,7 +1102,10 @@ impl HybridCache {
         }
         let mut caches = Vec::with_capacity(config.layer_types.len());
 
-        for (layer_type, device) in config.layer_types.iter().zip(layer_devices) {
+        for (layer_idx, (layer_type, device)) in
+            config.layer_types.iter().zip(layer_devices).enumerate()
+        {
+            let recurrent = overrides.get(&layer_idx).unwrap_or(&config.recurrent);
             let cache = match layer_type {
                 HybridLayerType::Attention => HybridLayerCache::Attention(KvCache::new_normal(
                     2,
@@ -1100,15 +1114,15 @@ impl HybridCache {
                 )),
                 HybridLayerType::Recurrent => {
                     let (state_dims, state_layout) =
-                        config.recurrent.state.physical_layout(dtype, device)?;
+                        recurrent.state.physical_layout(dtype, device)?;
                     HybridLayerCache::Recurrent(RecurrentStatePool::new(
                         RecurrentStatePoolConfig {
-                            conv_dim: config.recurrent.conv_dim,
-                            conv_width: config.recurrent.conv_width,
+                            conv_dim: recurrent.conv_dim,
+                            conv_width: recurrent.conv_width,
                             state_dims,
                             state_layout,
                             conv_dtype: dtype,
-                            recurrent_dtype: config.recurrent.recurrent_dtype.unwrap_or(dtype),
+                            recurrent_dtype: recurrent.recurrent_dtype.unwrap_or(dtype),
                             device,
                         },
                     )?)

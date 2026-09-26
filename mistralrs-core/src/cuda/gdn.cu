@@ -2690,6 +2690,10 @@ __device__ __forceinline__ float gdn_silu(float x) {
   return x * ex / (1.0f + ex);
 }
 
+__device__ __forceinline__ float gdn_gate_act(float x, int sigmoid_gate) {
+  return sigmoid_gate ? 1.0f / (1.0f + expf(-x)) : gdn_silu(x);
+}
+
 __device__ __forceinline__ float gdn_warp_max(float value, int width = 32) {
 #pragma unroll
   for (int offset = width / 2; offset > 0; offset >>= 1) {
@@ -2735,7 +2739,7 @@ gdn_rmsnorm_gated_kernel(const T *__restrict__ x, const T *__restrict__ gate,
                          int64_t x_stride_1, int64_t x_stride_2,
                          int64_t x_stride_3, int64_t gate_stride_0,
                          int64_t gate_stride_1, int64_t gate_stride_2,
-                         int64_t gate_stride_3, float eps) {
+                         int64_t gate_stride_3, float eps, int sigmoid_gate) {
   const int row = blockIdx.x;
   const int tid = threadIdx.x;
 
@@ -2778,7 +2782,7 @@ gdn_rmsnorm_gated_kernel(const T *__restrict__ x, const T *__restrict__ gate,
         (float)gate[gate_row_offset + (size_t)i * gate_stride_3];
     const float out =
         (float)x[x_row_offset + (size_t)i * x_stride_3] * inv_rms *
-        (float)weight[i] * gdn_silu(gate_val);
+        (float)weight[i] * gdn_gate_act(gate_val, sigmoid_gate);
     out_row[i] = (T)out;
   }
 }
@@ -2789,7 +2793,7 @@ __global__ void gdn_rmsnorm_gated_warp_kernel(
     const T *__restrict__ weight, T *__restrict__ output, int rows,
     int outer_dim_1, int outer_dim_2, int64_t x_stride_0,
     int64_t x_stride_1, int64_t x_stride_2, int64_t gate_stride_0,
-    int64_t gate_stride_1, int64_t gate_stride_2, float eps) {
+    int64_t gate_stride_1, int64_t gate_stride_2, float eps, int sigmoid_gate) {
   const int lane = threadIdx.x;
   const int warp = threadIdx.y;
   const int row = blockIdx.x * ROWS_PER_BLOCK + warp;
@@ -2827,7 +2831,7 @@ __global__ void gdn_rmsnorm_gated_warp_kernel(
 #pragma unroll
   for (int i = lane; i < HIDDEN_DIM; i += 32) {
     out_row[i] = (T)(values[i / 32] * inv_rms * (float)weight[i] *
-                     gdn_silu((float)gate_row[i]));
+                     gdn_gate_act((float)gate_row[i], sigmoid_gate));
   }
 }
 
@@ -2841,7 +2845,7 @@ __global__ void gdn_rmsnorm_gated_quantized_warp_kernel(
     int outer_dim_2, int64_t x_stride_0, int64_t x_stride_1,
     int64_t x_stride_2, int64_t x_stride_3, int64_t gate_stride_0,
     int64_t gate_stride_1, int64_t gate_stride_2, int64_t gate_stride_3,
-    float eps) {
+    float eps, int sigmoid_gate) {
   constexpr int HIDDEN_DIM = GDN_RMSNORM_FAST_HIDDEN;
   const int lane = threadIdx.x;
   const int warp = threadIdx.y;
@@ -2882,7 +2886,7 @@ __global__ void gdn_rmsnorm_gated_quantized_warp_kernel(
   for (int i = lane; i < HIDDEN_DIM; i += 32) {
     rounded[i / 32] = __float2bfloat16_rn(
         values[i / 32] * inv_rms * (float)weight[i] *
-        gdn_silu((float)gate_row[(size_t)i * gate_stride_3]));
+        gdn_gate_act((float)gate_row[(size_t)i * gate_stride_3], sigmoid_gate));
     maximum = fmaxf(maximum, fabsf((float)rounded[i / 32]));
   }
   maximum = gdn_warp_max(maximum);
@@ -2910,7 +2914,7 @@ template <typename T>
 __global__ void gdn_rmsnorm_gated_rows4_kernel(
     const T *__restrict__ x, const T *__restrict__ gate,
     const T *__restrict__ weight, T *__restrict__ output, int rows,
-    float eps) {
+    float eps, int sigmoid_gate) {
   using Vec = gdn_rmsnorm_vec8<T>;
   constexpr int vecs_per_row =
       GDN_RMSNORM_FAST_HIDDEN / GDN_RMSNORM_TILED_VALUES_PER_LANE;
@@ -2973,7 +2977,7 @@ __global__ void gdn_rmsnorm_gated_rows4_kernel(
       result.data[i] =
           (T)((float)first_value.data[i] * first_inv_rms *
               (float)weight_value.data[i] *
-              gdn_silu((float)gate_value.data[i]));
+              gdn_gate_act((float)gate_value.data[i], sigmoid_gate));
     }
     reinterpret_cast<Vec *>(output)[first_row * vecs_per_row + lane_in_half] =
         result;
@@ -2987,7 +2991,7 @@ __global__ void gdn_rmsnorm_gated_rows4_kernel(
       result.data[i] =
           (T)((float)second_value.data[i] * second_inv_rms *
               (float)weight_value.data[i] *
-              gdn_silu((float)gate_value.data[i]));
+              gdn_gate_act((float)gate_value.data[i], sigmoid_gate));
     }
     reinterpret_cast<Vec *>(
         output)[second_row * vecs_per_row + lane_in_half] = result;
@@ -2999,7 +3003,8 @@ __global__ void gdn_rmsnorm_gated_quantized_rows4_kernel(
     const __nv_bfloat16 *__restrict__ gate,
     const __nv_bfloat16 *__restrict__ weight,
     gdn_fp8_e4m3 *__restrict__ output, float *__restrict__ scales, int rows,
-    int groups, int scale_stride_m, int scale_layout, float eps) {
+    int groups, int scale_stride_m, int scale_layout, float eps,
+    int sigmoid_gate) {
   using Vec = gdn_rmsnorm_vec8<__nv_bfloat16>;
   constexpr int vecs_per_row =
       GDN_RMSNORM_FAST_HIDDEN / GDN_RMSNORM_TILED_VALUES_PER_LANE;
@@ -3064,7 +3069,7 @@ __global__ void gdn_rmsnorm_gated_quantized_rows4_kernel(
     for (int i = 0; i < GDN_RMSNORM_TILED_VALUES_PER_LANE; ++i) {
       rounded[i] = __float2bfloat16_rn(
           (float)values[row_index].data[i] * inv_rms[row_index] *
-          (float)weight_value.data[i] * gdn_silu((float)gate_value.data[i]));
+          (float)weight_value.data[i] * gdn_gate_act((float)gate_value.data[i], sigmoid_gate));
       maximum = fmaxf(maximum, fabsf((float)rounded[i]));
     }
     maximum = gdn_warp_max(maximum, GDN_RMSNORM_TILED_LANES_PER_ROW);
@@ -3110,7 +3115,8 @@ extern "C" void gdn_rmsnorm_gated(const void *x, const void *gate,
                                   int64_t x_stride_1, int64_t x_stride_2,
                                   int64_t x_stride_3, int64_t gate_stride_0,
                                   int64_t gate_stride_1, int64_t gate_stride_2,
-                                  int64_t gate_stride_3, float eps, int dtype,
+                                  int64_t gate_stride_3, float eps,
+                                  int sigmoid_gate, int dtype,
                                   int64_t stream) {
   const cudaStream_t custream = (cudaStream_t)stream;
   const bool use_warp_kernel =
@@ -3133,7 +3139,7 @@ extern "C" void gdn_rmsnorm_gated(const void *x, const void *gate,
                             GDN_RMSNORM_TILED_ROWS_PER_BLOCK);
       gdn_rmsnorm_gated_rows4_kernel<<<rows4_grid, rows4_block, 0, custream>>>(
           (const __half *)x, (const __half *)gate, (const __half *)weight,
-          (__half *)output, rows, eps);
+          (__half *)output, rows, eps, sigmoid_gate);
       return;
     }
     if (dtype != 0 && use_rows4_kernel &&
@@ -3146,7 +3152,8 @@ extern "C" void gdn_rmsnorm_gated(const void *x, const void *gate,
                             GDN_RMSNORM_TILED_ROWS_PER_BLOCK);
       gdn_rmsnorm_gated_rows4_kernel<<<rows4_grid, rows4_block, 0, custream>>>(
           (const __nv_bfloat16 *)x, (const __nv_bfloat16 *)gate,
-          (const __nv_bfloat16 *)weight, (__nv_bfloat16 *)output, rows, eps);
+          (const __nv_bfloat16 *)weight, (__nv_bfloat16 *)output, rows, eps,
+          sigmoid_gate);
       return;
     }
 
@@ -3160,7 +3167,7 @@ extern "C" void gdn_rmsnorm_gated(const void *x, const void *gate,
               (const __half *)x, (const __half *)gate,
               (const __half *)weight, (__half *)output, rows, outer_dim_1,
               outer_dim_2, x_stride_0, x_stride_1, x_stride_2, gate_stride_0,
-              gate_stride_1, gate_stride_2, eps);
+              gate_stride_1, gate_stride_2, eps, sigmoid_gate);
     } else {
       gdn_rmsnorm_gated_warp_kernel<
           __nv_bfloat16, GDN_RMSNORM_FAST_HIDDEN,
@@ -3169,7 +3176,7 @@ extern "C" void gdn_rmsnorm_gated(const void *x, const void *gate,
               (const __nv_bfloat16 *)x, (const __nv_bfloat16 *)gate,
               (const __nv_bfloat16 *)weight, (__nv_bfloat16 *)output, rows,
               outer_dim_1, outer_dim_2, x_stride_0, x_stride_1, x_stride_2,
-              gate_stride_0, gate_stride_1, gate_stride_2, eps);
+              gate_stride_0, gate_stride_1, gate_stride_2, eps, sigmoid_gate);
     }
     return;
   }
@@ -3182,14 +3189,14 @@ extern "C" void gdn_rmsnorm_gated(const void *x, const void *gate,
         (const __half *)x, (const __half *)gate, (const __half *)weight,
         (__half *)output, rows, hidden_dim, outer_dim_1, outer_dim_2,
         x_stride_0, x_stride_1, x_stride_2, x_stride_3, gate_stride_0,
-        gate_stride_1, gate_stride_2, gate_stride_3, eps);
+        gate_stride_1, gate_stride_2, gate_stride_3, eps, sigmoid_gate);
   } else {
     gdn_rmsnorm_gated_kernel<__nv_bfloat16><<<grid, block, 0, custream>>>(
         (const __nv_bfloat16 *)x, (const __nv_bfloat16 *)gate,
         (const __nv_bfloat16 *)weight, (__nv_bfloat16 *)output, rows,
         hidden_dim, outer_dim_1, outer_dim_2, x_stride_0, x_stride_1,
         x_stride_2, x_stride_3, gate_stride_0, gate_stride_1, gate_stride_2,
-        gate_stride_3, eps);
+        gate_stride_3, eps, sigmoid_gate);
   }
 }
 
@@ -3199,7 +3206,7 @@ extern "C" void gdn_rmsnorm_gated_quantized_bf16(
     int scale_layout, int outer_dim_1, int outer_dim_2, int64_t x_stride_0,
     int64_t x_stride_1, int64_t x_stride_2, int64_t x_stride_3,
     int64_t gate_stride_0, int64_t gate_stride_1, int64_t gate_stride_2,
-    int64_t gate_stride_3, float eps, int64_t stream) {
+    int64_t gate_stride_3, float eps, int sigmoid_gate, int64_t stream) {
   const cudaStream_t custream = (cudaStream_t)stream;
   const bool use_rows4_kernel =
       rows >= GDN_RMSNORM_TILED_MIN_ROWS &&
@@ -3218,7 +3225,7 @@ extern "C" void gdn_rmsnorm_gated_quantized_bf16(
     gdn_rmsnorm_gated_quantized_rows4_kernel<<<grid, block, 0, custream>>>(
         (const __nv_bfloat16 *)x, (const __nv_bfloat16 *)gate,
         (const __nv_bfloat16 *)weight, (gdn_fp8_e4m3 *)output, scales, rows,
-        groups, scale_stride_m, scale_layout, eps);
+        groups, scale_stride_m, scale_layout, eps, sigmoid_gate);
     return;
   }
 
@@ -3231,7 +3238,8 @@ extern "C" void gdn_rmsnorm_gated_quantized_bf16(
           (const __nv_bfloat16 *)weight, (gdn_fp8_e4m3 *)output, scales,
           rows, groups, scale_stride_m, scale_layout, outer_dim_1,
           outer_dim_2, x_stride_0, x_stride_1, x_stride_2, x_stride_3,
-          gate_stride_0, gate_stride_1, gate_stride_2, gate_stride_3, eps);
+          gate_stride_0, gate_stride_1, gate_stride_2, gate_stride_3, eps,
+          sigmoid_gate);
 }
 
 // ============================================================================
