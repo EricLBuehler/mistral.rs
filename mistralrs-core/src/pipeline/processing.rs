@@ -192,6 +192,7 @@ pub(crate) fn apply_chat_template(
     let bos_tok = chat_template.bos_token.as_ref().map(extract_token_string);
     let eos_tok = chat_template.eos_token.as_ref().map(extract_token_string);
     let unk_tok = chat_template.unk_token.as_ref().map(extract_token_string);
+    let pad_tok = chat_template.pad_token.as_ref().map(extract_token_string);
 
     apply_chat_template_to(
         messages,
@@ -202,6 +203,7 @@ pub(crate) fn apply_chat_template(
         bos_tok,
         eos_tok,
         unk_tok,
+        pad_tok,
         tools,
     )
 }
