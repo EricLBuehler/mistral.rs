@@ -16,6 +16,7 @@ mod hf_config;
 mod inputs_processor;
 mod isq;
 mod isq_flow;
+pub(crate) mod metal_phase;
 pub use isq_flow::CalibrationStatus;
 pub(crate) mod llg;
 mod loaders;
@@ -1979,6 +1980,7 @@ pub trait Pipeline:
         backend_metadata: CacheBackendMetadata,
         logger: &IntervalLogger,
     ) -> Result<Duration, candle_core::Error> {
+        metal_phase::begin(&self.device(), is_prompt, input_seqs.len());
         let completion = self
             .submit_step(
                 input_seqs,
@@ -1994,6 +1996,7 @@ pub trait Pipeline:
             .await?
             .into_ready()
             .expect("lookahead-disabled pipeline step must complete eagerly");
+        metal_phase::finish();
         Ok(completion.duration())
     }
 
@@ -2068,9 +2071,12 @@ pub trait Pipeline:
                             && sampling::can_sample_batch_cuda(input_seqs))
                             || crate::speculative::verifier::can_batch_device_verify(input_seqs));
                     let start = Instant::now();
-                    let raw_logits = self
-                        .forward_inputs(inputs, return_raw_logits)?
-                        .into_cpu_for_batch(input_seqs.len(), preserve_causal_generation)?;
+                    metal_phase::forward_start();
+                    let forward = self.forward_inputs(inputs, return_raw_logits)?;
+                    metal_phase::encoded();
+                    let raw_logits =
+                        forward.into_cpu_for_batch(input_seqs.len(), preserve_causal_generation)?;
+                    metal_phase::readback();
                     let end = Instant::now();
                     exec_duration += end.duration_since(start);
 
@@ -2595,6 +2601,7 @@ pub trait Pipeline:
                             hybrid_cache.install_sequence_state_indices(&sequence_slots)?;
                         }
                         let start = Instant::now();
+                        metal_phase::forward_start();
                         #[cfg(feature = "cuda")]
                         let forward = if cuda_decode_lookahead {
                             self.forward_step(inputs, return_raw_logits)?
@@ -2607,11 +2614,13 @@ pub trait Pipeline:
                         let forward = ForwardStepResult::eager(
                             self.forward_inputs(inputs, return_raw_logits)?,
                         );
+                        metal_phase::encoded();
                         #[cfg(feature = "cuda")]
                         let mut cuda_decode = forward.cuda_decode;
                         let raw_logits = forward
                             .output
                             .into_cpu_for_batch(input_seqs.len(), preserve_causal_generation)?;
+                        metal_phase::readback();
                         if let Some(prompt_chunk) = prompt_chunk.as_ref() {
                             self.speculative_prompt_chunk(
                                 input_seqs,

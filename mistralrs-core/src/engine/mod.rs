@@ -1919,7 +1919,12 @@ impl Engine {
                                     "All sequences must either return raw logits, or not."
                                 );
 
-                                pipeline
+                                crate::pipeline::metal_phase::begin(
+                                    &pipeline.device(),
+                                    is_prompt,
+                                    guards_mut.len(),
+                                );
+                                let submission = pipeline
                                     .submit_step(
                                         &mut guards_mut,
                                         is_prompt,
@@ -1931,7 +1936,9 @@ impl Engine {
                                         self.logger.as_ref(),
                                         step_lookahead,
                                     )
-                                    .await
+                                    .await;
+                                crate::pipeline::metal_phase::finish();
+                                submission
                             }
                         };
 
