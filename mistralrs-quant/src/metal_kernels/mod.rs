@@ -3,7 +3,7 @@
 // Licensed under the Apache License 2.0
 // Copyright © 2023 Apple Inc.
 
-use candle_core::{DType, MetalDevice};
+use candle_core::{quantized::GgmlDType, DType, MetalDevice};
 use candle_metal_kernels::metal::{
     Buffer, ComputeCommandEncoder, ComputePipeline, ConstantValues, Device, Function, Library,
     MetalDeviceType, Value as ConstantValue,
@@ -44,6 +44,8 @@ pub enum MetalKernelError {
     FailedToCreatePipeline(String),
     #[error("dtype mismatch, got {got:?}, expected {expected:?}")]
     DTypeMismatch { expected: Vec<DType>, got: DType },
+    #[error("unsupported GGML dtype {0:?} for the indexed MoE gemv")]
+    UnsupportedGgmlDType(GgmlDType),
     #[error("Failed to compile Metal shader: {0}")]
     CompilationError(String),
 }
@@ -170,6 +172,88 @@ impl Kernels {
         pipelines.insert((name, constants), pipeline.clone());
         Ok(pipeline)
     }
+}
+
+/// Bounded indexed (routed MoE) GEMV over stacked GGUF expert weights shaped
+/// `[experts, n, k]` in `ggml_dtype`'s packed block format. For every
+/// (token, expert) pair in `ids` the kernel dot-products the selected expert's
+/// rows against the token activation row and writes F32 results to `out`
+/// (`[pairs, n]`). Only the selected experts' blocks are read; the stack is
+/// never dequantized. `x_per_pair` selects whether each pair reads its own
+/// activation row (activation shaped `[tokens, topk, k]`) or whether each
+/// token's single row is shared across its experts (`[tokens, 1, k]`).
+#[allow(clippy::too_many_arguments)]
+pub fn call_indexed_moe_gemv(
+    device: &Device,
+    ep: impl EncoderProvider,
+    kernels: &Kernels,
+    ggml_dtype: GgmlDType,
+    weights: (&Buffer, usize),
+    x: (&Buffer, usize),
+    ids: (&Buffer, usize),
+    out: &Buffer,
+    n: usize,
+    k: usize,
+    topk: usize,
+    x_per_pair: bool,
+    pairs: usize,
+) -> Result<(), MetalKernelError> {
+    let name = match ggml_dtype {
+        GgmlDType::Q2K => "indexed_moe_gemv_q2_k",
+        GgmlDType::Q4_0 => "indexed_moe_gemv_q4_0",
+        GgmlDType::Q4K => "indexed_moe_gemv_q4_k",
+        GgmlDType::Q6K => "indexed_moe_gemv_q6_k",
+        GgmlDType::Q8_0 => "indexed_moe_gemv_q8_0",
+        other => return Err(MetalKernelError::UnsupportedGgmlDType(other)),
+    };
+    if n == 0 || pairs == 0 {
+        return Ok(());
+    }
+    // The kernel decodes `pair = gid / n` from the flattened grid, so the total
+    // output count must stay representable in the scalar grid position.
+    let outputs = pairs.checked_mul(n).ok_or_else(|| {
+        MetalKernelError::FailedToCreatePipeline("indexed MoE gemv grid overflow".to_string())
+    })?;
+    if outputs > u32::MAX as usize {
+        return Err(MetalKernelError::FailedToCreatePipeline(format!(
+            "indexed MoE gemv output size {outputs} (pairs={pairs} x n={n}) exceeds the \
+             u32 grid limit; reduce the prompt chunk size"
+        )));
+    }
+
+    let pipeline = kernels.load_pipeline(device, name)?;
+
+    let encoder = ep.encoder();
+    let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
+    encoder.set_compute_pipeline_state(&pipeline);
+
+    set_params!(
+        encoder,
+        (
+            weights,
+            x,
+            ids,
+            Output::new(out),
+            n as i32,
+            k as i32,
+            topk as i32,
+            x_per_pair as i32
+        )
+    );
+
+    encoder.dispatch_thread_groups(
+        MTLSize {
+            width: outputs,
+            height: 1,
+            depth: 1,
+        },
+        MTLSize {
+            width: 32,
+            height: 1,
+            depth: 1,
+        },
+    );
+    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]

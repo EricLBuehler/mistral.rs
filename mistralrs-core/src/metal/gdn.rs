@@ -582,3 +582,104 @@ pub fn fused_gdn_gating_metal(
 ) -> candle_core::Result<(candle_core::Tensor, candle_core::Tensor)> {
     candle_core::bail!("fused_gdn_gating_metal requires the metal feature")
 }
+
+// ============================================================================
+// Public API: rmsnorm_gated
+// ============================================================================
+
+/// Fused gated RMSNorm on Metal, mirroring `crate::cuda::gdn::rmsnorm_gated_cuda`
+/// while accepting both SiLU and sigmoid output gates.
+///
+/// x and gate flatten to `[rows, H]` (rank 2-4, contiguous, equal element counts);
+/// weight is `[H]`. All tensors share the activation dtype (F16 or BF16) and sit
+/// on one Metal device. The RMS statistics are computed in F32, exactly like the
+/// CUDA kernel and the composed Candle fallback.
+#[cfg(feature = "metal")]
+pub fn rmsnorm_gated_metal(
+    x: &Tensor,
+    gate: &Tensor,
+    weight: &Tensor,
+    eps: f64,
+    output_gate: crate::gdn::GdnOutputGate,
+) -> Result<Tensor> {
+    let x = x.contiguous()?;
+    let gate = gate.contiguous()?;
+    let weight = weight.contiguous()?;
+
+    let dtype = x.dtype();
+    let type_suffix = match dtype {
+        DType::F16 => "half",
+        DType::BF16 => "bfloat16_t",
+        _ => candle_core::bail!(
+            "rmsnorm_gated_metal: unsupported dtype {dtype:?}, expected F16 or BF16"
+        ),
+    };
+    let gate_suffix = match output_gate {
+        crate::gdn::GdnOutputGate::Silu => "silu",
+        crate::gdn::GdnOutputGate::Sigmoid => "sigmoid",
+    };
+
+    let hidden = weight.elem_count();
+    if hidden == 0 || x.elem_count() % hidden != 0 || gate.elem_count() != x.elem_count() {
+        candle_core::bail!("rmsnorm_gated_metal: incompatible x/gate/weight element counts");
+    }
+    let rows = x.elem_count() / hidden;
+    if rows == 0 {
+        return Tensor::zeros(x.shape(), dtype, x.device());
+    }
+
+    let Device::Metal(dev) = x.device() else {
+        candle_core::bail!("rmsnorm_gated_metal: expected Metal device");
+    };
+
+    let kernel_name = format!("rmsnorm_gated_{gate_suffix}_{type_suffix}");
+    let pipeline = load_pipeline(dev.device(), &kernel_name)?;
+
+    let output = Tensor::zeros(x.shape(), dtype, x.device())?;
+
+    let (x_buf, x_off) = metal_buffer_and_offset(&x)?;
+    let (g_buf, g_off) = metal_buffer_and_offset(&gate)?;
+    let (w_buf, w_off) = metal_buffer_and_offset(&weight)?;
+    let (o_buf, o_off) = metal_buffer_and_offset(&output)?;
+
+    let encoder = dev.command_encoder()?;
+    let encoder: &ComputeCommandEncoder = encoder.as_ref();
+    encoder.set_compute_pipeline_state(&pipeline);
+
+    encoder.set_input_buffer(0, Some(&x_buf), x_off);
+    encoder.set_input_buffer(1, Some(&g_buf), g_off);
+    encoder.set_input_buffer(2, Some(&w_buf), w_off);
+    encoder.set_output_buffer(3, Some(&o_buf), o_off);
+
+    let hidden_u32 = hidden as u32;
+    let eps_f32 = eps as f32;
+    encoder.set_bytes(4, &hidden_u32);
+    encoder.set_bytes(5, &eps_f32);
+
+    let thread_groups = MTLSize {
+        width: rows,
+        height: 1,
+        depth: 1,
+    };
+    let threads_per_group = MTLSize {
+        width: 256,
+        height: 1,
+        depth: 1,
+    };
+    encoder.dispatch_thread_groups(thread_groups, threads_per_group);
+
+    Ok(output)
+}
+
+/// Stub for non-metal builds.
+#[cfg(not(feature = "metal"))]
+#[allow(dead_code)]
+pub fn rmsnorm_gated_metal(
+    _x: &candle_core::Tensor,
+    _gate: &candle_core::Tensor,
+    _weight: &candle_core::Tensor,
+    _eps: f64,
+    _output_gate: crate::gdn::GdnOutputGate,
+) -> candle_core::Result<candle_core::Tensor> {
+    candle_core::bail!("rmsnorm_gated_metal requires the metal feature")
+}

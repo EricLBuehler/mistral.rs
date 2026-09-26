@@ -28,7 +28,7 @@ pub use normal_loaders::{
     HunYuanDenseV1Loader, HunYuanMoEV1Loader, Lfm2Loader, LlamaLoader, MistralLoader,
     MixtralLoader, NormalLoaderType, NormalLoadingMetadata, NormalModel, NormalModelLoader,
     Phi2Loader, Phi3Loader, Phi3_5MoELoader, Qwen2Loader, Qwen3Loader, Qwen3MoELoader,
-    Qwen3NextLoader, Qwen3_5TextLoader, SmolLm3Loader, Starcoder2Loader,
+    Qwen3NextLoader, Qwen3_5TextLoader, Qwen4ExpLoader, SmolLm3Loader, Starcoder2Loader,
 };
 
 pub use multimodal_loaders::{
@@ -36,7 +36,8 @@ pub use multimodal_loaders::{
     Idefics2Loader, Idefics3Loader, LLaVALoader, LLaVANextLoader, Lfm2VlLoader, MiniCpmOLoader,
     Mistral3Loader, MultimodalLoaderType, MultimodalModel, MultimodalModelLoader,
     MuseGlimmerLoader, Phi3VLoader, Phi4MMLoader, Qwen2VLLoader, Qwen2_5VLLoader, Qwen3VLLoader,
-    Qwen3VLMoELoader, Qwen3_5Loader, Qwen3_5MoeLoader, VLlama4Loader, VLlamaLoader, VoxtralLoader,
+    Qwen3VLMoELoader, Qwen3_5Loader, Qwen3_5MoeLoader, Qwen4ExpLoader as MultimodalQwen4ExpLoader,
+    VLlama4Loader, VLlamaLoader, VoxtralLoader,
 };
 
 pub use embedding_loaders::{
@@ -189,6 +190,21 @@ pub(crate) fn inject_mtp_config_flag(config: &str) -> anyhow::Result<String> {
     Ok(config.to_string())
 }
 
+/// Reject MTP for model families whose target checkpoints intentionally exclude it.
+pub(crate) fn reject_mtp_config(config: &str, architecture: &str) -> anyhow::Result<()> {
+    let config: serde_json::Value = serde_json::from_str(config)?;
+    if config
+        .get(MTP_CONFIG_KEY)
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false)
+    {
+        anyhow::bail!(
+            "{architecture} does not support built-in MTP or draft-model loading; MTP artifacts are not target model shards"
+        );
+    }
+    Ok(())
+}
+
 pub(crate) fn qk_rope_layout_from_config(
     config: &str,
 ) -> Result<Option<crate::gguf::normal_registry::RopePairing>> {
@@ -243,6 +259,25 @@ pub(crate) fn validate_lora_qk_rope_layout(config: &str, has_adapter: bool) -> R
         );
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn qwen4exp_rejects_requested_mtp_loading() {
+        let error = reject_mtp_config(
+            r#"{"architectures":["Qwen4ExpForCausalLM"],"_mistralrs_mtp":true}"#,
+            "Qwen4Exp",
+        )
+        .unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("Qwen4Exp does not support built-in MTP or draft-model loading"));
+
+        reject_mtp_config(r#"{"architectures":["Qwen4ExpForCausalLM"]}"#, "Qwen4Exp").unwrap();
+    }
 }
 
 /// `ModelPaths` abstracts the mechanism to get all necessary files for running a model. For
@@ -789,6 +824,12 @@ fn language_model_pack_factors_with_aliases(
     Ok((embedding, head))
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct ContextMemoryEstimate {
+    pub label: &'static str,
+    pub bytes: usize,
+}
+
 pub trait DeviceMappedModelLoader {
     /// Maximum activation size of non-mapped parts of this model.
     /// Useful for the multimodal models which may prefer to keep the vison components on the GPU.
@@ -832,6 +873,47 @@ pub trait DeviceMappedModelLoader {
     fn num_layers(&self, config: &str) -> Result<usize>;
     fn model_config(&self, config: &str) -> Result<Box<dyn ModelConfigLike>>;
 
+    /// Persistent context state allocated alongside each mapped decoder layer, excluding the
+    /// ordinary K/V cache already described by `model_config`.
+    fn layer_auxiliary_cache_size_in_bytes(
+        &self,
+        config: &str,
+        _dtype: DType,
+        _params: &AutoDeviceMapParams,
+    ) -> Result<Vec<usize>> {
+        Ok(vec![0; self.num_layers(config)?])
+    }
+
+    /// Named model-specific context allocations for memory reporting.
+    fn context_memory_estimates(
+        &self,
+        _config: &str,
+        _dtype: DType,
+        _params: &AutoDeviceMapParams,
+    ) -> Result<Vec<ContextMemoryEstimate>> {
+        Ok(Vec::new())
+    }
+
+    /// Persistent model-specific context state held on the primary device.
+    fn non_mapped_context_size_in_bytes(
+        &self,
+        _config: &str,
+        _dtype: DType,
+        _params: &AutoDeviceMapParams,
+    ) -> Result<usize> {
+        Ok(0)
+    }
+
+    /// Peak model-specific context workspace shared by mapped decoder layers.
+    fn mapped_context_workspace_size_in_bytes(
+        &self,
+        _config: &str,
+        _dtype: DType,
+        _params: &AutoDeviceMapParams,
+    ) -> Result<usize> {
+        Ok(0)
+    }
+
     fn checkpoint_layer_index(&self, _config: &str, tensor_name: &str) -> Option<usize> {
         checkpoint_inventory::standard_layer_index(tensor_name)
     }
@@ -859,6 +941,7 @@ pub trait DeviceMappedModelLoader {
             layer_sizes_in_bytes,
             non_mapped_size_in_bytes,
             total_model_size_in_bytes,
+            None,
             devices,
             dtype,
             params,

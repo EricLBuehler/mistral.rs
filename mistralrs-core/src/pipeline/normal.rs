@@ -13,7 +13,7 @@ use super::{
     GLM4MoeLoader, Gemma2Loader, GemmaLoader, GptOssLoader, GraniteMoeHybridLoader,
     HunYuanDenseV1Loader, HunYuanMoEV1Loader, Lfm2Loader, LlamaLoader, MistralLoader,
     MixtralLoader, NormalLoaderType, Phi2Loader, Phi3Loader, Phi3_5MoELoader, Qwen2Loader,
-    Qwen3Loader, Qwen3MoELoader, Qwen3NextLoader, Qwen3_5TextLoader, SmolLm3Loader,
+    Qwen3Loader, Qwen3MoELoader, Qwen3NextLoader, Qwen3_5TextLoader, Qwen4ExpLoader, SmolLm3Loader,
     Starcoder2Loader,
 };
 use crate::amoe::AnyMoeExpertType;
@@ -534,6 +534,7 @@ impl NormalLoaderBuilder {
             Some(NormalLoaderType::Qwen3_5) => Box::new(Qwen3_5TextLoader),
             Some(NormalLoaderType::Lfm2) => Box::new(Lfm2Loader),
             Some(NormalLoaderType::Lfm2Moe) => Box::new(Lfm2Loader),
+            Some(NormalLoaderType::Qwen4Exp) => Box::new(Qwen4ExpLoader),
             None => Box::new(AutoNormalLoader),
         };
         Ok(NormalLoader {
@@ -738,12 +739,19 @@ impl Loader for NormalLoader {
 
             // ISQ or UQFF: quantized path
             // Match logic below where UQFF has priority
+            let sizing = super::isq_flow::resolve_auto_device_map_sizing(
+                uqff_reader.is_some(),
+                has_prepared_weight_source,
+                in_situ_quant,
+            );
+            let cpu_resident_weight_bytes = matches!(
+                sizing,
+                super::isq_flow::AutoDeviceMapSizing::PreparedWeightSource
+            )
+            .then(|| weight_source.as_ref()?.cpu_resident_weight_bytes())
+            .flatten();
             let (layer_sizes_in_bytes, non_mapped_size_in_bytes, total_model_size_in_bytes) =
-                match super::isq_flow::resolve_auto_device_map_sizing(
-                    uqff_reader.is_some(),
-                    has_prepared_weight_source,
-                    in_situ_quant,
-                ) {
+                match sizing {
                     sizing @ (super::isq_flow::AutoDeviceMapSizing::Uqff
                     | super::isq_flow::AutoDeviceMapSizing::PreparedWeightSource) => {
                         let source = weight_source
@@ -913,6 +921,7 @@ impl Loader for NormalLoader {
                 layer_sizes_in_bytes,
                 non_mapped_size_in_bytes,
                 total_model_size_in_bytes,
+                cpu_resident_weight_bytes,
                 &available_devices,
                 dtype,
                 &params,

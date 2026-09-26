@@ -13,7 +13,9 @@ use crate::{
     amoe::AnyMoeBaseModelMixin,
     device_map::DeviceMapper,
     lora::{LoraConfig, Ordering},
-    paged_attention::{AttentionImplementation, ModelConfigLike, ModelConfigMetadata},
+    paged_attention::{
+        AttentionImplementation, HybridPagedKvCacheConfig, ModelConfigLike, ModelConfigMetadata,
+    },
     pipeline::{
         isq::IsqModelLoader, text_models_inputs_processor::FlashParams, EitherCache, IsqModel,
         ModelForwardContext,
@@ -38,7 +40,7 @@ use crate::{
     xlora_models::{self, XLoraConfig},
 };
 
-use super::{AutoDeviceMapParams, DeviceMappedModelLoader};
+use super::{AutoDeviceMapParams, ContextMemoryEstimate, DeviceMappedModelLoader};
 use crate::gguf::normal_registry::RopePairing;
 
 pub trait NormalModel: IsqModel + AnyMoeBaseModelMixin + SpeculativeTargetMixin {
@@ -228,6 +230,8 @@ pub enum NormalLoaderType {
     Lfm2,
     #[serde(rename = "lfm2_moe")]
     Lfm2Moe,
+    #[serde(rename = "qwen4exp")]
+    Qwen4Exp,
 }
 
 // https://github.com/huggingface/transformers/blob/cff06aac6fad28019930be03f5d467055bf62177/src/transformers/models/auto/modeling_auto.py#L448
@@ -260,6 +264,7 @@ impl NormalLoaderType {
             Self::Qwen3_5 => "Qwen3_5ForCausalLM",
             Self::Lfm2 => "Lfm2ForCausalLM",
             Self::Lfm2Moe => "Lfm2MoeForCausalLM",
+            Self::Qwen4Exp => "Qwen4ExpForCausalLM",
         }
     }
 
@@ -291,6 +296,7 @@ impl NormalLoaderType {
             Self::Qwen3_5 => "qwen3_5_text",
             Self::Lfm2 => "lfm2",
             Self::Lfm2Moe => "lfm2_moe",
+            Self::Qwen4Exp => "qwen4_exp",
         }
     }
 
@@ -322,6 +328,7 @@ impl NormalLoaderType {
             "Qwen3_5ForCausalLM" => Ok(Self::Qwen3_5),
             "Lfm2ForCausalLM" => Ok(Self::Lfm2),
             "Lfm2MoeForCausalLM" => Ok(Self::Lfm2Moe),
+            "Qwen4ExpForCausalLM" => Ok(Self::Qwen4Exp),
             other => anyhow::bail!(
                 "Unsupported Hugging Face Transformers -CausalLM model class `{other}`. Please raise an issue."
             ),
@@ -359,7 +366,8 @@ impl FromStr for NormalLoaderType {
             "qwen3_5" => Ok(Self::Qwen3_5),
             "lfm2" => Ok(Self::Lfm2),
             "lfm2_moe" => Ok(Self::Lfm2Moe),
-            a => Err(format!("Unknown architecture `{a}`. Possible architectures: `mistral`, `gemma`, `mixtral`, `llama`, `phi2`, `phi3`, `qwen2`, `gemma2`, `starcoder2`, `phi3.5moe`, `deepseekv2`, `deepseekv3`, `qwen3`, `glm4`, `glm4moelite`, `glm4moe`, `qwen3moe`, `smollm3`, `granitemoehybrid`, `gpt_oss`, `hunyuanv1dense`, `hunyuanv1moe`, `qwen3next`, `qwen3_5`, `lfm2`, `lfm2_moe`.")),
+            "qwen4exp" => Ok(Self::Qwen4Exp),
+            a => Err(format!("Unknown architecture `{a}`. Possible architectures: `mistral`, `gemma`, `mixtral`, `llama`, `phi2`, `phi3`, `qwen2`, `gemma2`, `starcoder2`, `phi3.5moe`, `deepseekv2`, `deepseekv3`, `qwen3`, `glm4`, `glm4moelite`, `glm4moe`, `qwen3moe`, `smollm3`, `granitemoehybrid`, `gpt_oss`, `hunyuanv1dense`, `hunyuanv1moe`, `qwen3next`, `qwen3_5`, `lfm2`, `lfm2_moe`, `qwen4exp`.")),
         }
     }
 }
@@ -393,6 +401,7 @@ impl Display for NormalLoaderType {
             Self::Qwen3_5 => write!(f, "qwen3_5"),
             Self::Lfm2 => write!(f, "lfm2"),
             Self::Lfm2Moe => write!(f, "lfm2_moe"),
+            Self::Qwen4Exp => write!(f, "qwen4exp"),
         }
     }
 }
@@ -455,6 +464,7 @@ impl AutoNormalLoader {
             NormalLoaderType::Qwen3_5 => Ok(Box::new(Qwen3_5TextLoader)),
             NormalLoaderType::Lfm2 => Ok(Box::new(Lfm2Loader)),
             NormalLoaderType::Lfm2Moe => Ok(Box::new(Lfm2Loader)),
+            NormalLoaderType::Qwen4Exp => Ok(Box::new(Qwen4ExpLoader)),
         }
     }
 }
@@ -6390,6 +6400,576 @@ impl DeviceMappedModelLoader for Lfm2Loader {
     }
 }
 
+/// [`NormalLoader`] for the Qwen3.8 Flash Next (`qwen4exp`) text model.
+///
+/// [`NormalLoader`]: https://docs.rs/mistralrs/latest/mistralrs/struct.NormalLoader.html
+pub struct Qwen4ExpLoader;
+
+impl NormalModelLoader for Qwen4ExpLoader {
+    fn runtime_config<'a>(
+        &self,
+        config: &'a str,
+        max_model_len: Option<usize>,
+    ) -> Result<Cow<'a, str>> {
+        super::reject_mtp_config(config, "Qwen4Exp")?;
+        match max_model_len {
+            Some(max_model_len) => Ok(Cow::Owned(
+                crate::vision_models::qwen3_5::config::apply_max_model_len(config, max_model_len)?,
+            )),
+            None => Ok(Cow::Borrowed(config)),
+        }
+    }
+
+    fn load(
+        &self,
+        config: &str,
+        vb: ShardedVarBuilder,
+        normal_loading_metadata: NormalLoadingMetadata,
+        attention_mechanism: AttentionImplementation,
+    ) -> Result<Box<dyn NormalModel + Send + Sync>> {
+        super::reject_mtp_config(config, "Qwen4Exp")?;
+        let cfg: crate::models::qwen4_exp::config::Config = serde_json::from_str(config)?;
+        Ok(Box::new(crate::models::qwen4_exp::text::Model::new(
+            &cfg,
+            vb,
+            self.is_gptx_for(config, &normal_loading_metadata)?,
+            normal_loading_metadata,
+            attention_mechanism,
+        )?))
+    }
+
+    fn load_xlora(
+        &self,
+        _config: &str,
+        _vb: ShardedVarBuilder,
+        _lora_config: &[((String, String), LoraConfig)],
+        _xlora_config: Option<XLoraConfig>,
+        _xlora_ordering: Ordering,
+        _normal_loading_metadata: NormalLoadingMetadata,
+        _preload_adapters: &Option<HashMap<String, (ShardedVarBuilder, LoraConfig)>>,
+    ) -> Result<Box<dyn NormalModel + Send + Sync>> {
+        anyhow::bail!("Qwen4Exp does not support X-LoRA")
+    }
+
+    fn is_gptx(&self, _: &str) -> Result<bool> {
+        Ok(true)
+    }
+
+    fn get_config_repr(&self, config: &str) -> Result<Box<dyn Debug>> {
+        let cfg: crate::models::qwen4_exp::config::Config = serde_json::from_str(config)?;
+        Ok(Box::new(cfg))
+    }
+
+    fn supports_paged_attention(&self, _config: &str) -> Result<bool> {
+        // Paged attention requires indexed sparse K/V gathering from paged blocks, which
+        // the model still fails closed on.
+        Ok(false)
+    }
+}
+
+impl IsqModelLoader for Qwen4ExpLoader {
+    fn promoted_isq_predicates(&self, _config: &str) -> Result<Vec<Regex>> {
+        Ok(vec![
+            Regex::new(r"^model\.embed_tokens\.weight$")?,
+            Regex::new(r"^lm_head\.(weight|bias)$")?,
+        ])
+    }
+
+    fn isq_layer_regexes(&self, _config: &str) -> Result<Vec<Regex>> {
+        // The PLE table stays a quantized GGUF weight and is deliberately never listed for
+        // ISQ: re-quantizing it would materialize the complete table.
+        Ok(vec![
+            Regex::new(r"lm_head\.(weight|bias)$")?,
+            Regex::new(
+                r"layers\.(\d+)\.self_attn\.attn\.(q_proj|k_proj|v_proj|o_proj)\.(weight|bias)$",
+            )?,
+            Regex::new(r"layers\.(\d+)\.self_attn\.indexer\.(q_proj|k_proj)\.weight$")?,
+            Regex::new(r"layers\.(\d+)\.hc_(attn|ffn)\.(down|up|inject)\.weight$")?,
+            Regex::new(
+                r"layers\.(\d+)\.linear_attn\.(in_proj_qkv|in_proj_z|in_proj_b|in_proj_a)\.(weight|bias)$",
+            )?,
+            Regex::new(r"layers\.(\d+)\.linear_attn\.out_proj\.(weight|bias)$")?,
+            Regex::new(
+                r"layers\.(\d+)\.mlp\.experts\.(\d+)\.(gate_proj|up_proj|down_proj)\.(weight|bias)$",
+            )?,
+            Regex::new(r"layers\.(\d+)\.mlp\.experts\.(gate_proj|up_proj|down_proj)\.weight$")?,
+            Regex::new(
+                r"layers\.(\d+)\.mlp\.shared_expert\.(gate_proj|up_proj|down_proj)\.(weight|bias)$",
+            )?,
+            Regex::new(r"layers\.(\d+)\.ple\.(key|value)\.weight$")?,
+        ])
+    }
+
+    fn immediate_isq_predicates(&self, config: &str) -> Result<Vec<Regex>> {
+        self.isq_layer_regexes(config)
+    }
+
+    fn isq_layer_regexes_moqe(&self, _config: &str) -> Result<Vec<Regex>> {
+        Ok(vec![
+            Regex::new(
+                r"layers\.(\d+)\.mlp\.experts\.(\d+)\.(gate_proj|up_proj|down_proj)\.(weight|bias)$",
+            )?,
+            Regex::new(r"layers\.(\d+)\.mlp\.experts\.(gate_proj|up_proj|down_proj)\.weight$")?,
+        ])
+    }
+
+    fn immediate_isq_predicates_moqe(&self, config: &str) -> Result<Vec<Regex>> {
+        self.isq_layer_regexes_moqe(config)
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct Qwen4ExpContextEstimates {
+    main_kv_cache: usize,
+    indexer_key_cache: usize,
+    indexer_position_cache: usize,
+    gdn_state: usize,
+    ple_state: usize,
+    sparse_attention_workspace: usize,
+    per_layer: Vec<usize>,
+}
+
+fn checked_product(label: &str, factors: &[usize]) -> Result<usize> {
+    factors.iter().try_fold(1usize, |product, factor| {
+        product
+            .checked_mul(*factor)
+            .ok_or_else(|| anyhow::anyhow!("Qwen4Exp {label} estimate overflow"))
+    })
+}
+
+fn qwen4exp_context_estimates(
+    cfg: &crate::models::qwen4_exp::config::Config,
+    dtype: DType,
+    max_seq_len: usize,
+    max_batch_size: usize,
+) -> Result<Qwen4ExpContextEstimates> {
+    cfg.validate()?;
+    let full_layers = cfg
+        .layer_types
+        .iter()
+        .filter(|layer| {
+            matches!(
+                layer,
+                crate::models::qwen4_exp::config::LayerType::FullAttention
+            )
+        })
+        .count();
+    let gdn_layers = cfg.num_hidden_layers - full_layers;
+    let dtype_bytes = dtype.size_in_bytes();
+    let state_dtype_bytes = cfg.mamba_ssm_dtype.dtype().size_in_bytes();
+    let gdn_pool_capacity = max_batch_size.max(crate::kv_cache::INITIAL_RECURRENT_POOL_CAPACITY);
+
+    let main_kv_per_layer = checked_product(
+        "main K/V cache",
+        &[
+            max_batch_size,
+            max_seq_len,
+            cfg.num_key_value_heads,
+            cfg.head_dim,
+            2,
+            dtype_bytes,
+        ],
+    )?;
+    let indexer_keys_per_layer = checked_product(
+        "indexer-key cache",
+        &[
+            max_batch_size,
+            max_seq_len,
+            cfg.indexer_head_dim,
+            dtype_bytes,
+        ],
+    )?;
+    let indexer_positions_per_layer = checked_product(
+        "indexer-position cache",
+        &[max_batch_size, max_seq_len, std::mem::size_of::<u32>()],
+    )?;
+    let gdn_conv_per_layer = checked_product(
+        "GDN convolution state",
+        &[
+            gdn_pool_capacity,
+            2 * cfg.linear_num_key_heads * cfg.linear_key_head_dim
+                + cfg.linear_num_value_heads * cfg.linear_value_head_dim,
+            cfg.linear_conv_kernel_dim,
+            dtype_bytes,
+        ],
+    )?;
+    let gdn_recurrent_per_layer = checked_product(
+        "GDN recurrent state",
+        &[
+            gdn_pool_capacity,
+            cfg.linear_num_value_heads,
+            cfg.linear_key_head_dim,
+            cfg.linear_value_head_dim,
+            state_dtype_bytes,
+        ],
+    )?;
+    let gdn_per_layer = gdn_conv_per_layer
+        .checked_add(gdn_recurrent_per_layer)
+        .ok_or_else(|| anyhow::anyhow!("Qwen4Exp GDN state estimate overflow"))?;
+
+    let ple_predecessors_per_layer = checked_product(
+        "PLE predecessor state",
+        &[
+            max_batch_size,
+            cfg.ngram_size.saturating_sub(1),
+            std::mem::size_of::<u32>(),
+        ],
+    )?;
+    let ple_convolution_per_layer = checked_product(
+        "PLE convolution state",
+        &[
+            max_batch_size,
+            cfg.hidden_size,
+            cfg.hc_count,
+            cfg.ple_conv_kernel_size.saturating_sub(1),
+            cfg.ngram_size,
+            std::mem::size_of::<f32>(),
+        ],
+    )?;
+    let ple_per_layer = ple_predecessors_per_layer
+        .checked_add(ple_convolution_per_layer)
+        .ok_or_else(|| anyhow::anyhow!("Qwen4Exp PLE state estimate overflow"))?;
+
+    let selected_tokens = cfg
+        .indexer_budget
+        .checked_add(cfg.indexer_compress_ratio - 1)
+        .ok_or_else(|| anyhow::anyhow!("Qwen4Exp sparse workspace token count overflow"))?;
+    let query_tokens = max_seq_len.min(ATTENTION_CHUNK_SIZE);
+    let gathered_kv = checked_product(
+        "sparse gathered K/V workspace",
+        &[
+            max_batch_size,
+            query_tokens,
+            selected_tokens,
+            cfg.num_key_value_heads,
+            cfg.head_dim,
+            2,
+            dtype_bytes,
+        ],
+    )?;
+    let attention_scores = checked_product(
+        "sparse attention score workspace",
+        &[
+            max_batch_size,
+            query_tokens,
+            selected_tokens,
+            cfg.num_attention_heads,
+            dtype_bytes,
+        ],
+    )?;
+    let sparse_attention_workspace = gathered_kv
+        .checked_add(attention_scores)
+        .ok_or_else(|| anyhow::anyhow!("Qwen4Exp sparse workspace estimate overflow"))?;
+
+    let mut per_layer = Vec::with_capacity(cfg.num_hidden_layers);
+    for layer_type in &cfg.layer_types {
+        let bytes = match layer_type {
+            crate::models::qwen4_exp::config::LayerType::FullAttention => main_kv_per_layer
+                .checked_add(indexer_keys_per_layer)
+                .ok_or_else(|| anyhow::anyhow!("Qwen4Exp QSA cache estimate overflow"))?,
+            crate::models::qwen4_exp::config::LayerType::LinearAttention => gdn_per_layer,
+        };
+        per_layer.push(bytes);
+    }
+
+    Ok(Qwen4ExpContextEstimates {
+        main_kv_cache: checked_product("main K/V cache total", &[main_kv_per_layer, full_layers])?,
+        indexer_key_cache: checked_product(
+            "indexer-key cache total",
+            &[indexer_keys_per_layer, full_layers],
+        )?,
+        indexer_position_cache: checked_product(
+            "indexer-position cache total",
+            &[indexer_positions_per_layer, full_layers],
+        )?,
+        gdn_state: checked_product("GDN state total", &[gdn_per_layer, gdn_layers])?,
+        ple_state: checked_product("PLE state total", &[ple_per_layer, cfg.ple_layer_ids.len()])?,
+        sparse_attention_workspace,
+        per_layer,
+    })
+}
+
+impl DeviceMappedModelLoader for Qwen4ExpLoader {
+    fn mapped_max_act_size_elems(
+        &self,
+        config: &str,
+        params: &AutoDeviceMapParams,
+    ) -> Result<usize> {
+        let AutoDeviceMapParams::Text {
+            max_seq_len,
+            max_batch_size,
+        } = params
+        else {
+            anyhow::bail!("Expected text AutoDeviceMapParams for this model!")
+        };
+
+        let cfg: crate::models::qwen4_exp::config::Config = serde_json::from_str(config)?;
+
+        // Persistent context state and sparse gathered workspaces are accounted separately.
+        // Keep this bound for the remaining dense per-layer activations.
+        let query_tokens = max_seq_len.min(&ATTENTION_CHUNK_SIZE);
+        Ok(max_batch_size * cfg.num_attention_heads * query_tokens.pow(2))
+    }
+
+    fn non_mapped_max_act_size_elems(
+        &self,
+        _config: &str,
+        _params: &AutoDeviceMapParams,
+    ) -> Result<usize> {
+        Ok(0)
+    }
+
+    fn non_mapped_size_in_bytes(
+        &self,
+        config: &str,
+        dtype: DType,
+        weight_pack_factor: usize,
+        quantization: Option<&super::AutoDeviceMapQuantization<'_>>,
+        _matformer_config: Option<&MatformerSliceConfig>,
+    ) -> Result<usize> {
+        let cfg: crate::models::qwen4_exp::config::Config = serde_json::from_str(config)?;
+
+        let elems = {
+            let (embed_tokens_pack_factor, lm_head_pack_factor) =
+                super::language_model_pack_factors(
+                    quantization,
+                    "model.embed_tokens.weight",
+                    "lm_head.weight",
+                    cfg.tie_word_embeddings,
+                    dtype,
+                    weight_pack_factor,
+                )?;
+            let embed_tokens = cfg.hidden_size * cfg.vocab_size / embed_tokens_pack_factor;
+            let lm_head = if !cfg.tie_word_embeddings {
+                cfg.hidden_size * cfg.vocab_size / lm_head_pack_factor
+            } else {
+                0
+            };
+            let wide = cfg.hidden_size * cfg.hc_count;
+            // Final hyper-connection mixer: wide gamma plus low-rank down/up projections.
+            let hc_final = wide + 2 * wide * cfg.hc_lowrank;
+            embed_tokens + lm_head + hc_final
+            // The PLE embedding table is deliberately excluded from the fixed non-mapped
+            // requirement (Phase 10 PLE placement policy): it is never dequantized or
+            // materialized, stays backed by the GGUF mmap on disk, and only the rows
+            // requested by the current tokens are gathered, converted, and transferred.
+            // Requiring its full byte size to fit in free device memory would reject
+            // otherwise-workable mmap-backed runs.
+        };
+        Ok(elems * dtype.size_in_bytes())
+    }
+
+    fn layer_sizes_in_bytes(
+        &self,
+        config: &str,
+        dtype: DType,
+        weight_pack_factor: usize,
+        _matformer_config: Option<&MatformerSliceConfig>,
+    ) -> Result<Vec<usize>> {
+        let cfg: crate::models::qwen4_exp::config::Config = serde_json::from_str(config)?;
+        let mut layer_sizes = Vec::with_capacity(cfg.num_hidden_layers);
+
+        for (layer_idx, layer_type) in cfg.layer_types.iter().enumerate() {
+            let wide = cfg.hidden_size * cfg.hc_count;
+            // Attention and MoE hyper-connection mixers: wide gamma, low-rank down/up,
+            // and a wide-to-hc_count injection projection each.
+            let hc_elems = 2 * (wide + 2 * wide * cfg.hc_lowrank + wide * cfg.hc_count);
+
+            let branch_elems = match layer_type {
+                crate::models::qwen4_exp::config::LayerType::FullAttention => {
+                    let hidden = cfg.hidden_size;
+                    let q_dim = cfg.head_dim * cfg.num_attention_heads;
+                    let kv_dim = cfg.head_dim * cfg.num_key_value_heads;
+                    // The fused Q tensor carries the per-head interleaved query/gate layout.
+                    let q_gate = hidden * q_dim * 2 / weight_pack_factor;
+                    let k_proj = hidden * kv_dim / weight_pack_factor;
+                    let v_proj = hidden * kv_dim / weight_pack_factor;
+                    let o_proj = q_dim * hidden / weight_pack_factor;
+                    let q_norm = cfg.head_dim;
+                    let k_norm = cfg.head_dim;
+                    let indexer = hidden
+                        * (cfg.indexer_n_heads + cfg.indexer_kv_heads)
+                        * cfg.indexer_head_dim
+                        / weight_pack_factor;
+                    let indexer_norms = 2 * cfg.indexer_head_dim;
+                    q_gate + k_proj + v_proj + o_proj + q_norm + k_norm + indexer + indexer_norms
+                }
+                crate::models::qwen4_exp::config::LayerType::LinearAttention => {
+                    let hidden = cfg.hidden_size;
+                    let key_dim = cfg.linear_num_key_heads * cfg.linear_key_head_dim;
+                    let value_dim = cfg.linear_num_value_heads * cfg.linear_value_head_dim;
+                    let conv_dim = key_dim + value_dim;
+                    // in_proj_qkv: (2 * key_dim + value_dim, hidden); in_proj_z: (value_dim, hidden)
+                    let in_proj_qkv = hidden * (key_dim * 2 + value_dim) / weight_pack_factor;
+                    let in_proj_z = hidden * value_dim / weight_pack_factor;
+                    let in_proj_ba = hidden * (cfg.linear_num_value_heads * 2) / weight_pack_factor;
+                    let out_proj = value_dim * hidden / weight_pack_factor;
+                    let conv1d = conv_dim * cfg.linear_conv_kernel_dim;
+                    let dt_bias = cfg.linear_num_value_heads;
+                    let a_log = cfg.linear_num_value_heads;
+                    let norm = cfg.linear_value_head_dim;
+                    in_proj_qkv
+                        + in_proj_z
+                        + in_proj_ba
+                        + out_proj
+                        + conv1d
+                        + dt_bias
+                        + a_log
+                        + norm
+                }
+            };
+
+            let moe_elems = cfg.hidden_size * cfg.num_experts
+                + cfg.num_experts * 3 * cfg.hidden_size * cfg.moe_intermediate_size
+                    / weight_pack_factor
+                + 3 * cfg.hidden_size * cfg.shared_expert_intermediate_size / weight_pack_factor
+                + cfg.hidden_size;
+
+            let ple_elems = if cfg.ple_layer_ids.contains(&layer_idx) {
+                let channels = cfg.hidden_size * cfg.hc_count;
+                channels * cfg.ple_embed_dim / weight_pack_factor
+                    + cfg.hidden_size * cfg.ple_embed_dim / weight_pack_factor
+                    + 3 * channels
+                    + channels * cfg.ple_conv_kernel_size
+            } else {
+                0
+            };
+
+            layer_sizes
+                .push((hc_elems + branch_elems + moe_elems + ple_elems) * dtype.size_in_bytes());
+        }
+
+        Ok(layer_sizes)
+    }
+
+    fn num_layers(&self, config: &str) -> Result<usize> {
+        let cfg: crate::models::qwen4_exp::config::Config = serde_json::from_str(config)?;
+        Ok(cfg.num_hidden_layers)
+    }
+
+    fn layer_auxiliary_cache_size_in_bytes(
+        &self,
+        config: &str,
+        dtype: DType,
+        params: &AutoDeviceMapParams,
+    ) -> Result<Vec<usize>> {
+        let AutoDeviceMapParams::Text {
+            max_seq_len,
+            max_batch_size,
+        } = params
+        else {
+            anyhow::bail!("Expected text AutoDeviceMapParams for this model!")
+        };
+        let cfg: crate::models::qwen4_exp::config::Config = serde_json::from_str(config)?;
+        Ok(qwen4exp_context_estimates(&cfg, dtype, *max_seq_len, *max_batch_size)?.per_layer)
+    }
+
+    fn non_mapped_context_size_in_bytes(
+        &self,
+        config: &str,
+        dtype: DType,
+        params: &AutoDeviceMapParams,
+    ) -> Result<usize> {
+        let AutoDeviceMapParams::Text {
+            max_seq_len,
+            max_batch_size,
+        } = params
+        else {
+            anyhow::bail!("Expected text AutoDeviceMapParams for this model!")
+        };
+        let cfg: crate::models::qwen4_exp::config::Config = serde_json::from_str(config)?;
+        let estimates = qwen4exp_context_estimates(&cfg, dtype, *max_seq_len, *max_batch_size)?;
+        estimates
+            .indexer_position_cache
+            .checked_add(estimates.ple_state)
+            .ok_or_else(|| anyhow::anyhow!("Qwen4Exp host auxiliary-state estimate overflow"))
+    }
+
+    fn mapped_context_workspace_size_in_bytes(
+        &self,
+        config: &str,
+        dtype: DType,
+        params: &AutoDeviceMapParams,
+    ) -> Result<usize> {
+        let AutoDeviceMapParams::Text {
+            max_seq_len,
+            max_batch_size,
+        } = params
+        else {
+            anyhow::bail!("Expected text AutoDeviceMapParams for this model!")
+        };
+        let cfg: crate::models::qwen4_exp::config::Config = serde_json::from_str(config)?;
+        Ok(
+            qwen4exp_context_estimates(&cfg, dtype, *max_seq_len, *max_batch_size)?
+                .sparse_attention_workspace,
+        )
+    }
+
+    fn context_memory_estimates(
+        &self,
+        config: &str,
+        dtype: DType,
+        params: &AutoDeviceMapParams,
+    ) -> Result<Vec<ContextMemoryEstimate>> {
+        let AutoDeviceMapParams::Text {
+            max_seq_len,
+            max_batch_size,
+        } = params
+        else {
+            anyhow::bail!("Expected text AutoDeviceMapParams for this model!")
+        };
+        let cfg: crate::models::qwen4_exp::config::Config = serde_json::from_str(config)?;
+        let estimates = qwen4exp_context_estimates(&cfg, dtype, *max_seq_len, *max_batch_size)?;
+        Ok(vec![
+            ContextMemoryEstimate {
+                label: "Qwen4Exp QSA main K/V cache",
+                bytes: estimates.main_kv_cache,
+            },
+            ContextMemoryEstimate {
+                label: "Qwen4Exp QSA raw indexer-key cache",
+                bytes: estimates.indexer_key_cache,
+            },
+            ContextMemoryEstimate {
+                label: "Qwen4Exp QSA indexer positions",
+                bytes: estimates.indexer_position_cache,
+            },
+            ContextMemoryEstimate {
+                label: "Qwen4Exp GDN recurrent and convolution state",
+                bytes: estimates.gdn_state,
+            },
+            ContextMemoryEstimate {
+                label: "Qwen4Exp PLE predecessor and convolution state",
+                bytes: estimates.ple_state,
+            },
+            ContextMemoryEstimate {
+                label: "Qwen4Exp sparse-attention peak workspace",
+                bytes: estimates.sparse_attention_workspace,
+            },
+        ])
+    }
+
+    fn model_config(&self, config: &str) -> Result<Box<dyn ModelConfigLike>> {
+        let cfg: crate::models::qwen4_exp::config::Config = serde_json::from_str(config)?;
+        let base = ModelConfigMetadata {
+            max_seq_len: cfg.max_position_embeddings,
+            num_layers: cfg.num_hidden_layers,
+            hidden_size: cfg.hidden_size,
+            num_kv_heads: cfg.num_key_value_heads,
+            num_attn_heads: cfg.num_attention_heads,
+            sliding_window: None,
+            k_head_dim: cfg.head_dim,
+            v_head_dim: cfg.head_dim,
+            kv_cache_layout: crate::paged_attention::KvCacheLayout::Standard,
+        };
+        // Qwen4Exp owns its QSA main K/V outside the generic paged-cache interface. The
+        // architecture-specific estimates above account for those caches only on QSA layers.
+        Ok(Box::new(HybridPagedKvCacheConfig::new(
+            base,
+            vec![false; cfg.num_hidden_layers],
+        )))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -7297,6 +7877,83 @@ mod tests {
             .layer_sizes_in_bytes(&config.to_string(), DType::F32, 2, None)
             .unwrap();
         assert_eq!(pure_dense, vec![736]);
+    }
+
+    #[test]
+    fn qwen4exp_runtime_config_rejects_mtp_before_loading_weights() {
+        let config = crate::pipeline::loaders::inject_mtp_config_flag(
+            crate::models::qwen4_exp::config::tests::OFFICIAL_TEXT_CONFIG,
+        )
+        .unwrap();
+        let error = Qwen4ExpLoader.runtime_config(&config, None).unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("Qwen4Exp does not support built-in MTP or draft-model loading"));
+    }
+
+    #[test]
+    fn qwen4exp_runtime_config_caps_max_model_len() -> Result<()> {
+        let config = crate::models::qwen4_exp::config::tests::OFFICIAL_TEXT_CONFIG;
+        let config = Qwen4ExpLoader.runtime_config(config, Some(8_192))?;
+        let config: serde_json::Value = serde_json::from_str(&config)?;
+        assert_eq!(config["max_position_embeddings"], 8_192);
+        Ok(())
+    }
+
+    #[test]
+    fn qwen4exp_estimates_all_auxiliary_context_state() -> Result<()> {
+        let cfg = crate::models::qwen4_exp::config::tests::fixture_config();
+        let estimates = qwen4exp_context_estimates(&cfg, DType::F16, 8, 2)?;
+
+        assert_eq!(estimates.main_kv_cache, 32_768);
+        assert_eq!(estimates.indexer_key_cache, 4_096);
+        assert_eq!(estimates.indexer_position_cache, 64);
+        assert_eq!(estimates.gdn_state, 87_146_496);
+        assert_eq!(estimates.ple_state, 737_296);
+        assert_eq!(estimates.sparse_attention_workspace, 68_782_336);
+        assert_eq!(
+            estimates.per_layer,
+            vec![29_048_832, 29_048_832, 29_048_832, 36_864]
+        );
+
+        let config = crate::models::qwen4_exp::config::tests::OFFICIAL_TEXT_CONFIG;
+        let params = AutoDeviceMapParams::Text {
+            max_seq_len: 8,
+            max_batch_size: 2,
+        };
+        let model = Qwen4ExpLoader.model_config(config)?;
+        assert_eq!(model.total_kv_cache_elements_per_token(), 0);
+        assert_eq!(
+            Qwen4ExpLoader.non_mapped_context_size_in_bytes(config, DType::F16, &params)?,
+            estimates.indexer_position_cache + estimates.ple_state
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn qwen4exp_native_context_estimates_scale_without_overflow() -> Result<()> {
+        let mut cfg = crate::models::qwen4_exp::config::tests::fixture_config();
+        cfg.num_hidden_layers = 48;
+        cfg.layer_types = (0..48)
+            .map(|layer| {
+                if (layer + 1) % 4 == 0 {
+                    crate::models::qwen4_exp::config::LayerType::FullAttention
+                } else {
+                    crate::models::qwen4_exp::config::LayerType::LinearAttention
+                }
+            })
+            .collect();
+        cfg.ple_layer_ids = vec![1];
+        let estimates =
+            qwen4exp_context_estimates(&cfg, DType::BF16, cfg.max_position_embeddings, 1)?;
+
+        assert_eq!(estimates.main_kv_cache, 6_442_450_944);
+        assert_eq!(estimates.indexer_key_cache, 805_306_368);
+        assert_eq!(estimates.indexer_position_cache, 12_582_912);
+        assert_eq!(estimates.gdn_state, 1_045_757_952);
+        assert_eq!(estimates.ple_state, 368_648);
+        assert_eq!(estimates.sparse_attention_workspace, 4_402_069_504);
+        Ok(())
     }
 
     #[test]

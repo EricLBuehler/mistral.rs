@@ -11,7 +11,7 @@ use super::backend;
 use super::cache::GdnLayerCache;
 #[cfg(feature = "cuda")]
 use super::config::GdnVHeadLayout;
-use super::config::{GdnConfig, GdnDims};
+use super::config::{GdnConfig, GdnDims, GdnOutputGate};
 use super::norm::RmsNormGated;
 use super::packed::PackedGdnLayout;
 use super::projection::{GdnCoreProjection, GdnInputProjection, GdnProjection};
@@ -259,6 +259,7 @@ impl GatedDeltaNet {
         activation_dtype: DType,
     ) -> bool {
         self.speculative_checkpoints_supported(pool, activation_dtype)
+            && self.norm.output_gate() == GdnOutputGate::Silu
             && pool.checkpoint_lanes() == 1
             && pool.state_layout() == RecurrentStateLayout::GdnValueMajor
             && self.dims.head_k_dim == crate::cuda::gdn::GDN_DECODE_K_DIM
@@ -274,6 +275,7 @@ impl GatedDeltaNet {
         activation_dtype: DType,
     ) -> bool {
         self.speculative_checkpoints_supported(pool, activation_dtype)
+            && self.norm.output_gate() == GdnOutputGate::Silu
             && pool.checkpoint_lanes() == 1
             && pool.state_layout() == RecurrentStateLayout::GdnValueMajor
             && pool.recurrent_dtype() == DType::F32
@@ -823,7 +825,8 @@ impl GatedDeltaNet {
                 pending: pending_conv,
             },
         )?;
-        let fused_norm = cache.state_layout == RecurrentStateLayout::GdnValueMajor
+        let fused_norm = self.norm.output_gate() == GdnOutputGate::Silu
+            && cache.state_layout == RecurrentStateLayout::GdnValueMajor
             && self.dims.head_k_dim == crate::cuda::gdn::GDN_DECODE_K_DIM
             && self.dims.head_v_dim == crate::cuda::gdn::GDN_DECODE_V_DIM
             && seq_len <= crate::cuda::gdn::GDN_SPEC_FUSED_MAX_TOKENS
@@ -991,7 +994,8 @@ impl GatedDeltaNet {
         batch_size: usize,
         seq_len: usize,
     ) -> Option<crate::cuda::gdn::GdnFp8OutputSpec> {
-        if self.out_proj_input_shard.is_some()
+        if self.norm.output_gate() != GdnOutputGate::Silu
+            || self.out_proj_input_shard.is_some()
             || gate.dtype() != DType::BF16
             || !gate.device().is_cuda()
             || self.norm.weight.dtype() != DType::BF16

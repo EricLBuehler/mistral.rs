@@ -610,7 +610,7 @@ pub(super) fn qtensor_from_gguf_data(
     QTensor::new(storage, dims)
 }
 
-const fn ggml_dtype_alignment(dtype: GgmlDType) -> usize {
+pub(crate) const fn ggml_dtype_alignment(dtype: GgmlDType) -> usize {
     match dtype {
         GgmlDType::F32 => align_of::<f32>(),
         GgmlDType::F16 => align_of::<f16>(),

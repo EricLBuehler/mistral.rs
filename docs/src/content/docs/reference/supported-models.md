@@ -52,6 +52,7 @@ The `Architecture` column is the `config.json` `architectures` value. Per-family
 | `Qwen3_5ForCausalLM` | Qwen3.5 | No published example |
 | `Lfm2ForCausalLM` | LFM2, LFM2.5 | <details><summary><code>LiquidAI/LFM2.5-1.2B-Instruct</code> (LFM2.5), <code>LiquidAI/LFM2-1.2B</code> (LFM2)</summary><code>mistralrs run -m LiquidAI/LFM2.5-1.2B-Instruct</code><br><code>mistralrs run -m LiquidAI/LFM2-1.2B</code></details> |
 | `Lfm2MoeForCausalLM` | LFM2 MoE, LFM2.5 MoE | <details><summary><code>LiquidAI/LFM2.5-8B-A1B</code> (LFM2.5), <code>LiquidAI/LFM2-8B-A1B</code> (LFM2)</summary><code>mistralrs run -m LiquidAI/LFM2.5-8B-A1B</code><br><code>mistralrs run -m LiquidAI/LFM2-8B-A1B</code></details> |
+| `Qwen4ExpForCausalLM` | Qwen3.8 Flash Next | <details><summary><code>unsloth/Qwen3.8-Flash-Next-GGUF</code></summary><code>mistralrs run -m unsloth/Qwen3.8-Flash-Next-GGUF</code></details> |
 
 ## Multimodal models
 
@@ -80,6 +81,7 @@ The `Architecture` column is the `config.json` `architectures` value. Per-family
 | `Gemma4ForConditionalGeneration` | Gemma 4 | <details><summary><code>google/gemma-4-E4B-it</code> (E4B), <code>google/gemma-4-26B-A4B-it</code> (26B-A4B MoE), <code>google/gemma-4-31B-it</code> (31B dense)</summary><code>mistralrs run -m google/gemma-4-E4B-it</code><br><code>mistralrs run -m google/gemma-4-26B-A4B-it</code><br><code>mistralrs run -m google/gemma-4-31B-it</code></details> |
 | `MuseGlimmerForConditionalGeneration` | Muse Glimmer | <details><summary><code>meta-models/Muse-Glimmer-30B</code></summary><code>mistralrs run -m meta-models/Muse-Glimmer-30B</code></details> |
 | `DiffusionGemmaForBlockDiffusion` | DiffusionGemma | <details><summary><code>google/diffusiongemma-26B-A4B-it</code></summary><code>mistralrs run -m google/diffusiongemma-26B-A4B-it</code></details> |
+| `Qwen4ExpForConditionalGeneration` | Qwen3.8 Flash Next | <details><summary><code>unsloth/Qwen3.8-Flash-Next-GGUF</code></summary><code>mistralrs run -m unsloth/Qwen3.8-Flash-Next-GGUF</code></details> |
 
 ## Image generation
 

@@ -171,6 +171,11 @@ impl NormalLoaderType {
                 modalities: m,
                 examples: &[ex!("Qwen/Qwen3-Next-80B-A3B-Instruct")],
             },
+            Self::Qwen4Exp => ArchMetadata {
+                families: &["Qwen3.8 Flash Next"],
+                modalities: m,
+                examples: &[ex!("unsloth/Qwen3.8-Flash-Next-GGUF")],
+            },
             Self::Qwen3_5 => ArchMetadata {
                 families: &["Qwen3.5"],
                 modalities: m,
@@ -208,6 +213,11 @@ impl MultimodalLoaderType {
                 families: &["Idefics2"],
                 modalities: &[Text, Vision],
                 examples: &[ex!("HuggingFaceM4/idefics2-8b")],
+            },
+            Self::Qwen4Exp => ArchMetadata {
+                families: &["Qwen3.8 Flash Next"],
+                modalities: &[Text, Vision],
+                examples: &[ex!("unsloth/Qwen3.8-Flash-Next-GGUF")],
             },
             Self::LLaVANext => ArchMetadata {
                 families: &["LLaVA-NeXT"],
@@ -409,6 +419,7 @@ impl NormalLoaderType {
             Self::Qwen3_5 => "Qwen3_5ForCausalLM",
             Self::Lfm2 => "Lfm2ForCausalLM",
             Self::Lfm2Moe => "Lfm2MoeForCausalLM",
+            Self::Qwen4Exp => "Qwen4ExpForCausalLM",
         }
     }
 }
@@ -435,6 +446,7 @@ impl MultimodalLoaderType {
             Self::Qwen3VLMoE => "Qwen3VLMoeForConditionalGeneration",
             Self::Qwen3_5 => "Qwen3_5ForConditionalGeneration",
             Self::Qwen3_5Moe => "Qwen3_5MoeForConditionalGeneration",
+            Self::Qwen4Exp => "Qwen4ExpForConditionalGeneration",
             Self::Voxtral => "VoxtralRealtimeForConditionalGeneration",
             Self::Gemma4 => "Gemma4ForConditionalGeneration",
             Self::MuseGlimmer => "MuseGlimmerForConditionalGeneration",

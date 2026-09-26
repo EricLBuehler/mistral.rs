@@ -6249,8 +6249,12 @@ impl TopKLastDimOp for Tensor {
     fn topk(&self, topk: usize) -> Result<TopKOutput> {
         // Use optimized parallel topk kernel on CUDA
         // Single kernel call, no post-processing overhead
+        // The kernel only supports single-row inputs with k up to
+        // [`CUDA_TOPK_MAX_K`]; multi-row inputs and larger selection sizes
+        // (for example QSA block selection with up to 512 blocks) fall back to
+        // a full sort, which is correct for any k and row count.
         #[cfg(feature = "cuda")]
-        if self.device().is_cuda() {
+        if self.device().is_cuda() && topk <= CUDA_TOPK_MAX_K && self.dims().len() <= 1 {
             return cuda_topk(self, topk);
         }
 
@@ -7489,6 +7493,86 @@ mod tests {
             indices.to_vec2::<u32>().unwrap(),
             vec![vec![2u32, 1u32], vec![2u32, 1u32]]
         );
+    }
+
+    #[test]
+    fn topk_fallback_supports_multi_row_and_large_k() -> candle_core::Result<()> {
+        use crate::ops::{TopKLastDimOp, TopKOutput};
+        use candle_core::Tensor;
+        let device = candle_core::Device::Cpu;
+
+        // Multi-row input with k far above the optimized CUDA kernel limit.
+        let rows = 3usize;
+        let cols = 600usize;
+        let k = 512usize;
+        let x = Tensor::arange(0f32, (rows * cols) as f32, &device)?.reshape((rows, cols))?;
+        let TopKOutput { values, indices } = x.topk(k)?;
+        assert_eq!(values.dims(), &[rows, k]);
+        assert_eq!(indices.dims(), &[rows, k]);
+        let expected_indices: Vec<Vec<u32>> = (0..rows)
+            .map(|_row| {
+                (0..k)
+                    .map(|offset| (cols - 1 - offset) as u32)
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        assert_eq!(indices.to_vec2::<u32>()?, expected_indices);
+        let values_host = values.to_vec2::<f32>()?;
+        for (row, values_row) in values_host.iter().enumerate() {
+            for (offset, value) in values_row.iter().enumerate() {
+                let expected = (row * cols + cols - 1 - offset) as f32;
+                assert_eq!(*value, expected, "row {row} offset {offset}");
+            }
+        }
+
+        // Single-row input with k above the optimized CUDA kernel limit.
+        let flat = Tensor::arange(0f32, 700f32, &device)?;
+        let TopKOutput { values, indices } = flat.topk(600)?;
+        assert_eq!(values.dims(), &[600]);
+        assert_eq!(indices.to_vec1::<u32>()?[0], 699);
+        assert_eq!(values.to_vec1::<f32>()?[599], 100.0);
+        Ok(())
+    }
+
+    #[cfg(feature = "cuda")]
+    #[test]
+    fn cuda_topk_falls_back_for_multi_row_and_large_k() -> candle_core::Result<()> {
+        use crate::ops::{TopKLastDimOp, TopKOutput};
+        use candle_core::Tensor;
+        let Ok(device) = candle_core::CudaDevice::new(0) else {
+            // No CUDA device in this environment; the CPU fallback test above
+            // already covers the shared fallback path.
+            return Ok(());
+        };
+        let device = candle_core::Device::Cuda(device);
+
+        // Multi-row input must not collapse to the last row; k above the
+        // kernel limit must take the sort fallback.
+        let x = Tensor::arange(0f32, 6000f32, &device)?.reshape((2, 3000))?;
+        let TopKOutput { values, indices } = x.topk(200)?;
+        assert_eq!(values.dims(), &[2, 200]);
+        assert_eq!(indices.dims(), &[2, 200]);
+        let indices_host = indices
+            .to_device(&candle_core::Device::Cpu)?
+            .to_vec2::<u32>()?;
+        for (row, indices_row) in indices_host.iter().enumerate() {
+            for (offset, index) in indices_row.iter().enumerate() {
+                assert_eq!(*index, ((3000 - 1 - offset) as u32), "row {row}");
+            }
+        }
+
+        // Single-row input within the kernel limits stays on the optimized
+        // kernel and must agree with the sort fallback.
+        let flat = Tensor::arange(0f32, 4096f32, &device)?;
+        let TopKOutput { values, indices } = flat.topk(64)?;
+        assert_eq!(values.dims(), &[64]);
+        let indices_host = indices
+            .to_device(&candle_core::Device::Cpu)?
+            .to_vec1::<u32>()?;
+        for (offset, index) in indices_host.iter().enumerate() {
+            assert_eq!(*index, (4096 - 1 - offset) as u32);
+        }
+        Ok(())
     }
 
     #[test]

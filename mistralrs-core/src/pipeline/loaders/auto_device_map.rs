@@ -25,6 +25,18 @@ fn checked_memory_sum<const N: usize>(parts: [usize; N]) -> Option<usize> {
         .try_fold(0usize, |total, part| total.checked_add(part))
 }
 
+fn resident_weight_bytes(
+    weight_bytes: usize,
+    cpu_resident_weight_bytes: Option<usize>,
+    device: &Device,
+) -> usize {
+    if device.is_cpu() {
+        cpu_resident_weight_bytes.unwrap_or(weight_bytes)
+    } else {
+        weight_bytes
+    }
+}
+
 fn post_load_memory_config(
     requested: MemoryGpuConfig,
     pre_load_budget: MemoryGpuConfig,
@@ -204,6 +216,7 @@ pub fn get_device_layers(
     mut layer_sizes_in_bytes: Vec<usize>,
     non_mapped_size_in_bytes: usize,
     total_model_size_in_bytes: usize,
+    cpu_resident_weight_bytes: Option<usize>,
     devices: &[Device],
     dtype: DType,
     params: &AutoDeviceMapParams,
@@ -212,6 +225,17 @@ pub fn get_device_layers(
     let mapped_max = loader.mapped_max_act_size_elems(config, params)? * dtype.size_in_bytes();
     let non_mapped_max =
         loader.non_mapped_max_act_size_elems(config, params)? * dtype.size_in_bytes();
+    let mapped_context_workspace =
+        loader.mapped_context_workspace_size_in_bytes(config, dtype, params)?;
+    let non_mapped_context = loader.non_mapped_context_size_in_bytes(config, dtype, params)?;
+    let layer_auxiliary_cache_bytes =
+        loader.layer_auxiliary_cache_size_in_bytes(config, dtype, params)?;
+    if layer_auxiliary_cache_bytes.len() != num_layers {
+        anyhow::bail!(
+            "Loader returned {} auxiliary-cache layer estimates for {num_layers} mapped layers",
+            layer_auxiliary_cache_bytes.len()
+        );
+    }
 
     let mut layer_sizes_backup = if paged_attn_config.is_some() {
         Some(layer_sizes_in_bytes.clone())
@@ -228,6 +252,15 @@ pub fn get_device_layers(
         AutoDeviceMapParams::Text { max_batch_size, .. }
         | AutoDeviceMapParams::Multimodal { max_batch_size, .. } => *max_batch_size,
     };
+    for estimate in loader.context_memory_estimates(config, dtype, params)? {
+        info!(
+            "Estimated {} at context {}: {} bytes ({} MB).",
+            estimate.label,
+            params,
+            estimate.bytes,
+            b_to_mb!(estimate.bytes)
+        );
+    }
 
     let model_cfg = loader.model_config(config)?;
     let has_paged_attn = paged_attn_config.is_some();
@@ -244,7 +277,10 @@ pub fn get_device_layers(
                     let primary_dev = &devices[0];
                     let avail_bytes = MemoryUsage.query(primary_dev)?.available();
                     let cap = device_memory_cap(avail_bytes, primary_dev);
-                    let act_overhead = non_mapped_max.max(mapped_max);
+                    let act_overhead = non_mapped_max
+                        .max(mapped_max)
+                        .saturating_add(mapped_context_workspace)
+                        .saturating_add(non_mapped_context);
                     let budget_mb = cap
                         .saturating_sub(act_overhead)
                         .saturating_sub(base_device_memory_reservation_bytes)
@@ -255,7 +291,10 @@ pub fn get_device_layers(
                     let primary_dev = &devices[0];
                     let avail_bytes = MemoryUsage.query(primary_dev)?.available();
                     let cap = device_memory_cap(avail_bytes, primary_dev);
-                    let act_overhead = non_mapped_max.max(mapped_max);
+                    let act_overhead = non_mapped_max
+                        .max(mapped_max)
+                        .saturating_add(mapped_context_workspace)
+                        .saturating_add(non_mapped_context);
                     let budget_mb = cap
                         .saturating_sub(act_overhead)
                         .saturating_sub(base_device_memory_reservation_bytes)
@@ -273,7 +312,10 @@ pub fn get_device_layers(
                     let primary_dev = &devices[0];
                     let avail_bytes = MemoryUsage.query(primary_dev)?.available();
                     let cap = device_memory_cap(avail_bytes, primary_dev);
-                    let act_overhead = non_mapped_max.max(mapped_max);
+                    let act_overhead = non_mapped_max
+                        .max(mapped_max)
+                        .saturating_add(mapped_context_workspace)
+                        .saturating_add(non_mapped_context);
                     let occupied = saturating_memory_sum([
                         remaining,
                         act_overhead,
@@ -288,10 +330,21 @@ pub fn get_device_layers(
             };
             info!(
                 "Reserving {} MB on the primary device and {} MB on mapped devices for activations (predicted).",
-                b_to_mb!(non_mapped_max.max(mapped_max)),
-                b_to_mb!(mapped_max),
+                b_to_mb!(
+                    non_mapped_max
+                        .max(mapped_max)
+                        .saturating_add(mapped_context_workspace)
+                        .saturating_add(non_mapped_context)
+                ),
+                b_to_mb!(mapped_max.saturating_add(mapped_context_workspace)),
             );
-            cfg.reserve_activation_memory(non_mapped_max.max(mapped_max), mapped_max);
+            cfg.reserve_activation_memory(
+                non_mapped_max
+                    .max(mapped_max)
+                    .saturating_add(mapped_context_workspace)
+                    .saturating_add(non_mapped_context),
+                mapped_max.saturating_add(mapped_context_workspace),
+            );
             if base_device_memory_reservation_bytes > 0 {
                 info!(
                     "Reserving {} MB on the primary device for post-load model components.",
@@ -372,6 +425,8 @@ pub fn get_device_layers(
 
     avail.reverse();
     layer_sizes_in_bytes.reverse();
+    let mut layer_auxiliary_cache_bytes = layer_auxiliary_cache_bytes;
+    layer_auxiliary_cache_bytes.reverse();
 
     let mut mappings = Vec::new();
     info!("Using automatic device mapping parameters: {params}.");
@@ -395,10 +450,14 @@ pub fn get_device_layers(
 
         // For GPU/accelerators: keep a small dynamic safety reserve to avoid OOMs
         let cap = device_memory_cap(avail_bytes, &dev);
+        let file_backed_cpu = cpu_resident_weight_bytes.is_some() && dev.is_cpu();
+        let resident_non_mapped_weights = non_mapped_size_in_bytes;
         if ordinal == 0
             && checked_memory_sum([
                 non_mapped_max.max(mapped_max),
-                non_mapped_size_in_bytes,
+                mapped_context_workspace,
+                non_mapped_context,
+                resident_non_mapped_weights,
                 base_device_memory_reservation_bytes,
             ])
             .is_none_or(|required| required > cap)
@@ -417,28 +476,44 @@ pub fn get_device_layers(
         //   - if this is the first dev: must hold the non-mapped act and non-mapped model
         //   - otherwise, must hold the mapped act
         let remaining_kv_bytes = (layer..num_layers).map(kv_bytes_for_layer).sum::<usize>();
+        let remaining_auxiliary_bytes = layer_auxiliary_cache_bytes.iter().sum::<usize>();
+        let resident_remaining = if file_backed_cpu {
+            resident_weight_bytes(remaining, cpu_resident_weight_bytes, &dev)
+        } else {
+            remaining
+        };
         let required_whole_capacity = if ordinal == 0 {
             checked_memory_sum([
-                remaining,
+                resident_remaining,
                 non_mapped_max.max(mapped_max),
+                mapped_context_workspace,
+                non_mapped_context,
                 remaining_kv_bytes,
+                remaining_auxiliary_bytes,
                 extra_kv_bytes,
                 base_device_memory_reservation_bytes,
             ])
         } else {
-            checked_memory_sum([remaining, mapped_max, remaining_kv_bytes])
+            checked_memory_sum([
+                resident_remaining,
+                mapped_max,
+                mapped_context_workspace,
+                remaining_kv_bytes,
+                remaining_auxiliary_bytes,
+            ])
         };
 
         let layers_on_dev = if required_whole_capacity.is_some_and(|required| cap >= required) {
             remaining = 0;
             num_layers - layer
         } else {
-            let mut used = mapped_max;
+            let mut used = mapped_max.saturating_add(mapped_context_workspace);
             let mut used_weight_bytes = 0usize;
             let mut count = 0;
             if ordinal == 0 {
                 used = checked_memory_sum([
                     used.max(non_mapped_max),
+                    non_mapped_context,
                     non_mapped_size_in_bytes,
                     extra_kv_bytes,
                     base_device_memory_reservation_bytes,
@@ -446,8 +521,14 @@ pub fn get_device_layers(
                 .unwrap_or(usize::MAX);
                 used_weight_bytes = used_weight_bytes.saturating_add(non_mapped_size_in_bytes);
             }
-            while let Some(&sz) = layer_sizes_in_bytes.last() {
-                let Some(delta) = sz.checked_add(kv_bytes_for_layer(layer + count)) else {
+            while let (Some(&sz), Some(&auxiliary_size)) = (
+                layer_sizes_in_bytes.last(),
+                layer_auxiliary_cache_bytes.last(),
+            ) {
+                let Some(delta) = sz
+                    .checked_add(kv_bytes_for_layer(layer + count))
+                    .and_then(|bytes| bytes.checked_add(auxiliary_size))
+                else {
                     break;
                 };
                 let Some(next_used) = used.checked_add(delta) else {
@@ -457,6 +538,7 @@ pub fn get_device_layers(
                     break;
                 }
                 layer_sizes_in_bytes.pop();
+                layer_auxiliary_cache_bytes.pop();
                 used = next_used;
                 used_weight_bytes = used_weight_bytes.saturating_add(sz);
                 count += 1;
@@ -505,6 +587,7 @@ pub fn get_device_layers(
             original_layers,
             non_mapped_size_in_bytes,
             total_model_size_in_bytes,
+            cpu_resident_weight_bytes,
             devices,
             dtype,
             params,
@@ -582,6 +665,20 @@ mod tests {
     fn checked_memory_sum_distinguishes_max_from_overflow() {
         assert_eq!(checked_memory_sum([usize::MAX - 1, 1]), Some(usize::MAX));
         assert_eq!(checked_memory_sum([usize::MAX, 1]), None);
+    }
+
+    #[test]
+    fn file_backed_weight_estimates_only_replace_cpu_resident_accounting() {
+        let bytes = 80 * 1024 * 1024 * 1024usize;
+        let resident = 2 * 1024 * 1024 * 1024usize;
+        assert_eq!(
+            resident_weight_bytes(bytes, Some(resident), &Device::Cpu),
+            resident
+        );
+        assert_eq!(resident_weight_bytes(bytes, None, &Device::Cpu), bytes);
+        if let Ok(device) = Device::new_metal(0) {
+            assert_eq!(resident_weight_bytes(bytes, Some(resident), &device), bytes);
+        }
     }
 
     #[test]

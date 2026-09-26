@@ -71,6 +71,22 @@ pub fn qtensor_indexed_moe_forward(
 
     let device = x.device();
 
+    // Fail closed: dequantizing the complete stack on an accelerator
+    // materializes every expert densely and exhausts device memory on large MoE
+    // checkpoints. CPU keeps the legacy fallback because system RAM bounds it;
+    // Metal stacked experts take the bounded kernel path via GgufMetalExperts.
+    if !device.is_cpu() {
+        candle_core::bail!(
+            "GGUF stacked experts {:?} on {device:?} with dtype {:?} have no bounded indexed \
+             MoE kernel for this device; running them would fully dequantize every expert \
+             ({} experts). Load with `--cpu` so the experts stay mmap-backed, or use a quant \
+             whose routed experts are supported natively on this device",
+            qtensor.shape().dims(),
+            qtensor.dtype(),
+            qtensor.shape().dim(0)?,
+        );
+    }
+
     // Dequantize all weights to f32
     let weights = qtensor.dequantize(device)?;
 

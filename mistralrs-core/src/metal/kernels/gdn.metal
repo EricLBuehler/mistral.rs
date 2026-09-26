@@ -547,3 +547,76 @@ template <typename T>
 
 instantiate_gdn_gating(half);
 instantiate_gdn_gating(bfloat16_t);
+
+// ============================================================================
+// Kernel 4: rmsnorm_gated
+//
+// Fused RMSNorm with an activation gate for the GDN output projection,
+// mirroring the CUDA `gdn_rmsnorm_gated` kernels. One threadgroup per row;
+// GATE_SILU selects silu(gate) vs sigmoid(gate) at compile time so the
+// sigmoid-gated Qwen4Exp GDN norm runs fused on Metal instead of falling
+// back to the composed Candle chain.
+//
+// x, gate: [rows, H] contiguous (same logical shape flattened)
+// weight:  [H]        output: [rows, H]
+// ============================================================================
+
+template <typename T, int GATE_SILU>
+[[kernel]] void rmsnorm_gated_kernel(
+    const device T *x [[buffer(0)]], const device T *gate [[buffer(1)]],
+    const device T *weight [[buffer(2)]], device T *output [[buffer(3)]],
+    constant uint &hidden [[buffer(4)]], constant float &eps [[buffer(5)]],
+    uint tgpig [[threadgroup_position_in_grid]],
+    uint tg_size [[threads_per_threadgroup]],
+    uint gid [[thread_position_in_threadgroup]],
+    uint simd_lane [[thread_index_in_simdgroup]],
+    uint simd_group [[simdgroup_index_in_threadgroup]],
+    uint simd_groups [[simdgroups_per_threadgroup]]) {
+  const size_t row = tgpig;
+  const device T *x_row = x + row * (size_t)hidden;
+  const device T *g_row = gate + row * (size_t)hidden;
+  device T *o_row = output + row * (size_t)hidden;
+
+  float partial = 0.0f;
+  for (uint i = gid; i < hidden; i += tg_size) {
+    const float v = (float)x_row[i];
+    partial = fma(v, v, partial);
+  }
+  const float warp_total = simd_sum(partial);
+
+  threadgroup float sums[32];
+  if (simd_lane == 0) {
+    sums[simd_group] = warp_total;
+  }
+  threadgroup_barrier(mem_flags::mem_threadgroup);
+
+  float sum = 0.0f;
+  for (uint s = 0; s < simd_groups; s++) {
+    sum += sums[s];
+  }
+
+  const float inv_rms = rsqrt(sum / (float)hidden + eps);
+
+  for (uint i = gid; i < hidden; i += tg_size) {
+    const float g = (float)g_row[i];
+    const float act =
+        GATE_SILU ? g / (1.0f + exp(-g)) : 1.0f / (1.0f + exp(-g));
+    o_row[i] =
+        (T)((float)x_row[i] * inv_rms * (float)weight[i] * act);
+  }
+}
+
+#define instantiate_rmsnorm_gated(type, name)                                  \
+  template [[host_name("rmsnorm_gated_silu_" #name)]] [[kernel]]               \
+  void rmsnorm_gated_kernel<type, 1>(                                          \
+      const device type *, const device type *, const device type *,           \
+      device type *, constant uint &, constant float &, uint, uint, uint,      \
+      uint, uint, uint);                                                       \
+  template [[host_name("rmsnorm_gated_sigmoid_" #name)]] [[kernel]]            \
+  void rmsnorm_gated_kernel<type, 0>(                                          \
+      const device type *, const device type *, const device type *,           \
+      device type *, constant uint &, constant float &, uint, uint, uint,      \
+      uint, uint, uint);
+
+instantiate_rmsnorm_gated(half, half);
+instantiate_rmsnorm_gated(bfloat16_t, bfloat16_t);

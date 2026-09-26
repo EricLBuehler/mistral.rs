@@ -352,6 +352,7 @@ impl GdnWeights {
             cfg.rms_norm_eps(),
             vb_la.pp("norm"),
             isq_target_device.as_ref(),
+            cfg.output_gate(),
         )?;
         let out_spec = row_input_lora_spec(
             dims.value_dim,
