@@ -230,7 +230,7 @@ impl CacheEngine {
                                 * key_block_shape.1
                                 * key_block_shape.2
                                 * key_block_shape.3;
-                            let buffer = dev.new_private_buffer(elem_count, dtype, "k_cache")?;
+                            let buffer = new_kv_buffer(dev, elem_count, dtype, "k_cache")?;
                             let storage = Storage::Metal(MetalStorage::new(
                                 buffer,
                                 dev.clone(),
@@ -278,7 +278,7 @@ impl CacheEngine {
                                 * value_block_shape.0
                                 * value_block_shape.1
                                 * value_block_shape.2;
-                            let buffer = dev.new_private_buffer(elem_count, dtype, "v_cache")?;
+                            let buffer = new_kv_buffer(dev, elem_count, dtype, "v_cache")?;
                             let storage = Storage::Metal(MetalStorage::new(
                                 buffer,
                                 dev.clone(),
@@ -332,7 +332,7 @@ impl CacheEngine {
                                 * key_block_shape.0
                                 * key_block_shape.1
                                 * key_block_shape.2;
-                            let buffer = dev.new_private_buffer(elem_count, dtype, "k_cache")?;
+                            let buffer = new_kv_buffer(dev, elem_count, dtype, "k_cache")?;
                             let storage = Storage::Metal(MetalStorage::new(
                                 buffer,
                                 dev.clone(),
@@ -394,7 +394,7 @@ impl CacheEngine {
 
                             let elem_count =
                                 num_gpu_blocks * cache_config.block_size * kv_lora_rank;
-                            let buffer = dev.new_private_buffer(elem_count, dtype, "k_cache")?;
+                            let buffer = new_kv_buffer(dev, elem_count, dtype, "k_cache")?;
                             let storage = Storage::Metal(MetalStorage::new(
                                 buffer,
                                 dev.clone(),
@@ -432,7 +432,7 @@ impl CacheEngine {
 
                             let elem_count =
                                 num_gpu_blocks * cache_config.block_size * kpe_head_dim;
-                            let buffer = dev.new_private_buffer(elem_count, dtype, "v_cache")?;
+                            let buffer = new_kv_buffer(dev, elem_count, dtype, "v_cache")?;
                             let storage = Storage::Metal(MetalStorage::new(
                                 buffer,
                                 dev.clone(),
@@ -654,4 +654,15 @@ mod tests {
         assert_eq!(incompatible.fa3_prefill_num_sm_by_layer(), &[None, None]);
         Ok(())
     }
+}
+
+// Metal refuses zero-length buffers, and hybrid models give their linear-attention layers 0 blocks.
+#[cfg(feature = "metal")]
+fn new_kv_buffer(
+    dev: &candle_core::MetalDevice,
+    elem_count: usize,
+    dtype: DType,
+    name: &str,
+) -> Result<std::sync::Arc<candle_metal_kernels::metal::Buffer>> {
+    dev.new_private_buffer(elem_count.max(1), dtype, name)
 }
