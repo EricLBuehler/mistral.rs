@@ -135,7 +135,7 @@ derive_more = { version = "2.1.1", default-features = false, features = ["from"]
 akin = "0.4.0"
 variantly = "0.4.0"
 derive-new = "0.7.0"
-sysinfo = "0.36.1"
+sysinfo = "0.38.4"
 csv = "1.4.0"
 bytemuck_derive = "1.10.2"
 uuid = "1.19.0"
