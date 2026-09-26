@@ -991,6 +991,34 @@ pub fn call_afq_qmm(
         4
     };
 
+    // Decode batches: read each weight block once for every row instead of once per row.
+    if transpose && !batched && !gather && (QMV_ROWS_MIN..=QMM_SMALL_MAX_ROWS).contains(&b) {
+        let args = QmvRows {
+            ty,
+            x: (x, x_offset),
+            w,
+            scales,
+            biases,
+            out,
+            in_vec_size: d,
+            out_vec_size: o,
+            num_rows: b,
+            bits,
+            group_size,
+        };
+        let qmv_fast_shape = o.is_multiple_of(8) && d.is_multiple_of(512) && d >= 512;
+        let qmv_quad_shape = (d == 128 || d == 64) && bits.is_power_of_two();
+        return if b <= QMV_ROWS_MAX_FOR_ROWS_KERNEL
+            && qmv_fast_shape
+            && !qmv_quad_shape
+            && QMV_ROWS_BITS.contains(&bits)
+        {
+            encode_qmv_fast_rows(device, ep, kernels, args)
+        } else {
+            encode_qmm_t_small(device, ep, kernels, args)
+        };
+    }
+
     let (group_dims, grid_dims) = if transpose {
         if b < qmv_limit && (d == 128 || d == 64) && bits.is_power_of_two() {
             name.push_str("qmv_quad");
@@ -1231,6 +1259,138 @@ pub fn call_afq_qmm(
     }
 
     encoder.dispatch_thread_groups(grid_dims, group_dims);
+    Ok(())
+}
+
+// Below this many rows plain qmv_fast already reads the weights once.
+const QMV_ROWS_MIN: usize = 2;
+// qmv_fast_rows dequantizes by shift-and-mask, which needs a power-of-two bit width.
+const QMV_ROWS_BITS: [usize; 3] = [2, 4, 8];
+// Rows per threadgroup; more spill the per-row activation registers.
+const QMV_ROWS_MAX: usize = 4;
+// From 4 rows qmm_t_small's MMA tiles beat qmv_fast_rows (flat cost up to its 8-row tile).
+const QMV_ROWS_MAX_FOR_ROWS_KERNEL: usize = 3;
+
+struct QmvRows<'a> {
+    ty: DType,
+    x: (&'a Buffer, usize),
+    w: &'a Buffer,
+    scales: &'a Buffer,
+    biases: &'a Buffer,
+    out: &'a Buffer,
+    in_vec_size: usize,
+    out_vec_size: usize,
+    num_rows: usize,
+    bits: usize,
+    group_size: usize,
+}
+
+/// Small-batch qmv that reads each weight block once for up to 8 input rows.
+fn encode_qmv_fast_rows(
+    device: &Device,
+    ep: impl EncoderProvider,
+    kernels: &Kernels,
+    args: QmvRows<'_>,
+) -> Result<(), MetalKernelError> {
+    const RESULTS_PER_THREADGROUP: usize = 8;
+    let rows_per_group = if args.num_rows <= 2 { 2 } else { QMV_ROWS_MAX };
+    let type_string = match args.ty {
+        DType::F32 => "float",
+        DType::BF16 => "bfloat16_t",
+        DType::F16 => "float16_t",
+        other => {
+            return Err(MetalKernelError::DTypeMismatch {
+                expected: vec![DType::F32, DType::F16, DType::BF16],
+                got: other,
+            })
+        }
+    };
+    let name = format!(
+        "qmv_fast_rows_{type_string}_gs_{}_b_{}_r_{rows_per_group}",
+        args.group_size, args.bits
+    );
+    let pipeline = kernels.load_pipeline(device, &name)?;
+    let encoder = ep.encoder();
+    let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
+    encoder.set_compute_pipeline_state(&pipeline);
+    encoder.set_input_buffer(0, Some(args.w), 0);
+    encoder.set_input_buffer(1, Some(args.scales), 0);
+    encoder.set_input_buffer(2, Some(args.biases), 0);
+    encoder.set_input_buffer(3, Some(args.x.0), args.x.1);
+    encoder.set_output_buffer(4, Some(args.out), 0);
+    <i32 as EncoderParam>::set_param(encoder, 5, args.in_vec_size as i32);
+    <i32 as EncoderParam>::set_param(encoder, 6, args.out_vec_size as i32);
+    <i32 as EncoderParam>::set_param(encoder, 7, args.num_rows as i32);
+    encoder.dispatch_thread_groups(
+        MTLSize {
+            width: args.out_vec_size / RESULTS_PER_THREADGROUP,
+            height: args.num_rows.div_ceil(rows_per_group),
+            depth: 1,
+        },
+        MTLSize {
+            width: 32,
+            height: 2,
+            depth: 1,
+        },
+    );
+    Ok(())
+}
+
+const QMM_SMALL_MAX_ROWS: usize = 16;
+
+/// Tiled qmm_t with 8- or 16-row tiles for decode batches.
+fn encode_qmm_t_small(
+    device: &Device,
+    ep: impl EncoderProvider,
+    kernels: &Kernels,
+    args: QmvRows<'_>,
+) -> Result<(), MetalKernelError> {
+    const BN: usize = 32;
+    let (bm, wm, wn) = if args.num_rows <= 8 {
+        (8, 1, 4)
+    } else {
+        (16, 2, 2)
+    };
+    let type_string = match args.ty {
+        DType::F32 => "float",
+        DType::BF16 => "bfloat16_t",
+        DType::F16 => "float16_t",
+        other => {
+            return Err(MetalKernelError::DTypeMismatch {
+                expected: vec![DType::F32, DType::F16, DType::BF16],
+                got: other,
+            })
+        }
+    };
+    let aligned = args.out_vec_size.is_multiple_of(BN);
+    let name = format!(
+        "qmm_t_small_{type_string}_gs_{}_b_{}_alN_{aligned}_bm_{bm}",
+        args.group_size, args.bits
+    );
+    let pipeline = kernels.load_pipeline(device, &name)?;
+    let encoder = ep.encoder();
+    let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
+    encoder.set_compute_pipeline_state(&pipeline);
+    encoder.set_input_buffer(0, Some(args.w), 0);
+    encoder.set_input_buffer(1, Some(args.scales), 0);
+    encoder.set_input_buffer(2, Some(args.biases), 0);
+    encoder.set_input_buffer(3, Some(args.x.0), args.x.1);
+    encoder.set_output_buffer(4, Some(args.out), 0);
+    <i32 as EncoderParam>::set_param(encoder, 5, args.in_vec_size as i32);
+    <i32 as EncoderParam>::set_param(encoder, 6, args.out_vec_size as i32);
+    <i32 as EncoderParam>::set_param(encoder, 7, args.num_rows as i32);
+    encoder.dispatch_thread_groups(
+        MTLSize {
+            width: args.out_vec_size.div_ceil(BN),
+            height: args.num_rows.div_ceil(bm),
+            depth: 1,
+        },
+        MTLSize {
+            width: 32,
+            height: wn,
+            depth: wm,
+        },
+    );
     Ok(())
 }
 
