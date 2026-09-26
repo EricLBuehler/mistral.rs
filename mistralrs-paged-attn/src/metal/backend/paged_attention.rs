@@ -223,7 +223,68 @@ impl candle_core::CustomOp1 for PagedAttention {
 
         let out = dev.new_buffer(elem_count, q.dtype(), "paged-attention-out")?;
 
-        if use_v1 {
+        let gqa = num_heads / num_kv_heads;
+        let use_gqa_decode = matches!(ty, PagedAttentionDType::BF16 | PagedAttentionDType::F16)
+            && cache_ty == ty
+            && k_v_scale.is_none()
+            && alibi_storage_and_offset.is_none()
+            && sinks_storage_and_offset.is_none()
+            && self.softcapping == 1.0
+            && block_size == kernels::PAGED_DECODE_BLOCK_SIZE
+            && x == 8
+            && kernels::PAGED_DECODE_HEAD_SIZES.contains(&head_size)
+            && num_heads % num_kv_heads == 0
+            && (1..=kernels::PAGED_DECODE_MAX_GQA).contains(&gqa);
+
+        if use_gqa_decode {
+            let partition_size =
+                kernels::paged_decode_partition_size(self.max_context_len, num_seqs, num_kv_heads);
+            let num_partitions = self.max_context_len.div_ceil(partition_size);
+            let partials_len = num_seqs * num_heads * num_partitions;
+            let scratch = (num_partitions > 1)
+                .then(|| -> Result<_> {
+                    Ok((
+                        dev.new_buffer(partials_len, DType::F32, "paged-decode-expsums")?,
+                        dev.new_buffer(partials_len, DType::F32, "paged-decode-maxlogits")?,
+                        dev.new_buffer(partials_len * head_size, q.dtype(), "paged-decode-tmpout")?,
+                    ))
+                })
+                .transpose()?;
+            let dtype_size = |dtype: DType| dtype.size_in_bytes();
+            kernels::call_paged_decode_gqa(
+                dev.device(),
+                &encoder,
+                &kernels::Kernels::new(),
+                kernels::PagedDecodeArgs {
+                    ty,
+                    q: (q.buffer(), q_l.start_offset() * dtype_size(q.dtype())),
+                    k_cache: (kc.buffer(), kc_l.start_offset() * dtype_size(kc.dtype())),
+                    v_cache: (vc.buffer(), vc_l.start_offset() * dtype_size(vc.dtype())),
+                    block_tables: (bt.buffer(), bt_l.start_offset() * dtype_size(bt.dtype())),
+                    context_lens: (cl.buffer(), cl_l.start_offset() * dtype_size(cl.dtype())),
+                    output: &out,
+                    partials: scratch.as_ref().map(|(exp_sums, max_logits, tmp_out)| {
+                        kernels::PagedDecodePartials {
+                            exp_sums,
+                            max_logits,
+                            tmp_out,
+                        }
+                    }),
+                    scale: self.softmax_scale,
+                    partition_size,
+                    max_context_len: self.max_context_len as i32,
+                    num_seqs: num_seqs as i32,
+                    num_heads: num_heads as i32,
+                    num_kv_heads: num_kv_heads as i32,
+                    head_size: head_size as i32,
+                    max_num_blocks_per_seq: max_num_blocks_per_seq as i32,
+                    q_stride: q_stride as i32,
+                    kv_block_stride: kv_block_stride as i32,
+                    kv_head_stride: kv_head_stride as i32,
+                },
+            )
+            .map_err(candle_core::Error::wrap)?;
+        } else if use_v1 {
             kernels::call_paged_attention_v1(
                 dev.device(),
                 &encoder,

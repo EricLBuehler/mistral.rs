@@ -563,6 +563,17 @@ impl CacheEngine {
     }
 }
 
+// Metal refuses zero-length buffers, and hybrid models give their linear-attention layers 0 blocks.
+#[cfg(feature = "metal")]
+fn new_kv_buffer(
+    dev: &candle_core::MetalDevice,
+    elem_count: usize,
+    dtype: DType,
+    name: &str,
+) -> Result<std::sync::Arc<candle_metal_kernels::metal::Buffer>> {
+    dev.new_private_buffer(elem_count.max(1), dtype, name)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -654,15 +665,4 @@ mod tests {
         assert_eq!(incompatible.fa3_prefill_num_sm_by_layer(), &[None, None]);
         Ok(())
     }
-}
-
-// Metal refuses zero-length buffers, and hybrid models give their linear-attention layers 0 blocks.
-#[cfg(feature = "metal")]
-fn new_kv_buffer(
-    dev: &candle_core::MetalDevice,
-    elem_count: usize,
-    dtype: DType,
-    name: &str,
-) -> Result<std::sync::Arc<candle_metal_kernels::metal::Buffer>> {
-    dev.new_private_buffer(elem_count.max(1), dtype, name)
 }

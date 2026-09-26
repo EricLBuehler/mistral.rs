@@ -56,10 +56,15 @@ type Pipelines = HashMap<(String, Option<ConstantValues>), ComputePipelineState>
 
 static LIBRARY: OnceLock<Library> = OnceLock::new();
 
-#[derive(Debug)]
-pub struct Kernels {
-    pipelines: RwLock<Pipelines>,
+// Process-wide: callers construct `Kernels` per dispatch, so a per-instance cache rebuilt pipelines every call.
+static PIPELINES: OnceLock<RwLock<Pipelines>> = OnceLock::new();
+
+fn pipelines() -> &'static RwLock<Pipelines> {
+    PIPELINES.get_or_init(|| RwLock::new(Pipelines::new()))
 }
+
+#[derive(Debug)]
+pub struct Kernels;
 
 impl Default for Kernels {
     fn default() -> Self {
@@ -69,8 +74,7 @@ impl Default for Kernels {
 
 impl Kernels {
     pub fn new() -> Self {
-        let pipelines = RwLock::new(Pipelines::new());
-        Self { pipelines }
+        Self
     }
 
     /// Load the library from precompiled metallib, falling back to runtime compilation if needed.
@@ -132,7 +136,7 @@ impl Kernels {
         name: String,
         constants: Option<ConstantValues>,
     ) -> Result<ComputePipelineState, MetalKernelError> {
-        let mut pipelines = self.pipelines.write()?;
+        let mut pipelines = pipelines().write()?;
         let key = (name, constants);
         if let Some(pipeline) = pipelines.get(&key) {
             Ok(pipeline.clone())
@@ -217,7 +221,7 @@ pub fn call_copy_blocks(
     Ok(())
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PagedAttentionDType {
     F16 = 0,
     BF16 = 1,
@@ -226,7 +230,7 @@ pub enum PagedAttentionDType {
 }
 
 impl PagedAttentionDType {
-    fn to_repr(&self) -> &'static str {
+    fn to_repr(self) -> &'static str {
         match self {
             PagedAttentionDType::F32 => "float",
             PagedAttentionDType::BF16 => "bfloat16_t",
@@ -605,66 +609,26 @@ pub fn call_paged_attention_v2(
         encoder.dispatch_thread_groups(thread_groups_count, thread_group_size);
     }
 
-    // Paged attention reduce kernel
-    {
-        let name = match ty {
-            PagedAttentionDType::F32 => "paged_attention_v2_reduce_float",
-            PagedAttentionDType::BF16 => "paged_attention_v2_reduce_bfloat16_t",
-            PagedAttentionDType::F16 => "paged_attention_v2_reduce_half",
-            PagedAttentionDType::F8E4M3 => {
-                return Err(MetalKernelError::DTypeMismatch {
-                    expected: vec![DType::F32, DType::F16, DType::BF16],
-                    got: DType::F8E4M3,
-                })
-            }
-        };
-        let mut name = name.to_string();
-        name.push_str(&format!("_hs{head_size}"));
-        name.push_str(&format!("_nt{NUM_THREADS}"));
-        name.push_str(&format!("_nsl{NUM_SIMD_LANES}"));
-        name.push_str(&format!("_ps{PARTITION_SIZE}"));
-
-        let reduce_constants = Some(ConstantValues::new(vec![(
-            40,
-            Value::Bool(/* use_sinks */ sinks.is_some()),
-        )]));
-        let pipeline = kernels.load_pipeline_with_constants(device, name, reduce_constants)?;
-
-        let encoder = ep.encoder();
-        let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
-        encoder.set_compute_pipeline_state(&pipeline);
-
-        let max_num_partitions =
-            (max_context_len + PARTITION_SIZE as i32 - 1) / PARTITION_SIZE as i32;
-        let reduce_shared_mem_size = 2 * max_num_partitions * std::mem::size_of::<f32>() as i32;
-        encoder.set_threadgroup_memory_length(0, reduce_shared_mem_size as usize);
-
-        encoder.set_output_buffer(0, Some(output), 0_usize);
-        encoder.set_input_buffer(1, Some(exp_sums), 0_usize);
-        encoder.set_input_buffer(2, Some(max_logits), 0_usize);
-        encoder.set_input_buffer(3, Some(tmp_out), 0_usize);
-        encoder.set_input_buffer(4, Some(context_lens), context_lens_offset);
-        encoder.set_bytes_raw(
-            5,
-            core::mem::size_of_val(&max_num_partitions),
-            &max_num_partitions as *const _ as *const c_void,
-        );
-        if let Some((sinks_buf, sinks_offset)) = sinks {
-            encoder.set_input_buffer(6, Some(sinks_buf), sinks_offset);
-        }
-
-        let thread_groups_count = MTLSize {
-            width: num_heads as usize,
-            height: num_seqs as usize,
-            depth: 1,
-        };
-        let thread_group_size = MTLSize {
-            width: NUM_THREADS,
-            height: 1,
-            depth: 1,
-        };
-        encoder.dispatch_thread_groups(thread_groups_count, thread_group_size);
-    }
+    encode_v2_reduce(
+        device,
+        ep,
+        kernels,
+        ty,
+        V2Reduce {
+            exp_sums,
+            max_logits,
+            tmp_out,
+            output,
+            context_lens,
+            context_lens_offset,
+            sinks,
+            partition_size: PARTITION_SIZE,
+            max_context_len,
+            num_seqs,
+            num_heads,
+            head_size,
+        },
+    )?;
     Ok(())
 }
 
@@ -833,5 +797,255 @@ pub fn call_kv_scale_update(
         depth: 1,
     };
     encoder.dispatch_thread_groups(thread_groups_count, thread_group_size);
+    Ok(())
+}
+
+/// Inputs for the v2 reduce pass.
+pub struct V2Reduce<'a> {
+    pub exp_sums: &'a Buffer,
+    pub max_logits: &'a Buffer,
+    pub tmp_out: &'a Buffer,
+    pub output: &'a Buffer,
+    pub context_lens: &'a Buffer,
+    pub context_lens_offset: usize,
+    pub sinks: Option<(&'a Buffer, usize)>,
+    pub partition_size: usize,
+    pub max_context_len: i32,
+    pub num_seqs: i32,
+    pub num_heads: i32,
+    pub head_size: i32,
+}
+
+/// Merges 512-token partition partials into the final output; shared by v2 and the GQA decode kernel.
+fn encode_v2_reduce(
+    device: &Device,
+    ep: impl EncoderProvider,
+    kernels: &Kernels,
+    ty: PagedAttentionDType,
+    reduce: V2Reduce<'_>,
+) -> Result<(), MetalKernelError> {
+    const NUM_THREADS: usize = 256;
+    const NUM_SIMD_LANES: usize = 32;
+    let V2Reduce {
+        exp_sums,
+        max_logits,
+        tmp_out,
+        output,
+        context_lens,
+        context_lens_offset,
+        sinks,
+        partition_size,
+        max_context_len,
+        num_seqs,
+        num_heads,
+        head_size,
+    } = reduce;
+    let name = match ty {
+        PagedAttentionDType::F32 => "paged_attention_v2_reduce_float",
+        PagedAttentionDType::BF16 => "paged_attention_v2_reduce_bfloat16_t",
+        PagedAttentionDType::F16 => "paged_attention_v2_reduce_half",
+        PagedAttentionDType::F8E4M3 => {
+            return Err(MetalKernelError::DTypeMismatch {
+                expected: vec![DType::F32, DType::F16, DType::BF16],
+                got: DType::F8E4M3,
+            })
+        }
+    };
+    let mut name = name.to_string();
+    name.push_str(&format!("_hs{head_size}"));
+    name.push_str(&format!("_nt{NUM_THREADS}"));
+    name.push_str(&format!("_nsl{NUM_SIMD_LANES}"));
+    name.push_str(&format!("_ps{partition_size}"));
+
+    let reduce_constants = Some(ConstantValues::new(vec![(
+        40,
+        Value::Bool(/* use_sinks */ sinks.is_some()),
+    )]));
+    let pipeline = kernels.load_pipeline_with_constants(device, name, reduce_constants)?;
+
+    let encoder = ep.encoder();
+    let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
+    encoder.set_compute_pipeline_state(&pipeline);
+
+    let max_num_partitions = (max_context_len + partition_size as i32 - 1) / partition_size as i32;
+    let reduce_shared_mem_size = 2 * max_num_partitions * std::mem::size_of::<f32>() as i32;
+    encoder.set_threadgroup_memory_length(0, reduce_shared_mem_size as usize);
+
+    encoder.set_output_buffer(0, Some(output), 0_usize);
+    encoder.set_input_buffer(1, Some(exp_sums), 0_usize);
+    encoder.set_input_buffer(2, Some(max_logits), 0_usize);
+    encoder.set_input_buffer(3, Some(tmp_out), 0_usize);
+    encoder.set_input_buffer(4, Some(context_lens), context_lens_offset);
+    encoder.set_bytes_raw(
+        5,
+        core::mem::size_of_val(&max_num_partitions),
+        &max_num_partitions as *const _ as *const c_void,
+    );
+    if let Some((sinks_buf, sinks_offset)) = sinks {
+        encoder.set_input_buffer(6, Some(sinks_buf), sinks_offset);
+    }
+
+    let thread_groups_count = MTLSize {
+        width: num_heads as usize,
+        height: num_seqs as usize,
+        depth: 1,
+    };
+    let thread_group_size = MTLSize {
+        width: NUM_THREADS,
+        height: 1,
+        depth: 1,
+    };
+    encoder.dispatch_thread_groups(thread_groups_count, thread_group_size);
+    Ok(())
+}
+
+/// Block size, head sizes and query/KV head ratios the GQA decode kernel is instantiated for.
+pub const PAGED_DECODE_BLOCK_SIZE: usize = 32;
+pub const PAGED_DECODE_HEAD_SIZES: [usize; 5] = [64, 96, 128, 192, 256];
+pub const PAGED_DECODE_MAX_GQA: usize = 8;
+const PAGED_DECODE_THREADS: usize = 128;
+// Reduce kernels are instantiated for exactly these partition sizes.
+const PAGED_DECODE_LONG_PARTITION: usize = 512;
+const PAGED_DECODE_SHORT_PARTITION: usize = 128;
+// Below this many threadgroups a 40-core GPU idles, so shorter partitions trade reduce work for occupancy.
+const PAGED_DECODE_MIN_THREADGROUPS: usize = 64;
+
+/// Inputs for [`call_paged_decode_gqa`]; the cache must use the [blocks, kv_heads, D/8, 32, 8] key layout.
+pub struct PagedDecodeArgs<'a> {
+    pub ty: PagedAttentionDType,
+    pub q: (&'a Buffer, usize),
+    pub k_cache: (&'a Buffer, usize),
+    pub v_cache: (&'a Buffer, usize),
+    pub block_tables: (&'a Buffer, usize),
+    pub context_lens: (&'a Buffer, usize),
+    pub output: &'a Buffer,
+    /// Required when the longest context spans more than one 512-token partition.
+    pub partials: Option<PagedDecodePartials<'a>>,
+    pub scale: f32,
+    /// From [`paged_decode_partition_size`]; the partials must be sized for it.
+    pub partition_size: usize,
+    pub max_context_len: i32,
+    pub num_seqs: i32,
+    pub num_heads: i32,
+    pub num_kv_heads: i32,
+    pub head_size: i32,
+    pub max_num_blocks_per_seq: i32,
+    pub q_stride: i32,
+    pub kv_block_stride: i32,
+    pub kv_head_stride: i32,
+}
+
+/// Per-partition scratch in the v2 layout: [seqs, heads, parts] sums and maxima, [seqs, heads, parts, D] outputs.
+pub struct PagedDecodePartials<'a> {
+    pub exp_sums: &'a Buffer,
+    pub max_logits: &'a Buffer,
+    pub tmp_out: &'a Buffer,
+}
+
+pub fn paged_decode_partition_size(
+    max_context_len: usize,
+    num_seqs: usize,
+    num_kv_heads: usize,
+) -> usize {
+    let long_threadgroups =
+        max_context_len.div_ceil(PAGED_DECODE_LONG_PARTITION) * num_seqs * num_kv_heads;
+    if long_threadgroups < PAGED_DECODE_MIN_THREADGROUPS {
+        PAGED_DECODE_SHORT_PARTITION
+    } else {
+        PAGED_DECODE_LONG_PARTITION
+    }
+}
+
+/// GQA-aware paged decode: one threadgroup per (partition, kv head, sequence) reads each KV block once.
+pub fn call_paged_decode_gqa(
+    device: &Device,
+    ep: impl EncoderProvider,
+    kernels: &Kernels,
+    args: PagedDecodeArgs<'_>,
+) -> Result<(), MetalKernelError> {
+    let max_num_partitions = (args.max_context_len as usize).div_ceil(args.partition_size);
+    let gqa = args.num_heads / args.num_kv_heads;
+    let name = format!(
+        "paged_decode_gqa_{}_hs{}_g{gqa}",
+        args.ty.to_repr(),
+        args.head_size
+    );
+    let pipeline = kernels.load_pipeline_with_constants(device, name, None)?;
+
+    let (exp_sums, max_logits, tmp_out) = match &args.partials {
+        Some(p) => (p.exp_sums, p.max_logits, p.tmp_out),
+        None => (args.output, args.output, args.output),
+    };
+
+    {
+        let encoder = ep.encoder();
+        let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
+        encoder.set_compute_pipeline_state(&pipeline);
+        encoder.set_output_buffer(0, Some(args.output), 0);
+        encoder.set_output_buffer(1, Some(exp_sums), 0);
+        encoder.set_output_buffer(2, Some(max_logits), 0);
+        encoder.set_output_buffer(3, Some(tmp_out), 0);
+        encoder.set_input_buffer(4, Some(args.q.0), args.q.1);
+        encoder.set_input_buffer(5, Some(args.k_cache.0), args.k_cache.1);
+        encoder.set_input_buffer(6, Some(args.v_cache.0), args.v_cache.1);
+        encoder.set_input_buffer(7, Some(args.block_tables.0), args.block_tables.1);
+        encoder.set_input_buffer(8, Some(args.context_lens.0), args.context_lens.1);
+        let max_parts = max_num_partitions as i32;
+        let partition_size = args.partition_size as i32;
+        for (index, value) in [
+            (9, args.max_num_blocks_per_seq),
+            (10, args.q_stride),
+            (11, args.kv_block_stride),
+            (12, args.kv_head_stride),
+            (14, max_parts),
+            (15, partition_size),
+        ] {
+            encoder.set_bytes_raw(
+                index,
+                core::mem::size_of_val(&value),
+                &value as *const _ as *const c_void,
+            );
+        }
+        encoder.set_bytes_raw(
+            13,
+            core::mem::size_of_val(&args.scale),
+            &args.scale as *const _ as *const c_void,
+        );
+        encoder.dispatch_thread_groups(
+            MTLSize {
+                width: max_num_partitions,
+                height: args.num_kv_heads as usize,
+                depth: args.num_seqs as usize,
+            },
+            MTLSize {
+                width: PAGED_DECODE_THREADS,
+                height: 1,
+                depth: 1,
+            },
+        );
+    }
+
+    if let Some(partials) = &args.partials {
+        encode_v2_reduce(
+            device,
+            ep,
+            kernels,
+            args.ty,
+            V2Reduce {
+                exp_sums: partials.exp_sums,
+                max_logits: partials.max_logits,
+                tmp_out: partials.tmp_out,
+                output: args.output,
+                context_lens: args.context_lens.0,
+                context_lens_offset: args.context_lens.1,
+                sinks: None,
+                partition_size: args.partition_size,
+                max_context_len: args.max_context_len,
+                num_seqs: args.num_seqs,
+                num_heads: args.num_heads,
+                head_size: args.head_size,
+            },
+        )?;
+    }
     Ok(())
 }
