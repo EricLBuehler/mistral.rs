@@ -391,6 +391,7 @@ pub fn calculate_cache_config(
     model_weight_size_in_bytes: Option<usize>,
     max_num_tokens: Option<usize>,
 ) -> anyhow::Result<CacheConfig> {
+    let fills_memory = matches!(mem_gpu, MemoryGpuConfig::Utilization(_));
     let block_size = block_size.unwrap_or(DEFAULT_PAGED_ATTENTION_BLOCK_SIZE);
     if !SUPPORTED_BLOCK_SIZE.contains(&block_size) {
         anyhow::bail!("Block size must be in {SUPPORTED_BLOCK_SIZE:?}, got {block_size}");
@@ -527,8 +528,14 @@ pub fn calculate_cache_config(
     // On CUDA, all available memory is used for maximum request concurrency (vLLM approach).
     #[allow(unused_mut, unused_variables)]
     let mut mem_gpu = min_mem_gpu;
-    if device.is_metal() || (device.is_cuda() && crate::utils::normal::is_integrated_gpu(device)) {
-        let max_tokens = max_num_tokens.unwrap_or(config.max_seq_len());
+    let cuda_unified = device.is_cuda() && crate::utils::normal::is_integrated_gpu(device);
+    if device.is_metal() || (cuda_unified && fills_memory) {
+        // CUDA iGPUs cap at the model's context; an explicit context or MB request is taken as is
+        let max_tokens = if cuda_unified {
+            config.max_seq_len()
+        } else {
+            max_num_tokens.unwrap_or(config.max_seq_len())
+        };
         let mem_for_tokens =
             ctxt_to_blocks!(max_tokens, dtype_size, block_size, config) / SIZE_IN_MB;
         if mem_for_tokens < mem_gpu {
