@@ -137,6 +137,11 @@ mistralrs serve -m Qwen/Qwen3.8-Flash-Next --isq q4k
 - Each attention query sees at most 2,051 tokens: its 512 highest-scoring 4-token blocks plus the incomplete tail. Below that context length attention is exact and uses the regular kernels; above it the CUDA backend runs dedicated sparse kernels over the paged KV cache, which keeps a small per-token indexer cache next to it.
 - Block-sparse attention with paged attention is CUDA-only. On other devices, use `--paged-attn off`.
 - The FP8 KV cache and tensor parallelism are not supported for this architecture, and the multi-token prediction head is ignored.
+- `qwen4exp` GGUF files from the llama.cpp converter load directly, with no `config.json` needed. `--quant` picks a variant and its vision projector from the repository, which enables image and video input. The IQ4_NL n-gram table is copied into device memory as is, so there is no quantization pass at startup.
+
+```bash
+mistralrs run -m unsloth/Qwen3.8-Flash-Next-GGUF --quant 4
+```
 
 ## Granite 4.0 (GraniteMoeHybrid)
 

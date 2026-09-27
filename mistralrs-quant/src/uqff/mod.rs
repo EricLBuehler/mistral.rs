@@ -345,6 +345,7 @@ pub struct ShardedVarBuilder {
     shapes: Option<Arc<HashMap<String, Vec<usize>>>>,
     lora_registry: Option<Arc<crate::LoraLayerRegistry>>,
     raw_safetensors: Option<Arc<crate::safetensors::MmapedSafetensors>>,
+    raw_gguf: Option<Arc<crate::GgufArchive>>,
 }
 
 impl ShardedVarBuilder {
@@ -356,6 +357,7 @@ impl ShardedVarBuilder {
             shapes: None,
             lora_registry: None,
             raw_safetensors: None,
+            raw_gguf: None,
         }
     }
 
@@ -371,6 +373,16 @@ impl ShardedVarBuilder {
     /// keeps the mappings alive, so views into it stay valid.
     pub fn raw_safetensors(&self) -> Option<Arc<crate::safetensors::MmapedSafetensors>> {
         self.raw_safetensors.clone()
+    }
+
+    pub(crate) fn with_raw_gguf(mut self, raw: Arc<crate::GgufArchive>) -> Self {
+        self.raw_gguf = Some(raw);
+        self
+    }
+
+    /// The GGUF archive behind this builder, for tensors a model reads as raw ggml blocks.
+    pub fn raw_gguf(&self) -> Option<Arc<crate::GgufArchive>> {
+        self.raw_gguf.clone()
     }
 
     pub(crate) fn with_shapes(mut self, shapes: HashMap<String, Vec<usize>>) -> Self {
@@ -403,6 +415,7 @@ impl ShardedVarBuilder {
             shapes: self.shapes.clone(),
             lora_registry: self.lora_registry.clone(),
             raw_safetensors: self.raw_safetensors.clone(),
+            raw_gguf: self.raw_gguf.clone(),
         }
     }
 

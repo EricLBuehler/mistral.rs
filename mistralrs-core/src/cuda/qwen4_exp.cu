@@ -309,15 +309,22 @@ q4_ple_gather_kernel(const long long *__restrict__ rows, int n_lookups,
   }
 }
 
-// Gather from the device-resident quantized table: per row, symmetric int8
-// (bits = 8) or offset-8 nibbles (bits = 4) with one f16 scale per group of
-// Q4_PLE_GROUP values.
+// Gather from the device-resident quantized table. Q8/Q4: per row, symmetric
+// int8 or offset-8 nibbles with one f16 scale per Q4_PLE_GROUP values in
+// `scales`. IQ4_NL: ggml block_iq4_nl rows (f16 scale + 16 nibble bytes per
+// Q4_PLE_GROUP values, low nibbles first) straight from a GGUF; `scales` unused.
 #define Q4_PLE_GROUP 32
+#define Q4_PLE_FMT_Q8 0
+#define Q4_PLE_FMT_Q4 1
+#define Q4_PLE_FMT_IQ4_NL 2
+#define Q4_IQ4_NL_BLOCK_BYTES 18
+__constant__ signed char q4_kvalues_iq4nl[16] = {
+    -127, -104, -83, -65, -49, -35, -22, -10, 1, 13, 25, 38, 53, 69, 89, 113};
 __global__ void
 q4_ple_gather_quant_kernel(const long long *__restrict__ rows, int n_lookups,
                            const unsigned char *__restrict__ data,
                            const __half *__restrict__ scales, int head_dim,
-                           int bits, __nv_bfloat16 *__restrict__ out) {
+                           int format, __nv_bfloat16 *__restrict__ out) {
   const int lookup = blockIdx.x * (blockDim.x >> 5) + (threadIdx.x >> 5);
   const int lane = threadIdx.x & 31;
   if (lookup >= n_lookups) {
@@ -325,10 +332,25 @@ q4_ple_gather_quant_kernel(const long long *__restrict__ rows, int n_lookups,
   }
   const size_t r = (size_t)rows[lookup];
   const int groups = head_dim / Q4_PLE_GROUP;
+  __nv_bfloat16 *dst = out + (size_t)lookup * head_dim;
+  if (format == Q4_PLE_FMT_IQ4_NL) {
+    const unsigned char *src =
+        data + r * (size_t)groups * Q4_IQ4_NL_BLOCK_BYTES;
+    for (int i = lane; i < head_dim; i += 32) {
+      const unsigned char *blk =
+          src + (size_t)(i / Q4_PLE_GROUP) * Q4_IQ4_NL_BLOCK_BYTES;
+      const int j = i % Q4_PLE_GROUP;
+      const unsigned char byte = blk[2 + (j & 15)];
+      const int idx = j < 16 ? (byte & 15) : (byte >> 4);
+      const float d = __half2float(*reinterpret_cast<const __half *>(blk));
+      dst[i] = __float2bfloat16_rn(d * (float)q4_kvalues_iq4nl[idx]);
+    }
+    return;
+  }
+  const int bits = format == Q4_PLE_FMT_Q8 ? 8 : 4;
   const size_t row_bytes = (size_t)head_dim * bits / 8;
   const unsigned char *src = data + r * row_bytes;
   const __half *sc = scales + r * groups;
-  __nv_bfloat16 *dst = out + (size_t)lookup * head_dim;
   for (int i = lane; i < head_dim; i += 32) {
     int q;
     if (bits == 8) {
@@ -1079,7 +1101,7 @@ extern "C" void qwen4_ple_gather(const long long *rows, int n_lookups,
 extern "C" void qwen4_ple_gather_quant(const long long *rows, int n_lookups,
                                        const unsigned char *data,
                                        const void *scales, int head_dim,
-                                       int bits, void *out, int64_t stream) {
+                                       int format, void *out, int64_t stream) {
   if (n_lookups == 0) {
     return;
   }
@@ -1087,7 +1109,7 @@ extern "C" void qwen4_ple_gather_quant(const long long *rows, int n_lookups,
   const int warps = 8;
   q4_ple_gather_quant_kernel<<<(n_lookups + warps - 1) / warps, warps * 32, 0,
                                s>>>(rows, n_lookups, data,
-                                    (const __half *)scales, head_dim, bits,
+                                    (const __half *)scales, head_dim, format,
                                     (__nv_bfloat16 *)out);
 }
 

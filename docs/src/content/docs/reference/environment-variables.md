@@ -106,7 +106,7 @@ See the [distributed inference guide](/guides/perf/distributed-inference/) for u
 
 | Variable | Purpose |
 |---|---|
-| `MISTRALRS_IGPU_MEMORY_FRACTION` | Fraction of integrated GPU memory usable on CUDA systems with iGPUs. Default 0.75. |
+| `MISTRALRS_IGPU_MEMORY_FRACTION` | Fraction of system memory usable on CUDA systems with integrated GPUs (unified memory, e.g. DGX Spark). By default all available memory is usable except 1 GiB left for the system, and the KV cache is sized to the model's context length. |
 
 ## Build-time
 

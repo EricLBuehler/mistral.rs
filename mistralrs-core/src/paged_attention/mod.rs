@@ -482,7 +482,10 @@ pub fn calculate_cache_config(
                     None => MemoryUsage.query(device)?,
                 };
                 let total = memory.total() as f32 / SIZE_IN_MB as f32;
-                if model_weight_size_in_bytes.is_some() {
+                if model_weight_size_in_bytes.is_none() && device.is_cuda() && memory.is_unified() {
+                    // The integrated-GPU budget already leaves the system margin; the context cap below bounds it
+                    memory.available() / SIZE_IN_MB
+                } else if model_weight_size_in_bytes.is_some() {
                     // Pre-loading: compute budget from total memory and known model size.
                     (total * f - model_weight_per_device_mb as f32).max(0.0) as usize
                 } else {
@@ -524,14 +527,14 @@ pub fn calculate_cache_config(
     // On CUDA, all available memory is used for maximum request concurrency (vLLM approach).
     #[allow(unused_mut, unused_variables)]
     let mut mem_gpu = min_mem_gpu;
-    if device.is_metal() {
+    if device.is_metal() || (device.is_cuda() && crate::utils::normal::is_integrated_gpu(device)) {
         let max_tokens = max_num_tokens.unwrap_or(config.max_seq_len());
         let mem_for_tokens =
             ctxt_to_blocks!(max_tokens, dtype_size, block_size, config) / SIZE_IN_MB;
         if mem_for_tokens < mem_gpu {
             if !silent {
                 info!(
-                    "Metal: capping KV cache from {} MB to {} MB ({} tokens).",
+                    "Unified memory: capping KV cache from {} MB to {} MB ({} tokens).",
                     mem_gpu, mem_for_tokens, max_tokens
                 );
             }

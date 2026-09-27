@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use candle_core::{DType, Device, IndexOp, Result, Tensor, D};
 use mistralrs_quant::{
-    safetensors::MmapedSafetensors, QuantMethod, ReplicatedLayer, ShardedVarBuilder,
+    safetensors::MmapedSafetensors, GgufArchive, QuantMethod, ReplicatedLayer, ShardedVarBuilder,
 };
 
 use super::config::{PleConfig, TextConfig};
@@ -16,12 +16,35 @@ const SPLITMIX_M2: u64 = 0x94D0_49BB_1331_11EB;
 const LAYER_SEED_PRIME: u64 = 10007;
 const GATE_MAGNITUDE_FLOOR: f64 = 1e-6;
 const TABLE_SHARD_PREFIX: &str = "shard_";
+const GGUF_TABLE_NAME: &str = "per_layer_token_embd.weight";
+const GGML_TYPE_IQ4_NL: u32 = 20;
+const IQ4_NL_BLOCK: usize = 32;
+const IQ4_NL_BLOCK_BYTES: usize = 18;
+const KVALUES_IQ4_NL: [i8; 16] = [
+    -127, -104, -83, -65, -49, -35, -22, -10, 1, 13, 25, 38, 53, 69, 89, 113,
+];
 #[cfg(feature = "cuda")]
 const RESIDENT_GROUP: usize = 32;
 #[cfg(feature = "cuda")]
-const RESIDENT_RESERVE_BYTES: usize = 6 << 30;
+const RESIDENT_RESERVE_BYTES: usize = 2 << 30;
 #[cfg(feature = "cuda")]
 const RESIDENT_BITS: [usize; 2] = [8, 4];
+#[cfg(feature = "cuda")]
+const PLANNED_RESIDENT_BITS: usize = 4;
+#[cfg(feature = "cuda")]
+const RESIDENT_COPY_ROWS: usize = 1 << 20;
+
+#[cfg(feature = "cuda")]
+fn resident_bytes(rows: usize, head_dim: usize, bits: usize) -> usize {
+    rows * (head_dim * bits / 8 + head_dim / RESIDENT_GROUP * 2)
+}
+
+/// Device bytes of the resident n-gram table at the precision the device map plans for.
+#[cfg(feature = "cuda")]
+pub(crate) fn planned_resident_table_bytes(cfg: &TextConfig, ple: &PleConfig) -> usize {
+    let rows = PleHash::new(cfg, ple, 0).vocab_sizes.iter().sum::<u64>() as usize;
+    resident_bytes(rows, ple.head_dim(), PLANNED_RESIDENT_BITS)
+}
 
 fn splitmix64(value: u64) -> u64 {
     let mut value = value.wrapping_add(SPLITMIX_GAMMA);
@@ -70,6 +93,15 @@ pub(super) struct PleHash {
 
 impl PleHash {
     pub(super) fn new(cfg: &TextConfig, ple: &PleConfig, ple_layer_index: u64) -> Self {
+        if let Some(hash) = &cfg.ple_hash {
+            return Self {
+                multipliers: hash.layer_multipliers.clone(),
+                vocab_sizes: hash.head_vocab_sizes.clone(),
+                offsets: hash.head_offsets.clone(),
+                heads_per_ngram: ple.heads_per_ngram,
+                eos: ple.eos_token_id,
+            };
+        }
         let max_long = (1u64 << 63) - 1;
         let multiplier_max = max_long / (cfg.vocab_size as u64).max(1);
         let half_bound = (multiplier_max / 2).max(1);
@@ -167,41 +199,75 @@ impl PleHash {
     }
 }
 
-/// The ~100 GB hashed n-gram table, left in the checkpoint's memory map.
+/// Where the ~100 GB hashed n-gram table lives; it is never loaded as a weight tensor.
+enum TableSource {
+    /// bf16/f16 row shards in the safetensors memory map.
+    Shards {
+        raw: Arc<MmapedSafetensors>,
+        names: Vec<String>,
+        starts: Vec<usize>,
+        dtype: DType,
+    },
+    /// One tensor in the GGUF memory map; `load_gguf` admits only IQ4_NL, which llama.cpp emits.
+    Gguf {
+        archive: Arc<GgufArchive>,
+        #[cfg_attr(not(feature = "cuda"), allow(dead_code))]
+        rows: usize,
+    },
+}
+
 struct PleTable {
-    raw: Arc<MmapedSafetensors>,
-    shard_names: Vec<String>,
-    shard_starts: Vec<usize>,
+    source: TableSource,
     head_dim: usize,
-    dtype: DType,
     #[cfg(feature = "cuda")]
     device_index: Option<(Tensor, Tensor)>,
     #[cfg(feature = "cuda")]
     resident: Option<ResidentTable>,
 }
 
-/// Device copy of the table quantized per `RESIDENT_GROUP` values so decode never faults on host pages.
+/// Device copy of the table in a gather-kernel format so decode never faults on host pages.
 #[cfg(feature = "cuda")]
 struct ResidentTable {
     data: Tensor,
-    scales: Tensor,
-    bits: usize,
+    scales: Option<Tensor>,
+    format: crate::cuda::qwen4_exp::PleTableFormat,
+}
+
+fn iq4_nl_row_bytes(head_dim: usize) -> usize {
+    head_dim / IQ4_NL_BLOCK * IQ4_NL_BLOCK_BYTES
+}
+
+/// ggml `dequantize_row_iq4_nl` for one row.
+fn dequantize_iq4_nl_row(src: &[u8], out: &mut [f32]) {
+    let (blocks, _) = src.as_chunks::<IQ4_NL_BLOCK_BYTES>();
+    let (dsts, _) = out.as_chunks_mut::<IQ4_NL_BLOCK>();
+    for (block, dst) in blocks.iter().zip(dsts) {
+        let d = half::f16::from_le_bytes([block[0], block[1]]).to_f32();
+        let (lo, hi) = dst.split_at_mut(IQ4_NL_BLOCK / 2);
+        for (j, &byte) in block[2..].iter().enumerate() {
+            lo[j] = d * f32::from(KVALUES_IQ4_NL[usize::from(byte & 0xf)]);
+            hi[j] = d * f32::from(KVALUES_IQ4_NL[usize::from(byte >> 4)]);
+        }
+    }
 }
 
 impl PleTable {
     fn load(vb: &ShardedVarBuilder, head_dim: usize, device: &Device) -> Result<Self> {
+        if let Some(archive) = vb.raw_gguf() {
+            return Self::load_gguf(archive, head_dim);
+        }
         let raw = vb.raw_safetensors().ok_or_else(|| {
             candle_core::Error::msg(
-                "Qwen4-Exp PLE requires memory-mapped safetensors weights (unset MISTRALRS_NO_MMAP)",
+                "Qwen4-Exp PLE requires memory-mapped safetensors or GGUF weights (unset MISTRALRS_NO_MMAP)",
             )
         })?;
         let prefix = vb.prefix();
-        let mut shard_names = Vec::new();
-        let mut shard_starts = Vec::new();
+        let mut names = Vec::new();
+        let mut starts = Vec::new();
         let mut rows = 0usize;
         let mut dtype = None;
         loop {
-            let name = format!("{prefix}.{TABLE_SHARD_PREFIX}{}.weight", shard_names.len());
+            let name = format!("{prefix}.{TABLE_SHARD_PREFIX}{}.weight", names.len());
             let Ok(view) = raw.get(&name) else {
                 break;
             };
@@ -219,27 +285,29 @@ impl PleTable {
                 candle_core::bail!("PLE table shards mix dtypes");
             }
             dtype = Some(shard_dtype);
-            shard_starts.push(rows);
+            starts.push(rows);
             rows += shape[0];
-            shard_names.push(name);
+            names.push(name);
         }
         let dtype = dtype.ok_or_else(|| {
             candle_core::Error::msg(format!(
                 "Qwen4-Exp PLE table `{prefix}.{TABLE_SHARD_PREFIX}N.weight` not found"
             ))
         })?;
-        tracing::info!(
-            shards = shard_names.len(),
+        tracing::debug!(
+            shards = names.len(),
             rows,
-            "Qwen4-Exp PLE n-gram table stays memory-mapped"
+            "Qwen4-Exp PLE n-gram table is memory-mapped"
         );
         #[cfg_attr(not(feature = "cuda"), allow(unused_mut))]
         let mut table = Self {
-            raw,
-            shard_names,
-            shard_starts,
+            source: TableSource::Shards {
+                raw,
+                names,
+                starts,
+                dtype,
+            },
             head_dim,
-            dtype,
             #[cfg(feature = "cuda")]
             device_index: None,
             #[cfg(feature = "cuda")]
@@ -247,76 +315,194 @@ impl PleTable {
         };
         #[cfg(feature = "cuda")]
         if device.is_cuda() && device_reads_pageable_memory(device)? {
-            let ptrs = table
-                .shard_names
+            let TableSource::Shards {
+                raw, names, starts, ..
+            } = &table.source
+            else {
+                unreachable!()
+            };
+            let ptrs = names
                 .iter()
-                .map(|name| Ok(table.raw.get(name)?.data().as_ptr() as i64))
+                .map(|name| Ok(raw.get(name)?.data().as_ptr() as i64))
                 .collect::<Result<Vec<_>>>()?;
-            let starts = table
-                .shard_starts
-                .iter()
-                .map(|s| *s as i64)
-                .collect::<Vec<_>>();
+            let starts = starts.iter().map(|s| *s as i64).collect::<Vec<_>>();
             let n = ptrs.len();
             table.device_index = Some((
                 Tensor::from_vec(ptrs, n, device)?,
                 Tensor::from_vec(starts, n, device)?,
             ));
-            tracing::info!(
-                "Qwen4-Exp PLE rows are gathered on the GPU through pageable memory access"
-            );
+            tracing::debug!("Qwen4-Exp PLE rows can be gathered through pageable memory access");
         }
         #[cfg(not(feature = "cuda"))]
         let _ = device;
         Ok(table)
     }
 
-    #[cfg(feature = "cuda")]
-    fn total_rows(&self) -> Result<usize> {
-        let last = self.shard_names.len() - 1;
-        Ok(self.shard_starts[last] + self.raw.get(&self.shard_names[last])?.shape()[0])
+    fn load_gguf(archive: Arc<GgufArchive>, head_dim: usize) -> Result<Self> {
+        let info = archive.tensor_info(GGUF_TABLE_NAME)?;
+        if info.dtype().raw() != GGML_TYPE_IQ4_NL {
+            candle_core::bail!(
+                "Qwen4-Exp GGUF n-gram table `{GGUF_TABLE_NAME}` is {}, only IQ4_NL is supported",
+                info.dtype().name()
+            );
+        }
+        let rows = match info.shape() {
+            &[rows, dim] if dim == head_dim && head_dim.is_multiple_of(IQ4_NL_BLOCK) => rows,
+            shape => candle_core::bail!(
+                "Qwen4-Exp GGUF n-gram table has shape {shape:?}, expected [_, {head_dim}]"
+            ),
+        };
+        tracing::debug!(
+            rows,
+            "Qwen4-Exp PLE n-gram table is memory-mapped from GGUF"
+        );
+        Ok(Self {
+            source: TableSource::Gguf { archive, rows },
+            head_dim,
+            #[cfg(feature = "cuda")]
+            device_index: None,
+            #[cfg(feature = "cuda")]
+            resident: None,
+        })
     }
 
-    /// Quantize the whole table into device memory when it fits beside a working reserve.
+    /// Element dtype of the rows `device_index` points at.
+    #[cfg(feature = "cuda")]
+    fn shard_dtype(&self) -> DType {
+        match &self.source {
+            TableSource::Shards { dtype, .. } => *dtype,
+            TableSource::Gguf { .. } => DType::U8,
+        }
+    }
+
+    #[cfg(feature = "cuda")]
+    fn total_rows(&self) -> Result<usize> {
+        match &self.source {
+            TableSource::Shards {
+                raw, names, starts, ..
+            } => {
+                let last = names.len() - 1;
+                Ok(starts[last] + raw.get(&names[last])?.shape()[0])
+            }
+            TableSource::Gguf { rows, .. } => Ok(*rows),
+        }
+    }
+
+    #[cfg(feature = "cuda")]
+    fn fallback_path(&self) -> &'static str {
+        if self.device_index.is_some() {
+            "the GPU reads rows from the memory map (slow)"
+        } else {
+            "rows are gathered on the host every step (slow)"
+        }
+    }
+
+    /// Move the whole table into device memory when it fits beside a working reserve: GGUF IQ4_NL rows
+    /// are copied as is, safetensors rows are quantized to 8 or 4 bits.
     #[cfg(feature = "cuda")]
     fn make_resident(&mut self, device: &Device) -> Result<()> {
-        use rayon::prelude::*;
-        if !device.is_cuda()
-            || self.dtype != DType::BF16
-            || !self.head_dim.is_multiple_of(RESIDENT_GROUP)
-        {
+        if !self.head_dim.is_multiple_of(RESIDENT_GROUP) {
+            tracing::warn!(
+                head_dim = self.head_dim,
+                "Qwen4-Exp PLE table rows are not a multiple of {RESIDENT_GROUP}, so it stays out of device memory; {}",
+                self.fallback_path()
+            );
             return Ok(());
         }
         let rows = self.total_rows()?;
-        let groups = self.head_dim / RESIDENT_GROUP;
-        // On unified memory the table competes with host memory directly, not the engine's scaled budget
-        let usage = crate::MemoryUsage.query(device)?;
-        let available = if usage.is_unified() {
-            let mut sys = sysinfo::System::new();
-            sys.refresh_memory();
-            usize::try_from(sys.available_memory()).map_err(candle_core::Error::wrap)?
-        } else {
-            usage.available()
-        };
-        let footprint = |bits: usize| rows * (self.head_dim * bits / 8 + groups * 2);
+        let available = crate::MemoryUsage.query(device)?.available();
+        let footprint = |bits: usize| resident_bytes(rows, self.head_dim, bits);
         let Some(bits) = RESIDENT_BITS
             .into_iter()
+            .filter(|bits| {
+                *bits == PLANNED_RESIDENT_BITS || matches!(self.source, TableSource::Shards { .. })
+            })
             .find(|bits| footprint(*bits) + RESIDENT_RESERVE_BYTES <= available)
         else {
-            tracing::info!(
+            tracing::warn!(
                 available_gb = available >> 30,
-                needed_gb = footprint(4) >> 30,
-                "Qwen4-Exp PLE table does not fit in device memory; rows are read from the memory map"
+                needed_gb = (footprint(PLANNED_RESIDENT_BITS) + RESIDENT_RESERVE_BYTES) >> 30,
+                "Qwen4-Exp PLE table does not fit in device memory; {}",
+                self.fallback_path()
             );
             return Ok(());
         };
         let start = std::time::Instant::now();
+        let resident = match &self.source {
+            TableSource::Gguf { archive, .. } => self.copy_iq4_nl(archive, rows, device)?,
+            TableSource::Shards {
+                raw,
+                names,
+                starts,
+                dtype,
+            } => self.quantize_shards(QuantizeShards {
+                raw,
+                names,
+                starts,
+                dtype: *dtype,
+                rows,
+                bits,
+                device,
+            })?,
+        };
+        tracing::info!(
+            format = ?resident.format,
+            size_gb = footprint(bits) >> 30,
+            elapsed_s = start.elapsed().as_secs(),
+            "Qwen4-Exp PLE table resident in device memory"
+        );
+        self.resident = Some(resident);
+        Ok(())
+    }
+
+    #[cfg(feature = "cuda")]
+    fn copy_iq4_nl(
+        &self,
+        archive: &GgufArchive,
+        rows: usize,
+        device: &Device,
+    ) -> Result<ResidentTable> {
+        let row_bytes = iq4_nl_row_bytes(self.head_dim);
+        let bytes = archive.tensor_data(GGUF_TABLE_NAME)?.bytes();
+        let data = unsafe { Tensor::empty((rows, row_bytes), DType::U8, device)? };
+        for (chunk, src) in bytes.chunks(RESIDENT_COPY_ROWS * row_bytes).enumerate() {
+            data.slice_set(
+                &Tensor::from_slice(src, (src.len() / row_bytes, row_bytes), device)?,
+                0,
+                chunk * RESIDENT_COPY_ROWS,
+            )?;
+            evict_page_cache(src);
+        }
+        Ok(ResidentTable {
+            data,
+            scales: None,
+            format: crate::cuda::qwen4_exp::PleTableFormat::Iq4Nl,
+        })
+    }
+
+    #[cfg(feature = "cuda")]
+    fn quantize_shards(&self, args: QuantizeShards<'_>) -> Result<ResidentTable> {
+        use rayon::prelude::*;
+        let QuantizeShards {
+            raw,
+            names,
+            starts,
+            dtype,
+            rows,
+            bits,
+            device,
+        } = args;
+        let groups = self.head_dim / RESIDENT_GROUP;
         let row_bytes = self.head_dim * bits / 8;
         let data = unsafe { Tensor::empty((rows, row_bytes), DType::U8, device)? };
         let scales = unsafe { Tensor::empty((rows, groups), DType::F16, device)? };
         let head_dim = self.head_dim;
-        for (shard, name) in self.shard_names.iter().enumerate() {
-            let view = self.raw.get(name)?;
+        let decode = match dtype {
+            DType::F16 => |b: [u8; 2]| half::f16::from_le_bytes(b).to_f32(),
+            _ => |b: [u8; 2]| half::bf16::from_le_bytes(b).to_f32(),
+        };
+        for (shard, name) in names.iter().enumerate() {
+            let view = raw.get(name)?;
             let shard_rows = view.shape()[0];
             let src = view.data();
             let mut q = vec![0u8; shard_rows * row_bytes];
@@ -326,10 +512,7 @@ impl PleTable {
                 .enumerate()
                 .for_each(|(row, (q_row, sc_row))| {
                     let base = row * head_dim * 2;
-                    let value = |i: usize| {
-                        half::bf16::from_le_bytes([src[base + 2 * i], src[base + 2 * i + 1]])
-                            .to_f32()
-                    };
+                    let value = |i: usize| decode([src[base + 2 * i], src[base + 2 * i + 1]]);
                     let q_max = if bits == 8 { 127.0 } else { 7.0 };
                     for (g, scale) in sc_row.iter_mut().enumerate() {
                         let range = g * RESIDENT_GROUP..(g + 1) * RESIDENT_GROUP;
@@ -351,7 +534,7 @@ impl PleTable {
                         }
                     }
                 });
-            let start_row = self.shard_starts[shard];
+            let start_row = starts[shard];
             data.slice_set(
                 &Tensor::from_vec(q, (shard_rows, row_bytes), device)?,
                 0,
@@ -364,38 +547,71 @@ impl PleTable {
             )?;
             evict_page_cache(src);
         }
-        tracing::info!(
-            bits,
-            size_gb = footprint(bits) >> 30,
-            elapsed_s = start.elapsed().as_secs(),
-            "Qwen4-Exp PLE table quantized into device memory"
-        );
-        self.resident = Some(ResidentTable { data, scales, bits });
-        Ok(())
+        Ok(ResidentTable {
+            data,
+            scales: Some(scales),
+            format: if bits == 8 {
+                crate::cuda::qwen4_exp::PleTableFormat::Q8
+            } else {
+                crate::cuda::qwen4_exp::PleTableFormat::Q4
+            },
+        })
     }
 
     /// Host gather of `rows` into a `[rows.len(), head_dim]` tensor on `device`.
     fn gather_host(&self, rows: &[u64], device: &Device) -> Result<Tensor> {
-        let row_bytes = self.head_dim * self.dtype.size_in_bytes();
-        let mut data = vec![0u8; rows.len() * row_bytes];
-        for (dst, &row) in data.chunks_exact_mut(row_bytes).zip(rows) {
-            let row = row as usize;
-            let shard = self.shard_starts.partition_point(|start| *start <= row) - 1;
-            let view = self.raw.get(&self.shard_names[shard])?;
-            let offset = (row - self.shard_starts[shard]) * row_bytes;
-            let src = view.data().get(offset..offset + row_bytes).ok_or_else(|| {
-                candle_core::Error::msg(format!("PLE row {row} is outside the n-gram table"))
-            })?;
-            dst.copy_from_slice(src);
+        let outside = |row: u64| {
+            candle_core::Error::msg(format!("PLE row {row} is outside the n-gram table"))
+        };
+        match &self.source {
+            TableSource::Shards {
+                raw,
+                names,
+                starts,
+                dtype,
+            } => {
+                let row_bytes = self.head_dim * dtype.size_in_bytes();
+                let mut data = vec![0u8; rows.len() * row_bytes];
+                for (dst, &row) in data.chunks_exact_mut(row_bytes).zip(rows) {
+                    let idx = row as usize;
+                    let shard = starts.partition_point(|start| *start <= idx) - 1;
+                    let view = raw.get(&names[shard])?;
+                    let offset = (idx - starts[shard]) * row_bytes;
+                    let src = view
+                        .data()
+                        .get(offset..offset + row_bytes)
+                        .ok_or_else(|| outside(row))?;
+                    dst.copy_from_slice(src);
+                }
+                Tensor::from_raw_buffer(&data, *dtype, &[rows.len(), self.head_dim], &Device::Cpu)?
+                    .to_device(device)
+            }
+            TableSource::Gguf { archive, .. } => {
+                let row_bytes = iq4_nl_row_bytes(self.head_dim);
+                let bytes = archive.tensor_data(GGUF_TABLE_NAME)?.bytes();
+                let mut out = vec![0f32; rows.len() * self.head_dim];
+                for (dst, &row) in out.chunks_exact_mut(self.head_dim).zip(rows) {
+                    let offset = row as usize * row_bytes;
+                    let src = bytes
+                        .get(offset..offset + row_bytes)
+                        .ok_or_else(|| outside(row))?;
+                    dequantize_iq4_nl_row(src, dst);
+                }
+                Tensor::from_vec(out, (rows.len(), self.head_dim), device)
+            }
         }
-        Tensor::from_raw_buffer(
-            &data,
-            self.dtype,
-            &[rows.len(), self.head_dim],
-            &Device::Cpu,
-        )?
-        .to_device(device)
     }
+}
+
+#[cfg(feature = "cuda")]
+struct QuantizeShards<'a> {
+    raw: &'a MmapedSafetensors,
+    names: &'a [String],
+    starts: &'a [usize],
+    dtype: DType,
+    rows: usize,
+    bits: usize,
+    device: &'a Device,
 }
 
 /// Drop the page cache behind a mapped range; on unified memory the allocator can't reclaim it.
@@ -472,7 +688,9 @@ impl PleLayer {
             ple.head_dim(),
             &device,
         )?;
-        verify_hash_buffers(&table.raw, &vb.pp("ple_embedding").prefix(), &hash)?;
+        if let TableSource::Shards { raw, .. } = &table.source {
+            verify_hash_buffers(raw, &vb.pp("ple_embedding").prefix(), &hash)?;
+        }
         let norm = |name: &str| -> Result<Tensor> {
             vb.pp(name).get(hc_hidden, "weight")?.to_dtype(DType::F32)? + 1.0
         };
@@ -519,9 +737,11 @@ impl PleLayer {
     /// Quantize the n-gram table into device memory if it fits; call once the rest of the model is loaded.
     pub(super) fn make_table_resident(&mut self, device: &Device) -> Result<()> {
         #[cfg(feature = "cuda")]
-        self.table.make_resident(device)?;
-        #[cfg(not(feature = "cuda"))]
+        if device.is_cuda() {
+            return self.table.make_resident(device);
+        }
         let _ = device;
+        tracing::info!("Qwen4-Exp PLE rows are gathered from the memory-mapped table on the host");
         Ok(())
     }
 
@@ -550,16 +770,16 @@ impl PleLayer {
                 (Some(resident), _) => crate::cuda::qwen4_exp::ple_gather_quant(
                     &rows,
                     &resident.data,
-                    &resident.scales,
+                    resident.scales.as_ref(),
                     self.table.head_dim,
-                    resident.bits,
+                    resident.format,
                 )?,
                 (None, Some((ptrs, starts))) => crate::cuda::qwen4_exp::ple_gather(
                     &rows,
                     ptrs,
                     starts,
                     self.table.head_dim,
-                    self.table.dtype,
+                    self.table.shard_dtype(),
                 )?,
                 (None, None) => unreachable!("checked by gathers_on_device"),
             }
@@ -747,6 +967,70 @@ fn verify_hash_buffers(raw: &MmapedSafetensors, prefix: &str, hash: &PleHash) ->
 mod tests {
     use super::*;
     use crate::vision_models::qwen4_exp::config::tests::flash_next_text_config;
+
+    #[cfg(feature = "cuda")]
+    #[test]
+    fn iq4_nl_gather_matches_host_dequant() -> Result<()> {
+        const HEAD_DIM: usize = 160;
+        const ROWS: usize = 37;
+        let device = Device::new_cuda(0)?;
+        let row_bytes = iq4_nl_row_bytes(HEAD_DIM);
+        let mut state = 0x2545_f491_4f6c_dd1du64;
+        let mut table = vec![0u8; ROWS * row_bytes];
+        for block in table.as_chunks_mut::<IQ4_NL_BLOCK_BYTES>().0 {
+            for byte in block.iter_mut() {
+                state ^= state << 13;
+                state ^= state >> 7;
+                state ^= state << 17;
+                *byte = state as u8;
+            }
+            let scale = half::f16::from_f32(((state >> 40) as f32 / (1u64 << 24) as f32) - 0.5);
+            block[..2].copy_from_slice(&scale.to_le_bytes());
+        }
+        let lookups: Vec<i64> = vec![0, 36, 5, 5, 17, 1, 30, 22];
+        let data = Tensor::from_slice(&table, (ROWS, row_bytes), &device)?;
+        let rows = Tensor::from_slice(&lookups, (2, 4), &device)?;
+        let got = crate::cuda::qwen4_exp::ple_gather_quant(
+            &rows,
+            &data,
+            None,
+            HEAD_DIM,
+            crate::cuda::qwen4_exp::PleTableFormat::Iq4Nl,
+        )?
+        .to_dtype(DType::F32)?
+        .flatten_all()?
+        .to_vec1::<f32>()?;
+        let mut expected = vec![0f32; lookups.len() * HEAD_DIM];
+        for (dst, &row) in expected
+            .as_chunks_mut::<HEAD_DIM>()
+            .0
+            .iter_mut()
+            .zip(&lookups)
+        {
+            let row = row as usize;
+            dequantize_iq4_nl_row(&table[row * row_bytes..(row + 1) * row_bytes], dst);
+        }
+        for (g, e) in got.iter().zip(&expected) {
+            assert_eq!(*g, half::bf16::from_f32(*e).to_f32());
+        }
+        Ok(())
+    }
+
+    #[cfg(feature = "cuda")]
+    #[test]
+    fn planned_table_matches_checkpoint_rows() {
+        // The checkpoint pads the hashed rows up to a multiple of its shard count
+        const CHECKPOINT_ROWS: usize = 320_001_536;
+        const CHECKPOINT_SHARDS: usize = 128;
+        let cfg = flash_next_text_config(4);
+        let ple = cfg.ple().unwrap().unwrap();
+        let row_bytes = ple.head_dim() / 2 + ple.head_dim() / RESIDENT_GROUP * 2;
+        let rows = planned_resident_table_bytes(&cfg, &ple) / row_bytes;
+        assert_eq!(
+            rows.div_ceil(CHECKPOINT_SHARDS) * CHECKPOINT_SHARDS,
+            CHECKPOINT_ROWS
+        );
+    }
 
     #[test]
     fn hashed_rows_match_reference() {

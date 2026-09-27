@@ -108,6 +108,16 @@ pub struct TextConfig {
     pub quantization_config: Option<QuantizedConfig>,
     #[serde(default, rename = "_mistralrs_gdn_v_head_layout")]
     pub(crate) gdn_v_head_layout: GdnVHeadLayout,
+    #[serde(default, rename = "_mistralrs_ple_hash")]
+    pub(crate) ple_hash: Option<PleHashConstants>,
+}
+
+/// PLE hash constants stated outright (GGUF stores these rather than the seed they derive from).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+pub(crate) struct PleHashConstants {
+    pub layer_multipliers: Vec<u64>,
+    pub head_vocab_sizes: Vec<u64>,
+    pub head_offsets: Vec<u64>,
 }
 
 /// Block-sparse attention (QSA) parameters shared by every indexed attention layer.
@@ -296,10 +306,16 @@ impl TextConfig {
                     conv_kernel_size: self.ple_conv_kernel_size,
                     eos_token_id,
                 };
+                let explicit_hash_mismatch = self.ple_hash.as_ref().is_some_and(|hash| {
+                    hash.layer_multipliers.len() != ple.ngram_size
+                        || hash.head_vocab_sizes.len() != ple.num_heads()
+                        || hash.head_offsets.len() != ple.num_heads()
+                });
                 if ple.ngram_size < 2
                     || ple.heads_per_ngram == 0
                     || ple.conv_kernel_size == 0
                     || !ple.embed_dim.is_multiple_of(ple.num_heads())
+                    || explicit_hash_mismatch
                 {
                     candle_core::bail!("Qwen4-Exp PLE config is invalid: {ple:?}");
                 }
@@ -370,7 +386,8 @@ impl TextConfig {
 #[derive(Debug, Clone, serde::Deserialize)]
 pub struct Config {
     pub text_config: TextConfig,
-    pub vision_config: VisionConfig,
+    #[serde(default)]
+    pub vision_config: Option<VisionConfig>,
     pub image_token_id: u32,
     pub video_token_id: u32,
     pub vision_start_token_id: u32,

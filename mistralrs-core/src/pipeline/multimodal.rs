@@ -760,42 +760,62 @@ impl Loader for MultimodalLoader {
                         let source = weight_source
                             .as_ref()
                             .expect("selected weight-source sizing requires a weight source");
-                        let quantization =
-                            if matches!(sizing, super::isq_flow::AutoDeviceMapSizing::Uqff) {
-                                AutoDeviceMapQuantization::weight_source(source.as_ref())
-                            } else {
-                                AutoDeviceMapQuantization::weight_source_with_topology(
-                                    source.as_ref(),
-                                    self.config.topology.as_ref(),
-                                )
-                            };
-                        let weight_pack_factor = quantization
-                            .conservative_pack_factor(dtype, source.pack_factor(dtype)?);
-                        let non_mapped_pack_factor =
-                            if matches!(sizing, super::isq_flow::AutoDeviceMapSizing::Uqff) {
-                                weight_pack_factor
-                            } else {
-                                1
-                            };
-                        let layer_sizes_in_bytes = self.inner.layer_sizes_in_bytes(
-                            &config,
-                            dtype,
-                            weight_pack_factor,
-                            matformer_slicing_config.as_ref(),
-                        )?;
-                        let non_mapped_size_in_bytes = self.inner.non_mapped_size_in_bytes(
-                            &config,
-                            dtype,
-                            non_mapped_pack_factor,
-                            Some(&quantization),
-                            matformer_slicing_config.as_ref(),
-                        )?;
-                        let layer_sizes_sum = layer_sizes_in_bytes.iter().sum::<usize>();
-                        (
-                            layer_sizes_in_bytes,
-                            non_mapped_size_in_bytes,
-                            layer_sizes_sum + non_mapped_size_in_bytes,
-                        )
+                        let exact = if self.config.topology.is_none()
+                            && matformer_slicing_config.is_none()
+                        {
+                            source.resident_layer_bytes(dtype)?
+                        } else {
+                            None
+                        };
+                        if let Some(exact) = exact {
+                            let mut layer_sizes = (0..self.inner.num_layers(&config)?)
+                                .map(|layer| exact.layers.get(&layer).copied().unwrap_or(0))
+                                .collect::<Vec<_>>();
+                            for (layer, bytes) in self.inner.unbound_layer_bytes(&config)? {
+                                if let Some(size) = layer_sizes.get_mut(layer) {
+                                    *size += bytes;
+                                }
+                            }
+                            let total = layer_sizes.iter().sum::<usize>() + exact.outside;
+                            (layer_sizes, exact.outside, total)
+                        } else {
+                            let quantization =
+                                if matches!(sizing, super::isq_flow::AutoDeviceMapSizing::Uqff) {
+                                    AutoDeviceMapQuantization::weight_source(source.as_ref())
+                                } else {
+                                    AutoDeviceMapQuantization::weight_source_with_topology(
+                                        source.as_ref(),
+                                        self.config.topology.as_ref(),
+                                    )
+                                };
+                            let weight_pack_factor = quantization
+                                .conservative_pack_factor(dtype, source.pack_factor(dtype)?);
+                            let non_mapped_pack_factor =
+                                if matches!(sizing, super::isq_flow::AutoDeviceMapSizing::Uqff) {
+                                    weight_pack_factor
+                                } else {
+                                    1
+                                };
+                            let layer_sizes_in_bytes = self.inner.layer_sizes_in_bytes(
+                                &config,
+                                dtype,
+                                weight_pack_factor,
+                                matformer_slicing_config.as_ref(),
+                            )?;
+                            let non_mapped_size_in_bytes = self.inner.non_mapped_size_in_bytes(
+                                &config,
+                                dtype,
+                                non_mapped_pack_factor,
+                                Some(&quantization),
+                                matformer_slicing_config.as_ref(),
+                            )?;
+                            let layer_sizes_sum = layer_sizes_in_bytes.iter().sum::<usize>();
+                            (
+                                layer_sizes_in_bytes,
+                                non_mapped_size_in_bytes,
+                                layer_sizes_sum + non_mapped_size_in_bytes,
+                            )
+                        }
                     }
                     super::isq_flow::AutoDeviceMapSizing::Isq(isq) => {
                         let moqe =

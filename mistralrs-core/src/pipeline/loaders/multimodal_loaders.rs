@@ -7867,13 +7867,19 @@ impl MultimodalModelLoader for Qwen4ExpLoader {
     fn video_frame_sampling(&self, _config: &str) -> crate::VideoFrameSampling {
         QWEN3_VIDEO_SAMPLING
     }
-    fn modalities(&self, _config: &str) -> Result<Modalities> {
-        Ok(Modalities {
-            input: vec![
+    fn modalities(&self, config: &str) -> Result<Modalities> {
+        let cfg: Qwen4ExpConfig = serde_json::from_str(config)?;
+        let input = if cfg.vision_config.is_some() {
+            vec![
                 SupportedModality::Text,
                 SupportedModality::Vision,
                 SupportedModality::Video,
-            ],
+            ]
+        } else {
+            vec![SupportedModality::Text]
+        };
+        Ok(Modalities {
+            input,
             output: vec![SupportedModality::Text],
         })
     }
@@ -7928,12 +7934,11 @@ impl DeviceMappedModelLoader for Qwen4ExpLoader {
             anyhow::bail!("Expected multimodal AutoDeviceMapParams for this model!")
         };
         let cfg: Qwen4ExpConfig = serde_json::from_str(config)?;
-        let img_seq_len = {
-            let cfg = &cfg.vision_config;
+        let img_seq_len = cfg.vision_config.as_ref().map_or(0, |cfg| {
             let grid_h = (max_image_shape.0 / cfg.patch_size) / cfg.spatial_merge_size;
             let grid_w = (max_image_shape.1 / cfg.patch_size) / cfg.spatial_merge_size;
             grid_h * grid_w * max_num_images
-        };
+        });
         let max_seq_len = img_seq_len + max_seq_len.min(&ATTENTION_CHUNK_SIZE);
         let text = &cfg.text_config;
         let attn = max_batch_size * text.num_attention_heads * max_seq_len * max_seq_len;
@@ -7956,10 +7961,11 @@ impl DeviceMappedModelLoader for Qwen4ExpLoader {
             anyhow::bail!("Expected multimodal AutoDeviceMapParams for this model!")
         };
         let cfg: Qwen4ExpConfig = serde_json::from_str(config)?;
-        let cfg = &cfg.vision_config;
-        let img_seq_len =
-            (max_image_shape.0 / cfg.patch_size) * (max_image_shape.1 / cfg.patch_size);
-        Ok((max_batch_size * max_num_images) * cfg.num_heads * img_seq_len * img_seq_len)
+        Ok(cfg.vision_config.as_ref().map_or(0, |cfg| {
+            let img_seq_len =
+                (max_image_shape.0 / cfg.patch_size) * (max_image_shape.1 / cfg.patch_size);
+            (max_batch_size * max_num_images) * cfg.num_heads * img_seq_len * img_seq_len
+        }))
     }
 
     fn non_mapped_size_in_bytes(
@@ -7993,33 +7999,29 @@ impl DeviceMappedModelLoader for Qwen4ExpLoader {
         };
         let final_mixer = text.hc_hidden_size() * (2 * text.hc_lowrank + 1);
 
-        let vision = &cfg.vision_config;
-        let merge_hidden = vision.hidden_size * vision.spatial_merge_size.pow(2);
-        let merger = merge_hidden * merge_hidden
-            + merge_hidden
-            + merge_hidden * vision.out_hidden_size
-            + vision.out_hidden_size
-            + 2 * vision.hidden_size;
-        let patch_embed = vision.in_chans
-            * vision.hidden_size
-            * vision.temporal_patch_size
-            * vision.patch_size
-            * vision.patch_size
-            + vision.hidden_size;
-        let pos_embed = vision.num_position_embeddings * vision.hidden_size;
-        let encoder_layer = 4 * vision.hidden_size
-            + 2 * vision.hidden_size * vision.intermediate_size
-            + vision.intermediate_size
-            + vision.hidden_size
-            + 4 * vision.hidden_size * vision.hidden_size
-            + 4 * vision.hidden_size;
-        let elems = embed_tokens
-            + lm_head
-            + final_mixer
-            + merger
-            + patch_embed
-            + pos_embed
-            + encoder_layer * vision.depth;
+        let vision = cfg.vision_config.as_ref().map_or(0, |vision| {
+            let merge_hidden = vision.hidden_size * vision.spatial_merge_size.pow(2);
+            let merger = merge_hidden * merge_hidden
+                + merge_hidden
+                + merge_hidden * vision.out_hidden_size
+                + vision.out_hidden_size
+                + 2 * vision.hidden_size;
+            let patch_embed = vision.in_chans
+                * vision.hidden_size
+                * vision.temporal_patch_size
+                * vision.patch_size
+                * vision.patch_size
+                + vision.hidden_size;
+            let pos_embed = vision.num_position_embeddings * vision.hidden_size;
+            let encoder_layer = 4 * vision.hidden_size
+                + 2 * vision.hidden_size * vision.intermediate_size
+                + vision.intermediate_size
+                + vision.hidden_size
+                + 4 * vision.hidden_size * vision.hidden_size
+                + 4 * vision.hidden_size;
+            merger + patch_embed + pos_embed + encoder_layer * vision.depth
+        });
+        let elems = embed_tokens + lm_head + final_mixer + vision;
         Ok(elems * dtype.size_in_bytes())
     }
 
@@ -8037,6 +8039,13 @@ impl DeviceMappedModelLoader for Qwen4ExpLoader {
         let ple = text.ple()?;
         let hc_hidden = text.hc_hidden_size();
         let hyper = 2 * hc_hidden * (2 * text.hc_lowrank + text.hc_count + 1);
+        // The n-gram table is never a weight tensor but is quantized into device memory after loading
+        #[cfg(feature = "cuda")]
+        let table_bytes = ple.as_ref().map_or(0, |ple| {
+            crate::vision_models::qwen4_exp::planned_resident_table_bytes(text, ple)
+        });
+        #[cfg(not(feature = "cuda"))]
+        let table_bytes = 0;
         Ok(text
             .layer_types()
             .into_iter()
@@ -8070,15 +8079,14 @@ impl DeviceMappedModelLoader for Qwen4ExpLoader {
                 let expert = 3 * hidden * text.moe_intermediate_size / weight_pack_factor;
                 let shared = 3 * hidden * text.shared_expert_intermediate_size / weight_pack_factor;
                 let moe = hidden * text.num_experts + expert * text.num_experts + shared + hidden;
-                let ple_elems = ple
-                    .as_ref()
-                    .filter(|ple| ple.layer_idx == layer_idx)
-                    .map_or(0, |ple| {
-                        ple.embed_dim * (hc_hidden + hidden)
-                            + 3 * hc_hidden
-                            + hc_hidden * ple.conv_kernel_size
-                    });
+                let ple_layer = ple.as_ref().filter(|ple| ple.layer_idx == layer_idx);
+                let ple_elems = ple_layer.map_or(0, |ple| {
+                    ple.embed_dim * (hc_hidden + hidden)
+                        + 3 * hc_hidden
+                        + hc_hidden * ple.conv_kernel_size
+                });
                 (mixer + moe + hyper + ple_elems) * dtype.size_in_bytes()
+                    + ple_layer.map_or(0, |_| table_bytes)
             })
             .collect())
     }
@@ -8086,6 +8094,23 @@ impl DeviceMappedModelLoader for Qwen4ExpLoader {
     fn num_layers(&self, config: &str) -> Result<usize> {
         let cfg: Qwen4ExpConfig = serde_json::from_str(config)?;
         Ok(cfg.text_config.num_hidden_layers)
+    }
+
+    fn unbound_layer_bytes(&self, config: &str) -> Result<Vec<(usize, usize)>> {
+        let cfg: Qwen4ExpConfig = serde_json::from_str(config)?;
+        let text = &cfg.text_config;
+        #[cfg(feature = "cuda")]
+        return Ok(text.ple()?.map_or_else(Vec::new, |ple| {
+            vec![(
+                ple.layer_idx,
+                crate::vision_models::qwen4_exp::planned_resident_table_bytes(text, &ple),
+            )]
+        }));
+        #[cfg(not(feature = "cuda"))]
+        {
+            let _ = text;
+            Ok(Vec::new())
+        }
     }
 
     fn model_config(&self, config: &str) -> Result<Box<dyn ModelConfigLike>> {

@@ -120,7 +120,7 @@ mod ffi {
             data: *const u8,
             scales: *const c_void,
             head_dim: i32,
-            bits: i32,
+            format: i32,
             out: *mut c_void,
             stream: i64,
         );
@@ -518,13 +518,21 @@ pub(crate) fn ple_gather(
     Ok(out)
 }
 
+/// Row encodings of the device-resident n-gram table; values match `Q4_PLE_FMT_*`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PleTableFormat {
+    Q8 = 0,
+    Q4 = 1,
+    Iq4Nl = 2,
+}
+
 /// Gather and dequantize rows from the device-resident table into `[tokens, heads * head_dim]` bf16.
 pub(crate) fn ple_gather_quant(
     rows: &Tensor,
     data: &Tensor,
-    scales: &Tensor,
+    scales: Option<&Tensor>,
     head_dim: usize,
-    bits: usize,
+    format: PleTableFormat,
 ) -> Result<Tensor> {
     let (tokens, heads) = rows.dims2()?;
     let out = empty(&[tokens, heads * head_dim], DType::BF16, rows.device())?;
@@ -533,9 +541,9 @@ pub(crate) fn ple_gather_quant(
             dev_ptr(rows)? as *const i64,
             (tokens * heads) as i32,
             dev_ptr(data)? as *const u8,
-            dev_ptr(scales)? as *const _,
+            dev_ptr(scales.unwrap_or(data))? as *const _,
             head_dim as i32,
-            bits as i32,
+            format as i32,
             dev_ptr(&out)? as *mut _,
             stream(rows.device())?,
         );

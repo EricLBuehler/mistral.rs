@@ -586,6 +586,21 @@ impl GGUFLoader {
             }
             None => bail!("GGUF metadata is missing `general.architecture`"),
         };
+        if architecture.eq_ignore_ascii_case(crate::gguf::qwen4exp::ARCHITECTURE) {
+            return self.load_native_qwen4exp(
+                archive,
+                NativeNormalLoadArgs {
+                    paths,
+                    dtype,
+                    device,
+                    silent,
+                    mapper,
+                    in_situ_quant,
+                    paged_attn_config,
+                },
+                &[],
+            );
+        }
         if architecture.eq_ignore_ascii_case("gemma3") {
             return self.load_native_gemma3_text(
                 archive,
@@ -734,20 +749,7 @@ impl GGUFLoader {
         archive: Arc<mistralrs_quant::GgufArchive>,
         args: NativeNormalLoadArgs<'_>,
     ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
-        let NativeNormalLoadArgs {
-            paths,
-            dtype,
-            device,
-            silent,
-            mapper,
-            in_situ_quant,
-            paged_attn_config,
-        } = args;
-        let external_config = if paths.get_config_filename().as_os_str().is_empty() {
-            None
-        } else {
-            Some(fs::read_to_string(paths.get_config_filename())?)
-        };
+        let external_config = read_external_config(args.paths)?;
         let tensor_names = archive.tensors().keys().cloned().collect::<Vec<_>>();
         let config = prepare_gemma3_text_config(
             external_config.as_deref(),
@@ -757,6 +759,70 @@ impl GGUFLoader {
         let config = stamp_qk_rope_layout(&config, RopePairing::HalfSplit)?;
         let use_language_model_prefix = gemma3_text_uses_language_model_prefix(&config)?;
         let bindings = build_gemma3_text_bindings(&archive, use_language_model_prefix)?;
+        self.load_native_synthesized_multimodal(
+            archive,
+            args,
+            SynthesizedMultimodalSource {
+                config,
+                bindings,
+                loader_type: MultimodalLoaderType::Gemma3,
+                preprocessor_config: None,
+                projector_files: &[],
+            },
+        )
+    }
+
+    fn load_native_qwen4exp(
+        &self,
+        archive: Arc<mistralrs_quant::GgufArchive>,
+        args: NativeNormalLoadArgs<'_>,
+        projector_files: &[PathBuf],
+    ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
+        let external_config = read_external_config(args.paths)?;
+        let config =
+            crate::gguf::qwen4exp::prepare_qwen4exp_config(external_config.as_deref(), &archive)?;
+        let config = stamp_qk_rope_layout(&config, RopePairing::HalfSplit)?;
+        let bindings = crate::gguf::qwen4exp::build_qwen4exp_bindings(&archive)?;
+        let preprocessor_config = match args.paths.get_preprocessor_config() {
+            Some(path) => Some(fs::read_to_string(path)?),
+            None => crate::gguf::qwen4exp::qwen4exp_preprocessor_config(&archive)?,
+        };
+        self.load_native_synthesized_multimodal(
+            archive,
+            args,
+            SynthesizedMultimodalSource {
+                config,
+                bindings,
+                loader_type: MultimodalLoaderType::Qwen4Exp,
+                preprocessor_config,
+                projector_files,
+            },
+        )
+    }
+
+    /// Load a GGUF whose config the loader builds itself into a model implemented as multimodal.
+    fn load_native_synthesized_multimodal(
+        &self,
+        archive: Arc<mistralrs_quant::GgufArchive>,
+        args: NativeNormalLoadArgs<'_>,
+        prepared: SynthesizedMultimodalSource<'_>,
+    ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
+        let NativeNormalLoadArgs {
+            paths,
+            dtype,
+            device,
+            silent,
+            mapper,
+            in_situ_quant,
+            paged_attn_config,
+        } = args;
+        let SynthesizedMultimodalSource {
+            config,
+            bindings,
+            loader_type,
+            preprocessor_config,
+            projector_files,
+        } = prepared;
         let internal_dtype = dtype.try_into_dtype(&[device])?;
         let source = Arc::new(mistralrs_quant::GgufWeightSource::new(
             archive.clone(),
@@ -782,8 +848,13 @@ impl GGUFLoader {
             eos_token: tokenizer.conversion.eos,
             unk_token: tokenizer.conversion.unk,
             processor_config: None,
-            preprocessor_config: None,
-            source_weight_files: paths.get_weight_filenames().to_vec(),
+            preprocessor_config,
+            source_weight_files: paths
+                .get_weight_filenames()
+                .iter()
+                .chain(projector_files)
+                .cloned()
+                .collect(),
             rope_pairing: RopePairing::HalfSplit,
         };
         let mut loader = MultimodalLoaderBuilder::new(
@@ -797,8 +868,7 @@ impl GGUFLoader {
         if let Some(dynamic_lora) = self.dynamic_lora.as_ref() {
             loader = loader.with_lora(dynamic_lora.adapters.clone(), dynamic_lora.runtime);
         }
-        let loader =
-            loader.build_with_source(MultimodalLoaderType::Gemma3, source, self.kind.clone());
+        let loader = loader.build_with_source(loader_type, source, self.kind.clone());
         loader.load_model_from_path(
             paths,
             dtype,
@@ -838,6 +908,26 @@ impl GGUFLoader {
         let mmproj = mistralrs_quant::GgufArchive::open_components(mmproj_paths)?;
         archive.merge_components(mmproj)?;
         let archive = Arc::new(archive);
+        if architecture.eq_ignore_ascii_case(crate::gguf::qwen4exp::ARCHITECTURE) {
+            validate_native_dynamic_lora(
+                self.dynamic_lora.as_ref(),
+                RopePairing::HalfSplit,
+                &architecture,
+            )?;
+            return self.load_native_qwen4exp(
+                archive,
+                NativeNormalLoadArgs {
+                    paths,
+                    dtype,
+                    device,
+                    silent,
+                    mapper,
+                    in_situ_quant,
+                    paged_attn_config,
+                },
+                mmproj_paths,
+            );
+        }
 
         let (loader_type, bindings, rope_pairing) = match architecture.as_str() {
             "gemma4" => (
@@ -960,8 +1050,14 @@ impl GGUFLoader {
             return Ok(None);
         }
 
-        let config_missing = paths.get_config_filename().as_os_str().is_empty();
         let model_archive = mistralrs_quant::GgufArchive::open(paths.get_weight_filenames())?;
+        let synthesizes_config = matches!(
+            model_archive.metadata_value("general.architecture"),
+            Some(candle_core::quantized::gguf_file::Value::String(architecture))
+                if architecture.eq_ignore_ascii_case(crate::gguf::qwen4exp::ARCHITECTURE)
+        );
+        let config_missing =
+            paths.get_config_filename().as_os_str().is_empty() && !synthesizes_config;
         let projector_archives = mistralrs_quant::GgufArchive::open_components(mmproj_paths)?;
         let projector_labels = projector_archives
             .iter()
@@ -1579,6 +1675,22 @@ impl Pipeline for GGUFPipeline {
 }
 
 impl AnyMoePipelineMixin for GGUFPipeline {}
+
+struct SynthesizedMultimodalSource<'a> {
+    config: String,
+    bindings: mistralrs_quant::GgufBindingMap,
+    loader_type: MultimodalLoaderType,
+    preprocessor_config: Option<String>,
+    projector_files: &'a [PathBuf],
+}
+
+fn read_external_config(paths: &dyn ModelPaths) -> Result<Option<String>> {
+    if paths.get_config_filename().as_os_str().is_empty() {
+        Ok(None)
+    } else {
+        Ok(Some(fs::read_to_string(paths.get_config_filename())?))
+    }
+}
 
 #[cfg(test)]
 mod tests {

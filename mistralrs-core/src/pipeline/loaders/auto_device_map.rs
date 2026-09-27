@@ -185,6 +185,13 @@ fn calculate_value_block_shape(
     )
 }
 
+const BYTES_PER_GIB: f64 = 1_073_741_824.0;
+
+#[allow(clippy::cast_precision_loss)]
+fn gib(bytes: usize) -> f64 {
+    bytes as f64 / BYTES_PER_GIB
+}
+
 macro_rules! b_to_mb {
     ($x:expr) => {
         $x / (1024 * 1024)
@@ -234,6 +241,30 @@ pub fn get_device_layers(
     let base_device_memory_reservation_bytes = paged_attn_config
         .as_ref()
         .map_or(0, |config| config.base_device_memory_reservation_bytes);
+    let unified_device = devices
+        .first()
+        .filter(|dev| crate::utils::normal::is_integrated_gpu(dev));
+    // Unified memory has no fallback device, so a model that can't fit fails here with the real numbers
+    if let Some(dev) = unified_device {
+        let min_kv_bytes = (max_seq_len * max_batch_size)
+            .saturating_mul(model_cfg.total_kv_cache_elements_per_token())
+            .saturating_mul(dtype.size_in_bytes());
+        let required = saturating_memory_sum([
+            total_model_size_in_bytes,
+            non_mapped_max.max(mapped_max),
+            min_kv_bytes,
+            base_device_memory_reservation_bytes,
+        ]);
+        let available = device_memory_cap(MemoryUsage.query(dev)?.available(), dev);
+        if required > available {
+            anyhow::bail!(
+                "Model needs {:.1} GiB, but only {:.1} GiB of unified memory is available after leaving {} GiB for the system. Close other applications, pick a smaller quantization, or set MISTRALRS_IGPU_MEMORY_FRACTION.",
+                gib(required),
+                gib(available),
+                crate::utils::memory_usage::UNIFIED_SYSTEM_MARGIN_BYTES >> 30,
+            );
+        }
+    }
     let kv_cache_elems = match paged_attn_config {
         Some(cfg) => {
             // The mapping estimate is bounded independently from the post-load memory mode.
@@ -279,8 +310,14 @@ pub fn get_device_layers(
                         act_overhead,
                         base_device_memory_reservation_bytes,
                     ]);
+                    // On unified memory the KV cache is capped to the context instead of a share of memory
+                    let fraction = if unified_device.is_some() {
+                        1.0
+                    } else {
+                        f64::from(f)
+                    };
                     let budget_mb =
-                        ((cap as f64 * f as f64) as usize).saturating_sub(occupied) / (1024 * 1024);
+                        ((cap as f64 * fraction) as usize).saturating_sub(occupied) / (1024 * 1024);
                     MemoryGpuConfig::MbAmount(budget_mb)
                 }
                 // ContextSize passes through to calculate_cache_config.

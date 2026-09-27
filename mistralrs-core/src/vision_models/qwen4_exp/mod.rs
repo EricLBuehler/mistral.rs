@@ -40,6 +40,8 @@ mod text;
 
 pub(crate) use crate::vision_models::qwen3_vl::Qwen3VLProcessor as Qwen4ExpProcessor;
 pub(crate) use config::Config;
+#[cfg(feature = "cuda")]
+pub(crate) use ple::planned_resident_table_bytes;
 
 /// Hybrid paged config that also budgets for the per-token QSA aux cache beside the KV cache.
 pub(crate) struct Qwen4ExpPagedConfig {
@@ -140,7 +142,7 @@ impl ModelConfigLike for Qwen4ExpPagedConfig {
 
 pub struct Qwen4ExpModel {
     text: Qwen4ExpTextModel,
-    vision: Qwen3VLVisionModel,
+    vision: Option<Qwen3VLVisionModel>,
     spatial_merge_size: usize,
     image_token_id: u32,
     video_token_id: u32,
@@ -163,10 +165,16 @@ impl Qwen4ExpModel {
             vb.pp("model").pp("visual")
         }
         .without_lora_registry();
-        let vision = Qwen3VLVisionModel::new(
-            &cfg.vision_config,
-            vision_vb.set_device(normal_loading_metadata.real_device.clone()),
-        )?;
+        let vision = cfg
+            .vision_config
+            .as_ref()
+            .map(|vision_cfg| {
+                Qwen3VLVisionModel::new(
+                    vision_cfg,
+                    vision_vb.set_device(normal_loading_metadata.real_device.clone()),
+                )
+            })
+            .transpose()?;
         // Use top-level quantization_config if present, otherwise fall back to text_config's
         let mut text_config = cfg.text_config.clone();
         if cfg.quantization_config.is_some() {
@@ -182,13 +190,22 @@ impl Qwen4ExpModel {
         Ok(Self {
             text,
             vision,
-            spatial_merge_size: cfg.vision_config.spatial_merge_size,
+            spatial_merge_size: cfg
+                .vision_config
+                .as_ref()
+                .map_or(0, |vision| vision.spatial_merge_size),
             image_token_id: cfg.image_token_id,
             video_token_id: cfg.video_token_id,
             vision_start_token_id: cfg.vision_start_token_id,
             vision_end_token_id: cfg.vision_end_token_id,
             encoder_cache: Arc::new(Mutex::new(EncoderCacheManager::new(32))),
         })
+    }
+
+    fn vision(&self) -> Result<&Qwen3VLVisionModel> {
+        self.vision
+            .as_ref()
+            .ok_or_else(|| candle_core::Error::msg("this Qwen4-Exp checkpoint has no vision tower"))
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -232,23 +249,28 @@ impl Qwen4ExpModel {
             let position_ids = prompt_position_ids.ok_or_else(|| {
                 candle_core::Error::msg("packed Qwen4-Exp prefill is missing prompt position IDs")
             })?;
-            let visual = PackedVisualEncoder::new(
-                &self.vision,
-                &self.encoder_cache,
-                self.spatial_merge_size,
-            )
-            .prepare(PackedVisualInput {
-                input_embeds,
-                pixel_values: pixel_values.as_ref(),
-                pixel_values_videos: pixel_values_videos.as_ref(),
-                image_grid_thw: image_grid_thw.as_ref(),
-                video_grid_thw: video_grid_thw.as_ref(),
-                image_hashes,
-                video_hashes,
-                layout,
-            })?;
+            let input_embeds = if pixel_values.is_none() && pixel_values_videos.is_none() {
+                input_embeds
+            } else {
+                PackedVisualEncoder::new(
+                    self.vision()?,
+                    &self.encoder_cache,
+                    self.spatial_merge_size,
+                )
+                .prepare(PackedVisualInput {
+                    input_embeds,
+                    pixel_values: pixel_values.as_ref(),
+                    pixel_values_videos: pixel_values_videos.as_ref(),
+                    image_grid_thw: image_grid_thw.as_ref(),
+                    video_grid_thw: video_grid_thw.as_ref(),
+                    image_hashes,
+                    video_hashes,
+                    layout,
+                })?
+                .input_embeds
+            };
             return self.text.forward_embeds(
-                visual.input_embeds,
+                input_embeds,
                 input_ids,
                 &attention_mask,
                 position_ids,
@@ -284,11 +306,12 @@ impl Qwen4ExpModel {
                 let last_dim = media.dim(D::Minus1)?;
                 media = media.reshape(((), last_dim))?;
             }
+            let vision = self.vision()?;
             let (embeds, _) = if hashes.is_empty() {
-                self.vision.forward(&media, grid)?
+                vision.forward(&media, grid)?
             } else {
                 let items =
-                    VisualEncoder::new(&self.vision, &self.encoder_cache, self.spatial_merge_size)
+                    VisualEncoder::new(vision, &self.encoder_cache, self.spatial_merge_size)
                         .encode(&media, grid, hashes, modality)?;
                 concatenate_visual_items(&items)?
             };
@@ -504,7 +527,9 @@ impl MultimodalModel for Qwen4ExpModel {
 impl IsqModel for Qwen4ExpModel {
     fn residual_tensors(&self) -> Vec<(String, Tensor)> {
         let mut tensors = self.text.residual_tensors();
-        tensors.extend(self.vision.residual_tensors());
+        if let Some(vision) = &self.vision {
+            tensors.extend(vision.residual_tensors());
+        }
         tensors
     }
 }

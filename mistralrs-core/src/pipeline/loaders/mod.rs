@@ -831,6 +831,11 @@ pub trait DeviceMappedModelLoader {
         Ok(self.non_mapped_sub_models())
     }
     fn num_layers(&self, config: &str) -> Result<usize>;
+
+    /// Device bytes a layer holds outside its weight bindings, as `(layer, bytes)`.
+    fn unbound_layer_bytes(&self, _config: &str) -> Result<Vec<(usize, usize)>> {
+        Ok(Vec::new())
+    }
     fn model_config(&self, config: &str) -> Result<Box<dyn ModelConfigLike>>;
 
     fn checkpoint_layer_index(&self, _config: &str, tensor_name: &str) -> Option<usize> {

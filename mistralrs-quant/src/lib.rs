@@ -81,6 +81,19 @@ pub trait QuantizedWeightSource: Send + Sync {
     fn pack_factor(&self, dtype: DType) -> Result<usize>;
 
     fn pack_factor_for(&self, key: &str, dtype: DType) -> Result<Option<usize>>;
+
+    /// Exact resident bytes of the bound weights, when the source knows them; device mapping
+    /// falls back to the pack-factor estimate otherwise.
+    fn resident_layer_bytes(&self, _dtype: DType) -> Result<Option<ResidentLayerBytes>> {
+        Ok(None)
+    }
+}
+
+/// Resident weight bytes per text layer, plus everything outside the repeating layers.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ResidentLayerBytes {
+    pub layers: std::collections::BTreeMap<usize, usize>,
+    pub outside: usize,
 }
 
 impl<T: QuantizedWeightSource + ?Sized> QuantizedWeightSource for Arc<T> {
@@ -111,6 +124,10 @@ impl<T: QuantizedWeightSource + ?Sized> QuantizedWeightSource for Arc<T> {
 
     fn pack_factor_for(&self, key: &str, dtype: DType) -> Result<Option<usize>> {
         (**self).pack_factor_for(key, dtype)
+    }
+
+    fn resident_layer_bytes(&self, dtype: DType) -> Result<Option<ResidentLayerBytes>> {
+        (**self).resident_layer_bytes(dtype)
     }
 }
 
