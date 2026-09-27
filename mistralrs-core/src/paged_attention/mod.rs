@@ -27,6 +27,8 @@ mod scheduler;
 ))]
 pub(crate) mod windowed_pool;
 pub const _PAD_SLOT_ID: i64 = -1;
+// Unified memory is shared with the OS, so the default Metal KV budget stops at this many full-length sequences.
+const METAL_DEFAULT_KV_SEQS: usize = 8;
 
 pub use attention_backend::AttentionBackendKind;
 pub use cache_engine::{CacheConfig, CacheEngine, PagedCacheType};
@@ -237,9 +239,13 @@ impl PagedAttentionConfig {
         })
     }
 
-    /// Tokens a Metal KV cache is capped to: every concurrently served sequence at full length.
+    /// Tokens a Metal KV cache is capped to: concurrently served sequences at full length.
     pub(crate) fn metal_kv_token_cap(&self, max_seq_len: usize, max_batch_size: usize) -> usize {
-        max_seq_len * max_batch_size.max(self.serving_capacity.unwrap_or(1))
+        let serving = self
+            .serving_capacity
+            .unwrap_or(1)
+            .min(METAL_DEFAULT_KV_SEQS);
+        max_seq_len * max_batch_size.max(serving)
     }
 
     pub fn with_serving_capacity(mut self, serving_capacity: usize) -> anyhow::Result<Self> {

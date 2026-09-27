@@ -84,8 +84,8 @@ chunk can improve prefill throughput while increasing decode latency, especially
 
 Concurrency beyond a few sequences is the main reason to care about paged attention. It is the difference between per-sequence contiguous caches sized for the maximum context and a shared block pool with a fixed budget:
 
-- With paged attention (default on CUDA): continuous batching against the block pool, block-level prefix sharing, and the CUDA decode-graph and FlashInfer (NVIDIA's attention-kernel library) fast paths.
-- Without it (Metal, CPU, or `--paged-attn off`): the default scheduler is first-come-first-served and batches running sequences by equal length; sequences at other lengths wait their turn and accumulate priority.
+- With paged attention (default on CUDA and Metal): continuous batching against the block pool, block-level prefix sharing, and on CUDA the decode-graph and FlashInfer (NVIDIA's attention-kernel library) fast paths.
+- Without it (CPU or `--paged-attn off`): the default scheduler is first-come-first-served and batches running sequences by equal length; sequences at other lengths wait their turn and accumulate priority.
 
 ## Prefix caching
 
