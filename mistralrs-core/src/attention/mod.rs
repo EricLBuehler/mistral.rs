@@ -173,6 +173,15 @@ where
     Tensor::cat(&attn_chunks, 2)
 }
 
+// Metal SDPA kernels only honor batch/head strides and assume each head's rows are packed.
+fn packed_rows(x: &Tensor) -> Result<Tensor> {
+    let (_, _, seq_len, head_dim) = x.dims4()?;
+    match x.stride() {
+        [.., seq_stride, 1] if seq_len == 1 || *seq_stride == head_dim => Ok(x.clone()),
+        _ => x.contiguous(),
+    }
+}
+
 fn repeat_kv(x: Tensor, n_rep: usize) -> Result<Tensor> {
     if n_rep == 1 {
         Ok(x)
@@ -470,9 +479,9 @@ impl Sdpa {
             // entirely (roughly halves matmul cost for prefill).
             let do_causal = seq_len > 1 && causal;
             return candle_nn::ops::sdpa(
-                q,
-                k,
-                v,
+                &packed_rows(q)?,
+                &packed_rows(k)?,
+                &packed_rows(v)?,
                 mask.as_ref(),
                 do_causal,
                 sdpa_params.softmax_scale,

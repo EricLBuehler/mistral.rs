@@ -163,6 +163,8 @@ fn paged_decode_matches_dense_sdpa() -> Result<()> {
     for (q_heads, kv_heads, head_dim, lens) in [
         (24, 4, 256, vec![1usize, 37, 700, 1500]),
         (32, 8, 128, vec![33, 512, 513, 2049]),
+        (8, 2, 512, vec![1, 37, 90, 700]),
+        (8, 2, 256, vec![1, 37, 90, 700]),
     ] {
         let batch = lens.len();
         let max_len = *lens.iter().max().unwrap();
@@ -176,17 +178,16 @@ fn paged_decode_matches_dense_sdpa() -> Result<()> {
             let (kb, vb) = pack_seq(&k, &v, blocks_per_seq)?;
             k_blocks.push(kb);
             v_blocks.push(vb);
-            let qb = q.narrow(0, b, 1)?.unsqueeze(2)?;
-            let out = candle_nn::ops::sdpa(
-                &qb,
-                &k.unsqueeze(0)?,
-                &v.unsqueeze(0)?,
-                None,
-                false,
-                scale,
-                1.,
-            )?;
-            expected.push(out.squeeze(2)?);
+            let gqa = q_heads / kv_heads;
+            let qb = q
+                .narrow(0, b, 1)?
+                .to_dtype(DType::F32)?
+                .reshape((kv_heads, gqa, head_dim))?;
+            let kf = k.to_dtype(DType::F32)?;
+            let att = (qb.matmul(&kf.t()?)? * scale as f64)?;
+            let att = candle_nn::ops::softmax_last_dim(&att)?;
+            let out = att.matmul(&v.to_dtype(DType::F32)?)?;
+            expected.push(out.reshape((1, q_heads, head_dim))?);
         }
         let key_cache = Tensor::cat(&k_blocks, 0)?;
         let value_cache = Tensor::cat(&v_blocks, 0)?;
@@ -218,6 +219,41 @@ fn paged_decode_matches_dense_sdpa() -> Result<()> {
             diff < 3e-2,
             "{q_heads}/{kv_heads}/{head_dim} {lens:?}: max abs diff {diff}"
         );
+    }
+    Ok(())
+}
+
+#[test]
+fn sdpa_handles_token_major_kv_views() -> Result<()> {
+    use crate::attention::{AttentionMask, Sdpa, SdpaParams};
+
+    let device = Device::new_metal(0)?;
+    let (q_heads, kv_heads, head_dim, kv_len) = (8, 2, 256, 90);
+    let q = Tensor::randn(0f32, 1., (1, q_heads, 1, head_dim), &device)?.to_dtype(DType::BF16)?;
+    let k_tokens =
+        Tensor::randn(0f32, 1., (kv_len, kv_heads, head_dim), &device)?.to_dtype(DType::BF16)?;
+    let v_tokens =
+        Tensor::randn(0f32, 1., (kv_len, kv_heads, head_dim), &device)?.to_dtype(DType::BF16)?;
+    let k = k_tokens.transpose(0, 1)?.unsqueeze(0)?;
+    let v = v_tokens.transpose(0, 1)?.unsqueeze(0)?;
+    let mask = Tensor::zeros((1, 1, 1, kv_len), DType::BF16, &device)?;
+    let params = SdpaParams {
+        n_kv_groups: q_heads / kv_heads,
+        softcap: None,
+        softmax_scale: 1. / (head_dim as f32).sqrt(),
+        sliding_window: None,
+        sinks: None,
+    };
+    for mask in [AttentionMask::None, AttentionMask::Custom(mask)] {
+        let strided = Sdpa.run_attention(&q, &k, &v, &mask, None, &params)?;
+        let packed =
+            Sdpa.run_attention(&q, &k.contiguous()?, &v.contiguous()?, &mask, None, &params)?;
+        let diff = (strided.to_dtype(DType::F32)? - packed.to_dtype(DType::F32)?)?
+            .abs()?
+            .flatten_all()?
+            .max(0)?
+            .to_scalar::<f32>()?;
+        assert!(diff < 1e-3, "max abs diff {diff}");
     }
     Ok(())
 }
