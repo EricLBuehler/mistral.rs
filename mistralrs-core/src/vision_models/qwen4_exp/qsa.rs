@@ -140,6 +140,17 @@ impl QsaAttention {
             vb_sa.pp("indexer").pp("index_qk_proj"),
         )?;
         let vb_norms = mapper.set_device(layer_idx, vb.pp("self_attn"), false);
+        #[cfg(feature = "cutile")]
+        if use_paged_attention {
+            mistralrs_quant::cutile::register_qsa_shape(mistralrs_quant::cutile::QsaWarmShape {
+                ratio: qsa.compress_ratio,
+                topk: qsa.block_topk(),
+                aux_dim: aux_dim(&qsa, cfg.rot_dim() / 2),
+                n_q_heads: num_heads,
+                n_kv_heads: num_kv_heads,
+                block_size: crate::paged_attention::DEFAULT_PAGED_ATTENTION_BLOCK_SIZE,
+            });
+        }
         let paged_attn = if use_paged_attention {
             Some(PagedAttention::new_with_fp8_attention_scales(
                 head_dim,
@@ -430,20 +441,19 @@ impl QsaAttention {
                 &mut value_cache,
                 slot_mapping,
             )?;
-            let (selected, n_selected) = kernels::qsa_select(
-                &index_q.reshape((n_tokens, self.qsa.n_heads, self.qsa.head_dim))?,
-                &aux,
-                layout,
-                &paged,
-                &shape,
-                max_blocks,
-            )?;
+            let index_q = index_q.reshape((n_tokens, self.qsa.n_heads, self.qsa.head_dim))?;
+            let (selected, n_selected) = match kernels::qsa_select_cutile(
+                &index_q, &aux, layout, &paged, &shape, max_blocks,
+            )? {
+                Some(selection) => selection,
+                None => kernels::qsa_select(&index_q, &aux, layout, &paged, &shape, max_blocks)?,
+            };
             let q_tokens = q.transpose(1, 2)?.contiguous()?.reshape((
                 n_tokens,
                 self.num_heads,
                 self.head_dim,
             ))?;
-            let y = kernels::qsa_attention(kernels::QsaAttentionArgs {
+            let attn_args = kernels::QsaAttentionArgs {
                 q: &q_tokens,
                 key_cache: &key_cache,
                 value_cache: &value_cache,
@@ -454,7 +464,11 @@ impl QsaAttention {
                 shape: &shape,
                 n_kv_heads: self.num_kv_heads,
                 scale: self.sdpa_params.softmax_scale,
-            })?;
+            };
+            let y = match kernels::qsa_attention_cutile(&attn_args)? {
+                Some(y) => y,
+                None => kernels::qsa_attention(attn_args)?,
+            };
             return y.reshape((b_sz, seq_len, ()));
         }
         candle_core::bail!(

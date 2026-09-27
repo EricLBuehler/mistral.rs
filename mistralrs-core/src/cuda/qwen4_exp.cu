@@ -1210,6 +1210,18 @@ extern "C" void qwen4_qsa_select(const void *q, const void *aux,
       scores, score_stride, layout, paged, ratio, topk, selected, n_selected);
 }
 
+// Top-k over scores produced elsewhere (the cuTile scoring kernel).
+extern "C" void qwen4_qsa_topk(const float *scores, int score_stride,
+                               Q4Tokens layout, Q4Paged paged, int ratio,
+                               int topk, int *selected, int *n_selected,
+                               int64_t stream) {
+  if (layout.n_tokens == 0) {
+    return;
+  }
+  q4_qsa_topk_kernel<<<layout.n_tokens, 1024, 0, (cudaStream_t)stream>>>(
+      scores, score_stride, layout, paged, ratio, topk, selected, n_selected);
+}
+
 extern "C" void qwen4_qsa_attention(
     const void *q, const void *k_cache, const void *v_cache, Q4Tokens layout,
     Q4Paged paged, const int *selected, const int *n_selected, int topk,

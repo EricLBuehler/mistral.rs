@@ -124,6 +124,18 @@ mod ffi {
             out: *mut c_void,
             stream: i64,
         );
+        #[cfg(feature = "cutile")]
+        pub(super) fn qwen4_qsa_topk(
+            scores: *const f32,
+            score_stride: i32,
+            layout: Q4Tokens,
+            paged: Q4Paged,
+            ratio: i32,
+            topk: i32,
+            selected: *mut i32,
+            n_selected: *mut i32,
+            stream: i64,
+        );
         pub(super) fn qwen4_ple_gate(
             key: *const c_void,
             hidden_states: *const c_void,
@@ -291,6 +303,50 @@ pub(crate) struct TokenLayout {
     pub kv_lens: Option<Tensor>,
     pub n_tokens: usize,
     pub n_seqs: usize,
+    #[cfg(feature = "cutile")]
+    pub cutile: Option<CutileTokens>,
+}
+
+/// Prefill metadata of the cuTile QSA kernels: score tiles `[n, 4]` (first token, sequence, tokens,
+/// first position) of one sequence each, and `[tokens, 2]` (sequence or -1, kv position) rows.
+#[cfg(feature = "cutile")]
+#[derive(Clone)]
+pub(crate) struct CutileTokens {
+    pub tiles: Tensor,
+    pub tokens: Tensor,
+}
+
+#[cfg(feature = "cutile")]
+impl CutileTokens {
+    fn from_host(
+        seqs: &[(usize, usize)],
+        kv_lens: &[usize],
+        n_tokens: usize,
+        device: &Device,
+    ) -> Result<Self> {
+        let tile_tokens = mistralrs_quant::cutile::QSA_SCORE_TOKENS;
+        let mut tokens = vec![[-1i32, 0]; n_tokens];
+        let mut tiles = Vec::new();
+        for (seq, (&(start, len), &kv_len)) in seqs.iter().zip(kv_lens).enumerate() {
+            let pos0 = kv_len - len;
+            for local in 0..len {
+                tokens[start + local] = [seq as i32, (pos0 + local) as i32];
+            }
+            for first in (0..len).step_by(tile_tokens) {
+                tiles.extend([
+                    (start + first) as i32,
+                    seq as i32,
+                    tile_tokens.min(len - first) as i32,
+                    (pos0 + first) as i32,
+                ]);
+            }
+        }
+        let n_tiles = tiles.len() / 4;
+        Ok(Self {
+            tiles: Tensor::from_vec(tiles, (n_tiles, 4), device)?,
+            tokens: Tensor::from_vec(tokens.concat(), (n_tokens, 2), device)?,
+        })
+    }
 }
 
 impl TokenLayout {
@@ -303,6 +359,8 @@ impl TokenLayout {
             kv_lens: None,
             n_tokens: n_seqs,
             n_seqs,
+            #[cfg(feature = "cutile")]
+            cutile: None,
         }
     }
 
@@ -335,6 +393,8 @@ impl TokenLayout {
             )?),
             n_tokens,
             n_seqs: seqs.len(),
+            #[cfg(feature = "cutile")]
+            cutile: Some(CutileTokens::from_host(seqs, kv_lens, n_tokens, device)?),
         })
     }
 
@@ -746,6 +806,120 @@ pub(crate) fn qsa_select(
         );
     }
     Ok((selected, n_selected))
+}
+
+/// cuTile scoring plus the CUDA top-k, for prefill layouts on devices with the tile JIT.
+pub(crate) fn qsa_select_cutile(
+    q: &Tensor,
+    aux: &Tensor,
+    layout: &TokenLayout,
+    paged: &PagedView<'_>,
+    shape: &QsaShape,
+    max_blocks: usize,
+) -> Result<Option<(Tensor, Tensor)>> {
+    #[cfg(feature = "cutile")]
+    {
+        let (Some(meta), Device::Cuda(dev)) = (layout.cutile.as_ref(), q.device()) else {
+            return Ok(None);
+        };
+        if q.dtype() != DType::BF16
+            || shape.n_index_heads != mistralrs_quant::cutile::QSA_INDEX_HEADS
+            || q.dim(candle_core::D::Minus1)? != mistralrs_quant::cutile::QSA_INDEX_DIM
+            || !mistralrs_quant::cutile::jit_available(dev)
+        {
+            return Ok(None);
+        }
+        let q = q.contiguous()?;
+        let n_tokens = layout.n_tokens;
+        let score_stride = max_blocks.max(shape.topk + 1);
+        let scores = empty(&[n_tokens, score_stride], DType::F32, q.device())?;
+        let block_tables = paged.block_tables.contiguous()?;
+        let tile_paged = mistralrs_quant::cutile::QsaPaged {
+            block_tables: &block_tables,
+            max_blocks_per_seq: block_tables.dim(1)?,
+            block_size: paged.block_size,
+        };
+        mistralrs_quant::cutile::cutile_qsa_score(
+            &mistralrs_quant::cutile::QsaScoreArgs {
+                q: &q,
+                aux,
+                paged: &tile_paged,
+                tiles: &meta.tiles,
+                scores: &scores,
+                max_blocks,
+                ratio: shape.ratio,
+                topk: shape.topk,
+            },
+            dev,
+        )?;
+        let selected = empty(&[n_tokens, shape.topk], DType::I32, q.device())?;
+        let n_selected = empty(&[n_tokens], DType::I32, q.device())?;
+        unsafe {
+            ffi::qwen4_qsa_topk(
+                dev_ptr(&scores)? as *const f32,
+                score_stride as i32,
+                layout.ffi()?,
+                paged.ffi()?,
+                shape.ratio as i32,
+                shape.topk as i32,
+                dev_ptr(&selected)? as *mut i32,
+                dev_ptr(&n_selected)? as *mut i32,
+                stream(q.device())?,
+            );
+        }
+        Ok(Some((selected, n_selected)))
+    }
+    #[cfg(not(feature = "cutile"))]
+    {
+        let _ = (q, aux, layout, paged, shape, max_blocks);
+        Ok(None)
+    }
+}
+
+/// cuTile sparse attention for prefill layouts on devices with the tile JIT.
+pub(crate) fn qsa_attention_cutile(args: &QsaAttentionArgs<'_>) -> Result<Option<Tensor>> {
+    #[cfg(feature = "cutile")]
+    {
+        let (Some(meta), Device::Cuda(dev)) = (args.layout.cutile.as_ref(), args.q.device()) else {
+            return Ok(None);
+        };
+        let (_, n_q_heads, head_dim) = args.q.dims3()?;
+        if args.q.dtype() != DType::BF16
+            || args.key_cache.rank() != 4
+            || head_dim != mistralrs_quant::cutile::QSA_ATTN_HEAD_DIM
+            || n_q_heads % args.n_kv_heads != 0
+            || !mistralrs_quant::cutile::jit_available(dev)
+        {
+            return Ok(None);
+        }
+        let block_tables = args.paged.block_tables.contiguous()?;
+        let tile_paged = mistralrs_quant::cutile::QsaPaged {
+            block_tables: &block_tables,
+            max_blocks_per_seq: block_tables.dim(1)?,
+            block_size: args.paged.block_size,
+        };
+        let out = mistralrs_quant::cutile::cutile_qsa_attention(
+            &mistralrs_quant::cutile::QsaAttentionArgs {
+                q: &args.q.contiguous()?,
+                key_cache: args.key_cache,
+                value_cache: args.value_cache,
+                paged: &tile_paged,
+                selected: args.selected,
+                n_selected: args.n_selected,
+                tokens: &meta.tokens,
+                n_kv_heads: args.n_kv_heads,
+                ratio: args.shape.ratio,
+                scale: args.scale,
+            },
+            dev,
+        )?;
+        Ok(Some(out))
+    }
+    #[cfg(not(feature = "cutile"))]
+    {
+        let _ = args;
+        Ok(None)
+    }
 }
 
 pub(crate) struct QsaAttentionArgs<'a> {
