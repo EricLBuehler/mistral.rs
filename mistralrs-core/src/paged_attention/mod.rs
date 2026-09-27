@@ -237,6 +237,11 @@ impl PagedAttentionConfig {
         })
     }
 
+    /// Tokens a Metal KV cache is capped to: every concurrently served sequence at full length.
+    pub(crate) fn metal_kv_token_cap(&self, max_seq_len: usize, max_batch_size: usize) -> usize {
+        max_seq_len * max_batch_size.max(self.serving_capacity.unwrap_or(1))
+    }
+
     pub fn with_serving_capacity(mut self, serving_capacity: usize) -> anyhow::Result<Self> {
         if serving_capacity == 0 {
             anyhow::bail!("paged attention serving capacity must be nonzero")
@@ -380,7 +385,7 @@ fn fit_post_load_cache_budget(
 /// If `None` on Metal, falls back to `config.max_seq_len()`.
 #[allow(clippy::too_many_arguments)]
 pub fn calculate_cache_config(
-    mem_gpu: MemoryGpuConfig,
+    mem_gpu_config: MemoryGpuConfig,
     memory_reservations: CacheMemoryReservations,
     block_size: Option<usize>,
     dtype: DType,
@@ -465,7 +470,7 @@ pub fn calculate_cache_config(
         let future_reserved_mb = future_reserved_bytes.div_ceil(SIZE_IN_MB);
 
         #[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
-        let mut mem_gpu_mb = match mem_gpu {
+        let mut mem_gpu_mb = match mem_gpu_config {
             MemoryGpuConfig::MbAmount(v) => v,
             MemoryGpuConfig::BestEffortMbAmount { target_mb, min_mb } => {
                 if let Some(min_mb) = min_mb {
@@ -501,7 +506,7 @@ pub fn calculate_cache_config(
             let available_mb = device_memory_cap(memory.available(), device)
                 .saturating_sub(future_reserved_bytes)
                 / SIZE_IN_MB;
-            mem_gpu_mb = fit_post_load_cache_budget(mem_gpu, mem_gpu_mb, available_mb)?;
+            mem_gpu_mb = fit_post_load_cache_budget(mem_gpu_config, mem_gpu_mb, available_mb)?;
         }
         min_mem_gpu = min_mem_gpu.min(mem_gpu_mb);
     }
@@ -525,7 +530,8 @@ pub fn calculate_cache_config(
     // On CUDA, all available memory is used for maximum request concurrency (vLLM approach).
     #[allow(unused_mut, unused_variables)]
     let mut mem_gpu = min_mem_gpu;
-    if device.is_metal() {
+    // Explicit budgets (--pa-context-len / --pa-memory-mb) are honored as given.
+    if device.is_metal() && matches!(mem_gpu_config, MemoryGpuConfig::Utilization(_)) {
         let max_tokens = max_num_tokens.unwrap_or(config.max_seq_len());
         let mem_for_tokens =
             ctxt_to_blocks!(max_tokens, dtype_size, block_size, config) / SIZE_IN_MB;

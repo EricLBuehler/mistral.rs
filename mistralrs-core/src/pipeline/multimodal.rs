@@ -741,7 +741,10 @@ impl Loader for MultimodalLoader {
             };
         } else if let DeviceMapSetting::Auto(mut params) = mapper.clone() {
             params = self.inner.auto_device_map_params(&config, &params)?;
-            max_kv_tokens = Some(params.max_seq_len() * params.max_batch_size());
+            max_kv_tokens = Some(match paged_attn_config.as_ref() {
+                Some(cfg) => cfg.metal_kv_token_cap(params.max_seq_len(), params.max_batch_size()),
+                None => params.max_seq_len() * params.max_batch_size(),
+            });
 
             // Initial dtype
             let dtype = dtype.try_into_dtype(&available_devices.iter().collect::<Vec<_>>())?;

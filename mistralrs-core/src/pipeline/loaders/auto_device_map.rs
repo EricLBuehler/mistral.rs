@@ -316,7 +316,7 @@ pub fn get_device_layers(
                 &devices.iter().map(|d| Some(d.clone())).collect::<Vec<_>>(),
                 true,
                 Some(total_model_size_in_bytes),
-                Some(max_seq_len * max_batch_size),
+                Some(cfg.metal_kv_token_cap(max_seq_len, max_batch_size)),
             )?;
             let key_shape = calculate_key_block_shape(&*model_cfg, dtype, cache.block_size);
             let key_sz =
