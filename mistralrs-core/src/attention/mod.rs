@@ -182,6 +182,15 @@ fn packed_rows(x: &Tensor) -> Result<Tensor> {
     }
 }
 
+// candle's Metal SDPA binds the mask buffer without its storage offset.
+fn offset_free(x: &Tensor) -> Result<Tensor> {
+    if x.layout().start_offset() == 0 {
+        Ok(x.clone())
+    } else {
+        x.force_contiguous()
+    }
+}
+
 fn repeat_kv(x: Tensor, n_rep: usize) -> Result<Tensor> {
     if n_rep == 1 {
         Ok(x)
@@ -471,7 +480,7 @@ impl Sdpa {
             && !(head_dim == 512 && seq_len > 8)
         {
             let mask = match mask {
-                Some(mask) => Some(mask.broadcast_as(tgt_mask_shape)?),
+                Some(mask) => Some(offset_free(mask)?.broadcast_as(tgt_mask_shape)?),
                 None => None,
             };
             // do_causal lets the steel_attention kernel bound its kb-loop to

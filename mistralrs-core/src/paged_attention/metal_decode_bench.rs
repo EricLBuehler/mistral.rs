@@ -257,3 +257,60 @@ fn sdpa_handles_token_major_kv_views() -> Result<()> {
     }
     Ok(())
 }
+
+#[test]
+fn sdpa_honors_offset_mask_views() -> Result<()> {
+    use crate::attention::{AttentionMask, Sdpa, SdpaParams};
+
+    let device = Device::new_metal(0)?;
+    let (q_heads, kv_heads, head_dim, q_len, full_kv, kv_len) = (8, 2, 256, 79, 1103, 591);
+    let q =
+        Tensor::randn(0f32, 1., (1, q_heads, q_len, head_dim), &device)?.to_dtype(DType::BF16)?;
+    let k =
+        Tensor::randn(0f32, 1., (1, kv_heads, kv_len, head_dim), &device)?.to_dtype(DType::BF16)?;
+    let v =
+        Tensor::randn(0f32, 1., (1, kv_heads, kv_len, head_dim), &device)?.to_dtype(DType::BF16)?;
+    let window = 512;
+    let prefix = full_kv - q_len;
+    let mut m = vec![0f32; q_len * full_kv];
+    for i in 0..q_len {
+        let qp = prefix + i;
+        for j in 0..full_kv {
+            if j > qp || j + window <= qp {
+                m[i * full_kv + j] = f32::NEG_INFINITY;
+            }
+        }
+    }
+    let full_mask = Tensor::from_vec(m, (q_len, full_kv), &device)?.to_dtype(DType::BF16)?;
+    let view = full_mask.narrow(1, full_kv - kv_len, kv_len)?;
+    let params = SdpaParams {
+        n_kv_groups: q_heads / kv_heads,
+        softcap: None,
+        softmax_scale: 1. / (head_dim as f32).sqrt(),
+        sliding_window: Some(window),
+        sinks: None,
+    };
+    let from_view = Sdpa.run_attention(
+        &q,
+        &k,
+        &v,
+        &AttentionMask::Custom(view.clone()),
+        None,
+        &params,
+    )?;
+    let from_copy = Sdpa.run_attention(
+        &q,
+        &k,
+        &v,
+        &AttentionMask::Custom(view.force_contiguous()?),
+        None,
+        &params,
+    )?;
+    let diff = (from_view.to_dtype(DType::F32)? - from_copy.to_dtype(DType::F32)?)?
+        .abs()?
+        .flatten_all()?
+        .max(0)?
+        .to_scalar::<f32>()?;
+    assert!(diff < 1e-3, "max abs diff {diff}");
+    Ok(())
+}
