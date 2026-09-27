@@ -1008,6 +1008,15 @@ pub fn call_afq_qmm(
         };
         let qmv_fast_shape = o.is_multiple_of(8) && d.is_multiple_of(512) && d >= 512;
         let qmv_quad_shape = (d == 128 || d == 64) && bits.is_power_of_two();
+        if b <= QMM_ROWS8_MAX_ROWS
+            && b > QMV_ROWS_MAX_FOR_ROWS_KERNEL
+            && d.is_multiple_of(QMM_ROWS8_K_CHUNK)
+            && o.is_multiple_of(QMM_ROWS8_OUTS_PER_SIMDGROUP)
+            && QMV_ROWS_BITS.contains(&bits)
+            && group_size.is_multiple_of(QMM_ROWS8_LANE_RUN)
+        {
+            return encode_qmm_t_rows8(device, ep, kernels, args);
+        }
         return if b <= QMV_ROWS_MAX_FOR_ROWS_KERNEL
             && qmv_fast_shape
             && !qmv_quad_shape
@@ -1337,6 +1346,63 @@ fn encode_qmv_fast_rows(
 }
 
 const QMM_SMALL_MAX_ROWS: usize = 16;
+// qmm_t_rows8 geometry: one 8x8 MMA tile of outputs x rows per simdgroup, 4 simdgroups per threadgroup, and each
+// lane dequantizing a contiguous 32-weight run per 128-wide K chunk (so the group size must be a multiple of 32).
+const QMM_ROWS8_MAX_ROWS: usize = 8;
+const QMM_ROWS8_OUTS_PER_SIMDGROUP: usize = 8;
+const QMM_ROWS8_SIMDGROUPS: usize = 4;
+const QMM_ROWS8_K_CHUNK: usize = 128;
+const QMM_ROWS8_LANE_RUN: usize = 32;
+
+fn encode_qmm_t_rows8(
+    device: &Device,
+    ep: impl EncoderProvider,
+    kernels: &Kernels,
+    args: QmvRows<'_>,
+) -> Result<(), MetalKernelError> {
+    let type_string = match args.ty {
+        DType::F32 => "float",
+        DType::BF16 => "bfloat16_t",
+        DType::F16 => "float16_t",
+        other => {
+            return Err(MetalKernelError::DTypeMismatch {
+                expected: vec![DType::F32, DType::F16, DType::BF16],
+                got: other,
+            })
+        }
+    };
+    let name = format!(
+        "qmm_t_rows8_{type_string}_gs_{}_b_{}",
+        args.group_size, args.bits
+    );
+    let pipeline = kernels.load_pipeline(device, &name)?;
+    let encoder = ep.encoder();
+    let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
+    encoder.set_compute_pipeline_state(&pipeline);
+    encoder.set_input_buffer(0, Some(args.w), 0);
+    encoder.set_input_buffer(1, Some(args.scales), 0);
+    encoder.set_input_buffer(2, Some(args.biases), 0);
+    encoder.set_input_buffer(3, Some(args.x.0), args.x.1);
+    encoder.set_output_buffer(4, Some(args.out), 0);
+    <i32 as EncoderParam>::set_param(encoder, 5, args.in_vec_size as i32);
+    <i32 as EncoderParam>::set_param(encoder, 6, args.out_vec_size as i32);
+    <i32 as EncoderParam>::set_param(encoder, 7, args.num_rows as i32);
+    encoder.dispatch_thread_groups(
+        MTLSize {
+            width: args
+                .out_vec_size
+                .div_ceil(QMM_ROWS8_OUTS_PER_SIMDGROUP * QMM_ROWS8_SIMDGROUPS),
+            height: 1,
+            depth: 1,
+        },
+        MTLSize {
+            width: 32,
+            height: QMM_ROWS8_SIMDGROUPS,
+            depth: 1,
+        },
+    );
+    Ok(())
+}
 
 /// Tiled qmm_t with 8- or 16-row tiles for decode batches.
 fn encode_qmm_t_small(
