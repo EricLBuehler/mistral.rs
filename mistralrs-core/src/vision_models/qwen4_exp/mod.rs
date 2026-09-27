@@ -473,9 +473,10 @@ impl MultimodalModel for Qwen4ExpModel {
     }
     #[cfg(feature = "cuda")]
     fn supports_cuda_decode_graphs_for_args(&self, model_specific_args: &dyn Any) -> bool {
-        model_specific_args
-            .downcast_ref::<Qwen3VLVisionSpecificArgs>()
-            .is_some()
+        self.supports_cuda_decode_graphs()
+            && model_specific_args
+                .downcast_ref::<Qwen3VLVisionSpecificArgs>()
+                .is_some()
     }
     fn config(&self) -> &ModelConfigMetadata {
         &self.text.cfg
