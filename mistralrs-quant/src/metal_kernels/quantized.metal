@@ -2772,12 +2772,13 @@ template <typename T, int group_size, int bits, int ROWS>
   constexpr int sb_block_step = block_size / group_size;
 
   for (int k = 0; k < in_vec_size; k += block_size) {
+#pragma unroll
     for (int r = 0; r < ROWS; ++r) {
-      if (r < rows) {
-        const device T *xr = x + r * in_vec_size;
-        for (int i = 0; i < values_per_thread; ++i) {
-          x_thread[r][i] = static_cast<float>(xr[i]);
-        }
+      // Rows past the batch reread the last real row so every loop unrolls; only the store is guarded.
+      const device T *xr = x + min(r, rows - 1) * in_vec_size;
+#pragma unroll
+      for (int i = 0; i < values_per_thread; ++i) {
+        x_thread[r][i] = static_cast<float>(xr[i]);
       }
     }
     for (int o = 0; o < results_per_simdgroup; ++o) {
@@ -2792,14 +2793,14 @@ template <typename T, int group_size, int bits, int ROWS>
               fma(sc, static_cast<float>((packed >> (bits * j)) & mask), bi);
         }
       }
+#pragma unroll
       for (int r = 0; r < ROWS; ++r) {
-        if (r < rows) {
-          float acc = 0;
-          for (int i = 0; i < values_per_thread; ++i) {
-            acc = fma(wf[i], x_thread[r][i], acc);
-          }
-          result[r][o] += acc;
+        float acc = 0;
+#pragma unroll
+        for (int i = 0; i < values_per_thread; ++i) {
+          acc = fma(wf[i], x_thread[r][i], acc);
         }
+        result[r][o] += acc;
       }
     }
     ws += ws_block_step;

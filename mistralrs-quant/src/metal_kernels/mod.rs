@@ -1268,8 +1268,8 @@ const QMV_ROWS_MIN: usize = 2;
 const QMV_ROWS_BITS: [usize; 3] = [2, 4, 8];
 // Rows per threadgroup; more spill the per-row activation registers.
 const QMV_ROWS_MAX: usize = 4;
-// From 4 rows qmm_t_small's MMA tiles beat qmv_fast_rows (flat cost up to its 8-row tile).
-const QMV_ROWS_MAX_FOR_ROWS_KERNEL: usize = 3;
+// From 5 rows qmm_t_small's MMA tiles beat qmv_fast_rows (flat cost up to its 8-row tile).
+const QMV_ROWS_MAX_FOR_ROWS_KERNEL: usize = 4;
 
 struct QmvRows<'a> {
     ty: DType,
