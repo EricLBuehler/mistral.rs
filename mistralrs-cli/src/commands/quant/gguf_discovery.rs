@@ -352,6 +352,64 @@ pub(crate) fn list_local_files_recursive(root: &Path) -> Result<Vec<String>> {
     Ok(files)
 }
 
+const VISION_PROJECTOR_TYPE_KEY: &str = "clip.vision.projector_type";
+const AUDIO_PROJECTOR_TYPE_KEY: &str = "clip.audio.projector_type";
+
+/// Reads one string metadata key from a local GGUF file's header, tolerating any failure
+/// (missing file, not a GGUF, key absent or non-string) by returning `None`. Only the header
+/// and metadata table are read, not tensor data.
+fn read_local_gguf_metadata_string(path: &Path, key: &str) -> Option<String> {
+    let mut file = fs::File::open(path).ok()?;
+    let content = candle_core::quantized::gguf_file::Content::read(&mut file).ok()?;
+    match content.metadata.get(key)? {
+        candle_core::quantized::gguf_file::Value::String(value) => Some(value.clone()),
+        _ => None,
+    }
+}
+
+/// Drops directory-scan projector candidates that structurally cannot pair with `model_file`
+/// (relative to `root`), so a stray `mmproj*.gguf` belonging to a different model in the same
+/// flat directory is never auto-attached to (or counted toward "ambiguous" for) an unrelated
+/// model. See mistral.rs issue #2421.
+///
+/// Fails open: if the model's own architecture can't be read locally (e.g. remote/undownloaded
+/// files), every candidate is kept and the caller falls back to the previous, unfiltered
+/// behavior.
+pub(crate) fn filter_projector_candidates(
+    root: &Path,
+    files: &[String],
+    model_file: &str,
+) -> Vec<String> {
+    let Some(first_shard) = model_file.split(GGUF_MULTI_FILE_DELIMITER).next() else {
+        return files.to_vec();
+    };
+    let Some(architecture) =
+        read_local_gguf_metadata_string(&root.join(first_shard), "general.architecture")
+    else {
+        return files.to_vec();
+    };
+
+    files
+        .iter()
+        .filter(|file| {
+            let path = file.replace('\\', "/");
+            if !is_gguf(&path) || !is_projector(&path) {
+                return true;
+            }
+            let full_path = root.join(&path);
+            let vision_type =
+                read_local_gguf_metadata_string(&full_path, VISION_PROJECTOR_TYPE_KEY);
+            let audio_type = read_local_gguf_metadata_string(&full_path, AUDIO_PROJECTOR_TYPE_KEY);
+            mistralrs_core::gguf_architecture_accepts_projector(
+                &architecture,
+                vision_type.as_deref(),
+                audio_type.as_deref(),
+            )
+        })
+        .cloned()
+        .collect()
+}
+
 pub(crate) fn list_local_gguf_companions(root: &Path, exact_file: &str) -> Result<Vec<String>> {
     let mut directories = BTreeSet::from([root.to_path_buf()]);
     for filename in exact_file.split(GGUF_MULTI_FILE_DELIMITER).map(str::trim) {

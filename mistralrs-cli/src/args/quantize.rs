@@ -163,6 +163,7 @@ impl QuantizeFormatOptions {
             tok_model_id: self.tok_model_id.clone(),
             gqa: 1,
             direct_file_only: self.direct_file_only,
+            mmproj_disabled: false,
         }
     }
 

@@ -82,7 +82,7 @@ impl NativeMultimodalGgufFamily {
     }
 }
 
-fn family_from_names(
+pub(crate) fn family_from_names(
     architecture: &str,
     projector: Option<&str>,
 ) -> Result<Option<NativeMultimodalGgufFamily>> {
