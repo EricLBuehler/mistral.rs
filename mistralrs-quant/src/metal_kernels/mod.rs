@@ -1080,11 +1080,11 @@ pub fn call_afq_qmm(
             };
             (group_dims, grid_dims)
         } else {
-            // Prefer the BM=64 BN=32 tile when prefill is large enough; only the plain (non-batched,
-            // non-gather) kernel has the wide-tile instantiations, so the grid must follow the same rule.
+            // Only the plain (non-batched, non-gather) kernel has the wide-tile instantiations, so the grid
+            // must follow the same rule.
             let wn = 2;
             let wm = 2;
-            let wide_tiles = b >= 64 && !batched && !gather;
+            let wide_tiles = b >= QMM_WIDE_TILE_MIN_ROWS && !batched && !gather;
             let use_tile_64_32 = wide_tiles && o.is_multiple_of(32);
             let use_tile_64_64 = wide_tiles && o.is_multiple_of(64);
             let (bm, bn) = if use_tile_64_32 {
@@ -1272,6 +1272,9 @@ pub fn call_afq_qmm(
 }
 
 // Below this many rows plain qmv_fast already reads the weights once.
+// 64-row qmm_t tiles only pay off once the padding in the last tile is small: at 89-135 prompt rows they
+// waste 40%+ of the tile and run 11-21% slower than 32-row tiles; from ~256 rows they win by ~6%.
+const QMM_WIDE_TILE_MIN_ROWS: usize = 256;
 const QMV_ROWS_MIN: usize = 2;
 // qmv_fast_rows dequantizes by shift-and-mask, which needs a power-of-two bit width.
 const QMV_ROWS_BITS: [usize; 3] = [2, 4, 8];
