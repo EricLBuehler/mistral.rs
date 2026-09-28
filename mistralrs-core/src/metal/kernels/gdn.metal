@@ -414,6 +414,121 @@ instantiate_gdn_rmsnorm_gated(half)
 instantiate_gdn_rmsnorm_gated(bfloat)
 
 // ============================================================================
+// Kernel 1d: multi-token GDN recurrence straight from the convolved projection
+//
+// MLX-style layout: one simdgroup per (batch, v head, v column); each lane holds DK / 32 state entries and the key
+// dot products reduce with simd_sum, so the grid has B * Hv * V * 32 threads. Per token it computes the q/k L2 norms,
+// q scale, beta and decay in-kernel (same math as Kernel 1c). mixed: [B, T, 2 * key_dim + value_dim]
+// b, a: [B, T, Hv] (strided)  state: [rows, Hv, K, V] f32 at row slots[b] (or b)  y: [B, T, Hv, V]
+// ============================================================================
+
+struct GdnPrefillParams {
+  int seq_len;
+  int num_k_heads;
+  int num_v_heads;
+  int head_v_dim;
+  int tiled_v_heads;
+  int use_slots;
+  int b_stride[3];
+  int a_stride[3];
+};
+
+template <typename T, int DK>
+[[kernel]] void gdn_prefill_from_convolved_kernel(
+    const device T *mixed [[buffer(0)]], const device T *b [[buffer(1)]],
+    const device T *a [[buffer(2)]], const device float *a_log [[buffer(3)]],
+    const device float *dt_bias [[buffer(4)]], device float *state [[buffer(5)]],
+    device T *y [[buffer(6)]], const device uint *slots [[buffer(7)]],
+    constant GdnPrefillParams &p [[buffer(8)]],
+    uint3 gid [[thread_position_in_grid]],
+    uint lane [[thread_index_in_simdgroup]]) {
+  constexpr int N = DK / 32;
+  const int dv = gid.y;
+  const int n = gid.z;
+  if (dv >= p.head_v_dim)
+    return;
+  const int bidx = n / p.num_v_heads;
+  const int hv = n - bidx * p.num_v_heads;
+  const int hk = p.tiled_v_heads ? hv % p.num_k_heads
+                                 : hv / (p.num_v_heads / p.num_k_heads);
+  const int key_dim = p.num_k_heads * DK;
+  const int conv_dim = 2 * key_dim + p.num_v_heads * p.head_v_dim;
+  const long row = p.use_slots ? (long)slots[bidx] : (long)bidx;
+  device float *state_col =
+      state + (row * p.num_v_heads + hv) * DK * p.head_v_dim + dv;
+  const float neg_a = -exp(a_log[hv]);
+  const float bias = dt_bias[hv];
+  const float q_scale = rsqrt(float(DK));
+
+  float s[N];
+  for (int i = 0; i < N; i++) {
+    s[i] = state_col[(lane * N + i) * p.head_v_dim];
+  }
+
+  for (int t = 0; t < p.seq_len; t++) {
+    const device T *tok = mixed + ((long)bidx * p.seq_len + t) * conv_dim;
+    float q[N];
+    float k[N];
+    float q_ss = 0.0f;
+    float k_ss = 0.0f;
+    for (int i = 0; i < N; i++) {
+      q[i] = float(tok[hk * DK + lane * N + i]);
+      k[i] = float(tok[key_dim + hk * DK + lane * N + i]);
+      q_ss = fma(q[i], q[i], q_ss);
+      k_ss = fma(k[i], k[i], k_ss);
+    }
+    const float q_mul = rsqrt(simd_sum(q_ss) + 1.0e-6f) * q_scale;
+    const float k_mul = rsqrt(simd_sum(k_ss) + 1.0e-6f);
+    const float b_val = float(b[bidx * p.b_stride[0] + t * p.b_stride[1] + hv * p.b_stride[2]]);
+    const float a_val =
+        float(a[bidx * p.a_stride[0] + t * p.a_stride[1] + hv * p.a_stride[2]]) + bias;
+    const float softplus_val =
+        a_val > 20.0f ? a_val
+                      : (a_val > 0.0f ? a_val + log(1.0f + exp(-a_val))
+                                      : log(1.0f + exp(a_val)));
+    const float beta_t = 1.0f / (1.0f + exp(-b_val));
+    const float decay = exp(neg_a * softplus_val);
+
+    float kv_mem = 0.0f;
+    for (int i = 0; i < N; i++) {
+      s[i] *= decay;
+      kv_mem = fma(s[i], k[i] * k_mul, kv_mem);
+    }
+    kv_mem = simd_sum(kv_mem);
+    const float v_t = float(tok[2 * key_dim + hv * p.head_v_dim + dv]);
+    const float delta = (v_t - kv_mem) * beta_t;
+    float out = 0.0f;
+    for (int i = 0; i < N; i++) {
+      s[i] = fma(k[i] * k_mul, delta, s[i]);
+      out = fma(s[i], q[i] * q_mul, out);
+    }
+    out = simd_sum(out);
+    if (lane == 0) {
+      y[(((long)bidx * p.seq_len + t) * p.num_v_heads + hv) * p.head_v_dim + dv] = T(out);
+    }
+  }
+
+  for (int i = 0; i < N; i++) {
+    state_col[(lane * N + i) * p.head_v_dim] = s[i];
+  }
+}
+
+#define instantiate_gdn_prefill_from_convolved(type, dk)                       \
+  template [[host_name("gdn_prefill_from_convolved_" #type "_" #dk)]]         \
+  [[kernel]] void gdn_prefill_from_convolved_kernel<type, dk>(                 \
+      const device type *, const device type *, const device type *,           \
+      const device float *, const device float *, device float *,              \
+      device type *, const device uint *, constant GdnPrefillParams &, uint3,  \
+      uint);
+
+instantiate_gdn_prefill_from_convolved(float, 128)
+instantiate_gdn_prefill_from_convolved(float, 64)
+instantiate_gdn_prefill_from_convolved(half, 128)
+instantiate_gdn_prefill_from_convolved(half, 64)
+instantiate_gdn_prefill_from_convolved(bfloat, 128)
+instantiate_gdn_prefill_from_convolved(bfloat, 64)
+
+// ============================================================================
 // Kernel 1b: chunked_gated_delta_rule_recurrence (prefill optimization)
 //
 // Processes prefill tokens in BT-token chunks instead of one at a time.

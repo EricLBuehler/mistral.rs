@@ -151,6 +151,7 @@ pub fn gated_delta_rule_recurrence_metal(
     let (out_buf, out_off) = metal_buffer_and_offset(&output)?;
 
     let encoder = dev.command_encoder()?;
+    encoder.set_label("gdn-recurrence");
     let encoder: &ComputeCommandEncoder = encoder.as_ref();
     encoder.set_compute_pipeline_state(&pipeline);
 
@@ -265,6 +266,7 @@ pub fn chunked_gated_delta_rule_recurrence_metal(
     let (out_buf, out_off) = metal_buffer_and_offset(&output)?;
 
     let encoder = dev.command_encoder()?;
+    encoder.set_label("gdn-chunked-recurrence");
     let encoder: &ComputeCommandEncoder = encoder.as_ref();
     encoder.set_compute_pipeline_state(&pipeline);
 
@@ -358,6 +360,7 @@ pub fn gated_delta_rule_pooled_decode_metal(
     let (slots_buf, slots_off) = metal_buffer_and_offset(slots)?;
 
     let encoder = dev.command_encoder()?;
+    encoder.set_label("gdn-pooled-decode");
     let encoder: &ComputeCommandEncoder = encoder.as_ref();
     encoder.set_compute_pipeline_state(&pipeline);
     encoder.set_input_buffer(0, Some(&q_buf), q_off);
@@ -478,6 +481,7 @@ pub fn gdn_pooled_decode_from_convolved_metal(
     let (slots_buf, slots_off) = metal_buffer_and_offset(args.slots)?;
 
     let encoder = dev.command_encoder()?;
+    encoder.set_label("gdn-decode-from-convolved");
     let encoder: &ComputeCommandEncoder = encoder.as_ref();
     encoder.set_compute_pipeline_state(&pipeline);
     encoder.set_input_buffer(0, Some(&mixed_buf), mixed_off);
@@ -498,6 +502,132 @@ pub fn gdn_pooled_decode_from_convolved_metal(
         MTLSize {
             width: BV,
             height: 1,
+            depth: 1,
+        },
+    );
+    Ok(output)
+}
+
+#[cfg(feature = "metal")]
+#[repr(C)]
+struct GdnPrefillParams {
+    seq_len: i32,
+    num_k_heads: i32,
+    num_v_heads: i32,
+    head_v_dim: i32,
+    tiled_v_heads: i32,
+    use_slots: i32,
+    b_stride: [i32; 3],
+    a_stride: [i32; 3],
+}
+
+#[cfg(feature = "metal")]
+pub struct RecurrenceFromConvolved<'a> {
+    /// [B, T, 2 * key_dim + value_dim]
+    pub mixed_qkv: &'a Tensor,
+    /// [B, T, Hv], may be strided
+    pub b: &'a Tensor,
+    /// [B, T, Hv], may be strided
+    pub a: &'a Tensor,
+    /// [Hv], f32
+    pub a_log: &'a Tensor,
+    /// [Hv], f32
+    pub dt_bias: &'a Tensor,
+    /// [rows, Hv, K, V], f32, updated in place: the pool when `slots` is set, else the batch's gathered rows
+    pub state: &'a Tensor,
+    pub slots: Option<&'a Tensor>,
+    pub num_k_heads: usize,
+    pub head_k_dim: usize,
+    pub tiled_v_heads: bool,
+}
+
+/// GDN recurrence over T >= 1 tokens from the convolved projection (norms, gates and state update in one
+/// kernel, one simdgroup per value column). Returns y: [B, T, Hv, V] in the projection dtype.
+#[cfg(feature = "metal")]
+pub fn gdn_recurrence_from_convolved_metal(args: RecurrenceFromConvolved<'_>) -> Result<Tensor> {
+    const SIMD_WIDTH: usize = 32;
+    const COLUMNS_PER_THREADGROUP: usize = 4;
+    let mixed = args.mixed_qkv.contiguous()?;
+    let (batch_size, seq_len, _) = mixed.dims3()?;
+    let (_, num_v_heads, _, head_v_dim) = args.state.dims4()?;
+    let type_name = match mixed.dtype() {
+        DType::F32 => "float",
+        DType::F16 => "half",
+        DType::BF16 => "bfloat",
+        dtype => {
+            candle_core::bail!("gdn_recurrence_from_convolved_metal: unsupported dtype {dtype:?}")
+        }
+    };
+    if args.b.dtype() != mixed.dtype() || args.a.dtype() != mixed.dtype() {
+        candle_core::bail!(
+            "gdn_recurrence_from_convolved_metal: b/a must match the projection dtype"
+        );
+    }
+    let Device::Metal(dev) = mixed.device() else {
+        candle_core::bail!("gdn_recurrence_from_convolved_metal: expected Metal device");
+    };
+    let pipeline = load_pipeline(
+        dev.device(),
+        &format!("gdn_prefill_from_convolved_{type_name}_{}", args.head_k_dim),
+    )?;
+    // Every element is written by the kernel.
+    let output = unsafe {
+        Tensor::empty(
+            (batch_size, seq_len, num_v_heads, head_v_dim),
+            mixed.dtype(),
+            mixed.device(),
+        )?
+    };
+    let to_i32 = |v: usize| i32::try_from(v).map_err(candle_core::Error::wrap);
+    let strides3 = |t: &Tensor| -> Result<[i32; 3]> {
+        let st = t.stride();
+        Ok([to_i32(st[0])?, to_i32(st[1])?, to_i32(st[2])?])
+    };
+    let params = GdnPrefillParams {
+        seq_len: to_i32(seq_len)?,
+        num_k_heads: to_i32(args.num_k_heads)?,
+        num_v_heads: to_i32(num_v_heads)?,
+        head_v_dim: to_i32(head_v_dim)?,
+        tiled_v_heads: i32::from(args.tiled_v_heads),
+        use_slots: i32::from(args.slots.is_some()),
+        b_stride: strides3(args.b)?,
+        a_stride: strides3(args.a)?,
+    };
+
+    let (mixed_buf, mixed_off) = metal_buffer_and_offset(&mixed)?;
+    let (b_buf, b_off) = metal_buffer_and_offset(args.b)?;
+    let (a_buf, a_off) = metal_buffer_and_offset(args.a)?;
+    let (a_log_buf, a_log_off) = metal_buffer_and_offset(args.a_log)?;
+    let (dt_buf, dt_off) = metal_buffer_and_offset(args.dt_bias)?;
+    let (state_buf, state_off) = metal_buffer_and_offset(args.state)?;
+    let (out_buf, out_off) = metal_buffer_and_offset(&output)?;
+    let (slots_buf, slots_off) = match args.slots {
+        Some(slots) => metal_buffer_and_offset(slots)?,
+        None => (a_log_buf.clone(), a_log_off),
+    };
+
+    let encoder = dev.command_encoder()?;
+    encoder.set_label("gdn-recurrence-from-convolved");
+    let encoder: &ComputeCommandEncoder = encoder.as_ref();
+    encoder.set_compute_pipeline_state(&pipeline);
+    encoder.set_input_buffer(0, Some(&mixed_buf), mixed_off);
+    encoder.set_input_buffer(1, Some(&b_buf), b_off);
+    encoder.set_input_buffer(2, Some(&a_buf), a_off);
+    encoder.set_input_buffer(3, Some(&a_log_buf), a_log_off);
+    encoder.set_input_buffer(4, Some(&dt_buf), dt_off);
+    encoder.set_output_buffer(5, Some(&state_buf), state_off);
+    encoder.set_output_buffer(6, Some(&out_buf), out_off);
+    encoder.set_input_buffer(7, Some(&slots_buf), slots_off);
+    encoder.set_bytes(8, &params);
+    encoder.dispatch_threads(
+        MTLSize {
+            width: SIMD_WIDTH,
+            height: head_v_dim,
+            depth: batch_size * num_v_heads,
+        },
+        MTLSize {
+            width: SIMD_WIDTH,
+            height: COLUMNS_PER_THREADGROUP,
             depth: 1,
         },
     );
@@ -531,6 +661,7 @@ pub fn rmsnorm_gated_metal(x: &Tensor, gate: &Tensor, weight: &Tensor, eps: f64)
     let (out_buf, out_off) = metal_buffer_and_offset(&output)?;
 
     let encoder = dev.command_encoder()?;
+    encoder.set_label("gdn-rmsnorm-gated");
     let encoder: &ComputeCommandEncoder = encoder.as_ref();
     encoder.set_compute_pipeline_state(&pipeline);
     encoder.set_input_buffer(0, Some(&x_buf), x_off);
@@ -593,6 +724,7 @@ pub fn causal_conv1d_update_pooled_metal(
     let (slots_buf, slots_off) = metal_buffer_and_offset(slots)?;
 
     let encoder = dev.command_encoder()?;
+    encoder.set_label("gdn-conv-update-pooled");
     let encoder: &ComputeCommandEncoder = encoder.as_ref();
     encoder.set_compute_pipeline_state(&pipeline);
     encoder.set_input_buffer(0, Some(&x_buf), x_off);
@@ -665,6 +797,7 @@ pub fn causal_conv1d_metal(
         let (out_buf, out_off) = metal_buffer_and_offset(&output)?;
 
         let encoder = dev.command_encoder()?;
+        encoder.set_label("gdn-conv-update");
         let encoder: &ComputeCommandEncoder = encoder.as_ref();
         encoder.set_compute_pipeline_state(&pipeline);
 
@@ -711,6 +844,7 @@ pub fn causal_conv1d_metal(
 
         {
             let encoder = dev.command_encoder()?;
+            encoder.set_label("gdn-conv");
             let encoder: &ComputeCommandEncoder = encoder.as_ref();
             encoder.set_compute_pipeline_state(&conv_pipeline);
 
@@ -750,6 +884,7 @@ pub fn causal_conv1d_metal(
 
         {
             let encoder = dev.command_encoder()?;
+            encoder.set_label("gdn-conv-save-state");
             let encoder: &ComputeCommandEncoder = encoder.as_ref();
             encoder.set_compute_pipeline_state(&save_pipeline);
 
@@ -846,6 +981,7 @@ pub fn fused_gdn_gating_metal(
     let (g_buf, g_off) = metal_buffer_and_offset(&g_out)?;
 
     let encoder = dev.command_encoder()?;
+    encoder.set_label("gdn-gating");
     let encoder: &ComputeCommandEncoder = encoder.as_ref();
     encoder.set_compute_pipeline_state(&pipeline);
 

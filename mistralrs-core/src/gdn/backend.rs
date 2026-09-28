@@ -256,6 +256,18 @@ pub fn apply_recurrence_from_convolved(
         );
     }
 
+    #[cfg(feature = "metal")]
+    if mixed_qkv.device().is_metal()
+        && seq_len > 1
+        && cache.state_layout == RecurrentStateLayout::GdnKeyMajor
+        && cache.recurrent_state.dtype() == DType::F32
+        && matches!(dims.head_k_dim, 64 | 128)
+    {
+        return recurrence_metal_multi_token_from_convolved(
+            mixed_qkv, b, a, a_log, dt_bias, dims, batch_size, seq_len, cache, dtype,
+        );
+    }
+
     let q = mixed_qkv.narrow(D::Minus1, 0, dims.key_dim)?;
     let k = mixed_qkv.narrow(D::Minus1, dims.key_dim, dims.key_dim)?;
     let v = mixed_qkv.narrow(D::Minus1, dims.key_dim * 2, dims.value_dim)?;
@@ -724,6 +736,46 @@ fn recurrence_metal(
     finish_recurrence(
         RecurrenceOutput::BatchHeadMajor(out_bh),
         state_flat,
+        dims,
+        batch_size,
+        seq_len,
+        cache,
+        dtype,
+    )
+}
+
+#[cfg(feature = "metal")]
+#[allow(clippy::too_many_arguments)]
+fn recurrence_metal_multi_token_from_convolved(
+    mixed_qkv: &Tensor,
+    b: &Tensor,
+    a: &Tensor,
+    a_log: &Tensor,
+    dt_bias: &Tensor,
+    dims: &GdnDims,
+    batch_size: usize,
+    seq_len: usize,
+    cache: &mut GdnLayerCache,
+    dtype: DType,
+) -> Result<Tensor> {
+    let state = cache.recurrent_state.contiguous()?;
+    let out = crate::metal::gdn::gdn_recurrence_from_convolved_metal(
+        crate::metal::gdn::RecurrenceFromConvolved {
+            mixed_qkv: &mixed_qkv.reshape((batch_size, seq_len, dims.conv_dim))?,
+            b,
+            a,
+            a_log: &a_log.to_dtype(DType::F32)?,
+            dt_bias: &dt_bias.to_dtype(DType::F32)?,
+            state: &state,
+            slots: cache.slots.as_ref(),
+            num_k_heads: dims.num_k_heads,
+            head_k_dim: dims.head_k_dim,
+            tiled_v_heads: dims.v_head_layout == GdnVHeadLayout::Tiled,
+        },
+    )?;
+    finish_recurrence(
+        RecurrenceOutput::TokenMajor(out),
+        state,
         dims,
         batch_size,
         seq_len,
@@ -1388,6 +1440,146 @@ mod tests {
                 "{layout:?} {dtype:?}: state diff {state_diff}"
             );
             assert_eq!(untouched, 0.0, "unselected pool rows must not change");
+        }
+        Ok(())
+    }
+
+    #[cfg(feature = "metal")]
+    #[test]
+    fn metal_multi_token_from_convolved_matches_cpu() -> CandleResult<()> {
+        const POOL_ROWS: usize = 5;
+        const SEQ: usize = 7;
+        let cpu = Device::Cpu;
+        let metal = Device::new_metal(0)?;
+        let slots = [3u32, 0];
+        let batch_size = slots.len();
+        for (layout, dtype, pooled, tol) in [
+            (GdnVHeadLayout::Grouped, DType::F32, false, 1e-4f32),
+            (GdnVHeadLayout::Tiled, DType::F32, false, 1e-4),
+            (GdnVHeadLayout::Grouped, DType::BF16, true, 3e-2),
+        ] {
+            let dims = dims_with_layout(2, 4, 128, 128, layout);
+            let round =
+                |t: Tensor| -> CandleResult<Tensor> { t.to_dtype(dtype)?.to_dtype(DType::F32) };
+            let mixed = round(Tensor::from_vec(
+                patterned(batch_size * SEQ * dims.conv_dim, 1, 0.4, 0.05),
+                (batch_size, SEQ, dims.conv_dim),
+                &cpu,
+            )?)?;
+            let b = round(Tensor::from_vec(
+                patterned(batch_size * SEQ * dims.num_v_heads, 2, 0.8, 0.1),
+                (batch_size, SEQ, dims.num_v_heads),
+                &cpu,
+            )?)?;
+            let a = round(Tensor::from_vec(
+                patterned(batch_size * SEQ * dims.num_v_heads, 3, 0.8, -0.05),
+                (batch_size, SEQ, dims.num_v_heads),
+                &cpu,
+            )?)?;
+            let a_log = Tensor::from_vec(
+                patterned(dims.num_v_heads, 4, 0.2, -0.2),
+                (dims.num_v_heads,),
+                &cpu,
+            )?;
+            let dt_bias = Tensor::from_vec(
+                patterned(dims.num_v_heads, 5, 0.3, 0.3),
+                (dims.num_v_heads,),
+                &cpu,
+            )?;
+            let state_len = dims.num_v_heads * dims.head_k_dim * dims.head_v_dim;
+            let pool = Tensor::from_vec(
+                patterned(POOL_ROWS * state_len, 6, 0.05, 0.0),
+                (
+                    POOL_ROWS,
+                    dims.num_v_heads,
+                    dims.head_k_dim,
+                    dims.head_v_dim,
+                ),
+                &cpu,
+            )?;
+            let rows = slots.iter().map(|&s| s as usize).collect::<Vec<_>>();
+            let gathered = Tensor::cat(
+                &rows
+                    .iter()
+                    .map(|&r| pool.narrow(0, r, 1))
+                    .collect::<CandleResult<Vec<_>>>()?,
+                0,
+            )?;
+            let mut cpu_cache = GdnLayerCache {
+                conv_state: Tensor::zeros(
+                    (batch_size, dims.conv_dim, dims.conv_kernel_size),
+                    DType::F32,
+                    &cpu,
+                )?,
+                recurrent_state: gathered.clone(),
+                state_layout: RecurrentStateLayout::GdnKeyMajor,
+                slots: None,
+                pending_transitions: None,
+                deferred_state: None,
+            };
+            let expected = apply_recurrence_from_convolved(
+                &mixed,
+                &b,
+                &a,
+                &a_log,
+                &dt_bias,
+                &dims,
+                batch_size,
+                SEQ,
+                &mut cpu_cache,
+                DType::F32,
+            )?;
+
+            let (state, slot_tensor) = if pooled {
+                (pool.to_device(&metal)?, Some(Tensor::new(&slots, &metal)?))
+            } else {
+                (gathered.to_device(&metal)?, None)
+            };
+            let mut metal_cache = GdnLayerCache {
+                conv_state: Tensor::zeros(
+                    (1, dims.conv_dim, dims.conv_kernel_size),
+                    DType::F32,
+                    &metal,
+                )?,
+                recurrent_state: state,
+                state_layout: RecurrentStateLayout::GdnKeyMajor,
+                slots: slot_tensor,
+                pending_transitions: None,
+                deferred_state: None,
+            };
+            let actual = apply_recurrence_from_convolved(
+                &mixed.to_dtype(dtype)?.to_device(&metal)?,
+                &b.to_dtype(dtype)?.to_device(&metal)?,
+                &a.to_dtype(dtype)?.to_device(&metal)?,
+                &a_log.to_device(&metal)?,
+                &dt_bias.to_device(&metal)?,
+                &dims,
+                batch_size,
+                SEQ,
+                &mut metal_cache,
+                dtype,
+            )?;
+            let max_diff = |x: &Tensor, y: &Tensor| -> CandleResult<f32> {
+                (x.to_dtype(DType::F32)?.to_device(&cpu)?
+                    - y.to_dtype(DType::F32)?.to_device(&cpu)?)?
+                .abs()?
+                .flatten_all()?
+                .max(0)?
+                .to_scalar::<f32>()
+            };
+            let tag = format!("{layout:?} {dtype:?} pooled={pooled}");
+            let out_diff = max_diff(&actual, &expected)?;
+            assert!(out_diff < tol, "{tag}: output diff {out_diff}");
+            let state_after = metal_cache.recurrent_state.to_device(&cpu)?;
+            for (i, &r) in rows.iter().enumerate() {
+                let got = if pooled {
+                    state_after.narrow(0, r, 1)?
+                } else {
+                    state_after.narrow(0, i, 1)?
+                };
+                let d = max_diff(&got, &cpu_cache.recurrent_state.narrow(0, i, 1)?)?;
+                assert!(d < 1e-3, "{tag}: state diff {d}");
+            }
         }
         Ok(())
     }
