@@ -4623,6 +4623,65 @@ pub fn call_rmsnorm_residual(
     Ok(())
 }
 
+/// Fused pre-norm residual: `sum_out = x + residual`, `norm_out = rms_norm(sum_out) * weight`.
+#[allow(clippy::too_many_arguments)]
+pub fn call_add_rmsnorm(
+    device: &Device,
+    ep: impl EncoderProvider,
+    kernels: &Kernels,
+    ty: DType,
+    x: (&Buffer, usize),
+    residual: (&Buffer, usize),
+    weight: (&Buffer, usize),
+    sum_out: &Buffer,
+    norm_out: &Buffer,
+    n_cols: usize,
+    n_rows: usize,
+    eps: f32,
+) -> Result<(), MetalKernelError> {
+    let name = match ty {
+        DType::F32 => "add_rmsnorm_f32",
+        DType::F16 => "add_rmsnorm_f16",
+        DType::BF16 => "add_rmsnorm_bf16",
+        other => {
+            return Err(MetalKernelError::DTypeMismatch {
+                expected: vec![DType::F32, DType::F16, DType::BF16],
+                got: other,
+            })
+        }
+    };
+    let pipeline = kernels.load_pipeline(device, name)?;
+    let encoder = ep.encoder();
+    let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
+    encoder.set_compute_pipeline_state(&pipeline);
+    encoder.set_input_buffer(0, Some(x.0), x.1);
+    encoder.set_input_buffer(1, Some(residual.0), residual.1);
+    encoder.set_input_buffer(2, Some(weight.0), weight.1);
+    encoder.set_output_buffer(3, Some(sum_out), 0);
+    encoder.set_output_buffer(4, Some(norm_out), 0);
+    <u32 as EncoderParam>::set_param(encoder, 5, n_cols as u32);
+    <f32 as EncoderParam>::set_param(encoder, 6, eps);
+
+    // Same width as candle's rms_norm launch, so both reduce in the same order.
+    let tg_size = pipeline
+        .max_total_threads_per_threadgroup()
+        .min((n_cols / 2).next_power_of_two());
+    encoder.set_threadgroup_memory_length(0, tg_size * std::mem::size_of::<f32>());
+    encoder.dispatch_thread_groups(
+        MTLSize {
+            width: n_rows,
+            height: 1,
+            depth: 1,
+        },
+        MTLSize {
+            width: tg_size,
+            height: 1,
+            depth: 1,
+        },
+    );
+    Ok(())
+}
+
 /// Fused gate+up qmm_t with GLU activation, all in one dispatch.
 /// `act_code`: 0=silu, 1=gelu(tanh), 2=gelu(erf), 3=relu.
 #[allow(clippy::too_many_arguments)]

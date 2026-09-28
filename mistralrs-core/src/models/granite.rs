@@ -1410,9 +1410,8 @@ impl MambaBlock {
         let x = self.rms_1.forward(x)?;
         let mamba_out = self.mamba.forward(&x, cache, batch_kind)?;
         let mamba_out = scale_tensor(mamba_out, self.residual_multiplier)?;
-        let x = (mamba_out + residual)?;
+        let (x, normed) = self.rms_2.forward_add_rms_norm(&mamba_out, residual)?;
         let residual = &x;
-        let normed = self.rms_2.forward(&x)?;
 
         let ffn_out =
             granite_ffn_forward(self.mlp.as_deref(), self.block_sparse_moe.as_ref(), &normed)?;
@@ -1431,9 +1430,8 @@ impl MambaBlock {
         let x = self.rms_1.forward(x)?;
         let mamba_out = self.mamba.forward_packed_prefill(&x, cache, query_lens)?;
         let mamba_out = scale_tensor(mamba_out, self.residual_multiplier)?;
-        let x = (mamba_out + residual)?;
+        let (x, normed) = self.rms_2.forward_add_rms_norm(&mamba_out, residual)?;
         let residual = &x;
-        let normed = self.rms_2.forward(&x)?;
 
         let ffn_out =
             granite_ffn_forward(self.mlp.as_deref(), self.block_sparse_moe.as_ref(), &normed)?;
@@ -1717,9 +1715,8 @@ impl Block {
             .forward(&x, attention_mask, kv_cache, ctx, layer_idx)?;
         // Scale residual connection
         let attn_out = scale_tensor(attn_out, self.residual_multiplier)?;
-        let x = (attn_out + residual)?;
+        let (x, normed) = self.rms_2.forward_add_rms_norm(&attn_out, residual)?;
         let residual = &x;
-        let normed = self.rms_2.forward(&x)?;
 
         let ffn_out =
             granite_ffn_forward(self.mlp.as_deref(), self.block_sparse_moe.as_ref(), &normed)?;

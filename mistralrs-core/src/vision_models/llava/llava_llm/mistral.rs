@@ -379,11 +379,10 @@ impl DecoderLayer {
             kv_cache,
             (&self.rope_parameter.0, &self.rope_parameter.1),
         )?;
-        xs = (xs + residual)?;
-        let residual = &xs;
-        let xs = self
-            .mlp
-            .forward(&xs.apply(&self.post_attention_layernorm)?)?;
+        let (residual, xs) = self
+            .post_attention_layernorm
+            .forward_add_rms_norm(&xs, residual)?;
+        let xs = self.mlp.forward(&xs)?;
         residual + xs
     }
 }

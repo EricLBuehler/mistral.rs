@@ -4817,6 +4817,83 @@ pub fn metal_rms_norm_residual(
     Ok(Some(out))
 }
 
+/// Fused pre-norm residual on Metal: returns `(x + residual, rms_norm(x + residual) * weight)`.
+/// Callers check shapes and dtypes; see `layers::fused_add_rms_norm_applies`.
+#[cfg(feature = "metal")]
+pub fn metal_add_rms_norm(
+    input: &Tensor,
+    residual: &Tensor,
+    weight: &Tensor,
+    eps: f32,
+) -> Result<(Tensor, Tensor)> {
+    use candle_core::{backend::BackendStorage, MetalStorage, Shape, Storage};
+
+    let n_cols = input.dim(D::Minus1)?;
+    let n_rows = input.elem_count() / n_cols;
+    let input = input.contiguous()?;
+    let residual = residual.contiguous()?;
+    let weight = weight.contiguous()?;
+
+    let (input_storage, input_layout) = input.storage_and_layout();
+    let (residual_storage, residual_layout) = residual.storage_and_layout();
+    let (weight_storage, weight_layout) = weight.storage_and_layout();
+    let (
+        Storage::Metal(input_storage),
+        Storage::Metal(residual_storage),
+        Storage::Metal(weight_storage),
+    ) = (&*input_storage, &*residual_storage, &*weight_storage)
+    else {
+        candle_core::bail!("metal_add_rms_norm expects Metal tensors");
+    };
+
+    let device = input_storage.device().clone();
+    let dtype = input.dtype();
+    let elem_size = dtype.size_in_bytes();
+    let sum_buf = device.new_buffer(input.elem_count(), dtype, "add-rmsnorm-sum")?;
+    let norm_buf = device.new_buffer(input.elem_count(), dtype, "add-rmsnorm-norm")?;
+
+    let encoder = device.command_encoder()?;
+    encoder.set_label("add-rmsnorm");
+    mistralrs_quant::metal_kernels::call_add_rmsnorm(
+        device.device(),
+        &encoder,
+        &mistralrs_quant::metal_kernels::Kernels::new(),
+        dtype,
+        (
+            input_storage.buffer(),
+            input_layout.start_offset() * elem_size,
+        ),
+        (
+            residual_storage.buffer(),
+            residual_layout.start_offset() * elem_size,
+        ),
+        (
+            weight_storage.buffer(),
+            weight_layout.start_offset() * elem_size,
+        ),
+        &sum_buf,
+        &norm_buf,
+        n_cols,
+        n_rows,
+        eps,
+    )
+    .map_err(candle_core::Error::wrap)?;
+    drop(encoder);
+
+    let to_tensor = |buf| {
+        Tensor::from((
+            Storage::Metal(MetalStorage::new(
+                buf,
+                device.clone(),
+                input.elem_count(),
+                dtype,
+            )),
+            Shape::from(input.dims()),
+        ))
+    };
+    Ok((to_tensor(sum_buf), to_tensor(norm_buf)))
+}
+
 #[cfg(feature = "metal")]
 #[allow(clippy::cast_possible_truncation)]
 pub fn metal_topk_logits_packed(

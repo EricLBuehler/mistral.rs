@@ -266,12 +266,11 @@ impl Block {
     ) -> Result<Tensor> {
         let residual = x;
         let x = self.rms_1.forward(x)?;
-        let x = (self
+        let x = self
             .attn
-            .forward(&x, attention_mask, kv_cache, ctx, layer_idx)?
-            + residual)?;
-        let residual = &x;
-        let x = (self.mlp.forward(&self.rms_2.forward(&x)?)? + residual)?;
+            .forward(&x, attention_mask, kv_cache, ctx, layer_idx)?;
+        let (residual, x) = self.rms_2.forward_add_rms_norm(&x, residual)?;
+        let x = (self.mlp.forward(&x)? + residual)?;
         Ok(x)
     }
 

@@ -451,9 +451,10 @@ impl DecoderLayer {
             metadata,
             flash_params,
         )?;
-        let x = (attn_out + residual)?;
+        let (x, normed) = self
+            .post_attention_layernorm
+            .forward_add_rms_norm(&attn_out, residual)?;
         let residual = &x;
-        let normed = self.post_attention_layernorm.forward(&x)?;
         let ffn_out = self.moe.forward(&normed)?;
         ffn_out + residual
     }
@@ -476,9 +477,10 @@ impl DecoderLayer {
         } else {
             gdn.forward(&x, cache, batch_kind)?
         };
-        let x = (gdn_out + residual)?;
+        let (x, normed) = self
+            .post_attention_layernorm
+            .forward_add_rms_norm(&gdn_out, residual)?;
         let residual = &x;
-        let normed = self.post_attention_layernorm.forward(&x)?;
         let ffn_out = self.moe.forward(&normed)?;
         ffn_out + residual
     }

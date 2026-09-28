@@ -736,7 +736,7 @@ impl Block {
         } else {
             None
         };
-        let x = (self.attn.forward(
+        let x = self.attn.forward(
             &x,
             position_ids,
             &mask,
@@ -744,9 +744,9 @@ impl Block {
             kv_cache,
             ctx,
             layer_idx,
-        )? + residual)?;
-        let residual = &x;
-        let x = (self.ff.forward(&self.rms_2.forward(&x)?)? + residual)?;
+        )?;
+        let (residual, x) = self.rms_2.forward_add_rms_norm(&x, residual)?;
+        let x = (self.ff.forward(&x)? + residual)?;
         Ok(x)
     }
 }
