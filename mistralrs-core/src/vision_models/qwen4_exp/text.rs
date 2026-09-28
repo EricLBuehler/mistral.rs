@@ -2,7 +2,10 @@
 
 use std::{
     collections::HashMap,
-    sync::{Arc, Mutex},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, Mutex,
+    },
 };
 
 use candle_core::{DType, Device, Module, Result, Tensor};
@@ -12,7 +15,8 @@ use mistralrs_quant::{QuantMethod, QuantizedConfig, ReplicatedLayer, ShardedVarB
 use super::{
     config::{LayerType, QsaConfig, TextConfig},
     hyper::GatedResidual,
-    ple::{PleBatch, PleLayer, PleState},
+    mtp::Qwen4ExpMtpHead,
+    ple::{PleBatch, PleLayer, PleStash, PleState},
     qsa::{aux_dim, QsaAttention, QsaMode, QsaStep},
 };
 use crate::{
@@ -20,7 +24,7 @@ use crate::{
     device_map::{DeviceMappedMask, DeviceMapper},
     gdn::{
         GatedDeltaNet, GdnConfig, GdnGateActivation, GdnInputProjectionKind, GdnLayerCache,
-        GdnVHeadLayout,
+        GdnSpeculativeStash, GdnVHeadLayout,
     },
     kv_cache::{
         HybridCache, HybridCacheConfig, HybridLayerCache, HybridLayerType, RecurrentLayerConfig,
@@ -29,7 +33,13 @@ use crate::{
     layers::{self, Qwen3VLRotaryEmbedding},
     moe::{MoEExperts, MoEExpertsConfig},
     paged_attention::{AttentionImplementation, ModelConfigMetadata},
-    pipeline::{EitherCache, IsqModel, ModelForwardContext, NormalLoadingMetadata},
+    pipeline::{
+        EitherCache, IsqModel, ModelForwardContext, NormalLoadingMetadata, RecurrentBatchKind,
+    },
+    speculative::hybrid_state::{
+        refresh_gdn_stash_slots, replay_gdn_prefixes, should_stash_gdn_replay, GdnLayerRollback,
+        GdnLayerStash, GdnReplayStash, SpecCapture, SpecGraphState,
+    },
     utils::{progress::NiceProgressBar, unvarbuilder::UnVarBuilder},
     vision_models::qwen3_5::packed_gdn::{forward_packed_gdn, packed_gdn_layout},
 };
@@ -68,7 +78,7 @@ impl GdnConfig for TextConfig {
     }
 }
 
-struct SparseMoeBlock {
+pub(super) struct SparseMoeBlock {
     gate: Linear,
     experts: MoEExperts,
     shared_expert: layers::Mlp,
@@ -78,7 +88,7 @@ struct SparseMoeBlock {
 }
 
 impl SparseMoeBlock {
-    fn new(
+    pub(super) fn new(
         cfg: &TextConfig,
         vb: ShardedVarBuilder,
         layer_device: Device,
@@ -129,7 +139,14 @@ impl SparseMoeBlock {
         })
     }
 
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+    pub(super) fn add_residual_tensors(&self, uvb: &UnVarBuilder) {
+        uvb.pp("gate")
+            .add_tensor("weight", self.gate.weight().clone());
+        uvb.pp("shared_expert_gate")
+            .add_tensor("weight", self.shared_expert_gate.weight().clone());
+    }
+
+    pub(super) fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         let (b_size, seq_len, hidden_dim) = xs.dims3()?;
         let xs_flat = xs.reshape(((), hidden_dim))?;
         let router_logits = self.gate.forward(&xs_flat)?;
@@ -196,6 +213,14 @@ pub struct Qwen4ExpTextModel {
     pub(super) max_seq_len: usize,
     pub(super) aux_dim: usize,
     pub(super) dense_kv_cap: usize,
+    pub(super) mtp: Option<Qwen4ExpMtpHead>,
+    store_spec_hidden: AtomicBool,
+    // Pre-final-mixer residual of the rows the sampler sees, for the MTP proposer
+    last_spec_capture: Mutex<Option<SpecCapture>>,
+    // Same, over every row of a prompt chunk
+    last_full_capture: Mutex<Option<SpecCapture>>,
+    gdn_replay_stash: Mutex<Option<GdnReplayStash>>,
+    ple_stash: Mutex<Option<PleStash>>,
 }
 
 fn text_model_vb(vb: &ShardedVarBuilder) -> ShardedVarBuilder {
@@ -211,6 +236,7 @@ impl Qwen4ExpTextModel {
         cfg: &TextConfig,
         vb: ShardedVarBuilder,
         tie: bool,
+        mtp: bool,
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
     ) -> Result<Self> {
@@ -277,12 +303,14 @@ impl Qwen4ExpTextModel {
             let vb_layer = vb_l.pp(layer_idx);
             let mixer = match layer_types[layer_idx] {
                 LayerType::FullAttention => Mixer::Attention(QsaAttention::load(
-                    vb_layer.clone(),
+                    mapper.set_device(
+                        layer_idx,
+                        vb_layer.pp("self_attn"),
+                        normal_loading_metadata.loading_isq,
+                    ),
+                    mapper.set_device(layer_idx, vb_layer.pp("self_attn"), false),
                     cfg,
                     qsa,
-                    &*mapper,
-                    layer_idx,
-                    normal_loading_metadata.loading_isq,
                     ropes
                         .get(&layer_device.location())
                         .expect("rope per attention device")
@@ -334,6 +362,20 @@ impl Qwen4ExpTextModel {
                 ple.make_table_resident(device)?;
             }
         }
+        let mtp = mtp
+            .then(|| {
+                Qwen4ExpMtpHead::load(
+                    &vb,
+                    cfg,
+                    qsa,
+                    &*mapper,
+                    normal_loading_metadata.loading_isq,
+                    &real_device,
+                    &attention_mechanism,
+                    rotary_emb.clone(),
+                )
+            })
+            .transpose()?;
         let final_mixer = GatedResidual::load(
             cfg,
             mapper.set_nm_device(vb_m.pp("hyper_connection_mixer"), false),
@@ -418,7 +460,7 @@ impl Qwen4ExpTextModel {
             max_seq_len: cfg.max_position_embeddings,
             cfg: ModelConfigMetadata {
                 max_seq_len: cfg.max_position_embeddings,
-                num_layers: cfg.num_hidden_layers,
+                num_layers: cfg.num_hidden_layers + cfg.mtp_layers(mtp.is_some()),
                 hidden_size: cfg.hidden_size,
                 num_attn_heads: cfg.num_attention_heads,
                 num_kv_heads: cfg.num_key_value_heads,
@@ -430,7 +472,141 @@ impl Qwen4ExpTextModel {
             device: real_device,
             dtype: vb.dtype(),
             mapper,
+            mtp,
+            store_spec_hidden: AtomicBool::new(false),
+            last_spec_capture: Mutex::new(None),
+            last_full_capture: Mutex::new(None),
+            gdn_replay_stash: Mutex::new(None),
+            ple_stash: Mutex::new(None),
         })
+    }
+
+    pub(super) fn lm_head(&self) -> &Arc<dyn QuantMethod> {
+        &self.lm_head
+    }
+
+    pub(super) fn set_store_spec_hidden(&self, store: bool) {
+        self.store_spec_hidden.store(store, Ordering::Relaxed);
+        if !store {
+            *self
+                .last_spec_capture
+                .lock()
+                .expect("spec capture poisoned") = None;
+            *self
+                .last_full_capture
+                .lock()
+                .expect("spec capture poisoned") = None;
+            self.clear_speculative_stash();
+        }
+    }
+
+    pub(super) fn last_spec_capture(&self) -> Option<SpecCapture> {
+        self.last_spec_capture
+            .lock()
+            .expect("spec capture poisoned")
+            .clone()
+    }
+
+    pub(super) fn last_full_capture(&self) -> Option<SpecCapture> {
+        self.last_full_capture
+            .lock()
+            .expect("spec capture poisoned")
+            .clone()
+    }
+
+    pub(super) fn take_spec_graph_state(&self) -> Option<SpecGraphState> {
+        if !self.store_spec_hidden.load(Ordering::Relaxed) {
+            return None;
+        }
+        Some(SpecGraphState {
+            spec_capture: self
+                .last_spec_capture
+                .lock()
+                .expect("spec capture poisoned")
+                .take(),
+            full_capture: self
+                .last_full_capture
+                .lock()
+                .expect("spec capture poisoned")
+                .take(),
+            gdn_stash: self
+                .gdn_replay_stash
+                .lock()
+                .expect("gdn stash poisoned")
+                .take(),
+            aux: self
+                .ple_stash
+                .lock()
+                .expect("ple stash poisoned")
+                .take()
+                .map(PleStash::into_tensors)
+                .unwrap_or_default(),
+        })
+    }
+
+    /// Reinstalls a replayed graph's outputs; the stashes take the live batch's slots.
+    pub(super) fn install_spec_graph_state(&self, state: &SpecGraphState) -> Result<()> {
+        let mut gdn_stash = state.gdn_stash.clone();
+        let slots = self
+            .cache
+            .hybrid()
+            .state_indices_host()
+            .map(ToOwned::to_owned);
+        if let (Some(stash), Some(slots)) = (gdn_stash.as_mut(), slots.as_deref()) {
+            refresh_gdn_stash_slots(stash, slots)?;
+        }
+        let ple_stash = match (&gdn_stash, state.aux.is_empty()) {
+            (_, true) => None,
+            (Some(gdn), false) => Some(PleStash::from_tensors(&state.aux, gdn.slots.clone())?),
+            (None, false) => candle_core::bail!("Qwen4-Exp PLE graph stash has no slot table"),
+        };
+        *self
+            .last_spec_capture
+            .lock()
+            .expect("spec capture poisoned") = state.spec_capture.clone();
+        *self
+            .last_full_capture
+            .lock()
+            .expect("spec capture poisoned") = state.full_capture.clone();
+        *self.gdn_replay_stash.lock().expect("gdn stash poisoned") = gdn_stash;
+        *self.ple_stash.lock().expect("ple stash poisoned") = ple_stash;
+        Ok(())
+    }
+
+    pub(super) fn clear_speculative_stash(&self) {
+        *self.gdn_replay_stash.lock().expect("gdn stash poisoned") = None;
+        *self.ple_stash.lock().expect("ple stash poisoned") = None;
+    }
+
+    /// Undoes the rejected tail of the last verify: each `(batch_idx, keep_rows)` keeps only its prefix.
+    pub(super) fn replay_recurrent_prefixes(&self, rows: &[(usize, usize)]) -> Result<()> {
+        if rows.is_empty() {
+            return Ok(());
+        }
+        let gdn_stash = self
+            .gdn_replay_stash
+            .lock()
+            .expect("gdn stash poisoned")
+            .take()
+            .ok_or_else(|| {
+                candle_core::Error::msg("no GDN replay stash for speculative rollback")
+            })?;
+        let ple_stash = self.ple_stash.lock().expect("ple stash poisoned").take();
+        let mut hybrid_cache = self.cache.hybrid();
+        replay_gdn_prefixes(&gdn_stash, rows, &mut hybrid_cache, |idx| {
+            match &self.layers.get(idx)?.mixer {
+                Mixer::Linear(gdn) => Some(gdn),
+                Mixer::Attention(_) => None,
+            }
+        })?;
+        if let Some(ple) = ple_stash {
+            let Some(HybridLayerCache::Recurrent(pool)) = hybrid_cache.get_mut(self.layers.len())
+            else {
+                candle_core::bail!("Qwen4-Exp PLE state pool is missing");
+            };
+            ple.rollback(rows, &pool.conv_state, &pool.recurrent_state)?;
+        }
+        Ok(())
     }
 
     /// The decode step is graph-capturable unless PLE rows must be gathered on the host.
@@ -513,17 +689,45 @@ impl Qwen4ExpTextModel {
         let cos_sin = self.rotary_emb.compute_cos_sin(position_ids, xs.dtype())?;
         let attention_mask = DeviceMappedMask::new(attention_mask.clone(), &*self.mapper)?;
 
-        let is_decode = ctx
-            .paged_input_metadata()
-            .is_some_and(|metadata| metadata.is_decode_step());
         let (batch, seq_len, _) = xs.dims3()?;
+        let batch_kind = recurrent_metadata.batch_kind();
+        // Multi-token verify rows arrive as decode metadata but run like a prompt chunk per sequence
+        let is_verify = batch_kind == RecurrentBatchKind::SpeculativeDecode && seq_len > 1;
+        let is_decode = !is_verify
+            && ctx
+                .paged_input_metadata()
+                .is_some_and(|metadata| metadata.is_decode_step());
+        let store_spec = self.store_spec_hidden.load(Ordering::Relaxed);
+        let stash = should_stash_gdn_replay(
+            false,
+            store_spec,
+            seq_len,
+            Some(batch_kind),
+            ctx.paged_input_metadata().is_some_and(|meta| {
+                !meta.is_first_prompt_chunk && meta.num_cached_tokens.is_none()
+            }),
+        );
+        let stash_slots = || {
+            recurrent_metadata
+                .state_indices_host()
+                .map(<[u32]>::to_vec)
+                .unwrap_or_default()
+        };
+        let mut gdn_stash = stash.then(|| GdnReplayStash {
+            slots: stash_slots(),
+            layers: Vec::new(),
+        });
+        let mut ple_stash = None;
         let spans = if is_decode {
             (0..batch).map(|b| (b, 1)).collect::<Vec<_>>()
         } else {
             Self::sequence_spans(&xs, ctx)?
         };
         let kv_lens = Self::kv_lens(&spans, ctx);
-        let mode = if is_decode {
+        // Decode and verify rows read kv lengths from the paged metadata on device, which keeps them graph-safe
+        // and off the dense paged kernels; under the budget the selection keeps every block
+        let rectangular = is_decode || (is_verify && ctx.is_paged());
+        let mode = if rectangular {
             QsaMode::Sparse {
                 max_blocks: self.max_seq_len / self.qsa.compress_ratio,
             }
@@ -540,8 +744,8 @@ impl Qwen4ExpTextModel {
         }
         #[cfg(feature = "cuda")]
         let layout = if xs.device().is_cuda() {
-            Some(if is_decode {
-                crate::cuda::qwen4_exp::TokenLayout::decode(batch)
+            Some(if rectangular {
+                crate::cuda::qwen4_exp::TokenLayout::rectangular(batch, seq_len)
             } else {
                 crate::cuda::qwen4_exp::TokenLayout::from_host(
                     &spans,
@@ -577,6 +781,15 @@ impl Qwen4ExpTextModel {
                     history: &pool.recurrent_state,
                     slots: &indices,
                 };
+                let pre_state = stash
+                    .then(|| -> Result<_> {
+                        Ok((
+                            pool.gather_conv_state(&indices)?,
+                            pool.gather_recurrent_state(&indices)?,
+                        ))
+                    })
+                    .transpose()?;
+                let mut conv_inputs = None;
                 res = ple.forward(
                     &res,
                     &input_ids.to_device(res.device())?,
@@ -586,7 +799,18 @@ impl Qwen4ExpTextModel {
                         #[cfg(feature = "cuda")]
                         layout: layout.as_ref(),
                     },
+                    pre_state.as_ref().map(|_| &mut conv_inputs),
                 )?;
+                if let (Some((conv, history)), Some(conv_inputs)) = (pre_state, conv_inputs) {
+                    let tokens = (input_ids.to_device(res.device())?.to_dtype(DType::F32)? + 1.0)?;
+                    ple_stash = Some(PleStash {
+                        slots: stash_slots(),
+                        conv,
+                        history,
+                        conv_inputs: conv_inputs.reshape((batch, seq_len, ()))?,
+                        tokens,
+                    });
+                }
                 pending_norm = None;
             }
             let xn = match pending_norm.take() {
@@ -605,7 +829,7 @@ impl Qwen4ExpTextModel {
                         &h,
                         &attention_mask.get(h.device()),
                         &cos_sin,
-                        kv_cache,
+                        Some(kv_cache),
                         ctx.paged_layer(i),
                         ctx.flash_params(),
                         &step,
@@ -620,6 +844,15 @@ impl Qwen4ExpTextModel {
                     let Some(HybridLayerCache::Recurrent(pool)) = hybrid_cache.get_mut(i) else {
                         candle_core::bail!("Hybrid cache layer {i} is not recurrent");
                     };
+                    let pre_state = gdn_stash
+                        .is_some()
+                        .then(|| -> Result<_> {
+                            Ok((
+                                pool.gather_conv_state(&indices)?,
+                                pool.gather_recurrent_state(&indices)?,
+                            ))
+                        })
+                        .transpose()?;
                     let mut gdn_cache = if packed_layout.is_some() {
                         GdnLayerCache::gathered(
                             pool.gather_conv_state(&indices)?,
@@ -629,16 +862,36 @@ impl Qwen4ExpTextModel {
                     } else {
                         GdnLayerCache::checkout(pool, &indices)?
                     };
+                    let mut projected = None;
                     let out = match &packed_layout {
-                        Some(packed) => forward_packed_gdn(
-                            gdn,
+                        Some(packed) => {
+                            forward_packed_gdn(gdn, &h, &mut gdn_cache, batch_kind, packed)?
+                        }
+                        None => gdn.forward_with_stash(
                             &h,
                             &mut gdn_cache,
-                            recurrent_metadata.batch_kind(),
-                            packed,
+                            batch_kind,
+                            1,
+                            false,
+                            pre_state.as_ref().map(|_| &mut projected),
                         )?,
-                        None => gdn.forward(&h, &mut gdn_cache, recurrent_metadata.batch_kind())?,
                     };
+                    if let (Some(stash), Some((conv_state, recurrent_state))) =
+                        (gdn_stash.as_mut(), pre_state)
+                    {
+                        let Some(GdnSpeculativeStash::Replay(projected)) = projected else {
+                            candle_core::bail!("Qwen4-Exp GDN verify returned no replay stash");
+                        };
+                        stash.layers.push(GdnLayerStash {
+                            layer_idx: i,
+                            state_layout: pool.state_layout(),
+                            rollback: GdnLayerRollback::Replay {
+                                projected,
+                                conv_state,
+                                recurrent_state,
+                            },
+                        });
+                    }
                     gdn_cache.commit(pool, &indices, recurrent_metadata.state_indices_host())?;
                     out
                 }
@@ -664,6 +917,32 @@ impl Qwen4ExpTextModel {
             pending_norm = xn;
         }
         let res = res.to_device(&self.device)?;
+        if store_spec {
+            *self.gdn_replay_stash.lock().expect("gdn stash poisoned") = gdn_stash;
+            *self.ple_stash.lock().expect("ple stash poisoned") = ple_stash;
+            let positions = position_ids.to_device(&self.device)?;
+            *self
+                .last_full_capture
+                .lock()
+                .expect("spec capture poisoned") = (batch_kind == RecurrentBatchKind::Prefill)
+                .then(|| SpecCapture {
+                    hidden: res.clone(),
+                    positions: positions.clone(),
+                    taps: Vec::new(),
+                });
+            let positions = ctx
+                .logits(&positions.permute((1, 2, 0))?.contiguous()?)?
+                .permute((2, 0, 1))?
+                .contiguous()?;
+            *self
+                .last_spec_capture
+                .lock()
+                .expect("spec capture poisoned") = Some(SpecCapture {
+                hidden: ctx.logits(&res)?,
+                positions,
+                taps: Vec::new(),
+            });
+        }
         let xn = match pending_norm {
             Some(xn) if xn.device().same_device(&self.device) => xn,
             _ => self.final_mixer.norm(&res)?,
@@ -704,14 +983,10 @@ impl IsqModel for Qwen4ExpTextModel {
                     la.pp("norm").add_tensor("weight", gdn.norm.weight.clone());
                 }
             }
-            uvb_l
-                .pp("mlp")
-                .pp("gate")
-                .add_tensor("weight", layer.moe.gate.weight().clone());
-            uvb_l
-                .pp("mlp")
-                .pp("shared_expert_gate")
-                .add_tensor("weight", layer.moe.shared_expert_gate.weight().clone());
+            layer.moe.add_residual_tensors(&uvb_l.pp("mlp"));
+        }
+        if let Some(mtp) = &self.mtp {
+            mtp.residual_tensors(&uvb);
         }
         uvb.to_safetensors()
     }

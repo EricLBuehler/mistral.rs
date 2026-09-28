@@ -79,9 +79,9 @@ __device__ __forceinline__ void q4_load8(const T *__restrict__ p, float *out) {
   }
 }
 
-// Flattened token -> logical sequence mapping. A null tok_seq is the decode
-// layout: token t is the single new token of sequence t. tok_seq < 0 marks
-// padding.
+// Flattened token -> logical sequence mapping. A null tok_seq is the
+// rectangular layout: every sequence has q_len consecutive new tokens (decode
+// is q_len 1). tok_seq < 0 marks padding.
 struct Q4Tokens {
   const int *tok_seq;
   const int *tok_local;
@@ -89,19 +89,20 @@ struct Q4Tokens {
   const int *seq_len;
   int n_tokens;
   int n_seqs;
+  int q_len;
 };
 
 __device__ __forceinline__ int q4_seq_of(const Q4Tokens &l, int t) {
-  return l.tok_seq ? l.tok_seq[t] : t;
+  return l.tok_seq ? l.tok_seq[t] : t / l.q_len;
 }
 __device__ __forceinline__ int q4_local_of(const Q4Tokens &l, int t) {
-  return l.tok_seq ? l.tok_local[t] : 0;
+  return l.tok_seq ? l.tok_local[t] : t % l.q_len;
 }
 __device__ __forceinline__ int q4_start_of(const Q4Tokens &l, int seq) {
-  return l.seq_start ? l.seq_start[seq] : seq;
+  return l.seq_start ? l.seq_start[seq] : seq * l.q_len;
 }
 __device__ __forceinline__ int q4_len_of(const Q4Tokens &l, int seq) {
-  return l.seq_len ? l.seq_len[seq] : 1;
+  return l.seq_len ? l.seq_len[seq] : l.q_len;
 }
 
 template <typename T>

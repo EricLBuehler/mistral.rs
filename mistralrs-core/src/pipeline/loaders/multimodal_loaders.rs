@@ -7901,11 +7901,27 @@ impl IsqModelLoader for Qwen4ExpLoader {
             Regex::new(
                 r"^model\.language_model\.layers\.(\d+)\.self_attn\.indexer\.index_qk_proj\.weight$",
             )?,
+            Regex::new(
+                r"^mtp\.layers\.(\d+)\.(attn|mlp)_hyper_connection\.(input_mix_weight_down|input_mix_weight_up|block_inject_weight)\.weight$",
+            )?,
+            Regex::new(
+                r"^mtp\.hyper_connection_mixer\.(input_mix_weight_down|input_mix_weight_up)\.weight$",
+            )?,
+            Regex::new(r"^mtp\.layers\.(\d+)\.self_attn\.indexer\.index_qk_proj\.weight$")?,
+            Regex::new(r"^mtp\.(fc_embedding|fc_hidden)\.weight$")?,
         ]);
         Ok(predicates)
     }
     fn isq_layer_regexes(&self, config: &str) -> Result<Vec<Regex>> {
-        Qwen3_5MoeLoader.isq_layer_regexes(config)
+        let mut regexes = Qwen3_5MoeLoader.isq_layer_regexes(config)?;
+        regexes.extend([
+            Regex::new(r"^mtp\.layers\.(\d+)\.self_attn\.(q_proj|k_proj|v_proj|o_proj)\.weight$")?,
+            Regex::new(r"^mtp\.layers\.(\d+)\.mlp\.experts\.(gate_up_proj|down_proj)\.weight$")?,
+            Regex::new(
+                r"^mtp\.layers\.(\d+)\.mlp\.shared_expert\.(gate_proj|up_proj|down_proj)\.weight$",
+            )?,
+        ]);
+        Ok(regexes)
     }
     fn immediate_isq_predicates(&self, config: &str) -> Result<Vec<Regex>> {
         self.isq_layer_regexes(config)
@@ -8022,7 +8038,29 @@ impl DeviceMappedModelLoader for Qwen4ExpLoader {
             merger + patch_embed + pos_embed + encoder_layer * vision.depth
         });
         let elems = embed_tokens + lm_head + final_mixer + vision;
-        Ok(elems * dtype.size_in_bytes())
+        let mtp = if cfg.mtp {
+            use crate::vision_models::qwen4_exp::config::LayerType;
+            let ple_layer = text.ple()?.map(|ple| ple.layer_idx);
+            // The MTP block is shaped like a main-stack attention layer without PLE
+            let block = text
+                .layer_types()
+                .iter()
+                .enumerate()
+                .position(|(idx, ty)| *ty == LayerType::FullAttention && Some(idx) != ple_layer)
+                .map(|idx| -> Result<usize> {
+                    Ok(self.layer_sizes_in_bytes(config, dtype, weight_pack_factor, None)?[idx])
+                })
+                .transpose()?
+                .unwrap_or(0);
+            let fc = 2 * text.hidden_size * text.hidden_size / weight_pack_factor;
+            let norms_and_mixer = text.hidden_size
+                + text.hc_hidden_size()
+                + text.hc_hidden_size() * (2 * text.hc_lowrank + 1);
+            block + (fc + norms_and_mixer) * dtype.size_in_bytes()
+        } else {
+            0
+        };
+        Ok(elems * dtype.size_in_bytes() + mtp)
     }
 
     fn layer_sizes_in_bytes(
@@ -8121,7 +8159,7 @@ impl DeviceMappedModelLoader for Qwen4ExpLoader {
         })?;
         let base = ModelConfigMetadata {
             max_seq_len: text.max_position_embeddings,
-            num_layers: text.num_hidden_layers,
+            num_layers: text.num_hidden_layers + text.mtp_layers(cfg.mtp),
             hidden_size: text.hidden_size,
             num_kv_heads: text.num_key_value_heads,
             num_attn_heads: text.num_attention_heads,
@@ -8132,7 +8170,7 @@ impl DeviceMappedModelLoader for Qwen4ExpLoader {
         };
         Ok(Box::new(Qwen4ExpPagedConfig::new(
             base,
-            &text.layer_types(),
+            &text.paged_layer_types(cfg.mtp),
             qsa.head_dim + text.rot_dim(),
             qsa.max_selected_tokens(),
         )))

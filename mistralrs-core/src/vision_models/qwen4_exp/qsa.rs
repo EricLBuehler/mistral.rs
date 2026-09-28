@@ -10,7 +10,6 @@ use mistralrs_quant::{
 use super::config::{QsaConfig, TextConfig};
 use crate::{
     attention::{AttentionMask, SdpaParams},
-    device_map::DeviceMapper,
     layers::{GemmaRmsNorm, Qwen3VLRotaryEmbedding, Sdpa},
     paged_attention::{load_fp8_attention_scales, PagedAttention},
     pipeline::{
@@ -81,14 +80,13 @@ pub(super) struct QsaAttention {
 }
 
 impl QsaAttention {
-    #[allow(clippy::too_many_arguments)]
+    /// `vb_sa` and `vb_norms` are the `self_attn` builders already placed on the layer device, the
+    /// former with ISQ applied.
     pub(super) fn load(
-        vb: ShardedVarBuilder,
+        vb_sa: ShardedVarBuilder,
+        vb_norms: ShardedVarBuilder,
         cfg: &TextConfig,
         qsa: QsaConfig,
-        mapper: &dyn DeviceMapper,
-        layer_idx: usize,
-        loading_isq: bool,
         rotary_emb: Arc<Qwen3VLRotaryEmbedding>,
         use_paged_attention: bool,
         comm: &Arc<mistralrs_quant::Comm>,
@@ -96,7 +94,6 @@ impl QsaAttention {
         if comm.world_size() != 1 {
             candle_core::bail!("Qwen4-Exp QSA attention does not support tensor parallelism yet");
         }
-        let vb_sa = mapper.set_device(layer_idx, vb.pp("self_attn"), loading_isq);
         let num_heads = cfg.num_attention_heads;
         let num_kv_heads = cfg.num_key_value_heads;
         let head_dim = cfg.head_dim;
@@ -139,7 +136,6 @@ impl QsaAttention {
             false,
             vb_sa.pp("indexer").pp("index_qk_proj"),
         )?;
-        let vb_norms = mapper.set_device(layer_idx, vb.pp("self_attn"), false);
         #[cfg(feature = "cutile")]
         if use_paged_attention {
             mistralrs_quant::cutile::register_qsa_shape(mistralrs_quant::cutile::QsaWarmShape {
@@ -207,7 +203,7 @@ impl QsaAttention {
         x: &Tensor,
         attention_mask: &AttentionMask,
         cos_sin: &(Tensor, Tensor),
-        kv_cache: &mut KvCache,
+        kv_cache: Option<&mut KvCache>,
         metadata: Option<((Tensor, Tensor), &PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
         step: &QsaStep<'_>,
@@ -287,7 +283,9 @@ impl QsaAttention {
                 raw_key: &raw_key,
                 cos_sin: &cos_sin,
                 attention_mask,
-                kv_cache,
+                kv_cache: kv_cache.ok_or_else(|| {
+                    candle_core::Error::msg("unpaged Qwen4-Exp QSA requires a KV cache")
+                })?,
                 flash_params,
                 step,
             })?,
@@ -365,14 +363,22 @@ impl QsaAttention {
             let layout = step
                 .layout
                 .ok_or_else(|| candle_core::Error::msg("QSA requires a token layout"))?;
+            // Multi-token decode metadata carries one block table per query row; QSA wants one per sequence
+            let block_tables = &per_sequence_block_tables(block_tables, layout.n_seqs)?;
             // Prompt metadata carries per-token positions in `context_lens`; only decode has lengths
-            let kv_lens = match &layout.kv_lens {
-                Some(kv_lens) => kv_lens,
-                None => metadata
-                    .context_lens
-                    .as_ref()
-                    .and_then(|lens| lens.get(&location))
-                    .ok_or_else(|| candle_core::Error::msg("QSA requires paged context lengths"))?,
+            // Decode-row lengths are per query row; the last row of each sequence holds its kv length
+            let kv_lens = &match &layout.kv_lens {
+                Some(kv_lens) => kv_lens.clone(),
+                None => last_row_per_sequence(
+                    metadata
+                        .context_lens
+                        .as_ref()
+                        .and_then(|lens| lens.get(&location))
+                        .ok_or_else(|| {
+                            candle_core::Error::msg("QSA requires paged context lengths")
+                        })?,
+                    layout.n_seqs,
+                )?,
             };
             let slot_mapping = metadata
                 .slot_mappings
@@ -634,6 +640,36 @@ struct UnpagedQsaInputs<'a> {
     kv_cache: &'a mut KvCache,
     flash_params: &'a FlashParams,
     step: &'a QsaStep<'a>,
+}
+
+#[cfg(feature = "cuda")]
+fn per_sequence_block_tables(block_tables: &Tensor, n_seqs: usize) -> Result<Tensor> {
+    let (rows, width) = block_tables.dims2()?;
+    if rows == n_seqs {
+        return Ok(block_tables.clone());
+    }
+    if n_seqs == 0 || !rows.is_multiple_of(n_seqs) {
+        candle_core::bail!("QSA block tables have {rows} rows for {n_seqs} sequences");
+    }
+    block_tables
+        .reshape((n_seqs, rows / n_seqs, width))?
+        .i((.., 0, ..))?
+        .contiguous()
+}
+
+#[cfg(feature = "cuda")]
+fn last_row_per_sequence(lens: &Tensor, n_seqs: usize) -> Result<Tensor> {
+    let rows = lens.dim(0)?;
+    if rows == n_seqs {
+        return Ok(lens.clone());
+    }
+    if n_seqs == 0 || !rows.is_multiple_of(n_seqs) {
+        candle_core::bail!("QSA context lengths have {rows} rows for {n_seqs} sequences");
+    }
+    let q_len = rows / n_seqs;
+    lens.reshape((n_seqs, q_len))?
+        .i((.., q_len - 1))?
+        .contiguous()
 }
 
 /// NeoX RoPE over the first `2 * half` dims of `x: [b, s, heads, d]`; `cos`/`sin` are `[b, s, half]`.

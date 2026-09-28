@@ -105,6 +105,10 @@ pub struct TextConfig {
     #[serde(default)]
     pub eos_token_id: Option<TokenIds>,
     #[serde(default)]
+    pub mtp_num_hidden_layers: usize,
+    #[serde(default)]
+    pub mtp_use_dedicated_embeddings: bool,
+    #[serde(default)]
     pub quantization_config: Option<QuantizedConfig>,
     #[serde(default, rename = "_mistralrs_gdn_v_head_layout")]
     pub(crate) gdn_v_head_layout: GdnVHeadLayout,
@@ -381,6 +385,24 @@ impl TextConfig {
     pub fn hc_hidden_size(&self) -> usize {
         self.hc_count * self.hidden_size
     }
+
+    pub fn mtp_layers(&self, mtp: bool) -> usize {
+        if mtp {
+            self.mtp_num_hidden_layers
+        } else {
+            0
+        }
+    }
+
+    /// Paged-KV layer kinds: the main stack, then any MTP blocks (all QSA attention) after it.
+    pub fn paged_layer_types(&self, mtp: bool) -> Vec<LayerType> {
+        let mut layers = self.layer_types();
+        layers.extend(std::iter::repeat_n(
+            LayerType::FullAttention,
+            self.mtp_layers(mtp),
+        ));
+        layers
+    }
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -396,6 +418,9 @@ pub struct Config {
     pub tie_word_embeddings: bool,
     #[serde(default)]
     pub quantization_config: Option<QuantizedConfig>,
+    /// Injected by the loader when the built-in MTP head should be loaded (see `MTP_CONFIG_KEY`).
+    #[serde(default, rename = "_mistralrs_mtp")]
+    pub mtp: bool,
 }
 
 #[cfg(test)]

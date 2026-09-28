@@ -2034,7 +2034,16 @@ impl MultimodalPipeline {
             );
             return Ok(None);
         }
-        let Some(bucket) = cuda_graph_batch_bucket(CudaGraphComponent::Target, q_len, batch) else {
+        let Some(bucket) = cuda_graph_batch_bucket(CudaGraphComponent::Target, q_len, batch)
+            .filter(|bucket| {
+                q_len == 1
+                    || crate::speculative::SpeculativeGraphPlan::allows(
+                        &self.model.speculative_graph_plans(),
+                        q_len,
+                        *bucket,
+                    )
+            })
+        else {
             record_cuda_graph_dispatch(
                 CudaGraphComponent::Target,
                 CudaGraphDispatchMode::Eager,

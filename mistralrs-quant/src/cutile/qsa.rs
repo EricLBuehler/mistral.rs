@@ -881,10 +881,10 @@ mod tests {
     const AUX_DIM: usize = 192;
     const KV_HEADS: usize = 2;
     const Q_HEADS: usize = 24;
-    const POOL_BLOCKS: usize = 24;
+    const POOL_BLOCKS: usize = 48;
     const MAX_BLOCKS: usize = 12;
-    // (tokens, kv length after the step) per sequence
-    const SEQS: [(usize, usize); 2] = [(37, 300), (21, 150)];
+    // (tokens, kv length after the step) per sequence; the short ones select every block or none
+    const SEQS: [(usize, usize); 4] = [(37, 300), (21, 150), (4, 6), (3, 3)];
 
     struct Lcg(u64);
 

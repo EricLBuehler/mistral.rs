@@ -23,6 +23,7 @@ pub(crate) struct Q4Tokens {
     pub seq_len: u64,
     pub n_tokens: i32,
     pub n_seqs: i32,
+    pub q_len: i32,
 }
 
 #[repr(C)]
@@ -303,6 +304,8 @@ pub(crate) struct TokenLayout {
     pub kv_lens: Option<Tensor>,
     pub n_tokens: usize,
     pub n_seqs: usize,
+    // Tokens per sequence of the rectangular (tensor-free) layout
+    pub q_len: usize,
     #[cfg(feature = "cutile")]
     pub cutile: Option<CutileTokens>,
 }
@@ -350,15 +353,18 @@ impl CutileTokens {
 }
 
 impl TokenLayout {
-    pub(crate) fn decode(n_seqs: usize) -> Self {
+    /// `q_len` consecutive new tokens per sequence (decode is `q_len` 1); kv lengths come from the paged
+    /// metadata, so nothing is staged from the host and the layout is graph-safe.
+    pub(crate) fn rectangular(n_seqs: usize, q_len: usize) -> Self {
         Self {
             tok_seq: None,
             tok_local: None,
             seq_start: None,
             seq_len: None,
             kv_lens: None,
-            n_tokens: n_seqs,
+            n_tokens: n_seqs * q_len,
             n_seqs,
+            q_len,
             #[cfg(feature = "cutile")]
             cutile: None,
         }
@@ -393,6 +399,7 @@ impl TokenLayout {
             )?),
             n_tokens,
             n_seqs: seqs.len(),
+            q_len: 1,
             #[cfg(feature = "cutile")]
             cutile: Some(CutileTokens::from_host(seqs, kv_lens, n_tokens, device)?),
         })
@@ -406,6 +413,7 @@ impl TokenLayout {
             seq_len: opt_ptr(self.seq_len.as_ref())?,
             n_tokens: self.n_tokens as i32,
             n_seqs: self.n_seqs as i32,
+            q_len: self.q_len as i32,
         })
     }
 }

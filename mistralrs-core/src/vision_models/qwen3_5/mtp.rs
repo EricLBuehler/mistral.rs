@@ -11,27 +11,17 @@ use candle_core::{DType, Device, Module, Result, Tensor, D};
 use mistralrs_quant::{QuantMethod, ReplicatedLayer, ShardedVarBuilder};
 
 use crate::{
-    attention::AttentionMask,
     device_map::DeviceMapper,
     layers::{GemmaRmsNorm, Qwen3VLRotaryEmbedding},
     paged_attention::{load_fp8_attention_scales, AttentionImplementation, PagedAttention},
-    pipeline::{
-        text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
-        NormalLoadingMetadata,
-    },
+    pipeline::NormalLoadingMetadata,
+    speculative::builtin_mtp::MtpAttentionInputs,
     utils::unvarbuilder::UnVarBuilder,
 };
 
 use super::{config::TextConfig, text::DecoderLayer};
 
 pub const MTP_FC_WEIGHT: &str = "mtp.fc.weight";
-
-pub struct MtpAttentionInputs<'a> {
-    pub kv_cache: (Tensor, Tensor),
-    pub metadata: &'a PagedAttentionInputMetadata,
-    pub attention_mask: &'a AttentionMask,
-    pub flash_params: &'a FlashParams,
-}
 
 pub struct Qwen3_5MtpHead {
     pre_fc_norm_embedding: GemmaRmsNorm,

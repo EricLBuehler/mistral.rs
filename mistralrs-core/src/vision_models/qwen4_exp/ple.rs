@@ -645,6 +645,85 @@ fn device_reads_pageable_memory(device: &Device) -> Result<bool> {
     Ok(supported == 1)
 }
 
+/// PLE state before a multi-token speculative verify plus that step's inputs, so a rejected tail can be
+/// dropped by rebuilding the state from the accepted prefix.
+#[derive(Clone)]
+pub(super) struct PleStash {
+    pub slots: Vec<u32>,
+    // [b, hc * hidden, state_len]
+    pub conv: Tensor,
+    // [b, context] token history as `id + 1`
+    pub history: Tensor,
+    // [b, q, hc * hidden]
+    pub conv_inputs: Tensor,
+    // [b, q] as `id + 1`
+    pub tokens: Tensor,
+}
+
+impl PleStash {
+    pub(super) fn into_tensors(self) -> Vec<Tensor> {
+        vec![self.conv, self.history, self.conv_inputs, self.tokens]
+    }
+
+    pub(super) fn from_tensors(tensors: &[Tensor], slots: Vec<u32>) -> Result<Self> {
+        let [conv, history, conv_inputs, tokens] = tensors else {
+            candle_core::bail!("PLE stash expects 4 tensors, got {}", tensors.len());
+        };
+        Ok(Self {
+            slots,
+            conv: conv.clone(),
+            history: history.clone(),
+            conv_inputs: conv_inputs.clone(),
+            tokens: tokens.clone(),
+        })
+    }
+
+    /// Rewrites each `(batch_idx, keep_rows)` sequence's state to the pre-verify state advanced by its kept rows.
+    pub(super) fn rollback(
+        &self,
+        rows: &[(usize, usize)],
+        conv_pool: &Tensor,
+        history_pool: &Tensor,
+    ) -> Result<()> {
+        let state_len = self.conv.dim(2)?;
+        let context = self.history.dim(1)?;
+        for &(batch_idx, keep) in rows {
+            let slot = *self.slots.get(batch_idx).ok_or_else(|| {
+                candle_core::Error::msg(format!("PLE stash has no batch row {batch_idx}"))
+            })? as usize;
+            let conv = Tensor::cat(
+                &[
+                    self.conv.i(batch_idx)?.t()?,
+                    self.conv_inputs
+                        .i(batch_idx)?
+                        .narrow(0, 0, keep)?
+                        .to_dtype(self.conv.dtype())?,
+                ],
+                0,
+            )?;
+            let conv = conv
+                .narrow(0, conv.dim(0)? - state_len, state_len)?
+                .t()?
+                .unsqueeze(0)?
+                .contiguous()?;
+            conv_pool.slice_set(&conv, 0, slot)?;
+            let history = Tensor::cat(
+                &[
+                    self.history.i(batch_idx)?,
+                    self.tokens.i(batch_idx)?.narrow(0, 0, keep)?,
+                ],
+                0,
+            )?;
+            let history = history
+                .narrow(0, history.dim(0)? - context, context)?
+                .unsqueeze(0)?
+                .contiguous()?;
+            history_pool.slice_set(&history, 0, slot)?;
+        }
+        Ok(())
+    }
+}
+
 /// Hybrid-cache PLE rows: conv history `[slots, hc * hidden, state_len]`, token history as `id + 1` f32.
 pub(super) struct PleState<'a> {
     pub conv: &'a Tensor,
@@ -745,13 +824,15 @@ impl PleLayer {
         Ok(())
     }
 
-    /// `hidden_states + ple(hidden_states, tokens)`, advancing the per-sequence state.
+    /// `hidden_states + ple(hidden_states, tokens)`, advancing the per-sequence state. `conv_inputs_out`
+    /// receives the `[tokens, hc * hidden]` rows appended to the conv history.
     pub(super) fn forward(
         &self,
         hidden_states: &Tensor,
         tokens: &Tensor,
         state: &PleState<'_>,
         batch: &PleBatch<'_>,
+        conv_inputs_out: Option<&mut Option<Tensor>>,
     ) -> Result<Tensor> {
         let dims = hidden_states.dims().to_vec();
         let width = dims[dims.len() - 1];
@@ -785,6 +866,9 @@ impl PleLayer {
             }
             .to_dtype(flat.dtype())?;
             let (gated, normed) = self.gate(&emb, &flat)?;
+            if let Some(out) = conv_inputs_out {
+                *out = Some(normed.clone());
+            }
             let out = crate::cuda::qwen4_exp::ple_conv(crate::cuda::qwen4_exp::PleConvArgs {
                 normed: &normed,
                 gated: &gated,
@@ -799,6 +883,9 @@ impl PleLayer {
         }
         let emb = self.host_embeddings(tokens, state, batch.seqs, n_tokens)?;
         let (gated, normed) = self.gate(&emb.to_dtype(flat.dtype())?, &flat)?;
+        if let Some(out) = conv_inputs_out {
+            *out = Some(normed.clone());
+        }
         let out = self.conv_host(&flat, &gated, &normed, state, batch.seqs)?;
         out.reshape(dims)
     }

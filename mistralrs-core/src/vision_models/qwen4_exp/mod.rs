@@ -34,8 +34,10 @@ use crate::{
 
 pub(crate) mod config;
 mod hyper;
+mod mtp;
 mod ple;
 mod qsa;
+mod speculative;
 mod text;
 
 pub(crate) use crate::vision_models::qwen3_vl::Qwen3VLProcessor as Qwen4ExpProcessor;
@@ -142,6 +144,9 @@ impl ModelConfigLike for Qwen4ExpPagedConfig {
 
 pub struct Qwen4ExpModel {
     text: Qwen4ExpTextModel,
+    mtp_n_predict: std::sync::atomic::AtomicUsize,
+    mtp_proposer: crate::speculative::builtin_mtp::BuiltinMtpProposer,
+    draft_lm_head: Mutex<Option<Arc<dyn mistralrs_quant::QuantMethod>>>,
     vision: Option<Qwen3VLVisionModel>,
     spatial_merge_size: usize,
     image_token_id: u32,
@@ -184,11 +189,15 @@ impl Qwen4ExpModel {
             &text_config,
             vb.clone(),
             cfg.tie_word_embeddings,
+            cfg.mtp,
             normal_loading_metadata,
             attention_mechanism,
         )?;
         Ok(Self {
             text,
+            mtp_n_predict: std::sync::atomic::AtomicUsize::new(0),
+            mtp_proposer: Default::default(),
+            draft_lm_head: Mutex::new(None),
             vision,
             spatial_merge_size: cfg
                 .vision_config
@@ -394,8 +403,6 @@ impl Qwen4ExpModel {
     }
 }
 
-impl crate::speculative::SpeculativeTargetMixin for Qwen4ExpModel {}
-
 impl crate::block_diffusion::BlockDiffusionMixin for Qwen4ExpModel {}
 
 impl MultimodalModel for Qwen4ExpModel {
@@ -482,9 +489,16 @@ impl MultimodalModel for Qwen4ExpModel {
         &self.text.cfg
     }
     fn model_config(&self) -> Arc<dyn ModelConfigLike + Send + Sync> {
+        let mut layer_types = self.text.layer_types.clone();
+        layer_types.extend(
+            self.text
+                .mtp
+                .as_ref()
+                .map(|_| config::LayerType::FullAttention),
+        );
         Arc::new(Qwen4ExpPagedConfig::new(
             self.text.cfg.clone(),
-            &self.text.layer_types,
+            &layer_types,
             self.text.aux_dim,
             self.text.dense_kv_cap,
         ))
