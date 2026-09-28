@@ -49,7 +49,8 @@ const GPU_MIN_RESERVE_BYTES: usize = 512 * 1024 * 1024;
 
 #[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 pub(crate) fn device_memory_cap(available_bytes: usize, device: &Device) -> usize {
-    if device.is_cpu() {
+    // Unified memory already left its system margin in `MemoryUsage`
+    if device.is_cpu() || crate::utils::normal::is_integrated_gpu(device) {
         available_bytes
     } else {
         let fractional_reserve = (available_bytes as f64 * GPU_RESERVE_FRACTION) as usize;
