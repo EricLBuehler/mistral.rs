@@ -4896,6 +4896,7 @@ pub fn metal_add_rms_norm(
 
 /// Shape of a fused per-head RMSNorm + RoPE call, from [`qk_norm_rope_shape`].
 #[derive(Clone, Copy, Debug)]
+#[cfg_attr(not(feature = "metal"), allow(dead_code))]
 pub(crate) struct QkNormRopeShape {
     pub batch: usize,
     pub q_heads: usize,

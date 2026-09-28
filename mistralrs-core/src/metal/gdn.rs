@@ -385,6 +385,7 @@ pub fn gated_delta_rule_pooled_decode_metal(
     Ok(output)
 }
 
+#[cfg(feature = "metal")]
 #[repr(C)]
 struct GdnDecodeParams {
     num_k_heads: i32,
@@ -397,6 +398,7 @@ struct GdnDecodeParams {
     a_head_stride: i32,
 }
 
+#[cfg(feature = "metal")]
 pub struct PooledDecodeFromConvolved<'a> {
     /// [B, 2 * key_dim + value_dim]
     pub mixed_qkv: &'a Tensor,

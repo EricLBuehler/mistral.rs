@@ -36,6 +36,7 @@ impl RmsNormGated {
     }
 
     pub fn forward(&self, x: &Tensor, gate: &Tensor) -> Result<Tensor> {
+        #[cfg(any(feature = "cuda", feature = "metal"))]
         if self.fused_kernel_applies(x, gate)? {
             let weight = self.weight.to_dtype(x.dtype())?;
             #[cfg(feature = "cuda")]
@@ -60,6 +61,7 @@ impl RmsNormGated {
         out.to_dtype(dtype)
     }
 
+    #[cfg(any(feature = "cuda", feature = "metal"))]
     fn fused_kernel_applies(&self, x: &Tensor, gate: &Tensor) -> Result<bool> {
         Ok((x.device().is_cuda() || x.device().is_metal())
             && (2..=4).contains(&x.rank())
