@@ -2063,12 +2063,17 @@ mod metal_tests {
 
     #[test]
     fn metal_sorted_afq_moe_matches_gather_pipeline() -> Result<()> {
+        // 128-wide experts exercise the gather route that previously picked a missing bs_qmv_quad kernel.
+        for (hidden, intermediate) in [(512, 512), (128, 256)] {
+            sorted_matches_gather(hidden, intermediate)?;
+        }
+        Ok(())
+    }
+
+    fn sorted_matches_gather(hidden: usize, intermediate: usize) -> Result<()> {
         use mistralrs_quant::{AfqBits, AfqGroupSize, AfqLayer};
 
         const EXPERTS: usize = 4;
-        // Widths of 64/128 would send the gather reference through bs_qmv_quad, which lacks those instantiations.
-        const HIDDEN: usize = 512;
-        const INTERMEDIATE: usize = 512;
         const TOKENS: usize = 40;
         const TOPK: usize = 2;
 
@@ -2085,16 +2090,16 @@ mod metal_tests {
             })?))
         };
         let fast = FastExpertsWeights {
-            fused_gate_proj: afq((EXPERTS, INTERMEDIATE, HIDDEN), 0.1)?,
-            fused_up_proj: afq((EXPERTS, INTERMEDIATE, HIDDEN), 0.7)?,
-            fused_down_proj: afq((EXPERTS, HIDDEN, INTERMEDIATE), 1.3)?,
+            fused_gate_proj: afq((EXPERTS, intermediate, hidden), 0.1)?,
+            fused_up_proj: afq((EXPERTS, intermediate, hidden), 0.7)?,
+            fused_down_proj: afq((EXPERTS, hidden, intermediate), 1.3)?,
             sharded: false,
         };
 
-        let xs = (tensor((TOKENS, 1, HIDDEN), 3.1)? * 10.0)?
+        let xs = (tensor((TOKENS, 1, hidden), 3.1)? * 10.0)?
             .to_dtype(DType::BF16)?
             .to_device(&device)?;
-        let xs_flat = xs.reshape((TOKENS, HIDDEN))?;
+        let xs_flat = xs.reshape((TOKENS, hidden))?;
         let ids = (0..TOKENS * TOPK)
             .map(|i| u32::try_from((i * 7 + i / TOPK) % EXPERTS).expect("small"))
             .collect::<Vec<_>>();
@@ -2115,7 +2120,7 @@ mod metal_tests {
             shape: MoEForwardShape {
                 batch_size: TOKENS,
                 seq_len: 1,
-                hidden_dim: HIDDEN,
+                hidden_dim: hidden,
                 num_tokens: TOKENS,
                 phase: MoEForwardPhase::Prefill,
             },

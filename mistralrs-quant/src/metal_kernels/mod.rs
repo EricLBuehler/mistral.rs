@@ -963,6 +963,7 @@ pub fn call_afq_qmm(
     };
     let mut matrix = false;
     let mut aligned = false;
+    let mut tile_suffix = "";
     let mut quad = false;
 
     // Batch-size cutoff for qmv* vs qmm_t dispatch at small M.
@@ -1029,7 +1030,8 @@ pub fn call_afq_qmm(
     }
 
     let (group_dims, grid_dims) = if transpose {
-        if b < qmv_limit && (d == 128 || d == 64) && bits.is_power_of_two() {
+        // No bs_ (gather) instantiation of qmv_quad; gathers take bs_qmv(_fast).
+        if b < qmv_limit && (d == 128 || d == 64) && bits.is_power_of_two() && !gather {
             name.push_str("qmv_quad");
             let quads_per_simd = 8;
             let results_per_simdgroup = 8;
@@ -1078,14 +1080,18 @@ pub fn call_afq_qmm(
             };
             (group_dims, grid_dims)
         } else {
-            // Prefer the BM=64 BN=32 tile when prefill is large enough.
+            // Prefer the BM=64 BN=32 tile when prefill is large enough; only the plain (non-batched,
+            // non-gather) kernel has the wide-tile instantiations, so the grid must follow the same rule.
             let wn = 2;
             let wm = 2;
-            let use_tile_64_32 = b >= 64 && o.is_multiple_of(32);
-            let use_tile_64_64 = b >= 64 && o.is_multiple_of(64);
+            let wide_tiles = b >= 64 && !batched && !gather;
+            let use_tile_64_32 = wide_tiles && o.is_multiple_of(32);
+            let use_tile_64_64 = wide_tiles && o.is_multiple_of(64);
             let (bm, bn) = if use_tile_64_32 {
+                tile_suffix = "_t_64_32_32";
                 (64, 32)
             } else if use_tile_64_64 {
+                tile_suffix = "_t_64_64_32";
                 (64, 64)
             } else {
                 (32, 32)
@@ -1176,13 +1182,7 @@ pub fn call_afq_qmm(
     if !gather {
         name.push_str(&format!("_batch_{}", batched as usize));
     }
-    if matrix && aligned && !batched && !gather && transpose {
-        if b >= 64 && o.is_multiple_of(32) {
-            name.push_str("_t_64_32_32");
-        } else if b >= 64 && o.is_multiple_of(64) {
-            name.push_str("_t_64_64_32");
-        }
-    }
+    name.push_str(tile_suffix);
 
     let pipeline = kernels.load_pipeline(device, &name)?;
 
