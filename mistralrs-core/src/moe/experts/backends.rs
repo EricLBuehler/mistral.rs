@@ -8,7 +8,7 @@ use mistralrs_quant::{
 use std::sync::Arc;
 
 use crate::cuda::moe;
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "metal"))]
 use crate::layers::Activation;
 
 use super::checkpoint::ExpertCheckpoint;
@@ -21,6 +21,9 @@ use super::forward::{MoEForward, MoEForwardConfig};
 
 #[cfg(feature = "cuda")]
 const GROUPED_PREFILL_MIN_TOKENS: usize = 32;
+// Below this many routed (token, expert) rows the sorted Metal path's sort and unsort cost more than it saves.
+#[cfg(feature = "metal")]
+const METAL_SORTED_MIN_ROUTED_ROWS: usize = 64;
 
 /// Canonical stacked expert weights, ENK [E, N, K] = [E, out, in]. The raw backends (Fused,
 /// Cutile) hold exactly this; nothing else stores a layout.
@@ -1097,14 +1100,110 @@ impl FastExpertsWeights {
             return self.forward_gather_lora(forward, config);
         }
         // while collecting, force the gather path; fused kernels never materialize the routed inputs
-        #[cfg(feature = "cuda")]
         if self.fused_gate_proj.stats_snapshot().is_none() {
+            #[cfg(feature = "cuda")]
             if let Some(result) = self.forward_cuda(forward, config)? {
+                return Ok(result);
+            }
+            #[cfg(feature = "metal")]
+            if let Some(result) = self.forward_metal_sorted(forward, config)? {
                 return Ok(result);
             }
         }
 
         self.forward_gather(forward, config)
+    }
+
+    /// Metal fast path (MLX SwitchGLU): sort routed rows by expert, run gate+up+act and down as grouped AFQ
+    /// GEMMs that reuse each expert's weights across its tile, then unsort and reduce. `None` when the weights
+    /// or activation are not covered by the kernels.
+    #[cfg(feature = "metal")]
+    fn forward_metal_sorted(
+        &self,
+        forward: &MoEForward,
+        config: MoEForwardConfig,
+    ) -> Result<Option<Tensor>> {
+        use mistralrs_quant::{
+            afq_gather_qmm_rhs_sorted, afq_gather_qmm_rhs_sorted_gate_up, metal_arg_sort_u32_1d,
+            AfqBits, AfqGroupSize,
+        };
+
+        let top_k = config.num_experts_per_tok;
+        let rows = forward.shape.num_tokens * top_k;
+        if !forward.xs.device().is_metal() || rows < METAL_SORTED_MIN_ROUTED_ROWS {
+            return Ok(None);
+        }
+        let (Some(gate), Some(up), Some(down)) = (
+            self.fused_gate_proj.afq_inner(),
+            self.fused_up_proj.afq_inner(),
+            self.fused_down_proj.afq_inner(),
+        ) else {
+            return Ok(None);
+        };
+        let bits_ok = |b: AfqBits| matches!(b, AfqBits::Eight | AfqBits::Four);
+        if [gate.group_size, up.group_size, down.group_size]
+            .iter()
+            .any(|g| *g != AfqGroupSize::Med)
+            || !bits_ok(gate.bits)
+            || !bits_ok(down.bits)
+            || gate.bits != up.bits
+        {
+            return Ok(None);
+        }
+        // Matches fused_glu_activation in quantized.metal.
+        let act_idx = match config.act {
+            Activation::Silu | Activation::Swish => 0,
+            Activation::GeluPytorchTanh | Activation::NewGelu => 1,
+            Activation::Gelu => 2,
+            Activation::Relu => 3,
+            _ => return Ok(None),
+        };
+
+        let ids = forward
+            .topk_ids
+            .reshape((rows,))?
+            .to_dtype(DType::U32)?
+            .contiguous()?;
+        let perm = metal_arg_sort_u32_1d(&ids)?;
+        let sorted_expert_ids = ids.gather(&perm, 0)?;
+        let sorted_token_idx = perm
+            .to_dtype(DType::F32)?
+            .affine(
+                1.0 / f64::from(u32::try_from(top_k).map_err(candle_core::Error::wrap)?),
+                0.0,
+            )?
+            .floor()?
+            .to_dtype(DType::U32)?;
+        let x_sorted = forward.xs_flat.index_select(&sorted_token_idx, 0)?;
+        let mid = afq_gather_qmm_rhs_sorted_gate_up(
+            &x_sorted,
+            &gate.w_q,
+            &gate.scales,
+            &gate.biases,
+            &up.w_q,
+            &up.scales,
+            &up.biases,
+            &sorted_expert_ids,
+            gate.group_size,
+            gate.bits,
+            act_idx,
+        )?;
+        let down_sorted = afq_gather_qmm_rhs_sorted(
+            &mid,
+            &down.w_q,
+            &down.scales,
+            &down.biases,
+            &sorted_expert_ids,
+            down.group_size,
+            down.bits,
+        )?;
+        let inv_perm = metal_arg_sort_u32_1d(&perm)?;
+        let ys = down_sorted.index_select(&inv_perm, 0)?.reshape((
+            forward.shape.num_tokens,
+            top_k,
+            forward.shape.hidden_dim,
+        ))?;
+        topk_weight_reduce(&ys, forward.topk_weights, forward.original_dtype).map(Some)
     }
 
     #[cfg(feature = "cuda")]
@@ -1211,10 +1310,7 @@ impl FastExpertsWeights {
             ))?
         };
 
-        ys.to_dtype(DType::F32)?
-            .broadcast_mul(&forward.topk_weights.unsqueeze(D::Minus1)?)?
-            .sum(D::Minus2)?
-            .to_dtype(forward.original_dtype)
+        topk_weight_reduce(&ys, forward.topk_weights, forward.original_dtype)
     }
 
     fn forward_gather_lora(
@@ -1925,6 +2021,122 @@ mod nvfp4_tests {
             };
             let output = experts.forward_gather(&forward, config)?.to_vec2::<f32>()?;
             assert_eq!(output, vec![vec![204.0; FEATURES], vec![816.0; FEATURES]]);
+        }
+        Ok(())
+    }
+}
+
+/// Sum `[tokens, top_k, hidden]` expert outputs weighted by `topk_weights` into `[tokens, hidden]`.
+fn topk_weight_reduce(ys: &Tensor, topk_weights: &Tensor, dtype: DType) -> Result<Tensor> {
+    #[cfg(feature = "metal")]
+    if ys.device().is_metal() && matches!(ys.dtype(), DType::BF16 | DType::F16 | DType::F32) {
+        let (tokens, top_k, hidden) = ys.dims3()?;
+        return mistralrs_quant::metal_moe_weighted_reduce_flat(
+            &ys.reshape((tokens * top_k, hidden))?,
+            topk_weights,
+            tokens,
+            top_k,
+        )?
+        .to_dtype(dtype);
+    }
+    ys.to_dtype(DType::F32)?
+        .broadcast_mul(&topk_weights.unsqueeze(D::Minus1)?)?
+        .sum(D::Minus2)?
+        .to_dtype(dtype)
+}
+
+#[cfg(all(test, feature = "metal"))]
+mod metal_tests {
+    use super::*;
+    use crate::moe::experts::forward::{MoEForwardPhase, MoEForwardShape};
+
+    fn tensor(shape: impl Into<candle_core::Shape>, phase: f32) -> Result<Tensor> {
+        let shape = shape.into();
+        let values = (0..shape.elem_count())
+            .map(|index| {
+                let index = u16::try_from(index % 4096).expect("index is bounded");
+                (f32::from(index) * 0.017 + phase).sin() * 0.08
+            })
+            .collect::<Vec<_>>();
+        Tensor::from_vec(values, shape, &Device::Cpu)
+    }
+
+    #[test]
+    fn metal_sorted_afq_moe_matches_gather_pipeline() -> Result<()> {
+        use mistralrs_quant::{AfqBits, AfqGroupSize, AfqLayer};
+
+        const EXPERTS: usize = 4;
+        // Widths of 64/128 would send the gather reference through bs_qmv_quad, which lacks those instantiations.
+        const HIDDEN: usize = 512;
+        const INTERMEDIATE: usize = 512;
+        const TOKENS: usize = 40;
+        const TOPK: usize = 2;
+
+        let device = Device::new_metal(0)?;
+        let afq = |shape: (usize, usize, usize), phase: f32| -> Result<Arc<dyn QuantMethod>> {
+            let weight = tensor(shape, phase)?
+                .to_dtype(DType::BF16)?
+                .to_device(&device)?;
+            Ok(Arc::new(AfqLayer::new(QuantMethodConfig::Afq {
+                weight,
+                bias: None,
+                bits: AfqBits::Four,
+                group_size: AfqGroupSize::Med,
+            })?))
+        };
+        let fast = FastExpertsWeights {
+            fused_gate_proj: afq((EXPERTS, INTERMEDIATE, HIDDEN), 0.1)?,
+            fused_up_proj: afq((EXPERTS, INTERMEDIATE, HIDDEN), 0.7)?,
+            fused_down_proj: afq((EXPERTS, HIDDEN, INTERMEDIATE), 1.3)?,
+            sharded: false,
+        };
+
+        let xs = (tensor((TOKENS, 1, HIDDEN), 3.1)? * 10.0)?
+            .to_dtype(DType::BF16)?
+            .to_device(&device)?;
+        let xs_flat = xs.reshape((TOKENS, HIDDEN))?;
+        let ids = (0..TOKENS * TOPK)
+            .map(|i| u32::try_from((i * 7 + i / TOPK) % EXPERTS).expect("small"))
+            .collect::<Vec<_>>();
+        let topk_ids = Tensor::from_slice(&ids, (TOKENS, TOPK), &device)?;
+        let topk_weights = Tensor::from_vec(
+            (0..TOKENS * TOPK)
+                .map(|i| if i % 2 == 0 { 0.6f32 } else { 0.4 })
+                .collect::<Vec<_>>(),
+            (TOKENS, TOPK),
+            &device,
+        )?;
+        let forward = MoEForward {
+            xs: &xs,
+            xs_flat: &xs_flat,
+            topk_weights: &topk_weights,
+            topk_ids: &topk_ids,
+            original_dtype: DType::BF16,
+            shape: MoEForwardShape {
+                batch_size: TOKENS,
+                seq_len: 1,
+                hidden_dim: HIDDEN,
+                num_tokens: TOKENS,
+                phase: MoEForwardPhase::Prefill,
+            },
+            lora: None,
+        };
+        for act in [Activation::Silu, Activation::GeluPytorchTanh] {
+            let config = MoEForwardConfig {
+                num_experts: EXPERTS,
+                num_experts_per_tok: TOPK,
+                act,
+            };
+            let actual = fast
+                .forward_metal_sorted(&forward, config)?
+                .expect("AFQ 4-bit group 64 takes the sorted path");
+            let expected = fast.forward_gather(&forward, config)?;
+            let expected_f32 = expected.to_dtype(DType::F32)?;
+            let error = ((actual.to_dtype(DType::F32)? - &expected_f32)?.abs()?
+                / expected_f32.abs()?.maximum(0.05)?)?
+            .max_all()?
+            .to_scalar::<f32>()?;
+            assert!(error < 3e-2, "{act:?}: relative error {error}");
         }
         Ok(())
     }
