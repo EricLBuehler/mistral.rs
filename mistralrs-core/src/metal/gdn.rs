@@ -502,6 +502,56 @@ pub fn gdn_pooled_decode_from_convolved_metal(
     Ok(output)
 }
 
+/// Gated RMSNorm over the last dim: x * rsqrt(mean(x^2) + eps) * weight * silu(gate).
+#[cfg(feature = "metal")]
+pub fn rmsnorm_gated_metal(x: &Tensor, gate: &Tensor, weight: &Tensor, eps: f64) -> Result<Tensor> {
+    let x = x.contiguous()?;
+    let gate = gate.reshape(x.shape())?.contiguous()?;
+    let weight = weight.to_dtype(x.dtype())?.contiguous()?;
+    let dim = x.dim(candle_core::D::Minus1)?;
+    let rows = x.elem_count() / dim;
+    let type_name = match x.dtype() {
+        DType::F32 => "float",
+        DType::F16 => "half",
+        DType::BF16 => "bfloat",
+        dtype => candle_core::bail!("rmsnorm_gated_metal: unsupported dtype {dtype:?}"),
+    };
+    let Device::Metal(dev) = x.device() else {
+        candle_core::bail!("rmsnorm_gated_metal: expected Metal device");
+    };
+    let pipeline = load_pipeline(dev.device(), &format!("gdn_rmsnorm_gated_{type_name}"))?;
+    // Every element is written by the kernel.
+    let output = unsafe { Tensor::empty(x.shape(), x.dtype(), x.device())? };
+
+    let (x_buf, x_off) = metal_buffer_and_offset(&x)?;
+    let (g_buf, g_off) = metal_buffer_and_offset(&gate)?;
+    let (w_buf, w_off) = metal_buffer_and_offset(&weight)?;
+    let (out_buf, out_off) = metal_buffer_and_offset(&output)?;
+
+    let encoder = dev.command_encoder()?;
+    let encoder: &ComputeCommandEncoder = encoder.as_ref();
+    encoder.set_compute_pipeline_state(&pipeline);
+    encoder.set_input_buffer(0, Some(&x_buf), x_off);
+    encoder.set_input_buffer(1, Some(&g_buf), g_off);
+    encoder.set_input_buffer(2, Some(&w_buf), w_off);
+    encoder.set_output_buffer(3, Some(&out_buf), out_off);
+    encoder.set_bytes(4, &(dim as i32));
+    encoder.set_bytes(5, &(eps as f32));
+    encoder.dispatch_thread_groups(
+        MTLSize {
+            width: rows,
+            height: 1,
+            depth: 1,
+        },
+        MTLSize {
+            width: 32,
+            height: 1,
+            depth: 1,
+        },
+    );
+    Ok(output)
+}
+
 /// Single-token conv update against the conv pool: row `slots[b]` is shifted in place.
 ///
 /// x: [B, conv_dim, 1]  weight: [conv_dim, kernel_size]  conv_pool: [P, conv_dim, kernel_size]

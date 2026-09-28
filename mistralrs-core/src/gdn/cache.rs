@@ -68,14 +68,15 @@ impl GdnLayerCache {
         }
     }
 
-    /// Check out the rows `indices` of `pool` for one layer forward. On CUDA, and for Metal decode, the kernels
-    /// update the pool in place through the slot table; elsewhere this is a gathered copy `commit` scatters back.
+    /// Check out the rows `indices` of `pool` for one layer forward. Where the backend's kernels cover the
+    /// batch they update the pool in place through the slot table; otherwise this is a gathered copy that
+    /// `commit` scatters back.
     pub fn checkout(
         pool: &RecurrentStatePool,
         indices: &Tensor,
         batch_kind: RecurrentBatchKind,
     ) -> Result<Self> {
-        if pool.device().is_cuda() || metal_pooled_decode(pool, batch_kind) {
+        if pooled_kernels_cover(pool, batch_kind) {
             let mut cache = Self::pooled(
                 pool.conv_state.clone(),
                 pool.recurrent_state.clone(),
@@ -126,12 +127,18 @@ impl Clone for GdnLayerCache {
     }
 }
 
-// The pooled Metal kernels cover single-token decode over a key-major f32 state with K of 64 or 128.
-fn metal_pooled_decode(pool: &RecurrentStatePool, batch_kind: RecurrentBatchKind) -> bool {
-    batch_kind == RecurrentBatchKind::Decode
-        && pool.device().is_metal()
-        && pool.state_layout() == RecurrentStateLayout::GdnKeyMajor
-        && pool.recurrent_state.dtype() == DType::F32
-        && matches!(pool.conv_state.dtype(), DType::F16 | DType::BF16)
-        && matches!(pool.recurrent_state.dim(2), Ok(64 | 128))
+/// Whether this backend's kernels read and update the recurrent pool in place for `batch_kind`.
+fn pooled_kernels_cover(pool: &RecurrentStatePool, batch_kind: RecurrentBatchKind) -> bool {
+    match pool.device() {
+        Device::Cuda(_) => true,
+        // Metal covers single-token decode over a key-major f32 state with K of 64 or 128.
+        Device::Metal(_) => {
+            batch_kind == RecurrentBatchKind::Decode
+                && pool.state_layout() == RecurrentStateLayout::GdnKeyMajor
+                && pool.recurrent_state.dtype() == DType::F32
+                && matches!(pool.conv_state.dtype(), DType::F16 | DType::BF16)
+                && matches!(pool.recurrent_state.dim(2), Ok(64 | 128))
+        }
+        Device::Cpu => false,
+    }
 }

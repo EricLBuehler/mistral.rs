@@ -375,6 +375,45 @@ instantiate_gdn_pooled_decode_from_convolved(bfloat, 128, 64)
 instantiate_gdn_pooled_decode_from_convolved(bfloat, 64, 64)
 
 // ============================================================================
+// Gated RMSNorm on the recurrence output: out = x * rsqrt(mean(x^2) + eps) * w * silu(gate), per row of dim.
+// One simdgroup per row; x, gate, out: [rows, dim]  weight: [dim]
+// ============================================================================
+
+template <typename T>
+[[kernel]] void gdn_rmsnorm_gated_kernel(
+    const device T *x [[buffer(0)]], const device T *gate [[buffer(1)]],
+    const device T *weight [[buffer(2)]], device T *out [[buffer(3)]],
+    constant int &dim [[buffer(4)]], constant float &eps [[buffer(5)]],
+    uint row [[threadgroup_position_in_grid]],
+    uint lane [[thread_index_in_simdgroup]]) {
+  const device T *xr = x + (long)row * dim;
+  const device T *gr = gate + (long)row * dim;
+  device T *orow = out + (long)row * dim;
+  float sum_sq = 0.0f;
+  for (int i = (int)lane; i < dim; i += 32) {
+    const float v = static_cast<float>(xr[i]);
+    sum_sq = fma(v, v, sum_sq);
+  }
+  const float inv_rms = rsqrt(simd_sum(sum_sq) / float(dim) + eps);
+  for (int i = (int)lane; i < dim; i += 32) {
+    const float g = static_cast<float>(gr[i]);
+    const float silu = g / (1.0f + exp(-g));
+    orow[i] = static_cast<T>(static_cast<float>(xr[i]) * inv_rms *
+                             static_cast<float>(weight[i]) * silu);
+  }
+}
+
+#define instantiate_gdn_rmsnorm_gated(type)                                    \
+  template [[host_name("gdn_rmsnorm_gated_" #type)]] [[kernel]] void           \
+  gdn_rmsnorm_gated_kernel<type>(const device type *, const device type *,     \
+                                 const device type *, device type *,           \
+                                 constant int &, constant float &, uint, uint);
+
+instantiate_gdn_rmsnorm_gated(float)
+instantiate_gdn_rmsnorm_gated(half)
+instantiate_gdn_rmsnorm_gated(bfloat)
+
+// ============================================================================
 // Kernel 1b: chunked_gated_delta_rule_recurrence (prefill optimization)
 //
 // Processes prefill tokens in BT-token chunks instead of one at a time.
