@@ -248,6 +248,43 @@ pub fn apply_recurrence_from_convolved(
         );
     }
 
+    #[cfg(feature = "metal")]
+    if seq_len == 1 && metal_pooled_decode_from_convolved_supported(mixed_qkv, b, a, dims, cache) {
+        let slots = cache
+            .slots
+            .as_ref()
+            .expect("pooled decode was checked above");
+        let out = crate::metal::gdn::gdn_pooled_decode_from_convolved_metal(
+            crate::metal::gdn::PooledDecodeFromConvolved {
+                mixed_qkv: &mixed_qkv.reshape((batch_size, dims.conv_dim))?,
+                b,
+                a,
+                a_log: &a_log.to_dtype(DType::F32)?,
+                dt_bias: &dt_bias.to_dtype(DType::F32)?,
+                state_pool: &cache.recurrent_state,
+                slots,
+                num_k_heads: dims.num_k_heads,
+                head_k_dim: dims.head_k_dim,
+                tiled_v_heads: dims.v_head_layout == GdnVHeadLayout::Tiled,
+            },
+        )?;
+        let state_pool = cache.recurrent_state.clone();
+        return finish_recurrence(
+            RecurrenceOutput::TokenMajor(out.reshape((
+                batch_size,
+                1,
+                dims.num_v_heads,
+                dims.head_v_dim,
+            ))?),
+            state_pool,
+            dims,
+            batch_size,
+            seq_len,
+            cache,
+            dtype,
+        );
+    }
+
     let q = mixed_qkv.narrow(D::Minus1, 0, dims.key_dim)?;
     let k = mixed_qkv.narrow(D::Minus1, dims.key_dim, dims.key_dim)?;
     let v = mixed_qkv.narrow(D::Minus1, dims.key_dim * 2, dims.value_dim)?;
@@ -724,6 +761,25 @@ fn recurrence_metal(
     )
 }
 
+#[cfg(feature = "metal")]
+fn metal_pooled_decode_from_convolved_supported(
+    mixed_qkv: &Tensor,
+    b: &Tensor,
+    a: &Tensor,
+    dims: &GdnDims,
+    cache: &GdnLayerCache,
+) -> bool {
+    mixed_qkv.device().is_metal()
+        && cache.slots.is_some()
+        && cache.state_layout == RecurrentStateLayout::GdnKeyMajor
+        && cache.recurrent_state.dtype() == DType::F32
+        && matches!(dims.head_k_dim, 64 | 128)
+        && b.dtype() == mixed_qkv.dtype()
+        && a.dtype() == mixed_qkv.dtype()
+        && matches!(b.rank(), 2 | 3)
+        && matches!(a.rank(), 2 | 3)
+}
+
 #[cfg(any(feature = "cuda", feature = "metal"))]
 fn prepare_q_for_backend(
     q: &Tensor,
@@ -1188,6 +1244,150 @@ mod tests {
                 diff <= ASSERT_EPS,
                 "idx={idx} lhs={lhs} rhs={rhs} diff={diff}"
             );
+        }
+        Ok(())
+    }
+
+    #[cfg(feature = "metal")]
+    #[test]
+    fn metal_pooled_decode_from_convolved_matches_cpu() -> CandleResult<()> {
+        const POOL_ROWS: usize = 6;
+        let cpu = Device::Cpu;
+        let metal = Device::new_metal(0)?;
+        let slots = [2u32, 0, 5];
+        let batch_size = slots.len();
+        for (layout, dtype, tol) in [
+            (GdnVHeadLayout::Grouped, DType::F32, 1e-4f32),
+            (GdnVHeadLayout::Tiled, DType::F32, 1e-4),
+            (GdnVHeadLayout::Grouped, DType::BF16, 2e-2),
+        ] {
+            let dims = dims_with_layout(2, 4, 128, 128, layout);
+            let mixed = Tensor::from_vec(
+                patterned(batch_size * dims.conv_dim, 1, 0.4, 0.05),
+                (batch_size, 1, dims.conv_dim),
+                &cpu,
+            )?;
+            let b = Tensor::from_vec(
+                patterned(batch_size * dims.num_v_heads, 2, 0.8, 0.1),
+                (batch_size, 1, dims.num_v_heads),
+                &cpu,
+            )?;
+            let a = Tensor::from_vec(
+                patterned(batch_size * dims.num_v_heads, 3, 0.8, -0.05),
+                (batch_size, 1, dims.num_v_heads),
+                &cpu,
+            )?;
+            let a_log = Tensor::from_vec(
+                patterned(dims.num_v_heads, 4, 0.2, -0.2),
+                (dims.num_v_heads,),
+                &cpu,
+            )?;
+            let dt_bias = Tensor::from_vec(
+                patterned(dims.num_v_heads, 5, 0.3, 0.3),
+                (dims.num_v_heads,),
+                &cpu,
+            )?;
+            let state_len = dims.num_v_heads * dims.head_k_dim * dims.head_v_dim;
+            let pool = Tensor::from_vec(
+                patterned(POOL_ROWS * state_len, 6, 0.05, 0.0),
+                (
+                    POOL_ROWS,
+                    dims.num_v_heads,
+                    dims.head_k_dim,
+                    dims.head_v_dim,
+                ),
+                &cpu,
+            )?;
+            let slot_rows = slots.iter().map(|&s| s as usize).collect::<Vec<_>>();
+            let gathered = Tensor::cat(
+                &slot_rows
+                    .iter()
+                    .map(|&s| pool.narrow(0, s, 1))
+                    .collect::<CandleResult<Vec<_>>>()?,
+                0,
+            )?;
+            // Round inputs through the tested dtype so both sides see the same values.
+            let (mixed, b, a) = (
+                mixed.to_dtype(dtype)?.to_dtype(DType::F32)?,
+                b.to_dtype(dtype)?.to_dtype(DType::F32)?,
+                a.to_dtype(dtype)?.to_dtype(DType::F32)?,
+            );
+            let mut cpu_cache = GdnLayerCache {
+                conv_state: Tensor::zeros(
+                    (batch_size, dims.conv_dim, dims.conv_kernel_size),
+                    DType::F32,
+                    &cpu,
+                )?,
+                recurrent_state: gathered,
+                state_layout: RecurrentStateLayout::GdnKeyMajor,
+                slots: None,
+                pending_transitions: None,
+                deferred_state: None,
+            };
+            let expected = apply_recurrence_from_convolved(
+                &mixed,
+                &b,
+                &a,
+                &a_log,
+                &dt_bias,
+                &dims,
+                batch_size,
+                1,
+                &mut cpu_cache,
+                DType::F32,
+            )?;
+
+            let mut metal_cache = GdnLayerCache {
+                conv_state: Tensor::zeros(
+                    (POOL_ROWS, dims.conv_dim, dims.conv_kernel_size),
+                    DType::F32,
+                    &metal,
+                )?,
+                recurrent_state: pool.to_device(&metal)?,
+                state_layout: RecurrentStateLayout::GdnKeyMajor,
+                slots: Some(Tensor::new(&slots, &metal)?),
+                pending_transitions: None,
+                deferred_state: None,
+            };
+            let actual = apply_recurrence_from_convolved(
+                &mixed.to_dtype(dtype)?.to_device(&metal)?,
+                &b.to_dtype(dtype)?.to_device(&metal)?,
+                &a.to_dtype(dtype)?.to_device(&metal)?,
+                &a_log.to_device(&metal)?,
+                &dt_bias.to_device(&metal)?,
+                &dims,
+                batch_size,
+                1,
+                &mut metal_cache,
+                dtype,
+            )?;
+            let max_diff = |x: &Tensor, y: &Tensor| -> CandleResult<f32> {
+                (x.to_dtype(DType::F32)?.to_device(&cpu)?
+                    - y.to_dtype(DType::F32)?.to_device(&cpu)?)?
+                .abs()?
+                .flatten_all()?
+                .max(0)?
+                .to_scalar::<f32>()
+            };
+            let out_diff = max_diff(&actual, &expected)?;
+            let pool_after = metal_cache.recurrent_state.to_device(&cpu)?;
+            let mut state_diff = 0f32;
+            for (row, &slot) in slot_rows.iter().enumerate() {
+                state_diff = state_diff.max(max_diff(
+                    &pool_after.narrow(0, slot, 1)?,
+                    &cpu_cache.recurrent_state.narrow(0, row, 1)?,
+                )?);
+            }
+            let untouched = max_diff(&pool_after.narrow(0, 1, 1)?, &pool.narrow(0, 1, 1)?)?;
+            assert!(
+                out_diff < tol,
+                "{layout:?} {dtype:?}: output diff {out_diff}"
+            );
+            assert!(
+                state_diff < 1e-3,
+                "{layout:?} {dtype:?}: state diff {state_diff}"
+            );
+            assert_eq!(untouched, 0.0, "unselected pool rows must not change");
         }
         Ok(())
     }
