@@ -2887,8 +2887,7 @@ pub fn qk_rms_norm_rope(
     is_gpt_neox: bool,
     positions: &Tensor,
 ) -> Result<(Tensor, Tensor)> {
-    #[cfg(feature = "cuda")]
-    if let Some((q, Some(k))) = crate::ops::try_cuda_qk_rms_norm_rope_positions(
+    if let Some((q, Some(k))) = crate::ops::try_fused_qk_rms_norm_rope_positions(
         q,
         Some(k),
         q_weight,
@@ -2924,8 +2923,7 @@ pub fn qkv_rms_norm_rope(
     is_gpt_neox: bool,
     positions: &Tensor,
 ) -> Result<(Tensor, Tensor, Tensor)> {
-    #[cfg(feature = "cuda")]
-    if let Some((q, k, v)) = crate::ops::try_cuda_qkv_rms_norm_rope_positions(
+    if let Some((q, k, v)) = crate::ops::try_fused_qkv_rms_norm_rope_positions(
         q,
         k,
         v,
@@ -2960,8 +2958,7 @@ pub fn q_rms_norm_rope(
     is_gpt_neox: bool,
     positions: &Tensor,
 ) -> Result<Tensor> {
-    #[cfg(feature = "cuda")]
-    if let Some((q, None)) = crate::ops::try_cuda_qk_rms_norm_rope_positions(
+    if let Some((q, None)) = crate::ops::try_fused_qk_rms_norm_rope_positions(
         q,
         None,
         q_weight,
@@ -4321,6 +4318,88 @@ mod metal_add_rms_norm_tests {
                 rel_diff < tol,
                 "{dtype:?} {cols}: relative norm diff {rel_diff}"
             );
+        }
+        Ok(())
+    }
+}
+
+#[cfg(all(test, feature = "metal"))]
+mod metal_qk_norm_rope_tests {
+    use candle_core::{DType, Device, Result, Tensor};
+
+    use super::{apply_rotary_qk, q_rms_norm_rope, qk_rms_norm_rope, qkv_rms_norm_rope};
+
+    const EPS: f64 = 1e-6;
+
+    fn max_rel_diff(a: &Tensor, b: &Tensor) -> Result<f32> {
+        let b = b.to_dtype(DType::F32)?;
+        ((a.to_dtype(DType::F32)? - &b)?.abs()? / b.abs()?.maximum(1.0)?)?
+            .flatten_all()?
+            .max(0)?
+            .to_scalar::<f32>()
+    }
+
+    fn norm(x: &Tensor, w: &Tensor) -> Result<Tensor> {
+        candle_nn::ops::rms_norm(&x.contiguous()?, w, EPS as f32)
+    }
+
+    #[test]
+    fn metal_fused_qk_norm_rope_matches_separate_ops() -> Result<()> {
+        let dev = Device::new_metal(0)?;
+        let (batch, seq, q_heads, kv_heads, head_dim) = (2, 3, 8, 2, 128);
+        let max_pos = 64;
+        for (dtype, tol) in [(DType::F32, 1e-4f32), (DType::BF16, 2e-2)] {
+            for (is_neox, rot_dim) in [(true, 64), (false, 64), (true, 32)] {
+                for token_major in [true, false] {
+                    let mk = |heads: usize| -> Result<Tensor> {
+                        if token_major {
+                            Tensor::randn(0f32, 1., (batch, seq, heads, head_dim), &dev)?
+                                .to_dtype(dtype)?
+                                .transpose(1, 2)
+                        } else {
+                            Tensor::randn(0f32, 1., (batch, heads, seq, head_dim), &dev)?
+                                .to_dtype(dtype)
+                        }
+                    };
+                    let (q, k, v) = (mk(q_heads)?, mk(kv_heads)?, mk(kv_heads)?);
+                    let w = |s: f32| -> Result<Tensor> {
+                        Tensor::randn(1f32, s, head_dim, &dev)?.to_dtype(dtype)
+                    };
+                    let (qw, kw, vw) = (w(0.1)?, w(0.2)?, w(0.3)?);
+                    let angles = Tensor::randn(0f32, 3., (max_pos, rot_dim), &dev)?;
+                    let cos = angles.cos()?.to_dtype(dtype)?;
+                    let sin = angles.sin()?.to_dtype(dtype)?;
+                    let positions = Tensor::new(&[5u32, 6, 7, 40, 41, 42], &dev)?;
+
+                    let (ref_q, ref_k) = apply_rotary_qk(
+                        &norm(&q, &qw)?,
+                        &norm(&k, &kw)?,
+                        &cos,
+                        &sin,
+                        &positions,
+                        is_neox,
+                    )?;
+                    let tag =
+                        format!("{dtype:?} neox={is_neox} rot={rot_dim} token_major={token_major}");
+
+                    let (fq, fk) = qk_rms_norm_rope(
+                        &q, &k, &qw, &kw, EPS, EPS, &cos, &sin, is_neox, &positions,
+                    )?;
+                    let d = max_rel_diff(&fq, &ref_q)?;
+                    assert!(d < tol, "qk q {tag}: {d}");
+                    assert!(max_rel_diff(&fk, &ref_k)? < tol, "qk k {tag}");
+
+                    let fq = q_rms_norm_rope(&q, &qw, EPS, &cos, &sin, is_neox, &positions)?;
+                    assert!(max_rel_diff(&fq, &ref_q)? < tol, "q-only {tag}");
+
+                    let (fq, fk, fv) = qkv_rms_norm_rope(
+                        &q, &k, &v, &qw, &kw, &vw, EPS, EPS, EPS, &cos, &sin, is_neox, &positions,
+                    )?;
+                    assert!(max_rel_diff(&fq, &ref_q)? < tol, "qkv q {tag}");
+                    assert!(max_rel_diff(&fk, &ref_k)? < tol, "qkv k {tag}");
+                    assert!(max_rel_diff(&fv, &norm(&v, &vw)?)? < tol, "qkv v {tag}");
+                }
+            }
         }
         Ok(())
     }

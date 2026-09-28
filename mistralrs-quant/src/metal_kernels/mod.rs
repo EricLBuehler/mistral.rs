@@ -4682,6 +4682,114 @@ pub fn call_add_rmsnorm(
     Ok(())
 }
 
+/// Layout-compatible with `QkNormRopeParams` in rmsnorm_residual.metal.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct QkNormRopeParams {
+    pub q_stride: [i64; 4],
+    pub k_stride: [i64; 4],
+    pub v_stride: [i64; 4],
+    pub batch: i32,
+    pub q_heads: i32,
+    pub k_heads: i32,
+    pub v_heads: i32,
+    pub seq_len: i32,
+    pub head_dim: i32,
+    pub rot_dim: i32,
+    pub q_eps: f32,
+    pub k_eps: f32,
+    pub v_eps: f32,
+    pub token_major: i32,
+    pub use_positions: i32,
+    pub cos_batch_stride: i32,
+}
+
+/// Buffers for [`call_qk_norm_rope`] as (buffer, byte offset); absent k/v/positions reuse q's buffers and are
+/// never read because their row counts are zero.
+pub struct QkNormRopeBuffers<'a> {
+    pub q: (&'a Buffer, usize),
+    pub k: Option<(&'a Buffer, usize)>,
+    pub v: Option<(&'a Buffer, usize)>,
+    pub q_weight: (&'a Buffer, usize),
+    pub k_weight: Option<(&'a Buffer, usize)>,
+    pub v_weight: Option<(&'a Buffer, usize)>,
+    pub cos: (&'a Buffer, usize),
+    pub sin: (&'a Buffer, usize),
+    pub positions: Option<(&'a Buffer, usize)>,
+    pub q_out: &'a Buffer,
+    pub k_out: Option<&'a Buffer>,
+    pub v_out: Option<&'a Buffer>,
+}
+
+/// Fused per-head RMSNorm + RoPE over q/k (and norm-only v); one threadgroup per output row.
+pub fn call_qk_norm_rope(
+    device: &Device,
+    ep: impl EncoderProvider,
+    kernels: &Kernels,
+    ty: DType,
+    is_neox: bool,
+    bufs: QkNormRopeBuffers<'_>,
+    params: &QkNormRopeParams,
+) -> Result<(), MetalKernelError> {
+    let suffix = match ty {
+        DType::F32 => "f32",
+        DType::F16 => "f16",
+        DType::BF16 => "bf16",
+        other => {
+            return Err(MetalKernelError::DTypeMismatch {
+                expected: vec![DType::F32, DType::F16, DType::BF16],
+                got: other,
+            })
+        }
+    };
+    let style = if is_neox { "neox" } else { "gptj" };
+    let pipeline = kernels.load_pipeline(device, format!("qk_norm_rope_{style}_{suffix}"))?;
+    let encoder = ep.encoder();
+    let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
+    encoder.set_compute_pipeline_state(&pipeline);
+    encoder.set_input_buffer(0, Some(bufs.q.0), bufs.q.1);
+    let (k, k_off) = bufs.k.unwrap_or(bufs.q);
+    encoder.set_input_buffer(1, Some(k), k_off);
+    let (v, v_off) = bufs.v.unwrap_or(bufs.q);
+    encoder.set_input_buffer(2, Some(v), v_off);
+    encoder.set_input_buffer(3, Some(bufs.q_weight.0), bufs.q_weight.1);
+    let (kw, kw_off) = bufs.k_weight.unwrap_or(bufs.q_weight);
+    encoder.set_input_buffer(4, Some(kw), kw_off);
+    let (vw, vw_off) = bufs.v_weight.unwrap_or(bufs.q_weight);
+    encoder.set_input_buffer(5, Some(vw), vw_off);
+    encoder.set_input_buffer(6, Some(bufs.cos.0), bufs.cos.1);
+    encoder.set_input_buffer(7, Some(bufs.sin.0), bufs.sin.1);
+    let (pos, pos_off) = bufs.positions.unwrap_or(bufs.cos);
+    encoder.set_input_buffer(8, Some(pos), pos_off);
+    encoder.set_output_buffer(9, Some(bufs.q_out), 0);
+    encoder.set_output_buffer(10, Some(bufs.k_out.unwrap_or(bufs.q_out)), 0);
+    encoder.set_output_buffer(11, Some(bufs.v_out.unwrap_or(bufs.q_out)), 0);
+    encoder.set_bytes(12, params);
+
+    const SIMD_WIDTH: usize = 32;
+    const MAX_THREADS: usize = 256;
+    let head_dim = params.head_dim as usize;
+    let threads = head_dim.div_ceil(SIMD_WIDTH).max(1) * SIMD_WIDTH;
+    let threads = threads.min(MAX_THREADS);
+    encoder.set_threadgroup_memory_length(0, (threads / SIMD_WIDTH) * std::mem::size_of::<f32>());
+    let rows = params.batch as usize
+        * params.seq_len as usize
+        * (params.q_heads + params.k_heads + params.v_heads) as usize;
+    encoder.dispatch_thread_groups(
+        MTLSize {
+            width: rows,
+            height: 1,
+            depth: 1,
+        },
+        MTLSize {
+            width: threads,
+            height: 1,
+            depth: 1,
+        },
+    );
+    Ok(())
+}
+
 /// Fused gate+up qmm_t with GLU activation, all in one dispatch.
 /// `act_code`: 0=silu, 1=gelu(tanh), 2=gelu(erf), 3=relu.
 #[allow(clippy::too_many_arguments)]

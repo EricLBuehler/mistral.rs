@@ -4894,6 +4894,347 @@ pub fn metal_add_rms_norm(
     Ok((to_tensor(sum_buf), to_tensor(norm_buf)))
 }
 
+/// Shape of a fused per-head RMSNorm + RoPE call, from [`qk_norm_rope_shape`].
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct QkNormRopeShape {
+    pub batch: usize,
+    pub q_heads: usize,
+    pub k_heads: usize,
+    pub seq_len: usize,
+    pub head_dim: usize,
+    pub rot_dim: usize,
+}
+
+/// The one eligibility check for the fused QK(V)-norm + RoPE kernels on every GPU backend: `Ok(None)` means
+/// fall back to separate ops. `positions` holds one cos/sin row index per token.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn qk_norm_rope_shape(
+    q: &Tensor,
+    k: Option<&Tensor>,
+    q_weight: &Tensor,
+    k_weight: Option<&Tensor>,
+    cos: &Tensor,
+    sin: &Tensor,
+    positions: &Tensor,
+) -> Result<Option<QkNormRopeShape>> {
+    let dtype = q.dtype();
+    let device = q.device();
+    let on_device = |t: &Tensor| t.device().same_device(device);
+    if !(device.is_cuda() || device.is_metal())
+        || !matches!(dtype, DType::BF16 | DType::F16 | DType::F32)
+        || [q_weight, cos, sin]
+            .iter()
+            .any(|t| t.dtype() != dtype || !on_device(t))
+        || k.into_iter()
+            .chain(k_weight)
+            .any(|t| t.dtype() != dtype || !on_device(t))
+        || positions.dtype() != DType::U32
+        || !on_device(positions)
+    {
+        return Ok(None);
+    }
+    let (batch, q_heads, seq_len, head_dim) = q.dims4()?;
+    if positions.dims1()? != batch * seq_len {
+        candle_core::bail!(
+            "positions length {} does not match token count {}",
+            positions.dims1()?,
+            batch * seq_len
+        );
+    }
+    let k_heads = match (k, k_weight) {
+        (Some(k), Some(k_weight)) => {
+            let (k_batch, k_heads, k_seq_len, k_head_dim) = k.dims4()?;
+            if (k_batch, k_seq_len, k_head_dim) != (batch, seq_len, head_dim)
+                || k_weight.dims1()? != head_dim
+            {
+                return Ok(None);
+            }
+            k_heads
+        }
+        (None, None) => 0,
+        _ => return Ok(None),
+    };
+    let (cos_rows, rot_dim) = cos.dims2()?;
+    if q_weight.dims1()? != head_dim
+        || sin.dims2()? != (cos_rows, rot_dim)
+        || rot_dim == 0
+        || rot_dim * 2 > head_dim
+        || [batch, q_heads, k_heads, seq_len, head_dim]
+            .iter()
+            .any(|&d| d > i32::MAX as usize)
+    {
+        return Ok(None);
+    }
+    Ok(Some(QkNormRopeShape {
+        batch,
+        q_heads,
+        k_heads,
+        seq_len,
+        head_dim,
+        rot_dim,
+    }))
+}
+
+/// Fused RMSNorm + RoPE of q and (optionally) k, on whichever GPU backend holds them.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn try_fused_qk_rms_norm_rope_positions(
+    q: &Tensor,
+    k: Option<&Tensor>,
+    q_weight: &Tensor,
+    k_weight: Option<&Tensor>,
+    q_eps: f32,
+    k_eps: f32,
+    cos: &Tensor,
+    sin: &Tensor,
+    positions: &Tensor,
+    is_neox: bool,
+) -> Result<Option<(Tensor, Option<Tensor>)>> {
+    let Some(shape) = qk_norm_rope_shape(q, k, q_weight, k_weight, cos, sin, positions)? else {
+        return Ok(None);
+    };
+    #[cfg(feature = "cuda")]
+    if q.device().is_cuda() {
+        let _ = shape;
+        return try_cuda_qk_rms_norm_rope_positions(
+            q, k, q_weight, k_weight, q_eps, k_eps, cos, sin, positions, is_neox,
+        );
+    }
+    #[cfg(feature = "metal")]
+    if q.device().is_metal() {
+        let (q, k, _) = metal_qk_norm_rope(MetalQkNormRope {
+            shape,
+            q: (q, q_weight, q_eps),
+            k: k.zip(k_weight).map(|(k, w)| (k, w, k_eps)),
+            v: None,
+            cos,
+            sin,
+            positions,
+            is_neox,
+            token_major_output: true,
+        })?;
+        return Ok(Some((q, k)));
+    }
+    let _ = (shape, q_eps, k_eps, is_neox);
+    Ok(None)
+}
+
+/// Fused RMSNorm + RoPE of q and k plus RMSNorm of v, on whichever GPU backend holds them.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn try_fused_qkv_rms_norm_rope_positions(
+    q: &Tensor,
+    k: &Tensor,
+    v: &Tensor,
+    q_weight: &Tensor,
+    k_weight: &Tensor,
+    v_weight: &Tensor,
+    q_eps: f32,
+    k_eps: f32,
+    v_eps: f32,
+    cos: &Tensor,
+    sin: &Tensor,
+    positions: &Tensor,
+    is_neox: bool,
+) -> Result<Option<(Tensor, Tensor, Tensor)>> {
+    let Some(shape) =
+        qk_norm_rope_shape(q, Some(k), q_weight, Some(k_weight), cos, sin, positions)?
+    else {
+        return Ok(None);
+    };
+    if v.dims4()? != k.dims4()?
+        || v.dtype() != q.dtype()
+        || v_weight.dtype() != q.dtype()
+        || v_weight.dims1()? != shape.head_dim
+        || !v.device().same_device(q.device())
+    {
+        return Ok(None);
+    }
+    #[cfg(feature = "cuda")]
+    if q.device().is_cuda() {
+        return try_cuda_qkv_rms_norm_rope_positions(
+            q, k, v, q_weight, k_weight, v_weight, q_eps, k_eps, v_eps, cos, sin, positions,
+            is_neox,
+        );
+    }
+    #[cfg(feature = "metal")]
+    if q.device().is_metal() {
+        let (q, k, v) = metal_qk_norm_rope(MetalQkNormRope {
+            shape,
+            q: (q, q_weight, q_eps),
+            k: Some((k, k_weight, k_eps)),
+            v: Some((v, v_weight, v_eps)),
+            cos,
+            sin,
+            positions,
+            is_neox,
+            token_major_output: false,
+        })?;
+        return Ok(Some((
+            q,
+            k.expect("k was requested"),
+            v.expect("v was requested"),
+        )));
+    }
+    let _ = (q_eps, k_eps, v_eps, is_neox);
+    Ok(None)
+}
+
+#[cfg(feature = "metal")]
+struct MetalQkNormRope<'a> {
+    shape: QkNormRopeShape,
+    q: (&'a Tensor, &'a Tensor, f32),
+    k: Option<(&'a Tensor, &'a Tensor, f32)>,
+    v: Option<(&'a Tensor, &'a Tensor, f32)>,
+    cos: &'a Tensor,
+    sin: &'a Tensor,
+    positions: &'a Tensor,
+    is_neox: bool,
+    /// Write token-major (and return transposed views) when q already arrives token-major.
+    token_major_output: bool,
+}
+
+#[cfg(feature = "metal")]
+type MetalQkNormRopeOutput = (Tensor, Option<Tensor>, Option<Tensor>);
+
+#[cfg(feature = "metal")]
+fn metal_qk_norm_rope(args: MetalQkNormRope<'_>) -> Result<MetalQkNormRopeOutput> {
+    use candle_core::{backend::BackendStorage, MetalDevice, MetalStorage, Shape, Storage};
+    use mistralrs_quant::metal_kernels::{QkNormRopeBuffers, QkNormRopeParams};
+
+    let MetalQkNormRope {
+        shape,
+        q: (q, q_weight, q_eps),
+        k,
+        v,
+        cos,
+        sin,
+        positions,
+        is_neox,
+        token_major_output,
+    } = args;
+    let head_dim = shape.head_dim;
+    let token_major = token_major_output && q.stride()[1] == head_dim && q.stride()[3] == 1;
+    let (cos, sin, positions) = (
+        cos.contiguous()?,
+        sin.contiguous()?,
+        positions.contiguous()?,
+    );
+    let q_weight = q_weight.contiguous()?;
+    let k_weight = k.map(|(_, w, _)| w.contiguous()).transpose()?;
+    let v_weight = v.map(|(_, w, _)| w.contiguous()).transpose()?;
+    let v_heads = v.map(|(v, _, _)| v.dim(1)).transpose()?.unwrap_or(0);
+    let stride4 = |t: &Tensor| -> [i64; 4] {
+        let s = t.stride();
+        [s[0] as i64, s[1] as i64, s[2] as i64, s[3] as i64]
+    };
+
+    let buffer_of =
+        |t: &Tensor| -> Result<(candle_metal_kernels::metal::Buffer, usize, MetalDevice)> {
+            let (storage, layout) = t.storage_and_layout();
+            match &*storage {
+                Storage::Metal(m) => Ok((
+                    m.buffer().clone(),
+                    layout.start_offset() * m.dtype().size_in_bytes(),
+                    m.device().clone(),
+                )),
+                _ => candle_core::bail!("fused qk norm rope expects Metal tensors"),
+            }
+        };
+    let (q_buf, q_off, device) = buffer_of(q)?;
+    let k_buf = k.map(|(k, _, _)| buffer_of(k)).transpose()?;
+    let v_buf = v.map(|(v, _, _)| buffer_of(v)).transpose()?;
+    let (qw_buf, qw_off, _) = buffer_of(&q_weight)?;
+    let kw_buf = k_weight.as_ref().map(buffer_of).transpose()?;
+    let vw_buf = v_weight.as_ref().map(buffer_of).transpose()?;
+    let (cos_buf, cos_off, _) = buffer_of(&cos)?;
+    let (sin_buf, sin_off, _) = buffer_of(&sin)?;
+    let (pos_buf, pos_off, _) = buffer_of(&positions)?;
+
+    let dtype = q.dtype();
+    let q_count = q.elem_count();
+    let k_count = k.map(|(k, _, _)| k.elem_count()).unwrap_or(0);
+    let v_count = v.map(|(v, _, _)| v.elem_count()).unwrap_or(0);
+    let q_out = device.new_buffer(q_count, dtype, "qk-norm-rope-q")?;
+    let k_out = (k_count > 0)
+        .then(|| device.new_buffer(k_count, dtype, "qk-norm-rope-k"))
+        .transpose()?;
+    let v_out = (v_count > 0)
+        .then(|| device.new_buffer(v_count, dtype, "qk-norm-rope-v"))
+        .transpose()?;
+
+    let to_i32 = |value: usize| i32::try_from(value).map_err(candle_core::Error::wrap);
+    let params = QkNormRopeParams {
+        q_stride: stride4(q),
+        k_stride: k.map(|(k, _, _)| stride4(k)).unwrap_or_default(),
+        v_stride: v.map(|(v, _, _)| stride4(v)).unwrap_or_default(),
+        batch: to_i32(shape.batch)?,
+        q_heads: to_i32(shape.q_heads)?,
+        k_heads: to_i32(shape.k_heads)?,
+        v_heads: to_i32(v_heads)?,
+        seq_len: to_i32(shape.seq_len)?,
+        head_dim: to_i32(head_dim)?,
+        rot_dim: to_i32(shape.rot_dim)?,
+        q_eps,
+        k_eps: k.map(|(_, _, e)| e).unwrap_or(q_eps),
+        v_eps: v.map(|(_, _, e)| e).unwrap_or(q_eps),
+        token_major: i32::from(token_major),
+        use_positions: 1,
+        cos_batch_stride: 0,
+    };
+    {
+        let encoder = device.command_encoder()?;
+        encoder.set_label("qk-norm-rope");
+        mistralrs_quant::metal_kernels::call_qk_norm_rope(
+            device.device(),
+            &encoder,
+            &mistralrs_quant::metal_kernels::Kernels::new(),
+            dtype,
+            is_neox,
+            QkNormRopeBuffers {
+                q: (&q_buf, q_off),
+                k: k_buf.as_ref().map(|(b, off, _)| (b, *off)),
+                v: v_buf.as_ref().map(|(b, off, _)| (b, *off)),
+                q_weight: (&qw_buf, qw_off),
+                k_weight: kw_buf.as_ref().map(|(b, off, _)| (b, *off)),
+                v_weight: vw_buf.as_ref().map(|(b, off, _)| (b, *off)),
+                cos: (&cos_buf, cos_off),
+                sin: (&sin_buf, sin_off),
+                positions: Some((&pos_buf, pos_off)),
+                q_out: &q_out,
+                k_out: k_out.as_deref(),
+                v_out: v_out.as_deref(),
+            },
+            &params,
+        )
+        .map_err(candle_core::Error::wrap)?;
+    }
+
+    let (batch, seq_len) = (shape.batch, shape.seq_len);
+    let wrap = |buf, heads: usize, count: usize, token_major: bool| -> Result<Tensor> {
+        let dims = if token_major {
+            [batch, seq_len, heads, head_dim]
+        } else {
+            [batch, heads, seq_len, head_dim]
+        };
+        let t = Tensor::from((
+            Storage::Metal(MetalStorage::new(buf, device.clone(), count, dtype)),
+            Shape::from_dims(&dims),
+        ));
+        if token_major {
+            t.transpose(1, 2)
+        } else {
+            Ok(t)
+        }
+    };
+    let q_t = wrap(q_out, shape.q_heads, q_count, token_major)?;
+    let k_t = k_out
+        .map(|b| wrap(b, shape.k_heads, k_count, token_major))
+        .transpose()?;
+    let v_t = v_out
+        .map(|b| wrap(b, v_heads, v_count, false))
+        .transpose()?;
+    Ok((q_t, k_t, v_t))
+}
+
 #[cfg(feature = "metal")]
 #[allow(clippy::cast_possible_truncation)]
 pub fn metal_topk_logits_packed(
