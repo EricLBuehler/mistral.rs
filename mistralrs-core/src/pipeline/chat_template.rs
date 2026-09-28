@@ -369,6 +369,60 @@ impl GenerationConfig {
     }
 }
 
+// `tojson` re-escapes whatever it is given, so chaining the filter doubles the payload each pass.
+// Serializing into an unbounded buffer lets a short template request an allocation big enough to
+// abort the process, which kills the listener instead of failing the render.
+const MAX_JSON_BYTES: usize = 8 * 1024 * 1024;
+
+struct LimitedWriter {
+    buf: Vec<u8>,
+    exceeded: bool,
+}
+
+impl std::io::Write for LimitedWriter {
+    fn write(&mut self, data: &[u8]) -> std::io::Result<usize> {
+        if self.buf.len().saturating_add(data.len()) > MAX_JSON_BYTES {
+            self.exceeded = true;
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("tojson output exceeds the maximum of {MAX_JSON_BYTES} bytes"),
+            ));
+        }
+        self.buf.extend_from_slice(data);
+        Ok(data.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+fn serialize_bounded<F: serde_json::ser::Formatter>(
+    value: &Value,
+    formatter: F,
+) -> Result<String, Error> {
+    let mut writer = LimitedWriter {
+        buf: Vec::new(),
+        exceeded: false,
+    };
+    let result = {
+        let mut ser = serde_json::Serializer::with_formatter(&mut writer, formatter);
+        value.serialize(&mut ser)
+    };
+    match result {
+        Ok(()) => String::from_utf8(writer.buf).map_err(|err| {
+            Error::new(ErrorKind::BadSerialization, "cannot serialize to JSON").with_source(err)
+        }),
+        Err(_) if writer.exceeded => Err(Error::new(
+            ErrorKind::InvalidOperation,
+            format!("tojson output exceeds the maximum of {MAX_JSON_BYTES} bytes"),
+        )),
+        Err(err) => Err(
+            Error::new(ErrorKind::BadSerialization, "cannot serialize to JSON").with_source(err),
+        ),
+    }
+}
+
 fn tojson(value: Value, kwargs: Kwargs) -> Result<Value, Error> {
     if let Ok(indent) = kwargs.get::<usize>("indent") {
         // Cap the indent: it feeds `b" ".repeat(indent)`, so an attacker-controlled template could request a huge allocation or capacity-overflow panic.
@@ -379,26 +433,14 @@ fn tojson(value: Value, kwargs: Kwargs) -> Result<Value, Error> {
                 format!("tojson `indent` of {indent} exceeds the maximum of {MAX_INDENT}"),
             ));
         }
-        let mut buf = Vec::new();
         let repeat = b" ".repeat(indent);
-        let formatter = serde_json::ser::PrettyFormatter::with_indent(&repeat);
-        let mut ser = serde_json::Serializer::with_formatter(&mut buf, formatter);
-        value.serialize(&mut ser).map_err(|err| {
-            Error::new(ErrorKind::BadSerialization, "cannot serialize to JSON").with_source(err)
-        })?;
-        String::from_utf8(buf).map_err(|err| {
-            Error::new(ErrorKind::BadSerialization, "cannot serialize to JSON").with_source(err)
-        })
+        serialize_bounded(
+            &value,
+            serde_json::ser::PrettyFormatter::with_indent(&repeat),
+        )
     } else {
         // Python's json.dumps default separators, which is what HF templates were rendered with
-        let mut buf = Vec::new();
-        let mut ser = serde_json::Serializer::with_formatter(&mut buf, PythonCompactFormatter);
-        value.serialize(&mut ser).map_err(|err| {
-            Error::new(ErrorKind::BadSerialization, "cannot serialize to JSON").with_source(err)
-        })?;
-        String::from_utf8(buf).map_err(|err| {
-            Error::new(ErrorKind::BadSerialization, "cannot serialize to JSON").with_source(err)
-        })
+        serialize_bounded(&value, PythonCompactFormatter)
     }
     .map_err(|err| {
         Error::new(ErrorKind::InvalidOperation, "cannot serialize to JSON").with_source(err)
@@ -959,6 +1001,54 @@ mod tests {
         .unwrap_err();
 
         assert!(super::is_chat_template_request_error(&error));
+    }
+
+    #[test]
+    fn chained_tojson_fails_the_render_instead_of_aborting() {
+        // Each `|tojson` re-escapes the previous result, so 25 of them ask for roughly 2^25 chars.
+        let template = ChatTemplateValue(Either::Left(format!(
+            "{{{{ '3'{} }}}}",
+            "|tojson".repeat(25)
+        )));
+        let error = apply_chat_template_to(
+            vec![user_text_message("hello")],
+            false,
+            None,
+            None,
+            &template,
+            None,
+            None,
+            None,
+            Vec::new(),
+        )
+        .unwrap_err();
+
+        let reported = format!("{error:?}");
+        assert!(
+            reported.contains("exceeds the maximum"),
+            "unexpected error: {reported}"
+        );
+    }
+
+    #[test]
+    fn ordinary_tojson_output_is_unaffected_by_the_bound() {
+        let template = ChatTemplateValue(Either::Left(
+            "{{ messages[0]['content']|tojson }}".to_string(),
+        ));
+        let rendered = apply_chat_template_to(
+            vec![user_text_message("hello")],
+            false,
+            None,
+            None,
+            &template,
+            None,
+            None,
+            None,
+            Vec::new(),
+        )
+        .unwrap();
+
+        assert_eq!(rendered, "\"hello\"");
     }
 
     #[test]
