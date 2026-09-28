@@ -7107,25 +7107,11 @@ pub(crate) fn quantized_ffn(
     down: &dyn mistralrs_quant::QuantMethod,
     act: Activation,
 ) -> Result<Tensor> {
-    #[cfg(feature = "cuda")]
     if let Some(activation_type) = glu_activation_type(act) {
-        if let Some(out) =
-            mistralrs_quant::try_fused_quantized_ffn(xs, gate, up, down, activation_type)?
-        {
+        if let Some(out) = mistralrs_quant::try_fused_ffn(xs, gate, up, down, activation_type)? {
             return Ok(out);
         }
-        if let Some(inter) =
-            mistralrs_quant::try_fused_quantized_gate_up(xs, gate, up, activation_type)?
-        {
-            return down.forward(&inter);
-        }
-    }
-
-    #[cfg(feature = "metal")]
-    if let Some(activation_type) = glu_activation_type(act) {
-        if let Some(inter) =
-            mistralrs_quant::try_fused_gate_up_metal(xs, gate, up, activation_type)?
-        {
+        if let Some(inter) = mistralrs_quant::try_fused_gate_up(xs, gate, up, activation_type)? {
             return down.forward(&inter);
         }
     }
@@ -7154,13 +7140,7 @@ pub(crate) fn qkv_projections(
     k_proj: &dyn mistralrs_quant::QuantMethod,
     v_proj: &dyn mistralrs_quant::QuantMethod,
 ) -> Result<(Tensor, Tensor, Tensor)> {
-    #[cfg(feature = "cuda")]
-    if let Some(qkv) = mistralrs_quant::try_fused_quantized_qkv(xs, q_proj, k_proj, v_proj)? {
-        return Ok(qkv);
-    }
-
-    #[cfg(feature = "metal")]
-    if let Some(qkv) = mistralrs_quant::try_fused_qkv_metal(xs, q_proj, k_proj, v_proj)? {
+    if let Some(qkv) = mistralrs_quant::try_fused_qkv(xs, q_proj, k_proj, v_proj)? {
         return Ok(qkv);
     }
 
