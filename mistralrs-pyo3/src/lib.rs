@@ -1211,13 +1211,12 @@ impl Runner {
             None => DeviceMapSetting::Auto(auto_map_params),
         };
 
-        let no_paged_attn = if device.is_cuda() || mistralrs_core::distributed::use_nccl() {
-            no_paged_attn
-        } else if device.is_metal() {
-            !paged_attn
-        } else {
-            true
-        };
+        let no_paged_attn =
+            if device.is_cuda() || device.is_metal() || mistralrs_core::distributed::use_nccl() {
+                no_paged_attn && !paged_attn
+            } else {
+                true
+            };
 
         let cache_config = match (
             pa_blk_size,
