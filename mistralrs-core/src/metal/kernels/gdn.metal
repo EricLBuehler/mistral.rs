@@ -254,127 +254,6 @@ instantiate_gdn_pooled_decode(128, 64)
 instantiate_gdn_pooled_decode(64, 64)
 
 // ============================================================================
-// Kernel 1c: pooled single-token decode straight from the convolved projection
-//
-// Port of the CUDA gdn_decode_recurrence_kernel: q/k L2 norm, the q scale, beta = sigmoid(b) and
-// decay = exp(-exp(a_log) * softplus(a + dt_bias)) are computed in-kernel, so decode launches one kernel
-// per layer instead of the norm/gate/cast chain. mixed: [B, 2 * key_dim + value_dim]  b, a: [B, Hv] (strided)
-// state pool: [P, Hv, K, V] updated in place at row slots[b]  output: [B * Hv, V]
-// ============================================================================
-
-struct GdnDecodeParams {
-  int num_k_heads;
-  int num_v_heads;
-  int head_v_dim;
-  int tiled_v_heads;
-  int b_batch_stride;
-  int b_head_stride;
-  int a_batch_stride;
-  int a_head_stride;
-};
-
-template <typename T, int BK, int BV>
-[[kernel]] void gdn_pooled_decode_from_convolved_kernel(
-    const device T *mixed [[buffer(0)]], const device T *b [[buffer(1)]],
-    const device T *a [[buffer(2)]], const device float *a_log [[buffer(3)]],
-    const device float *dt_bias [[buffer(4)]], device float *state [[buffer(5)]],
-    device T *output [[buffer(6)]], const device uint *slots [[buffer(7)]],
-    constant GdnDecodeParams &p [[buffer(8)]],
-    uint2 tgpig [[threadgroup_position_in_grid]],
-    uint tid [[thread_index_in_threadgroup]],
-    uint simd_gid [[simdgroup_index_in_threadgroup]],
-    uint simd_lid [[thread_index_in_simdgroup]]) {
-  constexpr int SIMDS = BV / 32;
-  const int bh = tgpig.y;
-  const int v_idx = tgpig.x * BV + (int)tid;
-  const int bidx = bh / p.num_v_heads;
-  const int hv = bh - bidx * p.num_v_heads;
-  const int hk = p.tiled_v_heads ? hv % p.num_k_heads
-                                 : hv / (p.num_v_heads / p.num_k_heads);
-  const int key_dim = p.num_k_heads * BK;
-  const int conv_dim = 2 * key_dim + p.num_v_heads * p.head_v_dim;
-  const device T *row = mixed + (long)bidx * conv_dim;
-
-  threadgroup float q_buf[BK];
-  threadgroup float k_buf[BK];
-  threadgroup float red_q[SIMDS];
-  threadgroup float red_k[SIMDS];
-
-  float q_sum = 0.0f;
-  float k_sum = 0.0f;
-  for (int d = (int)tid; d < BK; d += BV) {
-    const float q_val = static_cast<float>(row[hk * BK + d]);
-    const float k_val = static_cast<float>(row[key_dim + hk * BK + d]);
-    q_buf[d] = q_val;
-    k_buf[d] = k_val;
-    q_sum = fma(q_val, q_val, q_sum);
-    k_sum = fma(k_val, k_val, k_sum);
-  }
-  q_sum = simd_sum(q_sum);
-  k_sum = simd_sum(k_sum);
-  if (simd_lid == 0) {
-    red_q[simd_gid] = q_sum;
-    red_k[simd_gid] = k_sum;
-  }
-  threadgroup_barrier(mem_flags::mem_threadgroup);
-  q_sum = 0.0f;
-  k_sum = 0.0f;
-  for (int i = 0; i < SIMDS; i++) {
-    q_sum += red_q[i];
-    k_sum += red_k[i];
-  }
-  const float q_mul = rsqrt(q_sum + 1.0e-6f) * rsqrt(float(BK));
-  const float k_mul = rsqrt(k_sum + 1.0e-6f);
-  const float b_val =
-      static_cast<float>(b[bidx * p.b_batch_stride + hv * p.b_head_stride]);
-  const float a_val =
-      static_cast<float>(a[bidx * p.a_batch_stride + hv * p.a_head_stride]) +
-      dt_bias[hv];
-  const float softplus_val =
-      a_val > 20.0f ? a_val
-                    : (a_val > 0.0f ? a_val + log(1.0f + exp(-a_val))
-                                    : log(1.0f + exp(a_val)));
-  const float beta_t = 1.0f / (1.0f + exp(-b_val));
-  const float decay = exp(-exp(a_log[hv]) * softplus_val);
-  if (v_idx >= p.head_v_dim)
-    return;
-
-  device float *state_bh =
-      state + ((long)slots[bidx] * p.num_v_heads + hv) * BK * p.head_v_dim;
-  const float v_t = static_cast<float>(row[2 * key_dim + hv * p.head_v_dim + v_idx]);
-  float s[BK];
-  float kv_mem = 0.0f;
-  for (int j = 0; j < BK; j++) {
-    s[j] = state_bh[j * p.head_v_dim + v_idx] * decay;
-    kv_mem = fma(s[j], k_buf[j] * k_mul, kv_mem);
-  }
-  const float delta = (v_t - kv_mem) * beta_t;
-  float y = 0.0f;
-  for (int j = 0; j < BK; j++) {
-    s[j] = fma(k_buf[j] * k_mul, delta, s[j]);
-    y = fma(s[j], q_buf[j] * q_mul, y);
-    state_bh[j * p.head_v_dim + v_idx] = s[j];
-  }
-  output[bh * p.head_v_dim + v_idx] = static_cast<T>(y);
-}
-
-#define instantiate_gdn_pooled_decode_from_convolved(type, bk, bv)             \
-  template [[host_name("gdn_pooled_decode_from_convolved_" #type "_" #bk      \
-                       "_" #bv)]] [[kernel]] void                              \
-  gdn_pooled_decode_from_convolved_kernel<type, bk, bv>(                       \
-      const device type *, const device type *, const device type *,           \
-      const device float *, const device float *, device float *,              \
-      device type *, const device uint *, constant GdnDecodeParams &, uint2,   \
-      uint, uint, uint);
-
-instantiate_gdn_pooled_decode_from_convolved(float, 128, 64)
-instantiate_gdn_pooled_decode_from_convolved(float, 64, 64)
-instantiate_gdn_pooled_decode_from_convolved(half, 128, 64)
-instantiate_gdn_pooled_decode_from_convolved(half, 64, 64)
-instantiate_gdn_pooled_decode_from_convolved(bfloat, 128, 64)
-instantiate_gdn_pooled_decode_from_convolved(bfloat, 64, 64)
-
-// ============================================================================
 // Gated RMSNorm on the recurrence output: out = x * rsqrt(mean(x^2) + eps) * w * silu(gate), per row of dim.
 // One simdgroup per row; x, gate, out: [rows, dim]  weight: [dim]
 // ============================================================================
@@ -414,11 +293,11 @@ instantiate_gdn_rmsnorm_gated(half)
 instantiate_gdn_rmsnorm_gated(bfloat)
 
 // ============================================================================
-// Kernel 1d: multi-token GDN recurrence straight from the convolved projection
+// Kernel 1c: GDN recurrence straight from the convolved projection (any token count)
 //
 // MLX-style layout: one simdgroup per (batch, v head, v column); each lane holds DK / 32 state entries and the key
 // dot products reduce with simd_sum, so the grid has B * Hv * V * 32 threads. Per token it computes the q/k L2 norms,
-// q scale, beta and decay in-kernel (same math as Kernel 1c). mixed: [B, T, 2 * key_dim + value_dim]
+// q scale, beta = sigmoid(b) and decay = exp(-exp(a_log) * softplus(a + dt_bias)) in-kernel. mixed: [B, T, 2 * key_dim + value_dim]
 // b, a: [B, T, Hv] (strided)  state: [rows, Hv, K, V] f32 at row slots[b] (or b)  y: [B, T, Hv, V]
 // ============================================================================
 

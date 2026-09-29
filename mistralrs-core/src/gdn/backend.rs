@@ -248,22 +248,13 @@ pub fn apply_recurrence_from_convolved(
         );
     }
 
-    // A pooled cache means the backend's decode kernels cover this batch.
-    #[cfg(feature = "metal")]
-    if mixed_qkv.device().is_metal() && seq_len == 1 && cache.slots.is_some() {
-        return recurrence_metal_from_convolved(
-            mixed_qkv, b, a, a_log, dt_bias, dims, batch_size, cache, dtype,
-        );
-    }
-
     #[cfg(feature = "metal")]
     if mixed_qkv.device().is_metal()
-        && seq_len > 1
         && cache.state_layout == RecurrentStateLayout::GdnKeyMajor
         && cache.recurrent_state.dtype() == DType::F32
         && matches!(dims.head_k_dim, 64 | 128)
     {
-        return recurrence_metal_multi_token_from_convolved(
+        return recurrence_metal_from_convolved(
             mixed_qkv, b, a, a_log, dt_bias, dims, batch_size, seq_len, cache, dtype,
         );
     }
@@ -746,7 +737,7 @@ fn recurrence_metal(
 
 #[cfg(feature = "metal")]
 #[allow(clippy::too_many_arguments)]
-fn recurrence_metal_multi_token_from_convolved(
+fn recurrence_metal_from_convolved(
     mixed_qkv: &Tensor,
     b: &Tensor,
     a: &Tensor,
@@ -779,54 +770,6 @@ fn recurrence_metal_multi_token_from_convolved(
         dims,
         batch_size,
         seq_len,
-        cache,
-        dtype,
-    )
-}
-
-#[cfg(feature = "metal")]
-#[allow(clippy::too_many_arguments)]
-fn recurrence_metal_from_convolved(
-    mixed_qkv: &Tensor,
-    b: &Tensor,
-    a: &Tensor,
-    a_log: &Tensor,
-    dt_bias: &Tensor,
-    dims: &GdnDims,
-    batch_size: usize,
-    cache: &mut GdnLayerCache,
-    dtype: DType,
-) -> Result<Tensor> {
-    let slots = cache
-        .slots
-        .as_ref()
-        .expect("caller checked for a pooled cache");
-    let out = crate::metal::gdn::gdn_pooled_decode_from_convolved_metal(
-        crate::metal::gdn::PooledDecodeFromConvolved {
-            mixed_qkv: &mixed_qkv.reshape((batch_size, dims.conv_dim))?,
-            b,
-            a,
-            a_log: &a_log.to_dtype(DType::F32)?,
-            dt_bias: &dt_bias.to_dtype(DType::F32)?,
-            state_pool: &cache.recurrent_state,
-            slots,
-            num_k_heads: dims.num_k_heads,
-            head_k_dim: dims.head_k_dim,
-            tiled_v_heads: dims.v_head_layout == GdnVHeadLayout::Tiled,
-        },
-    )?;
-    let state_pool = cache.recurrent_state.clone();
-    finish_recurrence(
-        RecurrenceOutput::TokenMajor(out.reshape((
-            batch_size,
-            1,
-            dims.num_v_heads,
-            dims.head_v_dim,
-        ))?),
-        state_pool,
-        dims,
-        batch_size,
-        1,
         cache,
         dtype,
     )
