@@ -93,7 +93,8 @@ pub enum Command {
         reasoning_effort: Option<ReasoningEffort>,
 
         /// One-shot text prompt. When provided, sends a single request and exits
-        /// instead of entering interactive mode.
+        /// instead of entering interactive mode. Pass `-` to read the prompt from stdin
+        /// until EOF, e.g. `cat prompt.txt | mistralrs run -m <model> -i -`.
         /// Combine with --image, --video, or --audio for multimodal requests.
         #[arg(short = 'i', long)]
         input: Option<String>,
