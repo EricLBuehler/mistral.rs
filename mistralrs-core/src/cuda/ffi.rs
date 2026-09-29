@@ -1367,6 +1367,7 @@ extern "C" {
         tiled_v_heads: i32,
         value_major: i32,
         norm_eps: f32,
+        sigmoid_gate: i32,
         dtype: i32,
         state_dtype: i32,
         stream: i64,

@@ -264,7 +264,6 @@ impl GatedDeltaNet {
             && self.dims.head_k_dim == crate::cuda::gdn::GDN_DECODE_K_DIM
             && self.dims.head_v_dim == crate::cuda::gdn::GDN_DECODE_V_DIM
             && self.dims.conv_kernel_size <= crate::cuda::gdn::GDN_SPEC_CHECKPOINT_MAX_CONV_WIDTH
-            && self.norm.activation() == GdnGateActivation::Silu
             && self.norm.weight.dtype() == activation_dtype
             && self.norm.weight.device().same_device(pool.device())
     }
@@ -830,12 +829,12 @@ impl GatedDeltaNet {
             && self.dims.head_v_dim == crate::cuda::gdn::GDN_DECODE_V_DIM
             && seq_len <= crate::cuda::gdn::GDN_SPEC_FUSED_MAX_TOKENS
             && projected.z.dtype() == mixed_qkv.dtype()
-            && self.norm.activation() == GdnGateActivation::Silu
             && self.norm.weight.dtype() == mixed_qkv.dtype();
         let post_op = fused_norm.then_some(crate::cuda::gdn::GdnSpeculativeRmsNormGate {
             gate: &projected.z,
             weight: &self.norm.weight,
             eps: self.norm.eps(),
+            sigmoid_gate: self.norm.activation() == GdnGateActivation::Sigmoid,
             quantization: self.fp8_output_spec(&projected.z, batch_size, seq_len),
         });
         let pending_recurrence = cache.pending_transitions.as_ref().map(|pending| {

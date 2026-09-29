@@ -129,7 +129,10 @@ impl IntervalLogger {
                         let accept_rate =
                             100. * spec_accepted_tokens as f64 / spec_draft_tokens as f64;
                         let mean_len = 1. + spec_accepted_tokens as f64 / spec_drafts.max(1) as f64;
-                        format!(", MTP accept {accept_rate:.1}% (len {mean_len:.2})")
+                        let mean_depth = spec_draft_tokens as f64 / spec_drafts.max(1) as f64;
+                        format!(
+                            ", MTP accept {accept_rate:.1}% (len {mean_len:.2}, depth {mean_depth:.1})"
+                        )
                     } else {
                         String::new()
                     };

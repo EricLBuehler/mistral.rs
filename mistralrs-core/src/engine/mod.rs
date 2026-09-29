@@ -698,7 +698,14 @@ impl Engine {
                     })
             };
             if let Some(ctx) = &ctx {
-                get_mut_arcmutex!(pipeline).precapture_cuda_decode_graphs(ctx);
+                let pipeline = get_mut_arcmutex!(pipeline);
+                pipeline.precapture_cuda_decode_graphs(ctx);
+                #[cfg(feature = "cuda")]
+                if let Err(err) =
+                    crate::pipeline::cuda_graph::log_cuda_graph_memory(&pipeline.device())
+                {
+                    tracing::debug!("CUDA graph memory report failed: {err}");
+                }
             }
             ctx
         };
@@ -1502,6 +1509,7 @@ impl Engine {
                                 }
                             };
 
+                            crate::speculative::autotuner::note_interruption();
                             pipeline
                                 .step(
                                     &mut scheduled.prompt,
@@ -1919,6 +1927,9 @@ impl Engine {
                                     "All sequences must either return raw logits, or not."
                                 );
 
+                                if is_prompt {
+                                    crate::speculative::autotuner::note_interruption();
+                                }
                                 pipeline
                                     .submit_step(
                                         &mut guards_mut,
@@ -2213,7 +2224,13 @@ impl Engine {
                         }
                     }
                     #[cfg(feature = "cuda")]
-                    if is_prompt && cuda_memory_pool.after_prompt_step() {
+                    let reclaim_graphs = if is_prompt {
+                        cuda_memory_pool.after_prompt_step()
+                    } else {
+                        cuda_decode_lease.is_none() && cuda_memory_pool.after_decode_step()
+                    };
+                    #[cfg(feature = "cuda")]
+                    if reclaim_graphs {
                         debug_assert!(cuda_decode_lease.is_none());
                         loop {
                             let reclaimed = get_mut_arcmutex!(self.pipeline)

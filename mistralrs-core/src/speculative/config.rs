@@ -161,6 +161,16 @@ pub fn reserve_external_mtp_memory_with_runtime(
         return Ok(Some(cache_config));
     };
     if mtp_config.is_builtin() {
+        let lanes = mtp_config
+            .n_predict
+            .unwrap_or(super::autotuner::AUTO_MAX_DEPTH)
+            + 1;
+        // Verify then logs GDN transitions in a pool sized before the KV cache instead of stashing states
+        if lanes > crate::cuda::gdn::GDN_SPEC_FUSED_MAX_TOKENS {
+            return Ok(Some(cache_config));
+        }
+        let mut cache_config = cache_config.with_recurrent_checkpoint_lanes(lanes)?;
+        cache_config.recurrent_checkpoint_lanes_auto = mtp_config.n_predict.is_none();
         return Ok(Some(cache_config));
     }
     let dtype = dtype.try_into_dtype(&[device])?;

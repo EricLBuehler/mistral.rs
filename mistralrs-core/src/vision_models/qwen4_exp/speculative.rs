@@ -6,14 +6,13 @@ use candle_core::{DType, Device, IndexOp, Result, Tensor};
 
 use super::{mtp::Qwen4ExpMtpHead, Qwen4ExpModel};
 use crate::speculative::{
+    autotuner::{AUTO_DEPTHS, AUTO_MAX_DEPTH},
     builtin_mtp::{capture_view, BuiltinMtpHost, MtpAttentionInputs, MtpDraftOutput},
     hybrid_state::{SpecCapture, SpecGraphState},
     MtpRuntimeConfig, SpeculativeAttachInfo, SpeculativeBatchPlan, SpeculativeCommitRow,
     SpeculativeConfig, SpeculativeGraphPlan, SpeculativeGraphState, SpeculativePrefillCtx,
     SpeculativeProposalBatch, SpeculativeProposeBatchCtx, SpeculativeTargetMixin,
 };
-
-pub const DEFAULT_MTP_N_PREDICT: usize = 3;
 
 impl Qwen4ExpModel {
     fn mtp_n_predict(&self) -> usize {
@@ -97,11 +96,13 @@ impl SpeculativeTargetMixin for Qwen4ExpModel {
                 "The built-in MTP head was not loaded; pass `--mtp` when loading the model."
             );
         }
-        let n_predict = config.n_predict.unwrap_or(DEFAULT_MTP_N_PREDICT);
+        let n_predict = config.n_predict.unwrap_or(AUTO_MAX_DEPTH);
         if n_predict == 0 {
             candle_core::bail!("MTP n_predict must be at least 1.");
         }
         self.mtp_n_predict.store(n_predict, Ordering::Relaxed);
+        self.mtp_auto_depth
+            .store(config.n_predict.is_none(), Ordering::Relaxed);
         self.text.set_store_spec_hidden(true);
         // A base-type copy of the promoted lm_head makes drafting cheaper without touching verification
         let draft_head = config
@@ -127,9 +128,41 @@ impl SpeculativeTargetMixin for Qwen4ExpModel {
         self.mtp_n_predict() > 0
     }
 
+    fn supports_recurrent_speculative_transitions(&self) -> bool {
+        self.text.supports_recurrent_speculative_transitions()
+    }
+
+    fn speculative_verify_mutates_recurrent_state(&self) -> bool {
+        true
+    }
+
+    fn reserve_recurrent_speculative_transition_storage(&self) -> Result<bool> {
+        self.text.reserve_recurrent_transition_storage()
+    }
+
+    fn apply_recurrent_speculative_transitions_for_current_batch(&self) -> Result<bool> {
+        self.text.apply_current_recurrent_transitions()
+    }
+
+    fn flush_recurrent_state_for_current_batch(&self) -> Result<()> {
+        self.text.flush_current_recurrent_state()
+    }
+
+    fn flush_recurrent_speculative_transitions(&self, seq_ids: &[usize]) -> Result<()> {
+        self.text.flush_recurrent_transitions_for_sequences(seq_ids)
+    }
+
     fn speculative_plan(&self, _batch_size: usize) -> Option<SpeculativeBatchPlan> {
         let n = self.mtp_n_predict();
         (n > 0).then(|| SpeculativeBatchPlan::new(n))
+    }
+
+    fn speculative_depth_candidates(&self) -> Vec<usize> {
+        if self.mtp_auto_depth.load(Ordering::Relaxed) {
+            AUTO_DEPTHS.to_vec()
+        } else {
+            Vec::new()
+        }
     }
 
     fn speculative_graph_plans(&self) -> Vec<SpeculativeGraphPlan> {
@@ -137,13 +170,22 @@ impl SpeculativeTargetMixin for Qwen4ExpModel {
         if n == 0 {
             return Vec::new();
         }
-        // Wider verify batches take the grouped MoE path, whose per-expert padded workspaces every
-        // captured graph would pin; on unified memory those do not fit beside a filled KV pool
-        #[cfg(feature = "cuda")]
-        let max_batch = Some((crate::moe::GROUPED_PREFILL_MIN_TOKENS - 1) / (1 + n));
-        #[cfg(not(feature = "cuda"))]
-        let max_batch = None;
-        vec![SpeculativeGraphPlan::new(n, max_batch)]
+        let depths = match self.speculative_depth_candidates() {
+            depths if depths.is_empty() => vec![n],
+            depths => depths,
+        };
+        depths
+            .into_iter()
+            .map(|depth| {
+                // Wider verify batches take the grouped MoE path, whose per-expert padded workspaces every
+                // captured graph would pin; on unified memory those do not fit beside a filled KV pool
+                #[cfg(feature = "cuda")]
+                let max_batch = Some((crate::moe::GROUPED_PREFILL_MIN_TOKENS - 1) / (1 + depth));
+                #[cfg(not(feature = "cuda"))]
+                let max_batch = None;
+                SpeculativeGraphPlan::new(depth, max_batch)
+            })
+            .collect()
     }
 
     fn take_speculative_graph_state(&self) -> Option<Box<dyn SpeculativeGraphState>> {
@@ -194,7 +236,15 @@ impl SpeculativeTargetMixin for Qwen4ExpModel {
             .filter(|row| !row.accepted_all)
             .map(|row| (row.batch_idx, row.keep_rows))
             .collect::<Vec<_>>();
-        let result = self.text.replay_recurrent_prefixes(&rejected);
+        let transition_log = self.text.cache.hybrid().uses_recurrent_transition_log();
+        let result = match transition_log {
+            true => self.text.stage_recurrent_prefixes(rows),
+            false => Ok(false),
+        }
+        .and_then(|staged| match staged {
+            true => self.text.rollback_ple_prefixes(&rejected),
+            false => self.text.replay_recurrent_prefixes(&rejected),
+        });
         self.text.clear_speculative_stash();
         result
     }

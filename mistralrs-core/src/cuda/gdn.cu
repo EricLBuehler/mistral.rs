@@ -3965,7 +3965,8 @@ __global__ __launch_bounds__(GDN_SPEC_FUSED_THREADS, 2)
         int64_t gate_stride_b, int64_t gate_stride_s,
         int64_t gate_stride_h, int64_t gate_stride_v, int batch_size,
         int seq_len, int num_k_heads, int num_v_heads,
-        int checkpoint_lanes, int tiled_v_heads, float norm_eps) {
+        int checkpoint_lanes, int tiled_v_heads, float norm_eps,
+        int sigmoid_gate) {
   constexpr int K = GDN_DECODE_VALUE_MAJOR_K;
   constexpr int V = GDN_DECODE_VALUE_MAJOR_V;
   constexpr int VALUES_PER_WARP = GDN_SPEC_FUSED_VALUES_PER_WARP;
@@ -4461,14 +4462,14 @@ __global__ __launch_bounds__(GDN_SPEC_FUSED_THREADS, 2)
           (size_t)value_head * gate_stride_h +
           (size_t)value * gate_stride_v;
       const float gate_value = (float)gate[gate_offset];
-      const float silu_gate = gdn_silu(gate_value);
+      const float gate_act = gdn_gate_act(gate_value, sigmoid_gate);
       const size_t output_offset =
           (((size_t)batch_idx * seq_len + position) * num_v_heads +
            value_head) *
               V +
           value;
       rounded[i] = (T)(output_values[i] * rstd * (float)norm_weight[value] *
-                       silu_gate);
+                       gate_act);
       maximum = fmaxf(maximum, fabsf((float)rounded[i]));
       if (quantized_output == nullptr) {
         output[output_offset] = rounded[i];
@@ -5307,7 +5308,7 @@ void launch_gdn_speculative_recurrence_checkpoints(
     int64_t gate_stride_b, int64_t gate_stride_s, int64_t gate_stride_h,
     int64_t gate_stride_v, int batch_size, int seq_len, int num_k_heads,
     int num_v_heads, int head_k_dim, int head_v_dim, int checkpoint_lanes,
-    int tiled_v_heads, int value_major, float norm_eps,
+    int tiled_v_heads, int value_major, float norm_eps, int sigmoid_gate,
     cudaStream_t stream) {
   const bool batch_transitions = transition_delta != nullptr;
   const bool direct_transitions = slot_indexed_transitions != 0;
@@ -5356,7 +5357,8 @@ void launch_gdn_speculative_recurrence_checkpoints(
       max_pending_rows, pending_capacity, b_stride_b, b_stride_s,            \
       b_stride_h, a_stride_b, a_stride_s, a_stride_h, gate_stride_b,         \
       gate_stride_s, gate_stride_h, gate_stride_v, batch_size, seq_len,      \
-      num_k_heads, num_v_heads, checkpoint_lanes, tiled_v_heads, norm_eps)
+      num_k_heads, num_v_heads, checkpoint_lanes, tiled_v_heads, norm_eps, \
+      sigmoid_gate)
     if (direct_transitions) {
       if (paired_reductions) {
         GDN_LAUNCH_SPEC_RECURRENCE(true, true);
@@ -5427,7 +5429,7 @@ void dispatch_gdn_speculative_recurrence_checkpoints(
     int64_t gate_stride_b, int64_t gate_stride_s, int64_t gate_stride_h,
     int64_t gate_stride_v, int batch_size, int seq_len, int num_k_heads,
     int num_v_heads, int head_k_dim, int head_v_dim, int checkpoint_lanes,
-    int tiled_v_heads, int value_major, float norm_eps, int state_dtype,
+    int tiled_v_heads, int value_major, float norm_eps, int sigmoid_gate, int state_dtype,
     cudaStream_t stream) {
   if (state_dtype == GDN_STATE_DTYPE_F16) {
     launch_gdn_speculative_recurrence_checkpoints(
@@ -5442,7 +5444,7 @@ void dispatch_gdn_speculative_recurrence_checkpoints(
         a_stride_h, gate_stride_b, gate_stride_s, gate_stride_h,
         gate_stride_v, batch_size, seq_len, num_k_heads, num_v_heads,
         head_k_dim, head_v_dim, checkpoint_lanes, tiled_v_heads, value_major,
-        norm_eps, stream);
+        norm_eps, sigmoid_gate, stream);
   } else if (state_dtype == GDN_STATE_DTYPE_BF16) {
     launch_gdn_speculative_recurrence_checkpoints(
         mixed_qkv, b, a, a_log, dt_bias, (__nv_bfloat16 *)state_pool, output,
@@ -5456,7 +5458,7 @@ void dispatch_gdn_speculative_recurrence_checkpoints(
         a_stride_h, gate_stride_b, gate_stride_s, gate_stride_h,
         gate_stride_v, batch_size, seq_len, num_k_heads, num_v_heads,
         head_k_dim, head_v_dim, checkpoint_lanes, tiled_v_heads, value_major,
-        norm_eps, stream);
+        norm_eps, sigmoid_gate, stream);
   } else {
     launch_gdn_speculative_recurrence_checkpoints(
         mixed_qkv, b, a, a_log, dt_bias, (float *)state_pool, output,
@@ -5470,7 +5472,7 @@ void dispatch_gdn_speculative_recurrence_checkpoints(
         a_stride_h, gate_stride_b, gate_stride_s, gate_stride_h,
         gate_stride_v, batch_size, seq_len, num_k_heads, num_v_heads,
         head_k_dim, head_v_dim, checkpoint_lanes, tiled_v_heads, value_major,
-        norm_eps, stream);
+        norm_eps, sigmoid_gate, stream);
   }
 }
 
@@ -5492,7 +5494,7 @@ extern "C" void gdn_speculative_recurrence_checkpoints(
     int64_t gate_stride_b, int64_t gate_stride_s, int64_t gate_stride_h,
     int64_t gate_stride_v, int batch_size, int seq_len, int num_k_heads,
     int num_v_heads, int head_k_dim, int head_v_dim, int checkpoint_lanes,
-    int tiled_v_heads, int value_major, float norm_eps, int dtype,
+    int tiled_v_heads, int value_major, float norm_eps, int sigmoid_gate, int dtype,
     int state_dtype, int64_t stream) {
   const cudaStream_t custream = (cudaStream_t)stream;
   if (dtype == 0) {
@@ -5509,7 +5511,7 @@ extern "C" void gdn_speculative_recurrence_checkpoints(
         b_stride_h, a_stride_b, a_stride_s, a_stride_h, gate_stride_b,
         gate_stride_s, gate_stride_h, gate_stride_v, batch_size, seq_len,
         num_k_heads, num_v_heads, head_k_dim, head_v_dim, checkpoint_lanes,
-        tiled_v_heads, value_major, norm_eps, state_dtype, custream);
+        tiled_v_heads, value_major, norm_eps, sigmoid_gate, state_dtype, custream);
   } else {
     dispatch_gdn_speculative_recurrence_checkpoints(
         (const __nv_bfloat16 *)mixed_qkv, (const __nv_bfloat16 *)b,
@@ -5526,7 +5528,7 @@ extern "C" void gdn_speculative_recurrence_checkpoints(
         a_stride_h, gate_stride_b, gate_stride_s, gate_stride_h,
         gate_stride_v, batch_size, seq_len, num_k_heads, num_v_heads,
         head_k_dim, head_v_dim, checkpoint_lanes, tiled_v_heads, value_major,
-        norm_eps, state_dtype, custream);
+        norm_eps, sigmoid_gate, state_dtype, custream);
   }
 }
 

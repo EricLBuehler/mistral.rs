@@ -54,6 +54,7 @@ pub struct Qwen3_5Model {
     encoder_cache: Arc<Mutex<EncoderCacheManager>>,
     // Draft tokens per speculative step; 0 while MTP is not attached
     pub(super) mtp_n_predict: std::sync::atomic::AtomicUsize,
+    pub(super) mtp_auto_depth: std::sync::atomic::AtomicBool,
     // Draft-only lm_head at the base ISQ type; the target verifies with the promoted head
     pub(super) draft_lm_head: Mutex<Option<std::sync::Arc<dyn mistralrs_quant::QuantMethod>>>,
     // External DFlash block-diffusion drafter, replacing the built-in MTP head when attached
@@ -103,6 +104,7 @@ impl Qwen3_5Model {
             vision_end_token_id: cfg.vision_end_token_id,
             encoder_cache: Arc::new(Mutex::new(EncoderCacheManager::new(32))),
             mtp_n_predict: std::sync::atomic::AtomicUsize::new(0),
+            mtp_auto_depth: std::sync::atomic::AtomicBool::new(false),
             draft_lm_head: Mutex::new(None),
             dflash: Mutex::new(None),
             mtp_proposer: Default::default(),

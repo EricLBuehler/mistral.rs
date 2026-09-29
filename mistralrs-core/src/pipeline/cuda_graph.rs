@@ -186,6 +186,7 @@ pub(crate) enum CudaGraphDispatchReason {
     PaddingUnavailable,
     CachePopulation,
     Fallback,
+    MemoryPressure,
 }
 
 impl CudaGraphDispatchReason {
@@ -204,6 +205,7 @@ impl CudaGraphDispatchReason {
             Self::PaddingUnavailable => "padding_unavailable",
             Self::CachePopulation => "cache_population",
             Self::Fallback => "fallback",
+            Self::MemoryPressure => "memory_pressure",
         }
     }
 }
@@ -2349,7 +2351,10 @@ where
     graph.upload()?;
     metadata_buffers.finish_capture(&metadata);
     let host_staging = CudaGraphHostStaging::new(graph.stream.clone())?;
+    let graph_mem = |attribute| cuda_graph_memory_attribute(&stream, attribute).unwrap_or(0) >> 20;
     tracing::debug!(
+        reserved_mib = graph_mem(sys::CUgraphMem_attribute::CU_GRAPH_MEM_ATTR_RESERVED_MEM_CURRENT),
+        used_mib = graph_mem(sys::CUgraphMem_attribute::CU_GRAPH_MEM_ATTR_USED_MEM_CURRENT),
         "Captured CUDA decode graph: batch bucket {batch} ({real_batch} live rows), {seq_len} query tokens"
     );
 
@@ -2608,7 +2613,6 @@ fn trim_cuda_graph_memory_bound(stream: &Arc<CudaStream>) -> candle_core::Result
     Ok(())
 }
 
-#[cfg(test)]
 fn cuda_graph_memory_attribute(
     stream: &Arc<CudaStream>,
     attribute: sys::CUgraphMem_attribute,
@@ -2656,9 +2660,59 @@ pub(crate) fn trim_cuda_graph_memory(stream: &Arc<CudaStream>) -> candle_core::R
     trim_cuda_graph_memory_bound(stream)
 }
 
+static CUDA_GRAPH_CAPTURES: AtomicU64 = AtomicU64::new(0);
+// A graph captured on a unified-memory device keeps its memory; below this much free memory new shapes run eagerly
+const UNIFIED_CAPTURE_MIN_FREE_BYTES: usize = 2 << 30;
+static CAPTURE_SKIP_LOGGED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// Whether a new graph may be captured without eating the memory the system needs on a unified device.
+pub(crate) fn cuda_graph_capture_headroom(device: &Device) -> candle_core::Result<bool> {
+    if !crate::utils::normal::is_integrated_gpu(device) {
+        return Ok(true);
+    }
+    let Some(snapshot) = crate::MemoryUsage.query_cuda_allocator(device)? else {
+        return Ok(true);
+    };
+    let ok = snapshot.available >= UNIFIED_CAPTURE_MIN_FREE_BYTES;
+    if !ok && !CAPTURE_SKIP_LOGGED.swap(true, Ordering::Relaxed) {
+        tracing::info!(
+            "Unified memory is low ({} MiB free); new CUDA graph shapes will run eagerly.",
+            snapshot.available >> 20
+        );
+    }
+    Ok(ok)
+}
+
+/// Logs the memory the captured graphs hold and what is left for the runtime.
+pub(crate) fn log_cuda_graph_memory(device: &Device) -> candle_core::Result<()> {
+    let Device::Cuda(cuda) = device else {
+        return Ok(());
+    };
+    let reserved = cuda_graph_memory_attribute(
+        &cuda.cuda_stream(),
+        sys::CUgraphMem_attribute::CU_GRAPH_MEM_ATTR_RESERVED_MEM_HIGH,
+    )?;
+    let free = crate::MemoryUsage
+        .query_cuda_allocator(device)?
+        .map_or(0, |snapshot| snapshot.available);
+    tracing::info!(
+        "CUDA graphs reserve {} MiB; {} MiB of device memory free after startup.",
+        reserved >> 20,
+        free >> 20
+    );
+    Ok(())
+}
+
+/// Graph captures started so far; timing that spans a change includes a one-off capture.
+pub(crate) fn cuda_graph_capture_count() -> u64 {
+    CUDA_GRAPH_CAPTURES.load(Ordering::Relaxed)
+}
+
 pub(crate) fn prepare_cuda_graph_memory_pool(
     stream: &Arc<CudaStream>,
 ) -> candle_core::Result<CudaGraphMemoryPoolGuard> {
+    CUDA_GRAPH_CAPTURES.fetch_add(1, Ordering::Relaxed);
     if !stream.context().has_async_alloc() {
         return Ok(CudaGraphMemoryPoolGuard {
             stream: stream.clone(),

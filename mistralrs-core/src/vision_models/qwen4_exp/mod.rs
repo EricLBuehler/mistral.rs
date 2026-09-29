@@ -145,6 +145,7 @@ impl ModelConfigLike for Qwen4ExpPagedConfig {
 pub struct Qwen4ExpModel {
     text: Qwen4ExpTextModel,
     mtp_n_predict: std::sync::atomic::AtomicUsize,
+    mtp_auto_depth: std::sync::atomic::AtomicBool,
     mtp_proposer: crate::speculative::builtin_mtp::BuiltinMtpProposer,
     draft_lm_head: Mutex<Option<Arc<dyn mistralrs_quant::QuantMethod>>>,
     vision: Option<Qwen3VLVisionModel>,
@@ -196,6 +197,7 @@ impl Qwen4ExpModel {
         Ok(Self {
             text,
             mtp_n_predict: std::sync::atomic::AtomicUsize::new(0),
+            mtp_auto_depth: std::sync::atomic::AtomicBool::new(false),
             mtp_proposer: Default::default(),
             draft_lm_head: Mutex::new(None),
             vision,

@@ -21,6 +21,7 @@ use crate::speculative::{
 
 use super::{mtp::Qwen3_5MtpHead, Qwen3_5Model};
 use crate::speculative::{
+    autotuner::{auto_depth_graph_plans, depths_up_to, AUTO_DEPTHS, AUTO_MAX_DEPTH},
     builtin_mtp::{capture_view, BuiltinMtpHost, MtpAttentionInputs, MtpDraftOutput},
     hybrid_state::{SpecCapture, SpecGraphState},
 };
@@ -126,6 +127,14 @@ impl Qwen3_5Model {
         self.mtp_n_predict.load(Ordering::Relaxed)
     }
 
+    fn mtp_default_depth(&self) -> usize {
+        if self.text.cfg.hidden_size >= MTP_LARGE_HIDDEN_SIZE {
+            DEFAULT_MTP_N_PREDICT_LARGE
+        } else {
+            DEFAULT_MTP_N_PREDICT
+        }
+    }
+
     fn mtp_head(&self) -> Result<&Qwen3_5MtpHead> {
         self.text
             .mtp
@@ -175,6 +184,8 @@ impl Qwen3_5Model {
         let max_live_sequences =
             sequence_capacity.saturating_sub(crate::pipeline::RECURRENT_GRAPH_PAD_SLOTS);
         let adaptive = adaptive && drafter.enable_adaptive(n_predict, max_live_sequences);
+        let autotuned = config.n_predict.is_none() && !adaptive;
+        self.mtp_auto_depth.store(autotuned, Ordering::Relaxed);
         let kind = if drafter.has_selector() {
             "DFlash2"
         } else {
@@ -189,6 +200,8 @@ impl Qwen3_5Model {
         };
         let depth = if adaptive {
             format!("batch-adaptive depth <= {n_predict}")
+        } else if autotuned {
+            format!("autotuned depth <= {n_predict}")
         } else {
             format!("depth {n_predict}")
         };
@@ -581,6 +594,7 @@ impl SpeculativeTargetMixin for Qwen3_5Model {
         config: SpeculativeConfig,
         runtime: MtpRuntimeConfig,
     ) -> Result<Option<SpeculativeAttachInfo>> {
+        self.mtp_auto_depth.store(false, Ordering::Relaxed);
         let SpeculativeConfig::Mtp(config) = config else {
             self.mtp_n_predict.store(0, Ordering::Relaxed);
             self.text.set_store_spec_hidden(false);
@@ -596,16 +610,13 @@ impl SpeculativeTargetMixin for Qwen3_5Model {
                 "The built-in MTP head was not loaded; pass `--mtp` when loading the model."
             );
         }
-        let default_n_predict = if self.text.cfg.hidden_size >= MTP_LARGE_HIDDEN_SIZE {
-            DEFAULT_MTP_N_PREDICT_LARGE
-        } else {
-            DEFAULT_MTP_N_PREDICT
-        };
-        let n_predict = config.n_predict.unwrap_or(default_n_predict);
+        let n_predict = config.n_predict.unwrap_or(AUTO_MAX_DEPTH);
         if n_predict == 0 {
             candle_core::bail!("MTP n_predict must be at least 1.");
         }
         self.mtp_n_predict.store(n_predict, Ordering::Relaxed);
+        self.mtp_auto_depth
+            .store(config.n_predict.is_none(), Ordering::Relaxed);
         self.text.set_store_spec_hidden(true);
         // The promoted (sensitive) lm_head is read once per draft; a base-type copy makes the
         // drafter cheaper without touching what the target verifies with
@@ -739,15 +750,34 @@ impl SpeculativeTargetMixin for Qwen3_5Model {
         Some(SpeculativeBatchPlan::new(n))
     }
 
+    fn speculative_depth_candidates(&self) -> Vec<usize> {
+        if !self.mtp_auto_depth.load(Ordering::Relaxed) {
+            return Vec::new();
+        }
+        if self.dflash.lock().expect("dflash poisoned").is_none() {
+            return AUTO_DEPTHS.to_vec();
+        }
+        depths_up_to(
+            &crate::speculative::dflash::AUTO_DEPTHS,
+            self.mtp_n_predict(),
+        )
+    }
+
     fn speculative_graph_plans(&self) -> Vec<SpeculativeGraphPlan> {
         let n = self.mtp_n_predict();
         if n == 0 {
             return Vec::new();
         }
         if let Some(drafter) = self.dflash.lock().expect("dflash poisoned").as_ref() {
+            if self.mtp_auto_depth.load(Ordering::Relaxed) {
+                return auto_depth_graph_plans(&self.speculative_depth_candidates(), n);
+            }
             return drafter.graph_plans(n);
         }
-        vec![SpeculativeGraphPlan::new(n, None)]
+        if !self.mtp_auto_depth.load(Ordering::Relaxed) {
+            return vec![SpeculativeGraphPlan::new(n, None)];
+        }
+        auto_depth_graph_plans(&AUTO_DEPTHS, self.mtp_default_depth())
     }
 
     #[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]

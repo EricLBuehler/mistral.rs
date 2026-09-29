@@ -36,9 +36,13 @@ use crate::{
     pipeline::{
         EitherCache, IsqModel, ModelForwardContext, NormalLoadingMetadata, RecurrentBatchKind,
     },
-    speculative::hybrid_state::{
-        refresh_gdn_stash_slots, replay_gdn_prefixes, should_stash_gdn_replay, GdnLayerRollback,
-        GdnLayerStash, GdnReplayStash, SpecCapture, SpecGraphState,
+    speculative::{
+        gdn_transitions::GdnTransitionLayers,
+        hybrid_state::{
+            refresh_gdn_stash_slots, replay_gdn_prefixes, should_stash_gdn_replay,
+            GdnLayerRollback, GdnLayerStash, GdnReplayStash, SpecCapture, SpecGraphState,
+        },
+        SpeculativeCommitRow,
     },
     utils::{progress::NiceProgressBar, unvarbuilder::UnVarBuilder},
     vision_models::qwen3_5::packed_gdn::{forward_packed_gdn, packed_gdn_layout},
@@ -591,22 +595,110 @@ impl Qwen4ExpTextModel {
             .ok_or_else(|| {
                 candle_core::Error::msg("no GDN replay stash for speculative rollback")
             })?;
-        let ple_stash = self.ple_stash.lock().expect("ple stash poisoned").take();
-        let mut hybrid_cache = self.cache.hybrid();
-        replay_gdn_prefixes(&gdn_stash, rows, &mut hybrid_cache, |idx| {
-            match &self.layers.get(idx)?.mixer {
+        replay_gdn_prefixes(
+            &gdn_stash,
+            rows,
+            &mut self.cache.hybrid(),
+            |idx| match &self.layers.get(idx)?.mixer {
                 Mixer::Linear(gdn) => Some(gdn),
                 Mixer::Attention(_) => None,
-            }
-        })?;
-        if let Some(ple) = ple_stash {
-            let Some(HybridLayerCache::Recurrent(pool)) = hybrid_cache.get_mut(self.layers.len())
-            else {
-                candle_core::bail!("Qwen4-Exp PLE state pool is missing");
-            };
-            ple.rollback(rows, &pool.conv_state, &pool.recurrent_state)?;
+            },
+        )?;
+        self.rollback_ple_prefixes(rows)
+    }
+
+    pub(super) fn rollback_ple_prefixes(&self, rows: &[(usize, usize)]) -> Result<()> {
+        let Some(ple) = self.ple_stash.lock().expect("ple stash poisoned").take() else {
+            return Ok(());
+        };
+        if rows.is_empty() {
+            return Ok(());
+        }
+        let hybrid_cache = self.cache.hybrid();
+        let Some(HybridLayerCache::Recurrent(pool)) = hybrid_cache.get(self.layers.len()) else {
+            candle_core::bail!("Qwen4-Exp PLE state pool is missing");
+        };
+        ple.rollback(rows, &pool.conv_state, &pool.recurrent_state)
+    }
+
+    fn gdn_transition_layers(&self) -> GdnTransitionLayers<'_> {
+        GdnTransitionLayers {
+            layers: self
+                .layers
+                .iter()
+                .enumerate()
+                .filter_map(|(idx, layer)| match &layer.mixer {
+                    Mixer::Linear(gdn) => Some((idx, gdn)),
+                    Mixer::Attention(_) => None,
+                })
+                .collect(),
+            dtype: self.dtype,
+            device: &self.device,
+        }
+    }
+
+    pub(super) fn supports_recurrent_speculative_transitions(&self) -> bool {
+        self.gdn_transition_layers().supported(&self.cache.hybrid())
+    }
+
+    pub(super) fn reserve_recurrent_transition_storage(&self) -> Result<bool> {
+        self.gdn_transition_layers()
+            .reserve(&mut self.cache.hybrid())
+    }
+
+    pub(super) fn apply_current_recurrent_transitions(&self) -> Result<bool> {
+        self.gdn_transition_layers()
+            .apply_pending_for_current_batch(&self.cache.hybrid())
+    }
+
+    pub(super) fn flush_current_recurrent_state(&self) -> Result<()> {
+        let cache = self.cache.hybrid();
+        let has_slots = cache
+            .state_indices()
+            .is_some_and(|slots| slots.elem_count() != 0);
+        if has_slots
+            && cache.uses_recurrent_transition_log()
+            && !self
+                .gdn_transition_layers()
+                .apply_pending_for_current_batch(&cache)?
+        {
+            candle_core::bail!("Qwen4-Exp pending recurrent transitions cannot be applied");
         }
         Ok(())
+    }
+
+    pub(super) fn flush_recurrent_transitions_for_sequences(
+        &self,
+        seq_ids: &[usize],
+    ) -> Result<()> {
+        let cache = self.cache.hybrid();
+        let slots = cache.recurrent_slots_for_sequences(seq_ids);
+        if cache.uses_recurrent_transition_log()
+            && !self
+                .gdn_transition_layers()
+                .apply_pending_for_slots(&cache, &slots)?
+            && !slots.is_empty()
+        {
+            candle_core::bail!("Qwen4-Exp pending recurrent transitions cannot be applied");
+        }
+        Ok(())
+    }
+
+    /// Publishes every row's accepted prefix to the transition log; `false` means the stash needs a replay.
+    pub(super) fn stage_recurrent_prefixes(&self, rows: &[SpeculativeCommitRow]) -> Result<bool> {
+        if rows.is_empty() {
+            return Ok(true);
+        }
+        let Some(stash) = self
+            .gdn_replay_stash
+            .lock()
+            .expect("gdn stash poisoned")
+            .clone()
+        else {
+            candle_core::bail!("no GDN transition stash for speculative commit");
+        };
+        self.gdn_transition_layers()
+            .stage_prefixes(&self.cache.hybrid(), &stash, rows)
     }
 
     /// The decode step is graph-capturable unless PLE rows must be gathered on the host.
@@ -697,6 +789,24 @@ impl Qwen4ExpTextModel {
             && ctx
                 .paged_input_metadata()
                 .is_some_and(|metadata| metadata.is_decode_step());
+        let checkpoint_lanes = hybrid_cache.checkpoint_lanes();
+        let transition_log = hybrid_cache.uses_recurrent_transition_log();
+        let transition_gdn = is_verify
+            && transition_log
+            && seq_len <= checkpoint_lanes.min(crate::cuda::gdn::GDN_SPEC_FUSED_MAX_TOKENS)
+            && self.gdn_transition_layers().supported(&hybrid_cache);
+        if transition_log && !transition_gdn {
+            let has_slots = hybrid_cache
+                .state_indices()
+                .is_some_and(|slots| slots.elem_count() != 0);
+            if !self
+                .gdn_transition_layers()
+                .apply_pending_for_current_batch(&hybrid_cache)?
+                && has_slots
+            {
+                candle_core::bail!("Qwen4-Exp pending recurrent transitions cannot be applied");
+            }
+        }
         let store_spec = self.store_spec_hidden.load(Ordering::Relaxed);
         let stash = should_stash_gdn_replay(
             false,
@@ -844,8 +954,7 @@ impl Qwen4ExpTextModel {
                     let Some(HybridLayerCache::Recurrent(pool)) = hybrid_cache.get_mut(i) else {
                         candle_core::bail!("Hybrid cache layer {i} is not recurrent");
                     };
-                    let pre_state = gdn_stash
-                        .is_some()
+                    let pre_state = (gdn_stash.is_some() && !transition_gdn)
                         .then(|| -> Result<_> {
                             Ok((
                                 pool.gather_conv_state(&indices)?,
@@ -871,25 +980,32 @@ impl Qwen4ExpTextModel {
                             &h,
                             &mut gdn_cache,
                             batch_kind,
-                            1,
-                            false,
-                            pre_state.as_ref().map(|_| &mut projected),
+                            if transition_gdn { checkpoint_lanes } else { 1 },
+                            transition_gdn,
+                            gdn_stash.as_ref().map(|_| &mut projected),
                         )?,
                     };
-                    if let (Some(stash), Some((conv_state, recurrent_state))) =
-                        (gdn_stash.as_mut(), pre_state)
-                    {
-                        let Some(GdnSpeculativeStash::Replay(projected)) = projected else {
-                            candle_core::bail!("Qwen4-Exp GDN verify returned no replay stash");
-                        };
-                        stash.layers.push(GdnLayerStash {
-                            layer_idx: i,
-                            state_layout: pool.state_layout(),
-                            rollback: GdnLayerRollback::Replay {
+                    if let Some(stash) = gdn_stash.as_mut() {
+                        let rollback = match (projected, pre_state) {
+                            (Some(GdnSpeculativeStash::Transition(transitions)), None) => {
+                                GdnLayerRollback::Transition(transitions)
+                            }
+                            (
+                                Some(GdnSpeculativeStash::Replay(projected)),
+                                Some((conv_state, recurrent_state)),
+                            ) => GdnLayerRollback::Replay {
                                 projected,
                                 conv_state,
                                 recurrent_state,
                             },
+                            _ => candle_core::bail!(
+                                "Qwen4-Exp GDN verify returned no matching rollback stash"
+                            ),
+                        };
+                        stash.layers.push(GdnLayerStash {
+                            layer_idx: i,
+                            state_layout: pool.state_layout(),
+                            rollback,
                         });
                     }
                     gdn_cache.commit(pool, &indices, recurrent_metadata.state_indices_host())?;

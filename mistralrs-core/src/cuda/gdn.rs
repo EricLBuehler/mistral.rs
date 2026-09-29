@@ -3342,6 +3342,7 @@ pub struct GdnSpeculativeRmsNormGate<'a> {
     pub gate: &'a Tensor,
     pub weight: &'a Tensor,
     pub eps: f64,
+    pub sigmoid_gate: bool,
     #[cfg(feature = "cuda")]
     pub quantization: Option<GdnFp8OutputSpec>,
 }
@@ -3666,7 +3667,7 @@ pub fn speculative_recurrence_checkpoints_cuda(
         let dt_bias_ptr = cuda_ptr!(dt_bias, f32, "dt_bias") as *const f32;
         let (state_ptr, state_dtype) = cuda_recurrent_state_ptr(state_pool, "state_pool")?;
         let slots_ptr = cuda_ptr!(active_slots, u32, "active_slots") as *const u32;
-        let (gate_ptr, norm_weight, gate_strides, norm_eps) =
+        let (gate_ptr, norm_weight, gate_strides, norm_eps, sigmoid_gate) =
             if let Some((post_op, gate_strides, _)) = post_op {
                 let gate_ptr = cuda_ptr!(post_op.gate, T, "gate") as *const c_void;
                 let norm_weight = post_op.weight.contiguous()?;
@@ -3675,9 +3676,10 @@ pub fn speculative_recurrence_checkpoints_cuda(
                     Some(norm_weight),
                     gate_strides,
                     post_op.eps as f32,
+                    i32::from(post_op.sigmoid_gate),
                 )
             } else {
-                (std::ptr::null(), None, [0; 4], 0.0)
+                (std::ptr::null(), None, [0; 4], 0.0, 0)
             };
         let norm_weight_ptr = if let Some(norm_weight) = norm_weight.as_ref() {
             cuda_ptr!(norm_weight, T, "norm_weight") as *const c_void
@@ -3819,6 +3821,7 @@ pub fn speculative_recurrence_checkpoints_cuda(
                 i32::from(tiled_v_heads),
                 i32::from(value_major),
                 norm_eps,
+                sigmoid_gate,
                 dtype_code,
                 state_dtype,
                 stream,
@@ -8357,6 +8360,7 @@ mod tests {
                             tiled_v_heads: true,
                             state_layout,
                             post_op: Some(GdnSpeculativeRmsNormGate {
+                                sigmoid_gate: false,
                                 gate: &gate,
                                 weight: &norm_weight,
                                 eps: norm_eps,
@@ -8411,6 +8415,7 @@ mod tests {
                                 tiled_v_heads: true,
                                 state_layout,
                                 post_op: Some(GdnSpeculativeRmsNormGate {
+                                    sigmoid_gate: false,
                                     gate: &gate,
                                     weight: &norm_weight,
                                     eps: norm_eps,
@@ -8609,6 +8614,7 @@ mod tests {
                     tiled_v_heads,
                     state_layout: RecurrentStateLayout::GdnValueMajor,
                     post_op: Some(GdnSpeculativeRmsNormGate {
+                        sigmoid_gate: false,
                         gate: &gate,
                         weight: &norm_weight,
                         eps: 1.0e-6,
@@ -8858,6 +8864,7 @@ mod tests {
                     tiled_v_heads,
                     state_layout: RecurrentStateLayout::GdnValueMajor,
                     post_op: Some(GdnSpeculativeRmsNormGate {
+                        sigmoid_gate: false,
                         gate: &case.gate,
                         weight: &case.norm_weight,
                         eps: 1.0e-6,
@@ -8899,6 +8906,7 @@ mod tests {
                         tiled_v_heads,
                         state_layout: RecurrentStateLayout::GdnValueMajor,
                         post_op: Some(GdnSpeculativeRmsNormGate {
+                            sigmoid_gate: false,
                             gate: &case.gate,
                             weight: &case.norm_weight,
                             eps: 1.0e-6,
@@ -9035,6 +9043,7 @@ mod tests {
                     tiled_v_heads,
                     state_layout: RecurrentStateLayout::GdnValueMajor,
                     post_op: Some(GdnSpeculativeRmsNormGate {
+                        sigmoid_gate: false,
                         gate: &case.gate,
                         weight: &case.norm_weight,
                         eps: 1.0e-6,
