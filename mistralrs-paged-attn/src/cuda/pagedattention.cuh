@@ -667,10 +667,10 @@ __global__ void paged_attention_v2_reduce_kernel(
 } // namespace vllm
 
 #define LAUNCH_PAGED_ATTENTION_V1(HEAD_SIZE)                                   \
-  VLLM_DevFuncAttribute_SET_MaxDynamicSharedMemorySize(                        \
+  CUDA_CHECK(VLLM_DevFuncAttribute_SET_MaxDynamicSharedMemorySize(             \
       ((void *)vllm::paged_attention_v1_kernel<T, CACHE_T, KV_DT, HEAD_SIZE,   \
                                                BLOCK_SIZE, NUM_THREADS>),      \
-      shared_mem_size);                                                        \
+      shared_mem_size));                                                       \
   vllm::paged_attention_v1_kernel<T, CACHE_T, KV_DT, HEAD_SIZE, BLOCK_SIZE,    \
                                   NUM_THREADS>                                 \
       <<<grid, block, shared_mem_size, stream>>>(                              \

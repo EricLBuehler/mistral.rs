@@ -1,10 +1,12 @@
 #[cfg(feature = "cuda")]
 mod ffi;
+mod fp8;
 pub(crate) mod isq;
 pub mod log;
 mod ops;
 mod uqff;
 
+pub(crate) use fp8::contiguous_fp8;
 pub use ops::flash_attn_sinks_metal;
 pub use ops::flash_attn_sinks_varlen_metal;
 #[cfg(feature = "cuda")]

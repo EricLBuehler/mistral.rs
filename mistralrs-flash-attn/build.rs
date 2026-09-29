@@ -121,6 +121,25 @@ mod cuda_build {
         Ok(build_dir)
     }
 
+    fn prepare_cuda_archive(path: PathBuf) -> PathBuf {
+        if [
+            CUDA_BUILD_ROOT_ENV,
+            FLASH_ATTN_BUILD_DIR_ENV,
+            CANDLE_FLASH_ATTN_BUILD_DIR_ENV,
+        ]
+        .iter()
+        .any(|name| std::env::var_os(name).is_some())
+        {
+            // Shared objects can be newer than this Cargo build directory's archive.
+            match fs::remove_file(&path) {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => panic!("failed to refresh CUDA archive {}: {error}", path.display()),
+            }
+        }
+        path
+    }
+
     pub fn build() -> Result<()> {
         println!("cargo::rerun-if-changed=build.rs");
         println!("cargo::rerun-if-env-changed={CUTLASS_COMMIT_ENV}");
@@ -175,7 +194,7 @@ mod cuda_build {
         }
 
         let out_file = out_dir.join("libflashattention.a");
-        builder.build_lib(out_file)?;
+        builder.build_lib(prepare_cuda_archive(out_file))?;
 
         println!("cargo::rustc-link-search={}", out_dir.display());
         println!("cargo::rustc-link-lib=flashattention");

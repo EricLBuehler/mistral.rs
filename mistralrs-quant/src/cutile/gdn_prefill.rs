@@ -25,7 +25,6 @@ const KV_SIZE: usize = GDN_PREFILL_HEAD_DIM * GDN_PREFILL_HEAD_DIM;
 #[cutile::module]
 mod kernels {
     use cutile::core::*;
-    use cutile::cutile_compiler;
 
     // w = A_inv (beta e^gcum k), u = A_inv (beta v) per (head, chunk), A_inv = (I + A)^-1 solved like
     // FLA's solve_tril: forward substitution on the 16x16 diagonal blocks (compact [C, 16] rows), then

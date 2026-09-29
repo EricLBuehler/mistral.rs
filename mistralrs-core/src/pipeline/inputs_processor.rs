@@ -120,6 +120,7 @@ pub mod text_models_inputs_processor {
     use super::{InputProcessorOutput, InputsProcessor, InputsProcessorType};
 
     const CUDA_GRAPH_CONTEXT_BUCKET_MIN_TOKENS: usize = 512;
+    const CUDA_GRAPH_DECODE_CONTEXT_FLOOR_TOKENS: usize = 2048;
 
     fn cuda_graph_context_bucket_tokens(
         required_tokens: usize,
@@ -1944,6 +1945,33 @@ pub mod text_models_inputs_processor {
             rows
         }
 
+        fn graph_block_table_len(
+            &self,
+            blocks: usize,
+            live_context_len: usize,
+            capacity: Option<usize>,
+        ) -> usize {
+            let minimum_blocks = if crate::perf_flags::cuda_graphs_enabled()
+                && !self.use_standard_metadata
+                && self.query_len == 1
+                && self.decode_window == 1
+            {
+                capacity
+                    .unwrap_or(CUDA_GRAPH_DECODE_CONTEXT_FLOOR_TOKENS)
+                    .min(CUDA_GRAPH_DECODE_CONTEXT_FLOOR_TOKENS)
+                    .div_ceil(self.block_size)
+            } else {
+                0
+            };
+            cuda_graph_block_table_len_with_cap(
+                blocks.max(minimum_blocks),
+                self.block_size,
+                true,
+                live_context_len,
+                capacity,
+            )
+        }
+
         #[cfg(feature = "cuda")]
         pub(crate) fn graph_key(&self) -> DecodePagedRowsGraphKey {
             let batch_size = self.batch_size();
@@ -1967,23 +1995,19 @@ pub mod text_models_inputs_processor {
                         .min(self.max_paged_context_len)
                 })
                 .or(graph_capacity);
-            let paged_block_table_len = cuda_graph_block_table_len_with_cap(
+            let paged_block_table_len = self.graph_block_table_len(
                 (0..paged_block_tables.len())
                     .map(|row| paged_block_tables.row(row).len())
                     .max()
                     .unwrap_or(1),
-                self.block_size,
-                true,
                 max_context_len,
                 paged_graph_capacity,
             );
-            let full_block_table_len = cuda_graph_block_table_len_with_cap(
+            let full_block_table_len = self.graph_block_table_len(
                 (0..self.block_tables.len())
                     .map(|row| self.block_tables.row(row).len())
                     .max()
                     .unwrap_or(1),
-                self.block_size,
-                true,
                 full_max_context_len,
                 graph_capacity,
             );
@@ -2114,10 +2138,8 @@ pub mod text_models_inputs_processor {
                         .min(self.max_paged_context_len)
                 })
                 .or(graph_capacity);
-            let max_block_table_len = cuda_graph_block_table_len_with_cap(
+            let max_block_table_len = self.graph_block_table_len(
                 max_block_table_len,
-                block_size,
-                true,
                 max_context_len,
                 paged_graph_capacity,
             );
@@ -2186,10 +2208,8 @@ pub mod text_models_inputs_processor {
             let full_tensors = if full_matches_paged {
                 None
             } else {
-                let full_max_block_table_len = cuda_graph_block_table_len_with_cap(
+                let full_max_block_table_len = self.graph_block_table_len(
                     full_max_block_table_len,
-                    block_size,
-                    true,
                     full_max_context_len,
                     graph_capacity,
                 );
@@ -2860,10 +2880,10 @@ pub mod text_models_inputs_processor {
             .build()
             .unwrap();
             let view = &metadata.flashinfer.unwrap().views.logical;
-            assert_eq!(view.paged_kv.indices[&Device::Cpu.location()].dims(), &[16]);
+            assert_eq!(view.paged_kv.indices[&Device::Cpu.location()].dims(), &[64]);
             assert_eq!(
                 view.tile_plan.request_indices[&Device::Cpu.location()].dims(),
-                &[2]
+                &[8]
             );
         }
 

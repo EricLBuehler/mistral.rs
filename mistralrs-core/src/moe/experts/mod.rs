@@ -23,6 +23,8 @@ pub use config::{prelog_moe_backend, ExpertProj, ExpertProjNames, MoEExpertsConf
 
 #[cfg(feature = "cutile")]
 use backends::CutileExpertsWeights;
+#[cfg(feature = "cutile")]
+use backends::CutileFp8ExpertsWeights;
 #[cfg(feature = "cuda")]
 use backends::CutlassExpertsWeights;
 use backends::{
@@ -48,6 +50,8 @@ enum MoEExpertsBackendImpl {
     Fused(FusedExpertsWeights),
     #[cfg(feature = "cutile")]
     Cutile(CutileExpertsWeights),
+    #[cfg(feature = "cutile")]
+    CutileFp8(CutileFp8ExpertsWeights),
     #[cfg(feature = "cuda")]
     Cutlass(CutlassExpertsWeights),
     Fast(FastExpertsWeights),
@@ -61,6 +65,10 @@ impl MoEExpertsBackendImpl {
             Self::Cutile(w) => w
                 .forward_impl(forward, config)
                 .map_err(|err| err.context("moe experts cutile")),
+            #[cfg(feature = "cutile")]
+            Self::CutileFp8(w) => w
+                .forward_impl(forward, config)
+                .map_err(|err| err.context("moe experts cutile fp8")),
             #[cfg(feature = "cuda")]
             Self::Cutlass(w) => w
                 .forward_impl(forward, config)
@@ -102,6 +110,23 @@ impl MoEExperts {
             let lora_site = Self::register_lora_site(cfg, &experts_vb, comm, fast.sharded)?;
             return Ok(Self::from_backend(
                 MoEExpertsBackendImpl::Fast(fast),
+                lora_site,
+                cfg,
+                comm,
+                act,
+            ));
+        }
+        #[cfg(feature = "cutile")]
+        if let Some(fp8) = CutileFp8ExpertsWeights::try_from_checkpoint(
+            cfg,
+            &experts_vb,
+            comm,
+            quantization_config,
+            act,
+        )? {
+            let lora_site = Self::register_lora_site(cfg, &experts_vb, comm, false)?;
+            return Ok(Self::from_backend(
+                MoEExpertsBackendImpl::CutileFp8(fp8),
                 lora_site,
                 cfg,
                 comm,

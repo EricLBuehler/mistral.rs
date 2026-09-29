@@ -180,7 +180,7 @@ fn validate_grouped(c: &BackendChoice, backend: &str) -> Result<()> {
 }
 
 impl MoEExpertsBackend {
-    fn from_env() -> Option<Self> {
+    pub(super) fn from_env() -> Option<Self> {
         let force = std::env::var("MISTRALRS_MOE_BACKEND").ok()?;
         Some(match force.as_str() {
             "fused" | "native" | "legacy" | "wmma" => Self::Fused,

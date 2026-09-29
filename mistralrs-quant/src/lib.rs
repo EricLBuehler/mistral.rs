@@ -4,14 +4,12 @@ use std::{
     sync::{atomic::AtomicUsize, Arc, Mutex, MutexGuard},
 };
 
-use blockwise_fp8::blockwise_fp8_linear_b;
 #[cfg(feature = "metal")]
 use candle_core::D;
 use candle_core::{
     quantized::{GgmlDType, QMatMul, QTensor},
     DType, Device, Result, Tensor,
 };
-use pertensor_fp8::pertensor_fp8_linear_b;
 
 #[cfg(feature = "metal")]
 pub mod metal_kernels;
@@ -29,6 +27,7 @@ pub mod distributed;
 mod dummy;
 pub mod f8q8;
 mod fp8;
+mod fp8_config;
 pub mod gemv;
 mod gguf;
 mod gptq;
@@ -39,6 +38,7 @@ mod lora;
 #[cfg(feature = "cuda")]
 pub mod moe;
 mod mxfp4;
+pub mod nvfp4;
 mod pending_layer;
 mod pertensor_fp8;
 pub mod rotary;
@@ -153,6 +153,11 @@ pub use distributed::{
 pub use dummy::{DummyLayer, DummyLayerInfo};
 pub use f8q8::F8Q8Linear;
 pub use fp8::FP8Linear;
+pub use fp8_config::{
+    CheckpointDialect, CheckpointLinearSpec, CheckpointQuantConfig, Fp8ActivationMode,
+    Fp8LinearSpec, Fp8ScaleNames, Fp8WeightScaleLayout, Nvfp4ActivationMode, Nvfp4LinearSpec,
+    Nvfp4ScaleNames, ScaleConvention, NVFP4_BLOCK_SIZE,
+};
 #[cfg(feature = "cuda")]
 pub use gemv::gemv;
 pub use gemv::{should_use_gemv, GEMV_CONTROLLER};
@@ -208,8 +213,9 @@ pub use lora::{
     RoutedLoraCudaWeightTable, RoutedLoraDirectLaunch, RoutedLoraGroupedLaunch,
 };
 pub use mxfp4::MXFP4Layer;
+pub use nvfp4::{Nvfp4InputCalibration, Nvfp4Layer, Nvfp4LayerParts};
 pub use pending_layer::{pending_isq_channel, PendingIsqLayer};
-pub use pertensor_fp8::PerTensorFP8Linear;
+pub use pertensor_fp8::{fp8_w8a16_linear, fp8_w8a8_linear, Fp8W8A8LinearArgs, PerTensorFP8Linear};
 pub use unquantized::UnquantLinear;
 pub use utils::flash_attn_sinks_metal;
 pub use utils::flash_attn_sinks_varlen_metal;
@@ -516,6 +522,20 @@ pub enum QuantizedConfig {
         fmt: Option<String>,
         modules_to_not_convert: Vec<String>,
     },
+    #[serde(rename = "compressed-tensors")]
+    CompressedTensors {
+        #[serde(skip_serializing)]
+        config: CheckpointQuantConfig,
+        #[serde(flatten)]
+        raw: serde_json::Map<String, serde_json::Value>,
+    },
+    #[serde(rename = "modelopt")]
+    ModelOpt {
+        #[serde(skip_serializing)]
+        config: CheckpointQuantConfig,
+        #[serde(flatten)]
+        raw: serde_json::Map<String, serde_json::Value>,
+    },
     Bitsandbytes {
         bnb_4bit_quant_type: Option<String>,
     },
@@ -537,7 +557,19 @@ struct RawConfig {
     activation_scheme: Option<Fp8ActivationScheme>,
     fmt: Option<String>,
     modules_to_not_convert: Option<Vec<String>>,
+    ignored_layers: Option<Vec<String>>,
     bnb_4bit_quant_type: Option<String>,
+}
+
+fn raw_quantization_config(
+    value: &serde_json::Value,
+) -> std::result::Result<serde_json::Map<String, serde_json::Value>, String> {
+    let mut raw = value
+        .as_object()
+        .cloned()
+        .ok_or_else(|| "quantization config must be an object".to_string())?;
+    raw.remove("quant_method");
+    Ok(raw)
 }
 
 // Custom deserializer implementation
@@ -546,7 +578,8 @@ impl<'de> Deserialize<'de> for QuantizedConfig {
     where
         D: Deserializer<'de>,
     {
-        let raw = RawConfig::deserialize(deserializer)?;
+        let value = serde_json::Value::deserialize(deserializer)?;
+        let raw = RawConfig::deserialize(value.clone()).map_err(serde::de::Error::custom)?;
 
         match &raw.quant_method {
             Some(m) if m == "gptq" || m == "awq" => {
@@ -565,11 +598,37 @@ impl<'de> Deserialize<'de> for QuantizedConfig {
             }
             Some(m) if m == "fp8" => {
                 // weight_block_size is optional - None means per-tensor quantization
+                let mut modules_to_not_convert = raw.modules_to_not_convert.unwrap_or_default();
+                for module in raw.ignored_layers.unwrap_or_default() {
+                    if !modules_to_not_convert.contains(&module) {
+                        modules_to_not_convert.push(module);
+                    }
+                }
+                CheckpointQuantConfig::native(
+                    raw.weight_block_size.as_deref(),
+                    raw.activation_scheme,
+                    raw.fmt.as_deref(),
+                    &modules_to_not_convert,
+                )
+                .map_err(serde::de::Error::custom)?;
                 Ok(QuantizedConfig::Fp8 {
                     weight_block_size: raw.weight_block_size,
                     activation_scheme: raw.activation_scheme,
                     fmt: raw.fmt,
-                    modules_to_not_convert: raw.modules_to_not_convert.unwrap_or_default(),
+                    modules_to_not_convert,
+                })
+            }
+            Some(m) if m == "compressed-tensors" || m == "compressed_tensors" => {
+                Ok(QuantizedConfig::CompressedTensors {
+                    config: CheckpointQuantConfig::compressed_tensors(&value)
+                        .map_err(serde::de::Error::custom)?,
+                    raw: raw_quantization_config(&value).map_err(serde::de::Error::custom)?,
+                })
+            }
+            Some(m) if m.to_ascii_lowercase().starts_with("modelopt") => {
+                Ok(QuantizedConfig::ModelOpt {
+                    config: CheckpointQuantConfig::model_opt(&value).map_err(serde::de::Error::custom)?,
+                    raw: raw_quantization_config(&value).map_err(serde::de::Error::custom)?,
                 })
             }
             Some(m) if m == "bitsandbytes" => Ok(QuantizedConfig::Bitsandbytes {
@@ -587,6 +646,13 @@ impl<'de> Deserialize<'de> for QuantizedConfig {
             Some(m) if m == "mxfp4" => {
                 Ok(QuantizedConfig::MXFP4 {  })
             }
+            None if value.get("config_groups").is_some() => {
+                Ok(QuantizedConfig::CompressedTensors {
+                    config: CheckpointQuantConfig::compressed_tensors(&value)
+                        .map_err(serde::de::Error::custom)?,
+                    raw: raw_quantization_config(&value).map_err(serde::de::Error::custom)?,
+                })
+            }
             None => {
                 let bits = raw
                     .bits
@@ -598,7 +664,7 @@ impl<'de> Deserialize<'de> for QuantizedConfig {
             }
             Some(unknown_method) => {
                 Err(serde::de::Error::custom(format!(
-                    "Unknown quantization method: {unknown_method}. Expected one of: gptq, fp8, bitsandbytes, afq, or not specified"
+                    "Unknown quantization method: {unknown_method}. Expected one of: gptq, fp8, compressed-tensors, modelopt, bitsandbytes, afq, or not specified"
                 )))
             },
         }
@@ -606,20 +672,80 @@ impl<'de> Deserialize<'de> for QuantizedConfig {
 }
 
 impl QuantizedConfig {
+    pub fn from_modelopt_config(config: &serde_json::Value) -> std::result::Result<Self, String> {
+        Ok(Self::ModelOpt {
+            config: CheckpointQuantConfig::model_opt(config)?,
+            raw: raw_quantization_config(config)?,
+        })
+    }
+
+    pub fn from_modelopt_configs(
+        embedded: Option<&serde_json::Value>,
+        external: &serde_json::Value,
+    ) -> std::result::Result<Self, String> {
+        let merged = CheckpointQuantConfig::model_opt_merged_value(embedded, external)?;
+        Ok(Self::ModelOpt {
+            config: CheckpointQuantConfig::model_opt(&merged)?,
+            raw: raw_quantization_config(&merged)?,
+        })
+    }
+
+    pub fn resolve_checkpoint(&self, prefix: &str) -> Result<Option<CheckpointLinearSpec>> {
+        match self {
+            Self::Fp8 {
+                weight_block_size,
+                activation_scheme,
+                fmt,
+                modules_to_not_convert,
+            } => CheckpointQuantConfig::native(
+                weight_block_size.as_deref(),
+                *activation_scheme,
+                fmt.as_deref(),
+                modules_to_not_convert,
+            )
+            .map_err(candle_core::Error::msg)?
+            .resolve_checked(prefix)
+            .map_err(candle_core::Error::msg),
+            Self::CompressedTensors { config, .. } | Self::ModelOpt { config, .. } => config
+                .resolve_checked(prefix)
+                .map_err(candle_core::Error::msg),
+            _ => Ok(None),
+        }
+    }
+
+    pub fn resolve_fp8(&self, prefix: &str) -> Result<Option<Fp8LinearSpec>> {
+        match self.resolve_checkpoint(prefix)? {
+            Some(CheckpointLinearSpec::Fp8(spec)) => Ok(Some(spec)),
+            Some(CheckpointLinearSpec::Nvfp4(_)) => {
+                candle_core::bail!("NVFP4 layer `{prefix}` requires the NVFP4 loader")
+            }
+            None => Ok(None),
+        }
+    }
+
     pub fn name(&self) -> &'static str {
         match self {
             Self::GptqAwq { .. } => "gptq",
             Self::Fp8 { .. } => "fp8",
+            Self::CompressedTensors { .. } => "compressed-tensors",
+            Self::ModelOpt { .. } => "modelopt",
             Self::Bitsandbytes { .. } => "bitsandbytes",
             Self::Afq { .. } => "afq",
             Self::MXFP4 { .. } => "mxfp4",
         }
     }
 
-    pub fn get_bits_name(&self, _vb: &ShardedVarBuilder) -> String {
+    pub fn get_bits_name(&self, vb: &ShardedVarBuilder) -> String {
         match self {
             Self::GptqAwq { bits, .. } => format!("{bits} bits"),
             Self::Fp8 { .. } => "8 bits".to_string(),
+            Self::CompressedTensors { .. } | Self::ModelOpt { .. } => {
+                match self.resolve_checkpoint(&vb.prefix()) {
+                    Ok(Some(CheckpointLinearSpec::Nvfp4(_))) => "4 bits".to_string(),
+                    Ok(Some(CheckpointLinearSpec::Fp8(_))) => "8 bits".to_string(),
+                    _ => "unquantized".to_string(),
+                }
+            }
             Self::Bitsandbytes {
                 bnb_4bit_quant_type: Some(_),
             } => "4 bits".to_string(),
@@ -644,6 +770,7 @@ impl QuantizedConfig {
                 other => panic!("Unexpected bits in `pack_factor` {other}"),
             },
             Self::Fp8 { .. } => IsqType::F8E4M3.pack_factor(dtype),
+            Self::CompressedTensors { .. } | Self::ModelOpt { .. } => 1,
             Self::Bitsandbytes {
                 bnb_4bit_quant_type: Some(_),
             } => IsqType::Q4K.pack_factor(dtype),
@@ -707,6 +834,7 @@ pub enum QuantMethodConfig {
     PerTensorFP8 {
         weight: Tensor,
         weight_scale_inv: Tensor,
+        activation_mode: Fp8ActivationMode,
         activation_scale: Option<Tensor>,
         bias: Option<Tensor>,
         dequant_dtype: DType,
@@ -1445,6 +1573,7 @@ pub struct QuantizedActivation {
     source_dtype: DType,
     scheme: ActivationQuantizationScheme,
     scale_layout: ActivationScaleLayout,
+    global_scale: Option<f32>,
 }
 
 impl QuantizedActivation {
@@ -1535,7 +1664,53 @@ impl QuantizedActivation {
             source_dtype,
             scheme,
             scale_layout,
+            global_scale: None,
         })
+    }
+
+    pub fn new_nvfp4(
+        quantized: Tensor,
+        scales: Tensor,
+        source: &Tensor,
+        global_scale: f32,
+    ) -> Result<Self> {
+        if source.rank() < 2 || !matches!(source.dtype(), DType::BF16 | DType::F16) {
+            candle_core::bail!("NVFP4 activation source must be rank >= 2 and BF16 or F16");
+        }
+        let columns = source.dim(candle_core::D::Minus1)?;
+        if columns == 0 || !columns.is_multiple_of(NVFP4_BLOCK_SIZE) {
+            candle_core::bail!(
+                "NVFP4 activation columns must be a nonzero multiple of {NVFP4_BLOCK_SIZE}"
+            );
+        }
+        let rows = source.elem_count() / columns;
+        if quantized.dtype() != DType::U8 || quantized.dims() != [rows, columns / 2] {
+            candle_core::bail!("NVFP4 activation values must be packed U8 [rows, columns / 2]");
+        }
+        if scales.dtype() != DType::F8E4M3 || scales.dims() != [rows, columns / NVFP4_BLOCK_SIZE] {
+            candle_core::bail!("NVFP4 activation block scales must be E4M3 [rows, columns / 16]");
+        }
+        if !quantized.device().same_device(source.device())
+            || !scales.device().same_device(source.device())
+        {
+            candle_core::bail!("NVFP4 activation tensors must be on the same device");
+        }
+        if !global_scale.is_finite() || global_scale <= 0.0 {
+            candle_core::bail!("NVFP4 activation global scale must be finite and positive");
+        }
+        Ok(Self {
+            quantized,
+            scales,
+            source_shape: source.dims().to_vec(),
+            source_dtype: source.dtype(),
+            scheme: nvfp4::NVFP4_ACTIVATION_SCHEME,
+            scale_layout: ActivationScaleLayout::RowMajor,
+            global_scale: Some(global_scale),
+        })
+    }
+
+    pub fn global_scale(&self) -> Option<f32> {
+        self.global_scale
     }
 
     pub fn quantized(&self) -> &Tensor {
@@ -1710,6 +1885,15 @@ pub trait QuantMethod: Send + Sync + Debug + QuantizedSerde {
             .map(|_| ActivationScaleLayout::RowMajor)
     }
 
+    #[doc(hidden)]
+    fn nvfp4_input_calibration(&self) -> Option<Nvfp4InputCalibration<'_>> {
+        None
+    }
+
+    fn activation_quantization_global_scale(&self) -> Option<f32> {
+        None
+    }
+
     fn quantize_activation(&self, _a: &Tensor) -> Result<QuantizedActivation> {
         candle_core::bail!("{} does not support activation quantization", self.name())
     }
@@ -1719,6 +1903,15 @@ pub trait QuantMethod: Send + Sync + Debug + QuantizedSerde {
             "{} does not support prequantized activation input",
             self.name()
         )
+    }
+
+    fn try_quantize_glu(
+        &self,
+        _gate: &Tensor,
+        _value: &Tensor,
+        _activation: GluActivationType,
+    ) -> Result<Option<QuantizedActivation>> {
+        Ok(None)
     }
 
     #[cfg(feature = "cuda")]
@@ -1814,12 +2007,26 @@ pub fn try_forward_with_shared_quantized_activation(
     if first.preferred_activation_scale_layout_for(a) != Some(ActivationScaleLayout::RowMajor) {
         return Ok(None);
     }
+    let global_scale = first.activation_quantization_global_scale();
     if methods.iter().skip(1).any(|method| {
         method.activation_quantization_scheme_for(a) != Some(scheme)
+            || method.activation_quantization_global_scale() != global_scale
             || method.preferred_activation_scale_layout_for(a)
                 != Some(ActivationScaleLayout::RowMajor)
     }) {
         return Ok(None);
+    }
+    if scheme == nvfp4::NVFP4_ACTIVATION_SCHEME {
+        let Some(calibration) = first.nvfp4_input_calibration() else {
+            return Ok(None);
+        };
+        if methods.iter().skip(1).any(|method| {
+            method
+                .nvfp4_input_calibration()
+                .is_none_or(|other| !calibration.matches(other))
+        }) {
+            return Ok(None);
+        }
     }
     let activation = first.quantize_activation(a)?;
     if activation.scheme() != scheme {
@@ -1828,6 +2035,11 @@ pub fn try_forward_with_shared_quantized_activation(
             first.name(),
             activation.scheme(),
             scheme
+        );
+    }
+    if activation.global_scale() != global_scale {
+        candle_core::bail!(
+            "shared activation quantizer returned a different calibrated global scale"
         );
     }
     if activation.scale_layout() != ActivationScaleLayout::RowMajor {
@@ -1852,14 +2064,20 @@ pub fn try_forward_fused_quantized_glu(
 ) -> Result<Option<Tensor>> {
     #[cfg(feature = "cuda")]
     {
-        if gate.dtype() != DType::BF16
-            || value.dtype() != DType::BF16
+        if !matches!(gate.dtype(), DType::BF16 | DType::F16)
+            || gate.dtype() != value.dtype()
             || gate.shape() != value.shape()
             || !gate.device().same_device(value.device())
             || !gate.device().is_cuda()
             || projection.is_dynamic_lora_active()
             || projection.stats_snapshot().is_some()
         {
+            return Ok(None);
+        }
+        if let Some(quantized) = projection.try_quantize_glu(gate, value, activation)? {
+            return projection.forward_quantized(&quantized).map(Some);
+        }
+        if gate.dtype() != DType::BF16 {
             return Ok(None);
         }
         let Some(scheme) = projection.activation_quantization_scheme_for(value) else {
@@ -1952,6 +2170,10 @@ pub fn try_fused_quantized_ffn(
         let [gate_out, up_out]: [Tensor; 2] = outputs.try_into().map_err(|_| {
             candle_core::Error::msg("shared gate/up projection returned the wrong output count")
         })?;
+        if let Some(output) = try_forward_fused_quantized_glu(&gate_out, &up_out, down, activation)?
+        {
+            return Ok(Some(output));
+        }
         let intermediate = fused_glu(&gate_out, &up_out, activation)?;
         return Ok(Some(down.forward(&intermediate)?));
     }
@@ -2615,29 +2837,16 @@ pub fn linear_no_bias(
     let layer = if let Some(quant_conf) = &config {
         match quant_conf {
             QuantizedConfig::GptqAwq { .. } => gptq_linear(in_dim, out_dim, quant_conf, vb)?,
-            QuantizedConfig::Fp8 {
-                weight_block_size, ..
-            } => {
-                if weight_block_size.is_some() {
-                    blockwise_fp8_linear_b(
-                        in_dim,
-                        out_dim,
-                        quant_conf,
-                        false,
-                        Default::default(),
-                        vb,
-                    )?
-                } else {
-                    pertensor_fp8_linear_b(
-                        in_dim,
-                        out_dim,
-                        quant_conf,
-                        false,
-                        Default::default(),
-                        vb,
-                    )?
-                }
-            }
+            QuantizedConfig::Fp8 { .. }
+            | QuantizedConfig::CompressedTensors { .. }
+            | QuantizedConfig::ModelOpt { .. } => fp8_config::checkpoint_linear_b(
+                in_dim,
+                out_dim,
+                quant_conf,
+                false,
+                Default::default(),
+                vb,
+            )?,
             QuantizedConfig::Bitsandbytes { .. } => {
                 Arc::new(BnbLinear::linear_b(in_dim, out_dim, false, vb)?) as Arc<_>
             }
@@ -2694,29 +2903,16 @@ pub fn linear(
     let layer = if let Some(quant_conf) = &config {
         match quant_conf {
             QuantizedConfig::GptqAwq { .. } => gptq_linear(in_dim, out_dim, quant_conf, vb)?,
-            QuantizedConfig::Fp8 {
-                weight_block_size, ..
-            } => {
-                if weight_block_size.is_some() {
-                    blockwise_fp8_linear_b(
-                        in_dim,
-                        out_dim,
-                        quant_conf,
-                        true,
-                        Default::default(),
-                        vb,
-                    )?
-                } else {
-                    pertensor_fp8_linear_b(
-                        in_dim,
-                        out_dim,
-                        quant_conf,
-                        true,
-                        Default::default(),
-                        vb,
-                    )?
-                }
-            }
+            QuantizedConfig::Fp8 { .. }
+            | QuantizedConfig::CompressedTensors { .. }
+            | QuantizedConfig::ModelOpt { .. } => fp8_config::checkpoint_linear_b(
+                in_dim,
+                out_dim,
+                quant_conf,
+                true,
+                Default::default(),
+                vb,
+            )?,
             QuantizedConfig::Bitsandbytes { .. } => {
                 Arc::new(BnbLinear::linear_b(in_dim, out_dim, true, vb)?) as Arc<_>
             }
@@ -2766,7 +2962,7 @@ mod tests {
     use super::*;
 
     #[derive(Debug)]
-    struct SharedActivationProbe;
+    struct SharedActivationProbe(Option<f32>);
 
     impl QuantizedSerde for SharedActivationProbe {
         fn name(&self) -> &'static str {
@@ -2776,7 +2972,7 @@ mod tests {
 
     impl QuantMethod for SharedActivationProbe {
         fn new(_method: QuantMethodConfig) -> Result<Self> {
-            Ok(Self)
+            Ok(Self(None))
         }
 
         fn dequantize_w(&self) -> Result<Tensor> {
@@ -2792,6 +2988,10 @@ mod tests {
                 dtype: DType::F8E4M3,
                 block_shape: [1, 4],
             })
+        }
+
+        fn activation_quantization_global_scale(&self) -> Option<f32> {
+            self.0
         }
 
         fn quantize_activation(&self, _a: &Tensor) -> Result<QuantizedActivation> {
@@ -2827,10 +3027,53 @@ mod tests {
     }
 
     #[test]
+    fn shared_activation_requires_matching_global_calibration() -> Result<()> {
+        let input = Tensor::zeros((2, 4), DType::BF16, &Device::Cpu)?;
+        let first = SharedActivationProbe(Some(0.25));
+        let second = SharedActivationProbe(Some(0.5));
+        assert!(
+            try_forward_with_shared_quantized_activation(&input, &[&first, &second])?.is_none()
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn packed_nvfp4_activation_keeps_logical_shape_and_rejects_wrong_scales() -> Result<()> {
+        const ROWS: usize = 2;
+        let source = Tensor::zeros((ROWS, 1, NVFP4_BLOCK_SIZE), DType::BF16, &Device::Cpu)?;
+        let packed = Tensor::zeros((ROWS, NVFP4_BLOCK_SIZE / 2), DType::U8, &Device::Cpu)?;
+        let scales = Tensor::ones((ROWS, 1), DType::F8E4M3, &Device::Cpu)?;
+        let activation =
+            QuantizedActivation::new_nvfp4(packed.clone(), scales.clone(), &source, 0.25)?;
+        assert_eq!(activation.source_shape(), source.dims());
+        assert_eq!(activation.quantized().dims(), &[ROWS, NVFP4_BLOCK_SIZE / 2]);
+        assert_eq!(activation.global_scale(), Some(0.25));
+        assert!(QuantizedActivation::new_nvfp4(
+            packed.clone(),
+            scales.to_dtype(DType::F32)?,
+            &source,
+            0.25
+        )
+        .is_err());
+        assert!(QuantizedActivation::new_nvfp4(packed, scales, &source, f32::NAN).is_err());
+        Ok(())
+    }
+
+    #[test]
     fn shared_activation_falls_back_for_unsupported_input_dtype() -> Result<()> {
         let input = Tensor::zeros((1, 4), DType::F32, &Device::Cpu)?;
-        let method = SharedActivationProbe;
+        let method = SharedActivationProbe(None);
         assert!(try_forward_with_shared_quantized_activation(&input, &[&method])?.is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn fused_glu_quantization_defaults_to_fallback() -> Result<()> {
+        let input = Tensor::zeros((2, 16), DType::BF16, &Device::Cpu)?;
+        let method = SharedActivationProbe(None);
+        assert!(method
+            .try_quantize_glu(&input, &input, GluActivationType::Relu)?
+            .is_none());
         Ok(())
     }
 
@@ -2838,7 +3081,7 @@ mod tests {
     fn fused_quantized_glu_falls_back_off_cuda() -> Result<()> {
         let gate = Tensor::zeros((3, 4), DType::BF16, &Device::Cpu)?;
         let value = Tensor::ones((3, 4), DType::BF16, &Device::Cpu)?;
-        let method = SharedActivationProbe;
+        let method = SharedActivationProbe(None);
         assert!(try_forward_fused_quantized_glu(
             &gate,
             &value,
@@ -3268,6 +3511,125 @@ mod tests {
         assert_eq!(activation_scheme, None);
         assert_eq!(fmt, None);
         assert!(modules_to_not_convert.is_empty());
+    }
+
+    #[test]
+    fn fp8_config_deserializes_compressed_tensors_and_model_opt() {
+        let compressed: QuantizedConfig = serde_json::from_value(serde_json::json!({
+            "quant_method": "compressed-tensors",
+            "format": "float-quantized",
+            "config_groups": {
+                "group_0": {
+                    "targets": ["Linear"],
+                    "weights": {
+                        "dynamic": false,
+                        "num_bits": 8,
+                        "strategy": "channel",
+                        "symmetric": true,
+                        "type": "float"
+                    },
+                    "input_activations": null
+                }
+            }
+        }))
+        .unwrap();
+        assert!(matches!(
+            &compressed,
+            QuantizedConfig::CompressedTensors { .. }
+        ));
+        assert_eq!(
+            compressed
+                .resolve_fp8("model.layers.0.mlp.up_proj")
+                .unwrap()
+                .unwrap()
+                .activation,
+            Fp8ActivationMode::None
+        );
+        let serialized = serde_json::to_value(&compressed).unwrap();
+        assert_eq!(serialized["quant_method"], "compressed-tensors");
+        assert_eq!(serialized["format"], "float-quantized");
+        assert!(serialized.get("config").is_none());
+        let round_trip: QuantizedConfig = serde_json::from_value(serialized).unwrap();
+        assert_eq!(
+            round_trip
+                .resolve_fp8("model.layers.0.mlp.up_proj")
+                .unwrap(),
+            compressed
+                .resolve_fp8("model.layers.0.mlp.up_proj")
+                .unwrap()
+        );
+
+        let model_opt: QuantizedConfig = serde_json::from_value(serde_json::json!({
+            "quant_method": "modelopt",
+            "quant_algo": "FP8_PER_CHANNEL_PER_TOKEN",
+            "producer": {"name": "modelopt", "version": "test"}
+        }))
+        .unwrap();
+        assert!(matches!(&model_opt, QuantizedConfig::ModelOpt { .. }));
+        assert_eq!(
+            model_opt
+                .resolve_fp8("model.layers.0.mlp.up_proj")
+                .unwrap()
+                .unwrap()
+                .weight_scale,
+            Fp8WeightScaleLayout::Channel
+        );
+        let serialized = serde_json::to_value(&model_opt).unwrap();
+        assert_eq!(serialized["quant_method"], "modelopt");
+        assert_eq!(serialized["producer"]["version"], "test");
+        assert!(serialized.get("config").is_none());
+        let round_trip: QuantizedConfig = serde_json::from_value(serialized).unwrap();
+        assert_eq!(
+            round_trip
+                .resolve_fp8("model.layers.0.mlp.up_proj")
+                .unwrap(),
+            model_opt.resolve_fp8("model.layers.0.mlp.up_proj").unwrap()
+        );
+    }
+
+    #[test]
+    fn native_fp8_merges_exclusion_aliases_and_rejects_other_formats() {
+        let config: QuantizedConfig = serde_json::from_value(serde_json::json!({
+            "quant_method": "fp8",
+            "fmt": "e4m3",
+            "modules_to_not_convert": ["lm_head"],
+            "ignored_layers": ["model.embed_tokens"]
+        }))
+        .unwrap();
+        assert!(config.resolve_fp8("lm_head").unwrap().is_none());
+        assert!(config.resolve_fp8("model.embed_tokens").unwrap().is_none());
+        assert!(
+            serde_json::from_value::<QuantizedConfig>(serde_json::json!({
+                "quant_method": "fp8",
+                "fmt": "e5m2"
+            }))
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn legacy_model_opt_file_can_be_merged_with_embedded_config() {
+        let external = serde_json::json!({
+            "quantization": {
+                "quant_algo": "FP8",
+                "exclude_modules": ["old_head"]
+            }
+        });
+        let embedded = serde_json::json!({
+            "quant_method": "modelopt",
+            "quant_algo": "FP8_PER_CHANNEL_PER_TOKEN",
+            "ignore": ["lm_head"]
+        });
+        let config = QuantizedConfig::from_modelopt_configs(Some(&embedded), &external).unwrap();
+        assert!(config.resolve_fp8("lm_head").unwrap().is_none());
+        assert_eq!(
+            config
+                .resolve_fp8("model.layers.0.self_attn.q_proj")
+                .unwrap()
+                .unwrap()
+                .weight_scale,
+            Fp8WeightScaleLayout::Channel
+        );
     }
 
     #[test]

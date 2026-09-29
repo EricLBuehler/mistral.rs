@@ -3738,6 +3738,16 @@ impl Mlp {
         Self::new(vb, params[0], params[1], &None, act, comm)
     }
 
+    fn forward_gate_up(&self, gate: &Tensor, up: &Tensor) -> Result<Tensor> {
+        if let Some(output) =
+            crate::ops::try_fused_gated_projection(gate, up, self.act, &*self.down)?
+        {
+            return Ok(output);
+        }
+        let inter = crate::ops::mul_and_act(gate, up, self.act)?;
+        self.down.forward(&inter)
+    }
+
     fn forward_packed_gate_up(&self, gate_up: Tensor) -> Result<Tensor> {
         let split_size = gate_up.dim(D::Minus1)? / 2;
         if let Some(output) = crate::ops::try_fused_split_glu_quantized_forward(
@@ -3782,8 +3792,7 @@ impl Mlp {
         }
         let gate = self.gate.forward_quantized(activation)?;
         let up = self.up.forward_quantized(activation)?;
-        let inter = crate::ops::mul_and_act(&gate, &up, self.act)?;
-        self.down.forward(&inter)
+        self.forward_gate_up(&gate, &up)
     }
 
     pub fn forward_with_add_rms_norm(
@@ -3823,8 +3832,7 @@ impl Mlp {
                 let mut gate_up = merged_gate_up.forward(xs)?.into_iter();
                 let gate = gate_up.next().unwrap();
                 let up = gate_up.next().unwrap();
-                let inter = crate::ops::mul_and_act(&gate, &up, self.act)?;
-                self.down.forward(&inter)?
+                self.forward_gate_up(&gate, &up)?
             }
         } else {
             crate::ops::quantized_ffn(xs, &*self.gate, &*self.up, &*self.down, self.act)?

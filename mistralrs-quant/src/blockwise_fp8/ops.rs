@@ -304,11 +304,8 @@ impl CustomOp2 for Fp8BlockwiseDequantize {
 
         let out_shape = weight_l.shape().clone();
 
-        let output = device.new_buffer(
-            out_shape.elem_count(),
-            weight_s.dtype(),
-            "dequant-blockwise-fp8",
-        )?;
+        let output =
+            device.new_buffer(out_shape.elem_count(), self.out_ty, "dequant-blockwise-fp8")?;
 
         let weight_height = weight_l.dim(0)? as u32;
         let weight_block_size_y = self.weight_block_size[0] as u32;
@@ -775,6 +772,232 @@ pub fn fp8_blockwise_quantize(
     {
         candle_core::bail!("FP8 blockwise quantization requires CUDA feature");
     }
+}
+
+#[cfg(all(feature = "cuda", feature = "cutile"))]
+pub(crate) fn fp8_quantize_activation_rowwise(input: &Tensor) -> Result<(Tensor, Tensor)> {
+    use candle_core::{CudaStorage, Device, Shape, Storage};
+    use half::{bf16, f16};
+
+    use crate::utils::{slice_ptr_mut_on_stream, slice_ptr_on_stream};
+
+    if !super::ffi::HAVE_BLOCKWISE_QUANT_KERNELS {
+        candle_core::bail!("FP8 rowwise activation quantization kernels are unavailable")
+    }
+    let Device::Cuda(dev) = input.device() else {
+        candle_core::bail!("FP8 rowwise activation quantization requires CUDA")
+    };
+    let input = input.contiguous()?;
+    let (rows, columns) = input.dims2()?;
+    if rows == 0 || columns == 0 {
+        candle_core::bail!("FP8 rowwise activation quantization requires nonzero dimensions")
+    }
+    let rows_i32 = i32::try_from(rows)
+        .map_err(|_| candle_core::Error::msg("FP8 activation row count exceeds i32"))?;
+    let columns_i32 = i32::try_from(columns)
+        .map_err(|_| candle_core::Error::msg("FP8 activation column count exceeds i32"))?;
+    let row_stride = i32::try_from(input.stride()[0])
+        .map_err(|_| candle_core::Error::msg("FP8 activation row stride exceeds i32"))?;
+    let stream = dev.cuda_stream();
+    let mut quantized = unsafe { dev.alloc::<F8E4M3>(rows * columns)? };
+    let mut scales = unsafe { dev.alloc::<f32>(rows)? };
+    let (quantized_ptr, quantized_guard) = slice_ptr_mut_on_stream(&mut quantized, 0, &stream);
+    let (scales_ptr, scales_guard) = slice_ptr_mut_on_stream(&mut scales, 0, &stream);
+    let (input_storage, input_layout) = input.storage_and_layout();
+    let Storage::Cuda(input_storage) = &*input_storage else {
+        unreachable!()
+    };
+    let status = match input.dtype() {
+        DType::F32 => {
+            let (input_ptr, input_guard) = slice_ptr_on_stream(
+                input_storage.as_cuda_slice::<f32>()?,
+                input_layout.start_offset(),
+                &stream,
+            );
+            let status = unsafe {
+                super::ffi::launch_quant_fp8_rowwise_kernel_f32(
+                    input_ptr as *const f32,
+                    quantized_ptr as *mut F8E4M3,
+                    scales_ptr as *mut f32,
+                    rows_i32,
+                    columns_i32,
+                    row_stride,
+                    stream.cu_stream(),
+                )
+            };
+            drop(input_guard);
+            status
+        }
+        DType::F16 => {
+            let (input_ptr, input_guard) = slice_ptr_on_stream(
+                input_storage.as_cuda_slice::<f16>()?,
+                input_layout.start_offset(),
+                &stream,
+            );
+            let status = unsafe {
+                super::ffi::launch_quant_fp8_rowwise_kernel_f16(
+                    input_ptr as *const f16,
+                    quantized_ptr as *mut F8E4M3,
+                    scales_ptr as *mut f32,
+                    rows_i32,
+                    columns_i32,
+                    row_stride,
+                    stream.cu_stream(),
+                )
+            };
+            drop(input_guard);
+            status
+        }
+        DType::BF16 => {
+            let (input_ptr, input_guard) = slice_ptr_on_stream(
+                input_storage.as_cuda_slice::<bf16>()?,
+                input_layout.start_offset(),
+                &stream,
+            );
+            let status = unsafe {
+                super::ffi::launch_quant_fp8_rowwise_kernel_bf16(
+                    input_ptr as *const bf16,
+                    quantized_ptr as *mut F8E4M3,
+                    scales_ptr as *mut f32,
+                    rows_i32,
+                    columns_i32,
+                    row_stride,
+                    stream.cu_stream(),
+                )
+            };
+            drop(input_guard);
+            status
+        }
+        dtype => candle_core::bail!(
+            "FP8 rowwise activation quantization requires F32, F16, or BF16, got {dtype:?}"
+        ),
+    };
+    if status != 0 {
+        candle_core::bail!(
+            "FP8 rowwise activation quantization launch failed with CUDA error {status}"
+        )
+    }
+    drop((quantized_guard, scales_guard));
+    let quantized = Tensor::from((
+        Storage::Cuda(CudaStorage::wrap_cuda_slice(quantized, dev.clone())),
+        Shape::from_dims(&[rows, columns]),
+    ));
+    let scales = Tensor::from((
+        Storage::Cuda(CudaStorage::wrap_cuda_slice(scales, dev.clone())),
+        Shape::from_dims(&[rows]),
+    ));
+    Ok((quantized, scales))
+}
+
+#[cfg(all(feature = "cuda", feature = "cutile"))]
+pub(crate) fn fp8_quantize_activation_static(input: &Tensor, scale: &Tensor) -> Result<Tensor> {
+    use candle_core::{CudaStorage, Device, Storage};
+    use half::{bf16, f16};
+
+    use crate::utils::{slice_ptr_mut_on_stream, slice_ptr_on_stream};
+
+    if !super::ffi::HAVE_BLOCKWISE_QUANT_KERNELS {
+        candle_core::bail!("FP8 static activation quantization kernels are unavailable")
+    }
+    let Device::Cuda(dev) = input.device() else {
+        candle_core::bail!("FP8 static activation quantization requires CUDA")
+    };
+    if scale.dtype() != DType::F32 || scale.elem_count() != 1 {
+        candle_core::bail!("FP8 static activation quantization requires one F32 scale")
+    }
+    if !input.device().same_device(scale.device()) {
+        candle_core::bail!("FP8 static activation and scale must be on the same device")
+    }
+    let input = input.contiguous()?;
+    let scale = scale.reshape(())?.contiguous()?;
+    let elements = input.elem_count();
+    if elements == 0 {
+        candle_core::bail!("FP8 static activation quantization requires a nonempty tensor")
+    }
+    let stream = dev.cuda_stream();
+    let mut quantized = unsafe { dev.alloc::<F8E4M3>(elements)? };
+    let (quantized_ptr, quantized_guard) = slice_ptr_mut_on_stream(&mut quantized, 0, &stream);
+    let (input_storage, input_layout) = input.storage_and_layout();
+    let (scale_storage, scale_layout) = scale.storage_and_layout();
+    let (Storage::Cuda(input_storage), Storage::Cuda(scale_storage)) =
+        (&*input_storage, &*scale_storage)
+    else {
+        unreachable!()
+    };
+    let (scale_ptr, scale_guard) = slice_ptr_on_stream(
+        scale_storage.as_cuda_slice::<f32>()?,
+        scale_layout.start_offset(),
+        &stream,
+    );
+    let status = match input.dtype() {
+        DType::F32 => {
+            let (input_ptr, input_guard) = slice_ptr_on_stream(
+                input_storage.as_cuda_slice::<f32>()?,
+                input_layout.start_offset(),
+                &stream,
+            );
+            let status = unsafe {
+                super::ffi::launch_quant_fp8_static_kernel_f32(
+                    input_ptr as *const f32,
+                    scale_ptr as *const f32,
+                    quantized_ptr as *mut F8E4M3,
+                    elements,
+                    stream.cu_stream(),
+                )
+            };
+            drop(input_guard);
+            status
+        }
+        DType::F16 => {
+            let (input_ptr, input_guard) = slice_ptr_on_stream(
+                input_storage.as_cuda_slice::<f16>()?,
+                input_layout.start_offset(),
+                &stream,
+            );
+            let status = unsafe {
+                super::ffi::launch_quant_fp8_static_kernel_f16(
+                    input_ptr as *const f16,
+                    scale_ptr as *const f32,
+                    quantized_ptr as *mut F8E4M3,
+                    elements,
+                    stream.cu_stream(),
+                )
+            };
+            drop(input_guard);
+            status
+        }
+        DType::BF16 => {
+            let (input_ptr, input_guard) = slice_ptr_on_stream(
+                input_storage.as_cuda_slice::<bf16>()?,
+                input_layout.start_offset(),
+                &stream,
+            );
+            let status = unsafe {
+                super::ffi::launch_quant_fp8_static_kernel_bf16(
+                    input_ptr as *const bf16,
+                    scale_ptr as *const f32,
+                    quantized_ptr as *mut F8E4M3,
+                    elements,
+                    stream.cu_stream(),
+                )
+            };
+            drop(input_guard);
+            status
+        }
+        dtype => candle_core::bail!(
+            "FP8 static activation quantization requires F32, F16, or BF16, got {dtype:?}"
+        ),
+    };
+    if status != 0 {
+        candle_core::bail!(
+            "FP8 static activation quantization launch failed with CUDA error {status}"
+        )
+    }
+    drop((scale_guard, quantized_guard));
+    Ok(Tensor::from((
+        Storage::Cuda(CudaStorage::wrap_cuda_slice(quantized, dev.clone())),
+        input.shape().clone(),
+    )))
 }
 
 /// FP8 blockwise matmul.

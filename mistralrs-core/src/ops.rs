@@ -5733,8 +5733,16 @@ pub(crate) fn try_cuda_qk_rms_norm_rope_positions(
     let dev = q_storage.device();
     let stream = dev.cuda_stream();
     let stream_ptr = stream.cu_stream() as i64;
-    let q_shape = Shape::from_dims(&[batch, q_heads, seq_len, head_dim]);
-    let k_shape = Shape::from_dims(&[batch, k_heads, seq_len, head_dim]);
+    let output_token_major = q.stride()[1] == head_dim && q.stride()[3] == 1;
+    let output_shape = |heads| {
+        Shape::from_dims(&if output_token_major {
+            [batch, seq_len, heads, head_dim]
+        } else {
+            [batch, heads, seq_len, head_dim]
+        })
+    };
+    let q_shape = output_shape(q_heads);
+    let k_shape = output_shape(k_heads);
     let q_elem_count = q.elem_count();
 
     let q_stride = q_layout.stride();
@@ -5853,6 +5861,7 @@ pub(crate) fn try_cuda_qk_rms_norm_rope_positions(
                     k_eps,
                     i32::from(is_neox),
                     $dtype_id,
+                    i32::from(output_token_major),
                     stream_ptr,
                 );
             }
@@ -5886,6 +5895,14 @@ pub(crate) fn try_cuda_qk_rms_norm_rope_positions(
                 None
             };
 
+            let (q_tensor, k_tensor) = if output_token_major {
+                (
+                    q_tensor.transpose(1, 2)?,
+                    k_tensor.map(|tensor| tensor.transpose(1, 2)).transpose()?,
+                )
+            } else {
+                (q_tensor, k_tensor)
+            };
             Ok(Some((q_tensor, k_tensor)))
         }};
     }
@@ -6705,6 +6722,9 @@ pub(crate) fn quantized_ffn(
 
     let lhs = gate.forward(xs)?;
     let rhs = up.forward(xs)?;
+    if let Some(output) = try_fused_gated_projection(&lhs, &rhs, act, down)? {
+        return Ok(output);
+    }
     let inter = mul_and_act(&lhs, &rhs, act)?;
     down.forward(&inter)
 }
@@ -7129,6 +7149,177 @@ mod tests {
             )
         {
             assert!((actual - expected).abs() <= CUDA_BF16_ABS_TOLERANCE);
+        }
+        Ok(())
+    }
+
+    #[cfg(feature = "cuda")]
+    #[test]
+    fn cuda_qk_norm_rope_positions_preserves_projection_layout() -> candle_core::Result<()> {
+        const BATCH: usize = 2;
+        const SEQ_LEN: usize = 3;
+        const Q_HEADS: usize = 3;
+        const K_HEADS: usize = 2;
+        const HEAD_DIM: usize = 64;
+        const PADDING_HEADS: usize = 1;
+        const CACHE_ROWS: usize = 11;
+        const EPS: f32 = 1e-6;
+        const BF16_TOLERANCE: f32 = 0.008;
+        const F16_TOLERANCE: f32 = 0.001;
+        const F32_TOLERANCE: f32 = 1e-5;
+        const POSITIONS: [u32; BATCH * SEQ_LEN] = [9, 2, 7, 1, 10, 4];
+
+        let device = Device::new_cuda(0)?;
+        let packed_heads = PADDING_HEADS + Q_HEADS + K_HEADS;
+        let width = packed_heads * HEAD_DIM;
+        let raw = (0..BATCH * SEQ_LEN * width)
+            .map(|index| ((index * 29 + index / 7) % 277) as f32 / 71.0 - 1.7)
+            .collect::<Vec<_>>();
+        for dtype in [DType::BF16, DType::F16, DType::F32] {
+            let packed = Tensor::from_vec(
+                raw.clone(),
+                (BATCH, SEQ_LEN, packed_heads, HEAD_DIM),
+                &device,
+            )?
+            .to_dtype(dtype)?;
+            let q = packed.narrow(2, PADDING_HEADS, Q_HEADS)?.transpose(1, 2)?;
+            let k = packed
+                .narrow(2, PADDING_HEADS + Q_HEADS, K_HEADS)?
+                .transpose(1, 2)?;
+            for projection in [&q, &k] {
+                assert!(projection.storage_and_layout().1.start_offset() > 0);
+                assert_eq!(projection.stride()[2], width);
+            }
+            let weight = Tensor::from_vec(
+                (0..HEAD_DIM)
+                    .map(|index| 0.7 + index as f32 / 211.0)
+                    .collect::<Vec<_>>(),
+                HEAD_DIM,
+                &device,
+            )?
+            .to_dtype(dtype)?;
+            let positions = Tensor::new(POSITIONS.as_slice(), &device)?;
+            for rot_dim in [HEAD_DIM / 4, HEAD_DIM / 2] {
+                let angles = Tensor::from_vec(
+                    (0..CACHE_ROWS * rot_dim)
+                        .map(|index| index as f32 * 0.023)
+                        .collect::<Vec<_>>(),
+                    (CACHE_ROWS, rot_dim),
+                    &device,
+                )?;
+                let cos = angles.cos()?.to_dtype(dtype)?;
+                let sin = angles.sin()?.to_dtype(dtype)?;
+                let values = |tensor: &Tensor| -> candle_core::Result<Vec<f32>> {
+                    tensor
+                        .to_device(&Device::Cpu)?
+                        .to_dtype(DType::F32)?
+                        .flatten_all()?
+                        .to_vec1()
+                };
+                let weights = values(&weight)?;
+                let cos_values = values(&cos)?;
+                let sin_values = values(&sin)?;
+                for is_neox in [false, true] {
+                    let reference = |input: &Tensor| -> candle_core::Result<Vec<f32>> {
+                        let input_values = values(input)?;
+                        let heads = input.dim(1)?;
+                        let mut expected = vec![0f32; input_values.len()];
+                        for batch in 0..BATCH {
+                            for head in 0..heads {
+                                for seq in 0..SEQ_LEN {
+                                    let row = ((batch * heads + head) * SEQ_LEN + seq) * HEAD_DIM;
+                                    let squares = input_values[row..row + HEAD_DIM]
+                                        .iter()
+                                        .map(|x| f64::from(*x).powi(2))
+                                        .sum::<f64>();
+                                    let inv_rms =
+                                        (squares / HEAD_DIM as f64 + f64::from(EPS)).sqrt().recip();
+                                    let normalized = (0..HEAD_DIM)
+                                        .map(|col| {
+                                            f64::from(input_values[row + col])
+                                                * inv_rms
+                                                * f64::from(weights[col])
+                                        })
+                                        .collect::<Vec<_>>();
+                                    for col in 0..HEAD_DIM {
+                                        expected[row + col] = normalized[col] as f32;
+                                    }
+                                    let cache_row =
+                                        POSITIONS[batch * SEQ_LEN + seq] as usize * rot_dim;
+                                    for col in 0..rot_dim {
+                                        let (left, right) = if is_neox {
+                                            (col, col + rot_dim)
+                                        } else {
+                                            (2 * col, 2 * col + 1)
+                                        };
+                                        let c = f64::from(cos_values[cache_row + col]);
+                                        let s = f64::from(sin_values[cache_row + col]);
+                                        expected[row + left] =
+                                            (normalized[left] * c - normalized[right] * s) as f32;
+                                        expected[row + right] =
+                                            (normalized[right] * c + normalized[left] * s) as f32;
+                                    }
+                                }
+                            }
+                        }
+                        values(
+                            &Tensor::from_vec(expected, input.shape(), &Device::Cpu)?
+                                .to_dtype(dtype)?,
+                        )
+                    };
+                    let expected_q = reference(&q)?;
+                    let expected_k = reference(&k)?;
+                    for token_major in [false, true] {
+                        let q = if token_major {
+                            q.clone()
+                        } else {
+                            q.contiguous()?
+                        };
+                        let k = if token_major {
+                            k.clone()
+                        } else {
+                            k.contiguous()?
+                        };
+                        for with_k in [false, true] {
+                            let (actual_q, actual_k) = super::try_cuda_qk_rms_norm_rope_positions(
+                                &q,
+                                with_k.then_some(&k),
+                                &weight,
+                                with_k.then_some(&weight),
+                                EPS,
+                                EPS,
+                                &cos,
+                                &sin,
+                                &positions,
+                                is_neox,
+                            )?
+                            .expect("supported CUDA Q/K normalization and RoPE");
+                            assert_eq!(actual_q.shape(), q.shape());
+                            assert_eq!(actual_k.is_some(), with_k);
+                            let outputs = std::iter::once((&actual_q, &expected_q))
+                                .chain(actual_k.as_ref().map(|tensor| (tensor, &expected_k)));
+                            for (actual, expected) in outputs {
+                                if token_major {
+                                    assert!(actual.transpose(1, 2)?.is_contiguous());
+                                } else {
+                                    assert!(actual.is_contiguous());
+                                }
+                                let tolerance = match dtype {
+                                    DType::BF16 => BF16_TOLERANCE,
+                                    DType::F16 => F16_TOLERANCE,
+                                    _ => F32_TOLERANCE,
+                                };
+                                for (index, (actual, expected)) in
+                                    values(actual)?.into_iter().zip(expected).enumerate()
+                                {
+                                    assert!((actual - expected).abs() <= tolerance * expected.abs().max(1.0),
+                                        "{dtype:?} token_major={token_major} neox={is_neox} with_k={with_k} output[{index}]={actual}, expected={expected}");
+                                }
+                            }
+                        }
+                    }
+                }
+            }
         }
         Ok(())
     }

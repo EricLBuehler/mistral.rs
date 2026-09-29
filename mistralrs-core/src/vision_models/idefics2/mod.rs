@@ -4,7 +4,7 @@ pub(crate) mod idefics2_input_processor;
 
 use candle_core::{DType, Device, IndexOp, Result, Tensor, D};
 use candle_nn::{Conv2d, Conv2dConfig, Embedding, LayerNorm, Module};
-use mistralrs_quant::{Convolution, ShardedVarBuilder};
+use mistralrs_quant::{Convolution, QuantizedConfig, ShardedVarBuilder};
 use serde::Deserialize;
 use std::{
     any::Any,
@@ -157,7 +157,7 @@ pub struct VisionConfig {
     pub initializer_range: f32,
 }
 
-#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub(crate) struct TextConfig {
     #[serde(default = "default_32000")]
     pub(crate) vocab_size: usize,
@@ -181,8 +181,10 @@ pub(crate) struct TextConfig {
     pub(crate) rope_theta: f64,
     #[serde(default = "default_sliding")]
     pub(crate) sliding_window: Option<usize>,
+    pub(crate) quantization_config: Option<QuantizedConfig>,
 
-    model_type: String, // Must be mistral for now
+    #[serde(rename = "model_type")]
+    _model_type: String, // Must be mistral for now
 }
 
 impl From<TextConfig> for mistral::Config {
@@ -201,13 +203,49 @@ impl From<TextConfig> for mistral::Config {
             rope_parameters: None,
             sliding_window: val.sliding_window,
             head_dim: None,
-            quantization_config: None,
+            quantization_config: val.quantization_config,
             tie_word_embeddings: false,
         }
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[cfg(test)]
+mod quantization_config_tests {
+    use super::*;
+
+    #[test]
+    fn text_quantization_config_reaches_mistral_config() {
+        let text_config: TextConfig = serde_json::from_value(serde_json::json!({
+            "model_type": "mistral",
+            "quantization_config": {
+                "quant_method": "compressed-tensors",
+                "format": "float-quantized",
+                "config_groups": {
+                    "group_0": {
+                        "targets": ["Linear"],
+                        "weights": {
+                            "dynamic": false,
+                            "num_bits": 8,
+                            "strategy": "channel",
+                            "symmetric": true,
+                            "type": "float"
+                        },
+                        "input_activations": null
+                    }
+                }
+            }
+        }))
+        .unwrap();
+        let config: mistral::Config = text_config.into();
+
+        assert!(matches!(
+            config.quantization_config,
+            Some(QuantizedConfig::CompressedTensors { .. })
+        ));
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
 pub(crate) struct Config {
     pub perceiver_config: PerceiverConfig,
     pub vision_config: VisionConfig,

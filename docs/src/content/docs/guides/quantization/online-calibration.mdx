@@ -47,7 +47,8 @@ curl -X POST localhost:1234/calibration/apply \
 
 `status` reports how many layers are collecting and the token rows seen per layer. `apply`
 harvests the statistics, requantizes, and returns the pre-apply status. The optional
-`save_cimatrix` writes the collected importance matrix for reuse with `--imatrix`.
+`save_cimatrix` writes the collected importance matrix for reuse with `--imatrix`. Over HTTP it
+must be a bare file name and is written to the server's working directory.
 
 </TabItem>
 <TabItem label="Rust">

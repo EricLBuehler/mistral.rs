@@ -1,5 +1,6 @@
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
+use std::path::{Path, PathBuf};
 use tokio::sync::RwLock;
 
 use mistralrs::{ModelGenerationDefaults, SearchEmbeddingModel};
@@ -154,6 +155,28 @@ pub struct AppState {
     pub tool_dispatch_url: Option<String>,
 }
 
+const CHAT_FILE_EXT: &str = "json";
+const CHAT_SESSION_FILE_EXT: &str = "session.json";
+
+impl AppState {
+    pub fn chat_path(&self, chat_id: &str) -> Option<PathBuf> {
+        chat_file_path(&self.chats_dir, chat_id, CHAT_FILE_EXT)
+    }
+
+    pub fn chat_session_path(&self, chat_id: &str) -> Option<PathBuf> {
+        chat_file_path(&self.chats_dir, chat_id, CHAT_SESSION_FILE_EXT)
+    }
+}
+
+// ids are server-generated (`chat_<n>`), so anything else is a client trying to leave chats_dir
+fn chat_file_path(chats_dir: &str, chat_id: &str, ext: &str) -> Option<PathBuf> {
+    let valid = !chat_id.is_empty()
+        && chat_id
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-');
+    valid.then(|| Path::new(chats_dir).join(format!("{chat_id}.{ext}")))
+}
+
 // Request/Response types
 #[derive(Deserialize)]
 pub struct SelectRequest {
@@ -183,7 +206,28 @@ pub struct RenameChatRequest {
 
 #[cfg(test)]
 mod tests {
-    use super::{GenerationParams, ModelGenerationDefaults};
+    use super::{chat_file_path, GenerationParams, ModelGenerationDefaults};
+
+    #[test]
+    fn chat_paths_stay_inside_chats_dir() {
+        assert_eq!(
+            chat_file_path("/c", "chat_12", "json"),
+            Some(std::path::Path::new("/c").join("chat_12.json"))
+        );
+        for id in [
+            "",
+            "..",
+            "../x",
+            "../../home/u/.config/app",
+            "/etc/passwd",
+            "a/b",
+            "a\\b",
+            "chat_1.session",
+            "chat 1",
+        ] {
+            assert_eq!(chat_file_path("/c", id, "json"), None, "{id:?}");
+        }
+    }
 
     #[test]
     fn do_sample_false_overrides_sampling_defaults() {

@@ -23,6 +23,8 @@ use crate::ui::types::{
 };
 use crate::ui::utils::get_cache_dir;
 
+const INVALID_CHAT_ID: &str = "Invalid chat id";
+
 fn validate_image_upload(
     filename: Option<&str>,
     content_type: Option<&str>,
@@ -446,7 +448,9 @@ pub async fn new_chat(
         tail: None,
     };
 
-    let path = format!("{}/{}.json", app.chats_dir, chat_id);
+    let path = app
+        .chat_path(&chat_id)
+        .expect("server-generated chat ids are valid");
     if let Err(e) = fs::write(&path, serde_json::to_vec_pretty(&chat).unwrap()).await {
         error!("write chat error: {}", e);
         return (StatusCode::INTERNAL_SERVER_ERROR, "write failed").into_response();
@@ -461,8 +465,10 @@ pub async fn delete_chat(
     Extension(app): Extension<Arc<AppState>>,
     Json(req): Json<DeleteChatRequest>,
 ) -> impl IntoResponse {
-    let path = format!("{}/{}.json", app.chats_dir, req.id);
-    let session_path = format!("{}/{}.session.json", app.chats_dir, req.id);
+    let (Some(path), Some(session_path)) = (app.chat_path(&req.id), app.chat_session_path(&req.id))
+    else {
+        return (StatusCode::BAD_REQUEST, INVALID_CHAT_ID).into_response();
+    };
     // Best-effort delete the session sidecar; ignore errors (it may not exist)
     let _ = fs::remove_file(&session_path).await;
     match fs::remove_file(&path).await {
@@ -475,7 +481,9 @@ pub async fn load_chat(
     Extension(app): Extension<Arc<AppState>>,
     Json(req): Json<LoadChatRequest>,
 ) -> impl IntoResponse {
-    let path = format!("{}/{}.json", app.chats_dir, req.id);
+    let Some(path) = app.chat_path(&req.id) else {
+        return (StatusCode::BAD_REQUEST, INVALID_CHAT_ID).into_response();
+    };
     if let Ok(bytes) = fs::read(&path).await {
         if let Ok(chat) = serde_json::from_slice::<ChatFile>(&bytes) {
             let mut cur = app.current_chat.write().await;
@@ -490,7 +498,9 @@ pub async fn rename_chat(
     Extension(app): Extension<Arc<AppState>>,
     Json(req): Json<RenameChatRequest>,
 ) -> impl IntoResponse {
-    let path = format!("{}/{}.json", app.chats_dir, req.id);
+    let Some(path) = app.chat_path(&req.id) else {
+        return (StatusCode::BAD_REQUEST, INVALID_CHAT_ID).into_response();
+    };
     if let Ok(bytes) = fs::read(&path).await {
         if let Ok(mut chat) = serde_json::from_slice::<ChatFile>(&bytes) {
             chat.title = Some(req.title);
@@ -756,7 +766,12 @@ pub async fn save_chat_session(
     };
 
     // Write session blob to sidecar file
-    let session_path = format!("{}/{}.session.json", app.chats_dir, req.chat_id);
+    let (Some(session_path), Some(chat_path)) = (
+        app.chat_session_path(&req.chat_id),
+        app.chat_path(&req.chat_id),
+    ) else {
+        return (StatusCode::BAD_REQUEST, INVALID_CHAT_ID).into_response();
+    };
     let session_bytes = match serde_json::to_vec(&session) {
         Ok(b) => b,
         Err(e) => {
@@ -770,7 +785,6 @@ pub async fn save_chat_session(
     }
 
     // Stamp session_id into the chat JSON for fast lookup
-    let chat_path = format!("{}/{}.json", app.chats_dir, req.chat_id);
     if let Ok(bytes) = fs::read(&chat_path).await {
         if let Ok(mut chat) = serde_json::from_slice::<ChatFile>(&bytes) {
             chat.session_id = Some(req.session_id);
@@ -791,7 +805,12 @@ pub async fn restore_chat_session(
     Extension(app): Extension<Arc<AppState>>,
     Json(req): Json<RestoreChatSessionRequest>,
 ) -> impl IntoResponse {
-    let chat_path = format!("{}/{}.json", app.chats_dir, req.chat_id);
+    let (Some(chat_path), Some(session_path)) = (
+        app.chat_path(&req.chat_id),
+        app.chat_session_path(&req.chat_id),
+    ) else {
+        return (StatusCode::BAD_REQUEST, INVALID_CHAT_ID).into_response();
+    };
     let session_id = match fs::read(&chat_path).await {
         Ok(bytes) => match serde_json::from_slice::<ChatFile>(&bytes) {
             Ok(chat) => chat.session_id,
@@ -804,7 +823,6 @@ pub async fn restore_chat_session(
         return Json(json!({ "session_id": serde_json::Value::Null })).into_response();
     };
 
-    let session_path = format!("{}/{}.session.json", app.chats_dir, req.chat_id);
     let bytes = match fs::read(&session_path).await {
         Ok(b) => b,
         Err(_) => {

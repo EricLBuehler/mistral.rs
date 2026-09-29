@@ -11,11 +11,14 @@ use serde_json::{json, Value};
 use std::env::consts::{ARCH, FAMILY, OS};
 use tokenizers::Tokenizer;
 
+use crate::remote_fetch::{fetch_limited, FetchOptions, NetworkPolicy};
 use crate::{Function, Tool, ToolType, WebSearchOptions, WebSearchUserLocation};
 
 const SEARCH_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 const SEARCH_REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 const MAX_SEARCH_RESULTS: usize = 10;
+const MAX_FETCHED_PAGE_BYTES: usize = 8 * 1024 * 1024;
+const MAX_FETCH_REDIRECTS: usize = 5;
 
 /// Callback used to override how search results are gathered. The returned
 /// vector must be sorted in decreasing order of relevance.
@@ -239,6 +242,19 @@ fn build_client() -> Result<reqwest::Client> {
         .build()?)
 }
 
+// pages are chosen by the model (and so by the request), so they get the same egress guard as media URLs
+async fn fetch_page_text(url: &str, user_agent: &str) -> Result<Option<String>> {
+    let options = FetchOptions {
+        max_bytes: MAX_FETCHED_PAGE_BYTES,
+        timeout: SEARCH_REQUEST_TIMEOUT,
+        max_redirects: MAX_FETCH_REDIRECTS,
+        user_agent: Some(user_agent),
+    };
+    let fetched =
+        fetch_limited(url.parse()?, options, NetworkPolicy::PublicOnly, "web page").await?;
+    Ok(html_to_text(&String::from_utf8_lossy(&fetched.bytes)))
+}
+
 fn html_to_text(html: &str) -> Option<String> {
     config::with_decorator(PlainDecorator::new())
         .do_decorate()
@@ -254,13 +270,9 @@ pub async fn run_search_tool(params: &SearchFunctionParameters) -> Result<Vec<Se
     // rather than searching DuckDuckGo (which returns 0 results for raw URLs).
     let trimmed = params.query.trim().trim_matches('"');
     if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
-        let response = client
-            .get(trimmed)
-            .header("User-Agent", &user_agent)
-            .send()
-            .await?;
-        let html = response.text().await?;
-        let content = html_to_text(&html).unwrap_or_default();
+        let content = fetch_page_text(trimmed, &user_agent)
+            .await?
+            .unwrap_or_default();
         return Ok(vec![SearchResult {
             title: trimmed.to_string(),
             description: String::new(),
@@ -333,17 +345,9 @@ pub async fn run_search_tool(params: &SearchFunctionParameters) -> Result<Vec<Se
     // Fetch all pages concurrently with async I/O (not Rayon thread pool rounds).
     let t1 = std::time::Instant::now();
     let fetches = partials.into_iter().map(|(title, description, url)| {
-        let client = client.clone();
         let user_agent = user_agent.clone();
         async move {
-            let resp = client
-                .get(&url)
-                .header("User-Agent", &user_agent)
-                .send()
-                .await
-                .ok()?;
-            let html = resp.text().await.ok()?;
-            let content = html_to_text(&html)?;
+            let content = fetch_page_text(&url, &user_agent).await.ok()??;
             Some(SearchResult {
                 title,
                 description,
@@ -367,24 +371,40 @@ pub async fn run_search_tool(params: &SearchFunctionParameters) -> Result<Vec<Se
 }
 
 pub async fn run_extract_tool(params: &ExtractFunctionParameters) -> Result<ExtractResult> {
-    let client = build_client()?;
     let user_agent = format!("mistralrs/{APP_VERSION} ({OS}; {ARCH}; {FAMILY})");
-
-    let content = match client
-        .get(&params.url)
-        .header("User-Agent", &user_agent)
-        .send()
+    let content = fetch_page_text(&params.url, &user_agent)
         .await
-    {
-        Ok(response) => response
-            .text()
-            .await
-            .ok()
-            .and_then(|html| html_to_text(&html)),
-        Err(_) => None,
-    };
+        .ok()
+        .flatten();
     Ok(ExtractResult {
         url: params.url.clone(),
         content: content.unwrap_or("ERROR: failed to extract content".to_string()),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const INTERNAL_URLS: &[&str] = &[
+        "http://127.0.0.1:8080/admin",
+        "http://169.254.169.254/latest/meta-data/",
+        "http://[::1]/",
+        "http://localhost/",
+    ];
+
+    #[tokio::test]
+    async fn search_tools_refuse_internal_urls() {
+        for url in INTERNAL_URLS {
+            let search = SearchFunctionParameters {
+                query: url.to_string(),
+            };
+            assert!(run_search_tool(&search).await.is_err(), "{url}");
+            let extract = ExtractFunctionParameters {
+                url: url.to_string(),
+            };
+            let result = run_extract_tool(&extract).await.unwrap();
+            assert!(result.content.starts_with("ERROR"), "{url}");
+        }
+    }
 }

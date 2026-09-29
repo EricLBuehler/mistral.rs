@@ -1,3 +1,4 @@
+use mistralrs_quant::QuantizedConfig;
 use serde::Deserialize;
 
 use crate::layers::{Activation, Llama3RopeConfig};
@@ -40,6 +41,7 @@ pub struct LLaVATextConfig {
     pub vocab_size: usize,
     pub sliding_window: Option<usize>,
     pub rope_scaling: Option<Llama3RopeConfig>,
+    pub quantization_config: Option<QuantizedConfig>,
 }
 
 serde_default_fn!(usize, default_num_hidden_layers, 32);
@@ -74,7 +76,7 @@ impl Config {
             rope_theta: self.text_config.rope_theta,
             max_position_embeddings: self.text_config.max_position_embeddings,
             rope_scaling: self.text_config.rope_scaling.clone(),
-            quantization_config: None,
+            quantization_config: self.text_config.quantization_config.clone(),
             tie_word_embeddings: false,
             hidden_act: Activation::Silu,
         }
@@ -95,7 +97,7 @@ impl Config {
             rope_parameters: None,
             sliding_window: self.text_config.sliding_window,
             head_dim: None,
-            quantization_config: None,
+            quantization_config: self.text_config.quantization_config.clone(),
             tie_word_embeddings: false,
         }
     }
@@ -111,5 +113,63 @@ impl Config {
             patch_size: self.vision_config.patch_size,
             hidden_act: ClipActivation::QuickGelu,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn text_quantization_config_reaches_llm_configs() {
+        let text_config: LLaVATextConfig = serde_json::from_value(serde_json::json!({
+            "max_position_embeddings": 4096,
+            "model_type": "llama",
+            "rms_norm_eps": 1e-5,
+            "sliding_window": null,
+            "rope_scaling": null,
+            "quantization_config": {
+                "quant_method": "compressed-tensors",
+                "format": "float-quantized",
+                "config_groups": {
+                    "group_0": {
+                        "targets": ["Linear"],
+                        "weights": {
+                            "dynamic": false,
+                            "num_bits": 8,
+                            "strategy": "channel",
+                            "symmetric": true,
+                            "type": "float"
+                        },
+                        "input_activations": null
+                    }
+                }
+            }
+        }))
+        .unwrap();
+        let config = Config {
+            image_grid_pinpoints: None,
+            projector_hidden_act: "gelu".to_string(),
+            text_config,
+            vision_config: LLaVAVisionConfig {
+                hidden_size: 1024,
+                image_size: 336,
+                intermediate_size: 4096,
+                num_attention_heads: 16,
+                num_hidden_layers: 24,
+                patch_size: 14,
+            },
+            vision_feature_layer: -2,
+            vision_feature_select_strategy: "default".to_string(),
+        };
+
+        assert!(matches!(
+            config.to_llama_config().quantization_config,
+            Some(QuantizedConfig::CompressedTensors { .. })
+        ));
+        assert!(matches!(
+            config.to_mistral_config().quantization_config,
+            Some(QuantizedConfig::CompressedTensors { .. })
+        ));
     }
 }

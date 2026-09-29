@@ -2655,41 +2655,42 @@ struct DenseLastDimLayout {
     row_stride: usize,
 }
 
+// size-1 dims can carry any stride (candle's `is_contiguous` ignores them), so skip them here too
 #[cfg(feature = "cuda")]
 fn dense_last_dim_layout(layout: &Layout) -> Option<DenseLastDimLayout> {
     let dims = layout.dims();
-    if dims.is_empty() {
+    let strides = layout.stride();
+    let Some((&cols, leading)) = dims.split_last() else {
         return Some(DenseLastDimLayout {
             rows: 1,
             cols: 1,
             row_stride: 1,
         });
-    }
-    let cols = *dims.last()?;
-    let strides = layout.stride();
-    if *strides.last()? != 1 {
+    };
+    if cols > 1 && strides[leading.len()] != 1 {
         return None;
     }
-    let rows = dims[..dims.len() - 1]
+    let rows = leading
         .iter()
         .try_fold(1usize, |rows, &dim| rows.checked_mul(dim))?;
-    let row_stride = if dims.len() == 1 {
-        cols
-    } else {
-        strides[strides.len() - 2]
-    };
-    if row_stride < cols {
-        return None;
-    }
-    for index in 0..dims.len().saturating_sub(2) {
-        if strides[index] != dims[index + 1].checked_mul(strides[index + 1])? {
-            return None;
+    let mut row_stride = None;
+    let mut expected_stride = None;
+    for (&dim, &stride) in leading.iter().zip(&strides[..leading.len()]).rev() {
+        if dim == 1 {
+            continue;
         }
+        match expected_stride {
+            None if stride < cols => return None,
+            None => row_stride = Some(stride),
+            Some(expected) if stride != expected => return None,
+            Some(_) => {}
+        }
+        expected_stride = Some(dim.checked_mul(stride)?);
     }
     Some(DenseLastDimLayout {
         rows,
         cols,
-        row_stride,
+        row_stride: row_stride.unwrap_or(cols),
     })
 }
 
@@ -4866,5 +4867,39 @@ mod tests {
             max_diff <= 0.015625,
             "CUDA BF16 Gelu fused vs candle fallback max_diff {max_diff} exceeds 1 BF16 ULP"
         );
+    }
+}
+
+#[cfg(all(test, feature = "cuda"))]
+mod dense_last_dim_layout_tests {
+    use super::dense_last_dim_layout;
+    use candle_core::{Layout, Shape};
+
+    fn layout(dims: &[usize], stride: &[usize]) -> Option<(usize, usize, usize)> {
+        dense_last_dim_layout(&Layout::new(Shape::from(dims), stride.to_vec(), 0))
+            .map(|l| (l.rows, l.cols, l.row_stride))
+    }
+
+    #[test]
+    fn size_one_dims_ignore_their_strides() {
+        assert_eq!(layout(&[1, 1, 8], &[8, 8, 1]), Some((1, 8, 8)));
+        assert_eq!(layout(&[1, 1, 8], &[1, 1, 1]), Some((1, 8, 8)));
+        assert_eq!(layout(&[2, 1, 8], &[8, 1, 1]), Some((2, 8, 8)));
+        assert_eq!(layout(&[1, 3, 8], &[0, 16, 1]), Some((3, 8, 16)));
+    }
+
+    #[test]
+    fn strided_and_dense_rows() {
+        assert_eq!(layout(&[4, 8], &[8, 1]), Some((4, 8, 8)));
+        assert_eq!(layout(&[4, 8], &[16, 1]), Some((4, 8, 16)));
+        assert_eq!(layout(&[2, 3, 8], &[48, 16, 1]), Some((6, 8, 16)));
+        assert_eq!(layout(&[8], &[1]), Some((1, 8, 8)));
+    }
+
+    #[test]
+    fn rejects_non_row_dense() {
+        assert_eq!(layout(&[4, 8], &[1, 4]), None);
+        assert_eq!(layout(&[4, 8], &[4, 1]), None);
+        assert_eq!(layout(&[2, 3, 8], &[64, 16, 1]), None);
     }
 }

@@ -42,7 +42,7 @@ hf-hub.workspace = true
 tokio.workspace = true
 futures.workspace = true
 sysinfo.workspace = true
-cutile = { workspace = true, optional = true }
+cutile = { workspace = true, optional = true, features = ["experimental-tune"] }
 mistralrs-metal-compile = { workspace = true, optional = true, features = ["metal"] }
 
 [features]
@@ -94,3 +94,7 @@ mistralrs-metal-compile = { workspace = true, optional = true }
 
 [dev-dependencies]
 tempfile.workspace = true
+
+[[example]]
+name = "nvfp4_bench"
+required-features = ["cuda", "cutile"]

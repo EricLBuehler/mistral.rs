@@ -14,6 +14,7 @@ use crate::{
     prefix_cacher::PrefixCacheManagerV2,
     sampler::Logprobs,
     sequence::{Sequence, SequenceRecognizer, SequenceState, StopReason, StreamingEmission},
+    special_text::{SpecialStrings, SpecialTextGuard},
     tools::ToolCallState,
 };
 
@@ -202,9 +203,19 @@ pub(crate) async fn finish_or_add_toks_to_seq(
     // delimiters like <tool_call>, [TOOL_CALLS], <|python_tag|>) or when think tag
     // mode is enabled (so <think>/<\/think> delimiters are visible in the output).
     let include_special = seq.tool_call_state.is_some() || seq.needs_special_tokens();
-    let completion_bytes = tok_env
+    let mut completion_bytes = tok_env
         .tok_trie()
         .decode_ext(&[logprobs.token], include_special);
+    if include_special {
+        let guard = seq
+            .special_text_guard
+            .get_or_insert_with(|| SpecialTextGuard::new(SpecialStrings::for_env(&tok_env)));
+        completion_bytes = guard.push(
+            &completion_bytes,
+            tok_env.tok_trie().is_special_token(logprobs.token),
+            is_done.is_some(),
+        );
+    }
     let mut is_done = seq.add_token(logprobs.clone(), completion_bytes, is_done);
     let hidden_stop = match is_done {
         Some(StopReason::StopString {

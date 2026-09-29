@@ -542,7 +542,10 @@ impl Loader for MultimodalLoader {
         self.validate_dynamic_lora()?;
         let config = match self.prepared_source.as_ref() {
             Some(source) => source.config.clone(),
-            None => std::fs::read_to_string(paths.get_config_filename())?,
+            None => super::loaders::load_model_config(
+                paths.get_config_filename(),
+                self.config.from_uqff.is_none(),
+            )?,
         };
         let config = if self.config.from_uqff.is_some() {
             super::isq::sanitize_quantized_weight_source_config(&config)?

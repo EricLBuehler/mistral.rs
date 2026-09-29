@@ -14,8 +14,11 @@ use super::ToolFormatParser;
 use crate::Tool;
 
 static QWEN_REGEX: OnceLock<Regex> = OnceLock::new();
-static QWEN_FUNCTION_REGEX: OnceLock<Regex> = OnceLock::new();
-static QWEN_PARAMETER_REGEX: OnceLock<Regex> = OnceLock::new();
+
+const FUNCTION_OPEN: &str = "<function=";
+const FUNCTION_CLOSE: &str = "</function>";
+const PARAMETER_OPEN: &str = "<parameter=";
+const PARAMETER_CLOSE: &str = "</parameter>";
 
 pub struct QwenParser;
 
@@ -79,7 +82,7 @@ fn qwen_tool_call_lark(tools: &[Tool], include_wrapper: bool) -> String {
     format!(
         r#"{start}
 {json_call}
-xml_call: "\n"? xml_function ("\n"? xml_function)* "\n"? {xml_end}
+xml_call: "\n"? xml_function "\n"? {xml_end}
 {}
 xml_param_value: (xml_param_text | xml_param_lt)*
 xml_param_text: /[^<]+/
@@ -126,9 +129,11 @@ fn parse_qwen_tool_calls(message: &str) -> Result<Option<String>> {
             continue;
         }
 
-        let parsed_xml = parse_qwen_xml_tool_call(inner)?;
-        if !parsed_xml.is_empty() {
-            xml_calls.extend(parsed_xml);
+        if inner.starts_with(FUNCTION_OPEN) {
+            match parse_qwen_xml_tool_call(inner) {
+                Some(call) => xml_calls.push(call),
+                None => return Ok(None),
+            }
             continue;
         }
 
@@ -155,30 +160,41 @@ fn parse_qwen_tool_calls(message: &str) -> Result<Option<String>> {
     }
 }
 
-fn parse_qwen_xml_tool_call(inner: &str) -> Result<Vec<QwenToolCall>> {
-    let function_re = QWEN_FUNCTION_REGEX.get_or_init(|| {
-        Regex::new(r"(?s)<function=(?P<name>[^>\n]+)>\s*(?P<body>.*?)\s*</function>").unwrap()
-    });
-    let parameter_re = QWEN_PARAMETER_REGEX.get_or_init(|| {
-        Regex::new(r"(?s)<parameter=(?P<key>[^>\n]+)>(?P<value>.*?)</parameter>").unwrap()
-    });
-
-    let mut calls = Vec::new();
-    for caps in function_re.captures_iter(inner) {
-        let name = caps.name("name").unwrap().as_str().trim().to_string();
-        let body = caps.name("body").unwrap().as_str();
-        let mut arguments = Map::new();
-        for param_caps in parameter_re.captures_iter(body) {
-            let key = param_caps.name("key").unwrap().as_str().trim().to_string();
-            let value = param_caps.name("value").unwrap().as_str();
-            arguments.insert(key, qwen_xml_param_value(value));
-        }
-        calls.push(QwenToolCall {
-            name,
-            arguments: Value::Object(arguments),
-        });
+// One function per block: text quoted inside a value must not be able to open a second call.
+fn parse_qwen_xml_tool_call(inner: &str) -> Option<QwenToolCall> {
+    let (name, rest) = inner.strip_prefix(FUNCTION_OPEN)?.split_once('>')?;
+    let body = rest.trim_end().strip_suffix(FUNCTION_CLOSE)?;
+    if name.contains('\n') {
+        return None;
     }
-    Ok(calls)
+
+    let mut arguments = Map::new();
+    let mut rest = body;
+    while let Some(start) = rest.find(PARAMETER_OPEN) {
+        let (key, value_and_rest) = rest[start + PARAMETER_OPEN.len()..].split_once('>')?;
+        let (value, after) = split_parameter_value(value_and_rest)?;
+        if key.contains('\n')
+            || arguments
+                .insert(key.trim().to_string(), qwen_xml_param_value(value))
+                .is_some()
+        {
+            return None;
+        }
+        rest = after;
+    }
+    Some(QwenToolCall {
+        name: name.trim().to_string(),
+        arguments: Value::Object(arguments),
+    })
+}
+
+// A value ends only at a close tag followed by the next parameter or the end of the function body.
+fn split_parameter_value(text: &str) -> Option<(&str, &str)> {
+    text.match_indices(PARAMETER_CLOSE).find_map(|(idx, _)| {
+        let after = &text[idx + PARAMETER_CLOSE.len()..];
+        let next = after.trim_start();
+        (next.is_empty() || next.starts_with(PARAMETER_OPEN)).then_some((&text[..idx], after))
+    })
 }
 
 // Values are kept verbatim minus the template's single framing newlines; types come from the tool schema later

@@ -31,6 +31,19 @@ fn cuda_build_dir(out_dir: &std::path::Path, component: &str) -> std::path::Path
 }
 
 #[cfg(all(feature = "cuda", target_family = "unix"))]
+fn prepare_cuda_archive(path: std::path::PathBuf) -> std::path::PathBuf {
+    if std::env::var_os(CUDA_BUILD_ROOT_ENV).is_some() {
+        // Shared objects can be newer than this Cargo build directory's archive.
+        match std::fs::remove_file(&path) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => panic!("failed to refresh CUDA archive {}: {error}", path.display()),
+        }
+    }
+    path
+}
+
+#[cfg(all(feature = "cuda", target_family = "unix"))]
 fn cuda_header_hash(dir: &str, excluded_dirs: &[&str]) -> Result<u64> {
     use std::path::Path;
 
@@ -169,7 +182,7 @@ fn main() -> Result<()> {
         out_dir.join("libmistralrspagedattention.a")
     };
     builder
-        .build_lib(out_file)
+        .build_lib(prepare_cuda_archive(out_file))
         .expect("Build paged attention lib failed!");
 
     let using_fa3_fp8_paged = compute_cap == 90;
@@ -222,7 +235,7 @@ fn main() -> Result<()> {
                 .arg(cuda_nvcc_flags_env);
         }
         fa3_builder
-            .build_lib(out_dir.join("libmistralrsfa3paged.a"))
+            .build_lib(prepare_cuda_archive(out_dir.join("libmistralrsfa3paged.a")))
             .expect("Build FA3 FP8 paged attention lib failed!");
     }
 

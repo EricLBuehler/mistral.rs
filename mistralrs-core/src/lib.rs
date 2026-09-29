@@ -95,12 +95,14 @@ mod perf_flags;
 mod pipeline;
 mod prefix_cacher;
 pub mod reasoning_parsers;
+pub mod remote_fetch;
 mod request;
 pub mod resource_plan;
 mod response;
 mod sampler;
 mod scheduler;
 mod sequence;
+mod special_text;
 pub mod speculative;
 mod speech_models;
 mod toml_selector;
@@ -1190,7 +1192,7 @@ impl MistralRs {
         let adapter_runtime = pipeline_guard.adapter_runtime();
         drop(pipeline_guard);
 
-        // cuTile kernels JIT-compile into a thread-local cache, so warmup must run on the engine thread.
+        // Warm cuTile before the engine starts capturing and serving CUDA work.
         #[cfg(feature = "cutile")]
         let warmup_device = device.clone();
 
@@ -1231,6 +1233,11 @@ impl MistralRs {
                 let rt = build_engine_runtime();
                 rt.block_on(async move {
                     file_store_for_engine.spawn_cleanup_task();
+                    // cuTile warmup precedes graph capture.
+                    #[cfg(feature = "cutile")]
+                    if let Err(err) = mistralrs_quant::cutile::warmup_moe_kernels(&warmup_device) {
+                        warn!("Failed to warm up cuTile MoE kernels: {err}");
+                    }
                     let engine = match Engine::new(
                         tx_for_engine,
                         rx,
@@ -1257,10 +1264,6 @@ impl MistralRs {
                             return;
                         }
                     };
-                    #[cfg(feature = "cutile")]
-                    if let Err(err) = mistralrs_quant::cutile::warmup_moe_kernels(&warmup_device) {
-                        warn!("Failed to warm up cuTile MoE kernels: {err}");
-                    }
                     Arc::new(engine).run().await;
                 })
             });
@@ -1270,6 +1273,11 @@ impl MistralRs {
                 let rt = build_engine_runtime();
                 rt.block_on(async move {
                     file_store_for_engine.spawn_cleanup_task();
+                    // cuTile warmup precedes graph capture.
+                    #[cfg(feature = "cutile")]
+                    if let Err(err) = mistralrs_quant::cutile::warmup_moe_kernels(&warmup_device) {
+                        warn!("Failed to warm up cuTile MoE kernels: {err}");
+                    }
                     let engine = match Engine::new(
                         tx_for_engine,
                         rx,
@@ -1296,10 +1304,6 @@ impl MistralRs {
                             return;
                         }
                     };
-                    #[cfg(feature = "cutile")]
-                    if let Err(err) = mistralrs_quant::cutile::warmup_moe_kernels(&warmup_device) {
-                        warn!("Failed to warm up cuTile MoE kernels: {err}");
-                    }
                     Arc::new(engine).run().await;
                 })
             }
@@ -1582,11 +1586,11 @@ impl MistralRs {
             tool_callbacks,
         };
 
+        let pipeline_name = pipeline.lock().await.name();
         let engine_instance =
             Self::create_engine_instance(pipeline.clone(), method, engine_config, reboot_state)
                 .expect("Failed to create engine instance");
 
-        let pipeline_name = pipeline.try_lock().unwrap().name();
         let (id, alias_map) = match model_id_override {
             Some(override_id) => {
                 let mut alias_map = HashMap::new();

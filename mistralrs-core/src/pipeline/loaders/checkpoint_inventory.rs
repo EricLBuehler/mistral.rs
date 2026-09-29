@@ -57,23 +57,23 @@ fn is_float(dtype: SafeDtype) -> bool {
     )
 }
 
-fn is_sub_byte_or_fp8(dtype: SafeDtype) -> bool {
+fn is_sub_byte(dtype: SafeDtype) -> bool {
     matches!(
         dtype,
-        SafeDtype::F4
-            | SafeDtype::F6_E2M3
-            | SafeDtype::F6_E3M2
-            | SafeDtype::F8_E4M3
-            | SafeDtype::F8_E4M3FNUZ
-            | SafeDtype::F8_E5M2
-            | SafeDtype::F8_E5M2FNUZ
-            | SafeDtype::F8_E8M0
+        SafeDtype::F4 | SafeDtype::F6_E2M3 | SafeDtype::F6_E3M2
+    )
+}
+
+fn is_runtime_f32_scale(name: &str) -> bool {
+    matches!(
+        name.rsplit('.').next(),
+        Some("weight_scale" | "weight_scale_inv" | "input_scale" | "activation_scale")
     )
 }
 
 fn runtime_tensor_bytes(name: &str, view: &TensorView<'_>, target_dtype: DType) -> Result<usize> {
     let stored_bytes = view.data().len();
-    if is_sub_byte_or_fp8(view.dtype()) || !is_float(view.dtype()) {
+    if is_sub_byte(view.dtype()) || !is_float(view.dtype()) {
         return Ok(stored_bytes);
     }
     let elements = view
@@ -81,7 +81,7 @@ fn runtime_tensor_bytes(name: &str, view: &TensorView<'_>, target_dtype: DType) 
         .iter()
         .try_fold(1usize, |elements, dim| elements.checked_mul(*dim))
         .context("checkpoint tensor element count overflow")?;
-    let runtime_element_bytes = if name.ends_with(".weight_scale_inv") {
+    let runtime_element_bytes = if is_runtime_f32_scale(name) {
         DType::F32.size_in_bytes()
     } else {
         target_dtype.size_in_bytes()
@@ -242,12 +242,12 @@ mod tests {
             standard_layer_index,
         )?
         .unwrap();
-        assert_eq!(sizes.layer_sizes_in_bytes, [24, 24]);
+        assert_eq!(sizes.layer_sizes_in_bytes, [40, 40]);
         assert_eq!(sizes.non_mapped_size_in_bytes, 8);
-        assert_eq!(sizes.total_model_size_in_bytes, 56);
+        assert_eq!(sizes.total_model_size_in_bytes, 88);
         assert_eq!(
             checkpoint_runtime_size(std::slice::from_ref(&path), DType::BF16)?,
-            Some(56)
+            Some(88)
         );
         Ok(())
     }

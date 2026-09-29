@@ -547,7 +547,7 @@ fn supports_flashinfer_group_size(q_heads: usize, kv_heads: usize) -> bool {
         return false;
     }
     // Must match DISPATCH_GQA_GROUP_SIZE in FlashInfer's utils.cuh.
-    matches!(q_heads / kv_heads, 1 | 2 | 3 | 4 | 6 | 8 | 16)
+    matches!(q_heads / kv_heads, 1..=8 | 16)
 }
 
 impl FlashInferPagedAttentionViews {
@@ -697,11 +697,11 @@ mod tests {
 
     #[test]
     fn flashinfer_group_size_matches_kernel_instantiations() {
-        for group_size in [1, 2, 3, 4, 6, 8, 16] {
+        for group_size in [1, 2, 3, 4, 5, 6, 7, 8, 16] {
             assert!(supports_flashinfer_group_size(group_size * 2, 2));
         }
 
-        for group_size in [0, 5, 7, 9, 15, 17] {
+        for group_size in [0, 9, 10, 11, 12, 13, 14, 15, 17] {
             assert!(!supports_flashinfer_group_size(group_size * 2, 2));
         }
         assert!(!supports_flashinfer_group_size(14, 0));
@@ -755,7 +755,7 @@ mod tests {
         assert_eq!(fa3_prefill_num_splits(8, 128, 24, 4, 132), Some(2));
         assert_eq!(fa3_prefill_num_splits(16, 128, 24, 4, 132), Some(2));
         assert_eq!(fa3_prefill_num_splits(1, 128, 24, 0, 132), None);
-        assert_eq!(fa3_prefill_num_splits(1, 128, 20, 4, 132), None);
+        assert_eq!(fa3_prefill_num_splits(1, 128, 36, 4, 132), None);
         assert_eq!(
             fa3_prefill_num_splits(1, FA3_DECODE_MAX_QUERY_LEN + 1, 24, 4, 132),
             None
@@ -865,7 +865,7 @@ mod tests {
     fn fa3_prefill_workspace_rejects_invalid_or_overflowing_shapes() {
         assert!(fa3_prefill_workspace_bytes(0, 1, 24, 4, 256, 1, 132).is_err());
         assert!(fa3_prefill_workspace_bytes(1, 1, 24, 5, 256, 1, 132).is_err());
-        assert!(fa3_prefill_workspace_bytes(1, 1, 20, 4, 256, 1, 132).is_err());
+        assert!(fa3_prefill_workspace_bytes(1, 1, 36, 4, 256, 1, 132).is_err());
         assert!(fa3_prefill_workspace_bytes(1, 1, 24, 4, 128, 1, 132).is_err());
         assert!(
             fa3_prefill_workspace_bytes(1, FA3_DECODE_MAX_QUERY_LEN + 1, 24, 4, 256, 1, 132)

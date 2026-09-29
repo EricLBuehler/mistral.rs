@@ -183,6 +183,72 @@ impl<'a> ExpertCheckpoint<'a> {
         }
     }
 
+    /// Blockwise FP8 experts with their `weight_scale_inv` tensors as `(gate_up, gate_up_scales,
+    /// down, down_scales)` in ENK layout; `None` for layouts the cuTile FP8 backend does not take.
+    #[cfg(feature = "cutile")]
+    pub(super) fn stacked_enk_fp8(
+        &self,
+        block: usize,
+    ) -> Result<Option<(Tensor, Tensor, Tensor, Tensor)>> {
+        use candle_core::DType;
+        let cfg = self.cfg;
+        let ExpertSourceLayout::PerExpert { names, .. } = self.layout else {
+            return Ok(None);
+        };
+        if self.world_size > 1
+            || !cfg.hidden_size.is_multiple_of(block)
+            || !cfg.moe_intermediate_size.is_multiple_of(block)
+        {
+            return Ok(None);
+        }
+        let (inter, hidden) = (cfg.moe_intermediate_size, cfg.hidden_size);
+        let read = |vb: &ShardedVarBuilder, shape: (usize, usize), dtype: DType, name: &str| {
+            vb.get_with_hints_dtype(shape, name, Default::default(), dtype)
+        };
+        let mut gate_up = Vec::with_capacity(cfg.num_experts);
+        let mut gate_up_scales = Vec::with_capacity(cfg.num_experts);
+        let mut down = Vec::with_capacity(cfg.num_experts);
+        let mut down_scales = Vec::with_capacity(cfg.num_experts);
+        for i in 0..cfg.num_experts {
+            let expert_vb = self.vb.pp(i.to_string());
+            let gate_vb = expert_vb.pp(names.gate);
+            let up_vb = expert_vb.pp(names.up);
+            let down_vb = expert_vb.pp(names.down);
+            if !gate_vb.contains_tensor("weight_scale_inv") {
+                return Ok(None);
+            }
+            let gate = read(&gate_vb, (inter, hidden), DType::F8E4M3, "weight")?;
+            let up = read(&up_vb, (inter, hidden), DType::F8E4M3, "weight")?;
+            let gate_s = read(
+                &gate_vb,
+                (inter / block, hidden / block),
+                DType::F32,
+                "weight_scale_inv",
+            )?;
+            let up_s = read(
+                &up_vb,
+                (inter / block, hidden / block),
+                DType::F32,
+                "weight_scale_inv",
+            )?;
+            gate_up.push(Tensor::cat(&[&gate, &up], 0)?);
+            gate_up_scales.push(Tensor::cat(&[&gate_s, &up_s], 0)?);
+            down.push(read(&down_vb, (hidden, inter), DType::F8E4M3, "weight")?);
+            down_scales.push(read(
+                &down_vb,
+                (hidden / block, inter / block),
+                DType::F32,
+                "weight_scale_inv",
+            )?);
+        }
+        Ok(Some((
+            Tensor::stack(&gate_up, 0)?,
+            Tensor::stack(&gate_up_scales, 0)?,
+            Tensor::stack(&down, 0)?,
+            Tensor::stack(&down_scales, 0)?,
+        )))
+    }
+
     fn fused_transposed(&self) -> bool {
         matches!(self.layout, ExpertSourceLayout::Fused { transposed, .. } if transposed)
     }

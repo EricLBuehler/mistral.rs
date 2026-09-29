@@ -395,8 +395,21 @@ impl PagedAttentionScheduler {
             };
         }
 
+        let pack_prompt_spans = self.supports_packed_prefill
+            && !self.requires_uniform_prompt_batch
+            && candidates.iter().all(|seq| {
+                let seq = get_mut_arcmutex!(seq);
+                modality_signature(&seq) == 0
+            });
         let chunk_size = self
-            .prompt_chunk_size(candidates.len(), latency_bounded)
+            .prompt_chunk_size(
+                if pack_prompt_spans {
+                    1
+                } else {
+                    candidates.len()
+                },
+                latency_bounded,
+            )
             .unwrap();
         let chunk_plans = candidates
             .iter()
@@ -409,15 +422,36 @@ impl PagedAttentionScheduler {
         let require_uniform_query_len = self.requires_uniform_prompt_batch
             || !self.supports_packed_prefill
             || self.prompt_chunks_use_block_alignment();
-        let (active_indices, _, _) =
+        let (active_indices, _, is_final) =
             next_prompt_chunk_group(&plan_indices, &chunk_plans, require_uniform_query_len)
                 .expect("running prompt has uncomputed tokens");
 
         let mut scheduled = VecDeque::with_capacity(active_indices.len());
         let mut scheduled_chunks = Vec::with_capacity(active_indices.len());
+        let token_budget = self.prefill_token_budget(latency_bounded);
+        let packed_token_budget = pack_prompt_spans
+            && is_final
+            && active_indices
+                .iter()
+                .all(|index| chunk_plans[*index][0].start == 0);
+        let mut scheduled_tokens = 0usize;
+        let mut max_query_tokens = 0usize;
         for index in active_indices {
+            let chunk = chunk_plans[index][0];
+            let chunk_tokens = chunk.end - chunk.start;
+            let next_max_query_tokens = max_query_tokens.max(chunk_tokens);
+            let next_tokens = if packed_token_budget {
+                scheduled_tokens.saturating_add(chunk_tokens)
+            } else {
+                next_max_query_tokens.saturating_mul(scheduled.len() + 1)
+            };
+            if pack_prompt_spans && next_tokens > token_budget {
+                break;
+            }
+            scheduled_tokens = scheduled_tokens.saturating_add(chunk_tokens);
+            max_query_tokens = next_max_query_tokens;
             scheduled.push_back(candidates[index].clone());
-            scheduled_chunks.push(chunk_plans[index][0]);
+            scheduled_chunks.push(chunk);
         }
         self.advance_prompt_cursor(&rotation_candidates, &scheduled);
         PromptBatch {
@@ -3312,6 +3346,204 @@ mod tests {
                 .sum::<usize>(),
             16
         );
+    }
+
+    fn span_packing_scheduler() -> PagedAttentionScheduler {
+        let mut scheduler = test_scheduler();
+        scheduler.scheduler_visible_prompt_chunks = true;
+        scheduler.supports_packed_prefill = true;
+        scheduler.requires_uniform_prompt_batch = false;
+        scheduler.config.max_num_seqs = 64;
+        scheduler.config.max_prefill_chunk_tokens = 512;
+        scheduler
+    }
+
+    fn span_packing_prompts(lengths: &[usize]) -> VecDeque<Arc<Mutex<Sequence>>> {
+        lengths
+            .iter()
+            .enumerate()
+            .map(|(id, &length)| {
+                let seq = test_sequence(id, length);
+                get_mut_arcmutex!(seq).set_state(SequenceState::RunningPrompt);
+                seq
+            })
+            .collect()
+    }
+
+    #[test]
+    fn packed_prompt_spans_finish_whole_prompts_within_the_idle_budget() {
+        let mut scheduler = span_packing_scheduler();
+        let candidates = span_packing_prompts(&[1024; 64]);
+
+        let batch = scheduler.select_prompt_batch(candidates);
+
+        assert_eq!(batch.scheduled.len(), 4);
+        assert_eq!(scheduler.next_prompt_sequence_id, Some(4));
+        assert!(batch
+            .chunks
+            .unwrap()
+            .iter()
+            .all(|chunk| (chunk.start, chunk.end) == (0, 1024)));
+    }
+
+    #[test]
+    fn packed_prompt_spans_pack_ragged_cold_queries_without_padding() {
+        let mut scheduler = span_packing_scheduler();
+        scheduler.config.max_num_batched_tokens = 512;
+        let batch = scheduler.select_prompt_batch(span_packing_prompts(&[128, 256, 128, 64]));
+
+        assert_eq!(batch.scheduled.len(), 3);
+        assert_eq!(scheduler.next_prompt_sequence_id, Some(3));
+        assert_eq!(
+            batch
+                .chunks
+                .unwrap()
+                .iter()
+                .map(|chunk| chunk.end - chunk.start)
+                .sum::<usize>(),
+            512
+        );
+    }
+
+    #[test]
+    fn packed_prompt_spans_budget_padding_for_cached_queries() {
+        let mut scheduler = span_packing_scheduler();
+        scheduler.config.max_num_batched_tokens = 512;
+        let candidates = span_packing_prompts(&[512, 256, 256]);
+        for seq in &candidates {
+            get_mut_arcmutex!(seq).set_num_computed_tokens(128);
+        }
+
+        let batch = scheduler.select_prompt_batch(candidates);
+
+        assert_eq!(batch.scheduled.len(), 1);
+        assert_eq!(scheduler.next_prompt_sequence_id, Some(1));
+        assert_eq!(
+            (
+                batch.chunks.as_ref().unwrap()[0].start,
+                batch.chunks.unwrap()[0].end
+            ),
+            (128, 512)
+        );
+    }
+
+    #[test]
+    fn packed_prompt_spans_keep_the_mixed_budget_and_rotate_without_starvation() {
+        let mut scheduler = span_packing_scheduler();
+        scheduler.running.push_back(test_sequence(100, 8));
+        let candidates = span_packing_prompts(&[1024; 63]);
+        scheduler.running.extend(candidates.iter().cloned());
+        let mut seen = Vec::new();
+
+        for _ in 0..candidates.len() {
+            let batch = scheduler.select_prompt_batch(candidates.clone());
+            assert_eq!(batch.scheduled.len(), 1);
+            assert_eq!(
+                (
+                    batch.chunks.as_ref().unwrap()[0].start,
+                    batch.chunks.unwrap()[0].end
+                ),
+                (0, 512)
+            );
+            seen.push(*get_mut_arcmutex!(batch.scheduled[0]).id());
+        }
+        assert_eq!(seen, (0..63).collect::<Vec<_>>());
+        assert!(scheduler.completion_is_due());
+        scheduler.decode_steps_since_prefill = scheduler.config.max_decode_steps_before_prefill;
+        assert!(!scheduler.completion_is_due());
+    }
+
+    #[test]
+    fn packed_prompt_spans_respect_the_admission_quantum() {
+        let mut scheduler = span_packing_scheduler();
+        scheduler.prompt_admission_epoch = true;
+        scheduler.running.push_back(test_sequence(100, 8));
+        let candidates = span_packing_prompts(&[1024; 63]);
+        scheduler.running.extend(candidates.iter().cloned());
+
+        let batch = scheduler.select_prompt_batch(candidates);
+
+        assert_eq!(batch.scheduled.len(), 8);
+        assert_eq!(scheduler.next_prompt_sequence_id, Some(8));
+        assert!(batch
+            .chunks
+            .unwrap()
+            .iter()
+            .all(|chunk| (chunk.start, chunk.end) == (0, 512)));
+        assert!(scheduler.completion_is_due());
+        scheduler.decode_steps_since_prefill = 1;
+        assert!(!scheduler.completion_is_due());
+    }
+
+    #[test]
+    fn packed_prompt_spans_do_not_mix_final_and_nonfinal_queries() {
+        let mut scheduler = span_packing_scheduler();
+        scheduler.config.max_num_batched_tokens = 512;
+        let candidates = span_packing_prompts(&[1024, 128, 128]);
+
+        let first = scheduler.select_prompt_batch(candidates.clone());
+        let second = scheduler.select_prompt_batch(candidates);
+
+        assert_eq!(first.scheduled.len(), 1);
+        assert_eq!(first.chunks.unwrap()[0].end, 512);
+        assert_eq!(second.scheduled.len(), 2);
+        assert!(second.chunks.unwrap().iter().all(|chunk| chunk.end == 128));
+    }
+
+    #[test]
+    fn packed_prompt_spans_require_the_runtime_packing_capability() {
+        let mut scheduler = span_packing_scheduler();
+        scheduler.supports_packed_prefill = false;
+        let batch = scheduler.select_prompt_batch(span_packing_prompts(&[1024; 64]));
+
+        assert_eq!(batch.scheduled.len(), 64);
+        assert_eq!(batch.chunk_size, Some(64));
+        assert!(batch.chunks.unwrap().iter().all(|chunk| chunk.end == 64));
+    }
+
+    #[test]
+    fn packed_prompt_spans_keep_small_aligned_budgets_nonempty() {
+        let mut scheduler = span_packing_scheduler();
+        scheduler.config.max_num_batched_tokens = 16;
+        scheduler.prompt_chunks_require_block_alignment = true;
+        scheduler.block_size = 32;
+        let candidates = span_packing_prompts(&[80; 3]);
+        for seq in &candidates {
+            get_mut_arcmutex!(seq).set_num_computed_tokens(31);
+        }
+
+        let batch = scheduler.select_prompt_batch(candidates);
+
+        assert_eq!(batch.scheduled.len(), 3);
+        assert!(batch
+            .chunks
+            .unwrap()
+            .iter()
+            .all(|chunk| (chunk.start, chunk.end) == (31, 32)));
+    }
+
+    #[test]
+    fn packed_prompt_spans_preserve_recurrent_and_multimodal_planning() {
+        let mut scheduler = span_packing_scheduler();
+        scheduler.prefill_has_per_sequence_state = true;
+        let recurrent = scheduler.select_prompt_batch(span_packing_prompts(&[1024; 64]));
+        assert_eq!(recurrent.scheduled.len(), 8);
+        assert_eq!(recurrent.chunk_size, Some(512));
+
+        let mut scheduler = span_packing_scheduler();
+        let candidates = span_packing_prompts(&[1024; 64]);
+        get_mut_arcmutex!(candidates[63]).set_mm_features(vec![MultiModalFeature {
+            kind: MultimodalKind::Image,
+            item_range: 0..1,
+            hashes: vec![1],
+            offset: 0,
+            length: 32,
+            attention_policy: crate::paged_attention::block_hash::MultimodalAttentionPolicy::Causal,
+            splittable: false,
+        }]);
+        let multimodal = scheduler.select_prompt_batch(candidates);
+        assert_eq!(multimodal.scheduled.len(), 64);
+        assert_eq!(multimodal.chunk_size, Some(64));
     }
 
     #[test]
