@@ -554,11 +554,7 @@ pub(crate) async fn finish_or_add_toks_to_seq(
                 | crate::sequence::StopReason::StopTok(_)
                 | crate::sequence::StopReason::StopString { .. }
                 | crate::sequence::StopReason::Canceled
-                | crate::sequence::StopReason::ToolCalls => {
-                    String::from_utf8_lossy(seq.completion_bytes())
-                        .trim_start()
-                        .to_string()
-                }
+                | crate::sequence::StopReason::ToolCalls => seq.completion_text(),
                 crate::sequence::StopReason::GeneratedImage
                 | crate::sequence::StopReason::GeneratedSpeech => {
                     candle_core::bail!("Stop reason was `GeneratedImage`.")

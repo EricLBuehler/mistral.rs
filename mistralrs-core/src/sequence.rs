@@ -1369,6 +1369,15 @@ impl Sequence {
         &self.completion_bytes
     }
 
+    pub(crate) fn completion_text(&self) -> String {
+        let text = String::from_utf8_lossy(&self.completion_bytes);
+        if get_mut_group!(self).is_chat {
+            text.trim_start().to_string()
+        } else {
+            text.into_owned()
+        }
+    }
+
     pub fn preallocated_cache(&self) -> Option<&SeqPreallocatedCache> {
         self.seq_preallocated_cache.as_ref()
     }
@@ -1576,7 +1585,7 @@ impl Sequence {
             let is_first = self.stream_idx == 0;
             self.stream_idx += bytes.len();
             let text = String::from_utf8_lossy(&bytes);
-            let text = if is_first {
+            let text = if is_first && get_mut_group!(self).is_chat {
                 text.trim_start().to_string()
             } else {
                 text.to_string()
@@ -1772,7 +1781,7 @@ impl Sequence {
         let is_first = self.stream_idx == 0;
         let decoded = String::from_utf8_lossy(&self.completion_bytes[self.stream_idx..]);
         self.stream_idx = self.completion_bytes.len();
-        if is_first {
+        if is_first && get_mut_group!(self).is_chat {
             decoded.trim_start().to_string()
         } else {
             decoded.to_string()
@@ -1808,10 +1817,7 @@ impl Sequence {
         }
         let new_decoded = String::from_utf8_lossy(&pending[..consumed]);
 
-        // The first token usually starts with a space. We don't want to add that to the delta.
-        // Since we're using the completion_bytes, we need to take care of that ourselves.
-        // Had we used HF's Tokenizer, it would have taken care of that for us.
-        if is_first {
+        if is_first && get_mut_group!(self).is_chat {
             return (Some(new_decoded.trim_start().to_string()), consumed);
         }
         (Some(new_decoded.to_string()), consumed)
@@ -3144,6 +3150,164 @@ mod tests {
         assert_eq!(required_tool_call_deadline_tokens(512), 1024);
         assert_eq!(required_tool_call_deadline_tokens(8192), 2048);
         assert_eq!(required_tool_call_deadline_tokens(32768), 4096);
+    }
+
+    fn completion_whitespace_sequence(streaming: bool, logprobs: bool) -> Sequence {
+        let mut seq = make_test_sequence();
+        seq.cache.push(None);
+        seq.get_mut_group().is_chat = false;
+        seq.get_mut_group().is_streaming = streaming;
+        seq.return_logprobs = logprobs;
+        seq.stream_logprobs = streaming && logprobs;
+        seq
+    }
+
+    #[test]
+    fn completion_whitespace_final_preserves_echo_and_usage() {
+        const PREFIX: &str = "def answer():\n";
+        const SUFFIX: &str = "\n# done";
+        const BODY: &str = "return 1\n";
+        for whitespace in ["    ", "\n\n", "\t", " ", "\u{2003}"] {
+            let mut seq = completion_whitespace_sequence(false, false);
+            let prompt_tokens = seq.prompt_tokens();
+            seq.prefix = Some(PREFIX.to_string());
+            seq.suffix = Some(SUFFIX.to_string());
+            assert_eq!(
+                seq.add_token(test_logprobs(11), whitespace.as_bytes().to_vec(), None),
+                None
+            );
+            assert_eq!(
+                seq.add_token(
+                    test_logprobs(12),
+                    BODY.as_bytes().to_vec(),
+                    Some(StopReason::Length(2)),
+                ),
+                Some(StopReason::Length(2))
+            );
+
+            let expected = format!("{whitespace}{BODY}");
+            assert_eq!(seq.completion_text(), expected);
+            assert_eq!(seq.get_final_delta(), expected);
+            assert_eq!(seq.get_final_delta(), "");
+            seq.add_completion_choice_to_group(CompletionChoice {
+                finish_reason: "length".to_string(),
+                index: 0,
+                text: seq.completion_text(),
+                logprobs: None,
+            });
+
+            let group = seq.get_mut_group();
+            assert_eq!(
+                group.get_completion_choices()[0].text,
+                format!("{PREFIX}{expected}{SUFFIX}")
+            );
+            let usage = group.get_usage();
+            assert_eq!(usage.prompt_tokens, prompt_tokens);
+            assert_eq!(usage.completion_tokens, 2);
+            assert_eq!(usage.total_tokens, prompt_tokens + 2);
+            assert_eq!(seq.logprobs().len(), 2);
+        }
+    }
+
+    #[test]
+    fn completion_whitespace_streaming_preserves_text_and_token_boundaries() {
+        for logprobs in [false, true] {
+            for leading in ["    ", "\n\n    "] {
+                let mut seq = completion_whitespace_sequence(true, logprobs);
+                let pieces = [leading, "if True:\n", "        return 1\n"];
+                let mut text = String::new();
+                for (idx, piece) in pieces.iter().enumerate() {
+                    let token = u32::try_from(idx).unwrap();
+                    let finalize = idx + 1 == pieces.len();
+                    let reason = finalize.then_some(StopReason::Length(pieces.len()));
+                    assert_eq!(
+                        seq.add_token(
+                            test_logprobs_with_value(token, -1.0),
+                            piece.as_bytes().to_vec(),
+                            reason,
+                        ),
+                        reason
+                    );
+                    let delta = if logprobs {
+                        let emissions = seq.take_ready_streaming_emissions(finalize);
+                        assert_eq!(emissions.len(), 1);
+                        assert_eq!(emissions[0].bytes, piece.as_bytes());
+                        assert_eq!(emissions[0].logprobs.token, token);
+                        assert_eq!(emissions[0].logprobs.logprob, -1.0);
+                        emissions[0].text.clone()
+                    } else if finalize {
+                        seq.get_final_delta()
+                    } else {
+                        assert_eq!(seq.peek_delta().unwrap().as_deref(), Some(*piece));
+                        seq.get_delta().unwrap().unwrap()
+                    };
+                    assert_eq!(delta, *piece);
+                    text.push_str(&delta);
+                    seq.add_streaming_completion_chunk_choice_to_group(CompletionChunkChoice {
+                        text: delta,
+                        index: 0,
+                        finish_reason: finalize.then(|| "length".to_string()),
+                        logprobs: None,
+                    });
+                }
+                assert_eq!(text, pieces.concat());
+                assert_eq!(text, seq.completion_text());
+                let group = seq.get_mut_group();
+                assert_eq!(
+                    group
+                        .completion_streaming_chunks
+                        .iter()
+                        .map(|chunk| chunk.text.as_str())
+                        .collect::<String>(),
+                    text
+                );
+                assert_eq!(group.get_usage().completion_tokens, pieces.len());
+                assert_eq!(seq.logprobs().len(), pieces.len());
+            }
+        }
+    }
+
+    #[test]
+    fn completion_whitespace_chat_keeps_existing_initial_trim() {
+        const FIRST: &str = "\n    hello";
+        const NEXT: &str = " world\n";
+        let mut final_seq = completion_whitespace_sequence(false, false);
+        final_seq.get_mut_group().is_chat = true;
+        assert_eq!(
+            final_seq.add_token(test_logprobs(11), FIRST.as_bytes().to_vec(), None),
+            None
+        );
+        assert_eq!(final_seq.completion_text(), "hello");
+        assert_eq!(final_seq.get_final_delta(), "hello");
+        for logprobs in [false, true] {
+            let mut seq = completion_whitespace_sequence(true, logprobs);
+            seq.get_mut_group().is_chat = true;
+            assert_eq!(
+                seq.add_token(test_logprobs(11), FIRST.as_bytes().to_vec(), None),
+                None
+            );
+            let first = if logprobs {
+                seq.take_ready_streaming_emissions(false)[0].text.clone()
+            } else {
+                seq.get_delta().unwrap().unwrap()
+            };
+            assert_eq!(first, "hello");
+            assert_eq!(
+                seq.add_token(
+                    test_logprobs(12),
+                    NEXT.as_bytes().to_vec(),
+                    Some(StopReason::Length(2)),
+                ),
+                Some(StopReason::Length(2))
+            );
+            let next = if logprobs {
+                seq.take_ready_streaming_emissions(true)[0].text.clone()
+            } else {
+                seq.get_final_delta()
+            };
+            assert_eq!(next, NEXT);
+            assert_eq!(seq.completion_text(), format!("hello{NEXT}"));
+        }
     }
 
     #[test]
