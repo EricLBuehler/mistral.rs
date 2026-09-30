@@ -110,6 +110,8 @@ Separate C4/C8 bursts reach 95.16/128.99 tok/s, changes of +5.76%/+3.45%. Ordina
 
 This staged comparison does not isolate either optimization. Adaptive MTP depths, acceptance, graph dispatch counts, and global swap-in also differ. Matching-workload validation, finite-logprob checks, the long repetitive-prompt smoke, and mixed-context requests pass. [Full results and limitations](optimization.md#final-serving-rerun) and [raw comparison](raw/optimization/final_serving/comparison/comparison.json) retain the evidence. The cross-engine tables above retain their original binaries and results.
 
+A [followup headroom control](optimization.md#remaining-expert-kernel-headroom) reads the selected expert bytes without model computation. Native C8-shaped captures take 2.47 ms for that scan versus 3.40 ms for the complete FFN. A separate profile records L2 refill equivalents only 2.84% above the selected weight payload, and matched routes give only 1.469x cross-sequence weight reuse at C8. These results explain why large arithmetic padding does not imply an equally large time saving. They do not establish physical DRAM saturation or a full-model ceiling, and they do not support projecting the 3.00x C6 serving gain needed for 360 tok/s from removing MMQ padding alone.
+
 ## Method
 
 - NVIDIA GB10, 128 GB unified system memory, NVIDIA driver 580.126.09.

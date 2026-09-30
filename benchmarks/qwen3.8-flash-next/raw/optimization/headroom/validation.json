@@ -1,0 +1,14 @@
+{
+  "command": [
+    "cargo",
+    "check",
+    "--release",
+    "-p",
+    "mistralrs-cli",
+    "--features",
+    "cuda,flash-attn,cutile"
+  ],
+  "returncode": 0,
+  "log_sha256": "92ee56a2fea37e7c0824e8f57c5bf7f03da67dfe0d42ba10790bb6bb21bb0f54",
+  "scope": "No production source changed during the headroom investigation; this check validates current committed source."
+}

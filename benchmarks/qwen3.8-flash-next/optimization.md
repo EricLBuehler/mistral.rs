@@ -24,6 +24,25 @@ Validation confirms matching settings, tokenizer, prompt hashes and token counts
 
 [Validated comparison and all per-prompt results](raw/optimization/final_serving/comparison/comparison.md), [machine-readable summary](raw/optimization/final_serving/comparison/comparison.json), [run metadata](raw/optimization/final_serving/run/metadata.json), and the [archive manifest](raw/optimization/final_serving/manifest.json) retain the raw samples, commands, counters, memory records, source/build provenance, and validators. The historical baseline files remain intact.
 
+## Remaining expert-kernel headroom
+
+The serving gain does not resolve the scaling gap. A followup control tests whether removing more MMQ computation has enough measured headroom to plausibly explain the requested jump. It reads the exact compressed bytes of every selected expert, with no model computation. Coalesced vector loads feed four observable XOR checksums; independent CPU checksums validate every selected byte range. The control uses the same 8 KiB chunks for all inputs, seven rounds of ten repetitions, and frozen production-FFN replays before and after the scan.
+
+| Native captured rows | Captures | Selected weight payload, median MiB | Read-only scan, median ms | Complete FFN, median ms | Median paired FFN/scan ratio |
+| ---: | ---: | ---: | ---: | ---: | ---: |
+| 42, B6xQ7 | 5 | 448.44 | 1.905 | 2.541 | 1.359x |
+| 56, B8xQ7 | 5 | 582.42 | 2.466 | 3.403 | 1.380x |
+
+FFN times use each capture's midpoint of the before/after medians. The ratios are paired per capture, not ratios of table medians. Other scan chunk sizes give 2.491-2.548 ms at M56; a separate 96 MiB cache-flush control gives 2.559 ms at the fixed 8 KiB size. The device reports 24 MiB of L2. The flush is outside the event window and is an eviction attempt, not proof of cold DRAM. M56 FFN drift between bracketing runs ranges from -1.37% to +0.63% per capture.
+
+The arithmetic padding is substantial: the current M56 token tiles execute a median 24.34x the useful token-column work, or 25.97x after including down-projection K padding. But a separate Nsight Compute profile of the median-selected-expert M56 input records 628,068,608 bytes of L2 refill equivalents against 610,713,600 bytes of selected compressed weights, only 2.84% extra. All observed fills use the system-memory aperture. This is data returned to GPU L2, not measured memory-controller traffic or total LPDDR bandwidth. The profile uses five replay passes; its timings are excluded from the unprofiled scan comparison.
+
+Matched route accounting also distinguishes MoE from dense weight reuse. Within each saved B8xQ7 batch, compare the union of all selected experts with the sum of expert sets selected by those exact eight sequences separately. The median payload reuse factor is only 1.469x, versus ideal 8x logical cross-sequence weight reuse for a dense projection. B6xQ7 gives 1.384x. For the profiled B8 sample, the separate sequences select 313 expert payloads in total, versus 213 distinct payloads for the batch: 897.43 MB versus 610.71 MB. These are paired logical byte counts, not predicted throughput.
+
+Together, these controls show why padded arithmetic alone does not imply a similarly large time saving. The read-only control takes much of the complete FFN latency, and batching these routes provides limited weight reuse. The remaining gap is worth investigating, but this evidence does not support expecting the 3.00x full-model gain needed to reach 360 tok/s at C6 from 119.95 solely by removing MMQ padding. The scan includes checksum/launch overhead and differs in access pattern and cache history; it is neither a physical lower bound nor an attainable-FFN guarantee. These fixed-Q7 layer-8 captures also differ from the adaptive-depth full-model run, so no model-wide ceiling is inferred.
+
+All 312 scan checksum comparisons pass, and focused Compute Sanitizer reports zero errors. Both 71-case FFN replays pass all 26 native source-path guards. Six pre-existing numerical diagnostic failures comparing GEMV with alternate MMQ remain visible in small native/derived cases; those alternate outputs are not substituted into this control's current-path comparison. The release CLI cargo check passes, and no production kernel changes result from this followup. [Scan samples and methodology](raw/optimization/headroom/selected_scan/report.md), [L2 refill counters](raw/optimization/headroom/l2_refill/README.md), [paired route reuse](raw/optimization/headroom/accounting/paired_sequence_reuse.md), and [operation accounting](raw/optimization/headroom/accounting/report.md) retain the evidence and an unimplemented integer-MMA design with its risks.
+
 ## Skip padded activation-column loads
 
 Grouped MMQ used to read every column of its activation tile, including columns past an expert's final assignment. The kernel now fills those unused shared-memory columns with zero without reading them from global memory. Valid columns, tile selection, routing, and accumulation are unchanged. The optimization applies to grouped tiles of at most 64 columns.

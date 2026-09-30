@@ -1,0 +1,124 @@
+{
+  "label": "masked_mmq",
+  "output": "/home/ericbuehler/qwen4exp_work/moe_headroom_20260930/l2_refill/masked_mmq",
+  "command": [
+    "/opt/nvidia/nsight-compute/2026.2.1/ncu",
+    "--config-file",
+    "0",
+    "--section-folder",
+    "/opt/nvidia/nsight-compute/2026.2.1/sections",
+    "--target-processes",
+    "application-only",
+    "--replay-mode",
+    "kernel",
+    "--cache-control",
+    "none",
+    "--clock-control",
+    "none",
+    "--import-sass",
+    "no",
+    "--kernel-name-base",
+    "function",
+    "--kernel-name",
+    "regex:^mul_mat_q$",
+    "--launch-skip",
+    "12",
+    "--launch-count",
+    "3",
+    "--metrics",
+    "gpu__time_duration.sum,lts__d_sectors_fill_sysmem.sum,lts__d_sectors_fill_device.sum,lts__t_sectors_op_read.sum,lts__t_sectors_op_read_lookup_hit.sum,lts__t_sectors_op_read_lookup_miss.sum,lts__t_sectors_aperture_sysmem_op_read_lookup_miss.sum,lts__t_sectors_aperture_device_op_read_lookup_miss.sum,lts__t_sectors_op_write.sum,lts__t_sector_hit_rate.pct",
+    "--disable-extra-suffixes",
+    "--export",
+    "/home/ericbuehler/qwen4exp_work/moe_headroom_20260930/l2_refill/masked_mmq/profile",
+    "/home/ericbuehler/qwen4exp_work/moe_optimization_20260930/final_serving/build/moe_dispatch_bench-0dfba70e2949feab",
+    "--exact",
+    "flash_next_real_routing_replay",
+    "--ignored",
+    "--nocapture",
+    "--test-threads=1"
+  ],
+  "environment_overrides": {
+    "MISTRALRS_MOE_REPLAY_DIR": "/home/ericbuehler/qwen4exp_work/moe_headroom_20260930/l2_refill/masked_mmq/selected_sample",
+    "MISTRALRS_MOE_BENCH_OUTPUT": "/home/ericbuehler/qwen4exp_work/moe_headroom_20260930/l2_refill/masked_mmq/profiled_test_output_not_benchmark.json"
+  },
+  "binary_sha256_expected": "eaf7d867dadfd56433f0f8a093e0f6dd320b1bcfde76ee76c58e32027443f7f1",
+  "sample_selection": {
+    "rule": "Closest observed unique-expert count to the median among native B8xQ7 captures; filename breaks ties.",
+    "median_unique_experts": 213,
+    "selected_unique_experts": 213,
+    "selected_filename": "c8_target_verify_b8_q7_04.json",
+    "candidates": [
+      {
+        "filename": "c8_target_verify_b8_q7_00.json",
+        "unique_experts": 132
+      },
+      {
+        "filename": "c8_target_verify_b8_q7_01.json",
+        "unique_experts": 184
+      },
+      {
+        "filename": "c8_target_verify_b8_q7_02.json",
+        "unique_experts": 216
+      },
+      {
+        "filename": "c8_target_verify_b8_q7_03.json",
+        "unique_experts": 219
+      },
+      {
+        "filename": "c8_target_verify_b8_q7_04.json",
+        "unique_experts": 213
+      }
+    ]
+  },
+  "metrics": {
+    "gpu__time_duration.sum": {
+      "line": 7446,
+      "query_line": "gpu__time_duration.sum                                                                       Counter         ns              equals to gpu__time_duration_measured_user if collectable, otherwise"
+    },
+    "lts__d_sectors_fill_device.sum": {
+      "line": 68347,
+      "query_line": "lts__d_sectors_fill_device.sum                                              Counter         sector          # of sectors written to LTS from FBPA (This counter metric represents"
+    },
+    "lts__d_sectors_fill_sysmem.sum": {
+      "line": 68471,
+      "query_line": "lts__d_sectors_fill_sysmem.sum                                              Counter         sector          # of sectors filled from system memory (This counter metric"
+    },
+    "lts__t_sector_hit_rate.pct": {
+      "line": 209146,
+      "query_line": "lts__t_sector_hit_rate.pct                                                  Ratio           %               proportion of L2 sector lookups that hit (This ratio metric"
+    },
+    "lts__t_sectors_aperture_device_op_read_lookup_miss.sum": {
+      "line": 219577,
+      "query_line": "lts__t_sectors_aperture_device_op_read_lookup_miss.sum                                   Counter         sector          # of LTS sectors accessing device memory (vidmem) for reads that"
+    },
+    "lts__t_sectors_aperture_sysmem_op_read_lookup_miss.sum": {
+      "line": 245313,
+      "query_line": "lts__t_sectors_aperture_sysmem_op_read_lookup_miss.sum                                   Counter         sector          # of LTS sectors accessing system memory (sysmem) for reads that"
+    },
+    "lts__t_sectors_op_read.sum": {
+      "line": 255588,
+      "query_line": "lts__t_sectors_op_read.sum                                                  Counter         sector          # of LTS sectors for reads (This counter metric represents the sum"
+    },
+    "lts__t_sectors_op_read_lookup_hit.sum": {
+      "line": 257254,
+      "query_line": "lts__t_sectors_op_read_lookup_hit.sum                                                 Counter         sector          # of LTS sectors for reads that hit (This counter metric represents"
+    },
+    "lts__t_sectors_op_read_lookup_miss.sum": {
+      "line": 257378,
+      "query_line": "lts__t_sectors_op_read_lookup_miss.sum                                            Counter         sector          # of LTS sectors for reads that missed (This counter metric"
+    },
+    "lts__t_sectors_op_write.sum": {
+      "line": 258107,
+      "query_line": "lts__t_sectors_op_write.sum                                                 Counter         sector          # of LTS sectors for writes (This counter metric represents the sum"
+    }
+  },
+  "limits": [
+    "L2 refill sectors are data delivered to GPU L2 from system/device apertures, not memory-controller transactions or total LPDDR traffic.",
+    "32 times a sector count is an L2 interface byte equivalent. It does not establish physical DRAM bytes, CPU traffic, memory utilization, or bandwidth headroom.",
+    "NCU serializes and replays kernels; cache-control none preserves preceding work but later passes may alter cache contents. These are diagnostic rates, not serving performance.",
+    "One selected captured layer/input is reused. This warmed isolated-layer footprint differs from a full-model execution.",
+    "Read misses count requests that missed; fills count returned sectors. They need not agree because of request merging, other requests, aperture semantics, and replay.",
+    "The script does not measure external writes. L2 write-request sectors are not writeback traffic."
+  ],
+  "launch_selection": "Default MMQ skip=12 skips one reference forward and three warmups, each with gate/up/down; captures the next native56 gate/up/down. Custom kernels/tests must re-audit their launch order."
+}

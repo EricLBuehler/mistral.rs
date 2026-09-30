@@ -1,0 +1,58 @@
+[
+  {
+    "rows": 1,
+    "captures": 8,
+    "selected_experts_median": 10.0,
+    "selected_payload_mib_median": 27.34375,
+    "warm_scan_ms_median": 0.09583680331707001,
+    "flush_control_ms_median": 0.18665439635515213,
+    "ffn_before_ms_median": 0.11314080357551574,
+    "ffn_after_ms_median": 0.10990239977836609,
+    "ffn_stage_midpoint_ms_median": 0.1119920015335083,
+    "paired_ffn_midpoint_over_warm_scan_median": 1.1658757720296684,
+    "ffn_after_vs_before_percent_min": -23.29370426931765,
+    "ffn_after_vs_before_percent_max": 12.38013812636396
+  },
+  {
+    "rows": 7,
+    "captures": 8,
+    "selected_experts_median": 31.0,
+    "selected_payload_mib_median": 84.765625,
+    "warm_scan_ms_median": 0.3679167926311493,
+    "flush_control_ms_median": 0.43219198286533356,
+    "ffn_before_ms_median": 0.541321587562561,
+    "ffn_after_ms_median": 0.5540464162826537,
+    "ffn_stage_midpoint_ms_median": 0.5476840019226075,
+    "paired_ffn_midpoint_over_warm_scan_median": 1.505484455919883,
+    "ffn_after_vs_before_percent_min": -2.12804208964934,
+    "ffn_after_vs_before_percent_max": 4.214632415714736
+  },
+  {
+    "rows": 42,
+    "captures": 5,
+    "selected_experts_median": 164,
+    "selected_payload_mib_median": 448.4375,
+    "warm_scan_ms_median": 1.905273675918579,
+    "flush_control_ms_median": 1.9755264520645142,
+    "ffn_before_ms_median": 2.530422401428223,
+    "ffn_after_ms_median": 2.5510719299316404,
+    "ffn_stage_midpoint_ms_median": 2.5407471656799316,
+    "paired_ffn_midpoint_over_warm_scan_median": 1.3590314203518066,
+    "ffn_after_vs_before_percent_min": -0.9561178296795703,
+    "ffn_after_vs_before_percent_max": 3.4938236577833015
+  },
+  {
+    "rows": 56,
+    "captures": 5,
+    "selected_experts_median": 213,
+    "selected_payload_mib_median": 582.421875,
+    "warm_scan_ms_median": 2.465721607208252,
+    "flush_control_ms_median": 2.558544158935547,
+    "ffn_before_ms_median": 3.3970272064208986,
+    "ffn_after_ms_median": 3.39769287109375,
+    "ffn_stage_midpoint_ms_median": 3.4027328491210938,
+    "paired_ffn_midpoint_over_warm_scan_median": 1.3800150183920188,
+    "ffn_after_vs_before_percent_min": -1.3730714989334314,
+    "ffn_after_vs_before_percent_max": 0.6319776837561797
+  }
+]

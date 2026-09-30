@@ -1,0 +1,12 @@
+{
+  "complete": true,
+  "scope": "CPU-only parser and sample-selection self-check; no profiler or GPU workload",
+  "checks": [
+    "Sector-byte/rate formula correct",
+    "Zero duration rejected",
+    "Missing/NaN counters rejected",
+    "Saved query contains all requested metrics",
+    "Median selection matches earlier native56 capture"
+  ],
+  "synthetic_fixture_retained": false
+}
