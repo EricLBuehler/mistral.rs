@@ -1,9 +1,0 @@
-
-running 1 test
-test grouped_gemv_replay::flash_next_grouped_gemv_f32_oracle ... loading blk.8.ffn_gate_exps.weight
-loading blk.8.ffn_up_exps.weight
-loading blk.8.ffn_down_exps.weight
-ok
-
-test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 8 filtered out; finished in 5.04s
-

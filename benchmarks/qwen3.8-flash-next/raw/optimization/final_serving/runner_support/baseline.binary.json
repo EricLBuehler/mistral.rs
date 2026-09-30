@@ -1,7 +1,0 @@
-{
-  "path": "/home/ericbuehler/qwen4exp_work/moe_optimization_20260930/final_serving/baseline.mistralrs",
-  "sha256": "d245efbb543fa8131f71aee34fef3a868cb1f3c0cfba8eaafd5b4fd7d4c64588",
-  "bytes": 609661096,
-  "original_path": "/home/ericbuehler/mistral.rs/target/release/mistralrs",
-  "preserved_at": "2026-09-30T16:06:42.453993+00:00"
-}

@@ -1,8 +1,0 @@
-Arm       C  Aggregate tok/s     Per-active tok/s    Mean active
-fp8       1     8.118 +/- 0.020     8.118 +/- 0.020  1.000
-fp8       8    59.253 +/- 0.075     7.423 +/- 0.017  7.982
-  C8/C1 aggregate: 7.2994x; per-active retention: 91.44%
-q4k       1    13.019 +/- 0.002    13.019 +/- 0.002  1.000
-q4k       8    71.009 +/- 0.105     8.891 +/- 0.019  7.986
-  C8/C1 aggregate: 5.4543x; per-active retention: 68.29%
-/home/ericbuehler/qwen4exp_work/kernel_comparison_20260930/comparison.json

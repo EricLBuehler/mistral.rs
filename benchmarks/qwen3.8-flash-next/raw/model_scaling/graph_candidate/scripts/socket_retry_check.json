@@ -1,9 +1,0 @@
-{
-  "complete": true,
-  "scope": "Local ephemeral loopback sockets only; no model/API/GPU",
-  "checks": [
-    "SO_REUSEADDR bind rejects an existing live listener",
-    "Without SO_REUSEADDR TIME_WAIT reproduces EADDRINUSE",
-    "With SO_REUSEADDR the TIME_WAIT port can be rebound"
-  ]
-}

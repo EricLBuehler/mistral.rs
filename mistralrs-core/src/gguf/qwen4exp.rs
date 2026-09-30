@@ -516,8 +516,8 @@ fn token_id(archive: &GgufArchive, token: &str) -> Result<usize> {
 mod tests {
     use super::*;
 
-    const LOCAL_GGUF_DIR: &str = "qwen4exp_work/gguf/UD-Q4_K_XL";
-    const LOCAL_PROJECTOR: &str = "qwen4exp_work/gguf/mmproj-BF16.gguf";
+    const GGUF_DIR_ENV: &str = "MISTRALRS_TEST_QWEN4EXP_GGUF_DIR";
+    const PROJECTOR_ENV: &str = "MISTRALRS_TEST_QWEN4EXP_PROJECTOR";
 
     fn source_names<'a>(binding: &'a GgufTensorBinding, out: &mut Vec<&'a str>) {
         match binding {
@@ -540,22 +540,32 @@ mod tests {
         }
     }
 
-    fn local_archive() -> Option<GgufArchive> {
-        let dir = std::path::Path::new(&std::env::var("HOME").ok()?).join(LOCAL_GGUF_DIR);
-        let mut files = std::fs::read_dir(dir)
-            .ok()?
-            .filter_map(|entry| Some(entry.ok()?.path()))
+    fn checkpoint_archive() -> Result<GgufArchive> {
+        let dir = std::env::var_os(GGUF_DIR_ENV).with_context(|| {
+            format!("set {GGUF_DIR_ENV} to the Qwen3.8-Flash-Next GGUF shard directory")
+        })?;
+        let mut files = std::fs::read_dir(&dir)
+            .with_context(|| format!("cannot read {GGUF_DIR_ENV}={dir:?}"))?
+            .map(|entry| entry.map(|entry| entry.path()))
+            .collect::<std::io::Result<Vec<_>>>()?
+            .into_iter()
             .filter(|path| path.extension().is_some_and(|ext| ext == "gguf"))
             .collect::<Vec<_>>();
         files.sort();
-        GgufArchive::open(&files).ok()
+        anyhow::ensure!(
+            !files.is_empty(),
+            "no GGUF shards found in {GGUF_DIR_ENV}={dir:?}"
+        );
+        Ok(GgufArchive::open(&files)?)
     }
 
     #[test]
-    #[ignore = "requires the local Qwen3.8-Flash-Next GGUF and projector"]
+    #[ignore = "requires MISTRALRS_TEST_QWEN4EXP_GGUF_DIR and MISTRALRS_TEST_QWEN4EXP_PROJECTOR"]
     fn local_qwen4exp_projector_config_and_bindings_are_complete() -> Result<()> {
-        let mut archive = local_archive().context("local GGUF not found")?;
-        let projector = std::path::Path::new(&std::env::var("HOME")?).join(LOCAL_PROJECTOR);
+        let mut archive = checkpoint_archive()?;
+        let projector = std::env::var_os(PROJECTOR_ENV).with_context(|| {
+            format!("set {PROJECTOR_ENV} to the Qwen3.8-Flash-Next mmproj GGUF file")
+        })?;
         archive.merge_component(GgufArchive::open_file(projector)?)?;
         let config = prepare_qwen4exp_config(None, &archive)?;
         let parsed: Qwen4ExpConfig = serde_json::from_str(&config)?;
@@ -597,9 +607,9 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "requires the local Qwen3.8-Flash-Next GGUF"]
+    #[ignore = "requires MISTRALRS_TEST_QWEN4EXP_GGUF_DIR"]
     fn local_qwen4exp_gguf_config_and_bindings_are_complete() -> Result<()> {
-        let archive = local_archive().context("local GGUF not found")?;
+        let archive = checkpoint_archive()?;
         let config = prepare_qwen4exp_config(None, &archive)?;
         let parsed: Qwen4ExpConfig = serde_json::from_str(&config)?;
         let text = &parsed.text_config;

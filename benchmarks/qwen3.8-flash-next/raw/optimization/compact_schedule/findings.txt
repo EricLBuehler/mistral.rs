@@ -1,5 +1,0 @@
-The default-tile compact scheduler was rejected. All 25 captured-route outputs are bit-exact against the freshly linked bounded-mask baseline (maximum absolute and RMS difference 0; cosine 1). Independent tail/stream-K CPU-oracle and dynamic-routing CUDA graph tests pass, including compute-sanitizer with 0 errors.
-
-Ordinary CUDA-event FFN medians (masked baseline -> compact): native42 2.5516 -> 5.4379 ms; native56 3.4267 -> 7.3828 ms. Paired baseline/compact ratios are 0.467 and 0.467, respectively. Derived B8xQ3/Q4/Q5 rows24/32/40 are likewise slower (ratios0.560/0.478/0.468). The unchanged GEMV timing control has native ratios0.988/0.991, so ordinary drift does not explain the roughly doubled grouped cost.
-
-This tests one fixed-grid persistent full-K implementation, not every possible compact scheduler. It adds one GPU prefix kernel per projection, skips empty expert tiles, preserves full column coverage and the existing MMA math, and uses no CPU readback. No tile16 followup was run. Production sources and native archive were preserved; no serving gain is claimed. These are warmed single-layer captured-operand FFN replays, not whole-model benchmarks.

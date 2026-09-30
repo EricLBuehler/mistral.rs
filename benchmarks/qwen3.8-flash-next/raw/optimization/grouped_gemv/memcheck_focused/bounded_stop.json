@@ -1,4 +1,0 @@
-{
-  "at": "2026-09-30T16:13:07.296089+00:00",
-  "reason": "Captured graph nodes may retain instrumentation across timing iterations. Replace with a separate validation-only harness, no timing loops. Incomplete run has no pass/fail conclusion."
-}

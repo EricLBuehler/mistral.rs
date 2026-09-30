@@ -1,5 +1,0 @@
-python C=8 trial=0 warmup=True aggregate=216.396 active=7.807
-python C=8 trial=1 warmup=True aggregate=226.375 active=7.805
-python C=8 trial=2 warmup=False aggregate=258.178 active=7.788
-python C=8 trial=3 warmup=False aggregate=236.233 active=7.788
-python C=8 trial=4 warmup=False aggregate=270.291 active=7.840

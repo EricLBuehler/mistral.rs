@@ -1,5 +1,0 @@
-{
-  "at": "2026-09-30T16:10:36.106973+00:00",
-  "runner_pid": 2432142,
-  "reason": "Full replay instrumentation exceeded the intended focused-check scope; stop before three minutes and rerun only first24 candidate kernels, covering original and changed-route graph checks. No pass/fail claim from incomplete run."
-}

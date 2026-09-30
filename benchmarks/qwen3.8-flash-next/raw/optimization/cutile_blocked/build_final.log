@@ -1,7 +1,0 @@
-warning: mistralrs-quant@0.9.4: Using 10 threads for compilation
-warning: mistralrs-quant@0.9.4: Using cached cutlass at /home/ericbuehler/.cudaforge/git/checkouts/cutlass-7127592069c2fe01
-warning: mistralrs-quant@0.9.4: Compiling 45 of 45 kernels
-   Compiling mistralrs-quant v0.9.4 (/home/ericbuehler/mistral.rs/mistralrs-quant)
-    Finished `release` profile [optimized] target(s) in 1.45s
-  Executable tests/cutile_gguf_moe_tests.rs (target/release/deps/cutile_gguf_moe_tests-3a81d5e6af257f7b)
-  Executable tests/moe_dispatch_bench.rs (target/release/deps/moe_dispatch_bench-0dfba70e2949feab)

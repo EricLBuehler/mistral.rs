@@ -1,7 +1,0 @@
-closed-loop C=1 trial=0 warmup=True aggregate=20.99 tok/s active=1.00 request_latency=6.099s
-closed-loop C=1 trial=1 warmup=True aggregate=31.01 tok/s active=1.00 request_latency=4.127s
-closed-loop C=1 trial=2 warmup=False aggregate=30.93 tok/s active=1.00 request_latency=4.139s
-closed-loop C=1 trial=3 warmup=False aggregate=30.93 tok/s active=1.00 request_latency=4.138s
-closed-loop C=1 trial=4 warmup=False aggregate=30.94 tok/s active=1.00 request_latency=4.137s
-closed-loop C=1 trial=5 warmup=False aggregate=30.91 tok/s active=1.00 request_latency=4.141s
-closed-loop C=1 trial=6 warmup=False aggregate=30.90 tok/s active=1.00 request_latency=4.142s

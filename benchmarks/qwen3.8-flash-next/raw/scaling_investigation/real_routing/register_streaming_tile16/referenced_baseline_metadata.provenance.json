@@ -1,7 +1,0 @@
-{
-  "original_path": "/home/ericbuehler/qwen4exp_work/real_routing_20260930/ncu_native56/metadata.json",
-  "sha256": "3573cbd30201510d91af81f202265aecf329dea405ae0ea7c2fa834a36d1ea5d",
-  "comparison_field": "baseline_metadata_sha256",
-  "existing_archive": "../ncu_native56/metadata.json",
-  "existing_archive_identical": true
-}

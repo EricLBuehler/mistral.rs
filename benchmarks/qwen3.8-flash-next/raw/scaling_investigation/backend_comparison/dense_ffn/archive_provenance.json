@@ -1,9 +1,0 @@
-{
-  "packaged_at": "2026-09-30T13:42:15.812987+00:00",
-  "external_originals": {
-    "default": "/home/ericbuehler/qwen4exp_work/kernel_comparison_20260930/dense_projection",
-    "affine_on": "/home/ericbuehler/qwen4exp_work/kernel_comparison_20260930/dense_projection_affine_on"
-  },
-  "package_script_sha256": "826b840c1b28b527e897746909c307ec7893a572395c3f9e2aaa79525c5ded58",
-  "originals_preserved": true
-}
