@@ -5,12 +5,10 @@ description: Use MTP assistant models to draft multiple tokens per target verifi
 
 import { Tabs, TabItem } from '@astrojs/starlight/components';
 
-Speculative decoding lets a smaller assistant propose future tokens while the target model verifies them in parallel. mistral.rs exposes this through the MTP (Multi-Token Prediction) API: attach an assistant checkpoint or enable a supported model's built-in prediction head to draft several tokens per target step.
-
-Every accepted draft token is verified by the target model before it is emitted.
+Speculative decoding drafts several tokens per step using a separate assistant or the model's built-in prediction head. The target model verifies the drafts in parallel before emitting accepted tokens. Configure it through the MTP (Multi-Token Prediction) API.
 
 :::caution
-The target must run with [paged attention](/guides/perf/paged-attention/) (the default on CUDA). Loading fails with an error if paged attention is off.
+Speculative decoding requires [paged attention](/guides/perf/paged-attention/), which is enabled by default on CUDA.
 :::
 
 <Tabs>
@@ -50,12 +48,12 @@ let model = mistralrs::ModelBuilder::new("google/gemma-4-E4B-it")
     .await?;
 ```
 
-For full control, use `with_mtp_config(MtpConfig::new("google/gemma-4-E4B-it-assistant", Some(6)))`. Use `MtpConfig::builtin(None)` for a supported built-in head with automatic draft depth. The MTP builder methods exist on the text, multimodal, and auto-detecting model builders.
+You can also pass `MtpConfig::new("google/gemma-4-E4B-it-assistant", Some(6))` to `with_mtp_config`. Use `MtpConfig::builtin(None)` for a built-in head with automatic draft depth. These methods are available on the text, multimodal, and auto-detecting model builders.
 
 </TabItem>
 </Tabs>
 
-`--mtp-n-predict N` fixes the number of draft tokens per step. Omit it to let the engine adapt depth. The throughput tuner uses draft acceptance, measured step time, and batch size, and periodically samples other depths as the workload changes. Built-in Qwen heads choose among 2, 3, 4, and 6 drafts. Gemma 4 uses the same candidates up to the assistant's `num_assistant_tokens` in `generation_config.json` (6 if absent). DFlash has its own depth limits and serving policy described below.
+`--mtp-n-predict N` fixes the number of draft tokens per step. Without it, the engine tunes depth using draft acceptance, step time, and batch size, periodically trying other depths as the workload changes. Built-in Qwen heads choose among 2, 3, 4, and 6 drafts. Gemma 4 uses the same candidates, capped by `num_assistant_tokens` in the assistant's `generation_config.json` (6 if absent). DFlash uses the policy described below.
 
 ## Supported models
 
@@ -66,8 +64,6 @@ For full control, use `with_mtp_config(MtpConfig::new("google/gemma-4-E4B-it-ass
 | MTP | Qwen3.8-Flash-Next | Built into the checkpoint (`--mtp`) | Safetensors/UQFF with paged attention |
 | DFlash / DFlash 2 | Qwen3.5, Qwen3.8 | DFlash draft checkpoints (`--mtp-model`) | Supported with paged attention |
 
-Legacy target/draft speculative decoding has been removed. New speculative decoding features use the MTP proposer/target path.
-
 ## Qwen3.5 / Qwen3.8
 
 Qwen3.5 and Qwen3.8 checkpoints ship a multi-token prediction head (`mtp.*` weights) sharing the target's embeddings and `lm_head`. Pass `--mtp` to load it; no separate assistant model is needed:
@@ -76,9 +72,11 @@ Qwen3.5 and Qwen3.8 checkpoints ship a multi-token prediction head (`mtp.*` weig
 mistralrs serve -m Qwen/Qwen3.8-27B --quant 4 --mtp
 ```
 
-The head keeps its own paged KV cache alongside the target's, so the KV budget grows by one attention layer. Depth is tuned automatically unless `--mtp-n-predict` is set. Multi-token verification can use different quantized matrix and recurrent kernels from ordinary decoding, so log probabilities and greedy token choices can differ; token-for-token equivalence is not guaranteed. UQFF artifacts must include the `mtp.*` tensors to use `--mtp`; built-in heads are not supported through GGUF loading.
+The head adds one attention layer's paged KV cache. Safetensors and UQFF checkpoints must contain the `mtp.*` weights; GGUF loading does not support built-in MTP.
 
-Built-in Qwen MTP currently recomputes cached prompt prefixes because its shifted-token KV rows cannot safely share the target model's prefix block hashes. This can increase time to first token for repeated prompts. DFlash retains its own prefix-cache behavior.
+Multi-token verification can use different quantized matrix and recurrent kernels from ordinary decoding. Log probabilities and greedy token choices can differ, so token-for-token equivalence is not guaranteed.
+
+Built-in Qwen MTP recomputes cached prompt prefixes, which can increase time to first token for repeated prompts. This restriction does not apply to DFlash.
 
 Qwen3.8-Flash-Next uses the same built-in-head flags:
 
@@ -86,7 +84,7 @@ Qwen3.8-Flash-Next uses the same built-in-head flags:
 mistralrs serve -m Qwen/Qwen3.8-Flash-Next --isq q4k --mtp
 ```
 
-Flash-Next supports its own built-in head only, with no external assistant or DFlash support. See [model-family notes](/guides/models/model-family-notes/#qwen38-flash-next) for its memory requirements.
+Flash-Next supports only its built-in head. External assistants and DFlash are unsupported. See [model-family notes](/guides/models/model-family-notes/#qwen38-flash-next) for memory requirements.
 
 ## DFlash and DFlash 2 (Qwen3.5 / Qwen3.8)
 
@@ -112,16 +110,15 @@ shallower depth so the recurrent checkpoint layout fits the configured sequence 
 preserving memory for the requested paged KV cache. Pass `--mtp-n-predict` to request a fixed depth
 instead. Automatic CUDA serving also adapts the active depth to live load: up to 8 live DFlash
 contexts use the full reserved depth, while larger loads use up to 3 drafts. Set
-`MISTRALRS_DFLASH_ADAPTIVE=0` (or `false`) to use throughput-based depth tuning instead of the
-batch-load policy. That tuner also applies when the batch-load policy is unavailable, choosing
-among 3, 5, and 7 drafts up to the reserved depth. The drafter's projection
+`MISTRALRS_DFLASH_ADAPTIVE=0` (or `false`) to tune depth from measured throughput instead.
+That tuner also runs when adaptation by live context count is unavailable. It chooses among
+3, 5, and 7 drafts, capped by the reserved depth. The drafter's projection
 weights are requantized to the target's in-situ quantization type at load (override with the
 `MISTRALRS_DFLASH_ISQ` environment variable, e.g. `q6k` or `none` for bf16).
 
 Acceptance is strongly content-dependent: [incoai/Qwen3.8-27B-DFlash2](https://huggingface.co/incoai/Qwen3.8-27B-DFlash2)
 accepts ~7 of 7 drafts on math/code and much less on thinking-mode reasoning traces, which are out
-of its training distribution. As everywhere in this engine, drafts are verified by the target:
-greedy output is byte-identical to non-speculative decoding.
+of its training distribution.
 
 ## Gemma 4
 
