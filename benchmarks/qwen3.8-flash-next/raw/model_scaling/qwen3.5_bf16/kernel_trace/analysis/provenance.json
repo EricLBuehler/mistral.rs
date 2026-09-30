@@ -1,0 +1,283 @@
+{
+  "complete": true,
+  "analyzer_sha256": "5086ebf749782c2a6a9588c034aeb603e00a5d24a012db758318c2d89a67d64c",
+  "run_metadata_sha256": "34132c1c8b5968dce03424f0a07a57d1ce9916e66453d84c0116686a8cdd1aed",
+  "steps": [
+    {
+      "command": [
+        "/opt/nvidia/nsight-systems/2026.1.3/bin/nsys",
+        "export",
+        "--type=sqlite",
+        "--output=/home/ericbuehler/qwen4exp_work/qwen3_moe_scaling_20260930/kernel_trace/analysis/profile_c1.sqlite",
+        "/home/ericbuehler/qwen4exp_work/qwen3_moe_scaling_20260930/kernel_trace/capture/profile_c1.nsys-rep"
+      ],
+      "returncode": 0,
+      "log": "profile_c1.export.log",
+      "log_sha256": "432984853e5b097efc0091f69a6fbeb43e5a3155acbfbcd614d3de786d71e317"
+    },
+    {
+      "command": [
+        "/home/ericbuehler/mistral.rs/.venv/bin/python3",
+        "/home/ericbuehler/qwen4exp_work/qwen3_moe_scaling_20260930/kernel_trace/dependencies/analyze_nsys.py",
+        "/home/ericbuehler/qwen4exp_work/qwen3_moe_scaling_20260930/kernel_trace/analysis/profile_c1.sqlite",
+        "--output=/home/ericbuehler/qwen4exp_work/qwen3_moe_scaling_20260930/kernel_trace/analysis/profile_c1.analysis.json",
+        "--windows=/home/ericbuehler/qwen4exp_work/qwen3_moe_scaling_20260930/kernel_trace/analysis/profile_c1.windows.json"
+      ],
+      "returncode": 0,
+      "log": "profile_c1.analysis.log",
+      "log_sha256": "116b0b5d0c42137fe468241799969d06a3cc5195c070d2029e7b4ac0a807fee9"
+    },
+    {
+      "command": [
+        "/opt/nvidia/nsight-systems/2026.1.3/bin/nsys",
+        "export",
+        "--type=sqlite",
+        "--output=/home/ericbuehler/qwen4exp_work/qwen3_moe_scaling_20260930/kernel_trace/analysis/profile_c8.sqlite",
+        "/home/ericbuehler/qwen4exp_work/qwen3_moe_scaling_20260930/kernel_trace/capture/profile_c8.nsys-rep"
+      ],
+      "returncode": 0,
+      "log": "profile_c8.export.log",
+      "log_sha256": "cf85fe6f6f71bf40d7cd1538abe9a8aa740ab289fc95d8623be94538703fec88"
+    },
+    {
+      "command": [
+        "/home/ericbuehler/mistral.rs/.venv/bin/python3",
+        "/home/ericbuehler/qwen4exp_work/qwen3_moe_scaling_20260930/kernel_trace/dependencies/analyze_nsys.py",
+        "/home/ericbuehler/qwen4exp_work/qwen3_moe_scaling_20260930/kernel_trace/analysis/profile_c8.sqlite",
+        "--output=/home/ericbuehler/qwen4exp_work/qwen3_moe_scaling_20260930/kernel_trace/analysis/profile_c8.analysis.json",
+        "--windows=/home/ericbuehler/qwen4exp_work/qwen3_moe_scaling_20260930/kernel_trace/analysis/profile_c8.windows.json"
+      ],
+      "returncode": 0,
+      "log": "profile_c8.analysis.log",
+      "log_sha256": "5ef8e07d59ad138ccfddabb29a8f1862c39d9d2a275bcf6af257c0911159f74e"
+    }
+  ],
+  "phases": [
+    {
+      "name": "profile_c1",
+      "report_sha256": "791ade1da5f4a3f3d28a6228109440d91f1ce13754c6e2fd6e8d70151bddb610",
+      "sqlite_sha256": "0e747930a0045cafaf64790ebdab5db37d4bfc1b5d9180b16c89758a46fa3081",
+      "client_requests_sha256": "3e914e9d1aeca7948a71dd48e1f8998d42bb78ec38b9e90553d73c77f9eac539",
+      "alignment_file": "profile_c1.alignment.json",
+      "diagnostics": [
+        {
+          "timestamp": -214166780096,
+          "timestampType": 1,
+          "source": 2,
+          "severity": 1,
+          "text": "Process was launched by the profiler, see /tmp/nvidia/nsight_systems/quadd_session_102583530/streams/pid_2583544_stdout.log and stderr.log for program output",
+          "globalPid": 324819652444160
+        },
+        {
+          "timestamp": -213695186208,
+          "timestampType": 1,
+          "source": 1,
+          "severity": 1,
+          "text": "Common injection library initialized successfully.",
+          "globalPid": 324819652444160
+        },
+        {
+          "timestamp": -213694954816,
+          "timestampType": 1,
+          "source": 1,
+          "severity": 1,
+          "text": "Buffers holding CUDA trace data will be flushed on CudaProfilerStop() call. See --flush-on-cudaprofilerstop to control this behavior.",
+          "globalPid": 324819652444160
+        },
+        {
+          "timestamp": -213679255760,
+          "timestampType": 1,
+          "source": 1,
+          "severity": 1,
+          "text": "Loaded CUPTI library: /opt/nvidia/nsight-systems/2026.1.3/target-linux-sbsa-armv8/libcupti-sbsa.so.13.3",
+          "globalPid": 324819652444160
+        },
+        {
+          "timestamp": -213569307568,
+          "timestampType": 1,
+          "source": 1,
+          "severity": 1,
+          "text": "CUDA injection initialized successfully.",
+          "globalPid": 324819652444160
+        },
+        {
+          "timestamp": -213520259152,
+          "timestampType": 1,
+          "source": 1,
+          "severity": 3,
+          "text": "CUDA device 0: Unified Memory trace is not supported by the current driver version or configuration.",
+          "globalPid": 324819652444160
+        },
+        {
+          "timestamp": 0,
+          "timestampType": 1,
+          "source": 3,
+          "severity": 1,
+          "text": "Profiling has started.",
+          "globalPid": -144115188075855872
+        },
+        {
+          "timestamp": 309963336,
+          "timestampType": 2,
+          "source": 3,
+          "severity": 2,
+          "text": "Not all CUDA events might have been collected.",
+          "globalPid": 324819652444160
+        },
+        {
+          "timestamp": 309967480,
+          "timestampType": 2,
+          "source": 3,
+          "severity": 1,
+          "text": "Number of CUDA events collected: \t356662.",
+          "globalPid": 324819652444160
+        },
+        {
+          "timestamp": 9405056736,
+          "timestampType": 1,
+          "source": 3,
+          "severity": 1,
+          "text": "Profiling has stopped.",
+          "globalPid": -144115188075855872
+        },
+        {
+          "timestamp": 9405982976,
+          "timestampType": 1,
+          "source": 1,
+          "severity": 1,
+          "text": "CUDA legacy/software instrumented trace was collected.",
+          "globalPid": 324819652444160
+        },
+        {
+          "timestamp": 9439852176,
+          "timestampType": 1,
+          "source": 1,
+          "severity": 1,
+          "text": "Number of CUPTI events produced: \t360204, CUPTI buffers: 50.",
+          "globalPid": 324819652444160
+        },
+        {
+          "timestamp": 10397783584,
+          "timestampType": 1,
+          "source": 2,
+          "severity": 1,
+          "text": "S3EventHandler: S3 trace events were not found, not creating counters",
+          "globalPid": 281474976710656
+        },
+        {
+          "timestamp": 11322897104,
+          "timestampType": 1,
+          "source": 2,
+          "severity": 1,
+          "text": "Number of Debuginfod queries: 0 (successful queries: 0, timed out queries: 0).",
+          "globalPid": 281474976710656
+        },
+        {
+          "timestamp": 11322906672,
+          "timestampType": 1,
+          "source": 2,
+          "severity": 1,
+          "text": "Number of used Debuginfod cached files: 0.",
+          "globalPid": 281474976710656
+        },
+        {
+          "timestamp": 11322907936,
+          "timestampType": 1,
+          "source": 2,
+          "severity": 1,
+          "text": "Total time spent on all Debuginfod queries: 0 sec (successful queries: 0 sec).",
+          "globalPid": 281474976710656
+        }
+      ]
+    },
+    {
+      "name": "profile_c8",
+      "report_sha256": "a30901c486e2d46e8e1cdb3f7365db14c51f78a2661051d98a14b09a42321405",
+      "sqlite_sha256": "34627eb0d582bec1be877e5bb2d6bf025776205b2c7750d11f335c1575c62ab6",
+      "client_requests_sha256": "2a537ad52f96f4d6fca494ff7334d4bb6895c46f8aadec1adef97a17b76eea56",
+      "alignment_file": "profile_c8.alignment.json",
+      "diagnostics": [
+        {
+          "timestamp": 0,
+          "timestampType": 1,
+          "source": 3,
+          "severity": 1,
+          "text": "Profiling has started.",
+          "globalPid": -144115188075855872
+        },
+        {
+          "timestamp": 64040563,
+          "timestampType": 2,
+          "source": 3,
+          "severity": 2,
+          "text": "Not all CUDA events might have been collected.",
+          "globalPid": 324819652444160
+        },
+        {
+          "timestamp": 64045043,
+          "timestampType": 2,
+          "source": 3,
+          "severity": 1,
+          "text": "Number of CUDA events collected: \t72408.",
+          "globalPid": 324819652444160
+        },
+        {
+          "timestamp": 3602204368,
+          "timestampType": 1,
+          "source": 3,
+          "severity": 1,
+          "text": "Profiling has stopped.",
+          "globalPid": -144115188075855872
+        },
+        {
+          "timestamp": 3602430816,
+          "timestampType": 1,
+          "source": 1,
+          "severity": 1,
+          "text": "CUDA legacy/software instrumented trace was collected.",
+          "globalPid": 324819652444160
+        },
+        {
+          "timestamp": 3641519376,
+          "timestampType": 1,
+          "source": 1,
+          "severity": 1,
+          "text": "Number of CUPTI events produced: \t73361, CUPTI buffers: 50.",
+          "globalPid": 324819652444160
+        },
+        {
+          "timestamp": 3972964224,
+          "timestampType": 1,
+          "source": 2,
+          "severity": 1,
+          "text": "S3EventHandler: S3 trace events were not found, not creating counters",
+          "globalPid": 281474976710656
+        },
+        {
+          "timestamp": 4596308176,
+          "timestampType": 1,
+          "source": 2,
+          "severity": 1,
+          "text": "Number of Debuginfod queries: 0 (successful queries: 0, timed out queries: 0).",
+          "globalPid": 281474976710656
+        },
+        {
+          "timestamp": 4596315296,
+          "timestampType": 1,
+          "source": 2,
+          "severity": 1,
+          "text": "Number of used Debuginfod cached files: 0.",
+          "globalPid": 281474976710656
+        },
+        {
+          "timestamp": 4596317040,
+          "timestampType": 1,
+          "source": 2,
+          "severity": 1,
+          "text": "Total time spent on all Debuginfod queries: 0 sec (successful queries: 0 sec).",
+          "globalPid": 281474976710656
+        }
+      ]
+    }
+  ]
+}

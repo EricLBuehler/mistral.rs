@@ -1,0 +1,68 @@
+Waiting for completed vLLM measurements and cleanup.
+Starting run_capture.py
+Model ready; starting unrecorded warmups.
+{"complete": true, "output": "/home/ericbuehler/qwen4exp_work/qwen3_moe_scaling_20260930/kernel_trace/capture", "cleanup_errors": []}
+Finished run_capture.py
+Starting analyze_capture.py
+{
+  "complete": true,
+  "output": "/home/ericbuehler/qwen4exp_work/qwen3_moe_scaling_20260930/kernel_trace/analysis",
+  "capture_off_vs_recorded": [
+    {
+      "concurrency": 1,
+      "warmup_phase": "c1.warmup0",
+      "recorded_phase": "profile_c1",
+      "requests": 8,
+      "capture_off_output_tokens": 256,
+      "profiled_output_tokens": 256,
+      "capture_off_client_wall_seconds": 8.83225395300542,
+      "profiled_client_wall_seconds": 8.807415866991505,
+      "profiled_over_capture_off_wall_ratio": 0.99718779757171,
+      "identical_completion_text_count": 8,
+      "limitations": [
+        "Same server with profiler instrumentation attached in both phases; only recording is disabled in the warmup.",
+        "Sequential warmup then recorded trial, not randomized or an estimate of pure profiler overhead.",
+        "Generated text, routes, cache state, and memory pressure may also differ; inspect separate counter and memory windows.",
+        "One finite trial each, without a variability estimate; these elapsed rates do not replace official serving results."
+      ]
+    },
+    {
+      "concurrency": 8,
+      "warmup_phase": "c8.warmup0",
+      "recorded_phase": "profile_c8",
+      "requests": 8,
+      "capture_off_output_tokens": 256,
+      "profiled_output_tokens": 256,
+      "capture_off_client_wall_seconds": 3.1419651949836407,
+      "profiled_client_wall_seconds": 3.02985002900823,
+      "profiled_over_capture_off_wall_ratio": 0.9643168657137228,
+      "identical_completion_text_count": 6,
+      "limitations": [
+        "Same server with profiler instrumentation attached in both phases; only recording is disabled in the warmup.",
+        "Sequential warmup then recorded trial, not randomized or an estimate of pure profiler overhead.",
+        "Generated text, routes, cache state, and memory pressure may also differ; inspect separate counter and memory windows.",
+        "One finite trial each, without a variability estimate; these elapsed rates do not replace official serving results."
+      ]
+    }
+  ]
+}
+Finished analyze_capture.py
+Starting prove_kernels.py
+{
+  "complete": true,
+  "phases": [
+    {
+      "name": "profile_c1",
+      "kernel_launches": 20480,
+      "graph_kernel_launches": 19840,
+      "observed_decode_graph_execution": true
+    },
+    {
+      "name": "profile_c8",
+      "kernel_launches": 2720,
+      "graph_kernel_launches": 2480,
+      "observed_decode_graph_execution": true
+    }
+  ]
+}
+Finished prove_kernels.py

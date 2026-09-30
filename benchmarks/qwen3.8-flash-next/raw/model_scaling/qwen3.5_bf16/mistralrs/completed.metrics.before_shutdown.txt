@@ -1,0 +1,256 @@
+# TYPE mistralrs_paged_recurrent_prefix_validation_total counter
+mistralrs_paged_recurrent_prefix_validation_total{outcome="miss",reason="no_replay_boundary"} 393
+
+# TYPE mistralrs_paged_prefix_retention_pressure_evictions_total counter
+mistralrs_paged_prefix_retention_pressure_evictions_total{reason="allocation_pressure"} 0
+mistralrs_paged_prefix_retention_pressure_evictions_total{reason="reset"} 0
+
+# TYPE mistralrs_decode_tokens_processed_total counter
+mistralrs_decode_tokens_processed_total 49784
+
+# TYPE mistralrs_prefix_cache_tokens_reused_total counter
+mistralrs_prefix_cache_tokens_reused_total 0
+
+# TYPE mistralrs_encoder_cache_insert_rejections_total counter
+mistralrs_encoder_cache_insert_rejections_total{reason="entry_exceeds_logical_byte_capacity"} 0
+mistralrs_encoder_cache_insert_rejections_total{reason="storage_compaction_failed"} 0
+
+# TYPE mistralrs_encoder_cache_hits_total counter
+mistralrs_encoder_cache_hits_total 0
+
+# TYPE mistralrs_tokens_processed_total counter
+mistralrs_tokens_processed_total 56106
+
+# TYPE mistralrs_paged_recurrent_prefix_owner_evictions_total counter
+mistralrs_paged_recurrent_prefix_owner_evictions_total{reason="capacity"} 0
+mistralrs_paged_recurrent_prefix_owner_evictions_total{reason="block_pressure"} 0
+
+# TYPE mistralrs_encoder_cache_misses_total counter
+mistralrs_encoder_cache_misses_total 0
+
+# TYPE mistralrs_sequences_completed_total counter
+mistralrs_sequences_completed_total{reason="length"} 393
+
+# TYPE mistralrs_prefill_tokens_processed_total counter
+mistralrs_prefill_tokens_processed_total 6322
+
+# TYPE mistralrs_cuda_graph_dispatch_total counter
+mistralrs_cuda_graph_dispatch_total{component="target",mode="replay",reason="cache_hit"} 13382
+mistralrs_cuda_graph_dispatch_total{component="target",mode="skipped",reason="prefill"} 153
+
+# TYPE mistralrs_request_outcomes_total counter
+mistralrs_request_outcomes_total{outcome="completed"} 393
+
+# TYPE mistralrs_cuda_memory_maintenance_total counter
+mistralrs_cuda_memory_maintenance_total{device="cuda[0]",reason="prompt_preflight",action="observe",outcome="success"} 153
+mistralrs_cuda_memory_maintenance_total{device="cuda[0]",reason="idle",action="observe",outcome="success"} 144
+mistralrs_cuda_memory_maintenance_total{device="cuda[0]",reason="decode_boundary",action="observe",outcome="success"} 310
+mistralrs_cuda_memory_maintenance_total{device="cuda[0]",reason="prompt_boundary",action="observe",outcome="success"} 153
+
+# TYPE mistralrs_prefix_cache_lookups_total counter
+mistralrs_prefix_cache_lookups_total 393
+
+# TYPE mistralrs_cuda_graph_events_total counter
+mistralrs_cuda_graph_events_total{component="target",event="capture",outcome="success"} 8
+mistralrs_cuda_graph_events_total{component="target",event="replay",outcome="success"} 13382
+
+# TYPE http_requests_total counter
+http_requests_total{method="GET",path="/v1/models",model="none",status="200"} 1
+http_requests_total{method="POST",path="/v1/completions",model="/home/ericbuehler/hf_models/qwen3.5_35b_a3b",status="200"} 392
+
+# TYPE mistralrs_encoder_cache_evictions_total counter
+mistralrs_encoder_cache_evictions_total{reason="entry_capacity"} 0
+mistralrs_encoder_cache_evictions_total{reason="incompatible_shape"} 0
+mistralrs_encoder_cache_evictions_total{reason="logical_byte_capacity"} 0
+
+# TYPE mistralrs_prefix_cache_tokens_matched_total counter
+mistralrs_prefix_cache_tokens_matched_total 0
+
+# TYPE mistralrs_cuda_device_memory_bytes gauge
+mistralrs_cuda_device_memory_bytes{device="cuda[0]",state="total"} 130663165952
+mistralrs_cuda_device_memory_bytes{device="cuda[0]",state="available"} 5530030080
+
+# TYPE mistralrs_sequences_capacity gauge
+mistralrs_sequences_capacity 8
+
+# TYPE mistralrs_paged_recurrent_prefix_owners_used gauge
+mistralrs_paged_recurrent_prefix_owners_used 0
+
+# TYPE mistralrs_kv_cache_blocks_total gauge
+mistralrs_kv_cache_blocks_total 512
+
+# TYPE mistralrs_paged_prefix_retention_free_blocks gauge
+mistralrs_paged_prefix_retention_free_blocks 0
+
+# TYPE mistralrs_cuda_memory_pool_bytes gauge
+mistralrs_cuda_memory_pool_bytes{device="cuda[0]",pool="async",state="reserved",watermark="high"} 74423730176
+mistralrs_cuda_memory_pool_bytes{device="cuda[0]",pool="async",state="used",watermark="current"} 71170795032
+mistralrs_cuda_memory_pool_bytes{device="cuda[0]",pool="async",state="used",watermark="high"} 73801482508
+mistralrs_cuda_memory_pool_bytes{device="cuda[0]",pool="graph",state="used",watermark="current"} 268435456
+mistralrs_cuda_memory_pool_bytes{device="cuda[0]",pool="graph",state="reserved",watermark="current"} 268435456
+mistralrs_cuda_memory_pool_bytes{device="cuda[0]",pool="async",state="reclaimable",watermark="current"} 132372968
+mistralrs_cuda_memory_pool_bytes{device="cuda[0]",pool="graph",state="reserved",watermark="high"} 268435456
+mistralrs_cuda_memory_pool_bytes{device="cuda[0]",pool="async",state="reserved",watermark="current"} 71303168000
+mistralrs_cuda_memory_pool_bytes{device="cuda[0]",pool="graph",state="used",watermark="high"} 268435456
+
+# TYPE mistralrs_recurrent_state_slots_used gauge
+mistralrs_recurrent_state_slots_used 1
+
+# TYPE mistralrs_cuda_memory_required_available_bytes gauge
+mistralrs_cuda_memory_required_available_bytes{device="cuda[0]",reason="prompt_boundary"} 1020805984
+mistralrs_cuda_memory_required_available_bytes{device="cuda[0]",reason="prompt_preflight"} 1020805984
+mistralrs_cuda_memory_required_available_bytes{device="cuda[0]",reason="decode_boundary"} 1020805984
+mistralrs_cuda_memory_required_available_bytes{device="cuda[0]",reason="idle"} 1020805984
+
+# TYPE mistralrs_sequences_running gauge
+mistralrs_sequences_running 0
+
+# TYPE http_requests_in_flight gauge
+http_requests_in_flight{method="POST",path="/v1/completions",model="/home/ericbuehler/hf_models/qwen3.5_35b_a3b"} 0
+http_requests_in_flight{method="GET",path="/v1/models",model="none"} 0
+
+# TYPE mistralrs_paged_recurrent_prefix_owners_capacity gauge
+mistralrs_paged_recurrent_prefix_owners_capacity 0
+
+# TYPE mistralrs_sequences_waiting gauge
+mistralrs_sequences_waiting 0
+
+# TYPE mistralrs_paged_recurrent_prefix_checkpoints_used gauge
+mistralrs_paged_recurrent_prefix_checkpoints_used 0
+
+# TYPE mistralrs_cuda_memory_pool_release_threshold_bytes gauge
+mistralrs_cuda_memory_pool_release_threshold_bytes{device="cuda[0]",pool="async"} 18446744073709552000
+
+# TYPE mistralrs_paged_prefix_retention_entries gauge
+mistralrs_paged_prefix_retention_entries 0
+
+# TYPE mistralrs_kv_cache_blocks_available gauge
+mistralrs_kv_cache_blocks_available 512
+
+# TYPE mistralrs_cuda_memory_maintenance_pending gauge
+mistralrs_cuda_memory_maintenance_pending{device="cuda[0]"} 0
+
+# TYPE mistralrs_encoder_cache_resident_entries gauge
+mistralrs_encoder_cache_resident_entries 0
+
+# TYPE mistralrs_kv_cache_blocks_used gauge
+mistralrs_kv_cache_blocks_used 0
+
+# TYPE mistralrs_kv_cache_blocks_prefix_cached gauge
+mistralrs_kv_cache_blocks_prefix_cached 0
+
+# TYPE mistralrs_requests_pending_admission gauge
+mistralrs_requests_pending_admission 0
+
+# TYPE mistralrs_kv_cache_blocks_prefix_retained gauge
+mistralrs_kv_cache_blocks_prefix_retained 0
+
+# TYPE mistralrs_kv_cache_blocks_active gauge
+mistralrs_kv_cache_blocks_active 0
+
+# TYPE mistralrs_paged_prefix_retention_hashes gauge
+mistralrs_paged_prefix_retention_hashes 0
+
+# TYPE mistralrs_kv_cache_blocks_reserved gauge
+mistralrs_kv_cache_blocks_reserved 0
+
+# TYPE mistralrs_encoder_cache_resident_logical_bytes gauge
+mistralrs_encoder_cache_resident_logical_bytes 0
+
+# TYPE mistralrs_cuda_graph_resident_entries gauge
+mistralrs_cuda_graph_resident_entries{component="target"} 8
+
+# TYPE mistralrs_recurrent_state_slots_total gauge
+mistralrs_recurrent_state_slots_total 9
+
+# TYPE mistralrs_paged_recurrent_prefix_bytes_used gauge
+mistralrs_paged_recurrent_prefix_bytes_used 0
+
+# TYPE http_request_body_bytes histogram
+http_request_body_bytes_bucket{method="POST",path="/v1/completions",model="/home/ericbuehler/hf_models/qwen3.5_35b_a3b",le="128"} 0
+http_request_body_bytes_bucket{method="POST",path="/v1/completions",model="/home/ericbuehler/hf_models/qwen3.5_35b_a3b",le="512"} 392
+http_request_body_bytes_bucket{method="POST",path="/v1/completions",model="/home/ericbuehler/hf_models/qwen3.5_35b_a3b",le="1024"} 392
+http_request_body_bytes_bucket{method="POST",path="/v1/completions",model="/home/ericbuehler/hf_models/qwen3.5_35b_a3b",le="4096"} 392
+http_request_body_bytes_bucket{method="POST",path="/v1/completions",model="/home/ericbuehler/hf_models/qwen3.5_35b_a3b",le="16384"} 392
+http_request_body_bytes_bucket{method="POST",path="/v1/completions",model="/home/ericbuehler/hf_models/qwen3.5_35b_a3b",le="65536"} 392
+http_request_body_bytes_bucket{method="POST",path="/v1/completions",model="/home/ericbuehler/hf_models/qwen3.5_35b_a3b",le="262144"} 392
+http_request_body_bytes_bucket{method="POST",path="/v1/completions",model="/home/ericbuehler/hf_models/qwen3.5_35b_a3b",le="1048576"} 392
+http_request_body_bytes_bucket{method="POST",path="/v1/completions",model="/home/ericbuehler/hf_models/qwen3.5_35b_a3b",le="4194304"} 392
+http_request_body_bytes_bucket{method="POST",path="/v1/completions",model="/home/ericbuehler/hf_models/qwen3.5_35b_a3b",le="16777216"} 392
+http_request_body_bytes_bucket{method="POST",path="/v1/completions",model="/home/ericbuehler/hf_models/qwen3.5_35b_a3b",le="52428800"} 392
+http_request_body_bytes_bucket{method="POST",path="/v1/completions",model="/home/ericbuehler/hf_models/qwen3.5_35b_a3b",le="104857600"} 392
+http_request_body_bytes_bucket{method="POST",path="/v1/completions",model="/home/ericbuehler/hf_models/qwen3.5_35b_a3b",le="+Inf"} 392
+http_request_body_bytes_sum{method="POST",path="/v1/completions",model="/home/ericbuehler/hf_models/qwen3.5_35b_a3b"} 79282
+http_request_body_bytes_count{method="POST",path="/v1/completions",model="/home/ericbuehler/hf_models/qwen3.5_35b_a3b"} 392
+
+# TYPE http_request_duration_seconds histogram
+http_request_duration_seconds_bucket{method="GET",path="/v1/models",model="none",status="200",le="0.001"} 0
+http_request_duration_seconds_bucket{method="GET",path="/v1/models",model="none",status="200",le="0.005"} 1
+http_request_duration_seconds_bucket{method="GET",path="/v1/models",model="none",status="200",le="0.01"} 1
+http_request_duration_seconds_bucket{method="GET",path="/v1/models",model="none",status="200",le="0.025"} 1
+http_request_duration_seconds_bucket{method="GET",path="/v1/models",model="none",status="200",le="0.05"} 1
+http_request_duration_seconds_bucket{method="GET",path="/v1/models",model="none",status="200",le="0.1"} 1
+http_request_duration_seconds_bucket{method="GET",path="/v1/models",model="none",status="200",le="0.25"} 1
+http_request_duration_seconds_bucket{method="GET",path="/v1/models",model="none",status="200",le="0.5"} 1
+http_request_duration_seconds_bucket{method="GET",path="/v1/models",model="none",status="200",le="1"} 1
+http_request_duration_seconds_bucket{method="GET",path="/v1/models",model="none",status="200",le="2.5"} 1
+http_request_duration_seconds_bucket{method="GET",path="/v1/models",model="none",status="200",le="5"} 1
+http_request_duration_seconds_bucket{method="GET",path="/v1/models",model="none",status="200",le="10"} 1
+http_request_duration_seconds_bucket{method="GET",path="/v1/models",model="none",status="200",le="30"} 1
+http_request_duration_seconds_bucket{method="GET",path="/v1/models",model="none",status="200",le="60"} 1
+http_request_duration_seconds_bucket{method="GET",path="/v1/models",model="none",status="200",le="120"} 1
+http_request_duration_seconds_bucket{method="GET",path="/v1/models",model="none",status="200",le="300"} 1
+http_request_duration_seconds_bucket{method="GET",path="/v1/models",model="none",status="200",le="600"} 1
+http_request_duration_seconds_bucket{method="GET",path="/v1/models",model="none",status="200",le="1200"} 1
+http_request_duration_seconds_bucket{method="GET",path="/v1/models",model="none",status="200",le="+Inf"} 1
+http_request_duration_seconds_sum{method="GET",path="/v1/models",model="none",status="200"} 0.001360683
+http_request_duration_seconds_count{method="GET",path="/v1/models",model="none",status="200"} 1
+http_request_duration_seconds_bucket{method="POST",path="/v1/completions",model="/home/ericbuehler/hf_models/qwen3.5_35b_a3b",status="200",le="0.001"} 0
+http_request_duration_seconds_bucket{method="POST",path="/v1/completions",model="/home/ericbuehler/hf_models/qwen3.5_35b_a3b",status="200",le="0.005"} 0
+http_request_duration_seconds_bucket{method="POST",path="/v1/completions",model="/home/ericbuehler/hf_models/qwen3.5_35b_a3b",status="200",le="0.01"} 0
+http_request_duration_seconds_bucket{method="POST",path="/v1/completions",model="/home/ericbuehler/hf_models/qwen3.5_35b_a3b",status="200",le="0.025"} 0
+http_request_duration_seconds_bucket{method="POST",path="/v1/completions",model="/home/ericbuehler/hf_models/qwen3.5_35b_a3b",status="200",le="0.05"} 0
+http_request_duration_seconds_bucket{method="POST",path="/v1/completions",model="/home/ericbuehler/hf_models/qwen3.5_35b_a3b",status="200",le="0.1"} 0
+http_request_duration_seconds_bucket{method="POST",path="/v1/completions",model="/home/ericbuehler/hf_models/qwen3.5_35b_a3b",status="200",le="0.25"} 0
+http_request_duration_seconds_bucket{method="POST",path="/v1/completions",model="/home/ericbuehler/hf_models/qwen3.5_35b_a3b",status="200",le="0.5"} 0
+http_request_duration_seconds_bucket{method="POST",path="/v1/completions",model="/home/ericbuehler/hf_models/qwen3.5_35b_a3b",status="200",le="1"} 0
+http_request_duration_seconds_bucket{method="POST",path="/v1/completions",model="/home/ericbuehler/hf_models/qwen3.5_35b_a3b",status="200",le="2.5"} 0
+http_request_duration_seconds_bucket{method="POST",path="/v1/completions",model="/home/ericbuehler/hf_models/qwen3.5_35b_a3b",status="200",le="5"} 56
+http_request_duration_seconds_bucket{method="POST",path="/v1/completions",model="/home/ericbuehler/hf_models/qwen3.5_35b_a3b",status="200",le="10"} 212
+http_request_duration_seconds_bucket{method="POST",path="/v1/completions",model="/home/ericbuehler/hf_models/qwen3.5_35b_a3b",status="200",le="30"} 392
+http_request_duration_seconds_bucket{method="POST",path="/v1/completions",model="/home/ericbuehler/hf_models/qwen3.5_35b_a3b",status="200",le="60"} 392
+http_request_duration_seconds_bucket{method="POST",path="/v1/completions",model="/home/ericbuehler/hf_models/qwen3.5_35b_a3b",status="200",le="120"} 392
+http_request_duration_seconds_bucket{method="POST",path="/v1/completions",model="/home/ericbuehler/hf_models/qwen3.5_35b_a3b",status="200",le="300"} 392
+http_request_duration_seconds_bucket{method="POST",path="/v1/completions",model="/home/ericbuehler/hf_models/qwen3.5_35b_a3b",status="200",le="600"} 392
+http_request_duration_seconds_bucket{method="POST",path="/v1/completions",model="/home/ericbuehler/hf_models/qwen3.5_35b_a3b",status="200",le="1200"} 392
+http_request_duration_seconds_bucket{method="POST",path="/v1/completions",model="/home/ericbuehler/hf_models/qwen3.5_35b_a3b",status="200",le="+Inf"} 392
+http_request_duration_seconds_sum{method="POST",path="/v1/completions",model="/home/ericbuehler/hf_models/qwen3.5_35b_a3b",status="200"} 3602.086173208
+http_request_duration_seconds_count{method="POST",path="/v1/completions",model="/home/ericbuehler/hf_models/qwen3.5_35b_a3b",status="200"} 392
+
+# TYPE mistralrs_request_queue_duration_seconds histogram
+mistralrs_request_queue_duration_seconds_bucket{le="0.001"} 78
+mistralrs_request_queue_duration_seconds_bucket{le="0.005"} 83
+mistralrs_request_queue_duration_seconds_bucket{le="0.01"} 86
+mistralrs_request_queue_duration_seconds_bucket{le="0.02"} 86
+mistralrs_request_queue_duration_seconds_bucket{le="0.04"} 86
+mistralrs_request_queue_duration_seconds_bucket{le="0.06"} 110
+mistralrs_request_queue_duration_seconds_bucket{le="0.08"} 188
+mistralrs_request_queue_duration_seconds_bucket{le="0.1"} 324
+mistralrs_request_queue_duration_seconds_bucket{le="0.25"} 390
+mistralrs_request_queue_duration_seconds_bucket{le="0.5"} 390
+mistralrs_request_queue_duration_seconds_bucket{le="0.75"} 390
+mistralrs_request_queue_duration_seconds_bucket{le="1"} 390
+mistralrs_request_queue_duration_seconds_bucket{le="2.5"} 393
+mistralrs_request_queue_duration_seconds_bucket{le="5"} 393
+mistralrs_request_queue_duration_seconds_bucket{le="7.5"} 393
+mistralrs_request_queue_duration_seconds_bucket{le="10"} 393
+mistralrs_request_queue_duration_seconds_bucket{le="20"} 393
+mistralrs_request_queue_duration_seconds_bucket{le="40"} 393
+mistralrs_request_queue_duration_seconds_bucket{le="80"} 393
+mistralrs_request_queue_duration_seconds_bucket{le="160"} 393
+mistralrs_request_queue_duration_seconds_bucket{le="640"} 393
+mistralrs_request_queue_duration_seconds_bucket{le="2560"} 393
+mistralrs_request_queue_duration_seconds_bucket{le="+Inf"} 393
+mistralrs_request_queue_duration_seconds_sum 30.443021336
+mistralrs_request_queue_duration_seconds_count 393
+

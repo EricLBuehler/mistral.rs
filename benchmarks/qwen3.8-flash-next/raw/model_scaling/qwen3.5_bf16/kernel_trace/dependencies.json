@@ -1,0 +1,23 @@
+{
+  "observe.py": {
+    "sha256": "8b7e8bc4206e463bce8e01bc2f55f8a3d38d283248b932d1a05847cbda385233",
+    "source": "/home/ericbuehler/qwen4exp_work/model_scaling_20260930/dependencies/observe.py"
+  },
+  "counter_summary.py": {
+    "sha256": "a8072012a5f1db8fc081afbdad76b3d70886a14af3ceedf23763931fd8fe2def",
+    "source": "/home/ericbuehler/qwen4exp_work/model_scaling_20260930/dependencies/counter_summary.py",
+    "adaptation": "Explicit require_speculative=False for target-only phases; all counter reset/finite checks retained."
+  },
+  "analyze_nsys.py": {
+    "sha256": "22a9cd8a04b75830ba0b74561a1520eae0544abdcdb641f47b70d913e9f35dea",
+    "source": "/home/ericbuehler/qwen4exp_work/model_scaling_20260930/dependencies/analyze_nsys.py"
+  },
+  "bench_serving.py": {
+    "sha256": "a16b5815b8744def761174e396de92e41ecd499afae712255721c20a33a79705",
+    "source": "/home/ericbuehler/qwen4exp_work/model_scaling_20260930/dependencies/bench_serving.py"
+  },
+  "bench_concurrency.py": {
+    "sha256": "a4f80b49b8a9dc80287a2392f7e87b07e6375cfe1b6e534441da365904ee18ba",
+    "source": "/home/ericbuehler/qwen4exp_work/model_scaling_20260930/dependencies/bench_concurrency.py"
+  }
+}

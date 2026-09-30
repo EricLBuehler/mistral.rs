@@ -1,0 +1,19 @@
+client_request_envelope: 42428 kernels, GPU traced busy 93.36%
+  moe_dispatch_routing_reduce: 69.90% summed kernel time
+  other_matrix_multiply: 23.48% summed kernel time
+  gdn: 4.41% summed kernel time
+  other: 2.02% summed kernel time
+  attention: 0.18% summed kernel time
+client_request_interior: 42428 kernels, GPU traced busy 93.36%
+  moe_dispatch_routing_reduce: 69.90% summed kernel time
+  other_matrix_multiply: 23.48% summed kernel time
+  gdn: 4.41% summed kernel time
+  other: 2.02% summed kernel time
+  attention: 0.18% summed kernel time
+recorded_kernel_span: 42428 kernels, GPU traced busy 98.59%
+  moe_dispatch_routing_reduce: 69.90% summed kernel time
+  other_matrix_multiply: 23.48% summed kernel time
+  gdn: 4.41% summed kernel time
+  other: 2.02% summed kernel time
+  attention: 0.18% summed kernel time
+/home/ericbuehler/qwen4exp_work/qwen3_moe_scaling_20260930/kernel_trace/analysis/profile_c8.analysis.json

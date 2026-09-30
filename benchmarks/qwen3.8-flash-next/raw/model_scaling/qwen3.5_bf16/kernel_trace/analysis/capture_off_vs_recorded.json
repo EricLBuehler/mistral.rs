@@ -1,0 +1,1070 @@
+[
+  {
+    "concurrency": 1,
+    "warmup_phase": "c1.warmup0",
+    "recorded_phase": "profile_c1",
+    "requests": 8,
+    "capture_off_output_tokens": 256,
+    "profiled_output_tokens": 256,
+    "capture_off_client_wall_seconds": 8.83225395300542,
+    "profiled_client_wall_seconds": 8.807415866991505,
+    "profiled_over_capture_off_wall_ratio": 0.99718779757171,
+    "identical_completion_text_count": 8,
+    "limitations": [
+      "Same server with profiler instrumentation attached in both phases; only recording is disabled in the warmup.",
+      "Sequential warmup then recorded trial, not randomized or an estimate of pure profiler overhead.",
+      "Generated text, routes, cache state, and memory pressure may also differ; inspect separate counter and memory windows.",
+      "One finite trial each, without a variability estimate; these elapsed rates do not replace official serving results."
+    ],
+    "capture_off_counters": {
+      "name": "c1.warmup0",
+      "target_only": true,
+      "graph_dispatches": [
+        {
+          "labels": {
+            "component": "target",
+            "mode": "replay",
+            "reason": "cache_hit"
+          },
+          "dispatches": 248
+        },
+        {
+          "labels": {
+            "component": "target",
+            "mode": "skipped",
+            "reason": "prefill"
+          },
+          "dispatches": 8
+        }
+      ],
+      "all_counter_deltas": [
+        {
+          "name": "http_requests_total",
+          "labels": {
+            "method": "GET",
+            "model": "none",
+            "path": "/v1/models",
+            "status": "200"
+          },
+          "delta": 0
+        },
+        {
+          "name": "http_requests_total",
+          "labels": {
+            "method": "POST",
+            "model": "/home/ericbuehler/hf_models/qwen3.5_35b_a3b",
+            "path": "/v1/completions",
+            "status": "200"
+          },
+          "delta": 8
+        },
+        {
+          "name": "mistralrs_cuda_graph_dispatch_total",
+          "labels": {
+            "component": "target",
+            "mode": "replay",
+            "reason": "cache_hit"
+          },
+          "delta": 248
+        },
+        {
+          "name": "mistralrs_cuda_graph_dispatch_total",
+          "labels": {
+            "component": "target",
+            "mode": "skipped",
+            "reason": "prefill"
+          },
+          "delta": 8
+        },
+        {
+          "name": "mistralrs_cuda_graph_events_total",
+          "labels": {
+            "component": "target",
+            "event": "capture",
+            "outcome": "success"
+          },
+          "delta": 0
+        },
+        {
+          "name": "mistralrs_cuda_graph_events_total",
+          "labels": {
+            "component": "target",
+            "event": "replay",
+            "outcome": "success"
+          },
+          "delta": 248
+        },
+        {
+          "name": "mistralrs_cuda_memory_maintenance_total",
+          "labels": {
+            "action": "observe",
+            "device": "cuda[0]",
+            "outcome": "success",
+            "reason": "idle"
+          },
+          "delta": 16
+        },
+        {
+          "name": "mistralrs_cuda_memory_maintenance_total",
+          "labels": {
+            "action": "observe",
+            "device": "cuda[0]",
+            "outcome": "success",
+            "reason": "prompt_boundary"
+          },
+          "delta": 8
+        },
+        {
+          "name": "mistralrs_cuda_memory_maintenance_total",
+          "labels": {
+            "action": "observe",
+            "device": "cuda[0]",
+            "outcome": "success",
+            "reason": "prompt_preflight"
+          },
+          "delta": 8
+        },
+        {
+          "name": "mistralrs_decode_tokens_processed_total",
+          "labels": {},
+          "delta": 248
+        },
+        {
+          "name": "mistralrs_encoder_cache_evictions_total",
+          "labels": {
+            "reason": "entry_capacity"
+          },
+          "delta": 0
+        },
+        {
+          "name": "mistralrs_encoder_cache_evictions_total",
+          "labels": {
+            "reason": "incompatible_shape"
+          },
+          "delta": 0
+        },
+        {
+          "name": "mistralrs_encoder_cache_evictions_total",
+          "labels": {
+            "reason": "logical_byte_capacity"
+          },
+          "delta": 0
+        },
+        {
+          "name": "mistralrs_encoder_cache_hits_total",
+          "labels": {},
+          "delta": 0
+        },
+        {
+          "name": "mistralrs_encoder_cache_insert_rejections_total",
+          "labels": {
+            "reason": "entry_exceeds_logical_byte_capacity"
+          },
+          "delta": 0
+        },
+        {
+          "name": "mistralrs_encoder_cache_insert_rejections_total",
+          "labels": {
+            "reason": "storage_compaction_failed"
+          },
+          "delta": 0
+        },
+        {
+          "name": "mistralrs_encoder_cache_misses_total",
+          "labels": {},
+          "delta": 0
+        },
+        {
+          "name": "mistralrs_paged_prefix_retention_pressure_evictions_total",
+          "labels": {
+            "reason": "allocation_pressure"
+          },
+          "delta": 0
+        },
+        {
+          "name": "mistralrs_paged_prefix_retention_pressure_evictions_total",
+          "labels": {
+            "reason": "reset"
+          },
+          "delta": 0
+        },
+        {
+          "name": "mistralrs_paged_recurrent_prefix_owner_evictions_total",
+          "labels": {
+            "reason": "block_pressure"
+          },
+          "delta": 0
+        },
+        {
+          "name": "mistralrs_paged_recurrent_prefix_owner_evictions_total",
+          "labels": {
+            "reason": "capacity"
+          },
+          "delta": 0
+        },
+        {
+          "name": "mistralrs_paged_recurrent_prefix_validation_total",
+          "labels": {
+            "outcome": "miss",
+            "reason": "no_replay_boundary"
+          },
+          "delta": 8
+        },
+        {
+          "name": "mistralrs_prefill_tokens_processed_total",
+          "labels": {},
+          "delta": 129
+        },
+        {
+          "name": "mistralrs_prefix_cache_lookups_total",
+          "labels": {},
+          "delta": 8
+        },
+        {
+          "name": "mistralrs_prefix_cache_tokens_matched_total",
+          "labels": {},
+          "delta": 0
+        },
+        {
+          "name": "mistralrs_prefix_cache_tokens_reused_total",
+          "labels": {},
+          "delta": 0
+        },
+        {
+          "name": "mistralrs_request_outcomes_total",
+          "labels": {
+            "outcome": "completed"
+          },
+          "delta": 8
+        },
+        {
+          "name": "mistralrs_sequences_completed_total",
+          "labels": {
+            "reason": "length"
+          },
+          "delta": 8
+        },
+        {
+          "name": "mistralrs_tokens_processed_total",
+          "labels": {},
+          "delta": 377
+        }
+      ],
+      "scope": "Only this one request phase, between saved /metrics snapshots; warmups are separate phases."
+    },
+    "recorded_counters": {
+      "name": "profile_c1",
+      "target_only": true,
+      "graph_dispatches": [
+        {
+          "labels": {
+            "component": "target",
+            "mode": "replay",
+            "reason": "cache_hit"
+          },
+          "dispatches": 248
+        },
+        {
+          "labels": {
+            "component": "target",
+            "mode": "skipped",
+            "reason": "prefill"
+          },
+          "dispatches": 8
+        }
+      ],
+      "all_counter_deltas": [
+        {
+          "name": "http_requests_total",
+          "labels": {
+            "method": "GET",
+            "model": "none",
+            "path": "/v1/models",
+            "status": "200"
+          },
+          "delta": 0
+        },
+        {
+          "name": "http_requests_total",
+          "labels": {
+            "method": "POST",
+            "model": "/home/ericbuehler/hf_models/qwen3.5_35b_a3b",
+            "path": "/v1/completions",
+            "status": "200"
+          },
+          "delta": 8
+        },
+        {
+          "name": "mistralrs_cuda_graph_dispatch_total",
+          "labels": {
+            "component": "target",
+            "mode": "replay",
+            "reason": "cache_hit"
+          },
+          "delta": 248
+        },
+        {
+          "name": "mistralrs_cuda_graph_dispatch_total",
+          "labels": {
+            "component": "target",
+            "mode": "skipped",
+            "reason": "prefill"
+          },
+          "delta": 8
+        },
+        {
+          "name": "mistralrs_cuda_graph_events_total",
+          "labels": {
+            "component": "target",
+            "event": "capture",
+            "outcome": "success"
+          },
+          "delta": 0
+        },
+        {
+          "name": "mistralrs_cuda_graph_events_total",
+          "labels": {
+            "component": "target",
+            "event": "replay",
+            "outcome": "success"
+          },
+          "delta": 248
+        },
+        {
+          "name": "mistralrs_cuda_memory_maintenance_total",
+          "labels": {
+            "action": "observe",
+            "device": "cuda[0]",
+            "outcome": "success",
+            "reason": "idle"
+          },
+          "delta": 16
+        },
+        {
+          "name": "mistralrs_cuda_memory_maintenance_total",
+          "labels": {
+            "action": "observe",
+            "device": "cuda[0]",
+            "outcome": "success",
+            "reason": "prompt_boundary"
+          },
+          "delta": 8
+        },
+        {
+          "name": "mistralrs_cuda_memory_maintenance_total",
+          "labels": {
+            "action": "observe",
+            "device": "cuda[0]",
+            "outcome": "success",
+            "reason": "prompt_preflight"
+          },
+          "delta": 8
+        },
+        {
+          "name": "mistralrs_decode_tokens_processed_total",
+          "labels": {},
+          "delta": 248
+        },
+        {
+          "name": "mistralrs_encoder_cache_evictions_total",
+          "labels": {
+            "reason": "entry_capacity"
+          },
+          "delta": 0
+        },
+        {
+          "name": "mistralrs_encoder_cache_evictions_total",
+          "labels": {
+            "reason": "incompatible_shape"
+          },
+          "delta": 0
+        },
+        {
+          "name": "mistralrs_encoder_cache_evictions_total",
+          "labels": {
+            "reason": "logical_byte_capacity"
+          },
+          "delta": 0
+        },
+        {
+          "name": "mistralrs_encoder_cache_hits_total",
+          "labels": {},
+          "delta": 0
+        },
+        {
+          "name": "mistralrs_encoder_cache_insert_rejections_total",
+          "labels": {
+            "reason": "entry_exceeds_logical_byte_capacity"
+          },
+          "delta": 0
+        },
+        {
+          "name": "mistralrs_encoder_cache_insert_rejections_total",
+          "labels": {
+            "reason": "storage_compaction_failed"
+          },
+          "delta": 0
+        },
+        {
+          "name": "mistralrs_encoder_cache_misses_total",
+          "labels": {},
+          "delta": 0
+        },
+        {
+          "name": "mistralrs_paged_prefix_retention_pressure_evictions_total",
+          "labels": {
+            "reason": "allocation_pressure"
+          },
+          "delta": 0
+        },
+        {
+          "name": "mistralrs_paged_prefix_retention_pressure_evictions_total",
+          "labels": {
+            "reason": "reset"
+          },
+          "delta": 0
+        },
+        {
+          "name": "mistralrs_paged_recurrent_prefix_owner_evictions_total",
+          "labels": {
+            "reason": "block_pressure"
+          },
+          "delta": 0
+        },
+        {
+          "name": "mistralrs_paged_recurrent_prefix_owner_evictions_total",
+          "labels": {
+            "reason": "capacity"
+          },
+          "delta": 0
+        },
+        {
+          "name": "mistralrs_paged_recurrent_prefix_validation_total",
+          "labels": {
+            "outcome": "miss",
+            "reason": "no_replay_boundary"
+          },
+          "delta": 8
+        },
+        {
+          "name": "mistralrs_prefill_tokens_processed_total",
+          "labels": {},
+          "delta": 129
+        },
+        {
+          "name": "mistralrs_prefix_cache_lookups_total",
+          "labels": {},
+          "delta": 8
+        },
+        {
+          "name": "mistralrs_prefix_cache_tokens_matched_total",
+          "labels": {},
+          "delta": 0
+        },
+        {
+          "name": "mistralrs_prefix_cache_tokens_reused_total",
+          "labels": {},
+          "delta": 0
+        },
+        {
+          "name": "mistralrs_request_outcomes_total",
+          "labels": {
+            "outcome": "completed"
+          },
+          "delta": 8
+        },
+        {
+          "name": "mistralrs_sequences_completed_total",
+          "labels": {
+            "reason": "length"
+          },
+          "delta": 8
+        },
+        {
+          "name": "mistralrs_tokens_processed_total",
+          "labels": {},
+          "delta": 377
+        }
+      ],
+      "scope": "Only this one request phase, between saved /metrics snapshots; warmups are separate phases."
+    }
+  },
+  {
+    "concurrency": 8,
+    "warmup_phase": "c8.warmup0",
+    "recorded_phase": "profile_c8",
+    "requests": 8,
+    "capture_off_output_tokens": 256,
+    "profiled_output_tokens": 256,
+    "capture_off_client_wall_seconds": 3.1419651949836407,
+    "profiled_client_wall_seconds": 3.02985002900823,
+    "profiled_over_capture_off_wall_ratio": 0.9643168657137228,
+    "identical_completion_text_count": 6,
+    "limitations": [
+      "Same server with profiler instrumentation attached in both phases; only recording is disabled in the warmup.",
+      "Sequential warmup then recorded trial, not randomized or an estimate of pure profiler overhead.",
+      "Generated text, routes, cache state, and memory pressure may also differ; inspect separate counter and memory windows.",
+      "One finite trial each, without a variability estimate; these elapsed rates do not replace official serving results."
+    ],
+    "capture_off_counters": {
+      "name": "c8.warmup0",
+      "target_only": true,
+      "graph_dispatches": [
+        {
+          "labels": {
+            "component": "target",
+            "mode": "eager",
+            "reason": "cache_population"
+          },
+          "dispatches": 1
+        },
+        {
+          "labels": {
+            "component": "target",
+            "mode": "eager",
+            "reason": "memory_pressure"
+          },
+          "dispatches": 1
+        },
+        {
+          "labels": {
+            "component": "target",
+            "mode": "replay",
+            "reason": "cache_hit"
+          },
+          "dispatches": 31
+        },
+        {
+          "labels": {
+            "component": "target",
+            "mode": "skipped",
+            "reason": "prefill"
+          },
+          "dispatches": 2
+        }
+      ],
+      "all_counter_deltas": [
+        {
+          "name": "http_requests_total",
+          "labels": {
+            "method": "GET",
+            "model": "none",
+            "path": "/v1/models",
+            "status": "200"
+          },
+          "delta": 0
+        },
+        {
+          "name": "http_requests_total",
+          "labels": {
+            "method": "POST",
+            "model": "/home/ericbuehler/hf_models/qwen3.5_35b_a3b",
+            "path": "/v1/completions",
+            "status": "200"
+          },
+          "delta": 8
+        },
+        {
+          "name": "mistralrs_cuda_graph_dispatch_total",
+          "labels": {
+            "component": "target",
+            "mode": "eager",
+            "reason": "cache_population"
+          },
+          "delta": 1
+        },
+        {
+          "name": "mistralrs_cuda_graph_dispatch_total",
+          "labels": {
+            "component": "target",
+            "mode": "eager",
+            "reason": "memory_pressure"
+          },
+          "delta": 1
+        },
+        {
+          "name": "mistralrs_cuda_graph_dispatch_total",
+          "labels": {
+            "component": "target",
+            "mode": "replay",
+            "reason": "cache_hit"
+          },
+          "delta": 31
+        },
+        {
+          "name": "mistralrs_cuda_graph_dispatch_total",
+          "labels": {
+            "component": "target",
+            "mode": "skipped",
+            "reason": "prefill"
+          },
+          "delta": 2
+        },
+        {
+          "name": "mistralrs_cuda_graph_events_total",
+          "labels": {
+            "component": "target",
+            "event": "capture",
+            "outcome": "success"
+          },
+          "delta": 1
+        },
+        {
+          "name": "mistralrs_cuda_graph_events_total",
+          "labels": {
+            "component": "target",
+            "event": "replay",
+            "outcome": "success"
+          },
+          "delta": 31
+        },
+        {
+          "name": "mistralrs_cuda_memory_maintenance_total",
+          "labels": {
+            "action": "observe",
+            "device": "cuda[0]",
+            "outcome": "success",
+            "reason": "decode_boundary"
+          },
+          "delta": 4
+        },
+        {
+          "name": "mistralrs_cuda_memory_maintenance_total",
+          "labels": {
+            "action": "observe",
+            "device": "cuda[0]",
+            "outcome": "success",
+            "reason": "idle"
+          },
+          "delta": 2
+        },
+        {
+          "name": "mistralrs_cuda_memory_maintenance_total",
+          "labels": {
+            "action": "observe",
+            "device": "cuda[0]",
+            "outcome": "success",
+            "reason": "prompt_boundary"
+          },
+          "delta": 2
+        },
+        {
+          "name": "mistralrs_cuda_memory_maintenance_total",
+          "labels": {
+            "action": "observe",
+            "device": "cuda[0]",
+            "outcome": "success",
+            "reason": "prompt_preflight"
+          },
+          "delta": 2
+        },
+        {
+          "name": "mistralrs_decode_tokens_processed_total",
+          "labels": {},
+          "delta": 248
+        },
+        {
+          "name": "mistralrs_encoder_cache_evictions_total",
+          "labels": {
+            "reason": "entry_capacity"
+          },
+          "delta": 0
+        },
+        {
+          "name": "mistralrs_encoder_cache_evictions_total",
+          "labels": {
+            "reason": "incompatible_shape"
+          },
+          "delta": 0
+        },
+        {
+          "name": "mistralrs_encoder_cache_evictions_total",
+          "labels": {
+            "reason": "logical_byte_capacity"
+          },
+          "delta": 0
+        },
+        {
+          "name": "mistralrs_encoder_cache_hits_total",
+          "labels": {},
+          "delta": 0
+        },
+        {
+          "name": "mistralrs_encoder_cache_insert_rejections_total",
+          "labels": {
+            "reason": "entry_exceeds_logical_byte_capacity"
+          },
+          "delta": 0
+        },
+        {
+          "name": "mistralrs_encoder_cache_insert_rejections_total",
+          "labels": {
+            "reason": "storage_compaction_failed"
+          },
+          "delta": 0
+        },
+        {
+          "name": "mistralrs_encoder_cache_misses_total",
+          "labels": {},
+          "delta": 0
+        },
+        {
+          "name": "mistralrs_paged_prefix_retention_pressure_evictions_total",
+          "labels": {
+            "reason": "allocation_pressure"
+          },
+          "delta": 0
+        },
+        {
+          "name": "mistralrs_paged_prefix_retention_pressure_evictions_total",
+          "labels": {
+            "reason": "reset"
+          },
+          "delta": 0
+        },
+        {
+          "name": "mistralrs_paged_recurrent_prefix_owner_evictions_total",
+          "labels": {
+            "reason": "block_pressure"
+          },
+          "delta": 0
+        },
+        {
+          "name": "mistralrs_paged_recurrent_prefix_owner_evictions_total",
+          "labels": {
+            "reason": "capacity"
+          },
+          "delta": 0
+        },
+        {
+          "name": "mistralrs_paged_recurrent_prefix_validation_total",
+          "labels": {
+            "outcome": "miss",
+            "reason": "no_replay_boundary"
+          },
+          "delta": 8
+        },
+        {
+          "name": "mistralrs_prefill_tokens_processed_total",
+          "labels": {},
+          "delta": 129
+        },
+        {
+          "name": "mistralrs_prefix_cache_lookups_total",
+          "labels": {},
+          "delta": 8
+        },
+        {
+          "name": "mistralrs_prefix_cache_tokens_matched_total",
+          "labels": {},
+          "delta": 0
+        },
+        {
+          "name": "mistralrs_prefix_cache_tokens_reused_total",
+          "labels": {},
+          "delta": 0
+        },
+        {
+          "name": "mistralrs_request_outcomes_total",
+          "labels": {
+            "outcome": "completed"
+          },
+          "delta": 8
+        },
+        {
+          "name": "mistralrs_sequences_completed_total",
+          "labels": {
+            "reason": "length"
+          },
+          "delta": 8
+        },
+        {
+          "name": "mistralrs_tokens_processed_total",
+          "labels": {},
+          "delta": 377
+        }
+      ],
+      "scope": "Only this one request phase, between saved /metrics snapshots; warmups are separate phases."
+    },
+    "recorded_counters": {
+      "name": "profile_c8",
+      "target_only": true,
+      "graph_dispatches": [
+        {
+          "labels": {
+            "component": "target",
+            "mode": "eager",
+            "reason": "cache_population"
+          },
+          "dispatches": 0
+        },
+        {
+          "labels": {
+            "component": "target",
+            "mode": "eager",
+            "reason": "memory_pressure"
+          },
+          "dispatches": 1
+        },
+        {
+          "labels": {
+            "component": "target",
+            "mode": "replay",
+            "reason": "cache_hit"
+          },
+          "dispatches": 31
+        },
+        {
+          "labels": {
+            "component": "target",
+            "mode": "skipped",
+            "reason": "prefill"
+          },
+          "dispatches": 2
+        }
+      ],
+      "all_counter_deltas": [
+        {
+          "name": "http_requests_total",
+          "labels": {
+            "method": "GET",
+            "model": "none",
+            "path": "/v1/models",
+            "status": "200"
+          },
+          "delta": 0
+        },
+        {
+          "name": "http_requests_total",
+          "labels": {
+            "method": "POST",
+            "model": "/home/ericbuehler/hf_models/qwen3.5_35b_a3b",
+            "path": "/v1/completions",
+            "status": "200"
+          },
+          "delta": 8
+        },
+        {
+          "name": "mistralrs_cuda_graph_dispatch_total",
+          "labels": {
+            "component": "target",
+            "mode": "eager",
+            "reason": "cache_population"
+          },
+          "delta": 0
+        },
+        {
+          "name": "mistralrs_cuda_graph_dispatch_total",
+          "labels": {
+            "component": "target",
+            "mode": "eager",
+            "reason": "memory_pressure"
+          },
+          "delta": 1
+        },
+        {
+          "name": "mistralrs_cuda_graph_dispatch_total",
+          "labels": {
+            "component": "target",
+            "mode": "replay",
+            "reason": "cache_hit"
+          },
+          "delta": 31
+        },
+        {
+          "name": "mistralrs_cuda_graph_dispatch_total",
+          "labels": {
+            "component": "target",
+            "mode": "skipped",
+            "reason": "prefill"
+          },
+          "delta": 2
+        },
+        {
+          "name": "mistralrs_cuda_graph_events_total",
+          "labels": {
+            "component": "target",
+            "event": "capture",
+            "outcome": "success"
+          },
+          "delta": 0
+        },
+        {
+          "name": "mistralrs_cuda_graph_events_total",
+          "labels": {
+            "component": "target",
+            "event": "replay",
+            "outcome": "success"
+          },
+          "delta": 31
+        },
+        {
+          "name": "mistralrs_cuda_memory_maintenance_total",
+          "labels": {
+            "action": "observe",
+            "device": "cuda[0]",
+            "outcome": "success",
+            "reason": "decode_boundary"
+          },
+          "delta": 4
+        },
+        {
+          "name": "mistralrs_cuda_memory_maintenance_total",
+          "labels": {
+            "action": "observe",
+            "device": "cuda[0]",
+            "outcome": "success",
+            "reason": "idle"
+          },
+          "delta": 2
+        },
+        {
+          "name": "mistralrs_cuda_memory_maintenance_total",
+          "labels": {
+            "action": "observe",
+            "device": "cuda[0]",
+            "outcome": "success",
+            "reason": "prompt_boundary"
+          },
+          "delta": 2
+        },
+        {
+          "name": "mistralrs_cuda_memory_maintenance_total",
+          "labels": {
+            "action": "observe",
+            "device": "cuda[0]",
+            "outcome": "success",
+            "reason": "prompt_preflight"
+          },
+          "delta": 2
+        },
+        {
+          "name": "mistralrs_decode_tokens_processed_total",
+          "labels": {},
+          "delta": 248
+        },
+        {
+          "name": "mistralrs_encoder_cache_evictions_total",
+          "labels": {
+            "reason": "entry_capacity"
+          },
+          "delta": 0
+        },
+        {
+          "name": "mistralrs_encoder_cache_evictions_total",
+          "labels": {
+            "reason": "incompatible_shape"
+          },
+          "delta": 0
+        },
+        {
+          "name": "mistralrs_encoder_cache_evictions_total",
+          "labels": {
+            "reason": "logical_byte_capacity"
+          },
+          "delta": 0
+        },
+        {
+          "name": "mistralrs_encoder_cache_hits_total",
+          "labels": {},
+          "delta": 0
+        },
+        {
+          "name": "mistralrs_encoder_cache_insert_rejections_total",
+          "labels": {
+            "reason": "entry_exceeds_logical_byte_capacity"
+          },
+          "delta": 0
+        },
+        {
+          "name": "mistralrs_encoder_cache_insert_rejections_total",
+          "labels": {
+            "reason": "storage_compaction_failed"
+          },
+          "delta": 0
+        },
+        {
+          "name": "mistralrs_encoder_cache_misses_total",
+          "labels": {},
+          "delta": 0
+        },
+        {
+          "name": "mistralrs_paged_prefix_retention_pressure_evictions_total",
+          "labels": {
+            "reason": "allocation_pressure"
+          },
+          "delta": 0
+        },
+        {
+          "name": "mistralrs_paged_prefix_retention_pressure_evictions_total",
+          "labels": {
+            "reason": "reset"
+          },
+          "delta": 0
+        },
+        {
+          "name": "mistralrs_paged_recurrent_prefix_owner_evictions_total",
+          "labels": {
+            "reason": "block_pressure"
+          },
+          "delta": 0
+        },
+        {
+          "name": "mistralrs_paged_recurrent_prefix_owner_evictions_total",
+          "labels": {
+            "reason": "capacity"
+          },
+          "delta": 0
+        },
+        {
+          "name": "mistralrs_paged_recurrent_prefix_validation_total",
+          "labels": {
+            "outcome": "miss",
+            "reason": "no_replay_boundary"
+          },
+          "delta": 8
+        },
+        {
+          "name": "mistralrs_prefill_tokens_processed_total",
+          "labels": {},
+          "delta": 129
+        },
+        {
+          "name": "mistralrs_prefix_cache_lookups_total",
+          "labels": {},
+          "delta": 8
+        },
+        {
+          "name": "mistralrs_prefix_cache_tokens_matched_total",
+          "labels": {},
+          "delta": 0
+        },
+        {
+          "name": "mistralrs_prefix_cache_tokens_reused_total",
+          "labels": {},
+          "delta": 0
+        },
+        {
+          "name": "mistralrs_request_outcomes_total",
+          "labels": {
+            "outcome": "completed"
+          },
+          "delta": 8
+        },
+        {
+          "name": "mistralrs_sequences_completed_total",
+          "labels": {
+            "reason": "length"
+          },
+          "delta": 8
+        },
+        {
+          "name": "mistralrs_tokens_processed_total",
+          "labels": {},
+          "delta": 377
+        }
+      ],
+      "scope": "Only this one request phase, between saved /metrics snapshots; warmups are separate phases."
+    }
+  }
+]

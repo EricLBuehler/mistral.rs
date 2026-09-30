@@ -1,0 +1,22 @@
+{
+  "utc": "2026-09-30T18:13:19.469727+00:00",
+  "monotonic": 162890.314902679,
+  "watched": [
+    {
+      "pid": 2122897,
+      "state": "T",
+      "parent_pid": 2122011,
+      "starttime_ticks": 13585712,
+      "comm": "rust-analyzer",
+      "command": [
+        "/home/ericbuehler/.vscode-server/extensions/rust-lang.rust-analyzer-0.3.3065-linux-arm64/server/rust-analyzer"
+      ],
+      "VmHWM_KiB": 4290612,
+      "VmRSS_KiB": 35852,
+      "RssAnon_KiB": 34324,
+      "RssFile_KiB": 1528,
+      "VmSwap_KiB": 5101400
+    }
+  ],
+  "unexpected_active": []
+}

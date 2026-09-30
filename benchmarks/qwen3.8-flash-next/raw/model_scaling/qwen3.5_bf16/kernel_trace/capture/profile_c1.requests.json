@@ -1,0 +1,467 @@
+{
+  "complete": true,
+  "scope": "One profiled or warmup diagnostic phase, not a normal benchmark.",
+  "client_sha256": "f0987e9e2a4d3b98c758b129115b000f421402fa16165138a7eec0d5a9d03896",
+  "shared_harness_sha256": "a16b5815b8744def761174e396de92e41ecd499afae712255721c20a33a79705",
+  "timestamped_harness_sha256": "a4f80b49b8a9dc80287a2392f7e87b07e6375cfe1b6e534441da365904ee18ba",
+  "tokenizer_sha256": "5f9e4d4901a92b997e463c1f46055088b6cca5ca61a6522d1b9f64c4bb81cb42",
+  "prompts_sha256": "ff2600daa58028527e50710169fcd5915b28e894b7ef4a2b6438b66563812793",
+  "settings": {
+    "output": "/home/ericbuehler/qwen4exp_work/qwen3_moe_scaling_20260930/kernel_trace/capture/profile_c1.requests.json",
+    "base_url": "http://127.0.0.1:1234",
+    "tokenizer": "/home/ericbuehler/hf_models/qwen3.5_35b_a3b/tokenizer.json",
+    "concurrency": 1,
+    "requests": 8,
+    "max_tokens": 32,
+    "timeout": 600,
+    "expected_prompt_tokens": {
+      "python": 17,
+      "rust": 17,
+      "prose": 11,
+      "json": 19,
+      "primes": 10,
+      "math": 30,
+      "translation": 19,
+      "quicksort": 6
+    }
+  },
+  "clock_before": {
+    "realtime_ns": 1790793245319094112,
+    "realtime_perf_counter_lower_ns": 164136164264128,
+    "realtime_perf_counter_upper_ns": 164136164265216,
+    "monotonic_raw_ns": 164135269923904,
+    "raw_perf_counter_lower_ns": 164136164265280,
+    "raw_perf_counter_upper_ns": 164136164266656,
+    "perf_counter_clock": "clock_gettime(CLOCK_MONOTONIC)"
+  },
+  "clock_after": {
+    "realtime_ns": 1790793254126788380,
+    "realtime_perf_counter_lower_ns": 164144971958412,
+    "realtime_perf_counter_upper_ns": 164144971959356,
+    "monotonic_raw_ns": 164144077587120,
+    "raw_perf_counter_lower_ns": 164144971959436,
+    "raw_perf_counter_upper_ns": 164144971960716,
+    "perf_counter_clock": "clock_gettime(CLOCK_MONOTONIC)"
+  },
+  "trial": {
+    "trial_start_perf_counter_ns": 164136164437441,
+    "complete": true,
+    "wall_seconds": 8.807415866991505,
+    "completed_output_tokens": 256,
+    "aggregate_output_tokens_per_second": 29.06641447004207,
+    "mean_active_requests": 0.999621108952804,
+    "mean_request_wall_seconds": 1.1005098519963212,
+    "mean_request_output_tokens_per_second": 29.084276744180745,
+    "latency_weighted_request_output_tokens_per_second": 29.077431648569167,
+    "sustained_window": {
+      "definition": "whole responses completed after first completion, through last replenishment",
+      "start_seconds": 1.1282287559879478,
+      "end_seconds": 7.734949392994167,
+      "wall_seconds": 6.6067206370062195,
+      "completed_request_indices": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6
+      ],
+      "completed_requests": 6,
+      "completed_output_tokens": 192,
+      "completion_boundary_output_tokens_per_second": 29.061316581868248,
+      "mean_active_requests": 0.9997307580971551
+    },
+    "sustained_window_unavailable_reason": null,
+    "requests": [
+      {
+        "request_index": 0,
+        "prompt_name": "python",
+        "prompt_sha256": "7d9074c26475df2a799d748be049ff151de83afb31dde5ef9211371fc3a1b124",
+        "request": {
+          "model": "default",
+          "prompt": "Write a Python function that returns the n-th Fibonacci number, with a docstring.",
+          "max_tokens": 32,
+          "temperature": 0.0,
+          "seed": 20260929,
+          "ignore_eos": true,
+          "cache_prompt": false
+        },
+        "submitted_seconds": 0.0007673789805267006,
+        "started_perf_counter_ns": 164136165791318,
+        "finished_perf_counter_ns": 164137292666197,
+        "started_seconds": 0.0013538769853767008,
+        "finished_seconds": 1.1282287559879478,
+        "wall_seconds": 1.126874879002571,
+        "output_tokens_per_second": 28.397118967035727,
+        "response": {
+          "id": "9",
+          "choices": [
+            {
+              "finish_reason": "length",
+              "index": 0,
+              "text": "```python\ndef fibonacci(n):\n    \"\"\"\n    Returns the n-th Fibonacci number.\n    \n    Parameters:\n    n (int): The",
+              "logprobs": null
+            }
+          ],
+          "created": 1790793245,
+          "model": "/home/ericbuehler/hf_models/qwen3.5_35b_a3b",
+          "system_fingerprint": "local",
+          "object": "text_completion",
+          "usage": {
+            "completion_tokens": 32,
+            "prompt_tokens": 17,
+            "total_tokens": 49,
+            "avg_tok_per_sec": 45.286507,
+            "avg_prompt_tok_per_sec": 195.4023,
+            "avg_compl_tok_per_sec": 32.160805,
+            "total_time_sec": 1.082,
+            "total_prompt_time_sec": 0.087,
+            "total_completion_time_sec": 0.995
+          }
+        },
+        "error": null
+      },
+      {
+        "request_index": 1,
+        "prompt_name": "rust",
+        "prompt_sha256": "60b4ac9a09b8a5ee17b2810c21cd6b28772af55c47488253dd3654098624138d",
+        "request": {
+          "model": "default",
+          "prompt": "Write a Rust struct for a 2D point with methods for distance and midpoint.",
+          "max_tokens": 32,
+          "temperature": 0.0,
+          "seed": 20260929,
+          "ignore_eos": true,
+          "cache_prompt": false
+        },
+        "submitted_seconds": 1.1284239079977851,
+        "started_perf_counter_ns": 164137292963846,
+        "finished_perf_counter_ns": 164138388040151,
+        "started_seconds": 1.1285264049947727,
+        "finished_seconds": 2.223602710000705,
+        "wall_seconds": 1.0950763050059322,
+        "output_tokens_per_second": 29.221707979360076,
+        "response": {
+          "id": "10",
+          "choices": [
+            {
+              "finish_reason": "length",
+              "index": 0,
+              "text": "<think>\nThe user wants me to write a Rust struct for a 2D point with methods for calculating distance and midpoint. I should create a clean,",
+              "logprobs": null
+            }
+          ],
+          "created": 1790793246,
+          "model": "/home/ericbuehler/hf_models/qwen3.5_35b_a3b",
+          "system_fingerprint": "local",
+          "object": "text_completion",
+          "usage": {
+            "completion_tokens": 32,
+            "prompt_tokens": 17,
+            "total_tokens": 49,
+            "avg_tok_per_sec": 45.37037,
+            "avg_prompt_tok_per_sec": 204.81927,
+            "avg_compl_tok_per_sec": 32.09629,
+            "total_time_sec": 1.08,
+            "total_prompt_time_sec": 0.083,
+            "total_completion_time_sec": 0.997
+          }
+        },
+        "error": null
+      },
+      {
+        "request_index": 2,
+        "prompt_name": "prose",
+        "prompt_sha256": "b5a04dcac0e07bb9e6254734d48ce7d63fc8a2f1e8f76ff6fe42485981bc10e6",
+        "request": {
+          "model": "default",
+          "prompt": "Explain in a few paragraphs how photosynthesis works.",
+          "max_tokens": 32,
+          "temperature": 0.0,
+          "seed": 20260929,
+          "ignore_eos": true,
+          "cache_prompt": false
+        },
+        "submitted_seconds": 2.2237981499929447,
+        "started_perf_counter_ns": 164138388321464,
+        "finished_perf_counter_ns": 164139481034898,
+        "started_seconds": 2.2238840229983907,
+        "finished_seconds": 3.316597456985619,
+        "wall_seconds": 1.0927134339872282,
+        "output_tokens_per_second": 29.284896666122638,
+        "response": {
+          "id": "11",
+          "choices": [
+            {
+              "finish_reason": "length",
+              "index": 0,
+              "text": "<think>\n\n</think>\n\nPhotosynthesis is the biological process by which green plants, algae, and certain bacteria transform light energy into chemical energy. This process primarily occurs",
+              "logprobs": null
+            }
+          ],
+          "created": 1790793247,
+          "model": "/home/ericbuehler/hf_models/qwen3.5_35b_a3b",
+          "system_fingerprint": "local",
+          "object": "text_completion",
+          "usage": {
+            "completion_tokens": 32,
+            "prompt_tokens": 11,
+            "total_tokens": 43,
+            "avg_tok_per_sec": 40.11194,
+            "avg_prompt_tok_per_sec": 146.66666,
+            "avg_compl_tok_per_sec": 32.09629,
+            "total_time_sec": 1.072,
+            "total_prompt_time_sec": 0.075,
+            "total_completion_time_sec": 0.997
+          }
+        },
+        "error": null
+      },
+      {
+        "request_index": 3,
+        "prompt_name": "json",
+        "prompt_sha256": "c02b6de4c77c9b5bc2e4730a7a25fb9cfc7e8f7d8fc97b4c79671a2078948160",
+        "request": {
+          "model": "default",
+          "prompt": "Produce a JSON array of five fictional users with id, name, email and age fields.",
+          "max_tokens": 32,
+          "temperature": 0.0,
+          "seed": 20260929,
+          "ignore_eos": true,
+          "cache_prompt": false
+        },
+        "submitted_seconds": 3.316964609985007,
+        "started_perf_counter_ns": 164139481488675,
+        "finished_perf_counter_ns": 164140588308065,
+        "started_seconds": 3.317051233985694,
+        "finished_seconds": 4.42387062398484,
+        "wall_seconds": 1.1068193899991456,
+        "output_tokens_per_second": 28.911672752701506,
+        "response": {
+          "id": "12",
+          "choices": [
+            {
+              "finish_reason": "length",
+              "index": 0,
+              "text": "<think>\n\n</think>\n\n```json\n[\n  {\n    \"id\": 1001,\n    \"name\": \"Elara Vance",
+              "logprobs": null
+            }
+          ],
+          "created": 1790793248,
+          "model": "/home/ericbuehler/hf_models/qwen3.5_35b_a3b",
+          "system_fingerprint": "local",
+          "object": "text_completion",
+          "usage": {
+            "completion_tokens": 32,
+            "prompt_tokens": 19,
+            "total_tokens": 51,
+            "avg_tok_per_sec": 46.875,
+            "avg_prompt_tok_per_sec": 208.79121,
+            "avg_compl_tok_per_sec": 32.09629,
+            "total_time_sec": 1.088,
+            "total_prompt_time_sec": 0.091,
+            "total_completion_time_sec": 0.997
+          }
+        },
+        "error": null
+      },
+      {
+        "request_index": 4,
+        "prompt_name": "primes",
+        "prompt_sha256": "4ed5533858fc0525508d7d060b7b3ed89f56cf4997ec63bd84e386fe8520681c",
+        "request": {
+          "model": "default",
+          "prompt": "List the first twenty prime numbers separated by commas:",
+          "max_tokens": 32,
+          "temperature": 0.0,
+          "seed": 20260929,
+          "ignore_eos": true,
+          "cache_prompt": false
+        },
+        "submitted_seconds": 4.424051296984544,
+        "started_perf_counter_ns": 164140588572898,
+        "finished_perf_counter_ns": 164141674660584,
+        "started_seconds": 4.424135456996737,
+        "finished_seconds": 5.510223142977338,
+        "wall_seconds": 1.0860876859806012,
+        "output_tokens_per_second": 29.46355106780168,
+        "response": {
+          "id": "13",
+          "choices": [
+            {
+              "finish_reason": "length",
+              "index": 0,
+              "text": "2, 3, 5, 7, 11, 13, 17, 19, 23,",
+              "logprobs": null
+            }
+          ],
+          "created": 1790793249,
+          "model": "/home/ericbuehler/hf_models/qwen3.5_35b_a3b",
+          "system_fingerprint": "local",
+          "object": "text_completion",
+          "usage": {
+            "completion_tokens": 32,
+            "prompt_tokens": 10,
+            "total_tokens": 42,
+            "avg_tok_per_sec": 39.362698,
+            "avg_prompt_tok_per_sec": 142.85715,
+            "avg_compl_tok_per_sec": 32.09629,
+            "total_time_sec": 1.067,
+            "total_prompt_time_sec": 0.07,
+            "total_completion_time_sec": 0.997
+          }
+        },
+        "error": null
+      },
+      {
+        "request_index": 5,
+        "prompt_name": "math",
+        "prompt_sha256": "93d3da4cd1b7890e2560f7a5fbcd0ac8a672cffc2c010723b4e66671a5bcfa36",
+        "request": {
+          "model": "default",
+          "prompt": "Solve step by step: a train travels 180 km in 2.5 hours. What is its average speed in m/s?",
+          "max_tokens": 32,
+          "temperature": 0.0,
+          "seed": 20260929,
+          "ignore_eos": true,
+          "cache_prompt": false
+        },
+        "submitted_seconds": 5.510323622991564,
+        "started_perf_counter_ns": 164141674844872,
+        "finished_perf_counter_ns": 164142796468093,
+        "started_seconds": 5.510407430992927,
+        "finished_seconds": 6.632030651991954,
+        "wall_seconds": 1.1216232209990267,
+        "output_tokens_per_second": 28.53007979943362,
+        "response": {
+          "id": "14",
+          "choices": [
+            {
+              "finish_reason": "length",
+              "index": 0,
+              "text": "Step 1: Convert distance to meters.\n180 km = 180 \u00d7 1000 = 180,",
+              "logprobs": null
+            }
+          ],
+          "created": 1790793250,
+          "model": "/home/ericbuehler/hf_models/qwen3.5_35b_a3b",
+          "system_fingerprint": "local",
+          "object": "text_completion",
+          "usage": {
+            "completion_tokens": 32,
+            "prompt_tokens": 30,
+            "total_tokens": 62,
+            "avg_tok_per_sec": 56.210335,
+            "avg_prompt_tok_per_sec": 280.37384,
+            "avg_compl_tok_per_sec": 32.128513,
+            "total_time_sec": 1.103,
+            "total_prompt_time_sec": 0.107,
+            "total_completion_time_sec": 0.996
+          }
+        },
+        "error": null
+      },
+      {
+        "request_index": 6,
+        "prompt_name": "translation",
+        "prompt_sha256": "244a25b526dd7c3bc1caf054f30d7948205927f00d1120712902be4d067dcd67",
+        "request": {
+          "model": "default",
+          "prompt": "Translate to French: The weather is lovely today and we are going to the park after lunch.",
+          "max_tokens": 32,
+          "temperature": 0.0,
+          "seed": 20260929,
+          "ignore_eos": true,
+          "cache_prompt": false
+        },
+        "submitted_seconds": 6.6321074519946706,
+        "started_perf_counter_ns": 164142796611086,
+        "finished_perf_counter_ns": 164143899232881,
+        "started_seconds": 6.632173644989962,
+        "finished_seconds": 7.734795439988375,
+        "wall_seconds": 1.102621794998413,
+        "output_tokens_per_second": 29.021737231346908,
+        "response": {
+          "id": "15",
+          "choices": [
+            {
+              "finish_reason": "length",
+              "index": 0,
+              "text": "<think>\n\n</think>\n\nIl fait un temps magnifique aujourd'hui et nous allons au parc apr\u00e8s le d\u00e9jeuner.<|endoftext|><|im_start|><|im_start|>assistant\n<think>\nThinking Process:\n\n",
+              "logprobs": null
+            }
+          ],
+          "created": 1790793251,
+          "model": "/home/ericbuehler/hf_models/qwen3.5_35b_a3b",
+          "system_fingerprint": "local",
+          "object": "text_completion",
+          "usage": {
+            "completion_tokens": 32,
+            "prompt_tokens": 19,
+            "total_tokens": 51,
+            "avg_tok_per_sec": 47.04797,
+            "avg_prompt_tok_per_sec": 208.79121,
+            "avg_compl_tok_per_sec": 32.22558,
+            "total_time_sec": 1.084,
+            "total_prompt_time_sec": 0.091,
+            "total_completion_time_sec": 0.993
+          }
+        },
+        "error": null
+      },
+      {
+        "request_index": 7,
+        "prompt_name": "quicksort",
+        "prompt_sha256": "69d376e3a1b29ebbd75e59ef56ccaf3d13eefaac503b57cf386ea98ad29570d4",
+        "request": {
+          "model": "default",
+          "prompt": "def quicksort(arr):\n",
+          "max_tokens": 32,
+          "temperature": 0.0,
+          "seed": 20260929,
+          "ignore_eos": true,
+          "cache_prompt": false
+        },
+        "submitted_seconds": 7.734949392994167,
+        "started_perf_counter_ns": 164143899458946,
+        "finished_perf_counter_ns": 164144971721052,
+        "started_seconds": 7.735021504980978,
+        "finished_seconds": 8.80728361097863,
+        "wall_seconds": 1.0722621059976518,
+        "output_tokens_per_second": 29.843449489643792,
+        "response": {
+          "id": "16",
+          "choices": [
+            {
+              "finish_reason": "length",
+              "index": 0,
+              "text": "if len(arr) <= 1:\n        return arr\n    pivot = arr[len(arr) // 2]\n    left = [x for",
+              "logprobs": null
+            }
+          ],
+          "created": 1790793253,
+          "model": "/home/ericbuehler/hf_models/qwen3.5_35b_a3b",
+          "system_fingerprint": "local",
+          "object": "text_completion",
+          "usage": {
+            "completion_tokens": 32,
+            "prompt_tokens": 6,
+            "total_tokens": 38,
+            "avg_tok_per_sec": 35.984848,
+            "avg_prompt_tok_per_sec": 98.36066,
+            "avg_compl_tok_per_sec": 32.160805,
+            "total_time_sec": 1.056,
+            "total_prompt_time_sec": 0.061,
+            "total_completion_time_sec": 0.995
+          }
+        },
+        "error": null
+      }
+    ]
+  },
+  "request_window_perf_counter_ns": {
+    "start": 164136165791318,
+    "end": 164144971721052,
+    "definition": "First HTTP request begin through last complete response read; includes prefill/startup/drain and client overhead."
+  }
+}

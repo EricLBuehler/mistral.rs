@@ -1,0 +1,383 @@
+{
+  "complete": true,
+  "scope": "Post-warmup diagnostic trace only; positive geometry and counter evidence, not a serving benchmark.",
+  "startup": {
+    "captured_batches_from_ascending_exact_policy": [
+      1,
+      2,
+      3
+    ],
+    "deferred_batches": [
+      4,
+      5,
+      6,
+      7,
+      8
+    ],
+    "c8_warmup_successful_lazy_captures": 1,
+    "configured_max_log_is_not_largest_captured_batch": true
+  },
+  "decode_geometry": {
+    "recorded_bm": 16,
+    "recorded_bn": 64,
+    "recorded_split_k": 1,
+    "experts": 256,
+    "top_k": 8,
+    "gate_up_n": 1024,
+    "down_n": 2048,
+    "formula_for_batches_1_through_8": "EM=M*8*16; gridX=ceil(EM/16)*ceil(N/64), giving gate/up128*M and down256*M.",
+    "source_refs": [
+      "mistralrs-quant/src/moe/cuda.rs:146",
+      "mistralrs-quant/src/cutile/fused_moe.rs:534",
+      "mistralrs-core/src/pipeline/multimodal.rs:2309",
+      "mistralrs-core/src/pipeline/cuda_graph.rs:452"
+    ]
+  },
+  "c8": {
+    "batch8_graph_id": 11,
+    "batch8_graph_replays": 30,
+    "batch8_moe_launches": 2400,
+    "batch1_graph_id": 2,
+    "batch1_graph_replays": 1,
+    "batch1_moe_launches": 80,
+    "batch7_eager_steps": 1,
+    "batch7_eager_moe_launches": 80,
+    "prefill_steps": 2,
+    "prefill_moe_launches": 160,
+    "prefill_tokens": 129,
+    "decode_tokens": 248,
+    "token_reconciliation": "1 + 30*8 + 7 = 248 decode tokens; 129 prompt tokens; 8*32=256 completed output tokens.",
+    "prefill_interpretation": "Launch grids3840/7680 and2120/4240 are consistent with separate30-token and99-token prompt batches; only total129 is directly confirmed by phase counters.",
+    "ordered_model_steps": [
+      {
+        "step_index": 0,
+        "first_moe_start_relative_to_envelope_ns": 158981528,
+        "graph_id": null,
+        "gate_up_grid_x": 3840,
+        "down_grid_x": 7680,
+        "launches_per_projection": 40,
+        "decode_batch_inferred_from_grid": null
+      },
+      {
+        "step_index": 1,
+        "first_moe_start_relative_to_envelope_ns": 268149912,
+        "graph_id": 2,
+        "gate_up_grid_x": 128,
+        "down_grid_x": 256,
+        "launches_per_projection": 40,
+        "decode_batch_inferred_from_grid": 1
+      },
+      {
+        "step_index": 2,
+        "first_moe_start_relative_to_envelope_ns": 317744920,
+        "graph_id": null,
+        "gate_up_grid_x": 2120,
+        "down_grid_x": 4240,
+        "launches_per_projection": 40,
+        "decode_batch_inferred_from_grid": null
+      },
+      {
+        "step_index": 3,
+        "first_moe_start_relative_to_envelope_ns": 528763320,
+        "graph_id": 11,
+        "gate_up_grid_x": 1024,
+        "down_grid_x": 2048,
+        "launches_per_projection": 40,
+        "decode_batch_inferred_from_grid": 8
+      },
+      {
+        "step_index": 4,
+        "first_moe_start_relative_to_envelope_ns": 589934744,
+        "graph_id": 11,
+        "gate_up_grid_x": 1024,
+        "down_grid_x": 2048,
+        "launches_per_projection": 40,
+        "decode_batch_inferred_from_grid": 8
+      },
+      {
+        "step_index": 5,
+        "first_moe_start_relative_to_envelope_ns": 654271800,
+        "graph_id": 11,
+        "gate_up_grid_x": 1024,
+        "down_grid_x": 2048,
+        "launches_per_projection": 40,
+        "decode_batch_inferred_from_grid": 8
+      },
+      {
+        "step_index": 6,
+        "first_moe_start_relative_to_envelope_ns": 717672888,
+        "graph_id": 11,
+        "gate_up_grid_x": 1024,
+        "down_grid_x": 2048,
+        "launches_per_projection": 40,
+        "decode_batch_inferred_from_grid": 8
+      },
+      {
+        "step_index": 7,
+        "first_moe_start_relative_to_envelope_ns": 787797240,
+        "graph_id": 11,
+        "gate_up_grid_x": 1024,
+        "down_grid_x": 2048,
+        "launches_per_projection": 40,
+        "decode_batch_inferred_from_grid": 8
+      },
+      {
+        "step_index": 8,
+        "first_moe_start_relative_to_envelope_ns": 864150904,
+        "graph_id": 11,
+        "gate_up_grid_x": 1024,
+        "down_grid_x": 2048,
+        "launches_per_projection": 40,
+        "decode_batch_inferred_from_grid": 8
+      },
+      {
+        "step_index": 9,
+        "first_moe_start_relative_to_envelope_ns": 945146488,
+        "graph_id": 11,
+        "gate_up_grid_x": 1024,
+        "down_grid_x": 2048,
+        "launches_per_projection": 40,
+        "decode_batch_inferred_from_grid": 8
+      },
+      {
+        "step_index": 10,
+        "first_moe_start_relative_to_envelope_ns": 1027550840,
+        "graph_id": 11,
+        "gate_up_grid_x": 1024,
+        "down_grid_x": 2048,
+        "launches_per_projection": 40,
+        "decode_batch_inferred_from_grid": 8
+      },
+      {
+        "step_index": 11,
+        "first_moe_start_relative_to_envelope_ns": 1110057688,
+        "graph_id": 11,
+        "gate_up_grid_x": 1024,
+        "down_grid_x": 2048,
+        "launches_per_projection": 40,
+        "decode_batch_inferred_from_grid": 8
+      },
+      {
+        "step_index": 12,
+        "first_moe_start_relative_to_envelope_ns": 1193682584,
+        "graph_id": 11,
+        "gate_up_grid_x": 1024,
+        "down_grid_x": 2048,
+        "launches_per_projection": 40,
+        "decode_batch_inferred_from_grid": 8
+      },
+      {
+        "step_index": 13,
+        "first_moe_start_relative_to_envelope_ns": 1273949496,
+        "graph_id": 11,
+        "gate_up_grid_x": 1024,
+        "down_grid_x": 2048,
+        "launches_per_projection": 40,
+        "decode_batch_inferred_from_grid": 8
+      },
+      {
+        "step_index": 14,
+        "first_moe_start_relative_to_envelope_ns": 1356676696,
+        "graph_id": 11,
+        "gate_up_grid_x": 1024,
+        "down_grid_x": 2048,
+        "launches_per_projection": 40,
+        "decode_batch_inferred_from_grid": 8
+      },
+      {
+        "step_index": 15,
+        "first_moe_start_relative_to_envelope_ns": 1439395320,
+        "graph_id": 11,
+        "gate_up_grid_x": 1024,
+        "down_grid_x": 2048,
+        "launches_per_projection": 40,
+        "decode_batch_inferred_from_grid": 8
+      },
+      {
+        "step_index": 16,
+        "first_moe_start_relative_to_envelope_ns": 1523936024,
+        "graph_id": 11,
+        "gate_up_grid_x": 1024,
+        "down_grid_x": 2048,
+        "launches_per_projection": 40,
+        "decode_batch_inferred_from_grid": 8
+      },
+      {
+        "step_index": 17,
+        "first_moe_start_relative_to_envelope_ns": 1606210680,
+        "graph_id": 11,
+        "gate_up_grid_x": 1024,
+        "down_grid_x": 2048,
+        "launches_per_projection": 40,
+        "decode_batch_inferred_from_grid": 8
+      },
+      {
+        "step_index": 18,
+        "first_moe_start_relative_to_envelope_ns": 1691934008,
+        "graph_id": 11,
+        "gate_up_grid_x": 1024,
+        "down_grid_x": 2048,
+        "launches_per_projection": 40,
+        "decode_batch_inferred_from_grid": 8
+      },
+      {
+        "step_index": 19,
+        "first_moe_start_relative_to_envelope_ns": 1773809880,
+        "graph_id": 11,
+        "gate_up_grid_x": 1024,
+        "down_grid_x": 2048,
+        "launches_per_projection": 40,
+        "decode_batch_inferred_from_grid": 8
+      },
+      {
+        "step_index": 20,
+        "first_moe_start_relative_to_envelope_ns": 1857060568,
+        "graph_id": 11,
+        "gate_up_grid_x": 1024,
+        "down_grid_x": 2048,
+        "launches_per_projection": 40,
+        "decode_batch_inferred_from_grid": 8
+      },
+      {
+        "step_index": 21,
+        "first_moe_start_relative_to_envelope_ns": 1939532664,
+        "graph_id": 11,
+        "gate_up_grid_x": 1024,
+        "down_grid_x": 2048,
+        "launches_per_projection": 40,
+        "decode_batch_inferred_from_grid": 8
+      },
+      {
+        "step_index": 22,
+        "first_moe_start_relative_to_envelope_ns": 2021595096,
+        "graph_id": 11,
+        "gate_up_grid_x": 1024,
+        "down_grid_x": 2048,
+        "launches_per_projection": 40,
+        "decode_batch_inferred_from_grid": 8
+      },
+      {
+        "step_index": 23,
+        "first_moe_start_relative_to_envelope_ns": 2105356248,
+        "graph_id": 11,
+        "gate_up_grid_x": 1024,
+        "down_grid_x": 2048,
+        "launches_per_projection": 40,
+        "decode_batch_inferred_from_grid": 8
+      },
+      {
+        "step_index": 24,
+        "first_moe_start_relative_to_envelope_ns": 2190419064,
+        "graph_id": 11,
+        "gate_up_grid_x": 1024,
+        "down_grid_x": 2048,
+        "launches_per_projection": 40,
+        "decode_batch_inferred_from_grid": 8
+      },
+      {
+        "step_index": 25,
+        "first_moe_start_relative_to_envelope_ns": 2277533656,
+        "graph_id": 11,
+        "gate_up_grid_x": 1024,
+        "down_grid_x": 2048,
+        "launches_per_projection": 40,
+        "decode_batch_inferred_from_grid": 8
+      },
+      {
+        "step_index": 26,
+        "first_moe_start_relative_to_envelope_ns": 2360165048,
+        "graph_id": 11,
+        "gate_up_grid_x": 1024,
+        "down_grid_x": 2048,
+        "launches_per_projection": 40,
+        "decode_batch_inferred_from_grid": 8
+      },
+      {
+        "step_index": 27,
+        "first_moe_start_relative_to_envelope_ns": 2442751992,
+        "graph_id": 11,
+        "gate_up_grid_x": 1024,
+        "down_grid_x": 2048,
+        "launches_per_projection": 40,
+        "decode_batch_inferred_from_grid": 8
+      },
+      {
+        "step_index": 28,
+        "first_moe_start_relative_to_envelope_ns": 2525433912,
+        "graph_id": 11,
+        "gate_up_grid_x": 1024,
+        "down_grid_x": 2048,
+        "launches_per_projection": 40,
+        "decode_batch_inferred_from_grid": 8
+      },
+      {
+        "step_index": 29,
+        "first_moe_start_relative_to_envelope_ns": 2609144792,
+        "graph_id": 11,
+        "gate_up_grid_x": 1024,
+        "down_grid_x": 2048,
+        "launches_per_projection": 40,
+        "decode_batch_inferred_from_grid": 8
+      },
+      {
+        "step_index": 30,
+        "first_moe_start_relative_to_envelope_ns": 2691453880,
+        "graph_id": 11,
+        "gate_up_grid_x": 1024,
+        "down_grid_x": 2048,
+        "launches_per_projection": 40,
+        "decode_batch_inferred_from_grid": 8
+      },
+      {
+        "step_index": 31,
+        "first_moe_start_relative_to_envelope_ns": 2775946296,
+        "graph_id": 11,
+        "gate_up_grid_x": 1024,
+        "down_grid_x": 2048,
+        "launches_per_projection": 40,
+        "decode_batch_inferred_from_grid": 8
+      },
+      {
+        "step_index": 32,
+        "first_moe_start_relative_to_envelope_ns": 2861213592,
+        "graph_id": 11,
+        "gate_up_grid_x": 1024,
+        "down_grid_x": 2048,
+        "launches_per_projection": 40,
+        "decode_batch_inferred_from_grid": 8
+      },
+      {
+        "step_index": 33,
+        "first_moe_start_relative_to_envelope_ns": 2947029976,
+        "graph_id": null,
+        "gate_up_grid_x": 896,
+        "down_grid_x": 1792,
+        "launches_per_projection": 40,
+        "decode_batch_inferred_from_grid": 7
+      }
+    ]
+  },
+  "limitations": [
+    "Startup captured3 shapes versus8 in the unprofiled throughput run; one B7 trace tail was eager under memory pressure.",
+    "Any nonzero graphId alone would not prove B8; this conclusion additionally uses exact launch geometry and phase counters.",
+    "The profiler warns that not all CUDA events might have been collected. This is observed positive evidence, not guaranteed exhaustive coverage.",
+    "Recorded phases include prefill and drain. Kernel durations and profiled request walls are not used as official throughput results."
+  ],
+  "input_sha256": {
+    "analysis/kernel_proof.json": "57775644a20aa2341d6055307975a2cfa751dd8fc7a7c4faa0649cd513ce3d30",
+    "analysis/manifest.json": "9ea36e2c4b6d67be4567b88e9ccad34decbad70624e745ef75577c91c4b34922",
+    "capture/metadata.json": "34132c1c8b5968dce03424f0a07a57d1ce9916e66453d84c0116686a8cdd1aed",
+    "capture/server.log": "5fdf6ba7fca8935f0ea9675e9cd10a81f96546dacbe96d892f22ec79d8778c92",
+    "capture/c8.warmup0.metrics.delta.json": "97bb4027271c0db222e67ab7aced696c7fffc828a4f74374f68cd76d0a6c59d6",
+    "capture/profile_c8.metrics.delta.json": "e9a1767a80c025f711e55a1f3dadd08cc13b242c0cb9c1ac49b1480a092c2f6d",
+    "capture/profile_c8.requests.json": "2a537ad52f96f4d6fca494ff7334d4bb6895c46f8aadec1adef97a17b76eea56"
+  },
+  "source_sha256": {
+    "mistralrs-core/src/pipeline/multimodal.rs": "d89cfc29b75c8280925b544b817b61c9c106f5e55ef2bb15afb2bd3925c8a3fc",
+    "mistralrs-core/src/pipeline/cuda_graph.rs": "79cc9aff27a5b2f26a4e01bd53f228b5aeb348c34a769c1d0198bb966abf1125",
+    "mistralrs-quant/src/cutile/fused_moe.rs": "b378c0eed07d635d63f8c748e56bd69fecd1fd2952a3d8d8096b4fcc665ac1fb",
+    "mistralrs-quant/src/moe/cuda.rs": "e4f38ee5ffa55e1849b3701e447916d16e70b41f97875ae46f87a432372062a3"
+  },
+  "sqlite_sha256": "34627eb0d582bec1be877e5bb2d6bf025776205b2c7750d11f335c1575c62ab6",
+  "script_sha256": "369f66a5cff10b375cdea225ec6ad2c1cc423bf93182b45cf72add817c52dfa6"
+}

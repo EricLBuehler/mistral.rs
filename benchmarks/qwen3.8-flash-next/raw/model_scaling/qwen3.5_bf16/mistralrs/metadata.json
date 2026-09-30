@@ -1,0 +1,639 @@
+{
+  "complete": true,
+  "started": {
+    "utc": "2026-09-30T17:56:36.321028+00:00",
+    "monotonic": 161887.166207724
+  },
+  "env": {
+    "CUTILE_TILEIRAS_PATH": "/usr/local/cuda-13.2/bin/tileiras",
+    "CUDA_TOOLKIT_PATH": "/usr/local/cuda",
+    "LD_LIBRARY_PATH": "/usr/local/cuda/compat",
+    "CUDA_HOME": "/usr/local/cuda",
+    "PATH": "/home/ericbuehler/.nvm/versions/node/v24.11.0/lib/node_modules/@openai/codex/node_modules/@openai/codex-linux-arm64/vendor/aarch64-unknown-linux-musl/codex-path:/home/ericbuehler/.local/bin:/usr/local/cuda/bin:/opt/bin/:/home/ericbuehler/.codex/tmp/arg0/codex-arg0fq25DY:/home/ericbuehler/.nvm/versions/node/v24.11.0/lib/node_modules/@openai/codex/node_modules/@openai/codex-linux-arm64/vendor/aarch64-unknown-linux-musl/codex-path:/home/ericbuehler/mistral.rs/.venv/bin:/home/ericbuehler/.opencode/bin:/usr/local/cuda/bin:/home/ericbuehler/.nvm/versions/node/v24.11.0/bin:/home/ericbuehler/.vscode-server/cli/servers/Stable-2242ebbb54efeeb0129e08e919e7e8d43033cd83/server/bin/remote-cli:/home/ericbuehler/.cargo/bin:/home/ericbuehler/.local/bin:/usr/local/cuda/bin:/opt/bin/:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin",
+    "HF_HUB_OFFLINE": "1",
+    "RUST_LOG": "info",
+    "MISTRALRS_MOE_BACKEND": "cutile"
+  },
+  "phases": [
+    {
+      "name": "c1",
+      "command": [
+        "/home/ericbuehler/mistral.rs/.venv/bin/python3",
+        "/home/ericbuehler/qwen4exp_work/qwen3_moe_scaling_20260930/mistralrs_bf16/scripts/bench_concurrency.py",
+        "--base-url",
+        "http://127.0.0.1:1234",
+        "--tokenizer",
+        "/home/ericbuehler/qwen4exp_work/qwen3_moe_scaling_20260930/mistralrs_bf16/checkpoint/tokenizer.json",
+        "--label",
+        "qwen3_5_35b_a3b_bf16_cutile",
+        "--output",
+        "/home/ericbuehler/qwen4exp_work/qwen3_moe_scaling_20260930/mistralrs_bf16/concurrency.c1.json",
+        "--concurrencies",
+        "1",
+        "--requests",
+        "8",
+        "--modes",
+        "closed-loop",
+        "--warmup",
+        "2",
+        "--trials",
+        "5",
+        "--max-tokens",
+        "128"
+      ],
+      "started": {
+        "utc": "2026-09-30T18:00:31.048712+00:00",
+        "monotonic": 162121.893888466
+      },
+      "complete": true,
+      "process_finished": {
+        "utc": "2026-09-30T18:04:17.134699+00:00",
+        "monotonic": 162347.979887745
+      },
+      "returncode": 0,
+      "finished": {
+        "utc": "2026-09-30T18:04:17.148529+00:00",
+        "monotonic": 162347.99370471
+      }
+    },
+    {
+      "name": "c6",
+      "command": [
+        "/home/ericbuehler/mistral.rs/.venv/bin/python3",
+        "/home/ericbuehler/qwen4exp_work/qwen3_moe_scaling_20260930/mistralrs_bf16/scripts/bench_concurrency.py",
+        "--base-url",
+        "http://127.0.0.1:1234",
+        "--tokenizer",
+        "/home/ericbuehler/qwen4exp_work/qwen3_moe_scaling_20260930/mistralrs_bf16/checkpoint/tokenizer.json",
+        "--label",
+        "qwen3_5_35b_a3b_bf16_cutile",
+        "--output",
+        "/home/ericbuehler/qwen4exp_work/qwen3_moe_scaling_20260930/mistralrs_bf16/concurrency.c6.json",
+        "--concurrencies",
+        "6",
+        "--requests",
+        "24",
+        "--modes",
+        "closed-loop",
+        "--warmup",
+        "2",
+        "--trials",
+        "5",
+        "--max-tokens",
+        "128"
+      ],
+      "started": {
+        "utc": "2026-09-30T18:04:17.161571+00:00",
+        "monotonic": 162348.006746984
+      },
+      "complete": true,
+      "process_finished": {
+        "utc": "2026-09-30T18:08:36.243432+00:00",
+        "monotonic": 162607.088620176
+      },
+      "returncode": 0,
+      "finished": {
+        "utc": "2026-09-30T18:08:36.258730+00:00",
+        "monotonic": 162607.103906465
+      }
+    },
+    {
+      "name": "c8",
+      "command": [
+        "/home/ericbuehler/mistral.rs/.venv/bin/python3",
+        "/home/ericbuehler/qwen4exp_work/qwen3_moe_scaling_20260930/mistralrs_bf16/scripts/bench_concurrency.py",
+        "--base-url",
+        "http://127.0.0.1:1234",
+        "--tokenizer",
+        "/home/ericbuehler/qwen4exp_work/qwen3_moe_scaling_20260930/mistralrs_bf16/checkpoint/tokenizer.json",
+        "--label",
+        "qwen3_5_35b_a3b_bf16_cutile",
+        "--output",
+        "/home/ericbuehler/qwen4exp_work/qwen3_moe_scaling_20260930/mistralrs_bf16/concurrency.c8.json",
+        "--concurrencies",
+        "8",
+        "--requests",
+        "24",
+        "--modes",
+        "closed-loop",
+        "--warmup",
+        "2",
+        "--trials",
+        "5",
+        "--max-tokens",
+        "128"
+      ],
+      "started": {
+        "utc": "2026-09-30T18:08:36.267408+00:00",
+        "monotonic": 162607.112580865
+      },
+      "complete": true,
+      "process_finished": {
+        "utc": "2026-09-30T18:12:26.353092+00:00",
+        "monotonic": 162837.198291758
+      },
+      "returncode": 0,
+      "finished": {
+        "utc": "2026-09-30T18:12:26.377773+00:00",
+        "monotonic": 162837.222948593
+      }
+    }
+  ],
+  "label": "qwen3_5_35b_a3b_bf16_cutile",
+  "profiled": false,
+  "target_only": true,
+  "isq": null,
+  "expected_config_sha256": "5e4d7f74fec2f360eb9cfbfcd6ec0c4c76e684d3a11caaed259d9fd9bfbc7944",
+  "expected_backend": "cutile-bf16",
+  "allowed_backend_override": {
+    "MISTRALRS_MOE_BACKEND": "cutile"
+  },
+  "checkpoint_validation": {
+    "config": {
+      "architectures": [
+        "Qwen3_5MoeForConditionalGeneration"
+      ],
+      "image_token_id": 248056,
+      "model_type": "qwen3_5_moe",
+      "text_config": {
+        "attention_bias": false,
+        "attention_dropout": 0.0,
+        "attn_output_gate": true,
+        "dtype": "bfloat16",
+        "eos_token_id": 248044,
+        "full_attention_interval": 4,
+        "head_dim": 256,
+        "hidden_act": "silu",
+        "hidden_size": 2048,
+        "initializer_range": 0.02,
+        "layer_types": [
+          "linear_attention",
+          "linear_attention",
+          "linear_attention",
+          "full_attention",
+          "linear_attention",
+          "linear_attention",
+          "linear_attention",
+          "full_attention",
+          "linear_attention",
+          "linear_attention",
+          "linear_attention",
+          "full_attention",
+          "linear_attention",
+          "linear_attention",
+          "linear_attention",
+          "full_attention",
+          "linear_attention",
+          "linear_attention",
+          "linear_attention",
+          "full_attention",
+          "linear_attention",
+          "linear_attention",
+          "linear_attention",
+          "full_attention",
+          "linear_attention",
+          "linear_attention",
+          "linear_attention",
+          "full_attention",
+          "linear_attention",
+          "linear_attention",
+          "linear_attention",
+          "full_attention",
+          "linear_attention",
+          "linear_attention",
+          "linear_attention",
+          "full_attention",
+          "linear_attention",
+          "linear_attention",
+          "linear_attention",
+          "full_attention"
+        ],
+        "linear_conv_kernel_dim": 4,
+        "linear_key_head_dim": 128,
+        "linear_num_key_heads": 16,
+        "linear_num_value_heads": 32,
+        "linear_value_head_dim": 128,
+        "max_position_embeddings": 262144,
+        "mlp_only_layers": [],
+        "model_type": "qwen3_5_moe_text",
+        "moe_intermediate_size": 512,
+        "mtp_num_hidden_layers": 1,
+        "mtp_use_dedicated_embeddings": false,
+        "num_attention_heads": 16,
+        "num_experts": 256,
+        "num_experts_per_tok": 8,
+        "num_hidden_layers": 40,
+        "num_key_value_heads": 2,
+        "rms_norm_eps": 1e-06,
+        "router_aux_loss_coef": 0.001,
+        "shared_expert_intermediate_size": 512,
+        "use_cache": true,
+        "vocab_size": 248320,
+        "mamba_ssm_dtype": "float32",
+        "rope_parameters": {
+          "mrope_interleaved": true,
+          "mrope_section": [
+            11,
+            11,
+            10
+          ],
+          "rope_type": "default",
+          "rope_theta": 10000000,
+          "partial_rotary_factor": 0.25
+        }
+      },
+      "tie_word_embeddings": false,
+      "transformers_version": "4.57.0.dev0",
+      "video_token_id": 248057,
+      "vision_config": {
+        "deepstack_visual_indexes": [],
+        "depth": 27,
+        "hidden_act": "gelu_pytorch_tanh",
+        "hidden_size": 1152,
+        "in_channels": 3,
+        "initializer_range": 0.02,
+        "intermediate_size": 4304,
+        "model_type": "qwen3_5_moe",
+        "num_heads": 16,
+        "num_position_embeddings": 2304,
+        "out_hidden_size": 2048,
+        "patch_size": 16,
+        "spatial_merge_size": 2,
+        "temporal_patch_size": 2
+      },
+      "vision_end_token_id": 248054,
+      "vision_start_token_id": 248053
+    },
+    "text_config": {
+      "attention_bias": false,
+      "attention_dropout": 0.0,
+      "attn_output_gate": true,
+      "dtype": "bfloat16",
+      "eos_token_id": 248044,
+      "full_attention_interval": 4,
+      "head_dim": 256,
+      "hidden_act": "silu",
+      "hidden_size": 2048,
+      "initializer_range": 0.02,
+      "layer_types": [
+        "linear_attention",
+        "linear_attention",
+        "linear_attention",
+        "full_attention",
+        "linear_attention",
+        "linear_attention",
+        "linear_attention",
+        "full_attention",
+        "linear_attention",
+        "linear_attention",
+        "linear_attention",
+        "full_attention",
+        "linear_attention",
+        "linear_attention",
+        "linear_attention",
+        "full_attention",
+        "linear_attention",
+        "linear_attention",
+        "linear_attention",
+        "full_attention",
+        "linear_attention",
+        "linear_attention",
+        "linear_attention",
+        "full_attention",
+        "linear_attention",
+        "linear_attention",
+        "linear_attention",
+        "full_attention",
+        "linear_attention",
+        "linear_attention",
+        "linear_attention",
+        "full_attention",
+        "linear_attention",
+        "linear_attention",
+        "linear_attention",
+        "full_attention",
+        "linear_attention",
+        "linear_attention",
+        "linear_attention",
+        "full_attention"
+      ],
+      "linear_conv_kernel_dim": 4,
+      "linear_key_head_dim": 128,
+      "linear_num_key_heads": 16,
+      "linear_num_value_heads": 32,
+      "linear_value_head_dim": 128,
+      "max_position_embeddings": 262144,
+      "mlp_only_layers": [],
+      "model_type": "qwen3_5_moe_text",
+      "moe_intermediate_size": 512,
+      "mtp_num_hidden_layers": 1,
+      "mtp_use_dedicated_embeddings": false,
+      "num_attention_heads": 16,
+      "num_experts": 256,
+      "num_experts_per_tok": 8,
+      "num_hidden_layers": 40,
+      "num_key_value_heads": 2,
+      "rms_norm_eps": 1e-06,
+      "router_aux_loss_coef": 0.001,
+      "shared_expert_intermediate_size": 512,
+      "use_cache": true,
+      "vocab_size": 248320,
+      "mamba_ssm_dtype": "float32",
+      "rope_parameters": {
+        "mrope_interleaved": true,
+        "mrope_section": [
+          11,
+          11,
+          10
+        ],
+        "rope_type": "default",
+        "rope_theta": 10000000,
+        "partial_rotary_factor": 0.25
+      }
+    },
+    "shards": [
+      {
+        "name": "model.safetensors-00001-of-00014.safetensors",
+        "bytes": 5368709816
+      },
+      {
+        "name": "model.safetensors-00002-of-00014.safetensors",
+        "bytes": 5368709808
+      },
+      {
+        "name": "model.safetensors-00003-of-00014.safetensors",
+        "bytes": 5368709808
+      },
+      {
+        "name": "model.safetensors-00004-of-00014.safetensors",
+        "bytes": 5368709816
+      },
+      {
+        "name": "model.safetensors-00005-of-00014.safetensors",
+        "bytes": 5368709816
+      },
+      {
+        "name": "model.safetensors-00006-of-00014.safetensors",
+        "bytes": 5368709816
+      },
+      {
+        "name": "model.safetensors-00007-of-00014.safetensors",
+        "bytes": 5368709808
+      },
+      {
+        "name": "model.safetensors-00008-of-00014.safetensors",
+        "bytes": 5368709808
+      },
+      {
+        "name": "model.safetensors-00009-of-00014.safetensors",
+        "bytes": 5255463936
+      },
+      {
+        "name": "model.safetensors-00010-of-00014.safetensors",
+        "bytes": 5368710456
+      },
+      {
+        "name": "model.safetensors-00011-of-00014.safetensors",
+        "bytes": 5368710464
+      },
+      {
+        "name": "model.safetensors-00012-of-00014.safetensors",
+        "bytes": 5368710456
+      },
+      {
+        "name": "model.safetensors-00013-of-00014.safetensors",
+        "bytes": 5367839544
+      },
+      {
+        "name": "model.safetensors-00014-of-00014.safetensors",
+        "bytes": 2224764664
+      }
+    ],
+    "headers": [
+      {
+        "shard": "model.safetensors-00001-of-00014.safetensors",
+        "header_bytes": 688,
+        "header_sha256": "a9e64954690c4c0ad5f2e3c0a7fc6aa6de664ede4d131a89159644ce69108097"
+      },
+      {
+        "shard": "model.safetensors-00002-of-00014.safetensors",
+        "header_bytes": 680,
+        "header_sha256": "f2946c1b7f76e805e9c65b3f36668c5a66e667df847cf2711f75fcf8cad62a86"
+      },
+      {
+        "shard": "model.safetensors-00003-of-00014.safetensors",
+        "header_bytes": 680,
+        "header_sha256": "c4869b957409a99ea645d3a142f6db52f5234175ef95daea82630c4f4b5e4f92"
+      },
+      {
+        "shard": "model.safetensors-00004-of-00014.safetensors",
+        "header_bytes": 688,
+        "header_sha256": "cdee7b53ce364dec3dae03a8a05243fbc781617b8da89144ccc6994ede0fcf00"
+      },
+      {
+        "shard": "model.safetensors-00005-of-00014.safetensors",
+        "header_bytes": 688,
+        "header_sha256": "622e146b35670d3299b837bd12cb88a833dcb67e8458eb4adefd029856e6ac99"
+      },
+      {
+        "shard": "model.safetensors-00006-of-00014.safetensors",
+        "header_bytes": 688,
+        "header_sha256": "29b1d47c04f7ba5d0db2cc3f1f5c5da1734458c9827718dc3431b73e6351d6e4"
+      },
+      {
+        "shard": "model.safetensors-00007-of-00014.safetensors",
+        "header_bytes": 680,
+        "header_sha256": "4d3ea421051e6e223e1e11649e1b0356b8ffedb5fe8bc2f9576c5f4d0ccb25cb"
+      },
+      {
+        "shard": "model.safetensors-00008-of-00014.safetensors",
+        "header_bytes": 680,
+        "header_sha256": "571c32bb9b8498dafe1158145f209f8feb16e422e0f3fb4275de46d4cd00f4ac"
+      },
+      {
+        "shard": "model.safetensors-00009-of-00014.safetensors",
+        "header_bytes": 1016,
+        "header_sha256": "584efa83d5ef219e516ff08e22ab6f7a6e35caaccbfb203746ce58415437b637"
+      },
+      {
+        "shard": "model.safetensors-00010-of-00014.safetensors",
+        "header_bytes": 1328,
+        "header_sha256": "a64decc0f44288bb357f0c9cfd420377dc2b5ee9e52dbeb286b97e6077374326"
+      },
+      {
+        "shard": "model.safetensors-00011-of-00014.safetensors",
+        "header_bytes": 1336,
+        "header_sha256": "a58e8b0b974f0f414c39f08f4d250eee5e0c419eedf3b2d6aee2a50a3bc54408"
+      },
+      {
+        "shard": "model.safetensors-00012-of-00014.safetensors",
+        "header_bytes": 1328,
+        "header_sha256": "05cb22d118a5fc2c655dc7c686617c20a9d770c4fcd9e4ee663524af813a09a2"
+      },
+      {
+        "shard": "model.safetensors-00013-of-00014.safetensors",
+        "header_bytes": 23344,
+        "header_sha256": "5d7fb10af28ff02acfa88a1e623ccb41b360e442ff2bddeefa131a71235da416"
+      },
+      {
+        "shard": "model.safetensors-00014-of-00014.safetensors",
+        "header_bytes": 189072,
+        "header_sha256": "091eaab7a7dd4059a782c2fed3e4c3942546ef4803f9be95ff14bf63bc33c59d"
+      }
+    ],
+    "expert_tensor_dtypes": {
+      "BF16": 848
+    },
+    "tensor_inventory_scope": "Shard presence/sizes and safetensor header hashes/dtypes only; no full tensor-data hashing."
+  },
+  "model_comparison_limit": "A different model/checkpoint is an architecture/backend control, not an isolated regression test against Flash-Next.",
+  "counter_scope": "Whole command including warmups; global swap counters do not identify model paging or timing impact.",
+  "isolation_scope": "Boundary process snapshots, not a continuous monitor of all processes.",
+  "files": [
+    {
+      "source": "/home/ericbuehler/qwen4exp_work/qwen3_moe_scaling_20260930/harnesses/bench_serving.py",
+      "copy": "scripts/bench_serving.py",
+      "sha256": "a16b5815b8744def761174e396de92e41ecd499afae712255721c20a33a79705"
+    },
+    {
+      "source": "/home/ericbuehler/qwen4exp_work/qwen3_moe_scaling_20260930/harnesses/bench_concurrency.py",
+      "copy": "scripts/bench_concurrency.py",
+      "sha256": "9f664f3ff278f0f16b24e655477486e93b91aec41bf473510e13f449ab1dbbc3"
+    },
+    {
+      "source": "/home/ericbuehler/qwen4exp_work/qwen3_moe_scaling_20260930/harnesses/summarize_concurrency.py",
+      "copy": "scripts/summarize_concurrency.py",
+      "sha256": "1ed661d68016937619f7f94b35f6801fed581219685635916e6312d1a0c42d91"
+    },
+    {
+      "source": "/home/ericbuehler/qwen4exp_work/qwen3_moe_scaling_20260930/run_qwen3_moe.py",
+      "copy": "scripts/run_qwen3_moe.py",
+      "sha256": "fb17ddbbd227dc3c26f0a66977c8874e82f1dd47d6fe6fca34a2a3956fe690b2"
+    },
+    {
+      "source": "/home/ericbuehler/qwen4exp_work/qwen3_moe_scaling_20260930/observe.py",
+      "copy": "scripts/observe.py",
+      "sha256": "8b7e8bc4206e463bce8e01bc2f55f8a3d38d283248b932d1a05847cbda385233"
+    },
+    {
+      "source": "/home/ericbuehler/qwen4exp_work/tuner_exploration_20260930/run_server.py",
+      "copy": "scripts/ancestor_run_server.py",
+      "sha256": "b6b734836f7791b1835e9f50684fd57e711263d4c8dc60b002c63df4f5d2bfd7"
+    },
+    {
+      "source": "/home/ericbuehler/hf_models/qwen3.5_35b_a3b/config.json",
+      "copy": "checkpoint/config.json",
+      "sha256": "5e4d7f74fec2f360eb9cfbfcd6ec0c4c76e684d3a11caaed259d9fd9bfbc7944"
+    },
+    {
+      "source": "/home/ericbuehler/hf_models/qwen3.5_35b_a3b/tokenizer.json",
+      "copy": "checkpoint/tokenizer.json",
+      "sha256": "5f9e4d4901a92b997e463c1f46055088b6cca5ca61a6522d1b9f64c4bb81cb42"
+    },
+    {
+      "source": "/home/ericbuehler/hf_models/qwen3.5_35b_a3b/tokenizer_config.json",
+      "copy": "checkpoint/tokenizer_config.json",
+      "sha256": "316230d6a809701f4db5ea8f8fc862bc3a6f3229c937c174e674ff3ca0a64ac8"
+    },
+    {
+      "source": "/home/ericbuehler/hf_models/qwen3.5_35b_a3b/generation_config.json",
+      "copy": "checkpoint/generation_config.json",
+      "sha256": "4f25002776b741773666203dcea8f54619f177ace3ae483d311102092a4658e0"
+    },
+    {
+      "source": "/home/ericbuehler/hf_models/qwen3.5_35b_a3b/preprocessor_config.json",
+      "copy": "checkpoint/preprocessor_config.json",
+      "sha256": "27225450ac9c6529872ee1924fcb0962ff5634834f817040f444118116f4e516"
+    },
+    {
+      "source": "/home/ericbuehler/hf_models/qwen3.5_35b_a3b/model.safetensors.index.json",
+      "copy": "checkpoint/model.safetensors.index.json",
+      "sha256": "d8d0b7ca4e61ae107e3e87a3ff21136b3ac7c789e64bb24267227ca804e04205"
+    },
+    {
+      "source": "/home/ericbuehler/qwen4exp_work/verify_graph_depth4_20260930/build/metadata.json",
+      "copy": "candidate_build_metadata.json",
+      "sha256": "37b171ecc2f1e76fa970345985e5dd6c22b2e9c92d4d940d85951f3081eecc60"
+    }
+  ],
+  "checkpoint": "/home/ericbuehler/hf_models/qwen3.5_35b_a3b",
+  "git_head": "74a469b6d402bf3795bb3b8eb40920d242185ae9",
+  "git_status": "",
+  "source_diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "source_manifest_sha256": "617c109d263465fa8fa315fc68d206e8acdbc97c179f4d0f8d288b3a15b2843f",
+  "source_provenance_limit": "Source snapshot is taken before launch; executable identity is its SHA256. Only supplied build metadata links the executable to a build.",
+  "binary": "/home/ericbuehler/qwen4exp_work/verify_graph_depth4_20260930/build/mistralrs",
+  "binary_bytes": 609921008,
+  "binary_sha256": "92c050e15bbfe15fc99ef11077366a8fb40db5af96223c67e0f9299fce23f2fa",
+  "binary_version": "mistralrs 0.9.4",
+  "python_version": "3.12.3 (main, Mar 23 2026, 19:04:32) [GCC 13.3.0]",
+  "gpu": "name, uuid, driver_version, memory.total [MiB]\nNVIDIA GB10, GPU-0341400a-e8b8-eae5-b907-6b7ce08225b5, 580.126.09, [N/A]",
+  "command": [
+    "/home/ericbuehler/qwen4exp_work/verify_graph_depth4_20260930/build/mistralrs",
+    "serve",
+    "--no-ui",
+    "--host",
+    "127.0.0.1",
+    "-p",
+    "1234",
+    "--disable-access-log",
+    "--max-model-len",
+    "16384",
+    "--pa-context-len",
+    "16384",
+    "--max-seqs",
+    "8",
+    "--max-num-batched-tokens",
+    "4096",
+    "--max-prefill-chunk-tokens",
+    "512",
+    "--prefix-cache-n",
+    "0",
+    "--pa-cache-type",
+    "auto",
+    "--dtype",
+    "bf16",
+    "-m",
+    "/home/ericbuehler/hf_models/qwen3.5_35b_a3b"
+  ],
+  "model_pid": 2525305,
+  "startup_seconds": 234.2029986960115,
+  "ready": {
+    "utc": "2026-09-30T18:00:31.002696+00:00",
+    "monotonic": 162121.847880031
+  },
+  "summary_command": [
+    "/home/ericbuehler/mistral.rs/.venv/bin/python3",
+    "/home/ericbuehler/qwen4exp_work/qwen3_moe_scaling_20260930/mistralrs_bf16/scripts/summarize_concurrency.py",
+    "/home/ericbuehler/qwen4exp_work/qwen3_moe_scaling_20260930/mistralrs_bf16/concurrency.c1.json",
+    "/home/ericbuehler/qwen4exp_work/qwen3_moe_scaling_20260930/mistralrs_bf16/concurrency.c6.json",
+    "/home/ericbuehler/qwen4exp_work/qwen3_moe_scaling_20260930/mistralrs_bf16/concurrency.c8.json",
+    "--output",
+    "/home/ericbuehler/qwen4exp_work/qwen3_moe_scaling_20260930/mistralrs_bf16/concurrency.summary.json"
+  ],
+  "measurements_finished": {
+    "utc": "2026-09-30T18:12:26.504381+00:00",
+    "monotonic": 162837.349553765
+  },
+  "server_shutdown": {
+    "pid": 2525305,
+    "returncode": -15,
+    "forced_kill": false,
+    "utc": "2026-09-30T18:12:27.577450+00:00",
+    "monotonic": 162838.422636531
+  },
+  "gpu_monitor_shutdown": {
+    "pid": 2525304,
+    "returncode": 0,
+    "forced_kill": false,
+    "utc": "2026-09-30T18:12:28.311722+00:00",
+    "monotonic": 162839.156909456
+  },
+  "monitor_errors": [],
+  "finished": {
+    "utc": "2026-09-30T18:12:28.312119+00:00",
+    "monotonic": 162839.157291646
+  },
+  "binary_sha256_after": "92c050e15bbfe15fc99ef11077366a8fb40db5af96223c67e0f9299fce23f2fa",
+  "git_head_after": "29079c69a790adb16787409161fdd1e26fdc23ec"
+}

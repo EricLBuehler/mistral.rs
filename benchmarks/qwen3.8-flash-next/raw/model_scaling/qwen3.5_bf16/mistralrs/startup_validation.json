@@ -1,0 +1,25 @@
+{
+  "complete": true,
+  "checks": {
+    "all_layers_cuda0": true,
+    "model_bf16": true,
+    "cache_bf16": true,
+    "context_16k": true,
+    "scheduler_8": true,
+    "graphs_batch8": true,
+    "requested_moe_backend": true,
+    "no_cutile_warmup_failure": true,
+    "no_mtp_assistant": true,
+    "no_cutlass_fallback": true
+  },
+  "patterns": {
+    "all_layers_cuda0": "Layers 0-39: cuda\\[0\\]",
+    "model_bf16": "DType selected is BF16",
+    "cache_bf16": "PagedAttention KV cache type is BF16",
+    "context_16k": "available context length is 16384 tokens",
+    "scheduler_8": "max_num_seqs=8 max_num_batched_tokens=4096 max_prefill_chunk_tokens=512",
+    "graphs_batch8": "Captured [1-9][0-9]* CUDA decode graphs through batch bucket 8",
+    "requested_moe_backend": "Warming [1-9][0-9]* cuTile MoE kernels\\."
+  },
+  "backend_evidence_scope": "Startup selection/JIT logs with source provenance; no kernel-time profiling in this benchmark."
+}

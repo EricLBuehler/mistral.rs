@@ -1,0 +1,53 @@
+{
+  "utc": "2026-09-30T18:04:17.149331+00:00",
+  "monotonic": 162347.994507063,
+  "system": {
+    "MemAvailable_KiB": 51707172,
+    "SwapTotal_KiB": 16777212,
+    "SwapFree_KiB": 8798432
+  },
+  "page_size_bytes": 4096,
+  "pswpin_pages": 18343458,
+  "pswpout_pages": 30699537,
+  "model_pid": 2525305,
+  "model": {
+    "pid": 2525305,
+    "state": "S",
+    "parent_pid": 2525254,
+    "starttime_ticks": 16188764,
+    "comm": "mistralrs",
+    "command": [
+      "/home/ericbuehler/qwen4exp_work/verify_graph_depth4_20260930/build/mistralrs",
+      "serve",
+      "--no-ui",
+      "--host",
+      "127.0.0.1",
+      "-p",
+      "1234",
+      "--disable-access-log",
+      "--max-model-len",
+      "16384",
+      "--pa-context-len",
+      "16384",
+      "--max-seqs",
+      "8",
+      "--max-num-batched-tokens",
+      "4096",
+      "--max-prefill-chunk-tokens",
+      "512",
+      "--prefix-cache-n",
+      "0",
+      "--pa-cache-type",
+      "auto",
+      "--dtype",
+      "bf16",
+      "-m",
+      "/home/ericbuehler/hf_models/qwen3.5_35b_a3b"
+    ],
+    "VmHWM_KiB": 54241136,
+    "VmRSS_KiB": 1413112,
+    "RssAnon_KiB": 1200504,
+    "RssFile_KiB": 195684,
+    "VmSwap_KiB": 200452
+  }
+}

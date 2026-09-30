@@ -1,0 +1,20 @@
+{
+  "object": "list",
+  "data": [
+    {
+      "id": "default",
+      "object": "model",
+      "created": 1790791229,
+      "owned_by": "local",
+      "root": "default"
+    },
+    {
+      "id": "/home/ericbuehler/hf_models/qwen3.5_35b_a3b",
+      "object": "model",
+      "created": 1790791229,
+      "owned_by": "local",
+      "root": "/home/ericbuehler/hf_models/qwen3.5_35b_a3b",
+      "status": "loaded"
+    }
+  ]
+}

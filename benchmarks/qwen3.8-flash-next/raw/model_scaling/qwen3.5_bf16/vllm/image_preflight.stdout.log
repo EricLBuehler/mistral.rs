@@ -1,0 +1,229 @@
+{
+  "complete": true,
+  "versions": {
+    "vllm": "0.28.0",
+    "torch": "2.13.0+cu130",
+    "triton": "3.7.1",
+    "transformers": "5.15.1",
+    "tokenizers": "0.22.2",
+    "flashinfer-python": "0.6.16.post3"
+  },
+  "vllm_commit_prefix": "g2cf0a6915",
+  "config_sha256": "5e4d7f74fec2f360eb9cfbfcd6ec0c4c76e684d3a11caaed259d9fd9bfbc7944",
+  "tokenizer_sha256": "5f9e4d4901a92b997e463c1f46055088b6cca5ca61a6522d1b9f64c4bb81cb42",
+  "prompts": [
+    {
+      "name": "python",
+      "prompt_tokens": 17,
+      "token_ids": [
+        7734,
+        264,
+        12654,
+        709,
+        421,
+        4523,
+        279,
+        307,
+        7324,
+        76938,
+        1324,
+        11,
+        440,
+        264,
+        4479,
+        889,
+        13
+      ],
+      "prompt_sha256": "7d9074c26475df2a799d748be049ff151de83afb31dde5ef9211371fc3a1b124",
+      "special_tokens_true_false_equal": true
+    },
+    {
+      "name": "rust",
+      "prompt_tokens": 17,
+      "token_ids": [
+        7734,
+        264,
+        32671,
+        1968,
+        364,
+        264,
+        220,
+        17,
+        35,
+        1406,
+        440,
+        5245,
+        364,
+        5821,
+        321,
+        79133,
+        13
+      ],
+      "prompt_sha256": "60b4ac9a09b8a5ee17b2810c21cd6b28772af55c47488253dd3654098624138d",
+      "special_tokens_true_false_equal": true
+    },
+    {
+      "name": "prose",
+      "prompt_tokens": 11,
+      "token_ids": [
+        814,
+        20139,
+        303,
+        264,
+        2342,
+        41228,
+        1204,
+        7022,
+        71163,
+        4138,
+        13
+      ],
+      "prompt_sha256": "b5a04dcac0e07bb9e6254734d48ce7d63fc8a2f1e8f76ff6fe42485981bc10e6",
+      "special_tokens_true_false_equal": true
+    },
+    {
+      "name": "json",
+      "prompt_tokens": 19,
+      "token_ids": [
+        1289,
+        12986,
+        264,
+        4566,
+        1287,
+        314,
+        4097,
+        42140,
+        3719,
+        440,
+        850,
+        11,
+        803,
+        11,
+        2469,
+        321,
+        4092,
+        4881,
+        13
+      ],
+      "prompt_sha256": "c02b6de4c77c9b5bc2e4730a7a25fb9cfc7e8f7d8fc97b4c79671a2078948160",
+      "special_tokens_true_false_equal": true
+    },
+    {
+      "name": "primes",
+      "prompt_tokens": 10,
+      "token_ids": [
+        826,
+        279,
+        1118,
+        16570,
+        9944,
+        4947,
+        18101,
+        539,
+        73982,
+        25
+      ],
+      "prompt_sha256": "4ed5533858fc0525508d7d060b7b3ed89f56cf4997ec63bd84e386fe8520681c",
+      "special_tokens_true_false_equal": true
+    },
+    {
+      "name": "math",
+      "prompt_tokens": 30,
+      "token_ids": [
+        50,
+        3815,
+        2923,
+        539,
+        2923,
+        25,
+        264,
+        5257,
+        33060,
+        220,
+        16,
+        23,
+        15,
+        12754,
+        303,
+        220,
+        17,
+        13,
+        20,
+        3979,
+        13,
+        3437,
+        369,
+        1141,
+        5289,
+        4478,
+        303,
+        295,
+        2600,
+        30
+      ],
+      "prompt_sha256": "93d3da4cd1b7890e2560f7a5fbcd0ac8a672cffc2c010723b4e66671a5bcfa36",
+      "special_tokens_true_false_equal": true
+    },
+    {
+      "name": "translation",
+      "prompt_tokens": 19,
+      "token_ids": [
+        26583,
+        310,
+        8323,
+        25,
+        561,
+        8831,
+        369,
+        16200,
+        3242,
+        321,
+        567,
+        513,
+        2019,
+        310,
+        279,
+        5926,
+        1238,
+        15322,
+        13
+      ],
+      "prompt_sha256": "244a25b526dd7c3bc1caf054f30d7948205927f00d1120712902be4d067dcd67",
+      "special_tokens_true_false_equal": true
+    },
+    {
+      "name": "quicksort",
+      "prompt_tokens": 6,
+      "token_ids": [
+        727,
+        3841,
+        6646,
+        10620,
+        1590,
+        198
+      ],
+      "prompt_sha256": "69d376e3a1b29ebbd75e59ef56ccaf3d13eefaac503b57cf386ea98ad29570d4",
+      "special_tokens_true_false_equal": true
+    }
+  ],
+  "source_files": [
+    {
+      "path": "/usr/local/lib/python3.12/dist-packages/vllm/_version.py",
+      "sha256": "63904896f9449a84bac95c17567eb1dea3592783ac3aa13916f5928b9458e9ac"
+    },
+    {
+      "path": "/usr/local/lib/python3.12/dist-packages/vllm/entrypoints/openai/engine/protocol.py",
+      "sha256": "5e6935461da65b9c398db08cebc797db3eeb9a8515d7c743c8ce6c4a6b3e6242"
+    },
+    {
+      "path": "/usr/local/lib/python3.12/dist-packages/vllm/entrypoints/openai/completion/protocol.py",
+      "sha256": "73a91d8b511fe02a09e1c8cd5374d1cbc07246968c167667959003b50f519059"
+    },
+    {
+      "path": "/usr/local/lib/python3.12/dist-packages/vllm/engine/arg_utils.py",
+      "sha256": "75636c2a7903738f0e8954394fcedfced318d30a41598a8aca533be2ea2c38c4"
+    }
+  ],
+  "cache_prompt": "Accepted as an extra field but unused; --no-enable-prefix-caching is required.",
+  "scope": "Package files and tokenizers only; vLLM/Torch were not imported, no GPU requested."
+}

@@ -1,0 +1,10 @@
+{
+  "python": "Write a Python function that returns the n-th Fibonacci number, with a docstring.",
+  "rust": "Write a Rust struct for a 2D point with methods for distance and midpoint.",
+  "prose": "Explain in a few paragraphs how photosynthesis works.",
+  "json": "Produce a JSON array of five fictional users with id, name, email and age fields.",
+  "primes": "List the first twenty prime numbers separated by commas:",
+  "math": "Solve step by step: a train travels 180 km in 2.5 hours. What is its average speed in m/s?",
+  "translation": "Translate to French: The weather is lovely today and we are going to the park after lunch.",
+  "quicksort": "def quicksort(arr):\n"
+}

@@ -1,0 +1,51 @@
+{
+  "complete": true,
+  "scope": "Preparation and synthetic CPU tests only; no real engine comparison or archive planning executed",
+  "utc": "2026-09-30T18:15:46.335378+00:00",
+  "commands": [
+    {
+      "command": [
+        "/home/ericbuehler/.local/bin/ruff",
+        "format",
+        "--check",
+        "compare_bf16.py",
+        "plan_comparison_archive.py",
+        "test_comparison.py"
+      ],
+      "returncode": 0,
+      "stdout": "3 files already formatted\n",
+      "stderr": ""
+    },
+    {
+      "command": [
+        "/home/ericbuehler/.local/bin/ruff",
+        "check",
+        "compare_bf16.py",
+        "plan_comparison_archive.py",
+        "test_comparison.py"
+      ],
+      "returncode": 0,
+      "stdout": "All checks passed!\n",
+      "stderr": ""
+    },
+    {
+      "command": [
+        "/home/ericbuehler/mistral.rs/.venv/bin/python",
+        "-m",
+        "unittest",
+        "-v",
+        "test_comparison"
+      ],
+      "returncode": 0,
+      "stdout": "",
+      "stderr": "test_cache_and_tokenizer_are_external_even_when_small (test_comparison.ComparisonTests.test_cache_and_tokenizer_are_external_even_when_small) ... ok\ntest_incomplete_extra_and_reordered_trials_rejected (test_comparison.ComparisonTests.test_incomplete_extra_and_reordered_trials_rejected) ... ok\ntest_lifecycle_gate_precedes_reading_partial_trials (test_comparison.ComparisonTests.test_lifecycle_gate_precedes_reading_partial_trials) ... ok\ntest_phase_conditions_keep_global_swap_and_missing_clocks_distinct (test_comparison.ComparisonTests.test_phase_conditions_keep_global_swap_and_missing_clocks_distinct) ... ok\ntest_protocol_response_and_arithmetic_errors_rejected (test_comparison.ComparisonTests.test_protocol_response_and_arithmetic_errors_rejected) ... ok\ntest_redaction_preserves_token_counts_and_hashes (test_comparison.ComparisonTests.test_redaction_preserves_token_counts_and_hashes) ... ok\ntest_warmups_excluded_and_all_five_rates_retained (test_comparison.ComparisonTests.test_warmups_excluded_and_all_five_rates_retained) ... ok\n\n----------------------------------------------------------------------\nRan 7 tests in 0.006s\n\nOK\n"
+    }
+  ],
+  "files": {
+    "compare_bf16.py": "82bc319699e567089aac639492a090f807fcf1ad7871d3eb8b8c527b9eda8724",
+    "plan_comparison_archive.py": "e719fec3ddf2aa4832129129b6e8cfa40a9110467921a6fc243b990815ac1d9c",
+    "test_comparison.py": "b1a7e2fadbfedb75a5fbfacb341fc5ac7df0ac3fb1f908f5f3dfd5c61e26480f",
+    "comparison_plan.md": "6a01cc866db0291e307e21bd5b04f39c54fd37f8407f50866913ae1085fa5537",
+    "precision_evidence.json": "0b601ba73205df48a0b83e2aab5b45aa920469bcf479ec83aac8401462add20e"
+  }
+}

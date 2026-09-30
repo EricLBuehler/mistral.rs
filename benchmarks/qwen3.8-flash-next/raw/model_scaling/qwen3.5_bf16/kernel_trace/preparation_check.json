@@ -1,0 +1,11 @@
+{
+  "complete": true,
+  "scope": "CPU-only preparation checks; no profile or model launch.",
+  "checks": [
+    "All prepared Python files parse",
+    "Completed native target-only metrics validate without requiring absent speculative counters",
+    "Positive graph dispatch deltas present in saved native snapshots",
+    "Dry-run plan uses frozen CLI/checkpoint and32 outputs per request",
+    "Installed Nsight2026 schema supports exact kernel names, graph IDs and geometry"
+  ]
+}
