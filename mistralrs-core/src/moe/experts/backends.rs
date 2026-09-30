@@ -21,6 +21,18 @@ use super::forward::{MoEForward, MoEForwardConfig};
 
 #[cfg(feature = "cuda")]
 pub(crate) const GROUPED_PREFILL_MIN_TOKENS: usize = 32;
+#[cfg(feature = "cuda")]
+const SMALL_GROUPED_MMQ_MIN_TOKENS: usize = 24;
+#[cfg(feature = "cuda")]
+const SMALL_GROUPED_MMQ_GATE_UP_SHAPE: [usize; 3] = [512, 640, 2560];
+#[cfg(feature = "cuda")]
+const SMALL_GROUPED_MMQ_DOWN_SHAPE: [usize; 3] = [512, 2560, 640];
+#[cfg(feature = "cuda")]
+const SMALL_GROUPED_MMQ_TOPK: usize = 10;
+#[cfg(feature = "cuda")]
+const SMALL_GROUPED_MMQ_COMPUTE_CAPABILITY: (i32, i32) = (12, 1);
+#[cfg(feature = "cuda")]
+static SMALL_GROUPED_MMQ_LOG: std::sync::Once = std::sync::Once::new();
 
 /// Canonical stacked expert weights, ENK [E, N, K] = [E, out, in]. The raw backends (Fused,
 /// Cutile) hold exactly this; nothing else stores a layout.
@@ -1133,12 +1145,80 @@ impl FastExpertsWeights {
     }
 
     #[cfg(feature = "cuda")]
+    fn prefers_small_grouped_mmq(&self, forward: &MoEForward, config: MoEForwardConfig) -> bool {
+        use candle_core::cuda::cudarc::driver::sys::CUdevice_attribute;
+        use candle_core::quantized::GgmlDType;
+
+        if !(SMALL_GROUPED_MMQ_MIN_TOKENS..GROUPED_PREFILL_MIN_TOKENS)
+            .contains(&forward.shape.num_tokens)
+            || forward.shape.seq_len <= 1
+            || forward.original_dtype != DType::BF16
+            || !matches!(config.act, Activation::Silu)
+            || self.sharded
+            || forward.lora.is_some()
+            || config.num_experts != SMALL_GROUPED_MMQ_GATE_UP_SHAPE[0]
+            || config.num_experts_per_tok != SMALL_GROUPED_MMQ_TOPK
+            || forward.shape.hidden_dim != SMALL_GROUPED_MMQ_GATE_UP_SHAPE[2]
+        {
+            return false;
+        }
+        let projections = [
+            &self.fused_gate_proj,
+            &self.fused_up_proj,
+            &self.fused_down_proj,
+        ];
+        let expected = [
+            (GgmlDType::Q4K, SMALL_GROUPED_MMQ_GATE_UP_SHAPE),
+            (GgmlDType::Q4K, SMALL_GROUPED_MMQ_GATE_UP_SHAPE),
+            (GgmlDType::Q4_1, SMALL_GROUPED_MMQ_DOWN_SHAPE),
+        ];
+        if !projections
+            .into_iter()
+            .zip(expected)
+            .all(|(projection, (dtype, shape))| {
+                !projection.has_bias()
+                    && !projection.is_dynamic_lora_active()
+                    && projection.stats_snapshot().is_none()
+                    && projection.get_qtensor().is_some_and(|weight| {
+                        weight.dtype() == dtype && weight.shape().dims() == shape.as_slice()
+                    })
+            })
+        {
+            return false;
+        }
+        let Ok(device) = forward.xs.device().as_cuda_device() else {
+            return false;
+        };
+        let stream = device.cuda_stream();
+        let context = stream.context();
+        context
+            .attribute(CUdevice_attribute::CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR)
+            .is_ok_and(|major| major == SMALL_GROUPED_MMQ_COMPUTE_CAPABILITY.0)
+            && context
+                .attribute(CUdevice_attribute::CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MINOR)
+                .is_ok_and(|minor| minor == SMALL_GROUPED_MMQ_COMPUTE_CAPABILITY.1)
+    }
+
+    #[cfg(feature = "cuda")]
     pub(super) fn forward_cuda(
         &self,
         forward: &MoEForward,
         config: MoEForwardConfig,
     ) -> Result<Option<Tensor>> {
-        match Self::select_cuda_fast_path(forward) {
+        let path = match Self::select_cuda_fast_path(forward) {
+            Some(MoECudaFastPath::Decode) if self.prefers_small_grouped_mmq(forward, config) => {
+                SMALL_GROUPED_MMQ_LOG.call_once(|| {
+                    tracing::info!(
+                        min_tokens = SMALL_GROUPED_MMQ_MIN_TOKENS,
+                        max_tokens = GROUPED_PREFILL_MIN_TOKENS - 1,
+                        "Using grouped GGUF MoE for small batches"
+                    );
+                });
+                Some(MoECudaFastPath::GroupedPrefill)
+            }
+            path => path,
+        };
+        match path {
             Some(MoECudaFastPath::Decode) => self
                 .forward_decode(forward, config)
                 .map_err(|err| err.context("moe experts fast decode")),

@@ -17,7 +17,7 @@ const HIDDEN: usize = 64;
 const INTERMEDIATE: usize = 96;
 const TOLERANCE: f32 = 5e-4;
 const GRAPH_NUM_EXPERTS: usize = 512;
-const GRAPH_NUM_TOKENS: usize = 32;
+const GRAPH_TOKEN_COUNTS: [usize; 3] = [24, 28, 32];
 const GRAPH_GROW_TOKENS: usize = 128;
 const GRAPH_TOPK: usize = 10;
 const GRAPH_HIDDEN: usize = 256;
@@ -318,24 +318,31 @@ fn graph_routes(num_tokens: usize, variant: usize, device: &Device) -> Result<Te
 
 #[test]
 fn grouped_mmq_graph_replay_updates_inputs_and_routes_after_workspace_growth() -> Result<()> {
+    let _gpu_guard = CUDA_TEST_LOCK.lock().unwrap();
+    for num_tokens in GRAPH_TOKEN_COUNTS {
+        check_graph_replay(num_tokens)?;
+    }
+    Ok(())
+}
+
+fn check_graph_replay(num_tokens: usize) -> Result<()> {
     use candle_core::cuda::cudarc::driver::sys;
 
-    let _gpu_guard = CUDA_TEST_LOCK.lock().unwrap();
     let cuda = Device::new_cuda(0)?;
     let dev = cuda.as_cuda_device()?;
     let stream = dev.cuda_stream();
     let weights = GraphMoeWeights::new(&cuda)?;
     let inputs = [
-        patterned((GRAPH_NUM_TOKENS, GRAPH_HIDDEN), 3, 0.7)?
+        patterned((num_tokens, GRAPH_HIDDEN), 3, 0.7)?
             .to_dtype(DType::BF16)?
             .to_device(&cuda)?,
-        patterned((GRAPH_NUM_TOKENS, GRAPH_HIDDEN), 97, 0.4)?
+        patterned((num_tokens, GRAPH_HIDDEN), 97, 0.4)?
             .to_dtype(DType::BF16)?
             .to_device(&cuda)?,
     ];
     let routes = [
-        graph_routes(GRAPH_NUM_TOKENS, 0, &cuda)?,
-        graph_routes(GRAPH_NUM_TOKENS, 1, &cuda)?,
+        graph_routes(num_tokens, 0, &cuda)?,
+        graph_routes(num_tokens, 1, &cuda)?,
     ];
     let expected = GRAPH_REPLAY_CASES
         .iter()
@@ -353,8 +360,8 @@ fn grouped_mmq_graph_replay_updates_inputs_and_routes_after_workspace_growth() -
         assert!(difference > GRAPH_MIN_VARIATION);
     }
 
-    let xs = Tensor::zeros((GRAPH_NUM_TOKENS, GRAPH_HIDDEN), DType::BF16, &cuda)?;
-    let ids = Tensor::zeros((GRAPH_NUM_TOKENS, GRAPH_TOPK), DType::U32, &cuda)?;
+    let xs = Tensor::zeros((num_tokens, GRAPH_HIDDEN), DType::BF16, &cuda)?;
+    let ids = Tensor::zeros((num_tokens, GRAPH_TOPK), DType::U32, &cuda)?;
     xs.slice_set(&inputs[0], 0, 0)?;
     ids.slice_set(&routes[0], 0, 0)?;
     let _htod_cache_guard = dev.enable_cuda_graph_htod_cache();
