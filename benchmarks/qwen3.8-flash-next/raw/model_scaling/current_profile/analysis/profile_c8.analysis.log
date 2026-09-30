@@ -1,0 +1,53 @@
+client_request_envelope: 573391 kernels, GPU traced busy 95.14%
+  moe_grouped_mmq_context: 59.06% summed kernel time
+  mmq_outside_grouped_context: 13.82% summed kernel time
+  moe_gemv: 10.13% summed kernel time
+  other_matrix_multiply: 7.55% summed kernel time
+  gdn: 4.24% summed kernel time
+  other: 1.64% summed kernel time
+  hyper_connections: 0.84% summed kernel time
+  other_quantization: 0.79% summed kernel time
+  attention: 0.78% summed kernel time
+  moe_dispatch_routing_reduce: 0.73% summed kernel time
+  grouped_moe_quantization_context: 0.29% summed kernel time
+  ple: 0.13% summed kernel time
+client_request_interior: 573391 kernels, GPU traced busy 95.14%
+  moe_grouped_mmq_context: 59.06% summed kernel time
+  mmq_outside_grouped_context: 13.82% summed kernel time
+  moe_gemv: 10.13% summed kernel time
+  other_matrix_multiply: 7.55% summed kernel time
+  gdn: 4.24% summed kernel time
+  other: 1.64% summed kernel time
+  hyper_connections: 0.84% summed kernel time
+  other_quantization: 0.79% summed kernel time
+  attention: 0.78% summed kernel time
+  moe_dispatch_routing_reduce: 0.73% summed kernel time
+  grouped_moe_quantization_context: 0.29% summed kernel time
+  ple: 0.13% summed kernel time
+client_completion_boundary_interior: 274214 kernels, GPU traced busy 95.49%
+  moe_grouped_mmq_context: 57.90% summed kernel time
+  mmq_outside_grouped_context: 13.81% summed kernel time
+  moe_gemv: 10.91% summed kernel time
+  other_matrix_multiply: 7.76% summed kernel time
+  gdn: 4.24% summed kernel time
+  other: 1.73% summed kernel time
+  hyper_connections: 0.88% summed kernel time
+  other_quantization: 0.83% summed kernel time
+  attention: 0.79% summed kernel time
+  moe_dispatch_routing_reduce: 0.73% summed kernel time
+  grouped_moe_quantization_context: 0.29% summed kernel time
+  ple: 0.13% summed kernel time
+recorded_kernel_span: 573391 kernels, GPU traced busy 95.63%
+  moe_grouped_mmq_context: 59.06% summed kernel time
+  mmq_outside_grouped_context: 13.82% summed kernel time
+  moe_gemv: 10.13% summed kernel time
+  other_matrix_multiply: 7.55% summed kernel time
+  gdn: 4.24% summed kernel time
+  other: 1.64% summed kernel time
+  hyper_connections: 0.84% summed kernel time
+  other_quantization: 0.79% summed kernel time
+  attention: 0.78% summed kernel time
+  moe_dispatch_routing_reduce: 0.73% summed kernel time
+  grouped_moe_quantization_context: 0.29% summed kernel time
+  ple: 0.13% summed kernel time
+/home/ericbuehler/qwen4exp_work/model_scaling_20260930/analysis/profile_c8.analysis.json

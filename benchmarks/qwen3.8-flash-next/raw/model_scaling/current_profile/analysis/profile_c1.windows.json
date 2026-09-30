@@ -1,0 +1,32 @@
+[
+  {
+    "name": "client_request_envelope",
+    "start_ns": 586741558,
+    "end_ns": 19853877925,
+    "client_exact_monotonic_duration_ns": 19267133375,
+    "definition": "Whole request-phase envelope including observed clock uncertainty; full-phase token/proposal denominators apply, not streaming or decode-only timing."
+  },
+  {
+    "name": "client_request_interior",
+    "start_ns": 586744550,
+    "end_ns": 19853874933,
+    "client_start_perf_counter_ns": 161115835575698,
+    "client_end_perf_counter_ns": 161135102709073,
+    "client_exact_monotonic_duration_ns": 19267133375,
+    "definition": "Interior trimmed by the observed realtime-minus-monotonic offset envelope; not streaming-token or decode-only timing."
+  },
+  {
+    "name": "client_completion_boundary_interior",
+    "start_ns": 2771858246,
+    "end_ns": 17642546236,
+    "client_start_perf_counter_ns": 161118020689394,
+    "client_end_perf_counter_ns": 161132891380376,
+    "client_exact_monotonic_duration_ns": 14870690982,
+    "definition": "Interior trimmed by the observed realtime-minus-monotonic offset envelope; not streaming-token or decode-only timing."
+  },
+  {
+    "name": "recorded_kernel_span",
+    "start_ns": 612521968,
+    "end_ns": 19853925648
+  }
+]

@@ -1,0 +1,50 @@
+[
+  {
+    "pid": 2122897,
+    "comm": "rust-analyzer",
+    "starttime": "13585712",
+    "prior_state": "S",
+    "paused_at": "2026-09-30T17:27:17.495888+00:00",
+    "signal": "SIGSTOP"
+  },
+  {
+    "pid": 2123194,
+    "comm": "rust-analyzer-p",
+    "starttime": "13585755",
+    "prior_state": "S",
+    "paused_at": "2026-09-30T17:27:17.496042+00:00",
+    "signal": "SIGSTOP"
+  },
+  {
+    "pid": 2123195,
+    "comm": "rust-analyzer-p",
+    "starttime": "13585756",
+    "prior_state": "S",
+    "paused_at": "2026-09-30T17:27:17.496165+00:00",
+    "signal": "SIGSTOP"
+  },
+  {
+    "pid": 2305338,
+    "comm": "cpptools",
+    "starttime": "14809480",
+    "prior_state": "S",
+    "paused_at": "2026-09-30T17:27:17.505709+00:00",
+    "signal": "SIGSTOP"
+  },
+  {
+    "pid": 2305477,
+    "comm": "cpptools-srv2",
+    "starttime": "14810059",
+    "prior_state": "S",
+    "paused_at": "2026-09-30T17:27:17.505967+00:00",
+    "signal": "SIGSTOP"
+  },
+  {
+    "pid": 2305493,
+    "comm": "cpptools-srv2",
+    "starttime": "14810062",
+    "prior_state": "S",
+    "paused_at": "2026-09-30T17:27:17.506823+00:00",
+    "signal": "SIGSTOP"
+  }
+]

@@ -1,0 +1,11 @@
+{
+  "complete": true,
+  "scope": "Synthetic CPU-only adapter checks; no capture export or real trace analysis.",
+  "checks": [
+    "Boundary clipping preserves only interval overlap",
+    "97/3 HC topology separates target/draft and retains mixed intervals as unknown",
+    "Per-phase denominators, exact head rows and zero alignment sensitivity are consistent",
+    "Empty phase output is rejected",
+    "Incomplete run refuses before reading any export"
+  ]
+}

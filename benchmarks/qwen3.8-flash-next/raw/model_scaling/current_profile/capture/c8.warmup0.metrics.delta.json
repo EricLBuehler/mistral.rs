@@ -1,0 +1,373 @@
+{
+  "name": "c8.warmup0",
+  "scope": "Only this one request phase, between saved /metrics snapshots; warmups are separate phases.",
+  "counts": {
+    "sequence_proposals": 828,
+    "proposed_draft_tokens": 2885,
+    "accepted_draft_tokens": 2216
+  },
+  "draft_token_acceptance_fraction": 0.7681109185441941,
+  "mean_proposed_depth_per_sequence_proposal": 3.4842995169082127,
+  "mean_accepted_drafts_per_sequence_proposal": 2.676328502415459,
+  "theoretical_accepted_drafts_plus_one_continuation_per_sequence_proposal": 3.676328502415459,
+  "accepted_positions": {
+    "0": {
+      "accepted_drafts": 750,
+      "fraction_of_sequence_proposals": 0.9057971014492754
+    },
+    "1": {
+      "accepted_drafts": 680,
+      "fraction_of_sequence_proposals": 0.821256038647343
+    },
+    "2": {
+      "accepted_drafts": 525,
+      "fraction_of_sequence_proposals": 0.6340579710144928
+    },
+    "3": {
+      "accepted_drafts": 245,
+      "fraction_of_sequence_proposals": 0.29589371980676327
+    },
+    "4": {
+      "accepted_drafts": 8,
+      "fraction_of_sequence_proposals": 0.00966183574879227
+    },
+    "5": {
+      "accepted_drafts": 8,
+      "fraction_of_sequence_proposals": 0.00966183574879227
+    }
+  },
+  "graph_dispatches": [
+    {
+      "labels": {
+        "component": "target",
+        "mode": "eager",
+        "reason": "batch_unsupported"
+      },
+      "dispatches": 52
+    },
+    {
+      "labels": {
+        "component": "target",
+        "mode": "replay",
+        "reason": "cache_hit"
+      },
+      "dispatches": 72
+    },
+    {
+      "labels": {
+        "component": "target",
+        "mode": "skipped",
+        "reason": "prefill"
+      },
+      "dispatches": 22
+    }
+  ],
+  "all_counter_deltas": [
+    {
+      "name": "http_requests_total",
+      "labels": {
+        "method": "GET",
+        "model": "none",
+        "path": "/v1/models",
+        "status": "200"
+      },
+      "delta": 0
+    },
+    {
+      "name": "http_requests_total",
+      "labels": {
+        "method": "POST",
+        "model": "/home/ericbuehler/.cache/huggingface/hub/models--Qwen--Qwen3.8-Flash-Next/snapshots/de4b8e4d43b917e7706784d8bb445c9af86a3540",
+        "path": "/v1/completions",
+        "status": "200"
+      },
+      "delta": 24
+    },
+    {
+      "name": "mistralrs_cuda_graph_dispatch_total",
+      "labels": {
+        "component": "target",
+        "mode": "eager",
+        "reason": "batch_unsupported"
+      },
+      "delta": 52
+    },
+    {
+      "name": "mistralrs_cuda_graph_dispatch_total",
+      "labels": {
+        "component": "target",
+        "mode": "replay",
+        "reason": "cache_hit"
+      },
+      "delta": 72
+    },
+    {
+      "name": "mistralrs_cuda_graph_dispatch_total",
+      "labels": {
+        "component": "target",
+        "mode": "skipped",
+        "reason": "prefill"
+      },
+      "delta": 22
+    },
+    {
+      "name": "mistralrs_cuda_graph_events_total",
+      "labels": {
+        "component": "target",
+        "event": "capture",
+        "outcome": "success"
+      },
+      "delta": 0
+    },
+    {
+      "name": "mistralrs_cuda_graph_events_total",
+      "labels": {
+        "component": "target",
+        "event": "replay",
+        "outcome": "success"
+      },
+      "delta": 72
+    },
+    {
+      "name": "mistralrs_cuda_memory_maintenance_total",
+      "labels": {
+        "action": "observe",
+        "device": "cuda[0]",
+        "outcome": "success",
+        "reason": "decode_boundary"
+      },
+      "delta": 64
+    },
+    {
+      "name": "mistralrs_cuda_memory_maintenance_total",
+      "labels": {
+        "action": "observe",
+        "device": "cuda[0]",
+        "outcome": "success",
+        "reason": "prompt_boundary"
+      },
+      "delta": 22
+    },
+    {
+      "name": "mistralrs_cuda_memory_maintenance_total",
+      "labels": {
+        "action": "observe",
+        "device": "cuda[0]",
+        "outcome": "success",
+        "reason": "prompt_preflight"
+      },
+      "delta": 22
+    },
+    {
+      "name": "mistralrs_cuda_memory_maintenance_total",
+      "labels": {
+        "action": "trim",
+        "device": "cuda[0]",
+        "outcome": "success",
+        "reason": "idle"
+      },
+      "delta": 1
+    },
+    {
+      "name": "mistralrs_cuda_memory_maintenance_total",
+      "labels": {
+        "action": "trim",
+        "device": "cuda[0]",
+        "outcome": "unchanged",
+        "reason": "idle"
+      },
+      "delta": 1
+    },
+    {
+      "name": "mistralrs_cuda_memory_reclaimed_bytes_total",
+      "labels": {
+        "device": "cuda[0]",
+        "pool": "async",
+        "reason": "idle"
+      },
+      "delta": 100663296
+    },
+    {
+      "name": "mistralrs_decode_tokens_processed_total",
+      "labels": {},
+      "delta": 3048
+    },
+    {
+      "name": "mistralrs_encoder_cache_evictions_total",
+      "labels": {
+        "reason": "entry_capacity"
+      },
+      "delta": 0
+    },
+    {
+      "name": "mistralrs_encoder_cache_evictions_total",
+      "labels": {
+        "reason": "incompatible_shape"
+      },
+      "delta": 0
+    },
+    {
+      "name": "mistralrs_encoder_cache_evictions_total",
+      "labels": {
+        "reason": "logical_byte_capacity"
+      },
+      "delta": 0
+    },
+    {
+      "name": "mistralrs_encoder_cache_hits_total",
+      "labels": {},
+      "delta": 0
+    },
+    {
+      "name": "mistralrs_encoder_cache_insert_rejections_total",
+      "labels": {
+        "reason": "entry_exceeds_logical_byte_capacity"
+      },
+      "delta": 0
+    },
+    {
+      "name": "mistralrs_encoder_cache_insert_rejections_total",
+      "labels": {
+        "reason": "storage_compaction_failed"
+      },
+      "delta": 0
+    },
+    {
+      "name": "mistralrs_encoder_cache_misses_total",
+      "labels": {},
+      "delta": 0
+    },
+    {
+      "name": "mistralrs_paged_prefix_retention_pressure_evictions_total",
+      "labels": {
+        "reason": "allocation_pressure"
+      },
+      "delta": 0
+    },
+    {
+      "name": "mistralrs_paged_prefix_retention_pressure_evictions_total",
+      "labels": {
+        "reason": "reset"
+      },
+      "delta": 0
+    },
+    {
+      "name": "mistralrs_paged_recurrent_prefix_owner_evictions_total",
+      "labels": {
+        "reason": "block_pressure"
+      },
+      "delta": 0
+    },
+    {
+      "name": "mistralrs_paged_recurrent_prefix_owner_evictions_total",
+      "labels": {
+        "reason": "capacity"
+      },
+      "delta": 0
+    },
+    {
+      "name": "mistralrs_paged_recurrent_prefix_validation_total",
+      "labels": {
+        "outcome": "miss",
+        "reason": "no_replay_boundary"
+      },
+      "delta": 24
+    },
+    {
+      "name": "mistralrs_prefill_tokens_processed_total",
+      "labels": {},
+      "delta": 387
+    },
+    {
+      "name": "mistralrs_prefix_cache_lookups_total",
+      "labels": {},
+      "delta": 24
+    },
+    {
+      "name": "mistralrs_prefix_cache_tokens_matched_total",
+      "labels": {},
+      "delta": 0
+    },
+    {
+      "name": "mistralrs_prefix_cache_tokens_reused_total",
+      "labels": {},
+      "delta": 0
+    },
+    {
+      "name": "mistralrs_request_outcomes_total",
+      "labels": {
+        "outcome": "completed"
+      },
+      "delta": 24
+    },
+    {
+      "name": "mistralrs_sequences_completed_total",
+      "labels": {
+        "reason": "length"
+      },
+      "delta": 24
+    },
+    {
+      "name": "mistralrs_speculative_draft_tokens_accepted_per_pos_total",
+      "labels": {
+        "position": "0"
+      },
+      "delta": 750
+    },
+    {
+      "name": "mistralrs_speculative_draft_tokens_accepted_per_pos_total",
+      "labels": {
+        "position": "1"
+      },
+      "delta": 680
+    },
+    {
+      "name": "mistralrs_speculative_draft_tokens_accepted_per_pos_total",
+      "labels": {
+        "position": "2"
+      },
+      "delta": 525
+    },
+    {
+      "name": "mistralrs_speculative_draft_tokens_accepted_per_pos_total",
+      "labels": {
+        "position": "3"
+      },
+      "delta": 245
+    },
+    {
+      "name": "mistralrs_speculative_draft_tokens_accepted_per_pos_total",
+      "labels": {
+        "position": "4"
+      },
+      "delta": 8
+    },
+    {
+      "name": "mistralrs_speculative_draft_tokens_accepted_per_pos_total",
+      "labels": {
+        "position": "5"
+      },
+      "delta": 8
+    },
+    {
+      "name": "mistralrs_speculative_draft_tokens_accepted_total",
+      "labels": {},
+      "delta": 2216
+    },
+    {
+      "name": "mistralrs_speculative_draft_tokens_proposed_total",
+      "labels": {},
+      "delta": 2885
+    },
+    {
+      "name": "mistralrs_speculative_drafts_total",
+      "labels": {},
+      "delta": 828
+    },
+    {
+      "name": "mistralrs_tokens_processed_total",
+      "labels": {},
+      "delta": 3435
+    }
+  ]
+}

@@ -1,0 +1,49 @@
+--- original/bench_concurrency.py
++++ dependencies/bench_concurrency.py
+@@ -73,7 +73,8 @@
+         headers={"Content-Type": "application/json"},
+     )
+     response, error = None, None
+-    start = time.perf_counter()
++    start_ns = time.perf_counter_ns()
++    start = start_ns / 1e9
+     try:
+         with urllib.request.urlopen(req, timeout=args.timeout) as result:
+             response = json.load(result)
+@@ -82,7 +83,8 @@
+         response = {"http_error_body": exc.read().decode(errors="replace")}
+     except (OSError, ValueError) as exc:
+         error = {"type": type(exc).__name__, "message": str(exc)}
+-    finish = time.perf_counter()
++    finish_ns = time.perf_counter_ns()
++    finish = finish_ns / 1e9
+     if error is None:
+         try:
+             expected_prompt_tokens = (
+@@ -100,6 +102,8 @@
+         "prompt_sha256": hashlib.sha256(prompt.encode()).hexdigest(),
+         "request": body,
+         "submitted_seconds": submitted_seconds,
++        "started_perf_counter_ns": start_ns,
++        "finished_perf_counter_ns": finish_ns,
+         "started_seconds": start - trial_start,
+         "finished_seconds": finish - trial_start,
+         "wall_seconds": elapsed,
+@@ -148,7 +152,8 @@
+ def run_trial(args, mode, concurrency):
+     results = []
+     last_replenishment = None
+-    trial_start = time.perf_counter()
++    trial_start_ns = time.perf_counter_ns()
++    trial_start = trial_start_ns / 1e9
+ 
+     def submit(pool, index):
+         submitted = time.perf_counter() - trial_start
+@@ -201,6 +206,7 @@
+         sustained_window(results, concurrency, last_replenishment) if complete else None
+     )
+     return {
++        "trial_start_perf_counter_ns": trial_start_ns,
+         "complete": complete,
+         "wall_seconds": elapsed,
+         "completed_output_tokens": output_tokens,

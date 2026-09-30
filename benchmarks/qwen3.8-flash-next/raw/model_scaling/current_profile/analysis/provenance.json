@@ -1,0 +1,403 @@
+{
+  "complete": true,
+  "analyzer_sha256": "40b848cda64ab16bfae58372c1ed2114fda4fa02c500b39608e930df8f5634a5",
+  "run_metadata_sha256": "33ad7fc63714ee59bb80138b1bfd002fd32d8ea462a43f1b87d2f880fb530b4f",
+  "steps": [
+    {
+      "command": [
+        "/opt/nvidia/nsight-systems/2026.1.3/bin/nsys",
+        "export",
+        "--type=sqlite",
+        "--output=/home/ericbuehler/qwen4exp_work/model_scaling_20260930/analysis/profile_c1.sqlite",
+        "/home/ericbuehler/qwen4exp_work/model_scaling_20260930/current_capture/profile_c1.nsys-rep"
+      ],
+      "returncode": 0,
+      "log": "profile_c1.export.log",
+      "log_sha256": "13d61222596340fa73d20d96e14271e621fbe18d1fb0e81f65eb2b08c0771c3b"
+    },
+    {
+      "command": [
+        "/home/ericbuehler/mistral.rs/.venv/bin/python3",
+        "/home/ericbuehler/qwen4exp_work/model_scaling_20260930/dependencies/analyze_nsys.py",
+        "/home/ericbuehler/qwen4exp_work/model_scaling_20260930/analysis/profile_c1.sqlite",
+        "--output=/home/ericbuehler/qwen4exp_work/model_scaling_20260930/analysis/profile_c1.analysis.json",
+        "--windows=/home/ericbuehler/qwen4exp_work/model_scaling_20260930/analysis/profile_c1.windows.json"
+      ],
+      "returncode": 0,
+      "log": "profile_c1.analysis.log",
+      "log_sha256": "ff6eb519f27c81846be8e1a207852fdf9337ba513445c151b836216713de16f9"
+    },
+    {
+      "command": [
+        "/opt/nvidia/nsight-systems/2026.1.3/bin/nsys",
+        "export",
+        "--type=sqlite",
+        "--output=/home/ericbuehler/qwen4exp_work/model_scaling_20260930/analysis/profile_c8.sqlite",
+        "/home/ericbuehler/qwen4exp_work/model_scaling_20260930/current_capture/profile_c8.nsys-rep"
+      ],
+      "returncode": 0,
+      "log": "profile_c8.export.log",
+      "log_sha256": "b838aeed661cacec514104f864ecfaa62126bb2e65471460ca4f768186eb15f7"
+    },
+    {
+      "command": [
+        "/home/ericbuehler/mistral.rs/.venv/bin/python3",
+        "/home/ericbuehler/qwen4exp_work/model_scaling_20260930/dependencies/analyze_nsys.py",
+        "/home/ericbuehler/qwen4exp_work/model_scaling_20260930/analysis/profile_c8.sqlite",
+        "--output=/home/ericbuehler/qwen4exp_work/model_scaling_20260930/analysis/profile_c8.analysis.json",
+        "--windows=/home/ericbuehler/qwen4exp_work/model_scaling_20260930/analysis/profile_c8.windows.json"
+      ],
+      "returncode": 0,
+      "log": "profile_c8.analysis.log",
+      "log_sha256": "2e9c5d6cdb9130091b9fe712c6ddcf2a9c2ed9a1931fc1f5e222a3aafd140bea"
+    }
+  ],
+  "phases": [
+    {
+      "name": "profile_c1",
+      "report_sha256": "d6d67e305082cbdfccc31f7ab1da56ac3d181f21f7745ce4de5f52d9b04b718f",
+      "sqlite_sha256": "7bf8c9935beb865b40436764b08669c07e7b44cf37b717605e54bfb46f4976fe",
+      "client_requests_sha256": "474898deeb82c9fa95c6de581b966a57f717c61910d807ea2777f9990252c9f9",
+      "alignment_file": "profile_c1.alignment.json",
+      "diagnostics": [
+        {
+          "timestamp": -890103959248,
+          "timestampType": 1,
+          "source": 2,
+          "severity": 1,
+          "text": "Process was launched by the profiler, see /tmp/nvidia/nsight_systems/quadd_session_102510599/streams/pid_2510613_stdout.log and stderr.log for program output",
+          "globalPid": 323596073304064
+        },
+        {
+          "timestamp": -890022491952,
+          "timestampType": 1,
+          "source": 1,
+          "severity": 1,
+          "text": "Common injection library initialized successfully.",
+          "globalPid": 323596073304064
+        },
+        {
+          "timestamp": -890006799984,
+          "timestampType": 1,
+          "source": 1,
+          "severity": 1,
+          "text": "OS runtime libraries injection initialized successfully.",
+          "globalPid": 323596073304064
+        },
+        {
+          "timestamp": -889925433904,
+          "timestampType": 1,
+          "source": 1,
+          "severity": 1,
+          "text": "Buffers holding CUDA trace data will be flushed on CudaProfilerStop() call. See --flush-on-cudaprofilerstop to control this behavior.",
+          "globalPid": 323596073304064
+        },
+        {
+          "timestamp": -889909581776,
+          "timestampType": 1,
+          "source": 1,
+          "severity": 1,
+          "text": "Loaded CUPTI library: /opt/nvidia/nsight-systems/2026.1.3/target-linux-sbsa-armv8/libcupti-sbsa.so.13.3",
+          "globalPid": 323596073304064
+        },
+        {
+          "timestamp": -889802655952,
+          "timestampType": 1,
+          "source": 1,
+          "severity": 1,
+          "text": "CUDA injection initialized successfully.",
+          "globalPid": 323596073304064
+        },
+        {
+          "timestamp": -889770830592,
+          "timestampType": 1,
+          "source": 1,
+          "severity": 3,
+          "text": "CUDA device 0: Unified Memory trace is not supported by the current driver version or configuration.",
+          "globalPid": 323596073304064
+        },
+        {
+          "timestamp": 0,
+          "timestampType": 1,
+          "source": 3,
+          "severity": 1,
+          "text": "Profiling has started.",
+          "globalPid": -144115188075855872
+        },
+        {
+          "timestamp": 79560272,
+          "timestampType": 2,
+          "source": 3,
+          "severity": 2,
+          "text": "Failed to load symbols for VMA 0xe48609800000-0xe4860aca2308 from '/usr/local/cuda-13.2/targets/sbsa-linux/lib/libcublasLt.so.13.4.0.1'",
+          "globalPid": 281474976710656
+        },
+        {
+          "timestamp": 80415719,
+          "timestampType": 2,
+          "source": 3,
+          "severity": 2,
+          "text": "Failed to load symbols for VMA 0xe485e1000000-0xe485fc0839e5 from '/usr/local/cuda-13.2/targets/sbsa-linux/lib/libcublasLt.so.13.4.0.1'",
+          "globalPid": 281474976710656
+        },
+        {
+          "timestamp": 1422942403,
+          "timestampType": 2,
+          "source": 3,
+          "severity": 2,
+          "text": "Scheduling information is absent. The thread activity is deduced based on OS runtime libraries traces. This is inaccurate and does not take into account asynchronous interrupts and exception faults.",
+          "globalPid": -144115188075855872
+        },
+        {
+          "timestamp": 1423640489,
+          "timestampType": 2,
+          "source": 3,
+          "severity": 2,
+          "text": "Not all NVTX events might have been collected.",
+          "globalPid": 323596073304064
+        },
+        {
+          "timestamp": 1423641545,
+          "timestampType": 2,
+          "source": 3,
+          "severity": 2,
+          "text": "No NVTX events collected. Does the process use NVTX?",
+          "globalPid": 323596073304064
+        },
+        {
+          "timestamp": 1423642777,
+          "timestampType": 2,
+          "source": 3,
+          "severity": 2,
+          "text": "Not all CUDA events might have been collected.",
+          "globalPid": 323596073304064
+        },
+        {
+          "timestamp": 1423643497,
+          "timestampType": 2,
+          "source": 3,
+          "severity": 1,
+          "text": "Number of CUDA events collected: \t1478556.",
+          "globalPid": 323596073304064
+        },
+        {
+          "timestamp": 1423645465,
+          "timestampType": 2,
+          "source": 3,
+          "severity": 2,
+          "text": "Not all OS runtime libraries events might have been collected.",
+          "globalPid": 323596073304064
+        },
+        {
+          "timestamp": 1423646073,
+          "timestampType": 2,
+          "source": 3,
+          "severity": 1,
+          "text": "Number of OS runtime libraries events collected: \t7222.",
+          "globalPid": 323596073304064
+        },
+        {
+          "timestamp": 20118640736,
+          "timestampType": 1,
+          "source": 3,
+          "severity": 1,
+          "text": "Profiling has stopped.",
+          "globalPid": -144115188075855872
+        },
+        {
+          "timestamp": 20119712880,
+          "timestampType": 1,
+          "source": 1,
+          "severity": 1,
+          "text": "CUDA legacy/software instrumented trace was collected.",
+          "globalPid": 323596073304064
+        },
+        {
+          "timestamp": 20148366832,
+          "timestampType": 1,
+          "source": 1,
+          "severity": 1,
+          "text": "Number of CUPTI events produced: \t1492007, CUPTI buffers: 50.",
+          "globalPid": 323596073304064
+        },
+        {
+          "timestamp": 23762152176,
+          "timestampType": 1,
+          "source": 2,
+          "severity": 1,
+          "text": "S3EventHandler: S3 trace events were not found, not creating counters",
+          "globalPid": 281474976710656
+        },
+        {
+          "timestamp": 33173804816,
+          "timestampType": 1,
+          "source": 2,
+          "severity": 1,
+          "text": "Number of Debuginfod queries: 16 (successful queries: 0, timed out queries: 0).",
+          "globalPid": 281474976710656
+        },
+        {
+          "timestamp": 33173817296,
+          "timestampType": 1,
+          "source": 2,
+          "severity": 1,
+          "text": "Number of used Debuginfod cached files: 2.",
+          "globalPid": 281474976710656
+        },
+        {
+          "timestamp": 33173818816,
+          "timestampType": 1,
+          "source": 2,
+          "severity": 1,
+          "text": "Total time spent on all Debuginfod queries: 8 sec 186 msec (successful queries: 0 sec).",
+          "globalPid": 281474976710656
+        }
+      ]
+    },
+    {
+      "name": "profile_c8",
+      "report_sha256": "29a5d57085fbca0c3f59fd5eb6d80909d5efaa957cfc439138f0c4767489ee1a",
+      "sqlite_sha256": "2365f7e217907b66c06c74659f41cd0392bbc2d593b4ce2c03799fabf060d491",
+      "client_requests_sha256": "77e9b2f443e439574664876062c17b6d0298ffbad20221027296cda1fb27374b",
+      "alignment_file": "profile_c8.alignment.json",
+      "diagnostics": [
+        {
+          "timestamp": 0,
+          "timestampType": 1,
+          "source": 3,
+          "severity": 1,
+          "text": "Profiling has started.",
+          "globalPid": -144115188075855872
+        },
+        {
+          "timestamp": 97453222,
+          "timestampType": 2,
+          "source": 3,
+          "severity": 2,
+          "text": "Failed to load symbols for VMA 0xe48609800000-0xe4860aca2308 from '/usr/local/cuda-13.2/targets/sbsa-linux/lib/libcublasLt.so.13.4.0.1'",
+          "globalPid": 281474976710656
+        },
+        {
+          "timestamp": 97609736,
+          "timestampType": 2,
+          "source": 3,
+          "severity": 2,
+          "text": "Failed to load symbols for VMA 0xe485e1000000-0xe485fc0839e5 from '/usr/local/cuda-13.2/targets/sbsa-linux/lib/libcublasLt.so.13.4.0.1'",
+          "globalPid": 281474976710656
+        },
+        {
+          "timestamp": 1721232226,
+          "timestampType": 2,
+          "source": 3,
+          "severity": 2,
+          "text": "Scheduling information is absent. The thread activity is deduced based on OS runtime libraries traces. This is inaccurate and does not take into account asynchronous interrupts and exception faults.",
+          "globalPid": -144115188075855872
+        },
+        {
+          "timestamp": 1721272370,
+          "timestampType": 2,
+          "source": 3,
+          "severity": 2,
+          "text": "Not all NVTX events might have been collected.",
+          "globalPid": 323596073304064
+        },
+        {
+          "timestamp": 1721273906,
+          "timestampType": 2,
+          "source": 3,
+          "severity": 2,
+          "text": "No NVTX events collected. Does the process use NVTX?",
+          "globalPid": 323596073304064
+        },
+        {
+          "timestamp": 1721275282,
+          "timestampType": 2,
+          "source": 3,
+          "severity": 2,
+          "text": "Not all CUDA events might have been collected.",
+          "globalPid": 323596073304064
+        },
+        {
+          "timestamp": 1721275922,
+          "timestampType": 2,
+          "source": 3,
+          "severity": 1,
+          "text": "Number of CUDA events collected: \t1915144.",
+          "globalPid": 323596073304064
+        },
+        {
+          "timestamp": 1721277810,
+          "timestampType": 2,
+          "source": 3,
+          "severity": 2,
+          "text": "Not all OS runtime libraries events might have been collected.",
+          "globalPid": 323596073304064
+        },
+        {
+          "timestamp": 1721278354,
+          "timestampType": 2,
+          "source": 3,
+          "severity": 1,
+          "text": "Number of OS runtime libraries events collected: \t4491.",
+          "globalPid": 323596073304064
+        },
+        {
+          "timestamp": 24274480400,
+          "timestampType": 1,
+          "source": 3,
+          "severity": 1,
+          "text": "Profiling has stopped.",
+          "globalPid": -144115188075855872
+        },
+        {
+          "timestamp": 24274770096,
+          "timestampType": 1,
+          "source": 1,
+          "severity": 1,
+          "text": "CUDA legacy/software instrumented trace was collected.",
+          "globalPid": 323596073304064
+        },
+        {
+          "timestamp": 24309552304,
+          "timestampType": 1,
+          "source": 1,
+          "severity": 1,
+          "text": "Number of CUPTI events produced: \t1968850, CUPTI buffers: 50.",
+          "globalPid": 323596073304064
+        },
+        {
+          "timestamp": 28427245168,
+          "timestampType": 1,
+          "source": 2,
+          "severity": 1,
+          "text": "S3EventHandler: S3 trace events were not found, not creating counters",
+          "globalPid": 281474976710656
+        },
+        {
+          "timestamp": 37954482608,
+          "timestampType": 1,
+          "source": 2,
+          "severity": 1,
+          "text": "Number of Debuginfod queries: 16 (successful queries: 0, timed out queries: 0).",
+          "globalPid": 281474976710656
+        },
+        {
+          "timestamp": 37954488048,
+          "timestampType": 1,
+          "source": 2,
+          "severity": 1,
+          "text": "Number of used Debuginfod cached files: 2.",
+          "globalPid": 281474976710656
+        },
+        {
+          "timestamp": 37954489984,
+          "timestampType": 1,
+          "source": 2,
+          "severity": 1,
+          "text": "Total time spent on all Debuginfod queries: 8 sec 708 msec (successful queries: 0 sec).",
+          "globalPid": 281474976710656
+        }
+      ]
+    }
+  ]
+}

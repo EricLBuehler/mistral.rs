@@ -1,0 +1,320 @@
+{
+  "capture_epoch_ns": 1790790283773541828,
+  "capture_start": {
+    "utcEpochNs": 1790790283773541828,
+    "utcTime": "2026-09-30T17:44:43",
+    "localTime": "2026-09-30T13:44:43",
+    "systemClockNs": 161192370398768
+  },
+  "clock_anchors": [
+    {
+      "realtime_ns": 1790790284284244655,
+      "realtime_perf_counter_lower_ns": 161175129414335,
+      "realtime_perf_counter_upper_ns": 161175129415759,
+      "monotonic_raw_ns": 161174238632176,
+      "raw_perf_counter_lower_ns": 161175129415823,
+      "raw_perf_counter_upper_ns": 161175129417391,
+      "perf_counter_clock": "clock_gettime(CLOCK_MONOTONIC)"
+    },
+    {
+      "realtime_ns": 1790790307729464649,
+      "realtime_perf_counter_lower_ns": 161198574634585,
+      "realtime_perf_counter_upper_ns": 161198574635641,
+      "monotonic_raw_ns": 161197683653728,
+      "raw_perf_counter_lower_ns": 161198574635721,
+      "raw_perf_counter_upper_ns": 161198574636857,
+      "perf_counter_clock": "clock_gettime(CLOCK_MONOTONIC)"
+    },
+    {
+      "realtime_ns": 1790790284388462255,
+      "realtime_perf_counter_lower_ns": 161175233632367,
+      "realtime_perf_counter_upper_ns": 161175233633215,
+      "monotonic_raw_ns": 161174342848096,
+      "raw_perf_counter_lower_ns": 161175233633279,
+      "raw_perf_counter_upper_ns": 161175233634015,
+      "perf_counter_clock": "clock_gettime(CLOCK_MONOTONIC)"
+    },
+    {
+      "realtime_ns": 1790790286390277031,
+      "realtime_perf_counter_lower_ns": 161177235445815,
+      "realtime_perf_counter_upper_ns": 161177235447975,
+      "monotonic_raw_ns": 161176344647712,
+      "raw_perf_counter_lower_ns": 161177235448215,
+      "raw_perf_counter_upper_ns": 161177235451127,
+      "perf_counter_clock": "clock_gettime(CLOCK_MONOTONIC)"
+    },
+    {
+      "realtime_ns": 1790790288391612748,
+      "realtime_perf_counter_lower_ns": 161179236781244,
+      "realtime_perf_counter_upper_ns": 161179236783708,
+      "monotonic_raw_ns": 161178345967280,
+      "raw_perf_counter_lower_ns": 161179236784140,
+      "raw_perf_counter_upper_ns": 161179236787692,
+      "perf_counter_clock": "clock_gettime(CLOCK_MONOTONIC)"
+    },
+    {
+      "realtime_ns": 1790790290392543564,
+      "realtime_perf_counter_lower_ns": 161181237713516,
+      "realtime_perf_counter_upper_ns": 161181237714508,
+      "monotonic_raw_ns": 161180346879536,
+      "raw_perf_counter_lower_ns": 161181237714700,
+      "raw_perf_counter_upper_ns": 161181237716380,
+      "perf_counter_clock": "clock_gettime(CLOCK_MONOTONIC)"
+    },
+    {
+      "realtime_ns": 1790790292393524381,
+      "realtime_perf_counter_lower_ns": 161183238693597,
+      "realtime_perf_counter_upper_ns": 161183238695341,
+      "monotonic_raw_ns": 161182347844864,
+      "raw_perf_counter_lower_ns": 161183238695565,
+      "raw_perf_counter_upper_ns": 161183238698621,
+      "perf_counter_clock": "clock_gettime(CLOCK_MONOTONIC)"
+    },
+    {
+      "realtime_ns": 1790790294394544589,
+      "realtime_perf_counter_lower_ns": 161185239714605,
+      "realtime_perf_counter_upper_ns": 161185239715549,
+      "monotonic_raw_ns": 161184348846880,
+      "raw_perf_counter_lower_ns": 161185239715693,
+      "raw_perf_counter_upper_ns": 161185239717645,
+      "perf_counter_clock": "clock_gettime(CLOCK_MONOTONIC)"
+    },
+    {
+      "realtime_ns": 1790790296395871280,
+      "realtime_perf_counter_lower_ns": 161187241039680,
+      "realtime_perf_counter_upper_ns": 161187241042240,
+      "monotonic_raw_ns": 161186350158480,
+      "raw_perf_counter_lower_ns": 161187241042496,
+      "raw_perf_counter_upper_ns": 161187241045952,
+      "perf_counter_clock": "clock_gettime(CLOCK_MONOTONIC)"
+    },
+    {
+      "realtime_ns": 1790790298397053552,
+      "realtime_perf_counter_lower_ns": 161189242223584,
+      "realtime_perf_counter_upper_ns": 161189242224496,
+      "monotonic_raw_ns": 161188351321664,
+      "raw_perf_counter_lower_ns": 161189242224640,
+      "raw_perf_counter_upper_ns": 161189242226000,
+      "perf_counter_clock": "clock_gettime(CLOCK_MONOTONIC)"
+    },
+    {
+      "realtime_ns": 1790790300398417491,
+      "realtime_perf_counter_lower_ns": 161191243587011,
+      "realtime_perf_counter_upper_ns": 161191243588419,
+      "monotonic_raw_ns": 161190352671440,
+      "raw_perf_counter_lower_ns": 161191243588819,
+      "raw_perf_counter_upper_ns": 161191243592787,
+      "perf_counter_clock": "clock_gettime(CLOCK_MONOTONIC)"
+    },
+    {
+      "realtime_ns": 1790790302399529090,
+      "realtime_perf_counter_lower_ns": 161193244698626,
+      "realtime_perf_counter_upper_ns": 161193244700034,
+      "monotonic_raw_ns": 161192353765232,
+      "raw_perf_counter_lower_ns": 161193244700306,
+      "raw_perf_counter_upper_ns": 161193244703378,
+      "perf_counter_clock": "clock_gettime(CLOCK_MONOTONIC)"
+    },
+    {
+      "realtime_ns": 1790790304400919827,
+      "realtime_perf_counter_lower_ns": 161195246089875,
+      "realtime_perf_counter_upper_ns": 161195246090771,
+      "monotonic_raw_ns": 161194355137344,
+      "raw_perf_counter_lower_ns": 161195246091027,
+      "raw_perf_counter_upper_ns": 161195246092371,
+      "perf_counter_clock": "clock_gettime(CLOCK_MONOTONIC)"
+    },
+    {
+      "realtime_ns": 1790790306401724192,
+      "realtime_perf_counter_lower_ns": 161197246894096,
+      "realtime_perf_counter_upper_ns": 161197246895152,
+      "monotonic_raw_ns": 161196355924352,
+      "raw_perf_counter_lower_ns": 161197246895200,
+      "raw_perf_counter_upper_ns": 161197246896144,
+      "perf_counter_clock": "clock_gettime(CLOCK_MONOTONIC)"
+    }
+  ],
+  "observed_realtime_minus_perf_counter_offset_lower_ns": 1790629109154828896,
+  "observed_realtime_minus_perf_counter_offset_upper_ns": 1790629109154831600,
+  "observed_offset_envelope_width_ns": 2704,
+  "exact_client_request_window": {
+    "start": 161175131337903,
+    "end": 161198573726961,
+    "definition": "First HTTP request begin through last complete response read; includes prefill/startup/drain and client overhead."
+  },
+  "windows": [
+    {
+      "name": "client_request_envelope",
+      "start_ns": 512624971,
+      "end_ns": 23955016733,
+      "client_exact_monotonic_duration_ns": 23442389058,
+      "definition": "Whole request-phase envelope including observed clock uncertainty; full-phase token/proposal denominators apply, not streaming or decode-only timing."
+    },
+    {
+      "name": "client_request_interior",
+      "start_ns": 512627675,
+      "end_ns": 23955014029,
+      "client_start_perf_counter_ns": 161175131337903,
+      "client_end_perf_counter_ns": 161198573726961,
+      "client_exact_monotonic_duration_ns": 23442389058,
+      "definition": "Interior trimmed by the observed realtime-minus-monotonic offset envelope; not streaming-token or decode-only timing."
+    },
+    {
+      "name": "client_completion_boundary_interior",
+      "start_ns": 7200940250,
+      "end_ns": 18090032801,
+      "client_start_perf_counter_ns": 161181819650478,
+      "client_end_perf_counter_ns": 161192708745733,
+      "client_exact_monotonic_duration_ns": 10889095255,
+      "definition": "Interior trimmed by the observed realtime-minus-monotonic offset envelope; not streaming-token or decode-only timing."
+    },
+    {
+      "name": "recorded_kernel_span",
+      "start_ns": 634090928,
+      "end_ns": 23954789072
+    }
+  ],
+  "limitations": [
+    "Client monotonic timestamps are exact; trace alignment uses observed clock pairs, not an assumed identity with Nsight systemClockNs.",
+    "The offset envelope covers sampled offsets before/during/after the trial, not arbitrary unobserved realtime clock steps.",
+    "The request window includes prefill, final response delivery, and finite-trial startup/drain."
+  ],
+  "profiler_diagnostics": [
+    {
+      "timestamp": 0,
+      "timestampType": 1,
+      "source": 3,
+      "severity": 1,
+      "text": "Profiling has started.",
+      "globalPid": -144115188075855872
+    },
+    {
+      "timestamp": 97453222,
+      "timestampType": 2,
+      "source": 3,
+      "severity": 2,
+      "text": "Failed to load symbols for VMA 0xe48609800000-0xe4860aca2308 from '/usr/local/cuda-13.2/targets/sbsa-linux/lib/libcublasLt.so.13.4.0.1'",
+      "globalPid": 281474976710656
+    },
+    {
+      "timestamp": 97609736,
+      "timestampType": 2,
+      "source": 3,
+      "severity": 2,
+      "text": "Failed to load symbols for VMA 0xe485e1000000-0xe485fc0839e5 from '/usr/local/cuda-13.2/targets/sbsa-linux/lib/libcublasLt.so.13.4.0.1'",
+      "globalPid": 281474976710656
+    },
+    {
+      "timestamp": 1721232226,
+      "timestampType": 2,
+      "source": 3,
+      "severity": 2,
+      "text": "Scheduling information is absent. The thread activity is deduced based on OS runtime libraries traces. This is inaccurate and does not take into account asynchronous interrupts and exception faults.",
+      "globalPid": -144115188075855872
+    },
+    {
+      "timestamp": 1721272370,
+      "timestampType": 2,
+      "source": 3,
+      "severity": 2,
+      "text": "Not all NVTX events might have been collected.",
+      "globalPid": 323596073304064
+    },
+    {
+      "timestamp": 1721273906,
+      "timestampType": 2,
+      "source": 3,
+      "severity": 2,
+      "text": "No NVTX events collected. Does the process use NVTX?",
+      "globalPid": 323596073304064
+    },
+    {
+      "timestamp": 1721275282,
+      "timestampType": 2,
+      "source": 3,
+      "severity": 2,
+      "text": "Not all CUDA events might have been collected.",
+      "globalPid": 323596073304064
+    },
+    {
+      "timestamp": 1721275922,
+      "timestampType": 2,
+      "source": 3,
+      "severity": 1,
+      "text": "Number of CUDA events collected: \t1915144.",
+      "globalPid": 323596073304064
+    },
+    {
+      "timestamp": 1721277810,
+      "timestampType": 2,
+      "source": 3,
+      "severity": 2,
+      "text": "Not all OS runtime libraries events might have been collected.",
+      "globalPid": 323596073304064
+    },
+    {
+      "timestamp": 1721278354,
+      "timestampType": 2,
+      "source": 3,
+      "severity": 1,
+      "text": "Number of OS runtime libraries events collected: \t4491.",
+      "globalPid": 323596073304064
+    },
+    {
+      "timestamp": 24274480400,
+      "timestampType": 1,
+      "source": 3,
+      "severity": 1,
+      "text": "Profiling has stopped.",
+      "globalPid": -144115188075855872
+    },
+    {
+      "timestamp": 24274770096,
+      "timestampType": 1,
+      "source": 1,
+      "severity": 1,
+      "text": "CUDA legacy/software instrumented trace was collected.",
+      "globalPid": 323596073304064
+    },
+    {
+      "timestamp": 24309552304,
+      "timestampType": 1,
+      "source": 1,
+      "severity": 1,
+      "text": "Number of CUPTI events produced: \t1968850, CUPTI buffers: 50.",
+      "globalPid": 323596073304064
+    },
+    {
+      "timestamp": 28427245168,
+      "timestampType": 1,
+      "source": 2,
+      "severity": 1,
+      "text": "S3EventHandler: S3 trace events were not found, not creating counters",
+      "globalPid": 281474976710656
+    },
+    {
+      "timestamp": 37954482608,
+      "timestampType": 1,
+      "source": 2,
+      "severity": 1,
+      "text": "Number of Debuginfod queries: 16 (successful queries: 0, timed out queries: 0).",
+      "globalPid": 281474976710656
+    },
+    {
+      "timestamp": 37954488048,
+      "timestampType": 1,
+      "source": 2,
+      "severity": 1,
+      "text": "Number of used Debuginfod cached files: 2.",
+      "globalPid": 281474976710656
+    },
+    {
+      "timestamp": 37954489984,
+      "timestampType": 1,
+      "source": 2,
+      "severity": 1,
+      "text": "Total time spent on all Debuginfod queries: 8 sec 708 msec (successful queries: 0 sec).",
+      "globalPid": 281474976710656
+    }
+  ]
+}

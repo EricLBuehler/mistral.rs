@@ -24,6 +24,8 @@ Validation confirms matching settings, tokenizer, prompt hashes and token counts
 
 [Validated comparison and all per-prompt results](raw/optimization/final_serving/comparison/comparison.md), [machine-readable summary](raw/optimization/final_serving/comparison/comparison.json), [run metadata](raw/optimization/final_serving/run/metadata.json), and the [archive manifest](raw/optimization/final_serving/manifest.json) retain the raw samples, commands, counters, memory records, source/build provenance, and validators. The historical baseline files remain intact.
 
+The [current whole-model profile](model-scaling.md) measures the same binary at C1/C8: expert kernel time per output improves 1.54x, versus 4.13x for all other kernels together, with similar MTP acceptance. It also records 59 graph and 65 unsupported-batch eager target dispatches at C8. The subsequent depth-four graph expansion passes focused CUDA checks but has no Flash-Next full-model speed measurement yet.
+
 ## Remaining expert-kernel headroom
 
 The serving gain does not resolve the scaling gap. A followup control tests whether removing more MMQ computation has enough measured headroom to plausibly explain the requested jump. It reads the exact compressed bytes of every selected expert, with no model computation. Coalesced vector loads feed four observable XOR checksums; independent CPU checksums validate every selected byte range. The control uses the same 8 KiB chunks for all inputs, seven rounds of ten repetitions, and frozen production-FFN replays before and after the scan.
