@@ -1,0 +1,67 @@
+{
+  "complete": true,
+  "started_at": "2026-09-30T15:25:05.756452+00:00",
+  "head": "2e103c0467bea7ac7c7e9a6624af48a3310fcefa",
+  "build_command": [
+    "cargo",
+    "test",
+    "--release",
+    "-p",
+    "mistralrs-quant",
+    "--features",
+    "cuda,cutile",
+    "--test",
+    "cutile_gguf_moe_tests",
+    "--no-run"
+  ],
+  "initial_source_hashes": {
+    "mistralrs-quant/src/cutile/gguf_moe.rs": "8906915fd0cc3f91d895ef0fff386049812a1a2d4b1fb404b543be8783aa5746",
+    "mistralrs-quant/src/cutile/mod.rs": "e23686799b346a12ad912f9c283dcc1ac8f3aa0a2072c76b0d440dcdee697b90",
+    "mistralrs-quant/tests/cutile_gguf_moe_tests.rs": "ceba38c89a78ee882073f9a3a440e66d394313d2290fc880b6a1a3e4c899aa4c"
+  },
+  "source_hashes": {
+    "mistralrs-quant/src/cutile/gguf_moe.rs": "d9bba1f7fd899c99ed80b71ac86d18c251a6841b0faca115cb88ea3b7c677c40",
+    "mistralrs-quant/src/cutile/mod.rs": "e23686799b346a12ad912f9c283dcc1ac8f3aa0a2072c76b0d440dcdee697b90",
+    "mistralrs-quant/tests/cutile_gguf_moe_tests.rs": "dc8a11c0813d43cfca1679538f6eae3baf4f1d1582416a8cfc61a9c6388b192a",
+    "mistralrs-quant/tests/moe_dispatch_bench.rs": "016fb8046913d3909de853cdf67c410545d91a09527b8dff0b2d4a12d973c953",
+    "mistralrs-quant/tests/support/cutile_gguf_replay.rs": "b7f20bc0ec82ef17f12b97291041e81e00a8c5c8521c21a40ff459b282d81863"
+  },
+  "binaries": {
+    "projection": {
+      "path": "/home/ericbuehler/qwen4exp_work/moe_optimization_20260930/cutile_gguf/build/cutile_gguf_moe_tests-3a81d5e6af257f7b",
+      "sha256": "67b48a801d1c659a892a1a60f0e91cc68de2bb737672d35e1a1af6dca5bb500d",
+      "bytes": 114116144
+    },
+    "replay": {
+      "path": "/home/ericbuehler/qwen4exp_work/moe_optimization_20260930/cutile_gguf/build/moe_dispatch_bench-0dfba70e2949feab",
+      "sha256": "6b9424feab37eeb64ba39495bb536001abd8457a919a63ef5d88efd8617ca03b",
+      "bytes": 119913560
+    }
+  },
+  "checks": {
+    "release_build": "build_final.log",
+    "cargo_check": "check.log",
+    "clippy": "clippy.log",
+    "gpu_tests": "projection_tests2.log",
+    "gpu_tests_passed": 4,
+    "memcheck": "memcheck.log",
+    "memcheck_errors": 0
+  },
+  "log_hashes": {
+    "build5.log": "e7efcfb50d87826691e22d2d353dbad24adf6d5806188f7b5f7986e5b5bb5784",
+    "build2.log": "84b6c1ae89620ffb0e40afb5c7b995f25b44e6e731a2436aef6c7b70158175bf",
+    "build3.log": "8ebbda6ab4eee55e4bcd40afeebe377dd0b657a9cb5cc84b354ea011f8ab775d",
+    "clippy.log": "1bae8c736fe1af3dcf29e7ec10cf08e2d906c9432f25c4fcb9a1166786f90001",
+    "decode3.log": "1566fee52d8f79f49747a3c09c2fa6116c2b1c78da72d3c86146ce2b4054844e",
+    "projection_tests.log": "a7d06511d30a8224d08d48573d1f090cfbbc52981953319028b4df44e2d04790",
+    "projection_tests2.log": "d2293b75013ab8552d68a8c54ee276f8c4a10e9730b7b6492de6f17ceec5dda6",
+    "decode4.log": "e0b87ee9ea7e2350c770b4d9c7614435826e3d77273971e40695fc0aba3fe7b9",
+    "check.log": "a16ffd1661e8f6220147ad28ed9860a15c9a10cedf2fa3f0b40fdeb6d7979057",
+    "build_final.log": "9fa04f99d626573f1fb7cbaf1ac92f628b625b1b5e461bd612b70312ba6bfb0d",
+    "memcheck.log": "d303a0753285c0a6c2a6d31c9ecda42bb933d5cb2c6a57e5c82e9cffe17371c4",
+    "build.log": "bf8447f88634e4227f2ccf3558a628a03e4cef61fd308b80ae072a3a2900f1da",
+    "build4.log": "615c1bc03a26a446951754ee8c21b56e5c98c8630641e9193a145832cdeb3742",
+    "decode2.log": "fc5c4634c4e28077b02582e1de7c9c509dab1a677f0497bed47e6388a2f6ba5e"
+  },
+  "finished_at": "2026-09-30T15:33:22.449207+00:00"
+}

@@ -1,0 +1,70 @@
+{
+  "scope": "One native56 capture, three tile configurations, independent per-shape warmup and7 alternating rounds of10 complete routed FFN forwards. Eager and CUDAgraph latencies measured separately. No end-to-end serving measurement.",
+  "results": [
+    {
+      "phase": "native56_default",
+      "config": {
+        "bk": 128,
+        "bm": 16,
+        "bn": 64
+      },
+      "median_ms": {
+        "baseline_eager": 3.3225982666015623,
+        "candidate_eager": 17.725260925292968,
+        "baseline_graph": 3.3186080932617186,
+        "candidate_graph": 17.68488006591797
+      },
+      "candidate_slowdown_eager": 5.334758975668405,
+      "candidate_slowdown_graph": 5.329005284422197,
+      "numerical": {
+        "cosine": 0.9997517346239781,
+        "max_abs": 0.0025634765625,
+        "relative_rms": 0.022285218683252155
+      }
+    },
+    {
+      "phase": "native56_8_64_256",
+      "config": {
+        "bk": 256,
+        "bm": 8,
+        "bn": 64
+      },
+      "median_ms": {
+        "baseline_eager": 3.428339385986328,
+        "candidate_eager": 296.113720703125,
+        "baseline_graph": 3.429216003417969,
+        "candidate_graph": 296.3575439453125
+      },
+      "candidate_slowdown_eager": 86.37234747339157,
+      "candidate_slowdown_graph": 86.42136968039544,
+      "numerical": {
+        "cosine": 0.9997516977006511,
+        "max_abs": 0.0025634765625,
+        "relative_rms": 0.02228703260002481
+      }
+    },
+    {
+      "phase": "native56_8_32_64",
+      "config": {
+        "bk": 64,
+        "bm": 8,
+        "bn": 32
+      },
+      "median_ms": {
+        "baseline_eager": 3.4150047302246094,
+        "candidate_eager": 19.296617126464845,
+        "baseline_graph": 3.408601760864258,
+        "candidate_graph": 19.150079345703126
+      },
+      "candidate_slowdown_eager": 5.650538916001935,
+      "candidate_slowdown_graph": 5.618162721610396,
+      "numerical": {
+        "cosine": 0.9997516949577369,
+        "max_abs": 0.0025634765625,
+        "relative_rms": 0.022287167713669318
+      }
+    }
+  ],
+  "default_dispatch_changed": false,
+  "oracle_scope": "4 dedicated CUDA projection/decode/sentinel/graph tests pass against independent CPU reference. Complete FFN comparison is against existing MMQ/captured output; separate full-FP32/BF16-weight oracle harness is implemented but not run at this checkpoint."
+}

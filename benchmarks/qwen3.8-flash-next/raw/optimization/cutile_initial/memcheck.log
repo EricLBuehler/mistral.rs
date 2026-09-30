@@ -1,0 +1,13 @@
+========= COMPUTE-SANITIZER
+
+running 4 tests
+test cutile_gguf_decodes_every_nibble_and_scale_group ... ok
+test cutile_gguf_nonlocal_expert_writes_zero ... ok
+test cutile_gguf_projection_graph_replays_changed_routes ... ok
+test cutile_gguf_projection_matches_rounded_weight_oracle ... Q4K BF16 weight rounding alone: relative RMS 0.002061223815781021, max 0.5613517761230469
+Q4_1 BF16 weight rounding alone: relative RMS 0.0017902589325798136, max 0.34042835235595703
+ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 18.02s
+
+========= ERROR SUMMARY: 0 errors

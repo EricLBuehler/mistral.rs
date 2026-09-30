@@ -1,0 +1,12 @@
+
+running 1 test
+test cutile_gguf_decodes_every_nibble_and_scale_group ... Error: cuTile GGUF MoE: Anyhow("error: associated const values are not supported in expression position; use a literal or pass supported element constants such as `T::ZERO` directly to a DSL operation that accepts them\n  --> mistralrs-quant/src/cutile/gguf_moe.rs:174:29")
+FAILED
+
+failures:
+
+failures:
+    cutile_gguf_decodes_every_nibble_and_scale_group
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.89s
+
