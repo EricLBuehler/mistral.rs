@@ -1,0 +1,7 @@
+{
+  "base_sha256": "d9bba1f7fd899c99ed80b71ac86d18c251a6841b0faca115cb88ea3b7c677c40",
+  "variant_sha256": "9d92dca0b1e8aafc3071745198d375e9b3eccafe43fa0c6f2e1a86c793f454f4",
+  "compiled": false,
+  "production_modified": false,
+  "semantic_contract": "Unchanged FP32 dequantization, once-rounded BF16 weights, BF16 activations, FP32 MMA accumulation. Q4K native 256-value blocks use metadata loaded once and separate BF16 low/high halves; Q4_1 native32-value blocks likewise use once-loaded headers/bytes. Public config unchanged; GB=BK/32 is an internal JIT generic."
+}

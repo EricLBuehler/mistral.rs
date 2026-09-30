@@ -1,0 +1,108 @@
+{
+  "complete": true,
+  "started_at": "2026-09-30T15:52:18.871580+00:00",
+  "binary": "/home/ericbuehler/qwen4exp_work/moe_optimization_20260930/cutile_gguf/blocked/build/moe_dispatch_bench-0dfba70e2949feab",
+  "binary_sha256": "403cea6ff114b278944c4b352add9d7fe5e7ad4f7b057b7e4884483cddadd5c0",
+  "tile": "8,32,256",
+  "sample": "c8_target_verify_b8_q7_04.json",
+  "commands": [],
+  "sources": {
+    "mistralrs-quant/src/cutile/gguf_moe.rs": "9d92dca0b1e8aafc3071745198d375e9b3eccafe43fa0c6f2e1a86c793f454f4",
+    "mistralrs-quant/src/cutile/mod.rs": "e23686799b346a12ad912f9c283dcc1ac8f3aa0a2072c76b0d440dcdee697b90",
+    "mistralrs-quant/tests/moe_dispatch_bench.rs": "016fb8046913d3909de853cdf67c410545d91a09527b8dff0b2d4a12d973c953",
+    "mistralrs-quant/tests/support/cutile_gguf_replay.rs": "b7f20bc0ec82ef17f12b97291041e81e00a8c5c8521c21a40ff459b282d81863",
+    "mistralrs-quant/kernels/mmq_gguf/mmq_gguf.cuh": "8b629533b0289ee0d67179530c5bd2ff9bd3248802fc7957d74b44343bd3bfa8",
+    "mistralrs-quant/src/gguf/fast_mmq.rs": "7ef69810435e2f00e54e4121b7aeec0f71a82fd094103f9d44ebfaf60a67497e",
+    "mistralrs-quant/src/gguf/cuda.rs": "3dcbdf72ed0ad678126fe008c3200c3211259b40520f1421173716b368f9b927",
+    "external_helpers/build_diagnostic.py": "a4de06ddbd9819f43a3484053a7ea8b52c60ceccfae1e706611dd0fa111d1aa8",
+    "external_helpers/run_diagnostic.py": "473180a3c3a5d475a584a8e26a427b6d8ee5415f1b39c736a2c0d63a7d6bb494"
+  },
+  "isolation_before": {
+    "at": "2026-09-30T15:52:18.930462+00:00",
+    "processes": [
+      {
+        "pid": 2122897,
+        "name": "rust-analyzer",
+        "state": "T"
+      }
+    ]
+  },
+  "capture_validation_sha256": "e8daed05249e354fe95f954529d12d29a1cb09f33c852f54b9fd23a0506041a5",
+  "all_capture_files_verified": true,
+  "captured_metadata_sha256": {
+    "c1_r00_target_decode_b1_q1_00.json": "574316dbd827224409ecc3b3cd42c6009f537a0e38239f092613962219ab022f",
+    "c1_r00_target_verify_b1_q7_00.json": "861915937d0d8f201797cc9fd992074fddc5be4d91359b47eb8fcaf4ca4168b9",
+    "c1_r01_target_decode_b1_q1_00.json": "dd49402106e7c7cf151cc19e31d5b65dfe61d15329d6841353be8f0f3cca40ea",
+    "c1_r01_target_verify_b1_q7_00.json": "23a166c92d1de53e8ab0f877176293ea3704352d35c1d20e6a617a70897814dd",
+    "c1_r02_target_decode_b1_q1_00.json": "b979e4c1115992780b0f07d93a6872ab22a3b49a2632c40e862d080567213d35",
+    "c1_r02_target_verify_b1_q7_00.json": "d23d355a9d5935da57462f42632c42d96f558d6380eabc7899f0da115c115f44",
+    "c1_r03_target_decode_b1_q1_00.json": "cb94b7bf0cccfd230bd6985cea44815f3f75273c1ab1cf0c6f3fff66c29700e4",
+    "c1_r03_target_verify_b1_q7_00.json": "093da862fa739e26cfda70fa5d9f48e8d95fabcc667da232c0a2d46e5f01a6b7",
+    "c1_r04_target_decode_b1_q1_00.json": "44a69eef14d34fdd8d85c09df06350e323bec4e83dcb8907ccb13d1905d24cad",
+    "c1_r04_target_verify_b1_q7_00.json": "3f89e39b05267786a31b73df3f0024a07e5456f7fbd27c509ec957ecae26c0dd",
+    "c1_r05_target_decode_b1_q1_00.json": "6149dcbfe71247b111f81c6a841a2d3716a5b30376af9adf1a2a030af3c60b9a",
+    "c1_r05_target_verify_b1_q7_00.json": "d93933296bafca34664a4ae8cadeba154e3b217fb0f17ea2b6f5f059e1002bba",
+    "c1_r06_target_decode_b1_q1_00.json": "ade80a0bf7463d106904775bf870b54665f979a11cec21555170c1f0fb9bdbde",
+    "c1_r06_target_verify_b1_q7_00.json": "fe9cf3c08a8a8e84ebec7f2f74f24074f6b8e085de666df348616fa92289e87e",
+    "c1_r07_target_decode_b1_q1_00.json": "6b7b7ec0a52d308cf32c1e4801ca5ea298efc82fd673e1503f8325976aa13b0d",
+    "c1_r07_target_verify_b1_q7_00.json": "c4da17bef5779e625fac22e81d52fc4f905e1c4a0ea3cedbaeacf7def79a0eaf",
+    "c6_target_verify_b6_q7_00.json": "5157c8b2915b39a47b61f3a884d7bc4d6259db54ab41eff3bb982ddea9c50895",
+    "c6_target_verify_b6_q7_01.json": "f34faaeffa3ab1c22bf0cab2f17d4c00e1a3a800033f162a785e2fb19d115bb0",
+    "c6_target_verify_b6_q7_02.json": "489902a452dbadc000ace276fc715e1f754284118cf8d5c831e3fdf2045013da",
+    "c6_target_verify_b6_q7_03.json": "aa218dc4cde44cdbc800d65f144f56c8db899848c1855f2e6380818c27b1852f",
+    "c6_target_verify_b6_q7_04.json": "80a8a5d8ce44f7ff9b122cdb4072f8f08dc37d2f1ab643334c983b1a5c3c6364",
+    "c8_target_verify_b8_q7_00.json": "fe5a69c8eca766e33b9c180d59528b68865d45c6336601106762cc16751335a2",
+    "c8_target_verify_b8_q7_01.json": "8e1c8ec080e25294cf9bfb123b14733c0436cd85946810505d6c36f54b163a7b",
+    "c8_target_verify_b8_q7_02.json": "d190ab74d558f06e45822ba845363fea4e3d8f9d5c13f9454b640dd220c2a81f",
+    "c8_target_verify_b8_q7_03.json": "14fcfc0f3aa71201cec5594feddadd60ba624d3f92a8a8f2319ea0fc906aef70",
+    "c8_target_verify_b8_q7_04.json": "ddb318298950d025a58690cd763c79b4b87230750c1544c5e404c6b7c89d8ff0"
+  },
+  "runner_sha256": "9ee1f7ffe5edbbfec583f854e7205e234dc1a226842e8b3ab4b7c229de787b4f",
+  "git_head": "62a1bf2f5ab11e0e192c286e101d2119f4f1541b",
+  "git_diff_sha256": "86a58e6583b08ad776a782d30e62bf60799cee6c13a98123bfa94fc32691613f",
+  "environment_overrides": {
+    "MISTRALRS_MOE_REPLAY_DIR": "/home/ericbuehler/qwen4exp_work/real_routing_20260930/runtime/captures",
+    "MISTRALRS_MOE_REPLAY_OUTPUT_DIR": "/home/ericbuehler/qwen4exp_work/moe_optimization_20260930/cutile_gguf/blocked/native56_8_32_256/outputs",
+    "MISTRALRS_MOE_BENCH_OUTPUT": "/home/ericbuehler/qwen4exp_work/moe_optimization_20260930/cutile_gguf/blocked/native56_8_32_256/replay.json",
+    "MISTRALRS_GGUF_MOE_TILE": "8,32,256",
+    "MISTRALRS_MOE_REPLAY_SAMPLE": "c8_target_verify_b8_q7_04.json"
+  },
+  "command": [
+    "/home/ericbuehler/qwen4exp_work/moe_optimization_20260930/cutile_gguf/blocked/build/moe_dispatch_bench-0dfba70e2949feab",
+    "--exact",
+    "cutile_gguf_replay::flash_next_cutile_gguf_real_routing",
+    "--ignored",
+    "--nocapture",
+    "--test-threads=1"
+  ],
+  "monitor_command": [
+    "nvidia-smi",
+    "--query-gpu=timestamp,clocks.sm,clocks.mem,power.draw,temperature.gpu,utilization.gpu",
+    "--format=csv,nounits",
+    "--loop-ms=1000"
+  ],
+  "child_pid": 2389957,
+  "monitor_pid": 2389956,
+  "returncode": 0,
+  "monitor_returncode_before_stop": null,
+  "monitor_returncode": 0,
+  "replay_sha256": "48b2e723dff205150be986ba7f02853f8710277eaf67637be51ba19a13438fc7",
+  "saved_outputs": [
+    {
+      "path": "outputs/c8_target_verify_b8_q7_04.json.native.56.safetensors",
+      "bytes": 573600,
+      "sha256": "cba71abbe2dce78889db169e8e8d86247adb22931be48024e6763873ff3514f5"
+    }
+  ],
+  "isolation_after": {
+    "at": "2026-09-30T15:52:40.648451+00:00",
+    "processes": [
+      {
+        "pid": 2122897,
+        "name": "rust-analyzer",
+        "state": "T"
+      }
+    ]
+  },
+  "finished_at": "2026-09-30T15:52:40.701878+00:00"
+}

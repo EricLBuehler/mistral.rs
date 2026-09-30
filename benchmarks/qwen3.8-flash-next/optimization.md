@@ -55,6 +55,17 @@ Tensor activity is the profiler's active tensor-pipeline cycles as a percentage 
 
 Local and L2 sectors count cache requests, not DRAM bytes or bandwidth. These profiles use kernel replay with ten counter passes, unchanged caches/clocks, and explicit graph-node profiling. The profiler intentionally terminates each target after the selected launches: completion means the requested counter records were exported, not that the test finished or produced a replay summary. Profiled durations are excluded from the timing table. [Counters and interpretation](raw/optimization/cutile_profile/ncu_comparison.json), [exact commands](raw/optimization/cutile_profile/ncu_native56/metadata.json), and the [archive manifest](raw/optimization/cutile_profile/manifest.json) preserve the evidence.
 
+### Rejected blocked decoder
+
+A second layout loads each Q4K block's metadata in smaller arrays, unpacks its 256 values, and selects the requested K subtile. All four expanded projection tests pass, covering BK 32/64/128/256 with unchanged tolerances, and Compute Sanitizer reports zero errors. Correctness did not translate into performance on the same native 56-row capture:
+
+| Tile BM/BN/BK | Existing path, eager | cuTile, eager | Existing path, graph | cuTile, graph |
+| --- | ---: | ---: | ---: | ---: |
+| 16/64/128 | 3.440 | 927.615 | 3.482 | 927.241 |
+| 8/32/256 | 3.435 | 93.658 | 3.429 | 93.571 |
+
+Times are median milliseconds over the same seven-round protocol. At BK 128, this layout decodes the entire block twice and dynamically extracts each half. BK 256 eliminates the repeated decode but remains substantially slower. The source also introduces concatenation and tile-layout conversion; no counter profile of this version was collected, so the particular cause of its regression is not established. This version is rejected. Baseline outputs still match the native capture exactly, and candidate graph/eager outputs match each other exactly. [Results](raw/optimization/cutile_blocked/summary.json), [validation](raw/optimization/cutile_blocked/validation.json), and [source archive](raw/optimization/cutile_blocked/manifest.json) retain the experiment.
+
 ## Compact grouped-MMQ scheduling
 
 An external prototype builds an expert-tile prefix on the GPU and uses a fixed grid of persistent blocks to visit only nonempty tiles. It keeps the existing default tile selection and full column coverage, runs each tile's complete K dimension, and reuses the bounded masked-Y math. It requires no CPU readback. Freshly linked baseline and candidate executables use identical Rust dependencies and replay source; only the Q4K/Q4_1 CUDA objects differ.

@@ -1,0 +1,159 @@
+let zero: Tile<i32, { [] }> = scalar_to_tile(0i32);
+let one: Tile<i32, { [] }> = scalar_to_tile(1i32);
+let b: Tile<bf16, { [BN, BK] }> = if FORMAT == 0 {
+    let block: Tile<i64, { [BN] }> = exti(broadcast_scalar((kt * BK) / Q4K_VALUES, const_shape![BN]));
+    let block_bytes: Tile<i64, { [BN] }> = exti(broadcast_scalar(Q4K_BYTES, const_shape![BN]));
+    let byte_base: Tile<i64, { [BN] }> = (weight_base + block) * block_bytes;
+    let half_base: Tile<i64, { [BN] }> = byte_base / broadcast_scalar(2i64, const_shape![BN]);
+let d_ptr: PointerTile<*mut f16, { [] }> = pointer_to_tile(weight_halves);
+let d_ptr: PointerTile<*mut f16, { [1] }> = d_ptr.reshape(const_shape![1]);
+let d_ptr: PointerTile<*mut f16, { [BN] }> = d_ptr.broadcast(const_shape![BN]);
+let d_ptr = d_ptr.offset_tile(half_base);
+let (d, _): (Tile<f16, { [BN] }>, Token) = load_ptr_tko(
+    d_ptr, ordering::Weak, None::<scope::TileBlock>, None, None, None, Latency::<0>,
+);
+let m_ptr: PointerTile<*mut f16, { [] }> = pointer_to_tile(weight_halves);
+let m_ptr: PointerTile<*mut f16, { [1] }> = m_ptr.reshape(const_shape![1]);
+let m_ptr: PointerTile<*mut f16, { [BN] }> = m_ptr.broadcast(const_shape![BN]);
+let m_ptr = m_ptr.offset_tile(half_base + broadcast_scalar(1i64, const_shape![BN]));
+let (m, _): (Tile<f16, { [BN] }>, Token) = load_ptr_tko(
+    m_ptr, ordering::Weak, None::<scope::TileBlock>, None, None, None, Latency::<0>,
+);
+let d: Tile<f32, { [BN] }> = convert_tile(d);
+let m: Tile<f32, { [BN] }> = convert_tile(m);
+let group: Tile<i32, { [4] }> = iota(const_shape![4]);
+let group: Tile<i64, { [4] }> = exti(group);
+let group: Tile<i64, { [BN, 4] }> = group.reshape(const_shape![1, 4]).broadcast(const_shape![BN, 4]);
+let scale_base: Tile<i64, { [BN, 4] }> = byte_base.reshape(const_shape![BN, 1]).broadcast(const_shape![BN, 4]) + group;
+let s0_ptr: PointerTile<*mut u8, { [] }> = pointer_to_tile(weight_bytes);
+let s0_ptr: PointerTile<*mut u8, { [1, 1] }> = s0_ptr.reshape(const_shape![1, 1]);
+let s0_ptr: PointerTile<*mut u8, { [BN, 4] }> = s0_ptr.broadcast(const_shape![BN, 4]);
+let s0_ptr = s0_ptr.offset_tile(scale_base + broadcast_scalar(4i64, const_shape![BN, 4]));
+let (s0, _): (Tile<u8, { [BN, 4] }>, Token) = load_ptr_tko(
+    s0_ptr, ordering::Weak, None::<scope::TileBlock>, None, None, None, Latency::<0>,
+);
+let s0: Tile<i32, { [BN, 4] }> = exti(s0);
+let s1_ptr: PointerTile<*mut u8, { [] }> = pointer_to_tile(weight_bytes);
+let s1_ptr: PointerTile<*mut u8, { [1, 1] }> = s1_ptr.reshape(const_shape![1, 1]);
+let s1_ptr: PointerTile<*mut u8, { [BN, 4] }> = s1_ptr.broadcast(const_shape![BN, 4]);
+let s1_ptr = s1_ptr.offset_tile(scale_base + broadcast_scalar(8i64, const_shape![BN, 4]));
+let (s1, _): (Tile<u8, { [BN, 4] }>, Token) = load_ptr_tko(
+    s1_ptr, ordering::Weak, None::<scope::TileBlock>, None, None, None, Latency::<0>,
+);
+let s1: Tile<i32, { [BN, 4] }> = exti(s1);
+let s2_ptr: PointerTile<*mut u8, { [] }> = pointer_to_tile(weight_bytes);
+let s2_ptr: PointerTile<*mut u8, { [1, 1] }> = s2_ptr.reshape(const_shape![1, 1]);
+let s2_ptr: PointerTile<*mut u8, { [BN, 4] }> = s2_ptr.broadcast(const_shape![BN, 4]);
+let s2_ptr = s2_ptr.offset_tile(scale_base + broadcast_scalar(12i64, const_shape![BN, 4]));
+let (s2, _): (Tile<u8, { [BN, 4] }>, Token) = load_ptr_tko(
+    s2_ptr, ordering::Weak, None::<scope::TileBlock>, None, None, None, Latency::<0>,
+);
+let s2: Tile<i32, { [BN, 4] }> = exti(s2);
+let scale_lo: Tile<i32, { [BN, 4] }> = s0 & broadcast_scalar(SCALE_MASK, const_shape![BN, 4]);
+let scale_hi: Tile<i32, { [BN, 4] }> = (s2 & broadcast_scalar(NIBBLE_MASK, const_shape![BN, 4]))
+    | ((s0 >> broadcast_scalar(SCALE_BITS, const_shape![BN, 4])) << broadcast_scalar(NIBBLE_BITS, const_shape![BN, 4]));
+let min_lo: Tile<i32, { [BN, 4] }> = s1 & broadcast_scalar(SCALE_MASK, const_shape![BN, 4]);
+let min_hi: Tile<i32, { [BN, 4] }> = (s2 >> broadcast_scalar(NIBBLE_BITS, const_shape![BN, 4]))
+    | ((s1 >> broadcast_scalar(SCALE_BITS, const_shape![BN, 4])) << broadcast_scalar(NIBBLE_BITS, const_shape![BN, 4]));
+let scales: Tile<i32, { [BN, 8] }> = cat(scale_lo, scale_hi, 1i32);
+let minima: Tile<i32, { [BN, 8] }> = cat(min_lo, min_hi, 1i32);
+let scales: Tile<f32, { [BN, 8] }> = convert_tile(scales);
+let minima: Tile<f32, { [BN, 8] }> = convert_tile(minima);
+let scales: Tile<f32, { [BN, 8] }> = scales * d.reshape(const_shape![BN, 1]).broadcast(const_shape![BN, 8]);
+let minima: Tile<f32, { [BN, 8] }> = minima * m.reshape(const_shape![BN, 1]).broadcast(const_shape![BN, 8]);
+let scales: Tile<f32, { [BN, 4, 2] }> = scales.reshape(const_shape![BN, 4, 2]);
+let minima: Tile<f32, { [BN, 4, 2] }> = minima.reshape(const_shape![BN, 4, 2]);
+let scale_even: Tile<f32, { [BN, 4, 1] }> = extract(scales, [zero, zero, zero]);
+let scale_odd: Tile<f32, { [BN, 4, 1] }> = extract(scales, [zero, zero, one]);
+let min_even: Tile<f32, { [BN, 4, 1] }> = extract(minima, [zero, zero, zero]);
+let min_odd: Tile<f32, { [BN, 4, 1] }> = extract(minima, [zero, zero, one]);
+let quant_index: Tile<i32, { [128] }> = iota(const_shape![128]);
+let quant_index: Tile<i64, { [128] }> = exti(quant_index);
+let quant_offsets: Tile<i64, { [BN, 128] }> = byte_base.reshape(const_shape![BN, 1]).broadcast(const_shape![BN, 128])
+    + quant_index.reshape(const_shape![1, 128]).broadcast(const_shape![BN, 128])
+    + broadcast_scalar(16i64, const_shape![BN, 128]);
+let packed_ptr: PointerTile<*mut u8, { [] }> = pointer_to_tile(weight_bytes);
+let packed_ptr: PointerTile<*mut u8, { [1, 1] }> = packed_ptr.reshape(const_shape![1, 1]);
+let packed_ptr: PointerTile<*mut u8, { [BN, 128] }> = packed_ptr.broadcast(const_shape![BN, 128]);
+let packed_ptr = packed_ptr.offset_tile(quant_offsets);
+let (packed, _): (Tile<u8, { [BN, 128] }>, Token) = load_ptr_tko(
+    packed_ptr, ordering::Weak, None::<scope::TileBlock>, None, None, None, Latency::<0>,
+);
+let packed: Tile<u8, { [BN, 4, 32] }> = packed.reshape(const_shape![BN, 4, 32]);
+let packed: Tile<i32, { [BN, 4, 32] }> = exti(packed);
+let low: Tile<i32, { [BN, 4, 32] }> = packed & broadcast_scalar(NIBBLE_MASK, const_shape![BN, 4, 32]);
+let low: Tile<f32, { [BN, 4, 32] }> = convert_tile(low);
+let low: Tile<f32, { [BN, 4, 32] }> = low * scale_even.broadcast(const_shape![BN, 4, 32]) - min_even.broadcast(const_shape![BN, 4, 32]);
+let low: Tile<bf16, { [BN, 4, 32] }> = convert_tile(low);
+let high: Tile<i32, { [BN, 4, 32] }> = packed >> broadcast_scalar(NIBBLE_BITS, const_shape![BN, 4, 32]);
+let high: Tile<f32, { [BN, 4, 32] }> = convert_tile(high);
+let high: Tile<f32, { [BN, 4, 32] }> = high * scale_odd.broadcast(const_shape![BN, 4, 32]) - min_odd.broadcast(const_shape![BN, 4, 32]);
+let high: Tile<bf16, { [BN, 4, 32] }> = convert_tile(high);
+let low: Tile<bf16, { [BN, 4, 1, 32] }> = low.reshape(const_shape![BN, 4, 1, 32]);
+let high: Tile<bf16, { [BN, 4, 1, 32] }> = high.reshape(const_shape![BN, 4, 1, 32]);
+let decoded: Tile<bf16, { [BN, 4, 2, 32] }> = cat(low, high, 2i32);
+let decoded: Tile<bf16, { [BN, 256] }> = decoded.reshape(const_shape![BN, 256]);
+let section: Tile<i32, { [] }> = scalar_to_tile(kt % (Q4K_VALUES / BK));
+let decoded: Tile<bf16, { [BN, BK] }> = extract(decoded, [zero, section]);
+decoded
+} else {
+    let group: Tile<i32, { [GB] }> = iota(const_shape![GB]) + broadcast_scalar(kt * GB, const_shape![GB]);
+    let group_count: Tile<i32, { [GB] }> = broadcast_scalar(k_size / Q4_1_VALUES, const_shape![GB]);
+    let valid: Tile<bool, { [GB] }> = lt_tile(group, group_count);
+    let zero_group: Tile<i32, { [GB] }> = broadcast_scalar(0i32, const_shape![GB]);
+    let group: Tile<i32, { [GB] }> = select(valid, group, zero_group);
+    let group: Tile<i64, { [GB] }> = exti(group);
+    let blocks: Tile<i64, { [BN, GB] }> = weight_base.reshape(const_shape![BN, 1]).broadcast(const_shape![BN, GB])
+        + group.reshape(const_shape![1, GB]).broadcast(const_shape![BN, GB]);
+    let byte_base: Tile<i64, { [BN, GB] }> = blocks * broadcast_scalar(20i64, const_shape![BN, GB]);
+    let half_base: Tile<i64, { [BN, GB] }> = byte_base / broadcast_scalar(2i64, const_shape![BN, GB]);
+let d_ptr: PointerTile<*mut f16, { [] }> = pointer_to_tile(weight_halves);
+let d_ptr: PointerTile<*mut f16, { [1, 1] }> = d_ptr.reshape(const_shape![1, 1]);
+let d_ptr: PointerTile<*mut f16, { [BN, GB] }> = d_ptr.broadcast(const_shape![BN, GB]);
+let d_ptr = d_ptr.offset_tile(half_base);
+let (d, _): (Tile<f16, { [BN, GB] }>, Token) = load_ptr_tko(
+    d_ptr, ordering::Weak, None::<scope::TileBlock>, None, None, None, Latency::<0>,
+);
+let m_ptr: PointerTile<*mut f16, { [] }> = pointer_to_tile(weight_halves);
+let m_ptr: PointerTile<*mut f16, { [1, 1] }> = m_ptr.reshape(const_shape![1, 1]);
+let m_ptr: PointerTile<*mut f16, { [BN, GB] }> = m_ptr.broadcast(const_shape![BN, GB]);
+let m_ptr = m_ptr.offset_tile(half_base + broadcast_scalar(1i64, const_shape![BN, GB]));
+let (m, _): (Tile<f16, { [BN, GB] }>, Token) = load_ptr_tko(
+    m_ptr, ordering::Weak, None::<scope::TileBlock>, None, None, None, Latency::<0>,
+);
+let d: Tile<f32, { [BN, GB] }> = convert_tile(d);
+let m: Tile<f32, { [BN, GB] }> = convert_tile(m);
+let d: Tile<f32, { [BN, GB, 1] }> = d.reshape(const_shape![BN, GB, 1]);
+let m: Tile<f32, { [BN, GB, 1] }> = m.reshape(const_shape![BN, GB, 1]);
+let quant_index: Tile<i32, { [16] }> = iota(const_shape![16]);
+let quant_index: Tile<i64, { [16] }> = exti(quant_index);
+let quant_offsets: Tile<i64, { [BN, GB, 16] }> = byte_base.reshape(const_shape![BN, GB, 1]).broadcast(const_shape![BN, GB, 16])
+    + quant_index.reshape(const_shape![1, 1, 16]).broadcast(const_shape![BN, GB, 16])
+    + broadcast_scalar(4i64, const_shape![BN, GB, 16]);
+let packed_ptr: PointerTile<*mut u8, { [] }> = pointer_to_tile(weight_bytes);
+let packed_ptr: PointerTile<*mut u8, { [1, 1, 1] }> = packed_ptr.reshape(const_shape![1, 1, 1]);
+let packed_ptr: PointerTile<*mut u8, { [BN, GB, 16] }> = packed_ptr.broadcast(const_shape![BN, GB, 16]);
+let packed_ptr = packed_ptr.offset_tile(quant_offsets);
+let (packed, _): (Tile<u8, { [BN, GB, 16] }>, Token) = load_ptr_tko(
+    packed_ptr, ordering::Weak, None::<scope::TileBlock>, None, None, None, Latency::<0>,
+);
+let packed: Tile<i32, { [BN, GB, 16] }> = exti(packed);
+let low: Tile<i32, { [BN, GB, 16] }> = packed & broadcast_scalar(NIBBLE_MASK, const_shape![BN, GB, 16]);
+let low: Tile<f32, { [BN, GB, 16] }> = convert_tile(low);
+let low: Tile<f32, { [BN, GB, 16] }> = d.broadcast(const_shape![BN, GB, 16]) * low + m.broadcast(const_shape![BN, GB, 16]);
+let low: Tile<bf16, { [BN, GB, 16] }> = convert_tile(low);
+let high: Tile<i32, { [BN, GB, 16] }> = packed >> broadcast_scalar(NIBBLE_BITS, const_shape![BN, GB, 16]);
+let high: Tile<f32, { [BN, GB, 16] }> = convert_tile(high);
+let high: Tile<f32, { [BN, GB, 16] }> = d.broadcast(const_shape![BN, GB, 16]) * high + m.broadcast(const_shape![BN, GB, 16]);
+let high: Tile<bf16, { [BN, GB, 16] }> = convert_tile(high);
+let low: Tile<bf16, { [BN, GB, 1, 16] }> = low.reshape(const_shape![BN, GB, 1, 16]);
+let high: Tile<bf16, { [BN, GB, 1, 16] }> = high.reshape(const_shape![BN, GB, 1, 16]);
+let decoded: Tile<bf16, { [BN, GB, 2, 16] }> = cat(low, high, 2i32);
+let decoded: Tile<bf16, { [BN, BK] }> = decoded.reshape(const_shape![BN, BK]);
+decoded
+};
+let b_mask: Tile<bool, { [BN, BK] }> = valid_columns.reshape(const_shape![BN, 1]).broadcast(const_shape![BN, BK])
+    & valid_k.reshape(const_shape![1, BK]).broadcast(const_shape![BN, BK]);
+let b_zero: Tile<bf16, { [BN, BK] }> = constant(bf16::ZERO, const_shape![BN, BK]);
+let b: Tile<bf16, { [BN, BK] }> = select(b_mask, b, b_zero);
+let b: Tile<bf16, { [BK, BN] }> = permute(b, const_array![1, 0]);

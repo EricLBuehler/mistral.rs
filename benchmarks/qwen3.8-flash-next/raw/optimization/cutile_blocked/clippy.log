@@ -1,0 +1,5 @@
+warning: mistralrs-quant@0.9.4: Using 10 threads for compilation
+warning: mistralrs-quant@0.9.4: Using cached cutlass at /home/ericbuehler/.cudaforge/git/checkouts/cutlass-7127592069c2fe01
+warning: mistralrs-quant@0.9.4: Compiling 45 of 45 kernels
+    Checking mistralrs-quant v0.9.4 (/home/ericbuehler/mistral.rs/mistralrs-quant)
+    Finished `release` profile [optimized] target(s) in 5.03s

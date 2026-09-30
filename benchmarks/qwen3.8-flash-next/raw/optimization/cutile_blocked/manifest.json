@@ -1,0 +1,267 @@
+{
+  "created_at": "2026-09-30T15:54:02.750133+00:00",
+  "source": "/home/ericbuehler/qwen4exp_work/moe_optimization_20260930/cutile_gguf/blocked",
+  "files": [
+    {
+      "path": "base.rs",
+      "bytes": 27196,
+      "sha256": "d9bba1f7fd899c99ed80b71ac86d18c251a6841b0faca115cb88ea3b7c677c40"
+    },
+    {
+      "path": "blocked.patch",
+      "bytes": 33458,
+      "sha256": "754b25c736f703aa2c218ab3aac4fd6552319b88a3ea80b5fed1e4024ae62fc2"
+    },
+    {
+      "path": "build/cutile_gguf_moe_tests.rs",
+      "bytes": 12047,
+      "sha256": "2e89f1a25ec4f4a5dc8d5d5ea13bb199465d3db5d4c332142f17af0362eac3f7"
+    },
+    {
+      "path": "build/cutile_gguf_replay.rs",
+      "bytes": 17491,
+      "sha256": "b7f20bc0ec82ef17f12b97291041e81e00a8c5c8521c21a40ff459b282d81863"
+    },
+    {
+      "path": "build/gguf_moe.rs",
+      "bytes": 33563,
+      "sha256": "9d92dca0b1e8aafc3071745198d375e9b3eccafe43fa0c6f2e1a86c793f454f4"
+    },
+    {
+      "path": "build/mod.rs",
+      "bytes": 13330,
+      "sha256": "e23686799b346a12ad912f9c283dcc1ac8f3aa0a2072c76b0d440dcdee697b90"
+    },
+    {
+      "path": "build/moe_dispatch_bench.rs",
+      "bytes": 42534,
+      "sha256": "016fb8046913d3909de853cdf67c410545d91a09527b8dff0b2d4a12d973c953"
+    },
+    {
+      "path": "build.log",
+      "bytes": 598,
+      "sha256": "18a29cf9ca1a64833823bd55d452fada18c09af111a862a00271ffc86fe7f8fb"
+    },
+    {
+      "path": "build_final.log",
+      "bytes": 597,
+      "sha256": "12131b32f358b4a533235dc4f97c6bb9c1c253e5484423b23dd63d375c44f4f3"
+    },
+    {
+      "path": "check.log",
+      "bytes": 393,
+      "sha256": "f8d499e71c979ad7d5e2683b26525319679efe2186d74686ee8712ceb4ba8141"
+    },
+    {
+      "path": "clippy.log",
+      "bytes": 393,
+      "sha256": "6cdf94f12db1daa9a1772af6ffcfc7e22c4151a43e1bace58e691ff8699baa0c"
+    },
+    {
+      "path": "decoder.fragment.rs",
+      "bytes": 11578,
+      "sha256": "4d92094bd75116667b5a55981f42919ad9a8d2c75a1b756ace9c8ce24bbcf3a0"
+    },
+    {
+      "path": "gguf_moe.rs",
+      "bytes": 33563,
+      "sha256": "9d92dca0b1e8aafc3071745198d375e9b3eccafe43fa0c6f2e1a86c793f454f4"
+    },
+    {
+      "path": "memcheck.log",
+      "bytes": 601,
+      "sha256": "afe9b02ccf987424b87e4141b660473a3135f0bd51c00b6deac2c1f4e9ffd281"
+    },
+    {
+      "path": "native56_8_32_256/capture.validation.json",
+      "bytes": 18366,
+      "sha256": "e8daed05249e354fe95f954529d12d29a1cb09f33c852f54b9fd23a0506041a5"
+    },
+    {
+      "path": "native56_8_32_256/gpu_monitor.csv",
+      "bytes": 1200,
+      "sha256": "09163ed7986abc2cc516e50fb80d10595fdfe3f9fcda59b8dc350a359de20282"
+    },
+    {
+      "path": "native56_8_32_256/gpu_monitor.stderr.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "native56_8_32_256/helpers/build_diagnostic.py",
+      "bytes": 13968,
+      "sha256": "a4de06ddbd9819f43a3484053a7ea8b52c60ceccfae1e706611dd0fa111d1aa8"
+    },
+    {
+      "path": "native56_8_32_256/helpers/run_diagnostic.py",
+      "bytes": 17537,
+      "sha256": "473180a3c3a5d475a584a8e26a427b6d8ee5415f1b39c736a2c0d63a7d6bb494"
+    },
+    {
+      "path": "native56_8_32_256/metadata.json",
+      "bytes": 6562,
+      "sha256": "792180e18e75ce0c11e1719170d993548b83eca3142f9c0a8fdd7f50cbc49b62"
+    },
+    {
+      "path": "native56_8_32_256/replay.json",
+      "bytes": 13823,
+      "sha256": "48b2e723dff205150be986ba7f02853f8710277eaf67637be51ba19a13438fc7"
+    },
+    {
+      "path": "native56_8_32_256/replay.log",
+      "bytes": 5344,
+      "sha256": "bf820f9ff6c46e2f034cbaebb10786757bbfb9cf7649621de6912b406f3b4800"
+    },
+    {
+      "path": "native56_8_32_256/run_replay.py",
+      "bytes": 5289,
+      "sha256": "9ee1f7ffe5edbbfec583f854e7205e234dc1a226842e8b3ab4b7c229de787b4f"
+    },
+    {
+      "path": "native56_8_32_256/sources/mistralrs-quant/kernels/mmq_gguf/mmq_gguf.cuh",
+      "bytes": 171127,
+      "sha256": "8b629533b0289ee0d67179530c5bd2ff9bd3248802fc7957d74b44343bd3bfa8"
+    },
+    {
+      "path": "native56_8_32_256/sources/mistralrs-quant/src/cutile/gguf_moe.rs",
+      "bytes": 33563,
+      "sha256": "9d92dca0b1e8aafc3071745198d375e9b3eccafe43fa0c6f2e1a86c793f454f4"
+    },
+    {
+      "path": "native56_8_32_256/sources/mistralrs-quant/src/cutile/mod.rs",
+      "bytes": 13330,
+      "sha256": "e23686799b346a12ad912f9c283dcc1ac8f3aa0a2072c76b0d440dcdee697b90"
+    },
+    {
+      "path": "native56_8_32_256/sources/mistralrs-quant/src/gguf/cuda.rs",
+      "bytes": 58353,
+      "sha256": "3dcbdf72ed0ad678126fe008c3200c3211259b40520f1421173716b368f9b927"
+    },
+    {
+      "path": "native56_8_32_256/sources/mistralrs-quant/src/gguf/fast_mmq.rs",
+      "bytes": 55930,
+      "sha256": "7ef69810435e2f00e54e4121b7aeec0f71a82fd094103f9d44ebfaf60a67497e"
+    },
+    {
+      "path": "native56_8_32_256/sources/mistralrs-quant/tests/moe_dispatch_bench.rs",
+      "bytes": 42534,
+      "sha256": "016fb8046913d3909de853cdf67c410545d91a09527b8dff0b2d4a12d973c953"
+    },
+    {
+      "path": "native56_8_32_256/sources/mistralrs-quant/tests/support/cutile_gguf_replay.rs",
+      "bytes": 17491,
+      "sha256": "b7f20bc0ec82ef17f12b97291041e81e00a8c5c8521c21a40ff459b282d81863"
+    },
+    {
+      "path": "native56_default/capture.validation.json",
+      "bytes": 18366,
+      "sha256": "e8daed05249e354fe95f954529d12d29a1cb09f33c852f54b9fd23a0506041a5"
+    },
+    {
+      "path": "native56_default/gpu_monitor.csv",
+      "bytes": 7750,
+      "sha256": "8624e8afa709a592a0c69130ac340504897a13e091897c1d735fbe3414406d53"
+    },
+    {
+      "path": "native56_default/gpu_monitor.stderr.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "native56_default/helpers/build_diagnostic.py",
+      "bytes": 13968,
+      "sha256": "a4de06ddbd9819f43a3484053a7ea8b52c60ceccfae1e706611dd0fa111d1aa8"
+    },
+    {
+      "path": "native56_default/helpers/run_diagnostic.py",
+      "bytes": 17537,
+      "sha256": "473180a3c3a5d475a584a8e26a427b6d8ee5415f1b39c736a2c0d63a7d6bb494"
+    },
+    {
+      "path": "native56_default/metadata.json",
+      "bytes": 6562,
+      "sha256": "ff9d2d411519cc18e474d6eeb3980c61cb8c1e301c5a2c68c9a98e6635f7ed44"
+    },
+    {
+      "path": "native56_default/replay.json",
+      "bytes": 13810,
+      "sha256": "0dad38927f5c2755a970bce728246f10d8e3a3ae2529e1fffe021863dd9c67b9"
+    },
+    {
+      "path": "native56_default/replay.log",
+      "bytes": 5332,
+      "sha256": "ef10a64bb15c188e3465ecc46a1d8b0161920320060116a8d7f15bbe1e6cf5b1"
+    },
+    {
+      "path": "native56_default/run_replay.py",
+      "bytes": 5289,
+      "sha256": "9ee1f7ffe5edbbfec583f854e7205e234dc1a226842e8b3ab4b7c229de787b4f"
+    },
+    {
+      "path": "native56_default/sources/mistralrs-quant/kernels/mmq_gguf/mmq_gguf.cuh",
+      "bytes": 171127,
+      "sha256": "8b629533b0289ee0d67179530c5bd2ff9bd3248802fc7957d74b44343bd3bfa8"
+    },
+    {
+      "path": "native56_default/sources/mistralrs-quant/src/cutile/gguf_moe.rs",
+      "bytes": 33563,
+      "sha256": "9d92dca0b1e8aafc3071745198d375e9b3eccafe43fa0c6f2e1a86c793f454f4"
+    },
+    {
+      "path": "native56_default/sources/mistralrs-quant/src/cutile/mod.rs",
+      "bytes": 13330,
+      "sha256": "e23686799b346a12ad912f9c283dcc1ac8f3aa0a2072c76b0d440dcdee697b90"
+    },
+    {
+      "path": "native56_default/sources/mistralrs-quant/src/gguf/cuda.rs",
+      "bytes": 58353,
+      "sha256": "3dcbdf72ed0ad678126fe008c3200c3211259b40520f1421173716b368f9b927"
+    },
+    {
+      "path": "native56_default/sources/mistralrs-quant/src/gguf/fast_mmq.rs",
+      "bytes": 55930,
+      "sha256": "7ef69810435e2f00e54e4121b7aeec0f71a82fd094103f9d44ebfaf60a67497e"
+    },
+    {
+      "path": "native56_default/sources/mistralrs-quant/tests/moe_dispatch_bench.rs",
+      "bytes": 42534,
+      "sha256": "016fb8046913d3909de853cdf67c410545d91a09527b8dff0b2d4a12d973c953"
+    },
+    {
+      "path": "native56_default/sources/mistralrs-quant/tests/support/cutile_gguf_replay.rs",
+      "bytes": 17491,
+      "sha256": "b7f20bc0ec82ef17f12b97291041e81e00a8c5c8521c21a40ff459b282d81863"
+    },
+    {
+      "path": "prepare.py",
+      "bytes": 10056,
+      "sha256": "25e83981db1b373348545972a6a13b3b2cd20c63c14d2f1bd1d5b0955b98151b"
+    },
+    {
+      "path": "sources.json",
+      "bytes": 571,
+      "sha256": "42858cb741f865b402f9a47bab5724113fb877b6ee6d35e803a29154416b20b8"
+    },
+    {
+      "path": "tests.log",
+      "bytes": 539,
+      "sha256": "2df6eead9634ef589f0e65669505c968559d57dbc99a7fc1292032ebc91a8754"
+    },
+    {
+      "path": "tests_final.log",
+      "bytes": 539,
+      "sha256": "dee6b670d463a3a774c7f72a4ba13a7cb7bd35b67da3a8ca4e1a45cb2298823e"
+    },
+    {
+      "path": "validation.json",
+      "bytes": 2590,
+      "sha256": "552a2f3c2a3bd701812545b11253b10466421a562825214916204690ce38847c"
+    },
+    {
+      "path": "summary.json",
+      "bytes": 1758,
+      "sha256": "82dc2545ba8abdc81175e557a01778d37b1b60895eb8d06e3704ca672fa3daf1"
+    }
+  ],
+  "excluded": "Compiled binaries; model weights; saved output tensors (hashes retained in metadata)."
+}
