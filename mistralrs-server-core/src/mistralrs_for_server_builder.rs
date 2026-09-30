@@ -11,7 +11,7 @@ use mistralrs_core::{
     HfConfigOverrides, Loader, LoaderBuilder, McpClientConfig, MemoryGpuConfig, MistralRsBuilder,
     ModelLoaderConfig, ModelSelected, MtpConfig, MtpRuntimeConfig, PagedAttentionConfig,
     PagedCacheType, PagedKvModelRequest, SchedulerConfig, SearchCallback, SearchEmbeddingModel,
-    TokenSource,
+    TokenSource, DEFAULT_PAGED_ATTENTION_MEMORY_UTILIZATION,
 };
 use tracing::{debug, info, warn};
 
@@ -250,25 +250,16 @@ pub struct MistralRsForServerBuilder {
     /// In-situ quantization to apply.
     in_situ_quant: Option<String>,
 
-    /// GPU memory to allocate for KV cache with PagedAttention in MBs.
-    /// PagedAttention is supported on CUDA and Metal. It is automatically activated on CUDA but not on Metal.
-    /// The priority is as follows: `pa-ctxt-len` > `pa-gpu-mem-usage` > `pa-gpu-mem`.
+    /// Explicit PagedAttention KV cache budget in MB, without the Metal automatic token cap.
     paged_attn_gpu_mem: Option<usize>,
 
-    /// Percentage of GPU memory to utilize after allocation of KV cache with PagedAttention, from 0 to 1.
-    /// If this is not set and the device is CUDA, it will default to `0.9`.
-    /// PagedAttention is supported on CUDA and Metal. It is automatically activated on CUDA but not on Metal.
-    /// The priority is as follows: `pa-ctxt-len` > `pa-gpu-mem-usage` > `pa-gpu-mem`.
+    /// GPU memory utilization target, from 0 to 1; defaults to 0.9 with the Metal automatic token cap.
     paged_attn_gpu_mem_usage: Option<f32>,
 
-    /// Total context length to allocate the KV cache for (total number of tokens which the KV cache can hold).
-    /// PagedAttention is supported on CUDA and Metal. It is automatically activated on CUDA but not on Metal.
-    /// The priority is as follows: `pa-ctxt-len` > `pa-gpu-mem-usage` > `pa-gpu-mem`.
-    /// This is the default setting, and it defaults to the `max-seq-len` specified in after the model type.
+    /// Explicit total KV token capacity, without the Metal automatic token cap.
     paged_ctxt_len: Option<usize>,
 
-    /// Block size (number of tokens per block) for PagedAttention. If this is not set and the device is CUDA, it will default to 32.
-    /// PagedAttention is supported on CUDA and Metal. It is automatically activated on CUDA but not on Metal.
+    /// PagedAttention tokens per block, defaulting to 32 on CUDA and Metal.
     paged_attn_block_size: Option<usize>,
 
     /// Enables or disables PagedAttention. By default, PagedAttention is enabled on CUDA and Metal (and not supported on CPU). Use this to override the default behavior.
@@ -1502,7 +1493,7 @@ fn init_cache_config(
     ) {
         (block_size, None, None, None, true, false) => Ok(Some(PagedAttentionConfig::new(
             block_size,
-            MemoryGpuConfig::Utilization(0.9),
+            MemoryGpuConfig::Utilization(DEFAULT_PAGED_ATTENTION_MEMORY_UTILIZATION),
             cache_type,
         )?)),
         (block_size, None, None, Some(ctxt), true, false) => Ok(Some(PagedAttentionConfig::new(

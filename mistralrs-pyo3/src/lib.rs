@@ -47,6 +47,7 @@ use mistralrs_core::{
     Request as _Request, RequestMessage, Response, ResponseOk, SamplingParams, SchedulerConfig,
     SearchEmbeddingModel, SpeculativeConfig, SpeechLoader, StopTokens, TokenSource,
     TokenizationRequest, Tool, Topology, UqffWriteConfig,
+    DEFAULT_PAGED_ATTENTION_MEMORY_UTILIZATION,
 };
 use mistralrs_core::{
     CalledFunction, SearchCallback, SearchFunctionParameters, SearchResult, ToolCallback,
@@ -73,6 +74,27 @@ use which::{
 };
 
 static DEVICE: OnceLock<Result<Device>> = OnceLock::new();
+
+fn runner_paged_attention_memory(
+    is_metal: bool,
+    max_seq_len: usize,
+    memory_mb: Option<usize>,
+    utilization: Option<f32>,
+    context_len: Option<usize>,
+) -> Option<MemoryGpuConfig> {
+    match (memory_mb, utilization, context_len) {
+        (None, None, None) if is_metal => Some(MemoryGpuConfig::Utilization(
+            DEFAULT_PAGED_ATTENTION_MEMORY_UTILIZATION,
+        )),
+        (None, None, None) => Some(MemoryGpuConfig::ContextSize(max_seq_len)),
+        (_, None, Some(context_len)) => Some(MemoryGpuConfig::ContextSize(context_len)),
+        (_, Some(utilization), None) | (None, Some(utilization), _) => {
+            Some(MemoryGpuConfig::Utilization(utilization))
+        }
+        (Some(memory_mb), None, None) => Some(MemoryGpuConfig::MbAmount(memory_mb)),
+        (Some(_), Some(_), Some(_)) => None,
+    }
+}
 
 pyo3::create_exception!(
     mistralrs,
@@ -1218,54 +1240,20 @@ impl Runner {
                 true
             };
 
-        let cache_config = match (
-            pa_blk_size,
-            pa_gpu_mem,
-            pa_gpu_mem_usage,
-            pa_ctxt_len,
-            paged_attn_supported(),
-            no_paged_attn,
-        ) {
-            (block_size, None, None, None, true, false) => Some(PagedAttentionConfig::new(
-                block_size,
-                MemoryGpuConfig::ContextSize(max_seq_len),
-                pa_cache_type.unwrap_or_default(),
-            )?),
-            (block_size, None, None, Some(ctxt), true, false) => Some(PagedAttentionConfig::new(
-                block_size,
-                MemoryGpuConfig::ContextSize(ctxt),
-                pa_cache_type.unwrap_or_default(),
-            )?),
-            (block_size, None, Some(f), None, true, false) => Some(PagedAttentionConfig::new(
-                block_size,
-                MemoryGpuConfig::Utilization(f),
-                pa_cache_type.unwrap_or_default(),
-            )?),
-            (block_size, Some(m), None, None, true, false) => Some(PagedAttentionConfig::new(
-                block_size,
-                MemoryGpuConfig::MbAmount(m),
-                pa_cache_type.unwrap_or_default(),
-            )?),
-            (block_size, Some(_m), Some(f), None, true, false) => Some(PagedAttentionConfig::new(
-                block_size,
-                MemoryGpuConfig::Utilization(f),
-                pa_cache_type.unwrap_or_default(),
-            )?),
-            (block_size, Some(_m), None, Some(ctxt), true, false) => {
-                Some(PagedAttentionConfig::new(
-                    block_size,
-                    MemoryGpuConfig::ContextSize(ctxt),
-                    pa_cache_type.unwrap_or_default(),
-                )?)
-            }
-            (block_size, None, Some(f), Some(_ctxt), true, false) => {
-                Some(PagedAttentionConfig::new(
-                    block_size,
-                    MemoryGpuConfig::Utilization(f),
-                    pa_cache_type.unwrap_or_default(),
-                )?)
-            }
-            (_, _, _, _, _, _) => None,
+        let cache_config = if paged_attn_supported() && !no_paged_attn {
+            runner_paged_attention_memory(
+                device.is_metal(),
+                max_seq_len,
+                pa_gpu_mem,
+                pa_gpu_mem_usage,
+                pa_ctxt_len,
+            )
+            .map(|memory| {
+                PagedAttentionConfig::new(pa_blk_size, memory, pa_cache_type.unwrap_or_default())
+            })
+            .transpose()?
+        } else {
+            None
         };
         let cache_config = cache_config
             .map(|config| config.with_serving_capacity(max_seqs))
@@ -3336,6 +3324,70 @@ mod mtp_reservation_tests {
             .to_string()
             .contains("paged attention device memory reservation overflow"));
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod paged_attention_policy_tests {
+    use super::{runner_paged_attention_memory, MemoryGpuConfig};
+    use mistralrs_core::DEFAULT_PAGED_ATTENTION_MEMORY_UTILIZATION;
+
+    const MAX_SEQ_LEN: usize = 4096;
+    const MEMORY_MB: usize = 2048;
+    const CONTEXT_LEN: usize = 8192;
+    const UTILIZATION: f32 = 0.75;
+
+    #[test]
+    fn defaults_follow_backend_memory_policy() {
+        assert!(matches!(
+            runner_paged_attention_memory(true, MAX_SEQ_LEN, None, None, None),
+            Some(MemoryGpuConfig::Utilization(f))
+                if f == DEFAULT_PAGED_ATTENTION_MEMORY_UTILIZATION
+        ));
+        assert!(matches!(
+            runner_paged_attention_memory(false, MAX_SEQ_LEN, None, None, None),
+            Some(MemoryGpuConfig::ContextSize(MAX_SEQ_LEN))
+        ));
+    }
+
+    #[test]
+    fn explicit_budgets_preserve_their_precedence_on_both_backends() {
+        for is_metal in [false, true] {
+            assert!(matches!(
+                runner_paged_attention_memory(is_metal, MAX_SEQ_LEN, Some(MEMORY_MB), None, None),
+                Some(MemoryGpuConfig::MbAmount(MEMORY_MB))
+            ));
+            for memory_mb in [None, Some(MEMORY_MB)] {
+                assert!(matches!(
+                    runner_paged_attention_memory(
+                        is_metal,
+                        MAX_SEQ_LEN,
+                        memory_mb,
+                        None,
+                        Some(CONTEXT_LEN)
+                    ),
+                    Some(MemoryGpuConfig::ContextSize(CONTEXT_LEN))
+                ));
+            }
+            for (memory_mb, context_len) in [
+                (None, None),
+                (Some(MEMORY_MB), None),
+                (None, Some(CONTEXT_LEN)),
+            ] {
+                assert!(matches!(
+                    runner_paged_attention_memory(is_metal, MAX_SEQ_LEN, memory_mb, Some(UTILIZATION), context_len),
+                    Some(MemoryGpuConfig::Utilization(f)) if f == UTILIZATION
+                ));
+            }
+            assert!(runner_paged_attention_memory(
+                is_metal,
+                MAX_SEQ_LEN,
+                Some(MEMORY_MB),
+                Some(UTILIZATION),
+                Some(CONTEXT_LEN),
+            )
+            .is_none());
+        }
     }
 }
 

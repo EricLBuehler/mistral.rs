@@ -1459,11 +1459,9 @@ impl Loader for MultimodalLoader {
 
         let (cache_config, cache_engine) = if let Some(paged_attn_config) = paged_attn_config {
             let cache_config = calculate_cache_config(
-                paged_attn_config.mem_gpu,
+                paged_attn_config,
                 paged_attention_memory_reservations(model.cache(), paged_attn_config, &device)?,
-                paged_attn_config.block_size,
                 dtype,
-                paged_attn_config.cache_type,
                 model_metadata.as_ref(),
                 &device,
                 &layer_devices,

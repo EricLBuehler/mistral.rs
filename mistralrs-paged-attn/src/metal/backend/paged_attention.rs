@@ -237,9 +237,14 @@ impl candle_core::CustomOp1 for PagedAttention {
             && (1..=kernels::PAGED_DECODE_MAX_GQA).contains(&gqa);
 
         if use_gqa_decode {
-            let partition_size =
-                kernels::paged_decode_partition_size(self.max_context_len, num_seqs, num_kv_heads);
-            let num_partitions = self.max_context_len.div_ceil(partition_size);
+            let variant = kernels::paged_decode_variant(
+                self.max_context_len,
+                num_seqs,
+                num_heads,
+                num_kv_heads,
+                head_size,
+            );
+            let num_partitions = variant.num_partitions(self.max_context_len);
             let partials_len = num_seqs * num_heads * num_partitions;
             let scratch = (num_partitions > 1)
                 .then(|| -> Result<_> {
@@ -271,7 +276,7 @@ impl candle_core::CustomOp1 for PagedAttention {
                         }
                     }),
                     scale: self.softmax_scale,
-                    partition_size,
+                    variant,
                     max_context_len: self.max_context_len as i32,
                     num_seqs: num_seqs as i32,
                     num_heads: num_heads as i32,

@@ -108,6 +108,7 @@ fn split_paged_config(
     split.recurrent_prefix_capacity = config.recurrent_prefix_capacity;
     split.resolve_memory_utilization_after_load =
         config.resolve_memory_utilization_after_load && model_weight == active_weight;
+    split.cap_metal_kv_cache = config.cap_metal_kv_cache;
     Ok(split)
 }
 
@@ -168,6 +169,27 @@ mod tests {
         assert!(matches!(
             split.mem_gpu,
             MemoryGpuConfig::Utilization(value) if value == 0.9
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn split_preserves_resolved_metal_cache_policy() -> anyhow::Result<()> {
+        let mut config = PagedAttentionConfig::new(
+            Some(32),
+            MemoryGpuConfig::Utilization(0.9),
+            PagedCacheType::Auto,
+        )?;
+        config.mem_gpu = MemoryGpuConfig::MbAmount(1024);
+
+        let split = split_paged_config(config, 1, 2)?;
+        assert!(split.cap_metal_kv_cache);
+        assert!(matches!(
+            split.mem_gpu,
+            MemoryGpuConfig::BestEffortMbAmount {
+                target_mb: 512,
+                min_mb: None,
+            }
         ));
         Ok(())
     }

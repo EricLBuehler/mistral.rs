@@ -904,6 +904,10 @@ pub const PAGED_DECODE_BLOCK_SIZE: usize = 32;
 pub const PAGED_DECODE_HEAD_SIZES: [usize; 5] = [64, 96, 128, 192, 256];
 pub const PAGED_DECODE_MAX_GQA: usize = 8;
 const PAGED_DECODE_THREADS: usize = 128;
+const PAGED_DECODE_SHORT_THREADS: usize = 1024;
+const PAGED_DECODE_SHORT_MAX_HEADS: usize = 32;
+// Head-parallel decode trades KV reuse for fewer launches; keep it below the measured crossover.
+const PAGED_DECODE_SHORT_CONTEXTS: [(usize, usize, usize); 2] = [(128, 2, 288), (256, 3, 320)];
 // Reduce kernels are instantiated for exactly these partition sizes.
 const PAGED_DECODE_LONG_PARTITION: usize = 512;
 const PAGED_DECODE_SHORT_PARTITION: usize = 128;
@@ -919,11 +923,10 @@ pub struct PagedDecodeArgs<'a> {
     pub block_tables: (&'a Buffer, usize),
     pub context_lens: (&'a Buffer, usize),
     pub output: &'a Buffer,
-    /// Required when the longest context spans more than one 512-token partition.
+    /// Required when the selected variant uses more than one partition.
     pub partials: Option<PagedDecodePartials<'a>>,
     pub scale: f32,
-    /// From [`paged_decode_partition_size`]; the partials must be sized for it.
-    pub partition_size: usize,
+    pub variant: PagedDecodeVariant,
     pub max_context_len: i32,
     pub num_seqs: i32,
     pub num_heads: i32,
@@ -942,34 +945,77 @@ pub struct PagedDecodePartials<'a> {
     pub tmp_out: &'a Buffer,
 }
 
-pub fn paged_decode_partition_size(
-    max_context_len: usize,
-    num_seqs: usize,
-    num_kv_heads: usize,
-) -> usize {
-    let long_threadgroups =
-        max_context_len.div_ceil(PAGED_DECODE_LONG_PARTITION) * num_seqs * num_kv_heads;
-    if long_threadgroups < PAGED_DECODE_MIN_THREADGROUPS {
-        PAGED_DECODE_SHORT_PARTITION
-    } else {
-        PAGED_DECODE_LONG_PARTITION
+#[derive(Clone, Copy)]
+pub enum PagedDecodeVariant {
+    Short,
+    Grouped { partition_size: usize },
+}
+
+impl PagedDecodeVariant {
+    pub fn num_partitions(self, max_context_len: usize) -> usize {
+        match self {
+            Self::Short => 1,
+            Self::Grouped { partition_size } => max_context_len.div_ceil(partition_size),
+        }
     }
 }
 
-/// GQA-aware paged decode: one threadgroup per (partition, kv head, sequence) reads each KV block once.
+pub fn paged_decode_variant(
+    max_context_len: usize,
+    num_seqs: usize,
+    num_heads: usize,
+    num_kv_heads: usize,
+    head_size: usize,
+) -> PagedDecodeVariant {
+    let short_context = PAGED_DECODE_SHORT_CONTEXTS
+        .iter()
+        .any(|&(head, min_gqa, limit)| {
+            head_size == head && num_heads / num_kv_heads >= min_gqa && max_context_len <= limit
+        });
+    if num_seqs == 1 && num_heads <= PAGED_DECODE_SHORT_MAX_HEADS && short_context {
+        return PagedDecodeVariant::Short;
+    }
+    let long_threadgroups =
+        max_context_len.div_ceil(PAGED_DECODE_LONG_PARTITION) * num_seqs * num_kv_heads;
+    let partition_size = if long_threadgroups < PAGED_DECODE_MIN_THREADGROUPS {
+        PAGED_DECODE_SHORT_PARTITION
+    } else {
+        PAGED_DECODE_LONG_PARTITION
+    };
+    PagedDecodeVariant::Grouped { partition_size }
+}
+
+/// Short decode uses one threadgroup per query head; grouped decode shares KV reads within each partition.
 pub fn call_paged_decode_gqa(
     device: &Device,
     ep: impl EncoderProvider,
     kernels: &Kernels,
     args: PagedDecodeArgs<'_>,
 ) -> Result<(), MetalKernelError> {
-    let max_num_partitions = (args.max_context_len as usize).div_ceil(args.partition_size);
+    let max_num_partitions = args.variant.num_partitions(args.max_context_len as usize);
     let gqa = args.num_heads / args.num_kv_heads;
-    let name = format!(
-        "paged_decode_gqa_{}_hs{}_g{gqa}",
-        args.ty.to_repr(),
-        args.head_size
-    );
+    let (name, grid_heads, threads, kernel_param) = match args.variant {
+        PagedDecodeVariant::Short => (
+            format!(
+                "paged_decode_short_{}_hs{}",
+                args.ty.to_repr(),
+                args.head_size
+            ),
+            args.num_heads,
+            PAGED_DECODE_SHORT_THREADS,
+            gqa,
+        ),
+        PagedDecodeVariant::Grouped { partition_size } => (
+            format!(
+                "paged_decode_gqa_{}_hs{}_g{gqa}",
+                args.ty.to_repr(),
+                args.head_size
+            ),
+            args.num_kv_heads,
+            PAGED_DECODE_THREADS,
+            partition_size as i32,
+        ),
+    };
     let pipeline = kernels.load_pipeline_with_constants(device, name, None)?;
 
     let (exp_sums, max_logits, tmp_out) = match &args.partials {
@@ -991,14 +1037,13 @@ pub fn call_paged_decode_gqa(
         encoder.set_input_buffer(7, Some(args.block_tables.0), args.block_tables.1);
         encoder.set_input_buffer(8, Some(args.context_lens.0), args.context_lens.1);
         let max_parts = max_num_partitions as i32;
-        let partition_size = args.partition_size as i32;
         for (index, value) in [
             (9, args.max_num_blocks_per_seq),
             (10, args.q_stride),
             (11, args.kv_block_stride),
             (12, args.kv_head_stride),
             (14, max_parts),
-            (15, partition_size),
+            (15, kernel_param),
         ] {
             encoder.set_bytes_raw(
                 index,
@@ -1014,11 +1059,11 @@ pub fn call_paged_decode_gqa(
         encoder.dispatch_thread_groups(
             MTLSize {
                 width: max_num_partitions,
-                height: args.num_kv_heads as usize,
+                height: grid_heads as usize,
                 depth: args.num_seqs as usize,
             },
             MTLSize {
-                width: PAGED_DECODE_THREADS,
+                width: threads,
                 height: 1,
                 depth: 1,
             },
@@ -1026,6 +1071,9 @@ pub fn call_paged_decode_gqa(
     }
 
     if let Some(partials) = &args.partials {
+        let PagedDecodeVariant::Grouped { partition_size } = args.variant else {
+            unreachable!("the short decode kernel does not use partials")
+        };
         encode_v2_reduce(
             device,
             ep,
@@ -1039,7 +1087,7 @@ pub fn call_paged_decode_gqa(
                 context_lens: args.context_lens.0,
                 context_lens_offset: args.context_lens.1,
                 sinks: None,
-                partition_size: args.partition_size,
+                partition_size,
                 max_context_len: args.max_context_len,
                 num_seqs: args.num_seqs,
                 num_heads: args.num_heads,
@@ -1048,4 +1096,36 @@ pub fn call_paged_decode_gqa(
         )?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod decode_tests {
+    use super::*;
+
+    #[test]
+    fn short_decode_has_no_partials() {
+        for (head, min_gqa, limit) in PAGED_DECODE_SHORT_CONTEXTS {
+            for context in [1, limit] {
+                let variant = paged_decode_variant(context, 1, min_gqa * 8, 8, head);
+                assert!(matches!(variant, PagedDecodeVariant::Short));
+                assert_eq!(variant.num_partitions(context), 1);
+            }
+            assert!(matches!(
+                paged_decode_variant(limit + 1, 1, min_gqa * 8, 8, head),
+                PagedDecodeVariant::Grouped { .. }
+            ));
+        }
+        for (batch, heads, head_size) in [
+            (4, 16, 128),
+            (1, 8, 128),
+            (1, 16, 192),
+            (1, 64, 128),
+            (1, 16, 256),
+        ] {
+            let context = 256;
+            let variant = paged_decode_variant(context, batch, heads, 8, head_size);
+            assert!(matches!(variant, PagedDecodeVariant::Grouped { .. }));
+            assert!(variant.num_partitions(context) > 1);
+        }
+    }
 }

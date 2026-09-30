@@ -14,6 +14,9 @@ using namespace metal;
 constant constexpr int PD_BLOCK = 32;
 constant constexpr int PD_SIMDS = 4;
 constant constexpr int PD_THREADS = PD_SIMDS * 32;
+constant constexpr int PD_SHORT_SIMDS = 32;
+constant constexpr int PD_SIMD_WIDTH = 32;
+constant constexpr int PD_KEY_PACK = 8;
 
 template <typename T> inline void pd_load8(const device T *p, thread float *out);
 
@@ -222,6 +225,97 @@ template <typename T, int HEAD_DIM, int GQA>
   }
 }
 
+// Adapted from Candle's MLX-derived sdpa_vector; licensed under Apache-2.0.
+// Copyright (c) 2023 Apple Inc. https://github.com/ml-explore/mlx
+template <typename T, int HEAD_DIM>
+[[kernel]] void
+paged_decode_short(device T *out [[buffer(0)]], const device T *q [[buffer(4)]],
+                   const device T *k_cache [[buffer(5)]],
+                   const device T *v_cache [[buffer(6)]],
+                   const device uint32_t *block_tables [[buffer(7)]],
+                   const device uint32_t *context_lens [[buffer(8)]],
+                   constant int &max_num_blocks_per_seq [[buffer(9)]],
+                   constant int &q_stride [[buffer(10)]],
+                   constant int &kv_block_stride [[buffer(11)]],
+                   constant int &kv_head_stride [[buffer(12)]],
+                   constant float &scale [[buffer(13)]],
+                   constant int &gqa [[buffer(15)]],
+                   uint3 tg [[threadgroup_position_in_grid]],
+                   uint3 tgs [[threadgroups_per_grid]],
+                   uint sg [[simdgroup_index_in_threadgroup]],
+                   uint lane [[thread_index_in_simdgroup]]) {
+  constexpr int ELEMS = HEAD_DIM / PD_SIMD_WIDTH;
+  const int head = tg.y;
+  const int seq = tg.z;
+  const int kv_head = head / gqa;
+  const int context_len = context_lens[seq];
+  const int dim_start = lane * ELEMS;
+
+  threadgroup float maxima[PD_SHORT_SIMDS];
+  threadgroup float sums[PD_SHORT_SIMDS];
+  threadgroup float outputs[PD_SIMD_WIDTH * PD_SHORT_SIMDS];
+  float query[ELEMS];
+  float o[ELEMS];
+  for (int d = 0; d < ELEMS; ++d) {
+    query[d] =
+        float(q[seq * q_stride + head * HEAD_DIM + dim_start + d]) * scale;
+    o[d] = 0.f;
+  }
+
+  float m = -INFINITY;
+  float l = 0.f;
+  for (int token = int(sg); token < context_len; token += PD_SHORT_SIMDS) {
+    const int block = token / PD_BLOCK;
+    const int slot = token % PD_BLOCK;
+    const uint64_t phys = block_tables[seq * max_num_blocks_per_seq + block];
+    const device T *kb =
+        k_cache + phys * kv_block_stride + kv_head * kv_head_stride;
+    const device T *vb =
+        v_cache + phys * kv_block_stride + kv_head * kv_head_stride;
+    float score = 0.f;
+    for (int d = 0; d < ELEMS; ++d) {
+      const int dim = dim_start + d;
+      const float key =
+          float(kb[((dim / PD_KEY_PACK) * PD_BLOCK + slot) * PD_KEY_PACK +
+                   dim % PD_KEY_PACK]);
+      score = fma(query[d], key, score);
+    }
+    score = simd_sum(score);
+    const float new_m = max(m, score);
+    const float alpha = fast::exp(m - new_m);
+    const float p = fast::exp(score - new_m);
+    l = l * alpha + p;
+    m = new_m;
+    for (int d = 0; d < ELEMS; ++d) {
+      const float value = float(vb[(dim_start + d) * PD_BLOCK + slot]);
+      o[d] = fma(p, value, o[d] * alpha);
+    }
+  }
+
+  if (lane == 0) {
+    maxima[sg] = m;
+    sums[sg] = l;
+  }
+  threadgroup_barrier(mem_flags::mem_threadgroup);
+  const float max_logit = simd_max(maxima[lane]);
+  const float weight = fast::exp(maxima[lane] - max_logit);
+  const float denominator = simd_sum(sums[lane] * weight);
+
+  for (int d = 0; d < ELEMS; ++d) {
+    outputs[lane * PD_SHORT_SIMDS + sg] = o[d];
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    o[d] = simd_sum(outputs[sg * PD_SHORT_SIMDS + lane] * weight) / denominator;
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+  }
+  if (lane == 0) {
+    const int output_start =
+        (seq * int(tgs.y) + head) * HEAD_DIM + int(sg) * ELEMS;
+    for (int d = 0; d < ELEMS; ++d) {
+      out[output_start + d] = T(o[d]);
+    }
+  }
+}
+
 #define instantiate_paged_decode(type, head_dim, gqa)                          \
   template [[host_name("paged_decode_gqa_" #type "_hs" #head_dim "_g" #gqa)]]  \
   [[kernel]] void paged_decode_gqa<type, head_dim, gqa>(                       \
@@ -264,3 +358,29 @@ template <typename T, int HEAD_DIM, int GQA>
 
 instantiate_paged_decode_heads(bfloat16_t)
 instantiate_paged_decode_heads(half)
+
+#define instantiate_paged_decode_short(type, head_dim)                         \
+  template [[host_name("paged_decode_short_" #type                             \
+                       "_hs" #head_dim)]] [[kernel]] void                      \
+  paged_decode_short<type, head_dim>(                                          \
+      device type * out [[buffer(0)]], const device type *q [[buffer(4)]],     \
+      const device type *k_cache [[buffer(5)]],                                \
+      const device type *v_cache [[buffer(6)]],                                \
+      const device uint32_t *block_tables [[buffer(7)]],                       \
+      const device uint32_t *context_lens [[buffer(8)]],                       \
+      constant int &max_num_blocks_per_seq [[buffer(9)]],                      \
+      constant int &q_stride [[buffer(10)]],                                   \
+      constant int &kv_block_stride [[buffer(11)]],                            \
+      constant int &kv_head_stride [[buffer(12)]],                             \
+      constant float &scale [[buffer(13)]], constant int &gqa [[buffer(15)]],  \
+      uint3 tg [[threadgroup_position_in_grid]],                               \
+      uint3 tgs [[threadgroups_per_grid]],                                     \
+      uint sg [[simdgroup_index_in_threadgroup]],                              \
+      uint lane [[thread_index_in_simdgroup]]);
+
+#define instantiate_paged_decode_short_heads(type)                             \
+  instantiate_paged_decode_short(type, 128)                                    \
+  instantiate_paged_decode_short(type, 256)
+
+instantiate_paged_decode_short_heads(bfloat16_t)
+instantiate_paged_decode_short_heads(half)

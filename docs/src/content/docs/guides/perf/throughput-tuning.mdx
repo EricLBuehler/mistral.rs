@@ -87,6 +87,8 @@ Concurrency beyond a few sequences is the main reason to care about paged attent
 - With paged attention (default on CUDA and Metal): continuous batching against the block pool, block-level prefix sharing, and on CUDA the decode-graph and FlashInfer (NVIDIA's attention-kernel library) fast paths.
 - Without it (CPU or `--paged-attn off`): the default scheduler is first-come-first-served and batches running sequences by equal length; sequences at other lengths wait their turn and accumulate priority.
 
+On Metal with automatic device mapping, automatic KV budgeting caps capacity using the device mapping sequence length and the larger of `max_batch_size` or serving concurrency capped at eight. Raising serving concurrency beyond eight does not enlarge that cap; an explicitly larger `max_batch_size` or an explicit MB/context budget can. See [paged attention memory budgets](/guides/perf/paged-attention/#memory-budget).
+
 ## Prefix caching
 
 Prefix caching skips prefill for tokens the engine has already processed, which is most valuable for multi-turn chat and shared system prompts.
@@ -132,6 +134,8 @@ The mechanism depends on the attention mode:
 
 - Paged attention: sequences sharing a token prefix reuse the same reference-counted cache blocks; matching blocks of a new request are not recomputed.
 - Non-paged: completed sequences' caches are kept whole; a new request whose tokens extend a cached sequence resumes from it. Beyond `--prefix-cache-n` device entries, the oldest caches are evicted (dropped, not offloaded); a later matching request re-prefills.
+
+Qwen3.5 hybrid models on Metal can report zero prefix-cache hits for repeated identical prompts. Reuse also requires a saved recurrent-state checkpoint, and Metal does not currently create the intermediate checkpoints needed for this case.
 
 ## Memory planning for automatic device mapping
 

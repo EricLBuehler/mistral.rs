@@ -65,15 +65,21 @@ Use paged attention when:
 - Running long-context models (32k+) where standard caches would be enormous.
 - Using CUDA decode graphs (see below).
 
+On Metal, the default favors concurrent serving. For a single request with a short context, paging overhead can reduce throughput; compare `--paged-attn auto` with `--paged-attn off` on your workload.
+
 ## Memory budget
 
 The pool's size is set via one of three mutually exclusive flags:
 
 - `--pa-memory-mb <mb>`: KV cache budget in MB.
-- `--pa-memory-fraction <f>`: KV cache budget as a fraction of VRAM.
+- `--pa-memory-fraction <f>`: GPU memory utilization target, accounting for model weights and reserved memory.
 - `--pa-context-len <n>`: allocate KV cache sized for this context length.
 
-When none are set, the pool defaults to 90% of available VRAM.
+When none are set, the CLI uses a GPU memory utilization target of `0.9`, accounting for model weights and reserved memory.
+
+On Metal, the CLI and Python `Runner` use the same default utilization target and also cap the pool's token capacity. With automatic device mapping, the cap is `max_seq_len * max(max_batch_size, min(max_seqs, 8))`. The sequence length and batch size come from the device mapping options; `max_seqs` is the serving concurrency. This budgets for up to eight full-length concurrent sequences by default, while an explicitly larger `max_batch_size` raises the cap. With a manual layer map, the token cap is the model's maximum context length. Available memory can reduce the pool further. Explicit MB and context-length budgets bypass this token cap; a memory-fraction override retains it.
+
+Python on CUDA retains its default total KV token capacity of `max_seq_len`. Set `pa_gpu_mem_usage`, `pa_gpu_mem`, or `pa_ctxt_len` to choose a different budget.
 
 Two more flags tune the cache itself:
 

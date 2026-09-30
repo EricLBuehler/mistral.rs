@@ -24,8 +24,7 @@ pub struct PagedAttentionOptions {
     #[serde(default)]
     pub mode: PagedAttnMode,
 
-    /// Allocate KV cache for this context length.
-    /// If not specified, defaults to using 90% of available VRAM.
+    /// Allocate this many KV cache tokens instead of automatic memory budgeting
     #[arg(long = "pa-context-len")]
     pub context_len: Option<usize>,
 
@@ -33,11 +32,11 @@ pub struct PagedAttentionOptions {
     #[arg(long = "pa-memory-mb", conflicts_with = "context_len")]
     pub memory_mb: Option<usize>,
 
-    /// GPU memory utilization fraction 0.0-1.0 (alternative to context-len/memory-mb)
+    /// GPU memory utilization target 0.0-1.0 (default: 0.9; Metal also caps token capacity)
     #[arg(long = "pa-memory-fraction", conflicts_with_all = ["context_len", "memory_mb"])]
     pub memory_fraction: Option<f32>,
 
-    /// Tokens per block (default: 32 on CUDA)
+    /// Tokens per block (default: 32 on CUDA and Metal)
     #[arg(long = "pa-block-size")]
     pub block_size: Option<usize>,
 

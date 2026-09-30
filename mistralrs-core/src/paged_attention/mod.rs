@@ -47,6 +47,7 @@ use crate::MemoryUsage;
 use tracing::info;
 
 pub const DEFAULT_PAGED_ATTENTION_BLOCK_SIZE: usize = 32;
+pub const DEFAULT_PAGED_ATTENTION_MEMORY_UTILIZATION: f32 = 0.9;
 const GPU_RESERVE_FRACTION: f64 = 0.02;
 const GPU_MIN_RESERVE_BYTES: usize = 512 * 1024 * 1024;
 
@@ -210,6 +211,8 @@ pub struct PagedAttentionConfig {
     pub(crate) recurrent_checkpoint_lanes_auto: bool,
     pub(crate) recurrent_prefix_capacity: usize,
     pub(crate) resolve_memory_utilization_after_load: bool,
+    // Utilization may be resolved to MB before the Metal cache is allocated.
+    pub(crate) cap_metal_kv_cache: bool,
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -236,6 +239,7 @@ impl PagedAttentionConfig {
             recurrent_checkpoint_lanes_auto: false,
             recurrent_prefix_capacity: 0,
             resolve_memory_utilization_after_load: true,
+            cap_metal_kv_cache: matches!(mem_gpu, MemoryGpuConfig::Utilization(_)),
         })
     }
 
@@ -391,11 +395,9 @@ fn fit_post_load_cache_budget(
 /// If `None` on Metal, falls back to `config.max_seq_len()`.
 #[allow(clippy::too_many_arguments)]
 pub fn calculate_cache_config(
-    mem_gpu_config: MemoryGpuConfig,
+    paged_config: PagedAttentionConfig,
     memory_reservations: CacheMemoryReservations,
-    block_size: Option<usize>,
     dtype: DType,
-    cache_type: PagedCacheType,
     config: &dyn ModelConfigLike,
     device: &Device,
     layer_devices: &[Option<Device>],
@@ -403,7 +405,11 @@ pub fn calculate_cache_config(
     model_weight_size_in_bytes: Option<usize>,
     max_num_tokens: Option<usize>,
 ) -> anyhow::Result<CacheConfig> {
-    let block_size = block_size.unwrap_or(DEFAULT_PAGED_ATTENTION_BLOCK_SIZE);
+    let mem_gpu_config = paged_config.mem_gpu;
+    let cache_type = paged_config.cache_type;
+    let block_size = paged_config
+        .block_size
+        .unwrap_or(DEFAULT_PAGED_ATTENTION_BLOCK_SIZE);
     if !SUPPORTED_BLOCK_SIZE.contains(&block_size) {
         anyhow::bail!("Block size must be in {SUPPORTED_BLOCK_SIZE:?}, got {block_size}");
     }
@@ -537,7 +543,7 @@ pub fn calculate_cache_config(
     #[allow(unused_mut, unused_variables)]
     let mut mem_gpu = min_mem_gpu;
     // Explicit budgets (--pa-context-len / --pa-memory-mb) are honored as given.
-    if device.is_metal() && matches!(mem_gpu_config, MemoryGpuConfig::Utilization(_)) {
+    if device.is_metal() && paged_config.cap_metal_kv_cache {
         let max_tokens = max_num_tokens.unwrap_or(config.max_seq_len());
         let mem_for_tokens =
             ctxt_to_blocks!(max_tokens, dtype_size, block_size, config) / SIZE_IN_MB;

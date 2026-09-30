@@ -49,10 +49,10 @@ mistralrs bench [OPTIONS] [COMMAND]
 | `--max-seq-len <MAX_SEQ_LEN>` | `4096` | Max sequence length for automatic device mapping |
 | `--max-batch-size <MAX_BATCH_SIZE>` | `1` | Max batch size for automatic device mapping |
 | `--paged-attn <MODE>` | `auto` | PagedAttention mode - auto: enabled on CUDA and Metal, disabled on CPU (default) - on: force enable (fails if unsupported) - off: force disable. Possible values: `auto`, `on`, `off`. |
-| `--pa-context-len <CONTEXT_LEN>` |  | Allocate KV cache for this context length. If not specified, defaults to using 90% of available VRAM |
+| `--pa-context-len <CONTEXT_LEN>` |  | Allocate this many KV cache tokens instead of automatic memory budgeting |
 | `--pa-memory-mb <MEMORY_MB>` |  | GPU memory to allocate in MBs (alternative to context-len) |
-| `--pa-memory-fraction <MEMORY_FRACTION>` |  | GPU memory utilization fraction 0.0-1.0 (alternative to context-len/memory-mb) |
-| `--pa-block-size <BLOCK_SIZE>` |  | Tokens per block (default: 32 on CUDA) |
+| `--pa-memory-fraction <MEMORY_FRACTION>` |  | GPU memory utilization target 0.0-1.0 (default: 0.9; Metal also caps token capacity) |
+| `--pa-block-size <BLOCK_SIZE>` |  | Tokens per block (default: 32 on CUDA and Metal) |
 | `--pa-cache-type <CACHE_TYPE>` | `auto` | KV cache quantization type |
 | `--encoder-cache-memory-mb <ENCODER_CACHE_MEMORY_MB>` |  | Maximum logical tensor memory retained by the multimodal encoder cache, in MiB |
 | `--max-edge <MAX_EDGE>` |  | Maximum edge length for image resizing (aspect ratio preserved) |
@@ -116,10 +116,10 @@ mistralrs bench auto [OPTIONS] --model-id <MODEL_ID>
 | `--max-seq-len <MAX_SEQ_LEN>` | `4096` | Max sequence length for automatic device mapping |
 | `--max-batch-size <MAX_BATCH_SIZE>` | `1` | Max batch size for automatic device mapping |
 | `--paged-attn <MODE>` | `auto` | PagedAttention mode - auto: enabled on CUDA and Metal, disabled on CPU (default) - on: force enable (fails if unsupported) - off: force disable. Possible values: `auto`, `on`, `off`. |
-| `--pa-context-len <CONTEXT_LEN>` |  | Allocate KV cache for this context length. If not specified, defaults to using 90% of available VRAM |
+| `--pa-context-len <CONTEXT_LEN>` |  | Allocate this many KV cache tokens instead of automatic memory budgeting |
 | `--pa-memory-mb <MEMORY_MB>` |  | GPU memory to allocate in MBs (alternative to context-len) |
-| `--pa-memory-fraction <MEMORY_FRACTION>` |  | GPU memory utilization fraction 0.0-1.0 (alternative to context-len/memory-mb) |
-| `--pa-block-size <BLOCK_SIZE>` |  | Tokens per block (default: 32 on CUDA) |
+| `--pa-memory-fraction <MEMORY_FRACTION>` |  | GPU memory utilization target 0.0-1.0 (default: 0.9; Metal also caps token capacity) |
+| `--pa-block-size <BLOCK_SIZE>` |  | Tokens per block (default: 32 on CUDA and Metal) |
 | `--pa-cache-type <CACHE_TYPE>` | `auto` | KV cache quantization type |
 | `--encoder-cache-memory-mb <ENCODER_CACHE_MEMORY_MB>` |  | Maximum logical tensor memory retained by the multimodal encoder cache, in MiB |
 | `--max-edge <MAX_EDGE>` |  | Maximum edge length for image resizing (aspect ratio preserved) |
@@ -170,10 +170,10 @@ mistralrs bench text [OPTIONS] --model-id <MODEL_ID>
 | `--max-seq-len <MAX_SEQ_LEN>` | `4096` | Max sequence length for automatic device mapping |
 | `--max-batch-size <MAX_BATCH_SIZE>` | `1` | Max batch size for automatic device mapping |
 | `--paged-attn <MODE>` | `auto` | PagedAttention mode - auto: enabled on CUDA and Metal, disabled on CPU (default) - on: force enable (fails if unsupported) - off: force disable. Possible values: `auto`, `on`, `off`. |
-| `--pa-context-len <CONTEXT_LEN>` |  | Allocate KV cache for this context length. If not specified, defaults to using 90% of available VRAM |
+| `--pa-context-len <CONTEXT_LEN>` |  | Allocate this many KV cache tokens instead of automatic memory budgeting |
 | `--pa-memory-mb <MEMORY_MB>` |  | GPU memory to allocate in MBs (alternative to context-len) |
-| `--pa-memory-fraction <MEMORY_FRACTION>` |  | GPU memory utilization fraction 0.0-1.0 (alternative to context-len/memory-mb) |
-| `--pa-block-size <BLOCK_SIZE>` |  | Tokens per block (default: 32 on CUDA) |
+| `--pa-memory-fraction <MEMORY_FRACTION>` |  | GPU memory utilization target 0.0-1.0 (default: 0.9; Metal also caps token capacity) |
+| `--pa-block-size <BLOCK_SIZE>` |  | Tokens per block (default: 32 on CUDA and Metal) |
 | `--pa-cache-type <CACHE_TYPE>` | `auto` | KV cache quantization type |
 
 ## mistralrs bench multimodal
@@ -215,10 +215,10 @@ mistralrs bench multimodal [OPTIONS] --model-id <MODEL_ID>
 | `--max-seq-len <MAX_SEQ_LEN>` | `4096` | Max sequence length for automatic device mapping |
 | `--max-batch-size <MAX_BATCH_SIZE>` | `1` | Max batch size for automatic device mapping |
 | `--paged-attn <MODE>` | `auto` | PagedAttention mode - auto: enabled on CUDA and Metal, disabled on CPU (default) - on: force enable (fails if unsupported) - off: force disable. Possible values: `auto`, `on`, `off`. |
-| `--pa-context-len <CONTEXT_LEN>` |  | Allocate KV cache for this context length. If not specified, defaults to using 90% of available VRAM |
+| `--pa-context-len <CONTEXT_LEN>` |  | Allocate this many KV cache tokens instead of automatic memory budgeting |
 | `--pa-memory-mb <MEMORY_MB>` |  | GPU memory to allocate in MBs (alternative to context-len) |
-| `--pa-memory-fraction <MEMORY_FRACTION>` |  | GPU memory utilization fraction 0.0-1.0 (alternative to context-len/memory-mb) |
-| `--pa-block-size <BLOCK_SIZE>` |  | Tokens per block (default: 32 on CUDA) |
+| `--pa-memory-fraction <MEMORY_FRACTION>` |  | GPU memory utilization target 0.0-1.0 (default: 0.9; Metal also caps token capacity) |
+| `--pa-block-size <BLOCK_SIZE>` |  | Tokens per block (default: 32 on CUDA and Metal) |
 | `--pa-cache-type <CACHE_TYPE>` | `auto` | KV cache quantization type |
 | `--encoder-cache-memory-mb <ENCODER_CACHE_MEMORY_MB>` |  | Maximum logical tensor memory retained by the multimodal encoder cache, in MiB |
 | `--max-edge <MAX_EDGE>` |  | Maximum edge length for image resizing (aspect ratio preserved) |
@@ -305,9 +305,9 @@ mistralrs bench embedding [OPTIONS] --model-id <MODEL_ID>
 | `--max-seq-len <MAX_SEQ_LEN>` | `4096` | Max sequence length for automatic device mapping |
 | `--max-batch-size <MAX_BATCH_SIZE>` | `1` | Max batch size for automatic device mapping |
 | `--paged-attn <MODE>` | `auto` | PagedAttention mode - auto: enabled on CUDA and Metal, disabled on CPU (default) - on: force enable (fails if unsupported) - off: force disable. Possible values: `auto`, `on`, `off`. |
-| `--pa-context-len <CONTEXT_LEN>` |  | Allocate KV cache for this context length. If not specified, defaults to using 90% of available VRAM |
+| `--pa-context-len <CONTEXT_LEN>` |  | Allocate this many KV cache tokens instead of automatic memory budgeting |
 | `--pa-memory-mb <MEMORY_MB>` |  | GPU memory to allocate in MBs (alternative to context-len) |
-| `--pa-memory-fraction <MEMORY_FRACTION>` |  | GPU memory utilization fraction 0.0-1.0 (alternative to context-len/memory-mb) |
-| `--pa-block-size <BLOCK_SIZE>` |  | Tokens per block (default: 32 on CUDA) |
+| `--pa-memory-fraction <MEMORY_FRACTION>` |  | GPU memory utilization target 0.0-1.0 (default: 0.9; Metal also caps token capacity) |
+| `--pa-block-size <BLOCK_SIZE>` |  | Tokens per block (default: 32 on CUDA and Metal) |
 | `--pa-cache-type <CACHE_TYPE>` | `auto` | KV cache quantization type |
 

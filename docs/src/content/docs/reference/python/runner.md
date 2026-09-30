@@ -59,19 +59,16 @@ Load a model.
     the corresponding number of layers. Note: this is deprecated in favor of automatic device mapping.
 - `in_situ_quant` sets the optional in-situ quantization for a model.
 - `anymoe_config` specifies the AnyMoE config. If this is set, then the model will be loaded as an AnyMoE model.
-- `pa_gpu_mem`: GPU memory to allocate for KV cache with PagedAttention in MBs.
-    PagedAttention is supported on CUDA and Metal. It is automatically activated on CUDA and Metal.
-    The priority is as follows: `pa-ctxt-len` > `pa-gpu-mem-usage` > `pa-gpu-mem`.
-- `pa_gpu_mem_usage`: Percentage of GPU memory to utilize after allocation of KV cache with PagedAttention, from 0 to 1.
-    If this is not set and the device is CUDA, it will default to `0.9`.
-    PagedAttention is supported on CUDA and Metal. It is automatically activated on CUDA and Metal.
-    The priority is as follows: `pa-ctxt-len` > `pa-gpu-mem-usage` > `pa-gpu-mem`.
-- `pa_ctxt_len`: Total context length to allocate the KV cache for (total number of tokens which the KV cache can hold).
-    PagedAttention is supported on CUDA and Metal. It is automatically activated on CUDA and Metal.
-    The priority is as follows: `pa-ctxt-len` > `pa-gpu-mem-usage` > `pa-gpu-mem`.
-    This is the default setting, and it defaults to the `max-seq-len` specified in after the model type.
-- `pa_blk_size` sets the block size (number of tokens per block) for PagedAttention. If this is not set and the device is CUDA,
-    it will default to 32. PagedAttention is supported on CUDA and Metal. It is automatically activated on CUDA and Metal.
+- `pa_gpu_mem`: Explicit KV cache memory budget in MB, without the Metal automatic token cap.
+    Set only one of `pa_gpu_mem`, `pa_gpu_mem_usage`, and `pa_ctxt_len`.
+- `pa_gpu_mem_usage`: GPU memory utilization target from 0 to 1, accounting for model weights and reserved memory.
+    On Metal, the default is `0.9` when no memory budget is specified, matching the CLI.
+    With automatic device mapping, Metal also caps KV tokens at `max_seq_len * max(max_batch_size, min(max_seqs, 8))`.
+    The sequence length and batch size come from the device mapping options. An explicit batch size above eight raises the cap.
+    With a manual layer map, the cap is the model's maximum context length. Available memory can reduce capacity further.
+- `pa_ctxt_len`: Explicit total KV token capacity, without the Metal automatic token cap.
+    On CUDA, the default when no memory budget is specified remains the device mapping `max_seq_len`.
+- `pa_blk_size`: Tokens per block, defaulting to 32 on CUDA and Metal. PagedAttention is enabled by default on both.
 - `pa_cache_type` sets the PagedAttention KV cache type (auto or f8e4m3). Defaults to `auto`.
 - `no_paged_attn` disables PagedAttention on CUDA and Metal.
 - `paged_attn` forces PagedAttention on, overriding `no_paged_attn`.
