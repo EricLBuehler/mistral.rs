@@ -61,10 +61,30 @@ A second layout loads each Q4K block's metadata in smaller arrays, unpacks its 2
 
 | Tile BM/BN/BK | Existing path, eager | cuTile, eager | Existing path, graph | cuTile, graph |
 | --- | ---: | ---: | ---: | ---: |
-| 16/64/128 | 3.440 | 927.615 | 3.482 | 927.241 |
+| 16/64/128 | 3.440 | 927.615 | 3.482 | 927.337 |
 | 8/32/256 | 3.435 | 93.658 | 3.429 | 93.571 |
 
 Times are median milliseconds over the same seven-round protocol. At BK 128, this layout decodes the entire block twice and dynamically extracts each half. BK 256 eliminates the repeated decode but remains substantially slower. The source also introduces concatenation and tile-layout conversion; no counter profile of this version was collected, so the particular cause of its regression is not established. This version is rejected. Baseline outputs still match the native capture exactly, and candidate graph/eager outputs match each other exactly. [Results](raw/optimization/cutile_blocked/summary.json), [validation](raw/optimization/cutile_blocked/validation.json), and [source archive](raw/optimization/cutile_blocked/manifest.json) retain the experiment.
+
+### Grouped metadata decoder
+
+The third layout decodes only the requested K lanes and broadcasts metadata from one entry per 32-value group. It removes the full-block concatenation/extraction. The same native 56-row input gives these median milliseconds:
+
+| Tile BM/BN/BK | Existing path, eager | cuTile, eager | Existing path, graph | cuTile, graph |
+| --- | ---: | ---: | ---: | ---: |
+| 8/32/64 | 3.428 | 8.663 | 3.415 | 8.605 |
+| 16/64/128 | 3.362 | 9.468 | 3.328 | 9.526 |
+| 16/64/32 | 3.419 | 8.774 | 3.423 | 8.680 |
+| 16/128/32 | 3.435 | 17.164 | 3.423 | 19.529 |
+| 16/32/64 | 3.336 | 7.931 | 3.404 | 7.944 |
+
+This improves on the earlier decoders but still loses to MMQ. The best configuration takes 2.38x the baseline's eager time. No native cuTile GGUF path is enabled in production; the experiment lives in test support with its replay harness and CPU-oracle tests.
+
+Nsight Compute for 8/32/64 reports 151/151/153 registers in gate/up/down, zero local-memory load/store sectors, and about 25% achieved warp occupancy. Its tensor activity is zero. Offline SASS inspection of corresponding unit-test cubins confirms that the 8-row shape lowers to ordinary arithmetic, whereas the examined 16-row shapes contain HMMA instructions. Thus removing spills and using tensor cores are insufficient by themselves to establish a faster complete forward. The matched 16/32/64 timing is an additional negative probe, not a profiled run.
+
+The independent full-FFN reference ran separately for 8/32/64. Relative RMS against original decoded FP32 weights is 0.2785% for cuTile and 2.2111% for existing MMQ. Against a reference with BF16-rounded weights, intermediate, and final output, cuTile differs by 0.00859% RMS; accumulation, nonlinear evaluation, and reduction order still differ. These are one-layer numerical comparisons, not language-model quality measurements. All five replay configurations preserve exact baseline/capture and candidate eager/graph agreement.
+
+[Timing samples](raw/optimization/cutile_grouped_metadata/summary.json), [full-FFN references](raw/optimization/cutile_grouped_metadata/oracle_native56_8_32_64/oracle.json), [profiling counters](raw/optimization/cutile_grouped_metadata/ncu_native56_8_32_64/kernels.json), and [validation](raw/optimization/cutile_grouped_metadata/validation.json) retain the tested scope and provenance. Profiled durations are excluded from the timing table; the profiling process intentionally stops after the selected launches.
 
 ## Compact grouped-MMQ scheduling
 

@@ -1,0 +1,93 @@
+{
+  "original_reference": "Original quantized weights dequantized to FP32; unquantized FP32 FFN with CPU F64 routing-weight reduction.",
+  "reduced_f32": false,
+  "replay_results": "/home/ericbuehler/qwen4exp_work/moe_optimization_20260930/cutile_gguf/grouped_metadata/native56_8_32_64/replay.json",
+  "results": [
+    {
+      "derived": false,
+      "original_reference_vs_baseline": {
+        "cosine": 0.9997555242177224,
+        "max_abs": 0.0025188028812408447,
+        "relative_rms": 0.02211102179399007
+      },
+      "original_reference_vs_cutile": {
+        "cosine": 0.9999961220538587,
+        "max_abs": 0.00033418089151382446,
+        "relative_rms": 0.002784939437851447
+      },
+      "rounded_reference_bf16_output_vs_cutile": {
+        "cosine": 0.9999999963081072,
+        "max_abs": 0.000244140625,
+        "relative_rms": 0.00008592911270841985
+      },
+      "rounded_reference_vs_cutile": {
+        "cosine": 0.9999986203845628,
+        "max_abs": 0.0002388209104537964,
+        "relative_rms": 0.0016610927750024096
+      },
+      "rows": 56,
+      "selection": "native",
+      "source_metadata": "c8_target_verify_b8_q7_04.json",
+      "source_row_indices": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16,
+        17,
+        18,
+        19,
+        20,
+        21,
+        22,
+        23,
+        24,
+        25,
+        26,
+        27,
+        28,
+        29,
+        30,
+        31,
+        32,
+        33,
+        34,
+        35,
+        36,
+        37,
+        38,
+        39,
+        40,
+        41,
+        42,
+        43,
+        44,
+        45,
+        46,
+        47,
+        48,
+        49,
+        50,
+        51,
+        52,
+        53,
+        54,
+        55
+      ]
+    }
+  ],
+  "rounded_reference": "Decoded weights rounded to BF16 then represented as FP32; BF16-rounded intermediate activation; FP32 matmuls with TF32 disabled and CPU F64 weighted reduction. Reports both unrounded F64 output and output cast through FP32 to BF16; differences still include accumulation and reduction ordering. Distinguishes the cuTile numerical contract from original-weight rounding.",
+  "scope": "Separate reference pass after timing. Expanded weights exist only in the reference implementation, not in the cuTile kernel or timed forward. Projection tests independently validate decoding against CPU dequantization. These metrics are not a language-model quality evaluation."
+}

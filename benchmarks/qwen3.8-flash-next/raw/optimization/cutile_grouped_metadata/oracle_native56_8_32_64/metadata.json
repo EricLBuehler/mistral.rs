@@ -1,0 +1,58 @@
+{
+  "complete": true,
+  "started_at": "2026-09-30T15:59:39.695823+00:00",
+  "binary": "/home/ericbuehler/qwen4exp_work/moe_optimization_20260930/cutile_gguf/grouped_metadata/build/moe_dispatch_bench-0dfba70e2949feab",
+  "binary_sha256": "7acc2a77b306794e9c79777a7b74ac2719ae34456737f938f316834f00c03e18",
+  "replay": "/home/ericbuehler/qwen4exp_work/moe_optimization_20260930/cutile_gguf/grouped_metadata/native56_8_32_64",
+  "replay_metadata_sha256": "e608badbb2c5af539d2ec7fa8856c108a7143d0dba4d1d9f14321fde1936c09c",
+  "saved_outputs": [
+    {
+      "path": "outputs/c8_target_verify_b8_q7_04.json.native.56.safetensors",
+      "bytes": 573600,
+      "sha256": "f9c6442eaad32598d5dc98858a38d584b21ff3d22e6b5673a8a8776f250e908a"
+    }
+  ],
+  "isolation_before": {
+    "at": "2026-09-30T15:59:39.755959+00:00",
+    "processes": [
+      {
+        "pid": 2122897,
+        "name": "rust-analyzer",
+        "state": "T"
+      }
+    ]
+  },
+  "source_hashes": {
+    "run_oracle.py": "043e2526447ae4abd7facbb7a05e39e4e2364490c37b71bc0896ac4cf60839b2",
+    "moe_dispatch_bench.rs": "016fb8046913d3909de853cdf67c410545d91a09527b8dff0b2d4a12d973c953",
+    "cutile_gguf_replay.rs": "b7f20bc0ec82ef17f12b97291041e81e00a8c5c8521c21a40ff459b282d81863"
+  },
+  "command": [
+    "/home/ericbuehler/qwen4exp_work/moe_optimization_20260930/cutile_gguf/grouped_metadata/build/moe_dispatch_bench-0dfba70e2949feab",
+    "--exact",
+    "cutile_gguf_replay::flash_next_cutile_gguf_oracle",
+    "--ignored",
+    "--nocapture",
+    "--test-threads=1"
+  ],
+  "environment_overrides": {
+    "MISTRALRS_MOE_REPLAY_DIR": "/home/ericbuehler/qwen4exp_work/real_routing_20260930/runtime/captures",
+    "MISTRALRS_MOE_REPLAY_RESULTS": "/home/ericbuehler/qwen4exp_work/moe_optimization_20260930/cutile_gguf/grouped_metadata/native56_8_32_64/replay.json",
+    "MISTRALRS_MOE_ORACLE_OUTPUT": "/home/ericbuehler/qwen4exp_work/moe_optimization_20260930/cutile_gguf/grouped_metadata/oracle_native56_8_32_64/oracle.json"
+  },
+  "child_pid": 2428568,
+  "returncode": 0,
+  "finished_at": "2026-09-30T15:59:44.294820+00:00",
+  "oracle_sha256": "7ac2d147a8c243b5455eab698bb585f4db68824a08c7a4acaf49c49c0c11546e",
+  "log_sha256": "a31ccb3a4b00a7ea383aff105145a65bacebf236638b27bd6639a4130368ff2c",
+  "isolation_after": {
+    "at": "2026-09-30T15:59:44.300268+00:00",
+    "processes": [
+      {
+        "pid": 2122897,
+        "name": "rust-analyzer",
+        "state": "T"
+      }
+    ]
+  }
+}

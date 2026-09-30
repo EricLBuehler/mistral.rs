@@ -1,0 +1,17 @@
+==WARNING== Could not deploy stock section files to "/home/ericbuehler/Documents/NVIDIA Nsight Compute/2026.2.1/Sections".
+Set the HOME environment variable to a writable directory.
+==WARNING== Using "/opt/nvidia/nsight-compute/2026.2.1/target/linux-desktop-t210-a64/../../sections" instead.
+==WARNING== See https://docs.nvidia.com/nsight-compute/ProfilingGuide/index.html#faq.
+
+running 1 test
+test cutile_gguf_replay::flash_next_cutile_gguf_real_routing ... ==WARNING== Note: Running with uncontrolled GPU caches. Profiling results may be inconsistent.
+==WARNING== Note: Running with unmodified GPU clocks. If not controlled otherwise, profiling results may be inconsistent.
+==PROF== Connected to process 2428862 (/home/ericbuehler/qwen4exp_work/moe_optimization_20260930/cutile_gguf/grouped_metadata/build/moe_dispatch_bench-0dfba70e2949feab)
+loading blk.8.ffn_gate_exps.weight
+loading blk.8.ffn_up_exps.weight
+loading blk.8.ffn_down_exps.weight
+==PROF== Profiling "projection_entry": 0%....50%....100% - 10 passes
+==PROF== Profiling "projection_entry": 0%....50%....100% - 10 passes
+==PROF== Profiling "projection_entry": 0%....50%....100% - 10 passes
+==PROF== Trying to shutdown target application
+==PROF== Report: /home/ericbuehler/qwen4exp_work/moe_optimization_20260930/cutile_gguf/grouped_metadata/ncu_native56_8_32_64/cutile.ncu-rep

@@ -1,0 +1,397 @@
+{
+  "scope": "Static JIT cubin resources for routed CPU-oracle unit fixtures; no performance claim",
+  "results": [
+    {
+      "format": "Q4K",
+      "tile": [
+        8,
+        32,
+        64
+      ],
+      "top_k": 2,
+      "started": 1790783759.7087255,
+      "seconds": 0.6984391212463379,
+      "args": [
+        "--gpu-name",
+        "sm_121",
+        "--opt-level",
+        "3",
+        "-o",
+        "/tmp/956cf8ce-0876-45bc-b995-d9dfd1ac43ce.cubin",
+        "/tmp/956cf8ce-0876-45bc-b995-d9dfd1ac43ce.bc"
+      ],
+      "cubin": "/home/ericbuehler/qwen4exp_work/moe_optimization_20260930/cutile_gguf/grouped_metadata/jit/5cb2b3da5db74a82f9307ed983952a2983dcd5ef484449846c6f606aca543929.cubin",
+      "sha256": "5cb2b3da5db74a82f9307ed983952a2983dcd5ef484449846c6f606aca543929",
+      "resources": {
+        "REG": 150,
+        "STACK": 0,
+        "SHARED": 5132,
+        "LOCAL": 0
+      }
+    },
+    {
+      "format": "Q4K",
+      "tile": [
+        8,
+        64,
+        128
+      ],
+      "top_k": 2,
+      "started": 1790783761.3556511,
+      "seconds": 1.1426429748535156,
+      "args": [
+        "--gpu-name",
+        "sm_121",
+        "--opt-level",
+        "3",
+        "-o",
+        "/tmp/d7b048c0-f552-4e0e-8a6a-816a2782ccd0.cubin",
+        "/tmp/d7b048c0-f552-4e0e-8a6a-816a2782ccd0.bc"
+      ],
+      "cubin": "/home/ericbuehler/qwen4exp_work/moe_optimization_20260930/cutile_gguf/grouped_metadata/jit/8b9ac71b2dea555ab4dfacaaf93266e8d4d2edcb2806fd4a0a646f51804e0c46.cubin",
+      "sha256": "8b9ac71b2dea555ab4dfacaaf93266e8d4d2edcb2806fd4a0a646f51804e0c46",
+      "resources": {
+        "REG": 255,
+        "STACK": 1144,
+        "SHARED": 40036,
+        "LOCAL": 0
+      }
+    },
+    {
+      "format": "Q4K",
+      "tile": [
+        16,
+        64,
+        128
+      ],
+      "top_k": 2,
+      "started": 1790783763.5059426,
+      "seconds": 1.1826653480529785,
+      "args": [
+        "--gpu-name",
+        "sm_121",
+        "--opt-level",
+        "3",
+        "-o",
+        "/tmp/585b5aba-12c9-4960-aa73-be19370e73e4.cubin",
+        "/tmp/585b5aba-12c9-4960-aa73-be19370e73e4.bc"
+      ],
+      "cubin": "/home/ericbuehler/qwen4exp_work/moe_optimization_20260930/cutile_gguf/grouped_metadata/jit/aabaa6b2c9590dc49e86d17c736db3b685b15cdeb89b47428013b9eb540e199e.cubin",
+      "sha256": "aabaa6b2c9590dc49e86d17c736db3b685b15cdeb89b47428013b9eb540e199e",
+      "resources": {
+        "REG": 168,
+        "STACK": 0,
+        "SHARED": 48236,
+        "LOCAL": 0
+      }
+    },
+    {
+      "format": "Q4K",
+      "tile": [
+        32,
+        64,
+        128
+      ],
+      "top_k": 2,
+      "started": 1790783765.7520053,
+      "seconds": 1.319396734237671,
+      "args": [
+        "--gpu-name",
+        "sm_121",
+        "--opt-level",
+        "3",
+        "-o",
+        "/tmp/b1369340-a284-4bdf-a17f-bcf75ceee715.cubin",
+        "/tmp/b1369340-a284-4bdf-a17f-bcf75ceee715.bc"
+      ],
+      "cubin": "/home/ericbuehler/qwen4exp_work/moe_optimization_20260930/cutile_gguf/grouped_metadata/jit/c24b93a0cc94a1d8320b947bc9fed910d34ebab8c768b4e9d9abcda8221c3bf5.cubin",
+      "sha256": "c24b93a0cc94a1d8320b947bc9fed910d34ebab8c768b4e9d9abcda8221c3bf5",
+      "resources": {
+        "REG": 168,
+        "STACK": 0,
+        "SHARED": 54380,
+        "LOCAL": 0
+      }
+    },
+    {
+      "format": "Q4K",
+      "tile": [
+        16,
+        64,
+        32
+      ],
+      "top_k": 2,
+      "started": 1790783768.1850674,
+      "seconds": 0.36280226707458496,
+      "args": [
+        "--gpu-name",
+        "sm_121",
+        "--opt-level",
+        "3",
+        "-o",
+        "/tmp/6c1e3627-52a2-4feb-b877-0c7bb21c14c2.cubin",
+        "/tmp/6c1e3627-52a2-4feb-b877-0c7bb21c14c2.bc"
+      ],
+      "cubin": "/home/ericbuehler/qwen4exp_work/moe_optimization_20260930/cutile_gguf/grouped_metadata/jit/bb8fd5d7acaf1a99a805db3b503ff8ce4f89df4135d81c828fff92d2f4d8ce1a.cubin",
+      "sha256": "bb8fd5d7acaf1a99a805db3b503ff8ce4f89df4135d81c828fff92d2f4d8ce1a",
+      "resources": {
+        "REG": 94,
+        "STACK": 0,
+        "SHARED": 10252,
+        "LOCAL": 0
+      }
+    },
+    {
+      "format": "Q4K",
+      "tile": [
+        16,
+        64,
+        64
+      ],
+      "top_k": 2,
+      "started": 1790783769.7280722,
+      "seconds": 0.734990119934082,
+      "args": [
+        "--gpu-name",
+        "sm_121",
+        "--opt-level",
+        "3",
+        "-o",
+        "/tmp/133c78b6-2ea6-4422-8384-1410079a9d6a.cubin",
+        "/tmp/133c78b6-2ea6-4422-8384-1410079a9d6a.bc"
+      ],
+      "cubin": "/home/ericbuehler/qwen4exp_work/moe_optimization_20260930/cutile_gguf/grouped_metadata/jit/7d84f0dba653ee1c7a190ecc86e335aa0ddd2e5086380831b65a298ebb650426.cubin",
+      "sha256": "7d84f0dba653ee1c7a190ecc86e335aa0ddd2e5086380831b65a298ebb650426",
+      "resources": {
+        "REG": 176,
+        "STACK": 0,
+        "SHARED": 48228,
+        "LOCAL": 0
+      }
+    },
+    {
+      "format": "Q4K",
+      "tile": [
+        16,
+        64,
+        256
+      ],
+      "top_k": 2,
+      "started": 1790783771.6931658,
+      "seconds": 1.3764545917510986,
+      "args": [
+        "--gpu-name",
+        "sm_121",
+        "--opt-level",
+        "3",
+        "-o",
+        "/tmp/4748af62-8250-420a-a405-7b18357970dd.cubin",
+        "/tmp/4748af62-8250-420a-a405-7b18357970dd.bc"
+      ],
+      "cubin": "/home/ericbuehler/qwen4exp_work/moe_optimization_20260930/cutile_gguf/grouped_metadata/jit/8090243447b2f7c6ba8ecd738685ff5dfbb3635813007fa1e13a6608ef2bb374.cubin",
+      "sha256": "8090243447b2f7c6ba8ecd738685ff5dfbb3635813007fa1e13a6608ef2bb374",
+      "resources": {
+        "REG": 255,
+        "STACK": 368,
+        "SHARED": 48236,
+        "LOCAL": 0
+      }
+    },
+    {
+      "format": "Q4_1",
+      "tile": [
+        8,
+        32,
+        64
+      ],
+      "top_k": 2,
+      "started": 1790783774.2473674,
+      "seconds": 0.5050320625305176,
+      "args": [
+        "--gpu-name",
+        "sm_121",
+        "--opt-level",
+        "3",
+        "-o",
+        "/tmp/b6372f1b-50b1-42c2-b475-9312b2df1bcd.cubin",
+        "/tmp/b6372f1b-50b1-42c2-b475-9312b2df1bcd.bc"
+      ],
+      "cubin": "/home/ericbuehler/qwen4exp_work/moe_optimization_20260930/cutile_gguf/grouped_metadata/jit/28747f0205fb8bd55ce392120ca8db6f018110e1411705f1e00b22def9a10230.cubin",
+      "sha256": "28747f0205fb8bd55ce392120ca8db6f018110e1411705f1e00b22def9a10230",
+      "resources": {
+        "REG": 153,
+        "STACK": 0,
+        "SHARED": 5132,
+        "LOCAL": 0
+      }
+    },
+    {
+      "format": "Q4_1",
+      "tile": [
+        8,
+        64,
+        128
+      ],
+      "top_k": 2,
+      "started": 1790783775.9358442,
+      "seconds": 0.9836957454681396,
+      "args": [
+        "--gpu-name",
+        "sm_121",
+        "--opt-level",
+        "3",
+        "-o",
+        "/tmp/7345cf6c-de46-4790-8ecc-d55732172dd0.cubin",
+        "/tmp/7345cf6c-de46-4790-8ecc-d55732172dd0.bc"
+      ],
+      "cubin": "/home/ericbuehler/qwen4exp_work/moe_optimization_20260930/cutile_gguf/grouped_metadata/jit/ed2f03d9f92847397c0bbfa8a72b161838434d87444c3d176f65e3879d3f2e36.cubin",
+      "sha256": "ed2f03d9f92847397c0bbfa8a72b161838434d87444c3d176f65e3879d3f2e36",
+      "resources": {
+        "REG": 255,
+        "STACK": 1152,
+        "SHARED": 40116,
+        "LOCAL": 0
+      }
+    },
+    {
+      "format": "Q4_1",
+      "tile": [
+        16,
+        64,
+        128
+      ],
+      "top_k": 2,
+      "started": 1790783778.1143858,
+      "seconds": 0.9982123374938965,
+      "args": [
+        "--gpu-name",
+        "sm_121",
+        "--opt-level",
+        "3",
+        "-o",
+        "/tmp/0b3ded94-8a74-447d-8caa-f76f8a4c9ba4.cubin",
+        "/tmp/0b3ded94-8a74-447d-8caa-f76f8a4c9ba4.bc"
+      ],
+      "cubin": "/home/ericbuehler/qwen4exp_work/moe_optimization_20260930/cutile_gguf/grouped_metadata/jit/90c8ae76086bf5d3c95a1f484160b1ad5dfaef399b7ecd1b4c36b8283618a575.cubin",
+      "sha256": "90c8ae76086bf5d3c95a1f484160b1ad5dfaef399b7ecd1b4c36b8283618a575",
+      "resources": {
+        "REG": 162,
+        "STACK": 0,
+        "SHARED": 48156,
+        "LOCAL": 0
+      }
+    },
+    {
+      "format": "Q4_1",
+      "tile": [
+        32,
+        64,
+        128
+      ],
+      "top_k": 2,
+      "started": 1790783780.3243546,
+      "seconds": 1.0830891132354736,
+      "args": [
+        "--gpu-name",
+        "sm_121",
+        "--opt-level",
+        "3",
+        "-o",
+        "/tmp/1be99006-05ef-4c13-9114-1574383ec78c.cubin",
+        "/tmp/1be99006-05ef-4c13-9114-1574383ec78c.bc"
+      ],
+      "cubin": "/home/ericbuehler/qwen4exp_work/moe_optimization_20260930/cutile_gguf/grouped_metadata/jit/96ec9a1b938aaeaf5dababb54aa969fb3d772432010d1952cbfa5ca0e0354e3c.cubin",
+      "sha256": "96ec9a1b938aaeaf5dababb54aa969fb3d772432010d1952cbfa5ca0e0354e3c",
+      "resources": {
+        "REG": 162,
+        "STACK": 0,
+        "SHARED": 54300,
+        "LOCAL": 0
+      }
+    },
+    {
+      "format": "Q4_1",
+      "tile": [
+        16,
+        64,
+        32
+      ],
+      "top_k": 2,
+      "started": 1790783782.627261,
+      "seconds": 0.3457818031311035,
+      "args": [
+        "--gpu-name",
+        "sm_121",
+        "--opt-level",
+        "3",
+        "-o",
+        "/tmp/c7953855-52a2-4d9e-bdcb-0dda752625bd.cubin",
+        "/tmp/c7953855-52a2-4d9e-bdcb-0dda752625bd.bc"
+      ],
+      "cubin": "/home/ericbuehler/qwen4exp_work/moe_optimization_20260930/cutile_gguf/grouped_metadata/jit/ba5dd2e5a40b1eb79109e00ee465b3ce7afff5b27298aa4e54570dac5acc9096.cubin",
+      "sha256": "ba5dd2e5a40b1eb79109e00ee465b3ce7afff5b27298aa4e54570dac5acc9096",
+      "resources": {
+        "REG": 100,
+        "STACK": 0,
+        "SHARED": 10252,
+        "LOCAL": 0
+      }
+    },
+    {
+      "format": "Q4_1",
+      "tile": [
+        16,
+        64,
+        64
+      ],
+      "top_k": 2,
+      "started": 1790783784.1992831,
+      "seconds": 0.6202235221862793,
+      "args": [
+        "--gpu-name",
+        "sm_121",
+        "--opt-level",
+        "3",
+        "-o",
+        "/tmp/4f78d236-c115-481e-8fe9-99dc419e8c30.cubin",
+        "/tmp/4f78d236-c115-481e-8fe9-99dc419e8c30.bc"
+      ],
+      "cubin": "/home/ericbuehler/qwen4exp_work/moe_optimization_20260930/cutile_gguf/grouped_metadata/jit/c498d372830a5683328db843cc1fc32fd5cbcec5a00f5c7cb0904ce9d3025145.cubin",
+      "sha256": "c498d372830a5683328db843cc1fc32fd5cbcec5a00f5c7cb0904ce9d3025145",
+      "resources": {
+        "REG": 210,
+        "STACK": 0,
+        "SHARED": 48308,
+        "LOCAL": 0
+      }
+    },
+    {
+      "format": "Q4_1",
+      "tile": [
+        16,
+        64,
+        256
+      ],
+      "top_k": 2,
+      "started": 1790783786.0309763,
+      "seconds": 1.1601314544677734,
+      "args": [
+        "--gpu-name",
+        "sm_121",
+        "--opt-level",
+        "3",
+        "-o",
+        "/tmp/521b298f-4dbe-4df9-ba5f-24ec25de4e51.cubin",
+        "/tmp/521b298f-4dbe-4df9-ba5f-24ec25de4e51.bc"
+      ],
+      "cubin": "/home/ericbuehler/qwen4exp_work/moe_optimization_20260930/cutile_gguf/grouped_metadata/jit/f68d7f8d4012f9c542eee41549ca10ade621bed11e5932fb31883588d9f06d4a.cubin",
+      "sha256": "f68d7f8d4012f9c542eee41549ca10ade621bed11e5932fb31883588d9f06d4a",
+      "resources": {
+        "REG": 255,
+        "STACK": 184,
+        "SHARED": 48156,
+        "LOCAL": 0
+      }
+    }
+  ]
+}
