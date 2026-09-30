@@ -397,14 +397,6 @@ pub mod text_models_inputs_processor {
                 .zip(query_lens.iter())
                 .map(|(cached, query)| cached + query)
                 .collect::<Vec<_>>();
-            let context_lens_cpu = Tensor::from_vec(
-                context_lens
-                    .iter()
-                    .map(|len| *len as u32)
-                    .collect::<Vec<_>>(),
-                (batch_size,),
-                &Device::Cpu,
-            )?;
             let mut rope_positions = Vec::with_capacity(batch_size * max_query_len);
             for (&cached, &query_len) in num_cached_tokens.iter().zip(query_lens.iter()) {
                 for seq_idx in 0..max_query_len {
@@ -439,6 +431,15 @@ pub mod text_models_inputs_processor {
                 .full_paged_context_lens_cpu
                 .as_deref()
                 .unwrap_or(paged_decode_context_lens);
+            let context_lens_tensor = |lengths: &[usize]| {
+                Tensor::from_vec(
+                    lengths.iter().map(|&len| len as u32).collect::<Vec<_>>(),
+                    batch_size,
+                    &Device::Cpu,
+                )
+            };
+            let context_lens_cpu = context_lens_tensor(paged_decode_context_lens)?;
+            let full_context_lens_cpu = context_lens_tensor(full_decode_context_lens)?;
             let (
                 decode_request_indices_cpu,
                 decode_kv_tile_indices_cpu,
@@ -474,6 +475,7 @@ pub mod text_models_inputs_processor {
 
             let mut slot_mappings = HashMap::new();
             let mut context_lens_map = HashMap::new();
+            let mut full_context_lens_map = HashMap::new();
             let mut rope_positions = HashMap::new();
             let mut cu_q_map = HashMap::new();
             let mut cu_kv_map = HashMap::new();
@@ -490,6 +492,10 @@ pub mod text_models_inputs_processor {
             for device in devices {
                 slot_mappings.insert(device.location(), slot_mappings_cpu.to_device(device)?);
                 context_lens_map.insert(device.location(), context_lens_cpu.to_device(device)?);
+                if self.full_block_tables.is_some() {
+                    full_context_lens_map
+                        .insert(device.location(), full_context_lens_cpu.to_device(device)?);
+                }
                 rope_positions.insert(device.location(), rope_positions_cpu.to_device(device)?);
                 cu_q_map.insert(device.location(), cu_q_cpu.to_device(device)?);
                 cu_kv_map.insert(device.location(), cu_kv_cpu.to_device(device)?);
@@ -535,11 +541,11 @@ pub mod text_models_inputs_processor {
             let full_context_lens = self
                 .full_block_tables
                 .as_ref()
-                .map(|_| context_lens_map.clone());
+                .map(|_| full_context_lens_map);
             let full_max_context_len = self
                 .full_block_tables
                 .as_ref()
-                .and_then(|_| context_lens.iter().copied().max());
+                .and_then(|_| full_decode_context_lens.iter().copied().max());
             let flashinfer =
                 self.flashinfer.as_ref().map(|flashinfer| {
                     let decode_tile_plan = flashinfer_tile_plan(
@@ -588,7 +594,7 @@ pub mod text_models_inputs_processor {
                 paged_context_lens_cpu: Some(paged_decode_context_lens.to_vec()),
                 full_paged_context_lens_cpu: Some(full_decode_context_lens.to_vec()),
                 slot_mappings,
-                max_context_len: context_lens.iter().copied().max(),
+                max_context_len: paged_decode_context_lens.iter().copied().max(),
                 full_block_tables: self.full_block_tables.clone(),
                 full_context_lens,
                 full_max_context_len,
@@ -2815,6 +2821,44 @@ pub mod text_models_inputs_processor {
     #[cfg(test)]
     mod tests {
         use super::*;
+
+        #[test]
+        fn reduced_prefill_keeps_physical_cache_views_separate_from_positions() -> Result<()> {
+            let device = Device::Cpu;
+            let location = device.location();
+            let mut metadata = PagedAttentionInputMetadata::dummy(&device)?;
+            metadata.block_size = Some(32);
+            metadata.block_tables = Some(HashMap::from([(
+                location,
+                Tensor::zeros((2, 17), DType::U32, &device)?,
+            )]));
+            metadata.full_block_tables = Some(HashMap::from([(
+                location,
+                Tensor::zeros((2, 29), DType::U32, &device)?,
+            )]));
+            metadata.paged_context_lens_cpu = Some(vec![515, 541]);
+            metadata.full_paged_context_lens_cpu = Some(vec![899, 701]);
+            let reduced = metadata.for_reduced_prefill_queries(&[device], &[898, 700], &[1, 1])?;
+            assert_eq!(
+                reduced.context_lens.as_ref().unwrap()[&location].to_vec1::<u32>()?,
+                [515, 541],
+            );
+            assert_eq!(
+                reduced.full_context_lens.as_ref().unwrap()[&location].to_vec1::<u32>()?,
+                [899, 701],
+            );
+            assert_eq!(reduced.max_context_len, Some(541));
+            assert_eq!(reduced.full_max_context_len, Some(899));
+            assert_eq!(
+                reduced.rope_positions.as_ref().unwrap()[&location].to_vec1::<u32>()?,
+                [898, 700],
+            );
+            assert_eq!(
+                reduced.cu_seqlens_kv.as_ref().unwrap()[&location].to_vec1::<u32>()?,
+                [0, 899, 1600],
+            );
+            Ok(())
+        }
 
         fn assert_zero_padded_rows(rows: &[Vec<u32>], prefixes: &[&[u32]]) {
             assert_eq!(rows.len(), prefixes.len());

@@ -38,6 +38,7 @@ use crate::{
 static UNCALIBRATED_FP8_ATTENTION_WARNING: Once = Once::new();
 const METAL_DECODE_PATH_ENV: &str = "MISTRALRS_METAL_DECODE_PATH";
 const METAL_KV_PACK_ENV: &str = "MISTRALRS_METAL_KV_PACK";
+const METAL_DONOR_DECODE_HEAD_SIZES: [usize; 2] = [256, 512];
 
 struct MetalDecodeDiagnostics {
     path: MetalDecodePath,
@@ -2302,6 +2303,33 @@ impl PagedAttention {
             {
                 candle_core::bail!("packed varlen segment metadata is not safe for direct prefill");
             }
+        }
+
+        // A donor-prefill tail with one query per sequence already has a complete decode view.
+        if !write_cache
+            && is_metal_hnd_cache(key_cache.as_ref().unwrap(), value_cache.as_ref().unwrap())
+            && METAL_DONOR_DECODE_HEAD_SIZES.contains(&ctx.dims.head_size)
+            && query.stride()[3] == 1
+            && query.stride()[1] == ctx.dims.head_size
+            && (key_cache.as_ref().unwrap().dtype() == query.dtype()
+                || key_cache.as_ref().unwrap().dtype() == DType::F8E4M3)
+            && ctx.dims.seq_len == 1
+            && attention_mask.is_none()
+            && !input_metadata.has_noncausal_mm_context
+            && !ctx.has_noncausal_mm_context()
+            && flash_params.is_none_or(|params| params.causal)
+            && input_metadata.query_lens.as_ref().is_some_and(|lengths| {
+                lengths.len() == ctx.dims.batch_size && lengths.iter().all(|&len| len == 1)
+            })
+        {
+            return self
+                .run_decode(&ctx, tensors, &mut key_cache, &mut value_cache, false)?
+                .reshape((
+                    ctx.dims.batch_size,
+                    1,
+                    ctx.dims.attention_heads,
+                    ctx.dims.head_size,
+                ));
         }
 
         if let Some(out) = self.try_prefix_gather_prefill(

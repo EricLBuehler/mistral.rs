@@ -266,12 +266,21 @@ impl candle_core::CustomOp1 for PagedAttention {
             };
             let num_partitions = variant.num_partitions(self.max_context_len);
             let partials_len = num_seqs * num_heads * num_partitions;
+            let partial_dtype = if matches!(variant, kernels::PagedDecodeVariant::Split) {
+                DType::F32
+            } else {
+                q.dtype()
+            };
             let scratch = (num_partitions > 1)
                 .then(|| -> Result<_> {
                     Ok((
                         dev.new_buffer(partials_len, DType::F32, "paged-decode-expsums")?,
                         dev.new_buffer(partials_len, DType::F32, "paged-decode-maxlogits")?,
-                        dev.new_buffer(partials_len * head_size, q.dtype(), "paged-decode-tmpout")?,
+                        dev.new_buffer(
+                            partials_len * head_size,
+                            partial_dtype,
+                            "paged-decode-tmpout",
+                        )?,
                     ))
                 })
                 .transpose()?;

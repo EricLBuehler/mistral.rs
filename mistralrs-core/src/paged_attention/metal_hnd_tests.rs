@@ -6,6 +6,13 @@ use mistralrs_paged_attn::{
     copy_blocks, gather_kv_cache, paged_attention_with_window, reshape_and_cache, swap_blocks,
 };
 
+use crate::{
+    attention::{AttentionMask, SdpaParams},
+    pipeline::text_models_inputs_processor::PagedAttentionInputMetadata,
+};
+
+use super::{Fp8AttentionScales, PagedAttention};
+
 const CACHE_VECTOR_BYTES: usize = 16;
 const KEY_SCALE: f32 = 0.5;
 const VALUE_SCALE: f32 = 0.25;
@@ -25,6 +32,9 @@ const BENCH_BLOCK_SIZE: usize = 32;
 const BENCH_ROUNDS: usize = 3;
 const BENCH_WARMUP_ITERS: usize = 3;
 const BENCH_TIMED_ITERS: usize = 10;
+const DONOR_QUERY_LENGTHS: [&[usize]; 3] =
+    [&[224], &[543], &[31, 64, 224, 511, 512, 513, 529, 543]];
+const DONOR_CROPPED_BLOCKS: usize = 7;
 
 #[derive(Clone, Copy, Debug)]
 struct Case<'a> {
@@ -62,6 +72,33 @@ const CASES: &[Case<'static>] = &[
         query_heads: 8,
         block_size: 32,
         lengths: &[256],
+        window: None,
+        features: false,
+    },
+    Case {
+        head_dim: 512,
+        kv_heads: 2,
+        query_heads: 8,
+        block_size: 32,
+        lengths: &[1025],
+        window: None,
+        features: false,
+    },
+    Case {
+        head_dim: 512,
+        kv_heads: 2,
+        query_heads: 8,
+        block_size: 32,
+        lengths: &[2049],
+        window: None,
+        features: false,
+    },
+    Case {
+        head_dim: 512,
+        kv_heads: 2,
+        query_heads: 8,
+        block_size: 32,
+        lengths: &[4096],
         window: None,
         features: false,
     },
@@ -585,6 +622,108 @@ fn run_case(device: &Device, case: Case<'_>, dtype: DType, fp8: bool) -> Result<
 }
 
 #[test]
+fn metal_hnd_reduced_donor_prefill_uses_pages_without_gathering() -> Result<()> {
+    let device = Device::new_metal(0)?;
+    let location = device.location();
+    for head_dim in [256, 512] {
+        for lengths in DONOR_QUERY_LENGTHS {
+            for window in [None, Some(512)] {
+                let case = Case {
+                    head_dim,
+                    kv_heads: 2,
+                    query_heads: 8,
+                    block_size: BENCH_BLOCK_SIZE,
+                    lengths,
+                    window,
+                    features: false,
+                };
+                for (dtype, fp8) in [
+                    (DType::BF16, false),
+                    (DType::F16, false),
+                    (DType::BF16, true),
+                ] {
+                    let inputs = Inputs::new(&device, case, dtype, fp8)?;
+                    let cache_dtype = if fp8 { DType::F8E4M3 } else { dtype };
+                    let (key, value) = inputs.cache(&device, case, cache_dtype, true)?;
+                    let batch = lengths.len();
+                    let mut metadata = PagedAttentionInputMetadata::dummy(&device)?;
+                    metadata.block_size = Some(case.block_size);
+                    metadata.block_tables =
+                        Some(HashMap::from([(location, inputs.block_tables.clone())]));
+                    metadata.paged_context_lens_cpu = Some(lengths.to_vec());
+                    metadata.prefix_gather_workspace_limit = Some(0);
+                    let cached = lengths
+                        .iter()
+                        .map(|&len| {
+                            let cropped = if window.is_some_and(|window| len >= window) {
+                                DONOR_CROPPED_BLOCKS * case.block_size
+                            } else {
+                                0
+                            };
+                            len + cropped - 1
+                        })
+                        .collect::<Vec<_>>();
+                    let metadata = metadata
+                        .for_reduced_prefill_queries(&[device.clone()], &cached, &vec![1; batch])
+                        .map_err(|err| candle_core::Error::Msg(err.to_string()))?;
+                    let attention = PagedAttention::new_with_fp8_attention_scales(
+                        head_dim,
+                        &device,
+                        None,
+                        fp8.then_some(Fp8AttentionScales {
+                            q: 1.,
+                            k: KEY_SCALE,
+                            v: VALUE_SCALE,
+                        }),
+                    )?;
+                    let params = SdpaParams {
+                        n_kv_groups: case.query_heads / case.kv_heads,
+                        softmax_scale: 1. / (head_dim as f32).sqrt(),
+                        softcap: None,
+                        sliding_window: window,
+                        sinks: None,
+                    };
+                    let output = attention.forward_donor_cache(
+                        &inputs.query.unsqueeze(2)?,
+                        &key,
+                        &value,
+                        &AttentionMask::None,
+                        &metadata,
+                        &params,
+                        None,
+                    )?;
+                    assert_eq!(output.dims(), &[batch, 1, case.query_heads, head_dim]);
+                    assert_close(
+                        &values(&output)?,
+                        &inputs.expected(case),
+                        if dtype == DType::F16 {
+                            F16_TOLERANCE
+                        } else {
+                            BF16_TOLERANCE
+                        },
+                        &format!("reduced donor {case:?} {dtype:?} fp8={fp8}"),
+                    );
+                    let mut noncausal = metadata.clone();
+                    noncausal.has_noncausal_mm_context = true;
+                    assert!(attention
+                        .forward_donor_cache(
+                            &inputs.query.unsqueeze(2)?,
+                            &key,
+                            &value,
+                            &AttentionMask::None,
+                            &noncausal,
+                            &params,
+                            None,
+                        )
+                        .is_err());
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+#[test]
 fn metal_hnd_decode_matches_cpu_with_ragged_pages_and_features() -> Result<()> {
     let device = Device::new_metal(0)?;
     for dtype in [DType::BF16, DType::F16, DType::F32] {
@@ -614,7 +753,7 @@ fn metal_hnd_fp8_cache_matches_cpu() -> Result<()> {
     let device = Device::new_metal(0)?;
     for dtype in [DType::BF16, DType::F16, DType::F32] {
         for &case in &[
-            CASES[0], CASES[2], CASES[4], CASES[8], CASES[10], CASES[12], CASES[13],
+            CASES[0], CASES[2], CASES[4], CASES[7], CASES[11], CASES[13], CASES[15], CASES[16],
         ] {
             run_case(&device, case, dtype, true)?;
         }

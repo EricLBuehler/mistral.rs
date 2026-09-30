@@ -931,6 +931,10 @@ pub const PAGED_DECODE_LARGE_HEAD_SIZE: usize = 512;
 // Larger grouped heads need this cap to fit 32 KiB of threadgroup memory.
 pub const PAGED_DECODE_LARGE_HEAD_MAX_GQA: usize = 4;
 const PAGED_DECODE_HND_SHORT_CONTEXT: usize = 256;
+const PAGED_DECODE_SPLIT_PARTITIONS: usize = 32;
+const PAGED_DECODE_SPLIT_THREADS: usize = 256;
+const PAGED_DECODE_SPLIT_MIN_CONTEXT: usize = 768;
+const PAGED_DECODE_SPLIT_MAX_CONTEXT: usize = 4096;
 // Head-parallel decode trades KV reuse for fewer launches; keep it below the measured crossover.
 const PAGED_DECODE_SHORT_CONTEXTS: [(usize, usize, usize); 2] = [(128, 2, 288), (256, 3, 320)];
 
@@ -970,14 +974,14 @@ const PAGED_DECODE_HND_SHORT_PROFILES: &[ShortDecodeProfile] = &[
         query_heads: 8,
         kv_heads: 2,
         max_batch: 8,
-        max_context: 256,
+        max_context: 512,
     },
     ShortDecodeProfile {
         head_size: 512,
         query_heads: 8,
         kv_heads: 2,
         max_batch: 8,
-        max_context: 256,
+        max_context: 512,
     },
 ];
 // Reduce kernels are instantiated for exactly these partition sizes.
@@ -1022,6 +1026,7 @@ pub struct PagedDecodePartials<'a> {
 #[derive(Clone, Copy)]
 pub enum PagedDecodeVariant {
     Short,
+    Split,
     Grouped { partition_size: usize },
 }
 
@@ -1029,6 +1034,7 @@ impl PagedDecodeVariant {
     pub fn num_partitions(self, max_context_len: usize) -> usize {
         match self {
             Self::Short => 1,
+            Self::Split => PAGED_DECODE_SPLIT_PARTITIONS,
             Self::Grouped { partition_size } => max_context_len.div_ceil(partition_size),
         }
     }
@@ -1060,6 +1066,16 @@ pub fn paged_decode_hnd_variant(
     sliding_window: Option<usize>,
     head_size: usize,
 ) -> PagedDecodeVariant {
+    if num_seqs == 1
+        && num_heads == 8
+        && num_kv_heads == 2
+        && head_size == PAGED_DECODE_LARGE_HEAD_SIZE
+        && sliding_window.is_none()
+        && (PAGED_DECODE_SPLIT_MIN_CONTEXT..=PAGED_DECODE_SPLIT_MAX_CONTEXT)
+            .contains(&max_context_len)
+    {
+        return PagedDecodeVariant::Split;
+    }
     let visible_context = max_context_len.min(sliding_window.unwrap_or(max_context_len));
     let profiled_short = PAGED_DECODE_HND_SHORT_PROFILES.iter().any(|profile| {
         head_size == profile.head_size
@@ -1118,6 +1134,16 @@ pub fn call_paged_decode_gqa(
             ),
             args.num_heads,
             PAGED_DECODE_SHORT_THREADS,
+            gqa,
+        ),
+        PagedDecodeVariant::Split => (
+            format!(
+                "paged_decode_hnd_split_{}_hs{}",
+                args.ty.to_repr(),
+                args.head_size
+            ),
+            args.num_heads,
+            PAGED_DECODE_SPLIT_THREADS,
             gqa,
         ),
         PagedDecodeVariant::Grouped { partition_size } => (
@@ -1193,6 +1219,37 @@ pub fn call_paged_decode_gqa(
     }
 
     if let Some(partials) = &args.partials {
+        if matches!(args.variant, PagedDecodeVariant::Split) {
+            let pipeline = kernels.load_pipeline_with_constants(
+                device,
+                format!(
+                    "paged_decode_hnd_split_reduce_{}_hs{}",
+                    args.ty.to_repr(),
+                    args.head_size
+                ),
+                None,
+            )?;
+            let encoder = ep.encoder();
+            let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
+            encoder.set_compute_pipeline_state(&pipeline);
+            encoder.set_output_buffer(0, Some(args.output), 0);
+            encoder.set_input_buffer(1, Some(partials.exp_sums), 0);
+            encoder.set_input_buffer(2, Some(partials.max_logits), 0);
+            encoder.set_input_buffer(3, Some(partials.tmp_out), 0);
+            encoder.dispatch_thread_groups(
+                MTLSize {
+                    width: args.num_heads as usize,
+                    height: args.num_seqs as usize,
+                    depth: 1,
+                },
+                MTLSize {
+                    width: PAGED_DECODE_SHORT_THREADS,
+                    height: 1,
+                    depth: 1,
+                },
+            );
+            return Ok(());
+        }
         let PagedDecodeVariant::Grouped { partition_size } = args.variant else {
             unreachable!("the short decode kernel does not use partials")
         };
@@ -1239,8 +1296,15 @@ mod decode_tests {
             };
             for batch in [1, profile.max_batch] {
                 let variant = select(profile.max_context, batch);
-                assert!(matches!(variant, PagedDecodeVariant::Short));
-                assert_eq!(variant.num_partitions(profile.max_context), 1);
+                if profile.head_size == PAGED_DECODE_LARGE_HEAD_SIZE
+                    && batch == 1
+                    && profile.max_context >= PAGED_DECODE_SPLIT_MIN_CONTEXT
+                {
+                    assert!(matches!(variant, PagedDecodeVariant::Split));
+                } else {
+                    assert!(matches!(variant, PagedDecodeVariant::Short));
+                    assert_eq!(variant.num_partitions(profile.max_context), 1);
+                }
             }
             assert!(matches!(
                 select(profile.max_context + 1, profile.max_batch),
@@ -1268,11 +1332,52 @@ mod decode_tests {
             (4, 16, 4, 256, 512),
             (1, 16, 4, 512, 512),
             (1, 8, 8, 128, 512),
-            (8, 8, 2, 256, 512),
-            (8, 8, 2, 512, 512),
+            (8, 8, 2, 256, 513),
+            (8, 8, 2, 512, 513),
         ] {
             assert!(matches!(
                 paged_decode_hnd_variant(context, batch, heads, kv_heads, None, head_size),
+                PagedDecodeVariant::Grouped { .. }
+            ));
+        }
+    }
+
+    #[test]
+    fn hnd_split_is_limited_to_profiled_global_decode() {
+        for context in [
+            PAGED_DECODE_SPLIT_MIN_CONTEXT,
+            1024,
+            2048,
+            PAGED_DECODE_SPLIT_MAX_CONTEXT,
+        ] {
+            let variant = paged_decode_hnd_variant(context, 1, 8, 2, None, 512);
+            assert!(matches!(variant, PagedDecodeVariant::Split));
+            assert_eq!(
+                variant.num_partitions(context),
+                PAGED_DECODE_SPLIT_PARTITIONS
+            );
+        }
+        for (context, batch, heads, kv_heads, head_size, window) in [
+            (PAGED_DECODE_SPLIT_MIN_CONTEXT - 1, 1, 8, 2, 512, None),
+            (PAGED_DECODE_SPLIT_MAX_CONTEXT + 1, 1, 8, 2, 512, None),
+            (1024, 2, 8, 2, 512, None),
+            (1024, 1, 16, 4, 512, None),
+            (1024, 1, 8, 4, 512, None),
+            (1024, 1, 8, 2, 256, None),
+            (1024, 1, 8, 2, 512, Some(1024)),
+        ] {
+            assert!(!matches!(
+                paged_decode_hnd_variant(context, batch, heads, kv_heads, window, head_size),
+                PagedDecodeVariant::Split
+            ));
+        }
+        for head_size in [256, 512] {
+            assert!(matches!(
+                paged_decode_hnd_variant(543, 8, 8, 2, Some(512), head_size),
+                PagedDecodeVariant::Short
+            ));
+            assert!(matches!(
+                paged_decode_hnd_variant(543, 8, 8, 2, Some(513), head_size),
                 PagedDecodeVariant::Grouped { .. }
             ));
         }
