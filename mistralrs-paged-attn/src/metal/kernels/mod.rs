@@ -975,6 +975,14 @@ pub fn paged_decode_variant(
     if num_seqs == 1 && num_heads <= PAGED_DECODE_SHORT_MAX_HEADS && short_context {
         return PagedDecodeVariant::Short;
     }
+    paged_decode_grouped_variant(max_context_len, num_seqs, num_kv_heads)
+}
+
+pub(crate) fn paged_decode_grouped_variant(
+    max_context_len: usize,
+    num_seqs: usize,
+    num_kv_heads: usize,
+) -> PagedDecodeVariant {
     let long_threadgroups =
         max_context_len.div_ceil(PAGED_DECODE_LONG_PARTITION) * num_seqs * num_kv_heads;
     let partition_size = if long_threadgroups < PAGED_DECODE_MIN_THREADGROUPS {

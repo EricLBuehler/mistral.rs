@@ -37,6 +37,13 @@ const SHORT_SHAPES: [(usize, usize, usize); 7] = [
 const QUERY_PADDING_HEADS: usize = 2;
 const BF16_ABS_TOL: f32 = 3e-2;
 const F16_ABS_TOL: f32 = 3e-3;
+const GEMMA_DECODE_SHAPE: (usize, usize, usize) = (8, 2, 256);
+const GEMMA_GLOBAL_DECODE_SHAPE: (usize, usize, usize) = (8, 2, 512);
+const GEMMA_SLIDING_WINDOW: usize = 512;
+const MASKED_DECODE_CASES: [(usize, usize, usize); 2] = [(33, 0, 17), (543, 31, 543)];
+const MASK_CONTROL_CONTEXT: usize = 256;
+const MASK_QK_AMPLITUDE: f32 = 0.1;
+const MASK_EXCLUDED_VALUE_BIAS: f32 = 4.0;
 // (query heads, kv heads, head dim): Qwen3.8 full attention, then a common GQA-4 shape.
 const SHAPES: [(usize, usize, usize); 2] = [(24, 4, 256), (32, 8, 128)];
 const DECODE_CASES: [(usize, usize, usize, [usize; 4]); 7] = [
@@ -444,6 +451,196 @@ fn sdpa_handles_token_major_kv_views() -> Result<()> {
         assert!(diff < 1e-3, "max abs diff {diff}");
     }
     Ok(())
+}
+
+fn decode_mask_errors(
+    device: &Device,
+    dtype: DType,
+    (q_heads, kv_heads, head_dim): (usize, usize, usize),
+    (context, visible_start, visible_end): (usize, usize, usize),
+) -> Result<(f32, f32, f32)> {
+    use crate::attention::{AttentionMask, Sdpa, SdpaParams};
+
+    let cpu = Device::Cpu;
+    let q = Tensor::from_vec(
+        (0..q_heads * head_dim)
+            .map(|i| (i as f32).sin() * MASK_QK_AMPLITUDE)
+            .collect::<Vec<_>>(),
+        (1, q_heads, 1, head_dim),
+        &cpu,
+    )?
+    .to_dtype(dtype)?;
+    let k = Tensor::from_vec(
+        (0..context * kv_heads * head_dim)
+            .map(|i| (i as f32).cos() * MASK_QK_AMPLITUDE)
+            .collect::<Vec<_>>(),
+        (context, kv_heads, head_dim),
+        &cpu,
+    )?
+    .to_dtype(dtype)?;
+    let v = Tensor::from_vec(
+        (0..context * kv_heads * head_dim)
+            .map(|i| {
+                let token = i / (kv_heads * head_dim);
+                let bias = if (visible_start..visible_end).contains(&token) {
+                    0.0
+                } else {
+                    MASK_EXCLUDED_VALUE_BIAS
+                };
+                (i as f32).sin() + bias
+            })
+            .collect::<Vec<_>>(),
+        (context, kv_heads, head_dim),
+        &cpu,
+    )?
+    .to_dtype(dtype)?;
+    let mask = Tensor::from_vec(
+        (0..context)
+            .map(|token| {
+                if (visible_start..visible_end).contains(&token) {
+                    0f32
+                } else {
+                    f32::NEG_INFINITY
+                }
+            })
+            .collect::<Vec<_>>(),
+        (1, 1, context),
+        &cpu,
+    )?;
+    let q_cpu = q
+        .to_dtype(DType::F32)?
+        .reshape((kv_heads, q_heads / kv_heads, head_dim))?;
+    let k_cpu = k.to_dtype(DType::F32)?.transpose(0, 1)?.contiguous()?;
+    let v_cpu = v.to_dtype(DType::F32)?.transpose(0, 1)?.contiguous()?;
+    let logits = q_cpu.matmul(&k_cpu.t()?)?.broadcast_add(&mask)?;
+    let expected = candle_nn::ops::softmax_last_dim(&logits)?
+        .matmul(&v_cpu)?
+        .reshape((1, q_heads, 1, head_dim))?;
+
+    let q = q.to_device(device)?;
+    let k = k.to_device(device)?.transpose(0, 1)?.unsqueeze(0)?;
+    let v = v.to_device(device)?.transpose(0, 1)?.unsqueeze(0)?;
+    let mask = AttentionMask::Custom(mask.unsqueeze(0)?.to_dtype(dtype)?.to_device(device)?);
+    let params = SdpaParams {
+        n_kv_groups: q_heads / kv_heads,
+        softcap: None,
+        softmax_scale: 1.0,
+        sliding_window: (head_dim == GEMMA_DECODE_SHAPE.2).then_some(GEMMA_SLIDING_WINDOW),
+        sinks: None,
+    };
+    let masked = Sdpa.run_attention(&q, &k, &v, &mask, None, &params)?;
+    let unmasked = Sdpa.run_attention(&q, &k, &v, &AttentionMask::None, None, &params)?;
+    let trimmed = Sdpa.run_attention(
+        &q,
+        &k.narrow(2, visible_start, visible_end - visible_start)?,
+        &v.narrow(2, visible_start, visible_end - visible_start)?,
+        &AttentionMask::None,
+        None,
+        &params,
+    )?;
+    let masked_error = max_abs_diff(&masked, &expected)?;
+    let masked_vs_unmasked = max_abs_diff(&masked, &unmasked)?;
+    let trimmed_error = max_abs_diff(&trimmed, &expected)?;
+
+    if visible_start == 0 && visible_end == context {
+        let (key_cache, value_cache) =
+            pack_seq(&k.squeeze(0)?, &v.squeeze(0)?, context.div_ceil(BLOCK_SIZE))?;
+        let (key_cache, value_cache, block_tables) =
+            remap_cache_blocks(&key_cache, &value_cache, 1, context.div_ceil(BLOCK_SIZE))?;
+        let context_lens = Tensor::new(&[context as u32], device)?;
+        let paged = mistralrs_paged_attn::paged_attention(
+            &q.squeeze(2)?,
+            None,
+            None,
+            &key_cache,
+            &value_cache,
+            &block_tables,
+            &context_lens,
+            None,
+            context,
+            params.softmax_scale,
+            1.0,
+            None,
+        )?;
+        let paged_error = max_abs_diff(&paged, &expected)?;
+        let tolerance = if dtype == DType::BF16 {
+            BF16_ABS_TOL
+        } else {
+            F16_ABS_TOL
+        };
+        assert!(
+            paged_error < tolerance,
+            "{dtype:?}: paged control error {paged_error}"
+        );
+    }
+    Ok((masked_error, masked_vs_unmasked, trimmed_error))
+}
+
+fn assert_decode_masks_match_cpu(
+    dtype: DType,
+    tolerance: f32,
+    shape: (usize, usize, usize),
+) -> Result<()> {
+    let device = Device::new_metal(0)?;
+    let mut failures = Vec::new();
+    for case in MASKED_DECODE_CASES {
+        let (masked, masked_vs_unmasked, trimmed) =
+            decode_mask_errors(&device, dtype, shape, case)?;
+        if masked >= tolerance || trimmed >= tolerance {
+            failures.push(format!(
+                "{dtype:?} {shape:?} {case:?}: masked error {masked}, masked/unmasked diff {masked_vs_unmasked}, trimmed error {trimmed}"
+            ));
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+    Ok(())
+}
+
+#[test]
+fn sdpa_decode_masks_match_cpu_bf16() -> Result<()> {
+    assert_decode_masks_match_cpu(DType::BF16, BF16_ABS_TOL, GEMMA_DECODE_SHAPE)
+}
+
+#[test]
+fn sdpa_decode_masks_match_cpu_f16() -> Result<()> {
+    assert_decode_masks_match_cpu(DType::F16, F16_ABS_TOL, GEMMA_DECODE_SHAPE)
+}
+
+#[test]
+fn sdpa_decode_global_masks_match_cpu_bf16() -> Result<()> {
+    assert_decode_masks_match_cpu(DType::BF16, BF16_ABS_TOL, GEMMA_GLOBAL_DECODE_SHAPE)
+}
+
+fn assert_decode_noop_mask_matches_cpu(
+    dtype: DType,
+    tolerance: f32,
+    shape: (usize, usize, usize),
+) -> Result<()> {
+    let device = Device::new_metal(0)?;
+    let (masked, masked_vs_unmasked, trimmed) = decode_mask_errors(
+        &device,
+        dtype,
+        shape,
+        (MASK_CONTROL_CONTEXT, 0, MASK_CONTROL_CONTEXT),
+    )?;
+    assert!(
+        masked < tolerance && trimmed < tolerance && masked_vs_unmasked < tolerance,
+        "{dtype:?} {shape:?}: no-op mask error {masked}, masked/unmasked diff {masked_vs_unmasked}, unmasked/trimmed error {trimmed}"
+    );
+    Ok(())
+}
+
+#[test]
+fn sdpa_decode_noop_sliding_mask_matches_cpu() -> Result<()> {
+    for (dtype, tolerance) in [(DType::BF16, BF16_ABS_TOL), (DType::F16, F16_ABS_TOL)] {
+        assert_decode_noop_mask_matches_cpu(dtype, tolerance, GEMMA_DECODE_SHAPE)?;
+    }
+    Ok(())
+}
+
+#[test]
+fn sdpa_decode_global_noop_mask_matches_cpu_bf16() -> Result<()> {
+    assert_decode_noop_mask_matches_cpu(DType::BF16, BF16_ABS_TOL, GEMMA_GLOBAL_DECODE_SHAPE)
 }
 
 #[test]

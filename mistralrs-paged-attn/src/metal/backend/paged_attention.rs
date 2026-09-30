@@ -1,3 +1,5 @@
+use std::sync::OnceLock;
+
 use candle_core::{
     backend::BackendStorage, CpuStorage, DType, Layout, MetalStorage, Result, Shape, Storage,
     Tensor,
@@ -7,6 +9,27 @@ use crate::metal::{
     backend::validate_kv_cache_scales,
     kernels::{self, PagedAttentionDType},
 };
+
+const METAL_PAGED_KERNEL_ENV: &str = "MISTRALRS_METAL_PAGED_KERNEL";
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum MetalPagedKernel {
+    Auto,
+    Grouped,
+    Legacy,
+}
+
+fn metal_paged_kernel() -> MetalPagedKernel {
+    static KERNEL: OnceLock<MetalPagedKernel> = OnceLock::new();
+    *KERNEL.get_or_init(
+        || match std::env::var(METAL_PAGED_KERNEL_ENV).ok().as_deref() {
+            None | Some("auto") => MetalPagedKernel::Auto,
+            Some("grouped") => MetalPagedKernel::Grouped,
+            Some("legacy") => MetalPagedKernel::Legacy,
+            Some(value) => panic!("invalid {METAL_PAGED_KERNEL_ENV}={value}"),
+        },
+    )
+}
 
 struct PagedAttention {
     softmax_scale: f32,
@@ -224,7 +247,9 @@ impl candle_core::CustomOp1 for PagedAttention {
         let out = dev.new_buffer(elem_count, q.dtype(), "paged-attention-out")?;
 
         let gqa = num_heads / num_kv_heads;
-        let use_gqa_decode = matches!(ty, PagedAttentionDType::BF16 | PagedAttentionDType::F16)
+        let kernel = metal_paged_kernel();
+        let use_gqa_decode = kernel != MetalPagedKernel::Legacy
+            && matches!(ty, PagedAttentionDType::BF16 | PagedAttentionDType::F16)
             && cache_ty == ty
             && k_v_scale.is_none()
             && alibi_storage_and_offset.is_none()
@@ -237,13 +262,17 @@ impl candle_core::CustomOp1 for PagedAttention {
             && (1..=kernels::PAGED_DECODE_MAX_GQA).contains(&gqa);
 
         if use_gqa_decode {
-            let variant = kernels::paged_decode_variant(
-                self.max_context_len,
-                num_seqs,
-                num_heads,
-                num_kv_heads,
-                head_size,
-            );
+            let variant = if kernel == MetalPagedKernel::Grouped {
+                kernels::paged_decode_grouped_variant(self.max_context_len, num_seqs, num_kv_heads)
+            } else {
+                kernels::paged_decode_variant(
+                    self.max_context_len,
+                    num_seqs,
+                    num_heads,
+                    num_kv_heads,
+                    head_size,
+                )
+            };
             let num_partitions = variant.num_partitions(self.max_context_len);
             let partials_len = num_seqs * num_heads * num_partitions;
             let scratch = (num_partitions > 1)
