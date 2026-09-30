@@ -1,0 +1,147 @@
+--- /home/ericbuehler/qwen4exp_work/moe_optimization_20260930/final_serving/run_final.py
++++ /home/ericbuehler/qwen4exp_work/model_scaling_20260930/graph_candidate/run_final.py
+@@ -25,13 +25,14 @@
+ SNAPSHOT = Path(
+     "/home/ericbuehler/.cache/huggingface/hub/models--Qwen--Qwen3.8-Flash-Next/snapshots/de4b8e4d43b917e7706784d8bb445c9af86a3540"
+ )
+-HARNESS_DIR = ROOT / "benchmarks/qwen3.8-flash-next"
++HARNESS_DIR = Path(__file__).resolve().parent / "harnesses"
+ HARNESSES = (
+     "bench_serving.py",
+     "bench_concurrency.py",
+     "summarize_concurrency.py",
+     "text_smoke.py",
+     "mixed_context_smoke.py",
++    "bench_homogeneous.py",
+ )
+ MODEL_FILES = (
+     "config.json",
+@@ -45,6 +46,7 @@
+ HTTP_TIMEOUT_SECONDS = 30
+ STOP_TIMEOUT_SECONDS = 30
+ MONITOR_INTERVAL_SECONDS = 2
++MIN_FREE_DISK_BYTES = 1024**3
+ SOURCE_PATHS = (
+     ":(glob)mistralrs*/**",
+     "Cargo.toml",
+@@ -62,8 +64,13 @@
+     "kv_bf16": r"PagedAttention KV cache type is BF16",
+     "mtp_builtin_six": r"MTP assistant `built-in` with n_predict=6",
+     "scheduler_8": r"max_num_seqs=8 max_num_batched_tokens=4096 max_prefill_chunk_tokens=512 max_decode_steps_before_prefill=8",
+-    "graphs_34": r"Captured 34 CUDA decode graphs through batch bucket 8",
++    "graphs_36": r"Captured 36 CUDA decode graphs through batch bucket 8",
+ }
++
++
++def check_free_disk(path):
++    if shutil.disk_usage(path).free < MIN_FREE_DISK_BYTES:
++        raise RuntimeError("At least 1 GiB free disk is required for the serving run")
+ 
+ 
+ def save(path, value):
+@@ -214,6 +221,26 @@
+                 ],
+             )
+         )
++    for prompt_name in ("python", "math"):
++        for concurrency in (1, 8):
++            name = f"homogeneous_{prompt_name}_c{concurrency}"
++            jobs.append(
++                (
++                    name,
++                    [
++                        sys.executable,
++                        str(scripts / "bench_homogeneous.py"),
++                        "run",
++                        *common,
++                        "--output",
++                        str(output / f"{name}.json"),
++                        "--prompt-name",
++                        prompt_name,
++                        "--concurrency",
++                        str(concurrency),
++                    ],
++                )
++            )
+     return jobs
+ 
+ 
+@@ -352,6 +379,7 @@
+ def run_phase(
+     name, command, output, base_url, server, gpu_monitor, monitor_errors, metadata
+ ):
++    check_free_disk(output)
+     snapshot_phase(output, base_url, server, name, "before")
+     record = {"name": name, "command": command, "started": stamp(), "complete": False}
+     metadata["phases"].append(record)
+@@ -399,7 +427,7 @@
+     parser.add_argument("--expected-binary-sha256", required=True)
+     parser.add_argument("--output", required=True, type=Path)
+     parser.add_argument("--build-metadata", type=Path)
+-    parser.add_argument("--label", default="isq_mtp_masked")
++    parser.add_argument("--label", default="isq_mtp_adaptive_graphs36")
+     parser.add_argument("--port", type=int, default=1234)
+     parser.add_argument("--include-serving", action="store_true")
+     parser.add_argument("--include-smokes", action="store_true")
+@@ -427,6 +455,7 @@
+         )
+         return
+     env, recorded_env = environment()
++    check_free_disk(output.parent)
+     output.mkdir(parents=True, exist_ok=False)
+     metadata = {
+         "complete": False,
+@@ -435,6 +464,7 @@
+         "phases": [],
+         "label": args.label,
+         "profiled": False,
++        "minimum_free_disk_bytes": MIN_FREE_DISK_BYTES,
+         "counter_scope": "Whole command including warmups; global swap counters do not identify model paging or timing impact.",
+         "isolation_scope": "Boundary process snapshots, not a continuous monitor of all processes.",
+     }
+@@ -454,6 +484,7 @@
+     try:
+         isolation_check(output, "preflight")
+         with socket.socket() as sock:
++            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+             sock.bind(("127.0.0.1", args.port))
+         scripts = capture_provenance(args, output, metadata)
+         metadata["command"] = server_command(args.binary, args.port)
+@@ -487,6 +518,7 @@
+                 try:
+                     with (output / "memory.jsonl").open("w") as memory_log:
+                         while not stop_monitor.is_set():
++                            check_free_disk(output)
+                             memory_log.write(
+                                 json.dumps(memory_snapshot(server.pid)) + "\n"
+                             )
+@@ -566,6 +598,29 @@
+                     stderr=subprocess.STDOUT,
+                 )
+             metadata["summary_command"] = summary_command
++            homogeneous_summary_command = [
++                sys.executable,
++                str(scripts / "bench_homogeneous.py"),
++                "summarize",
++                *[
++                    str(output / f"homogeneous_{prompt}_c{concurrency}.json")
++                    for prompt in ("python", "math")
++                    for concurrency in (1, 8)
++                ],
++                "--output",
++                str(output / "homogeneous.summary.json"),
++            ]
++            with (output / "homogeneous.summary.txt").open("w") as summary_log:
++                subprocess.run(
++                    homogeneous_summary_command,
++                    cwd=ROOT,
++                    env=dict(os.environ, PYTHONDONTWRITEBYTECODE="1"),
++                    check=True,
++                    timeout=60,
++                    stdout=summary_log,
++                    stderr=subprocess.STDOUT,
++                )
++            metadata["homogeneous_summary_command"] = homogeneous_summary_command
+             if args.include_serving:
+                 serving = json.loads((output / "serving.json").read_text())
+                 if (

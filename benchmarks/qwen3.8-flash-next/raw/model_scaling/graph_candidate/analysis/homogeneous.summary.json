@@ -1,0 +1,1607 @@
+{
+  "complete": true,
+  "diagnostic": "same-prompt C1 versus C8 finite waves",
+  "identity": {
+    "label": "isq_mtp_adaptive_graphs36",
+    "source_prompts_sha256": "ff2600daa58028527e50710169fcd5915b28e894b7ef4a2b6438b66563812793",
+    "source_files_sha256": {
+      "bench_homogeneous.py": "6cb61ba30e30d01891ca02ee5e1a891900046f36631360f81b97bbd427f394fc",
+      "bench_concurrency.py": "9f664f3ff278f0f16b24e655477486e93b91aec41bf473510e13f449ab1dbbc3",
+      "bench_serving.py": "a16b5815b8744def761174e396de92e41ecd499afae712255721c20a33a79705"
+    },
+    "tokenizer_sha256": "0997f410c57a1f4e53b09e4be8f4a172d90edd9564368fb0847030937229b9f3"
+  },
+  "rows": [
+    {
+      "prompt_name": "python",
+      "prompt_sha256": "7d9074c26475df2a799d748be049ff151de83afb31dde5ef9211371fc3a1b124",
+      "c1": {
+        "aggregate_output_tokens_per_second": {
+          "mean": 56.13804215652178,
+          "sample_stddev": 0.6247520978057688,
+          "samples": [
+            56.6098756750998,
+            55.4295314576055,
+            56.37471933686003
+          ]
+        },
+        "latency_weighted_request_output_tokens_per_second": {
+          "mean": 56.14966627525393,
+          "sample_stddev": 0.6202440372843502,
+          "samples": [
+            56.619330681963135,
+            55.44657754542088,
+            56.38309059837776
+          ]
+        },
+        "mean_active_requests": {
+          "mean": 0.9997923678880207,
+          "sample_stddev": 8.692450797522686e-05,
+          "samples": [
+            0.9998330074419911,
+            0.999692567358167,
+            0.9998515288639042
+          ]
+        },
+        "mean_request_wall_seconds": {
+          "mean": 2.279808196123971,
+          "sample_stddev": 0.025319339460900644,
+          "samples": [
+            2.2607119946187595,
+            2.3085284190019593,
+            2.2701841747511935
+          ]
+        }
+      },
+      "c8": {
+        "aggregate_output_tokens_per_second": {
+          "mean": 254.90066213513822,
+          "sample_stddev": 17.2635769313777,
+          "samples": [
+            258.1777472851401,
+            236.23341957583654,
+            270.290819544438
+          ]
+        },
+        "latency_weighted_request_output_tokens_per_second": {
+          "mean": 32.65398513957187,
+          "sample_stddev": 2.1158282499092094,
+          "samples": [
+            33.14979079568819,
+            30.334280741228522,
+            34.477883881798896
+          ]
+        },
+        "mean_active_requests": {
+          "mean": 7.805143402909792,
+          "sample_stddev": 0.02979132392465404,
+          "samples": [
+            7.788216489098368,
+            7.787671696951177,
+            7.83954202267983
+          ]
+        },
+        "mean_request_wall_seconds": {
+          "mean": 3.931144808946151,
+          "sample_stddev": 0.260684440929502,
+          "samples": [
+            3.861261170210734,
+            4.2196484265417284,
+            3.7125248300859917
+          ]
+        }
+      },
+      "aggregate_c8_over_c1": 4.540604772507646,
+      "per_active_c8_over_c1": 0.5815526129665176,
+      "measured_output_agreement": {
+        "1": {
+          "request_count": 24,
+          "unique_output_text_hashes": 4,
+          "hash_counts": {
+            "22a562b8921b3ddcbf193781a748d1db2b439a927ce7c5884e4865fab7418e20": 3,
+            "8e38cb4c814fecf5d09b7dd3935371b9dd95d45b045a5dfe0e9afe9f2ed405af": 6,
+            "9694090937d4fd05c99b7baa3006359c63f4f58aaa1cd7555569cc6c0a871b2d": 5,
+            "d2d297d75d388c7b1342ab178a624395f20aedf90bd36b947b71eaf0ae07a524": 10
+          },
+          "all_outputs_identical": false,
+          "equal_pair_fraction": 0.2644927536231884
+        },
+        "8": {
+          "request_count": 72,
+          "unique_output_text_hashes": 3,
+          "hash_counts": {
+            "22a562b8921b3ddcbf193781a748d1db2b439a927ce7c5884e4865fab7418e20": 1,
+            "8e38cb4c814fecf5d09b7dd3935371b9dd95d45b045a5dfe0e9afe9f2ed405af": 64,
+            "d2d297d75d388c7b1342ab178a624395f20aedf90bd36b947b71eaf0ae07a524": 7
+          },
+          "all_outputs_identical": false,
+          "equal_pair_fraction": 0.7969483568075117
+        }
+      },
+      "c1_c8_equal_output_pair_fraction": 0.2644675925925926,
+      "measured_waves": {
+        "1": [
+          {
+            "request_indices": [
+              0
+            ],
+            "started_seconds": 0.0002595400146674365,
+            "finished_seconds": 2.301064565021079,
+            "mean_active_requests": 1.0,
+            "complete": true,
+            "agreement": {
+              "request_count": 1,
+              "unique_output_text_hashes": 1,
+              "hash_counts": {
+                "9694090937d4fd05c99b7baa3006359c63f4f58aaa1cd7555569cc6c0a871b2d": 1
+              },
+              "all_outputs_identical": true,
+              "equal_pair_fraction": null
+            }
+          },
+          {
+            "request_indices": [
+              1
+            ],
+            "started_seconds": 2.3013376890157815,
+            "finished_seconds": 4.571503104001749,
+            "mean_active_requests": 1.0,
+            "complete": true,
+            "agreement": {
+              "request_count": 1,
+              "unique_output_text_hashes": 1,
+              "hash_counts": {
+                "9694090937d4fd05c99b7baa3006359c63f4f58aaa1cd7555569cc6c0a871b2d": 1
+              },
+              "all_outputs_identical": true,
+              "equal_pair_fraction": null
+            }
+          },
+          {
+            "request_indices": [
+              2
+            ],
+            "started_seconds": 4.57171624302282,
+            "finished_seconds": 6.851150278002024,
+            "mean_active_requests": 1.0,
+            "complete": true,
+            "agreement": {
+              "request_count": 1,
+              "unique_output_text_hashes": 1,
+              "hash_counts": {
+                "8e38cb4c814fecf5d09b7dd3935371b9dd95d45b045a5dfe0e9afe9f2ed405af": 1
+              },
+              "all_outputs_identical": true,
+              "equal_pair_fraction": null
+            }
+          },
+          {
+            "request_indices": [
+              3
+            ],
+            "started_seconds": 6.8514175140007865,
+            "finished_seconds": 9.031088895018911,
+            "mean_active_requests": 1.0,
+            "complete": true,
+            "agreement": {
+              "request_count": 1,
+              "unique_output_text_hashes": 1,
+              "hash_counts": {
+                "8e38cb4c814fecf5d09b7dd3935371b9dd95d45b045a5dfe0e9afe9f2ed405af": 1
+              },
+              "all_outputs_identical": true,
+              "equal_pair_fraction": null
+            }
+          },
+          {
+            "request_indices": [
+              4
+            ],
+            "started_seconds": 9.031351122015622,
+            "finished_seconds": 11.335562374006258,
+            "mean_active_requests": 1.0,
+            "complete": true,
+            "agreement": {
+              "request_count": 1,
+              "unique_output_text_hashes": 1,
+              "hash_counts": {
+                "d2d297d75d388c7b1342ab178a624395f20aedf90bd36b947b71eaf0ae07a524": 1
+              },
+              "all_outputs_identical": true,
+              "equal_pair_fraction": null
+            }
+          },
+          {
+            "request_indices": [
+              5
+            ],
+            "started_seconds": 11.335832233016845,
+            "finished_seconds": 13.604150989995105,
+            "mean_active_requests": 1.0,
+            "complete": true,
+            "agreement": {
+              "request_count": 1,
+              "unique_output_text_hashes": 1,
+              "hash_counts": {
+                "d2d297d75d388c7b1342ab178a624395f20aedf90bd36b947b71eaf0ae07a524": 1
+              },
+              "all_outputs_identical": true,
+              "equal_pair_fraction": null
+            }
+          },
+          {
+            "request_indices": [
+              6
+            ],
+            "started_seconds": 13.60442452999996,
+            "finished_seconds": 15.91283113299869,
+            "mean_active_requests": 1.0,
+            "complete": true,
+            "agreement": {
+              "request_count": 1,
+              "unique_output_text_hashes": 1,
+              "hash_counts": {
+                "8e38cb4c814fecf5d09b7dd3935371b9dd95d45b045a5dfe0e9afe9f2ed405af": 1
+              },
+              "all_outputs_identical": true,
+              "equal_pair_fraction": null
+            }
+          },
+          {
+            "request_indices": [
+              7
+            ],
+            "started_seconds": 15.913421333010774,
+            "finished_seconds": 18.088104822003515,
+            "mean_active_requests": 1.0,
+            "complete": true,
+            "agreement": {
+              "request_count": 1,
+              "unique_output_text_hashes": 1,
+              "hash_counts": {
+                "8e38cb4c814fecf5d09b7dd3935371b9dd95d45b045a5dfe0e9afe9f2ed405af": 1
+              },
+              "all_outputs_identical": true,
+              "equal_pair_fraction": null
+            }
+          },
+          {
+            "request_indices": [
+              0
+            ],
+            "started_seconds": 0.00024200300686061382,
+            "finished_seconds": 2.255742631998146,
+            "mean_active_requests": 1.0,
+            "complete": true,
+            "agreement": {
+              "request_count": 1,
+              "unique_output_text_hashes": 1,
+              "hash_counts": {
+                "9694090937d4fd05c99b7baa3006359c63f4f58aaa1cd7555569cc6c0a871b2d": 1
+              },
+              "all_outputs_identical": true,
+              "equal_pair_fraction": null
+            }
+          },
+          {
+            "request_indices": [
+              1
+            ],
+            "started_seconds": 2.25634865599568,
+            "finished_seconds": 4.465893112006597,
+            "mean_active_requests": 1.0,
+            "complete": true,
+            "agreement": {
+              "request_count": 1,
+              "unique_output_text_hashes": 1,
+              "hash_counts": {
+                "d2d297d75d388c7b1342ab178a624395f20aedf90bd36b947b71eaf0ae07a524": 1
+              },
+              "all_outputs_identical": true,
+              "equal_pair_fraction": null
+            }
+          },
+          {
+            "request_indices": [
+              2
+            ],
+            "started_seconds": 4.466370814014226,
+            "finished_seconds": 6.836285760015016,
+            "mean_active_requests": 1.0,
+            "complete": true,
+            "agreement": {
+              "request_count": 1,
+              "unique_output_text_hashes": 1,
+              "hash_counts": {
+                "8e38cb4c814fecf5d09b7dd3935371b9dd95d45b045a5dfe0e9afe9f2ed405af": 1
+              },
+              "all_outputs_identical": true,
+              "equal_pair_fraction": null
+            }
+          },
+          {
+            "request_indices": [
+              3
+            ],
+            "started_seconds": 6.836919848021353,
+            "finished_seconds": 9.136092085012933,
+            "mean_active_requests": 1.0,
+            "complete": true,
+            "agreement": {
+              "request_count": 1,
+              "unique_output_text_hashes": 1,
+              "hash_counts": {
+                "d2d297d75d388c7b1342ab178a624395f20aedf90bd36b947b71eaf0ae07a524": 1
+              },
+              "all_outputs_identical": true,
+              "equal_pair_fraction": null
+            }
+          },
+          {
+            "request_indices": [
+              4
+            ],
+            "started_seconds": 9.13679423800204,
+            "finished_seconds": 11.586470262001967,
+            "mean_active_requests": 1.0,
+            "complete": true,
+            "agreement": {
+              "request_count": 1,
+              "unique_output_text_hashes": 1,
+              "hash_counts": {
+                "d2d297d75d388c7b1342ab178a624395f20aedf90bd36b947b71eaf0ae07a524": 1
+              },
+              "all_outputs_identical": true,
+              "equal_pair_fraction": null
+            }
+          },
+          {
+            "request_indices": [
+              5
+            ],
+            "started_seconds": 11.587024222011678,
+            "finished_seconds": 13.885398590995464,
+            "mean_active_requests": 1.0,
+            "complete": true,
+            "agreement": {
+              "request_count": 1,
+              "unique_output_text_hashes": 1,
+              "hash_counts": {
+                "22a562b8921b3ddcbf193781a748d1db2b439a927ce7c5884e4865fab7418e20": 1
+              },
+              "all_outputs_identical": true,
+              "equal_pair_fraction": null
+            }
+          },
+          {
+            "request_indices": [
+              6
+            ],
+            "started_seconds": 13.886053463997087,
+            "finished_seconds": 16.245832258020528,
+            "mean_active_requests": 1.0,
+            "complete": true,
+            "agreement": {
+              "request_count": 1,
+              "unique_output_text_hashes": 1,
+              "hash_counts": {
+                "8e38cb4c814fecf5d09b7dd3935371b9dd95d45b045a5dfe0e9afe9f2ed405af": 1
+              },
+              "all_outputs_identical": true,
+              "equal_pair_fraction": null
+            }
+          },
+          {
+            "request_indices": [
+              7
+            ],
+            "started_seconds": 16.246480506000808,
+            "finished_seconds": 18.472746403014753,
+            "mean_active_requests": 1.0,
+            "complete": true,
+            "agreement": {
+              "request_count": 1,
+              "unique_output_text_hashes": 1,
+              "hash_counts": {
+                "d2d297d75d388c7b1342ab178a624395f20aedf90bd36b947b71eaf0ae07a524": 1
+              },
+              "all_outputs_identical": true,
+              "equal_pair_fraction": null
+            }
+          },
+          {
+            "request_indices": [
+              0
+            ],
+            "started_seconds": 0.0001872669963631779,
+            "finished_seconds": 2.251399286004016,
+            "mean_active_requests": 1.0,
+            "complete": true,
+            "agreement": {
+              "request_count": 1,
+              "unique_output_text_hashes": 1,
+              "hash_counts": {
+                "22a562b8921b3ddcbf193781a748d1db2b439a927ce7c5884e4865fab7418e20": 1
+              },
+              "all_outputs_identical": true,
+              "equal_pair_fraction": null
+            }
+          },
+          {
+            "request_indices": [
+              1
+            ],
+            "started_seconds": 2.2519379169971216,
+            "finished_seconds": 4.6625281010055915,
+            "mean_active_requests": 1.0,
+            "complete": true,
+            "agreement": {
+              "request_count": 1,
+              "unique_output_text_hashes": 1,
+              "hash_counts": {
+                "d2d297d75d388c7b1342ab178a624395f20aedf90bd36b947b71eaf0ae07a524": 1
+              },
+              "all_outputs_identical": true,
+              "equal_pair_fraction": null
+            }
+          },
+          {
+            "request_indices": [
+              2
+            ],
+            "started_seconds": 4.662793625000631,
+            "finished_seconds": 6.940544651995879,
+            "mean_active_requests": 1.0,
+            "complete": true,
+            "agreement": {
+              "request_count": 1,
+              "unique_output_text_hashes": 1,
+              "hash_counts": {
+                "9694090937d4fd05c99b7baa3006359c63f4f58aaa1cd7555569cc6c0a871b2d": 1
+              },
+              "all_outputs_identical": true,
+              "equal_pair_fraction": null
+            }
+          },
+          {
+            "request_indices": [
+              3
+            ],
+            "started_seconds": 6.940821632015286,
+            "finished_seconds": 9.271301364991814,
+            "mean_active_requests": 1.0,
+            "complete": true,
+            "agreement": {
+              "request_count": 1,
+              "unique_output_text_hashes": 1,
+              "hash_counts": {
+                "d2d297d75d388c7b1342ab178a624395f20aedf90bd36b947b71eaf0ae07a524": 1
+              },
+              "all_outputs_identical": true,
+              "equal_pair_fraction": null
+            }
+          },
+          {
+            "request_indices": [
+              4
+            ],
+            "started_seconds": 9.271573241014266,
+            "finished_seconds": 11.495114757010015,
+            "mean_active_requests": 1.0,
+            "complete": true,
+            "agreement": {
+              "request_count": 1,
+              "unique_output_text_hashes": 1,
+              "hash_counts": {
+                "9694090937d4fd05c99b7baa3006359c63f4f58aaa1cd7555569cc6c0a871b2d": 1
+              },
+              "all_outputs_identical": true,
+              "equal_pair_fraction": null
+            }
+          },
+          {
+            "request_indices": [
+              5
+            ],
+            "started_seconds": 11.495487017993582,
+            "finished_seconds": 13.750989435007796,
+            "mean_active_requests": 1.0,
+            "complete": true,
+            "agreement": {
+              "request_count": 1,
+              "unique_output_text_hashes": 1,
+              "hash_counts": {
+                "22a562b8921b3ddcbf193781a748d1db2b439a927ce7c5884e4865fab7418e20": 1
+              },
+              "all_outputs_identical": true,
+              "equal_pair_fraction": null
+            }
+          },
+          {
+            "request_indices": [
+              6
+            ],
+            "started_seconds": 13.751259854994714,
+            "finished_seconds": 15.930115780007327,
+            "mean_active_requests": 1.0,
+            "complete": true,
+            "agreement": {
+              "request_count": 1,
+              "unique_output_text_hashes": 1,
+              "hash_counts": {
+                "d2d297d75d388c7b1342ab178a624395f20aedf90bd36b947b71eaf0ae07a524": 1
+              },
+              "all_outputs_identical": true,
+              "equal_pair_fraction": null
+            }
+          },
+          {
+            "request_indices": [
+              7
+            ],
+            "started_seconds": 15.930388120003045,
+            "finished_seconds": 18.16392869700212,
+            "mean_active_requests": 1.0,
+            "complete": true,
+            "agreement": {
+              "request_count": 1,
+              "unique_output_text_hashes": 1,
+              "hash_counts": {
+                "d2d297d75d388c7b1342ab178a624395f20aedf90bd36b947b71eaf0ae07a524": 1
+              },
+              "all_outputs_identical": true,
+              "equal_pair_fraction": null
+            }
+          }
+        ],
+        "8": [
+          {
+            "request_indices": [
+              0,
+              1,
+              2,
+              3,
+              4,
+              5,
+              6,
+              7
+            ],
+            "started_seconds": 0.00015476997941732407,
+            "finished_seconds": 4.186749885993777,
+            "mean_active_requests": 7.800762899681162,
+            "complete": true,
+            "agreement": {
+              "request_count": 8,
+              "unique_output_text_hashes": 3,
+              "hash_counts": {
+                "22a562b8921b3ddcbf193781a748d1db2b439a927ce7c5884e4865fab7418e20": 1,
+                "8e38cb4c814fecf5d09b7dd3935371b9dd95d45b045a5dfe0e9afe9f2ed405af": 6,
+                "d2d297d75d388c7b1342ab178a624395f20aedf90bd36b947b71eaf0ae07a524": 1
+              },
+              "all_outputs_identical": false,
+              "equal_pair_fraction": 0.5357142857142857
+            }
+          },
+          {
+            "request_indices": [
+              8,
+              9,
+              10,
+              11,
+              12,
+              13,
+              14,
+              15
+            ],
+            "started_seconds": 4.187365733989282,
+            "finished_seconds": 7.805222978990059,
+            "mean_active_requests": 7.83651582140318,
+            "complete": true,
+            "agreement": {
+              "request_count": 8,
+              "unique_output_text_hashes": 1,
+              "hash_counts": {
+                "8e38cb4c814fecf5d09b7dd3935371b9dd95d45b045a5dfe0e9afe9f2ed405af": 8
+              },
+              "all_outputs_identical": true,
+              "equal_pair_fraction": 1.0
+            }
+          },
+          {
+            "request_indices": [
+              16,
+              17,
+              18,
+              19,
+              20,
+              21,
+              22,
+              23
+            ],
+            "started_seconds": 7.805548118980369,
+            "finished_seconds": 11.897635821980657,
+            "mean_active_requests": 7.736939915737065,
+            "complete": true,
+            "agreement": {
+              "request_count": 8,
+              "unique_output_text_hashes": 1,
+              "hash_counts": {
+                "8e38cb4c814fecf5d09b7dd3935371b9dd95d45b045a5dfe0e9afe9f2ed405af": 8
+              },
+              "all_outputs_identical": true,
+              "equal_pair_fraction": 1.0
+            }
+          },
+          {
+            "request_indices": [
+              0,
+              1,
+              2,
+              3,
+              4,
+              5,
+              6,
+              7
+            ],
+            "started_seconds": 0.00020398700144141912,
+            "finished_seconds": 4.281265061988961,
+            "mean_active_requests": 7.733658106260044,
+            "complete": true,
+            "agreement": {
+              "request_count": 8,
+              "unique_output_text_hashes": 2,
+              "hash_counts": {
+                "8e38cb4c814fecf5d09b7dd3935371b9dd95d45b045a5dfe0e9afe9f2ed405af": 6,
+                "d2d297d75d388c7b1342ab178a624395f20aedf90bd36b947b71eaf0ae07a524": 2
+              },
+              "all_outputs_identical": false,
+              "equal_pair_fraction": 0.5714285714285714
+            }
+          },
+          {
+            "request_indices": [
+              8,
+              9,
+              10,
+              11,
+              12,
+              13,
+              14,
+              15
+            ],
+            "started_seconds": 4.28159778600093,
+            "finished_seconds": 8.49061988099129,
+            "mean_active_requests": 7.831436036227451,
+            "complete": true,
+            "agreement": {
+              "request_count": 8,
+              "unique_output_text_hashes": 2,
+              "hash_counts": {
+                "8e38cb4c814fecf5d09b7dd3935371b9dd95d45b045a5dfe0e9afe9f2ed405af": 7,
+                "d2d297d75d388c7b1342ab178a624395f20aedf90bd36b947b71eaf0ae07a524": 1
+              },
+              "all_outputs_identical": false,
+              "equal_pair_fraction": 0.75
+            }
+          },
+          {
+            "request_indices": [
+              16,
+              17,
+              18,
+              19,
+              20,
+              21,
+              22,
+              23
+            ],
+            "started_seconds": 8.491108654998243,
+            "finished_seconds": 13.00300976599101,
+            "mean_active_requests": 7.801725120544489,
+            "complete": true,
+            "agreement": {
+              "request_count": 8,
+              "unique_output_text_hashes": 1,
+              "hash_counts": {
+                "8e38cb4c814fecf5d09b7dd3935371b9dd95d45b045a5dfe0e9afe9f2ed405af": 8
+              },
+              "all_outputs_identical": true,
+              "equal_pair_fraction": 1.0
+            }
+          },
+          {
+            "request_indices": [
+              0,
+              1,
+              2,
+              3,
+              4,
+              5,
+              6,
+              7
+            ],
+            "started_seconds": 0.00020619400311261415,
+            "finished_seconds": 3.9283588319958653,
+            "mean_active_requests": 7.968377008129319,
+            "complete": true,
+            "agreement": {
+              "request_count": 8,
+              "unique_output_text_hashes": 2,
+              "hash_counts": {
+                "8e38cb4c814fecf5d09b7dd3935371b9dd95d45b045a5dfe0e9afe9f2ed405af": 6,
+                "d2d297d75d388c7b1342ab178a624395f20aedf90bd36b947b71eaf0ae07a524": 2
+              },
+              "all_outputs_identical": false,
+              "equal_pair_fraction": 0.5714285714285714
+            }
+          },
+          {
+            "request_indices": [
+              8,
+              9,
+              10,
+              11,
+              12,
+              13,
+              14,
+              15
+            ],
+            "started_seconds": 3.928784404997714,
+            "finished_seconds": 7.75951840300695,
+            "mean_active_requests": 7.716269314276437,
+            "complete": true,
+            "agreement": {
+              "request_count": 8,
+              "unique_output_text_hashes": 2,
+              "hash_counts": {
+                "8e38cb4c814fecf5d09b7dd3935371b9dd95d45b045a5dfe0e9afe9f2ed405af": 7,
+                "d2d297d75d388c7b1342ab178a624395f20aedf90bd36b947b71eaf0ae07a524": 1
+              },
+              "all_outputs_identical": false,
+              "equal_pair_fraction": 0.75
+            }
+          },
+          {
+            "request_indices": [
+              16,
+              17,
+              18,
+              19,
+              20,
+              21,
+              22,
+              23
+            ],
+            "started_seconds": 7.759862823993899,
+            "finished_seconds": 11.364373774005799,
+            "mean_active_requests": 7.83479921373867,
+            "complete": true,
+            "agreement": {
+              "request_count": 8,
+              "unique_output_text_hashes": 1,
+              "hash_counts": {
+                "8e38cb4c814fecf5d09b7dd3935371b9dd95d45b045a5dfe0e9afe9f2ed405af": 8
+              },
+              "all_outputs_identical": true,
+              "equal_pair_fraction": 1.0
+            }
+          }
+        ]
+      }
+    },
+    {
+      "prompt_name": "math",
+      "prompt_sha256": "93d3da4cd1b7890e2560f7a5fbcd0ac8a672cffc2c010723b4e66671a5bcfa36",
+      "c1": {
+        "aggregate_output_tokens_per_second": {
+          "mean": 60.09080471207792,
+          "sample_stddev": 0.9864887447750526,
+          "samples": [
+            59.76024965304012,
+            61.20012146656379,
+            59.31204301662984
+          ]
+        },
+        "latency_weighted_request_output_tokens_per_second": {
+          "mean": 60.103220610492194,
+          "sample_stddev": 0.9841726586249433,
+          "samples": [
+            59.776090138893714,
+            61.20930113152489,
+            59.32427056105797
+          ]
+        },
+        "mean_active_requests": {
+          "mean": 0.9997929725178208,
+          "sample_stddev": 5.751808865521116e-05,
+          "samples": [
+            0.9997350029783348,
+            0.9998500282670869,
+            0.9997938863080408
+          ]
+        },
+        "mean_request_wall_seconds": {
+          "mean": 2.1300475933773364,
+          "sample_stddev": 0.0346293473869196,
+          "samples": [
+            2.141324394127878,
+            2.0911854511286947,
+            2.157632934875437
+          ]
+        }
+      },
+      "c8": {
+        "aggregate_output_tokens_per_second": {
+          "mean": 254.35204584210416,
+          "sample_stddev": 14.380603077521236,
+          "samples": [
+            269.503928106486,
+            252.6597339264722,
+            240.89247549335425
+          ]
+        },
+        "latency_weighted_request_output_tokens_per_second": {
+          "mean": 33.01005267591032,
+          "sample_stddev": 1.744681811601249,
+          "samples": [
+            34.90574581689419,
+            32.652693412777545,
+            31.47171879805924
+          ]
+        },
+        "mean_active_requests": {
+          "mean": 7.70431608097859,
+          "sample_stddev": 0.044171043229458445,
+          "samples": [
+            7.720904447085258,
+            7.737791511790028,
+            7.654252284060486
+          ]
+        },
+        "mean_request_wall_seconds": {
+          "mean": 3.8847352724312967,
+          "sample_stddev": 0.20238614980824168,
+          "samples": [
+            3.6670180511670574,
+            3.920044156293443,
+            4.06714360983339
+          ]
+        }
+      },
+      "aggregate_c8_over_c1": 4.232794802146838,
+      "per_active_c8_over_c1": 0.5492226929042098,
+      "measured_output_agreement": {
+        "1": {
+          "request_count": 24,
+          "unique_output_text_hashes": 5,
+          "hash_counts": {
+            "1728d8716d8fdb143423d122139612a79782ec7865e1cbd2edb5a59d9b338a14": 3,
+            "4f66a0714e0b443f27b75596c559a1e5f4a8f75f3f4ba590e4ab97a7b5866d72": 2,
+            "648ce818f8354da7fcdda90cb502b6976fd2c9d7a0ea98703eecc980cd51e97d": 8,
+            "c87927d8084a31531e7a0ba1c5cfa0c0255f1c2c2d081938357a249ca87baf6e": 1,
+            "ed7ad98095f368bf37d3a00d30bad778a4febf7f806bd905bf4715381d88a445": 10
+          },
+          "all_outputs_identical": false,
+          "equal_pair_fraction": 0.27898550724637683
+        },
+        "8": {
+          "request_count": 72,
+          "unique_output_text_hashes": 7,
+          "hash_counts": {
+            "3c5881663580d269eb217e1ff1497516583c9fa87d6cf19a6b2cdba3289b4a2f": 2,
+            "4f66a0714e0b443f27b75596c559a1e5f4a8f75f3f4ba590e4ab97a7b5866d72": 1,
+            "648ce818f8354da7fcdda90cb502b6976fd2c9d7a0ea98703eecc980cd51e97d": 24,
+            "a99640afcf2044b3f216a2e25cea7bd2b17fd60df1322ef833fb13d08ec7cfce": 1,
+            "b7391f4a5474576796dee1bb77657c43f3ad280388e68b1a6d2331a3ecdc1f92": 2,
+            "bff115e9c445020d3fe658b5bbb3d315fc93936a5fd76d651b58dc4650859b3b": 1,
+            "ed7ad98095f368bf37d3a00d30bad778a4febf7f806bd905bf4715381d88a445": 41
+          },
+          "all_outputs_identical": false,
+          "equal_pair_fraction": 0.4295774647887324
+        }
+      },
+      "c1_c8_equal_output_pair_fraction": 0.34953703703703703,
+      "measured_waves": {
+        "1": [
+          {
+            "request_indices": [
+              0
+            ],
+            "started_seconds": 0.00017273900448344648,
+            "finished_seconds": 2.218166751001263,
+            "mean_active_requests": 1.0,
+            "complete": true,
+            "agreement": {
+              "request_count": 1,
+              "unique_output_text_hashes": 1,
+              "hash_counts": {
+                "648ce818f8354da7fcdda90cb502b6976fd2c9d7a0ea98703eecc980cd51e97d": 1
+              },
+              "all_outputs_identical": true,
+              "equal_pair_fraction": null
+            }
+          },
+          {
+            "request_indices": [
+              1
+            ],
+            "started_seconds": 2.2188995280012023,
+            "finished_seconds": 4.378475789009826,
+            "mean_active_requests": 1.0,
+            "complete": true,
+            "agreement": {
+              "request_count": 1,
+              "unique_output_text_hashes": 1,
+              "hash_counts": {
+                "ed7ad98095f368bf37d3a00d30bad778a4febf7f806bd905bf4715381d88a445": 1
+              },
+              "all_outputs_identical": true,
+              "equal_pair_fraction": null
+            }
+          },
+          {
+            "request_indices": [
+              2
+            ],
+            "started_seconds": 4.379060740000568,
+            "finished_seconds": 6.585781203000806,
+            "mean_active_requests": 1.0,
+            "complete": true,
+            "agreement": {
+              "request_count": 1,
+              "unique_output_text_hashes": 1,
+              "hash_counts": {
+                "4f66a0714e0b443f27b75596c559a1e5f4a8f75f3f4ba590e4ab97a7b5866d72": 1
+              },
+              "all_outputs_identical": true,
+              "equal_pair_fraction": null
+            }
+          },
+          {
+            "request_indices": [
+              3
+            ],
+            "started_seconds": 6.586718175007263,
+            "finished_seconds": 8.689162096998189,
+            "mean_active_requests": 1.0,
+            "complete": true,
+            "agreement": {
+              "request_count": 1,
+              "unique_output_text_hashes": 1,
+              "hash_counts": {
+                "ed7ad98095f368bf37d3a00d30bad778a4febf7f806bd905bf4715381d88a445": 1
+              },
+              "all_outputs_identical": true,
+              "equal_pair_fraction": null
+            }
+          },
+          {
+            "request_indices": [
+              4
+            ],
+            "started_seconds": 8.689864457992371,
+            "finished_seconds": 10.787251411005855,
+            "mean_active_requests": 1.0,
+            "complete": true,
+            "agreement": {
+              "request_count": 1,
+              "unique_output_text_hashes": 1,
+              "hash_counts": {
+                "ed7ad98095f368bf37d3a00d30bad778a4febf7f806bd905bf4715381d88a445": 1
+              },
+              "all_outputs_identical": true,
+              "equal_pair_fraction": null
+            }
+          },
+          {
+            "request_indices": [
+              5
+            ],
+            "started_seconds": 10.787703623995185,
+            "finished_seconds": 12.910258435003925,
+            "mean_active_requests": 1.0,
+            "complete": true,
+            "agreement": {
+              "request_count": 1,
+              "unique_output_text_hashes": 1,
+              "hash_counts": {
+                "648ce818f8354da7fcdda90cb502b6976fd2c9d7a0ea98703eecc980cd51e97d": 1
+              },
+              "all_outputs_identical": true,
+              "equal_pair_fraction": null
+            }
+          },
+          {
+            "request_indices": [
+              6
+            ],
+            "started_seconds": 12.910576070018578,
+            "finished_seconds": 15.068324380001286,
+            "mean_active_requests": 1.0,
+            "complete": true,
+            "agreement": {
+              "request_count": 1,
+              "unique_output_text_hashes": 1,
+              "hash_counts": {
+                "ed7ad98095f368bf37d3a00d30bad778a4febf7f806bd905bf4715381d88a445": 1
+              },
+              "all_outputs_identical": true,
+              "equal_pair_fraction": null
+            }
+          },
+          {
+            "request_indices": [
+              7
+            ],
+            "started_seconds": 15.068606846994953,
+            "finished_seconds": 17.134777268016478,
+            "mean_active_requests": 1.0,
+            "complete": true,
+            "agreement": {
+              "request_count": 1,
+              "unique_output_text_hashes": 1,
+              "hash_counts": {
+                "648ce818f8354da7fcdda90cb502b6976fd2c9d7a0ea98703eecc980cd51e97d": 1
+              },
+              "all_outputs_identical": true,
+              "equal_pair_fraction": null
+            }
+          },
+          {
+            "request_indices": [
+              0
+            ],
+            "started_seconds": 0.00017253000987693667,
+            "finished_seconds": 2.095120758021949,
+            "mean_active_requests": 1.0,
+            "complete": true,
+            "agreement": {
+              "request_count": 1,
+              "unique_output_text_hashes": 1,
+              "hash_counts": {
+                "648ce818f8354da7fcdda90cb502b6976fd2c9d7a0ea98703eecc980cd51e97d": 1
+              },
+              "all_outputs_identical": true,
+              "equal_pair_fraction": null
+            }
+          },
+          {
+            "request_indices": [
+              1
+            ],
+            "started_seconds": 2.0953957220190205,
+            "finished_seconds": 4.100454855011776,
+            "mean_active_requests": 1.0,
+            "complete": true,
+            "agreement": {
+              "request_count": 1,
+              "unique_output_text_hashes": 1,
+              "hash_counts": {
+                "ed7ad98095f368bf37d3a00d30bad778a4febf7f806bd905bf4715381d88a445": 1
+              },
+              "all_outputs_identical": true,
+              "equal_pair_fraction": null
+            }
+          },
+          {
+            "request_indices": [
+              2
+            ],
+            "started_seconds": 4.1007268899993505,
+            "finished_seconds": 6.215824554004939,
+            "mean_active_requests": 1.0,
+            "complete": true,
+            "agreement": {
+              "request_count": 1,
+              "unique_output_text_hashes": 1,
+              "hash_counts": {
+                "ed7ad98095f368bf37d3a00d30bad778a4febf7f806bd905bf4715381d88a445": 1
+              },
+              "all_outputs_identical": true,
+              "equal_pair_fraction": null
+            }
+          },
+          {
+            "request_indices": [
+              3
+            ],
+            "started_seconds": 6.216095533018233,
+            "finished_seconds": 8.285150904004695,
+            "mean_active_requests": 1.0,
+            "complete": true,
+            "agreement": {
+              "request_count": 1,
+              "unique_output_text_hashes": 1,
+              "hash_counts": {
+                "ed7ad98095f368bf37d3a00d30bad778a4febf7f806bd905bf4715381d88a445": 1
+              },
+              "all_outputs_identical": true,
+              "equal_pair_fraction": null
+            }
+          },
+          {
+            "request_indices": [
+              4
+            ],
+            "started_seconds": 8.285443564003799,
+            "finished_seconds": 10.308440098015126,
+            "mean_active_requests": 1.0,
+            "complete": true,
+            "agreement": {
+              "request_count": 1,
+              "unique_output_text_hashes": 1,
+              "hash_counts": {
+                "c87927d8084a31531e7a0ba1c5cfa0c0255f1c2c2d081938357a249ca87baf6e": 1
+              },
+              "all_outputs_identical": true,
+              "equal_pair_fraction": null
+            }
+          },
+          {
+            "request_indices": [
+              5
+            ],
+            "started_seconds": 10.30877144599799,
+            "finished_seconds": 12.441940026998054,
+            "mean_active_requests": 1.0,
+            "complete": true,
+            "agreement": {
+              "request_count": 1,
+              "unique_output_text_hashes": 1,
+              "hash_counts": {
+                "1728d8716d8fdb143423d122139612a79782ec7865e1cbd2edb5a59d9b338a14": 1
+              },
+              "all_outputs_identical": true,
+              "equal_pair_fraction": null
+            }
+          },
+          {
+            "request_indices": [
+              6
+            ],
+            "started_seconds": 12.442190589994425,
+            "finished_seconds": 14.636118555994472,
+            "mean_active_requests": 1.0,
+            "complete": true,
+            "agreement": {
+              "request_count": 1,
+              "unique_output_text_hashes": 1,
+              "hash_counts": {
+                "648ce818f8354da7fcdda90cb502b6976fd2c9d7a0ea98703eecc980cd51e97d": 1
+              },
+              "all_outputs_identical": true,
+              "equal_pair_fraction": null
+            }
+          },
+          {
+            "request_indices": [
+              7
+            ],
+            "started_seconds": 14.636406014993554,
+            "finished_seconds": 16.731636147014797,
+            "mean_active_requests": 1.0,
+            "complete": true,
+            "agreement": {
+              "request_count": 1,
+              "unique_output_text_hashes": 1,
+              "hash_counts": {
+                "ed7ad98095f368bf37d3a00d30bad778a4febf7f806bd905bf4715381d88a445": 1
+              },
+              "all_outputs_identical": true,
+              "equal_pair_fraction": null
+            }
+          },
+          {
+            "request_indices": [
+              0
+            ],
+            "started_seconds": 0.00019213097402825952,
+            "finished_seconds": 2.144646565982839,
+            "mean_active_requests": 1.0,
+            "complete": true,
+            "agreement": {
+              "request_count": 1,
+              "unique_output_text_hashes": 1,
+              "hash_counts": {
+                "1728d8716d8fdb143423d122139612a79782ec7865e1cbd2edb5a59d9b338a14": 1
+              },
+              "all_outputs_identical": true,
+              "equal_pair_fraction": null
+            }
+          },
+          {
+            "request_indices": [
+              1
+            ],
+            "started_seconds": 2.144942856975831,
+            "finished_seconds": 4.22865333899972,
+            "mean_active_requests": 1.0,
+            "complete": true,
+            "agreement": {
+              "request_count": 1,
+              "unique_output_text_hashes": 1,
+              "hash_counts": {
+                "648ce818f8354da7fcdda90cb502b6976fd2c9d7a0ea98703eecc980cd51e97d": 1
+              },
+              "all_outputs_identical": true,
+              "equal_pair_fraction": null
+            }
+          },
+          {
+            "request_indices": [
+              2
+            ],
+            "started_seconds": 4.229160752991447,
+            "finished_seconds": 6.423029079975095,
+            "mean_active_requests": 1.0,
+            "complete": true,
+            "agreement": {
+              "request_count": 1,
+              "unique_output_text_hashes": 1,
+              "hash_counts": {
+                "648ce818f8354da7fcdda90cb502b6976fd2c9d7a0ea98703eecc980cd51e97d": 1
+              },
+              "all_outputs_identical": true,
+              "equal_pair_fraction": null
+            }
+          },
+          {
+            "request_indices": [
+              3
+            ],
+            "started_seconds": 6.423541101976298,
+            "finished_seconds": 8.70141412699013,
+            "mean_active_requests": 1.0,
+            "complete": true,
+            "agreement": {
+              "request_count": 1,
+              "unique_output_text_hashes": 1,
+              "hash_counts": {
+                "4f66a0714e0b443f27b75596c559a1e5f4a8f75f3f4ba590e4ab97a7b5866d72": 1
+              },
+              "all_outputs_identical": true,
+              "equal_pair_fraction": null
+            }
+          },
+          {
+            "request_indices": [
+              4
+            ],
+            "started_seconds": 8.701705234998371,
+            "finished_seconds": 10.828948435984785,
+            "mean_active_requests": 1.0,
+            "complete": true,
+            "agreement": {
+              "request_count": 1,
+              "unique_output_text_hashes": 1,
+              "hash_counts": {
+                "ed7ad98095f368bf37d3a00d30bad778a4febf7f806bd905bf4715381d88a445": 1
+              },
+              "all_outputs_identical": true,
+              "equal_pair_fraction": null
+            }
+          },
+          {
+            "request_indices": [
+              5
+            ],
+            "started_seconds": 10.829465930990409,
+            "finished_seconds": 12.897427374991821,
+            "mean_active_requests": 1.0,
+            "complete": true,
+            "agreement": {
+              "request_count": 1,
+              "unique_output_text_hashes": 1,
+              "hash_counts": {
+                "1728d8716d8fdb143423d122139612a79782ec7865e1cbd2edb5a59d9b338a14": 1
+              },
+              "all_outputs_identical": true,
+              "equal_pair_fraction": null
+            }
+          },
+          {
+            "request_indices": [
+              6
+            ],
+            "started_seconds": 12.897737041988876,
+            "finished_seconds": 15.114074175973656,
+            "mean_active_requests": 1.0,
+            "complete": true,
+            "agreement": {
+              "request_count": 1,
+              "unique_output_text_hashes": 1,
+              "hash_counts": {
+                "ed7ad98095f368bf37d3a00d30bad778a4febf7f806bd905bf4715381d88a445": 1
+              },
+              "all_outputs_identical": true,
+              "equal_pair_fraction": null
+            }
+          },
+          {
+            "request_indices": [
+              7
+            ],
+            "started_seconds": 15.114357170998119,
+            "finished_seconds": 17.26397260199883,
+            "mean_active_requests": 1.0,
+            "complete": true,
+            "agreement": {
+              "request_count": 1,
+              "unique_output_text_hashes": 1,
+              "hash_counts": {
+                "648ce818f8354da7fcdda90cb502b6976fd2c9d7a0ea98703eecc980cd51e97d": 1
+              },
+              "all_outputs_identical": true,
+              "equal_pair_fraction": null
+            }
+          }
+        ],
+        "8": [
+          {
+            "request_indices": [
+              0,
+              1,
+              2,
+              3,
+              4,
+              5,
+              6,
+              7
+            ],
+            "started_seconds": 0.00024033902445808053,
+            "finished_seconds": 4.342547353997361,
+            "mean_active_requests": 7.510910314855024,
+            "complete": true,
+            "agreement": {
+              "request_count": 8,
+              "unique_output_text_hashes": 3,
+              "hash_counts": {
+                "648ce818f8354da7fcdda90cb502b6976fd2c9d7a0ea98703eecc980cd51e97d": 4,
+                "b7391f4a5474576796dee1bb77657c43f3ad280388e68b1a6d2331a3ecdc1f92": 1,
+                "ed7ad98095f368bf37d3a00d30bad778a4febf7f806bd905bf4715381d88a445": 3
+              },
+              "all_outputs_identical": false,
+              "equal_pair_fraction": 0.32142857142857145
+            }
+          },
+          {
+            "request_indices": [
+              8,
+              9,
+              10,
+              11,
+              12,
+              13,
+              14,
+              15
+            ],
+            "started_seconds": 4.342884974001208,
+            "finished_seconds": 7.8514638479973655,
+            "mean_active_requests": 7.863746825949477,
+            "complete": true,
+            "agreement": {
+              "request_count": 8,
+              "unique_output_text_hashes": 2,
+              "hash_counts": {
+                "648ce818f8354da7fcdda90cb502b6976fd2c9d7a0ea98703eecc980cd51e97d": 4,
+                "ed7ad98095f368bf37d3a00d30bad778a4febf7f806bd905bf4715381d88a445": 4
+              },
+              "all_outputs_identical": false,
+              "equal_pair_fraction": 0.42857142857142855
+            }
+          },
+          {
+            "request_indices": [
+              16,
+              17,
+              18,
+              19,
+              20,
+              21,
+              22,
+              23
+            ],
+            "started_seconds": 7.852187632001005,
+            "finished_seconds": 11.397655105014564,
+            "mean_active_requests": 7.841893602642304,
+            "complete": true,
+            "agreement": {
+              "request_count": 8,
+              "unique_output_text_hashes": 2,
+              "hash_counts": {
+                "648ce818f8354da7fcdda90cb502b6976fd2c9d7a0ea98703eecc980cd51e97d": 4,
+                "ed7ad98095f368bf37d3a00d30bad778a4febf7f806bd905bf4715381d88a445": 4
+              },
+              "all_outputs_identical": false,
+              "equal_pair_fraction": 0.42857142857142855
+            }
+          },
+          {
+            "request_indices": [
+              0,
+              1,
+              2,
+              3,
+              4,
+              5,
+              6,
+              7
+            ],
+            "started_seconds": 0.000238019012613222,
+            "finished_seconds": 4.434921759006102,
+            "mean_active_requests": 7.5865490816376955,
+            "complete": true,
+            "agreement": {
+              "request_count": 8,
+              "unique_output_text_hashes": 4,
+              "hash_counts": {
+                "3c5881663580d269eb217e1ff1497516583c9fa87d6cf19a6b2cdba3289b4a2f": 1,
+                "648ce818f8354da7fcdda90cb502b6976fd2c9d7a0ea98703eecc980cd51e97d": 3,
+                "a99640afcf2044b3f216a2e25cea7bd2b17fd60df1322ef833fb13d08ec7cfce": 1,
+                "ed7ad98095f368bf37d3a00d30bad778a4febf7f806bd905bf4715381d88a445": 3
+              },
+              "all_outputs_identical": false,
+              "equal_pair_fraction": 0.21428571428571427
+            }
+          },
+          {
+            "request_indices": [
+              8,
+              9,
+              10,
+              11,
+              12,
+              13,
+              14,
+              15
+            ],
+            "started_seconds": 4.435527990019182,
+            "finished_seconds": 8.345167745021172,
+            "mean_active_requests": 7.767261294907563,
+            "complete": true,
+            "agreement": {
+              "request_count": 8,
+              "unique_output_text_hashes": 1,
+              "hash_counts": {
+                "ed7ad98095f368bf37d3a00d30bad778a4febf7f806bd905bf4715381d88a445": 8
+              },
+              "all_outputs_identical": true,
+              "equal_pair_fraction": 1.0
+            }
+          },
+          {
+            "request_indices": [
+              16,
+              17,
+              18,
+              19,
+              20,
+              21,
+              22,
+              23
+            ],
+            "started_seconds": 8.34569893500884,
+            "finished_seconds": 12.157513889018446,
+            "mean_active_requests": 7.888609681420226,
+            "complete": true,
+            "agreement": {
+              "request_count": 8,
+              "unique_output_text_hashes": 2,
+              "hash_counts": {
+                "648ce818f8354da7fcdda90cb502b6976fd2c9d7a0ea98703eecc980cd51e97d": 4,
+                "ed7ad98095f368bf37d3a00d30bad778a4febf7f806bd905bf4715381d88a445": 4
+              },
+              "all_outputs_identical": false,
+              "equal_pair_fraction": 0.42857142857142855
+            }
+          },
+          {
+            "request_indices": [
+              0,
+              1,
+              2,
+              3,
+              4,
+              5,
+              6,
+              7
+            ],
+            "started_seconds": 0.00023080300888977945,
+            "finished_seconds": 4.363056532019982,
+            "mean_active_requests": 7.504277062513426,
+            "complete": true,
+            "agreement": {
+              "request_count": 8,
+              "unique_output_text_hashes": 3,
+              "hash_counts": {
+                "648ce818f8354da7fcdda90cb502b6976fd2c9d7a0ea98703eecc980cd51e97d": 4,
+                "b7391f4a5474576796dee1bb77657c43f3ad280388e68b1a6d2331a3ecdc1f92": 1,
+                "ed7ad98095f368bf37d3a00d30bad778a4febf7f806bd905bf4715381d88a445": 3
+              },
+              "all_outputs_identical": false,
+              "equal_pair_fraction": 0.32142857142857145
+            }
+          },
+          {
+            "request_indices": [
+              8,
+              9,
+              10,
+              11,
+              12,
+              13,
+              14,
+              15
+            ],
+            "started_seconds": 4.3633998000004794,
+            "finished_seconds": 8.639446168002905,
+            "mean_active_requests": 7.778640860614194,
+            "complete": true,
+            "agreement": {
+              "request_count": 8,
+              "unique_output_text_hashes": 3,
+              "hash_counts": {
+                "3c5881663580d269eb217e1ff1497516583c9fa87d6cf19a6b2cdba3289b4a2f": 1,
+                "4f66a0714e0b443f27b75596c559a1e5f4a8f75f3f4ba590e4ab97a7b5866d72": 1,
+                "ed7ad98095f368bf37d3a00d30bad778a4febf7f806bd905bf4715381d88a445": 6
+              },
+              "all_outputs_identical": false,
+              "equal_pair_fraction": 0.5357142857142857
+            }
+          },
+          {
+            "request_indices": [
+              16,
+              17,
+              18,
+              19,
+              20,
+              21,
+              22,
+              23
+            ],
+            "started_seconds": 8.640360467019491,
+            "finished_seconds": 12.75104770102189,
+            "mean_active_requests": 7.689654500724041,
+            "complete": true,
+            "agreement": {
+              "request_count": 8,
+              "unique_output_text_hashes": 3,
+              "hash_counts": {
+                "648ce818f8354da7fcdda90cb502b6976fd2c9d7a0ea98703eecc980cd51e97d": 1,
+                "bff115e9c445020d3fe658b5bbb3d315fc93936a5fd76d651b58dc4650859b3b": 1,
+                "ed7ad98095f368bf37d3a00d30bad778a4febf7f806bd905bf4715381d88a445": 6
+              },
+              "all_outputs_identical": false,
+              "equal_pair_fraction": 0.5357142857142857
+            }
+          }
+        ]
+      }
+    }
+  ],
+  "inputs": [
+    {
+      "path": "/home/ericbuehler/qwen4exp_work/model_scaling_20260930/graph_candidate/adaptive_run/homogeneous_python_c1.json",
+      "sha256": "7743da74bfdec690ead1b8dd9af19be4653402b17c26bbe03efab399d85268d7"
+    },
+    {
+      "path": "/home/ericbuehler/qwen4exp_work/model_scaling_20260930/graph_candidate/adaptive_run/homogeneous_python_c8.json",
+      "sha256": "8c0ced777a50892829142455c9f404e66a52783b156f09ec385e8e0447da312e"
+    },
+    {
+      "path": "/home/ericbuehler/qwen4exp_work/model_scaling_20260930/graph_candidate/adaptive_run/homogeneous_math_c1.json",
+      "sha256": "203f82df4bc1494b7c05795f9db38fdb71eed85309bba9abaa47f5d1a093eae9"
+    },
+    {
+      "path": "/home/ericbuehler/qwen4exp_work/model_scaling_20260930/graph_candidate/adaptive_run/homogeneous_math_c8.json",
+      "sha256": "f84012c9bdbf6eeb8e4174a1712f55f881a62fd083d933b5f66b2bdf88afd6bd"
+    }
+  ],
+  "definition": "Mean +/- sample SD across three measured trials after two warmups; C1 has eight requests, C8 has three waves of eight. Whole-trial rates include prefill/client/startup/drain. Per-active rate is output tokens / summed request latency.",
+  "limits": [
+    "Homogeneous inputs do not prove identical expert routing or weight reuse.",
+    "Batch-dependent numerics and adaptive MTP can change outputs, acceptance, and depth; output equality is diagnostic, not required.",
+    "Sequential phases are not randomized causal trials. Metrics phase boundaries include warmups; these finite-wave results are separate from normal mixed-prompt serving and closed-loop results."
+  ]
+}

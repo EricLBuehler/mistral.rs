@@ -1,0 +1,2819 @@
+{
+  "complete": true,
+  "diagnostic": "homogeneous input, synchronized finite waves; not a normal mixed-prompt benchmark",
+  "date": "2026-09-30T19:10:55.964763+00:00",
+  "python_version": "3.12.3",
+  "label": "isq_mtp_adaptive_graphs36",
+  "source_prompts_sha256": "ff2600daa58028527e50710169fcd5915b28e894b7ef4a2b6438b66563812793",
+  "source_files_sha256": {
+    "bench_homogeneous.py": "6cb61ba30e30d01891ca02ee5e1a891900046f36631360f81b97bbd427f394fc",
+    "bench_concurrency.py": "9f664f3ff278f0f16b24e655477486e93b91aec41bf473510e13f449ab1dbbc3",
+    "bench_serving.py": "a16b5815b8744def761174e396de92e41ecd499afae712255721c20a33a79705"
+  },
+  "tokenizer_sha256": "0997f410c57a1f4e53b09e4be8f4a172d90edd9564368fb0847030937229b9f3",
+  "prompt_name": "math",
+  "prompt": "Solve step by step: a train travels 180 km in 2.5 hours. What is its average speed in m/s?",
+  "prompt_sha256": "93d3da4cd1b7890e2560f7a5fbcd0ac8a672cffc2c010723b4e66671a5bcfa36",
+  "expected_prompt_tokens": 30,
+  "settings": {
+    "mode": "burst",
+    "concurrency": 1,
+    "requests": 8,
+    "warmup": 2,
+    "trials": 3,
+    "max_tokens": 128,
+    "temperature": 0.0,
+    "seed": 20260929,
+    "ignore_eos": true,
+    "cache_prompt": false,
+    "logprobs": null,
+    "base_url": "http://127.0.0.1:1234",
+    "timeout": 1800
+  },
+  "runs": [
+    {
+      "complete": true,
+      "wall_seconds": 17.075060014991323,
+      "completed_output_tokens": 1024,
+      "aggregate_output_tokens_per_second": 59.97050663956453,
+      "mean_active_requests": 0.9997723575805897,
+      "mean_request_wall_seconds": 2.1338966258772416,
+      "mean_request_output_tokens_per_second": 60.1505233032399,
+      "latency_weighted_request_output_tokens_per_second": 59.98416157923273,
+      "sustained_window": null,
+      "sustained_window_unavailable_reason": "burst traffic, failed trial, or fewer than C completions between first completion and last replenishment",
+      "requests": [
+        {
+          "request_index": 0,
+          "prompt_name": "math",
+          "prompt_sha256": "93d3da4cd1b7890e2560f7a5fbcd0ac8a672cffc2c010723b4e66671a5bcfa36",
+          "request": {
+            "model": "default",
+            "prompt": "Solve step by step: a train travels 180 km in 2.5 hours. What is its average speed in m/s?",
+            "max_tokens": 128,
+            "temperature": 0.0,
+            "seed": 20260929,
+            "ignore_eos": true,
+            "cache_prompt": false
+          },
+          "submitted_seconds": 0.0006372399802785367,
+          "started_seconds": 0.001660324982367456,
+          "finished_seconds": 2.003805760992691,
+          "wall_seconds": 2.0021454360103235,
+          "output_tokens_per_second": 63.93141961508335,
+          "response": {
+            "id": "739",
+            "choices": [
+              {
+                "finish_reason": "length",
+                "index": 0,
+                "text": "<think>\n\n</think>\n\nTo find the average speed in meters per second (m/s), we will follow these steps:\n\n### Step 1: Identify the given values\n*   Distance ($d$) = $180$ km\n*   Time ($t$) = $2.5$ hours\n\n### Step 2: Calculate the average speed in km/h\nThe formula for average speed is:\n$$ \\text{Speed} = \\frac{\\text{Distance}}{\\text{Time}} $$\n\nSubstitute the given values:\n$$ \\text{Speed} = \\frac{180 \\",
+                "logprobs": null
+              }
+            ],
+            "created": 1790795455,
+            "model": "/home/ericbuehler/.cache/huggingface/hub/models--Qwen--Qwen3.8-Flash-Next/snapshots/de4b8e4d43b917e7706784d8bb445c9af86a3540",
+            "system_fingerprint": "local",
+            "object": "text_completion",
+            "usage": {
+              "completion_tokens": 128,
+              "prompt_tokens": 30,
+              "total_tokens": 158,
+              "avg_tok_per_sec": 80.20305,
+              "avg_prompt_tok_per_sec": 275.22937,
+              "avg_compl_tok_per_sec": 68.78023,
+              "total_time_sec": 1.97,
+              "total_prompt_time_sec": 0.109,
+              "total_completion_time_sec": 1.861
+            }
+          },
+          "error": null,
+          "response_sha256": "f0b1ebb03ef3e32658dd0493b6218be377ccc7197901a7c9496cf1f1a9613f89",
+          "output_text_sha256": "a99640afcf2044b3f216a2e25cea7bd2b17fd60df1322ef833fb13d08ec7cfce"
+        },
+        {
+          "request_index": 1,
+          "prompt_name": "math",
+          "prompt_sha256": "93d3da4cd1b7890e2560f7a5fbcd0ac8a672cffc2c010723b4e66671a5bcfa36",
+          "request": {
+            "model": "default",
+            "prompt": "Solve step by step: a train travels 180 km in 2.5 hours. What is its average speed in m/s?",
+            "max_tokens": 128,
+            "temperature": 0.0,
+            "seed": 20260929,
+            "ignore_eos": true,
+            "cache_prompt": false
+          },
+          "submitted_seconds": 2.0040205949917436,
+          "started_seconds": 2.004133748996537,
+          "finished_seconds": 4.092666496988386,
+          "wall_seconds": 2.0885327479918487,
+          "output_tokens_per_second": 61.28704475573757,
+          "response": {
+            "id": "740",
+            "choices": [
+              {
+                "finish_reason": "length",
+                "index": 0,
+                "text": "<think>\n\n</think>\n\nTo find the average speed in meters per second (m/s), we will follow these steps:\n\n### Step 1: Identify the given values\n*   Distance ($d$) = $180 \\text{ km}$\n*   Time ($t$) = $2.5 \\text{ hours}$\n\n### Step 2: Calculate the average speed in km/h\nThe formula for average speed is:\n$$ v = \\frac{d}{t} $$\n\nSubstitute the given values:\n$$ v = \\frac{180 \\text{ km}}{2.",
+                "logprobs": null
+              }
+            ],
+            "created": 1790795457,
+            "model": "/home/ericbuehler/.cache/huggingface/hub/models--Qwen--Qwen3.8-Flash-Next/snapshots/de4b8e4d43b917e7706784d8bb445c9af86a3540",
+            "system_fingerprint": "local",
+            "object": "text_completion",
+            "usage": {
+              "completion_tokens": 128,
+              "prompt_tokens": 30,
+              "total_tokens": 158,
+              "avg_tok_per_sec": 76.62464,
+              "avg_prompt_tok_per_sec": 283.01886,
+              "avg_compl_tok_per_sec": 65.439674,
+              "total_time_sec": 2.062,
+              "total_prompt_time_sec": 0.106,
+              "total_completion_time_sec": 1.956
+            }
+          },
+          "error": null,
+          "response_sha256": "1201652f4222793db111899cea7105d66fb8043a6ec0bbafff4bc99f8d35f8cb",
+          "output_text_sha256": "ed7ad98095f368bf37d3a00d30bad778a4febf7f806bd905bf4715381d88a445"
+        },
+        {
+          "request_index": 2,
+          "prompt_name": "math",
+          "prompt_sha256": "93d3da4cd1b7890e2560f7a5fbcd0ac8a672cffc2c010723b4e66671a5bcfa36",
+          "request": {
+            "model": "default",
+            "prompt": "Solve step by step: a train travels 180 km in 2.5 hours. What is its average speed in m/s?",
+            "max_tokens": 128,
+            "temperature": 0.0,
+            "seed": 20260929,
+            "ignore_eos": true,
+            "cache_prompt": false
+          },
+          "submitted_seconds": 4.092873171000974,
+          "started_seconds": 4.092966964002699,
+          "finished_seconds": 6.153664632991422,
+          "wall_seconds": 2.0606976689887233,
+          "output_tokens_per_second": 62.114885616780136,
+          "response": {
+            "id": "741",
+            "choices": [
+              {
+                "finish_reason": "length",
+                "index": 0,
+                "text": "<think>\n\n</think>\n\nTo find the average speed in meters per second (m/s), we will follow these steps:\n\n### Step 1: Identify the given values\n*   Distance ($d$) = $180 \\text{ km}$\n*   Time ($t$) = $2.5 \\text{ hours}$\n\n### Step 2: Calculate the average speed in km/h\nThe formula for average speed is:\n$$ v = \\frac{d}{t} $$\n\nSubstitute the given values:\n$$ v = \\frac{180 \\text{ km}}{2.",
+                "logprobs": null
+              }
+            ],
+            "created": 1790795460,
+            "model": "/home/ericbuehler/.cache/huggingface/hub/models--Qwen--Qwen3.8-Flash-Next/snapshots/de4b8e4d43b917e7706784d8bb445c9af86a3540",
+            "system_fingerprint": "local",
+            "object": "text_completion",
+            "usage": {
+              "completion_tokens": 128,
+              "prompt_tokens": 30,
+              "total_tokens": 158,
+              "avg_tok_per_sec": 77.48897,
+              "avg_prompt_tok_per_sec": 277.7778,
+              "avg_compl_tok_per_sec": 66.286896,
+              "total_time_sec": 2.039,
+              "total_prompt_time_sec": 0.108,
+              "total_completion_time_sec": 1.931
+            }
+          },
+          "error": null,
+          "response_sha256": "6c99be7cfdac472211bae9d2b2de232f5611dd6268bbcdb102392ddb32d0595c",
+          "output_text_sha256": "ed7ad98095f368bf37d3a00d30bad778a4febf7f806bd905bf4715381d88a445"
+        },
+        {
+          "request_index": 3,
+          "prompt_name": "math",
+          "prompt_sha256": "93d3da4cd1b7890e2560f7a5fbcd0ac8a672cffc2c010723b4e66671a5bcfa36",
+          "request": {
+            "model": "default",
+            "prompt": "Solve step by step: a train travels 180 km in 2.5 hours. What is its average speed in m/s?",
+            "max_tokens": 128,
+            "temperature": 0.0,
+            "seed": 20260929,
+            "ignore_eos": true,
+            "cache_prompt": false
+          },
+          "submitted_seconds": 6.153852186980657,
+          "started_seconds": 6.1539481559884734,
+          "finished_seconds": 8.272062873002142,
+          "wall_seconds": 2.1181147170136683,
+          "output_tokens_per_second": 60.43109892577835,
+          "response": {
+            "id": "742",
+            "choices": [
+              {
+                "finish_reason": "length",
+                "index": 0,
+                "text": "<think>\n\n</think>\n\nTo find the average speed in meters per second (m/s), we will follow these steps:\n\n### Step 1: Identify the given values\n*   Distance ($d$) = $180 \\text{ km}$\n*   Time ($t$) = $2.5 \\text{ hours}$\n\n### Step 2: Calculate the average speed in km/h\nThe formula for average speed is:\n$$ v = \\frac{d}{t} $$\n\nSubstitute the given values:\n$$ v = \\frac{180 \\text{ km}}{2.",
+                "logprobs": null
+              }
+            ],
+            "created": 1790795462,
+            "model": "/home/ericbuehler/.cache/huggingface/hub/models--Qwen--Qwen3.8-Flash-Next/snapshots/de4b8e4d43b917e7706784d8bb445c9af86a3540",
+            "system_fingerprint": "local",
+            "object": "text_completion",
+            "usage": {
+              "completion_tokens": 128,
+              "prompt_tokens": 30,
+              "total_tokens": 158,
+              "avg_tok_per_sec": 75.30982,
+              "avg_prompt_tok_per_sec": 283.01886,
+              "avg_compl_tok_per_sec": 64.25703,
+              "total_time_sec": 2.098,
+              "total_prompt_time_sec": 0.106,
+              "total_completion_time_sec": 1.992
+            }
+          },
+          "error": null,
+          "response_sha256": "7489def940cf6c3d747217350a67257ed1217be939c41a93df5c6e00b61ccee3",
+          "output_text_sha256": "ed7ad98095f368bf37d3a00d30bad778a4febf7f806bd905bf4715381d88a445"
+        },
+        {
+          "request_index": 4,
+          "prompt_name": "math",
+          "prompt_sha256": "93d3da4cd1b7890e2560f7a5fbcd0ac8a672cffc2c010723b4e66671a5bcfa36",
+          "request": {
+            "model": "default",
+            "prompt": "Solve step by step: a train travels 180 km in 2.5 hours. What is its average speed in m/s?",
+            "max_tokens": 128,
+            "temperature": 0.0,
+            "seed": 20260929,
+            "ignore_eos": true,
+            "cache_prompt": false
+          },
+          "submitted_seconds": 8.272248058987316,
+          "started_seconds": 8.272355339984642,
+          "finished_seconds": 10.696930078993319,
+          "wall_seconds": 2.4245747390086763,
+          "output_tokens_per_second": 52.79276317641366,
+          "response": {
+            "id": "743",
+            "choices": [
+              {
+                "finish_reason": "length",
+                "index": 0,
+                "text": "<think>\n\n</think>\n\nTo find the average speed in meters per second (m/s), we need to convert the given distance from kilometers to meters and the time from hours to seconds, then apply the speed formula.\n\n**Step 1: Identify the given values**\n*   Distance ($d$) = $180 \\text{ km}$\n*   Time ($t$) = $2.5 \\text{ hours}$\n\n**Step 2: Convert distance to meters**\nSince $1 \\text{ km} = 1,000 \\text{ meters}$:\n$$180",
+                "logprobs": null
+              }
+            ],
+            "created": 1790795464,
+            "model": "/home/ericbuehler/.cache/huggingface/hub/models--Qwen--Qwen3.8-Flash-Next/snapshots/de4b8e4d43b917e7706784d8bb445c9af86a3540",
+            "system_fingerprint": "local",
+            "object": "text_completion",
+            "usage": {
+              "completion_tokens": 128,
+              "prompt_tokens": 30,
+              "total_tokens": 158,
+              "avg_tok_per_sec": 65.94324,
+              "avg_prompt_tok_per_sec": 283.01886,
+              "avg_compl_tok_per_sec": 55.8952,
+              "total_time_sec": 2.396,
+              "total_prompt_time_sec": 0.106,
+              "total_completion_time_sec": 2.29
+            }
+          },
+          "error": null,
+          "response_sha256": "b5ca0a7b7a58a0b9c9c0356272dcb5168bafec5352d53df3f2a6399a6e76f82e",
+          "output_text_sha256": "3c5881663580d269eb217e1ff1497516583c9fa87d6cf19a6b2cdba3289b4a2f"
+        },
+        {
+          "request_index": 5,
+          "prompt_name": "math",
+          "prompt_sha256": "93d3da4cd1b7890e2560f7a5fbcd0ac8a672cffc2c010723b4e66671a5bcfa36",
+          "request": {
+            "model": "default",
+            "prompt": "Solve step by step: a train travels 180 km in 2.5 hours. What is its average speed in m/s?",
+            "max_tokens": 128,
+            "temperature": 0.0,
+            "seed": 20260929,
+            "ignore_eos": true,
+            "cache_prompt": false
+          },
+          "submitted_seconds": 10.697118513984606,
+          "started_seconds": 10.697208306984976,
+          "finished_seconds": 12.828520317998482,
+          "wall_seconds": 2.131312011013506,
+          "output_tokens_per_second": 60.05690360611817,
+          "response": {
+            "id": "744",
+            "choices": [
+              {
+                "finish_reason": "length",
+                "index": 0,
+                "text": "<think>\n\n</think>\n\nTo find the average speed in meters per second (m/s), we will follow these steps:\n\n### Step 1: Identify the given values\n*   Distance ($d$) = $180$ km\n*   Time ($t$) = $2.5$ hours\n\n### Step 2: Calculate the average speed in km/h\nThe formula for average speed is:\n$$ \\text{Speed} = \\frac{\\text{Distance}}{\\text{Time}} $$\n\nSubstitute the given values:\n$$ \\text{Speed} = \\frac{180 \\",
+                "logprobs": null
+              }
+            ],
+            "created": 1790795466,
+            "model": "/home/ericbuehler/.cache/huggingface/hub/models--Qwen--Qwen3.8-Flash-Next/snapshots/de4b8e4d43b917e7706784d8bb445c9af86a3540",
+            "system_fingerprint": "local",
+            "object": "text_completion",
+            "usage": {
+              "completion_tokens": 128,
+              "prompt_tokens": 30,
+              "total_tokens": 158,
+              "avg_tok_per_sec": 75.02374,
+              "avg_prompt_tok_per_sec": 275.22937,
+              "avg_compl_tok_per_sec": 64.096146,
+              "total_time_sec": 2.106,
+              "total_prompt_time_sec": 0.109,
+              "total_completion_time_sec": 1.997
+            }
+          },
+          "error": null,
+          "response_sha256": "72862ba819a584bd03ad905c4c633ed40844638dcbe21b79a4871c6aeaed4839",
+          "output_text_sha256": "a99640afcf2044b3f216a2e25cea7bd2b17fd60df1322ef833fb13d08ec7cfce"
+        },
+        {
+          "request_index": 6,
+          "prompt_name": "math",
+          "prompt_sha256": "93d3da4cd1b7890e2560f7a5fbcd0ac8a672cffc2c010723b4e66671a5bcfa36",
+          "request": {
+            "model": "default",
+            "prompt": "Solve step by step: a train travels 180 km in 2.5 hours. What is its average speed in m/s?",
+            "max_tokens": 128,
+            "temperature": 0.0,
+            "seed": 20260929,
+            "ignore_eos": true,
+            "cache_prompt": false
+          },
+          "submitted_seconds": 12.828720208985033,
+          "started_seconds": 12.828805361990817,
+          "finished_seconds": 14.94904593998217,
+          "wall_seconds": 2.1202405779913533,
+          "output_tokens_per_second": 60.37050763421527,
+          "response": {
+            "id": "745",
+            "choices": [
+              {
+                "finish_reason": "length",
+                "index": 0,
+                "text": "<think>\n\n</think>\n\nTo find the average speed in meters per second (m/s), we will follow these steps:\n\n### Step 1: Identify the given values\n*   Distance ($d$) = $180 \\text{ km}$\n*   Time ($t$) = $2.5 \\text{ hours}$\n\n### Step 2: Calculate the average speed in km/h\nThe formula for average speed is:\n$$ v = \\frac{d}{t} $$\n\nSubstitute the given values:\n$$ v = \\frac{180 \\text{ km}}{2.",
+                "logprobs": null
+              }
+            ],
+            "created": 1790795468,
+            "model": "/home/ericbuehler/.cache/huggingface/hub/models--Qwen--Qwen3.8-Flash-Next/snapshots/de4b8e4d43b917e7706784d8bb445c9af86a3540",
+            "system_fingerprint": "local",
+            "object": "text_completion",
+            "usage": {
+              "completion_tokens": 128,
+              "prompt_tokens": 30,
+              "total_tokens": 158,
+              "avg_tok_per_sec": 75.34573,
+              "avg_prompt_tok_per_sec": 280.37384,
+              "avg_compl_tok_per_sec": 64.32161,
+              "total_time_sec": 2.097,
+              "total_prompt_time_sec": 0.107,
+              "total_completion_time_sec": 1.99
+            }
+          },
+          "error": null,
+          "response_sha256": "992f7188a038a6d06a6838f51b22b0cc1a83edd8e37844dbf8f42b08c4950bba",
+          "output_text_sha256": "ed7ad98095f368bf37d3a00d30bad778a4febf7f806bd905bf4715381d88a445"
+        },
+        {
+          "request_index": 7,
+          "prompt_name": "math",
+          "prompt_sha256": "93d3da4cd1b7890e2560f7a5fbcd0ac8a672cffc2c010723b4e66671a5bcfa36",
+          "request": {
+            "model": "default",
+            "prompt": "Solve step by step: a train travels 180 km in 2.5 hours. What is its average speed in m/s?",
+            "max_tokens": 128,
+            "temperature": 0.0,
+            "seed": 20260929,
+            "ignore_eos": true,
+            "cache_prompt": false
+          },
+          "submitted_seconds": 14.949124676990323,
+          "started_seconds": 14.949198869988322,
+          "finished_seconds": 17.074753978988156,
+          "wall_seconds": 2.1255551089998335,
+          "output_tokens_per_second": 60.2195630957927,
+          "response": {
+            "id": "746",
+            "choices": [
+              {
+                "finish_reason": "length",
+                "index": 0,
+                "text": "<think>\n\n</think>\n\nTo find the average speed in meters per second (m/s), we will follow these steps:\n\n### Step 1: Identify the given values\n*   Distance ($d$) = $180 \\text{ km}$\n*   Time ($t$) = $2.5 \\text{ hours}$\n\n### Step 2: Calculate the average speed in km/h\nThe formula for average speed is:\n$$ v = \\frac{d}{t} $$\n\nSubstitute the given values:\n$$ v = \\frac{180 \\text{ km}}{2.",
+                "logprobs": null
+              }
+            ],
+            "created": 1790795470,
+            "model": "/home/ericbuehler/.cache/huggingface/hub/models--Qwen--Qwen3.8-Flash-Next/snapshots/de4b8e4d43b917e7706784d8bb445c9af86a3540",
+            "system_fingerprint": "local",
+            "object": "text_completion",
+            "usage": {
+              "completion_tokens": 128,
+              "prompt_tokens": 30,
+              "total_tokens": 158,
+              "avg_tok_per_sec": 75.13077,
+              "avg_prompt_tok_per_sec": 280.37384,
+              "avg_compl_tok_per_sec": 64.12826,
+              "total_time_sec": 2.103,
+              "total_prompt_time_sec": 0.107,
+              "total_completion_time_sec": 1.996
+            }
+          },
+          "error": null,
+          "response_sha256": "805176071a88f80fad72422c2bdd5f6d8da75a991464f0b16bb0ef832cbd7f85",
+          "output_text_sha256": "ed7ad98095f368bf37d3a00d30bad778a4febf7f806bd905bf4715381d88a445"
+        }
+      ],
+      "trial": 0,
+      "warmup": true,
+      "waves": [
+        {
+          "request_indices": [
+            0
+          ],
+          "started_seconds": 0.001660324982367456,
+          "finished_seconds": 2.003805760992691,
+          "mean_active_requests": 1.0,
+          "complete": true,
+          "agreement": {
+            "request_count": 1,
+            "unique_output_text_hashes": 1,
+            "hash_counts": {
+              "a99640afcf2044b3f216a2e25cea7bd2b17fd60df1322ef833fb13d08ec7cfce": 1
+            },
+            "all_outputs_identical": true,
+            "equal_pair_fraction": null
+          }
+        },
+        {
+          "request_indices": [
+            1
+          ],
+          "started_seconds": 2.004133748996537,
+          "finished_seconds": 4.092666496988386,
+          "mean_active_requests": 1.0,
+          "complete": true,
+          "agreement": {
+            "request_count": 1,
+            "unique_output_text_hashes": 1,
+            "hash_counts": {
+              "ed7ad98095f368bf37d3a00d30bad778a4febf7f806bd905bf4715381d88a445": 1
+            },
+            "all_outputs_identical": true,
+            "equal_pair_fraction": null
+          }
+        },
+        {
+          "request_indices": [
+            2
+          ],
+          "started_seconds": 4.092966964002699,
+          "finished_seconds": 6.153664632991422,
+          "mean_active_requests": 1.0,
+          "complete": true,
+          "agreement": {
+            "request_count": 1,
+            "unique_output_text_hashes": 1,
+            "hash_counts": {
+              "ed7ad98095f368bf37d3a00d30bad778a4febf7f806bd905bf4715381d88a445": 1
+            },
+            "all_outputs_identical": true,
+            "equal_pair_fraction": null
+          }
+        },
+        {
+          "request_indices": [
+            3
+          ],
+          "started_seconds": 6.1539481559884734,
+          "finished_seconds": 8.272062873002142,
+          "mean_active_requests": 1.0,
+          "complete": true,
+          "agreement": {
+            "request_count": 1,
+            "unique_output_text_hashes": 1,
+            "hash_counts": {
+              "ed7ad98095f368bf37d3a00d30bad778a4febf7f806bd905bf4715381d88a445": 1
+            },
+            "all_outputs_identical": true,
+            "equal_pair_fraction": null
+          }
+        },
+        {
+          "request_indices": [
+            4
+          ],
+          "started_seconds": 8.272355339984642,
+          "finished_seconds": 10.696930078993319,
+          "mean_active_requests": 1.0,
+          "complete": true,
+          "agreement": {
+            "request_count": 1,
+            "unique_output_text_hashes": 1,
+            "hash_counts": {
+              "3c5881663580d269eb217e1ff1497516583c9fa87d6cf19a6b2cdba3289b4a2f": 1
+            },
+            "all_outputs_identical": true,
+            "equal_pair_fraction": null
+          }
+        },
+        {
+          "request_indices": [
+            5
+          ],
+          "started_seconds": 10.697208306984976,
+          "finished_seconds": 12.828520317998482,
+          "mean_active_requests": 1.0,
+          "complete": true,
+          "agreement": {
+            "request_count": 1,
+            "unique_output_text_hashes": 1,
+            "hash_counts": {
+              "a99640afcf2044b3f216a2e25cea7bd2b17fd60df1322ef833fb13d08ec7cfce": 1
+            },
+            "all_outputs_identical": true,
+            "equal_pair_fraction": null
+          }
+        },
+        {
+          "request_indices": [
+            6
+          ],
+          "started_seconds": 12.828805361990817,
+          "finished_seconds": 14.94904593998217,
+          "mean_active_requests": 1.0,
+          "complete": true,
+          "agreement": {
+            "request_count": 1,
+            "unique_output_text_hashes": 1,
+            "hash_counts": {
+              "ed7ad98095f368bf37d3a00d30bad778a4febf7f806bd905bf4715381d88a445": 1
+            },
+            "all_outputs_identical": true,
+            "equal_pair_fraction": null
+          }
+        },
+        {
+          "request_indices": [
+            7
+          ],
+          "started_seconds": 14.949198869988322,
+          "finished_seconds": 17.074753978988156,
+          "mean_active_requests": 1.0,
+          "complete": true,
+          "agreement": {
+            "request_count": 1,
+            "unique_output_text_hashes": 1,
+            "hash_counts": {
+              "ed7ad98095f368bf37d3a00d30bad778a4febf7f806bd905bf4715381d88a445": 1
+            },
+            "all_outputs_identical": true,
+            "equal_pair_fraction": null
+          }
+        }
+      ]
+    },
+    {
+      "complete": true,
+      "wall_seconds": 17.312468993011862,
+      "completed_output_tokens": 1024,
+      "aggregate_output_tokens_per_second": 59.148120375743936,
+      "mean_active_requests": 0.9996563655352768,
+      "mean_request_wall_seconds": 2.1633149789995514,
+      "mean_request_output_tokens_per_second": 59.21333767124417,
+      "latency_weighted_request_output_tokens_per_second": 59.16845269531439,
+      "sustained_window": null,
+      "sustained_window_unavailable_reason": "burst traffic, failed trial, or fewer than C completions between first completion and last replenishment",
+      "requests": [
+        {
+          "request_index": 0,
+          "prompt_name": "math",
+          "prompt_sha256": "93d3da4cd1b7890e2560f7a5fbcd0ac8a672cffc2c010723b4e66671a5bcfa36",
+          "request": {
+            "model": "default",
+            "prompt": "Solve step by step: a train travels 180 km in 2.5 hours. What is its average speed in m/s?",
+            "max_tokens": 128,
+            "temperature": 0.0,
+            "seed": 20260929,
+            "ignore_eos": true,
+            "cache_prompt": false
+          },
+          "submitted_seconds": 1.3167998986318707e-05,
+          "started_seconds": 0.0007513370073866099,
+          "finished_seconds": 2.1006871700228658,
+          "wall_seconds": 2.099935833015479,
+          "output_tokens_per_second": 60.95424345237909,
+          "response": {
+            "id": "747",
+            "choices": [
+              {
+                "finish_reason": "length",
+                "index": 0,
+                "text": "<think>\n\n</think>\n\nTo find the average speed in meters per second (m/s), we will follow these steps:\n\n### Step 1: Identify the given values\n*   Distance ($d$) = $180 \\text{ km}$\n*   Time ($t$) = $2.5 \\text{ hours}$\n\n### Step 2: Calculate the average speed in km/h\nThe formula for average speed is:\n$$ v = \\frac{d}{t} $$\n\nSubstitute the given values:\n$$ v = \\frac{180 \\text{ km}}{2.",
+                "logprobs": null
+              }
+            ],
+            "created": 1790795473,
+            "model": "/home/ericbuehler/.cache/huggingface/hub/models--Qwen--Qwen3.8-Flash-Next/snapshots/de4b8e4d43b917e7706784d8bb445c9af86a3540",
+            "system_fingerprint": "local",
+            "object": "text_completion",
+            "usage": {
+              "completion_tokens": 128,
+              "prompt_tokens": 30,
+              "total_tokens": 158,
+              "avg_tok_per_sec": 76.14458,
+              "avg_prompt_tok_per_sec": 280.37384,
+              "avg_compl_tok_per_sec": 65.04065,
+              "total_time_sec": 2.075,
+              "total_prompt_time_sec": 0.107,
+              "total_completion_time_sec": 1.968
+            }
+          },
+          "error": null,
+          "response_sha256": "d4dbe22915a0a472617069cd5c19e9f049de529064d81e009bd55e94a0632cbb",
+          "output_text_sha256": "ed7ad98095f368bf37d3a00d30bad778a4febf7f806bd905bf4715381d88a445"
+        },
+        {
+          "request_index": 1,
+          "prompt_name": "math",
+          "prompt_sha256": "93d3da4cd1b7890e2560f7a5fbcd0ac8a672cffc2c010723b4e66671a5bcfa36",
+          "request": {
+            "model": "default",
+            "prompt": "Solve step by step: a train travels 180 km in 2.5 hours. What is its average speed in m/s?",
+            "max_tokens": 128,
+            "temperature": 0.0,
+            "seed": 20260929,
+            "ignore_eos": true,
+            "cache_prompt": false
+          },
+          "submitted_seconds": 2.101209640997695,
+          "started_seconds": 2.101345338014653,
+          "finished_seconds": 4.391611205006484,
+          "wall_seconds": 2.290265866991831,
+          "output_tokens_per_second": 55.88870787657621,
+          "response": {
+            "id": "748",
+            "choices": [
+              {
+                "finish_reason": "length",
+                "index": 0,
+                "text": "<think>\n\n</think>\n\nTo find the average speed in meters per second (m/s), we will follow these steps:\n\n### Step 1: Identify the given values\n*   Distance ($d$) = $180 \\text{ km}$\n*   Time ($t$) = $2.5 \\text{ hours}$\n\n### Step 2: Calculate the average speed in km/h\nThe formula for average speed is:\n$$ \\text{Speed} = \\frac{\\text{Distance}}{\\text{Time}} $$\n\nSubstitute the given values:\n$$ \\text{Speed} = \\",
+                "logprobs": null
+              }
+            ],
+            "created": 1790795475,
+            "model": "/home/ericbuehler/.cache/huggingface/hub/models--Qwen--Qwen3.8-Flash-Next/snapshots/de4b8e4d43b917e7706784d8bb445c9af86a3540",
+            "system_fingerprint": "local",
+            "object": "text_completion",
+            "usage": {
+              "completion_tokens": 128,
+              "prompt_tokens": 30,
+              "total_tokens": 158,
+              "avg_tok_per_sec": 69.78799,
+              "avg_prompt_tok_per_sec": 275.22937,
+              "avg_compl_tok_per_sec": 59.39675,
+              "total_time_sec": 2.264,
+              "total_prompt_time_sec": 0.109,
+              "total_completion_time_sec": 2.155
+            }
+          },
+          "error": null,
+          "response_sha256": "63ae59dff7f37fb6a6d7f0349b2c3443f71dfe987502838f716d67a02341a196",
+          "output_text_sha256": "648ce818f8354da7fcdda90cb502b6976fd2c9d7a0ea98703eecc980cd51e97d"
+        },
+        {
+          "request_index": 2,
+          "prompt_name": "math",
+          "prompt_sha256": "93d3da4cd1b7890e2560f7a5fbcd0ac8a672cffc2c010723b4e66671a5bcfa36",
+          "request": {
+            "model": "default",
+            "prompt": "Solve step by step: a train travels 180 km in 2.5 hours. What is its average speed in m/s?",
+            "max_tokens": 128,
+            "temperature": 0.0,
+            "seed": 20260929,
+            "ignore_eos": true,
+            "cache_prompt": false
+          },
+          "submitted_seconds": 4.391874328022823,
+          "started_seconds": 4.391968841024209,
+          "finished_seconds": 6.476611254998716,
+          "wall_seconds": 2.084642413974507,
+          "output_tokens_per_second": 61.40141788440332,
+          "response": {
+            "id": "749",
+            "choices": [
+              {
+                "finish_reason": "length",
+                "index": 0,
+                "text": "<think>\n\n</think>\n\nTo find the average speed in meters per second (m/s), we will follow these steps:\n\n### Step 1: Identify the given values\n*   Distance ($d$) = $180 \\text{ km}$\n*   Time ($t$) = $2.5 \\text{ hours}$\n\n### Step 2: Calculate the average speed in km/h\nThe formula for average speed is:\n$$ \\text{Speed} = \\frac{\\text{Distance}}{\\text{Time}} $$\n\nSubstitute the given values:\n$$ \\text{Speed} = \\",
+                "logprobs": null
+              }
+            ],
+            "created": 1790795477,
+            "model": "/home/ericbuehler/.cache/huggingface/hub/models--Qwen--Qwen3.8-Flash-Next/snapshots/de4b8e4d43b917e7706784d8bb445c9af86a3540",
+            "system_fingerprint": "local",
+            "object": "text_completion",
+            "usage": {
+              "completion_tokens": 128,
+              "prompt_tokens": 30,
+              "total_tokens": 158,
+              "avg_tok_per_sec": 76.550385,
+              "avg_prompt_tok_per_sec": 277.7778,
+              "avg_compl_tok_per_sec": 65.439674,
+              "total_time_sec": 2.064,
+              "total_prompt_time_sec": 0.108,
+              "total_completion_time_sec": 1.956
+            }
+          },
+          "error": null,
+          "response_sha256": "9180eedadc8bbc4a8c41cd339ef22bfe1876bb8f435dd35650f07ad20feffd17",
+          "output_text_sha256": "648ce818f8354da7fcdda90cb502b6976fd2c9d7a0ea98703eecc980cd51e97d"
+        },
+        {
+          "request_index": 3,
+          "prompt_name": "math",
+          "prompt_sha256": "93d3da4cd1b7890e2560f7a5fbcd0ac8a672cffc2c010723b4e66671a5bcfa36",
+          "request": {
+            "model": "default",
+            "prompt": "Solve step by step: a train travels 180 km in 2.5 hours. What is its average speed in m/s?",
+            "max_tokens": 128,
+            "temperature": 0.0,
+            "seed": 20260929,
+            "ignore_eos": true,
+            "cache_prompt": false
+          },
+          "submitted_seconds": 6.4770408760232385,
+          "started_seconds": 6.477138540998567,
+          "finished_seconds": 8.62770717201056,
+          "wall_seconds": 2.1505686310119927,
+          "output_tokens_per_second": 59.51914212557219,
+          "response": {
+            "id": "750",
+            "choices": [
+              {
+                "finish_reason": "length",
+                "index": 0,
+                "text": "<think>\n\n</think>\n\nTo find the average speed in meters per second (m/s), we will follow these steps:\n\n### Step 1: Identify the given values\n*   Distance ($d$) = $180$ km\n*   Time ($t$) = $2.5$ hours\n\n### Step 2: Calculate the average speed in km/h\nThe formula for average speed is:\n$$ \\text{Speed} = \\frac{\\text{Distance}}{\\text{Time}} $$\n\nSubstitute the given values:\n$$ \\text{Speed} = \\frac{180 \\",
+                "logprobs": null
+              }
+            ],
+            "created": 1790795479,
+            "model": "/home/ericbuehler/.cache/huggingface/hub/models--Qwen--Qwen3.8-Flash-Next/snapshots/de4b8e4d43b917e7706784d8bb445c9af86a3540",
+            "system_fingerprint": "local",
+            "object": "text_completion",
+            "usage": {
+              "completion_tokens": 128,
+              "prompt_tokens": 30,
+              "total_tokens": 158,
+              "avg_tok_per_sec": 74.31797,
+              "avg_prompt_tok_per_sec": 277.7778,
+              "avg_compl_tok_per_sec": 63.42914,
+              "total_time_sec": 2.126,
+              "total_prompt_time_sec": 0.108,
+              "total_completion_time_sec": 2.018
+            }
+          },
+          "error": null,
+          "response_sha256": "00d33ebe4ab2d76eaf7cb0eae569856e153ee709f0cf32d14d1faf35792f95c5",
+          "output_text_sha256": "a99640afcf2044b3f216a2e25cea7bd2b17fd60df1322ef833fb13d08ec7cfce"
+        },
+        {
+          "request_index": 4,
+          "prompt_name": "math",
+          "prompt_sha256": "93d3da4cd1b7890e2560f7a5fbcd0ac8a672cffc2c010723b4e66671a5bcfa36",
+          "request": {
+            "model": "default",
+            "prompt": "Solve step by step: a train travels 180 km in 2.5 hours. What is its average speed in m/s?",
+            "max_tokens": 128,
+            "temperature": 0.0,
+            "seed": 20260929,
+            "ignore_eos": true,
+            "cache_prompt": false
+          },
+          "submitted_seconds": 8.62807544899988,
+          "started_seconds": 8.628173466015141,
+          "finished_seconds": 10.796163125021849,
+          "wall_seconds": 2.1679896590067074,
+          "output_tokens_per_second": 59.0408720208771,
+          "response": {
+            "id": "751",
+            "choices": [
+              {
+                "finish_reason": "length",
+                "index": 0,
+                "text": "<think>\n\n</think>\n\nTo find the average speed in meters per second (m/s), we will follow these steps:\n\n### Step 1: Identify the given values\n*   Distance ($d$) = $180 \\text{ km}$\n*   Time ($t$) = $2.5 \\text{ hours}$\n\n### Step 2: Calculate the average speed in km/h\nThe formula for average speed is:\n$$ v = \\frac{d}{t} $$\n\nSubstitute the given values:\n$$ v = \\frac{180 \\text{ km}}{2.",
+                "logprobs": null
+              }
+            ],
+            "created": 1790795481,
+            "model": "/home/ericbuehler/.cache/huggingface/hub/models--Qwen--Qwen3.8-Flash-Next/snapshots/de4b8e4d43b917e7706784d8bb445c9af86a3540",
+            "system_fingerprint": "local",
+            "object": "text_completion",
+            "usage": {
+              "completion_tokens": 128,
+              "prompt_tokens": 30,
+              "total_tokens": 158,
+              "avg_tok_per_sec": 73.866295,
+              "avg_prompt_tok_per_sec": 275.22937,
+              "avg_compl_tok_per_sec": 63.054188,
+              "total_time_sec": 2.139,
+              "total_prompt_time_sec": 0.109,
+              "total_completion_time_sec": 2.03
+            }
+          },
+          "error": null,
+          "response_sha256": "30637b1d59763785569524e28ae858bfb43df454ae23018bdadbd2c357ce6509",
+          "output_text_sha256": "ed7ad98095f368bf37d3a00d30bad778a4febf7f806bd905bf4715381d88a445"
+        },
+        {
+          "request_index": 5,
+          "prompt_name": "math",
+          "prompt_sha256": "93d3da4cd1b7890e2560f7a5fbcd0ac8a672cffc2c010723b4e66671a5bcfa36",
+          "request": {
+            "model": "default",
+            "prompt": "Solve step by step: a train travels 180 km in 2.5 hours. What is its average speed in m/s?",
+            "max_tokens": 128,
+            "temperature": 0.0,
+            "seed": 20260929,
+            "ignore_eos": true,
+            "cache_prompt": false
+          },
+          "submitted_seconds": 10.796701596002094,
+          "started_seconds": 10.796837757021422,
+          "finished_seconds": 13.003737574006664,
+          "wall_seconds": 2.206899816985242,
+          "output_tokens_per_second": 57.999914184983574,
+          "response": {
+            "id": "752",
+            "choices": [
+              {
+                "finish_reason": "length",
+                "index": 0,
+                "text": "<think>\n\n</think>\n\nTo find the average speed in meters per second (m/s), we will follow these steps:\n\n### Step 1: Identify the given values\n*   Distance ($d$) = $180 \\text{ km}$\n*   Time ($t$) = $2.5 \\text{ hours}$\n\n### Step 2: Calculate the average speed in km/h\nThe formula for average speed is:\n$$ v = \\frac{d}{t} $$\n\nSubstitute the given values:\n$$ v = \\frac{180 \\text{ km}}{2.",
+                "logprobs": null
+              }
+            ],
+            "created": 1790795483,
+            "model": "/home/ericbuehler/.cache/huggingface/hub/models--Qwen--Qwen3.8-Flash-Next/snapshots/de4b8e4d43b917e7706784d8bb445c9af86a3540",
+            "system_fingerprint": "local",
+            "object": "text_completion",
+            "usage": {
+              "completion_tokens": 128,
+              "prompt_tokens": 30,
+              "total_tokens": 158,
+              "avg_tok_per_sec": 72.31122,
+              "avg_prompt_tok_per_sec": 275.22937,
+              "avg_compl_tok_per_sec": 61.657032,
+              "total_time_sec": 2.185,
+              "total_prompt_time_sec": 0.109,
+              "total_completion_time_sec": 2.076
+            }
+          },
+          "error": null,
+          "response_sha256": "04aa16fb44acfae1c7858207832d556e7acd534753fd3c85e5dcfa4762e9d8e0",
+          "output_text_sha256": "ed7ad98095f368bf37d3a00d30bad778a4febf7f806bd905bf4715381d88a445"
+        },
+        {
+          "request_index": 6,
+          "prompt_name": "math",
+          "prompt_sha256": "93d3da4cd1b7890e2560f7a5fbcd0ac8a672cffc2c010723b4e66671a5bcfa36",
+          "request": {
+            "model": "default",
+            "prompt": "Solve step by step: a train travels 180 km in 2.5 hours. What is its average speed in m/s?",
+            "max_tokens": 128,
+            "temperature": 0.0,
+            "seed": 20260929,
+            "ignore_eos": true,
+            "cache_prompt": false
+          },
+          "submitted_seconds": 13.004243949020747,
+          "started_seconds": 13.004340573999798,
+          "finished_seconds": 15.144119344011415,
+          "wall_seconds": 2.139778770011617,
+          "output_tokens_per_second": 59.81926813831557,
+          "response": {
+            "id": "753",
+            "choices": [
+              {
+                "finish_reason": "length",
+                "index": 0,
+                "text": "<think>\n\n</think>\n\nTo find the average speed in meters per second (m/s), we will follow these steps:\n\n### Step 1: Identify the given values\n*   Distance ($d$) = $180 \\text{ km}$\n*   Time ($t$) = $2.5 \\text{ hours}$\n\n### Step 2: Calculate the average speed in km/h\nThe formula for average speed is:\n$$ \\text{Speed} = \\frac{\\text{Distance}}{\\text{Time}} $$\n\nSubstitute the given values:\n$$ \\text{Speed} = \\",
+                "logprobs": null
+              }
+            ],
+            "created": 1790795486,
+            "model": "/home/ericbuehler/.cache/huggingface/hub/models--Qwen--Qwen3.8-Flash-Next/snapshots/de4b8e4d43b917e7706784d8bb445c9af86a3540",
+            "system_fingerprint": "local",
+            "object": "text_completion",
+            "usage": {
+              "completion_tokens": 128,
+              "prompt_tokens": 30,
+              "total_tokens": 158,
+              "avg_tok_per_sec": 74.66919,
+              "avg_prompt_tok_per_sec": 277.7778,
+              "avg_compl_tok_per_sec": 63.74502,
+              "total_time_sec": 2.116,
+              "total_prompt_time_sec": 0.108,
+              "total_completion_time_sec": 2.008
+            }
+          },
+          "error": null,
+          "response_sha256": "5de8780818ef7e57a0047ac3d78f4354e9570224639263f4faebe825dbd17617",
+          "output_text_sha256": "648ce818f8354da7fcdda90cb502b6976fd2c9d7a0ea98703eecc980cd51e97d"
+        },
+        {
+          "request_index": 7,
+          "prompt_name": "math",
+          "prompt_sha256": "93d3da4cd1b7890e2560f7a5fbcd0ac8a672cffc2c010723b4e66671a5bcfa36",
+          "request": {
+            "model": "default",
+            "prompt": "Solve step by step: a train travels 180 km in 2.5 hours. What is its average speed in m/s?",
+            "max_tokens": 128,
+            "temperature": 0.0,
+            "seed": 20260929,
+            "ignore_eos": true,
+            "cache_prompt": false
+          },
+          "submitted_seconds": 15.144657063006889,
+          "started_seconds": 15.144794409017777,
+          "finished_seconds": 17.311233250016812,
+          "wall_seconds": 2.166438840999035,
+          "output_tokens_per_second": 59.08313568684628,
+          "response": {
+            "id": "754",
+            "choices": [
+              {
+                "finish_reason": "length",
+                "index": 0,
+                "text": "<think>\n\n</think>\n\nTo find the average speed in meters per second (m/s), we will follow these steps:\n\n### Step 1: Identify the given values\n*   Distance ($d$) = $180 \\text{ km}$\n*   Time ($t$) = $2.5 \\text{ hours}$\n\n### Step 2: Calculate the average speed in km/h\nThe formula for average speed is:\n$$ v = \\frac{d}{t} $$\n\nSubstitute the given values:\n$$ v = \\frac{180 \\text{ km}}{2.",
+                "logprobs": null
+              }
+            ],
+            "created": 1790795488,
+            "model": "/home/ericbuehler/.cache/huggingface/hub/models--Qwen--Qwen3.8-Flash-Next/snapshots/de4b8e4d43b917e7706784d8bb445c9af86a3540",
+            "system_fingerprint": "local",
+            "object": "text_completion",
+            "usage": {
+              "completion_tokens": 128,
+              "prompt_tokens": 30,
+              "total_tokens": 158,
+              "avg_tok_per_sec": 73.659676,
+              "avg_prompt_tok_per_sec": 277.7778,
+              "avg_compl_tok_per_sec": 62.837505,
+              "total_time_sec": 2.145,
+              "total_prompt_time_sec": 0.108,
+              "total_completion_time_sec": 2.037
+            }
+          },
+          "error": null,
+          "response_sha256": "d7d25acc3dcea7d0438d465708bcaea42512721413634cf1f275f89b5828d3c6",
+          "output_text_sha256": "ed7ad98095f368bf37d3a00d30bad778a4febf7f806bd905bf4715381d88a445"
+        }
+      ],
+      "trial": 1,
+      "warmup": true,
+      "waves": [
+        {
+          "request_indices": [
+            0
+          ],
+          "started_seconds": 0.0007513370073866099,
+          "finished_seconds": 2.1006871700228658,
+          "mean_active_requests": 1.0,
+          "complete": true,
+          "agreement": {
+            "request_count": 1,
+            "unique_output_text_hashes": 1,
+            "hash_counts": {
+              "ed7ad98095f368bf37d3a00d30bad778a4febf7f806bd905bf4715381d88a445": 1
+            },
+            "all_outputs_identical": true,
+            "equal_pair_fraction": null
+          }
+        },
+        {
+          "request_indices": [
+            1
+          ],
+          "started_seconds": 2.101345338014653,
+          "finished_seconds": 4.391611205006484,
+          "mean_active_requests": 1.0,
+          "complete": true,
+          "agreement": {
+            "request_count": 1,
+            "unique_output_text_hashes": 1,
+            "hash_counts": {
+              "648ce818f8354da7fcdda90cb502b6976fd2c9d7a0ea98703eecc980cd51e97d": 1
+            },
+            "all_outputs_identical": true,
+            "equal_pair_fraction": null
+          }
+        },
+        {
+          "request_indices": [
+            2
+          ],
+          "started_seconds": 4.391968841024209,
+          "finished_seconds": 6.476611254998716,
+          "mean_active_requests": 1.0,
+          "complete": true,
+          "agreement": {
+            "request_count": 1,
+            "unique_output_text_hashes": 1,
+            "hash_counts": {
+              "648ce818f8354da7fcdda90cb502b6976fd2c9d7a0ea98703eecc980cd51e97d": 1
+            },
+            "all_outputs_identical": true,
+            "equal_pair_fraction": null
+          }
+        },
+        {
+          "request_indices": [
+            3
+          ],
+          "started_seconds": 6.477138540998567,
+          "finished_seconds": 8.62770717201056,
+          "mean_active_requests": 1.0,
+          "complete": true,
+          "agreement": {
+            "request_count": 1,
+            "unique_output_text_hashes": 1,
+            "hash_counts": {
+              "a99640afcf2044b3f216a2e25cea7bd2b17fd60df1322ef833fb13d08ec7cfce": 1
+            },
+            "all_outputs_identical": true,
+            "equal_pair_fraction": null
+          }
+        },
+        {
+          "request_indices": [
+            4
+          ],
+          "started_seconds": 8.628173466015141,
+          "finished_seconds": 10.796163125021849,
+          "mean_active_requests": 1.0,
+          "complete": true,
+          "agreement": {
+            "request_count": 1,
+            "unique_output_text_hashes": 1,
+            "hash_counts": {
+              "ed7ad98095f368bf37d3a00d30bad778a4febf7f806bd905bf4715381d88a445": 1
+            },
+            "all_outputs_identical": true,
+            "equal_pair_fraction": null
+          }
+        },
+        {
+          "request_indices": [
+            5
+          ],
+          "started_seconds": 10.796837757021422,
+          "finished_seconds": 13.003737574006664,
+          "mean_active_requests": 1.0,
+          "complete": true,
+          "agreement": {
+            "request_count": 1,
+            "unique_output_text_hashes": 1,
+            "hash_counts": {
+              "ed7ad98095f368bf37d3a00d30bad778a4febf7f806bd905bf4715381d88a445": 1
+            },
+            "all_outputs_identical": true,
+            "equal_pair_fraction": null
+          }
+        },
+        {
+          "request_indices": [
+            6
+          ],
+          "started_seconds": 13.004340573999798,
+          "finished_seconds": 15.144119344011415,
+          "mean_active_requests": 1.0,
+          "complete": true,
+          "agreement": {
+            "request_count": 1,
+            "unique_output_text_hashes": 1,
+            "hash_counts": {
+              "648ce818f8354da7fcdda90cb502b6976fd2c9d7a0ea98703eecc980cd51e97d": 1
+            },
+            "all_outputs_identical": true,
+            "equal_pair_fraction": null
+          }
+        },
+        {
+          "request_indices": [
+            7
+          ],
+          "started_seconds": 15.144794409017777,
+          "finished_seconds": 17.311233250016812,
+          "mean_active_requests": 1.0,
+          "complete": true,
+          "agreement": {
+            "request_count": 1,
+            "unique_output_text_hashes": 1,
+            "hash_counts": {
+              "ed7ad98095f368bf37d3a00d30bad778a4febf7f806bd905bf4715381d88a445": 1
+            },
+            "all_outputs_identical": true,
+            "equal_pair_fraction": null
+          }
+        }
+      ]
+    },
+    {
+      "complete": true,
+      "wall_seconds": 17.135135913005797,
+      "completed_output_tokens": 1024,
+      "aggregate_output_tokens_per_second": 59.76024965304012,
+      "mean_active_requests": 0.9997350029783348,
+      "mean_request_wall_seconds": 2.141324394127878,
+      "mean_request_output_tokens_per_second": 59.808913740987734,
+      "latency_weighted_request_output_tokens_per_second": 59.776090138893714,
+      "sustained_window": null,
+      "sustained_window_unavailable_reason": "burst traffic, failed trial, or fewer than C completions between first completion and last replenishment",
+      "requests": [
+        {
+          "request_index": 0,
+          "prompt_name": "math",
+          "prompt_sha256": "93d3da4cd1b7890e2560f7a5fbcd0ac8a672cffc2c010723b4e66671a5bcfa36",
+          "request": {
+            "model": "default",
+            "prompt": "Solve step by step: a train travels 180 km in 2.5 hours. What is its average speed in m/s?",
+            "max_tokens": 128,
+            "temperature": 0.0,
+            "seed": 20260929,
+            "ignore_eos": true,
+            "cache_prompt": false
+          },
+          "submitted_seconds": 1.2321019312366843e-05,
+          "started_seconds": 0.00017273900448344648,
+          "finished_seconds": 2.218166751001263,
+          "wall_seconds": 2.2179940119967796,
+          "output_tokens_per_second": 57.70980413277412,
+          "response": {
+            "id": "755",
+            "choices": [
+              {
+                "finish_reason": "length",
+                "index": 0,
+                "text": "<think>\n\n</think>\n\nTo find the average speed in meters per second (m/s), we will follow these steps:\n\n### Step 1: Identify the given values\n*   Distance ($d$) = $180 \\text{ km}$\n*   Time ($t$) = $2.5 \\text{ hours}$\n\n### Step 2: Calculate the average speed in km/h\nThe formula for average speed is:\n$$ \\text{Speed} = \\frac{\\text{Distance}}{\\text{Time}} $$\n\nSubstitute the given values:\n$$ \\text{Speed} = \\",
+                "logprobs": null
+              }
+            ],
+            "created": 1790795490,
+            "model": "/home/ericbuehler/.cache/huggingface/hub/models--Qwen--Qwen3.8-Flash-Next/snapshots/de4b8e4d43b917e7706784d8bb445c9af86a3540",
+            "system_fingerprint": "local",
+            "object": "text_completion",
+            "usage": {
+              "completion_tokens": 128,
+              "prompt_tokens": 30,
+              "total_tokens": 158,
+              "avg_tok_per_sec": 71.98178,
+              "avg_prompt_tok_per_sec": 277.7778,
+              "avg_compl_tok_per_sec": 61.332054,
+              "total_time_sec": 2.195,
+              "total_prompt_time_sec": 0.108,
+              "total_completion_time_sec": 2.087
+            }
+          },
+          "error": null,
+          "response_sha256": "0548faf6f3a6e047cd7a0601ab820ebc310b77da2d52e8055982ff07bb9f64d5",
+          "output_text_sha256": "648ce818f8354da7fcdda90cb502b6976fd2c9d7a0ea98703eecc980cd51e97d"
+        },
+        {
+          "request_index": 1,
+          "prompt_name": "math",
+          "prompt_sha256": "93d3da4cd1b7890e2560f7a5fbcd0ac8a672cffc2c010723b4e66671a5bcfa36",
+          "request": {
+            "model": "default",
+            "prompt": "Solve step by step: a train travels 180 km in 2.5 hours. What is its average speed in m/s?",
+            "max_tokens": 128,
+            "temperature": 0.0,
+            "seed": 20260929,
+            "ignore_eos": true,
+            "cache_prompt": false
+          },
+          "submitted_seconds": 2.218776021996746,
+          "started_seconds": 2.2188995280012023,
+          "finished_seconds": 4.378475789009826,
+          "wall_seconds": 2.159576261008624,
+          "output_tokens_per_second": 59.270886752671544,
+          "response": {
+            "id": "756",
+            "choices": [
+              {
+                "finish_reason": "length",
+                "index": 0,
+                "text": "<think>\n\n</think>\n\nTo find the average speed in meters per second (m/s), we will follow these steps:\n\n### Step 1: Identify the given values\n*   Distance ($d$) = $180 \\text{ km}$\n*   Time ($t$) = $2.5 \\text{ hours}$\n\n### Step 2: Calculate the average speed in km/h\nThe formula for average speed is:\n$$ v = \\frac{d}{t} $$\n\nSubstitute the given values:\n$$ v = \\frac{180 \\text{ km}}{2.",
+                "logprobs": null
+              }
+            ],
+            "created": 1790795492,
+            "model": "/home/ericbuehler/.cache/huggingface/hub/models--Qwen--Qwen3.8-Flash-Next/snapshots/de4b8e4d43b917e7706784d8bb445c9af86a3540",
+            "system_fingerprint": "local",
+            "object": "text_completion",
+            "usage": {
+              "completion_tokens": 128,
+              "prompt_tokens": 30,
+              "total_tokens": 158,
+              "avg_tok_per_sec": 73.83177,
+              "avg_prompt_tok_per_sec": 280.37384,
+              "avg_compl_tok_per_sec": 62.96114,
+              "total_time_sec": 2.14,
+              "total_prompt_time_sec": 0.107,
+              "total_completion_time_sec": 2.033
+            }
+          },
+          "error": null,
+          "response_sha256": "8f97c7c3bba79ac6b6bf659af65954fe18eedce15e172b05b59c34314899c660",
+          "output_text_sha256": "ed7ad98095f368bf37d3a00d30bad778a4febf7f806bd905bf4715381d88a445"
+        },
+        {
+          "request_index": 2,
+          "prompt_name": "math",
+          "prompt_sha256": "93d3da4cd1b7890e2560f7a5fbcd0ac8a672cffc2c010723b4e66671a5bcfa36",
+          "request": {
+            "model": "default",
+            "prompt": "Solve step by step: a train travels 180 km in 2.5 hours. What is its average speed in m/s?",
+            "max_tokens": 128,
+            "temperature": 0.0,
+            "seed": 20260929,
+            "ignore_eos": true,
+            "cache_prompt": false
+          },
+          "submitted_seconds": 4.378962098999182,
+          "started_seconds": 4.379060740000568,
+          "finished_seconds": 6.585781203000806,
+          "wall_seconds": 2.206720463000238,
+          "output_tokens_per_second": 58.0046282010601,
+          "response": {
+            "id": "757",
+            "choices": [
+              {
+                "finish_reason": "length",
+                "index": 0,
+                "text": "<think>\n\n</think>\n\nTo find the average speed in meters per second (m/s), we need to convert the given distance from kilometers to meters and the time from hours to seconds, then apply the speed formula.\n\n**Step 1: Identify the given values**\n*   Distance ($d$) = $180 \\text{ km}$\n*   Time ($t$) = $2.5 \\text{ hours}$\n\n**Step 2: Convert distance from kilometers to meters**\nSince $1 \\text{ km} = 1,000 \\text{ meters}$:\n$$ d",
+                "logprobs": null
+              }
+            ],
+            "created": 1790795494,
+            "model": "/home/ericbuehler/.cache/huggingface/hub/models--Qwen--Qwen3.8-Flash-Next/snapshots/de4b8e4d43b917e7706784d8bb445c9af86a3540",
+            "system_fingerprint": "local",
+            "object": "text_completion",
+            "usage": {
+              "completion_tokens": 128,
+              "prompt_tokens": 30,
+              "total_tokens": 158,
+              "avg_tok_per_sec": 72.34432,
+              "avg_prompt_tok_per_sec": 277.7778,
+              "avg_compl_tok_per_sec": 61.657032,
+              "total_time_sec": 2.184,
+              "total_prompt_time_sec": 0.108,
+              "total_completion_time_sec": 2.076
+            }
+          },
+          "error": null,
+          "response_sha256": "03cf7f070d0c96e55831e03508f62c61138cf7805a33a3b11f227df9b7e9853b",
+          "output_text_sha256": "4f66a0714e0b443f27b75596c559a1e5f4a8f75f3f4ba590e4ab97a7b5866d72"
+        },
+        {
+          "request_index": 3,
+          "prompt_name": "math",
+          "prompt_sha256": "93d3da4cd1b7890e2560f7a5fbcd0ac8a672cffc2c010723b4e66671a5bcfa36",
+          "request": {
+            "model": "default",
+            "prompt": "Solve step by step: a train travels 180 km in 2.5 hours. What is its average speed in m/s?",
+            "max_tokens": 128,
+            "temperature": 0.0,
+            "seed": 20260929,
+            "ignore_eos": true,
+            "cache_prompt": false
+          },
+          "submitted_seconds": 6.586581325012958,
+          "started_seconds": 6.586718175007263,
+          "finished_seconds": 8.689162096998189,
+          "wall_seconds": 2.1024439219909254,
+          "output_tokens_per_second": 60.88152871101999,
+          "response": {
+            "id": "758",
+            "choices": [
+              {
+                "finish_reason": "length",
+                "index": 0,
+                "text": "<think>\n\n</think>\n\nTo find the average speed in meters per second (m/s), we will follow these steps:\n\n### Step 1: Identify the given values\n*   Distance ($d$) = $180 \\text{ km}$\n*   Time ($t$) = $2.5 \\text{ hours}$\n\n### Step 2: Calculate the average speed in km/h\nThe formula for average speed is:\n$$ v = \\frac{d}{t} $$\n\nSubstitute the given values:\n$$ v = \\frac{180 \\text{ km}}{2.",
+                "logprobs": null
+              }
+            ],
+            "created": 1790795496,
+            "model": "/home/ericbuehler/.cache/huggingface/hub/models--Qwen--Qwen3.8-Flash-Next/snapshots/de4b8e4d43b917e7706784d8bb445c9af86a3540",
+            "system_fingerprint": "local",
+            "object": "text_completion",
+            "usage": {
+              "completion_tokens": 128,
+              "prompt_tokens": 30,
+              "total_tokens": 158,
+              "avg_tok_per_sec": 75.815735,
+              "avg_prompt_tok_per_sec": 277.7778,
+              "avg_compl_tok_per_sec": 64.77733,
+              "total_time_sec": 2.084,
+              "total_prompt_time_sec": 0.108,
+              "total_completion_time_sec": 1.976
+            }
+          },
+          "error": null,
+          "response_sha256": "15ede5821e4c263ed30f0bbb2034f4e674361048c9a63a1d7bc6c90892c18a46",
+          "output_text_sha256": "ed7ad98095f368bf37d3a00d30bad778a4febf7f806bd905bf4715381d88a445"
+        },
+        {
+          "request_index": 4,
+          "prompt_name": "math",
+          "prompt_sha256": "93d3da4cd1b7890e2560f7a5fbcd0ac8a672cffc2c010723b4e66671a5bcfa36",
+          "request": {
+            "model": "default",
+            "prompt": "Solve step by step: a train travels 180 km in 2.5 hours. What is its average speed in m/s?",
+            "max_tokens": 128,
+            "temperature": 0.0,
+            "seed": 20260929,
+            "ignore_eos": true,
+            "cache_prompt": false
+          },
+          "submitted_seconds": 8.68970552799874,
+          "started_seconds": 8.689864457992371,
+          "finished_seconds": 10.787251411005855,
+          "wall_seconds": 2.0973869530134834,
+          "output_tokens_per_second": 61.02831898333885,
+          "response": {
+            "id": "759",
+            "choices": [
+              {
+                "finish_reason": "length",
+                "index": 0,
+                "text": "<think>\n\n</think>\n\nTo find the average speed in meters per second (m/s), we will follow these steps:\n\n### Step 1: Identify the given values\n*   Distance ($d$) = $180 \\text{ km}$\n*   Time ($t$) = $2.5 \\text{ hours}$\n\n### Step 2: Calculate the average speed in km/h\nThe formula for average speed is:\n$$ v = \\frac{d}{t} $$\n\nSubstitute the given values:\n$$ v = \\frac{180 \\text{ km}}{2.",
+                "logprobs": null
+              }
+            ],
+            "created": 1790795499,
+            "model": "/home/ericbuehler/.cache/huggingface/hub/models--Qwen--Qwen3.8-Flash-Next/snapshots/de4b8e4d43b917e7706784d8bb445c9af86a3540",
+            "system_fingerprint": "local",
+            "object": "text_completion",
+            "usage": {
+              "completion_tokens": 128,
+              "prompt_tokens": 30,
+              "total_tokens": 158,
+              "avg_tok_per_sec": 76.107895,
+              "avg_prompt_tok_per_sec": 280.37384,
+              "avg_compl_tok_per_sec": 65.00762,
+              "total_time_sec": 2.076,
+              "total_prompt_time_sec": 0.107,
+              "total_completion_time_sec": 1.969
+            }
+          },
+          "error": null,
+          "response_sha256": "a9533f64970426603450c89db2021a500c372e40ba8ca61e92c0da00af2dbff9",
+          "output_text_sha256": "ed7ad98095f368bf37d3a00d30bad778a4febf7f806bd905bf4715381d88a445"
+        },
+        {
+          "request_index": 5,
+          "prompt_name": "math",
+          "prompt_sha256": "93d3da4cd1b7890e2560f7a5fbcd0ac8a672cffc2c010723b4e66671a5bcfa36",
+          "request": {
+            "model": "default",
+            "prompt": "Solve step by step: a train travels 180 km in 2.5 hours. What is its average speed in m/s?",
+            "max_tokens": 128,
+            "temperature": 0.0,
+            "seed": 20260929,
+            "ignore_eos": true,
+            "cache_prompt": false
+          },
+          "submitted_seconds": 10.78756418300327,
+          "started_seconds": 10.787703623995185,
+          "finished_seconds": 12.910258435003925,
+          "wall_seconds": 2.12255481100874,
+          "output_tokens_per_second": 60.30468534245683,
+          "response": {
+            "id": "760",
+            "choices": [
+              {
+                "finish_reason": "length",
+                "index": 0,
+                "text": "<think>\n\n</think>\n\nTo find the average speed in meters per second (m/s), we will follow these steps:\n\n### Step 1: Identify the given values\n*   Distance ($d$) = $180 \\text{ km}$\n*   Time ($t$) = $2.5 \\text{ hours}$\n\n### Step 2: Calculate the average speed in km/h\nThe formula for average speed is:\n$$ \\text{Speed} = \\frac{\\text{Distance}}{\\text{Time}} $$\n\nSubstitute the given values:\n$$ \\text{Speed} = \\",
+                "logprobs": null
+              }
+            ],
+            "created": 1790795501,
+            "model": "/home/ericbuehler/.cache/huggingface/hub/models--Qwen--Qwen3.8-Flash-Next/snapshots/de4b8e4d43b917e7706784d8bb445c9af86a3540",
+            "system_fingerprint": "local",
+            "object": "text_completion",
+            "usage": {
+              "completion_tokens": 128,
+              "prompt_tokens": 30,
+              "total_tokens": 158,
+              "avg_tok_per_sec": 75.23809,
+              "avg_prompt_tok_per_sec": 280.37384,
+              "avg_compl_tok_per_sec": 64.224785,
+              "total_time_sec": 2.1,
+              "total_prompt_time_sec": 0.107,
+              "total_completion_time_sec": 1.993
+            }
+          },
+          "error": null,
+          "response_sha256": "7343d555a1c7d60bb0f65926a0f82a016b9f45d7ec431d079ea50f868662a826",
+          "output_text_sha256": "648ce818f8354da7fcdda90cb502b6976fd2c9d7a0ea98703eecc980cd51e97d"
+        },
+        {
+          "request_index": 6,
+          "prompt_name": "math",
+          "prompt_sha256": "93d3da4cd1b7890e2560f7a5fbcd0ac8a672cffc2c010723b4e66671a5bcfa36",
+          "request": {
+            "model": "default",
+            "prompt": "Solve step by step: a train travels 180 km in 2.5 hours. What is its average speed in m/s?",
+            "max_tokens": 128,
+            "temperature": 0.0,
+            "seed": 20260929,
+            "ignore_eos": true,
+            "cache_prompt": false
+          },
+          "submitted_seconds": 12.910478533012792,
+          "started_seconds": 12.910576070018578,
+          "finished_seconds": 15.068324380001286,
+          "wall_seconds": 2.1577483099827077,
+          "output_tokens_per_second": 59.32109848392179,
+          "response": {
+            "id": "761",
+            "choices": [
+              {
+                "finish_reason": "length",
+                "index": 0,
+                "text": "<think>\n\n</think>\n\nTo find the average speed in meters per second (m/s), we will follow these steps:\n\n### Step 1: Identify the given values\n*   Distance ($d$) = $180 \\text{ km}$\n*   Time ($t$) = $2.5 \\text{ hours}$\n\n### Step 2: Calculate the average speed in km/h\nThe formula for average speed is:\n$$ v = \\frac{d}{t} $$\n\nSubstitute the given values:\n$$ v = \\frac{180 \\text{ km}}{2.",
+                "logprobs": null
+              }
+            ],
+            "created": 1790795503,
+            "model": "/home/ericbuehler/.cache/huggingface/hub/models--Qwen--Qwen3.8-Flash-Next/snapshots/de4b8e4d43b917e7706784d8bb445c9af86a3540",
+            "system_fingerprint": "local",
+            "object": "text_completion",
+            "usage": {
+              "completion_tokens": 128,
+              "prompt_tokens": 30,
+              "total_tokens": 158,
+              "avg_tok_per_sec": 74.03936,
+              "avg_prompt_tok_per_sec": 280.37384,
+              "avg_compl_tok_per_sec": 63.147507,
+              "total_time_sec": 2.134,
+              "total_prompt_time_sec": 0.107,
+              "total_completion_time_sec": 2.027
+            }
+          },
+          "error": null,
+          "response_sha256": "7fc1daad359769f88b99b8602fb9e20535548b482c0a5eb72d25921812a2dc34",
+          "output_text_sha256": "ed7ad98095f368bf37d3a00d30bad778a4febf7f806bd905bf4715381d88a445"
+        },
+        {
+          "request_index": 7,
+          "prompt_name": "math",
+          "prompt_sha256": "93d3da4cd1b7890e2560f7a5fbcd0ac8a672cffc2c010723b4e66671a5bcfa36",
+          "request": {
+            "model": "default",
+            "prompt": "Solve step by step: a train travels 180 km in 2.5 hours. What is its average speed in m/s?",
+            "max_tokens": 128,
+            "temperature": 0.0,
+            "seed": 20260929,
+            "ignore_eos": true,
+            "cache_prompt": false
+          },
+          "submitted_seconds": 15.068515790015226,
+          "started_seconds": 15.068606846994953,
+          "finished_seconds": 17.134777268016478,
+          "wall_seconds": 2.066170421021525,
+          "output_tokens_per_second": 61.950359320658634,
+          "response": {
+            "id": "762",
+            "choices": [
+              {
+                "finish_reason": "length",
+                "index": 0,
+                "text": "<think>\n\n</think>\n\nTo find the average speed in meters per second (m/s), we will follow these steps:\n\n### Step 1: Identify the given values\n*   Distance ($d$) = $180 \\text{ km}$\n*   Time ($t$) = $2.5 \\text{ hours}$\n\n### Step 2: Calculate the average speed in km/h\nThe formula for average speed is:\n$$ \\text{Speed} = \\frac{\\text{Distance}}{\\text{Time}} $$\n\nSubstitute the given values:\n$$ \\text{Speed} = \\",
+                "logprobs": null
+              }
+            ],
+            "created": 1790795505,
+            "model": "/home/ericbuehler/.cache/huggingface/hub/models--Qwen--Qwen3.8-Flash-Next/snapshots/de4b8e4d43b917e7706784d8bb445c9af86a3540",
+            "system_fingerprint": "local",
+            "object": "text_completion",
+            "usage": {
+              "completion_tokens": 128,
+              "prompt_tokens": 30,
+              "total_tokens": 158,
+              "avg_tok_per_sec": 77.223854,
+              "avg_prompt_tok_per_sec": 277.7778,
+              "avg_compl_tok_per_sec": 66.04748,
+              "total_time_sec": 2.046,
+              "total_prompt_time_sec": 0.108,
+              "total_completion_time_sec": 1.938
+            }
+          },
+          "error": null,
+          "response_sha256": "73c57fdc1c505e9ac644611d675faeadb54d19a359432d2df891e1408ffd13b1",
+          "output_text_sha256": "648ce818f8354da7fcdda90cb502b6976fd2c9d7a0ea98703eecc980cd51e97d"
+        }
+      ],
+      "trial": 2,
+      "warmup": false,
+      "waves": [
+        {
+          "request_indices": [
+            0
+          ],
+          "started_seconds": 0.00017273900448344648,
+          "finished_seconds": 2.218166751001263,
+          "mean_active_requests": 1.0,
+          "complete": true,
+          "agreement": {
+            "request_count": 1,
+            "unique_output_text_hashes": 1,
+            "hash_counts": {
+              "648ce818f8354da7fcdda90cb502b6976fd2c9d7a0ea98703eecc980cd51e97d": 1
+            },
+            "all_outputs_identical": true,
+            "equal_pair_fraction": null
+          }
+        },
+        {
+          "request_indices": [
+            1
+          ],
+          "started_seconds": 2.2188995280012023,
+          "finished_seconds": 4.378475789009826,
+          "mean_active_requests": 1.0,
+          "complete": true,
+          "agreement": {
+            "request_count": 1,
+            "unique_output_text_hashes": 1,
+            "hash_counts": {
+              "ed7ad98095f368bf37d3a00d30bad778a4febf7f806bd905bf4715381d88a445": 1
+            },
+            "all_outputs_identical": true,
+            "equal_pair_fraction": null
+          }
+        },
+        {
+          "request_indices": [
+            2
+          ],
+          "started_seconds": 4.379060740000568,
+          "finished_seconds": 6.585781203000806,
+          "mean_active_requests": 1.0,
+          "complete": true,
+          "agreement": {
+            "request_count": 1,
+            "unique_output_text_hashes": 1,
+            "hash_counts": {
+              "4f66a0714e0b443f27b75596c559a1e5f4a8f75f3f4ba590e4ab97a7b5866d72": 1
+            },
+            "all_outputs_identical": true,
+            "equal_pair_fraction": null
+          }
+        },
+        {
+          "request_indices": [
+            3
+          ],
+          "started_seconds": 6.586718175007263,
+          "finished_seconds": 8.689162096998189,
+          "mean_active_requests": 1.0,
+          "complete": true,
+          "agreement": {
+            "request_count": 1,
+            "unique_output_text_hashes": 1,
+            "hash_counts": {
+              "ed7ad98095f368bf37d3a00d30bad778a4febf7f806bd905bf4715381d88a445": 1
+            },
+            "all_outputs_identical": true,
+            "equal_pair_fraction": null
+          }
+        },
+        {
+          "request_indices": [
+            4
+          ],
+          "started_seconds": 8.689864457992371,
+          "finished_seconds": 10.787251411005855,
+          "mean_active_requests": 1.0,
+          "complete": true,
+          "agreement": {
+            "request_count": 1,
+            "unique_output_text_hashes": 1,
+            "hash_counts": {
+              "ed7ad98095f368bf37d3a00d30bad778a4febf7f806bd905bf4715381d88a445": 1
+            },
+            "all_outputs_identical": true,
+            "equal_pair_fraction": null
+          }
+        },
+        {
+          "request_indices": [
+            5
+          ],
+          "started_seconds": 10.787703623995185,
+          "finished_seconds": 12.910258435003925,
+          "mean_active_requests": 1.0,
+          "complete": true,
+          "agreement": {
+            "request_count": 1,
+            "unique_output_text_hashes": 1,
+            "hash_counts": {
+              "648ce818f8354da7fcdda90cb502b6976fd2c9d7a0ea98703eecc980cd51e97d": 1
+            },
+            "all_outputs_identical": true,
+            "equal_pair_fraction": null
+          }
+        },
+        {
+          "request_indices": [
+            6
+          ],
+          "started_seconds": 12.910576070018578,
+          "finished_seconds": 15.068324380001286,
+          "mean_active_requests": 1.0,
+          "complete": true,
+          "agreement": {
+            "request_count": 1,
+            "unique_output_text_hashes": 1,
+            "hash_counts": {
+              "ed7ad98095f368bf37d3a00d30bad778a4febf7f806bd905bf4715381d88a445": 1
+            },
+            "all_outputs_identical": true,
+            "equal_pair_fraction": null
+          }
+        },
+        {
+          "request_indices": [
+            7
+          ],
+          "started_seconds": 15.068606846994953,
+          "finished_seconds": 17.134777268016478,
+          "mean_active_requests": 1.0,
+          "complete": true,
+          "agreement": {
+            "request_count": 1,
+            "unique_output_text_hashes": 1,
+            "hash_counts": {
+              "648ce818f8354da7fcdda90cb502b6976fd2c9d7a0ea98703eecc980cd51e97d": 1
+            },
+            "all_outputs_identical": true,
+            "equal_pair_fraction": null
+          }
+        }
+      ]
+    },
+    {
+      "complete": true,
+      "wall_seconds": 16.73199293500511,
+      "completed_output_tokens": 1024,
+      "aggregate_output_tokens_per_second": 61.20012146656379,
+      "mean_active_requests": 0.9998500282670869,
+      "mean_request_wall_seconds": 2.0911854511286947,
+      "mean_request_output_tokens_per_second": 61.25378187256953,
+      "latency_weighted_request_output_tokens_per_second": 61.20930113152489,
+      "sustained_window": null,
+      "sustained_window_unavailable_reason": "burst traffic, failed trial, or fewer than C completions between first completion and last replenishment",
+      "requests": [
+        {
+          "request_index": 0,
+          "prompt_name": "math",
+          "prompt_sha256": "93d3da4cd1b7890e2560f7a5fbcd0ac8a672cffc2c010723b4e66671a5bcfa36",
+          "request": {
+            "model": "default",
+            "prompt": "Solve step by step: a train travels 180 km in 2.5 hours. What is its average speed in m/s?",
+            "max_tokens": 128,
+            "temperature": 0.0,
+            "seed": 20260929,
+            "ignore_eos": true,
+            "cache_prompt": false
+          },
+          "submitted_seconds": 1.2384000001475215e-05,
+          "started_seconds": 0.00017253000987693667,
+          "finished_seconds": 2.095120758021949,
+          "wall_seconds": 2.094948228012072,
+          "output_tokens_per_second": 61.09936192621864,
+          "response": {
+            "id": "763",
+            "choices": [
+              {
+                "finish_reason": "length",
+                "index": 0,
+                "text": "<think>\n\n</think>\n\nTo find the average speed in meters per second (m/s), we will follow these steps:\n\n### Step 1: Identify the given values\n*   Distance ($d$) = $180 \\text{ km}$\n*   Time ($t$) = $2.5 \\text{ hours}$\n\n### Step 2: Calculate the average speed in km/h\nThe formula for average speed is:\n$$ \\text{Speed} = \\frac{\\text{Distance}}{\\text{Time}} $$\n\nSubstitute the given values:\n$$ \\text{Speed} = \\",
+                "logprobs": null
+              }
+            ],
+            "created": 1790795507,
+            "model": "/home/ericbuehler/.cache/huggingface/hub/models--Qwen--Qwen3.8-Flash-Next/snapshots/de4b8e4d43b917e7706784d8bb445c9af86a3540",
+            "system_fingerprint": "local",
+            "object": "text_completion",
+            "usage": {
+              "completion_tokens": 128,
+              "prompt_tokens": 30,
+              "total_tokens": 158,
+              "avg_tok_per_sec": 76.107895,
+              "avg_prompt_tok_per_sec": 275.22937,
+              "avg_compl_tok_per_sec": 65.073715,
+              "total_time_sec": 2.076,
+              "total_prompt_time_sec": 0.109,
+              "total_completion_time_sec": 1.967
+            }
+          },
+          "error": null,
+          "response_sha256": "b17ea34222cb6366abd9014a8a94d3c9d6d481290f5cec352618ece3b477a79f",
+          "output_text_sha256": "648ce818f8354da7fcdda90cb502b6976fd2c9d7a0ea98703eecc980cd51e97d"
+        },
+        {
+          "request_index": 1,
+          "prompt_name": "math",
+          "prompt_sha256": "93d3da4cd1b7890e2560f7a5fbcd0ac8a672cffc2c010723b4e66671a5bcfa36",
+          "request": {
+            "model": "default",
+            "prompt": "Solve step by step: a train travels 180 km in 2.5 hours. What is its average speed in m/s?",
+            "max_tokens": 128,
+            "temperature": 0.0,
+            "seed": 20260929,
+            "ignore_eos": true,
+            "cache_prompt": false
+          },
+          "submitted_seconds": 2.0953020570159424,
+          "started_seconds": 2.0953957220190205,
+          "finished_seconds": 4.100454855011776,
+          "wall_seconds": 2.0050591329927556,
+          "output_tokens_per_second": 63.83851622817075,
+          "response": {
+            "id": "764",
+            "choices": [
+              {
+                "finish_reason": "length",
+                "index": 0,
+                "text": "<think>\n\n</think>\n\nTo find the average speed in meters per second (m/s), we will follow these steps:\n\n### Step 1: Identify the given values\n*   Distance ($d$) = $180 \\text{ km}$\n*   Time ($t$) = $2.5 \\text{ hours}$\n\n### Step 2: Calculate the average speed in km/h\nThe formula for average speed is:\n$$ v = \\frac{d}{t} $$\n\nSubstitute the given values:\n$$ v = \\frac{180 \\text{ km}}{2.",
+                "logprobs": null
+              }
+            ],
+            "created": 1790795509,
+            "model": "/home/ericbuehler/.cache/huggingface/hub/models--Qwen--Qwen3.8-Flash-Next/snapshots/de4b8e4d43b917e7706784d8bb445c9af86a3540",
+            "system_fingerprint": "local",
+            "object": "text_completion",
+            "usage": {
+              "completion_tokens": 128,
+              "prompt_tokens": 30,
+              "total_tokens": 158,
+              "avg_tok_per_sec": 79.59698,
+              "avg_prompt_tok_per_sec": 283.01886,
+              "avg_compl_tok_per_sec": 68.121346,
+              "total_time_sec": 1.985,
+              "total_prompt_time_sec": 0.106,
+              "total_completion_time_sec": 1.879
+            }
+          },
+          "error": null,
+          "response_sha256": "4ed76174edef5ec017ae65e943d9258d9795db8630fb8c860259592e3abd5062",
+          "output_text_sha256": "ed7ad98095f368bf37d3a00d30bad778a4febf7f806bd905bf4715381d88a445"
+        },
+        {
+          "request_index": 2,
+          "prompt_name": "math",
+          "prompt_sha256": "93d3da4cd1b7890e2560f7a5fbcd0ac8a672cffc2c010723b4e66671a5bcfa36",
+          "request": {
+            "model": "default",
+            "prompt": "Solve step by step: a train travels 180 km in 2.5 hours. What is its average speed in m/s?",
+            "max_tokens": 128,
+            "temperature": 0.0,
+            "seed": 20260929,
+            "ignore_eos": true,
+            "cache_prompt": false
+          },
+          "submitted_seconds": 4.100630713015562,
+          "started_seconds": 4.1007268899993505,
+          "finished_seconds": 6.215824554004939,
+          "wall_seconds": 2.1150976640055887,
+          "output_tokens_per_second": 60.51730006528048,
+          "response": {
+            "id": "765",
+            "choices": [
+              {
+                "finish_reason": "length",
+                "index": 0,
+                "text": "<think>\n\n</think>\n\nTo find the average speed in meters per second (m/s), we will follow these steps:\n\n### Step 1: Identify the given values\n*   Distance ($d$) = $180 \\text{ km}$\n*   Time ($t$) = $2.5 \\text{ hours}$\n\n### Step 2: Calculate the average speed in km/h\nThe formula for average speed is:\n$$ v = \\frac{d}{t} $$\n\nSubstitute the given values:\n$$ v = \\frac{180 \\text{ km}}{2.",
+                "logprobs": null
+              }
+            ],
+            "created": 1790795511,
+            "model": "/home/ericbuehler/.cache/huggingface/hub/models--Qwen--Qwen3.8-Flash-Next/snapshots/de4b8e4d43b917e7706784d8bb445c9af86a3540",
+            "system_fingerprint": "local",
+            "object": "text_completion",
+            "usage": {
+              "completion_tokens": 128,
+              "prompt_tokens": 30,
+              "total_tokens": 158,
+              "avg_tok_per_sec": 75.59808,
+              "avg_prompt_tok_per_sec": 277.7778,
+              "avg_compl_tok_per_sec": 64.58123,
+              "total_time_sec": 2.09,
+              "total_prompt_time_sec": 0.108,
+              "total_completion_time_sec": 1.982
+            }
+          },
+          "error": null,
+          "response_sha256": "c642f62af0fb56a0039b064f68f1948cac7f0a9eb19a6651e8886eaedf603a58",
+          "output_text_sha256": "ed7ad98095f368bf37d3a00d30bad778a4febf7f806bd905bf4715381d88a445"
+        },
+        {
+          "request_index": 3,
+          "prompt_name": "math",
+          "prompt_sha256": "93d3da4cd1b7890e2560f7a5fbcd0ac8a672cffc2c010723b4e66671a5bcfa36",
+          "request": {
+            "model": "default",
+            "prompt": "Solve step by step: a train travels 180 km in 2.5 hours. What is its average speed in m/s?",
+            "max_tokens": 128,
+            "temperature": 0.0,
+            "seed": 20260929,
+            "ignore_eos": true,
+            "cache_prompt": false
+          },
+          "submitted_seconds": 6.216001499997219,
+          "started_seconds": 6.216095533018233,
+          "finished_seconds": 8.285150904004695,
+          "wall_seconds": 2.0690553709864616,
+          "output_tokens_per_second": 61.86397995669568,
+          "response": {
+            "id": "766",
+            "choices": [
+              {
+                "finish_reason": "length",
+                "index": 0,
+                "text": "<think>\n\n</think>\n\nTo find the average speed in meters per second (m/s), we will follow these steps:\n\n### Step 1: Identify the given values\n*   Distance ($d$) = $180 \\text{ km}$\n*   Time ($t$) = $2.5 \\text{ hours}$\n\n### Step 2: Calculate the average speed in km/h\nThe formula for average speed is:\n$$ v = \\frac{d}{t} $$\n\nSubstitute the given values:\n$$ v = \\frac{180 \\text{ km}}{2.",
+                "logprobs": null
+              }
+            ],
+            "created": 1790795513,
+            "model": "/home/ericbuehler/.cache/huggingface/hub/models--Qwen--Qwen3.8-Flash-Next/snapshots/de4b8e4d43b917e7706784d8bb445c9af86a3540",
+            "system_fingerprint": "local",
+            "object": "text_completion",
+            "usage": {
+              "completion_tokens": 128,
+              "prompt_tokens": 30,
+              "total_tokens": 158,
+              "avg_tok_per_sec": 77.14844,
+              "avg_prompt_tok_per_sec": 280.37384,
+              "avg_compl_tok_per_sec": 65.94539,
+              "total_time_sec": 2.048,
+              "total_prompt_time_sec": 0.107,
+              "total_completion_time_sec": 1.941
+            }
+          },
+          "error": null,
+          "response_sha256": "1bf72d18499c4224e450daa60288d9227b7e79419d6a1456f3cecf2a4fd675b3",
+          "output_text_sha256": "ed7ad98095f368bf37d3a00d30bad778a4febf7f806bd905bf4715381d88a445"
+        },
+        {
+          "request_index": 4,
+          "prompt_name": "math",
+          "prompt_sha256": "93d3da4cd1b7890e2560f7a5fbcd0ac8a672cffc2c010723b4e66671a5bcfa36",
+          "request": {
+            "model": "default",
+            "prompt": "Solve step by step: a train travels 180 km in 2.5 hours. What is its average speed in m/s?",
+            "max_tokens": 128,
+            "temperature": 0.0,
+            "seed": 20260929,
+            "ignore_eos": true,
+            "cache_prompt": false
+          },
+          "submitted_seconds": 8.285347323020687,
+          "started_seconds": 8.285443564003799,
+          "finished_seconds": 10.308440098015126,
+          "wall_seconds": 2.0229965340113267,
+          "output_tokens_per_second": 63.272476174832306,
+          "response": {
+            "id": "767",
+            "choices": [
+              {
+                "finish_reason": "length",
+                "index": 0,
+                "text": "<think>\n\n</think>\n\nTo find the average speed in meters per second (m/s), we will follow these steps:\n\n### Step 1: Identify the given values\n*   Distance ($d$) = $180$ km\n*   Time ($t$) = $2.5$ hours\n\n### Step 2: Calculate the average speed in km/h\nThe formula for average speed is:\n$$ v = \\frac{d}{t} $$\n\nSubstitute the given values:\n$$ v = \\frac{180 \\text{ km}}{2.5 \\text{ h}}",
+                "logprobs": null
+              }
+            ],
+            "created": 1790795515,
+            "model": "/home/ericbuehler/.cache/huggingface/hub/models--Qwen--Qwen3.8-Flash-Next/snapshots/de4b8e4d43b917e7706784d8bb445c9af86a3540",
+            "system_fingerprint": "local",
+            "object": "text_completion",
+            "usage": {
+              "completion_tokens": 128,
+              "prompt_tokens": 30,
+              "total_tokens": 158,
+              "avg_tok_per_sec": 78.960526,
+              "avg_prompt_tok_per_sec": 280.37384,
+              "avg_compl_tok_per_sec": 67.58184,
+              "total_time_sec": 2.001,
+              "total_prompt_time_sec": 0.107,
+              "total_completion_time_sec": 1.894
+            }
+          },
+          "error": null,
+          "response_sha256": "29c0309bf8c84a879da16252d00107c7114e164b9af3e308578fe90383d538fb",
+          "output_text_sha256": "c87927d8084a31531e7a0ba1c5cfa0c0255f1c2c2d081938357a249ca87baf6e"
+        },
+        {
+          "request_index": 5,
+          "prompt_name": "math",
+          "prompt_sha256": "93d3da4cd1b7890e2560f7a5fbcd0ac8a672cffc2c010723b4e66671a5bcfa36",
+          "request": {
+            "model": "default",
+            "prompt": "Solve step by step: a train travels 180 km in 2.5 hours. What is its average speed in m/s?",
+            "max_tokens": 128,
+            "temperature": 0.0,
+            "seed": 20260929,
+            "ignore_eos": true,
+            "cache_prompt": false
+          },
+          "submitted_seconds": 10.308679940993898,
+          "started_seconds": 10.30877144599799,
+          "finished_seconds": 12.441940026998054,
+          "wall_seconds": 2.1331685810000636,
+          "output_tokens_per_second": 60.004634017247504,
+          "response": {
+            "id": "768",
+            "choices": [
+              {
+                "finish_reason": "length",
+                "index": 0,
+                "text": "<think>\n\n</think>\n\nTo find the average speed in meters per second (m/s), we will follow these steps:\n\n### Step 1: Identify the given values\n*   Distance ($d$) = $180$ km\n*   Time ($t$) = $2.5$ hours\n\n### Step 2: Calculate the average speed in km/h\nThe formula for average speed is:\n$$ \\text{Speed} = \\frac{\\text{Distance}}{\\text{Time}} $$\n\nSubstituting the given values:\n$$ \\text{Speed} = \\frac{180",
+                "logprobs": null
+              }
+            ],
+            "created": 1790795517,
+            "model": "/home/ericbuehler/.cache/huggingface/hub/models--Qwen--Qwen3.8-Flash-Next/snapshots/de4b8e4d43b917e7706784d8bb445c9af86a3540",
+            "system_fingerprint": "local",
+            "object": "text_completion",
+            "usage": {
+              "completion_tokens": 128,
+              "prompt_tokens": 30,
+              "total_tokens": 158,
+              "avg_tok_per_sec": 74.881516,
+              "avg_prompt_tok_per_sec": 283.01886,
+              "avg_compl_tok_per_sec": 63.872257,
+              "total_time_sec": 2.11,
+              "total_prompt_time_sec": 0.106,
+              "total_completion_time_sec": 2.004
+            }
+          },
+          "error": null,
+          "response_sha256": "60a303ba29adfbc70afed3d78760f9df90f9acf312fe89fc25cddde6fcf94dda",
+          "output_text_sha256": "1728d8716d8fdb143423d122139612a79782ec7865e1cbd2edb5a59d9b338a14"
+        },
+        {
+          "request_index": 6,
+          "prompt_name": "math",
+          "prompt_sha256": "93d3da4cd1b7890e2560f7a5fbcd0ac8a672cffc2c010723b4e66671a5bcfa36",
+          "request": {
+            "model": "default",
+            "prompt": "Solve step by step: a train travels 180 km in 2.5 hours. What is its average speed in m/s?",
+            "max_tokens": 128,
+            "temperature": 0.0,
+            "seed": 20260929,
+            "ignore_eos": true,
+            "cache_prompt": false
+          },
+          "submitted_seconds": 12.442099549021805,
+          "started_seconds": 12.442190589994425,
+          "finished_seconds": 14.636118555994472,
+          "wall_seconds": 2.1939279660000466,
+          "output_tokens_per_second": 58.34284533660814,
+          "response": {
+            "id": "769",
+            "choices": [
+              {
+                "finish_reason": "length",
+                "index": 0,
+                "text": "<think>\n\n</think>\n\nTo find the average speed in meters per second (m/s), we will follow these steps:\n\n### Step 1: Identify the given values\n*   Distance ($d$) = $180 \\text{ km}$\n*   Time ($t$) = $2.5 \\text{ hours}$\n\n### Step 2: Calculate the average speed in km/h\nThe formula for average speed is:\n$$ \\text{Speed} = \\frac{\\text{Distance}}{\\text{Time}} $$\n\nSubstitute the given values:\n$$ \\text{Speed} = \\",
+                "logprobs": null
+              }
+            ],
+            "created": 1790795519,
+            "model": "/home/ericbuehler/.cache/huggingface/hub/models--Qwen--Qwen3.8-Flash-Next/snapshots/de4b8e4d43b917e7706784d8bb445c9af86a3540",
+            "system_fingerprint": "local",
+            "object": "text_completion",
+            "usage": {
+              "completion_tokens": 128,
+              "prompt_tokens": 30,
+              "total_tokens": 158,
+              "avg_tok_per_sec": 72.81106,
+              "avg_prompt_tok_per_sec": 283.01886,
+              "avg_compl_tok_per_sec": 62.015503,
+              "total_time_sec": 2.17,
+              "total_prompt_time_sec": 0.106,
+              "total_completion_time_sec": 2.064
+            }
+          },
+          "error": null,
+          "response_sha256": "3807d862e4b93c4f8859a32506b341a40190459d631166a53d3f7b0017168edb",
+          "output_text_sha256": "648ce818f8354da7fcdda90cb502b6976fd2c9d7a0ea98703eecc980cd51e97d"
+        },
+        {
+          "request_index": 7,
+          "prompt_name": "math",
+          "prompt_sha256": "93d3da4cd1b7890e2560f7a5fbcd0ac8a672cffc2c010723b4e66671a5bcfa36",
+          "request": {
+            "model": "default",
+            "prompt": "Solve step by step: a train travels 180 km in 2.5 hours. What is its average speed in m/s?",
+            "max_tokens": 128,
+            "temperature": 0.0,
+            "seed": 20260929,
+            "ignore_eos": true,
+            "cache_prompt": false
+          },
+          "submitted_seconds": 14.63630220599589,
+          "started_seconds": 14.636406014993554,
+          "finished_seconds": 16.731636147014797,
+          "wall_seconds": 2.0952301320212428,
+          "output_tokens_per_second": 61.09114127550274,
+          "response": {
+            "id": "770",
+            "choices": [
+              {
+                "finish_reason": "length",
+                "index": 0,
+                "text": "<think>\n\n</think>\n\nTo find the average speed in meters per second (m/s), we will follow these steps:\n\n### Step 1: Identify the given values\n*   Distance ($d$) = $180 \\text{ km}$\n*   Time ($t$) = $2.5 \\text{ hours}$\n\n### Step 2: Calculate the average speed in km/h\nThe formula for average speed is:\n$$ v = \\frac{d}{t} $$\n\nSubstitute the given values:\n$$ v = \\frac{180 \\text{ km}}{2.",
+                "logprobs": null
+              }
+            ],
+            "created": 1790795522,
+            "model": "/home/ericbuehler/.cache/huggingface/hub/models--Qwen--Qwen3.8-Flash-Next/snapshots/de4b8e4d43b917e7706784d8bb445c9af86a3540",
+            "system_fingerprint": "local",
+            "object": "text_completion",
+            "usage": {
+              "completion_tokens": 128,
+              "prompt_tokens": 30,
+              "total_tokens": 158,
+              "avg_tok_per_sec": 76.21804,
+              "avg_prompt_tok_per_sec": 280.37384,
+              "avg_compl_tok_per_sec": 65.10682,
+              "total_time_sec": 2.073,
+              "total_prompt_time_sec": 0.107,
+              "total_completion_time_sec": 1.966
+            }
+          },
+          "error": null,
+          "response_sha256": "9764d70d6147102986106cfe27e54a3c87bd9744bf2a780682ac47773125c3cd",
+          "output_text_sha256": "ed7ad98095f368bf37d3a00d30bad778a4febf7f806bd905bf4715381d88a445"
+        }
+      ],
+      "trial": 3,
+      "warmup": false,
+      "waves": [
+        {
+          "request_indices": [
+            0
+          ],
+          "started_seconds": 0.00017253000987693667,
+          "finished_seconds": 2.095120758021949,
+          "mean_active_requests": 1.0,
+          "complete": true,
+          "agreement": {
+            "request_count": 1,
+            "unique_output_text_hashes": 1,
+            "hash_counts": {
+              "648ce818f8354da7fcdda90cb502b6976fd2c9d7a0ea98703eecc980cd51e97d": 1
+            },
+            "all_outputs_identical": true,
+            "equal_pair_fraction": null
+          }
+        },
+        {
+          "request_indices": [
+            1
+          ],
+          "started_seconds": 2.0953957220190205,
+          "finished_seconds": 4.100454855011776,
+          "mean_active_requests": 1.0,
+          "complete": true,
+          "agreement": {
+            "request_count": 1,
+            "unique_output_text_hashes": 1,
+            "hash_counts": {
+              "ed7ad98095f368bf37d3a00d30bad778a4febf7f806bd905bf4715381d88a445": 1
+            },
+            "all_outputs_identical": true,
+            "equal_pair_fraction": null
+          }
+        },
+        {
+          "request_indices": [
+            2
+          ],
+          "started_seconds": 4.1007268899993505,
+          "finished_seconds": 6.215824554004939,
+          "mean_active_requests": 1.0,
+          "complete": true,
+          "agreement": {
+            "request_count": 1,
+            "unique_output_text_hashes": 1,
+            "hash_counts": {
+              "ed7ad98095f368bf37d3a00d30bad778a4febf7f806bd905bf4715381d88a445": 1
+            },
+            "all_outputs_identical": true,
+            "equal_pair_fraction": null
+          }
+        },
+        {
+          "request_indices": [
+            3
+          ],
+          "started_seconds": 6.216095533018233,
+          "finished_seconds": 8.285150904004695,
+          "mean_active_requests": 1.0,
+          "complete": true,
+          "agreement": {
+            "request_count": 1,
+            "unique_output_text_hashes": 1,
+            "hash_counts": {
+              "ed7ad98095f368bf37d3a00d30bad778a4febf7f806bd905bf4715381d88a445": 1
+            },
+            "all_outputs_identical": true,
+            "equal_pair_fraction": null
+          }
+        },
+        {
+          "request_indices": [
+            4
+          ],
+          "started_seconds": 8.285443564003799,
+          "finished_seconds": 10.308440098015126,
+          "mean_active_requests": 1.0,
+          "complete": true,
+          "agreement": {
+            "request_count": 1,
+            "unique_output_text_hashes": 1,
+            "hash_counts": {
+              "c87927d8084a31531e7a0ba1c5cfa0c0255f1c2c2d081938357a249ca87baf6e": 1
+            },
+            "all_outputs_identical": true,
+            "equal_pair_fraction": null
+          }
+        },
+        {
+          "request_indices": [
+            5
+          ],
+          "started_seconds": 10.30877144599799,
+          "finished_seconds": 12.441940026998054,
+          "mean_active_requests": 1.0,
+          "complete": true,
+          "agreement": {
+            "request_count": 1,
+            "unique_output_text_hashes": 1,
+            "hash_counts": {
+              "1728d8716d8fdb143423d122139612a79782ec7865e1cbd2edb5a59d9b338a14": 1
+            },
+            "all_outputs_identical": true,
+            "equal_pair_fraction": null
+          }
+        },
+        {
+          "request_indices": [
+            6
+          ],
+          "started_seconds": 12.442190589994425,
+          "finished_seconds": 14.636118555994472,
+          "mean_active_requests": 1.0,
+          "complete": true,
+          "agreement": {
+            "request_count": 1,
+            "unique_output_text_hashes": 1,
+            "hash_counts": {
+              "648ce818f8354da7fcdda90cb502b6976fd2c9d7a0ea98703eecc980cd51e97d": 1
+            },
+            "all_outputs_identical": true,
+            "equal_pair_fraction": null
+          }
+        },
+        {
+          "request_indices": [
+            7
+          ],
+          "started_seconds": 14.636406014993554,
+          "finished_seconds": 16.731636147014797,
+          "mean_active_requests": 1.0,
+          "complete": true,
+          "agreement": {
+            "request_count": 1,
+            "unique_output_text_hashes": 1,
+            "hash_counts": {
+              "ed7ad98095f368bf37d3a00d30bad778a4febf7f806bd905bf4715381d88a445": 1
+            },
+            "all_outputs_identical": true,
+            "equal_pair_fraction": null
+          }
+        }
+      ]
+    },
+    {
+      "complete": true,
+      "wall_seconds": 17.26462195397471,
+      "completed_output_tokens": 1024,
+      "aggregate_output_tokens_per_second": 59.31204301662984,
+      "mean_active_requests": 0.9997938863080408,
+      "mean_request_wall_seconds": 2.157632934875437,
+      "mean_request_output_tokens_per_second": 59.37773572857602,
+      "latency_weighted_request_output_tokens_per_second": 59.32427056105797,
+      "sustained_window": null,
+      "sustained_window_unavailable_reason": "burst traffic, failed trial, or fewer than C completions between first completion and last replenishment",
+      "requests": [
+        {
+          "request_index": 0,
+          "prompt_name": "math",
+          "prompt_sha256": "93d3da4cd1b7890e2560f7a5fbcd0ac8a672cffc2c010723b4e66671a5bcfa36",
+          "request": {
+            "model": "default",
+            "prompt": "Solve step by step: a train travels 180 km in 2.5 hours. What is its average speed in m/s?",
+            "max_tokens": 128,
+            "temperature": 0.0,
+            "seed": 20260929,
+            "ignore_eos": true,
+            "cache_prompt": false
+          },
+          "submitted_seconds": 1.1056981747969985e-05,
+          "started_seconds": 0.00019213097402825952,
+          "finished_seconds": 2.144646565982839,
+          "wall_seconds": 2.144454435008811,
+          "output_tokens_per_second": 59.6888410918715,
+          "response": {
+            "id": "771",
+            "choices": [
+              {
+                "finish_reason": "length",
+                "index": 0,
+                "text": "<think>\n\n</think>\n\nTo find the average speed in meters per second (m/s), we will follow these steps:\n\n### Step 1: Identify the given values\n*   Distance ($d$) = $180$ km\n*   Time ($t$) = $2.5$ hours\n\n### Step 2: Calculate the average speed in km/h\nThe formula for average speed is:\n$$ \\text{Speed} = \\frac{\\text{Distance}}{\\text{Time}} $$\n\nSubstituting the given values:\n$$ \\text{Speed} = \\frac{180",
+                "logprobs": null
+              }
+            ],
+            "created": 1790795524,
+            "model": "/home/ericbuehler/.cache/huggingface/hub/models--Qwen--Qwen3.8-Flash-Next/snapshots/de4b8e4d43b917e7706784d8bb445c9af86a3540",
+            "system_fingerprint": "local",
+            "object": "text_completion",
+            "usage": {
+              "completion_tokens": 128,
+              "prompt_tokens": 30,
+              "total_tokens": 158,
+              "avg_tok_per_sec": 74.493164,
+              "avg_prompt_tok_per_sec": 280.37384,
+              "avg_compl_tok_per_sec": 63.555115,
+              "total_time_sec": 2.121,
+              "total_prompt_time_sec": 0.107,
+              "total_completion_time_sec": 2.014
+            }
+          },
+          "error": null,
+          "response_sha256": "bd15c9f651b8ac809310ba4210db918c1071d3c415786f03639a2e23d1544489",
+          "output_text_sha256": "1728d8716d8fdb143423d122139612a79782ec7865e1cbd2edb5a59d9b338a14"
+        },
+        {
+          "request_index": 1,
+          "prompt_name": "math",
+          "prompt_sha256": "93d3da4cd1b7890e2560f7a5fbcd0ac8a672cffc2c010723b4e66671a5bcfa36",
+          "request": {
+            "model": "default",
+            "prompt": "Solve step by step: a train travels 180 km in 2.5 hours. What is its average speed in m/s?",
+            "max_tokens": 128,
+            "temperature": 0.0,
+            "seed": 20260929,
+            "ignore_eos": true,
+            "cache_prompt": false
+          },
+          "submitted_seconds": 2.1448385679977946,
+          "started_seconds": 2.144942856975831,
+          "finished_seconds": 4.22865333899972,
+          "wall_seconds": 2.083710482023889,
+          "output_tokens_per_second": 61.42887944570627,
+          "response": {
+            "id": "772",
+            "choices": [
+              {
+                "finish_reason": "length",
+                "index": 0,
+                "text": "<think>\n\n</think>\n\nTo find the average speed in meters per second (m/s), we will follow these steps:\n\n### Step 1: Identify the given values\n*   Distance ($d$) = $180 \\text{ km}$\n*   Time ($t$) = $2.5 \\text{ hours}$\n\n### Step 2: Calculate the average speed in km/h\nThe formula for average speed is:\n$$ \\text{Speed} = \\frac{\\text{Distance}}{\\text{Time}} $$\n\nSubstitute the given values:\n$$ \\text{Speed} = \\",
+                "logprobs": null
+              }
+            ],
+            "created": 1790795526,
+            "model": "/home/ericbuehler/.cache/huggingface/hub/models--Qwen--Qwen3.8-Flash-Next/snapshots/de4b8e4d43b917e7706784d8bb445c9af86a3540",
+            "system_fingerprint": "local",
+            "object": "text_completion",
+            "usage": {
+              "completion_tokens": 128,
+              "prompt_tokens": 30,
+              "total_tokens": 158,
+              "avg_tok_per_sec": 76.66182,
+              "avg_prompt_tok_per_sec": 275.22937,
+              "avg_compl_tok_per_sec": 65.57377,
+              "total_time_sec": 2.061,
+              "total_prompt_time_sec": 0.109,
+              "total_completion_time_sec": 1.952
+            }
+          },
+          "error": null,
+          "response_sha256": "139b8eb7a254d1c17e556e261b190dfcca7e8b6e1411ac3b6e26c51683d49573",
+          "output_text_sha256": "648ce818f8354da7fcdda90cb502b6976fd2c9d7a0ea98703eecc980cd51e97d"
+        },
+        {
+          "request_index": 2,
+          "prompt_name": "math",
+          "prompt_sha256": "93d3da4cd1b7890e2560f7a5fbcd0ac8a672cffc2c010723b4e66671a5bcfa36",
+          "request": {
+            "model": "default",
+            "prompt": "Solve step by step: a train travels 180 km in 2.5 hours. What is its average speed in m/s?",
+            "max_tokens": 128,
+            "temperature": 0.0,
+            "seed": 20260929,
+            "ignore_eos": true,
+            "cache_prompt": false
+          },
+          "submitted_seconds": 4.229053199989721,
+          "started_seconds": 4.229160752991447,
+          "finished_seconds": 6.423029079975095,
+          "wall_seconds": 2.1938683269836474,
+          "output_tokens_per_second": 58.344431352444644,
+          "response": {
+            "id": "773",
+            "choices": [
+              {
+                "finish_reason": "length",
+                "index": 0,
+                "text": "<think>\n\n</think>\n\nTo find the average speed in meters per second (m/s), we will follow these steps:\n\n### Step 1: Identify the given values\n*   Distance ($d$) = $180 \\text{ km}$\n*   Time ($t$) = $2.5 \\text{ hours}$\n\n### Step 2: Calculate the average speed in km/h\nThe formula for average speed is:\n$$ \\text{Speed} = \\frac{\\text{Distance}}{\\text{Time}} $$\n\nSubstitute the given values:\n$$ \\text{Speed} = \\",
+                "logprobs": null
+              }
+            ],
+            "created": 1790795528,
+            "model": "/home/ericbuehler/.cache/huggingface/hub/models--Qwen--Qwen3.8-Flash-Next/snapshots/de4b8e4d43b917e7706784d8bb445c9af86a3540",
+            "system_fingerprint": "local",
+            "object": "text_completion",
+            "usage": {
+              "completion_tokens": 128,
+              "prompt_tokens": 30,
+              "total_tokens": 158,
+              "avg_tok_per_sec": 72.67709,
+              "avg_prompt_tok_per_sec": 275.22937,
+              "avg_compl_tok_per_sec": 61.98547,
+              "total_time_sec": 2.174,
+              "total_prompt_time_sec": 0.109,
+              "total_completion_time_sec": 2.065
+            }
+          },
+          "error": null,
+          "response_sha256": "1357243d3f7abb43f6e985d0fedce4db4b9d93d4f101b0a312b355ed4584d860",
+          "output_text_sha256": "648ce818f8354da7fcdda90cb502b6976fd2c9d7a0ea98703eecc980cd51e97d"
+        },
+        {
+          "request_index": 3,
+          "prompt_name": "math",
+          "prompt_sha256": "93d3da4cd1b7890e2560f7a5fbcd0ac8a672cffc2c010723b4e66671a5bcfa36",
+          "request": {
+            "model": "default",
+            "prompt": "Solve step by step: a train travels 180 km in 2.5 hours. What is its average speed in m/s?",
+            "max_tokens": 128,
+            "temperature": 0.0,
+            "seed": 20260929,
+            "ignore_eos": true,
+            "cache_prompt": false
+          },
+          "submitted_seconds": 6.423439563979628,
+          "started_seconds": 6.423541101976298,
+          "finished_seconds": 8.70141412699013,
+          "wall_seconds": 2.2778730250138324,
+          "output_tokens_per_second": 56.192772202139196,
+          "response": {
+            "id": "774",
+            "choices": [
+              {
+                "finish_reason": "length",
+                "index": 0,
+                "text": "<think>\n\n</think>\n\nTo find the average speed in meters per second (m/s), we need to convert the given distance from kilometers to meters and the time from hours to seconds, then apply the speed formula.\n\n**Step 1: Identify the given values**\n*   Distance ($d$) = $180 \\text{ km}$\n*   Time ($t$) = $2.5 \\text{ hours}$\n\n**Step 2: Convert distance from kilometers to meters**\nSince $1 \\text{ km} = 1,000 \\text{ meters}$:\n$$ d",
+                "logprobs": null
+              }
+            ],
+            "created": 1790795530,
+            "model": "/home/ericbuehler/.cache/huggingface/hub/models--Qwen--Qwen3.8-Flash-Next/snapshots/de4b8e4d43b917e7706784d8bb445c9af86a3540",
+            "system_fingerprint": "local",
+            "object": "text_completion",
+            "usage": {
+              "completion_tokens": 128,
+              "prompt_tokens": 30,
+              "total_tokens": 158,
+              "avg_tok_per_sec": 70.03546,
+              "avg_prompt_tok_per_sec": 277.7778,
+              "avg_compl_tok_per_sec": 59.590317,
+              "total_time_sec": 2.256,
+              "total_prompt_time_sec": 0.108,
+              "total_completion_time_sec": 2.148
+            }
+          },
+          "error": null,
+          "response_sha256": "9a2b0c3ed838179df5a1ddf22e36bb84670266752cb3ddea015a3b390938026d",
+          "output_text_sha256": "4f66a0714e0b443f27b75596c559a1e5f4a8f75f3f4ba590e4ab97a7b5866d72"
+        },
+        {
+          "request_index": 4,
+          "prompt_name": "math",
+          "prompt_sha256": "93d3da4cd1b7890e2560f7a5fbcd0ac8a672cffc2c010723b4e66671a5bcfa36",
+          "request": {
+            "model": "default",
+            "prompt": "Solve step by step: a train travels 180 km in 2.5 hours. What is its average speed in m/s?",
+            "max_tokens": 128,
+            "temperature": 0.0,
+            "seed": 20260929,
+            "ignore_eos": true,
+            "cache_prompt": false
+          },
+          "submitted_seconds": 8.701602033979725,
+          "started_seconds": 8.701705234998371,
+          "finished_seconds": 10.828948435984785,
+          "wall_seconds": 2.1272432009864133,
+          "output_tokens_per_second": 60.171775347851984,
+          "response": {
+            "id": "775",
+            "choices": [
+              {
+                "finish_reason": "length",
+                "index": 0,
+                "text": "<think>\n\n</think>\n\nTo find the average speed in meters per second (m/s), we will follow these steps:\n\n### Step 1: Identify the given values\n*   Distance ($d$) = $180 \\text{ km}$\n*   Time ($t$) = $2.5 \\text{ hours}$\n\n### Step 2: Calculate the average speed in km/h\nThe formula for average speed is:\n$$ v = \\frac{d}{t} $$\n\nSubstitute the given values:\n$$ v = \\frac{180 \\text{ km}}{2.",
+                "logprobs": null
+              }
+            ],
+            "created": 1790795532,
+            "model": "/home/ericbuehler/.cache/huggingface/hub/models--Qwen--Qwen3.8-Flash-Next/snapshots/de4b8e4d43b917e7706784d8bb445c9af86a3540",
+            "system_fingerprint": "local",
+            "object": "text_completion",
+            "usage": {
+              "completion_tokens": 128,
+              "prompt_tokens": 30,
+              "total_tokens": 158,
+              "avg_tok_per_sec": 75.13077,
+              "avg_prompt_tok_per_sec": 280.37384,
+              "avg_compl_tok_per_sec": 64.12826,
+              "total_time_sec": 2.103,
+              "total_prompt_time_sec": 0.107,
+              "total_completion_time_sec": 1.996
+            }
+          },
+          "error": null,
+          "response_sha256": "c3de9c24e81a4538d0155c24879a2de3d95af50b46f17c1745daa74f1114504d",
+          "output_text_sha256": "ed7ad98095f368bf37d3a00d30bad778a4febf7f806bd905bf4715381d88a445"
+        },
+        {
+          "request_index": 5,
+          "prompt_name": "math",
+          "prompt_sha256": "93d3da4cd1b7890e2560f7a5fbcd0ac8a672cffc2c010723b4e66671a5bcfa36",
+          "request": {
+            "model": "default",
+            "prompt": "Solve step by step: a train travels 180 km in 2.5 hours. What is its average speed in m/s?",
+            "max_tokens": 128,
+            "temperature": 0.0,
+            "seed": 20260929,
+            "ignore_eos": true,
+            "cache_prompt": false
+          },
+          "submitted_seconds": 10.829349176987307,
+          "started_seconds": 10.829465930990409,
+          "finished_seconds": 12.897427374991821,
+          "wall_seconds": 2.067961444001412,
+          "output_tokens_per_second": 61.89670526560968,
+          "response": {
+            "id": "776",
+            "choices": [
+              {
+                "finish_reason": "length",
+                "index": 0,
+                "text": "<think>\n\n</think>\n\nTo find the average speed in meters per second (m/s), we will follow these steps:\n\n### Step 1: Identify the given values\n*   Distance ($d$) = $180$ km\n*   Time ($t$) = $2.5$ hours\n\n### Step 2: Calculate the average speed in km/h\nThe formula for average speed is:\n$$ \\text{Speed} = \\frac{\\text{Distance}}{\\text{Time}} $$\n\nSubstituting the given values:\n$$ \\text{Speed} = \\frac{180",
+                "logprobs": null
+              }
+            ],
+            "created": 1790795535,
+            "model": "/home/ericbuehler/.cache/huggingface/hub/models--Qwen--Qwen3.8-Flash-Next/snapshots/de4b8e4d43b917e7706784d8bb445c9af86a3540",
+            "system_fingerprint": "local",
+            "object": "text_completion",
+            "usage": {
+              "completion_tokens": 128,
+              "prompt_tokens": 30,
+              "total_tokens": 158,
+              "avg_tok_per_sec": 77.11078,
+              "avg_prompt_tok_per_sec": 280.37384,
+              "avg_compl_tok_per_sec": 65.91144,
+              "total_time_sec": 2.049,
+              "total_prompt_time_sec": 0.107,
+              "total_completion_time_sec": 1.942
+            }
+          },
+          "error": null,
+          "response_sha256": "01852ba9453a5fab7fa1a26a4ffa5448ad2489d8bedbd877e43439d7f253d33f",
+          "output_text_sha256": "1728d8716d8fdb143423d122139612a79782ec7865e1cbd2edb5a59d9b338a14"
+        },
+        {
+          "request_index": 6,
+          "prompt_name": "math",
+          "prompt_sha256": "93d3da4cd1b7890e2560f7a5fbcd0ac8a672cffc2c010723b4e66671a5bcfa36",
+          "request": {
+            "model": "default",
+            "prompt": "Solve step by step: a train travels 180 km in 2.5 hours. What is its average speed in m/s?",
+            "max_tokens": 128,
+            "temperature": 0.0,
+            "seed": 20260929,
+            "ignore_eos": true,
+            "cache_prompt": false
+          },
+          "submitted_seconds": 12.89763518498512,
+          "started_seconds": 12.897737041988876,
+          "finished_seconds": 15.114074175973656,
+          "wall_seconds": 2.21633713398478,
+          "output_tokens_per_second": 57.75294653384579,
+          "response": {
+            "id": "777",
+            "choices": [
+              {
+                "finish_reason": "length",
+                "index": 0,
+                "text": "<think>\n\n</think>\n\nTo find the average speed in meters per second (m/s), we will follow these steps:\n\n### Step 1: Identify the given values\n*   Distance ($d$) = $180 \\text{ km}$\n*   Time ($t$) = $2.5 \\text{ hours}$\n\n### Step 2: Calculate the average speed in km/h\nThe formula for average speed is:\n$$ v = \\frac{d}{t} $$\n\nSubstitute the given values:\n$$ v = \\frac{180 \\text{ km}}{2.",
+                "logprobs": null
+              }
+            ],
+            "created": 1790795537,
+            "model": "/home/ericbuehler/.cache/huggingface/hub/models--Qwen--Qwen3.8-Flash-Next/snapshots/de4b8e4d43b917e7706784d8bb445c9af86a3540",
+            "system_fingerprint": "local",
+            "object": "text_completion",
+            "usage": {
+              "completion_tokens": 128,
+              "prompt_tokens": 30,
+              "total_tokens": 158,
+              "avg_tok_per_sec": 71.98178,
+              "avg_prompt_tok_per_sec": 280.37384,
+              "avg_compl_tok_per_sec": 61.30268,
+              "total_time_sec": 2.195,
+              "total_prompt_time_sec": 0.107,
+              "total_completion_time_sec": 2.088
+            }
+          },
+          "error": null,
+          "response_sha256": "4b38178746bc99dbc4a755f7bdfe34b890e93e19f93fc1900435c00fcf67aea9",
+          "output_text_sha256": "ed7ad98095f368bf37d3a00d30bad778a4febf7f806bd905bf4715381d88a445"
+        },
+        {
+          "request_index": 7,
+          "prompt_name": "math",
+          "prompt_sha256": "93d3da4cd1b7890e2560f7a5fbcd0ac8a672cffc2c010723b4e66671a5bcfa36",
+          "request": {
+            "model": "default",
+            "prompt": "Solve step by step: a train travels 180 km in 2.5 hours. What is its average speed in m/s?",
+            "max_tokens": 128,
+            "temperature": 0.0,
+            "seed": 20260929,
+            "ignore_eos": true,
+            "cache_prompt": false
+          },
+          "submitted_seconds": 15.114256081986241,
+          "started_seconds": 15.114357170998119,
+          "finished_seconds": 17.26397260199883,
+          "wall_seconds": 2.1496154310007114,
+          "output_tokens_per_second": 59.545534589139095,
+          "response": {
+            "id": "778",
+            "choices": [
+              {
+                "finish_reason": "length",
+                "index": 0,
+                "text": "<think>\n\n</think>\n\nTo find the average speed in meters per second (m/s), we will follow these steps:\n\n### Step 1: Identify the given values\n*   Distance ($d$) = $180 \\text{ km}$\n*   Time ($t$) = $2.5 \\text{ hours}$\n\n### Step 2: Calculate the average speed in km/h\nThe formula for average speed is:\n$$ \\text{Speed} = \\frac{\\text{Distance}}{\\text{Time}} $$\n\nSubstitute the given values:\n$$ \\text{Speed} = \\",
+                "logprobs": null
+              }
+            ],
+            "created": 1790795539,
+            "model": "/home/ericbuehler/.cache/huggingface/hub/models--Qwen--Qwen3.8-Flash-Next/snapshots/de4b8e4d43b917e7706784d8bb445c9af86a3540",
+            "system_fingerprint": "local",
+            "object": "text_completion",
+            "usage": {
+              "completion_tokens": 128,
+              "prompt_tokens": 30,
+              "total_tokens": 158,
+              "avg_tok_per_sec": 74.21324,
+              "avg_prompt_tok_per_sec": 280.37384,
+              "avg_compl_tok_per_sec": 63.303658,
+              "total_time_sec": 2.129,
+              "total_prompt_time_sec": 0.107,
+              "total_completion_time_sec": 2.022
+            }
+          },
+          "error": null,
+          "response_sha256": "01cf16a97aeea00e11479c6ef92a0fcb420ca8b634c671fca668be718a627f42",
+          "output_text_sha256": "648ce818f8354da7fcdda90cb502b6976fd2c9d7a0ea98703eecc980cd51e97d"
+        }
+      ],
+      "trial": 4,
+      "warmup": false,
+      "waves": [
+        {
+          "request_indices": [
+            0
+          ],
+          "started_seconds": 0.00019213097402825952,
+          "finished_seconds": 2.144646565982839,
+          "mean_active_requests": 1.0,
+          "complete": true,
+          "agreement": {
+            "request_count": 1,
+            "unique_output_text_hashes": 1,
+            "hash_counts": {
+              "1728d8716d8fdb143423d122139612a79782ec7865e1cbd2edb5a59d9b338a14": 1
+            },
+            "all_outputs_identical": true,
+            "equal_pair_fraction": null
+          }
+        },
+        {
+          "request_indices": [
+            1
+          ],
+          "started_seconds": 2.144942856975831,
+          "finished_seconds": 4.22865333899972,
+          "mean_active_requests": 1.0,
+          "complete": true,
+          "agreement": {
+            "request_count": 1,
+            "unique_output_text_hashes": 1,
+            "hash_counts": {
+              "648ce818f8354da7fcdda90cb502b6976fd2c9d7a0ea98703eecc980cd51e97d": 1
+            },
+            "all_outputs_identical": true,
+            "equal_pair_fraction": null
+          }
+        },
+        {
+          "request_indices": [
+            2
+          ],
+          "started_seconds": 4.229160752991447,
+          "finished_seconds": 6.423029079975095,
+          "mean_active_requests": 1.0,
+          "complete": true,
+          "agreement": {
+            "request_count": 1,
+            "unique_output_text_hashes": 1,
+            "hash_counts": {
+              "648ce818f8354da7fcdda90cb502b6976fd2c9d7a0ea98703eecc980cd51e97d": 1
+            },
+            "all_outputs_identical": true,
+            "equal_pair_fraction": null
+          }
+        },
+        {
+          "request_indices": [
+            3
+          ],
+          "started_seconds": 6.423541101976298,
+          "finished_seconds": 8.70141412699013,
+          "mean_active_requests": 1.0,
+          "complete": true,
+          "agreement": {
+            "request_count": 1,
+            "unique_output_text_hashes": 1,
+            "hash_counts": {
+              "4f66a0714e0b443f27b75596c559a1e5f4a8f75f3f4ba590e4ab97a7b5866d72": 1
+            },
+            "all_outputs_identical": true,
+            "equal_pair_fraction": null
+          }
+        },
+        {
+          "request_indices": [
+            4
+          ],
+          "started_seconds": 8.701705234998371,
+          "finished_seconds": 10.828948435984785,
+          "mean_active_requests": 1.0,
+          "complete": true,
+          "agreement": {
+            "request_count": 1,
+            "unique_output_text_hashes": 1,
+            "hash_counts": {
+              "ed7ad98095f368bf37d3a00d30bad778a4febf7f806bd905bf4715381d88a445": 1
+            },
+            "all_outputs_identical": true,
+            "equal_pair_fraction": null
+          }
+        },
+        {
+          "request_indices": [
+            5
+          ],
+          "started_seconds": 10.829465930990409,
+          "finished_seconds": 12.897427374991821,
+          "mean_active_requests": 1.0,
+          "complete": true,
+          "agreement": {
+            "request_count": 1,
+            "unique_output_text_hashes": 1,
+            "hash_counts": {
+              "1728d8716d8fdb143423d122139612a79782ec7865e1cbd2edb5a59d9b338a14": 1
+            },
+            "all_outputs_identical": true,
+            "equal_pair_fraction": null
+          }
+        },
+        {
+          "request_indices": [
+            6
+          ],
+          "started_seconds": 12.897737041988876,
+          "finished_seconds": 15.114074175973656,
+          "mean_active_requests": 1.0,
+          "complete": true,
+          "agreement": {
+            "request_count": 1,
+            "unique_output_text_hashes": 1,
+            "hash_counts": {
+              "ed7ad98095f368bf37d3a00d30bad778a4febf7f806bd905bf4715381d88a445": 1
+            },
+            "all_outputs_identical": true,
+            "equal_pair_fraction": null
+          }
+        },
+        {
+          "request_indices": [
+            7
+          ],
+          "started_seconds": 15.114357170998119,
+          "finished_seconds": 17.26397260199883,
+          "mean_active_requests": 1.0,
+          "complete": true,
+          "agreement": {
+            "request_count": 1,
+            "unique_output_text_hashes": 1,
+            "hash_counts": {
+              "648ce818f8354da7fcdda90cb502b6976fd2c9d7a0ea98703eecc980cd51e97d": 1
+            },
+            "all_outputs_identical": true,
+            "equal_pair_fraction": null
+          }
+        }
+      ]
+    }
+  ],
+  "limits": [
+    "Only this subprocess replaces the shared prompt cycle with the selected original prompt; shared scheduling and request code are unchanged.",
+    "Every wave waits for all responses before the next wave; rates include prefill, startup, drain, and client overhead.",
+    "Identical inputs and greedy sampling do not guarantee identical expert routes or outputs across batch shapes or adaptive MTP states.",
+    "C1 has eight sequential requests; C8 has three waves of eight requests. This is a finite-wave diagnostic, not sustained traffic."
+  ],
+  "summary": {
+    "aggregate_output_tokens_per_second": {
+      "mean": 60.09080471207792,
+      "sample_stddev": 0.9864887447750526,
+      "samples": [
+        59.76024965304012,
+        61.20012146656379,
+        59.31204301662984
+      ]
+    },
+    "mean_active_requests": {
+      "mean": 0.9997929725178208,
+      "sample_stddev": 5.751808865521116e-05,
+      "samples": [
+        0.9997350029783348,
+        0.9998500282670869,
+        0.9997938863080408
+      ]
+    },
+    "mean_request_wall_seconds": {
+      "mean": 2.1300475933773364,
+      "sample_stddev": 0.0346293473869196,
+      "samples": [
+        2.141324394127878,
+        2.0911854511286947,
+        2.157632934875437
+      ]
+    },
+    "mean_request_output_tokens_per_second": {
+      "mean": 60.14681044737776,
+      "sample_stddev": 0.9826077150827557,
+      "samples": [
+        59.808913740987734,
+        61.25378187256953,
+        59.37773572857602
+      ]
+    },
+    "latency_weighted_request_output_tokens_per_second": {
+      "mean": 60.103220610492194,
+      "sample_stddev": 0.9841726586249433,
+      "samples": [
+        59.776090138893714,
+        61.20930113152489,
+        59.32427056105797
+      ]
+    },
+    "sustained_completion_boundary_output_tokens_per_second": null
+  }
+}

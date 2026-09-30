@@ -1,0 +1,13 @@
+{
+  "utc": "2026-09-30T19:13:27.600344+00:00",
+  "monotonic": 166498.445519655,
+  "system": {
+    "MemAvailable_KiB": 123821052,
+    "SwapTotal_KiB": 16777212,
+    "SwapFree_KiB": 8979432
+  },
+  "page_size_bytes": 4096,
+  "pswpin_pages": 18864566,
+  "pswpout_pages": 31559972,
+  "model_pid": null
+}

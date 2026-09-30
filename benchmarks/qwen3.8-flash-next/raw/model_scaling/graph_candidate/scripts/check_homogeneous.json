@@ -1,0 +1,12 @@
+{
+  "complete": true,
+  "scope": "CPU mock only; no server/GPU/build",
+  "checks": [
+    "All four cases complete with exact 2 warmups/3 trials and 8/24 requests",
+    "Mock peak request concurrency is exactly 1/8; no request overlaps phases",
+    "Recomputed token/latency/active-integral metrics and nonoverlapping finite waves pass",
+    "All output hashes preserved; constant outputs give agreement 1, alternating outputs give cross-C agreement 0.5",
+    "Same-prompt C8/C1 summary ratios independently checked",
+    "Hash corruption rejected; short output persists failed raw wave, stops next wave, restores original prompts"
+  ]
+}

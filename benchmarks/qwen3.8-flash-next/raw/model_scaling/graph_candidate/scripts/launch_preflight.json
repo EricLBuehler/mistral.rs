@@ -1,0 +1,76 @@
+{
+  "complete": true,
+  "scope": "CPU preflight; binary payload was not rehashed during active vLLM timing. Required launch itself verifies SHA before/after.",
+  "checked_at": "2026-09-30T18:23:27.562839+00:00",
+  "command": [
+    "python3",
+    "/home/ericbuehler/qwen4exp_work/model_scaling_20260930/graph_candidate/run_final.py",
+    "--binary",
+    "/home/ericbuehler/qwen4exp_work/verify_graph_depth4_20260930/build/mistralrs",
+    "--expected-binary-sha256",
+    "92c050e15bbfe15fc99ef11077366a8fb40db5af96223c67e0f9299fce23f2fa",
+    "--build-metadata",
+    "/home/ericbuehler/qwen4exp_work/verify_graph_depth4_20260930/build/metadata.json",
+    "--output",
+    "/home/ericbuehler/qwen4exp_work/model_scaling_20260930/graph_candidate/adaptive_run",
+    "--include-serving",
+    "--include-smokes"
+  ],
+  "binary": {
+    "path": "/home/ericbuehler/qwen4exp_work/verify_graph_depth4_20260930/build/mistralrs",
+    "bytes": 609921008,
+    "mtime_ns": 1790790566527165656,
+    "sha256_evidence": "92c050e15bbfe15fc99ef11077366a8fb40db5af96223c67e0f9299fce23f2fa",
+    "last_verified_before_after": "/home/ericbuehler/qwen4exp_work/qwen3_moe_scaling_20260930/mistralrs_bf16/metadata.json"
+  },
+  "build_complete": true,
+  "current_git_head": "29079c69a790adb16787409161fdd1e26fdc23ec",
+  "tracked_worktree_clean": true,
+  "changed_runtime_sources_since_build_base": [
+    {
+      "path": "mistralrs-core/src/cuda/gdn.rs",
+      "matches_build_snapshot": true,
+      "sha256": "3184acf25987c47661d2a3be381c30380a14b98f150062220c42ed52c25daa82"
+    },
+    {
+      "path": "mistralrs-core/src/vision_models/qwen4_exp/speculative.rs",
+      "matches_build_snapshot": true,
+      "sha256": "59dd1fd4934876351f719c4fa061a8411421bca61dbb03392d264b120e84fb35"
+    },
+    {
+      "path": "mistralrs-quant/tests/grouped_mmq_packed_cuda_tests.rs",
+      "matches_build_snapshot": true,
+      "sha256": "623eae948871fbaf99da7390743cca3cd1f9d9b5d7f193705c3d65ef6e8826c1"
+    }
+  ],
+  "verified_preparation_files": 24,
+  "pinned_model": "/home/ericbuehler/.cache/huggingface/hub/models--Qwen--Qwen3.8-Flash-Next/snapshots/de4b8e4d43b917e7706784d8bb445c9af86a3540",
+  "shards_present": 131,
+  "minimum_free_disk_bytes": 1073741824,
+  "free_disk_bytes_now": 2731020288,
+  "startup_graph_assertion": 36,
+  "prior_stage_duration_seconds": {
+    "startup": 894.3606281889952,
+    "phases": {
+      "serving": 340.1928460370109,
+      "text": 8.024881389981601,
+      "c1": 134.06654781202087,
+      "c6_c8": 342.1638960239943,
+      "mixed_context": 21.033804328006227
+    },
+    "total": 1743.209409092
+  },
+  "prior_stage_artifact_bytes": 17644003,
+  "estimated_duration_minutes": {
+    "original_protocol": 29.05349015153333,
+    "extra_homogeneous_estimate": [
+      6,
+      9
+    ],
+    "total_estimate": [
+      35,
+      40
+    ]
+  },
+  "duration_limits": "Homogeneous-input throughput is unmeasured; estimate uses prior comparable rates. Model loading and new graph warmup can change elapsed time."
+}

@@ -1,0 +1,24 @@
+{
+  "complete": true,
+  "scope": "Manual semantic inspection of saved completed responses, separate from throughput and numerical validation",
+  "source_sha256": {
+    "text.json": "bb95f4dec7fe7484e92b0bd332e901729531a9a982ef501a7cba86e66a952ad2",
+    "mixed_context.json": "caa5c174827ab421e3024bd3030b04c58c55cd8cb420e6f731e5211579604d6f"
+  },
+  "chat_smoke": {
+    "prompt_tokens": 8128,
+    "request": "Write one sentence about the river after a repetitive river context",
+    "response": "The quiet river flows past the green forest.",
+    "assessment": "Coherent single sentence answering the request; matches preceding stage response"
+  },
+  "mixed_context_smoke": {
+    "requests": 8,
+    "assessment": "Synthetic word-list continuation stress inputs; saved outputs include repeated words and occasional reasoning/role markers. All requests completed with finite logprobs and nonempty output, but this is not a semantic quality benchmark or proof of MTP equivalence.",
+    "identical_text_to_previous_stage": 3
+  },
+  "limits": [
+    "No broad quality evaluation was performed",
+    "Displayed text differences do not measure expert routes",
+    "128-token forced-length completions may end mid-sentence/code"
+  ]
+}

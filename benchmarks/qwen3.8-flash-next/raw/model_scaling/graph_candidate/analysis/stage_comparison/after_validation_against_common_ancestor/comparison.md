@@ -1,0 +1,84 @@
+# Staged optimized-serving comparison
+
+Mean +/- sample standard deviation across five measured trials after two warmups. Changes are ratios of means; these runs were not randomized causal A/B trials.
+
+## Serving workloads
+
+| Workload | Before tok/s | Candidate tok/s | Change |
+| --- | ---: | ---: | ---: |
+| pp512 | 1318.41 +/- 26.63 | 1306.68 +/- 30.76 | -0.89% |
+| pp2048 | 1304.02 +/- 8.61 | 1296.01 +/- 7.77 | -0.61% |
+| pp8192 | 1284.94 +/- 3.28 | 1275.07 +/- 2.65 | -0.77% |
+| tg128_d16 | 47.01 +/- 9.57 | 44.81 +/- 3.60 | -4.67% |
+| python | 54.64 +/- 1.02 | 54.73 +/- 1.24 | +0.18% |
+| rust | 57.35 +/- 1.33 | 57.97 +/- 2.26 | +1.08% |
+| prose | 48.26 +/- 1.23 | 49.02 +/- 1.61 | +1.57% |
+| json | 49.17 +/- 1.08 | 50.45 +/- 1.07 | +2.61% |
+| primes | 54.66 +/- 2.45 | 56.47 +/- 1.89 | +3.32% |
+| math | 58.32 +/- 2.13 | 60.26 +/- 1.03 | +3.31% |
+| translation | 54.11 +/- 2.36 | 54.60 +/- 2.88 | +0.91% |
+| quicksort | 56.68 +/- 1.93 | 57.87 +/- 3.54 | +2.10% |
+| concurrency4 | 89.98 +/- 1.84 | 94.55 +/- 4.05 | +5.08% |
+| concurrency8 | 124.70 +/- 1.81 | 130.56 +/- 2.96 | +4.70% |
+
+Arithmetic mean across the eight ordinary prompt throughputs: 54.15 -> 55.17 tok/s (+1.89%). This is not a pooled request rate. C4/C8 serving rows are finite bursts.
+
+## Closed-loop concurrency
+
+| C | Requests/trial | Before aggregate tok/s | Candidate aggregate tok/s | Change | Before per-active tok/s | Candidate per-active tok/s | Candidate mean active | Candidate mean latency (s) |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 1 | 8 | 54.86 +/- 1.16 | 54.70 +/- 1.23 | -0.29% | 54.87 +/- 1.16 | 54.71 +/- 1.23 | 1.00 +/- 0.00 | 2.34 +/- 0.05 |
+| 6 | 24 | 114.94 +/- 1.21 | 119.85 +/- 2.46 | +4.27% | 20.12 +/- 0.29 | 20.80 +/- 0.35 | 5.76 +/- 0.03 | 6.16 +/- 0.11 |
+| 8 | 24 | 126.56 +/- 1.96 | 131.74 +/- 1.07 | +4.09% | 16.64 +/- 0.17 | 17.32 +/- 0.22 | 7.61 +/- 0.06 | 7.39 +/- 0.09 |
+
+Per-active-request throughput is output tokens divided by summed request latency. Whole-trial rates include startup/drain; completion-boundary estimates remain secondary in concurrency.summary.json.
+
+## Whole-command counters and swap
+
+| Phase | Stage | Acceptance | Mean draft depth | Target graph replays | Target eager | Swap-in MiB | Swap-out MiB |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| serving | pre_moe_optimization | 76.9% | 3.06 | 3386 | 42 | 94.77 | 0.00 |
+| serving | optimized_candidate | 73.1% | 3.55 | 3494 | 23 | 124.00 | 4.68 |
+| text | pre_moe_optimization | 100.0% | 3.00 | 3 | 0 | 2.38 | 0.00 |
+| text | optimized_candidate | 100.0% | 3.00 | 3 | 0 | 0.19 | 0.00 |
+| c1 | pre_moe_optimization | 79.3% | 3.28 | 2025 | 0 | 24.91 | 0.00 |
+| c1 | optimized_candidate | 75.8% | 3.76 | 1902 | 0 | 10.38 | 0.16 |
+| c6_c8 | pre_moe_optimization | 66.4% | 5.18 | 720 | 1065 | 151.03 | 0.00 |
+| c6_c8 | optimized_candidate | 70.9% | 4.38 | 1444 | 469 | 17.53 | 0.00 |
+| mixed_context | pre_moe_optimization | 52.0% | 2.98 | 60 | 19 | 0.90 | 0.02 |
+| mixed_context | optimized_candidate | 48.7% | 2.41 | 82 | 16 | 0.98 | 0.00 |
+
+## Chat smoke for human inspection
+
+pre_moe_optimization, finish_reason=stop:
+
+```json
+{
+  "content": "The quiet river flows past the green forest.",
+  "role": "assistant",
+  "tool_calls": null
+}
+```
+
+optimized_candidate, finish_reason=stop:
+
+```json
+{
+  "content": "The quiet river flows past the green forest.",
+  "role": "assistant",
+  "tool_calls": null
+}
+```
+
+Mixed-context request counts and finite-logprob checks passed for both stages. Semantic quality is not inferred from these structural checks.
+
+## Limits
+
+- Staged before/after measurements, not randomized causal A/B trials; percentages are ratios of means.
+- Candidate includes masked-Y MMQ and the scoped small-group dispatch, plus documented intervening fixes; no isolated causal speedup is inferred.
+- Whole-trial closed-loop rates include startup/drain. Per-active-request rates use tokens divided by summed request latency.
+- Counters bracket whole subprocesses including warmups and boundary overhead. C6/C8 counters cannot be split by concurrency.
+- Global swap counters do not identify model page-ins or their timing impact. Process VmSwap is separate.
+- Graph dispatch counts are not kernel-time coverage. No bandwidth or hardware-ceiling claim follows.
+- Output text differences are diagnostic; finite logprobs and nonempty output do not establish model quality.
+- Earlier metadata did not record every inherited environment variable; only shared recorded values can be checked.

@@ -1,0 +1,43 @@
+{
+  "utc": "2026-09-30T19:12:21.733257+00:00",
+  "monotonic": 166432.578433642,
+  "system": {
+    "MemAvailable_KiB": 8280292,
+    "SwapTotal_KiB": 16777212,
+    "SwapFree_KiB": 8458152
+  },
+  "page_size_bytes": 4096,
+  "pswpin_pages": 18862375,
+  "pswpout_pages": 31559972,
+  "model_pid": 2589294,
+  "model": {
+    "pid": 2589294,
+    "state": "S",
+    "parent_pid": 2589222,
+    "starttime_ticks": 16449458,
+    "comm": "mistralrs",
+    "command": [
+      "/home/ericbuehler/qwen4exp_work/verify_graph_depth4_20260930/build/mistralrs",
+      "serve",
+      "--no-ui",
+      "-p",
+      "1234",
+      "--max-model-len",
+      "16384",
+      "--max-seqs",
+      "8",
+      "--prefix-cache-n",
+      "0",
+      "-m",
+      "/home/ericbuehler/.cache/huggingface/hub/models--Qwen--Qwen3.8-Flash-Next/snapshots/de4b8e4d43b917e7706784d8bb445c9af86a3540",
+      "--isq",
+      "q4k",
+      "--mtp"
+    ],
+    "VmHWM_KiB": 95947252,
+    "VmRSS_KiB": 5950248,
+    "RssAnon_KiB": 3193900,
+    "RssFile_KiB": 2745736,
+    "VmSwap_KiB": 494712
+  }
+}

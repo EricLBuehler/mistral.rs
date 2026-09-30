@@ -1,0 +1,73 @@
+{
+  "scope": "Reclaim clean page cache from the completed Qwen3.5 comparison checkpoint before loading the distinct Flash-Next model. File contents are not changed.",
+  "started_unix": 1790793399.7943053,
+  "before_KiB": {
+    "MemFree": 74836472,
+    "MemAvailable": 123784016,
+    "Cached": 49224956
+  },
+  "files": [
+    {
+      "path": "/home/ericbuehler/hf_models/qwen3.5_35b_a3b/model.safetensors-00001-of-00014.safetensors",
+      "bytes": 5368709816
+    },
+    {
+      "path": "/home/ericbuehler/hf_models/qwen3.5_35b_a3b/model.safetensors-00002-of-00014.safetensors",
+      "bytes": 5368709808
+    },
+    {
+      "path": "/home/ericbuehler/hf_models/qwen3.5_35b_a3b/model.safetensors-00003-of-00014.safetensors",
+      "bytes": 5368709808
+    },
+    {
+      "path": "/home/ericbuehler/hf_models/qwen3.5_35b_a3b/model.safetensors-00004-of-00014.safetensors",
+      "bytes": 5368709816
+    },
+    {
+      "path": "/home/ericbuehler/hf_models/qwen3.5_35b_a3b/model.safetensors-00005-of-00014.safetensors",
+      "bytes": 5368709816
+    },
+    {
+      "path": "/home/ericbuehler/hf_models/qwen3.5_35b_a3b/model.safetensors-00006-of-00014.safetensors",
+      "bytes": 5368709816
+    },
+    {
+      "path": "/home/ericbuehler/hf_models/qwen3.5_35b_a3b/model.safetensors-00007-of-00014.safetensors",
+      "bytes": 5368709808
+    },
+    {
+      "path": "/home/ericbuehler/hf_models/qwen3.5_35b_a3b/model.safetensors-00008-of-00014.safetensors",
+      "bytes": 5368709808
+    },
+    {
+      "path": "/home/ericbuehler/hf_models/qwen3.5_35b_a3b/model.safetensors-00009-of-00014.safetensors",
+      "bytes": 5255463936
+    },
+    {
+      "path": "/home/ericbuehler/hf_models/qwen3.5_35b_a3b/model.safetensors-00010-of-00014.safetensors",
+      "bytes": 5368710456
+    },
+    {
+      "path": "/home/ericbuehler/hf_models/qwen3.5_35b_a3b/model.safetensors-00011-of-00014.safetensors",
+      "bytes": 5368710464
+    },
+    {
+      "path": "/home/ericbuehler/hf_models/qwen3.5_35b_a3b/model.safetensors-00012-of-00014.safetensors",
+      "bytes": 5368710456
+    },
+    {
+      "path": "/home/ericbuehler/hf_models/qwen3.5_35b_a3b/model.safetensors-00013-of-00014.safetensors",
+      "bytes": 5367839544
+    },
+    {
+      "path": "/home/ericbuehler/hf_models/qwen3.5_35b_a3b/model.safetensors-00014-of-00014.safetensors",
+      "bytes": 2224764664
+    }
+  ],
+  "after_KiB": {
+    "MemFree": 122725548,
+    "MemAvailable": 123790232,
+    "Cached": 1409032
+  },
+  "finished_unix": 1790793400.5310059
+}

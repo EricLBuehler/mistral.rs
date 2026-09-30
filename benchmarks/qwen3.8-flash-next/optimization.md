@@ -24,7 +24,41 @@ Validation confirms matching settings, tokenizer, prompt hashes and token counts
 
 [Validated comparison and all per-prompt results](raw/optimization/final_serving/comparison/comparison.md), [machine-readable summary](raw/optimization/final_serving/comparison/comparison.json), [run metadata](raw/optimization/final_serving/run/metadata.json), and the [archive manifest](raw/optimization/final_serving/manifest.json) retain the raw samples, commands, counters, memory records, source/build provenance, and validators. The historical baseline files remain intact.
 
-The [current whole-model profile](model-scaling.md) measures the same binary at C1/C8: expert kernel time per output improves 1.54x, versus 4.13x for all other kernels together, with similar MTP acceptance. It also records 59 graph and 65 unsupported-batch eager target dispatches at C8. The subsequent depth-four graph expansion passes focused CUDA checks but has no Flash-Next full-model speed measurement yet.
+The [current whole-model profile](model-scaling.md) measures the same binary at C1/C8: expert kernel time per output improves 1.54x, versus 4.13x for all other kernels together, with similar MTP acceptance. It also records 59 graph and 65 unsupported-batch eager target dispatches at C8. The subsequent depth-four graph expansion is measured below.
+
+## Depth-four graph followup
+
+The completed followup adds the B7/B8, Q5 verification graphs, increasing startup capture from 34 to 36 shapes. The model, Q4K ISQ, Q4 PLE, 48 GPU layers, 513 BF16 KV blocks, adaptive MTP, ordinary request bodies, and measurement protocol match the preceding `d2c85e` stage. The frozen candidate executable has SHA256 `92c050e15bbfe15fc99ef11077366a8fb40db5af96223c67e0f9299fce23f2fa` and contains the runtime changes committed as `74a469b6d402bf3795bb3b8eb40920d242185ae9`; it was built before that commit with embedded revision `ec33e3a75`. Five measured trials follow two warmups.
+
+| Concurrency | Prior stage, aggregate tok/s | Graph candidate, aggregate tok/s | Change | Candidate per-active tok/s |
+| ---: | ---: | ---: | ---: | ---: |
+| 1 | 53.78 +/- 1.43 | 54.70 +/- 1.23 | +1.73% | 54.71 +/- 1.23 |
+| 6 | 119.95 +/- 0.71 | 119.85 +/- 2.46 | -0.08% | 20.80 +/- 0.35 |
+| 8 | 131.94 +/- 0.71 | 131.74 +/- 1.07 | -0.15% | 17.32 +/- 0.22 |
+
+This does not establish a C6/C8 throughput improvement. Candidate C8 mean active requests are 7.61 versus 7.71 previously, with mean request latency 7.39 versus 7.48 seconds. Across the combined C6/C8 command, draft acceptance changes from 74.46% to 70.92%, mean proposed depth from 3.94 to 4.38, and target graph/eager dispatches from 1400/557 to 1444/469. Those counters include warmups and cannot separate C6 from C8; they do not measure kernel-time coverage. Both stages use adaptive MTP, so this is not a fixed-depth-four or randomized causal A/B experiment.
+
+The separate serving suite is mixed: ordinary single-prompt rates average 55.17 tok/s versus 53.88 (+2.39%), C4/C8 bursts change by -0.65%/+1.21%, and prefill 512/2048/8192 changes by +1.38%/+0.16%/+1.55%. Synthetic 16-token-input decode falls from 48.41 to 44.81 +/- 3.60 tok/s (-7.44%). The full per-prompt results are retained; these changes do not establish an isolated graph-policy speedup.
+
+Four additional commands test identical `python` or `math` inputs separately. Each uses two warmups and three measured trials, with eight sequential requests at C1 or three synchronized waves of eight at C8. Every request generates 128 tokens. These finite-wave controls are separate from the replenished mixed-prompt results above.
+
+| Homogeneous input | C1 aggregate tok/s | C8 aggregate tok/s | C8/C1 | C8 per-active tok/s |
+| --- | ---: | ---: | ---: | ---: |
+| Python | 56.14 +/- 0.62 | 254.90 +/- 17.26 | 4.54x | 32.65 |
+| Math | 60.09 +/- 0.99 | 254.35 +/- 14.38 | 4.23x | 33.01 |
+
+| Homogeneous command | Draft acceptance | Mean proposed depth | Target graph/eager dispatches |
+| --- | ---: | ---: | ---: |
+| Python C1 | 80.55% | 3.64 | 1328 / 0 |
+| Python C8 | 88.72% | 2.66 | 615 / 3 |
+| Math C1 | 86.84% | 4.00 | 1171 / 0 |
+| Math C8 | 86.29% | 3.70 | 498 / 12 |
+
+These command counters also include warmups. C8 mean active counts are 7.81 and 7.70. Only four of nine measured Python waves and one of nine math waves have identical text across all eight requests. The controls demonstrate substantial workload dependence, with different acceptance, depth, and scheduling. They neither measure expert-route overlap nor assign a quantitative gain to weight reuse, and they do not establish a general throughput ceiling.
+
+The 8,128-token repetitive-context chat returns a coherent sentence about the river, matching the prior stage. Eight synthetic mixed-context requests complete with finite logprobs; their word-list continuations are numerical stress checks rather than a model-quality benchmark. Before loading this distinct model, clean page cache for the completed Qwen3.5 checkpoint's 14 shards was released without changing file contents: MemFree rose from about 71 to 117 GiB while MemAvailable remained about 118 GiB. This preparation was outside timing. The candidate combined C6/C8 command records 17.53 MiB of global swap-in and no swap-out; other phases record small swap-out amounts. Global counters do not identify GPU paging or its timing cost.
+
+[Direct staged comparison](raw/model_scaling/graph_candidate/analysis/stage_comparison/comparison.json), [homogeneous summary](raw/model_scaling/graph_candidate/analysis/homogeneous.summary.json), [command counters](raw/model_scaling/graph_candidate/analysis/homogeneous.windows.json), and [response review](raw/model_scaling/graph_candidate/analysis/response_review.json) retain the evidence. The [archive](raw/model_scaling/graph_candidate/README.md) includes raw trials, exact protocols, source/build identities, memory/process records, validators, and the cache-release record; its [manifest](raw/model_scaling/graph_candidate/SHA256SUMS.json) covers every archived file except itself. The prior baseline remains unchanged.
 
 ## Remaining expert-kernel headroom
 

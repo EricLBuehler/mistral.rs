@@ -4,7 +4,7 @@ This directory contains the serving benchmark harness and results for the Qwen3.
 
 ## Results
 
-The cross-engine tables below preserve the baseline collected before the subsequent MoE kernel optimizations. The [latest full-model rerun](#subsequent-moe-optimization) reports those changes separately.
+The cross-engine tables below preserve the baseline collected before the subsequent MoE kernel optimizations. The [subsequent full-model reruns](#subsequent-moe-optimization) report those changes separately.
 
 Throughput in tokens/s, mean +/- sample standard deviation over five measured repetitions. Both GGUF columns use UD-Q4_K_XL; ISQ uses safetensors with `--isq q4k`; ISQ + MTP adds `--mtp` with adaptive draft depth. The llama.cpp serving run uses the allocation-padding fix described below, with its original kernels, fusion, and CUDA graphs.
 
@@ -109,6 +109,10 @@ The full-model ISQ + MTP rerun uses the same settings and five-trial protocol as
 Separate C4/C8 bursts reach 95.16/128.99 tok/s, changes of +5.76%/+3.45%. Ordinary single-prompt throughput averages 53.88 tok/s (-0.49%), and prefill changes range from -2.28% to -0.78%. The result is a modest concurrency improvement, with no demonstrated serial or prefill gain. C6 remains far below the requested 60 tok/s per active request and 360 aggregate tok/s.
 
 This staged comparison does not isolate either optimization. Adaptive MTP depths, acceptance, graph dispatch counts, and global swap-in also differ. Matching-workload validation, finite-logprob checks, the long repetitive-prompt smoke, and mixed-context requests pass. [Full results and limitations](optimization.md#final-serving-rerun) and [raw comparison](raw/optimization/final_serving/comparison/comparison.json) retain the evidence. The cross-engine tables above retain their original binaries and results.
+
+The final [depth-four graph followup](optimization.md#depth-four-graph-followup) captures two additional verification shapes and measures 54.70/119.85/131.74 aggregate tok/s at C1/C6/C8. It establishes no further C6/C8 throughput gain. Separate identical-prompt controls reach about 255 tok/s at C8, with different MTP acceptance and finite-wave scheduling; they demonstrate workload dependence without measuring expert-route overlap.
+
+The [same-checkpoint Qwen3.5-35B-A3B BF16 comparison with vLLM](qwen3.5-bf16-comparison.md) tests the native cuTile fused MoE path with MTP disabled. C8 throughput is 93.85 tok/s for mistral.rs and 95.47 for vLLM, or 2.95x and 3.09x their respective C1 rates. That independent control does not establish a hardware ceiling or predict vLLM's Flash-Next performance.
 
 A [followup headroom control](optimization.md#remaining-expert-kernel-headroom) reads the selected expert bytes without model computation. Native C8-shaped captures take 2.47 ms for that scan versus 3.40 ms for the complete FFN. A separate profile records L2 refill equivalents only 2.84% above the selected weight payload, and matched routes give only 1.469x cross-sequence weight reuse at C8. These results explain why large arithmetic padding does not imply an equally large time saving. They do not establish physical DRAM saturation or a full-model ceiling, and they do not support projecting the 3.00x C6 serving gain needed for 360 tok/s from removing MMQ padding alone.
 

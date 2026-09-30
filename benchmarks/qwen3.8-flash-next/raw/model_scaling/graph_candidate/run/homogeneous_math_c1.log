@@ -1,0 +1,5 @@
+math C=1 trial=0 warmup=True aggregate=59.971 active=1.000
+math C=1 trial=1 warmup=True aggregate=59.148 active=1.000
+math C=1 trial=2 warmup=False aggregate=59.760 active=1.000
+math C=1 trial=3 warmup=False aggregate=61.200 active=1.000
+math C=1 trial=4 warmup=False aggregate=59.312 active=1.000

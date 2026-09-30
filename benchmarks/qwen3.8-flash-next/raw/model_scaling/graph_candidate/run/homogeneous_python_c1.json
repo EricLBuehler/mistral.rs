@@ -1,0 +1,2819 @@
+{
+  "complete": true,
+  "diagnostic": "homogeneous input, synchronized finite waves; not a normal mixed-prompt benchmark",
+  "date": "2026-09-30T19:08:19.835950+00:00",
+  "python_version": "3.12.3",
+  "label": "isq_mtp_adaptive_graphs36",
+  "source_prompts_sha256": "ff2600daa58028527e50710169fcd5915b28e894b7ef4a2b6438b66563812793",
+  "source_files_sha256": {
+    "bench_homogeneous.py": "6cb61ba30e30d01891ca02ee5e1a891900046f36631360f81b97bbd427f394fc",
+    "bench_concurrency.py": "9f664f3ff278f0f16b24e655477486e93b91aec41bf473510e13f449ab1dbbc3",
+    "bench_serving.py": "a16b5815b8744def761174e396de92e41ecd499afae712255721c20a33a79705"
+  },
+  "tokenizer_sha256": "0997f410c57a1f4e53b09e4be8f4a172d90edd9564368fb0847030937229b9f3",
+  "prompt_name": "python",
+  "prompt": "Write a Python function that returns the n-th Fibonacci number, with a docstring.",
+  "prompt_sha256": "7d9074c26475df2a799d748be049ff151de83afb31dde5ef9211371fc3a1b124",
+  "expected_prompt_tokens": 17,
+  "settings": {
+    "mode": "burst",
+    "concurrency": 1,
+    "requests": 8,
+    "warmup": 2,
+    "trials": 3,
+    "max_tokens": 128,
+    "temperature": 0.0,
+    "seed": 20260929,
+    "ignore_eos": true,
+    "cache_prompt": false,
+    "logprobs": null,
+    "base_url": "http://127.0.0.1:1234",
+    "timeout": 1800
+  },
+  "runs": [
+    {
+      "complete": true,
+      "wall_seconds": 17.845465685997624,
+      "completed_output_tokens": 1024,
+      "aggregate_output_tokens_per_second": 57.38152301643087,
+      "mean_active_requests": 0.9997189621072948,
+      "mean_request_wall_seconds": 2.230056304240861,
+      "mean_request_output_tokens_per_second": 57.47623462912415,
+      "latency_weighted_request_output_tokens_per_second": 57.39765393213818,
+      "sustained_window": null,
+      "sustained_window_unavailable_reason": "burst traffic, failed trial, or fewer than C completions between first completion and last replenishment",
+      "requests": [
+        {
+          "request_index": 0,
+          "prompt_name": "python",
+          "prompt_sha256": "7d9074c26475df2a799d748be049ff151de83afb31dde5ef9211371fc3a1b124",
+          "request": {
+            "model": "default",
+            "prompt": "Write a Python function that returns the n-th Fibonacci number, with a docstring.",
+            "max_tokens": 128,
+            "temperature": 0.0,
+            "seed": 20260929,
+            "ignore_eos": true,
+            "cache_prompt": false
+          },
+          "submitted_seconds": 0.0006701050151605159,
+          "started_seconds": 0.0019252260099165142,
+          "finished_seconds": 2.3801882849948015,
+          "wall_seconds": 2.378263058984885,
+          "output_tokens_per_second": 53.82079140338424,
+          "response": {
+            "id": "579",
+            "choices": [
+              {
+                "finish_reason": "length",
+                "index": 0,
+                "text": "<think>\n\n</think>\n\n```python\ndef fibonacci(n: int) -> int:\n    \"\"\"\n    Return the n-th Fibonacci number.\n    \n    The Fibonacci sequence is defined as:\n    F(0) = 0, F(1) = 1, and F(n) = F(n-1) + F(n-2) for n > 1.\n    \n    Parameters:\n        n (int): The index in the Fibonacci sequence (non-negative integer).\n    \n    Returns:\n        int: The n-th Fibonacci number.\n    \n    Raises:\n        ValueError: If n is",
+                "logprobs": null
+              }
+            ],
+            "created": 1790795299,
+            "model": "/home/ericbuehler/.cache/huggingface/hub/models--Qwen--Qwen3.8-Flash-Next/snapshots/de4b8e4d43b917e7706784d8bb445c9af86a3540",
+            "system_fingerprint": "local",
+            "object": "text_completion",
+            "usage": {
+              "completion_tokens": 128,
+              "prompt_tokens": 17,
+              "total_tokens": 145,
+              "avg_tok_per_sec": 62.231762,
+              "avg_prompt_tok_per_sec": 161.90477,
+              "avg_compl_tok_per_sec": 57.52809,
+              "total_time_sec": 2.33,
+              "total_prompt_time_sec": 0.105,
+              "total_completion_time_sec": 2.225
+            }
+          },
+          "error": null,
+          "response_sha256": "cd1e61d37aa49fbab065b2b22577420a76b5e690713faa39a2429342064ceb63",
+          "output_text_sha256": "8e38cb4c814fecf5d09b7dd3935371b9dd95d45b045a5dfe0e9afe9f2ed405af"
+        },
+        {
+          "request_index": 1,
+          "prompt_name": "python",
+          "prompt_sha256": "7d9074c26475df2a799d748be049ff151de83afb31dde5ef9211371fc3a1b124",
+          "request": {
+            "model": "default",
+            "prompt": "Write a Python function that returns the n-th Fibonacci number, with a docstring.",
+            "max_tokens": 128,
+            "temperature": 0.0,
+            "seed": 20260929,
+            "ignore_eos": true,
+            "cache_prompt": false
+          },
+          "submitted_seconds": 2.380533905001357,
+          "started_seconds": 2.3807061320112552,
+          "finished_seconds": 4.575885714002652,
+          "wall_seconds": 2.195179581991397,
+          "output_tokens_per_second": 58.309580250323975,
+          "response": {
+            "id": "580",
+            "choices": [
+              {
+                "finish_reason": "length",
+                "index": 0,
+                "text": "<think>\n\n</think>\n\n```python\ndef fibonacci(n: int) -> int:\n    \"\"\"\n    Return the n-th Fibonacci number.\n    \n    The Fibonacci sequence is defined as:\n    F(0) = 0, F(1) = 1, and F(n) = F(n-1) + F(n-2) for n > 1.\n    \n    Parameters:\n        n (int): The index in the Fibonacci sequence (non-negative integer).\n    \n    Returns:\n        int: The n-th Fibonacci number.\n    \n    Raises:\n        ValueError: If n is",
+                "logprobs": null
+              }
+            ],
+            "created": 1790795302,
+            "model": "/home/ericbuehler/.cache/huggingface/hub/models--Qwen--Qwen3.8-Flash-Next/snapshots/de4b8e4d43b917e7706784d8bb445c9af86a3540",
+            "system_fingerprint": "local",
+            "object": "text_completion",
+            "usage": {
+              "completion_tokens": 128,
+              "prompt_tokens": 17,
+              "total_tokens": 145,
+              "avg_tok_per_sec": 66.82028,
+              "avg_prompt_tok_per_sec": 163.46153,
+              "avg_compl_tok_per_sec": 61.95547,
+              "total_time_sec": 2.17,
+              "total_prompt_time_sec": 0.104,
+              "total_completion_time_sec": 2.066
+            }
+          },
+          "error": null,
+          "response_sha256": "5ab2449f941e8bb11c51eea09489c563320763d25291e85a8c73fe8c14bd2de7",
+          "output_text_sha256": "8e38cb4c814fecf5d09b7dd3935371b9dd95d45b045a5dfe0e9afe9f2ed405af"
+        },
+        {
+          "request_index": 2,
+          "prompt_name": "python",
+          "prompt_sha256": "7d9074c26475df2a799d748be049ff151de83afb31dde5ef9211371fc3a1b124",
+          "request": {
+            "model": "default",
+            "prompt": "Write a Python function that returns the n-th Fibonacci number, with a docstring.",
+            "max_tokens": 128,
+            "temperature": 0.0,
+            "seed": 20260929,
+            "ignore_eos": true,
+            "cache_prompt": false
+          },
+          "submitted_seconds": 4.576080693019321,
+          "started_seconds": 4.576187141996343,
+          "finished_seconds": 6.788582450011745,
+          "wall_seconds": 2.2123953080154024,
+          "output_tokens_per_second": 57.85584499129162,
+          "response": {
+            "id": "581",
+            "choices": [
+              {
+                "finish_reason": "length",
+                "index": 0,
+                "text": "<think>\n\n</think>\n\n```python\ndef fibonacci(n: int) -> int:\n    \"\"\"\n    Return the n-th Fibonacci number.\n\n    The Fibonacci sequence is defined as:\n    F(0) = 0, F(1) = 1, and F(n) = F(n-1) + F(n-2) for n > 1.\n\n    Parameters:\n        n (int): The index in the Fibonacci sequence (non-negative integer).\n\n    Returns:\n        int: The n-th Fibonacci number.\n\n    Raises:\n        ValueError: If n is negative.\n   ",
+                "logprobs": null
+              }
+            ],
+            "created": 1790795304,
+            "model": "/home/ericbuehler/.cache/huggingface/hub/models--Qwen--Qwen3.8-Flash-Next/snapshots/de4b8e4d43b917e7706784d8bb445c9af86a3540",
+            "system_fingerprint": "local",
+            "object": "text_completion",
+            "usage": {
+              "completion_tokens": 128,
+              "prompt_tokens": 17,
+              "total_tokens": 145,
+              "avg_tok_per_sec": 66.3312,
+              "avg_prompt_tok_per_sec": 163.46153,
+              "avg_compl_tok_per_sec": 61.479343,
+              "total_time_sec": 2.186,
+              "total_prompt_time_sec": 0.104,
+              "total_completion_time_sec": 2.082
+            }
+          },
+          "error": null,
+          "response_sha256": "c847f6387a4ba52d48ef82ece2d83053e185b4115e9aab3f7ef76f47385c5da5",
+          "output_text_sha256": "d2d297d75d388c7b1342ab178a624395f20aedf90bd36b947b71eaf0ae07a524"
+        },
+        {
+          "request_index": 3,
+          "prompt_name": "python",
+          "prompt_sha256": "7d9074c26475df2a799d748be049ff151de83afb31dde5ef9211371fc3a1b124",
+          "request": {
+            "model": "default",
+            "prompt": "Write a Python function that returns the n-th Fibonacci number, with a docstring.",
+            "max_tokens": 128,
+            "temperature": 0.0,
+            "seed": 20260929,
+            "ignore_eos": true,
+            "cache_prompt": false
+          },
+          "submitted_seconds": 6.788759012008086,
+          "started_seconds": 6.788863637018949,
+          "finished_seconds": 9.03004789899569,
+          "wall_seconds": 2.2411842619767413,
+          "output_tokens_per_second": 57.11266234178489,
+          "response": {
+            "id": "582",
+            "choices": [
+              {
+                "finish_reason": "length",
+                "index": 0,
+                "text": "<think>\n\n</think>\n\n```python\ndef fibonacci(n: int) -> int:\n    \"\"\"\n    Return the n-th Fibonacci number.\n\n    The Fibonacci sequence is defined as:\n    F(0) = 0, F(1) = 1, and F(n) = F(n-1) + F(n-2) for n > 1.\n\n    Parameters:\n        n (int): The index in the Fibonacci sequence (non-negative integer).\n\n    Returns:\n        int: The n-th Fibonacci number.\n\n    Raises:\n        ValueError: If n is negative.\n   ",
+                "logprobs": null
+              }
+            ],
+            "created": 1790795306,
+            "model": "/home/ericbuehler/.cache/huggingface/hub/models--Qwen--Qwen3.8-Flash-Next/snapshots/de4b8e4d43b917e7706784d8bb445c9af86a3540",
+            "system_fingerprint": "local",
+            "object": "text_completion",
+            "usage": {
+              "completion_tokens": 128,
+              "prompt_tokens": 17,
+              "total_tokens": 145,
+              "avg_tok_per_sec": 65.43321,
+              "avg_prompt_tok_per_sec": 163.46153,
+              "avg_compl_tok_per_sec": 60.606064,
+              "total_time_sec": 2.216,
+              "total_prompt_time_sec": 0.104,
+              "total_completion_time_sec": 2.112
+            }
+          },
+          "error": null,
+          "response_sha256": "643fce4df4a040cea2e1b849d4aade867a29ac80441330626fb9f5f5008760c4",
+          "output_text_sha256": "d2d297d75d388c7b1342ab178a624395f20aedf90bd36b947b71eaf0ae07a524"
+        },
+        {
+          "request_index": 4,
+          "prompt_name": "python",
+          "prompt_sha256": "7d9074c26475df2a799d748be049ff151de83afb31dde5ef9211371fc3a1b124",
+          "request": {
+            "model": "default",
+            "prompt": "Write a Python function that returns the n-th Fibonacci number, with a docstring.",
+            "max_tokens": 128,
+            "temperature": 0.0,
+            "seed": 20260929,
+            "ignore_eos": true,
+            "cache_prompt": false
+          },
+          "submitted_seconds": 9.030401472002268,
+          "started_seconds": 9.030513394012814,
+          "finished_seconds": 11.228410729003372,
+          "wall_seconds": 2.1978973349905573,
+          "output_tokens_per_second": 58.23747904974366,
+          "response": {
+            "id": "583",
+            "choices": [
+              {
+                "finish_reason": "length",
+                "index": 0,
+                "text": "<think>\n\n</think>\n\n```python\ndef fibonacci(n: int) -> int:\n    \"\"\"\n    Return the n-th Fibonacci number.\n    \n    The Fibonacci sequence is defined as:\n    F(0) = 0, F(1) = 1, and F(n) = F(n-1) + F(n-2) for n > 1.\n    \n    Parameters:\n        n (int): The index in the Fibonacci sequence (non-negative integer).\n    \n    Returns:\n        int: The n-th Fibonacci number.\n    \n    Raises:\n        ValueError: If n is",
+                "logprobs": null
+              }
+            ],
+            "created": 1790795308,
+            "model": "/home/ericbuehler/.cache/huggingface/hub/models--Qwen--Qwen3.8-Flash-Next/snapshots/de4b8e4d43b917e7706784d8bb445c9af86a3540",
+            "system_fingerprint": "local",
+            "object": "text_completion",
+            "usage": {
+              "completion_tokens": 128,
+              "prompt_tokens": 17,
+              "total_tokens": 145,
+              "avg_tok_per_sec": 66.72803,
+              "avg_prompt_tok_per_sec": 163.46153,
+              "avg_compl_tok_per_sec": 61.865635,
+              "total_time_sec": 2.173,
+              "total_prompt_time_sec": 0.104,
+              "total_completion_time_sec": 2.069
+            }
+          },
+          "error": null,
+          "response_sha256": "ebacb6780ffb62cf5be506afbe1c7dcded0baea248210a0ed1d77af64dd58c5b",
+          "output_text_sha256": "8e38cb4c814fecf5d09b7dd3935371b9dd95d45b045a5dfe0e9afe9f2ed405af"
+        },
+        {
+          "request_index": 5,
+          "prompt_name": "python",
+          "prompt_sha256": "7d9074c26475df2a799d748be049ff151de83afb31dde5ef9211371fc3a1b124",
+          "request": {
+            "model": "default",
+            "prompt": "Write a Python function that returns the n-th Fibonacci number, with a docstring.",
+            "max_tokens": 128,
+            "temperature": 0.0,
+            "seed": 20260929,
+            "ignore_eos": true,
+            "cache_prompt": false
+          },
+          "submitted_seconds": 11.228603916009888,
+          "started_seconds": 11.228709309012629,
+          "finished_seconds": 13.457635547994869,
+          "wall_seconds": 2.2289262389822397,
+          "output_tokens_per_second": 57.426754533809365,
+          "response": {
+            "id": "584",
+            "choices": [
+              {
+                "finish_reason": "length",
+                "index": 0,
+                "text": "<think>\n\n</think>\n\n```python\ndef fibonacci(n: int) -> int:\n    \"\"\"\n    Return the n-th Fibonacci number.\n\n    The Fibonacci sequence is defined as:\n    F(0) = 0, F(1) = 1, and F(n) = F(n-1) + F(n-2) for n > 1.\n\n    Parameters:\n        n (int): The index in the Fibonacci sequence (non-negative integer).\n\n    Returns:\n        int: The n-th Fibonacci number.\n\n    Raises:\n        ValueError: If n is negative.\n   ",
+                "logprobs": null
+              }
+            ],
+            "created": 1790795311,
+            "model": "/home/ericbuehler/.cache/huggingface/hub/models--Qwen--Qwen3.8-Flash-Next/snapshots/de4b8e4d43b917e7706784d8bb445c9af86a3540",
+            "system_fingerprint": "local",
+            "object": "text_completion",
+            "usage": {
+              "completion_tokens": 128,
+              "prompt_tokens": 17,
+              "total_tokens": 145,
+              "avg_tok_per_sec": 65.84923,
+              "avg_prompt_tok_per_sec": 163.46153,
+              "avg_compl_tok_per_sec": 61.010487,
+              "total_time_sec": 2.202,
+              "total_prompt_time_sec": 0.104,
+              "total_completion_time_sec": 2.098
+            }
+          },
+          "error": null,
+          "response_sha256": "738569c1da8918b96f52bd078772b2fcfce4f33bb442bf223565ee3763401d02",
+          "output_text_sha256": "d2d297d75d388c7b1342ab178a624395f20aedf90bd36b947b71eaf0ae07a524"
+        },
+        {
+          "request_index": 6,
+          "prompt_name": "python",
+          "prompt_sha256": "7d9074c26475df2a799d748be049ff151de83afb31dde5ef9211371fc3a1b124",
+          "request": {
+            "model": "default",
+            "prompt": "Write a Python function that returns the n-th Fibonacci number, with a docstring.",
+            "max_tokens": 128,
+            "temperature": 0.0,
+            "seed": 20260929,
+            "ignore_eos": true,
+            "cache_prompt": false
+          },
+          "submitted_seconds": 13.45816307500354,
+          "started_seconds": 13.45830232501612,
+          "finished_seconds": 15.535535703995265,
+          "wall_seconds": 2.0772333789791446,
+          "output_tokens_per_second": 61.62042324917075,
+          "response": {
+            "id": "585",
+            "choices": [
+              {
+                "finish_reason": "length",
+                "index": 0,
+                "text": "<think>\n\n</think>\n\n```python\ndef fibonacci(n: int) -> int:\n    \"\"\"\n    Return the n-th Fibonacci number.\n\n    The Fibonacci sequence is defined as:\n    F(0) = 0, F(1) = 1, and F(n) = F(n-1) + F(n-2) for n > 1.\n\n    Parameters:\n        n (int): The index in the Fibonacci sequence (0-based).\n\n    Returns:\n        int: The n-th Fibonacci number.\n\n    Raises:\n        ValueError: If n is negative.\n    \"\"\"",
+                "logprobs": null
+              }
+            ],
+            "created": 1790795313,
+            "model": "/home/ericbuehler/.cache/huggingface/hub/models--Qwen--Qwen3.8-Flash-Next/snapshots/de4b8e4d43b917e7706784d8bb445c9af86a3540",
+            "system_fingerprint": "local",
+            "object": "text_completion",
+            "usage": {
+              "completion_tokens": 128,
+              "prompt_tokens": 17,
+              "total_tokens": 145,
+              "avg_tok_per_sec": 70.45675,
+              "avg_prompt_tok_per_sec": 165.04854,
+              "avg_compl_tok_per_sec": 65.473145,
+              "total_time_sec": 2.058,
+              "total_prompt_time_sec": 0.103,
+              "total_completion_time_sec": 1.955
+            }
+          },
+          "error": null,
+          "response_sha256": "2bb8596b5620a6f44014d3d4b02307cfea4124f8cfbd62199ecce631bac2c617",
+          "output_text_sha256": "22a562b8921b3ddcbf193781a748d1db2b439a927ce7c5884e4865fab7418e20"
+        },
+        {
+          "request_index": 7,
+          "prompt_name": "python",
+          "prompt_sha256": "7d9074c26475df2a799d748be049ff151de83afb31dde5ef9211371fc3a1b124",
+          "request": {
+            "model": "default",
+            "prompt": "Write a Python function that returns the n-th Fibonacci number, with a docstring.",
+            "max_tokens": 128,
+            "temperature": 0.0,
+            "seed": 20260929,
+            "ignore_eos": true,
+            "cache_prompt": false
+          },
+          "submitted_seconds": 15.535738538019359,
+          "started_seconds": 15.535846251994371,
+          "finished_seconds": 17.845217522000894,
+          "wall_seconds": 2.3093712700065225,
+          "output_tokens_per_second": 55.42634121348469,
+          "response": {
+            "id": "586",
+            "choices": [
+              {
+                "finish_reason": "length",
+                "index": 0,
+                "text": "<think>\n\n</think>\n\n```python\ndef fibonacci(n: int) -> int:\n    \"\"\"\n    Return the n-th Fibonacci number.\n    \n    The Fibonacci sequence is defined as:\n    F(0) = 0, F(1) = 1, and F(n) = F(n-1) + F(n-2) for n > 1.\n    \n    Parameters:\n        n (int): The index in the Fibonacci sequence (0-based).\n        \n    Returns:\n        int: The n-th Fibonacci number.\n        \n    Raises:\n        ValueError: If n is negative",
+                "logprobs": null
+              }
+            ],
+            "created": 1790795315,
+            "model": "/home/ericbuehler/.cache/huggingface/hub/models--Qwen--Qwen3.8-Flash-Next/snapshots/de4b8e4d43b917e7706784d8bb445c9af86a3540",
+            "system_fingerprint": "local",
+            "object": "text_completion",
+            "usage": {
+              "completion_tokens": 128,
+              "prompt_tokens": 17,
+              "total_tokens": 145,
+              "avg_tok_per_sec": 63.51292,
+              "avg_prompt_tok_per_sec": 161.90477,
+              "avg_compl_tok_per_sec": 58.769512,
+              "total_time_sec": 2.283,
+              "total_prompt_time_sec": 0.105,
+              "total_completion_time_sec": 2.178
+            }
+          },
+          "error": null,
+          "response_sha256": "374b6e860b71de049840e2af0eeb719e1bcf4726ff20f7ddcc5e306da31b30bb",
+          "output_text_sha256": "9694090937d4fd05c99b7baa3006359c63f4f58aaa1cd7555569cc6c0a871b2d"
+        }
+      ],
+      "trial": 0,
+      "warmup": true,
+      "waves": [
+        {
+          "request_indices": [
+            0
+          ],
+          "started_seconds": 0.0019252260099165142,
+          "finished_seconds": 2.3801882849948015,
+          "mean_active_requests": 1.0,
+          "complete": true,
+          "agreement": {
+            "request_count": 1,
+            "unique_output_text_hashes": 1,
+            "hash_counts": {
+              "8e38cb4c814fecf5d09b7dd3935371b9dd95d45b045a5dfe0e9afe9f2ed405af": 1
+            },
+            "all_outputs_identical": true,
+            "equal_pair_fraction": null
+          }
+        },
+        {
+          "request_indices": [
+            1
+          ],
+          "started_seconds": 2.3807061320112552,
+          "finished_seconds": 4.575885714002652,
+          "mean_active_requests": 1.0,
+          "complete": true,
+          "agreement": {
+            "request_count": 1,
+            "unique_output_text_hashes": 1,
+            "hash_counts": {
+              "8e38cb4c814fecf5d09b7dd3935371b9dd95d45b045a5dfe0e9afe9f2ed405af": 1
+            },
+            "all_outputs_identical": true,
+            "equal_pair_fraction": null
+          }
+        },
+        {
+          "request_indices": [
+            2
+          ],
+          "started_seconds": 4.576187141996343,
+          "finished_seconds": 6.788582450011745,
+          "mean_active_requests": 1.0,
+          "complete": true,
+          "agreement": {
+            "request_count": 1,
+            "unique_output_text_hashes": 1,
+            "hash_counts": {
+              "d2d297d75d388c7b1342ab178a624395f20aedf90bd36b947b71eaf0ae07a524": 1
+            },
+            "all_outputs_identical": true,
+            "equal_pair_fraction": null
+          }
+        },
+        {
+          "request_indices": [
+            3
+          ],
+          "started_seconds": 6.788863637018949,
+          "finished_seconds": 9.03004789899569,
+          "mean_active_requests": 1.0,
+          "complete": true,
+          "agreement": {
+            "request_count": 1,
+            "unique_output_text_hashes": 1,
+            "hash_counts": {
+              "d2d297d75d388c7b1342ab178a624395f20aedf90bd36b947b71eaf0ae07a524": 1
+            },
+            "all_outputs_identical": true,
+            "equal_pair_fraction": null
+          }
+        },
+        {
+          "request_indices": [
+            4
+          ],
+          "started_seconds": 9.030513394012814,
+          "finished_seconds": 11.228410729003372,
+          "mean_active_requests": 1.0,
+          "complete": true,
+          "agreement": {
+            "request_count": 1,
+            "unique_output_text_hashes": 1,
+            "hash_counts": {
+              "8e38cb4c814fecf5d09b7dd3935371b9dd95d45b045a5dfe0e9afe9f2ed405af": 1
+            },
+            "all_outputs_identical": true,
+            "equal_pair_fraction": null
+          }
+        },
+        {
+          "request_indices": [
+            5
+          ],
+          "started_seconds": 11.228709309012629,
+          "finished_seconds": 13.457635547994869,
+          "mean_active_requests": 1.0,
+          "complete": true,
+          "agreement": {
+            "request_count": 1,
+            "unique_output_text_hashes": 1,
+            "hash_counts": {
+              "d2d297d75d388c7b1342ab178a624395f20aedf90bd36b947b71eaf0ae07a524": 1
+            },
+            "all_outputs_identical": true,
+            "equal_pair_fraction": null
+          }
+        },
+        {
+          "request_indices": [
+            6
+          ],
+          "started_seconds": 13.45830232501612,
+          "finished_seconds": 15.535535703995265,
+          "mean_active_requests": 1.0,
+          "complete": true,
+          "agreement": {
+            "request_count": 1,
+            "unique_output_text_hashes": 1,
+            "hash_counts": {
+              "22a562b8921b3ddcbf193781a748d1db2b439a927ce7c5884e4865fab7418e20": 1
+            },
+            "all_outputs_identical": true,
+            "equal_pair_fraction": null
+          }
+        },
+        {
+          "request_indices": [
+            7
+          ],
+          "started_seconds": 15.535846251994371,
+          "finished_seconds": 17.845217522000894,
+          "mean_active_requests": 1.0,
+          "complete": true,
+          "agreement": {
+            "request_count": 1,
+            "unique_output_text_hashes": 1,
+            "hash_counts": {
+              "9694090937d4fd05c99b7baa3006359c63f4f58aaa1cd7555569cc6c0a871b2d": 1
+            },
+            "all_outputs_identical": true,
+            "equal_pair_fraction": null
+          }
+        }
+      ]
+    },
+    {
+      "complete": true,
+      "wall_seconds": 17.947672373004025,
+      "completed_output_tokens": 1024,
+      "aggregate_output_tokens_per_second": 57.054752210668205,
+      "mean_active_requests": 0.9997657237737426,
+      "mean_request_wall_seconds": 2.2429334575062967,
+      "mean_request_output_tokens_per_second": 57.12105696913676,
+      "latency_weighted_request_output_tokens_per_second": 57.06812191491002,
+      "sustained_window": null,
+      "sustained_window_unavailable_reason": "burst traffic, failed trial, or fewer than C completions between first completion and last replenishment",
+      "requests": [
+        {
+          "request_index": 0,
+          "prompt_name": "python",
+          "prompt_sha256": "7d9074c26475df2a799d748be049ff151de83afb31dde5ef9211371fc3a1b124",
+          "request": {
+            "model": "default",
+            "prompt": "Write a Python function that returns the n-th Fibonacci number, with a docstring.",
+            "max_tokens": 128,
+            "temperature": 0.0,
+            "seed": 20260929,
+            "ignore_eos": true,
+            "cache_prompt": false
+          },
+          "submitted_seconds": 1.6080011846497655e-05,
+          "started_seconds": 0.0006329680036287755,
+          "finished_seconds": 2.3053298220038414,
+          "wall_seconds": 2.3046968540002126,
+          "output_tokens_per_second": 55.538757636533916,
+          "response": {
+            "id": "587",
+            "choices": [
+              {
+                "finish_reason": "length",
+                "index": 0,
+                "text": "<think>\n\n</think>\n\n```python\ndef fibonacci(n: int) -> int:\n    \"\"\"\n    Return the n-th Fibonacci number.\n\n    The Fibonacci sequence is defined as:\n    F(0) = 0, F(1) = 1, and F(n) = F(n-1) + F(n-2) for n > 1.\n\n    Parameters:\n        n (int): The index in the Fibonacci sequence (non-negative integer).\n\n    Returns:\n        int: The n-th Fibonacci number.\n\n    Raises:\n        ValueError: If n is negative.\n   ",
+                "logprobs": null
+              }
+            ],
+            "created": 1790795317,
+            "model": "/home/ericbuehler/.cache/huggingface/hub/models--Qwen--Qwen3.8-Flash-Next/snapshots/de4b8e4d43b917e7706784d8bb445c9af86a3540",
+            "system_fingerprint": "local",
+            "object": "text_completion",
+            "usage": {
+              "completion_tokens": 128,
+              "prompt_tokens": 17,
+              "total_tokens": 145,
+              "avg_tok_per_sec": 63.540756,
+              "avg_prompt_tok_per_sec": 160.37735,
+              "avg_compl_tok_per_sec": 58.82353,
+              "total_time_sec": 2.282,
+              "total_prompt_time_sec": 0.106,
+              "total_completion_time_sec": 2.176
+            }
+          },
+          "error": null,
+          "response_sha256": "40322cf591da279292a6ff4630bbcfb9b333cbe8e8156959772eb08a2273b4ec",
+          "output_text_sha256": "d2d297d75d388c7b1342ab178a624395f20aedf90bd36b947b71eaf0ae07a524"
+        },
+        {
+          "request_index": 1,
+          "prompt_name": "python",
+          "prompt_sha256": "7d9074c26475df2a799d748be049ff151de83afb31dde5ef9211371fc3a1b124",
+          "request": {
+            "model": "default",
+            "prompt": "Write a Python function that returns the n-th Fibonacci number, with a docstring.",
+            "max_tokens": 128,
+            "temperature": 0.0,
+            "seed": 20260929,
+            "ignore_eos": true,
+            "cache_prompt": false
+          },
+          "submitted_seconds": 2.3057164030033164,
+          "started_seconds": 2.305840052984422,
+          "finished_seconds": 4.592621540010441,
+          "wall_seconds": 2.286781487026019,
+          "output_tokens_per_second": 55.97386576994954,
+          "response": {
+            "id": "588",
+            "choices": [
+              {
+                "finish_reason": "length",
+                "index": 0,
+                "text": "<think>\n\n</think>\n\n```python\ndef fibonacci(n: int) -> int:\n    \"\"\"\n    Return the n-th Fibonacci number.\n    \n    The Fibonacci sequence is defined as:\n    F(0) = 0, F(1) = 1, and F(n) = F(n-1) + F(n-2) for n > 1.\n    \n    Parameters:\n        n (int): The index in the Fibonacci sequence (non-negative integer).\n    \n    Returns:\n        int: The n-th Fibonacci number.\n    \n    Raises:\n        ValueError: If n is",
+                "logprobs": null
+              }
+            ],
+            "created": 1790795320,
+            "model": "/home/ericbuehler/.cache/huggingface/hub/models--Qwen--Qwen3.8-Flash-Next/snapshots/de4b8e4d43b917e7706784d8bb445c9af86a3540",
+            "system_fingerprint": "local",
+            "object": "text_completion",
+            "usage": {
+              "completion_tokens": 128,
+              "prompt_tokens": 17,
+              "total_tokens": 145,
+              "avg_tok_per_sec": 64.13092,
+              "avg_prompt_tok_per_sec": 161.90477,
+              "avg_compl_tok_per_sec": 59.3692,
+              "total_time_sec": 2.261,
+              "total_prompt_time_sec": 0.105,
+              "total_completion_time_sec": 2.156
+            }
+          },
+          "error": null,
+          "response_sha256": "4dec302c7999a015fc8371209311ce3114b88b638eed96700d7c1b433465840f",
+          "output_text_sha256": "8e38cb4c814fecf5d09b7dd3935371b9dd95d45b045a5dfe0e9afe9f2ed405af"
+        },
+        {
+          "request_index": 2,
+          "prompt_name": "python",
+          "prompt_sha256": "7d9074c26475df2a799d748be049ff151de83afb31dde5ef9211371fc3a1b124",
+          "request": {
+            "model": "default",
+            "prompt": "Write a Python function that returns the n-th Fibonacci number, with a docstring.",
+            "max_tokens": 128,
+            "temperature": 0.0,
+            "seed": 20260929,
+            "ignore_eos": true,
+            "cache_prompt": false
+          },
+          "submitted_seconds": 4.592927401012275,
+          "started_seconds": 4.593082011007937,
+          "finished_seconds": 6.757707304001087,
+          "wall_seconds": 2.1646252929931507,
+          "output_tokens_per_second": 59.132636218533285,
+          "response": {
+            "id": "589",
+            "choices": [
+              {
+                "finish_reason": "length",
+                "index": 0,
+                "text": "<think>\n\n</think>\n\n```python\ndef fibonacci(n: int) -> int:\n    \"\"\"\n    Return the n-th Fibonacci number.\n    \n    The Fibonacci sequence is defined as:\n    F(0) = 0, F(1) = 1, and F(n) = F(n-1) + F(n-2) for n > 1.\n    \n    Parameters:\n        n (int): The index in the Fibonacci sequence (non-negative integer).\n    \n    Returns:\n        int: The n-th Fibonacci number.\n    \n    Raises:\n        ValueError: If n is",
+                "logprobs": null
+              }
+            ],
+            "created": 1790795322,
+            "model": "/home/ericbuehler/.cache/huggingface/hub/models--Qwen--Qwen3.8-Flash-Next/snapshots/de4b8e4d43b917e7706784d8bb445c9af86a3540",
+            "system_fingerprint": "local",
+            "object": "text_completion",
+            "usage": {
+              "completion_tokens": 128,
+              "prompt_tokens": 17,
+              "total_tokens": 145,
+              "avg_tok_per_sec": 67.69375,
+              "avg_prompt_tok_per_sec": 163.46153,
+              "avg_compl_tok_per_sec": 62.806675,
+              "total_time_sec": 2.142,
+              "total_prompt_time_sec": 0.104,
+              "total_completion_time_sec": 2.038
+            }
+          },
+          "error": null,
+          "response_sha256": "b98960e58776e9f8638009f6a4d49e404bef24b8aab5a8fb12ac56f3f641ae9f",
+          "output_text_sha256": "8e38cb4c814fecf5d09b7dd3935371b9dd95d45b045a5dfe0e9afe9f2ed405af"
+        },
+        {
+          "request_index": 3,
+          "prompt_name": "python",
+          "prompt_sha256": "7d9074c26475df2a799d748be049ff151de83afb31dde5ef9211371fc3a1b124",
+          "request": {
+            "model": "default",
+            "prompt": "Write a Python function that returns the n-th Fibonacci number, with a docstring.",
+            "max_tokens": 128,
+            "temperature": 0.0,
+            "seed": 20260929,
+            "ignore_eos": true,
+            "cache_prompt": false
+          },
+          "submitted_seconds": 6.757904074998805,
+          "started_seconds": 6.758020779991057,
+          "finished_seconds": 8.91466174699599,
+          "wall_seconds": 2.1566409670049325,
+          "output_tokens_per_second": 59.35155733305109,
+          "response": {
+            "id": "590",
+            "choices": [
+              {
+                "finish_reason": "length",
+                "index": 0,
+                "text": "<think>\n\n</think>\n\n```python\ndef fibonacci(n: int) -> int:\n    \"\"\"\n    Return the n-th Fibonacci number.\n    \n    The Fibonacci sequence is defined as:\n    F(0) = 0, F(1) = 1, and F(n) = F(n-1) + F(n-2) for n > 1.\n    \n    Parameters:\n        n (int): The index in the Fibonacci sequence (non-negative integer).\n    \n    Returns:\n        int: The n-th Fibonacci number.\n    \n    Raises:\n        ValueError: If n is",
+                "logprobs": null
+              }
+            ],
+            "created": 1790795324,
+            "model": "/home/ericbuehler/.cache/huggingface/hub/models--Qwen--Qwen3.8-Flash-Next/snapshots/de4b8e4d43b917e7706784d8bb445c9af86a3540",
+            "system_fingerprint": "local",
+            "object": "text_completion",
+            "usage": {
+              "completion_tokens": 128,
+              "prompt_tokens": 17,
+              "total_tokens": 145,
+              "avg_tok_per_sec": 67.94752,
+              "avg_prompt_tok_per_sec": 161.90477,
+              "avg_compl_tok_per_sec": 63.085266,
+              "total_time_sec": 2.134,
+              "total_prompt_time_sec": 0.105,
+              "total_completion_time_sec": 2.029
+            }
+          },
+          "error": null,
+          "response_sha256": "61371db39b8818aa7ecf1f747f62045b578570be51e418376a1c2c9e3aa847c4",
+          "output_text_sha256": "8e38cb4c814fecf5d09b7dd3935371b9dd95d45b045a5dfe0e9afe9f2ed405af"
+        },
+        {
+          "request_index": 4,
+          "prompt_name": "python",
+          "prompt_sha256": "7d9074c26475df2a799d748be049ff151de83afb31dde5ef9211371fc3a1b124",
+          "request": {
+            "model": "default",
+            "prompt": "Write a Python function that returns the n-th Fibonacci number, with a docstring.",
+            "max_tokens": 128,
+            "temperature": 0.0,
+            "seed": 20260929,
+            "ignore_eos": true,
+            "cache_prompt": false
+          },
+          "submitted_seconds": 8.91507324099075,
+          "started_seconds": 8.915190202009398,
+          "finished_seconds": 11.102873239986366,
+          "wall_seconds": 2.187683037976967,
+          "output_tokens_per_second": 58.509389970114874,
+          "response": {
+            "id": "591",
+            "choices": [
+              {
+                "finish_reason": "length",
+                "index": 0,
+                "text": "<think>\n\n</think>\n\n```python\ndef fibonacci(n: int) -> int:\n    \"\"\"\n    Return the n-th Fibonacci number.\n\n    The Fibonacci sequence is defined as:\n    F(0) = 0, F(1) = 1, and F(n) = F(n-1) + F(n-2) for n > 1.\n\n    Parameters:\n        n (int): The index in the Fibonacci sequence (non-negative integer).\n\n    Returns:\n        int: The n-th Fibonacci number.\n\n    Raises:\n        ValueError: If n is negative.\n   ",
+                "logprobs": null
+              }
+            ],
+            "created": 1790795326,
+            "model": "/home/ericbuehler/.cache/huggingface/hub/models--Qwen--Qwen3.8-Flash-Next/snapshots/de4b8e4d43b917e7706784d8bb445c9af86a3540",
+            "system_fingerprint": "local",
+            "object": "text_completion",
+            "usage": {
+              "completion_tokens": 128,
+              "prompt_tokens": 17,
+              "total_tokens": 145,
+              "avg_tok_per_sec": 66.94367,
+              "avg_prompt_tok_per_sec": 163.46153,
+              "avg_compl_tok_per_sec": 62.075657,
+              "total_time_sec": 2.166,
+              "total_prompt_time_sec": 0.104,
+              "total_completion_time_sec": 2.062
+            }
+          },
+          "error": null,
+          "response_sha256": "0233fc42f8a3d8c9096029fda626505919b622605b06f91480378cc5a691bc7d",
+          "output_text_sha256": "d2d297d75d388c7b1342ab178a624395f20aedf90bd36b947b71eaf0ae07a524"
+        },
+        {
+          "request_index": 5,
+          "prompt_name": "python",
+          "prompt_sha256": "7d9074c26475df2a799d748be049ff151de83afb31dde5ef9211371fc3a1b124",
+          "request": {
+            "model": "default",
+            "prompt": "Write a Python function that returns the n-th Fibonacci number, with a docstring.",
+            "max_tokens": 128,
+            "temperature": 0.0,
+            "seed": 20260929,
+            "ignore_eos": true,
+            "cache_prompt": false
+          },
+          "submitted_seconds": 11.103408079012297,
+          "started_seconds": 11.103549008985283,
+          "finished_seconds": 13.46637320300215,
+          "wall_seconds": 2.3628241940168664,
+          "output_tokens_per_second": 54.17246036506697,
+          "response": {
+            "id": "592",
+            "choices": [
+              {
+                "finish_reason": "length",
+                "index": 0,
+                "text": "<think>\n\n</think>\n\n```python\ndef fibonacci(n: int) -> int:\n    \"\"\"\n    Return the n-th Fibonacci number.\n    \n    The Fibonacci sequence is defined as:\n    F(0) = 0, F(1) = 1, and F(n) = F(n-1) + F(n-2) for n > 1.\n    \n    Parameters:\n        n (int): The index in the Fibonacci sequence (0-based).\n        \n    Returns:\n        int: The n-th Fibonacci number.\n        \n    Raises:\n        ValueError: If n is negative",
+                "logprobs": null
+              }
+            ],
+            "created": 1790795328,
+            "model": "/home/ericbuehler/.cache/huggingface/hub/models--Qwen--Qwen3.8-Flash-Next/snapshots/de4b8e4d43b917e7706784d8bb445c9af86a3540",
+            "system_fingerprint": "local",
+            "object": "text_completion",
+            "usage": {
+              "completion_tokens": 128,
+              "prompt_tokens": 17,
+              "total_tokens": 145,
+              "avg_tok_per_sec": 62.07192,
+              "avg_prompt_tok_per_sec": 163.46153,
+              "avg_compl_tok_per_sec": 57.34767,
+              "total_time_sec": 2.336,
+              "total_prompt_time_sec": 0.104,
+              "total_completion_time_sec": 2.232
+            }
+          },
+          "error": null,
+          "response_sha256": "3b481b8a96cb27270af2a2c7db5947004e78d79216226d59eef98a7d51d77eb3",
+          "output_text_sha256": "9694090937d4fd05c99b7baa3006359c63f4f58aaa1cd7555569cc6c0a871b2d"
+        },
+        {
+          "request_index": 6,
+          "prompt_name": "python",
+          "prompt_sha256": "7d9074c26475df2a799d748be049ff151de83afb31dde5ef9211371fc3a1b124",
+          "request": {
+            "model": "default",
+            "prompt": "Write a Python function that returns the n-th Fibonacci number, with a docstring.",
+            "max_tokens": 128,
+            "temperature": 0.0,
+            "seed": 20260929,
+            "ignore_eos": true,
+            "cache_prompt": false
+          },
+          "submitted_seconds": 13.466684359009378,
+          "started_seconds": 13.466776152985403,
+          "finished_seconds": 15.68637522199424,
+          "wall_seconds": 2.2195990690088365,
+          "output_tokens_per_second": 57.66807248534236,
+          "response": {
+            "id": "593",
+            "choices": [
+              {
+                "finish_reason": "length",
+                "index": 0,
+                "text": "<think>\n\n</think>\n\n```python\ndef fibonacci(n: int) -> int:\n    \"\"\"\n    Return the n-th Fibonacci number.\n    \n    The Fibonacci sequence is defined as:\n    F(0) = 0, F(1) = 1, and F(n) = F(n-1) + F(n-2) for n > 1.\n    \n    Parameters:\n        n (int): The index in the Fibonacci sequence (0-based).\n        \n    Returns:\n        int: The n-th Fibonacci number.\n        \n    Raises:\n        ValueError: If n is negative",
+                "logprobs": null
+              }
+            ],
+            "created": 1790795331,
+            "model": "/home/ericbuehler/.cache/huggingface/hub/models--Qwen--Qwen3.8-Flash-Next/snapshots/de4b8e4d43b917e7706784d8bb445c9af86a3540",
+            "system_fingerprint": "local",
+            "object": "text_completion",
+            "usage": {
+              "completion_tokens": 128,
+              "prompt_tokens": 17,
+              "total_tokens": 145,
+              "avg_tok_per_sec": 66.05923,
+              "avg_prompt_tok_per_sec": 161.90477,
+              "avg_compl_tok_per_sec": 61.24402,
+              "total_time_sec": 2.195,
+              "total_prompt_time_sec": 0.105,
+              "total_completion_time_sec": 2.09
+            }
+          },
+          "error": null,
+          "response_sha256": "4555ab6196db252b5e7ec0a0af7972c9bcaa82bc92517450af30a66f3917c404",
+          "output_text_sha256": "9694090937d4fd05c99b7baa3006359c63f4f58aaa1cd7555569cc6c0a871b2d"
+        },
+        {
+          "request_index": 7,
+          "prompt_name": "python",
+          "prompt_sha256": "7d9074c26475df2a799d748be049ff151de83afb31dde5ef9211371fc3a1b124",
+          "request": {
+            "model": "default",
+            "prompt": "Write a Python function that returns the n-th Fibonacci number, with a docstring.",
+            "max_tokens": 128,
+            "temperature": 0.0,
+            "seed": 20260929,
+            "ignore_eos": true,
+            "cache_prompt": false
+          },
+          "submitted_seconds": 15.686682314000791,
+          "started_seconds": 15.686776010988979,
+          "finished_seconds": 17.947392769012367,
+          "wall_seconds": 2.2606167580233887,
+          "output_tokens_per_second": 56.621715974502074,
+          "response": {
+            "id": "594",
+            "choices": [
+              {
+                "finish_reason": "length",
+                "index": 0,
+                "text": "<think>\n\n</think>\n\n```python\ndef fibonacci(n: int) -> int:\n    \"\"\"\n    Return the n-th Fibonacci number.\n\n    The Fibonacci sequence is defined as:\n    F(0) = 0, F(1) = 1, and F(n) = F(n-1) + F(n-2) for n > 1.\n\n    Parameters:\n        n (int): The index in the Fibonacci sequence (non-negative integer).\n\n    Returns:\n        int: The n-th Fibonacci number.\n\n    Raises:\n        ValueError: If n is negative.\n   ",
+                "logprobs": null
+              }
+            ],
+            "created": 1790795333,
+            "model": "/home/ericbuehler/.cache/huggingface/hub/models--Qwen--Qwen3.8-Flash-Next/snapshots/de4b8e4d43b917e7706784d8bb445c9af86a3540",
+            "system_fingerprint": "local",
+            "object": "text_completion",
+            "usage": {
+              "completion_tokens": 128,
+              "prompt_tokens": 17,
+              "total_tokens": 145,
+              "avg_tok_per_sec": 64.906,
+              "avg_prompt_tok_per_sec": 163.46153,
+              "avg_compl_tok_per_sec": 60.0939,
+              "total_time_sec": 2.234,
+              "total_prompt_time_sec": 0.104,
+              "total_completion_time_sec": 2.13
+            }
+          },
+          "error": null,
+          "response_sha256": "5e15d75354f9173606c634de2f7dc7d5c337ec9e11735268f6ec87b019e87365",
+          "output_text_sha256": "d2d297d75d388c7b1342ab178a624395f20aedf90bd36b947b71eaf0ae07a524"
+        }
+      ],
+      "trial": 1,
+      "warmup": true,
+      "waves": [
+        {
+          "request_indices": [
+            0
+          ],
+          "started_seconds": 0.0006329680036287755,
+          "finished_seconds": 2.3053298220038414,
+          "mean_active_requests": 1.0,
+          "complete": true,
+          "agreement": {
+            "request_count": 1,
+            "unique_output_text_hashes": 1,
+            "hash_counts": {
+              "d2d297d75d388c7b1342ab178a624395f20aedf90bd36b947b71eaf0ae07a524": 1
+            },
+            "all_outputs_identical": true,
+            "equal_pair_fraction": null
+          }
+        },
+        {
+          "request_indices": [
+            1
+          ],
+          "started_seconds": 2.305840052984422,
+          "finished_seconds": 4.592621540010441,
+          "mean_active_requests": 1.0,
+          "complete": true,
+          "agreement": {
+            "request_count": 1,
+            "unique_output_text_hashes": 1,
+            "hash_counts": {
+              "8e38cb4c814fecf5d09b7dd3935371b9dd95d45b045a5dfe0e9afe9f2ed405af": 1
+            },
+            "all_outputs_identical": true,
+            "equal_pair_fraction": null
+          }
+        },
+        {
+          "request_indices": [
+            2
+          ],
+          "started_seconds": 4.593082011007937,
+          "finished_seconds": 6.757707304001087,
+          "mean_active_requests": 1.0,
+          "complete": true,
+          "agreement": {
+            "request_count": 1,
+            "unique_output_text_hashes": 1,
+            "hash_counts": {
+              "8e38cb4c814fecf5d09b7dd3935371b9dd95d45b045a5dfe0e9afe9f2ed405af": 1
+            },
+            "all_outputs_identical": true,
+            "equal_pair_fraction": null
+          }
+        },
+        {
+          "request_indices": [
+            3
+          ],
+          "started_seconds": 6.758020779991057,
+          "finished_seconds": 8.91466174699599,
+          "mean_active_requests": 1.0,
+          "complete": true,
+          "agreement": {
+            "request_count": 1,
+            "unique_output_text_hashes": 1,
+            "hash_counts": {
+              "8e38cb4c814fecf5d09b7dd3935371b9dd95d45b045a5dfe0e9afe9f2ed405af": 1
+            },
+            "all_outputs_identical": true,
+            "equal_pair_fraction": null
+          }
+        },
+        {
+          "request_indices": [
+            4
+          ],
+          "started_seconds": 8.915190202009398,
+          "finished_seconds": 11.102873239986366,
+          "mean_active_requests": 1.0,
+          "complete": true,
+          "agreement": {
+            "request_count": 1,
+            "unique_output_text_hashes": 1,
+            "hash_counts": {
+              "d2d297d75d388c7b1342ab178a624395f20aedf90bd36b947b71eaf0ae07a524": 1
+            },
+            "all_outputs_identical": true,
+            "equal_pair_fraction": null
+          }
+        },
+        {
+          "request_indices": [
+            5
+          ],
+          "started_seconds": 11.103549008985283,
+          "finished_seconds": 13.46637320300215,
+          "mean_active_requests": 1.0,
+          "complete": true,
+          "agreement": {
+            "request_count": 1,
+            "unique_output_text_hashes": 1,
+            "hash_counts": {
+              "9694090937d4fd05c99b7baa3006359c63f4f58aaa1cd7555569cc6c0a871b2d": 1
+            },
+            "all_outputs_identical": true,
+            "equal_pair_fraction": null
+          }
+        },
+        {
+          "request_indices": [
+            6
+          ],
+          "started_seconds": 13.466776152985403,
+          "finished_seconds": 15.68637522199424,
+          "mean_active_requests": 1.0,
+          "complete": true,
+          "agreement": {
+            "request_count": 1,
+            "unique_output_text_hashes": 1,
+            "hash_counts": {
+              "9694090937d4fd05c99b7baa3006359c63f4f58aaa1cd7555569cc6c0a871b2d": 1
+            },
+            "all_outputs_identical": true,
+            "equal_pair_fraction": null
+          }
+        },
+        {
+          "request_indices": [
+            7
+          ],
+          "started_seconds": 15.686776010988979,
+          "finished_seconds": 17.947392769012367,
+          "mean_active_requests": 1.0,
+          "complete": true,
+          "agreement": {
+            "request_count": 1,
+            "unique_output_text_hashes": 1,
+            "hash_counts": {
+              "d2d297d75d388c7b1342ab178a624395f20aedf90bd36b947b71eaf0ae07a524": 1
+            },
+            "all_outputs_identical": true,
+            "equal_pair_fraction": null
+          }
+        }
+      ]
+    },
+    {
+      "complete": true,
+      "wall_seconds": 18.088716638012556,
+      "completed_output_tokens": 1024,
+      "aggregate_output_tokens_per_second": 56.6098756750998,
+      "mean_active_requests": 0.9998330074419911,
+      "mean_request_wall_seconds": 2.2607119946187595,
+      "mean_request_output_tokens_per_second": 56.64794520511752,
+      "latency_weighted_request_output_tokens_per_second": 56.619330681963135,
+      "sustained_window": null,
+      "sustained_window_unavailable_reason": "burst traffic, failed trial, or fewer than C completions between first completion and last replenishment",
+      "requests": [
+        {
+          "request_index": 0,
+          "prompt_name": "python",
+          "prompt_sha256": "7d9074c26475df2a799d748be049ff151de83afb31dde5ef9211371fc3a1b124",
+          "request": {
+            "model": "default",
+            "prompt": "Write a Python function that returns the n-th Fibonacci number, with a docstring.",
+            "max_tokens": 128,
+            "temperature": 0.0,
+            "seed": 20260929,
+            "ignore_eos": true,
+            "cache_prompt": false
+          },
+          "submitted_seconds": 9.568000677973032e-06,
+          "started_seconds": 0.0002595400146674365,
+          "finished_seconds": 2.301064565021079,
+          "wall_seconds": 2.3008050250064116,
+          "output_tokens_per_second": 55.632701862533224,
+          "response": {
+            "id": "595",
+            "choices": [
+              {
+                "finish_reason": "length",
+                "index": 0,
+                "text": "<think>\n\n</think>\n\n```python\ndef fibonacci(n: int) -> int:\n    \"\"\"\n    Return the n-th Fibonacci number.\n    \n    The Fibonacci sequence is defined as:\n    F(0) = 0, F(1) = 1, and F(n) = F(n-1) + F(n-2) for n > 1.\n    \n    Parameters:\n        n (int): The index in the Fibonacci sequence (0-based).\n        \n    Returns:\n        int: The n-th Fibonacci number.\n        \n    Raises:\n        ValueError: If n is negative",
+                "logprobs": null
+              }
+            ],
+            "created": 1790795335,
+            "model": "/home/ericbuehler/.cache/huggingface/hub/models--Qwen--Qwen3.8-Flash-Next/snapshots/de4b8e4d43b917e7706784d8bb445c9af86a3540",
+            "system_fingerprint": "local",
+            "object": "text_completion",
+            "usage": {
+              "completion_tokens": 128,
+              "prompt_tokens": 17,
+              "total_tokens": 145,
+              "avg_tok_per_sec": 63.70826,
+              "avg_prompt_tok_per_sec": 161.90477,
+              "avg_compl_tok_per_sec": 58.959003,
+              "total_time_sec": 2.276,
+              "total_prompt_time_sec": 0.105,
+              "total_completion_time_sec": 2.171
+            }
+          },
+          "error": null,
+          "response_sha256": "3fe4f43ed4f2de07bc454e4c2de203427208983327a43a81419773efcde3773e",
+          "output_text_sha256": "9694090937d4fd05c99b7baa3006359c63f4f58aaa1cd7555569cc6c0a871b2d"
+        },
+        {
+          "request_index": 1,
+          "prompt_name": "python",
+          "prompt_sha256": "7d9074c26475df2a799d748be049ff151de83afb31dde5ef9211371fc3a1b124",
+          "request": {
+            "model": "default",
+            "prompt": "Write a Python function that returns the n-th Fibonacci number, with a docstring.",
+            "max_tokens": 128,
+            "temperature": 0.0,
+            "seed": 20260929,
+            "ignore_eos": true,
+            "cache_prompt": false
+          },
+          "submitted_seconds": 2.301241656008642,
+          "started_seconds": 2.3013376890157815,
+          "finished_seconds": 4.571503104001749,
+          "wall_seconds": 2.270165414985968,
+          "output_tokens_per_second": 56.383556526338495,
+          "response": {
+            "id": "596",
+            "choices": [
+              {
+                "finish_reason": "length",
+                "index": 0,
+                "text": "<think>\n\n</think>\n\n```python\ndef fibonacci(n: int) -> int:\n    \"\"\"\n    Return the n-th Fibonacci number.\n    \n    The Fibonacci sequence is defined as:\n    F(0) = 0, F(1) = 1, and F(n) = F(n-1) + F(n-2) for n > 1.\n    \n    Parameters:\n        n (int): The index in the Fibonacci sequence (0-based).\n        \n    Returns:\n        int: The n-th Fibonacci number.\n        \n    Raises:\n        ValueError: If n is negative",
+                "logprobs": null
+              }
+            ],
+            "created": 1790795337,
+            "model": "/home/ericbuehler/.cache/huggingface/hub/models--Qwen--Qwen3.8-Flash-Next/snapshots/de4b8e4d43b917e7706784d8bb445c9af86a3540",
+            "system_fingerprint": "local",
+            "object": "text_completion",
+            "usage": {
+              "completion_tokens": 128,
+              "prompt_tokens": 17,
+              "total_tokens": 145,
+              "avg_tok_per_sec": 64.61675,
+              "avg_prompt_tok_per_sec": 163.46153,
+              "avg_compl_tok_per_sec": 59.813087,
+              "total_time_sec": 2.244,
+              "total_prompt_time_sec": 0.104,
+              "total_completion_time_sec": 2.14
+            }
+          },
+          "error": null,
+          "response_sha256": "c600d0cdd08a88e24f0317839dc40f2166aa1108577e6902d23a2cd8e8cbece3",
+          "output_text_sha256": "9694090937d4fd05c99b7baa3006359c63f4f58aaa1cd7555569cc6c0a871b2d"
+        },
+        {
+          "request_index": 2,
+          "prompt_name": "python",
+          "prompt_sha256": "7d9074c26475df2a799d748be049ff151de83afb31dde5ef9211371fc3a1b124",
+          "request": {
+            "model": "default",
+            "prompt": "Write a Python function that returns the n-th Fibonacci number, with a docstring.",
+            "max_tokens": 128,
+            "temperature": 0.0,
+            "seed": 20260929,
+            "ignore_eos": true,
+            "cache_prompt": false
+          },
+          "submitted_seconds": 4.571618289017351,
+          "started_seconds": 4.57171624302282,
+          "finished_seconds": 6.851150278002024,
+          "wall_seconds": 2.2794340349792037,
+          "output_tokens_per_second": 56.15429007190717,
+          "response": {
+            "id": "597",
+            "choices": [
+              {
+                "finish_reason": "length",
+                "index": 0,
+                "text": "<think>\n\n</think>\n\n```python\ndef fibonacci(n: int) -> int:\n    \"\"\"\n    Return the n-th Fibonacci number.\n    \n    The Fibonacci sequence is defined as:\n    F(0) = 0, F(1) = 1, and F(n) = F(n-1) + F(n-2) for n > 1.\n    \n    Parameters:\n        n (int): The index in the Fibonacci sequence (non-negative integer).\n    \n    Returns:\n        int: The n-th Fibonacci number.\n    \n    Raises:\n        ValueError: If n is",
+                "logprobs": null
+              }
+            ],
+            "created": 1790795340,
+            "model": "/home/ericbuehler/.cache/huggingface/hub/models--Qwen--Qwen3.8-Flash-Next/snapshots/de4b8e4d43b917e7706784d8bb445c9af86a3540",
+            "system_fingerprint": "local",
+            "object": "text_completion",
+            "usage": {
+              "completion_tokens": 128,
+              "prompt_tokens": 17,
+              "total_tokens": 145,
+              "avg_tok_per_sec": 64.35863,
+              "avg_prompt_tok_per_sec": 161.90477,
+              "avg_compl_tok_per_sec": 59.590317,
+              "total_time_sec": 2.253,
+              "total_prompt_time_sec": 0.105,
+              "total_completion_time_sec": 2.148
+            }
+          },
+          "error": null,
+          "response_sha256": "3f4ebe091ee5b466458b0ae9164ca4aa681b02bced7e6b540ba025ae0ad91fd4",
+          "output_text_sha256": "8e38cb4c814fecf5d09b7dd3935371b9dd95d45b045a5dfe0e9afe9f2ed405af"
+        },
+        {
+          "request_index": 3,
+          "prompt_name": "python",
+          "prompt_sha256": "7d9074c26475df2a799d748be049ff151de83afb31dde5ef9211371fc3a1b124",
+          "request": {
+            "model": "default",
+            "prompt": "Write a Python function that returns the n-th Fibonacci number, with a docstring.",
+            "max_tokens": 128,
+            "temperature": 0.0,
+            "seed": 20260929,
+            "ignore_eos": true,
+            "cache_prompt": false
+          },
+          "submitted_seconds": 6.851329785014968,
+          "started_seconds": 6.8514175140007865,
+          "finished_seconds": 9.031088895018911,
+          "wall_seconds": 2.1796713810181245,
+          "output_tokens_per_second": 58.724448609409734,
+          "response": {
+            "id": "598",
+            "choices": [
+              {
+                "finish_reason": "length",
+                "index": 0,
+                "text": "<think>\n\n</think>\n\n```python\ndef fibonacci(n: int) -> int:\n    \"\"\"\n    Return the n-th Fibonacci number.\n    \n    The Fibonacci sequence is defined as:\n    F(0) = 0, F(1) = 1, and F(n) = F(n-1) + F(n-2) for n > 1.\n    \n    Parameters:\n        n (int): The index in the Fibonacci sequence (non-negative integer).\n    \n    Returns:\n        int: The n-th Fibonacci number.\n    \n    Raises:\n        ValueError: If n is",
+                "logprobs": null
+              }
+            ],
+            "created": 1790795342,
+            "model": "/home/ericbuehler/.cache/huggingface/hub/models--Qwen--Qwen3.8-Flash-Next/snapshots/de4b8e4d43b917e7706784d8bb445c9af86a3540",
+            "system_fingerprint": "local",
+            "object": "text_completion",
+            "usage": {
+              "completion_tokens": 128,
+              "prompt_tokens": 17,
+              "total_tokens": 145,
+              "avg_tok_per_sec": 67.25417,
+              "avg_prompt_tok_per_sec": 161.90477,
+              "avg_compl_tok_per_sec": 62.40858,
+              "total_time_sec": 2.156,
+              "total_prompt_time_sec": 0.105,
+              "total_completion_time_sec": 2.051
+            }
+          },
+          "error": null,
+          "response_sha256": "5762cdf38578cbfc11590f3a06b904be642c4c0ecaec423bd61fbfade1748332",
+          "output_text_sha256": "8e38cb4c814fecf5d09b7dd3935371b9dd95d45b045a5dfe0e9afe9f2ed405af"
+        },
+        {
+          "request_index": 4,
+          "prompt_name": "python",
+          "prompt_sha256": "7d9074c26475df2a799d748be049ff151de83afb31dde5ef9211371fc3a1b124",
+          "request": {
+            "model": "default",
+            "prompt": "Write a Python function that returns the n-th Fibonacci number, with a docstring.",
+            "max_tokens": 128,
+            "temperature": 0.0,
+            "seed": 20260929,
+            "ignore_eos": true,
+            "cache_prompt": false
+          },
+          "submitted_seconds": 9.031258672999684,
+          "started_seconds": 9.031351122015622,
+          "finished_seconds": 11.335562374006258,
+          "wall_seconds": 2.304211251990637,
+          "output_tokens_per_second": 55.55046217633874,
+          "response": {
+            "id": "599",
+            "choices": [
+              {
+                "finish_reason": "length",
+                "index": 0,
+                "text": "<think>\n\n</think>\n\n```python\ndef fibonacci(n: int) -> int:\n    \"\"\"\n    Return the n-th Fibonacci number.\n\n    The Fibonacci sequence is defined as:\n    F(0) = 0, F(1) = 1, and F(n) = F(n-1) + F(n-2) for n > 1.\n\n    Parameters:\n        n (int): The index in the Fibonacci sequence (non-negative integer).\n\n    Returns:\n        int: The n-th Fibonacci number.\n\n    Raises:\n        ValueError: If n is negative.\n   ",
+                "logprobs": null
+              }
+            ],
+            "created": 1790795344,
+            "model": "/home/ericbuehler/.cache/huggingface/hub/models--Qwen--Qwen3.8-Flash-Next/snapshots/de4b8e4d43b917e7706784d8bb445c9af86a3540",
+            "system_fingerprint": "local",
+            "object": "text_completion",
+            "usage": {
+              "completion_tokens": 128,
+              "prompt_tokens": 17,
+              "total_tokens": 145,
+              "avg_tok_per_sec": 63.568607,
+              "avg_prompt_tok_per_sec": 161.90477,
+              "avg_compl_tok_per_sec": 58.82353,
+              "total_time_sec": 2.281,
+              "total_prompt_time_sec": 0.105,
+              "total_completion_time_sec": 2.176
+            }
+          },
+          "error": null,
+          "response_sha256": "fa277c8a2a274b104d4f3f59942f2feef99719b437886ca82584b4406dfb0cab",
+          "output_text_sha256": "d2d297d75d388c7b1342ab178a624395f20aedf90bd36b947b71eaf0ae07a524"
+        },
+        {
+          "request_index": 5,
+          "prompt_name": "python",
+          "prompt_sha256": "7d9074c26475df2a799d748be049ff151de83afb31dde5ef9211371fc3a1b124",
+          "request": {
+            "model": "default",
+            "prompt": "Write a Python function that returns the n-th Fibonacci number, with a docstring.",
+            "max_tokens": 128,
+            "temperature": 0.0,
+            "seed": 20260929,
+            "ignore_eos": true,
+            "cache_prompt": false
+          },
+          "submitted_seconds": 11.335742327995831,
+          "started_seconds": 11.335832233016845,
+          "finished_seconds": 13.604150989995105,
+          "wall_seconds": 2.2683187569782604,
+          "output_tokens_per_second": 56.42945886957931,
+          "response": {
+            "id": "600",
+            "choices": [
+              {
+                "finish_reason": "length",
+                "index": 0,
+                "text": "<think>\n\n</think>\n\n```python\ndef fibonacci(n: int) -> int:\n    \"\"\"\n    Return the n-th Fibonacci number.\n\n    The Fibonacci sequence is defined as:\n    F(0) = 0, F(1) = 1, and F(n) = F(n-1) + F(n-2) for n > 1.\n\n    Parameters:\n        n (int): The index in the Fibonacci sequence (non-negative integer).\n\n    Returns:\n        int: The n-th Fibonacci number.\n\n    Raises:\n        ValueError: If n is negative.\n   ",
+                "logprobs": null
+              }
+            ],
+            "created": 1790795346,
+            "model": "/home/ericbuehler/.cache/huggingface/hub/models--Qwen--Qwen3.8-Flash-Next/snapshots/de4b8e4d43b917e7706784d8bb445c9af86a3540",
+            "system_fingerprint": "local",
+            "object": "text_completion",
+            "usage": {
+              "completion_tokens": 128,
+              "prompt_tokens": 17,
+              "total_tokens": 145,
+              "avg_tok_per_sec": 64.703255,
+              "avg_prompt_tok_per_sec": 161.90477,
+              "avg_compl_tok_per_sec": 59.925095,
+              "total_time_sec": 2.241,
+              "total_prompt_time_sec": 0.105,
+              "total_completion_time_sec": 2.136
+            }
+          },
+          "error": null,
+          "response_sha256": "730a1ff9d6a6b54145d5ca553c01440feda1626d58d1351526c11ce371b6ddb1",
+          "output_text_sha256": "d2d297d75d388c7b1342ab178a624395f20aedf90bd36b947b71eaf0ae07a524"
+        },
+        {
+          "request_index": 6,
+          "prompt_name": "python",
+          "prompt_sha256": "7d9074c26475df2a799d748be049ff151de83afb31dde5ef9211371fc3a1b124",
+          "request": {
+            "model": "default",
+            "prompt": "Write a Python function that returns the n-th Fibonacci number, with a docstring.",
+            "max_tokens": 128,
+            "temperature": 0.0,
+            "seed": 20260929,
+            "ignore_eos": true,
+            "cache_prompt": false
+          },
+          "submitted_seconds": 13.604333408002276,
+          "started_seconds": 13.60442452999996,
+          "finished_seconds": 15.91283113299869,
+          "wall_seconds": 2.30840660299873,
+          "output_tokens_per_second": 55.44950349462782,
+          "response": {
+            "id": "601",
+            "choices": [
+              {
+                "finish_reason": "length",
+                "index": 0,
+                "text": "<think>\n\n</think>\n\n```python\ndef fibonacci(n: int) -> int:\n    \"\"\"\n    Return the n-th Fibonacci number.\n    \n    The Fibonacci sequence is defined as:\n    F(0) = 0, F(1) = 1, and F(n) = F(n-1) + F(n-2) for n > 1.\n    \n    Parameters:\n        n (int): The index in the Fibonacci sequence (non-negative integer).\n    \n    Returns:\n        int: The n-th Fibonacci number.\n    \n    Raises:\n        ValueError: If n is",
+                "logprobs": null
+              }
+            ],
+            "created": 1790795349,
+            "model": "/home/ericbuehler/.cache/huggingface/hub/models--Qwen--Qwen3.8-Flash-Next/snapshots/de4b8e4d43b917e7706784d8bb445c9af86a3540",
+            "system_fingerprint": "local",
+            "object": "text_completion",
+            "usage": {
+              "completion_tokens": 128,
+              "prompt_tokens": 17,
+              "total_tokens": 145,
+              "avg_tok_per_sec": 63.624397,
+              "avg_prompt_tok_per_sec": 163.46153,
+              "avg_compl_tok_per_sec": 58.850574,
+              "total_time_sec": 2.279,
+              "total_prompt_time_sec": 0.104,
+              "total_completion_time_sec": 2.175
+            }
+          },
+          "error": null,
+          "response_sha256": "35593f650027f5efc5601cce36b4b4ffe9bdf8b2cc46f0475db24568165c701a",
+          "output_text_sha256": "8e38cb4c814fecf5d09b7dd3935371b9dd95d45b045a5dfe0e9afe9f2ed405af"
+        },
+        {
+          "request_index": 7,
+          "prompt_name": "python",
+          "prompt_sha256": "7d9074c26475df2a799d748be049ff151de83afb31dde5ef9211371fc3a1b124",
+          "request": {
+            "model": "default",
+            "prompt": "Write a Python function that returns the n-th Fibonacci number, with a docstring.",
+            "max_tokens": 128,
+            "temperature": 0.0,
+            "seed": 20260929,
+            "ignore_eos": true,
+            "cache_prompt": false
+          },
+          "submitted_seconds": 15.913328419002937,
+          "started_seconds": 15.913421333010774,
+          "finished_seconds": 18.088104822003515,
+          "wall_seconds": 2.1746834889927413,
+          "output_tokens_per_second": 58.85914003020567,
+          "response": {
+            "id": "602",
+            "choices": [
+              {
+                "finish_reason": "length",
+                "index": 0,
+                "text": "<think>\n\n</think>\n\n```python\ndef fibonacci(n: int) -> int:\n    \"\"\"\n    Return the n-th Fibonacci number.\n    \n    The Fibonacci sequence is defined as:\n    F(0) = 0, F(1) = 1, and F(n) = F(n-1) + F(n-2) for n > 1.\n    \n    Parameters:\n        n (int): The index in the Fibonacci sequence (non-negative integer).\n    \n    Returns:\n        int: The n-th Fibonacci number.\n    \n    Raises:\n        ValueError: If n is",
+                "logprobs": null
+              }
+            ],
+            "created": 1790795351,
+            "model": "/home/ericbuehler/.cache/huggingface/hub/models--Qwen--Qwen3.8-Flash-Next/snapshots/de4b8e4d43b917e7706784d8bb445c9af86a3540",
+            "system_fingerprint": "local",
+            "object": "text_completion",
+            "usage": {
+              "completion_tokens": 128,
+              "prompt_tokens": 17,
+              "total_tokens": 145,
+              "avg_tok_per_sec": 67.28538,
+              "avg_prompt_tok_per_sec": 161.90477,
+              "avg_compl_tok_per_sec": 62.439026,
+              "total_time_sec": 2.155,
+              "total_prompt_time_sec": 0.105,
+              "total_completion_time_sec": 2.05
+            }
+          },
+          "error": null,
+          "response_sha256": "e00fec9e70ea8717ca7b52e3a3f027aa6ac1c8ab8066d062537f0c1e8cbcc7ff",
+          "output_text_sha256": "8e38cb4c814fecf5d09b7dd3935371b9dd95d45b045a5dfe0e9afe9f2ed405af"
+        }
+      ],
+      "trial": 2,
+      "warmup": false,
+      "waves": [
+        {
+          "request_indices": [
+            0
+          ],
+          "started_seconds": 0.0002595400146674365,
+          "finished_seconds": 2.301064565021079,
+          "mean_active_requests": 1.0,
+          "complete": true,
+          "agreement": {
+            "request_count": 1,
+            "unique_output_text_hashes": 1,
+            "hash_counts": {
+              "9694090937d4fd05c99b7baa3006359c63f4f58aaa1cd7555569cc6c0a871b2d": 1
+            },
+            "all_outputs_identical": true,
+            "equal_pair_fraction": null
+          }
+        },
+        {
+          "request_indices": [
+            1
+          ],
+          "started_seconds": 2.3013376890157815,
+          "finished_seconds": 4.571503104001749,
+          "mean_active_requests": 1.0,
+          "complete": true,
+          "agreement": {
+            "request_count": 1,
+            "unique_output_text_hashes": 1,
+            "hash_counts": {
+              "9694090937d4fd05c99b7baa3006359c63f4f58aaa1cd7555569cc6c0a871b2d": 1
+            },
+            "all_outputs_identical": true,
+            "equal_pair_fraction": null
+          }
+        },
+        {
+          "request_indices": [
+            2
+          ],
+          "started_seconds": 4.57171624302282,
+          "finished_seconds": 6.851150278002024,
+          "mean_active_requests": 1.0,
+          "complete": true,
+          "agreement": {
+            "request_count": 1,
+            "unique_output_text_hashes": 1,
+            "hash_counts": {
+              "8e38cb4c814fecf5d09b7dd3935371b9dd95d45b045a5dfe0e9afe9f2ed405af": 1
+            },
+            "all_outputs_identical": true,
+            "equal_pair_fraction": null
+          }
+        },
+        {
+          "request_indices": [
+            3
+          ],
+          "started_seconds": 6.8514175140007865,
+          "finished_seconds": 9.031088895018911,
+          "mean_active_requests": 1.0,
+          "complete": true,
+          "agreement": {
+            "request_count": 1,
+            "unique_output_text_hashes": 1,
+            "hash_counts": {
+              "8e38cb4c814fecf5d09b7dd3935371b9dd95d45b045a5dfe0e9afe9f2ed405af": 1
+            },
+            "all_outputs_identical": true,
+            "equal_pair_fraction": null
+          }
+        },
+        {
+          "request_indices": [
+            4
+          ],
+          "started_seconds": 9.031351122015622,
+          "finished_seconds": 11.335562374006258,
+          "mean_active_requests": 1.0,
+          "complete": true,
+          "agreement": {
+            "request_count": 1,
+            "unique_output_text_hashes": 1,
+            "hash_counts": {
+              "d2d297d75d388c7b1342ab178a624395f20aedf90bd36b947b71eaf0ae07a524": 1
+            },
+            "all_outputs_identical": true,
+            "equal_pair_fraction": null
+          }
+        },
+        {
+          "request_indices": [
+            5
+          ],
+          "started_seconds": 11.335832233016845,
+          "finished_seconds": 13.604150989995105,
+          "mean_active_requests": 1.0,
+          "complete": true,
+          "agreement": {
+            "request_count": 1,
+            "unique_output_text_hashes": 1,
+            "hash_counts": {
+              "d2d297d75d388c7b1342ab178a624395f20aedf90bd36b947b71eaf0ae07a524": 1
+            },
+            "all_outputs_identical": true,
+            "equal_pair_fraction": null
+          }
+        },
+        {
+          "request_indices": [
+            6
+          ],
+          "started_seconds": 13.60442452999996,
+          "finished_seconds": 15.91283113299869,
+          "mean_active_requests": 1.0,
+          "complete": true,
+          "agreement": {
+            "request_count": 1,
+            "unique_output_text_hashes": 1,
+            "hash_counts": {
+              "8e38cb4c814fecf5d09b7dd3935371b9dd95d45b045a5dfe0e9afe9f2ed405af": 1
+            },
+            "all_outputs_identical": true,
+            "equal_pair_fraction": null
+          }
+        },
+        {
+          "request_indices": [
+            7
+          ],
+          "started_seconds": 15.913421333010774,
+          "finished_seconds": 18.088104822003515,
+          "mean_active_requests": 1.0,
+          "complete": true,
+          "agreement": {
+            "request_count": 1,
+            "unique_output_text_hashes": 1,
+            "hash_counts": {
+              "8e38cb4c814fecf5d09b7dd3935371b9dd95d45b045a5dfe0e9afe9f2ed405af": 1
+            },
+            "all_outputs_identical": true,
+            "equal_pair_fraction": null
+          }
+        }
+      ]
+    },
+    {
+      "complete": true,
+      "wall_seconds": 18.473906833998626,
+      "completed_output_tokens": 1024,
+      "aggregate_output_tokens_per_second": 55.4295314576055,
+      "mean_active_requests": 0.999692567358167,
+      "mean_request_wall_seconds": 2.3085284190019593,
+      "mean_request_output_tokens_per_second": 55.50554069066285,
+      "latency_weighted_request_output_tokens_per_second": 55.44657754542088,
+      "sustained_window": null,
+      "sustained_window_unavailable_reason": "burst traffic, failed trial, or fewer than C completions between first completion and last replenishment",
+      "requests": [
+        {
+          "request_index": 0,
+          "prompt_name": "python",
+          "prompt_sha256": "7d9074c26475df2a799d748be049ff151de83afb31dde5ef9211371fc3a1b124",
+          "request": {
+            "model": "default",
+            "prompt": "Write a Python function that returns the n-th Fibonacci number, with a docstring.",
+            "max_tokens": 128,
+            "temperature": 0.0,
+            "seed": 20260929,
+            "ignore_eos": true,
+            "cache_prompt": false
+          },
+          "submitted_seconds": 1.7487996956333518e-05,
+          "started_seconds": 0.00024200300686061382,
+          "finished_seconds": 2.255742631998146,
+          "wall_seconds": 2.2555006289912853,
+          "output_tokens_per_second": 56.75015043433825,
+          "response": {
+            "id": "603",
+            "choices": [
+              {
+                "finish_reason": "length",
+                "index": 0,
+                "text": "<think>\n\n</think>\n\n```python\ndef fibonacci(n: int) -> int:\n    \"\"\"\n    Return the n-th Fibonacci number.\n    \n    The Fibonacci sequence is defined as:\n    F(0) = 0, F(1) = 1, and F(n) = F(n-1) + F(n-2) for n > 1.\n    \n    Parameters:\n        n (int): The index in the Fibonacci sequence (0-based).\n        \n    Returns:\n        int: The n-th Fibonacci number.\n        \n    Raises:\n        ValueError: If n is negative",
+                "logprobs": null
+              }
+            ],
+            "created": 1790795353,
+            "model": "/home/ericbuehler/.cache/huggingface/hub/models--Qwen--Qwen3.8-Flash-Next/snapshots/de4b8e4d43b917e7706784d8bb445c9af86a3540",
+            "system_fingerprint": "local",
+            "object": "text_completion",
+            "usage": {
+              "completion_tokens": 128,
+              "prompt_tokens": 17,
+              "total_tokens": 145,
+              "avg_tok_per_sec": 64.96416,
+              "avg_prompt_tok_per_sec": 163.46153,
+              "avg_compl_tok_per_sec": 60.15038,
+              "total_time_sec": 2.232,
+              "total_prompt_time_sec": 0.104,
+              "total_completion_time_sec": 2.128
+            }
+          },
+          "error": null,
+          "response_sha256": "46bafa39ad050af0b705eb67fa4023ded562c8e3f08d5d8ea0fa0b79158988d6",
+          "output_text_sha256": "9694090937d4fd05c99b7baa3006359c63f4f58aaa1cd7555569cc6c0a871b2d"
+        },
+        {
+          "request_index": 1,
+          "prompt_name": "python",
+          "prompt_sha256": "7d9074c26475df2a799d748be049ff151de83afb31dde5ef9211371fc3a1b124",
+          "request": {
+            "model": "default",
+            "prompt": "Write a Python function that returns the n-th Fibonacci number, with a docstring.",
+            "max_tokens": 128,
+            "temperature": 0.0,
+            "seed": 20260929,
+            "ignore_eos": true,
+            "cache_prompt": false
+          },
+          "submitted_seconds": 2.256244029995287,
+          "started_seconds": 2.25634865599568,
+          "finished_seconds": 4.465893112006597,
+          "wall_seconds": 2.209544456010917,
+          "output_tokens_per_second": 57.930493161965856,
+          "response": {
+            "id": "604",
+            "choices": [
+              {
+                "finish_reason": "length",
+                "index": 0,
+                "text": "<think>\n\n</think>\n\n```python\ndef fibonacci(n: int) -> int:\n    \"\"\"\n    Return the n-th Fibonacci number.\n\n    The Fibonacci sequence is defined as:\n    F(0) = 0, F(1) = 1, and F(n) = F(n-1) + F(n-2) for n > 1.\n\n    Parameters:\n        n (int): The index in the Fibonacci sequence (non-negative integer).\n\n    Returns:\n        int: The n-th Fibonacci number.\n\n    Raises:\n        ValueError: If n is negative.\n   ",
+                "logprobs": null
+              }
+            ],
+            "created": 1790795356,
+            "model": "/home/ericbuehler/.cache/huggingface/hub/models--Qwen--Qwen3.8-Flash-Next/snapshots/de4b8e4d43b917e7706784d8bb445c9af86a3540",
+            "system_fingerprint": "local",
+            "object": "text_completion",
+            "usage": {
+              "completion_tokens": 128,
+              "prompt_tokens": 17,
+              "total_tokens": 145,
+              "avg_tok_per_sec": 66.391945,
+              "avg_prompt_tok_per_sec": 163.46153,
+              "avg_compl_tok_per_sec": 61.53846,
+              "total_time_sec": 2.184,
+              "total_prompt_time_sec": 0.104,
+              "total_completion_time_sec": 2.08
+            }
+          },
+          "error": null,
+          "response_sha256": "07f78d5e1e5611b70be172eaa6cd2e4e87bcaebc101e126448d48003b7b00f74",
+          "output_text_sha256": "d2d297d75d388c7b1342ab178a624395f20aedf90bd36b947b71eaf0ae07a524"
+        },
+        {
+          "request_index": 2,
+          "prompt_name": "python",
+          "prompt_sha256": "7d9074c26475df2a799d748be049ff151de83afb31dde5ef9211371fc3a1b124",
+          "request": {
+            "model": "default",
+            "prompt": "Write a Python function that returns the n-th Fibonacci number, with a docstring.",
+            "max_tokens": 128,
+            "temperature": 0.0,
+            "seed": 20260929,
+            "ignore_eos": true,
+            "cache_prompt": false
+          },
+          "submitted_seconds": 4.46626334101893,
+          "started_seconds": 4.466370814014226,
+          "finished_seconds": 6.836285760015016,
+          "wall_seconds": 2.3699149460007902,
+          "output_tokens_per_second": 54.01037713019989,
+          "response": {
+            "id": "605",
+            "choices": [
+              {
+                "finish_reason": "length",
+                "index": 0,
+                "text": "<think>\n\n</think>\n\n```python\ndef fibonacci(n: int) -> int:\n    \"\"\"\n    Return the n-th Fibonacci number.\n    \n    The Fibonacci sequence is defined as:\n    F(0) = 0, F(1) = 1, and F(n) = F(n-1) + F(n-2) for n > 1.\n    \n    Parameters:\n        n (int): The index in the Fibonacci sequence (non-negative integer).\n    \n    Returns:\n        int: The n-th Fibonacci number.\n    \n    Raises:\n        ValueError: If n is",
+                "logprobs": null
+              }
+            ],
+            "created": 1790795358,
+            "model": "/home/ericbuehler/.cache/huggingface/hub/models--Qwen--Qwen3.8-Flash-Next/snapshots/de4b8e4d43b917e7706784d8bb445c9af86a3540",
+            "system_fingerprint": "local",
+            "object": "text_completion",
+            "usage": {
+              "completion_tokens": 128,
+              "prompt_tokens": 17,
+              "total_tokens": 145,
+              "avg_tok_per_sec": 61.86007,
+              "avg_prompt_tok_per_sec": 161.90477,
+              "avg_compl_tok_per_sec": 57.16838,
+              "total_time_sec": 2.344,
+              "total_prompt_time_sec": 0.105,
+              "total_completion_time_sec": 2.239
+            }
+          },
+          "error": null,
+          "response_sha256": "a0f6429801fe3cc4ceae74c2d99781e1a13b82447964462083aa21dd8ce928e3",
+          "output_text_sha256": "8e38cb4c814fecf5d09b7dd3935371b9dd95d45b045a5dfe0e9afe9f2ed405af"
+        },
+        {
+          "request_index": 3,
+          "prompt_name": "python",
+          "prompt_sha256": "7d9074c26475df2a799d748be049ff151de83afb31dde5ef9211371fc3a1b124",
+          "request": {
+            "model": "default",
+            "prompt": "Write a Python function that returns the n-th Fibonacci number, with a docstring.",
+            "max_tokens": 128,
+            "temperature": 0.0,
+            "seed": 20260929,
+            "ignore_eos": true,
+            "cache_prompt": false
+          },
+          "submitted_seconds": 6.836795511015225,
+          "started_seconds": 6.836919848021353,
+          "finished_seconds": 9.136092085012933,
+          "wall_seconds": 2.2991722369915806,
+          "output_tokens_per_second": 55.672210172251106,
+          "response": {
+            "id": "606",
+            "choices": [
+              {
+                "finish_reason": "length",
+                "index": 0,
+                "text": "<think>\n\n</think>\n\n```python\ndef fibonacci(n: int) -> int:\n    \"\"\"\n    Return the n-th Fibonacci number.\n\n    The Fibonacci sequence is defined as:\n    F(0) = 0, F(1) = 1, and F(n) = F(n-1) + F(n-2) for n > 1.\n\n    Parameters:\n        n (int): The index in the Fibonacci sequence (non-negative integer).\n\n    Returns:\n        int: The n-th Fibonacci number.\n\n    Raises:\n        ValueError: If n is negative.\n   ",
+                "logprobs": null
+              }
+            ],
+            "created": 1790795360,
+            "model": "/home/ericbuehler/.cache/huggingface/hub/models--Qwen--Qwen3.8-Flash-Next/snapshots/de4b8e4d43b917e7706784d8bb445c9af86a3540",
+            "system_fingerprint": "local",
+            "object": "text_completion",
+            "usage": {
+              "completion_tokens": 128,
+              "prompt_tokens": 17,
+              "total_tokens": 145,
+              "avg_tok_per_sec": 63.680283,
+              "avg_prompt_tok_per_sec": 163.46153,
+              "avg_compl_tok_per_sec": 58.90474,
+              "total_time_sec": 2.277,
+              "total_prompt_time_sec": 0.104,
+              "total_completion_time_sec": 2.173
+            }
+          },
+          "error": null,
+          "response_sha256": "db71d08d2cfcb6c1f3bbb61a58a30f04911f8fc00a1aac90b70a822eb397c02c",
+          "output_text_sha256": "d2d297d75d388c7b1342ab178a624395f20aedf90bd36b947b71eaf0ae07a524"
+        },
+        {
+          "request_index": 4,
+          "prompt_name": "python",
+          "prompt_sha256": "7d9074c26475df2a799d748be049ff151de83afb31dde5ef9211371fc3a1b124",
+          "request": {
+            "model": "default",
+            "prompt": "Write a Python function that returns the n-th Fibonacci number, with a docstring.",
+            "max_tokens": 128,
+            "temperature": 0.0,
+            "seed": 20260929,
+            "ignore_eos": true,
+            "cache_prompt": false
+          },
+          "submitted_seconds": 9.136652907996904,
+          "started_seconds": 9.13679423800204,
+          "finished_seconds": 11.586470262001967,
+          "wall_seconds": 2.4496760239999276,
+          "output_tokens_per_second": 52.25180748227945,
+          "response": {
+            "id": "607",
+            "choices": [
+              {
+                "finish_reason": "length",
+                "index": 0,
+                "text": "<think>\n\n</think>\n\n```python\ndef fibonacci(n: int) -> int:\n    \"\"\"\n    Return the n-th Fibonacci number.\n\n    The Fibonacci sequence is defined as:\n    F(0) = 0, F(1) = 1, and F(n) = F(n-1) + F(n-2) for n > 1.\n\n    Parameters:\n        n (int): The index in the Fibonacci sequence (non-negative integer).\n\n    Returns:\n        int: The n-th Fibonacci number.\n\n    Raises:\n        ValueError: If n is negative.\n   ",
+                "logprobs": null
+              }
+            ],
+            "created": 1790795362,
+            "model": "/home/ericbuehler/.cache/huggingface/hub/models--Qwen--Qwen3.8-Flash-Next/snapshots/de4b8e4d43b917e7706784d8bb445c9af86a3540",
+            "system_fingerprint": "local",
+            "object": "text_completion",
+            "usage": {
+              "completion_tokens": 128,
+              "prompt_tokens": 17,
+              "total_tokens": 145,
+              "avg_tok_per_sec": 59.84317,
+              "avg_prompt_tok_per_sec": 165.04854,
+              "avg_compl_tok_per_sec": 55.172413,
+              "total_time_sec": 2.423,
+              "total_prompt_time_sec": 0.103,
+              "total_completion_time_sec": 2.32
+            }
+          },
+          "error": null,
+          "response_sha256": "0586034718fb955c9209a3f6aa5c339e74bf9e003f9714335a6a27cafcefb89a",
+          "output_text_sha256": "d2d297d75d388c7b1342ab178a624395f20aedf90bd36b947b71eaf0ae07a524"
+        },
+        {
+          "request_index": 5,
+          "prompt_name": "python",
+          "prompt_sha256": "7d9074c26475df2a799d748be049ff151de83afb31dde5ef9211371fc3a1b124",
+          "request": {
+            "model": "default",
+            "prompt": "Write a Python function that returns the n-th Fibonacci number, with a docstring.",
+            "max_tokens": 128,
+            "temperature": 0.0,
+            "seed": 20260929,
+            "ignore_eos": true,
+            "cache_prompt": false
+          },
+          "submitted_seconds": 11.586917931999778,
+          "started_seconds": 11.587024222011678,
+          "finished_seconds": 13.885398590995464,
+          "wall_seconds": 2.2983743689837866,
+          "output_tokens_per_second": 55.69153647349213,
+          "response": {
+            "id": "608",
+            "choices": [
+              {
+                "finish_reason": "length",
+                "index": 0,
+                "text": "<think>\n\n</think>\n\n```python\ndef fibonacci(n: int) -> int:\n    \"\"\"\n    Return the n-th Fibonacci number.\n\n    The Fibonacci sequence is defined as:\n    F(0) = 0, F(1) = 1, and F(n) = F(n-1) + F(n-2) for n > 1.\n\n    Parameters:\n        n (int): The index in the Fibonacci sequence (0-based).\n\n    Returns:\n        int: The n-th Fibonacci number.\n\n    Raises:\n        ValueError: If n is negative.\n    \"\"\"",
+                "logprobs": null
+              }
+            ],
+            "created": 1790795365,
+            "model": "/home/ericbuehler/.cache/huggingface/hub/models--Qwen--Qwen3.8-Flash-Next/snapshots/de4b8e4d43b917e7706784d8bb445c9af86a3540",
+            "system_fingerprint": "local",
+            "object": "text_completion",
+            "usage": {
+              "completion_tokens": 128,
+              "prompt_tokens": 17,
+              "total_tokens": 145,
+              "avg_tok_per_sec": 63.87665,
+              "avg_prompt_tok_per_sec": 163.46153,
+              "avg_compl_tok_per_sec": 59.095108,
+              "total_time_sec": 2.27,
+              "total_prompt_time_sec": 0.104,
+              "total_completion_time_sec": 2.166
+            }
+          },
+          "error": null,
+          "response_sha256": "f395e8704ec78080865f8f3a5acb1fc28985ee4cbfb91010fa97fbed2e302093",
+          "output_text_sha256": "22a562b8921b3ddcbf193781a748d1db2b439a927ce7c5884e4865fab7418e20"
+        },
+        {
+          "request_index": 6,
+          "prompt_name": "python",
+          "prompt_sha256": "7d9074c26475df2a799d748be049ff151de83afb31dde5ef9211371fc3a1b124",
+          "request": {
+            "model": "default",
+            "prompt": "Write a Python function that returns the n-th Fibonacci number, with a docstring.",
+            "max_tokens": 128,
+            "temperature": 0.0,
+            "seed": 20260929,
+            "ignore_eos": true,
+            "cache_prompt": false
+          },
+          "submitted_seconds": 13.885912982019363,
+          "started_seconds": 13.886053463997087,
+          "finished_seconds": 16.245832258020528,
+          "wall_seconds": 2.359778794023441,
+          "output_tokens_per_second": 54.242372346163435,
+          "response": {
+            "id": "609",
+            "choices": [
+              {
+                "finish_reason": "length",
+                "index": 0,
+                "text": "<think>\n\n</think>\n\n```python\ndef fibonacci(n: int) -> int:\n    \"\"\"\n    Return the n-th Fibonacci number.\n    \n    The Fibonacci sequence is defined as:\n    F(0) = 0, F(1) = 1, and F(n) = F(n-1) + F(n-2) for n > 1.\n    \n    Parameters:\n        n (int): The index in the Fibonacci sequence (non-negative integer).\n    \n    Returns:\n        int: The n-th Fibonacci number.\n    \n    Raises:\n        ValueError: If n is",
+                "logprobs": null
+              }
+            ],
+            "created": 1790795367,
+            "model": "/home/ericbuehler/.cache/huggingface/hub/models--Qwen--Qwen3.8-Flash-Next/snapshots/de4b8e4d43b917e7706784d8bb445c9af86a3540",
+            "system_fingerprint": "local",
+            "object": "text_completion",
+            "usage": {
+              "completion_tokens": 128,
+              "prompt_tokens": 17,
+              "total_tokens": 145,
+              "avg_tok_per_sec": 62.125107,
+              "avg_prompt_tok_per_sec": 158.87851,
+              "avg_compl_tok_per_sec": 57.47643,
+              "total_time_sec": 2.334,
+              "total_prompt_time_sec": 0.107,
+              "total_completion_time_sec": 2.227
+            }
+          },
+          "error": null,
+          "response_sha256": "535849c19d399812eedfd5debd1dd95795ed076784621b9ab240e7c5fc1d864d",
+          "output_text_sha256": "8e38cb4c814fecf5d09b7dd3935371b9dd95d45b045a5dfe0e9afe9f2ed405af"
+        },
+        {
+          "request_index": 7,
+          "prompt_name": "python",
+          "prompt_sha256": "7d9074c26475df2a799d748be049ff151de83afb31dde5ef9211371fc3a1b124",
+          "request": {
+            "model": "default",
+            "prompt": "Write a Python function that returns the n-th Fibonacci number, with a docstring.",
+            "max_tokens": 128,
+            "temperature": 0.0,
+            "seed": 20260929,
+            "ignore_eos": true,
+            "cache_prompt": false
+          },
+          "submitted_seconds": 16.2463395280065,
+          "started_seconds": 16.246480506000808,
+          "finished_seconds": 18.472746403014753,
+          "wall_seconds": 2.2262658970139455,
+          "output_tokens_per_second": 57.49537832461267,
+          "response": {
+            "id": "610",
+            "choices": [
+              {
+                "finish_reason": "length",
+                "index": 0,
+                "text": "<think>\n\n</think>\n\n```python\ndef fibonacci(n: int) -> int:\n    \"\"\"\n    Return the n-th Fibonacci number.\n\n    The Fibonacci sequence is defined as:\n    F(0) = 0, F(1) = 1, and F(n) = F(n-1) + F(n-2) for n > 1.\n\n    Parameters:\n        n (int): The index in the Fibonacci sequence (non-negative integer).\n\n    Returns:\n        int: The n-th Fibonacci number.\n\n    Raises:\n        ValueError: If n is negative.\n   ",
+                "logprobs": null
+              }
+            ],
+            "created": 1790795369,
+            "model": "/home/ericbuehler/.cache/huggingface/hub/models--Qwen--Qwen3.8-Flash-Next/snapshots/de4b8e4d43b917e7706784d8bb445c9af86a3540",
+            "system_fingerprint": "local",
+            "object": "text_completion",
+            "usage": {
+              "completion_tokens": 128,
+              "prompt_tokens": 17,
+              "total_tokens": 145,
+              "avg_tok_per_sec": 65.759636,
+              "avg_prompt_tok_per_sec": 161.90477,
+              "avg_compl_tok_per_sec": 60.95238,
+              "total_time_sec": 2.205,
+              "total_prompt_time_sec": 0.105,
+              "total_completion_time_sec": 2.1
+            }
+          },
+          "error": null,
+          "response_sha256": "460aa222f18f4a97cf6b7af6849069c448d12b3c6f728439ebcd60157abc5a72",
+          "output_text_sha256": "d2d297d75d388c7b1342ab178a624395f20aedf90bd36b947b71eaf0ae07a524"
+        }
+      ],
+      "trial": 3,
+      "warmup": false,
+      "waves": [
+        {
+          "request_indices": [
+            0
+          ],
+          "started_seconds": 0.00024200300686061382,
+          "finished_seconds": 2.255742631998146,
+          "mean_active_requests": 1.0,
+          "complete": true,
+          "agreement": {
+            "request_count": 1,
+            "unique_output_text_hashes": 1,
+            "hash_counts": {
+              "9694090937d4fd05c99b7baa3006359c63f4f58aaa1cd7555569cc6c0a871b2d": 1
+            },
+            "all_outputs_identical": true,
+            "equal_pair_fraction": null
+          }
+        },
+        {
+          "request_indices": [
+            1
+          ],
+          "started_seconds": 2.25634865599568,
+          "finished_seconds": 4.465893112006597,
+          "mean_active_requests": 1.0,
+          "complete": true,
+          "agreement": {
+            "request_count": 1,
+            "unique_output_text_hashes": 1,
+            "hash_counts": {
+              "d2d297d75d388c7b1342ab178a624395f20aedf90bd36b947b71eaf0ae07a524": 1
+            },
+            "all_outputs_identical": true,
+            "equal_pair_fraction": null
+          }
+        },
+        {
+          "request_indices": [
+            2
+          ],
+          "started_seconds": 4.466370814014226,
+          "finished_seconds": 6.836285760015016,
+          "mean_active_requests": 1.0,
+          "complete": true,
+          "agreement": {
+            "request_count": 1,
+            "unique_output_text_hashes": 1,
+            "hash_counts": {
+              "8e38cb4c814fecf5d09b7dd3935371b9dd95d45b045a5dfe0e9afe9f2ed405af": 1
+            },
+            "all_outputs_identical": true,
+            "equal_pair_fraction": null
+          }
+        },
+        {
+          "request_indices": [
+            3
+          ],
+          "started_seconds": 6.836919848021353,
+          "finished_seconds": 9.136092085012933,
+          "mean_active_requests": 1.0,
+          "complete": true,
+          "agreement": {
+            "request_count": 1,
+            "unique_output_text_hashes": 1,
+            "hash_counts": {
+              "d2d297d75d388c7b1342ab178a624395f20aedf90bd36b947b71eaf0ae07a524": 1
+            },
+            "all_outputs_identical": true,
+            "equal_pair_fraction": null
+          }
+        },
+        {
+          "request_indices": [
+            4
+          ],
+          "started_seconds": 9.13679423800204,
+          "finished_seconds": 11.586470262001967,
+          "mean_active_requests": 1.0,
+          "complete": true,
+          "agreement": {
+            "request_count": 1,
+            "unique_output_text_hashes": 1,
+            "hash_counts": {
+              "d2d297d75d388c7b1342ab178a624395f20aedf90bd36b947b71eaf0ae07a524": 1
+            },
+            "all_outputs_identical": true,
+            "equal_pair_fraction": null
+          }
+        },
+        {
+          "request_indices": [
+            5
+          ],
+          "started_seconds": 11.587024222011678,
+          "finished_seconds": 13.885398590995464,
+          "mean_active_requests": 1.0,
+          "complete": true,
+          "agreement": {
+            "request_count": 1,
+            "unique_output_text_hashes": 1,
+            "hash_counts": {
+              "22a562b8921b3ddcbf193781a748d1db2b439a927ce7c5884e4865fab7418e20": 1
+            },
+            "all_outputs_identical": true,
+            "equal_pair_fraction": null
+          }
+        },
+        {
+          "request_indices": [
+            6
+          ],
+          "started_seconds": 13.886053463997087,
+          "finished_seconds": 16.245832258020528,
+          "mean_active_requests": 1.0,
+          "complete": true,
+          "agreement": {
+            "request_count": 1,
+            "unique_output_text_hashes": 1,
+            "hash_counts": {
+              "8e38cb4c814fecf5d09b7dd3935371b9dd95d45b045a5dfe0e9afe9f2ed405af": 1
+            },
+            "all_outputs_identical": true,
+            "equal_pair_fraction": null
+          }
+        },
+        {
+          "request_indices": [
+            7
+          ],
+          "started_seconds": 16.246480506000808,
+          "finished_seconds": 18.472746403014753,
+          "mean_active_requests": 1.0,
+          "complete": true,
+          "agreement": {
+            "request_count": 1,
+            "unique_output_text_hashes": 1,
+            "hash_counts": {
+              "d2d297d75d388c7b1342ab178a624395f20aedf90bd36b947b71eaf0ae07a524": 1
+            },
+            "all_outputs_identical": true,
+            "equal_pair_fraction": null
+          }
+        }
+      ]
+    },
+    {
+      "complete": true,
+      "wall_seconds": 18.16417025300325,
+      "completed_output_tokens": 1024,
+      "aggregate_output_tokens_per_second": 56.37471933686003,
+      "mean_active_requests": 0.9998515288639042,
+      "mean_request_wall_seconds": 2.2701841747511935,
+      "mean_request_output_tokens_per_second": 56.43098218694181,
+      "latency_weighted_request_output_tokens_per_second": 56.38309059837776,
+      "sustained_window": null,
+      "sustained_window_unavailable_reason": "burst traffic, failed trial, or fewer than C completions between first completion and last replenishment",
+      "requests": [
+        {
+          "request_index": 0,
+          "prompt_name": "python",
+          "prompt_sha256": "7d9074c26475df2a799d748be049ff151de83afb31dde5ef9211371fc3a1b124",
+          "request": {
+            "model": "default",
+            "prompt": "Write a Python function that returns the n-th Fibonacci number, with a docstring.",
+            "max_tokens": 128,
+            "temperature": 0.0,
+            "seed": 20260929,
+            "ignore_eos": true,
+            "cache_prompt": false
+          },
+          "submitted_seconds": 1.222401624545455e-05,
+          "started_seconds": 0.0001872669963631779,
+          "finished_seconds": 2.251399286004016,
+          "wall_seconds": 2.251212019007653,
+          "output_tokens_per_second": 56.858260758763684,
+          "response": {
+            "id": "611",
+            "choices": [
+              {
+                "finish_reason": "length",
+                "index": 0,
+                "text": "<think>\n\n</think>\n\n```python\ndef fibonacci(n: int) -> int:\n    \"\"\"\n    Return the n-th Fibonacci number.\n\n    The Fibonacci sequence is defined as:\n    F(0) = 0, F(1) = 1, and F(n) = F(n-1) + F(n-2) for n > 1.\n\n    Parameters:\n        n (int): The index in the Fibonacci sequence (0-based).\n\n    Returns:\n        int: The n-th Fibonacci number.\n\n    Raises:\n        ValueError: If n is negative.\n    \"\"\"",
+                "logprobs": null
+              }
+            ],
+            "created": 1790795372,
+            "model": "/home/ericbuehler/.cache/huggingface/hub/models--Qwen--Qwen3.8-Flash-Next/snapshots/de4b8e4d43b917e7706784d8bb445c9af86a3540",
+            "system_fingerprint": "local",
+            "object": "text_completion",
+            "usage": {
+              "completion_tokens": 128,
+              "prompt_tokens": 17,
+              "total_tokens": 145,
+              "avg_tok_per_sec": 64.96416,
+              "avg_prompt_tok_per_sec": 161.90477,
+              "avg_compl_tok_per_sec": 60.178658,
+              "total_time_sec": 2.232,
+              "total_prompt_time_sec": 0.105,
+              "total_completion_time_sec": 2.127
+            }
+          },
+          "error": null,
+          "response_sha256": "f03c0770459d6e51070e4c71fcbffb5e38b5b8a05dd2202f1e131cb459f4eef3",
+          "output_text_sha256": "22a562b8921b3ddcbf193781a748d1db2b439a927ce7c5884e4865fab7418e20"
+        },
+        {
+          "request_index": 1,
+          "prompt_name": "python",
+          "prompt_sha256": "7d9074c26475df2a799d748be049ff151de83afb31dde5ef9211371fc3a1b124",
+          "request": {
+            "model": "default",
+            "prompt": "Write a Python function that returns the n-th Fibonacci number, with a docstring.",
+            "max_tokens": 128,
+            "temperature": 0.0,
+            "seed": 20260929,
+            "ignore_eos": true,
+            "cache_prompt": false
+          },
+          "submitted_seconds": 2.251835339004174,
+          "started_seconds": 2.2519379169971216,
+          "finished_seconds": 4.6625281010055915,
+          "wall_seconds": 2.41059018400847,
+          "output_tokens_per_second": 53.09902979325758,
+          "response": {
+            "id": "612",
+            "choices": [
+              {
+                "finish_reason": "length",
+                "index": 0,
+                "text": "<think>\n\n</think>\n\n```python\ndef fibonacci(n: int) -> int:\n    \"\"\"\n    Return the n-th Fibonacci number.\n\n    The Fibonacci sequence is defined as:\n    F(0) = 0, F(1) = 1, and F(n) = F(n-1) + F(n-2) for n > 1.\n\n    Parameters:\n        n (int): The index in the Fibonacci sequence (non-negative integer).\n\n    Returns:\n        int: The n-th Fibonacci number.\n\n    Raises:\n        ValueError: If n is negative.\n   ",
+                "logprobs": null
+              }
+            ],
+            "created": 1790795374,
+            "model": "/home/ericbuehler/.cache/huggingface/hub/models--Qwen--Qwen3.8-Flash-Next/snapshots/de4b8e4d43b917e7706784d8bb445c9af86a3540",
+            "system_fingerprint": "local",
+            "object": "text_completion",
+            "usage": {
+              "completion_tokens": 128,
+              "prompt_tokens": 17,
+              "total_tokens": 145,
+              "avg_tok_per_sec": 60.873215,
+              "avg_prompt_tok_per_sec": 161.90477,
+              "avg_compl_tok_per_sec": 56.214317,
+              "total_time_sec": 2.382,
+              "total_prompt_time_sec": 0.105,
+              "total_completion_time_sec": 2.277
+            }
+          },
+          "error": null,
+          "response_sha256": "f502596cb1399cd4143933c0152cca7bb693e7baba43bf16fe66aefcba311212",
+          "output_text_sha256": "d2d297d75d388c7b1342ab178a624395f20aedf90bd36b947b71eaf0ae07a524"
+        },
+        {
+          "request_index": 2,
+          "prompt_name": "python",
+          "prompt_sha256": "7d9074c26475df2a799d748be049ff151de83afb31dde5ef9211371fc3a1b124",
+          "request": {
+            "model": "default",
+            "prompt": "Write a Python function that returns the n-th Fibonacci number, with a docstring.",
+            "max_tokens": 128,
+            "temperature": 0.0,
+            "seed": 20260929,
+            "ignore_eos": true,
+            "cache_prompt": false
+          },
+          "submitted_seconds": 4.662695288017858,
+          "started_seconds": 4.662793625000631,
+          "finished_seconds": 6.940544651995879,
+          "wall_seconds": 2.2777510269952472,
+          "output_tokens_per_second": 56.195781928306026,
+          "response": {
+            "id": "613",
+            "choices": [
+              {
+                "finish_reason": "length",
+                "index": 0,
+                "text": "<think>\n\n</think>\n\n```python\ndef fibonacci(n: int) -> int:\n    \"\"\"\n    Return the n-th Fibonacci number.\n    \n    The Fibonacci sequence is defined as:\n    F(0) = 0, F(1) = 1, and F(n) = F(n-1) + F(n-2) for n > 1.\n    \n    Parameters:\n        n (int): The index in the Fibonacci sequence (0-based).\n        \n    Returns:\n        int: The n-th Fibonacci number.\n        \n    Raises:\n        ValueError: If n is negative",
+                "logprobs": null
+              }
+            ],
+            "created": 1790795376,
+            "model": "/home/ericbuehler/.cache/huggingface/hub/models--Qwen--Qwen3.8-Flash-Next/snapshots/de4b8e4d43b917e7706784d8bb445c9af86a3540",
+            "system_fingerprint": "local",
+            "object": "text_completion",
+            "usage": {
+              "completion_tokens": 128,
+              "prompt_tokens": 17,
+              "total_tokens": 145,
+              "avg_tok_per_sec": 64.44444,
+              "avg_prompt_tok_per_sec": 161.90477,
+              "avg_compl_tok_per_sec": 59.67366,
+              "total_time_sec": 2.25,
+              "total_prompt_time_sec": 0.105,
+              "total_completion_time_sec": 2.145
+            }
+          },
+          "error": null,
+          "response_sha256": "93ee43327fc77c31edd6ffb573169a20fd512d6960bff21ef64d30629d9bd599",
+          "output_text_sha256": "9694090937d4fd05c99b7baa3006359c63f4f58aaa1cd7555569cc6c0a871b2d"
+        },
+        {
+          "request_index": 3,
+          "prompt_name": "python",
+          "prompt_sha256": "7d9074c26475df2a799d748be049ff151de83afb31dde5ef9211371fc3a1b124",
+          "request": {
+            "model": "default",
+            "prompt": "Write a Python function that returns the n-th Fibonacci number, with a docstring.",
+            "max_tokens": 128,
+            "temperature": 0.0,
+            "seed": 20260929,
+            "ignore_eos": true,
+            "cache_prompt": false
+          },
+          "submitted_seconds": 6.9407118700037245,
+          "started_seconds": 6.940821632015286,
+          "finished_seconds": 9.271301364991814,
+          "wall_seconds": 2.330479732976528,
+          "output_tokens_per_second": 54.92431373196979,
+          "response": {
+            "id": "614",
+            "choices": [
+              {
+                "finish_reason": "length",
+                "index": 0,
+                "text": "<think>\n\n</think>\n\n```python\ndef fibonacci(n: int) -> int:\n    \"\"\"\n    Return the n-th Fibonacci number.\n\n    The Fibonacci sequence is defined as:\n    F(0) = 0, F(1) = 1, and F(n) = F(n-1) + F(n-2) for n > 1.\n\n    Parameters:\n        n (int): The index in the Fibonacci sequence (non-negative integer).\n\n    Returns:\n        int: The n-th Fibonacci number.\n\n    Raises:\n        ValueError: If n is negative.\n   ",
+                "logprobs": null
+              }
+            ],
+            "created": 1790795379,
+            "model": "/home/ericbuehler/.cache/huggingface/hub/models--Qwen--Qwen3.8-Flash-Next/snapshots/de4b8e4d43b917e7706784d8bb445c9af86a3540",
+            "system_fingerprint": "local",
+            "object": "text_completion",
+            "usage": {
+              "completion_tokens": 128,
+              "prompt_tokens": 17,
+              "total_tokens": 145,
+              "avg_tok_per_sec": 63.01608,
+              "avg_prompt_tok_per_sec": 158.87851,
+              "avg_compl_tok_per_sec": 58.34093,
+              "total_time_sec": 2.301,
+              "total_prompt_time_sec": 0.107,
+              "total_completion_time_sec": 2.194
+            }
+          },
+          "error": null,
+          "response_sha256": "454cfbbe61b69c9bc6a7dc7d76e533ae2f0b8b9ee921b46566f9388840051ef6",
+          "output_text_sha256": "d2d297d75d388c7b1342ab178a624395f20aedf90bd36b947b71eaf0ae07a524"
+        },
+        {
+          "request_index": 4,
+          "prompt_name": "python",
+          "prompt_sha256": "7d9074c26475df2a799d748be049ff151de83afb31dde5ef9211371fc3a1b124",
+          "request": {
+            "model": "default",
+            "prompt": "Write a Python function that returns the n-th Fibonacci number, with a docstring.",
+            "max_tokens": 128,
+            "temperature": 0.0,
+            "seed": 20260929,
+            "ignore_eos": true,
+            "cache_prompt": false
+          },
+          "submitted_seconds": 9.271473975997651,
+          "started_seconds": 9.271573241014266,
+          "finished_seconds": 11.495114757010015,
+          "wall_seconds": 2.2235415159957483,
+          "output_tokens_per_second": 57.565824194957266,
+          "response": {
+            "id": "615",
+            "choices": [
+              {
+                "finish_reason": "length",
+                "index": 0,
+                "text": "<think>\n\n</think>\n\n```python\ndef fibonacci(n: int) -> int:\n    \"\"\"\n    Return the n-th Fibonacci number.\n    \n    The Fibonacci sequence is defined as:\n    F(0) = 0, F(1) = 1, and F(n) = F(n-1) + F(n-2) for n > 1.\n    \n    Parameters:\n        n (int): The index in the Fibonacci sequence (0-based).\n        \n    Returns:\n        int: The n-th Fibonacci number.\n        \n    Raises:\n        ValueError: If n is negative",
+                "logprobs": null
+              }
+            ],
+            "created": 1790795381,
+            "model": "/home/ericbuehler/.cache/huggingface/hub/models--Qwen--Qwen3.8-Flash-Next/snapshots/de4b8e4d43b917e7706784d8bb445c9af86a3540",
+            "system_fingerprint": "local",
+            "object": "text_completion",
+            "usage": {
+              "completion_tokens": 128,
+              "prompt_tokens": 17,
+              "total_tokens": 145,
+              "avg_tok_per_sec": 65.90909,
+              "avg_prompt_tok_per_sec": 161.90477,
+              "avg_compl_tok_per_sec": 61.097855,
+              "total_time_sec": 2.2,
+              "total_prompt_time_sec": 0.105,
+              "total_completion_time_sec": 2.095
+            }
+          },
+          "error": null,
+          "response_sha256": "3430560b9099daa7c8d7b9d151a57ca62356ed15eaf8a3011bb5561dca1e27c1",
+          "output_text_sha256": "9694090937d4fd05c99b7baa3006359c63f4f58aaa1cd7555569cc6c0a871b2d"
+        },
+        {
+          "request_index": 5,
+          "prompt_name": "python",
+          "prompt_sha256": "7d9074c26475df2a799d748be049ff151de83afb31dde5ef9211371fc3a1b124",
+          "request": {
+            "model": "default",
+            "prompt": "Write a Python function that returns the n-th Fibonacci number, with a docstring.",
+            "max_tokens": 128,
+            "temperature": 0.0,
+            "seed": 20260929,
+            "ignore_eos": true,
+            "cache_prompt": false
+          },
+          "submitted_seconds": 11.495281319017522,
+          "started_seconds": 11.495487017993582,
+          "finished_seconds": 13.750989435007796,
+          "wall_seconds": 2.2555024170142133,
+          "output_tokens_per_second": 56.7501054463261,
+          "response": {
+            "id": "616",
+            "choices": [
+              {
+                "finish_reason": "length",
+                "index": 0,
+                "text": "<think>\n\n</think>\n\n```python\ndef fibonacci(n: int) -> int:\n    \"\"\"\n    Return the n-th Fibonacci number.\n\n    The Fibonacci sequence is defined as:\n    F(0) = 0, F(1) = 1, and F(n) = F(n-1) + F(n-2) for n > 1.\n\n    Parameters:\n        n (int): The index in the Fibonacci sequence (0-based).\n\n    Returns:\n        int: The n-th Fibonacci number.\n\n    Raises:\n        ValueError: If n is negative.\n    \"\"\"",
+                "logprobs": null
+              }
+            ],
+            "created": 1790795383,
+            "model": "/home/ericbuehler/.cache/huggingface/hub/models--Qwen--Qwen3.8-Flash-Next/snapshots/de4b8e4d43b917e7706784d8bb445c9af86a3540",
+            "system_fingerprint": "local",
+            "object": "text_completion",
+            "usage": {
+              "completion_tokens": 128,
+              "prompt_tokens": 17,
+              "total_tokens": 145,
+              "avg_tok_per_sec": 65.02242,
+              "avg_prompt_tok_per_sec": 161.90477,
+              "avg_compl_tok_per_sec": 60.235294,
+              "total_time_sec": 2.23,
+              "total_prompt_time_sec": 0.105,
+              "total_completion_time_sec": 2.125
+            }
+          },
+          "error": null,
+          "response_sha256": "c0a4372f2b4bab2940c30eb2a1607ac3597aa537ec93699de9268862626d1ed3",
+          "output_text_sha256": "22a562b8921b3ddcbf193781a748d1db2b439a927ce7c5884e4865fab7418e20"
+        },
+        {
+          "request_index": 6,
+          "prompt_name": "python",
+          "prompt_sha256": "7d9074c26475df2a799d748be049ff151de83afb31dde5ef9211371fc3a1b124",
+          "request": {
+            "model": "default",
+            "prompt": "Write a Python function that returns the n-th Fibonacci number, with a docstring.",
+            "max_tokens": 128,
+            "temperature": 0.0,
+            "seed": 20260929,
+            "ignore_eos": true,
+            "cache_prompt": false
+          },
+          "submitted_seconds": 13.751160926010925,
+          "started_seconds": 13.751259854994714,
+          "finished_seconds": 15.930115780007327,
+          "wall_seconds": 2.1788559250126127,
+          "output_tokens_per_second": 58.746426751121255,
+          "response": {
+            "id": "617",
+            "choices": [
+              {
+                "finish_reason": "length",
+                "index": 0,
+                "text": "<think>\n\n</think>\n\n```python\ndef fibonacci(n: int) -> int:\n    \"\"\"\n    Return the n-th Fibonacci number.\n\n    The Fibonacci sequence is defined as:\n    F(0) = 0, F(1) = 1, and F(n) = F(n-1) + F(n-2) for n > 1.\n\n    Parameters:\n        n (int): The index in the Fibonacci sequence (non-negative integer).\n\n    Returns:\n        int: The n-th Fibonacci number.\n\n    Raises:\n        ValueError: If n is negative.\n   ",
+                "logprobs": null
+              }
+            ],
+            "created": 1790795385,
+            "model": "/home/ericbuehler/.cache/huggingface/hub/models--Qwen--Qwen3.8-Flash-Next/snapshots/de4b8e4d43b917e7706784d8bb445c9af86a3540",
+            "system_fingerprint": "local",
+            "object": "text_completion",
+            "usage": {
+              "completion_tokens": 128,
+              "prompt_tokens": 17,
+              "total_tokens": 145,
+              "avg_tok_per_sec": 67.28538,
+              "avg_prompt_tok_per_sec": 161.90477,
+              "avg_compl_tok_per_sec": 62.439026,
+              "total_time_sec": 2.155,
+              "total_prompt_time_sec": 0.105,
+              "total_completion_time_sec": 2.05
+            }
+          },
+          "error": null,
+          "response_sha256": "edcbf238a0deb238cfcc586b4a9f5edeb319f49d0d606bb9e4e00cfd1fbeb91f",
+          "output_text_sha256": "d2d297d75d388c7b1342ab178a624395f20aedf90bd36b947b71eaf0ae07a524"
+        },
+        {
+          "request_index": 7,
+          "prompt_name": "python",
+          "prompt_sha256": "7d9074c26475df2a799d748be049ff151de83afb31dde5ef9211371fc3a1b124",
+          "request": {
+            "model": "default",
+            "prompt": "Write a Python function that returns the n-th Fibonacci number, with a docstring.",
+            "max_tokens": 128,
+            "temperature": 0.0,
+            "seed": 20260929,
+            "ignore_eos": true,
+            "cache_prompt": false
+          },
+          "submitted_seconds": 15.930289637995884,
+          "started_seconds": 15.930388120003045,
+          "finished_seconds": 18.16392869700212,
+          "wall_seconds": 2.2335405769990757,
+          "output_tokens_per_second": 57.30811489083279,
+          "response": {
+            "id": "618",
+            "choices": [
+              {
+                "finish_reason": "length",
+                "index": 0,
+                "text": "<think>\n\n</think>\n\n```python\ndef fibonacci(n: int) -> int:\n    \"\"\"\n    Return the n-th Fibonacci number.\n\n    The Fibonacci sequence is defined as:\n    F(0) = 0, F(1) = 1, and F(n) = F(n-1) + F(n-2) for n > 1.\n\n    Parameters:\n        n (int): The index in the Fibonacci sequence (non-negative integer).\n\n    Returns:\n        int: The n-th Fibonacci number.\n\n    Raises:\n        ValueError: If n is negative.\n   ",
+                "logprobs": null
+              }
+            ],
+            "created": 1790795388,
+            "model": "/home/ericbuehler/.cache/huggingface/hub/models--Qwen--Qwen3.8-Flash-Next/snapshots/de4b8e4d43b917e7706784d8bb445c9af86a3540",
+            "system_fingerprint": "local",
+            "object": "text_completion",
+            "usage": {
+              "completion_tokens": 128,
+              "prompt_tokens": 17,
+              "total_tokens": 145,
+              "avg_tok_per_sec": 65.640564,
+              "avg_prompt_tok_per_sec": 161.90477,
+              "avg_compl_tok_per_sec": 60.836502,
+              "total_time_sec": 2.209,
+              "total_prompt_time_sec": 0.105,
+              "total_completion_time_sec": 2.104
+            }
+          },
+          "error": null,
+          "response_sha256": "1fa96a315dc3f64d4ceea71242973da6da67dab88c88e842e8679ddbf416dd27",
+          "output_text_sha256": "d2d297d75d388c7b1342ab178a624395f20aedf90bd36b947b71eaf0ae07a524"
+        }
+      ],
+      "trial": 4,
+      "warmup": false,
+      "waves": [
+        {
+          "request_indices": [
+            0
+          ],
+          "started_seconds": 0.0001872669963631779,
+          "finished_seconds": 2.251399286004016,
+          "mean_active_requests": 1.0,
+          "complete": true,
+          "agreement": {
+            "request_count": 1,
+            "unique_output_text_hashes": 1,
+            "hash_counts": {
+              "22a562b8921b3ddcbf193781a748d1db2b439a927ce7c5884e4865fab7418e20": 1
+            },
+            "all_outputs_identical": true,
+            "equal_pair_fraction": null
+          }
+        },
+        {
+          "request_indices": [
+            1
+          ],
+          "started_seconds": 2.2519379169971216,
+          "finished_seconds": 4.6625281010055915,
+          "mean_active_requests": 1.0,
+          "complete": true,
+          "agreement": {
+            "request_count": 1,
+            "unique_output_text_hashes": 1,
+            "hash_counts": {
+              "d2d297d75d388c7b1342ab178a624395f20aedf90bd36b947b71eaf0ae07a524": 1
+            },
+            "all_outputs_identical": true,
+            "equal_pair_fraction": null
+          }
+        },
+        {
+          "request_indices": [
+            2
+          ],
+          "started_seconds": 4.662793625000631,
+          "finished_seconds": 6.940544651995879,
+          "mean_active_requests": 1.0,
+          "complete": true,
+          "agreement": {
+            "request_count": 1,
+            "unique_output_text_hashes": 1,
+            "hash_counts": {
+              "9694090937d4fd05c99b7baa3006359c63f4f58aaa1cd7555569cc6c0a871b2d": 1
+            },
+            "all_outputs_identical": true,
+            "equal_pair_fraction": null
+          }
+        },
+        {
+          "request_indices": [
+            3
+          ],
+          "started_seconds": 6.940821632015286,
+          "finished_seconds": 9.271301364991814,
+          "mean_active_requests": 1.0,
+          "complete": true,
+          "agreement": {
+            "request_count": 1,
+            "unique_output_text_hashes": 1,
+            "hash_counts": {
+              "d2d297d75d388c7b1342ab178a624395f20aedf90bd36b947b71eaf0ae07a524": 1
+            },
+            "all_outputs_identical": true,
+            "equal_pair_fraction": null
+          }
+        },
+        {
+          "request_indices": [
+            4
+          ],
+          "started_seconds": 9.271573241014266,
+          "finished_seconds": 11.495114757010015,
+          "mean_active_requests": 1.0,
+          "complete": true,
+          "agreement": {
+            "request_count": 1,
+            "unique_output_text_hashes": 1,
+            "hash_counts": {
+              "9694090937d4fd05c99b7baa3006359c63f4f58aaa1cd7555569cc6c0a871b2d": 1
+            },
+            "all_outputs_identical": true,
+            "equal_pair_fraction": null
+          }
+        },
+        {
+          "request_indices": [
+            5
+          ],
+          "started_seconds": 11.495487017993582,
+          "finished_seconds": 13.750989435007796,
+          "mean_active_requests": 1.0,
+          "complete": true,
+          "agreement": {
+            "request_count": 1,
+            "unique_output_text_hashes": 1,
+            "hash_counts": {
+              "22a562b8921b3ddcbf193781a748d1db2b439a927ce7c5884e4865fab7418e20": 1
+            },
+            "all_outputs_identical": true,
+            "equal_pair_fraction": null
+          }
+        },
+        {
+          "request_indices": [
+            6
+          ],
+          "started_seconds": 13.751259854994714,
+          "finished_seconds": 15.930115780007327,
+          "mean_active_requests": 1.0,
+          "complete": true,
+          "agreement": {
+            "request_count": 1,
+            "unique_output_text_hashes": 1,
+            "hash_counts": {
+              "d2d297d75d388c7b1342ab178a624395f20aedf90bd36b947b71eaf0ae07a524": 1
+            },
+            "all_outputs_identical": true,
+            "equal_pair_fraction": null
+          }
+        },
+        {
+          "request_indices": [
+            7
+          ],
+          "started_seconds": 15.930388120003045,
+          "finished_seconds": 18.16392869700212,
+          "mean_active_requests": 1.0,
+          "complete": true,
+          "agreement": {
+            "request_count": 1,
+            "unique_output_text_hashes": 1,
+            "hash_counts": {
+              "d2d297d75d388c7b1342ab178a624395f20aedf90bd36b947b71eaf0ae07a524": 1
+            },
+            "all_outputs_identical": true,
+            "equal_pair_fraction": null
+          }
+        }
+      ]
+    }
+  ],
+  "limits": [
+    "Only this subprocess replaces the shared prompt cycle with the selected original prompt; shared scheduling and request code are unchanged.",
+    "Every wave waits for all responses before the next wave; rates include prefill, startup, drain, and client overhead.",
+    "Identical inputs and greedy sampling do not guarantee identical expert routes or outputs across batch shapes or adaptive MTP states.",
+    "C1 has eight sequential requests; C8 has three waves of eight requests. This is a finite-wave diagnostic, not sustained traffic."
+  ],
+  "summary": {
+    "aggregate_output_tokens_per_second": {
+      "mean": 56.13804215652178,
+      "sample_stddev": 0.6247520978057688,
+      "samples": [
+        56.6098756750998,
+        55.4295314576055,
+        56.37471933686003
+      ]
+    },
+    "mean_active_requests": {
+      "mean": 0.9997923678880207,
+      "sample_stddev": 8.692450797522686e-05,
+      "samples": [
+        0.9998330074419911,
+        0.999692567358167,
+        0.9998515288639042
+      ]
+    },
+    "mean_request_wall_seconds": {
+      "mean": 2.279808196123971,
+      "sample_stddev": 0.025319339460900644,
+      "samples": [
+        2.2607119946187595,
+        2.3085284190019593,
+        2.2701841747511935
+      ]
+    },
+    "mean_request_output_tokens_per_second": {
+      "mean": 56.19482269424073,
+      "sample_stddev": 0.6067128630218999,
+      "samples": [
+        56.64794520511752,
+        55.50554069066285,
+        56.43098218694181
+      ]
+    },
+    "latency_weighted_request_output_tokens_per_second": {
+      "mean": 56.14966627525393,
+      "sample_stddev": 0.6202440372843502,
+      "samples": [
+        56.619330681963135,
+        55.44657754542088,
+        56.38309059837776
+      ]
+    },
+    "sustained_completion_boundary_output_tokens_per_second": null
+  }
+}

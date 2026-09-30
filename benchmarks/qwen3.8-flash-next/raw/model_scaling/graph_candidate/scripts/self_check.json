@@ -1,0 +1,16 @@
+{
+  "complete": true,
+  "checks": [
+    "Python syntax",
+    "1 GiB disk guard accepts the boundary and rejects insufficient space",
+    "Homogeneous diagnostics are appended after every original phase",
+    "Exact workload counts/settings and max-seqs 8",
+    "Override rejection and credential exclusion",
+    "Owned group termination and forced-kill accounting",
+    "Phase success, request failure, server exit, monitor exit, and timeout",
+    "Linux process identity, VmSwap and global swap parsing"
+  ],
+  "server_requests": 0,
+  "gpu_commands": 0,
+  "builds": 0
+}

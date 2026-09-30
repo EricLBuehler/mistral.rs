@@ -1,0 +1,52 @@
+{
+  "utc": "2026-09-30T19:13:24.797466+00:00",
+  "monotonic": 166495.642643154,
+  "watched": [
+    {
+      "pid": 2122897,
+      "state": "T",
+      "parent_pid": 2122011,
+      "starttime_ticks": 13585712,
+      "comm": "rust-analyzer",
+      "command": [
+        "/home/ericbuehler/.vscode-server/extensions/rust-lang.rust-analyzer-0.3.3065-linux-arm64/server/rust-analyzer"
+      ],
+      "VmHWM_KiB": 4290612,
+      "VmRSS_KiB": 1532,
+      "RssAnon_KiB": 4,
+      "RssFile_KiB": 1528,
+      "VmSwap_KiB": 5135720
+    },
+    {
+      "pid": 2589294,
+      "state": "S",
+      "parent_pid": 2589222,
+      "starttime_ticks": 16449458,
+      "comm": "mistralrs",
+      "command": [
+        "/home/ericbuehler/qwen4exp_work/verify_graph_depth4_20260930/build/mistralrs",
+        "serve",
+        "--no-ui",
+        "-p",
+        "1234",
+        "--max-model-len",
+        "16384",
+        "--max-seqs",
+        "8",
+        "--prefix-cache-n",
+        "0",
+        "-m",
+        "/home/ericbuehler/.cache/huggingface/hub/models--Qwen--Qwen3.8-Flash-Next/snapshots/de4b8e4d43b917e7706784d8bb445c9af86a3540",
+        "--isq",
+        "q4k",
+        "--mtp"
+      ],
+      "VmHWM_KiB": 95947252,
+      "VmRSS_KiB": 5950964,
+      "RssAnon_KiB": 3194616,
+      "RssFile_KiB": 2745736,
+      "VmSwap_KiB": 494696
+    }
+  ],
+  "unexpected_active": []
+}

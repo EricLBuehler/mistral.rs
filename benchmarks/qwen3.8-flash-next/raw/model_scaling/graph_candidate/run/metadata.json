@@ -1,0 +1,484 @@
+{
+  "complete": true,
+  "started": {
+    "utc": "2026-09-30T18:40:02.166381+00:00",
+    "monotonic": 164493.011561973
+  },
+  "env": {
+    "CUTILE_TILEIRAS_PATH": "/usr/local/cuda-13.2/bin/tileiras",
+    "CUDA_TOOLKIT_PATH": "/usr/local/cuda",
+    "LD_LIBRARY_PATH": "/usr/local/cuda/compat",
+    "CUDA_HOME": "/usr/local/cuda",
+    "PATH": "/home/ericbuehler/.nvm/versions/node/v24.11.0/lib/node_modules/@openai/codex/node_modules/@openai/codex-linux-arm64/vendor/aarch64-unknown-linux-musl/codex-path:/home/ericbuehler/.local/bin:/usr/local/cuda/bin:/opt/bin/:/home/ericbuehler/.codex/tmp/arg0/codex-arg0fq25DY:/home/ericbuehler/.nvm/versions/node/v24.11.0/lib/node_modules/@openai/codex/node_modules/@openai/codex-linux-arm64/vendor/aarch64-unknown-linux-musl/codex-path:/home/ericbuehler/mistral.rs/.venv/bin:/home/ericbuehler/.opencode/bin:/usr/local/cuda/bin:/home/ericbuehler/.nvm/versions/node/v24.11.0/bin:/home/ericbuehler/.vscode-server/cli/servers/Stable-2242ebbb54efeeb0129e08e919e7e8d43033cd83/server/bin/remote-cli:/home/ericbuehler/.cargo/bin:/home/ericbuehler/.local/bin:/usr/local/cuda/bin:/opt/bin/:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin",
+    "HF_HUB_OFFLINE": "1",
+    "RUST_LOG": "info"
+  },
+  "phases": [
+    {
+      "name": "serving",
+      "command": [
+        "/home/ericbuehler/mistral.rs/.venv/bin/python3",
+        "/home/ericbuehler/qwen4exp_work/model_scaling_20260930/graph_candidate/adaptive_run/scripts/bench_serving.py",
+        "--base-url",
+        "http://127.0.0.1:1234",
+        "--tokenizer",
+        "/home/ericbuehler/qwen4exp_work/model_scaling_20260930/graph_candidate/adaptive_run/checkpoint/tokenizer.json",
+        "--label",
+        "isq_mtp_adaptive_graphs36",
+        "--output",
+        "/home/ericbuehler/qwen4exp_work/model_scaling_20260930/graph_candidate/adaptive_run/serving.json",
+        "--iterations",
+        "5",
+        "--warmup",
+        "2",
+        "--max-tokens",
+        "128"
+      ],
+      "started": {
+        "utc": "2026-09-30T18:54:16.083966+00:00",
+        "monotonic": 165346.929138283
+      },
+      "complete": true,
+      "process_finished": {
+        "utc": "2026-09-30T18:59:53.203108+00:00",
+        "monotonic": 165684.048294072
+      },
+      "returncode": 0,
+      "finished": {
+        "utc": "2026-09-30T18:59:53.212084+00:00",
+        "monotonic": 165684.057257088
+      }
+    },
+    {
+      "name": "text",
+      "command": [
+        "/home/ericbuehler/mistral.rs/.venv/bin/python3",
+        "/home/ericbuehler/qwen4exp_work/model_scaling_20260930/graph_candidate/adaptive_run/scripts/text_smoke.py",
+        "/home/ericbuehler/qwen4exp_work/model_scaling_20260930/graph_candidate/adaptive_run/text.json",
+        "--base-url",
+        "http://127.0.0.1:1234"
+      ],
+      "started": {
+        "utc": "2026-09-30T18:59:53.218426+00:00",
+        "monotonic": 165684.063598701
+      },
+      "complete": true,
+      "process_finished": {
+        "utc": "2026-09-30T19:00:01.221046+00:00",
+        "monotonic": 165692.066232032
+      },
+      "returncode": 0,
+      "finished": {
+        "utc": "2026-09-30T19:00:01.239982+00:00",
+        "monotonic": 165692.085160097
+      }
+    },
+    {
+      "name": "c1",
+      "command": [
+        "/home/ericbuehler/mistral.rs/.venv/bin/python3",
+        "/home/ericbuehler/qwen4exp_work/model_scaling_20260930/graph_candidate/adaptive_run/scripts/bench_concurrency.py",
+        "--base-url",
+        "http://127.0.0.1:1234",
+        "--tokenizer",
+        "/home/ericbuehler/qwen4exp_work/model_scaling_20260930/graph_candidate/adaptive_run/checkpoint/tokenizer.json",
+        "--label",
+        "isq_mtp_adaptive_graphs36",
+        "--output",
+        "/home/ericbuehler/qwen4exp_work/model_scaling_20260930/graph_candidate/adaptive_run/concurrency.c1.json",
+        "--concurrencies",
+        "1",
+        "--requests",
+        "8",
+        "--modes",
+        "closed-loop",
+        "--warmup",
+        "2",
+        "--trials",
+        "5",
+        "--max-tokens",
+        "128"
+      ],
+      "started": {
+        "utc": "2026-09-30T19:00:01.246264+00:00",
+        "monotonic": 165692.091436635
+      },
+      "complete": true,
+      "process_finished": {
+        "utc": "2026-09-30T19:02:13.289303+00:00",
+        "monotonic": 165824.134490027
+      },
+      "returncode": 0,
+      "finished": {
+        "utc": "2026-09-30T19:02:13.297715+00:00",
+        "monotonic": 165824.142888266
+      }
+    },
+    {
+      "name": "c6_c8",
+      "command": [
+        "/home/ericbuehler/mistral.rs/.venv/bin/python3",
+        "/home/ericbuehler/qwen4exp_work/model_scaling_20260930/graph_candidate/adaptive_run/scripts/bench_concurrency.py",
+        "--base-url",
+        "http://127.0.0.1:1234",
+        "--tokenizer",
+        "/home/ericbuehler/qwen4exp_work/model_scaling_20260930/graph_candidate/adaptive_run/checkpoint/tokenizer.json",
+        "--label",
+        "isq_mtp_adaptive_graphs36",
+        "--output",
+        "/home/ericbuehler/qwen4exp_work/model_scaling_20260930/graph_candidate/adaptive_run/concurrency.c6_c8.json",
+        "--concurrencies",
+        "6",
+        "8",
+        "--requests",
+        "24",
+        "--modes",
+        "closed-loop",
+        "--warmup",
+        "2",
+        "--trials",
+        "5",
+        "--max-tokens",
+        "128"
+      ],
+      "started": {
+        "utc": "2026-09-30T19:02:13.308088+00:00",
+        "monotonic": 165824.153261904
+      },
+      "complete": true,
+      "process_finished": {
+        "utc": "2026-09-30T19:07:57.427919+00:00",
+        "monotonic": 166168.273105722
+      },
+      "returncode": 0,
+      "finished": {
+        "utc": "2026-09-30T19:07:57.451245+00:00",
+        "monotonic": 166168.296420224
+      }
+    },
+    {
+      "name": "mixed_context",
+      "command": [
+        "/home/ericbuehler/mistral.rs/.venv/bin/python3",
+        "/home/ericbuehler/qwen4exp_work/model_scaling_20260930/graph_candidate/adaptive_run/scripts/mixed_context_smoke.py",
+        "/home/ericbuehler/qwen4exp_work/model_scaling_20260930/graph_candidate/adaptive_run/mixed_context.json",
+        "--base-url",
+        "http://127.0.0.1:1234",
+        "--tokenizer",
+        "/home/ericbuehler/qwen4exp_work/model_scaling_20260930/graph_candidate/adaptive_run/checkpoint/tokenizer.json"
+      ],
+      "started": {
+        "utc": "2026-09-30T19:07:57.463323+00:00",
+        "monotonic": 166168.308498712
+      },
+      "complete": true,
+      "process_finished": {
+        "utc": "2026-09-30T19:08:19.475092+00:00",
+        "monotonic": 166190.320281012
+      },
+      "returncode": 0,
+      "finished": {
+        "utc": "2026-09-30T19:08:19.488764+00:00",
+        "monotonic": 166190.333940464
+      }
+    },
+    {
+      "name": "homogeneous_python_c1",
+      "command": [
+        "/home/ericbuehler/mistral.rs/.venv/bin/python3",
+        "/home/ericbuehler/qwen4exp_work/model_scaling_20260930/graph_candidate/adaptive_run/scripts/bench_homogeneous.py",
+        "run",
+        "--base-url",
+        "http://127.0.0.1:1234",
+        "--tokenizer",
+        "/home/ericbuehler/qwen4exp_work/model_scaling_20260930/graph_candidate/adaptive_run/checkpoint/tokenizer.json",
+        "--label",
+        "isq_mtp_adaptive_graphs36",
+        "--output",
+        "/home/ericbuehler/qwen4exp_work/model_scaling_20260930/graph_candidate/adaptive_run/homogeneous_python_c1.json",
+        "--prompt-name",
+        "python",
+        "--concurrency",
+        "1"
+      ],
+      "started": {
+        "utc": "2026-09-30T19:08:19.500483+00:00",
+        "monotonic": 166190.345658769
+      },
+      "complete": true,
+      "process_finished": {
+        "utc": "2026-09-30T19:09:50.555454+00:00",
+        "monotonic": 166281.400644693
+      },
+      "returncode": 0,
+      "finished": {
+        "utc": "2026-09-30T19:09:50.569290+00:00",
+        "monotonic": 166281.414465192
+      }
+    },
+    {
+      "name": "homogeneous_python_c8",
+      "command": [
+        "/home/ericbuehler/mistral.rs/.venv/bin/python3",
+        "/home/ericbuehler/qwen4exp_work/model_scaling_20260930/graph_candidate/adaptive_run/scripts/bench_homogeneous.py",
+        "run",
+        "--base-url",
+        "http://127.0.0.1:1234",
+        "--tokenizer",
+        "/home/ericbuehler/qwen4exp_work/model_scaling_20260930/graph_candidate/adaptive_run/checkpoint/tokenizer.json",
+        "--label",
+        "isq_mtp_adaptive_graphs36",
+        "--output",
+        "/home/ericbuehler/qwen4exp_work/model_scaling_20260930/graph_candidate/adaptive_run/homogeneous_python_c8.json",
+        "--prompt-name",
+        "python",
+        "--concurrency",
+        "8"
+      ],
+      "started": {
+        "utc": "2026-09-30T19:09:50.581162+00:00",
+        "monotonic": 166281.426337457
+      },
+      "complete": true,
+      "process_finished": {
+        "utc": "2026-09-30T19:10:55.624178+00:00",
+        "monotonic": 166346.469377921
+      },
+      "returncode": 0,
+      "finished": {
+        "utc": "2026-09-30T19:10:55.648618+00:00",
+        "monotonic": 166346.493794784
+      }
+    },
+    {
+      "name": "homogeneous_math_c1",
+      "command": [
+        "/home/ericbuehler/mistral.rs/.venv/bin/python3",
+        "/home/ericbuehler/qwen4exp_work/model_scaling_20260930/graph_candidate/adaptive_run/scripts/bench_homogeneous.py",
+        "run",
+        "--base-url",
+        "http://127.0.0.1:1234",
+        "--tokenizer",
+        "/home/ericbuehler/qwen4exp_work/model_scaling_20260930/graph_candidate/adaptive_run/checkpoint/tokenizer.json",
+        "--label",
+        "isq_mtp_adaptive_graphs36",
+        "--output",
+        "/home/ericbuehler/qwen4exp_work/model_scaling_20260930/graph_candidate/adaptive_run/homogeneous_math_c1.json",
+        "--prompt-name",
+        "math",
+        "--concurrency",
+        "1"
+      ],
+      "started": {
+        "utc": "2026-09-30T19:10:55.661764+00:00",
+        "monotonic": 166346.506939907
+      },
+      "complete": true,
+      "process_finished": {
+        "utc": "2026-09-30T19:12:21.718427+00:00",
+        "monotonic": 166432.563616635
+      },
+      "returncode": 0,
+      "finished": {
+        "utc": "2026-09-30T19:12:21.732546+00:00",
+        "monotonic": 166432.577722817
+      }
+    },
+    {
+      "name": "homogeneous_math_c8",
+      "command": [
+        "/home/ericbuehler/mistral.rs/.venv/bin/python3",
+        "/home/ericbuehler/qwen4exp_work/model_scaling_20260930/graph_candidate/adaptive_run/scripts/bench_homogeneous.py",
+        "run",
+        "--base-url",
+        "http://127.0.0.1:1234",
+        "--tokenizer",
+        "/home/ericbuehler/qwen4exp_work/model_scaling_20260930/graph_candidate/adaptive_run/checkpoint/tokenizer.json",
+        "--label",
+        "isq_mtp_adaptive_graphs36",
+        "--output",
+        "/home/ericbuehler/qwen4exp_work/model_scaling_20260930/graph_candidate/adaptive_run/homogeneous_math_c8.json",
+        "--prompt-name",
+        "math",
+        "--concurrency",
+        "8"
+      ],
+      "started": {
+        "utc": "2026-09-30T19:12:21.745182+00:00",
+        "monotonic": 166432.590358599
+      },
+      "complete": true,
+      "process_finished": {
+        "utc": "2026-09-30T19:13:24.783533+00:00",
+        "monotonic": 166495.628735554
+      },
+      "returncode": 0,
+      "finished": {
+        "utc": "2026-09-30T19:13:24.797633+00:00",
+        "monotonic": 166495.642808915
+      }
+    }
+  ],
+  "label": "isq_mtp_adaptive_graphs36",
+  "profiled": false,
+  "minimum_free_disk_bytes": 1073741824,
+  "counter_scope": "Whole command including warmups; global swap counters do not identify model paging or timing impact.",
+  "isolation_scope": "Boundary process snapshots, not a continuous monitor of all processes.",
+  "files": [
+    {
+      "source": "/home/ericbuehler/qwen4exp_work/model_scaling_20260930/graph_candidate/harnesses/bench_serving.py",
+      "copy": "scripts/bench_serving.py",
+      "sha256": "a16b5815b8744def761174e396de92e41ecd499afae712255721c20a33a79705"
+    },
+    {
+      "source": "/home/ericbuehler/qwen4exp_work/model_scaling_20260930/graph_candidate/harnesses/bench_concurrency.py",
+      "copy": "scripts/bench_concurrency.py",
+      "sha256": "9f664f3ff278f0f16b24e655477486e93b91aec41bf473510e13f449ab1dbbc3"
+    },
+    {
+      "source": "/home/ericbuehler/qwen4exp_work/model_scaling_20260930/graph_candidate/harnesses/summarize_concurrency.py",
+      "copy": "scripts/summarize_concurrency.py",
+      "sha256": "1ed661d68016937619f7f94b35f6801fed581219685635916e6312d1a0c42d91"
+    },
+    {
+      "source": "/home/ericbuehler/qwen4exp_work/model_scaling_20260930/graph_candidate/harnesses/text_smoke.py",
+      "copy": "scripts/text_smoke.py",
+      "sha256": "8d3a86a6e830ff3842d969bd1d6a144ba251256f042b78b16acc808e9679b355"
+    },
+    {
+      "source": "/home/ericbuehler/qwen4exp_work/model_scaling_20260930/graph_candidate/harnesses/mixed_context_smoke.py",
+      "copy": "scripts/mixed_context_smoke.py",
+      "sha256": "bc899ef772db40d0edb3a549d7700c92bf8e5867adb861e80e1ac29a0ab5e25e"
+    },
+    {
+      "source": "/home/ericbuehler/qwen4exp_work/model_scaling_20260930/graph_candidate/harnesses/bench_homogeneous.py",
+      "copy": "scripts/bench_homogeneous.py",
+      "sha256": "6cb61ba30e30d01891ca02ee5e1a891900046f36631360f81b97bbd427f394fc"
+    },
+    {
+      "source": "/home/ericbuehler/qwen4exp_work/model_scaling_20260930/graph_candidate/run_final.py",
+      "copy": "scripts/run_final.py",
+      "sha256": "4dc6e0c129c10c257c171d0747d64b844fa26f3458734604bfa2a75fc6d3be75"
+    },
+    {
+      "source": "/home/ericbuehler/qwen4exp_work/model_scaling_20260930/graph_candidate/observe.py",
+      "copy": "scripts/observe.py",
+      "sha256": "8b7e8bc4206e463bce8e01bc2f55f8a3d38d283248b932d1a05847cbda385233"
+    },
+    {
+      "source": "/home/ericbuehler/qwen4exp_work/tuner_exploration_20260930/run_server.py",
+      "copy": "scripts/ancestor_run_server.py",
+      "sha256": "b6b734836f7791b1835e9f50684fd57e711263d4c8dc60b002c63df4f5d2bfd7"
+    },
+    {
+      "source": "/home/ericbuehler/.cache/huggingface/hub/models--Qwen--Qwen3.8-Flash-Next/snapshots/de4b8e4d43b917e7706784d8bb445c9af86a3540/config.json",
+      "copy": "checkpoint/config.json",
+      "sha256": "889658f2508e8c61d409b02e70e0d78d8d4452ec65aaafbe129805d213d2e74b"
+    },
+    {
+      "source": "/home/ericbuehler/.cache/huggingface/hub/models--Qwen--Qwen3.8-Flash-Next/snapshots/de4b8e4d43b917e7706784d8bb445c9af86a3540/tokenizer.json",
+      "copy": "checkpoint/tokenizer.json",
+      "sha256": "0997f410c57a1f4e53b09e4be8f4a172d90edd9564368fb0847030937229b9f3"
+    },
+    {
+      "source": "/home/ericbuehler/.cache/huggingface/hub/models--Qwen--Qwen3.8-Flash-Next/snapshots/de4b8e4d43b917e7706784d8bb445c9af86a3540/tokenizer_config.json",
+      "copy": "checkpoint/tokenizer_config.json",
+      "sha256": "b11349aafa7cdc6a320767cf7ceb29ed82f7eda5d65e8e0819e76f0ce947bf27"
+    },
+    {
+      "source": "/home/ericbuehler/.cache/huggingface/hub/models--Qwen--Qwen3.8-Flash-Next/snapshots/de4b8e4d43b917e7706784d8bb445c9af86a3540/generation_config.json",
+      "copy": "checkpoint/generation_config.json",
+      "sha256": "e70c136c1b78ddc1fb0905bac8e733a4dc448d4f852a5dd75143fffc70be550e"
+    },
+    {
+      "source": "/home/ericbuehler/.cache/huggingface/hub/models--Qwen--Qwen3.8-Flash-Next/snapshots/de4b8e4d43b917e7706784d8bb445c9af86a3540/model.safetensors.index.json",
+      "copy": "checkpoint/model.safetensors.index.json",
+      "sha256": "99e815241ef03325536b0aaa4441deea45174c17fae31e10f0bb456410c590de"
+    },
+    {
+      "source": "/home/ericbuehler/qwen4exp_work/verify_graph_depth4_20260930/build/metadata.json",
+      "copy": "candidate_build_metadata.json",
+      "sha256": "37b171ecc2f1e76fa970345985e5dd6c22b2e9c92d4d940d85951f3081eecc60"
+    }
+  ],
+  "checkpoint": "/home/ericbuehler/.cache/huggingface/hub/models--Qwen--Qwen3.8-Flash-Next/snapshots/de4b8e4d43b917e7706784d8bb445c9af86a3540",
+  "git_head": "22573f4f0d6fc5239f77dac3c4807845c1da05e5",
+  "git_status": "",
+  "source_diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "source_manifest_sha256": "617c109d263465fa8fa315fc68d206e8acdbc97c179f4d0f8d288b3a15b2843f",
+  "source_provenance_limit": "Source snapshot is taken before launch; executable identity is its SHA256. Only supplied build metadata links the executable to a build.",
+  "binary": "/home/ericbuehler/qwen4exp_work/verify_graph_depth4_20260930/build/mistralrs",
+  "binary_bytes": 609921008,
+  "binary_sha256": "92c050e15bbfe15fc99ef11077366a8fb40db5af96223c67e0f9299fce23f2fa",
+  "binary_version": "mistralrs 0.9.4",
+  "python_version": "3.12.3 (main, Mar 23 2026, 19:04:32) [GCC 13.3.0]",
+  "gpu": "name, uuid, driver_version, memory.total [MiB]\nNVIDIA GB10, GPU-0341400a-e8b8-eae5-b907-6b7ce08225b5, 580.126.09, [N/A]",
+  "command": [
+    "/home/ericbuehler/qwen4exp_work/verify_graph_depth4_20260930/build/mistralrs",
+    "serve",
+    "--no-ui",
+    "-p",
+    "1234",
+    "--max-model-len",
+    "16384",
+    "--max-seqs",
+    "8",
+    "--prefix-cache-n",
+    "0",
+    "-m",
+    "/home/ericbuehler/.cache/huggingface/hub/models--Qwen--Qwen3.8-Flash-Next/snapshots/de4b8e4d43b917e7706784d8bb445c9af86a3540",
+    "--isq",
+    "q4k",
+    "--mtp"
+  ],
+  "model_pid": 2589294,
+  "startup_seconds": 852.2994993540051,
+  "ready": {
+    "utc": "2026-09-30T18:54:16.039421+00:00",
+    "monotonic": 165346.884601948
+  },
+  "summary_command": [
+    "/home/ericbuehler/mistral.rs/.venv/bin/python3",
+    "/home/ericbuehler/qwen4exp_work/model_scaling_20260930/graph_candidate/adaptive_run/scripts/summarize_concurrency.py",
+    "/home/ericbuehler/qwen4exp_work/model_scaling_20260930/graph_candidate/adaptive_run/concurrency.c1.json",
+    "/home/ericbuehler/qwen4exp_work/model_scaling_20260930/graph_candidate/adaptive_run/concurrency.c6_c8.json",
+    "--output",
+    "/home/ericbuehler/qwen4exp_work/model_scaling_20260930/graph_candidate/adaptive_run/concurrency.summary.json"
+  ],
+  "homogeneous_summary_command": [
+    "/home/ericbuehler/mistral.rs/.venv/bin/python3",
+    "/home/ericbuehler/qwen4exp_work/model_scaling_20260930/graph_candidate/adaptive_run/scripts/bench_homogeneous.py",
+    "summarize",
+    "/home/ericbuehler/qwen4exp_work/model_scaling_20260930/graph_candidate/adaptive_run/homogeneous_python_c1.json",
+    "/home/ericbuehler/qwen4exp_work/model_scaling_20260930/graph_candidate/adaptive_run/homogeneous_python_c8.json",
+    "/home/ericbuehler/qwen4exp_work/model_scaling_20260930/graph_candidate/adaptive_run/homogeneous_math_c1.json",
+    "/home/ericbuehler/qwen4exp_work/model_scaling_20260930/graph_candidate/adaptive_run/homogeneous_math_c8.json",
+    "--output",
+    "/home/ericbuehler/qwen4exp_work/model_scaling_20260930/graph_candidate/adaptive_run/homogeneous.summary.json"
+  ],
+  "measurements_finished": {
+    "utc": "2026-09-30T19:13:24.979092+00:00",
+    "monotonic": 166495.824269081
+  },
+  "server_shutdown": {
+    "pid": 2589294,
+    "returncode": -15,
+    "forced_kill": false,
+    "utc": "2026-09-30T19:13:26.966136+00:00",
+    "monotonic": 166497.811335834
+  },
+  "gpu_monitor_shutdown": {
+    "pid": 2589293,
+    "returncode": 0,
+    "forced_kill": false,
+    "utc": "2026-09-30T19:13:27.600005+00:00",
+    "monotonic": 166498.445193635
+  },
+  "monitor_errors": [],
+  "finished": {
+    "utc": "2026-09-30T19:13:27.600594+00:00",
+    "monotonic": 166498.44576929
+  },
+  "binary_sha256_after": "92c050e15bbfe15fc99ef11077366a8fb40db5af96223c67e0f9299fce23f2fa",
+  "git_head_after": "22573f4f0d6fc5239f77dac3c4807845c1da05e5"
+}

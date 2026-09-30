@@ -1,0 +1,4 @@
+Mean +/- sample SD across three measured trials after two warmups; C1 has eight requests, C8 has three waves of eight. Whole-trial rates include prefill/client/startup/drain. Per-active rate is output tokens / summed request latency.
+Prompt | C1 tok/s | C8 tok/s | C8/C1 | C1 per-active | C8 per-active | C8 active
+python | 56.138 +/- 0.625 | 254.901 +/- 17.264 | 4.541x | 56.150 | 32.654 | 7.805
+math | 60.091 +/- 0.986 | 254.352 +/- 14.381 | 4.233x | 60.103 | 33.010 | 7.704

@@ -1,0 +1,92 @@
+{
+  "scope": "External adaptive serving runner only; no server launched",
+  "source_runner": "/home/ericbuehler/qwen4exp_work/moe_optimization_20260930/final_serving/run_final.py",
+  "source_runner_sha256": "520dae846661e2690f6dd99831108ce9a9b74cbc38fc66e0e54f03a1ed624ba2",
+  "expected_graphs": 36,
+  "required_binary_hash_supplied_by_coordinator": true,
+  "runtime_policy": "Adaptive MTP unchanged; no --mtp-n-predict override",
+  "baseline_stage": "/home/ericbuehler/qwen4exp_work/moe_optimization_20260930/final_serving/optimized_final",
+  "files_sha256": {
+    "README.md": "a80e625d75f41f2adbbea0b0fd552521e75e66a6a980d27de0f2572f84138fa2",
+    "check_homogeneous.json": "1d9b2fc8a247226f0a5f14ff574c1df54bfa6172feff143168fe901b04f2f8c7",
+    "check_homogeneous.py": "f4da70c3d9f17877dd760e414878dc58e4753ca45fe94539b02edc251d47421d",
+    "compare_stage.py": "fdf554f63606ca4d72a4c063226ff852d41dfb93643b874e10111a0f2739520e",
+    "harnesses/bench_concurrency.py": "9f664f3ff278f0f16b24e655477486e93b91aec41bf473510e13f449ab1dbbc3",
+    "harnesses/bench_homogeneous.py": "6cb61ba30e30d01891ca02ee5e1a891900046f36631360f81b97bbd427f394fc",
+    "harnesses/bench_serving.py": "a16b5815b8744def761174e396de92e41ecd499afae712255721c20a33a79705",
+    "harnesses/mixed_context_smoke.py": "bc899ef772db40d0edb3a549d7700c92bf8e5867adb861e80e1ac29a0ab5e25e",
+    "harnesses/summarize_concurrency.py": "1ed661d68016937619f7f94b35f6801fed581219685635916e6312d1a0c42d91",
+    "harnesses/text_smoke.py": "8d3a86a6e830ff3842d969bd1d6a144ba251256f042b78b16acc808e9679b355",
+    "observe.py": "8b7e8bc4206e463bce8e01bc2f55f8a3d38d283248b932d1a05847cbda385233",
+    "run_final.py": "4dc6e0c129c10c257c171d0747d64b844fa26f3458734604bfa2a75fc6d3be75",
+    "runner.patch": "f320458f8db5447c83b3108ded22d9584be73fe6a5305512f2483cba09a2d097",
+    "self_check.json": "a13c0d52e7cd003620f390a5edf9769d424e91f4e67f08b4741b3ac69755e59f",
+    "self_check.py": "788d60b1b5d4ef59ac8f2c1055392cf08eb800ea1da1bd71cee2a338878b18e2",
+    "socket_retry_check.json": "466b984ec15871eaed28833dbb42cd4a77bf6f5d4a423f403c6750fd56a0ac4d",
+    "validation_helpers/bench_concurrency.py": "9f664f3ff278f0f16b24e655477486e93b91aec41bf473510e13f449ab1dbbc3",
+    "validation_helpers/bench_serving.py": "a16b5815b8744def761174e396de92e41ecd499afae712255721c20a33a79705",
+    "validation_helpers/compare_final.py": "e04351cc7ed93944a2c53c62a36fda702ac55f68428fa18e3e5922c7bf31a80f",
+    "validation_helpers/counter_summary.py": "df007fe74214dbf6b433decb6dab8652f82980c7be687e5e29adf94afaad71d8",
+    "validation_helpers/dependencies.json": "434921e98223f0d6c4da9f0debb1a8260c15ad0ea65cbaebff6654b86be4eed1",
+    "validation_helpers/mixed_context_smoke.py": "bc899ef772db40d0edb3a549d7700c92bf8e5867adb861e80e1ac29a0ab5e25e",
+    "validation_helpers/serving_summary.py": "13dcef9a4ebeb6581b919037ef5605a1278059b78337bb30d3135b0b1dc02356",
+    "validation_helpers/summarize_concurrency.py": "1ed661d68016937619f7f94b35f6801fed581219685635916e6312d1a0c42d91",
+    "finalize_candidate.py": "50a1dc23f359c80c4d177f58cc4dc992f10b49b416e0b7d4294fb143eb50282e",
+    "test_finalize_candidate.py": "03beea3e535bacafdc4160a85de4ee1d83519062837c5d87aaffe3de7b79583b",
+    "completion_workflow.md": "a46adbe9b6d4d21bf9ba8520badb73c21344638bc1492f0cc962f8dabbd56a24",
+    "preparation.before_finalizer.json": "a8424cfe0a423efdd06a824360160036ab0429c4e390155cdde1e5e41e2750b1"
+  },
+  "checks": [
+    "Inherited runner CPU mock suite passes with no HTTP/build/GPU calls",
+    "36-graph startup rule accepts36/rejects34",
+    "Adaptive server command has no fixed-depth argument",
+    "Direct stage same-input transformation produces zero differences",
+    "Ruff and syntax pass",
+    "Homogeneous HTTP mock validates four cases, concurrency, waves, active integral, hashes, agreement, ratios and failure handling",
+    "CPU loopback regression confirms preflight tolerates TIME_WAIT but rejects a live listener",
+    "1 GiB startup/runtime disk guard boundary regression and inherited monitor-failure cleanup checks pass"
+  ],
+  "homogeneous_diagnostic": {
+    "prompts": [
+      "python",
+      "math"
+    ],
+    "mode": "synchronized finite waves",
+    "concurrencies": [
+      1,
+      8
+    ],
+    "requests": {
+      "1": 8,
+      "8": 24
+    },
+    "warmups": 2,
+    "trials": 3,
+    "output_tokens": 128,
+    "placement": "after all original phases",
+    "stage_comparison": "original phases only; additional diagnostics excluded"
+  },
+  "finalizer_preparation": {
+    "completed_utc": "2026-09-30T18:49:35.418332+00:00",
+    "scope": "External finalizer only; no running measurement files read, no repository edits, no GPU/build actions",
+    "guard": "Exactly nine unique expected phase names; successful return codes; complete clean shutdown; frozen binary and manifest validation",
+    "tests": {
+      "command": [
+        "/home/ericbuehler/mistral.rs/.venv/bin/python",
+        "-m",
+        "unittest",
+        "-v",
+        "test_finalize_candidate"
+      ],
+      "passed": 4,
+      "cases": [
+        "incomplete rejected before manifest reads",
+        "nine valid unique phases reach manifest verification",
+        "extra duplicate cannot hide failed earlier phase",
+        "duplicate replacing missing phase rejected"
+      ]
+    },
+    "ruff": "check and format passed",
+    "prior_preparation_sha256": "a8424cfe0a423efdd06a824360160036ab0429c4e390155cdde1e5e41e2750b1"
+  }
+}
