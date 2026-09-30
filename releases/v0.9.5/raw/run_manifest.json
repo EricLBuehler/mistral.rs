@@ -1,0 +1,228 @@
+{
+  "complete": true,
+  "generator": "releases/v0.9.5/scripts/build_release.py",
+  "generator_sha256": "d3f2b7653e797a86b96f8944f017f7827d23d89fe82d168778a3e8c0e573849b",
+  "identities": {
+    "bf16": {
+      "mistralrs": {
+        "binary_sha256": "92c050e15bbfe15fc99ef11077366a8fb40db5af96223c67e0f9299fce23f2fa",
+        "binary_version": "mistralrs 0.9.4",
+        "git_head": "74a469b6d402bf3795bb3b8eb40920d242185ae9"
+      },
+      "vllm": {
+        "image_commit": "2cf0a6915ce544dc493a0990f2ea38d81601128a",
+        "image_id": "sha256:89154ef00dd15368d2b293c167e5cc7dbb521fcfb2fbb77510e0d4df2b820e8f",
+        "versions": {
+          "flashinfer-python": "0.6.16.post3",
+          "tokenizers": "0.22.2",
+          "torch": "2.13.0+cu130",
+          "transformers": "5.15.1",
+          "triton": "3.7.1",
+          "vllm": "0.28.0"
+        }
+      }
+    },
+    "final_adaptive_binary_sha256": "92c050e15bbfe15fc99ef11077366a8fb40db5af96223c67e0f9299fce23f2fa"
+  },
+  "limitations": [
+    "Different workload protocols are kept separate; no cross-workload ratio is generated.",
+    "Same-GGUF comparison uses the documented llama.cpp allocation-padding patch and earlier baseline binaries.",
+    "Final Flash-Next rates precede the completion-whitespace rendering fix; frozen binary identity remains recorded.",
+    "BF16 engines use different physical cache allocations and graph policies despite matching checkpoint and request protocol.",
+    "Source archives retain complete requests, validation, logs and large-artifact provenance; this release duplicates only compact derived data.",
+    "Byte reproducibility of figures is checked in the recorded rendering environment; other library/font versions may render differently."
+  ],
+  "outputs": {
+    "figures/flash_next_gguf.png": "ec1ac6b82b842f7eb5cefa593be0adda03927e33cd1bc5eb8d17361028de64ba",
+    "figures/flash_next_gguf.svg": "24d6442786db54772b66ce03de6efddd4dae9ab12bc7d19f10cee236a6f03e09",
+    "figures/flash_next_mtp.png": "2dc206748dd8bb9d6422dadc51fdfb728008f9bcf4cdd766832172efa71f8900",
+    "figures/flash_next_mtp.svg": "339b0d6fd89df048cc2ccc1f03e75fd4a10aaf280fba6b9c272ce70b5f58f3e6",
+    "figures/qwen35_bf16.png": "43466e3e49d7b78768eec06e7e663ec012091d62a74c2d5ca2adfa47b277c7ec",
+    "figures/qwen35_bf16.svg": "c16f14bb102a6c18e170d0e797890ccaf45efc834a7d19ecc3a906179f67fb34",
+    "raw/results.jsonl": "911052ff6be8c9d08047b080d4887db3f4eb805d5a339ac0a67a85fd8e0e67b8",
+    "raw/summary.csv": "04c0d8b2ccdc3d7a29edbc7ebfaf0059fbd919edd6248355de50a7ebdb30c88f",
+    "raw/summary.json": "c58bdf8835e368e40b32260675cd0a4bbd5fac455c550adadde9506d3110b3d8",
+    "raw/tables.md": "6cdcf1e45621fde2c350b484a2d5461246e61d151d79af6d95aa6602b86d43f4"
+  },
+  "render_environment": {
+    "backend": "Agg",
+    "dpi": 220,
+    "font": "DejaVu Sans",
+    "freetype": "2.6.1",
+    "matplotlib": "3.10.8",
+    "numpy": "2.2.6",
+    "pillow": "11.3.0",
+    "python": "3.12.3"
+  },
+  "run_provenance": {
+    "bf16_mistralrs": {
+      "identity": {
+        "binary_sha256": "92c050e15bbfe15fc99ef11077366a8fb40db5af96223c67e0f9299fce23f2fa",
+        "git_head": "74a469b6d402bf3795bb3b8eb40920d242185ae9",
+        "source_diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "path": "benchmarks/qwen3.8-flash-next/raw/model_scaling/qwen3.5_bf16/mistralrs/metadata.json",
+      "sha256": "2b69b11626365b5fc9290034b74fc0c5257425efc22a140757858cdeb0a1df4d"
+    },
+    "bf16_vllm": {
+      "identity": {},
+      "path": "benchmarks/qwen3.8-flash-next/raw/model_scaling/qwen3.5_bf16/vllm/metadata.json",
+      "sha256": "97307f64ab7f89ce84dc018d6e690b50847174605e2dd7f41396b9b9cb5e9c35"
+    },
+    "final_adaptive": {
+      "identity": {
+        "binary_sha256": "92c050e15bbfe15fc99ef11077366a8fb40db5af96223c67e0f9299fce23f2fa",
+        "git_head": "22573f4f0d6fc5239f77dac3c4807845c1da05e5",
+        "source_diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "path": "benchmarks/qwen3.8-flash-next/raw/model_scaling/graph_candidate/run/metadata.json",
+      "sha256": "8c54ea597404b08a423661d169aa2d07511aee64686e02aebbdd1899b6960eb6"
+    },
+    "gguf": {
+      "identity": {
+        "binary_sha256": "cbfaea5a14ae70f139cdf3aa77390110f54f655731b2c9cb61582630ca4e028b",
+        "git_head": "0003cf35120f696e063d64993c36e25969cad422",
+        "source_diff_sha256": "81ec567fea844bbce4247b0520954ee4acf56233a487223ec55600b274f1ea47"
+      },
+      "path": "benchmarks/qwen3.8-flash-next/raw/gguf.metadata.json",
+      "sha256": "bdc16a47cde11f484edde77eb2610215e52a64ca0ef17425e82f90f420a1ecb1"
+    },
+    "llama_patched": {
+      "identity": {
+        "binary_sha256": "f19822a749b60c6611a4b9a6781caef8200696eaef52f3242b3f9879d73bb9df",
+        "git_head": "4b1a27fa0eb875bbca4f6cfe936e3d65adc685c0",
+        "original_shared_library_sha256": {
+          "/home/ericbuehler/llama.cpp/build/bin/libggml-base.so.0.25.3": "9efc7afaaa4f436e0a65d0e77d62cc3e42b7a660f9d4973638322a338d010233",
+          "/home/ericbuehler/llama.cpp/build/bin/libggml-cpu.so.0.25.3": "3dee4cb8c4ebc863d2ec16da94faeb6d393151d01634b1ee6c2752e59f78cfb2",
+          "/home/ericbuehler/llama.cpp/build/bin/libggml-cuda.so.0.25.3": "b22d5843a51f5987230fed258282a936cdd384799d3fc45295649a537e632f3c",
+          "/home/ericbuehler/llama.cpp/build/bin/libggml.so.0.25.3": "0b812962e4af1233fff8629d8b1181725c3d0ec5526ae2881f933617f170a443",
+          "/home/ericbuehler/llama.cpp/build/bin/libllama-bench-impl.so": "a52a78f91bb843ca3144783fc25f9469b596bd8a30d770a5f439991219ca5a09",
+          "/home/ericbuehler/llama.cpp/build/bin/libllama-common.so.0.5.0": "119ba25fbd724d8a2e0369ceb2021fd04c1c193ceac1fb005cdabae884b71e37",
+          "/home/ericbuehler/llama.cpp/build/bin/libllama.so.0.5.0": "422ca25d46e74f991dc92c8d78043f48bf15cee0464de354469ea1f5c606d30f"
+        },
+        "patch_sha256": "5d7e34774cc92db6bd60dcafb5f2da2b8b32a7fbfd72c639406faa260caace1f",
+        "patched_library_sha256": {
+          "libggml-cuda.so.0.25.3": "e6f011d6d26b8d070085761221dab2068421d26aaf141c80a34296b53fce3f8f"
+        },
+        "source_diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "path": "benchmarks/qwen3.8-flash-next/raw/llama_patched.metadata.json",
+      "sha256": "3a2153abe75af3ec38518facfcc603133fa2a21a446fb6d1d7d835e6c11ad83e"
+    }
+  },
+  "schema_version": 1,
+  "sources": {
+    "benchmarks/qwen3.8-flash-next/raw/gguf.json": {
+      "bytes": 775461,
+      "role": "Raw serving repetitions",
+      "sha256": "3bc8814670f1e32eba43b28cf9432ce88a4cd88c2d201db1937bb816d70bf12b"
+    },
+    "benchmarks/qwen3.8-flash-next/raw/gguf.metadata.json": {
+      "bytes": 1257,
+      "role": "Run command, binary/image and environment provenance",
+      "sha256": "bdc16a47cde11f484edde77eb2610215e52a64ca0ef17425e82f90f420a1ecb1"
+    },
+    "benchmarks/qwen3.8-flash-next/raw/llama-indexed-mmq-padding.patch": {
+      "bytes": 1612,
+      "role": "Patch or source archive manifest",
+      "sha256": "5d7e34774cc92db6bd60dcafb5f2da2b8b32a7fbfd72c639406faa260caace1f"
+    },
+    "benchmarks/qwen3.8-flash-next/raw/llama_patched.json": {
+      "bytes": 1034050,
+      "role": "Raw serving repetitions",
+      "sha256": "da6f8d1ddf0073d132af52801da367124770b8b177e1564e77e103e148721e2c"
+    },
+    "benchmarks/qwen3.8-flash-next/raw/llama_patched.metadata.json": {
+      "bytes": 2921,
+      "role": "Run command, binary/image and environment provenance",
+      "sha256": "3a2153abe75af3ec38518facfcc603133fa2a21a446fb6d1d7d835e6c11ad83e"
+    },
+    "benchmarks/qwen3.8-flash-next/raw/model_scaling/graph_candidate/SHA256SUMS.json": {
+      "bytes": 17233,
+      "role": "Patch or source archive manifest",
+      "sha256": "cdec4af26cfc9370e125400f0764ad0ac580e92664c300c4c20343849143d1f0"
+    },
+    "benchmarks/qwen3.8-flash-next/raw/model_scaling/graph_candidate/analysis/stage_comparison/comparison.json": {
+      "bytes": 213482,
+      "role": "Validated final adaptive stage summary; use after only",
+      "sha256": "796f3d2e761a179f4d32b4abc594ca6d7dd205057d49f977defdf8bb2f86b18c"
+    },
+    "benchmarks/qwen3.8-flash-next/raw/model_scaling/graph_candidate/run/concurrency.c1.json": {
+      "bytes": 145525,
+      "role": "Raw final adaptive closed-loop trials",
+      "sha256": "1df1850d9dcf803969c43259a584e2af3870dec03b1a18f8c78aacbe32774cf9"
+    },
+    "benchmarks/qwen3.8-flash-next/raw/model_scaling/graph_candidate/run/concurrency.c6_c8.json": {
+      "bytes": 825270,
+      "role": "Raw final adaptive closed-loop trials",
+      "sha256": "b3ac0d5bb75c3beb2f23ad59b5549cc14045f6d386e9dd6c1b600cb2e4820207"
+    },
+    "benchmarks/qwen3.8-flash-next/raw/model_scaling/graph_candidate/run/metadata.json": {
+      "bytes": 19554,
+      "role": "Run command, binary/image and environment provenance",
+      "sha256": "8c54ea597404b08a423661d169aa2d07511aee64686e02aebbdd1899b6960eb6"
+    },
+    "benchmarks/qwen3.8-flash-next/raw/model_scaling/qwen3.5_bf16/SHA256SUMS.json": {
+      "bytes": 19001,
+      "role": "Patch or source archive manifest",
+      "sha256": "3c697ff481c565eb3a9b7aa409c135be6a176ccc6855d0af2091ca91166553ad"
+    },
+    "benchmarks/qwen3.8-flash-next/raw/model_scaling/qwen3.5_bf16/comparison.json": {
+      "bytes": 32116,
+      "role": "Validated same-checkpoint BF16 comparison",
+      "sha256": "f9ad3bbd09579b89b1b4b4a429cf6b31dac78815d2ee5628e1ecff82e108deb7"
+    },
+    "benchmarks/qwen3.8-flash-next/raw/model_scaling/qwen3.5_bf16/mistralrs/concurrency.c1.json": {
+      "bytes": 139736,
+      "role": "Raw same-checkpoint BF16 trials",
+      "sha256": "92e515c41b68dcfec0f1081ae8c27dad0713c13b7a37933d4bb4765c1dbb37e3"
+    },
+    "benchmarks/qwen3.8-flash-next/raw/model_scaling/qwen3.5_bf16/mistralrs/concurrency.c6.json": {
+      "bytes": 395989,
+      "role": "Raw same-checkpoint BF16 trials",
+      "sha256": "79d1ccb0ea3f4a51316742c9ee239ae09def4af0495dcd562a9359f016fd9fcb"
+    },
+    "benchmarks/qwen3.8-flash-next/raw/model_scaling/qwen3.5_bf16/mistralrs/concurrency.c8.json": {
+      "bytes": 397216,
+      "role": "Raw same-checkpoint BF16 trials",
+      "sha256": "d61269e11cf3468d2a8e188aa0e45fda95b1bf3c270301daece8332da7e6ff84"
+    },
+    "benchmarks/qwen3.8-flash-next/raw/model_scaling/qwen3.5_bf16/mistralrs/metadata.json": {
+      "bytes": 22416,
+      "role": "Run command, binary/image and environment provenance",
+      "sha256": "2b69b11626365b5fc9290034b74fc0c5257425efc22a140757858cdeb0a1df4d"
+    },
+    "benchmarks/qwen3.8-flash-next/raw/model_scaling/qwen3.5_bf16/vllm/concurrency.c1.json": {
+      "bytes": 148877,
+      "role": "Raw same-checkpoint BF16 trials",
+      "sha256": "d5415ee23c329aa162e04d7ab291d86c6b2faf0f6189c539f159402aaa6343d4"
+    },
+    "benchmarks/qwen3.8-flash-next/raw/model_scaling/qwen3.5_bf16/vllm/concurrency.c6.json": {
+      "bytes": 423652,
+      "role": "Raw same-checkpoint BF16 trials",
+      "sha256": "f90456ddf73dc9dbf467e0bf468cb7f045402e5cc0429e46530878440b9fc6a9"
+    },
+    "benchmarks/qwen3.8-flash-next/raw/model_scaling/qwen3.5_bf16/vllm/concurrency.c8.json": {
+      "bytes": 425251,
+      "role": "Raw same-checkpoint BF16 trials",
+      "sha256": "b5bc7ec29e1211c39a0a376d0d0c21572999bb7cc80dfcac14d9a64073389254"
+    },
+    "benchmarks/qwen3.8-flash-next/raw/model_scaling/qwen3.5_bf16/vllm/metadata.json": {
+      "bytes": 25256,
+      "role": "Run command, binary/image and environment provenance",
+      "sha256": "97307f64ab7f89ce84dc018d6e690b50847174605e2dd7f41396b9b9cb5e9c35"
+    },
+    "benchmarks/qwen3.8-flash-next/summary.json": {
+      "bytes": 140895,
+      "role": "Validated same-GGUF serving summary",
+      "sha256": "bfd5f560f7995fb8ff5f86a043fa023d6b4b6380d030014678b994f950f0a2dd"
+    }
+  },
+  "validation": {
+    "measured_trial_rows": 165,
+    "paired_input_hashes_and_counts_match": true,
+    "raw_rates_recomputed": true,
+    "saved_summary_means_sd_samples_match": true,
+    "summary_cells": 33
+  }
+}
