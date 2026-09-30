@@ -1,0 +1,94 @@
+{
+  "queued_at": "2026-09-30T04:14:11.238993+00:00",
+  "dense_gate": "/home/ericbuehler/qwen4exp_work/scaling_20260930/current_dense_fp8_clean/metadata.json",
+  "complete": true,
+  "phase": "complete",
+  "steps": [
+    {
+      "name": "server_launcher",
+      "command": [
+        "python3",
+        "-u",
+        "/home/ericbuehler/qwen4exp_work/tuner_exploration_20260930/run_server.py"
+      ],
+      "cwd": "/home/ericbuehler/mistral.rs",
+      "pid": 1858495,
+      "started_at": "2026-09-30T04:14:11.566778+00:00",
+      "log": "/home/ericbuehler/qwen4exp_work/tuner_exploration_20260930/server_launcher.log",
+      "returncode": 0,
+      "finished_at": "2026-09-30T04:46:52.950798+00:00",
+      "log_sha256": "363948b40e16c5cba90f56bab94e83f88099d1da90e7ddfe21216ac9a3ed767c"
+    },
+    {
+      "name": "measurements",
+      "command": [
+        "python3",
+        "-u",
+        "/home/ericbuehler/qwen4exp_work/tuner_exploration_20260930/run_measurements.py"
+      ],
+      "cwd": "/home/ericbuehler/mistral.rs",
+      "pid": 1861427,
+      "started_at": "2026-09-30T04:29:19.445497+00:00",
+      "log": "/home/ericbuehler/qwen4exp_work/tuner_exploration_20260930/measurements.log",
+      "returncode": 0,
+      "finished_at": "2026-09-30T04:46:49.666737+00:00",
+      "log_sha256": "f1fab2696076c46f12bd40749dfefcd513c35e3742f49a7a43d82e58ccd5fcb3"
+    }
+  ],
+  "binary_sha256": "d245efbb543fa8131f71aee34fef3a868cb1f3c0cfba8eaafd5b4fd7d4c64588",
+  "source_diff_sha256_after_build": "4db87b81f6adcb127b54f7d4dbb2011986c31cbb6d9d36d842e9eade928c489e",
+  "resumed_after_validation": true,
+  "prior_attempt": "/home/ericbuehler/qwen4exp_work/tuner_exploration_20260930/failed_memory_preflight/orchestration.metadata.json",
+  "prior_attempt_sha256": "5396ba6a6e037338b0b237256d24d23ecba037b08accb79a9e2b1c62af03daa2",
+  "validation_marker_sha256": "cfc647da8eeba0f882ee672bfe88c131d98ddb808fab9fd59dd1d090124cc6fd",
+  "editor_cleanup_record": "/home/ericbuehler/qwen4exp_work/tuner_exploration_20260930/editor_retry_cleanup.json",
+  "editor_cleanup_sha256": "5870a3f95eb1f024452c23f89d9970e5d4e5fd3067a5b28807062f2a963975b0",
+  "scripts_sha256": {
+    "run_server.py": "b6b734836f7791b1835e9f50684fd57e711263d4c8dc60b002c63df4f5d2bfd7",
+    "validate.py": "87db2c4ffecf149d150dc85074e2b81653faa2852ec4f7f37228654c5b7e20d6",
+    "run_measurements.py": "0205a7d7e69eecce0e753b828dbef148811ddef3882d2a4df86eb2c9e2e54a15",
+    "retry_loading.py": "a964624d4a008d1ba812565447209f78b19fa0f74b7e48d1723173a1c0f2d48a"
+  },
+  "compiler_state_before_measurements": {
+    "at": "2026-09-30T04:29:18.601338+00:00",
+    "processes": [
+      {
+        "pid": 40433,
+        "comm": "rust-analyzer",
+        "state": "T"
+      },
+      {
+        "pid": 1793472,
+        "comm": "cargo",
+        "state": "Z"
+      },
+      {
+        "pid": 1794666,
+        "comm": "cargo",
+        "state": "Z"
+      }
+    ]
+  },
+  "phase_at": "2026-09-30T04:46:52.951415+00:00",
+  "model_pid": 1858502,
+  "server_startup_seconds": 904.3996072860027,
+  "startup_configuration_checks": {
+    "all_48_layers_cuda0": true,
+    "ple_q4": true,
+    "kv_bf16": true,
+    "kv_513_blocks": true,
+    "graphs_34": true
+  },
+  "startup_configuration_lines": [
+    "2026-09-30T04:14:13.303505Z  INFO mistralrs_quant::utils::log: Layers 0-47: cuda[0] (121 GB)",
+    "2026-09-30T04:28:10.666014Z  INFO mistralrs_core::vision_models::qwen4_exp::ple: Qwen4-Exp PLE table resident in device memory format=Q4 size_gb=26 elapsed_s=155",
+    "2026-09-30T04:28:37.891742Z  INFO mistralrs_core::paged_attention: PagedAttention KV cache type is BF16",
+    "2026-09-30T04:28:37.891744Z  INFO mistralrs_core::paged_attention: Using PagedAttention with block size 32 and 513 GPU blocks: available context length is 16384 tokens",
+    "2026-09-30T04:29:15.797466Z  INFO mistralrs_core::pipeline::multimodal: Captured 34 CUDA decode graphs through batch bucket 8 in 3.76s"
+  ],
+  "startup_memory_line": [
+    "2026-09-30T04:29:15.798245Z  INFO mistralrs_core::pipeline::cuda_graph: CUDA graphs reserve 0 MiB; 5039 MiB of device memory free after startup."
+  ],
+  "pre_measurement_provenance_sha256": "249b154ce026726af0f14c2fdc3e6248c0cda756579b9067a7ef9bd251dbc662",
+  "finished_at": "2026-09-30T04:46:52.951413+00:00"
+}

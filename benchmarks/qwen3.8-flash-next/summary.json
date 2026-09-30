@@ -1,0 +1,3018 @@
+{
+  "validation": {
+    "complete": true,
+    "tokenizer_sha256": "0997f410c57a1f4e53b09e4be8f4a172d90edd9564368fb0847030937229b9f3",
+    "harness_sha256": "a16b5815b8744def761174e396de92e41ecd499afae712255721c20a33a79705",
+    "shared_settings": {
+      "iterations": 5,
+      "warmup": 2,
+      "max_tokens": 128,
+      "skip_concurrency": false
+    },
+    "matching_prompt_hashes_and_token_counts": true,
+    "finite_validation_logprobs": true
+  },
+  "throughput": {
+    "llama_patched": {
+      "pp512": {
+        "mean_tokens_per_second": 868.3441686978518,
+        "sample_stddev": 10.179137499612935,
+        "samples": [
+          871.945525020091,
+          867.3116095337098,
+          873.3707539422775,
+          877.7053516698844,
+          851.3876033232965
+        ]
+      },
+      "pp2048": {
+        "mean_tokens_per_second": 881.8355369983193,
+        "sample_stddev": 22.467291774431104,
+        "samples": [
+          895.5862848682593,
+          901.4323303293419,
+          896.5277281023124,
+          863.9894461683673,
+          851.6418955233157
+        ]
+      },
+      "pp8192": {
+        "mean_tokens_per_second": 870.5703916757416,
+        "sample_stddev": 9.028819039438464,
+        "samples": [
+          883.1075075367803,
+          857.8470367933005,
+          869.793163250016,
+          872.7765152368229,
+          869.327735561788
+        ]
+      },
+      "tg128_d16": {
+        "mean_tokens_per_second": 25.772043647769447,
+        "sample_stddev": 1.5210407506115393,
+        "samples": [
+          23.05440527402995,
+          26.340070686637137,
+          26.52807932132783,
+          26.510245915413527,
+          26.427417041438783
+        ]
+      },
+      "python": {
+        "mean_tokens_per_second": 26.350066310435096,
+        "sample_stddev": 0.04381725487825133,
+        "samples": [
+          26.313245019679854,
+          26.320684623151894,
+          26.423768470508524,
+          26.34685941393879,
+          26.34577402489642
+        ]
+      },
+      "rust": {
+        "mean_tokens_per_second": 26.291899602296205,
+        "sample_stddev": 0.033438894283031255,
+        "samples": [
+          26.344044338668116,
+          26.303226422174387,
+          26.26244427786082,
+          26.284354574484396,
+          26.265428398293302
+        ]
+      },
+      "prose": {
+        "mean_tokens_per_second": 26.65692211441636,
+        "sample_stddev": 0.042776857566693464,
+        "samples": [
+          26.674974531916096,
+          26.67592610843543,
+          26.692385497449607,
+          26.65771073107656,
+          26.583613703204115
+        ]
+      },
+      "json": {
+        "mean_tokens_per_second": 26.46804825439051,
+        "sample_stddev": 0.06028984777406923,
+        "samples": [
+          26.44138293313973,
+          26.454333510468608,
+          26.557632712057792,
+          26.396518357132457,
+          26.490373759153954
+        ]
+      },
+      "primes": {
+        "mean_tokens_per_second": 26.619803063974427,
+        "sample_stddev": 0.034352528742733646,
+        "samples": [
+          26.64612951204384,
+          26.61488786259698,
+          26.566440877605633,
+          26.65373945868289,
+          26.617817608942797
+        ]
+      },
+      "math": {
+        "mean_tokens_per_second": 26.472501025079563,
+        "sample_stddev": 0.028640804812111887,
+        "samples": [
+          26.479206473438644,
+          26.445652066117184,
+          26.44026963797834,
+          26.505931605051497,
+          26.491445342812153
+        ]
+      },
+      "translation": {
+        "mean_tokens_per_second": 26.508051598314417,
+        "sample_stddev": 0.12946458151182924,
+        "samples": [
+          26.65029202215868,
+          26.607575542949725,
+          26.5267799198692,
+          26.414054301036703,
+          26.34155620555777
+        ]
+      },
+      "quicksort": {
+        "mean_tokens_per_second": 26.3320100782634,
+        "sample_stddev": 0.05542460056482854,
+        "samples": [
+          26.416994865635477,
+          26.315417422148197,
+          26.267421246887633,
+          26.347585061093042,
+          26.31263179555265
+        ]
+      },
+      "concurrency4": {
+        "mean_tokens_per_second": 54.83451233453381,
+        "sample_stddev": 0.5113313045084814,
+        "samples": [
+          55.721123509914044,
+          54.44259947725724,
+          54.74828338439075,
+          54.71775537271673,
+          54.54279992839028
+        ]
+      },
+      "concurrency8": {
+        "mean_tokens_per_second": 66.23644931057783,
+        "sample_stddev": 0.1469698727124036,
+        "samples": [
+          66.46448694617082,
+          66.13278680536648,
+          66.23993486558969,
+          66.2604597694992,
+          66.08457816626296
+        ]
+      }
+    },
+    "gguf": {
+      "pp512": {
+        "mean_tokens_per_second": 1370.236577409464,
+        "sample_stddev": 26.89644262101195,
+        "samples": [
+          1351.2671646385788,
+          1349.5944670156368,
+          1407.898129737936,
+          1389.751323389105,
+          1352.671802266063
+        ]
+      },
+      "pp2048": {
+        "mean_tokens_per_second": 1376.2730589870337,
+        "sample_stddev": 8.680235949781148,
+        "samples": [
+          1378.5708726487885,
+          1376.343662398111,
+          1387.6937478150255,
+          1363.437159470741,
+          1375.3198526025021
+        ]
+      },
+      "pp8192": {
+        "mean_tokens_per_second": 1348.2846203082663,
+        "sample_stddev": 2.3834437666621175,
+        "samples": [
+          1347.8801745755084,
+          1348.776441611662,
+          1350.0321624057194,
+          1350.3319875570994,
+          1344.4023353913421
+        ]
+      },
+      "tg128_d16": {
+        "mean_tokens_per_second": 25.90268294223041,
+        "sample_stddev": 0.1405520715911337,
+        "samples": [
+          25.80697196153987,
+          25.85093121513225,
+          25.75732659051932,
+          26.009213050934342,
+          26.08897189302626
+        ]
+      },
+      "python": {
+        "mean_tokens_per_second": 26.331294932380402,
+        "sample_stddev": 0.023666744570039453,
+        "samples": [
+          26.323468062882096,
+          26.310224623186933,
+          26.359956578091484,
+          26.352787025828125,
+          26.310038371913365
+        ]
+      },
+      "rust": {
+        "mean_tokens_per_second": 26.309536462294528,
+        "sample_stddev": 0.024525788434382505,
+        "samples": [
+          26.334629345507263,
+          26.304548508291756,
+          26.333655494597256,
+          26.277628624886198,
+          26.29722033819016
+        ]
+      },
+      "prose": {
+        "mean_tokens_per_second": 26.45230603697951,
+        "sample_stddev": 0.035662267609692294,
+        "samples": [
+          26.462518190567952,
+          26.432498868394433,
+          26.495321198191615,
+          26.402567036131426,
+          26.46862489161213
+        ]
+      },
+      "json": {
+        "mean_tokens_per_second": 26.19978920582318,
+        "sample_stddev": 0.03384067906831279,
+        "samples": [
+          26.223402099035034,
+          26.194890859332943,
+          26.208438153845787,
+          26.14397659689544,
+          26.228238320006692
+        ]
+      },
+      "primes": {
+        "mean_tokens_per_second": 26.448811640285346,
+        "sample_stddev": 0.014430483537237523,
+        "samples": [
+          26.433204840304974,
+          26.452132296266868,
+          26.434225384704963,
+          26.460742071621688,
+          26.463753608528236
+        ]
+      },
+      "math": {
+        "mean_tokens_per_second": 25.959058018683997,
+        "sample_stddev": 0.1446108036065864,
+        "samples": [
+          26.0115715927224,
+          25.70277573594531,
+          26.056819142785823,
+          26.00788971360426,
+          26.01623390836219
+        ]
+      },
+      "translation": {
+        "mean_tokens_per_second": 26.232125210111757,
+        "sample_stddev": 0.030799362911093586,
+        "samples": [
+          26.25193272139877,
+          26.204673801877195,
+          26.266707096554693,
+          26.24199878587903,
+          26.195313644849097
+        ]
+      },
+      "quicksort": {
+        "mean_tokens_per_second": 26.56085127856725,
+        "sample_stddev": 0.029485537406867456,
+        "samples": [
+          26.568699629268007,
+          26.55525061071781,
+          26.555172947378363,
+          26.60347195358715,
+          26.521661251884908
+        ]
+      },
+      "concurrency4": {
+        "mean_tokens_per_second": 57.90148631581186,
+        "sample_stddev": 0.4481301955590412,
+        "samples": [
+          57.86555453278685,
+          57.80014626582305,
+          57.875637938102265,
+          57.35944817321235,
+          58.60664466913479
+        ]
+      },
+      "concurrency8": {
+        "mean_tokens_per_second": 74.66803621180537,
+        "sample_stddev": 0.2783358908036653,
+        "samples": [
+          74.7212032163893,
+          75.05765830726148,
+          74.49607383838705,
+          74.32166461922168,
+          74.74358107776739
+        ]
+      }
+    },
+    "isq": {
+      "pp512": {
+        "mean_tokens_per_second": 1341.0391945235392,
+        "sample_stddev": 20.045268718662733,
+        "samples": [
+          1335.9975594915084,
+          1330.3400094045612,
+          1353.8852157033448,
+          1367.963547862706,
+          1317.0096401555757
+        ]
+      },
+      "pp2048": {
+        "mean_tokens_per_second": 1333.219353260849,
+        "sample_stddev": 10.64107127063579,
+        "samples": [
+          1342.0639134354785,
+          1331.0822358173139,
+          1345.556065911446,
+          1319.4193280847894,
+          1327.9752230552174
+        ]
+      },
+      "pp8192": {
+        "mean_tokens_per_second": 1313.4710548071682,
+        "sample_stddev": 2.270758824867861,
+        "samples": [
+          1313.318056421097,
+          1315.888807867534,
+          1313.5996915283924,
+          1314.7111331657886,
+          1309.8375850530288
+        ]
+      },
+      "tg128_d16": {
+        "mean_tokens_per_second": 36.03246497614656,
+        "sample_stddev": 0.05189814765117122,
+        "samples": [
+          36.062737355920575,
+          36.05624245374604,
+          35.95891114684984,
+          36.08517925508534,
+          35.999254669130984
+        ]
+      },
+      "python": {
+        "mean_tokens_per_second": 36.02699397466348,
+        "sample_stddev": 0.014310887969557255,
+        "samples": [
+          36.010209406365405,
+          36.02347158263441,
+          36.02121308372303,
+          36.03133817652571,
+          36.04873762406887
+        ]
+      },
+      "rust": {
+        "mean_tokens_per_second": 36.01397892874868,
+        "sample_stddev": 0.016531524562630608,
+        "samples": [
+          36.017129649025556,
+          36.020120993812704,
+          36.03652941798178,
+          35.994184851436636,
+          36.0019297314867
+        ]
+      },
+      "prose": {
+        "mean_tokens_per_second": 36.28156235072645,
+        "sample_stddev": 0.027908142727886477,
+        "samples": [
+          36.27026754500505,
+          36.330679452291065,
+          36.26906046095216,
+          36.275921289021646,
+          36.26188300636233
+        ]
+      },
+      "json": {
+        "mean_tokens_per_second": 35.82683509607211,
+        "sample_stddev": 0.013869310507561268,
+        "samples": [
+          35.83318498117985,
+          35.83426242438458,
+          35.83759393555009,
+          35.80322724431013,
+          35.82590689493589
+        ]
+      },
+      "primes": {
+        "mean_tokens_per_second": 36.18747578499269,
+        "sample_stddev": 0.039060972224770285,
+        "samples": [
+          36.239160140298324,
+          36.16287511132631,
+          36.175206301707846,
+          36.14424758854127,
+          36.21588978308973
+        ]
+      },
+      "math": {
+        "mean_tokens_per_second": 35.46221667706844,
+        "sample_stddev": 0.008559459011853615,
+        "samples": [
+          35.448577126100204,
+          35.46699163994005,
+          35.4677081901901,
+          35.46882125275745,
+          35.4589851763544
+        ]
+      },
+      "translation": {
+        "mean_tokens_per_second": 35.89044575842829,
+        "sample_stddev": 0.017397736504025298,
+        "samples": [
+          35.86265368528766,
+          35.88560691594544,
+          35.905941682687626,
+          35.89527269381474,
+          35.90275381440598
+        ]
+      },
+      "quicksort": {
+        "mean_tokens_per_second": 36.350784976396945,
+        "sample_stddev": 0.01950132223048924,
+        "samples": [
+          36.3639022539844,
+          36.36797762567255,
+          36.36274168530244,
+          36.33259775568366,
+          36.32670556134166
+        ]
+      },
+      "concurrency4": {
+        "mean_tokens_per_second": 69.52892628581847,
+        "sample_stddev": 0.7463635753908459,
+        "samples": [
+          70.23140413125073,
+          68.81822308830122,
+          70.35518088624387,
+          69.44577789041566,
+          68.7940454328809
+        ]
+      },
+      "concurrency8": {
+        "mean_tokens_per_second": 84.48742898098816,
+        "sample_stddev": 0.2192994628153034,
+        "samples": [
+          84.69129027088185,
+          84.25907268632282,
+          84.61967681620514,
+          84.6276764547898,
+          84.23942867674117
+        ]
+      }
+    },
+    "isq_mtp": {
+      "pp512": {
+        "mean_tokens_per_second": 1318.4061769390323,
+        "sample_stddev": 26.625225113138864,
+        "samples": [
+          1308.3346058104,
+          1319.8967296316794,
+          1348.2456996717076,
+          1336.1986861505382,
+          1279.355163430837
+        ]
+      },
+      "pp2048": {
+        "mean_tokens_per_second": 1304.0216446812267,
+        "sample_stddev": 8.60864924549931,
+        "samples": [
+          1314.166199630843,
+          1304.1151114199179,
+          1310.682758150478,
+          1293.7896883984663,
+          1297.3544658064286
+        ]
+      },
+      "pp8192": {
+        "mean_tokens_per_second": 1284.9430703415524,
+        "sample_stddev": 3.2775481375954234,
+        "samples": [
+          1287.0265570836493,
+          1285.7748689765428,
+          1288.7880536273021,
+          1281.9515029533925,
+          1281.1743690668745
+        ]
+      },
+      "tg128_d16": {
+        "mean_tokens_per_second": 47.00607557950779,
+        "sample_stddev": 9.5684564337283,
+        "samples": [
+          36.836377097368604,
+          62.617346160118956,
+          43.590041430670695,
+          44.355288527986126,
+          47.63132468139457
+        ]
+      },
+      "python": {
+        "mean_tokens_per_second": 54.635801038344454,
+        "sample_stddev": 1.0228235695847647,
+        "samples": [
+          54.980028695831194,
+          54.16115749128704,
+          53.31372025963369,
+          54.64159043197236,
+          56.082508312997966
+        ]
+      },
+      "rust": {
+        "mean_tokens_per_second": 57.347916483855656,
+        "sample_stddev": 1.3251850112685184,
+        "samples": [
+          57.7279145317067,
+          55.25389509261984,
+          56.948275056451635,
+          58.63017568764669,
+          58.17932205085341
+        ]
+      },
+      "prose": {
+        "mean_tokens_per_second": 48.258770726939495,
+        "sample_stddev": 1.2346482948680146,
+        "samples": [
+          48.98828661405989,
+          48.277951750000234,
+          46.90530192432466,
+          47.228844400022766,
+          49.89346894628992
+        ]
+      },
+      "json": {
+        "mean_tokens_per_second": 49.1725215109483,
+        "sample_stddev": 1.0847076689217743,
+        "samples": [
+          48.54754147426427,
+          50.40709176857365,
+          48.769295418699365,
+          50.211205196707674,
+          47.927473696496534
+        ]
+      },
+      "primes": {
+        "mean_tokens_per_second": 54.657709353310175,
+        "sample_stddev": 2.4542768417404073,
+        "samples": [
+          56.37175547466151,
+          53.95142309121118,
+          58.001966816742005,
+          52.52055621456609,
+          52.442845169370095
+        ]
+      },
+      "math": {
+        "mean_tokens_per_second": 58.32446767934845,
+        "sample_stddev": 2.1329771895504326,
+        "samples": [
+          59.14232986218098,
+          58.03445403589414,
+          59.617351488178564,
+          54.757385617533345,
+          60.07081739295522
+        ]
+      },
+      "translation": {
+        "mean_tokens_per_second": 54.110720149007115,
+        "sample_stddev": 2.361004924951447,
+        "samples": [
+          55.68464384693961,
+          56.384850923676915,
+          54.92601160942304,
+          50.531976089007294,
+          53.0261182759887
+        ]
+      },
+      "quicksort": {
+        "mean_tokens_per_second": 56.684200045629076,
+        "sample_stddev": 1.9330292670248725,
+        "samples": [
+          57.59131964345111,
+          58.7870069033757,
+          56.07377799726157,
+          57.28032091183853,
+          53.68857477221847
+        ]
+      },
+      "concurrency4": {
+        "mean_tokens_per_second": 89.9807026395083,
+        "sample_stddev": 1.8440039558431254,
+        "samples": [
+          91.25719445879321,
+          87.89852749664078,
+          91.02546716272174,
+          88.05611289252128,
+          91.66621118686449
+        ]
+      },
+      "concurrency8": {
+        "mean_tokens_per_second": 124.69500501699771,
+        "sample_stddev": 1.813507770816615,
+        "samples": [
+          126.81088554469001,
+          124.13609998188274,
+          121.94726081546732,
+          125.05924738334797,
+          125.5215313596005
+        ]
+      }
+    }
+  },
+  "output_comparisons": {
+    "within_variants": {
+      "llama_patched": {
+        "timed_repeats": {
+          "comparisons": 80,
+          "identical_text": 63,
+          "differences": [
+            {
+              "location": "concurrency4/sample3/request0",
+              "common_prefix_characters": 107,
+              "reference_characters": 414,
+              "candidate_characters": 416,
+              "reference_text_sha256": "35235fd66aceedf4625dbfc29e0325728ceeda2950bb01376599e7d1c6db55a4",
+              "candidate_text_sha256": "0210a1afc9882e2755e25b988ad76b2e2487572672bcb10a54f138b40d87e92d"
+            },
+            {
+              "location": "concurrency4/sample3/request3",
+              "common_prefix_characters": 83,
+              "reference_characters": 481,
+              "candidate_characters": 473,
+              "reference_text_sha256": "b6ea9cf3f4dd9bdaa626616b5ac5a838db6ebb89bbe5d67907058f1230eaa2b8",
+              "candidate_text_sha256": "5ad576735117ce5912845126ba570ebd61951a9f6dbd61f1b0569226ab6377c9"
+            },
+            {
+              "location": "concurrency4/sample4/request3",
+              "common_prefix_characters": 83,
+              "reference_characters": 481,
+              "candidate_characters": 467,
+              "reference_text_sha256": "b6ea9cf3f4dd9bdaa626616b5ac5a838db6ebb89bbe5d67907058f1230eaa2b8",
+              "candidate_text_sha256": "dd96d1e1547b08584bf809d68f45e780534d4548a1b51e61533003b5a65f635d"
+            },
+            {
+              "location": "concurrency4/sample5/request3",
+              "common_prefix_characters": 83,
+              "reference_characters": 481,
+              "candidate_characters": 473,
+              "reference_text_sha256": "b6ea9cf3f4dd9bdaa626616b5ac5a838db6ebb89bbe5d67907058f1230eaa2b8",
+              "candidate_text_sha256": "5ad576735117ce5912845126ba570ebd61951a9f6dbd61f1b0569226ab6377c9"
+            },
+            {
+              "location": "concurrency4/sample6/request3",
+              "common_prefix_characters": 391,
+              "reference_characters": 481,
+              "candidate_characters": 475,
+              "reference_text_sha256": "b6ea9cf3f4dd9bdaa626616b5ac5a838db6ebb89bbe5d67907058f1230eaa2b8",
+              "candidate_text_sha256": "ee0bee396f931767473faca3ff4e5a6eef2347eba0f74cf7b4392ebe1ddc28ca"
+            },
+            {
+              "location": "concurrency8/sample3/request0",
+              "common_prefix_characters": 411,
+              "reference_characters": 414,
+              "candidate_characters": 415,
+              "reference_text_sha256": "35235fd66aceedf4625dbfc29e0325728ceeda2950bb01376599e7d1c6db55a4",
+              "candidate_text_sha256": "9fb6fcb021a2f518d4d698dcaafb1158a1996dcb59e0bb0dc6e9694de9641ace"
+            },
+            {
+              "location": "concurrency8/sample3/request3",
+              "common_prefix_characters": 83,
+              "reference_characters": 474,
+              "candidate_characters": 473,
+              "reference_text_sha256": "0282c76802d271878d0aaa421d744c63928cc9a07a68f08a8ce8d993e0799b56",
+              "candidate_text_sha256": "5ad576735117ce5912845126ba570ebd61951a9f6dbd61f1b0569226ab6377c9"
+            },
+            {
+              "location": "concurrency8/sample3/request4",
+              "common_prefix_characters": 63,
+              "reference_characters": 214,
+              "candidate_characters": 227,
+              "reference_text_sha256": "5ce37e9d1e2596ffa37ea9012e430eec0e903be4f13664a5d5d487f6d7d84a07",
+              "candidate_text_sha256": "33b01a807fb405df5017c93aa789b9d475f35150b74bd30027e86e23330a9e51"
+            },
+            {
+              "location": "concurrency8/sample4/request3",
+              "common_prefix_characters": 197,
+              "reference_characters": 474,
+              "candidate_characters": 468,
+              "reference_text_sha256": "0282c76802d271878d0aaa421d744c63928cc9a07a68f08a8ce8d993e0799b56",
+              "candidate_text_sha256": "7e231c240bfb1d4230398b9390cfce3bd8dbcb450734ed3af54ba255807f98b3"
+            },
+            {
+              "location": "concurrency8/sample4/request6",
+              "common_prefix_characters": 430,
+              "reference_characters": 519,
+              "candidate_characters": 519,
+              "reference_text_sha256": "bb5b048787fd2d8c76e6553f8d5b87adcd825e2dc062ce3d1631bf905f7344f5",
+              "candidate_text_sha256": "f9397b336f1d2d21826a9cdc94fbdd96cc7c5979e3b71de2d26dc9b604703f30"
+            },
+            {
+              "location": "concurrency8/sample5/request0",
+              "common_prefix_characters": 411,
+              "reference_characters": 414,
+              "candidate_characters": 415,
+              "reference_text_sha256": "35235fd66aceedf4625dbfc29e0325728ceeda2950bb01376599e7d1c6db55a4",
+              "candidate_text_sha256": "9fb6fcb021a2f518d4d698dcaafb1158a1996dcb59e0bb0dc6e9694de9641ace"
+            },
+            {
+              "location": "concurrency8/sample5/request2",
+              "common_prefix_characters": 159,
+              "reference_characters": 637,
+              "candidate_characters": 664,
+              "reference_text_sha256": "a0c3421f2cd4da7a0b795c9aa85792652f70a5fa0b8a1dc8522d2c07a1e4bc3b",
+              "candidate_text_sha256": "3ae119587d069df48fc1c6c8010879163cc2f30362bf8fdd747ec950afe14366"
+            },
+            {
+              "location": "concurrency8/sample5/request3",
+              "common_prefix_characters": 83,
+              "reference_characters": 474,
+              "candidate_characters": 467,
+              "reference_text_sha256": "0282c76802d271878d0aaa421d744c63928cc9a07a68f08a8ce8d993e0799b56",
+              "candidate_text_sha256": "dd96d1e1547b08584bf809d68f45e780534d4548a1b51e61533003b5a65f635d"
+            },
+            {
+              "location": "concurrency8/sample5/request6",
+              "common_prefix_characters": 430,
+              "reference_characters": 519,
+              "candidate_characters": 528,
+              "reference_text_sha256": "bb5b048787fd2d8c76e6553f8d5b87adcd825e2dc062ce3d1631bf905f7344f5",
+              "candidate_text_sha256": "e5b07f3ac328d3bb713b1788b6de649b222df0d27c9a4d3aaf63dce4f107eb6a"
+            },
+            {
+              "location": "concurrency8/sample6/request3",
+              "common_prefix_characters": 240,
+              "reference_characters": 474,
+              "candidate_characters": 483,
+              "reference_text_sha256": "0282c76802d271878d0aaa421d744c63928cc9a07a68f08a8ce8d993e0799b56",
+              "candidate_text_sha256": "bb7750ba08e1e4666cb913a1d1ab7c3935d12cc720901515d2606b7d2ed27488"
+            },
+            {
+              "location": "concurrency8/sample6/request4",
+              "common_prefix_characters": 187,
+              "reference_characters": 214,
+              "candidate_characters": 219,
+              "reference_text_sha256": "5ce37e9d1e2596ffa37ea9012e430eec0e903be4f13664a5d5d487f6d7d84a07",
+              "candidate_text_sha256": "bb9886407d334210c0e2f584a239244a7fb7bb6bfb3acfed5078f06569abba6d"
+            },
+            {
+              "location": "concurrency8/sample6/request6",
+              "common_prefix_characters": 426,
+              "reference_characters": 519,
+              "candidate_characters": 516,
+              "reference_text_sha256": "bb5b048787fd2d8c76e6553f8d5b87adcd825e2dc062ce3d1631bf905f7344f5",
+              "candidate_text_sha256": "70e326e95a438db9a976608a3e1e605434ae058a002fffb918d1496bc506a1ec"
+            }
+          ]
+        },
+        "validation_vs_timed": {
+          "comparisons": 40,
+          "identical_text": 40,
+          "differences": []
+        }
+      },
+      "gguf": {
+        "timed_repeats": {
+          "comparisons": 80,
+          "identical_text": 60,
+          "differences": [
+            {
+              "location": "python/sample6/request0",
+              "common_prefix_characters": 105,
+              "reference_characters": 412,
+              "candidate_characters": 414,
+              "reference_text_sha256": "d2d297d75d388c7b1342ab178a624395f20aedf90bd36b947b71eaf0ae07a524",
+              "candidate_text_sha256": "8e38cb4c814fecf5d09b7dd3935371b9dd95d45b045a5dfe0e9afe9f2ed405af"
+            },
+            {
+              "location": "json/sample3/request0",
+              "common_prefix_characters": 81,
+              "reference_characters": 465,
+              "candidate_characters": 473,
+              "reference_text_sha256": "0619734a6df03ea39f9fe515b1f584268bf3f1807b8ce20ddf005bc5eb772d36",
+              "candidate_text_sha256": "40d559170f31c91768080d6037325119e5bded1b3a9df7f50ed7b7af30315ebf"
+            },
+            {
+              "location": "json/sample4/request0",
+              "common_prefix_characters": 193,
+              "reference_characters": 465,
+              "candidate_characters": 479,
+              "reference_text_sha256": "0619734a6df03ea39f9fe515b1f584268bf3f1807b8ce20ddf005bc5eb772d36",
+              "candidate_text_sha256": "94f8d3517d5ea44881d565d0ce82cada612007c7c5343f4500eba8f58adfa656"
+            },
+            {
+              "location": "json/sample5/request0",
+              "common_prefix_characters": 81,
+              "reference_characters": 465,
+              "candidate_characters": 466,
+              "reference_text_sha256": "0619734a6df03ea39f9fe515b1f584268bf3f1807b8ce20ddf005bc5eb772d36",
+              "candidate_text_sha256": "a3fd3dcb4ed79cbec2b485616d311305b703aad8f0afc208816537e9867fb027"
+            },
+            {
+              "location": "primes/sample4/request0",
+              "common_prefix_characters": 8,
+              "reference_characters": 217,
+              "candidate_characters": 682,
+              "reference_text_sha256": "e2c234367740c23d339995e16501733e0e990b17421023d6778a4294f0217884",
+              "candidate_text_sha256": "ae90958328f043635a2ea2c744c1e9d2f3651883bfa5a7ef27e81443ed5469a2"
+            },
+            {
+              "location": "primes/sample5/request0",
+              "common_prefix_characters": 61,
+              "reference_characters": 217,
+              "candidate_characters": 222,
+              "reference_text_sha256": "e2c234367740c23d339995e16501733e0e990b17421023d6778a4294f0217884",
+              "candidate_text_sha256": "bec869ef015417f28ac93d1c3a2ec40e413aa576d31577d74086792aeb606ad7"
+            },
+            {
+              "location": "primes/sample6/request0",
+              "common_prefix_characters": 185,
+              "reference_characters": 217,
+              "candidate_characters": 212,
+              "reference_text_sha256": "e2c234367740c23d339995e16501733e0e990b17421023d6778a4294f0217884",
+              "candidate_text_sha256": "ff95087f3847dde1be6afc69fe94b1c93eaf400d6fea90f6c2fbd159c7e454a1"
+            },
+            {
+              "location": "translation/sample3/request0",
+              "common_prefix_characters": 328,
+              "reference_characters": 512,
+              "candidate_characters": 521,
+              "reference_text_sha256": "931d8b75503dd1d82083f0da7d16183cbdb31b2b0a01765275f4792742f6737b",
+              "candidate_text_sha256": "f37af88a8c20ea68462eeac02cecd4b229149b52e7d7a5ab965e3cfb7bb79ff9"
+            },
+            {
+              "location": "translation/sample5/request0",
+              "common_prefix_characters": 328,
+              "reference_characters": 512,
+              "candidate_characters": 523,
+              "reference_text_sha256": "931d8b75503dd1d82083f0da7d16183cbdb31b2b0a01765275f4792742f6737b",
+              "candidate_text_sha256": "e07e5eb4a8b85aaae7d43f7e5644519f9f07ecacd43f5ce8bb057636b71cdf57"
+            },
+            {
+              "location": "translation/sample6/request0",
+              "common_prefix_characters": 422,
+              "reference_characters": 512,
+              "candidate_characters": 511,
+              "reference_text_sha256": "931d8b75503dd1d82083f0da7d16183cbdb31b2b0a01765275f4792742f6737b",
+              "candidate_text_sha256": "8603df5b041232ef65e342481f3d95d750aa2ade703f083126f0fe0fddec77da"
+            },
+            {
+              "location": "concurrency4/sample3/request0",
+              "common_prefix_characters": 105,
+              "reference_characters": 414,
+              "candidate_characters": 412,
+              "reference_text_sha256": "8e38cb4c814fecf5d09b7dd3935371b9dd95d45b045a5dfe0e9afe9f2ed405af",
+              "candidate_text_sha256": "d2d297d75d388c7b1342ab178a624395f20aedf90bd36b947b71eaf0ae07a524"
+            },
+            {
+              "location": "concurrency4/sample4/request3",
+              "common_prefix_characters": 81,
+              "reference_characters": 465,
+              "candidate_characters": 473,
+              "reference_text_sha256": "0619734a6df03ea39f9fe515b1f584268bf3f1807b8ce20ddf005bc5eb772d36",
+              "candidate_text_sha256": "f9235ee60335fe2f8e55e4a501e197dff7e3bf33bd244e33bd5291fc535a82b8"
+            },
+            {
+              "location": "concurrency4/sample5/request2",
+              "common_prefix_characters": 307,
+              "reference_characters": 635,
+              "candidate_characters": 635,
+              "reference_text_sha256": "8b8d82963f5e047a62b98b040c0127e1d7bac7c6d6fe00a3ea9e268ad61b5c73",
+              "candidate_text_sha256": "8c712da5cb57192fe428db83455e63eb47a0a44100ecc43f61cf58437493bb2b"
+            },
+            {
+              "location": "concurrency4/sample5/request3",
+              "common_prefix_characters": 81,
+              "reference_characters": 465,
+              "candidate_characters": 470,
+              "reference_text_sha256": "0619734a6df03ea39f9fe515b1f584268bf3f1807b8ce20ddf005bc5eb772d36",
+              "candidate_text_sha256": "38084b818bcc209dce3e92bd864cc0c9312f8f1f27f9ad076bdd5863d96b4f36"
+            },
+            {
+              "location": "concurrency4/sample6/request3",
+              "common_prefix_characters": 81,
+              "reference_characters": 465,
+              "candidate_characters": 467,
+              "reference_text_sha256": "0619734a6df03ea39f9fe515b1f584268bf3f1807b8ce20ddf005bc5eb772d36",
+              "candidate_text_sha256": "8bc565dc65f36f64fa4c05b5d302cef56d9c602b2671299df2dba022e6d252a5"
+            },
+            {
+              "location": "concurrency8/sample3/request3",
+              "common_prefix_characters": 245,
+              "reference_characters": 470,
+              "candidate_characters": 473,
+              "reference_text_sha256": "38084b818bcc209dce3e92bd864cc0c9312f8f1f27f9ad076bdd5863d96b4f36",
+              "candidate_text_sha256": "f9235ee60335fe2f8e55e4a501e197dff7e3bf33bd244e33bd5291fc535a82b8"
+            },
+            {
+              "location": "concurrency8/sample4/request3",
+              "common_prefix_characters": 195,
+              "reference_characters": 470,
+              "candidate_characters": 467,
+              "reference_text_sha256": "38084b818bcc209dce3e92bd864cc0c9312f8f1f27f9ad076bdd5863d96b4f36",
+              "candidate_text_sha256": "8bc565dc65f36f64fa4c05b5d302cef56d9c602b2671299df2dba022e6d252a5"
+            },
+            {
+              "location": "concurrency8/sample4/request6",
+              "common_prefix_characters": 328,
+              "reference_characters": 512,
+              "candidate_characters": 523,
+              "reference_text_sha256": "931d8b75503dd1d82083f0da7d16183cbdb31b2b0a01765275f4792742f6737b",
+              "candidate_text_sha256": "e07e5eb4a8b85aaae7d43f7e5644519f9f07ecacd43f5ce8bb057636b71cdf57"
+            },
+            {
+              "location": "concurrency8/sample5/request3",
+              "common_prefix_characters": 81,
+              "reference_characters": 470,
+              "candidate_characters": 479,
+              "reference_text_sha256": "38084b818bcc209dce3e92bd864cc0c9312f8f1f27f9ad076bdd5863d96b4f36",
+              "candidate_text_sha256": "94f8d3517d5ea44881d565d0ce82cada612007c7c5343f4500eba8f58adfa656"
+            },
+            {
+              "location": "concurrency8/sample6/request3",
+              "common_prefix_characters": 447,
+              "reference_characters": 470,
+              "candidate_characters": 472,
+              "reference_text_sha256": "38084b818bcc209dce3e92bd864cc0c9312f8f1f27f9ad076bdd5863d96b4f36",
+              "candidate_text_sha256": "eda025227e33dbdc43a425c1e1b1f417cec09e39f6fd3d02b29e30beff9fbdc5"
+            }
+          ]
+        },
+        "validation_vs_timed": {
+          "comparisons": 40,
+          "identical_text": 21,
+          "differences": [
+            {
+              "location": "python/sample2/request0",
+              "common_prefix_characters": 409,
+              "reference_characters": 412,
+              "candidate_characters": 413,
+              "reference_text_sha256": "d2d297d75d388c7b1342ab178a624395f20aedf90bd36b947b71eaf0ae07a524",
+              "candidate_text_sha256": "caf1598ca3464b80087a723f532fb220d41f72775bf64387a341b56bc8771da5"
+            },
+            {
+              "location": "python/sample3/request0",
+              "common_prefix_characters": 409,
+              "reference_characters": 412,
+              "candidate_characters": 413,
+              "reference_text_sha256": "d2d297d75d388c7b1342ab178a624395f20aedf90bd36b947b71eaf0ae07a524",
+              "candidate_text_sha256": "caf1598ca3464b80087a723f532fb220d41f72775bf64387a341b56bc8771da5"
+            },
+            {
+              "location": "python/sample4/request0",
+              "common_prefix_characters": 409,
+              "reference_characters": 412,
+              "candidate_characters": 413,
+              "reference_text_sha256": "d2d297d75d388c7b1342ab178a624395f20aedf90bd36b947b71eaf0ae07a524",
+              "candidate_text_sha256": "caf1598ca3464b80087a723f532fb220d41f72775bf64387a341b56bc8771da5"
+            },
+            {
+              "location": "python/sample5/request0",
+              "common_prefix_characters": 409,
+              "reference_characters": 412,
+              "candidate_characters": 413,
+              "reference_text_sha256": "d2d297d75d388c7b1342ab178a624395f20aedf90bd36b947b71eaf0ae07a524",
+              "candidate_text_sha256": "caf1598ca3464b80087a723f532fb220d41f72775bf64387a341b56bc8771da5"
+            },
+            {
+              "location": "python/sample6/request0",
+              "common_prefix_characters": 105,
+              "reference_characters": 414,
+              "candidate_characters": 413,
+              "reference_text_sha256": "8e38cb4c814fecf5d09b7dd3935371b9dd95d45b045a5dfe0e9afe9f2ed405af",
+              "candidate_text_sha256": "caf1598ca3464b80087a723f532fb220d41f72775bf64387a341b56bc8771da5"
+            },
+            {
+              "location": "json/sample2/request0",
+              "common_prefix_characters": 81,
+              "reference_characters": 465,
+              "candidate_characters": 472,
+              "reference_text_sha256": "0619734a6df03ea39f9fe515b1f584268bf3f1807b8ce20ddf005bc5eb772d36",
+              "candidate_text_sha256": "eda025227e33dbdc43a425c1e1b1f417cec09e39f6fd3d02b29e30beff9fbdc5"
+            },
+            {
+              "location": "json/sample3/request0",
+              "common_prefix_characters": 195,
+              "reference_characters": 473,
+              "candidate_characters": 472,
+              "reference_text_sha256": "40d559170f31c91768080d6037325119e5bded1b3a9df7f50ed7b7af30315ebf",
+              "candidate_text_sha256": "eda025227e33dbdc43a425c1e1b1f417cec09e39f6fd3d02b29e30beff9fbdc5"
+            },
+            {
+              "location": "json/sample4/request0",
+              "common_prefix_characters": 81,
+              "reference_characters": 479,
+              "candidate_characters": 472,
+              "reference_text_sha256": "94f8d3517d5ea44881d565d0ce82cada612007c7c5343f4500eba8f58adfa656",
+              "candidate_text_sha256": "eda025227e33dbdc43a425c1e1b1f417cec09e39f6fd3d02b29e30beff9fbdc5"
+            },
+            {
+              "location": "json/sample5/request0",
+              "common_prefix_characters": 195,
+              "reference_characters": 466,
+              "candidate_characters": 472,
+              "reference_text_sha256": "a3fd3dcb4ed79cbec2b485616d311305b703aad8f0afc208816537e9867fb027",
+              "candidate_text_sha256": "eda025227e33dbdc43a425c1e1b1f417cec09e39f6fd3d02b29e30beff9fbdc5"
+            },
+            {
+              "location": "json/sample6/request0",
+              "common_prefix_characters": 81,
+              "reference_characters": 465,
+              "candidate_characters": 472,
+              "reference_text_sha256": "0619734a6df03ea39f9fe515b1f584268bf3f1807b8ce20ddf005bc5eb772d36",
+              "candidate_text_sha256": "eda025227e33dbdc43a425c1e1b1f417cec09e39f6fd3d02b29e30beff9fbdc5"
+            },
+            {
+              "location": "primes/sample2/request0",
+              "common_prefix_characters": 185,
+              "reference_characters": 217,
+              "candidate_characters": 212,
+              "reference_text_sha256": "e2c234367740c23d339995e16501733e0e990b17421023d6778a4294f0217884",
+              "candidate_text_sha256": "ff95087f3847dde1be6afc69fe94b1c93eaf400d6fea90f6c2fbd159c7e454a1"
+            },
+            {
+              "location": "primes/sample3/request0",
+              "common_prefix_characters": 185,
+              "reference_characters": 217,
+              "candidate_characters": 212,
+              "reference_text_sha256": "e2c234367740c23d339995e16501733e0e990b17421023d6778a4294f0217884",
+              "candidate_text_sha256": "ff95087f3847dde1be6afc69fe94b1c93eaf400d6fea90f6c2fbd159c7e454a1"
+            },
+            {
+              "location": "primes/sample4/request0",
+              "common_prefix_characters": 8,
+              "reference_characters": 682,
+              "candidate_characters": 212,
+              "reference_text_sha256": "ae90958328f043635a2ea2c744c1e9d2f3651883bfa5a7ef27e81443ed5469a2",
+              "candidate_text_sha256": "ff95087f3847dde1be6afc69fe94b1c93eaf400d6fea90f6c2fbd159c7e454a1"
+            },
+            {
+              "location": "primes/sample5/request0",
+              "common_prefix_characters": 61,
+              "reference_characters": 222,
+              "candidate_characters": 212,
+              "reference_text_sha256": "bec869ef015417f28ac93d1c3a2ec40e413aa576d31577d74086792aeb606ad7",
+              "candidate_text_sha256": "ff95087f3847dde1be6afc69fe94b1c93eaf400d6fea90f6c2fbd159c7e454a1"
+            },
+            {
+              "location": "translation/sample2/request0",
+              "common_prefix_characters": 422,
+              "reference_characters": 512,
+              "candidate_characters": 519,
+              "reference_text_sha256": "931d8b75503dd1d82083f0da7d16183cbdb31b2b0a01765275f4792742f6737b",
+              "candidate_text_sha256": "6c0d912ba78a6011ebf627c0912b3cc8e1d3adede1d34ce55e3cc3852cf3de61"
+            },
+            {
+              "location": "translation/sample3/request0",
+              "common_prefix_characters": 328,
+              "reference_characters": 521,
+              "candidate_characters": 519,
+              "reference_text_sha256": "f37af88a8c20ea68462eeac02cecd4b229149b52e7d7a5ab965e3cfb7bb79ff9",
+              "candidate_text_sha256": "6c0d912ba78a6011ebf627c0912b3cc8e1d3adede1d34ce55e3cc3852cf3de61"
+            },
+            {
+              "location": "translation/sample4/request0",
+              "common_prefix_characters": 422,
+              "reference_characters": 512,
+              "candidate_characters": 519,
+              "reference_text_sha256": "931d8b75503dd1d82083f0da7d16183cbdb31b2b0a01765275f4792742f6737b",
+              "candidate_text_sha256": "6c0d912ba78a6011ebf627c0912b3cc8e1d3adede1d34ce55e3cc3852cf3de61"
+            },
+            {
+              "location": "translation/sample5/request0",
+              "common_prefix_characters": 328,
+              "reference_characters": 523,
+              "candidate_characters": 519,
+              "reference_text_sha256": "e07e5eb4a8b85aaae7d43f7e5644519f9f07ecacd43f5ce8bb057636b71cdf57",
+              "candidate_text_sha256": "6c0d912ba78a6011ebf627c0912b3cc8e1d3adede1d34ce55e3cc3852cf3de61"
+            },
+            {
+              "location": "translation/sample6/request0",
+              "common_prefix_characters": 440,
+              "reference_characters": 511,
+              "candidate_characters": 519,
+              "reference_text_sha256": "8603df5b041232ef65e342481f3d95d750aa2ade703f083126f0fe0fddec77da",
+              "candidate_text_sha256": "6c0d912ba78a6011ebf627c0912b3cc8e1d3adede1d34ce55e3cc3852cf3de61"
+            }
+          ]
+        }
+      },
+      "isq": {
+        "timed_repeats": {
+          "comparisons": 80,
+          "identical_text": 23,
+          "differences": [
+            {
+              "location": "python/sample3/request0",
+              "common_prefix_characters": 105,
+              "reference_characters": 414,
+              "candidate_characters": 412,
+              "reference_text_sha256": "8e38cb4c814fecf5d09b7dd3935371b9dd95d45b045a5dfe0e9afe9f2ed405af",
+              "candidate_text_sha256": "d2d297d75d388c7b1342ab178a624395f20aedf90bd36b947b71eaf0ae07a524"
+            },
+            {
+              "location": "prose/sample4/request0",
+              "common_prefix_characters": 333,
+              "reference_characters": 659,
+              "candidate_characters": 660,
+              "reference_text_sha256": "6827b4395ec5c180bee4d095ec426ce4f77db2ee73ad6153d1e3862bc6620f73",
+              "candidate_text_sha256": "81962ff28bf605f50865b5eae490d393f9e7a430f71ce51876a352730902c194"
+            },
+            {
+              "location": "prose/sample6/request0",
+              "common_prefix_characters": 243,
+              "reference_characters": 659,
+              "candidate_characters": 660,
+              "reference_text_sha256": "6827b4395ec5c180bee4d095ec426ce4f77db2ee73ad6153d1e3862bc6620f73",
+              "candidate_text_sha256": "cdb393a617bc35a4b4bcaf04bb410d95b32da5f7181d42b3b1c48799cbc1e33f"
+            },
+            {
+              "location": "json/sample3/request0",
+              "common_prefix_characters": 261,
+              "reference_characters": 509,
+              "candidate_characters": 500,
+              "reference_text_sha256": "e48cf96ae8e2e077a1cf1a8e8b1fafae12b235d43fd1c0b52fdbe787b50ca604",
+              "candidate_text_sha256": "203244082f70f80f17c61f3266d284f449bfc578263cf1279374ad8f8c45532c"
+            },
+            {
+              "location": "json/sample4/request0",
+              "common_prefix_characters": 365,
+              "reference_characters": 509,
+              "candidate_characters": 497,
+              "reference_text_sha256": "e48cf96ae8e2e077a1cf1a8e8b1fafae12b235d43fd1c0b52fdbe787b50ca604",
+              "candidate_text_sha256": "96dbbd699c935d8f11106d21fda2810b62a2d4aa43072610fdeddfd4be91b650"
+            },
+            {
+              "location": "json/sample5/request0",
+              "common_prefix_characters": 365,
+              "reference_characters": 509,
+              "candidate_characters": 497,
+              "reference_text_sha256": "e48cf96ae8e2e077a1cf1a8e8b1fafae12b235d43fd1c0b52fdbe787b50ca604",
+              "candidate_text_sha256": "96dbbd699c935d8f11106d21fda2810b62a2d4aa43072610fdeddfd4be91b650"
+            },
+            {
+              "location": "json/sample6/request0",
+              "common_prefix_characters": 365,
+              "reference_characters": 509,
+              "candidate_characters": 490,
+              "reference_text_sha256": "e48cf96ae8e2e077a1cf1a8e8b1fafae12b235d43fd1c0b52fdbe787b50ca604",
+              "candidate_text_sha256": "15358e6ea630d161ed8c67f0fa45f48295f1c3a70a805b932f195008f54220ad"
+            },
+            {
+              "location": "primes/sample3/request0",
+              "common_prefix_characters": 116,
+              "reference_characters": 238,
+              "candidate_characters": 210,
+              "reference_text_sha256": "533a3e28db7d9b55a67ebaf59a4bd88cfc644dc63e1e0ec434323b7d32191157",
+              "candidate_text_sha256": "f90c0b29ed008e8acd3b8d4080f8452244b54d154aae70c343cd2a4fbc5dc070"
+            },
+            {
+              "location": "primes/sample4/request0",
+              "common_prefix_characters": 116,
+              "reference_characters": 238,
+              "candidate_characters": 210,
+              "reference_text_sha256": "533a3e28db7d9b55a67ebaf59a4bd88cfc644dc63e1e0ec434323b7d32191157",
+              "candidate_text_sha256": "f90c0b29ed008e8acd3b8d4080f8452244b54d154aae70c343cd2a4fbc5dc070"
+            },
+            {
+              "location": "primes/sample5/request0",
+              "common_prefix_characters": 33,
+              "reference_characters": 238,
+              "candidate_characters": 204,
+              "reference_text_sha256": "533a3e28db7d9b55a67ebaf59a4bd88cfc644dc63e1e0ec434323b7d32191157",
+              "candidate_text_sha256": "b8aae973a52496df91c0543b5eb8c821a597c7799da765bc8da37b87b11485c5"
+            },
+            {
+              "location": "primes/sample6/request0",
+              "common_prefix_characters": 183,
+              "reference_characters": 238,
+              "candidate_characters": 231,
+              "reference_text_sha256": "533a3e28db7d9b55a67ebaf59a4bd88cfc644dc63e1e0ec434323b7d32191157",
+              "candidate_text_sha256": "c1b64d2551c79b00f1a820199e7ebe356ca87c2bcc85ca19396e0621230a1dbb"
+            },
+            {
+              "location": "math/sample4/request0",
+              "common_prefix_characters": 301,
+              "reference_characters": 381,
+              "candidate_characters": 404,
+              "reference_text_sha256": "ed7ad98095f368bf37d3a00d30bad778a4febf7f806bd905bf4715381d88a445",
+              "candidate_text_sha256": "648ce818f8354da7fcdda90cb502b6976fd2c9d7a0ea98703eecc980cd51e97d"
+            },
+            {
+              "location": "translation/sample3/request0",
+              "common_prefix_characters": 384,
+              "reference_characters": 558,
+              "candidate_characters": 551,
+              "reference_text_sha256": "aa50a24196ea7b52d7032d52534808b2b697fa039c92ac76a3543aaecb39bb7a",
+              "candidate_text_sha256": "fd0d52721d4846e210b4ae42ae797a803993737b53e61779965784330a1c1ed0"
+            },
+            {
+              "location": "translation/sample4/request0",
+              "common_prefix_characters": 384,
+              "reference_characters": 558,
+              "candidate_characters": 551,
+              "reference_text_sha256": "aa50a24196ea7b52d7032d52534808b2b697fa039c92ac76a3543aaecb39bb7a",
+              "candidate_text_sha256": "fd0d52721d4846e210b4ae42ae797a803993737b53e61779965784330a1c1ed0"
+            },
+            {
+              "location": "translation/sample5/request0",
+              "common_prefix_characters": 207,
+              "reference_characters": 558,
+              "candidate_characters": 506,
+              "reference_text_sha256": "aa50a24196ea7b52d7032d52534808b2b697fa039c92ac76a3543aaecb39bb7a",
+              "candidate_text_sha256": "1c3a1a3b2a9f749b430beaadc3c734d9dd1a9dd4035793d735d116aa7e752c28"
+            },
+            {
+              "location": "translation/sample6/request0",
+              "common_prefix_characters": 207,
+              "reference_characters": 558,
+              "candidate_characters": 506,
+              "reference_text_sha256": "aa50a24196ea7b52d7032d52534808b2b697fa039c92ac76a3543aaecb39bb7a",
+              "candidate_text_sha256": "95ec609d27ac54df7482f22a4cc43734684360d95217013104958f40f5c3a702"
+            },
+            {
+              "location": "quicksort/sample3/request0",
+              "common_prefix_characters": 266,
+              "reference_characters": 347,
+              "candidate_characters": 333,
+              "reference_text_sha256": "63150e0da911421bec79d1389646e15a7fa02ee1709ab973aa07d638c8cb4d3e",
+              "candidate_text_sha256": "bc76c79f6ed827496d10434427fd037690bab52721a0505a37a25813635457fa"
+            },
+            {
+              "location": "quicksort/sample4/request0",
+              "common_prefix_characters": 266,
+              "reference_characters": 347,
+              "candidate_characters": 333,
+              "reference_text_sha256": "63150e0da911421bec79d1389646e15a7fa02ee1709ab973aa07d638c8cb4d3e",
+              "candidate_text_sha256": "bc76c79f6ed827496d10434427fd037690bab52721a0505a37a25813635457fa"
+            },
+            {
+              "location": "quicksort/sample5/request0",
+              "common_prefix_characters": 266,
+              "reference_characters": 347,
+              "candidate_characters": 333,
+              "reference_text_sha256": "63150e0da911421bec79d1389646e15a7fa02ee1709ab973aa07d638c8cb4d3e",
+              "candidate_text_sha256": "bc76c79f6ed827496d10434427fd037690bab52721a0505a37a25813635457fa"
+            },
+            {
+              "location": "quicksort/sample6/request0",
+              "common_prefix_characters": 266,
+              "reference_characters": 347,
+              "candidate_characters": 360,
+              "reference_text_sha256": "63150e0da911421bec79d1389646e15a7fa02ee1709ab973aa07d638c8cb4d3e",
+              "candidate_text_sha256": "b517883d3166dcd8bca919ea700f0fb421aa27dfbb971847713efc2115853df6"
+            },
+            {
+              "location": "concurrency4/sample3/request0",
+              "common_prefix_characters": 281,
+              "reference_characters": 403,
+              "candidate_characters": 412,
+              "reference_text_sha256": "22a562b8921b3ddcbf193781a748d1db2b439a927ce7c5884e4865fab7418e20",
+              "candidate_text_sha256": "d2d297d75d388c7b1342ab178a624395f20aedf90bd36b947b71eaf0ae07a524"
+            },
+            {
+              "location": "concurrency4/sample3/request2",
+              "common_prefix_characters": 252,
+              "reference_characters": 668,
+              "candidate_characters": 659,
+              "reference_text_sha256": "193805b6853a59cbc965ca33ed2b6d00e135b17a6ba599e775f51f84a1ed6313",
+              "candidate_text_sha256": "4e315a867e89c258a77fba3cbfd5d29f33a298b476451177206fd5f2c0b1d4ef"
+            },
+            {
+              "location": "concurrency4/sample3/request3",
+              "common_prefix_characters": 261,
+              "reference_characters": 470,
+              "candidate_characters": 495,
+              "reference_text_sha256": "cfe7cd81a7dc90b4d56064981c8f865b6e13957c0c752d7e354497d6a259a1b9",
+              "candidate_text_sha256": "d96b711d1eb86308344af1df4fce717e70857b4202a84b03f6b74a3c89c9bab1"
+            },
+            {
+              "location": "concurrency4/sample4/request0",
+              "common_prefix_characters": 281,
+              "reference_characters": 403,
+              "candidate_characters": 412,
+              "reference_text_sha256": "22a562b8921b3ddcbf193781a748d1db2b439a927ce7c5884e4865fab7418e20",
+              "candidate_text_sha256": "d2d297d75d388c7b1342ab178a624395f20aedf90bd36b947b71eaf0ae07a524"
+            },
+            {
+              "location": "concurrency4/sample4/request2",
+              "common_prefix_characters": 252,
+              "reference_characters": 668,
+              "candidate_characters": 659,
+              "reference_text_sha256": "193805b6853a59cbc965ca33ed2b6d00e135b17a6ba599e775f51f84a1ed6313",
+              "candidate_text_sha256": "4e315a867e89c258a77fba3cbfd5d29f33a298b476451177206fd5f2c0b1d4ef"
+            },
+            {
+              "location": "concurrency4/sample5/request0",
+              "common_prefix_characters": 281,
+              "reference_characters": 403,
+              "candidate_characters": 412,
+              "reference_text_sha256": "22a562b8921b3ddcbf193781a748d1db2b439a927ce7c5884e4865fab7418e20",
+              "candidate_text_sha256": "d2d297d75d388c7b1342ab178a624395f20aedf90bd36b947b71eaf0ae07a524"
+            },
+            {
+              "location": "concurrency4/sample5/request2",
+              "common_prefix_characters": 17,
+              "reference_characters": 668,
+              "candidate_characters": 660,
+              "reference_text_sha256": "193805b6853a59cbc965ca33ed2b6d00e135b17a6ba599e775f51f84a1ed6313",
+              "candidate_text_sha256": "cdb393a617bc35a4b4bcaf04bb410d95b32da5f7181d42b3b1c48799cbc1e33f"
+            },
+            {
+              "location": "concurrency4/sample5/request3",
+              "common_prefix_characters": 234,
+              "reference_characters": 470,
+              "candidate_characters": 458,
+              "reference_text_sha256": "cfe7cd81a7dc90b4d56064981c8f865b6e13957c0c752d7e354497d6a259a1b9",
+              "candidate_text_sha256": "56032528e3679a1eb61e19d5651fe20b18e9bea322400ef89de0155ada193f4c"
+            },
+            {
+              "location": "concurrency4/sample6/request0",
+              "common_prefix_characters": 105,
+              "reference_characters": 403,
+              "candidate_characters": 418,
+              "reference_text_sha256": "22a562b8921b3ddcbf193781a748d1db2b439a927ce7c5884e4865fab7418e20",
+              "candidate_text_sha256": "9694090937d4fd05c99b7baa3006359c63f4f58aaa1cd7555569cc6c0a871b2d"
+            },
+            {
+              "location": "concurrency4/sample6/request2",
+              "common_prefix_characters": 252,
+              "reference_characters": 668,
+              "candidate_characters": 659,
+              "reference_text_sha256": "193805b6853a59cbc965ca33ed2b6d00e135b17a6ba599e775f51f84a1ed6313",
+              "candidate_text_sha256": "4e315a867e89c258a77fba3cbfd5d29f33a298b476451177206fd5f2c0b1d4ef"
+            },
+            {
+              "location": "concurrency4/sample6/request3",
+              "common_prefix_characters": 234,
+              "reference_characters": 470,
+              "candidate_characters": 473,
+              "reference_text_sha256": "cfe7cd81a7dc90b4d56064981c8f865b6e13957c0c752d7e354497d6a259a1b9",
+              "candidate_text_sha256": "5d5c3e7e43b920f45bef616f481cd0af524b0b2bf072dbebf81d73d8fa3a309f"
+            },
+            {
+              "location": "concurrency8/sample3/request0",
+              "common_prefix_characters": 105,
+              "reference_characters": 414,
+              "candidate_characters": 412,
+              "reference_text_sha256": "8e38cb4c814fecf5d09b7dd3935371b9dd95d45b045a5dfe0e9afe9f2ed405af",
+              "candidate_text_sha256": "d2d297d75d388c7b1342ab178a624395f20aedf90bd36b947b71eaf0ae07a524"
+            },
+            {
+              "location": "concurrency8/sample3/request2",
+              "common_prefix_characters": 17,
+              "reference_characters": 672,
+              "candidate_characters": 659,
+              "reference_text_sha256": "ed6a6c5eb1666d5063553fbc48f1a0d88d36a379b9f523807683376989c839cc",
+              "candidate_text_sha256": "6827b4395ec5c180bee4d095ec426ce4f77db2ee73ad6153d1e3862bc6620f73"
+            },
+            {
+              "location": "concurrency8/sample3/request3",
+              "common_prefix_characters": 434,
+              "reference_characters": 473,
+              "candidate_characters": 468,
+              "reference_text_sha256": "5d5c3e7e43b920f45bef616f481cd0af524b0b2bf072dbebf81d73d8fa3a309f",
+              "candidate_text_sha256": "a6f9a0ee560aa6885e0f037c33c80a2a752d0ab2dc4ed1882ea03d00f4a65d5d"
+            },
+            {
+              "location": "concurrency8/sample3/request4",
+              "common_prefix_characters": 200,
+              "reference_characters": 237,
+              "candidate_characters": 238,
+              "reference_text_sha256": "fffe1375caad6fe0076c583850537ac6bb23e9febf7d4dc5695ee5c9d34927b2",
+              "candidate_text_sha256": "533a3e28db7d9b55a67ebaf59a4bd88cfc644dc63e1e0ec434323b7d32191157"
+            },
+            {
+              "location": "concurrency8/sample3/request5",
+              "common_prefix_characters": 165,
+              "reference_characters": 404,
+              "candidate_characters": 398,
+              "reference_text_sha256": "648ce818f8354da7fcdda90cb502b6976fd2c9d7a0ea98703eecc980cd51e97d",
+              "candidate_text_sha256": "a99640afcf2044b3f216a2e25cea7bd2b17fd60df1322ef833fb13d08ec7cfce"
+            },
+            {
+              "location": "concurrency8/sample3/request6",
+              "common_prefix_characters": 207,
+              "reference_characters": 555,
+              "candidate_characters": 506,
+              "reference_text_sha256": "c4461426bfd074b2bb1454e29977ad72e3d9f950076b7c7dbe95a0360d28f806",
+              "candidate_text_sha256": "1c3a1a3b2a9f749b430beaadc3c734d9dd1a9dd4035793d735d116aa7e752c28"
+            },
+            {
+              "location": "concurrency8/sample3/request7",
+              "common_prefix_characters": 266,
+              "reference_characters": 347,
+              "candidate_characters": 353,
+              "reference_text_sha256": "63150e0da911421bec79d1389646e15a7fa02ee1709ab973aa07d638c8cb4d3e",
+              "candidate_text_sha256": "25ee649213cdb13c3c11bbd3d1ca649d1773c54f2e0279ed073ce0c684ab3962"
+            },
+            {
+              "location": "concurrency8/sample4/request0",
+              "common_prefix_characters": 105,
+              "reference_characters": 414,
+              "candidate_characters": 412,
+              "reference_text_sha256": "8e38cb4c814fecf5d09b7dd3935371b9dd95d45b045a5dfe0e9afe9f2ed405af",
+              "candidate_text_sha256": "d2d297d75d388c7b1342ab178a624395f20aedf90bd36b947b71eaf0ae07a524"
+            },
+            {
+              "location": "concurrency8/sample4/request2",
+              "common_prefix_characters": 201,
+              "reference_characters": 672,
+              "candidate_characters": 683,
+              "reference_text_sha256": "ed6a6c5eb1666d5063553fbc48f1a0d88d36a379b9f523807683376989c839cc",
+              "candidate_text_sha256": "55b60216d4161e52265c19a02bc120c4146459a42f11c426ba8eeccc8fc234b8"
+            },
+            {
+              "location": "concurrency8/sample4/request3",
+              "common_prefix_characters": 234,
+              "reference_characters": 473,
+              "candidate_characters": 487,
+              "reference_text_sha256": "5d5c3e7e43b920f45bef616f481cd0af524b0b2bf072dbebf81d73d8fa3a309f",
+              "candidate_text_sha256": "8d687c7504db49d36b308ba3b867c8b320058bb86ddb25572c75a459c569a384"
+            },
+            {
+              "location": "concurrency8/sample4/request4",
+              "common_prefix_characters": 93,
+              "reference_characters": 237,
+              "candidate_characters": 233,
+              "reference_text_sha256": "fffe1375caad6fe0076c583850537ac6bb23e9febf7d4dc5695ee5c9d34927b2",
+              "candidate_text_sha256": "a8964f8bb155865d313a06e13e9ee780b0b8d093e79e4296a226bc3acb9a4fe3"
+            },
+            {
+              "location": "concurrency8/sample4/request6",
+              "common_prefix_characters": 207,
+              "reference_characters": 555,
+              "candidate_characters": 510,
+              "reference_text_sha256": "c4461426bfd074b2bb1454e29977ad72e3d9f950076b7c7dbe95a0360d28f806",
+              "candidate_text_sha256": "ff8ba5294ddcffc1959b088081072cea92302a589dd398e20d5480ac5126cb86"
+            },
+            {
+              "location": "concurrency8/sample4/request7",
+              "common_prefix_characters": 266,
+              "reference_characters": 347,
+              "candidate_characters": 333,
+              "reference_text_sha256": "63150e0da911421bec79d1389646e15a7fa02ee1709ab973aa07d638c8cb4d3e",
+              "candidate_text_sha256": "bc76c79f6ed827496d10434427fd037690bab52721a0505a37a25813635457fa"
+            },
+            {
+              "location": "concurrency8/sample5/request0",
+              "common_prefix_characters": 105,
+              "reference_characters": 414,
+              "candidate_characters": 403,
+              "reference_text_sha256": "8e38cb4c814fecf5d09b7dd3935371b9dd95d45b045a5dfe0e9afe9f2ed405af",
+              "candidate_text_sha256": "22a562b8921b3ddcbf193781a748d1db2b439a927ce7c5884e4865fab7418e20"
+            },
+            {
+              "location": "concurrency8/sample5/request2",
+              "common_prefix_characters": 111,
+              "reference_characters": 672,
+              "candidate_characters": 682,
+              "reference_text_sha256": "ed6a6c5eb1666d5063553fbc48f1a0d88d36a379b9f523807683376989c839cc",
+              "candidate_text_sha256": "bf6f1cbbfadcd8bc842e98b654f738d12efc17039938ff7729766a255bffb43e"
+            },
+            {
+              "location": "concurrency8/sample5/request3",
+              "common_prefix_characters": 440,
+              "reference_characters": 473,
+              "candidate_characters": 468,
+              "reference_text_sha256": "5d5c3e7e43b920f45bef616f481cd0af524b0b2bf072dbebf81d73d8fa3a309f",
+              "candidate_text_sha256": "e91b07945ffd762071168431b626623b9ffe60a580c6d75b7030e59f35c62f17"
+            },
+            {
+              "location": "concurrency8/sample5/request4",
+              "common_prefix_characters": 93,
+              "reference_characters": 237,
+              "candidate_characters": 212,
+              "reference_text_sha256": "fffe1375caad6fe0076c583850537ac6bb23e9febf7d4dc5695ee5c9d34927b2",
+              "candidate_text_sha256": "a3edb73ae67f2f1d3625fe8da8db2ad186dbd23cc7f500ed0a34c3fc8c3396e5"
+            },
+            {
+              "location": "concurrency8/sample5/request6",
+              "common_prefix_characters": 384,
+              "reference_characters": 555,
+              "candidate_characters": 550,
+              "reference_text_sha256": "c4461426bfd074b2bb1454e29977ad72e3d9f950076b7c7dbe95a0360d28f806",
+              "candidate_text_sha256": "7714aa3d1bd793bdf88676dc892853de2878c3cbb7e266daaa2b820dc3766653"
+            },
+            {
+              "location": "concurrency8/sample5/request7",
+              "common_prefix_characters": 297,
+              "reference_characters": 347,
+              "candidate_characters": 333,
+              "reference_text_sha256": "63150e0da911421bec79d1389646e15a7fa02ee1709ab973aa07d638c8cb4d3e",
+              "candidate_text_sha256": "95a7bfb22a5a61b519649dd355e7e9779448204fc4f2d56312cc0111f7d7aa7c"
+            },
+            {
+              "location": "concurrency8/sample6/request0",
+              "common_prefix_characters": 105,
+              "reference_characters": 414,
+              "candidate_characters": 412,
+              "reference_text_sha256": "8e38cb4c814fecf5d09b7dd3935371b9dd95d45b045a5dfe0e9afe9f2ed405af",
+              "candidate_text_sha256": "d2d297d75d388c7b1342ab178a624395f20aedf90bd36b947b71eaf0ae07a524"
+            },
+            {
+              "location": "concurrency8/sample6/request2",
+              "common_prefix_characters": 17,
+              "reference_characters": 672,
+              "candidate_characters": 655,
+              "reference_text_sha256": "ed6a6c5eb1666d5063553fbc48f1a0d88d36a379b9f523807683376989c839cc",
+              "candidate_text_sha256": "78b3710aed693e20cc539e8d9e381321dec52849e08311b852214dbf973b5776"
+            },
+            {
+              "location": "concurrency8/sample6/request3",
+              "common_prefix_characters": 440,
+              "reference_characters": 473,
+              "candidate_characters": 468,
+              "reference_text_sha256": "5d5c3e7e43b920f45bef616f481cd0af524b0b2bf072dbebf81d73d8fa3a309f",
+              "candidate_text_sha256": "e91b07945ffd762071168431b626623b9ffe60a580c6d75b7030e59f35c62f17"
+            },
+            {
+              "location": "concurrency8/sample6/request4",
+              "common_prefix_characters": 93,
+              "reference_characters": 237,
+              "candidate_characters": 233,
+              "reference_text_sha256": "fffe1375caad6fe0076c583850537ac6bb23e9febf7d4dc5695ee5c9d34927b2",
+              "candidate_text_sha256": "a8964f8bb155865d313a06e13e9ee780b0b8d093e79e4296a226bc3acb9a4fe3"
+            },
+            {
+              "location": "concurrency8/sample6/request5",
+              "common_prefix_characters": 165,
+              "reference_characters": 404,
+              "candidate_characters": 398,
+              "reference_text_sha256": "648ce818f8354da7fcdda90cb502b6976fd2c9d7a0ea98703eecc980cd51e97d",
+              "candidate_text_sha256": "1728d8716d8fdb143423d122139612a79782ec7865e1cbd2edb5a59d9b338a14"
+            },
+            {
+              "location": "concurrency8/sample6/request6",
+              "common_prefix_characters": 545,
+              "reference_characters": 555,
+              "candidate_characters": 551,
+              "reference_text_sha256": "c4461426bfd074b2bb1454e29977ad72e3d9f950076b7c7dbe95a0360d28f806",
+              "candidate_text_sha256": "fd0d52721d4846e210b4ae42ae797a803993737b53e61779965784330a1c1ed0"
+            },
+            {
+              "location": "concurrency8/sample6/request7",
+              "common_prefix_characters": 266,
+              "reference_characters": 347,
+              "candidate_characters": 333,
+              "reference_text_sha256": "63150e0da911421bec79d1389646e15a7fa02ee1709ab973aa07d638c8cb4d3e",
+              "candidate_text_sha256": "bc76c79f6ed827496d10434427fd037690bab52721a0505a37a25813635457fa"
+            }
+          ]
+        },
+        "validation_vs_timed": {
+          "comparisons": 40,
+          "identical_text": 19,
+          "differences": [
+            {
+              "location": "python/sample3/request0",
+              "common_prefix_characters": 105,
+              "reference_characters": 412,
+              "candidate_characters": 414,
+              "reference_text_sha256": "d2d297d75d388c7b1342ab178a624395f20aedf90bd36b947b71eaf0ae07a524",
+              "candidate_text_sha256": "8e38cb4c814fecf5d09b7dd3935371b9dd95d45b045a5dfe0e9afe9f2ed405af"
+            },
+            {
+              "location": "prose/sample2/request0",
+              "common_prefix_characters": 333,
+              "reference_characters": 659,
+              "candidate_characters": 660,
+              "reference_text_sha256": "6827b4395ec5c180bee4d095ec426ce4f77db2ee73ad6153d1e3862bc6620f73",
+              "candidate_text_sha256": "81962ff28bf605f50865b5eae490d393f9e7a430f71ce51876a352730902c194"
+            },
+            {
+              "location": "prose/sample3/request0",
+              "common_prefix_characters": 333,
+              "reference_characters": 659,
+              "candidate_characters": 660,
+              "reference_text_sha256": "6827b4395ec5c180bee4d095ec426ce4f77db2ee73ad6153d1e3862bc6620f73",
+              "candidate_text_sha256": "81962ff28bf605f50865b5eae490d393f9e7a430f71ce51876a352730902c194"
+            },
+            {
+              "location": "prose/sample5/request0",
+              "common_prefix_characters": 333,
+              "reference_characters": 659,
+              "candidate_characters": 660,
+              "reference_text_sha256": "6827b4395ec5c180bee4d095ec426ce4f77db2ee73ad6153d1e3862bc6620f73",
+              "candidate_text_sha256": "81962ff28bf605f50865b5eae490d393f9e7a430f71ce51876a352730902c194"
+            },
+            {
+              "location": "prose/sample6/request0",
+              "common_prefix_characters": 243,
+              "reference_characters": 660,
+              "candidate_characters": 660,
+              "reference_text_sha256": "cdb393a617bc35a4b4bcaf04bb410d95b32da5f7181d42b3b1c48799cbc1e33f",
+              "candidate_text_sha256": "81962ff28bf605f50865b5eae490d393f9e7a430f71ce51876a352730902c194"
+            },
+            {
+              "location": "json/sample2/request0",
+              "common_prefix_characters": 384,
+              "reference_characters": 509,
+              "candidate_characters": 513,
+              "reference_text_sha256": "e48cf96ae8e2e077a1cf1a8e8b1fafae12b235d43fd1c0b52fdbe787b50ca604",
+              "candidate_text_sha256": "0da8d435f24ad7e6f2254649a2247a73472c4d3e91f341873484ff9a2dd214f6"
+            },
+            {
+              "location": "json/sample3/request0",
+              "common_prefix_characters": 261,
+              "reference_characters": 500,
+              "candidate_characters": 513,
+              "reference_text_sha256": "203244082f70f80f17c61f3266d284f449bfc578263cf1279374ad8f8c45532c",
+              "candidate_text_sha256": "0da8d435f24ad7e6f2254649a2247a73472c4d3e91f341873484ff9a2dd214f6"
+            },
+            {
+              "location": "json/sample4/request0",
+              "common_prefix_characters": 365,
+              "reference_characters": 497,
+              "candidate_characters": 513,
+              "reference_text_sha256": "96dbbd699c935d8f11106d21fda2810b62a2d4aa43072610fdeddfd4be91b650",
+              "candidate_text_sha256": "0da8d435f24ad7e6f2254649a2247a73472c4d3e91f341873484ff9a2dd214f6"
+            },
+            {
+              "location": "json/sample5/request0",
+              "common_prefix_characters": 365,
+              "reference_characters": 497,
+              "candidate_characters": 513,
+              "reference_text_sha256": "96dbbd699c935d8f11106d21fda2810b62a2d4aa43072610fdeddfd4be91b650",
+              "candidate_text_sha256": "0da8d435f24ad7e6f2254649a2247a73472c4d3e91f341873484ff9a2dd214f6"
+            },
+            {
+              "location": "json/sample6/request0",
+              "common_prefix_characters": 365,
+              "reference_characters": 490,
+              "candidate_characters": 513,
+              "reference_text_sha256": "15358e6ea630d161ed8c67f0fa45f48295f1c3a70a805b932f195008f54220ad",
+              "candidate_text_sha256": "0da8d435f24ad7e6f2254649a2247a73472c4d3e91f341873484ff9a2dd214f6"
+            },
+            {
+              "location": "primes/sample3/request0",
+              "common_prefix_characters": 116,
+              "reference_characters": 210,
+              "candidate_characters": 238,
+              "reference_text_sha256": "f90c0b29ed008e8acd3b8d4080f8452244b54d154aae70c343cd2a4fbc5dc070",
+              "candidate_text_sha256": "533a3e28db7d9b55a67ebaf59a4bd88cfc644dc63e1e0ec434323b7d32191157"
+            },
+            {
+              "location": "primes/sample4/request0",
+              "common_prefix_characters": 116,
+              "reference_characters": 210,
+              "candidate_characters": 238,
+              "reference_text_sha256": "f90c0b29ed008e8acd3b8d4080f8452244b54d154aae70c343cd2a4fbc5dc070",
+              "candidate_text_sha256": "533a3e28db7d9b55a67ebaf59a4bd88cfc644dc63e1e0ec434323b7d32191157"
+            },
+            {
+              "location": "primes/sample5/request0",
+              "common_prefix_characters": 33,
+              "reference_characters": 204,
+              "candidate_characters": 238,
+              "reference_text_sha256": "b8aae973a52496df91c0543b5eb8c821a597c7799da765bc8da37b87b11485c5",
+              "candidate_text_sha256": "533a3e28db7d9b55a67ebaf59a4bd88cfc644dc63e1e0ec434323b7d32191157"
+            },
+            {
+              "location": "primes/sample6/request0",
+              "common_prefix_characters": 183,
+              "reference_characters": 231,
+              "candidate_characters": 238,
+              "reference_text_sha256": "c1b64d2551c79b00f1a820199e7ebe356ca87c2bcc85ca19396e0621230a1dbb",
+              "candidate_text_sha256": "533a3e28db7d9b55a67ebaf59a4bd88cfc644dc63e1e0ec434323b7d32191157"
+            },
+            {
+              "location": "math/sample4/request0",
+              "common_prefix_characters": 301,
+              "reference_characters": 404,
+              "candidate_characters": 381,
+              "reference_text_sha256": "648ce818f8354da7fcdda90cb502b6976fd2c9d7a0ea98703eecc980cd51e97d",
+              "candidate_text_sha256": "ed7ad98095f368bf37d3a00d30bad778a4febf7f806bd905bf4715381d88a445"
+            },
+            {
+              "location": "translation/sample2/request0",
+              "common_prefix_characters": 207,
+              "reference_characters": 558,
+              "candidate_characters": 506,
+              "reference_text_sha256": "aa50a24196ea7b52d7032d52534808b2b697fa039c92ac76a3543aaecb39bb7a",
+              "candidate_text_sha256": "1c3a1a3b2a9f749b430beaadc3c734d9dd1a9dd4035793d735d116aa7e752c28"
+            },
+            {
+              "location": "translation/sample3/request0",
+              "common_prefix_characters": 207,
+              "reference_characters": 551,
+              "candidate_characters": 506,
+              "reference_text_sha256": "fd0d52721d4846e210b4ae42ae797a803993737b53e61779965784330a1c1ed0",
+              "candidate_text_sha256": "1c3a1a3b2a9f749b430beaadc3c734d9dd1a9dd4035793d735d116aa7e752c28"
+            },
+            {
+              "location": "translation/sample4/request0",
+              "common_prefix_characters": 207,
+              "reference_characters": 551,
+              "candidate_characters": 506,
+              "reference_text_sha256": "fd0d52721d4846e210b4ae42ae797a803993737b53e61779965784330a1c1ed0",
+              "candidate_text_sha256": "1c3a1a3b2a9f749b430beaadc3c734d9dd1a9dd4035793d735d116aa7e752c28"
+            },
+            {
+              "location": "translation/sample6/request0",
+              "common_prefix_characters": 479,
+              "reference_characters": 506,
+              "candidate_characters": 506,
+              "reference_text_sha256": "95ec609d27ac54df7482f22a4cc43734684360d95217013104958f40f5c3a702",
+              "candidate_text_sha256": "1c3a1a3b2a9f749b430beaadc3c734d9dd1a9dd4035793d735d116aa7e752c28"
+            },
+            {
+              "location": "quicksort/sample2/request0",
+              "common_prefix_characters": 266,
+              "reference_characters": 347,
+              "candidate_characters": 333,
+              "reference_text_sha256": "63150e0da911421bec79d1389646e15a7fa02ee1709ab973aa07d638c8cb4d3e",
+              "candidate_text_sha256": "bc76c79f6ed827496d10434427fd037690bab52721a0505a37a25813635457fa"
+            },
+            {
+              "location": "quicksort/sample6/request0",
+              "common_prefix_characters": 302,
+              "reference_characters": 360,
+              "candidate_characters": 333,
+              "reference_text_sha256": "b517883d3166dcd8bca919ea700f0fb421aa27dfbb971847713efc2115853df6",
+              "candidate_text_sha256": "bc76c79f6ed827496d10434427fd037690bab52721a0505a37a25813635457fa"
+            }
+          ]
+        }
+      },
+      "isq_mtp": {
+        "timed_repeats": {
+          "comparisons": 80,
+          "identical_text": 30,
+          "differences": [
+            {
+              "location": "python/sample3/request0",
+              "common_prefix_characters": 105,
+              "reference_characters": 414,
+              "candidate_characters": 412,
+              "reference_text_sha256": "8e38cb4c814fecf5d09b7dd3935371b9dd95d45b045a5dfe0e9afe9f2ed405af",
+              "candidate_text_sha256": "d2d297d75d388c7b1342ab178a624395f20aedf90bd36b947b71eaf0ae07a524"
+            },
+            {
+              "location": "python/sample6/request0",
+              "common_prefix_characters": 105,
+              "reference_characters": 414,
+              "candidate_characters": 403,
+              "reference_text_sha256": "8e38cb4c814fecf5d09b7dd3935371b9dd95d45b045a5dfe0e9afe9f2ed405af",
+              "candidate_text_sha256": "22a562b8921b3ddcbf193781a748d1db2b439a927ce7c5884e4865fab7418e20"
+            },
+            {
+              "location": "json/sample3/request0",
+              "common_prefix_characters": 261,
+              "reference_characters": 497,
+              "candidate_characters": 497,
+              "reference_text_sha256": "b40f73200f96e65bcfe6f8efdf6e37b93aa3f80fff9f82cd21c15c752dc13746",
+              "candidate_text_sha256": "96dbbd699c935d8f11106d21fda2810b62a2d4aa43072610fdeddfd4be91b650"
+            },
+            {
+              "location": "json/sample4/request0",
+              "common_prefix_characters": 261,
+              "reference_characters": 497,
+              "candidate_characters": 490,
+              "reference_text_sha256": "b40f73200f96e65bcfe6f8efdf6e37b93aa3f80fff9f82cd21c15c752dc13746",
+              "candidate_text_sha256": "15358e6ea630d161ed8c67f0fa45f48295f1c3a70a805b932f195008f54220ad"
+            },
+            {
+              "location": "json/sample5/request0",
+              "common_prefix_characters": 261,
+              "reference_characters": 497,
+              "candidate_characters": 487,
+              "reference_text_sha256": "b40f73200f96e65bcfe6f8efdf6e37b93aa3f80fff9f82cd21c15c752dc13746",
+              "candidate_text_sha256": "8d687c7504db49d36b308ba3b867c8b320058bb86ddb25572c75a459c569a384"
+            },
+            {
+              "location": "json/sample6/request0",
+              "common_prefix_characters": 335,
+              "reference_characters": 497,
+              "candidate_characters": 480,
+              "reference_text_sha256": "b40f73200f96e65bcfe6f8efdf6e37b93aa3f80fff9f82cd21c15c752dc13746",
+              "candidate_text_sha256": "2fdc3695865ade6e0e4c8ca8086666af5c68461e9dce960e9e6a5d43b73030a7"
+            },
+            {
+              "location": "primes/sample3/request0",
+              "common_prefix_characters": 33,
+              "reference_characters": 204,
+              "candidate_characters": 238,
+              "reference_text_sha256": "9cbc627f060d4c394484a23014e7e586a0c6705e231decf2379e495ab24319a9",
+              "candidate_text_sha256": "533a3e28db7d9b55a67ebaf59a4bd88cfc644dc63e1e0ec434323b7d32191157"
+            },
+            {
+              "location": "primes/sample4/request0",
+              "common_prefix_characters": 57,
+              "reference_characters": 204,
+              "candidate_characters": 204,
+              "reference_text_sha256": "9cbc627f060d4c394484a23014e7e586a0c6705e231decf2379e495ab24319a9",
+              "candidate_text_sha256": "b8aae973a52496df91c0543b5eb8c821a597c7799da765bc8da37b87b11485c5"
+            },
+            {
+              "location": "primes/sample5/request0",
+              "common_prefix_characters": 33,
+              "reference_characters": 204,
+              "candidate_characters": 231,
+              "reference_text_sha256": "9cbc627f060d4c394484a23014e7e586a0c6705e231decf2379e495ab24319a9",
+              "candidate_text_sha256": "c1b64d2551c79b00f1a820199e7ebe356ca87c2bcc85ca19396e0621230a1dbb"
+            },
+            {
+              "location": "primes/sample6/request0",
+              "common_prefix_characters": 33,
+              "reference_characters": 204,
+              "candidate_characters": 238,
+              "reference_text_sha256": "9cbc627f060d4c394484a23014e7e586a0c6705e231decf2379e495ab24319a9",
+              "candidate_text_sha256": "533a3e28db7d9b55a67ebaf59a4bd88cfc644dc63e1e0ec434323b7d32191157"
+            },
+            {
+              "location": "math/sample3/request0",
+              "common_prefix_characters": 165,
+              "reference_characters": 381,
+              "candidate_characters": 377,
+              "reference_text_sha256": "ed7ad98095f368bf37d3a00d30bad778a4febf7f806bd905bf4715381d88a445",
+              "candidate_text_sha256": "c87927d8084a31531e7a0ba1c5cfa0c0255f1c2c2d081938357a249ca87baf6e"
+            },
+            {
+              "location": "math/sample5/request0",
+              "common_prefix_characters": 76,
+              "reference_characters": 381,
+              "candidate_characters": 406,
+              "reference_text_sha256": "ed7ad98095f368bf37d3a00d30bad778a4febf7f806bd905bf4715381d88a445",
+              "candidate_text_sha256": "8288aca8616b3d7b848b226b720220ebb147beb151dbb978512eb549b7bfff8c"
+            },
+            {
+              "location": "translation/sample3/request0",
+              "common_prefix_characters": 384,
+              "reference_characters": 550,
+              "candidate_characters": 551,
+              "reference_text_sha256": "7714aa3d1bd793bdf88676dc892853de2878c3cbb7e266daaa2b820dc3766653",
+              "candidate_text_sha256": "fd0d52721d4846e210b4ae42ae797a803993737b53e61779965784330a1c1ed0"
+            },
+            {
+              "location": "translation/sample4/request0",
+              "common_prefix_characters": 384,
+              "reference_characters": 550,
+              "candidate_characters": 555,
+              "reference_text_sha256": "7714aa3d1bd793bdf88676dc892853de2878c3cbb7e266daaa2b820dc3766653",
+              "candidate_text_sha256": "c4461426bfd074b2bb1454e29977ad72e3d9f950076b7c7dbe95a0360d28f806"
+            },
+            {
+              "location": "translation/sample5/request0",
+              "common_prefix_characters": 207,
+              "reference_characters": 550,
+              "candidate_characters": 510,
+              "reference_text_sha256": "7714aa3d1bd793bdf88676dc892853de2878c3cbb7e266daaa2b820dc3766653",
+              "candidate_text_sha256": "ff8ba5294ddcffc1959b088081072cea92302a589dd398e20d5480ac5126cb86"
+            },
+            {
+              "location": "translation/sample6/request0",
+              "common_prefix_characters": 207,
+              "reference_characters": 550,
+              "candidate_characters": 507,
+              "reference_text_sha256": "7714aa3d1bd793bdf88676dc892853de2878c3cbb7e266daaa2b820dc3766653",
+              "candidate_text_sha256": "b1d6947a3521ed132f347c6e9051a5d81e3cde48d69027b6381f152759a1bdd0"
+            },
+            {
+              "location": "quicksort/sample3/request0",
+              "common_prefix_characters": 266,
+              "reference_characters": 353,
+              "candidate_characters": 347,
+              "reference_text_sha256": "25ee649213cdb13c3c11bbd3d1ca649d1773c54f2e0279ed073ce0c684ab3962",
+              "candidate_text_sha256": "63150e0da911421bec79d1389646e15a7fa02ee1709ab973aa07d638c8cb4d3e"
+            },
+            {
+              "location": "quicksort/sample4/request0",
+              "common_prefix_characters": 296,
+              "reference_characters": 353,
+              "candidate_characters": 371,
+              "reference_text_sha256": "25ee649213cdb13c3c11bbd3d1ca649d1773c54f2e0279ed073ce0c684ab3962",
+              "candidate_text_sha256": "452b58cd3770f822238c083d2366be4af8240b20137e98a08edd0546ea803466"
+            },
+            {
+              "location": "quicksort/sample6/request0",
+              "common_prefix_characters": 296,
+              "reference_characters": 353,
+              "candidate_characters": 360,
+              "reference_text_sha256": "25ee649213cdb13c3c11bbd3d1ca649d1773c54f2e0279ed073ce0c684ab3962",
+              "candidate_text_sha256": "b517883d3166dcd8bca919ea700f0fb421aa27dfbb971847713efc2115853df6"
+            },
+            {
+              "location": "concurrency4/sample3/request0",
+              "common_prefix_characters": 105,
+              "reference_characters": 414,
+              "candidate_characters": 412,
+              "reference_text_sha256": "8e38cb4c814fecf5d09b7dd3935371b9dd95d45b045a5dfe0e9afe9f2ed405af",
+              "candidate_text_sha256": "d2d297d75d388c7b1342ab178a624395f20aedf90bd36b947b71eaf0ae07a524"
+            },
+            {
+              "location": "concurrency4/sample3/request3",
+              "common_prefix_characters": 261,
+              "reference_characters": 490,
+              "candidate_characters": 501,
+              "reference_text_sha256": "15358e6ea630d161ed8c67f0fa45f48295f1c3a70a805b932f195008f54220ad",
+              "candidate_text_sha256": "4fc5660a6fd69759d1f04a835631aa0f07b572caada2d49f1129f424148eaefe"
+            },
+            {
+              "location": "concurrency4/sample4/request0",
+              "common_prefix_characters": 105,
+              "reference_characters": 414,
+              "candidate_characters": 412,
+              "reference_text_sha256": "8e38cb4c814fecf5d09b7dd3935371b9dd95d45b045a5dfe0e9afe9f2ed405af",
+              "candidate_text_sha256": "d2d297d75d388c7b1342ab178a624395f20aedf90bd36b947b71eaf0ae07a524"
+            },
+            {
+              "location": "concurrency4/sample4/request2",
+              "common_prefix_characters": 233,
+              "reference_characters": 659,
+              "candidate_characters": 655,
+              "reference_text_sha256": "6827b4395ec5c180bee4d095ec426ce4f77db2ee73ad6153d1e3862bc6620f73",
+              "candidate_text_sha256": "a5a445c03803d4579b43aec8d96fe6fb1d236e2e17e16ccc06bc9df9a600b3cf"
+            },
+            {
+              "location": "concurrency4/sample4/request3",
+              "common_prefix_characters": 234,
+              "reference_characters": 490,
+              "candidate_characters": 473,
+              "reference_text_sha256": "15358e6ea630d161ed8c67f0fa45f48295f1c3a70a805b932f195008f54220ad",
+              "candidate_text_sha256": "4b896a5f4c8fc644a9d4fdb63335327542f2a09c641fae0e03dcdb3f6f012a40"
+            },
+            {
+              "location": "concurrency4/sample5/request3",
+              "common_prefix_characters": 297,
+              "reference_characters": 490,
+              "candidate_characters": 494,
+              "reference_text_sha256": "15358e6ea630d161ed8c67f0fa45f48295f1c3a70a805b932f195008f54220ad",
+              "candidate_text_sha256": "264c2b01949521a8ad7b17949fbb839e6c43eb9ea3d05d5ddc96c95462a7364b"
+            },
+            {
+              "location": "concurrency4/sample6/request0",
+              "common_prefix_characters": 105,
+              "reference_characters": 414,
+              "candidate_characters": 403,
+              "reference_text_sha256": "8e38cb4c814fecf5d09b7dd3935371b9dd95d45b045a5dfe0e9afe9f2ed405af",
+              "candidate_text_sha256": "22a562b8921b3ddcbf193781a748d1db2b439a927ce7c5884e4865fab7418e20"
+            },
+            {
+              "location": "concurrency4/sample6/request3",
+              "common_prefix_characters": 424,
+              "reference_characters": 490,
+              "candidate_characters": 497,
+              "reference_text_sha256": "15358e6ea630d161ed8c67f0fa45f48295f1c3a70a805b932f195008f54220ad",
+              "candidate_text_sha256": "96dbbd699c935d8f11106d21fda2810b62a2d4aa43072610fdeddfd4be91b650"
+            },
+            {
+              "location": "concurrency8/sample3/request0",
+              "common_prefix_characters": 105,
+              "reference_characters": 414,
+              "candidate_characters": 412,
+              "reference_text_sha256": "8e38cb4c814fecf5d09b7dd3935371b9dd95d45b045a5dfe0e9afe9f2ed405af",
+              "candidate_text_sha256": "d2d297d75d388c7b1342ab178a624395f20aedf90bd36b947b71eaf0ae07a524"
+            },
+            {
+              "location": "concurrency8/sample3/request3",
+              "common_prefix_characters": 297,
+              "reference_characters": 495,
+              "candidate_characters": 509,
+              "reference_text_sha256": "d96b711d1eb86308344af1df4fce717e70857b4202a84b03f6b74a3c89c9bab1",
+              "candidate_text_sha256": "e48cf96ae8e2e077a1cf1a8e8b1fafae12b235d43fd1c0b52fdbe787b50ca604"
+            },
+            {
+              "location": "concurrency8/sample3/request4",
+              "common_prefix_characters": 93,
+              "reference_characters": 261,
+              "candidate_characters": 233,
+              "reference_text_sha256": "cc95265f4a23a2c0550fd148f25e5fc1cd7043ada8d9334eb52540fd099c2569",
+              "candidate_text_sha256": "a8964f8bb155865d313a06e13e9ee780b0b8d093e79e4296a226bc3acb9a4fe3"
+            },
+            {
+              "location": "concurrency8/sample3/request5",
+              "common_prefix_characters": 165,
+              "reference_characters": 404,
+              "candidate_characters": 398,
+              "reference_text_sha256": "648ce818f8354da7fcdda90cb502b6976fd2c9d7a0ea98703eecc980cd51e97d",
+              "candidate_text_sha256": "1728d8716d8fdb143423d122139612a79782ec7865e1cbd2edb5a59d9b338a14"
+            },
+            {
+              "location": "concurrency8/sample3/request6",
+              "common_prefix_characters": 545,
+              "reference_characters": 555,
+              "candidate_characters": 551,
+              "reference_text_sha256": "c4461426bfd074b2bb1454e29977ad72e3d9f950076b7c7dbe95a0360d28f806",
+              "candidate_text_sha256": "fd0d52721d4846e210b4ae42ae797a803993737b53e61779965784330a1c1ed0"
+            },
+            {
+              "location": "concurrency8/sample3/request7",
+              "common_prefix_characters": 302,
+              "reference_characters": 333,
+              "candidate_characters": 360,
+              "reference_text_sha256": "bc76c79f6ed827496d10434427fd037690bab52721a0505a37a25813635457fa",
+              "candidate_text_sha256": "b517883d3166dcd8bca919ea700f0fb421aa27dfbb971847713efc2115853df6"
+            },
+            {
+              "location": "concurrency8/sample4/request0",
+              "common_prefix_characters": 289,
+              "reference_characters": 414,
+              "candidate_characters": 418,
+              "reference_text_sha256": "8e38cb4c814fecf5d09b7dd3935371b9dd95d45b045a5dfe0e9afe9f2ed405af",
+              "candidate_text_sha256": "9694090937d4fd05c99b7baa3006359c63f4f58aaa1cd7555569cc6c0a871b2d"
+            },
+            {
+              "location": "concurrency8/sample4/request3",
+              "common_prefix_characters": 234,
+              "reference_characters": 495,
+              "candidate_characters": 473,
+              "reference_text_sha256": "d96b711d1eb86308344af1df4fce717e70857b4202a84b03f6b74a3c89c9bab1",
+              "candidate_text_sha256": "4b896a5f4c8fc644a9d4fdb63335327542f2a09c641fae0e03dcdb3f6f012a40"
+            },
+            {
+              "location": "concurrency8/sample4/request4",
+              "common_prefix_characters": 193,
+              "reference_characters": 261,
+              "candidate_characters": 232,
+              "reference_text_sha256": "cc95265f4a23a2c0550fd148f25e5fc1cd7043ada8d9334eb52540fd099c2569",
+              "candidate_text_sha256": "1713b6288b503bc4da8442407c1e6d465f83618a98945931e4e44ad2aba686c9"
+            },
+            {
+              "location": "concurrency8/sample4/request5",
+              "common_prefix_characters": 165,
+              "reference_characters": 404,
+              "candidate_characters": 398,
+              "reference_text_sha256": "648ce818f8354da7fcdda90cb502b6976fd2c9d7a0ea98703eecc980cd51e97d",
+              "candidate_text_sha256": "1728d8716d8fdb143423d122139612a79782ec7865e1cbd2edb5a59d9b338a14"
+            },
+            {
+              "location": "concurrency8/sample4/request6",
+              "common_prefix_characters": 207,
+              "reference_characters": 555,
+              "candidate_characters": 510,
+              "reference_text_sha256": "c4461426bfd074b2bb1454e29977ad72e3d9f950076b7c7dbe95a0360d28f806",
+              "candidate_text_sha256": "ff8ba5294ddcffc1959b088081072cea92302a589dd398e20d5480ac5126cb86"
+            },
+            {
+              "location": "concurrency8/sample4/request7",
+              "common_prefix_characters": 302,
+              "reference_characters": 333,
+              "candidate_characters": 341,
+              "reference_text_sha256": "bc76c79f6ed827496d10434427fd037690bab52721a0505a37a25813635457fa",
+              "candidate_text_sha256": "f3d60a3852891a793656f6dc95f357de37a2394feceea4f0b19b42f1c5ceee48"
+            },
+            {
+              "location": "concurrency8/sample5/request0",
+              "common_prefix_characters": 105,
+              "reference_characters": 414,
+              "candidate_characters": 412,
+              "reference_text_sha256": "8e38cb4c814fecf5d09b7dd3935371b9dd95d45b045a5dfe0e9afe9f2ed405af",
+              "candidate_text_sha256": "d2d297d75d388c7b1342ab178a624395f20aedf90bd36b947b71eaf0ae07a524"
+            },
+            {
+              "location": "concurrency8/sample5/request3",
+              "common_prefix_characters": 297,
+              "reference_characters": 495,
+              "candidate_characters": 517,
+              "reference_text_sha256": "d96b711d1eb86308344af1df4fce717e70857b4202a84b03f6b74a3c89c9bab1",
+              "candidate_text_sha256": "c99172354c3321f29532e41ef5dde20ccc314de243d69b0058840f45c3c5a0b9"
+            },
+            {
+              "location": "concurrency8/sample5/request4",
+              "common_prefix_characters": 116,
+              "reference_characters": 261,
+              "candidate_characters": 210,
+              "reference_text_sha256": "cc95265f4a23a2c0550fd148f25e5fc1cd7043ada8d9334eb52540fd099c2569",
+              "candidate_text_sha256": "f90c0b29ed008e8acd3b8d4080f8452244b54d154aae70c343cd2a4fbc5dc070"
+            },
+            {
+              "location": "concurrency8/sample5/request5",
+              "common_prefix_characters": 301,
+              "reference_characters": 404,
+              "candidate_characters": 381,
+              "reference_text_sha256": "648ce818f8354da7fcdda90cb502b6976fd2c9d7a0ea98703eecc980cd51e97d",
+              "candidate_text_sha256": "ed7ad98095f368bf37d3a00d30bad778a4febf7f806bd905bf4715381d88a445"
+            },
+            {
+              "location": "concurrency8/sample5/request6",
+              "common_prefix_characters": 207,
+              "reference_characters": 555,
+              "candidate_characters": 506,
+              "reference_text_sha256": "c4461426bfd074b2bb1454e29977ad72e3d9f950076b7c7dbe95a0360d28f806",
+              "candidate_text_sha256": "1c3a1a3b2a9f749b430beaadc3c734d9dd1a9dd4035793d735d116aa7e752c28"
+            },
+            {
+              "location": "concurrency8/sample5/request7",
+              "common_prefix_characters": 266,
+              "reference_characters": 333,
+              "candidate_characters": 347,
+              "reference_text_sha256": "bc76c79f6ed827496d10434427fd037690bab52721a0505a37a25813635457fa",
+              "candidate_text_sha256": "63150e0da911421bec79d1389646e15a7fa02ee1709ab973aa07d638c8cb4d3e"
+            },
+            {
+              "location": "concurrency8/sample6/request3",
+              "common_prefix_characters": 297,
+              "reference_characters": 495,
+              "candidate_characters": 490,
+              "reference_text_sha256": "d96b711d1eb86308344af1df4fce717e70857b4202a84b03f6b74a3c89c9bab1",
+              "candidate_text_sha256": "15358e6ea630d161ed8c67f0fa45f48295f1c3a70a805b932f195008f54220ad"
+            },
+            {
+              "location": "concurrency8/sample6/request4",
+              "common_prefix_characters": 33,
+              "reference_characters": 261,
+              "candidate_characters": 206,
+              "reference_text_sha256": "cc95265f4a23a2c0550fd148f25e5fc1cd7043ada8d9334eb52540fd099c2569",
+              "candidate_text_sha256": "e29024f175e83ee025404af0f5d5feaff9ef0cf5cb3449525da17af4a4ef051f"
+            },
+            {
+              "location": "concurrency8/sample6/request5",
+              "common_prefix_characters": 301,
+              "reference_characters": 404,
+              "candidate_characters": 381,
+              "reference_text_sha256": "648ce818f8354da7fcdda90cb502b6976fd2c9d7a0ea98703eecc980cd51e97d",
+              "candidate_text_sha256": "ed7ad98095f368bf37d3a00d30bad778a4febf7f806bd905bf4715381d88a445"
+            },
+            {
+              "location": "concurrency8/sample6/request6",
+              "common_prefix_characters": 207,
+              "reference_characters": 555,
+              "candidate_characters": 510,
+              "reference_text_sha256": "c4461426bfd074b2bb1454e29977ad72e3d9f950076b7c7dbe95a0360d28f806",
+              "candidate_text_sha256": "ff8ba5294ddcffc1959b088081072cea92302a589dd398e20d5480ac5126cb86"
+            },
+            {
+              "location": "concurrency8/sample6/request7",
+              "common_prefix_characters": 266,
+              "reference_characters": 333,
+              "candidate_characters": 347,
+              "reference_text_sha256": "bc76c79f6ed827496d10434427fd037690bab52721a0505a37a25813635457fa",
+              "candidate_text_sha256": "63150e0da911421bec79d1389646e15a7fa02ee1709ab973aa07d638c8cb4d3e"
+            }
+          ]
+        },
+        "validation_vs_timed": {
+          "comparisons": 40,
+          "identical_text": 16,
+          "differences": [
+            {
+              "location": "python/sample3/request0",
+              "common_prefix_characters": 105,
+              "reference_characters": 412,
+              "candidate_characters": 414,
+              "reference_text_sha256": "d2d297d75d388c7b1342ab178a624395f20aedf90bd36b947b71eaf0ae07a524",
+              "candidate_text_sha256": "8e38cb4c814fecf5d09b7dd3935371b9dd95d45b045a5dfe0e9afe9f2ed405af"
+            },
+            {
+              "location": "python/sample6/request0",
+              "common_prefix_characters": 105,
+              "reference_characters": 403,
+              "candidate_characters": 414,
+              "reference_text_sha256": "22a562b8921b3ddcbf193781a748d1db2b439a927ce7c5884e4865fab7418e20",
+              "candidate_text_sha256": "8e38cb4c814fecf5d09b7dd3935371b9dd95d45b045a5dfe0e9afe9f2ed405af"
+            },
+            {
+              "location": "json/sample2/request0",
+              "common_prefix_characters": 261,
+              "reference_characters": 497,
+              "candidate_characters": 497,
+              "reference_text_sha256": "b40f73200f96e65bcfe6f8efdf6e37b93aa3f80fff9f82cd21c15c752dc13746",
+              "candidate_text_sha256": "96dbbd699c935d8f11106d21fda2810b62a2d4aa43072610fdeddfd4be91b650"
+            },
+            {
+              "location": "json/sample4/request0",
+              "common_prefix_characters": 424,
+              "reference_characters": 490,
+              "candidate_characters": 497,
+              "reference_text_sha256": "15358e6ea630d161ed8c67f0fa45f48295f1c3a70a805b932f195008f54220ad",
+              "candidate_text_sha256": "96dbbd699c935d8f11106d21fda2810b62a2d4aa43072610fdeddfd4be91b650"
+            },
+            {
+              "location": "json/sample5/request0",
+              "common_prefix_characters": 297,
+              "reference_characters": 487,
+              "candidate_characters": 497,
+              "reference_text_sha256": "8d687c7504db49d36b308ba3b867c8b320058bb86ddb25572c75a459c569a384",
+              "candidate_text_sha256": "96dbbd699c935d8f11106d21fda2810b62a2d4aa43072610fdeddfd4be91b650"
+            },
+            {
+              "location": "json/sample6/request0",
+              "common_prefix_characters": 261,
+              "reference_characters": 480,
+              "candidate_characters": 497,
+              "reference_text_sha256": "2fdc3695865ade6e0e4c8ca8086666af5c68461e9dce960e9e6a5d43b73030a7",
+              "candidate_text_sha256": "96dbbd699c935d8f11106d21fda2810b62a2d4aa43072610fdeddfd4be91b650"
+            },
+            {
+              "location": "primes/sample2/request0",
+              "common_prefix_characters": 33,
+              "reference_characters": 204,
+              "candidate_characters": 271,
+              "reference_text_sha256": "9cbc627f060d4c394484a23014e7e586a0c6705e231decf2379e495ab24319a9",
+              "candidate_text_sha256": "fa030ff284405c6a321463bb1344fd3aa90da03276596f3958762d8c047cee2c"
+            },
+            {
+              "location": "primes/sample3/request0",
+              "common_prefix_characters": 200,
+              "reference_characters": 238,
+              "candidate_characters": 271,
+              "reference_text_sha256": "533a3e28db7d9b55a67ebaf59a4bd88cfc644dc63e1e0ec434323b7d32191157",
+              "candidate_text_sha256": "fa030ff284405c6a321463bb1344fd3aa90da03276596f3958762d8c047cee2c"
+            },
+            {
+              "location": "primes/sample4/request0",
+              "common_prefix_characters": 33,
+              "reference_characters": 204,
+              "candidate_characters": 271,
+              "reference_text_sha256": "b8aae973a52496df91c0543b5eb8c821a597c7799da765bc8da37b87b11485c5",
+              "candidate_text_sha256": "fa030ff284405c6a321463bb1344fd3aa90da03276596f3958762d8c047cee2c"
+            },
+            {
+              "location": "primes/sample5/request0",
+              "common_prefix_characters": 183,
+              "reference_characters": 231,
+              "candidate_characters": 271,
+              "reference_text_sha256": "c1b64d2551c79b00f1a820199e7ebe356ca87c2bcc85ca19396e0621230a1dbb",
+              "candidate_text_sha256": "fa030ff284405c6a321463bb1344fd3aa90da03276596f3958762d8c047cee2c"
+            },
+            {
+              "location": "primes/sample6/request0",
+              "common_prefix_characters": 200,
+              "reference_characters": 238,
+              "candidate_characters": 271,
+              "reference_text_sha256": "533a3e28db7d9b55a67ebaf59a4bd88cfc644dc63e1e0ec434323b7d32191157",
+              "candidate_text_sha256": "fa030ff284405c6a321463bb1344fd3aa90da03276596f3958762d8c047cee2c"
+            },
+            {
+              "location": "math/sample2/request0",
+              "common_prefix_characters": 165,
+              "reference_characters": 381,
+              "candidate_characters": 398,
+              "reference_text_sha256": "ed7ad98095f368bf37d3a00d30bad778a4febf7f806bd905bf4715381d88a445",
+              "candidate_text_sha256": "1728d8716d8fdb143423d122139612a79782ec7865e1cbd2edb5a59d9b338a14"
+            },
+            {
+              "location": "math/sample3/request0",
+              "common_prefix_characters": 285,
+              "reference_characters": 377,
+              "candidate_characters": 398,
+              "reference_text_sha256": "c87927d8084a31531e7a0ba1c5cfa0c0255f1c2c2d081938357a249ca87baf6e",
+              "candidate_text_sha256": "1728d8716d8fdb143423d122139612a79782ec7865e1cbd2edb5a59d9b338a14"
+            },
+            {
+              "location": "math/sample4/request0",
+              "common_prefix_characters": 165,
+              "reference_characters": 381,
+              "candidate_characters": 398,
+              "reference_text_sha256": "ed7ad98095f368bf37d3a00d30bad778a4febf7f806bd905bf4715381d88a445",
+              "candidate_text_sha256": "1728d8716d8fdb143423d122139612a79782ec7865e1cbd2edb5a59d9b338a14"
+            },
+            {
+              "location": "math/sample5/request0",
+              "common_prefix_characters": 76,
+              "reference_characters": 406,
+              "candidate_characters": 398,
+              "reference_text_sha256": "8288aca8616b3d7b848b226b720220ebb147beb151dbb978512eb549b7bfff8c",
+              "candidate_text_sha256": "1728d8716d8fdb143423d122139612a79782ec7865e1cbd2edb5a59d9b338a14"
+            },
+            {
+              "location": "math/sample6/request0",
+              "common_prefix_characters": 165,
+              "reference_characters": 381,
+              "candidate_characters": 398,
+              "reference_text_sha256": "ed7ad98095f368bf37d3a00d30bad778a4febf7f806bd905bf4715381d88a445",
+              "candidate_text_sha256": "1728d8716d8fdb143423d122139612a79782ec7865e1cbd2edb5a59d9b338a14"
+            },
+            {
+              "location": "translation/sample2/request0",
+              "common_prefix_characters": 384,
+              "reference_characters": 550,
+              "candidate_characters": 551,
+              "reference_text_sha256": "7714aa3d1bd793bdf88676dc892853de2878c3cbb7e266daaa2b820dc3766653",
+              "candidate_text_sha256": "fd0d52721d4846e210b4ae42ae797a803993737b53e61779965784330a1c1ed0"
+            },
+            {
+              "location": "translation/sample4/request0",
+              "common_prefix_characters": 545,
+              "reference_characters": 555,
+              "candidate_characters": 551,
+              "reference_text_sha256": "c4461426bfd074b2bb1454e29977ad72e3d9f950076b7c7dbe95a0360d28f806",
+              "candidate_text_sha256": "fd0d52721d4846e210b4ae42ae797a803993737b53e61779965784330a1c1ed0"
+            },
+            {
+              "location": "translation/sample5/request0",
+              "common_prefix_characters": 207,
+              "reference_characters": 510,
+              "candidate_characters": 551,
+              "reference_text_sha256": "ff8ba5294ddcffc1959b088081072cea92302a589dd398e20d5480ac5126cb86",
+              "candidate_text_sha256": "fd0d52721d4846e210b4ae42ae797a803993737b53e61779965784330a1c1ed0"
+            },
+            {
+              "location": "translation/sample6/request0",
+              "common_prefix_characters": 207,
+              "reference_characters": 507,
+              "candidate_characters": 551,
+              "reference_text_sha256": "b1d6947a3521ed132f347c6e9051a5d81e3cde48d69027b6381f152759a1bdd0",
+              "candidate_text_sha256": "fd0d52721d4846e210b4ae42ae797a803993737b53e61779965784330a1c1ed0"
+            },
+            {
+              "location": "quicksort/sample2/request0",
+              "common_prefix_characters": 266,
+              "reference_characters": 353,
+              "candidate_characters": 347,
+              "reference_text_sha256": "25ee649213cdb13c3c11bbd3d1ca649d1773c54f2e0279ed073ce0c684ab3962",
+              "candidate_text_sha256": "63150e0da911421bec79d1389646e15a7fa02ee1709ab973aa07d638c8cb4d3e"
+            },
+            {
+              "location": "quicksort/sample4/request0",
+              "common_prefix_characters": 266,
+              "reference_characters": 371,
+              "candidate_characters": 347,
+              "reference_text_sha256": "452b58cd3770f822238c083d2366be4af8240b20137e98a08edd0546ea803466",
+              "candidate_text_sha256": "63150e0da911421bec79d1389646e15a7fa02ee1709ab973aa07d638c8cb4d3e"
+            },
+            {
+              "location": "quicksort/sample5/request0",
+              "common_prefix_characters": 266,
+              "reference_characters": 353,
+              "candidate_characters": 347,
+              "reference_text_sha256": "25ee649213cdb13c3c11bbd3d1ca649d1773c54f2e0279ed073ce0c684ab3962",
+              "candidate_text_sha256": "63150e0da911421bec79d1389646e15a7fa02ee1709ab973aa07d638c8cb4d3e"
+            },
+            {
+              "location": "quicksort/sample6/request0",
+              "common_prefix_characters": 266,
+              "reference_characters": 360,
+              "candidate_characters": 347,
+              "reference_text_sha256": "b517883d3166dcd8bca919ea700f0fb421aa27dfbb971847713efc2115853df6",
+              "candidate_text_sha256": "63150e0da911421bec79d1389646e15a7fa02ee1709ab973aa07d638c8cb4d3e"
+            }
+          ]
+        }
+      }
+    },
+    "isq_mtp_vs_isq": {
+      "comparisons": 129,
+      "identical_text": 48,
+      "differences": [
+        {
+          "location": "pp8192/sample2/request0",
+          "common_prefix_characters": 0,
+          "reference_characters": 8,
+          "candidate_characters": 5,
+          "reference_text_sha256": "3b80d38f7686a8b5f8e61ad562ec069ac172732fb4dab946401f21a438669a4b",
+          "candidate_text_sha256": "008f0747f4e27c8462baa991a538025bcc2dd143e78422f1afbdfcd9e757a20f"
+        },
+        {
+          "location": "pp8192/sample3/request0",
+          "common_prefix_characters": 0,
+          "reference_characters": 5,
+          "candidate_characters": 3,
+          "reference_text_sha256": "008f0747f4e27c8462baa991a538025bcc2dd143e78422f1afbdfcd9e757a20f",
+          "candidate_text_sha256": "b9776d7ddf459c9ad5b0e1d6ac61e27befb5e99fd62446677600d7cacef544d0"
+        },
+        {
+          "location": "pp8192/sample4/request0",
+          "common_prefix_characters": 0,
+          "reference_characters": 5,
+          "candidate_characters": 8,
+          "reference_text_sha256": "008f0747f4e27c8462baa991a538025bcc2dd143e78422f1afbdfcd9e757a20f",
+          "candidate_text_sha256": "3b80d38f7686a8b5f8e61ad562ec069ac172732fb4dab946401f21a438669a4b"
+        },
+        {
+          "location": "tg128_d16/sample2/request0",
+          "common_prefix_characters": 0,
+          "reference_characters": 826,
+          "candidate_characters": 814,
+          "reference_text_sha256": "3fdfab9f794b29e49fd0a5ac6b1d06c47f2e0cb4453e3008bdfbbd3b90ec6358",
+          "candidate_text_sha256": "233d2d541fbdfda359cd01e7b43cffca0311eab6aefe8f0d2e3d199e06e7bb25"
+        },
+        {
+          "location": "tg128_d16/sample3/request0",
+          "common_prefix_characters": 0,
+          "reference_characters": 553,
+          "candidate_characters": 161,
+          "reference_text_sha256": "b69b36c41810410ac7ad80a6a575cf3d9e96730a1de95a8fb4085ff9543e73ef",
+          "candidate_text_sha256": "20250e1bf8920a00efe1759b8b4048d64b5e45d465ff5902c22614665be2f474"
+        },
+        {
+          "location": "tg128_d16/sample4/request0",
+          "common_prefix_characters": 0,
+          "reference_characters": 564,
+          "candidate_characters": 552,
+          "reference_text_sha256": "4d9281b2301cba471eed3b9b58de3cb9b954006a71a9ea61e82bac1fe2c0d8bb",
+          "candidate_text_sha256": "b1f2b466aae46e8a666e3f0165acfddbc158963f75a24138d4f791301ad602f0"
+        },
+        {
+          "location": "tg128_d16/sample5/request0",
+          "common_prefix_characters": 11,
+          "reference_characters": 539,
+          "candidate_characters": 501,
+          "reference_text_sha256": "6b04cf660fced6ae4407aeb1cde12e263da429b73df184ae44838ccfcb229248",
+          "candidate_text_sha256": "82887e7cd5a114827cf1c2fc961142209c4b17b68b78b7d6838a845c47356b43"
+        },
+        {
+          "location": "tg128_d16/sample6/request0",
+          "common_prefix_characters": 0,
+          "reference_characters": 471,
+          "candidate_characters": 521,
+          "reference_text_sha256": "c444fea021bf5dfc1cb62058091b705445bc660818d924ddd103928d9f53ece1",
+          "candidate_text_sha256": "72ce000a272580d01d110967437bffc7fda1b191d5bb12cda515e4ab53fa6a25"
+        },
+        {
+          "location": "python/sample6/request0",
+          "common_prefix_characters": 105,
+          "reference_characters": 414,
+          "candidate_characters": 403,
+          "reference_text_sha256": "8e38cb4c814fecf5d09b7dd3935371b9dd95d45b045a5dfe0e9afe9f2ed405af",
+          "candidate_text_sha256": "22a562b8921b3ddcbf193781a748d1db2b439a927ce7c5884e4865fab7418e20"
+        },
+        {
+          "location": "prose/sample4/request0",
+          "common_prefix_characters": 333,
+          "reference_characters": 660,
+          "candidate_characters": 659,
+          "reference_text_sha256": "81962ff28bf605f50865b5eae490d393f9e7a430f71ce51876a352730902c194",
+          "candidate_text_sha256": "6827b4395ec5c180bee4d095ec426ce4f77db2ee73ad6153d1e3862bc6620f73"
+        },
+        {
+          "location": "prose/sample6/request0",
+          "common_prefix_characters": 243,
+          "reference_characters": 660,
+          "candidate_characters": 659,
+          "reference_text_sha256": "cdb393a617bc35a4b4bcaf04bb410d95b32da5f7181d42b3b1c48799cbc1e33f",
+          "candidate_text_sha256": "6827b4395ec5c180bee4d095ec426ce4f77db2ee73ad6153d1e3862bc6620f73"
+        },
+        {
+          "location": "json/sample2/request0",
+          "common_prefix_characters": 261,
+          "reference_characters": 509,
+          "candidate_characters": 497,
+          "reference_text_sha256": "e48cf96ae8e2e077a1cf1a8e8b1fafae12b235d43fd1c0b52fdbe787b50ca604",
+          "candidate_text_sha256": "b40f73200f96e65bcfe6f8efdf6e37b93aa3f80fff9f82cd21c15c752dc13746"
+        },
+        {
+          "location": "json/sample3/request0",
+          "common_prefix_characters": 261,
+          "reference_characters": 500,
+          "candidate_characters": 497,
+          "reference_text_sha256": "203244082f70f80f17c61f3266d284f449bfc578263cf1279374ad8f8c45532c",
+          "candidate_text_sha256": "96dbbd699c935d8f11106d21fda2810b62a2d4aa43072610fdeddfd4be91b650"
+        },
+        {
+          "location": "json/sample4/request0",
+          "common_prefix_characters": 424,
+          "reference_characters": 497,
+          "candidate_characters": 490,
+          "reference_text_sha256": "96dbbd699c935d8f11106d21fda2810b62a2d4aa43072610fdeddfd4be91b650",
+          "candidate_text_sha256": "15358e6ea630d161ed8c67f0fa45f48295f1c3a70a805b932f195008f54220ad"
+        },
+        {
+          "location": "json/sample5/request0",
+          "common_prefix_characters": 297,
+          "reference_characters": 497,
+          "candidate_characters": 487,
+          "reference_text_sha256": "96dbbd699c935d8f11106d21fda2810b62a2d4aa43072610fdeddfd4be91b650",
+          "candidate_text_sha256": "8d687c7504db49d36b308ba3b867c8b320058bb86ddb25572c75a459c569a384"
+        },
+        {
+          "location": "json/sample6/request0",
+          "common_prefix_characters": 261,
+          "reference_characters": 490,
+          "candidate_characters": 480,
+          "reference_text_sha256": "15358e6ea630d161ed8c67f0fa45f48295f1c3a70a805b932f195008f54220ad",
+          "candidate_text_sha256": "2fdc3695865ade6e0e4c8ca8086666af5c68461e9dce960e9e6a5d43b73030a7"
+        },
+        {
+          "location": "primes/sample2/request0",
+          "common_prefix_characters": 33,
+          "reference_characters": 238,
+          "candidate_characters": 204,
+          "reference_text_sha256": "533a3e28db7d9b55a67ebaf59a4bd88cfc644dc63e1e0ec434323b7d32191157",
+          "candidate_text_sha256": "9cbc627f060d4c394484a23014e7e586a0c6705e231decf2379e495ab24319a9"
+        },
+        {
+          "location": "primes/sample3/request0",
+          "common_prefix_characters": 116,
+          "reference_characters": 210,
+          "candidate_characters": 238,
+          "reference_text_sha256": "f90c0b29ed008e8acd3b8d4080f8452244b54d154aae70c343cd2a4fbc5dc070",
+          "candidate_text_sha256": "533a3e28db7d9b55a67ebaf59a4bd88cfc644dc63e1e0ec434323b7d32191157"
+        },
+        {
+          "location": "primes/sample4/request0",
+          "common_prefix_characters": 33,
+          "reference_characters": 210,
+          "candidate_characters": 204,
+          "reference_text_sha256": "f90c0b29ed008e8acd3b8d4080f8452244b54d154aae70c343cd2a4fbc5dc070",
+          "candidate_text_sha256": "b8aae973a52496df91c0543b5eb8c821a597c7799da765bc8da37b87b11485c5"
+        },
+        {
+          "location": "primes/sample5/request0",
+          "common_prefix_characters": 33,
+          "reference_characters": 204,
+          "candidate_characters": 231,
+          "reference_text_sha256": "b8aae973a52496df91c0543b5eb8c821a597c7799da765bc8da37b87b11485c5",
+          "candidate_text_sha256": "c1b64d2551c79b00f1a820199e7ebe356ca87c2bcc85ca19396e0621230a1dbb"
+        },
+        {
+          "location": "primes/sample6/request0",
+          "common_prefix_characters": 183,
+          "reference_characters": 231,
+          "candidate_characters": 238,
+          "reference_text_sha256": "c1b64d2551c79b00f1a820199e7ebe356ca87c2bcc85ca19396e0621230a1dbb",
+          "candidate_text_sha256": "533a3e28db7d9b55a67ebaf59a4bd88cfc644dc63e1e0ec434323b7d32191157"
+        },
+        {
+          "location": "math/sample3/request0",
+          "common_prefix_characters": 165,
+          "reference_characters": 381,
+          "candidate_characters": 377,
+          "reference_text_sha256": "ed7ad98095f368bf37d3a00d30bad778a4febf7f806bd905bf4715381d88a445",
+          "candidate_text_sha256": "c87927d8084a31531e7a0ba1c5cfa0c0255f1c2c2d081938357a249ca87baf6e"
+        },
+        {
+          "location": "math/sample4/request0",
+          "common_prefix_characters": 301,
+          "reference_characters": 404,
+          "candidate_characters": 381,
+          "reference_text_sha256": "648ce818f8354da7fcdda90cb502b6976fd2c9d7a0ea98703eecc980cd51e97d",
+          "candidate_text_sha256": "ed7ad98095f368bf37d3a00d30bad778a4febf7f806bd905bf4715381d88a445"
+        },
+        {
+          "location": "math/sample5/request0",
+          "common_prefix_characters": 76,
+          "reference_characters": 381,
+          "candidate_characters": 406,
+          "reference_text_sha256": "ed7ad98095f368bf37d3a00d30bad778a4febf7f806bd905bf4715381d88a445",
+          "candidate_text_sha256": "8288aca8616b3d7b848b226b720220ebb147beb151dbb978512eb549b7bfff8c"
+        },
+        {
+          "location": "translation/sample2/request0",
+          "common_prefix_characters": 486,
+          "reference_characters": 558,
+          "candidate_characters": 550,
+          "reference_text_sha256": "aa50a24196ea7b52d7032d52534808b2b697fa039c92ac76a3543aaecb39bb7a",
+          "candidate_text_sha256": "7714aa3d1bd793bdf88676dc892853de2878c3cbb7e266daaa2b820dc3766653"
+        },
+        {
+          "location": "translation/sample4/request0",
+          "common_prefix_characters": 545,
+          "reference_characters": 551,
+          "candidate_characters": 555,
+          "reference_text_sha256": "fd0d52721d4846e210b4ae42ae797a803993737b53e61779965784330a1c1ed0",
+          "candidate_text_sha256": "c4461426bfd074b2bb1454e29977ad72e3d9f950076b7c7dbe95a0360d28f806"
+        },
+        {
+          "location": "translation/sample5/request0",
+          "common_prefix_characters": 293,
+          "reference_characters": 506,
+          "candidate_characters": 510,
+          "reference_text_sha256": "1c3a1a3b2a9f749b430beaadc3c734d9dd1a9dd4035793d735d116aa7e752c28",
+          "candidate_text_sha256": "ff8ba5294ddcffc1959b088081072cea92302a589dd398e20d5480ac5126cb86"
+        },
+        {
+          "location": "translation/sample6/request0",
+          "common_prefix_characters": 417,
+          "reference_characters": 506,
+          "candidate_characters": 507,
+          "reference_text_sha256": "95ec609d27ac54df7482f22a4cc43734684360d95217013104958f40f5c3a702",
+          "candidate_text_sha256": "b1d6947a3521ed132f347c6e9051a5d81e3cde48d69027b6381f152759a1bdd0"
+        },
+        {
+          "location": "quicksort/sample2/request0",
+          "common_prefix_characters": 266,
+          "reference_characters": 347,
+          "candidate_characters": 353,
+          "reference_text_sha256": "63150e0da911421bec79d1389646e15a7fa02ee1709ab973aa07d638c8cb4d3e",
+          "candidate_text_sha256": "25ee649213cdb13c3c11bbd3d1ca649d1773c54f2e0279ed073ce0c684ab3962"
+        },
+        {
+          "location": "quicksort/sample3/request0",
+          "common_prefix_characters": 266,
+          "reference_characters": 333,
+          "candidate_characters": 347,
+          "reference_text_sha256": "bc76c79f6ed827496d10434427fd037690bab52721a0505a37a25813635457fa",
+          "candidate_text_sha256": "63150e0da911421bec79d1389646e15a7fa02ee1709ab973aa07d638c8cb4d3e"
+        },
+        {
+          "location": "quicksort/sample4/request0",
+          "common_prefix_characters": 302,
+          "reference_characters": 333,
+          "candidate_characters": 371,
+          "reference_text_sha256": "bc76c79f6ed827496d10434427fd037690bab52721a0505a37a25813635457fa",
+          "candidate_text_sha256": "452b58cd3770f822238c083d2366be4af8240b20137e98a08edd0546ea803466"
+        },
+        {
+          "location": "quicksort/sample5/request0",
+          "common_prefix_characters": 296,
+          "reference_characters": 333,
+          "candidate_characters": 353,
+          "reference_text_sha256": "bc76c79f6ed827496d10434427fd037690bab52721a0505a37a25813635457fa",
+          "candidate_text_sha256": "25ee649213cdb13c3c11bbd3d1ca649d1773c54f2e0279ed073ce0c684ab3962"
+        },
+        {
+          "location": "concurrency4/sample2/request0",
+          "common_prefix_characters": 105,
+          "reference_characters": 403,
+          "candidate_characters": 414,
+          "reference_text_sha256": "22a562b8921b3ddcbf193781a748d1db2b439a927ce7c5884e4865fab7418e20",
+          "candidate_text_sha256": "8e38cb4c814fecf5d09b7dd3935371b9dd95d45b045a5dfe0e9afe9f2ed405af"
+        },
+        {
+          "location": "concurrency4/sample2/request2",
+          "common_prefix_characters": 17,
+          "reference_characters": 668,
+          "candidate_characters": 659,
+          "reference_text_sha256": "193805b6853a59cbc965ca33ed2b6d00e135b17a6ba599e775f51f84a1ed6313",
+          "candidate_text_sha256": "6827b4395ec5c180bee4d095ec426ce4f77db2ee73ad6153d1e3862bc6620f73"
+        },
+        {
+          "location": "concurrency4/sample2/request3",
+          "common_prefix_characters": 261,
+          "reference_characters": 470,
+          "candidate_characters": 490,
+          "reference_text_sha256": "cfe7cd81a7dc90b4d56064981c8f865b6e13957c0c752d7e354497d6a259a1b9",
+          "candidate_text_sha256": "15358e6ea630d161ed8c67f0fa45f48295f1c3a70a805b932f195008f54220ad"
+        },
+        {
+          "location": "concurrency4/sample3/request2",
+          "common_prefix_characters": 17,
+          "reference_characters": 659,
+          "candidate_characters": 659,
+          "reference_text_sha256": "4e315a867e89c258a77fba3cbfd5d29f33a298b476451177206fd5f2c0b1d4ef",
+          "candidate_text_sha256": "6827b4395ec5c180bee4d095ec426ce4f77db2ee73ad6153d1e3862bc6620f73"
+        },
+        {
+          "location": "concurrency4/sample3/request3",
+          "common_prefix_characters": 261,
+          "reference_characters": 495,
+          "candidate_characters": 501,
+          "reference_text_sha256": "d96b711d1eb86308344af1df4fce717e70857b4202a84b03f6b74a3c89c9bab1",
+          "candidate_text_sha256": "4fc5660a6fd69759d1f04a835631aa0f07b572caada2d49f1129f424148eaefe"
+        },
+        {
+          "location": "concurrency4/sample4/request2",
+          "common_prefix_characters": 17,
+          "reference_characters": 659,
+          "candidate_characters": 655,
+          "reference_text_sha256": "4e315a867e89c258a77fba3cbfd5d29f33a298b476451177206fd5f2c0b1d4ef",
+          "candidate_text_sha256": "a5a445c03803d4579b43aec8d96fe6fb1d236e2e17e16ccc06bc9df9a600b3cf"
+        },
+        {
+          "location": "concurrency4/sample4/request3",
+          "common_prefix_characters": 234,
+          "reference_characters": 470,
+          "candidate_characters": 473,
+          "reference_text_sha256": "cfe7cd81a7dc90b4d56064981c8f865b6e13957c0c752d7e354497d6a259a1b9",
+          "candidate_text_sha256": "4b896a5f4c8fc644a9d4fdb63335327542f2a09c641fae0e03dcdb3f6f012a40"
+        },
+        {
+          "location": "concurrency4/sample5/request0",
+          "common_prefix_characters": 105,
+          "reference_characters": 412,
+          "candidate_characters": 414,
+          "reference_text_sha256": "d2d297d75d388c7b1342ab178a624395f20aedf90bd36b947b71eaf0ae07a524",
+          "candidate_text_sha256": "8e38cb4c814fecf5d09b7dd3935371b9dd95d45b045a5dfe0e9afe9f2ed405af"
+        },
+        {
+          "location": "concurrency4/sample5/request2",
+          "common_prefix_characters": 243,
+          "reference_characters": 660,
+          "candidate_characters": 659,
+          "reference_text_sha256": "cdb393a617bc35a4b4bcaf04bb410d95b32da5f7181d42b3b1c48799cbc1e33f",
+          "candidate_text_sha256": "6827b4395ec5c180bee4d095ec426ce4f77db2ee73ad6153d1e3862bc6620f73"
+        },
+        {
+          "location": "concurrency4/sample5/request3",
+          "common_prefix_characters": 234,
+          "reference_characters": 458,
+          "candidate_characters": 494,
+          "reference_text_sha256": "56032528e3679a1eb61e19d5651fe20b18e9bea322400ef89de0155ada193f4c",
+          "candidate_text_sha256": "264c2b01949521a8ad7b17949fbb839e6c43eb9ea3d05d5ddc96c95462a7364b"
+        },
+        {
+          "location": "concurrency4/sample6/request0",
+          "common_prefix_characters": 105,
+          "reference_characters": 418,
+          "candidate_characters": 403,
+          "reference_text_sha256": "9694090937d4fd05c99b7baa3006359c63f4f58aaa1cd7555569cc6c0a871b2d",
+          "candidate_text_sha256": "22a562b8921b3ddcbf193781a748d1db2b439a927ce7c5884e4865fab7418e20"
+        },
+        {
+          "location": "concurrency4/sample6/request2",
+          "common_prefix_characters": 17,
+          "reference_characters": 659,
+          "candidate_characters": 659,
+          "reference_text_sha256": "4e315a867e89c258a77fba3cbfd5d29f33a298b476451177206fd5f2c0b1d4ef",
+          "candidate_text_sha256": "6827b4395ec5c180bee4d095ec426ce4f77db2ee73ad6153d1e3862bc6620f73"
+        },
+        {
+          "location": "concurrency4/sample6/request3",
+          "common_prefix_characters": 234,
+          "reference_characters": 473,
+          "candidate_characters": 497,
+          "reference_text_sha256": "5d5c3e7e43b920f45bef616f481cd0af524b0b2bf072dbebf81d73d8fa3a309f",
+          "candidate_text_sha256": "96dbbd699c935d8f11106d21fda2810b62a2d4aa43072610fdeddfd4be91b650"
+        },
+        {
+          "location": "concurrency8/sample2/request2",
+          "common_prefix_characters": 17,
+          "reference_characters": 672,
+          "candidate_characters": 659,
+          "reference_text_sha256": "ed6a6c5eb1666d5063553fbc48f1a0d88d36a379b9f523807683376989c839cc",
+          "candidate_text_sha256": "6827b4395ec5c180bee4d095ec426ce4f77db2ee73ad6153d1e3862bc6620f73"
+        },
+        {
+          "location": "concurrency8/sample2/request3",
+          "common_prefix_characters": 234,
+          "reference_characters": 473,
+          "candidate_characters": 495,
+          "reference_text_sha256": "5d5c3e7e43b920f45bef616f481cd0af524b0b2bf072dbebf81d73d8fa3a309f",
+          "candidate_text_sha256": "d96b711d1eb86308344af1df4fce717e70857b4202a84b03f6b74a3c89c9bab1"
+        },
+        {
+          "location": "concurrency8/sample2/request4",
+          "common_prefix_characters": 183,
+          "reference_characters": 237,
+          "candidate_characters": 261,
+          "reference_text_sha256": "fffe1375caad6fe0076c583850537ac6bb23e9febf7d4dc5695ee5c9d34927b2",
+          "candidate_text_sha256": "cc95265f4a23a2c0550fd148f25e5fc1cd7043ada8d9334eb52540fd099c2569"
+        },
+        {
+          "location": "concurrency8/sample2/request7",
+          "common_prefix_characters": 266,
+          "reference_characters": 347,
+          "candidate_characters": 333,
+          "reference_text_sha256": "63150e0da911421bec79d1389646e15a7fa02ee1709ab973aa07d638c8cb4d3e",
+          "candidate_text_sha256": "bc76c79f6ed827496d10434427fd037690bab52721a0505a37a25813635457fa"
+        },
+        {
+          "location": "concurrency8/sample3/request3",
+          "common_prefix_characters": 234,
+          "reference_characters": 468,
+          "candidate_characters": 509,
+          "reference_text_sha256": "a6f9a0ee560aa6885e0f037c33c80a2a752d0ab2dc4ed1882ea03d00f4a65d5d",
+          "candidate_text_sha256": "e48cf96ae8e2e077a1cf1a8e8b1fafae12b235d43fd1c0b52fdbe787b50ca604"
+        },
+        {
+          "location": "concurrency8/sample3/request4",
+          "common_prefix_characters": 93,
+          "reference_characters": 238,
+          "candidate_characters": 233,
+          "reference_text_sha256": "533a3e28db7d9b55a67ebaf59a4bd88cfc644dc63e1e0ec434323b7d32191157",
+          "candidate_text_sha256": "a8964f8bb155865d313a06e13e9ee780b0b8d093e79e4296a226bc3acb9a4fe3"
+        },
+        {
+          "location": "concurrency8/sample3/request5",
+          "common_prefix_characters": 349,
+          "reference_characters": 398,
+          "candidate_characters": 398,
+          "reference_text_sha256": "a99640afcf2044b3f216a2e25cea7bd2b17fd60df1322ef833fb13d08ec7cfce",
+          "candidate_text_sha256": "1728d8716d8fdb143423d122139612a79782ec7865e1cbd2edb5a59d9b338a14"
+        },
+        {
+          "location": "concurrency8/sample3/request6",
+          "common_prefix_characters": 207,
+          "reference_characters": 506,
+          "candidate_characters": 551,
+          "reference_text_sha256": "1c3a1a3b2a9f749b430beaadc3c734d9dd1a9dd4035793d735d116aa7e752c28",
+          "candidate_text_sha256": "fd0d52721d4846e210b4ae42ae797a803993737b53e61779965784330a1c1ed0"
+        },
+        {
+          "location": "concurrency8/sample3/request7",
+          "common_prefix_characters": 296,
+          "reference_characters": 353,
+          "candidate_characters": 360,
+          "reference_text_sha256": "25ee649213cdb13c3c11bbd3d1ca649d1773c54f2e0279ed073ce0c684ab3962",
+          "candidate_text_sha256": "b517883d3166dcd8bca919ea700f0fb421aa27dfbb971847713efc2115853df6"
+        },
+        {
+          "location": "concurrency8/sample4/request0",
+          "common_prefix_characters": 105,
+          "reference_characters": 412,
+          "candidate_characters": 418,
+          "reference_text_sha256": "d2d297d75d388c7b1342ab178a624395f20aedf90bd36b947b71eaf0ae07a524",
+          "candidate_text_sha256": "9694090937d4fd05c99b7baa3006359c63f4f58aaa1cd7555569cc6c0a871b2d"
+        },
+        {
+          "location": "concurrency8/sample4/request2",
+          "common_prefix_characters": 17,
+          "reference_characters": 683,
+          "candidate_characters": 659,
+          "reference_text_sha256": "55b60216d4161e52265c19a02bc120c4146459a42f11c426ba8eeccc8fc234b8",
+          "candidate_text_sha256": "6827b4395ec5c180bee4d095ec426ce4f77db2ee73ad6153d1e3862bc6620f73"
+        },
+        {
+          "location": "concurrency8/sample4/request3",
+          "common_prefix_characters": 234,
+          "reference_characters": 487,
+          "candidate_characters": 473,
+          "reference_text_sha256": "8d687c7504db49d36b308ba3b867c8b320058bb86ddb25572c75a459c569a384",
+          "candidate_text_sha256": "4b896a5f4c8fc644a9d4fdb63335327542f2a09c641fae0e03dcdb3f6f012a40"
+        },
+        {
+          "location": "concurrency8/sample4/request4",
+          "common_prefix_characters": 93,
+          "reference_characters": 233,
+          "candidate_characters": 232,
+          "reference_text_sha256": "a8964f8bb155865d313a06e13e9ee780b0b8d093e79e4296a226bc3acb9a4fe3",
+          "candidate_text_sha256": "1713b6288b503bc4da8442407c1e6d465f83618a98945931e4e44ad2aba686c9"
+        },
+        {
+          "location": "concurrency8/sample4/request5",
+          "common_prefix_characters": 165,
+          "reference_characters": 404,
+          "candidate_characters": 398,
+          "reference_text_sha256": "648ce818f8354da7fcdda90cb502b6976fd2c9d7a0ea98703eecc980cd51e97d",
+          "candidate_text_sha256": "1728d8716d8fdb143423d122139612a79782ec7865e1cbd2edb5a59d9b338a14"
+        },
+        {
+          "location": "concurrency8/sample4/request7",
+          "common_prefix_characters": 302,
+          "reference_characters": 333,
+          "candidate_characters": 341,
+          "reference_text_sha256": "bc76c79f6ed827496d10434427fd037690bab52721a0505a37a25813635457fa",
+          "candidate_text_sha256": "f3d60a3852891a793656f6dc95f357de37a2394feceea4f0b19b42f1c5ceee48"
+        },
+        {
+          "location": "concurrency8/sample5/request0",
+          "common_prefix_characters": 281,
+          "reference_characters": 403,
+          "candidate_characters": 412,
+          "reference_text_sha256": "22a562b8921b3ddcbf193781a748d1db2b439a927ce7c5884e4865fab7418e20",
+          "candidate_text_sha256": "d2d297d75d388c7b1342ab178a624395f20aedf90bd36b947b71eaf0ae07a524"
+        },
+        {
+          "location": "concurrency8/sample5/request2",
+          "common_prefix_characters": 17,
+          "reference_characters": 682,
+          "candidate_characters": 659,
+          "reference_text_sha256": "bf6f1cbbfadcd8bc842e98b654f738d12efc17039938ff7729766a255bffb43e",
+          "candidate_text_sha256": "6827b4395ec5c180bee4d095ec426ce4f77db2ee73ad6153d1e3862bc6620f73"
+        },
+        {
+          "location": "concurrency8/sample5/request3",
+          "common_prefix_characters": 234,
+          "reference_characters": 468,
+          "candidate_characters": 517,
+          "reference_text_sha256": "e91b07945ffd762071168431b626623b9ffe60a580c6d75b7030e59f35c62f17",
+          "candidate_text_sha256": "c99172354c3321f29532e41ef5dde20ccc314de243d69b0058840f45c3c5a0b9"
+        },
+        {
+          "location": "concurrency8/sample5/request4",
+          "common_prefix_characters": 93,
+          "reference_characters": 212,
+          "candidate_characters": 210,
+          "reference_text_sha256": "a3edb73ae67f2f1d3625fe8da8db2ad186dbd23cc7f500ed0a34c3fc8c3396e5",
+          "candidate_text_sha256": "f90c0b29ed008e8acd3b8d4080f8452244b54d154aae70c343cd2a4fbc5dc070"
+        },
+        {
+          "location": "concurrency8/sample5/request5",
+          "common_prefix_characters": 301,
+          "reference_characters": 404,
+          "candidate_characters": 381,
+          "reference_text_sha256": "648ce818f8354da7fcdda90cb502b6976fd2c9d7a0ea98703eecc980cd51e97d",
+          "candidate_text_sha256": "ed7ad98095f368bf37d3a00d30bad778a4febf7f806bd905bf4715381d88a445"
+        },
+        {
+          "location": "concurrency8/sample5/request6",
+          "common_prefix_characters": 207,
+          "reference_characters": 550,
+          "candidate_characters": 506,
+          "reference_text_sha256": "7714aa3d1bd793bdf88676dc892853de2878c3cbb7e266daaa2b820dc3766653",
+          "candidate_text_sha256": "1c3a1a3b2a9f749b430beaadc3c734d9dd1a9dd4035793d735d116aa7e752c28"
+        },
+        {
+          "location": "concurrency8/sample5/request7",
+          "common_prefix_characters": 297,
+          "reference_characters": 333,
+          "candidate_characters": 347,
+          "reference_text_sha256": "95a7bfb22a5a61b519649dd355e7e9779448204fc4f2d56312cc0111f7d7aa7c",
+          "candidate_text_sha256": "63150e0da911421bec79d1389646e15a7fa02ee1709ab973aa07d638c8cb4d3e"
+        },
+        {
+          "location": "concurrency8/sample6/request0",
+          "common_prefix_characters": 105,
+          "reference_characters": 412,
+          "candidate_characters": 414,
+          "reference_text_sha256": "d2d297d75d388c7b1342ab178a624395f20aedf90bd36b947b71eaf0ae07a524",
+          "candidate_text_sha256": "8e38cb4c814fecf5d09b7dd3935371b9dd95d45b045a5dfe0e9afe9f2ed405af"
+        },
+        {
+          "location": "concurrency8/sample6/request2",
+          "common_prefix_characters": 372,
+          "reference_characters": 655,
+          "candidate_characters": 659,
+          "reference_text_sha256": "78b3710aed693e20cc539e8d9e381321dec52849e08311b852214dbf973b5776",
+          "candidate_text_sha256": "6827b4395ec5c180bee4d095ec426ce4f77db2ee73ad6153d1e3862bc6620f73"
+        },
+        {
+          "location": "concurrency8/sample6/request3",
+          "common_prefix_characters": 234,
+          "reference_characters": 468,
+          "candidate_characters": 490,
+          "reference_text_sha256": "e91b07945ffd762071168431b626623b9ffe60a580c6d75b7030e59f35c62f17",
+          "candidate_text_sha256": "15358e6ea630d161ed8c67f0fa45f48295f1c3a70a805b932f195008f54220ad"
+        },
+        {
+          "location": "concurrency8/sample6/request4",
+          "common_prefix_characters": 33,
+          "reference_characters": 233,
+          "candidate_characters": 206,
+          "reference_text_sha256": "a8964f8bb155865d313a06e13e9ee780b0b8d093e79e4296a226bc3acb9a4fe3",
+          "candidate_text_sha256": "e29024f175e83ee025404af0f5d5feaff9ef0cf5cb3449525da17af4a4ef051f"
+        },
+        {
+          "location": "concurrency8/sample6/request5",
+          "common_prefix_characters": 165,
+          "reference_characters": 398,
+          "candidate_characters": 381,
+          "reference_text_sha256": "1728d8716d8fdb143423d122139612a79782ec7865e1cbd2edb5a59d9b338a14",
+          "candidate_text_sha256": "ed7ad98095f368bf37d3a00d30bad778a4febf7f806bd905bf4715381d88a445"
+        },
+        {
+          "location": "concurrency8/sample6/request6",
+          "common_prefix_characters": 207,
+          "reference_characters": 551,
+          "candidate_characters": 510,
+          "reference_text_sha256": "fd0d52721d4846e210b4ae42ae797a803993737b53e61779965784330a1c1ed0",
+          "candidate_text_sha256": "ff8ba5294ddcffc1959b088081072cea92302a589dd398e20d5480ac5126cb86"
+        },
+        {
+          "location": "concurrency8/sample6/request7",
+          "common_prefix_characters": 266,
+          "reference_characters": 333,
+          "candidate_characters": 347,
+          "reference_text_sha256": "bc76c79f6ed827496d10434427fd037690bab52721a0505a37a25813635457fa",
+          "candidate_text_sha256": "63150e0da911421bec79d1389646e15a7fa02ee1709ab973aa07d638c8cb4d3e"
+        },
+        {
+          "location": "validation/prose",
+          "common_prefix_characters": 333,
+          "reference_characters": 660,
+          "candidate_characters": 659,
+          "reference_text_sha256": "81962ff28bf605f50865b5eae490d393f9e7a430f71ce51876a352730902c194",
+          "candidate_text_sha256": "6827b4395ec5c180bee4d095ec426ce4f77db2ee73ad6153d1e3862bc6620f73"
+        },
+        {
+          "location": "validation/json",
+          "common_prefix_characters": 365,
+          "reference_characters": 513,
+          "candidate_characters": 497,
+          "reference_text_sha256": "0da8d435f24ad7e6f2254649a2247a73472c4d3e91f341873484ff9a2dd214f6",
+          "candidate_text_sha256": "96dbbd699c935d8f11106d21fda2810b62a2d4aa43072610fdeddfd4be91b650"
+        },
+        {
+          "location": "validation/primes",
+          "common_prefix_characters": 200,
+          "reference_characters": 238,
+          "candidate_characters": 271,
+          "reference_text_sha256": "533a3e28db7d9b55a67ebaf59a4bd88cfc644dc63e1e0ec434323b7d32191157",
+          "candidate_text_sha256": "fa030ff284405c6a321463bb1344fd3aa90da03276596f3958762d8c047cee2c"
+        },
+        {
+          "location": "validation/math",
+          "common_prefix_characters": 165,
+          "reference_characters": 381,
+          "candidate_characters": 398,
+          "reference_text_sha256": "ed7ad98095f368bf37d3a00d30bad778a4febf7f806bd905bf4715381d88a445",
+          "candidate_text_sha256": "1728d8716d8fdb143423d122139612a79782ec7865e1cbd2edb5a59d9b338a14"
+        },
+        {
+          "location": "validation/translation",
+          "common_prefix_characters": 207,
+          "reference_characters": 506,
+          "candidate_characters": 551,
+          "reference_text_sha256": "1c3a1a3b2a9f749b430beaadc3c734d9dd1a9dd4035793d735d116aa7e752c28",
+          "candidate_text_sha256": "fd0d52721d4846e210b4ae42ae797a803993737b53e61779965784330a1c1ed0"
+        },
+        {
+          "location": "validation/quicksort",
+          "common_prefix_characters": 266,
+          "reference_characters": 333,
+          "candidate_characters": 347,
+          "reference_text_sha256": "bc76c79f6ed827496d10434427fd037690bab52721a0505a37a25813635457fa",
+          "candidate_text_sha256": "63150e0da911421bec79d1389646e15a7fa02ee1709ab973aa07d638c8cb4d3e"
+        },
+        {
+          "location": "repetitive_prompt",
+          "common_prefix_characters": 183,
+          "reference_characters": 308,
+          "candidate_characters": 300,
+          "reference_text_sha256": "150c384838d4dc24b53a116581e260a5f6787469e1ab337bf5cba14a0c29eb0a",
+          "candidate_text_sha256": "34ba194e53b97f888247083d1366aa3b4cc6b28f8b4a32b2e189b5a25a9cc1a8"
+        }
+      ]
+    }
+  }
+}

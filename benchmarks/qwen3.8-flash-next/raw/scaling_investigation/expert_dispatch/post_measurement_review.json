@@ -1,0 +1,12 @@
+{
+  "measured_source": "/home/ericbuehler/qwen4exp_work/moe_dispatch_20260930/moe_dispatch_bench.rs",
+  "measured_source_sha256": "b425e0ea08ec369755bcc08b265114174f79028e421e3d6a74a327de30988a4e",
+  "current_source": "/home/ericbuehler/mistral.rs/mistralrs-quant/tests/moe_dispatch_bench.rs",
+  "current_source_sha256": "f144c10242ae44a8b1be6d37ffe025051085157d618de11a055e0f782302175a",
+  "changes": [
+    "Replace the indexed MoE SiLU activation literal1 with exported ACT_SILU (same value).",
+    "Assert both output tensor shapes agree before numerical comparison.",
+    "Run rustfmt on current source."
+  ],
+  "validation": "No build or GPU execution after these review-only changes. Archived measured source, raw timings, provenance and SHA256SUMS are unchanged."
+}

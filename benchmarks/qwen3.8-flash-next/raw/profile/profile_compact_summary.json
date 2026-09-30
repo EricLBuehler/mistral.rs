@@ -1,0 +1,686 @@
+[
+  {
+    "capture": "c1",
+    "kernel_timeline_status": "present",
+    "classification": {
+      "completed_dispatch_reduce_regions": 0,
+      "incomplete_regions": 0
+    },
+    "diagnostics": [
+      "Buffers holding CUDA trace data will be flushed on CudaProfilerStop() call. See --flush-on-cudaprofilerstop to control this behavior.",
+      "Loaded CUPTI library: /opt/nvidia/nsight-systems/2026.1.3/target-linux-sbsa-armv8/libcupti-sbsa.so.13.3",
+      "CUDA injection initialized successfully.",
+      "CUDA device 0: Unified Memory trace is not supported by the current driver version or configuration.",
+      "Failed to load symbols for VMA 0xe5259de00000-0xe5259f2a2308 from '/usr/local/cuda-13.2/targets/sbsa-linux/lib/libcublasLt.so.13.4.0.1'",
+      "Failed to load symbols for VMA 0xe52575600000-0xe525906839e5 from '/usr/local/cuda-13.2/targets/sbsa-linux/lib/libcublasLt.so.13.4.0.1'",
+      "Not all CUDA events might have been collected.",
+      "Number of CUDA events collected: \t1457923.",
+      "CUDA legacy/software instrumented trace was collected.",
+      "Number of CUPTI events produced: \t1472514, CUPTI buffers: 50."
+    ],
+    "windows": {
+      "recorded_kernel_span": {
+        "duration_ns": 20049728000,
+        "kernel_count": 803807,
+        "summed_kernel_time_ns": 18089200686,
+        "kernel_busy_union_ns": 18083685102,
+        "gpu_activity_busy_union_ns": 18115010186,
+        "gpu_activity_busy_pct": 90.35040368627445,
+        "gpu_internal_idle_gap_ns": {
+          "count": 812479,
+          "sum": 1934717814,
+          "mean": 2381.252701915988,
+          "median": 128.0,
+          "p90": 288.0,
+          "p99": 7840.0,
+          "min": 1,
+          "max": 13222624
+        },
+        "categories": {
+          "moe_gemv": {
+            "count": 26260,
+            "sum": 8648971872,
+            "mean": 329359.17258187354,
+            "median": 276000.0,
+            "p90": 582272.0,
+            "p99": 848823.3599999988,
+            "min": 47648,
+            "max": 2938240,
+            "share_of_summed_kernel_time_pct": 47.81290241693104
+          },
+          "other_matrix_multiply": {
+            "count": 217030,
+            "sum": 7744397026,
+            "mean": 35683.53235036631,
+            "median": 15200.0,
+            "p90": 53696.0,
+            "p99": 135680.0,
+            "min": 896,
+            "max": 3128640,
+            "share_of_summed_kernel_time_pct": 42.812267719456045
+          },
+          "other": {
+            "count": 232429,
+            "sum": 431588881,
+            "mean": 1856.863304492985,
+            "median": 1344.0,
+            "p90": 3040.0,
+            "p99": 9088.0,
+            "min": 704,
+            "max": 112352,
+            "share_of_summed_kernel_time_pct": 2.385892491833677
+          },
+          "gdn": {
+            "count": 19377,
+            "sum": 329548306,
+            "mean": 17007.189244981164,
+            "median": 9728.0,
+            "p90": 28224.0,
+            "p99": 49184.0,
+            "min": 1536,
+            "max": 1064768,
+            "share_of_summed_kernel_time_pct": 1.8217958422842389
+          },
+          "attention": {
+            "count": 33016,
+            "sum": 255227831,
+            "mean": 7730.428610370729,
+            "median": 3168.0,
+            "p90": 29712.0,
+            "p99": 62592.0,
+            "min": 992,
+            "max": 211648,
+            "share_of_summed_kernel_time_pct": 1.41094034739485
+          },
+          "other_quantization": {
+            "count": 195745,
+            "sum": 230838327,
+            "mean": 1179.2808347595085,
+            "median": 992.0,
+            "p90": 1440.0,
+            "p99": 3424.0,
+            "min": 704,
+            "max": 92480,
+            "share_of_summed_kernel_time_pct": 1.2761112611164493
+          },
+          "hyper_connections": {
+            "count": 55623,
+            "sum": 219522601,
+            "mean": 3946.615626629272,
+            "median": 4000.0,
+            "p90": 7936.0,
+            "p99": 11992.959999999963,
+            "min": 1024,
+            "max": 145696,
+            "share_of_summed_kernel_time_pct": 1.2135561145600968
+          },
+          "mmq_outside_grouped_context": {
+            "count": 9703,
+            "sum": 142494742,
+            "mean": 14685.637637843965,
+            "median": 7040.0,
+            "p90": 46918.40000000014,
+            "p99": 102560.0,
+            "min": 896,
+            "max": 225664,
+            "share_of_summed_kernel_time_pct": 0.7877337670883531
+          },
+          "moe_dispatch_routing_reduce": {
+            "count": 13130,
+            "sum": 68773596,
+            "mean": 5237.897638994668,
+            "median": 5120.0,
+            "p90": 5248.0,
+            "p99": 8416.0,
+            "min": 4928,
+            "max": 25824,
+            "share_of_summed_kernel_time_pct": 0.3801914589472536
+          },
+          "ple": {
+            "count": 1494,
+            "sum": 17837504,
+            "mean": 11939.42704149933,
+            "median": 6144.0,
+            "p90": 26720.0,
+            "p99": 38307.83999999997,
+            "min": 1440,
+            "max": 122368,
+            "share_of_summed_kernel_time_pct": 0.09860858038799471
+          }
+        },
+        "graph_kernel_count": 645955,
+        "graph_kernel_time_ns": 14335454033,
+        "api_call_kinds": {
+          "kernel_launch": 157852,
+          "other": 431271,
+          "graph_management": 9229,
+          "synchronization": 4575,
+          "graph_launch": 241
+        },
+        "cpu_inter_launch_api_gap_ns": {
+          "count": 158092,
+          "sum": 18266315120,
+          "mean": 115542.3115654176,
+          "median": 2048.0,
+          "p90": 7648.0,
+          "p99": 147455.35999999754,
+          "min": 224,
+          "max": 76845232
+        },
+        "gpu_metrics_status": "no samples in window or counters absent"
+      },
+      "sustained_interior": {
+        "duration_ns": 15083743420,
+        "kernel_count": 611241,
+        "summed_kernel_time_ns": 13595156681,
+        "kernel_busy_union_ns": 13590955561,
+        "gpu_activity_busy_union_ns": 13614083845,
+        "gpu_activity_busy_pct": 90.25666551015888,
+        "gpu_internal_idle_gap_ns": {
+          "count": 617174,
+          "sum": 1469659575,
+          "mean": 2381.2726637868736,
+          "median": 128.0,
+          "p90": 288.0,
+          "p99": 7360.0,
+          "min": 1,
+          "max": 13222624
+        },
+        "categories": {
+          "moe_gemv": {
+            "count": 20020,
+            "sum": 6467226108,
+            "mean": 323038.2671328671,
+            "median": 270752.0,
+            "p90": 563878.4000000001,
+            "p99": 807810.8800000037,
+            "min": 47712,
+            "max": 2938240,
+            "share_of_summed_kernel_time_pct": 47.570074106158074
+          },
+          "other_matrix_multiply": {
+            "count": 165459,
+            "sum": 5844021888,
+            "mean": 35320.06048628361,
+            "median": 15200.0,
+            "p90": 53344.0,
+            "p99": 135360.0,
+            "min": 896,
+            "max": 3128640,
+            "share_of_summed_kernel_time_pct": 42.98605764630393
+          },
+          "other": {
+            "count": 175981,
+            "sum": 325329022,
+            "mean": 1848.6599235144704,
+            "median": 1344.0,
+            "p90": 3040.0,
+            "p99": 8736.0,
+            "min": 704,
+            "max": 112352,
+            "share_of_summed_kernel_time_pct": 2.3929773641716516
+          },
+          "gdn": {
+            "count": 14699,
+            "sum": 249569170,
+            "mean": 16978.64956799782,
+            "median": 9760.0,
+            "p90": 28160.0,
+            "p99": 49760.640000000014,
+            "min": 1568,
+            "max": 1008832,
+            "share_of_summed_kernel_time_pct": 1.8357211752387306
+          },
+          "attention": {
+            "count": 25089,
+            "sum": 193169239,
+            "mean": 7699.359838973255,
+            "median": 3168.0,
+            "p90": 30112.0,
+            "p99": 62432.0,
+            "min": 992,
+            "max": 153216,
+            "share_of_summed_kernel_time_pct": 1.4208680600935253
+          },
+          "other_quantization": {
+            "count": 149169,
+            "sum": 175480705,
+            "mean": 1176.388559285106,
+            "median": 992.0,
+            "p90": 1440.0,
+            "p99": 3488.0,
+            "min": 704,
+            "max": 92480,
+            "share_of_summed_kernel_time_pct": 1.29075897481376
+          },
+          "hyper_connections": {
+            "count": 42370,
+            "sum": 167577968,
+            "mean": 3955.10899221147,
+            "median": 4000.0,
+            "p90": 7936.0,
+            "p99": 12384.0,
+            "min": 1024,
+            "max": 145696,
+            "share_of_summed_kernel_time_pct": 1.2326299132263747
+          },
+          "mmq_outside_grouped_context": {
+            "count": 7304,
+            "sum": 106842649,
+            "mean": 14627.963992332969,
+            "median": 7008.0,
+            "p90": 46076.79999999996,
+            "p99": 102715.20000000004,
+            "min": 896,
+            "max": 225664,
+            "share_of_summed_kernel_time_pct": 0.785887588550698
+          },
+          "moe_dispatch_routing_reduce": {
+            "count": 10010,
+            "sum": 52419324,
+            "mean": 5236.695704295705,
+            "median": 5120.0,
+            "p90": 5248.0,
+            "p99": 8352.0,
+            "min": 4928,
+            "max": 25824,
+            "share_of_summed_kernel_time_pct": 0.3855735187904011
+          },
+          "ple": {
+            "count": 1140,
+            "sum": 13520608,
+            "mean": 11860.18245614035,
+            "median": 6144.0,
+            "p90": 26531.200000000004,
+            "p99": 38584.31999999995,
+            "min": 1440,
+            "max": 122368,
+            "share_of_summed_kernel_time_pct": 0.09945165265285845
+          }
+        },
+        "graph_kernel_count": 495700,
+        "graph_kernel_time_ns": 10829229297,
+        "api_call_kinds": {
+          "other": 315066,
+          "kernel_launch": 114595,
+          "graph_management": 6625,
+          "synchronization": 3430,
+          "graph_launch": 185
+        },
+        "cpu_inter_launch_api_gap_ns": {
+          "count": 114779,
+          "sum": 13672493392,
+          "mean": 119120.1647688166,
+          "median": 2032.0,
+          "p90": 7424.0,
+          "p99": 219809.6000000001,
+          "min": 224,
+          "max": 76845232
+        },
+        "gpu_metrics_status": "no samples in window or counters absent"
+      }
+    }
+  },
+  {
+    "capture": "c8",
+    "kernel_timeline_status": "present",
+    "classification": {
+      "completed_dispatch_reduce_regions": 4225,
+      "incomplete_regions": 0
+    },
+    "diagnostics": [
+      "Failed to load symbols for VMA 0xe5259de00000-0xe5259f2a2308 from '/usr/local/cuda-13.2/targets/sbsa-linux/lib/libcublasLt.so.13.4.0.1'",
+      "Failed to load symbols for VMA 0xe52575600000-0xe525906839e5 from '/usr/local/cuda-13.2/targets/sbsa-linux/lib/libcublasLt.so.13.4.0.1'",
+      "Not all CUDA events might have been collected.",
+      "Number of CUDA events collected: \t2151188.",
+      "CUDA legacy/software instrumented trace was collected.",
+      "Number of CUPTI events produced: \t2223715, CUPTI buffers: 50."
+    ],
+    "windows": {
+      "recorded_kernel_span": {
+        "duration_ns": 25149560160,
+        "kernel_count": 546898,
+        "summed_kernel_time_ns": 23964651953,
+        "kernel_busy_union_ns": 23963601137,
+        "gpu_activity_busy_union_ns": 24005354001,
+        "gpu_activity_busy_pct": 95.45039296226005,
+        "gpu_internal_idle_gap_ns": {
+          "count": 601082,
+          "sum": 1144206159,
+          "mean": 1903.5774802772335,
+          "median": 288.0,
+          "p90": 1600.0,
+          "p99": 9952.0,
+          "min": 1,
+          "max": 6636384
+        },
+        "categories": {
+          "moe_grouped_mmq_context": {
+            "count": 12675,
+            "sum": 13481049280,
+            "mean": 1063593.6315581854,
+            "median": 1061984.0,
+            "p90": 1324204.8,
+            "p99": 1597994.8800000001,
+            "min": 328384,
+            "max": 2084448,
+            "share_of_summed_kernel_time_pct": 56.25389138318941
+          },
+          "moe_gemv": {
+            "count": 5856,
+            "sum": 3202890878,
+            "mean": 546941.7482923497,
+            "median": 382272.0,
+            "p90": 1202464.0,
+            "p99": 2339799.9999999986,
+            "min": 47488,
+            "max": 2921024,
+            "share_of_summed_kernel_time_pct": 13.365063195082406
+          },
+          "mmq_outside_grouped_context": {
+            "count": 152070,
+            "sum": 3110264964,
+            "mean": 20452.850424146774,
+            "median": 10272.0,
+            "p90": 50976.0,
+            "p99": 111177.91999999993,
+            "min": 704,
+            "max": 3322656,
+            "share_of_summed_kernel_time_pct": 12.97855262033398
+          },
+          "other_matrix_multiply": {
+            "count": 40656,
+            "sum": 2043472088,
+            "mean": 50262.49724517906,
+            "median": 14496.0,
+            "p90": 48512.0,
+            "p99": 1917920.0,
+            "min": 896,
+            "max": 2997888,
+            "share_of_summed_kernel_time_pct": 8.527025938067876
+          },
+          "gdn": {
+            "count": 13047,
+            "sum": 894916064,
+            "mean": 68591.71181114433,
+            "median": 15424.0,
+            "p90": 248096.0,
+            "p99": 259089.27999999997,
+            "min": 1568,
+            "max": 1995808,
+            "share_of_summed_kernel_time_pct": 3.7343169671528256
+          },
+          "other": {
+            "count": 143693,
+            "sum": 395693150,
+            "mean": 2753.739917741296,
+            "median": 1760.0,
+            "p90": 4505.600000000093,
+            "p99": 23488.0,
+            "min": 704,
+            "max": 135584,
+            "share_of_summed_kernel_time_pct": 1.6511533352374241
+          },
+          "hyper_connections": {
+            "count": 30270,
+            "sum": 201022400,
+            "mean": 6640.977865873802,
+            "median": 4096.0,
+            "p90": 15264.0,
+            "p99": 19936.0,
+            "min": 1024,
+            "max": 149152,
+            "share_of_summed_kernel_time_pct": 0.8388287899788803
+          },
+          "other_quantization": {
+            "count": 98114,
+            "sum": 192648667,
+            "mean": 1963.5186313879772,
+            "median": 1504.0,
+            "p90": 3264.0,
+            "p99": 6880.0,
+            "min": 736,
+            "max": 122432,
+            "share_of_summed_kernel_time_pct": 0.8038867719749353
+          },
+          "attention": {
+            "count": 17198,
+            "sum": 179949151,
+            "mean": 10463.376613559716,
+            "median": 3712.0,
+            "p90": 24147.20000000007,
+            "p99": 84000.0,
+            "min": 992,
+            "max": 184896,
+            "share_of_summed_kernel_time_pct": 0.7508940724568844
+          },
+          "moe_dispatch_routing_reduce": {
+            "count": 24053,
+            "sum": 161662079,
+            "mean": 6721.077578680414,
+            "median": 5568.0,
+            "p90": 19808.0,
+            "p99": 22432.0,
+            "min": 864,
+            "max": 77088,
+            "share_of_summed_kernel_time_pct": 0.6745855492374987
+          },
+          "grouped_moe_quantization_context": {
+            "count": 8450,
+            "sum": 72321472,
+            "mean": 8558.754082840236,
+            "median": 7776.0,
+            "p90": 11808.0,
+            "p99": 16448.0,
+            "min": 3680,
+            "max": 123712,
+            "share_of_summed_kernel_time_pct": 0.30178394471089526
+          },
+          "ple": {
+            "count": 816,
+            "sum": 28761760,
+            "mean": 35247.25490196078,
+            "median": 14288.0,
+            "p90": 137264.0,
+            "p99": 215136.0,
+            "min": 1408,
+            "max": 373472,
+            "share_of_summed_kernel_time_pct": 0.12001743257698128
+          }
+        },
+        "graph_kernel_count": 89789,
+        "graph_kernel_time_ns": 2266347114,
+        "api_call_kinds": {
+          "other": 1072549,
+          "kernel_launch": 457104,
+          "graph_management": 12960,
+          "synchronization": 2959,
+          "graph_launch": 31
+        },
+        "cpu_inter_launch_api_gap_ns": {
+          "count": 457134,
+          "sum": 12446494704,
+          "mean": 27227.23469267217,
+          "median": 1632.0,
+          "p90": 7200.0,
+          "p99": 36005.43999999948,
+          "min": 224,
+          "max": 187424768
+        },
+        "gpu_metrics_status": "no samples in window or counters absent"
+      },
+      "sustained_interior": {
+        "duration_ns": 12031720058,
+        "kernel_count": 269781,
+        "summed_kernel_time_ns": 11460625439,
+        "kernel_busy_union_ns": 11460119551,
+        "gpu_activity_busy_union_ns": 11479551967,
+        "gpu_activity_busy_pct": 95.41073023359733,
+        "gpu_internal_idle_gap_ns": {
+          "count": 295999,
+          "sum": 552168091,
+          "mean": 1865.4390420237905,
+          "median": 288.0,
+          "p90": 1504.0,
+          "p99": 10304.0,
+          "min": 1,
+          "max": 6501536
+        },
+        "categories": {
+          "moe_grouped_mmq_context": {
+            "count": 5964,
+            "sum": 6344215145,
+            "mean": 1063751.7010395708,
+            "median": 1058464.0,
+            "p90": 1325094.4,
+            "p99": 1611449.9199999997,
+            "min": 524544,
+            "max": 2084448,
+            "share_of_summed_kernel_time_pct": 55.356622365572804
+          },
+          "moe_gemv": {
+            "count": 3130,
+            "sum": 1641421711,
+            "mean": 524415.8821086262,
+            "median": 348896.0,
+            "p90": 1247980.8,
+            "p99": 2318547.2,
+            "min": 48864,
+            "max": 2840864,
+            "share_of_summed_kernel_time_pct": 14.322269929652483
+          },
+          "mmq_outside_grouped_context": {
+            "count": 74147,
+            "sum": 1482323573,
+            "mean": 19991.686420219296,
+            "median": 10112.0,
+            "p90": 50432.0,
+            "p99": 110338.55999999959,
+            "min": 736,
+            "max": 3322656,
+            "share_of_summed_kernel_time_pct": 12.934054785140422
+          },
+          "other_matrix_multiply": {
+            "count": 20824,
+            "sum": 962247802,
+            "mean": 46208.59594698425,
+            "median": 13952.0,
+            "p90": 46656.0,
+            "p99": 1916753.28,
+            "min": 896,
+            "max": 2975264,
+            "share_of_summed_kernel_time_pct": 8.396119453703752
+          },
+          "gdn": {
+            "count": 6899,
+            "sum": 437802688,
+            "mean": 63458.86186403826,
+            "median": 14400.0,
+            "p90": 238655.99999999997,
+            "p99": 258849.27999999997,
+            "min": 1568,
+            "max": 1995808,
+            "share_of_summed_kernel_time_pct": 3.8200593006920625
+          },
+          "other": {
+            "count": 70835,
+            "sum": 190957630,
+            "mean": 2695.8089927295828,
+            "median": 1728.0,
+            "p90": 4288.0,
+            "p99": 22485.12000000011,
+            "min": 704,
+            "max": 128096,
+            "share_of_summed_kernel_time_pct": 1.666206011324475
+          },
+          "hyper_connections": {
+            "count": 14976,
+            "sum": 96648288,
+            "mean": 6453.544871794872,
+            "median": 4128.0,
+            "p90": 14880.0,
+            "p99": 19744.0,
+            "min": 1024,
+            "max": 149152,
+            "share_of_summed_kernel_time_pct": 0.8433072742357512
+          },
+          "other_quantization": {
+            "count": 48843,
+            "sum": 93920955,
+            "mean": 1922.9153614642835,
+            "median": 1472.0,
+            "p90": 3200.0,
+            "p99": 6912.0,
+            "min": 736,
+            "max": 83648,
+            "share_of_summed_kernel_time_pct": 0.8195098557221071
+          },
+          "attention": {
+            "count": 8276,
+            "sum": 86699712,
+            "mean": 10476.040599323345,
+            "median": 3712.0,
+            "p90": 16960.0,
+            "p99": 84208.0,
+            "min": 992,
+            "max": 184896,
+            "share_of_summed_kernel_time_pct": 0.7565007028758197
+          },
+          "moe_dispatch_routing_reduce": {
+            "count": 11503,
+            "sum": 76804063,
+            "mean": 6676.872381117969,
+            "median": 5568.0,
+            "p90": 18592.0,
+            "p99": 23040.0,
+            "min": 864,
+            "max": 69440,
+            "share_of_summed_kernel_time_pct": 0.6701559474986346
+          },
+          "grouped_moe_quantization_context": {
+            "count": 3976,
+            "sum": 33789824,
+            "mean": 8498.446680080482,
+            "median": 7744.0,
+            "p90": 11840.0,
+            "p99": 16864.0,
+            "min": 3680,
+            "max": 123712,
+            "share_of_summed_kernel_time_pct": 0.2948340313523791
+          },
+          "ple": {
+            "count": 408,
+            "sum": 13794048,
+            "mean": 33808.94117647059,
+            "median": 13456.0,
+            "p90": 129401.60000000003,
+            "p99": 213447.36000000002,
+            "min": 1408,
+            "max": 363968,
+            "share_of_summed_kernel_time_pct": 0.12036034222931208
+          }
+        },
+        "graph_kernel_count": 45086,
+        "graph_kernel_time_ns": 1034790030,
+        "api_call_kinds": {
+          "other": 521721,
+          "kernel_launch": 224247,
+          "graph_management": 7595,
+          "synchronization": 1349,
+          "graph_launch": 16
+        },
+        "cpu_inter_launch_api_gap_ns": {
+          "count": 224262,
+          "sum": 5809783888,
+          "mean": 25906.234172530345,
+          "median": 1632.0,
+          "p90": 7248.0,
+          "p99": 34678.23999999976,
+          "min": 224,
+          "max": 183708624
+        },
+        "gpu_metrics_status": "no samples in window or counters absent"
+      }
+    }
+  }
+]

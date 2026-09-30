@@ -1,0 +1,17 @@
+{
+  "complete": true,
+  "command": [
+    "python3",
+    "/home/ericbuehler/mistral.rs/benchmarks/qwen3.8-flash-next/raw/scaling_investigation/backend_comparison/compare_backend_results.py",
+    "--snapshot",
+    "/home/ericbuehler/.cache/huggingface/hub/models--Qwen--Qwen3.8-27B-FP8/snapshots/017b9c7af6b5689d5dd426a76e0bc077eb5ca20a",
+    "--output",
+    "/tmp/backend-archive-validation-h18_1a0a/comparison.json"
+  ],
+  "exit_code": 0,
+  "stdout": "Arm       C  Aggregate tok/s     Per-active tok/s    Mean active\nfp8       1     8.118 +/- 0.020     8.118 +/- 0.020  1.000\nfp8       8    59.253 +/- 0.075     7.423 +/- 0.017  7.982\n  C8/C1 aggregate: 7.2994x; per-active retention: 91.44%\nq4k       1    13.019 +/- 0.002    13.019 +/- 0.002  1.000\nq4k       8    71.009 +/- 0.105     8.891 +/- 0.019  7.986\n  C8/C1 aggregate: 5.4543x; per-active retention: 68.29%\n/tmp/backend-archive-validation-h18_1a0a/comparison.json\n",
+  "stderr": "",
+  "all_metrics_and_ratios_exactly_reproduced": true,
+  "archived_source_hashes_match_original_validation": true,
+  "scope": "Archived raw data and helper scripts; only pinned tokenizer/config/index read outside archive. No model tensor payloads, binary hashes, or GPU/server operations."
+}

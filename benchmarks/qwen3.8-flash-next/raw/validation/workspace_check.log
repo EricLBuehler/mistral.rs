@@ -1,0 +1,6 @@
+   Compiling mistralrs-core v0.9.4 (/home/ericbuehler/mistral.rs/mistralrs-core)
+    Checking mistralrs v0.9.4 (/home/ericbuehler/mistral.rs/mistralrs)
+    Checking mistralrs-server-core v0.9.4 (/home/ericbuehler/mistral.rs/mistralrs-server-core)
+    Checking mistralrs-pyo3 v0.9.4 (/home/ericbuehler/mistral.rs/mistralrs-pyo3)
+    Checking mistralrs-cli v0.9.4 (/home/ericbuehler/mistral.rs/mistralrs-cli)
+    Finished `dev` profile [optimized + debuginfo] target(s) in 10.23s

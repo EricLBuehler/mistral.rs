@@ -1,0 +1,17 @@
+ggml_cuda_init: found 1 CUDA devices (Total VRAM: 124610 MiB):
+  Device 0: NVIDIA GB10, compute capability 12.1, VMM: yes, VRAM: 124610 MiB
+ggml_backend_cuda_get_available_uma_memory: final available_memory_kb: 123348416
+Testing 2 devices
+
+Backend 1/2: CUDA0
+  Device description: NVIDIA GB10
+  Device memory: 124610 MB (120457 MB free)
+
+  MUL_MAT_ID(type_a=iq3_s,type_b=f32,n_mats=512,n_used=10,b=0,m=128,n=64,k=512,amax=1.000000): [1;32mOK[0m
+  MUL_MAT_ID(type_a=iq3_s,type_b=f32,n_mats=512,n_used=10,b=0,m=128,n=300,k=512,amax=1.000000): [1;32mOK[0m
+  2/2 tests passed
+  Backend CUDA0: [1;32mOK[0m
+Backend 2/2: CPU
+  Skipping
+2/2 backends passed
+[1;32mOK[0m

@@ -1,0 +1,3 @@
+# Raw evidence is hashed byte for byte.
+raw/** -text -whitespace
+*.svg -whitespace

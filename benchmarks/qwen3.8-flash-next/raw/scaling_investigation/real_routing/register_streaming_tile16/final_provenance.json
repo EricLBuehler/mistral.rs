@@ -1,0 +1,21 @@
+{
+  "completed_at": "2026-09-30T14:27:57.817414+00:00",
+  "originals_unchanged": {
+    "/home/ericbuehler/mistral.rs/mistralrs-quant/kernels/mmq_gguf/mmq_instance_q4_k.cu": true,
+    "/home/ericbuehler/mistral.rs/mistralrs-quant/kernels/mmq_gguf/mmq_instance_q4_1.cu": true,
+    "/home/ericbuehler/mistral.rs/mistralrs-quant/kernels/mmq_gguf/mmq_gguf.cuh": true,
+    "/home/ericbuehler/mistral.rs/target/release/build/mistralrs-quant-1c0ce6ee625e3844/out/libmistralrsquant.a": true,
+    "/home/ericbuehler/mistral.rs/target/release/mistralrs": true
+  },
+  "restoration": "Not needed: only external CUDA copies and a shadow native archive were changed.",
+  "recommendation": "Do not ship this variant: no reliable speedup in the matched real-route replay.",
+  "summary_sha256": "1ae72387081c5c6b508d0849024e16625440c708009ac025266450941c20f796",
+  "baseline": "/home/ericbuehler/qwen4exp_work/real_routing_20260930/tile_variants/monitored_baseline",
+  "paused_processes_record": "/home/ericbuehler/qwen4exp_work/real_routing_20260930/tile_variants/paused_cpptools.json",
+  "limitations": [
+    "25 inputs from one model layer, with native42/56 and derived B8xQ3/4/5 shapes.",
+    "Warm repeated eager expert pipeline, not full-model throughput.",
+    "Same grouped output baseline guard unchanged; all25 outputs bit-exact."
+  ],
+  "ncu_metadata_sha256": "5ca1e5add9d08ad837a467d8e53171c651a5ad2e57e3eba0494dbb6e76377b8f"
+}

@@ -1,0 +1,120 @@
+{
+  "label": "dense_fp8",
+  "complete": true,
+  "raw_sha256": "55bf1b796275143a71d20d742d816ecfa84659cd356ec783d44442829f080eda",
+  "definitions": {
+    "aggregate": "Returned output tokens / whole-trial client wall seconds.",
+    "per_active_request": "Returned output tokens / summed request latency.",
+    "mean_active": "Summed request latency / whole-trial client wall seconds.",
+    "statistics": "Arithmetic mean and sample standard deviation of three measured trials."
+  },
+  "interpretation": "Current dense-model scaling on GB10 only. Different model, weights, prompts, and speculative mode from Flash-Next. One finite C8 wave, not sustained traffic. No old-versus-new engine regression isolation.",
+  "metrics_by_concurrency": {
+    "1": {
+      "aggregate_output_tokens_per_second": {
+        "mean": 8.117503467475878,
+        "sample_stddev": 0.02044545519607637,
+        "samples": [
+          8.140505581762985,
+          8.110606071040596,
+          8.101398749624051
+        ]
+      },
+      "mean_active_requests": {
+        "mean": 0.999972016331869,
+        "sample_stddev": 6.943069180507546e-06,
+        "samples": [
+          0.9999641351580247,
+          0.9999772303133774,
+          0.999974683524205
+        ]
+      },
+      "mean_request_wall_seconds": {
+        "mean": 15.768020387333914,
+        "sample_stddev": 0.03977013020315724,
+        "samples": [
+          15.723275171872956,
+          15.781445228505618,
+          15.79934076162317
+        ]
+      },
+      "mean_request_output_tokens_per_second": {
+        "mean": 8.117748378127636,
+        "sample_stddev": 0.020497507500457514,
+        "samples": [
+          8.140814813081409,
+          8.110808906140418,
+          8.101621415161082
+        ]
+      },
+      "latency_weighted_request_output_tokens_per_second": {
+        "mean": 8.117730718355617,
+        "sample_stddev": 0.020497775961203682,
+        "samples": [
+          8.140797550180675,
+          8.110790751204263,
+          8.101603853681912
+        ]
+      },
+      "sustained_completion_boundary_output_tokens_per_second": {
+        "mean": 8.116097905691023,
+        "sample_stddev": 0.024238022735574755,
+        "samples": [
+          8.143582509911962,
+          8.106930441746432,
+          8.097780765414674
+        ]
+      }
+    },
+    "8": {
+      "aggregate_output_tokens_per_second": {
+        "mean": 59.25266943234125,
+        "sample_stddev": 0.07498618723582125,
+        "samples": [
+          59.26490680697306,
+          59.17231723997031,
+          59.320784250080386
+        ]
+      },
+      "mean_active_requests": {
+        "mean": 7.982184572190268,
+        "sample_stddev": 0.007851064598781914,
+        "samples": [
+          7.981990517604903,
+          7.990130865209608,
+          7.974432333756294
+        ]
+      },
+      "mean_request_wall_seconds": {
+        "mean": 17.243468828793993,
+        "sample_stddev": 0.03872214299795739,
+        "samples": [
+          17.239456556999357,
+          17.28404089025571,
+          17.206909039126913
+        ]
+      },
+      "mean_request_output_tokens_per_second": {
+        "mean": 7.423215941971472,
+        "sample_stddev": 0.01669231007289067,
+        "samples": [
+          7.424923517007284,
+          7.405735478411966,
+          7.438988830495167
+        ]
+      },
+      "latency_weighted_request_output_tokens_per_second": {
+        "mean": 7.423125325952657,
+        "sample_stddev": 0.01666374580740372,
+        "samples": [
+          7.424828014548462,
+          7.4056756063429034,
+          7.438872356966605
+        ]
+      },
+      "sustained_completion_boundary_output_tokens_per_second": null
+    }
+  },
+  "c8_over_c1_aggregate": 7.299371003627764,
+  "c8_over_c1_per_active_request": 0.9144335508897412
+}

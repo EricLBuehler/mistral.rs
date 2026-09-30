@@ -1,0 +1,16 @@
+{
+  "completed_at": "2026-09-30T13:49:56.576939+00:00",
+  "uses_gpu": false,
+  "checks": [
+    {
+      "script": "test_capture_validator.py",
+      "returncode": 0,
+      "result": "Valid native shape/occupancy fixtures pass; BF16 NaN input rejected."
+    },
+    {
+      "script": "test_replay_summary.py",
+      "returncode": 0,
+      "result": "Paired ratio median, occupancy and logical weight payload arithmetic pass."
+    }
+  ]
+}

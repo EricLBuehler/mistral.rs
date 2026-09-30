@@ -1,0 +1,362 @@
+[
+  {
+    "path": "README.md",
+    "bytes": 3674,
+    "sha256": "ec286d8ad9050eb61215fe8ae96f25ca165543cace1e9a4ca72af89ae8d03cec"
+  },
+  {
+    "path": "baseline/build.provenance.json",
+    "bytes": 11168,
+    "sha256": "a099e925a63d65a0d43519b023408b9051ed7e5510a11fbf54bd15b0e59a23d6"
+  },
+  {
+    "path": "baseline/lifecycle.json",
+    "bytes": 12517,
+    "sha256": "d696612ac65a560a1baf6fd52b617c7bc7052eff4016d1a66578898ce9e3a4e6"
+  },
+  {
+    "path": "baseline/replay.json",
+    "bytes": 413948,
+    "sha256": "eab84303024e8c55f6f734461e61adb75a7e9ea1711a9ede11ec82dbb38c4824"
+  },
+  {
+    "path": "baseline/replay.log",
+    "bytes": 119926,
+    "sha256": "2ad9526ac4da441a5c399c386c5c213543eb61855c2411b54bba7ece7fd8155d"
+  },
+  {
+    "path": "baseline/replay.source.rs",
+    "bytes": 42440,
+    "sha256": "23b445348c121d8357cbcb449291bd5833c51302cfe0506e3fe66d095a393693"
+  },
+  {
+    "path": "baseline/run_variant.py",
+    "bytes": 7608,
+    "sha256": "592fa3384f336ce62fc6f079c297a2df3d1fb9012b33b2c66d456371a06559c8"
+  },
+  {
+    "path": "baseline.resources.json",
+    "bytes": 1779,
+    "sha256": "621d11af788038bc4824317a43b44f40d1fc6dbb026498432288da2a07cd8ace"
+  },
+  {
+    "path": "build/archive.log",
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "path": "build/baseline.log",
+    "bytes": 16359,
+    "sha256": "82faaba0c52e52e0bd3987bc29c4548617f9fd41ccb3c5e2d7a34a1887ee095d"
+  },
+  {
+    "path": "build/check.log",
+    "bytes": 393,
+    "sha256": "a9314aaea48b7bb41cf43fd657e1dc5bcbd9fe26616655ddd55648a072844f25"
+  },
+  {
+    "path": "build/mmq_instance_q4_1.cu",
+    "bytes": 11497,
+    "sha256": "596b6dd1ff08cb80971966f70996352fea027c8526b95582341cee0640b9ee21"
+  },
+  {
+    "path": "build/mmq_instance_q4_k.cu",
+    "bytes": 11497,
+    "sha256": "6f3e1c6cc0dd4536ca22635034a9fe0e1c9c4e462f954bf51526a27b3bcaf384"
+  },
+  {
+    "path": "build/nvcc_0.log",
+    "bytes": 6511,
+    "sha256": "089b14ccfdda38d44626c6b681317f073620fc59a5e1f7c80b682cc2cb1e15e2"
+  },
+  {
+    "path": "build/nvcc_1.log",
+    "bytes": 6511,
+    "sha256": "83f913aa6e0ef1f2a445a34b88c3c8a07026d422b903a6a1cb219ce000a95676"
+  },
+  {
+    "path": "build/provenance.json",
+    "bytes": 12540,
+    "sha256": "8db3a80253ea253c5e14898eda24ed3d3141b090462698977157bd14843c4c35"
+  },
+  {
+    "path": "build/replay.source.rs",
+    "bytes": 42440,
+    "sha256": "23b445348c121d8357cbcb449291bd5833c51302cfe0506e3fe66d095a393693"
+  },
+  {
+    "path": "build/rustc.log",
+    "bytes": 352,
+    "sha256": "a50dfa2c6179f0e8498fc89d839627cd3e9d4bb1603a098a90ec826465ebb462"
+  },
+  {
+    "path": "build_shadow.py",
+    "bytes": 2359,
+    "sha256": "8e157d01fb1dc28212ab7467aa32b9432c600cbcc9df6a298ae1ea0c89bc1a7b"
+  },
+  {
+    "path": "external_artifacts.json",
+    "bytes": 69199,
+    "sha256": "50481d31b3ad65c4998063cd98d560fcae46fb637407968147adaab74aae5676"
+  },
+  {
+    "path": "final_provenance.json",
+    "bytes": 3177,
+    "sha256": "83e6db2691dcab7498e114486869730f2ad09cd02a35301629946a68828a4f06"
+  },
+  {
+    "path": "grouped_tile_override.patch",
+    "bytes": 1462,
+    "sha256": "b6f364113384d14ec4a11463e7ce28ffa634817096b77ad23e4cf3e28281dc9e"
+  },
+  {
+    "path": "initial_unmonitored_summary.json",
+    "bytes": 49316,
+    "sha256": "daebc66d2c3df7ac157317688d54d3e2b64d894dbab7e771d39a544d8dc6402d"
+  },
+  {
+    "path": "monitored_16/build.provenance.json",
+    "bytes": 12540,
+    "sha256": "8db3a80253ea253c5e14898eda24ed3d3141b090462698977157bd14843c4c35"
+  },
+  {
+    "path": "monitored_16/gpu_monitor.csv",
+    "bytes": 895,
+    "sha256": "8b950fd169ab442b64b4f3a5336d2098a74b751bd5ac4b99ab195645b25413a7"
+  },
+  {
+    "path": "monitored_16/gpu_monitor.stderr.log",
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "path": "monitored_16/lifecycle.json",
+    "bytes": 13721,
+    "sha256": "8cc293bcb6494257934b3e1379f7b92c5d711c1221afc219f46216ff2b76be5d"
+  },
+  {
+    "path": "monitored_16/replay.json",
+    "bytes": 415964,
+    "sha256": "513b57534dbe49147adcd5f9415bb6e45ae5e4337b8449ac1c48b07d8ec5d3ed"
+  },
+  {
+    "path": "monitored_16/replay.log",
+    "bytes": 121017,
+    "sha256": "80fcbb103205d744b85f58b455ede75417c763fc7e0d2694326b8f9b1d180a9e"
+  },
+  {
+    "path": "monitored_16/replay.source.rs",
+    "bytes": 42440,
+    "sha256": "23b445348c121d8357cbcb449291bd5833c51302cfe0506e3fe66d095a393693"
+  },
+  {
+    "path": "monitored_16/run_variant.py",
+    "bytes": 9588,
+    "sha256": "1e85bd1594c48f203f3ddd71e0a4e98b164f47eb0d6e3e18b136481df42ac82d"
+  },
+  {
+    "path": "monitored_32/build.provenance.json",
+    "bytes": 12540,
+    "sha256": "8db3a80253ea253c5e14898eda24ed3d3141b090462698977157bd14843c4c35"
+  },
+  {
+    "path": "monitored_32/gpu_monitor.csv",
+    "bytes": 895,
+    "sha256": "9be3114dae4c91317752af4e537656678fa0b40888a9e41d2517d4052e0fc761"
+  },
+  {
+    "path": "monitored_32/gpu_monitor.stderr.log",
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "path": "monitored_32/lifecycle.json",
+    "bytes": 13721,
+    "sha256": "a786245f3d16395fbaed8b4e86993baa55eb87201201c08e41edb0c705eb0dea"
+  },
+  {
+    "path": "monitored_32/replay.json",
+    "bytes": 416038,
+    "sha256": "6f62f881ffe903c222aab78be73ae8310d936854180d3ecd875ab759e3cc5262"
+  },
+  {
+    "path": "monitored_32/replay.log",
+    "bytes": 121091,
+    "sha256": "ec04dc2c494ecf488cf4f3230eac568ca5ff31b9f75c9c5da093d5b3c74f94d0"
+  },
+  {
+    "path": "monitored_32/replay.source.rs",
+    "bytes": 42440,
+    "sha256": "23b445348c121d8357cbcb449291bd5833c51302cfe0506e3fe66d095a393693"
+  },
+  {
+    "path": "monitored_32/run_variant.py",
+    "bytes": 9588,
+    "sha256": "1e85bd1594c48f203f3ddd71e0a4e98b164f47eb0d6e3e18b136481df42ac82d"
+  },
+  {
+    "path": "monitored_baseline/build.provenance.json",
+    "bytes": 12540,
+    "sha256": "8db3a80253ea253c5e14898eda24ed3d3141b090462698977157bd14843c4c35"
+  },
+  {
+    "path": "monitored_baseline/gpu_monitor.csv",
+    "bytes": 891,
+    "sha256": "065a2a3d9af8520ca35fd2e049f745b5abaccbe77f734cb15a49c90cdb1bb38e"
+  },
+  {
+    "path": "monitored_baseline/gpu_monitor.stderr.log",
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "path": "monitored_baseline/lifecycle.json",
+    "bytes": 13347,
+    "sha256": "1e90acf77448c23fcef787062bf83a3acd12cea6da9c7c24f9a8f96508247dce"
+  },
+  {
+    "path": "monitored_baseline/replay.json",
+    "bytes": 413863,
+    "sha256": "242ba99c1163977f4b03893d6edc381cfd1948111143e6d338035380b1273832"
+  },
+  {
+    "path": "monitored_baseline/replay.log",
+    "bytes": 119841,
+    "sha256": "d78719ecb8e7d282793440a8d22a221a40876bc6e9daf31f1d430115a47cbdd4"
+  },
+  {
+    "path": "monitored_baseline/replay.source.rs",
+    "bytes": 42440,
+    "sha256": "23b445348c121d8357cbcb449291bd5833c51302cfe0506e3fe66d095a393693"
+  },
+  {
+    "path": "monitored_baseline/run_variant.py",
+    "bytes": 9588,
+    "sha256": "1e85bd1594c48f203f3ddd71e0a4e98b164f47eb0d6e3e18b136481df42ac82d"
+  },
+  {
+    "path": "monitored_unset/build.provenance.json",
+    "bytes": 12540,
+    "sha256": "8db3a80253ea253c5e14898eda24ed3d3141b090462698977157bd14843c4c35"
+  },
+  {
+    "path": "monitored_unset/gpu_monitor.csv",
+    "bytes": 891,
+    "sha256": "5c976199857ebe060140d42b410774d68e1121ef3c41113170a2844c7cc73412"
+  },
+  {
+    "path": "monitored_unset/gpu_monitor.stderr.log",
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "path": "monitored_unset/lifecycle.json",
+    "bytes": 13686,
+    "sha256": "0d343a3ba64cd0893cf9580c8a97bdac3367f108571283d24f3fac0abf580bdf"
+  },
+  {
+    "path": "monitored_unset/replay.json",
+    "bytes": 415929,
+    "sha256": "1a7429d1440ecc9b70bb746f9adf3c238d322db5f85f662c21f6e7013781f8db"
+  },
+  {
+    "path": "monitored_unset/replay.log",
+    "bytes": 120982,
+    "sha256": "36af1d74fac963f42b490075d554b97e85caba538e0118ab4f4168cfef93f9cd"
+  },
+  {
+    "path": "monitored_unset/replay.source.rs",
+    "bytes": 42440,
+    "sha256": "23b445348c121d8357cbcb449291bd5833c51302cfe0506e3fe66d095a393693"
+  },
+  {
+    "path": "monitored_unset/run_variant.py",
+    "bytes": 9588,
+    "sha256": "1e85bd1594c48f203f3ddd71e0a4e98b164f47eb0d6e3e18b136481df42ac82d"
+  },
+  {
+    "path": "package_results.py",
+    "bytes": 2586,
+    "sha256": "7769f23f3d57b2f192b8de124c442de73e314374b3645e16584b876484edbe61"
+  },
+  {
+    "path": "patched_unset/build.provenance.json",
+    "bytes": 12540,
+    "sha256": "8db3a80253ea253c5e14898eda24ed3d3141b090462698977157bd14843c4c35"
+  },
+  {
+    "path": "patched_unset/lifecycle.json",
+    "bytes": 12852,
+    "sha256": "27137273802ee5221fee888fdd551644cc188a1bc68159fcf8693fd60a4f8e97"
+  },
+  {
+    "path": "patched_unset/replay.json",
+    "bytes": 415891,
+    "sha256": "ff6437b5a89601b2f20d960eb4ef2fa989342191b978400450e68e0ef227066e"
+  },
+  {
+    "path": "patched_unset/replay.log",
+    "bytes": 120944,
+    "sha256": "c0212efcf336b255555c41c02fd8226829a17401663b1be4dcf65475a549c7c9"
+  },
+  {
+    "path": "patched_unset/replay.source.rs",
+    "bytes": 42440,
+    "sha256": "23b445348c121d8357cbcb449291bd5833c51302cfe0506e3fe66d095a393693"
+  },
+  {
+    "path": "patched_unset/run_variant.py",
+    "bytes": 7608,
+    "sha256": "592fa3384f336ce62fc6f079c297a2df3d1fb9012b33b2c66d456371a06559c8"
+  },
+  {
+    "path": "paused_cpptools.json",
+    "bytes": 971,
+    "sha256": "e9024b5b00d1494d760c8dcb8d7f7dff977446e63826c1f2e5b8ff49f2f50a7b"
+  },
+  {
+    "path": "q4_1.baseline.resources.txt",
+    "bytes": 11925,
+    "sha256": "3821dc41201ddd6ad0e43a6818dd2819e1ab6ca46bfc32fbb2f7013a74d0ec02"
+  },
+  {
+    "path": "q4_1.variant.resources.txt",
+    "bytes": 11925,
+    "sha256": "813410c6c5096629e5c615e1e4a37211641cf8ecc7c2f3a0c90f364fcc9d2ac1"
+  },
+  {
+    "path": "q4_k.baseline.resources.txt",
+    "bytes": 11985,
+    "sha256": "b55f1815d2a86808224f27536fdd3010a01607ab71e0454c03c3616e9f635bbe"
+  },
+  {
+    "path": "q4_k.variant.resources.txt",
+    "bytes": 11985,
+    "sha256": "51871eb57669897ced58cb3905fec39ba469822c7e2303310bb52cceb5602b5c"
+  },
+  {
+    "path": "run_monitored.py",
+    "bytes": 527,
+    "sha256": "12db91e09d3409473cfc5155cd14446b96c6d1c260f165c26542df3ad3b0a30b"
+  },
+  {
+    "path": "run_variant.py",
+    "bytes": 9588,
+    "sha256": "1e85bd1594c48f203f3ddd71e0a4e98b164f47eb0d6e3e18b136481df42ac82d"
+  },
+  {
+    "path": "summarize_variants.py",
+    "bytes": 7813,
+    "sha256": "e07130a02ebe92ca19d291230bbe3d559ef6a754fe73a0a0729d2f53f69fd1e4"
+  },
+  {
+    "path": "summary.json",
+    "bytes": 151355,
+    "sha256": "600776379a3e6e3d321f7858db2e1ffd7f04b77a61021f0a2310614a72ec66ff"
+  },
+  {
+    "path": "variant.resources.json",
+    "bytes": 1779,
+    "sha256": "621d11af788038bc4824317a43b44f40d1fc6dbb026498432288da2a07cd8ace"
+  }
+]

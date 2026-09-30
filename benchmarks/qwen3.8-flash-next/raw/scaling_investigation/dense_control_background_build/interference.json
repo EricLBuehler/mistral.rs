@@ -1,0 +1,8 @@
+{
+  "reason": "This original run overlapped rust-analyzer's background debug CUDA compilation, which started at approximately 2026-09-30 03:29 UTC. Its rates are not CPU-isolated measurements.",
+  "report_use": "Archived diagnostic only; excluded from the final dense-control table and ratios.",
+  "original_sha256sums_preserved": "16b67b24ca239d6b00b18258b54f8158a111fbd4fe5451277a455891bcc95a4b",
+  "paused_processes_sha256": "afe9a9c520af1c8afb1f51d7823ffd78bacb36183ef82e1d4c34b62dbfbb53f3",
+  "pause_record": "../dense_control/paused_editor_processes.json",
+  "original_expert_probe": "The original expert_dispatch probe also overlapped this compiler activity; later ideal-tile probes ran after these processes were paused."
+}

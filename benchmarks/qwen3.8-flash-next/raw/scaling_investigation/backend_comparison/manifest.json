@@ -1,0 +1,290 @@
+{
+  "files": [
+    {
+      "file": "README.md",
+      "bytes": 2930,
+      "sha256": "284fafbe0c54e242039c1b7b5e0639abbf3cde246d127b00cd94d667e6f9bee7"
+    },
+    {
+      "file": "architecture_comparison.json",
+      "bytes": 17482,
+      "sha256": "7f2086c24b045fd32c75c325958f90cdc0fa193dc6e4706180de3b3ada4592e0"
+    },
+    {
+      "file": "archive_validation.json",
+      "bytes": 1241,
+      "sha256": "e1efb967b9bb52820eb819a6893e220d8b0ce2e8494ed2d148680527145e7496"
+    },
+    {
+      "file": "canonical_prompts.jsonl",
+      "bytes": 62728,
+      "sha256": "5cdb082233a198b7ff4a14e33c6ac8d85980043238c9d08379ac812f7df730ef"
+    },
+    {
+      "file": "checkpoint_inventory.json",
+      "bytes": 29380,
+      "sha256": "09a041e54da061915da9c31550246af42f8a059766baebf2ece930b234de5a0d"
+    },
+    {
+      "file": "checkpoint_metadata/config.json",
+      "bytes": 51350,
+      "sha256": "74227dd615bf1ea975aa676bdf355a0379858c12f394b5365cd9dfa5fc2c70bc"
+    },
+    {
+      "file": "checkpoint_metadata/flash_next.config.json",
+      "bytes": 4745,
+      "sha256": "889658f2508e8c61d409b02e70e0d78d8d4452ec65aaafbe129805d213d2e74b"
+    },
+    {
+      "file": "checkpoint_metadata/model.safetensors.index.json",
+      "bytes": 137335,
+      "sha256": "f0838c766951bdfe76d6afbdb2771a8f67aaa2231dedb3d33cebd817729843a2"
+    },
+    {
+      "file": "compare_backend_results.py",
+      "bytes": 16174,
+      "sha256": "d1746753da87deb6000f9414c31bfdc61efdd73eea5aa6698146f28565b82371"
+    },
+    {
+      "file": "comparison.json",
+      "bytes": 12345,
+      "sha256": "d076d93b29e82ca82276a80179a06b26633525a660eaaecf437cefb03df3edc3"
+    },
+    {
+      "file": "comparison.txt",
+      "bytes": 490,
+      "sha256": "e18e659fab3cc72f0d97cd3abcd7304e169e66bcaffa6903e44079d161456f35"
+    },
+    {
+      "file": "dense_ffn/README.md",
+      "bytes": 2840,
+      "sha256": "530c998aa616334a1574ae282d384cf091eb0342ff1d544db52577d7c41682a6"
+    },
+    {
+      "file": "dense_ffn/SHA256SUMS",
+      "bytes": 2178,
+      "sha256": "dd677cfb32b28953425b0519a09842b03af0658474074072aed8a641b2754822"
+    },
+    {
+      "file": "dense_ffn/affine_on/SHA256SUMS",
+      "bytes": 598,
+      "sha256": "4aaa07d89a5fc6bdd7a4ef46cee13916528884142d2c53c43915769562857aff"
+    },
+    {
+      "file": "dense_ffn/affine_on/dense_backend_bench.measured.rs",
+      "bytes": 16745,
+      "sha256": "76bccb2cea5d97b1fc1852bed9513c570cb774904407fb523325d2ea7a380262"
+    },
+    {
+      "file": "dense_ffn/affine_on/paused_editor_processes.json",
+      "bytes": 519,
+      "sha256": "55f1eadbc54772ea5ac67b5caed9ef6f99dc542c33f6ede54697bc17aef1d26c"
+    },
+    {
+      "file": "dense_ffn/affine_on/provenance.json",
+      "bytes": 5325,
+      "sha256": "2c55475e1a5581bb3f1ae6ccfb576a9e29fa955088aff7c1e0422aaa01617111"
+    },
+    {
+      "file": "dense_ffn/affine_on/results.json",
+      "bytes": 34432,
+      "sha256": "d97c93ba74fb14e1dbe7e91de365ac0478b3e03a5d6890f62d2c5a16f0ad36cb"
+    },
+    {
+      "file": "dense_ffn/affine_on/run_dense_projection.py",
+      "bytes": 7782,
+      "sha256": "746f35e30b9bbde1b83aca2a398523e736fafacbcba299d7cfc0dcdac25c5c91"
+    },
+    {
+      "file": "dense_ffn/affine_on/summary.json",
+      "bytes": 26351,
+      "sha256": "65d120a42e8f684b199199032660cb33e8e38a0d91f79a746ef4c369704f550a"
+    },
+    {
+      "file": "dense_ffn/affine_on/test.log",
+      "bytes": 22563,
+      "sha256": "727976021f218f4f9ec634a73126c1f1272a88022c18db28a423009926194394"
+    },
+    {
+      "file": "dense_ffn/archive_provenance.json",
+      "bytes": 412,
+      "sha256": "884b0c687c569bc13a28d11e1c369d7159c0ddc8461dd44094c63a018c409358"
+    },
+    {
+      "file": "dense_ffn/build/build.jsonl",
+      "bytes": 372609,
+      "sha256": "f348c117e7dc99cb2463079386ed7d235ad2dced2110a6ad969f73fcf13e802d"
+    },
+    {
+      "file": "dense_ffn/build/build.stderr.log",
+      "bytes": 393,
+      "sha256": "077357afd18ecfb3343afefdc5b8ae7ac6ccfb6efebfef4ff44392bad5bf685d"
+    },
+    {
+      "file": "dense_ffn/build/check.log",
+      "bytes": 393,
+      "sha256": "6efef2cc1fecc41dd8dbda736b66670fbbc53c4a8e4b10a9bfe952a60a478a8e"
+    },
+    {
+      "file": "dense_ffn/build/executable.txt",
+      "bytes": 86,
+      "sha256": "b580dfaa73c7b60dfb3cdf30b51467ed9cb69f6c1943e538cd1a049be2cb2247"
+    },
+    {
+      "file": "dense_ffn/comparison.json",
+      "bytes": 50562,
+      "sha256": "30889181f99b1879e7f0e14c1ae86e4f0280c9f2b756ad80de7978edee173350"
+    },
+    {
+      "file": "dense_ffn/default/SHA256SUMS",
+      "bytes": 598,
+      "sha256": "94ef178d90e5a3da82d697416dd94c9216c45d0f739afd6305f267600438582c"
+    },
+    {
+      "file": "dense_ffn/default/dense_backend_bench.measured.rs",
+      "bytes": 16745,
+      "sha256": "76bccb2cea5d97b1fc1852bed9513c570cb774904407fb523325d2ea7a380262"
+    },
+    {
+      "file": "dense_ffn/default/paused_editor_processes.json",
+      "bytes": 519,
+      "sha256": "55f1eadbc54772ea5ac67b5caed9ef6f99dc542c33f6ede54697bc17aef1d26c"
+    },
+    {
+      "file": "dense_ffn/default/provenance.json",
+      "bytes": 5315,
+      "sha256": "d1c72667513b89f7d21e5164df05f23a597bd991b1547c825bc670299a1b5219"
+    },
+    {
+      "file": "dense_ffn/default/results.json",
+      "bytes": 34347,
+      "sha256": "1a72f9dfa76f4d028b5877a60b47e52cba57d5a3bf3f9dfd860c1ab06c8f2a5f"
+    },
+    {
+      "file": "dense_ffn/default/run_dense_projection.py",
+      "bytes": 7782,
+      "sha256": "746f35e30b9bbde1b83aca2a398523e736fafacbcba299d7cfc0dcdac25c5c91"
+    },
+    {
+      "file": "dense_ffn/default/summary.json",
+      "bytes": 26218,
+      "sha256": "14988c1c78a5e96ce292a5ec6579c8577ec84b7e6ed0bfc27fb720883078b6f9"
+    },
+    {
+      "file": "dense_ffn/default/test.log",
+      "bytes": 22478,
+      "sha256": "ce0d404fd8a3a8911d8c9ba924fd1a5cfb9619af5862b6968764e110e692c971"
+    },
+    {
+      "file": "dense_ffn/package_dense_projection.py",
+      "bytes": 7854,
+      "sha256": "826b840c1b28b527e897746909c307ec7893a572395c3f9e2aaa79525c5ded58"
+    },
+    {
+      "file": "dense_fp8/metadata.json",
+      "bytes": 3304,
+      "sha256": "b40092fba1fcfe2a4d5d07a3e8ae56b53d8dede4f3a0ab9d9e60d41847db00dd"
+    },
+    {
+      "file": "dense_fp8/raw.json",
+      "bytes": 202642,
+      "sha256": "55bf1b796275143a71d20d742d816ecfa84659cd356ec783d44442829f080eda"
+    },
+    {
+      "file": "dense_fp8/server.log",
+      "bytes": 27211,
+      "sha256": "ea211eb8790383d36c451178e93b79fa82736148674c29e22fedf8ce53c34030"
+    },
+    {
+      "file": "dense_fp8/summary.json",
+      "bytes": 3758,
+      "sha256": "ebbba12e9db73718f2919e46c5c68d7d4483743ac809ee8df3da2534b7955fb5"
+    },
+    {
+      "file": "dense_fp8.controller.log",
+      "bytes": 4362,
+      "sha256": "976c8b95911e76b735f09b1f375b387b08c34f646eb821bb9b5dfbfb55a0d595"
+    },
+    {
+      "file": "dense_fp8_to_q4k/metadata.json",
+      "bytes": 3329,
+      "sha256": "923754739aa8d2d5142ccc2e85383cdde2249ff7dd8a8f80b25de722b5d7cd80"
+    },
+    {
+      "file": "dense_fp8_to_q4k/raw.json",
+      "bytes": 203747,
+      "sha256": "0cd5559307b90d04457d9ead647e0b645e83b7ac89566affa90e1f9caa781eb4"
+    },
+    {
+      "file": "dense_fp8_to_q4k/server.log",
+      "bytes": 16332,
+      "sha256": "08a669385f32242d6fb64ba9e94f52bbb42afa1858ba79b22d21dcd42f4a8367"
+    },
+    {
+      "file": "dense_fp8_to_q4k/summary.json",
+      "bytes": 3782,
+      "sha256": "24f3ea0ff0c2b98c6898e83f5b29db7e82824c29590ee841ac3be5bf0d1c00f9"
+    },
+    {
+      "file": "dense_fp8_to_q4k.controller.log",
+      "bytes": 4389,
+      "sha256": "cb32814f2737f55d842674d2ccff3e662f40b13c0beda4972bf697e14f6ddb9d"
+    },
+    {
+      "file": "harness/bench_concurrency.py",
+      "bytes": 14391,
+      "sha256": "9f664f3ff278f0f16b24e655477486e93b91aec41bf473510e13f449ab1dbbc3"
+    },
+    {
+      "file": "harness/bench_serving.py",
+      "bytes": 9350,
+      "sha256": "a16b5815b8744def761174e396de92e41ecd499afae712255721c20a33a79705"
+    },
+    {
+      "file": "harness/summarize_concurrency.py",
+      "bytes": 19027,
+      "sha256": "1ed661d68016937619f7f94b35f6801fed581219685635916e6312d1a0c42d91"
+    },
+    {
+      "file": "inventory_local_checkpoints.py",
+      "bytes": 5382,
+      "sha256": "58697c67c5b79d7ca495895fc68e126446b98474620d610dd101ff3f6a3b7823"
+    },
+    {
+      "file": "methodology.md",
+      "bytes": 4727,
+      "sha256": "7063fce61bbd75a625094adab95836bde2a3d0fb5765b4c5014278d131f23c45"
+    },
+    {
+      "file": "package_backend_results.py",
+      "bytes": 10258,
+      "sha256": "31391898f5d726998e6db7fdcbf8a96df23d10bb4c1e430a175c62c64eb10b7f"
+    },
+    {
+      "file": "paused_editor_processes.json",
+      "bytes": 519,
+      "sha256": "55f1eadbc54772ea5ac67b5caed9ef6f99dc542c33f6ede54697bc17aef1d26c"
+    },
+    {
+      "file": "paused_editor_processes_after_dense.json",
+      "bytes": 643,
+      "sha256": "61de18767b01a44945c0221f6cf521d938b29c2fe1f4c52d30f606810335b446"
+    },
+    {
+      "file": "provenance.json",
+      "bytes": 8380,
+      "sha256": "3037fe056adce55923092301c1b909464d328be52e0820cf5e538c0332955117"
+    },
+    {
+      "file": "run_dense_backend_control.py",
+      "bytes": 13093,
+      "sha256": "45154e89019b17ec6f62e37e71764277b351f1691a57a54e5f79f4e2286f72bd"
+    },
+    {
+      "file": "startup_verification.json",
+      "bytes": 19108,
+      "sha256": "26c2991df813e8afe18f7827bf2577251e6c963df1d28faeb53cbacad910e01b"
+    }
+  ],
+  "scope": "All archived regular files except the root manifest.json and SHA256SUMS."
+}

@@ -1,0 +1,62 @@
+[
+  {
+    "quant": "q4_k",
+    "tile": 64,
+    "resources": "REG:164 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0"
+  },
+  {
+    "quant": "q4_k",
+    "tile": 48,
+    "resources": "REG:154 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0"
+  },
+  {
+    "quant": "q4_k",
+    "tile": 40,
+    "resources": "REG:137 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0"
+  },
+  {
+    "quant": "q4_k",
+    "tile": 32,
+    "resources": "REG:127 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0"
+  },
+  {
+    "quant": "q4_k",
+    "tile": 24,
+    "resources": "REG:123 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0"
+  },
+  {
+    "quant": "q4_k",
+    "tile": 16,
+    "resources": "REG:112 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0"
+  },
+  {
+    "quant": "q4_1",
+    "tile": 64,
+    "resources": "REG:168 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0"
+  },
+  {
+    "quant": "q4_1",
+    "tile": 48,
+    "resources": "REG:158 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0"
+  },
+  {
+    "quant": "q4_1",
+    "tile": 40,
+    "resources": "REG:142 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0"
+  },
+  {
+    "quant": "q4_1",
+    "tile": 32,
+    "resources": "REG:134 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0"
+  },
+  {
+    "quant": "q4_1",
+    "tile": 24,
+    "resources": "REG:128 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0"
+  },
+  {
+    "quant": "q4_1",
+    "tile": 16,
+    "resources": "REG:126 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0"
+  }
+]

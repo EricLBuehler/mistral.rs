@@ -1,0 +1,124 @@
+{
+  "source_directory": "/home/ericbuehler/qwen4exp_work/real_routing_20260930/ncu_native56",
+  "copied_files": [
+    {
+      "source": "/home/ericbuehler/qwen4exp_work/real_routing_20260930/ncu_native56/gemv.log",
+      "path": "gemv.log",
+      "sha256": "21ba8245330f645fdc8e8165aaa4257c8ed094d4b804c8f8e04f501196ec697d",
+      "bytes": 48077
+    },
+    {
+      "source": "/home/ericbuehler/qwen4exp_work/real_routing_20260930/ncu_native56/gemv.ncu-rep",
+      "path": "gemv.ncu-rep",
+      "sha256": "dd16d8de74c813f398f65b7b6e405e02f93947e0871cd39dbdf863f8b9247fb4",
+      "bytes": 47262
+    },
+    {
+      "source": "/home/ericbuehler/qwen4exp_work/real_routing_20260930/ncu_native56/gemv.profiled_test_output_not_benchmark.json",
+      "path": "gemv.profiled_test_output_not_benchmark.json",
+      "sha256": "38394d66dc5c005d620ad8a4a188faff8735b3df914473df3ed2c092a4323905",
+      "bytes": 162974
+    },
+    {
+      "source": "/home/ericbuehler/qwen4exp_work/real_routing_20260930/ncu_native56/gemv_raw.log",
+      "path": "gemv_raw.log",
+      "sha256": "011fe7811305421fff895a92c052b4f0dacb444f170a4a38e84cb1765678c753",
+      "bytes": 79
+    },
+    {
+      "source": "/home/ericbuehler/qwen4exp_work/real_routing_20260930/ncu_native56/gemv_raw_corrected.log",
+      "path": "gemv_raw_corrected.log",
+      "sha256": "3907e25cf4fe75e14b1fcc5ab97f2d7a8135c26081d742ffe35f60ec4998bb6b",
+      "bytes": 98
+    },
+    {
+      "source": "/home/ericbuehler/qwen4exp_work/real_routing_20260930/ncu_native56/gemv_raw_final.log",
+      "path": "gemv_raw_final.log",
+      "sha256": "6906c75ce2abcb090df01499df5b231d731263925596537069b9277d0f21e2c5",
+      "bytes": 16415
+    },
+    {
+      "source": "/home/ericbuehler/qwen4exp_work/real_routing_20260930/ncu_native56/kernels.json",
+      "path": "kernels.json",
+      "sha256": "a2344961ad6c2cb43b5acaf108ca1e8ae41f4b61770e4fbc63f5bdb829ce8848",
+      "bytes": 13935
+    },
+    {
+      "source": "/home/ericbuehler/qwen4exp_work/real_routing_20260930/ncu_native56/metadata.first_import_failure.json",
+      "path": "metadata.first_import_failure.json",
+      "sha256": "324b778aff238e5f7a7d66e4b15c751ed5ffdc3362557c8b65726a92affd1281",
+      "bytes": 14123
+    },
+    {
+      "source": "/home/ericbuehler/qwen4exp_work/real_routing_20260930/ncu_native56/metadata.json",
+      "path": "metadata.json",
+      "sha256": "3573cbd30201510d91af81f202265aecf329dea405ae0ea7c2fa834a36d1ea5d",
+      "bytes": 18829
+    },
+    {
+      "source": "/home/ericbuehler/qwen4exp_work/real_routing_20260930/ncu_native56/mmq.log",
+      "path": "mmq.log",
+      "sha256": "b834d61bfe3218ee4605cc96c3760733bae63820c06594ede03410d6e656def7",
+      "bytes": 48114
+    },
+    {
+      "source": "/home/ericbuehler/qwen4exp_work/real_routing_20260930/ncu_native56/mmq.ncu-rep",
+      "path": "mmq.ncu-rep",
+      "sha256": "3d0b3c957b58d6a34b3130bab1a4f777a55ba89f1303901cae3326a555da38a0",
+      "bytes": 60404
+    },
+    {
+      "source": "/home/ericbuehler/qwen4exp_work/real_routing_20260930/ncu_native56/mmq.profiled_test_output_not_benchmark.json",
+      "path": "mmq.profiled_test_output_not_benchmark.json",
+      "sha256": "8fa3299b7e7aa097db357caefdbaa913c12cc5339d096caadf112015483d979f",
+      "bytes": 162996
+    },
+    {
+      "source": "/home/ericbuehler/qwen4exp_work/real_routing_20260930/ncu_native56/mmq_raw.log",
+      "path": "mmq_raw.log",
+      "sha256": "ae75fe343dbbac38e623aaf2eefff881f069adda04595dfb2c7ba96b5ca0332f",
+      "bytes": 18810
+    },
+    {
+      "source": "/home/ericbuehler/qwen4exp_work/real_routing_20260930/ncu_native56/profile_selected_replay.initial.py",
+      "path": "profile_selected_replay.initial.py",
+      "sha256": "2c039eb8147ce9e48fa716e7882040fa02702e88641f38f5174a4778709cdf9e",
+      "bytes": 10648
+    },
+    {
+      "source": "/home/ericbuehler/qwen4exp_work/real_routing_20260930/ncu_native56/profile_selected_replay.measured.py",
+      "path": "profile_selected_replay.measured.py",
+      "sha256": "3175585c198a265b56823243b68efad34790e8045b318c116587bc80b27f9b3f",
+      "bytes": 10796
+    },
+    {
+      "source": "/home/ericbuehler/qwen4exp_work/real_routing_20260930/ncu_native56/resume_selected_profile.py",
+      "path": "resume_selected_profile.py",
+      "sha256": "c959ec666b773f83ffb82cb39a764c281718f28a5c60033b95691f4f21c6d47a",
+      "bytes": 3456
+    },
+    {
+      "source": "/home/ericbuehler/qwen4exp_work/real_routing_20260930/ncu_native56/version.log",
+      "path": "version.log",
+      "sha256": "99b61b4937aa4d473ccb4ef2395d69d5f3de64908a7d65d96bc8f9b73f72476a",
+      "bytes": 144
+    }
+  ],
+  "external_artifacts": [
+    {
+      "path": "/home/ericbuehler/qwen4exp_work/real_routing_20260930/ncu_native56/query_metrics.log",
+      "bytes": 93040329,
+      "sha256": "52dc30eb05091c32c404e7fe2a1ff61d3b898aee0b0d89f3110fd41acdc45d4b",
+      "hash_scope": "Previously recorded by the measured runner; not rehashed while GPU experiments run.",
+      "reason_omitted": "Large metric-availability listing; selected available and unavailable names remain in metadata.json."
+    },
+    {
+      "path": "/home/ericbuehler/qwen4exp_work/real_routing_20260930/replay_adjusted/moe_dispatch_bench.adjusted",
+      "sha256": "060fdcbd7bb2316f102ec6432a8b8c2394663bca73e3d7b779c97d6d5821c75e",
+      "bytes": 110572600,
+      "reason_omitted": "Diagnostic executable; source and build provenance are archived in the parent replay package."
+    }
+  ],
+  "manifest_scope": "Fresh hashes of this whitelist and generated summaries; the older external SHA256SUMS was not used as the package manifest.",
+  "report_sizes": "Both native NCU reports are small (less than 61 KB each) and included for offline inspection."
+}

@@ -1,0 +1,200 @@
+{
+  "complete": true,
+  "started_at": "2026-09-30T14:11:41.010197+00:00",
+  "phase": "complete",
+  "commands": [
+    {
+      "name": "build",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "--release",
+        "-p",
+        "mistralrs-quant",
+        "--features",
+        "cuda,cutile",
+        "--test",
+        "moe_dispatch_bench",
+        "--no-run",
+        "--message-format=json-render-diagnostics"
+      ],
+      "started_at": "2026-09-30T14:11:41.065569+00:00",
+      "log": "/home/ericbuehler/qwen4exp_work/real_routing_20260930/replay_sequence_query_prefix/build.log",
+      "pid": 2308601,
+      "returncode": 0,
+      "finished_at": "2026-09-30T14:11:43.099464+00:00"
+    },
+    {
+      "name": "check",
+      "command": [
+        "cargo",
+        "check",
+        "--locked",
+        "--release",
+        "-p",
+        "mistralrs-quant",
+        "--features",
+        "cuda,cutile",
+        "--test",
+        "moe_dispatch_bench"
+      ],
+      "started_at": "2026-09-30T14:11:43.206858+00:00",
+      "log": "/home/ericbuehler/qwen4exp_work/real_routing_20260930/replay_sequence_query_prefix/check.log",
+      "pid": 2308666,
+      "returncode": 0,
+      "finished_at": "2026-09-30T14:11:43.522458+00:00"
+    },
+    {
+      "name": "clippy",
+      "command": [
+        "cargo",
+        "clippy",
+        "--locked",
+        "--release",
+        "-p",
+        "mistralrs-quant",
+        "--features",
+        "cuda,cutile",
+        "--test",
+        "moe_dispatch_bench",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "started_at": "2026-09-30T14:11:43.523045+00:00",
+      "log": "/home/ericbuehler/qwen4exp_work/real_routing_20260930/replay_sequence_query_prefix/clippy.log",
+      "pid": 2308682,
+      "returncode": 0,
+      "finished_at": "2026-09-30T14:11:43.939146+00:00"
+    },
+    {
+      "name": "row_indices_test",
+      "command": [
+        "/home/ericbuehler/qwen4exp_work/real_routing_20260930/replay_sequence_query_prefix/moe_dispatch_bench.sequence_query_prefix",
+        "--exact",
+        "sequence_query_prefix_preserves_each_sequence",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "started_at": "2026-09-30T14:11:43.944970+00:00",
+      "log": "/home/ericbuehler/qwen4exp_work/real_routing_20260930/replay_sequence_query_prefix/row_indices_test.log",
+      "pid": 2308711,
+      "returncode": 0,
+      "finished_at": "2026-09-30T14:11:44.009185+00:00"
+    },
+    {
+      "name": "replay",
+      "command": [
+        "/home/ericbuehler/qwen4exp_work/real_routing_20260930/replay_sequence_query_prefix/moe_dispatch_bench.sequence_query_prefix",
+        "--exact",
+        "flash_next_real_routing_sequence_query_prefix_replay",
+        "--ignored",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "started_at": "2026-09-30T14:11:44.009734+00:00",
+      "log": "/home/ericbuehler/qwen4exp_work/real_routing_20260930/replay_sequence_query_prefix/replay.log",
+      "pid": 2308713,
+      "returncode": 0,
+      "finished_at": "2026-09-30T14:11:53.215368+00:00"
+    },
+    {
+      "name": "oracle",
+      "command": [
+        "/home/ericbuehler/qwen4exp_work/real_routing_20260930/replay_sequence_query_prefix/moe_dispatch_bench.sequence_query_prefix",
+        "--exact",
+        "flash_next_real_routing_oracle",
+        "--ignored",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "started_at": "2026-09-30T14:11:53.217255+00:00",
+      "log": "/home/ericbuehler/qwen4exp_work/real_routing_20260930/replay_sequence_query_prefix/oracle.log",
+      "pid": 2308797,
+      "returncode": 0,
+      "finished_at": "2026-09-30T14:11:58.262787+00:00"
+    },
+    {
+      "name": "summary",
+      "command": [
+        "/home/ericbuehler/mistral.rs/.venv/bin/python3",
+        "/home/ericbuehler/qwen4exp_work/real_routing_20260930/replay_sequence_query_prefix/summarize_replay.py",
+        "/home/ericbuehler/qwen4exp_work/real_routing_20260930/replay_sequence_query_prefix/replay.json",
+        "--oracle",
+        "/home/ericbuehler/qwen4exp_work/real_routing_20260930/replay_sequence_query_prefix/oracle.json",
+        "--output",
+        "/home/ericbuehler/qwen4exp_work/real_routing_20260930/replay_sequence_query_prefix/summary.json"
+      ],
+      "started_at": "2026-09-30T14:11:58.273022+00:00",
+      "log": "/home/ericbuehler/qwen4exp_work/real_routing_20260930/replay_sequence_query_prefix/summary.log",
+      "pid": 2308837,
+      "returncode": 0,
+      "finished_at": "2026-09-30T14:11:58.305309+00:00"
+    }
+  ],
+  "original_capture_runtime": "/home/ericbuehler/qwen4exp_work/real_routing_20260930/runtime",
+  "captures": "/home/ericbuehler/qwen4exp_work/real_routing_20260930/runtime/captures",
+  "original_failed_runtime_metadata_sha256": "0494c41dbe87184b7ae9eecf921071514acd7a5e60bd70eddd90b00fe6109d76",
+  "original_failed_replay_log_sha256": "76884545076ab4860b1c3d6f1a0f9edb85300f34587c9c3d25a963c694cd3e2c",
+  "original_failed_probe": {
+    "path": "/home/ericbuehler/qwen4exp_work/real_routing_20260930/build/moe_dispatch_bench.capture",
+    "cargo_path": "/home/ericbuehler/mistral.rs/target/release/deps/moe_dispatch_bench-0dfba70e2949feab",
+    "sha256": "0812a3b7d970c5266dd8c0f3bbb9fb4fda1cc0b3dd1fda2f5d961ca099f16512",
+    "bytes": 97404912
+  },
+  "original_failed_source_sha256": "790021c091707e6b924027ece936a109237d2883a527fdb4bfc687475db281d6",
+  "source_sha256": "eed6ef5b829e00aeca66e1febeb17f523565f672787b6db6892a212c6117790e",
+  "source_archive": "/home/ericbuehler/qwen4exp_work/real_routing_20260930/replay_sequence_query_prefix/replay.source.rs",
+  "script_sha256": "f39f6fbfef2658e7826e4e2ab3640e20ac58c120674a40b70686ad8a053937b2",
+  "summary_script_sha256": "ca1aad373c9d00cec4832b2801851e7637ee0e024284e5ae978944b2957f6276",
+  "method": "Derived first3/4/5 query positions from each of8 sequences in native B8xQ7; all15 samples receive separate FP32 oracle checks; not independently observed depth2/3/4 execution.",
+  "prior_adjusted_lifecycle_sha256": "97ee94e92b58834830c02f94b216ca2a7ac14ef35cd08c81b05b598c291af14a",
+  "prior_adjusted_binary": {
+    "path": "/home/ericbuehler/qwen4exp_work/real_routing_20260930/replay_adjusted/moe_dispatch_bench.adjusted",
+    "sha256": "060fdcbd7bb2316f102ec6432a8b8c2394663bca73e3d7b779c97d6d5821c75e",
+    "bytes": 110572600
+  },
+  "isolation_before": {
+    "at": "2026-09-30T14:11:41.065375+00:00",
+    "processes": [
+      {
+        "pid": 2122897,
+        "name": "rust-analyzer",
+        "state": "T"
+      }
+    ]
+  },
+  "replay_binary": {
+    "path": "/home/ericbuehler/qwen4exp_work/real_routing_20260930/replay_sequence_query_prefix/moe_dispatch_bench.sequence_query_prefix",
+    "sha256": "3b6a31ce3fb8ffcc7581b6d94819253f7f2e05692dd40b61ade5b74a83611edb",
+    "bytes": 110573384
+  },
+  "isolation_before_timing": {
+    "at": "2026-09-30T14:11:43.944766+00:00",
+    "processes": [
+      {
+        "pid": 2122897,
+        "name": "rust-analyzer",
+        "state": "T"
+      }
+    ]
+  },
+  "ordinary_replay_complete": true,
+  "replay_results_sha256": "282512101fe9c33d1cd0a7523318015537d7aeee2c7b6a36d4bea0ae00a9c540",
+  "oracle_complete": true,
+  "oracle_results_sha256": "fc7426091ab5656c65e0641bb1e4d43a97e5d73572c83131c201d107fb1369d3",
+  "isolation_after": {
+    "at": "2026-09-30T14:11:58.310658+00:00",
+    "processes": [
+      {
+        "pid": 2122897,
+        "name": "rust-analyzer",
+        "state": "T"
+      }
+    ]
+  },
+  "finished_at": "2026-09-30T14:11:58.577246+00:00",
+  "summary_sha256": "2f5900f06b753df8d08a6bf0df4079bab8691602cb5b6d29a9f69a19edd0a8eb",
+  "production_binary_sha256": "d245efbb543fa8131f71aee34fef3a868cb1f3c0cfba8eaafd5b4fd7d4c64588"
+}

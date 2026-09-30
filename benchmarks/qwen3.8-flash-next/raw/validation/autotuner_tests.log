@@ -1,0 +1,27 @@
+
+running 22 tests
+test speculative::autotuner::tests::a_cold_first_sample_is_corrected_by_the_next_fast_one ... ok
+test speculative::autotuner::tests::a_persistent_shift_replaces_the_cost_estimate ... ok
+test speculative::autotuner::tests::a_single_candidate_is_inactive ... ok
+test speculative::autotuner::tests::batch_weighs_each_sequence_by_its_gain ... ok
+test speculative::autotuner::tests::calibration_discounts_depths_that_underdeliver ... ok
+test speculative::autotuner::tests::canceled_proposals_do_not_contribute_timing_samples ... ok
+test speculative::autotuner::tests::censored_outcomes_estimate_the_per_draft_rate ... ok
+test speculative::autotuner::tests::cohort_hint_preserves_fixed_depth_and_candidate_limits ... ok
+test speculative::autotuner::tests::expected_tokens_is_the_geometric_series ... ok
+test speculative::autotuner::tests::falling_acceptance_by_position_prefers_shallower_drafts ... ok
+test speculative::autotuner::tests::interrupted_steps_update_acceptance_without_recording_cost ... ok
+test speculative::autotuner::tests::large_batches_start_shallow_from_small_batch_costs ... ok
+test speculative::autotuner::tests::nearby_batch_sizes_keep_separate_costs ... ok
+test speculative::autotuner::tests::probes_measure_only_neighboring_depths ... ok
+test speculative::autotuner::tests::small_gains_do_not_flip_the_depth ... ok
+test speculative::autotuner::tests::steeper_step_cost_picks_shallower_drafts ... ok
+test speculative::autotuner::tests::step_timing_ignores_mismatched_batches_and_outliers ... ok
+test speculative::autotuner::tests::timing_rejects_interleaved_batches_with_the_same_shape ... ok
+test speculative::autotuner::tests::unmeasured_depth_respects_a_lowered_cap ... ok
+test speculative::autotuner::tests::unmeasured_depths_transfer_from_other_batch_sizes ... ok
+test speculative::autotuner::tests::unmeasured_start_uses_the_middle_candidate_within_the_cap ... ok
+test speculative::autotuner::tests::warmup_probes_depths_without_clean_samples ... ok
+
+test result: ok. 22 passed; 0 failed; 0 ignored; 0 measured; 1626 filtered out; finished in 0.01s
+

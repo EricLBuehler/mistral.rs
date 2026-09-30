@@ -1,0 +1,85 @@
+{
+  "date": "2026-09-30T03:54:08.787229+00:00",
+  "command": [
+    "/home/ericbuehler/mistral.rs/target/release/mistralrs",
+    "serve",
+    "-m",
+    "/home/ericbuehler/.cache/huggingface/hub/models--Qwen--Qwen3.8-27B-FP8/snapshots/017b9c7af6b5689d5dd426a76e0bc077eb5ca20a",
+    "--dtype",
+    "bf16",
+    "--host",
+    "127.0.0.1",
+    "--port",
+    "1234",
+    "--no-ui",
+    "--disable-access-log",
+    "--max-seqs",
+    "8",
+    "--max-model-len",
+    "16384",
+    "--pa-context-len",
+    "16384",
+    "--pa-cache-type",
+    "auto",
+    "--max-num-batched-tokens",
+    "4096",
+    "--max-prefill-chunk-tokens",
+    "512",
+    "--prefix-cache-n",
+    "0"
+  ],
+  "binary_sha256": "1166ae7cb6be9b723ff4195102587b570c9a45d2c7ec980a732709c472f65012",
+  "model": "Qwen/Qwen3.8-27B-FP8",
+  "model_revision": "017b9c7af6b5689d5dd426a76e0bc077eb5ca20a",
+  "model_config_sha256": "74227dd615bf1ea975aa676bdf355a0379858c12f394b5365cd9dfa5fc2c70bc",
+  "tokenizer_sha256": "0997f410c57a1f4e53b09e4be8f4a172d90edd9564368fb0847030937229b9f3",
+  "weight_index_sha256": "f0838c766951bdfe76d6afbdb2771a8f67aaa2231dedb3d33cebd817729843a2",
+  "source_repo": "/home/ericbuehler/mistral.rs",
+  "source_head_at_launch": "0003cf35120f696e063d64993c36e25969cad422",
+  "source_diff_sha256_at_launch": "4db87b81f6adcb127b54f7d4dbb2011986c31cbb6d9d36d842e9eade928c489e",
+  "source_note": "Working-tree source observed at launch; executable SHA-256 identifies the loaded binary.",
+  "gpu": "NVIDIA GB10, GPU-0341400a-e8b8-eae5-b907-6b7ce08225b5, 580.126.09, [N/A]",
+  "component_hashes": {
+    "control_script": "e5286a85911c7b599e24dfb65abcd4b0975607bbf035730a100416ddb088e493",
+    "bench_concurrency": "9f664f3ff278f0f16b24e655477486e93b91aec41bf473510e13f449ab1dbbc3",
+    "bench_serving": "a16b5815b8744def761174e396de92e41ecd499afae712255721c20a33a79705"
+  },
+  "environment": {
+    "CUTILE_TILEIRAS_PATH": "/usr/local/cuda-13.2/bin/tileiras",
+    "CUDA_TOOLKIT_PATH": "/usr/local/cuda",
+    "LD_LIBRARY_PATH": "/usr/local/cuda/compat",
+    "CUDA_HOME": "/usr/local/cuda",
+    "HF_HUB_OFFLINE": "1",
+    "RUST_LOG": "info"
+  },
+  "kv_cache": "BF16",
+  "target_only": true,
+  "profiler": null,
+  "complete": true,
+  "server_pid": 1811698,
+  "models_response": {
+    "object": "list",
+    "data": [
+      {
+        "id": "default",
+        "object": "model",
+        "created": 1790740521,
+        "owned_by": "local",
+        "root": "default"
+      },
+      {
+        "id": "/home/ericbuehler/.cache/huggingface/hub/models--Qwen--Qwen3.8-27B-FP8/snapshots/017b9c7af6b5689d5dd426a76e0bc077eb5ca20a",
+        "object": "model",
+        "created": 1790740521,
+        "owned_by": "local",
+        "root": "/home/ericbuehler/.cache/huggingface/hub/models--Qwen--Qwen3.8-27B-FP8/snapshots/017b9c7af6b5689d5dd426a76e0bc077eb5ca20a",
+        "status": "loaded"
+      }
+    ]
+  },
+  "startup_seconds": 74.04407819300832,
+  "loaded_executable_sha256": "1166ae7cb6be9b723ff4195102587b570c9a45d2c7ec980a732709c472f65012",
+  "finished_at": "2026-09-30T04:05:02.802478+00:00",
+  "raw_sha256": "acdb91090a7ded6c3d16ad90832b2f0d96cbc9f7e9aec2d38ad01f287cbb0548",
+  "server_exit_code": -15
+}

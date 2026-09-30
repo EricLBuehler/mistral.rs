@@ -1,0 +1,29 @@
+{
+  "at": "2026-09-30T04:29:18.601905+00:00",
+  "git_head": "0003cf35120f696e063d64993c36e25969cad422",
+  "source_diff_sha256": "4db87b81f6adcb127b54f7d4dbb2011986c31cbb6d9d36d842e9eade928c489e",
+  "binary_sha256": "d245efbb543fa8131f71aee34fef3a868cb1f3c0cfba8eaafd5b4fd7d4c64588",
+  "loaded_executable_sha256": "d245efbb543fa8131f71aee34fef3a868cb1f3c0cfba8eaafd5b4fd7d4c64588",
+  "python_packages": {
+    "tokenizers": "0.22.1",
+    "Pillow": "11.3.0"
+  },
+  "component_sha256": {
+    "Cargo.toml": "0e95b186f6483204fdb5a1667d0208efe10629899bc0c6a81e7e6c535e6520d9",
+    "Cargo.lock": "a899910310b8476876154ae19913e83c75624f8a646a561a8f68727c56a7bac7",
+    "mistralrs-cli/Cargo.toml": "d0059e14f4b5a0480ea312f9d689b2a0dda5eb969ec591f40a7bbfa9a232fe27",
+    "mistralrs-core/Cargo.toml": "300b6ae163979f20601edbd6628b75ead0c95f77baeee5ab9c475d7e725b91f6",
+    "mistralrs-quant/Cargo.toml": "95984544e17f5bc89456145a2865988db61bc1e528a164711f9c635f6445a197",
+    "mistralrs-core/src/speculative/autotuner.rs": "b8fa4bc502dd625eed052e57159c266809ec08cfeeca09821fbaad28ef2e6733",
+    "benchmarks/qwen3.8-flash-next/bench_serving.py": "a16b5815b8744def761174e396de92e41ecd499afae712255721c20a33a79705",
+    "benchmarks/qwen3.8-flash-next/bench_concurrency.py": "9f664f3ff278f0f16b24e655477486e93b91aec41bf473510e13f449ab1dbbc3",
+    "benchmarks/qwen3.8-flash-next/text_smoke.py": "8d3a86a6e830ff3842d969bd1d6a144ba251256f042b78b16acc808e9679b355",
+    "benchmarks/qwen3.8-flash-next/mixed_context_smoke.py": "bc899ef772db40d0edb3a549d7700c92bf8e5867adb861e80e1ac29a0ab5e25e"
+  },
+  "scripts_sha256": {
+    "run_server.py": "b6b734836f7791b1835e9f50684fd57e711263d4c8dc60b002c63df4f5d2bfd7",
+    "validate.py": "87db2c4ffecf149d150dc85074e2b81653faa2852ec4f7f37228654c5b7e20d6",
+    "run_measurements.py": "1efd3ef836fef3ce6c1cc3545640027bb09d84205a6178eaa7dbe39eb0c42124",
+    "retry_loading.py": "a964624d4a008d1ba812565447209f78b19fa0f74b7e48d1723173a1c0f2d48a"
+  }
+}

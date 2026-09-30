@@ -1,0 +1,79 @@
+0.00.000.483 I srv  llama_server: initializing ...
+0.00.290.817 I cmn  common_param: common_params_print_info: verbosity = 3 (adjust with the `-lv N` CLI arg)
+0.00.291.095 W srv  llama_server: security: no API key is set and CORS allows all origins (see https://github.com/ggml-org/llama.cpp/pull/25655)
+0.00.293.591 I srv    load_model: loading model '/home/ericbuehler/qwen4exp_work/gguf/UD-Q4_K_XL/Qwen3.8-Flash-Next-UD-Q4_K_XL-00001-of-00004.gguf'
+1.51.349.515 I cmn          init: llama threadpool init, n_threads = 20
+1.51.533.145 I srv    load_model: initializing, n_slots = 1, n_ctx_slot = 16384, kv_unified = 'false'
+1.51.533.249 W srv          init: --cache-idle-slots requires --cache-ram, disabling
+1.51.536.821 W srv          init: chat template supports preserving reasoning, it is enabled by default (may use more tokens, disable via --no-reasoning-preserve)
+1.51.536.851 I srv  llama_server: model loaded
+1.51.536.855 I srv  llama_server: listening on http://127.0.0.1:1234
+1.52.338.880 I slot get_availabl: id  0 | task -1 | selected slot by LRU, t_last = -1
+1.52.338.968 I slot launch_slot_: id  0 | task 0 | processing task, is_child = 0
+/home/ericbuehler/llama.cpp/ggml/src/ggml-cuda/ggml-cuda.cu:109: CUDA error
+1.52.657.287 E CUDA error: an illegal memory access was encountered
+1.52.657.291 E   current device: 0, in function launch_mul_mat_q at /home/ericbuehler/llama.cpp/ggml/src/ggml-cuda/template-instances/../mmq.cuh:1417
+1.52.657.292 E   cudaFuncSetAttribute((mul_mat_q<type, J, false, prec_src1>), cudaFuncAttributeMaxDynamicSharedMemorySize, nbytes_shared)
+[New LWP 1547847]
+[New LWP 1546732]
+[New LWP 1546731]
+[New LWP 1546730]
+[New LWP 1546729]
+[New LWP 1546728]
+[New LWP 1546727]
+[New LWP 1546726]
+[New LWP 1546725]
+[New LWP 1546724]
+[New LWP 1546723]
+[New LWP 1546722]
+[New LWP 1546721]
+[New LWP 1546720]
+[New LWP 1546719]
+[New LWP 1546718]
+[New LWP 1546717]
+[New LWP 1546716]
+[New LWP 1546715]
+[New LWP 1546714]
+[New LWP 1546713]
+[New LWP 1546712]
+[New LWP 1546711]
+[New LWP 1546707]
+[New LWP 1546706]
+[New LWP 1546705]
+
+This GDB supports auto-downloading debuginfo from the following URLs:
+  <https://debuginfod.ubuntu.com>
+Enable debuginfod for this session? (y or [n]) [answered N; input not from terminal]
+Debuginfod has been disabled.
+To make this setting permanent, add 'set debuginfod enabled off' to .gdbinit.
+[Thread debugging using libthread_db enabled]
+Using host libthread_db library "/lib/aarch64-linux-gnu/libthread_db.so.1".
+0x0000f643cf147b74 in __GI___wait4 (pid=1547850, stat_loc=0x0, options=0, usage=0x0) at ../sysdeps/unix/sysv/linux/wait4.c:30
+warning: 30	../sysdeps/unix/sysv/linux/wait4.c: No such file or directory
+#0  0x0000f643cf147b74 in __GI___wait4 (pid=1547850, stat_loc=0x0, options=0, usage=0x0) at ../sysdeps/unix/sysv/linux/wait4.c:30
+30	in ../sysdeps/unix/sysv/linux/wait4.c
+#1  0x0000f643ce5d951c in ggml_print_backtrace () from /home/ericbuehler/llama.cpp/build/bin/libggml-base.so.0
+#2  0x0000f643ce5d96c0 in ggml_abort () from /home/ericbuehler/llama.cpp/build/bin/libggml-base.so.0
+#3  0x0000f643cbb68cdc in ggml_cuda_error(char const*, char const*, char const*, int, char const*) () from /home/ericbuehler/llama.cpp/build/bin/libggml-cuda.so.0
+#4  0x0000f643cc290a38 in void launch_mul_mat_q<(ggml_type)7, 128, false, (ggml_prec)30>(ggml_backend_cuda_context&, mmq_args const&, CUstream_st*) () from /home/ericbuehler/llama.cpp/build/bin/libggml-cuda.so.0
+#5  0x0000f643cbbaf89c in ggml_cuda_mul_mat_q(ggml_backend_cuda_context&, ggml_tensor const*, ggml_tensor const*, ggml_tensor const*, ggml_tensor*) () from /home/ericbuehler/llama.cpp/build/bin/libggml-cuda.so.0
+#6  0x0000f643cbb7cd28 in ggml_backend_cuda_graph_compute(ggml_backend*, ggml_cgraph*) () from /home/ericbuehler/llama.cpp/build/bin/libggml-cuda.so.0
+#7  0x0000f643ce5f73c8 in ggml_backend_sched_graph_compute_async () from /home/ericbuehler/llama.cpp/build/bin/libggml-base.so.0
+#8  0x0000f643ce88154c in llama_context::graph_compute(ggml_cgraph*, bool) () from /home/ericbuehler/llama.cpp/build/bin/libllama.so.0
+#9  0x0000f643ce885254 in llama_context::process_ubatch(llama_ubatch const&, llm_graph_type, llama_memory_context_i*, ggml_status&) () from /home/ericbuehler/llama.cpp/build/bin/libllama.so.0
+#10 0x0000f643ce88d434 in llama_context::decode(llama_batch_ext const&) () from /home/ericbuehler/llama.cpp/build/bin/libllama.so.0
+#11 0x0000f643ce88e8b0 in llama_context::decode(llama_batch const&) () from /home/ericbuehler/llama.cpp/build/bin/libllama.so.0
+#12 0x0000f643ce88e930 in llama_decode () from /home/ericbuehler/llama.cpp/build/bin/libllama.so.0
+#13 0x0000f643cf63af6c in std::_Function_handler<void (), server_context_impl::decode(int&, int, llama_batch&)::{lambda()#1}>::_M_invoke(std::_Any_data const&) () from /home/ericbuehler/llama.cpp/build/bin/libllama-server-impl.so
+#14 0x0000f643cf600b78 in server_queue::yield_to_queue(std::function<void ()>&&) () from /home/ericbuehler/llama.cpp/build/bin/libllama-server-impl.so
+#15 0x0000f643cf64b404 in server_context_impl::decode(int&, int, llama_batch&) () from /home/ericbuehler/llama.cpp/build/bin/libllama-server-impl.so
+#16 0x0000f643cf64cafc in server_context_impl::update_slots() () from /home/ericbuehler/llama.cpp/build/bin/libllama-server-impl.so
+#17 0x0000f643cf6018b0 in server_queue::start_loop(long) () from /home/ericbuehler/llama.cpp/build/bin/libllama-server-impl.so
+#18 0x0000f643cf5b8fa4 in llama_server(common_params&, int, char**) () from /home/ericbuehler/llama.cpp/build/bin/libllama-server-impl.so
+#19 0x0000f643cf5ba798 in llama_server(int, char**) () from /home/ericbuehler/llama.cpp/build/bin/libllama-server-impl.so
+#20 0x0000f643cf0984c4 in __libc_start_call_main (main=main@entry=0xbade5d361100 <main>, argc=argc@entry=28, argv=argv@entry=0xffffdd44eed8) at ../sysdeps/nptl/libc_start_call_main.h:58
+warning: 58	../sysdeps/nptl/libc_start_call_main.h: No such file or directory
+#21 0x0000f643cf098598 in __libc_start_main_impl (main=0xbade5d361100 <main>, argc=28, argv=0xffffdd44eed8, init=<optimized out>, fini=<optimized out>, rtld_fini=<optimized out>, stack_end=<optimized out>) at ../csu/libc-start.c:360
+warning: 360	../csu/libc-start.c: No such file or directory
+#22 0x0000bade5d361170 in _start ()
+[Inferior 1 (process 1546703) detached]

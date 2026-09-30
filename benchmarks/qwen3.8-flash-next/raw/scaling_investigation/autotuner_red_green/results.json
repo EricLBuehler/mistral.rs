@@ -1,0 +1,20 @@
+{
+  "red": {
+    "returncode": 101,
+    "command": [
+      "/home/ericbuehler/qwen4exp_work/autotuner_exploration_red_green/test_red",
+      "autotuner::tests::warmup_finds_a_faster_depth_across_a_slower_neighbor",
+      "--exact",
+      "--nocapture"
+    ]
+  },
+  "green": {
+    "returncode": 0,
+    "command": [
+      "/home/ericbuehler/qwen4exp_work/autotuner_exploration_red_green/test_green",
+      "autotuner::tests::warmup_finds_a_faster_depth_across_a_slower_neighbor",
+      "--exact",
+      "--nocapture"
+    ]
+  }
+}

@@ -1,0 +1,129 @@
+Server ready after 36.0s
+C1 trial=0 warmup=True complete=True aggregate=13.030 mean_active=1.000
+C1 trial=1 warmup=False complete=True aggregate=13.021 mean_active=1.000
+C1 trial=2 warmup=False complete=True aggregate=13.018 mean_active=1.000
+C1 trial=3 warmup=False complete=True aggregate=13.018 mean_active=1.000
+C8 trial=0 warmup=True complete=True aggregate=70.649 mean_active=7.990
+C8 trial=1 warmup=False complete=True aggregate=71.059 mean_active=7.991
+C8 trial=2 warmup=False complete=True aggregate=71.080 mean_active=7.978
+C8 trial=3 warmup=False complete=True aggregate=70.888 mean_active=7.991
+{
+  "label": "dense_fp8_to_q4k",
+  "complete": true,
+  "raw_sha256": "0cd5559307b90d04457d9ead647e0b645e83b7ac89566affa90e1f9caa781eb4",
+  "definitions": {
+    "aggregate": "Returned output tokens / whole-trial client wall seconds.",
+    "per_active_request": "Returned output tokens / summed request latency.",
+    "mean_active": "Summed request latency / whole-trial client wall seconds.",
+    "statistics": "Arithmetic mean and sample standard deviation of three measured trials."
+  },
+  "interpretation": "Current dense-model scaling on GB10 only. Different model, weights, prompts, and speculative mode from Flash-Next. One finite C8 wave, not sustained traffic. No old-versus-new engine regression isolation.",
+  "metrics_by_concurrency": {
+    "1": {
+      "aggregate_output_tokens_per_second": {
+        "mean": 13.018796857112418,
+        "sample_stddev": 0.0015685489280311796,
+        "samples": [
+          13.020586904906775,
+          13.017662788428499,
+          13.018140878001983
+        ]
+      },
+      "mean_active_requests": {
+        "mean": 0.9999647721799853,
+        "sample_stddev": 5.289182406161972e-06,
+        "samples": [
+          0.9999614752748132,
+          0.9999619683002904,
+          0.9999708729648523
+        ]
+      },
+      "mean_request_wall_seconds": {
+        "mean": 9.831591467666536,
+        "sample_stddev": 0.0012064756775356149,
+        "samples": [
+          9.83020733012745,
+          9.832420306371205,
+          9.832146766500955
+        ]
+      },
+      "mean_request_output_tokens_per_second": {
+        "mean": 13.019259259541569,
+        "sample_stddev": 0.0015972206090191822,
+        "samples": [
+          13.021091792041084,
+          13.018162765234782,
+          13.018523221348838
+        ]
+      },
+      "latency_weighted_request_output_tokens_per_second": {
+        "mean": 13.01925549958605,
+        "sample_stddev": 0.0015977539423947546,
+        "samples": [
+          13.021088538764365,
+          13.018157891100186,
+          13.0185200688936
+        ]
+      },
+      "sustained_completion_boundary_output_tokens_per_second": {
+        "mean": 13.019226839311239,
+        "sample_stddev": 0.001878893179584975,
+        "samples": [
+          13.020498955670547,
+          13.020112796097534,
+          13.017068766165634
+        ]
+      }
+    },
+    "8": {
+      "aggregate_output_tokens_per_second": {
+        "mean": 71.00871185861948,
+        "sample_stddev": 0.10534383679394169,
+        "samples": [
+          71.05888614104504,
+          71.07958945044848,
+          70.88765998436493
+        ]
+      },
+      "mean_active_requests": {
+        "mean": 7.986447762338921,
+        "sample_stddev": 0.007192426073961676,
+        "samples": [
+          7.990547974522118,
+          7.978142883040484,
+          7.990652429454159
+        ]
+      },
+      "mean_request_wall_seconds": {
+        "mean": 14.396365236503092,
+        "sample_stddev": 0.030839587178559492,
+        "samples": [
+          14.393557178882475,
+          14.367025709132577,
+          14.428512821494223
+        ]
+      },
+      "mean_request_output_tokens_per_second": {
+        "mean": 8.891233720821791,
+        "sample_stddev": 0.01905837861165929,
+        "samples": [
+          8.892928389280737,
+          8.909388172545645,
+          8.871384600638992
+        ]
+      },
+      "latency_weighted_request_output_tokens_per_second": {
+        "mean": 8.891160329295015,
+        "sample_stddev": 0.01904097089397609,
+        "samples": [
+          8.892867719162249,
+          8.909290105789623,
+          8.871323162933175
+        ]
+      },
+      "sustained_completion_boundary_output_tokens_per_second": null
+    }
+  },
+  "c8_over_c1_aggregate": 5.454322134216731,
+  "c8_over_c1_per_active_request": 0.6829238683869221
+}

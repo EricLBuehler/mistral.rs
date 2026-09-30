@@ -1,0 +1,11 @@
+{"case": "c1_r00", "every_n": 1, "max_per_shape": 1, "row_counts": [1, 7], "skip_per_shape": 0, "stages": ["target_decode", "target_verify"]}
+{"case": "c1_r01", "every_n": 1, "max_per_shape": 1, "row_counts": [1, 7], "skip_per_shape": 0, "stages": ["target_decode", "target_verify"]}
+{"case": "c1_r02", "every_n": 1, "max_per_shape": 1, "row_counts": [1, 7], "skip_per_shape": 0, "stages": ["target_decode", "target_verify"]}
+{"case": "c1_r03", "every_n": 1, "max_per_shape": 1, "row_counts": [1, 7], "skip_per_shape": 0, "stages": ["target_decode", "target_verify"]}
+{"case": "c1_r04", "every_n": 1, "max_per_shape": 1, "row_counts": [1, 7], "skip_per_shape": 0, "stages": ["target_decode", "target_verify"]}
+{"case": "c1_r05", "every_n": 1, "max_per_shape": 1, "row_counts": [1, 7], "skip_per_shape": 0, "stages": ["target_decode", "target_verify"]}
+{"case": "c1_r06", "every_n": 1, "max_per_shape": 1, "row_counts": [1, 7], "skip_per_shape": 0, "stages": ["target_decode", "target_verify"]}
+{"case": "c1_r07", "every_n": 1, "max_per_shape": 1, "row_counts": [1, 7], "skip_per_shape": 0, "stages": ["target_decode", "target_verify"]}
+{"case": "c6", "every_n": 4, "max_per_shape": 8, "row_counts": [6, 42], "skip_per_shape": 0, "stages": ["target_decode", "target_verify"]}
+{"case": "c8", "every_n": 4, "max_per_shape": 8, "row_counts": [8, 56], "skip_per_shape": 0, "stages": ["target_decode", "target_verify"]}
+Capture requests complete; this is not a throughput benchmark.

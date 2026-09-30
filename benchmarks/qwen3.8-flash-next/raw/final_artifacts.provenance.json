@@ -1,0 +1,72 @@
+[
+  {
+    "source": "/home/ericbuehler/qwen4exp_work/tuner_exploration_20260930/isq_mtp_tuner.json",
+    "destination": "raw/isq_mtp.json",
+    "sha256": "4e00617967f68ff5edbf078fc8d09d1e223b39e22555635291590f01b02ec3aa"
+  },
+  {
+    "source": "/home/ericbuehler/qwen4exp_work/tuner_exploration_20260930/isq_mtp_tuner.metadata.json",
+    "destination": "raw/isq_mtp.metadata.json",
+    "sha256": "28297f3e9c08901c4ed6b0557955bad4089338f7760091f126cbd9365f211991"
+  },
+  {
+    "source": "/home/ericbuehler/qwen4exp_work/tuner_exploration_20260930/isq_mtp_tuner.text.json",
+    "destination": "raw/isq_mtp.text.json",
+    "sha256": "59c9b9a2301502ad2988c74e25e8d0bd3aeecffe691625b9863bb2b7952e23a9"
+  },
+  {
+    "source": "/home/ericbuehler/qwen4exp_work/tuner_exploration_20260930/mixed_context.json",
+    "destination": "raw/isq_mtp.mixed_context.json",
+    "sha256": "c0b2daf08045594cbd5be6d98f71285fd5a28ab46c956b5732254f3a69dcaddf"
+  },
+  {
+    "source": "/home/ericbuehler/qwen4exp_work/tuner_exploration_20260930/pre_measurement_provenance.json",
+    "destination": "raw/isq_mtp.pre_measurement_provenance.json",
+    "sha256": "249b154ce026726af0f14c2fdc3e6248c0cda756579b9067a7ef9bd251dbc662"
+  },
+  {
+    "source": "/home/ericbuehler/qwen4exp_work/tuner_exploration_20260930/measurement_script.provenance.json",
+    "destination": "raw/isq_mtp.measurement_script.provenance.json",
+    "sha256": "2f8f91e2473907a94e9ff64815e509048f82e4b6e0b30460766c89dbe10537a1"
+  },
+  {
+    "source": "/home/ericbuehler/qwen4exp_work/tuner_exploration_20260930/measurement_commands.json",
+    "destination": "raw/isq_mtp.commands.json",
+    "sha256": "e879ea1be187d296c967443f78a9d4abb590c7bbea1e2c687d4052c239e23613"
+  },
+  {
+    "source": "/home/ericbuehler/qwen4exp_work/tuner_exploration_20260930/orchestration.metadata.json",
+    "destination": "raw/isq_mtp.orchestration.json",
+    "sha256": "73945828d38476b51e79ae62bfdb7410c0a7051c76bf9e23cf74cf0cb6c223e6"
+  },
+  {
+    "source": "/home/ericbuehler/qwen4exp_work/tuner_exploration_20260930/editor_retry_cleanup.json",
+    "destination": "raw/isq_mtp.editor_cleanup.json",
+    "sha256": "5870a3f95eb1f024452c23f89d9970e5d4e5fd3067a5b28807062f2a963975b0"
+  },
+  {
+    "source": "/home/ericbuehler/qwen4exp_work/tuner_exploration_20260930/concurrency.isq_mtp_tuner.c1.json",
+    "destination": "raw/concurrency.isq_mtp.c1.json",
+    "sha256": "579ca8db2dd58c6400526ed11f83b0bdcaec93aed698f743f076795a6847ae9d"
+  },
+  {
+    "source": "/home/ericbuehler/qwen4exp_work/tuner_exploration_20260930/concurrency.isq_mtp_tuner.c6_c8.json",
+    "destination": "raw/concurrency.isq_mtp.c6_c8.json",
+    "sha256": "ec01c12ee1d52822c92298f9288be783a78a742fca561aa858bb81bc60b80e2d"
+  },
+  {
+    "source": "/home/ericbuehler/qwen4exp_work/tuner_exploration_20260930/concurrency.isq_mtp_tuner.burst_c6.json",
+    "destination": "raw/concurrency.isq_mtp.burst_c6.json",
+    "sha256": "aa820fdc769ae567e49b7c27c9d3aba160d419a97518f354fc34f7876feda6dd"
+  },
+  {
+    "source": "/home/ericbuehler/qwen4exp_work/tuner_exploration_20260930/isq_mtp_tuner.server.log",
+    "destination": "raw/isq_mtp.server.log",
+    "sha256": "528b8d34e9d8987d1649f87da4460c9ecb0d438470a77f40696d9523ccf40c5e"
+  },
+  {
+    "source": "/home/ericbuehler/qwen4exp_work/tuner_exploration_20260930/isq_mtp_tuner.memory.jsonl",
+    "destination": "raw/isq_mtp.memory.jsonl",
+    "sha256": "fd98567873c8b7c56f1fd1b768e0c92a9f1eeac2a3940d599ca11ecef2cfb44c"
+  }
+]

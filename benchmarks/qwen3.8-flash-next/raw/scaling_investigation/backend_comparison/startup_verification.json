@@ -1,0 +1,446 @@
+{
+  "verified_utc": "2026-09-30T13:32:48.785953+00:00",
+  "scope": "Startup log and current source inspection only; no GPU queries, model tensor reads, or new binary hashes. Source inferences are distinguished from logged observations.",
+  "binary_sha256_from_launch_metadata": "d245efbb543fa8131f71aee34fef3a868cb1f3c0cfba8eaafd5b4fd7d4c64588",
+  "fp8": {
+    "log": "dense_fp8/server.log",
+    "log_evidence": [
+      {
+        "line": 3,
+        "text": "2026-09-30T13:20:18.784196Z  INFO mistralrs_quant::utils::log: DType selected is BF16."
+      },
+      {
+        "line": 4,
+        "text": "2026-09-30T13:20:18.786735Z  INFO mistralrs_core::pipeline::multimodal: Using checkpoint tensor inventory for automatic device mapping model_mib=52994"
+      },
+      {
+        "line": 5,
+        "text": "2026-09-30T13:20:18.787290Z  INFO mistralrs_core::pipeline::loaders::auto_device_map: Reserving 512 MB on the primary device and 192 MB on mapped devices for activations (predicted)."
+      },
+      {
+        "line": 6,
+        "text": "2026-09-30T13:20:18.787434Z  INFO mistralrs_core::pipeline::loaders::auto_device_map: Using automatic device mapping parameters: multimodal[max_seq_len: 4096, max_batch_size: 1, max_image_shape: (1024, 1024), max_num_images: 1]."
+      },
+      {
+        "line": 7,
+        "text": "2026-09-30T13:20:18.787439Z  INFO mistralrs_core::pipeline::loaders::auto_device_map: The following sub-models will not be device mapped and will be loaded on cuda[0]: vision"
+      },
+      {
+        "line": 8,
+        "text": "2026-09-30T13:20:18.787533Z  INFO mistralrs_quant::utils::log: Model has 64 repeating layers."
+      },
+      {
+        "line": 10,
+        "text": "2026-09-30T13:20:18.787595Z  INFO mistralrs_quant::utils::log: Layers 0-63: cuda[0] (121 GB)"
+      },
+      {
+        "line": 11,
+        "text": "2026-09-30T13:20:18.787831Z  INFO mistralrs_quant::utils::log: FlashAttention is enabled."
+      },
+      {
+        "line": 13,
+        "text": "2026-09-30T13:20:24.543432Z  INFO mistralrs_quant::blockwise_fp8: Using FP8 tensor-core W8A8 GEMV for decode with dynamic 1x128 activations"
+      },
+      {
+        "line": 14,
+        "text": "2026-09-30T13:21:50.675995Z  INFO mistralrs_core::kv_cache::hybrid_cache: Reserved GDN deferred-state storage storage_bytes=56956608"
+      },
+      {
+        "line": 15,
+        "text": "2026-09-30T13:21:50.676170Z  INFO mistralrs_core::paged_attention: Reserving 512 MB on the primary device for runtime components and activations."
+      },
+      {
+        "line": 16,
+        "text": "2026-09-30T13:21:50.676174Z  INFO mistralrs_core::paged_attention: Allocating 1026 MB for PagedAttention KV cache per GPU"
+      },
+      {
+        "line": 17,
+        "text": "2026-09-30T13:21:50.676175Z  INFO mistralrs_core::paged_attention: PagedAttention KV cache type is BF16"
+      },
+      {
+        "line": 18,
+        "text": "2026-09-30T13:21:50.676177Z  INFO mistralrs_core::paged_attention: Using PagedAttention with block size 32 and 513 GPU blocks: available context length is 16384 tokens"
+      },
+      {
+        "line": 20,
+        "text": "2026-09-30T13:21:50.797437Z  INFO mistralrs_core: mistral.rs version: 0.9.4"
+      },
+      {
+        "line": 21,
+        "text": "2026-09-30T13:21:50.797440Z  INFO mistralrs_core: git revision: 0003cf35120f696e063d64993c36e25969cad422"
+      },
+      {
+        "line": 29,
+        "text": "2026-09-30T13:21:50.934185Z  INFO mistralrs_quant::cutile::tune: cuTile autotune fp8_gemm n34816_k5120: <=128 blocks_per_sm=2,bm=128,cluster=0,latency=0,map_m=8,map_n=1,occupancy=0,warps=0 (recorded), <=512 blocks_per_sm=2,bm=128,cluster=0,latency=0,map_m=8,map_n=1,occupancy=0,warps=0 (recorded), >512 blocks_per_sm=2,bm=128,cluster=0,latency=0,map_m=8,map_n=1,occupancy=0,warps=0 (recorded)"
+      },
+      {
+        "line": 30,
+        "text": "2026-09-30T13:21:50.940961Z  INFO mistralrs_quant::cutile::tune: cuTile autotune fp8_gemm n17408_k5120: <=128 blocks_per_sm=2,bm=128,cluster=0,latency=0,map_m=8,map_n=1,occupancy=0,warps=0 (recorded), <=512 blocks_per_sm=2,bm=128,cluster=0,latency=0,map_m=8,map_n=1,occupancy=0,warps=0 (recorded), >512 blocks_per_sm=2,bm=128,cluster=0,latency=0,map_m=8,map_n=1,occupancy=0,warps=0 (recorded)"
+      },
+      {
+        "line": 31,
+        "text": "2026-09-30T13:21:50.947748Z  INFO mistralrs_quant::cutile::tune: cuTile autotune fp8_gemm n5120_k17408: <=128 blocks_per_sm=2,bm=128,cluster=0,latency=0,map_m=8,map_n=1,occupancy=0,warps=0 (recorded), <=512 blocks_per_sm=2,bm=128,cluster=0,latency=0,map_m=8,map_n=1,occupancy=0,warps=0 (recorded), >512 blocks_per_sm=2,bm=128,cluster=0,latency=0,map_m=8,map_n=1,occupancy=0,warps=0 (recorded)"
+      },
+      {
+        "line": 35,
+        "text": "2026-09-30T13:21:50.968393Z  INFO mistralrs_quant::cutile::fp8_gemm: Warming 10 cuTile FP8 GEMM kernels."
+      },
+      {
+        "line": 37,
+        "text": "2026-09-30T13:21:56.496227Z  INFO mistralrs_core::paged_attention::scheduler: Configured PagedAttention scheduler max_num_seqs=8 max_num_batched_tokens=4096 max_prefill_chunk_tokens=512 max_decode_steps_before_prefill=8"
+      },
+      {
+        "line": 38,
+        "text": "2026-09-30T13:21:57.948570Z  INFO mistralrs_core::pipeline::multimodal: Captured 8 CUDA decode graphs through batch bucket 8 in 1.45s"
+      },
+      {
+        "line": 39,
+        "text": "2026-09-30T13:21:57.948662Z  INFO mistralrs_core::pipeline::cuda_graph: CUDA graphs reserve 0 MiB; 37688 MiB of device memory free after startup."
+      },
+      {
+        "line": 40,
+        "text": "2026-09-30T13:21:58.084288Z  INFO mistralrs::commands::serve: Server listening on http://127.0.0.1:1234"
+      }
+    ],
+    "all_repeating_layers_on_cuda": true,
+    "repeating_layers": 64,
+    "model_compute_dtype": "BF16",
+    "logged_decode_backend": "FP8 tensor-core W8A8 GEMV with dynamic 1x128 activations",
+    "gdn_deferred_state_storage_bytes": 56956608,
+    "kv": {
+      "dtype": "BF16",
+      "allocated_megabytes_as_logged": 1026,
+      "block_size": 32,
+      "gpu_blocks": 513,
+      "context_tokens": 16384
+    },
+    "scheduler": {
+      "max_num_seqs": 8,
+      "max_num_batched_tokens": 4096,
+      "max_prefill_chunk_tokens": 512,
+      "max_decode_steps_before_prefill": 8
+    },
+    "decode_graphs": 8,
+    "maximum_graph_batch_bucket": 8,
+    "graph_reserve_mib_as_logged": 0,
+    "device_free_mib_after_startup": 37688,
+    "mapping_estimate_note": "The max_batch_size=1 and max_seq_len=4096 line describes automatic mapping estimates; runtime scheduler and cache lines show max_num_seqs=8 and context 16384."
+  },
+  "q4k_source_expectations": {
+    "verification_status": "Q4K startup completed. Global quantization plan, placement, and capacity are logged; exact per-tensor dtype/layout remain source-based inferences.",
+    "dense_ffn": {
+      "gate_proj": {
+        "weight_shape": [
+          17408,
+          5120
+        ],
+        "expected_weight_type": "Q4K",
+        "block_size": 256,
+        "blocks_per_row": 20
+      },
+      "up_proj": {
+        "weight_shape": [
+          17408,
+          5120
+        ],
+        "expected_weight_type": "Q4K",
+        "block_size": 256,
+        "blocks_per_row": 20
+      },
+      "down_proj": {
+        "weight_shape": [
+          5120,
+          17408
+        ],
+        "expected_weight_type": "Q4K",
+        "block_size": 256,
+        "blocks_per_row": 68
+      }
+    },
+    "dtype_reason": "Qwen3_5 immediate ISQ predicates include all three dense FFN projections. Sensitive-tensor promotion applies to embeddings and lm_head, not dense FFN down/gate/up. Each FFN input dimension is divisible by the Q4K block size, so no Q4_1 fallback is expected on this single-GPU run.",
+    "quantization_source": "Eligible blockwise FP8 weights are first dequantized using checkpoint scales and then quantized to the requested GGML format. This is FP8-to-Q4K double quantization, not BF16-source Q4K.",
+    "lm_head_note": "The BF16 checkpoint lm_head is also ISQ eligible and is promoted from default Q4K to Q6K; this pair changes eligible projection policy as well as FP8 matrix kernels.",
+    "layout_note": "Immediate ISQ disables load_packed_weights, so gate/up have separate stored quantized weight tensors. Mlp::forward calls quantized_ffn, which can fuse gate/up MMVQ computation at batches1-8. Native FP8 startup warms n34816_k5120, consistent with the packed gate/up path. Separate stored tensors do not imply separate gate and up decode kernel launches.",
+    "flash_next_contrast": "Flash-Next expert down projections have inner dimension640, so requested Q4K falls back to Q4_1 there; dense27B has inner dimension17408 and retains Q4K.",
+    "source_evidence": [
+      {
+        "file": "mistralrs-core/src/pipeline/loaders/multimodal_loaders.rs",
+        "lines": [
+          6985,
+          7043
+        ],
+        "claim": "Qwen3_5 ISQ eligibility and sensitive promotions"
+      },
+      {
+        "file": "mistralrs-core/src/layers.rs",
+        "lines": [
+          3619,
+          3666
+        ],
+        "claim": "Mlp packed attempt, separate gate/up fallback, row-parallel down projection without dtype override"
+      },
+      {
+        "file": "mistralrs-quant/src/distributed/layers.rs",
+        "lines": [
+          452,
+          461
+        ],
+        "claim": "Immediate ISQ disables packed projection loading"
+      },
+      {
+        "file": "mistralrs-core/src/layers.rs",
+        "lines": [
+          3788,
+          3795
+        ],
+        "claim": "Packed versus separate gate/up forward paths"
+      },
+      {
+        "file": "mistralrs-quant/src/utils/isq.rs",
+        "lines": [
+          248,
+          288
+        ],
+        "claim": "Q4K fallback only when last dimension is incompatible"
+      },
+      {
+        "file": "mistralrs-quant/src/lib.rs",
+        "lines": [
+          1124,
+          1129
+        ],
+        "claim": "Sensitive Q4K promotion to Q6K"
+      },
+      {
+        "file": "mistralrs-quant/src/blockwise_fp8/mod.rs",
+        "lines": [
+          920,
+          1010
+        ],
+        "claim": "FP8 dequantization followed by GGML quantization and GgufMatMul construction"
+      }
+    ]
+  },
+  "q4k": {
+    "log": "dense_fp8_to_q4k/server.log",
+    "log_evidence": [
+      {
+        "line": 3,
+        "text": "2026-09-30T13:31:35.120680Z  INFO mistralrs_quant::utils::log: DType selected is BF16."
+      },
+      {
+        "line": 4,
+        "text": "2026-09-30T13:31:35.121511Z  INFO mistralrs_core::pipeline::loaders::auto_device_map: Reserving 512 MB on the primary device and 192 MB on mapped devices for activations (predicted)."
+      },
+      {
+        "line": 5,
+        "text": "2026-09-30T13:31:35.121678Z  INFO mistralrs_core::pipeline::loaders::auto_device_map: Using automatic device mapping parameters: multimodal[max_seq_len: 4096, max_batch_size: 1, max_image_shape: (1024, 1024), max_num_images: 1]."
+      },
+      {
+        "line": 6,
+        "text": "2026-09-30T13:31:35.121684Z  INFO mistralrs_core::pipeline::loaders::auto_device_map: The following sub-models will not be device mapped and will be loaded on cuda[0]: vision"
+      },
+      {
+        "line": 7,
+        "text": "2026-09-30T13:31:35.121783Z  INFO mistralrs_quant::utils::log: Model has 64 repeating layers."
+      },
+      {
+        "line": 9,
+        "text": "2026-09-30T13:31:35.121858Z  INFO mistralrs_quant::utils::log: Layers 0-63: cuda[0] (121 GB)"
+      },
+      {
+        "line": 10,
+        "text": "2026-09-30T13:31:35.122100Z  INFO mistralrs_quant::utils::log: FlashAttention is enabled."
+      },
+      {
+        "line": 11,
+        "text": "2026-09-30T13:31:35.123105Z  INFO mistralrs_core::pipeline::isq_flow::plan: Quantizing model weights to q4k, with sensitive tensors using q6k."
+      },
+      {
+        "line": 12,
+        "text": "2026-09-30T13:31:35.125178Z  INFO mistralrs_core::pipeline::multimodal: Loading model weights for quantization."
+      },
+      {
+        "line": 13,
+        "text": "2026-09-30T13:32:03.358704Z  INFO mistralrs_core::kv_cache::hybrid_cache: Reserved GDN deferred-state storage storage_bytes=56956608"
+      },
+      {
+        "line": 14,
+        "text": "2026-09-30T13:32:03.358982Z  INFO mistralrs_core::paged_attention: Reserving 512 MB on the primary device for runtime components and activations."
+      },
+      {
+        "line": 15,
+        "text": "2026-09-30T13:32:03.358993Z  INFO mistralrs_core::paged_attention: Allocating 1026 MB for PagedAttention KV cache per GPU"
+      },
+      {
+        "line": 16,
+        "text": "2026-09-30T13:32:03.358995Z  INFO mistralrs_core::paged_attention: PagedAttention KV cache type is BF16"
+      },
+      {
+        "line": 17,
+        "text": "2026-09-30T13:32:03.358998Z  INFO mistralrs_core::paged_attention: Using PagedAttention with block size 32 and 513 GPU blocks: available context length is 16384 tokens"
+      },
+      {
+        "line": 18,
+        "text": "2026-09-30T13:32:03.580904Z  INFO mistralrs_server_core::mistralrs_for_server_builder: Model loaded."
+      },
+      {
+        "line": 19,
+        "text": "2026-09-30T13:32:03.580955Z  INFO mistralrs_core: mistral.rs version: 0.9.4"
+      },
+      {
+        "line": 20,
+        "text": "2026-09-30T13:32:03.580957Z  INFO mistralrs_core: git revision: 0003cf35120f696e063d64993c36e25969cad422"
+      },
+      {
+        "line": 24,
+        "text": "2026-09-30T13:32:03.652354Z  INFO mistralrs_quant::cutile::gdn_prefill: Warming cuTile GDN prefill kernels."
+      },
+      {
+        "line": 25,
+        "text": "2026-09-30T13:32:08.131067Z  INFO mistralrs_core::paged_attention::scheduler: Configured PagedAttention scheduler max_num_seqs=8 max_num_batched_tokens=4096 max_prefill_chunk_tokens=512 max_decode_steps_before_prefill=8"
+      },
+      {
+        "line": 26,
+        "text": "2026-09-30T13:32:09.079326Z  INFO mistralrs_core::pipeline::multimodal: Captured 8 CUDA decode graphs through batch bucket 8 in 948.19ms"
+      },
+      {
+        "line": 27,
+        "text": "2026-09-30T13:32:09.079425Z  INFO mistralrs_core::pipeline::cuda_graph: CUDA graphs reserve 0 MiB; 51802 MiB of device memory free after startup."
+      },
+      {
+        "line": 28,
+        "text": "2026-09-30T13:32:09.172432Z  INFO mistralrs::commands::serve: Server listening on http://127.0.0.1:1234"
+      }
+    ],
+    "startup_complete": true,
+    "startup_seconds_from_metadata": 36.027496832975885,
+    "binary_sha256_from_loaded_executable": "d245efbb543fa8131f71aee34fef3a868cb1f3c0cfba8eaafd5b4fd7d4c64588",
+    "all_repeating_layers_on_cuda": true,
+    "repeating_layers": 64,
+    "model_compute_dtype": "BF16",
+    "logged_quantization_plan": {
+      "default": "q4k",
+      "sensitive": "q6k"
+    },
+    "gdn_deferred_state_storage_bytes": 56956608,
+    "kv": {
+      "dtype": "BF16",
+      "allocated_megabytes_as_logged": 1026,
+      "block_size": 32,
+      "gpu_blocks": 513,
+      "context_tokens": 16384
+    },
+    "scheduler": {
+      "max_num_seqs": 8,
+      "max_num_batched_tokens": 4096,
+      "max_prefill_chunk_tokens": 512,
+      "max_decode_steps_before_prefill": 8
+    },
+    "decode_graphs": 8,
+    "maximum_graph_batch_bucket": 8,
+    "graph_reserve_mib_as_logged": 0,
+    "device_free_mib_after_startup": 51802,
+    "per_tensor_and_kernel_observation_limit": "The startup log states the ISQ plan and successful model load, but does not print a per-tensor dtype inventory or the executed GGUF kernels. FFN dtype, layout, and dispatch below are source-derived, not measured kernel attribution.",
+    "source_based_eligible_dispatch": {
+      "weight_object": "GgufMatMul after FP8 dequantization and Q4K quantization",
+      "projection_layout": "Separate gate/up weight tensors; fused MMVQ gate/up computation in the small-batch quantized_ffn path.",
+      "c1": "Canonical Q4K fast MMVQ; fused gate/up computation, MMVQ down projection.",
+      "c8": "Canonical Q4K fast MMVQ; fused gate/up computation, MMVQ down projection. Packed affine Marlin is disabled by the production environment gate.",
+      "sensitive_lm_head": "Q6K packed affine minimum batch128; C1/C8 use the canonical small-batch GGUF path",
+      "source_evidence": [
+        {
+          "file": "mistralrs-quant/src/gguf/mod.rs",
+          "lines": [
+            36,
+            36
+          ],
+          "claim": "Q4K packed affine minimum batch8"
+        },
+        {
+          "file": "mistralrs-quant/src/gguf/mod.rs",
+          "lines": [
+            298,
+            320
+          ],
+          "claim": "Canonical MMVQ batches1-8, MMQ above8"
+        },
+        {
+          "file": "mistralrs-quant/src/gguf/mod.rs",
+          "lines": [
+            325,
+            365
+          ],
+          "claim": "Packed affine shape/device/reservation guards"
+        },
+        {
+          "file": "mistralrs-quant/src/gguf/mod.rs",
+          "lines": [
+            440,
+            451
+          ],
+          "claim": "Packed affine is attempted before canonical fast path"
+        },
+        {
+          "file": "mistralrs-quant/src/gguf/packed_affine.rs",
+          "lines": [
+            28,
+            66
+          ],
+          "claim": "Format-specific minimum batches; Q6K128, Q4K8"
+        },
+        {
+          "file": "mistralrs-quant/src/gguf/packed_affine.rs",
+          "lines": [
+            698,
+            725
+          ],
+          "claim": "BF16 4-bit packed affine invokes marlin_affine_u4_bf16"
+        },
+        {
+          "file": "mistralrs-quant/src/gguf/packed_affine.rs",
+          "lines": [
+            295,
+            309
+          ],
+          "claim": "Production packed-affine backend defaults Off without on/auto environment override"
+        },
+        {
+          "file": "mistralrs-core/src/layers.rs",
+          "lines": [
+            3827,
+            3838
+          ],
+          "claim": "Mlp with separate stored weights enters quantized_ffn"
+        },
+        {
+          "file": "mistralrs-core/src/ops.rs",
+          "lines": [
+            6683,
+            6701
+          ],
+          "claim": "quantized_ffn attempts fused gate/up before down projection"
+        },
+        {
+          "file": "mistralrs-quant/src/lib.rs",
+          "lines": [
+            2320,
+            2344
+          ],
+          "claim": "Affine gated attempt followed by fused MMVQ gate/up for batch<=8"
+        }
+      ],
+      "packed_affine_gate": "Disabled: production backend() defaults Off, and launch metadata environment has no MISTRALRS_GGUF_AFFINE_BACKEND override. The batch8 shape threshold does not enable it by itself."
+    }
+  },
+  "matched_startup": {
+    "repeating_layer_placement": true,
+    "compute_dtype": true,
+    "gdn_deferred_state_storage": true,
+    "kv_dtype_and_capacity": true,
+    "scheduler": true,
+    "decode_graph_count_and_batch_ceiling": true,
+    "device_free_mib_difference_q4k_minus_fp8": 14114,
+    "free_memory_note": "Available device memory differs with weight storage/layout and unified system allocations; this delta is not an exact model-weight size measurement."
+  }
+}

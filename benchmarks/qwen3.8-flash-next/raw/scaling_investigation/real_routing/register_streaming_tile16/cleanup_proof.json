@@ -1,0 +1,45 @@
+{
+  "at": "2026-09-30T14:28:12.755664+00:00",
+  "files": [
+    {
+      "path": "/home/ericbuehler/mistral.rs/mistralrs-quant/kernels/mmq_gguf/mmq_instance_q4_k.cu",
+      "before": "04f082040de2264f8e462c580821c18f932389434e266f24341036d2129e8198",
+      "after": "04f082040de2264f8e462c580821c18f932389434e266f24341036d2129e8198"
+    },
+    {
+      "path": "/home/ericbuehler/mistral.rs/mistralrs-quant/kernels/mmq_gguf/mmq_instance_q4_1.cu",
+      "before": "8ef671d05df8b7edb9df82eb57a3c4bc817adac6a636ce015b611e638df2d59d",
+      "after": "8ef671d05df8b7edb9df82eb57a3c4bc817adac6a636ce015b611e638df2d59d"
+    },
+    {
+      "path": "/home/ericbuehler/mistral.rs/mistralrs-quant/kernels/mmq_gguf/mmq_gguf.cuh",
+      "before": "dcd3e00a749cc0725bd21a6d6b2a393f825d51c349441fb80a9a8b4747f0c57b",
+      "after": "dcd3e00a749cc0725bd21a6d6b2a393f825d51c349441fb80a9a8b4747f0c57b"
+    },
+    {
+      "path": "/home/ericbuehler/mistral.rs/target/release/build/mistralrs-quant-1c0ce6ee625e3844/out/libmistralrsquant.a",
+      "before": "6652fc66278439486febd58ce468a8453bbcc838a8bb26e034b6e01e7b0e3ccb",
+      "after": "6652fc66278439486febd58ce468a8453bbcc838a8bb26e034b6e01e7b0e3ccb"
+    },
+    {
+      "path": "/home/ericbuehler/mistral.rs/target/release/mistralrs",
+      "before": "d245efbb543fa8131f71aee34fef3a868cb1f3c0cfba8eaafd5b4fd7d4c64588",
+      "after": "d245efbb543fa8131f71aee34fef3a868cb1f3c0cfba8eaafd5b4fd7d4c64588"
+    }
+  ],
+  "relevant_processes": [
+    {
+      "pid": 2315864,
+      "comm": "nvcc",
+      "command": "/usr/local/cuda/bin/nvcc -gencode arch=compute_121f,code=sm_121f -c -o /home/ericbuehler/mistral.rs/target/release/build/mistralrs-core-b12c044d912367d7/out/gdn-680a1b870b572186.o --default-stream per-thread -std c++17 -O3 -U__CUDA_NO_HALF_OPERATORS__ -U__CUDA_NO_HALF_CONVERSIONS__ -U__CUDA_NO_HALF2_OPERATORS__ -U__CUDA_NO_BFLOAT16_CONVERSIONS__ --expt-relaxed-constexpr --expt-extended-lambda --use_fast_math --verbose --compiler-options -fPIC -DMISTRALRS_CORE_CUDA_HEADER_HASH=0xe50eaa504f988193 -Xcompiler -fPIC src/cuda/gdn.cu "
+    },
+    {
+      "pid": 2315906,
+      "comm": "cicc",
+      "command": "/usr/local/cuda/bin/../nvvm/bin/cicc --c++17 --static-host-stub --device-hidden-visibility --gnu_version=130300 --display_error_number --orig_src_file_name src/cuda/gdn.cu --orig_src_path_name /home/ericbuehler/mistral.rs/mistralrs-core/src/cuda/gdn.cu --allow_managed --extended-lambda --relaxed_constexpr --unsigned_chars --unsigned_wchar_t -arch compute_121f -m64 --no-version-ident -ftz=1 -prec_div=0 -prec_sqrt=0 -fmad=1 -fast-math --gen_div_approx_ftz --include_file_name tmpxft_00235658_00000000-3_gdn.fatbin.c -tused --module_id_file_name /tmp/tmpxft_00235658_00000000-4_gdn.module_id --gen_c_file_name /tmp/tmpxft_00235658_00000000-6_gdn.cudafe1.c --stub_file_name /tmp/tmpxft_00235658_00000000-6_gdn.cudafe1.stub.c --gen_device_file_name /tmp/tmpxft_00235658_00000000-6_gdn.cudafe1.gpu /tmp/tmpxft_00235658_00000000-7_gdn.cpp1.ii -o /tmp/tmpxft_00235658_00000000-6_gdn.ptx "
+    }
+  ],
+  "scope": "No diagnostic replay/model/profiler processes remain. Listed core CUDA compilers belong to the subsequent parent validation phase and are not benchmark interference.",
+  "editor_processes_restoration_owner": "root",
+  "diagnostic_processes_remaining": []
+}

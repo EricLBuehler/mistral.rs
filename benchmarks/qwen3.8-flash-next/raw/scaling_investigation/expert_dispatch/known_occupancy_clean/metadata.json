@@ -1,0 +1,271 @@
+{
+  "gate": "/home/ericbuehler/qwen4exp_work/scaling_20260930/current_dense_fp8/metadata.json",
+  "gate_passed_at": "2026-09-30T03:50:07.093118+00:00",
+  "dense_metadata_sha256": "09519e86a214012df4c2347e5c6725c0897cc13a639652de2f837d2f1ff67c4c",
+  "dense_server_pid": 1796174,
+  "source": "/home/ericbuehler/mistral.rs/mistralrs-quant/tests/moe_dispatch_bench.rs",
+  "source_sha256": "6412dcadd78d49372a90cdc8555215e93d4d4d79be29ca88bea3cc345a8219db",
+  "binary": "/home/ericbuehler/mistral.rs/target/release/deps/moe_dispatch_bench-0dfba70e2949feab",
+  "binary_sha256": "bd3f18db961de2f1a56ce6fd64c4ed4b55659c7396a6aea9423f13c3c462c52b",
+  "hardware": {
+    "architecture": "aarch64",
+    "kernel": "6.17.0-1021-nvidia",
+    "logical_cpus": 20,
+    "memory": {
+      "MemTotal": "127600748 kB",
+      "SwapTotal": "16777212 kB"
+    },
+    "gpu": "NVIDIA GB10, 580.126.09",
+    "rust": "rustc 1.98.1 (48a229cea 2026-09-01)",
+    "cuda": "nvcc: NVIDIA (R) Cuda compiler driver\nCopyright (c) 2005-2026 NVIDIA Corporation\nBuilt on Thu_Mar_19_11:11:41_PM_PDT_2026\nCuda compilation tools, release 13.2, V13.2.78\nBuild cuda_13.2.r13.2/compiler.37668154_0",
+    "performance_env": {
+      "CUTILE_TILEIRAS_PATH": "/usr/local/cuda-13.2/bin/tileiras",
+      "CUDA_TOOLKIT_PATH": "/usr/local/cuda",
+      "CUDA_HOME": "/usr/local/cuda"
+    },
+    "python_packages": {
+      "tokenizers": "0.22.1",
+      "Pillow": "11.3.0"
+    }
+  },
+  "weights": {
+    "gguf": {
+      "tensors": [
+        "blk.8.ffn_gate_exps.weight",
+        "blk.8.ffn_up_exps.weight",
+        "blk.8.ffn_down_exps.weight"
+      ],
+      "quant_formats": [
+        "Q4K",
+        "Q4K",
+        "Q5_1"
+      ]
+    },
+    "isq": {
+      "snapshot": "de4b8e4d43b917e7706784d8bb445c9af86a3540",
+      "index_path": "/home/ericbuehler/.cache/huggingface/hub/models--Qwen--Qwen3.8-Flash-Next/snapshots/de4b8e4d43b917e7706784d8bb445c9af86a3540/model.safetensors.index.json",
+      "index_sha256": "99e815241ef03325536b0aaa4441deea45174c17fae31e10f0bb456410c590de",
+      "config_sha256": "889658f2508e8c61d409b02e70e0d78d8d4452ec65aaafbe129805d213d2e74b",
+      "tensor_shards": {
+        "model.language_model.layers.8.mlp.experts.gate_up_proj": "model-00127-of-00131.safetensors",
+        "model.language_model.layers.8.mlp.experts.down_proj": "model-00128-of-00131.safetensors"
+      },
+      "quant_formats": [
+        "Q4K",
+        "Q4K",
+        "Q4_1"
+      ],
+      "quantization": "Candle QTensor::quantize_onto CPU BF16 tensor to CUDA; split gate_up_proj at640 rows; Q4_1 down since640 is not divisible by256"
+    }
+  },
+  "dimensions": {
+    "experts": 512,
+    "topk": 10,
+    "hidden": 2560,
+    "intermediate": 640
+  },
+  "git_head": "0003cf35120f696e063d64993c36e25969cad422",
+  "timing_note": "Same unfused projection pipeline for normal/tight bounds. Synthetic GPU expert bounds verified <=8 outside timing. Not a generally safe production bound change.",
+  "complete": true,
+  "started_at": "2026-09-30T03:53:14.243603+00:00",
+  "steps": [
+    {
+      "tag": "gguf",
+      "command": [
+        "/home/ericbuehler/mistral.rs/target/release/deps/moe_dispatch_bench-0dfba70e2949feab",
+        "--ignored",
+        "--exact",
+        "flash_next_known_occupancy_microbenchmark",
+        "--nocapture"
+      ],
+      "env_overrides": {
+        "MISTRALRS_MOE_BENCH_GGUF": "/home/ericbuehler/qwen4exp_work/gguf/UD-Q4_K_XL",
+        "MISTRALRS_MOE_BENCH_OUTPUT": "/home/ericbuehler/qwen4exp_work/moe_dispatch_20260930/known_occupancy_clean/gguf.json"
+      },
+      "cwd": "/home/ericbuehler/mistral.rs",
+      "started_at": "2026-09-30T03:53:14.347210+00:00",
+      "returncode": 0,
+      "finished_at": "2026-09-30T03:53:22.444523+00:00",
+      "log_sha256": "76630e06c88148c759d8d275484c4c69e3147655021f8a1a5e4c1a42cc6334dd"
+    },
+    {
+      "tag": "isq",
+      "command": [
+        "/home/ericbuehler/mistral.rs/target/release/deps/moe_dispatch_bench-0dfba70e2949feab",
+        "--ignored",
+        "--exact",
+        "flash_next_known_occupancy_microbenchmark",
+        "--nocapture"
+      ],
+      "env_overrides": {
+        "MISTRALRS_MOE_BENCH_SAFETENSORS": "/home/ericbuehler/.cache/huggingface/hub/models--Qwen--Qwen3.8-Flash-Next/snapshots/de4b8e4d43b917e7706784d8bb445c9af86a3540",
+        "MISTRALRS_MOE_BENCH_OUTPUT": "/home/ericbuehler/qwen4exp_work/moe_dispatch_20260930/known_occupancy_clean/isq.json"
+      },
+      "cwd": "/home/ericbuehler/mistral.rs",
+      "started_at": "2026-09-30T03:53:22.459366+00:00",
+      "returncode": 0,
+      "finished_at": "2026-09-30T03:53:50.279800+00:00",
+      "log_sha256": "10173b2a7f0ea5c25b0403258ea101cf991f9b2703b890a1e8661cccac85384c"
+    }
+  ],
+  "earlier_exploratory_metadata": "/home/ericbuehler/qwen4exp_work/moe_dispatch_20260930/known_occupancy/metadata.json",
+  "isolation_note": "Editor compiler tree paused by root before these runs; no active compiler processes allowed at run boundaries. No build occurs in this controller.",
+  "compiler_state_checks": [
+    {
+      "tag": "before_all",
+      "at": "2026-09-30T03:53:14.336726+00:00",
+      "observed": [
+        {
+          "pid": 40433,
+          "comm": "rust-analyzer",
+          "state": "T"
+        },
+        {
+          "pid": 1793472,
+          "comm": "cargo",
+          "state": "T"
+        },
+        {
+          "pid": 1793708,
+          "comm": "nvcc",
+          "state": "T"
+        },
+        {
+          "pid": 1794666,
+          "comm": "cargo",
+          "state": "T"
+        },
+        {
+          "pid": 1798790,
+          "comm": "ptxas",
+          "state": "T"
+        }
+      ]
+    },
+    {
+      "tag": "before_gguf",
+      "at": "2026-09-30T03:53:14.341603+00:00",
+      "observed": [
+        {
+          "pid": 40433,
+          "comm": "rust-analyzer",
+          "state": "T"
+        },
+        {
+          "pid": 1793472,
+          "comm": "cargo",
+          "state": "T"
+        },
+        {
+          "pid": 1793708,
+          "comm": "nvcc",
+          "state": "T"
+        },
+        {
+          "pid": 1794666,
+          "comm": "cargo",
+          "state": "T"
+        },
+        {
+          "pid": 1798790,
+          "comm": "ptxas",
+          "state": "T"
+        }
+      ]
+    },
+    {
+      "tag": "after_gguf",
+      "at": "2026-09-30T03:53:22.450334+00:00",
+      "observed": [
+        {
+          "pid": 40433,
+          "comm": "rust-analyzer",
+          "state": "T"
+        },
+        {
+          "pid": 1793472,
+          "comm": "cargo",
+          "state": "T"
+        },
+        {
+          "pid": 1793708,
+          "comm": "nvcc",
+          "state": "T"
+        },
+        {
+          "pid": 1794666,
+          "comm": "cargo",
+          "state": "T"
+        },
+        {
+          "pid": 1798790,
+          "comm": "ptxas",
+          "state": "T"
+        }
+      ]
+    },
+    {
+      "tag": "before_isq",
+      "at": "2026-09-30T03:53:22.459197+00:00",
+      "observed": [
+        {
+          "pid": 40433,
+          "comm": "rust-analyzer",
+          "state": "T"
+        },
+        {
+          "pid": 1793472,
+          "comm": "cargo",
+          "state": "T"
+        },
+        {
+          "pid": 1793708,
+          "comm": "nvcc",
+          "state": "T"
+        },
+        {
+          "pid": 1794666,
+          "comm": "cargo",
+          "state": "T"
+        },
+        {
+          "pid": 1798790,
+          "comm": "ptxas",
+          "state": "T"
+        }
+      ]
+    },
+    {
+      "tag": "after_isq",
+      "at": "2026-09-30T03:53:50.285738+00:00",
+      "observed": [
+        {
+          "pid": 40433,
+          "comm": "rust-analyzer",
+          "state": "T"
+        },
+        {
+          "pid": 1793472,
+          "comm": "cargo",
+          "state": "T"
+        },
+        {
+          "pid": 1793708,
+          "comm": "nvcc",
+          "state": "T"
+        },
+        {
+          "pid": 1794666,
+          "comm": "cargo",
+          "state": "T"
+        },
+        {
+          "pid": 1798790,
+          "comm": "ptxas",
+          "state": "T"
+        }
+      ]
+    }
+  ],
+  "finished_at": "2026-09-30T03:53:50.289871+00:00"
+}

@@ -1,0 +1,180 @@
+{
+  "packaged_utc": "2026-09-30T13:44:29.504304+00:00",
+  "source_directory": "/home/ericbuehler/qwen4exp_work/kernel_comparison_20260930",
+  "files_copied_and_byte_verified": [
+    {
+      "file": "dense_fp8/raw.json",
+      "source": "/home/ericbuehler/qwen4exp_work/kernel_comparison_20260930/dense_fp8/raw.json",
+      "bytes": 202642,
+      "sha256": "55bf1b796275143a71d20d742d816ecfa84659cd356ec783d44442829f080eda"
+    },
+    {
+      "file": "dense_fp8/summary.json",
+      "source": "/home/ericbuehler/qwen4exp_work/kernel_comparison_20260930/dense_fp8/summary.json",
+      "bytes": 3758,
+      "sha256": "ebbba12e9db73718f2919e46c5c68d7d4483743ac809ee8df3da2534b7955fb5"
+    },
+    {
+      "file": "dense_fp8/metadata.json",
+      "source": "/home/ericbuehler/qwen4exp_work/kernel_comparison_20260930/dense_fp8/metadata.json",
+      "bytes": 3304,
+      "sha256": "b40092fba1fcfe2a4d5d07a3e8ae56b53d8dede4f3a0ab9d9e60d41847db00dd"
+    },
+    {
+      "file": "dense_fp8/server.log",
+      "source": "/home/ericbuehler/qwen4exp_work/kernel_comparison_20260930/dense_fp8/server.log",
+      "bytes": 27211,
+      "sha256": "ea211eb8790383d36c451178e93b79fa82736148674c29e22fedf8ce53c34030"
+    },
+    {
+      "file": "dense_fp8_to_q4k/raw.json",
+      "source": "/home/ericbuehler/qwen4exp_work/kernel_comparison_20260930/dense_fp8_to_q4k/raw.json",
+      "bytes": 203747,
+      "sha256": "0cd5559307b90d04457d9ead647e0b645e83b7ac89566affa90e1f9caa781eb4"
+    },
+    {
+      "file": "dense_fp8_to_q4k/summary.json",
+      "source": "/home/ericbuehler/qwen4exp_work/kernel_comparison_20260930/dense_fp8_to_q4k/summary.json",
+      "bytes": 3782,
+      "sha256": "24f3ea0ff0c2b98c6898e83f5b29db7e82824c29590ee841ac3be5bf0d1c00f9"
+    },
+    {
+      "file": "dense_fp8_to_q4k/metadata.json",
+      "source": "/home/ericbuehler/qwen4exp_work/kernel_comparison_20260930/dense_fp8_to_q4k/metadata.json",
+      "bytes": 3329,
+      "sha256": "923754739aa8d2d5142ccc2e85383cdde2249ff7dd8a8f80b25de722b5d7cd80"
+    },
+    {
+      "file": "dense_fp8_to_q4k/server.log",
+      "source": "/home/ericbuehler/qwen4exp_work/kernel_comparison_20260930/dense_fp8_to_q4k/server.log",
+      "bytes": 16332,
+      "sha256": "08a669385f32242d6fb64ba9e94f52bbb42afa1858ba79b22d21dcd42f4a8367"
+    },
+    {
+      "file": "comparison.json",
+      "source": "/home/ericbuehler/qwen4exp_work/kernel_comparison_20260930/comparison.json",
+      "bytes": 12345,
+      "sha256": "d076d93b29e82ca82276a80179a06b26633525a660eaaecf437cefb03df3edc3"
+    },
+    {
+      "file": "comparison.txt",
+      "source": "/home/ericbuehler/qwen4exp_work/kernel_comparison_20260930/comparison.txt",
+      "bytes": 490,
+      "sha256": "e18e659fab3cc72f0d97cd3abcd7304e169e66bcaffa6903e44079d161456f35"
+    },
+    {
+      "file": "run_dense_backend_control.py",
+      "source": "/home/ericbuehler/qwen4exp_work/kernel_comparison_20260930/run_dense_backend_control.py",
+      "bytes": 13093,
+      "sha256": "45154e89019b17ec6f62e37e71764277b351f1691a57a54e5f79f4e2286f72bd"
+    },
+    {
+      "file": "compare_backend_results.py",
+      "source": "/home/ericbuehler/qwen4exp_work/kernel_comparison_20260930/compare_backend_results.py",
+      "bytes": 16174,
+      "sha256": "d1746753da87deb6000f9414c31bfdc61efdd73eea5aa6698146f28565b82371"
+    },
+    {
+      "file": "checkpoint_inventory.json",
+      "source": "/home/ericbuehler/qwen4exp_work/kernel_comparison_20260930/checkpoint_inventory.json",
+      "bytes": 29380,
+      "sha256": "09a041e54da061915da9c31550246af42f8a059766baebf2ece930b234de5a0d"
+    },
+    {
+      "file": "inventory_local_checkpoints.py",
+      "source": "/home/ericbuehler/qwen4exp_work/kernel_comparison_20260930/inventory_local_checkpoints.py",
+      "bytes": 5382,
+      "sha256": "58697c67c5b79d7ca495895fc68e126446b98474620d610dd101ff3f6a3b7823"
+    },
+    {
+      "file": "methodology.md",
+      "source": "/home/ericbuehler/qwen4exp_work/kernel_comparison_20260930/methodology.md",
+      "bytes": 4727,
+      "sha256": "7063fce61bbd75a625094adab95836bde2a3d0fb5765b4c5014278d131f23c45"
+    },
+    {
+      "file": "startup_verification.json",
+      "source": "/home/ericbuehler/qwen4exp_work/kernel_comparison_20260930/startup_verification.json",
+      "bytes": 19108,
+      "sha256": "26c2991df813e8afe18f7827bf2577251e6c963df1d28faeb53cbacad910e01b"
+    },
+    {
+      "file": "paused_editor_processes.json",
+      "source": "/home/ericbuehler/qwen4exp_work/kernel_comparison_20260930/paused_editor_processes.json",
+      "bytes": 519,
+      "sha256": "55f1eadbc54772ea5ac67b5caed9ef6f99dc542c33f6ede54697bc17aef1d26c"
+    },
+    {
+      "file": "paused_editor_processes_after_dense.json",
+      "source": "/home/ericbuehler/qwen4exp_work/kernel_comparison_20260930/paused_editor_processes_after_dense.json",
+      "bytes": 643,
+      "sha256": "61de18767b01a44945c0221f6cf521d938b29c2fe1f4c52d30f606810335b446"
+    },
+    {
+      "file": "package_backend_results.py",
+      "source": "/home/ericbuehler/qwen4exp_work/kernel_comparison_20260930/package_backend_results.py",
+      "bytes": 10258,
+      "sha256": "31391898f5d726998e6db7fdcbf8a96df23d10bb4c1e430a175c62c64eb10b7f"
+    },
+    {
+      "file": "dense_fp8.controller.log",
+      "source": "/home/ericbuehler/qwen4exp_work/kernel_comparison_20260930/dense_fp8.controller.log",
+      "bytes": 4362,
+      "sha256": "976c8b95911e76b735f09b1f375b387b08c34f646eb821bb9b5dfbfb55a0d595"
+    },
+    {
+      "file": "dense_fp8_to_q4k.controller.log",
+      "source": "/home/ericbuehler/qwen4exp_work/kernel_comparison_20260930/dense_fp8_to_q4k.controller.log",
+      "bytes": 4389,
+      "sha256": "cb32814f2737f55d842674d2ccff3e662f40b13c0beda4972bf697e14f6ddb9d"
+    },
+    {
+      "file": "harness/bench_concurrency.py",
+      "source": "/home/ericbuehler/mistral.rs/benchmarks/qwen3.8-flash-next/bench_concurrency.py",
+      "bytes": 14391,
+      "sha256": "9f664f3ff278f0f16b24e655477486e93b91aec41bf473510e13f449ab1dbbc3"
+    },
+    {
+      "file": "harness/bench_serving.py",
+      "source": "/home/ericbuehler/mistral.rs/benchmarks/qwen3.8-flash-next/bench_serving.py",
+      "bytes": 9350,
+      "sha256": "a16b5815b8744def761174e396de92e41ecd499afae712255721c20a33a79705"
+    },
+    {
+      "file": "harness/summarize_concurrency.py",
+      "source": "/home/ericbuehler/mistral.rs/benchmarks/qwen3.8-flash-next/summarize_concurrency.py",
+      "bytes": 19027,
+      "sha256": "1ed661d68016937619f7f94b35f6801fed581219685635916e6312d1a0c42d91"
+    },
+    {
+      "file": "canonical_prompts.jsonl",
+      "source": "/home/ericbuehler/mistral.rs/releases/v0.9.3/raw/prompts.jsonl",
+      "bytes": 62728,
+      "sha256": "5cdb082233a198b7ff4a14e33c6ac8d85980043238c9d08379ac812f7df730ef"
+    },
+    {
+      "file": "checkpoint_metadata/config.json",
+      "source": "/home/ericbuehler/.cache/huggingface/hub/models--Qwen--Qwen3.8-27B-FP8/snapshots/017b9c7af6b5689d5dd426a76e0bc077eb5ca20a/config.json",
+      "bytes": 51350,
+      "sha256": "74227dd615bf1ea975aa676bdf355a0379858c12f394b5365cd9dfa5fc2c70bc"
+    },
+    {
+      "file": "checkpoint_metadata/model.safetensors.index.json",
+      "source": "/home/ericbuehler/.cache/huggingface/hub/models--Qwen--Qwen3.8-27B-FP8/snapshots/017b9c7af6b5689d5dd426a76e0bc077eb5ca20a/model.safetensors.index.json",
+      "bytes": 137335,
+      "sha256": "f0838c766951bdfe76d6afbdb2771a8f67aaa2231dedb3d33cebd817729843a2"
+    }
+  ],
+  "excluded": [
+    "Checkpoint tensor payloads",
+    "Executable binaries",
+    "Tokenizer payload (pinned fingerprint retained)"
+  ],
+  "process_isolation": {
+    "editor_pause_record": "paused_editor_processes.json",
+    "post_pair_stopped_state": "paused_editor_processes_after_dense.json",
+    "root_observations": "The orchestrator separately observed the identified editor process in stopped T/Tl state before the pair and in ps snapshots around 13:25 UTC and 13:35 UTC, with no compiler observed. All three agents held builds and GPU work throughout the pair.",
+    "initial_state_note": "Immediate R states in the pause-request record reflect signal-delivery timing, not evidence that the pause failed.",
+    "limits": "No continuous system-wide process, GPU utilization, or paging monitor was captured for this pair. Snapshot observations and coordinated agents do not prove total machine isolation or absence of timing interference."
+  }
+}

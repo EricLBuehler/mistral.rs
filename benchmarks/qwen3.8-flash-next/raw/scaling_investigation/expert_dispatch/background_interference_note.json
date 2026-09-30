@@ -1,0 +1,15 @@
+{
+  "recorded_at": "2026-09-30T03:54:09.344023+00:00",
+  "affected_measurements": [
+    "gguf.json",
+    "isq.json",
+    "known_occupancy/gguf.json",
+    "known_occupancy/isq.json"
+  ],
+  "classification": "exploratory; background editor compilation was present for at least part of this interval",
+  "background_process": "VSCode rust-analyzer started a debug CUDA cargo check around2026-09-30T03:29UTC; GDN nvcc/ptxas descendants were discovered by root. Exact performance impact was not measured.",
+  "pause_record": "/home/ericbuehler/qwen4exp_work/scaling_20260930/paused_editor_processes.json",
+  "paused_at_utc": "2026-09-30T03:52:08.839410+00:00",
+  "clean_comparison": "known_occupancy_clean/{gguf,isq}.json repeats normal/tight bounds using the same binary after compiler tree pause, with compiler-state assertions before/after each run.",
+  "raw_preservation": "Existing raw timings, measured-source snapshots and original SHA256 manifests are unchanged. This note is intentionally outside their original manifests."
+}

@@ -1,0 +1,569 @@
+{
+  "created_utc": "2026-09-30T03:34:09.319676+00:00",
+  "scope": "Cross-workload context only; does not isolate an engine regression or prove a hardware/architecture explanation.",
+  "sources": {
+    "release_summary": {
+      "path": "/home/ericbuehler/mistral.rs/releases/v0.9.3/raw/summary.json",
+      "sha256": "db5b31a36758f788f1dcdc0f55edb0707484a6aee36807507b5c83bcd5f96d0b"
+    },
+    "release_raw_results": {
+      "path": "/home/ericbuehler/mistral.rs/releases/v0.9.3/raw/results.jsonl",
+      "sha256": "464d13554c91fa64d4765ccc719d170c0da41afcb3560013996d3b54177106ab"
+    },
+    "flash_concurrency_summary": {
+      "path": "/home/ericbuehler/mistral.rs/benchmarks/qwen3.8-flash-next/concurrency.summary.json",
+      "sha256": "0db0f816537c316e2f1bcb133589fa4d9d0763a7cd0dfe7da32439c51a918ab2"
+    },
+    "canonical_prompt_file": {
+      "path": "/home/ericbuehler/mistral.rs/releases/v0.9.3/raw/prompts.jsonl",
+      "sha256": "5cdb082233a198b7ff4a14e33c6ac8d85980043238c9d08379ac812f7df730ef"
+    },
+    "tokenizer": {
+      "path": "/home/ericbuehler/.cache/huggingface/hub/models--Qwen--Qwen3.8-27B-FP8/snapshots/017b9c7af6b5689d5dd426a76e0bc077eb5ca20a/tokenizer.json",
+      "sha256": "0997f410c57a1f4e53b09e4be8f4a172d90edd9564368fb0847030937229b9f3"
+    },
+    "tokenizer_config": {
+      "path": "/home/ericbuehler/.cache/huggingface/hub/models--Qwen--Qwen3.8-27B-FP8/snapshots/017b9c7af6b5689d5dd426a76e0bc077eb5ca20a/tokenizer_config.json",
+      "sha256": "b11349aafa7cdc6a320767cf7ceb29ed82f7eda5d65e8e0819e76f0ce947bf27"
+    },
+    "chat_template": {
+      "path": "/home/ericbuehler/.cache/huggingface/hub/models--Qwen--Qwen3.8-27B-FP8/snapshots/017b9c7af6b5689d5dd426a76e0bc077eb5ca20a/chat_template.jinja",
+      "sha256": "c3cf9e34abf4f9e36c2d72165aa9c132d3e2a725b6c2586aaa3a8af9d7a81041"
+    }
+  },
+  "vllm_client_source": {
+    "local_repository": "/home/ericbuehler/vllm",
+    "tag": "v0.27.1",
+    "commit": "6e448d0ea9bf3d88d898b65449ca6dc2aec170ac",
+    "datasets": {
+      "path": "vllm/benchmarks/datasets/datasets.py",
+      "sha256": "bd7f7e1a3f442901656e6dbdd5574301144dcc13f2dab6e306df1b2a9f903bd2",
+      "skip_template_flag_lines": [
+        1653,
+        1657
+      ],
+      "custom_dispatch_lines": [
+        2101,
+        2113
+      ],
+      "default_argument_line": 2555,
+      "apply_chat_template_lines": [
+        2598,
+        2607
+      ]
+    },
+    "metrics": {
+      "path": "vllm/benchmarks/serve.py",
+      "sha256": "3f0e40ac91a8e817815274ff4af964f2399d3d841f74fd2f04be168122fd0760",
+      "tpot_formula_lines": [
+        606,
+        615
+      ],
+      "coarse_peak_concurrency_lines": [
+        693,
+        700
+      ]
+    },
+    "source_access": "git show from existing local repository; no network or installation"
+  },
+  "series": [
+    {
+      "label": "v0.9.3 target",
+      "model": "Qwen/Qwen3.8-27B-FP8",
+      "hardware": "GH200 480GB, 97871MiB HBM exposed",
+      "checkpoint_quantization": "FP8",
+      "kv_cache": "FP8 E4M3",
+      "sampling": "temperature1,top_p0.95,top_k20,min_p0,repetition_penalty1,seed20260825,ignore_eos",
+      "speculation": "none",
+      "max_model_len": 4096,
+      "concurrency": {
+        "1": {
+          "source_summary_key": "mistralrs:target:c1",
+          "source_raw_line_numbers": [
+            22,
+            23,
+            24
+          ],
+          "aggregate_tokens_per_second": 96.97920357992983,
+          "latency_weighted_per_active_request_tokens_per_second": 96.98074899789661,
+          "mean_active_requests": 1.0000148058956542,
+          "mean_request_latency_seconds": 5.279398285644346,
+          "requests_per_trial": 64,
+          "output_tokens_per_request": 512,
+          "measured_trials": 3,
+          "warmup_waves": 1,
+          "aggregation": "median of three per-run values; per-active rate and mean activity reconstructed from mean TTFT/TPOT"
+        },
+        "8": {
+          "source_summary_key": "mistralrs:target:c8",
+          "source_raw_line_numbers": [
+            37,
+            38,
+            39
+          ],
+          "aggregate_tokens_per_second": 721.215294548394,
+          "latency_weighted_per_active_request_tokens_per_second": 90.16150353032587,
+          "mean_active_requests": 7.999155727001196,
+          "mean_request_latency_seconds": 5.67869855705976,
+          "requests_per_trial": 64,
+          "output_tokens_per_request": 512,
+          "measured_trials": 3,
+          "warmup_waves": 1,
+          "aggregation": "median of three per-run values; per-active rate and mean activity reconstructed from mean TTFT/TPOT"
+        }
+      },
+      "c8_over_c1_aggregate": 7.436803643721116,
+      "c8_per_active_rate_retained_fraction": 0.9296845452521857
+    },
+    {
+      "label": "v0.9.3 dflash",
+      "model": "Qwen/Qwen3.8-27B-FP8",
+      "hardware": "GH200 480GB, 97871MiB HBM exposed",
+      "checkpoint_quantization": "FP8",
+      "kv_cache": "FP8 E4M3",
+      "sampling": "temperature1,top_p0.95,top_k20,min_p0,repetition_penalty1,seed20260825,ignore_eos",
+      "speculation": "external DFlash2,7 probabilistic drafts",
+      "max_model_len": 4096,
+      "concurrency": {
+        "1": {
+          "source_summary_key": "mistralrs:dflash:c1",
+          "source_raw_line_numbers": [
+            1,
+            2,
+            3
+          ],
+          "aggregate_tokens_per_second": 216.90572072454043,
+          "latency_weighted_per_active_request_tokens_per_second": 216.9121889637379,
+          "mean_active_requests": 0.9999701803793122,
+          "mean_request_latency_seconds": 2.360402162948958,
+          "requests_per_trial": 64,
+          "output_tokens_per_request": 512,
+          "measured_trials": 3,
+          "warmup_waves": 1,
+          "aggregation": "median of three per-run values; per-active rate and mean activity reconstructed from mean TTFT/TPOT"
+        },
+        "8": {
+          "source_summary_key": "mistralrs:dflash:c8",
+          "source_raw_line_numbers": [
+            16,
+            17,
+            18
+          ],
+          "aggregate_tokens_per_second": 1299.9133477947253,
+          "latency_weighted_per_active_request_tokens_per_second": 167.24178891007298,
+          "mean_active_requests": 7.772658713269907,
+          "mean_request_latency_seconds": 3.061435801044354,
+          "requests_per_trial": 64,
+          "output_tokens_per_request": 512,
+          "measured_trials": 3,
+          "warmup_waves": 1,
+          "aggregation": "median of three per-run values; per-active rate and mean activity reconstructed from mean TTFT/TPOT"
+        }
+      },
+      "c8_over_c1_aggregate": 5.992987844915124,
+      "c8_per_active_rate_retained_fraction": 0.7710114849195104
+    },
+    {
+      "label": "Flash-Next built-in MTP",
+      "model": "Qwen/Qwen3.8-Flash-Next",
+      "hardware": "GB10,128GB unified system RAM",
+      "checkpoint_quantization": "safetensors ISQ q4k",
+      "kv_cache": "BF16",
+      "sampling": "temperature0,seed20260929,ignore_eos",
+      "speculation": "built-in MTP,automatic depths2/3/4/6",
+      "max_model_len": 16384,
+      "concurrency": {
+        "1": {
+          "source_row_selector": {
+            "label": "isq_mtp_batched",
+            "mode": "closed-loop",
+            "concurrency": 1
+          },
+          "aggregate_tokens_per_second": 52.601041839251906,
+          "latency_weighted_per_active_request_tokens_per_second": 52.61159898068657,
+          "mean_active_requests": 0.9997992570934002,
+          "mean_request_latency_seconds": 2.433520174773366,
+          "requests_per_trial": 8,
+          "output_tokens_per_request": 128,
+          "measured_trials": 5,
+          "warmup_trials": 2,
+          "aggregation": "mean of five per-run values, directly measured from raw timestamps"
+        },
+        "8": {
+          "source_row_selector": {
+            "label": "isq_mtp_batched",
+            "mode": "closed-loop",
+            "concurrency": 8
+          },
+          "aggregate_tokens_per_second": 124.90002472769235,
+          "latency_weighted_per_active_request_tokens_per_second": 16.512346916811538,
+          "mean_active_requests": 7.5642650350957625,
+          "mean_request_latency_seconds": 7.752824754883599,
+          "requests_per_trial": 24,
+          "output_tokens_per_request": 128,
+          "measured_trials": 5,
+          "warmup_trials": 2,
+          "aggregation": "mean of five per-run values, directly measured from raw timestamps"
+        }
+      },
+      "c8_over_c1_aggregate": 2.374478154052256,
+      "c8_per_active_rate_retained_fraction": 0.31385373637613884
+    }
+  ],
+  "formulas": {
+    "release_mean_request_latency_seconds": "(mean_ttft_ms + (512 - 1) * mean_tpot_ms) / 1000",
+    "release_per_active_request_rate": "512 / reconstructed_mean_request_latency_seconds",
+    "release_mean_active_requests": "completed * reconstructed_mean_request_latency_seconds / duration",
+    "flash_per_active_request_rate": "total_output_tokens / sum(request_wall_seconds)",
+    "aggregate_scaling": "C8 aggregate rate / C1 aggregate rate",
+    "timing": "Both suites use returned output tokens divided by whole-client-run wall time, including prompt processing and scheduling."
+  },
+  "effective_prompt_reconciliation": {
+    "cause": "vLLM CustomDataset applies the checkpoint chat template by default. The release runner omitted --skip-chat-template and supplied no enable_thinking override.",
+    "render_call": {
+      "messages": [
+        {
+          "role": "user",
+          "content": "<canonical prompt>"
+        }
+      ],
+      "add_generation_prompt": true,
+      "tokenize": false
+    },
+    "template_defaults": "enable_thinking=true when omitted; reasoning_effort=xhigh when omitted",
+    "template_source_lines": {
+      "default_thinking_and_effort": [
+        45,
+        54
+      ],
+      "system_instruction": [
+        80,
+        85
+      ],
+      "assistant_think_suffix": [
+        163,
+        168
+      ]
+    },
+    "model_revision": "017b9c7af6b5689d5dd426a76e0bc077eb5ca20a",
+    "canonical_count": 64,
+    "per_prompt_columns": [
+      "raw_tokens",
+      "rendered_tokens"
+    ],
+    "per_prompt_counts": [
+      [
+        77,
+        129
+      ],
+      [
+        82,
+        134
+      ],
+      [
+        81,
+        133
+      ],
+      [
+        80,
+        132
+      ],
+      [
+        80,
+        132
+      ],
+      [
+        85,
+        137
+      ],
+      [
+        84,
+        136
+      ],
+      [
+        83,
+        135
+      ],
+      [
+        81,
+        133
+      ],
+      [
+        86,
+        138
+      ],
+      [
+        85,
+        137
+      ],
+      [
+        84,
+        136
+      ],
+      [
+        80,
+        132
+      ],
+      [
+        85,
+        137
+      ],
+      [
+        84,
+        136
+      ],
+      [
+        83,
+        135
+      ],
+      [
+        80,
+        132
+      ],
+      [
+        85,
+        137
+      ],
+      [
+        84,
+        136
+      ],
+      [
+        83,
+        135
+      ],
+      [
+        81,
+        133
+      ],
+      [
+        86,
+        138
+      ],
+      [
+        85,
+        137
+      ],
+      [
+        84,
+        136
+      ],
+      [
+        77,
+        129
+      ],
+      [
+        82,
+        134
+      ],
+      [
+        81,
+        133
+      ],
+      [
+        80,
+        132
+      ],
+      [
+        82,
+        134
+      ],
+      [
+        87,
+        139
+      ],
+      [
+        86,
+        138
+      ],
+      [
+        85,
+        137
+      ],
+      [
+        80,
+        132
+      ],
+      [
+        85,
+        137
+      ],
+      [
+        84,
+        136
+      ],
+      [
+        83,
+        135
+      ],
+      [
+        79,
+        131
+      ],
+      [
+        84,
+        136
+      ],
+      [
+        83,
+        135
+      ],
+      [
+        82,
+        134
+      ],
+      [
+        77,
+        129
+      ],
+      [
+        82,
+        134
+      ],
+      [
+        81,
+        133
+      ],
+      [
+        80,
+        132
+      ],
+      [
+        79,
+        131
+      ],
+      [
+        84,
+        136
+      ],
+      [
+        83,
+        135
+      ],
+      [
+        82,
+        134
+      ],
+      [
+        79,
+        131
+      ],
+      [
+        84,
+        136
+      ],
+      [
+        83,
+        135
+      ],
+      [
+        82,
+        134
+      ],
+      [
+        78,
+        130
+      ],
+      [
+        83,
+        135
+      ],
+      [
+        82,
+        134
+      ],
+      [
+        81,
+        133
+      ],
+      [
+        82,
+        134
+      ],
+      [
+        87,
+        139
+      ],
+      [
+        86,
+        138
+      ],
+      [
+        85,
+        137
+      ],
+      [
+        76,
+        128
+      ],
+      [
+        81,
+        133
+      ],
+      [
+        80,
+        132
+      ],
+      [
+        79,
+        131
+      ]
+    ],
+    "raw_total_tokens": 5264,
+    "rendered_total_tokens": 8592,
+    "release_reported_total_tokens": 8592,
+    "raw_range": [
+      76,
+      87
+    ],
+    "rendered_range": [
+      128,
+      139
+    ],
+    "added_tokens_every_prompt": 52,
+    "rendered_prompt_sample": "<|im_start|>system\nReasoning effort is set to xhigh. Please think carefully through the task, validate key assumptions, consider plausible alternatives, and prioritize correctness, consistency, and clarity in the final answer.<|im_end|>\n<|im_start|>user\nWrite a self-contained response of at least 900 words. Maintain a natural, varied style and develop every point fully rather than ending with a short summary. Subject: How a public transit agency can redesign a crowded bus network while preserving access for elderly and disabled riders. Instructions: Present the strongest competing viewpoints, identify hidden assumptions, and end with a staged recommendation and measurable checkpoints.<|im_end|>\n<|im_start|>assistant\n<think>\n",
+    "rendered_prompts_sha256": "b051e88f728b69ae81571c05e2c156205555444f7067aa31457d6aa038b4a837",
+    "verification": "All 64 rendered token counts reconcile with the release 128-139 range and 8592 input-token total; each raw-to-rendered difference is exactly 52."
+  },
+  "old_peak_concurrency_metric_note": "vLLM 0.27.1 max_concurrent_requests counts requests touching each integer-second bucket, including both end buckets. Its values 2 at C1 and 15/16 at C8 are not instantaneous concurrency. Server and client configured concurrency remain C; mean activity above is reconstructed from request latencies.",
+  "direct_control_limits": {
+    "script": "/home/ericbuehler/qwen4exp_work/scaling_20260930/run_dense_control.py",
+    "scope": "Current binary, pinned dense FP8 model, same GB10, no MTP, BF16 KV, greedy, first 8 raw canonical prompts, 128 outputs, C1/C8, 1 warmup and 3 measured trials.",
+    "c8_is_single_wave": true,
+    "not_matched": "Not exact release reproduction: raw prompts without chat formatting, greedy sampling, 128 instead of 512 outputs, 8 instead of 64 requests, BF16 instead of FP8 KV, GB10 instead of GH200, current engine. Does not isolate an old-versus-new regression.",
+    "first_eight_prompt_counts": [
+      [
+        77,
+        129
+      ],
+      [
+        82,
+        134
+      ],
+      [
+        81,
+        133
+      ],
+      [
+        80,
+        132
+      ],
+      [
+        80,
+        132
+      ],
+      [
+        85,
+        137
+      ],
+      [
+        84,
+        136
+      ],
+      [
+        83,
+        135
+      ]
+    ]
+  }
+}

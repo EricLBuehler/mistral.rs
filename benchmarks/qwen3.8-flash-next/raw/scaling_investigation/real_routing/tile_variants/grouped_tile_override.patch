@@ -1,0 +1,50 @@
+--- a/mistralrs-quant/kernels/mmq_gguf/mmq_instance_q4_k.cu
++++ b/mistralrs-quant/kernels/mmq_gguf/mmq_instance_q4_k.cu
+@@ -1,3 +1,4 @@
++#include <cstdlib>
+ #include "mmq_common.cuh"
+ #include "mmq_gguf.cuh"
+ 
+@@ -144,6 +145,17 @@
+     }
+   }
+ 
++  if (args.expert_bounds != nullptr) {
++    static const int diagnostic_tile = [] {
++      const char *value = std::getenv("MISTRALRS_DIAGNOSTIC_MOE_MMQ_TILE");
++      const int tile = value ? std::atoi(value) : 0;
++      GGML_ASSERT(tile == 0 || tile == 16 || tile == 32);
++      return tile;
++    }();
++    if (diagnostic_tile != 0)
++      mmq_x_best = diagnostic_tile;
++  }
++
+   switch (mmq_x_best) {
+   case 8:
+     instantiate_mmq_q4_k<8>(tmp_fixup, args, stream, cc, nsm, smpbo,
+--- a/mistralrs-quant/kernels/mmq_gguf/mmq_instance_q4_1.cu
++++ b/mistralrs-quant/kernels/mmq_gguf/mmq_instance_q4_1.cu
+@@ -1,3 +1,4 @@
++#include <cstdlib>
+ #include "mmq_common.cuh"
+ #include "mmq_gguf.cuh"
+ 
+@@ -144,6 +145,17 @@
+     }
+   }
+ 
++  if (args.expert_bounds != nullptr) {
++    static const int diagnostic_tile = [] {
++      const char *value = std::getenv("MISTRALRS_DIAGNOSTIC_MOE_MMQ_TILE");
++      const int tile = value ? std::atoi(value) : 0;
++      GGML_ASSERT(tile == 0 || tile == 16 || tile == 32);
++      return tile;
++    }();
++    if (diagnostic_tile != 0)
++      mmq_x_best = diagnostic_tile;
++  }
++
+   switch (mmq_x_best) {
+   case 8:
+     instantiate_mmq_q4_1<8>(tmp_fixup, args, stream, cc, nsm, smpbo,

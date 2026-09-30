@@ -1,0 +1,513 @@
+{
+  "validation": {
+    "complete": true,
+    "harness_sha256": "9f664f3ff278f0f16b24e655477486e93b91aec41bf473510e13f449ab1dbbc3",
+    "shared_prompt_harness_sha256": "a16b5815b8744def761174e396de92e41ecd499afae712255721c20a33a79705",
+    "prompts_sha256": "ff2600daa58028527e50710169fcd5915b28e894b7ef4a2b6438b66563812793",
+    "tokenizer_sha256": "0997f410c57a1f4e53b09e4be8f4a172d90edd9564368fb0847030937229b9f3",
+    "prompt_token_counts": {
+      "python": 17,
+      "rust": 17,
+      "prose": 11,
+      "json": 19,
+      "primes": 10,
+      "math": 30,
+      "translation": 19,
+      "quicksort": 6
+    },
+    "shared_request_settings": {
+      "max_tokens": 128,
+      "timeout": 1800,
+      "expected_prompt_tokens": {
+        "python": 17,
+        "rust": 17,
+        "prose": 11,
+        "json": 19,
+        "primes": 10,
+        "math": 30,
+        "translation": 19,
+        "quicksort": 6
+      }
+    },
+    "metrics_recomputed_from_timestamps_and_token_counts": true
+  },
+  "rows": [
+    {
+      "label": "before_batched_draft_sampling",
+      "mode": "closed-loop",
+      "concurrency": 1,
+      "requests_per_trial": 8,
+      "output_tokens_per_request": 128,
+      "measured_trials": 3,
+      "warmup_trials": 1,
+      "metrics": {
+        "aggregate_output_tokens_per_second": {
+          "mean": 53.691335443752536,
+          "sample_stddev": 0.26294858013944644,
+          "samples": [
+            53.720398445833276,
+            53.938545155038184,
+            53.415062730386154
+          ]
+        },
+        "mean_active_requests": {
+          "mean": 0.9998198637705855,
+          "sample_stddev": 8.974282009631513e-05,
+          "samples": [
+            0.9998737362368489,
+            0.9997162653447323,
+            0.9998695897301753
+          ]
+        },
+        "mean_request_wall_seconds": {
+          "mean": 2.383606582041466,
+          "sample_stddev": 0.011854415517367014,
+          "samples": [
+            2.3824067196255783,
+            2.372397727753196,
+            2.396015298745624
+          ]
+        },
+        "mean_request_output_tokens_per_second": {
+          "mean": 54.21355524715317,
+          "sample_stddev": 0.1370742373152842,
+          "samples": [
+            54.272558492621116,
+            54.31124760738911,
+            54.056859641449265
+          ]
+        },
+        "latency_weighted_request_output_tokens_per_second": {
+          "mean": 53.701021828947844,
+          "sample_stddev": 0.26687548790123017,
+          "samples": [
+            53.72718224204666,
+            53.95385373312752,
+            53.42202951166936
+          ]
+        }
+      },
+      "completion_boundary_estimate_tokens_per_second": {
+        "mean": 52.38189634115616,
+        "sample_stddev": 0.7487401534491419,
+        "samples": [
+          52.39541084490558,
+          53.12378776257777,
+          51.62649041598512
+        ]
+      },
+      "measured_trials_recomputed": [
+        {
+          "aggregate_output_tokens_per_second": 53.720398445833276,
+          "mean_active_requests": 0.9998737362368489,
+          "mean_request_wall_seconds": 2.3824067196255783,
+          "mean_request_output_tokens_per_second": 54.272558492621116,
+          "latency_weighted_request_output_tokens_per_second": 53.72718224204666,
+          "completion_boundary_window": {
+            "start_seconds": 2.107791572008864,
+            "end_seconds": 16.765563838998787,
+            "wall_seconds": 14.657772266989923,
+            "completed_request_indices": [
+              1,
+              2,
+              3,
+              4,
+              5,
+              6
+            ],
+            "completed_requests": 6,
+            "completed_output_tokens": 768,
+            "completion_boundary_output_tokens_per_second": 52.39541084490558,
+            "mean_active_requests": 0.9999111641957548
+          }
+        },
+        {
+          "aggregate_output_tokens_per_second": 53.938545155038184,
+          "mean_active_requests": 0.9997162653447323,
+          "mean_request_wall_seconds": 2.372397727753196,
+          "mean_request_output_tokens_per_second": 54.31124760738911,
+          "latency_weighted_request_output_tokens_per_second": 53.95385373312752,
+          "completion_boundary_window": {
+            "start_seconds": 2.3256374080083333,
+            "end_seconds": 16.782437879999634,
+            "wall_seconds": 14.4568004719913,
+            "completed_request_indices": [
+              1,
+              2,
+              3,
+              4,
+              5,
+              6
+            ],
+            "completed_requests": 6,
+            "completed_output_tokens": 768,
+            "completion_boundary_output_tokens_per_second": 53.12378776257777,
+            "mean_active_requests": 0.9996993550556046
+          }
+        },
+        {
+          "aggregate_output_tokens_per_second": 53.415062730386154,
+          "mean_active_requests": 0.9998695897301753,
+          "mean_request_wall_seconds": 2.396015298745624,
+          "mean_request_output_tokens_per_second": 54.056859641449265,
+          "latency_weighted_request_output_tokens_per_second": 53.42202951166936,
+          "completion_boundary_window": {
+            "start_seconds": 2.16687191100209,
+            "end_seconds": 17.042955755008734,
+            "wall_seconds": 14.876083844006644,
+            "completed_request_indices": [
+              1,
+              2,
+              3,
+              4,
+              5,
+              6
+            ],
+            "completed_requests": 6,
+            "completed_output_tokens": 768,
+            "completion_boundary_output_tokens_per_second": 51.62649041598512,
+            "mean_active_requests": 0.9998851572736903
+          }
+        }
+      ]
+    },
+    {
+      "label": "before_batched_draft_sampling",
+      "mode": "closed-loop",
+      "concurrency": 6,
+      "requests_per_trial": 24,
+      "output_tokens_per_request": 128,
+      "measured_trials": 3,
+      "warmup_trials": 1,
+      "metrics": {
+        "aggregate_output_tokens_per_second": {
+          "mean": 101.15446768414904,
+          "sample_stddev": 0.5271766379993167,
+          "samples": [
+            100.55073747139679,
+            101.38889704103092,
+            101.52376854001942
+          ]
+        },
+        "mean_active_requests": {
+          "mean": 5.724214293147617,
+          "sample_stddev": 0.05570623848424167,
+          "samples": [
+            5.7463519358690975,
+            5.660842234916533,
+            5.76544870865722
+          ]
+        },
+        "mean_request_wall_seconds": {
+          "mean": 7.2435580369442,
+          "sample_stddev": 0.08704966473697122,
+          "samples": [
+            7.315043790707932,
+            7.146618882500358,
+            7.26901143762431
+          ]
+        },
+        "mean_request_output_tokens_per_second": {
+          "mean": 18.275124002698536,
+          "sample_stddev": 0.17831360245260455,
+          "samples": [
+            18.23900858945945,
+            18.46873084350721,
+            18.11763257512895
+          ]
+        },
+        "latency_weighted_request_output_tokens_per_second": {
+          "mean": 17.67258362125335,
+          "sample_stddev": 0.21341741098048228,
+          "samples": [
+            17.498186430899338,
+            17.910567515140414,
+            17.60899691772029
+          ]
+        }
+      },
+      "completion_boundary_estimate_tokens_per_second": {
+        "mean": 111.13907033826216,
+        "sample_stddev": 1.258675312950577,
+        "samples": [
+          110.09646617709153,
+          112.53729656936649,
+          110.78344826832846
+        ]
+      },
+      "measured_trials_recomputed": [
+        {
+          "aggregate_output_tokens_per_second": 100.55073747139679,
+          "mean_active_requests": 5.7463519358690975,
+          "mean_request_wall_seconds": 7.315043790707932,
+          "mean_request_output_tokens_per_second": 18.23900858945945,
+          "latency_weighted_request_output_tokens_per_second": 17.498186430899338,
+          "completion_boundary_window": {
+            "start_seconds": 5.975614031995065,
+            "end_seconds": 25.740099446993554,
+            "wall_seconds": 19.76448541499849,
+            "completed_request_indices": [
+              0,
+              2,
+              3,
+              4,
+              5,
+              6,
+              7,
+              8,
+              9,
+              10,
+              11,
+              12,
+              13,
+              14,
+              15,
+              16,
+              17
+            ],
+            "completed_requests": 17,
+            "completed_output_tokens": 2176,
+            "completion_boundary_output_tokens_per_second": 110.09646617709153,
+            "mean_active_requests": 5.999616110520671
+          }
+        },
+        {
+          "aggregate_output_tokens_per_second": 101.38889704103092,
+          "mean_active_requests": 5.660842234916533,
+          "mean_request_wall_seconds": 7.146618882500358,
+          "mean_request_output_tokens_per_second": 18.46873084350721,
+          "latency_weighted_request_output_tokens_per_second": 17.910567515140414,
+          "completion_boundary_window": {
+            "start_seconds": 6.140364758000942,
+            "end_seconds": 25.476176673997543,
+            "wall_seconds": 19.3358119159966,
+            "completed_request_indices": [
+              1,
+              2,
+              3,
+              4,
+              5,
+              6,
+              7,
+              8,
+              9,
+              10,
+              11,
+              12,
+              13,
+              14,
+              15,
+              16,
+              17
+            ],
+            "completed_requests": 17,
+            "completed_output_tokens": 2176,
+            "completion_boundary_output_tokens_per_second": 112.53729656936649,
+            "mean_active_requests": 5.999647744505703
+          }
+        },
+        {
+          "aggregate_output_tokens_per_second": 101.52376854001942,
+          "mean_active_requests": 5.76544870865722,
+          "mean_request_wall_seconds": 7.26901143762431,
+          "mean_request_output_tokens_per_second": 18.11763257512895,
+          "latency_weighted_request_output_tokens_per_second": 17.60899691772029,
+          "completion_boundary_window": {
+            "start_seconds": 5.933014901005663,
+            "end_seconds": 25.57493825700658,
+            "wall_seconds": 19.641923356000916,
+            "completed_request_indices": [
+              1,
+              2,
+              3,
+              4,
+              5,
+              6,
+              7,
+              8,
+              9,
+              10,
+              11,
+              12,
+              13,
+              14,
+              15,
+              16,
+              17
+            ],
+            "completed_requests": 17,
+            "completed_output_tokens": 2176,
+            "completion_boundary_output_tokens_per_second": 110.78344826832846,
+            "mean_active_requests": 5.999673302512622
+          }
+        }
+      ]
+    },
+    {
+      "label": "before_batched_draft_sampling",
+      "mode": "closed-loop",
+      "concurrency": 8,
+      "requests_per_trial": 24,
+      "output_tokens_per_request": 128,
+      "measured_trials": 3,
+      "warmup_trials": 1,
+      "metrics": {
+        "aggregate_output_tokens_per_second": {
+          "mean": 113.30934551999972,
+          "sample_stddev": 1.4069371390975969,
+          "samples": [
+            114.9280771311027,
+            112.61936602766754,
+            112.38059340122892
+          ]
+        },
+        "mean_active_requests": {
+          "mean": 7.662623777540725,
+          "sample_stddev": 0.01050907981259542,
+          "samples": [
+            7.655598802639466,
+            7.674705282101561,
+            7.657567247881148
+          ]
+        },
+        "mean_request_wall_seconds": {
+          "mean": 8.657022633737142,
+          "sample_stddev": 0.11316963650492937,
+          "samples": [
+            8.526346835334456,
+            8.722853899458642,
+            8.72186716641833
+          ]
+        },
+        "mean_request_output_tokens_per_second": {
+          "mean": 15.033220903325148,
+          "sample_stddev": 0.14891532509182376,
+          "samples": [
+            15.205059675970457,
+            14.941883841392158,
+            14.952719192612827
+          ]
+        },
+        "latency_weighted_request_output_tokens_per_second": {
+          "mean": 14.787381390985066,
+          "sample_stddev": 0.1947792179798882,
+          "samples": [
+            15.012291016540503,
+            14.67409651420895,
+            14.675756642205744
+          ]
+        }
+      },
+      "completion_boundary_estimate_tokens_per_second": {
+        "mean": 151.25346254078298,
+        "sample_stddev": 10.260791102957668,
+        "samples": [
+          162.43156965448782,
+          149.06606667900232,
+          142.26275128885877
+        ]
+      },
+      "measured_trials_recomputed": [
+        {
+          "aggregate_output_tokens_per_second": 114.9280771311027,
+          "mean_active_requests": 7.655598802639466,
+          "mean_request_wall_seconds": 8.526346835334456,
+          "mean_request_output_tokens_per_second": 15.205059675970457,
+          "latency_weighted_request_output_tokens_per_second": 15.012291016540503,
+          "completion_boundary_window": {
+            "start_seconds": 7.550951430996065,
+            "end_seconds": 19.371313716997975,
+            "wall_seconds": 11.82036228600191,
+            "completed_request_indices": [
+              0,
+              2,
+              3,
+              4,
+              5,
+              6,
+              7,
+              8,
+              9,
+              10,
+              11,
+              12,
+              13,
+              14,
+              15
+            ],
+            "completed_requests": 15,
+            "completed_output_tokens": 1920,
+            "completion_boundary_output_tokens_per_second": 162.43156965448782,
+            "mean_active_requests": 7.999135144020301
+          }
+        },
+        {
+          "aggregate_output_tokens_per_second": 112.61936602766754,
+          "mean_active_requests": 7.674705282101561,
+          "mean_request_wall_seconds": 8.722853899458642,
+          "mean_request_output_tokens_per_second": 14.941883841392158,
+          "latency_weighted_request_output_tokens_per_second": 14.67409651420895,
+          "completion_boundary_window": {
+            "start_seconds": 7.351121844010777,
+            "end_seconds": 20.23131679900689,
+            "wall_seconds": 12.880194954996114,
+            "completed_request_indices": [
+              0,
+              2,
+              3,
+              4,
+              5,
+              6,
+              7,
+              8,
+              9,
+              10,
+              11,
+              12,
+              13,
+              14,
+              15
+            ],
+            "completed_requests": 15,
+            "completed_output_tokens": 1920,
+            "completion_boundary_output_tokens_per_second": 149.06606667900232,
+            "mean_active_requests": 7.999286918478472
+          }
+        },
+        {
+          "aggregate_output_tokens_per_second": 112.38059340122892,
+          "mean_active_requests": 7.657567247881148,
+          "mean_request_wall_seconds": 8.72186716641833,
+          "mean_request_output_tokens_per_second": 14.952719192612827,
+          "latency_weighted_request_output_tokens_per_second": 14.675756642205744,
+          "completion_boundary_window": {
+            "start_seconds": 7.040727949002758,
+            "end_seconds": 20.53688194999995,
+            "wall_seconds": 13.496154000997194,
+            "completed_request_indices": [
+              1,
+              2,
+              3,
+              4,
+              5,
+              6,
+              7,
+              8,
+              9,
+              10,
+              11,
+              12,
+              13,
+              14,
+              15
+            ],
+            "completed_requests": 15,
+            "completed_output_tokens": 1920,
+            "completion_boundary_output_tokens_per_second": 142.26275128885877,
+            "mean_active_requests": 7.9993800233774195
+          }
+        }
+      ]
+    }
+  ]
+}

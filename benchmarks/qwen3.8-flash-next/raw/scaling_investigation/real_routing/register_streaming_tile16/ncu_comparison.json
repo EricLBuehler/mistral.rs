@@ -1,0 +1,757 @@
+{
+  "baseline_metadata": "/home/ericbuehler/qwen4exp_work/real_routing_20260930/ncu_native56/metadata.json",
+  "baseline_metadata_sha256": "3573cbd30201510d91af81f202265aecf329dea405ae0ea7c2fa834a36d1ea5d",
+  "variant_metadata": "/home/ericbuehler/qwen4exp_work/real_routing_20260930/register_streaming_tile16/ncu_native56/metadata.json",
+  "variant_metadata_sha256": "5ca1e5add9d08ad837a467d8e53171c651a5ad2e57e3eba0494dbb6e76377b8f",
+  "samples": [
+    {
+      "projection": "gate",
+      "baseline_kernel": "void mul_mat_q<12, 64, 0>(const char *, const int *, const int *, const int *, void *, float *, uint3, int, int, int, int, int, uint3, uint3, int, int, int, uint3, uint3, int, int, int, ggml_type, uint3)",
+      "variant_kernel": "void mul_mat_q<12, 16, 0>(const char *, const int *, const int *, const int *, void *, float *, uint3, int, int, int, int, int, uint3, uint3, int, int, int, uint3, uint3, int, int, int, ggml_type, uint3)",
+      "baseline_grid": "(2560, 1, 1)",
+      "variant_grid": "(10240, 1, 1)",
+      "metrics": {
+        "gpu__time_duration.sum": {
+          "baseline": {
+            "value": "1199648",
+            "unit": "ns"
+          },
+          "variant": {
+            "value": "1188704",
+            "unit": "ns"
+          }
+        },
+        "sm__throughput.avg.pct_of_peak_sustained_elapsed": {
+          "baseline": {
+            "value": "25.99",
+            "unit": "%"
+          },
+          "variant": {
+            "value": "19.00",
+            "unit": "%"
+          }
+        },
+        "sm__pipe_tensor_cycles_active.avg.pct_of_peak_sustained_elapsed": {
+          "baseline": {
+            "value": "14.82",
+            "unit": "%"
+          },
+          "variant": {
+            "value": "3.80",
+            "unit": "%"
+          }
+        },
+        "sm__pipe_alu_cycles_active.avg.pct_of_peak_sustained_elapsed": {
+          "baseline": {
+            "value": "7.55",
+            "unit": "%"
+          },
+          "variant": {
+            "value": "5.98",
+            "unit": "%"
+          }
+        },
+        "sm__warps_active.avg.pct_of_peak_sustained_active": {
+          "baseline": {
+            "value": "16.78",
+            "unit": "%"
+          },
+          "variant": {
+            "value": "31.11",
+            "unit": "%"
+          }
+        },
+        "smsp__issue_active.avg.per_cycle_active": {
+          "baseline": {
+            "value": "0.25",
+            "unit": ""
+          },
+          "variant": {
+            "value": "0.16",
+            "unit": ""
+          }
+        },
+        "smsp__warps_eligible.avg.per_cycle_active": {
+          "baseline": {
+            "value": "0.39",
+            "unit": "warp"
+          },
+          "variant": {
+            "value": "0.25",
+            "unit": "warp"
+          }
+        },
+        "smsp__average_warps_issue_stalled_long_scoreboard_per_issue_active.ratio": {
+          "baseline": {
+            "value": "3.64",
+            "unit": "inst"
+          },
+          "variant": {
+            "value": "8.21",
+            "unit": "inst"
+          }
+        },
+        "smsp__average_warps_issue_stalled_math_pipe_throttle_per_issue_active.ratio": {
+          "baseline": {
+            "value": "0.43",
+            "unit": "inst"
+          },
+          "variant": {
+            "value": "0.30",
+            "unit": "inst"
+          }
+        },
+        "lts__throughput.avg.pct_of_peak_sustained_elapsed": {
+          "baseline": {
+            "value": "14.74",
+            "unit": "%"
+          },
+          "variant": {
+            "value": "14.93",
+            "unit": "%"
+          }
+        },
+        "lts__t_sector_hit_rate.pct": {
+          "baseline": {
+            "value": "49.29",
+            "unit": "%"
+          },
+          "variant": {
+            "value": "30.22",
+            "unit": "%"
+          }
+        },
+        "lts__t_sectors_op_read.sum": {
+          "baseline": {
+            "value": "12545563",
+            "unit": "sector"
+          },
+          "variant": {
+            "value": "9128003",
+            "unit": "sector"
+          }
+        },
+        "lts__t_sectors_op_write.sum": {
+          "baseline": {
+            "value": "46996",
+            "unit": "sector"
+          },
+          "variant": {
+            "value": "49003",
+            "unit": "sector"
+          }
+        },
+        "profiler__replayer_passes": {
+          "baseline": {
+            "value": "10",
+            "unit": "pass"
+          },
+          "variant": {
+            "value": "10",
+            "unit": "pass"
+          }
+        },
+        "launch__registers_per_thread": {
+          "baseline": {
+            "value": "254",
+            "unit": "register/thread"
+          },
+          "variant": {
+            "value": "112",
+            "unit": "register/thread"
+          }
+        },
+        "launch__shared_mem_per_block": {
+          "baseline": {
+            "value": "49408",
+            "unit": "byte/block"
+          },
+          "variant": {
+            "value": "43072",
+            "unit": "byte/block"
+          }
+        },
+        "launch__waves_per_multiprocessor": {
+          "baseline": {
+            "value": "53.33",
+            "unit": ""
+          },
+          "variant": {
+            "value": "106.67",
+            "unit": ""
+          }
+        }
+      },
+      "variant_launch_resources": {
+        "launch__block_size": {
+          "value": "256",
+          "unit": ""
+        },
+        "launch__occupancy_limit_barriers": {
+          "value": "24",
+          "unit": "block"
+        },
+        "launch__occupancy_limit_blocks": {
+          "value": "24",
+          "unit": "block"
+        },
+        "launch__occupancy_limit_registers": {
+          "value": "2",
+          "unit": "block"
+        },
+        "launch__occupancy_limit_shared_mem": {
+          "value": "2",
+          "unit": "block"
+        },
+        "launch__occupancy_limit_warps": {
+          "value": "6",
+          "unit": "block"
+        },
+        "launch__occupancy_per_block_size": {
+          "value": "346",
+          "unit": ""
+        },
+        "launch__occupancy_per_register_count": {
+          "value": "3088",
+          "unit": ""
+        },
+        "launch__occupancy_per_shared_mem_size": {
+          "value": "2400",
+          "unit": ""
+        },
+        "launch__registers_per_thread": {
+          "value": "112",
+          "unit": "register/thread"
+        },
+        "launch__registers_per_thread_allocated": {
+          "value": "112",
+          "unit": "register/thread"
+        },
+        "launch__shared_mem_config_size": {
+          "value": "102400",
+          "unit": "byte"
+        },
+        "launch__shared_mem_per_block": {
+          "value": "43072",
+          "unit": "byte/block"
+        },
+        "launch__shared_mem_per_block_allocated": {
+          "value": "43136",
+          "unit": "byte/block"
+        },
+        "launch__shared_mem_per_block_driver": {
+          "value": "1024",
+          "unit": "byte/block"
+        },
+        "launch__shared_mem_per_block_dynamic": {
+          "value": "42048",
+          "unit": "byte/block"
+        },
+        "launch__shared_mem_per_block_static": {
+          "value": "0",
+          "unit": "byte/block"
+        }
+      }
+    },
+    {
+      "projection": "up",
+      "baseline_kernel": "void mul_mat_q<12, 64, 0>(const char *, const int *, const int *, const int *, void *, float *, uint3, int, int, int, int, int, uint3, uint3, int, int, int, uint3, uint3, int, int, int, ggml_type, uint3)",
+      "variant_kernel": "void mul_mat_q<12, 16, 0>(const char *, const int *, const int *, const int *, void *, float *, uint3, int, int, int, int, int, uint3, uint3, int, int, int, uint3, uint3, int, int, int, ggml_type, uint3)",
+      "baseline_grid": "(2560, 1, 1)",
+      "variant_grid": "(10240, 1, 1)",
+      "metrics": {
+        "gpu__time_duration.sum": {
+          "baseline": {
+            "value": "1206272",
+            "unit": "ns"
+          },
+          "variant": {
+            "value": "1175968",
+            "unit": "ns"
+          }
+        },
+        "sm__throughput.avg.pct_of_peak_sustained_elapsed": {
+          "baseline": {
+            "value": "25.85",
+            "unit": "%"
+          },
+          "variant": {
+            "value": "19.17",
+            "unit": "%"
+          }
+        },
+        "sm__pipe_tensor_cycles_active.avg.pct_of_peak_sustained_elapsed": {
+          "baseline": {
+            "value": "14.74",
+            "unit": "%"
+          },
+          "variant": {
+            "value": "3.83",
+            "unit": "%"
+          }
+        },
+        "sm__pipe_alu_cycles_active.avg.pct_of_peak_sustained_elapsed": {
+          "baseline": {
+            "value": "7.51",
+            "unit": "%"
+          },
+          "variant": {
+            "value": "6.04",
+            "unit": "%"
+          }
+        },
+        "sm__warps_active.avg.pct_of_peak_sustained_active": {
+          "baseline": {
+            "value": "16.75",
+            "unit": "%"
+          },
+          "variant": {
+            "value": "32.77",
+            "unit": "%"
+          }
+        },
+        "smsp__issue_active.avg.per_cycle_active": {
+          "baseline": {
+            "value": "0.26",
+            "unit": ""
+          },
+          "variant": {
+            "value": "0.16",
+            "unit": ""
+          }
+        },
+        "smsp__warps_eligible.avg.per_cycle_active": {
+          "baseline": {
+            "value": "0.39",
+            "unit": "warp"
+          },
+          "variant": {
+            "value": "0.25",
+            "unit": "warp"
+          }
+        },
+        "smsp__average_warps_issue_stalled_long_scoreboard_per_issue_active.ratio": {
+          "baseline": {
+            "value": "3.85",
+            "unit": "inst"
+          },
+          "variant": {
+            "value": "8.14",
+            "unit": "inst"
+          }
+        },
+        "smsp__average_warps_issue_stalled_math_pipe_throttle_per_issue_active.ratio": {
+          "baseline": {
+            "value": "0.43",
+            "unit": "inst"
+          },
+          "variant": {
+            "value": "0.30",
+            "unit": "inst"
+          }
+        },
+        "lts__throughput.avg.pct_of_peak_sustained_elapsed": {
+          "baseline": {
+            "value": "14.68",
+            "unit": "%"
+          },
+          "variant": {
+            "value": "15.02",
+            "unit": "%"
+          }
+        },
+        "lts__t_sector_hit_rate.pct": {
+          "baseline": {
+            "value": "49.25",
+            "unit": "%"
+          },
+          "variant": {
+            "value": "30.16",
+            "unit": "%"
+          }
+        },
+        "lts__t_sectors_op_read.sum": {
+          "baseline": {
+            "value": "12545535",
+            "unit": "sector"
+          },
+          "variant": {
+            "value": "9120646",
+            "unit": "sector"
+          }
+        },
+        "lts__t_sectors_op_write.sum": {
+          "baseline": {
+            "value": "46998",
+            "unit": "sector"
+          },
+          "variant": {
+            "value": "46996",
+            "unit": "sector"
+          }
+        },
+        "profiler__replayer_passes": {
+          "baseline": {
+            "value": "10",
+            "unit": "pass"
+          },
+          "variant": {
+            "value": "10",
+            "unit": "pass"
+          }
+        },
+        "launch__registers_per_thread": {
+          "baseline": {
+            "value": "254",
+            "unit": "register/thread"
+          },
+          "variant": {
+            "value": "112",
+            "unit": "register/thread"
+          }
+        },
+        "launch__shared_mem_per_block": {
+          "baseline": {
+            "value": "49408",
+            "unit": "byte/block"
+          },
+          "variant": {
+            "value": "43072",
+            "unit": "byte/block"
+          }
+        },
+        "launch__waves_per_multiprocessor": {
+          "baseline": {
+            "value": "53.33",
+            "unit": ""
+          },
+          "variant": {
+            "value": "106.67",
+            "unit": ""
+          }
+        }
+      },
+      "variant_launch_resources": {
+        "launch__block_size": {
+          "value": "256",
+          "unit": ""
+        },
+        "launch__occupancy_limit_barriers": {
+          "value": "24",
+          "unit": "block"
+        },
+        "launch__occupancy_limit_blocks": {
+          "value": "24",
+          "unit": "block"
+        },
+        "launch__occupancy_limit_registers": {
+          "value": "2",
+          "unit": "block"
+        },
+        "launch__occupancy_limit_shared_mem": {
+          "value": "2",
+          "unit": "block"
+        },
+        "launch__occupancy_limit_warps": {
+          "value": "6",
+          "unit": "block"
+        },
+        "launch__occupancy_per_block_size": {
+          "value": "346",
+          "unit": ""
+        },
+        "launch__occupancy_per_register_count": {
+          "value": "3088",
+          "unit": ""
+        },
+        "launch__occupancy_per_shared_mem_size": {
+          "value": "2400",
+          "unit": ""
+        },
+        "launch__registers_per_thread": {
+          "value": "112",
+          "unit": "register/thread"
+        },
+        "launch__registers_per_thread_allocated": {
+          "value": "112",
+          "unit": "register/thread"
+        },
+        "launch__shared_mem_config_size": {
+          "value": "102400",
+          "unit": "byte"
+        },
+        "launch__shared_mem_per_block": {
+          "value": "43072",
+          "unit": "byte/block"
+        },
+        "launch__shared_mem_per_block_allocated": {
+          "value": "43136",
+          "unit": "byte/block"
+        },
+        "launch__shared_mem_per_block_driver": {
+          "value": "1024",
+          "unit": "byte/block"
+        },
+        "launch__shared_mem_per_block_dynamic": {
+          "value": "42048",
+          "unit": "byte/block"
+        },
+        "launch__shared_mem_per_block_static": {
+          "value": "0",
+          "unit": "byte/block"
+        }
+      }
+    },
+    {
+      "projection": "down",
+      "baseline_kernel": "void mul_mat_q<3, 64, 0>(const char *, const int *, const int *, const int *, void *, float *, uint3, int, int, int, int, int, uint3, uint3, int, int, int, uint3, uint3, int, int, int, ggml_type, uint3)",
+      "variant_kernel": "void mul_mat_q<3, 16, 0>(const char *, const int *, const int *, const int *, void *, float *, uint3, int, int, int, int, int, uint3, uint3, int, int, int, uint3, uint3, int, int, int, ggml_type, uint3)",
+      "baseline_grid": "(10240, 1, 1)",
+      "variant_grid": "(40960, 1, 1)",
+      "metrics": {
+        "gpu__time_duration.sum": {
+          "baseline": {
+            "value": "1263520",
+            "unit": "ns"
+          },
+          "variant": {
+            "value": "1262560",
+            "unit": "ns"
+          }
+        },
+        "sm__throughput.avg.pct_of_peak_sustained_elapsed": {
+          "baseline": {
+            "value": "33.17",
+            "unit": "%"
+          },
+          "variant": {
+            "value": "34.43",
+            "unit": "%"
+          }
+        },
+        "sm__pipe_tensor_cycles_active.avg.pct_of_peak_sustained_elapsed": {
+          "baseline": {
+            "value": "17.00",
+            "unit": "%"
+          },
+          "variant": {
+            "value": "4.28",
+            "unit": "%"
+          }
+        },
+        "sm__pipe_alu_cycles_active.avg.pct_of_peak_sustained_elapsed": {
+          "baseline": {
+            "value": "10.89",
+            "unit": "%"
+          },
+          "variant": {
+            "value": "14.87",
+            "unit": "%"
+          }
+        },
+        "sm__warps_active.avg.pct_of_peak_sustained_active": {
+          "baseline": {
+            "value": "16.98",
+            "unit": "%"
+          },
+          "variant": {
+            "value": "32.14",
+            "unit": "%"
+          }
+        },
+        "smsp__issue_active.avg.per_cycle_active": {
+          "baseline": {
+            "value": "0.35",
+            "unit": ""
+          },
+          "variant": {
+            "value": "0.34",
+            "unit": ""
+          }
+        },
+        "smsp__warps_eligible.avg.per_cycle_active": {
+          "baseline": {
+            "value": "0.52",
+            "unit": "warp"
+          },
+          "variant": {
+            "value": "0.64",
+            "unit": "warp"
+          }
+        },
+        "smsp__average_warps_issue_stalled_long_scoreboard_per_issue_active.ratio": {
+          "baseline": {
+            "value": "2.05",
+            "unit": "inst"
+          },
+          "variant": {
+            "value": "1.95",
+            "unit": "inst"
+          }
+        },
+        "smsp__average_warps_issue_stalled_math_pipe_throttle_per_issue_active.ratio": {
+          "baseline": {
+            "value": "0.41",
+            "unit": "inst"
+          },
+          "variant": {
+            "value": "0.58",
+            "unit": "inst"
+          }
+        },
+        "lts__throughput.avg.pct_of_peak_sustained_elapsed": {
+          "baseline": {
+            "value": "17.86",
+            "unit": "%"
+          },
+          "variant": {
+            "value": "18.90",
+            "unit": "%"
+          }
+        },
+        "lts__t_sector_hit_rate.pct": {
+          "baseline": {
+            "value": "57.84",
+            "unit": "%"
+          },
+          "variant": {
+            "value": "59.95",
+            "unit": "%"
+          }
+        },
+        "lts__t_sectors_op_read.sum": {
+          "baseline": {
+            "value": "16116761",
+            "unit": "sector"
+          },
+          "variant": {
+            "value": "17064098",
+            "unit": "sector"
+          }
+        },
+        "lts__t_sectors_op_write.sum": {
+          "baseline": {
+            "value": "181288",
+            "unit": "sector"
+          },
+          "variant": {
+            "value": "181397",
+            "unit": "sector"
+          }
+        },
+        "profiler__replayer_passes": {
+          "baseline": {
+            "value": "10",
+            "unit": "pass"
+          },
+          "variant": {
+            "value": "10",
+            "unit": "pass"
+          }
+        },
+        "launch__registers_per_thread": {
+          "baseline": {
+            "value": "254",
+            "unit": "register/thread"
+          },
+          "variant": {
+            "value": "126",
+            "unit": "register/thread"
+          }
+        },
+        "launch__shared_mem_per_block": {
+          "baseline": {
+            "value": "49408",
+            "unit": "byte/block"
+          },
+          "variant": {
+            "value": "43072",
+            "unit": "byte/block"
+          }
+        },
+        "launch__waves_per_multiprocessor": {
+          "baseline": {
+            "value": "213.33",
+            "unit": ""
+          },
+          "variant": {
+            "value": "426.67",
+            "unit": ""
+          }
+        }
+      },
+      "variant_launch_resources": {
+        "launch__block_size": {
+          "value": "256",
+          "unit": ""
+        },
+        "launch__occupancy_limit_barriers": {
+          "value": "24",
+          "unit": "block"
+        },
+        "launch__occupancy_limit_blocks": {
+          "value": "24",
+          "unit": "block"
+        },
+        "launch__occupancy_limit_registers": {
+          "value": "2",
+          "unit": "block"
+        },
+        "launch__occupancy_limit_shared_mem": {
+          "value": "2",
+          "unit": "block"
+        },
+        "launch__occupancy_limit_warps": {
+          "value": "6",
+          "unit": "block"
+        },
+        "launch__occupancy_per_block_size": {
+          "value": "346",
+          "unit": ""
+        },
+        "launch__occupancy_per_register_count": {
+          "value": "3088",
+          "unit": ""
+        },
+        "launch__occupancy_per_shared_mem_size": {
+          "value": "2400",
+          "unit": ""
+        },
+        "launch__registers_per_thread": {
+          "value": "126",
+          "unit": "register/thread"
+        },
+        "launch__registers_per_thread_allocated": {
+          "value": "128",
+          "unit": "register/thread"
+        },
+        "launch__shared_mem_config_size": {
+          "value": "102400",
+          "unit": "byte"
+        },
+        "launch__shared_mem_per_block": {
+          "value": "43072",
+          "unit": "byte/block"
+        },
+        "launch__shared_mem_per_block_allocated": {
+          "value": "43136",
+          "unit": "byte/block"
+        },
+        "launch__shared_mem_per_block_driver": {
+          "value": "1024",
+          "unit": "byte/block"
+        },
+        "launch__shared_mem_per_block_dynamic": {
+          "value": "42048",
+          "unit": "byte/block"
+        },
+        "launch__shared_mem_per_block_static": {
+          "value": "0",
+          "unit": "byte/block"
+        }
+      }
+    }
+  ],
+  "conclusion": "Achieved occupancy increased to31-33% from~17%, but this change did not produce reliable full expert-pipeline speedup across25 inputs. Low occupancy alone does not explain the expert-path scaling.",
+  "scope": "Three projection launches on the same selected native56 sample; profiler replay durations are not benchmark timings. No DRAM counter claim; full-model scaling cannot be inferred from this one-layer counter capture."
+}

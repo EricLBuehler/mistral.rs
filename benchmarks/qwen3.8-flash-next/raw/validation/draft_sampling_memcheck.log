@@ -1,0 +1,11 @@
+========= COMPUTE-SANITIZER
+
+running 4 tests
+test speculative::proposer::cuda_draft_sampling_tests::draft_rows_cuda_greedy_matches_cpu_with_masks_padding_and_context_updates ... ok
+test speculative::proposer::cuda_draft_sampling_tests::draft_rows_cuda_preserves_mixed_sampler_penalties_bias_and_processors ... ok
+test speculative::proposer::cuda_draft_sampling_tests::draft_rows_cuda_preserves_stochastic_rng_consumption ... ok
+test speculative::proposer::cuda_draft_sampling_tests::draft_rows_cuda_rejects_invalid_logits_before_updating_contexts ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 1648 filtered out; finished in 0.44s
+
+========= ERROR SUMMARY: 0 errors

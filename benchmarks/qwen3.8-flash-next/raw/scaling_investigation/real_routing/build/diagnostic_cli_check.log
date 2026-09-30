@@ -1,0 +1,23 @@
+    Checking mistralrs-mcp v0.9.4 (/home/ericbuehler/mistral.rs/mistralrs-mcp)
+    Checking mistralrs-sandbox v0.9.4 (/home/ericbuehler/mistral.rs/mistralrs-sandbox)
+warning: mistralrs-quant@0.9.4: Using 10 threads for compilation
+warning: mistralrs-quant@0.9.4: Using cached cutlass at /home/ericbuehler/.cudaforge/git/checkouts/cutlass-7127592069c2fe01
+warning: mistralrs-quant@0.9.4: Compiling 45 of 45 kernels
+warning: mistralrs-paged-attn@0.9.4: Using 10 threads for compilation
+warning: mistralrs-paged-attn@0.9.4: Compiling 15 of 15 kernels
+warning: mistralrs-flash-attn@0.9.4: Using 10 threads for compilation
+warning: mistralrs-flash-attn@0.9.4: Using cached cutlass at /home/ericbuehler/.cudaforge/git/checkouts/cutlass-7127592069c2fe01
+warning: mistralrs-flash-attn@0.9.4: Compiling 53 of 53 kernels
+   Compiling mistralrs-core v0.9.4 (/home/ericbuehler/mistral.rs/mistralrs-core)
+    Checking mistralrs-quant v0.9.4 (/home/ericbuehler/mistral.rs/mistralrs-quant)
+    Checking mistralrs-audio v0.9.4 (/home/ericbuehler/mistral.rs/mistralrs-audio)
+    Checking mistralrs-paged-attn v0.9.4 (/home/ericbuehler/mistral.rs/mistralrs-paged-attn)
+    Checking mistralrs-flash-attn v0.9.4 (/home/ericbuehler/mistral.rs/mistralrs-flash-attn)
+    Checking mistralrs-vision v0.9.4 (/home/ericbuehler/mistral.rs/mistralrs-vision)
+warning: mistralrs-core@0.9.4: Using 10 threads for compilation
+warning: mistralrs-core@0.9.4: All library kernels up-to-date, skipping compilation
+    Checking mistralrs-code-exec v0.9.4 (/home/ericbuehler/mistral.rs/mistralrs-code-exec)
+    Checking mistralrs v0.9.4 (/home/ericbuehler/mistral.rs/mistralrs)
+    Checking mistralrs-server-core v0.9.4 (/home/ericbuehler/mistral.rs/mistralrs-server-core)
+    Checking mistralrs-cli v0.9.4 (/home/ericbuehler/mistral.rs/mistralrs-cli)
+    Finished `release` profile [optimized] target(s) in 34.54s

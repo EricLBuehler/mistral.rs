@@ -1,0 +1,67 @@
+{
+  "snapshot": "before_gpu_draft_sampling",
+  "preserved_at_utc": "2026-09-30T01:11:19.666288+00:00",
+  "description": "Baseline after scheduler fairness, draft-depth cohort batching, grouped verification graph, and MMQ bounds fixes, before GPU draft sampling. These measurements must not be attributed to the subsequent GPU draft-sampling runtime.",
+  "concurrency_method": {
+    "mode": "closed-loop",
+    "measured_trials": 3,
+    "discarded_warmup_trials": 1,
+    "requests_per_trial_by_concurrency": {
+      "1": 8,
+      "6": 24,
+      "8": 24
+    },
+    "output_tokens_per_request": 128,
+    "prompts": "The same eight ordinary prompts repeated in balanced cycles.",
+    "timing": "Unprofiled client wall time. These short diagnostic concurrency baselines are separate from the five-repetition serving benchmark."
+  },
+  "serving_method": {
+    "measured_repetitions": 5,
+    "discarded_warmups": 2,
+    "source": "isq_mtp_batched.json"
+  },
+  "profiling_evidence": "The compact transfer evidence is diagnostic Nsight data, separate from unprofiled throughput. Full vocabulary transfer sizes support investigation but do not uniquely attribute each transfer to a source call; summed transfer durations exclude host work and synchronization. Large SQLite/Nsight captures are not copied. The preserved script expects profile_c1.sqlite, profile_c6.sqlite, and profile_c8.sqlite beside it; original capture paths are recorded in the evidence JSON.",
+  "copy_validation": "Each copied file SHA-256 matches the source, which was read again after copying to detect concurrent changes.",
+  "files": {
+    "isq_mtp_batched.json": {
+      "original_path": "/home/ericbuehler/qwen4exp_work/concurrency_20260929/isq_mtp_batched.json",
+      "sha256": "a6e9d4f121e987543566356dbb29db6815835dfed1936457c1c327bb6b78842b",
+      "size_bytes": 787385
+    },
+    "isq_mtp_batched.metadata.json": {
+      "original_path": "/home/ericbuehler/qwen4exp_work/concurrency_20260929/isq_mtp_batched.metadata.json",
+      "sha256": "245eefe0c5155894a37dd80eb9af1078524aee4f835e2b2ef43472e233991848",
+      "size_bytes": 1594
+    },
+    "baseline_c1.json": {
+      "original_path": "/home/ericbuehler/qwen4exp_work/concurrency_20260929/baseline_c1.json",
+      "sha256": "e06bffb213169c6ab30e6e879031e2d8b97d9d3b29059553de39f4fb645ab001",
+      "size_bytes": 84188
+    },
+    "baseline_c6.json": {
+      "original_path": "/home/ericbuehler/qwen4exp_work/concurrency_20260929/baseline_c6.json",
+      "sha256": "5895594368762f0460ecb882222ddad4a70a57000c0befc4623c7657d15f686a",
+      "size_bytes": 237348
+    },
+    "baseline_c8.json": {
+      "original_path": "/home/ericbuehler/qwen4exp_work/concurrency_20260929/baseline_c8.json",
+      "sha256": "90d6f2106ed3b426b9b3df3ab8e630b702ae599136c59ae740e52e40373c5f55",
+      "size_bytes": 237297
+    },
+    "baseline.summary.json": {
+      "original_path": "/home/ericbuehler/qwen4exp_work/concurrency_20260929/baseline.summary.json",
+      "sha256": "88fbd749aeb460e6c416af22f3e589dc169da7cef7746b7c9a2e85442732a206",
+      "size_bytes": 16195
+    },
+    "draft_sampling_transfer_evidence.json": {
+      "original_path": "/home/ericbuehler/qwen4exp_work/concurrency_20260929/draft_sampling_transfer_evidence.json",
+      "sha256": "384c4a4b48a011ce1479e29aaff892f2cf3b8ca60d772d3cde5d51b1df4bd06b",
+      "size_bytes": 3372
+    },
+    "draft_sampling_transfer_evidence.py": {
+      "original_path": "/home/ericbuehler/qwen4exp_work/concurrency_20260929/draft_sampling_transfer_evidence.py",
+      "sha256": "194522328d74a977d64848121b4d290e4a25c8309cb64c453b8229272a3244a4",
+      "size_bytes": 2939
+    }
+  }
+}

@@ -1,0 +1,18 @@
+{
+  "captured_utc": "2026-09-30T04:35:07.821570+00:00",
+  "captured_monotonic": 113798.666743291,
+  "model_pid": 1858502,
+  "process": {
+    "VmHWM_KiB": 82579796,
+    "VmRSS_KiB": 3561868,
+    "RssAnon_KiB": 2400412,
+    "RssFile_KiB": 1145180,
+    "VmSwap_KiB": 488272
+  },
+  "system": {
+    "MemAvailable_KiB": 9922252,
+    "SwapFree_KiB": 7387356
+  },
+  "pswpin_pages": 14503358,
+  "pswpout_pages": 25679468
+}

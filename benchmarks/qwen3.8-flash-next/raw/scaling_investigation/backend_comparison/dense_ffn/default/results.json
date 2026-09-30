@@ -1,0 +1,928 @@
+{
+  "compute_capability": [
+    12,
+    1
+  ],
+  "dimensions": {
+    "hidden": 5120,
+    "intermediate": 17408
+  },
+  "gguf_affine_env": null,
+  "layer": 0,
+  "limitations": [
+    "Q4K weights are quantized from dequantized FP8 checkpoint weights, not the original BF16 checkpoint. This double-quantized control is for backend timing, not model quality.",
+    "Each backend is checked against FP32 matmul with its own dequantized weights; cross-backend equality is not expected.",
+    "Activations are deterministic synthetic BF16 rows, not captured model activations.",
+    "Timing starts from BF16 inputs and includes activation quantization; a full model may fuse that quantization with upstream normalization.",
+    "Repeated isolated FFN weights have different cache behavior from a full model; timings do not predict end-to-end speed.",
+    "CUDA-event intervals include host launch gaps. This benchmark does not use CUDA graphs.",
+    "Recorded kernel families are inferred from checked dispatch branches, not an instruction-level profile."
+  ],
+  "pipeline": "gate/up projections, SiLU product, down projection through production QuantMethod dispatch/fusion hooks; FP8 packs gate/up, Q4K uses separate weights with fused FFN/gate-up kernels as production ISQ does",
+  "reference_tolerance": {
+    "cosine_min": 0.995,
+    "relative_rms_max": 0.06
+  },
+  "repetitions": 10,
+  "results": [
+    {
+      "cross_backend_difference_not_an_equivalence_assertion": {
+        "cosine": 0.9994253257196447,
+        "max_abs": 0.298095703125,
+        "relative_rms": 0.033909866535344196
+      },
+      "fp8": {
+        "dispatch": {
+          "down": {
+            "activation_scale_layout": "Some(RowMajor)",
+            "activation_scheme": "Some(ActivationQuantizationScheme { dtype: F8E4M3, block_shape: [1, 128] })",
+            "expected_kernel_family_from_source_dispatch": "fp8_mma_gemv_kernel",
+            "method": "blockwise-fp8-linear",
+            "packed_affine_prepared": false
+          },
+          "gate_up": {
+            "packed": {
+              "activation_scale_layout": "Some(RowMajor)",
+              "activation_scheme": "Some(ActivationQuantizationScheme { dtype: F8E4M3, block_shape: [1, 128] })",
+              "expected_kernel_family_from_source_dispatch": "fp8_mma_gemv_kernel",
+              "method": "blockwise-fp8-linear",
+              "packed_affine_prepared": false
+            }
+          },
+          "source_dispatch_is_not_a_measured_kernel_trace": true
+        },
+        "own_dequantized_weight_reference": {
+          "cosine": 0.9999415488918756,
+          "max_abs": 0.1375885009765625,
+          "relative_rms": 0.010884076523712243
+        },
+        "timings": [
+          {
+            "host_elapsed_ms_per_layer": 1.2636052999999998,
+            "stream_elapsed_ms_per_layer": 1.262342357635498
+          },
+          {
+            "host_elapsed_ms_per_layer": 1.2230788,
+            "stream_elapsed_ms_per_layer": 1.2226112365722657
+          },
+          {
+            "host_elapsed_ms_per_layer": 1.2611269,
+            "stream_elapsed_ms_per_layer": 1.2606623649597168
+          },
+          {
+            "host_elapsed_ms_per_layer": 1.2846758,
+            "stream_elapsed_ms_per_layer": 1.2841952323913575
+          },
+          {
+            "host_elapsed_ms_per_layer": 1.2615013,
+            "stream_elapsed_ms_per_layer": 1.261043167114258
+          },
+          {
+            "host_elapsed_ms_per_layer": 1.2672838,
+            "stream_elapsed_ms_per_layer": 1.2668383598327637
+          },
+          {
+            "host_elapsed_ms_per_layer": 1.2577829,
+            "stream_elapsed_ms_per_layer": 1.2573344230651855
+          }
+        ]
+      },
+      "q4k": {
+        "dispatch": {
+          "down": {
+            "activation_scale_layout": "None",
+            "activation_scheme": "None",
+            "expected_kernel_family_from_source_dispatch": "mmvq_gguf Q4K",
+            "method": "gguf",
+            "packed_affine_prepared": false
+          },
+          "gate_up": {
+            "fusion": "try_fused_quantized_ffn, then fused gate/up fallback, as in the production unpacked MLP",
+            "gate": {
+              "activation_scale_layout": "None",
+              "activation_scheme": "None",
+              "expected_kernel_family_from_source_dispatch": "mmvq_gguf Q4K",
+              "method": "gguf",
+              "packed_affine_prepared": false
+            },
+            "up": {
+              "activation_scale_layout": "None",
+              "activation_scheme": "None",
+              "expected_kernel_family_from_source_dispatch": "mmvq_gguf Q4K",
+              "method": "gguf",
+              "packed_affine_prepared": false
+            }
+          },
+          "source_dispatch_is_not_a_measured_kernel_trace": true
+        },
+        "own_dequantized_weight_reference": {
+          "cosine": 0.9999958250400489,
+          "max_abs": 0.0672149658203125,
+          "relative_rms": 0.0029404854240215666
+        },
+        "timings": [
+          {
+            "host_elapsed_ms_per_layer": 0.8105107,
+            "stream_elapsed_ms_per_layer": 0.8100447654724121
+          },
+          {
+            "host_elapsed_ms_per_layer": 0.7808193,
+            "stream_elapsed_ms_per_layer": 0.7803872108459473
+          },
+          {
+            "host_elapsed_ms_per_layer": 0.8115842000000001,
+            "stream_elapsed_ms_per_layer": 0.8111328125
+          },
+          {
+            "host_elapsed_ms_per_layer": 0.7871665999999999,
+            "stream_elapsed_ms_per_layer": 0.7867263793945313
+          },
+          {
+            "host_elapsed_ms_per_layer": 0.809213,
+            "stream_elapsed_ms_per_layer": 0.8087712287902832
+          },
+          {
+            "host_elapsed_ms_per_layer": 0.8025041999999999,
+            "stream_elapsed_ms_per_layer": 0.8020544052124023
+          },
+          {
+            "host_elapsed_ms_per_layer": 0.807853,
+            "stream_elapsed_ms_per_layer": 0.807414436340332
+          }
+        ]
+      },
+      "rows": 1
+    },
+    {
+      "cross_backend_difference_not_an_equivalence_assertion": {
+        "cosine": 0.9993711851279405,
+        "max_abs": 1.0,
+        "relative_rms": 0.035585339706193646
+      },
+      "fp8": {
+        "dispatch": {
+          "down": {
+            "activation_scale_layout": "Some(RowMajor)",
+            "activation_scheme": "Some(ActivationQuantizationScheme { dtype: F8E4M3, block_shape: [1, 128] })",
+            "expected_kernel_family_from_source_dispatch": "fp8_mma_gemv_kernel",
+            "method": "blockwise-fp8-linear",
+            "packed_affine_prepared": false
+          },
+          "gate_up": {
+            "packed": {
+              "activation_scale_layout": "Some(RowMajor)",
+              "activation_scheme": "Some(ActivationQuantizationScheme { dtype: F8E4M3, block_shape: [1, 128] })",
+              "expected_kernel_family_from_source_dispatch": "fp8_mma_gemv_kernel",
+              "method": "blockwise-fp8-linear",
+              "packed_affine_prepared": false
+            }
+          },
+          "source_dispatch_is_not_a_measured_kernel_trace": true
+        },
+        "own_dequantized_weight_reference": {
+          "cosine": 0.9999385710876688,
+          "max_abs": 0.25331878662109375,
+          "relative_rms": 0.01108408711829808
+        },
+        "timings": [
+          {
+            "host_elapsed_ms_per_layer": 1.4648206,
+            "stream_elapsed_ms_per_layer": 1.4202912330627442
+          },
+          {
+            "host_elapsed_ms_per_layer": 1.4342252,
+            "stream_elapsed_ms_per_layer": 1.3893216133117676
+          },
+          {
+            "host_elapsed_ms_per_layer": 1.4052028,
+            "stream_elapsed_ms_per_layer": 1.3529248237609863
+          },
+          {
+            "host_elapsed_ms_per_layer": 1.4606062,
+            "stream_elapsed_ms_per_layer": 1.416659164428711
+          },
+          {
+            "host_elapsed_ms_per_layer": 1.4645998,
+            "stream_elapsed_ms_per_layer": 1.3997056007385253
+          },
+          {
+            "host_elapsed_ms_per_layer": 1.4804558,
+            "stream_elapsed_ms_per_layer": 1.4358336448669433
+          },
+          {
+            "host_elapsed_ms_per_layer": 1.3948299,
+            "stream_elapsed_ms_per_layer": 1.3491552352905274
+          }
+        ]
+      },
+      "q4k": {
+        "dispatch": {
+          "down": {
+            "activation_scale_layout": "None",
+            "activation_scheme": "None",
+            "expected_kernel_family_from_source_dispatch": "mmvq_gguf Q4K",
+            "method": "gguf",
+            "packed_affine_prepared": false
+          },
+          "gate_up": {
+            "fusion": "try_fused_quantized_ffn, then fused gate/up fallback, as in the production unpacked MLP",
+            "gate": {
+              "activation_scale_layout": "None",
+              "activation_scheme": "None",
+              "expected_kernel_family_from_source_dispatch": "mmvq_gguf Q4K",
+              "method": "gguf",
+              "packed_affine_prepared": false
+            },
+            "up": {
+              "activation_scale_layout": "None",
+              "activation_scheme": "None",
+              "expected_kernel_family_from_source_dispatch": "mmvq_gguf Q4K",
+              "method": "gguf",
+              "packed_affine_prepared": false
+            }
+          },
+          "source_dispatch_is_not_a_measured_kernel_trace": true
+        },
+        "own_dequantized_weight_reference": {
+          "cosine": 0.9999939772493189,
+          "max_abs": 0.4535064697265625,
+          "relative_rms": 0.0034920396183568208
+        },
+        "timings": [
+          {
+            "host_elapsed_ms_per_layer": 0.9299574999999999,
+            "stream_elapsed_ms_per_layer": 0.9289952278137207
+          },
+          {
+            "host_elapsed_ms_per_layer": 0.8809302000000001,
+            "stream_elapsed_ms_per_layer": 0.8804736137390137
+          },
+          {
+            "host_elapsed_ms_per_layer": 0.9380487000000001,
+            "stream_elapsed_ms_per_layer": 0.9371071815490722
+          },
+          {
+            "host_elapsed_ms_per_layer": 0.8667556999999999,
+            "stream_elapsed_ms_per_layer": 0.866329574584961
+          },
+          {
+            "host_elapsed_ms_per_layer": 0.8840372999999999,
+            "stream_elapsed_ms_per_layer": 0.8825728416442871
+          },
+          {
+            "host_elapsed_ms_per_layer": 0.9461704,
+            "stream_elapsed_ms_per_layer": 0.9458463668823243
+          },
+          {
+            "host_elapsed_ms_per_layer": 0.9464632,
+            "stream_elapsed_ms_per_layer": 0.9456928253173829
+          }
+        ]
+      },
+      "rows": 6
+    },
+    {
+      "cross_backend_difference_not_an_equivalence_assertion": {
+        "cosine": 0.9993760388810651,
+        "max_abs": 1.0,
+        "relative_rms": 0.03545168768224533
+      },
+      "fp8": {
+        "dispatch": {
+          "down": {
+            "activation_scale_layout": "Some(RowMajor)",
+            "activation_scheme": "Some(ActivationQuantizationScheme { dtype: F8E4M3, block_shape: [1, 128] })",
+            "expected_kernel_family_from_source_dispatch": "fp8_mma_gemv_kernel",
+            "method": "blockwise-fp8-linear",
+            "packed_affine_prepared": false
+          },
+          "gate_up": {
+            "packed": {
+              "activation_scale_layout": "Some(RowMajor)",
+              "activation_scheme": "Some(ActivationQuantizationScheme { dtype: F8E4M3, block_shape: [1, 128] })",
+              "expected_kernel_family_from_source_dispatch": "fp8_mma_gemv_kernel",
+              "method": "blockwise-fp8-linear",
+              "packed_affine_prepared": false
+            }
+          },
+          "source_dispatch_is_not_a_measured_kernel_trace": true
+        },
+        "own_dequantized_weight_reference": {
+          "cosine": 0.9999373151501327,
+          "max_abs": 0.5253372192382812,
+          "relative_rms": 0.01119718260782155
+        },
+        "timings": [
+          {
+            "host_elapsed_ms_per_layer": 1.2567301,
+            "stream_elapsed_ms_per_layer": 1.2561311721801758
+          },
+          {
+            "host_elapsed_ms_per_layer": 1.2741702,
+            "stream_elapsed_ms_per_layer": 1.2736672401428222
+          },
+          {
+            "host_elapsed_ms_per_layer": 1.3038103,
+            "stream_elapsed_ms_per_layer": 1.3023743629455566
+          },
+          {
+            "host_elapsed_ms_per_layer": 1.2569205,
+            "stream_elapsed_ms_per_layer": 1.2564319610595702
+          },
+          {
+            "host_elapsed_ms_per_layer": 1.3126296,
+            "stream_elapsed_ms_per_layer": 1.3121184349060058
+          },
+          {
+            "host_elapsed_ms_per_layer": 1.3112007,
+            "stream_elapsed_ms_per_layer": 1.3107295989990235
+          },
+          {
+            "host_elapsed_ms_per_layer": 1.269447,
+            "stream_elapsed_ms_per_layer": 1.2689696311950684
+          }
+        ]
+      },
+      "q4k": {
+        "dispatch": {
+          "down": {
+            "activation_scale_layout": "None",
+            "activation_scheme": "None",
+            "expected_kernel_family_from_source_dispatch": "mmvq_gguf Q4K",
+            "method": "gguf",
+            "packed_affine_prepared": false
+          },
+          "gate_up": {
+            "fusion": "try_fused_quantized_ffn, then fused gate/up fallback, as in the production unpacked MLP",
+            "gate": {
+              "activation_scale_layout": "None",
+              "activation_scheme": "None",
+              "expected_kernel_family_from_source_dispatch": "mmvq_gguf Q4K",
+              "method": "gguf",
+              "packed_affine_prepared": false
+            },
+            "up": {
+              "activation_scale_layout": "None",
+              "activation_scheme": "None",
+              "expected_kernel_family_from_source_dispatch": "mmvq_gguf Q4K",
+              "method": "gguf",
+              "packed_affine_prepared": false
+            }
+          },
+          "source_dispatch_is_not_a_measured_kernel_trace": true
+        },
+        "own_dequantized_weight_reference": {
+          "cosine": 0.9999941170659135,
+          "max_abs": 0.4535064697265625,
+          "relative_rms": 0.0034311896115692916
+        },
+        "timings": [
+          {
+            "host_elapsed_ms_per_layer": 1.0741998000000001,
+            "stream_elapsed_ms_per_layer": 1.0737824440002441
+          },
+          {
+            "host_elapsed_ms_per_layer": 1.0663997,
+            "stream_elapsed_ms_per_layer": 1.0659647941589356
+          },
+          {
+            "host_elapsed_ms_per_layer": 1.033182,
+            "stream_elapsed_ms_per_layer": 1.0310272216796874
+          },
+          {
+            "host_elapsed_ms_per_layer": 1.0798845,
+            "stream_elapsed_ms_per_layer": 1.0795295715332032
+          },
+          {
+            "host_elapsed_ms_per_layer": 1.0781901,
+            "stream_elapsed_ms_per_layer": 1.0777952194213867
+          },
+          {
+            "host_elapsed_ms_per_layer": 1.0055467,
+            "stream_elapsed_ms_per_layer": 1.005123233795166
+          },
+          {
+            "host_elapsed_ms_per_layer": 1.0733053,
+            "stream_elapsed_ms_per_layer": 1.072822380065918
+          }
+        ]
+      },
+      "rows": 8
+    },
+    {
+      "cross_backend_difference_not_an_equivalence_assertion": {
+        "cosine": 0.9993504274957149,
+        "max_abs": 2.0,
+        "relative_rms": 0.03636969112042024
+      },
+      "fp8": {
+        "dispatch": {
+          "down": {
+            "activation_scale_layout": "Some(RowMajor)",
+            "activation_scheme": "Some(ActivationQuantizationScheme { dtype: F8E4M3, block_shape: [1, 128] })",
+            "expected_kernel_family_from_source_dispatch": "fp8_mma_gemv_kernel",
+            "method": "blockwise-fp8-linear",
+            "packed_affine_prepared": false
+          },
+          "gate_up": {
+            "packed": {
+              "activation_scale_layout": "Some(RowMajor)",
+              "activation_scheme": "Some(ActivationQuantizationScheme { dtype: F8E4M3, block_shape: [1, 128] })",
+              "expected_kernel_family_from_source_dispatch": "fp8_mma_gemv_kernel",
+              "method": "blockwise-fp8-linear",
+              "packed_affine_prepared": false
+            }
+          },
+          "source_dispatch_is_not_a_measured_kernel_trace": true
+        },
+        "own_dequantized_weight_reference": {
+          "cosine": 0.9999349734353774,
+          "max_abs": 0.8350067138671875,
+          "relative_rms": 0.011407821692433904
+        },
+        "timings": [
+          {
+            "host_elapsed_ms_per_layer": 1.3671258,
+            "stream_elapsed_ms_per_layer": 1.3665151596069336
+          },
+          {
+            "host_elapsed_ms_per_layer": 1.3018231,
+            "stream_elapsed_ms_per_layer": 1.2994879722595214
+          },
+          {
+            "host_elapsed_ms_per_layer": 1.3510217,
+            "stream_elapsed_ms_per_layer": 1.3504799842834472
+          },
+          {
+            "host_elapsed_ms_per_layer": 1.3514521,
+            "stream_elapsed_ms_per_layer": 1.350921630859375
+          },
+          {
+            "host_elapsed_ms_per_layer": 1.3003191,
+            "stream_elapsed_ms_per_layer": 1.2998527526855468
+          },
+          {
+            "host_elapsed_ms_per_layer": 1.3598426,
+            "stream_elapsed_ms_per_layer": 1.359391975402832
+          },
+          {
+            "host_elapsed_ms_per_layer": 1.2895926000000002,
+            "stream_elapsed_ms_per_layer": 1.289078426361084
+          }
+        ]
+      },
+      "q4k": {
+        "dispatch": {
+          "down": {
+            "activation_scale_layout": "None",
+            "activation_scheme": "None",
+            "expected_kernel_family_from_source_dispatch": "mul_mat_q Q4K (MMQ)",
+            "method": "gguf",
+            "packed_affine_prepared": false
+          },
+          "gate_up": {
+            "fusion": "try_fused_quantized_ffn, then fused gate/up fallback, as in the production unpacked MLP",
+            "gate": {
+              "activation_scale_layout": "None",
+              "activation_scheme": "None",
+              "expected_kernel_family_from_source_dispatch": "mul_mat_q Q4K (MMQ)",
+              "method": "gguf",
+              "packed_affine_prepared": false
+            },
+            "up": {
+              "activation_scale_layout": "None",
+              "activation_scheme": "None",
+              "expected_kernel_family_from_source_dispatch": "mul_mat_q Q4K (MMQ)",
+              "method": "gguf",
+              "packed_affine_prepared": false
+            }
+          },
+          "source_dispatch_is_not_a_measured_kernel_trace": true
+        },
+        "own_dequantized_weight_reference": {
+          "cosine": 0.9999786613383751,
+          "max_abs": 0.7432403564453125,
+          "relative_rms": 0.006644142165793591
+        },
+        "timings": [
+          {
+            "host_elapsed_ms_per_layer": 0.8710628,
+            "stream_elapsed_ms_per_layer": 0.8706015586853028
+          },
+          {
+            "host_elapsed_ms_per_layer": 0.9370296,
+            "stream_elapsed_ms_per_layer": 0.9366047859191895
+          },
+          {
+            "host_elapsed_ms_per_layer": 0.9094391,
+            "stream_elapsed_ms_per_layer": 0.9090751647949219
+          },
+          {
+            "host_elapsed_ms_per_layer": 0.8998758,
+            "stream_elapsed_ms_per_layer": 0.8994144439697266
+          },
+          {
+            "host_elapsed_ms_per_layer": 0.9389287,
+            "stream_elapsed_ms_per_layer": 0.9385567665100097
+          },
+          {
+            "host_elapsed_ms_per_layer": 0.8709813000000001,
+            "stream_elapsed_ms_per_layer": 0.8705280303955079
+          },
+          {
+            "host_elapsed_ms_per_layer": 0.8698613,
+            "stream_elapsed_ms_per_layer": 0.8693440437316895
+          }
+        ]
+      },
+      "rows": 24
+    },
+    {
+      "cross_backend_difference_not_an_equivalence_assertion": {
+        "cosine": 0.9993582730477597,
+        "max_abs": 2.0,
+        "relative_rms": 0.03612191482814062
+      },
+      "fp8": {
+        "dispatch": {
+          "down": {
+            "activation_scale_layout": "Some(RowMajor)",
+            "activation_scheme": "Some(ActivationQuantizationScheme { dtype: F8E4M3, block_shape: [1, 128] })",
+            "expected_kernel_family_from_source_dispatch": "fp8_mma_gemv_kernel",
+            "method": "blockwise-fp8-linear",
+            "packed_affine_prepared": false
+          },
+          "gate_up": {
+            "packed": {
+              "activation_scale_layout": "Some(RowMajor)",
+              "activation_scheme": "Some(ActivationQuantizationScheme { dtype: F8E4M3, block_shape: [1, 128] })",
+              "expected_kernel_family_from_source_dispatch": "fp8_mma_gemv_kernel",
+              "method": "blockwise-fp8-linear",
+              "packed_affine_prepared": false
+            }
+          },
+          "source_dispatch_is_not_a_measured_kernel_trace": true
+        },
+        "own_dequantized_weight_reference": {
+          "cosine": 0.9999343330989066,
+          "max_abs": 0.9960250854492188,
+          "relative_rms": 0.011479914827229716
+        },
+        "timings": [
+          {
+            "host_elapsed_ms_per_layer": 1.2404964,
+            "stream_elapsed_ms_per_layer": 1.2399231910705566
+          },
+          {
+            "host_elapsed_ms_per_layer": 1.1872881999999998,
+            "stream_elapsed_ms_per_layer": 1.1867648124694825
+          },
+          {
+            "host_elapsed_ms_per_layer": 1.2524101,
+            "stream_elapsed_ms_per_layer": 1.2520095825195312
+          },
+          {
+            "host_elapsed_ms_per_layer": 1.1827442000000001,
+            "stream_elapsed_ms_per_layer": 1.1822367668151856
+          },
+          {
+            "host_elapsed_ms_per_layer": 1.2471876,
+            "stream_elapsed_ms_per_layer": 1.2467840194702149
+          },
+          {
+            "host_elapsed_ms_per_layer": 1.2190227999999999,
+            "stream_elapsed_ms_per_layer": 1.2184864044189454
+          },
+          {
+            "host_elapsed_ms_per_layer": 1.2125587,
+            "stream_elapsed_ms_per_layer": 1.2120384216308593
+          }
+        ]
+      },
+      "q4k": {
+        "dispatch": {
+          "down": {
+            "activation_scale_layout": "None",
+            "activation_scheme": "None",
+            "expected_kernel_family_from_source_dispatch": "mul_mat_q Q4K (MMQ)",
+            "method": "gguf",
+            "packed_affine_prepared": false
+          },
+          "gate_up": {
+            "fusion": "try_fused_quantized_ffn, then fused gate/up fallback, as in the production unpacked MLP",
+            "gate": {
+              "activation_scale_layout": "None",
+              "activation_scheme": "None",
+              "expected_kernel_family_from_source_dispatch": "mul_mat_q Q4K (MMQ)",
+              "method": "gguf",
+              "packed_affine_prepared": false
+            },
+            "up": {
+              "activation_scale_layout": "None",
+              "activation_scheme": "None",
+              "expected_kernel_family_from_source_dispatch": "mul_mat_q Q4K (MMQ)",
+              "method": "gguf",
+              "packed_affine_prepared": false
+            }
+          },
+          "source_dispatch_is_not_a_measured_kernel_trace": true
+        },
+        "own_dequantized_weight_reference": {
+          "cosine": 0.9999816750433007,
+          "max_abs": 0.7432403564453125,
+          "relative_rms": 0.0061154560333235184
+        },
+        "timings": [
+          {
+            "host_elapsed_ms_per_layer": 0.8986502,
+            "stream_elapsed_ms_per_layer": 0.8981568336486816
+          },
+          {
+            "host_elapsed_ms_per_layer": 0.9459864,
+            "stream_elapsed_ms_per_layer": 0.9454976081848144
+          },
+          {
+            "host_elapsed_ms_per_layer": 0.9446087999999999,
+            "stream_elapsed_ms_per_layer": 0.9441280364990234
+          },
+          {
+            "host_elapsed_ms_per_layer": 0.9555865000000001,
+            "stream_elapsed_ms_per_layer": 0.9551775932312012
+          },
+          {
+            "host_elapsed_ms_per_layer": 0.9244359000000001,
+            "stream_elapsed_ms_per_layer": 0.9239583969116211
+          },
+          {
+            "host_elapsed_ms_per_layer": 0.9186102999999999,
+            "stream_elapsed_ms_per_layer": 0.918115234375
+          },
+          {
+            "host_elapsed_ms_per_layer": 0.9395656000000001,
+            "stream_elapsed_ms_per_layer": 0.9379391670227051
+          }
+        ]
+      },
+      "rows": 32
+    },
+    {
+      "cross_backend_difference_not_an_equivalence_assertion": {
+        "cosine": 0.9993508790437382,
+        "max_abs": 2.0,
+        "relative_rms": 0.03647093673459103
+      },
+      "fp8": {
+        "dispatch": {
+          "down": {
+            "activation_scale_layout": "Some(GroupMajor { row_alignment: 128 })",
+            "activation_scheme": "Some(ActivationQuantizationScheme { dtype: F8E4M3, block_shape: [1, 128] })",
+            "expected_kernel_family_from_source_dispatch": "fp8_blockwise_gemm (cuTile)",
+            "method": "blockwise-fp8-linear",
+            "packed_affine_prepared": false
+          },
+          "gate_up": {
+            "packed": {
+              "activation_scale_layout": "Some(GroupMajor { row_alignment: 128 })",
+              "activation_scheme": "Some(ActivationQuantizationScheme { dtype: F8E4M3, block_shape: [1, 128] })",
+              "expected_kernel_family_from_source_dispatch": "fp8_blockwise_gemm (cuTile)",
+              "method": "blockwise-fp8-linear",
+              "packed_affine_prepared": false
+            }
+          },
+          "source_dispatch_is_not_a_measured_kernel_trace": true
+        },
+        "own_dequantized_weight_reference": {
+          "cosine": 0.999933800138223,
+          "max_abs": 0.99603271484375,
+          "relative_rms": 0.011507443306064536
+        },
+        "timings": [
+          {
+            "host_elapsed_ms_per_layer": 1.3581161,
+            "stream_elapsed_ms_per_layer": 1.3575200080871581
+          },
+          {
+            "host_elapsed_ms_per_layer": 1.292263,
+            "stream_elapsed_ms_per_layer": 1.2917471885681153
+          },
+          {
+            "host_elapsed_ms_per_layer": 1.3452153,
+            "stream_elapsed_ms_per_layer": 1.3446911811828612
+          },
+          {
+            "host_elapsed_ms_per_layer": 1.3444217,
+            "stream_elapsed_ms_per_layer": 1.3440095901489257
+          },
+          {
+            "host_elapsed_ms_per_layer": 1.3478249,
+            "stream_elapsed_ms_per_layer": 1.3473055839538575
+          },
+          {
+            "host_elapsed_ms_per_layer": 1.2834374,
+            "stream_elapsed_ms_per_layer": 1.2829504013061523
+          },
+          {
+            "host_elapsed_ms_per_layer": 1.32706,
+            "stream_elapsed_ms_per_layer": 1.326591968536377
+          }
+        ]
+      },
+      "q4k": {
+        "dispatch": {
+          "down": {
+            "activation_scale_layout": "None",
+            "activation_scheme": "None",
+            "expected_kernel_family_from_source_dispatch": "mul_mat_q Q4K (MMQ)",
+            "method": "gguf",
+            "packed_affine_prepared": false
+          },
+          "gate_up": {
+            "fusion": "try_fused_quantized_ffn, then fused gate/up fallback, as in the production unpacked MLP",
+            "gate": {
+              "activation_scale_layout": "None",
+              "activation_scheme": "None",
+              "expected_kernel_family_from_source_dispatch": "mul_mat_q Q4K (MMQ)",
+              "method": "gguf",
+              "packed_affine_prepared": false
+            },
+            "up": {
+              "activation_scale_layout": "None",
+              "activation_scheme": "None",
+              "expected_kernel_family_from_source_dispatch": "mul_mat_q Q4K (MMQ)",
+              "method": "gguf",
+              "packed_affine_prepared": false
+            }
+          },
+          "source_dispatch_is_not_a_measured_kernel_trace": true
+        },
+        "own_dequantized_weight_reference": {
+          "cosine": 0.9999817976740845,
+          "max_abs": 0.7431869506835938,
+          "relative_rms": 0.006070443097024109
+        },
+        "timings": [
+          {
+            "host_elapsed_ms_per_layer": 0.9009446000000001,
+            "stream_elapsed_ms_per_layer": 0.9004128456115723
+          },
+          {
+            "host_elapsed_ms_per_layer": 0.983225,
+            "stream_elapsed_ms_per_layer": 0.9828384399414063
+          },
+          {
+            "host_elapsed_ms_per_layer": 0.9449224,
+            "stream_elapsed_ms_per_layer": 0.9443679809570312
+          },
+          {
+            "host_elapsed_ms_per_layer": 0.9327975000000001,
+            "stream_elapsed_ms_per_layer": 0.932316780090332
+          },
+          {
+            "host_elapsed_ms_per_layer": 0.8989382000000001,
+            "stream_elapsed_ms_per_layer": 0.8984383583068848
+          },
+          {
+            "host_elapsed_ms_per_layer": 0.8986006,
+            "stream_elapsed_ms_per_layer": 0.8981087684631348
+          },
+          {
+            "host_elapsed_ms_per_layer": 0.9340856000000001,
+            "stream_elapsed_ms_per_layer": 0.9335904121398926
+          }
+        ]
+      },
+      "rows": 40
+    },
+    {
+      "cross_backend_difference_not_an_equivalence_assertion": {
+        "cosine": 0.999355312869716,
+        "max_abs": 2.0,
+        "relative_rms": 0.036380104607735046
+      },
+      "fp8": {
+        "dispatch": {
+          "down": {
+            "activation_scale_layout": "Some(GroupMajor { row_alignment: 128 })",
+            "activation_scheme": "Some(ActivationQuantizationScheme { dtype: F8E4M3, block_shape: [1, 128] })",
+            "expected_kernel_family_from_source_dispatch": "fp8_blockwise_gemm (cuTile)",
+            "method": "blockwise-fp8-linear",
+            "packed_affine_prepared": false
+          },
+          "gate_up": {
+            "packed": {
+              "activation_scale_layout": "Some(GroupMajor { row_alignment: 128 })",
+              "activation_scheme": "Some(ActivationQuantizationScheme { dtype: F8E4M3, block_shape: [1, 128] })",
+              "expected_kernel_family_from_source_dispatch": "fp8_blockwise_gemm (cuTile)",
+              "method": "blockwise-fp8-linear",
+              "packed_affine_prepared": false
+            }
+          },
+          "source_dispatch_is_not_a_measured_kernel_trace": true
+        },
+        "own_dequantized_weight_reference": {
+          "cosine": 0.9999332096511262,
+          "max_abs": 1.18951416015625,
+          "relative_rms": 0.011560069644584677
+        },
+        "timings": [
+          {
+            "host_elapsed_ms_per_layer": 1.3653145,
+            "stream_elapsed_ms_per_layer": 1.364780807495117
+          },
+          {
+            "host_elapsed_ms_per_layer": 1.3308567999999998,
+            "stream_elapsed_ms_per_layer": 1.3302975654602052
+          },
+          {
+            "host_elapsed_ms_per_layer": 1.3162568000000001,
+            "stream_elapsed_ms_per_layer": 1.315727996826172
+          },
+          {
+            "host_elapsed_ms_per_layer": 1.3571560999999999,
+            "stream_elapsed_ms_per_layer": 1.3566495895385742
+          },
+          {
+            "host_elapsed_ms_per_layer": 1.3296455999999999,
+            "stream_elapsed_ms_per_layer": 1.329139232635498
+          },
+          {
+            "host_elapsed_ms_per_layer": 1.322044,
+            "stream_elapsed_ms_per_layer": 1.3214624404907227
+          },
+          {
+            "host_elapsed_ms_per_layer": 1.3572185,
+            "stream_elapsed_ms_per_layer": 1.3566944122314453
+          }
+        ]
+      },
+      "q4k": {
+        "dispatch": {
+          "down": {
+            "activation_scale_layout": "None",
+            "activation_scheme": "None",
+            "expected_kernel_family_from_source_dispatch": "mul_mat_q Q4K (MMQ)",
+            "method": "gguf",
+            "packed_affine_prepared": false
+          },
+          "gate_up": {
+            "fusion": "try_fused_quantized_ffn, then fused gate/up fallback, as in the production unpacked MLP",
+            "gate": {
+              "activation_scale_layout": "None",
+              "activation_scheme": "None",
+              "expected_kernel_family_from_source_dispatch": "mul_mat_q Q4K (MMQ)",
+              "method": "gguf",
+              "packed_affine_prepared": false
+            },
+            "up": {
+              "activation_scale_layout": "None",
+              "activation_scheme": "None",
+              "expected_kernel_family_from_source_dispatch": "mul_mat_q Q4K (MMQ)",
+              "method": "gguf",
+              "packed_affine_prepared": false
+            }
+          },
+          "source_dispatch_is_not_a_measured_kernel_trace": true
+        },
+        "own_dequantized_weight_reference": {
+          "cosine": 0.9999839427750171,
+          "max_abs": 0.7431869506835938,
+          "relative_rms": 0.0057056741930674995
+        },
+        "timings": [
+          {
+            "host_elapsed_ms_per_layer": 0.9253752000000001,
+            "stream_elapsed_ms_per_layer": 0.9248991966247558
+          },
+          {
+            "host_elapsed_ms_per_layer": 0.9891321,
+            "stream_elapsed_ms_per_layer": 0.9886112213134766
+          },
+          {
+            "host_elapsed_ms_per_layer": 0.9162903,
+            "stream_elapsed_ms_per_layer": 0.9158432006835937
+          },
+          {
+            "host_elapsed_ms_per_layer": 0.9198359,
+            "stream_elapsed_ms_per_layer": 0.919382381439209
+          },
+          {
+            "host_elapsed_ms_per_layer": 0.9561095999999999,
+            "stream_elapsed_ms_per_layer": 0.9556351661682129
+          },
+          {
+            "host_elapsed_ms_per_layer": 0.9643321,
+            "stream_elapsed_ms_per_layer": 0.9638560295104981
+          },
+          {
+            "host_elapsed_ms_per_layer": 0.9207046999999999,
+            "stream_elapsed_ms_per_layer": 0.9202431678771973
+          }
+        ]
+      },
+      "rows": 56
+    }
+  ],
+  "rounds": 7,
+  "source_directory": "/home/ericbuehler/.cache/huggingface/hub/models--Qwen--Qwen3.8-27B-FP8/snapshots/017b9c7af6b5689d5dd426a76e0bc077eb5ca20a",
+  "warmups": 3
+}

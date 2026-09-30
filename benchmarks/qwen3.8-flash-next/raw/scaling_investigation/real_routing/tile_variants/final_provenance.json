@@ -1,0 +1,59 @@
+{
+  "completed_at": "2026-09-30T14:22:46.212886+00:00",
+  "runtime_sources_and_production_cli_unchanged": {
+    "/home/ericbuehler/mistral.rs/mistralrs-quant/kernels/mmq_gguf/mmq_instance_q4_k.cu": true,
+    "/home/ericbuehler/mistral.rs/mistralrs-quant/kernels/mmq_gguf/mmq_instance_q4_1.cu": true,
+    "/home/ericbuehler/mistral.rs/target/release/build/mistralrs-quant-1c0ce6ee625e3844/out/libmistralrsquant.a": true,
+    "/home/ericbuehler/mistral.rs/target/release/mistralrs": true
+  },
+  "restoration": "Not needed: variant CUDA sources and native archive existed only externally. Repository production sources, cached native archive, and CLI were never modified.",
+  "check_command": [
+    "cargo",
+    "check",
+    "--release",
+    "-p",
+    "mistralrs-quant",
+    "--features",
+    "cuda,cutile",
+    "--test",
+    "moe_dispatch_bench"
+  ],
+  "check_passed": true,
+  "check_log_sha256": "a9314aaea48b7bb41cf43fd657e1dc5bcbd9fe26616655ddd55648a072844f25",
+  "paused_editor_processes": [
+    {
+      "pid": 2305338,
+      "comm": "cpptools",
+      "starttime": "14809480",
+      "prior_state": "S",
+      "command": "/home/ericbuehler/.vscode-server/extensions/ms-vscode.cpptools-1.34.4-linux-arm64/bin/cpptools ",
+      "paused_at": "2026-09-30T14:20:10.906803+00:00"
+    },
+    {
+      "pid": 2305477,
+      "comm": "cpptools-srv2",
+      "starttime": "14810059",
+      "prior_state": "S",
+      "command": "/home/ericbuehler/.vscode-server/extensions/ms-vscode.cpptools-1.34.4-linux-arm64/bin/cpptools-srv2 -s {A87F9CA0-8445-463D-8DA7-02DA6CB8D331} -p 2305338 -i TagParser ",
+      "paused_at": "2026-09-30T14:20:50.167516+00:00"
+    },
+    {
+      "pid": 2305493,
+      "comm": "cpptools-srv2",
+      "starttime": "14810062",
+      "prior_state": "S",
+      "command": "/home/ericbuehler/.vscode-server/extensions/ms-vscode.cpptools-1.34.4-linux-arm64/bin/cpptools-srv2 -s {5A5F04A1-AA98-42ED-BD79-FC3B40C71D8B} -p 2305338 -i TagParser ",
+      "paused_at": "2026-09-30T14:20:50.167580+00:00"
+    }
+  ],
+  "editor_restoration_owner": "root; identities recorded for later SIGCONT",
+  "recommendation": "Keep production grouped MMQ tile selection unchanged. Smaller 16/32 tiles are bit-exact for all 25 captured/derived cases but offer no reliable performance gain beyond observed drift.",
+  "resources": "All compared compiled template resources match baseline/variant copies. Tiles 16/32 reduce registers but still exceed 128 registers/thread at 256 threads/CTA; no expected register-limited residency increase.",
+  "timing_scope": "Repeated warm eager expert layer 8 pipeline; same captured inputs/routes/weights. 25 cases include 5 native M42, 5 native M56, and 5 each derived B8xQ3/4/5. No end-to-end throughput claim.",
+  "summary_sha256": "600776379a3e6e3d321f7858db2e1ffd7f04b77a61021f0a2310614a72ec66ff",
+  "notes": [
+    "Initial baseline/patched_unset phases preceded uniform monitoring and editor pause; main summary uses monitored phases only.",
+    "nvidia-smi 1Hz windows cover loading/checks/warmups/timings. GPU memory clocks unavailable.",
+    "Unchanged GEMV median timing ratio 0.993 to 1.021 is a drift observation, not a correction factor."
+  ]
+}

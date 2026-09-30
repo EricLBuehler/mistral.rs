@@ -1,0 +1,87 @@
+{
+  "query": "SELECT COUNT(*) AS transfer_count, COALESCE(SUM(m.bytes),0) AS total_bytes,\n       COALESCE(SUM(m.end-m.start),0) AS summed_transfer_duration_ns\nFROM CUPTI_ACTIVITY_KIND_MEMCPY AS m JOIN ENUM_CUDA_MEMCPY_OPER AS k ON k.id=m.copyKind\nWHERE k.name='CUDA_MEMCPY_KIND_DTOH' AND m.bytes=?",
+  "query_parameters": [
+    993280
+  ],
+  "cases": [
+    {
+      "capture": "c1",
+      "source_sqlite": "/home/ericbuehler/qwen4exp_work/batched_draft_20260929/profile_c1.sqlite",
+      "transfer_count": 0,
+      "total_bytes": 0,
+      "summed_transfer_duration_ns": 0
+    },
+    {
+      "capture": "c8",
+      "source_sqlite": "/home/ericbuehler/qwen4exp_work/batched_draft_20260929/profile_c8.sqlite",
+      "transfer_count": 5,
+      "total_bytes": 4966400,
+      "summed_transfer_duration_ns": 111648
+    }
+  ],
+  "baseline": {
+    "vocab_size": 248320,
+    "bytes_per_logit": 4,
+    "matched_transfer_size_bytes": 993280,
+    "query": "SELECT COUNT(*) AS transfer_count,\n       COALESCE(SUM(m.bytes),0) AS total_bytes,\n       COALESCE(SUM(m.end-m.start),0) AS summed_transfer_duration_ns\nFROM CUPTI_ACTIVITY_KIND_MEMCPY AS m\nJOIN ENUM_CUDA_MEMCPY_OPER AS k ON k.id=m.copyKind\nWHERE k.name='CUDA_MEMCPY_KIND_DTOH' AND m.bytes=?",
+    "query_parameters": [
+      993280
+    ],
+    "cases": [
+      {
+        "capture": "c1",
+        "source_sqlite": "/home/ericbuehler/qwen4exp_work/concurrency_20260929/profile_c1.sqlite",
+        "source_sqlite_bytes": 152031232,
+        "export_metadata": {
+          "EXPORT_PRODUCT_VERSION": "2025.6.3.541",
+          "EXPORT_SCHEMA_VERSION": "3.24.8",
+          "EXPORT_TIME_UTC": "2026-09-30T00:50:55",
+          "EXPORT_PARAM_INPUT_PATH_ABS": "/home/ericbuehler/qwen4exp_work/concurrency_20260929/mtp_concurrency.nsys-rep"
+        },
+        "transfer_count": 0,
+        "total_bytes": 0,
+        "summed_transfer_duration_ns": 0
+      },
+      {
+        "capture": "c6",
+        "source_sqlite": "/home/ericbuehler/qwen4exp_work/concurrency_20260929/profile_c6.sqlite",
+        "source_sqlite_bytes": 278732800,
+        "export_metadata": {
+          "EXPORT_PRODUCT_VERSION": "2025.6.3.541",
+          "EXPORT_SCHEMA_VERSION": "3.24.8",
+          "EXPORT_TIME_UTC": "2026-09-30T00:51:14",
+          "EXPORT_PARAM_INPUT_PATH_ABS": "/home/ericbuehler/qwen4exp_work/concurrency_20260929/profile_c6.nsys-rep"
+        },
+        "transfer_count": 3415,
+        "total_bytes": 3392051200,
+        "summed_transfer_duration_ns": 65934464
+      },
+      {
+        "capture": "c8",
+        "source_sqlite": "/home/ericbuehler/qwen4exp_work/concurrency_20260929/profile_c8.sqlite",
+        "source_sqlite_bytes": 224362496,
+        "export_metadata": {
+          "EXPORT_PRODUCT_VERSION": "2025.6.3.541",
+          "EXPORT_SCHEMA_VERSION": "3.24.8",
+          "EXPORT_TIME_UTC": "2026-09-30T00:51:30",
+          "EXPORT_PARAM_INPUT_PATH_ABS": "/home/ericbuehler/qwen4exp_work/concurrency_20260929/profile_c8.nsys-rep"
+        },
+        "transfer_count": 2913,
+        "total_bytes": 2893424640,
+        "summed_transfer_duration_ns": 55713632
+      }
+    ],
+    "interpretation": "Full F32 vocabulary D2H transfers are absent at C1 but numerous at C6/C8. Source tracing identifies per-row draft sampling as a consumer; transfer-size matching alone does not attribute every transfer to a source call.",
+    "duration_caveat": "Summed memcpy durations measure recorded transfer activity only. They exclude CPU argmax/softmax, allocation, host synchronization and launch/wait overhead, so they are not the full cost of draft sampling.",
+    "profile_caveat": "These are diagnostic profiles from Nsight2025.6.3 hardware tracing, not unprofiled throughput measurements. Kernel activity timestamps are missing in all three exports; memcpy records remain available.",
+    "source_paths": {
+      "draft_loop": "mistralrs-core/src/speculative/builtin_mtp.rs:329",
+      "row_sampling": "mistralrs-core/src/speculative/proposer.rs:455 (pre-fastpath implementation)",
+      "greedy_eligibility": "mistralrs-core/src/sampler.rs:1365",
+      "host_logits_copy": "mistralrs-core/src/sampler.rs:2183",
+      "host_argmax_and_softmax": "mistralrs-core/src/sampler.rs:1163"
+    },
+    "reproduce": "python3 /home/ericbuehler/qwen4exp_work/concurrency_20260929/draft_sampling_transfer_evidence.py"
+  },
+  "caveat": "Recorded transfer durations exclude host synchronization, CPU argmax/softmax and temporary allocations. These profiles diagnose work; do not compare profiled throughput with unprofiled benchmarks."
+}

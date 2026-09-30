@@ -1,0 +1,94 @@
+{
+  "complete": true,
+  "prepared_at": "2026-09-30T13:40:31.079153+00:00",
+  "command": [
+    "/home/ericbuehler/mistral.rs/target/release/deps/dense_backend_bench-17a9411696af18c4",
+    "--exact",
+    "dense_qwen38_fp8_vs_q4k_microbenchmark",
+    "--ignored",
+    "--nocapture",
+    "--test-threads=1"
+  ],
+  "cwd": "/home/ericbuehler/mistral.rs",
+  "binary": "/home/ericbuehler/mistral.rs/target/release/deps/dense_backend_bench-17a9411696af18c4",
+  "binary_sha256": "4b4e51ba0c19494651090f52b80c69522d9122ece218f2745ac34aff9f8d2d24",
+  "source": "/home/ericbuehler/mistral.rs/mistralrs-quant/tests/dense_backend_bench.rs",
+  "source_sha256": "76bccb2cea5d97b1fc1852bed9513c570cb774904407fb523325d2ea7a380262",
+  "controller_sha256": "746f35e30b9bbde1b83aca2a398523e736fafacbcba299d7cfc0dcdac25c5c91",
+  "git_head": "0003cf35120f696e063d64993c36e25969cad422",
+  "source_diff_sha256": "4db87b81f6adcb127b54f7d4dbb2011986c31cbb6d9d36d842e9eade928c489e",
+  "environment_overrides": {
+    "MISTRALRS_DENSE_BENCH_SAFETENSORS": "/home/ericbuehler/.cache/huggingface/hub/models--Qwen--Qwen3.8-27B-FP8/snapshots/017b9c7af6b5689d5dd426a76e0bc077eb5ca20a",
+    "MISTRALRS_DENSE_BENCH_OUTPUT": "/home/ericbuehler/qwen4exp_work/kernel_comparison_20260930/dense_projection/results.json"
+  },
+  "performance_environment": {
+    "CUDA_VISIBLE_DEVICES": null,
+    "MISTRALRS_GGUF_AFFINE_BACKEND": null,
+    "CUDA_LAUNCH_BLOCKING": null,
+    "RAYON_NUM_THREADS": null,
+    "OMP_NUM_THREADS": null
+  },
+  "snapshot": "/home/ericbuehler/.cache/huggingface/hub/models--Qwen--Qwen3.8-27B-FP8/snapshots/017b9c7af6b5689d5dd426a76e0bc077eb5ca20a",
+  "weight_map": {
+    "model.language_model.layers.0.mlp.gate_proj.weight": "layers-0.safetensors",
+    "model.language_model.layers.0.mlp.gate_proj.weight_scale_inv": "layers-0.safetensors",
+    "model.language_model.layers.0.mlp.up_proj.weight": "layers-0.safetensors",
+    "model.language_model.layers.0.mlp.up_proj.weight_scale_inv": "layers-0.safetensors",
+    "model.language_model.layers.0.mlp.down_proj.weight": "layers-0.safetensors",
+    "model.language_model.layers.0.mlp.down_proj.weight_scale_inv": "layers-0.safetensors"
+  },
+  "checkpoint_files": {
+    "config.json": "74227dd615bf1ea975aa676bdf355a0379858c12f394b5365cd9dfa5fc2c70bc",
+    "layers-0.safetensors": "07f700e293baeaf3cd4240c3df1a948c4403f16961ea7979e86c8d6a9f8fd466",
+    "model.safetensors.index.json": "f0838c766951bdfe76d6afbdb2771a8f67aaa2231dedb3d33cebd817729843a2"
+  },
+  "implementation_sha256": {
+    "mistralrs-quant/src/blockwise_fp8/mod.rs": "ee216d1ba12fb3d397af6cf6ebf80d1372615e8f18e34e1ed0b467915cd711d9",
+    "mistralrs-quant/src/blockwise_fp8/mma.rs": "6d27c055ebe68650300ff9179843103a78b0a7e53939d084b2404646124b4c41",
+    "mistralrs-quant/src/cutile/fp8_gemm.rs": "c32842cc661140609005b21d626ae5877df9daeb440767ad4b0ab2104ea19f1f",
+    "mistralrs-quant/kernels/blockwise_fp8/blockwise_fp8_mma.cu": "e5fc886bb47c7e4cc569535bdada115522a1569ab3d378ac9b7a3ff136d823b0",
+    "mistralrs-quant/src/gguf/mod.rs": "9fdf8c7b3ef8532284029359498095eff1bbb2dec2965492a24b90b854b1c815",
+    "mistralrs-quant/src/gguf/fast_mmvq.rs": "44f8f7f5c3545c106d6ea807fedd38a4a4820d347d2fbc7f75a370f4da278c3d",
+    "mistralrs-quant/src/gguf/fast_mmq.rs": "7ef69810435e2f00e54e4121b7aeec0f71a82fd094103f9d44ebfaf60a67497e",
+    "mistralrs-quant/src/gguf/packed_affine.rs": "6adebf7dc7ee0b23d343fc360aeb3d4982474e0f415a718d3368e7deaf7668d7",
+    "mistralrs-quant/kernels/mmvq_gguf/mmvq_gguf.cu": "1d3ebcf559fecdcb14fe65ed08fc4d48ddacdd8e42c9f3fdbb53f1d957eb61cb",
+    "mistralrs-quant/kernels/mmq_gguf/mmq_gguf.cuh": "dcd3e00a749cc0725bd21a6d6b2a393f825d51c349441fb80a9a8b4747f0c57b",
+    "mistralrs-quant/kernels/mmq_gguf/mmq_instance_q4_k.cu": "04f082040de2264f8e462c580821c18f932389434e266f24341036d2129e8198",
+    "mistralrs-core/src/layers.rs": "1dca3ff96870491830d9d967998bdde7774b823f440bff8ffb5a9a0500d86688",
+    "mistralrs-core/src/ops.rs": "f1c4f04b05506d8eb6cc534875cdca122f5211eb8672e3f2eaeee748a2379aa8",
+    "mistralrs-quant/src/lib.rs": "1d539002844d57edd098eac6ffc1cc89dd039d37ae767a242d98a6b00331c627",
+    "Cargo.lock": "a899910310b8476876154ae19913e83c75624f8a646a561a8f68727c56a7bac7"
+  },
+  "limitations": [
+    "Q4K derives from already-FP8 weights and is a timing control, not a quality comparison.",
+    "The model is not loaded; this is an isolated FFN pipeline using synthetic activations.",
+    "CUDA-event intervals include CPU launch gaps; graph replay is not measured."
+  ],
+  "isolation_before": {
+    "at": "2026-09-30T13:40:31.349158+00:00",
+    "processes": [
+      {
+        "pid": 2122897,
+        "name": "rust-analyzer",
+        "state": "T"
+      }
+    ]
+  },
+  "started_at": "2026-09-30T13:40:31.349169+00:00",
+  "returncode": 0,
+  "elapsed_seconds": 5.797706701006973,
+  "finished_at": "2026-09-30T13:40:37.147000+00:00",
+  "log_sha256": "ce0d404fd8a3a8911d8c9ba924fd1a5cfb9619af5862b6968764e110e692c971",
+  "isolation_after": {
+    "at": "2026-09-30T13:40:37.152785+00:00",
+    "processes": [
+      {
+        "pid": 2122897,
+        "name": "rust-analyzer",
+        "state": "T"
+      }
+    ]
+  },
+  "results_sha256": "1a72f9dfa76f4d028b5877a60b47e52cba57d5a3bf3f9dfd860c1ab06c8f2a5f",
+  "summary_sha256": "14988c1c78a5e96ce292a5ec6579c8577ec84b7e6ed0bfc27fb720883078b6f9"
+}

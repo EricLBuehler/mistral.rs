@@ -1,0 +1,133 @@
+[
+  {
+    "name": "isq_mtp_tuner.serving",
+    "command": [
+      "python3",
+      "/home/ericbuehler/mistral.rs/benchmarks/qwen3.8-flash-next/bench_serving.py",
+      "--tokenizer",
+      "/home/ericbuehler/.cache/huggingface/hub/models--Qwen--Qwen3.8-Flash-Next/snapshots/de4b8e4d43b917e7706784d8bb445c9af86a3540/tokenizer.json",
+      "--label",
+      "isq_mtp",
+      "--output",
+      "/home/ericbuehler/qwen4exp_work/tuner_exploration_20260930/isq_mtp_tuner.json"
+    ],
+    "started_utc": "2026-09-30T04:29:19.560546+00:00",
+    "started_monotonic": 113450.405718747,
+    "started_raw": 113449.694914368,
+    "returncode": 0,
+    "finished_utc": "2026-09-30T04:35:00.119047+00:00",
+    "finished_monotonic": 113790.964241616,
+    "finished_raw": 113790.253363856
+  },
+  {
+    "name": "isq_mtp_tuner.text",
+    "command": [
+      "python3",
+      "/home/ericbuehler/mistral.rs/benchmarks/qwen3.8-flash-next/text_smoke.py",
+      "/home/ericbuehler/qwen4exp_work/tuner_exploration_20260930/isq_mtp_tuner.text.json"
+    ],
+    "started_utc": "2026-09-30T04:35:00.121419+00:00",
+    "started_monotonic": 113790.966591857,
+    "started_raw": 113790.25571264,
+    "returncode": 0,
+    "finished_utc": "2026-09-30T04:35:07.821121+00:00",
+    "finished_monotonic": 113798.666305882,
+    "finished_raw": 113797.955421312
+  },
+  {
+    "name": "concurrency_c1",
+    "command": [
+      "python3",
+      "/home/ericbuehler/mistral.rs/benchmarks/qwen3.8-flash-next/bench_concurrency.py",
+      "--label",
+      "isq_mtp_tuner",
+      "--output",
+      "/home/ericbuehler/qwen4exp_work/tuner_exploration_20260930/concurrency.isq_mtp_tuner.c1.json",
+      "--tokenizer",
+      "/home/ericbuehler/.cache/huggingface/hub/models--Qwen--Qwen3.8-Flash-Next/snapshots/de4b8e4d43b917e7706784d8bb445c9af86a3540/tokenizer.json",
+      "--concurrencies",
+      "1",
+      "--requests",
+      "8",
+      "--modes",
+      "closed-loop"
+    ],
+    "started_utc": "2026-09-30T04:35:07.824943+00:00",
+    "started_monotonic": 113798.670116333,
+    "started_raw": 113797.959231424,
+    "returncode": 0,
+    "finished_utc": "2026-09-30T04:37:19.742723+00:00",
+    "finished_monotonic": 113930.587906849,
+    "finished_raw": 113929.876898624
+  },
+  {
+    "name": "concurrency_c6_c8",
+    "command": [
+      "python3",
+      "/home/ericbuehler/mistral.rs/benchmarks/qwen3.8-flash-next/bench_concurrency.py",
+      "--label",
+      "isq_mtp_tuner",
+      "--output",
+      "/home/ericbuehler/qwen4exp_work/tuner_exploration_20260930/concurrency.isq_mtp_tuner.c6_c8.json",
+      "--tokenizer",
+      "/home/ericbuehler/.cache/huggingface/hub/models--Qwen--Qwen3.8-Flash-Next/snapshots/de4b8e4d43b917e7706784d8bb445c9af86a3540/tokenizer.json",
+      "--concurrencies",
+      "6",
+      "8",
+      "--requests",
+      "24",
+      "--modes",
+      "closed-loop"
+    ],
+    "started_utc": "2026-09-30T04:37:19.745788+00:00",
+    "started_monotonic": 113930.590960677,
+    "started_raw": 113929.879951504,
+    "returncode": 0,
+    "finished_utc": "2026-09-30T04:43:17.888077+00:00",
+    "finished_monotonic": 114288.733273306,
+    "finished_raw": 114288.021780576
+  },
+  {
+    "name": "burst_c6",
+    "command": [
+      "python3",
+      "/home/ericbuehler/mistral.rs/benchmarks/qwen3.8-flash-next/bench_concurrency.py",
+      "--label",
+      "isq_mtp_tuner",
+      "--output",
+      "/home/ericbuehler/qwen4exp_work/tuner_exploration_20260930/concurrency.isq_mtp_tuner.burst_c6.json",
+      "--tokenizer",
+      "/home/ericbuehler/.cache/huggingface/hub/models--Qwen--Qwen3.8-Flash-Next/snapshots/de4b8e4d43b917e7706784d8bb445c9af86a3540/tokenizer.json",
+      "--concurrencies",
+      "6",
+      "--requests",
+      "24",
+      "--modes",
+      "burst"
+    ],
+    "started_utc": "2026-09-30T04:43:17.891823+00:00",
+    "started_monotonic": 114288.736998415,
+    "started_raw": 114288.02550464,
+    "returncode": 0,
+    "finished_utc": "2026-09-30T04:46:26.151034+00:00",
+    "finished_monotonic": 114476.996234602,
+    "finished_raw": 114476.284430336
+  },
+  {
+    "name": "mixed_context",
+    "command": [
+      "python3",
+      "/home/ericbuehler/mistral.rs/benchmarks/qwen3.8-flash-next/mixed_context_smoke.py",
+      "/home/ericbuehler/qwen4exp_work/tuner_exploration_20260930/mixed_context.json",
+      "--tokenizer",
+      "/home/ericbuehler/.cache/huggingface/hub/models--Qwen--Qwen3.8-Flash-Next/snapshots/de4b8e4d43b917e7706784d8bb445c9af86a3540/tokenizer.json"
+    ],
+    "started_utc": "2026-09-30T04:46:26.154780+00:00",
+    "started_monotonic": 114476.999955553,
+    "started_raw": 114476.288149984,
+    "returncode": 0,
+    "finished_utc": "2026-09-30T04:46:47.739297+00:00",
+    "finished_monotonic": 114498.58449256,
+    "finished_raw": 114497.872650928
+  }
+]

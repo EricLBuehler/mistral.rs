@@ -1,0 +1,202 @@
+{
+  "started_at": "2026-09-30T13:46:00.038399+00:00",
+  "complete": false,
+  "phase": "replay",
+  "commands": [
+    {
+      "name": "capture_requests",
+      "command": [
+        "/home/ericbuehler/mistral.rs/.venv/bin/python3",
+        "/home/ericbuehler/qwen4exp_work/real_routing_20260930/capture_requests.py",
+        "--directory",
+        "/home/ericbuehler/qwen4exp_work/real_routing_20260930/runtime/captures",
+        "--output",
+        "/home/ericbuehler/qwen4exp_work/real_routing_20260930/runtime/requests.json",
+        "--base-url",
+        "http://127.0.0.1:1234",
+        "--max-tokens",
+        "128"
+      ],
+      "started_at": "2026-09-30T14:00:10.105471+00:00",
+      "log": "capture_requests.log",
+      "pid": 2303100,
+      "finished_at": "2026-09-30T14:00:53.191034+00:00",
+      "returncode": 0
+    },
+    {
+      "name": "validate_capture",
+      "command": [
+        "/home/ericbuehler/mistral.rs/.venv/bin/python3",
+        "/home/ericbuehler/qwen4exp_work/real_routing_20260930/validate_capture.py",
+        "/home/ericbuehler/qwen4exp_work/real_routing_20260930/runtime/captures",
+        "--requests",
+        "/home/ericbuehler/qwen4exp_work/real_routing_20260930/runtime/requests.json",
+        "--output",
+        "/home/ericbuehler/qwen4exp_work/real_routing_20260930/runtime/capture.validation.json"
+      ],
+      "started_at": "2026-09-30T14:00:53.195528+00:00",
+      "log": "validate_capture.log",
+      "pid": 2303316,
+      "finished_at": "2026-09-30T14:00:54.921661+00:00",
+      "returncode": 0
+    },
+    {
+      "name": "replay",
+      "command": [
+        "/home/ericbuehler/qwen4exp_work/real_routing_20260930/build/moe_dispatch_bench.capture",
+        "--exact",
+        "flash_next_real_routing_replay",
+        "--ignored",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "started_at": "2026-09-30T14:00:56.596839+00:00",
+      "log": "replay.log",
+      "pid": 2303369,
+      "finished_at": "2026-09-30T14:01:00.328322+00:00",
+      "returncode": 101
+    }
+  ],
+  "scope": "Diagnostic capture and isolated kernel replay; no end-to-end throughput claim",
+  "scripts_sha256": {
+    "run_diagnostic.py": "473180a3c3a5d475a584a8e26a427b6d8ee5415f1b39c736a2c0d63a7d6bb494",
+    "build_diagnostic.py": "a4de06ddbd9819f43a3484053a7ea8b52c60ceccfae1e706611dd0fa111d1aa8",
+    "capture_requests.py": "b54b4d830a05dd9fe2f608afa0678d685cec5706729a38d0c85ad043296f6f78",
+    "control_capture.py": "f33367b67b6cfd62c046bf9aeab3b7077ae00eb0fc81eb8feac144bfa8b6dc2c",
+    "validate_capture.py": "141a43f9fd50bd41167dba698d4b13b13fef596e2ad4dc7d7b1be7f3cf78b86a",
+    "summarize_replay.py": "47244a9f85cf2a8db2ff1ad54ae77401ec2aa062d9e79f8a3c295d90219dbf0e",
+    "capture.patch": "32265a4f03653c4764bb6fdcee526a35158716a44feab8cf565e4c0c0589cf90",
+    "replay.patch": "6e700989de28ad275aa68c47ead1c68649235cab4a6730ebc5525bd0cbcb837f",
+    "source_manifest.json": "82092a23215fb7e79997052d9a6838e8e1acecf79c0bec8971adbdb02597ea82",
+    "README.md": "abaff75b1e300e8a1c2b25b1530d1f6a8f5b0394e7c1970253a72343a6ccfbbc",
+    "test_request_runner.py": "ad913450508416cfa5dcc8ffd393d92cd1f890fb6edaaf945b841ff6ca537854",
+    "request_runner.selftest.json": "843f5c618c1310cdd31864f85d421e4cbadadaf9ae35c0f1f2cddefe07879c59"
+  },
+  "isolation_before_server": {
+    "at": "2026-09-30T13:46:00.628076+00:00",
+    "processes": [
+      {
+        "pid": 2122897,
+        "name": "rust-analyzer",
+        "state": "T"
+      }
+    ]
+  },
+  "build_metadata_sha256": "0e3e3fe5401746c48772c5cbcc9b1f7e4c61cb6efe1dae2490d084a1acc93bab",
+  "source_manifest_sha256": "82092a23215fb7e79997052d9a6838e8e1acecf79c0bec8971adbdb02597ea82",
+  "diagnostic_binary": {
+    "path": "/home/ericbuehler/qwen4exp_work/real_routing_20260930/build/mistralrs.capture",
+    "sha256": "2433b522f88c954161163a5e31eeee2bfa7e54cc198bb69cc173d8420964d598"
+  },
+  "replay_binary": {
+    "path": "/home/ericbuehler/qwen4exp_work/real_routing_20260930/build/moe_dispatch_bench.capture",
+    "sha256": "0812a3b7d970c5266dd8c0f3bbb9fb4fda1cc0b3dd1fda2f5d961ca099f16512"
+  },
+  "snapshot": "/home/ericbuehler/.cache/huggingface/hub/models--Qwen--Qwen3.8-Flash-Next/snapshots/de4b8e4d43b917e7706784d8bb445c9af86a3540",
+  "checkpoint_metadata_sha256": {
+    "config.json": "889658f2508e8c61d409b02e70e0d78d8d4452ec65aaafbe129805d213d2e74b",
+    "model.safetensors.index.json": "99e815241ef03325536b0aaa4441deea45174c17fae31e10f0bb456410c590de",
+    "tokenizer.json": "0997f410c57a1f4e53b09e4be8f4a172d90edd9564368fb0847030937229b9f3"
+  },
+  "git_head": "0003cf35120f696e063d64993c36e25969cad422",
+  "memory_scope": "Global swap counters and process RSS across startup/capture only; not a kernel bandwidth measurement",
+  "prompts_source_sha256": "a16b5815b8744def761174e396de92e41ecd499afae712255721c20a33a79705",
+  "server_command": [
+    "/home/ericbuehler/qwen4exp_work/real_routing_20260930/build/mistralrs.capture",
+    "serve",
+    "--no-ui",
+    "--host",
+    "127.0.0.1",
+    "-p",
+    "1234",
+    "--max-model-len",
+    "16384",
+    "--max-seqs",
+    "8",
+    "--prefix-cache-n",
+    "0",
+    "-m",
+    "/home/ericbuehler/.cache/huggingface/hub/models--Qwen--Qwen3.8-Flash-Next/snapshots/de4b8e4d43b917e7706784d8bb445c9af86a3540",
+    "--isq",
+    "q4k",
+    "--mtp",
+    "--mtp-n-predict",
+    "6"
+  ],
+  "environment_overrides": {
+    "HF_HUB_OFFLINE": "1",
+    "RUST_LOG": "info",
+    "MISTRALRS_CUDA_GRAPHS": "0",
+    "MISTRALRS_MOE_CAPTURE_DIR": "/home/ericbuehler/qwen4exp_work/real_routing_20260930/runtime/captures"
+  },
+  "performance_environment": {
+    "CUDA_VISIBLE_DEVICES": null,
+    "CUDA_LAUNCH_BLOCKING": null,
+    "MISTRALRS_GGUF_AFFINE_BACKEND": null,
+    "MISTRALRS_IGPU_MEMORY_FRACTION": null,
+    "OMP_NUM_THREADS": null,
+    "RAYON_NUM_THREADS": null
+  },
+  "server_pid": 2262476,
+  "models_response": {
+    "object": "list",
+    "data": [
+      {
+        "id": "default",
+        "object": "model",
+        "created": 1790776808,
+        "owned_by": "local",
+        "root": "default"
+      },
+      {
+        "id": "/home/ericbuehler/.cache/huggingface/hub/models--Qwen--Qwen3.8-Flash-Next/snapshots/de4b8e4d43b917e7706784d8bb445c9af86a3540",
+        "object": "model",
+        "created": 1790776808,
+        "owned_by": "local",
+        "root": "/home/ericbuehler/.cache/huggingface/hub/models--Qwen--Qwen3.8-Flash-Next/snapshots/de4b8e4d43b917e7706784d8bb445c9af86a3540",
+        "status": "loaded"
+      }
+    ]
+  },
+  "startup_seconds": 848.3720761850127,
+  "loaded_executable_sha256": "2433b522f88c954161163a5e31eeee2bfa7e54cc198bb69cc173d8420964d598",
+  "startup_configuration_checks": {
+    "all_48_layers_cuda0": true,
+    "ple_q4": true,
+    "kv_bf16": true,
+    "kv_513_blocks": true,
+    "mtp_six": true,
+    "max_sequences_eight": true,
+    "no_decode_graph_capture_log": true
+  },
+  "startup_configuration_lines": [
+    "2026-09-30T13:46:02.332629Z  INFO mistralrs_quant::utils::log: Layers 0-47: cuda[0] (121 GB)",
+    "2026-09-30T13:59:08.203555Z  INFO mistralrs_core::vision_models::qwen4_exp::ple: Qwen4-Exp PLE table resident in device memory format=Q4 size_gb=26 elapsed_s=155",
+    "2026-09-30T13:59:33.682894Z  INFO mistralrs_core::paged_attention: PagedAttention KV cache type is BF16",
+    "2026-09-30T13:59:33.683177Z  INFO mistralrs_core::paged_attention: Using PagedAttention with block size 32 and 513 GPU blocks: available context length is 16384 tokens",
+    "2026-09-30T14:00:00.056273Z  INFO mistralrs_core::speculative::logging: Speculative decoding enabled: MTP assistant `built-in` with n_predict=6",
+    "2026-09-30T14:00:07.524014Z  INFO mistralrs_core::paged_attention::scheduler: Configured PagedAttention scheduler max_num_seqs=8 max_num_batched_tokens=4096 max_prefill_chunk_tokens=512 max_decode_steps_before_prefill=8"
+  ],
+  "server_returncode": -15,
+  "server_stopped_at": "2026-09-30T14:00:56.564358+00:00",
+  "server_pid_gone": true,
+  "isolation_before_replay": {
+    "at": "2026-09-30T14:00:56.591711+00:00",
+    "processes": [
+      {
+        "pid": 2122897,
+        "name": "rust-analyzer",
+        "state": "T"
+      }
+    ]
+  },
+  "replay_environment_overrides": {
+    "MISTRALRS_MOE_REPLAY_DIR": "/home/ericbuehler/qwen4exp_work/real_routing_20260930/runtime/captures",
+    "MISTRALRS_MOE_BENCH_OUTPUT": "/home/ericbuehler/qwen4exp_work/real_routing_20260930/runtime/replay.json"
+  },
+  "error": {
+    "type": "CalledProcessError",
+    "message": "Command '['/home/ericbuehler/qwen4exp_work/real_routing_20260930/build/moe_dispatch_bench.capture', '--exact', 'flash_next_real_routing_replay', '--ignored', '--nocapture', '--test-threads=1']' returned non-zero exit status 101."
+  },
+  "failed_at": "2026-09-30T14:01:00.330260+00:00"
+}

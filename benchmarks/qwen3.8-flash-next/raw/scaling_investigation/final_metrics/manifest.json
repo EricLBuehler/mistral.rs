@@ -1,0 +1,92 @@
+{
+  "scope": "Saved before/after counters across six whole subprocesses, including warmups; C6+C8 combined.",
+  "source_directory": "/home/ericbuehler/qwen4exp_work/tuner_exploration_20260930",
+  "binary_sha256": "d245efbb543fa8131f71aee34fef3a868cb1f3c0cfba8eaafd5b4fd7d4c64588",
+  "source_diff_sha256": "4db87b81f6adcb127b54f7d4dbb2011986c31cbb6d9d36d842e9eade928c489e",
+  "validation": {
+    "subprocesses": 6,
+    "snapshot_pairs": 6,
+    "nonnegative_finite_counter_deltas": true,
+    "accepted_position_sums_match": true,
+    "loaded_binary_matches_built_binary": true,
+    "packaged_summary_recomputed_without_server_access": true
+  },
+  "files": {
+    "README.md": {
+      "sha256": "be2fd1760cc377939f86493c228910b88ca8192ded9d4e7cb2ae485dc305bddd",
+      "bytes": 2224
+    },
+    "burst_c6.metrics.after.txt": {
+      "sha256": "4cc6297b222419704d9df139b90750034675056b40b39f43cc34ffdb84769343",
+      "bytes": 30141
+    },
+    "burst_c6.metrics.before.txt": {
+      "sha256": "6296cdc3331d7e83915f23a4b41343c756fb021df1252eaf3189433cc9ef2683",
+      "bytes": 30132
+    },
+    "concurrency_c1.metrics.after.txt": {
+      "sha256": "3da3e25761bee05bead08e6b3abeef6de1bb55211ce60d95a48750d1b2eedb4f",
+      "bytes": 30134
+    },
+    "concurrency_c1.metrics.before.txt": {
+      "sha256": "755d7782165e9d43ad223f282665f93457fb4fd386aa7c36ccb3a9792abb5558",
+      "bytes": 30131
+    },
+    "concurrency_c6_c8.metrics.after.txt": {
+      "sha256": "08247bc4c0b13e4d87a0082f3c07f63ef4feb81748e690d8ecffd8ce24ecb99b",
+      "bytes": 30132
+    },
+    "concurrency_c6_c8.metrics.before.txt": {
+      "sha256": "b7874d2a9ec671887ab17ae24fdf1273924e1f4cc67370e317b56f010ac49094",
+      "bytes": 30134
+    },
+    "isq_mtp_tuner.serving.metrics.after.txt": {
+      "sha256": "20466c6a3ec07f76ccad985f4c9104c1c5bed8ad2f81c42d4fd0e2c3d258a2ec",
+      "bytes": 21410
+    },
+    "isq_mtp_tuner.serving.metrics.before.txt": {
+      "sha256": "db32d63ff72a42d85b871176b7c465c11dbc985a2c5342a84c5a5106b8280ac5",
+      "bytes": 10604
+    },
+    "isq_mtp_tuner.text.metrics.after.txt": {
+      "sha256": "c20949a0d6595247789f087a43ca2f8df1b545271249db1ca53a5635509571b4",
+      "bytes": 30131
+    },
+    "isq_mtp_tuner.text.metrics.before.txt": {
+      "sha256": "62f7584c8ba69b32fb8532d770cec7a4e0908fe5931ceb40331de15839c802c2",
+      "bytes": 21410
+    },
+    "measurement_commands.json": {
+      "sha256": "e879ea1be187d296c967443f78a9d4abb590c7bbea1e2c687d4052c239e23613",
+      "bytes": 4743
+    },
+    "measurements-complete": {
+      "sha256": "06b082659b3ff4b0428631c0e2e71721616a5aab02333130b8dceddbc2c1a257",
+      "bytes": 32
+    },
+    "metrics.snapshots.json": {
+      "sha256": "5149d7744d9150c7c3de877d3540ebb57e1ac692e7aa976504505cbde4d985c5",
+      "bytes": 342677
+    },
+    "metrics.summary.json": {
+      "sha256": "40f2d4d25d0d6372ffe5719b9da59b5790c8947ac91d81eced08bd43f1488333",
+      "bytes": 76719
+    },
+    "mixed_context.metrics.after.txt": {
+      "sha256": "c5b4c32816a383f33dbb5bf95c39269575a0ecd8ecaafac743c931ab84e8497d",
+      "bytes": 30136
+    },
+    "mixed_context.metrics.before.txt": {
+      "sha256": "be17dd7ce23dc23c83805d84ddd80712ca58b176f3a611f0b4e5aff7717c29ad",
+      "bytes": 30141
+    },
+    "pre_measurement_provenance.json": {
+      "sha256": "249b154ce026726af0f14c2fdc3e6248c0cda756579b9067a7ef9bd251dbc662",
+      "bytes": 1967
+    },
+    "summarize_metrics.py": {
+      "sha256": "df007fe74214dbf6b433decb6dab8652f82980c7be687e5e29adf94afaad71d8",
+      "bytes": 7877
+    }
+  }
+}

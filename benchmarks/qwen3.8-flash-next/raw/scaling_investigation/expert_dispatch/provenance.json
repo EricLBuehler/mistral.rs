@@ -1,0 +1,177 @@
+{
+  "generated_utc": "2026-09-30T03:33:16.810395+00:00",
+  "repository": "/home/ericbuehler/mistral.rs",
+  "git_head": "0003cf35120f696e063d64993c36e25969cad422",
+  "source": "/home/ericbuehler/mistral.rs/mistralrs-quant/tests/moe_dispatch_bench.rs",
+  "source_sha256": "b425e0ea08ec369755bcc08b265114174f79028e421e3d6a74a327de30988a4e",
+  "binary": "/home/ericbuehler/mistral.rs/target/release/deps/moe_dispatch_bench-0dfba70e2949feab",
+  "binary_sha256": "4d7d54ab33f575192b1b3e1bb998eaf33a2cb907f4235b8d0560265890ab5aad",
+  "build_command": [
+    "cargo",
+    "test",
+    "--release",
+    "-p",
+    "mistralrs-quant",
+    "--features",
+    "cuda,cutile",
+    "--test",
+    "moe_dispatch_bench",
+    "--no-run"
+  ],
+  "build_log": "/home/ericbuehler/qwen4exp_work/moe_dispatch_20260930/build.log",
+  "build_exit_code": 0,
+  "commands": [
+    {
+      "scheme": "gguf",
+      "cwd": "/home/ericbuehler/mistral.rs",
+      "env": {
+        "MISTRALRS_MOE_BENCH_GGUF": "/home/ericbuehler/qwen4exp_work/gguf/UD-Q4_K_XL",
+        "MISTRALRS_MOE_BENCH_OUTPUT": "/home/ericbuehler/qwen4exp_work/moe_dispatch_20260930/gguf.json"
+      },
+      "command": [
+        "/home/ericbuehler/mistral.rs/target/release/deps/moe_dispatch_bench-0dfba70e2949feab",
+        "--ignored",
+        "--exact",
+        "flash_next_expert_dispatch_microbenchmark",
+        "--nocapture"
+      ],
+      "stdout_stderr": "/home/ericbuehler/qwen4exp_work/moe_dispatch_20260930/gguf.log",
+      "exit_code": 0
+    },
+    {
+      "scheme": "isq",
+      "cwd": "/home/ericbuehler/mistral.rs",
+      "env": {
+        "MISTRALRS_MOE_BENCH_SAFETENSORS": "/home/ericbuehler/.cache/huggingface/hub/models--Qwen--Qwen3.8-Flash-Next/snapshots/de4b8e4d43b917e7706784d8bb445c9af86a3540",
+        "MISTRALRS_MOE_BENCH_OUTPUT": "/home/ericbuehler/qwen4exp_work/moe_dispatch_20260930/isq.json"
+      },
+      "command": [
+        "/home/ericbuehler/mistral.rs/target/release/deps/moe_dispatch_bench-0dfba70e2949feab",
+        "--ignored",
+        "--exact",
+        "flash_next_expert_dispatch_microbenchmark",
+        "--nocapture"
+      ],
+      "stdout_stderr": "/home/ericbuehler/qwen4exp_work/moe_dispatch_20260930/isq.log",
+      "exit_code": 0
+    }
+  ],
+  "hardware": {
+    "architecture": "aarch64",
+    "kernel": "6.17.0-1021-nvidia",
+    "logical_cpus": 20,
+    "memory": {
+      "MemTotal": "127600748 kB",
+      "SwapTotal": "16777212 kB"
+    },
+    "gpu": "NVIDIA GB10, 580.126.09",
+    "rust": "rustc 1.98.1 (48a229cea 2026-09-01)",
+    "cuda": "nvcc: NVIDIA (R) Cuda compiler driver\nCopyright (c) 2005-2026 NVIDIA Corporation\nBuilt on Thu_Mar_19_11:11:41_PM_PDT_2026\nCuda compilation tools, release 13.2, V13.2.78\nBuild cuda_13.2.r13.2/compiler.37668154_0",
+    "performance_env": {
+      "CUTILE_TILEIRAS_PATH": "/usr/local/cuda-13.2/bin/tileiras",
+      "CUDA_TOOLKIT_PATH": "/usr/local/cuda",
+      "CUDA_HOME": "/usr/local/cuda"
+    },
+    "python_packages": {
+      "tokenizers": "0.22.1",
+      "Pillow": "11.3.0"
+    }
+  },
+  "hardware_record_note": "Previously captured same-host record; no GPU query was run during these timings.",
+  "performance_env": {
+    "CUDA_HOME": "/usr/local/cuda",
+    "CUDA_TOOLKIT_PATH": "/usr/local/cuda",
+    "CUDA_VISIBLE_DEVICES": null,
+    "CUTILE_TILEIRAS_PATH": "/usr/local/cuda-13.2/bin/tileiras",
+    "CARGO_BUILD_JOBS": null,
+    "RUSTFLAGS": null
+  },
+  "layer": 8,
+  "dimensions": {
+    "experts": 512,
+    "topk": 10,
+    "hidden": 2560,
+    "intermediate": 640
+  },
+  "weights": {
+    "gguf": {
+      "tensors": [
+        "blk.8.ffn_gate_exps.weight",
+        "blk.8.ffn_up_exps.weight",
+        "blk.8.ffn_down_exps.weight"
+      ],
+      "quant_formats": [
+        "Q4K",
+        "Q4K",
+        "Q5_1"
+      ]
+    },
+    "isq": {
+      "snapshot": "de4b8e4d43b917e7706784d8bb445c9af86a3540",
+      "index_path": "/home/ericbuehler/.cache/huggingface/hub/models--Qwen--Qwen3.8-Flash-Next/snapshots/de4b8e4d43b917e7706784d8bb445c9af86a3540/model.safetensors.index.json",
+      "index_sha256": "99e815241ef03325536b0aaa4441deea45174c17fae31e10f0bb456410c590de",
+      "config_sha256": "889658f2508e8c61d409b02e70e0d78d8d4452ec65aaafbe129805d213d2e74b",
+      "tensor_shards": {
+        "model.language_model.layers.8.mlp.experts.gate_up_proj": "model-00127-of-00131.safetensors",
+        "model.language_model.layers.8.mlp.experts.down_proj": "model-00128-of-00131.safetensors"
+      },
+      "quant_formats": [
+        "Q4K",
+        "Q4K",
+        "Q4_1"
+      ],
+      "quantization": "Candle QTensor::quantize_onto CPU BF16 tensor to CUDA; split gate_up_proj at640 rows; Q4_1 down since640 is not divisible by256"
+    }
+  },
+  "weight_files": [
+    {
+      "path": "/home/ericbuehler/qwen4exp_work/gguf/UD-Q4_K_XL/Qwen3.8-Flash-Next-UD-Q4_K_XL-00001-of-00004.gguf",
+      "resolved_path": "/home/ericbuehler/qwen4exp_work/gguf/UD-Q4_K_XL/Qwen3.8-Flash-Next-UD-Q4_K_XL-00001-of-00004.gguf",
+      "bytes": 10946624,
+      "mtime_ns": 1790368058242827181,
+      "content_hash": "not recomputed during concurrent model work"
+    },
+    {
+      "path": "/home/ericbuehler/qwen4exp_work/gguf/UD-Q4_K_XL/Qwen3.8-Flash-Next-UD-Q4_K_XL-00003-of-00004.gguf",
+      "resolved_path": "/home/ericbuehler/qwen4exp_work/gguf/UD-Q4_K_XL/Qwen3.8-Flash-Next-UD-Q4_K_XL-00003-of-00004.gguf",
+      "bytes": 49376141504,
+      "mtime_ns": 1790379166260346385,
+      "content_hash": "not recomputed during concurrent model work"
+    },
+    {
+      "path": "/home/ericbuehler/qwen4exp_work/gguf/UD-Q4_K_XL/Qwen3.8-Flash-Next-UD-Q4_K_XL-00004-of-00004.gguf",
+      "resolved_path": "/home/ericbuehler/qwen4exp_work/gguf/UD-Q4_K_XL/Qwen3.8-Flash-Next-UD-Q4_K_XL-00004-of-00004.gguf",
+      "bytes": 12087983520,
+      "mtime_ns": 1790368406462117077,
+      "content_hash": "not recomputed during concurrent model work"
+    },
+    {
+      "path": "/home/ericbuehler/qwen4exp_work/gguf/UD-Q4_K_XL/Qwen3.8-Flash-Next-UD-Q4_K_XL-00002-of-00004.gguf",
+      "resolved_path": "/home/ericbuehler/qwen4exp_work/gguf/UD-Q4_K_XL/Qwen3.8-Flash-Next-UD-Q4_K_XL-00002-of-00004.gguf",
+      "bytes": 49859583136,
+      "mtime_ns": 1790369023277623765,
+      "content_hash": "not recomputed during concurrent model work"
+    },
+    {
+      "path": "/home/ericbuehler/.cache/huggingface/hub/models--Qwen--Qwen3.8-Flash-Next/snapshots/de4b8e4d43b917e7706784d8bb445c9af86a3540/model-00127-of-00131.safetensors",
+      "resolved_path": "/home/ericbuehler/.cache/huggingface/hub/models--Qwen--Qwen3.8-Flash-Next/blobs/fa0c609906b194b1c5172d7346f971b2ebd41f674af8f1469c2fc9232ccc2506",
+      "bytes": 3355443368,
+      "mtime_ns": 1787858193654569022,
+      "content_hash": "not recomputed during concurrent model work"
+    },
+    {
+      "path": "/home/ericbuehler/.cache/huggingface/hub/models--Qwen--Qwen3.8-Flash-Next/snapshots/de4b8e4d43b917e7706784d8bb445c9af86a3540/model-00128-of-00131.safetensors",
+      "resolved_path": "/home/ericbuehler/.cache/huggingface/hub/models--Qwen--Qwen3.8-Flash-Next/blobs/abfe513d53dd3bc17958ae25518dd0e30300616ecd807bb3ca12563f1ff22314",
+      "bytes": 1832518264,
+      "mtime_ns": 1787858182015634849,
+      "content_hash": "not recomputed during concurrent model work"
+    }
+  ],
+  "implementation_sha256": {
+    "mistralrs-quant/src/gguf/cuda.rs": "3dcbdf72ed0ad678126fe008c3200c3211259b40520f1421173716b368f9b927",
+    "mistralrs-quant/src/gguf/fast_mmq.rs": "7ef69810435e2f00e54e4121b7aeec0f71a82fd094103f9d44ebfaf60a67497e",
+    "mistralrs-quant/kernels/indexed_moe/indexed_moe.cu": "52bfbbd681d838e17e11f84b7c7f5fe4bdfac8812e4e58b31ed3ba9957133b1d",
+    "mistralrs-quant/kernels/mmq_gguf/mmq_gguf.cuh": "dcd3e00a749cc0725bd21a6d6b2a393f825d51c349441fb80a9a8b4747f0c57b",
+    "mistralrs-quant/kernels/mmq_gguf/mmq_instance_q4_k.cu": "04f082040de2264f8e462c580821c18f932389434e266f24341036d2129e8198"
+  }
+}

@@ -1,0 +1,32 @@
+[
+  {
+    "original_path": "/home/ericbuehler/qwen4exp_work/real_routing_20260930/tile_variants/run_variant.py",
+    "archive_path": "helper_sources/tile_variants/run_variant.py",
+    "sha256": "1e85bd1594c48f203f3ddd71e0a4e98b164f47eb0d6e3e18b136481df42ac82d"
+  },
+  {
+    "original_path": "/home/ericbuehler/qwen4exp_work/real_routing_20260930/tile_variants/summarize_variants.py",
+    "archive_path": "helper_sources/tile_variants/summarize_variants.py",
+    "sha256": "e07130a02ebe92ca19d291230bbe3d559ef6a754fe73a0a0729d2f53f69fd1e4"
+  },
+  {
+    "original_path": "/home/ericbuehler/qwen4exp_work/real_routing_20260930/build_diagnostic.py",
+    "archive_path": "helper_sources/build_diagnostic.py",
+    "sha256": "a4de06ddbd9819f43a3484053a7ea8b52c60ceccfae1e706611dd0fa111d1aa8"
+  },
+  {
+    "original_path": "/home/ericbuehler/qwen4exp_work/real_routing_20260930/run_diagnostic.py",
+    "archive_path": "helper_sources/run_diagnostic.py",
+    "sha256": "473180a3c3a5d475a584a8e26a427b6d8ee5415f1b39c736a2c0d63a7d6bb494"
+  },
+  {
+    "original_path": "/home/ericbuehler/qwen4exp_work/real_routing_20260930/profile_streaming16.py",
+    "archive_path": "helper_sources/profile_streaming16.py",
+    "sha256": "5fb0820039f5a44e2b77b49e569485649c496838b7e6124dd38d8fd15d17ee21"
+  },
+  {
+    "original_path": "/home/ericbuehler/qwen4exp_work/real_routing_20260930/profile_selected_replay.py",
+    "archive_path": "helper_sources/profile_selected_replay.py",
+    "sha256": "3175585c198a265b56823243b68efad34790e8045b318c116587bc80b27f9b3f"
+  }
+]

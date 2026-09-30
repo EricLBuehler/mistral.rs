@@ -1,0 +1,2920 @@
+{
+  "label": "isq_mtp_tuner",
+  "date": "2026-09-30T04:35:08.160047+00:00",
+  "python_version": "3.12.3",
+  "harness_sha256": "9f664f3ff278f0f16b24e655477486e93b91aec41bf473510e13f449ab1dbbc3",
+  "shared_prompt_harness_sha256": "a16b5815b8744def761174e396de92e41ecd499afae712255721c20a33a79705",
+  "tokenizer_sha256": "0997f410c57a1f4e53b09e4be8f4a172d90edd9564368fb0847030937229b9f3",
+  "prompts_sha256": "ff2600daa58028527e50710169fcd5915b28e894b7ef4a2b6438b66563812793",
+  "settings": {
+    "base_url": "http://127.0.0.1:1234",
+    "label": "isq_mtp_tuner",
+    "output": "/home/ericbuehler/qwen4exp_work/tuner_exploration_20260930/concurrency.isq_mtp_tuner.c1.json",
+    "tokenizer": "/home/ericbuehler/.cache/huggingface/hub/models--Qwen--Qwen3.8-Flash-Next/snapshots/de4b8e4d43b917e7706784d8bb445c9af86a3540/tokenizer.json",
+    "concurrencies": [
+      1
+    ],
+    "modes": [
+      "closed-loop"
+    ],
+    "trials": 5,
+    "warmup": 2,
+    "requests": 8,
+    "max_tokens": 128,
+    "timeout": 1800,
+    "expected_prompt_tokens": {
+      "python": 17,
+      "rust": 17,
+      "prose": 11,
+      "json": 19,
+      "primes": 10,
+      "math": 30,
+      "translation": 19,
+      "quicksort": 6
+    }
+  },
+  "complete": true,
+  "cases": {
+    "closed-loop_c1": {
+      "mode": "closed-loop",
+      "concurrency": 1,
+      "runs": [
+        {
+          "complete": true,
+          "wall_seconds": 18.925784883991582,
+          "completed_output_tokens": 1024,
+          "aggregate_output_tokens_per_second": 54.106078362232296,
+          "mean_active_requests": 0.9998111399866443,
+          "mean_request_wall_seconds": 2.365276320000703,
+          "mean_request_output_tokens_per_second": 54.39411465753063,
+          "latency_weighted_request_output_tokens_per_second": 54.11629876714022,
+          "sustained_window": {
+            "definition": "whole responses completed after first completion, through last replenishment",
+            "start_seconds": 2.3409024739958113,
+            "end_seconds": 16.753316439993796,
+            "wall_seconds": 14.412413965997985,
+            "completed_request_indices": [
+              1,
+              2,
+              3,
+              4,
+              5,
+              6
+            ],
+            "completed_requests": 6,
+            "completed_output_tokens": 768,
+            "completion_boundary_output_tokens_per_second": 53.287395283807335,
+            "mean_active_requests": 0.9999039827056481
+          },
+          "sustained_window_unavailable_reason": null,
+          "requests": [
+            {
+              "request_index": 0,
+              "prompt_name": "python",
+              "prompt_sha256": "7d9074c26475df2a799d748be049ff151de83afb31dde5ef9211371fc3a1b124",
+              "request": {
+                "model": "default",
+                "prompt": "Write a Python function that returns the n-th Fibonacci number, with a docstring.",
+                "max_tokens": 128,
+                "temperature": 0.0,
+                "seed": 20260929,
+                "ignore_eos": true,
+                "cache_prompt": false
+              },
+              "submitted_seconds": 0.0006677130004391074,
+              "started_seconds": 0.0015891219954937696,
+              "finished_seconds": 2.3409024739958113,
+              "wall_seconds": 2.3393133520003175,
+              "output_tokens_per_second": 54.71691079373732,
+              "response": {
+                "id": "179",
+                "choices": [
+                  {
+                    "finish_reason": "length",
+                    "index": 0,
+                    "text": "<think>\n\n</think>\n\n```python\ndef fibonacci(n: int) -> int:\n    \"\"\"\n    Return the n-th Fibonacci number.\n\n    The Fibonacci sequence is defined as:\n    F(0) = 0, F(1) = 1, and F(n) = F(n-1) + F(n-2) for n > 1.\n\n    Parameters:\n        n (int): The index in the Fibonacci sequence (non-negative integer).\n\n    Returns:\n        int: The n-th Fibonacci number.\n\n    Raises:\n        ValueError: If n is negative.\n   ",
+                    "logprobs": null
+                  }
+                ],
+                "created": 1790742908,
+                "model": "/home/ericbuehler/.cache/huggingface/hub/models--Qwen--Qwen3.8-Flash-Next/snapshots/de4b8e4d43b917e7706784d8bb445c9af86a3540",
+                "system_fingerprint": "local",
+                "object": "text_completion",
+                "usage": {
+                  "completion_tokens": 128,
+                  "prompt_tokens": 17,
+                  "total_tokens": 145,
+                  "avg_tok_per_sec": 63.23594,
+                  "avg_prompt_tok_per_sec": 160.37735,
+                  "avg_compl_tok_per_sec": 58.527664,
+                  "total_time_sec": 2.293,
+                  "total_prompt_time_sec": 0.106,
+                  "total_completion_time_sec": 2.187
+                }
+              },
+              "error": null
+            },
+            {
+              "request_index": 1,
+              "prompt_name": "rust",
+              "prompt_sha256": "60b4ac9a09b8a5ee17b2810c21cd6b28772af55c47488253dd3654098624138d",
+              "request": {
+                "model": "default",
+                "prompt": "Write a Rust struct for a 2D point with methods for distance and midpoint.",
+                "max_tokens": 128,
+                "temperature": 0.0,
+                "seed": 20260929,
+                "ignore_eos": true,
+                "cache_prompt": false
+              },
+              "submitted_seconds": 2.3410014819965,
+              "started_seconds": 2.341093513998203,
+              "finished_seconds": 4.610037286998704,
+              "wall_seconds": 2.268943773000501,
+              "output_tokens_per_second": 56.41391449323135,
+              "response": {
+                "id": "180",
+                "choices": [
+                  {
+                    "finish_reason": "length",
+                    "index": 0,
+                    "text": "<think>\n\n</think>\n\n```rust\n#[derive(Debug, Clone, Copy, PartialEq)]\npub struct Point {\n    pub x: f64,\n    pub y: f64,\n}\n\nimpl Point {\n    /// Creates a new Point with the given x and y coordinates.\n    pub fn new(x: f64, y: f64) -> Self {\n        Point { x, y }\n    }\n\n    /// Calculates the Euclidean distance between this point and another point.\n    pub fn distance_to(&self, other: &Point) -> f64 {\n",
+                    "logprobs": null
+                  }
+                ],
+                "created": 1790742910,
+                "model": "/home/ericbuehler/.cache/huggingface/hub/models--Qwen--Qwen3.8-Flash-Next/snapshots/de4b8e4d43b917e7706784d8bb445c9af86a3540",
+                "system_fingerprint": "local",
+                "object": "text_completion",
+                "usage": {
+                  "completion_tokens": 128,
+                  "prompt_tokens": 17,
+                  "total_tokens": 145,
+                  "avg_tok_per_sec": 64.6744,
+                  "avg_prompt_tok_per_sec": 158.87851,
+                  "avg_compl_tok_per_sec": 59.95316,
+                  "total_time_sec": 2.242,
+                  "total_prompt_time_sec": 0.107,
+                  "total_completion_time_sec": 2.135
+                }
+              },
+              "error": null
+            },
+            {
+              "request_index": 2,
+              "prompt_name": "prose",
+              "prompt_sha256": "b5a04dcac0e07bb9e6254734d48ce7d63fc8a2f1e8f76ff6fe42485981bc10e6",
+              "request": {
+                "model": "default",
+                "prompt": "Explain in a few paragraphs how photosynthesis works.",
+                "max_tokens": 128,
+                "temperature": 0.0,
+                "seed": 20260929,
+                "ignore_eos": true,
+                "cache_prompt": false
+              },
+              "submitted_seconds": 4.610228135003126,
+              "started_seconds": 4.610313766999752,
+              "finished_seconds": 7.241212963999715,
+              "wall_seconds": 2.6308991969999624,
+              "output_tokens_per_second": 48.65256720818476,
+              "response": {
+                "id": "181",
+                "choices": [
+                  {
+                    "finish_reason": "length",
+                    "index": 0,
+                    "text": "<think>\nThe user wants a clear, concise explanation of photosynthesis in a few paragraphs. I should cover the key aspects: what it is, the two main stages (light-dependent reactions and the Calvin cycle), the inputs and outputs, and why it matters. I'll aim for clarity and accessibility while being scientifically accurate. Let me structure it logically: overview \u2192 light reactions \u2192 Calvin cycle \u2192 significance.\n</think>\n\nPhotosynthesis is the process by which plants, algae, and certain bacteria convert light energy into chemical energy stored in sugar molecules. It takes place primarily in the chloroplasts of plant cells, organelles packed with the",
+                    "logprobs": null
+                  }
+                ],
+                "created": 1790742912,
+                "model": "/home/ericbuehler/.cache/huggingface/hub/models--Qwen--Qwen3.8-Flash-Next/snapshots/de4b8e4d43b917e7706784d8bb445c9af86a3540",
+                "system_fingerprint": "local",
+                "object": "text_completion",
+                "usage": {
+                  "completion_tokens": 128,
+                  "prompt_tokens": 11,
+                  "total_tokens": 139,
+                  "avg_tok_per_sec": 53.461536,
+                  "avg_prompt_tok_per_sec": 132.53012,
+                  "avg_compl_tok_per_sec": 50.85419,
+                  "total_time_sec": 2.6,
+                  "total_prompt_time_sec": 0.083,
+                  "total_completion_time_sec": 2.517
+                }
+              },
+              "error": null
+            },
+            {
+              "request_index": 3,
+              "prompt_name": "json",
+              "prompt_sha256": "c02b6de4c77c9b5bc2e4730a7a25fb9cfc7e8f7d8fc97b4c79671a2078948160",
+              "request": {
+                "model": "default",
+                "prompt": "Produce a JSON array of five fictional users with id, name, email and age fields.",
+                "max_tokens": 128,
+                "temperature": 0.0,
+                "seed": 20260929,
+                "ignore_eos": true,
+                "cache_prompt": false
+              },
+              "submitted_seconds": 7.241295475992956,
+              "started_seconds": 7.241378867998719,
+              "finished_seconds": 9.766985754991765,
+              "wall_seconds": 2.525606886993046,
+              "output_tokens_per_second": 50.680888090384926,
+              "response": {
+                "id": "182",
+                "choices": [
+                  {
+                    "finish_reason": "length",
+                    "index": 0,
+                    "text": "<think>\nThe user wants me to generate a JSON array containing five fictional user objects. Each object should have four fields: id, name, email, and age. Let me create five diverse, fictional users with realistic-looking data. I'll make sure the emails look plausible but are clearly fictional, the names are varied, and the ages are reasonable.\n</think>\n\n```json\n[\n  {\n    \"id\": 1,\n    \"name\": \"Elena Vasquez\",\n    \"email\": \"elena.vasquez@example.com\",\n    \"age\": 34\n  },\n  {",
+                    "logprobs": null
+                  }
+                ],
+                "created": 1790742915,
+                "model": "/home/ericbuehler/.cache/huggingface/hub/models--Qwen--Qwen3.8-Flash-Next/snapshots/de4b8e4d43b917e7706784d8bb445c9af86a3540",
+                "system_fingerprint": "local",
+                "object": "text_completion",
+                "usage": {
+                  "completion_tokens": 128,
+                  "prompt_tokens": 19,
+                  "total_tokens": 147,
+                  "avg_tok_per_sec": 58.77649,
+                  "avg_prompt_tok_per_sec": 158.33333,
+                  "avg_compl_tok_per_sec": 53.758923,
+                  "total_time_sec": 2.501,
+                  "total_prompt_time_sec": 0.12,
+                  "total_completion_time_sec": 2.381
+                }
+              },
+              "error": null
+            },
+            {
+              "request_index": 4,
+              "prompt_name": "primes",
+              "prompt_sha256": "4ed5533858fc0525508d7d060b7b3ed89f56cf4997ec63bd84e386fe8520681c",
+              "request": {
+                "model": "default",
+                "prompt": "List the first twenty prime numbers separated by commas:",
+                "max_tokens": 128,
+                "temperature": 0.0,
+                "seed": 20260929,
+                "ignore_eos": true,
+                "cache_prompt": false
+              },
+              "submitted_seconds": 9.767137914997875,
+              "started_seconds": 9.767215450992808,
+              "finished_seconds": 12.044080456005759,
+              "wall_seconds": 2.276865005012951,
+              "output_tokens_per_second": 56.217650022370094,
+              "response": {
+                "id": "183",
+                "choices": [
+                  {
+                    "finish_reason": "length",
+                    "index": 0,
+                    "text": "<think>\nThe user wants the first twenty prime numbers listed and separated by commas. Let me list them:\n\n1. 2\n2. 3\n5. 5\n4. 7\n5. 11\n6. 13\n7. 17\n8. 19\n9. 23\n10. 29\n11. 31\n12. 37\n13. 41\n14. 43\n15. 47\n16. 53\n17. 59",
+                    "logprobs": null
+                  }
+                ],
+                "created": 1790742917,
+                "model": "/home/ericbuehler/.cache/huggingface/hub/models--Qwen--Qwen3.8-Flash-Next/snapshots/de4b8e4d43b917e7706784d8bb445c9af86a3540",
+                "system_fingerprint": "local",
+                "object": "text_completion",
+                "usage": {
+                  "completion_tokens": 128,
+                  "prompt_tokens": 10,
+                  "total_tokens": 138,
+                  "avg_tok_per_sec": 61.333332,
+                  "avg_prompt_tok_per_sec": 128.20514,
+                  "avg_compl_tok_per_sec": 58.93186,
+                  "total_time_sec": 2.25,
+                  "total_prompt_time_sec": 0.078,
+                  "total_completion_time_sec": 2.172
+                }
+              },
+              "error": null
+            },
+            {
+              "request_index": 5,
+              "prompt_name": "math",
+              "prompt_sha256": "93d3da4cd1b7890e2560f7a5fbcd0ac8a672cffc2c010723b4e66671a5bcfa36",
+              "request": {
+                "model": "default",
+                "prompt": "Solve step by step: a train travels 180 km in 2.5 hours. What is its average speed in m/s?",
+                "max_tokens": 128,
+                "temperature": 0.0,
+                "seed": 20260929,
+                "ignore_eos": true,
+                "cache_prompt": false
+              },
+              "submitted_seconds": 12.044167319996632,
+              "started_seconds": 12.044246360004763,
+              "finished_seconds": 14.197275562997675,
+              "wall_seconds": 2.1530292029929115,
+              "output_tokens_per_second": 59.451121156214725,
+              "response": {
+                "id": "184",
+                "choices": [
+                  {
+                    "finish_reason": "length",
+                    "index": 0,
+                    "text": "<think>\n\n</think>\n\nTo find the average speed in meters per second (m/s), we will follow these steps:\n\n### Step 1: Identify the given values\n*   Distance ($d$) = $180$ km\n*   Time ($t$) = $2.5$ hours\n\n### Step 2: Calculate the average speed in km/h\nThe formula for average speed is:\n$$ v = \\frac{d}{t} $$\n\nSubstitute the given values:\n$$ v = \\frac{180 \\text{ km}}{2.5 \\text{ h}}",
+                    "logprobs": null
+                  }
+                ],
+                "created": 1790742920,
+                "model": "/home/ericbuehler/.cache/huggingface/hub/models--Qwen--Qwen3.8-Flash-Next/snapshots/de4b8e4d43b917e7706784d8bb445c9af86a3540",
+                "system_fingerprint": "local",
+                "object": "text_completion",
+                "usage": {
+                  "completion_tokens": 128,
+                  "prompt_tokens": 30,
+                  "total_tokens": 158,
+                  "avg_tok_per_sec": 74.10882,
+                  "avg_prompt_tok_per_sec": 196.07843,
+                  "avg_compl_tok_per_sec": 64.67913,
+                  "total_time_sec": 2.132,
+                  "total_prompt_time_sec": 0.153,
+                  "total_completion_time_sec": 1.979
+                }
+              },
+              "error": null
+            },
+            {
+              "request_index": 6,
+              "prompt_name": "translation",
+              "prompt_sha256": "244a25b526dd7c3bc1caf054f30d7948205927f00d1120712902be4d067dcd67",
+              "request": {
+                "model": "default",
+                "prompt": "Translate to French: The weather is lovely today and we are going to the park after lunch.",
+                "max_tokens": 128,
+                "temperature": 0.0,
+                "seed": 20260929,
+                "ignore_eos": true,
+                "cache_prompt": false
+              },
+              "submitted_seconds": 14.19745370700548,
+              "started_seconds": 14.197539882996352,
+              "finished_seconds": 16.75322594300087,
+              "wall_seconds": 2.5556860600045184,
+              "output_tokens_per_second": 50.08439886383138,
+              "response": {
+                "id": "185",
+                "choices": [
+                  {
+                    "finish_reason": "length",
+                    "index": 0,
+                    "text": "<think>\nThe user wants me to translate an English sentence into French. Let me think about the best translation:\n\n\"The weather is lovely today and we are going to the park after lunch.\"\n\nLet me consider the components:\n- \"The weather is lovely today\" \u2192 \"Il fait beau aujourd'hui\" (this is the most natural French way to express nice weather)\n- \"and we are going to the park\" \u2192 \"et nous allons au parc\" (or \"on va au parc\" for a more casual tone)\n- \"after lunch\" \u2192 \"apr\u00e8s le d\u00e9jeuner\" or \"apr\u00e8s le repas de midi",
+                    "logprobs": null
+                  }
+                ],
+                "created": 1790742922,
+                "model": "/home/ericbuehler/.cache/huggingface/hub/models--Qwen--Qwen3.8-Flash-Next/snapshots/de4b8e4d43b917e7706784d8bb445c9af86a3540",
+                "system_fingerprint": "local",
+                "object": "text_completion",
+                "usage": {
+                  "completion_tokens": 128,
+                  "prompt_tokens": 19,
+                  "total_tokens": 147,
+                  "avg_tok_per_sec": 58.35649,
+                  "avg_prompt_tok_per_sec": 158.33333,
+                  "avg_compl_tok_per_sec": 53.355564,
+                  "total_time_sec": 2.519,
+                  "total_prompt_time_sec": 0.12,
+                  "total_completion_time_sec": 2.399
+                }
+              },
+              "error": null
+            },
+            {
+              "request_index": 7,
+              "prompt_name": "quicksort",
+              "prompt_sha256": "69d376e3a1b29ebbd75e59ef56ccaf3d13eefaac503b57cf386ea98ad29570d4",
+              "request": {
+                "model": "default",
+                "prompt": "def quicksort(arr):\n",
+                "max_tokens": 128,
+                "temperature": 0.0,
+                "seed": 20260929,
+                "ignore_eos": true,
+                "cache_prompt": false
+              },
+              "submitted_seconds": 16.753316439993796,
+              "started_seconds": 16.753399768000236,
+              "finished_seconds": 18.925266851001652,
+              "wall_seconds": 2.171867083001416,
+              "output_tokens_per_second": 58.93546663229047,
+              "response": {
+                "id": "186",
+                "choices": [
+                  {
+                    "finish_reason": "length",
+                    "index": 0,
+                    "text": "if len(arr) <= 1:\n        return arr\n    pivot = arr[len(arr) // 2]\n    left = [x for x in arr if x < pivot]\n    middle = [x for x in arr if x == pivot]\n    right = [x for x in arr if x > pivot]\n    return quicksort(left) + middle + quicksort(right)\n\n# Example usage\narr = [3, 6, 8, 10, 1, 2, 1]\nsorted_arr = quicksort(arr)\nprint(\"Sorted array:\", sorted",
+                    "logprobs": null
+                  }
+                ],
+                "created": 1790742924,
+                "model": "/home/ericbuehler/.cache/huggingface/hub/models--Qwen--Qwen3.8-Flash-Next/snapshots/de4b8e4d43b917e7706784d8bb445c9af86a3540",
+                "system_fingerprint": "local",
+                "object": "text_completion",
+                "usage": {
+                  "completion_tokens": 128,
+                  "prompt_tokens": 6,
+                  "total_tokens": 134,
+                  "avg_tok_per_sec": 62.32558,
+                  "avg_prompt_tok_per_sec": 98.36066,
+                  "avg_compl_tok_per_sec": 61.27334,
+                  "total_time_sec": 2.15,
+                  "total_prompt_time_sec": 0.061,
+                  "total_completion_time_sec": 2.089
+                }
+              },
+              "error": null
+            }
+          ],
+          "trial": 0,
+          "warmup": true
+        },
+        {
+          "complete": true,
+          "wall_seconds": 19.16308621200733,
+          "completed_output_tokens": 1024,
+          "aggregate_output_tokens_per_second": 53.43606915249254,
+          "mean_active_requests": 0.9997644561554092,
+          "mean_request_wall_seconds": 2.394821558125841,
+          "mean_request_output_tokens_per_second": 53.808918171319775,
+          "latency_weighted_request_output_tokens_per_second": 53.448658655040376,
+          "sustained_window": {
+            "definition": "whole responses completed after first completion, through last replenishment",
+            "start_seconds": 2.2376879360090243,
+            "end_seconds": 16.914445859001717,
+            "wall_seconds": 14.676757922992692,
+            "completed_request_indices": [
+              1,
+              2,
+              3,
+              4,
+              5,
+              6
+            ],
+            "completed_requests": 6,
+            "completed_output_tokens": 768,
+            "completion_boundary_output_tokens_per_second": 52.32763284845401,
+            "mean_active_requests": 0.9997671593400451
+          },
+          "sustained_window_unavailable_reason": null,
+          "requests": [
+            {
+              "request_index": 0,
+              "prompt_name": "python",
+              "prompt_sha256": "7d9074c26475df2a799d748be049ff151de83afb31dde5ef9211371fc3a1b124",
+              "request": {
+                "model": "default",
+                "prompt": "Write a Python function that returns the n-th Fibonacci number, with a docstring.",
+                "max_tokens": 128,
+                "temperature": 0.0,
+                "seed": 20260929,
+                "ignore_eos": true,
+                "cache_prompt": false
+              },
+              "submitted_seconds": 1.4560006093233824e-05,
+              "started_seconds": 0.0005535370000870898,
+              "finished_seconds": 2.2376879360090243,
+              "wall_seconds": 2.237134399008937,
+              "output_tokens_per_second": 57.21605284720699,
+              "response": {
+                "id": "187",
+                "choices": [
+                  {
+                    "finish_reason": "length",
+                    "index": 0,
+                    "text": "<think>\n\n</think>\n\n```python\ndef fibonacci(n: int) -> int:\n    \"\"\"\n    Return the n-th Fibonacci number.\n    \n    The Fibonacci sequence is defined as:\n    F(0) = 0, F(1) = 1, and F(n) = F(n-1) + F(n-2) for n > 1.\n    \n    Parameters:\n        n (int): The index in the Fibonacci sequence (non-negative integer).\n    \n    Returns:\n        int: The n-th Fibonacci number.\n    \n    Raises:\n        ValueError: If n is",
+                    "logprobs": null
+                  }
+                ],
+                "created": 1790742927,
+                "model": "/home/ericbuehler/.cache/huggingface/hub/models--Qwen--Qwen3.8-Flash-Next/snapshots/de4b8e4d43b917e7706784d8bb445c9af86a3540",
+                "system_fingerprint": "local",
+                "object": "text_completion",
+                "usage": {
+                  "completion_tokens": 128,
+                  "prompt_tokens": 17,
+                  "total_tokens": 145,
+                  "avg_tok_per_sec": 65.61086,
+                  "avg_prompt_tok_per_sec": 165.04854,
+                  "avg_compl_tok_per_sec": 60.74988,
+                  "total_time_sec": 2.21,
+                  "total_prompt_time_sec": 0.103,
+                  "total_completion_time_sec": 2.107
+                }
+              },
+              "error": null
+            },
+            {
+              "request_index": 1,
+              "prompt_name": "rust",
+              "prompt_sha256": "60b4ac9a09b8a5ee17b2810c21cd6b28772af55c47488253dd3654098624138d",
+              "request": {
+                "model": "default",
+                "prompt": "Write a Rust struct for a 2D point with methods for distance and midpoint.",
+                "max_tokens": 128,
+                "temperature": 0.0,
+                "seed": 20260929,
+                "ignore_eos": true,
+                "cache_prompt": false
+              },
+              "submitted_seconds": 2.238202143998933,
+              "started_seconds": 2.2383274080057163,
+              "finished_seconds": 4.50994827899558,
+              "wall_seconds": 2.2716208709898638,
+              "output_tokens_per_second": 56.347430873983704,
+              "response": {
+                "id": "188",
+                "choices": [
+                  {
+                    "finish_reason": "length",
+                    "index": 0,
+                    "text": "<think>\n\n</think>\n\n```rust\n#[derive(Debug, Clone, Copy, PartialEq)]\npub struct Point {\n    pub x: f64,\n    pub y: f64,\n}\n\nimpl Point {\n    /// Creates a new Point with the given x and y coordinates.\n    pub fn new(x: f64, y: f64) -> Self {\n        Point { x, y }\n    }\n\n    /// Calculates the Euclidean distance between this point and another point.\n    pub fn distance_to(&self, other: &Point) -> f64 {\n",
+                    "logprobs": null
+                  }
+                ],
+                "created": 1790742929,
+                "model": "/home/ericbuehler/.cache/huggingface/hub/models--Qwen--Qwen3.8-Flash-Next/snapshots/de4b8e4d43b917e7706784d8bb445c9af86a3540",
+                "system_fingerprint": "local",
+                "object": "text_completion",
+                "usage": {
+                  "completion_tokens": 128,
+                  "prompt_tokens": 17,
+                  "total_tokens": 145,
+                  "avg_tok_per_sec": 64.6744,
+                  "avg_prompt_tok_per_sec": 155.9633,
+                  "avg_compl_tok_per_sec": 60.009377,
+                  "total_time_sec": 2.242,
+                  "total_prompt_time_sec": 0.109,
+                  "total_completion_time_sec": 2.133
+                }
+              },
+              "error": null
+            },
+            {
+              "request_index": 2,
+              "prompt_name": "prose",
+              "prompt_sha256": "b5a04dcac0e07bb9e6254734d48ce7d63fc8a2f1e8f76ff6fe42485981bc10e6",
+              "request": {
+                "model": "default",
+                "prompt": "Explain in a few paragraphs how photosynthesis works.",
+                "max_tokens": 128,
+                "temperature": 0.0,
+                "seed": 20260929,
+                "ignore_eos": true,
+                "cache_prompt": false
+              },
+              "submitted_seconds": 4.510275831999024,
+              "started_seconds": 4.510402504005469,
+              "finished_seconds": 7.266061991002061,
+              "wall_seconds": 2.755659486996592,
+              "output_tokens_per_second": 46.44986095125559,
+              "response": {
+                "id": "189",
+                "choices": [
+                  {
+                    "finish_reason": "length",
+                    "index": 0,
+                    "text": "<think>\nThe user wants a clear, concise explanation of photosynthesis in a few paragraphs. I should cover the key aspects: what it is, the two main stages (light-dependent reactions and the Calvin cycle), the inputs and outputs, and perhaps why it matters. I'll aim for clarity and accessibility while being scientifically accurate. Let me structure it logically: overview \u2192 light reactions \u2192 Calvin cycle \u2192 significance.\n</think>\n\nPhotosynthesis is the process by which plants, algae, and certain bacteria convert light energy into chemical energy stored in sugar molecules. It takes place primarily in the chloroplasts of plant cells, organelles packed with",
+                    "logprobs": null
+                  }
+                ],
+                "created": 1790742931,
+                "model": "/home/ericbuehler/.cache/huggingface/hub/models--Qwen--Qwen3.8-Flash-Next/snapshots/de4b8e4d43b917e7706784d8bb445c9af86a3540",
+                "system_fingerprint": "local",
+                "object": "text_completion",
+                "usage": {
+                  "completion_tokens": 128,
+                  "prompt_tokens": 11,
+                  "total_tokens": 139,
+                  "avg_tok_per_sec": 51.06539,
+                  "avg_prompt_tok_per_sec": 137.5,
+                  "avg_compl_tok_per_sec": 48.448147,
+                  "total_time_sec": 2.722,
+                  "total_prompt_time_sec": 0.08,
+                  "total_completion_time_sec": 2.642
+                }
+              },
+              "error": null
+            },
+            {
+              "request_index": 3,
+              "prompt_name": "json",
+              "prompt_sha256": "c02b6de4c77c9b5bc2e4730a7a25fb9cfc7e8f7d8fc97b4c79671a2078948160",
+              "request": {
+                "model": "default",
+                "prompt": "Produce a JSON array of five fictional users with id, name, email and age fields.",
+                "max_tokens": 128,
+                "temperature": 0.0,
+                "seed": 20260929,
+                "ignore_eos": true,
+                "cache_prompt": false
+              },
+              "submitted_seconds": 7.266354167004465,
+              "started_seconds": 7.266483911007526,
+              "finished_seconds": 9.965451016003499,
+              "wall_seconds": 2.6989671049959725,
+              "output_tokens_per_second": 47.425550227367815,
+              "response": {
+                "id": "190",
+                "choices": [
+                  {
+                    "finish_reason": "length",
+                    "index": 0,
+                    "text": "<think>\nThe user wants me to generate a JSON array containing five fictional user objects. Each object should have four fields: id, name, email, and age. Let me create five diverse, clearly fictional users with realistic-looking data. I'll make sure the emails use fictional domains or clearly fake addresses, and the names are varied. Let me produce clean, valid JSON.\n</think>\n\n```json\n[\n  {\n    \"id\": 1,\n    \"name\": \"Eleanor Whitfield\",\n    \"email\": \"eleanor.whitfield@example.com\",\n    \"age\": 34\n",
+                    "logprobs": null
+                  }
+                ],
+                "created": 1790742934,
+                "model": "/home/ericbuehler/.cache/huggingface/hub/models--Qwen--Qwen3.8-Flash-Next/snapshots/de4b8e4d43b917e7706784d8bb445c9af86a3540",
+                "system_fingerprint": "local",
+                "object": "text_completion",
+                "usage": {
+                  "completion_tokens": 128,
+                  "prompt_tokens": 19,
+                  "total_tokens": 147,
+                  "avg_tok_per_sec": 55.11811,
+                  "avg_prompt_tok_per_sec": 158.33333,
+                  "avg_compl_tok_per_sec": 50.255203,
+                  "total_time_sec": 2.667,
+                  "total_prompt_time_sec": 0.12,
+                  "total_completion_time_sec": 2.547
+                }
+              },
+              "error": null
+            },
+            {
+              "request_index": 4,
+              "prompt_name": "primes",
+              "prompt_sha256": "4ed5533858fc0525508d7d060b7b3ed89f56cf4997ec63bd84e386fe8520681c",
+              "request": {
+                "model": "default",
+                "prompt": "List the first twenty prime numbers separated by commas:",
+                "max_tokens": 128,
+                "temperature": 0.0,
+                "seed": 20260929,
+                "ignore_eos": true,
+                "cache_prompt": false
+              },
+              "submitted_seconds": 9.965903064003214,
+              "started_seconds": 9.965994152007625,
+              "finished_seconds": 12.415582180998172,
+              "wall_seconds": 2.449588028990547,
+              "output_tokens_per_second": 52.25368449108058,
+              "response": {
+                "id": "191",
+                "choices": [
+                  {
+                    "finish_reason": "length",
+                    "index": 0,
+                    "text": "<think>\nThe user wants the first twenty prime numbers listed and separated by commas. Let me list them:\n\n1. 2\n2. 3\n5\n7\n11\n13\n17\n19\n23\n29\n31\n37\n41\n43\n47\n53\n59\n61\n67\n71\n\nThat's 20 prime numbers. Let me count: 2, 3, 5, 7, 11, 13, 17, 19, 23",
+                    "logprobs": null
+                  }
+                ],
+                "created": 1790742937,
+                "model": "/home/ericbuehler/.cache/huggingface/hub/models--Qwen--Qwen3.8-Flash-Next/snapshots/de4b8e4d43b917e7706784d8bb445c9af86a3540",
+                "system_fingerprint": "local",
+                "object": "text_completion",
+                "usage": {
+                  "completion_tokens": 128,
+                  "prompt_tokens": 10,
+                  "total_tokens": 138,
+                  "avg_tok_per_sec": 57.02479,
+                  "avg_prompt_tok_per_sec": 128.20514,
+                  "avg_compl_tok_per_sec": 54.65414,
+                  "total_time_sec": 2.42,
+                  "total_prompt_time_sec": 0.078,
+                  "total_completion_time_sec": 2.342
+                }
+              },
+              "error": null
+            },
+            {
+              "request_index": 5,
+              "prompt_name": "math",
+              "prompt_sha256": "93d3da4cd1b7890e2560f7a5fbcd0ac8a672cffc2c010723b4e66671a5bcfa36",
+              "request": {
+                "model": "default",
+                "prompt": "Solve step by step: a train travels 180 km in 2.5 hours. What is its average speed in m/s?",
+                "max_tokens": 128,
+                "temperature": 0.0,
+                "seed": 20260929,
+                "ignore_eos": true,
+                "cache_prompt": false
+              },
+              "submitted_seconds": 12.415784869008348,
+              "started_seconds": 12.415896852995502,
+              "finished_seconds": 14.670755330007523,
+              "wall_seconds": 2.2548584770120215,
+              "output_tokens_per_second": 56.7663120789809,
+              "response": {
+                "id": "192",
+                "choices": [
+                  {
+                    "finish_reason": "length",
+                    "index": 0,
+                    "text": "<think>\n\n</think>\n\nTo find the average speed in meters per second (m/s), we will follow these steps:\n\n### Step 1: Identify the given values\n*   Distance ($d$) = $180$ km\n*   Time ($t$) = $2.5$ hours\n\n### Step 2: Calculate the average speed in km/h\nThe formula for average speed is:\n$$ \\text{Speed} = \\frac{\\text{Distance}}{\\text{Time}} $$\n\nSubstitute the given values:\n$$ \\text{Speed} = \\frac{180 \\",
+                    "logprobs": null
+                  }
+                ],
+                "created": 1790742939,
+                "model": "/home/ericbuehler/.cache/huggingface/hub/models--Qwen--Qwen3.8-Flash-Next/snapshots/de4b8e4d43b917e7706784d8bb445c9af86a3540",
+                "system_fingerprint": "local",
+                "object": "text_completion",
+                "usage": {
+                  "completion_tokens": 128,
+                  "prompt_tokens": 30,
+                  "total_tokens": 158,
+                  "avg_tok_per_sec": 70.91562,
+                  "avg_prompt_tok_per_sec": 193.54839,
+                  "avg_compl_tok_per_sec": 61.74626,
+                  "total_time_sec": 2.228,
+                  "total_prompt_time_sec": 0.155,
+                  "total_completion_time_sec": 2.073
+                }
+              },
+              "error": null
+            },
+            {
+              "request_index": 6,
+              "prompt_name": "translation",
+              "prompt_sha256": "244a25b526dd7c3bc1caf054f30d7948205927f00d1120712902be4d067dcd67",
+              "request": {
+                "model": "default",
+                "prompt": "Translate to French: The weather is lovely today and we are going to the park after lunch.",
+                "max_tokens": 128,
+                "temperature": 0.0,
+                "seed": 20260929,
+                "ignore_eos": true,
+                "cache_prompt": false
+              },
+              "submitted_seconds": 14.671282355004223,
+              "started_seconds": 14.671410515002208,
+              "finished_seconds": 16.914057123009115,
+              "wall_seconds": 2.2426466080069076,
+              "output_tokens_per_second": 57.075421309359385,
+              "response": {
+                "id": "193",
+                "choices": [
+                  {
+                    "finish_reason": "length",
+                    "index": 0,
+                    "text": "<think>\nThe user wants me to translate an English sentence into French. Let me think about the best translation:\n\n\"The weather is lovely today and we are going to the park after lunch.\"\n\nLet me consider the options:\n\n1. \"Il fait beau aujourd'hui et nous allons au parc apr\u00e8s le d\u00e9jeuner.\"\n2. \"Le temps est magnifique aujourd'hui et nous allons au parc apr\u00e8s le d\u00e9jeuner.\"\n3. \"Il fait un temps magnifique aujourd'hui et nous allons au parc apr\u00e8s le d\u00e9jeuner.\"\n\nIn French, the most natural way to express \"the weather is lovely\" is \"Il fait beau\" or \"Il",
+                    "logprobs": null
+                  }
+                ],
+                "created": 1790742941,
+                "model": "/home/ericbuehler/.cache/huggingface/hub/models--Qwen--Qwen3.8-Flash-Next/snapshots/de4b8e4d43b917e7706784d8bb445c9af86a3540",
+                "system_fingerprint": "local",
+                "object": "text_completion",
+                "usage": {
+                  "completion_tokens": 128,
+                  "prompt_tokens": 19,
+                  "total_tokens": 147,
+                  "avg_tok_per_sec": 66.33574,
+                  "avg_prompt_tok_per_sec": 161.01695,
+                  "avg_compl_tok_per_sec": 61.010487,
+                  "total_time_sec": 2.216,
+                  "total_prompt_time_sec": 0.118,
+                  "total_completion_time_sec": 2.098
+                }
+              },
+              "error": null
+            },
+            {
+              "request_index": 7,
+              "prompt_name": "quicksort",
+              "prompt_sha256": "69d376e3a1b29ebbd75e59ef56ccaf3d13eefaac503b57cf386ea98ad29570d4",
+              "request": {
+                "model": "default",
+                "prompt": "def quicksort(arr):\n",
+                "max_tokens": 128,
+                "temperature": 0.0,
+                "seed": 20260929,
+                "ignore_eos": true,
+                "cache_prompt": false
+              },
+              "submitted_seconds": 16.914445859001717,
+              "started_seconds": 16.91454064300342,
+              "finished_seconds": 19.162638132009306,
+              "wall_seconds": 2.248097489005886,
+              "output_tokens_per_second": 56.93703259132321,
+              "response": {
+                "id": "194",
+                "choices": [
+                  {
+                    "finish_reason": "length",
+                    "index": 0,
+                    "text": "if len(arr) <= 1:\n        return arr\n    pivot = arr[len(arr) // 2]\n    left = [x for x in arr if x < pivot]\n    middle = [x for x in arr if x == pivot]\n    right = [x for x in arr if x > pivot]\n    return quicksort(left) + middle + quicksort(right)\n\n# Example usage:\narr = [3, 6, 8, 10, 1, 2, 1]\nsorted_arr = quicksort(arr)\nprint(\"Sorted array:\",",
+                    "logprobs": null
+                  }
+                ],
+                "created": 1790742944,
+                "model": "/home/ericbuehler/.cache/huggingface/hub/models--Qwen--Qwen3.8-Flash-Next/snapshots/de4b8e4d43b917e7706784d8bb445c9af86a3540",
+                "system_fingerprint": "local",
+                "object": "text_completion",
+                "usage": {
+                  "completion_tokens": 128,
+                  "prompt_tokens": 6,
+                  "total_tokens": 134,
+                  "avg_tok_per_sec": 60.30603,
+                  "avg_prompt_tok_per_sec": 101.69491,
+                  "avg_compl_tok_per_sec": 59.177067,
+                  "total_time_sec": 2.222,
+                  "total_prompt_time_sec": 0.059,
+                  "total_completion_time_sec": 2.163
+                }
+              },
+              "error": null
+            }
+          ],
+          "trial": 1,
+          "warmup": true
+        },
+        {
+          "complete": true,
+          "wall_seconds": 18.775584066999727,
+          "completed_output_tokens": 1024,
+          "aggregate_output_tokens_per_second": 54.538915878510494,
+          "mean_active_requests": 0.999893072088013,
+          "mean_request_wall_seconds": 2.3466970541248884,
+          "mean_request_output_tokens_per_second": 55.06024708314485,
+          "latency_weighted_request_output_tokens_per_second": 54.54474823454907,
+          "sustained_window": {
+            "definition": "whole responses completed after first completion, through last replenishment",
+            "start_seconds": 2.3862222480092896,
+            "end_seconds": 16.618509413005086,
+            "wall_seconds": 14.232287164995796,
+            "completed_request_indices": [
+              1,
+              2,
+              3,
+              4,
+              5,
+              6
+            ],
+            "completed_requests": 6,
+            "completed_output_tokens": 768,
+            "completion_boundary_output_tokens_per_second": 53.9618116959367,
+            "mean_active_requests": 0.9999017849362143
+          },
+          "sustained_window_unavailable_reason": null,
+          "requests": [
+            {
+              "request_index": 0,
+              "prompt_name": "python",
+              "prompt_sha256": "7d9074c26475df2a799d748be049ff151de83afb31dde5ef9211371fc3a1b124",
+              "request": {
+                "model": "default",
+                "prompt": "Write a Python function that returns the n-th Fibonacci number, with a docstring.",
+                "max_tokens": 128,
+                "temperature": 0.0,
+                "seed": 20260929,
+                "ignore_eos": true,
+                "cache_prompt": false
+              },
+              "submitted_seconds": 1.5936006093397737e-05,
+              "started_seconds": 0.00018712000746745616,
+              "finished_seconds": 2.3862222480092896,
+              "wall_seconds": 2.386035128001822,
+              "output_tokens_per_second": 53.645480109588,
+              "response": {
+                "id": "195",
+                "choices": [
+                  {
+                    "finish_reason": "length",
+                    "index": 0,
+                    "text": "<think>\n\n</think>\n\n```python\ndef fibonacci(n: int) -> int:\n    \"\"\"\n    Return the n-th Fibonacci number.\n\n    The Fibonacci sequence is defined as:\n    F(0) = 0, F(1) = 1, and F(n) = F(n-1) + F(n-2) for n > 1.\n\n    Parameters:\n        n (int): The index in the Fibonacci sequence (0-based).\n\n    Returns:\n        int: The n-th Fibonacci number.\n\n    Raises:\n        ValueError: If n is negative.\n    \"\"\"",
+                    "logprobs": null
+                  }
+                ],
+                "created": 1790742946,
+                "model": "/home/ericbuehler/.cache/huggingface/hub/models--Qwen--Qwen3.8-Flash-Next/snapshots/de4b8e4d43b917e7706784d8bb445c9af86a3540",
+                "system_fingerprint": "local",
+                "object": "text_completion",
+                "usage": {
+                  "completion_tokens": 128,
+                  "prompt_tokens": 17,
+                  "total_tokens": 145,
+                  "avg_tok_per_sec": 61.518883,
+                  "avg_prompt_tok_per_sec": 163.46153,
+                  "avg_compl_tok_per_sec": 56.81314,
+                  "total_time_sec": 2.357,
+                  "total_prompt_time_sec": 0.104,
+                  "total_completion_time_sec": 2.253
+                }
+              },
+              "error": null
+            },
+            {
+              "request_index": 1,
+              "prompt_name": "rust",
+              "prompt_sha256": "60b4ac9a09b8a5ee17b2810c21cd6b28772af55c47488253dd3654098624138d",
+              "request": {
+                "model": "default",
+                "prompt": "Write a Rust struct for a 2D point with methods for distance and midpoint.",
+                "max_tokens": 128,
+                "temperature": 0.0,
+                "seed": 20260929,
+                "ignore_eos": true,
+                "cache_prompt": false
+              },
+              "submitted_seconds": 2.3862985520099755,
+              "started_seconds": 2.3864134960022056,
+              "finished_seconds": 4.62479762500152,
+              "wall_seconds": 2.2383841289993143,
+              "output_tokens_per_second": 57.18410809909706,
+              "response": {
+                "id": "196",
+                "choices": [
+                  {
+                    "finish_reason": "length",
+                    "index": 0,
+                    "text": "<think>\n\n</think>\n\n```rust\n#[derive(Debug, Clone, Copy, PartialEq)]\npub struct Point {\n    pub x: f64,\n    pub y: f64,\n}\n\nimpl Point {\n    /// Creates a new Point with the given x and y coordinates.\n    pub fn new(x: f64, y: f64) -> Self {\n        Point { x, y }\n    }\n\n    /// Calculates the Euclidean distance between this point and another point.\n    pub fn distance_to(&self, other: &Point) -> f64 {\n",
+                    "logprobs": null
+                  }
+                ],
+                "created": 1790742948,
+                "model": "/home/ericbuehler/.cache/huggingface/hub/models--Qwen--Qwen3.8-Flash-Next/snapshots/de4b8e4d43b917e7706784d8bb445c9af86a3540",
+                "system_fingerprint": "local",
+                "object": "text_completion",
+                "usage": {
+                  "completion_tokens": 128,
+                  "prompt_tokens": 17,
+                  "total_tokens": 145,
+                  "avg_tok_per_sec": 65.581184,
+                  "avg_prompt_tok_per_sec": 155.9633,
+                  "avg_compl_tok_per_sec": 60.894386,
+                  "total_time_sec": 2.211,
+                  "total_prompt_time_sec": 0.109,
+                  "total_completion_time_sec": 2.102
+                }
+              },
+              "error": null
+            },
+            {
+              "request_index": 2,
+              "prompt_name": "prose",
+              "prompt_sha256": "b5a04dcac0e07bb9e6254734d48ce7d63fc8a2f1e8f76ff6fe42485981bc10e6",
+              "request": {
+                "model": "default",
+                "prompt": "Explain in a few paragraphs how photosynthesis works.",
+                "max_tokens": 128,
+                "temperature": 0.0,
+                "seed": 20260929,
+                "ignore_eos": true,
+                "cache_prompt": false
+              },
+              "submitted_seconds": 4.624956105006277,
+              "started_seconds": 4.625050505012041,
+              "finished_seconds": 7.267843247012934,
+              "wall_seconds": 2.6427927420008928,
+              "output_tokens_per_second": 48.43361265745324,
+              "response": {
+                "id": "197",
+                "choices": [
+                  {
+                    "finish_reason": "length",
+                    "index": 0,
+                    "text": "<think>\nThe user wants a clear, concise explanation of photosynthesis in a few paragraphs. I should cover the key aspects: what it is, the two main stages (light-dependent reactions and the Calvin cycle), the inputs and outputs, and perhaps why it matters. I'll aim for clarity and accessibility while being scientifically accurate. Let me structure it logically: overview \u2192 light reactions \u2192 Calvin cycle \u2192 significance.\n</think>\n\nPhotosynthesis is the process by which plants, algae, and certain bacteria convert light energy into chemical energy stored in sugar molecules. It takes place primarily in the chloroplasts of plant cells, organelles packed with",
+                    "logprobs": null
+                  }
+                ],
+                "created": 1790742950,
+                "model": "/home/ericbuehler/.cache/huggingface/hub/models--Qwen--Qwen3.8-Flash-Next/snapshots/de4b8e4d43b917e7706784d8bb445c9af86a3540",
+                "system_fingerprint": "local",
+                "object": "text_completion",
+                "usage": {
+                  "completion_tokens": 128,
+                  "prompt_tokens": 11,
+                  "total_tokens": 139,
+                  "avg_tok_per_sec": 53.215923,
+                  "avg_prompt_tok_per_sec": 135.80246,
+                  "avg_compl_tok_per_sec": 50.572895,
+                  "total_time_sec": 2.612,
+                  "total_prompt_time_sec": 0.081,
+                  "total_completion_time_sec": 2.531
+                }
+              },
+              "error": null
+            },
+            {
+              "request_index": 3,
+              "prompt_name": "json",
+              "prompt_sha256": "c02b6de4c77c9b5bc2e4730a7a25fb9cfc7e8f7d8fc97b4c79671a2078948160",
+              "request": {
+                "model": "default",
+                "prompt": "Produce a JSON array of five fictional users with id, name, email and age fields.",
+                "max_tokens": 128,
+                "temperature": 0.0,
+                "seed": 20260929,
+                "ignore_eos": true,
+                "cache_prompt": false
+              },
+              "submitted_seconds": 7.2679242710000835,
+              "started_seconds": 7.26802126300754,
+              "finished_seconds": 10.091748903010739,
+              "wall_seconds": 2.8237276400031988,
+              "output_tokens_per_second": 45.33015089226346,
+              "response": {
+                "id": "198",
+                "choices": [
+                  {
+                    "finish_reason": "length",
+                    "index": 0,
+                    "text": "<think>\nThe user wants me to generate a JSON array containing five fictional user objects. Each object should have four fields: id, name, email, and age. Let me create five diverse, clearly fictional users with realistic-looking data. I'll make sure the emails use fictional domains or clearly fake addresses, and the names are clearly made up. Let me craft this now.\n</think>\n\n```json\n[\n  {\n    \"id\": 1,\n    \"name\": \"Elara Whitmore\",\n    \"email\": \"elara.whitmore@example.com\",\n    \"age\": 34\n",
+                    "logprobs": null
+                  }
+                ],
+                "created": 1790742953,
+                "model": "/home/ericbuehler/.cache/huggingface/hub/models--Qwen--Qwen3.8-Flash-Next/snapshots/de4b8e4d43b917e7706784d8bb445c9af86a3540",
+                "system_fingerprint": "local",
+                "object": "text_completion",
+                "usage": {
+                  "completion_tokens": 128,
+                  "prompt_tokens": 19,
+                  "total_tokens": 147,
+                  "avg_tok_per_sec": 52.74489,
+                  "avg_prompt_tok_per_sec": 157.0248,
+                  "avg_compl_tok_per_sec": 48.012005,
+                  "total_time_sec": 2.787,
+                  "total_prompt_time_sec": 0.121,
+                  "total_completion_time_sec": 2.666
+                }
+              },
+              "error": null
+            },
+            {
+              "request_index": 4,
+              "prompt_name": "primes",
+              "prompt_sha256": "4ed5533858fc0525508d7d060b7b3ed89f56cf4997ec63bd84e386fe8520681c",
+              "request": {
+                "model": "default",
+                "prompt": "List the first twenty prime numbers separated by commas:",
+                "max_tokens": 128,
+                "temperature": 0.0,
+                "seed": 20260929,
+                "ignore_eos": true,
+                "cache_prompt": false
+              },
+              "submitted_seconds": 10.091911080002319,
+              "started_seconds": 10.092006632010452,
+              "finished_seconds": 12.29304657400644,
+              "wall_seconds": 2.2010399419959867,
+              "output_tokens_per_second": 58.1543285779379,
+              "response": {
+                "id": "199",
+                "choices": [
+                  {
+                    "finish_reason": "length",
+                    "index": 0,
+                    "text": "<think>\nThe user wants the first 20 prime numbers listed with commas. Let me recall them:\n\n2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37, 41, 43, 47, 53, 59, 61, 67, 71\n\nLet me count: 1-2, 2-3, 3-5, 4-7, 5-11,",
+                    "logprobs": null
+                  }
+                ],
+                "created": 1790742956,
+                "model": "/home/ericbuehler/.cache/huggingface/hub/models--Qwen--Qwen3.8-Flash-Next/snapshots/de4b8e4d43b917e7706784d8bb445c9af86a3540",
+                "system_fingerprint": "local",
+                "object": "text_completion",
+                "usage": {
+                  "completion_tokens": 128,
+                  "prompt_tokens": 10,
+                  "total_tokens": 138,
+                  "avg_tok_per_sec": 63.50667,
+                  "avg_prompt_tok_per_sec": 131.57895,
+                  "avg_compl_tok_per_sec": 61.03958,
+                  "total_time_sec": 2.173,
+                  "total_prompt_time_sec": 0.076,
+                  "total_completion_time_sec": 2.097
+                }
+              },
+              "error": null
+            },
+            {
+              "request_index": 5,
+              "prompt_name": "math",
+              "prompt_sha256": "93d3da4cd1b7890e2560f7a5fbcd0ac8a672cffc2c010723b4e66671a5bcfa36",
+              "request": {
+                "model": "default",
+                "prompt": "Solve step by step: a train travels 180 km in 2.5 hours. What is its average speed in m/s?",
+                "max_tokens": 128,
+                "temperature": 0.0,
+                "seed": 20260929,
+                "ignore_eos": true,
+                "cache_prompt": false
+              },
+              "submitted_seconds": 12.293131534010172,
+              "started_seconds": 12.293226366004092,
+              "finished_seconds": 14.454606028011767,
+              "wall_seconds": 2.1613796620076755,
+              "output_tokens_per_second": 59.221432610827186,
+              "response": {
+                "id": "200",
+                "choices": [
+                  {
+                    "finish_reason": "length",
+                    "index": 0,
+                    "text": "<think>\n\n</think>\n\nTo find the average speed in meters per second (m/s), we will follow these steps:\n\n### Step 1: Identify the given values\n*   Distance ($d$) = $180 \\text{ km}$\n*   Time ($t$) = $2.5 \\text{ hours}$\n\n### Step 2: Calculate the average speed in km/h\nThe formula for average speed is:\n$$ v = \\frac{d}{t} $$\n\nSubstitute the given values:\n$$ v = \\frac{180 \\text{ km}}{2.",
+                    "logprobs": null
+                  }
+                ],
+                "created": 1790742958,
+                "model": "/home/ericbuehler/.cache/huggingface/hub/models--Qwen--Qwen3.8-Flash-Next/snapshots/de4b8e4d43b917e7706784d8bb445c9af86a3540",
+                "system_fingerprint": "local",
+                "object": "text_completion",
+                "usage": {
+                  "completion_tokens": 128,
+                  "prompt_tokens": 30,
+                  "total_tokens": 158,
+                  "avg_tok_per_sec": 73.83177,
+                  "avg_prompt_tok_per_sec": 196.07843,
+                  "avg_compl_tok_per_sec": 64.41872,
+                  "total_time_sec": 2.14,
+                  "total_prompt_time_sec": 0.153,
+                  "total_completion_time_sec": 1.987
+                }
+              },
+              "error": null
+            },
+            {
+              "request_index": 6,
+              "prompt_name": "translation",
+              "prompt_sha256": "244a25b526dd7c3bc1caf054f30d7948205927f00d1120712902be4d067dcd67",
+              "request": {
+                "model": "default",
+                "prompt": "Translate to French: The weather is lovely today and we are going to the park after lunch.",
+                "max_tokens": 128,
+                "temperature": 0.0,
+                "seed": 20260929,
+                "ignore_eos": true,
+                "cache_prompt": false
+              },
+              "submitted_seconds": 14.454766268012463,
+              "started_seconds": 14.454860732002999,
+              "finished_seconds": 16.618425957,
+              "wall_seconds": 2.1635652249970008,
+              "output_tokens_per_second": 59.161609052104005,
+              "response": {
+                "id": "201",
+                "choices": [
+                  {
+                    "finish_reason": "length",
+                    "index": 0,
+                    "text": "<think>\nThe user wants me to translate an English sentence into French. Let me think about the best translation:\n\n\"The weather is lovely today and we are going to the park after lunch.\"\n\nLet me consider the options:\n\n1. \"Il fait beau aujourd'hui et nous allons au parc apr\u00e8s le d\u00e9jeuner.\"\n2. \"Le temps est magnifique aujourd'hui et nous allons au parc apr\u00e8s le d\u00e9jeuner.\"\n3. \"Il fait un temps magnifique aujourd'hui et nous allons au parc apr\u00e8s le d\u00e9jeuner.\"\n\nIn French, the most natural way to express \"the weather is lovely\" is \"Il fait beau\" or \"Il",
+                    "logprobs": null
+                  }
+                ],
+                "created": 1790742960,
+                "model": "/home/ericbuehler/.cache/huggingface/hub/models--Qwen--Qwen3.8-Flash-Next/snapshots/de4b8e4d43b917e7706784d8bb445c9af86a3540",
+                "system_fingerprint": "local",
+                "object": "text_completion",
+                "usage": {
+                  "completion_tokens": 128,
+                  "prompt_tokens": 19,
+                  "total_tokens": 147,
+                  "avg_tok_per_sec": 68.65951,
+                  "avg_prompt_tok_per_sec": 161.01695,
+                  "avg_compl_tok_per_sec": 63.272366,
+                  "total_time_sec": 2.141,
+                  "total_prompt_time_sec": 0.118,
+                  "total_completion_time_sec": 2.023
+                }
+              },
+              "error": null
+            },
+            {
+              "request_index": 7,
+              "prompt_name": "quicksort",
+              "prompt_sha256": "69d376e3a1b29ebbd75e59ef56ccaf3d13eefaac503b57cf386ea98ad29570d4",
+              "request": {
+                "model": "default",
+                "prompt": "def quicksort(arr):\n",
+                "max_tokens": 128,
+                "temperature": 0.0,
+                "seed": 20260929,
+                "ignore_eos": true,
+                "cache_prompt": false
+              },
+              "submitted_seconds": 16.618509413005086,
+              "started_seconds": 16.618603350012563,
+              "finished_seconds": 18.77525531500578,
+              "wall_seconds": 2.156651964993216,
+              "output_tokens_per_second": 59.351254665887936,
+              "response": {
+                "id": "202",
+                "choices": [
+                  {
+                    "finish_reason": "length",
+                    "index": 0,
+                    "text": "if len(arr) <= 1:\n        return arr\n    pivot = arr[len(arr) // 2]\n    left = [x for x in arr if x < pivot]\n    middle = [x for x in arr if x == pivot]\n    right = [x for x in arr if x > pivot]\n    return quicksort(left) + middle + quicksort(right)\n\n# Example usage:\narr = [3, 6, 8, 10, 1, 2, 1]\nsorted_arr = quicksort(arr)\nprint(\"Sorted array:\",",
+                    "logprobs": null
+                  }
+                ],
+                "created": 1790742962,
+                "model": "/home/ericbuehler/.cache/huggingface/hub/models--Qwen--Qwen3.8-Flash-Next/snapshots/de4b8e4d43b917e7706784d8bb445c9af86a3540",
+                "system_fingerprint": "local",
+                "object": "text_completion",
+                "usage": {
+                  "completion_tokens": 128,
+                  "prompt_tokens": 6,
+                  "total_tokens": 134,
+                  "avg_tok_per_sec": 62.763466,
+                  "avg_prompt_tok_per_sec": 98.36066,
+                  "avg_compl_tok_per_sec": 61.716488,
+                  "total_time_sec": 2.135,
+                  "total_prompt_time_sec": 0.061,
+                  "total_completion_time_sec": 2.074
+                }
+              },
+              "error": null
+            }
+          ],
+          "trial": 2,
+          "warmup": false
+        },
+        {
+          "complete": true,
+          "wall_seconds": 18.730467451998265,
+          "completed_output_tokens": 1024,
+          "aggregate_output_tokens_per_second": 54.67028533186737,
+          "mean_active_requests": 0.9998840272392852,
+          "mean_request_wall_seconds": 2.3410369034972973,
+          "mean_request_output_tokens_per_second": 55.128121923398986,
+          "latency_weighted_request_output_tokens_per_second": 54.67662633116957,
+          "sustained_window": {
+            "definition": "whole responses completed after first completion, through last replenishment",
+            "start_seconds": 2.2427573510067305,
+            "end_seconds": 16.40031062399794,
+            "wall_seconds": 14.157553272991208,
+            "completed_request_indices": [
+              1,
+              2,
+              3,
+              4,
+              5,
+              6
+            ],
+            "completed_requests": 6,
+            "completed_output_tokens": 768,
+            "completion_boundary_output_tokens_per_second": 54.24666149518482,
+            "mean_active_requests": 0.999882710806121
+          },
+          "sustained_window_unavailable_reason": null,
+          "requests": [
+            {
+              "request_index": 0,
+              "prompt_name": "python",
+              "prompt_sha256": "7d9074c26475df2a799d748be049ff151de83afb31dde5ef9211371fc3a1b124",
+              "request": {
+                "model": "default",
+                "prompt": "Write a Python function that returns the n-th Fibonacci number, with a docstring.",
+                "max_tokens": 128,
+                "temperature": 0.0,
+                "seed": 20260929,
+                "ignore_eos": true,
+                "cache_prompt": false
+              },
+              "submitted_seconds": 1.5376004739664495e-05,
+              "started_seconds": 0.00026283200713805854,
+              "finished_seconds": 2.2427573510067305,
+              "wall_seconds": 2.2424945189995924,
+              "output_tokens_per_second": 57.079292241526886,
+              "response": {
+                "id": "203",
+                "choices": [
+                  {
+                    "finish_reason": "length",
+                    "index": 0,
+                    "text": "<think>\n\n</think>\n\n```python\ndef fibonacci(n: int) -> int:\n    \"\"\"\n    Return the n-th Fibonacci number.\n\n    The Fibonacci sequence is defined as:\n    F(0) = 0, F(1) = 1, and F(n) = F(n-1) + F(n-2) for n > 1.\n\n    Parameters:\n        n (int): The index in the Fibonacci sequence (non-negative integer).\n\n    Returns:\n        int: The n-th Fibonacci number.\n\n    Raises:\n        ValueError: If n is negative.\n   ",
+                    "logprobs": null
+                  }
+                ],
+                "created": 1790742965,
+                "model": "/home/ericbuehler/.cache/huggingface/hub/models--Qwen--Qwen3.8-Flash-Next/snapshots/de4b8e4d43b917e7706784d8bb445c9af86a3540",
+                "system_fingerprint": "local",
+                "object": "text_completion",
+                "usage": {
+                  "completion_tokens": 128,
+                  "prompt_tokens": 17,
+                  "total_tokens": 145,
+                  "avg_tok_per_sec": 65.374214,
+                  "avg_prompt_tok_per_sec": 161.90477,
+                  "avg_compl_tok_per_sec": 60.577377,
+                  "total_time_sec": 2.218,
+                  "total_prompt_time_sec": 0.105,
+                  "total_completion_time_sec": 2.113
+                }
+              },
+              "error": null
+            },
+            {
+              "request_index": 1,
+              "prompt_name": "rust",
+              "prompt_sha256": "60b4ac9a09b8a5ee17b2810c21cd6b28772af55c47488253dd3654098624138d",
+              "request": {
+                "model": "default",
+                "prompt": "Write a Rust struct for a 2D point with methods for distance and midpoint.",
+                "max_tokens": 128,
+                "temperature": 0.0,
+                "seed": 20260929,
+                "ignore_eos": true,
+                "cache_prompt": false
+              },
+              "submitted_seconds": 2.2428398949996335,
+              "started_seconds": 2.2429445190064143,
+              "finished_seconds": 4.2763397520029685,
+              "wall_seconds": 2.033395232996554,
+              "output_tokens_per_second": 62.94890335282738,
+              "response": {
+                "id": "204",
+                "choices": [
+                  {
+                    "finish_reason": "length",
+                    "index": 0,
+                    "text": "<think>\n\n</think>\n\n```rust\n#[derive(Debug, Clone, Copy, PartialEq)]\npub struct Point {\n    pub x: f64,\n    pub y: f64,\n}\n\nimpl Point {\n    /// Creates a new Point with the given x and y coordinates.\n    pub fn new(x: f64, y: f64) -> Self {\n        Point { x, y }\n    }\n\n    /// Calculates the Euclidean distance between this point and another point.\n    pub fn distance_to(&self, other: &Point) -> f64 {\n",
+                    "logprobs": null
+                  }
+                ],
+                "created": 1790742967,
+                "model": "/home/ericbuehler/.cache/huggingface/hub/models--Qwen--Qwen3.8-Flash-Next/snapshots/de4b8e4d43b917e7706784d8bb445c9af86a3540",
+                "system_fingerprint": "local",
+                "object": "text_completion",
+                "usage": {
+                  "completion_tokens": 128,
+                  "prompt_tokens": 17,
+                  "total_tokens": 145,
+                  "avg_tok_per_sec": 72.1393,
+                  "avg_prompt_tok_per_sec": 157.40741,
+                  "avg_compl_tok_per_sec": 67.29758,
+                  "total_time_sec": 2.01,
+                  "total_prompt_time_sec": 0.108,
+                  "total_completion_time_sec": 1.902
+                }
+              },
+              "error": null
+            },
+            {
+              "request_index": 2,
+              "prompt_name": "prose",
+              "prompt_sha256": "b5a04dcac0e07bb9e6254734d48ce7d63fc8a2f1e8f76ff6fe42485981bc10e6",
+              "request": {
+                "model": "default",
+                "prompt": "Explain in a few paragraphs how photosynthesis works.",
+                "max_tokens": 128,
+                "temperature": 0.0,
+                "seed": 20260929,
+                "ignore_eos": true,
+                "cache_prompt": false
+              },
+              "submitted_seconds": 4.2764944240043405,
+              "started_seconds": 4.276591736008413,
+              "finished_seconds": 6.9704434190061875,
+              "wall_seconds": 2.6938516829977743,
+              "output_tokens_per_second": 47.51560778489443,
+              "response": {
+                "id": "205",
+                "choices": [
+                  {
+                    "finish_reason": "length",
+                    "index": 0,
+                    "text": "<think>\nThe user wants a clear, concise explanation of photosynthesis in a few paragraphs. I should cover the key aspects: what it is, the two main stages (light-dependent reactions and the Calvin cycle), the inputs and outputs, and perhaps why it matters. I'll aim for clarity and accessibility while being scientifically accurate. Let me structure it logically: overview \u2192 light reactions \u2192 Calvin cycle \u2192 significance.\n</think>\n\nPhotosynthesis is the process by which plants, algae, and certain bacteria convert light energy into chemical energy stored in sugar molecules. It takes place primarily in the chloroplasts of plant cells, organelles packed with",
+                    "logprobs": null
+                  }
+                ],
+                "created": 1790742969,
+                "model": "/home/ericbuehler/.cache/huggingface/hub/models--Qwen--Qwen3.8-Flash-Next/snapshots/de4b8e4d43b917e7706784d8bb445c9af86a3540",
+                "system_fingerprint": "local",
+                "object": "text_completion",
+                "usage": {
+                  "completion_tokens": 128,
+                  "prompt_tokens": 11,
+                  "total_tokens": 139,
+                  "avg_tok_per_sec": 52.33434,
+                  "avg_prompt_tok_per_sec": 135.80246,
+                  "avg_compl_tok_per_sec": 49.70874,
+                  "total_time_sec": 2.656,
+                  "total_prompt_time_sec": 0.081,
+                  "total_completion_time_sec": 2.575
+                }
+              },
+              "error": null
+            },
+            {
+              "request_index": 3,
+              "prompt_name": "json",
+              "prompt_sha256": "c02b6de4c77c9b5bc2e4730a7a25fb9cfc7e8f7d8fc97b4c79671a2078948160",
+              "request": {
+                "model": "default",
+                "prompt": "Produce a JSON array of five fictional users with id, name, email and age fields.",
+                "max_tokens": 128,
+                "temperature": 0.0,
+                "seed": 20260929,
+                "ignore_eos": true,
+                "cache_prompt": false
+              },
+              "submitted_seconds": 6.9705273550061975,
+              "started_seconds": 6.97062535501027,
+              "finished_seconds": 9.533650691999355,
+              "wall_seconds": 2.563025336989085,
+              "output_tokens_per_second": 49.94098113379091,
+              "response": {
+                "id": "206",
+                "choices": [
+                  {
+                    "finish_reason": "length",
+                    "index": 0,
+                    "text": "<think>\nThe user wants me to generate a JSON array containing five fictional user objects. Each object should have four fields: id, name, email, and age. Let me create five diverse, clearly fictional users with realistic-looking data.\n\nLet me make sure:\n- 5 users\n- Fields: id, name, email, age\n- Fictional names and emails\n- Valid JSON format\n- Varied ages and names for diversity\n</think>\n\n```json\n[\n  {\n    \"id\": 1,\n    \"name\": \"Marina Voss\",\n    \"email\": \"marina",
+                    "logprobs": null
+                  }
+                ],
+                "created": 1790742972,
+                "model": "/home/ericbuehler/.cache/huggingface/hub/models--Qwen--Qwen3.8-Flash-Next/snapshots/de4b8e4d43b917e7706784d8bb445c9af86a3540",
+                "system_fingerprint": "local",
+                "object": "text_completion",
+                "usage": {
+                  "completion_tokens": 128,
+                  "prompt_tokens": 19,
+                  "total_tokens": 147,
+                  "avg_tok_per_sec": 58.079807,
+                  "avg_prompt_tok_per_sec": 158.33333,
+                  "avg_compl_tok_per_sec": 53.090004,
+                  "total_time_sec": 2.531,
+                  "total_prompt_time_sec": 0.12,
+                  "total_completion_time_sec": 2.411
+                }
+              },
+              "error": null
+            },
+            {
+              "request_index": 4,
+              "prompt_name": "primes",
+              "prompt_sha256": "4ed5533858fc0525508d7d060b7b3ed89f56cf4997ec63bd84e386fe8520681c",
+              "request": {
+                "model": "default",
+                "prompt": "List the first twenty prime numbers separated by commas:",
+                "max_tokens": 128,
+                "temperature": 0.0,
+                "seed": 20260929,
+                "ignore_eos": true,
+                "cache_prompt": false
+              },
+              "submitted_seconds": 9.533805108003435,
+              "started_seconds": 9.5338989640004,
+              "finished_seconds": 11.941005141998176,
+              "wall_seconds": 2.4071061779977754,
+              "output_tokens_per_second": 53.17588445827099,
+              "response": {
+                "id": "207",
+                "choices": [
+                  {
+                    "finish_reason": "length",
+                    "index": 0,
+                    "text": "<think>\nThe user wants the first twenty prime numbers listed and separated by commas. Let me list them:\n\n1. 2\n2. 3\n5\n7\n11\n13\n17\n19\n23\n29\n31\n37\n41\n43\n47\n53\n59\n61\n67\n71\n\nThat's 20 primes. Let me verify: 2, 3, 5, 7, 11, 13, 17, 19, 23,",
+                    "logprobs": null
+                  }
+                ],
+                "created": 1790742974,
+                "model": "/home/ericbuehler/.cache/huggingface/hub/models--Qwen--Qwen3.8-Flash-Next/snapshots/de4b8e4d43b917e7706784d8bb445c9af86a3540",
+                "system_fingerprint": "local",
+                "object": "text_completion",
+                "usage": {
+                  "completion_tokens": 128,
+                  "prompt_tokens": 10,
+                  "total_tokens": 138,
+                  "avg_tok_per_sec": 57.93451,
+                  "avg_prompt_tok_per_sec": 128.20514,
+                  "avg_compl_tok_per_sec": 55.555557,
+                  "total_time_sec": 2.382,
+                  "total_prompt_time_sec": 0.078,
+                  "total_completion_time_sec": 2.304
+                }
+              },
+              "error": null
+            },
+            {
+              "request_index": 5,
+              "prompt_name": "math",
+              "prompt_sha256": "93d3da4cd1b7890e2560f7a5fbcd0ac8a672cffc2c010723b4e66671a5bcfa36",
+              "request": {
+                "model": "default",
+                "prompt": "Solve step by step: a train travels 180 km in 2.5 hours. What is its average speed in m/s?",
+                "max_tokens": 128,
+                "temperature": 0.0,
+                "seed": 20260929,
+                "ignore_eos": true,
+                "cache_prompt": false
+              },
+              "submitted_seconds": 11.941088278006646,
+              "started_seconds": 11.941186085998197,
+              "finished_seconds": 14.011056085000746,
+              "wall_seconds": 2.069869999002549,
+              "output_tokens_per_second": 61.839632470484624,
+              "response": {
+                "id": "208",
+                "choices": [
+                  {
+                    "finish_reason": "length",
+                    "index": 0,
+                    "text": "<think>\n\n</think>\n\nTo find the average speed in meters per second (m/s), we will follow these steps:\n\n### Step 1: Identify the given values\n*   Distance ($d$) = $180 \\text{ km}$\n*   Time ($t$) = $2.5 \\text{ hours}$\n\n### Step 2: Calculate the average speed in km/h\nThe formula for average speed is:\n$$ v = \\frac{d}{t} $$\n\nSubstitute the given values:\n$$ v = \\frac{180 \\text{ km}}{2.",
+                    "logprobs": null
+                  }
+                ],
+                "created": 1790742976,
+                "model": "/home/ericbuehler/.cache/huggingface/hub/models--Qwen--Qwen3.8-Flash-Next/snapshots/de4b8e4d43b917e7706784d8bb445c9af86a3540",
+                "system_fingerprint": "local",
+                "object": "text_completion",
+                "usage": {
+                  "completion_tokens": 128,
+                  "prompt_tokens": 30,
+                  "total_tokens": 158,
+                  "avg_tok_per_sec": 77.03559,
+                  "avg_prompt_tok_per_sec": 193.54839,
+                  "avg_compl_tok_per_sec": 67.510544,
+                  "total_time_sec": 2.051,
+                  "total_prompt_time_sec": 0.155,
+                  "total_completion_time_sec": 1.896
+                }
+              },
+              "error": null
+            },
+            {
+              "request_index": 6,
+              "prompt_name": "translation",
+              "prompt_sha256": "244a25b526dd7c3bc1caf054f30d7948205927f00d1120712902be4d067dcd67",
+              "request": {
+                "model": "default",
+                "prompt": "Translate to French: The weather is lovely today and we are going to the park after lunch.",
+                "max_tokens": 128,
+                "temperature": 0.0,
+                "seed": 20260929,
+                "ignore_eos": true,
+                "cache_prompt": false
+              },
+              "submitted_seconds": 14.011147173005156,
+              "started_seconds": 14.011246405003476,
+              "finished_seconds": 16.399890720000258,
+              "wall_seconds": 2.3886443149967818,
+              "output_tokens_per_second": 53.58688156138159,
+              "response": {
+                "id": "209",
+                "choices": [
+                  {
+                    "finish_reason": "length",
+                    "index": 0,
+                    "text": "<think>\nThe user wants me to translate an English sentence into French. Let me think about the best translation:\n\n\"The weather is lovely today and we are going to the park after lunch.\"\n\nLet me consider the components:\n- \"The weather is lovely today\" \u2192 \"Il fait beau aujourd'hui\" (this is the most natural French way to express nice weather)\n- \"and we are going to the park\" \u2192 \"et nous allons au parc\" (or \"on va au parc\" for a more casual tone)\n- \"after lunch\" \u2192 \"apr\u00e8s le d\u00e9jeuner\" (or \"apr\u00e8s le repas de",
+                    "logprobs": null
+                  }
+                ],
+                "created": 1790742979,
+                "model": "/home/ericbuehler/.cache/huggingface/hub/models--Qwen--Qwen3.8-Flash-Next/snapshots/de4b8e4d43b917e7706784d8bb445c9af86a3540",
+                "system_fingerprint": "local",
+                "object": "text_completion",
+                "usage": {
+                  "completion_tokens": 128,
+                  "prompt_tokens": 19,
+                  "total_tokens": 147,
+                  "avg_tok_per_sec": 62.0777,
+                  "avg_prompt_tok_per_sec": 162.39317,
+                  "avg_compl_tok_per_sec": 56.863617,
+                  "total_time_sec": 2.368,
+                  "total_prompt_time_sec": 0.117,
+                  "total_completion_time_sec": 2.251
+                }
+              },
+              "error": null
+            },
+            {
+              "request_index": 7,
+              "prompt_name": "quicksort",
+              "prompt_sha256": "69d376e3a1b29ebbd75e59ef56ccaf3d13eefaac503b57cf386ea98ad29570d4",
+              "request": {
+                "model": "default",
+                "prompt": "def quicksort(arr):\n",
+                "max_tokens": 128,
+                "temperature": 0.0,
+                "seed": 20260929,
+                "ignore_eos": true,
+                "cache_prompt": false
+              },
+              "submitted_seconds": 16.40031062399794,
+              "started_seconds": 16.40040656000201,
+              "finished_seconds": 18.730314524000278,
+              "wall_seconds": 2.3299079639982665,
+              "output_tokens_per_second": 54.93779238401506,
+              "response": {
+                "id": "210",
+                "choices": [
+                  {
+                    "finish_reason": "length",
+                    "index": 0,
+                    "text": "if len(arr) <= 1:\n        return arr\n    pivot = arr[len(arr) // 2]\n    left = [x for x in arr if x < pivot]\n    middle = [x for x in arr if x == pivot]\n    right = [x for x in arr if x > pivot]\n    return quicksort(left) + middle + quicksort(right)\n\n# Example usage:\narr = [3, 6, 8, 10, 1, 2, 1]\nsorted_arr = quicksort(arr)\nprint(\"Sorted array:\",",
+                    "logprobs": null
+                  }
+                ],
+                "created": 1790742981,
+                "model": "/home/ericbuehler/.cache/huggingface/hub/models--Qwen--Qwen3.8-Flash-Next/snapshots/de4b8e4d43b917e7706784d8bb445c9af86a3540",
+                "system_fingerprint": "local",
+                "object": "text_completion",
+                "usage": {
+                  "completion_tokens": 128,
+                  "prompt_tokens": 6,
+                  "total_tokens": 134,
+                  "avg_tok_per_sec": 58.10928,
+                  "avg_prompt_tok_per_sec": 101.69491,
+                  "avg_compl_tok_per_sec": 56.96484,
+                  "total_time_sec": 2.306,
+                  "total_prompt_time_sec": 0.059,
+                  "total_completion_time_sec": 2.247
+                }
+              },
+              "error": null
+            }
+          ],
+          "trial": 3,
+          "warmup": false
+        },
+        {
+          "complete": true,
+          "wall_seconds": 18.456312401991454,
+          "completed_output_tokens": 1024,
+          "aggregate_output_tokens_per_second": 55.4823725182236,
+          "mean_active_requests": 0.9998106037687705,
+          "mean_request_wall_seconds": 2.3066021057475155,
+          "mean_request_output_tokens_per_second": 55.87660133176447,
+          "latency_weighted_request_output_tokens_per_second": 55.49288266105966,
+          "sustained_window": {
+            "definition": "whole responses completed after first completion, through last replenishment",
+            "start_seconds": 2.297744088995387,
+            "end_seconds": 16.247854257992003,
+            "wall_seconds": 13.950110168996616,
+            "completed_request_indices": [
+              1,
+              2,
+              3,
+              4,
+              5,
+              6
+            ],
+            "completed_requests": 6,
+            "completed_output_tokens": 768,
+            "completion_boundary_output_tokens_per_second": 55.05332866165025,
+            "mean_active_requests": 0.9998023146784591
+          },
+          "sustained_window_unavailable_reason": null,
+          "requests": [
+            {
+              "request_index": 0,
+              "prompt_name": "python",
+              "prompt_sha256": "7d9074c26475df2a799d748be049ff151de83afb31dde5ef9211371fc3a1b124",
+              "request": {
+                "model": "default",
+                "prompt": "Write a Python function that returns the n-th Fibonacci number, with a docstring.",
+                "max_tokens": 128,
+                "temperature": 0.0,
+                "seed": 20260929,
+                "ignore_eos": true,
+                "cache_prompt": false
+              },
+              "submitted_seconds": 1.443199289496988e-05,
+              "started_seconds": 0.0005277599993860349,
+              "finished_seconds": 2.297744088995387,
+              "wall_seconds": 2.297216328996001,
+              "output_tokens_per_second": 55.719610897917676,
+              "response": {
+                "id": "211",
+                "choices": [
+                  {
+                    "finish_reason": "length",
+                    "index": 0,
+                    "text": "<think>\n\n</think>\n\n```python\ndef fibonacci(n: int) -> int:\n    \"\"\"\n    Return the n-th Fibonacci number.\n    \n    The Fibonacci sequence is defined as:\n    F(0) = 0, F(1) = 1, and F(n) = F(n-1) + F(n-2) for n > 1.\n    \n    Parameters:\n        n (int): The index in the Fibonacci sequence (0-based).\n        \n    Returns:\n        int: The n-th Fibonacci number.\n        \n    Raises:\n        ValueError: If n is negative",
+                    "logprobs": null
+                  }
+                ],
+                "created": 1790742983,
+                "model": "/home/ericbuehler/.cache/huggingface/hub/models--Qwen--Qwen3.8-Flash-Next/snapshots/de4b8e4d43b917e7706784d8bb445c9af86a3540",
+                "system_fingerprint": "local",
+                "object": "text_completion",
+                "usage": {
+                  "completion_tokens": 128,
+                  "prompt_tokens": 17,
+                  "total_tokens": 145,
+                  "avg_tok_per_sec": 63.680283,
+                  "avg_prompt_tok_per_sec": 160.37735,
+                  "avg_compl_tok_per_sec": 58.959003,
+                  "total_time_sec": 2.277,
+                  "total_prompt_time_sec": 0.106,
+                  "total_completion_time_sec": 2.171
+                }
+              },
+              "error": null
+            },
+            {
+              "request_index": 1,
+              "prompt_name": "rust",
+              "prompt_sha256": "60b4ac9a09b8a5ee17b2810c21cd6b28772af55c47488253dd3654098624138d",
+              "request": {
+                "model": "default",
+                "prompt": "Write a Rust struct for a 2D point with methods for distance and midpoint.",
+                "max_tokens": 128,
+                "temperature": 0.0,
+                "seed": 20260929,
+                "ignore_eos": true,
+                "cache_prompt": false
+              },
+              "submitted_seconds": 2.2979272899974603,
+              "started_seconds": 2.2980177059944253,
+              "finished_seconds": 4.396615851990646,
+              "wall_seconds": 2.0985981459962204,
+              "output_tokens_per_second": 60.9930968652588,
+              "response": {
+                "id": "212",
+                "choices": [
+                  {
+                    "finish_reason": "length",
+                    "index": 0,
+                    "text": "<think>\n\n</think>\n\n```rust\n#[derive(Debug, Clone, Copy, PartialEq)]\npub struct Point {\n    pub x: f64,\n    pub y: f64,\n}\n\nimpl Point {\n    /// Creates a new Point with the given x and y coordinates.\n    pub fn new(x: f64, y: f64) -> Self {\n        Point { x, y }\n    }\n\n    /// Calculates the Euclidean distance between this point and another point.\n    pub fn distance_to(&self, other: &Point) -> f64 {\n",
+                    "logprobs": null
+                  }
+                ],
+                "created": 1790742986,
+                "model": "/home/ericbuehler/.cache/huggingface/hub/models--Qwen--Qwen3.8-Flash-Next/snapshots/de4b8e4d43b917e7706784d8bb445c9af86a3540",
+                "system_fingerprint": "local",
+                "object": "text_completion",
+                "usage": {
+                  "completion_tokens": 128,
+                  "prompt_tokens": 17,
+                  "total_tokens": 145,
+                  "avg_tok_per_sec": 69.91321,
+                  "avg_prompt_tok_per_sec": 157.40741,
+                  "avg_compl_tok_per_sec": 65.10682,
+                  "total_time_sec": 2.074,
+                  "total_prompt_time_sec": 0.108,
+                  "total_completion_time_sec": 1.966
+                }
+              },
+              "error": null
+            },
+            {
+              "request_index": 2,
+              "prompt_name": "prose",
+              "prompt_sha256": "b5a04dcac0e07bb9e6254734d48ce7d63fc8a2f1e8f76ff6fe42485981bc10e6",
+              "request": {
+                "model": "default",
+                "prompt": "Explain in a few paragraphs how photosynthesis works.",
+                "max_tokens": 128,
+                "temperature": 0.0,
+                "seed": 20260929,
+                "ignore_eos": true,
+                "cache_prompt": false
+              },
+              "submitted_seconds": 4.397159580999869,
+              "started_seconds": 4.397282812991762,
+              "finished_seconds": 7.142699152987916,
+              "wall_seconds": 2.7454163399961544,
+              "output_tokens_per_second": 46.62316535938564,
+              "response": {
+                "id": "213",
+                "choices": [
+                  {
+                    "finish_reason": "length",
+                    "index": 0,
+                    "text": "<think>\nThe user wants a clear, concise explanation of photosynthesis in a few paragraphs. I should cover the key aspects: what it is, the two main stages (light-dependent reactions and the Calvin cycle), the inputs and outputs, and perhaps where it occurs. I'll aim for clarity and accessibility while being scientifically accurate. Let me structure it logically: overview \u2192 light reactions \u2192 Calvin cycle \u2192 significance.\n</think>\n\nPhotosynthesis is the process by which plants, algae, and certain bacteria convert light energy into chemical energy stored in sugar molecules. It takes place primarily in the chloroplasts of plant cells, organelles packed with",
+                    "logprobs": null
+                  }
+                ],
+                "created": 1790742988,
+                "model": "/home/ericbuehler/.cache/huggingface/hub/models--Qwen--Qwen3.8-Flash-Next/snapshots/de4b8e4d43b917e7706784d8bb445c9af86a3540",
+                "system_fingerprint": "local",
+                "object": "text_completion",
+                "usage": {
+                  "completion_tokens": 128,
+                  "prompt_tokens": 11,
+                  "total_tokens": 139,
+                  "avg_tok_per_sec": 51.310448,
+                  "avg_prompt_tok_per_sec": 135.80246,
+                  "avg_compl_tok_per_sec": 48.70624,
+                  "total_time_sec": 2.709,
+                  "total_prompt_time_sec": 0.081,
+                  "total_completion_time_sec": 2.628
+                }
+              },
+              "error": null
+            },
+            {
+              "request_index": 3,
+              "prompt_name": "json",
+              "prompt_sha256": "c02b6de4c77c9b5bc2e4730a7a25fb9cfc7e8f7d8fc97b4c79671a2078948160",
+              "request": {
+                "model": "default",
+                "prompt": "Produce a JSON array of five fictional users with id, name, email and age fields.",
+                "max_tokens": 128,
+                "temperature": 0.0,
+                "seed": 20260929,
+                "ignore_eos": true,
+                "cache_prompt": false
+              },
+              "submitted_seconds": 7.143148561997805,
+              "started_seconds": 7.143269681997481,
+              "finished_seconds": 9.628299558986328,
+              "wall_seconds": 2.485029876988847,
+              "output_tokens_per_second": 51.508435043485186,
+              "response": {
+                "id": "214",
+                "choices": [
+                  {
+                    "finish_reason": "length",
+                    "index": 0,
+                    "text": "<think>\nThe user wants me to generate a JSON array containing five fictional user objects. Each object should have four fields: id, name, email, and age. Let me create five diverse, clearly fictional users with realistic-looking data. I'll make sure the emails are clearly fictional (using example domains or made-up names) and the data is varied and interesting.\n</think>\n\n```json\n[\n  {\n    \"id\": 1,\n    \"name\": \"Marina Voss\",\n    \"email\": \"marina.voss@example.com\",\n    \"age\": 34\n  },\n",
+                    "logprobs": null
+                  }
+                ],
+                "created": 1790742990,
+                "model": "/home/ericbuehler/.cache/huggingface/hub/models--Qwen--Qwen3.8-Flash-Next/snapshots/de4b8e4d43b917e7706784d8bb445c9af86a3540",
+                "system_fingerprint": "local",
+                "object": "text_completion",
+                "usage": {
+                  "completion_tokens": 128,
+                  "prompt_tokens": 19,
+                  "total_tokens": 147,
+                  "avg_tok_per_sec": 59.95106,
+                  "avg_prompt_tok_per_sec": 157.0248,
+                  "avg_compl_tok_per_sec": 54.912056,
+                  "total_time_sec": 2.452,
+                  "total_prompt_time_sec": 0.121,
+                  "total_completion_time_sec": 2.331
+                }
+              },
+              "error": null
+            },
+            {
+              "request_index": 4,
+              "prompt_name": "primes",
+              "prompt_sha256": "4ed5533858fc0525508d7d060b7b3ed89f56cf4997ec63bd84e386fe8520681c",
+              "request": {
+                "model": "default",
+                "prompt": "List the first twenty prime numbers separated by commas:",
+                "max_tokens": 128,
+                "temperature": 0.0,
+                "seed": 20260929,
+                "ignore_eos": true,
+                "cache_prompt": false
+              },
+              "submitted_seconds": 9.628514054988045,
+              "started_seconds": 9.628604390993132,
+              "finished_seconds": 11.912724145993707,
+              "wall_seconds": 2.2841197550005745,
+              "output_tokens_per_second": 56.039093274235,
+              "response": {
+                "id": "215",
+                "choices": [
+                  {
+                    "finish_reason": "length",
+                    "index": 0,
+                    "text": "<think>\nThe user wants the first twenty prime numbers listed and separated by commas. Let me list them:\n\n1. 2\n2. 3\n5. 5\n4. 7\n5. 11\n6. 13\n7. 17\n8. 19\n9. 23\n10. 29\n11. 31\n12. 37\n13. 41\n14. 43\n15. 47\n16. 53\n17. 59",
+                    "logprobs": null
+                  }
+                ],
+                "created": 1790742993,
+                "model": "/home/ericbuehler/.cache/huggingface/hub/models--Qwen--Qwen3.8-Flash-Next/snapshots/de4b8e4d43b917e7706784d8bb445c9af86a3540",
+                "system_fingerprint": "local",
+                "object": "text_completion",
+                "usage": {
+                  "completion_tokens": 128,
+                  "prompt_tokens": 10,
+                  "total_tokens": 138,
+                  "avg_tok_per_sec": 61.007957,
+                  "avg_prompt_tok_per_sec": 128.20514,
+                  "avg_compl_tok_per_sec": 58.60806,
+                  "total_time_sec": 2.262,
+                  "total_prompt_time_sec": 0.078,
+                  "total_completion_time_sec": 2.184
+                }
+              },
+              "error": null
+            },
+            {
+              "request_index": 5,
+              "prompt_name": "math",
+              "prompt_sha256": "93d3da4cd1b7890e2560f7a5fbcd0ac8a672cffc2c010723b4e66671a5bcfa36",
+              "request": {
+                "model": "default",
+                "prompt": "Solve step by step: a train travels 180 km in 2.5 hours. What is its average speed in m/s?",
+                "max_tokens": 128,
+                "temperature": 0.0,
+                "seed": 20260929,
+                "ignore_eos": true,
+                "cache_prompt": false
+              },
+              "submitted_seconds": 11.913114082999527,
+              "started_seconds": 11.913204114986002,
+              "finished_seconds": 14.043339632989955,
+              "wall_seconds": 2.1301355180039536,
+              "output_tokens_per_second": 60.09007357425906,
+              "response": {
+                "id": "216",
+                "choices": [
+                  {
+                    "finish_reason": "length",
+                    "index": 0,
+                    "text": "<think>\n\n</think>\n\nTo find the average speed in meters per second (m/s), we will follow these steps:\n\n### Step 1: Identify the given values\n*   Distance ($d$) = $180 \\text{ km}$\n*   Time ($t$) = $2.5 \\text{ hours}$\n\n### Step 2: Calculate the average speed in km/h\nThe formula for average speed is:\n$$ v = \\frac{d}{t} $$\n\nSubstitute the given values:\n$$ v = \\frac{180 \\text{ km}}{2.",
+                    "logprobs": null
+                  }
+                ],
+                "created": 1790742995,
+                "model": "/home/ericbuehler/.cache/huggingface/hub/models--Qwen--Qwen3.8-Flash-Next/snapshots/de4b8e4d43b917e7706784d8bb445c9af86a3540",
+                "system_fingerprint": "local",
+                "object": "text_completion",
+                "usage": {
+                  "completion_tokens": 128,
+                  "prompt_tokens": 30,
+                  "total_tokens": 158,
+                  "avg_tok_per_sec": 74.98814,
+                  "avg_prompt_tok_per_sec": 194.80519,
+                  "avg_compl_tok_per_sec": 65.54019,
+                  "total_time_sec": 2.107,
+                  "total_prompt_time_sec": 0.154,
+                  "total_completion_time_sec": 1.953
+                }
+              },
+              "error": null
+            },
+            {
+              "request_index": 6,
+              "prompt_name": "translation",
+              "prompt_sha256": "244a25b526dd7c3bc1caf054f30d7948205927f00d1120712902be4d067dcd67",
+              "request": {
+                "model": "default",
+                "prompt": "Translate to French: The weather is lovely today and we are going to the park after lunch.",
+                "max_tokens": 128,
+                "temperature": 0.0,
+                "seed": 20260929,
+                "ignore_eos": true,
+                "cache_prompt": false
+              },
+              "submitted_seconds": 14.043420176996733,
+              "started_seconds": 14.043505296998774,
+              "finished_seconds": 16.247558097995352,
+              "wall_seconds": 2.2040528009965783,
+              "output_tokens_per_second": 58.07483375267774,
+              "response": {
+                "id": "217",
+                "choices": [
+                  {
+                    "finish_reason": "length",
+                    "index": 0,
+                    "text": "<think>\nThe user wants me to translate an English sentence into French. Let me think about the best translation:\n\n\"The weather is lovely today and we are going to the park after lunch.\"\n\nLet me consider the options:\n\n1. \"Il fait beau aujourd'hui et nous allons au parc apr\u00e8s le d\u00e9jeuner.\"\n2. \"Le temps est magnifique aujourd'hui et nous allons au parc apr\u00e8s le d\u00e9jeuner.\"\n3. \"Il fait un temps magnifique aujourd'hui et nous allons au parc apr\u00e8s le d\u00e9jeuner.\"\n\nIn French, the most natural way to express \"the weather is lovely\" is \"Il fait beau\" or \"Il",
+                    "logprobs": null
+                  }
+                ],
+                "created": 1790742997,
+                "model": "/home/ericbuehler/.cache/huggingface/hub/models--Qwen--Qwen3.8-Flash-Next/snapshots/de4b8e4d43b917e7706784d8bb445c9af86a3540",
+                "system_fingerprint": "local",
+                "object": "text_completion",
+                "usage": {
+                  "completion_tokens": 128,
+                  "prompt_tokens": 19,
+                  "total_tokens": 147,
+                  "avg_tok_per_sec": 67.400276,
+                  "avg_prompt_tok_per_sec": 161.01695,
+                  "avg_compl_tok_per_sec": 62.045563,
+                  "total_time_sec": 2.181,
+                  "total_prompt_time_sec": 0.118,
+                  "total_completion_time_sec": 2.063
+                }
+              },
+              "error": null
+            },
+            {
+              "request_index": 7,
+              "prompt_name": "quicksort",
+              "prompt_sha256": "69d376e3a1b29ebbd75e59ef56ccaf3d13eefaac503b57cf386ea98ad29570d4",
+              "request": {
+                "model": "default",
+                "prompt": "def quicksort(arr):\n",
+                "max_tokens": 128,
+                "temperature": 0.0,
+                "seed": 20260929,
+                "ignore_eos": true,
+                "cache_prompt": false
+              },
+              "submitted_seconds": 16.247854257992003,
+              "started_seconds": 16.247936241998104,
+              "finished_seconds": 18.4561843219999,
+              "wall_seconds": 2.2082480800017947,
+              "output_tokens_per_second": 57.96450188689668,
+              "response": {
+                "id": "218",
+                "choices": [
+                  {
+                    "finish_reason": "length",
+                    "index": 0,
+                    "text": "if len(arr) <= 1:\n        return arr\n    pivot = arr[len(arr) // 2]\n    left = [x for x in arr if x < pivot]\n    middle = [x for x in arr if x == pivot]\n    right = [x for x in arr if x > pivot]\n    return quicksort(left) + middle + quicksort(right)\n\n# Example usage:\narr = [3, 6, 8, 10, 1, 2, 1]\nprint(quicksort(arr))  # Output: [1,",
+                    "logprobs": null
+                  }
+                ],
+                "created": 1790743000,
+                "model": "/home/ericbuehler/.cache/huggingface/hub/models--Qwen--Qwen3.8-Flash-Next/snapshots/de4b8e4d43b917e7706784d8bb445c9af86a3540",
+                "system_fingerprint": "local",
+                "object": "text_completion",
+                "usage": {
+                  "completion_tokens": 128,
+                  "prompt_tokens": 6,
+                  "total_tokens": 134,
+                  "avg_tok_per_sec": 61.355312,
+                  "avg_prompt_tok_per_sec": 101.69491,
+                  "avg_compl_tok_per_sec": 60.235294,
+                  "total_time_sec": 2.184,
+                  "total_prompt_time_sec": 0.059,
+                  "total_completion_time_sec": 2.125
+                }
+              },
+              "error": null
+            }
+          ],
+          "trial": 4,
+          "warmup": false
+        },
+        {
+          "complete": true,
+          "wall_seconds": 18.16551227599848,
+          "completed_output_tokens": 1024,
+          "aggregate_output_tokens_per_second": 56.3705545124086,
+          "mean_active_requests": 0.9998258061246854,
+          "mean_request_wall_seconds": 2.270293494377256,
+          "mean_request_output_tokens_per_second": 56.74299857501062,
+          "latency_weighted_request_output_tokens_per_second": 56.38037562853103,
+          "sustained_window": {
+            "definition": "whole responses completed after first completion, through last replenishment",
+            "start_seconds": 2.2536296710022725,
+            "end_seconds": 15.819286740006646,
+            "wall_seconds": 13.565657069004374,
+            "completed_request_indices": [
+              1,
+              2,
+              3,
+              4,
+              5,
+              6
+            ],
+            "completed_requests": 6,
+            "completed_output_tokens": 768,
+            "completion_boundary_output_tokens_per_second": 56.61354964919263,
+            "mean_active_requests": 0.9998465348213179
+          },
+          "sustained_window_unavailable_reason": null,
+          "requests": [
+            {
+              "request_index": 0,
+              "prompt_name": "python",
+              "prompt_sha256": "7d9074c26475df2a799d748be049ff151de83afb31dde5ef9211371fc3a1b124",
+              "request": {
+                "model": "default",
+                "prompt": "Write a Python function that returns the n-th Fibonacci number, with a docstring.",
+                "max_tokens": 128,
+                "temperature": 0.0,
+                "seed": 20260929,
+                "ignore_eos": true,
+                "cache_prompt": false
+              },
+              "submitted_seconds": 1.5408004401251674e-05,
+              "started_seconds": 0.0006989289977354929,
+              "finished_seconds": 2.2536296710022725,
+              "wall_seconds": 2.252930742004537,
+              "output_tokens_per_second": 56.8148845472775,
+              "response": {
+                "id": "219",
+                "choices": [
+                  {
+                    "finish_reason": "length",
+                    "index": 0,
+                    "text": "<think>\n\n</think>\n\n```python\ndef fibonacci(n: int) -> int:\n    \"\"\"\n    Return the n-th Fibonacci number.\n    \n    The Fibonacci sequence is defined as:\n    F(0) = 0, F(1) = 1, and F(n) = F(n-1) + F(n-2) for n > 1.\n    \n    Parameters:\n        n (int): The index in the Fibonacci sequence (0-based).\n        \n    Returns:\n        int: The n-th Fibonacci number.\n        \n    Raises:\n        ValueError: If n is negative",
+                    "logprobs": null
+                  }
+                ],
+                "created": 1790743002,
+                "model": "/home/ericbuehler/.cache/huggingface/hub/models--Qwen--Qwen3.8-Flash-Next/snapshots/de4b8e4d43b917e7706784d8bb445c9af86a3540",
+                "system_fingerprint": "local",
+                "object": "text_completion",
+                "usage": {
+                  "completion_tokens": 128,
+                  "prompt_tokens": 17,
+                  "total_tokens": 145,
+                  "avg_tok_per_sec": 65.080795,
+                  "avg_prompt_tok_per_sec": 161.90477,
+                  "avg_compl_tok_per_sec": 60.292038,
+                  "total_time_sec": 2.228,
+                  "total_prompt_time_sec": 0.105,
+                  "total_completion_time_sec": 2.123
+                }
+              },
+              "error": null
+            },
+            {
+              "request_index": 1,
+              "prompt_name": "rust",
+              "prompt_sha256": "60b4ac9a09b8a5ee17b2810c21cd6b28772af55c47488253dd3654098624138d",
+              "request": {
+                "model": "default",
+                "prompt": "Write a Rust struct for a 2D point with methods for distance and midpoint.",
+                "max_tokens": 128,
+                "temperature": 0.0,
+                "seed": 20260929,
+                "ignore_eos": true,
+                "cache_prompt": false
+              },
+              "submitted_seconds": 2.2539318470080616,
+              "started_seconds": 2.2540705029969104,
+              "finished_seconds": 4.245368575007888,
+              "wall_seconds": 1.9912980720109772,
+              "output_tokens_per_second": 64.2796785670239,
+              "response": {
+                "id": "220",
+                "choices": [
+                  {
+                    "finish_reason": "length",
+                    "index": 0,
+                    "text": "<think>\n\n</think>\n\n```rust\n#[derive(Debug, Clone, Copy, PartialEq)]\npub struct Point {\n    pub x: f64,\n    pub y: f64,\n}\n\nimpl Point {\n    /// Creates a new Point with the given x and y coordinates.\n    pub fn new(x: f64, y: f64) -> Self {\n        Point { x, y }\n    }\n\n    /// Calculates the Euclidean distance between this point and another point.\n    pub fn distance_to(&self, other: &Point) -> f64 {\n",
+                    "logprobs": null
+                  }
+                ],
+                "created": 1790743004,
+                "model": "/home/ericbuehler/.cache/huggingface/hub/models--Qwen--Qwen3.8-Flash-Next/snapshots/de4b8e4d43b917e7706784d8bb445c9af86a3540",
+                "system_fingerprint": "local",
+                "object": "text_completion",
+                "usage": {
+                  "completion_tokens": 128,
+                  "prompt_tokens": 17,
+                  "total_tokens": 145,
+                  "avg_tok_per_sec": 73.52941,
+                  "avg_prompt_tok_per_sec": 157.40741,
+                  "avg_compl_tok_per_sec": 68.669525,
+                  "total_time_sec": 1.972,
+                  "total_prompt_time_sec": 0.108,
+                  "total_completion_time_sec": 1.864
+                }
+              },
+              "error": null
+            },
+            {
+              "request_index": 2,
+              "prompt_name": "prose",
+              "prompt_sha256": "b5a04dcac0e07bb9e6254734d48ce7d63fc8a2f1e8f76ff6fe42485981bc10e6",
+              "request": {
+                "model": "default",
+                "prompt": "Explain in a few paragraphs how photosynthesis works.",
+                "max_tokens": 128,
+                "temperature": 0.0,
+                "seed": 20260929,
+                "ignore_eos": true,
+                "cache_prompt": false
+              },
+              "submitted_seconds": 4.245656223007245,
+              "started_seconds": 4.2457935830025235,
+              "finished_seconds": 6.849547389007057,
+              "wall_seconds": 2.6037538060045335,
+              "output_tokens_per_second": 49.159793719674404,
+              "response": {
+                "id": "221",
+                "choices": [
+                  {
+                    "finish_reason": "length",
+                    "index": 0,
+                    "text": "<think>\nThe user wants a clear, concise explanation of photosynthesis in a few paragraphs. I should cover the key aspects: what it is, the two main stages (light-dependent reactions and the Calvin cycle), the inputs and outputs, and why it matters. I'll aim for clarity and accessibility while being scientifically accurate. Let me structure it logically: overview \u2192 light reactions \u2192 Calvin cycle \u2192 significance.\n</think>\n\nPhotosynthesis is the process by which plants, algae, and certain bacteria convert light energy into chemical energy stored in sugar molecules. It takes place primarily in the chloroplasts of plant cells, organelles packed with the",
+                    "logprobs": null
+                  }
+                ],
+                "created": 1790743006,
+                "model": "/home/ericbuehler/.cache/huggingface/hub/models--Qwen--Qwen3.8-Flash-Next/snapshots/de4b8e4d43b917e7706784d8bb445c9af86a3540",
+                "system_fingerprint": "local",
+                "object": "text_completion",
+                "usage": {
+                  "completion_tokens": 128,
+                  "prompt_tokens": 11,
+                  "total_tokens": 139,
+                  "avg_tok_per_sec": 54.064568,
+                  "avg_prompt_tok_per_sec": 134.14635,
+                  "avg_compl_tok_per_sec": 51.426277,
+                  "total_time_sec": 2.571,
+                  "total_prompt_time_sec": 0.082,
+                  "total_completion_time_sec": 2.489
+                }
+              },
+              "error": null
+            },
+            {
+              "request_index": 3,
+              "prompt_name": "json",
+              "prompt_sha256": "c02b6de4c77c9b5bc2e4730a7a25fb9cfc7e8f7d8fc97b4c79671a2078948160",
+              "request": {
+                "model": "default",
+                "prompt": "Produce a JSON array of five fictional users with id, name, email and age fields.",
+                "max_tokens": 128,
+                "temperature": 0.0,
+                "seed": 20260929,
+                "ignore_eos": true,
+                "cache_prompt": false
+              },
+              "submitted_seconds": 6.849638765008422,
+              "started_seconds": 6.84974564499862,
+              "finished_seconds": 9.315876827997272,
+              "wall_seconds": 2.4661311829986516,
+              "output_tokens_per_second": 51.90315944359477,
+              "response": {
+                "id": "222",
+                "choices": [
+                  {
+                    "finish_reason": "length",
+                    "index": 0,
+                    "text": "<think>\nThe user wants me to generate a JSON array containing five fictional user objects. Each object should have four fields: id, name, email, and age. Let me create five diverse, clearly fictional users with realistic-looking data. I'll make sure the emails are clearly fictional (using example.com or similar), the names are varied, and the ages are reasonable.\n</think>\n\n```json\n[\n  {\n    \"id\": 1,\n    \"name\": \"Eleanor Whitfield\",\n    \"email\": \"eleanor.whitfield@example.com\",\n    \"age\": 34\n ",
+                    "logprobs": null
+                  }
+                ],
+                "created": 1790743009,
+                "model": "/home/ericbuehler/.cache/huggingface/hub/models--Qwen--Qwen3.8-Flash-Next/snapshots/de4b8e4d43b917e7706784d8bb445c9af86a3540",
+                "system_fingerprint": "local",
+                "object": "text_completion",
+                "usage": {
+                  "completion_tokens": 128,
+                  "prompt_tokens": 19,
+                  "total_tokens": 147,
+                  "avg_tok_per_sec": 60.320065,
+                  "avg_prompt_tok_per_sec": 157.0248,
+                  "avg_compl_tok_per_sec": 55.267704,
+                  "total_time_sec": 2.437,
+                  "total_prompt_time_sec": 0.121,
+                  "total_completion_time_sec": 2.316
+                }
+              },
+              "error": null
+            },
+            {
+              "request_index": 4,
+              "prompt_name": "primes",
+              "prompt_sha256": "4ed5533858fc0525508d7d060b7b3ed89f56cf4997ec63bd84e386fe8520681c",
+              "request": {
+                "model": "default",
+                "prompt": "List the first twenty prime numbers separated by commas:",
+                "max_tokens": 128,
+                "temperature": 0.0,
+                "seed": 20260929,
+                "ignore_eos": true,
+                "cache_prompt": false
+              },
+              "submitted_seconds": 9.316073787995265,
+              "started_seconds": 9.316182987997308,
+              "finished_seconds": 11.524772863005637,
+              "wall_seconds": 2.208589875008329,
+              "output_tokens_per_second": 57.95553146756923,
+              "response": {
+                "id": "223",
+                "choices": [
+                  {
+                    "finish_reason": "length",
+                    "index": 0,
+                    "text": "<think>\nThe user wants the first twenty prime numbers listed and separated by commas. Let me list them:\n\n1. 2\n2. 3\n5. 5\n4. 7\n5. 11\n6. 13\n7. 17\n8. 19\n9. 23\n10. 29\n11. 31\n12. 37\n13. 41\n14. 43\n15. 47\n16. 53\n17. 59",
+                    "logprobs": null
+                  }
+                ],
+                "created": 1790743011,
+                "model": "/home/ericbuehler/.cache/huggingface/hub/models--Qwen--Qwen3.8-Flash-Next/snapshots/de4b8e4d43b917e7706784d8bb445c9af86a3540",
+                "system_fingerprint": "local",
+                "object": "text_completion",
+                "usage": {
+                  "completion_tokens": 128,
+                  "prompt_tokens": 10,
+                  "total_tokens": 138,
+                  "avg_tok_per_sec": 63.186817,
+                  "avg_prompt_tok_per_sec": 129.87013,
+                  "avg_compl_tok_per_sec": 60.74988,
+                  "total_time_sec": 2.184,
+                  "total_prompt_time_sec": 0.077,
+                  "total_completion_time_sec": 2.107
+                }
+              },
+              "error": null
+            },
+            {
+              "request_index": 5,
+              "prompt_name": "math",
+              "prompt_sha256": "93d3da4cd1b7890e2560f7a5fbcd0ac8a672cffc2c010723b4e66671a5bcfa36",
+              "request": {
+                "model": "default",
+                "prompt": "Solve step by step: a train travels 180 km in 2.5 hours. What is its average speed in m/s?",
+                "max_tokens": 128,
+                "temperature": 0.0,
+                "seed": 20260929,
+                "ignore_eos": true,
+                "cache_prompt": false
+              },
+              "submitted_seconds": 11.5249713910016,
+              "started_seconds": 11.525080655002967,
+              "finished_seconds": 13.641100173001178,
+              "wall_seconds": 2.116019517998211,
+              "output_tokens_per_second": 60.49093541494839,
+              "response": {
+                "id": "224",
+                "choices": [
+                  {
+                    "finish_reason": "length",
+                    "index": 0,
+                    "text": "<think>\n\n</think>\n\nTo find the average speed in meters per second (m/s), we will follow these steps:\n\n### Step 1: Identify the given values\n*   Distance ($d$) = $180$ km\n*   Time ($t$) = $2.5$ hours\n\n### Step 2: Calculate the average speed in km/h\nThe formula for average speed is:\n$$ v = \\frac{d}{t} $$\n\nSubstitute the given values:\n$$ v = \\frac{180 \\text{ km}}{2.5 \\text{ h}}",
+                    "logprobs": null
+                  }
+                ],
+                "created": 1790743013,
+                "model": "/home/ericbuehler/.cache/huggingface/hub/models--Qwen--Qwen3.8-Flash-Next/snapshots/de4b8e4d43b917e7706784d8bb445c9af86a3540",
+                "system_fingerprint": "local",
+                "object": "text_completion",
+                "usage": {
+                  "completion_tokens": 128,
+                  "prompt_tokens": 30,
+                  "total_tokens": 158,
+                  "avg_tok_per_sec": 75.561935,
+                  "avg_prompt_tok_per_sec": 198.67549,
+                  "avg_compl_tok_per_sec": 65.979385,
+                  "total_time_sec": 2.091,
+                  "total_prompt_time_sec": 0.151,
+                  "total_completion_time_sec": 1.94
+                }
+              },
+              "error": null
+            },
+            {
+              "request_index": 6,
+              "prompt_name": "translation",
+              "prompt_sha256": "244a25b526dd7c3bc1caf054f30d7948205927f00d1120712902be4d067dcd67",
+              "request": {
+                "model": "default",
+                "prompt": "Translate to French: The weather is lovely today and we are going to the park after lunch.",
+                "max_tokens": 128,
+                "temperature": 0.0,
+                "seed": 20260929,
+                "ignore_eos": true,
+                "cache_prompt": false
+              },
+              "submitted_seconds": 13.641199901001528,
+              "started_seconds": 13.641308364996803,
+              "finished_seconds": 15.81909112399444,
+              "wall_seconds": 2.177782758997637,
+              "output_tokens_per_second": 58.77537576746832,
+              "response": {
+                "id": "225",
+                "choices": [
+                  {
+                    "finish_reason": "length",
+                    "index": 0,
+                    "text": "<think>\nThe user wants me to translate an English sentence into French. Let me think about the best translation:\n\n\"The weather is lovely today and we are going to the park after lunch.\"\n\nLet me consider the options:\n\n1. \"Il fait beau aujourd'hui et nous allons au parc apr\u00e8s le d\u00e9jeuner.\"\n2. \"Le temps est magnifique aujourd'hui et nous allons au parc apr\u00e8s le d\u00e9jeuner.\"\n3. \"Il fait un temps magnifique aujourd'hui et nous allons au parc apr\u00e8s le d\u00e9jeuner.\"\n\nIn French, the most natural way to express \"the weather is lovely\" is \"Il fait beau\" or \"Il",
+                    "logprobs": null
+                  }
+                ],
+                "created": 1790743015,
+                "model": "/home/ericbuehler/.cache/huggingface/hub/models--Qwen--Qwen3.8-Flash-Next/snapshots/de4b8e4d43b917e7706784d8bb445c9af86a3540",
+                "system_fingerprint": "local",
+                "object": "text_completion",
+                "usage": {
+                  "completion_tokens": 128,
+                  "prompt_tokens": 19,
+                  "total_tokens": 147,
+                  "avg_tok_per_sec": 68.276825,
+                  "avg_prompt_tok_per_sec": 159.66386,
+                  "avg_compl_tok_per_sec": 62.930187,
+                  "total_time_sec": 2.153,
+                  "total_prompt_time_sec": 0.119,
+                  "total_completion_time_sec": 2.034
+                }
+              },
+              "error": null
+            },
+            {
+              "request_index": 7,
+              "prompt_name": "quicksort",
+              "prompt_sha256": "69d376e3a1b29ebbd75e59ef56ccaf3d13eefaac503b57cf386ea98ad29570d4",
+              "request": {
+                "model": "default",
+                "prompt": "def quicksort(arr):\n",
+                "max_tokens": 128,
+                "temperature": 0.0,
+                "seed": 20260929,
+                "ignore_eos": true,
+                "cache_prompt": false
+              },
+              "submitted_seconds": 15.819286740006646,
+              "started_seconds": 15.819393764002598,
+              "finished_seconds": 18.16523576399777,
+              "wall_seconds": 2.345841999995173,
+              "output_tokens_per_second": 54.564629672528405,
+              "response": {
+                "id": "226",
+                "choices": [
+                  {
+                    "finish_reason": "length",
+                    "index": 0,
+                    "text": "if len(arr) <= 1:\n        return arr\n    pivot = arr[len(arr) // 2]\n    left = [x for x in arr if x < pivot]\n    middle = [x for x in arr if x == pivot]\n    right = [x for x in arr if x > pivot]\n    return quicksort(left) + middle + quicksort(right)\n\n# Example usage\narr = [3, 6, 8, 10, 1, 2, 1]\nprint(quicksort(arr))  # Output: [1, ",
+                    "logprobs": null
+                  }
+                ],
+                "created": 1790743018,
+                "model": "/home/ericbuehler/.cache/huggingface/hub/models--Qwen--Qwen3.8-Flash-Next/snapshots/de4b8e4d43b917e7706784d8bb445c9af86a3540",
+                "system_fingerprint": "local",
+                "object": "text_completion",
+                "usage": {
+                  "completion_tokens": 128,
+                  "prompt_tokens": 6,
+                  "total_tokens": 134,
+                  "avg_tok_per_sec": 57.75862,
+                  "avg_prompt_tok_per_sec": 101.69491,
+                  "avg_compl_tok_per_sec": 56.612118,
+                  "total_time_sec": 2.32,
+                  "total_prompt_time_sec": 0.059,
+                  "total_completion_time_sec": 2.261
+                }
+              },
+              "error": null
+            }
+          ],
+          "trial": 5,
+          "warmup": false
+        },
+        {
+          "complete": true,
+          "wall_seconds": 19.226946801005397,
+          "completed_output_tokens": 1024,
+          "aggregate_output_tokens_per_second": 53.25858601462682,
+          "mean_active_requests": 0.9998414748288016,
+          "mean_request_wall_seconds": 2.402987355746518,
+          "mean_request_output_tokens_per_second": 53.82173579827571,
+          "latency_weighted_request_output_tokens_per_second": 53.267030179705294,
+          "sustained_window": {
+            "definition": "whole responses completed after first completion, through last replenishment",
+            "start_seconds": 2.0541509530012263,
+            "end_seconds": 17.021600350009976,
+            "wall_seconds": 14.96744939700875,
+            "completed_request_indices": [
+              1,
+              2,
+              3,
+              4,
+              5,
+              6
+            ],
+            "completed_requests": 6,
+            "completed_output_tokens": 768,
+            "completion_boundary_output_tokens_per_second": 51.3113476871674,
+            "mean_active_requests": 0.9998399757383014
+          },
+          "sustained_window_unavailable_reason": null,
+          "requests": [
+            {
+              "request_index": 0,
+              "prompt_name": "python",
+              "prompt_sha256": "7d9074c26475df2a799d748be049ff151de83afb31dde5ef9211371fc3a1b124",
+              "request": {
+                "model": "default",
+                "prompt": "Write a Python function that returns the n-th Fibonacci number, with a docstring.",
+                "max_tokens": 128,
+                "temperature": 0.0,
+                "seed": 20260929,
+                "ignore_eos": true,
+                "cache_prompt": false
+              },
+              "submitted_seconds": 1.6192003386095166e-05,
+              "started_seconds": 0.00022033600544091314,
+              "finished_seconds": 2.0541509530012263,
+              "wall_seconds": 2.0539306169957854,
+              "output_tokens_per_second": 62.319534526059726,
+              "response": {
+                "id": "227",
+                "choices": [
+                  {
+                    "finish_reason": "length",
+                    "index": 0,
+                    "text": "<think>\n\n</think>\n\n```python\ndef fibonacci(n: int) -> int:\n    \"\"\"\n    Return the n-th Fibonacci number.\n    \n    The Fibonacci sequence is defined as:\n    F(0) = 0, F(1) = 1, and F(n) = F(n-1) + F(n-2) for n > 1.\n    \n    Parameters:\n        n (int): The index in the Fibonacci sequence (non-negative integer).\n    \n    Returns:\n        int: The n-th Fibonacci number.\n    \n    Raises:\n        ValueError: If n is",
+                    "logprobs": null
+                  }
+                ],
+                "created": 1790743020,
+                "model": "/home/ericbuehler/.cache/huggingface/hub/models--Qwen--Qwen3.8-Flash-Next/snapshots/de4b8e4d43b917e7706784d8bb445c9af86a3540",
+                "system_fingerprint": "local",
+                "object": "text_completion",
+                "usage": {
+                  "completion_tokens": 128,
+                  "prompt_tokens": 17,
+                  "total_tokens": 145,
+                  "avg_tok_per_sec": 71.35827,
+                  "avg_prompt_tok_per_sec": 163.46153,
+                  "avg_compl_tok_per_sec": 66.390045,
+                  "total_time_sec": 2.032,
+                  "total_prompt_time_sec": 0.104,
+                  "total_completion_time_sec": 1.928
+                }
+              },
+              "error": null
+            },
+            {
+              "request_index": 1,
+              "prompt_name": "rust",
+              "prompt_sha256": "60b4ac9a09b8a5ee17b2810c21cd6b28772af55c47488253dd3654098624138d",
+              "request": {
+                "model": "default",
+                "prompt": "Write a Rust struct for a 2D point with methods for distance and midpoint.",
+                "max_tokens": 128,
+                "temperature": 0.0,
+                "seed": 20260929,
+                "ignore_eos": true,
+                "cache_prompt": false
+              },
+              "submitted_seconds": 2.0543408730009105,
+              "started_seconds": 2.0544468090083683,
+              "finished_seconds": 4.185407867000322,
+              "wall_seconds": 2.1309610579919536,
+              "output_tokens_per_second": 60.06679451975388,
+              "response": {
+                "id": "228",
+                "choices": [
+                  {
+                    "finish_reason": "length",
+                    "index": 0,
+                    "text": "<think>\n\n</think>\n\n```rust\n#[derive(Debug, Clone, Copy, PartialEq)]\npub struct Point {\n    pub x: f64,\n    pub y: f64,\n}\n\nimpl Point {\n    /// Creates a new Point with the given x and y coordinates.\n    pub fn new(x: f64, y: f64) -> Self {\n        Point { x, y }\n    }\n\n    /// Calculates the Euclidean distance between this point and another point.\n    pub fn distance_to(&self, other: &Point) -> f64 {\n",
+                    "logprobs": null
+                  }
+                ],
+                "created": 1790743022,
+                "model": "/home/ericbuehler/.cache/huggingface/hub/models--Qwen--Qwen3.8-Flash-Next/snapshots/de4b8e4d43b917e7706784d8bb445c9af86a3540",
+                "system_fingerprint": "local",
+                "object": "text_completion",
+                "usage": {
+                  "completion_tokens": 128,
+                  "prompt_tokens": 17,
+                  "total_tokens": 145,
+                  "avg_tok_per_sec": 68.81823,
+                  "avg_prompt_tok_per_sec": 157.40741,
+                  "avg_compl_tok_per_sec": 64.03202,
+                  "total_time_sec": 2.107,
+                  "total_prompt_time_sec": 0.108,
+                  "total_completion_time_sec": 1.999
+                }
+              },
+              "error": null
+            },
+            {
+              "request_index": 2,
+              "prompt_name": "prose",
+              "prompt_sha256": "b5a04dcac0e07bb9e6254734d48ce7d63fc8a2f1e8f76ff6fe42485981bc10e6",
+              "request": {
+                "model": "default",
+                "prompt": "Explain in a few paragraphs how photosynthesis works.",
+                "max_tokens": 128,
+                "temperature": 0.0,
+                "seed": 20260929,
+                "ignore_eos": true,
+                "cache_prompt": false
+              },
+              "submitted_seconds": 4.18558225101151,
+              "started_seconds": 4.185687707009492,
+              "finished_seconds": 6.921466788000544,
+              "wall_seconds": 2.735779080991051,
+              "output_tokens_per_second": 46.78740359167864,
+              "response": {
+                "id": "229",
+                "choices": [
+                  {
+                    "finish_reason": "length",
+                    "index": 0,
+                    "text": "<think>\nThe user wants a clear, concise explanation of photosynthesis in a few paragraphs. I should cover the key aspects: what it is, the two main stages (light-dependent reactions and the Calvin cycle), the inputs and outputs, and perhaps why it matters. I'll aim for clarity and accessibility while being scientifically accurate. A few paragraphs means roughly 3-4 paragraphs. Let me structure it logically: overview \u2192 light reactions \u2192 Calvin cycle \u2192 significance.\n</think>\n\nPhotosynthesis is the process by which plants, algae, and certain bacteria convert light energy into chemical energy stored in sugar molecules. It takes place primarily in the chlor",
+                    "logprobs": null
+                  }
+                ],
+                "created": 1790743024,
+                "model": "/home/ericbuehler/.cache/huggingface/hub/models--Qwen--Qwen3.8-Flash-Next/snapshots/de4b8e4d43b917e7706784d8bb445c9af86a3540",
+                "system_fingerprint": "local",
+                "object": "text_completion",
+                "usage": {
+                  "completion_tokens": 128,
+                  "prompt_tokens": 11,
+                  "total_tokens": 139,
+                  "avg_tok_per_sec": 51.443375,
+                  "avg_prompt_tok_per_sec": 134.14635,
+                  "avg_compl_tok_per_sec": 48.85496,
+                  "total_time_sec": 2.702,
+                  "total_prompt_time_sec": 0.082,
+                  "total_completion_time_sec": 2.62
+                }
+              },
+              "error": null
+            },
+            {
+              "request_index": 3,
+              "prompt_name": "json",
+              "prompt_sha256": "c02b6de4c77c9b5bc2e4730a7a25fb9cfc7e8f7d8fc97b4c79671a2078948160",
+              "request": {
+                "model": "default",
+                "prompt": "Produce a JSON array of five fictional users with id, name, email and age fields.",
+                "max_tokens": 128,
+                "temperature": 0.0,
+                "seed": 20260929,
+                "ignore_eos": true,
+                "cache_prompt": false
+              },
+              "submitted_seconds": 6.921878613007721,
+              "started_seconds": 6.921986789006041,
+              "finished_seconds": 9.668518726000912,
+              "wall_seconds": 2.74653193699487,
+              "output_tokens_per_second": 46.60422778118202,
+              "response": {
+                "id": "230",
+                "choices": [
+                  {
+                    "finish_reason": "length",
+                    "index": 0,
+                    "text": "<think>\nThe user wants me to generate a JSON array containing five fictional user objects. Each object should have four fields: id, name, email, and age. Let me create five diverse, clearly fictional users with realistic-looking data. I'll make sure the emails use fictional domains or clearly fake addresses, and the names are varied. Let me produce clean, valid JSON.\n</think>\n\n```json\n[\n  {\n    \"id\": 1,\n    \"name\": \"Eleanor Whitfield\",\n    \"email\": \"eleanor.whitfield@example.com\",\n    \"age\": 34\n",
+                    "logprobs": null
+                  }
+                ],
+                "created": 1790743027,
+                "model": "/home/ericbuehler/.cache/huggingface/hub/models--Qwen--Qwen3.8-Flash-Next/snapshots/de4b8e4d43b917e7706784d8bb445c9af86a3540",
+                "system_fingerprint": "local",
+                "object": "text_completion",
+                "usage": {
+                  "completion_tokens": 128,
+                  "prompt_tokens": 19,
+                  "total_tokens": 147,
+                  "avg_tok_per_sec": 54.263565,
+                  "avg_prompt_tok_per_sec": 157.0248,
+                  "avg_compl_tok_per_sec": 49.45904,
+                  "total_time_sec": 2.709,
+                  "total_prompt_time_sec": 0.121,
+                  "total_completion_time_sec": 2.588
+                }
+              },
+              "error": null
+            },
+            {
+              "request_index": 4,
+              "prompt_name": "primes",
+              "prompt_sha256": "4ed5533858fc0525508d7d060b7b3ed89f56cf4997ec63bd84e386fe8520681c",
+              "request": {
+                "model": "default",
+                "prompt": "List the first twenty prime numbers separated by commas:",
+                "max_tokens": 128,
+                "temperature": 0.0,
+                "seed": 20260929,
+                "ignore_eos": true,
+                "cache_prompt": false
+              },
+              "submitted_seconds": 9.668617462011753,
+              "started_seconds": 9.668722262009396,
+              "finished_seconds": 12.112617445003707,
+              "wall_seconds": 2.4438951829943107,
+              "output_tokens_per_second": 52.37540500537006,
+              "response": {
+                "id": "231",
+                "choices": [
+                  {
+                    "finish_reason": "length",
+                    "index": 0,
+                    "text": "<think>\nThe user wants the first twenty prime numbers listed and separated by commas. Let me list them:\n\n1. 2\n2. 3\n5\n7\n11\n13\n17\n19\n23\n29\n31\n37\n41\n43\n47\n53\n59\n61\n67\n71\n\nThat's 20 primes. Let me count: 2, 3, 5, 7, 11, 13, 17, 19, 23,",
+                    "logprobs": null
+                  }
+                ],
+                "created": 1790743030,
+                "model": "/home/ericbuehler/.cache/huggingface/hub/models--Qwen--Qwen3.8-Flash-Next/snapshots/de4b8e4d43b917e7706784d8bb445c9af86a3540",
+                "system_fingerprint": "local",
+                "object": "text_completion",
+                "usage": {
+                  "completion_tokens": 128,
+                  "prompt_tokens": 10,
+                  "total_tokens": 138,
+                  "avg_tok_per_sec": 57.095573,
+                  "avg_prompt_tok_per_sec": 128.20514,
+                  "avg_compl_tok_per_sec": 54.724243,
+                  "total_time_sec": 2.417,
+                  "total_prompt_time_sec": 0.078,
+                  "total_completion_time_sec": 2.339
+                }
+              },
+              "error": null
+            },
+            {
+              "request_index": 5,
+              "prompt_name": "math",
+              "prompt_sha256": "93d3da4cd1b7890e2560f7a5fbcd0ac8a672cffc2c010723b4e66671a5bcfa36",
+              "request": {
+                "model": "default",
+                "prompt": "Solve step by step: a train travels 180 km in 2.5 hours. What is its average speed in m/s?",
+                "max_tokens": 128,
+                "temperature": 0.0,
+                "seed": 20260929,
+                "ignore_eos": true,
+                "cache_prompt": false
+              },
+              "submitted_seconds": 12.113095542008523,
+              "started_seconds": 12.11323295001057,
+              "finished_seconds": 14.515385221006,
+              "wall_seconds": 2.4021522709954297,
+              "output_tokens_per_second": 53.28554794195373,
+              "response": {
+                "id": "232",
+                "choices": [
+                  {
+                    "finish_reason": "length",
+                    "index": 0,
+                    "text": "<think>\n\n</think>\n\nTo find the average speed in meters per second (m/s), we will follow these steps:\n\n### Step 1: Identify the given values\n*   Distance ($d$) = $180 \\text{ km}$\n*   Time ($t$) = $2.5 \\text{ hours}$\n\n### Step 2: Calculate the average speed in km/h\nThe formula for average speed is:\n$$ v = \\frac{d}{t} $$\n\nSubstitute the given values:\n$$ v = \\frac{180 \\text{ km}}{2.",
+                    "logprobs": null
+                  }
+                ],
+                "created": 1790743032,
+                "model": "/home/ericbuehler/.cache/huggingface/hub/models--Qwen--Qwen3.8-Flash-Next/snapshots/de4b8e4d43b917e7706784d8bb445c9af86a3540",
+                "system_fingerprint": "local",
+                "object": "text_completion",
+                "usage": {
+                  "completion_tokens": 128,
+                  "prompt_tokens": 30,
+                  "total_tokens": 158,
+                  "avg_tok_per_sec": 66.66667,
+                  "avg_prompt_tok_per_sec": 194.80519,
+                  "avg_compl_tok_per_sec": 57.761734,
+                  "total_time_sec": 2.37,
+                  "total_prompt_time_sec": 0.154,
+                  "total_completion_time_sec": 2.216
+                }
+              },
+              "error": null
+            },
+            {
+              "request_index": 6,
+              "prompt_name": "translation",
+              "prompt_sha256": "244a25b526dd7c3bc1caf054f30d7948205927f00d1120712902be4d067dcd67",
+              "request": {
+                "model": "default",
+                "prompt": "Translate to French: The weather is lovely today and we are going to the park after lunch.",
+                "max_tokens": 128,
+                "temperature": 0.0,
+                "seed": 20260929,
+                "ignore_eos": true,
+                "cache_prompt": false
+              },
+              "submitted_seconds": 14.515578085003654,
+              "started_seconds": 14.515696709000622,
+              "finished_seconds": 17.02143142100249,
+              "wall_seconds": 2.5057347120018676,
+              "output_tokens_per_second": 51.08282189128432,
+              "response": {
+                "id": "233",
+                "choices": [
+                  {
+                    "finish_reason": "length",
+                    "index": 0,
+                    "text": "<think>\nThe user wants me to translate an English sentence into French. Let me think about the best translation:\n\n\"The weather is lovely today and we are going to the park after lunch.\"\n\nLet me consider the options:\n\n1. \"Il fait beau aujourd'hui et nous allons au parc apr\u00e8s le d\u00e9jeuner.\"\n2. \"Le temps est magnifique aujourd'hui et nous allons au parc apr\u00e8s le d\u00e9jeuner.\"\n3. \"Il fait un temps magnifique aujourd'hui et nous allons au parc apr\u00e8s le d\u00e9jeuner.\"\n\nIn French, the most natural way to express \"the weather is lovely\" is \"Il fait beau\" or \"Il",
+                    "logprobs": null
+                  }
+                ],
+                "created": 1790743034,
+                "model": "/home/ericbuehler/.cache/huggingface/hub/models--Qwen--Qwen3.8-Flash-Next/snapshots/de4b8e4d43b917e7706784d8bb445c9af86a3540",
+                "system_fingerprint": "local",
+                "object": "text_completion",
+                "usage": {
+                  "completion_tokens": 128,
+                  "prompt_tokens": 19,
+                  "total_tokens": 147,
+                  "avg_tok_per_sec": 59.34598,
+                  "avg_prompt_tok_per_sec": 161.01695,
+                  "avg_compl_tok_per_sec": 54.26028,
+                  "total_time_sec": 2.477,
+                  "total_prompt_time_sec": 0.118,
+                  "total_completion_time_sec": 2.359
+                }
+              },
+              "error": null
+            },
+            {
+              "request_index": 7,
+              "prompt_name": "quicksort",
+              "prompt_sha256": "69d376e3a1b29ebbd75e59ef56ccaf3d13eefaac503b57cf386ea98ad29570d4",
+              "request": {
+                "model": "default",
+                "prompt": "def quicksort(arr):\n",
+                "max_tokens": 128,
+                "temperature": 0.0,
+                "seed": 20260929,
+                "ignore_eos": true,
+                "cache_prompt": false
+              },
+              "submitted_seconds": 17.021600350009976,
+              "started_seconds": 17.02169750200119,
+              "finished_seconds": 19.226611489008064,
+              "wall_seconds": 2.2049139870068757,
+              "output_tokens_per_second": 58.05215112892331,
+              "response": {
+                "id": "234",
+                "choices": [
+                  {
+                    "finish_reason": "length",
+                    "index": 0,
+                    "text": "if len(arr) <= 1:\n        return arr\n    pivot = arr[len(arr) // 2]\n    left = [x for x in arr if x < pivot]\n    middle = [x for x in arr if x == pivot]\n    right = [x for x in arr if x > pivot]\n    return quicksort(left) + middle + quicksort(right)\n\n# Example usage\narr = [3, 6, 8, 10, 1, 2, 1]\nsorted_arr = quicksort(arr)\nprint(\"Sorted array:\", sorted",
+                    "logprobs": null
+                  }
+                ],
+                "created": 1790743037,
+                "model": "/home/ericbuehler/.cache/huggingface/hub/models--Qwen--Qwen3.8-Flash-Next/snapshots/de4b8e4d43b917e7706784d8bb445c9af86a3540",
+                "system_fingerprint": "local",
+                "object": "text_completion",
+                "usage": {
+                  "completion_tokens": 128,
+                  "prompt_tokens": 6,
+                  "total_tokens": 134,
+                  "avg_tok_per_sec": 61.38342,
+                  "avg_prompt_tok_per_sec": 101.69491,
+                  "avg_compl_tok_per_sec": 60.263653,
+                  "total_time_sec": 2.183,
+                  "total_prompt_time_sec": 0.059,
+                  "total_completion_time_sec": 2.124
+                }
+              },
+              "error": null
+            }
+          ],
+          "trial": 6,
+          "warmup": false
+        }
+      ],
+      "summary": {
+        "aggregate_output_tokens_per_second": {
+          "mean": 54.864142851127376,
+          "sample_stddev": 1.158948887057452,
+          "samples": [
+            54.538915878510494,
+            54.67028533186737,
+            55.4823725182236,
+            56.3705545124086,
+            53.25858601462682
+          ]
+        },
+        "mean_active_requests": {
+          "mean": 0.9998509968099112,
+          "sample_stddev": 3.611846761341236e-05,
+          "samples": [
+            0.999893072088013,
+            0.9998840272392852,
+            0.9998106037687705,
+            0.9998258061246854,
+            0.9998414748288016
+          ]
+        },
+        "mean_request_wall_seconds": {
+          "mean": 2.333523382698695,
+          "sample_stddev": 0.049441925769150505,
+          "samples": [
+            2.3466970541248884,
+            2.3410369034972973,
+            2.3066021057475155,
+            2.270293494377256,
+            2.402987355746518
+          ]
+        },
+        "mean_request_output_tokens_per_second": {
+          "mean": 55.32594094231893,
+          "sample_stddev": 1.0820857065511755,
+          "samples": [
+            55.06024708314485,
+            55.128121923398986,
+            55.87660133176447,
+            56.74299857501062,
+            53.82173579827571
+          ]
+        },
+        "latency_weighted_request_output_tokens_per_second": {
+          "mean": 54.872332607002924,
+          "sample_stddev": 1.159944446399658,
+          "samples": [
+            54.54474823454907,
+            54.67662633116957,
+            55.49288266105966,
+            56.38037562853103,
+            53.267030179705294
+          ]
+        },
+        "sustained_completion_boundary_output_tokens_per_second": {
+          "mean": 54.23733983782636,
+          "sample_stddev": 1.9332384452147733,
+          "samples": [
+            53.9618116959367,
+            54.24666149518482,
+            55.05332866165025,
+            56.61354964919263,
+            51.3113476871674
+          ]
+        }
+      }
+    }
+  }
+}
