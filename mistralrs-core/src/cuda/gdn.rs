@@ -9102,7 +9102,7 @@ mod tests {
     #[ignore = "requires a CUDA device"]
     fn speculative_transition_commit_matches_prefix_replay_cuda() -> Result<()> {
         let dev = Device::new_cuda(0)?;
-        for seq_len in [4, 8] {
+        for seq_len in [4, 5, 8] {
             for activation_dtype in [DType::F16, DType::BF16] {
                 for state_dtype in [DType::F32, DType::BF16, DType::F16] {
                     for tiled_v_heads in [false, true] {

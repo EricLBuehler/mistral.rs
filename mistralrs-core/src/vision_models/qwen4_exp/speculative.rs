@@ -18,13 +18,13 @@ use crate::speculative::{
 };
 
 #[cfg(feature = "cuda")]
-const GROUPED_VERIFY_GRAPH_DEPTH: usize = 3;
+const GROUPED_VERIFY_GRAPH_DEPTHS: [usize; 2] = [3, 4];
 #[cfg(feature = "cuda")]
 const GROUPED_VERIFY_GRAPH_MAX_BATCH: usize = 8;
 
 #[cfg(feature = "cuda")]
 fn max_verify_graph_batch(depth: usize) -> usize {
-    if depth == GROUPED_VERIFY_GRAPH_DEPTH {
+    if GROUPED_VERIFY_GRAPH_DEPTHS.contains(&depth) {
         GROUPED_VERIFY_GRAPH_MAX_BATCH
     } else {
         (crate::moe::GROUPED_PREFILL_MIN_TOKENS - 1) / (1 + depth)
@@ -285,9 +285,21 @@ mod tests {
     use super::max_verify_graph_batch;
 
     #[test]
-    fn grouped_verify_capture_is_limited_to_depth_three_batch_eight() {
-        assert_eq!(max_verify_graph_batch(3), 8);
-        for (depth, max_batch) in [(1, 15), (2, 10), (4, 6), (6, 4), (7, 3), (15, 1), (31, 0)] {
+    fn grouped_verify_graphs_cover_depths_three_and_four_through_batch_eight() {
+        use crate::speculative::SpeculativeGraphPlan;
+
+        for depth in [3, 4] {
+            assert_eq!(max_verify_graph_batch(depth), 8);
+            let plans = [SpeculativeGraphPlan::new(
+                depth,
+                Some(max_verify_graph_batch(depth)),
+            )];
+            for batch in [7, 8] {
+                assert!(SpeculativeGraphPlan::allows(&plans, depth + 1, batch));
+            }
+            assert!(!SpeculativeGraphPlan::allows(&plans, depth + 1, 9));
+        }
+        for (depth, max_batch) in [(1, 15), (2, 10), (6, 4), (7, 3), (15, 1), (31, 0)] {
             assert_eq!(max_verify_graph_batch(depth), max_batch);
         }
     }
