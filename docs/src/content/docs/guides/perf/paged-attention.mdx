@@ -73,7 +73,9 @@ The pool's size is set via one of three mutually exclusive flags:
 - `--pa-memory-fraction <f>`: KV cache budget as a fraction of VRAM.
 - `--pa-context-len <n>`: allocate KV cache sized for this context length.
 
-When none are set, the pool defaults to 90% of available VRAM.
+When none are set on a dedicated CUDA GPU, the model and KV cache share a budget of 90% of total VRAM, with runtime reservations subtracted before allocating the cache. CUDA devices with unified memory, such as DGX Spark and Jetson, instead use available system RAM minus 1 GiB and cap the cache to the model context length. `MISTRALRS_IGPU_MEMORY_FRACTION` overrides that unified-memory budget; `--pa-memory-fraction` is ignored on these devices. Use `--pa-context-len` or `--pa-memory-mb` to request an explicit cache size.
+
+`--pa-context-len` sizes the shared token pool; it does not change the per-request context limit. Use `--max-model-len` to limit prompt-plus-output length. Concurrent requests share the pool, so a cache sized for one full-length request may not hold several at once.
 
 Two more flags tune the cache itself:
 

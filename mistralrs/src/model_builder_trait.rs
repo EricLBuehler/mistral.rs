@@ -928,6 +928,13 @@ pub async fn build_gguf_pipeline(
 ) -> anyhow::Result<(Arc<Mutex<dyn Pipeline>>, SchedulerConfig, AddModelConfig)> {
     use mistralrs_core::*;
 
+    if builder
+        .mtp_config
+        .as_ref()
+        .is_some_and(MtpConfig::is_builtin)
+    {
+        anyhow::bail!("Built-in MTP is not supported for GGUF models. Use a safetensors checkpoint with ISQ, or omit the built-in MTP configuration.");
+    }
     let mtp_runtime = MtpRuntimeConfig::new(builder.prefix_cache_n.unwrap_or(0));
 
     builder.paged_attn_cfg = paged_attn_with_serving_capacity(

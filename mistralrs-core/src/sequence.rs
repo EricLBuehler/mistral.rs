@@ -782,6 +782,7 @@ pub struct Sequence {
     // Speculative
     staged_speculative_tokens: SpeculativeTokens,
     staged_speculative_distribution: Option<SpeculativeProposalDistribution>,
+    speculative_depth_hint: Option<usize>,
 
     // Prefix caching
     prefill_prompt_toks: Option<PrefillTokens>,
@@ -952,6 +953,7 @@ impl Sequence {
             last_is_done: None,
             staged_speculative_tokens: SpeculativeTokens::default(),
             staged_speculative_distribution: None,
+            speculative_depth_hint: None,
             scheduling_urgency: 0,
             // Multimodal data
             multimodal: MultimodalData::new(
@@ -1208,6 +1210,14 @@ impl Sequence {
         &self.staged_speculative_tokens
     }
 
+    pub(crate) fn speculative_depth_hint(&self) -> Option<usize> {
+        self.speculative_depth_hint
+    }
+
+    pub(crate) fn set_speculative_depth_hint(&mut self, depth: Option<usize>) {
+        self.speculative_depth_hint = depth;
+    }
+
     pub(crate) fn active_staged_speculative_len(&self) -> usize {
         self.staged_speculative_tokens.len()
     }
@@ -1241,6 +1251,7 @@ impl Sequence {
     pub(crate) fn clear_staged_speculative_tokens(&mut self) {
         self.staged_speculative_tokens = SpeculativeTokens::default();
         self.staged_speculative_distribution = None;
+        self.speculative_depth_hint = None;
     }
 
     pub fn get_initial_prompt(&self) -> &str {

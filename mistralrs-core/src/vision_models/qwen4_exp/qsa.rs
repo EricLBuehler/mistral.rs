@@ -53,6 +53,13 @@ pub(super) struct QsaStep<'a> {
     pub layout: Option<&'a crate::cuda::qwen4_exp::TokenLayout>,
 }
 
+#[derive(Clone)]
+#[cfg_attr(not(feature = "cuda"), allow(dead_code))]
+struct QsaAuxCache {
+    raw: Tensor,
+    block_keys: Tensor,
+}
+
 pub(super) struct QsaAttention {
     q_proj: Arc<dyn QuantMethod>,
     k_proj: Arc<dyn QuantMethod>,
@@ -76,7 +83,7 @@ pub(super) struct QsaAttention {
     sdpa_params: SdpaParams,
     eps: f64,
     #[cfg_attr(not(feature = "cuda"), allow(dead_code))]
-    aux_cache: Mutex<Option<Tensor>>,
+    aux_cache: Mutex<Option<QsaAuxCache>>,
 }
 
 impl QsaAttention {
@@ -141,7 +148,6 @@ impl QsaAttention {
             mistralrs_quant::cutile::register_qsa_shape(mistralrs_quant::cutile::QsaWarmShape {
                 ratio: qsa.compress_ratio,
                 topk: qsa.block_topk(),
-                aux_dim: aux_dim(&qsa, cfg.rot_dim() / 2),
                 n_q_heads: num_heads,
                 n_kv_heads: num_kv_heads,
                 block_size: crate::paged_attention::DEFAULT_PAGED_ATTENTION_BLOCK_SIZE,
@@ -306,22 +312,43 @@ impl QsaAttention {
     }
 
     #[cfg(feature = "cuda")]
-    fn aux_cache(&self, key_cache: &Tensor, block_size: usize, dtype: DType) -> Result<Tensor> {
+    fn aux_cache(
+        &self,
+        key_cache: &Tensor,
+        block_size: usize,
+        dtype: DType,
+    ) -> Result<QsaAuxCache> {
+        if !block_size.is_multiple_of(self.qsa.compress_ratio) {
+            candle_core::bail!(
+                "Qwen4-Exp QSA paged block size {block_size} must be divisible by compression ratio {}",
+                self.qsa.compress_ratio
+            );
+        }
         let mut aux = self.aux_cache.lock().expect("QSA aux cache poisoned");
         let num_blocks = key_cache.dim(0)?;
         if let Some(existing) = aux.as_ref() {
-            if existing.dim(0)? == num_blocks * block_size
-                && existing.device().same_device(key_cache.device())
+            if existing.raw.dim(0)? == num_blocks * block_size
+                && existing.raw.device().same_device(key_cache.device())
             {
                 return Ok(existing.clone());
             }
         }
         let half_rot = self.rotary_emb_half_dim();
-        let cache = Tensor::zeros(
-            (num_blocks * block_size, aux_dim(&self.qsa, half_rot)),
-            dtype,
-            key_cache.device(),
-        )?;
+        let cache = QsaAuxCache {
+            raw: Tensor::zeros(
+                (num_blocks * block_size, aux_dim(&self.qsa, half_rot)),
+                dtype,
+                key_cache.device(),
+            )?,
+            block_keys: Tensor::zeros(
+                (
+                    num_blocks * block_size / self.qsa.compress_ratio,
+                    self.qsa.head_dim,
+                ),
+                dtype,
+                key_cache.device(),
+            )?,
+        };
         *aux = Some(cache.clone());
         Ok(cache)
     }
@@ -414,16 +441,17 @@ impl QsaAttention {
                 &cos_sin.0.reshape((n_tokens, shape.half_rot))?,
                 &cos_sin.1.reshape((n_tokens, shape.half_rot))?,
                 slot_mapping,
-                &aux,
+                &aux.raw,
             )?;
-            kernels::qsa_finalize(
-                &aux,
+            kernels::qsa_finalize(kernels::QsaFinalizeArgs {
+                aux: &aux.raw,
+                block_keys: &aux.block_keys,
                 layout,
-                &paged,
-                &self.index_k_norm_f32,
-                &shape,
-                self.eps,
-            )?;
+                paged: &paged,
+                norm_weight: &self.index_k_norm_f32,
+                shape: &shape,
+                eps: self.eps,
+            })?;
             let QsaMode::Sparse { max_blocks } = step.mode else {
                 let y = paged_attn.forward(
                     q,
@@ -449,10 +477,22 @@ impl QsaAttention {
             )?;
             let index_q = index_q.reshape((n_tokens, self.qsa.n_heads, self.qsa.head_dim))?;
             let (selected, n_selected) = match kernels::qsa_select_cutile(
-                &index_q, &aux, layout, &paged, &shape, max_blocks,
+                &index_q,
+                &aux.block_keys,
+                layout,
+                &paged,
+                &shape,
+                max_blocks,
             )? {
                 Some(selection) => selection,
-                None => kernels::qsa_select(&index_q, &aux, layout, &paged, &shape, max_blocks)?,
+                None => kernels::qsa_select(
+                    &index_q,
+                    &aux.block_keys,
+                    layout,
+                    &paged,
+                    &shape,
+                    max_blocks,
+                )?,
             };
             let q_tokens = q.transpose(1, 2)?.contiguous()?.reshape((
                 n_tokens,

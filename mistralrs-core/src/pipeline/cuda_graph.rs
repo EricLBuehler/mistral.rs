@@ -2691,7 +2691,7 @@ pub(crate) fn log_cuda_graph_memory(device: &Device) -> candle_core::Result<()> 
     };
     let reserved = cuda_graph_memory_attribute(
         &cuda.cuda_stream(),
-        sys::CUgraphMem_attribute::CU_GRAPH_MEM_ATTR_RESERVED_MEM_HIGH,
+        sys::CUgraphMem_attribute::CU_GRAPH_MEM_ATTR_RESERVED_MEM_CURRENT,
     )?;
     let free = crate::MemoryUsage
         .query_cuda_allocator(device)?

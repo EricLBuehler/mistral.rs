@@ -8,6 +8,25 @@ use std::time::Duration;
 
 use tracing::info;
 
+use crate::sequence::Sequence;
+
+pub(super) struct DecodeTokenSnapshot(usize);
+
+impl DecodeTokenSnapshot {
+    pub(super) fn capture<'a>(sequences: impl Iterator<Item = &'a Sequence>) -> Self {
+        Self(sequences.map(Sequence::generated_len).sum())
+    }
+
+    pub(super) fn record<'a>(
+        self,
+        logger: &IntervalLogger,
+        sequences: impl Iterator<Item = &'a Sequence>,
+    ) {
+        let generated_tokens = sequences.map(Sequence::generated_len).sum::<usize>();
+        logger.add_decode_tokens_processed(generated_tokens.saturating_sub(self.0));
+    }
+}
+
 #[derive(Default)]
 struct PrefixCacheStats {
     hits: usize,
@@ -305,9 +324,143 @@ impl Drop for IntervalLogger {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{
+        sampler::{Logprobs, Sampler},
+        sequence::{SeqStepType, SequenceGroup, SequenceRecognizer, SequenceState, StopReason},
+    };
+    use std::collections::HashMap;
 
     const INACTIVE_LOGGER_INTERVAL: Duration = Duration::from_secs(3600);
     const TEST_SEQUENCE_CAPACITY: usize = 16;
+    const TEST_CONTEXT_LENGTH: usize = 128;
+    const TEST_EOS_TOKEN: u32 = 99;
+    const TEST_STOP_TOKEN: u32 = 42;
+
+    fn test_sequence() -> Sequence {
+        let (sender, _receiver) = tokio::sync::mpsc::channel(1);
+        let sampler = Sampler::new(
+            None,
+            0,
+            None,
+            None,
+            None,
+            None,
+            None,
+            32,
+            1.0,
+            0.0,
+            HashMap::new(),
+            vec![],
+        )
+        .unwrap();
+        let group = Arc::new(tokio::sync::Mutex::new(SequenceGroup::new(
+            1, false, true, None,
+        )));
+        Sequence::new_waiting(
+            vec![1, 2, 3, 4],
+            "prompt".to_string(),
+            0,
+            0,
+            1,
+            sender,
+            sampler,
+            vec![TEST_STOP_TOKEN],
+            vec!["STOP".to_string()],
+            None,
+            false,
+            false,
+            group,
+            0,
+            0,
+            SequenceRecognizer::None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            SeqStepType::PromptAndDecode,
+            None,
+            None,
+            None,
+            false,
+            false,
+            vec![],
+            None,
+        )
+    }
+
+    fn commit_token(seq: &mut Sequence, token: u32, bytes: &[u8]) -> Option<StopReason> {
+        let reason = seq.is_done(token, Some(&[TEST_EOS_TOKEN]), TEST_CONTEXT_LENGTH);
+        let reason = seq.add_token(
+            Logprobs {
+                token,
+                logprob: 0.0,
+                bytes: None,
+                top_logprobs: None,
+            },
+            bytes.to_vec(),
+            reason,
+        );
+        if let Some(reason) = reason {
+            seq.set_state(SequenceState::Done(reason));
+        }
+        reason
+    }
+
+    #[test]
+    fn decode_counts_committed_tokens_instead_of_speculative_width() {
+        let logger = IntervalLogger::new(INACTIVE_LOGGER_INTERVAL, None);
+        let mut seq = test_sequence();
+        commit_token(&mut seq, 10, b"first");
+        seq.set_num_computed_tokens(seq.get_toks().len() - 1);
+        seq.set_staged_speculative(vec![11, 12, 13, 14], None);
+        let snapshot = DecodeTokenSnapshot::capture([&seq].into_iter());
+
+        seq.take_staged_speculative_tokens();
+        commit_token(&mut seq, 11, b" accepted");
+        commit_token(&mut seq, 20, b" replacement");
+        snapshot.record(&logger, [&seq].into_iter());
+
+        assert_eq!(logger.decode_tokens_processed.load(Ordering::Relaxed), 2);
+        assert_eq!(logger.tokens_processed.load(Ordering::Relaxed), 2);
+    }
+
+    #[test]
+    fn decode_counts_terminal_tokens_with_uncommitted_drafts() {
+        for (token, bytes) in [
+            (TEST_EOS_TOKEN, b"<eos>".as_slice()),
+            (TEST_STOP_TOKEN, b"<stop>".as_slice()),
+            (10, b"prefix STOP suffix".as_slice()),
+        ] {
+            let logger = IntervalLogger::new(INACTIVE_LOGGER_INTERVAL, None);
+            let mut seq = test_sequence();
+            seq.set_staged_speculative(vec![token, 11, 12, 13], None);
+            let snapshot = DecodeTokenSnapshot::capture([&seq].into_iter());
+
+            assert!(commit_token(&mut seq, token, bytes).is_some());
+            snapshot.record(&logger, [&seq].into_iter());
+
+            assert_eq!(logger.decode_tokens_processed.load(Ordering::Relaxed), 1);
+        }
+    }
+
+    #[test]
+    fn decode_does_not_count_computed_lookahead_without_committed_tokens() {
+        let logger = IntervalLogger::new(INACTIVE_LOGGER_INTERVAL, None);
+        let mut seq = test_sequence();
+        commit_token(&mut seq, TEST_EOS_TOKEN, b"<eos>");
+        seq.set_num_computed_tokens(seq.get_toks().len() - 1);
+        let snapshot = DecodeTokenSnapshot::capture([&seq].into_iter());
+
+        seq.advance_num_computed_tokens(1);
+        snapshot.record(&logger, [&seq].into_iter());
+
+        assert_eq!(logger.decode_tokens_processed.load(Ordering::Relaxed), 0);
+        assert_eq!(logger.tokens_processed.load(Ordering::Relaxed), 0);
+    }
 
     #[test]
     fn sequence_capacity_is_retained_for_recurring_publication() {

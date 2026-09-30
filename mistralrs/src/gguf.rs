@@ -545,6 +545,17 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn builtin_mtp_fails_before_loading_weights() {
+        let error = GgufModelBuilder::new("missing-model", vec!["missing.gguf"])
+            .with_mtp_config(MtpConfig::builtin(None))
+            .build()
+            .await
+            .err()
+            .expect("GGUF cannot load a built-in MTP head");
+        assert!(error.to_string().contains("Built-in MTP is not supported"));
+    }
+
     #[test]
     fn mcp_configuration_is_preserved() {
         let builder = GgufModelBuilder::new("repo", vec!["model.gguf"])

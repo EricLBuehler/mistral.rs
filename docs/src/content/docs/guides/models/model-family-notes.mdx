@@ -136,12 +136,17 @@ mistralrs serve -m Qwen/Qwen3.8-Flash-Next --isq q4k
 - The PLE table is never loaded with the rest of the weights. At startup it is quantized into device memory (8-bit if it fits, otherwise 4-bit, about 29 GB); this reads the whole table once and adds a minute or two to load. If there is not enough memory, rows are read from the memory-mapped checkpoint instead, which needs pageable memory access (ATS/HMM) on CUDA for decode graphs and is much slower on cold rows.
 - Each attention query sees at most 2,051 tokens: its 512 highest-scoring 4-token blocks plus the incomplete tail. Below that context length attention is exact and uses the regular kernels; above it the CUDA backend runs dedicated sparse kernels over the paged KV cache, which keeps a small per-token indexer cache next to it.
 - Block-sparse attention with paged attention is CUDA-only. On other devices, use `--paged-attn off`.
-- The FP8 KV cache and tensor parallelism are not supported for this architecture, and the multi-token prediction head is ignored.
+- The FP8 KV cache and tensor parallelism are not supported for this architecture.
+- The built-in multi-token prediction head supports [speculative decoding](/guides/perf/speculative-decoding/) with safetensors and UQFF checkpoints containing the `mtp.*` weights. Add `--mtp` to enable it. Draft depth adapts between 2, 3, 4, and 6 tokens using measured acceptance and step time; `--mtp-n-predict N` fixes the depth instead. The head adds weights, one attention layer's KV cache, and recurrent verification state to the memory budget.
+- With `--mtp`, cached prompt prefixes are recomputed because the prediction head's shifted-token KV rows cannot safely share the target's prefix block hashes. Repeated prompts can therefore take longer to prefill.
 - `qwen4exp` GGUF files from the llama.cpp converter load directly, with no `config.json` needed. `--quant` picks a variant and its vision projector from the repository, which enables image and video input. The IQ4_NL n-gram table is copied into device memory as is, so there is no quantization pass at startup.
+- Built-in MTP is not supported for GGUF loading. This architecture also does not support external MTP or DFlash drafters.
 
 ```bash
 mistralrs run -m unsloth/Qwen3.8-Flash-Next-GGUF --quant 4
 ```
+
+On CUDA devices with unified memory, such as DGX Spark, the default budget leaves 1 GiB of available system RAM free and caps the KV cache to the model context length. Use `--pa-context-len N` for a smaller cache to leave room for other applications or MTP. This sets cache capacity; `--max-model-len N` sets the prompt-plus-output limit. `MISTRALRS_IGPU_MEMORY_FRACTION` overrides the default memory budget.
 
 ## Granite 4.0 (GraniteMoeHybrid)
 

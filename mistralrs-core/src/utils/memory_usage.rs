@@ -6,6 +6,7 @@ use tracing::warn;
 #[cfg(feature = "metal")]
 const SIZE_IN_MB: usize = 1024 * 1024;
 // Left to the system on integrated GPUs, like llama.cpp's default `--fit-target`
+#[cfg(feature = "cuda")]
 pub(crate) const UNIFIED_SYSTEM_MARGIN_BYTES: usize = 1 << 30;
 
 #[derive(Debug, Clone, Copy)]

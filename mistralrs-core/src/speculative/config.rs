@@ -161,10 +161,15 @@ pub fn reserve_external_mtp_memory_with_runtime(
         return Ok(Some(cache_config));
     };
     if mtp_config.is_builtin() {
-        let lanes = mtp_config
+        let drafts = mtp_config
             .n_predict
-            .unwrap_or(super::autotuner::AUTO_MAX_DEPTH)
-            + 1;
+            .unwrap_or(super::autotuner::AUTO_MAX_DEPTH);
+        if drafts == 0 {
+            anyhow::bail!("MTP n_predict must be at least 1.");
+        }
+        let lanes = drafts
+            .checked_add(1)
+            .ok_or_else(|| anyhow::anyhow!("MTP n_predict is too large"))?;
         // Verify then logs GDN transitions in a pool sized before the KV cache instead of stashing states
         if lanes > crate::cuda::gdn::GDN_SPEC_FUSED_MAX_TOKENS {
             return Ok(Some(cache_config));
@@ -346,6 +351,41 @@ mod tests {
                 .expect("cache config missing");
         assert_eq!(explicit.recurrent_checkpoint_lanes, 4);
         assert!(!explicit.recurrent_checkpoint_lanes_auto);
+        Ok(())
+    }
+
+    #[test]
+    fn builtin_mtp_reserves_depth_and_rejects_invalid_counts() -> anyhow::Result<()> {
+        let base = crate::PagedAttentionConfig::new(
+            None,
+            crate::MemoryGpuConfig::Utilization(0.9),
+            crate::PagedCacheType::Auto,
+        )?;
+        let reserve = |count| {
+            reserve_external_mtp_memory(
+                Some(base),
+                Some(&MtpConfig::builtin(count)),
+                &DType::F32,
+                &Device::Cpu,
+            )
+        };
+        let auto = reserve(None)?.expect("cache config missing");
+        assert_eq!(
+            auto.recurrent_checkpoint_lanes,
+            super::super::autotuner::AUTO_MAX_DEPTH + 1
+        );
+        assert!(auto.recurrent_checkpoint_lanes_auto);
+        let explicit = reserve(Some(3))?.expect("cache config missing");
+        assert_eq!(explicit.recurrent_checkpoint_lanes, 4);
+        assert!(!explicit.recurrent_checkpoint_lanes_auto);
+        assert!(reserve(Some(0))
+            .unwrap_err()
+            .to_string()
+            .contains("at least 1"));
+        assert!(reserve(Some(usize::MAX))
+            .unwrap_err()
+            .to_string()
+            .contains("too large"));
         Ok(())
     }
 }

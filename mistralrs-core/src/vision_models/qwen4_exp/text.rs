@@ -17,7 +17,7 @@ use super::{
     hyper::GatedResidual,
     mtp::Qwen4ExpMtpHead,
     ple::{PleBatch, PleLayer, PleStash, PleState},
-    qsa::{aux_dim, QsaAttention, QsaMode, QsaStep},
+    qsa::{QsaAttention, QsaMode, QsaStep},
 };
 use crate::{
     attention::AttentionMask,
@@ -456,7 +456,7 @@ impl Qwen4ExpTextModel {
             layer_types,
             rotary_emb,
             qsa,
-            aux_dim: aux_dim(&qsa, cfg.rot_dim() / 2),
+            aux_dim: qsa.aux_cache_elements_per_token(cfg.rot_dim()),
             dense_kv_cap: qsa.max_selected_tokens(),
             hc: cfg.hc_count,
             lm_head,
@@ -853,32 +853,38 @@ impl Qwen4ExpTextModel {
             }
         }
         #[cfg(feature = "cuda")]
-        let layout = if xs.device().is_cuda() {
-            Some(if rectangular {
-                crate::cuda::qwen4_exp::TokenLayout::rectangular(batch, seq_len)
-            } else {
-                crate::cuda::qwen4_exp::TokenLayout::from_host(
-                    &spans,
-                    &kv_lens,
-                    batch * seq_len,
-                    xs.device(),
-                )?
-            })
-        } else {
-            None
-        };
-        let step = QsaStep {
-            mode,
-            positions: &positions,
-            #[cfg(feature = "cuda")]
-            layout: layout.as_ref(),
-        };
+        let mut layouts = HashMap::new();
 
         let mut res = xs.repeat((1, 1, self.hc))?;
         let mut pending_norm: Option<Tensor> = None;
         let n_layers = self.layers.len();
         for (i, layer) in self.layers.iter().enumerate() {
             res = self.mapper.map(res, i)?;
+            #[cfg(feature = "cuda")]
+            let layout = if res.device().is_cuda() {
+                let location = res.device().location();
+                if let std::collections::hash_map::Entry::Vacant(entry) = layouts.entry(location) {
+                    entry.insert(if rectangular {
+                        crate::cuda::qwen4_exp::TokenLayout::rectangular(batch, seq_len)
+                    } else {
+                        crate::cuda::qwen4_exp::TokenLayout::from_host(
+                            &spans,
+                            &kv_lens,
+                            batch * seq_len,
+                            res.device(),
+                        )?
+                    });
+                }
+                layouts.get(&location)
+            } else {
+                None
+            };
+            let step = QsaStep {
+                mode,
+                positions: &positions,
+                #[cfg(feature = "cuda")]
+                layout,
+            };
             if let Some(ple) = &layer.ple {
                 let indices = hybrid_cache
                     .state_indices_for_layer(n_layers)?
@@ -907,7 +913,7 @@ impl Qwen4ExpTextModel {
                     &PleBatch {
                         seqs: &spans,
                         #[cfg(feature = "cuda")]
-                        layout: layout.as_ref(),
+                        layout,
                     },
                     pre_state.as_ref().map(|_| &mut conv_inputs),
                 )?;

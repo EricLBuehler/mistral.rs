@@ -5,9 +5,9 @@ description: Use MTP assistant models to draft multiple tokens per target verifi
 
 import { Tabs, TabItem } from '@astrojs/starlight/components';
 
-Speculative decoding lets a smaller assistant propose future tokens while the target model verifies them in parallel. mistral.rs exposes this through the MTP (Multi-Token Prediction) API: attach an assistant checkpoint and the engine drafts several tokens per target step.
+Speculative decoding lets a smaller assistant propose future tokens while the target model verifies them in parallel. mistral.rs exposes this through the MTP (Multi-Token Prediction) API: attach an assistant checkpoint or enable a supported model's built-in prediction head to draft several tokens per target step.
 
-Output stays exact: every accepted token is verified by the target model before it is emitted.
+Every accepted draft token is verified by the target model before it is emitted.
 
 :::caution
 The target must run with [paged attention](/guides/perf/paged-attention/) (the default on CUDA). Loading fails with an error if paged attention is off.
@@ -38,7 +38,7 @@ runner = Runner(
 )
 ```
 
-Gemma 4 loads via `Which.MultimodalPlain`; it is currently the only model family with MTP assistant checkpoints.
+Gemma 4 loads via `Which.MultimodalPlain` and uses a separate assistant checkpoint.
 
 </TabItem>
 <TabItem label="Rust">
@@ -50,12 +50,12 @@ let model = mistralrs::ModelBuilder::new("google/gemma-4-E4B-it")
     .await?;
 ```
 
-For full control, `with_mtp_config(MtpConfig { model, n_predict })` is equivalent. The MTP builder methods exist on the text, multimodal, and auto-detecting model builders.
+For full control, use `with_mtp_config(MtpConfig::new("google/gemma-4-E4B-it-assistant", Some(6)))`. Use `MtpConfig::builtin(None)` for a supported built-in head with automatic draft depth. The MTP builder methods exist on the text, multimodal, and auto-detecting model builders.
 
 </TabItem>
 </Tabs>
 
-`--mtp-n-predict` controls how many assistant tokens are proposed per step. If it is omitted, mistral.rs reads `num_assistant_tokens` from the assistant's `generation_config.json` and falls back to 6.
+`--mtp-n-predict N` fixes the number of draft tokens per step. Omit it to let the engine adapt depth. The throughput tuner uses draft acceptance, measured step time, and batch size, and periodically samples other depths as the workload changes. Built-in Qwen heads choose among 2, 3, 4, and 6 drafts. Gemma 4 uses the same candidates up to the assistant's `num_assistant_tokens` in `generation_config.json` (6 if absent). DFlash has its own depth limits and serving policy described below.
 
 ## Supported models
 
@@ -63,6 +63,7 @@ For full control, `with_mtp_config(MtpConfig { model, n_predict })` is equivalen
 |---|---|---|---|
 | MTP | Gemma 4 | Gemma 4 assistant checkpoints (`--mtp-model`) | Supported with paged attention |
 | MTP | Qwen3.5, Qwen3.8 | Built into the checkpoint (`--mtp`) | Supported with paged attention |
+| MTP | Qwen3.8-Flash-Next | Built into the checkpoint (`--mtp`) | Safetensors/UQFF with paged attention |
 | DFlash / DFlash 2 | Qwen3.5, Qwen3.8 | DFlash draft checkpoints (`--mtp-model`) | Supported with paged attention |
 
 Legacy target/draft speculative decoding has been removed. New speculative decoding features use the MTP proposer/target path.
@@ -75,7 +76,17 @@ Qwen3.5 and Qwen3.8 checkpoints ship a multi-token prediction head (`mtp.*` weig
 mistralrs serve -m Qwen/Qwen3.8-27B --quant 4 --mtp
 ```
 
-The head keeps its own paged KV cache alongside the target's, so the KV budget grows by one attention layer. `--mtp-n-predict` defaults to 2 for these heads. Greedy output is equivalent to non-MTP decoding up to floating-point tie-breaks in the hybrid recurrent layers. UQFF artifacts must include the `mtp.*` tensors to use `--mtp`.
+The head keeps its own paged KV cache alongside the target's, so the KV budget grows by one attention layer. Depth is tuned automatically unless `--mtp-n-predict` is set. Multi-token verification can use different quantized matrix and recurrent kernels from ordinary decoding, so log probabilities and greedy token choices can differ; token-for-token equivalence is not guaranteed. UQFF artifacts must include the `mtp.*` tensors to use `--mtp`; built-in heads are not supported through GGUF loading.
+
+Built-in Qwen MTP currently recomputes cached prompt prefixes because its shifted-token KV rows cannot safely share the target model's prefix block hashes. This can increase time to first token for repeated prompts. DFlash retains its own prefix-cache behavior.
+
+Qwen3.8-Flash-Next uses the same built-in-head flags:
+
+```bash
+mistralrs serve -m Qwen/Qwen3.8-Flash-Next --isq q4k --mtp
+```
+
+Flash-Next supports its own built-in head only, with no external assistant or DFlash support. See [model-family notes](/guides/models/model-family-notes/#qwen38-flash-next) for its memory requirements.
 
 ## DFlash and DFlash 2 (Qwen3.5 / Qwen3.8)
 
@@ -101,7 +112,9 @@ shallower depth so the recurrent checkpoint layout fits the configured sequence 
 preserving memory for the requested paged KV cache. Pass `--mtp-n-predict` to request a fixed depth
 instead. Automatic CUDA serving also adapts the active depth to live load: up to 8 live DFlash
 contexts use the full reserved depth, while larger loads use up to 3 drafts. Set
-`MISTRALRS_DFLASH_ADAPTIVE=0` (or `false`) to disable load adaptation. The drafter's projection
+`MISTRALRS_DFLASH_ADAPTIVE=0` (or `false`) to use throughput-based depth tuning instead of the
+batch-load policy. That tuner also applies when the batch-load policy is unavailable, choosing
+among 3, 5, and 7 drafts up to the reserved depth. The drafter's projection
 weights are requantized to the target's in-situ quantization type at load (override with the
 `MISTRALRS_DFLASH_ISQ` environment variable, e.g. `q6k` or `none` for bf16).
 
@@ -126,7 +139,7 @@ The target and assistant configs must match where the implementation requires it
 
 ## Notes
 
-MTP remains exact: accepted output is verified by the target model before it is emitted. Throughput gain depends on how many proposed tokens the target accepts and on the cost of the target verification pass.
+Throughput gain depends on how many proposed tokens the target accepts and on the cost of the target verification pass.
 
 MTP supports batched generation and constrained decoding.
 

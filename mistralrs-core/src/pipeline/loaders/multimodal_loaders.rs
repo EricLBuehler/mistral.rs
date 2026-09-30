@@ -8171,7 +8171,7 @@ impl DeviceMappedModelLoader for Qwen4ExpLoader {
         Ok(Box::new(Qwen4ExpPagedConfig::new(
             base,
             &text.paged_layer_types(cfg.mtp),
-            qsa.head_dim + text.rot_dim(),
+            qsa.aux_cache_elements_per_token(text.rot_dim()),
             qsa.max_selected_tokens(),
         )))
     }

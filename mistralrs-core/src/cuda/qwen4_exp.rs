@@ -183,7 +183,8 @@ mod ffi {
             stream: i64,
         );
         pub(super) fn qwen4_qsa_finalize(
-            aux: *mut c_void,
+            aux: *const c_void,
+            block_keys: *mut c_void,
             layout: Q4Tokens,
             paged: Q4Paged,
             norm_weight: *const f32,
@@ -196,7 +197,7 @@ mod ffi {
         );
         pub(super) fn qwen4_qsa_select(
             q: *const c_void,
-            aux: *const c_void,
+            block_keys: *const c_void,
             layout: Q4Tokens,
             paged: Q4Paged,
             scores: *mut f32,
@@ -204,7 +205,7 @@ mod ffi {
             n_heads: i32,
             ratio: i32,
             topk: i32,
-            aux_dim: i32,
+            key_dim: i32,
             selected: *mut i32,
             n_selected: *mut i32,
             dtype: i32,
@@ -748,18 +749,31 @@ pub(crate) struct QsaShape {
     pub n_index_heads: usize,
 }
 
+pub(crate) struct QsaFinalizeArgs<'a> {
+    pub aux: &'a Tensor,
+    pub block_keys: &'a Tensor,
+    pub layout: &'a TokenLayout,
+    pub paged: &'a PagedView<'a>,
+    pub norm_weight: &'a Tensor,
+    pub shape: &'a QsaShape,
+    pub eps: f64,
+}
+
 /// Pool, normalize and rotate the key of every compressed block this step completes.
-pub(crate) fn qsa_finalize(
-    aux: &Tensor,
-    layout: &TokenLayout,
-    paged: &PagedView<'_>,
-    norm_weight: &Tensor,
-    shape: &QsaShape,
-    eps: f64,
-) -> Result<()> {
+pub(crate) fn qsa_finalize(args: QsaFinalizeArgs<'_>) -> Result<()> {
+    let QsaFinalizeArgs {
+        aux,
+        block_keys,
+        layout,
+        paged,
+        norm_weight,
+        shape,
+        eps,
+    } = args;
     unsafe {
         ffi::qwen4_qsa_finalize(
-            dev_ptr(aux)? as *mut _,
+            dev_ptr(aux)? as *const _,
+            dev_ptr(block_keys)? as *mut _,
             layout.ffi()?,
             paged.ffi()?,
             dev_ptr(norm_weight)? as *const f32,
@@ -777,7 +791,7 @@ pub(crate) fn qsa_finalize(
 /// Per-query top-k blocks as `(selected [tokens, topk], n_selected [tokens])`, both i32.
 pub(crate) fn qsa_select(
     q: &Tensor,
-    aux: &Tensor,
+    block_keys: &Tensor,
     layout: &TokenLayout,
     paged: &PagedView<'_>,
     shape: &QsaShape,
@@ -798,7 +812,7 @@ pub(crate) fn qsa_select(
     unsafe {
         ffi::qwen4_qsa_select(
             dev_ptr(&q)? as *const _,
-            dev_ptr(aux)? as *const _,
+            dev_ptr(block_keys)? as *const _,
             layout.ffi()?,
             paged.ffi()?,
             dev_ptr(&scores)? as *mut f32,
@@ -806,10 +820,10 @@ pub(crate) fn qsa_select(
             shape.n_index_heads as i32,
             shape.ratio as i32,
             shape.topk as i32,
-            aux.dim(candle_core::D::Minus1)? as i32,
+            block_keys.dim(candle_core::D::Minus1)? as i32,
             dev_ptr(&selected)? as *mut i32,
             dev_ptr(&n_selected)? as *mut i32,
-            half_dtype_code(aux.dtype())?,
+            half_dtype_code(block_keys.dtype())?,
             stream(device)?,
         );
     }
@@ -819,7 +833,7 @@ pub(crate) fn qsa_select(
 /// cuTile scoring plus the CUDA top-k, for prefill layouts on devices with the tile JIT.
 pub(crate) fn qsa_select_cutile(
     q: &Tensor,
-    aux: &Tensor,
+    block_keys: &Tensor,
     layout: &TokenLayout,
     paged: &PagedView<'_>,
     shape: &QsaShape,
@@ -850,7 +864,7 @@ pub(crate) fn qsa_select_cutile(
         mistralrs_quant::cutile::cutile_qsa_score(
             &mistralrs_quant::cutile::QsaScoreArgs {
                 q: &q,
-                aux,
+                block_keys,
                 paged: &tile_paged,
                 tiles: &meta.tiles,
                 scores: &scores,
@@ -879,7 +893,7 @@ pub(crate) fn qsa_select_cutile(
     }
     #[cfg(not(feature = "cutile"))]
     {
-        let _ = (q, aux, layout, paged, shape, max_blocks);
+        let _ = (q, block_keys, layout, paged, shape, max_blocks);
         Ok(None)
     }
 }
@@ -994,4 +1008,95 @@ pub(crate) fn qsa_attention(args: QsaAttentionArgs<'_>) -> Result<Tensor> {
         );
     }
     Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const BLOCK_SIZE: usize = 4;
+    const RATIO: usize = 4;
+    const HALF_ROT: usize = 32;
+    const TOKENS: usize = 8;
+    const SLOTS: usize = 12;
+    const REPLACED_TOKENS: usize = 2;
+
+    #[test]
+    #[ignore = "requires a CUDA device"]
+    fn qsa_reopened_block_matches_fresh_prefill() -> Result<()> {
+        let device = Device::new_cuda(0)?;
+        let dtype = DType::BF16;
+        let aux_dim = QSA_HEAD_DIM + 2 * HALF_ROT;
+        let head_dim = u32::try_from(QSA_HEAD_DIM).unwrap();
+        let half_rot = u32::try_from(HALF_ROT).unwrap();
+        let raw = (Tensor::arange(0u32, u32::try_from(TOKENS).unwrap() * head_dim, &device)?
+            .to_dtype(DType::F32)?
+            .reshape((TOKENS, QSA_HEAD_DIM))?
+            / f64::from(head_dim))?
+        .sin()?
+        .to_dtype(dtype)?;
+        let angles = (Tensor::arange(0u32, u32::try_from(TOKENS).unwrap() * half_rot, &device)?
+            .to_dtype(DType::F32)?
+            .reshape((TOKENS, HALF_ROT))?
+            / f64::from(half_rot))?;
+        let cos = angles.cos()?.to_dtype(dtype)?;
+        let sin = angles.sin()?.to_dtype(dtype)?;
+        let slots = Tensor::new(&[8i64, 9, 10, 11, 0, 1, 2, 3], &device)?;
+        let tables = Tensor::new(&[[2u32, 0]], &device)?;
+        let kv_lens = Tensor::new(&[TOKENS as u32], &device)?;
+        let paged = PagedView {
+            block_tables: &tables,
+            kv_lens: &kv_lens,
+            block_size: BLOCK_SIZE,
+        };
+        let shape = QsaShape {
+            ratio: RATIO,
+            topk: 1,
+            half_rot: HALF_ROT,
+            n_index_heads: 1,
+        };
+        let weight = Tensor::ones(QSA_HEAD_DIM, DType::F32, &device)?;
+        let full_layout = TokenLayout::from_host(&[(0, TOKENS)], &[TOKENS], TOKENS, &device)?;
+        let suffix_layout =
+            TokenLayout::from_host(&[(0, REPLACED_TOKENS)], &[TOKENS], REPLACED_TOKENS, &device)?;
+        let aux = Tensor::zeros((SLOTS, aux_dim), dtype, &device)?;
+        let keys = Tensor::zeros((SLOTS / RATIO, QSA_HEAD_DIM), dtype, &device)?;
+        let finalize = |aux: &Tensor, keys: &Tensor, layout: &TokenLayout| {
+            qsa_finalize(QsaFinalizeArgs {
+                aux,
+                block_keys: keys,
+                layout,
+                paged: &paged,
+                norm_weight: &weight,
+                shape: &shape,
+                eps: 1e-6,
+            })
+        };
+        qsa_aux_write(&raw, &cos, &sin, &slots, &aux)?;
+        let initial_aux = aux.to_dtype(DType::F32)?.to_vec2::<f32>()?;
+        finalize(&aux, &keys, &full_layout)?;
+        assert_eq!(aux.to_dtype(DType::F32)?.to_vec2::<f32>()?, initial_aux);
+
+        let suffix_start = TOKENS - REPLACED_TOKENS;
+        let replacement = raw.narrow(0, suffix_start, REPLACED_TOKENS)?.neg()?;
+        qsa_aux_write(
+            &replacement,
+            &cos.narrow(0, suffix_start, REPLACED_TOKENS)?,
+            &sin.narrow(0, suffix_start, REPLACED_TOKENS)?,
+            &slots.narrow(0, suffix_start, REPLACED_TOKENS)?,
+            &aux,
+        )?;
+        finalize(&aux, &keys, &suffix_layout)?;
+
+        let fresh_aux = Tensor::zeros((SLOTS, aux_dim), dtype, &device)?;
+        let fresh_keys = Tensor::zeros((SLOTS / RATIO, QSA_HEAD_DIM), dtype, &device)?;
+        let accepted = Tensor::cat(&[raw.narrow(0, 0, suffix_start)?, replacement], 0)?;
+        qsa_aux_write(&accepted, &cos, &sin, &slots, &fresh_aux)?;
+        finalize(&fresh_aux, &fresh_keys, &full_layout)?;
+        assert_eq!(
+            keys.to_dtype(DType::F32)?.to_vec2::<f32>()?,
+            fresh_keys.to_dtype(DType::F32)?.to_vec2::<f32>()?
+        );
+        Ok(())
+    }
 }

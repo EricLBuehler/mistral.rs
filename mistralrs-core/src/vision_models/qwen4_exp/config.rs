@@ -142,6 +142,10 @@ impl QsaConfig {
     pub fn max_selected_tokens(&self) -> usize {
         self.budget + self.compress_ratio - 1
     }
+
+    pub(crate) fn aux_cache_elements_per_token(&self, rot_dim: usize) -> usize {
+        self.head_dim + rot_dim + self.head_dim.div_ceil(self.compress_ratio)
+    }
 }
 
 /// Hashed n-gram PLE parameters.

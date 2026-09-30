@@ -1,11 +1,4 @@
-//! Picks the speculative draft depth for every step.
-//!
-//! The population keeps a decayed acceptance rate per draft position (later drafts land less often), and
-//! each sequence scales that curve by how its hits compare with what the curve predicted for it, so `n`
-//! chained drafts commit `1 + p1 + p1 p2 + ... + p1..pn` tokens in expectation. Step cost is the measured time from the start of
-//! drafting to the end of verification at that batch size and depth, so each drafter's own cost shape
-//! (chained heads or one block forward) is measured rather than assumed. The batch runs at the depth
-//! that maximizes expected committed tokens across all its sequences per second of step time.
+//! Adapts speculative depth from acceptance rates and the measured cost of drafting and verification.
 
 #![allow(clippy::cast_precision_loss)]
 
@@ -40,7 +33,7 @@ const SWITCH_MARGIN: f64 = 1.03;
 const PROBE_INTERVAL: u64 = 32;
 // Sequences not seen for this many decisions are forgotten
 const STALE_DECISIONS: u64 = 4096;
-// Until both depths next to the chosen one have this many clean samples at a batch size, they are probed often
+// Every candidate needs direct samples because graph and kernel boundaries can make costs non-monotonic
 const WARMUP_SAMPLES: u32 = 2;
 const WARMUP_PROBE_INTERVAL: u64 = 4;
 
@@ -180,9 +173,9 @@ fn record_cost<K: std::hash::Hash + Eq>(
         });
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 struct StepBoundary {
-    batch: usize,
+    seq_ids: Vec<usize>,
     depth: usize,
     at: Instant,
     interruptions: u64,
@@ -383,6 +376,29 @@ impl SpeculativeAutotuner {
             .map(|secs| tokens / secs.max(f64::MIN_POSITIVE))
     }
 
+    pub(crate) fn choose_with_hint(
+        &mut self,
+        seq_ids: &[usize],
+        max_depth: usize,
+        depth_hint: Option<usize>,
+    ) -> usize {
+        if !self.is_active() {
+            return max_depth;
+        }
+        if let Some(depth) =
+            depth_hint.filter(|depth| *depth <= max_depth && self.candidates.contains(depth))
+        {
+            tracing::debug!(
+                batch = seq_ids.len(),
+                chosen = depth,
+                reason = "cohort_hint",
+                "speculative depth decision"
+            );
+            return depth;
+        }
+        self.choose(seq_ids, max_depth)
+    }
+
     /// The depth the batch of `seq_ids` should draft at, at most `max_depth`.
     pub fn choose(&mut self, seq_ids: &[usize], max_depth: usize) -> usize {
         self.clock += 1;
@@ -404,7 +420,11 @@ impl SpeculativeAutotuner {
             return max_depth;
         }
         let key = batch_key(seq_ids.len());
-        let current = self.current.get(&key).copied();
+        let current = self
+            .current
+            .get(&key)
+            .copied()
+            .filter(|depth| candidates.contains(depth));
         let mut ranked = candidates
             .iter()
             .filter_map(|depth| Some((*depth, self.score(seq_ids, key, *depth)?)))
@@ -426,14 +446,6 @@ impl SpeculativeAutotuner {
             }
             (Some(&(best, _)), _) => best,
         };
-        tracing::debug!(
-            batch = seq_ids.len(),
-            ?current,
-            chosen,
-            ?ranked,
-            curve = ?self.position_rates(max_depth),
-            "speculative depth decision"
-        );
         self.current.insert(key, chosen);
         let decisions = self.decisions.entry(key).or_default();
         *decisions += 1;
@@ -454,45 +466,76 @@ impl SpeculativeAutotuner {
                 .get(&(key, depth))
                 .map_or(0, |cost| cost.samples)
         };
-        let undersampled = neighbors
+        let undersampled = candidates
             .iter()
             .copied()
-            .filter(|depth| samples(*depth) < WARMUP_SAMPLES)
-            .min_by_key(|depth| samples(*depth));
-        if let Some(depth) = undersampled {
-            if decisions.is_multiple_of(WARMUP_PROBE_INTERVAL) {
-                return depth;
-            }
-        }
-        if decisions.is_multiple_of(PROBE_INTERVAL) {
-            let stalest = neighbors.iter().copied().min_by_key(|depth| {
-                self.step_cost
-                    .get(&(key, *depth))
-                    .map_or(0, |cost| cost.updated)
-            });
-            if let Some(depth) = stalest {
-                return depth;
-            }
-        }
-        chosen
+            .filter(|depth| *depth != chosen && samples(*depth) < WARMUP_SAMPLES)
+            .min_by_key(|depth| (samples(*depth), depth.abs_diff(chosen), *depth));
+        let warmup = undersampled.filter(|_| decisions.is_multiple_of(WARMUP_PROBE_INTERVAL));
+        let stale = decisions
+            .is_multiple_of(PROBE_INTERVAL)
+            .then(|| {
+                neighbors.iter().copied().min_by_key(|depth| {
+                    self.step_cost
+                        .get(&(key, *depth))
+                        .map_or(0, |cost| cost.updated)
+                })
+            })
+            .flatten();
+        let (selected, reason) = if let Some(depth) = warmup {
+            (depth, "warmup_probe")
+        } else if let Some(depth) = stale {
+            (depth, "stale_probe")
+        } else {
+            (
+                chosen,
+                if ranked.is_empty() {
+                    "unmeasured"
+                } else {
+                    "score"
+                },
+            )
+        };
+        tracing::debug!(
+            batch = seq_ids.len(),
+            ?current,
+            preferred = chosen,
+            chosen = selected,
+            reason,
+            ?ranked,
+            estimated_step_secs = ?self.step_seconds(key, selected),
+            cost_samples = samples(selected),
+            curve = ?self.position_rates(max_depth),
+            "speculative depth decision"
+        );
+        selected
     }
 
-    /// A batch of `batch` sequences started drafting `depth` tokens at `started`.
-    pub fn begin_step(&mut self, batch: usize, depth: usize, started: Instant) {
+    /// The sequences in `seq_ids` started drafting `depth` tokens at `started`.
+    pub fn begin_step(&mut self, seq_ids: &[usize], depth: usize, started: Instant) {
         self.boundary = (depth > 0).then(|| StepBoundary {
-            batch,
+            seq_ids: seq_ids.to_vec(),
             depth,
             at: started,
             interruptions: interruptions(),
         });
     }
 
+    pub fn cancel_step(&mut self) {
+        self.boundary = None;
+    }
+
     /// The target step verifying the last proposal finished at `verified_at` with these outcomes.
     pub fn record_verification(&mut self, verified_at: Instant, outcomes: &[DraftOutcome]) {
         if let Some(boundary) = self.boundary.take() {
-            let depth = outcomes.first().map_or(0, |outcome| outcome.proposed);
-            if boundary.batch == outcomes.len()
-                && boundary.depth == depth
+            if boundary.seq_ids.len() == outcomes.len()
+                && boundary
+                    .seq_ids
+                    .iter()
+                    .zip(outcomes)
+                    .all(|(seq_id, outcome)| {
+                        *seq_id == outcome.seq_id && boundary.depth == outcome.proposed
+                    })
                 && boundary.interruptions == interruptions()
             {
                 let secs = verified_at
@@ -500,7 +543,7 @@ impl SpeculativeAutotuner {
                     .as_secs_f64();
                 record_cost(
                     &mut self.step_cost,
-                    (batch_key(boundary.batch), boundary.depth),
+                    (batch_key(boundary.seq_ids.len()), boundary.depth),
                     secs,
                     self.clock,
                 );
@@ -653,6 +696,79 @@ mod tests {
     }
 
     #[test]
+    fn cohort_hint_preserves_fixed_depth_and_candidate_limits() {
+        let mut fixed = tuner(&[]);
+        assert_eq!(fixed.choose_with_hint(&[0], 6, Some(2)), 6);
+        let mut adaptive = tuner(&[2, 3, 4, 6]);
+        assert_eq!(adaptive.choose_with_hint(&[0], 6, Some(2)), 2);
+        assert_eq!(adaptive.choose_with_hint(&[0], 6, Some(5)), 4);
+        assert_eq!(adaptive.choose_with_hint(&[0], 2, Some(6)), 2);
+    }
+
+    #[test]
+    fn unmeasured_depth_respects_a_lowered_cap() {
+        let mut t = tuner(&[2, 3, 4, 6]);
+        assert_eq!(t.choose(&[0], 6), 4);
+        assert_eq!(t.choose(&[0], 3), 3);
+        assert_eq!(t.choose(&[0], 2), 2);
+    }
+
+    #[test]
+    fn interrupted_steps_update_acceptance_without_recording_cost() {
+        let mut t = tuner(&[2, 4]);
+        let started = Instant::now();
+        t.begin_step(&[7], 4, started);
+        t.boundary.as_mut().unwrap().interruptions = interruptions().wrapping_sub(1);
+        t.record_verification(
+            started + Duration::from_secs(1),
+            &[DraftOutcome {
+                seq_id: 7,
+                proposed: 4,
+                accepted: 2,
+            }],
+        );
+        assert!(t.step_cost.is_empty());
+        assert_eq!(t.positions.len(), 3);
+        assert_eq!(t.positions[2].hits, 0.0);
+        assert_eq!(t.positions[2].trials, 1.0);
+    }
+
+    #[test]
+    fn timing_rejects_interleaved_batches_with_the_same_shape() {
+        let mut t = tuner(&[2, 4]);
+        let started = Instant::now();
+        let outcome = DraftOutcome {
+            seq_id: 2,
+            proposed: 4,
+            accepted: 2,
+        };
+        t.begin_step(&[1], 4, started);
+        t.record_verification(started + Duration::from_millis(20), &[outcome]);
+        assert!(t.step_cost.is_empty());
+        t.begin_step(&[2], 4, started);
+        t.record_verification(started + Duration::from_millis(20), &[outcome]);
+        assert!(t.step_cost.contains_key(&(1, 4)));
+    }
+
+    #[test]
+    fn canceled_proposals_do_not_contribute_timing_samples() {
+        let mut t = tuner(&[2, 4]);
+        let started = Instant::now();
+        t.begin_step(&[7], 4, started);
+        t.cancel_step();
+        t.record_verification(
+            started + Duration::from_millis(20),
+            &[DraftOutcome {
+                seq_id: 7,
+                proposed: 4,
+                accepted: 2,
+            }],
+        );
+        assert!(t.step_cost.is_empty());
+        assert_eq!(t.positions.len(), 3);
+    }
+
+    #[test]
     fn step_timing_ignores_mismatched_batches_and_outliers() {
         let mut t = tuner(&[2, 4]);
         let outcome = |seq_id| DraftOutcome {
@@ -660,22 +776,22 @@ mod tests {
             proposed: 4,
             accepted: 4,
         };
-        t.begin_step(1, 4, Instant::now());
+        t.begin_step(&[0], 4, Instant::now());
         t.record_verification(
-            t.boundary.unwrap().at + Duration::from_millis(20),
+            t.boundary.as_ref().unwrap().at + Duration::from_millis(20),
             &[outcome(0)],
         );
         let cost = t.step_cost[&(1, 4)].secs;
         assert!((cost - 0.020).abs() < 1e-6);
-        t.begin_step(1, 4, Instant::now());
+        t.begin_step(&[0], 4, Instant::now());
         t.record_verification(
-            t.boundary.unwrap().at + Duration::from_secs(2),
+            t.boundary.as_ref().unwrap().at + Duration::from_secs(2),
             &[outcome(0)],
         );
         assert!((t.step_cost[&(1, 4)].secs - cost).abs() < 1e-9);
-        t.begin_step(1, 4, Instant::now());
+        t.begin_step(&[0], 4, Instant::now());
         t.record_verification(
-            t.boundary.unwrap().at + Duration::from_millis(40),
+            t.boundary.as_ref().unwrap().at + Duration::from_millis(40),
             &[outcome(0), outcome(1)],
         );
         assert!((t.step_cost[&(1, 4)].secs - cost).abs() < 1e-9);
@@ -701,7 +817,7 @@ mod tests {
     }
 
     #[test]
-    fn probes_measure_only_neighboring_depths() {
+    fn steady_state_probes_only_neighboring_depths() {
         let mut t = tuner(&[2, 3, 4, 6]);
         t.set_costs(1, &[(2, 1.0), (3, 1.0), (4, 1.0), (6, 1.0)]);
         t.step_cost.get_mut(&(1, 4)).unwrap().updated = 9;
@@ -710,8 +826,54 @@ mod tests {
             .map(|_| t.choose(&[0], 6))
             .collect::<Vec<_>>();
         assert_eq!(decisions[0], 6);
+        assert!(decisions[..decisions.len() - 1]
+            .iter()
+            .all(|depth| *depth == 6));
         // depth 2 is the stalest overall, but only 4 sits next to 6
         assert_eq!(decisions[decisions.len() - 1], 4);
+    }
+
+    #[test]
+    fn warmup_finds_a_faster_depth_across_a_slower_neighbor() {
+        let mut t = tuner(&AUTO_DEPTHS);
+        let ids = (0..8).collect::<Vec<_>>();
+        t.set_positions(&[0.9; AUTO_MAX_DEPTH]);
+        t.set_costs(8, &[(4, 0.20), (6, 0.21)]);
+        assert_eq!(t.choose(&ids, AUTO_MAX_DEPTH), 6);
+        let costs = [(2, 0.13), (3, 0.10), (4, 0.20), (6, 0.21)];
+        let bound =
+            WARMUP_PROBE_INTERVAL * u64::from(WARMUP_SAMPLES + 1) * AUTO_DEPTHS.len() as u64;
+        for _ in 0..bound {
+            let depth = t.choose(&ids, AUTO_MAX_DEPTH);
+            let secs = costs
+                .iter()
+                .find(|(candidate, _)| *candidate == depth)
+                .unwrap()
+                .1;
+            record_cost(&mut t.step_cost, (8, depth), secs, t.clock);
+        }
+        assert!(AUTO_DEPTHS.iter().all(|depth| {
+            t.step_cost
+                .get(&(8, *depth))
+                .is_some_and(|cost| cost.samples >= WARMUP_SAMPLES)
+        }));
+        assert_eq!(t.current[&8], 3);
+    }
+
+    #[test]
+    fn warmup_probes_other_depths_before_the_preferred_cost_finishes_warming() {
+        let mut t = tuner(&AUTO_DEPTHS);
+        let ids = (0..8).collect::<Vec<_>>();
+        t.set_positions(&[0.9; AUTO_MAX_DEPTH]);
+        t.set_costs(8, &[(4, 0.20), (6, 0.21)]);
+        t.step_cost.get_mut(&(8, 6)).unwrap().samples = WARMUP_SAMPLES - 1;
+        let decisions = (0..WARMUP_PROBE_INTERVAL)
+            .map(|_| t.choose(&ids, AUTO_MAX_DEPTH))
+            .collect::<Vec<_>>();
+        assert!(decisions[..decisions.len() - 1]
+            .iter()
+            .all(|depth| *depth == 6));
+        assert_eq!(decisions[decisions.len() - 1], 3);
     }
 
     #[test]
@@ -746,9 +908,9 @@ mod tests {
                 })
                 .collect::<Vec<_>>()
         };
-        t.begin_step(5, 6, Instant::now());
+        t.begin_step(&[0, 1, 2, 3, 4], 6, Instant::now());
         t.record_verification(
-            t.boundary.unwrap().at + Duration::from_millis(10),
+            t.boundary.as_ref().unwrap().at + Duration::from_millis(10),
             &outcomes(5),
         );
         assert!(t.step_cost.contains_key(&(5, 6)));

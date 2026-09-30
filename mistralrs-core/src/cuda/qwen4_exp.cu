@@ -554,7 +554,8 @@ __global__ void q4_qsa_aux_write_kernel(
 // key_dim must be 128.
 template <typename T>
 __global__ void
-q4_qsa_finalize_kernel(T *__restrict__ aux, Q4Tokens l, Q4Paged pg,
+q4_qsa_finalize_kernel(const T *__restrict__ aux, T *__restrict__ block_keys,
+                       Q4Tokens l, Q4Paged pg,
                        const float *__restrict__ norm_weight, int ratio,
                        int half_rot, int aux_dim, float eps) {
   const int t = blockIdx.x * (blockDim.x >> 5) + (threadIdx.x >> 5);
@@ -589,8 +590,9 @@ q4_qsa_finalize_kernel(T *__restrict__ aux, Q4Tokens l, Q4Paged pg,
   for (int i = 0; i < 4; ++i) {
     v[i] = q4_f(q4_t<T>(v[i] * inv * norm_weight[lane * 4 + i]));
   }
-  T *dst = aux + q4_slot(pg, seq, start) * aux_dim;
-  const T *cs = dst + Q4_QSA_HEAD_DIM;
+  const T *cs = aux + q4_slot(pg, seq, start) * aux_dim + Q4_QSA_HEAD_DIM;
+  // Keep raw keys intact when speculative rollback reopens a completed block.
+  T *dst = block_keys + q4_slot(pg, seq, start) / ratio * Q4_QSA_HEAD_DIM;
   const T *sn = cs + half_rot;
   float out[4];
 #pragma unroll
@@ -620,11 +622,11 @@ q4_qsa_finalize_kernel(T *__restrict__ aux, Q4Tokens l, Q4Paged pg,
 // scores[t, j] = sum_h relu(q[t, h] . block_key[j]) / sqrt(d) for rows with
 // more complete blocks than the budget selects; other rows are skipped.
 template <typename T>
-__global__ void q4_qsa_score_kernel(const T *__restrict__ q,
-                                    const T *__restrict__ aux, Q4Tokens l,
-                                    Q4Paged pg, float *__restrict__ scores,
-                                    int score_stride, int n_heads, int ratio,
-                                    int topk, int aux_dim) {
+__global__ void
+q4_qsa_score_kernel(const T *__restrict__ q, const T *__restrict__ block_keys,
+                    Q4Tokens l, Q4Paged pg, float *__restrict__ scores,
+                    int score_stride, int n_heads, int ratio, int topk,
+                    int key_dim) {
   __shared__ float qs[Q4_QSA_MAX_INDEX_HEADS * Q4_QSA_HEAD_DIM];
   const int t = blockIdx.y;
   int seq;
@@ -641,7 +643,7 @@ __global__ void q4_qsa_score_kernel(const T *__restrict__ q,
   if (j >= nb) {
     return;
   }
-  const T *key = aux + q4_slot(pg, seq, j * ratio) * aux_dim;
+  const T *key = block_keys + q4_slot(pg, seq, j * ratio) / ratio * key_dim;
   float dots[Q4_QSA_MAX_INDEX_HEADS];
 #pragma unroll
   for (int h = 0; h < Q4_QSA_MAX_INDEX_HEADS; ++h) {
@@ -1174,7 +1176,8 @@ extern "C" void qwen4_qsa_aux_write(const void *raw_key, const void *cos,
                        n_tokens, key_dim, half_rot, aux_dim));
 }
 
-extern "C" void qwen4_qsa_finalize(void *aux, Q4Tokens layout, Q4Paged paged,
+extern "C" void qwen4_qsa_finalize(const void *aux, void *block_keys,
+                                   Q4Tokens layout, Q4Paged paged,
                                    const float *norm_weight, int ratio,
                                    int half_rot, int aux_dim, float eps,
                                    int dtype, int64_t stream) {
@@ -1186,14 +1189,14 @@ extern "C" void qwen4_qsa_finalize(void *aux, Q4Tokens layout, Q4Paged paged,
   Q4_DISPATCH_HALF(
       dtype, q4_qsa_finalize_kernel<scalar_t>
       <<<(layout.n_tokens + warps - 1) / warps, warps * 32, 0, s>>>(
-          (scalar_t *)aux, layout, paged, norm_weight, ratio, half_rot, aux_dim,
-          eps));
+          (const scalar_t *)aux, (scalar_t *)block_keys, layout, paged,
+          norm_weight, ratio, half_rot, aux_dim, eps));
 }
 
-extern "C" void qwen4_qsa_select(const void *q, const void *aux,
+extern "C" void qwen4_qsa_select(const void *q, const void *block_keys,
                                  Q4Tokens layout, Q4Paged paged, float *scores,
                                  int score_stride, int n_heads, int ratio,
-                                 int topk, int aux_dim, int *selected,
+                                 int topk, int key_dim, int *selected,
                                  int *n_selected, int dtype, int64_t stream) {
   if (layout.n_tokens == 0) {
     return;
@@ -1204,8 +1207,8 @@ extern "C" void qwen4_qsa_select(const void *q, const void *aux,
     const dim3 grid((score_stride + threads - 1) / threads, layout.n_tokens);
     Q4_DISPATCH_HALF(
         dtype, q4_qsa_score_kernel<scalar_t><<<grid, threads, 0, s>>>(
-                   (const scalar_t *)q, (const scalar_t *)aux, layout, paged,
-                   scores, score_stride, n_heads, ratio, topk, aux_dim));
+                   (const scalar_t *)q, (const scalar_t *)block_keys, layout,
+                   paged, scores, score_stride, n_heads, ratio, topk, key_dim));
   }
   q4_qsa_topk_kernel<<<layout.n_tokens, 1024, 0, s>>>(
       scores, score_stride, layout, paged, ratio, topk, selected, n_selected);

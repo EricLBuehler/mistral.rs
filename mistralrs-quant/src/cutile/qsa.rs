@@ -35,14 +35,14 @@ mod kernels {
     unsafe fn qsa_score<const BT: i32, const NH: i32, const R: i32, const D: i32, const BN: i32>(
         scores_ptr: *mut f32,
         q_ptr: *mut bf16,
-        aux_ptr: *mut bf16,
+        block_keys_ptr: *mut bf16,
         tables_ptr: *mut i32,
         tiles_ptr: *mut i32,
         score_stride_f: f32,
         max_blocks_f: f32,
         ratio: i32,
         block_size: i32,
-        aux_dim: i32,
+        block_keys_dim: i32,
         topk: i32,
         scale: f32,
     ) {
@@ -176,8 +176,9 @@ mod kernels {
             );
             let blk: Tile<i32, { [BN] }> = select(key_ok, blk_raw, zero_n);
             let slot: Tile<i32, { [BN] }> = blk * bs_n + key_pos - page * bs_n;
-            let aux_n: Tile<i32, { [BN] }> = broadcast_scalar(aux_dim, const_shape![BN]);
-            let k_off: Tile<i32, { [BN, D] }> = (slot * aux_n)
+            let block_keys_n: Tile<i32, { [BN] }> =
+                broadcast_scalar(block_keys_dim, const_shape![BN]);
+            let k_off: Tile<i32, { [BN, D] }> = (slot / ratio_n * block_keys_n)
                 .reshape(const_shape![BN, 1])
                 .broadcast(const_shape![BN, D])
                 + iota_d
@@ -186,7 +187,7 @@ mod kernels {
             let k_mask: Tile<bool, { [BN, D] }> = key_ok
                 .reshape(const_shape![BN, 1])
                 .broadcast(const_shape![BN, D]);
-            let a_p0: PointerTile<*mut bf16, { [] }> = pointer_to_tile(aux_ptr);
+            let a_p0: PointerTile<*mut bf16, { [] }> = pointer_to_tile(block_keys_ptr);
             let a_p1: PointerTile<*mut bf16, { [1, 1] }> = a_p0.reshape(const_shape![1, 1]);
             let a_p2: PointerTile<*mut bf16, { [BN, D] }> = a_p1.broadcast(const_shape![BN, D]);
             let k_ptrs: PointerTile<*mut bf16, { [BN, D] }> = a_p2.offset_tile(k_off);
@@ -199,8 +200,8 @@ mod kernels {
                 None,
                 Latency::<0>,
             );
-            let zero_nd: Tile<bf16, { [BN, D] }> = constant(bf16::ZERO, const_shape![BN, D]);
-            let k_tile: Tile<bf16, { [BN, D] }> = select(k_mask, k_raw, zero_nd);
+            let zero_keys: Tile<bf16, { [BN, D] }> = constant(bf16::ZERO, const_shape![BN, D]);
+            let k_tile: Tile<bf16, { [BN, D] }> = select(k_mask, k_raw, zero_keys);
             let transpose: Array<{ [1, 0] }> = Array::<{ [1, 0] }> {
                 dims: &[1i32, 0i32],
             };
@@ -550,12 +551,10 @@ pub struct QsaPaged<'a> {
     pub block_size: usize,
 }
 
-/// Block scoring for prefill. `q: [tokens, 4, 128]` BF16, `aux: [slots, aux_dim]` BF16 whose rows
-/// start with the pooled block key, `tiles: [n, 4]` I32 score tiles of at most
-/// [`QSA_SCORE_TOKENS`] tokens of one sequence (first token, sequence, tokens, first position).
+/// Prefill scoring from BF16 queries and pooled block keys, using per-sequence I32 score tiles.
 pub struct QsaScoreArgs<'a> {
     pub q: &'a Tensor,
-    pub aux: &'a Tensor,
+    pub block_keys: &'a Tensor,
     pub paged: &'a QsaPaged<'a>,
     pub tiles: &'a Tensor,
     pub scores: &'a Tensor,
@@ -624,7 +623,7 @@ pub fn cutile_qsa_score(args: &QsaScoreArgs<'_>, dev: &CudaDevice) -> Result<()>
 
 fn score_launch(args: &QsaScoreArgs<'_>, dev: &CudaDevice, compile_only: bool) -> Result<()> {
     require(args.q, DType::BF16, "q")?;
-    require(args.aux, DType::BF16, "aux")?;
+    require(args.block_keys, DType::BF16, "block_keys")?;
     require(args.tiles, DType::I32, "tiles")?;
     require(args.scores, DType::F32, "scores")?;
     let (_, heads, dim) = args.q.dims3()?;
@@ -639,7 +638,13 @@ fn score_launch(args: &QsaScoreArgs<'_>, dev: &CudaDevice, compile_only: bool) -
     let score_stride = args.scores.dim(1)?;
     let stream = dev.cuda_stream();
     cuda_addr!(args.q, &stream, q_held, q_addr, _q_guard);
-    cuda_addr!(args.aux, &stream, aux_held, aux_addr, _aux_guard);
+    cuda_addr!(
+        args.block_keys,
+        &stream,
+        block_keys_held,
+        block_keys_addr,
+        _block_keys_guard
+    );
     cuda_addr!(
         args.paged.block_tables,
         &stream,
@@ -649,7 +654,7 @@ fn score_launch(args: &QsaScoreArgs<'_>, dev: &CudaDevice, compile_only: bool) -
     );
     cuda_addr!(args.tiles, &stream, ti_held, ti_addr, _ti_guard);
     cuda_addr!(args.scores, &stream, sc_held, sc_addr, _sc_guard);
-    let aux_dim = args.aux.dim(1)?;
+    let block_keys_dim = args.block_keys.dim(1)?;
     let rows = QSA_SCORE_TOKENS * QSA_INDEX_HEADS;
     let generics = vec![
         QSA_SCORE_TOKENS.to_string(),
@@ -662,14 +667,14 @@ fn score_launch(args: &QsaScoreArgs<'_>, dev: &CudaDevice, compile_only: bool) -
         kernels::qsa_score(
             ptr::<f32>(sc_addr),
             ptr::<tile_bf16>(q_addr),
-            ptr::<tile_bf16>(aux_addr),
+            ptr::<tile_bf16>(block_keys_addr),
             ptr::<i32>(tb_addr),
             ptr::<i32>(ti_addr),
             score_stride as f32,
             args.paged.max_blocks_per_seq as f32,
             args.ratio as i32,
             args.paged.block_size as i32,
-            aux_dim as i32,
+            block_keys_dim as i32,
             args.topk as i32,
             (QSA_INDEX_DIM as f32).sqrt().recip(),
         )
@@ -787,7 +792,6 @@ fn attention_launch(
 pub struct QsaWarmShape {
     pub ratio: usize,
     pub topk: usize,
-    pub aux_dim: usize,
     pub n_q_heads: usize,
     pub n_kv_heads: usize,
     pub block_size: usize,
@@ -827,7 +831,7 @@ impl CutileKernel for QsaKernel {
             score_launch(
                 &QsaScoreArgs {
                     q: &Tensor::zeros((1, QSA_INDEX_HEADS, QSA_INDEX_DIM), DType::BF16, &device)?,
-                    aux: &Tensor::zeros((1, shape.aux_dim), DType::BF16, &device)?,
+                    block_keys: &Tensor::zeros((1, QSA_INDEX_DIM), DType::BF16, &device)?,
                     paged: &paged,
                     tiles: &Tensor::zeros((1, 4), DType::I32, &device)?,
                     scores: &scores,
@@ -878,7 +882,6 @@ mod tests {
     const BLOCK_SIZE: usize = 32;
     const RATIO: usize = 4;
     const TOPK: usize = 8;
-    const AUX_DIM: usize = 192;
     const KV_HEADS: usize = 2;
     const Q_HEADS: usize = 24;
     const POOL_BLOCKS: usize = 48;
@@ -964,7 +967,7 @@ mod tests {
         let mut rng = Lcg(7);
         let n_tokens = fx.tokens.len();
         let q = rng.vec(n_tokens * QSA_INDEX_HEADS * QSA_INDEX_DIM);
-        let aux = rng.vec(POOL_BLOCKS * BLOCK_SIZE * AUX_DIM);
+        let block_keys = rng.vec(POOL_BLOCKS * BLOCK_SIZE / RATIO * QSA_INDEX_DIM);
         let max_blocks = SEQS.iter().map(|(_, kv)| kv / RATIO).max().unwrap();
         let stride = max_blocks + 1;
         let scores = Tensor::full(f32::NAN, (n_tokens, stride), &dev)?;
@@ -978,7 +981,11 @@ mod tests {
         cutile_qsa_score(
             &QsaScoreArgs {
                 q: &to_bf16(&q, &[n_tokens, QSA_INDEX_HEADS, QSA_INDEX_DIM], &dev)?,
-                aux: &to_bf16(&aux, &[POOL_BLOCKS * BLOCK_SIZE, AUX_DIM], &dev)?,
+                block_keys: &to_bf16(
+                    &block_keys,
+                    &[POOL_BLOCKS * BLOCK_SIZE / RATIO, QSA_INDEX_DIM],
+                    &dev,
+                )?,
                 paged: &paged,
                 tiles: &Tensor::from_vec(fx.tiles.clone(), (n_tiles, 4), &dev)?,
                 scores: &scores,
@@ -999,7 +1006,8 @@ mod tests {
                 continue;
             }
             for j in 0..nb {
-                let key = &aux[slot(&fx.tables, seq as usize, j * RATIO) * AUX_DIM..];
+                let key = &block_keys
+                    [slot(&fx.tables, seq as usize, j * RATIO) / RATIO * QSA_INDEX_DIM..];
                 let expected: f32 = (0..QSA_INDEX_HEADS)
                     .map(|h| {
                         let qh = &q[(t * QSA_INDEX_HEADS + h) * QSA_INDEX_DIM..];

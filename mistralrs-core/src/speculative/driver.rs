@@ -132,7 +132,11 @@ pub trait SpeculativePipelineExt: Pipeline {
 }
 
 /// The model's plan for this step, at the depth the autotuner picks for these sequences.
-fn plan_speculative_step<P>(target: &P, seq_ids: &[usize]) -> Option<SpeculativeBatchPlan>
+fn plan_speculative_step<P>(
+    target: &P,
+    seq_ids: &[usize],
+    depth_hint: Option<usize>,
+) -> Option<SpeculativeBatchPlan>
 where
     P: SpeculativePipelineExt,
 {
@@ -144,7 +148,7 @@ where
         .expect("speculative autotuner poisoned");
     tuner.set_candidates(&candidates);
     if tuner.is_active() && plan.proposal_len > 0 {
-        plan.proposal_len = tuner.choose(seq_ids, plan.proposal_len);
+        plan.proposal_len = tuner.choose_with_hint(seq_ids, plan.proposal_len, depth_hint);
     }
     Some(plan)
 }
@@ -207,10 +211,11 @@ where
             Ok(true)
         }
         StagedBatchState::Mixed => {
+            let depth_hint = seqs[0].speculative_depth_hint();
             trim_mixed_staged_allocations(seqs, cache)?;
             clear_staged_speculative_tokens(seqs);
             let seq_ids = seqs.iter().map(|seq| *seq.id()).collect::<Vec<_>>();
-            let Some(plan) = plan_speculative_step(target, &seq_ids) else {
+            let Some(plan) = plan_speculative_step(target, &seq_ids, depth_hint) else {
                 return Ok(false);
             };
             if plan.proposal_len == 0 {
@@ -232,7 +237,9 @@ where
         }
         StagedBatchState::None => {
             let seq_ids = seqs.iter().map(|seq| *seq.id()).collect::<Vec<_>>();
-            let Some(plan) = plan_speculative_step(target, &seq_ids) else {
+            let Some(plan) =
+                plan_speculative_step(target, &seq_ids, seqs[0].speculative_depth_hint())
+            else {
                 return Ok(false);
             };
             if plan.proposal_len == 0 {
@@ -715,7 +722,8 @@ where
         .iter()
         .map(|idx| *seqs[*idx].id())
         .collect::<Vec<_>>();
-    let Some(plan) = plan.or_else(|| plan_speculative_step(target, &seq_ids)) else {
+    let depth_hint = seqs[active_indices[0]].speculative_depth_hint();
+    let Some(plan) = plan.or_else(|| plan_speculative_step(target, &seq_ids, depth_hint)) else {
         target.speculative_bypass(&seq_ids)?;
         clear_active_staged(seqs, active_indices);
         return Ok(());
@@ -763,7 +771,12 @@ where
             .map(|(batch_idx, accepted)| (*batch_idx, accepted + 1))
             .collect::<Vec<_>>();
         let started = std::time::Instant::now();
-        let proposal = target.speculative_propose(SpeculativeProposeBatchCtx {
+        target
+            .speculative_autotuner()
+            .lock()
+            .expect("speculative autotuner poisoned")
+            .begin_step(&seq_ids, proposal_len, started);
+        target.speculative_propose(SpeculativeProposeBatchCtx {
             proposal_len,
             sampled_tokens,
             sampled_tokens_emitted: true,
@@ -775,16 +788,15 @@ where
             target_rows: &target_rows,
             preparation,
             rng: rng.clone(),
-        })?;
+        })?
+    };
+
+    let Some(proposal_batch) = proposal_batch else {
         target
             .speculative_autotuner()
             .lock()
             .expect("speculative autotuner poisoned")
-            .begin_step(active_indices.len(), proposal_len, started);
-        proposal
-    };
-
-    let Some(proposal_batch) = proposal_batch else {
+            .cancel_step();
         target.speculative_bypass(&seq_ids)?;
         clear_active_staged(seqs, active_indices);
         return Ok(());
@@ -807,6 +819,11 @@ where
         }
     }
     if !bypassed.is_empty() {
+        target
+            .speculative_autotuner()
+            .lock()
+            .expect("speculative autotuner poisoned")
+            .cancel_step();
         target.speculative_bypass(&bypassed)?;
     }
 

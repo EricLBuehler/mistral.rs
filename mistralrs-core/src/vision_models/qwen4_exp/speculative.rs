@@ -7,12 +7,29 @@ use candle_core::{DType, Device, IndexOp, Result, Tensor};
 use super::{mtp::Qwen4ExpMtpHead, Qwen4ExpModel};
 use crate::speculative::{
     autotuner::{AUTO_DEPTHS, AUTO_MAX_DEPTH},
-    builtin_mtp::{capture_view, BuiltinMtpHost, MtpAttentionInputs, MtpDraftOutput},
+    builtin_mtp::{
+        capture_view, BuiltinMtpHost, MtpAttentionInputs, MtpDraftOutput, BUILTIN_MTP_PREFIX_REPLAY,
+    },
     hybrid_state::{SpecCapture, SpecGraphState},
     MtpRuntimeConfig, SpeculativeAttachInfo, SpeculativeBatchPlan, SpeculativeCommitRow,
     SpeculativeConfig, SpeculativeGraphPlan, SpeculativeGraphState, SpeculativePrefillCtx,
-    SpeculativeProposalBatch, SpeculativeProposeBatchCtx, SpeculativeTargetMixin,
+    SpeculativePrefixReplay, SpeculativeProposalBatch, SpeculativeProposeBatchCtx,
+    SpeculativeTargetMixin,
 };
+
+#[cfg(feature = "cuda")]
+const GROUPED_VERIFY_GRAPH_DEPTH: usize = 3;
+#[cfg(feature = "cuda")]
+const GROUPED_VERIFY_GRAPH_MAX_BATCH: usize = 8;
+
+#[cfg(feature = "cuda")]
+fn max_verify_graph_batch(depth: usize) -> usize {
+    if depth == GROUPED_VERIFY_GRAPH_DEPTH {
+        GROUPED_VERIFY_GRAPH_MAX_BATCH
+    } else {
+        (crate::moe::GROUPED_PREFILL_MIN_TOKENS - 1) / (1 + depth)
+    }
+}
 
 impl Qwen4ExpModel {
     fn mtp_n_predict(&self) -> usize {
@@ -128,6 +145,14 @@ impl SpeculativeTargetMixin for Qwen4ExpModel {
         self.mtp_n_predict() > 0
     }
 
+    fn speculative_prefix_replay(&self) -> SpeculativePrefixReplay {
+        if self.mtp_n_predict() > 0 {
+            BUILTIN_MTP_PREFIX_REPLAY
+        } else {
+            SpeculativePrefixReplay::NotRequired
+        }
+    }
+
     fn supports_recurrent_speculative_transitions(&self) -> bool {
         self.text.supports_recurrent_speculative_transitions()
     }
@@ -177,10 +202,9 @@ impl SpeculativeTargetMixin for Qwen4ExpModel {
         depths
             .into_iter()
             .map(|depth| {
-                // Wider verify batches take the grouped MoE path, whose per-expert padded workspaces every
-                // captured graph would pin; on unified memory those do not fit beside a filled KV pool
+                // Limit retained graph buffers on unified memory, including the compact grouped MoE shape.
                 #[cfg(feature = "cuda")]
-                let max_batch = Some((crate::moe::GROUPED_PREFILL_MIN_TOKENS - 1) / (1 + depth));
+                let max_batch = Some(max_verify_graph_batch(depth));
                 #[cfg(not(feature = "cuda"))]
                 let max_batch = None;
                 SpeculativeGraphPlan::new(depth, max_batch)
@@ -209,6 +233,12 @@ impl SpeculativeTargetMixin for Qwen4ExpModel {
         ctx: SpeculativeProposeBatchCtx<'_>,
     ) -> Result<Option<SpeculativeProposalBatch>> {
         self.mtp_proposer.propose(self, ctx, self.mtp_n_predict())
+    }
+
+    fn release_speculative_sequences(&mut self, seq_ids: &[usize]) -> Result<()> {
+        let flush_result = self.text.flush_recurrent_transitions_for_sequences(seq_ids);
+        self.mtp_proposer.release_sequences(seq_ids);
+        flush_result
     }
 
     fn speculative_target_hiddens(&self, rows: &[(usize, usize)]) -> Result<Option<Tensor>> {
@@ -247,5 +277,18 @@ impl SpeculativeTargetMixin for Qwen4ExpModel {
         });
         self.text.clear_speculative_stash();
         result
+    }
+}
+
+#[cfg(all(test, feature = "cuda"))]
+mod tests {
+    use super::max_verify_graph_batch;
+
+    #[test]
+    fn grouped_verify_capture_is_limited_to_depth_three_batch_eight() {
+        assert_eq!(max_verify_graph_batch(3), 8);
+        for (depth, max_batch) in [(1, 15), (2, 10), (4, 6), (6, 4), (7, 3), (15, 1), (31, 0)] {
+            assert_eq!(max_verify_graph_batch(depth), max_batch);
+        }
     }
 }

@@ -2,7 +2,7 @@
 
 use candle_core::{
     quantized::{GgmlDType, QTensor},
-    Device, Result, Storage, Tensor,
+    DType, Device, Result, Storage, Tensor,
 };
 use mistralrs_quant::{
     grouped_moe_mmq, grouped_moe_mmq_from_glu_packed, grouped_moe_mmq_from_glu_sorted_pair,
@@ -16,13 +16,27 @@ const TOTAL_ASSIGNMENTS: usize = NUM_TOKENS * TOPK;
 const HIDDEN: usize = 64;
 const INTERMEDIATE: usize = 96;
 const TOLERANCE: f32 = 5e-4;
+const GRAPH_NUM_EXPERTS: usize = 512;
+const GRAPH_NUM_TOKENS: usize = 32;
+const GRAPH_GROW_TOKENS: usize = 128;
+const GRAPH_TOPK: usize = 10;
+const GRAPH_HIDDEN: usize = 256;
+const GRAPH_INTERMEDIATE: usize = 128;
+const GRAPH_ROUTE_TOKEN_STRIDE: usize = 17;
+const GRAPH_ROUTE_EXPERT_STRIDE: usize = 53;
+const GRAPH_ROUTE_VARIANT_OFFSET: usize = 137;
+const GRAPH_REPLAY_CASES: [(usize, usize); 4] = [(0, 0), (1, 0), (0, 1), (1, 1)];
+const GRAPH_MIN_VARIATION: f32 = 1e-4;
+
+// Capture changes event tracking on the shared primary CUDA context.
+static CUDA_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 fn patterned(shape: impl Into<candle_core::Shape>, salt: usize, scale: f32) -> Result<Tensor> {
     let shape = shape.into();
     let values = (0..shape.elem_count())
         .map(|index| {
             let value = (index.wrapping_mul(37) + salt.wrapping_mul(19)) % 211;
-            (value as f32 / 105.0 - 1.0) * scale
+            (f32::from(u16::try_from(value).unwrap()) / 105.0 - 1.0) * scale
         })
         .collect::<Vec<_>>();
     Tensor::from_vec(values, shape, &Device::Cpu)
@@ -60,6 +74,7 @@ fn assert_close(actual: &Tensor, expected: &Tensor) -> Result<()> {
 
 #[test]
 fn packed_gate_up_and_sorted_pair_glu_preserve_route_order() -> Result<()> {
+    let _gpu_guard = CUDA_TEST_LOCK.lock().unwrap();
     let cuda = Device::new_cuda(0)?;
     let dev = cuda.as_cuda_device()?;
     let xs = patterned((NUM_TOKENS, HIDDEN), 3, 0.7)?.to_device(&cuda)?;
@@ -210,4 +225,187 @@ fn packed_gate_up_and_sorted_pair_glu_preserve_route_order() -> Result<()> {
         dev,
     )?;
     assert_close(&down_from_sorted_pair, &down_from_packed)
+}
+
+struct GraphMoeWeights {
+    gate: QTensor,
+    up: QTensor,
+    down: QTensor,
+}
+
+impl GraphMoeWeights {
+    fn new(device: &Device) -> Result<Self> {
+        let gate_shape = (GRAPH_NUM_EXPERTS, GRAPH_INTERMEDIATE, GRAPH_HIDDEN);
+        Ok(Self {
+            gate: QTensor::quantize_onto(
+                &patterned(gate_shape, 11, 0.11)?,
+                GgmlDType::Q4K,
+                device,
+            )?,
+            up: QTensor::quantize_onto(&patterned(gate_shape, 29, 0.09)?, GgmlDType::Q4K, device)?,
+            down: QTensor::quantize_onto(
+                &patterned(
+                    (GRAPH_NUM_EXPERTS, GRAPH_HIDDEN, GRAPH_INTERMEDIATE),
+                    47,
+                    0.1,
+                )?,
+                GgmlDType::Q4_1,
+                device,
+            )?,
+        })
+    }
+
+    fn forward(&self, xs: &Tensor, routes: &Tensor) -> Result<Tensor> {
+        let num_tokens = xs.dim(0)?;
+        let assignments = num_tokens * GRAPH_TOPK;
+        let dev = xs.device().as_cuda_device()?;
+        let ids = routes.flatten_all()?.contiguous()?;
+        let (storage, layout) = ids.storage_and_layout();
+        assert_eq!(layout.start_offset(), 0);
+        let Storage::Cuda(storage) = &*storage else {
+            unreachable!()
+        };
+        let (bounds, sorted_tokens, sorted_sources) = moe_dispatch_build(
+            storage.as_cuda_slice::<u32>()?,
+            assignments,
+            GRAPH_NUM_EXPERTS,
+            GRAPH_TOPK,
+            dev,
+        )?;
+        let gate_up = grouped_moe_mmq_pair_packed(
+            &self.gate,
+            &self.up,
+            xs,
+            &sorted_sources,
+            &sorted_tokens,
+            &bounds,
+            assignments,
+            GRAPH_TOPK,
+            GRAPH_NUM_EXPERTS,
+            dev,
+        )?;
+        grouped_moe_mmq_from_glu_packed(
+            &self.down,
+            &gate_up,
+            &sorted_tokens,
+            &sorted_tokens,
+            &bounds,
+            assignments,
+            num_tokens,
+            GRAPH_NUM_EXPERTS,
+            GluActivationType::Silu as i32,
+            dev,
+        )
+    }
+}
+
+fn graph_routes(num_tokens: usize, variant: usize, device: &Device) -> Result<Tensor> {
+    let routes = (0..num_tokens)
+        .flat_map(|token| {
+            (0..GRAPH_TOPK).map(move |rank| {
+                u32::try_from(
+                    (token * GRAPH_ROUTE_TOKEN_STRIDE
+                        + rank * GRAPH_ROUTE_EXPERT_STRIDE
+                        + variant * GRAPH_ROUTE_VARIANT_OFFSET)
+                        % GRAPH_NUM_EXPERTS,
+                )
+                .unwrap()
+            })
+        })
+        .collect::<Vec<_>>();
+    Tensor::from_vec(routes, (num_tokens, GRAPH_TOPK), device)
+}
+
+#[test]
+fn grouped_mmq_graph_replay_updates_inputs_and_routes_after_workspace_growth() -> Result<()> {
+    use candle_core::cuda::cudarc::driver::sys;
+
+    let _gpu_guard = CUDA_TEST_LOCK.lock().unwrap();
+    let cuda = Device::new_cuda(0)?;
+    let dev = cuda.as_cuda_device()?;
+    let stream = dev.cuda_stream();
+    let weights = GraphMoeWeights::new(&cuda)?;
+    let inputs = [
+        patterned((GRAPH_NUM_TOKENS, GRAPH_HIDDEN), 3, 0.7)?
+            .to_dtype(DType::BF16)?
+            .to_device(&cuda)?,
+        patterned((GRAPH_NUM_TOKENS, GRAPH_HIDDEN), 97, 0.4)?
+            .to_dtype(DType::BF16)?
+            .to_device(&cuda)?,
+    ];
+    let routes = [
+        graph_routes(GRAPH_NUM_TOKENS, 0, &cuda)?,
+        graph_routes(GRAPH_NUM_TOKENS, 1, &cuda)?,
+    ];
+    let expected = GRAPH_REPLAY_CASES
+        .iter()
+        .map(|&(input, route)| {
+            weights
+                .forward(&inputs[input], &routes[route])?
+                .to_device(&Device::Cpu)
+        })
+        .collect::<Result<Vec<_>>>()?;
+    for changed in &expected[1..] {
+        let difference = (&expected[0] - changed)?
+            .abs()?
+            .max_all()?
+            .to_scalar::<f32>()?;
+        assert!(difference > GRAPH_MIN_VARIATION);
+    }
+
+    let xs = Tensor::zeros((GRAPH_NUM_TOKENS, GRAPH_HIDDEN), DType::BF16, &cuda)?;
+    let ids = Tensor::zeros((GRAPH_NUM_TOKENS, GRAPH_TOPK), DType::U32, &cuda)?;
+    xs.slice_set(&inputs[0], 0, 0)?;
+    ids.slice_set(&routes[0], 0, 0)?;
+    let _htod_cache_guard = dev.enable_cuda_graph_htod_cache();
+    drop(weights.forward(&xs, &ids)?);
+    cuda.synchronize()?;
+
+    let tracking = stream.context().is_event_tracking();
+    if tracking {
+        unsafe { stream.context().disable_event_tracking() };
+    }
+    if let Err(error) =
+        stream.begin_capture(sys::CUstreamCaptureMode::CU_STREAM_CAPTURE_MODE_RELAXED)
+    {
+        if tracking {
+            unsafe { stream.context().enable_event_tracking() };
+        }
+        return Err(candle_core::Error::msg(error.to_string()));
+    }
+    let captured = weights.forward(&xs, &ids);
+    let graph = stream.end_capture(
+        sys::CUgraphInstantiate_flags::CUDA_GRAPH_INSTANTIATE_FLAG_AUTO_FREE_ON_LAUNCH,
+    );
+    if tracking {
+        unsafe { stream.context().enable_event_tracking() };
+    }
+    let output = captured?;
+    let graph = graph
+        .map_err(|error| candle_core::Error::msg(error.to_string()))?
+        .ok_or_else(|| candle_core::Error::msg("grouped MMQ capture produced no graph"))?;
+
+    for grow_workspace in [false, true] {
+        if grow_workspace {
+            let larger_input = patterned((GRAPH_GROW_TOKENS, GRAPH_HIDDEN), 61, 0.6)?
+                .to_dtype(DType::BF16)?
+                .to_device(&cuda)?;
+            let larger_routes = graph_routes(GRAPH_GROW_TOKENS, 1, &cuda)?;
+            drop(weights.forward(&larger_input, &larger_routes)?);
+            cuda.synchronize()?;
+        }
+        for (&(input, route), expected) in GRAPH_REPLAY_CASES.iter().zip(&expected) {
+            xs.slice_set(&inputs[input], 0, 0)?;
+            ids.slice_set(&routes[route], 0, 0)?;
+            graph
+                .launch()
+                .map_err(|error| candle_core::Error::msg(error.to_string()))?;
+            cuda.synchronize()?;
+            assert_close(&output, expected)?;
+        }
+    }
+    drop(output);
+    cuda.synchronize()?;
+    drop(graph);
+    cuda.synchronize()
 }

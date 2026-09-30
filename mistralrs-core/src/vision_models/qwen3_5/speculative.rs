@@ -22,7 +22,9 @@ use crate::speculative::{
 use super::{mtp::Qwen3_5MtpHead, Qwen3_5Model};
 use crate::speculative::{
     autotuner::{auto_depth_graph_plans, depths_up_to, AUTO_DEPTHS, AUTO_MAX_DEPTH},
-    builtin_mtp::{capture_view, BuiltinMtpHost, MtpAttentionInputs, MtpDraftOutput},
+    builtin_mtp::{
+        capture_view, BuiltinMtpHost, MtpAttentionInputs, MtpDraftOutput, BUILTIN_MTP_PREFIX_REPLAY,
+    },
     hybrid_state::{SpecCapture, SpecGraphState},
 };
 
@@ -691,9 +693,16 @@ impl SpeculativeTargetMixin for Qwen3_5Model {
             .lock()
             .expect("dflash poisoned")
             .as_ref()
-            .map_or(SpeculativePrefixReplay::NotRequired, |drafter| {
-                drafter.prefix_replay()
-            })
+            .map_or_else(
+                || {
+                    if self.mtp_n_predict() > 0 {
+                        BUILTIN_MTP_PREFIX_REPLAY
+                    } else {
+                        SpeculativePrefixReplay::NotRequired
+                    }
+                },
+                |drafter| drafter.prefix_replay(),
+            )
     }
 
     fn supports_paged_auxiliary_prefix_state(&self) -> bool {
@@ -807,6 +816,7 @@ impl SpeculativeTargetMixin for Qwen3_5Model {
 
     fn release_speculative_sequences(&mut self, seq_ids: &[usize]) -> Result<()> {
         let flush_result = self.text.flush_recurrent_transitions_for_sequences(seq_ids);
+        self.mtp_proposer.release_sequences(seq_ids);
         if let Some(drafter) = self.dflash.lock().expect("dflash poisoned").as_ref() {
             drafter.release_seqs(seq_ids);
         }

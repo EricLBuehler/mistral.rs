@@ -1,8 +1,8 @@
 use std::fmt::{self, Display};
 
 use crate::paged_attention::{
-    calculate_cache_config, device_memory_cap, CacheMemoryReservations, MemoryGpuConfig,
-    ModelConfigLike, DEFAULT_PAGED_ATTENTION_BLOCK_SIZE,
+    calculate_cache_config, device_memory_cap, CacheConfig, CacheMemoryReservations,
+    MemoryGpuConfig, ModelConfigLike, DEFAULT_PAGED_ATTENTION_BLOCK_SIZE,
 };
 use crate::utils::debug::DeviceRepr;
 use crate::{DeviceLayerMapMetadata, DeviceMapMetadata, MemoryUsage, PagedAttentionConfig};
@@ -159,30 +159,21 @@ impl AutoDeviceMapParams {
     }
 }
 
-fn calculate_key_block_shape(
+fn paged_kv_bytes_per_layer(
     model_config: &dyn ModelConfigLike,
+    cache: &CacheConfig,
     dtype: DType,
-    block_size: usize,
-) -> (usize, usize, usize, usize) {
-    let element_size = dtype.size_in_bytes();
-    let x = 16 / element_size;
-    (
-        model_config.num_kv_heads(),
-        model_config.k_head_dim() / x,
-        block_size,
-        x,
-    )
-}
-
-fn calculate_value_block_shape(
-    model_config: &dyn ModelConfigLike,
-    block_size: usize,
-) -> (usize, usize, usize) {
-    (
-        model_config.num_kv_heads(),
-        model_config.v_head_dim(),
-        block_size,
-    )
+) -> Vec<usize> {
+    let bytes_per_element =
+        cache.num_gpu_blocks * cache.block_size * cache.cache_type.to_dtype(dtype).size_in_bytes();
+    (0..model_config.num_layers())
+        .map(|idx| {
+            model_config
+                .layer_kv_cache_elements_per_token(idx)
+                .unwrap_or(0)
+                * bytes_per_element
+        })
+        .collect()
 }
 
 const BYTES_PER_GIB: f64 = 1_073_741_824.0;
@@ -246,26 +237,21 @@ pub fn get_device_layers(
         .filter(|dev| crate::utils::normal::is_integrated_gpu(dev));
     // Unified memory has no fallback device, so a model that can't fit fails here with the real numbers
     if let Some(dev) = unified_device {
-        let min_kv_bytes = (max_seq_len * max_batch_size)
-            .saturating_mul(model_cfg.total_kv_cache_elements_per_token())
-            .saturating_mul(dtype.size_in_bytes());
         let required = saturating_memory_sum([
             total_model_size_in_bytes,
             non_mapped_max.max(mapped_max),
-            min_kv_bytes,
             base_device_memory_reservation_bytes,
         ]);
         let available = device_memory_cap(MemoryUsage.query(dev)?.available(), dev);
         if required > available {
             anyhow::bail!(
-                "Model needs {:.1} GiB, but only {:.1} GiB of unified memory is available after leaving {} GiB for the system. Close other applications, pick a smaller quantization, or set MISTRALRS_IGPU_MEMORY_FRACTION.",
+                "Model weights, activations, and runtime reservations need {:.1} GiB, but only {:.1} GiB is available within the unified-memory budget. Close other applications, pick a smaller quantization, reduce the expected context or batch size, or adjust MISTRALRS_IGPU_MEMORY_FRACTION.",
                 gib(required),
                 gib(available),
-                crate::utils::memory_usage::UNIFIED_SYSTEM_MARGIN_BYTES >> 30,
             );
         }
     }
-    let kv_cache_elems = match paged_attn_config {
+    let kv_cache_bytes = match paged_attn_config {
         Some(cfg) => {
             // The mapping estimate is bounded independently from the post-load memory mode.
             let requested_mem_gpu = cfg.mem_gpu;
@@ -355,12 +341,7 @@ pub fn get_device_layers(
                 Some(total_model_size_in_bytes),
                 Some(max_seq_len * max_batch_size),
             )?;
-            let key_shape = calculate_key_block_shape(&*model_cfg, dtype, cache.block_size);
-            let key_sz =
-                cache.num_gpu_blocks * key_shape.0 * key_shape.1 * key_shape.2 * key_shape.3;
-            let val_shape = calculate_value_block_shape(&*model_cfg, cache.block_size);
-            let val_sz = cache.num_gpu_blocks * val_shape.0 * val_shape.1 * val_shape.2;
-            key_sz + val_sz
+            paged_kv_bytes_per_layer(&*model_cfg, &cache, dtype)
         }
         None => {
             let key_shape = [
@@ -375,18 +356,21 @@ pub fn get_device_layers(
                 max_seq_len,
                 model_cfg.v_head_dim(),
             ];
-            key_shape.iter().product::<usize>() + val_shape.iter().product::<usize>()
+            let bytes = (key_shape.iter().product::<usize>() + val_shape.iter().product::<usize>())
+                * dtype.size_in_bytes();
+            (0..model_cfg.num_layers())
+                .map(|idx| {
+                    if model_cfg.layer_has_paged_kv_cache(idx) {
+                        bytes
+                    } else {
+                        0
+                    }
+                })
+                .collect()
         }
     };
     // Per paged layer; hybrid models leave the recurrent/linear layers out of the cache entirely.
-    let kv_cache_bytes = kv_cache_elems * dtype.size_in_bytes();
-    let kv_bytes_for_layer = |idx: usize| {
-        if model_cfg.layer_has_paged_kv_cache(idx) {
-            kv_cache_bytes
-        } else {
-            0
-        }
-    };
+    let kv_bytes_for_layer = |idx: usize| kv_cache_bytes[idx];
     // Paged layers past the mapped stack (an MTP head) are charged to the non-mapped device.
     let extra_kv_bytes = (num_layers..model_cfg.num_layers())
         .map(kv_bytes_for_layer)
@@ -554,6 +538,64 @@ pub fn get_device_layers(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::paged_attention::{KvCacheLayout, ModelConfigMetadata, PagedCacheType};
+    use crate::vision_models::qwen4_exp::{
+        config::{LayerType, QsaConfig},
+        Qwen4ExpPagedConfig,
+    };
+
+    #[test]
+    fn paged_reservations_include_aux_buffers_and_cache_dtype() {
+        let base = ModelConfigMetadata {
+            max_seq_len: 128,
+            num_layers: 3,
+            hidden_size: 2560,
+            num_attn_heads: 24,
+            num_kv_heads: 2,
+            sliding_window: None,
+            k_head_dim: 256,
+            v_head_dim: 256,
+            kv_cache_layout: KvCacheLayout::Standard,
+        };
+        let qsa = QsaConfig {
+            n_heads: 4,
+            head_dim: 128,
+            budget: 2048,
+            compress_ratio: 4,
+        };
+        let rot_dim = 64;
+        let model = Qwen4ExpPagedConfig::new(
+            base.clone(),
+            &[
+                LayerType::FullAttention,
+                LayerType::LinearAttention,
+                LayerType::FullAttention,
+            ],
+            qsa.aux_cache_elements_per_token(rot_dim),
+            qsa.max_selected_tokens(),
+        );
+        let mut cache = CacheConfig {
+            block_size: 32,
+            num_gpu_blocks: 5,
+            cache_type: PagedCacheType::Auto,
+            kv_cache_group_ids: vec![0],
+        };
+        let slots = cache.block_size * cache.num_gpu_blocks;
+        let kv = slots * base.num_kv_heads * (base.k_head_dim + base.v_head_dim);
+        let raw_aux = slots * (qsa.head_dim + rot_dim);
+        let block_keys = slots / qsa.compress_ratio * qsa.head_dim;
+        let expected = (kv + raw_aux + block_keys) * DType::BF16.size_in_bytes();
+        assert_eq!(
+            paged_kv_bytes_per_layer(&model, &cache, DType::BF16),
+            [expected, 0, expected]
+        );
+
+        cache.cache_type = PagedCacheType::F8E4M3;
+        assert_eq!(
+            paged_kv_bytes_per_layer(&base, &cache, DType::BF16),
+            [kv; 3]
+        );
+    }
 
     #[test]
     fn text_params_promote_to_multimodal_defaults_after_detection() {

@@ -24,9 +24,9 @@ pub struct PagedAttentionOptions {
     #[serde(default)]
     pub mode: PagedAttnMode,
 
-    /// Allocate KV cache for this context length.
-    /// If not specified, defaults to using 90% of available VRAM.
-    #[arg(long = "pa-context-len")]
+    /// Allocate KV cache for this many tokens. Defaults to a memory budget on dedicated GPUs,
+    /// capped to the model context length on CUDA unified-memory devices.
+    #[arg(long = "pa-context-len", value_parser = super::model::parse_positive_usize)]
     pub context_len: Option<usize>,
 
     /// GPU memory to allocate in MBs (alternative to context-len)

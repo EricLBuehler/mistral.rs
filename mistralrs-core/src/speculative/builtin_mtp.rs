@@ -20,14 +20,16 @@ use crate::{
     speculative::{
         hybrid_state::SpecCapture, paged_rows::make_paged_rows_metadata,
         proposer::sample_draft_rows, SpeculativeKvCache, SpeculativePrefillCtx,
-        SpeculativeProposal, SpeculativeProposalBatch, SpeculativeProposeBatchCtx,
-        TargetAttentionInputs,
+        SpeculativePrefixReplay, SpeculativeProposal, SpeculativeProposalBatch,
+        SpeculativeProposeBatchCtx, TargetAttentionInputs,
     },
 };
 
 const MROPE_DIMS: usize = 3;
 // Stands in for the not-yet-sampled next token; the bootstrap refresh rewrites its KV
 const PLACEHOLDER_TOKEN: u32 = 0;
+// Target-only block hashes can alias MTP rows with different next-token inputs, including interior blocks.
+pub(crate) const BUILTIN_MTP_PREFIX_REPLAY: SpeculativePrefixReplay = SpeculativePrefixReplay::Full;
 
 pub struct MtpAttentionInputs<'a> {
     pub kv_cache: (Tensor, Tensor),
@@ -94,6 +96,18 @@ pub(crate) struct BuiltinMtpProposer {
 }
 
 impl BuiltinMtpProposer {
+    fn take_prompt_tails(&self, seq_ids: &[usize]) -> Vec<Option<PendingPromptTail>> {
+        let mut tails = self
+            .pending_prompt_tails
+            .lock()
+            .expect("mtp tails poisoned");
+        seq_ids.iter().map(|seq_id| tails.remove(seq_id)).collect()
+    }
+
+    pub(crate) fn release_sequences(&self, seq_ids: &[usize]) {
+        drop(self.take_prompt_tails(seq_ids));
+    }
+
     /// Runs the drafter over `rows` (all sequences flattened, `[1, rows]`), writing drafter KV at each
     /// row's position.
     fn drafter_forward<H: BuiltinMtpHost + ?Sized>(
@@ -252,11 +266,8 @@ impl BuiltinMtpProposer {
         let mut rows = Vec::new();
         let mut hidden_rows = Vec::with_capacity(batch);
         let mut last_row_idx = Vec::with_capacity(batch);
-        let mut pending_tails = self
-            .pending_prompt_tails
-            .lock()
-            .expect("mtp tails poisoned");
-        for (i, seq) in ctx.sequences.iter().enumerate() {
+        let pending_tails = self.take_prompt_tails(ctx.seq_ids);
+        for (i, (seq, tail)) in ctx.sequences.iter().zip(pending_tails).enumerate() {
             let (batch_idx, count) = ctx.target_rows[i];
             let base_len = ctx.base_lens[i];
             let toks = seq.get_toks();
@@ -266,7 +277,7 @@ impl BuiltinMtpProposer {
                     toks.len()
                 );
             }
-            if let Some(tail) = pending_tails.remove(seq.id()) {
+            if let Some(tail) = tail {
                 if tail.position + 1 < toks.len() {
                     rows.push(DraftRow {
                         seq_id: ctx.seq_ids[i],
@@ -289,8 +300,6 @@ impl BuiltinMtpProposer {
             hidden_rows.push(hidden.narrow(0, batch_idx, 1)?.narrow(1, 0, count)?);
             last_row_idx.push(rows.len() - 1);
         }
-        pending_tails.retain(|seq_id, _| ctx.seq_ids.contains(seq_id));
-        drop(pending_tails);
         let target_hidden = Tensor::cat(&hidden_rows, 1)?;
         let refreshed = Self::drafter_forward(host, &rows, &target_hidden, &kv_cache, paged_meta)?;
         let last_idx = Tensor::from_vec(
@@ -487,4 +496,50 @@ pub(crate) fn mrope_at(
             })?;
     }
     Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn prefix_replay_rejects_interior_blocks_with_different_shifted_tokens() {
+        let cached = [0, 1, 2, 3, 4, 5, 6, 7, 8];
+        let next = [0, 1, 2, 3, 9, 5, 6, 7, 8];
+        let target_cached_tokens = 8;
+        let retained = crate::speculative::target::clamp_speculative_prefix_cache_hit(
+            target_cached_tokens,
+            4,
+            BUILTIN_MTP_PREFIX_REPLAY,
+        );
+        assert_eq!(&cached[..4], &next[..4]);
+        assert_ne!(cached[4], next[4]);
+        assert_eq!(retained, 0);
+    }
+
+    #[test]
+    fn interleaved_batches_preserve_pending_prompt_tails() -> Result<()> {
+        let proposer = BuiltinMtpProposer::default();
+        for seq_id in [1, 2, 3] {
+            proposer.pending_prompt_tails.lock().unwrap().insert(
+                seq_id,
+                PendingPromptTail {
+                    position: seq_id,
+                    hidden: Tensor::zeros((1, 1, 1), DType::F32, &Device::Cpu)?,
+                    mrope: [seq_id as u32; MROPE_DIMS],
+                },
+            );
+        }
+        let first = proposer.take_prompt_tails(&[1]);
+        assert_eq!(first[0].as_ref().unwrap().position, 1);
+        proposer.release_sequences(&[3]);
+        let second = proposer.take_prompt_tails(&[2, 3]);
+        assert_eq!(second[0].as_ref().unwrap().position, 2);
+        assert!(second[1].is_none());
+        assert!(proposer
+            .take_prompt_tails(&[1, 2])
+            .iter()
+            .all(Option::is_none));
+        Ok(())
+    }
 }
