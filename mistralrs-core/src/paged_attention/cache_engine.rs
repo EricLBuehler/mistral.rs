@@ -10,6 +10,18 @@ use super::config::{KvCacheLayout, ModelConfigLike};
 #[cfg(all(feature = "cuda", target_family = "unix"))]
 use crate::flashinfer::{register_fa3_prefill_caches, Fa3PrefillWorkspaceRegistration};
 
+const METAL_PAGED_LAYOUT_ENV: &str = "MISTRALRS_METAL_PAGED_LAYOUT";
+
+fn metal_cache_layout(value: Option<&str>) -> Result<KvCacheLayout> {
+    match value {
+        None | Some("auto" | "hnd") => Ok(KvCacheLayout::MetalHnd),
+        Some("legacy") => Ok(KvCacheLayout::Standard),
+        Some(value) => {
+            candle_core::bail!("invalid {METAL_PAGED_LAYOUT_ENV}={value}; expected hnd or legacy")
+        }
+    }
+}
+
 #[cfg(all(feature = "cuda", target_family = "unix"))]
 fn cuda_supports_fp8(device: &Device) -> bool {
     use candle_core::cuda::cudarc::driver::{result, sys};
@@ -183,6 +195,15 @@ impl CacheEngine {
         layer_devices: Vec<Option<Device>>,
     ) -> Result<Vec<KVCache>> {
         let mut gpu_cache = Vec::new();
+        let metal_layout = layer_devices
+            .iter()
+            .take(model_config.num_layers())
+            .any(|layer| layer.as_ref().unwrap_or(device).is_metal())
+            .then(|| metal_cache_layout(std::env::var(METAL_PAGED_LAYOUT_ENV).ok().as_deref()))
+            .transpose()?;
+        if let Some(layout) = metal_layout {
+            tracing::info!(?layout, "Metal paged KV cache layout");
+        }
 
         for (layer_idx, device) in layer_devices
             .iter()
@@ -198,14 +219,18 @@ impl CacheEngine {
                 0
             };
             let requested_kv_cache_layout = model_config.kv_cache_layout_for_layer(layer_idx);
-            let kv_cache_layout =
-                if matches!(requested_kv_cache_layout, KvCacheLayout::FlashInferHnd)
+            let kv_cache_layout = if device.is_metal()
+                && !matches!(requested_kv_cache_layout, KvCacheLayout::Mla { .. })
+            {
+                metal_layout.unwrap()
+            } else if matches!(requested_kv_cache_layout, KvCacheLayout::MetalHnd)
+                || matches!(requested_kv_cache_layout, KvCacheLayout::FlashInferHnd)
                     && !device.is_cuda()
-                {
-                    KvCacheLayout::Standard
-                } else {
-                    requested_kv_cache_layout
-                };
+            {
+                KvCacheLayout::Standard
+            } else {
+                requested_kv_cache_layout
+            };
             let (key_blocks, value_blocks) = match kv_cache_layout {
                 KvCacheLayout::Standard | KvCacheLayout::StandardNoFlashInfer => {
                     let key_block_shape = Self::calculate_key_block_shape(
@@ -315,6 +340,38 @@ impl CacheEngine {
                         }
                     };
                     (key_blocks, value_blocks)
+                }
+                KvCacheLayout::MetalHnd => {
+                    #[cfg(feature = "metal")]
+                    {
+                        let Device::Metal(dev) = device else {
+                            unreachable!()
+                        };
+                        let shape = |head_dim| {
+                            [
+                                num_gpu_blocks,
+                                model_config.num_kv_heads_for_layer(layer_idx),
+                                cache_config.block_size,
+                                head_dim,
+                            ]
+                        };
+                        (
+                            new_metal_cache(
+                                dev,
+                                shape(model_config.k_head_dim_for_layer(layer_idx)),
+                                dtype,
+                                "k_cache",
+                            )?,
+                            new_metal_cache(
+                                dev,
+                                shape(model_config.v_head_dim_for_layer(layer_idx)),
+                                dtype,
+                                "v_cache",
+                            )?,
+                        )
+                    }
+                    #[cfg(not(feature = "metal"))]
+                    unreachable!()
                 }
                 KvCacheLayout::FlashInferHnd => {
                     let key_block_shape = Self::calculate_flashinfer_block_shape(
@@ -574,6 +631,21 @@ fn new_kv_buffer(
     dev.new_private_buffer(elem_count.max(1), dtype, name)
 }
 
+#[cfg(feature = "metal")]
+fn new_metal_cache(
+    dev: &candle_core::MetalDevice,
+    shape: [usize; 4],
+    dtype: DType,
+    name: &str,
+) -> Result<Tensor> {
+    use candle_core::{MetalStorage, Shape, Storage};
+
+    let elem_count = shape.iter().product();
+    let buffer = new_kv_buffer(dev, elem_count, dtype, name)?;
+    let storage = Storage::Metal(MetalStorage::new(buffer, dev.clone(), elem_count, dtype));
+    Ok(Tensor::from((storage, Shape::from_dims(&shape))))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -604,6 +676,52 @@ mod tests {
             )
             .unwrap_err();
         assert!(err.contains("only supported on CUDA or Metal"));
+    }
+
+    #[test]
+    fn metal_layout_defaults_to_hnd_with_explicit_legacy_opt_out() -> Result<()> {
+        assert_eq!(metal_cache_layout(None)?, KvCacheLayout::MetalHnd);
+        assert_eq!(metal_cache_layout(Some("auto"))?, KvCacheLayout::MetalHnd);
+        assert_eq!(metal_cache_layout(Some("hnd"))?, KvCacheLayout::MetalHnd);
+        assert_eq!(metal_cache_layout(Some("legacy"))?, KvCacheLayout::Standard);
+        assert!(metal_cache_layout(Some("unknown")).is_err());
+        Ok(())
+    }
+
+    #[cfg(feature = "metal")]
+    #[test]
+    fn metal_hybrid_cache_allocates_empty_layers_in_the_selected_layout() -> Result<()> {
+        use crate::paged_attention::HybridPagedKvCacheConfig;
+
+        let device = Device::new_metal(0)?;
+        let model =
+            HybridPagedKvCacheConfig::new(model_config(KvCacheLayout::Standard), vec![true, false]);
+        let config = CacheConfig {
+            block_size: 32,
+            num_gpu_blocks: 2,
+            cache_type: PagedCacheType::Auto,
+            kv_cache_group_ids: vec![0],
+        };
+        let engine = CacheEngine::new(
+            &model,
+            &config,
+            DType::BF16,
+            &device,
+            vec![None; model.num_layers()],
+        )?;
+        let layout = metal_cache_layout(std::env::var(METAL_PAGED_LAYOUT_ENV).ok().as_deref())?;
+        let caches = engine.get_kv_cache();
+        for (layer, blocks) in [2, 0].into_iter().enumerate() {
+            let (key, value) = &caches[layer];
+            if layout == KvCacheLayout::MetalHnd {
+                assert_eq!(key.dims(), &[blocks, 4, 32, 128]);
+                assert_eq!(value.dims(), key.dims());
+            } else {
+                assert_eq!(key.dims(), &[blocks, 4, 16, 32, 8]);
+                assert_eq!(value.dims(), &[blocks, 4, 128, 32]);
+            }
+        }
+        Ok(())
     }
 
     #[test]

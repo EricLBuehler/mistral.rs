@@ -6,6 +6,7 @@ pub enum KvCacheLayout {
     Standard,
     StandardNoFlashInfer,
     FlashInferHnd,
+    MetalHnd,
     Mla {
         kv_lora_rank: usize,
         kpe_head_dim: usize,
@@ -101,7 +102,7 @@ fn select_kv_cache_layout<M: ModelConfigLike + ?Sized>(
     config: &M,
 ) -> KvCacheLayout {
     match requested_layout {
-        KvCacheLayout::Mla { .. } => requested_layout,
+        KvCacheLayout::Mla { .. } | KvCacheLayout::MetalHnd => requested_layout,
         KvCacheLayout::StandardNoFlashInfer => KvCacheLayout::Standard,
         KvCacheLayout::FlashInferHnd | KvCacheLayout::Standard => {
             match config.attention_backend_kind() {
@@ -118,7 +119,7 @@ fn select_kv_cache_layout_for_layer<M: ModelConfigLike + ?Sized>(
     layer_idx: usize,
 ) -> KvCacheLayout {
     match requested_layout {
-        KvCacheLayout::Mla { .. } => requested_layout,
+        KvCacheLayout::Mla { .. } | KvCacheLayout::MetalHnd => requested_layout,
         KvCacheLayout::StandardNoFlashInfer => KvCacheLayout::Standard,
         KvCacheLayout::FlashInferHnd | KvCacheLayout::Standard => {
             match config.attention_backend_kind_for_layer(layer_idx) {
@@ -261,9 +262,9 @@ impl ModelConfigLike for ModelConfigMetadata {
     }
     fn attention_backend_kind(&self) -> AttentionBackendKind {
         match self.kv_cache_layout {
-            KvCacheLayout::Mla { .. } | KvCacheLayout::StandardNoFlashInfer => {
-                AttentionBackendKind::Standard
-            }
+            KvCacheLayout::Mla { .. }
+            | KvCacheLayout::StandardNoFlashInfer
+            | KvCacheLayout::MetalHnd => AttentionBackendKind::Standard,
             KvCacheLayout::FlashInferHnd | KvCacheLayout::Standard => {
                 select_attention_backend(self)
             }
@@ -271,9 +272,9 @@ impl ModelConfigLike for ModelConfigMetadata {
     }
     fn attention_backend_kind_for_layer(&self, layer_idx: usize) -> AttentionBackendKind {
         match self.kv_cache_layout {
-            KvCacheLayout::Mla { .. } | KvCacheLayout::StandardNoFlashInfer => {
-                AttentionBackendKind::Standard
-            }
+            KvCacheLayout::Mla { .. }
+            | KvCacheLayout::StandardNoFlashInfer
+            | KvCacheLayout::MetalHnd => AttentionBackendKind::Standard,
             KvCacheLayout::FlashInferHnd | KvCacheLayout::Standard => {
                 select_attention_backend_for_layer(self, layer_idx)
             }
@@ -289,6 +290,7 @@ impl ModelConfigLike for ModelConfigMetadata {
         match self.kv_cache_layout() {
             KvCacheLayout::Standard
             | KvCacheLayout::StandardNoFlashInfer
+            | KvCacheLayout::MetalHnd
             | KvCacheLayout::FlashInferHnd => {
                 2 * self.num_kv_heads * self.k_head_dim.max(self.v_head_dim)
             }

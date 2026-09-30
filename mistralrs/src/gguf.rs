@@ -46,6 +46,7 @@ pub struct GgufModelBuilder {
 
     // Other things
     pub(crate) paged_attn_cfg: Option<PagedAttentionConfig>,
+    pub(crate) no_paged_attn: bool,
     pub(crate) max_num_seqs: usize,
     pub(crate) no_kv_cache: bool,
     pub(crate) with_logging: bool,
@@ -59,6 +60,7 @@ pub struct GgufModelBuilder {
 }
 
 impl GgufModelBuilder {
+    /// PagedAttention defaults to enabled on supported CUDA and Metal devices.
     /// A few defaults are applied here:
     /// - Token source is from the cache (.cache/huggingface/token)
     /// - Maximum number of sequences running is 32
@@ -76,6 +78,7 @@ impl GgufModelBuilder {
             token_source: TokenSource::CacheToken,
             hf_revision: None,
             paged_attn_cfg: None,
+            no_paged_attn: false,
             max_num_seqs: 32,
             no_kv_cache: false,
             prefix_cache_n: Some(16),
@@ -379,7 +382,7 @@ impl GgufModelBuilder {
         self
     }
 
-    /// Force usage of the CPU device. Do not use PagedAttention with this.
+    /// Force usage of the CPU device, which disables PagedAttention.
     pub fn with_force_cpu(mut self) -> Self {
         self.force_cpu = true;
         self
@@ -397,16 +400,17 @@ impl GgufModelBuilder {
         self
     }
 
-    /// Enable PagedAttention. Configure PagedAttention with a [`PagedAttentionConfig`] object, which
-    /// can be created with sensible values with a [`PagedAttentionMetaBuilder`].
-    ///
-    /// If PagedAttention is not supported (query with [`paged_attn_supported`]), this will do nothing.
-    ///
-    /// [`PagedAttentionMetaBuilder`]: crate::PagedAttentionMetaBuilder
+    /// Override the default PagedAttention configuration; ignored on unsupported devices or models.
     pub fn with_paged_attn(mut self, paged_attn_cfg: PagedAttentionConfig) -> Self {
-        if paged_attn_supported() {
-            self.paged_attn_cfg = Some(paged_attn_cfg);
-        }
+        self.paged_attn_cfg = Some(paged_attn_cfg);
+        self.no_paged_attn = false;
+        self
+    }
+
+    /// Disable PagedAttention, which is enabled by default on supported CUDA and Metal devices.
+    pub fn without_paged_attn(mut self) -> Self {
+        self.paged_attn_cfg = None;
+        self.no_paged_attn = true;
         self
     }
 

@@ -67,8 +67,8 @@ fn metal_decode_diagnostics() -> &'static MetalDecodeDiagnostics {
                 Some(value) => panic!("invalid {METAL_DECODE_PATH_ENV}={value}"),
             },
             contiguous_pack: match pack.as_deref() {
-                None | Some("force") => false,
-                Some("contiguous") => true,
+                Some("force") => false,
+                None | Some("contiguous") => true,
                 Some(value) => panic!("invalid {METAL_KV_PACK_ENV}={value}"),
             },
             active: path.is_some() || pack.is_some(),
@@ -192,7 +192,14 @@ fn block_aligned_window_len_for_query(
     full_len - block_aligned_sliding_window_start(full_len, query_len, window, block_size)
 }
 
+fn is_metal_hnd_cache(key_cache: &Tensor, value_cache: &Tensor) -> bool {
+    key_cache.device().is_metal() && key_cache.rank() == 4 && value_cache.rank() == 4
+}
+
 fn cache_block_size(key_cache: &Tensor, value_cache: &Tensor) -> Result<usize> {
+    if is_metal_hnd_cache(key_cache, value_cache) {
+        return Ok(key_cache.dims4()?.2);
+    }
     match AttentionBackendKind::from_cache(key_cache, value_cache) {
         AttentionBackendKind::FlashInfer => Ok(key_cache.dims4()?.2),
         AttentionBackendKind::Standard => Ok(key_cache.dims5()?.3),
@@ -200,6 +207,10 @@ fn cache_block_size(key_cache: &Tensor, value_cache: &Tensor) -> Result<usize> {
 }
 
 fn cache_kv_shape(key_cache: &Tensor, value_cache: &Tensor) -> Result<(usize, usize)> {
+    if is_metal_hnd_cache(key_cache, value_cache) {
+        let (_, num_kv_heads, _, head_size) = key_cache.dims4()?;
+        return Ok((num_kv_heads, head_size));
+    }
     match AttentionBackendKind::from_cache(key_cache, value_cache) {
         AttentionBackendKind::FlashInfer => {
             let (_, num_kv_heads, _, head_size) = key_cache.dims4()?;
@@ -236,7 +247,7 @@ fn cache_input_can_write_directly(tensor: &Tensor) -> Result<bool> {
     let row_stride = match *dims {
         [_, _, _] => stride[0],
         [batch, seq_len, _, _] => {
-            if !cfg!(all(feature = "cuda", target_family = "unix")) {
+            if tensor.device().is_metal() || !cfg!(all(feature = "cuda", target_family = "unix")) {
                 return Ok(false);
             }
             let row_stride = if seq_len == 1 { stride[0] } else { stride[1] };
@@ -1790,6 +1801,12 @@ impl PagedAttention {
             has_sinks: ctx.sdpa_params.sinks.is_some(),
             has_sliding_window: ctx.sdpa_params.sliding_window.is_some(),
         })?;
+        if is_metal_hnd_cache(key_cache_ref, value_cache_ref)
+            && ctx.dims.seq_len == 1
+            && ctx.sdpa_params.sliding_window.is_some()
+        {
+            plan = DecodePlan::PagedAttention;
+        }
         if query.device().is_metal()
             && ctx.dims.batch_size == 1
             && ctx.dims.seq_len == 1
@@ -1881,6 +1898,35 @@ impl PagedAttention {
             query.dtype(),
         )?;
         let q_4d = query.reshape((query_rows, ctx.dims.attention_heads, 1, ctx.dims.head_size))?;
+
+        if query.device().is_metal()
+            && query_rows == 1
+            && ctx.dims.seq_len == 1
+            && attention_mask.is_none()
+            && ctx.alibi_slopes.is_none()
+            && ctx.sdpa_params.sinks.is_none()
+        {
+            if let Some(window) = ctx.sdpa_params.sliding_window {
+                let retained = kv_lens[0].min(window);
+                let start = kv_lens[0] - retained;
+                let k = k_gathered
+                    .narrow(0, start, retained)?
+                    .unsqueeze(0)?
+                    .transpose(1, 2)?;
+                let v = v_gathered
+                    .narrow(0, start, retained)?
+                    .unsqueeze(0)?
+                    .transpose(1, 2)?;
+                return Sdpa.run_attention(
+                    &q_4d,
+                    &k,
+                    &v,
+                    &AttentionMask::None,
+                    None,
+                    ctx.sdpa_params,
+                );
+            }
+        }
 
         if !attention_mask.is_custom()
             && should_use_decode_gather_varlen(
@@ -2123,6 +2169,28 @@ impl PagedAttention {
         dev: &DeviceLocation,
     ) -> Result<Tensor> {
         let scales = self.cache_scales(key_cache);
+        #[cfg(feature = "metal")]
+        if is_metal_hnd_cache(key_cache, value_cache) {
+            return mistralrs_paged_attn::paged_attention_with_window(
+                query,
+                scales.k,
+                scales.v,
+                key_cache,
+                value_cache,
+                ctx.block_tables(dev).unwrap(),
+                ctx.context_lens(dev).unwrap(),
+                ctx.alibi_slopes.as_ref(),
+                if ctx.use_full {
+                    ctx.input_metadata.full_max_context_len.unwrap()
+                } else {
+                    ctx.input_metadata.max_context_len.unwrap()
+                },
+                ctx.sdpa_params.softmax_scale,
+                ctx.sdpa_params.softcap.unwrap_or(1.0f32),
+                ctx.sdpa_params.sinks.as_ref(),
+                ctx.sdpa_params.sliding_window,
+            );
+        }
         paged_attention(
             query,
             scales.k,
@@ -2529,6 +2597,8 @@ mod tests {
                 };
                 let key = source(7)?;
                 let value = source(11)?;
+                assert!(!cache_input_can_write_directly(&key)?);
+                assert!(!cache_input_can_write_directly(&value)?);
                 assert_eq!(key.is_contiguous(), query_len == 1);
                 assert_eq!(value.is_contiguous(), query_len == 1);
                 assert!(key.layout().start_offset() > 0);
@@ -2540,6 +2610,8 @@ mod tests {
                 let value_values = read(&value)?;
                 let mut expected_key = vec![SENTINEL; BLOCKS * HEADS * HEAD_DIM * BLOCK_SIZE];
                 let mut expected_value = expected_key.clone();
+                let mut expected_hnd_key = expected_key.clone();
+                let mut expected_hnd_value = expected_key.clone();
                 for (token, &slot) in SLOTS.iter().take(tokens).enumerate() {
                     let (block, offset) = (slot as usize / BLOCK_SIZE, slot as usize % BLOCK_SIZE);
                     for head in 0..HEADS {
@@ -2555,6 +2627,10 @@ mod tests {
                                 ((block * HEADS + head) * HEAD_DIM + dim) * BLOCK_SIZE + offset;
                             expected_key[key_index] = key_values[source];
                             expected_value[value_index] = value_values[source];
+                            let hnd_index =
+                                ((block * HEADS + head) * BLOCK_SIZE + offset) * HEAD_DIM + dim;
+                            expected_hnd_key[hnd_index] = key_values[source];
+                            expected_hnd_value[hnd_index] = value_values[source];
                         }
                     }
                 }
@@ -2572,32 +2648,50 @@ mod tests {
                         0
                     };
                     assert_eq!(packed_key.layout().start_offset(), expected_offset);
-                    let key_cache = Tensor::full(
-                        SENTINEL,
-                        (BLOCKS, HEADS, HEAD_DIM / PACK, BLOCK_SIZE, PACK),
-                        &device,
-                    )?
-                    .to_dtype(dtype)?;
-                    let value_cache =
-                        Tensor::full(SENTINEL, (BLOCKS, HEADS, HEAD_DIM, BLOCK_SIZE), &device)?
-                            .to_dtype(dtype)?;
-                    reshape_and_cache(
-                        &packed_key,
-                        &packed_value,
-                        None,
-                        None,
-                        &key_cache,
-                        &value_cache,
-                        &slots,
-                    )?;
-                    assert!(
-                        read(&key_cache)? == expected_key,
-                        "{dtype:?} query_len={query_len} contiguous_pack={contiguous_pack}: key cache mismatch"
-                    );
-                    assert!(
-                        read(&value_cache)? == expected_value,
-                        "{dtype:?} query_len={query_len} contiguous_pack={contiguous_pack}: value cache mismatch"
-                    );
+                    for hnd in [false, true] {
+                        let (key_shape, value_shape, expected_key, expected_value) = if hnd {
+                            (
+                                vec![BLOCKS, HEADS, BLOCK_SIZE, HEAD_DIM],
+                                vec![BLOCKS, HEADS, BLOCK_SIZE, HEAD_DIM],
+                                &expected_hnd_key,
+                                &expected_hnd_value,
+                            )
+                        } else {
+                            (
+                                vec![BLOCKS, HEADS, HEAD_DIM / PACK, BLOCK_SIZE, PACK],
+                                vec![BLOCKS, HEADS, HEAD_DIM, BLOCK_SIZE],
+                                &expected_key,
+                                &expected_value,
+                            )
+                        };
+                        let key_cache =
+                            Tensor::full(SENTINEL, key_shape, &device)?.to_dtype(dtype)?;
+                        let value_cache =
+                            Tensor::full(SENTINEL, value_shape, &device)?.to_dtype(dtype)?;
+                        assert_eq!(
+                            AttentionBackendKind::from_cache(&key_cache, &value_cache),
+                            AttentionBackendKind::Standard,
+                        );
+                        assert_eq!(cache_block_size(&key_cache, &value_cache)?, BLOCK_SIZE);
+                        assert_eq!(cache_kv_shape(&key_cache, &value_cache)?, (HEADS, HEAD_DIM));
+                        reshape_and_cache(
+                            &packed_key,
+                            &packed_value,
+                            None,
+                            None,
+                            &key_cache,
+                            &value_cache,
+                            &slots,
+                        )?;
+                        assert_eq!(
+                            &read(&key_cache)?, expected_key,
+                            "{dtype:?} query_len={query_len} contiguous_pack={contiguous_pack} hnd={hnd}: key cache mismatch"
+                        );
+                        assert_eq!(
+                            &read(&value_cache)?, expected_value,
+                            "{dtype:?} query_len={query_len} contiguous_pack={contiguous_pack} hnd={hnd}: value cache mismatch"
+                        );
+                    }
                 }
             }
         }

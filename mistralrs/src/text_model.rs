@@ -54,6 +54,7 @@ pub struct TextModelBuilder {
 
     // Other things
     pub(crate) paged_attn_cfg: Option<PagedAttentionConfig>,
+    pub(crate) no_paged_attn: bool,
     pub(crate) max_num_seqs: usize,
     pub(crate) no_kv_cache: bool,
     pub(crate) with_logging: bool,
@@ -114,6 +115,7 @@ impl PagedAttentionMetaBuilder {
 }
 
 impl TextModelBuilder {
+    /// PagedAttention defaults to enabled on supported CUDA and Metal devices.
     /// A few defaults are applied here:
     /// - MoQE ISQ organization
     /// - Token source is from the cache (.cache/huggingface/token)
@@ -138,6 +140,7 @@ impl TextModelBuilder {
             hf_revision: None,
             isq: None,
             paged_attn_cfg: None,
+            no_paged_attn: false,
             max_num_seqs: 32,
             no_kv_cache: false,
             prefix_cache_n: Some(16),

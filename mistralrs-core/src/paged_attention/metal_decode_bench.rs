@@ -44,6 +44,10 @@ const MASKED_DECODE_CASES: [(usize, usize, usize); 2] = [(33, 0, 17), (543, 31, 
 const MASK_CONTROL_CONTEXT: usize = 256;
 const MASK_QK_AMPLITUDE: f32 = 0.1;
 const MASK_EXCLUDED_VALUE_BIAS: f32 = 4.0;
+const CUSTOM_MASK_BATCH: usize = 2;
+const CUSTOM_MASK_CONTEXT: usize = 33;
+const CUSTOM_MASK_VISIBLE: usize = 9;
+const CUSTOM_MASK_BIAS: f32 = 0.25;
 // (query heads, kv heads, head dim): Qwen3.8 full attention, then a common GQA-4 shape.
 const SHAPES: [(usize, usize, usize); 2] = [(24, 4, 256), (32, 8, 128)];
 const DECODE_CASES: [(usize, usize, usize, [usize; 4]); 7] = [
@@ -295,6 +299,20 @@ fn pack_seq(k: &Tensor, v: &Tensor, blocks: usize) -> Result<(Tensor, Tensor)> {
     Ok((k, v))
 }
 
+fn cache_with_layout(k: &Tensor, v: &Tensor, hnd: bool) -> Result<(Tensor, Tensor)> {
+    if !hnd {
+        return Ok((k.clone(), v.clone()));
+    }
+    let (blocks, heads, head_chunks, block_size, x) = k.dims5()?;
+    let k = k.permute((0, 1, 3, 2, 4))?.contiguous()?.reshape((
+        blocks,
+        heads,
+        block_size,
+        head_chunks * x,
+    ))?;
+    Ok((k, v.transpose(2, 3)?.contiguous()?))
+}
+
 fn remap_cache_blocks(
     key_cache: &Tensor,
     value_cache: &Tensor,
@@ -542,36 +560,94 @@ fn decode_mask_errors(
     let masked_vs_unmasked = max_abs_diff(&masked, &unmasked)?;
     let trimmed_error = max_abs_diff(&trimmed, &expected)?;
 
-    if visible_start == 0 && visible_end == context {
-        let (key_cache, value_cache) =
-            pack_seq(&k.squeeze(0)?, &v.squeeze(0)?, context.div_ceil(BLOCK_SIZE))?;
-        let (key_cache, value_cache, block_tables) =
-            remap_cache_blocks(&key_cache, &value_cache, 1, context.div_ceil(BLOCK_SIZE))?;
-        let context_lens = Tensor::new(&[context as u32], device)?;
-        let paged = mistralrs_paged_attn::paged_attention(
-            &q.squeeze(2)?,
-            None,
-            None,
-            &key_cache,
-            &value_cache,
-            &block_tables,
-            &context_lens,
-            None,
-            context,
-            params.softmax_scale,
-            1.0,
-            None,
-        )?;
-        let paged_error = max_abs_diff(&paged, &expected)?;
-        let tolerance = if dtype == DType::BF16 {
-            BF16_ABS_TOL
-        } else {
-            F16_ABS_TOL
+    let full_context = visible_start == 0 && visible_end == context;
+    let generated_window = params.sliding_window.is_some_and(|window| {
+        visible_start == context.saturating_sub(window) && visible_end == context
+    });
+    if full_context || generated_window {
+        use crate::{
+            paged_attention::PagedAttention,
+            pipeline::text_models_inputs_processor::PagedAttentionInputMetadata,
         };
-        assert!(
-            paged_error < tolerance,
-            "{dtype:?}: paged control error {paged_error}"
-        );
+        use std::collections::HashMap;
+
+        let mut cache_key = k.squeeze(0)?;
+        let mut cache_value = v.squeeze(0)?;
+        if generated_window && visible_start > 0 {
+            let poison = Tensor::full(f32::NAN, (kv_heads, visible_start, head_dim), device)?
+                .to_dtype(dtype)?;
+            cache_key = Tensor::cat(
+                &[
+                    &poison,
+                    &cache_key.narrow(1, visible_start, context - visible_start)?,
+                ],
+                1,
+            )?;
+            cache_value = Tensor::cat(
+                &[
+                    &poison,
+                    &cache_value.narrow(1, visible_start, context - visible_start)?,
+                ],
+                1,
+            )?;
+        }
+        let (key_cache, value_cache) =
+            pack_seq(&cache_key, &cache_value, context.div_ceil(BLOCK_SIZE))?;
+        for hnd in [false, true] {
+            let (key_cache, value_cache) = cache_with_layout(&key_cache, &value_cache, hnd)?;
+            let (key_cache, value_cache, block_tables) =
+                remap_cache_blocks(&key_cache, &value_cache, 1, context.div_ceil(BLOCK_SIZE))?;
+            let context_lens = Tensor::new(&[context as u32], device)?;
+            let tolerance = if dtype == DType::BF16 {
+                BF16_ABS_TOL
+            } else {
+                F16_ABS_TOL
+            };
+            if full_context {
+                let paged = mistralrs_paged_attn::paged_attention(
+                    &q.squeeze(2)?,
+                    None,
+                    None,
+                    &key_cache,
+                    &value_cache,
+                    &block_tables,
+                    &context_lens,
+                    None,
+                    context,
+                    params.softmax_scale,
+                    1.0,
+                    None,
+                )?;
+                let paged_error = max_abs_diff(&paged, &expected)?;
+                assert!(
+                    paged_error < tolerance,
+                    "{dtype:?} hnd={hnd}: paged control error {paged_error}"
+                );
+            }
+            if generated_window {
+                let mut metadata = PagedAttentionInputMetadata::dummy(device)?;
+                metadata.is_first_prompt_chunk = false;
+                metadata.block_size = Some(BLOCK_SIZE);
+                metadata.block_tables = Some(HashMap::from([(device.location(), block_tables)]));
+                metadata.context_lens = Some(HashMap::from([(device.location(), context_lens)]));
+                metadata.paged_context_lens_cpu = Some(vec![context]);
+                metadata.max_context_len = Some(context);
+                let output = PagedAttention::new(head_dim, device, None)?.forward_donor_cache(
+                    &q,
+                    &key_cache,
+                    &value_cache,
+                    &AttentionMask::None,
+                    &metadata,
+                    &params,
+                    None,
+                )?;
+                let error = max_abs_diff(&output, &expected)?;
+                assert!(
+                    error < tolerance,
+                    "{dtype:?} context={context} hnd={hnd}: paged window error {error}"
+                );
+            }
+        }
     }
     Ok((masked_error, masked_vs_unmasked, trimmed_error))
 }
@@ -641,6 +717,154 @@ fn sdpa_decode_noop_sliding_mask_matches_cpu() -> Result<()> {
 #[test]
 fn sdpa_decode_global_noop_mask_matches_cpu_bf16() -> Result<()> {
     assert_decode_noop_mask_matches_cpu(DType::BF16, BF16_ABS_TOL, GEMMA_GLOBAL_DECODE_SHAPE)
+}
+
+#[test]
+fn sdpa_decode_batch_head_masks_match_cpu() -> Result<()> {
+    use crate::{
+        attention::{AttentionMask, Sdpa, SdpaParams},
+        paged_attention::PagedAttention,
+        pipeline::text_models_inputs_processor::PagedAttentionInputMetadata,
+    };
+    use std::collections::HashMap;
+
+    let device = Device::new_metal(0)?;
+    let cpu = Device::Cpu;
+    for ((q_heads, kv_heads, head_dim), dtype, tolerance) in [
+        (GEMMA_DECODE_SHAPE, DType::BF16, BF16_ABS_TOL),
+        (GEMMA_DECODE_SHAPE, DType::F16, F16_ABS_TOL),
+        (GEMMA_GLOBAL_DECODE_SHAPE, DType::BF16, BF16_ABS_TOL),
+    ] {
+        let q = Tensor::from_vec(
+            (0..CUSTOM_MASK_BATCH * q_heads * head_dim)
+                .map(|i| (i as f32).sin() * MASK_QK_AMPLITUDE)
+                .collect::<Vec<_>>(),
+            (CUSTOM_MASK_BATCH, q_heads, 1, head_dim),
+            &cpu,
+        )?
+        .to_dtype(dtype)?;
+        let kv_shape = (CUSTOM_MASK_BATCH, kv_heads, CUSTOM_MASK_CONTEXT, head_dim);
+        let kv_elements = CUSTOM_MASK_BATCH * kv_heads * CUSTOM_MASK_CONTEXT * head_dim;
+        let k = Tensor::from_vec(
+            (0..kv_elements)
+                .map(|i| (i as f32).cos() * MASK_QK_AMPLITUDE)
+                .collect::<Vec<_>>(),
+            kv_shape,
+            &cpu,
+        )?
+        .to_dtype(dtype)?;
+        let v = Tensor::from_vec(
+            (0..kv_elements)
+                .map(|i| {
+                    (i as f32).sin()
+                        + ((i / head_dim) % CUSTOM_MASK_CONTEXT) as f32 / CUSTOM_MASK_CONTEXT as f32
+                })
+                .collect::<Vec<_>>(),
+            kv_shape,
+            &cpu,
+        )?
+        .to_dtype(dtype)?;
+        let mask = Tensor::from_vec(
+            (0..CUSTOM_MASK_BATCH * q_heads * CUSTOM_MASK_CONTEXT)
+                .map(|i| {
+                    let row = i / CUSTOM_MASK_CONTEXT;
+                    let token = i % CUSTOM_MASK_CONTEXT;
+                    let start = row % (CUSTOM_MASK_CONTEXT - CUSTOM_MASK_VISIBLE + 1);
+                    if (start..start + CUSTOM_MASK_VISIBLE).contains(&token) {
+                        (token % 2) as f32 * CUSTOM_MASK_BIAS
+                    } else {
+                        f32::NEG_INFINITY
+                    }
+                })
+                .collect::<Vec<_>>(),
+            (CUSTOM_MASK_BATCH, q_heads, 1, CUSTOM_MASK_CONTEXT),
+            &cpu,
+        )?
+        .to_dtype(dtype)?;
+        let mut expected = Vec::with_capacity(CUSTOM_MASK_BATCH);
+        for batch in 0..CUSTOM_MASK_BATCH {
+            let q = q.narrow(0, batch, 1)?.to_dtype(DType::F32)?.reshape((
+                kv_heads,
+                q_heads / kv_heads,
+                head_dim,
+            ))?;
+            let k = k.narrow(0, batch, 1)?.squeeze(0)?.to_dtype(DType::F32)?;
+            let v = v.narrow(0, batch, 1)?.squeeze(0)?.to_dtype(DType::F32)?;
+            let mask = mask.narrow(0, batch, 1)?.to_dtype(DType::F32)?.reshape((
+                kv_heads,
+                q_heads / kv_heads,
+                CUSTOM_MASK_CONTEXT,
+            ))?;
+            let logits = q.matmul(&k.t()?)?.broadcast_add(&mask)?;
+            expected.push(
+                candle_nn::ops::softmax_last_dim(&logits)?
+                    .matmul(&v)?
+                    .reshape((1, q_heads, 1, head_dim))?,
+            );
+        }
+        let params = SdpaParams {
+            n_kv_groups: q_heads / kv_heads,
+            softcap: None,
+            softmax_scale: 1.0,
+            sliding_window: None,
+            sinks: None,
+        };
+        let q = q.to_device(&device)?;
+        let k = k.to_device(&device)?;
+        let v = v.to_device(&device)?;
+        let mask = AttentionMask::Custom(mask.to_device(&device)?);
+        let expected = Tensor::cat(&expected, 0)?;
+        let actual = Sdpa.run_attention(&q, &k, &v, &mask, None, &params)?;
+        let error = max_abs_diff(&actual, &expected)?;
+        assert!(
+            error < tolerance,
+            "{dtype:?} head_dim={head_dim}: batch/head mask error {error}"
+        );
+        let blocks = CUSTOM_MASK_CONTEXT.div_ceil(BLOCK_SIZE);
+        let mut key_blocks = Vec::with_capacity(CUSTOM_MASK_BATCH);
+        let mut value_blocks = Vec::with_capacity(CUSTOM_MASK_BATCH);
+        for batch in 0..CUSTOM_MASK_BATCH {
+            let (key, value) = pack_seq(
+                &k.narrow(0, batch, 1)?.squeeze(0)?,
+                &v.narrow(0, batch, 1)?.squeeze(0)?,
+                blocks,
+            )?;
+            key_blocks.push(key);
+            value_blocks.push(value);
+        }
+        let key_cache = Tensor::cat(&key_blocks, 0)?;
+        let value_cache = Tensor::cat(&value_blocks, 0)?;
+        for hnd in [false, true] {
+            let (key_cache, value_cache) = cache_with_layout(&key_cache, &value_cache, hnd)?;
+            let (key_cache, value_cache, block_tables) =
+                remap_cache_blocks(&key_cache, &value_cache, CUSTOM_MASK_BATCH, blocks)?;
+            let context_lens =
+                Tensor::full(CUSTOM_MASK_CONTEXT as u32, CUSTOM_MASK_BATCH, &device)?;
+            let mut metadata = PagedAttentionInputMetadata::dummy(&device)?;
+            metadata.is_first_prompt_chunk = false;
+            metadata.block_size = Some(BLOCK_SIZE);
+            metadata.block_tables = Some(HashMap::from([(device.location(), block_tables)]));
+            metadata.context_lens = Some(HashMap::from([(device.location(), context_lens)]));
+            metadata.paged_context_lens_cpu = Some(vec![CUSTOM_MASK_CONTEXT; CUSTOM_MASK_BATCH]);
+            metadata.max_context_len = Some(CUSTOM_MASK_CONTEXT);
+            metadata.query_lens = Some(vec![1; CUSTOM_MASK_BATCH]);
+            let actual = PagedAttention::new(head_dim, &device, None)?.forward_donor_cache(
+                &q,
+                &key_cache,
+                &value_cache,
+                &mask,
+                &metadata,
+                &params,
+                None,
+            )?;
+            let error = max_abs_diff(&actual, &expected)?;
+            assert!(
+                error < tolerance,
+                "{dtype:?} head_dim={head_dim} hnd={hnd}: paged batch/head mask error {error}"
+            );
+        }
+    }
+    Ok(())
 }
 
 #[test]

@@ -1,4 +1,4 @@
-//! Enable PagedAttention for efficient KV-cache memory management.
+//! Override the default PagedAttention cache budget.
 //!
 //! Run with: `cargo run --release --example paged_attn -p mistralrs`
 

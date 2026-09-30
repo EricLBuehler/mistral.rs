@@ -408,6 +408,19 @@ impl Sdpa {
         let (_, _, _, k_head_dim) = k.dims4()?;
         let (_, _, _, v_head_dim) = v.dims4()?;
 
+        // Metal's vector paths do not implement general additive masks correctly.
+        if q.device().is_metal() && seq_len == 1 && mask.is_some() {
+            let k = repeat_kv(k.clone(), sdpa_params.n_kv_groups)?;
+            let v = repeat_kv(v.clone(), sdpa_params.n_kv_groups)?;
+            return naive_sdpa(
+                &q.contiguous()?,
+                &k.contiguous()?,
+                &v.contiguous()?,
+                mask,
+                sdpa_params,
+            );
+        }
+
         // We can use Metal SDPA (vector/full) if the mask is the correct size and head dims match.
         // If the mask is provided, then softcapping isn't allowed - default back to naive SDPA
         // Softcapping is implemented for vector SDPA.

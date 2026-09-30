@@ -1,6 +1,6 @@
 ---
 title: Paged attention
-description: Block-based KV caching for higher concurrency, plus the CUDA fast paths built on it.
+description: Block-based KV caching and optimized attention on CUDA and Metal.
 ---
 
 import { Tabs, TabItem } from '@astrojs/starlight/components';
@@ -53,7 +53,9 @@ let model = ModelBuilder::new("Qwen/Qwen3-4B")
     .await?;
 ```
 
-`with_paged_attn` is silently ignored on platforms without paged attention support. [Full example](/examples/rust/advanced/paged-attn/).
+`ModelBuilder`, `TextModelBuilder`, `GgufModelBuilder`, and `MultimodalModelBuilder` enable paged attention by default on supported CUDA and Metal devices. CPU and unsupported model loaders use the standard cache. Call `.without_paged_attn()` to opt out; `.with_paged_attn(config)` overrides the default budget and re-enables paging after an opt-out. Disabling the KV cache also disables paging.
+
+Rust defaults to the same utilization target as the CLI. `MultiModelBuilder` divides the requested cache budgets among its paged models according to their serving concurrency. An explicit `PagedAttentionMetaBuilder::default()` still selects a total context budget of 4096 tokens. [Full example](/examples/rust/advanced/paged-attn/).
 
 </TabItem>
 </Tabs>
@@ -65,7 +67,7 @@ Use paged attention when:
 - Running long-context models (32k+) where standard caches would be enormous.
 - Using CUDA decode graphs (see below).
 
-On Metal, the default favors concurrent serving. For a single request with a short context, paging overhead can reduce throughput; compare `--paged-attn auto` with `--paged-attn off` on your workload.
+Compare `--paged-attn auto` with `--paged-attn off` using your workload's context lengths and concurrency.
 
 ## Memory budget
 
@@ -77,7 +79,7 @@ The pool's size is set via one of three mutually exclusive flags:
 
 When none are set, the CLI uses a GPU memory utilization target of `0.9`, accounting for model weights and reserved memory.
 
-On Metal, the CLI and Python `Runner` use the same default utilization target and also cap the pool's token capacity. With automatic device mapping, the cap is `max_seq_len * max(max_batch_size, min(max_seqs, 8))`. The sequence length and batch size come from the device mapping options; `max_seqs` is the serving concurrency. This budgets for up to eight full-length concurrent sequences by default, while an explicitly larger `max_batch_size` raises the cap. With a manual layer map, the token cap is the model's maximum context length. Available memory can reduce the pool further. Explicit MB and context-length budgets bypass this token cap; a memory-fraction override retains it.
+On Metal, the CLI, Rust model builders, and Python `Runner` use the same default utilization target and also cap the pool's token capacity. With automatic device mapping, the cap is `max_seq_len * max(max_batch_size, min(max_seqs, 8))`. The sequence length and batch size come from the device mapping options; `max_seqs` is the serving concurrency. This budgets for up to eight full-length concurrent sequences by default, while an explicitly larger `max_batch_size` raises the cap. With a manual layer map, the token cap is the model's maximum context length. Available memory can reduce the pool further. Explicit MB and context-length budgets bypass this token cap; a memory-fraction override retains it.
 
 Python on CUDA retains its default total KV token capacity of `max_seq_len`. Set `pa_gpu_mem_usage`, `pa_gpu_mem`, or `pa_ctxt_len` to choose a different budget.
 
@@ -106,6 +108,18 @@ Each sequence holds a list of block pointers. On each decoding step, the schedul
 Sequences that begin with identical tokens share the blocks holding those tokens. A shared block is reference-counted rather than duplicated. This is the mechanism behind [prefix caching](/guides/perf/throughput-tuning/) when paged attention is on.
 
 MLA (Multi-head Latent Attention)'s latent cache is supported through a dedicated kernel path. Some models opt out of the FlashInfer paged cache layout (FlashInfer is NVIDIA's attention-kernel library; see [Flash attention vs FlashInfer](#flash-attention-vs-flashinfer) below) when their cache shape needs a different backend.
+
+## Metal decode
+
+Metal defaults to a paged cache with contiguous head dimensions for both K and V. Short-context decode and grouped, partitioned decode use dedicated kernels. Sliding-window decode reads the visible tokens directly from the pages. Prefix-cache prefill continues to gather cached K/V before running attention.
+
+To select the legacy Metal cache layout and decode backend before loading a model:
+
+```bash
+MISTRALRS_METAL_PAGED_LAYOUT=legacy mistralrs serve --paged-attn on -m <model>
+```
+
+The default is `MISTRALRS_METAL_PAGED_LAYOUT=hnd`; `auto` selects the same layout. The legacy option retains paging and prefix sharing. Use `--paged-attn off` to disable paging entirely. The cache layout is fixed for the lifetime of a loaded model.
 
 ## CUDA fast paths
 

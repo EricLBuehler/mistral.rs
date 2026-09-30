@@ -16,6 +16,8 @@ pub mod kv_cache_manager;
 mod layers;
 #[cfg(all(test, feature = "metal"))]
 mod metal_decode_bench;
+#[cfg(all(test, feature = "metal"))]
+mod metal_hnd_tests;
 pub(crate) mod mm_prefix;
 #[cfg(any(all(feature = "cuda", target_family = "unix"), feature = "metal"))]
 pub(crate) mod plan;
@@ -222,6 +224,10 @@ pub struct CacheMemoryReservations {
 }
 
 impl PagedAttentionConfig {
+    pub fn gpu_memory(&self) -> MemoryGpuConfig {
+        self.mem_gpu
+    }
+
     pub fn new(
         block_size: Option<usize>,
         mem_gpu: MemoryGpuConfig,

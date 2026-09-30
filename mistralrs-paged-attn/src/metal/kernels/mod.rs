@@ -10,6 +10,8 @@ use std::{collections::HashMap, ffi::c_void};
 pub mod utils;
 use utils::{EncoderProvider, RawBytesEncoder};
 
+const CACHE_LAYOUT_CONSTANT: usize = 50;
+
 // Backward-compatible aliases to ease migration from the `metal` crate API.
 type ComputeCommandEncoderRef = ComputeCommandEncoder;
 type ComputePipelineState = ComputePipeline;
@@ -184,9 +186,10 @@ pub fn call_copy_blocks(
         DType::F32 => "copy_blocks_float",
         DType::BF16 => "copy_blocks_bfloat16_t",
         DType::F16 => "copy_blocks_half",
+        DType::F8E4M3 => "copy_blocks_uchar",
         other => {
             return Err(MetalKernelError::DTypeMismatch {
-                expected: vec![DType::F32, DType::F16, DType::BF16],
+                expected: vec![DType::F32, DType::F16, DType::BF16, DType::F8E4M3],
                 got: other,
             })
         }
@@ -265,6 +268,7 @@ pub fn call_reshape_and_cache(
     x: i32,
     key_stride: i32,
     value_stride: i32,
+    hnd: bool,
 ) -> Result<(), MetalKernelError> {
     let name = format!(
         "reshape_and_cache_kv_{}_cache_{}",
@@ -272,10 +276,10 @@ pub fn call_reshape_and_cache(
         cache_ty.to_repr()
     );
 
-    let constants = Some(ConstantValues::new(vec![(
-        10,
-        Value::Bool(/* use_fp8_scales */ k_v_scale.is_some()),
-    )]));
+    let constants = Some(ConstantValues::new(vec![
+        (10, Value::Bool(k_v_scale.is_some())),
+        (CACHE_LAYOUT_CONSTANT, Value::Bool(hnd)),
+    ]));
 
     let pipeline = kernels.load_pipeline_with_constants(device, name, constants)?;
     let encoder = ep.encoder();
@@ -369,6 +373,8 @@ pub fn call_paged_attention_v1(
     kv_block_stride: i32,
     kv_head_stride: i32,
     sinks: Option<(&Buffer, usize)>,
+    hnd: bool,
+    sliding_window: i32,
 ) -> Result<(), MetalKernelError> {
     const NUM_THREADS: usize = 256;
     const NUM_SIMD_LANES: usize = 32;
@@ -387,6 +393,7 @@ pub fn call_paged_attention_v1(
         ),
         (30, Value::Bool(/* use_fp8_scales */ k_v_scale.is_some())),
         (40, Value::Bool(/* use_sinks */ sinks.is_some())),
+        (CACHE_LAYOUT_CONSTANT, Value::Bool(hnd)),
     ]));
 
     let pipeline = kernels.load_pipeline_with_constants(device, name, constants)?;
@@ -453,6 +460,11 @@ pub fn call_paged_attention_v1(
         encoder.set_input_buffer(18, Some(sinks_buf), sinks_offset);
     }
 
+    encoder.set_bytes_raw(
+        19,
+        core::mem::size_of_val(&sliding_window),
+        &sliding_window as *const _ as *const c_void,
+    );
     let thread_groups_count = MTLSize {
         width: num_heads as usize,
         height: num_seqs as usize,
@@ -503,6 +515,8 @@ pub fn call_paged_attention_v2(
     kv_block_stride: i32,
     kv_head_stride: i32,
     sinks: Option<(&Buffer, usize)>,
+    hnd: bool,
+    sliding_window: i32,
 ) -> Result<(), MetalKernelError> {
     const NUM_THREADS: usize = 256;
     const PARTITION_SIZE: usize = 512;
@@ -526,6 +540,7 @@ pub fn call_paged_attention_v2(
             ),
             (30, Value::Bool(/* use_fp8_scales */ k_v_scale.is_some())),
             (40, Value::Bool(/* use_sinks */ sinks.is_some())),
+            (CACHE_LAYOUT_CONSTANT, Value::Bool(hnd)),
         ]));
 
         let pipeline = kernels.load_pipeline_with_constants(device, name, constants)?;
@@ -596,6 +611,11 @@ pub fn call_paged_attention_v2(
             encoder.set_input_buffer(18, Some(sinks_buf), sinks_offset);
         }
 
+        encoder.set_bytes_raw(
+            19,
+            core::mem::size_of_val(&sliding_window),
+            &sliding_window as *const _ as *const c_void,
+        );
         let thread_groups_count = MTLSize {
             width: num_heads as usize,
             height: num_seqs as usize,
@@ -659,6 +679,7 @@ pub fn call_gather_kv_cache(
     num_kv_heads: i32,
     head_size: i32,
     x: i32,
+    hnd: bool,
 ) -> Result<(), MetalKernelError> {
     let name = format!(
         "gather_kv_cache_cache_{}_out_{}",
@@ -666,10 +687,10 @@ pub fn call_gather_kv_cache(
         out_ty.to_repr()
     );
 
-    let constants = Some(ConstantValues::new(vec![(
-        10,
-        Value::Bool(/* use_fp8_scales */ k_v_scale.is_some()),
-    )]));
+    let constants = Some(ConstantValues::new(vec![
+        (10, Value::Bool(k_v_scale.is_some())),
+        (CACHE_LAYOUT_CONSTANT, Value::Bool(hnd)),
+    ]));
 
     let pipeline = kernels.load_pipeline_with_constants(device, name, constants)?;
     let encoder = ep.encoder();
@@ -906,17 +927,70 @@ pub const PAGED_DECODE_MAX_GQA: usize = 8;
 const PAGED_DECODE_THREADS: usize = 128;
 const PAGED_DECODE_SHORT_THREADS: usize = 1024;
 const PAGED_DECODE_SHORT_MAX_HEADS: usize = 32;
+pub const PAGED_DECODE_LARGE_HEAD_SIZE: usize = 512;
+// Larger grouped heads need this cap to fit 32 KiB of threadgroup memory.
+pub const PAGED_DECODE_LARGE_HEAD_MAX_GQA: usize = 4;
+const PAGED_DECODE_HND_SHORT_CONTEXT: usize = 256;
 // Head-parallel decode trades KV reuse for fewer launches; keep it below the measured crossover.
 const PAGED_DECODE_SHORT_CONTEXTS: [(usize, usize, usize); 2] = [(128, 2, 288), (256, 3, 320)];
+
+struct ShortDecodeProfile {
+    head_size: usize,
+    query_heads: usize,
+    kv_heads: usize,
+    max_batch: usize,
+    max_context: usize,
+}
+
+// Longer single-pass launches are limited to profiled head configurations.
+const PAGED_DECODE_HND_SHORT_PROFILES: &[ShortDecodeProfile] = &[
+    ShortDecodeProfile {
+        head_size: 128,
+        query_heads: 16,
+        kv_heads: 8,
+        max_batch: 1,
+        max_context: 512,
+    },
+    ShortDecodeProfile {
+        head_size: 256,
+        query_heads: 8,
+        kv_heads: 2,
+        max_batch: 4,
+        max_context: 1024,
+    },
+    ShortDecodeProfile {
+        head_size: 512,
+        query_heads: 8,
+        kv_heads: 2,
+        max_batch: 4,
+        max_context: 1024,
+    },
+    ShortDecodeProfile {
+        head_size: 256,
+        query_heads: 8,
+        kv_heads: 2,
+        max_batch: 8,
+        max_context: 256,
+    },
+    ShortDecodeProfile {
+        head_size: 512,
+        query_heads: 8,
+        kv_heads: 2,
+        max_batch: 8,
+        max_context: 256,
+    },
+];
 // Reduce kernels are instantiated for exactly these partition sizes.
 const PAGED_DECODE_LONG_PARTITION: usize = 512;
 const PAGED_DECODE_SHORT_PARTITION: usize = 128;
 // Below this many threadgroups a 40-core GPU idles, so shorter partitions trade reduce work for occupancy.
 const PAGED_DECODE_MIN_THREADGROUPS: usize = 64;
 
-/// Inputs for [`call_paged_decode_gqa`]; the cache must use the [blocks, kv_heads, D/8, 32, 8] key layout.
+/// Inputs for either the HND or packed-cache decode family.
 pub struct PagedDecodeArgs<'a> {
     pub ty: PagedAttentionDType,
+    pub hnd: bool,
+    pub sliding_window: i32,
     pub q: (&'a Buffer, usize),
     pub k_cache: (&'a Buffer, usize),
     pub v_cache: (&'a Buffer, usize),
@@ -978,6 +1052,38 @@ pub fn paged_decode_variant(
     paged_decode_grouped_variant(max_context_len, num_seqs, num_kv_heads)
 }
 
+pub fn paged_decode_hnd_variant(
+    max_context_len: usize,
+    num_seqs: usize,
+    num_heads: usize,
+    num_kv_heads: usize,
+    sliding_window: Option<usize>,
+    head_size: usize,
+) -> PagedDecodeVariant {
+    let visible_context = max_context_len.min(sliding_window.unwrap_or(max_context_len));
+    let profiled_short = PAGED_DECODE_HND_SHORT_PROFILES.iter().any(|profile| {
+        head_size == profile.head_size
+            && num_heads == profile.query_heads
+            && num_kv_heads == profile.kv_heads
+            && num_seqs <= profile.max_batch
+            && visible_context <= profile.max_context
+    });
+    if profiled_short
+        || (num_seqs == 1
+            && num_heads <= PAGED_DECODE_SHORT_MAX_HEADS
+            && visible_context <= PAGED_DECODE_HND_SHORT_CONTEXT)
+    {
+        return PagedDecodeVariant::Short;
+    }
+    paged_decode_variant(
+        max_context_len,
+        num_seqs,
+        num_heads,
+        num_kv_heads,
+        head_size,
+    )
+}
+
 pub(crate) fn paged_decode_grouped_variant(
     max_context_len: usize,
     num_seqs: usize,
@@ -1002,10 +1108,11 @@ pub fn call_paged_decode_gqa(
 ) -> Result<(), MetalKernelError> {
     let max_num_partitions = args.variant.num_partitions(args.max_context_len as usize);
     let gqa = args.num_heads / args.num_kv_heads;
+    let layout = if args.hnd { "hnd_" } else { "" };
     let (name, grid_heads, threads, kernel_param) = match args.variant {
         PagedDecodeVariant::Short => (
             format!(
-                "paged_decode_short_{}_hs{}",
+                "paged_decode_{layout}short_{}_hs{}",
                 args.ty.to_repr(),
                 args.head_size
             ),
@@ -1015,7 +1122,7 @@ pub fn call_paged_decode_gqa(
         ),
         PagedDecodeVariant::Grouped { partition_size } => (
             format!(
-                "paged_decode_gqa_{}_hs{}_g{gqa}",
+                "paged_decode_{layout}gqa_{}_hs{}_g{gqa}",
                 args.ty.to_repr(),
                 args.head_size
             ),
@@ -1064,6 +1171,13 @@ pub fn call_paged_decode_gqa(
             core::mem::size_of_val(&args.scale),
             &args.scale as *const _ as *const c_void,
         );
+        if args.hnd {
+            encoder.set_bytes_raw(
+                16,
+                core::mem::size_of_val(&args.sliding_window),
+                &args.sliding_window as *const _ as *const c_void,
+            );
+        }
         encoder.dispatch_thread_groups(
             MTLSize {
                 width: max_num_partitions,
@@ -1109,6 +1223,60 @@ pub fn call_paged_decode_gqa(
 #[cfg(test)]
 mod decode_tests {
     use super::*;
+
+    #[test]
+    fn hnd_short_profiles_bound_context_and_batch() {
+        for profile in PAGED_DECODE_HND_SHORT_PROFILES {
+            let select = |context, batch| {
+                paged_decode_hnd_variant(
+                    context,
+                    batch,
+                    profile.query_heads,
+                    profile.kv_heads,
+                    None,
+                    profile.head_size,
+                )
+            };
+            for batch in [1, profile.max_batch] {
+                let variant = select(profile.max_context, batch);
+                assert!(matches!(variant, PagedDecodeVariant::Short));
+                assert_eq!(variant.num_partitions(profile.max_context), 1);
+            }
+            assert!(matches!(
+                select(profile.max_context + 1, profile.max_batch),
+                PagedDecodeVariant::Grouped { .. }
+            ));
+            assert!(matches!(
+                select(profile.max_context, profile.max_batch + 1),
+                PagedDecodeVariant::Grouped { .. }
+            ));
+        }
+    }
+
+    #[test]
+    fn hnd_short_profiles_use_the_visible_window_and_keep_unprofiled_shapes() {
+        for head_size in [256, 512] {
+            let windowed = paged_decode_hnd_variant(8192, 4, 8, 2, Some(1024), head_size);
+            assert!(matches!(windowed, PagedDecodeVariant::Short));
+            assert_eq!(windowed.num_partitions(8192), 1);
+            assert!(matches!(
+                paged_decode_hnd_variant(8192, 4, 8, 2, Some(1025), head_size),
+                PagedDecodeVariant::Grouped { .. }
+            ));
+        }
+        for (batch, heads, kv_heads, head_size, context) in [
+            (4, 16, 4, 256, 512),
+            (1, 16, 4, 512, 512),
+            (1, 8, 8, 128, 512),
+            (8, 8, 2, 256, 512),
+            (8, 8, 2, 512, 512),
+        ] {
+            assert!(matches!(
+                paged_decode_hnd_variant(context, batch, heads, kv_heads, None, head_size),
+                PagedDecodeVariant::Grouped { .. }
+            ));
+        }
+    }
 
     #[test]
     fn short_decode_has_no_partials() {

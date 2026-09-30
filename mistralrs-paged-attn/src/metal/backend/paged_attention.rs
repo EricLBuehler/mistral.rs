@@ -6,7 +6,7 @@ use candle_core::{
 };
 
 use crate::metal::{
-    backend::validate_kv_cache_scales,
+    backend::{validate_kv_cache_scales, CacheShape},
     kernels::{self, PagedAttentionDType},
 };
 
@@ -41,6 +41,7 @@ struct PagedAttention {
     context_lens: Tensor,
     alibi_slopes: Option<Tensor>,
     max_context_len: usize,
+    sliding_window: Option<usize>,
 
     k_scale: Option<Tensor>,
     v_scale: Option<Tensor>,
@@ -105,27 +106,11 @@ impl candle_core::CustomOp1 for PagedAttention {
         };
 
         let q_rank = q_l.stride().len();
-        let kc_rank = kc_l.stride().len();
-        let vc_rank = vc_l.stride().len();
 
         if q_rank != 3 {
             candle_core::bail!(
                 "paged-attention expects `q` tensor to be of rank 3 \
                 (q: {q_l:?})"
-            )
-        }
-
-        if kc_rank != 5 {
-            candle_core::bail!(
-                "paged-attention expects `key_cache` tensor to be of rank 5 \
-                (key_cache: {kc_l:?})"
-            )
-        }
-
-        if vc_rank != 4 {
-            candle_core::bail!(
-                "paged-attention expects `value_cache` tensor to be of rank 4 \
-                (value_cache: {vc_l:?})"
             )
         }
 
@@ -166,22 +151,16 @@ impl candle_core::CustomOp1 for PagedAttention {
             )
         }
 
-        let (num_blocks, num_kv_heads, head_size_kc, block_size, x) = kc_l.shape().dims5()?;
-        if head_size_kc != head_size / x {
-            candle_core::bail!(
-                "shape mismatch value_cache {:?}, expected {:?}",
-                vc_l.shape(),
-                (num_blocks, num_kv_heads, head_size / x, block_size, x)
-            )
+        let cache = CacheShape::new(&self.key_cache, &self.value_cache)?;
+        let num_kv_heads = cache.num_heads;
+        let block_size = cache.block_size;
+        if cache.head_size != head_size || num_heads % num_kv_heads != 0 {
+            candle_core::bail!("query and cache head dimensions do not match");
         }
-
-        if (num_blocks, num_kv_heads, head_size, block_size) != vc_l.shape().dims4()? {
-            candle_core::bail!(
-                "shape mismatch key_cache {:?} and value_cache {:?}",
-                kc_l.shape(),
-                vc_l.shape()
-            )
+        if self.sliding_window.is_some() && !cache.hnd {
+            candle_core::bail!("Metal sliding paged attention requires an HND cache");
         }
+        let sliding_window = self.sliding_window.unwrap_or(0) as i32;
 
         if (num_seqs) != cl_l.shape().dims1()? {
             candle_core::bail!(
@@ -256,14 +235,26 @@ impl candle_core::CustomOp1 for PagedAttention {
             && sinks_storage_and_offset.is_none()
             && self.softcapping == 1.0
             && block_size == kernels::PAGED_DECODE_BLOCK_SIZE
-            && x == 8
-            && kernels::PAGED_DECODE_HEAD_SIZES.contains(&head_size)
+            && (cache.hnd || cache.x == 8)
+            && (kernels::PAGED_DECODE_HEAD_SIZES.contains(&head_size)
+                || (cache.hnd
+                    && head_size == kernels::PAGED_DECODE_LARGE_HEAD_SIZE
+                    && gqa <= kernels::PAGED_DECODE_LARGE_HEAD_MAX_GQA))
             && num_heads % num_kv_heads == 0
             && (1..=kernels::PAGED_DECODE_MAX_GQA).contains(&gqa);
 
         if use_gqa_decode {
             let variant = if kernel == MetalPagedKernel::Grouped {
                 kernels::paged_decode_grouped_variant(self.max_context_len, num_seqs, num_kv_heads)
+            } else if cache.hnd {
+                kernels::paged_decode_hnd_variant(
+                    self.max_context_len,
+                    num_seqs,
+                    num_heads,
+                    num_kv_heads,
+                    self.sliding_window,
+                    head_size,
+                )
             } else {
                 kernels::paged_decode_variant(
                     self.max_context_len,
@@ -291,6 +282,8 @@ impl candle_core::CustomOp1 for PagedAttention {
                 &kernels::Kernels::new(),
                 kernels::PagedDecodeArgs {
                     ty,
+                    hnd: cache.hnd,
+                    sliding_window,
                     q: (q.buffer(), q_l.start_offset() * dtype_size(q.dtype())),
                     k_cache: (kc.buffer(), kc_l.start_offset() * dtype_size(kc.dtype())),
                     v_cache: (vc.buffer(), vc_l.start_offset() * dtype_size(vc.dtype())),
@@ -353,6 +346,8 @@ impl candle_core::CustomOp1 for PagedAttention {
                 sinks_storage_and_offset
                     .as_ref()
                     .map(|(b, o)| (b as &_, *o)),
+                cache.hnd,
+                sliding_window,
             )
             .map_err(candle_core::Error::wrap)?;
         } else {
@@ -411,6 +406,8 @@ impl candle_core::CustomOp1 for PagedAttention {
                 sinks_storage_and_offset
                     .as_ref()
                     .map(|(b, o)| (b as &_, *o)),
+                cache.hnd,
+                sliding_window,
             )
             .map_err(candle_core::Error::wrap)?;
         }
@@ -430,9 +427,8 @@ impl candle_core::CustomOp1 for PagedAttention {
 /// # Arguments
 ///
 /// * `q` - Query tensor with shape `(num_sequences, num_heads_q, head_size)`.
-/// * `key_cache` - Key cache paged tensor of shape `(num_blocks, num_heads_kv, head_size / x, block_size, x)`
-///   with `x` being the size of an element in bytes.
-/// * `value_cache` - Value cache paged tensor of shape `(num_blocks, num_heads_kv, head_size, block_size)`.
+/// * `key_cache` - HND `(blocks, kv_heads, block_size, head_size)` or legacy packed rank-5 cache.
+/// * `value_cache` - HND shape matching K, or legacy `(blocks, kv_heads, head_size, block_size)`.
 /// * `block_tables` - Padded table associating blocks to each sequence of shape `(num_sequences, max_context_len // block_size)`
 /// * `context_lens` - Tensor associating lengths to each sequence of shape `(num_sequences)`
 /// * `max_context_len` - Max of `context_len`
@@ -456,6 +452,43 @@ pub fn paged_attention(
     softcapping: f32,
     sinks: Option<&Tensor>,
 ) -> Result<Tensor> {
+    paged_attention_with_window(
+        q,
+        k_scale,
+        v_scale,
+        key_cache,
+        value_cache,
+        block_tables,
+        context_lens,
+        alibi_slopes,
+        max_context_len,
+        softmax_scale,
+        softcapping,
+        sinks,
+        None,
+    )
+}
+
+/// Decode from an HND cache with an optional exact trailing token window.
+#[allow(clippy::too_many_arguments)]
+pub fn paged_attention_with_window(
+    q: &Tensor,
+    k_scale: Option<&Tensor>,
+    v_scale: Option<&Tensor>,
+    key_cache: &Tensor,
+    value_cache: &Tensor,
+    block_tables: &Tensor,
+    context_lens: &Tensor,
+    alibi_slopes: Option<&Tensor>,
+    max_context_len: usize,
+    softmax_scale: f32,
+    softcapping: f32,
+    sinks: Option<&Tensor>,
+    sliding_window: Option<usize>,
+) -> Result<Tensor> {
+    if sliding_window == Some(0) {
+        candle_core::bail!("sliding_window must be positive");
+    }
     let op = PagedAttention {
         softmax_scale,
         key_cache: key_cache.clone(),
@@ -463,6 +496,7 @@ pub fn paged_attention(
         block_tables: block_tables.clone(),
         context_lens: context_lens.clone(),
         max_context_len,
+        sliding_window,
         softcapping,
         alibi_slopes: alibi_slopes.cloned(),
         k_scale: k_scale.cloned(),
@@ -480,9 +514,8 @@ pub fn paged_attention(
 ///
 /// * `key` - Key tensor of shape `(num_tokens, num_heads, head_size)`.
 /// * `value` - Value tensor of shape `(num_tokens, num_heads, head_size)`.
-/// * `key_cache` - Key cache paged tensor of shape `(num_blocks, num_heads, head_size / x, block_size, x)`
-///   with `x` being the size of an element in bytes.
-/// * `value_cache` - Value cache paged tensor of shape `(num_blocks, num_heads, head_size, block_size)`.
+/// * `key_cache` - HND `(blocks, heads, block_size, head_size)` or legacy packed rank-5 cache.
+/// * `value_cache` - HND shape matching K, or legacy `(blocks, heads, head_size, block_size)`.
 /// * `slot_mapping` - Mapping associating a slot to each token of shape `(num_tokens)`.
 pub fn reshape_and_cache(
     key: &Tensor,
@@ -565,26 +598,10 @@ pub fn reshape_and_cache(
 
     let k_rank = k_l.stride().len();
     let v_rank = v_l.stride().len();
-    let kc_rank = kc_l.stride().len();
-    let vc_rank = vc_l.stride().len();
 
     if k_rank != 3 || v_rank != 3 {
         candle_core::bail!(
             "paged-attention expects input tensors of rank 3 (k: {k_l:?}, v: {v_l:?})"
-        )
-    }
-
-    if kc_rank != 5 {
-        candle_core::bail!(
-            "paged-attention expects `key_cache` tensor to be of rank 5 \
-                (key_cache: {kc_l:?})"
-        )
-    }
-
-    if vc_rank != 4 {
-        candle_core::bail!(
-            "paged-attention expects `value_cache` tensor to be of rank 4 \
-                (value_cache: {vc_l:?})"
         )
     }
 
@@ -593,21 +610,9 @@ pub fn reshape_and_cache(
         candle_core::bail!("shape mismatch k {:?} and v {:?}", k_l.shape(), v_l.shape())
     }
 
-    let (num_blocks, num_heads_kc, head_size_kc, block_size, x) = kc_l.shape().dims5()?;
-    if num_heads_kc != num_heads || head_size_kc != head_size / x {
-        candle_core::bail!(
-            "shape mismatch value_cache {:?}, expected {:?}",
-            vc_l.shape(),
-            (num_blocks, num_heads, head_size / x, block_size, x)
-        )
-    }
-
-    if (num_blocks, num_heads, head_size, block_size) != vc_l.shape().dims4()? {
-        candle_core::bail!(
-            "shape mismatch key_cache {:?} and value_cache {:?}",
-            kc_l.shape(),
-            vc_l.shape()
-        )
+    let cache = CacheShape::new(key_cache, value_cache)?;
+    if cache.num_heads != num_heads || cache.head_size != head_size {
+        candle_core::bail!("input and cache head dimensions do not match");
     }
 
     if (num_tokens) != s_l.shape().dims1()? {
@@ -646,10 +651,11 @@ pub fn reshape_and_cache(
         num_tokens as i32,
         num_heads as i32,
         head_size as i32,
-        block_size as i32,
-        x as i32,
+        cache.block_size as i32,
+        cache.x as i32,
         key_stride,
         value_stride,
+        cache.hnd,
     )
     .map_err(candle_core::Error::wrap)?;
 

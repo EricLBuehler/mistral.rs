@@ -1,6 +1,6 @@
 //! Multi-model builder and pipeline construction utilities.
 
-use candle_core::Device;
+use candle_core::{Device, DeviceLocation};
 use mistralrs_core::{
     plan_paged_kv, AddModelConfig, DefaultSchedulerMethod, EngineConfig, IsqType,
     PagedAttentionConfig, PagedKvModelRequest, Pipeline, SchedulerConfig, SearchCallback,
@@ -56,6 +56,42 @@ impl AnyModelBuilder {
             AnyModelBuilder::Speech(b) => build_speech_pipeline(b).await,
             AnyModelBuilder::Embedding(b) => build_embedding_pipeline(b).await,
         }
+    }
+
+    fn resolve_paged_attn(&mut self) -> anyhow::Result<()> {
+        let (force_cpu, device, config, disabled) = match self {
+            AnyModelBuilder::Text(b) => (
+                b.force_cpu,
+                &mut b.device,
+                &mut b.paged_attn_cfg,
+                b.no_paged_attn || b.no_kv_cache,
+            ),
+            AnyModelBuilder::Multimodal(b) => (
+                b.force_cpu,
+                &mut b.device,
+                &mut b.paged_attn_cfg,
+                b.no_paged_attn,
+            ),
+            AnyModelBuilder::Auto(b) => (
+                b.force_cpu,
+                &mut b.device,
+                &mut b.paged_attn_cfg,
+                b.no_paged_attn || b.no_kv_cache,
+            ),
+            AnyModelBuilder::Gguf(b) => (
+                b.force_cpu,
+                &mut b.device,
+                &mut b.paged_attn_cfg,
+                b.no_paged_attn || b.no_kv_cache,
+            ),
+            AnyModelBuilder::Diffusion(_)
+            | AnyModelBuilder::Speech(_)
+            | AnyModelBuilder::Embedding(_) => return Ok(()),
+        };
+        let resolved = resolve_device(force_cpu, device.clone())?;
+        *config = resolve_paged_attn(*config, disabled, resolved.location())?;
+        *device = Some(resolved);
+        Ok(())
     }
 
     fn paged_attn_cfg(&self) -> Option<PagedAttentionConfig> {
@@ -201,7 +237,14 @@ impl MultiModelBuilder {
 
         mistralrs_core::distributed::begin_tensor_parallel_session(self.builders.len())?;
 
-        let entries = self.builders;
+        let entries = self
+            .builders
+            .into_iter()
+            .map(|mut entry| {
+                entry.builder.resolve_paged_attn()?;
+                Ok(entry)
+            })
+            .collect::<anyhow::Result<Vec<_>>>()?;
         let paged_kv_plan = plan_paged_kv(
             &entries
                 .iter()
@@ -335,9 +378,12 @@ pub(crate) fn maybe_initialize_logging(with_logging: bool) {
 }
 
 pub(crate) fn resolve_device(force_cpu: bool, device: Option<Device>) -> anyhow::Result<Device> {
+    if force_cpu {
+        return Ok(Device::Cpu);
+    }
     Ok(device
         .map(Ok)
-        .unwrap_or_else(|| crate::best_device(force_cpu))?)
+        .unwrap_or_else(|| crate::best_device(false))?)
 }
 
 pub(crate) fn resolve_isq_type(
@@ -352,6 +398,29 @@ pub(crate) fn default_scheduler_config(max_num_seqs: usize) -> anyhow::Result<Sc
     Ok(SchedulerConfig::DefaultScheduler {
         method: DefaultSchedulerMethod::Fixed(max_num_seqs.try_into()?),
     })
+}
+
+fn resolve_paged_attn(
+    config: Option<PagedAttentionConfig>,
+    disabled: bool,
+    device: DeviceLocation,
+) -> anyhow::Result<Option<PagedAttentionConfig>> {
+    if disabled || device == DeviceLocation::Cpu || !mistralrs_core::paged_attn_supported() {
+        return Ok(None);
+    }
+    config.map_or_else(
+        || {
+            PagedAttentionConfig::new(
+                None,
+                mistralrs_core::MemoryGpuConfig::Utilization(
+                    mistralrs_core::DEFAULT_PAGED_ATTENTION_MEMORY_UTILIZATION,
+                ),
+                mistralrs_core::PagedCacheType::Auto,
+            )
+            .map(Some)
+        },
+        |config| Ok(Some(config)),
+    )
 }
 
 fn paged_attn_with_serving_capacity(
@@ -434,12 +503,6 @@ pub(crate) async fn build_pipeline_from_text_loader(
 
     let mtp_runtime = MtpRuntimeConfig::new(builder.prefix_cache_n.unwrap_or(0));
 
-    builder.paged_attn_cfg = paged_attn_with_serving_capacity(
-        builder.paged_attn_cfg,
-        builder.max_num_seqs,
-        builder.prefix_cache_n.unwrap_or(0),
-    )?;
-
     let engine_config = build_engine_config(
         builder.throughput_logging,
         builder.search_embedding_model,
@@ -450,6 +513,17 @@ pub(crate) async fn build_pipeline_from_text_loader(
     );
     let mcp_client_config = builder.mcp_client_config.clone();
     let device = resolve_device(builder.force_cpu, builder.device.clone())?;
+    builder.paged_attn_cfg = resolve_paged_attn(
+        builder.paged_attn_cfg,
+        builder.no_paged_attn || builder.no_kv_cache,
+        device.location(),
+    )?;
+    builder.paged_attn_cfg = paged_attn_with_serving_capacity(
+        builder.paged_attn_cfg,
+        builder.max_num_seqs,
+        builder.prefix_cache_n.unwrap_or(0),
+    )?;
+
     builder.paged_attn_cfg = reserve_external_mtp_memory_with_runtime(
         builder.paged_attn_cfg,
         builder.mtp_config.as_ref(),
@@ -507,12 +581,6 @@ pub(crate) async fn build_pipeline_from_gguf_loader(
 
     let mtp_runtime = MtpRuntimeConfig::new(builder.prefix_cache_n.unwrap_or(0));
 
-    builder.paged_attn_cfg = paged_attn_with_serving_capacity(
-        builder.paged_attn_cfg,
-        builder.max_num_seqs,
-        builder.prefix_cache_n.unwrap_or(0),
-    )?;
-
     let engine_config = build_engine_config(
         builder.throughput_logging,
         builder.search_embedding_model,
@@ -522,6 +590,17 @@ pub(crate) async fn build_pipeline_from_gguf_loader(
         builder.prefix_cache_n,
     );
     let device = resolve_device(builder.force_cpu, builder.device.clone())?;
+    builder.paged_attn_cfg = resolve_paged_attn(
+        builder.paged_attn_cfg,
+        builder.no_paged_attn || builder.no_kv_cache,
+        device.location(),
+    )?;
+    builder.paged_attn_cfg = paged_attn_with_serving_capacity(
+        builder.paged_attn_cfg,
+        builder.max_num_seqs,
+        builder.prefix_cache_n.unwrap_or(0),
+    )?;
+
     builder.paged_attn_cfg = reserve_external_mtp_memory_with_runtime(
         builder.paged_attn_cfg,
         builder.mtp_config.as_ref(),
@@ -628,12 +707,6 @@ pub async fn build_text_pipeline(
 
     let mtp_runtime = MtpRuntimeConfig::new(builder.prefix_cache_n.unwrap_or(0));
 
-    builder.paged_attn_cfg = paged_attn_with_serving_capacity(
-        builder.paged_attn_cfg,
-        builder.max_num_seqs,
-        builder.prefix_cache_n.unwrap_or(0),
-    )?;
-
     let config = NormalSpecificConfig {
         topology: builder.topology.clone(),
         organization: builder.organization,
@@ -666,7 +739,18 @@ pub async fn build_text_pipeline(
     )
     .build(builder.loader_type.clone())?;
 
-    let device = resolve_device(builder.force_cpu, None)?;
+    let device = resolve_device(builder.force_cpu, builder.device.clone())?;
+    builder.paged_attn_cfg = resolve_paged_attn(
+        builder.paged_attn_cfg,
+        builder.no_paged_attn || builder.no_kv_cache,
+        device.location(),
+    )?;
+    builder.paged_attn_cfg = paged_attn_with_serving_capacity(
+        builder.paged_attn_cfg,
+        builder.max_num_seqs,
+        builder.prefix_cache_n.unwrap_or(0),
+    )?;
+
     builder.paged_attn_cfg = reserve_external_mtp_memory_with_runtime(
         builder.paged_attn_cfg,
         builder.mtp_config.as_ref(),
@@ -775,12 +859,6 @@ pub async fn build_multimodal_pipeline(
 
     let mtp_runtime = MtpRuntimeConfig::new(builder.prefix_cache_n.unwrap_or(0));
 
-    builder.paged_attn_cfg = paged_attn_with_serving_capacity(
-        builder.paged_attn_cfg,
-        builder.max_num_seqs,
-        builder.prefix_cache_n.unwrap_or(0),
-    )?;
-
     let config = MultimodalSpecificConfig {
         topology: builder.topology.clone(),
         write_uqff: builder.write_uqff.clone(),
@@ -814,7 +892,18 @@ pub async fn build_multimodal_pipeline(
     .with_encoder_cache_memory_bytes(builder.encoder_cache_memory_bytes)
     .build(builder.loader_type.clone());
 
-    let device = resolve_device(builder.force_cpu, None)?;
+    let device = resolve_device(builder.force_cpu, builder.device.clone())?;
+    builder.paged_attn_cfg = resolve_paged_attn(
+        builder.paged_attn_cfg,
+        builder.no_paged_attn,
+        device.location(),
+    )?;
+    builder.paged_attn_cfg = paged_attn_with_serving_capacity(
+        builder.paged_attn_cfg,
+        builder.max_num_seqs,
+        builder.prefix_cache_n.unwrap_or(0),
+    )?;
+
     builder.paged_attn_cfg = reserve_external_mtp_memory_with_runtime(
         builder.paged_attn_cfg,
         builder.mtp_config.as_ref(),
@@ -930,12 +1019,6 @@ pub async fn build_gguf_pipeline(
 
     let mtp_runtime = MtpRuntimeConfig::new(builder.prefix_cache_n.unwrap_or(0));
 
-    builder.paged_attn_cfg = paged_attn_with_serving_capacity(
-        builder.paged_attn_cfg,
-        builder.max_num_seqs,
-        builder.prefix_cache_n.unwrap_or(0),
-    )?;
-
     let config = GGUFSpecificConfig {
         topology: builder.topology.clone(),
         organization: builder.organization,
@@ -973,6 +1056,17 @@ pub async fn build_gguf_pipeline(
     let loader = loader_builder.build();
 
     let device = resolve_device(builder.force_cpu, builder.device.clone())?;
+    builder.paged_attn_cfg = resolve_paged_attn(
+        builder.paged_attn_cfg,
+        builder.no_paged_attn || builder.no_kv_cache,
+        device.location(),
+    )?;
+    builder.paged_attn_cfg = paged_attn_with_serving_capacity(
+        builder.paged_attn_cfg,
+        builder.max_num_seqs,
+        builder.prefix_cache_n.unwrap_or(0),
+    )?;
+
     builder.paged_attn_cfg = reserve_external_mtp_memory_with_runtime(
         builder.paged_attn_cfg,
         builder.mtp_config.as_ref(),
@@ -1350,12 +1444,6 @@ pub async fn build_auto_pipeline(
 
     let mtp_runtime = MtpRuntimeConfig::new(builder.prefix_cache_n.unwrap_or(0));
 
-    builder.paged_attn_cfg = paged_attn_with_serving_capacity(
-        builder.paged_attn_cfg,
-        builder.max_num_seqs,
-        builder.prefix_cache_n.unwrap_or(0),
-    )?;
-
     let normal_config = NormalSpecificConfig {
         topology: builder.topology.clone(),
         organization: builder.organization,
@@ -1422,6 +1510,17 @@ pub async fn build_auto_pipeline(
         .build();
 
     let device = resolve_device(builder.force_cpu, builder.device.clone())?;
+    builder.paged_attn_cfg = resolve_paged_attn(
+        builder.paged_attn_cfg,
+        builder.no_paged_attn || builder.no_kv_cache,
+        device.location(),
+    )?;
+    builder.paged_attn_cfg = paged_attn_with_serving_capacity(
+        builder.paged_attn_cfg,
+        builder.max_num_seqs,
+        builder.prefix_cache_n.unwrap_or(0),
+    )?;
+
     builder.paged_attn_cfg = reserve_external_mtp_memory_with_runtime(
         builder.paged_attn_cfg,
         builder.mtp_config.as_ref(),
@@ -1521,4 +1620,155 @@ pub async fn build_auto_pipeline(
     };
 
     Ok((pipeline, scheduler_config, add_model_config))
+}
+
+#[cfg(test)]
+mod paged_attention_policy_tests {
+    use super::*;
+    use mistralrs_core::{
+        MemoryGpuConfig, PagedCacheType, DEFAULT_PAGED_ATTENTION_MEMORY_UTILIZATION,
+    };
+
+    const TEST_CONTEXT: usize = 8192;
+    const TEST_DEVICE_ID: usize = 0;
+    const FIRST_MODEL_SEQS: usize = 1;
+    const SECOND_MODEL_SEQS: usize = 3;
+    const DISABLED_MODEL_SEQS: usize = 100;
+
+    fn explicit_config() -> anyhow::Result<PagedAttentionConfig> {
+        PagedAttentionConfig::new(
+            None,
+            MemoryGpuConfig::ContextSize(TEST_CONTEXT),
+            PagedCacheType::Auto,
+        )
+    }
+
+    #[test]
+    fn defaults_follow_resolved_device_and_preserve_explicit_budget() -> anyhow::Result<()> {
+        for device in [
+            DeviceLocation::Cuda {
+                gpu_id: TEST_DEVICE_ID,
+            },
+            DeviceLocation::Metal {
+                gpu_id: TEST_DEVICE_ID,
+            },
+        ] {
+            let default = resolve_paged_attn(None, false, device)?;
+            let explicit = resolve_paged_attn(Some(explicit_config()?), false, device)?;
+            if mistralrs_core::paged_attn_supported() {
+                assert!(
+                    matches!(default.unwrap().gpu_memory(), MemoryGpuConfig::Utilization(value)
+                    if value == DEFAULT_PAGED_ATTENTION_MEMORY_UTILIZATION)
+                );
+                assert!(matches!(
+                    explicit.unwrap().gpu_memory(),
+                    MemoryGpuConfig::ContextSize(TEST_CONTEXT)
+                ));
+            } else {
+                assert!(default.is_none());
+                assert!(explicit.is_none());
+            }
+            assert!(resolve_paged_attn(Some(explicit_config()?), true, device)?.is_none());
+        }
+        assert!(resolve_paged_attn(None, false, DeviceLocation::Cpu)?.is_none());
+        assert!(
+            resolve_paged_attn(Some(explicit_config()?), false, DeviceLocation::Cpu)?.is_none()
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn explicit_cpu_builders_do_not_request_paged_cache() -> anyhow::Result<()> {
+        let config = explicit_config()?;
+        let builders: Vec<AnyModelBuilder> = vec![
+            crate::TextModelBuilder::new("model")
+                .with_device(Device::Cpu)
+                .with_paged_attn(config)
+                .into(),
+            crate::ModelBuilder::new("model")
+                .with_device(Device::Cpu)
+                .with_paged_attn(config)
+                .into(),
+            crate::MultimodalModelBuilder::new("model")
+                .with_device(Device::Cpu)
+                .with_paged_attn(config)
+                .into(),
+            crate::GgufModelBuilder::new("model", vec!["model.gguf"])
+                .with_device(Device::Cpu)
+                .with_paged_attn(config)
+                .into(),
+        ];
+        for mut builder in builders {
+            builder.resolve_paged_attn()?;
+            assert!(builder.paged_attn_cfg().is_none());
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn builder_opt_out_and_explicit_config_follow_call_order() -> anyhow::Result<()> {
+        let config = explicit_config()?;
+        macro_rules! check_builder {
+            ($builder:expr) => {{
+                let disabled = $builder.with_paged_attn(config).without_paged_attn();
+                assert!(disabled.no_paged_attn);
+                assert!(disabled.paged_attn_cfg.is_none());
+                let enabled = disabled.with_paged_attn(config);
+                assert!(!enabled.no_paged_attn);
+                assert!(matches!(
+                    enabled.paged_attn_cfg.unwrap().gpu_memory(),
+                    MemoryGpuConfig::ContextSize(TEST_CONTEXT)
+                ));
+            }};
+        }
+        check_builder!(crate::TextModelBuilder::new("model"));
+        check_builder!(crate::ModelBuilder::new("model"));
+        check_builder!(crate::MultimodalModelBuilder::new("model"));
+        check_builder!(crate::GgufModelBuilder::new("model", vec!["model.gguf"]));
+        Ok(())
+    }
+
+    #[test]
+    fn automatic_multi_model_budgets_are_shared_before_loading() -> anyhow::Result<()> {
+        let device = DeviceLocation::Metal {
+            gpu_id: TEST_DEVICE_ID,
+        };
+        let default = resolve_paged_attn(None, false, device)?;
+        let plan = plan_paged_kv(
+            &[
+                PagedKvModelRequest {
+                    paged_attn: default,
+                    max_num_seqs: FIRST_MODEL_SEQS,
+                },
+                PagedKvModelRequest {
+                    paged_attn: default,
+                    max_num_seqs: SECOND_MODEL_SEQS,
+                },
+                PagedKvModelRequest {
+                    paged_attn: resolve_paged_attn(None, true, device)?,
+                    max_num_seqs: DISABLED_MODEL_SEQS,
+                },
+            ],
+            Default::default(),
+        )?;
+        assert!(plan.paged_attn[2].is_none());
+        for (config, weight) in plan
+            .paged_attn
+            .into_iter()
+            .take(2)
+            .zip([FIRST_MODEL_SEQS, SECOND_MODEL_SEQS])
+        {
+            let resolved = resolve_paged_attn(config, false, device)?;
+            if mistralrs_core::paged_attn_supported() {
+                let expected = DEFAULT_PAGED_ATTENTION_MEMORY_UTILIZATION * weight as f32
+                    / (FIRST_MODEL_SEQS + SECOND_MODEL_SEQS) as f32;
+                assert!(
+                    matches!(resolved.unwrap().gpu_memory(), MemoryGpuConfig::Utilization(value) if value == expected)
+                );
+            } else {
+                assert!(resolved.is_none());
+            }
+        }
+        Ok(())
+    }
 }

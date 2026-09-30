@@ -114,7 +114,7 @@ macro_rules! common_builder_methods {
             self
         }
 
-        /// Force usage of the CPU device. Do not use PagedAttention with this.
+        /// Force usage of the CPU device, which disables PagedAttention.
         pub fn with_force_cpu(mut self) -> Self {
             self.force_cpu = true;
             self
@@ -162,8 +162,7 @@ macro_rules! common_builder_methods {
             self
         }
 
-        /// Enable PagedAttention. If PagedAttention is not supported on this platform,
-        /// the configuration is silently ignored.
+        /// Override the default PagedAttention configuration; ignored on unsupported devices or models.
         ///
         /// Configure with a [`PagedAttentionConfig`] object, which can be created with
         /// sensible defaults via [`crate::PagedAttentionMetaBuilder`]:
@@ -177,9 +176,15 @@ macro_rules! common_builder_methods {
         /// # }
         /// ```
         pub fn with_paged_attn(mut self, paged_attn_cfg: PagedAttentionConfig) -> Self {
-            if paged_attn_supported() {
-                self.paged_attn_cfg = Some(paged_attn_cfg);
-            }
+            self.paged_attn_cfg = Some(paged_attn_cfg);
+            self.no_paged_attn = false;
+            self
+        }
+
+        /// Disable PagedAttention, which is enabled by default on supported CUDA and Metal devices.
+        pub fn without_paged_attn(mut self) -> Self {
+            self.paged_attn_cfg = None;
+            self.no_paged_attn = true;
             self
         }
 

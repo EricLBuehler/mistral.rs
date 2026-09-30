@@ -54,12 +54,14 @@ pub struct MultimodalModelBuilder {
 
     // Other things
     pub(crate) paged_attn_cfg: Option<PagedAttentionConfig>,
+    pub(crate) no_paged_attn: bool,
     pub(crate) max_num_seqs: usize,
     pub(crate) with_logging: bool,
     pub(crate) prefix_cache_n: Option<usize>,
 }
 
 impl MultimodalModelBuilder {
+    /// PagedAttention defaults to enabled on supported CUDA and Metal devices.
     /// A few defaults are applied here:
     /// - Token source is from the cache (.cache/huggingface/token)
     /// - Maximum number of sequences running is 32
@@ -91,6 +93,7 @@ impl MultimodalModelBuilder {
             jinja_explicit: None,
             throughput_logging: false,
             paged_attn_cfg: None,
+            no_paged_attn: false,
             hf_cache_path: None,
             search_embedding_model: None,
             search_callback: None,
