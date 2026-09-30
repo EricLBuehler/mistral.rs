@@ -1,0 +1,27 @@
+{
+  "complete": true,
+  "checks": {
+    "small_group_mmq": true,
+    "all_48_layers_cuda0": true,
+    "model_bf16": true,
+    "isq_q4k_sensitive_q6k": true,
+    "ple_q4": true,
+    "kv_513_bf16_blocks": true,
+    "kv_bf16": true,
+    "mtp_builtin_six": true,
+    "scheduler_8": true,
+    "graphs_34": true
+  },
+  "patterns": {
+    "small_group_mmq": "Using grouped GGUF MoE for small batches",
+    "all_48_layers_cuda0": "Layers 0-47: cuda\\[0\\]",
+    "model_bf16": "DType selected is BF16",
+    "isq_q4k_sensitive_q6k": "Quantizing model weights to q4k, with sensitive tensors using q6k",
+    "ple_q4": "PLE table resident in device memory format=Q4(?: |\\n)",
+    "kv_513_bf16_blocks": "block size 32 and 513 GPU blocks: available context length is 16384 tokens",
+    "kv_bf16": "PagedAttention KV cache type is BF16",
+    "mtp_builtin_six": "MTP assistant `built-in` with n_predict=6",
+    "scheduler_8": "max_num_seqs=8 max_num_batched_tokens=4096 max_prefill_chunk_tokens=512 max_decode_steps_before_prefill=8",
+    "graphs_34": "Captured 34 CUDA decode graphs through batch bucket 8"
+  }
+}

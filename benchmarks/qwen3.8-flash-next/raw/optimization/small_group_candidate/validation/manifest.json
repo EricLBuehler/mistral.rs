@@ -1,0 +1,137 @@
+{
+  "created_at": "2026-09-30T16:28:17.097449+00:00",
+  "scope": "Build, independent GPU tests, graph tests, memcheck, cargo check, Clippy, and format validation of the small-group MMQ serving candidate. Serving performance is measured separately. The intentionally interrupted unused-feature Clippy attempt is recorded; production-union core+CLI Clippy passed.",
+  "files": [
+    {
+      "path": "build_candidate.py",
+      "bytes": 5047,
+      "sha256": "ab7a16f671325abaf56d8c77a5bc91036ce51937b906fdefd5c0fb60bac5b41a"
+    },
+    {
+      "path": "cargo_check.log",
+      "bytes": 1265,
+      "sha256": "c80ea6b1bc21959e97c12e4a9072bce49840951410a66aca8c4bc89583fb56d1"
+    },
+    {
+      "path": "cli_release.log",
+      "bytes": 1265,
+      "sha256": "678569c38ad9485d49312098dbf18bc8a33e98bf2ef56308693add76c0577be9"
+    },
+    {
+      "path": "core_cli_clippy.log",
+      "bytes": 1265,
+      "sha256": "0537a676dbbc68794a5b66b37ed9a058dac0c022e759a905888add488ba1ef04"
+    },
+    {
+      "path": "core_clippy.log",
+      "bytes": 809,
+      "sha256": "fed05a576708565a8f1d93b1a99393e0dd86c90706e6d9644a4b36f6e00e97e2"
+    },
+    {
+      "path": "format.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "format_check.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "gpu_tests_build.log",
+      "bytes": 374556,
+      "sha256": "c598c54a5c757932460094254c278b7eb492be0cef86629feeb52ace9a0b1b91"
+    },
+    {
+      "path": "logging_regression.log",
+      "bytes": 662,
+      "sha256": "f918658475deb08ebd963518f814edcab8e2a5159048172684573587cadcb03a"
+    },
+    {
+      "path": "metadata.json",
+      "bytes": 118719,
+      "sha256": "faa46c2c30da73a6a357289ddd616d80f930abe7c77c6ce626239bfc24ac92a4"
+    },
+    {
+      "path": "packed_memcheck.log",
+      "bytes": 329,
+      "sha256": "9f9f371c655a9b0371e227ee2a09e4f1513763465bad366c6bd0b874152e3bdc"
+    },
+    {
+      "path": "packed_tests.log",
+      "bytes": 267,
+      "sha256": "91410d6188335df1cb22dc62ac24ffbcd328bbd810fcf18c24a2606e1954f893"
+    },
+    {
+      "path": "projection_memcheck.log",
+      "bytes": 601,
+      "sha256": "ea8675e8c68b808e852df7d367bb80af07ace13be5e95f6bfa418fd44754cefc"
+    },
+    {
+      "path": "projection_tests.log",
+      "bytes": 539,
+      "sha256": "3771c6aaf5325a874d4cebe6d59e9ab9e4fa748d4a4f7dbe230942aaf0ef4e69"
+    },
+    {
+      "path": "quant_clippy.log",
+      "bytes": 393,
+      "sha256": "71ec62e08e5ec81e4f80ae5bcedb21b364071f7c6027eeedbd307f6ecd4f5329"
+    },
+    {
+      "path": "resume_validation.py",
+      "bytes": 1940,
+      "sha256": "94d39d477a5fc16adf637c4e3d880af4e482c84ab6d47254de952391ec08ce01"
+    },
+    {
+      "path": "source.diff",
+      "bytes": 41777,
+      "sha256": "8be352eda1df21c920109745b5d57dba7331b5eb09d194cdd7fa05e77b751407"
+    },
+    {
+      "path": "sources/mistralrs-core/src/moe/experts/backends.rs",
+      "bytes": 72467,
+      "sha256": "09796ddff2e084eb361f66701e384557c4a8fe8ed9e57f399fb5fccb15058306"
+    },
+    {
+      "path": "sources/mistralrs-quant/kernels/mmq_gguf/mmq_gguf.cuh",
+      "bytes": 171127,
+      "sha256": "8b629533b0289ee0d67179530c5bd2ff9bd3248802fc7957d74b44343bd3bfa8"
+    },
+    {
+      "path": "sources/mistralrs-quant/src/cutile/mod.rs",
+      "bytes": 13312,
+      "sha256": "00508bf78fc031017d8f0e0943303d3e7b04188b1edf24ddc59a92e55ec0c713"
+    },
+    {
+      "path": "sources/mistralrs-quant/src/utils/log.rs",
+      "bytes": 2086,
+      "sha256": "1a5d63e7fe6b0407e0eb43926ea43cd488e247c8fcc58b9bec2685b1e3d9f7e1"
+    },
+    {
+      "path": "sources/mistralrs-quant/tests/cutile_gguf_moe_tests.rs",
+      "bytes": 12071,
+      "sha256": "c1d73d57f4bb4397882df2a63255e62b082486543779f31e0fa159d356a74d44"
+    },
+    {
+      "path": "sources/mistralrs-quant/tests/grouped_mmq_packed_cuda_tests.rs",
+      "bytes": 13508,
+      "sha256": "0186267c3f8a79ae362b7c81a135ed20cae133ca3a872995ab07a32ef5c657be"
+    },
+    {
+      "path": "sources/mistralrs-quant/tests/moe_dispatch_bench.rs",
+      "bytes": 42608,
+      "sha256": "7991b04caf998a1fc6419d6a8b269f12f0b0f5604fc040e0319ce78bbae00ad4"
+    },
+    {
+      "path": "sources/mistralrs-quant/tests/support/cutile_gguf_replay.rs",
+      "bytes": 17479,
+      "sha256": "feadd059f33a2b1a6e38b31ec8213cb3832d78048e6c9831d5e35fe5dc5be916"
+    },
+    {
+      "path": "sources/mistralrs-quant/tests/support/gguf_moe.rs",
+      "bytes": 30685,
+      "sha256": "f7c827d8706cd3afb4febb178ee17349cca8134de110f688cadbb603b6029311"
+    }
+  ],
+  "excluded": "Compiled executables, object files, libraries, and model weights; binary hashes retained in metadata."
+}

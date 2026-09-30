@@ -1,0 +1,10 @@
+   Compiling mistralrs-quant v0.9.4 (/home/ericbuehler/mistral.rs/mistralrs-quant)
+warning: mistralrs-paged-attn@0.9.4: Using 10 threads for compilation
+warning: mistralrs-paged-attn@0.9.4: Compiling 15 of 15 kernels
+warning: mistralrs-flash-attn@0.9.4: Using 10 threads for compilation
+warning: mistralrs-flash-attn@0.9.4: Using cached cutlass at /home/ericbuehler/.cudaforge/git/checkouts/cutlass-7127592069c2fe01
+warning: mistralrs-flash-attn@0.9.4: Compiling 53 of 53 kernels
+   Compiling mistralrs-core v0.9.4 (/home/ericbuehler/mistral.rs/mistralrs-core)
+warning: mistralrs-quant@0.9.4: Using 10 threads for compilation
+warning: mistralrs-quant@0.9.4: Using cached cutlass at /home/ericbuehler/.cudaforge/git/checkouts/cutlass-7127592069c2fe01
+warning: mistralrs-quant@0.9.4: Compiling 45 of 45 kernels

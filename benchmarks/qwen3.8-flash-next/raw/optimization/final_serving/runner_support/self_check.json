@@ -1,0 +1,14 @@
+{
+  "complete": true,
+  "checks": [
+    "Python syntax",
+    "Exact workload counts/settings and max-seqs 8",
+    "Override rejection and credential exclusion",
+    "Owned group termination and forced-kill accounting",
+    "Phase success, request failure, server exit, monitor exit, and timeout",
+    "Linux process identity, VmSwap and global swap parsing"
+  ],
+  "server_requests": 0,
+  "gpu_commands": 0,
+  "builds": 0
+}

@@ -1,0 +1,15 @@
+Whole-trial rates: mean +/- sample standard deviation across measured trials.
+
+| Label | Mode | C | Requests/trial | Trials | Aggregate tok/s | Per active request tok/s | Mean active | Mean latency (s) |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| isq_mtp_small_group_mmq | closed-loop | 1 | 8 | 5 | 53.8 +/- 1.4 | 53.8 +/- 1.4 | 1.00 +/- 0.00 | 2.381 +/- 0.063 |
+| isq_mtp_small_group_mmq | closed-loop | 6 | 24 | 5 | 119.9 +/- 0.7 | 20.7 +/- 0.1 | 5.78 +/- 0.04 | 6.170 +/- 0.040 |
+| isq_mtp_small_group_mmq | closed-loop | 8 | 24 | 5 | 131.9 +/- 0.7 | 17.1 +/- 0.1 | 7.71 +/- 0.01 | 7.485 +/- 0.037 |
+
+Secondary completion-boundary estimates count whole responses, not streaming token arrivals.
+
+| Label | Mode | C | Requests/trial | Completion-boundary estimate tok/s |
+| --- | --- | ---: | ---: | ---: |
+| isq_mtp_small_group_mmq | closed-loop | 1 | 8 | 53.2 +/- 1.7 |
+| isq_mtp_small_group_mmq | closed-loop | 6 | 24 | 140.7 +/- 2.1 |
+| isq_mtp_small_group_mmq | closed-loop | 8 | 24 | 180.4 +/- 4.3 |

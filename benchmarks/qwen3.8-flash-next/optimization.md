@@ -1,6 +1,28 @@
 # MoE kernel optimization
 
-This continues the [scaling investigation](scaling.md) using the exact captured Flash-Next layer-8 weights, inputs, and routes on GB10. These are warmed layer replays, not updated serving benchmarks. The existing serving results remain the baseline until a full-model rerun is recorded.
+This continues the [scaling investigation](scaling.md) on GB10. The full-model serving rerun below measures the adopted changes together. Later sections use warmed replays of exact captured Flash-Next layer-8 weights, inputs, and routes to distinguish kernel measurements from serving results.
+
+## Final serving rerun
+
+The September 30 rerun uses the same safetensors revision, Q4K ISQ, adaptive MTP, prompts, BF16 KV cache, 16,384-token context, and eight-sequence scheduler as the preceding serving baseline. All 48 layers remain on the GPU, with Q4 PLE storage, 513 KV blocks, and 34 CUDA graphs. Two warmups precede five measured trials; decode and concurrency requests generate 128 tokens. The binary SHA256 is `d2c85e943f4eafbfc2a9515339671f0fd3eb59e2684ad20dece0552ac855487d`.
+
+| Concurrency | Before, aggregate tok/s | After, aggregate tok/s | Change | Before, per-active tok/s | After, per-active tok/s |
+| ---: | ---: | ---: | ---: | ---: | ---: |
+| 1 | 54.86 +/- 1.16 | 53.78 +/- 1.43 | -1.98% | 54.87 +/- 1.16 | 53.78 +/- 1.43 |
+| 6 | 114.94 +/- 1.21 | 119.95 +/- 0.71 | +4.36% | 20.12 +/- 0.29 | 20.75 +/- 0.13 |
+| 8 | 126.56 +/- 1.96 | 131.94 +/- 0.71 | +4.25% | 16.64 +/- 0.17 | 17.10 +/- 0.08 |
+
+These closed-loop trials replenish completed requests and include the finite trial's startup and drain. C1 has eight requests per trial; C6/C8 have 24. Per-active throughput divides output tokens by summed request latency. Mean active requests are 5.78 at C6 and 7.71 at C8; mean request latencies are 6.17 and 7.48 seconds. Variability is sample standard deviation. C8/C1 aggregate scaling is 2.45x, versus 2.31x previously; part of that ratio increase comes from lower C1 throughput. The result remains far below 60 tok/s per request or 360 aggregate tok/s at C6.
+
+In the separate serving suite, four-request bursts improve from 89.98 to 95.16 tok/s (+5.76%) and eight-request bursts from 124.70 to 128.99 (+3.45%). The arithmetic mean of the eight ordinary single-prompt rates changes from 54.15 to 53.88 (-0.49%). Prefill 512/2048/8192 records 1288.83/1293.90/1255.58 tok/s, changes of -2.24%/-0.78%/-2.28%; synthetic 16-token-input decode records 48.41 tok/s (+2.99%). These measurements do not establish a single-request or prefill improvement. The earlier cross-engine GGUF comparison is unchanged; no new same-GGUF versus llama.cpp speedup is claimed.
+
+This is a staged comparison of masked activation loads, the scoped small-batch dispatch, and the intervening logging fix, not a randomized causal estimate of either optimization. Adaptive MTP behavior also changes. Across the combined C6/C8 command, acceptance rises from 66.4% to 74.5%, mean proposed depth falls from 5.18 to 3.94, and target graph/eager dispatches change from 720/1065 to 1400/557. Those counters include warmups and cannot separate C6 from C8; dispatch counts are not kernel-time coverage. Different routes, rounding, generated text, and adaptive depth can affect the measured workload.
+
+No system swap-out is recorded during the new benchmark phases. The C6/C8 command records 19.91 MiB of system swap-in versus 151.03 MiB previously, with model process `VmSwap` approximately 477 MiB at both boundaries in both stages. Reported CUDA free memory at startup also differs, approximately 8,106 MiB versus 5,039 MiB previously. These are not matched memory-pressure conditions. Global counters do not identify model page-ins or their timing impact. The server runs without a profiler and stops after all checks.
+
+Validation confirms matching settings, tokenizer, prompt hashes and token counts, complete trials, no reported prefix reuse, and finite validation logprobs. The 8,128-token repetitive-prompt chat returns the requested coherent sentence and stops normally. Eight concurrent mixed-context requests spanning 1,024 and 2,304 input tokens also pass. These checks do not establish model quality or exact MTP equivalence.
+
+[Validated comparison and all per-prompt results](raw/optimization/final_serving/comparison/comparison.md), [machine-readable summary](raw/optimization/final_serving/comparison/comparison.json), [run metadata](raw/optimization/final_serving/run/metadata.json), and the [archive manifest](raw/optimization/final_serving/manifest.json) retain the raw samples, commands, counters, memory records, source/build provenance, and validators. The historical baseline files remain intact.
 
 ## Skip padded activation-column loads
 
@@ -25,6 +47,14 @@ Nsight Compute on the same native 56-row sample records 48.1% fewer L2 read sect
 Independent regression tests cover empty experts, partial and exact column tiles, the last valid column, multiple tiles, and forced stream-K fixup. They exercise Q4K, Q4_1, Q6K, and Q2K with BF16, F16, and F32 inputs. The CPU oracle dequantizes identical weight bytes; power-of-two block scales and exact-Q8 activations isolate indexing from intermediate scale rounding. The original general-weight fixture failed identically under both kernels because native MMQ rounds intermediate scale products to FP16; that failed test and baseline reproduction are retained. The corrected fixture keeps the existing tolerance. CUDA graph replay tests cover changed inputs and routes; both regression binaries pass Compute Sanitizer with zero reported errors.
 
 [Final validation commands and hashes](raw/optimization/masked_y/masked_y_bounded/validation.json) record the release build, scoped CUDA cargo check and Clippy, formatting, test runs, and sanitizer results. The [archive manifest](raw/optimization/masked_y/manifest.json) hashes the raw text evidence and records the saved output tensor hashes.
+
+## Small verification batches
+
+The adopted dispatch selects existing grouped MMQ at 24-31 rows for the measured Flash-Next geometry on compute capability 12.1. Eligibility requires BF16, SiLU, 512 experts with top-10 routing, Q4K gate/up tensors shaped `[512,640,2560]`, Q4_1 down shaped `[512,2560,640]`, and multi-token queries. Biased projections, LoRA, statistics collection, and sharded experts retain their existing dispatch. Other hardware and model geometries are unchanged.
+
+The global 32-row threshold remains intact because it also contributes to speculative graph budgeting. The exception changes only eligible forwards. Five balanced 24-row subsets of captured C8 verification inputs previously favored existing MMQ over GEMV on every sample, with a 1.257x median paired ratio (range 1.191-1.503x). Median latencies were 2.024 and 2.612 ms. These are derived layer inputs, not naturally captured shorter-depth verification or serving measurements. [Samples and independent references](raw/scaling_investigation/real_routing/replay_sequence_query_prefix/summary.json) retain that distinction.
+
+Expanded regression coverage replays changed inputs and routes at 24, 28, and 32 rows after growing the shared workspace. The packed-MMQ and cuTile projection tests pass normally and under Compute Sanitizer with zero reported errors. The release CLI build, cargo check, scoped quant/core/CLI Clippy, and formatting pass. A separate logging regression verifies that repeated messages no longer append duplicate entries to the one-time log caches. [Validation commands, logs, sources, and binary hashes](raw/optimization/small_group_candidate/validation/metadata.json) identify the exact serving candidate. One lint attempt for a different core feature combination was intentionally stopped; the final core/CLI lint uses the production feature union and passes.
 
 ## Native GGUF cuTile prototype
 

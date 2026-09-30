@@ -1,0 +1,331 @@
+{
+  "complete": true,
+  "started": {
+    "utc": "2026-09-30T16:26:11.417108+00:00",
+    "monotonic": 156462.262288087
+  },
+  "env": {
+    "CUTILE_TILEIRAS_PATH": "/usr/local/cuda-13.2/bin/tileiras",
+    "CUDA_TOOLKIT_PATH": "/usr/local/cuda",
+    "LD_LIBRARY_PATH": "/usr/local/cuda/compat",
+    "CUDA_HOME": "/usr/local/cuda",
+    "PATH": "/home/ericbuehler/.nvm/versions/node/v24.11.0/lib/node_modules/@openai/codex/node_modules/@openai/codex-linux-arm64/vendor/aarch64-unknown-linux-musl/codex-path:/home/ericbuehler/.local/bin:/usr/local/cuda/bin:/opt/bin/:/home/ericbuehler/.codex/tmp/arg0/codex-arg0fq25DY:/home/ericbuehler/.nvm/versions/node/v24.11.0/lib/node_modules/@openai/codex/node_modules/@openai/codex-linux-arm64/vendor/aarch64-unknown-linux-musl/codex-path:/home/ericbuehler/mistral.rs/.venv/bin:/home/ericbuehler/.opencode/bin:/usr/local/cuda/bin:/home/ericbuehler/.nvm/versions/node/v24.11.0/bin:/home/ericbuehler/.vscode-server/cli/servers/Stable-2242ebbb54efeeb0129e08e919e7e8d43033cd83/server/bin/remote-cli:/home/ericbuehler/.cargo/bin:/home/ericbuehler/.local/bin:/usr/local/cuda/bin:/opt/bin/:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin",
+    "HF_HUB_OFFLINE": "1",
+    "RUST_LOG": "info"
+  },
+  "phases": [
+    {
+      "name": "serving",
+      "command": [
+        "/home/ericbuehler/mistral.rs/.venv/bin/python3",
+        "/home/ericbuehler/qwen4exp_work/moe_optimization_20260930/final_serving/optimized_final/scripts/bench_serving.py",
+        "--base-url",
+        "http://127.0.0.1:1234",
+        "--tokenizer",
+        "/home/ericbuehler/qwen4exp_work/moe_optimization_20260930/final_serving/optimized_final/checkpoint/tokenizer.json",
+        "--label",
+        "isq_mtp_small_group_mmq",
+        "--output",
+        "/home/ericbuehler/qwen4exp_work/moe_optimization_20260930/final_serving/optimized_final/serving.json",
+        "--iterations",
+        "5",
+        "--warmup",
+        "2",
+        "--max-tokens",
+        "128"
+      ],
+      "started": {
+        "utc": "2026-09-30T16:41:06.311259+00:00",
+        "monotonic": 157357.156436003
+      },
+      "complete": true,
+      "process_finished": {
+        "utc": "2026-09-30T16:46:46.488403+00:00",
+        "monotonic": 157697.333590662
+      },
+      "returncode": 0,
+      "finished": {
+        "utc": "2026-09-30T16:46:46.504106+00:00",
+        "monotonic": 157697.34928204
+      }
+    },
+    {
+      "name": "text",
+      "command": [
+        "/home/ericbuehler/mistral.rs/.venv/bin/python3",
+        "/home/ericbuehler/qwen4exp_work/moe_optimization_20260930/final_serving/optimized_final/scripts/text_smoke.py",
+        "/home/ericbuehler/qwen4exp_work/moe_optimization_20260930/final_serving/optimized_final/text.json",
+        "--base-url",
+        "http://127.0.0.1:1234"
+      ],
+      "started": {
+        "utc": "2026-09-30T16:46:46.517939+00:00",
+        "monotonic": 157697.363116062
+      },
+      "complete": true,
+      "process_finished": {
+        "utc": "2026-09-30T16:46:54.523275+00:00",
+        "monotonic": 157705.368477523
+      },
+      "returncode": 0,
+      "finished": {
+        "utc": "2026-09-30T16:46:54.542824+00:00",
+        "monotonic": 157705.387997452
+      }
+    },
+    {
+      "name": "c1",
+      "command": [
+        "/home/ericbuehler/mistral.rs/.venv/bin/python3",
+        "/home/ericbuehler/qwen4exp_work/moe_optimization_20260930/final_serving/optimized_final/scripts/bench_concurrency.py",
+        "--base-url",
+        "http://127.0.0.1:1234",
+        "--tokenizer",
+        "/home/ericbuehler/qwen4exp_work/moe_optimization_20260930/final_serving/optimized_final/checkpoint/tokenizer.json",
+        "--label",
+        "isq_mtp_small_group_mmq",
+        "--output",
+        "/home/ericbuehler/qwen4exp_work/moe_optimization_20260930/final_serving/optimized_final/concurrency.c1.json",
+        "--concurrencies",
+        "1",
+        "--requests",
+        "8",
+        "--modes",
+        "closed-loop",
+        "--warmup",
+        "2",
+        "--trials",
+        "5",
+        "--max-tokens",
+        "128"
+      ],
+      "started": {
+        "utc": "2026-09-30T16:46:54.549380+00:00",
+        "monotonic": 157705.394552853
+      },
+      "complete": true,
+      "process_finished": {
+        "utc": "2026-09-30T16:49:08.607688+00:00",
+        "monotonic": 157839.452882967
+      },
+      "returncode": 0,
+      "finished": {
+        "utc": "2026-09-30T16:49:08.615928+00:00",
+        "monotonic": 157839.461100665
+      }
+    },
+    {
+      "name": "c6_c8",
+      "command": [
+        "/home/ericbuehler/mistral.rs/.venv/bin/python3",
+        "/home/ericbuehler/qwen4exp_work/moe_optimization_20260930/final_serving/optimized_final/scripts/bench_concurrency.py",
+        "--base-url",
+        "http://127.0.0.1:1234",
+        "--tokenizer",
+        "/home/ericbuehler/qwen4exp_work/moe_optimization_20260930/final_serving/optimized_final/checkpoint/tokenizer.json",
+        "--label",
+        "isq_mtp_small_group_mmq",
+        "--output",
+        "/home/ericbuehler/qwen4exp_work/moe_optimization_20260930/final_serving/optimized_final/concurrency.c6_c8.json",
+        "--concurrencies",
+        "6",
+        "8",
+        "--requests",
+        "24",
+        "--modes",
+        "closed-loop",
+        "--warmup",
+        "2",
+        "--trials",
+        "5",
+        "--max-tokens",
+        "128"
+      ],
+      "started": {
+        "utc": "2026-09-30T16:49:08.624176+00:00",
+        "monotonic": 157839.469348587
+      },
+      "complete": true,
+      "process_finished": {
+        "utc": "2026-09-30T16:54:50.773768+00:00",
+        "monotonic": 158181.618954093
+      },
+      "returncode": 0,
+      "finished": {
+        "utc": "2026-09-30T16:54:50.788068+00:00",
+        "monotonic": 158181.633244611
+      }
+    },
+    {
+      "name": "mixed_context",
+      "command": [
+        "/home/ericbuehler/mistral.rs/.venv/bin/python3",
+        "/home/ericbuehler/qwen4exp_work/moe_optimization_20260930/final_serving/optimized_final/scripts/mixed_context_smoke.py",
+        "/home/ericbuehler/qwen4exp_work/moe_optimization_20260930/final_serving/optimized_final/mixed_context.json",
+        "--base-url",
+        "http://127.0.0.1:1234",
+        "--tokenizer",
+        "/home/ericbuehler/qwen4exp_work/moe_optimization_20260930/final_serving/optimized_final/checkpoint/tokenizer.json"
+      ],
+      "started": {
+        "utc": "2026-09-30T16:54:50.800895+00:00",
+        "monotonic": 158181.646071224
+      },
+      "complete": true,
+      "process_finished": {
+        "utc": "2026-09-30T16:55:11.811129+00:00",
+        "monotonic": 158202.656331268
+      },
+      "returncode": 0,
+      "finished": {
+        "utc": "2026-09-30T16:55:11.834700+00:00",
+        "monotonic": 158202.679875552
+      }
+    }
+  ],
+  "label": "isq_mtp_small_group_mmq",
+  "profiled": false,
+  "counter_scope": "Whole command including warmups; global swap counters do not identify model paging or timing impact.",
+  "isolation_scope": "Boundary process snapshots, not a continuous monitor of all processes.",
+  "files": [
+    {
+      "source": "/home/ericbuehler/mistral.rs/benchmarks/qwen3.8-flash-next/bench_serving.py",
+      "copy": "scripts/bench_serving.py",
+      "sha256": "a16b5815b8744def761174e396de92e41ecd499afae712255721c20a33a79705"
+    },
+    {
+      "source": "/home/ericbuehler/mistral.rs/benchmarks/qwen3.8-flash-next/bench_concurrency.py",
+      "copy": "scripts/bench_concurrency.py",
+      "sha256": "9f664f3ff278f0f16b24e655477486e93b91aec41bf473510e13f449ab1dbbc3"
+    },
+    {
+      "source": "/home/ericbuehler/mistral.rs/benchmarks/qwen3.8-flash-next/summarize_concurrency.py",
+      "copy": "scripts/summarize_concurrency.py",
+      "sha256": "1ed661d68016937619f7f94b35f6801fed581219685635916e6312d1a0c42d91"
+    },
+    {
+      "source": "/home/ericbuehler/mistral.rs/benchmarks/qwen3.8-flash-next/text_smoke.py",
+      "copy": "scripts/text_smoke.py",
+      "sha256": "8d3a86a6e830ff3842d969bd1d6a144ba251256f042b78b16acc808e9679b355"
+    },
+    {
+      "source": "/home/ericbuehler/mistral.rs/benchmarks/qwen3.8-flash-next/mixed_context_smoke.py",
+      "copy": "scripts/mixed_context_smoke.py",
+      "sha256": "bc899ef772db40d0edb3a549d7700c92bf8e5867adb861e80e1ac29a0ab5e25e"
+    },
+    {
+      "source": "/home/ericbuehler/qwen4exp_work/moe_optimization_20260930/final_serving/run_final.py",
+      "copy": "scripts/run_final.py",
+      "sha256": "520dae846661e2690f6dd99831108ce9a9b74cbc38fc66e0e54f03a1ed624ba2"
+    },
+    {
+      "source": "/home/ericbuehler/qwen4exp_work/moe_optimization_20260930/final_serving/observe.py",
+      "copy": "scripts/observe.py",
+      "sha256": "8b7e8bc4206e463bce8e01bc2f55f8a3d38d283248b932d1a05847cbda385233"
+    },
+    {
+      "source": "/home/ericbuehler/qwen4exp_work/tuner_exploration_20260930/run_server.py",
+      "copy": "scripts/ancestor_run_server.py",
+      "sha256": "b6b734836f7791b1835e9f50684fd57e711263d4c8dc60b002c63df4f5d2bfd7"
+    },
+    {
+      "source": "/home/ericbuehler/.cache/huggingface/hub/models--Qwen--Qwen3.8-Flash-Next/snapshots/de4b8e4d43b917e7706784d8bb445c9af86a3540/config.json",
+      "copy": "checkpoint/config.json",
+      "sha256": "889658f2508e8c61d409b02e70e0d78d8d4452ec65aaafbe129805d213d2e74b"
+    },
+    {
+      "source": "/home/ericbuehler/.cache/huggingface/hub/models--Qwen--Qwen3.8-Flash-Next/snapshots/de4b8e4d43b917e7706784d8bb445c9af86a3540/tokenizer.json",
+      "copy": "checkpoint/tokenizer.json",
+      "sha256": "0997f410c57a1f4e53b09e4be8f4a172d90edd9564368fb0847030937229b9f3"
+    },
+    {
+      "source": "/home/ericbuehler/.cache/huggingface/hub/models--Qwen--Qwen3.8-Flash-Next/snapshots/de4b8e4d43b917e7706784d8bb445c9af86a3540/tokenizer_config.json",
+      "copy": "checkpoint/tokenizer_config.json",
+      "sha256": "b11349aafa7cdc6a320767cf7ceb29ed82f7eda5d65e8e0819e76f0ce947bf27"
+    },
+    {
+      "source": "/home/ericbuehler/.cache/huggingface/hub/models--Qwen--Qwen3.8-Flash-Next/snapshots/de4b8e4d43b917e7706784d8bb445c9af86a3540/generation_config.json",
+      "copy": "checkpoint/generation_config.json",
+      "sha256": "e70c136c1b78ddc1fb0905bac8e733a4dc448d4f852a5dd75143fffc70be550e"
+    },
+    {
+      "source": "/home/ericbuehler/.cache/huggingface/hub/models--Qwen--Qwen3.8-Flash-Next/snapshots/de4b8e4d43b917e7706784d8bb445c9af86a3540/model.safetensors.index.json",
+      "copy": "checkpoint/model.safetensors.index.json",
+      "sha256": "99e815241ef03325536b0aaa4441deea45174c17fae31e10f0bb456410c590de"
+    },
+    {
+      "source": "/home/ericbuehler/qwen4exp_work/moe_optimization_20260930/final_serving/build/metadata.json",
+      "copy": "candidate_build_metadata.json",
+      "sha256": "faa46c2c30da73a6a357289ddd616d80f930abe7c77c6ce626239bfc24ac92a4"
+    }
+  ],
+  "checkpoint": "/home/ericbuehler/.cache/huggingface/hub/models--Qwen--Qwen3.8-Flash-Next/snapshots/de4b8e4d43b917e7706784d8bb445c9af86a3540",
+  "git_head": "f5f225aab31b603213118d79618fa8fc5c4f0745",
+  "git_status": "M mistralrs-core/src/moe/experts/backends.rs\n M mistralrs-quant/tests/grouped_mmq_packed_cuda_tests.rs",
+  "source_diff_sha256": "635075a2aa991999d79f65d30565054fb5e4f25fa1e9d7b5794ad745f5597320",
+  "source_manifest_sha256": "e9aa635fd23289f9d630141ab37d25e578f3b8e68afaec28ab580e42235fa5db",
+  "source_provenance_limit": "Source snapshot is taken before launch; executable identity is its SHA256. Only supplied build metadata links the executable to a build.",
+  "binary": "/home/ericbuehler/qwen4exp_work/moe_optimization_20260930/final_serving/build/mistralrs",
+  "binary_bytes": 609921328,
+  "binary_sha256": "d2c85e943f4eafbfc2a9515339671f0fd3eb59e2684ad20dece0552ac855487d",
+  "binary_version": "mistralrs 0.9.4",
+  "python_version": "3.12.3 (main, Mar 23 2026, 19:04:32) [GCC 13.3.0]",
+  "gpu": "name, uuid, driver_version, memory.total [MiB]\nNVIDIA GB10, GPU-0341400a-e8b8-eae5-b907-6b7ce08225b5, 580.126.09, [N/A]",
+  "command": [
+    "/home/ericbuehler/qwen4exp_work/moe_optimization_20260930/final_serving/build/mistralrs",
+    "serve",
+    "--no-ui",
+    "-p",
+    "1234",
+    "--max-model-len",
+    "16384",
+    "--max-seqs",
+    "8",
+    "--prefix-cache-n",
+    "0",
+    "-m",
+    "/home/ericbuehler/.cache/huggingface/hub/models--Qwen--Qwen3.8-Flash-Next/snapshots/de4b8e4d43b917e7706784d8bb445c9af86a3540",
+    "--isq",
+    "q4k",
+    "--mtp"
+  ],
+  "model_pid": 2444677,
+  "startup_seconds": 894.3606281889952,
+  "ready": {
+    "utc": "2026-09-30T16:41:06.254283+00:00",
+    "monotonic": 157357.099466139
+  },
+  "summary_command": [
+    "/home/ericbuehler/mistral.rs/.venv/bin/python3",
+    "/home/ericbuehler/qwen4exp_work/moe_optimization_20260930/final_serving/optimized_final/scripts/summarize_concurrency.py",
+    "/home/ericbuehler/qwen4exp_work/moe_optimization_20260930/final_serving/optimized_final/concurrency.c1.json",
+    "/home/ericbuehler/qwen4exp_work/moe_optimization_20260930/final_serving/optimized_final/concurrency.c6_c8.json",
+    "--output",
+    "/home/ericbuehler/qwen4exp_work/moe_optimization_20260930/final_serving/optimized_final/concurrency.summary.json"
+  ],
+  "measurements_finished": {
+    "utc": "2026-09-30T16:55:11.932375+00:00",
+    "monotonic": 158202.77755174
+  },
+  "server_shutdown": {
+    "pid": 2444677,
+    "returncode": -15,
+    "forced_kill": false,
+    "utc": "2026-09-30T16:55:13.905243+00:00",
+    "monotonic": 158204.750432233
+  },
+  "gpu_monitor_shutdown": {
+    "pid": 2444676,
+    "returncode": 0,
+    "forced_kill": false,
+    "utc": "2026-09-30T16:55:14.625927+00:00",
+    "monotonic": 158205.471116366
+  },
+  "monitor_errors": [],
+  "finished": {
+    "utc": "2026-09-30T16:55:14.626522+00:00",
+    "monotonic": 158205.471697179
+  },
+  "binary_sha256_after": "d2c85e943f4eafbfc2a9515339671f0fd3eb59e2684ad20dece0552ac855487d",
+  "git_head_after": "f5f225aab31b603213118d79618fa8fc5c4f0745"
+}
