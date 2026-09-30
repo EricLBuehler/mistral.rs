@@ -1005,5 +1005,9 @@ fn flash_next_real_routing_oracle() -> Result<()> {
 }
 
 #[cfg(feature = "cutile")]
+#[path = "support/gguf_moe.rs"]
+mod gguf_moe;
+
+#[cfg(feature = "cutile")]
 #[path = "support/cutile_gguf_replay.rs"]
 mod cutile_gguf_replay;

@@ -1,10 +1,7 @@
+use super::gguf_moe::{gguf_moe_projection, GgufMoeConfig, GgufMoeProjection};
 use super::*;
 use candle_core::cuda::cudarc::driver::{sys, CudaGraph};
-use mistralrs_quant::{
-    cutile::gguf_moe::{gguf_moe_projection, GgufMoeConfig, GgufMoeProjection},
-    fused_glu,
-    moe::cuda::moe_align,
-};
+use mistralrs_quant::{fused_glu, moe::cuda::moe_align};
 
 const TILE_ENV: &str = "MISTRALRS_GGUF_MOE_TILE";
 const SAMPLE_ENV: &str = "MISTRALRS_MOE_REPLAY_SAMPLE";

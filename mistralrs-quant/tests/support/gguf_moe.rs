@@ -3,7 +3,7 @@
     reason = "cuTile kernel arguments follow the device ABI"
 )]
 
-use candle_core::cuda::cudarc::driver::CudaSlice;
+use candle_core::cuda::cudarc::driver::{CudaSlice, DevicePtr, DevicePtrMut};
 use candle_core::quantized::{GgmlDType, QTensor};
 use candle_core::{CudaStorage, DType, Result, Storage, Tensor};
 use cutile::cuda_async::device_buffer::DevicePointer;
@@ -12,12 +12,28 @@ use cutile::cuda_core::sys::CUdeviceptr;
 use cutile::tile_kernel::TileKernel;
 use half::{bf16, f16};
 
-use super::{catch_cutile_panic, context};
-use crate::utils::{slice_ptr_mut_on_stream, slice_ptr_on_stream};
+use mistralrs_quant::cutile::context;
 
 const DEFAULT_BM: i32 = 16;
 const DEFAULT_BN: i32 = 64;
 const DEFAULT_BK: i32 = 128;
+
+fn catch_cutile_panic<T>(
+    operation: &str,
+    f: impl FnOnce() -> candle_core::Result<T>,
+) -> candle_core::Result<T> {
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)) {
+        Ok(result) => result,
+        Err(payload) => {
+            let message = payload
+                .downcast_ref::<String>()
+                .map(String::as_str)
+                .or_else(|| payload.downcast_ref::<&str>().copied())
+                .unwrap_or("non-string panic");
+            candle_core::bail!("cuTile {operation} panicked: {message}")
+        }
+    }
+}
 
 #[cutile::module]
 mod kernels {
@@ -27,22 +43,23 @@ mod kernels {
     const Q4K_BYTES: i32 = 144;
     const Q4_1_VALUES: i32 = 32;
     const Q4_1_BYTES: i32 = 20;
+    const Q4K_SCALE_GROUPS: i32 = 8;
+    const Q4K_LOW_SCALE_GROUPS: i32 = 4;
+    const Q4K_GROUP_PAIR_VALUES: i32 = 64;
     const Q4K_QUANTS_OFFSET: i32 = 16;
     const QUANT_HEADERS_BYTES: i32 = 4;
+    const Q4_1_HALF_VALUES: i32 = 16;
     const NIBBLE_MASK: i32 = 15;
     const NIBBLE_BITS: i32 = 4;
     const SCALE_MASK: i32 = 63;
     const SCALE_BITS: i32 = 6;
-    const Q4K_GROUP_VALUES: i32 = 32;
-    const Q4K_GROUP_PAIR_VALUES: i32 = 64;
-    const Q4K_LOW_SCALE_GROUPS: i32 = 4;
-    const Q4_1_NIBBLE_VALUES: i32 = 16;
 
     #[cutile::entry(unchecked_accesses = true)]
     unsafe fn projection<
         const BM: i32,
         const BN: i32,
         const BK: i32,
+        const GB: i32,
         const FORMAT: i32,
         const TOP_K: i32,
     >(
@@ -134,7 +151,6 @@ mod kernels {
             let n_size64: Tile<i64, { [BN] }> = exti(broadcast_scalar(n_size, const_shape![BN]));
             let weight_row: Tile<i64, { [BN] }> = weight_row + expert64 * n_size64;
             let block_values = if FORMAT == 0 { Q4K_VALUES } else { Q4_1_VALUES };
-            let block_bytes = if FORMAT == 0 { Q4K_BYTES } else { Q4_1_BYTES };
             let weight_stride: Tile<i64, { [BN] }> =
                 exti(broadcast_scalar(k_size / block_values, const_shape![BN]));
             let weight_base: Tile<i64, { [BN] }> = weight_row * weight_stride;
@@ -178,29 +194,41 @@ mod kernels {
                     let a_zero: Tile<bf16, { [BM, BK] }> =
                         constant(bf16::ZERO, const_shape![BM, BK]);
                     let a: Tile<bf16, { [BM, BK] }> = select(a_mask, a, a_zero);
-                    let block: Tile<i32, { [BK] }> =
-                        safe_k / broadcast_scalar(block_values, const_shape![BK]);
-                    let block: Tile<i64, { [BK] }> = exti(block);
-                    let bytes_per_block: Tile<i64, { [BN, BK] }> =
-                        exti(broadcast_scalar(block_bytes, const_shape![BN, BK]));
-                    let byte_base: Tile<i64, { [BN, BK] }> = (weight_base
+                    let groups: Tile<i32, { [GB] }> =
+                        iota(const_shape![GB]) + broadcast_scalar(kt * GB, const_shape![GB]);
+                    let group_count: Tile<i32, { [GB] }> =
+                        broadcast_scalar(k_size / Q4_1_VALUES, const_shape![GB]);
+                    let valid_groups: Tile<bool, { [GB] }> = lt_tile(groups, group_count);
+                    let groups: Tile<i32, { [GB] }> = select(
+                        valid_groups,
+                        groups,
+                        broadcast_scalar(0i32, const_shape![GB]),
+                    );
+                    let blocks: Tile<i32, { [GB] }> = if FORMAT == 0 {
+                        groups / broadcast_scalar(Q4K_SCALE_GROUPS, const_shape![GB])
+                    } else {
+                        groups
+                    };
+                    let blocks: Tile<i64, { [GB] }> = exti(blocks);
+                    let bytes_per_block = if FORMAT == 0 { Q4K_BYTES } else { Q4_1_BYTES };
+                    let block_bytes: Tile<i64, { [BN, GB] }> =
+                        exti(broadcast_scalar(bytes_per_block, const_shape![BN, GB]));
+                    let byte_base: Tile<i64, { [BN, GB] }> = (weight_base
                         .reshape(const_shape![BN, 1])
-                        .broadcast(const_shape![BN, BK])
-                        + block
-                            .reshape(const_shape![1, BK])
-                            .broadcast(const_shape![BN, BK]))
-                        * bytes_per_block;
-                    let local: Tile<i32, { [BK] }> =
-                        safe_k & broadcast_scalar(block_values - 1, const_shape![BK]);
-                    let half_base: Tile<i64, { [BN, BK] }> =
-                        byte_base / broadcast_scalar(2i64, const_shape![BN, BK]);
+                        .broadcast(const_shape![BN, GB])
+                        + blocks
+                            .reshape(const_shape![1, GB])
+                            .broadcast(const_shape![BN, GB]))
+                        * block_bytes;
+                    let half_base: Tile<i64, { [BN, GB] }> =
+                        byte_base / broadcast_scalar(2i64, const_shape![BN, GB]);
                     let d_ptr: PointerTile<*mut f16, { [] }> = pointer_to_tile(weight_halves);
                     let d_ptr: PointerTile<*mut f16, { [1, 1] }> =
                         d_ptr.reshape(const_shape![1, 1]);
-                    let d_ptr: PointerTile<*mut f16, { [BN, BK] }> =
-                        d_ptr.broadcast(const_shape![BN, BK]);
+                    let d_ptr: PointerTile<*mut f16, { [BN, GB] }> =
+                        d_ptr.broadcast(const_shape![BN, GB]);
                     let d_ptr = d_ptr.offset_tile(half_base);
-                    let (d, _): (Tile<f16, { [BN, BK] }>, Token) = load_ptr_tko(
+                    let (d, _): (Tile<f16, { [BN, GB] }>, Token) = load_ptr_tko(
                         d_ptr,
                         ordering::Weak,
                         None::<scope::TileBlock>,
@@ -212,11 +240,11 @@ mod kernels {
                     let m_ptr: PointerTile<*mut f16, { [] }> = pointer_to_tile(weight_halves);
                     let m_ptr: PointerTile<*mut f16, { [1, 1] }> =
                         m_ptr.reshape(const_shape![1, 1]);
-                    let m_ptr: PointerTile<*mut f16, { [BN, BK] }> =
-                        m_ptr.broadcast(const_shape![BN, BK]);
+                    let m_ptr: PointerTile<*mut f16, { [BN, GB] }> =
+                        m_ptr.broadcast(const_shape![BN, GB]);
                     let m_ptr =
-                        m_ptr.offset_tile(half_base + broadcast_scalar(1i64, const_shape![BN, BK]));
-                    let (m, _): (Tile<f16, { [BN, BK] }>, Token) = load_ptr_tko(
+                        m_ptr.offset_tile(half_base + broadcast_scalar(1i64, const_shape![BN, GB]));
+                    let (m, _): (Tile<f16, { [BN, GB] }>, Token) = load_ptr_tko(
                         m_ptr,
                         ordering::Weak,
                         None::<scope::TileBlock>,
@@ -225,29 +253,165 @@ mod kernels {
                         None,
                         Latency::<0>,
                     );
-                    let d: Tile<f32, { [BN, BK] }> = convert_tile(d);
-                    let m: Tile<f32, { [BN, BK] }> = convert_tile(m);
-                    let q_offset: Tile<i32, { [BK] }> = if FORMAT == 0 {
+                    let d: Tile<f32, { [BN, GB] }> = convert_tile(d);
+                    let m: Tile<f32, { [BN, GB] }> = convert_tile(m);
+                    let local_group: Tile<i32, { [GB] }> =
+                        groups & broadcast_scalar(Q4K_SCALE_GROUPS - 1, const_shape![GB]);
+                    let scale: Tile<f32, { [BN, GB] }> = if FORMAT == 0 {
+                        let lower: Tile<bool, { [GB] }> = lt_tile(
+                            local_group,
+                            broadcast_scalar(Q4K_LOW_SCALE_GROUPS, const_shape![GB]),
+                        );
+                        let index: Tile<i32, { [GB] }> = local_group
+                            & broadcast_scalar(Q4K_LOW_SCALE_GROUPS - 1, const_shape![GB]);
+                        let index: Tile<i64, { [GB] }> = exti(index);
+                        let offsets: Tile<i64, { [BN, GB] }> = byte_base
+                            + broadcast_scalar(4i64, const_shape![BN, GB])
+                            + index
+                                .reshape(const_shape![1, GB])
+                                .broadcast(const_shape![BN, GB]);
+                        let scale_low_ptr: PointerTile<*mut u8, { [] }> =
+                            pointer_to_tile(weight_bytes);
+                        let scale_low_ptr: PointerTile<*mut u8, { [1, 1] }> =
+                            scale_low_ptr.reshape(const_shape![1, 1]);
+                        let scale_low_ptr: PointerTile<*mut u8, { [BN, GB] }> =
+                            scale_low_ptr.broadcast(const_shape![BN, GB]);
+                        let scale_low_ptr = scale_low_ptr.offset_tile(offsets);
+                        let (scale_low, _): (Tile<u8, { [BN, GB] }>, Token) = load_ptr_tko(
+                            scale_low_ptr,
+                            ordering::Weak,
+                            None::<scope::TileBlock>,
+                            None,
+                            None,
+                            None,
+                            Latency::<0>,
+                        );
+                        let scale_high_ptr: PointerTile<*mut u8, { [] }> =
+                            pointer_to_tile(weight_bytes);
+                        let scale_high_ptr: PointerTile<*mut u8, { [1, 1] }> =
+                            scale_high_ptr.reshape(const_shape![1, 1]);
+                        let scale_high_ptr: PointerTile<*mut u8, { [BN, GB] }> =
+                            scale_high_ptr.broadcast(const_shape![BN, GB]);
+                        let scale_high_ptr = scale_high_ptr
+                            .offset_tile(offsets + broadcast_scalar(8i64, const_shape![BN, GB]));
+                        let (scale_high, _): (Tile<u8, { [BN, GB] }>, Token) = load_ptr_tko(
+                            scale_high_ptr,
+                            ordering::Weak,
+                            None::<scope::TileBlock>,
+                            None,
+                            None,
+                            None,
+                            Latency::<0>,
+                        );
+                        let scale_low: Tile<i32, { [BN, GB] }> = exti(scale_low);
+                        let scale_high: Tile<i32, { [BN, GB] }> = exti(scale_high);
+                        let lower: Tile<bool, { [BN, GB] }> = lower
+                            .reshape(const_shape![1, GB])
+                            .broadcast(const_shape![BN, GB]);
+                        let scale: Tile<i32, { [BN, GB] }> = select(
+                            lower,
+                            scale_low & broadcast_scalar(SCALE_MASK, const_shape![BN, GB]),
+                            (scale_high & broadcast_scalar(NIBBLE_MASK, const_shape![BN, GB]))
+                                | ((scale_low
+                                    >> broadcast_scalar(SCALE_BITS, const_shape![BN, GB]))
+                                    << broadcast_scalar(NIBBLE_BITS, const_shape![BN, GB])),
+                        );
+                        let scale: Tile<f32, { [BN, GB] }> = convert_tile(scale);
+                        d * scale
+                    } else {
+                        d
+                    };
+                    let bias: Tile<f32, { [BN, GB] }> = if FORMAT == 0 {
+                        let lower: Tile<bool, { [GB] }> = lt_tile(
+                            local_group,
+                            broadcast_scalar(Q4K_LOW_SCALE_GROUPS, const_shape![GB]),
+                        );
+                        let index: Tile<i32, { [GB] }> = local_group
+                            & broadcast_scalar(Q4K_LOW_SCALE_GROUPS - 1, const_shape![GB]);
+                        let index: Tile<i64, { [GB] }> = exti(index);
+                        let offsets: Tile<i64, { [BN, GB] }> = byte_base
+                            + broadcast_scalar(8i64, const_shape![BN, GB])
+                            + index
+                                .reshape(const_shape![1, GB])
+                                .broadcast(const_shape![BN, GB]);
+                        let min_low_ptr: PointerTile<*mut u8, { [] }> =
+                            pointer_to_tile(weight_bytes);
+                        let min_low_ptr: PointerTile<*mut u8, { [1, 1] }> =
+                            min_low_ptr.reshape(const_shape![1, 1]);
+                        let min_low_ptr: PointerTile<*mut u8, { [BN, GB] }> =
+                            min_low_ptr.broadcast(const_shape![BN, GB]);
+                        let min_low_ptr = min_low_ptr.offset_tile(offsets);
+                        let (min_low, _): (Tile<u8, { [BN, GB] }>, Token) = load_ptr_tko(
+                            min_low_ptr,
+                            ordering::Weak,
+                            None::<scope::TileBlock>,
+                            None,
+                            None,
+                            None,
+                            Latency::<0>,
+                        );
+                        let min_high_ptr: PointerTile<*mut u8, { [] }> =
+                            pointer_to_tile(weight_bytes);
+                        let min_high_ptr: PointerTile<*mut u8, { [1, 1] }> =
+                            min_high_ptr.reshape(const_shape![1, 1]);
+                        let min_high_ptr: PointerTile<*mut u8, { [BN, GB] }> =
+                            min_high_ptr.broadcast(const_shape![BN, GB]);
+                        let min_high_ptr = min_high_ptr
+                            .offset_tile(offsets + broadcast_scalar(4i64, const_shape![BN, GB]));
+                        let (min_high, _): (Tile<u8, { [BN, GB] }>, Token) = load_ptr_tko(
+                            min_high_ptr,
+                            ordering::Weak,
+                            None::<scope::TileBlock>,
+                            None,
+                            None,
+                            None,
+                            Latency::<0>,
+                        );
+                        let min_low: Tile<i32, { [BN, GB] }> = exti(min_low);
+                        let min_high: Tile<i32, { [BN, GB] }> = exti(min_high);
+                        let lower: Tile<bool, { [BN, GB] }> = lower
+                            .reshape(const_shape![1, GB])
+                            .broadcast(const_shape![BN, GB]);
+                        let minimum: Tile<i32, { [BN, GB] }> = select(
+                            lower,
+                            min_low & broadcast_scalar(SCALE_MASK, const_shape![BN, GB]),
+                            (min_high >> broadcast_scalar(NIBBLE_BITS, const_shape![BN, GB]))
+                                | ((min_low >> broadcast_scalar(SCALE_BITS, const_shape![BN, GB]))
+                                    << broadcast_scalar(NIBBLE_BITS, const_shape![BN, GB])),
+                        );
+                        let minimum: Tile<f32, { [BN, GB] }> = convert_tile(minimum);
+                        m * minimum
+                    } else {
+                        m
+                    };
+                    let local: Tile<i32, { [BK] }> =
+                        safe_k & broadcast_scalar(block_values - 1, const_shape![BK]);
+                    let quant_offset: Tile<i32, { [BK] }> = if FORMAT == 0 {
                         broadcast_scalar(Q4K_QUANTS_OFFSET, const_shape![BK])
                             + (local / broadcast_scalar(Q4K_GROUP_PAIR_VALUES, const_shape![BK]))
-                                * broadcast_scalar(Q4K_GROUP_VALUES, const_shape![BK])
-                            + (local & broadcast_scalar(Q4K_GROUP_VALUES - 1, const_shape![BK]))
+                                * broadcast_scalar(Q4_1_VALUES, const_shape![BK])
+                            + (local & broadcast_scalar(Q4_1_VALUES - 1, const_shape![BK]))
                     } else {
                         broadcast_scalar(QUANT_HEADERS_BYTES, const_shape![BK])
                             + (local & broadcast_scalar(NIBBLE_MASK, const_shape![BK]))
                     };
-                    let q_offset: Tile<i64, { [BK] }> = exti(q_offset);
-                    let q_offset: Tile<i64, { [BN, BK] }> = byte_base
-                        + q_offset
+                    let quant_offset: Tile<i64, { [BK] }> = exti(quant_offset);
+                    let expanded_base: Tile<i64, { [BN, BK] }> = byte_base
+                        .reshape(const_shape![BN, GB, 1])
+                        .broadcast(const_shape![BN, GB, 32])
+                        .reshape(const_shape![BN, BK]);
+                    let quant_offset: Tile<i64, { [BN, BK] }> = expanded_base
+                        + quant_offset
                             .reshape(const_shape![1, BK])
                             .broadcast(const_shape![BN, BK]);
-                    let q_ptr: PointerTile<*mut u8, { [] }> = pointer_to_tile(weight_bytes);
-                    let q_ptr: PointerTile<*mut u8, { [1, 1] }> = q_ptr.reshape(const_shape![1, 1]);
-                    let q_ptr: PointerTile<*mut u8, { [BN, BK] }> =
-                        q_ptr.broadcast(const_shape![BN, BK]);
-                    let q_ptr = q_ptr.offset_tile(q_offset);
-                    let (q, _): (Tile<u8, { [BN, BK] }>, Token) = load_ptr_tko(
-                        q_ptr,
+                    let packed_ptr: PointerTile<*mut u8, { [] }> = pointer_to_tile(weight_bytes);
+                    let packed_ptr: PointerTile<*mut u8, { [1, 1] }> =
+                        packed_ptr.reshape(const_shape![1, 1]);
+                    let packed_ptr: PointerTile<*mut u8, { [BN, BK] }> =
+                        packed_ptr.broadcast(const_shape![BN, BK]);
+                    let packed_ptr = packed_ptr.offset_tile(quant_offset);
+                    let (packed, _): (Tile<u8, { [BN, BK] }>, Token) = load_ptr_tko(
+                        packed_ptr,
                         ordering::Weak,
                         None::<scope::TileBlock>,
                         None,
@@ -255,143 +419,44 @@ mod kernels {
                         None,
                         Latency::<0>,
                     );
-                    let q: Tile<i32, { [BN, BK] }> = exti(q);
+                    let packed: Tile<i32, { [BN, BK] }> = exti(packed);
                     let shift: Tile<i32, { [BK] }> = if FORMAT == 0 {
-                        ((local / broadcast_scalar(Q4K_GROUP_VALUES, const_shape![BK]))
+                        ((local / broadcast_scalar(Q4_1_VALUES, const_shape![BK]))
                             & broadcast_scalar(1i32, const_shape![BK]))
                             * broadcast_scalar(NIBBLE_BITS, const_shape![BK])
                     } else {
-                        (local / broadcast_scalar(Q4_1_NIBBLE_VALUES, const_shape![BK]))
+                        (local / broadcast_scalar(Q4_1_HALF_VALUES, const_shape![BK]))
                             * broadcast_scalar(NIBBLE_BITS, const_shape![BK])
                     };
-                    let shift = shift
+                    let shift: Tile<i32, { [BN, BK] }> = shift
                         .reshape(const_shape![1, BK])
                         .broadcast(const_shape![BN, BK]);
                     let q: Tile<i32, { [BN, BK] }> =
-                        (q >> shift) & broadcast_scalar(NIBBLE_MASK, const_shape![BN, BK]);
+                        (packed >> shift) & broadcast_scalar(NIBBLE_MASK, const_shape![BN, BK]);
                     let q: Tile<f32, { [BN, BK] }> = convert_tile(q);
+                    let scale: Tile<f32, { [BN, BK] }> = scale
+                        .reshape(const_shape![BN, GB, 1])
+                        .broadcast(const_shape![BN, GB, 32])
+                        .reshape(const_shape![BN, BK]);
+                    let bias: Tile<f32, { [BN, BK] }> = bias
+                        .reshape(const_shape![BN, GB, 1])
+                        .broadcast(const_shape![BN, GB, 32])
+                        .reshape(const_shape![BN, BK]);
                     let decoded: Tile<f32, { [BN, BK] }> = if FORMAT == 0 {
-                        let group: Tile<i32, { [BK] }> =
-                            local / broadcast_scalar(Q4K_GROUP_VALUES, const_shape![BK]);
-                        let lower: Tile<bool, { [BK] }> = lt_tile(
-                            group,
-                            broadcast_scalar(Q4K_LOW_SCALE_GROUPS, const_shape![BK]),
-                        );
-                        let scale_index: Tile<i32, { [BK] }> = select(
-                            lower,
-                            group,
-                            group - broadcast_scalar(Q4K_LOW_SCALE_GROUPS, const_shape![BK]),
-                        );
-                        let min_index: Tile<i32, { [BK] }> = select(
-                            lower,
-                            group + broadcast_scalar(Q4K_LOW_SCALE_GROUPS, const_shape![BK]),
-                            group,
-                        );
-                        let packed_index: Tile<i32, { [BK] }> =
-                            group + broadcast_scalar(Q4K_LOW_SCALE_GROUPS, const_shape![BK]);
-                        let scale_index: Tile<i64, { [BK] }> = exti(scale_index);
-                        let min_index: Tile<i64, { [BK] }> = exti(min_index);
-                        let packed_index: Tile<i64, { [BK] }> = exti(packed_index);
-                        let headers: Tile<i64, { [BN, BK] }> =
-                            exti(broadcast_scalar(QUANT_HEADERS_BYTES, const_shape![BN, BK]));
-                        let scale_base: Tile<i64, { [BN, BK] }> = byte_base + headers;
-                        let scale_ptr: PointerTile<*mut u8, { [] }> = pointer_to_tile(weight_bytes);
-                        let scale_ptr: PointerTile<*mut u8, { [1, 1] }> =
-                            scale_ptr.reshape(const_shape![1, 1]);
-                        let scale_ptr: PointerTile<*mut u8, { [BN, BK] }> =
-                            scale_ptr.broadcast(const_shape![BN, BK]);
-                        let scale_ptr = scale_ptr.offset_tile(
-                            scale_base
-                                + scale_index
-                                    .reshape(const_shape![1, BK])
-                                    .broadcast(const_shape![BN, BK]),
-                        );
-                        let (scale, _): (Tile<u8, { [BN, BK] }>, Token) = load_ptr_tko(
-                            scale_ptr,
-                            ordering::Weak,
-                            None::<scope::TileBlock>,
-                            None,
-                            None,
-                            None,
-                            Latency::<0>,
-                        );
-                        let minimum_ptr: PointerTile<*mut u8, { [] }> =
-                            pointer_to_tile(weight_bytes);
-                        let minimum_ptr: PointerTile<*mut u8, { [1, 1] }> =
-                            minimum_ptr.reshape(const_shape![1, 1]);
-                        let minimum_ptr: PointerTile<*mut u8, { [BN, BK] }> =
-                            minimum_ptr.broadcast(const_shape![BN, BK]);
-                        let minimum_ptr = minimum_ptr.offset_tile(
-                            scale_base
-                                + min_index
-                                    .reshape(const_shape![1, BK])
-                                    .broadcast(const_shape![BN, BK]),
-                        );
-                        let (minimum, _): (Tile<u8, { [BN, BK] }>, Token) = load_ptr_tko(
-                            minimum_ptr,
-                            ordering::Weak,
-                            None::<scope::TileBlock>,
-                            None,
-                            None,
-                            None,
-                            Latency::<0>,
-                        );
-                        let packed_ptr: PointerTile<*mut u8, { [] }> =
-                            pointer_to_tile(weight_bytes);
-                        let packed_ptr: PointerTile<*mut u8, { [1, 1] }> =
-                            packed_ptr.reshape(const_shape![1, 1]);
-                        let packed_ptr: PointerTile<*mut u8, { [BN, BK] }> =
-                            packed_ptr.broadcast(const_shape![BN, BK]);
-                        let packed_ptr = packed_ptr.offset_tile(
-                            scale_base
-                                + packed_index
-                                    .reshape(const_shape![1, BK])
-                                    .broadcast(const_shape![BN, BK]),
-                        );
-                        let (packed, _): (Tile<u8, { [BN, BK] }>, Token) = load_ptr_tko(
-                            packed_ptr,
-                            ordering::Weak,
-                            None::<scope::TileBlock>,
-                            None,
-                            None,
-                            None,
-                            Latency::<0>,
-                        );
-                        let scale: Tile<i32, { [BN, BK] }> = exti(scale);
-                        let minimum: Tile<i32, { [BN, BK] }> = exti(minimum);
-                        let packed: Tile<i32, { [BN, BK] }> = exti(packed);
-                        let lower = lower
-                            .reshape(const_shape![1, BK])
-                            .broadcast(const_shape![BN, BK]);
-                        let scale: Tile<i32, { [BN, BK] }> = select(
-                            lower,
-                            scale & broadcast_scalar(SCALE_MASK, const_shape![BN, BK]),
-                            (packed & broadcast_scalar(NIBBLE_MASK, const_shape![BN, BK]))
-                                | ((scale >> broadcast_scalar(SCALE_BITS, const_shape![BN, BK]))
-                                    << broadcast_scalar(NIBBLE_BITS, const_shape![BN, BK])),
-                        );
-                        let minimum: Tile<i32, { [BN, BK] }> = select(
-                            lower,
-                            minimum & broadcast_scalar(SCALE_MASK, const_shape![BN, BK]),
-                            (packed >> broadcast_scalar(NIBBLE_BITS, const_shape![BN, BK]))
-                                | ((minimum >> broadcast_scalar(SCALE_BITS, const_shape![BN, BK]))
-                                    << broadcast_scalar(NIBBLE_BITS, const_shape![BN, BK])),
-                        );
-                        let scale: Tile<f32, { [BN, BK] }> = convert_tile(scale);
-                        let minimum: Tile<f32, { [BN, BK] }> = convert_tile(minimum);
-                        (d * scale) * q - m * minimum
+                        scale * q - bias
                     } else {
-                        d * q + m
+                        scale * q + bias
                     };
+                    let b: Tile<bf16, { [BN, BK] }> = convert_tile(decoded);
                     let b_mask: Tile<bool, { [BN, BK] }> = valid_columns
                         .reshape(const_shape![BN, 1])
                         .broadcast(const_shape![BN, BK])
                         & valid_k
                             .reshape(const_shape![1, BK])
                             .broadcast(const_shape![BN, BK]);
-                    let b_zero: Tile<f32, { [BN, BK] }> = constant(0.0f32, const_shape![BN, BK]);
-                    let decoded: Tile<f32, { [BN, BK] }> = select(b_mask, decoded, b_zero);
-                    let b: Tile<bf16, { [BN, BK] }> = convert_tile(decoded);
+                    let b_zero: Tile<bf16, { [BN, BK] }> =
+                        constant(bf16::ZERO, const_shape![BN, BK]);
+                    let b: Tile<bf16, { [BN, BK] }> = select(b_mask, b, b_zero);
                     let b: Tile<bf16, { [BK, BN] }> = permute(b, const_array![1, 0]);
                     acc = mmaf(a, b, acc);
                 }
@@ -499,12 +564,13 @@ pub fn gguf_moe_projection(args: GgufMoeProjection<'_>) -> Result<Tensor> {
     };
     let input = storage.as_cuda_slice::<bf16>()?;
     let mut output = unsafe { dev.alloc::<f32>(args.assignments * n_size)? };
-    let (input_ptr, _input_guard) = slice_ptr_on_stream(input, layout.start_offset(), &stream);
+    let (input_ptr, _input_guard) = input.device_ptr(&stream);
+    let input_ptr = input_ptr + (layout.start_offset() * std::mem::size_of::<bf16>()) as u64;
     let (weight_ptr, _weight_guard) = args.weight.device_ptr_with_guard(&stream)?;
-    let (output_ptr, output_guard) = slice_ptr_mut_on_stream(&mut output, 0, &stream);
-    let (ids_ptr, _ids_guard) = slice_ptr_on_stream(args.sorted_token_ids, 0, &stream);
-    let (experts_ptr, _experts_guard) = slice_ptr_on_stream(args.expert_ids, 0, &stream);
-    let (padded_ptr, _padded_guard) = slice_ptr_on_stream(args.num_tokens_post_pad, 0, &stream);
+    let (output_ptr, output_guard) = output.device_ptr_mut(&stream);
+    let (ids_ptr, _ids_guard) = args.sorted_token_ids.device_ptr(&stream);
+    let (experts_ptr, _experts_guard) = args.expert_ids.device_ptr(&stream);
+    let (padded_ptr, _padded_guard) = args.num_tokens_post_pad.device_ptr(&stream);
     let launcher = unsafe {
         kernels::projection(
             DevicePointer::<f32>::from_cu_deviceptr(output_ptr as CUdeviceptr),
@@ -524,6 +590,7 @@ pub fn gguf_moe_projection(args: GgufMoeProjection<'_>) -> Result<Tensor> {
         cfg.bm.to_string(),
         cfg.bn.to_string(),
         cfg.bk.to_string(),
+        (cfg.bk / 32).to_string(),
         format.to_string(),
         args.top_k.to_string(),
     ])

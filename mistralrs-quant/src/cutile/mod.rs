@@ -7,7 +7,6 @@ mod fp8_w8a8;
 mod fused_moe;
 mod fused_moe_fp8;
 mod gdn_prefill;
-pub mod gguf_moe;
 mod nvfp4;
 mod nvfp4_gemv;
 mod nvfp4_glu;

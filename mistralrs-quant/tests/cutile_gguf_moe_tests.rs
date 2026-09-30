@@ -5,7 +5,9 @@ use candle_core::{
     quantized::{GgmlDType, QTensor},
     DType, Device, Result, Storage, Tensor,
 };
-use mistralrs_quant::cutile::gguf_moe::{gguf_moe_projection, GgufMoeConfig, GgufMoeProjection};
+#[path = "support/gguf_moe.rs"]
+mod gguf_moe;
+use gguf_moe::{gguf_moe_projection, GgufMoeConfig, GgufMoeProjection};
 
 const EXPERTS: usize = 8;
 const OUTPUT_COLUMNS: usize = 67;
@@ -16,6 +18,18 @@ const Q4_1_COLUMNS: usize = 96;
 const PROJECTION_RELATIVE_RMS: f64 = 2e-5;
 const PROJECTION_MAX_ERROR: f64 = 2e-3;
 const IDENTITY_MAX_ERROR: f64 = 2e-6;
+const DECODE_K_TILES: [i32; 4] = [32, 64, 128, 256];
+const PROJECTION_TILES: [(i32, i32, i32); 9] = [
+    (8, 32, 64),
+    (8, 64, 128),
+    (16, 64, 128),
+    (32, 64, 128),
+    (16, 64, 32),
+    (16, 64, 64),
+    (16, 64, 256),
+    (16, 32, 64),
+    (16, 128, 32),
+];
 const GRAPH_INPUTS: [(usize, usize); 4] = [(0, 0), (1, 0), (0, 1), (1, 1)];
 
 struct Projection {
@@ -179,16 +193,22 @@ fn cutile_gguf_decodes_every_nibble_and_scale_group() -> Result<()> {
         let input = Tensor::from_vec(eye, (columns, columns), &device)?.to_dtype(DType::BF16)?;
         let ids = Tensor::from_vec(vec![(EXPERTS - 1) as u32; columns], (columns, 1), &device)?;
         let expected = projection.reference(&input, &ids, true)?;
-        let actual = projection
-            .forward(&input, &ids, GgufMoeConfig::default())?
-            .to_device(&Device::Cpu)?
-            .flatten_all()?
-            .to_vec1::<f32>()?;
-        let (_, maximum) = compare(&actual, &expected);
-        assert!(
-            maximum < IDENTITY_MAX_ERROR,
-            "{dtype:?} decoding max error {maximum}"
-        );
+        for bk in DECODE_K_TILES {
+            let config = GgufMoeConfig {
+                bk,
+                ..GgufMoeConfig::default()
+            };
+            let actual = projection
+                .forward(&input, &ids, config)?
+                .to_device(&Device::Cpu)?
+                .flatten_all()?
+                .to_vec1::<f32>()?;
+            let (_, maximum) = compare(&actual, &expected);
+            assert!(
+                maximum < IDENTITY_MAX_ERROR,
+                "{dtype:?} BK{bk} decoding max error {maximum}"
+            );
+        }
     }
     Ok(())
 }
@@ -207,11 +227,8 @@ fn cutile_gguf_projection_matches_rounded_weight_oracle() -> Result<()> {
         let original = projection.reference(&input, &ids, false)?;
         let (rounding_rms, rounding_maximum) = compare(&rounded, &original);
         eprintln!("{dtype:?} BF16 weight rounding alone: relative RMS {rounding_rms}, max {rounding_maximum}");
-        for bm in [8, 16, 32] {
-            let cfg = GgufMoeConfig {
-                bm,
-                ..GgufMoeConfig::default()
-            };
+        for (bm, bn, bk) in PROJECTION_TILES {
+            let cfg = GgufMoeConfig { bm, bn, bk };
             assert_projection(&projection.forward(&input, &ids, cfg)?, &rounded)?;
         }
     }
