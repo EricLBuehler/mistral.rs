@@ -1,0 +1,9 @@
+========= COMPUTE-SANITIZER
+
+running 2 tests
+test grouped_mmq_graph_replay_updates_inputs_and_routes_after_workspace_growth ... ok
+test packed_gate_up_and_sorted_pair_glu_preserve_route_order ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.89s
+
+========= ERROR SUMMARY: 0 errors

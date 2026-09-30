@@ -92,6 +92,10 @@ Separate historical C8 full-model Nsight Systems captures recorded 2,913 full-vo
 
 These quantities describe traced activity, not bandwidth utilization or a physical throughput ceiling. Those traces did not collect bandwidth counters, software tracing adds overhead, and the reports warn that some CUDA events may be missing. The final server was launched without Nsight; use its serving and concurrency measurements for final throughput claims. [Trace findings](raw/profile/profile_findings.txt), [transfer evidence](raw/profile/draft_sampling_transfer_evidence.json), and [analysis provenance and reproduction instructions](raw/profile/README.txt) retain the historical definitions and caveats.
 
+## Subsequent MoE optimization
+
+The [optimization report](optimization.md) records the first adopted kernel change: masking unused grouped-MMQ activation columns. Native C8-shaped layer replays improve by about 4%, with byte-identical outputs and passing independent CUDA regressions. This is an isolated layer measurement; the serving tables above retain their original binaries and results.
+
 ## Method
 
 - NVIDIA GB10, 128 GB unified system memory, NVIDIA driver 580.126.09.

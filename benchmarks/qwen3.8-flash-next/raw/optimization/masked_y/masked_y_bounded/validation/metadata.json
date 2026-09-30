@@ -1,0 +1,30 @@
+{
+  "complete": false,
+  "started_at": "2026-09-30T15:16:13.720891+00:00",
+  "header_sha256": "8b629533b0289ee0d67179530c5bd2ff9bd3248802fc7957d74b44343bd3bfa8",
+  "binaries": {
+    "grouped_mmq_tail_cuda_tests": {
+      "path": "/home/ericbuehler/qwen4exp_work/moe_optimization_20260930/masked_y_bounded/validation/grouped_mmq_tail_cuda_tests",
+      "sha256": "385ffe1dc1c6c28b4cfd7e51eabbb82a9e7983a063ae0e64142672f7cad86f20"
+    },
+    "grouped_mmq_packed_cuda_tests": {
+      "path": "/home/ericbuehler/qwen4exp_work/moe_optimization_20260930/masked_y_bounded/validation/grouped_mmq_packed_cuda_tests",
+      "sha256": "bda1412d700d160ca281b26efcd4da7a09852745da2b0212e67a94d1f4086cf4"
+    }
+  },
+  "commands": [
+    {
+      "name": "grouped_mmq_tail_cuda_tests.test",
+      "command": [
+        "/home/ericbuehler/qwen4exp_work/moe_optimization_20260930/masked_y_bounded/validation/grouped_mmq_tail_cuda_tests",
+        "--test-threads=1"
+      ],
+      "started_at": "2026-09-30T15:16:13.813191+00:00",
+      "pid": 2371321,
+      "returncode": 101,
+      "finished_at": "2026-09-30T15:16:14.329594+00:00",
+      "log_sha256": "113b6ab852698cbbb6ff00d5fb1fc8dec66e3cf72757ed6257fb849208bdc47f"
+    }
+  ],
+  "error": "AssertionError('grouped_mmq_tail_cuda_tests.test')"
+}

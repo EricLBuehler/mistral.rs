@@ -1,0 +1,10 @@
+{
+  "command": [
+    "/home/ericbuehler/qwen4exp_work/moe_optimization_20260930/masked_y_bounded/validation/grouped_mmq_packed_cuda_tests",
+    "--test-threads=1",
+    "--nocapture"
+  ],
+  "status": 0,
+  "finished": "2026-09-30T15:19:28.461746+00:00",
+  "log_sha256": "43507c448295bf36fe6638f0ea32378659d92a116ae7ca0025f1f3a2dc2e174d"
+}

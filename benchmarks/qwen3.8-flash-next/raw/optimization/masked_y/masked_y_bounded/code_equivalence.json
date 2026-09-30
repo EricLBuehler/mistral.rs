@@ -1,0 +1,1093 @@
+{
+  "method": "Compare whitespace-normalized complete SASS bodies of active SM121f mul_mat_q templates: <=64 matches measured mask; >64 matches original baseline. Invalid width specializations contain only assertion stubs and are retained but excluded from equality requirement.",
+  "kernels": [
+    {
+      "quant": "q4_k",
+      "tile": 128,
+      "need_check": true,
+      "expected_equivalent": "baseline",
+      "sass_identical": true,
+      "sass_sha256": {
+        "baseline": "f20d739eecd099f5012a49f5ba455b901dae3754f1ac13f2fe6b5031bb33a35a",
+        "unbounded": "47c5b39fa1f0a8c08068678a5390751ef5a8cd731fdb1be04316c2013052c9ce",
+        "bounded": "f20d739eecd099f5012a49f5ba455b901dae3754f1ac13f2fe6b5031bb33a35a"
+      },
+      "resources": {
+        "baseline": "REG:255 STACK:96 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "unbounded": "REG:255 STACK:192 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "bounded": "REG:255 STACK:96 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0"
+      }
+    },
+    {
+      "quant": "q4_k",
+      "tile": 128,
+      "need_check": false,
+      "expected_equivalent": "baseline",
+      "sass_identical": true,
+      "sass_sha256": {
+        "baseline": "66b9a95ba07b55ddfb08cf075451600aab2a6e2e808b1aaf261bf182c10915b2",
+        "unbounded": "cc0abbdebdbf96ba8b54c043e07dc230faddfde1f18139e8f6f044c885b39d76",
+        "bounded": "66b9a95ba07b55ddfb08cf075451600aab2a6e2e808b1aaf261bf182c10915b2"
+      },
+      "resources": {
+        "baseline": "REG:252 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "unbounded": "REG:255 STACK:120 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "bounded": "REG:252 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0"
+      }
+    },
+    {
+      "quant": "q4_k",
+      "tile": 120,
+      "need_check": true,
+      "expected_equivalent": "baseline",
+      "sass_identical": false,
+      "sass_sha256": {
+        "baseline": "bab3327f36b83b01947d62f8ce4562d00cee191f2532cd8f6249b6f3ddc8c147",
+        "unbounded": "2d214384c52772b50a91f4490316f96e2f7a77ddf2ba7bee6c47d48d81b722c2",
+        "bounded": "6a4f4bef20cda778e452ae5a1949b270a56b1907835dc7707a3d5a93f2d0fc84"
+      },
+      "resources": {
+        "baseline": "REG:24 STACK:40 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "unbounded": "REG:24 STACK:40 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "bounded": "REG:24 STACK:40 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0"
+      }
+    },
+    {
+      "quant": "q4_k",
+      "tile": 120,
+      "need_check": false,
+      "expected_equivalent": "baseline",
+      "sass_identical": false,
+      "sass_sha256": {
+        "baseline": "712490e4f568541e4ba9b2194a52f44c5034604ee1bfdefb16f5d3f2a55f89ff",
+        "unbounded": "904d68862f70eebcec125c0f8f06465ee32456fb476301860d04f00798d92aea",
+        "bounded": "b84e25381625fddadd2e77baeb6ef7ab794665af9dc489e74ab69b8c5fbf2687"
+      },
+      "resources": {
+        "baseline": "REG:24 STACK:40 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "unbounded": "REG:24 STACK:40 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "bounded": "REG:24 STACK:40 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0"
+      }
+    },
+    {
+      "quant": "q4_k",
+      "tile": 112,
+      "need_check": true,
+      "expected_equivalent": "baseline",
+      "sass_identical": true,
+      "sass_sha256": {
+        "baseline": "1c869cf97688998ec3bf09f6bd316209164d7791f14d23f6b4a96aa7f6ac2366",
+        "unbounded": "389883e653f59c91bc1486cf912acb4ac9e7ff7b32ad5b6355f7e5294e0a3b94",
+        "bounded": "1c869cf97688998ec3bf09f6bd316209164d7791f14d23f6b4a96aa7f6ac2366"
+      },
+      "resources": {
+        "baseline": "REG:255 STACK:96 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "unbounded": "REG:255 STACK:112 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "bounded": "REG:255 STACK:96 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0"
+      }
+    },
+    {
+      "quant": "q4_k",
+      "tile": 112,
+      "need_check": false,
+      "expected_equivalent": "baseline",
+      "sass_identical": true,
+      "sass_sha256": {
+        "baseline": "4abae631ffd6e8820dcaf8b5b962e6cc3a2f33a084df3383effefab3b6255cd7",
+        "unbounded": "ed2454c10a74440b3f45ef7e02f3ce3cc0bf9b74a019005c38c4002876cacd60",
+        "bounded": "4abae631ffd6e8820dcaf8b5b962e6cc3a2f33a084df3383effefab3b6255cd7"
+      },
+      "resources": {
+        "baseline": "REG:255 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "unbounded": "REG:255 STACK:56 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "bounded": "REG:255 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0"
+      }
+    },
+    {
+      "quant": "q4_k",
+      "tile": 104,
+      "need_check": true,
+      "expected_equivalent": "baseline",
+      "sass_identical": false,
+      "sass_sha256": {
+        "baseline": "585ba015723edb84a5d6f5a7836c744cfe031df1615529356df743a282992ce2",
+        "unbounded": "ae52c64a17d788b31953b2cb3e21757bb839887037b581d32b6b16a6069a72a0",
+        "bounded": "d5ddf7577c6c3e1155162dd5614af0a840a4e18d9e4f2e56468440b252a2451e"
+      },
+      "resources": {
+        "baseline": "REG:24 STACK:40 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "unbounded": "REG:24 STACK:40 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "bounded": "REG:24 STACK:40 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0"
+      }
+    },
+    {
+      "quant": "q4_k",
+      "tile": 104,
+      "need_check": false,
+      "expected_equivalent": "baseline",
+      "sass_identical": false,
+      "sass_sha256": {
+        "baseline": "8ee79e243e90c82d4bf9f3af07da4b90a53248598b12a67dd01c1db0da2c33e8",
+        "unbounded": "d358c2be70b007d7123557b9db5f39e13b0e589578983ea71375a661a11b0a52",
+        "bounded": "50c0cab04636b67f69a0d6baf7b79d44f04b356a1ca123a360b15941a1e6c53b"
+      },
+      "resources": {
+        "baseline": "REG:24 STACK:40 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "unbounded": "REG:24 STACK:40 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "bounded": "REG:24 STACK:40 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0"
+      }
+    },
+    {
+      "quant": "q4_k",
+      "tile": 96,
+      "need_check": true,
+      "expected_equivalent": "baseline",
+      "sass_identical": true,
+      "sass_sha256": {
+        "baseline": "727fa19b07019f993647125e4dbe7fe0e1a30183c26f7100c2317826f53852e3",
+        "unbounded": "3004ae3a458e4bfcccfab48453e25755307fd4017173adf18a4a1d63d3fd9db5",
+        "bounded": "727fa19b07019f993647125e4dbe7fe0e1a30183c26f7100c2317826f53852e3"
+      },
+      "resources": {
+        "baseline": "REG:254 STACK:32 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "unbounded": "REG:255 STACK:56 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "bounded": "REG:254 STACK:32 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0"
+      }
+    },
+    {
+      "quant": "q4_k",
+      "tile": 96,
+      "need_check": false,
+      "expected_equivalent": "baseline",
+      "sass_identical": true,
+      "sass_sha256": {
+        "baseline": "f815199e9d6d8176bb6e13de6655bd3df817b7ad31f9c25c36b1cf01c00dcf54",
+        "unbounded": "27372dcb90df16929fde2b487d3280310014837581b06d5752a299af7eefbde5",
+        "bounded": "f815199e9d6d8176bb6e13de6655bd3df817b7ad31f9c25c36b1cf01c00dcf54"
+      },
+      "resources": {
+        "baseline": "REG:255 STACK:8 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "unbounded": "REG:255 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "bounded": "REG:255 STACK:8 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0"
+      }
+    },
+    {
+      "quant": "q4_k",
+      "tile": 88,
+      "need_check": true,
+      "expected_equivalent": "baseline",
+      "sass_identical": false,
+      "sass_sha256": {
+        "baseline": "4eb3c85f892ff1cf5cdd929d69d04cbccba8cefe041af759f6f278cd0a06a8c3",
+        "unbounded": "975e8fb6e2a6541a0e33c7dd36a5a305c18a6b4efd1889719f9dfe049c55a072",
+        "bounded": "4519b7dbca85e13b7bf648417ce2704649a814edc1da9e7f85e174d301a5f5f1"
+      },
+      "resources": {
+        "baseline": "REG:24 STACK:40 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "unbounded": "REG:24 STACK:40 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "bounded": "REG:24 STACK:40 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0"
+      }
+    },
+    {
+      "quant": "q4_k",
+      "tile": 88,
+      "need_check": false,
+      "expected_equivalent": "baseline",
+      "sass_identical": false,
+      "sass_sha256": {
+        "baseline": "82f06ef7d6779d2c8374ea9b24d071467c9b283abe63f042d9b595d793aa78a7",
+        "unbounded": "4145ffe92d6b40382d7d928da845f00cdecf3032d491870859a0296ca7da2665",
+        "bounded": "082b6df76f0059cc8fdf89c0e00d08baa43374d502940945939fb392ac9e6a82"
+      },
+      "resources": {
+        "baseline": "REG:24 STACK:40 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "unbounded": "REG:24 STACK:40 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "bounded": "REG:24 STACK:40 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0"
+      }
+    },
+    {
+      "quant": "q4_k",
+      "tile": 80,
+      "need_check": true,
+      "expected_equivalent": "baseline",
+      "sass_identical": true,
+      "sass_sha256": {
+        "baseline": "f7409e13ee8628c0838fe3ea5648b8d983d6ab1cd86105ff27b68a201981dfdf",
+        "unbounded": "919eac5e9d04bd8b66eb9082e8e75860408e33f51ddaf5955c3c0379fce08c39",
+        "bounded": "f7409e13ee8628c0838fe3ea5648b8d983d6ab1cd86105ff27b68a201981dfdf"
+      },
+      "resources": {
+        "baseline": "REG:255 STACK:8 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "unbounded": "REG:255 STACK:8 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "bounded": "REG:255 STACK:8 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0"
+      }
+    },
+    {
+      "quant": "q4_k",
+      "tile": 80,
+      "need_check": false,
+      "expected_equivalent": "baseline",
+      "sass_identical": true,
+      "sass_sha256": {
+        "baseline": "07d98016fcb3b83df36582df4842ce1727c753748b5a41a392f2941eac4018f9",
+        "unbounded": "593422b913738959cfcf0d0cfc6b5cc84b597c0dbf9c4666a64826e0a6bfb84a",
+        "bounded": "07d98016fcb3b83df36582df4842ce1727c753748b5a41a392f2941eac4018f9"
+      },
+      "resources": {
+        "baseline": "REG:250 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "unbounded": "REG:255 STACK:32 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "bounded": "REG:250 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0"
+      }
+    },
+    {
+      "quant": "q4_k",
+      "tile": 72,
+      "need_check": true,
+      "expected_equivalent": "baseline",
+      "sass_identical": false,
+      "sass_sha256": {
+        "baseline": "51257e0cf6013fb5794adbbe6c71e88446b1f59efeefb6bedbc3dbea96506c04",
+        "unbounded": "01c0b8ea4003079769274f7828ae1570a395422bbd641fe5d2e43668b09fb0ed",
+        "bounded": "dfb0b7e84ff0f5bb73e3f3f2d70a79b756664dbc97f2cc414cc8fdcb14c7d875"
+      },
+      "resources": {
+        "baseline": "REG:24 STACK:40 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "unbounded": "REG:24 STACK:40 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "bounded": "REG:24 STACK:40 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0"
+      }
+    },
+    {
+      "quant": "q4_k",
+      "tile": 72,
+      "need_check": false,
+      "expected_equivalent": "baseline",
+      "sass_identical": false,
+      "sass_sha256": {
+        "baseline": "83fdf7d082e118ad9649db9e21d5fee02f8568808b31f3d908f7884dd5ad073d",
+        "unbounded": "e39e56ea9b3e128a4d0ec643897feb3e2be72a7588c5757f2c1e437a28207bd1",
+        "bounded": "6c5ad5d112a810711c192b82ac04183c9f6e1d8f3ea806d38c306a8cc0f828a0"
+      },
+      "resources": {
+        "baseline": "REG:24 STACK:40 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "unbounded": "REG:24 STACK:40 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "bounded": "REG:24 STACK:40 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0"
+      }
+    },
+    {
+      "quant": "q4_k",
+      "tile": 64,
+      "need_check": true,
+      "expected_equivalent": "unbounded",
+      "sass_identical": true,
+      "sass_sha256": {
+        "baseline": "a2997b6779f8a22b50451fbc23f2f18eb7479aca7e6652c2e0922936a9e0f67c",
+        "unbounded": "376c107334e695d2d188fd9c839d948ec9909112eefe7ba37efb84c25364b645",
+        "bounded": "376c107334e695d2d188fd9c839d948ec9909112eefe7ba37efb84c25364b645"
+      },
+      "resources": {
+        "baseline": "REG:255 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "unbounded": "REG:251 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "bounded": "REG:251 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0"
+      }
+    },
+    {
+      "quant": "q4_k",
+      "tile": 64,
+      "need_check": false,
+      "expected_equivalent": "unbounded",
+      "sass_identical": true,
+      "sass_sha256": {
+        "baseline": "e7d81cf54a30e27b2a49a911911def5004207b740acc0b039f986ade2423bfe7",
+        "unbounded": "a2285dd0b5d52a81cd561df380e7d81de26744f61089f5a1565eeb28695c632e",
+        "bounded": "a2285dd0b5d52a81cd561df380e7d81de26744f61089f5a1565eeb28695c632e"
+      },
+      "resources": {
+        "baseline": "REG:254 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "unbounded": "REG:255 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "bounded": "REG:255 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0"
+      }
+    },
+    {
+      "quant": "q4_k",
+      "tile": 56,
+      "need_check": true,
+      "expected_equivalent": "unbounded",
+      "sass_identical": false,
+      "sass_sha256": {
+        "baseline": "f9243e2c328bf32c986e7d26eea4b0f205511c7604c58bed38f4be6bc41e7186",
+        "unbounded": "15a081bd6f500ebaed2d069b95a0be97cc82641d503191294c0ca6d75c56ddc4",
+        "bounded": "10dce87074f013e85beeeecdec961cc3f26706296bbd8d6e148a002a6994708d"
+      },
+      "resources": {
+        "baseline": "REG:24 STACK:40 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "unbounded": "REG:24 STACK:40 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "bounded": "REG:24 STACK:40 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0"
+      }
+    },
+    {
+      "quant": "q4_k",
+      "tile": 56,
+      "need_check": false,
+      "expected_equivalent": "unbounded",
+      "sass_identical": false,
+      "sass_sha256": {
+        "baseline": "76f1372b181c66dbf085f8dcc1c88b7b448b957adc096d805a11e16ffa556fb3",
+        "unbounded": "1c0ce40facdca490c8091473a1feaf94fa947caa6277d879e0a4cceef2c4506b",
+        "bounded": "d54fba304023c2e1714f223f7fe3632eef4d00b259f6268baa12f27715f2ddb0"
+      },
+      "resources": {
+        "baseline": "REG:24 STACK:40 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "unbounded": "REG:24 STACK:40 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "bounded": "REG:24 STACK:40 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0"
+      }
+    },
+    {
+      "quant": "q4_k",
+      "tile": 48,
+      "need_check": true,
+      "expected_equivalent": "unbounded",
+      "sass_identical": true,
+      "sass_sha256": {
+        "baseline": "500e60f6ba19961dc50ba39f403a4c8ceb41a79fc2b18ae258c5b886e6c7933e",
+        "unbounded": "0a0f66a40a594275b70942c4c20f853493a41def127d4d1c9ee19a92e47c6aae",
+        "bounded": "0a0f66a40a594275b70942c4c20f853493a41def127d4d1c9ee19a92e47c6aae"
+      },
+      "resources": {
+        "baseline": "REG:255 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "unbounded": "REG:255 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "bounded": "REG:255 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0"
+      }
+    },
+    {
+      "quant": "q4_k",
+      "tile": 48,
+      "need_check": false,
+      "expected_equivalent": "unbounded",
+      "sass_identical": true,
+      "sass_sha256": {
+        "baseline": "1054ee0dfdd057c75fab034707f2611035c6fe5e637a8ec55d04c11c4019efa3",
+        "unbounded": "a62b068169a4e25e03ee8de2bae5352e1efb6bd3633db9ea68e29d4b2acf8bc3",
+        "bounded": "a62b068169a4e25e03ee8de2bae5352e1efb6bd3633db9ea68e29d4b2acf8bc3"
+      },
+      "resources": {
+        "baseline": "REG:255 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "unbounded": "REG:255 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "bounded": "REG:255 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0"
+      }
+    },
+    {
+      "quant": "q4_k",
+      "tile": 40,
+      "need_check": true,
+      "expected_equivalent": "unbounded",
+      "sass_identical": true,
+      "sass_sha256": {
+        "baseline": "be23707f348a0b4b12808c075c5d58984348db0604c8fc09b09124953fd752f2",
+        "unbounded": "85cbdf3a7c4d923d772dc5bcf895e719dd5ec20ed49b87019ead74e2a5661149",
+        "bounded": "85cbdf3a7c4d923d772dc5bcf895e719dd5ec20ed49b87019ead74e2a5661149"
+      },
+      "resources": {
+        "baseline": "REG:255 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "unbounded": "REG:254 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "bounded": "REG:254 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0"
+      }
+    },
+    {
+      "quant": "q4_k",
+      "tile": 40,
+      "need_check": false,
+      "expected_equivalent": "unbounded",
+      "sass_identical": true,
+      "sass_sha256": {
+        "baseline": "6e4a87d67eb7d5a0a9d9d060d7f110bc4b47f05c3dd9a1e06d98b4f964fd51ba",
+        "unbounded": "84d72cdf47bdb1996c672906e477db889e49d0393c51b14b65afde814357a2a8",
+        "bounded": "84d72cdf47bdb1996c672906e477db889e49d0393c51b14b65afde814357a2a8"
+      },
+      "resources": {
+        "baseline": "REG:252 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "unbounded": "REG:252 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "bounded": "REG:252 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0"
+      }
+    },
+    {
+      "quant": "q4_k",
+      "tile": 32,
+      "need_check": true,
+      "expected_equivalent": "unbounded",
+      "sass_identical": true,
+      "sass_sha256": {
+        "baseline": "8585adcf7bdea9d13f477141cf747d4f940d5be5dca53a564212d762c9aa7f3a",
+        "unbounded": "123c02cf64c674e2dc13554f656eeeef8e6d10c9ee2192d08dc5d2d789d019cf",
+        "bounded": "123c02cf64c674e2dc13554f656eeeef8e6d10c9ee2192d08dc5d2d789d019cf"
+      },
+      "resources": {
+        "baseline": "REG:242 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "unbounded": "REG:254 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "bounded": "REG:254 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0"
+      }
+    },
+    {
+      "quant": "q4_k",
+      "tile": 32,
+      "need_check": false,
+      "expected_equivalent": "unbounded",
+      "sass_identical": true,
+      "sass_sha256": {
+        "baseline": "a40facd4026cbaf5a2fd3ac14150a84318f13e529cffa05a4c0d0583fd341aaa",
+        "unbounded": "0244bc75ca370cd9b3b7edc88a7ee3d53e0b715a7fbf422a57cce9b31c7851dd",
+        "bounded": "0244bc75ca370cd9b3b7edc88a7ee3d53e0b715a7fbf422a57cce9b31c7851dd"
+      },
+      "resources": {
+        "baseline": "REG:224 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "unbounded": "REG:234 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "bounded": "REG:234 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0"
+      }
+    },
+    {
+      "quant": "q4_k",
+      "tile": 24,
+      "need_check": true,
+      "expected_equivalent": "unbounded",
+      "sass_identical": true,
+      "sass_sha256": {
+        "baseline": "06843e9409b5fff71847c46cce9ae33901cbbfd36c0391b356daa79216f43574",
+        "unbounded": "c75cb872b631175210617955997ab823baebac6f771d012e11c158c7ae535114",
+        "bounded": "c75cb872b631175210617955997ab823baebac6f771d012e11c158c7ae535114"
+      },
+      "resources": {
+        "baseline": "REG:234 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "unbounded": "REG:247 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "bounded": "REG:247 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0"
+      }
+    },
+    {
+      "quant": "q4_k",
+      "tile": 24,
+      "need_check": false,
+      "expected_equivalent": "unbounded",
+      "sass_identical": true,
+      "sass_sha256": {
+        "baseline": "bd5dec1a3c10033c32f0a3d7a00b72d180c2507d87f5f14ad103a4009499f86a",
+        "unbounded": "cb3da464749c3e7bf6136c9329321bef2cc45091f5a31c990c353bd3743f98ce",
+        "bounded": "cb3da464749c3e7bf6136c9329321bef2cc45091f5a31c990c353bd3743f98ce"
+      },
+      "resources": {
+        "baseline": "REG:211 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "unbounded": "REG:217 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "bounded": "REG:217 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0"
+      }
+    },
+    {
+      "quant": "q4_k",
+      "tile": 16,
+      "need_check": true,
+      "expected_equivalent": "unbounded",
+      "sass_identical": true,
+      "sass_sha256": {
+        "baseline": "650fcb9cc6a51e4d0d74ec475212244b11836c3ffd73d756eeede8fd4037c2ac",
+        "unbounded": "982213104fa2bd29b20cd6b6f05d01bb296055ed1540c6eaf3627bf41d3e6eb2",
+        "bounded": "982213104fa2bd29b20cd6b6f05d01bb296055ed1540c6eaf3627bf41d3e6eb2"
+      },
+      "resources": {
+        "baseline": "REG:222 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "unbounded": "REG:222 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "bounded": "REG:222 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0"
+      }
+    },
+    {
+      "quant": "q4_k",
+      "tile": 16,
+      "need_check": false,
+      "expected_equivalent": "unbounded",
+      "sass_identical": true,
+      "sass_sha256": {
+        "baseline": "63d90204db1189a3453237630a8e119f7b06a827ee67ccf43cfa30aae2707c4a",
+        "unbounded": "507ac9ec36781bcbb66641cc6598cb29291ae669883f2dc10eebf8c239c61fb0",
+        "bounded": "507ac9ec36781bcbb66641cc6598cb29291ae669883f2dc10eebf8c239c61fb0"
+      },
+      "resources": {
+        "baseline": "REG:201 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "unbounded": "REG:197 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "bounded": "REG:197 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0"
+      }
+    },
+    {
+      "quant": "q4_k",
+      "tile": 8,
+      "need_check": true,
+      "expected_equivalent": "unbounded",
+      "sass_identical": true,
+      "sass_sha256": {
+        "baseline": "997dafcd5cf4d243f5ab446c1784635b8f8e1d7222ed93ee1aac496041b3f71e",
+        "unbounded": "e4632e18f74681c3f664b0fe493c7776a580baea5c69e0278c6908cc17bb0704",
+        "bounded": "e4632e18f74681c3f664b0fe493c7776a580baea5c69e0278c6908cc17bb0704"
+      },
+      "resources": {
+        "baseline": "REG:191 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "unbounded": "REG:191 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "bounded": "REG:191 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0"
+      }
+    },
+    {
+      "quant": "q4_k",
+      "tile": 8,
+      "need_check": false,
+      "expected_equivalent": "unbounded",
+      "sass_identical": true,
+      "sass_sha256": {
+        "baseline": "802a3a8a482e5640d524265b586069d95e7bc809a44e2931956a85890c977cd7",
+        "unbounded": "a5c91bfd681639f40ee1153734a5d7fbe175bef5b116d242d2d4f6c5773bc0e4",
+        "bounded": "a5c91bfd681639f40ee1153734a5d7fbe175bef5b116d242d2d4f6c5773bc0e4"
+      },
+      "resources": {
+        "baseline": "REG:160 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "unbounded": "REG:161 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "bounded": "REG:161 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0"
+      }
+    },
+    {
+      "quant": "q4_1",
+      "tile": 128,
+      "need_check": true,
+      "expected_equivalent": "baseline",
+      "sass_identical": true,
+      "sass_sha256": {
+        "baseline": "3fc79296c73214d0fc087e936d1c145f8bd42c0fc924d924a74cb1e923d37d24",
+        "unbounded": "9523c9250e326bdc5f56a0ffbb68db313604d25873502d5ee59d6d89014fee6d",
+        "bounded": "3fc79296c73214d0fc087e936d1c145f8bd42c0fc924d924a74cb1e923d37d24"
+      },
+      "resources": {
+        "baseline": "REG:255 STACK:112 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "unbounded": "REG:255 STACK:184 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "bounded": "REG:255 STACK:112 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0"
+      }
+    },
+    {
+      "quant": "q4_1",
+      "tile": 128,
+      "need_check": false,
+      "expected_equivalent": "baseline",
+      "sass_identical": true,
+      "sass_sha256": {
+        "baseline": "aa3850568b3f0ad02ccc81c1e0022a01662c08b6aae068cfd5fcbc49413602c0",
+        "unbounded": "e52799005c92f71ff883bb497d845e8b9f600e79b1f66e14265f207d1b778bf3",
+        "bounded": "aa3850568b3f0ad02ccc81c1e0022a01662c08b6aae068cfd5fcbc49413602c0"
+      },
+      "resources": {
+        "baseline": "REG:255 STACK:64 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "unbounded": "REG:255 STACK:128 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "bounded": "REG:255 STACK:64 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0"
+      }
+    },
+    {
+      "quant": "q4_1",
+      "tile": 120,
+      "need_check": true,
+      "expected_equivalent": "baseline",
+      "sass_identical": false,
+      "sass_sha256": {
+        "baseline": "bab3327f36b83b01947d62f8ce4562d00cee191f2532cd8f6249b6f3ddc8c147",
+        "unbounded": "2d214384c52772b50a91f4490316f96e2f7a77ddf2ba7bee6c47d48d81b722c2",
+        "bounded": "6a4f4bef20cda778e452ae5a1949b270a56b1907835dc7707a3d5a93f2d0fc84"
+      },
+      "resources": {
+        "baseline": "REG:24 STACK:40 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "unbounded": "REG:24 STACK:40 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "bounded": "REG:24 STACK:40 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0"
+      }
+    },
+    {
+      "quant": "q4_1",
+      "tile": 120,
+      "need_check": false,
+      "expected_equivalent": "baseline",
+      "sass_identical": false,
+      "sass_sha256": {
+        "baseline": "712490e4f568541e4ba9b2194a52f44c5034604ee1bfdefb16f5d3f2a55f89ff",
+        "unbounded": "904d68862f70eebcec125c0f8f06465ee32456fb476301860d04f00798d92aea",
+        "bounded": "b84e25381625fddadd2e77baeb6ef7ab794665af9dc489e74ab69b8c5fbf2687"
+      },
+      "resources": {
+        "baseline": "REG:24 STACK:40 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "unbounded": "REG:24 STACK:40 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "bounded": "REG:24 STACK:40 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0"
+      }
+    },
+    {
+      "quant": "q4_1",
+      "tile": 112,
+      "need_check": true,
+      "expected_equivalent": "baseline",
+      "sass_identical": true,
+      "sass_sha256": {
+        "baseline": "f47ae71149cb50e81f29dfd9d5b8efe1472e8bd1116aa43ca415da31a2c0826c",
+        "unbounded": "7177150523dfac2d7059eb240b15367d9783e76cde077018af36411b8c522289",
+        "bounded": "f47ae71149cb50e81f29dfd9d5b8efe1472e8bd1116aa43ca415da31a2c0826c"
+      },
+      "resources": {
+        "baseline": "REG:255 STACK:64 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "unbounded": "REG:255 STACK:144 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "bounded": "REG:255 STACK:64 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0"
+      }
+    },
+    {
+      "quant": "q4_1",
+      "tile": 112,
+      "need_check": false,
+      "expected_equivalent": "baseline",
+      "sass_identical": true,
+      "sass_sha256": {
+        "baseline": "7d1f7be707583133d3c6fa58d91a9c3540c0c48409c86d638163d14129cbe902",
+        "unbounded": "daf22b5edc93482de0ba55b8f46ff3d1c1759f541dd092a62adecae86f5419c7",
+        "bounded": "7d1f7be707583133d3c6fa58d91a9c3540c0c48409c86d638163d14129cbe902"
+      },
+      "resources": {
+        "baseline": "REG:255 STACK:48 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "unbounded": "REG:255 STACK:96 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "bounded": "REG:255 STACK:48 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0"
+      }
+    },
+    {
+      "quant": "q4_1",
+      "tile": 104,
+      "need_check": true,
+      "expected_equivalent": "baseline",
+      "sass_identical": false,
+      "sass_sha256": {
+        "baseline": "585ba015723edb84a5d6f5a7836c744cfe031df1615529356df743a282992ce2",
+        "unbounded": "ae52c64a17d788b31953b2cb3e21757bb839887037b581d32b6b16a6069a72a0",
+        "bounded": "d5ddf7577c6c3e1155162dd5614af0a840a4e18d9e4f2e56468440b252a2451e"
+      },
+      "resources": {
+        "baseline": "REG:24 STACK:40 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "unbounded": "REG:24 STACK:40 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "bounded": "REG:24 STACK:40 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0"
+      }
+    },
+    {
+      "quant": "q4_1",
+      "tile": 104,
+      "need_check": false,
+      "expected_equivalent": "baseline",
+      "sass_identical": false,
+      "sass_sha256": {
+        "baseline": "8ee79e243e90c82d4bf9f3af07da4b90a53248598b12a67dd01c1db0da2c33e8",
+        "unbounded": "d358c2be70b007d7123557b9db5f39e13b0e589578983ea71375a661a11b0a52",
+        "bounded": "50c0cab04636b67f69a0d6baf7b79d44f04b356a1ca123a360b15941a1e6c53b"
+      },
+      "resources": {
+        "baseline": "REG:24 STACK:40 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "unbounded": "REG:24 STACK:40 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "bounded": "REG:24 STACK:40 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0"
+      }
+    },
+    {
+      "quant": "q4_1",
+      "tile": 96,
+      "need_check": true,
+      "expected_equivalent": "baseline",
+      "sass_identical": true,
+      "sass_sha256": {
+        "baseline": "3223757518b9dc9888642a623ccb1252fe4d438941c4020de719fdcb3d1231cb",
+        "unbounded": "1c2697dc059dd0d30f3b6e5a1192d849747bc03990a8191563cd67ee7da0fe86",
+        "bounded": "3223757518b9dc9888642a623ccb1252fe4d438941c4020de719fdcb3d1231cb"
+      },
+      "resources": {
+        "baseline": "REG:255 STACK:48 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "unbounded": "REG:255 STACK:48 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "bounded": "REG:255 STACK:48 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0"
+      }
+    },
+    {
+      "quant": "q4_1",
+      "tile": 96,
+      "need_check": false,
+      "expected_equivalent": "baseline",
+      "sass_identical": true,
+      "sass_sha256": {
+        "baseline": "ff5a5afe455ae53c6c667a562847ab5ad7509d7a4ce0cb49eaf7b3683bcba29c",
+        "unbounded": "c8eb6e559ffc0ba07ddb760198ef7ff021931b526a6135f8f018ed1755ee75ae",
+        "bounded": "ff5a5afe455ae53c6c667a562847ab5ad7509d7a4ce0cb49eaf7b3683bcba29c"
+      },
+      "resources": {
+        "baseline": "REG:255 STACK:40 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "unbounded": "REG:255 STACK:32 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "bounded": "REG:255 STACK:40 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0"
+      }
+    },
+    {
+      "quant": "q4_1",
+      "tile": 88,
+      "need_check": true,
+      "expected_equivalent": "baseline",
+      "sass_identical": false,
+      "sass_sha256": {
+        "baseline": "4eb3c85f892ff1cf5cdd929d69d04cbccba8cefe041af759f6f278cd0a06a8c3",
+        "unbounded": "975e8fb6e2a6541a0e33c7dd36a5a305c18a6b4efd1889719f9dfe049c55a072",
+        "bounded": "4519b7dbca85e13b7bf648417ce2704649a814edc1da9e7f85e174d301a5f5f1"
+      },
+      "resources": {
+        "baseline": "REG:24 STACK:40 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "unbounded": "REG:24 STACK:40 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "bounded": "REG:24 STACK:40 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0"
+      }
+    },
+    {
+      "quant": "q4_1",
+      "tile": 88,
+      "need_check": false,
+      "expected_equivalent": "baseline",
+      "sass_identical": false,
+      "sass_sha256": {
+        "baseline": "82f06ef7d6779d2c8374ea9b24d071467c9b283abe63f042d9b595d793aa78a7",
+        "unbounded": "4145ffe92d6b40382d7d928da845f00cdecf3032d491870859a0296ca7da2665",
+        "bounded": "082b6df76f0059cc8fdf89c0e00d08baa43374d502940945939fb392ac9e6a82"
+      },
+      "resources": {
+        "baseline": "REG:24 STACK:40 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "unbounded": "REG:24 STACK:40 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "bounded": "REG:24 STACK:40 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0"
+      }
+    },
+    {
+      "quant": "q4_1",
+      "tile": 80,
+      "need_check": true,
+      "expected_equivalent": "baseline",
+      "sass_identical": true,
+      "sass_sha256": {
+        "baseline": "ddce86d34a5f6d93ca3f71c4b44c876674209b0dae1ef9e12757bd9e2d743606",
+        "unbounded": "d25d4e455186fb320dc655c4539de860d89260e41640e74fa41cbed0dc31c944",
+        "bounded": "ddce86d34a5f6d93ca3f71c4b44c876674209b0dae1ef9e12757bd9e2d743606"
+      },
+      "resources": {
+        "baseline": "REG:255 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "unbounded": "REG:255 STACK:8 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "bounded": "REG:255 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0"
+      }
+    },
+    {
+      "quant": "q4_1",
+      "tile": 80,
+      "need_check": false,
+      "expected_equivalent": "baseline",
+      "sass_identical": true,
+      "sass_sha256": {
+        "baseline": "a0119652002c419fb9296abb6e9c13e5eddbe51e106d7cb5c81a30a16d6ae8f3",
+        "unbounded": "837e252fd0bb4377af3c570ba1fcab029441b6718497b5238596d55a3ac2a3a3",
+        "bounded": "a0119652002c419fb9296abb6e9c13e5eddbe51e106d7cb5c81a30a16d6ae8f3"
+      },
+      "resources": {
+        "baseline": "REG:254 STACK:8 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "unbounded": "REG:255 STACK:8 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "bounded": "REG:254 STACK:8 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0"
+      }
+    },
+    {
+      "quant": "q4_1",
+      "tile": 72,
+      "need_check": true,
+      "expected_equivalent": "baseline",
+      "sass_identical": false,
+      "sass_sha256": {
+        "baseline": "51257e0cf6013fb5794adbbe6c71e88446b1f59efeefb6bedbc3dbea96506c04",
+        "unbounded": "01c0b8ea4003079769274f7828ae1570a395422bbd641fe5d2e43668b09fb0ed",
+        "bounded": "dfb0b7e84ff0f5bb73e3f3f2d70a79b756664dbc97f2cc414cc8fdcb14c7d875"
+      },
+      "resources": {
+        "baseline": "REG:24 STACK:40 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "unbounded": "REG:24 STACK:40 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "bounded": "REG:24 STACK:40 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0"
+      }
+    },
+    {
+      "quant": "q4_1",
+      "tile": 72,
+      "need_check": false,
+      "expected_equivalent": "baseline",
+      "sass_identical": false,
+      "sass_sha256": {
+        "baseline": "83fdf7d082e118ad9649db9e21d5fee02f8568808b31f3d908f7884dd5ad073d",
+        "unbounded": "e39e56ea9b3e128a4d0ec643897feb3e2be72a7588c5757f2c1e437a28207bd1",
+        "bounded": "6c5ad5d112a810711c192b82ac04183c9f6e1d8f3ea806d38c306a8cc0f828a0"
+      },
+      "resources": {
+        "baseline": "REG:24 STACK:40 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "unbounded": "REG:24 STACK:40 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "bounded": "REG:24 STACK:40 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0"
+      }
+    },
+    {
+      "quant": "q4_1",
+      "tile": 64,
+      "need_check": true,
+      "expected_equivalent": "unbounded",
+      "sass_identical": true,
+      "sass_sha256": {
+        "baseline": "e07fb9fccb718cd1919cdafd65792594799423ac65cb657d9eaa1d48a25afe5d",
+        "unbounded": "d29627c0da046b24d1cf9c10d30d0aa162751fb805e46dc143b5b7c41f217f8c",
+        "bounded": "d29627c0da046b24d1cf9c10d30d0aa162751fb805e46dc143b5b7c41f217f8c"
+      },
+      "resources": {
+        "baseline": "REG:255 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "unbounded": "REG:255 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "bounded": "REG:255 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0"
+      }
+    },
+    {
+      "quant": "q4_1",
+      "tile": 64,
+      "need_check": false,
+      "expected_equivalent": "unbounded",
+      "sass_identical": true,
+      "sass_sha256": {
+        "baseline": "2e24220ab72ed3c2ef8e330faf75a2fa7fcd57f6a464e996b45fd6d8383f0296",
+        "unbounded": "279c2b459d653e7d463d9b4f983c03fd47f753e4dc0c2ed80f980fcb74cff67f",
+        "bounded": "279c2b459d653e7d463d9b4f983c03fd47f753e4dc0c2ed80f980fcb74cff67f"
+      },
+      "resources": {
+        "baseline": "REG:254 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "unbounded": "REG:254 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "bounded": "REG:254 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0"
+      }
+    },
+    {
+      "quant": "q4_1",
+      "tile": 56,
+      "need_check": true,
+      "expected_equivalent": "unbounded",
+      "sass_identical": false,
+      "sass_sha256": {
+        "baseline": "f9243e2c328bf32c986e7d26eea4b0f205511c7604c58bed38f4be6bc41e7186",
+        "unbounded": "15a081bd6f500ebaed2d069b95a0be97cc82641d503191294c0ca6d75c56ddc4",
+        "bounded": "10dce87074f013e85beeeecdec961cc3f26706296bbd8d6e148a002a6994708d"
+      },
+      "resources": {
+        "baseline": "REG:24 STACK:40 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "unbounded": "REG:24 STACK:40 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "bounded": "REG:24 STACK:40 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0"
+      }
+    },
+    {
+      "quant": "q4_1",
+      "tile": 56,
+      "need_check": false,
+      "expected_equivalent": "unbounded",
+      "sass_identical": false,
+      "sass_sha256": {
+        "baseline": "76f1372b181c66dbf085f8dcc1c88b7b448b957adc096d805a11e16ffa556fb3",
+        "unbounded": "1c0ce40facdca490c8091473a1feaf94fa947caa6277d879e0a4cceef2c4506b",
+        "bounded": "d54fba304023c2e1714f223f7fe3632eef4d00b259f6268baa12f27715f2ddb0"
+      },
+      "resources": {
+        "baseline": "REG:24 STACK:40 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "unbounded": "REG:24 STACK:40 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "bounded": "REG:24 STACK:40 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0"
+      }
+    },
+    {
+      "quant": "q4_1",
+      "tile": 48,
+      "need_check": true,
+      "expected_equivalent": "unbounded",
+      "sass_identical": true,
+      "sass_sha256": {
+        "baseline": "c38800fdae9ae3b184ae97864823f4815527e26c4e177994a6bbfbb056a0a757",
+        "unbounded": "ad44de2b30afdb645a94213cd52bfb13cfed7f32e0adb8b2906e24a4cc01cc9c",
+        "bounded": "ad44de2b30afdb645a94213cd52bfb13cfed7f32e0adb8b2906e24a4cc01cc9c"
+      },
+      "resources": {
+        "baseline": "REG:253 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "unbounded": "REG:254 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "bounded": "REG:254 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0"
+      }
+    },
+    {
+      "quant": "q4_1",
+      "tile": 48,
+      "need_check": false,
+      "expected_equivalent": "unbounded",
+      "sass_identical": true,
+      "sass_sha256": {
+        "baseline": "da954e3644983b35ed8f8192032c0d3e1194cbaced05ee02ff3de659ef753309",
+        "unbounded": "3acd5543096fcc1c35eeec3795f6698225db3789efc7ca4ef461f25efd74350f",
+        "bounded": "3acd5543096fcc1c35eeec3795f6698225db3789efc7ca4ef461f25efd74350f"
+      },
+      "resources": {
+        "baseline": "REG:255 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "unbounded": "REG:254 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "bounded": "REG:254 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0"
+      }
+    },
+    {
+      "quant": "q4_1",
+      "tile": 40,
+      "need_check": true,
+      "expected_equivalent": "unbounded",
+      "sass_identical": true,
+      "sass_sha256": {
+        "baseline": "3ab627ee78316fe0f4000453d26316b61717b6e43e5ecc285b288c30da1c124d",
+        "unbounded": "dfca21cd6537f2a36167192e679fa78054fea7069fb7f3be6bbbba0eb17597aa",
+        "bounded": "dfca21cd6537f2a36167192e679fa78054fea7069fb7f3be6bbbba0eb17597aa"
+      },
+      "resources": {
+        "baseline": "REG:255 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "unbounded": "REG:255 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "bounded": "REG:255 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0"
+      }
+    },
+    {
+      "quant": "q4_1",
+      "tile": 40,
+      "need_check": false,
+      "expected_equivalent": "unbounded",
+      "sass_identical": true,
+      "sass_sha256": {
+        "baseline": "a9e61991c878c99eb8657197fbd4ce53708b6c6a2ba41872c7c0a1fba7c8ad66",
+        "unbounded": "3fccee72177d5a628a7ca633276043bc526ffb489d779b68630267a070f532b8",
+        "bounded": "3fccee72177d5a628a7ca633276043bc526ffb489d779b68630267a070f532b8"
+      },
+      "resources": {
+        "baseline": "REG:251 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "unbounded": "REG:255 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "bounded": "REG:255 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0"
+      }
+    },
+    {
+      "quant": "q4_1",
+      "tile": 32,
+      "need_check": true,
+      "expected_equivalent": "unbounded",
+      "sass_identical": true,
+      "sass_sha256": {
+        "baseline": "3066379e3a2f5c7b686c8c340cfa700f7bd0aeb3085f0c0b6752df2222b8f415",
+        "unbounded": "3e84a8c19850fdacaeb279e3d6bf5d3b2da91141abadaa11be887cf78a67922c",
+        "bounded": "3e84a8c19850fdacaeb279e3d6bf5d3b2da91141abadaa11be887cf78a67922c"
+      },
+      "resources": {
+        "baseline": "REG:246 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "unbounded": "REG:243 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "bounded": "REG:243 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0"
+      }
+    },
+    {
+      "quant": "q4_1",
+      "tile": 32,
+      "need_check": false,
+      "expected_equivalent": "unbounded",
+      "sass_identical": true,
+      "sass_sha256": {
+        "baseline": "ff0e50e37c70c8be7c3820dcbc7c6412cc3859baa40925abfd49a43ed39df671",
+        "unbounded": "c361a816c5b316f5b0ad37c0f9e4b2526e69b8f64941c3c1820f1213bb454905",
+        "bounded": "c361a816c5b316f5b0ad37c0f9e4b2526e69b8f64941c3c1820f1213bb454905"
+      },
+      "resources": {
+        "baseline": "REG:227 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "unbounded": "REG:247 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "bounded": "REG:247 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0"
+      }
+    },
+    {
+      "quant": "q4_1",
+      "tile": 24,
+      "need_check": true,
+      "expected_equivalent": "unbounded",
+      "sass_identical": true,
+      "sass_sha256": {
+        "baseline": "6564caa51a330614374f98afa076e25551ac9ec8ab520810ac563256eeb2c332",
+        "unbounded": "20b4998fd586e2a10f74c0729ffdb78bbb0b32b483ddbcf0df01d3472b3dcd8d",
+        "bounded": "20b4998fd586e2a10f74c0729ffdb78bbb0b32b483ddbcf0df01d3472b3dcd8d"
+      },
+      "resources": {
+        "baseline": "REG:238 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "unbounded": "REG:242 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "bounded": "REG:242 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0"
+      }
+    },
+    {
+      "quant": "q4_1",
+      "tile": 24,
+      "need_check": false,
+      "expected_equivalent": "unbounded",
+      "sass_identical": true,
+      "sass_sha256": {
+        "baseline": "8c2982c2f1729eeed20f659ca94ccad582df8d60a7d22ab72b3aa8430e529f3c",
+        "unbounded": "3cdd7a6d6ce181267353940024d9dced445b315685f08902596a1372af8e83aa",
+        "bounded": "3cdd7a6d6ce181267353940024d9dced445b315685f08902596a1372af8e83aa"
+      },
+      "resources": {
+        "baseline": "REG:215 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "unbounded": "REG:213 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "bounded": "REG:213 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0"
+      }
+    },
+    {
+      "quant": "q4_1",
+      "tile": 16,
+      "need_check": true,
+      "expected_equivalent": "unbounded",
+      "sass_identical": true,
+      "sass_sha256": {
+        "baseline": "d45cb85c446a1ec4d33153ebf84ae4fc5a25a7b854a3afb8c91133315999980e",
+        "unbounded": "8de151922342b654095f9645a8e6bb8ac123fbe00d8c48a63dc4978189002112",
+        "bounded": "8de151922342b654095f9645a8e6bb8ac123fbe00d8c48a63dc4978189002112"
+      },
+      "resources": {
+        "baseline": "REG:231 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "unbounded": "REG:238 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "bounded": "REG:238 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0"
+      }
+    },
+    {
+      "quant": "q4_1",
+      "tile": 16,
+      "need_check": false,
+      "expected_equivalent": "unbounded",
+      "sass_identical": true,
+      "sass_sha256": {
+        "baseline": "218024fbf19694852151b31bb5a84073cc8cacb685779be74a4a947ae654ce19",
+        "unbounded": "d12fef3f7167591625d91c3121aee583f1dae95a1b4b472746c4851480f9c4f0",
+        "bounded": "d12fef3f7167591625d91c3121aee583f1dae95a1b4b472746c4851480f9c4f0"
+      },
+      "resources": {
+        "baseline": "REG:205 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "unbounded": "REG:201 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "bounded": "REG:201 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0"
+      }
+    },
+    {
+      "quant": "q4_1",
+      "tile": 8,
+      "need_check": true,
+      "expected_equivalent": "unbounded",
+      "sass_identical": true,
+      "sass_sha256": {
+        "baseline": "5a4ce39598ddf5be64006d542b0a26a4290ebadb4dfc35a89dc86881758a5369",
+        "unbounded": "9389c0362b172d322c230dc602b483e7b79d6f6c89d966e5863e28b3cae27fae",
+        "bounded": "9389c0362b172d322c230dc602b483e7b79d6f6c89d966e5863e28b3cae27fae"
+      },
+      "resources": {
+        "baseline": "REG:200 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "unbounded": "REG:200 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "bounded": "REG:200 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0"
+      }
+    },
+    {
+      "quant": "q4_1",
+      "tile": 8,
+      "need_check": false,
+      "expected_equivalent": "unbounded",
+      "sass_identical": true,
+      "sass_sha256": {
+        "baseline": "aafedba3aceca4bdcd30300152ee1088737314203cb6fe862442d7766b624bee",
+        "unbounded": "15598a28edc6a080821c6973913fa59ec577e6ab96c730ce4c3520ad08b56a48",
+        "bounded": "15598a28edc6a080821c6973913fa59ec577e6ab96c730ce4c3520ad08b56a48"
+      },
+      "resources": {
+        "baseline": "REG:162 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "unbounded": "REG:162 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0",
+        "bounded": "REG:162 STACK:0 SHARED:1024 LOCAL:0 CONSTANT[0]:1064 TEXTURE:0 SURFACE:0 SAMPLER:0"
+      }
+    }
+  ]
+}

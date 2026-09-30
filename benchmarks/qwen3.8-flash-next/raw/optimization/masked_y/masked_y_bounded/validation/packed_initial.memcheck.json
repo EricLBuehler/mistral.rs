@@ -1,0 +1,18 @@
+{
+  "command": [
+    "/usr/local/cuda/bin/compute-sanitizer",
+    "--tool",
+    "memcheck",
+    "--error-exitcode",
+    "99",
+    "--target-processes",
+    "all",
+    "--print-limit",
+    "20",
+    "/home/ericbuehler/qwen4exp_work/moe_optimization_20260930/masked_y_bounded/validation/grouped_mmq_packed_cuda_tests",
+    "--test-threads=1"
+  ],
+  "status": 0,
+  "finished": "2026-09-30T15:19:37.902608+00:00",
+  "log_sha256": "f6951c7b674679e6a82375a244e3b40c2a961e7ec9e72463e775a78a8108dd6d"
+}

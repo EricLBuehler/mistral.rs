@@ -1,0 +1,47 @@
+[
+  {
+    "name": "cargo_check",
+    "command": [
+      "cargo",
+      "check",
+      "--release",
+      "-p",
+      "mistralrs-quant",
+      "--features",
+      "cuda,cutile",
+      "--test",
+      "grouped_mmq_tail_cuda_tests",
+      "--test",
+      "grouped_mmq_packed_cuda_tests"
+    ],
+    "started_at": "2026-09-30T15:21:21.084388+00:00",
+    "returncode": 0,
+    "finished_at": "2026-09-30T15:21:26.311963+00:00",
+    "log": "/home/ericbuehler/qwen4exp_work/moe_optimization_20260930/masked_y_bounded/cargo_check.log",
+    "log_sha256": "d5ac33f0555fcdba02ab05d3ebe1751eeda606aaeae84c825907bf448bc7b134"
+  },
+  {
+    "name": "cargo_clippy",
+    "command": [
+      "cargo",
+      "clippy",
+      "--release",
+      "-p",
+      "mistralrs-quant",
+      "--features",
+      "cuda,cutile",
+      "--test",
+      "grouped_mmq_tail_cuda_tests",
+      "--test",
+      "grouped_mmq_packed_cuda_tests",
+      "--",
+      "-D",
+      "warnings"
+    ],
+    "started_at": "2026-09-30T15:21:26.312347+00:00",
+    "returncode": 101,
+    "finished_at": "2026-09-30T15:22:51.683209+00:00",
+    "log": "/home/ericbuehler/qwen4exp_work/moe_optimization_20260930/masked_y_bounded/cargo_clippy.log",
+    "log_sha256": "7d3e1c9e51d32e7ac875cb265d60ba971ad34f31060f1446c640385a5a027aad"
+  }
+]

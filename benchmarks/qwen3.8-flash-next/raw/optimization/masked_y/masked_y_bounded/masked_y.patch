@@ -1,0 +1,73 @@
+--- a/mistralrs-quant/kernels/mmq_gguf/mmq_gguf.cuh
++++ b/mistralrs-quant/kernels/mmq_gguf/mmq_gguf.cuh
+@@ -13,6 +13,8 @@
+ #define MMQ_ITER_K 256
+ #define MMQ_ITER_K_MXFP4_FP4    512
+ #define MMQ_NWARPS 8
++// Larger tiles otherwise spill additional registers with the masked load path.
++constexpr int MMQ_MASKED_Y_MAX_COLS = 64;
+ 
+ typedef void (*load_tiles_mmq_t)(const char * __restrict__ x, int * x_tile, const int kbx0, const int i_max, const int stride);
+ typedef void (*vec_dot_mmq_t)(const int * __restrict__ x, const int * __restrict__ y, float * __restrict__ sum, const int k00);
+@@ -3486,7 +3488,7 @@
+         const char * __restrict__ x, const int offset_x, const int * __restrict__ y,
+         const int * __restrict__ ids_dst, void * __restrict__ dst, const ggml_type type_dst, float * __restrict__ tmp_fixup,
+         const int stride_row_x, const int ncols_y, const int stride_col_dst,
+-        const int tile_x_max_i, const int tile_y_max_j, const int kb0_start, const int kb0_stop) {
++        const int tile_x_max_i, const int tile_y_max_j, const int kb0_start, const int kb0_stop, const bool mask_y_tail) {
+ 
+     constexpr int              warp_size  = ggml_cuda_get_physical_warp_size();
+     constexpr int              nwarps     = mmq_get_nwarps_device();
+@@ -3519,6 +3521,7 @@
+     float sum[mmq_x*mmq_y / (nwarps*warp_size)] = {0.0f};
+ 
+     constexpr int sz = sizeof(block_q8_1_mmq) / sizeof(int);
++    const int valid_y_ints = mmq_x <= MMQ_MASKED_Y_MAX_COLS && mask_y_tail ? min(mmq_x, tile_y_max_j + 1) * MMQ_TILE_Y_K : INT_MAX;
+ 
+     for (int kb0 = kb0_start; kb0 < kb0_stop; kb0 += blocks_per_iter) {
+         load_tiles(x, tile_x, offset_x + kb0, tile_x_max_i, stride_row_x);
+@@ -3528,7 +3531,7 @@
+             for (int l0 = 0; l0 < mmq_x * MMQ_TILE_Y_K; l0 += nwarps * warp_size) {
+                 int l = l0 + threadIdx.y*warp_size + threadIdx.x;
+ 
+-                tile_y[l] = by0[l];
++                tile_y[l] = l < valid_y_ints ? by0[l] : 0;
+             }
+         }
+ 
+@@ -3544,7 +3547,7 @@
+             for (int l0 = 0; l0 < mmq_x * MMQ_TILE_Y_K; l0 += nwarps * warp_size) {
+                 int l = l0 + threadIdx.y*warp_size + threadIdx.x;
+ 
+-                tile_y[l] = by0[l];
++                tile_y[l] = l < valid_y_ints ? by0[l] : 0;
+             }
+         }
+ 
+@@ -3667,7 +3670,7 @@
+         constexpr bool fixup = false;
+         mul_mat_q_process_tile<type, mmq_x, need_check, fixup>
+             (x, offset_x, y + offset_y, ids_dst_shared, (char *) dst + offset_dst*mmq_type_size(type_dst), type_dst, tmp_fixup, stride_row_x, ncols_y, stride_col_dst,
+-             tile_x_max_i, tile_y_max_j, 0, blocks_per_ne00.z);
++             tile_x_max_i, tile_y_max_j, 0, blocks_per_ne00.z, ids_dst != nullptr);
+         return;
+     }
+ #endif // (defined(GGML_USE_HIP) && !defined(CDNA3)) || __CUDA_ARCH__ < GGML_CUDA_CC_VOLTA
+@@ -3749,7 +3752,7 @@
+         constexpr bool fixup = false; // All but (potentially) the last iterations write their data to dst rather than the fixup buffer.
+         mul_mat_q_process_tile<type, mmq_x, need_check, fixup>
+             (x, offset_x, y + offset_y, ids_dst_shared, (char *) dst + offset_dst*mmq_type_size(type_dst), type_dst, tmp_fixup, stride_row_x, ncols_y, stride_col_dst,
+-             tile_x_max_i, tile_y_max_j, kb0_start, kb0_stop);
++             tile_x_max_i, tile_y_max_j, kb0_start, kb0_stop, ids_dst != nullptr);
+ 
+         kbc += blocks_per_ne00.z;
+         kbc -= fastmodulo(kbc, blocks_per_ne00);
+@@ -3818,7 +3821,7 @@
+     constexpr bool fixup = true; // Last index writes its data to fixup buffer to avoid data races with other blocks.
+     mul_mat_q_process_tile<type, mmq_x, need_check, fixup>
+         (x, offset_x, y + offset_y, ids_dst_shared, (char *) dst + offset_dst*mmq_type_size(type_dst), type_dst, tmp_fixup, stride_row_x, ncols_y, stride_col_dst,
+-         tile_x_max_i, tile_y_max_j, kb0_start, kb0_stop);
++         tile_x_max_i, tile_y_max_j, kb0_start, kb0_stop, ids_dst != nullptr);
+ }
+ 
+ template <ggml_type type, int mmq_x, bool need_check>

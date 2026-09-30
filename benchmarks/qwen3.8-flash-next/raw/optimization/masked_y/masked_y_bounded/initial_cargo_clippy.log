@@ -1,0 +1,19 @@
+   Compiling mistralrs-quant v0.9.4 (/home/ericbuehler/mistral.rs/mistralrs-quant)
+warning: mistralrs-quant@0.9.4: Using 10 threads for compilation
+warning: mistralrs-quant@0.9.4: Using cached cutlass at /home/ericbuehler/.cudaforge/git/checkouts/cutlass-7127592069c2fe01
+warning: mistralrs-quant@0.9.4: Compiling 45 of 45 kernels
+error: manual implementation of `.is_multiple_of()`
+  --> mistralrs-quant/tests/grouped_mmq_tail_cuda_tests.rs:65:20
+   |
+65 |     let value = if (row + block) % 2 == 0 {
+   |                    ^^^^^^^^^^^^^^^^^^^^^^ help: replace with: `(row + block).is_multiple_of(2)`
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#manual_is_multiple_of
+   = note: `-D clippy::manual-is-multiple-of` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(clippy::manual_is_multiple_of)]`
+
+warning: mistralrs-quant@0.9.4: Using 10 threads for compilation
+warning: mistralrs-quant@0.9.4: Using cached cutlass at /home/ericbuehler/.cudaforge/git/checkouts/cutlass-7127592069c2fe01
+warning: mistralrs-quant@0.9.4: Compiling 45 of 45 kernels
+error: could not compile `mistralrs-quant` (test "grouped_mmq_tail_cuda_tests") due to 1 previous error
+warning: build failed, waiting for other jobs to finish...

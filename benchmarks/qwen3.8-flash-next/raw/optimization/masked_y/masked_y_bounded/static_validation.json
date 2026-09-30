@@ -1,0 +1,96 @@
+[
+  {
+    "name": "production_build_final",
+    "command": [
+      "cargo",
+      "test",
+      "--release",
+      "-p",
+      "mistralrs-quant",
+      "--features",
+      "cuda,cutile",
+      "--test",
+      "grouped_mmq_tail_cuda_tests",
+      "--test",
+      "grouped_mmq_packed_cuda_tests",
+      "--no-run",
+      "--message-format=json-render-diagnostics"
+    ],
+    "started_at": "2026-09-30T15:23:17.910244+00:00",
+    "returncode": 0,
+    "finished_at": "2026-09-30T15:23:19.133141+00:00",
+    "log": "/home/ericbuehler/qwen4exp_work/moe_optimization_20260930/masked_y_bounded/production_build_final.log",
+    "log_sha256": "975a808eaab7de4a1b957a7b60a7bdb0873e07b7a041d174bd13c4693d3e3d93"
+  },
+  {
+    "name": "cargo_check",
+    "command": [
+      "cargo",
+      "check",
+      "--release",
+      "-p",
+      "mistralrs-quant",
+      "--features",
+      "cuda,cutile",
+      "--test",
+      "grouped_mmq_tail_cuda_tests",
+      "--test",
+      "grouped_mmq_packed_cuda_tests"
+    ],
+    "started_at": "2026-09-30T15:23:19.133978+00:00",
+    "returncode": 0,
+    "finished_at": "2026-09-30T15:23:19.395624+00:00",
+    "log": "/home/ericbuehler/qwen4exp_work/moe_optimization_20260930/masked_y_bounded/cargo_check.log",
+    "log_sha256": "7b4bdc067ea5b09829c1d710deedb5c14e81c36c4efcf35bcf707cb2c683f72f"
+  },
+  {
+    "name": "cargo_clippy",
+    "command": [
+      "cargo",
+      "clippy",
+      "--release",
+      "-p",
+      "mistralrs-quant",
+      "--features",
+      "cuda,cutile",
+      "--test",
+      "grouped_mmq_tail_cuda_tests",
+      "--test",
+      "grouped_mmq_packed_cuda_tests",
+      "--",
+      "-D",
+      "warnings"
+    ],
+    "started_at": "2026-09-30T15:23:19.396126+00:00",
+    "returncode": 0,
+    "finished_at": "2026-09-30T15:23:19.714153+00:00",
+    "log": "/home/ericbuehler/qwen4exp_work/moe_optimization_20260930/masked_y_bounded/cargo_clippy.log",
+    "log_sha256": "b0fa74073417a0fc9542bb784c5482b36e0ac4233f0d3f6482b38ae7c283ebc3"
+  },
+  {
+    "name": "rustfmt",
+    "command": [
+      "rustfmt",
+      "--check",
+      "mistralrs-quant/tests/grouped_mmq_tail_cuda_tests.rs"
+    ],
+    "started_at": "2026-09-30T15:23:19.714506+00:00",
+    "returncode": 0,
+    "finished_at": "2026-09-30T15:23:19.725865+00:00",
+    "log": "/home/ericbuehler/qwen4exp_work/moe_optimization_20260930/masked_y_bounded/rustfmt.log",
+    "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "name": "diff_check",
+    "command": [
+      "git",
+      "diff",
+      "--check"
+    ],
+    "started_at": "2026-09-30T15:23:19.726090+00:00",
+    "returncode": 0,
+    "finished_at": "2026-09-30T15:23:19.731981+00:00",
+    "log": "/home/ericbuehler/qwen4exp_work/moe_optimization_20260930/masked_y_bounded/diff_check.log",
+    "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  }
+]

@@ -1,0 +1,7 @@
+
+running 2 tests
+test grouped_mmq_partial_columns_survive_stream_k_fixup ... ok
+test grouped_mmq_sparse_expert_tails_match_cpu_reference ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.41s
+
