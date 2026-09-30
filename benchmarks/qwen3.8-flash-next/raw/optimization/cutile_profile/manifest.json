@@ -1,0 +1,117 @@
+{
+  "complete": true,
+  "created_at": "2026-09-30T15:43:33.053568+00:00",
+  "external_original_root": "/home/ericbuehler/qwen4exp_work/moe_optimization_20260930/cutile_gguf",
+  "scope": "Same native56 layer8 input; default cuTile and masked MMQ three projections each, plus one wide cuTile gate projection. NCU kernel replay, caches/clocks unchanged, ten passes. Profile completion means requested records were exported; --kill yes intentionally stops the test before its replay summary. Counter durations are not benchmark timings. Source/prototype correctness and ordinary timing evidence remain in sibling cutile_initial; metric-query support is referenced externally by path/hash.",
+  "files": [
+    {
+      "path": "profile_projection.py",
+      "source": "/home/ericbuehler/qwen4exp_work/moe_optimization_20260930/cutile_gguf/profile_projection.py",
+      "bytes": 7657,
+      "sha256": "db08d28330833e59398f1c32e3115d2d16291ac97b3a313bd6deaae933c25fdd"
+    },
+    {
+      "path": "ncu_comparison.json",
+      "source": "/home/ericbuehler/qwen4exp_work/moe_optimization_20260930/cutile_gguf/ncu_comparison.json",
+      "bytes": 32548,
+      "sha256": "ad18fc6ec2062463ef282b847d2fe8c020ccd81a3b08d29880140d835b621e7b"
+    },
+    {
+      "path": "ncu_native56/cutile.ncu-rep",
+      "source": "/home/ericbuehler/qwen4exp_work/moe_optimization_20260930/cutile_gguf/ncu_native56/cutile.ncu-rep",
+      "bytes": 60539,
+      "sha256": "ed95b98550e4504626f9c5263cee834dedbf5386696cb79847ec835b4e9a0b02"
+    },
+    {
+      "path": "ncu_native56/mmq.ncu-rep",
+      "source": "/home/ericbuehler/qwen4exp_work/moe_optimization_20260930/cutile_gguf/ncu_native56/mmq.ncu-rep",
+      "bytes": 61373,
+      "sha256": "56bc40ebc59ec1a152ec82c9fa8f7b428f6f9b2b729fe2c7c37e0503a6ea3ae7"
+    },
+    {
+      "path": "ncu_native56/kernels.json",
+      "source": "/home/ericbuehler/qwen4exp_work/moe_optimization_20260930/cutile_gguf/ncu_native56/kernels.json",
+      "bytes": 31284,
+      "sha256": "d1045936473a75e6b2f0a68ad716da0a63acc74b6255be17ac418393846d8f6f"
+    },
+    {
+      "path": "ncu_native56/mmq.log",
+      "source": "/home/ericbuehler/qwen4exp_work/moe_optimization_20260930/cutile_gguf/ncu_native56/mmq.log",
+      "bytes": 1263,
+      "sha256": "cb8801ad8f2e7db123d869649366007ffbfc3c8b5f216097ccec2ea8909a79d0"
+    },
+    {
+      "path": "ncu_native56/cutile.log",
+      "source": "/home/ericbuehler/qwen4exp_work/moe_optimization_20260930/cutile_gguf/ncu_native56/cutile.log",
+      "bytes": 1287,
+      "sha256": "1c4fa1d3b7135d2ccd58bd47716b1757c50652addd3a97ecfb84587d8f1a4ee0"
+    },
+    {
+      "path": "ncu_native56/metadata.json",
+      "source": "/home/ericbuehler/qwen4exp_work/moe_optimization_20260930/cutile_gguf/ncu_native56/metadata.json",
+      "bytes": 17943,
+      "sha256": "a8b93c306efc417419228179b87873960393fcb984360cf8362c6b54a36cb847"
+    },
+    {
+      "path": "ncu_native56/mmq_raw.log",
+      "source": "/home/ericbuehler/qwen4exp_work/moe_optimization_20260930/cutile_gguf/ncu_native56/mmq_raw.log",
+      "bytes": 18946,
+      "sha256": "1d754425fcd66067433b0582fdfca1ac60cd9bca46b7d199d640fdab93a3ae60"
+    },
+    {
+      "path": "ncu_native56/cutile_raw.log",
+      "source": "/home/ericbuehler/qwen4exp_work/moe_optimization_20260930/cutile_gguf/ncu_native56/cutile_raw.log",
+      "bytes": 18426,
+      "sha256": "a0143aa7fbd58bb2a713df0428401778de142c22e49f855638a6ca88045388e8"
+    },
+    {
+      "path": "ncu_native56_wide/cutile.ncu-rep",
+      "source": "/home/ericbuehler/qwen4exp_work/moe_optimization_20260930/cutile_gguf/ncu_native56_wide/cutile.ncu-rep",
+      "bytes": 35221,
+      "sha256": "f343c969a72d737baad6af6d993d9d8361924c38daf206d28bf8180d3015d640"
+    },
+    {
+      "path": "ncu_native56_wide/kernels.json",
+      "source": "/home/ericbuehler/qwen4exp_work/moe_optimization_20260930/cutile_gguf/ncu_native56_wide/kernels.json",
+      "bytes": 5685,
+      "sha256": "218c2202197916a421bc7b07ff870714274b1e6edf4bc31dab537b30bb67726f"
+    },
+    {
+      "path": "ncu_native56_wide/cutile.log",
+      "source": "/home/ericbuehler/qwen4exp_work/moe_optimization_20260930/cutile_gguf/ncu_native56_wide/cutile.log",
+      "bytes": 1154,
+      "sha256": "a6e9f97a834185b2ca8a092b8d59c90d6ca2eabc4d5bd45be67626731588a1fa"
+    },
+    {
+      "path": "ncu_native56_wide/metadata.json",
+      "source": "/home/ericbuehler/qwen4exp_work/moe_optimization_20260930/cutile_gguf/ncu_native56_wide/metadata.json",
+      "bytes": 14824,
+      "sha256": "bb3fa87064c68a0efb95ea4140caf0dd60e3d65540d019e66a83f21752b23d3e"
+    },
+    {
+      "path": "ncu_native56_wide/cutile_raw.log",
+      "source": "/home/ericbuehler/qwen4exp_work/moe_optimization_20260930/cutile_gguf/ncu_native56_wide/cutile_raw.log",
+      "bytes": 14671,
+      "sha256": "ad509e34b19a7aa906e1fc48ff7a6cac0e47d3165d99e796ee7e61c5b7e6475b"
+    },
+    {
+      "path": "helpers/profile_selected_replay.py",
+      "source": "/home/ericbuehler/qwen4exp_work/real_routing_20260930/profile_selected_replay.py",
+      "bytes": 10796,
+      "sha256": "3175585c198a265b56823243b68efad34790e8045b318c116587bc80b27f9b3f"
+    },
+    {
+      "path": "helpers/build_diagnostic.py",
+      "source": "/home/ericbuehler/qwen4exp_work/real_routing_20260930/build_diagnostic.py",
+      "bytes": 13968,
+      "sha256": "a4de06ddbd9819f43a3484053a7ea8b52c60ceccfae1e706611dd0fa111d1aa8"
+    },
+    {
+      "path": "package_followup.py",
+      "source": "/home/ericbuehler/qwen4exp_work/moe_optimization_20260930/package_followup.py",
+      "bytes": 5087,
+      "sha256": "6cf084640a7f54d90aef02ddb237f6371242ea16048ec0b46b21a2389f51cc5c"
+    }
+  ],
+  "excluded": "No executable, native archive, object, model weight, saved tensor output, selected-sample symlink, or duplicate output metadata was copied. External lifecycle/build records retain their hashes and paths."
+}

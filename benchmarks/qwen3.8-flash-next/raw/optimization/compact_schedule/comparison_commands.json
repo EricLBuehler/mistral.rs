@@ -1,0 +1,48 @@
+[
+  {
+    "name": "baseline",
+    "command": [
+      "python3",
+      "/home/ericbuehler/qwen4exp_work/real_routing_20260930/tile_variants/run_variant.py",
+      "--binary",
+      "/home/ericbuehler/qwen4exp_work/moe_optimization_20260930/compact_schedule/validation/moe_dispatch_bench/moe_dispatch_bench-0dfba70e2949feab",
+      "--variant",
+      "baseline",
+      "--provenance",
+      "/home/ericbuehler/qwen4exp_work/moe_optimization_20260930/compact_schedule/validation/metadata.json",
+      "--test-source",
+      "/home/ericbuehler/qwen4exp_work/moe_optimization_20260930/compact_schedule/build/replay.source.rs",
+      "--output",
+      "/home/ericbuehler/qwen4exp_work/moe_optimization_20260930/compact_schedule/baseline",
+      "--baseline-dir",
+      "/home/ericbuehler/qwen4exp_work/moe_optimization_20260930/masked_y_bounded/replay",
+      "--released"
+    ],
+    "started_at": "2026-09-30T15:40:48.913110+00:00",
+    "returncode": 0,
+    "finished_at": "2026-09-30T15:41:04.151045+00:00"
+  },
+  {
+    "name": "compact",
+    "command": [
+      "python3",
+      "/home/ericbuehler/qwen4exp_work/real_routing_20260930/tile_variants/run_variant.py",
+      "--binary",
+      "/home/ericbuehler/qwen4exp_work/moe_optimization_20260930/compact_schedule/build/moe_dispatch_bench.variant",
+      "--variant",
+      "baseline",
+      "--provenance",
+      "/home/ericbuehler/qwen4exp_work/moe_optimization_20260930/compact_schedule/build/provenance.json",
+      "--test-source",
+      "/home/ericbuehler/qwen4exp_work/moe_optimization_20260930/compact_schedule/build/replay.source.rs",
+      "--output",
+      "/home/ericbuehler/qwen4exp_work/moe_optimization_20260930/compact_schedule/compact",
+      "--baseline-dir",
+      "/home/ericbuehler/qwen4exp_work/moe_optimization_20260930/compact_schedule/baseline",
+      "--released"
+    ],
+    "started_at": "2026-09-30T15:41:04.151315+00:00",
+    "returncode": 0,
+    "finished_at": "2026-09-30T15:41:24.386915+00:00"
+  }
+]

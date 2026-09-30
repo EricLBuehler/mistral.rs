@@ -1,0 +1,21 @@
+{
+  "original_sources": {
+    "/home/ericbuehler/mistral.rs/mistralrs-quant/kernels/mmq_gguf/mmq_gguf.cuh": "8b629533b0289ee0d67179530c5bd2ff9bd3248802fc7957d74b44343bd3bfa8",
+    "/home/ericbuehler/mistral.rs/mistralrs-quant/kernels/mmq_gguf/mmq_instance_q4_k.cu": "04f082040de2264f8e462c580821c18f932389434e266f24341036d2129e8198",
+    "/home/ericbuehler/mistral.rs/mistralrs-quant/kernels/mmq_gguf/mmq_instance_q4_1.cu": "8ef671d05df8b7edb9df82eb57a3c4bc817adac6a636ce015b611e638df2d59d"
+  },
+  "patched_sources": {
+    "/home/ericbuehler/qwen4exp_work/moe_optimization_20260930/compact_schedule/sources/mmq_gguf.cuh": "7d0df85b903336db81320a5cc51263907fe24d9acb3404137ecfb23cc6078c04",
+    "/home/ericbuehler/qwen4exp_work/moe_optimization_20260930/compact_schedule/sources/mmq_instance_q4_k.cu": "7e1f1d13747d36131f0a072d470937abce6782960276add5fce6b97ce2d014a9",
+    "/home/ericbuehler/qwen4exp_work/moe_optimization_20260930/compact_schedule/sources/mmq_instance_q4_1.cu": "b9d06352701987857afe51473532f6622dd0456c515dd08d6d4e0de89b49afac"
+  },
+  "patch_sha256": "286927d66d0c2c2775fb3c4337c588f7c5301a3ea577cc207fd50eb0b34c8d93",
+  "generator_sha256": "97872ffdf12ac03426461389f1c94d7ed554d7090d9899e3b2b75502fc83f20b",
+  "snippet_sha256": "e5bbb40b45f6c6db3d58bcef1142951c1c35b4b7e90db0b06411585fc1ea2434",
+  "scope": "Grouped Q4K/Q4_1, <=640 packed assignment rows, <=1024 experts; unchanged host tile selection.",
+  "prefix_capacity_bytes": 4100,
+  "existing_min_fixup_capacity_bytes": 65536,
+  "arithmetic": "Full-K, unchanged process_tile; same output-row/expert/tile ordering.",
+  "production_source_modified": false,
+  "compiled": false
+}

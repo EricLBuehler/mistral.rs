@@ -1,0 +1,322 @@
+[
+  {
+    "kind": "q4_k",
+    "kernel": "_Z17mul_mat_q_compactIL9ggml_type12ELi128ELb1EEv8mmq_argsPKi5uint3",
+    "resources": "REG:200 STACK:0 SHARED:1040 LOCAL:0 CONSTANT[2]:84 CONSTANT[0]:1116 TEXTURE:0 SURFACE:0 SAMPLER:0"
+  },
+  {
+    "kind": "q4_k",
+    "kernel": "_Z17mul_mat_q_compactIL9ggml_type12ELi128ELb0EEv8mmq_argsPKi5uint3",
+    "resources": "REG:199 STACK:0 SHARED:1040 LOCAL:0 CONSTANT[2]:96 CONSTANT[0]:1116 TEXTURE:0 SURFACE:0 SAMPLER:0"
+  },
+  {
+    "kind": "q4_k",
+    "kernel": "_Z17mul_mat_q_compactIL9ggml_type12ELi120ELb1EEv8mmq_argsPKi5uint3",
+    "resources": "REG:24 STACK:40 SHARED:1024 LOCAL:0 CONSTANT[0]:1116 TEXTURE:0 SURFACE:0 SAMPLER:0"
+  },
+  {
+    "kind": "q4_k",
+    "kernel": "_Z17mul_mat_q_compactIL9ggml_type12ELi120ELb0EEv8mmq_argsPKi5uint3",
+    "resources": "REG:24 STACK:40 SHARED:1024 LOCAL:0 CONSTANT[0]:1116 TEXTURE:0 SURFACE:0 SAMPLER:0"
+  },
+  {
+    "kind": "q4_k",
+    "kernel": "_Z17mul_mat_q_compactIL9ggml_type12ELi112ELb1EEv8mmq_argsPKi5uint3",
+    "resources": "REG:255 STACK:24 SHARED:1040 LOCAL:0 CONSTANT[2]:84 CONSTANT[0]:1116 TEXTURE:0 SURFACE:0 SAMPLER:0"
+  },
+  {
+    "kind": "q4_k",
+    "kernel": "_Z17mul_mat_q_compactIL9ggml_type12ELi112ELb0EEv8mmq_argsPKi5uint3",
+    "resources": "REG:254 STACK:0 SHARED:1040 LOCAL:0 CONSTANT[2]:84 CONSTANT[0]:1116 TEXTURE:0 SURFACE:0 SAMPLER:0"
+  },
+  {
+    "kind": "q4_k",
+    "kernel": "_Z17mul_mat_q_compactIL9ggml_type12ELi104ELb1EEv8mmq_argsPKi5uint3",
+    "resources": "REG:24 STACK:40 SHARED:1024 LOCAL:0 CONSTANT[0]:1116 TEXTURE:0 SURFACE:0 SAMPLER:0"
+  },
+  {
+    "kind": "q4_k",
+    "kernel": "_Z17mul_mat_q_compactIL9ggml_type12ELi104ELb0EEv8mmq_argsPKi5uint3",
+    "resources": "REG:24 STACK:40 SHARED:1024 LOCAL:0 CONSTANT[0]:1116 TEXTURE:0 SURFACE:0 SAMPLER:0"
+  },
+  {
+    "kind": "q4_k",
+    "kernel": "_Z17mul_mat_q_compactIL9ggml_type12ELi96ELb1EEv8mmq_argsPKi5uint3",
+    "resources": "REG:254 STACK:0 SHARED:1040 LOCAL:0 CONSTANT[2]:72 CONSTANT[0]:1116 TEXTURE:0 SURFACE:0 SAMPLER:0"
+  },
+  {
+    "kind": "q4_k",
+    "kernel": "_Z17mul_mat_q_compactIL9ggml_type12ELi96ELb0EEv8mmq_argsPKi5uint3",
+    "resources": "REG:255 STACK:0 SHARED:1040 LOCAL:0 CONSTANT[2]:72 CONSTANT[0]:1116 TEXTURE:0 SURFACE:0 SAMPLER:0"
+  },
+  {
+    "kind": "q4_k",
+    "kernel": "_Z17mul_mat_q_compactIL9ggml_type12ELi88ELb1EEv8mmq_argsPKi5uint3",
+    "resources": "REG:24 STACK:40 SHARED:1024 LOCAL:0 CONSTANT[0]:1116 TEXTURE:0 SURFACE:0 SAMPLER:0"
+  },
+  {
+    "kind": "q4_k",
+    "kernel": "_Z17mul_mat_q_compactIL9ggml_type12ELi88ELb0EEv8mmq_argsPKi5uint3",
+    "resources": "REG:24 STACK:40 SHARED:1024 LOCAL:0 CONSTANT[0]:1116 TEXTURE:0 SURFACE:0 SAMPLER:0"
+  },
+  {
+    "kind": "q4_k",
+    "kernel": "_Z17mul_mat_q_compactIL9ggml_type12ELi80ELb1EEv8mmq_argsPKi5uint3",
+    "resources": "REG:254 STACK:0 SHARED:1040 LOCAL:0 CONSTANT[2]:84 CONSTANT[0]:1116 TEXTURE:0 SURFACE:0 SAMPLER:0"
+  },
+  {
+    "kind": "q4_k",
+    "kernel": "_Z17mul_mat_q_compactIL9ggml_type12ELi80ELb0EEv8mmq_argsPKi5uint3",
+    "resources": "REG:252 STACK:0 SHARED:1040 LOCAL:0 CONSTANT[2]:60 CONSTANT[0]:1116 TEXTURE:0 SURFACE:0 SAMPLER:0"
+  },
+  {
+    "kind": "q4_k",
+    "kernel": "_Z17mul_mat_q_compactIL9ggml_type12ELi72ELb1EEv8mmq_argsPKi5uint3",
+    "resources": "REG:24 STACK:40 SHARED:1024 LOCAL:0 CONSTANT[0]:1116 TEXTURE:0 SURFACE:0 SAMPLER:0"
+  },
+  {
+    "kind": "q4_k",
+    "kernel": "_Z17mul_mat_q_compactIL9ggml_type12ELi72ELb0EEv8mmq_argsPKi5uint3",
+    "resources": "REG:24 STACK:40 SHARED:1024 LOCAL:0 CONSTANT[0]:1116 TEXTURE:0 SURFACE:0 SAMPLER:0"
+  },
+  {
+    "kind": "q4_k",
+    "kernel": "_Z17mul_mat_q_compactIL9ggml_type12ELi64ELb1EEv8mmq_argsPKi5uint3",
+    "resources": "REG:255 STACK:0 SHARED:1040 LOCAL:0 CONSTANT[2]:84 CONSTANT[0]:1116 TEXTURE:0 SURFACE:0 SAMPLER:0"
+  },
+  {
+    "kind": "q4_k",
+    "kernel": "_Z17mul_mat_q_compactIL9ggml_type12ELi64ELb0EEv8mmq_argsPKi5uint3",
+    "resources": "REG:255 STACK:0 SHARED:1040 LOCAL:0 CONSTANT[2]:24 CONSTANT[0]:1116 TEXTURE:0 SURFACE:0 SAMPLER:0"
+  },
+  {
+    "kind": "q4_k",
+    "kernel": "_Z17mul_mat_q_compactIL9ggml_type12ELi56ELb1EEv8mmq_argsPKi5uint3",
+    "resources": "REG:24 STACK:40 SHARED:1024 LOCAL:0 CONSTANT[0]:1116 TEXTURE:0 SURFACE:0 SAMPLER:0"
+  },
+  {
+    "kind": "q4_k",
+    "kernel": "_Z17mul_mat_q_compactIL9ggml_type12ELi56ELb0EEv8mmq_argsPKi5uint3",
+    "resources": "REG:24 STACK:40 SHARED:1024 LOCAL:0 CONSTANT[0]:1116 TEXTURE:0 SURFACE:0 SAMPLER:0"
+  },
+  {
+    "kind": "q4_k",
+    "kernel": "_Z17mul_mat_q_compactIL9ggml_type12ELi48ELb1EEv8mmq_argsPKi5uint3",
+    "resources": "REG:254 STACK:0 SHARED:1040 LOCAL:0 CONSTANT[2]:60 CONSTANT[0]:1116 TEXTURE:0 SURFACE:0 SAMPLER:0"
+  },
+  {
+    "kind": "q4_k",
+    "kernel": "_Z17mul_mat_q_compactIL9ggml_type12ELi48ELb0EEv8mmq_argsPKi5uint3",
+    "resources": "REG:168 STACK:0 SHARED:1040 LOCAL:0 CONSTANT[2]:24 CONSTANT[0]:1116 TEXTURE:0 SURFACE:0 SAMPLER:0"
+  },
+  {
+    "kind": "q4_k",
+    "kernel": "_Z17mul_mat_q_compactIL9ggml_type12ELi40ELb1EEv8mmq_argsPKi5uint3",
+    "resources": "REG:168 STACK:0 SHARED:1040 LOCAL:0 CONSTANT[0]:1116 TEXTURE:0 SURFACE:0 SAMPLER:0"
+  },
+  {
+    "kind": "q4_k",
+    "kernel": "_Z17mul_mat_q_compactIL9ggml_type12ELi40ELb0EEv8mmq_argsPKi5uint3",
+    "resources": "REG:140 STACK:0 SHARED:1040 LOCAL:0 CONSTANT[0]:1116 TEXTURE:0 SURFACE:0 SAMPLER:0"
+  },
+  {
+    "kind": "q4_k",
+    "kernel": "_Z17mul_mat_q_compactIL9ggml_type12ELi32ELb1EEv8mmq_argsPKi5uint3",
+    "resources": "REG:168 STACK:0 SHARED:1040 LOCAL:0 CONSTANT[0]:1116 TEXTURE:0 SURFACE:0 SAMPLER:0"
+  },
+  {
+    "kind": "q4_k",
+    "kernel": "_Z17mul_mat_q_compactIL9ggml_type12ELi32ELb0EEv8mmq_argsPKi5uint3",
+    "resources": "REG:168 STACK:0 SHARED:1040 LOCAL:0 CONSTANT[0]:1116 TEXTURE:0 SURFACE:0 SAMPLER:0"
+  },
+  {
+    "kind": "q4_k",
+    "kernel": "_Z17mul_mat_q_compactIL9ggml_type12ELi24ELb1EEv8mmq_argsPKi5uint3",
+    "resources": "REG:166 STACK:0 SHARED:1040 LOCAL:0 CONSTANT[0]:1116 TEXTURE:0 SURFACE:0 SAMPLER:0"
+  },
+  {
+    "kind": "q4_k",
+    "kernel": "_Z17mul_mat_q_compactIL9ggml_type12ELi24ELb0EEv8mmq_argsPKi5uint3",
+    "resources": "REG:164 STACK:0 SHARED:1040 LOCAL:0 CONSTANT[0]:1116 TEXTURE:0 SURFACE:0 SAMPLER:0"
+  },
+  {
+    "kind": "q4_k",
+    "kernel": "_Z17mul_mat_q_compactIL9ggml_type12ELi16ELb1EEv8mmq_argsPKi5uint3",
+    "resources": "REG:162 STACK:0 SHARED:1040 LOCAL:0 CONSTANT[0]:1116 TEXTURE:0 SURFACE:0 SAMPLER:0"
+  },
+  {
+    "kind": "q4_k",
+    "kernel": "_Z17mul_mat_q_compactIL9ggml_type12ELi16ELb0EEv8mmq_argsPKi5uint3",
+    "resources": "REG:128 STACK:0 SHARED:1040 LOCAL:0 CONSTANT[0]:1116 TEXTURE:0 SURFACE:0 SAMPLER:0"
+  },
+  {
+    "kind": "q4_k",
+    "kernel": "_Z17mul_mat_q_compactIL9ggml_type12ELi8ELb1EEv8mmq_argsPKi5uint3",
+    "resources": "REG:126 STACK:0 SHARED:1040 LOCAL:0 CONSTANT[0]:1116 TEXTURE:0 SURFACE:0 SAMPLER:0"
+  },
+  {
+    "kind": "q4_k",
+    "kernel": "_Z17mul_mat_q_compactIL9ggml_type12ELi8ELb0EEv8mmq_argsPKi5uint3",
+    "resources": "REG:76 STACK:0 SHARED:1040 LOCAL:0 CONSTANT[0]:1116 TEXTURE:0 SURFACE:0 SAMPLER:0"
+  },
+  {
+    "kind": "q4_1",
+    "kernel": "_Z17mul_mat_q_compactIL9ggml_type3ELi128ELb1EEv8mmq_argsPKi5uint3",
+    "resources": "REG:190 STACK:0 SHARED:1040 LOCAL:0 CONSTANT[2]:84 CONSTANT[0]:1116 TEXTURE:0 SURFACE:0 SAMPLER:0"
+  },
+  {
+    "kind": "q4_1",
+    "kernel": "_Z17mul_mat_q_compactIL9ggml_type3ELi128ELb0EEv8mmq_argsPKi5uint3",
+    "resources": "REG:199 STACK:0 SHARED:1040 LOCAL:0 CONSTANT[2]:96 CONSTANT[0]:1116 TEXTURE:0 SURFACE:0 SAMPLER:0"
+  },
+  {
+    "kind": "q4_1",
+    "kernel": "_Z17mul_mat_q_compactIL9ggml_type3ELi120ELb1EEv8mmq_argsPKi5uint3",
+    "resources": "REG:24 STACK:40 SHARED:1024 LOCAL:0 CONSTANT[0]:1116 TEXTURE:0 SURFACE:0 SAMPLER:0"
+  },
+  {
+    "kind": "q4_1",
+    "kernel": "_Z17mul_mat_q_compactIL9ggml_type3ELi120ELb0EEv8mmq_argsPKi5uint3",
+    "resources": "REG:24 STACK:40 SHARED:1024 LOCAL:0 CONSTANT[0]:1116 TEXTURE:0 SURFACE:0 SAMPLER:0"
+  },
+  {
+    "kind": "q4_1",
+    "kernel": "_Z17mul_mat_q_compactIL9ggml_type3ELi112ELb1EEv8mmq_argsPKi5uint3",
+    "resources": "REG:255 STACK:0 SHARED:1040 LOCAL:0 CONSTANT[2]:84 CONSTANT[0]:1116 TEXTURE:0 SURFACE:0 SAMPLER:0"
+  },
+  {
+    "kind": "q4_1",
+    "kernel": "_Z17mul_mat_q_compactIL9ggml_type3ELi112ELb0EEv8mmq_argsPKi5uint3",
+    "resources": "REG:255 STACK:48 SHARED:1040 LOCAL:0 CONSTANT[2]:84 CONSTANT[0]:1116 TEXTURE:0 SURFACE:0 SAMPLER:0"
+  },
+  {
+    "kind": "q4_1",
+    "kernel": "_Z17mul_mat_q_compactIL9ggml_type3ELi104ELb1EEv8mmq_argsPKi5uint3",
+    "resources": "REG:24 STACK:40 SHARED:1024 LOCAL:0 CONSTANT[0]:1116 TEXTURE:0 SURFACE:0 SAMPLER:0"
+  },
+  {
+    "kind": "q4_1",
+    "kernel": "_Z17mul_mat_q_compactIL9ggml_type3ELi104ELb0EEv8mmq_argsPKi5uint3",
+    "resources": "REG:24 STACK:40 SHARED:1024 LOCAL:0 CONSTANT[0]:1116 TEXTURE:0 SURFACE:0 SAMPLER:0"
+  },
+  {
+    "kind": "q4_1",
+    "kernel": "_Z17mul_mat_q_compactIL9ggml_type3ELi96ELb1EEv8mmq_argsPKi5uint3",
+    "resources": "REG:255 STACK:8 SHARED:1040 LOCAL:0 CONSTANT[2]:72 CONSTANT[0]:1116 TEXTURE:0 SURFACE:0 SAMPLER:0"
+  },
+  {
+    "kind": "q4_1",
+    "kernel": "_Z17mul_mat_q_compactIL9ggml_type3ELi96ELb0EEv8mmq_argsPKi5uint3",
+    "resources": "REG:255 STACK:24 SHARED:1040 LOCAL:0 CONSTANT[2]:72 CONSTANT[0]:1116 TEXTURE:0 SURFACE:0 SAMPLER:0"
+  },
+  {
+    "kind": "q4_1",
+    "kernel": "_Z17mul_mat_q_compactIL9ggml_type3ELi88ELb1EEv8mmq_argsPKi5uint3",
+    "resources": "REG:24 STACK:40 SHARED:1024 LOCAL:0 CONSTANT[0]:1116 TEXTURE:0 SURFACE:0 SAMPLER:0"
+  },
+  {
+    "kind": "q4_1",
+    "kernel": "_Z17mul_mat_q_compactIL9ggml_type3ELi88ELb0EEv8mmq_argsPKi5uint3",
+    "resources": "REG:24 STACK:40 SHARED:1024 LOCAL:0 CONSTANT[0]:1116 TEXTURE:0 SURFACE:0 SAMPLER:0"
+  },
+  {
+    "kind": "q4_1",
+    "kernel": "_Z17mul_mat_q_compactIL9ggml_type3ELi80ELb1EEv8mmq_argsPKi5uint3",
+    "resources": "REG:254 STACK:0 SHARED:1040 LOCAL:0 CONSTANT[2]:84 CONSTANT[0]:1116 TEXTURE:0 SURFACE:0 SAMPLER:0"
+  },
+  {
+    "kind": "q4_1",
+    "kernel": "_Z17mul_mat_q_compactIL9ggml_type3ELi80ELb0EEv8mmq_argsPKi5uint3",
+    "resources": "REG:255 STACK:24 SHARED:1040 LOCAL:0 CONSTANT[2]:60 CONSTANT[0]:1116 TEXTURE:0 SURFACE:0 SAMPLER:0"
+  },
+  {
+    "kind": "q4_1",
+    "kernel": "_Z17mul_mat_q_compactIL9ggml_type3ELi72ELb1EEv8mmq_argsPKi5uint3",
+    "resources": "REG:24 STACK:40 SHARED:1024 LOCAL:0 CONSTANT[0]:1116 TEXTURE:0 SURFACE:0 SAMPLER:0"
+  },
+  {
+    "kind": "q4_1",
+    "kernel": "_Z17mul_mat_q_compactIL9ggml_type3ELi72ELb0EEv8mmq_argsPKi5uint3",
+    "resources": "REG:24 STACK:40 SHARED:1024 LOCAL:0 CONSTANT[0]:1116 TEXTURE:0 SURFACE:0 SAMPLER:0"
+  },
+  {
+    "kind": "q4_1",
+    "kernel": "_Z17mul_mat_q_compactIL9ggml_type3ELi64ELb1EEv8mmq_argsPKi5uint3",
+    "resources": "REG:255 STACK:0 SHARED:1040 LOCAL:0 CONSTANT[2]:84 CONSTANT[0]:1116 TEXTURE:0 SURFACE:0 SAMPLER:0"
+  },
+  {
+    "kind": "q4_1",
+    "kernel": "_Z17mul_mat_q_compactIL9ggml_type3ELi64ELb0EEv8mmq_argsPKi5uint3",
+    "resources": "REG:255 STACK:0 SHARED:1040 LOCAL:0 CONSTANT[2]:36 CONSTANT[0]:1116 TEXTURE:0 SURFACE:0 SAMPLER:0"
+  },
+  {
+    "kind": "q4_1",
+    "kernel": "_Z17mul_mat_q_compactIL9ggml_type3ELi56ELb1EEv8mmq_argsPKi5uint3",
+    "resources": "REG:24 STACK:40 SHARED:1024 LOCAL:0 CONSTANT[0]:1116 TEXTURE:0 SURFACE:0 SAMPLER:0"
+  },
+  {
+    "kind": "q4_1",
+    "kernel": "_Z17mul_mat_q_compactIL9ggml_type3ELi56ELb0EEv8mmq_argsPKi5uint3",
+    "resources": "REG:24 STACK:40 SHARED:1024 LOCAL:0 CONSTANT[0]:1116 TEXTURE:0 SURFACE:0 SAMPLER:0"
+  },
+  {
+    "kind": "q4_1",
+    "kernel": "_Z17mul_mat_q_compactIL9ggml_type3ELi48ELb1EEv8mmq_argsPKi5uint3",
+    "resources": "REG:254 STACK:0 SHARED:1040 LOCAL:0 CONSTANT[2]:60 CONSTANT[0]:1116 TEXTURE:0 SURFACE:0 SAMPLER:0"
+  },
+  {
+    "kind": "q4_1",
+    "kernel": "_Z17mul_mat_q_compactIL9ggml_type3ELi48ELb0EEv8mmq_argsPKi5uint3",
+    "resources": "REG:168 STACK:0 SHARED:1040 LOCAL:0 CONSTANT[2]:24 CONSTANT[0]:1116 TEXTURE:0 SURFACE:0 SAMPLER:0"
+  },
+  {
+    "kind": "q4_1",
+    "kernel": "_Z17mul_mat_q_compactIL9ggml_type3ELi40ELb1EEv8mmq_argsPKi5uint3",
+    "resources": "REG:168 STACK:0 SHARED:1040 LOCAL:0 CONSTANT[0]:1116 TEXTURE:0 SURFACE:0 SAMPLER:0"
+  },
+  {
+    "kind": "q4_1",
+    "kernel": "_Z17mul_mat_q_compactIL9ggml_type3ELi40ELb0EEv8mmq_argsPKi5uint3",
+    "resources": "REG:168 STACK:0 SHARED:1040 LOCAL:0 CONSTANT[0]:1116 TEXTURE:0 SURFACE:0 SAMPLER:0"
+  },
+  {
+    "kind": "q4_1",
+    "kernel": "_Z17mul_mat_q_compactIL9ggml_type3ELi32ELb1EEv8mmq_argsPKi5uint3",
+    "resources": "REG:166 STACK:0 SHARED:1040 LOCAL:0 CONSTANT[0]:1116 TEXTURE:0 SURFACE:0 SAMPLER:0"
+  },
+  {
+    "kind": "q4_1",
+    "kernel": "_Z17mul_mat_q_compactIL9ggml_type3ELi32ELb0EEv8mmq_argsPKi5uint3",
+    "resources": "REG:166 STACK:0 SHARED:1040 LOCAL:0 CONSTANT[0]:1116 TEXTURE:0 SURFACE:0 SAMPLER:0"
+  },
+  {
+    "kind": "q4_1",
+    "kernel": "_Z17mul_mat_q_compactIL9ggml_type3ELi24ELb1EEv8mmq_argsPKi5uint3",
+    "resources": "REG:164 STACK:0 SHARED:1040 LOCAL:0 CONSTANT[0]:1116 TEXTURE:0 SURFACE:0 SAMPLER:0"
+  },
+  {
+    "kind": "q4_1",
+    "kernel": "_Z17mul_mat_q_compactIL9ggml_type3ELi24ELb0EEv8mmq_argsPKi5uint3",
+    "resources": "REG:128 STACK:0 SHARED:1040 LOCAL:0 CONSTANT[0]:1116 TEXTURE:0 SURFACE:0 SAMPLER:0"
+  },
+  {
+    "kind": "q4_1",
+    "kernel": "_Z17mul_mat_q_compactIL9ggml_type3ELi16ELb1EEv8mmq_argsPKi5uint3",
+    "resources": "REG:167 STACK:0 SHARED:1040 LOCAL:0 CONSTANT[0]:1116 TEXTURE:0 SURFACE:0 SAMPLER:0"
+  },
+  {
+    "kind": "q4_1",
+    "kernel": "_Z17mul_mat_q_compactIL9ggml_type3ELi16ELb0EEv8mmq_argsPKi5uint3",
+    "resources": "REG:128 STACK:0 SHARED:1040 LOCAL:0 CONSTANT[0]:1116 TEXTURE:0 SURFACE:0 SAMPLER:0"
+  },
+  {
+    "kind": "q4_1",
+    "kernel": "_Z17mul_mat_q_compactIL9ggml_type3ELi8ELb1EEv8mmq_argsPKi5uint3",
+    "resources": "REG:128 STACK:0 SHARED:1040 LOCAL:0 CONSTANT[0]:1116 TEXTURE:0 SURFACE:0 SAMPLER:0"
+  },
+  {
+    "kind": "q4_1",
+    "kernel": "_Z17mul_mat_q_compactIL9ggml_type3ELi8ELb0EEv8mmq_argsPKi5uint3",
+    "resources": "REG:100 STACK:0 SHARED:1040 LOCAL:0 CONSTANT[0]:1116 TEXTURE:0 SURFACE:0 SAMPLER:0"
+  }
+]
