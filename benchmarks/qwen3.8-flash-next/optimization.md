@@ -103,3 +103,25 @@ The prototype is rejected because it is substantially slower. Each row below con
 All 25 outputs are bit-exact against the masked baseline. Independent CPU-oracle tail/stream-K tests and changed-route CUDA graph tests pass, including Compute Sanitizer with zero errors. The unchanged GEMV control has native 42/56-row ratios of 0.988x/0.991x, so ordinary drift does not explain the roughly doubled grouped cost. This rejects this persistent scheduling implementation; it does not establish that every compact schedule would lose. No smaller-tile followup or production adoption was made, and these warmed single-layer replays make no serving-throughput claim.
 
 [Paired measurements and controls](raw/optimization/compact_schedule/summary.json), [correctness commands](raw/optimization/compact_schedule/validation/metadata.json), [source patch](raw/optimization/compact_schedule/sources/compact_schedule.patch), and [provenance](raw/optimization/compact_schedule/final_provenance.json) retain the result. The [manifest](raw/optimization/compact_schedule/manifest.json) excludes executables, model weights, and saved output tensors while retaining their hashes in the lifecycle records.
+
+## Grouped small-row GEMV
+
+An external CUDA prototype reuses each expert's weight fragment across two or four routed rows. It keeps the indexed GEMV Q8_1 activation format, F32 intermediate, fused gate/up/SiLU, and weighted atomic reduction. Routing construction, both quantizations, output clearing, and BF16 conversion remain inside each measured FFN call. The first layout handles two gate/up output features and four down features per warp; a second layout doubles those counts.
+
+The first layout with two routed rows per group improves the 24-row cases, where current dispatch uses indexed GEMV, but roughly ties MMQ at larger shapes. The doubled-feature layout loses every comparison against MMQ at 32 or more rows. Neither new kernel is adopted. Each table row contains five inputs; times are medians of per-input eager CUDA-event medians, and ratios are medians of paired input ratios. The two layouts run in separate processes and each ratio uses its own contemporaneous default control.
+
+| Input rows | Route source | Default, ms | First layout, group 2, ms | Default / first layout | Default / doubled features |
+| --- | --- | ---: | ---: | ---: | ---: |
+| 24 | Derived per-sequence prefix | 2.628 | 2.028 | 1.282x | 1.207x |
+| 32 | Derived per-sequence prefix | 2.326 | 2.353 | 0.992x | 0.939x |
+| 40 | Derived per-sequence prefix | 2.610 | 2.612 | 1.002x | 0.927x |
+| 42 | Native C6 verification | 2.547 | 2.545 | 1.001x | 0.933x |
+| 56 | Native C8 verification | 3.359 | 3.359 | 0.998x | 0.918x |
+
+The first layout's 24-row graph ratio is 1.308x; both eager and graph comparisons improve on all five inputs. Grouping four routed rows is slower than grouping two in the first layout. The two-row kernels use 55/48 registers in gate-up/down, versus 53/48 after doubling output features. All four compiled configurations have zero stack and spill bytes. These resource counts establish feasibility, not a measured occupancy or bandwidth explanation. [First-layout results](raw/optimization/grouped_gemv/summary.json) and [doubled-feature results](raw/optimization/grouped_gemv/more_features_summary.json) include both group widths, graphs, controls, and clock samples.
+
+Both layouts pass all 25 strict comparisons against existing GEMV, all native default/capture checks, eager/graph comparisons, and one changed-routing graph case per run using the same device allocation. The first layout's maximum difference from GEMV is 0.00404% relative RMS; atomic accumulation can occur in a different order. Separate FP32 expert-FFN references cover every saved output and retain the existing GEMV quantization error. MMQ has different activation quantization and intermediate rounding, so its output difference is recorded separately. These are numerical kernel checks, not model-quality evaluations.
+
+Two initial sanitizer attempts included repeated timing replays and were stopped without a pass/fail conclusion. Final validation uses a separate harness with no warmups or timed iterations, linked to each benchmark's exact CUDA object. Both group widths and changed-route graphs pass the focused checks with zero reported errors. Sanitizer timings are excluded from the table. [Final provenance](raw/optimization/grouped_gemv/final_provenance.json) retains the stopped attempts, successful checks, commands, object hashes, and unchanged production-source/archive/binary checks.
+
+This experiment supports investigating the existing MMQ path for sub-32-row batches as a smaller production change. It does not validate broader eligibility for the new GEMV kernels. Repeated single-layer weights can have different cache behavior from full-model execution, and these results make no serving-throughput or DRAM-bandwidth claim. The [archive manifest](raw/optimization/grouped_gemv/manifest.json) preserves source and raw evidence while excluding executables, model weights, and output tensors; their hashes remain recorded.

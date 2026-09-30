@@ -1,0 +1,6 @@
+========= COMPUTE-SANITIZER
+
+running 1 test
+test grouped_gemv_replay::flash_next_grouped_gemv_real_routing ... loading blk.8.ffn_gate_exps.weight
+loading blk.8.ffn_up_exps.weight
+loading blk.8.ffn_down_exps.weight

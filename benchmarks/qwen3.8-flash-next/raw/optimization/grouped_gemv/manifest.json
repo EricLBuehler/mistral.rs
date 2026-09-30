@@ -1,0 +1,413 @@
+{
+  "scope": "External grouped small-row GEMV experiment, both output-feature layouts; no production adoption.",
+  "external_source_root": "/home/ericbuehler/qwen4exp_work/moe_optimization_20260930/grouped_gemv",
+  "files": [
+    {
+      "path": "all25/gpu_monitor.csv",
+      "bytes": 2503,
+      "sha256": "4ded75b53d7f9a56036b112f9ea306a8fc765c218fb0f068a1be31bf0ca20e79"
+    },
+    {
+      "path": "all25/gpu_monitor.stderr.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "all25/metadata.json",
+      "bytes": 7094,
+      "sha256": "c156cf1b32bb651d587df93dc0d08622403a91ec66952d6a3fc8edccb30ef06f"
+    },
+    {
+      "path": "all25/results.json",
+      "bytes": 461184,
+      "sha256": "cea179f0095a0c43790512b29e168967d7e99c163f3df446329d0eee7a2b3e4d"
+    },
+    {
+      "path": "all25/run.log",
+      "bytes": 201659,
+      "sha256": "dd80294286140172f617f1e69de3641dfe44c03b3fbb35e3e62fa42aa721982f"
+    },
+    {
+      "path": "all25/run_external.source.py",
+      "bytes": 5438,
+      "sha256": "942590aee2d2956e9c911417012333abe2b1f137553bbbe1ad730a5b14d3b608"
+    },
+    {
+      "path": "build_base.provenance.json",
+      "bytes": 13073,
+      "sha256": "b6923c1f0818c0b2984f472a370487f19a868b74221600cd4d5dd50be015b48c"
+    },
+    {
+      "path": "build_external.py",
+      "bytes": 5174,
+      "sha256": "7e10b3be05ce9a5f5149bbae2e5873ea0660724404058985e67b7069a79909d9"
+    },
+    {
+      "path": "build_final/nvcc.log",
+      "bytes": 7859,
+      "sha256": "7737a71375e26f28c6f08d2341fca18fd4d287bcbc26cb95dc33912496743a9d"
+    },
+    {
+      "path": "build_final/provenance.json",
+      "bytes": 18899,
+      "sha256": "3751f1a038dbd43e2915e9896dffd586f979f18810907e9a9016c26494db7513"
+    },
+    {
+      "path": "build_final/rustc.log",
+      "bytes": 356,
+      "sha256": "31bce90a65fd1af40f1d537647f836a6085d58bff517f05099cc21fbb0f16a5c"
+    },
+    {
+      "path": "build_more_features/nvcc.log",
+      "bytes": 7915,
+      "sha256": "c659d36c4297458157021f18073afa337797efd60353e3863e73bc2b53d603e0"
+    },
+    {
+      "path": "build_more_features/provenance.json",
+      "bytes": 19011,
+      "sha256": "c9d5b96244c4ac518b9387fdbe4fe7d9f248841dde683e0d11ad709b0d8a1659"
+    },
+    {
+      "path": "build_more_features/rustc.log",
+      "bytes": 372,
+      "sha256": "0a7b0e5024bb62ecf62e7c66ba921e10bf63ea50dd47002804783f80794acf80"
+    },
+    {
+      "path": "build_more_features_validation/provenance.json",
+      "bytes": 18114,
+      "sha256": "630b456e027eb18ede57ab28a07396d46cbf07fbfb7332d691f2d82581b61361"
+    },
+    {
+      "path": "build_more_features_validation/rustc.log",
+      "bytes": 394,
+      "sha256": "ae9ae118386d233a6e839f1c31dc8fa09935a6d7db76b7a35bd450a40c8c05aa"
+    },
+    {
+      "path": "build_validation/provenance.json",
+      "bytes": 17938,
+      "sha256": "eea98b4d22584d20ef221e590aefda3e8363dadbaf7e12c2bf2a03b23ce2aefd"
+    },
+    {
+      "path": "build_validation/rustc.log",
+      "bytes": 366,
+      "sha256": "240776a69c61433121af5a60dffc2a068e9573c87deccfb3d614c2a59e71a74e"
+    },
+    {
+      "path": "final_provenance.json",
+      "bytes": 10127,
+      "sha256": "8a7dd63321c5a4f36d4c9225a807da2384412e23c9ce7f89f14d7dbfca5ee4f5"
+    },
+    {
+      "path": "findings.txt",
+      "bytes": 3248,
+      "sha256": "bc29c513fadaac24dbb39f27b50ae60232c020f991188c26f29c83a908b49894"
+    },
+    {
+      "path": "grouped_gemv.cu",
+      "bytes": 8784,
+      "sha256": "0ce2cecc267b824b2a08627321e8f2f83f404a8417fc7572bf898265747a1c1e"
+    },
+    {
+      "path": "grouped_gemv_replay.rs",
+      "bytes": 19676,
+      "sha256": "14d7d46b3c8bfc6681cab527a364aecae939962356f4c9d1d1b4c20a5d24cb68"
+    },
+    {
+      "path": "harness_sources.json",
+      "bytes": 448,
+      "sha256": "05da934ce1ae21562c5b9218ae6eee34929f9ff54303fcae2af9fa2f284ad6e4"
+    },
+    {
+      "path": "memcheck_focused/bounded_stop.json",
+      "bytes": 246,
+      "sha256": "58503c01a6a076714e90017cd14850ddb65005d60e333dffa15bd8b7c0fb4cff"
+    },
+    {
+      "path": "memcheck_focused/gpu_monitor.csv",
+      "bytes": 6976,
+      "sha256": "42261bd4fa0244a4df8af2d7ebe5ee673fb9f3f7ca8fa09a64a17740595b2096"
+    },
+    {
+      "path": "memcheck_focused/gpu_monitor.stderr.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "memcheck_focused/metadata.json",
+      "bytes": 2931,
+      "sha256": "c1efbb64d5c44bf8da22943fb3815144972dfcfec2832c94d614508c2c677035"
+    },
+    {
+      "path": "memcheck_focused/run.log",
+      "bytes": 214,
+      "sha256": "83e93f888d32f15787047a9587ddafcccad9102c1f2b967ec2811ce74a3be449"
+    },
+    {
+      "path": "memcheck_focused/run_external.source.py",
+      "bytes": 5762,
+      "sha256": "c1085bce253ce6868d4fdcb2ea3251937efe118424601d20d4cb710c7da9ce53"
+    },
+    {
+      "path": "memcheck_native56/bounded_stop.json",
+      "bytes": 316,
+      "sha256": "fb5733036f1b3863620776296d7f585a533fd2af497204cbf970bfc81ed6897b"
+    },
+    {
+      "path": "memcheck_native56/gpu_monitor.csv",
+      "bytes": 9212,
+      "sha256": "f77d673e8bc9e8b8de67e486a9f6cde2fee8d274dc1fcda15ee21e4aa098e6c8"
+    },
+    {
+      "path": "memcheck_native56/gpu_monitor.stderr.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "memcheck_native56/metadata.json",
+      "bytes": 2843,
+      "sha256": "655d02f824a0790da5411bbf0dd5bfb1c7e8b922ab80526445e6f3adb0dd56a4"
+    },
+    {
+      "path": "memcheck_native56/run.log",
+      "bytes": 214,
+      "sha256": "83e93f888d32f15787047a9587ddafcccad9102c1f2b967ec2811ce74a3be449"
+    },
+    {
+      "path": "memcheck_native56/run_external.source.py",
+      "bytes": 5438,
+      "sha256": "942590aee2d2956e9c911417012333abe2b1f137553bbbe1ad730a5b14d3b608"
+    },
+    {
+      "path": "memcheck_validation/gpu_monitor.csv",
+      "bytes": 996,
+      "sha256": "3f9beb4b8ef50231f9a49e3d2096b06391f1c5fdec6891ca4875b8c9007c2ec5"
+    },
+    {
+      "path": "memcheck_validation/gpu_monitor.stderr.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "memcheck_validation/metadata.json",
+      "bytes": 4039,
+      "sha256": "02a11c63a7f93e6fdc097e343bd0de7b90cf85f3f7b980b994de361201586a05"
+    },
+    {
+      "path": "memcheck_validation/results.json",
+      "bytes": 11262,
+      "sha256": "ee3d8e0ba4d44621629c34396acbde2ecdbaf4fa9d6328fea17ef75a090cb7e4"
+    },
+    {
+      "path": "memcheck_validation/run.log",
+      "bytes": 3764,
+      "sha256": "121c8ac9ca5755efa913d8a65eb25c1124f391a6ef5301cffefc9e9ff1ea211f"
+    },
+    {
+      "path": "memcheck_validation/run_external.source.py",
+      "bytes": 5762,
+      "sha256": "c1085bce253ce6868d4fdcb2ea3251937efe118424601d20d4cb710c7da9ce53"
+    },
+    {
+      "path": "more_features/features_per_warp.patch",
+      "bytes": 356,
+      "sha256": "f30923c99267e9c0e699eeb7f47ea4b69cfb6fd549dcb7a5d67525063d3ecd1a"
+    },
+    {
+      "path": "more_features/grouped_gemv.cu",
+      "bytes": 8784,
+      "sha256": "e73bef75af45d20df29cd568d8f94bb0c11dc62d23f5aecf597b81c081b67942"
+    },
+    {
+      "path": "more_features_all25/gpu_monitor.csv",
+      "bytes": 2607,
+      "sha256": "3c1d187d252766ef4f39c0742077bbdace0aec5672818d6edceb7f21f444f153"
+    },
+    {
+      "path": "more_features_all25/gpu_monitor.stderr.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "more_features_all25/metadata.json",
+      "bytes": 7274,
+      "sha256": "1df76f0599c735893e10ada1b2745033b92ca4cbbcfaec696bcad86dd10b5555"
+    },
+    {
+      "path": "more_features_all25/results.json",
+      "bytes": 461652,
+      "sha256": "5fce1a64ab55f4ccdda203804f619ab44ced9da3473049c084c290330a4f3230"
+    },
+    {
+      "path": "more_features_all25/run.log",
+      "bytes": 202127,
+      "sha256": "983d8fbd05e5ee59379304b517c0b8e717e52ea181f9943a22e7d941fe9e78d7"
+    },
+    {
+      "path": "more_features_all25/run_external.source.py",
+      "bytes": 5762,
+      "sha256": "c1085bce253ce6868d4fdcb2ea3251937efe118424601d20d4cb710c7da9ce53"
+    },
+    {
+      "path": "more_features_memcheck_validation/gpu_monitor.csv",
+      "bytes": 943,
+      "sha256": "02680dc99914118064614ec4000aba12aa60b03ffd628524a7a2390f8f9f4eb0"
+    },
+    {
+      "path": "more_features_memcheck_validation/gpu_monitor.stderr.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "more_features_memcheck_validation/metadata.json",
+      "bytes": 4151,
+      "sha256": "672f1d6358c5f7b56cfabd78138683adf245321dd31198523eb87a990753583f"
+    },
+    {
+      "path": "more_features_memcheck_validation/results.json",
+      "bytes": 11308,
+      "sha256": "444daef0ac7001e4c1f879118e19b8f62a76eeeae459e693ec0501aeb23aa319"
+    },
+    {
+      "path": "more_features_memcheck_validation/run.log",
+      "bytes": 3810,
+      "sha256": "c4c64f9a6201b79e021fc05eb76bc7c2284f5e3004b4dcdfb80276f37a9ceb84"
+    },
+    {
+      "path": "more_features_memcheck_validation/run_external.source.py",
+      "bytes": 5762,
+      "sha256": "c1085bce253ce6868d4fdcb2ea3251937efe118424601d20d4cb710c7da9ce53"
+    },
+    {
+      "path": "more_features_oracle25/gpu_monitor.csv",
+      "bytes": 423,
+      "sha256": "ae40a4fa7b946be37180cfa9602d010e0454f7ed1cfb15c86ce095caf09c6c23"
+    },
+    {
+      "path": "more_features_oracle25/gpu_monitor.stderr.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "more_features_oracle25/metadata.json",
+      "bytes": 3795,
+      "sha256": "ee624477a3799493f805da57fb491aa466edf52a38722def116d324e346b813f"
+    },
+    {
+      "path": "more_features_oracle25/oracle.json",
+      "bytes": 32447,
+      "sha256": "97fba1dbe23cdcac9db3c0393d33098ccd7d1eb0e3e0300f8e5dcd37ee6efb83"
+    },
+    {
+      "path": "more_features_oracle25/run.log",
+      "bytes": 283,
+      "sha256": "52be80a0304cb6aa6731661c5e6734b0f2bf3caeea22459a212e97ebd2e5d4c0"
+    },
+    {
+      "path": "more_features_oracle25/run_external.source.py",
+      "bytes": 5762,
+      "sha256": "c1085bce253ce6868d4fdcb2ea3251937efe118424601d20d4cb710c7da9ce53"
+    },
+    {
+      "path": "more_features_summary.json",
+      "bytes": 33789,
+      "sha256": "6f6d59d0bbf3af791a4edc223a6e451392e6419674dcc5b228cebb8f5f28d2e2"
+    },
+    {
+      "path": "oracle25/gpu_monitor.csv",
+      "bytes": 424,
+      "sha256": "25cb273587625790686287007f17488444306fd6af87e1f5248f27c5048e5ab7"
+    },
+    {
+      "path": "oracle25/gpu_monitor.stderr.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "oracle25/metadata.json",
+      "bytes": 3601,
+      "sha256": "1c5e3fc0f7dc4496680141f8bd6578a8624fd340a83e46001de8c53100077698"
+    },
+    {
+      "path": "oracle25/oracle.json",
+      "bytes": 32448,
+      "sha256": "3fa0f386644833b69fbea86237e78608b6adcec32e2601e9dcdb735390d6a61c"
+    },
+    {
+      "path": "oracle25/run.log",
+      "bytes": 283,
+      "sha256": "8dda14d85b993cbaf4bd874c94b046939addd0678f91d7bf09220ba41863758d"
+    },
+    {
+      "path": "oracle25/run_external.source.py",
+      "bytes": 5438,
+      "sha256": "942590aee2d2956e9c911417012333abe2b1f137553bbbe1ad730a5b14d3b608"
+    },
+    {
+      "path": "package_evidence.py",
+      "bytes": 2835,
+      "sha256": "721ee76a7a6ed0b6979fdc28303d9b21cccc5b4511f5a286552c3ea02c6079df"
+    },
+    {
+      "path": "replay.source.rs",
+      "bytes": 42503,
+      "sha256": "f61cc9799fa6361f6fde5ec62230bd1d042f8f3bb30a7d2293ce134652dbccfb"
+    },
+    {
+      "path": "run_external.py",
+      "bytes": 5762,
+      "sha256": "c1085bce253ce6868d4fdcb2ea3251937efe118424601d20d4cb710c7da9ce53"
+    },
+    {
+      "path": "smoke_native56/gpu_monitor.csv",
+      "bytes": 475,
+      "sha256": "35857521e16aa344c570387ad464e36fa27251e6e97fb89a4f25bd2241eded4f"
+    },
+    {
+      "path": "smoke_native56/gpu_monitor.stderr.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "smoke_native56/metadata.json",
+      "bytes": 3701,
+      "sha256": "150d1ed5dac21887ea761e5f93973ab0ee45578b6edecf9924af3eba109366f1"
+    },
+    {
+      "path": "smoke_native56/results.json",
+      "bytes": 19648,
+      "sha256": "4229311739f228cfa73129de4b17d6c82da8b579e5021aa6120b3c61be3f339e"
+    },
+    {
+      "path": "smoke_native56/run.log",
+      "bytes": 8777,
+      "sha256": "bf48347e4728c1c5858649c262d6092a22a8daff0202bb413fbc194fe5610a9e"
+    },
+    {
+      "path": "smoke_native56/run_external.source.py",
+      "bytes": 5438,
+      "sha256": "942590aee2d2956e9c911417012333abe2b1f137553bbbe1ad730a5b14d3b608"
+    },
+    {
+      "path": "summarize.py",
+      "bytes": 4861,
+      "sha256": "c3466063814eb94e956e2bcbb0c37206c2e496f8baf3e65a85baae6fdc7e309f"
+    },
+    {
+      "path": "summary.json",
+      "bytes": 33754,
+      "sha256": "80232f871e496c29899978c2e52e34f697c8792af4f83f84d9a636312652f483"
+    },
+    {
+      "path": "validation_harness/grouped_gemv_replay.rs",
+      "bytes": 19667,
+      "sha256": "92d2848062c34686422bd8abcaed0bf5b198f20387827aae3d7d0c7d0c8d3b94"
+    },
+    {
+      "path": "validation_harness/replay.source.rs",
+      "bytes": 42503,
+      "sha256": "f61cc9799fa6361f6fde5ec62230bd1d042f8f3bb30a7d2293ce134652dbccfb"
+    }
+  ],
+  "excluded": "Executable/object/native archives, full SASS, model weights and output tensors. Exact executable/object/source/archive hashes are retained in build and final provenance; saved output hashes are retained in phase metadata.",
+  "validation": "Two initial sanitizer attempts were stopped and are incomplete. Validation-only runs pass with zero errors while reusing the exact benchmark CUDA objects. Sanitizer timings are not benchmark results."
+}

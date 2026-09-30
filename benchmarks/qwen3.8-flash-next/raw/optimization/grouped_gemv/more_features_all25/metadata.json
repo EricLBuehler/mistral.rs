@@ -1,0 +1,98 @@
+{
+  "complete": true,
+  "started_at": "2026-09-30T16:14:05.226643+00:00",
+  "build_provenance": "/home/ericbuehler/qwen4exp_work/moe_optimization_20260930/grouped_gemv/build_more_features/provenance.json",
+  "build_provenance_sha256": "c9d5b96244c4ac518b9387fdbe4fe7d9f248841dde683e0d11ad709b0d8a1659",
+  "binary_sha256": "827b8efa475d3b02feb1834e1c4cdc07f9572b2bcca205587e083244cdd1584a",
+  "command": [
+    "/home/ericbuehler/qwen4exp_work/moe_optimization_20260930/grouped_gemv/build_more_features/moe_dispatch_bench-0dfba70e2949feab",
+    "--exact",
+    "grouped_gemv_replay::flash_next_grouped_gemv_real_routing",
+    "--ignored",
+    "--nocapture",
+    "--test-threads=1"
+  ],
+  "script_sha256": "c1085bce253ce6868d4fdcb2ea3251937efe118424601d20d4cb710c7da9ce53",
+  "source_sha256": {
+    "/home/ericbuehler/qwen4exp_work/moe_optimization_20260930/grouped_gemv/build_more_features/grouped_gemv.cu": "e73bef75af45d20df29cd568d8f94bb0c11dc62d23f5aecf597b81c081b67942",
+    "/home/ericbuehler/qwen4exp_work/moe_optimization_20260930/grouped_gemv/build_more_features/replay.source.rs": "f61cc9799fa6361f6fde5ec62230bd1d042f8f3bb30a7d2293ce134652dbccfb",
+    "/home/ericbuehler/qwen4exp_work/moe_optimization_20260930/grouped_gemv/build_more_features/grouped_gemv_replay.rs": "14d7d46b3c8bfc6681cab527a364aecae939962356f4c9d1d1b4c20a5d24cb68"
+  },
+  "environment_overrides": {
+    "MISTRALRS_MOE_REPLAY_DIR": "/home/ericbuehler/qwen4exp_work/real_routing_20260930/runtime/captures",
+    "MISTRALRS_MOE_BENCH_OUTPUT": "/home/ericbuehler/qwen4exp_work/moe_optimization_20260930/grouped_gemv/more_features_all25/results.json",
+    "MISTRALRS_MOE_REPLAY_OUTPUT_DIR": "/home/ericbuehler/qwen4exp_work/moe_optimization_20260930/grouped_gemv/more_features_all25/outputs",
+    "MISTRALRS_MOE_ORACLE_OUTPUT": "/home/ericbuehler/qwen4exp_work/moe_optimization_20260930/grouped_gemv/more_features_all25/oracle.json"
+  },
+  "scope": "Isolated captured layer8 FFN, not whole-model serving throughput.",
+  "memcheck": false,
+  "isolation_before": {
+    "at": "2026-09-30T16:14:05.281226+00:00",
+    "processes": [
+      {
+        "pid": 2122897,
+        "name": "rust-analyzer",
+        "state": "T"
+      }
+    ]
+  },
+  "monitor": {
+    "command": [
+      "nvidia-smi",
+      "--query-gpu=timestamp,clocks.sm,clocks.mem,power.draw,temperature.gpu,utilization.gpu",
+      "--format=csv,nounits",
+      "--loop-ms=1000"
+    ],
+    "scope": "Whole child, including loading, correctness checks, warmups and timing; not kernel-local counters.",
+    "returncode_before_stop": null,
+    "csv_sha256": "3c1d187d252766ef4f39c0742077bbdace0aec5672818d6edceb7f21f444f153",
+    "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "pid": 2435331,
+  "launched_at": "2026-09-30T16:14:05.282813+00:00",
+  "returncode": 0,
+  "finished_at": "2026-09-30T16:14:52.438302+00:00",
+  "log_sha256": "983d8fbd05e5ee59379304b517c0b8e717e52ea181f9943a22e7d941fe9e78d7",
+  "artifact_sha256": {
+    "gpu_monitor.stderr.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "run_external.source.py": "c1085bce253ce6868d4fdcb2ea3251937efe118424601d20d4cb710c7da9ce53",
+    "results.json": "5fce1a64ab55f4ccdda203804f619ab44ced9da3473049c084c290330a4f3230",
+    "gpu_monitor.csv": "3c1d187d252766ef4f39c0742077bbdace0aec5672818d6edceb7f21f444f153",
+    "run.log": "983d8fbd05e5ee59379304b517c0b8e717e52ea181f9943a22e7d941fe9e78d7",
+    "outputs/c8_target_verify_b8_q7_02.json.sequence_query_prefix.24.safetensors": "5b9cb8d291c2ef9ccca3fe621e088048bb3e868020eac92ba6ee4e4918c1ab7c",
+    "outputs/c6_target_verify_b6_q7_04.json.native.42.safetensors": "74f27fba53fadb738e3d49ce90cdb862fbf52b36500e7fa0a5a64efc0ba27fc4",
+    "outputs/c8_target_verify_b8_q7_01.json.sequence_query_prefix.24.safetensors": "b53e4aa658ea18df774cb42d5783e3059f2dbf168bb3fbc09a6325af204d2fa2",
+    "outputs/c8_target_verify_b8_q7_00.json.sequence_query_prefix.24.safetensors": "767396a56dc5239d241149f7803b0450090e5053cc832efd95ea6aca44e1dd4e",
+    "outputs/c6_target_verify_b6_q7_01.json.native.42.safetensors": "f24436dfc31ca3fc79f35ce0675f7e410f9cc815391fd8cc86410a28a166de50",
+    "outputs/c8_target_verify_b8_q7_04.json.native.56.safetensors": "617f45679b9a7797dd20677049eee3c5046c2b5e46e802be2c68aefec29f5083",
+    "outputs/c8_target_verify_b8_q7_04.json.sequence_query_prefix.32.safetensors": "f46a0c82463cd9aae14334fefcba4bbe1511e0e8f4790bd8b9ba06fa110ab7c7",
+    "outputs/c8_target_verify_b8_q7_01.json.sequence_query_prefix.32.safetensors": "7ca2e20b7d6b7ac4054aa9f9fb5ef79c530b17ce836d26368b2a16b925fa3779",
+    "outputs/c8_target_verify_b8_q7_00.json.native.56.safetensors": "14a4c5e0f38a46de0fc1bc82c95ee06ed67a344948d46092fac9149a4b54870d",
+    "outputs/c8_target_verify_b8_q7_02.json.sequence_query_prefix.40.safetensors": "757098ac3861a78a2565991111ddc18a33f5c960848c50b3f9eb66e5f54b1fda",
+    "outputs/c8_target_verify_b8_q7_01.json.sequence_query_prefix.40.safetensors": "0fc635dbf56bb58e41e53b8e50208e13a7ef758a31e364e100280a49029a5902",
+    "outputs/c6_target_verify_b6_q7_00.json.native.42.safetensors": "855a0f9e232717fb24229f3b0b2d32ff612a4eb848cc3abc10e905910ca720fa",
+    "outputs/c8_target_verify_b8_q7_03.json.sequence_query_prefix.32.safetensors": "cdb09e7cbf1f1602df5e833591b0c87ae405b122e99931bf5a0fdb8414837d5f",
+    "outputs/c8_target_verify_b8_q7_04.json.sequence_query_prefix.24.safetensors": "c0c05e226af5d09dbbecbc128e860d3207a106c9a3892e87e9a9902cab1a225a",
+    "outputs/c8_target_verify_b8_q7_00.json.sequence_query_prefix.32.safetensors": "bf829f929207efe199953e2bdee9373d085b94a119c3524ba963686b5c6b1c53",
+    "outputs/c8_target_verify_b8_q7_03.json.sequence_query_prefix.24.safetensors": "b012154b50cb6f2869a258c11dfba0df0bbea031786f5a62a60988e08511a0a2",
+    "outputs/c8_target_verify_b8_q7_04.json.sequence_query_prefix.40.safetensors": "fb92f99889c4cfb0bf64469223697915f79a3eefa3c8797b0b5d87164b23eb02",
+    "outputs/c6_target_verify_b6_q7_02.json.native.42.safetensors": "fcbf6d7667eed85377fb13ad0800f9652ad76a1a3ab507adf0773919224506c4",
+    "outputs/c8_target_verify_b8_q7_01.json.native.56.safetensors": "88d26a39334565916488ba598f8f6da99acc3aacb20af016c30d24700258c8b5",
+    "outputs/c8_target_verify_b8_q7_00.json.sequence_query_prefix.40.safetensors": "f76ac0bcc83da4310f4324cdea5324ed1699ed8c8af2ccb0ecf38b4cac11cf45",
+    "outputs/c6_target_verify_b6_q7_03.json.native.42.safetensors": "a3b31e912ca6b133a234593d35404123531faf20c6f6ad8d764c338d251646c6",
+    "outputs/c8_target_verify_b8_q7_03.json.native.56.safetensors": "0619d531cb8b1d78ed200f1b7e736d364514e80131c35fb3688f7b6abce237c3",
+    "outputs/c8_target_verify_b8_q7_02.json.sequence_query_prefix.32.safetensors": "a3ff462a5c53fec29fc91a68bc9aa6417282beec18e78b70f0e5caa2a7bfd0b1",
+    "outputs/c8_target_verify_b8_q7_02.json.native.56.safetensors": "2ff76f64d77ac23a560748951fa7fec4f68790861d9b75a8368dda003ad6624a",
+    "outputs/c8_target_verify_b8_q7_03.json.sequence_query_prefix.40.safetensors": "a662bd15fa32aec9525f327662485add62f777919a3d12142dc959ebe006e580"
+  },
+  "isolation_after": {
+    "at": "2026-09-30T16:14:53.375322+00:00",
+    "processes": [
+      {
+        "pid": 2122897,
+        "name": "rust-analyzer",
+        "state": "T"
+      }
+    ]
+  }
+}

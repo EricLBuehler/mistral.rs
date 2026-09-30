@@ -1,0 +1,5 @@
+{
+  "mistralrs-quant/tests/moe_dispatch_bench.rs": "7991b04caf998a1fc6419d6a8b269f12f0b0f5604fc040e0319ce78bbae00ad4",
+  "/home/ericbuehler/qwen4exp_work/moe_optimization_20260930/grouped_gemv/replay.source.rs": "f61cc9799fa6361f6fde5ec62230bd1d042f8f3bb30a7d2293ce134652dbccfb",
+  "/home/ericbuehler/qwen4exp_work/moe_optimization_20260930/grouped_gemv/grouped_gemv_replay.rs": "14d7d46b3c8bfc6681cab527a364aecae939962356f4c9d1d1b4c20a5d24cb68"
+}
