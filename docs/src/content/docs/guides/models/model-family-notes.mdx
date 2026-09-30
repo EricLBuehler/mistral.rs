@@ -133,12 +133,12 @@ Qwen3.8-Flash-Next (HF `qwen4_exp`) adds block-sparse attention (QSA), hyper-con
 mistralrs serve -m Qwen/Qwen3.8-Flash-Next --isq q4k
 ```
 
-- The PLE table is quantized separately at startup: 8-bit if it fits in device memory, otherwise 4-bit (about 29 GB). This reads the whole table once and adds to startup time. If neither fits, rows are read from the memory-mapped checkpoint. That fallback requires pageable memory access (ATS/HMM) for CUDA decode graphs and is slower when rows are not cached.
-- Attention is dense through 2,051 tokens. Longer contexts use QSA over the paged KV cache: each query selects 512 four-token blocks plus the incomplete tail, for at most 2,051 tokens. QSA also needs a small per-token indexer cache.
+- On CUDA, the safetensors PLE table is quantized separately at startup: 8-bit if it fits in device memory, otherwise 4-bit (about 29 GB). This reads the whole table once and adds to startup time. If neither fits, rows are read from the memory-mapped checkpoint; CUDA decode graphs then require pageable memory access (ATS/HMM). CPU and Metal gather mapped rows on the host.
+- QSA preserves full causal attention through 2,051 tokens. Longer contexts use QSA over the paged KV cache: each query selects 512 four-token blocks plus the incomplete tail, for at most 2,051 tokens. QSA also needs a small per-token indexer cache.
 - Paged attention is CUDA-only for this model. On other devices, use `--paged-attn off`. FP8 KV caches and tensor parallelism are not supported.
 - Add `--mtp` for built-in [speculative decoding](/guides/perf/speculative-decoding/) with safetensors or UQFF checkpoints containing `mtp.*` weights. Draft depth adapts among 2, 3, 4, and 6 tokens; `--mtp-n-predict N` fixes it. MTP needs extra weights, one attention layer's KV cache, and recurrent verification state.
 - Built-in MTP recomputes cached prompt prefixes, so repeated prompts can take longer to prefill. GGUF loading does not support MTP. External MTP and DFlash drafters are also unsupported for this model.
-- `qwen4exp` GGUF files load without `config.json`. `--quant` selects a variant and its vision projector for image and video input. The IQ4_NL PLE table is copied into device memory without requantization.
+- `qwen4exp` GGUF files load without `config.json`. `--quant` selects a variant and its vision projector for image and video input. On CUDA, the IQ4_NL PLE table is copied into device memory without requantization if it fits. Otherwise, rows are gathered on the host and CUDA decode graphs are disabled.
 
 ```bash
 mistralrs run -m unsloth/Qwen3.8-Flash-Next-GGUF --quant 4
