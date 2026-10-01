@@ -1196,6 +1196,7 @@ impl Sampler {
         top_k: i64,
         top_p: f32,
         min_p: f32,
+        rng: Arc<Mutex<Isaac64Rng>>,
     ) -> Result<Logprobs> {
         let mut probs: Vec<f32> = logits.to_vec1()?;
         let reporting_probs = probs.clone();
@@ -1241,8 +1242,40 @@ impl Sampler {
             }
         }
 
-        // Find argmax directly on the Vec (O(n) scan, no Tensor creation)
-        let next_token = argmax_f32(&probs)?;
+        let mut mut_ref_rng = &mut *rng.lock().expect("could not lock rng mutex");
+        let distr = match WeightedIndex::new(&probs) {
+            Ok(distr) => distr,
+            Err(e) => {
+                if let Some((idx, prob)) = probs
+                    .iter()
+                    .enumerate()
+                    .find(|(_, prob)| !prob.is_finite() || **prob < 0.0)
+                {
+                    return Err(Error::Msg(format!(
+                                "Invalid sampling probability at index {idx}: {prob}. The model likely produced NaN/Inf logits."
+                            )));
+                }
+
+                let positive_weight_sum: f64 = probs
+                    .iter()
+                    .copied()
+                    .filter(|prob| prob.is_finite() && *prob > 0.0)
+                    .map(f64::from)
+                    .sum();
+
+                if positive_weight_sum == 0.0 {
+                    return Err(Error::Msg(
+                        "All sampling probabilities are zero after filtering (top-k/top-p/min-p)."
+                            .to_string(),
+                    ));
+                }
+
+                return Err(Error::Msg(format!(
+                    "Failed to construct multinomial sampler: {e}"
+                )));
+            }
+        };
+        let next_token: u32 = distr.sample(&mut mut_ref_rng).try_into().unwrap();
         let logprob = reporting_probs[next_token as usize].ln();
 
         let top_logprobs = if return_logprobs {
@@ -2188,13 +2221,7 @@ impl Sampler {
         }
         let next_token = if sample_speculative {
             match self.temperature {
-                None => self.sample_speculative_top_kp_min_p(
-                    candle_nn::ops::softmax_last_dim(&logits)?,
-                    return_logprobs,
-                    self.top_k,
-                    self.top_p as f32,
-                    self.min_p as f32,
-                )?,
+                None => self.sample_argmax(logits, return_logprobs)?,
                 Some(temperature) => {
                     let logits = (&logits / temperature)?;
                     let probs = candle_nn::ops::softmax_last_dim(&logits)?;
@@ -2205,6 +2232,7 @@ impl Sampler {
                         self.top_k,
                         self.top_p as f32,
                         self.min_p as f32,
+                        rng,
                     )?
                 }
             }
@@ -2294,6 +2322,46 @@ mod tests {
 
         assert_eq!(selected, vec![(1, 0.5), (2, 0.5)]);
         assert_eq!(probs, vec![0.0, 0.5, 0.5, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn test_temperature_sampling() {
+        use super::Sampler;
+        use candle_core::{Device, Tensor};
+        use rand::SeedableRng;
+        use rand_isaac::Isaac64Rng;
+        use std::sync::Arc;
+        use std::sync::Mutex;
+
+        let sampler = Sampler::new(
+            Some(1.),
+            10,
+            None,
+            None,
+            None,
+            None,
+            None,
+            -1,
+            1.,
+            0.0,
+            HashMap::new(),
+            vec![],
+        )
+        .unwrap();
+
+        let logits = Tensor::from_vec(vec![0.0f32, 1.0, 2.0], 3, &Device::Cpu).unwrap();
+
+        let mut counts = [0usize; 3];
+        for seed in 0..300 {
+            let rng = Arc::new(Mutex::new(Isaac64Rng::seed_from_u64(seed)));
+            let res = sampler
+                .sample(logits.clone(), &[0], 0, false, rng, true, false)
+                .unwrap();
+            counts[res.token as usize] += 1;
+        }
+        assert!(counts[0] > 0, "token 0 never sampled: {counts:?}");
+        assert!(counts[1] > 0, "token 1 never sampled: {counts:?}");
+        assert!(counts[2] > 0, "token 2 never sampled: {counts:?}");
     }
 
     #[test]
