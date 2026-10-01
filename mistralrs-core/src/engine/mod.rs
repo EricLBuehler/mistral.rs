@@ -601,9 +601,9 @@ impl Engine {
                 pipeline.requires_uniform_completion_batch(),
                 pipeline.requires_uniform_media_batch(),
                 pipeline.supports_packed_prefill(),
-                pipeline.cache().is_hybrid(),
+                !no_kv_cache && pipeline.cache().is_hybrid(),
                 pipeline.device().is_cuda() && !pipeline_metadata.is_xlora,
-                pipeline.cache().is_hybrid(),
+                !no_kv_cache && pipeline.cache().is_hybrid(),
                 pipeline.speculative_prefix_checkpoint_policy(),
             )
         };
