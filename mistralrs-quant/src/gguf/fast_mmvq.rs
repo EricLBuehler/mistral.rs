@@ -56,13 +56,13 @@ struct WorkspaceSlot {
     slice: CudaSlice<u8>,
 }
 
-struct WorkspaceGuard<'a> {
+pub(super) struct WorkspaceGuard<'a> {
     slot: MutexGuard<'static, WorkspaceSlot>,
     stream: &'a CudaStream,
 }
 
 impl WorkspaceGuard<'_> {
-    fn ptr_mut(&mut self) -> (u64, SyncOnDrop<'_>) {
+    pub(super) fn ptr_mut(&mut self) -> (u64, SyncOnDrop<'_>) {
         self.slot.slice.device_ptr_mut(self.stream)
     }
 }
@@ -79,7 +79,7 @@ type WsMap = Mutex<HashMap<WorkspaceKey, &'static Mutex<WorkspaceSlot>>>;
 
 static WORKSPACE: OnceLock<WsMap> = OnceLock::new();
 
-fn workspace_ensure<'a>(
+pub(super) fn workspace_ensure<'a>(
     dev: &CudaDevice,
     bytes: usize,
     stream: &'a CudaStream,

@@ -150,6 +150,7 @@ fn main() -> Result<(), String> {
     println!("cargo::rustc-check-cfg=cfg(has_vector_fp8_kernels)");
     println!("cargo::rustc-check-cfg=cfg(has_mxfp4_kernels)");
     println!("cargo::rustc-check-cfg=cfg(has_mxfp4_wmma_kernels)");
+    println!("cargo::rustc-check-cfg=cfg(has_ptq1_0_wmma_kernels)");
     println!("cargo::rustc-check-cfg=cfg(has_cutlass_moe_kernels)");
     println!("cargo::rustc-check-cfg=cfg(has_nvfp4_cutlass_sm121_kernels)");
     println!("cargo::rustc-check-cfg=cfg(cuda_ge_13000)");
@@ -203,6 +204,7 @@ fn main() -> Result<(), String> {
             println!("cargo:rustc-cfg=has_vector_fp8_kernels");
             // WMMA tensor core MXFP4 kernel (FP16/BF16 WMMA requires SM >= 80)
             println!("cargo:rustc-cfg=has_mxfp4_wmma_kernels");
+            println!("cargo:rustc-cfg=has_ptq1_0_wmma_kernels");
         }
         let cutlass_fp8_sm90 = compute_cap == 90 && cuda_major >= 12 && !target.contains("msvc");
         if cutlass_fp8_sm90 {

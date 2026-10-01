@@ -99,6 +99,11 @@ mistral.rs accepts GGUF files using the following storage types. A file can mix 
 | Legacy block quants | `Q4_0`, `Q4_1`, `Q5_0`, `Q5_1`, `Q8_0`, `Q8_1` |
 | K-quants | `Q2_K`, `Q3_K`, `Q4_K`, `Q5_K`, `Q6_K`, `Q8_K` |
 | GPT-OSS | The GPT-OSS MXFP4 representation |
+| Prism ternary | `PTQ1_0` and `PQ2_0`, with the optional `prism.hadamard.*` weight-fold metadata |
+
+`PTQ1_0` linears stay packed and the Hadamard fold is applied to activations at run time, on CPU
+(memory-mapped file) and on CUDA (blocks uploaded once). Other devices decode to dense weights at
+load and unfold the fold once. `PQ2_0` always decodes to dense at load.
 
 IQ storage types, including IQ1, IQ2, IQ3, and IQ4 variants, are not supported for GGUF files yet.
 Select a supported Q/K artifact instead. Other storage types not listed above are also unsupported.
