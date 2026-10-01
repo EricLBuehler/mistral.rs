@@ -105,7 +105,7 @@ pub(crate) fn checkpoint_runtime_size(
     }
 
     let safetensors = unsafe {
-        mistralrs_quant::safetensors::MmapedSafetensors::multi_unique(paths)
+        mistralrs_quant::safetensors::MmapedSafetensors::multi(paths)
             .context("reading checkpoint tensor inventory")?
     };
     safetensors
@@ -134,7 +134,7 @@ pub(crate) fn checkpoint_device_map_sizes(
     }
 
     let safetensors = unsafe {
-        mistralrs_quant::safetensors::MmapedSafetensors::multi_unique(paths)
+        mistralrs_quant::safetensors::MmapedSafetensors::multi(paths)
             .context("reading checkpoint tensor inventory")?
     };
     let mut layer_sizes_in_bytes = vec![0usize; num_layers];
