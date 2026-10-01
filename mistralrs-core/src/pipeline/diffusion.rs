@@ -148,7 +148,7 @@ impl Loader for DiffusionLoader {
         if paged_attn_config.is_some() {
             warn!("PagedAttention is not supported for Diffusion models, disabling it.");
 
-            paged_attn_config = None;
+            super::disable_unsupported_paged_attention(&mut paged_attn_config)?;
         }
 
         if crate::using_flash_attn() {
@@ -243,6 +243,9 @@ impl Loader for DiffusionLoader {
                 sliding_window: None,
                 cache_config: None,
                 cache_engine: None,
+                memory_plan: None,
+                #[cfg(feature = "cuda")]
+                runtime_memory_reservation: None,
                 model_metadata: None,
                 modalities: Modalities {
                     input: vec![SupportedModality::Text],

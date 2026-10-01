@@ -97,10 +97,9 @@ The MCP *client* configuration (`mcp_config`) lives under `[runtime]`, not `[ser
 
 | Field | CLI flag | Default | Purpose |
 |---|---|---|---|
-| `mode` | `--paged-attn` | `auto` | `auto` (on for CUDA, off for Metal/CPU), `on`, or `off`. |
-| `context_len` | `--pa-context-len` | not set | Allocate KV cache for this context length. |
-| `memory_mb` | `--pa-memory-mb` | not set | KV cache budget in MB. Conflicts with `context_len`. |
-| `memory_fraction` | `--pa-memory-fraction` | not set | KV cache budget as fraction of VRAM (0.0 to 1.0). Conflicts with `context_len` and `memory_mb`. |
+| `mode` | `--paged-attn` | `auto` | `auto` (on for CUDA and Metal, off for CPU), `on`, or `off`. |
+| `gpu_memory_utilization` | `--gpu-memory-utilization` | not set | Physical GPU memory fraction for weights, workspace, and KV. Conflicts with `kv_cache`. |
+| `kv_cache` | `--kv-cache` | not set | Explicit KV capacity string, such as `"4GiB"` or `"65536tokens"`. |
 | `block_size` | `--pa-block-size` | not set | Tokens per block. |
 | `cache_type` | `--pa-cache-type` | `auto` | KV cache quantization type. |
 
@@ -142,7 +141,7 @@ Each `[[models]]` entry can carry nested sections whose field shapes mirror the 
 | `[models.format]` | Weight format selection and overrides (`format`, `quantized_file`, `mmproj`, `tok_model_id`, and GGML `gqa`). |
 | `[models.adapter]` | LoRA/X-LoRA adapter configuration. |
 | `[models.quantization]` | Quantization and artifact selection: `quant` (same as `--quant`), `isq` (explicit ISQ, same as `--isq`), `from_uqff`, `isq_organization`, `imatrix`, `calibration_file`. |
-| `[models.device]` | Device placement: `cpu`, `device_layers`, `topology`, `hf_cache`, `max_seq_len`, `max_batch_size`. `cpu` must be consistent across every entry. |
+| `[models.device]` | Device placement: `cpu`, `device_layers`, `topology`, `hf_cache`. `cpu` must be consistent across every entry. |
 | `[models.multimodal]` | Multimodal load-time caps (image/video/audio limits). |
 
 Dynamic LoRA uses structured adapter entries and explicit per-request selection. For `command = "run"`, the top-level `adapter` key selects the initial alias; omit it to run the base model.

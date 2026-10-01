@@ -275,7 +275,7 @@ mod tests {
         assert_eq!(config.external_weight_size_in_bytes(DType::F32)?, 16);
         let cache_config = crate::PagedAttentionConfig::new(
             None,
-            crate::MemoryGpuConfig::Utilization(0.9),
+            crate::MemoryGoal::Utilization(0.9),
             crate::PagedCacheType::Auto,
         )?
         .with_base_device_memory_reservation(usize::MAX - 16)?;
@@ -320,13 +320,18 @@ mod tests {
         )?;
         let base = crate::PagedAttentionConfig::new(
             None,
-            crate::MemoryGpuConfig::Utilization(0.9),
+            crate::MemoryGoal::Utilization(0.9),
             crate::PagedCacheType::Auto,
         )?;
 
         let auto = MtpConfig::new(dir.path().to_string_lossy().into_owned(), None);
-        let auto = reserve_external_mtp_memory(Some(base), Some(&auto), &DType::F32, &Device::Cpu)?
-            .expect("cache config missing");
+        let auto = reserve_external_mtp_memory(
+            Some(base.clone()),
+            Some(&auto),
+            &DType::F32,
+            &Device::Cpu,
+        )?
+        .expect("cache config missing");
         assert_eq!(auto.recurrent_checkpoint_lanes, 8);
         assert!(auto.recurrent_checkpoint_lanes_auto);
 

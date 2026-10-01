@@ -22,6 +22,10 @@ fn metal_cache_layout(value: Option<&str>) -> Result<KvCacheLayout> {
     }
 }
 
+pub(crate) fn configured_metal_cache_layout() -> Result<KvCacheLayout> {
+    metal_cache_layout(std::env::var(METAL_PAGED_LAYOUT_ENV).ok().as_deref())
+}
+
 #[cfg(all(feature = "cuda", target_family = "unix"))]
 fn cuda_supports_fp8(device: &Device) -> bool {
     use candle_core::cuda::cudarc::driver::{result, sys};
@@ -199,7 +203,7 @@ impl CacheEngine {
             .iter()
             .take(model_config.num_layers())
             .any(|layer| layer.as_ref().unwrap_or(device).is_metal())
-            .then(|| metal_cache_layout(std::env::var(METAL_PAGED_LAYOUT_ENV).ok().as_deref()))
+            .then(configured_metal_cache_layout)
             .transpose()?;
         if let Some(layout) = metal_layout {
             tracing::info!(?layout, "Metal paged KV cache layout");
@@ -620,6 +624,40 @@ impl CacheEngine {
     }
 }
 
+#[cfg(feature = "metal")]
+fn metal_kv_buffer_options() -> candle_metal_kernels::metal::MTLResourceOptions {
+    use candle_metal_kernels::metal::MTLResourceOptions;
+
+    #[cfg(target_os = "ios")]
+    let storage = MTLResourceOptions::StorageModeShared;
+    #[cfg(not(target_os = "ios"))]
+    let storage = MTLResourceOptions::StorageModePrivate;
+    storage | MTLResourceOptions::HazardTrackingModeTracked
+}
+
+#[cfg(feature = "metal")]
+pub(crate) fn metal_kv_buffer_allocation_bytes(
+    dev: &candle_core::MetalDevice,
+    logical_bytes: usize,
+) -> Result<usize> {
+    use objc2_metal::MTLDevice as _;
+
+    static PAGE_SIZE: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+    let page_size = *PAGE_SIZE.get_or_init(|| {
+        usize::try_from(unsafe { libc::sysconf(libc::_SC_PAGESIZE) })
+            .expect("system page size must be positive and fit usize")
+    });
+    let allocation = dev
+        .device()
+        .as_ref()
+        .heapBufferSizeAndAlignWithLength_options(logical_bytes, metal_kv_buffer_options());
+    // Standalone buffers consume system pages; heap alignment alone can undercount them.
+    logical_bytes
+        .max(allocation.size)
+        .checked_next_multiple_of(allocation.align.max(page_size))
+        .ok_or_else(|| candle_core::Error::msg("Metal KV allocation size overflow"))
+}
+
 // Metal refuses zero-length buffers, and hybrid models give their linear-attention layers 0 blocks.
 #[cfg(feature = "metal")]
 fn new_kv_buffer(
@@ -628,7 +666,17 @@ fn new_kv_buffer(
     dtype: DType,
     name: &str,
 ) -> Result<std::sync::Arc<candle_metal_kernels::metal::Buffer>> {
-    dev.new_private_buffer(elem_count.max(1), dtype, name)
+    let bytes = elem_count
+        .max(1)
+        .checked_mul(dtype.size_in_bytes())
+        .ok_or_else(|| candle_core::Error::msg("KV cache buffer size overflow"))?;
+    // Bound tracked buffers stay resident through command completion without a permanent residency-set retain.
+    let buffer = dev
+        .device()
+        .new_buffer(bytes, metal_kv_buffer_options())
+        .map_err(candle_core::Error::wrap)?;
+    buffer.set_label(name);
+    Ok(std::sync::Arc::new(buffer))
 }
 
 #[cfg(feature = "metal")]
@@ -663,6 +711,61 @@ mod tests {
             v_head_dim: 128,
             kv_cache_layout: layout,
         }
+    }
+
+    #[cfg(feature = "metal")]
+    #[test]
+    #[ignore = "requires exclusive Metal allocator accounting"]
+    fn metal_kv_storage_releases_after_last_tensor_alias() -> Result<()> {
+        const ELEMENTS: usize = 4 * 1024 * 1024;
+        let device = Device::new_metal(0)?;
+        device.synchronize()?;
+        let metal = device.as_metal_device()?;
+        let before = metal.device().current_allocated_size();
+        let cache = new_metal_cache(metal, [1, 1, 1, ELEMENTS], DType::F32, "lifetime-test")?;
+        let allocated = metal.device().current_allocated_size();
+        assert!(allocated >= before + ELEMENTS * DType::F32.size_in_bytes());
+        let alias = cache.clone();
+        drop(cache);
+        assert_eq!(metal.device().current_allocated_size(), allocated);
+        drop(alias);
+        device.synchronize()?;
+        assert!(metal.device().current_allocated_size() <= before);
+        Ok(())
+    }
+
+    #[cfg(feature = "metal")]
+    #[test]
+    #[ignore = "requires exclusive Metal allocator accounting"]
+    fn metal_kv_allocation_prediction_covers_nonaligned_buffers() -> Result<()> {
+        use objc2_metal::MTLResource as _;
+
+        const ELEMENT_COUNTS: [usize; 7] = [1, 3, 257, 4095, 4097, 16385, 1048577];
+        let device = Device::new_metal(0)?;
+        device.synchronize()?;
+        let metal = device.as_metal_device()?;
+        for dtype in [DType::U8, DType::BF16, DType::F32] {
+            for elements in ELEMENT_COUNTS {
+                let logical_bytes = elements * dtype.size_in_bytes();
+                let prediction = metal_kv_buffer_allocation_bytes(metal, logical_bytes)?;
+                let before = metal.device().current_allocated_size();
+                let buffer = new_kv_buffer(metal, elements, dtype, "allocation-test")?;
+                let allocated = buffer.as_ref().as_ref().allocatedSize();
+                let delta = metal
+                    .device()
+                    .current_allocated_size()
+                    .saturating_sub(before);
+                assert!(allocated >= logical_bytes);
+                assert!(
+                    allocated <= prediction && delta <= prediction,
+                    "{dtype:?} {logical_bytes} bytes: allocated {allocated}, device delta {delta}, predicted {prediction}"
+                );
+                drop(buffer);
+                device.synchronize()?;
+                assert!(metal.device().current_allocated_size() <= before);
+            }
+        }
+        Ok(())
     }
 
     #[test]

@@ -40,6 +40,11 @@ pub(crate) fn gguf_affine_budget_bytes(device: &Device, dtype: DType) -> usize {
     packed_affine::budget_bytes(device, dtype)
 }
 
+#[cfg(all(feature = "cuda", has_marlin_kernels))]
+pub(crate) fn gguf_affine_reserved_bytes(device: &Device, dtype: DType) -> usize {
+    packed_affine::reserved_bytes(device, dtype)
+}
+
 #[derive(Debug)]
 pub struct GgufMatMul {
     pub(crate) w: QMatMul,

@@ -1218,7 +1218,8 @@ impl Loader for GGUFLoader {
         {
             bail!("ISQ conversion is only supported by the native GGUF loading path");
         }
-        if paged_attn_config.is_some() {
+        if let Some(config) = paged_attn_config {
+            super::disable_unsupported_paged_attention(&mut Some(config))?;
             warn!("Adapter models do not currently support PagedAttention, running without");
         }
 
@@ -1406,6 +1407,9 @@ impl Loader for GGUFLoader {
                 sliding_window: None,
                 cache_config: None,
                 cache_engine: None,
+                memory_plan: None,
+                #[cfg(feature = "cuda")]
+                runtime_memory_reservation: None,
                 model_metadata: Some(Arc::new(model_config_metadata)),
                 modalities: Modalities {
                     input: vec![SupportedModality::Text],

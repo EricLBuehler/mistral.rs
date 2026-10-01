@@ -1,6 +1,6 @@
 use std::time::{Duration, Instant};
 
-use candle_core::Device;
+use candle_core::{DType, Device};
 
 use crate::{
     utils::{debug::DeviceRepr, memory_usage::CudaAllocatorSnapshot},
@@ -18,31 +18,9 @@ const IDLE_RECLAIM_MULTIPLIER: usize = 2;
 const TRIM_COOLDOWN: Duration = Duration::from_secs(1);
 pub(super) const GRAPH_RECLAIM_BATCH_SIZE: usize = 16;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum PromptBatchMemoryAction {
-    Proceed,
-    Retain(usize),
-    Reject,
-}
-
-pub(super) fn prompt_batch_memory_action(
-    current: usize,
-    transient_pressure: bool,
-) -> PromptBatchMemoryAction {
-    if !transient_pressure {
-        PromptBatchMemoryAction::Proceed
-    } else if current > 1 {
-        PromptBatchMemoryAction::Retain(current.div_ceil(2))
-    } else {
-        PromptBatchMemoryAction::Reject
-    }
-}
-
-pub(super) fn record_prompt_batch_reduction(previous: usize, retained: usize) {
-    metrics::counter!("mistralrs_cuda_prompt_batch_reductions_total").increment(1);
-    metrics::counter!("mistralrs_cuda_prompt_sequences_deferred_total")
-        .increment(u64::try_from(previous.saturating_sub(retained)).unwrap_or(u64::MAX));
-}
+#[cfg(test)]
+use super::memory::{prompt_batch_memory_action, PromptBatchMemoryAction};
+use super::memory::{ForwardWorkspaceBytes, PromptMemoryStatus};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum MaintenancePoint {
@@ -73,16 +51,9 @@ struct MaintenanceOutcome {
     reclaim_deferred: bool,
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(super) struct PromptMemoryStatus {
-    pub(super) graph_pressure: bool,
-    pub(super) transient_pressure: bool,
-    pub(super) insufficient_total_capacity: bool,
-    pub(super) maintenance_failed: bool,
-}
-
 struct MaintainedDevice {
     device: Device,
+    primary: bool,
     _retention: Option<crate::pipeline::cuda_graph::CudaMemoryPoolRetention>,
     last_trim: Option<Instant>,
     capture_deferred: bool,
@@ -90,10 +61,11 @@ struct MaintainedDevice {
 
 pub(super) struct CudaMemoryPoolMaintenance {
     devices: Vec<MaintainedDevice>,
+    activation_dtype: DType,
 }
 
 impl CudaMemoryPoolMaintenance {
-    pub(super) fn new(devices: Vec<Device>) -> Self {
+    pub(super) fn new(devices: Vec<Device>, primary: &Device, activation_dtype: DType) -> Self {
         let devices = devices
             .into_iter()
             .map(|device| {
@@ -116,6 +88,7 @@ impl CudaMemoryPoolMaintenance {
                     _ => None,
                 };
                 MaintainedDevice {
+                    primary: device.same_device(primary),
                     device,
                     _retention: retention,
                     last_trim: None,
@@ -123,31 +96,57 @@ impl CudaMemoryPoolMaintenance {
                 }
             })
             .collect();
-        Self { devices }
+        Self {
+            devices,
+            activation_dtype,
+        }
     }
 
     pub(super) fn after_prompt_step(&mut self) -> bool {
-        self.maintain(MaintenancePoint::PromptBoundary, 0)
-            .graph_pressure
+        self.maintain(
+            MaintenancePoint::PromptBoundary,
+            ForwardWorkspaceBytes::default(),
+        )
+        .graph_pressure
     }
 
-    pub(super) fn before_prompt_step(&mut self, transient_bytes: usize) -> PromptMemoryStatus {
+    pub(super) fn before_prompt_step(
+        &mut self,
+        transient_bytes: ForwardWorkspaceBytes,
+    ) -> PromptMemoryStatus {
         self.maintain(MaintenancePoint::PromptPreflight, transient_bytes)
             .into()
     }
 
-    pub(super) fn after_graph_reclaim(&mut self, transient_bytes: usize) -> PromptMemoryStatus {
+    pub(super) fn after_graph_reclaim(
+        &mut self,
+        transient_bytes: ForwardWorkspaceBytes,
+    ) -> PromptMemoryStatus {
         self.maintain(MaintenancePoint::GraphReclaimed, transient_bytes)
             .into()
     }
 
     pub(super) fn when_idle(&mut self) -> bool {
-        self.maintain(MaintenancePoint::Idle, 0).graph_pressure
+        self.maintain(MaintenancePoint::Idle, ForwardWorkspaceBytes::default())
+            .graph_pressure
     }
 
-    fn maintain(&mut self, point: MaintenancePoint, transient_bytes: usize) -> MaintenanceOutcome {
+    fn maintain(
+        &mut self,
+        point: MaintenancePoint,
+        transient_bytes: ForwardWorkspaceBytes,
+    ) -> MaintenanceOutcome {
+        let activation_dtype = self.activation_dtype;
         let outcomes = self.devices.iter_mut().map(|maintained| {
-            match maintain_device(maintained, point, transient_bytes) {
+            let pending = if point == MaintenancePoint::PromptPreflight
+                || transient_bytes != ForwardWorkspaceBytes::default()
+            {
+                mistralrs_quant::gguf_affine_reserved_bytes(&maintained.device, activation_dtype)
+            } else {
+                0
+            };
+            let required = transient_bytes.with_pending(maintained.primary, pending);
+            match required.and_then(|required| maintain_device(maintained, point, required)) {
                 Ok(outcome) => outcome,
                 Err(err) => {
                     let device = maintained.device.device_pretty_repr();
@@ -552,8 +551,10 @@ mod tests {
         };
         let original = threshold(&device)?;
         for reverse_drop in [false, true] {
-            let mut first = CudaMemoryPoolMaintenance::new(vec![device.clone()]);
-            let mut second = CudaMemoryPoolMaintenance::new(vec![alias.clone()]);
+            let mut first =
+                CudaMemoryPoolMaintenance::new(vec![device.clone()], &device, DType::BF16);
+            let mut second =
+                CudaMemoryPoolMaintenance::new(vec![alias.clone()], &alias, DType::BF16);
             assert!(first.devices[0]._retention.is_some());
             assert!(second.devices[0]._retention.is_some());
             assert_eq!(threshold(&device)?, u64::MAX);
@@ -564,7 +565,7 @@ mod tests {
                     MaintenancePoint::PromptBoundary,
                     MaintenancePoint::Idle,
                 ] {
-                    let outcome = maintenance.maintain(point, 0);
+                    let outcome = maintenance.maintain(point, ForwardWorkspaceBytes::default());
                     assert!(!outcome.capture_active);
                     assert!(!outcome.reclaim_deferred);
                     assert!(!outcome.maintenance_failed);

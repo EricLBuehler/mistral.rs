@@ -130,6 +130,18 @@ pub fn gguf_affine_budget_bytes(device: &Device, dtype: DType) -> usize {
     }
 }
 
+pub fn gguf_affine_reserved_bytes(device: &Device, dtype: DType) -> usize {
+    #[cfg(all(feature = "cuda", has_marlin_kernels))]
+    {
+        gguf::gguf_affine_reserved_bytes(device, dtype)
+    }
+    #[cfg(not(all(feature = "cuda", has_marlin_kernels)))]
+    {
+        let _ = (device, dtype);
+        0
+    }
+}
+
 #[cfg(feature = "metal")]
 pub use afq::ops::{
     afq_gather_qmm_rhs_sorted, afq_gather_qmm_rhs_sorted_gate_up, metal_arg_sort_u32_1d,

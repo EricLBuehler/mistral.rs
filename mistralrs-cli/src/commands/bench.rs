@@ -119,14 +119,8 @@ pub async fn run_bench(
     let model_selected = convert_to_model_selected(&model_type, &matformer)?;
     let (max_model_len, hf_config_overrides) = extract_hf_config_settings(&model_type);
 
-    let (
-        paged_attn,
-        paged_attn_gpu_mem,
-        paged_attn_gpu_mem_usage,
-        paged_ctxt_len,
-        paged_attn_block_size,
-        paged_cache_type,
-    ) = extract_paged_attn_settings(&model_type);
+    let (paged_attn, memory_goal, paged_attn_block_size, paged_cache_type) =
+        extract_paged_attn_settings(&model_type)?;
 
     let (cpu, device_layers) = extract_device_settings(&model_type);
     let isq = extract_isq_setting(&model_type);
@@ -151,9 +145,7 @@ pub async fn run_bench(
         .with_seed_optional(global.seed)
         .with_num_device_layers_optional(device_layers)
         .with_in_situ_quant_optional(isq)
-        .with_paged_attn_gpu_mem_optional(paged_attn_gpu_mem)
-        .with_paged_attn_gpu_mem_usage_optional(paged_attn_gpu_mem_usage)
-        .with_paged_ctxt_len_optional(paged_ctxt_len)
+        .with_memory_goal(memory_goal)
         .with_paged_attn_block_size_optional(paged_attn_block_size)
         .with_paged_attn_cache_type(paged_cache_type);
 

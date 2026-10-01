@@ -933,7 +933,7 @@ pub const PAGED_DECODE_LARGE_HEAD_MAX_GQA: usize = 4;
 const PAGED_DECODE_HND_SHORT_CONTEXT: usize = 256;
 const PAGED_DECODE_SPLIT_PARTITIONS: usize = 32;
 const PAGED_DECODE_SPLIT_THREADS: usize = 256;
-const PAGED_DECODE_SPLIT_MIN_CONTEXT: usize = 768;
+pub(crate) const PAGED_DECODE_SPLIT_MIN_CONTEXT: usize = 768;
 const PAGED_DECODE_SPLIT_MAX_CONTEXT: usize = 4096;
 // Head-parallel decode trades KV reuse for fewer launches; keep it below the measured crossover.
 const PAGED_DECODE_SHORT_CONTEXTS: [(usize, usize, usize); 2] = [(128, 2, 288), (256, 3, 320)];
@@ -986,7 +986,7 @@ const PAGED_DECODE_HND_SHORT_PROFILES: &[ShortDecodeProfile] = &[
 ];
 // Reduce kernels are instantiated for exactly these partition sizes.
 const PAGED_DECODE_LONG_PARTITION: usize = 512;
-const PAGED_DECODE_SHORT_PARTITION: usize = 128;
+pub(crate) const PAGED_DECODE_SHORT_PARTITION: usize = 128;
 // Below this many threadgroups a 40-core GPU idles, so shorter partitions trade reduce work for occupancy.
 const PAGED_DECODE_MIN_THREADGROUPS: usize = 64;
 

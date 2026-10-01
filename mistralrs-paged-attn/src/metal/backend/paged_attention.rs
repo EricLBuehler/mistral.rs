@@ -10,6 +10,10 @@ use crate::metal::{
     kernels::{self, PagedAttentionDType},
 };
 
+pub const METAL_PAGED_CACHE_VECTOR_BYTES: usize = 16;
+const SPECIALIZED_PACKED_X: usize = METAL_PAGED_CACHE_VECTOR_BYTES / 2;
+const GENERIC_PARTITION_SIZE: usize = 512;
+const GENERIC_V1_HEAD_THRESHOLD: usize = 512;
 const METAL_PAGED_KERNEL_ENV: &str = "MISTRALRS_METAL_PAGED_KERNEL";
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -29,6 +33,182 @@ fn metal_paged_kernel() -> MetalPagedKernel {
             Some(value) => panic!("invalid {METAL_PAGED_KERNEL_ENV}={value}"),
         },
     )
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct MetalPagedAttentionWorkspace {
+    pub num_seqs: usize,
+    pub num_heads: usize,
+    pub num_kv_heads: usize,
+    pub head_size: usize,
+    pub block_size: usize,
+    pub max_context_len: usize,
+    pub sliding_window: Option<usize>,
+    pub dtype: DType,
+    pub cache_dtype: DType,
+    pub hnd: bool,
+    pub packed_x: usize,
+    pub has_alibi: bool,
+    pub has_sinks: bool,
+    pub has_scales: bool,
+    pub softcapping: f32,
+}
+
+impl MetalPagedAttentionWorkspace {
+    fn specialized_variant(self, kernel: MetalPagedKernel) -> Option<kernels::PagedDecodeVariant> {
+        let gqa = self.num_heads.checked_div(self.num_kv_heads)?;
+        let specialized = kernel != MetalPagedKernel::Legacy
+            && matches!(self.dtype, DType::BF16 | DType::F16)
+            && self.cache_dtype == self.dtype
+            && !self.has_scales
+            && !self.has_alibi
+            && !self.has_sinks
+            && self.softcapping == 1.0
+            && self.block_size == kernels::PAGED_DECODE_BLOCK_SIZE
+            && (self.hnd || self.packed_x == SPECIALIZED_PACKED_X)
+            && (kernels::PAGED_DECODE_HEAD_SIZES.contains(&self.head_size)
+                || (self.hnd
+                    && self.head_size == kernels::PAGED_DECODE_LARGE_HEAD_SIZE
+                    && gqa <= kernels::PAGED_DECODE_LARGE_HEAD_MAX_GQA))
+            && self.num_heads.is_multiple_of(self.num_kv_heads)
+            && (1..=kernels::PAGED_DECODE_MAX_GQA).contains(&gqa);
+        specialized.then(|| {
+            if kernel == MetalPagedKernel::Grouped {
+                kernels::paged_decode_grouped_variant(
+                    self.max_context_len,
+                    self.num_seqs,
+                    self.num_kv_heads,
+                )
+            } else if self.hnd {
+                kernels::paged_decode_hnd_variant(
+                    self.max_context_len,
+                    self.num_seqs,
+                    self.num_heads,
+                    self.num_kv_heads,
+                    self.sliding_window,
+                    self.head_size,
+                )
+            } else {
+                kernels::paged_decode_variant(
+                    self.max_context_len,
+                    self.num_seqs,
+                    self.num_heads,
+                    self.num_kv_heads,
+                    self.head_size,
+                )
+            }
+        })
+    }
+
+    fn use_v1(self) -> bool {
+        (self.max_context_len.div_ceil(GENERIC_PARTITION_SIZE) == 1
+            || self.num_seqs.saturating_mul(self.num_heads) > GENERIC_V1_HEAD_THRESHOLD)
+            && GENERIC_PARTITION_SIZE.is_multiple_of(self.block_size)
+    }
+
+    pub fn bytes(self) -> Result<usize> {
+        self.bytes_for_kernel(metal_paged_kernel())
+    }
+
+    /// Monotonic workspace bound for every batch and context up to this shape.
+    pub fn capacity_bytes(self) -> Result<usize> {
+        self.capacity_bytes_for_kernel(metal_paged_kernel())
+    }
+
+    fn capacity_bytes_for_kernel(self, kernel: MetalPagedKernel) -> Result<usize> {
+        let mut bytes = self
+            .bytes_for_kernel(kernel)?
+            .max(self.bytes_for_partitions(
+                self.max_context_len.div_ceil(GENERIC_PARTITION_SIZE),
+                self.dtype,
+            )?);
+        if self.specialized_variant(kernel).is_some() {
+            bytes = bytes.max(
+                self.bytes_for_partitions(
+                    self.max_context_len
+                        .div_ceil(kernels::PAGED_DECODE_SHORT_PARTITION),
+                    self.dtype,
+                )?,
+            );
+            let split = Self {
+                num_seqs: 1,
+                max_context_len: kernels::PAGED_DECODE_SPLIT_MIN_CONTEXT,
+                ..self
+            };
+            if self.max_context_len >= split.max_context_len
+                && matches!(
+                    split.specialized_variant(kernel),
+                    Some(kernels::PagedDecodeVariant::Split)
+                )
+            {
+                bytes = bytes.max(split.bytes_for_kernel(kernel)?);
+            }
+        }
+        Ok(bytes)
+    }
+
+    fn bytes_for_kernel(self, kernel: MetalPagedKernel) -> Result<usize> {
+        if self.num_seqs == 0
+            || self.num_heads == 0
+            || self.num_kv_heads == 0
+            || self.head_size == 0
+            || self.block_size == 0
+            || self.max_context_len == 0
+        {
+            candle_core::bail!("invalid Metal paged attention workspace shape");
+        }
+        metal_buffer_bytes(&[self.num_seqs, self.num_heads, self.head_size], self.dtype)?;
+        let (partitions, partial_dtype) = match self.specialized_variant(kernel) {
+            Some(variant) => (
+                variant.num_partitions(self.max_context_len),
+                if matches!(variant, kernels::PagedDecodeVariant::Split) {
+                    DType::F32
+                } else {
+                    self.dtype
+                },
+            ),
+            None if self.use_v1() => (1, self.dtype),
+            None => (
+                self.max_context_len.div_ceil(GENERIC_PARTITION_SIZE),
+                self.dtype,
+            ),
+        };
+        self.bytes_for_partitions(partitions, partial_dtype)
+    }
+
+    fn bytes_for_partitions(self, partitions: usize, partial_dtype: DType) -> Result<usize> {
+        let heads = self
+            .num_seqs
+            .checked_mul(self.num_heads)
+            .ok_or_else(|| candle_core::Error::msg("Metal attention workspace overflow"))?;
+        let output = metal_buffer_bytes(&[heads, self.head_size], self.dtype)?;
+        let mut bytes = output;
+        if partitions > 1 {
+            for buffer in [
+                metal_buffer_bytes(&[heads, partitions], DType::F32)?,
+                metal_buffer_bytes(&[heads, partitions], DType::F32)?,
+                metal_buffer_bytes(&[heads, partitions, self.head_size], partial_dtype)?,
+            ] {
+                bytes = bytes
+                    .checked_add(buffer)
+                    .ok_or_else(|| candle_core::Error::msg("Metal attention workspace overflow"))?;
+            }
+        }
+        if self.has_sinks {
+            bytes = bytes
+                .checked_add(metal_buffer_bytes(&[self.num_heads], DType::F32)?)
+                .ok_or_else(|| candle_core::Error::msg("Metal attention workspace overflow"))?;
+        }
+        Ok(bytes)
+    }
+}
+
+fn metal_buffer_bytes(dimensions: &[usize], dtype: DType) -> Result<usize> {
+    dimensions
+        .iter()
+        .try_fold(dtype.size_in_bytes(), |bytes, dim| bytes.checked_mul(*dim))
+        .and_then(usize::checked_next_power_of_two)
+        .ok_or_else(|| candle_core::Error::msg("Metal attention buffer size overflow"))
 }
 
 struct PagedAttention {
@@ -213,10 +393,25 @@ impl candle_core::CustomOp1 for PagedAttention {
         let kv_block_stride = kc_l.stride()[0];
         let kv_head_stride = kc_l.stride()[1];
 
-        let partition_size = 512;
-        let max_num_partitions = self.max_context_len.div_ceil(partition_size);
-        let use_v1 = (max_num_partitions == 1 || num_seqs * num_heads > 512)
-            && partition_size % block_size == 0;
+        let workload = MetalPagedAttentionWorkspace {
+            num_seqs,
+            num_heads,
+            num_kv_heads,
+            head_size,
+            block_size,
+            max_context_len: self.max_context_len,
+            sliding_window: self.sliding_window,
+            dtype: q.dtype(),
+            cache_dtype: self.key_cache.dtype(),
+            hnd: cache.hnd,
+            packed_x: cache.x,
+            has_alibi: alibi_storage_and_offset.is_some(),
+            has_sinks: sinks_storage_and_offset.is_some(),
+            has_scales: k_v_scale.is_some(),
+            softcapping: self.softcapping,
+        };
+        let max_num_partitions = self.max_context_len.div_ceil(GENERIC_PARTITION_SIZE);
+        let use_v1 = workload.use_v1();
 
         let elem_count = out_shape.elem_count();
 
@@ -225,45 +420,7 @@ impl candle_core::CustomOp1 for PagedAttention {
 
         let out = dev.new_buffer(elem_count, q.dtype(), "paged-attention-out")?;
 
-        let gqa = num_heads / num_kv_heads;
-        let kernel = metal_paged_kernel();
-        let use_gqa_decode = kernel != MetalPagedKernel::Legacy
-            && matches!(ty, PagedAttentionDType::BF16 | PagedAttentionDType::F16)
-            && cache_ty == ty
-            && k_v_scale.is_none()
-            && alibi_storage_and_offset.is_none()
-            && sinks_storage_and_offset.is_none()
-            && self.softcapping == 1.0
-            && block_size == kernels::PAGED_DECODE_BLOCK_SIZE
-            && (cache.hnd || cache.x == 8)
-            && (kernels::PAGED_DECODE_HEAD_SIZES.contains(&head_size)
-                || (cache.hnd
-                    && head_size == kernels::PAGED_DECODE_LARGE_HEAD_SIZE
-                    && gqa <= kernels::PAGED_DECODE_LARGE_HEAD_MAX_GQA))
-            && num_heads % num_kv_heads == 0
-            && (1..=kernels::PAGED_DECODE_MAX_GQA).contains(&gqa);
-
-        if use_gqa_decode {
-            let variant = if kernel == MetalPagedKernel::Grouped {
-                kernels::paged_decode_grouped_variant(self.max_context_len, num_seqs, num_kv_heads)
-            } else if cache.hnd {
-                kernels::paged_decode_hnd_variant(
-                    self.max_context_len,
-                    num_seqs,
-                    num_heads,
-                    num_kv_heads,
-                    self.sliding_window,
-                    head_size,
-                )
-            } else {
-                kernels::paged_decode_variant(
-                    self.max_context_len,
-                    num_seqs,
-                    num_heads,
-                    num_kv_heads,
-                    head_size,
-                )
-            };
+        if let Some(variant) = workload.specialized_variant(metal_paged_kernel()) {
             let num_partitions = variant.num_partitions(self.max_context_len);
             let partials_len = num_seqs * num_heads * num_partitions;
             let partial_dtype = if matches!(variant, kernels::PagedDecodeVariant::Split) {
@@ -669,4 +826,183 @@ pub fn reshape_and_cache(
     .map_err(candle_core::Error::wrap)?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod workspace_tests {
+    use super::*;
+
+    fn workload() -> MetalPagedAttentionWorkspace {
+        MetalPagedAttentionWorkspace {
+            num_seqs: 1,
+            num_heads: 8,
+            num_kv_heads: 2,
+            head_size: 512,
+            block_size: 32,
+            max_context_len: 1024,
+            sliding_window: None,
+            dtype: DType::BF16,
+            cache_dtype: DType::BF16,
+            hnd: true,
+            packed_x: 1,
+            has_alibi: false,
+            has_sinks: false,
+            has_scales: false,
+            softcapping: 1.0,
+        }
+    }
+
+    #[test]
+    fn split_accounts_for_f32_partials_and_each_backing_buffer() {
+        let input = workload();
+        assert_eq!(
+            input.bytes_for_kernel(MetalPagedKernel::Auto).unwrap(),
+            8 * 512 * 2 + 2 * 8 * 32 * 4 + 8 * 32 * 512 * 4
+        );
+        assert_eq!(
+            MetalPagedAttentionWorkspace {
+                max_context_len: 256,
+                ..input
+            }
+            .bytes_for_kernel(MetalPagedKernel::Auto)
+            .unwrap(),
+            8 * 512 * 2
+        );
+    }
+
+    #[test]
+    fn feature_fallback_accounts_for_generic_partitions() {
+        let input = MetalPagedAttentionWorkspace {
+            cache_dtype: DType::F8E4M3,
+            has_scales: true,
+            max_context_len: 1025,
+            ..workload()
+        };
+        assert_eq!(
+            input.bytes_for_kernel(MetalPagedKernel::Auto).unwrap(),
+            8192 + 2 * 128 + 32768
+        );
+        assert_eq!(
+            input.bytes_for_kernel(MetalPagedKernel::Auto).unwrap(),
+            input.bytes_for_kernel(MetalPagedKernel::Legacy).unwrap()
+        );
+    }
+
+    #[test]
+    fn noncanonical_legacy_packing_uses_the_same_generic_fallback_as_dispatch() {
+        let canonical = MetalPagedAttentionWorkspace {
+            num_heads: 16,
+            num_kv_heads: 8,
+            head_size: 128,
+            hnd: false,
+            packed_x: SPECIALIZED_PACKED_X,
+            max_context_len: 1024,
+            ..workload()
+        };
+        let noncanonical = MetalPagedAttentionWorkspace {
+            packed_x: SPECIALIZED_PACKED_X / 2,
+            ..canonical
+        };
+        assert!(canonical
+            .specialized_variant(MetalPagedKernel::Auto)
+            .is_some());
+        assert!(noncanonical
+            .specialized_variant(MetalPagedKernel::Auto)
+            .is_none());
+        assert_eq!(
+            noncanonical
+                .bytes_for_kernel(MetalPagedKernel::Auto)
+                .unwrap(),
+            noncanonical
+                .bytes_for_kernel(MetalPagedKernel::Legacy)
+                .unwrap()
+        );
+        assert_ne!(
+            noncanonical
+                .bytes_for_kernel(MetalPagedKernel::Auto)
+                .unwrap(),
+            canonical.bytes_for_kernel(MetalPagedKernel::Auto).unwrap()
+        );
+    }
+
+    #[test]
+    fn rejects_workspace_overflow() {
+        assert!(MetalPagedAttentionWorkspace {
+            num_seqs: usize::MAX,
+            ..workload()
+        }
+        .bytes()
+        .is_err());
+        assert!(MetalPagedAttentionWorkspace {
+            num_kv_heads: 0,
+            ..workload()
+        }
+        .bytes()
+        .is_err());
+    }
+
+    #[test]
+    fn capacity_bound_covers_dispatch_switches_and_smaller_batches() {
+        let contexts = [
+            1, 128, 256, 288, 512, 513, 767, 768, 1024, 2048, 4096, 4097, 8192,
+        ];
+        let batches = [1, 2, 4, 8, 16, 32, 64];
+        for kernel in [
+            MetalPagedKernel::Auto,
+            MetalPagedKernel::Grouped,
+            MetalPagedKernel::Legacy,
+        ] {
+            for shape in [
+                workload(),
+                MetalPagedAttentionWorkspace {
+                    num_seqs: 8,
+                    ..workload()
+                },
+                MetalPagedAttentionWorkspace {
+                    num_seqs: 64,
+                    num_heads: 16,
+                    num_kv_heads: 8,
+                    head_size: 128,
+                    ..workload()
+                },
+                MetalPagedAttentionWorkspace {
+                    num_seqs: 64,
+                    cache_dtype: DType::F8E4M3,
+                    has_scales: true,
+                    ..workload()
+                },
+                MetalPagedAttentionWorkspace {
+                    sliding_window: Some(512),
+                    ..workload()
+                },
+            ] {
+                let mut previous = 0;
+                for capacity in contexts {
+                    let bound = MetalPagedAttentionWorkspace {
+                        max_context_len: capacity,
+                        ..shape
+                    }
+                    .capacity_bytes_for_kernel(kernel)
+                    .unwrap();
+                    assert!(bound >= previous, "capacity {capacity} reduced the bound");
+                    previous = bound;
+                    for batch in batches.into_iter().filter(|batch| *batch <= shape.num_seqs) {
+                        for context in contexts.into_iter().filter(|context| *context <= capacity) {
+                            let exact = MetalPagedAttentionWorkspace {
+                                num_seqs: batch,
+                                max_context_len: context,
+                                ..shape
+                            }
+                            .bytes_for_kernel(kernel)
+                            .unwrap();
+                            assert!(
+                                bound >= exact,
+                                "batch {batch}, context {context} exceeds capacity {capacity}"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
 }

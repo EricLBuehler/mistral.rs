@@ -46,6 +46,7 @@ pub struct GgufModelBuilder {
 
     // Other things
     pub(crate) paged_attn_cfg: Option<PagedAttentionConfig>,
+    pub(crate) memory_goal: Option<crate::MemoryGoal>,
     pub(crate) no_paged_attn: bool,
     pub(crate) max_num_seqs: usize,
     pub(crate) no_kv_cache: bool,
@@ -65,7 +66,7 @@ impl GgufModelBuilder {
     /// - Token source is from the cache (.cache/huggingface/token)
     /// - Maximum number of sequences running is 32
     /// - Number of sequences to hold in prefix cache is 16.
-    /// - Automatic device mapping with model defaults according to `AutoDeviceMapParams`
+    /// - Automatic device mapping using the shared memory goal and execution limits
     /// - By default, web searching compatible with the OpenAI `web_search_options` setting is disabled.
     pub fn new(model_id: impl ToString, files: Vec<impl ToString>) -> Self {
         Self {
@@ -78,8 +79,9 @@ impl GgufModelBuilder {
             token_source: TokenSource::CacheToken,
             hf_revision: None,
             paged_attn_cfg: None,
+            memory_goal: None,
             no_paged_attn: false,
-            max_num_seqs: 32,
+            max_num_seqs: mistralrs_core::memory_plan::DEFAULT_MAX_NUM_SEQS,
             no_kv_cache: false,
             prefix_cache_n: Some(16),
             with_logging: false,
@@ -400,16 +402,22 @@ impl GgufModelBuilder {
         self
     }
 
-    /// Override the default PagedAttention configuration; ignored on unsupported devices or models.
+    /// Override the default PagedAttention configuration.
     pub fn with_paged_attn(mut self, paged_attn_cfg: PagedAttentionConfig) -> Self {
         self.paged_attn_cfg = Some(paged_attn_cfg);
+        self.memory_goal = None;
         self.no_paged_attn = false;
+        self
+    }
+
+    /// Set the memory goal for model placement and KV cache allocation.
+    pub fn with_memory_goal(mut self, memory_goal: crate::MemoryGoal) -> Self {
+        self.memory_goal = Some(memory_goal);
         self
     }
 
     /// Disable PagedAttention, which is enabled by default on supported CUDA and Metal devices.
     pub fn without_paged_attn(mut self) -> Self {
-        self.paged_attn_cfg = None;
         self.no_paged_attn = true;
         self
     }
@@ -438,9 +446,9 @@ impl GgufModelBuilder {
         self
     }
 
-    /// Provide metadata to initialize the device mapper.
-    pub fn with_device_mapping(mut self, device_mapping: DeviceMapSetting) -> Self {
-        self.device_mapping = Some(device_mapping);
+    /// Override automatic placement with explicit device layer counts.
+    pub fn with_device_mapping(mut self, device_mapping: DeviceMapMetadata) -> Self {
+        self.device_mapping = Some(DeviceMapSetting::Map(device_mapping));
         self
     }
 

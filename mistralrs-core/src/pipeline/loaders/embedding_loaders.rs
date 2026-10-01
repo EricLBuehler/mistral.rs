@@ -325,6 +325,10 @@ impl IsqModelLoader for AutoEmbeddingLoader {
 }
 
 impl DeviceMappedModelLoader for AutoEmbeddingLoader {
+    fn activation_model_config(&self, config: &str) -> Result<super::ActivationModelConfig> {
+        Self::get_loader(config)?.activation_model_config(config)
+    }
+
     fn non_mapped_size_in_bytes(
         &self,
         config: &str,
@@ -438,6 +442,17 @@ impl IsqModelLoader for EmbeddingGemmaLoader {
 }
 
 impl DeviceMappedModelLoader for EmbeddingGemmaLoader {
+    fn activation_model_config(&self, config: &str) -> Result<super::ActivationModelConfig> {
+        let cfg: EmbeddingGemmaConfig = serde_json::from_str(config)?;
+        Ok(super::ActivationModelConfig {
+            intermediate_size: cfg.intermediate_size,
+            // Embedding models have no vocabulary projection.
+            vocab_size: 0,
+            custom_prefill_mask: true,
+            ..Default::default()
+        })
+    }
+
     fn mapped_max_act_size_elems(
         &self,
         config: &str,
@@ -629,6 +644,19 @@ impl IsqModelLoader for Qwen3EmbeddingLoader {
 }
 
 impl DeviceMappedModelLoader for Qwen3EmbeddingLoader {
+    fn activation_model_config(&self, config: &str) -> Result<super::ActivationModelConfig> {
+        let cfg: Qwen3EmbeddingConfig = serde_json::from_str(config)?;
+        Ok(super::ActivationModelConfig {
+            intermediate_size: cfg.intermediate_size,
+            // Embedding models have no vocabulary projection.
+            vocab_size: 0,
+            custom_prefill_mask: true,
+            attention_features: (!(cfg.use_sliding_window && cfg.sliding_window.is_some()))
+                .then_some(Default::default()),
+            ..Default::default()
+        })
+    }
+
     fn mapped_max_act_size_elems(
         &self,
         config: &str,

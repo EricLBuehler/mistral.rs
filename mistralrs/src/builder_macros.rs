@@ -162,7 +162,7 @@ macro_rules! common_builder_methods {
             self
         }
 
-        /// Override the default PagedAttention configuration; ignored on unsupported devices or models.
+        /// Override the default PagedAttention configuration.
         ///
         /// Configure with a [`PagedAttentionConfig`] object, which can be created with
         /// sensible defaults via [`crate::PagedAttentionMetaBuilder`]:
@@ -177,13 +177,19 @@ macro_rules! common_builder_methods {
         /// ```
         pub fn with_paged_attn(mut self, paged_attn_cfg: PagedAttentionConfig) -> Self {
             self.paged_attn_cfg = Some(paged_attn_cfg);
+            self.memory_goal = None;
             self.no_paged_attn = false;
+            self
+        }
+
+        /// Set the memory goal for model placement and KV cache allocation.
+        pub fn with_memory_goal(mut self, memory_goal: crate::MemoryGoal) -> Self {
+            self.memory_goal = Some(memory_goal);
             self
         }
 
         /// Disable PagedAttention, which is enabled by default on supported CUDA and Metal devices.
         pub fn without_paged_attn(mut self) -> Self {
-            self.paged_attn_cfg = None;
             self.no_paged_attn = true;
             self
         }
@@ -222,9 +228,9 @@ macro_rules! common_builder_methods {
             self
         }
 
-        /// Provide metadata to initialize the device mapper.
-        pub fn with_device_mapping(mut self, device_mapping: DeviceMapSetting) -> Self {
-            self.device_mapping = Some(device_mapping);
+        /// Override automatic placement with explicit device layer counts.
+        pub fn with_device_mapping(mut self, device_mapping: DeviceMapMetadata) -> Self {
+            self.device_mapping = Some(DeviceMapSetting::Map(device_mapping));
             self
         }
 

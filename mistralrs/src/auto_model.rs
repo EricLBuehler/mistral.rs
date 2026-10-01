@@ -71,6 +71,7 @@ pub struct ModelBuilder {
     pub(crate) isq: Option<IsqSetting>,
     pub(crate) throughput_logging: bool,
     pub(crate) paged_attn_cfg: Option<PagedAttentionConfig>,
+    pub(crate) memory_goal: Option<crate::MemoryGoal>,
     pub(crate) no_paged_attn: bool,
     pub(crate) max_num_seqs: usize,
     pub(crate) with_logging: bool,
@@ -92,7 +93,7 @@ impl ModelBuilder {
     /// - Token source is from the cache (.cache/huggingface/token)
     /// - Maximum number of sequences running is 32
     /// - Number of sequences to hold in prefix cache is 16.
-    /// - Automatic device mapping with model defaults according to `AutoDeviceMapParams`
+    /// - Automatic device mapping using the shared memory goal and execution limits
     pub fn new(model_id: impl ToString) -> Self {
         Self {
             model_id: model_id.to_string(),
@@ -109,8 +110,9 @@ impl ModelBuilder {
             hf_revision: None,
             isq: None,
             paged_attn_cfg: None,
+            memory_goal: None,
             no_paged_attn: false,
-            max_num_seqs: 32,
+            max_num_seqs: mistralrs_core::memory_plan::DEFAULT_MAX_NUM_SEQS,
             prefix_cache_n: Some(16),
             with_logging: false,
             device_mapping: None,

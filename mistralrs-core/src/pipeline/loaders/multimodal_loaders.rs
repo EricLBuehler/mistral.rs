@@ -4,7 +4,7 @@ use std::sync::atomic::AtomicUsize;
 use std::sync::{Arc, Mutex};
 use std::{fmt::Debug, str::FromStr};
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use candle_core::{DType, Device, Tensor, D};
 use candle_nn::Conv2dConfig;
 use image::{ColorType, DynamicImage};
@@ -20,7 +20,9 @@ use serde::Deserialize;
 
 use self::minicpmo::{MiniCpmOConfig, MiniCpmOModel, MiniCpmOProcessor};
 
-use super::{DeviceMappedModelLoader, NonMappedSubModel, NormalLoadingMetadata};
+use super::{
+    ActivationModelConfig, DeviceMappedModelLoader, NonMappedSubModel, NormalLoadingMetadata,
+};
 use crate::amoe::AnyMoeBaseModelMixin;
 use crate::attention::ATTENTION_CHUNK_SIZE;
 use crate::block_diffusion::BlockDiffusionMixin;
@@ -30,7 +32,7 @@ use crate::layers::Conv3dConfig;
 use crate::matformer::MatformerSliceConfig;
 use crate::paged_attention::{
     encoder_cache::EncoderCacheManager, AttentionImplementation, HybridPagedKvCacheConfig,
-    ModelConfigLike, ModelConfigMetadata,
+    ModelConfigLike, ModelConfigMetadata, PrefixPrefillAttentionFeatures,
 };
 use crate::pipeline::isq::IsqModelLoader;
 use crate::pipeline::loaders::AutoDeviceMapParams;
@@ -87,6 +89,28 @@ use crate::vision_models::qwen3_vl_moe::{
 use crate::vision_models::voxtral::config::VoxtralConfig;
 use crate::vision_models::voxtral::{VoxtralModel, VoxtralProcessor};
 use crate::vision_models::{minicpmo, phi4};
+
+const PER_LAYER_INPUT_BUFFERS: usize = 2;
+const F32_PER_LAYER_INPUT_BUFFERS: usize = 6;
+const ALTUP_STATE_BUFFERS: usize = 4;
+const GDN_PROJECTION_PAIRS: usize = 2;
+const LLAMA4_FULL_ATTENTION_INTERVAL: usize = 4;
+
+fn uniform_attention_features(
+    sliding_layers: impl IntoIterator<Item = bool>,
+    has_softcap: bool,
+) -> Option<PrefixPrefillAttentionFeatures> {
+    let mut layers = sliding_layers.into_iter();
+    let has_sliding_window = layers.next()?;
+    // A mixed-layer union would merge distinct full and windowed mask allocations.
+    layers
+        .all(|sliding| sliding == has_sliding_window)
+        .then_some(PrefixPrefillAttentionFeatures {
+            has_sliding_window,
+            has_softcap,
+            ..Default::default()
+        })
+}
 
 // HF Qwen3VLVideoProcessor sampling defaults, shared by the Qwen3-VL/3.5 family.
 const QWEN3_VIDEO_SAMPLING: crate::VideoFrameSampling = crate::VideoFrameSampling::Fps {
@@ -595,6 +619,10 @@ impl IsqModelLoader for AutoMultimodalLoader {
 }
 
 impl DeviceMappedModelLoader for AutoMultimodalLoader {
+    fn activation_model_config(&self, config: &str) -> Result<ActivationModelConfig> {
+        Self::get_loader(config)?.activation_model_config(config)
+    }
+
     fn mapped_max_act_size_elems(
         &self,
         config: &str,
@@ -806,6 +834,20 @@ impl IsqModelLoader for Phi3VLoader {
 }
 
 impl DeviceMappedModelLoader for Phi3VLoader {
+    fn activation_model_config(&self, config: &str) -> Result<ActivationModelConfig> {
+        let cfg: Phi3Config = serde_json::from_str(config)?;
+        Ok(ActivationModelConfig {
+            attention_features: Some(PrefixPrefillAttentionFeatures {
+                has_sliding_window: cfg.sliding_window.is_some(),
+                ..Default::default()
+            }),
+            intermediate_size: cfg.intermediate_size,
+            vocab_size: cfg.vocab_size,
+            custom_prefill_mask: false,
+            ..Default::default()
+        })
+    }
+
     fn mapped_max_act_size_elems(
         &self,
         config: &str,
@@ -1119,6 +1161,21 @@ impl IsqModelLoader for Idefics2Loader {
 }
 
 impl DeviceMappedModelLoader for Idefics2Loader {
+    fn activation_model_config(&self, config: &str) -> Result<ActivationModelConfig> {
+        let cfg: Idefics2Config = serde_json::from_str(config)?;
+        let cfg = &cfg.text_config;
+        Ok(ActivationModelConfig {
+            attention_features: Some(PrefixPrefillAttentionFeatures {
+                has_sliding_window: cfg.sliding_window.is_some(),
+                ..Default::default()
+            }),
+            intermediate_size: cfg.intermediate_size,
+            vocab_size: cfg.vocab_size,
+            custom_prefill_mask: false,
+            ..Default::default()
+        })
+    }
+
     fn mapped_max_act_size_elems(
         &self,
         config: &str,
@@ -1485,6 +1542,21 @@ impl IsqModelLoader for LLaVANextLoader {
 }
 
 impl DeviceMappedModelLoader for LLaVANextLoader {
+    fn activation_model_config(&self, config: &str) -> Result<ActivationModelConfig> {
+        let cfg: LLaVAConfig = serde_json::from_str(config)?;
+        let cfg = &cfg.text_config;
+        Ok(ActivationModelConfig {
+            attention_features: Some(PrefixPrefillAttentionFeatures {
+                has_sliding_window: cfg.model_type == "mistral" && cfg.sliding_window.is_some(),
+                ..Default::default()
+            }),
+            intermediate_size: cfg.intermediate_size,
+            vocab_size: cfg.vocab_size,
+            custom_prefill_mask: false,
+            ..Default::default()
+        })
+    }
+
     fn mapped_max_act_size_elems(
         &self,
         config: &str,
@@ -1778,6 +1850,21 @@ impl IsqModelLoader for LLaVALoader {
 }
 
 impl DeviceMappedModelLoader for LLaVALoader {
+    fn activation_model_config(&self, config: &str) -> Result<ActivationModelConfig> {
+        let cfg: LLaVAConfig = serde_json::from_str(config)?;
+        let cfg = &cfg.text_config;
+        Ok(ActivationModelConfig {
+            attention_features: Some(PrefixPrefillAttentionFeatures {
+                has_sliding_window: cfg.model_type == "mistral" && cfg.sliding_window.is_some(),
+                ..Default::default()
+            }),
+            intermediate_size: cfg.intermediate_size,
+            vocab_size: cfg.vocab_size,
+            custom_prefill_mask: false,
+            ..Default::default()
+        })
+    }
+
     fn mapped_max_act_size_elems(
         &self,
         config: &str,
@@ -2105,6 +2192,18 @@ impl IsqModelLoader for VLlamaLoader {
 }
 
 impl DeviceMappedModelLoader for VLlamaLoader {
+    fn activation_model_config(&self, config: &str) -> Result<ActivationModelConfig> {
+        let cfg: MLlamaConfig = serde_json::from_str(config)?;
+        let cfg = &cfg.text_config;
+        Ok(ActivationModelConfig {
+            attention_features: Some(PrefixPrefillAttentionFeatures::default()),
+            intermediate_size: cfg.intermediate_size,
+            vocab_size: cfg.vocab_size,
+            custom_prefill_mask: true,
+            ..Default::default()
+        })
+    }
+
     fn mapped_max_act_size_elems(
         &self,
         config: &str,
@@ -2463,6 +2562,39 @@ impl IsqModelLoader for Qwen2VLLoader {
 }
 
 impl DeviceMappedModelLoader for Qwen2VLLoader {
+    fn activation_model_config(&self, config: &str) -> Result<ActivationModelConfig> {
+        let cfg: Qwen2VLConfig = serde_json::from_str(config)?;
+        Ok(ActivationModelConfig {
+            attention_features: cfg.layer_types.as_ref().map_or_else(
+                || {
+                    uniform_attention_features(
+                        (0..cfg.num_hidden_layers).map(|layer| {
+                            cfg.use_sliding_window
+                                && cfg.sliding_window.is_some()
+                                && layer >= cfg.max_window_layers
+                        }),
+                        false,
+                    )
+                },
+                |layers| {
+                    uniform_attention_features(
+                        layers.iter().map(|kind| {
+                            matches!(
+                                kind,
+                                crate::vision_models::qwen2vl::AttentionType::SlidingAttention
+                            )
+                        }),
+                        false,
+                    )
+                },
+            ),
+            intermediate_size: cfg.intermediate_size,
+            vocab_size: cfg.vocab_size,
+            custom_prefill_mask: false,
+            ..Default::default()
+        })
+    }
+
     fn mapped_max_act_size_elems(
         &self,
         config: &str,
@@ -2812,6 +2944,18 @@ impl IsqModelLoader for Idefics3Loader {
 }
 
 impl DeviceMappedModelLoader for Idefics3Loader {
+    fn activation_model_config(&self, config: &str) -> Result<ActivationModelConfig> {
+        let cfg: Idefics3Config = serde_json::from_str(config)?;
+        let cfg = &cfg.text_config;
+        Ok(ActivationModelConfig {
+            attention_features: Some(PrefixPrefillAttentionFeatures::default()),
+            intermediate_size: cfg.intermediate_size,
+            vocab_size: cfg.vocab_size,
+            custom_prefill_mask: false,
+            ..Default::default()
+        })
+    }
+
     fn mapped_max_act_size_elems(
         &self,
         config: &str,
@@ -3126,6 +3270,40 @@ impl IsqModelLoader for MiniCpmOLoader {
 }
 
 impl DeviceMappedModelLoader for MiniCpmOLoader {
+    fn activation_model_config(&self, config: &str) -> Result<ActivationModelConfig> {
+        let cfg: MiniCpmOConfig = serde_json::from_str(config)?;
+        let cfg = &cfg.text_config;
+        Ok(ActivationModelConfig {
+            attention_features: cfg.layer_types.as_ref().map_or_else(
+                || {
+                    uniform_attention_features(
+                        (0..cfg.num_hidden_layers).map(|layer| {
+                            cfg.use_sliding_window
+                                && cfg.sliding_window.is_some()
+                                && layer >= cfg.max_window_layers
+                        }),
+                        false,
+                    )
+                },
+                |layers| {
+                    uniform_attention_features(
+                        layers.iter().map(|kind| {
+                            matches!(
+                                kind,
+                                crate::models::qwen2::Qwen2AttentionType::SlidingAttention
+                            )
+                        }),
+                        false,
+                    )
+                },
+            ),
+            intermediate_size: cfg.intermediate_size,
+            vocab_size: cfg.vocab_size,
+            custom_prefill_mask: true,
+            ..Default::default()
+        })
+    }
+
     fn mapped_max_act_size_elems(
         &self,
         config: &str,
@@ -3445,6 +3623,20 @@ impl IsqModelLoader for Phi4MMLoader {
 }
 
 impl DeviceMappedModelLoader for Phi4MMLoader {
+    fn activation_model_config(&self, config: &str) -> Result<ActivationModelConfig> {
+        let cfg: Phi4MMConfig = serde_json::from_str(config)?;
+        Ok(ActivationModelConfig {
+            attention_features: Some(PrefixPrefillAttentionFeatures {
+                has_sliding_window: cfg.sliding_window.is_some(),
+                ..Default::default()
+            }),
+            intermediate_size: cfg.intermediate_size,
+            vocab_size: cfg.vocab_size,
+            custom_prefill_mask: true,
+            ..Default::default()
+        })
+    }
+
     fn mapped_max_act_size_elems(
         &self,
         config: &str,
@@ -3796,6 +3988,39 @@ impl IsqModelLoader for Qwen2_5VLLoader {
 }
 
 impl DeviceMappedModelLoader for Qwen2_5VLLoader {
+    fn activation_model_config(&self, config: &str) -> Result<ActivationModelConfig> {
+        let cfg: Qwen2_5VLConfig = serde_json::from_str(config)?;
+        Ok(ActivationModelConfig {
+            attention_features: cfg.layer_types.as_ref().map_or_else(
+                || {
+                    uniform_attention_features(
+                        (0..cfg.num_hidden_layers).map(|layer| {
+                            cfg.use_sliding_window
+                                && cfg.sliding_window.is_some()
+                                && layer >= cfg.max_window_layers
+                        }),
+                        false,
+                    )
+                },
+                |layers| {
+                    uniform_attention_features(
+                        layers.iter().map(|kind| {
+                            matches!(
+                                kind,
+                                crate::vision_models::qwen2_5_vl::AttentionType::SlidingAttention
+                            )
+                        }),
+                        false,
+                    )
+                },
+            ),
+            intermediate_size: cfg.intermediate_size,
+            vocab_size: cfg.vocab_size,
+            custom_prefill_mask: false,
+            ..Default::default()
+        })
+    }
+
     fn mapped_max_act_size_elems(
         &self,
         config: &str,
@@ -3815,10 +4040,10 @@ impl DeviceMappedModelLoader for Qwen2_5VLLoader {
 
         let img_seq_len = {
             let cfg = &cfg.vision_config;
-            let grid_t = max_num_images / cfg.temporal_patch_size;
+            // Each still image is padded to one temporal patch group.
             let grid_h = max_image_shape.0 / cfg.patch_size;
             let grid_w = max_image_shape.1 / cfg.patch_size;
-            grid_t * grid_h * grid_w
+            grid_h * grid_w
         };
         let img_seq_len = img_seq_len * max_num_images;
 
@@ -3850,10 +4075,10 @@ impl DeviceMappedModelLoader for Qwen2_5VLLoader {
 
         let img_seq_len = {
             let cfg = &cfg.vision_config;
-            let grid_t = max_num_images / cfg.temporal_patch_size;
+            // Each still image is padded to one temporal patch group.
             let grid_h = max_image_shape.0 / cfg.patch_size;
             let grid_w = max_image_shape.1 / cfg.patch_size;
-            grid_t * grid_h * grid_w
+            grid_h * grid_w
         };
 
         let max_vision_attn = {
@@ -4161,6 +4386,25 @@ impl IsqModelLoader for Gemma3Loader {
 }
 
 impl DeviceMappedModelLoader for Gemma3Loader {
+    fn activation_model_config(&self, config: &str) -> Result<ActivationModelConfig> {
+        let cfg: Gemma3Config = serde_json::from_str(config)?;
+        let (cfg, custom_prefill_mask) = match &cfg {
+            Gemma3Config::Text(cfg) => (cfg, false),
+            Gemma3Config::WithVision { text_config, .. } => (text_config, true),
+        };
+        Ok(ActivationModelConfig {
+            attention_features: uniform_attention_features(
+                (0..cfg.num_hidden_layers)
+                    .map(|layer| !(layer + 1).is_multiple_of(cfg.sliding_window_pattern)),
+                cfg.attn_logit_softcapping.is_some(),
+            ),
+            intermediate_size: cfg.intermediate_size,
+            vocab_size: cfg.vocab_size,
+            custom_prefill_mask,
+            ..Default::default()
+        })
+    }
+
     fn mapped_max_act_size_elems(
         &self,
         config: &str,
@@ -4533,6 +4777,21 @@ impl IsqModelLoader for Mistral3Loader {
 
 #[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 impl DeviceMappedModelLoader for Mistral3Loader {
+    fn activation_model_config(&self, config: &str) -> Result<ActivationModelConfig> {
+        let cfg: Mistral3Config = serde_json::from_str(config)?;
+        let cfg = &cfg.text_config;
+        Ok(ActivationModelConfig {
+            attention_features: Some(PrefixPrefillAttentionFeatures {
+                has_sliding_window: cfg.sliding_window.is_some(),
+                ..Default::default()
+            }),
+            intermediate_size: cfg.intermediate_size,
+            vocab_size: cfg.vocab_size,
+            custom_prefill_mask: true,
+            ..Default::default()
+        })
+    }
+
     fn mapped_max_act_size_elems(
         &self,
         config: &str,
@@ -4963,6 +5222,30 @@ impl VLlama4Loader {
 }
 
 impl DeviceMappedModelLoader for VLlama4Loader {
+    fn activation_model_config(&self, config: &str) -> Result<ActivationModelConfig> {
+        let cfg: Llama4Config = serde_json::from_str(config)?;
+        let cfg = &cfg.text_config;
+        let routed_and_shared = if cfg.moe_layers().is_empty() {
+            0
+        } else {
+            cfg.num_experts_per_tok
+                .checked_add(1)
+                .and_then(|experts| cfg.intermediate_size.checked_mul(experts))
+                .context("Llama4 active expert activation size overflow")?
+        };
+        Ok(ActivationModelConfig {
+            attention_features: uniform_attention_features(
+                (0..cfg.num_hidden_layers)
+                    .map(|layer| !(layer + 1).is_multiple_of(LLAMA4_FULL_ATTENTION_INTERVAL)),
+                false,
+            ),
+            intermediate_size: cfg.intermediate_size_mlp.max(routed_and_shared),
+            vocab_size: cfg.vocab_size,
+            custom_prefill_mask: true,
+            ..Default::default()
+        })
+    }
+
     fn mapped_max_act_size_elems(
         &self,
         config: &str,
@@ -5008,10 +5291,7 @@ impl DeviceMappedModelLoader for VLlama4Loader {
             self.run_dummy_processing(&cfg, *height, *width, *max_num_images, *max_batch_size)?;
         let max_seq_len = cfg.vision_config.num_patches();
 
-        Ok((max_batch_size * pixels_batch_size)
-            * cfg.vision_config.num_attention_heads
-            * max_seq_len
-            * max_seq_len)
+        Ok(pixels_batch_size * cfg.vision_config.num_attention_heads * max_seq_len * max_seq_len)
     }
 
     fn non_mapped_size_in_bytes(
@@ -5374,6 +5654,43 @@ impl IsqModelLoader for Gemma3nLoader {
 }
 
 impl DeviceMappedModelLoader for Gemma3nLoader {
+    fn activation_model_config(&self, config: &str) -> Result<ActivationModelConfig> {
+        let cfg: Gemma3nConfig = serde_json::from_str(config)?;
+        let cfg = &cfg.text_config;
+        let intermediate_size = match &cfg.intermediate_size {
+            IntermediateSize::Single(size) => *size,
+            IntermediateSize::PerLayer(sizes) | IntermediateSize::Matformer(sizes, _) => sizes
+                .iter()
+                .copied()
+                .max()
+                .context("Gemma3n has no intermediate layers")?,
+        };
+        let per_layer_inputs = cfg
+            .hidden_size_per_layer_input
+            .checked_mul(cfg.num_hidden_layers)
+            .and_then(|elements| elements.checked_mul(F32_PER_LAYER_INPUT_BUFFERS))
+            .context("Gemma3n per-layer activation size overflow")?;
+        let altup_inputs = cfg
+            .hidden_size
+            .checked_mul(cfg.altup_num_inputs)
+            .and_then(|elements| elements.checked_mul(ALTUP_STATE_BUFFERS))
+            .context("Gemma3n AltUp activation size overflow")?;
+        Ok(ActivationModelConfig {
+            attention_features: uniform_attention_features(
+                cfg.layer_types
+                    .iter()
+                    .map(|kind| kind == "sliding_attention"),
+                false,
+            ),
+            intermediate_size,
+            vocab_size: cfg.vocab_size,
+            extra_hidden_elements_per_token: per_layer_inputs
+                .checked_add(altup_inputs)
+                .context("Gemma3n retained activation size overflow")?,
+            custom_prefill_mask: true,
+        })
+    }
+
     fn mapped_max_act_size_elems(
         &self,
         config: &str,
@@ -6213,6 +6530,25 @@ impl IsqModelLoader for Qwen3VLLoader {
 }
 
 impl DeviceMappedModelLoader for Qwen3VLLoader {
+    fn activation_model_config(&self, config: &str) -> Result<ActivationModelConfig> {
+        let cfg: Qwen3VLConfig = serde_json::from_str(config)?;
+        let tc = &cfg.text_config;
+        let deepstack = cfg
+            .vision_config
+            .out_hidden_size
+            .checked_mul(cfg.vision_config.deepstack_visual_indexes.len())
+            .context("Qwen visual deepstack activation size overflow")?;
+        let extra_hidden_elements_per_token = deepstack;
+        let intermediate_size = tc.intermediate_size;
+        Ok(ActivationModelConfig {
+            attention_features: Some(PrefixPrefillAttentionFeatures::default()),
+            intermediate_size,
+            vocab_size: tc.vocab_size,
+            extra_hidden_elements_per_token,
+            custom_prefill_mask: false,
+        })
+    }
+
     fn mapped_max_act_size_elems(
         &self,
         config: &str,
@@ -6615,6 +6951,29 @@ impl IsqModelLoader for Qwen3VLMoELoader {
 }
 
 impl DeviceMappedModelLoader for Qwen3VLMoELoader {
+    fn activation_model_config(&self, config: &str) -> Result<ActivationModelConfig> {
+        let cfg: Qwen3VLMoEConfig = serde_json::from_str(config)?;
+        let tc = &cfg.text_config;
+        let deepstack = cfg
+            .vision_config
+            .out_hidden_size
+            .checked_mul(cfg.vision_config.deepstack_visual_indexes.len())
+            .context("Qwen visual deepstack activation size overflow")?;
+        let extra_hidden_elements_per_token = deepstack;
+        let routed = tc
+            .moe_intermediate_size
+            .checked_mul(tc.num_experts_per_tok)
+            .context("Qwen active expert activation size overflow")?;
+        let intermediate_size = tc.intermediate_size.max(routed);
+        Ok(ActivationModelConfig {
+            attention_features: Some(PrefixPrefillAttentionFeatures::default()),
+            intermediate_size,
+            vocab_size: tc.vocab_size,
+            extra_hidden_elements_per_token,
+            custom_prefill_mask: false,
+        })
+    }
+
     fn mapped_max_act_size_elems(
         &self,
         config: &str,
@@ -7035,6 +7394,46 @@ impl IsqModelLoader for Qwen3_5Loader {
 }
 
 impl DeviceMappedModelLoader for Qwen3_5Loader {
+    fn activation_model_config(&self, config: &str) -> Result<ActivationModelConfig> {
+        let cfg: Qwen3_5Config = serde_json::from_str(config)?;
+        let tc = &cfg.text_config;
+        let deepstack = cfg
+            .vision_config
+            .out_hidden_size
+            .checked_mul(cfg.vision_config.deepstack_visual_indexes.len())
+            .context("Qwen visual deepstack activation size overflow")?;
+        let linear = if tc.layer_types().iter().any(|kind| {
+            matches!(
+                kind,
+                crate::vision_models::qwen3_5::config::LayerType::LinearAttention
+            )
+        }) {
+            tc.linear_num_key_heads
+                .checked_mul(tc.linear_key_head_dim)
+                .and_then(|key| {
+                    tc.linear_num_value_heads
+                        .checked_mul(tc.linear_value_head_dim)
+                        .and_then(|value| key.checked_add(value))
+                })
+                .and_then(|elements| elements.checked_add(tc.linear_num_value_heads))
+                .and_then(|elements| elements.checked_mul(GDN_PROJECTION_PAIRS))
+                .context("Qwen linear attention activation size overflow")?
+        } else {
+            0
+        };
+        let extra_hidden_elements_per_token = deepstack
+            .checked_add(linear)
+            .context("Qwen retained activation size overflow")?;
+        let intermediate_size = tc.intermediate_size;
+        Ok(ActivationModelConfig {
+            attention_features: Some(PrefixPrefillAttentionFeatures::default()),
+            intermediate_size,
+            vocab_size: tc.vocab_size,
+            extra_hidden_elements_per_token,
+            custom_prefill_mask: false,
+        })
+    }
+
     fn mapped_max_act_size_elems(
         &self,
         config: &str,
@@ -7494,6 +7893,52 @@ impl IsqModelLoader for Qwen3_5MoeLoader {
 }
 
 impl DeviceMappedModelLoader for Qwen3_5MoeLoader {
+    fn activation_model_config(&self, config: &str) -> Result<ActivationModelConfig> {
+        let cfg: Qwen3_5MoeConfig = serde_json::from_str(config)?;
+        let tc = &cfg.text_config;
+        let deepstack = cfg
+            .vision_config
+            .out_hidden_size
+            .checked_mul(cfg.vision_config.deepstack_visual_indexes.len())
+            .context("Qwen visual deepstack activation size overflow")?;
+        let linear = if tc.layer_types().iter().any(|kind| {
+            matches!(
+                kind,
+                crate::vision_models::qwen3_5_moe::config::LayerType::LinearAttention
+            )
+        }) {
+            tc.linear_num_key_heads
+                .checked_mul(tc.linear_key_head_dim)
+                .and_then(|key| {
+                    tc.linear_num_value_heads
+                        .checked_mul(tc.linear_value_head_dim)
+                        .and_then(|value| key.checked_add(value))
+                })
+                .and_then(|elements| elements.checked_add(tc.linear_num_value_heads))
+                .and_then(|elements| elements.checked_mul(GDN_PROJECTION_PAIRS))
+                .context("Qwen linear attention activation size overflow")?
+        } else {
+            0
+        };
+        let extra_hidden_elements_per_token = deepstack
+            .checked_add(linear)
+            .context("Qwen retained activation size overflow")?;
+        let routed = tc
+            .moe_intermediate_size
+            .checked_mul(tc.num_experts_per_tok)
+            .context("Qwen active expert activation size overflow")?;
+        let intermediate_size = routed
+            .checked_add(tc.shared_expert_intermediate_size)
+            .context("Qwen shared expert activation size overflow")?;
+        Ok(ActivationModelConfig {
+            attention_features: Some(PrefixPrefillAttentionFeatures::default()),
+            intermediate_size,
+            vocab_size: tc.vocab_size,
+            extra_hidden_elements_per_token,
+            custom_prefill_mask: false,
+        })
+    }
+
     fn mapped_max_act_size_elems(
         &self,
         config: &str,
@@ -7907,6 +8352,20 @@ impl IsqModelLoader for VoxtralLoader {
 
 #[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 impl DeviceMappedModelLoader for VoxtralLoader {
+    fn activation_model_config(&self, config: &str) -> Result<ActivationModelConfig> {
+        let cfg: VoxtralConfig = serde_json::from_str(config)?;
+        Ok(ActivationModelConfig {
+            attention_features: Some(PrefixPrefillAttentionFeatures {
+                has_sliding_window: cfg.sliding_window.is_some(),
+                ..Default::default()
+            }),
+            intermediate_size: cfg.hidden_dim,
+            vocab_size: cfg.vocab_size,
+            custom_prefill_mask: true,
+            ..Default::default()
+        })
+    }
+
     fn mapped_max_act_size_elems(
         &self,
         config: &str,
@@ -8268,6 +8727,39 @@ impl IsqModelLoader for Gemma4Loader {
 }
 
 impl DeviceMappedModelLoader for Gemma4Loader {
+    fn activation_model_config(&self, config: &str) -> Result<ActivationModelConfig> {
+        let cfg: Gemma4Config = serde_json::from_str(config)?;
+        let tc = &cfg.text_config;
+        let intermediate_size = tc
+            .intermediate_size
+            .checked_mul(if tc.use_double_wide_mlp { 2 } else { 1 })
+            .and_then(|dense| {
+                let experts = if tc.enable_moe_block {
+                    tc.expert_intermediate_size()
+                        .unwrap_or(tc.intermediate_size)
+                        .checked_mul(tc.top_k_experts.unwrap_or(2))?
+                } else {
+                    0
+                };
+                dense.checked_add(experts)
+            })
+            .context("Gemma active MLP activation size overflow")?;
+        let extra_hidden_elements_per_token = tc
+            .hidden_size_per_layer_input
+            .unwrap_or(0)
+            .checked_mul(tc.num_hidden_layers)
+            .and_then(|elements| elements.checked_mul(PER_LAYER_INPUT_BUFFERS))
+            .context("Gemma per-layer activation size overflow")?;
+        Ok(ActivationModelConfig {
+            attention_features: None,
+            intermediate_size,
+            vocab_size: tc.vocab_size,
+            extra_hidden_elements_per_token,
+            custom_prefill_mask: tc.bidirectional_attention()
+                != crate::vision_models::gemma4::config::Gemma4BidirectionalAttention::Causal,
+        })
+    }
+
     fn mapped_max_act_size_elems(
         &self,
         config: &str,
@@ -8618,20 +9110,12 @@ impl DeviceMappedModelLoader for Gemma4Loader {
     fn model_config(&self, config: &str) -> Result<Box<dyn ModelConfigLike>> {
         let cfg: Gemma4Config = serde_json::from_str(config)?;
         let tc = &cfg.text_config;
-
-        let cfg = ModelConfigMetadata {
-            max_seq_len: tc.max_position_embeddings,
-            num_layers: tc.num_hidden_layers,
-            hidden_size: tc.hidden_size,
-            num_kv_heads: tc.num_key_value_heads,
-            num_attn_heads: tc.num_attention_heads,
-            sliding_window: Some(tc.sliding_window),
-            k_head_dim: tc.global_head_dim,
-            v_head_dim: tc.global_head_dim,
-            kv_cache_layout: crate::paged_attention::KvCacheLayout::Standard,
-        };
-
-        Ok(Box::new(cfg))
+        Ok(Box::new(
+            crate::vision_models::gemma4::text::Gemma4ModelConfigLike::new(
+                tc,
+                &vec![1; tc.num_hidden_layers],
+            )?,
+        ))
     }
 }
 
@@ -8791,6 +9275,18 @@ impl IsqModelLoader for MuseGlimmerLoader {
 }
 
 impl DeviceMappedModelLoader for MuseGlimmerLoader {
+    fn activation_model_config(&self, config: &str) -> Result<ActivationModelConfig> {
+        let cfg: MuseGlimmerConfig = serde_json::from_str(config)?;
+        let cfg = &cfg.text_config;
+        Ok(ActivationModelConfig {
+            attention_features: uniform_attention_features(cfg.layer_types()?.iter().map(|kind| matches!(kind, crate::vision_models::muse_glimmer::config::TextAttentionType::SlidingAttention)), false),
+            intermediate_size: cfg.intermediate_size,
+            vocab_size: cfg.vocab_size,
+            custom_prefill_mask: true,
+            ..Default::default()
+        })
+    }
+
     fn mapped_max_act_size_elems(
         &self,
         config: &str,
@@ -9118,6 +9614,25 @@ impl IsqModelLoader for Lfm2VlLoader {
 }
 
 impl DeviceMappedModelLoader for Lfm2VlLoader {
+    fn activation_model_config(&self, config: &str) -> Result<ActivationModelConfig> {
+        let cfg: Lfm2VlConfig = serde_json::from_str(config)?;
+        let tc = &cfg.text_config;
+        let routed = if tc.is_moe() {
+            tc.moe_intermediate_size
+                .checked_mul(tc.num_experts_per_tok)
+                .context("LFM2 active expert activation size overflow")?
+        } else {
+            0
+        };
+        Ok(ActivationModelConfig {
+            attention_features: Some(PrefixPrefillAttentionFeatures::default()),
+            intermediate_size: tc.intermediate_size().max(routed),
+            vocab_size: tc.vocab_size,
+            custom_prefill_mask: true,
+            ..Default::default()
+        })
+    }
+
     fn mapped_max_act_size_elems(
         &self,
         config: &str,
@@ -9438,6 +9953,43 @@ impl IsqModelLoader for DiffusionGemmaLoader {
 }
 
 impl DeviceMappedModelLoader for DiffusionGemmaLoader {
+    fn activation_model_config(&self, config: &str) -> Result<ActivationModelConfig> {
+        let cfg: DiffusionGemmaConfig = serde_json::from_str(config)?;
+        let tc = &cfg.text_config;
+        let intermediate_size = tc
+            .intermediate_size
+            .checked_mul(if tc.use_double_wide_mlp { 2 } else { 1 })
+            .and_then(|dense| {
+                let experts = if tc.enable_moe_block {
+                    tc.expert_intermediate_size()
+                        .unwrap_or(tc.intermediate_size)
+                        .checked_mul(tc.top_k_experts.unwrap_or(2))?
+                } else {
+                    0
+                };
+                dense.checked_add(experts)
+            })
+            .context("Gemma active MLP activation size overflow")?;
+        let extra_hidden_elements_per_token = tc
+            .hidden_size_per_layer_input
+            .unwrap_or(0)
+            .checked_mul(tc.num_hidden_layers)
+            .and_then(|elements| elements.checked_mul(PER_LAYER_INPUT_BUFFERS))
+            .context("Gemma per-layer activation size overflow")?;
+        Ok(ActivationModelConfig {
+            attention_features: uniform_attention_features(
+                tc.layer_types
+                    .iter()
+                    .map(|kind| kind == "sliding_attention"),
+                false,
+            ),
+            intermediate_size,
+            vocab_size: tc.vocab_size,
+            extra_hidden_elements_per_token,
+            custom_prefill_mask: true,
+        })
+    }
+
     fn mapped_max_act_size_elems(
         &self,
         config: &str,
@@ -9663,6 +10215,196 @@ mod tests {
         matformer::{MatformerConfig, MatformerSliceConfig, Slice},
     };
     use mistralrs_quant::IsqType;
+
+    fn qwen_activation_config(architecture: &str) -> serde_json::Value {
+        serde_json::json!({
+            "architectures": [architecture],
+            "text_config": {
+                "head_dim": 8,
+                "vocab_size": 128,
+                "hidden_size": 16,
+                "intermediate_size": 32,
+                "num_hidden_layers": 4,
+                "num_attention_heads": 2,
+                "num_key_value_heads": 1,
+                "hidden_act": "silu",
+                "max_position_embeddings": 1024,
+                "rms_norm_eps": 1e-6,
+                "rope_theta": 10000.0,
+                "rope_scaling": {"mrope_section": [1, 1, 2]},
+                "rope_parameters": {"mrope_section": [1, 1, 2]},
+                "moe_intermediate_size": 24,
+                "shared_expert_intermediate_size": 16,
+                "num_experts": 8,
+                "num_experts_per_tok": 3,
+                "linear_key_head_dim": 4,
+                "linear_value_head_dim": 8,
+                "linear_num_key_heads": 2,
+                "linear_num_value_heads": 4
+            },
+            "vision_config": {"out_hidden_size": 16, "deepstack_visual_indexes": [1, 2]},
+            "image_token_id": 1,
+            "video_token_id": 2,
+            "vision_start_token_id": 3,
+            "vision_end_token_id": 4,
+            "tie_word_embeddings": false
+        })
+    }
+
+    #[test]
+    fn qwen_dense_activation_metadata_preserves_widths_and_deepstack() -> Result<()> {
+        let config = qwen_activation_config("Qwen3VLForConditionalGeneration").to_string();
+        for loader in [
+            &Qwen3VLLoader as &dyn DeviceMappedModelLoader,
+            &AutoMultimodalLoader,
+        ] {
+            let metadata = loader.activation_model_config(&config)?;
+            assert_eq!(metadata.intermediate_size, 32);
+            assert_eq!(metadata.vocab_size, 128);
+            assert_eq!(metadata.extra_hidden_elements_per_token, 32);
+            assert!(!metadata.custom_prefill_mask);
+            assert_eq!(
+                metadata.attention_features,
+                Some(PrefixPrefillAttentionFeatures::default())
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn qwen_moe_activation_metadata_counts_active_shared_and_recurrent_work() -> Result<()> {
+        let vl_config = qwen_activation_config("Qwen3VLMoeForConditionalGeneration").to_string();
+        let vl = Qwen3VLMoELoader.activation_model_config(&vl_config)?;
+        assert_eq!(vl.intermediate_size, 72);
+        assert_eq!(vl.extra_hidden_elements_per_token, 32);
+        let hybrid_config =
+            qwen_activation_config("Qwen3_5MoeForConditionalGeneration").to_string();
+        let hybrid = Qwen3_5MoeLoader.activation_model_config(&hybrid_config)?;
+        assert_eq!(hybrid.intermediate_size, 88);
+        assert_eq!(hybrid.extra_hidden_elements_per_token, 120);
+        assert_eq!(hybrid.vocab_size, 128);
+        Ok(())
+    }
+
+    fn qwen2_vl_activation_config() -> serde_json::Value {
+        let mut config =
+            qwen_activation_config("Qwen2VLForConditionalGeneration")["text_config"].clone();
+        config["vision_config"] = serde_json::json!({
+            "depth": 2,
+            "embed_dim": 16,
+            "hidden_size": 16,
+            "mlp_ratio": 2.0,
+            "num_heads": 2,
+            "patch_size": 2,
+            "spatial_merge_size": 2,
+            "temporal_patch_size": 2
+        });
+        config["image_token_id"] = 1.into();
+        config["video_token_id"] = 2.into();
+        config["tie_word_embeddings"] = false.into();
+        config["use_sliding_window"] = true.into();
+        config["sliding_window"] = 128.into();
+        config
+    }
+
+    #[test]
+    fn qwen2_5_vl_still_image_activation_estimate_scales_with_batch() -> Result<()> {
+        let config = qwen2_vl_activation_config().to_string();
+        let params = |max_batch_size| AutoDeviceMapParams::Multimodal {
+            max_seq_len: 16,
+            max_batch_size,
+            max_image_shape: (8, 8),
+            max_num_images: 1,
+        };
+        let single_encoder = Qwen2_5VLLoader.non_mapped_max_act_size_elems(&config, &params(1))?;
+        let single_mapped = Qwen2_5VLLoader.mapped_max_act_size_elems(&config, &params(1))?;
+        assert_eq!(single_encoder, 2 * 16 * 16);
+        assert_eq!(single_mapped, 2 * 32 * 32);
+        assert_eq!(
+            Qwen2_5VLLoader.non_mapped_max_act_size_elems(&config, &params(4))?,
+            single_encoder * 4
+        );
+        assert_eq!(
+            Qwen2_5VLLoader.mapped_max_act_size_elems(&config, &params(4))?,
+            single_mapped * 4
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn qwen2_vl_attention_fallback_requires_uniform_layers() -> Result<()> {
+        let mut config = qwen2_vl_activation_config();
+        for loader in [
+            &Qwen2VLLoader as &dyn DeviceMappedModelLoader,
+            &Qwen2_5VLLoader,
+        ] {
+            config.as_object_mut().unwrap().remove("layer_types");
+            config["max_window_layers"] = 2.into();
+            assert_eq!(
+                loader
+                    .activation_model_config(&config.to_string())?
+                    .attention_features,
+                None
+            );
+            config["max_window_layers"] = 0.into();
+            assert!(
+                loader
+                    .activation_model_config(&config.to_string())?
+                    .attention_features
+                    .unwrap()
+                    .has_sliding_window
+            );
+            config["layer_types"] = serde_json::json!([
+                "full_attention",
+                "full_attention",
+                "full_attention",
+                "full_attention"
+            ]);
+            assert_eq!(
+                loader
+                    .activation_model_config(&config.to_string())?
+                    .attention_features,
+                Some(PrefixPrefillAttentionFeatures::default())
+            );
+            config["layer_types"] = serde_json::json!([
+                "full_attention",
+                "full_attention",
+                "sliding_attention",
+                "sliding_attention"
+            ]);
+            assert_eq!(
+                loader
+                    .activation_model_config(&config.to_string())?
+                    .attention_features,
+                None
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn active_expert_activation_metadata_rejects_overflow() {
+        let mut config = qwen_activation_config("Qwen3_5MoeForConditionalGeneration");
+        config["text_config"]["moe_intermediate_size"] = usize::MAX.into();
+        let error = Qwen3_5MoeLoader
+            .activation_model_config(&config.to_string())
+            .unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("active expert activation size overflow"));
+    }
+
+    #[test]
+    fn muse_glimmer_activation_metadata_uses_typed_text_config() -> Result<()> {
+        let mut config: serde_json::Value = serde_json::from_str(&muse_glimmer_test_config())?;
+        config["text_config"]["intermediate_size"] = 48.into();
+        config["text_config"]["vocab_size"] = 96.into();
+        let metadata = MuseGlimmerLoader.activation_model_config(&config.to_string())?;
+        assert_eq!(metadata.intermediate_size, 48);
+        assert_eq!(metadata.vocab_size, 96);
+        assert!(metadata.custom_prefill_mask);
+        Ok(())
+    }
 
     fn matches_any(regexes: &[Regex], name: &str) -> bool {
         regexes.iter().any(|regex| regex.is_match(name))
@@ -10622,6 +11364,35 @@ mod tests {
     }
 
     #[test]
+    fn gemma4_mapper_metadata_matches_runtime_layer_geometry() -> Result<()> {
+        let mut config: serde_json::Value = serde_json::from_str(&gemma4_estimator_config(true))?;
+        config["text_config"]["num_key_value_heads"] = 2.into();
+        config["text_config"]["num_global_key_value_heads"] = 4.into();
+        config["text_config"]["head_dim"] = 64.into();
+        config["text_config"]["global_head_dim"] = 128.into();
+        let mapped = Gemma4Loader.model_config(&config.to_string())?;
+        assert_eq!(mapped.num_kv_heads_for_layer(0), 2);
+        assert_eq!(mapped.num_kv_heads_for_layer(1), 4);
+        assert_eq!(mapped.k_head_dim_for_layer(0), 64);
+        assert_eq!(mapped.k_head_dim_for_layer(1), 128);
+        assert_eq!(
+            mapped.total_kv_cache_elements_per_token(),
+            2 * 128 + 4 * 256
+        );
+        let config: Gemma4Config = serde_json::from_value(config)?;
+        let sharded = crate::vision_models::gemma4::text::Gemma4ModelConfigLike::new(
+            &config.text_config,
+            &[2, 2],
+        )?;
+        assert_eq!(sharded.num_attn_heads(), mapped.num_attn_heads() / 2);
+        assert_eq!(
+            sharded.total_kv_cache_elements_per_token(),
+            mapped.total_kv_cache_elements_per_token() / 2
+        );
+        Ok(())
+    }
+
+    #[test]
     fn gemma4_runtime_config_caps_nested_and_flat_contexts() -> Result<()> {
         let loader = Gemma4Loader;
         let config = gemma4_estimator_config(true);
@@ -10748,9 +11519,8 @@ mod tests {
         Ok(())
     }
 
-    #[test]
-    fn llama4_estimator_keeps_vision_weights_dense_for_isq() -> Result<()> {
-        let config = serde_json::json!({
+    fn llama4_estimator_config() -> String {
+        serde_json::json!({
             "text_config": {
                 "hidden_act": "silu",
                 "hidden_size": 12,
@@ -10791,7 +11561,30 @@ mod tests {
             },
             "image_token_index": 0
         })
-        .to_string();
+        .to_string()
+    }
+
+    #[test]
+    fn llama4_encoder_activation_estimate_scales_with_batch() -> Result<()> {
+        let config = llama4_estimator_config();
+        let params = |max_batch_size| AutoDeviceMapParams::Multimodal {
+            max_seq_len: 16,
+            max_batch_size,
+            max_image_shape: (8, 8),
+            max_num_images: 1,
+        };
+        let single = VLlama4Loader.non_mapped_max_act_size_elems(&config, &params(1))?;
+        assert!(single > 0);
+        assert_eq!(
+            VLlama4Loader.non_mapped_max_act_size_elems(&config, &params(4))?,
+            single * 4
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn llama4_estimator_keeps_vision_weights_dense_for_isq() -> Result<()> {
+        let config = llama4_estimator_config();
         let loader = VLlama4Loader;
         let dtype = DType::BF16;
         let dense = loader.non_mapped_size_in_bytes(&config, dtype, 1, None, None)?;

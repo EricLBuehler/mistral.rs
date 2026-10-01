@@ -12,10 +12,10 @@ mistralrs serve -m Qwen/Qwen3-4B \
   --max-seqs 64 \
   --max-num-batched-tokens 4096 \
   --max-prefill-chunk-tokens 512 \
-  --pa-memory-fraction 0.9
+  --gpu-memory-utilization 0.9
 ```
 
-`--pa-memory-fraction` sizes the [paged attention](/guides/perf/paged-attention/) block pool; see [When paged attention matters](#when-paged-attention-matters) below.
+`--gpu-memory-utilization` sets the total GPU budget, including the [paged attention](/guides/perf/paged-attention/) block pool; see [When paged attention matters](#when-paged-attention-matters) below.
 
 Use `mistralrs bench -m <model>` for single-request kernel measurements. For server tuning, replay
 the same prompt and output lengths through the HTTP API at the production concurrency; flags that
@@ -62,17 +62,17 @@ The default differs by surface:
 | Python | `Runner(max_seqs=...)` | 16 |
 | Rust | `.with_max_num_seqs(...)` | 32 |
 
-More running sequences need more KV cache. With paged attention, size the block pool to match: one of `--pa-context-len`, `--pa-memory-mb`, or `--pa-memory-fraction` (default: 90% of available VRAM). If the pool runs out of blocks mid-generation, the scheduler preempts a running sequence, frees its blocks, and requeues it, which costs recomputation.
+More running sequences need more KV cache. Automatic memory sizing accounts for serving limits; use `--gpu-memory-utilization 0.9` or `--kv-cache 4GiB` to override the shared budget. If the pool runs out of blocks mid-generation, the scheduler preempts a running sequence, frees its blocks, and requeues it, which costs recomputation.
 
 ## Mixed prefill and decode
 
 Three limits control how new prompts share the GPU with active decodes:
 
 - `--max-num-batched-tokens` bounds the total token work in a scheduler batch (default 4096).
-- `--max-prefill-chunk-tokens` bounds each chunkable CUDA text-prompt scheduling quantum (default
+- `--max-prefill-chunk-tokens` bounds each chunkable CUDA or Metal text-prompt scheduling quantum (default
   512). The budget is divided across admitted prompt sequences, limiting how long active decodes
   wait behind one non-preemptible prefill step. Raw-logit, adapter, and multimodal prompt paths that
-  cannot be split remain atomic; the limit does not change CPU or Metal scheduling.
+  cannot be split remain atomic; the limit does not change CPU scheduling.
 - `--max-decode-steps-before-prefill` bounds how long a waiting prompt can be deferred while a
   decode batch is active (default 8). Raise it to favor inter-token latency for active requests;
   lower it to reduce time to first token under sustained arrivals.
@@ -87,7 +87,7 @@ Concurrency beyond a few sequences is the main reason to care about paged attent
 - With paged attention (default on CUDA and Metal): continuous batching against the block pool, block-level prefix sharing, and on CUDA the decode-graph and FlashInfer (NVIDIA's attention-kernel library) fast paths.
 - Without it (CPU or `--paged-attn off`): the default scheduler is first-come-first-served and batches running sequences by equal length; sequences at other lengths wait their turn and accumulate priority.
 
-On Metal with automatic device mapping, automatic KV budgeting caps capacity using the device mapping sequence length and the larger of `max_batch_size` or serving concurrency capped at eight. Raising serving concurrency beyond eight does not enlarge that cap; an explicitly larger `max_batch_size` or an explicit MB/context budget can. See [paged attention memory budgets](/guides/perf/paged-attention/#memory-budget).
+Automatic KV budgeting uses the shared memory goal after reserving weights and execution workspace. Increase an explicit KV budget only when the device has enough headroom. See [paged attention memory budgets](/guides/perf/paged-attention/#memory-budget).
 
 ## Prefix caching
 
@@ -139,7 +139,7 @@ Qwen3.5 hybrid models on Metal can report zero prefix-cache hits for repeated id
 
 ## Memory planning for automatic device mapping
 
-Automatic device mapping reserves activation and KV memory for a worst case you declare: `--max-seq-len` (default 4096) and `--max-batch-size` (default 1). If you expect long prompts or large batches, raise these so layers are not placed too greedily; if memory is tight, the defaults already keep reservations small. See [distributed inference](/guides/perf/distributed-inference/) for manual placement.
+Automatic device mapping and KV allocation share the same memory goal and execution limits. `--max-seqs`, `--max-num-batched-tokens`, and `--max-prefill-chunk-tokens` describe actual scheduler bounds; `--max-model-len` bounds request context length. See [distributed inference](/guides/perf/distributed-inference/) for manual placement.
 
 ## CPU threads and affinity
 

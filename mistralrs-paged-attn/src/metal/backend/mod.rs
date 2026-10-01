@@ -68,5 +68,8 @@ fn validate_kv_cache_scales(
 
 pub use cache::{copy_blocks, swap_blocks};
 pub use gather_kv::gather_kv_cache;
-pub use paged_attention::{paged_attention, paged_attention_with_window, reshape_and_cache};
+pub use paged_attention::{
+    paged_attention, paged_attention_with_window, reshape_and_cache, MetalPagedAttentionWorkspace,
+    METAL_PAGED_CACHE_VECTOR_BYTES,
+};
 pub use scale_update::kv_scale_update;

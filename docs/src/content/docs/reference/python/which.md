@@ -35,7 +35,6 @@ Usage:
 | `dtype` | `ModelDType` | `ModelDType.Auto` |
 | `imatrix` | `str \| None` | `None` |
 | `calibration_file` | `str \| None` | `None` |
-| `auto_map_params` | `TextAutoMapParams \| None` | `None` |
 | `hf_cache_path` | `str \| None` | `None` |
 | `matformer_config_path` | `str \| None` | `None` |
 | `matformer_slice_name` | `str \| None` | `None` |
@@ -69,7 +68,6 @@ Usage:
 | `write_uqff` | `str \| None` | `None` |
 | `from_uqff` | `str \| list[str] \| None` | `None` |
 | `dtype` | `ModelDType` | `ModelDType.Auto` |
-| `auto_map_params` | `TextAutoMapParams \| None` | `None` |
 | `hf_cache_path` | `str \| None` | `None` |
 
 ### `Which.Lora`
@@ -84,7 +82,6 @@ Usage:
 | `write_uqff` | `str \| None` | `None` |
 | `from_uqff` | `str \| list[str] \| None` | `None` |
 | `dtype` | `ModelDType` | `ModelDType.Auto` |
-| `auto_map_params` | `TextAutoMapParams \| None` | `None` |
 | `hf_cache_path` | `str \| None` | `None` |
 | `max_adapters` | `int` | `16` |
 | `max_rank` | `int` | `256` |
@@ -105,7 +102,6 @@ Pass `in_situ_quant` to `Runner` to requantize compatible GGUF weights while loa
 | `tok_model_id` | `str \| None` | `None` |
 | `topology` | `str \| None` | `None` |
 | `dtype` | `ModelDType` | `ModelDType.Auto` |
-| `auto_map_params` | `TextAutoMapParams \| None` | `None` |
 | `tokenizer_json` | `str \| None` | `None (keyword-only)` |
 | `mmproj_filename` | `str \| list[str] \| None` | `None (keyword-only)` |
 | `organization` | `IsqOrganization \| None` | `None (keyword-only)` |
@@ -113,7 +109,6 @@ Pass `in_situ_quant` to `Runner` to requantize compatible GGUF weights while loa
 | `imatrix` | `str \| None` | `None (keyword-only)` |
 | `calibration_file` | `str \| None` | `None (keyword-only)` |
 | `max_edge` | `int \| None` | `None (keyword-only)` |
-| `multimodal_auto_map_params` | `MultimodalAutoMapParams \| None` | `None (keyword-only)` |
 | `adapters` | `list[LoraAdapter] \| None` | `None (keyword-only)` |
 | `max_adapters` | `int` | `16 (keyword-only)` |
 | `max_rank` | `int` | `256 (keyword-only)` |
@@ -137,7 +132,6 @@ Select X-LoRA for a Phi3 GGUF configuration.
 | `tgt_non_granular_index` | `int \| None` | `None` |
 | `topology` | `str \| None` | `None` |
 | `dtype` | `ModelDType` | `ModelDType.Auto` |
-| `auto_map_params` | `TextAutoMapParams \| None` | `None` |
 
 ### `Which.LoraGGUF`
 
@@ -154,7 +148,6 @@ For dynamic adapters on a supported GGUF, pass `adapters` to `Which.GGUF`.
 | `tok_model_id` | `str \| None` | `None` |
 | `topology` | `str \| None` | `None` |
 | `dtype` | `ModelDType` | `ModelDType.Auto` |
-| `auto_map_params` | `TextAutoMapParams \| None` | `None` |
 
 ### `Which.GGML`
 
@@ -167,7 +160,6 @@ For dynamic adapters on a supported GGUF, pass `adapters` to `Which.GGUF`.
 | `gqa` | `int` | `1` |
 | `topology` | `str \| None` | `None` |
 | `dtype` | `ModelDType` | `ModelDType.Auto` |
-| `auto_map_params` | `TextAutoMapParams \| None` | `None` |
 
 ### `Which.XLoraGGML`
 
@@ -183,7 +175,6 @@ For dynamic adapters on a supported GGUF, pass `adapters` to `Which.GGUF`.
 | `gqa` | `int` | `1` |
 | `topology` | `str \| None` | `None` |
 | `dtype` | `ModelDType` | `ModelDType.Auto` |
-| `auto_map_params` | `TextAutoMapParams \| None` | `None` |
 
 ### `Which.LoraGGML`
 
@@ -198,7 +189,6 @@ For dynamic adapters on a supported GGUF, pass `adapters` to `Which.GGUF`.
 | `gqa` | `int` | `1` |
 | `topology` | `str \| None` | `None` |
 | `dtype` | `ModelDType` | `ModelDType.Auto` |
-| `auto_map_params` | `TextAutoMapParams \| None` | `None` |
 
 ### `Which.MultimodalPlain`
 
@@ -214,7 +204,6 @@ For dynamic adapters on a supported GGUF, pass `adapters` to `Which.GGUF`.
 | `max_edge` | `int \| None` | `None` |
 | `calibration_file` | `str \| None` | `None` |
 | `imatrix` | `str \| None` | `None` |
-| `auto_map_params` | `MultimodalAutoMapParams \| None` | `None` |
 | `hf_cache_path` | `str \| None` | `None` |
 | `matformer_config_path` | `str \| None` | `None` |
 | `matformer_slice_name` | `str \| None` | `None` |

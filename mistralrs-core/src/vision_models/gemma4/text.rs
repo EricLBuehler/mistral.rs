@@ -1363,12 +1363,58 @@ impl DecoderLayer {
 // ────────────────────────────────────────────────────────────────────────────
 
 #[derive(Clone)]
-struct Gemma4ModelConfigLike {
+pub(crate) struct Gemma4ModelConfigLike {
     base: ModelConfigMetadata,
     per_layer_num_kv_heads: Vec<usize>,
     per_layer_k_head_dim: Vec<usize>,
     per_layer_v_head_dim: Vec<usize>,
+    per_layer_sliding_window: Vec<bool>,
     kv_cache_topology: KvCacheTopology,
+}
+
+impl Gemma4ModelConfigLike {
+    pub(crate) fn new(cfg: &Gemma4TextConfig, world_sizes: &[usize]) -> Result<Self> {
+        let mut per_layer_num_kv_heads = Vec::with_capacity(cfg.num_hidden_layers);
+        let mut per_layer_k_head_dim = Vec::with_capacity(cfg.num_hidden_layers);
+        let mut owners = Vec::with_capacity(cfg.num_hidden_layers);
+        let mut per_layer_sliding_window = Vec::with_capacity(cfg.num_hidden_layers);
+        for (layer_idx, &world_size) in world_sizes.iter().enumerate() {
+            let is_sliding = is_sliding!(layer_idx, cfg);
+            per_layer_sliding_window.push(is_sliding);
+            let head_dim = if is_sliding {
+                cfg.head_dim
+            } else {
+                cfg.global_head_dim
+            };
+            let num_kv_heads = if is_sliding {
+                cfg.num_key_value_heads
+            } else {
+                cfg.num_global_key_value_heads
+                    .unwrap_or(cfg.num_key_value_heads)
+            };
+            per_layer_num_kv_heads.push((num_kv_heads / world_size).max(1));
+            per_layer_k_head_dim.push(head_dim);
+            owners.push(kv_shared_layer_index(cfg, layer_idx)?.unwrap_or(layer_idx));
+        }
+        Ok(Self {
+            base: ModelConfigMetadata {
+                max_seq_len: cfg.max_position_embeddings,
+                num_layers: cfg.num_hidden_layers,
+                hidden_size: cfg.hidden_size,
+                num_attn_heads: cfg.num_attention_heads / world_sizes[0],
+                num_kv_heads: (cfg.num_key_value_heads / world_sizes[0]).max(1),
+                sliding_window: Some(cfg.effective_sliding_window()),
+                k_head_dim: cfg.head_dim,
+                v_head_dim: cfg.head_dim,
+                kv_cache_layout: KvCacheLayout::Standard,
+            },
+            per_layer_num_kv_heads,
+            per_layer_v_head_dim: per_layer_k_head_dim.clone(),
+            per_layer_k_head_dim,
+            per_layer_sliding_window,
+            kv_cache_topology: KvCacheTopology::from_layer_owners(owners),
+        })
+    }
 }
 
 fn gemma4_attention_backend_for_layer(
@@ -1394,6 +1440,11 @@ fn gemma4_attention_backend_for_layer(
 }
 
 impl ModelConfigLike for Gemma4ModelConfigLike {
+    fn sliding_window_for_layer(&self, layer_idx: usize) -> Option<usize> {
+        self.per_layer_sliding_window[layer_idx]
+            .then_some(self.base.sliding_window)
+            .flatten()
+    }
     fn max_seq_len(&self) -> usize {
         self.base.max_seq_len
     }
@@ -1470,6 +1521,16 @@ impl ModelConfigLike for Gemma4ModelConfigLike {
             AttentionBackendKind::FlashInfer => KvCacheLayout::FlashInferHnd,
             AttentionBackendKind::Standard => KvCacheLayout::Standard,
         }
+    }
+
+    fn prefix_prefill_attention_features(
+        &self,
+        layer_idx: usize,
+    ) -> Option<crate::paged_attention::PrefixPrefillAttentionFeatures> {
+        Some(crate::paged_attention::PrefixPrefillAttentionFeatures {
+            has_sliding_window: self.per_layer_sliding_window[layer_idx],
+            ..Default::default()
+        })
     }
 
     fn layer_kv_cache_elements_per_token(&self, layer_idx: usize) -> Option<usize> {
@@ -1785,34 +1846,14 @@ impl TextModel {
             }
         }
 
-        let mut per_layer_num_kv_heads = Vec::with_capacity(cfg.num_hidden_layers);
-        let mut per_layer_k_head_dim = Vec::with_capacity(cfg.num_hidden_layers);
-        let mut per_layer_v_head_dim = Vec::with_capacity(cfg.num_hidden_layers);
-        let mut kv_cache_layer_owners = Vec::with_capacity(cfg.num_hidden_layers);
+        let mut world_sizes = Vec::with_capacity(cfg.num_hidden_layers);
         let cache_types = (0..cfg.num_hidden_layers)
             .map(|layer_idx| {
-                let world_size = mapper.get_comm_for(layer_idx)?.world_size();
+                world_sizes.push(mapper.get_comm_for(layer_idx)?.world_size());
                 let is_sliding = is_sliding!(layer_idx, cfg);
-                let head_dim = if is_sliding {
-                    cfg.head_dim
-                } else {
-                    cfg.global_head_dim
-                };
-                let num_kv_heads = if is_sliding {
-                    cfg.num_key_value_heads
-                } else {
-                    cfg.num_global_key_value_heads
-                        .unwrap_or(cfg.num_key_value_heads)
-                };
-
-                per_layer_num_kv_heads.push((num_kv_heads / world_size).max(1));
-                per_layer_k_head_dim.push(head_dim);
-                per_layer_v_head_dim.push(head_dim);
                 if let Some(owner) = kv_shared_layer_index(cfg, layer_idx)? {
-                    kv_cache_layer_owners.push(owner);
                     Ok(NormalCacheType::Shared { owner })
                 } else if is_sliding {
-                    kv_cache_layer_owners.push(layer_idx);
                     if donor_layers.contains(&layer_idx) {
                         // Donor for shared layers: full cache so consumers see
                         // the entire sequence. SWA masking still applied via
@@ -1826,7 +1867,6 @@ impl TextModel {
                         })
                     }
                 } else {
-                    kv_cache_layer_owners.push(layer_idx);
                     Ok(NormalCacheType::Normal {
                         max_seq_len: cfg.max_position_embeddings,
                     })
@@ -1834,25 +1874,9 @@ impl TextModel {
             })
             .collect::<Result<Vec<_>>>()?;
 
-        let cfg_metadata = ModelConfigMetadata {
-            max_seq_len: cfg.max_position_embeddings,
-            num_layers: cfg.num_hidden_layers,
-            hidden_size: cfg.hidden_size,
-            num_attn_heads: cfg.num_attention_heads / mapper.get_comm_for(0)?.world_size(),
-            num_kv_heads: (cfg.num_key_value_heads / mapper.get_comm_for(0)?.world_size()).max(1),
-            sliding_window: Some(cfg.effective_sliding_window()),
-            k_head_dim: cfg.head_dim,
-            v_head_dim: cfg.head_dim,
-            kv_cache_layout: crate::paged_attention::KvCacheLayout::Standard,
-        };
-        let model_config: Arc<dyn ModelConfigLike + Send + Sync> =
-            Arc::new(Gemma4ModelConfigLike {
-                base: cfg_metadata.clone(),
-                per_layer_num_kv_heads,
-                per_layer_k_head_dim,
-                per_layer_v_head_dim,
-                kv_cache_topology: KvCacheTopology::from_layer_owners(kv_cache_layer_owners),
-            });
+        let model_config = Gemma4ModelConfigLike::new(cfg, &world_sizes)?;
+        let cfg_metadata = model_config.base.clone();
+        let model_config: Arc<dyn ModelConfigLike + Send + Sync> = Arc::new(model_config);
 
         Ok(Self {
             embed_tokens,

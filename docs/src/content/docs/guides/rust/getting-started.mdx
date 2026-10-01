@@ -33,6 +33,10 @@ Run with `cargo run --release`. The first run downloads the weights into the Hug
 
 `with_auto_isq(IsqBits::Four)` enables [ISQ (in-situ quantization)](/reference/quantization-types/) to 4 bits; omit it to run the model unquantized.
 
+Memory sizing defaults to `MemoryGoal::Auto`, using the same policy as the CLI and Python. Set `.with_memory_goal(MemoryGoal::Utilization(0.9))` or `.with_memory_goal(MemoryGoal::KvTokens(65536))` to override it. Serving concurrency defaults to 32 and is set with `.with_max_num_seqs(...)`. See [memory budgets](/guides/perf/paged-attention/#memory-budget) for the default reserves and explicit-goal behavior.
+
+Automatic placement uses execution limits without separate per-sequence memory hints. To assign layer counts manually, pass `DeviceMapMetadata::from_num_device_layers(Vec<DeviceLayerMapMetadata>)` to `.with_device_mapping(...)`.
+
 Full example: [text-generation](/examples/rust/getting-started/text-generation/).
 
 ## Project setup

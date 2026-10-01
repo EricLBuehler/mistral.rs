@@ -1,29 +1,60 @@
 use candle_core::{Device, Result};
 use sysinfo::System;
-#[cfg(feature = "metal")]
-use tracing::warn;
-
-#[cfg(feature = "metal")]
-const SIZE_IN_MB: usize = 1024 * 1024;
 
 #[derive(Debug, Clone, Copy)]
 pub enum DeviceMemory {
-    Discrete { total: usize, free: usize },
-    Unified { budget: usize, allocated: usize },
+    Discrete {
+        total: usize,
+        free: usize,
+    },
+    Unified {
+        total: usize,
+        available: usize,
+        allocated: usize,
+        working_set_limit: usize,
+    },
 }
 
 impl DeviceMemory {
     pub fn total(&self) -> usize {
         match *self {
             Self::Discrete { total, .. } => total,
-            Self::Unified { budget, .. } => budget,
+            Self::Unified { total, .. } => total,
         }
     }
 
     pub fn available(&self) -> usize {
         match *self {
             Self::Discrete { free, .. } => free,
-            Self::Unified { budget, allocated } => budget.saturating_sub(allocated),
+            Self::Unified {
+                available,
+                allocated,
+                working_set_limit,
+                ..
+            } => available.min(working_set_limit.saturating_sub(allocated)),
+        }
+    }
+
+    pub fn allocated(&self) -> usize {
+        match *self {
+            Self::Discrete { total, free } => total.saturating_sub(free),
+            Self::Unified { allocated, .. } => allocated,
+        }
+    }
+
+    pub fn physical_available(&self) -> usize {
+        match *self {
+            Self::Discrete { free, .. } => free,
+            Self::Unified { available, .. } => available,
+        }
+    }
+
+    pub fn working_set_limit(&self) -> usize {
+        match *self {
+            Self::Discrete { total, .. } => total,
+            Self::Unified {
+                working_set_limit, ..
+            } => working_set_limit,
         }
     }
 
@@ -94,12 +125,11 @@ impl MemoryUsage {
                     sys.refresh_memory();
                     let total_bytes = usize::try_from(sys.total_memory())?;
                     let avail_bytes = usize::try_from(sys.available_memory())?;
-                    let fraction = igpu_memory_fraction();
-                    let budget = (total_bytes as f64 * fraction) as usize;
-                    let free = (avail_bytes as f64 * fraction) as usize;
                     Ok(DeviceMemory::Unified {
-                        budget,
-                        allocated: budget.saturating_sub(free),
+                        total: total_bytes,
+                        available: avail_bytes,
+                        allocated: total_bytes.saturating_sub(avail_bytes),
+                        working_set_limit: total_bytes,
                     })
                 } else {
                     use candle_core::cuda::cudarc::driver::result;
@@ -116,24 +146,21 @@ impl MemoryUsage {
             }
             #[cfg(feature = "metal")]
             Device::Metal(dev) => {
-                let sysctl_floor = metal_sysctl_floor_bytes()?;
-                let device_max = dev.device().recommended_max_working_set_size();
-                let budget = sysctl_floor.max(device_max);
-                let allocated = dev.current_allocated_size();
-
-                // recommendedMaxWorkingSetSize is dynamic and can underreport on small/pressured Apple Silicon.
-                // Dividing by 2 here is a heuristic to indicate that we are now below an expected value.
-                // See: https://github.com/EricLBuehler/mistral.rs/issues/2127
-                if device_max < sysctl_floor / 2 {
-                    warn!(
-                        "Metal recommendedMaxWorkingSetSize ({} MB) is much smaller than the system-RAM floor ({} MB); currentAllocatedSize = {} MB. Using the floor.",
-                        device_max / SIZE_IN_MB,
-                        sysctl_floor / SIZE_IN_MB,
-                        allocated / SIZE_IN_MB,
-                    );
-                }
-
-                Ok(DeviceMemory::Unified { budget, allocated })
+                let mut sys = System::new();
+                sys.refresh_memory();
+                let total = usize::try_from(sys.total_memory())?;
+                let available = usize::try_from(sys.available_memory())?;
+                let recommended = dev.device().recommended_max_working_set_size();
+                Ok(DeviceMemory::Unified {
+                    total,
+                    available,
+                    allocated: dev.current_allocated_size(),
+                    working_set_limit: if recommended == 0 {
+                        total
+                    } else {
+                        recommended.min(total)
+                    },
+                })
             }
             #[cfg(not(feature = "metal"))]
             Device::Metal(_) => {
@@ -377,43 +404,4 @@ fn cuda_result(
             "{context} failed: {result:?}"
         )))
     }
-}
-
-#[cfg(feature = "cuda")]
-fn igpu_memory_fraction() -> f64 {
-    std::env::var("MISTRALRS_IGPU_MEMORY_FRACTION")
-        .ok()
-        .and_then(|s| s.parse::<f64>().ok())
-        .filter(|&f| (0.0..=1.0).contains(&f))
-        .unwrap_or(0.75)
-}
-
-#[cfg(feature = "metal")]
-fn metal_sysctl_floor_bytes() -> Result<usize> {
-    let sys = System::new_all();
-    let system_ram_mb = usize::try_from(sys.total_memory())? / SIZE_IN_MB;
-
-    let sysctl_mb = std::process::Command::new("sysctl")
-        .arg("-n")
-        .arg("iogpu.wired_limit_mb")
-        .output()
-        .ok()
-        .and_then(|o| String::from_utf8(o.stdout).ok())
-        .and_then(|s| s.trim().parse::<usize>().ok());
-
-    let default_cap_mb = match system_ram_mb {
-        x if x <= 36 * 1024 => (system_ram_mb * 2) / 3,
-        x if x > 36 * 1024 => (system_ram_mb * 3) / 4,
-        x => {
-            return Err(candle_core::Error::Msg(format!(
-                "Invalid system ram mb value {x}."
-            )))
-        }
-    };
-
-    let floor_mb = match sysctl_mb {
-        Some(0) | None => default_cap_mb,
-        Some(x) => x,
-    };
-    Ok(floor_mb * SIZE_IN_MB)
 }

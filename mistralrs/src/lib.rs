@@ -309,8 +309,8 @@ pub use mistralrs_core::{
 
 // ========== Config Types ==========
 pub use mistralrs_core::{
-    DefaultSchedulerMethod, IsqType, MemoryGpuConfig, MistralRsConfig, ModelDType,
-    PagedAttentionConfig, PagedCacheType, SchedulerConfig, WebSearchOptions,
+    DefaultSchedulerMethod, IsqType, MemoryGoal, MistralRsConfig, ModelDType, PagedAttentionConfig,
+    PagedCacheType, SchedulerConfig, WebSearchOptions,
 };
 
 // ========== Audio Types ==========
@@ -343,7 +343,7 @@ pub use mistralrs_core::{
 pub use mistralrs_core::{MtpConfig, SpeculativeConfig};
 
 // ========== Device Mapping ==========
-pub use mistralrs_core::{AutoDeviceMapParams, DeviceMapSetting};
+pub use mistralrs_core::{DeviceLayerMapMetadata, DeviceMapMetadata};
 
 // ========== Topology ==========
 pub use mistralrs_core::{LayerTopology, Topology};

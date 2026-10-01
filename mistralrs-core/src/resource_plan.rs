@@ -1,14 +1,20 @@
-use anyhow::Context;
-use num_traits::ToPrimitive;
+#[path = "memory_budget.rs"]
+mod memory_budget;
+pub(crate) use memory_budget::ModelMemoryBudget;
+#[cfg(any(feature = "cuda", test))]
+pub use memory_budget::RuntimeMemoryReservation;
 
-use crate::{MemoryGpuConfig, PagedAttentionConfig};
+use std::sync::Arc;
+
+use crate::{MemoryGoal, PagedAttentionConfig};
+use memory_budget::MemoryBudgetGroup;
 
 #[derive(Clone, Copy, Debug)]
 pub enum PagedKvPolicy {
     FairContext,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub struct PagedKvModelRequest {
     pub paged_attn: Option<PagedAttentionConfig>,
     pub max_num_seqs: usize,
@@ -44,17 +50,31 @@ pub fn plan_paged_kv(
 fn plan_fair_context_paged_kv(models: &[PagedKvModelRequest]) -> anyhow::Result<PagedKvPlan> {
     let active_weight = models
         .iter()
-        .filter(|model| model.paged_attn.is_some())
         .map(|model| model.max_num_seqs.max(1))
-        .sum::<usize>()
+        .try_fold(0usize, |sum, weight| sum.checked_add(weight))
+        .ok_or_else(|| anyhow::anyhow!("multi-model serving capacity overflow"))?
         .max(1);
+    let group = Arc::new(MemoryBudgetGroup::new(shared_memory_goal(models)?));
+    #[cfg(any(feature = "cuda", test))]
+    if models.iter().any(|model| model.paged_attn.is_none()) {
+        // Nonpaged members do not publish a runtime reserve that retained graphs can protect.
+        group.disable_runtime_capture();
+    }
 
     let paged_attn = models
         .iter()
         .map(|model| {
             model
                 .paged_attn
-                .map(|config| split_paged_config(config, model.max_num_seqs.max(1), active_weight))
+                .clone()
+                .map(|config| {
+                    split_paged_config(
+                        config,
+                        model.max_num_seqs.max(1),
+                        active_weight,
+                        group.clone(),
+                    )
+                })
                 .transpose()
         })
         .collect::<anyhow::Result<Vec<_>>>()?;
@@ -62,66 +82,72 @@ fn plan_fair_context_paged_kv(models: &[PagedKvModelRequest]) -> anyhow::Result<
     Ok(PagedKvPlan { paged_attn })
 }
 
+fn shared_memory_goal(models: &[PagedKvModelRequest]) -> anyhow::Result<MemoryGoal> {
+    let mut utilization = None;
+    for config in models.iter().filter_map(|model| model.paged_attn.as_ref()) {
+        config.memory_goal.validate()?;
+        if let MemoryGoal::Utilization(value) = config.memory_goal {
+            anyhow::ensure!(
+                utilization.is_none_or(|previous| previous == value),
+                "multi-model loading requires one shared GPU memory utilization target"
+            );
+            utilization = Some(value);
+        }
+    }
+    Ok(utilization.map_or(MemoryGoal::Auto, MemoryGoal::Utilization))
+}
+
 fn split_paged_config(
     config: PagedAttentionConfig,
     model_weight: usize,
     active_weight: usize,
+    group: Arc<MemoryBudgetGroup>,
 ) -> anyhow::Result<PagedAttentionConfig> {
-    let share = |value: usize| {
-        value
-            .saturating_mul(model_weight)
-            .div_ceil(active_weight)
-            .max(1)
-    };
-    let model_weight_f32 = model_weight
-        .to_f32()
-        .context("model weight cannot be represented as f32")?;
-    let active_weight_f32 = active_weight
-        .to_f32()
-        .context("active weight cannot be represented as f32")?;
-    let share_f32 = |value: f32| value * model_weight_f32 / active_weight_f32;
-
-    let mem_gpu = match config.mem_gpu {
-        MemoryGpuConfig::MbAmount(mb) => MemoryGpuConfig::BestEffortMbAmount {
-            target_mb: share(mb),
-            min_mb: None,
-        },
-        MemoryGpuConfig::BestEffortMbAmount { target_mb, min_mb } => {
-            MemoryGpuConfig::BestEffortMbAmount {
-                target_mb: share(target_mb),
-                min_mb: min_mb.map(share),
-            }
-        }
-        MemoryGpuConfig::Utilization(f) => MemoryGpuConfig::Utilization(share_f32(f)),
-        MemoryGpuConfig::ContextSize(tokens) => MemoryGpuConfig::ContextSize(share(tokens)),
-    };
-
-    let mut split = PagedAttentionConfig::new(config.block_size, mem_gpu, config.cache_type)?;
-    split.serving_capacity = config.serving_capacity;
-    split.base_device_memory_reservation_bytes = config.base_device_memory_reservation_bytes;
-    split.primary_activation_memory_reservation_bytes =
-        config.primary_activation_memory_reservation_bytes;
-    split.mapped_activation_memory_reservation_bytes =
-        config.mapped_activation_memory_reservation_bytes;
-    split.recurrent_checkpoint_lanes = config.recurrent_checkpoint_lanes;
-    split.recurrent_checkpoint_lanes_auto = config.recurrent_checkpoint_lanes_auto;
-    split.recurrent_prefix_capacity = config.recurrent_prefix_capacity;
-    split.resolve_memory_utilization_after_load =
-        config.resolve_memory_utilization_after_load && model_weight == active_weight;
-    split.cap_metal_kv_cache = config.cap_metal_kv_cache;
+    config.memory_goal.validate()?;
+    let mut split = config;
+    #[allow(clippy::cast_precision_loss)]
+    let share = model_weight as f64 / active_weight as f64;
+    split.memory_budget = Some(Arc::new(ModelMemoryBudget::new(group, share)));
     Ok(split)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::PagedCacheType;
+    use crate::{MemoryGoal, PagedCacheType};
+
+    #[test]
+    fn mixed_nonpaged_groups_keep_runtime_capture_disabled() -> anyhow::Result<()> {
+        let config = PagedAttentionConfig::new(Some(32), MemoryGoal::Auto, PagedCacheType::Auto)?;
+        let plan = plan_paged_kv(
+            &[
+                PagedKvModelRequest {
+                    paged_attn: Some(config),
+                    max_num_seqs: 1,
+                },
+                PagedKvModelRequest {
+                    paged_attn: None,
+                    max_num_seqs: 1,
+                },
+            ],
+            RuntimeResourcePlanOptions::default(),
+        )?;
+        let runtime = plan.paged_attn[0]
+            .as_ref()
+            .unwrap()
+            .memory_budget
+            .as_ref()
+            .unwrap()
+            .reserve_runtime(std::collections::HashMap::new());
+        assert!(!runtime.capture_ready());
+        Ok(())
+    }
 
     #[test]
     fn split_preserves_base_device_memory_reservation() -> anyhow::Result<()> {
         let mut config = PagedAttentionConfig::new(
             Some(32),
-            MemoryGpuConfig::Utilization(0.9),
+            MemoryGoal::Utilization(0.9),
             PagedCacheType::Auto,
         )?
         .with_serving_capacity(16)?
@@ -131,7 +157,7 @@ mod tests {
         config.recurrent_checkpoint_lanes_auto = true;
         config.reserve_activation_memory(512 * 1024 * 1024, 256 * 1024 * 1024);
 
-        let split = split_paged_config(config, 1, 2)?;
+        let split = split_paged_config(config, 1, 2, Arc::default())?;
         assert_eq!(split.serving_capacity, Some(16));
         assert_eq!(
             split.base_device_memory_reservation_bytes,
@@ -148,10 +174,10 @@ mod tests {
         assert_eq!(split.recurrent_checkpoint_lanes, 8);
         assert!(split.recurrent_checkpoint_lanes_auto);
         assert_eq!(split.recurrent_prefix_capacity, 16);
-        assert!(!split.resolve_memory_utilization_after_load);
+        assert!(split.memory_budget.is_some());
         assert!(matches!(
-            split.mem_gpu,
-            MemoryGpuConfig::Utilization(value) if value == 0.45
+            split.memory_goal,
+            MemoryGoal::Utilization(value) if value == 0.9
         ));
         Ok(())
     }
@@ -160,37 +186,139 @@ mod tests {
     fn single_model_plan_keeps_runtime_utilization_resolution() -> anyhow::Result<()> {
         let config = PagedAttentionConfig::new(
             Some(32),
-            MemoryGpuConfig::Utilization(0.9),
+            MemoryGoal::Utilization(0.9),
             PagedCacheType::Auto,
         )?;
 
-        let split = split_paged_config(config, 16, 16)?;
-        assert!(split.resolve_memory_utilization_after_load);
+        let split = split_paged_config(config, 16, 16, Arc::default())?;
+        assert!(split.memory_budget.is_some());
         assert!(matches!(
-            split.mem_gpu,
-            MemoryGpuConfig::Utilization(value) if value == 0.9
+            split.memory_goal,
+            MemoryGoal::Utilization(value) if value == 0.9
         ));
         Ok(())
     }
 
     #[test]
-    fn split_preserves_resolved_metal_cache_policy() -> anyhow::Result<()> {
-        let mut config = PagedAttentionConfig::new(
-            Some(32),
-            MemoryGpuConfig::Utilization(0.9),
-            PagedCacheType::Auto,
-        )?;
-        config.mem_gpu = MemoryGpuConfig::MbAmount(1024);
-
-        let split = split_paged_config(config, 1, 2)?;
-        assert!(split.cap_metal_kv_cache);
-        assert!(matches!(
-            split.mem_gpu,
-            MemoryGpuConfig::BestEffortMbAmount {
-                target_mb: 512,
-                min_mb: None,
-            }
-        ));
+    fn explicit_capacity_is_not_silently_shared() -> anyhow::Result<()> {
+        let config =
+            PagedAttentionConfig::new(None, MemoryGoal::KvBytes(1024), PagedCacheType::Auto)?;
+        let split = split_paged_config(config, 1, 2, Arc::default())?;
+        assert_eq!(split.memory_goal, MemoryGoal::KvBytes(1024));
+        assert!(split.memory_budget.is_some());
         Ok(())
+    }
+    #[test]
+    fn conflicting_utilization_targets_are_rejected() -> anyhow::Result<()> {
+        let request = |goal| -> anyhow::Result<_> {
+            Ok(PagedKvModelRequest {
+                paged_attn: Some(PagedAttentionConfig::new(None, goal, PagedCacheType::Auto)?),
+                max_num_seqs: 1,
+            })
+        };
+        let models = [
+            request(MemoryGoal::Utilization(0.5))?,
+            request(MemoryGoal::Utilization(0.9))?,
+        ];
+        assert!(plan_paged_kv(&models, Default::default()).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn changing_a_planned_goal_requires_replanning_the_group() -> anyhow::Result<()> {
+        let goal = MemoryGoal::Utilization(0.5);
+        let plan = plan_paged_kv(
+            &[PagedKvModelRequest {
+                paged_attn: Some(PagedAttentionConfig::new(None, goal, PagedCacheType::Auto)?),
+                max_num_seqs: 1,
+            }],
+            Default::default(),
+        )?;
+        let config = plan.paged_attn[0].as_ref().unwrap();
+        assert_eq!(config.clone().with_memory_goal(goal)?.memory_goal(), goal);
+        for changed in [
+            MemoryGoal::Auto,
+            MemoryGoal::Utilization(0.9),
+            MemoryGoal::KvTokens(1024),
+        ] {
+            assert!(config.clone().with_memory_goal(changed).is_err());
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn explicit_utilization_is_shared_with_auto_and_capacity_models() -> anyhow::Result<()> {
+        let models = [
+            MemoryGoal::Auto,
+            MemoryGoal::Utilization(0.5),
+            MemoryGoal::KvTokens(1024),
+        ]
+        .into_iter()
+        .map(|goal| {
+            Ok(PagedKvModelRequest {
+                paged_attn: Some(PagedAttentionConfig::new(None, goal, PagedCacheType::Auto)?),
+                max_num_seqs: 1,
+            })
+        })
+        .collect::<anyhow::Result<Vec<_>>>()?;
+        let plan = plan_paged_kv(&models, Default::default())?;
+        for config in plan.paged_attn.iter().flatten() {
+            assert_eq!(
+                config.memory_budget.as_ref().unwrap().memory_goal(),
+                MemoryGoal::Utilization(0.5)
+            );
+        }
+        assert_eq!(
+            plan.paged_attn[2].as_ref().unwrap().memory_goal(),
+            MemoryGoal::KvTokens(1024)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn dense_models_leave_a_share_unallocated_by_paged_models() -> anyhow::Result<()> {
+        const GIB: usize = 1024 * 1024 * 1024;
+        let plan = plan_paged_kv(
+            &[
+                PagedKvModelRequest {
+                    paged_attn: Some(PagedAttentionConfig::new(
+                        None,
+                        MemoryGoal::Auto,
+                        PagedCacheType::Auto,
+                    )?),
+                    max_num_seqs: 1,
+                },
+                PagedKvModelRequest {
+                    paged_attn: None,
+                    max_num_seqs: 3,
+                },
+            ],
+            Default::default(),
+        )?;
+        let config = plan.paged_attn[0].as_ref().unwrap();
+        let available = config.memory_budget.as_ref().unwrap().allocation_budget(
+            candle_core::DeviceLocation::Cuda { gpu_id: 0 },
+            crate::utils::memory_usage::DeviceMemory::Discrete {
+                total: 100 * GIB,
+                free: 100 * GIB,
+            },
+        )?;
+        assert_eq!(available, 95 * GIB / 4);
+        assert!(plan.paged_attn[1].is_none());
+        Ok(())
+    }
+    #[test]
+    fn total_serving_capacity_overflow_is_rejected() {
+        let models = [
+            PagedKvModelRequest {
+                paged_attn: None,
+                max_num_seqs: usize::MAX,
+            },
+            PagedKvModelRequest {
+                paged_attn: None,
+                max_num_seqs: 1,
+            },
+        ];
+        assert!(plan_paged_kv(&models, Default::default()).is_err());
     }
 }

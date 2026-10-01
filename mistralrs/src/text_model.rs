@@ -54,6 +54,7 @@ pub struct TextModelBuilder {
 
     // Other things
     pub(crate) paged_attn_cfg: Option<PagedAttentionConfig>,
+    pub(crate) memory_goal: Option<crate::MemoryGoal>,
     pub(crate) no_paged_attn: bool,
     pub(crate) max_num_seqs: usize,
     pub(crate) no_kv_cache: bool,
@@ -69,13 +70,13 @@ pub struct TextModelBuilder {
 /// # use mistralrs::*;
 /// let config = PagedAttentionMetaBuilder::default()
 ///     .with_block_size(32)
-///     .with_gpu_memory(MemoryGpuConfig::ContextSize(8192))
+///     .with_memory_goal(MemoryGoal::KvTokens(8192))
 ///     .build()
 ///     .unwrap();
 /// ```
 pub struct PagedAttentionMetaBuilder {
     block_size: Option<usize>,
-    mem_gpu: MemoryGpuConfig,
+    memory_goal: MemoryGoal,
     cache_type: PagedCacheType,
 }
 
@@ -83,7 +84,7 @@ impl Default for PagedAttentionMetaBuilder {
     fn default() -> Self {
         Self {
             block_size: None,
-            mem_gpu: MemoryGpuConfig::ContextSize(4096),
+            memory_goal: MemoryGoal::Auto,
             cache_type: PagedCacheType::Auto,
         }
     }
@@ -96,9 +97,9 @@ impl PagedAttentionMetaBuilder {
         self
     }
 
-    /// Set the GPU memory configuration for the KV cache. Defaults to `MemoryGpuConfig::ContextSize(4096)`.
-    pub fn with_gpu_memory(mut self, mem_gpu: MemoryGpuConfig) -> Self {
-        self.mem_gpu = mem_gpu;
+    /// Set the GPU memory configuration for the KV cache. Defaults to `MemoryGoal::Auto`.
+    pub fn with_memory_goal(mut self, memory_goal: MemoryGoal) -> Self {
+        self.memory_goal = memory_goal;
         self
     }
 
@@ -110,7 +111,7 @@ impl PagedAttentionMetaBuilder {
 
     /// Build the [`PagedAttentionConfig`]. Returns an error if the configuration is invalid.
     pub fn build(self) -> anyhow::Result<PagedAttentionConfig> {
-        PagedAttentionConfig::new(self.block_size, self.mem_gpu, self.cache_type)
+        PagedAttentionConfig::new(self.block_size, self.memory_goal, self.cache_type)
     }
 }
 
@@ -121,7 +122,7 @@ impl TextModelBuilder {
     /// - Token source is from the cache (.cache/huggingface/token)
     /// - Maximum number of sequences running is 32
     /// - Number of sequences to hold in prefix cache is 16.
-    /// - Automatic device mapping with model defaults according to `AutoDeviceMapParams`
+    /// - Automatic device mapping using the shared memory goal and execution limits
     /// - By default, web searching compatible with the OpenAI `web_search_options` setting is disabled.
     pub fn new(model_id: impl ToString) -> Self {
         Self {
@@ -140,8 +141,9 @@ impl TextModelBuilder {
             hf_revision: None,
             isq: None,
             paged_attn_cfg: None,
+            memory_goal: None,
             no_paged_attn: false,
-            max_num_seqs: 32,
+            max_num_seqs: mistralrs_core::memory_plan::DEFAULT_MAX_NUM_SEQS,
             no_kv_cache: false,
             prefix_cache_n: Some(16),
             with_logging: false,
@@ -250,7 +252,7 @@ impl UqffTextModelBuilder {
     /// - Token source is from the cache (.cache/huggingface/token)
     /// - Maximum number of sequences running is 32
     /// - Number of sequences to hold in prefix cache is 16.
-    /// - Automatic device mapping with model defaults according to `AutoDeviceMapParams`
+    /// - Automatic device mapping using the shared memory goal and execution limits
     ///
     /// For sharded UQFF models, you only need to specify the first shard file
     /// (e.g., `q4k-0.uqff`). The remaining shards are auto-discovered from the

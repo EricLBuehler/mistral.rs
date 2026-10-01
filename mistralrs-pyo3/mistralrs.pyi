@@ -336,28 +336,6 @@ class SpeechGenerationResponse:
     rate: int
     channels: int
 
-@dataclass
-class TextAutoMapParams:
-    """
-    Auto-mapping parameters for a text model.
-    These affect automatic device mapping but are not a hard limit.
-    """
-
-    max_seq_len: int = 4 * 1024
-    max_batch_size: int = 1
-
-@dataclass
-class MultimodalAutoMapParams:
-    """
-    Auto-mapping parameters for a multimodal model.
-    These affect automatic device mapping but are not a hard limit.
-    """
-
-    max_seq_len: int = 4 * 1024
-    max_batch_size: int = 1
-    max_num_images: int = 1
-    max_image_length: int = 1024
-
 class SandboxPolicy:
     """
     OS-level sandbox applied to code-execution and shell subprocesses on Linux/macOS.
@@ -502,7 +480,6 @@ class Which(Enum):
         dtype: ModelDType = ModelDType.Auto
         imatrix: str | None = None
         calibration_file: str | None = None
-        auto_map_params: TextAutoMapParams | None = None
         hf_cache_path: str | None = None
         matformer_config_path: str | None = None
         matformer_slice_name: str | None = None
@@ -532,7 +509,6 @@ class Which(Enum):
         write_uqff: str | None = None
         from_uqff: str | list[str] | None = None
         dtype: ModelDType = ModelDType.Auto
-        auto_map_params: TextAutoMapParams | None = None
         hf_cache_path: str | None = None
 
     @dataclass
@@ -545,7 +521,6 @@ class Which(Enum):
         write_uqff: str | None = None
         from_uqff: str | list[str] | None = None
         dtype: ModelDType = ModelDType.Auto
-        auto_map_params: TextAutoMapParams | None = None
         hf_cache_path: str | None = None
         max_adapters: int = 16
         max_rank: int = 256
@@ -565,7 +540,6 @@ class Which(Enum):
         tok_model_id: str | None = None
         topology: str | None = None
         dtype: ModelDType = ModelDType.Auto
-        auto_map_params: TextAutoMapParams | None = None
         tokenizer_json: str | None = field(default=None, kw_only=True)
         mmproj_filename: str | list[str] | None = field(default=None, kw_only=True)
         organization: IsqOrganization | None = field(default=None, kw_only=True)
@@ -573,9 +547,6 @@ class Which(Enum):
         imatrix: str | None = field(default=None, kw_only=True)
         calibration_file: str | None = field(default=None, kw_only=True)
         max_edge: int | None = field(default=None, kw_only=True)
-        multimodal_auto_map_params: MultimodalAutoMapParams | None = field(
-            default=None, kw_only=True
-        )
         adapters: list[LoraAdapter] | None = field(default=None, kw_only=True)
         max_adapters: int = field(default=16, kw_only=True)
         max_rank: int = field(default=256, kw_only=True)
@@ -597,7 +568,6 @@ class Which(Enum):
         tgt_non_granular_index: int | None = None
         topology: str | None = None
         dtype: ModelDType = ModelDType.Auto
-        auto_map_params: TextAutoMapParams | None = None
 
     @dataclass
     class LoraGGUF:
@@ -613,7 +583,6 @@ class Which(Enum):
         tok_model_id: str | None = None
         topology: str | None = None
         dtype: ModelDType = ModelDType.Auto
-        auto_map_params: TextAutoMapParams | None = None
 
     @dataclass
     class GGML:
@@ -624,7 +593,6 @@ class Which(Enum):
         gqa: int = 1
         topology: str | None = None
         dtype: ModelDType = ModelDType.Auto
-        auto_map_params: TextAutoMapParams | None = None
 
     @dataclass
     class XLoraGGML:
@@ -638,7 +606,6 @@ class Which(Enum):
         gqa: int = 1
         topology: str | None = None
         dtype: ModelDType = ModelDType.Auto
-        auto_map_params: TextAutoMapParams | None = None
 
     @dataclass
     class LoraGGML:
@@ -651,7 +618,6 @@ class Which(Enum):
         gqa: int = 1
         topology: str | None = None
         dtype: ModelDType = ModelDType.Auto
-        auto_map_params: TextAutoMapParams | None = None
 
     @dataclass
     class MultimodalPlain:
@@ -665,7 +631,6 @@ class Which(Enum):
         max_edge: int | None = None
         calibration_file: str | None = None
         imatrix: str | None = None
-        auto_map_params: MultimodalAutoMapParams | None = None
         hf_cache_path: str | None = None
         matformer_config_path: str | None = None
         matformer_slice_name: str | None = None
@@ -731,7 +696,7 @@ class Runner:
     def __init__(
         self,
         which: Which,
-        max_seqs: int = 16,
+        max_seqs: int = 32,
         no_kv_cache: bool = False,
         prefix_cache_n: int = 16,
         token_source: str = "cache",
@@ -742,9 +707,7 @@ class Runner:
         num_device_layers: list[str] | None = None,
         in_situ_quant: str | None = None,
         anymoe_config: AnyMoeConfig | None = None,
-        pa_gpu_mem: int | None = None,
-        pa_gpu_mem_usage: float | None = None,
-        pa_ctxt_len: int | None = None,
+        memory_goal: str | float | None = None,
         pa_blk_size: int | None = None,
         pa_cache_type: PagedCacheType | None = None,
         no_paged_attn: bool = False,
@@ -778,19 +741,13 @@ class Runner:
             the corresponding number of layers. Note: this is deprecated in favor of automatic device mapping.
         - `in_situ_quant` sets the optional in-situ quantization for a model.
         - `anymoe_config` specifies the AnyMoE config. If this is set, then the model will be loaded as an AnyMoE model.
-        - `pa_gpu_mem`: Explicit KV cache memory budget in MB, without the Metal automatic token cap.
-            Set only one of `pa_gpu_mem`, `pa_gpu_mem_usage`, and `pa_ctxt_len`.
-        - `pa_gpu_mem_usage`: GPU memory utilization target from 0 to 1, accounting for model weights and reserved memory.
-            On Metal, the default is `0.9` when no memory budget is specified, matching the CLI.
-            With automatic device mapping, Metal also caps KV tokens at `max_seq_len * max(max_batch_size, min(max_seqs, 8))`.
-            The sequence length and batch size come from the device mapping options. An explicit batch size above eight raises the cap.
-            With a manual layer map, the cap is the model's maximum context length. Available memory can reduce capacity further.
-        - `pa_ctxt_len`: Explicit total KV token capacity, without the Metal automatic token cap.
-            On CUDA, the default when no memory budget is specified remains the device mapping `max_seq_len`.
+        - `memory_goal`: Shared model and KV memory goal. Defaults to automatic sizing.
+            Use a fraction such as `0.9` for physical GPU memory utilization, or
+            a KV capacity such as `"4GiB"` or `"65536tokens"`. Explicit goals require paging.
         - `pa_blk_size`: Tokens per block, defaulting to 32 on CUDA and Metal. PagedAttention is enabled by default on both.
         - `pa_cache_type` sets the PagedAttention KV cache type (auto or f8e4m3). Defaults to `auto`.
         - `no_paged_attn` disables PagedAttention on CUDA and Metal.
-        - `paged_attn` forces PagedAttention on, overriding `no_paged_attn`.
+        - `paged_attn` forces PagedAttention on; mutually exclusive with `no_paged_attn`.
         - `seed`, used to ensure reproducible random number generation.
         - `enable_search`: Enable searching compatible with the OpenAI `web_search_options` setting. This loads the selected search embedding reranker (EmbeddingGemma by default).
         - `search_embedding_model`: select which built-in search embedding model to load (currently `"embedding_gemma"`).

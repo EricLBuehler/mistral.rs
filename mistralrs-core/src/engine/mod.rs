@@ -68,6 +68,8 @@ pub(crate) mod agentic_loop;
 mod cuda_decode;
 #[cfg(feature = "cuda")]
 mod cuda_memory;
+#[cfg(any(feature = "cuda", feature = "metal", test))]
+mod memory;
 pub use agentic_loop::DEFAULT_MAX_TOOL_ROUNDS;
 pub(crate) mod agentic_session;
 mod file_tools;
@@ -88,15 +90,15 @@ fn record_paged_recurrent_prefix_validation(outcome: &'static str, reason: &'sta
 
 #[cfg(feature = "cuda")]
 use self::cuda_decode::CudaDecodeCompletionWorker;
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "metal"))]
 use crate::paged_attention::block_hash::MultimodalAttentionPolicy;
 #[cfg(feature = "cuda")]
 use crate::pipeline::execution::{
     submit_decode_tail, CudaDecodeTail, CudaStepCompletion, CudaStepSubmission, CudaTailSubmission,
 };
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "metal"))]
 use crate::response::Response;
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "metal"))]
 use crate::sequence::Sequence;
 
 pub enum EngineInstruction {
@@ -232,15 +234,15 @@ struct CudaDecodeBatchLease {
     started: Instant,
 }
 
-#[cfg(feature = "cuda")]
-enum CudaPromptRejection {
+#[cfg(any(feature = "cuda", feature = "metal"))]
+enum PromptMemoryRejection {
     InvalidRequest(String),
     Internal(String),
     Unavailable(String),
 }
 
-#[cfg(feature = "cuda")]
-impl CudaPromptRejection {
+#[cfg(any(feature = "cuda", feature = "metal"))]
+impl PromptMemoryRejection {
     fn reason(&self) -> &str {
         match self {
             Self::InvalidRequest(reason) | Self::Internal(reason) | Self::Unavailable(reason) => {
@@ -602,7 +604,8 @@ impl Engine {
                 pipeline.requires_uniform_media_batch(),
                 pipeline.supports_packed_prefill(),
                 pipeline.cache().is_hybrid(),
-                pipeline.device().is_cuda() && !pipeline_metadata.is_xlora,
+                (pipeline.device().is_cuda() || pipeline.device().is_metal())
+                    && !pipeline_metadata.is_xlora,
                 pipeline.cache().is_hybrid(),
                 pipeline.speculative_prefix_checkpoint_policy(),
             )
@@ -933,14 +936,14 @@ impl Engine {
         Ok(())
     }
 
-    #[cfg(feature = "cuda")]
-    async fn reject_prompt_for_cuda_memory(
+    #[cfg(any(feature = "cuda", feature = "metal"))]
+    async fn reject_prompt_for_memory(
         &self,
         rows: &[Arc<std::sync::Mutex<Sequence>>],
-        rejection: CudaPromptRejection,
+        rejection: PromptMemoryRejection,
     ) {
         tracing::warn!("{}", rejection.reason());
-        metrics::counter!("mistralrs_cuda_prompt_memory_rejections_total")
+        metrics::counter!("mistralrs_prompt_memory_rejections_total")
             .increment(u64::try_from(rows.len()).unwrap_or(u64::MAX));
         for row in rows {
             let (sequence_id, responder) = {
@@ -949,7 +952,7 @@ impl Engine {
                 (*row.id(), row.responder())
             };
             if responder.send(rejection.response()).await.is_err() {
-                tracing::warn!("Failed to deliver CUDA memory error for sequence {sequence_id}");
+                tracing::warn!("Failed to deliver memory error for sequence {sequence_id}");
             }
         }
     }
@@ -958,8 +961,8 @@ impl Engine {
     fn maintain_cuda_prompt_memory(
         &self,
         cuda_memory_pool: &mut cuda_memory::CudaMemoryPoolMaintenance,
-        workspace_bytes: usize,
-    ) -> cuda_memory::PromptMemoryStatus {
+        workspace_bytes: memory::ForwardWorkspaceBytes,
+    ) -> memory::PromptMemoryStatus {
         let mut memory_status = cuda_memory_pool.before_prompt_step(workspace_bytes);
         if memory_status.graph_pressure {
             let pipeline = get_mut_arcmutex!(self.pipeline);
@@ -1146,10 +1149,14 @@ impl Engine {
                     unique_devices.push(device);
                 }
             }
-            cuda_memory::CudaMemoryPoolMaintenance::new(unique_devices)
+            cuda_memory::CudaMemoryPoolMaintenance::new(
+                unique_devices,
+                &pipeline.device(),
+                pipeline.get_metadata().activation_dtype,
+            )
         };
         #[cfg(feature = "cuda")]
-        let mut cuda_prompt_preemption_workspace = None;
+        let mut cuda_prompt_preemption_workspace: Option<memory::ForwardWorkspaceBytes> = None;
         'lp: loop {
             let should_terminate = || {
                 matches!(
@@ -1245,7 +1252,10 @@ impl Engine {
                     loop {
                         let reclaimed = get_mut_arcmutex!(self.pipeline)
                             .reclaim_cuda_graph_memory(cuda_memory::GRAPH_RECLAIM_BATCH_SIZE);
-                        if reclaimed == 0 || !cuda_memory_pool.after_graph_reclaim(0).graph_pressure
+                        if reclaimed == 0
+                            || !cuda_memory_pool
+                                .after_graph_reclaim(memory::ForwardWorkspaceBytes::default())
+                                .graph_pressure
                         {
                             break;
                         }
@@ -1610,12 +1620,16 @@ impl Engine {
                             tracing::error!("Failed to release preempted speculative state: {err}");
                         }
                     }
-                    #[cfg(feature = "cuda")]
+                    #[cfg(any(feature = "cuda", feature = "metal"))]
                     let mut prefix_gather_workspace_limit = None;
-                    #[cfg(not(feature = "cuda"))]
+                    #[cfg(not(any(feature = "cuda", feature = "metal")))]
                     let prefix_gather_workspace_limit = None;
-                    #[cfg(feature = "cuda")]
-                    if is_prompt && !output.scheduled.is_empty() {
+                    #[cfg(any(feature = "cuda", feature = "metal"))]
+                    let mut attention_memory = None;
+                    #[cfg(not(any(feature = "cuda", feature = "metal")))]
+                    let attention_memory = None;
+                    #[cfg(any(feature = "cuda", feature = "metal"))]
+                    if !output.scheduled.is_empty() {
                         let (
                             model_metadata,
                             activation_dtype,
@@ -1623,6 +1637,10 @@ impl Engine {
                             device_is_cuda,
                             has_sliding_window,
                             fa3_num_sm_by_layer,
+                            execution_devices,
+                            primary_device,
+                            memory_plan,
+                            _metal_hnd_by_layer,
                         ) = {
                             let pipeline = get_mut_arcmutex!(self.pipeline);
                             let metadata = pipeline.get_metadata();
@@ -1645,16 +1663,38 @@ impl Engine {
                                     .as_ref()
                                     .map(|engine| engine.fa3_prefill_num_sm_by_layer().to_vec())
                                     .unwrap_or_default(),
+                                pipeline.execution_devices(),
+                                pipeline.device(),
+                                metadata.memory_plan,
+                                metadata
+                                    .cache_engine
+                                    .as_ref()
+                                    .map(|engine| {
+                                        engine
+                                            .get_kv_cache()
+                                            .iter()
+                                            .map(|(k, _)| k.rank() == 4)
+                                            .collect::<Vec<_>>()
+                                    })
+                                    .unwrap_or_default(),
                             )
                         };
                         let mut rejection = None;
                         loop {
+                            if !is_prompt
+                                && !execution_devices.iter().any(candle_core::Device::is_metal)
+                            {
+                                break;
+                            }
                             let query_lens = output
                                 .scheduled
                                 .iter()
                                 .enumerate()
                                 .map(|(seq_idx, seq)| {
                                     let seq = get_mut_arcmutex!(seq);
+                                    if !is_prompt {
+                                        return 1 + seq.active_staged_speculative_len();
+                                    }
                                     output
                                         .scheduled_prompt_chunks
                                         .as_ref()
@@ -1668,9 +1708,14 @@ impl Engine {
                                 .iter()
                                 .zip(&query_lens)
                                 .map(|(seq, query_len)| {
-                                    get_mut_arcmutex!(seq)
-                                        .num_computed_tokens()
-                                        .saturating_add(*query_len)
+                                    let seq = get_mut_arcmutex!(seq);
+                                    if is_prompt {
+                                        seq.num_computed_tokens().saturating_add(*query_len)
+                                    } else {
+                                        seq.get_toks()
+                                            .len()
+                                            .saturating_add(query_len.saturating_sub(1))
+                                    }
                                 })
                                 .collect::<Vec<_>>();
                             let max_pages_per_sequence = {
@@ -1708,13 +1753,18 @@ impl Engine {
                                     .iter()
                                     .zip(&full_context_lens)
                                     .any(|(query, full)| full > query);
-                            let workspace =
-                                match crate::paged_attention::plan::prompt_prefill_workspace(
-                                    model_metadata.as_deref(),
+                            let workspace_result = if is_prompt {
+                                crate::paged_attention::plan::prompt_prefill_workspace(
+                                    model_metadata.as_deref().map(|model| {
+                                        model as &dyn crate::paged_attention::ModelConfigLike
+                                    }),
                                     crate::paged_attention::plan::PromptPrefillWorkspaceInput {
                                         activation_dtype,
                                         cache_dtype,
                                         device_is_cuda,
+                                        device_is_metal: execution_devices
+                                            .iter()
+                                            .any(candle_core::Device::is_metal),
                                         block_size,
                                         query_lens: &query_lens,
                                         full_context_lens: &full_context_lens,
@@ -1727,61 +1777,207 @@ impl Engine {
                                         has_sliding_window,
                                         fa3_num_sm_by_layer: &fa3_num_sm_by_layer,
                                     },
-                                ) {
-                                    Ok(workspace) => workspace,
-                                    Err(err) => {
-                                        rejection = Some(CudaPromptRejection::Internal(format!(
-                                            "CUDA prompt memory preflight could not establish a safe attention plan: {err}"
-                                        )));
-                                        break;
-                                    }
+                                )
+                            } else {
+                                #[cfg(feature = "metal")]
+                                let decode_bytes = if execution_devices
+                                    .iter()
+                                    .any(candle_core::Device::is_metal)
+                                {
+                                    crate::paged_attention::plan::metal_decode_workspace(
+                                        model_metadata.as_deref().map(|model| {
+                                            model as &dyn crate::paged_attention::ModelConfigLike
+                                        }),
+                                        crate::paged_attention::plan::MetalDecodeWorkspaceInput {
+                                            activation_dtype,
+                                            cache_dtype,
+                                            block_size,
+                                            query_lens: &query_lens,
+                                            context_lens: &full_context_lens,
+                                            hnd_by_layer: &_metal_hnd_by_layer,
+                                            capacity_bound: false,
+                                        },
+                                    )
+                                } else {
+                                    Ok(0)
                                 };
-                            let workspace_bytes = workspace.bytes;
-                            debug_assert!(cuda_decode_lease.is_none());
-                            let memory_status = self.maintain_cuda_prompt_memory(
-                                &mut cuda_memory_pool,
-                                workspace_bytes,
-                            );
-                            let previous = output.scheduled.len();
-                            match cuda_memory::prompt_batch_memory_action(
-                                previous,
-                                memory_status.transient_pressure,
-                            ) {
-                                cuda_memory::PromptBatchMemoryAction::Proceed => {
-                                    prefix_gather_workspace_limit =
-                                        Some(workspace.gather_workspace_bytes);
+                                #[cfg(not(feature = "metal"))]
+                                let decode_bytes: candle_core::Result<usize> = Ok(0);
+                                decode_bytes.map(|bytes| {
+                                    crate::paged_attention::plan::PromptPrefillWorkspace {
+                                        bytes,
+                                        gather_workspace_bytes: 0,
+                                    }
+                                })
+                            };
+                            let workspace = match workspace_result {
+                                Ok(workspace) => workspace,
+                                Err(err) => {
+                                    rejection = Some(PromptMemoryRejection::Internal(format!(
+                                            "Memory preflight could not establish a safe attention plan: {err}"
+                                        )));
                                     break;
                                 }
-                                cuda_memory::PromptBatchMemoryAction::Retain(retained) => {
+                            };
+                            let reserve = (|| -> candle_core::Result<_> {
+                                let query_tokens = query_lens
+                                    .iter()
+                                    .copied()
+                                    .max()
+                                    .unwrap_or_default()
+                                    .checked_mul(query_lens.len())
+                                    .ok_or_else(|| {
+                                        candle_core::Error::msg("padded query token count overflow")
+                                    })?;
+                                #[cfg(feature = "metal")]
+                                let attention_bytes = if is_prompt
+                                    && execution_devices.iter().any(candle_core::Device::is_metal)
+                                {
+                                    crate::paged_attention::plan::metal_gather_workspace_bytes(
+                                        workspace.bytes,
+                                    )?
+                                    .checked_add(
+                                        crate::paged_attention::plan::metal_cache_write_workspace(
+                                            model_metadata.as_deref().map(|model| {
+                                                model as &dyn crate::paged_attention::ModelConfigLike
+                                            }),
+                                            query_tokens,
+                                            activation_dtype,
+                                        )?,
+                                    )
+                                    .ok_or_else(|| {
+                                        candle_core::Error::msg(
+                                            "prompt attention workspace overflow",
+                                        )
+                                    })?
+                                } else {
+                                    workspace.bytes
+                                };
+                                #[cfg(not(feature = "metal"))]
+                                let attention_bytes = workspace.bytes;
+                                let extra_raw_logit_tokens = if output
+                                    .scheduled
+                                    .iter()
+                                    .any(|seq| get_mut_arcmutex!(seq).return_raw_logits)
+                                {
+                                    query_tokens.saturating_sub(query_lens.len())
+                                } else {
+                                    0
+                                };
+                                let bytes = memory::forward_workspace_bytes(
+                                    memory_plan,
+                                    query_tokens,
+                                    attention_bytes,
+                                    extra_raw_logit_tokens,
+                                )?;
+                                Ok((bytes, attention_bytes))
+                            })();
+                            let (workspace_bytes, attention_bytes) = match reserve {
+                                Ok(bytes) => bytes,
+                                Err(err) => {
+                                    rejection = Some(PromptMemoryRejection::Internal(format!("Memory preflight could not establish a forward reserve: {err}")));
+                                    break;
+                                }
+                            };
+                            #[cfg(feature = "cuda")]
+                            let mut cuda_status = if is_prompt {
+                                debug_assert!(cuda_decode_lease.is_none());
+                                self.maintain_cuda_prompt_memory(
+                                    &mut cuda_memory_pool,
+                                    workspace_bytes,
+                                )
+                            } else {
+                                memory::PromptMemoryStatus::default()
+                            };
+                            #[allow(unused_mut)]
+                            let (mut memory_status, mut metal_allocation_limits) =
+                                memory::enforce_memory_goal(
+                                    &execution_devices,
+                                    &primary_device,
+                                    memory_plan
+                                        .map_or(crate::MemoryGoal::Auto, |plan| plan.memory_goal),
+                                    workspace_bytes,
+                                    activation_dtype,
+                                );
+                            #[cfg(feature = "cuda")]
+                            {
+                                while is_prompt
+                                    && memory_status.transient_pressure
+                                    && !memory_status.maintenance_failed
+                                    && !memory_status.insufficient_total_capacity
+                                {
+                                    let reclaimed = get_mut_arcmutex!(self.pipeline)
+                                        .reclaim_cuda_graph_memory(
+                                            cuda_memory::GRAPH_RECLAIM_BATCH_SIZE,
+                                        );
+                                    if reclaimed == 0 {
+                                        break;
+                                    }
+                                    (memory_status, metal_allocation_limits) =
+                                        memory::enforce_memory_goal(
+                                            &execution_devices,
+                                            &primary_device,
+                                            memory_plan.map_or(crate::MemoryGoal::Auto, |plan| {
+                                                plan.memory_goal
+                                            }),
+                                            workspace_bytes,
+                                            activation_dtype,
+                                        );
+                                    cuda_status = self.maintain_cuda_prompt_memory(
+                                        &mut cuda_memory_pool,
+                                        workspace_bytes,
+                                    );
+                                }
+                                memory_status.transient_pressure |= cuda_status.transient_pressure;
+                                memory_status.insufficient_total_capacity |=
+                                    cuda_status.insufficient_total_capacity;
+                                memory_status.maintenance_failed |= cuda_status.maintenance_failed;
+                            }
+                            let previous = output.scheduled.len();
+                            match memory::prompt_batch_memory_action(
+                                if is_prompt { previous } else { 1 },
+                                memory_status.transient_pressure,
+                            ) {
+                                memory::PromptBatchMemoryAction::Proceed => {
+                                    prefix_gather_workspace_limit =
+                                        is_prompt.then_some(workspace.gather_workspace_bytes);
+                                    attention_memory = Some(crate::pipeline::text_models_inputs_processor::AttentionMemoryBudget {
+                                        workspace_bytes: attention_bytes,
+                                        metal_allocation_limits: (!metal_allocation_limits.is_empty()).then(|| Arc::new(metal_allocation_limits)),
+                                    });
+                                    break;
+                                }
+                                memory::PromptBatchMemoryAction::Retain(retained) => {
                                     let first_omitted_id = output
                                         .retain_prompt_prefix(retained)
                                         .expect("reduced prompt batch must omit a tail");
                                     get_mut_arcmutex!(self.scheduler)
                                         .defer_prompt_tail(first_omitted_id);
-                                    cuda_memory::record_prompt_batch_reduction(previous, retained);
+                                    memory::record_prompt_batch_reduction(previous, retained);
                                 }
-                                cuda_memory::PromptBatchMemoryAction::Reject => {
-                                    if !memory_status.insufficient_total_capacity {
+                                memory::PromptBatchMemoryAction::Reject => {
+                                    #[cfg(feature = "cuda")]
+                                    if is_prompt && !memory_status.insufficient_total_capacity {
                                         cuda_prompt_preemption_workspace = Some(
                                             cuda_prompt_preemption_workspace
-                                                .map_or(workspace_bytes, |current: usize| {
-                                                    current.max(workspace_bytes)
+                                                .map_or(workspace_bytes, |current| {
+                                                    current.component_max(workspace_bytes)
                                                 }),
                                         );
                                     }
                                     rejection = Some(
                                         if memory_status.insufficient_total_capacity {
-                                            CudaPromptRejection::InvalidRequest(format!(
-                                                "CUDA prompt requires {workspace_bytes} bytes of transient workspace and cannot fit after device-memory reclamation"
+                                            PromptMemoryRejection::InvalidRequest(format!(
+                                                "Forward pass requires {workspace_bytes} of transient workspace and cannot fit after device-memory reclamation"
                                             ))
                                         } else if memory_status.maintenance_failed {
-                                            CudaPromptRejection::Internal(
-                                                "CUDA prompt memory preflight could not verify allocator capacity"
+                                            PromptMemoryRejection::Internal(
+                                                "Memory preflight could not verify allocator capacity"
                                                     .to_string(),
                                             )
                                         } else {
-                                            CudaPromptRejection::Unavailable(format!(
-                                                "CUDA memory pressure prevented prompt admission requiring {workspace_bytes} bytes of transient workspace"
+                                            PromptMemoryRejection::Unavailable(format!(
+                                                "Memory pressure prevented forward admission requiring {workspace_bytes} of transient workspace"
                                             ))
                                         },
                                     );
@@ -1790,7 +1986,7 @@ impl Engine {
                             }
                         }
                         if let Some(rejection) = rejection {
-                            self.reject_prompt_for_cuda_memory(&output.scheduled, rejection)
+                            self.reject_prompt_for_memory(&output.scheduled, rejection)
                                 .await;
                             continue 'lp;
                         }
@@ -1903,6 +2099,7 @@ impl Engine {
                                     prompt_chunk_attention_policy,
                                     has_noncausal_mm_context: false,
                                     prefix_gather_workspace_limit,
+                                    attention_memory,
                                     mm_prefix_ranges_by_seq_id: HashMap::new(),
                                     full_mm_prefix_ranges_by_seq_id: HashMap::new(),
                                     enable_packed_prefill: pipeline.supports_packed_prefill(),
@@ -2226,7 +2423,9 @@ impl Engine {
                             let reclaimed = get_mut_arcmutex!(self.pipeline)
                                 .reclaim_cuda_graph_memory(cuda_memory::GRAPH_RECLAIM_BATCH_SIZE);
                             if reclaimed == 0
-                                || !cuda_memory_pool.after_graph_reclaim(0).graph_pressure
+                                || !cuda_memory_pool
+                                    .after_graph_reclaim(memory::ForwardWorkspaceBytes::default())
+                                    .graph_pressure
                             {
                                 break;
                             }

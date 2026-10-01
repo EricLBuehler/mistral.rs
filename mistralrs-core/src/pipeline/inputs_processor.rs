@@ -199,6 +199,22 @@ pub mod text_models_inputs_processor {
         }
     }
 
+    #[derive(Clone, Debug)]
+    pub struct AttentionMemoryBudget {
+        pub workspace_bytes: usize,
+        pub metal_allocation_limits: Option<Arc<Vec<(DeviceLocation, usize)>>>,
+    }
+
+    impl AttentionMemoryBudget {
+        #[cfg(any(feature = "metal", test))]
+        pub(crate) fn metal_allocation_limit(&self, location: DeviceLocation) -> Option<usize> {
+            self.metal_allocation_limits
+                .as_ref()?
+                .iter()
+                .find_map(|&(device, limit)| (device == location).then_some(limit))
+        }
+    }
+
     #[derive(Clone)]
     pub struct PagedAttentionMeta {
         pub sliding_window: Option<usize>,
@@ -216,6 +232,7 @@ pub mod text_models_inputs_processor {
         pub prompt_chunk_attention_policy: MultimodalAttentionPolicy,
         pub has_noncausal_mm_context: bool,
         pub prefix_gather_workspace_limit: Option<usize>,
+        pub attention_memory: Option<AttentionMemoryBudget>,
         pub mm_prefix_ranges_by_seq_id: HashMap<usize, Vec<(usize, usize)>>,
         pub full_mm_prefix_ranges_by_seq_id: HashMap<usize, Vec<(usize, usize)>>,
         pub(crate) enable_packed_prefill: bool,
@@ -257,6 +274,7 @@ pub mod text_models_inputs_processor {
     #[derive(Clone, Debug)]
     #[allow(dead_code)]
     pub struct PagedAttentionInputMetadata {
+        pub(crate) prefix_masks: crate::paged_attention::mask_cache::PrefixMaskCache,
         /// Block tables, windowed when a global sliding_window is set.
         pub block_tables: Option<HashMap<DeviceLocation, Tensor>>,
         /// Context lens, capped by sliding_window when set.
@@ -279,6 +297,7 @@ pub mod text_models_inputs_processor {
         pub prompt_chunk_attention_policy: MultimodalAttentionPolicy,
         pub has_noncausal_mm_context: bool,
         pub prefix_gather_workspace_limit: Option<usize>,
+        pub attention_memory: Option<AttentionMemoryBudget>,
         pub mm_prefix_ranges: Option<HashMap<DeviceLocation, Tensor>>,
         pub full_mm_prefix_ranges: Option<HashMap<DeviceLocation, Tensor>>,
         pub prefill_attention_heads: usize,
@@ -346,6 +365,8 @@ pub mod text_models_inputs_processor {
                 prompt_chunk_attention_policy: MultimodalAttentionPolicy::Causal,
                 has_noncausal_mm_context: false,
                 prefix_gather_workspace_limit: None,
+                attention_memory: None,
+                prefix_masks: Default::default(),
                 mm_prefix_ranges: None,
                 full_mm_prefix_ranges: None,
                 prefill_attention_heads: 1,
@@ -604,6 +625,8 @@ pub mod text_models_inputs_processor {
                 prompt_chunk_attention_policy: MultimodalAttentionPolicy::Causal,
                 has_noncausal_mm_context: self.has_noncausal_mm_context,
                 prefix_gather_workspace_limit: self.prefix_gather_workspace_limit,
+                attention_memory: self.attention_memory.clone(),
+                prefix_masks: self.prefix_masks.clone(),
                 mm_prefix_ranges: self.mm_prefix_ranges.clone(),
                 full_mm_prefix_ranges: self.full_mm_prefix_ranges.clone(),
                 prefill_attention_heads: self.prefill_attention_heads,
@@ -1429,6 +1452,8 @@ pub mod text_models_inputs_processor {
                 has_noncausal_mm_context: mm_prefix_ranges_tensor.is_some()
                     || full_mm_prefix_ranges_tensor.is_some(),
                 prefix_gather_workspace_limit: paged_attn_metadata.prefix_gather_workspace_limit,
+                attention_memory: paged_attn_metadata.attention_memory.clone(),
+                prefix_masks: Default::default(),
                 mm_prefix_ranges: if mm_prefix_ranges_map.is_empty() {
                     None
                 } else {
@@ -2085,6 +2110,8 @@ pub mod text_models_inputs_processor {
                 prompt_chunk_attention_policy: MultimodalAttentionPolicy::Causal,
                 has_noncausal_mm_context: false,
                 prefix_gather_workspace_limit: None,
+                attention_memory: None,
+                prefix_masks: Default::default(),
                 mm_prefix_ranges: None,
                 full_mm_prefix_ranges: None,
                 prefill_attention_heads: 1,
@@ -2373,6 +2400,8 @@ pub mod text_models_inputs_processor {
                 prompt_chunk_attention_policy: MultimodalAttentionPolicy::Causal,
                 has_noncausal_mm_context: false,
                 prefix_gather_workspace_limit: None,
+                attention_memory: None,
+                prefix_masks: Default::default(),
                 mm_prefix_ranges: None,
                 full_mm_prefix_ranges: None,
                 prefill_attention_heads: 1,
@@ -2822,11 +2851,50 @@ pub mod text_models_inputs_processor {
     mod tests {
         use super::*;
 
+        const FIRST_METAL_LIMIT: usize = 1024;
+        const SECOND_METAL_LIMIT: usize = 4096;
+
+        #[test]
+        fn attention_memory_limits_follow_each_device() {
+            let first = DeviceLocation::Metal { gpu_id: 0 };
+            let second = DeviceLocation::Metal { gpu_id: 1 };
+            let budget = AttentionMemoryBudget {
+                workspace_bytes: FIRST_METAL_LIMIT,
+                metal_allocation_limits: Some(Arc::new(vec![
+                    (first, FIRST_METAL_LIMIT),
+                    (second, SECOND_METAL_LIMIT),
+                ])),
+            };
+            assert_eq!(
+                budget.metal_allocation_limit(first),
+                Some(FIRST_METAL_LIMIT)
+            );
+            assert_eq!(
+                budget.metal_allocation_limit(second),
+                Some(SECOND_METAL_LIMIT)
+            );
+            assert_eq!(
+                budget.metal_allocation_limit(DeviceLocation::Metal { gpu_id: 2 }),
+                None
+            );
+            assert_eq!(
+                budget.metal_allocation_limit(DeviceLocation::Cuda { gpu_id: 0 }),
+                None
+            );
+        }
+
         #[test]
         fn reduced_prefill_keeps_physical_cache_views_separate_from_positions() -> Result<()> {
             let device = Device::Cpu;
             let location = device.location();
             let mut metadata = PagedAttentionInputMetadata::dummy(&device)?;
+            metadata.attention_memory = Some(AttentionMemoryBudget {
+                workspace_bytes: FIRST_METAL_LIMIT,
+                metal_allocation_limits: Some(Arc::new(vec![
+                    (DeviceLocation::Metal { gpu_id: 0 }, FIRST_METAL_LIMIT),
+                    (DeviceLocation::Metal { gpu_id: 1 }, SECOND_METAL_LIMIT),
+                ])),
+            });
             metadata.block_size = Some(32);
             metadata.block_tables = Some(HashMap::from([(
                 location,
@@ -2839,6 +2907,12 @@ pub mod text_models_inputs_processor {
             metadata.paged_context_lens_cpu = Some(vec![515, 541]);
             metadata.full_paged_context_lens_cpu = Some(vec![899, 701]);
             let reduced = metadata.for_reduced_prefill_queries(&[device], &[898, 700], &[1, 1])?;
+            let memory = reduced.attention_memory.as_ref().unwrap();
+            assert_eq!(memory.workspace_bytes, FIRST_METAL_LIMIT);
+            assert_eq!(
+                memory.metal_allocation_limit(DeviceLocation::Metal { gpu_id: 1 }),
+                Some(SECOND_METAL_LIMIT)
+            );
             assert_eq!(
                 reduced.context_lens.as_ref().unwrap()[&location].to_vec1::<u32>()?,
                 [515, 541],

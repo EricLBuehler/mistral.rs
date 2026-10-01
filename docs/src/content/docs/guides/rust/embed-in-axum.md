@@ -72,6 +72,8 @@ async fn main() -> anyhow::Result<()> {
 }
 ```
 
+The `AutoDeviceMapParams` constants fill internal fallback fields required by the low-level `ModelSelected` API. With paging enabled, memory planning uses actual scheduler execution limits instead. Set `.with_memory_goal(MemoryGoal::Utilization(0.9))` on the server builder to choose an explicit engine budget; see [memory budgets](/guides/perf/paged-attention/#memory-budget).
+
 `POST /ai/v1/chat/completions` then behaves identically to the standalone server, as do the other routes.
 
 `with_in_situ_quant("4")` applies [ISQ (in-situ quantization)](/reference/quantization-types/) to 4-bit; omit it to run the model unquantized.

@@ -64,6 +64,268 @@ static NEXT_CUDA_DECODE_GRAPH_GENERATION: AtomicU64 = AtomicU64::new(1);
 static CUDA_GRAPH_MEMORY_POOL_SCOPES: OnceLock<Mutex<HashMap<usize, MemoryPoolScopeState>>> =
     OnceLock::new();
 static CUDA_PHASE_TIMINGS_ENABLED: OnceLock<bool> = OnceLock::new();
+const CAPTURE_RECLAIM_BATCH_SIZE: usize = 1;
+
+pub(crate) struct CudaGraphCaptureMemory<'a> {
+    pub plan: Option<crate::memory_plan::RuntimeMemoryPlan>,
+    pub reservation: Option<&'a crate::resource_plan::RuntimeMemoryReservation>,
+    pub devices: &'a [Device],
+    pub primary: &'a Device,
+    pub activation_dtype: DType,
+    pub block_size: usize,
+    pub step: &'a CudaGraphDecodeStep,
+    pub kv_cache: &'a [(Tensor, Tensor)],
+    pub model: Option<&'a (dyn ModelConfigLike + Send + Sync)>,
+}
+
+impl CudaGraphCaptureMemory<'_> {
+    fn shape(
+        &self,
+        device: &Device,
+    ) -> candle_core::Result<super::cuda_graph_budget::CaptureMemoryShape> {
+        let query_tokens = self.step.input_ids.elem_count();
+        let mut keys = Vec::new();
+        for (name, map) in [
+            ("slot_mappings", Some(&self.step.metadata.slot_mappings)),
+            ("block_tables", self.step.metadata.block_tables.as_ref()),
+            ("context_lens", self.step.metadata.context_lens.as_ref()),
+            (
+                "full_block_tables",
+                self.step.metadata.full_block_tables.as_ref(),
+            ),
+            (
+                "full_context_lens",
+                self.step.metadata.full_context_lens.as_ref(),
+            ),
+        ] {
+            push_graph_tensor_keys(name, map, &mut keys);
+        }
+        push_flashinfer_graph_tensor_keys(&self.step.metadata, &mut keys);
+        let mut input_bytes = query_tokens
+            .checked_mul(self.step.input_ids.dtype().size_in_bytes() + std::mem::size_of::<i64>())
+            .ok_or_else(|| candle_core::Error::msg("CUDA capture input size overflow"))?;
+        for key in keys.iter().filter(|key| key.location == device.location()) {
+            let bytes = key
+                .shape
+                .iter()
+                .try_fold(key.dtype.size_in_bytes(), |bytes, dim| {
+                    bytes.checked_mul(*dim)
+                })
+                .ok_or_else(|| candle_core::Error::msg("CUDA capture metadata size overflow"))?;
+            input_bytes = input_bytes
+                .checked_add(bytes)
+                .ok_or_else(|| candle_core::Error::msg("CUDA capture input size overflow"))?;
+        }
+        let mut attention_bytes = 0;
+        if let Some(model) = self.model {
+            let mut fa3_specs = std::collections::HashSet::new();
+            let mut fa3_bytes = 0usize;
+            let mut transient_attention_bytes = 0usize;
+            let mut flashinfer_heads = 0usize;
+            let mut flashinfer_dim = 0usize;
+            let context = self
+                .step
+                .metadata
+                .max_context_len
+                .unwrap_or_default()
+                .max(self.step.metadata.full_max_context_len.unwrap_or_default());
+            let context = if context == 0 {
+                model.max_seq_len()
+            } else {
+                context
+            };
+            let partitions = context.div_ceil(PAGED_ATTENTION_PARTITION_SIZE).max(1);
+            for (layer, (key_cache, _)) in self.kv_cache.iter().enumerate().take(model.num_layers())
+            {
+                if !key_cache.device().same_device(device) || !model.layer_has_paged_kv_cache(layer)
+                {
+                    continue;
+                }
+                let flashinfer = model.attention_backend_kind_for_layer(layer)
+                    == AttentionBackendKind::FlashInfer;
+                if flashinfer {
+                    flashinfer_heads = flashinfer_heads.max(model.num_attn_heads_for_layer(layer));
+                    flashinfer_dim = flashinfer_dim.max(model.v_head_dim_for_layer(layer));
+                }
+                #[allow(unused_mut)]
+                let mut layer_partitions = partitions;
+                #[cfg(target_family = "unix")]
+                if key_cache.dtype() == DType::F8E4M3
+                    && model.attention_backend_kind_for_layer(layer)
+                        == AttentionBackendKind::FlashInfer
+                {
+                    layer_partitions =
+                        layer_partitions.max(crate::flashinfer::FA3_DECODE_NUM_SPLITS);
+                }
+                let bytes = super::cuda_graph_budget::partitioned_attention_bytes(
+                    query_tokens,
+                    model.num_attn_heads_for_layer(layer),
+                    model.v_head_dim_for_layer(layer),
+                    layer_partitions.checked_add(1).ok_or_else(|| {
+                        candle_core::Error::msg("CUDA capture partition size overflow")
+                    })?,
+                    DType::F32.size_in_bytes(),
+                )
+                .map_err(candle_core::Error::wrap)?;
+                if key_cache.dtype() == DType::F8E4M3 && flashinfer {
+                    if fa3_specs.insert((
+                        model.num_attn_heads_for_layer(layer),
+                        model.num_kv_heads_for_layer(layer),
+                        model.k_head_dim_for_layer(layer),
+                    )) {
+                        fa3_bytes = fa3_bytes.checked_add(bytes).ok_or_else(|| {
+                            candle_core::Error::msg("FA3 capture workspace size overflow")
+                        })?;
+                    }
+                } else {
+                    transient_attention_bytes = transient_attention_bytes.max(bytes);
+                }
+            }
+            let split_rows =
+                flashinfer_split_rows(&self.step.metadata, self.step.input_ids.dim(0)?)?;
+            let flashinfer_bytes = if let Some(&rows) = split_rows.get(&device.location()) {
+                super::cuda_graph_budget::partitioned_attention_bytes(
+                    rows,
+                    flashinfer_heads,
+                    flashinfer_dim,
+                    1,
+                    self.activation_dtype.size_in_bytes(),
+                )
+                .map_err(candle_core::Error::wrap)?
+            } else {
+                0
+            };
+            attention_bytes = super::cuda_graph_budget::capture_attention_bytes(
+                fa3_bytes,
+                flashinfer_bytes,
+                transient_attention_bytes,
+            )
+            .map_err(candle_core::Error::wrap)?;
+            let page_tables = model
+                .max_seq_len()
+                .div_ceil(self.block_size)
+                .checked_mul(self.step.input_ids.dim(0)?)
+                .and_then(|elements| elements.checked_mul(std::mem::size_of::<i32>()))
+                .ok_or_else(|| candle_core::Error::msg("CUDA capture page table size overflow"))?;
+            input_bytes = input_bytes
+                .checked_add(page_tables)
+                .ok_or_else(|| candle_core::Error::msg("CUDA capture input size overflow"))?;
+        }
+        Ok(super::cuda_graph_budget::CaptureMemoryShape {
+            query_tokens,
+            input_bytes,
+            attention_bytes,
+        })
+    }
+
+    fn fits(&self, retaining: bool, protect_other_models: bool) -> candle_core::Result<bool> {
+        let Some(plan) = self.plan else {
+            return Ok(true);
+        };
+        for device in self.devices.iter().filter(|device| device.is_cuda()) {
+            let workspace = if retaining {
+                0
+            } else {
+                super::cuda_graph_budget::capture_workspace_bytes(
+                    plan,
+                    device.same_device(self.primary),
+                    &self.shape(device)?,
+                )
+                .map_err(candle_core::Error::wrap)?
+            };
+            let pending =
+                mistralrs_quant::gguf_affine_reserved_bytes(device, self.activation_dtype);
+            let other_workspace = self
+                .reservation
+                .filter(|_| protect_other_models)
+                .map(|reservation| reservation.other_workspace_bytes(device.location()))
+                .transpose()
+                .map_err(candle_core::Error::wrap)?
+                .unwrap_or_default();
+            let snapshot = crate::MemoryUsage.query(device)?;
+            if !super::cuda_graph_budget::capture_memory_available(
+                plan,
+                snapshot,
+                workspace,
+                pending,
+                other_workspace,
+            )
+            .map_err(candle_core::Error::wrap)?
+            {
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    }
+}
+
+pub(crate) fn prepare_cuda_capture_memory(
+    state: &mut CudaDecodeGraphState,
+    memory: &CudaGraphCaptureMemory<'_>,
+) -> candle_core::Result<bool> {
+    admit_cuda_capture_memory(state, memory, false, true)
+}
+
+pub(crate) fn admit_cuda_eager_after_capture(
+    state: &mut CudaDecodeGraphState,
+    memory: &CudaGraphCaptureMemory<'_>,
+) -> candle_core::Result<()> {
+    admit_cuda_capture_memory(state, memory, false, false).map(|_| ())
+}
+
+fn admit_cuda_capture_memory(
+    state: &mut CudaDecodeGraphState,
+    memory: &CudaGraphCaptureMemory<'_>,
+    retaining: bool,
+    protect_other_models: bool,
+) -> candle_core::Result<bool> {
+    let result = (|| {
+        if memory.fits(retaining, protect_other_models)? {
+            return Ok(true);
+        }
+        if protect_other_models && memory.fits(retaining, false)? {
+            return Ok(false);
+        }
+        for device in memory.devices.iter().filter(|device| device.is_cuda()) {
+            crate::MemoryUsage.synchronize_cuda_context(device)?;
+            crate::MemoryUsage.trim_cuda_memory_pool(device, 0)?;
+            trim_cuda_graph_memory(&device.as_cuda_device()?.cuda_stream())?;
+        }
+        loop {
+            if memory.fits(retaining, protect_other_models)? {
+                return Ok(true);
+            }
+            if protect_other_models && memory.fits(retaining, false)? {
+                return Ok(false);
+            }
+            if state.evict_lru_for_memory_pressure(CAPTURE_RECLAIM_BATCH_SIZE) == 0 {
+                candle_core::bail!("CUDA graph capture cannot fit within the memory goal after reclaiming cached graphs");
+            }
+        }
+    })();
+    if result.is_err() {
+        state.block_eager_retry();
+    }
+    result
+}
+
+pub(crate) fn finish_cuda_capture_memory(
+    state: &mut CudaDecodeGraphState,
+    memory: &CudaGraphCaptureMemory<'_>,
+    entry: CudaDecodeGraphEntry,
+) -> candle_core::Result<Option<CudaDecodeGraphEntry>> {
+    match admit_cuda_capture_memory(state, memory, true, true) {
+        Ok(true) => Ok(Some(entry)),
+        Ok(false) => {
+            release_cuda_graph_entries(vec![entry]);
+            Ok(None)
+        }
+        Err(err) => {
+            release_cuda_graph_entries(vec![entry]);
+            Err(err)
+        }
+    }
+}
 
 pub(crate) struct CudaPhaseTimer {
     start: CudaEvent,
@@ -1511,6 +1773,8 @@ impl CudaDecodeGraphMetadataBuffers {
             prompt_chunk_attention_policy: metadata.prompt_chunk_attention_policy,
             has_noncausal_mm_context: metadata.has_noncausal_mm_context,
             prefix_gather_workspace_limit: metadata.prefix_gather_workspace_limit,
+            attention_memory: metadata.attention_memory.clone(),
+            prefix_masks: metadata.prefix_masks.clone(),
             mm_prefix_ranges: metadata.mm_prefix_ranges.clone(),
             full_mm_prefix_ranges: metadata.full_mm_prefix_ranges.clone(),
             prefill_attention_heads: metadata.prefill_attention_heads,

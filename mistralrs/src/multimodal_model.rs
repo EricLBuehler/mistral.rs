@@ -54,6 +54,7 @@ pub struct MultimodalModelBuilder {
 
     // Other things
     pub(crate) paged_attn_cfg: Option<PagedAttentionConfig>,
+    pub(crate) memory_goal: Option<crate::MemoryGoal>,
     pub(crate) no_paged_attn: bool,
     pub(crate) max_num_seqs: usize,
     pub(crate) with_logging: bool,
@@ -65,7 +66,7 @@ impl MultimodalModelBuilder {
     /// A few defaults are applied here:
     /// - Token source is from the cache (.cache/huggingface/token)
     /// - Maximum number of sequences running is 32
-    /// - Automatic device mapping with model defaults according to `AutoDeviceMapParams`
+    /// - Automatic device mapping using the shared memory goal and execution limits
     /// - By default, web searching compatible with the OpenAI `web_search_options` setting is disabled.
     pub fn new(model_id: impl ToString) -> Self {
         Self {
@@ -85,7 +86,7 @@ impl MultimodalModelBuilder {
             token_source: TokenSource::CacheToken,
             hf_revision: None,
             isq: None,
-            max_num_seqs: 32,
+            max_num_seqs: mistralrs_core::memory_plan::DEFAULT_MAX_NUM_SEQS,
             with_logging: false,
             device_mapping: None,
             calibration_file: None,
@@ -93,6 +94,7 @@ impl MultimodalModelBuilder {
             jinja_explicit: None,
             throughput_logging: false,
             paged_attn_cfg: None,
+            memory_goal: None,
             no_paged_attn: false,
             hf_cache_path: None,
             search_embedding_model: None,
@@ -186,7 +188,7 @@ impl UqffMultimodalModelBuilder {
     /// A few defaults are applied here:
     /// - Token source is from the cache (.cache/huggingface/token)
     /// - Maximum number of sequences running is 32
-    /// - Automatic device mapping with model defaults according to `AutoDeviceMapParams`
+    /// - Automatic device mapping using the shared memory goal and execution limits
     ///
     /// For sharded UQFF models, you only need to specify the first shard file
     /// (e.g., `q4k-0.uqff`). The remaining shards are auto-discovered from the

@@ -70,7 +70,7 @@ pub struct PagedAttentionSchedulerOutput {
 }
 
 impl PagedAttentionSchedulerOutput {
-    #[cfg(any(test, feature = "cuda"))]
+    #[cfg(any(test, feature = "cuda", feature = "metal"))]
     pub(crate) fn retain_prompt_prefix(&mut self, retained: usize) -> Option<usize> {
         assert!(retained > 0);
         assert_eq!(self.num_cached_tokens.len(), self.scheduled.len());

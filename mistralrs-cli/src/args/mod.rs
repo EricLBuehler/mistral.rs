@@ -581,7 +581,7 @@ pub struct GlobalOptions {
 #[derive(clap::Args, Clone, Deserialize)]
 pub struct RuntimeOptions {
     /// Maximum concurrent sequences
-    #[arg(long, default_value_t = 32)]
+    #[arg(long, default_value_t = default_max_seqs())]
     #[serde(default = "default_max_seqs")]
     pub max_seqs: usize,
 
@@ -590,7 +590,7 @@ pub struct RuntimeOptions {
     #[serde(default = "default_max_num_batched_tokens")]
     pub max_num_batched_tokens: NonZeroUsize,
 
-    /// CUDA prompt-token quantum used while decode is resident and for recurrent prefill batching
+    /// CUDA or Metal prompt-token quantum used while decode is resident and for recurrent prefill batching
     #[arg(long, default_value_t = default_max_prefill_chunk_tokens())]
     #[serde(default = "default_max_prefill_chunk_tokens")]
     pub max_prefill_chunk_tokens: NonZeroUsize,
@@ -986,7 +986,7 @@ impl Default for GlobalOptions {
 impl Default for RuntimeOptions {
     fn default() -> Self {
         Self {
-            max_seqs: 32,
+            max_seqs: default_max_seqs(),
             max_num_batched_tokens: default_max_num_batched_tokens(),
             max_prefill_chunk_tokens: default_max_prefill_chunk_tokens(),
             max_decode_steps_before_prefill: default_max_decode_steps_before_prefill(),
@@ -1036,7 +1036,7 @@ fn default_token_source() -> TokenSource {
 }
 
 fn default_max_seqs() -> usize {
-    32
+    mistralrs_core::memory_plan::DEFAULT_MAX_NUM_SEQS
 }
 
 fn default_max_num_batched_tokens() -> NonZeroUsize {

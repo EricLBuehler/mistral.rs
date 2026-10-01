@@ -1,3 +1,5 @@
+#![allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
+
 use std::{collections::HashMap, time::Instant};
 
 use candle_core::{DType, Device, Result, Tensor};
@@ -664,7 +666,11 @@ fn metal_hnd_reduced_donor_prefill_uses_pages_without_gathering() -> Result<()> 
                         })
                         .collect::<Vec<_>>();
                     let metadata = metadata
-                        .for_reduced_prefill_queries(&[device.clone()], &cached, &vec![1; batch])
+                        .for_reduced_prefill_queries(
+                            std::slice::from_ref(&device),
+                            &cached,
+                            &vec![1; batch],
+                        )
                         .map_err(|err| candle_core::Error::Msg(err.to_string()))?;
                     let attention = PagedAttention::new_with_fp8_attention_scales(
                         head_dim,
@@ -1072,7 +1078,10 @@ fn metal_hnd_decode_bench() -> Result<()> {
                 }
                 device.synchronize()?;
                 let mut timings = [[0f64; BENCH_ROUNDS]; 2];
-                for round in 0..BENCH_ROUNDS {
+                let [hnd_timings, legacy_timings] = &mut timings;
+                for (round, (hnd, legacy)) in hnd_timings.iter_mut().zip(legacy_timings).enumerate()
+                {
+                    let round_timings = [hnd, legacy];
                     for index in 0..caches.len() {
                         let layout = (index + round) % caches.len();
                         device.synchronize()?;
@@ -1081,10 +1090,10 @@ fn metal_hnd_decode_bench() -> Result<()> {
                             decode(layout)?;
                         }
                         device.synchronize()?;
-                        timings[layout][round] =
+                        *round_timings[layout] =
                             start.elapsed().as_secs_f64() * 1e3 / BENCH_TIMED_ITERS as f64;
                     }
-                    let (hnd, legacy) = (timings[0][round], timings[1][round]);
+                    let (hnd, legacy) = (*round_timings[0], *round_timings[1]);
                     println!(
                         "{query_heads},{kv_heads},{head_dim},{batch},{context},{round},{hnd:.6},{legacy:.6},{:.4}",
                         legacy / hnd,

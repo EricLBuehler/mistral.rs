@@ -54,14 +54,8 @@ async fn run_serve_config(cfg: crate::config::ServeConfig) -> Result<()> {
     validate_agent_options(&runtime)?;
     log_agent_runtime(&runtime, server.max_tool_rounds);
 
-    let (
-        paged_attn,
-        paged_attn_gpu_mem,
-        paged_attn_gpu_mem_usage,
-        paged_ctxt_len,
-        paged_attn_block_size,
-        paged_cache_type,
-    ) = paged_attn.into_builder_flags();
+    let (paged_attn, memory_goal, paged_attn_block_size, paged_cache_type) =
+        paged_attn.into_builder_flags()?;
 
     let (model_configs, cpu) = build_model_configs(&models, &runtime, &global.token_source).await?;
 
@@ -91,9 +85,7 @@ async fn run_serve_config(cfg: crate::config::ServeConfig) -> Result<()> {
                 .as_ref()
                 .map(|p| p.to_string_lossy().to_string()),
         )
-        .with_paged_attn_gpu_mem_optional(paged_attn_gpu_mem)
-        .with_paged_attn_gpu_mem_usage_optional(paged_attn_gpu_mem_usage)
-        .with_paged_ctxt_len_optional(paged_ctxt_len)
+        .with_memory_goal(memory_goal)
         .with_paged_attn_block_size_optional(paged_attn_block_size)
         .with_mtp_config_optional(runtime.mtp_config())
         .with_paged_attn_cache_type(paged_cache_type);
@@ -226,14 +218,8 @@ async fn run_run_config(cfg: crate::config::RunConfig) -> Result<()> {
     apply_agent_mode(&mut runtime);
     validate_agent_options(&runtime)?;
     log_agent_runtime(&runtime, None);
-    let (
-        paged_attn,
-        paged_attn_gpu_mem,
-        paged_attn_gpu_mem_usage,
-        paged_ctxt_len,
-        paged_attn_block_size,
-        paged_cache_type,
-    ) = paged_attn.into_builder_flags();
+    let (paged_attn, memory_goal, paged_attn_block_size, paged_cache_type) =
+        paged_attn.into_builder_flags()?;
 
     let (model_configs, cpu) = build_model_configs(&models, &runtime, &global.token_source).await?;
 
@@ -263,9 +249,7 @@ async fn run_run_config(cfg: crate::config::RunConfig) -> Result<()> {
                 .as_ref()
                 .map(|p| p.to_string_lossy().to_string()),
         )
-        .with_paged_attn_gpu_mem_optional(paged_attn_gpu_mem)
-        .with_paged_attn_gpu_mem_usage_optional(paged_attn_gpu_mem_usage)
-        .with_paged_ctxt_len_optional(paged_ctxt_len)
+        .with_memory_goal(memory_goal)
         .with_paged_attn_block_size_optional(paged_attn_block_size)
         .with_mtp_config_optional(runtime.mtp_config())
         .with_paged_attn_cache_type(paged_cache_type);

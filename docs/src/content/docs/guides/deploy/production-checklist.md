@@ -23,9 +23,8 @@ Work through this list before a `mistralrs serve` deployment receives traffic fr
 - [ ] Run `mistralrs tune -m <model>` for a starting quantization and memory plan (it estimates from configs; it does not load or benchmark the model).
 - [ ] Set `--max-seqs` deliberately (default 32).
 - [ ] Size the [paged-attention](/guides/perf/paged-attention/) KV pool explicitly instead of relying on the implicit 90% budget, with one of:
-  - `--pa-context-len`
-  - `--pa-memory-mb`
-  - `--pa-memory-fraction`
+  - `--kv-cache 4GiB` or `--kv-cache 65536tokens`
+  - `--gpu-memory-utilization 0.9`
 
   See [throughput tuning](/guides/perf/throughput-tuning/).
 

@@ -1,8 +1,8 @@
 use std::fmt::{self, Display};
 
+use crate::memory_plan::{device_memory_budget, MemoryGoal};
 use crate::paged_attention::{
-    calculate_cache_config, device_memory_cap, CacheConfig, CacheMemoryReservations,
-    MemoryGpuConfig, ModelConfigLike,
+    requested_cache_blocks, CacheConfig, ModelConfigLike, DEFAULT_PAGED_ATTENTION_BLOCK_SIZE,
 };
 use crate::utils::debug::DeviceRepr;
 use crate::{DeviceLayerMapMetadata, DeviceMapMetadata, MemoryUsage, PagedAttentionConfig};
@@ -13,27 +13,12 @@ use tracing::{info, warn};
 
 use super::DeviceMappedModelLoader;
 
-fn saturating_memory_sum<const N: usize>(parts: [usize; N]) -> usize {
-    parts
-        .into_iter()
-        .fold(0usize, |total, part| total.saturating_add(part))
-}
+const MIN_MAPPING_CACHE_BLOCKS: usize = 2;
 
 fn checked_memory_sum<const N: usize>(parts: [usize; N]) -> Option<usize> {
     parts
         .into_iter()
         .try_fold(0usize, |total, part| total.checked_add(part))
-}
-
-fn post_load_memory_config(
-    requested: MemoryGpuConfig,
-    pre_load_budget: MemoryGpuConfig,
-    resolve_utilization_after_load: bool,
-) -> MemoryGpuConfig {
-    match requested {
-        MemoryGpuConfig::Utilization(_) if !resolve_utilization_after_load => pre_load_budget,
-        _ => requested,
-    }
 }
 
 #[derive(Clone, Debug)]
@@ -159,43 +144,52 @@ impl AutoDeviceMapParams {
     }
 }
 
-fn calculate_key_block_shape(
-    model_config: &dyn ModelConfigLike,
-    dtype: DType,
-    block_size: usize,
-) -> (usize, usize, usize, usize) {
-    let element_size = dtype.size_in_bytes();
-    let x = 16 / element_size;
-    (
-        model_config.num_kv_heads(),
-        model_config.k_head_dim() / x,
-        block_size,
-        x,
-    )
-}
-
-fn calculate_value_block_shape(
-    model_config: &dyn ModelConfigLike,
-    block_size: usize,
-) -> (usize, usize, usize) {
-    (
-        model_config.num_kv_heads(),
-        model_config.v_head_dim(),
-        block_size,
-    )
-}
-
 fn paged_layer_cache_bytes(
     model_config: &dyn ModelConfigLike,
+    layer_idx: usize,
     model_dtype: DType,
     cache: &CacheConfig,
-) -> usize {
+) -> Result<usize> {
     let cache_dtype = cache.cache_type.to_dtype(model_dtype);
-    let key_shape = calculate_key_block_shape(model_config, cache_dtype, cache.block_size);
-    let key_sz = cache.num_gpu_blocks * key_shape.0 * key_shape.1 * key_shape.2 * key_shape.3;
-    let val_shape = calculate_value_block_shape(model_config, cache.block_size);
-    let val_sz = cache.num_gpu_blocks * val_shape.0 * val_shape.1 * val_shape.2;
-    (key_sz + val_sz) * cache_dtype.size_in_bytes()
+    let elements = model_config
+        .layer_kv_cache_elements_per_token(layer_idx)
+        .unwrap_or(0);
+    elements
+        .checked_mul(cache.block_size)
+        .and_then(|bytes| bytes.checked_mul(cache.num_gpu_blocks))
+        .and_then(|bytes| bytes.checked_mul(cache_dtype.size_in_bytes()))
+        .context("paged KV cache size overflow")
+}
+
+fn mapping_cache_config(
+    model: &dyn ModelConfigLike,
+    dtype: DType,
+    config: &PagedAttentionConfig,
+) -> Result<CacheConfig> {
+    let block_size = config
+        .block_size
+        .unwrap_or(DEFAULT_PAGED_ATTENTION_BLOCK_SIZE);
+    let cache_dtype = config.cache_type.to_dtype(dtype);
+    let total_bytes_per_block = (0..model.num_layers())
+        .try_fold(0usize, |total, idx| {
+            total.checked_add(model.layer_kv_cache_elements_per_token(idx).unwrap_or(0))
+        })
+        .and_then(|elements| elements.checked_mul(block_size))
+        .and_then(|elements| elements.checked_mul(cache_dtype.size_in_bytes()))
+        .context("paged KV block size overflow")?;
+    anyhow::ensure!(
+        total_bytes_per_block != 0,
+        "The model has no paged KV cache storage"
+    );
+    let num_gpu_blocks =
+        requested_cache_blocks(config.memory_goal, block_size, total_bytes_per_block)?
+            .unwrap_or(MIN_MAPPING_CACHE_BLOCKS);
+    Ok(CacheConfig {
+        block_size,
+        num_gpu_blocks,
+        cache_type: config.cache_type,
+        kv_cache_group_ids: model.kv_cache_group_ids(),
+    })
 }
 
 macro_rules! b_to_mb {
@@ -220,11 +214,33 @@ pub fn get_device_layers(
     devices: &[Device],
     dtype: DType,
     params: &AutoDeviceMapParams,
-    paged_attn_config: Option<&mut PagedAttentionConfig>,
+    mut paged_attn_config: Option<&mut PagedAttentionConfig>,
 ) -> Result<DeviceMapMetadata> {
-    let mapped_max = loader.mapped_max_act_size_elems(config, params)? * dtype.size_in_bytes();
-    let non_mapped_max =
-        loader.non_mapped_max_act_size_elems(config, params)? * dtype.size_in_bytes();
+    let (mapped_max, non_mapped_max) = if let Some(cfg) = paged_attn_config.as_deref_mut() {
+        let estimate = super::reserve_model_activation_memory(
+            loader,
+            config,
+            cfg,
+            dtype,
+            &devices[0],
+            params,
+        )?;
+        (estimate.mapped_bytes, estimate.non_mapped_bytes)
+    } else {
+        (
+            loader
+                .mapped_max_act_size_elems(config, params)?
+                .checked_mul(dtype.size_in_bytes())
+                .context("mapped activation memory size overflow")?,
+            loader
+                .non_mapped_max_act_size_elems(config, params)?
+                .checked_mul(dtype.size_in_bytes())
+                .context("non-mapped activation memory size overflow")?,
+        )
+    };
+    let goal = paged_attn_config
+        .as_ref()
+        .map_or(MemoryGoal::Auto, |cfg| cfg.memory_goal);
 
     let mut layer_sizes_backup = if paged_attn_config.is_some() {
         Some(layer_sizes_in_bytes.clone())
@@ -247,130 +263,51 @@ pub fn get_device_layers(
     let base_device_memory_reservation_bytes = paged_attn_config
         .as_ref()
         .map_or(0, |config| config.base_device_memory_reservation_bytes);
-    let kv_cache_bytes = match paged_attn_config {
+    let kv_cache_bytes = match paged_attn_config.as_deref_mut() {
         Some(cfg) => {
-            // The mapping estimate is bounded independently from the post-load memory mode.
-            let requested_mem_gpu = cfg.mem_gpu;
-            let effective_mem_gpu = match requested_mem_gpu {
-                MemoryGpuConfig::MbAmount(user_mb) => {
-                    // Clamp user's KV budget to available memory.
-                    let primary_dev = &devices[0];
-                    let avail_bytes = MemoryUsage.query(primary_dev)?.available();
-                    let cap = device_memory_cap(avail_bytes, primary_dev);
-                    let act_overhead = non_mapped_max.max(mapped_max);
-                    let budget_mb = cap
-                        .saturating_sub(act_overhead)
-                        .saturating_sub(base_device_memory_reservation_bytes)
-                        / (1024 * 1024);
-                    MemoryGpuConfig::MbAmount(budget_mb.min(user_mb))
-                }
-                MemoryGpuConfig::BestEffortMbAmount { target_mb, min_mb } => {
-                    let primary_dev = &devices[0];
-                    let avail_bytes = MemoryUsage.query(primary_dev)?.available();
-                    let cap = device_memory_cap(avail_bytes, primary_dev);
-                    let act_overhead = non_mapped_max.max(mapped_max);
-                    let budget_mb = cap
-                        .saturating_sub(act_overhead)
-                        .saturating_sub(base_device_memory_reservation_bytes)
-                        / (1024 * 1024);
-                    MemoryGpuConfig::BestEffortMbAmount {
-                        target_mb: budget_mb.min(target_mb),
-                        min_mb,
-                    }
-                }
-                MemoryGpuConfig::Utilization(f) => {
-                    // Prevent overallocation when total_memory > available_memory
-                    // (e.g., unified memory systems, other GPU processes using VRAM).
-                    // Cap the KV budget so model + activations + KV fits within
-                    // the device capacity derived from *available* memory.
-                    let primary_dev = &devices[0];
-                    let avail_bytes = MemoryUsage.query(primary_dev)?.available();
-                    let cap = device_memory_cap(avail_bytes, primary_dev);
-                    let act_overhead = non_mapped_max.max(mapped_max);
-                    let occupied = saturating_memory_sum([
-                        remaining,
-                        act_overhead,
-                        base_device_memory_reservation_bytes,
-                    ]);
-                    let budget_mb =
-                        ((cap as f64 * f as f64) as usize).saturating_sub(occupied) / (1024 * 1024);
-                    MemoryGpuConfig::MbAmount(budget_mb)
-                }
-                // ContextSize passes through to calculate_cache_config.
-                other => other,
-            };
             info!(
                 "Reserving {} MB on the primary device and {} MB on mapped devices for activations (predicted).",
                 b_to_mb!(non_mapped_max.max(mapped_max)),
                 b_to_mb!(mapped_max),
             );
-            cfg.reserve_activation_memory(non_mapped_max.max(mapped_max), mapped_max);
-            if base_device_memory_reservation_bytes > 0 {
-                info!(
-                    "Reserving {} MB on the primary device for post-load model components.",
-                    base_device_memory_reservation_bytes.div_ceil(1024 * 1024)
-                );
-            }
-            // Re-resolve utilization after recurrent serving state is allocated.
-            cfg.mem_gpu = post_load_memory_config(
-                requested_mem_gpu,
-                effective_mem_gpu,
-                cfg.resolve_memory_utilization_after_load,
-            );
-
-            let cache = calculate_cache_config(
-                PagedAttentionConfig {
-                    mem_gpu: effective_mem_gpu,
-                    ..*cfg
-                },
-                CacheMemoryReservations::default(),
-                dtype,
-                &*model_cfg,
-                &devices[0],
-                &devices.iter().map(|d| Some(d.clone())).collect::<Vec<_>>(),
-                true,
-                Some(total_model_size_in_bytes),
-                Some(cfg.metal_kv_token_cap(max_seq_len, max_batch_size)),
-            )?;
-            paged_layer_cache_bytes(&*model_cfg, dtype, &cache)
+            let cache = mapping_cache_config(&*model_cfg, dtype, cfg)?;
+            (0..model_cfg.num_layers())
+                .map(|idx| paged_layer_cache_bytes(&*model_cfg, idx, dtype, &cache))
+                .collect::<Result<Vec<_>>>()?
         }
-        None => {
-            let key_shape = [
-                max_batch_size,
-                model_cfg.num_kv_heads(),
-                max_seq_len,
-                model_cfg.k_head_dim(),
-            ];
-            let val_shape = [
-                max_batch_size,
-                model_cfg.num_kv_heads(),
-                max_seq_len,
-                model_cfg.v_head_dim(),
-            ];
-            (key_shape.iter().product::<usize>() + val_shape.iter().product::<usize>())
-                * dtype.size_in_bytes()
-        }
+        None => (0..model_cfg.num_layers())
+            .map(|idx| {
+                model_cfg
+                    .layer_kv_cache_elements_per_token(idx)
+                    .unwrap_or(0)
+                    .checked_mul(max_batch_size)
+                    .and_then(|bytes| bytes.checked_mul(max_seq_len))
+                    .and_then(|bytes| bytes.checked_mul(dtype.size_in_bytes()))
+                    .context("dense KV cache size overflow")
+            })
+            .collect::<Result<Vec<_>>>()?,
     };
-    // Per paged layer; hybrid models leave the recurrent/linear layers out of the cache entirely.
-    let kv_bytes_for_layer = |idx: usize| {
-        if model_cfg.layer_has_paged_kv_cache(idx) {
-            kv_cache_bytes
-        } else {
-            0
-        }
-    };
+    let kv_bytes_for_layer = |idx: usize| kv_cache_bytes[idx];
     // Paged layers past the mapped stack (an MTP head) are charged to the non-mapped device.
     let extra_kv_bytes = (num_layers..model_cfg.num_layers())
         .map(kv_bytes_for_layer)
-        .sum::<usize>();
+        .try_fold(0usize, |total, bytes| total.checked_add(bytes))
+        .context("extra-layer KV cache size overflow")?;
 
     // prepare available memory per device, CPU fallback last (unless unified memory)
     let has_unified_memory = devices.iter().any(crate::utils::normal::is_integrated_gpu);
 
     let mut avail = Vec::new();
     for dev in devices {
-        let a = MemoryUsage.query(dev)?.available();
-        avail.push((a, dev.clone()));
+        let memory = MemoryUsage.query(dev)?;
+        let capacity = if dev.is_cpu() {
+            memory.available()
+        } else if let Some(config) = paged_attn_config.as_ref() {
+            config.allocation_budget(dev, memory)?
+        } else {
+            device_memory_budget(goal, memory)?
+        };
+        avail.push((capacity, dev.clone()));
     }
     // On unified memory systems (iGPUs), GPU and CPU share the same physical RAM.
     // Don't add CPU as a fallback device since it would double-count memory.
@@ -402,8 +339,7 @@ pub fn get_device_layers(
             .pop()
             .context("No more devices to map to. The model does not fit on this system.")?;
 
-        // For GPU/accelerators: keep a small dynamic safety reserve to avoid OOMs
-        let cap = device_memory_cap(avail_bytes, &dev);
+        let cap = avail_bytes;
         if ordinal == 0
             && checked_memory_sum([
                 non_mapped_max.max(mapped_max),
@@ -425,7 +361,10 @@ pub fn get_device_layers(
         // 3) common case, iteratively find the optimal amount of layers to put on the nth device
         //   - if this is the first dev: must hold the non-mapped act and non-mapped model
         //   - otherwise, must hold the mapped act
-        let remaining_kv_bytes = (layer..num_layers).map(kv_bytes_for_layer).sum::<usize>();
+        let remaining_kv_bytes = (layer..num_layers)
+            .map(kv_bytes_for_layer)
+            .try_fold(0usize, |total, bytes| total.checked_add(bytes))
+            .context("mapped KV cache size overflow")?;
         let required_whole_capacity = if ordinal == 0 {
             checked_memory_sum([
                 remaining,
@@ -474,7 +413,7 @@ pub fn get_device_layers(
                 remaining = remaining.saturating_sub(used_weight_bytes);
             } else {
                 warn!(
-                    "Device {} can fit 0 layers. Consider reducing auto map params from current: {params} (ex. reducing max seq len or max num images)",
+                    "Device {} can fit 0 layers after model, execution, and KV memory reservations",
                     dev.device_pretty_repr(),
                 );
                 ordinal += 1;
@@ -502,6 +441,11 @@ pub fn get_device_layers(
         );
     }
     if has_paged_attn && includes_cpu {
+        if goal.is_capacity() {
+            anyhow::bail!(
+                "The requested KV capacity cannot fit with the model on the accelerator devices; reduce the capacity or change device placement."
+            );
+        }
         let original_layers = layer_sizes_backup
             .take()
             .expect("layer sizes backup missing for paged attention fallback");
@@ -552,77 +496,92 @@ mod tests {
             kv_cache_group_ids: vec![0],
         };
         assert_eq!(
-            paged_layer_cache_bytes(&model, DType::BF16, &cache),
+            paged_layer_cache_bytes(&model, 0, DType::BF16, &cache).unwrap(),
             4 * 1024 * 1024
         );
         cache.cache_type = PagedCacheType::Auto;
         assert_eq!(
-            paged_layer_cache_bytes(&model, DType::BF16, &cache),
+            paged_layer_cache_bytes(&model, 0, DType::BF16, &cache).unwrap(),
             8 * 1024 * 1024
         );
     }
 
-    #[cfg(feature = "metal")]
     #[test]
-    fn metal_mapping_and_split_budgets_preserve_user_memory_policy() -> Result<()> {
-        use crate::{plan_paged_kv, PagedKvModelRequest, RuntimeResourcePlanOptions};
-
-        let device = Device::new_metal(0)?;
+    fn explicit_mapping_capacity_is_not_clamped_to_a_device_snapshot() -> Result<()> {
         let model = cache_test_model();
-        for (memory, single_blocks, split_blocks) in [
-            (MemoryGpuConfig::Utilization(0.9), 1024, 1024),
-            (MemoryGpuConfig::MbAmount(1024), 32768, 16384),
-            (MemoryGpuConfig::ContextSize(131072), 4096, 2048),
+        for (goal, expected_blocks) in [
+            (MemoryGoal::Auto, 2),
+            (MemoryGoal::Utilization(0.95), 2),
+            (MemoryGoal::KvTokens(65), 4),
+            (MemoryGoal::KvBytes(1024 * 1024), 32),
         ] {
-            let config = PagedAttentionConfig::new(Some(32), memory, PagedCacheType::Auto)?
-                .with_serving_capacity(16)?;
-            let request = PagedKvModelRequest {
-                paged_attn: Some(config),
-                max_num_seqs: 16,
-            };
-            let plan = plan_paged_kv(&[request, request], RuntimeResourcePlanOptions::default())?;
-            let split = plan.paged_attn[0].unwrap();
-            for (config, expected_blocks) in [(config, single_blocks), (split, split_blocks)] {
-                let effective_memory = match config.mem_gpu {
-                    MemoryGpuConfig::Utilization(_) => MemoryGpuConfig::MbAmount(512),
-                    other => other,
-                };
-                let mapping_config = PagedAttentionConfig {
-                    mem_gpu: effective_memory,
-                    ..config
-                };
-                let mapping_cache = calculate_cache_config(
-                    mapping_config,
-                    CacheMemoryReservations::default(),
-                    DType::BF16,
-                    &model,
-                    &device,
-                    &[],
-                    true,
-                    Some(0),
-                    Some(config.metal_kv_token_cap(model.max_seq_len, 1)),
-                )?;
-                assert_eq!(mapping_cache.num_gpu_blocks, expected_blocks);
-                if !config.resolve_memory_utilization_after_load {
-                    let runtime_config = PagedAttentionConfig {
-                        mem_gpu: post_load_memory_config(config.mem_gpu, effective_memory, false),
-                        ..config
-                    };
-                    let runtime_cache = calculate_cache_config(
-                        runtime_config,
-                        CacheMemoryReservations::default(),
-                        DType::BF16,
-                        &model,
-                        &device,
-                        &[],
-                        true,
-                        None,
-                        Some(config.metal_kv_token_cap(model.max_seq_len, 1)),
-                    )?;
-                    assert_eq!(runtime_cache.num_gpu_blocks, expected_blocks);
-                }
-            }
+            let config = PagedAttentionConfig::new(Some(32), goal, PagedCacheType::Auto)?;
+            let cache = mapping_cache_config(&model, DType::BF16, &config)?;
+            assert_eq!(cache.num_gpu_blocks, expected_blocks, "{goal:?}");
+            assert_eq!(config.memory_goal, goal);
         }
+        Ok(())
+    }
+
+    #[test]
+    fn heterogeneous_mapping_uses_each_layers_physical_cache() -> Result<()> {
+        let config = serde_json::json!({
+            "architectures": ["Gemma4ForCausalLM"],
+            "text_config": {
+                "hidden_size": 256,
+                "intermediate_size": 512,
+                "num_hidden_layers": 4,
+                "num_attention_heads": 8,
+                "num_key_value_heads": 2,
+                "num_global_key_value_heads": 4,
+                "head_dim": 64,
+                "global_head_dim": 128,
+                "sliding_window": 16,
+                "num_kv_shared_layers": 2,
+                "layer_types": ["full_attention", "sliding_attention", "full_attention", "sliding_attention"]
+            }
+        }).to_string();
+        let model = super::super::Gemma4Loader.model_config(&config)?;
+        let bytes_per_block = (1024 + 256 + 1024 + 256) * 32 * 2;
+        let config = PagedAttentionConfig::new(
+            Some(32),
+            MemoryGoal::KvBytes(bytes_per_block * 3),
+            PagedCacheType::Auto,
+        )?;
+        let cache = mapping_cache_config(&*model, DType::BF16, &config)?;
+        assert_eq!(cache.num_gpu_blocks, 3);
+        let per_layer = (0..4)
+            .map(|idx| paged_layer_cache_bytes(&*model, idx, DType::BF16, &cache))
+            .collect::<Result<Vec<_>>>()?;
+        assert_eq!(
+            per_layer,
+            vec![
+                1024 * 32 * 2 * 3,
+                256 * 32 * 2 * 3,
+                1024 * 32 * 2 * 3,
+                256 * 32 * 2 * 3
+            ]
+        );
+        assert_eq!(per_layer.iter().sum::<usize>(), bytes_per_block * 3);
+        assert!(model.has_kv_cache_sharing());
+        assert!(!model.uses_own_kv_cache_for_layer(2));
+        Ok(())
+    }
+
+    #[test]
+    fn hybrid_mapping_skips_recurrent_layers() -> Result<()> {
+        let model = crate::paged_attention::HybridPagedKvCacheConfig::new(
+            cache_test_model(),
+            vec![true, false, true, false],
+        );
+        let config =
+            PagedAttentionConfig::new(Some(32), MemoryGoal::KvTokens(32), PagedCacheType::F8E4M3)?;
+        let cache = mapping_cache_config(&model, DType::BF16, &config)?;
+        assert_eq!(
+            paged_layer_cache_bytes(&model, 0, DType::BF16, &cache)?,
+            8192
+        );
+        assert_eq!(paged_layer_cache_bytes(&model, 1, DType::BF16, &cache)?, 0);
         Ok(())
     }
 
@@ -681,52 +640,8 @@ mod tests {
     }
 
     #[test]
-    fn memory_sum_saturates_capacity_accounting_overflow() {
-        assert_eq!(saturating_memory_sum([usize::MAX - 2, 1, 1]), usize::MAX);
-        assert_eq!(saturating_memory_sum([usize::MAX, 1]), usize::MAX);
-    }
-
-    #[test]
     fn checked_memory_sum_distinguishes_max_from_overflow() {
         assert_eq!(checked_memory_sum([usize::MAX - 1, 1]), Some(usize::MAX));
         assert_eq!(checked_memory_sum([usize::MAX, 1]), None);
-    }
-
-    #[test]
-    fn post_load_utilization_is_not_frozen_to_the_inventory_estimate() {
-        let requested = MemoryGpuConfig::Utilization(0.85);
-        assert!(matches!(
-            post_load_memory_config(requested, MemoryGpuConfig::MbAmount(45_000), true),
-            MemoryGpuConfig::Utilization(value) if value == 0.85
-        ));
-        assert!(matches!(
-            post_load_memory_config(requested, MemoryGpuConfig::MbAmount(45_000), false,),
-            MemoryGpuConfig::MbAmount(45_000)
-        ));
-        assert!(matches!(
-            post_load_memory_config(
-                MemoryGpuConfig::MbAmount(60_000),
-                MemoryGpuConfig::MbAmount(45_000),
-                true,
-            ),
-            MemoryGpuConfig::MbAmount(60_000)
-        ));
-        assert!(matches!(
-            post_load_memory_config(
-                MemoryGpuConfig::BestEffortMbAmount {
-                    target_mb: 60_000,
-                    min_mb: Some(40_000),
-                },
-                MemoryGpuConfig::BestEffortMbAmount {
-                    target_mb: 45_000,
-                    min_mb: Some(40_000),
-                },
-                true,
-            ),
-            MemoryGpuConfig::BestEffortMbAmount {
-                target_mb: 60_000,
-                min_mb: Some(40_000),
-            }
-        ));
     }
 }
