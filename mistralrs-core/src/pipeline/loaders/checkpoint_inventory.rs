@@ -253,6 +253,50 @@ mod tests {
     }
 
     #[test]
+    fn duplicate_tensor_names_across_module_files_are_counted() -> Result<()> {
+        let dir = tempdir()?;
+        let transformer = dir.path().join("model.safetensors");
+        let dense_a = dir.path().join("2_Dense").join("model.safetensors");
+        let dense_b = dir.path().join("3_Dense").join("model.safetensors");
+        std::fs::create_dir_all(dense_a.parent().unwrap())?;
+        std::fs::create_dir_all(dense_b.parent().unwrap())?;
+
+        let bytes = vec![0u8; 8];
+        let layer = vec![0u8; 16];
+        serialize_to_file(
+            HashMap::from([(
+                "model.layers.0.proj.weight",
+                TensorView::new(SafeDtype::F16, vec![2, 4], &layer)?,
+            )]),
+            None,
+            &transformer,
+        )?;
+        for path in [&dense_a, &dense_b] {
+            serialize_to_file(
+                HashMap::from([(
+                    "linear.weight",
+                    TensorView::new(SafeDtype::F16, vec![2, 2], &bytes)?,
+                )]),
+                None,
+                path,
+            )?;
+        }
+
+        let paths = vec![transformer, dense_a, dense_b];
+        let sizes =
+            checkpoint_device_map_sizes(&paths, 1, DType::F16, standard_layer_index)?.unwrap();
+
+        assert_eq!(sizes.layer_sizes_in_bytes, [16]);
+        assert_eq!(sizes.non_mapped_size_in_bytes, 16);
+        assert_eq!(sizes.total_model_size_in_bytes, 32);
+        assert_eq!(
+            checkpoint_runtime_size(&paths, DType::F16)?,
+            Some(32)
+        );
+        Ok(())
+    }
+
+    #[test]
     fn incomplete_layer_inventory_falls_back() -> Result<()> {
         let dir = tempdir()?;
         let path = dir.path().join("weights.safetensors");
