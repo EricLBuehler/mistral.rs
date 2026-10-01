@@ -16,6 +16,8 @@ const WARM_CACHE_MIN_BYTES: usize = 256 * BYTES_PER_MIB;
 const WARM_CACHE_MAX_BYTES: usize = 1024 * BYTES_PER_MIB;
 const IDLE_RECLAIM_MULTIPLIER: usize = 2;
 const TRIM_COOLDOWN: Duration = Duration::from_secs(1);
+// Decode bursts never reach a prompt boundary, so the pool is also checked this often between decode steps
+const DECODE_MAINTENANCE_INTERVAL: Duration = Duration::from_millis(250);
 pub(super) const GRAPH_RECLAIM_BATCH_SIZE: usize = 16;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -49,6 +51,7 @@ enum MaintenancePoint {
     Idle,
     PromptPreflight,
     PromptBoundary,
+    DecodeBoundary,
     GraphReclaimed,
 }
 
@@ -58,6 +61,7 @@ impl MaintenancePoint {
             Self::Idle => "idle",
             Self::PromptPreflight => "prompt_preflight",
             Self::PromptBoundary => "prompt_boundary",
+            Self::DecodeBoundary => "decode_boundary",
             Self::GraphReclaimed => "graph_reclaimed",
         }
     }
@@ -90,6 +94,7 @@ struct MaintainedDevice {
 
 pub(super) struct CudaMemoryPoolMaintenance {
     devices: Vec<MaintainedDevice>,
+    last_decode_check: Option<Instant>,
 }
 
 impl CudaMemoryPoolMaintenance {
@@ -123,11 +128,27 @@ impl CudaMemoryPoolMaintenance {
                 }
             })
             .collect();
-        Self { devices }
+        Self {
+            devices,
+            last_decode_check: None,
+        }
     }
 
     pub(super) fn after_prompt_step(&mut self) -> bool {
         self.maintain(MaintenancePoint::PromptBoundary, 0)
+            .graph_pressure
+    }
+
+    /// Rate-limited pool check between decode steps; true means graphs should be reclaimed.
+    pub(super) fn after_decode_step(&mut self) -> bool {
+        if self
+            .last_decode_check
+            .is_some_and(|last| last.elapsed() < DECODE_MAINTENANCE_INTERVAL)
+        {
+            return false;
+        }
+        self.last_decode_check = Some(Instant::now());
+        self.maintain(MaintenancePoint::DecodeBoundary, 0)
             .graph_pressure
     }
 
@@ -217,6 +238,19 @@ fn maintain_device(
         return Ok(maintenance_failure_outcome());
     };
     record_allocator_metrics(&maintained.device, snapshot);
+    tracing::debug!(
+        point = point.label(),
+        available_mib = snapshot.available >> 20,
+        pool_reserved_mib = snapshot
+            .async_pool
+            .map_or(0, |pool| pool.current.reserved >> 20),
+        pool_used_mib = snapshot
+            .async_pool
+            .map_or(0, |pool| pool.current.used >> 20),
+        graph_reserved_mib = snapshot.graph_pool.map_or(0, |pool| pool.reserved >> 20),
+        graph_used_mib = snapshot.graph_pool.map_or(0, |pool| pool.used >> 20),
+        "CUDA memory"
+    );
 
     let thresholds = PressureThresholds::from_snapshot(snapshot);
     let exceeds_physical_capacity = transient_bytes > snapshot.total;
@@ -291,7 +325,7 @@ fn maintain_device(
                         .warm_cache
                         .saturating_mul(IDLE_RECLAIM_MULTIPLIER)
             }
-            MaintenancePoint::PromptBoundary => {
+            MaintenancePoint::PromptBoundary | MaintenancePoint::DecodeBoundary => {
                 snapshot.available < thresholds.base_free
                     && cached > thresholds.warm_cache
                     && cooldown_elapsed

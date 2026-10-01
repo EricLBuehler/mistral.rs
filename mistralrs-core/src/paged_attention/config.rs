@@ -214,6 +214,11 @@ pub trait ModelConfigLike {
     ) -> Option<PrefixPrefillAttentionFeatures> {
         None
     }
+    /// Most keys any prompt query attends through the dense prefix path; longer contexts take a
+    /// sparse path that needs no prefix workspace.
+    fn prefix_prefill_kv_len_cap(&self) -> Option<usize> {
+        None
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]

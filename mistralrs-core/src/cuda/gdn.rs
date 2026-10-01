@@ -6,6 +6,7 @@ use mistralrs_quant::QuantizedActivation;
 #[cfg(any(feature = "cuda", test))]
 use mistralrs_quant::{ActivationQuantizationScheme, ActivationScaleLayout};
 
+use crate::gdn::GdnGateActivation;
 use crate::kv_cache::RecurrentStateLayout;
 #[cfg(feature = "cuda")]
 use crate::kv_cache::GDN_PENDING_KEY_BANK_COUNT;
@@ -3341,6 +3342,7 @@ pub struct GdnSpeculativeRmsNormGate<'a> {
     pub gate: &'a Tensor,
     pub weight: &'a Tensor,
     pub eps: f64,
+    pub sigmoid_gate: bool,
     #[cfg(feature = "cuda")]
     pub quantization: Option<GdnFp8OutputSpec>,
 }
@@ -3665,7 +3667,7 @@ pub fn speculative_recurrence_checkpoints_cuda(
         let dt_bias_ptr = cuda_ptr!(dt_bias, f32, "dt_bias") as *const f32;
         let (state_ptr, state_dtype) = cuda_recurrent_state_ptr(state_pool, "state_pool")?;
         let slots_ptr = cuda_ptr!(active_slots, u32, "active_slots") as *const u32;
-        let (gate_ptr, norm_weight, gate_strides, norm_eps) =
+        let (gate_ptr, norm_weight, gate_strides, norm_eps, sigmoid_gate) =
             if let Some((post_op, gate_strides, _)) = post_op {
                 let gate_ptr = cuda_ptr!(post_op.gate, T, "gate") as *const c_void;
                 let norm_weight = post_op.weight.contiguous()?;
@@ -3674,9 +3676,10 @@ pub fn speculative_recurrence_checkpoints_cuda(
                     Some(norm_weight),
                     gate_strides,
                     post_op.eps as f32,
+                    i32::from(post_op.sigmoid_gate),
                 )
             } else {
-                (std::ptr::null(), None, [0; 4], 0.0)
+                (std::ptr::null(), None, [0; 4], 0.0, 0)
             };
         let norm_weight_ptr = if let Some(norm_weight) = norm_weight.as_ref() {
             cuda_ptr!(norm_weight, T, "norm_weight") as *const c_void
@@ -3818,6 +3821,7 @@ pub fn speculative_recurrence_checkpoints_cuda(
                 i32::from(tiled_v_heads),
                 i32::from(value_major),
                 norm_eps,
+                sigmoid_gate,
                 dtype_code,
                 state_dtype,
                 stream,
@@ -5507,9 +5511,15 @@ fn normalize_gdn_rmsnorm_layout(
     }
 }
 
-/// CUDA RMSNorm with a SiLU gate; packed final dimensions are split by the norm weight width.
+/// CUDA gated RMSNorm; packed final dimensions are split by the norm weight width.
 #[cfg(feature = "cuda")]
-pub fn rmsnorm_gated_cuda(x: &Tensor, gate: &Tensor, weight: &Tensor, eps: f64) -> Result<Tensor> {
+pub fn rmsnorm_gated_cuda(
+    x: &Tensor,
+    gate: &Tensor,
+    weight: &Tensor,
+    eps: f64,
+    activation: GdnGateActivation,
+) -> Result<Tensor> {
     use candle::cuda_backend::cudarc::driver::DevicePtr;
     use candle_core as candle;
     use core::ffi::c_void;
@@ -5521,6 +5531,7 @@ pub fn rmsnorm_gated_cuda(x: &Tensor, gate: &Tensor, weight: &Tensor, eps: f64) 
         gate: &Tensor,
         weight: &Tensor,
         eps: f64,
+        activation: GdnGateActivation,
         dtype_code: i32,
     ) -> Result<Tensor> {
         let weight = weight.contiguous()?;
@@ -5580,6 +5591,7 @@ pub fn rmsnorm_gated_cuda(x: &Tensor, gate: &Tensor, weight: &Tensor, eps: f64) 
                 gate_stride[2] as i64,
                 gate_stride[3] as i64,
                 eps as f32,
+                activation.sigmoid_flag(),
                 dtype_code,
                 stream,
             );
@@ -5593,18 +5605,20 @@ pub fn rmsnorm_gated_cuda(x: &Tensor, gate: &Tensor, weight: &Tensor, eps: f64) 
     }
 
     match x.dtype() {
-        DType::F16 => cuda_fwd::<half::f16>(x, gate, weight, eps, 0),
-        DType::BF16 => cuda_fwd::<half::bf16>(x, gate, weight, eps, 1),
+        DType::F16 => cuda_fwd::<half::f16>(x, gate, weight, eps, activation, 0),
+        DType::BF16 => cuda_fwd::<half::bf16>(x, gate, weight, eps, activation, 1),
         other => candle_core::bail!("rmsnorm_gated_cuda only supports f16/bf16, got {:?}", other),
     }
 }
 
 #[cfg(feature = "cuda")]
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn rmsnorm_gated_quantized_cuda(
     x: &Tensor,
     gate: &Tensor,
     weight: &Tensor,
     eps: f64,
+    activation: GdnGateActivation,
     spec: &GdnFp8OutputSpec,
     num_v_heads: usize,
     head_v_dim: usize,
@@ -5699,6 +5713,7 @@ pub(crate) fn rmsnorm_gated_quantized_cuda(
             gate_stride[2] as i64,
             gate_stride[3] as i64,
             eps as f32,
+            activation.sigmoid_flag(),
             stream,
         );
     }
@@ -5733,6 +5748,7 @@ pub fn rmsnorm_gated_cuda(
     _gate: &Tensor,
     _weight: &Tensor,
     _eps: f64,
+    _activation: GdnGateActivation,
 ) -> Result<Tensor> {
     candle_core::bail!("rmsnorm_gated_cuda requires the cuda feature")
 }
@@ -8320,8 +8336,13 @@ mod tests {
                         .reshape((batch_size, num_v_heads, seq_len, head_v_dim))?
                         .transpose(1, 2)?
                         .to_dtype(DType::BF16)?;
-                    let expected_normalized =
-                        rmsnorm_gated_cuda(&expected_normalized, &gate, &norm_weight, norm_eps)?;
+                    let expected_normalized = rmsnorm_gated_cuda(
+                        &expected_normalized,
+                        &gate,
+                        &norm_weight,
+                        norm_eps,
+                        GdnGateActivation::Silu,
+                    )?;
                     let actual_normalized = speculative_recurrence_checkpoints_cuda(
                         GdnSpeculativeRecurrenceCheckpoints {
                             mixed_qkv: &mixed_qkv,
@@ -8339,6 +8360,7 @@ mod tests {
                             tiled_v_heads: true,
                             state_layout,
                             post_op: Some(GdnSpeculativeRmsNormGate {
+                                sigmoid_gate: false,
                                 gate: &gate,
                                 weight: &norm_weight,
                                 eps: norm_eps,
@@ -8393,6 +8415,7 @@ mod tests {
                                 tiled_v_heads: true,
                                 state_layout,
                                 post_op: Some(GdnSpeculativeRmsNormGate {
+                                    sigmoid_gate: false,
                                     gate: &gate,
                                     weight: &norm_weight,
                                     eps: norm_eps,
@@ -8591,6 +8614,7 @@ mod tests {
                     tiled_v_heads,
                     state_layout: RecurrentStateLayout::GdnValueMajor,
                     post_op: Some(GdnSpeculativeRmsNormGate {
+                        sigmoid_gate: false,
                         gate: &gate,
                         weight: &norm_weight,
                         eps: 1.0e-6,
@@ -8840,6 +8864,7 @@ mod tests {
                     tiled_v_heads,
                     state_layout: RecurrentStateLayout::GdnValueMajor,
                     post_op: Some(GdnSpeculativeRmsNormGate {
+                        sigmoid_gate: false,
                         gate: &case.gate,
                         weight: &case.norm_weight,
                         eps: 1.0e-6,
@@ -8881,6 +8906,7 @@ mod tests {
                         tiled_v_heads,
                         state_layout: RecurrentStateLayout::GdnValueMajor,
                         post_op: Some(GdnSpeculativeRmsNormGate {
+                            sigmoid_gate: false,
                             gate: &case.gate,
                             weight: &case.norm_weight,
                             eps: 1.0e-6,
@@ -9017,6 +9043,7 @@ mod tests {
                     tiled_v_heads,
                     state_layout: RecurrentStateLayout::GdnValueMajor,
                     post_op: Some(GdnSpeculativeRmsNormGate {
+                        sigmoid_gate: false,
                         gate: &case.gate,
                         weight: &case.norm_weight,
                         eps: 1.0e-6,
@@ -9075,7 +9102,7 @@ mod tests {
     #[ignore = "requires a CUDA device"]
     fn speculative_transition_commit_matches_prefix_replay_cuda() -> Result<()> {
         let dev = Device::new_cuda(0)?;
-        for seq_len in [4, 8] {
+        for seq_len in [4, 5, 8] {
             for activation_dtype in [DType::F16, DType::BF16] {
                 for state_dtype in [DType::F32, DType::BF16, DType::F16] {
                     for tiled_v_heads in [false, true] {
@@ -9806,7 +9833,7 @@ mod tests {
             }
         }
 
-        let actual = rmsnorm_gated_cuda(&x, &gate, &weight, eps)?;
+        let actual = rmsnorm_gated_cuda(&x, &gate, &weight, eps, GdnGateActivation::Silu)?;
         assert_eq!(actual.shape(), x.shape());
         assert!(actual.is_contiguous());
         assert_close(
@@ -9860,7 +9887,7 @@ mod tests {
                 }
             }
 
-            let actual = rmsnorm_gated_cuda(&x, &gate, &weight, eps)?;
+            let actual = rmsnorm_gated_cuda(&x, &gate, &weight, eps, GdnGateActivation::Silu)?;
             assert_close(
                 &format!("hidden-128 gated RMSNorm {dtype:?}"),
                 &flat(&actual.to_dtype(DType::F32)?)?,
@@ -9990,7 +10017,7 @@ mod tests {
             let weight =
                 Tensor::from_vec(patterned(HEAD_DIM, seq_len + 403, 0.1, 1.0), HEAD_DIM, &dev)?
                     .to_dtype(DType::BF16)?;
-            let expected = rmsnorm_gated_cuda(&x, &gate, &weight, EPS)?;
+            let expected = rmsnorm_gated_cuda(&x, &gate, &weight, EPS, GdnGateActivation::Silu)?;
             for scale_layout in [
                 ActivationScaleLayout::RowMajor,
                 ActivationScaleLayout::GroupMajor {
@@ -10014,6 +10041,7 @@ mod tests {
                     &gate,
                     &weight,
                     EPS,
+                    GdnGateActivation::Silu,
                     &spec,
                     NUM_V_HEADS,
                     HEAD_DIM,
@@ -10726,7 +10754,13 @@ mod tests {
                 slots: GdnStateSlots::Pooled(&active_slots),
             })?
             .reshape((BATCH_SIZE, 1, NUM_V_HEADS, HEAD_DIM))?;
-            let eager_output = rmsnorm_gated_cuda(&eager_raw, &gate_step, &norm_weight, NORM_EPS)?;
+            let eager_output = rmsnorm_gated_cuda(
+                &eager_raw,
+                &gate_step,
+                &norm_weight,
+                NORM_EPS,
+                GdnGateActivation::Silu,
+            )?;
             let deferred_output = deferred_recurrence_rmsnorm_gate_cuda(GdnDeferredRecurrence {
                 mixed_qkv: &mixed_step,
                 b: &b_step,

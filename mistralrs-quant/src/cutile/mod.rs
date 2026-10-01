@@ -11,6 +11,7 @@ mod nvfp4;
 mod nvfp4_gemv;
 mod nvfp4_glu;
 mod nvfp4_matmul;
+mod qsa;
 mod routed_lora;
 mod split_k;
 mod tune;
@@ -37,6 +38,11 @@ pub use nvfp4::{
     nvfp4_supported, register_nvfp4_routing, register_nvfp4_shape, Nvfp4GemmArgs,
 };
 pub(crate) use nvfp4_glu::{launch as cutile_nvfp4_glu, GluQuantArgs};
+pub use qsa::{
+    cutile_qsa_attention, cutile_qsa_score, register_qsa_shape, QsaAttentionArgs, QsaPaged,
+    QsaScoreArgs, QsaWarmShape, QSA_ATTN_HEAD_DIM, QSA_INDEX_DIM, QSA_INDEX_HEADS,
+    QSA_SCORE_TOKENS,
+};
 pub use routed_lora::{
     cached_cutile_routed_lora_config, cutile_routed_lora_candidate_configs,
     selected_cutile_routed_lora_config, set_cutile_routed_lora_tuned_config,

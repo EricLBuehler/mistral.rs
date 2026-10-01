@@ -84,6 +84,9 @@ use crate::vision_models::qwen3_vl::{Config as Qwen3VLConfig, Qwen3VLModel, Qwen
 use crate::vision_models::qwen3_vl_moe::{
     Config as Qwen3VLMoEConfig, Qwen3VLMoEModel, Qwen3VLMoEProcessor,
 };
+use crate::vision_models::qwen4_exp::{
+    Config as Qwen4ExpConfig, Qwen4ExpModel, Qwen4ExpPagedConfig, Qwen4ExpProcessor,
+};
 use crate::vision_models::voxtral::config::VoxtralConfig;
 use crate::vision_models::voxtral::{VoxtralModel, VoxtralProcessor};
 use crate::vision_models::{minicpmo, phi4};
@@ -304,6 +307,8 @@ pub enum MultimodalLoaderType {
     Qwen3_5,
     #[serde(rename = "qwen3_5moe")]
     Qwen3_5Moe,
+    #[serde(rename = "qwen4exp")]
+    Qwen4Exp,
     #[serde(rename = "voxtral")]
     Voxtral,
     #[serde(rename = "gemma4")]
@@ -343,6 +348,7 @@ impl MultimodalLoaderType {
             "Qwen3VLMoeForConditionalGeneration" => Ok(Self::Qwen3VLMoE),
             "Qwen3_5ForConditionalGeneration" => Ok(Self::Qwen3_5),
             "Qwen3_5MoeForConditionalGeneration" => Ok(Self::Qwen3_5Moe),
+            "Qwen4ExpForConditionalGeneration" => Ok(Self::Qwen4Exp),
             "VoxtralRealtimeForConditionalGeneration" => Ok(Self::Voxtral),
             other => anyhow::bail!(
                 "Unsupported Hugging Face Transformers -CausalLM model class `{other}`. Please raise an issue."
@@ -377,8 +383,9 @@ impl FromStr for MultimodalLoaderType {
             "qwen3vlmoe" => Ok(Self::Qwen3VLMoE),
             "qwen3_5" => Ok(Self::Qwen3_5),
             "qwen3_5moe" => Ok(Self::Qwen3_5Moe),
+            "qwen4exp" => Ok(Self::Qwen4Exp),
             "voxtral" => Ok(Self::Voxtral),
-            a => Err(format!("Unknown architecture `{a}`. Possible architectures: `phi3v`, `idefics2`, `llava_next`, `llava`, `lfm2vl`, `vllama`, `qwen2vl`, `idefics3`, `minicpmo`, `phi4mm`, `qwen2_5vl`, `gemma3`, `mistral3`, `llama4`, `gemma3n`, `gemma4`, `muse_glimmer`, `qwen3vl`, `qwen3vlmoe`, `qwen3_5`, `qwen3_5moe`, `voxtral`, `diffusiongemma`.")),
+            a => Err(format!("Unknown architecture `{a}`. Possible architectures: `phi3v`, `idefics2`, `llava_next`, `llava`, `lfm2vl`, `vllama`, `qwen2vl`, `idefics3`, `minicpmo`, `phi4mm`, `qwen2_5vl`, `gemma3`, `mistral3`, `llama4`, `gemma3n`, `gemma4`, `muse_glimmer`, `qwen3vl`, `qwen3vlmoe`, `qwen3_5`, `qwen3_5moe`, `qwen4exp`, `voxtral`, `diffusiongemma`.")),
         }
     }
 }
@@ -405,6 +412,7 @@ impl std::fmt::Display for MultimodalLoaderType {
             MultimodalLoaderType::Qwen3VLMoE => "qwen3vlmoe",
             MultimodalLoaderType::Qwen3_5 => "qwen3_5",
             MultimodalLoaderType::Qwen3_5Moe => "qwen3_5moe",
+            MultimodalLoaderType::Qwen4Exp => "qwen4exp",
             MultimodalLoaderType::Voxtral => "voxtral",
             MultimodalLoaderType::Gemma4 => "gemma4",
             MultimodalLoaderType::MuseGlimmer => "muse_glimmer",
@@ -466,6 +474,7 @@ impl AutoMultimodalLoader {
             MultimodalLoaderType::Qwen3VLMoE => Box::new(Qwen3VLMoELoader),
             MultimodalLoaderType::Qwen3_5 => Box::new(Qwen3_5Loader),
             MultimodalLoaderType::Qwen3_5Moe => Box::new(Qwen3_5MoeLoader),
+            MultimodalLoaderType::Qwen4Exp => Box::new(Qwen4ExpLoader),
             MultimodalLoaderType::Voxtral => Box::new(VoxtralLoader),
             MultimodalLoaderType::Gemma4 => Box::new(Gemma4Loader),
             MultimodalLoaderType::MuseGlimmer => Box::new(MuseGlimmerLoader),
@@ -7782,6 +7791,389 @@ impl DeviceMappedModelLoader for Qwen3_5MoeLoader {
             HybridPagedKvCacheConfig::new(base, paged_layers)
                 .with_uniform_prefix_prefill_attention_features(Default::default()),
         ))
+    }
+
+    fn non_mapped_sub_models(&self) -> Option<Vec<NonMappedSubModel>> {
+        Some(vec![NonMappedSubModel::Vision])
+    }
+}
+
+// ======================== Qwen4Exp Loader
+
+/// [`MultimodalLoader`] for Qwen4-Exp (Qwen3.8-Flash-Next): hybrid GDN + block-sparse attention
+/// MoE with hyper-connections and a hashed n-gram embedding.
+///
+/// [`MultimodalLoader`]: https://docs.rs/mistralrs/latest/mistralrs/struct.MultimodalLoader.html
+pub struct Qwen4ExpLoader;
+
+impl MultimodalModelLoader for Qwen4ExpLoader {
+    fn runtime_config<'a>(
+        &self,
+        config: &'a str,
+        max_model_len: Option<usize>,
+    ) -> Result<Cow<'a, str>> {
+        match max_model_len {
+            Some(max_model_len) => Ok(Cow::Owned(
+                crate::vision_models::qwen3_5::config::apply_max_model_len(config, max_model_len)?,
+            )),
+            None => Ok(Cow::Borrowed(config)),
+        }
+    }
+
+    fn load(
+        &self,
+        config: &str,
+        vb: ShardedVarBuilder,
+        normal_loading_metadata: NormalLoadingMetadata,
+        attention_mechanism: AttentionImplementation,
+    ) -> Result<Box<dyn MultimodalModel + Send + Sync>> {
+        let cfg: Qwen4ExpConfig = serde_json::from_str(config)?;
+        Ok(Box::new(Qwen4ExpModel::new(
+            &cfg,
+            vb,
+            self.is_gptx_for(config, &normal_loading_metadata)?,
+            normal_loading_metadata,
+            attention_mechanism,
+        )?))
+    }
+    fn is_gptx(&self, _config: &str) -> bool {
+        true
+    }
+    fn get_config_repr(&self, config: &str) -> Result<Box<dyn Debug>> {
+        let config: Qwen4ExpConfig = serde_json::from_str(config)?;
+        Ok(Box::new(config))
+    }
+    fn get_processor(
+        &self,
+        _model_config: &str,
+        _processor_config: Option<ProcessorConfig>,
+        _preprocessor_config: PreProcessorConfig,
+        max_edge: Option<u32>,
+    ) -> Arc<dyn Processor + Send + Sync> {
+        Arc::new(Qwen4ExpProcessor::new(max_edge))
+    }
+    fn supports_paged_attention(&self, _config: &str) -> bool {
+        true
+    }
+    fn supports_encoder_cache(&self, _config: &str) -> bool {
+        true
+    }
+    fn supports_prefix_cacher(&self, _config: &str) -> bool {
+        true
+    }
+    fn prefixer(&self, _config: &str) -> Arc<dyn MultimodalPromptPrefixer> {
+        Arc::new(Qwen3_5MoePrefixer)
+    }
+    fn video_frame_sampling(&self, _config: &str) -> crate::VideoFrameSampling {
+        QWEN3_VIDEO_SAMPLING
+    }
+    fn modalities(&self, config: &str) -> Result<Modalities> {
+        let cfg: Qwen4ExpConfig = serde_json::from_str(config)?;
+        let input = if cfg.vision_config.is_some() {
+            vec![
+                SupportedModality::Text,
+                SupportedModality::Vision,
+                SupportedModality::Video,
+            ]
+        } else {
+            vec![SupportedModality::Text]
+        };
+        Ok(Modalities {
+            input,
+            output: vec![SupportedModality::Text],
+        })
+    }
+}
+
+impl IsqModelLoader for Qwen4ExpLoader {
+    fn promoted_isq_predicates(&self, config: &str) -> Result<Vec<Regex>> {
+        // The residual-stream mixers, PLE projections and indexer run every token and are
+        // sensitive, so they take the promoted type rather than staying bf16
+        let mut predicates = Qwen3_5MoeLoader.promoted_isq_predicates(config)?;
+        predicates.extend([
+            Regex::new(
+                r"^model\.language_model\.layers\.(\d+)\.(attn|mlp)_hyper_connection\.(input_mix_weight_down|input_mix_weight_up|block_inject_weight)\.weight$",
+            )?,
+            Regex::new(
+                r"^model\.language_model\.hyper_connection_mixer\.(input_mix_weight_down|input_mix_weight_up)\.weight$",
+            )?,
+            Regex::new(r"^model\.language_model\.layers\.(\d+)\.ple\.(key_proj|value_proj)\.weight$")?,
+            Regex::new(
+                r"^model\.language_model\.layers\.(\d+)\.self_attn\.indexer\.index_qk_proj\.weight$",
+            )?,
+            Regex::new(
+                r"^mtp\.layers\.(\d+)\.(attn|mlp)_hyper_connection\.(input_mix_weight_down|input_mix_weight_up|block_inject_weight)\.weight$",
+            )?,
+            Regex::new(
+                r"^mtp\.hyper_connection_mixer\.(input_mix_weight_down|input_mix_weight_up)\.weight$",
+            )?,
+            Regex::new(r"^mtp\.layers\.(\d+)\.self_attn\.indexer\.index_qk_proj\.weight$")?,
+            Regex::new(r"^mtp\.(fc_embedding|fc_hidden)\.weight$")?,
+        ]);
+        Ok(predicates)
+    }
+    fn isq_layer_regexes(&self, config: &str) -> Result<Vec<Regex>> {
+        let mut regexes = Qwen3_5MoeLoader.isq_layer_regexes(config)?;
+        regexes.extend([
+            Regex::new(r"^mtp\.layers\.(\d+)\.self_attn\.(q_proj|k_proj|v_proj|o_proj)\.weight$")?,
+            Regex::new(r"^mtp\.layers\.(\d+)\.mlp\.experts\.(gate_up_proj|down_proj)\.weight$")?,
+            Regex::new(
+                r"^mtp\.layers\.(\d+)\.mlp\.shared_expert\.(gate_proj|up_proj|down_proj)\.weight$",
+            )?,
+        ]);
+        Ok(regexes)
+    }
+    fn immediate_isq_predicates(&self, config: &str) -> Result<Vec<Regex>> {
+        self.isq_layer_regexes(config)
+    }
+    fn isq_layer_regexes_moqe(&self, config: &str) -> Result<Vec<Regex>> {
+        Qwen3_5MoeLoader.isq_layer_regexes_moqe(config)
+    }
+    fn immediate_isq_predicates_moqe(&self, config: &str) -> Result<Vec<Regex>> {
+        self.isq_layer_regexes_moqe(config)
+    }
+}
+
+impl DeviceMappedModelLoader for Qwen4ExpLoader {
+    fn mapped_max_act_size_elems(
+        &self,
+        config: &str,
+        params: &AutoDeviceMapParams,
+    ) -> Result<usize> {
+        let AutoDeviceMapParams::Multimodal {
+            max_seq_len,
+            max_batch_size,
+            max_image_shape,
+            max_num_images,
+        } = params
+        else {
+            anyhow::bail!("Expected multimodal AutoDeviceMapParams for this model!")
+        };
+        let cfg: Qwen4ExpConfig = serde_json::from_str(config)?;
+        let img_seq_len = cfg.vision_config.as_ref().map_or(0, |cfg| {
+            let grid_h = (max_image_shape.0 / cfg.patch_size) / cfg.spatial_merge_size;
+            let grid_w = (max_image_shape.1 / cfg.patch_size) / cfg.spatial_merge_size;
+            grid_h * grid_w * max_num_images
+        });
+        let max_seq_len = img_seq_len + max_seq_len.min(&ATTENTION_CHUNK_SIZE);
+        let text = &cfg.text_config;
+        let attn = max_batch_size * text.num_attention_heads * max_seq_len * max_seq_len;
+        let hyper = max_batch_size * max_seq_len * text.hc_hidden_size() * 4;
+        Ok(attn.max(hyper))
+    }
+
+    fn non_mapped_max_act_size_elems(
+        &self,
+        config: &str,
+        params: &AutoDeviceMapParams,
+    ) -> Result<usize> {
+        let AutoDeviceMapParams::Multimodal {
+            max_seq_len: _,
+            max_batch_size,
+            max_image_shape,
+            max_num_images,
+        } = params
+        else {
+            anyhow::bail!("Expected multimodal AutoDeviceMapParams for this model!")
+        };
+        let cfg: Qwen4ExpConfig = serde_json::from_str(config)?;
+        Ok(cfg.vision_config.as_ref().map_or(0, |cfg| {
+            let img_seq_len =
+                (max_image_shape.0 / cfg.patch_size) * (max_image_shape.1 / cfg.patch_size);
+            (max_batch_size * max_num_images) * cfg.num_heads * img_seq_len * img_seq_len
+        }))
+    }
+
+    fn non_mapped_size_in_bytes(
+        &self,
+        config: &str,
+        dtype: DType,
+        weight_pack_factor: usize,
+        quantization: Option<&super::AutoDeviceMapQuantization<'_>>,
+        _matformer_config: Option<&MatformerSliceConfig>,
+    ) -> Result<usize> {
+        let cfg: Qwen4ExpConfig = serde_json::from_str(config)?;
+        let tie = cfg.tie_word_embeddings;
+        let text = &cfg.text_config;
+        let (embed_tokens_pack_factor, lm_head_pack_factor) =
+            super::language_model_pack_factors_with_aliases(
+                quantization,
+                &[
+                    "language_model.model.embed_tokens.weight",
+                    "model.language_model.embed_tokens.weight",
+                ],
+                &["lm_head.weight"],
+                tie,
+                dtype,
+                weight_pack_factor,
+            )?;
+        let embed_tokens = text.hidden_size * text.vocab_size / embed_tokens_pack_factor;
+        let lm_head = if tie {
+            0
+        } else {
+            text.hidden_size * text.vocab_size / lm_head_pack_factor
+        };
+        let final_mixer = text.hc_hidden_size() * (2 * text.hc_lowrank + 1);
+
+        let vision = cfg.vision_config.as_ref().map_or(0, |vision| {
+            let merge_hidden = vision.hidden_size * vision.spatial_merge_size.pow(2);
+            let merger = merge_hidden * merge_hidden
+                + merge_hidden
+                + merge_hidden * vision.out_hidden_size
+                + vision.out_hidden_size
+                + 2 * vision.hidden_size;
+            let patch_embed = vision.in_chans
+                * vision.hidden_size
+                * vision.temporal_patch_size
+                * vision.patch_size
+                * vision.patch_size
+                + vision.hidden_size;
+            let pos_embed = vision.num_position_embeddings * vision.hidden_size;
+            let encoder_layer = 4 * vision.hidden_size
+                + 2 * vision.hidden_size * vision.intermediate_size
+                + vision.intermediate_size
+                + vision.hidden_size
+                + 4 * vision.hidden_size * vision.hidden_size
+                + 4 * vision.hidden_size;
+            merger + patch_embed + pos_embed + encoder_layer * vision.depth
+        });
+        let elems = embed_tokens + lm_head + final_mixer + vision;
+        let mtp = if cfg.mtp {
+            use crate::vision_models::qwen4_exp::config::LayerType;
+            let ple_layer = text.ple()?.map(|ple| ple.layer_idx);
+            // The MTP block is shaped like a main-stack attention layer without PLE
+            let block = text
+                .layer_types()
+                .iter()
+                .enumerate()
+                .position(|(idx, ty)| *ty == LayerType::FullAttention && Some(idx) != ple_layer)
+                .map(|idx| -> Result<usize> {
+                    Ok(self.layer_sizes_in_bytes(config, dtype, weight_pack_factor, None)?[idx])
+                })
+                .transpose()?
+                .unwrap_or(0);
+            let fc = 2 * text.hidden_size * text.hidden_size / weight_pack_factor;
+            let norms_and_mixer = text.hidden_size
+                + text.hc_hidden_size()
+                + text.hc_hidden_size() * (2 * text.hc_lowrank + 1);
+            block + (fc + norms_and_mixer) * dtype.size_in_bytes()
+        } else {
+            0
+        };
+        Ok(elems * dtype.size_in_bytes() + mtp)
+    }
+
+    fn layer_sizes_in_bytes(
+        &self,
+        config: &str,
+        dtype: DType,
+        weight_pack_factor: usize,
+        _matformer_config: Option<&MatformerSliceConfig>,
+    ) -> Result<Vec<usize>> {
+        use crate::vision_models::qwen4_exp::config::LayerType;
+        let cfg: Qwen4ExpConfig = serde_json::from_str(config)?;
+        let text = &cfg.text_config;
+        let qsa = text.qsa()?;
+        let ple = text.ple()?;
+        let hc_hidden = text.hc_hidden_size();
+        let hyper = 2 * hc_hidden * (2 * text.hc_lowrank + text.hc_count + 1);
+        // The n-gram table is never a weight tensor but is quantized into device memory after loading
+        #[cfg(feature = "cuda")]
+        let table_bytes = ple.as_ref().map_or(0, |ple| {
+            crate::vision_models::qwen4_exp::planned_resident_table_bytes(text, ple)
+        });
+        #[cfg(not(feature = "cuda"))]
+        let table_bytes = 0;
+        Ok(text
+            .layer_types()
+            .into_iter()
+            .enumerate()
+            .map(|(layer_idx, layer_type)| {
+                let hidden = text.hidden_size;
+                let mixer = match layer_type {
+                    LayerType::FullAttention => {
+                        let q = text.head_dim * text.num_attention_heads;
+                        let kv = text.head_dim * text.num_key_value_heads;
+                        let indexer = qsa.map_or(0, |qsa| {
+                            hidden * (qsa.n_heads + 1) * qsa.head_dim + 2 * qsa.head_dim
+                        });
+                        (hidden * q * 2 + 2 * hidden * kv + q * hidden) / weight_pack_factor
+                            + 2 * text.head_dim
+                            + indexer
+                    }
+                    LayerType::LinearAttention => {
+                        let value_dim = text.linear_value_dim();
+                        let conv_dim = text.linear_conv_dim();
+                        (hidden * conv_dim
+                            + hidden * value_dim
+                            + hidden * text.linear_num_value_heads * 2
+                            + value_dim * hidden)
+                            / weight_pack_factor
+                            + conv_dim * text.linear_conv_kernel_dim
+                            + 2 * text.linear_num_value_heads
+                            + text.linear_value_head_dim
+                    }
+                };
+                let expert = 3 * hidden * text.moe_intermediate_size / weight_pack_factor;
+                let shared = 3 * hidden * text.shared_expert_intermediate_size / weight_pack_factor;
+                let moe = hidden * text.num_experts + expert * text.num_experts + shared + hidden;
+                let ple_layer = ple.as_ref().filter(|ple| ple.layer_idx == layer_idx);
+                let ple_elems = ple_layer.map_or(0, |ple| {
+                    ple.embed_dim * (hc_hidden + hidden)
+                        + 3 * hc_hidden
+                        + hc_hidden * ple.conv_kernel_size
+                });
+                (mixer + moe + hyper + ple_elems) * dtype.size_in_bytes()
+                    + ple_layer.map_or(0, |_| table_bytes)
+            })
+            .collect())
+    }
+
+    fn num_layers(&self, config: &str) -> Result<usize> {
+        let cfg: Qwen4ExpConfig = serde_json::from_str(config)?;
+        Ok(cfg.text_config.num_hidden_layers)
+    }
+
+    fn unbound_layer_bytes(&self, config: &str) -> Result<Vec<(usize, usize)>> {
+        let cfg: Qwen4ExpConfig = serde_json::from_str(config)?;
+        let text = &cfg.text_config;
+        #[cfg(feature = "cuda")]
+        return Ok(text.ple()?.map_or_else(Vec::new, |ple| {
+            vec![(
+                ple.layer_idx,
+                crate::vision_models::qwen4_exp::planned_resident_table_bytes(text, &ple),
+            )]
+        }));
+        #[cfg(not(feature = "cuda"))]
+        {
+            let _ = text;
+            Ok(Vec::new())
+        }
+    }
+
+    fn model_config(&self, config: &str) -> Result<Box<dyn ModelConfigLike>> {
+        let cfg: Qwen4ExpConfig = serde_json::from_str(config)?;
+        let text = &cfg.text_config;
+        let qsa = text.qsa()?.ok_or_else(|| {
+            anyhow::Error::msg("Qwen4-Exp checkpoints without a QSA indexer are unsupported")
+        })?;
+        let base = ModelConfigMetadata {
+            max_seq_len: text.max_position_embeddings,
+            num_layers: text.num_hidden_layers + text.mtp_layers(cfg.mtp),
+            hidden_size: text.hidden_size,
+            num_kv_heads: text.num_key_value_heads,
+            num_attn_heads: text.num_attention_heads,
+            sliding_window: None,
+            k_head_dim: text.head_dim,
+            v_head_dim: text.head_dim,
+            kv_cache_layout: crate::paged_attention::KvCacheLayout::Standard,
+        };
+        Ok(Box::new(Qwen4ExpPagedConfig::new(
+            base,
+            &text.paged_layer_types(cfg.mtp),
+            qsa.aux_cache_elements_per_token(text.rot_dim()),
+            qsa.max_selected_tokens(),
+        )))
     }
 
     fn non_mapped_sub_models(&self) -> Option<Vec<NonMappedSubModel>> {

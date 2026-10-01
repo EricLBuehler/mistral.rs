@@ -125,6 +125,27 @@ mistralrs serve -m Qwen/Qwen3.5-27B \
 
 Overrides merge recursively, so the checkpoint's `rope_theta`, `partial_rotary_factor`, and MRoPE sections remain intact. `--max-model-len` only sets the prompt-plus-output limit; it does not enable RoPE scaling and cannot exceed the context length supported by the final config. Static YaRN can reduce quality on shorter inputs, so enable it only when the extended context is needed.
 
+## Qwen3.8-Flash-Next
+
+Qwen3.8-Flash-Next (HF `qwen4_exp`) adds block-sparse attention (QSA), hyper-connections, and a hashed n-gram embedding (PLE) to the Qwen3.5 MoE hybrid. The checkpoint is roughly 330 GB, including a 100 GB bf16 PLE table. Use ISQ to reduce memory use:
+
+```bash
+mistralrs serve -m Qwen/Qwen3.8-Flash-Next --isq q4k
+```
+
+- On CUDA, the safetensors PLE table is quantized separately at startup: 8-bit if it fits in device memory, otherwise 4-bit (about 29 GB). This reads the whole table once and adds to startup time. If neither fits, rows are read from the memory-mapped checkpoint; CUDA decode graphs then require pageable memory access (ATS/HMM). CPU and Metal gather mapped rows on the host.
+- QSA preserves full causal attention through 2,051 tokens. Longer contexts use QSA over the paged KV cache: each query selects 512 four-token blocks plus the incomplete tail, for at most 2,051 tokens. QSA also needs a small per-token indexer cache.
+- Paged attention is CUDA-only for this model. On other devices, use `--paged-attn off`. FP8 KV caches and tensor parallelism are not supported.
+- Add `--mtp` for built-in [speculative decoding](/guides/perf/speculative-decoding/) with safetensors or UQFF checkpoints containing `mtp.*` weights. Draft depth adapts among 2, 3, 4, and 6 tokens; `--mtp-n-predict N` fixes it. MTP needs extra weights, one attention layer's KV cache, and recurrent verification state.
+- Built-in MTP recomputes cached prompt prefixes, so repeated prompts can take longer to prefill. GGUF loading does not support MTP. External MTP and DFlash drafters are also unsupported for this model.
+- `qwen4exp` GGUF files load without `config.json`. `--quant` selects a variant and its vision projector for image and video input. On CUDA, the IQ4_NL PLE table is copied into device memory without requantization if it fits. Otherwise, rows are gathered on the host and CUDA decode graphs are disabled.
+
+```bash
+mistralrs run -m unsloth/Qwen3.8-Flash-Next-GGUF --quant 4
+```
+
+On CUDA devices with unified memory, such as DGX Spark, the default memory budget is available system RAM minus 1 GiB. The KV cache is capped to the model context length. Use `--pa-context-len N` for a smaller cache to leave room for other applications or MTP; use `--max-model-len N` to limit prompt-plus-output length. `MISTRALRS_IGPU_MEMORY_FRACTION` overrides the memory budget.
+
 ## Granite 4.0 (GraniteMoeHybrid)
 
 IBM Granite 4.0 checkpoints (e.g. `ibm-granite/granite-4.0-micro`) mix Mamba-2 recurrent layers with attention layers. They load through auto-detection like any other text model.

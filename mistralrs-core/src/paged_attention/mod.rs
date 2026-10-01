@@ -31,6 +31,7 @@ pub use cache_engine::{CacheConfig, CacheEngine, PagedCacheType};
 use candle_core::{DType, Device};
 pub use config::{
     HybridPagedKvCacheConfig, KvCacheLayout, KvCacheTopology, ModelConfigLike, ModelConfigMetadata,
+    PrefixPrefillAttentionFeatures,
 };
 pub use kv_cache_manager::KVCacheManager;
 pub use layers::PagedAttention;
@@ -48,7 +49,8 @@ const GPU_MIN_RESERVE_BYTES: usize = 512 * 1024 * 1024;
 
 #[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 pub(crate) fn device_memory_cap(available_bytes: usize, device: &Device) -> usize {
-    if device.is_cpu() {
+    // Unified memory already left its system margin in `MemoryUsage`
+    if device.is_cpu() || crate::utils::normal::is_integrated_gpu(device) {
         available_bytes
     } else {
         let fractional_reserve = (available_bytes as f64 * GPU_RESERVE_FRACTION) as usize;
@@ -190,6 +192,43 @@ mod tests {
         );
         Ok(())
     }
+
+    #[test]
+    fn context_budget_fits_requested_tokens_and_reserved_block() -> anyhow::Result<()> {
+        for head_dim in [8, 128] {
+            let config = super::ModelConfigMetadata {
+                max_seq_len: 4096,
+                num_layers: 16,
+                hidden_size: 1024,
+                num_kv_heads: 8,
+                num_attn_heads: 8,
+                sliding_window: None,
+                k_head_dim: head_dim,
+                v_head_dim: head_dim,
+                kv_cache_layout: super::KvCacheLayout::Standard,
+            };
+            for tokens in [1, 31, 32, 33, 4096] {
+                let cache = super::calculate_cache_config(
+                    MemoryGpuConfig::ContextSize(tokens),
+                    super::CacheMemoryReservations::default(),
+                    Some(32),
+                    candle_core::DType::BF16,
+                    PagedCacheType::Auto,
+                    &config,
+                    &candle_core::Device::Cpu,
+                    &[],
+                    true,
+                    None,
+                    None,
+                )?;
+                assert!(
+                    (cache.num_gpu_blocks - 1) * cache.block_size >= tokens,
+                    "context {tokens} does not fit with head dimension {head_dim}"
+                );
+            }
+        }
+        Ok(())
+    }
 }
 
 /// All memory counts in MB. Default for block size is 32.
@@ -328,10 +367,16 @@ macro_rules! mb_to_blocks {
     };
 }
 
-macro_rules! ctxt_to_blocks {
-    ($context_len:expr, $dtype_size:expr, $block_size:expr, $config:expr) => {
-        $context_len * $dtype_size * $config.total_kv_cache_elements_per_token()
-    };
+fn context_cache_size_mb(
+    context_len: usize,
+    dtype_size: usize,
+    block_size: usize,
+    config: &dyn ModelConfigLike,
+) -> usize {
+    // Block zero is reserved by the block pool and cannot hold tokens.
+    let blocks = context_len.div_ceil(block_size) + 1;
+    (blocks * block_size * dtype_size * config.total_kv_cache_elements_per_token())
+        .div_ceil(SIZE_IN_MB)
 }
 
 fn fit_post_load_cache_budget(
@@ -390,6 +435,7 @@ pub fn calculate_cache_config(
     model_weight_size_in_bytes: Option<usize>,
     max_num_tokens: Option<usize>,
 ) -> anyhow::Result<CacheConfig> {
+    let fills_memory = matches!(mem_gpu, MemoryGpuConfig::Utilization(_));
     let block_size = block_size.unwrap_or(DEFAULT_PAGED_ATTENTION_BLOCK_SIZE);
     if !SUPPORTED_BLOCK_SIZE.contains(&block_size) {
         anyhow::bail!("Block size must be in {SUPPORTED_BLOCK_SIZE:?}, got {block_size}");
@@ -481,7 +527,10 @@ pub fn calculate_cache_config(
                     None => MemoryUsage.query(device)?,
                 };
                 let total = memory.total() as f32 / SIZE_IN_MB as f32;
-                if model_weight_size_in_bytes.is_some() {
+                if model_weight_size_in_bytes.is_none() && device.is_cuda() && memory.is_unified() {
+                    // The integrated-GPU budget already leaves the system margin; the context cap below bounds it
+                    memory.available() / SIZE_IN_MB
+                } else if model_weight_size_in_bytes.is_some() {
                     // Pre-loading: compute budget from total memory and known model size.
                     (total * f - model_weight_per_device_mb as f32).max(0.0) as usize
                 } else {
@@ -490,9 +539,12 @@ pub fn calculate_cache_config(
                 }
                 .saturating_sub(future_reserved_mb)
             }
+            MemoryGpuConfig::ContextSize(0) => {
+                anyhow::bail!("PagedAttention context length must be greater than zero.");
+            }
             MemoryGpuConfig::ContextSize(toks) => {
                 // ContextSize is demand-driven (bytes needed for N tokens), not a memory budget, so model weight does not apply here.
-                ctxt_to_blocks!(toks, dtype_size, block_size, config).div_ceil(SIZE_IN_MB)
+                context_cache_size_mb(toks, dtype_size, block_size, config)
             }
         };
         if let Some(memory) = post_load_memory {
@@ -517,20 +569,22 @@ pub fn calculate_cache_config(
         );
     }
 
-    // On Metal (unified memory), cap KV cache to what the model can actually use.
-    // Unlike CUDA with dedicated VRAM where unused memory is wasted, Metal's wired
-    // buffers compete with the OS and CPU for the same physical RAM.
-    // On CUDA, all available memory is used for maximum request concurrency (vLLM approach).
+    // Unified-memory caches compete with the OS and CPU for the same physical RAM.
     #[allow(unused_mut, unused_variables)]
     let mut mem_gpu = min_mem_gpu;
-    if device.is_metal() {
-        let max_tokens = max_num_tokens.unwrap_or(config.max_seq_len());
-        let mem_for_tokens =
-            ctxt_to_blocks!(max_tokens, dtype_size, block_size, config) / SIZE_IN_MB;
+    let cuda_unified = device.is_cuda() && crate::utils::normal::is_integrated_gpu(device);
+    if device.is_metal() || (cuda_unified && fills_memory) {
+        // CUDA iGPUs cap at the model's context; an explicit context or MB request is taken as is
+        let max_tokens = if cuda_unified {
+            config.max_seq_len()
+        } else {
+            max_num_tokens.unwrap_or(config.max_seq_len())
+        };
+        let mem_for_tokens = context_cache_size_mb(max_tokens, dtype_size, block_size, config);
         if mem_for_tokens < mem_gpu {
             if !silent {
                 info!(
-                    "Metal: capping KV cache from {} MB to {} MB ({} tokens).",
+                    "Unified memory: capping KV cache from {} MB to {} MB ({} tokens).",
                     mem_gpu, mem_for_tokens, max_tokens
                 );
             }
@@ -539,8 +593,8 @@ pub fn calculate_cache_config(
     }
 
     let num_gpu_blocks = mb_to_blocks!(mem_gpu * SIZE_IN_MB, dtype_size, block_size, config);
-    if num_gpu_blocks == 0 {
-        anyhow::bail!("Num GPU blocks is 0. This means there is not enough memory. Either reduce the memory amount/utilization/context size or disable PagedAttention.");
+    if num_gpu_blocks <= 1 {
+        anyhow::bail!("PagedAttention KV cache has no usable token blocks after reserving block zero. Increase --pa-memory-mb, free memory, choose a smaller model or quantization, or disable PagedAttention with --paged-attn off.");
     }
 
     if !silent {

@@ -16,6 +16,7 @@ pub(crate) mod muse_glimmer_bindings;
 pub(crate) mod normal_bindings;
 pub(crate) mod normal_config;
 pub(crate) mod normal_registry;
+pub(crate) mod qwen4exp;
 pub(crate) mod qwen_multimodal_bindings;
 use strum::EnumString;
 

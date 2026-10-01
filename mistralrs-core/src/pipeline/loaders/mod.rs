@@ -36,7 +36,8 @@ pub use multimodal_loaders::{
     Idefics2Loader, Idefics3Loader, LLaVALoader, LLaVANextLoader, Lfm2VlLoader, MiniCpmOLoader,
     Mistral3Loader, MultimodalLoaderType, MultimodalModel, MultimodalModelLoader,
     MuseGlimmerLoader, Phi3VLoader, Phi4MMLoader, Qwen2VLLoader, Qwen2_5VLLoader, Qwen3VLLoader,
-    Qwen3VLMoELoader, Qwen3_5Loader, Qwen3_5MoeLoader, VLlama4Loader, VLlamaLoader, VoxtralLoader,
+    Qwen3VLMoELoader, Qwen3_5Loader, Qwen3_5MoeLoader, Qwen4ExpLoader, VLlama4Loader, VLlamaLoader,
+    VoxtralLoader,
 };
 
 pub use embedding_loaders::{
@@ -830,6 +831,11 @@ pub trait DeviceMappedModelLoader {
         Ok(self.non_mapped_sub_models())
     }
     fn num_layers(&self, config: &str) -> Result<usize>;
+
+    /// Device bytes a layer holds outside its weight bindings, as `(layer, bytes)`.
+    fn unbound_layer_bytes(&self, _config: &str) -> Result<Vec<(usize, usize)>> {
+        Ok(Vec::new())
+    }
     fn model_config(&self, config: &str) -> Result<Box<dyn ModelConfigLike>>;
 
     fn checkpoint_layer_index(&self, _config: &str, tensor_name: &str) -> Option<usize> {

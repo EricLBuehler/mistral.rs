@@ -121,6 +121,7 @@ pub struct NormalPipeline {
     cuda_decode_graph: StdMutex<CudaDecodeGraphState>,
     #[cfg(feature = "cuda")]
     cuda_sparse_rejection: StdMutex<Option<crate::speculative::CudaSparseRejectionWorkspace>>,
+    speculative_autotuner: std::sync::Mutex<crate::speculative::autotuner::SpeculativeAutotuner>,
     generation_defaults: Option<crate::ModelGenerationDefaults>,
     mapper: Box<dyn DeviceMapper + Send + Sync>,
     tracked_modules: Vec<mistralrs_quant::TrackedModule>,
@@ -291,6 +292,7 @@ pub(crate) fn build_normal_pipeline(
         cuda_decode_graph: StdMutex::new(CudaDecodeGraphState::default()),
         #[cfg(feature = "cuda")]
         cuda_sparse_rejection: StdMutex::new(None),
+        speculative_autotuner: std::sync::Mutex::new(Default::default()),
         generation_defaults,
         mapper,
         tracked_modules,
@@ -1693,6 +1695,16 @@ impl crate::speculative::driver::SpeculativePipelineExt for NormalPipeline {
         self.model.speculative_plan(batch_size)
     }
 
+    fn speculative_depth_candidates(&self) -> Vec<usize> {
+        self.model.speculative_depth_candidates()
+    }
+
+    fn speculative_autotuner(
+        &self,
+    ) -> &std::sync::Mutex<crate::speculative::autotuner::SpeculativeAutotuner> {
+        &self.speculative_autotuner
+    }
+
     fn speculative_observe(&self, observation: crate::speculative::SpeculativeBatchObservation) {
         self.model.speculative_observe(observation);
     }
@@ -1914,6 +1926,14 @@ impl NormalPipeline {
             return Ok(Some(replay));
         }
 
+        if !crate::pipeline::cuda_graph::cuda_graph_capture_headroom(step.input_ids.device())? {
+            record_cuda_graph_dispatch(
+                CudaGraphComponent::Target,
+                CudaGraphDispatchMode::Eager,
+                CudaGraphDispatchReason::MemoryPressure,
+            );
+            return Ok(None);
+        }
         let replay_key = key.clone();
         let _ = self.capture_cuda_decode_graph_step(
             &mut state,
@@ -2011,6 +2031,10 @@ impl NormalPipeline {
             if state.contains(&key) {
                 continue;
             }
+            if !crate::pipeline::cuda_graph::cuda_graph_capture_headroom(step.input_ids.device())? {
+                info!("Deferred larger CUDA decode graph buckets to lazy capture for memory headroom; lower --pa-context-len to precapture more.");
+                break;
+            }
             self.capture_cuda_decode_graph_step(
                 &mut state,
                 key,
@@ -2076,8 +2100,12 @@ impl NormalPipeline {
             );
         }
 
-        let recurrent_snapshots =
-            self.snapshot_hybrid_recurrent_checkpoints(recurrent_batch_kind)?;
+        // Precapture runs before any sequence owns a slot, so there is no live state to restore
+        let recurrent_snapshots = if rollback_live_state {
+            self.snapshot_hybrid_recurrent_checkpoints(recurrent_batch_kind)?
+        } else {
+            None
+        };
         let live_state_indices = self.snapshot_hybrid_state_indices();
         let capture_attempt: candle_core::Result<_> = (|| {
             let state_index_buffers = match &step.state_indices {
@@ -2205,7 +2233,8 @@ impl NormalPipeline {
             return Ok(None);
         }
         let transitions_supported = batch_kind == RecurrentBatchKind::SpeculativeDecode
-            && self.model.supports_recurrent_speculative_transitions();
+            && self.model.supports_recurrent_speculative_transitions()
+            && !self.model.speculative_verify_mutates_recurrent_state();
         let hybrid_cache = self.model.cache().hybrid();
         if transitions_supported && hybrid_cache.uses_recurrent_transition_log() {
             return Ok(None);

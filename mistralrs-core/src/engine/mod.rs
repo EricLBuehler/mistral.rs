@@ -698,7 +698,14 @@ impl Engine {
                     })
             };
             if let Some(ctx) = &ctx {
-                get_mut_arcmutex!(pipeline).precapture_cuda_decode_graphs(ctx);
+                let pipeline = get_mut_arcmutex!(pipeline);
+                pipeline.precapture_cuda_decode_graphs(ctx);
+                #[cfg(feature = "cuda")]
+                if let Err(err) =
+                    crate::pipeline::cuda_graph::log_cuda_graph_memory(&pipeline.device())
+                {
+                    tracing::debug!("CUDA graph memory report failed: {err}");
+                }
             }
             ctx
         };
@@ -922,7 +929,6 @@ impl Engine {
         for row in rows {
             get_mut_arcmutex!(row).advance_num_computed_tokens(1);
         }
-        self.logger.add_decode_tokens_processed(rows.len());
     }
 
     #[cfg(feature = "cuda")]
@@ -1049,10 +1055,11 @@ impl Engine {
                 .map(|seq| seq.lock().unwrap())
                 .collect::<Vec<_>>();
             let mut guards_mut = guards.iter_mut().map(|seq| &mut **seq).collect::<Vec<_>>();
+            let decode_tokens =
+                logger::DecodeTokenSnapshot::capture(guards_mut.iter().map(|seq| &**seq));
             for seq in &mut guards_mut {
                 seq.advance_num_computed_tokens(1);
             }
-            self.logger.add_decode_tokens_processed(guards_mut.len());
 
             let pipeline = get_mut_arcmutex!(self.pipeline);
             if crate::pipeline::sampling::cuda_token_batch_will_finish(
@@ -1073,6 +1080,7 @@ impl Engine {
                     self.disable_eos_stop,
                 )
                 .await?;
+            decode_tokens.record(&self.logger, guards_mut.iter().map(|seq| &**seq));
             for (seq, commit) in guards_mut.iter_mut().zip(&commit_rows) {
                 if *commit {
                     seq.finish_completion_timing(step_duration);
@@ -1400,6 +1408,9 @@ impl Engine {
                     output: mut scheduled,
                 } => {
                     if !scheduled.completion.is_empty() {
+                        let decode_tokens = logger::DecodeTokenSnapshot::capture(
+                            scheduled.completion.iter().map(|seq| &**seq),
+                        );
                         let current_completion_ids: Vec<usize> =
                             scheduled.completion.iter().map(|seq| *seq.id()).collect();
                         for seq in scheduled.completion.iter_mut() {
@@ -1458,8 +1469,8 @@ impl Engine {
                             seq.finish_completion_timing(completion_exec_time);
                         }
 
-                        self.logger
-                            .add_decode_tokens_processed(scheduled.completion.len());
+                        decode_tokens
+                            .record(&self.logger, scheduled.completion.iter().map(|seq| &**seq));
 
                         last_completion_ids = current_completion_ids;
                     }
@@ -1502,6 +1513,7 @@ impl Engine {
                                 }
                             };
 
+                            crate::speculative::autotuner::note_interruption();
                             pipeline
                                 .step(
                                     &mut scheduled.prompt,
@@ -1814,6 +1826,9 @@ impl Engine {
                         let mut guards_mut =
                             guards.iter_mut().map(|seq| &mut **seq).collect::<Vec<_>>();
 
+                        let decode_tokens = logger::DecodeTokenSnapshot::capture(
+                            guards_mut.iter().map(|seq| &**seq),
+                        );
                         let staged_width =
                             crate::speculative::staging::staged_batch_width(&guards_mut);
                         let scheduler_visible_prompt_step =
@@ -1919,6 +1934,9 @@ impl Engine {
                                     "All sequences must either return raw logits, or not."
                                 );
 
+                                if is_prompt {
+                                    crate::speculative::autotuner::note_interruption();
+                                }
                                 pipeline
                                     .submit_step(
                                         &mut guards_mut,
@@ -2120,13 +2138,11 @@ impl Engine {
                             }
                         }
 
-                        let total_processed_tokens: usize = scheduled_token_counts.iter().sum();
                         if is_prompt {
                             self.logger
-                                .add_prefill_tokens_processed(total_processed_tokens);
+                                .add_prefill_tokens_processed(scheduled_token_counts.iter().sum());
                         } else {
-                            self.logger
-                                .add_decode_tokens_processed(total_processed_tokens);
+                            decode_tokens.record(&self.logger, guards_mut.iter().map(|seq| &**seq));
                         }
 
                         // Capture recurrent states at full-block boundaries so hybrid models can
@@ -2213,7 +2229,13 @@ impl Engine {
                         }
                     }
                     #[cfg(feature = "cuda")]
-                    if is_prompt && cuda_memory_pool.after_prompt_step() {
+                    let reclaim_graphs = if is_prompt {
+                        cuda_memory_pool.after_prompt_step()
+                    } else {
+                        cuda_decode_lease.is_none() && cuda_memory_pool.after_decode_step()
+                    };
+                    #[cfg(feature = "cuda")]
+                    if reclaim_graphs {
                         debug_assert!(cuda_decode_lease.is_none());
                         loop {
                             let reclaimed = get_mut_arcmutex!(self.pipeline)

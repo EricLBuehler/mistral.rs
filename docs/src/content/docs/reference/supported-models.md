@@ -76,6 +76,7 @@ The `Architecture` column is the `config.json` `architectures` value. Per-family
 | `Qwen3VLMoeForConditionalGeneration` | Qwen3-VL MoE | <details><summary><code>Qwen/Qwen3-VL-235B-A22B-Instruct</code></summary><code>mistralrs run -m Qwen/Qwen3-VL-235B-A22B-Instruct</code></details> |
 | `Qwen3_5ForConditionalGeneration` | Qwen 3.5, Qwen 3.6 | <details><summary><code>Qwen/Qwen3.5-27B</code> (3.5), <code>Qwen/Qwen3.6-27B</code> (3.6)</summary><code>mistralrs run -m Qwen/Qwen3.5-27B</code><br><code>mistralrs run -m Qwen/Qwen3.6-27B</code></details> |
 | `Qwen3_5MoeForConditionalGeneration` | Qwen 3.5 MoE, Qwen 3.6 MoE | <details><summary><code>Qwen/Qwen3.5-35B-A3B</code> (3.5), <code>Qwen/Qwen3.6-35B-A3B</code> (3.6)</summary><code>mistralrs run -m Qwen/Qwen3.5-35B-A3B</code><br><code>mistralrs run -m Qwen/Qwen3.6-35B-A3B</code></details> |
+| `Qwen4ExpForConditionalGeneration` | Qwen3.8-Flash-Next | <details><summary><code>Qwen/Qwen3.8-Flash-Next</code></summary><code>mistralrs run -m Qwen/Qwen3.8-Flash-Next</code></details> |
 | `VoxtralRealtimeForConditionalGeneration` | Voxtral | <details><summary><code>mistralai/Voxtral-Mini-4B-Realtime-2602</code></summary><code>mistralrs run -m mistralai/Voxtral-Mini-4B-Realtime-2602</code></details> |
 | `Gemma4ForConditionalGeneration` | Gemma 4 | <details><summary><code>google/gemma-4-E4B-it</code> (E4B), <code>google/gemma-4-26B-A4B-it</code> (26B-A4B MoE), <code>google/gemma-4-31B-it</code> (31B dense)</summary><code>mistralrs run -m google/gemma-4-E4B-it</code><br><code>mistralrs run -m google/gemma-4-26B-A4B-it</code><br><code>mistralrs run -m google/gemma-4-31B-it</code></details> |
 | `MuseGlimmerForConditionalGeneration` | Muse Glimmer | <details><summary><code>meta-models/Muse-Glimmer-30B</code></summary><code>mistralrs run -m meta-models/Muse-Glimmer-30B</code></details> |
@@ -110,4 +111,4 @@ Text, multimodal, speech, and embedding models support ISQ at load time. Diffusi
 | Mode | Target architecture | Assistant checkpoint family | Guide |
 |---|---|---|---|
 | MTP | `Gemma4` | Gemma 4 assistant checkpoints, PagedAttention required | [Speculative decoding (MTP)](/guides/perf/speculative-decoding/) |
-| MTP | `Qwen3_5`, `Qwen3.8` | Built-in `mtp.*` head (`--mtp`), PagedAttention required | [Speculative decoding (MTP)](/guides/perf/speculative-decoding/) |
+| MTP | `Qwen3_5`, `Qwen3.8`, `Qwen3.8-Flash-Next` | Built-in `mtp.*` head (`--mtp`) from safetensors/UQFF, PagedAttention required | [Speculative decoding (MTP)](/guides/perf/speculative-decoding/) |

@@ -67,7 +67,7 @@ See [CPU threads and affinity](/guides/perf/throughput-tuning/#cpu-threads-and-a
 | Variable | Purpose |
 |---|---|
 | `MISTRALRS_CUDA_GRAPHS` | CUDA graph acceleration is enabled by default when supported. Set to `0`, `false`, `no`, or `off` to disable. See [CUDA graphs](/guides/perf/paged-attention/#cuda-graphs). |
-| `MISTRALRS_DFLASH_ADAPTIVE` | Set to `1` or `true` to use full DFlash draft depth for batches up to 2 and depth 1 above that. Only applies when `--mtp-n-predict` is not set. |
+| `MISTRALRS_DFLASH_ADAPTIVE` | Enabled by default for automatic CUDA DFlash serving: use the full reserved depth for up to 8 live contexts and at most 3 drafts above that. Set to `0` or `false` to tune depth from measured throughput instead. Applies only when `--mtp-n-predict` is unset. |
 | `MISTRALRS_DFLASH_ISQ` | ISQ type for DFlash drafter weights (`q4k`, `q6k`, ... or `none` for bf16); defaults to the target's in-situ quantization type. |
 | `MISTRALRS_FLASHINFER_DECODE` | Disables FlashInfer decode acceleration when set to `0`, `false`, `no`, or `off`. Use only for compatibility troubleshooting. |
 | `MISTRALRS_GDN_DECODE_KERNEL` | Overrides the CUDA GDN decode kernel for benchmarking or troubleshooting. Accepted values are `auto` (default), `baseline`, `cooperative`, `pipelined`, `vmajor4`, and `vmajor32`; an incompatible forced kernel returns an error. The value-major kernels need compute capability 8.0 or newer. |
@@ -106,7 +106,7 @@ See the [distributed inference guide](/guides/perf/distributed-inference/) for u
 
 | Variable | Purpose |
 |---|---|
-| `MISTRALRS_IGPU_MEMORY_FRACTION` | Fraction of integrated GPU memory usable on CUDA systems with iGPUs. Default 0.75. |
+| `MISTRALRS_IGPU_MEMORY_FRACTION` | Overrides the memory budget on CUDA integrated GPUs, such as DGX Spark, as a fraction of system memory. The default is available RAM minus 1 GiB, with the KV cache capped to the model context length. |
 
 ## Build-time
 

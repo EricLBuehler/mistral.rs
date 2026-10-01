@@ -295,6 +295,11 @@ impl MultimodalLoaderType {
                     ex!("Qwen/Qwen3.6-27B", "3.6"),
                 ],
             },
+            Self::Qwen4Exp => ArchMetadata {
+                families: &["Qwen3.8-Flash-Next"],
+                modalities: &[Text, Vision],
+                examples: &[ex!("Qwen/Qwen3.8-Flash-Next")],
+            },
             Self::Qwen3_5Moe => ArchMetadata {
                 families: &["Qwen 3.5 MoE", "Qwen 3.6 MoE"],
                 modalities: &[Text, Vision],
@@ -435,6 +440,7 @@ impl MultimodalLoaderType {
             Self::Qwen3VLMoE => "Qwen3VLMoeForConditionalGeneration",
             Self::Qwen3_5 => "Qwen3_5ForConditionalGeneration",
             Self::Qwen3_5Moe => "Qwen3_5MoeForConditionalGeneration",
+            Self::Qwen4Exp => "Qwen4ExpForConditionalGeneration",
             Self::Voxtral => "VoxtralRealtimeForConditionalGeneration",
             Self::Gemma4 => "Gemma4ForConditionalGeneration",
             Self::MuseGlimmer => "MuseGlimmerForConditionalGeneration",
@@ -487,7 +493,7 @@ Text, multimodal, speech, and embedding models support ISQ at load time. Diffusi
 | Mode | Target architecture | Assistant checkpoint family | Guide |
 |---|---|---|---|
 | MTP | `Gemma4` | Gemma 4 assistant checkpoints, PagedAttention required | [Speculative decoding (MTP)](/guides/perf/speculative-decoding/) |
-| MTP | `Qwen3_5`, `Qwen3.8` | Built-in `mtp.*` head (`--mtp`), PagedAttention required | [Speculative decoding (MTP)](/guides/perf/speculative-decoding/) |
+| MTP | `Qwen3_5`, `Qwen3.8`, `Qwen3.8-Flash-Next` | Built-in `mtp.*` head (`--mtp`) from safetensors/UQFF, PagedAttention required | [Speculative decoding (MTP)](/guides/perf/speculative-decoding/) |
 "#;
 
 fn md_cell(s: &str) -> String {

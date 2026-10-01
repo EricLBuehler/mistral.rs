@@ -1,43 +1,31 @@
 //! MTP speculative decoding for Qwen3.5 / Qwen3.8 using the checkpoint's built-in head.
-//!
-//! Follows vLLM's EAGLE-style proposer: after every target step the drafter is refreshed over the
-//! accepted rows (input token shifted by one, target hidden state, same position), which writes its
-//! own paged KV for those positions and yields the first draft; further drafts are chained from the
-//! drafter's own hidden state at consecutive positions.
 
 use std::sync::{atomic::Ordering, Arc};
 
-use candle_core::{IndexOp, Result, Tensor};
+use candle_core::{DType, Device, IndexOp, Result, Tensor};
 use rand::Rng;
 
 #[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
 use crate::pipeline::cuda_graph::{CudaGraphComponent, CudaGraphEvent, CudaGraphEventGuard};
-use crate::{
-    attention::AttentionMask,
-    get_mut_arcmutex,
-    layers::CausalMasker,
-    layers_masker::CausalMaskConfig,
-    pipeline::text_models_inputs_processor::FlashParams,
-    speculative::{
-        dflash::{
-            CtxAppend, DFlashDraftModel, DFlashGraphProposalInputs, DFlashLoadTarget,
-            DFlashPreparedContext, DFlashProposalBatch, DFlashSamplingInputs,
-        },
-        paged_rows::make_paged_rows_metadata,
-        proposer::sample_draft_rows,
-        MtpRuntimeConfig, SpeculativeAttachInfo, SpeculativeBatchPlan, SpeculativeCommitRow,
-        SpeculativeConfig, SpeculativeGraphPlan, SpeculativeGraphState, SpeculativeKvCache,
-        SpeculativePrefillCtx, SpeculativePrefixReplay, SpeculativeProposal,
-        SpeculativeProposalBatch, SpeculativeProposeBatchCtx, SpeculativeProposePreparation,
-        SpeculativeProposePrepareCtx, SpeculativeTapRouting, SpeculativeTargetMixin,
-        TargetAttentionInputs,
+use crate::speculative::{
+    dflash::{
+        CtxAppend, DFlashDraftModel, DFlashGraphProposalInputs, DFlashLoadTarget,
+        DFlashPreparedContext, DFlashProposalBatch, DFlashSamplingInputs,
     },
+    MtpRuntimeConfig, SpeculativeAttachInfo, SpeculativeBatchPlan, SpeculativeCommitRow,
+    SpeculativeConfig, SpeculativeGraphPlan, SpeculativeGraphState, SpeculativePrefillCtx,
+    SpeculativePrefixReplay, SpeculativeProposal, SpeculativeProposalBatch,
+    SpeculativeProposeBatchCtx, SpeculativeProposePreparation, SpeculativeProposePrepareCtx,
+    SpeculativeTapRouting, SpeculativeTargetMixin,
 };
 
-use super::{
-    mtp::{MtpAttentionInputs, Qwen3_5MtpHead},
-    text::{SpecCapture, SpecGraphState},
-    Qwen3_5Model,
+use super::{mtp::Qwen3_5MtpHead, Qwen3_5Model};
+use crate::speculative::{
+    autotuner::{auto_depth_graph_plans, depths_up_to, AUTO_DEPTHS, AUTO_MAX_DEPTH},
+    builtin_mtp::{
+        capture_view, BuiltinMtpHost, MtpAttentionInputs, MtpDraftOutput, BUILTIN_MTP_PREFIX_REPLAY,
+    },
+    hybrid_state::{SpecCapture, SpecGraphState},
 };
 
 /// vLLM's documented setting for these single-layer MTP heads.
@@ -48,10 +36,6 @@ pub const DEFAULT_MTP_N_PREDICT_LARGE: usize = 3;
 const MTP_LARGE_HIDDEN_SIZE: usize = 4096;
 // Verify cost grows with block width and quantized targets accept shorter blocks anyway; deeper
 // drafting stays available via --mtp-n-predict.
-const MROPE_DIMS: usize = 3;
-// Feeds prompt rows whose next token is not known yet; their KV is rewritten before it is ever attended to
-const PLACEHOLDER_TOKEN: u32 = 0;
-
 struct DFlashPreparedRow {
     seq_id: usize,
     batch_idx: usize,
@@ -101,22 +85,6 @@ fn dflash_speculative_batch(batch: DFlashProposalBatch) -> Result<SpeculativePro
     Ok(SpeculativeProposalBatch::new(proposals))
 }
 
-/// The last prompt position of a sequence: its next token is only known once sampled, so the
-/// drafter processes it during bootstrap instead of prefill.
-pub(super) struct PendingPromptTail {
-    pub(super) position: usize,
-    pub(super) hidden: Tensor,
-    pub(super) mrope: [u32; MROPE_DIMS],
-}
-
-/// One drafter query row: which sequence, at which target position, fed which (shifted) token.
-struct DraftRow {
-    seq_id: usize,
-    position: usize,
-    token: u32,
-    mrope: [u32; MROPE_DIMS],
-}
-
 fn resolve_dflash_n_predict(
     requested: Option<usize>,
     block_size: usize,
@@ -161,118 +129,19 @@ impl Qwen3_5Model {
         self.mtp_n_predict.load(Ordering::Relaxed)
     }
 
+    fn mtp_default_depth(&self) -> usize {
+        if self.text.cfg.hidden_size >= MTP_LARGE_HIDDEN_SIZE {
+            DEFAULT_MTP_N_PREDICT_LARGE
+        } else {
+            DEFAULT_MTP_N_PREDICT
+        }
+    }
+
     fn mtp_head(&self) -> Result<&Qwen3_5MtpHead> {
         self.text
             .mtp
             .as_ref()
             .ok_or_else(|| candle_core::Error::msg("Qwen3.5 MTP head is not loaded"))
-    }
-
-    /// Runs the drafter over `rows` (all sequences flattened, `[1, rows]`) and returns the normed
-    /// hidden state per row `[1, rows, hidden]`, writing drafter KV at each row's position.
-    fn drafter_forward(
-        &self,
-        head: &Qwen3_5MtpHead,
-        rows: &[DraftRow],
-        target_hidden: &Tensor,
-        kv_cache: &(Tensor, Tensor),
-        paged_meta: &crate::pipeline::text_models_inputs_processor::PagedAttentionMeta,
-    ) -> Result<Tensor> {
-        let device = head.device();
-        let n = rows.len();
-        let tokens = Tensor::from_vec(
-            rows.iter().map(|row| row.token).collect::<Vec<_>>(),
-            (1, n),
-            device,
-        )?;
-        let mut mrope = Vec::with_capacity(MROPE_DIMS * n);
-        for dim in 0..MROPE_DIMS {
-            mrope.extend(rows.iter().map(|row| row.mrope[dim]));
-        }
-        let positions = Tensor::from_vec(mrope, (MROPE_DIMS, 1, n), device)?;
-        let seq_ids = rows.iter().map(|row| row.seq_id).collect::<Vec<_>>();
-        let context_lens = rows.iter().map(|row| row.position + 1).collect::<Vec<_>>();
-        let metadata = make_paged_rows_metadata(&seq_ids, &context_lens, paged_meta, device)?;
-        let embeds = self.text.embed_tokens(&tokens)?.to_dtype(head.dtype())?;
-        let target_hidden = target_hidden.to_device(device)?.to_dtype(head.dtype())?;
-        head.forward(
-            &embeds,
-            &target_hidden,
-            &positions,
-            MtpAttentionInputs {
-                kv_cache: kv_cache.clone(),
-                metadata: &metadata,
-                attention_mask: &AttentionMask::None,
-                flash_params: &FlashParams::empty(false),
-            },
-        )
-    }
-
-    /// Catch the drafter up over a whole prompt chunk with the target's own attention inputs: one causal
-    /// prefill instead of one decode query per prompt row. Row p is fed token p+1; the last row of a
-    /// final chunk has no next token yet, so it gets a placeholder whose KV the bootstrap refresh rewrites.
-    fn drafter_prefill_chunk(
-        &self,
-        head: &Qwen3_5MtpHead,
-        ctx: &SpeculativePrefillCtx<'_>,
-        target: TargetAttentionInputs<'_>,
-        capture: &SpecCapture,
-        kv_cache: &(Tensor, Tensor),
-    ) -> Result<()> {
-        let device = head.device();
-        let (batch, seq_len, _) = capture.hidden.dims3()?;
-        if batch != ctx.chunk_ranges.len() {
-            candle_core::bail!(
-                "MTP prefill capture has {batch} rows for {} sequences",
-                ctx.chunk_ranges.len()
-            );
-        }
-        let mut shifted = Vec::with_capacity(batch * seq_len);
-        let mut offsets = Vec::with_capacity(batch);
-        for ((start, end), toks) in ctx.chunk_ranges.iter().zip(ctx.tokens.iter()) {
-            offsets.push(*start);
-            for row in 0..seq_len {
-                let position = start + row;
-                let token = (position + 1 < *end || !ctx.is_final_prompt_chunk)
-                    .then(|| toks.get(position + 1).copied())
-                    .flatten();
-                shifted.push(token.unwrap_or(PLACEHOLDER_TOKEN));
-            }
-        }
-        let tokens = Tensor::from_vec(shifted, (batch, seq_len), device)?;
-        let embeds = self.text.embed_tokens(&tokens)?.to_dtype(head.dtype())?;
-        let target_hidden = capture.hidden.to_device(device)?.to_dtype(head.dtype())?;
-        let positions = capture.positions.to_device(device)?;
-        // Same mask policy as the target's prompt forward: explicit causal mask on the first chunk only
-        let attention_mask = if target.metadata.is_first_prompt_chunk {
-            CausalMasker.make_causal_mask(
-                &tokens,
-                &offsets.as_slice(),
-                head.dtype(),
-                &CausalMaskConfig::default(),
-            )?
-        } else {
-            AttentionMask::None
-        };
-        head.forward(
-            &embeds,
-            &target_hidden,
-            &positions,
-            MtpAttentionInputs {
-                kv_cache: kv_cache.clone(),
-                metadata: target.metadata,
-                attention_mask: &attention_mask,
-                flash_params: target.flash_params,
-            },
-        )?;
-        Ok(())
-    }
-
-    fn draft_logits(&self, normed_hidden: &Tensor) -> Result<Tensor> {
-        let draft_head = self.draft_lm_head.lock().expect("draft lm_head poisoned");
-        let head = draft_head.as_ref().unwrap_or_else(|| self.text.lm_head());
-        // [1, rows, hidden] -> [rows, vocab]
-        head.forward(normed_hidden)?.squeeze(0)
     }
 
     fn attach_dflash(
@@ -317,6 +186,8 @@ impl Qwen3_5Model {
         let max_live_sequences =
             sequence_capacity.saturating_sub(crate::pipeline::RECURRENT_GRAPH_PAD_SLOTS);
         let adaptive = adaptive && drafter.enable_adaptive(n_predict, max_live_sequences);
+        let autotuned = config.n_predict.is_none() && !adaptive;
+        self.mtp_auto_depth.store(autotuned, Ordering::Relaxed);
         let kind = if drafter.has_selector() {
             "DFlash2"
         } else {
@@ -331,6 +202,8 @@ impl Qwen3_5Model {
         };
         let depth = if adaptive {
             format!("batch-adaptive depth <= {n_predict}")
+        } else if autotuned {
+            format!("autotuned depth <= {n_predict}")
         } else {
             format!("depth {n_predict}")
         };
@@ -660,282 +533,54 @@ impl Qwen3_5Model {
         let flat_row_indices = routing.flat_row_indices()?;
         drafter.append_ctx_batch(&capture.taps, flat_row_indices, &appends)
     }
+}
 
-    fn mtp_propose(
+impl BuiltinMtpHost for Qwen3_5Model {
+    fn mtp_device(&self) -> &Device {
+        self.mtp_head().expect("MTP head is loaded").device()
+    }
+
+    fn mtp_dtype(&self) -> DType {
+        self.mtp_head().expect("MTP head is loaded").dtype()
+    }
+
+    fn mtp_kv_layer_idx(&self) -> usize {
+        self.mtp_head().expect("MTP head is loaded").kv_layer_idx()
+    }
+
+    fn mtp_embed_tokens(&self, tokens: &Tensor) -> Result<Tensor> {
+        self.text.embed_tokens(tokens)
+    }
+
+    fn mtp_forward(
         &self,
-        ctx: SpeculativeProposeBatchCtx<'_>,
-    ) -> Result<Option<SpeculativeProposalBatch>> {
-        let head = self.mtp_head()?;
-        let max_n = self.mtp_n_predict();
-        let n_predict = ctx.proposal_len;
-        let batch = ctx.sequences.len();
-        if batch == 0 || max_n == 0 {
-            return Ok(None);
-        }
-        if n_predict == 0 || n_predict > max_n {
-            candle_core::bail!(
-                "MTP proposal length {n_predict} is outside the configured range 1..={max_n}"
-            );
-        }
-        if ctx.target_rows.len() != batch || ctx.base_lens.len() != batch {
-            candle_core::bail!(
-                "MTP batch shape mismatch: sequences={batch}, target_rows={}, base_lens={}",
-                ctx.target_rows.len(),
-                ctx.base_lens.len()
-            );
-        }
-        let SpeculativeKvCache::Paged {
-            metadata: paged_meta,
-            kv_cache,
-        } = ctx.cache;
-        let kv_cache = kv_cache
-            .get(head.kv_layer_idx())
-            .ok_or_else(|| candle_core::Error::msg("paged cache has no MTP layer"))?
-            .clone();
-        let Some(capture) = self.text.last_spec_capture() else {
-            return Ok(None);
-        };
-        let CaptureView { hidden, mrope } = capture_view(&capture)?;
-
-        // Reserve blocks for the drafter's chained positions and the next verify step up front.
-        {
-            let mut kv_mgr = get_mut_arcmutex!(paged_meta.kv_cache_manager);
-            for (seq_id, base_len) in ctx.seq_ids.iter().zip(ctx.base_lens.iter()) {
-                if kv_mgr
-                    .allocate_slots(*seq_id, base_len + n_predict, &[])
-                    .is_none()
-                {
-                    return Ok(None);
-                }
-            }
-        }
-
-        // Refresh over the anchor + accepted rows of every sequence, flattened into one forward.
-        let mut rows = Vec::new();
-        let mut hidden_rows = Vec::with_capacity(batch);
-        let mut last_row_idx = Vec::with_capacity(batch);
-        let mut pending_tails = self
-            .pending_prompt_tails
-            .lock()
-            .expect("mtp tails poisoned");
-        for (i, seq) in ctx.sequences.iter().enumerate() {
-            let (batch_idx, count) = ctx.target_rows[i];
-            let base_len = ctx.base_lens[i];
-            let toks = seq.get_toks();
-            if count == 0 || base_len < count || toks.len() <= base_len {
-                candle_core::bail!(
-                    "MTP refresh rows out of range: base_len={base_len}, count={count}, toks={}",
-                    toks.len()
-                );
-            }
-            if let Some(tail) = pending_tails.remove(seq.id()) {
-                if tail.position + 1 < toks.len() {
-                    rows.push(DraftRow {
-                        seq_id: ctx.seq_ids[i],
-                        position: tail.position,
-                        token: toks[tail.position + 1],
-                        mrope: tail.mrope,
-                    });
-                    hidden_rows.push(tail.hidden.to_device(hidden.device())?);
-                }
-            }
-            for r in 0..count {
-                let position = base_len - count + r;
-                rows.push(DraftRow {
-                    seq_id: ctx.seq_ids[i],
-                    position,
-                    token: toks[position + 1],
-                    mrope: mrope_at(&mrope, batch_idx, r)?,
-                });
-            }
-            hidden_rows.push(hidden.narrow(0, batch_idx, 1)?.narrow(1, 0, count)?);
-            last_row_idx.push(rows.len() - 1);
-        }
-        pending_tails.retain(|seq_id, _| ctx.seq_ids.contains(seq_id));
-        drop(pending_tails);
-        let target_hidden = Tensor::cat(&hidden_rows, 1)?;
-        let normed = self.drafter_forward(head, &rows, &target_hidden, &kv_cache, paged_meta)?;
-        let last_idx = Tensor::from_vec(
-            last_row_idx.iter().map(|i| *i as u32).collect::<Vec<_>>(),
-            (batch,),
-            normed.device(),
-        )?;
-        let mut hidden = normed.index_select(&last_idx, 1)?;
-        let mut cursor = last_row_idx
-            .iter()
-            .map(|i| (rows[*i].position, rows[*i].mrope))
-            .collect::<Vec<_>>();
-
-        let mut contexts = ctx
-            .sequences
-            .iter()
-            .map(|seq| seq.get_toks().to_vec())
-            .collect::<Vec<_>>();
-        let mut tokens: Vec<Vec<u32>> = vec![Vec::with_capacity(n_predict); batch];
-        let mut logits = Vec::with_capacity(n_predict);
-        for step in 0..n_predict {
-            let step_logits = self.draft_logits(&hidden)?;
-            let drafts = sample_draft_rows(&step_logits, ctx.sequences, &mut contexts, &ctx.rng)?;
-            for (i, draft) in drafts.iter().enumerate() {
-                tokens[i].push(*draft);
-            }
-            logits.push(step_logits);
-            if step + 1 == n_predict {
-                break;
-            }
-            // Chain: the draft becomes the next input at the next position, hidden state carried over.
-            let chained = ctx
-                .seq_ids
-                .iter()
-                .zip(cursor.iter_mut())
-                .zip(drafts.iter())
-                .map(|((seq_id, (position, mrope)), draft)| {
-                    *position += 1;
-                    for value in mrope.iter_mut() {
-                        *value += 1;
-                    }
-                    DraftRow {
-                        seq_id: *seq_id,
-                        position: *position,
-                        token: *draft,
-                        mrope: *mrope,
-                    }
-                })
-                .collect::<Vec<_>>();
-            hidden = self.drafter_forward(head, &chained, &hidden, &kv_cache, paged_meta)?;
-        }
-
-        // [n_predict, batch, vocab] -> per sequence [n_predict, vocab]
-        let logits = Tensor::stack(&logits, 1)?;
-        let proposals = tokens
-            .into_iter()
-            .enumerate()
-            .map(|(row, tokens)| Ok(SpeculativeProposal::with_logits(tokens, logits.get(row)?)))
-            .collect::<Result<Vec<_>>>()?;
-        Ok(Some(SpeculativeProposalBatch::new(proposals)))
+        input_embeds: &Tensor,
+        target_hidden: &Tensor,
+        positions: &Tensor,
+        attention: MtpAttentionInputs<'_>,
+    ) -> Result<MtpDraftOutput> {
+        let logits_hidden =
+            self.mtp_head()?
+                .forward(input_embeds, target_hidden, positions, attention)?;
+        Ok(MtpDraftOutput {
+            logits_hidden,
+            chain_hidden: None,
+        })
     }
 
-    /// Catch the drafter up over a prompt chunk: every position gets (next token, target hidden),
-    /// except the last prompt position whose next token is only known once sampled (bootstrap).
-    fn mtp_prefill(&self, ctx: SpeculativePrefillCtx<'_>) -> Result<()> {
-        let head = self.mtp_head()?;
-        let SpeculativeKvCache::Paged {
-            metadata: paged_meta,
-            kv_cache,
-        } = ctx.cache;
-        let kv_cache = kv_cache
-            .get(head.kv_layer_idx())
-            .ok_or_else(|| candle_core::Error::msg("paged cache has no MTP layer"))?
-            .clone();
-        let Some(capture) = self.text.last_full_capture() else {
-            return Ok(());
-        };
-        let CaptureView { hidden, mrope } = capture_view(&capture)?;
-
-        let mut rows = Vec::new();
-        let mut hidden_rows = Vec::new();
-        let mut pending_tails = self
-            .pending_prompt_tails
-            .lock()
-            .expect("mtp tails poisoned");
-        for (i, seq_id) in ctx.seq_ids.iter().enumerate() {
-            let batch_idx = ctx.batch_indices[i];
-            let toks = ctx.tokens[i];
-            let (start, end) = ctx.chunk_ranges[i];
-            if end <= start || hidden.dim(1)? < end - start {
-                candle_core::bail!(
-                    "MTP prefill rows out of range: chunk=({start}, {end}), hidden rows={}",
-                    hidden.dim(1)?
-                );
-            }
-            let last = if ctx.is_final_prompt_chunk {
-                let tail_row = end - 1 - start;
-                pending_tails.insert(
-                    *seq_id,
-                    PendingPromptTail {
-                        position: end - 1,
-                        hidden: hidden.narrow(0, batch_idx, 1)?.narrow(1, tail_row, 1)?,
-                        mrope: mrope_at(&mrope, batch_idx, tail_row)?,
-                    },
-                );
-                end - 1
-            } else {
-                end
-            };
-            if ctx.target_attention.is_some() {
-                continue;
-            }
-            let count = last - start;
-            if count == 0 {
-                continue;
-            }
-            if toks.len() <= last {
-                candle_core::bail!(
-                    "MTP prefill tokens out of range: chunk=({start}, {end}), toks={}",
-                    toks.len()
-                );
-            }
-            for r in 0..count {
-                let position = start + r;
-                rows.push(DraftRow {
-                    seq_id: *seq_id,
-                    position,
-                    token: toks[position + 1],
-                    mrope: mrope_at(&mrope, batch_idx, r)?,
-                });
-            }
-            hidden_rows.push(hidden.narrow(0, batch_idx, 1)?.narrow(1, 0, count)?);
-        }
-        drop(pending_tails);
-        if let Some(target) = ctx.target_attention {
-            return self.drafter_prefill_chunk(head, &ctx, target, &capture, &kv_cache);
-        }
-        if rows.is_empty() {
-            return Ok(());
-        }
-        let target_hidden = Tensor::cat(&hidden_rows, 1)?;
-        self.drafter_forward(head, &rows, &target_hidden, &kv_cache, paged_meta)?;
-        Ok(())
+    fn mtp_draft_logits(&self, hidden: &Tensor) -> Result<Tensor> {
+        let draft_head = self.draft_lm_head.lock().expect("draft lm_head poisoned");
+        let head = draft_head.as_ref().unwrap_or_else(|| self.text.lm_head());
+        head.forward(hidden)?.squeeze(0)
     }
-}
 
-struct CaptureView {
-    hidden: Tensor,
-    mrope: Vec<Vec<Vec<u32>>>,
-}
-
-fn capture_view(capture: &SpecCapture) -> Result<CaptureView> {
-    let hidden = match capture.hidden.rank() {
-        3 => capture.hidden.clone(),
-        2 => capture.hidden.unsqueeze(1)?,
-        rank => candle_core::bail!("unexpected MTP hidden rank {rank}"),
-    };
-    let positions = capture.positions.to_dtype(candle_core::DType::U32)?;
-    let mrope = match positions.rank() {
-        3 => positions.to_vec3::<u32>()?,
-        2 => {
-            let positions = positions.to_vec2::<u32>()?;
-            vec![positions.clone(), positions.clone(), positions]
-        }
-        rank => candle_core::bail!("unexpected MTP position rank {rank}"),
-    };
-    Ok(CaptureView { hidden, mrope })
-}
-
-fn mrope_at(mrope: &[Vec<Vec<u32>>], batch_idx: usize, row: usize) -> Result<[u32; MROPE_DIMS]> {
-    let mut out = [0u32; MROPE_DIMS];
-    for (dim, slot) in out.iter_mut().enumerate() {
-        *slot = *mrope
-            .get(dim)
-            .and_then(|b| b.get(batch_idx))
-            .and_then(|r| r.get(row))
-            .ok_or_else(|| {
-                candle_core::Error::msg(format!(
-                    "MTP position ids missing for batch {batch_idx} row {row}"
-                ))
-            })?;
+    fn mtp_spec_capture(&self) -> Option<SpecCapture> {
+        self.text.last_spec_capture()
     }
-    Ok(out)
+
+    fn mtp_full_capture(&self) -> Option<SpecCapture> {
+        self.text.last_full_capture()
+    }
 }
 
 impl SpeculativeTargetMixin for Qwen3_5Model {
@@ -951,6 +596,7 @@ impl SpeculativeTargetMixin for Qwen3_5Model {
         config: SpeculativeConfig,
         runtime: MtpRuntimeConfig,
     ) -> Result<Option<SpeculativeAttachInfo>> {
+        self.mtp_auto_depth.store(false, Ordering::Relaxed);
         let SpeculativeConfig::Mtp(config) = config else {
             self.mtp_n_predict.store(0, Ordering::Relaxed);
             self.text.set_store_spec_hidden(false);
@@ -966,16 +612,13 @@ impl SpeculativeTargetMixin for Qwen3_5Model {
                 "The built-in MTP head was not loaded; pass `--mtp` when loading the model."
             );
         }
-        let default_n_predict = if self.text.cfg.hidden_size >= MTP_LARGE_HIDDEN_SIZE {
-            DEFAULT_MTP_N_PREDICT_LARGE
-        } else {
-            DEFAULT_MTP_N_PREDICT
-        };
-        let n_predict = config.n_predict.unwrap_or(default_n_predict);
+        let n_predict = config.n_predict.unwrap_or(AUTO_MAX_DEPTH);
         if n_predict == 0 {
             candle_core::bail!("MTP n_predict must be at least 1.");
         }
         self.mtp_n_predict.store(n_predict, Ordering::Relaxed);
+        self.mtp_auto_depth
+            .store(config.n_predict.is_none(), Ordering::Relaxed);
         self.text.set_store_spec_hidden(true);
         // The promoted (sensitive) lm_head is read once per draft; a base-type copy makes the
         // drafter cheaper without touching what the target verifies with
@@ -1050,9 +693,16 @@ impl SpeculativeTargetMixin for Qwen3_5Model {
             .lock()
             .expect("dflash poisoned")
             .as_ref()
-            .map_or(SpeculativePrefixReplay::NotRequired, |drafter| {
-                drafter.prefix_replay()
-            })
+            .map_or_else(
+                || {
+                    if self.mtp_n_predict() > 0 {
+                        BUILTIN_MTP_PREFIX_REPLAY
+                    } else {
+                        SpeculativePrefixReplay::NotRequired
+                    }
+                },
+                |drafter| drafter.prefix_replay(),
+            )
     }
 
     fn supports_paged_auxiliary_prefix_state(&self) -> bool {
@@ -1109,15 +759,34 @@ impl SpeculativeTargetMixin for Qwen3_5Model {
         Some(SpeculativeBatchPlan::new(n))
     }
 
+    fn speculative_depth_candidates(&self) -> Vec<usize> {
+        if !self.mtp_auto_depth.load(Ordering::Relaxed) {
+            return Vec::new();
+        }
+        if self.dflash.lock().expect("dflash poisoned").is_none() {
+            return AUTO_DEPTHS.to_vec();
+        }
+        depths_up_to(
+            &crate::speculative::dflash::AUTO_DEPTHS,
+            self.mtp_n_predict(),
+        )
+    }
+
     fn speculative_graph_plans(&self) -> Vec<SpeculativeGraphPlan> {
         let n = self.mtp_n_predict();
         if n == 0 {
             return Vec::new();
         }
         if let Some(drafter) = self.dflash.lock().expect("dflash poisoned").as_ref() {
+            if self.mtp_auto_depth.load(Ordering::Relaxed) {
+                return auto_depth_graph_plans(&self.speculative_depth_candidates(), n);
+            }
             return drafter.graph_plans(n);
         }
-        vec![SpeculativeGraphPlan::new(n, None)]
+        if !self.mtp_auto_depth.load(Ordering::Relaxed) {
+            return vec![SpeculativeGraphPlan::new(n, None)];
+        }
+        auto_depth_graph_plans(&AUTO_DEPTHS, self.mtp_default_depth())
     }
 
     #[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
@@ -1147,6 +816,7 @@ impl SpeculativeTargetMixin for Qwen3_5Model {
 
     fn release_speculative_sequences(&mut self, seq_ids: &[usize]) -> Result<()> {
         let flush_result = self.text.flush_recurrent_transitions_for_sequences(seq_ids);
+        self.mtp_proposer.release_sequences(seq_ids);
         if let Some(drafter) = self.dflash.lock().expect("dflash poisoned").as_ref() {
             drafter.release_seqs(seq_ids);
         }
@@ -1160,7 +830,7 @@ impl SpeculativeTargetMixin for Qwen3_5Model {
         if self.dflash.lock().expect("dflash poisoned").is_some() {
             return self.dflash_propose(ctx);
         }
-        self.mtp_propose(ctx)
+        self.mtp_proposer.propose(self, ctx, self.mtp_n_predict())
     }
 
     fn speculative_prepare_propose(
@@ -1192,7 +862,7 @@ impl SpeculativeTargetMixin for Qwen3_5Model {
         if self.dflash.lock().expect("dflash poisoned").is_some() {
             return self.dflash_prefill(ctx);
         }
-        self.mtp_prefill(ctx)
+        self.mtp_proposer.prefill(self, ctx)
     }
 
     fn speculative_commit(&mut self, rows: &[SpeculativeCommitRow]) -> Result<()> {

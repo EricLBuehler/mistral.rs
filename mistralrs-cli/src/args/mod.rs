@@ -640,8 +640,8 @@ pub struct RuntimeOptions {
     #[serde(default)]
     pub mtp_model: Option<String>,
 
-    /// Number of MTP draft tokens to propose per target step.
-    #[arg(long)]
+    /// Fixed MTP draft tokens per step; omit to adapt the depth automatically.
+    #[arg(long, value_parser = model::parse_positive_usize)]
     #[serde(default)]
     pub mtp_n_predict: Option<usize>,
 
@@ -828,8 +828,8 @@ pub struct BenchRuntimeOptions {
     #[arg(long)]
     pub mtp_model: Option<String>,
 
-    /// Number of MTP draft tokens to propose per target step.
-    #[arg(long)]
+    /// Fixed MTP draft tokens per step; omit to adapt the depth automatically.
+    #[arg(long, value_parser = model::parse_positive_usize)]
     pub mtp_n_predict: Option<usize>,
 
     /// MTP draft sampling policy. Auto uses probabilistic DFlash2 drafting when supported.
@@ -1535,6 +1535,22 @@ mod tests {
         assert!(help.contains("--enable-lora"));
         assert!(!help.contains("--legacy-lora"));
         assert!(!help.contains("--xlora"));
+    }
+
+    #[test]
+    fn mtp_draft_count_must_be_positive() {
+        for command in ["serve", "run", "bench"] {
+            assert!(Cli::try_parse_from([
+                "mistralrs",
+                command,
+                "-m",
+                "org/target",
+                "--mtp",
+                "--mtp-n-predict",
+                "0",
+            ])
+            .is_err());
+        }
     }
 
     #[test]

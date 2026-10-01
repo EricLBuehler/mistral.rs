@@ -295,6 +295,7 @@ class MultimodalArchitecture(Enum):
     Qwen3VLMoE = "Qwen3VLMoE"
     Qwen3_5 = "Qwen3_5"
     Qwen3_5Moe = "Qwen3_5Moe"
+    Qwen4Exp = "Qwen4Exp"
     Voxtral = "Voxtral"
     Gemma4 = "Gemma4"
     MuseGlimmer = "MuseGlimmer"
