@@ -229,6 +229,10 @@ name = "perplexity"
 path = "examples/advanced/perplexity/main.rs"
 
 [[example]]
+name = "hidden_states"
+path = "examples/advanced/hidden_states/main.rs"
+
+[[example]]
 name = "embeddings"
 path = "examples/advanced/embeddings/main.rs"
 

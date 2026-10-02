@@ -77,6 +77,15 @@ pub trait NormalModel: IsqModel + AnyMoeBaseModelMixin + SpeculativeTargetMixin 
     fn model_config(&self) -> Arc<dyn ModelConfigLike + Send + Sync> {
         Arc::new(self.config().clone())
     }
+    /// Return final-norm hidden states instead of logits from `forward`: the LM head is skipped
+    /// and the selected rows are `[.., hidden_size]`. Raw-logits requests then carry hidden
+    /// states. Models that do not support it return an error.
+    fn set_output_hidden_states(&self, _enabled: bool) -> candle_core::Result<()> {
+        candle_core::bail!("this model does not support hidden-state output")
+    }
+    fn output_hidden_states(&self) -> bool {
+        false
+    }
 }
 
 /// Metadata for loading a model with ISQ or device mapping.

@@ -1779,6 +1779,18 @@ pub trait Pipeline:
         None
     }
 
+    /// Switch the model to returning final-norm hidden states instead of logits. While enabled,
+    /// only raw-logits requests are meaningful: their chunks hold `[tokens, hidden_size]` hidden
+    /// states, and they may reuse the prefix cache (only the uncached tail is returned).
+    fn set_output_hidden_states(&mut self, _enabled: bool) -> candle_core::Result<()> {
+        candle_core::bail!("this pipeline does not support hidden-state output")
+    }
+
+    /// Whether the model currently returns hidden states instead of logits.
+    fn output_hidden_states(&self) -> bool {
+        false
+    }
+
     fn forward_inputs(
         &mut self,
         inputs: Box<dyn Any>,

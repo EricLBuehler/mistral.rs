@@ -873,7 +873,10 @@ impl Engine {
                 return;
             }
 
-            let prefill_cache = if seq.return_raw_logits {
+            // Raw logits cover every prompt position, so a cache hit would drop rows. Hidden-state
+            // output only needs the uncached tail (e.g. a question branch after a shared state).
+            let output_hidden_states = get_mut_arcmutex!(self.pipeline).output_hidden_states();
+            let prefill_cache = if seq.return_raw_logits && !output_hidden_states {
                 None
             } else {
                 handle_seq_error!(
