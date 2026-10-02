@@ -265,7 +265,10 @@ pub(crate) fn build_prompt_chunk_plan(
             .map(|feature| feature.offset)
             .min()
             .unwrap_or(total_len);
-        let mut end = (pos + chunk_size).min(next_feature_start).min(total_len);
+        let mut end = pos
+            .saturating_add(chunk_size)
+            .min(next_feature_start)
+            .min(total_len);
         if let Some(block_size) = block_align.filter(|size| *size > 0) {
             let aligned = end / block_size * block_size;
             if aligned > pos && aligned < end {
@@ -691,6 +694,35 @@ mod tests {
         let unaligned = build_prompt_chunk_plan(65_537, 0, 4096, Some(32), replay, &[]);
         assert!(aligned.iter().any(|chunk| chunk.end == 63_456));
         assert!(unaligned.iter().any(|chunk| chunk.end == 63_488));
+    }
+
+    #[test]
+    fn unchunked_plan_splits_only_at_the_recurrent_checkpoint() {
+        // One chunk as large as the prompt (or larger) still ends at the block-aligned
+        // checkpoint, so a hybrid model leaves a reusable recurrent prefix behind.
+        for chunk_size in [2062, usize::MAX] {
+            let plan = build_prompt_chunk_plan(
+                2062,
+                0,
+                chunk_size,
+                Some(32),
+                SpeculativePrefixReplay::NotRequired,
+                &[],
+            );
+            let spans = plan.iter().map(|c| (c.start, c.end)).collect::<Vec<_>>();
+            assert_eq!(spans, vec![(0, 2048), (2048, 2062)]);
+        }
+        // A cached prefix shifts the start; the split stays on the last block boundary.
+        let plan = build_prompt_chunk_plan(
+            2184,
+            2048,
+            2184,
+            Some(32),
+            SpeculativePrefixReplay::NotRequired,
+            &[],
+        );
+        let spans = plan.iter().map(|c| (c.start, c.end)).collect::<Vec<_>>();
+        assert_eq!(spans, vec![(2048, 2176), (2176, 2184)]);
     }
 
     #[test]
