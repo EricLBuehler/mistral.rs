@@ -104,6 +104,7 @@ async fn hidden_rows(model: &mistralrs::Model, ids: Vec<u32>) -> Result<Tensor> 
         tool_choice: None,
         logits_processors: None,
         return_raw_logits: true,
+        max_prefix_reuse: None,
         web_search_options: None,
         enable_code_execution: false,
         enable_shell: false,

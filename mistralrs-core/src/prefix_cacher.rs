@@ -717,6 +717,30 @@ impl PrefixCacheManagerV2 {
         audio_hashes: Option<&[u64]>,
         video_hashes: Option<&[u64]>,
     ) -> Result<Option<MatchingCache>> {
+        self.search_for_matching_cache_with_limit(
+            toks,
+            toks.len(),
+            adapter_generation,
+            mm_features,
+            image_hashes,
+            audio_hashes,
+            video_hashes,
+        )
+    }
+
+    /// Like [`Self::search_for_matching_cache`], but a hit reuses at most `max_reuse` leading
+    /// tokens; everything after is recomputed.
+    #[allow(clippy::too_many_arguments)]
+    pub fn search_for_matching_cache_with_limit(
+        &mut self,
+        toks: &[u32],
+        max_reuse: usize,
+        adapter_generation: Option<AdapterGenerationId>,
+        mm_features: &[MultiModalFeature],
+        image_hashes: Option<&[u64]>,
+        audio_hashes: Option<&[u64]>,
+        video_hashes: Option<&[u64]>,
+    ) -> Result<Option<MatchingCache>> {
         // Do not search if prefix caching disabled or no tokens
         if self.no_prefix_cache || toks.is_empty() {
             return Ok(None);
@@ -751,7 +775,7 @@ impl PrefixCacheManagerV2 {
             {
                 continue;
             }
-            let match_len = toks.shared_prefix_len(&k.tokens);
+            let match_len = toks.shared_prefix_len(&k.tokens).min(max_reuse);
             if match_len == 0 {
                 continue;
             }
@@ -1438,6 +1462,74 @@ mod tests {
             .search_for_matching_cache(&query, Some(generation_a), &[], None, None, None)?
             .is_some());
 
+        Ok(())
+    }
+
+    #[test]
+    fn reuse_limit_caps_a_kv_prefix_hit() -> candle_core::Result<()> {
+        let mut prefix_cacher = PrefixCacheManagerV2::new(1, false, false);
+        prefix_cacher.caches.insert(
+            vec![1, 2, 3, 4, 5, 6].into(),
+            CacheElement {
+                cache: vec![Some(make_normal_kv_cache(6)?)],
+                recurrent_snapshots: None,
+                audio_hashes: None,
+                image_hashes: None,
+                video_hashes: None,
+            },
+        );
+
+        let query = [1, 2, 3, 4, 5, 6, 7, 8];
+        match prefix_cacher.search_for_matching_cache_with_limit(
+            &query,
+            3,
+            None,
+            &[],
+            None,
+            None,
+            None,
+        )? {
+            Some(MatchingCache::Normal { toks, offset, .. }) => {
+                assert_eq!(offset, 3);
+                assert_eq!(toks, vec![4, 5, 6, 7, 8]);
+            }
+            None => panic!("expected a hit capped at 3 tokens"),
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn reuse_limit_below_a_recurrent_snapshot_skips_it() -> candle_core::Result<()> {
+        // A recurrent snapshot can only be restored at its own length, so a cap below it means no
+        // hit from that entry, while a shorter snapshot within the cap still serves.
+        let mut prefix_cacher = PrefixCacheManagerV2::new(2, false, false);
+        for (len, tokens) in [(4, vec![1, 2, 3, 4]), (8, vec![1, 2, 3, 4, 5, 6, 7, 8])] {
+            prefix_cacher.caches.insert(
+                tokens.into(),
+                CacheElement {
+                    cache: vec![Some(make_normal_kv_cache(len)?)],
+                    recurrent_snapshots: Some(CachedRecurrentState {
+                        len,
+                        snapshots: vec![make_recurrent_snapshot()?],
+                    }),
+                    audio_hashes: None,
+                    image_hashes: None,
+                    video_hashes: None,
+                },
+            );
+        }
+
+        let query: Vec<u32> = (1..=12).collect();
+        let hit = |cacher: &mut PrefixCacheManagerV2,
+                   limit|
+         -> candle_core::Result<Option<usize>> {
+            Ok(cacher
+                .search_for_matching_cache_with_limit(&query, limit, None, &[], None, None, None)?
+                .map(|MatchingCache::Normal { offset, .. }| offset))
+        };
+        assert_eq!(hit(&mut prefix_cacher, 12)?, Some(8));
+        assert_eq!(hit(&mut prefix_cacher, 6)?, Some(4));
+        assert_eq!(hit(&mut prefix_cacher, 3)?, None);
         Ok(())
     }
 

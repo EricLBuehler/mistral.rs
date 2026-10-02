@@ -793,6 +793,7 @@ impl Engine {
             );
             seq.return_hidden_states =
                 seq.return_raw_logits && get_mut_arcmutex!(self.pipeline).output_hidden_states();
+            seq.max_prefix_reuse = request.max_prefix_reuse;
             if let Some(adapter_lease) = &adapter_lease {
                 seq.bind_adapter(adapter_lease.clone());
             }
@@ -881,8 +882,9 @@ impl Engine {
                 None
             } else {
                 handle_seq_error!(
-                    get_mut_arcmutex!(self.prefix_cacher).search_for_matching_cache(
+                    get_mut_arcmutex!(self.prefix_cacher).search_for_matching_cache_with_limit(
                         seq.get_toks(),
+                        seq.prefix_reuse_limit(),
                         seq.adapter_generation(),
                         seq.mm_features(),
                         seq.image_hashes(),
