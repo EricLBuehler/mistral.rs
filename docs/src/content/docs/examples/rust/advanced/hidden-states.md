@@ -13,6 +13,9 @@ Input JSON: `{"rows": [{"ids": [u32, ..], "positions": [usize, ..]}, ..]}` where
 index into `ids`. Output JSON: `{"rows": [{"hidden": [[f32; hidden_size], ..]}, ..]}`, one
 vector per requested position.
 
+Each row reuses the prefix cache only up to its first position (`max_prefix_reuse`), so every
+position it reads is computed; rows of one `group` sent with `--concurrent` are batched.
+
 Run with: `cargo run --release --features cuda --example hidden_states -p mistralrs -- \
   --model-dir DIR --file model.gguf --input rows.json --output hidden.json`
 
@@ -22,6 +25,9 @@ Run with: `cargo run --release --features cuda --example hidden_states -p mistra
 //! Input JSON: `{"rows": [{"ids": [u32, ..], "positions": [usize, ..]}, ..]}` where positions
 //! index into `ids`. Output JSON: `{"rows": [{"hidden": [[f32; hidden_size], ..]}, ..]}`, one
 //! vector per requested position.
+//!
+//! Each row reuses the prefix cache only up to its first position (`max_prefix_reuse`), so every
+//! position it reads is computed; rows of one `group` sent with `--concurrent` are batched.
 //!
 //! Run with: `cargo run --release --features cuda --example hidden_states -p mistralrs -- \
 //!   --model-dir DIR --file model.gguf --input rows.json --output hidden.json`
@@ -103,7 +109,13 @@ struct Output {
     group_seconds: Vec<f64>,
 }
 
-async fn hidden_rows(model: &mistralrs::Model, ids: Vec<u32>) -> Result<Tensor> {
+/// Hidden states for the uncached tail of `ids`; at most `max_reuse` leading tokens may come from
+/// the prefix cache, so every position read from there on is computed.
+async fn hidden_rows(
+    model: &mistralrs::Model,
+    ids: Vec<u32>,
+    max_reuse: Option<usize>,
+) -> Result<Tensor> {
     let (tx, mut rx) = channel(1);
     let request = Request::Normal(Box::new(NormalRequest {
         messages: RequestMessage::CompletionTokens(ids),
@@ -123,6 +135,7 @@ async fn hidden_rows(model: &mistralrs::Model, ids: Vec<u32>) -> Result<Tensor> 
         tool_choice: None,
         logits_processors: None,
         return_raw_logits: true,
+        max_prefix_reuse: max_reuse,
         web_search_options: None,
         enable_code_execution: false,
         enable_shell: false,
@@ -213,7 +226,7 @@ async fn main() -> Result<()> {
             let model = &model;
             async move {
                 let start = Instant::now();
-                let hidden = hidden_rows(model, row.ids.clone()).await?;
+                let hidden = hidden_rows(model, row.ids.clone(), row.positions.iter().min().copied()).await?;
                 anyhow::Ok((*i, row, hidden, start.elapsed().as_secs_f64()))
             }
         });
