@@ -805,7 +805,9 @@ impl PagedAttentionScheduler {
                 } else {
                     0
                 },
-                seq_guard.needs_full_raw_prompt().then_some(*seq_guard.id()),
+                // Raw requests (hidden-state ones included) run alone here: the paged step does not
+                // trim padded rows per sequence.
+                seq_guard.return_raw_logits.then_some(*seq_guard.id()),
                 if self.requires_uniform_media_batch
                     || require_uniform_length && matches!(batch_kind, BatchKind::Prompt)
                 {

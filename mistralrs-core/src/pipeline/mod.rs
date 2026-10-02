@@ -1036,6 +1036,16 @@ impl<'a> ModelForwardContext<'a> {
     }
 }
 
+/// Drop the trailing padding rows of one sequence's raw output (`[rows, ..]` or `[1, rows, ..]`).
+fn trim_raw_rows(t: Tensor, rows: usize) -> candle_core::Result<Tensor> {
+    let axis = t.rank().saturating_sub(2);
+    if t.dim(axis)? > rows {
+        t.narrow(axis, 0, rows)
+    } else {
+        Ok(t)
+    }
+}
+
 pub(crate) fn text_positions_tensor(
     seqlen_offsets: &[usize],
     seq_len: usize,
@@ -2088,8 +2098,14 @@ pub trait Pipeline:
 
                     for (logit_idx, seq_idx) in seq_indices.into_iter().enumerate() {
                         if let ForwardInputsResult::RawLogits { logits } = &raw_logits {
-                            raw_out_logits[seq_idx][i] =
-                                Some(logits.i(logit_idx)?.to_device(&Device::Cpu)?);
+                            // Shorter prompts in a batch are padded at the end; keep only the
+                            // rows of this sequence's own tokens (after a prefix-cache hit these
+                            // are just the uncached tail).
+                            let rows = input_seqs[seq_idx].get_toks().len();
+                            raw_out_logits[seq_idx][i] = Some(trim_raw_rows(
+                                logits.i(logit_idx)?.to_device(&Device::Cpu)?,
+                                rows,
+                            )?);
                         } else if let ForwardInputsResult::Embeddings { embeddings } = &raw_logits {
                             embedding_logits[seq_idx] =
                                 Some(embeddings.i(logit_idx)?.to_device(&Device::Cpu)?);
@@ -3819,5 +3835,21 @@ mod tests {
         inputs.push(message);
 
         test_with_inputs(&templates, &expected_outputs, inputs);
+    }
+}
+
+#[cfg(test)]
+mod raw_rows_tests {
+    use super::trim_raw_rows;
+    use candle_core::{Device, Tensor};
+
+    #[test]
+    fn trims_padding_rows_of_one_sequence() -> candle_core::Result<()> {
+        let t = Tensor::arange(0f32, 12., &Device::Cpu)?.reshape((4, 3))?;
+        assert_eq!(trim_raw_rows(t.clone(), 2)?.dims(), &[2, 3]);
+        assert_eq!(trim_raw_rows(t.clone(), 4)?.dims(), &[4, 3]);
+        let batched = t.unsqueeze(0)?;
+        assert_eq!(trim_raw_rows(batched, 3)?.dims(), &[1, 3, 3]);
+        Ok(())
     }
 }
