@@ -100,7 +100,7 @@ impl<Backer: FcfsBacker> BucketingManager<Backer> for FixedBucketingManager {
                 len,
                 media,
                 seq.token_offset(),
-                seq.return_raw_logits.then_some(*seq.id()),
+                seq.needs_full_raw_prompt().then_some(*seq.id()),
             );
             match seq_buckets.get_mut(&key) {
                 Some(bucket) => {

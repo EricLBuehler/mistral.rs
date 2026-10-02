@@ -42,12 +42,27 @@ struct Args {
     /// Run on the CPU.
     #[arg(long)]
     cpu: bool,
+    /// Use paged attention with a KV cache sized for this many tokens (0 = off).
+    #[arg(long, default_value_t = 0)]
+    paged_ctx: usize,
+    /// Paged-attention block size.
+    #[arg(long)]
+    block_size: Option<usize>,
+    /// Send rows in groups: rows with the same `group` are sent concurrently, groups in order.
+    #[arg(long)]
+    concurrent: bool,
+    /// Maximum concurrently running sequences.
+    #[arg(long, default_value_t = 32)]
+    max_seqs: usize,
 }
 
 #[derive(Deserialize)]
 struct Row {
     ids: Vec<u32>,
     positions: Vec<usize>,
+    /// Rows sharing a group are sent together with `--concurrent`.
+    #[serde(default)]
+    group: usize,
 }
 
 #[derive(Deserialize)]
@@ -65,6 +80,8 @@ struct OutRow {
 #[derive(Serialize)]
 struct Output {
     rows: Vec<OutRow>,
+    /// Wall time per group, in order.
+    group_seconds: Vec<f64>,
 }
 
 async fn hidden_rows(model: &mistralrs::Model, ids: Vec<u32>) -> Result<Tensor> {
@@ -142,29 +159,75 @@ async fn main() -> Result<()> {
     if args.no_prefix_cache {
         builder = builder.with_prefix_cache_n(None);
     }
+    if args.paged_ctx > 0 {
+        let mut paged = mistralrs::PagedAttentionMetaBuilder::default()
+            .with_gpu_memory(mistralrs::MemoryGpuConfig::ContextSize(args.paged_ctx));
+        if let Some(bs) = args.block_size {
+            paged = paged.with_block_size(bs);
+        }
+        builder = builder.with_paged_attn(paged.build()?);
+    }
+    builder = builder.with_max_num_seqs(args.max_seqs);
     let model = builder.build().await?;
 
     let input: Input = serde_json::from_str(&fs::read_to_string(&args.input)?)?;
-    let mut rows = Vec::new();
-    for row in input.rows {
-        let n = row.ids.len();
-        let start = Instant::now();
-        let hidden = hidden_rows(&model, row.ids).await?;
-        let seconds = start.elapsed().as_secs_f64();
-        let returned = hidden.dim(0)?;
-        // Returned rows are the last `returned` prompt tokens (earlier ones came from the cache).
-        let offset = n - returned;
-        let mut out = Vec::new();
-        for p in row.positions {
-            anyhow::ensure!(p >= offset, "position {p} was served from the prefix cache");
-            out.push(hidden.i(p - offset)?.to_vec1::<f32>()?);
+    let n_rows = input.rows.len();
+    let mut rows: Vec<Option<OutRow>> = (0..n_rows).map(|_| None).collect();
+    let mut group_seconds = Vec::new();
+    let mut indexed: Vec<(usize, Row)> = input.rows.into_iter().enumerate().collect();
+    // Without --concurrent every row is its own group, in input order.
+    if !args.concurrent {
+        for (i, (_, row)) in indexed.iter_mut().enumerate() {
+            row.group = i;
         }
-        rows.push(OutRow {
-            hidden: out,
-            returned_rows: returned,
-            seconds,
-        });
     }
-    fs::write(&args.output, serde_json::to_string(&Output { rows })?)?;
+    indexed.sort_by_key(|(i, row)| (row.group, *i));
+    let mut start_idx = 0;
+    while start_idx < indexed.len() {
+        let group = indexed[start_idx].1.group;
+        let end_idx = indexed[start_idx..]
+            .iter()
+            .position(|(_, r)| r.group != group)
+            .map_or(indexed.len(), |p| start_idx + p);
+        let group_start = Instant::now();
+        let futures = indexed[start_idx..end_idx].iter().map(|(i, row)| {
+            let model = &model;
+            async move {
+                let start = Instant::now();
+                let hidden = hidden_rows(model, row.ids.clone()).await?;
+                anyhow::Ok((*i, row, hidden, start.elapsed().as_secs_f64()))
+            }
+        });
+        for result in futures::future::join_all(futures).await {
+            let (i, row, hidden, seconds) = result?;
+            let n = row.ids.len();
+            let returned = hidden.dim(0)?;
+            // Returned rows are the last `returned` prompt tokens (earlier ones came from the cache).
+            let offset = n - returned;
+            let mut out = Vec::new();
+            for &p in &row.positions {
+                anyhow::ensure!(p >= offset, "position {p} was served from the prefix cache");
+                out.push(hidden.i(p - offset)?.to_vec1::<f32>()?);
+            }
+            rows[i] = Some(OutRow {
+                hidden: out,
+                returned_rows: returned,
+                seconds,
+            });
+        }
+        group_seconds.push(group_start.elapsed().as_secs_f64());
+        start_idx = end_idx;
+    }
+    let rows = rows
+        .into_iter()
+        .map(|r| r.expect("every row answered"))
+        .collect();
+    fs::write(
+        &args.output,
+        serde_json::to_string(&Output {
+            rows,
+            group_seconds,
+        })?,
+    )?;
     Ok(())
 }

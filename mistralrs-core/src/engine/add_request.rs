@@ -791,6 +791,8 @@ impl Engine {
                 eos_toks,
                 choice_seed(request.seed, response_index),
             );
+            seq.return_hidden_states =
+                seq.return_raw_logits && get_mut_arcmutex!(self.pipeline).output_hidden_states();
             if let Some(adapter_lease) = &adapter_lease {
                 seq.bind_adapter(adapter_lease.clone());
             }
@@ -875,8 +877,7 @@ impl Engine {
 
             // Raw logits cover every prompt position, so a cache hit would drop rows. Hidden-state
             // output only needs the uncached tail (e.g. a question branch after a shared state).
-            let output_hidden_states = get_mut_arcmutex!(self.pipeline).output_hidden_states();
-            let prefill_cache = if seq.return_raw_logits && !output_hidden_states {
+            let prefill_cache = if seq.needs_full_raw_prompt() {
                 None
             } else {
                 handle_seq_error!(

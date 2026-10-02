@@ -375,7 +375,7 @@ impl PagedAttentionScheduler {
             let require_uniform_length = self.requires_uniform_prompt_batch
                 || candidates.iter().any(|seq| {
                     let seq = get_mut_arcmutex!(seq);
-                    seq.return_raw_logits || seq.prefix_cache_len() > 0
+                    seq.needs_full_raw_prompt() || seq.prefix_cache_len() > 0
                 });
             let scheduled = self.bucket_and_preempt_sequences(
                 candidates,
@@ -805,7 +805,7 @@ impl PagedAttentionScheduler {
                 } else {
                     0
                 },
-                seq_guard.return_raw_logits.then_some(*seq_guard.id()),
+                seq_guard.needs_full_raw_prompt().then_some(*seq_guard.id()),
                 if self.requires_uniform_media_batch
                     || require_uniform_length && matches!(batch_kind, BatchKind::Prompt)
                 {
@@ -955,7 +955,7 @@ impl PagedAttentionScheduler {
             let seq_guard = get_mut_arcmutex!(seq);
             let seq_id = *seq_guard.id();
             let num_tokens = seq_guard.get_toks().len();
-            let return_raw_logits = seq_guard.return_raw_logits;
+            let needs_full_raw_prompt = seq_guard.needs_full_raw_prompt();
             let new_seq_modality = modality_signature(&seq_guard);
             let lazy_prompt_allocation = self.supports_scheduler_visible_prompt_chunks(&seq_guard);
             drop(seq_guard);
@@ -1002,7 +1002,7 @@ impl PagedAttentionScheduler {
 
             // Look up prefix cache hits
             let kv_mgr = get_mut_arcmutex!(self.kv_cache_manager);
-            let mut computed = if self.prefix_caching_enabled && !return_raw_logits {
+            let mut computed = if self.prefix_caching_enabled && !needs_full_raw_prompt {
                 kv_mgr.get_computed_blocks(block_hashes, num_tokens)
             } else {
                 super::kv_cache_manager::ComputedBlocks {
@@ -2936,6 +2936,36 @@ mod tests {
             kv_mgr
                 .get_computed_blocks(&hashes, tokens.len())
                 .num_computed_tokens,
+            scheduler.block_size
+        );
+    }
+
+    #[test]
+    fn hidden_state_prompt_reuses_prefix_blocks() {
+        let mut scheduler = test_scheduler();
+        let tokens = vec![1; 16];
+        let hashes = compute_block_hashes(&tokens, scheduler.block_size, &[], &[]);
+        {
+            let mut kv_mgr = get_mut_arcmutex!(scheduler.kv_cache_manager);
+            assert!(kv_mgr.allocate_slots(99, tokens.len(), &[]).is_some());
+            kv_mgr.cache_blocks(99, &hashes, scheduler.block_size);
+            kv_mgr.free(99);
+        }
+
+        // A hidden-state request only needs its uncached tail, so unlike plain raw logits it
+        // takes the prefix hit.
+        let hidden = test_sequence(0, tokens.len());
+        get_mut_arcmutex!(hidden).return_raw_logits = true;
+        get_mut_arcmutex!(hidden).return_hidden_states = true;
+        get_mut_arcmutex!(hidden).set_state(SequenceState::Waiting);
+        scheduler.waiting.push_back(hidden);
+
+        let logger = IntervalLogger::new(std::time::Duration::from_secs(3600), None);
+        let output = scheduler.schedule(&logger, None);
+
+        assert_eq!(output.num_cached_tokens, vec![scheduler.block_size]);
+        assert_eq!(
+            get_mut_arcmutex!(output.scheduled[0]).prefix_cache_len(),
             scheduler.block_size
         );
     }
