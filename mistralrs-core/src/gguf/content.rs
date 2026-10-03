@@ -137,21 +137,21 @@ impl<'a, R: std::io::Seek + std::io::Read> Content<'a, R> {
             info!("GGUF file has been split into {} shards", n_splits[0]);
         }
 
-        let mut arch = None;
-        for ct in &contents {
-            if !ct.metadata.contains_key("general.architecture") {
-                continue;
-            }
-
-            arch = Some(
-                ct.metadata["general.architecture"]
-                    .to_string()
+        let arch = contents
+            .iter()
+            .find_map(|ct| ct.metadata.get("general.architecture"))
+            .map(|a| {
+                a.to_string()
                     .context("Model metadata should have declared an architecture")
                     .and_then(GGUFArchitecture::from_value)
-                    .unwrap(),
-            );
-        }
-        let arch = arch.expect("GGUF files must specify `general.architecture`");
+                    .map_err(|e| candle_core::Error::msg(e.to_string()))
+            })
+            .transpose()?
+            .ok_or_else(|| {
+                candle_core::Error::Msg(
+                    "GGUF files must specify `general.architecture`".to_string(),
+                )
+            })?;
 
         let mut all_metadata = HashMap::new();
         for content in &contents {
