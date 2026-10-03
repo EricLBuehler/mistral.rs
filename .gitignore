@@ -2,6 +2,7 @@
 .ruff_cache
 __pycache__/
 .vscode
+.zed
 *.a
 .DS_Store
 .idea
