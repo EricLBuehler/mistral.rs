@@ -46,22 +46,36 @@ impl ToolFormatParser for HunyuanParser {
     }
 
     fn parse(&self, message: &str) -> candle_core::Result<Option<String>> {
-        let Some(start) = message.find(START) else {
-            return Ok(None);
-        };
-        let rest = &message[start + START.len()..];
-        let Some(end) = rest.find(END) else {
-            return Ok(None);
-        };
-        let body = rest[..end].trim();
-        let Ok(calls) = serde_json::from_str::<Vec<CalledFunctionParameters>>(body) else {
-            return Ok(None);
-        };
-        if calls.is_empty() {
-            return Ok(None);
-        }
-        Ok(Some(body.to_string()))
+        Ok(extract_call(message).map(|(_, body)| body.to_string()))
     }
+}
+
+fn extract_call(message: &str) -> Option<(std::ops::Range<usize>, &str)> {
+    let start = message.find(START)?;
+    let rest = &message[start + START.len()..];
+    // Decode the JSON first: the wrapper end may also occur inside a string value.
+    let mut stream =
+        serde_json::Deserializer::from_str(rest).into_iter::<Vec<CalledFunctionParameters>>();
+    let calls = stream.next()?.ok()?;
+    if calls.is_empty() {
+        return None;
+    }
+    let offset = stream.byte_offset();
+    let tail = rest[offset..].trim_start();
+    tail.strip_prefix(END)?;
+    let end = message.len() - tail.len() + END.len();
+    Some((start..end, rest[..offset].trim()))
+}
+
+pub(super) fn strip_tool_calls(message: &str) -> String {
+    let mut rest = message;
+    let mut output = String::new();
+    while let Some((range, _)) = extract_call(rest) {
+        output.push_str(&rest[..range.start]);
+        rest = &rest[range.end..];
+    }
+    output.push_str(rest);
+    output
 }
 
 #[cfg(test)]
@@ -94,5 +108,24 @@ mod tests {
         let message = r#"<tool_calls>[{"name":"search","arguments":{}}]"#;
 
         assert!(HunyuanParser.parse(message).unwrap().is_none());
+    }
+
+    #[test]
+    fn wrapper_tags_inside_json_strings_are_data() {
+        let message = r#"before<tool_calls>[{"name":"echo","arguments":{"value":"</tool_calls> and <tool_calls> kept"}}]</tool_calls>after"#;
+
+        let parsed = HunyuanParser
+            .parse(message)
+            .unwrap()
+            .expect("wrapper tags inside a JSON string must not end the call");
+        let calls: serde_json::Value = serde_json::from_str(&parsed).unwrap();
+        assert_eq!(
+            calls[0]["arguments"]["value"],
+            "</tool_calls> and <tool_calls> kept"
+        );
+
+        let (calls_json, content) = extract_model_specific_message(message).unwrap().unwrap();
+        assert_eq!(calls_json, parsed);
+        assert_eq!(content, "beforeafter");
     }
 }

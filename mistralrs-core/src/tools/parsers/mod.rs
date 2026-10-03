@@ -199,9 +199,7 @@ fn strip_tool_call_segments(message: &str, format: ToolCallFormat) -> String {
             strip_delimited_segments(message, "<｜tool▁call▁begin｜>", "<｜tool▁call▁end｜>")
         }
         ToolCallFormat::MistralNemo => strip_from_first(message, "[TOOL_CALLS]"),
-        ToolCallFormat::Hunyuan => {
-            strip_delimited_segments(message, "<tool_calls>", "</tool_calls>")
-        }
+        ToolCallFormat::Hunyuan => hunyuan::strip_tool_calls(message),
         ToolCallFormat::Llama => strip_from_first(message, "<|python_tag|>"),
         ToolCallFormat::Liquid => {
             strip_delimited_segments(message, "<|tool_call_start|>", "<|tool_call_end|>")
