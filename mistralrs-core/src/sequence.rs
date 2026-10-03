@@ -3015,7 +3015,7 @@ mod tests {
             .tool_call_state
             .as_mut()
             .unwrap()
-            .finalize_for_response("", None, None, None)
+            .finalize_for_response("", None, None, None, reason)
             .unwrap();
 
         assert!(matches!(reason, Some(StopReason::StopString { .. })));
