@@ -1036,6 +1036,16 @@ impl<'a> ModelForwardContext<'a> {
     }
 }
 
+/// Drop the trailing padding rows of one sequence's raw output (`[rows, ..]` or `[1, rows, ..]`).
+fn trim_raw_rows(t: Tensor, rows: usize) -> candle_core::Result<Tensor> {
+    let axis = t.rank().saturating_sub(2);
+    if t.dim(axis)? > rows {
+        t.narrow(axis, 0, rows)
+    } else {
+        Ok(t)
+    }
+}
+
 pub(crate) fn text_positions_tensor(
     seqlen_offsets: &[usize],
     seq_len: usize,
@@ -1779,6 +1789,18 @@ pub trait Pipeline:
         None
     }
 
+    /// Switch the model to returning final-norm hidden states instead of logits. While enabled,
+    /// only raw-logits requests are meaningful: their chunks hold `[tokens, hidden_size]` hidden
+    /// states, and they may reuse the prefix cache (only the uncached tail is returned).
+    fn set_output_hidden_states(&mut self, _enabled: bool) -> candle_core::Result<()> {
+        candle_core::bail!("this pipeline does not support hidden-state output")
+    }
+
+    /// Whether the model currently returns hidden states instead of logits.
+    fn output_hidden_states(&self) -> bool {
+        false
+    }
+
     fn forward_inputs(
         &mut self,
         inputs: Box<dyn Any>,
@@ -2076,8 +2098,14 @@ pub trait Pipeline:
 
                     for (logit_idx, seq_idx) in seq_indices.into_iter().enumerate() {
                         if let ForwardInputsResult::RawLogits { logits } = &raw_logits {
-                            raw_out_logits[seq_idx][i] =
-                                Some(logits.i(logit_idx)?.to_device(&Device::Cpu)?);
+                            // Shorter prompts in a batch are padded at the end; keep only the
+                            // rows of this sequence's own tokens (after a prefix-cache hit these
+                            // are just the uncached tail).
+                            let rows = input_seqs[seq_idx].get_toks().len();
+                            raw_out_logits[seq_idx][i] = Some(trim_raw_rows(
+                                logits.i(logit_idx)?.to_device(&Device::Cpu)?,
+                                rows,
+                            )?);
                         } else if let ForwardInputsResult::Embeddings { embeddings } = &raw_logits {
                             embedding_logits[seq_idx] =
                                 Some(embeddings.i(logit_idx)?.to_device(&Device::Cpu)?);
@@ -2104,6 +2132,16 @@ pub trait Pipeline:
 
                 if raw_out_logits[0][0].is_some() {
                     let start = Instant::now();
+                    // A hidden-state request is a finished prefill: cache it so later requests
+                    // sharing its prompt (e.g. one question branch per shared state) skip it.
+                    // Requests that already extended a cached prefix are leaves; skip those.
+                    if self.output_hidden_states() {
+                        for seq in input_seqs.iter_mut() {
+                            if seq.prefix_cache_len() == 0 {
+                                sampling::cache_finished_sequence(self, prefix_cacher, seq)?;
+                            }
+                        }
+                    }
                     response::send_raw_responses(
                         input_seqs,
                         raw_out_logits
@@ -2295,13 +2333,30 @@ pub trait Pipeline:
                 let scheduler_visible_prompt_step = scheduled_prompt_chunks.is_some();
                 let scheduler_visible_prompt_is_final =
                     scheduler_visible_prompt_step && metadata.is_final_prompt_chunk;
+                // Hidden-state output reads every chunk's rows, so it may chunk like a normal prompt.
+                // Hybrid models can only checkpoint recurrent state between forwards, so it always
+                // gets a plan: at least one split at the last block boundary, which is what a later
+                // request sharing this prompt as a prefix (a question branch) restores from.
+                let hidden_prompt = return_raw_logits && self.output_hidden_states();
                 let chunk_size = if !scheduler_visible_prompt_step
                     && is_prompt
-                    && !return_raw_logits
+                    && (!return_raw_logits || hidden_prompt)
                     && !self.get_metadata().is_xlora
-                    && self.device().is_cuda()
                 {
-                    metadata.prompt_chunk_size
+                    if hidden_prompt && self.cache().is_hybrid() {
+                        // Unchunked: one chunk per prompt (the longest one bounds it), still split at
+                        // the checkpoint boundary by the plan.
+                        let longest = input_seqs
+                            .iter()
+                            .map(|seq| seq.get_toks().len())
+                            .max()
+                            .unwrap_or(1);
+                        Some(metadata.prompt_chunk_size.unwrap_or(longest))
+                    } else if self.device().is_cuda() {
+                        metadata.prompt_chunk_size
+                    } else {
+                        None
+                    }
                 } else {
                     None
                 };
@@ -2329,8 +2384,15 @@ pub trait Pipeline:
                     .any(|seq| seq.has_suffix_only_prefill_toks());
                 let hybrid_recurrent = self.cache().is_hybrid();
                 let prefix_policy = self.speculative_prefix_checkpoint_policy();
+                // A hidden-state prompt that already restored a cached prefix (a question branch
+                // after its state) is not split again: nothing will extend it, and the extra
+                // forward and snapshot would only cost time.
+                let checkpoints_recurrent_prefix = |seq: &Sequence| {
+                    hybrid_recurrent && !(hidden_prompt && seq.prefix_cache_len() > 0)
+                };
                 let keep_complete_packed_candidates = chunk_size.is_some_and(|chunk_size| {
-                    input_seqs.len() > 1
+                    !hidden_prompt
+                        && input_seqs.len() > 1
                         && self.supports_packed_prefill()
                         && input_seqs
                             .iter()
@@ -2343,7 +2405,6 @@ pub trait Pipeline:
                             && !has_suffix_only_prefill
                             && !keep_complete_packed_candidates)
                             .then(|| {
-                                let block_align = hybrid_recurrent.then_some(block_size);
                                 chunk_size.map(|chunk_size| {
                                     input_seqs
                                         .iter()
@@ -2352,7 +2413,8 @@ pub trait Pipeline:
                                                 seq.get_toks().len(),
                                                 seq.prefix_cache_len(),
                                                 chunk_size,
-                                                block_align,
+                                                checkpoints_recurrent_prefix(seq)
+                                                    .then_some(block_size),
                                                 prefix_policy.replay_for(
                                                     crate::scheduler::modality_signature(seq),
                                                 ),
@@ -2400,7 +2462,7 @@ pub trait Pipeline:
                                 recurrent_checkpoint_boundary(
                                     tokens.len(),
                                     *prefix_len,
-                                    hybrid_recurrent.then_some(block_size),
+                                    checkpoints_recurrent_prefix(seq).then_some(block_size),
                                     prefix_policy
                                         .replay_for(crate::scheduler::modality_signature(seq)),
                                     seq.mm_features(),
@@ -3773,5 +3835,21 @@ mod tests {
         inputs.push(message);
 
         test_with_inputs(&templates, &expected_outputs, inputs);
+    }
+}
+
+#[cfg(test)]
+mod raw_rows_tests {
+    use super::trim_raw_rows;
+    use candle_core::{Device, Tensor};
+
+    #[test]
+    fn trims_padding_rows_of_one_sequence() -> candle_core::Result<()> {
+        let t = Tensor::arange(0f32, 12., &Device::Cpu)?.reshape((4, 3))?;
+        assert_eq!(trim_raw_rows(t.clone(), 2)?.dims(), &[2, 3]);
+        assert_eq!(trim_raw_rows(t.clone(), 4)?.dims(), &[4, 3]);
+        let batched = t.unsqueeze(0)?;
+        assert_eq!(trim_raw_rows(batched, 3)?.dims(), &[1, 3, 3]);
+        Ok(())
     }
 }

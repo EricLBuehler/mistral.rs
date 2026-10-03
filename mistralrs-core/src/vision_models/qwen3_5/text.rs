@@ -786,6 +786,8 @@ pub struct Qwen3_5TextModel {
     weight_prefix: TextWeightPrefix,
     pub(super) mtp: Option<Qwen3_5MtpHead>,
     store_spec_hidden: AtomicBool,
+    // Return final-norm hidden states instead of logits (LM head skipped)
+    output_hidden_states: AtomicBool,
     // Rows the logits were reduced to (decode: all rows, prompt: the last one)
     last_spec_capture: Mutex<Option<SpecCapture>>,
     // Every row of the last forward, so a proposer can catch up over a prompt chunk
@@ -1044,6 +1046,7 @@ impl Qwen3_5TextModel {
             weight_prefix,
             mtp,
             store_spec_hidden: AtomicBool::new(false),
+            output_hidden_states: AtomicBool::new(false),
             last_spec_capture: Mutex::new(None),
             last_full_capture: Mutex::new(None),
             gdn_replay_stash: Mutex::new(None),
@@ -1767,6 +1770,9 @@ impl Qwen3_5TextModel {
                     taps,
                 });
             }
+            if self.output_hidden_states.load(Ordering::Relaxed) {
+                return xs.to_dtype(DType::F32);
+            }
             ctx.lm_head(&*self.lm_head, &xs)
         })();
         forward_result
@@ -1968,7 +1974,19 @@ impl NormalModel for Qwen3_5TextModel {
 
     #[cfg(feature = "cuda")]
     fn supports_cuda_decode_graphs(&self) -> bool {
-        SUPPORTS_CUDA_DECODE_GRAPHS
+        SUPPORTS_CUDA_DECODE_GRAPHS && !self.output_hidden_states.load(Ordering::Relaxed)
+    }
+
+    fn set_output_hidden_states(&self, enabled: bool) -> Result<()> {
+        if enabled && self.mtp.is_some() {
+            candle_core::bail!("hidden-state output is not supported with an MTP head attached");
+        }
+        self.output_hidden_states.store(enabled, Ordering::Relaxed);
+        Ok(())
+    }
+
+    fn output_hidden_states(&self) -> bool {
+        self.output_hidden_states.load(Ordering::Relaxed)
     }
 }
 

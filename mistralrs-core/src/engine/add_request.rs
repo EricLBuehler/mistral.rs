@@ -791,6 +791,9 @@ impl Engine {
                 eos_toks,
                 choice_seed(request.seed, response_index),
             );
+            seq.return_hidden_states =
+                seq.return_raw_logits && get_mut_arcmutex!(self.pipeline).output_hidden_states();
+            seq.max_prefix_reuse = request.max_prefix_reuse;
             if let Some(adapter_lease) = &adapter_lease {
                 seq.bind_adapter(adapter_lease.clone());
             }
@@ -873,12 +876,15 @@ impl Engine {
                 return;
             }
 
-            let prefill_cache = if seq.return_raw_logits {
+            // Raw logits cover every prompt position, so a cache hit would drop rows. Hidden-state
+            // output only needs the uncached tail (e.g. a question branch after a shared state).
+            let prefill_cache = if seq.needs_full_raw_prompt() {
                 None
             } else {
                 handle_seq_error!(
-                    get_mut_arcmutex!(self.prefix_cacher).search_for_matching_cache(
+                    get_mut_arcmutex!(self.prefix_cacher).search_for_matching_cache_with_limit(
                         seq.get_toks(),
+                        seq.prefix_reuse_limit(),
                         seq.adapter_generation(),
                         seq.mm_features(),
                         seq.image_hashes(),

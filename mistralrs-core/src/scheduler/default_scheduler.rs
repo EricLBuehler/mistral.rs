@@ -72,6 +72,8 @@ pub trait BucketingManager<Backer: FcfsBacker>: Send + Sync {
 
 // (cache length, media bucket, sequence offset, raw request)
 type BucketKey = (usize, u8, usize, Option<usize>);
+/// Raw-request slot of the bucket shared by hidden-state branches (sequence ids never reach it).
+const HIDDEN_BRANCH_BUCKET: usize = usize::MAX;
 
 struct FixedBucketingManager;
 
@@ -96,12 +98,25 @@ impl<Backer: FcfsBacker> BucketingManager<Backer> for FixedBucketingManager {
             } else {
                 u8::from(seq.images().is_some() && seq.is_prompt())
             };
-            let key = (
-                len,
-                media,
-                seq.token_offset(),
-                seq.return_raw_logits.then_some(*seq.id()),
-            );
+            // Hidden-state prompts that continue a cached prefix (e.g. the question branches of one
+            // shared state) batch together whatever their lengths: they share the cached length,
+            // shorter ones are padded at the end and trimmed from the output, and none of them is
+            // cached afterwards. Everything else buckets by length as usual.
+            let key = if seq.return_hidden_states && seq.is_prompt() && seq.prefix_cache_len() > 0 {
+                (
+                    seq.prefix_cache_len(),
+                    media,
+                    seq.token_offset(),
+                    Some(HIDDEN_BRANCH_BUCKET),
+                )
+            } else {
+                (
+                    len,
+                    media,
+                    seq.token_offset(),
+                    seq.needs_full_raw_prompt().then_some(*seq.id()),
+                )
+            };
             match seq_buckets.get_mut(&key) {
                 Some(bucket) => {
                     if !discrete {
@@ -383,6 +398,14 @@ mod tests {
     use tokio::sync::{mpsc::channel, Mutex as TokioMutex};
 
     fn test_sequence(id: usize, input_images: Option<Vec<image::DynamicImage>>) -> Sequence {
+        test_sequence_with_len(id, input_images, 4)
+    }
+
+    fn test_sequence_with_len(
+        id: usize,
+        input_images: Option<Vec<image::DynamicImage>>,
+        len: usize,
+    ) -> Sequence {
         let (tx, _rx) = channel(1);
         let sampler = Sampler::new(
             None,
@@ -401,7 +424,7 @@ mod tests {
         .unwrap();
         let group = Arc::new(TokioMutex::new(SequenceGroup::new(1, false, true, None)));
         let seq = Sequence::new_waiting(
-            vec![1; 4],
+            vec![1; len],
             "prompt".to_string(),
             id,
             id as u128,
@@ -515,6 +538,67 @@ mod tests {
         );
 
         assert_eq!(bucketed.running.len(), 1);
+        assert_eq!(bucketed.waiting.len(), 1);
+    }
+
+    /// A hidden-state prompt that continues a cached prefix of `cached` tokens.
+    fn hidden_branch(id: usize, len: usize, cached: usize) -> Sequence {
+        let mut seq = test_sequence_with_len(id, None, len);
+        seq.return_raw_logits = true;
+        seq.return_hidden_states = true;
+        seq.set_prefix_cache_len(cached);
+        seq.set_state(SequenceState::RunningPrompt);
+        seq
+    }
+
+    #[test]
+    fn hidden_state_branches_of_one_prefix_share_a_bucket_across_lengths() {
+        let mut manager = FixedBucketingManager;
+        let bucketed = manager.bucket_and_waitlist_seqs_waiting(
+            vec![
+                hidden_branch(0, 4, 16),
+                hidden_branch(1, 7, 16),
+                hidden_branch(2, 5, 16),
+            ],
+            VecDeque::new(),
+            true,
+            false,
+        );
+
+        assert_eq!(bucketed.running.len(), 3);
+        assert_eq!(bucketed.waiting.len(), 0);
+    }
+
+    #[test]
+    fn hidden_state_branches_of_different_prefixes_do_not_share_a_bucket() {
+        let mut manager = FixedBucketingManager;
+        let bucketed = manager.bucket_and_waitlist_seqs_waiting(
+            vec![hidden_branch(0, 4, 16), hidden_branch(1, 4, 24)],
+            VecDeque::new(),
+            true,
+            false,
+        );
+
+        assert_eq!(bucketed.running.len(), 1);
+        assert_eq!(bucketed.waiting.len(), 1);
+    }
+
+    #[test]
+    fn uncached_hidden_state_prompts_only_share_with_equal_lengths() {
+        // Nothing is padded into a prompt that will seed the prefix cache.
+        let mut manager = FixedBucketingManager;
+        let bucketed = manager.bucket_and_waitlist_seqs_waiting(
+            vec![
+                hidden_branch(0, 4, 0),
+                hidden_branch(1, 6, 0),
+                hidden_branch(2, 4, 0),
+            ],
+            VecDeque::new(),
+            true,
+            false,
+        );
+
+        assert_eq!(bucketed.running.len(), 2);
         assert_eq!(bucketed.waiting.len(), 1);
     }
 

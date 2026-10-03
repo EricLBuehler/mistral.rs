@@ -2310,6 +2310,17 @@ impl NormalPipeline {
 
 #[async_trait::async_trait]
 impl Pipeline for NormalPipeline {
+    fn set_output_hidden_states(&mut self, enabled: bool) -> candle_core::Result<()> {
+        if self.model.is_xlora() {
+            candle_core::bail!("hidden-state output is not supported with X-LoRA");
+        }
+        self.model.set_output_hidden_states(enabled)
+    }
+
+    fn output_hidden_states(&self) -> bool {
+        self.model.output_hidden_states()
+    }
+
     fn requires_uniform_prompt_batch(&self) -> bool {
         normal_model_requires_uniform_prompt_batch(
             self.model.cache().is_hybrid(),
