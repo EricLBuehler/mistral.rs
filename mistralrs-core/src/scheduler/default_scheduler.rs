@@ -272,9 +272,11 @@ impl<Backer: FcfsBacker> DefaultScheduler<Backer> {
                 }
                 logger.set_num_running(self.running.len());
                 logger.set_num_waiting(self.waiting.len());
+                let (prompt, completion): (Vec<_>, Vec<_>) =
+                    self.running.iter_mut().partition(|seq| seq.is_prompt());
                 return DefaultSchedulerOutput {
-                    prompt: vec![].into(),
-                    completion: self.running.iter_mut().collect::<Vec<_>>().into(),
+                    prompt: prompt.into(),
+                    completion: completion.into(),
                 };
             }
             _ => {}
@@ -728,6 +730,42 @@ mod tests {
             assert!(output.prompt[0].is_prompt());
             assert_eq!(output.prompt[0].token_offset(), expected_offset);
         }
+    }
+
+    #[test]
+    fn running_prompt_is_not_sent_to_decode_when_waiting_is_empty() {
+        let mut scheduler =
+            DefaultScheduler::new(DefaultSchedulerMethod::Fixed(NonZeroUsize::new(1).unwrap()));
+        let prompt = test_sequence(0, None);
+        prompt.set_state(SequenceState::RunningPrompt);
+        scheduler.add_seq(prompt);
+
+        let logger = IntervalLogger::new(TEST_LOG_INTERVAL, None);
+        let output = scheduler.schedule(&logger);
+
+        assert!(output.completion.is_empty());
+        assert_eq!(output.prompt.len(), 1);
+        assert!(output.prompt[0].is_prompt());
+    }
+
+    #[test]
+    fn running_prompt_and_decode_are_partitioned_when_waiting_is_empty() {
+        let mut scheduler =
+            DefaultScheduler::new(DefaultSchedulerMethod::Fixed(NonZeroUsize::new(2).unwrap()));
+        let prompt = test_sequence(0, None);
+        prompt.set_state(SequenceState::RunningPrompt);
+        scheduler.add_seq(prompt);
+        scheduler.add_seq(test_sequence(1, None));
+
+        let logger = IntervalLogger::new(TEST_LOG_INTERVAL, None);
+        let output = scheduler.schedule(&logger);
+
+        assert_eq!(output.prompt.len(), 1);
+        assert_eq!(output.completion.len(), 1);
+        assert_eq!(*output.prompt[0].id(), 0);
+        assert!(output.prompt[0].is_prompt());
+        assert_eq!(*output.completion[0].id(), 1);
+        assert!(output.completion[0].is_completion());
     }
 
     #[test]
