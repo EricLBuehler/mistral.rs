@@ -36,6 +36,7 @@ pub(crate) mod qwen3_5;
 pub(crate) mod qwen3_5_moe;
 pub(crate) mod qwen3_vl;
 pub(crate) mod qwen3_vl_moe;
+pub(crate) mod qwen4_exp;
 pub(crate) mod siglip;
 pub(crate) mod voxtral;
 

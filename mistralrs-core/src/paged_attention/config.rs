@@ -218,6 +218,11 @@ pub trait ModelConfigLike {
     ) -> Option<PrefixPrefillAttentionFeatures> {
         None
     }
+    /// Most keys any prompt query attends through the dense prefix path; longer contexts take a
+    /// sparse path that needs no prefix workspace.
+    fn prefix_prefill_kv_len_cap(&self) -> Option<usize> {
+        None
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -363,6 +368,10 @@ where
         self.base
             .prefix_prefill_attention_features(layer_idx)
             .or(self.fallback)
+    }
+
+    fn prefix_prefill_kv_len_cap(&self) -> Option<usize> {
+        self.base.prefix_prefill_kv_len_cap()
     }
 }
 
@@ -651,6 +660,45 @@ mod tests {
             &original,
             &with_attention_features(original.clone(), None)
         ));
+    }
+
+    #[test]
+    fn attention_feature_fallback_preserves_dense_prefix_cap() {
+        struct CappedConfig;
+        impl ModelConfigLike for CappedConfig {
+            fn max_seq_len(&self) -> usize {
+                65_536
+            }
+            fn num_layers(&self) -> usize {
+                1
+            }
+            fn hidden_size(&self) -> usize {
+                512
+            }
+            fn num_kv_heads(&self) -> usize {
+                2
+            }
+            fn num_attn_heads(&self) -> usize {
+                8
+            }
+            fn k_head_dim(&self) -> usize {
+                64
+            }
+            fn v_head_dim(&self) -> usize {
+                64
+            }
+            fn prefix_prefill_kv_len_cap(&self) -> Option<usize> {
+                Some(1024)
+            }
+        }
+
+        let base = std::sync::Arc::new(CappedConfig);
+        for fallback in [None, Some(super::PrefixPrefillAttentionFeatures::default())] {
+            let wrapped = super::with_attention_features(base.clone(), fallback);
+            assert_eq!(wrapped.prefix_prefill_kv_len_cap(), Some(1024));
+            let borrowed = super::AttentionFeaturesConfig::new(wrapped.as_ref(), fallback);
+            assert_eq!(borrowed.prefix_prefill_kv_len_cap(), Some(1024));
+        }
     }
 
     #[test]

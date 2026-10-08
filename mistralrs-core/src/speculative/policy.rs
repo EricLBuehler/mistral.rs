@@ -31,6 +31,14 @@ impl SpeculativeGraphPlan {
             max_batch_size,
         }
     }
+
+    /// Whether a verify graph of width `q_len` may be replayed or captured at the padded batch `bucket`.
+    pub fn allows(plans: &[Self], q_len: usize, bucket: usize) -> bool {
+        plans
+            .iter()
+            .filter(|plan| 1 + plan.proposal_len == q_len)
+            .all(|plan| plan.max_batch_size.is_none_or(|max| bucket <= max))
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -44,6 +52,18 @@ pub struct SpeculativeBatchObservation {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn graph_plans_cap_their_own_width_only() {
+        let plans = [
+            super::SpeculativeGraphPlan::new(3, Some(4)),
+            super::SpeculativeGraphPlan::new(1, None),
+        ];
+        assert!(super::SpeculativeGraphPlan::allows(&plans, 4, 4));
+        assert!(!super::SpeculativeGraphPlan::allows(&plans, 4, 8));
+        assert!(super::SpeculativeGraphPlan::allows(&plans, 2, 32));
+        assert!(super::SpeculativeGraphPlan::allows(&plans, 6, 32));
+    }
+
     use super::SpeculativeBatchPlan;
 
     #[test]

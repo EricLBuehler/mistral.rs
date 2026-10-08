@@ -255,6 +255,12 @@ impl ModelActivationConfig<'_> {
             .prefix_prefill_attention_features(layer_idx)
             .or(self.architecture.attention_features)
     }
+
+    fn prefix_kv_len(&self, capacity: usize, query_len: usize) -> usize {
+        self.model
+            .prefix_prefill_kv_len_cap()
+            .map_or(capacity, |cap| capacity.min(cap.max(query_len)))
+    }
 }
 
 fn prefill_backend(
@@ -368,14 +374,15 @@ fn prefix_prefill_workspace(
     prefix_query_lengths(max_query, capacity)
         .into_iter()
         .try_fold(0, |peak, query_len| {
+            let kv_len = cfg.prefix_kv_len(capacity, query_len);
             if let Some(bytes) =
-                native_metal_prefill_workspace(ctx, cfg, layer_idx, &[query_len], &[capacity])?
+                native_metal_prefill_workspace(ctx, cfg, layer_idx, &[query_len], &[kv_len])?
             {
                 return Ok(peak.max(bytes));
             }
             let bytes = gather_prefill_workspace_for_lengths(GatherPrefillWorkspaceRequest {
                 query_lens: &[query_len],
-                kv_lens: &[capacity],
+                kv_lens: &[kv_len],
                 q_heads: cfg.model.num_attn_heads_for_layer(layer_idx),
                 kv_heads: cfg.model.num_kv_heads_for_layer(layer_idx),
                 k_head_dim: cfg.model.k_head_dim_for_layer(layer_idx),
@@ -541,15 +548,11 @@ fn model_activation_memory(
         if let Some(capacity) = prefix_context_capacity {
             let bytes = prefix_prefill_workspace(ctx, &cfg, layer_idx, capacity, max_query)?;
             prefix_attention_bytes = prefix_attention_bytes.max(bytes);
+            let query_len = max_query.min(capacity);
+            let kv_len = cfg.prefix_kv_len(capacity, query_len);
             if has_native_custom_mask
-                || native_metal_prefill_workspace(
-                    ctx,
-                    &cfg,
-                    layer_idx,
-                    &[max_query.min(capacity)],
-                    &[capacity],
-                )?
-                .is_none()
+                || native_metal_prefill_workspace(ctx, &cfg, layer_idx, &[query_len], &[kv_len])?
+                    .is_none()
             {
                 prefix_mask_variants.insert(mask_key);
             }
@@ -570,12 +573,14 @@ fn model_activation_memory(
             .context("retained mask size overflow")?,
         ])?;
         if let Some(capacity) = prefix_context_capacity {
+            let query_len = max_query.min(capacity);
+            let kv_len = cfg.prefix_kv_len(capacity, query_len);
             prefix_attention_bytes = sum(&[
                 prefix_attention_bytes,
                 additional_metal_mask_bytes(
                     1,
-                    max_query.min(capacity),
-                    capacity,
+                    query_len,
+                    kv_len,
                     ctx.dtype,
                     prefix_mask_variants.len(),
                 )?
@@ -1041,6 +1046,87 @@ mod tests {
         assert_eq!(capacity(MemoryGoal::Auto, auto)?, None);
         assert_eq!(capacity(MemoryGoal::Utilization(0.9), auto)?, None);
         assert!(capacity(MemoryGoal::KvBytes(bytes_per_block), auto).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn startup_prefix_reservation_respects_dense_cap_and_query_lower_bound() -> Result<()> {
+        struct CappedConfig {
+            cap: Option<usize>,
+        }
+        impl ModelConfigLike for CappedConfig {
+            fn max_seq_len(&self) -> usize {
+                65_536
+            }
+            fn num_layers(&self) -> usize {
+                1
+            }
+            fn hidden_size(&self) -> usize {
+                512
+            }
+            fn num_kv_heads(&self) -> usize {
+                2
+            }
+            fn num_attn_heads(&self) -> usize {
+                8
+            }
+            fn k_head_dim(&self) -> usize {
+                64
+            }
+            fn v_head_dim(&self) -> usize {
+                64
+            }
+            fn prefix_prefill_kv_len_cap(&self) -> Option<usize> {
+                self.cap
+            }
+        }
+
+        let params = AutoDeviceMapParams::default_text();
+        let paged = PagedAttentionConfig::new(
+            Some(32),
+            MemoryGoal::Auto,
+            crate::paged_attention::PagedCacheType::Auto,
+        )?
+        .with_execution_limits(ExecutionMemoryLimits {
+            max_num_seqs: 1,
+            max_num_batched_tokens: 512,
+            max_prefill_chunk_tokens: 512,
+        })?;
+        let architecture = ActivationModelConfig {
+            intermediate_size: 1536,
+            vocab_size: 1024,
+            attention_features: Some(PrefixPrefillAttentionFeatures::default()),
+            ..Default::default()
+        };
+        let estimate = |cap, capacity| {
+            let model = CappedConfig { cap };
+            model_activation_memory(
+                &ActivationMemoryContext {
+                    params: &params,
+                    limits: paged.execution_limits,
+                    dtype: DType::BF16,
+                    device: &Device::Cpu,
+                    paged: &paged,
+                    cache_capacity_tokens: Some(capacity),
+                },
+                ModelActivationConfig {
+                    model: &model,
+                    architecture,
+                },
+            )
+        };
+        let uncapped = estimate(None, 65_536)?;
+        for (cap, capacity, dense_capacity) in
+            [(1024, 65_536, 1024), (128, 65_536, 512), (4096, 1024, 1024)]
+        {
+            let capped = estimate(Some(cap), capacity)?;
+            assert_eq!(capped, estimate(None, dense_capacity)?);
+            assert!(capped.mapped_bytes < uncapped.mapped_bytes);
+            assert_eq!(
+                capped.mapped_non_attention_bytes,
+                uncapped.mapped_non_attention_bytes
+            );
+        }
         Ok(())
     }
 

@@ -5,6 +5,8 @@
 //! canonical ENK), and [`backends`] (materialize + forward). [`forward`] holds the per-call shapes.
 
 mod backends;
+#[cfg(feature = "cuda")]
+pub(crate) use backends::GROUPED_PREFILL_MIN_TOKENS;
 mod checkpoint;
 pub(crate) use checkpoint::{expert_stack_available, rebuild_expert_projection};
 mod config;

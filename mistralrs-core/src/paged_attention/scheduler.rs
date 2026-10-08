@@ -558,11 +558,13 @@ impl PagedAttentionScheduler {
         let mut remaining_tokens = token_budget;
         let mut selected = Vec::with_capacity(len);
         let mut last_selected = start;
+        let mut first_skipped = None;
 
         for offset in 0..len {
             let index = (start + offset) % len;
             let seq = get_mut_arcmutex!(rows[index]);
             if seq.active_staged_speculative_len() != staged_width {
+                first_skipped.get_or_insert(index);
                 continue;
             }
             let token_cost = Self::completion_token_cost(&seq);
@@ -571,10 +573,12 @@ impl PagedAttentionScheduler {
                 remaining_tokens = remaining_tokens.saturating_sub(token_cost);
                 selected.push(index);
                 last_selected = index;
+            } else {
+                first_skipped.get_or_insert(index);
             }
         }
 
-        (selected, (last_selected + 1) % len)
+        (selected, first_skipped.unwrap_or((last_selected + 1) % len))
     }
 
     fn live_completion_rows(&self) -> Vec<Arc<Mutex<Sequence>>> {
@@ -617,6 +621,33 @@ impl PagedAttentionScheduler {
             .min(self.config.max_decode_steps_before_prefill);
     }
 
+    fn completion_depth_hint(
+        rows: &[Arc<Mutex<Sequence>>],
+        selected: &[usize],
+        token_budget: usize,
+    ) -> Option<usize> {
+        if selected.len() == rows.len() {
+            return None;
+        }
+        let first_depth = get_mut_arcmutex!(rows[0]).active_staged_speculative_len();
+        let mut mixed_depths = false;
+        let mut counts = HashMap::<usize, usize>::new();
+        for row in rows {
+            let depth = get_mut_arcmutex!(row).active_staged_speculative_len();
+            mixed_depths |= depth != first_depth;
+            if depth > 0 && rows.len().saturating_mul(depth.saturating_add(1)) <= token_budget {
+                *counts.entry(depth).or_default() += 1;
+            }
+        }
+        if !mixed_depths {
+            return None;
+        }
+        counts
+            .into_iter()
+            .max_by_key(|&(depth, count)| (count, std::cmp::Reverse(depth)))
+            .map(|(depth, _)| depth)
+    }
+
     fn select_completion_batch(&mut self) -> Vec<Arc<Mutex<Sequence>>> {
         let rows = self.running.iter().cloned().collect::<Vec<_>>();
         let (selected, next_cursor) = Self::completion_batch_indices(
@@ -625,9 +656,14 @@ impl PagedAttentionScheduler {
             self.config.max_num_batched_tokens,
         );
         self.completion_cursor = next_cursor;
+        let depth_hint =
+            Self::completion_depth_hint(&rows, &selected, self.config.max_num_batched_tokens);
         selected
             .into_iter()
-            .map(|index| rows[index].clone())
+            .map(|index| {
+                get_mut_arcmutex!(rows[index]).set_speculative_depth_hint(depth_hint);
+                rows[index].clone()
+            })
             .collect()
     }
 
@@ -888,7 +924,8 @@ impl PagedAttentionScheduler {
         mut prefix_validator: Option<&mut dyn PagedPrefixCacheValidator>,
     ) -> PagedAttentionSchedulerOutput {
         for seq in &self.running {
-            let seq = get_mut_arcmutex!(seq);
+            let mut seq = get_mut_arcmutex!(seq);
+            seq.set_speculative_depth_hint(None);
             if seq.is_prompt() && seq.num_computed_tokens() == seq.len() {
                 seq.set_state(SequenceState::RunningCompletion);
             }
@@ -4106,6 +4143,160 @@ mod tests {
             .map(|seq| *get_mut_arcmutex!(seq).id())
             .collect::<Vec<_>>();
         assert_eq!(joined_ids, vec![0, 1, 2]);
+    }
+
+    #[test]
+    fn completion_batches_rotate_to_interior_staged_widths() {
+        let widths = [2, 2, 6, 2, 6, 2, 2, 2];
+        let rows = widths
+            .iter()
+            .enumerate()
+            .map(|(id, &width)| {
+                let seq = test_sequence(id, 4);
+                let mut guard = get_mut_arcmutex!(seq);
+                guard.set_num_computed_tokens(4);
+                guard.set_staged_speculative(vec![10; width], None);
+                drop(guard);
+                seq
+            })
+            .collect::<Vec<_>>();
+
+        let (first, cursor) = PagedAttentionScheduler::completion_batch_indices(&rows, 0, 4096);
+        assert_eq!(first, vec![0, 1, 3, 5, 6, 7]);
+        let (second, cursor) =
+            PagedAttentionScheduler::completion_batch_indices(&rows, cursor, 4096);
+        assert_eq!(second, vec![2, 4]);
+        let (third, _) = PagedAttentionScheduler::completion_batch_indices(&rows, cursor, 4096);
+        assert_eq!(third, vec![3, 5, 6, 7, 0, 1]);
+        assert_eq!(
+            rows.iter()
+                .map(|seq| get_mut_arcmutex!(seq).active_staged_speculative_len())
+                .collect::<Vec<_>>(),
+            widths
+        );
+    }
+
+    #[test]
+    fn completion_batches_rotate_to_interior_rows_over_budget() {
+        let rows = [1, 4, 1]
+            .iter()
+            .enumerate()
+            .map(|(id, &uncomputed)| {
+                let seq = test_sequence(id, 4);
+                get_mut_arcmutex!(seq).set_num_computed_tokens(4 - uncomputed);
+                seq
+            })
+            .collect::<Vec<_>>();
+
+        let (first, cursor) = PagedAttentionScheduler::completion_batch_indices(&rows, 0, 2);
+        assert_eq!(first, vec![0, 2]);
+        let (second, cursor) = PagedAttentionScheduler::completion_batch_indices(&rows, cursor, 2);
+        assert_eq!(second, vec![1]);
+        let (third, _) = PagedAttentionScheduler::completion_batch_indices(&rows, cursor, 2);
+        assert_eq!(third, vec![2, 0]);
+    }
+
+    #[test]
+    fn mixed_depth_batches_merge_after_their_next_proposals() {
+        let mut scheduler = test_scheduler();
+        for (id, width) in [2, 2, 6, 2, 6, 2].into_iter().enumerate() {
+            let seq = test_sequence(id, 4);
+            let mut guard = get_mut_arcmutex!(seq);
+            guard.set_num_computed_tokens(4);
+            guard.set_staged_speculative(vec![10; width], None);
+            drop(guard);
+            scheduler.running.push_back(seq);
+        }
+        let mut tuner = crate::speculative::autotuner::SpeculativeAutotuner::default();
+        tuner.set_candidates(&[2, 3, 4, 6]);
+        let logger = IntervalLogger::new(std::time::Duration::from_secs(3600), None);
+
+        for expected_ids in [vec![0, 1, 3, 5], vec![2, 4]] {
+            let batch = scheduler.schedule(&logger, None);
+            let ids = batch
+                .scheduled
+                .iter()
+                .map(|seq| *get_mut_arcmutex!(seq).id())
+                .collect::<Vec<_>>();
+            assert_eq!(ids, expected_ids);
+            let hint = get_mut_arcmutex!(batch.scheduled[0]).speculative_depth_hint();
+            assert_eq!(hint, Some(2));
+            let depth = tuner.choose_with_hint(&ids, 6, hint);
+            assert_eq!(depth, 2);
+            for seq in &batch.scheduled {
+                get_mut_arcmutex!(seq).set_staged_speculative(vec![11; depth], None);
+            }
+        }
+
+        let merged = scheduler.schedule(&logger, None);
+        assert_eq!(merged.scheduled.len(), 6);
+        for seq in &merged.scheduled {
+            let seq = get_mut_arcmutex!(seq);
+            assert_eq!(seq.active_staged_speculative_len(), 2);
+            assert_eq!(seq.speculative_depth_hint(), None);
+        }
+    }
+
+    #[test]
+    fn completion_depth_hint_requires_a_joint_batch_within_budget() {
+        let mut scheduler = test_scheduler();
+        scheduler.config.max_num_batched_tokens = 8;
+        for (id, width) in [2, 6, 2].into_iter().enumerate() {
+            let seq = test_sequence(id, 4);
+            let mut guard = get_mut_arcmutex!(seq);
+            guard.set_num_computed_tokens(4);
+            guard.set_staged_speculative(vec![10; width], None);
+            guard.set_speculative_depth_hint(Some(6));
+            drop(guard);
+            scheduler.running.push_back(seq);
+        }
+        let logger = IntervalLogger::new(std::time::Duration::from_secs(3600), None);
+
+        let batch = scheduler.schedule(&logger, None);
+        assert_eq!(batch.scheduled.len(), 2);
+        assert!(scheduler
+            .running
+            .iter()
+            .all(|seq| { get_mut_arcmutex!(seq).speculative_depth_hint().is_none() }));
+    }
+
+    #[test]
+    fn matching_depths_split_by_token_cost_do_not_get_a_hint() {
+        let rows = [0, 9]
+            .into_iter()
+            .enumerate()
+            .map(|(id, computed)| {
+                let seq = test_sequence(id, 10);
+                let mut guard = get_mut_arcmutex!(seq);
+                guard.set_num_computed_tokens(computed);
+                guard.set_staged_speculative(vec![10; 2], None);
+                drop(guard);
+                seq
+            })
+            .collect::<Vec<_>>();
+        let (selected, _) = PagedAttentionScheduler::completion_batch_indices(&rows, 0, 6);
+        assert_eq!(selected, vec![0]);
+        assert_eq!(
+            PagedAttentionScheduler::completion_depth_hint(&rows, &selected, 6),
+            None
+        );
+    }
+
+    #[test]
+    fn completion_depth_hint_breaks_ties_toward_shallower_drafts() {
+        let rows = [6, 2]
+            .into_iter()
+            .enumerate()
+            .map(|(id, width)| {
+                let seq = test_sequence(id, 4);
+                get_mut_arcmutex!(seq).set_staged_speculative(vec![10; width], None);
+                seq
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            PagedAttentionScheduler::completion_depth_hint(&rows, &[0], 32),
+            Some(2)
+        );
     }
 
     #[test]

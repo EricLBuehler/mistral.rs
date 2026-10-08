@@ -485,6 +485,73 @@ pub fn get_device_layers(
 mod tests {
     use super::*;
     use crate::paged_attention::{KvCacheLayout, ModelConfigMetadata, PagedCacheType};
+    use crate::vision_models::qwen4_exp::{
+        config::{LayerType, QsaConfig},
+        Qwen4ExpPagedConfig,
+    };
+
+    #[test]
+    fn paged_reservations_include_aux_buffers_and_cache_dtype() -> Result<()> {
+        let base = ModelConfigMetadata {
+            max_seq_len: 128,
+            num_layers: 3,
+            hidden_size: 2560,
+            num_attn_heads: 24,
+            num_kv_heads: 2,
+            sliding_window: None,
+            k_head_dim: 256,
+            v_head_dim: 256,
+            kv_cache_layout: KvCacheLayout::Standard,
+        };
+        let qsa = QsaConfig {
+            n_heads: 4,
+            head_dim: 128,
+            budget: 2048,
+            compress_ratio: 4,
+        };
+        let rot_dim = 64;
+        let model = Qwen4ExpPagedConfig::new(
+            base.clone(),
+            &[
+                LayerType::FullAttention,
+                LayerType::LinearAttention,
+                LayerType::FullAttention,
+            ],
+            qsa.aux_cache_elements_per_token(rot_dim),
+            qsa.max_selected_tokens(),
+        );
+        let mut cache = CacheConfig {
+            block_size: 32,
+            num_gpu_blocks: 5,
+            cache_type: PagedCacheType::Auto,
+            kv_cache_group_ids: vec![0],
+        };
+        let slots = cache.block_size * cache.num_gpu_blocks;
+        let kv = slots * base.num_kv_heads * (base.k_head_dim + base.v_head_dim);
+        let raw_aux = slots * (qsa.head_dim + rot_dim);
+        let block_keys = slots / qsa.compress_ratio * qsa.head_dim;
+        let expected = (kv + raw_aux + block_keys) * DType::BF16.size_in_bytes();
+        let per_layer = (0..model.num_layers())
+            .map(|idx| paged_layer_cache_bytes(&model, idx, DType::BF16, &cache))
+            .collect::<Result<Vec<_>>>()?;
+        assert_eq!(per_layer, [expected, 0, expected]);
+        let goal = PagedAttentionConfig::new(
+            Some(cache.block_size),
+            MemoryGoal::KvBytes(2 * expected),
+            PagedCacheType::Auto,
+        )?;
+        assert_eq!(
+            mapping_cache_config(&model, DType::BF16, &goal)?.num_gpu_blocks,
+            cache.num_gpu_blocks
+        );
+
+        cache.cache_type = PagedCacheType::F8E4M3;
+        let per_layer = (0..base.num_layers())
+            .map(|idx| paged_layer_cache_bytes(&base, idx, DType::BF16, &cache))
+            .collect::<Result<Vec<_>>>()?;
+        assert_eq!(per_layer, [kv; 3]);
+        Ok(())
+    }
 
     fn cache_test_model() -> ModelConfigMetadata {
         ModelConfigMetadata {

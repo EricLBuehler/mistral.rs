@@ -19,6 +19,10 @@ jobs:
 
     runs-on: [self-hosted, Linux, ARM64, gpu, cuda]
 
+    env:
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_PROFILE_TEST_DEBUG: "0"
+
     strategy:
       fail-fast: false
       matrix:

@@ -26,9 +26,11 @@ const MOE_OUTPUT_F32: i32 = 0;
 const MOE_OUTPUT_F16: i32 = 1;
 const MOE_OUTPUT_BF16: i32 = 2;
 
+// Captured CUDA graphs keep the pointers they saw, so a superseded workspace is retired, never freed
 struct DispatchWorkspaceSlot {
     slice: CudaSlice<u32>,
     cap: usize,
+    retired: Vec<CudaSlice<u32>>,
 }
 
 #[derive(Clone, Copy, Eq, Hash, PartialEq)]
@@ -44,11 +46,13 @@ static MOE_DISPATCH_WORKSPACE: OnceLock<DispatchWsMap> = OnceLock::new();
 struct U8WorkspaceSlot {
     slice: CudaSlice<u8>,
     cap: usize,
+    retired: Vec<CudaSlice<u8>>,
 }
 
 struct F32WorkspaceSlot {
     slice: CudaSlice<f32>,
     cap: usize,
+    retired: Vec<CudaSlice<f32>>,
 }
 
 type U8WsMap = Mutex<HashMap<WorkspaceKey, &'static Mutex<U8WorkspaceSlot>>>;
@@ -68,7 +72,7 @@ fn dispatch_workspace_ensure(
     dev: &CudaDevice,
     len: usize,
 ) -> Result<(u64, std::sync::MutexGuard<'static, DispatchWorkspaceSlot>)> {
-    let len = len.max(1);
+    let len = len.max(1).next_power_of_two();
     let map = MOE_DISPATCH_WORKSPACE.get_or_init(|| Mutex::new(HashMap::new()));
     let key = workspace_key(dev);
     let device_mtx: &'static Mutex<DispatchWorkspaceSlot> = {
@@ -80,6 +84,7 @@ fn dispatch_workspace_ensure(
                 let leaked = Box::leak(Box::new(Mutex::new(DispatchWorkspaceSlot {
                     slice,
                     cap: len,
+                    retired: Vec::new(),
                 })));
                 guard.insert(key, leaked);
                 leaked
@@ -88,7 +93,8 @@ fn dispatch_workspace_ensure(
     };
     let mut slot = device_mtx.lock().unwrap();
     if slot.cap < len {
-        slot.slice = unsafe { dev.alloc::<u32>(len)? };
+        let old = std::mem::replace(&mut slot.slice, unsafe { dev.alloc::<u32>(len)? });
+        slot.retired.push(old);
         slot.cap = len;
     }
     let ptr = slot.slice.device_ptr(slot.slice.stream()).0;
@@ -100,7 +106,7 @@ fn u8_workspace_ensure(
     dev: &CudaDevice,
     len: usize,
 ) -> Result<std::sync::MutexGuard<'static, U8WorkspaceSlot>> {
-    let len = len.max(1);
+    let len = len.max(1).next_power_of_two();
     let map = ws.get_or_init(|| Mutex::new(HashMap::new()));
     let key = workspace_key(dev);
     let device_mtx: &'static Mutex<U8WorkspaceSlot> = {
@@ -109,7 +115,11 @@ fn u8_workspace_ensure(
             Some(mtx) => mtx,
             None => {
                 let slice = unsafe { dev.alloc::<u8>(len)? };
-                let leaked = Box::leak(Box::new(Mutex::new(U8WorkspaceSlot { slice, cap: len })));
+                let leaked = Box::leak(Box::new(Mutex::new(U8WorkspaceSlot {
+                    slice,
+                    cap: len,
+                    retired: Vec::new(),
+                })));
                 guard.insert(key, leaked);
                 leaked
             }
@@ -117,7 +127,8 @@ fn u8_workspace_ensure(
     };
     let mut slot = device_mtx.lock().unwrap();
     if slot.cap < len {
-        slot.slice = unsafe { dev.alloc::<u8>(len)? };
+        let old = std::mem::replace(&mut slot.slice, unsafe { dev.alloc::<u8>(len)? });
+        slot.retired.push(old);
         slot.cap = len;
     }
     Ok(slot)
@@ -128,7 +139,7 @@ fn f32_workspace_ensure(
     dev: &CudaDevice,
     len: usize,
 ) -> Result<std::sync::MutexGuard<'static, F32WorkspaceSlot>> {
-    let len = len.max(1);
+    let len = len.max(1).next_power_of_two();
     let map = ws.get_or_init(|| Mutex::new(HashMap::new()));
     let key = workspace_key(dev);
     let device_mtx: &'static Mutex<F32WorkspaceSlot> = {
@@ -137,7 +148,11 @@ fn f32_workspace_ensure(
             Some(mtx) => mtx,
             None => {
                 let slice = unsafe { dev.alloc::<f32>(len)? };
-                let leaked = Box::leak(Box::new(Mutex::new(F32WorkspaceSlot { slice, cap: len })));
+                let leaked = Box::leak(Box::new(Mutex::new(F32WorkspaceSlot {
+                    slice,
+                    cap: len,
+                    retired: Vec::new(),
+                })));
                 guard.insert(key, leaked);
                 leaked
             }
@@ -145,7 +160,8 @@ fn f32_workspace_ensure(
     };
     let mut slot = device_mtx.lock().unwrap();
     if slot.cap < len {
-        slot.slice = unsafe { dev.alloc::<f32>(len)? };
+        let old = std::mem::replace(&mut slot.slice, unsafe { dev.alloc::<f32>(len)? });
+        slot.retired.push(old);
         slot.cap = len;
     }
     Ok(slot)

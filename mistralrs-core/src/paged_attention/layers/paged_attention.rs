@@ -2864,6 +2864,33 @@ impl PagedAttention {
         self.run_decode(&ctx, tensors, &mut key_cache, &mut value_cache, write_cache)
     }
 
+    /// Write key/value into the paged cache without running attention.
+    #[cfg(feature = "cuda")]
+    pub fn write_cache(
+        &self,
+        key: &Tensor,
+        value: &Tensor,
+        key_cache: &mut Tensor,
+        value_cache: &mut Tensor,
+        input_metadata: &PagedAttentionInputMetadata,
+    ) -> Result<()> {
+        let scales = self.cache_scales(key_cache);
+        write_kv_cache(
+            key,
+            value,
+            key_cache,
+            value_cache,
+            CacheWriteParams {
+                scales,
+                slot_mapping: input_metadata
+                    .slot_mappings
+                    .get(&key.device().location())
+                    .unwrap(),
+                memory: input_metadata.attention_memory.as_ref(),
+            },
+        )
+    }
+
     /// Standard paged attention forward: writes key/value to cache, then
     /// runs attention (Sdpa for prompt, paged kernel for decode).
     #[allow(clippy::too_many_arguments)]

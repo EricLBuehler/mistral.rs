@@ -290,6 +290,19 @@ pub fn get_auto_device_map_params(model: &ModelSelected) -> anyhow::Result<AutoD
 }
 
 fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loader>> {
+    if args.mtp
+        && matches!(
+            &args.model,
+            ModelSelected::GGUF { .. }
+                | ModelSelected::LoraGGUF { .. }
+                | ModelSelected::XLoraGGUF { .. }
+                | ModelSelected::GGML { .. }
+                | ModelSelected::LoraGGML { .. }
+                | ModelSelected::XLoraGGML { .. }
+        )
+    {
+        anyhow::bail!("Built-in MTP is not supported for GGUF or GGML models. Use a safetensors checkpoint with --isq and --mtp, or omit --mtp.");
+    }
     if args.max_model_len == Some(0) {
         anyhow::bail!("max_model_len must be greater than zero");
     }
@@ -915,4 +928,29 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
         }
     };
     Ok(loader)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn gguf_builtin_mtp_fails_before_loading_weights() -> anyhow::Result<()> {
+        let selected: ModelSelected = serde_json::from_value(serde_json::json!({
+            "GGUF": {
+                "quantized_model_id": "missing-model",
+                "quantized_filename": "missing.gguf",
+                "dtype": "auto",
+                "max_seq_len": 4096,
+                "max_batch_size": 1
+            }
+        }))?;
+        let error = LoaderBuilder::new(selected)
+            .with_mtp(true)
+            .build()
+            .err()
+            .expect("GGUF cannot load a built-in MTP head");
+        assert!(error.to_string().contains("Built-in MTP is not supported"));
+        Ok(())
+    }
 }

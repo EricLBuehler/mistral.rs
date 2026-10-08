@@ -11,7 +11,7 @@ use super::backend;
 use super::cache::GdnLayerCache;
 #[cfg(feature = "cuda")]
 use super::config::GdnVHeadLayout;
-use super::config::{GdnConfig, GdnDims};
+use super::config::{GdnConfig, GdnDims, GdnGateActivation};
 use super::norm::RmsNormGated;
 use super::packed::PackedGdnLayout;
 use super::projection::{GdnCoreProjection, GdnInputProjection, GdnProjection};
@@ -279,6 +279,7 @@ impl GatedDeltaNet {
             && pool.recurrent_dtype() == DType::F32
             && self.dims.head_k_dim == crate::cuda::gdn::GDN_DECODE_K_DIM
             && self.dims.head_v_dim == crate::cuda::gdn::GDN_DECODE_V_DIM
+            && self.norm.activation() == GdnGateActivation::Silu
             && self.norm.weight.dtype() == activation_dtype
             && self.norm.weight.device().same_device(pool.device())
     }
@@ -833,6 +834,7 @@ impl GatedDeltaNet {
             gate: &projected.z,
             weight: &self.norm.weight,
             eps: self.norm.eps(),
+            sigmoid_gate: self.norm.activation() == GdnGateActivation::Sigmoid,
             quantization: self.fp8_output_spec(&projected.z, batch_size, seq_len),
         });
         let pending_recurrence = cache.pending_transitions.as_ref().map(|pending| {

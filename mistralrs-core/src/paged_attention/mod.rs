@@ -191,6 +191,48 @@ mod tests {
     }
 
     #[test]
+    fn token_budget_fits_requested_tokens_and_reserved_block() -> anyhow::Result<()> {
+        for head_dim in [8, 128] {
+            let model = ModelConfigMetadata {
+                max_seq_len: 4096,
+                num_layers: 16,
+                hidden_size: 1024,
+                num_kv_heads: 8,
+                num_attn_heads: 8,
+                sliding_window: None,
+                k_head_dim: head_dim,
+                v_head_dim: head_dim,
+                kv_cache_layout: KvCacheLayout::Standard,
+            };
+            for tokens in [1, 31, 32, 33, 4096] {
+                let mut config = PagedAttentionConfig::new(
+                    Some(32),
+                    MemoryGoal::KvTokens(tokens),
+                    PagedCacheType::Auto,
+                )?;
+                let cache = super::calculate_cache_config(
+                    &mut config,
+                    super::CacheConfigRequest {
+                        memory_reservations: super::CacheMemoryReservations::default(),
+                        dtype: candle_core::DType::BF16,
+                        model: &model,
+                        device: &candle_core::Device::Cpu,
+                        layer_devices: &[],
+                        capacity_activation_estimate: &|_| Ok(Default::default()),
+                        silent: true,
+                    },
+                )?;
+                assert!(
+                    (cache.num_gpu_blocks - 1) * cache.block_size >= tokens,
+                    "token capacity {tokens} does not fit with head dimension {head_dim}"
+                );
+                assert_eq!(cache.num_gpu_blocks, tokens.div_ceil(cache.block_size) + 1);
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
     fn rounded_buffers_reduce_byte_capacity_without_reducing_token_goals() -> anyhow::Result<()> {
         const ALIGNMENT: usize = 16;
         let allocation = |blocks: usize| {

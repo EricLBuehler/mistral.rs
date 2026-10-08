@@ -18,8 +18,8 @@ pub fn once_log_debug<M: AsRef<str>>(msg: M) {
     let mut log = CACHED_DEBUG.lock().expect("Poisoned Lock");
     if !log.contains(&hash) {
         debug!("{msg}");
+        log.push(hash);
     }
-    log.push(hash);
 }
 
 pub fn once_log_info<M: AsRef<str>>(msg: M) {
@@ -31,8 +31,8 @@ pub fn once_log_info<M: AsRef<str>>(msg: M) {
     let mut log = CACHED_INFO.lock().expect("Poisoned Lock");
     if !log.contains(&hash) {
         info!("{msg}");
+        log.push(hash);
     }
-    log.push(hash);
 }
 
 pub fn once_log_warn<M: AsRef<str>>(msg: M) {
@@ -44,6 +44,30 @@ pub fn once_log_warn<M: AsRef<str>>(msg: M) {
     let mut log = CACHED_WARN.lock().expect("Poisoned Lock");
     if !log.contains(&hash) {
         warn!("{msg}");
+        log.push(hash);
     }
-    log.push(hash);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const REPEATS: usize = 4;
+    const MESSAGE: &str = concat!(module_path!(), "::repeated_messages_are_cached_once");
+
+    #[test]
+    fn repeated_messages_are_cached_once() {
+        for _ in 0..REPEATS {
+            once_log_debug(MESSAGE);
+            once_log_info(MESSAGE);
+            once_log_warn(MESSAGE);
+        }
+        let mut hasher = DefaultHasher::new();
+        MESSAGE.hash(&mut hasher);
+        let hash = hasher.finish();
+        for cache in [&CACHED_DEBUG, &CACHED_INFO, &CACHED_WARN] {
+            let log = cache.lock().expect("Poisoned Lock");
+            assert_eq!(log.iter().filter(|&&entry| entry == hash).count(), 1);
+        }
+    }
 }
