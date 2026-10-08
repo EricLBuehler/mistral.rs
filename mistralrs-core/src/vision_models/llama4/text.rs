@@ -977,7 +977,11 @@ impl TextModel {
         } else {
             None
         };
-        let chunked_mask = if chunked_flash_params.is_none() {
+        let chunked_mask = if ctx.is_paged() && x.device().is_metal() {
+            AttentionMask::ChunkedCausal {
+                chunk_size: self.attention_chunk_size,
+            }
+        } else if chunked_flash_params.is_none() {
             fixed_chunk_attention_mask(
                 input_ids,
                 ctx.seqlen_offsets(),

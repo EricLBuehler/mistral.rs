@@ -47,8 +47,8 @@ mistralrs tune [OPTIONS] [COMMAND]
 | `--topology <TOPOLOGY>` |  | Topology YAML file for device mapping |
 | `--hf-cache <HF_CACHE>` |  | Custom Hugging Face cache directory |
 | `--paged-attn <MODE>` | `auto` | PagedAttention mode - auto: enabled on CUDA and Metal, disabled on CPU (default) - on: force enable (fails if unsupported) - off: force disable. Possible values: `auto`, `on`, `off`. |
-| `--kv-cache <KV_CACHE>` |  | Explicit KV cache capacity, such as 4GiB or 65536tokens |
 | `--gpu-memory-utilization <GPU_MEMORY_UTILIZATION>` |  | Fraction of physical GPU memory available to model weights, workspace, and KV cache |
+| `--kv-cache <KV_CACHE>` |  | Explicit KV cache capacity, such as 4GiB or 65536tokens |
 | `--pa-block-size <BLOCK_SIZE>` |  | Tokens per block (default: 32 on CUDA and Metal) |
 | `--pa-cache-type <CACHE_TYPE>` | `auto` | KV cache quantization type |
 | `--encoder-cache-memory-mb <ENCODER_CACHE_MEMORY_MB>` |  | Maximum logical tensor memory retained by the multimodal encoder cache, in MiB |
@@ -101,8 +101,8 @@ mistralrs tune auto [OPTIONS] --model-id <MODEL_ID>
 | `--topology <TOPOLOGY>` |  | Topology YAML file for device mapping |
 | `--hf-cache <HF_CACHE>` |  | Custom Hugging Face cache directory |
 | `--paged-attn <MODE>` | `auto` | PagedAttention mode - auto: enabled on CUDA and Metal, disabled on CPU (default) - on: force enable (fails if unsupported) - off: force disable. Possible values: `auto`, `on`, `off`. |
-| `--kv-cache <KV_CACHE>` |  | Explicit KV cache capacity, such as 4GiB or 65536tokens |
 | `--gpu-memory-utilization <GPU_MEMORY_UTILIZATION>` |  | Fraction of physical GPU memory available to model weights, workspace, and KV cache |
+| `--kv-cache <KV_CACHE>` |  | Explicit KV cache capacity, such as 4GiB or 65536tokens |
 | `--pa-block-size <BLOCK_SIZE>` |  | Tokens per block (default: 32 on CUDA and Metal) |
 | `--pa-cache-type <CACHE_TYPE>` | `auto` | KV cache quantization type |
 | `--encoder-cache-memory-mb <ENCODER_CACHE_MEMORY_MB>` |  | Maximum logical tensor memory retained by the multimodal encoder cache, in MiB |
@@ -152,8 +152,8 @@ mistralrs tune text [OPTIONS] --model-id <MODEL_ID>
 | `--topology <TOPOLOGY>` |  | Topology YAML file for device mapping |
 | `--hf-cache <HF_CACHE>` |  | Custom Hugging Face cache directory |
 | `--paged-attn <MODE>` | `auto` | PagedAttention mode - auto: enabled on CUDA and Metal, disabled on CPU (default) - on: force enable (fails if unsupported) - off: force disable. Possible values: `auto`, `on`, `off`. |
-| `--kv-cache <KV_CACHE>` |  | Explicit KV cache capacity, such as 4GiB or 65536tokens |
 | `--gpu-memory-utilization <GPU_MEMORY_UTILIZATION>` |  | Fraction of physical GPU memory available to model weights, workspace, and KV cache |
+| `--kv-cache <KV_CACHE>` |  | Explicit KV cache capacity, such as 4GiB or 65536tokens |
 | `--pa-block-size <BLOCK_SIZE>` |  | Tokens per block (default: 32 on CUDA and Metal) |
 | `--pa-cache-type <CACHE_TYPE>` | `auto` | KV cache quantization type |
 
@@ -194,8 +194,8 @@ mistralrs tune multimodal [OPTIONS] --model-id <MODEL_ID>
 | `--topology <TOPOLOGY>` |  | Topology YAML file for device mapping |
 | `--hf-cache <HF_CACHE>` |  | Custom Hugging Face cache directory |
 | `--paged-attn <MODE>` | `auto` | PagedAttention mode - auto: enabled on CUDA and Metal, disabled on CPU (default) - on: force enable (fails if unsupported) - off: force disable. Possible values: `auto`, `on`, `off`. |
-| `--kv-cache <KV_CACHE>` |  | Explicit KV cache capacity, such as 4GiB or 65536tokens |
 | `--gpu-memory-utilization <GPU_MEMORY_UTILIZATION>` |  | Fraction of physical GPU memory available to model weights, workspace, and KV cache |
+| `--kv-cache <KV_CACHE>` |  | Explicit KV cache capacity, such as 4GiB or 65536tokens |
 | `--pa-block-size <BLOCK_SIZE>` |  | Tokens per block (default: 32 on CUDA and Metal) |
 | `--pa-cache-type <CACHE_TYPE>` | `auto` | KV cache quantization type |
 | `--encoder-cache-memory-mb <ENCODER_CACHE_MEMORY_MB>` |  | Maximum logical tensor memory retained by the multimodal encoder cache, in MiB |
@@ -277,8 +277,7 @@ mistralrs tune embedding [OPTIONS] --model-id <MODEL_ID>
 | `--topology <TOPOLOGY>` |  | Topology YAML file for device mapping |
 | `--hf-cache <HF_CACHE>` |  | Custom Hugging Face cache directory |
 | `--paged-attn <MODE>` | `auto` | PagedAttention mode - auto: enabled on CUDA and Metal, disabled on CPU (default) - on: force enable (fails if unsupported) - off: force disable. Possible values: `auto`, `on`, `off`. |
-| `--kv-cache <KV_CACHE>` |  | Explicit KV cache capacity, such as 4GiB or 65536tokens |
 | `--gpu-memory-utilization <GPU_MEMORY_UTILIZATION>` |  | Fraction of physical GPU memory available to model weights, workspace, and KV cache |
+| `--kv-cache <KV_CACHE>` |  | Explicit KV cache capacity, such as 4GiB or 65536tokens |
 | `--pa-block-size <BLOCK_SIZE>` |  | Tokens per block (default: 32 on CUDA and Metal) |
 | `--pa-cache-type <CACHE_TYPE>` | `auto` | KV cache quantization type |
-

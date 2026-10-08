@@ -295,6 +295,8 @@ pub struct PagedAttentionConfig {
     pub(crate) logits_bytes_per_query_token: usize,
     pub(crate) primary_non_attention_memory_reservation_bytes: usize,
     pub(crate) mapped_non_attention_memory_reservation_bytes: usize,
+    pub(crate) custom_prefill_mask: bool,
+    pub(crate) metal_prefill_mask_is_structured: bool,
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -334,6 +336,8 @@ impl PagedAttentionConfig {
             logits_bytes_per_query_token: 0,
             primary_non_attention_memory_reservation_bytes: 0,
             mapped_non_attention_memory_reservation_bytes: 0,
+            custom_prefill_mask: false,
+            metal_prefill_mask_is_structured: false,
         })
     }
 
@@ -388,6 +392,8 @@ impl PagedAttentionConfig {
             mapped_non_attention_bytes: self.mapped_non_attention_memory_reservation_bytes,
             planned_query_tokens: self.planned_query_tokens,
             logits_bytes_per_query_token: self.logits_bytes_per_query_token,
+            custom_prefill_mask: self.custom_prefill_mask,
+            metal_prefill_mask_is_structured: self.metal_prefill_mask_is_structured,
         }
     }
 
@@ -773,14 +779,20 @@ pub fn calculate_cache_config(
         } else {
             0
         };
-        let available = paged_config
-            .allocation_budget(cache_device, memory)?
+        let allocation_budget = paged_config.allocation_budget(cache_device, memory)?;
+        let available = allocation_budget
             .checked_sub(reserved)
             .and_then(|remaining| remaining.checked_sub(affine))
             .ok_or_else(|| {
                 anyhow::anyhow!(
-                    "Runtime and pending-weight reservations no longer fit the memory budget on {:?}",
-                    cache_device.location()
+                    "After loading on {:?}, runtime reservations need {} MiB and pending weights need {} MiB, but only {} MiB remains usable under the memory goal ({} MiB allocated, {} MiB physically available, {} MiB engine limit)",
+                    cache_device.location(),
+                    reserved.div_ceil(SIZE_IN_MB),
+                    affine.div_ceil(SIZE_IN_MB),
+                    allocation_budget / SIZE_IN_MB,
+                    budget.occupied_bytes / SIZE_IN_MB,
+                    memory.physical_available() / SIZE_IN_MB,
+                    budget.engine_limit_bytes / SIZE_IN_MB,
                 )
             })?;
         let upper = available
@@ -802,7 +814,13 @@ pub fn calculate_cache_config(
             );
         }
         available_blocks = available_blocks.min(blocks);
-        budgets.push((budget, reserved.saturating_add(affine), available));
+        budgets.push((
+            budget,
+            reserved.saturating_add(affine),
+            available,
+            memory.physical_available(),
+            allocation_budget,
+        ));
     }
     let num_gpu_blocks = requested_blocks.unwrap_or(available_blocks);
     if num_gpu_blocks < 2 {
@@ -817,12 +835,16 @@ pub fn calculate_cache_config(
         .ok_or_else(|| anyhow::anyhow!("KV token capacity overflow"))?;
     let final_activation = activation_for_blocks(num_gpu_blocks)?;
     if !silent {
-        for (allocation, (budget, reserved, available)) in devices.iter().zip(budgets) {
+        for (allocation, (budget, reserved, available, physical_available, allocation_budget)) in
+            devices.iter().zip(budgets)
+        {
             let extra = extra_activation(num_gpu_blocks, allocation.device.same_device(device))?;
             info!(
-                "Memory plan {:?}: physical {} MiB, engine limit {} MiB, existing occupancy {} MiB, runtime reservation {} MiB, KV budget {} MiB ({goal})",
+                "Memory plan {:?}: physical {} MiB, engine limit {} MiB, existing occupancy {} MiB, physically available {} MiB, live allocation budget {} MiB, model allocation budget {} MiB, runtime reservation {} MiB, KV budget {} MiB ({goal})",
                 allocation.device.location(), budget.physical_bytes / SIZE_IN_MB,
                 budget.engine_limit_bytes / SIZE_IN_MB, budget.occupied_bytes / SIZE_IN_MB,
+                physical_available / SIZE_IN_MB, budget.allocatable_bytes / SIZE_IN_MB,
+                allocation_budget / SIZE_IN_MB,
                 reserved.saturating_add(extra).div_ceil(SIZE_IN_MB), available.saturating_sub(extra) / SIZE_IN_MB,
             );
         }

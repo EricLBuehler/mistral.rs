@@ -46,7 +46,7 @@ quant = "4"
 
 | Field | CLI flag | Default | Purpose |
 |---|---|---|---|
-| `max_seqs` | `--max-seqs` | 32 | Max concurrent sequences. |
+| `max_seqs` | `--max-seqs` | 1 for `run`, 32 for `serve` | Max concurrent sequences. An explicit value overrides the command default. |
 | `no_kv_cache` | `--no-kv-cache` | false | Disable KV cache entirely. |
 | `prefix_cache_n` | `--prefix-cache-n` | 16 | Prefix caches retained (0 to disable). |
 | `chat_template` | `-c`, `--chat-template` | not set | Custom chat template file (`.json` or `.jinja`), applied to every model. Per-model `chat_template` in `[[models]]` overrides it. |

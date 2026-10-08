@@ -5,11 +5,12 @@ use std::{collections::HashMap, time::Instant};
 use candle_core::{DType, Device, Result, Tensor};
 use float8::F8E4M3;
 use mistralrs_paged_attn::{
-    copy_blocks, gather_kv_cache, paged_attention_with_window, reshape_and_cache, swap_blocks,
+    copy_blocks, gather_kv_cache, metal_paged_prefill, paged_attention_with_window,
+    reshape_and_cache, swap_blocks, MetalPagedPrefillRequest,
 };
 
 use crate::{
-    attention::{AttentionMask, SdpaParams},
+    attention::{AttentionMask, Sdpa, SdpaParams},
     pipeline::text_models_inputs_processor::PagedAttentionInputMetadata,
 };
 
@@ -37,6 +38,14 @@ const BENCH_TIMED_ITERS: usize = 10;
 const DONOR_QUERY_LENGTHS: [&[usize]; 3] =
     [&[224], &[543], &[31, 64, 224, 511, 512, 513, 529, 543]];
 const DONOR_CROPPED_BLOCKS: usize = 7;
+const PREFILL_BENCH_FUSED_HEAD_DIM: usize = 512;
+const PREFILL_BENCH_HEAD_DIMS: [usize; 3] = [128, 256, PREFILL_BENCH_FUSED_HEAD_DIM];
+const PREFILL_BENCH_QUERY_HEADS: usize = 8;
+const PREFILL_BENCH_KV_HEADS: usize = 2;
+const PREFILL_BENCH_QUERY_LEN: usize = 512;
+const PREFILL_BENCH_CONTEXT_LEN: usize = 4096;
+const PREFILL_BENCH_TOLERANCE: f32 = 0.006;
+const PREFILL_BENCH_ITERS_ENV: &str = "MISTRALRS_METAL_PREFILL_BENCH_ITERS";
 
 #[derive(Clone, Copy, Debug)]
 struct Case<'a> {
@@ -1107,6 +1116,643 @@ fn metal_hnd_decode_bench() -> Result<()> {
                     "{query_heads},{kv_heads},{head_dim},{batch},{context},median,{hnd:.6},{legacy:.6},{:.4}",
                     legacy / hnd,
                 );
+            }
+        }
+    }
+    Ok(())
+}
+
+#[test]
+#[ignore = "benchmark; needs exclusive use of a Metal GPU"]
+fn metal_native_prefill_vs_sdpa_bench() -> Result<()> {
+    const QUERIES_ENV: &str = "MISTRALRS_METAL_PREFILL_BENCH_QUERIES";
+    const CONTEXTS_ENV: &str = "MISTRALRS_METAL_PREFILL_BENCH_CONTEXTS";
+    const DIMS_ENV: &str = "MISTRALRS_METAL_PREFILL_BENCH_DIMS";
+    const WINDOW_ENV: &str = "MISTRALRS_METAL_PREFILL_BENCH_WINDOW";
+    const BATCHES_ENV: &str = "MISTRALRS_METAL_PREFILL_BENCH_BATCHES";
+    const HEADS_ENV: &str = "MISTRALRS_METAL_PREFILL_BENCH_HEADS";
+    const KV_HEADS_ENV: &str = "MISTRALRS_METAL_PREFILL_BENCH_KV_HEADS";
+    const MASKLESS_ENV: &str = "MISTRALRS_METAL_PREFILL_BENCH_MASKLESS";
+    const MASKLESS_HEAD_DIMS: &[usize] = &[32, 64, 72, 80, 96, 128, 256];
+    let sizes = |name: &str, defaults: &[usize]| {
+        std::env::var(name).map_or_else(
+            |_| defaults.to_vec(),
+            |value| {
+                value
+                    .split(',')
+                    .map(|part| {
+                        let size = part.trim().parse::<usize>().expect(name);
+                        assert!(size > 0, "{name} must contain positive integers");
+                        size
+                    })
+                    .collect::<Vec<_>>()
+            },
+        )
+    };
+    let batches = sizes(BATCHES_ENV, &[1]);
+    let heads = sizes(HEADS_ENV, &[PREFILL_BENCH_QUERY_HEADS]);
+    let kv_heads = sizes(KV_HEADS_ENV, &[PREFILL_BENCH_KV_HEADS]);
+    assert_eq!(heads.len(), 1, "{HEADS_ENV} must contain one integer");
+    assert_eq!(kv_heads.len(), 1, "{KV_HEADS_ENV} must contain one integer");
+    let (query_heads, kv_heads) = (heads[0], kv_heads[0]);
+    assert_eq!(
+        query_heads % kv_heads,
+        0,
+        "query heads must divide into KV groups"
+    );
+    let maskless = std::env::var(MASKLESS_ENV).is_ok_and(|value| match value.trim() {
+        "1" | "true" => true,
+        "0" | "false" => false,
+        _ => panic!("{MASKLESS_ENV} must be 0, 1, false, or true"),
+    });
+    let dense_mode = if maskless {
+        "maskless_causal"
+    } else {
+        "masked"
+    };
+    let query_lengths = sizes(QUERIES_ENV, &[PREFILL_BENCH_QUERY_LEN]);
+    let context_lengths = sizes(CONTEXTS_ENV, &[PREFILL_BENCH_CONTEXT_LEN]);
+    let head_dims = sizes(DIMS_ENV, &PREFILL_BENCH_HEAD_DIMS);
+    let window = std::env::var(WINDOW_ENV)
+        .ok()
+        .map(|value| value.trim().parse::<usize>().expect(WINDOW_ENV))
+        .filter(|&size| size > 0);
+    let window_column = window.unwrap_or(0);
+    let device = Device::new_metal(0)?;
+    let iterations = std::env::var(PREFILL_BENCH_ITERS_ENV)
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(BENCH_TIMED_ITERS);
+    assert!(iterations > 0);
+    println!(
+        "Native paged prefill vs engine SDPA: BF16, host dispatch + allocation + synchronized GPU completion; excludes mask construction and KV packing/gathering"
+    );
+    println!(
+        "warmup={BENCH_WARMUP_ITERS}, timed={iterations}, rotating rounds={BENCH_ROUNDS}; D128/256 use Candle SDPA, D512 uses engine Metal FlashAttn"
+    );
+    println!("window={window:?}, dense={dense_mode}; query/context/dimension/batch environment values accept comma-separated lists; WINDOW=0 disables the window");
+    println!("head_dim,query_heads,kv_heads,batch,query_len,context_len,window,dense_mode,round,native_ms,sdpa_ms,sdpa_over_native,max_abs_error");
+    for head_dim in head_dims {
+        for &query_len in &query_lengths {
+            for &context_len in &context_lengths {
+                assert!(
+                    context_len >= query_len,
+                    "context length must cover the query length"
+                );
+                if maskless {
+                    assert!(
+                        MASKLESS_HEAD_DIMS.contains(&head_dim)
+                            && query_len > 1
+                            && query_len == context_len
+                            && window.is_none_or(|size| size >= context_len),
+                        "maskless comparison requires supported D<=256, Q=K>1, and no excluded window keys"
+                    );
+                }
+                for &batch in &batches {
+                    let context_lens = vec![context_len; batch];
+                    let query_lens = vec![query_len; batch];
+                    let query_starts = vec![context_len - query_len; batch];
+                    let key_starts = vec![0; batch];
+                    let case = Case {
+                        head_dim,
+                        kv_heads,
+                        query_heads,
+                        block_size: BENCH_BLOCK_SIZE,
+                        lengths: &context_lens,
+                        window: None,
+                        features: false,
+                    };
+                    let inputs = Inputs::new(&device, case, BENCH_DTYPE, false)?;
+                    let (key_cache, value_cache) =
+                        inputs.cache(&device, case, BENCH_DTYPE, true)?;
+                    let key = inputs
+                        .key
+                        .reshape((batch, context_len, kv_heads, head_dim))?
+                        .transpose(1, 2)?
+                        .contiguous()?;
+                    let value = inputs
+                        .value
+                        .reshape((batch, context_len, kv_heads, head_dim))?
+                        .transpose(1, 2)?
+                        .contiguous()?;
+                    let query = Tensor::from_vec(
+                        (0..batch * query_heads * query_len * head_dim)
+                            .map(|index| ((index * 11 + 1) as f32).sin() * 0.7)
+                            .collect::<Vec<_>>(),
+                        (batch, query_heads, query_len, head_dim),
+                        &Device::Cpu,
+                    )?
+                    .to_dtype(BENCH_DTYPE)?
+                    .to_device(&device)?;
+                    let prefix_len = context_len - query_len;
+                    let mask = Tensor::from_vec(
+                        (0..query_len)
+                            .flat_map(|query| {
+                                (0..context_len).map(move |key| {
+                                    if key <= prefix_len + query
+                                        && window.is_none_or(|size| prefix_len + query - key < size)
+                                    {
+                                        0f32
+                                    } else {
+                                        f32::NEG_INFINITY
+                                    }
+                                })
+                            })
+                            .collect::<Vec<_>>(),
+                        (1, 1, query_len, context_len),
+                        &Device::Cpu,
+                    )?
+                    .to_dtype(if head_dim == PREFILL_BENCH_FUSED_HEAD_DIM {
+                        DType::F16
+                    } else {
+                        BENCH_DTYPE
+                    })?
+                    .to_device(&device)?;
+                    let mask = AttentionMask::Custom(mask);
+                    let params = SdpaParams {
+                        n_kv_groups: query_heads / kv_heads,
+                        softcap: None,
+                        softmax_scale: 1. / (head_dim as f32).sqrt(),
+                        sliding_window: window,
+                        sinks: None,
+                    };
+                    let execute = |native: bool| {
+                        if native {
+                            metal_paged_prefill(MetalPagedPrefillRequest {
+                                query: &query,
+                                key_cache: &key_cache,
+                                value_cache: &value_cache,
+                                block_tables: &inputs.block_tables,
+                                query_lens: &query_lens,
+                                context_lens: &context_lens,
+                                query_start_positions: &query_starts,
+                                key_start_positions: &key_starts,
+                                packed_queries: false,
+                                causal: true,
+                                sliding_window: window,
+                                window_right: None,
+                                attention_chunk_size: None,
+                                multimodal_ranges: None,
+                                additive_mask: None,
+                                packed_mask: false,
+                                mask_key_offsets: None,
+                                alibi_slopes: None,
+                                sinks: None,
+                                k_scale: None,
+                                v_scale: None,
+                                scale: params.softmax_scale,
+                                softcap: None,
+                            })
+                        } else if maskless {
+                            Sdpa.run_attention_noflash(&query, &key, &value, None, &params, true)
+                        } else {
+                            Sdpa.run_attention(&query, &key, &value, &mask, None, &params)
+                        }
+                    };
+                    let native = execute(true)?;
+                    let dense = execute(false)?;
+                    assert_eq!(native.shape(), dense.shape());
+                    let native = values(&native)?;
+                    let dense = values(&dense)?;
+                    let label = format!(
+                        "native prefill vs SDPA D{head_dim} H{query_heads}/KV{kv_heads} B{batch} Q{query_len} K{context_len} window={window:?} dense={dense_mode}"
+                    );
+                    assert_close(&native, &dense, PREFILL_BENCH_TOLERANCE, &label);
+                    let max_error = native
+                        .iter()
+                        .zip(&dense)
+                        .map(|(a, b)| (a - b).abs())
+                        .fold(0f32, f32::max);
+                    for native in [true, false] {
+                        for _ in 0..BENCH_WARMUP_ITERS {
+                            let output = execute(native)?;
+                            device.synchronize()?;
+                            std::hint::black_box(output);
+                        }
+                    }
+                    let mut timings = [[0f64; BENCH_ROUNDS]; 2];
+                    let [native_timings, dense_timings] = &mut timings;
+                    for (round, (native, dense)) in
+                        native_timings.iter_mut().zip(dense_timings).enumerate()
+                    {
+                        let round_timings = [native, dense];
+                        for index in 0..round_timings.len() {
+                            let backend = (index + round) % round_timings.len();
+                            device.synchronize()?;
+                            let start = Instant::now();
+                            for _ in 0..iterations {
+                                let output = execute(backend == 0)?;
+                                device.synchronize()?;
+                                std::hint::black_box(output);
+                            }
+                            *round_timings[backend] =
+                                start.elapsed().as_secs_f64() * 1e3 / iterations as f64;
+                        }
+                        let (native, dense) = (*round_timings[0], *round_timings[1]);
+                        println!(
+                            "{head_dim},{query_heads},{kv_heads},{batch},{query_len},{context_len},{window_column},{dense_mode},{round},{native:.6},{dense:.6},{:.4},{max_error:.8}",
+                            dense / native,
+                        );
+                    }
+                    for samples in &mut timings {
+                        samples.sort_by(f64::total_cmp);
+                    }
+                    let (native, dense) =
+                        (timings[0][BENCH_ROUNDS / 2], timings[1][BENCH_ROUNDS / 2]);
+                    println!(
+                        "{head_dim},{query_heads},{kv_heads},{batch},{query_len},{context_len},{window_column},{dense_mode},median,{native:.6},{dense:.6},{:.4},{max_error:.8}",
+                        dense / native,
+                    );
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+#[derive(Clone, Copy, Debug)]
+enum PrefillMaskCase {
+    Causal,
+    Bidirectional,
+    Chunked,
+    Multimodal,
+    Custom,
+    CustomFullView,
+    Speculative,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct PrefillWrapperCase {
+    cold: bool,
+    cropped: bool,
+    donor: bool,
+    mask: PrefillMaskCase,
+}
+
+fn prefill_wrapper_case(
+    device: &Device,
+    dtype: DType,
+    hnd: bool,
+    test: PrefillWrapperCase,
+) -> Result<()> {
+    const HEAD_DIM: usize = 64;
+    const QUERY_HEADS: usize = 4;
+    const KV_HEADS: usize = 2;
+    const BLOCK_SIZE: usize = 8;
+    const WINDOW: usize = 7;
+    const CHUNK: usize = 8;
+    let speculative = matches!(test.mask, PrefillMaskCase::Speculative);
+    let query_lens = if speculative { [3, 3] } else { [3, 5] };
+    let lengths = if test.cold { query_lens } else { [17, 23] };
+    let starts = if test.cropped && !matches!(test.mask, PrefillMaskCase::CustomFullView) {
+        [16, 24]
+    } else {
+        [0, 0]
+    };
+    let max_q = *query_lens.iter().max().unwrap();
+    let max_k = *lengths.iter().max().unwrap();
+    let case = Case {
+        head_dim: HEAD_DIM,
+        kv_heads: KV_HEADS,
+        query_heads: QUERY_HEADS,
+        block_size: BLOCK_SIZE,
+        lengths: &lengths,
+        window: None,
+        features: false,
+    };
+    let inputs = Inputs::new(device, case, dtype, false)?;
+    let (key_cache, value_cache) = inputs.cache(device, case, dtype, hnd)?;
+    let mut query = vec![f32::NAN; 2 * QUERY_HEADS * max_q * HEAD_DIM];
+    let mut key = vec![f32::NAN; 2 * KV_HEADS * max_q * HEAD_DIM];
+    let mut value = key.clone();
+    let mut slots = vec![-1i64; 2 * max_q];
+    let original_slots = inputs.slots.to_device(&Device::Cpu)?.to_vec1::<i64>()?;
+    let mut token_base = 0;
+    for seq in 0..2 {
+        for row in 0..query_lens[seq] {
+            slots[seq * max_q + row] =
+                original_slots[token_base + lengths[seq] - query_lens[seq] + row];
+            for head in 0..QUERY_HEADS {
+                for dim in 0..HEAD_DIM {
+                    query[((seq * QUERY_HEADS + head) * max_q + row) * HEAD_DIM + dim] = round_to(
+                        inputs.q_cpu[(seq * QUERY_HEADS + head) * HEAD_DIM + dim]
+                            + row as f32 * 0.07,
+                        dtype,
+                    );
+                }
+            }
+            for head in 0..KV_HEADS {
+                let from = ((token_base + lengths[seq] - query_lens[seq] + row) * KV_HEADS + head)
+                    * HEAD_DIM;
+                let to = ((seq * KV_HEADS + head) * max_q + row) * HEAD_DIM;
+                key[to..to + HEAD_DIM].copy_from_slice(&inputs.k_cpu[from..from + HEAD_DIM]);
+                value[to..to + HEAD_DIM].copy_from_slice(&inputs.v_cpu[from..from + HEAD_DIM]);
+            }
+        }
+        token_base += lengths[seq];
+    }
+    let q = Tensor::from_vec(
+        query.clone(),
+        (2, QUERY_HEADS, max_q, HEAD_DIM),
+        &Device::Cpu,
+    )?
+    .to_dtype(dtype)?
+    .to_device(device)?;
+    let k = Tensor::from_vec(key, (2, KV_HEADS, max_q, HEAD_DIM), &Device::Cpu)?
+        .to_dtype(dtype)?
+        .to_device(device)?;
+    let v = Tensor::from_vec(value, (2, KV_HEADS, max_q, HEAD_DIM), &Device::Cpu)?
+        .to_dtype(dtype)?
+        .to_device(device)?;
+    let slot_tensor = Tensor::from_vec(slots, (2, max_q), device)?;
+    if !test.donor {
+        let zeros = Tensor::zeros((2 * max_q, KV_HEADS, HEAD_DIM), dtype, device)?;
+        reshape_and_cache(
+            &zeros,
+            &zeros,
+            None,
+            None,
+            &key_cache,
+            &value_cache,
+            &slot_tensor.flatten_all()?,
+        )?;
+    }
+    let mut metadata = PagedAttentionInputMetadata::dummy(device)?;
+    let location = device.location();
+    metadata.block_size = Some(BLOCK_SIZE);
+    metadata.slot_mappings = HashMap::from([(location, slot_tensor)]);
+    metadata.block_tables = Some(HashMap::from([(location, inputs.block_tables.clone())]));
+    metadata.paged_context_lens_cpu = Some(lengths.to_vec());
+    metadata.full_paged_context_lens_cpu = Some(
+        lengths
+            .iter()
+            .zip(starts)
+            .map(|(len, start)| len + start)
+            .collect(),
+    );
+    metadata.query_lens = Some(query_lens.to_vec());
+    metadata.num_cached_tokens = (!test.cold).then(|| {
+        lengths
+            .iter()
+            .zip(starts)
+            .zip(query_lens)
+            .map(|((len, start), q)| len + start - q)
+            .collect()
+    });
+    metadata.is_first_prompt_chunk = test.cold;
+    metadata.prefix_gather_workspace_limit = Some(0);
+    let custom = matches!(
+        test.mask,
+        PrefillMaskCase::Custom | PrefillMaskCase::CustomFullView
+    );
+    if matches!(test.mask, PrefillMaskCase::CustomFullView) {
+        metadata.full_block_tables = metadata.block_tables.clone();
+        metadata.block_tables = Some(HashMap::from([(
+            location,
+            inputs
+                .block_tables
+                .narrow(1, 1, inputs.block_tables.dim(1)? - 1)?,
+        )]));
+        metadata.paged_context_lens_cpu =
+            Some(lengths.iter().map(|len| len - BLOCK_SIZE).collect());
+    }
+    let mask_k = if test.cropped {
+        lengths
+            .iter()
+            .zip(starts)
+            .map(|(len, start)| len + start)
+            .max()
+            .unwrap()
+    } else {
+        max_k
+    };
+    let mut custom_values = vec![0f32; 2 * QUERY_HEADS * max_q * mask_k];
+    for (index, value) in custom_values.iter_mut().enumerate() {
+        *value = (index % 11) as f32 * 0.17 - 0.8;
+    }
+    let mask = match test.mask {
+        PrefillMaskCase::Bidirectional => AttentionMask::Bidirectional,
+        PrefillMaskCase::Chunked => AttentionMask::ChunkedCausal { chunk_size: CHUNK },
+        PrefillMaskCase::Custom | PrefillMaskCase::CustomFullView => {
+            AttentionMask::Custom(Tensor::from_vec(
+                custom_values.clone(),
+                (2, QUERY_HEADS, max_q, mask_k),
+                &Device::Cpu,
+            )?)
+        }
+        PrefillMaskCase::Speculative => AttentionMask::None,
+        _ => AttentionMask::CausalFlash,
+    };
+    if matches!(test.mask, PrefillMaskCase::Multimodal) {
+        let ranges = Tensor::from_vec(
+            lengths
+                .iter()
+                .flat_map(|len| [(len - 4) as i32, *len as i32])
+                .collect::<Vec<_>>(),
+            (2, 1, 2),
+            &Device::Cpu,
+        )?;
+        metadata.mm_prefix_ranges = Some(HashMap::from([
+            (Device::Cpu.location(), ranges.clone()),
+            (location, ranges.to_device(device)?),
+        ]));
+        metadata.has_noncausal_mm_context = true;
+    }
+    if speculative {
+        let table = inputs
+            .block_tables
+            .to_device(&Device::Cpu)?
+            .to_vec2::<u32>()?;
+        let expanded = table
+            .iter()
+            .flat_map(|row| std::iter::repeat_n(row.clone(), max_q))
+            .flatten()
+            .collect::<Vec<_>>();
+        metadata.block_tables = Some(HashMap::from([(
+            location,
+            Tensor::from_vec(expanded, (2 * max_q, inputs.block_tables.dim(1)?), device)?,
+        )]));
+        metadata.paged_context_lens_cpu = Some(
+            lengths
+                .iter()
+                .flat_map(|len| (len - max_q + 1)..=*len)
+                .collect(),
+        );
+        metadata.full_paged_context_lens_cpu = Some(
+            lengths
+                .iter()
+                .zip(starts)
+                .flat_map(|(len, start)| (len + start - max_q + 1)..=(len + start))
+                .collect(),
+        );
+        metadata.query_lens = None;
+    }
+    let window = test.cropped.then_some(WINDOW);
+    let params = SdpaParams {
+        n_kv_groups: QUERY_HEADS / KV_HEADS,
+        softmax_scale: 0.125,
+        softcap: None,
+        sliding_window: window,
+        sinks: None,
+    };
+    let attention = PagedAttention::new(HEAD_DIM, device, None)?;
+    let result = if test.donor {
+        attention.forward_donor_cache(
+            &q,
+            &key_cache,
+            &value_cache,
+            &mask,
+            &metadata,
+            &params,
+            None,
+        )?
+    } else {
+        attention.forward(
+            &q,
+            &k,
+            &v,
+            &mask,
+            Some(key_cache.clone()),
+            Some(value_cache.clone()),
+            &metadata,
+            &params,
+            None,
+        )?
+    };
+    let result = if speculative {
+        result.transpose(1, 2)?.contiguous()?
+    } else {
+        result
+    };
+    let actual = values(&result)?;
+    let mut expected = Vec::new();
+    let mut selected = Vec::new();
+    token_base = 0;
+    for seq in 0..2 {
+        for head in 0..QUERY_HEADS {
+            for row in 0..query_lens[seq] {
+                let qpos = starts[seq] + lengths[seq] - query_lens[seq] + row;
+                let qbase = ((seq * QUERY_HEADS + head) * max_q + row) * HEAD_DIM;
+                let mut logits = Vec::new();
+                for token in 0..lengths[seq] {
+                    let kpos = starts[seq] + token;
+                    let same_mm = matches!(test.mask, PrefillMaskCase::Multimodal)
+                        && token >= lengths[seq] - 4
+                        && qpos >= starts[seq] + lengths[seq] - 4;
+                    let visible = custom
+                        || same_mm
+                        || match test.mask {
+                            PrefillMaskCase::Bidirectional => {
+                                window.is_none_or(|w| qpos.abs_diff(kpos) < w)
+                            }
+                            PrefillMaskCase::Chunked => {
+                                kpos <= qpos
+                                    && kpos / CHUNK == qpos / CHUNK
+                                    && window.is_none_or(|w| qpos - kpos < w)
+                            }
+                            _ => kpos <= qpos && window.is_none_or(|w| qpos - kpos < w),
+                        };
+                    let base = ((token_base + token) * KV_HEADS + head / (QUERY_HEADS / KV_HEADS))
+                        * HEAD_DIM;
+                    let logit = if visible {
+                        (0..HEAD_DIM)
+                            .map(|dim| query[qbase + dim] as f64 * inputs.k_cpu[base + dim] as f64)
+                            .sum::<f64>()
+                            * 0.125
+                            + if custom {
+                                custom_values[((seq * QUERY_HEADS + head) * max_q + row) * mask_k
+                                    + starts[seq]
+                                    + token] as f64
+                            } else {
+                                0.
+                            }
+                    } else {
+                        f64::NEG_INFINITY
+                    };
+                    logits.push(logit);
+                }
+                let max = logits.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+                let weights = logits
+                    .iter()
+                    .map(|logit| (logit - max).exp())
+                    .collect::<Vec<_>>();
+                let sum = weights.iter().sum::<f64>();
+                for dim in 0..HEAD_DIM {
+                    expected.push(
+                        (weights
+                            .iter()
+                            .enumerate()
+                            .map(|(token, weight)| {
+                                weight
+                                    * inputs.v_cpu[((token_base + token) * KV_HEADS
+                                        + head / (QUERY_HEADS / KV_HEADS))
+                                        * HEAD_DIM
+                                        + dim] as f64
+                            })
+                            .sum::<f64>()
+                            / sum) as f32,
+                    );
+                    selected.push(actual[qbase + dim]);
+                }
+            }
+        }
+        token_base += lengths[seq];
+    }
+    assert_close(
+        &selected,
+        &expected,
+        match dtype {
+            DType::BF16 => BF16_TOLERANCE,
+            DType::F16 => F16_TOLERANCE,
+            _ => F32_TOLERANCE,
+        },
+        &format!("prefill {test:?} {dtype:?} hnd={hnd}"),
+    );
+    let (gathered_k, gathered_v) = gather_kv_cache(
+        &key_cache,
+        &value_cache,
+        None,
+        None,
+        &inputs.block_tables,
+        &inputs.cu_lengths,
+        inputs.tokens,
+        dtype,
+    )?;
+    assert_close(&values(&gathered_k)?, &inputs.k_cpu, 0., "prefill K cache");
+    assert_close(&values(&gathered_v)?, &inputs.v_cpu, 0., "prefill V cache");
+    Ok(())
+}
+
+#[test]
+fn metal_native_prefill_wrapper_matches_cpu_and_preserves_cache() -> Result<()> {
+    let device = Device::new_metal(0)?;
+    for dtype in [DType::F32, DType::BF16, DType::F16] {
+        for hnd in [false, true] {
+            for donor in [false, true] {
+                for (cold, cropped, mask) in [
+                    (true, false, PrefillMaskCase::Causal),
+                    (false, false, PrefillMaskCase::Causal),
+                    (false, true, PrefillMaskCase::Causal),
+                    (false, true, PrefillMaskCase::Bidirectional),
+                    (false, true, PrefillMaskCase::Chunked),
+                    (false, true, PrefillMaskCase::Multimodal),
+                    (false, false, PrefillMaskCase::Custom),
+                    (false, true, PrefillMaskCase::Custom),
+                    (false, true, PrefillMaskCase::CustomFullView),
+                    (false, true, PrefillMaskCase::Speculative),
+                ] {
+                    prefill_wrapper_case(
+                        &device,
+                        dtype,
+                        hnd,
+                        PrefillWrapperCase {
+                            cold,
+                            cropped,
+                            donor,
+                            mask,
+                        },
+                    )?;
+                }
             }
         }
     }

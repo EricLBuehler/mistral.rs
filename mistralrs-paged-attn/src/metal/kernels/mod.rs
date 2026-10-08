@@ -132,7 +132,7 @@ impl Kernels {
     /// Load the give pipeline
     /// loads the library from source, then gets the function [`name`] from
     /// that source
-    fn load_pipeline_with_constants(
+    pub(crate) fn load_pipeline_with_constants(
         &self,
         device: &Device,
         name: String,

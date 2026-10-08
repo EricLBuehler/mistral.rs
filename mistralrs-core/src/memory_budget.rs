@@ -210,9 +210,24 @@ impl ModelMemoryBudget {
         #[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
         let quota = ((initial_available as f64 * self.share) as usize).min(initial_available);
         let loaded_bytes = snapshot.allocated().saturating_sub(baseline);
-        Ok(quota
-            .saturating_sub(loaded_bytes)
-            .min(device_memory_budget(self.group.goal, snapshot)?))
+        let quota_remaining = quota.saturating_sub(loaded_bytes);
+        let live_policy_budget = device_memory_budget(self.group.goal, snapshot)?;
+        let allocation_budget = quota_remaining.min(live_policy_budget);
+        tracing::debug!(
+            device = ?location,
+            share = self.share,
+            initial_physical_available_bytes = initial.physical_available(),
+            initial_allocated_bytes = initial.allocated(),
+            load_baseline_allocated_bytes = baseline,
+            initial_goal_budget_bytes = initial_available,
+            quota_bytes = quota,
+            loaded_bytes,
+            quota_remaining_bytes = quota_remaining,
+            live_policy_budget_bytes = live_policy_budget,
+            allocation_budget_bytes = allocation_budget,
+            "Model memory allocation budget"
+        );
+        Ok(allocation_budget)
     }
 }
 

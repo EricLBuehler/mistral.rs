@@ -60,7 +60,7 @@ async fn run_serve_config(cfg: crate::config::ServeConfig) -> Result<()> {
     let (model_configs, cpu) = build_model_configs(&models, &runtime, &global.token_source).await?;
 
     let mut builder = MistralRsForServerBuilder::new()
-        .with_max_seqs(runtime.max_seqs)
+        .with_max_seqs(runtime.max_seqs_for_serve())
         .with_max_num_batched_tokens(runtime.max_num_batched_tokens)
         .with_max_prefill_chunk_tokens(runtime.max_prefill_chunk_tokens)
         .with_max_decode_steps_before_prefill(runtime.max_decode_steps_before_prefill)
@@ -224,7 +224,7 @@ async fn run_run_config(cfg: crate::config::RunConfig) -> Result<()> {
     let (model_configs, cpu) = build_model_configs(&models, &runtime, &global.token_source).await?;
 
     let mut builder = MistralRsForServerBuilder::new()
-        .with_max_seqs(runtime.max_seqs)
+        .with_max_seqs(runtime.max_seqs_for_run())
         .with_max_num_batched_tokens(runtime.max_num_batched_tokens)
         .with_max_prefill_chunk_tokens(runtime.max_prefill_chunk_tokens)
         .with_max_decode_steps_before_prefill(runtime.max_decode_steps_before_prefill)
@@ -399,6 +399,42 @@ mod tests {
     use std::fs;
 
     use super::*;
+
+    #[test]
+    fn toml_sequence_defaults_follow_command_and_preserve_explicit_limits() {
+        for (command, default) in [
+            ("run", RuntimeOptions::default().max_seqs_for_run()),
+            ("serve", RuntimeOptions::default().max_seqs_for_serve()),
+        ] {
+            for runtime_section in ["", "[runtime]\nprefix_cache_n = 4\n"] {
+                let config: CliConfig =
+                    toml::from_str(&format!("command = \"{command}\"\n{runtime_section}")).unwrap();
+                let (runtime, resolved) = match config {
+                    CliConfig::Run(config) => {
+                        let resolved = config.runtime.max_seqs_for_run();
+                        (config.runtime, resolved)
+                    }
+                    CliConfig::Serve(config) => {
+                        let resolved = config.runtime.max_seqs_for_serve();
+                        (config.runtime, resolved)
+                    }
+                };
+                assert_eq!(runtime.max_seqs, None);
+                assert_eq!(resolved, default);
+            }
+            for explicit in [1, 8, 32] {
+                let config: CliConfig = toml::from_str(&format!(
+                    "command = \"{command}\"\n[runtime]\nmax_seqs = {explicit}\n"
+                ))
+                .unwrap();
+                let resolved = match config {
+                    CliConfig::Run(config) => config.runtime.max_seqs_for_run(),
+                    CliConfig::Serve(config) => config.runtime.max_seqs_for_serve(),
+                };
+                assert_eq!(resolved, explicit);
+            }
+        }
+    }
 
     #[tokio::test]
     async fn from_config_infers_gguf_for_an_exact_file() {

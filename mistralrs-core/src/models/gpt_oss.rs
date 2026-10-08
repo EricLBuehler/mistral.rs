@@ -883,7 +883,8 @@ impl Model {
 
         let sliding_window = self.cfg.sliding_window;
 
-        let force_custom_attention_mask = !ctx.flash_params().packed;
+        let force_custom_attention_mask =
+            !ctx.flash_params().packed && !(ctx.is_paged() && xs.device().is_metal());
         let mask_cache = ctx.mask_cache(cache);
         let causal_mask = CausalMasker.make_causal_mask(
             input_ids,

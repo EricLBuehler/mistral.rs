@@ -10,6 +10,8 @@ use mistralrs_paged_attn::{
     Fa3DecodeParams, FlashInferDecodeScratch, KvCacheScales as FlashInferKvCacheScales,
     DEFAULT_FP8_KV_CACHE_SCALES,
 };
+#[cfg(feature = "metal")]
+use mistralrs_paged_attn::{metal_paged_prefill, MetalPagedPrefillRequest, MetalPagedPrefillShape};
 use mistralrs_paged_attn::{paged_attention, reshape_and_cache};
 
 #[cfg(all(feature = "cuda", target_family = "unix"))]
@@ -1157,7 +1159,10 @@ impl PagedAttention {
             .flashinfer
             .as_ref()
             .is_some_and(|metadata| metadata.views.sliding.is_some());
-        let use_full = setup.sdpa_params.sliding_window.is_none()
+        let custom_metal_full_view = setup.tensors.query.device().is_metal()
+            && setup.tensors.attention_mask.is_custom()
+            && setup.input_metadata.full_block_tables.is_some();
+        let use_full = (setup.sdpa_params.sliding_window.is_none() || custom_metal_full_view)
             && (setup.input_metadata.full_block_tables.is_some() || has_flashinfer_sliding_view);
         let alibi_slopes = if let Some(alibi_slopes) = self.alibi_slopes.as_ref() {
             Some(alibi_slopes.to_device(setup.tensors.query.device())?)
@@ -1181,6 +1186,276 @@ impl PagedAttention {
             use_full,
             alibi_slopes,
         })
+    }
+
+    #[cfg(feature = "metal")]
+    fn try_metal_prefill(
+        &self,
+        ctx: &PagedForwardCtx<'_>,
+        tensors: PagedForwardTensors<'_>,
+        key_cache: &mut Option<Tensor>,
+        value_cache: &mut Option<Tensor>,
+        write_cache: bool,
+    ) -> Result<Option<Tensor>> {
+        if !tensors.query.device().is_metal()
+            || key_cache.is_none()
+            || value_cache.is_none()
+            || (ctx.input_metadata.is_decode_step()
+                && ctx.dims.seq_len == 1
+                && tensors.attention_mask.is_none()
+                && !ctx.has_noncausal_mm_context())
+        {
+            return Ok(None);
+        }
+        let device = tensors.query.device();
+        let location = device.location();
+        if !matches!(key_cache.as_ref().unwrap().rank(), 4 | 5)
+            || value_cache.as_ref().unwrap().rank() != 4
+        {
+            return Ok(None);
+        }
+        if ctx.input_metadata.has_noncausal_mm_context
+            && ctx.input_metadata.mm_prefix_ranges.is_none()
+            && ctx.input_metadata.full_mm_prefix_ranges.is_none()
+        {
+            candle_core::bail!("Metal paged prefill is missing multimodal ranges");
+        }
+        let Some(block_tables) = ctx.block_tables(&location) else {
+            return Ok(None);
+        };
+        let Some(context_lens) = ctx.context_lens_cpu() else {
+            return Ok(None);
+        };
+        let expanded_decode = ctx.input_metadata.query_lens.is_none()
+            && ctx.dims.seq_len > 1
+            && context_lens.len() == ctx.dims.batch_size * ctx.dims.seq_len;
+        if expanded_decode && tensors.attention_mask.is_custom() {
+            return Ok(None);
+        }
+        let query_lens = ctx.input_metadata.query_lens.clone().unwrap_or_else(|| {
+            if expanded_decode {
+                vec![1; context_lens.len()]
+            } else {
+                vec![ctx.dims.seq_len; ctx.dims.batch_size]
+            }
+        });
+        if context_lens.len() != query_lens.len() {
+            candle_core::bail!("Metal paged prefill query and context counts differ");
+        }
+        let full_context_lens = ctx
+            .input_metadata
+            .full_paged_context_lens_cpu
+            .as_deref()
+            .filter(|lens| lens.len() == query_lens.len())
+            .map(<[usize]>::to_vec)
+            .unwrap_or_else(|| match &ctx.input_metadata.num_cached_tokens {
+                Some(cached) => cached.iter().zip(&query_lens).map(|(k, q)| k + q).collect(),
+                None => context_lens.to_vec(),
+            });
+        let query_starts = full_context_lens
+            .iter()
+            .zip(&query_lens)
+            .map(|(context, query)| context.saturating_sub(*query))
+            .collect::<Vec<_>>();
+        let key_starts = full_context_lens
+            .iter()
+            .zip(context_lens)
+            .map(|(full, visible)| full.saturating_sub(*visible))
+            .collect::<Vec<_>>();
+        let ranges_tensor = ctx
+            .mm_prefix_ranges(&DeviceLocation::Cpu)
+            .or_else(|| ctx.mm_prefix_ranges(&location));
+        let mut ranges = mm_prefix_ranges_from_tensor(ranges_tensor)?;
+        if let Some(ranges) = &mut ranges {
+            if ranges.len() != key_starts.len() {
+                candle_core::bail!("Metal paged prefill multimodal range count differs");
+            }
+            for (ranges, start) in ranges.iter_mut().zip(&key_starts) {
+                for (lo, hi) in ranges {
+                    *lo += start;
+                    *hi += start;
+                }
+            }
+        }
+        let k_cache = key_cache.as_ref().unwrap();
+        let v_cache = value_cache.as_ref().unwrap();
+        let hnd = is_metal_hnd_cache(k_cache, v_cache);
+        let value_dim = v_cache.dim(if hnd { 3 } else { 2 })?;
+        let packed = !expanded_decode && ctx.flash_params.is_some_and(|params| params.packed);
+        let shape = MetalPagedPrefillShape {
+            num_seqs: query_lens.len(),
+            num_heads: ctx.dims.attention_heads,
+            num_kv_heads: ctx.dims.key_value_heads,
+            max_query_len: query_lens.iter().copied().max().unwrap_or(0),
+            total_query_tokens: query_lens.iter().sum(),
+            max_context_len: context_lens.iter().copied().max().unwrap_or(0),
+            key_head_dim: ctx.dims.head_size,
+            value_head_dim: value_dim,
+            block_size: cache_block_size(k_cache, v_cache)?,
+            num_multimodal_ranges: ranges
+                .as_ref()
+                .map_or(0, |ranges| ranges.iter().map(Vec::len).sum()),
+            query_dtype: tensors.query.dtype(),
+            cache_dtype: k_cache.dtype(),
+            packed_queries: packed,
+            hnd,
+        };
+        if !shape.supports() {
+            return Ok(None);
+        }
+        let mut required = shape.workspace_bytes()?;
+        if expanded_decode {
+            required = required
+                .checked_add(shape.query_copy_workspace_bytes()?)
+                .ok_or_else(|| candle_core::Error::msg("Metal prefill workspace overflow"))?;
+        }
+        if tensors.attention_mask.is_none() {
+            required = required
+                .checked_add(shape.output_copy_workspace_bytes()?)
+                .ok_or_else(|| candle_core::Error::msg("Metal prefill workspace overflow"))?;
+        }
+        let mask = tensors.attention_mask.as_option_tensor().cloned();
+        let mask_key_offsets = if let Some(mask) = &mask {
+            let width = *mask
+                .dims()
+                .last()
+                .ok_or_else(|| candle_core::Error::msg("empty Metal prefill mask shape"))?;
+            let local_width = if packed {
+                context_lens.iter().sum()
+            } else {
+                shape.max_context_len
+            };
+            let full_width = if packed {
+                full_context_lens.iter().sum()
+            } else {
+                *full_context_lens.iter().max().unwrap()
+            };
+            if width == 1 {
+                None
+            } else if width >= full_width {
+                let mut base = 0;
+                Some(
+                    key_starts
+                        .iter()
+                        .zip(&full_context_lens)
+                        .map(|(&start, &length)| {
+                            let offset = base + start;
+                            if packed {
+                                base += length;
+                            }
+                            offset
+                        })
+                        .collect::<Vec<_>>(),
+                )
+            } else if width == local_width {
+                None
+            } else {
+                candle_core::bail!("Metal prefill mask width {width} matches neither its local KV view ({local_width}) nor full context ({full_width})");
+            }
+        } else {
+            None
+        };
+        if let Some(mask) = mask
+            .as_ref()
+            .filter(|mask| !mask.device().same_device(device))
+        {
+            let upload = mask
+                .elem_count()
+                .checked_mul(mask.dtype().size_in_bytes())
+                .ok_or_else(|| candle_core::Error::msg("Metal prefill mask size overflow"))?;
+            required = required
+                .checked_add(crate::paged_attention::plan::metal_gather_workspace_bytes(
+                    upload,
+                )?)
+                .ok_or_else(|| candle_core::Error::msg("Metal prefill workspace overflow"))?;
+        }
+        crate::paged_attention::plan::check_metal_attention_workspace(
+            device,
+            required,
+            ctx.input_metadata.attention_memory.as_ref(),
+        )?;
+        let query = if expanded_decode {
+            tensors.query.transpose(1, 2)?.contiguous()?.reshape((
+                query_lens.len(),
+                ctx.dims.attention_heads,
+                1,
+                ctx.dims.head_size,
+            ))?
+        } else {
+            tensors.query.clone()
+        };
+        let mask = mask.map(|mask| mask.to_device(device)).transpose()?;
+        if write_cache {
+            let scales = self.cache_scales(key_cache.as_ref().unwrap());
+            write_kv_cache(
+                &tensors.key.transpose(1, 2)?,
+                &tensors.value.transpose(1, 2)?,
+                key_cache.as_mut().unwrap(),
+                value_cache.as_mut().unwrap(),
+                CacheWriteParams {
+                    scales,
+                    slot_mapping: &ctx.slot_mapping,
+                    memory: ctx.input_metadata.attention_memory.as_ref(),
+                },
+            )?;
+        }
+        let scales = self.cache_scales(key_cache.as_ref().unwrap());
+        let bidirectional = matches!(tensors.attention_mask, AttentionMask::Bidirectional);
+        let causal = mask.is_none()
+            && !bidirectional
+            && (matches!(tensors.attention_mask, AttentionMask::ChunkedCausal { .. })
+                || ranges.is_some()
+                || ctx.flash_params.map_or(
+                    ctx.input_metadata.prompt_chunk_attention_policy
+                        == crate::paged_attention::block_hash::MultimodalAttentionPolicy::Causal,
+                    |params| params.causal,
+                ));
+        let output = metal_paged_prefill(MetalPagedPrefillRequest {
+            query: &query,
+            key_cache: key_cache.as_ref().unwrap(),
+            value_cache: value_cache.as_ref().unwrap(),
+            block_tables,
+            query_lens: &query_lens,
+            context_lens,
+            query_start_positions: &query_starts,
+            key_start_positions: &key_starts,
+            packed_queries: packed,
+            causal,
+            sliding_window: mask
+                .is_none()
+                .then_some(ctx.sdpa_params.sliding_window)
+                .flatten(),
+            window_right: bidirectional
+                .then_some(ctx.sdpa_params.sliding_window)
+                .flatten(),
+            attention_chunk_size: match tensors.attention_mask {
+                AttentionMask::ChunkedCausal { chunk_size } => Some(*chunk_size),
+                _ => None,
+            },
+            multimodal_ranges: if mask.is_none() {
+                ranges.as_deref()
+            } else {
+                None
+            },
+            additive_mask: mask.as_ref(),
+            mask_key_offsets: mask_key_offsets.as_deref(),
+            packed_mask: packed,
+            alibi_slopes: ctx.alibi_slopes.as_ref(),
+            sinks: ctx.sdpa_params.sinks.as_ref(),
+            k_scale: scales.k,
+            v_scale: scales.v,
+            scale: ctx.sdpa_params.softmax_scale,
+            softcap: ctx.sdpa_params.softcap,
+        })?;
+        if expanded_decode {
+            return Ok(Some(output.reshape((
+                ctx.dims.batch_size,
+                ctx.dims.seq_len,
+                ctx.dims.attention_heads,
+                value_dim,
+            ))?));
+        }
+        prefix_attention_output_layout(output, tensors.attention_mask).map(Some)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -2566,6 +2841,12 @@ impl PagedAttention {
                 ));
         }
 
+        #[cfg(feature = "metal")]
+        if let Some(out) =
+            self.try_metal_prefill(&ctx, tensors, &mut key_cache, &mut value_cache, write_cache)?
+        {
+            return Ok(out);
+        }
         if let Some(out) = self.try_prefix_gather_prefill(
             &ctx,
             tensors,

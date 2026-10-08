@@ -291,10 +291,6 @@ impl Attention {
         // self.sliding_window is None if !self.use_sliding_window
         let (k, v, mask) =
             Cache::update_kv_cache_sliding_window(kv_cache, k, v, mask, self.sliding_window)?;
-        let mask = match mask {
-            Some(t) => AttentionMask::Custom(t),
-            None => AttentionMask::None,
-        };
 
         let attn_output =
             Sdpa.run_attention(&q, &k, &v, &mask, Some(flash_params), &self.sdpa_params)?;

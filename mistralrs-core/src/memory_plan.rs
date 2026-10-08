@@ -131,6 +131,8 @@ pub struct RuntimeMemoryPlan {
     pub mapped_non_attention_bytes: usize,
     pub planned_query_tokens: usize,
     pub logits_bytes_per_query_token: usize,
+    pub custom_prefill_mask: bool,
+    pub metal_prefill_mask_is_structured: bool,
 }
 
 impl RuntimeMemoryPlan {
@@ -187,16 +189,15 @@ pub fn resolve_device_budget(goal: MemoryGoal, memory: DeviceMemory) -> Result<D
         ((total as f64 * DISCRETE_RESERVE_FRACTION) as usize).max(MIN_DISCRETE_RESERVE)
     }
     .min(total);
-    let (target, free_reserve) = match goal {
-        MemoryGoal::Utilization(fraction) => ((total as f64 * f64::from(fraction)) as usize, 0),
-        _ => (total.saturating_sub(reserve), reserve),
+    let target = match goal {
+        MemoryGoal::Utilization(fraction) => (total as f64 * f64::from(fraction)) as usize,
+        _ => total.saturating_sub(reserve),
     };
     let engine_limit_bytes = target.min(memory.working_set_limit());
     let occupied_bytes = memory.allocated();
     let available_bytes = memory.available();
     let allocatable_bytes = engine_limit_bytes
         .saturating_sub(occupied_bytes)
-        .min(memory.physical_available().saturating_sub(free_reserve))
         .min(available_bytes);
     Ok(DeviceMemoryBudget {
         physical_bytes: total,
@@ -254,6 +255,26 @@ mod tests {
     }
 
     #[test]
+    fn discrete_auto_budget_preserves_fraction_and_minimum_headroom() {
+        for (total, free, expected) in [
+            (100 * GIB, 100 * GIB, 95 * GIB),
+            (100 * GIB, 60 * GIB, 55 * GIB),
+            (100 * GIB, 5 * GIB, 0),
+            (100 * GIB, GIB, 0),
+            (8 * GIB, 8 * GIB, 7 * GIB),
+            (8 * GIB, 4 * GIB, 3 * GIB),
+            (8 * GIB, GIB, 0),
+        ] {
+            assert_eq!(
+                device_memory_budget(MemoryGoal::Auto, DeviceMemory::Discrete { total, free })
+                    .unwrap(),
+                expected,
+                "total={total}, free={free}"
+            );
+        }
+    }
+
+    #[test]
     fn unified_budget_respects_pressure_and_working_set() {
         let small = DeviceMemory::Unified {
             total: 8 * GIB,
@@ -273,7 +294,7 @@ mod tests {
         };
         assert_eq!(
             device_memory_budget(MemoryGoal::Auto, memory).unwrap(),
-            34 * GIB
+            40 * GIB
         );
         assert_eq!(
             device_memory_budget(MemoryGoal::Utilization(1.0), memory).unwrap(),
@@ -289,5 +310,33 @@ mod tests {
             device_memory_budget(MemoryGoal::Auto, large).unwrap(),
             112 * GIB
         );
+    }
+
+    #[test]
+    fn unified_auto_headroom_is_applied_once_to_the_engine_limit() {
+        for (available, allocated, working_set_limit, expected) in [
+            (50 * GIB, 8 * GIB, 64 * GIB, 40 * GIB),
+            (26 * GIB, 8 * GIB, 48 * GIB, 26 * GIB),
+            (50 * GIB, 8 * GIB, 40 * GIB, 32 * GIB),
+            (GIB, 8 * GIB, 48 * GIB, GIB),
+            (16 * GIB, 48 * GIB, 64 * GIB, 0),
+            (16 * GIB, 49 * GIB, 64 * GIB, 0),
+            (16 * GIB, 41 * GIB, 40 * GIB, 0),
+        ] {
+            let memory = DeviceMemory::Unified {
+                total: 64 * GIB,
+                available,
+                allocated,
+                working_set_limit,
+            };
+            let auto = resolve_device_budget(MemoryGoal::Auto, memory).unwrap();
+            let utilization = resolve_device_budget(MemoryGoal::Utilization(0.75), memory).unwrap();
+            assert_eq!(auto.engine_limit_bytes, (48 * GIB).min(working_set_limit));
+            assert_eq!(auto.allocatable_bytes, expected);
+            assert_eq!(auto.engine_limit_bytes, utilization.engine_limit_bytes);
+            assert_eq!(auto.allocatable_bytes, utilization.allocatable_bytes);
+            assert!(auto.allocatable_bytes <= available);
+            assert!(auto.allocatable_bytes <= working_set_limit.saturating_sub(allocated));
+        }
     }
 }

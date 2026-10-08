@@ -77,18 +77,35 @@ fn kv_shared_layer_index(cfg: &Gemma4TextConfig, layer_idx: usize) -> Result<Opt
         })
 }
 
+fn adjust_cache_mask(mask: &AttentionMask, kv_len: usize) -> Result<AttentionMask> {
+    let AttentionMask::Custom(tensor) = mask else {
+        return Ok(mask.clone());
+    };
+    if (2..=4).contains(&tensor.rank()) {
+        let axis = tensor.rank() - 1;
+        let mask_len = tensor.dim(axis)?;
+        if mask_len > kv_len {
+            return Ok(AttentionMask::Custom(tensor.narrow(
+                axis,
+                mask_len - kv_len,
+                kv_len,
+            )?));
+        }
+    }
+    Ok(mask.clone())
+}
+
 fn select_paged_mm_prefix_path(
     requires_noncausal: bool,
     is_paged: bool,
-    is_cuda: bool,
-    flash_attn: bool,
+    supported_backend: bool,
     packed: bool,
     has_range_metadata: bool,
 ) -> Result<bool> {
     if requires_noncausal && packed && !has_range_metadata {
         candle_core::bail!("packed Gemma 4 multimodal prefill is missing noncausal range metadata");
     }
-    Ok(requires_noncausal && is_paged && is_cuda && flash_attn && has_range_metadata)
+    Ok(requires_noncausal && is_paged && supported_backend && has_range_metadata)
 }
 
 /// Proportional RoPE for Gemma4 full-attention layers.
@@ -735,41 +752,7 @@ impl Attention {
                     attention_mask
                 };
 
-                // Adjust mask dimensions to match actual KV cache length.
-                // This is needed when:
-                //   - shared KV cache (donor may have different seq len)
-                //   - sliding/rotating KV cache (cache trimmed to window size
-                //     but mask was created for the full sequence length)
-                let adjust_mask = |m: Option<&Tensor>| -> Result<Option<Tensor>> {
-                    if let Some(mask) = m {
-                        let kv_seq_len = k.dims()[2];
-                        let mask_dims = mask.dims();
-                        match mask.rank() {
-                            2 if mask_dims[1] > kv_seq_len => Ok(Some(mask.narrow(
-                                1,
-                                mask_dims[1] - kv_seq_len,
-                                kv_seq_len,
-                            )?)),
-                            3 if mask_dims[2] > kv_seq_len => Ok(Some(mask.narrow(
-                                2,
-                                mask_dims[2] - kv_seq_len,
-                                kv_seq_len,
-                            )?)),
-                            4 if mask_dims[3] > kv_seq_len => Ok(Some(mask.narrow(
-                                3,
-                                mask_dims[3] - kv_seq_len,
-                                kv_seq_len,
-                            )?)),
-                            _ => Ok(Some(mask.clone())),
-                        }
-                    } else {
-                        Ok(None)
-                    }
-                };
-                let mask = match adjust_mask(mask.as_option_tensor())? {
-                    Some(t) => AttentionMask::Custom(t),
-                    None => AttentionMask::None,
-                };
+                let mask = adjust_cache_mask(mask, k.dim(2)?)?;
 
                 Sdpa.run_attention(&q, &k, &v, &mask, flash_params, &self.sdpa_params)?
             }
@@ -2163,8 +2146,7 @@ impl TextModel {
         let use_paged_mm_prefix_path = select_paged_mm_prefix_path(
             active_bidirectional_attention == Gemma4BidirectionalAttention::Vision,
             ctx.is_paged(),
-            xs.device().is_cuda(),
-            crate::using_flash_attn(),
+            crate::attention::supports_compact_paged_prefill(xs.device()),
             ctx.flash_params().packed,
             has_range_metadata,
         )?;
@@ -2174,7 +2156,8 @@ impl TextModel {
         let force_eager_full_attention = self
             .layers
             .iter()
-            .any(|layer| layer.self_attn.force_eager_prefill());
+            .any(|layer| layer.self_attn.force_eager_prefill())
+            && !(ctx.is_paged() && xs.device().is_metal());
         let is_first_prompt_chunk = ctx.is_first_prompt_chunk();
         let has_prompt_cache_metadata = ctx
             .paged_input_metadata()
@@ -2189,7 +2172,16 @@ impl TextModel {
             ctx.is_paged() && q_len > 1 && !is_first_prompt_chunk && !is_paged_decode;
 
         let (attention_mask, sliding_attention_mask, layer_flash_params) =
-            if active_bidirectional_attention == Gemma4BidirectionalAttention::All {
+            if active_bidirectional_attention == Gemma4BidirectionalAttention::All
+                && ctx.is_paged()
+                && xs.device().is_metal()
+            {
+                (
+                    AttentionMask::Bidirectional,
+                    AttentionMask::Bidirectional,
+                    Some(&bidir_flash),
+                )
+            } else if active_bidirectional_attention == Gemma4BidirectionalAttention::All {
                 (
                     AttentionMask::Custom(BidirectionalMasker.make_mask(input_ids, xs.dtype())?),
                     AttentionMask::Custom(BidirectionalMasker.make_sliding_mask(
@@ -2820,11 +2812,34 @@ mod tests {
     }
 
     #[test]
+    fn cache_mask_adjustment_preserves_structured_attention() -> candle_core::Result<()> {
+        use crate::attention::AttentionMask;
+        for mask in [
+            AttentionMask::CausalFlash,
+            AttentionMask::Bidirectional,
+            AttentionMask::ChunkedCausal { chunk_size: 8 },
+        ] {
+            let adjusted = super::adjust_cache_mask(&mask, 3)?;
+            assert_eq!(
+                std::mem::discriminant(&adjusted),
+                std::mem::discriminant(&mask)
+            );
+        }
+        let mask = AttentionMask::Custom(Tensor::arange(0f32, 10., &Device::Cpu)?.reshape((2, 5))?);
+        let adjusted = super::adjust_cache_mask(&mask, 3)?;
+        assert_eq!(
+            adjusted.as_option_tensor().unwrap().to_vec2::<f32>()?,
+            vec![vec![2., 3., 4.], vec![7., 8., 9.]]
+        );
+        Ok(())
+    }
+
+    #[test]
     fn paged_mm_prefix_requires_range_metadata() {
-        assert!(!select_paged_mm_prefix_path(true, true, true, true, false, false).unwrap());
-        assert!(select_paged_mm_prefix_path(true, true, true, true, true, false).is_err());
-        assert!(select_paged_mm_prefix_path(true, true, true, true, true, true).unwrap());
-        assert!(!select_paged_mm_prefix_path(false, true, true, true, true, false).unwrap());
+        assert!(!select_paged_mm_prefix_path(true, true, true, false, false).unwrap());
+        assert!(select_paged_mm_prefix_path(true, true, true, true, false).is_err());
+        assert!(select_paged_mm_prefix_path(true, true, true, true, true).unwrap());
+        assert!(!select_paged_mm_prefix_path(false, true, true, true, false).unwrap());
     }
 
     #[test]

@@ -73,13 +73,17 @@ Compare `--paged-attn auto` with `--paged-attn off` using your workload's contex
 
 CLI, Rust, and Python share one memory goal. The default, `Auto`, reserves operating-system and runtime headroom, accounts for model weights and execution workspace, and uses the remaining budget for the paged KV pool. Automatic sizing uses the actual serving concurrency and prefill limits; there are no separate sequence-length or batch-size mapping hints.
 
-On discrete GPUs, `Auto` leaves the larger of 5% of physical memory or 1 GiB as headroom. On unified-memory devices, it reserves 25% of physical memory, capped at 16 GiB. Metal also respects the device's recommended working-set limit and currently available system memory. Existing allocations and model execution workspace reduce the usable budget further.
+On discrete GPUs, `Auto` leaves the larger of 5% of physical memory or 1 GiB as headroom. On unified-memory devices, it caps the engine at physical memory minus 25%, with that deduction capped at 16 GiB. This is a whole-engine limit covering weights, runtime workspace, and KV cache. Metal also respects the device's recommended working-set limit and currently available system memory. Existing system usage can lower the usable capacity below the engine limit.
 
-On Metal, planning headroom also absorbs changes in system memory usage after loading. Each forward pass must still fit within the engine limit and currently available memory; transient admission can use that buffer when other applications consume more RAM. Persistent KV allocations retain the original headroom policy.
+On macOS, available memory includes free pages, reclaimable file cache, and purgeable pages. Non-purgeable anonymous allocations, wired pages, and compressed memory are excluded.
+
+On a 64 GiB Mac, `Auto` sets a 48 GiB engine ceiling. Memory already used by macOS and other applications reduces the available capacity; the planner does not require another 16 GiB to remain free after allocation. Runtime workspace is reserved before sizing KV, and each forward pass must still fit within the engine limit and currently available memory.
 
 Automatic sizing solves the KV capacity and execution workspace together. The workspace covers cold prefill, decode, and one prefix-cache request at the largest context allowed by the model and the usable pool. Larger prefix batches can be reduced to fit the reserved workspace; the pool size does not guarantee that every request can process its longest prefix concurrently.
 
-Paged memory planning uses the same activation estimator for every device-mapped model loader. Loaders supply architecture facts such as MLP width, vocabulary size, retained token state, and attention features; the shared estimator accounts for projections, logits, attention workspace, and encoder concurrency. Unknown attention features retain conservative fallback reservations. These are planning bounds, not measurements of an exact runtime peak.
+Paged memory planning uses the same activation estimator for every device-mapped model loader. Loaders supply architecture facts such as MLP width, vocabulary size, retained token state, and attention features; the shared estimator accounts for projections, logits, attention workspace, and encoder concurrency. Kernel capabilities and workspace requirements are shared between dispatch and planning. Unsupported paths retain conservative fallback reservations. These are planning bounds, not measurements of an exact runtime peak.
+
+Native Metal paged prefill reads KV pages directly and applies structured masks inside the kernel. Its attention workspace covers output and compact metadata, without a full KV gather or a query-by-context mask. Native prefill scratch therefore does not grow proportionally with the cached context. Shared-KV layers that reduce a prompt tail to one query also reserve the selected decode kernel's workspace. Runtime admission uses the current attention workload where accounting is complete, while preserving non-attention and encoder reservations. Explicit custom masks and other attention paths retain their own memory allowances.
 
 Choose one explicit override when needed:
 
@@ -123,9 +127,13 @@ Sequences that begin with identical tokens share the blocks holding those tokens
 
 MLA (Multi-head Latent Attention)'s latent cache is supported through a dedicated kernel path. Some models opt out of the FlashInfer paged cache layout (FlashInfer is NVIDIA's attention-kernel library; see [Flash attention vs FlashInfer](#flash-attention-vs-flashinfer) below) when their cache shape needs a different backend.
 
-## Metal decode
+## Metal prefill and decode
 
-Metal defaults to a paged cache with contiguous head dimensions for both K and V. Short-context decode and grouped, partitioned decode use dedicated kernels. Sliding-window decode reads the visible tokens directly from the pages. Prefix-cache prefill continues to gather cached K/V before running attention.
+Metal defaults to a paged cache with contiguous head dimensions for both K and V. Short-context decode and grouped, partitioned decode use dedicated kernels. Sliding-window decode reads the visible tokens directly from the pages.
+
+Native paged prefill handles fresh prompts, cached prefixes, and prompt chunks through the same interface. It supports uneven sequence lengths, grouped-query attention, shared KV, causal and bidirectional windows, fixed attention chunks, and multimodal bidirectional ranges. FP16, BF16, and FP32 activations can read regular or FP8 KV caches; positional biases, softcap, sinks, and explicit additive masks are applied within attention. Kernel selection follows attention dimensions and features rather than model names.
+
+Structured masks are passed as lengths, positions, windows, and ranges. An explicitly supplied arbitrary mask can still consume substantial memory, but the kernel reads it directly without creating a full attention-score matrix. Dedicated layouts such as MLA retain their separate implementation and memory accounting.
 
 To select the legacy Metal cache layout and decode backend before loading a model:
 
@@ -140,7 +148,7 @@ The default is `MISTRALRS_METAL_PAGED_LAYOUT=hnd`; `auto` selects the same layou
 On CUDA, paged attention dispatches to one of three paths:
 
 - Default decode: FlashInfer-backed paged decode kernels, used when the model's KV-cache shape is compatible.
-- Eligible prefill chunks: also use FlashInfer.
+- Eligible prefill chunks: use direct paged FlashAttention, subject to compiled kernel support and request capabilities.
 - Generic fallback: when a request falls outside those constraints, the runtime gathers blocks and then dispatches to the available attention backend.
 
 CUDA prompts are chunked from the batch-wide token budget. The per-sequence chunk is the budget
@@ -168,7 +176,7 @@ MISTRALRS_FLASHINFER_DECODE=0 mistralrs serve --paged-attn on -m <model>
 Paged attention and flash attention compose; both can be on simultaneously. They are not the same backend:
 
 - `flash-attn` (compute capability 8.0+) and `flash-attn-v3` (Hopper) are Cargo features for the standard attention path and fallback varlen paths. See [cargo features](/reference/cargo-features/).
-- FlashInfer paged decode and prefill kernels are built with the `cuda` feature as part of paged attention. They do not require the `flash-attn` Cargo feature.
+- FlashInfer paged decode is built with the `cuda` feature as part of paged attention. Regular FP16/BF16 paged FlashAttention prefill requires `flash-attn`; eligible FP8 FA3 paths have their own hardware and shape requirements.
 
 Set `MISTRALRS_FLASHINFER_DECODE=0` only when debugging or comparing against the generic paged path.
 

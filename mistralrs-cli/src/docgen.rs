@@ -206,6 +206,9 @@ fn rendered_pages() -> Vec<(String, String)> {
         ));
     }
     pages
+        .into_iter()
+        .map(|(name, content)| (name, format!("{}\n", content.trim_end())))
+        .collect()
 }
 
 #[test]

@@ -1,6 +1,7 @@
 mod cache;
 mod gather_kv;
 mod paged_attention;
+mod paged_prefill;
 mod scale_update;
 
 use candle_core::{DType, Result, Tensor};
@@ -72,4 +73,5 @@ pub use paged_attention::{
     paged_attention, paged_attention_with_window, reshape_and_cache, MetalPagedAttentionWorkspace,
     METAL_PAGED_CACHE_VECTOR_BYTES,
 };
+pub use paged_prefill::{metal_paged_prefill, MetalPagedPrefillRequest, MetalPagedPrefillShape};
 pub use scale_update::kv_scale_update;

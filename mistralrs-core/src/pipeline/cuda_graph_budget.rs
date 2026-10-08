@@ -106,6 +106,8 @@ mod tests {
             mapped_non_attention_bytes: 6 * GIB,
             planned_query_tokens: 4096,
             logits_bytes_per_query_token: 1024 * 1024,
+            custom_prefill_mask: false,
+            metal_prefill_mask_is_structured: false,
         }
     }
 

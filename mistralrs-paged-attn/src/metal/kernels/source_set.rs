@@ -7,6 +7,7 @@ mistralrs_metal_compile::metal_source_set! {
         "pagedattention",
         "paged_decode",
         "paged_decode_hnd",
+        "paged_prefill",
         "reshape_and_cache",
         "kv_scale_update",
         "gather_kv_cache",

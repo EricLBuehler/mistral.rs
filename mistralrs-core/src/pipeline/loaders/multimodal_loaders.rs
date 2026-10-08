@@ -3300,6 +3300,7 @@ impl DeviceMappedModelLoader for MiniCpmOLoader {
             intermediate_size: cfg.intermediate_size,
             vocab_size: cfg.vocab_size,
             custom_prefill_mask: true,
+            metal_prefill_mask_is_structured: true,
             ..Default::default()
         })
     }
@@ -3633,6 +3634,7 @@ impl DeviceMappedModelLoader for Phi4MMLoader {
             intermediate_size: cfg.intermediate_size,
             vocab_size: cfg.vocab_size,
             custom_prefill_mask: true,
+            metal_prefill_mask_is_structured: true,
             ..Default::default()
         })
     }
@@ -4401,6 +4403,7 @@ impl DeviceMappedModelLoader for Gemma3Loader {
             intermediate_size: cfg.intermediate_size,
             vocab_size: cfg.vocab_size,
             custom_prefill_mask,
+            metal_prefill_mask_is_structured: true,
             ..Default::default()
         })
     }
@@ -4788,6 +4791,7 @@ impl DeviceMappedModelLoader for Mistral3Loader {
             intermediate_size: cfg.intermediate_size,
             vocab_size: cfg.vocab_size,
             custom_prefill_mask: true,
+            metal_prefill_mask_is_structured: true,
             ..Default::default()
         })
     }
@@ -5242,6 +5246,7 @@ impl DeviceMappedModelLoader for VLlama4Loader {
             intermediate_size: cfg.intermediate_size_mlp.max(routed_and_shared),
             vocab_size: cfg.vocab_size,
             custom_prefill_mask: true,
+            metal_prefill_mask_is_structured: true,
             ..Default::default()
         })
     }
@@ -5688,6 +5693,7 @@ impl DeviceMappedModelLoader for Gemma3nLoader {
                 .checked_add(altup_inputs)
                 .context("Gemma3n retained activation size overflow")?,
             custom_prefill_mask: true,
+            metal_prefill_mask_is_structured: true,
         })
     }
 
@@ -6546,6 +6552,7 @@ impl DeviceMappedModelLoader for Qwen3VLLoader {
             vocab_size: tc.vocab_size,
             extra_hidden_elements_per_token,
             custom_prefill_mask: false,
+            metal_prefill_mask_is_structured: false,
         })
     }
 
@@ -6971,6 +6978,7 @@ impl DeviceMappedModelLoader for Qwen3VLMoELoader {
             vocab_size: tc.vocab_size,
             extra_hidden_elements_per_token,
             custom_prefill_mask: false,
+            metal_prefill_mask_is_structured: false,
         })
     }
 
@@ -7431,6 +7439,7 @@ impl DeviceMappedModelLoader for Qwen3_5Loader {
             vocab_size: tc.vocab_size,
             extra_hidden_elements_per_token,
             custom_prefill_mask: false,
+            metal_prefill_mask_is_structured: false,
         })
     }
 
@@ -7936,6 +7945,7 @@ impl DeviceMappedModelLoader for Qwen3_5MoeLoader {
             vocab_size: tc.vocab_size,
             extra_hidden_elements_per_token,
             custom_prefill_mask: false,
+            metal_prefill_mask_is_structured: false,
         })
     }
 
@@ -8362,6 +8372,7 @@ impl DeviceMappedModelLoader for VoxtralLoader {
             intermediate_size: cfg.hidden_dim,
             vocab_size: cfg.vocab_size,
             custom_prefill_mask: true,
+            metal_prefill_mask_is_structured: true,
             ..Default::default()
         })
     }
@@ -8751,6 +8762,7 @@ impl DeviceMappedModelLoader for Gemma4Loader {
             .and_then(|elements| elements.checked_mul(PER_LAYER_INPUT_BUFFERS))
             .context("Gemma per-layer activation size overflow")?;
         Ok(ActivationModelConfig {
+            metal_prefill_mask_is_structured: true,
             attention_features: None,
             intermediate_size,
             vocab_size: tc.vocab_size,
@@ -9283,6 +9295,7 @@ impl DeviceMappedModelLoader for MuseGlimmerLoader {
             intermediate_size: cfg.intermediate_size,
             vocab_size: cfg.vocab_size,
             custom_prefill_mask: true,
+            metal_prefill_mask_is_structured: true,
             ..Default::default()
         })
     }
@@ -9629,6 +9642,7 @@ impl DeviceMappedModelLoader for Lfm2VlLoader {
             intermediate_size: tc.intermediate_size().max(routed),
             vocab_size: tc.vocab_size,
             custom_prefill_mask: true,
+            metal_prefill_mask_is_structured: true,
             ..Default::default()
         })
     }
@@ -9977,6 +9991,7 @@ impl DeviceMappedModelLoader for DiffusionGemmaLoader {
             .and_then(|elements| elements.checked_mul(PER_LAYER_INPUT_BUFFERS))
             .context("Gemma per-layer activation size overflow")?;
         Ok(ActivationModelConfig {
+            metal_prefill_mask_is_structured: false,
             attention_features: uniform_attention_features(
                 tc.layer_types
                     .iter()
@@ -11821,6 +11836,29 @@ mod tests {
             "head_dim": 256,
             "sliding_window": 512
         })
+    }
+
+    #[test]
+    fn gemma3_activation_metadata_preserves_structured_metal_masks() -> Result<()> {
+        let text = gemma3_text_loader_config();
+        let multimodal = serde_json::json!({
+            "architectures": ["Gemma3ForConditionalGeneration"],
+            "text_config": text,
+            "vision_config": {},
+            "image_token_index": 7,
+            "mm_tokens_per_image": 256
+        });
+        for (config, custom_prefill_mask) in [(text, false), (multimodal, true)] {
+            for loader in [
+                &Gemma3Loader as &dyn DeviceMappedModelLoader,
+                &AutoMultimodalLoader,
+            ] {
+                let metadata = loader.activation_model_config(&config.to_string())?;
+                assert_eq!(metadata.custom_prefill_mask, custom_prefill_mask);
+                assert!(metadata.metal_prefill_mask_is_structured);
+            }
+        }
+        Ok(())
     }
 
     #[test]

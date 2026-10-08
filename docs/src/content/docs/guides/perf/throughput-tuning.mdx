@@ -58,8 +58,9 @@ The default differs by surface:
 
 | Surface | Flag / argument | Default |
 |---|---|---|
-| CLI | `--max-seqs` | 32 |
-| Python | `Runner(max_seqs=...)` | 16 |
+| CLI `run` | `--max-seqs` | 1 |
+| CLI `serve` | `--max-seqs` | 32 |
+| Python | `Runner(max_seqs=...)` | 32 |
 | Rust | `.with_max_num_seqs(...)` | 32 |
 
 More running sequences need more KV cache. Automatic memory sizing accounts for serving limits; use `--gpu-memory-utilization 0.9` or `--kv-cache 4GiB` to override the shared budget. If the pool runs out of blocks mid-generation, the scheduler preempts a running sequence, frees its blocks, and requeues it, which costs recomputation.

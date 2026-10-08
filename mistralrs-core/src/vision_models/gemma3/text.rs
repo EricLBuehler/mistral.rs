@@ -45,15 +45,14 @@ fn attention_layers_support_packed_prefill(
 fn select_paged_mm_prefix_path(
     requires_noncausal: bool,
     is_paged: bool,
-    is_cuda: bool,
-    flash_attn: bool,
+    supported_backend: bool,
     packed: bool,
     has_range_metadata: bool,
 ) -> Result<bool> {
     if requires_noncausal && packed && !has_range_metadata {
         candle_core::bail!("packed Gemma 3 multimodal prefill is missing noncausal range metadata");
     }
-    Ok(requires_noncausal && is_paged && is_cuda && flash_attn && has_range_metadata)
+    Ok(requires_noncausal && is_paged && supported_backend && has_range_metadata)
 }
 
 struct Attention {
@@ -619,8 +618,7 @@ impl TextModel {
         let use_paged_mm_prefix_path = select_paged_mm_prefix_path(
             requires_noncausal,
             ctx.is_paged(),
-            xs.device().is_cuda(),
-            crate::using_flash_attn(),
+            crate::attention::supports_compact_paged_prefill(xs.device()),
             ctx.flash_params().packed,
             has_range_metadata,
         )?;
@@ -1037,10 +1035,10 @@ mod tests {
 
     #[test]
     fn paged_mm_prefix_requires_range_metadata() {
-        assert!(!select_paged_mm_prefix_path(true, true, true, true, false, false).unwrap());
-        assert!(select_paged_mm_prefix_path(true, true, true, true, true, false).is_err());
-        assert!(select_paged_mm_prefix_path(true, true, true, true, true, true).unwrap());
-        assert!(!select_paged_mm_prefix_path(false, true, true, true, true, false).unwrap());
+        assert!(!select_paged_mm_prefix_path(true, true, true, false, false).unwrap());
+        assert!(select_paged_mm_prefix_path(true, true, true, true, false).is_err());
+        assert!(select_paged_mm_prefix_path(true, true, true, true, true).unwrap());
+        assert!(!select_paged_mm_prefix_path(false, true, true, true, false).unwrap());
     }
 
     #[test]

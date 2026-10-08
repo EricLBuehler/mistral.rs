@@ -1278,6 +1278,14 @@ pub mod text_models_inputs_processor {
                 None
             };
 
+            #[cfg(feature = "metal")]
+            if let Some(ranges) = &mm_prefix_ranges_tensor {
+                mm_prefix_ranges_map.insert(DeviceLocation::Cpu, ranges.clone());
+            }
+            #[cfg(feature = "metal")]
+            if let Some(ranges) = &full_mm_prefix_ranges_tensor {
+                full_mm_prefix_ranges_map.insert(DeviceLocation::Cpu, ranges.clone());
+            }
             for device in devices {
                 slot_mappings_map
                     .insert(device.location(), slot_mappings.clone().to_device(&device)?);

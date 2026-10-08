@@ -146,6 +146,7 @@ pub(crate) struct PromptPrefillWorkspaceInput<'a> {
     pub has_noncausal_mm_context: bool,
     pub has_sliding_window: bool,
     pub fa3_num_sm_by_layer: &'a [Option<usize>],
+    pub hnd_by_layer: &'a [bool],
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -153,6 +154,88 @@ pub(crate) struct PromptPrefillWorkspaceInput<'a> {
 pub(crate) struct PromptPrefillWorkspace {
     pub bytes: usize,
     pub gather_workspace_bytes: usize,
+    pub attention_is_complete: bool,
+}
+
+#[cfg(feature = "metal")]
+pub(crate) struct MetalPagedPrefillWorkspaceInput<'a> {
+    pub query_lens: &'a [usize],
+    pub context_lens: &'a [usize],
+    pub query_heads: usize,
+    pub kv_heads: usize,
+    pub key_head_dim: usize,
+    pub value_head_dim: usize,
+    pub block_size: usize,
+    pub query_dtype: DType,
+    pub cache_dtype: DType,
+    pub hnd: bool,
+    pub has_custom_mask: bool,
+    pub has_multimodal_ranges: bool,
+}
+
+#[cfg(feature = "metal")]
+pub(crate) fn metal_paged_prefill_workspace(
+    input: MetalPagedPrefillWorkspaceInput<'_>,
+) -> Result<Option<usize>> {
+    if input.query_lens.is_empty()
+        || input.query_lens.len() != input.context_lens.len()
+        || input
+            .query_lens
+            .iter()
+            .zip(input.context_lens)
+            .any(|(&query, &context)| query == 0 || query > context)
+    {
+        candle_core::bail!("invalid Metal paged prefill lengths");
+    }
+    let total_query_tokens = checked_sum(input.query_lens, "Metal prefill query lengths")?;
+    let max_query_len = *input.query_lens.iter().max().unwrap();
+    let max_context_len = *input.context_lens.iter().max().unwrap();
+    let shape = mistralrs_paged_attn::MetalPagedPrefillShape {
+        num_seqs: input.query_lens.len(),
+        num_heads: input.query_heads,
+        num_kv_heads: input.kv_heads,
+        max_query_len,
+        total_query_tokens,
+        max_context_len,
+        key_head_dim: input.key_head_dim,
+        value_head_dim: input.value_head_dim,
+        block_size: input.block_size,
+        num_multimodal_ranges: if input.has_multimodal_ranges {
+            checked_sum(input.context_lens, "Metal prefill multimodal ranges")?
+        } else {
+            0
+        },
+        query_dtype: input.query_dtype,
+        cache_dtype: input.cache_dtype,
+        packed_queries: false,
+        hnd: input.hnd,
+    };
+    if !shape.supports() {
+        return Ok(None);
+    }
+    let external_mask = if input.has_custom_mask {
+        metal_gather_workspace_bytes(checked_tensor_bytes(
+            &[
+                shape.num_seqs,
+                shape.num_heads,
+                max_query_len,
+                max_context_len,
+            ],
+            DType::F32.size_in_bytes() + input.query_dtype.size_in_bytes(),
+            "Metal prefill external mask",
+        )?)?
+    } else {
+        0
+    };
+    Ok(Some(checked_sum(
+        &[
+            shape.workspace_bytes()?,
+            shape.query_copy_workspace_bytes()?,
+            shape.output_copy_workspace_bytes()?,
+            external_mask,
+        ],
+        "Metal paged prefill workspace",
+    )?))
 }
 
 #[cfg(feature = "metal")]
@@ -255,6 +338,8 @@ pub(crate) struct MetalDecodeWorkspaceInput<'a> {
     pub context_lens: &'a [usize],
     pub hnd_by_layer: &'a [bool],
     pub capacity_bound: bool,
+    pub has_custom_mask: bool,
+    pub has_multimodal_ranges: bool,
 }
 
 #[cfg(feature = "metal")]
@@ -284,9 +369,36 @@ pub(crate) fn metal_decode_workspace(
         let kv_heads = model.num_kv_heads_for_layer(layer);
         let k_head_dim = model.k_head_dim_for_layer(layer);
         let v_head_dim = model.v_head_dim_for_layer(layer);
-        let gather = (!hnd && features.is_none_or(|features| features.has_sliding_window))
+        let gather = input.has_custom_mask
+            || (!hnd && features.is_none_or(|features| features.has_sliding_window))
             || k_head_dim != v_head_dim;
-        let attention = if gather {
+        let native_prefill = if !input.has_custom_mask
+            && !matches!(
+                model.kv_cache_layout_for_layer(layer),
+                super::KvCacheLayout::Mla { .. }
+            ) {
+            metal_paged_prefill_workspace(MetalPagedPrefillWorkspaceInput {
+                query_lens: input.query_lens,
+                context_lens: input.context_lens,
+                query_heads: q_heads,
+                kv_heads,
+                key_head_dim: k_head_dim,
+                value_head_dim: v_head_dim,
+                block_size: input.block_size,
+                query_dtype: input.activation_dtype,
+                cache_dtype: input.cache_dtype,
+                hnd,
+                has_custom_mask: false,
+                has_multimodal_ranges: input.has_multimodal_ranges,
+            })?
+        } else {
+            None
+        };
+        let attention = if let Some(bytes) =
+            native_prefill.filter(|_| input.query_lens.iter().any(|&query| query > 1))
+        {
+            bytes
+        } else if gather {
             metal_gather_workspace_bytes(gather_prefill_workspace_bytes(
                 GatherPrefillWorkspaceInput {
                     batch: row_contexts.len(),
@@ -348,6 +460,7 @@ pub(crate) fn metal_decode_workspace(
                 bytes
             }
         };
+        let attention = attention.max(native_prefill.unwrap_or_default());
         let pack = checked_tensor_bytes(
             &[row_contexts.len(), kv_heads, k_head_dim + v_head_dim],
             input.activation_dtype.size_in_bytes(),
@@ -810,7 +923,7 @@ pub(crate) fn prompt_prefill_workspace(
     model: Option<&dyn ModelConfigLike>,
     input: PromptPrefillWorkspaceInput<'_>,
 ) -> Result<PromptPrefillWorkspace> {
-    if !input.requires_prefix_attention {
+    if !input.requires_prefix_attention && (!input.device_is_metal || model.is_none()) {
         return Ok(PromptPrefillWorkspace::default());
     }
     let Some(model) = model else {
@@ -833,13 +946,57 @@ pub(crate) fn prompt_prefill_workspace(
     let mut fa3_pool = crate::flashinfer::Fa3PrefillPoolBytes::default();
     let mut max_layer_transient = 0usize;
     let mut gather_workspace_bytes = 0usize;
+    let mut attention_is_complete = input.device_is_metal;
+    #[cfg(feature = "metal")]
+    let mut native_workspace_bytes = 0usize;
+    #[cfg(feature = "metal")]
+    let mut has_native_donor = false;
     #[cfg(feature = "metal")]
     let mut retained_mask_keys = std::collections::HashSet::new();
+    #[cfg(feature = "metal")]
+    let mut retained_mask_heads = 1usize;
     for layer_idx in
         (0..model.num_layers()).filter(|&layer_idx| model.layer_has_paged_kv_cache(layer_idx))
     {
         let fa3_num_sm = input.fa3_num_sm_by_layer.get(layer_idx).copied().flatten();
         let features = model.prefix_prefill_attention_features(layer_idx);
+        #[cfg(feature = "metal")]
+        if input.device_is_metal
+            && !matches!(
+                model.kv_cache_layout_for_layer(layer_idx),
+                super::KvCacheLayout::Mla { .. }
+            )
+        {
+            let native = metal_paged_prefill_workspace(MetalPagedPrefillWorkspaceInput {
+                query_lens: input.query_lens,
+                context_lens: input.full_context_lens,
+                query_heads: model.num_attn_heads_for_layer(layer_idx),
+                kv_heads: model.num_kv_heads_for_layer(layer_idx),
+                key_head_dim: model.k_head_dim_for_layer(layer_idx),
+                value_head_dim: model.v_head_dim_for_layer(layer_idx),
+                block_size: input.block_size,
+                query_dtype: input.activation_dtype,
+                cache_dtype: input.cache_dtype,
+                hnd: input.hnd_by_layer.get(layer_idx).copied().unwrap_or(false),
+                has_custom_mask: input.has_custom_mask,
+                has_multimodal_ranges: input.has_noncausal_mm_context,
+            })?;
+            if let Some(bytes) = native {
+                native_workspace_bytes = native_workspace_bytes.max(bytes);
+                has_native_donor |= !model.uses_own_kv_cache_for_layer(layer_idx)
+                    && input.hnd_by_layer.get(layer_idx).copied().unwrap_or(false);
+                if input.has_custom_mask {
+                    retained_mask_keys.insert(metal_mask_key(model, layer_idx, features));
+                    retained_mask_heads =
+                        retained_mask_heads.max(model.num_attn_heads_for_layer(layer_idx));
+                }
+                continue;
+            }
+        }
+        attention_is_complete = false;
+        if !input.requires_prefix_attention {
+            continue;
+        }
         let plan_input = features.map(|features| {
             prompt_plan_input(
                 model,
@@ -887,15 +1044,7 @@ pub(crate) fn prompt_prefill_workspace(
         }
         #[cfg(feature = "metal")]
         if input.device_is_metal {
-            let key = match features {
-                Some(features) if !features.has_sliding_window => (None, None),
-                Some(_) => match model.sliding_window_for_layer(layer_idx) {
-                    Some(window) => (Some(window), None),
-                    None => (None, Some(layer_idx)),
-                },
-                None => (None, Some(layer_idx)),
-            };
-            retained_mask_keys.insert(key);
+            retained_mask_keys.insert(metal_mask_key(model, layer_idx, features));
         }
         let layer_workspace =
             gather_prefill_workspace_for_lengths(GatherPrefillWorkspaceRequest {
@@ -935,6 +1084,25 @@ pub(crate) fn prompt_prefill_workspace(
         gather_workspace_bytes = gather_workspace_bytes.max(layer_workspace);
         max_layer_transient = max_layer_transient.max(layer_workspace);
     }
+    #[cfg(feature = "metal")]
+    if has_native_donor && !input.has_custom_mask && !input.has_noncausal_mm_context {
+        // Shared-cache tails can reduce to one query and select a larger decode workspace.
+        let query_lens = vec![1; input.query_lens.len()];
+        native_workspace_bytes = native_workspace_bytes.max(metal_decode_workspace(
+            Some(model),
+            MetalDecodeWorkspaceInput {
+                activation_dtype: input.activation_dtype,
+                cache_dtype: input.cache_dtype,
+                block_size: input.block_size,
+                query_lens: &query_lens,
+                context_lens: input.full_context_lens,
+                hnd_by_layer: input.hnd_by_layer,
+                capacity_bound: true,
+                has_custom_mask: false,
+                has_multimodal_ranges: false,
+            },
+        )?);
+    }
     #[cfg(all(feature = "cuda", target_family = "unix"))]
     let fa3_pool_bytes = fa3_pool.bytes()?;
     #[cfg(not(all(feature = "cuda", target_family = "unix")))]
@@ -956,6 +1124,7 @@ pub(crate) fn prompt_prefill_workspace(
         checked_product(
             &[
                 retained_mask_keys.len() - 1,
+                retained_mask_heads,
                 elements,
                 DType::F32.size_in_bytes() + input.activation_dtype.size_in_bytes(),
             ],
@@ -966,6 +1135,15 @@ pub(crate) fn prompt_prefill_workspace(
     };
     #[cfg(not(feature = "metal"))]
     let retained_mask_bytes = 0usize;
+    #[cfg(feature = "metal")]
+    let (max_layer_transient, retained_mask_bytes) = if input.device_is_metal {
+        (
+            metal_gather_workspace_bytes(max_layer_transient)?.max(native_workspace_bytes),
+            metal_gather_workspace_bytes(retained_mask_bytes)?,
+        )
+    } else {
+        (max_layer_transient, retained_mask_bytes)
+    };
     let bytes = fa3_pool_bytes
         .checked_add(max_layer_transient)
         .and_then(|bytes| bytes.checked_add(retained_mask_bytes))
@@ -973,7 +1151,24 @@ pub(crate) fn prompt_prefill_workspace(
     Ok(PromptPrefillWorkspace {
         bytes,
         gather_workspace_bytes,
+        attention_is_complete,
     })
+}
+
+#[cfg(feature = "metal")]
+fn metal_mask_key(
+    model: &dyn ModelConfigLike,
+    layer: usize,
+    features: Option<PrefixPrefillAttentionFeatures>,
+) -> (Option<usize>, Option<usize>) {
+    match features {
+        Some(features) if !features.has_sliding_window => (None, None),
+        Some(_) => match model.sliding_window_for_layer(layer) {
+            Some(window) => (Some(window), None),
+            None => (None, Some(layer)),
+        },
+        None => (None, Some(layer)),
+    }
 }
 
 #[allow(dead_code)]
@@ -1094,9 +1289,9 @@ mod tests {
         HybridPagedKvCacheConfig, KvCacheLayout, KvCacheTopology, ModelConfigMetadata,
     };
 
-    struct DonorWorkspaceModel;
+    struct DonorWorkspaceModel<const HEAD_DIM: usize>;
 
-    impl ModelConfigLike for DonorWorkspaceModel {
+    impl<const HEAD_DIM: usize> ModelConfigLike for DonorWorkspaceModel<HEAD_DIM> {
         fn max_seq_len(&self) -> usize {
             131_072
         }
@@ -1110,19 +1305,19 @@ mod tests {
         }
 
         fn num_kv_heads(&self) -> usize {
-            4
+            2
         }
 
         fn num_attn_heads(&self) -> usize {
-            16
+            8
         }
 
         fn k_head_dim(&self) -> usize {
-            256
+            HEAD_DIM
         }
 
         fn v_head_dim(&self) -> usize {
-            256
+            HEAD_DIM
         }
 
         fn has_kv_cache_sharing(&self) -> bool {
@@ -1196,6 +1391,7 @@ mod tests {
             has_noncausal_mm_context: false,
             has_sliding_window: false,
             fa3_num_sm_by_layer: &[Some(132), None, Some(132), None],
+            hnd_by_layer: &[],
         }
     }
 
@@ -1562,7 +1758,7 @@ mod tests {
 
     #[test]
     fn donor_cache_first_prompt_requires_gather_workspace() {
-        let model = DonorWorkspaceModel;
+        let model = DonorWorkspaceModel::<256>;
         assert!(model_has_donor_paged_cache_layers(&model));
         let query_lens = [128];
         let context_lens = [128];
@@ -1571,6 +1767,63 @@ mod tests {
                 .unwrap();
         assert!(workspace.gather_workspace_bytes > 0);
         assert!(workspace.bytes >= workspace.gather_workspace_bytes);
+    }
+
+    #[cfg(feature = "metal")]
+    #[test]
+    fn donor_reduced_prompt_reserves_decode_workspace() -> Result<()> {
+        let model = DonorWorkspaceModel::<512>;
+        let query_lens = [15];
+        let context_lens = [7087];
+        let input = PromptPrefillWorkspaceInput {
+            device_is_cuda: false,
+            device_is_metal: true,
+            cache_dtype: DType::BF16,
+            hnd_by_layer: &[true, true],
+            fa3_num_sm_by_layer: &[],
+            ..workspace_input(&query_lens, &context_lens)
+        };
+        let native = metal_paged_prefill_workspace(MetalPagedPrefillWorkspaceInput {
+            query_lens: &query_lens,
+            context_lens: &context_lens,
+            query_heads: 8,
+            kv_heads: 2,
+            key_head_dim: 512,
+            value_head_dim: 512,
+            block_size: 32,
+            query_dtype: DType::BF16,
+            cache_dtype: DType::BF16,
+            hnd: true,
+            has_custom_mask: false,
+            has_multimodal_ranges: false,
+        })?
+        .unwrap();
+        let packing = metal_cache_write_workspace(Some(&model), query_lens[0], DType::BF16)?;
+        let donor_decode = mistralrs_paged_attn::MetalPagedAttentionWorkspace {
+            num_seqs: 1,
+            num_heads: 8,
+            num_kv_heads: 2,
+            head_size: 512,
+            block_size: 32,
+            max_context_len: context_lens[0],
+            sliding_window: None,
+            dtype: DType::BF16,
+            cache_dtype: DType::BF16,
+            hnd: true,
+            packed_x: 1,
+            has_alibi: false,
+            has_sinks: false,
+            has_scales: false,
+            softcapping: 1.0,
+        }
+        .bytes()?;
+        assert_eq!(native + packing, 532_480);
+        assert_eq!(donor_decode, 536_576);
+        let planned = prompt_prefill_workspace(Some(&model), input)?;
+        assert!(planned.bytes >= donor_decode);
+        assert_eq!(planned.gather_workspace_bytes, 0);
+        assert!(planned.attention_is_complete);
+        Ok(())
     }
 
     #[test]
@@ -1608,7 +1861,97 @@ mod tests {
 
     #[cfg(feature = "metal")]
     #[test]
-    fn metal_prefix_workspace_retains_distinct_full_and_window_masks() -> Result<()> {
+    fn metal_native_prefill_reserves_actual_outputs_without_gathers_or_masks() -> Result<()> {
+        let model = workspace_model(None);
+        let query_lens = [64, 32];
+        let contexts = [512, 256];
+        let mut input = workspace_input(&query_lens, &contexts);
+        input.device_is_cuda = false;
+        input.device_is_metal = true;
+        input.fa3_num_sm_by_layer = &[];
+        let prefix = prompt_prefill_workspace(Some(&model), input)?;
+        assert!(prefix.attention_is_complete);
+        assert!(prefix.bytes > 0);
+        assert_eq!(prefix.gather_workspace_bytes, 0);
+        let long_contexts = [65_536, 16_384];
+        let long = prompt_prefill_workspace(
+            Some(&model),
+            PromptPrefillWorkspaceInput {
+                full_context_lens: &long_contexts,
+                hnd_by_layer: &[true; 4],
+                ..input
+            },
+        )?;
+        assert_eq!(long, prefix);
+        let cold = prompt_prefill_workspace(
+            Some(&model),
+            PromptPrefillWorkspaceInput {
+                requires_prefix_attention: false,
+                full_context_lens: &query_lens,
+                ..input
+            },
+        )?;
+        assert_eq!(cold, prefix);
+        let features = PrefixPrefillAttentionFeatures {
+            has_alibi: true,
+            has_sinks: true,
+            has_softcap: true,
+            has_sliding_window: true,
+        };
+        let featured = workspace_model(Some(features));
+        assert_eq!(prompt_prefill_workspace(Some(&featured), input)?, prefix);
+        let masked = prompt_prefill_workspace(
+            Some(&model),
+            PromptPrefillWorkspaceInput {
+                has_custom_mask: true,
+                ..input
+            },
+        )?;
+        assert!(masked.attention_is_complete);
+        assert!(masked.bytes > prefix.bytes);
+        assert_eq!(masked.gather_workspace_bytes, 0);
+        let unsupported = prompt_prefill_workspace(
+            Some(&model),
+            PromptPrefillWorkspaceInput {
+                requires_prefix_attention: false,
+                activation_dtype: DType::F64,
+                ..input
+            },
+        )?;
+        assert!(!unsupported.attention_is_complete);
+        Ok(())
+    }
+
+    #[cfg(feature = "metal")]
+    #[test]
+    fn metal_native_prefill_capacity_bound_is_monotonic_with_compact_ranges() -> Result<()> {
+        let query_lens = [1];
+        let mut previous = 0;
+        for context in [1, 31, 32, 33, 511, 512, 513, 8192, 65_536] {
+            let bytes = metal_paged_prefill_workspace(MetalPagedPrefillWorkspaceInput {
+                query_lens: &query_lens,
+                context_lens: &[context],
+                query_heads: 12,
+                kv_heads: 4,
+                key_head_dim: 96,
+                value_head_dim: 192,
+                block_size: 32,
+                query_dtype: DType::BF16,
+                cache_dtype: DType::F8E4M3,
+                hnd: true,
+                has_custom_mask: false,
+                has_multimodal_ranges: true,
+            })?
+            .unwrap();
+            assert!(bytes >= previous);
+            previous = bytes;
+        }
+        Ok(())
+    }
+
+    #[cfg(feature = "metal")]
+    #[test]
+    fn metal_fallback_workspace_retains_distinct_full_and_window_masks() -> Result<()> {
         let full = PrefixPrefillAttentionFeatures::default();
         let window = PrefixPrefillAttentionFeatures {
             has_sliding_window: true,
@@ -1618,6 +1961,7 @@ mod tests {
         let mut input = workspace_input(&[64, 32], &[512, 256]);
         input.device_is_cuda = false;
         input.device_is_metal = true;
+        input.activation_dtype = DType::F64;
         input.has_sliding_window = true;
         input.fa3_num_sm_by_layer = &[];
         let single = prompt_prefill_workspace(Some(&model), input)?;
@@ -1626,7 +1970,9 @@ mod tests {
         let mask_elements: usize = (64 + 32) * (512 + 256);
         assert_eq!(
             both.bytes - single.bytes,
-            mask_elements * (DType::F32.size_in_bytes() + DType::BF16.size_in_bytes())
+            mask_elements
+                * (DType::F32.size_in_bytes() + DType::F64.size_in_bytes())
+                * METAL_BACKING_ROUNDING_BOUND
         );
         assert_eq!(both.gather_workspace_bytes, single.gather_workspace_bytes);
         let repeated = mixed.with_prefix_prefill_attention_features(vec![window; 4]);
@@ -1778,12 +2124,147 @@ mod metal_workspace_tests {
                 context_lens: &[1024],
                 hnd_by_layer: &[true],
                 capacity_bound: false,
+                has_multimodal_ranges: false,
+                has_custom_mask: false,
             },
         )
         .unwrap();
         let split_output_and_scratch = 8192 + 2 * 1024 + 524288;
         let packed_kv_backing = 2 * (2 * 512 * 2 * 2);
         assert_eq!(bytes, split_output_and_scratch + packed_kv_backing);
+    }
+
+    #[test]
+    fn speculative_decode_reserves_native_layout_copies_and_custom_fallback() -> Result<()> {
+        let model = model(PrefixPrefillAttentionFeatures::default());
+        let query_lens = [4, 2];
+        let context_lens = [1024, 513];
+        let native = metal_paged_prefill_workspace(MetalPagedPrefillWorkspaceInput {
+            query_lens: &query_lens,
+            context_lens: &context_lens,
+            query_heads: 8,
+            kv_heads: 2,
+            key_head_dim: 512,
+            value_head_dim: 512,
+            block_size: 32,
+            query_dtype: DType::BF16,
+            cache_dtype: DType::BF16,
+            hnd: true,
+            has_custom_mask: false,
+            has_multimodal_ranges: false,
+        })?
+        .unwrap();
+        let estimate = |has_custom_mask| {
+            metal_decode_workspace(
+                Some(&model),
+                MetalDecodeWorkspaceInput {
+                    activation_dtype: DType::BF16,
+                    cache_dtype: DType::BF16,
+                    block_size: 32,
+                    query_lens: &query_lens,
+                    context_lens: &context_lens,
+                    hnd_by_layer: &[true],
+                    capacity_bound: false,
+                    has_multimodal_ranges: false,
+                    has_custom_mask,
+                },
+            )
+        };
+        let packing = metal_cache_write_workspace(Some(&model), 6, DType::BF16)?;
+        assert_eq!(estimate(false)?, native + packing);
+        assert!(estimate(true)? > estimate(false)?);
+        Ok(())
+    }
+
+    #[test]
+    fn single_query_decode_also_reserves_structured_native_attention() -> Result<()> {
+        let model = model(PrefixPrefillAttentionFeatures::default());
+        let native = metal_paged_prefill_workspace(MetalPagedPrefillWorkspaceInput {
+            query_lens: &[1],
+            context_lens: &[1],
+            query_heads: 8,
+            kv_heads: 2,
+            key_head_dim: 512,
+            value_head_dim: 512,
+            block_size: 32,
+            query_dtype: DType::BF16,
+            cache_dtype: DType::BF16,
+            hnd: true,
+            has_custom_mask: false,
+            has_multimodal_ranges: false,
+        })?
+        .unwrap();
+        let decode = metal_decode_workspace(
+            Some(&model),
+            MetalDecodeWorkspaceInput {
+                activation_dtype: DType::BF16,
+                cache_dtype: DType::BF16,
+                block_size: 32,
+                query_lens: &[1],
+                context_lens: &[1],
+                hnd_by_layer: &[true],
+                capacity_bound: false,
+                has_multimodal_ranges: false,
+                has_custom_mask: false,
+            },
+        )?;
+        assert_eq!(
+            decode,
+            native + metal_cache_write_workspace(Some(&model), 1, DType::BF16)?
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn decode_reserves_retained_multimodal_range_metadata() -> Result<()> {
+        let model = ModelConfigMetadata {
+            max_seq_len: 8192,
+            num_layers: 1,
+            hidden_size: 128,
+            num_kv_heads: 1,
+            num_attn_heads: 2,
+            sliding_window: None,
+            k_head_dim: 64,
+            v_head_dim: 64,
+            kv_cache_layout: KvCacheLayout::MetalHnd,
+        };
+        let estimate = |has_multimodal_ranges| {
+            metal_decode_workspace(
+                Some(&model),
+                MetalDecodeWorkspaceInput {
+                    activation_dtype: DType::BF16,
+                    cache_dtype: DType::BF16,
+                    block_size: 32,
+                    query_lens: &[1, 1],
+                    context_lens: &[4096, 8192],
+                    hnd_by_layer: &[true],
+                    capacity_bound: false,
+                    has_custom_mask: false,
+                    has_multimodal_ranges,
+                },
+            )
+        };
+        let native = metal_paged_prefill_workspace(MetalPagedPrefillWorkspaceInput {
+            query_lens: &[1, 1],
+            context_lens: &[4096, 8192],
+            query_heads: 2,
+            kv_heads: 1,
+            key_head_dim: 64,
+            value_head_dim: 64,
+            block_size: 32,
+            query_dtype: DType::BF16,
+            cache_dtype: DType::BF16,
+            hnd: true,
+            has_custom_mask: false,
+            has_multimodal_ranges: true,
+        })?
+        .unwrap();
+        assert!(estimate(true)? > estimate(false)?);
+        assert_eq!(
+            estimate(true)?,
+            native + metal_cache_write_workspace(Some(&model), 2, DType::BF16)?
+        );
+        Ok(())
     }
 
     #[test]
@@ -1803,6 +2284,8 @@ mod metal_workspace_tests {
                     context_lens: &[context, context],
                     hnd_by_layer: &[false],
                     capacity_bound: false,
+                    has_multimodal_ranges: false,
+                    has_custom_mask: false,
                 },
             )
             .unwrap()
@@ -1834,6 +2317,8 @@ mod metal_workspace_tests {
                     context_lens: &[8192],
                     hnd_by_layer: &[hnd],
                     capacity_bound: false,
+                    has_multimodal_ranges: false,
+                    has_custom_mask: false,
                 },
             )
             .unwrap()

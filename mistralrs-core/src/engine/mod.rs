@@ -1772,10 +1772,23 @@ impl Engine {
                                         requires_prefix_attention,
                                         is_causal: !has_noncausal_mm_context,
                                         causality_known: true,
-                                        has_custom_mask: has_noncausal_mm_context,
+                                        has_custom_mask: if execution_devices
+                                            .iter()
+                                            .any(candle_core::Device::is_metal)
+                                        {
+                                            memory_plan.is_some_and(|plan| {
+                                                plan.custom_prefill_mask
+                                                    && !plan.metal_prefill_mask_is_structured
+                                            })
+                                        } else {
+                                            has_noncausal_mm_context
+                                                || memory_plan
+                                                    .is_some_and(|plan| plan.custom_prefill_mask)
+                                        },
                                         has_noncausal_mm_context,
                                         has_sliding_window,
                                         fa3_num_sm_by_layer: &fa3_num_sm_by_layer,
+                                        hnd_by_layer: &_metal_hnd_by_layer,
                                     },
                                 )
                             } else {
@@ -1796,6 +1809,11 @@ impl Engine {
                                             context_lens: &full_context_lens,
                                             hnd_by_layer: &_metal_hnd_by_layer,
                                             capacity_bound: false,
+                                            has_multimodal_ranges: has_noncausal_mm_context,
+                                            has_custom_mask: memory_plan.is_some_and(|plan| {
+                                                plan.custom_prefill_mask
+                                                    && !plan.metal_prefill_mask_is_structured
+                                            }),
                                         },
                                     )
                                 } else {
@@ -1807,6 +1825,9 @@ impl Engine {
                                     crate::paged_attention::plan::PromptPrefillWorkspace {
                                         bytes,
                                         gather_workspace_bytes: 0,
+                                        attention_is_complete: execution_devices
+                                            .iter()
+                                            .any(candle_core::Device::is_metal),
                                     }
                                 })
                             };
@@ -1833,10 +1854,7 @@ impl Engine {
                                 let attention_bytes = if is_prompt
                                     && execution_devices.iter().any(candle_core::Device::is_metal)
                                 {
-                                    crate::paged_attention::plan::metal_gather_workspace_bytes(
-                                        workspace.bytes,
-                                    )?
-                                    .checked_add(
+                                    workspace.bytes.checked_add(
                                         crate::paged_attention::plan::metal_cache_write_workspace(
                                             model_metadata.as_deref().map(|model| {
                                                 model as &dyn crate::paged_attention::ModelConfigLike
@@ -1869,6 +1887,7 @@ impl Engine {
                                     query_tokens,
                                     attention_bytes,
                                     extra_raw_logit_tokens,
+                                    workspace.attention_is_complete,
                                 )?;
                                 Ok((bytes, attention_bytes))
                             })();

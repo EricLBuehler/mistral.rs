@@ -29,6 +29,7 @@ pub struct ActivationModelConfig {
     pub vocab_size: usize,
     pub extra_hidden_elements_per_token: usize,
     pub custom_prefill_mask: bool,
+    pub metal_prefill_mask_is_structured: bool,
     pub attention_features: Option<PrefixPrefillAttentionFeatures>,
 }
 
@@ -60,6 +61,8 @@ pub struct ActivationMemoryEstimate {
     pub non_mapped_non_attention_bytes: usize,
     pub planned_query_tokens: usize,
     pub logits_bytes_per_query_token: usize,
+    pub custom_prefill_mask: bool,
+    pub metal_prefill_mask_is_structured: bool,
 }
 
 impl ActivationMemoryEstimate {
@@ -301,6 +304,53 @@ fn prefix_query_lengths(max_query: usize, capacity: usize) -> Vec<usize> {
     lengths
 }
 
+fn native_metal_prefill_workspace(
+    ctx: &ActivationMemoryContext<'_>,
+    cfg: &ModelActivationConfig<'_>,
+    layer: usize,
+    query_lens: &[usize],
+    context_lens: &[usize],
+) -> Result<Option<usize>> {
+    #[cfg(feature = "metal")]
+    if ctx.device.is_metal() {
+        use crate::paged_attention::{
+            configured_metal_cache_layout,
+            plan::{metal_paged_prefill_workspace, MetalPagedPrefillWorkspaceInput},
+            KvCacheLayout,
+        };
+        if matches!(
+            cfg.model.kv_cache_layout_for_layer(layer),
+            KvCacheLayout::Mla { .. }
+        ) {
+            return Ok(None);
+        }
+        let hnd = configured_metal_cache_layout()? == KvCacheLayout::MetalHnd;
+        return Ok(metal_paged_prefill_workspace(
+            MetalPagedPrefillWorkspaceInput {
+                query_lens,
+                context_lens,
+                query_heads: cfg.model.num_attn_heads_for_layer(layer),
+                kv_heads: cfg.model.num_kv_heads_for_layer(layer),
+                key_head_dim: cfg.model.k_head_dim_for_layer(layer),
+                value_head_dim: cfg.model.v_head_dim_for_layer(layer),
+                block_size: ctx
+                    .paged
+                    .block_size
+                    .unwrap_or(DEFAULT_PAGED_ATTENTION_BLOCK_SIZE),
+                query_dtype: ctx.dtype,
+                cache_dtype: ctx.paged.cache_type.to_dtype(ctx.dtype),
+                hnd,
+                has_custom_mask: cfg.architecture.custom_prefill_mask
+                    && !cfg.architecture.metal_prefill_mask_is_structured,
+                has_multimodal_ranges: cfg.architecture.custom_prefill_mask,
+            },
+        )?);
+    }
+    #[cfg(not(feature = "metal"))]
+    let _ = (ctx, cfg, layer, query_lens, context_lens);
+    Ok(None)
+}
+
 fn prefix_prefill_workspace(
     ctx: &ActivationMemoryContext<'_>,
     cfg: &ModelActivationConfig<'_>,
@@ -318,6 +368,11 @@ fn prefix_prefill_workspace(
     prefix_query_lengths(max_query, capacity)
         .into_iter()
         .try_fold(0, |peak, query_len| {
+            if let Some(bytes) =
+                native_metal_prefill_workspace(ctx, cfg, layer_idx, &[query_len], &[capacity])?
+            {
+                return Ok(peak.max(bytes));
+            }
             let bytes = gather_prefill_workspace_for_lengths(GatherPrefillWorkspaceRequest {
                 query_lens: &[query_len],
                 kv_lens: &[capacity],
@@ -355,6 +410,13 @@ fn prefix_prefill_workspace(
                     attention_backend: cfg.model.attention_backend_kind_for_layer(layer_idx),
                 },
             })?;
+            let bytes = bytes
+                .checked_mul(if ctx.device.is_metal() {
+                    METAL_BUFFER_ROUNDING_BOUND
+                } else {
+                    1
+                })
+                .context("prefix attention buffer rounding overflow")?;
             Ok(peak.max(bytes))
         })
 }
@@ -389,7 +451,9 @@ fn model_activation_memory(
     let mut prefill_attention_bytes = 0;
     let mut prefix_attention_bytes = 0;
     let mut decode_attention_bytes = 0;
-    let mut mask_variants = std::collections::HashSet::new();
+    let mut cold_mask_variants = std::collections::HashSet::new();
+    let mut prefix_mask_variants = std::collections::HashSet::new();
+    let mut mask_heads = 1;
     for layer_idx in 0..cfg.model.num_layers() {
         if !cfg.model.layer_has_paged_kv_cache(layer_idx) {
             continue;
@@ -403,8 +467,12 @@ fn model_activation_memory(
             },
             None => (None, Some(layer_idx)),
         };
-        mask_variants.insert(mask_key);
         let query_heads = cfg.model.num_attn_heads_for_layer(layer_idx);
+        let has_native_custom_mask = cfg.architecture.custom_prefill_mask
+            && !cfg.architecture.metal_prefill_mask_is_structured;
+        if has_native_custom_mask {
+            mask_heads = mask_heads.max(query_heads);
+        }
         let kv_heads = cfg.model.num_kv_heads_for_layer(layer_idx);
         let k_head_dim = cfg.model.k_head_dim_for_layer(layer_idx);
         let v_head_dim = cfg.model.v_head_dim_for_layer(layer_idx);
@@ -447,24 +515,44 @@ fn model_activation_memory(
             ..prefill
         };
         let decode_bytes = attention_workspace_bytes(decode)?;
-        let prefill_bytes = attention_workspace_bytes(prefill)?
-            .checked_mul(if ctx.device.is_metal() {
-                METAL_BUFFER_ROUNDING_BOUND
-            } else {
-                1
-            })
-            .context("attention buffer rounding overflow")?;
-        prefill_attention_bytes = prefill_attention_bytes.max(prefill_bytes);
-        // Reserve one full-prefix row; runtime admission reduces larger cohorts when their gathers cannot fit.
-        if let Some(capacity) = prefix_context_capacity {
-            let bytes = prefix_prefill_workspace(ctx, &cfg, layer_idx, capacity, max_query)?
+        let native_prefill = native_metal_prefill_workspace(
+            ctx,
+            &cfg,
+            layer_idx,
+            &vec![max_query; batch],
+            &vec![max_query; batch],
+        )?;
+        let prefill_bytes = if let Some(bytes) = native_prefill {
+            bytes
+        } else {
+            attention_workspace_bytes(prefill)?
                 .checked_mul(if ctx.device.is_metal() {
                     METAL_BUFFER_ROUNDING_BOUND
                 } else {
                     1
                 })
-                .context("prefix attention buffer rounding overflow")?;
+                .context("attention buffer rounding overflow")?
+        };
+        if native_prefill.is_none() || has_native_custom_mask {
+            cold_mask_variants.insert(mask_key);
+        }
+        prefill_attention_bytes = prefill_attention_bytes.max(prefill_bytes);
+        // Reserve one full-prefix row; runtime admission reduces larger cohorts when their gathers cannot fit.
+        if let Some(capacity) = prefix_context_capacity {
+            let bytes = prefix_prefill_workspace(ctx, &cfg, layer_idx, capacity, max_query)?;
             prefix_attention_bytes = prefix_attention_bytes.max(bytes);
+            if has_native_custom_mask
+                || native_metal_prefill_workspace(
+                    ctx,
+                    &cfg,
+                    layer_idx,
+                    &[max_query.min(capacity)],
+                    &[capacity],
+                )?
+                .is_none()
+            {
+                prefix_mask_variants.insert(mask_key);
+            }
         }
         decode_attention_bytes = decode_attention_bytes.max(decode_bytes);
     }
@@ -476,8 +564,10 @@ fn model_activation_memory(
                 max_query,
                 max_query,
                 ctx.dtype,
-                mask_variants.len(),
-            )?,
+                cold_mask_variants.len(),
+            )?
+            .checked_mul(mask_heads)
+            .context("retained mask size overflow")?,
         ])?;
         if let Some(capacity) = prefix_context_capacity {
             prefix_attention_bytes = sum(&[
@@ -487,8 +577,10 @@ fn model_activation_memory(
                     max_query.min(capacity),
                     capacity,
                     ctx.dtype,
-                    mask_variants.len(),
-                )?,
+                    prefix_mask_variants.len(),
+                )?
+                .checked_mul(mask_heads)
+                .context("retained mask size overflow")?,
             ])?;
         }
     }
@@ -523,6 +615,9 @@ fn model_activation_memory(
                 context_lens: &vec![context; ctx.limits.max_num_seqs],
                 hnd_by_layer: &hnd_by_layer,
                 capacity_bound: true,
+                has_custom_mask: cfg.architecture.custom_prefill_mask
+                    && !cfg.architecture.metal_prefill_mask_is_structured,
+                has_multimodal_ranges: cfg.architecture.custom_prefill_mask,
             },
         )?;
     }
@@ -557,6 +652,8 @@ fn model_activation_memory(
             dtype_bytes + DType::F32.size_in_bytes(),
             rounding,
         ])?,
+        custom_prefill_mask: cfg.architecture.custom_prefill_mask,
+        metal_prefill_mask_is_structured: cfg.architecture.metal_prefill_mask_is_structured,
     })
 }
 
@@ -612,13 +709,20 @@ pub(crate) fn estimate_model_activation_memory(
         ..ctx
     };
     let architecture = loader.activation_model_config(config)?;
-    let mut estimate = model_activation_memory(
-        &ctx,
-        ModelActivationConfig {
-            model: &*model,
-            architecture,
-        },
-    )?;
+    let cfg = ModelActivationConfig {
+        model: &*model,
+        architecture,
+    };
+    let mut native_prefill = ctx.device.is_metal()
+        && (!architecture.custom_prefill_mask || architecture.metal_prefill_mask_is_structured);
+    let mut paged_layers = 0;
+    for layer in (0..model.num_layers()).filter(|&layer| model.layer_has_paged_kv_cache(layer)) {
+        paged_layers += 1;
+        native_prefill &=
+            native_metal_prefill_workspace(&ctx, &cfg, layer, &[max_query], &[max_query])?
+                .is_some();
+    }
+    let mut estimate = model_activation_memory(&ctx, cfg)?;
     let encoder_params = match &params {
         AutoDeviceMapParams::Text { max_seq_len, .. } => AutoDeviceMapParams::Text {
             max_seq_len: *max_seq_len,
@@ -643,11 +747,13 @@ pub(crate) fn estimate_model_activation_memory(
     estimate.non_mapped_non_attention_bytes =
         sum(&[estimate.non_mapped_non_attention_bytes, encoder])?;
     estimate.non_mapped_bytes = estimate.non_mapped_non_attention_bytes;
-    let legacy = product(&[
-        loader.mapped_max_act_size_elems(config, &params)?,
-        DType::F32.size_in_bytes(),
-    ])?;
-    estimate.mapped_bytes = estimate.mapped_bytes.max(legacy);
+    if !native_prefill || paged_layers == 0 {
+        let legacy = product(&[
+            loader.mapped_max_act_size_elems(config, &params)?,
+            DType::F32.size_in_bytes(),
+        ])?;
+        estimate.mapped_bytes = estimate.mapped_bytes.max(legacy);
+    }
     #[cfg(feature = "metal")]
     let cache_write_workspace = if ctx.device.is_metal() {
         crate::paged_attention::plan::metal_cache_write_workspace(
@@ -667,6 +773,8 @@ pub(crate) fn apply_model_activation_memory(
     paged: &mut PagedAttentionConfig,
     estimate: ActivationMemoryEstimate,
 ) {
+    paged.custom_prefill_mask |= estimate.custom_prefill_mask;
+    paged.metal_prefill_mask_is_structured = estimate.metal_prefill_mask_is_structured;
     paged.reserve_activation_memory(
         estimate.non_mapped_bytes.max(estimate.mapped_bytes),
         estimate.mapped_bytes,
@@ -701,6 +809,8 @@ mod tests {
             non_mapped_non_attention_bytes: 100,
             planned_query_tokens: 512,
             logits_bytes_per_query_token: 7,
+            custom_prefill_mask: false,
+            metal_prefill_mask_is_structured: false,
         };
         for attention in [10, 80, 200] {
             let estimate = ActivationMemoryEstimate {
@@ -738,6 +848,8 @@ mod tests {
             non_mapped_non_attention_bytes: 50,
             planned_query_tokens: 512,
             logits_bytes_per_query_token: 0,
+            custom_prefill_mask: false,
+            metal_prefill_mask_is_structured: false,
         };
         assert_eq!(estimate.reserve_attention_inventory(0)?, estimate);
         assert!(ActivationMemoryEstimate {
@@ -761,6 +873,8 @@ mod tests {
             non_mapped_non_attention_bytes: 100,
             planned_query_tokens: QUERY_TOKENS,
             logits_bytes_per_query_token: 0,
+            custom_prefill_mask: false,
+            metal_prefill_mask_is_structured: false,
         }
         .reserve_attention_inventory(CACHE_WRITE)?;
         let mut paged = PagedAttentionConfig::new(
@@ -782,6 +896,104 @@ mod tests {
         }
         .reserve_attention_inventory(CACHE_WRITE)
         .is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn structured_mask_metadata_reaches_runtime_without_changing_non_attention() -> Result<()> {
+        let mut paged = PagedAttentionConfig::new(
+            Some(32),
+            MemoryGoal::Auto,
+            crate::paged_attention::PagedCacheType::Auto,
+        )?;
+        apply_model_activation_memory(
+            &mut paged,
+            ActivationMemoryEstimate {
+                mapped_bytes: 120,
+                non_mapped_bytes: 220,
+                mapped_non_attention_bytes: 100,
+                non_mapped_non_attention_bytes: 200,
+                planned_query_tokens: 512,
+                custom_prefill_mask: true,
+                metal_prefill_mask_is_structured: true,
+                ..Default::default()
+            },
+        );
+        let plan = paged.runtime_memory_plan();
+        assert!(plan.custom_prefill_mask);
+        assert!(plan.metal_prefill_mask_is_structured);
+        assert_eq!(plan.non_attention_bytes(true, 1)?, 200);
+        assert_eq!(plan.non_attention_bytes(false, 1)?, 100);
+        Ok(())
+    }
+
+    #[cfg(feature = "metal")]
+    #[test]
+    #[ignore = "requires a Metal device"]
+    fn native_metal_startup_reservation_has_no_full_prefix_gather() -> Result<()> {
+        let device = Device::new_metal(0)?;
+        let metadata = crate::paged_attention::ModelConfigMetadata {
+            max_seq_len: 65_536,
+            num_layers: 2,
+            hidden_size: 1024,
+            num_kv_heads: 2,
+            num_attn_heads: 8,
+            sliding_window: None,
+            k_head_dim: 512,
+            v_head_dim: 512,
+            kv_cache_layout: crate::paged_attention::KvCacheLayout::Standard,
+        };
+        let model = crate::paged_attention::AttentionFeaturesConfig::new(
+            &metadata,
+            Some(PrefixPrefillAttentionFeatures::default()),
+        );
+        let paged = PagedAttentionConfig::new(
+            Some(32),
+            MemoryGoal::Auto,
+            crate::paged_attention::PagedCacheType::Auto,
+        )?
+        .with_execution_limits(ExecutionMemoryLimits {
+            max_num_seqs: 1,
+            max_num_batched_tokens: 512,
+            max_prefill_chunk_tokens: 512,
+        })?;
+        let params = AutoDeviceMapParams::default_text();
+        let estimate = |capacity, custom, structured| {
+            model_activation_memory(
+                &ActivationMemoryContext {
+                    params: &params,
+                    limits: paged.execution_limits,
+                    dtype: DType::BF16,
+                    device: &device,
+                    paged: &paged,
+                    cache_capacity_tokens: Some(capacity),
+                },
+                ModelActivationConfig {
+                    model: &model,
+                    architecture: ActivationModelConfig {
+                        intermediate_size: 4096,
+                        vocab_size: 1024,
+                        custom_prefill_mask: custom,
+                        metal_prefill_mask_is_structured: structured,
+                        ..Default::default()
+                    },
+                },
+            )
+        };
+        let short = estimate(512, false, false)?;
+        let long = estimate(65_536, false, false)?;
+        assert_eq!(
+            long.mapped_non_attention_bytes,
+            short.mapped_non_attention_bytes
+        );
+        assert!(long.mapped_bytes < short.mapped_bytes * 2);
+        let structured = estimate(65_536, true, true)?;
+        let custom = estimate(65_536, true, false)?;
+        assert!(custom.mapped_bytes > structured.mapped_bytes * 8);
+        assert_eq!(
+            custom.mapped_non_attention_bytes,
+            structured.mapped_non_attention_bytes
+        );
         Ok(())
     }
 

@@ -266,7 +266,7 @@ pub fn get_device_layers(
     let kv_cache_bytes = match paged_attn_config.as_deref_mut() {
         Some(cfg) => {
             info!(
-                "Reserving {} MB on the primary device and {} MB on mapped devices for activations (predicted).",
+                "Reserving {} MiB on the primary device and {} MiB on mapped devices for activations (predicted).",
                 b_to_mb!(non_mapped_max.max(mapped_max)),
                 b_to_mb!(mapped_max),
             );
@@ -320,7 +320,16 @@ pub fn get_device_layers(
     layer_sizes_in_bytes.reverse();
 
     let mut mappings = Vec::new();
-    info!("Using automatic device mapping parameters: {params}.");
+    if let Some(config) = paged_attn_config.as_ref() {
+        info!(
+            max_num_seqs = config.execution_limits.max_num_seqs,
+            max_num_batched_tokens = config.execution_limits.max_num_batched_tokens,
+            max_prefill_chunk_tokens = config.execution_limits.max_prefill_chunk_tokens,
+            "Using paged execution limits for automatic device mapping"
+        );
+    } else {
+        info!("Using automatic device mapping parameters: {params}.");
+    }
     if let Some(subs) = loader.non_mapped_sub_models_for_config(config)? {
         let (_, last) = avail.last().unwrap();
         info!(
@@ -340,17 +349,22 @@ pub fn get_device_layers(
             .context("No more devices to map to. The model does not fit on this system.")?;
 
         let cap = avail_bytes;
-        if ordinal == 0
-            && checked_memory_sum([
-                non_mapped_max.max(mapped_max),
+        if ordinal == 0 {
+            let activations = non_mapped_max.max(mapped_max);
+            let required = checked_memory_sum([
+                activations,
                 non_mapped_size_in_bytes,
                 base_device_memory_reservation_bytes,
             ])
-            .is_none_or(|required| required > cap)
-        {
-            anyhow::bail!(
-                "Primary device {} cannot fit its fixed model components, activations, and post-load reservation within {} MB of usable capacity.",
+            .context("primary device reservation overflow")?;
+            anyhow::ensure!(
+                required <= cap,
+                "Primary device {} needs {} MiB ({} MiB of fixed model components, {} MiB of activations, {} MiB of post-load reservations), but only {} MiB is usable under the memory goal.",
                 dev.device_pretty_repr(),
+                b_to_mb!(required),
+                b_to_mb!(non_mapped_size_in_bytes),
+                b_to_mb!(activations),
+                b_to_mb!(base_device_memory_reservation_bytes),
                 b_to_mb!(cap),
             );
         }

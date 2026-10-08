@@ -1,5 +1,88 @@
 use candle_core::{Device, Result};
+#[cfg(not(target_os = "macos"))]
 use sysinfo::System;
+
+#[cfg(not(target_os = "macos"))]
+fn system_memory() -> Result<(usize, usize)> {
+    let mut sys = System::new();
+    sys.refresh_memory();
+    Ok((
+        usize::try_from(sys.total_memory())?,
+        usize::try_from(sys.available_memory())?,
+    ))
+}
+
+#[cfg(target_os = "macos")]
+fn system_memory() -> Result<(usize, usize)> {
+    unsafe extern "C" {
+        fn mach_port_deallocate(
+            task: libc::mach_port_t,
+            name: libc::mach_port_t,
+        ) -> libc::kern_return_t;
+    }
+
+    let mut total = 0u64;
+    let mut total_size = std::mem::size_of_val(&total);
+    let result = unsafe {
+        libc::sysctlbyname(
+            c"hw.memsize".as_ptr(),
+            (&mut total as *mut u64).cast(),
+            &mut total_size,
+            std::ptr::null_mut(),
+            0,
+        )
+    };
+    if result != 0 {
+        return Err(candle_core::Error::wrap(std::io::Error::last_os_error()));
+    }
+    let page_size = unsafe { libc::sysconf(libc::_SC_PAGESIZE) };
+    if page_size <= 0 {
+        candle_core::bail!("macOS memory page size query failed");
+    }
+    let mut stat: libc::vm_statistics64 = unsafe { std::mem::zeroed() };
+    let mut count = libc::HOST_VM_INFO64_COUNT;
+    #[allow(deprecated)]
+    let host = unsafe { libc::mach_host_self() };
+    let result = unsafe {
+        libc::host_statistics64(
+            host,
+            libc::HOST_VM_INFO64,
+            (&mut stat as *mut libc::vm_statistics64).cast(),
+            &mut count,
+        )
+    };
+    #[allow(deprecated)]
+    let release_result = unsafe { mach_port_deallocate(libc::mach_task_self_, host) };
+    if result != libc::KERN_SUCCESS {
+        candle_core::bail!("macOS memory statistics query failed: {result}");
+    }
+    if release_result != libc::KERN_SUCCESS {
+        candle_core::bail!("macOS memory statistics port release failed: {release_result}");
+    }
+    let total = usize::try_from(total)?;
+    Ok((
+        total,
+        macos_available_memory(&stat, usize::try_from(page_size)?, total)?,
+    ))
+}
+
+#[cfg(target_os = "macos")]
+fn macos_available_memory(
+    stat: &libc::vm_statistics64,
+    page_size: usize,
+    total: usize,
+) -> Result<usize> {
+    // Fully reclaimable pages: https://github.com/apple-oss-distributions/xnu/blob/main/doc/vm/memorystatus.md
+    // Mach free and pageable external counts both include speculative pages.
+    let pages = u64::from(stat.free_count)
+        .saturating_sub(u64::from(stat.speculative_count))
+        .saturating_add(u64::from(stat.external_page_count))
+        .saturating_add(u64::from(stat.purgeable_count));
+    let bytes = pages
+        .saturating_mul(u64::try_from(page_size)?)
+        .min(u64::try_from(total)?);
+    Ok(usize::try_from(bytes)?)
+}
 
 #[derive(Debug, Clone, Copy)]
 pub enum DeviceMemory {
@@ -111,20 +194,13 @@ impl MemoryUsage {
     pub fn query(&self, device: &Device) -> Result<DeviceMemory> {
         match device {
             Device::Cpu => {
-                let mut sys = System::new();
-                sys.refresh_memory();
-                Ok(DeviceMemory::Discrete {
-                    total: usize::try_from(sys.total_memory())?,
-                    free: usize::try_from(sys.available_memory())?,
-                })
+                let (total, free) = system_memory()?;
+                Ok(DeviceMemory::Discrete { total, free })
             }
             #[cfg(feature = "cuda")]
             Device::Cuda(dev) => {
                 if super::normal::is_integrated_gpu(device) {
-                    let mut sys = System::new();
-                    sys.refresh_memory();
-                    let total_bytes = usize::try_from(sys.total_memory())?;
-                    let avail_bytes = usize::try_from(sys.available_memory())?;
+                    let (total_bytes, avail_bytes) = system_memory()?;
                     Ok(DeviceMemory::Unified {
                         total: total_bytes,
                         available: avail_bytes,
@@ -146,10 +222,7 @@ impl MemoryUsage {
             }
             #[cfg(feature = "metal")]
             Device::Metal(dev) => {
-                let mut sys = System::new();
-                sys.refresh_memory();
-                let total = usize::try_from(sys.total_memory())?;
-                let available = usize::try_from(sys.available_memory())?;
+                let (total, available) = system_memory()?;
                 let recommended = dev.device().recommended_max_working_set_size();
                 Ok(DeviceMemory::Unified {
                     total,
@@ -403,5 +476,113 @@ fn cuda_result(
         Err(candle_core::Error::msg(format!(
             "{context} failed: {result:?}"
         )))
+    }
+}
+
+#[cfg(all(test, target_os = "macos"))]
+mod tests {
+    use super::{macos_available_memory, system_memory};
+
+    const PAGE_SIZE: usize = 16 * 1024;
+    const TOTAL_PAGES: u32 = 1_000;
+    const INITIAL_FREE_PAGES: u32 = 600;
+    const TRANSFER_PAGES: u32 = 100;
+    const COMPRESSED_PAGES: u32 = 25;
+
+    fn free_memory() -> libc::vm_statistics64 {
+        let mut stat: libc::vm_statistics64 = unsafe { std::mem::zeroed() };
+        stat.free_count = INITIAL_FREE_PAGES;
+        stat.internal_page_count = TOTAL_PAGES - INITIAL_FREE_PAGES;
+        stat.active_count = stat.internal_page_count;
+        stat
+    }
+
+    fn available_pages(stat: &libc::vm_statistics64) -> usize {
+        macos_available_memory(stat, PAGE_SIZE, TOTAL_PAGES as usize * PAGE_SIZE).unwrap()
+            / PAGE_SIZE
+    }
+
+    #[test]
+    fn macos_system_memory_query_succeeds() {
+        let (total, available) = system_memory().unwrap();
+        assert!(total > 0);
+        assert!(available <= total);
+    }
+
+    #[test]
+    fn file_faults_and_queue_promotion_preserve_available_memory() {
+        let mut stat = free_memory();
+        let initial = available_pages(&stat);
+        stat.free_count -= TRANSFER_PAGES;
+        stat.external_page_count += TRANSFER_PAGES;
+        stat.inactive_count += TRANSFER_PAGES;
+        assert_eq!(available_pages(&stat), initial);
+
+        stat.inactive_count -= TRANSFER_PAGES;
+        stat.active_count += TRANSFER_PAGES;
+        assert_eq!(available_pages(&stat), initial);
+    }
+
+    #[test]
+    fn speculative_file_pages_are_counted_once_before_and_after_activation() {
+        let mut stat = free_memory();
+        let initial = available_pages(&stat);
+        stat.speculative_count += TRANSFER_PAGES;
+        stat.external_page_count += TRANSFER_PAGES;
+        assert_eq!(available_pages(&stat), initial);
+
+        stat.free_count -= TRANSFER_PAGES;
+        stat.speculative_count -= TRANSFER_PAGES;
+        stat.active_count += TRANSFER_PAGES;
+        assert_eq!(available_pages(&stat), initial);
+    }
+
+    #[test]
+    fn anonymous_pages_require_explicit_volatile_purgeability() {
+        let mut stat = free_memory();
+        stat.free_count -= TRANSFER_PAGES;
+        stat.internal_page_count += TRANSFER_PAGES;
+        stat.active_count += TRANSFER_PAGES;
+        let expected = (INITIAL_FREE_PAGES - TRANSFER_PAGES) as usize;
+        assert_eq!(available_pages(&stat), expected);
+
+        stat.active_count -= TRANSFER_PAGES;
+        stat.inactive_count += TRANSFER_PAGES;
+        assert_eq!(available_pages(&stat), expected);
+
+        stat.purgeable_count += TRANSFER_PAGES;
+        assert_eq!(available_pages(&stat), INITIAL_FREE_PAGES as usize);
+    }
+
+    #[test]
+    fn compression_counts_only_the_pages_it_releases() {
+        let mut stat = free_memory();
+        stat.free_count -= TRANSFER_PAGES;
+        stat.internal_page_count += TRANSFER_PAGES;
+        stat.active_count += TRANSFER_PAGES;
+        let before = available_pages(&stat);
+
+        stat.internal_page_count -= TRANSFER_PAGES;
+        stat.active_count -= TRANSFER_PAGES;
+        stat.compressor_page_count += COMPRESSED_PAGES;
+        stat.free_count += TRANSFER_PAGES - COMPRESSED_PAGES;
+        assert_eq!(
+            available_pages(&stat),
+            before + (TRANSFER_PAGES - COMPRESSED_PAGES) as usize
+        );
+    }
+
+    #[test]
+    fn wiring_file_pages_removes_them_from_available_memory() {
+        let mut stat = free_memory();
+        stat.free_count -= TRANSFER_PAGES;
+        stat.external_page_count += TRANSFER_PAGES;
+        stat.active_count += TRANSFER_PAGES;
+        let before = available_pages(&stat);
+
+        stat.external_page_count -= TRANSFER_PAGES;
+        stat.active_count -= TRANSFER_PAGES;
+        stat.wire_count += TRANSFER_PAGES;
+        assert_eq!(available_pages(&stat), before - TRANSFER_PAGES as usize);
     }
 }
