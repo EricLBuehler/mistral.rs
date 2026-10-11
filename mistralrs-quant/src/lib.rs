@@ -17,7 +17,7 @@ pub mod metal_kernels;
 mod afq;
 mod bitsandbytes;
 mod blockwise_fp8;
-pub(crate) mod cpu_threads;
+pub mod cpu_threads;
 pub mod cublaslt;
 #[cfg(test)]
 #[path = "build_support/cuda_headers.rs"]

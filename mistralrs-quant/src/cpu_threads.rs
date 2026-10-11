@@ -14,7 +14,7 @@
 /// Fraction of available cores the decode GEMV uses when neither override is set.
 const DEFAULT_CORE_FRACTION: usize = 2;
 
-/// Threads to use for CPU decode GEMV, honouring `MISTRALRS_CPU_THREADS` then
+/// Threads for CPU decode-shaped work, honouring `MISTRALRS_CPU_THREADS` then
 /// `RAYON_NUM_THREADS`, else half the cores candle reports.
 pub fn resolve() -> usize {
     read_env_usize("MISTRALRS_CPU_THREADS")
