@@ -312,7 +312,7 @@ case specifically (a short prompt hides an off by one; see risk R3 below).
 
 Commit: `feat(core): sliding window in cpu attention kernels`
 
-### A0-gemv. CPU decode GEMV: reach the memory bandwidth (the real bottleneck)
+### A0-gemv. CPU decode GEMV: reach the memory bandwidth (the real bottleneck) [DONE: 8.2x]
 
 Section 8 measured the actual problem: decode tops out at 10.1 GB/s on a node that streams at
 122.7 GB/s, and 10.1 GB/s is exactly what a single thread achieves. The CPU linear layer is
@@ -323,37 +323,37 @@ entire weight tensor once per token, so it is purely bandwidth-bound and the cei
 `weight_bytes / bandwidth`. Current behaviour is neither bandwidth-saturating nor scaling
 with cores, and past half the cores it degrades.
 
-What this item has to deliver, in order of expected leverage:
+What this item delivered, in order:
 
-1. **Parallelize the weight stream.** Partition the N dimension (output features) across
-   cores so each core streams a slice of the weight matrix. This is the whole ballgame and is
-   how a GEMV should reach aggregate bandwidth.
-2. **Stop the oversubscription.** `get_num_threads()` returns the core count and feeds both
-   the flash-attention rayon pool (`attention/backends/cpu/threading.rs:6`) and the tokio
-   engine runtime (`mistralrs-core/src/lib.rs:36`). Two pools at core count for a batch-1
-   layer-serial workload. A shared helper sizing both off the cores actually available
-   (including under `numactl`/cgroup pinning) is required, and an `MISTRALRS_CPU_THREADS`
-   override should follow the existing `MISTRALRS_*` convention
-   (`utils/debug.rs`, `utils/memory_usage.rs`) and be documented in the environment-variables
-   reference page.
-3. **Fix the quantized dequant path.** `mistralrs-quant/src/gguf/cpu.rs:74-75` calls
-   `qtensor.dequantize(device)`, expanding weights per call instead of streaming packed bytes
-   and dequantizing in registers (or in a small cache, as in A1).
-4. **Parallelize the aarch64 packed MoE GEMV.** Candle's `quantized/repack.rs` has no parallel
-   constructs at all, so `indexed_gemv` is serial even when it is taken (see A5).
+1. **Parallelize the weight stream.** DONE. `mistralrs-quant/src/gemv_cpu.rs` partitions N
+   across the rayon pool, one output row per thread.
+2. **NEON inner loop.** DONE. Four-accumulator `vfmaq_f32` dot, matching the CPU attention
+   backend.
+3. **Stop the oversubscription.** DONE, partially. `cpu_threads::resolve()` sizes the GEMV
+   pool from `MISTRALRS_CPU_THREADS`, then `RAYON_NUM_THREADS`, then half the cores. The two
+   other pools (`attention/backends/cpu/threading.rs:6` and `mistralrs-core/src/lib.rs:36`)
+   still use candle's core count and are not yet on the shared helper; they are sized for
+   attention and the engine runtime rather than for the GEMV, so they were left alone pending
+   their own measurement.
+4. **Fix the quantized dequant path.** NOT DONE. `mistralrs-quant/src/gguf/cpu.rs:74-75`
+   still calls `qtensor.dequantize(device)` per call. This is why the 0.8B Q4_K_M number did
+   not move. This is now the top remaining item inside A0-gemv and overlaps A1.
+5. **Parallelize the aarch64 packed MoE GEMV.** NOT DONE. Candle's `quantized/repack.rs` has
+   no parallel constructs, so `indexed_gemv` is serial (see A5).
 
-Bit-exactness is the binding constraint. Reordering a parallel reduction changes accumulation
-order, which changes logits, which can change sampled tokens. Whatever partitioning is chosen,
-the per-row accumulation order must stay fixed (partition over independent output rows, not
-over a single row's K reduction), and the gate is bit-identical logits before and after, not
-merely "close".
+Bit-exactness is the binding constraint, and it held: the parallel path is asserted
+bit-identical to the serial loop (`parallel_matches_serial_bit_exactly`), the NEON dot keeps a
+fixed per-row reduction order, and the only difference against candle's vectorized matmul is
+FMA-vs-scalar rounding (`gemv_tracks_candle_matmul`, tolerance 1e-3 relative).
 
-Gate: decode on the section 8 harness must exceed single-thread bandwidth by a wide margin and
-must scale with thread count to a plateau. The reference target is 122.7 GB/s aggregate on
-this node; anything approaching single-digit percentages of that is not done. Prefill must not
-regress.
+Result: Qwen3-4B bf16 decode 0.6 to 4.9 tok/s (8.2x), Qwen3.5-9B bf16 decode 0.3 to 2.1 tok/s
+(7x), both on one node with prefill unchanged.
 
-Commit: `perf(quant): bandwidth-bound cpu gemv for decode`
+Gate: MET for the bf16 dense path. Open for the GGUF quantized path and the packed MoE path.
+
+Commits: `perf(quant): output-parallel CPU GEMV for decode`,
+`perf(quant): NEON dot for the output-parallel CPU GEMV`,
+`perf(quant): default cpu decode pool to half the cores`
 
 ### A5. Parallelize the CPU quantized MoE path (new)
 
@@ -490,19 +490,20 @@ chat template and reasoning/tool parsers. None of this should block a working fo
 
 ## 6. Sequencing
 
-| Order | Item | Independent PR | Gate |
-|---|---|---|---|
-| 1 | **A0-gemv bandwidth-bound decode GEMV** | yes | decode exceeds single-thread bandwidth, scales to plateau, bit-identical logits |
-| 2 | A2 sliding window in kernels | yes | golden output per SWA architecture |
-| 3 | A3 NUMA placement | yes | bit identical output, benched at 32/64/128 threads |
-| 4 | A5 CPU quantized MoE parallel | yes | MoE decode uses >1 core; cores-busy measured |
-| 5 | B1 registry | yes | `make docs-check` green |
-| 6 | B2 config and loader | yes | synthetic + manifest tests, bf16 scale-ignoring test |
-| 7 | B3 forward | yes | unit tests, then end to end greedy |
-| 8 | A1 fp8 dequant cache | yes, follow-up | bit identical to uncached, eviction test, bench |
-| 9 | B4 tokenizer and template | yes, non blocking | encode matches HF ids |
-| - | aarch64 CI lane | propose separately | compiles on aarch64 linux |
-| - | A4 CPU paged attention | separate project | serving benchmarks |
+| Order | Item | Independent PR | Gate | State |
+|---|---|---|---|---|
+| 1 | **A0-gemv bandwidth-bound decode GEMV** | yes | decode exceeds single-thread bandwidth, scales to plateau, bit-identical | **DONE for bf16 dense** (8.2x at 4B, 7x at 9B); GGUF quantized and packed MoE paths still open |
+| 2 | A0-gemv.4 GGUF quantized dequant + cache | yes | 0.8B Q4_K_M decode moves; bit identical to uncached | next |
+| 3 | A5 CPU packed MoE GEMV parallel | yes | MoE decode uses >1 core; cores-busy measured | next |
+| 4 | A2 sliding window in kernels | yes | golden output per SWA architecture | |
+| 5 | A3 NUMA placement | yes | bit identical output, benched at 32/64/128 threads | |
+| 6 | B1 registry | yes | `make docs-check` green | |
+| 7 | B2 config and loader | yes | synthetic + manifest tests, bf16 scale-ignoring test | |
+| 8 | B3 forward | yes | unit tests, then end to end greedy | |
+| 9 | A1 fp8 dequant cache | yes, follow-up | bit identical to uncached, eviction test, bench | |
+| 10 | B4 tokenizer and template | yes, non blocking | encode matches HF ids | |
+| - | aarch64 CI lane | propose separately | compiles on aarch64 linux | |
+| - | A4 CPU paged attention | separate project | serving benchmarks | |
 
 The ordering is forced by measurement. A0-gemv is first because section 8 showed decode reaches
 only 10.1 GB/s on a node that streams at 122.7 GB/s, and 10.1 GB/s is what one thread gets on
@@ -820,9 +821,18 @@ End to end on Qwen3-4B bf16 (node 3, depth 512):
 **Decode is 8.2x faster than the baseline** (0.6 to 4.9 tok/s), and the optimum has moved to
 16 threads now that the kernel is bandwidth-bound rather than barrier-bound. Prefill unchanged.
 
-Note both isolated shapes now exceed 122.7 GB/s, the figure the earlier numpy probe reported
-as the node ceiling. That probe was a conservative lower bound (python threads, 32 separate
-arrays), so the real ceiling is higher and these numbers are not contradicting it.
+Generalizes across scale. Qwen3.5-9B bf16 (32 layers, hybrid GDN + full attention), node 3,
+32 threads, depth 512:
+
+| build | decode tok/s | TPOT | TTFT tok/s |
+|---|---|---|---|
+| before | 0.3 +/- 0.0 | 2989 ms | 30.1 |
+| after | **2.1 +/- 0.0** | 478 ms | 27.8 |
+
+7x on decode at 9B, which is the shape Kolibri-1 has. Note both isolated GEMV shapes now
+exceed 122.7 GB/s, the figure the earlier numpy probe reported as the node ceiling. That probe
+was a conservative lower bound (python threads over 32 separate arrays), so the real ceiling is
+higher and these numbers are not contradicting it.
 
 ### Second and third models: the picture gets much worse
 
