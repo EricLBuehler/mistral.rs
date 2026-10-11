@@ -792,6 +792,38 @@ Two things this does NOT yet cover, both measured not assumed:
 - The scalar `dot` inner loop, which caps the bf16 shape at ~9 GB/s. Vectorizing it is the
   next lever inside this item.
 
+#### Second lever inside A0-gemv: NEON dot
+
+With the outputs partitioned, the scalar inner loop became the limit (bf16 shape capped near
+9 GB/s). Adding a four-accumulator NEON `vfmaq_f32` dot, same construction as the CPU
+attention backend already uses (`attention/backends/cpu/neon.rs`), keeps the reduction order
+fixed per output element so the bit-exactness property is preserved (the serial-vs-parallel
+test still passes).
+
+Isolated probe on node 3, GB/s, output-parallel GEMV before and after the NEON dot:
+
+| threads | f32 scalar | f32 NEON | bf16 scalar | bf16 NEON |
+|---|---|---|---|---|
+| 8 | 18.0 | 100.1 | 9.4 | 45.8 |
+| 16 | 30.2 | 114.6 | 17.1 | 74.7 |
+| 32 | 50.6 | **144.4** | 8.9 | **115.8** |
+
+End to end on Qwen3-4B bf16 (node 3, depth 512):
+
+| build | threads | decode tok/s | TPOT |
+|---|---|---|---|
+| parent commit | 32 | 0.6 | 1662 ms |
+| partitioned GEMV, scalar dot | 32 | 1.9 | 526 ms |
+| partitioned GEMV, NEON dot | 16 | **4.9** | 207 ms |
+| partitioned GEMV, NEON dot | 32 | 4.1 | 246 ms |
+
+**Decode is 8.2x faster than the baseline** (0.6 to 4.9 tok/s), and the optimum has moved to
+16 threads now that the kernel is bandwidth-bound rather than barrier-bound. Prefill unchanged.
+
+Note both isolated shapes now exceed 122.7 GB/s, the figure the earlier numpy probe reported
+as the node ceiling. That probe was a conservative lower bound (python threads, 32 separate
+arrays), so the real ceiling is higher and these numbers are not contradicting it.
+
 ### Second and third models: the picture gets much worse
 
 Two more checkpoints, same harness.

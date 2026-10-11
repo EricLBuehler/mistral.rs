@@ -78,12 +78,72 @@ fn gemv_into_vec(xs: &Tensor, w: &Tensor, n: usize, k: usize) -> Result<Vec<f32>
     Ok(out)
 }
 
+#[cfg(target_arch = "aarch64")]
+fn dot(x: &[f32], w: &[f32]) -> f32 {
+    dot_neon(x, w)
+}
+
+#[cfg(not(target_arch = "aarch64"))]
 fn dot(x: &[f32], w: &[f32]) -> f32 {
     let mut acc = 0f32;
     for (xi, wi) in x.iter().zip(w) {
         acc += xi * wi;
     }
     acc
+}
+
+/// Four independent accumulators over 16 lanes: matches the NEON dot the CPU attention
+/// backend already uses, and keeps a fixed reduction order per output element so results
+/// stay independent of how outputs are partitioned.
+#[cfg(target_arch = "aarch64")]
+fn dot_neon(a: &[f32], b: &[f32]) -> f32 {
+    use core::arch::aarch64::*;
+
+    unsafe {
+        let mut s0 = vdupq_n_f32(0.0);
+        let mut s1 = vdupq_n_f32(0.0);
+        let mut s2 = vdupq_n_f32(0.0);
+        let mut s3 = vdupq_n_f32(0.0);
+        let mut i = 0;
+        while i + 16 <= a.len() {
+            s0 = vfmaq_f32(
+                s0,
+                vld1q_f32(a.as_ptr().add(i)),
+                vld1q_f32(b.as_ptr().add(i)),
+            );
+            s1 = vfmaq_f32(
+                s1,
+                vld1q_f32(a.as_ptr().add(i + 4)),
+                vld1q_f32(b.as_ptr().add(i + 4)),
+            );
+            s2 = vfmaq_f32(
+                s2,
+                vld1q_f32(a.as_ptr().add(i + 8)),
+                vld1q_f32(b.as_ptr().add(i + 8)),
+            );
+            s3 = vfmaq_f32(
+                s3,
+                vld1q_f32(a.as_ptr().add(i + 12)),
+                vld1q_f32(b.as_ptr().add(i + 12)),
+            );
+            i += 16;
+        }
+        let mut sum = vaddq_f32(vaddq_f32(s0, s1), vaddq_f32(s2, s3));
+        while i + 4 <= a.len() {
+            sum = vfmaq_f32(
+                sum,
+                vld1q_f32(a.as_ptr().add(i)),
+                vld1q_f32(b.as_ptr().add(i)),
+            );
+            i += 4;
+        }
+        let mut out = vaddvq_f32(sum);
+        while i < a.len() {
+            out += *a.get_unchecked(i) * *b.get_unchecked(i);
+            i += 1;
+        }
+        out
+    }
 }
 
 fn serial(x: &[f32], w: &[f32], n: usize, k: usize) -> Vec<f32> {
