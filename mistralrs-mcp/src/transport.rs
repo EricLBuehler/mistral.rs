@@ -9,6 +9,9 @@ use tokio::net::TcpStream;
 use tokio_tungstenite::{connect_async, tungstenite::Message, MaybeTlsStream, WebSocketStream};
 
 /// Transport layer for MCP communication
+// `async_trait` emits `#[must_use]` on boxed futures; Rust 1.99 Clippy
+// reports this as a redundant annotation in the macro expansion.
+#[allow(clippy::double_must_use)]
 #[async_trait::async_trait]
 pub trait McpTransport: Send + Sync {
     /// Send a JSON-RPC request and receive a response

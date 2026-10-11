@@ -14,6 +14,9 @@ use tokio::sync::Semaphore;
 use tracing::warn;
 
 /// Trait for MCP server connections
+// `async_trait` emits `#[must_use]` on boxed futures; Rust 1.99 Clippy
+// reports this as a redundant annotation in the macro expansion.
+#[allow(clippy::double_must_use)]
 #[async_trait::async_trait]
 pub trait McpServerConnection: Send + Sync {
     /// Get the server ID
