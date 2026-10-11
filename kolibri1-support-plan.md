@@ -538,6 +538,11 @@ problems and its 78 GB weights make them 150x more expensive to hit.
   says nothing about the merges, so do not assume it transfers.
 - **R6 A1 blast radius.** `BlockwiseFP8Linear` serves every fp8 model. A cache bug is a
   correctness bug for all of them, not a perf regression.
+- **R9 workspace clippy debt.** `cargo clippy --workspace --tests --examples -- -D warnings`
+  reports 16 pre-existing `must_use` errors (`mistralrs-core/src/pipeline/mod.rs:1748`,
+  `mistralrs-mcp/src/client.rs:17`, `mistralrs-mcp/src/transport.rs:12`, and others). These
+  are on pristine `master`, not introduced here, but they mean the CI clippy gate cannot be
+  expected to pass until they are fixed. `mistralrs-quant` on its own is clean.
 - **R7 scales must stay f32.** The oracle explicitly refuses any power-of-two scale path for
   this model, because Kolibri-1's fp32 block scales are not representable as E8M0. Any
   fp8 KV or fp8 scale optimization for this model must not round scales to powers of two.
