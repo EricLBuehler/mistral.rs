@@ -847,12 +847,13 @@ End to end on Qwen3-4B bf16 (node 3, depth 512):
 16 threads now that the kernel is bandwidth-bound rather than barrier-bound. Prefill unchanged.
 
 Generalizes across scale. Qwen3.5-9B bf16 (32 layers, hybrid GDN + full attention), node 3,
-32 threads, depth 512:
+depth 512:
 
-| build | decode tok/s | TPOT | TTFT tok/s |
-|---|---|---|---|
-| before | 0.3 +/- 0.0 | 2989 ms | 30.1 |
-| after | **2.1 +/- 0.0** | 478 ms | 27.8 |
+| build | threads | decode tok/s | TPOT | TTFT tok/s |
+|---|---|---|---|---|
+| before | 128 (default) | 0.3 +/- 0.0 | 2989 ms | 30.1 |
+| after | 32 | 2.1 +/- 0.0 | 478 ms | 27.8 |
+| after | 16 | 2.1 +/- 0.1 | 483 ms | 20.1 |
 
 7x on decode at 9B, which is the shape Kolibri-1 has. Note both isolated GEMV shapes now
 exceed 122.7 GB/s, the figure the earlier numpy probe reported as the node ceiling. That probe
