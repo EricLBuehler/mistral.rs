@@ -134,6 +134,16 @@ impl QuantMethod for UnquantLinear {
         // Batch matrix multiplication
         maybe_init_cublas_lt_wrapper(a.device().clone());
 
+        // Decode is a single row against a large weight and is bandwidth-bound; candle runs it
+        // at one core's bandwidth, so split the outputs across the pool.
+        if a.device().is_cpu() && crate::gemv_cpu::should_use_gemv(a, &self.w) {
+            let out = crate::gemv_cpu::gemv(a, &self.w)?;
+            return match self.b.as_ref() {
+                Some(b) => out.broadcast_add(b),
+                None => Ok(out),
+            };
+        }
+
         // Try custom GEMV for single-token decode (batch_size=1)
         #[cfg(feature = "cuda")]
         if crate::gemv::should_use_gemv(a, &self.w) {

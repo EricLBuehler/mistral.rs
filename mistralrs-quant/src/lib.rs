@@ -17,6 +17,7 @@ pub mod metal_kernels;
 mod afq;
 mod bitsandbytes;
 mod blockwise_fp8;
+pub(crate) mod cpu_threads;
 pub mod cublaslt;
 #[cfg(test)]
 #[path = "build_support/cuda_headers.rs"]
@@ -29,6 +30,7 @@ pub mod f8q8;
 mod fp8;
 mod fp8_config;
 pub mod gemv;
+pub mod gemv_cpu;
 mod gguf;
 mod gptq;
 mod hqq;
