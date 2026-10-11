@@ -253,6 +253,30 @@ mod tests {
     }
 
     #[test]
+    fn duplicate_keys_in_transformer_shards_are_rejected() -> Result<()> {
+        let dir = tempdir()?;
+        let paths = [
+            dir.path().join("first.safetensors"),
+            dir.path().join("second.safetensors"),
+        ];
+        let bytes = [0u8; 16];
+        for path in &paths {
+            serialize_to_file(
+                HashMap::from([(
+                    "model.layers.0.proj.weight",
+                    TensorView::new(SafeDtype::BF16, vec![2, 4], &bytes)?,
+                )]),
+                None,
+                path,
+            )?;
+        }
+        let error =
+            checkpoint_device_map_sizes(&paths, 1, DType::BF16, standard_layer_index).unwrap_err();
+        assert!(format!("{error:#}").contains("Duplicate tensor key `model.layers.0.proj.weight`"));
+        Ok(())
+    }
+
+    #[test]
     fn incomplete_layer_inventory_falls_back() -> Result<()> {
         let dir = tempdir()?;
         let path = dir.path().join("weights.safetensors");

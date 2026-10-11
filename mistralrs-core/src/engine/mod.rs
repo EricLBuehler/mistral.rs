@@ -598,15 +598,16 @@ impl Engine {
         ) = {
             let pipeline = get_mut_arcmutex!(pipeline);
             let pipeline_metadata = pipeline.get_metadata();
+            let hybrid_cache = !pipeline_metadata.no_kv_cache && pipeline.cache().is_hybrid();
             (
                 pipeline.requires_uniform_prompt_batch(),
                 pipeline.requires_uniform_completion_batch(),
                 pipeline.requires_uniform_media_batch(),
                 pipeline.supports_packed_prefill(),
-                pipeline.cache().is_hybrid(),
+                hybrid_cache,
                 (pipeline.device().is_cuda() || pipeline.device().is_metal())
                     && !pipeline_metadata.is_xlora,
-                pipeline.cache().is_hybrid(),
+                hybrid_cache,
                 pipeline.speculative_prefix_checkpoint_policy(),
             )
         };

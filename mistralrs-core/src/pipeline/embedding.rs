@@ -401,6 +401,22 @@ impl Loader for EmbeddingLoader {
                     }
                 };
 
+            let module_bytes = paths
+                .get_modules()
+                .context("Embedding models require the `modules.json` file.")?
+                .iter()
+                .try_fold(0usize, |total, module| -> Result<usize> {
+                    total
+                        .checked_add(module.runtime_size(dtype)?)
+                        .context("Embedding module size overflow")
+                })?;
+            let non_mapped_size_in_bytes = non_mapped_size_in_bytes
+                .checked_add(module_bytes)
+                .context("Embedding non-mapped size overflow")?;
+            let total_model_size_in_bytes = total_model_size_in_bytes
+                .checked_add(module_bytes)
+                .context("Embedding total size overflow")?;
+
             let new = auto_device_map::get_device_layers(
                 &*self.inner,
                 &config,

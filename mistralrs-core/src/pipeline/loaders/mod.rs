@@ -388,15 +388,20 @@ pub struct EmbeddingModelPaths<P: Debug> {
     pub adapter_paths: AdapterPaths,
 }
 
-impl<P: Debug> EmbeddingModelPaths<P> {
+impl<P: Debug + AsRef<std::path::Path>> EmbeddingModelPaths<P> {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         tokenizer_filename: P,
         config_filename: P,
-        filenames: Vec<P>,
+        mut filenames: Vec<P>,
         adapter_paths: AdapterPaths,
         modules: Vec<EmbeddingModulePaths>,
     ) -> Self {
+        filenames.retain(|filename| {
+            !modules.iter().any(|module| {
+                matches!(module, EmbeddingModulePaths::Dense { model, .. } if model == filename.as_ref())
+            })
+        });
         Self {
             tokenizer_filename,
             config_filename,
