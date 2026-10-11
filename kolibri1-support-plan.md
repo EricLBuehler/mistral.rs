@@ -798,6 +798,26 @@ Two things this does NOT yet cover, both measured not assumed:
 - The scalar `dot` inner loop, which caps the bf16 shape at ~9 GB/s. Vectorizing it is the
   next lever inside this item.
 
+#### Thread policy: half the cores, and where the remaining gap is
+
+Qwen3-4B bf16, node 3, depth 512, decode tok/s:
+
+| configuration | decode tok/s |
+|---|---|
+| master | 0.6 |
+| default after this branch (mistralrs pools at half, candle at core count) | 2.2-2.6 |
+| `RAYON_NUM_THREADS=16` (sizes every pool consistently) | **5.4** |
+
+The gap between the default and `RAYON_NUM_THREADS=16` is not the GEMV: it is that
+`RAYON_NUM_THREADS` also resizes candle's *global* rayon pool, which backs candle's own
+matmul and reduction kernels. mistralrs cannot set that pool, so its own pools (the decode
+GEMV and the flash-attention pool, both now on `cpu_threads::resolve`) can only follow it,
+not lead it. The honest default is therefore "half the cores for the pools we own, and set
+`RAYON_NUM_THREADS` to move the rest"; that is what the docs entry says.
+
+This is why the old advice to think of the thread count as one number is wrong: there are
+three pools, and only one of them is reachable from here.
+
 #### Second lever inside A0-gemv: NEON dot
 
 With the outputs partitioned, the scalar inner loop became the limit (bf16 shape capped near
