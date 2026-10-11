@@ -144,6 +144,7 @@ fn main() -> Result<(), String> {
     // Declare expected cfg values for check-cfg lint
     println!("cargo::rustc-check-cfg=cfg(has_marlin_kernels)");
     println!("cargo::rustc-check-cfg=cfg(has_blockwise_fp8_kernels)");
+    println!("cargo::rustc-check-cfg=cfg(has_fp8_mma_kernels)");
     println!("cargo::rustc-check-cfg=cfg(has_cutlass_fp8_sm90_kernels)");
     println!("cargo::rustc-check-cfg=cfg(has_deepgemm_fp8_sm90_provider)");
     println!("cargo::rustc-check-cfg=cfg(has_scalar_fp8_kernels)");
@@ -222,6 +223,9 @@ fn main() -> Result<(), String> {
 
         if cc_over_80 {
             println!("cargo:rustc-cfg=has_marlin_kernels");
+            // Never advertise native MMA when *_fp8_mma.cu is excluded (SM61).
+            // Keep the original SM80+ compilation capability unchanged.
+            println!("cargo:rustc-cfg=has_fp8_mma_kernels");
             // WMMA tensor core MXFP4 kernel (FP16/BF16 WMMA requires SM >= 80)
             println!("cargo:rustc-cfg=has_mxfp4_wmma_kernels");
         }

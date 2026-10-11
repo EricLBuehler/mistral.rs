@@ -958,12 +958,12 @@ mod legacy_bf16_pascal_proof {
         let device = Device::new_cuda(0)?;
         let a = Tensor::new(&[[1.0_f32, 2.0]], &device)?.to_dtype(DType::BF16)?;
         assert!(use_legacy_bf16_fallback(&a));
-        let weight = Tensor::new(&[[1.0_f32, 1.0], [2.0, 0.0]], &device)?
-            .to_dtype(DType::BF16)?;
-        let layer = <UnquantLinear as QuantMethod>::new(
-            QuantMethodConfig::Unquantized(Linear::new(weight, None))
-        )?;
-        let result = layer.forward_raw(&a)?
+        let weight = Tensor::new(&[[1.0_f32, 1.0], [2.0, 0.0]], &device)?.to_dtype(DType::BF16)?;
+        let layer = <UnquantLinear as QuantMethod>::new(QuantMethodConfig::Unquantized(
+            Linear::new(weight, None),
+        ))?;
+        let result = layer
+            .forward_raw(&a)?
             .to_dtype(DType::F32)?
             .to_device(&Device::Cpu)?
             .to_vec2::<f32>()?;

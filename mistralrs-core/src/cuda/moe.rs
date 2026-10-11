@@ -115,13 +115,26 @@ pub fn moe_gemm(
             return launch_pascal_simt_moe::<T>(
                 dev,
                 input.slice(input_offset..).device_ptr(input.stream()).0 as *const c_void,
-                weights.slice(weights_offset..).device_ptr(weights.stream()).0 as *const c_void,
-                sorted_token_ids.slice(sti_offset..)
-                    .device_ptr(sorted_token_ids.stream()).0 as *const i32,
-                experts_ids.slice(ei_offset..).device_ptr(experts_ids.stream()).0 as *const i32,
+                weights
+                    .slice(weights_offset..)
+                    .device_ptr(weights.stream())
+                    .0 as *const c_void,
+                sorted_token_ids
+                    .slice(sti_offset..)
+                    .device_ptr(sorted_token_ids.stream())
+                    .0 as *const i32,
+                experts_ids
+                    .slice(ei_offset..)
+                    .device_ptr(experts_ids.stream())
+                    .0 as *const i32,
                 topk_weights_ptr,
-                num_experts_i32, topk_i32, size_m_i32,
-                size_n_i32, size_k_i32, data_type, stream,
+                num_experts_i32,
+                topk_i32,
+                size_m_i32,
+                size_n_i32,
+                size_k_i32,
+                data_type,
+                stream,
             );
         }
 
@@ -208,11 +221,9 @@ pub fn moe_gemm(
     candle_core::bail!("moe_gemm is not implemented on this platform!")
 }
 
-
 #[cfg(feature = "cuda")]
 fn launch_pascal_simt_moe<
-    T: candle_core::cuda_backend::CudaDType
-        + candle_core::cuda_backend::cudarc::driver::DeviceRepr,
+    T: candle_core::cuda_backend::CudaDType + candle_core::cuda_backend::cudarc::driver::DeviceRepr,
 >(
     dev: &candle_core::cuda_backend::CudaDevice,
     input: *const core::ffi::c_void,
@@ -270,12 +281,12 @@ mod pascal_moe_tests {
             let weights = Tensor::ones((1, 4, 16), dtype, &device)?;
             let sorted = Tensor::new(&[0u32], &device)?;
             let experts = Tensor::new(&[0u32], &device)?;
-            let output = moe_gemm(
-                &input, &weights, &None, &sorted, &experts, 1, true
-            )?;
+            let output = moe_gemm(&input, &weights, &None, &sorted, &experts, 1, true)?;
             device.synchronize()?;
-            let output = output.to_dtype(DType::F32)?
-                .to_device(&Device::Cpu)?.to_vec2::<f32>()?;
+            let output = output
+                .to_dtype(DType::F32)?
+                .to_device(&Device::Cpu)?
+                .to_vec2::<f32>()?;
             assert_eq!(output.len(), 1);
             for val in &output[0] {
                 assert!((*val - 16.0).abs() < 0.5, "{dtype:?}: {val}");

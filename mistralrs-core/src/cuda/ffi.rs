@@ -566,7 +566,6 @@ extern "C" {
         stream: i64,
     );
 
-
     // Pascal grouped SIMT fallback; the implementation is in moe_gemm_hfma2.cu.
     #[link_name = "mistralrs_moe_gemm_hfma2"]
     pub fn moe_gemm_hfma2(

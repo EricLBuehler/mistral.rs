@@ -141,7 +141,6 @@ fn main() {
                 .map(str::trim)
                 .any(|value| value == "bf16");
 
-
         // Check if CUDA_COMPUTE_CAP < 80 and disable bf16 kernels if so.
         // bf16 WMMA operations and certain bf16 intrinsics are only available on sm_80+.
         if compute_cap < 80 && !allow_legacy_bf16 {
