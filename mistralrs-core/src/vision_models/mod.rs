@@ -55,6 +55,24 @@ pub struct ModelInputs {
     pub flash_meta: FlashParams,
     pub recurrent_batch_kind: RecurrentBatchKind,
     pub adapter_leases: Arc<[Option<crate::AdapterLease>]>,
+    pub has_multimodal_data: bool,
+}
+
+// Hashes outlive the raw media, which is taken after prefill, so this stays true during decode.
+pub(crate) fn has_multimodal_data(
+    input_seqs: &[&mut crate::sequence::Sequence],
+    seq_indices: &[usize],
+) -> bool {
+    seq_indices.iter().any(|&index| {
+        let seq = &input_seqs[index];
+        [
+            seq.image_hashes(),
+            seq.audio_hashes(),
+            seq.video_hashes(),
+        ]
+        .into_iter()
+        .any(|hashes| hashes.is_some_and(|h| !h.is_empty()))
+    })
 }
 
 pub(crate) fn adapter_leases(

@@ -473,6 +473,7 @@ impl InputsProcessor for Mistral3ImageProcessor {
                 crate::pipeline::RecurrentBatchKind::Decode
             },
             adapter_leases: crate::vision_models::adapter_leases(input_seqs, &seq_indices),
+            has_multimodal_data: crate::vision_models::has_multimodal_data(input_seqs, &seq_indices),
         });
         Ok(InputProcessorOutput {
             inputs,

@@ -1,185 +1,154 @@
-# Blueprint: Multi-Head Speculative Decoding (Medusa/EAGLE) for mistral.rs
+# Medusa-Style Multi-Head Speculative Decoding for mistral.rs
 
-## Objective
-Break the PCIe memory bandwidth bottleneck during the autoregressive decode phase by trading surplus FLOPs (available on Blackwell architecture) for token throughput. 
-Implement Medusa/EAGLE speculative decoding to generate and verify multiple draft tokens per single base-model weight load, accelerating decoding from ~25 T/s to 100+ T/s.
+## Status: Proposal / Architecture Design (not started)
+**Target Milestone:** Raise single-stream decode throughput (~25 T/s on Blackwell/PCIe-bound setups) by drafting several tokens per base-model weight load  
+**Related Documents:**
+* [`MULTIMODAL_CUDA_GRAPH_SPEC.md`](MULTIMODAL_CUDA_GRAPH_SPEC.md) - Shares the CUDA-graph decode gate in `forward_step`
+* `mistralrs-core/src/speculative/` - The existing speculative framework this spec plugs into (read first)
+
+> [!IMPORTANT]
+> **Instructions for a local LLM picking this up.** The first draft of this spec assumed code that does not exist and
+> duplicated code that does. Section 2 is the verified truth (2026-10-11). Section 2.2 lists symbols from the old
+> draft that are **fake**: never reference them. Build Medusa as a new `SpeculativeProposer` inside the existing
+> framework; do not add a second engine-loop interception. Do one Work Package at a time and run its acceptance
+> commands before continuing.
 
 ---
 
-## 1. The Sequence Tree State (`mistralrs-core/src/speculative/proposer.rs` & `kv_cache_manager.rs`)
+## 1. Executive Summary & Problem Context
 
-### 1a. Struct Modification
-Currently, `staged_speculative_tokens` is a linear enum:
-```rust
-pub enum SpeculativeTokens {
-    Host(Vec<u32>),
-    Device(Tensor),
-}
+Autoregressive decode is memory-bandwidth bound: each token reloads all weights. Medusa adds small extra heads on the
+final hidden state that each guess a future token; the base model then verifies all guesses in one forward pass and
+keeps the longest accepted prefix.
+
+### 1.1 What the repo already gives us
+mistral.rs already has speculative decoding (MTP for Gemma4/Qwen3.5, DFlash). The pieces Medusa needs are present:
+
+```mermaid
+flowchart LR
+    CFG[SpeculativeConfig] --> PIPE[Pipeline: SpeculativePipelineExt]
+    PIPE -->|speculative_propose| PROP[SpeculativeProposer]
+    PROP -->|SpeculativeProposalBatch| DRV[driver.rs]
+    DRV -->|build_speculative_verify_inputs| FWD[target forward]
+    FWD --> VER[verifier.rs accept/reject]
+    VER -->|rollback_to| KV[trim_request_to_num_tokens]
 ```
-We will introduce `SpeculativeTree` to support Medusa's branching graph, flattening the tree into arrays for GPU cache locality.
+
+### 1.2 The gap
+Existing proposals are **linear** (`SpeculativeTokens::{Host,Device}`). Medusa's strength is a **tree** of candidates
+(top-k per head). Tree verification needs a non-causal attention mask in the verify pass, which does not exist.
+Therefore the plan is staged: linear Medusa first (cheap, reuses everything), tree second.
+
+---
+
+## 2. Ground Truth (verified in tree)
+
+### 2.1 Exists
+| Symbol | Where |
+|---|---|
+| `SpeculativeProposer { proposal_len, propose(ctx, target_embedder) -> SpeculativeProposalBatch }` | `speculative/proposer.rs:444` |
+| `SpeculativeProposal { tokens: SpeculativeTokens, distribution: Option<SpeculativeProposalDistribution> }` | `speculative/proposer.rs:316` |
+| `enum SpeculativeTokens { Host(Vec<u32>), Device(Tensor) }` | `speculative/proposer.rs:240` |
+| `trait SpeculativePipelineExt` (`speculative_propose`, `speculative_commit`, `build_speculative_verify_inputs`, `has_speculative_proposer`, ...) | `speculative/driver.rs:~97` |
+| `enum SpeculativeConfig { Off, Mtp(MtpConfig) }` | `speculative/config.rs:~17` |
+| KV rollback: `PagedSpeculativeCacheGuard::rollback_to` calls `KVCacheManager::trim_request_to_num_tokens(request_id, num_tokens)` | `speculative/cache.rs:~120`, `paged_attention/kv_cache_manager.rs:382` |
+| Gemma4 MTP proposer (closest template to copy) | `vision_models/gemma4/mtp.rs`, `has_speculative_proposer` at `vision_models/gemma4/mod.rs:1167` |
+| Pipeline step entry (`submit_step`, takes `is_prompt`, `StepLookahead`) | `pipeline/mod.rs:2002` |
+| Paged attention decode kernels `paged_attention_v1_kernel` / `v2_kernel` (single query token per sequence) | `mistralrs-paged-attn/src/cuda/pagedattention.cuh:490/518` |
+| Block copy kernel | `mistralrs-paged-attn/src/cuda/copy_blocks_kernel.cu` |
+
+### 2.2 Does NOT exist (old-draft fiction, do not use)
+`SpeculativeTree`, `SpeculativeTreeNode`, `SpeculativeTokens::Tree`, `MedusaScheduler`, `pipeline.has_medusa()`,
+`pipeline.submit_medusa_draft`, `build_tree_mask_tensor`, `evaluate_tree`, `compact_accepted_kv_blocks`,
+`PagedAttentionMeta.tree_mask`, `ctx.set_medusa_logits`, `medusa_head` field on `qwen2.rs`, `paged_tree_attention_v1_kernel`,
+and an interception "around line 1923 of `engine/mod.rs`" (the engine does not host speculative logic; `driver.rs` does).
+
+### 2.3 Must confirm before coding (use `grep`, do not guess)
+* Where `ModelForwardContext` is defined and whether it already carries hidden-state taps: `grep -rn "struct ModelForwardContext" mistralrs-core/src`.
+* How the verify pass attends over multiple query tokens per sequence (it is not the q_len=1 paged v1/v2 kernel): read `build_speculative_verify_inputs` in `pipeline/normal.rs` and `pipeline/multimodal.rs` and follow to the attention call.
+* How `speculative_target_hiddens(rows)` exposes the final hidden state to a proposer (Medusa heads consume it).
+
+---
+
+## 3. Design
+
+### 3.1 Medusa heads (new file `mistralrs-core/src/speculative/medusa.rs`)
+Each head k (k = 1..K) is a residual SiLU block followed by an LM-head projection, applied to the **post-norm final
+hidden state** (`[rows, hidden]`), predicting token t+k+1:
+```
+logits_k = lm_head_k( h + silu(W_k h) )
+```
+Heads load from a separate safetensors checkpoint (new `MedusaConfig { model: String, num_heads: Option<usize> }`),
+with `VarBuilder.pp(...)` prefixes verified against that checkpoint's `model.safetensors.index.json` (AGENTS.md "Models").
+Heads may reuse the base `lm_head` weights (`medusa_use_base_lm_head`) to save VRAM.
+
+### 3.2 Linear Medusa as a `SpeculativeProposer` (WP2)
+`MedusaProposer::propose` takes the target hidden states, runs K heads, takes argmax (or samples via `sample_draft_rows`)
+per head, and returns `SpeculativeProposal { tokens: Host(vec_of_K_tokens), distribution }`. The existing driver and
+verifier then work unchanged, including rollback.
+
+### 3.3 Config wiring (WP3)
+Add `SpeculativeConfig::Medusa(MedusaConfig)`; handle it everywhere `SpeculativeConfig::Mtp` is matched
+(`grep -rn "SpeculativeConfig::" mistralrs-core/src mistralrs/src mistralrs-cli/src mistralrs-pyo3/src`). Model support
+is opt-in per model through `has_speculative_proposer`; start with Gemma4 text (`vision_models/gemma4/text.rs`) and
+the plain Qwen2 text model.
+
+### 3.4 Tree verification (WP4, only after WP2-3 are measured)
+Prerequisite findings from Section 2.3. Candidate flattening (parents array, <= 64 nodes), a `[num_seqs, T, T]` boolean
+ancestor mask, and accepted-path KV compaction (copy accepted slots into contiguous positions with
+`copy_blocks_kernel.cu`, then `trim_request_to_num_tokens`). The attention change belongs to whichever kernel the verify
+pass actually uses (Section 2.3), not to `paged_attention_v1_kernel`, which only serves q_len = 1.
 
 ```rust
-#[derive(Clone, Debug)]
-pub struct SpeculativeTreeNode {
-    pub token_id: u32,
-    pub parent_idx: Option<usize>, // Index into `nodes`
-}
-
-#[derive(Clone, Debug)]
 pub struct SpeculativeTree {
-    pub nodes: Vec<SpeculativeTreeNode>, // Max length typically 64
+    pub tokens: Vec<u32>,
+    pub parents: Vec<Option<usize>>, // index into `tokens`
     pub leaf_indices: Vec<usize>,
 }
-
-pub enum SpeculativeTokens {
-    Host(Vec<u32>),
-    Device(Tensor),
-    Tree(SpeculativeTree), // NEW
-}
 ```
+Do not add a `Tree` variant to `SpeculativeTokens` until verifier/driver call sites are listed
+(`grep -rn "SpeculativeTokens::" mistralrs-core/src`); each `match` must be updated.
 
-### 1b. KV Cache Truncation & Rollback
-In `mistralrs-core/src/paged_attention/kv_cache_manager.rs`, blocks are allocated sequentially in `req.block_ids`. If a tree evaluates 64 tokens, we allocate blocks for all 64. If only a 3-token branch is accepted, we must slice off the rejected blocks.
-
-**Exact interception:**
-```rust
-// In `MedusaScheduler::step` after evaluating tree acceptance:
-let accepted_len = evaluate_tree(base_logits, &mut seq);
-
-// 1. Identify how many tokens to keep (base context + accepted drafts)
-let new_total_len = seq.prompt_tokens() + seq.recognized_len() + accepted_len;
-
-// 2. Call existing KVCacheManager function
-let mut kv_mgr = get_mut_arcmutex!(kv_cache_manager);
-kv_mgr.trim_request_to_num_tokens(seq.id(), new_total_len);
-
-// 3. Compact accepted tree branch into the contiguous slots via CUDA copy_blocks kernel
-// (If the accepted branch was evaluating at arbitrary offsets in the block table)
-compact_accepted_kv_blocks(seq.id(), &accepted_branch_offsets);
-```
+### 3.5 CUDA-graph interaction
+The verify pass has its own graph handling (`SpeculativeGraphState`, `SpeculativeGraphPlan` in `speculative/policy.rs`
+and `target.rs`). Medusa must not capture graphs in WP2; add them only by following the MTP path.
 
 ---
 
-## 2. The CUDA Tree Kernel (`mistralrs-paged-attn/src/cuda/pagedattention.cuh`)
+## 4. Work Packages
 
-### 2a. C++ Header / Signature
-The current causal kernel `paged_attention_v1_kernel` hardcodes causal logic (`mask = token_idx >= context_len`). We must inject a `tree_mask`.
+| WP | Scope | Files | Acceptance |
+|---|---|---|---|
+| WP1 | Read-only: answer the three items in Section 2.3 and write the answers into this doc | none | Section 2.3 replaced with concrete file:line facts |
+| WP2 | `medusa.rs` heads + `MedusaProposer` (linear), unit tests with random weights | `speculative/medusa.rs`, `speculative/mod.rs` | `cargo test -p mistralrs-core medusa` |
+| WP3 | `SpeculativeConfig::Medusa`, loader + CLI/API plumbing, Gemma4 and Qwen2 `has_speculative_proposer` | `speculative/config.rs`, model files, `mistralrs-cli`, `mistralrs` | `cargo check --workspace`; `cargo test -p mistralrs-core speculative` |
+| WP4 | Tree candidates, mask, KV compaction | decided by WP1 | acceptance rate >= linear on a fixed prompt set |
+| WP5 | Benchmark | `mistralrs bench` | table in Section 6 filled in |
 
-**Draft Signature:**
-```cpp
-__global__ void paged_tree_attention_v1_kernel(
-    scalar_t *__restrict__ out,
-    const scalar_t *__restrict__ q,
-    const cache_t *__restrict__ k_cache,
-    const cache_t *__restrict__ v_cache,
-    const int num_kv_heads,
-    const float scale, const float softcapping,
-    const uint32_t *__restrict__ block_tables,
-    const uint32_t *__restrict__ context_lens,
-    const int max_num_blocks_per_seq,
-    const float *__restrict__ alibi_slopes,
-    const int q_stride, const int kv_block_stride, const int kv_head_stride,
-    const float *k_scale, const float *v_scale,
-    const float *__restrict__ sinks,
-    // --- NEW EXACT FFI ARGS ---
-    const int32_t *__restrict__ tree_mask, // Flat 1D array representing 2D boolean mask [num_seqs, max_tree_len, max_tree_len]
-    const int max_tree_len
-)
-```
-
-### 2b. Passing the Mask across FFI
-In `mistralrs-paged-attn/src/cuda/ffi.rs`, the mask will be allocated as a `candle_core::Tensor` of `DType::I32` (acting as boolean 1/0) on the device.
-It will be passed across the C-interface as an opaque `*const c_void`:
-```rust
-extern "C" {
-    pub fn paged_tree_attention_v1(
-        // ... existing args ...
-        tree_mask: *const std::ffi::c_void,
-        max_tree_len: i32,
-    );
-}
-
-// Passed from Rust:
-let tree_mask_ptr = tree_mask.as_ptr() as *const std::ffi::c_void;
-```
+Rules for every WP: `cargo fmt --all`; `cargo check` (with and without `--features cuda`); `cargo clippy -p mistralrs-core -- -D warnings`;
+no new dependencies; follow the Code Style section of `AGENTS.md` (ASCII only, no multi-line comments, hoist constants).
 
 ---
 
-## 3. The Engine Loop Interception (`mistralrs-core/src/engine/mod.rs`)
+## 5. Verification Plan
 
-### Exact Execution Flow Hijack
-Around line 1923 in `engine/mod.rs`, the engine submits a step. We will intercept the decode step (when `!is_prompt`).
+### 5.1 Correctness
+Greedy decoding with Medusa on must equal greedy decoding with speculation off, token for token, over a fixed set of
+>= 20 prompts. Any divergence is a verifier/rollback bug, not a quality tradeoff.
 
-```rust
-// Current code around L1923:
-// pipeline.submit_step( &mut guards_mut, is_prompt, ... ).await
+### 5.2 Cache integrity
+After each request, the KV block count for the sequence must equal `prompt_len + generated_len` (no leaked draft blocks).
+Unit-test `rollback_to` with partial accepts.
 
-// NEW MEDUSA INTERCEPTION:
-let submission = if pipeline.has_medusa() && !is_prompt {
-    // Phase 1: Medusa Draft (Drafting using Medusa MLPs on the last hidden state)
-    let medusa_drafts = pipeline.submit_medusa_draft(&mut guards_mut).await?;
-    
-    // Update sequence state with tree
-    for (seq, draft) in guards_mut.iter_mut().zip(medusa_drafts) {
-        seq.staged_speculative_tokens = SpeculativeTokens::Tree(draft.tree);
-    }
-
-    // Build the 2D tree mask and attach to metadata
-    let tree_mask = build_tree_mask_tensor(&guards_mut, device)?;
-    metadata.tree_mask = Some(tree_mask); // Requires adding `tree_mask` to `PagedAttentionMeta`
-
-    // Phase 2: Base Model Verify (Executes paged_tree_attention_v1_kernel)
-    let base_logits = pipeline.submit_step(
-        &mut guards_mut, 
-        is_prompt, 
-        /* ... */ 
-        CacheBackendMetadata::PagedAttention { metadata }
-    ).await?;
-
-    // Phase 3: Acceptance & KV Rollback
-    for (seq, logits) in guards_mut.iter_mut().zip(base_logits) {
-        let accepted_len = evaluate_tree(logits, seq);
-        let new_len = seq.prompt_tokens() + seq.recognized_len() + accepted_len;
-        get_mut_arcmutex!(kv_cache_manager).trim_request_to_num_tokens(seq.id(), new_len);
-    }
-    
-    base_logits // return the accepted outputs
-} else {
-    // Fallback to standard execution
-    pipeline.submit_step(&mut guards_mut, is_prompt, /* ... */).await
-};
-```
+### 5.3 Performance table (fill in at WP5)
+| Setup | Tokens/s | Mean accepted tokens per step |
+|---|---|---|
+| Baseline (speculation off) | | 1.0 |
+| Linear Medusa K=3 | | |
+| Tree Medusa | | |
 
 ---
 
-## 4. Model Deserialization (`qwen2.rs` & `gemma4/text.rs`)
-
-### 4a. Layer Splice Index
-The Medusa heads operate on the final normalized hidden states *before* the Language Model Head (`lm_head`).
-
-In `mistralrs-core/src/models/qwen2.rs` inside `Model::forward_embed`:
-```rust
-for (i, layer) in self.layers.iter().enumerate() {
-    xs = layer.forward(&xs, ...)?;
-}
-let xs = xs.to_device(&self.device)?;
-let xs = xs.apply(&self.norm)?;
-
-// === MEDUSA SPLICE POINT ===
-// Here `xs` has shape [batch, seq_len, hidden_size]
-if let Some(medusa_head) = &self.medusa_head {
-    // We stash the Medusa logits directly into the forward context
-    let medusa_logits = medusa_head.forward(&xs)?;
-    ctx.set_medusa_logits(medusa_logits);
-}
-// ===========================
-
-let xs = ctx.logits(&xs)?;
-ctx.lm_head(&*self.lm_head, &xs)
-```
-
-### 4b. Synchronization Across Thread Pool
-Because `Model::forward` executes asynchronously via the `pipeline.submit_step` Rayon threadpool (`mistralrs-core/src/pipeline/mod.rs`), the Medusa logits must be synchronized. 
-
-**Solution:**
-We will add `medusa_logits: Option<Tensor>` to the `ModelForwardContext<'a>` struct in `mistralrs-core/src/pipeline/mod.rs`. The model populates this during the forward pass. Once `submit_step` returns the `StepSubmissionKind::Ready`, the engine extracts both `lm_head` logits and `ctx.medusa_logits()`, syncing them natively back into the main `Scheduler` thread without blocking the GPU streams.
+## 6. Open Questions (ask the user, do not guess)
+1. Which Medusa checkpoint is the target? Heads are model-specific and must be trained or downloaded; none exist in the repo.
+2. Is Medusa preferred over the existing Gemma4 MTP path? If a Gemma4 MTP assistant checkpoint is available, Medusa may add little.

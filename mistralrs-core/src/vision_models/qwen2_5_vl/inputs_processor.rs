@@ -416,6 +416,7 @@ impl InputsProcessor for Qwen2_5VLImageProcessor {
                     crate::speculative::staging::staged_batch_width(input_seqs).is_some(),
                 ),
                 adapter_leases: crate::vision_models::adapter_leases(input_seqs, &seq_indices),
+                has_multimodal_data: crate::vision_models::has_multimodal_data(input_seqs, &seq_indices),
             });
             return Ok(InputProcessorOutput {
                 inputs,
@@ -965,6 +966,7 @@ impl InputsProcessor for Qwen2_5VLImageProcessor {
                 crate::pipeline::RecurrentBatchKind::Decode
             },
             adapter_leases: crate::vision_models::adapter_leases(input_seqs, &seq_indices),
+            has_multimodal_data: crate::vision_models::has_multimodal_data(input_seqs, &seq_indices),
         });
         Ok(InputProcessorOutput {
             inputs,

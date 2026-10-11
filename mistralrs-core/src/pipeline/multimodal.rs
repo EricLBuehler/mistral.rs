@@ -1818,6 +1818,7 @@ impl crate::speculative::driver::SpeculativePipelineExt for MultimodalPipeline {
             flash_meta: input_meta.flash_meta,
             recurrent_batch_kind: RecurrentBatchKind::SpeculativeDecode,
             adapter_leases,
+            has_multimodal_data: false,
         }))
     }
 
@@ -2637,6 +2638,7 @@ impl Pipeline for MultimodalPipeline {
             flash_meta,
             recurrent_batch_kind,
             adapter_leases,
+            has_multimodal_data,
         } = *inputs.downcast::<ModelInputs>().expect("Downcast failed.");
         let lora_execution = super::resolve_lora_execution(
             self.dynamic_lora.as_deref(),
@@ -2672,10 +2674,21 @@ impl Pipeline for MultimodalPipeline {
                 .filter(|(_, meta)| meta.is_first_prompt_chunk || meta.num_cached_tokens.is_some())
                 .map(|(_, meta)| ((*meta).clone(), flash_meta.clone()));
         }
+        #[cfg(not(feature = "cuda"))]
+        let _ = has_multimodal_data;
         #[cfg(feature = "cuda")]
         let mut cuda_graph_eager_fallback = None;
         #[cfg(feature = "cuda")]
-        if lora_execution.is_none() && !return_raw_logits && pixel_values.is_none() {
+        if has_multimodal_data {
+            tracing::info!("Bypassing CUDA graph replay: Multimodal sequence detected");
+        }
+        #[cfg(feature = "cuda")]
+        if can_replay_cuda_decode_graph(
+            lora_execution.is_some(),
+            return_raw_logits,
+            pixel_values.is_some(),
+            has_multimodal_data,
+        ) {
             match self.try_cuda_decode_graph_forward(CudaDecodeGraphForwardInput {
                 input_ids: &input_ids,
                 seqlen_offsets: &seqlen_offsets,
@@ -3141,5 +3154,26 @@ impl AnyMoePipelineMixin for MultimodalPipeline {
     }
     fn amoe_supported(&self) -> bool {
         self.model.amoe_supported()
+    }
+}
+
+#[cfg(feature = "cuda")]
+fn can_replay_cuda_decode_graph(
+    has_lora: bool,
+    return_raw_logits: bool,
+    has_pixel_values: bool,
+    has_multimodal_data: bool,
+) -> bool {
+    !has_lora && !return_raw_logits && !has_pixel_values && !has_multimodal_data
+}
+
+#[cfg(all(test, feature = "cuda"))]
+mod cuda_graph_gate_tests {
+    use super::can_replay_cuda_decode_graph;
+
+    #[test]
+    fn multimodal_batches_skip_graph_replay() {
+        assert!(can_replay_cuda_decode_graph(false, false, false, false));
+        assert!(!can_replay_cuda_decode_graph(false, false, false, true));
     }
 }

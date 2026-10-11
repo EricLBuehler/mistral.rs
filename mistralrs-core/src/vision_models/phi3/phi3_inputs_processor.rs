@@ -367,6 +367,7 @@ impl InputsProcessor for Phi3InputsProcessor {
                         flash_meta,
                         recurrent_batch_kind,
                         adapter_leases,
+                        has_multimodal_data: false,
                     });
                     InputProcessorOutput {
                         inputs,
@@ -561,6 +562,7 @@ impl InputsProcessor for Phi3InputsProcessor {
                     crate::pipeline::RecurrentBatchKind::Decode
                 },
                 adapter_leases: crate::vision_models::adapter_leases(input_seqs, &seq_indices),
+                has_multimodal_data: crate::vision_models::has_multimodal_data(input_seqs, &seq_indices),
             }),
             seq_indices,
         })
