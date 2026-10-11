@@ -1745,6 +1745,9 @@ fn next_pipeline_prompt_chunk_group(
     next_prompt_chunk_group(plan_indices, chunk_plans, require_uniform_query_len)
 }
 
+// `async_trait` generates boxed futures with a redundant `#[must_use]`.
+// Scope the Rust 1.99 Clippy exception to this trait only.
+#[allow(clippy::double_must_use)]
 #[async_trait::async_trait]
 pub trait Pipeline:
     Send

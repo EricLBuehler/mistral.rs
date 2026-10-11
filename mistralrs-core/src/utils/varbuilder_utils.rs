@@ -293,6 +293,9 @@ trait LoadTensors {
 struct Common {}
 impl LoadTensors for Common {}
 
+// `derive(new)` generates a constructor whose field initialization triggers
+// Clippy's redundant_field_names lint on Rust 1.99.
+#[allow(clippy::redundant_field_names)]
 #[derive(new)]
 struct XLora {
     // Matches the associated path instance for reference in `get_name_key_pairs()`
