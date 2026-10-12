@@ -1831,6 +1831,13 @@ pub trait Pipeline:
         Ok(())
     }
 
+    fn supports_sampling_trace(&self) -> bool {
+        matches!(
+            self.category(),
+            ModelCategory::Text | ModelCategory::Multimodal { .. }
+        )
+    }
+
     fn supports_speculative_prompt_bootstrap(&self) -> bool {
         false
     }

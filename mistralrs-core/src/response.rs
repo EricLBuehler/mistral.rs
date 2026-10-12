@@ -85,6 +85,8 @@ generate_repr!(Logprobs);
 #[derive(Debug, Clone, Serialize)]
 /// Chat completion choice.
 pub struct Choice {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sampling_trace: Option<crate::sampling_trace::SamplingTrace>,
     pub finish_reason: String,
     #[serde(skip)]
     pub stop_sequence: Option<String>,
@@ -100,6 +102,8 @@ generate_repr!(Choice);
 #[derive(Debug, Clone, Serialize)]
 /// Chat completion streaming chunk choice.
 pub struct ChunkChoice {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sampling_trace: Option<crate::sampling_trace::SamplingTrace>,
     pub finish_reason: Option<String>,
     #[serde(skip)]
     pub stop_sequence: Option<String>,
@@ -115,6 +119,8 @@ generate_repr!(ChunkChoice);
 #[derive(Debug, Clone, Serialize)]
 /// Chat completion streaming chunk choice.
 pub struct CompletionChunkChoice {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sampling_trace: Option<crate::sampling_trace::SamplingTrace>,
     pub text: String,
     pub index: usize,
     pub logprobs: Option<ResponseLogprob>,
@@ -228,6 +234,8 @@ generate_repr!(ChatCompletionChunkResponse);
 #[derive(Debug, Clone, Serialize)]
 /// Completion request choice.
 pub struct CompletionChoice {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sampling_trace: Option<crate::sampling_trace::SamplingTrace>,
     pub finish_reason: String,
     pub index: usize,
     pub text: String,

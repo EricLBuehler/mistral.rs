@@ -183,6 +183,7 @@ export default defineConfig({
                 'guides/customize',
                 'guides/customize/chat-templates',
                 'guides/customize/sampling',
+                'guides/customize/watermarking',
                 'guides/customize/lora-adapters',
               ],
             },

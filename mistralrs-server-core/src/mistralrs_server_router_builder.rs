@@ -47,11 +47,12 @@ use crate::{
         RELOAD_MODEL_ROUTE, RESPONSES_ROUTE, RESPONSE_ROUTE, RE_ISQ_ROUTE, ROOT_ROUTE,
         SESSION_ROUTE, SKILLS_ROUTE, SKILL_VERSIONS_ROUTE, SPEECH_GENERATION_ROUTE,
         SYSTEM_DOCTOR_ROUTE, SYSTEM_INFO_ROUTE, TUNE_MODEL_ROUTE, UNLOAD_LORA_ADAPTER_ROUTE,
-        UNLOAD_MODEL_ROUTE,
+        UNLOAD_MODEL_ROUTE, WATERMARK_DETECT_ROUTE,
     },
     skills::{list_skill_versions, list_skills, upload_skill, upload_skill_version, SkillStore},
     speech_generation::speech_generation,
     types::SharedMistralRsState,
+    watermark::detect_watermark,
 };
 
 /// Server-level defaults for agentic features.
@@ -380,6 +381,7 @@ fn init_router(
         )
         .route(COMPLETIONS_ROUTE.path, post(completions))
         .route(EMBEDDINGS_ROUTE.path, post(embeddings))
+        .route(WATERMARK_DETECT_ROUTE.path, post(detect_watermark))
         .route(MODELS_ROUTE.path, get(models))
         .route(LIST_LORA_ADAPTERS_ROUTE.path, get(list_lora_adapters))
         .route(UNLOAD_MODEL_ROUTE.path, post(unload_model))
