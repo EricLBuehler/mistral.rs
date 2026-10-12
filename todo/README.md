@@ -14,6 +14,9 @@ is sent anywhere.
 | `candle/` | huggingface/candle | defects in the pinned candle revision, reached through mistral.rs |
 | `gaps/` | this repo | missing features, not defects |
 
+One entry (`gaps/04`) is unrequested rather than found-in-the-wild; it is marked as such in
+the index so it is not mistaken for a bug report.
+
 ## Index
 
 ### mistral.rs
@@ -42,6 +45,7 @@ is sent anywhere.
 | 01 | [No EXL3 quantization support](gaps/01-no-exl3-quantization.md) | open, unrequested |
 | 02 | [No OPT architecture](gaps/02-no-opt-architecture.md) | open, unrequested |
 | 03 | [`qwen3_5moe` has no text-only loader](gaps/03-qwen3-5moe-has-no-text-loader.md) | open, unrequested |
+| 04 | [No expert streaming, and the expert stack is materialized on CPU](gaps/04-no-expert-streaming.md) | open, unrequested; no tracker request exists |
 
 ## Status vocabulary
 
@@ -77,6 +81,10 @@ None of these are filed yet. Before sending anything:
 - The two entries with the strongest evidence are 02 (178 threads, 1 running, 1.9 cores busy)
   and candle/03 (1062 lines, zero parallel constructs). Those are checkable by reading the
   code, which is worth leading with.
+- `gaps/04` is unrequested and overlaps an open PR (#2380, sparse per-expert MoE on CPU).
+  Check that PR before filing, and lead with "the stack is copied into anonymous memory"
+  rather than "please add streaming", since the first is a statement about the code and the
+  second asks for work nobody has scoped.
 
 ## Not here
 
