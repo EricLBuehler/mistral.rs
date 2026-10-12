@@ -25,6 +25,7 @@ mod cuda_headers;
 #[cfg(all(feature = "cuda", feature = "cutile"))]
 pub mod cutile;
 pub mod distributed;
+mod dot_cpu;
 mod dummy;
 pub mod f8q8;
 mod fp8;

@@ -17,6 +17,8 @@
 use candle_core::{CpuStorage, DType, Result, Storage, Tensor};
 use rayon::prelude::*;
 
+use crate::dot_cpu::{dot_bf16, dot_f32 as dot};
+
 /// Below this many outputs there is not enough work to pay for splitting.
 const MIN_PARALLEL_OUTPUTS: usize = 1024;
 
@@ -317,82 +319,6 @@ fn dot_slot(
 ) -> f32 {
     let _ = (a, slot, row, w, expert, out_features, in_features);
     f32::NAN
-}
-
-fn dot(x: &[f32], w: &[f32]) -> f32 {
-    let mut acc = 0f32;
-    for (xi, wi) in x.iter().zip(w) {
-        acc += xi * wi;
-    }
-    acc
-}
-
-/// `x @ bf16_row`, widening the bf16 operands as they load.
-///
-/// Four independent accumulators give a fixed reduction order per output element, matching
-/// [`crate::gemv_cpu`]'s dense kernel so the routed and dense paths agree.
-#[cfg(target_arch = "aarch64")]
-fn dot_bf16(a: &[f32], b: &[u16]) -> f32 {
-    use core::arch::aarch64::*;
-
-    debug_assert_eq!(a.len(), b.len());
-    unsafe {
-        let mut s0 = vdupq_n_f32(0.0);
-        let mut s1 = vdupq_n_f32(0.0);
-        let mut s2 = vdupq_n_f32(0.0);
-        let mut s3 = vdupq_n_f32(0.0);
-        let mut i = 0;
-        while i + 16 <= a.len() {
-            s0 = vfmaq_f32(s0, vld1q_f32(a.as_ptr().add(i)), widen(b.as_ptr().add(i)));
-            s1 = vfmaq_f32(
-                s1,
-                vld1q_f32(a.as_ptr().add(i + 4)),
-                widen(b.as_ptr().add(i + 4)),
-            );
-            s2 = vfmaq_f32(
-                s2,
-                vld1q_f32(a.as_ptr().add(i + 8)),
-                widen(b.as_ptr().add(i + 8)),
-            );
-            s3 = vfmaq_f32(
-                s3,
-                vld1q_f32(a.as_ptr().add(i + 12)),
-                widen(b.as_ptr().add(i + 12)),
-            );
-            i += 16;
-        }
-        let mut sum = vaddq_f32(vaddq_f32(s0, s1), vaddq_f32(s2, s3));
-        while i + 4 <= a.len() {
-            sum = vfmaq_f32(sum, vld1q_f32(a.as_ptr().add(i)), widen(b.as_ptr().add(i)));
-            i += 4;
-        }
-        let mut out = vaddvq_f32(sum);
-        while i < a.len() {
-            out += *a.get_unchecked(i) * f32::from_bits((*b.get_unchecked(i) as u32) << 16);
-            i += 1;
-        }
-        out
-    }
-}
-
-/// Widen four adjacent bf16 lanes into one `float32x4_t`.
-///
-/// bf16 is the top half of an f32, so this is a 16-bit left shift after widening u16 -> u32.
-/// A 16-bit immediate shift does not exist for `u16`, hence the `vmovl_u16` first.
-#[cfg(target_arch = "aarch64")]
-#[inline(always)]
-unsafe fn widen(ptr: *const u16) -> core::arch::aarch64::float32x4_t {
-    use core::arch::aarch64::*;
-    unsafe { vreinterpretq_f32_u32(vshlq_n_u32::<16>(vmovl_u16(vld1_u16(ptr)))) }
-}
-
-#[cfg(not(target_arch = "aarch64"))]
-fn dot_bf16(a: &[f32], b: &[u16]) -> f32 {
-    let mut acc = 0f32;
-    for (ai, bi) in a.iter().zip(b) {
-        acc += ai * f32::from_bits((*bi as u32) << 16);
-    }
-    acc
 }
 
 #[cfg(test)]
