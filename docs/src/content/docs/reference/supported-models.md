@@ -72,6 +72,7 @@ The `Architecture` column is the `config.json` `architectures` value. Per-family
 | `Mistral3ForConditionalGeneration` | Mistral Small 3 | <details><summary><code>mistralai/Mistral-Small-3.2-24B-Instruct-2506</code></summary><code>mistralrs run -m mistralai/Mistral-Small-3.2-24B-Instruct-2506</code></details> |
 | `Llama4ForConditionalGeneration` | Llama 4 | <details><summary><code>meta-llama/Llama-4-Scout-17B-16E-Instruct</code></summary><code>mistralrs run -m meta-llama/Llama-4-Scout-17B-16E-Instruct</code></details> |
 | `Gemma3nForConditionalGeneration` | Gemma 3n | <details><summary><code>google/gemma-3n-E4B-it</code></summary><code>mistralrs run -m google/gemma-3n-E4B-it</code></details> |
+| `HunYuanVLForConditionalGeneration` | HunyuanOCR, HunyuanVL | <details><summary><code>tencent/HunyuanOCR</code></summary><code>mistralrs run -m tencent/HunyuanOCR</code></details> |
 | `Qwen3VLForConditionalGeneration` | Qwen3-VL | <details><summary><code>Qwen/Qwen3-VL-4B-Instruct</code></summary><code>mistralrs run -m Qwen/Qwen3-VL-4B-Instruct</code></details> |
 | `Qwen3VLMoeForConditionalGeneration` | Qwen3-VL MoE | <details><summary><code>Qwen/Qwen3-VL-235B-A22B-Instruct</code></summary><code>mistralrs run -m Qwen/Qwen3-VL-235B-A22B-Instruct</code></details> |
 | `Qwen3_5ForConditionalGeneration` | Qwen 3.5, Qwen 3.6 | <details><summary><code>Qwen/Qwen3.5-27B</code> (3.5), <code>Qwen/Qwen3.6-27B</code> (3.6)</summary><code>mistralrs run -m Qwen/Qwen3.5-27B</code><br><code>mistralrs run -m Qwen/Qwen3.6-27B</code></details> |
