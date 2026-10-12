@@ -34,6 +34,22 @@ cargo install --path mistralrs-cli --locked --features "cuda nccl flash-attn cud
 
 The flags above target CUDA. On macOS use `--features metal`; on CPU omit `--features` entirely. See the [cargo features reference](/reference/cargo-features/) for the full list.
 
+CUDA 13.4 is supported. When multiple toolkits are installed, select the same toolkit for CUDA
+headers, libraries, `nvcc`, and cuTile before building:
+
+```bash
+export CUDA_HOME=/usr/local/cuda-13.4
+export CUDA_ROOT="$CUDA_HOME"
+export CUDA_PATH="$CUDA_HOME"
+export CUDA_TOOLKIT_PATH="$CUDA_HOME"
+export PATH="$CUDA_HOME/bin:$PATH"
+export LD_LIBRARY_PATH="$CUDA_HOME/lib64${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+```
+
+Use a driver that supports the selected toolkit's PTX, and keep these exports in the runtime
+environment when using [cuTile](/developer/moe-backends/). For cuTile, the installer continues
+to select compatible prebuilt CUDA 13.2 or 13.3 binaries on CUDA 13.4-capable drivers.
+
 Metal builds precompile macOS, iOS, and tvOS metallibs by default. For local macOS-only development, set `MISTRALRS_METAL_PLATFORMS=macos`; to skip Metal precompilation entirely, set `MISTRALRS_METAL_PRECOMPILE=0`.
 
 The in-place build leaves the binary at `target/release/mistralrs`. The install variant copies it to `~/.cargo/bin/mistralrs`, which is on `PATH` after a rustup install.

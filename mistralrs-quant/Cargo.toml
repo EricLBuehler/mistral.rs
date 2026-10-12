@@ -87,6 +87,7 @@ cuda-13000 = []
 cuda-13010 = []
 cuda-13020 = []
 cuda-13030 = []
+cuda-13040 = []
 
 [build-dependencies]
 cudaforge = { workspace = true, optional = true }
