@@ -1659,6 +1659,7 @@ impl Engine {
                                     .unwrap_or_default(),
                             )
                         };
+                        let hybrid_cache = get_mut_arcmutex!(self.pipeline).cache().is_hybrid();
                         let mut rejection = None;
                         loop {
                             let query_lens = output
@@ -1720,34 +1721,84 @@ impl Engine {
                                     .iter()
                                     .zip(&full_context_lens)
                                     .any(|(query, full)| full > query);
-                            let workspace =
-                                match crate::paged_attention::plan::prompt_prefill_workspace(
+                            let workspace_input =
+                                crate::paged_attention::plan::PromptPrefillWorkspaceInput {
+                                    activation_dtype,
+                                    cache_dtype,
+                                    device_is_cuda,
+                                    block_size,
+                                    query_lens: &query_lens,
+                                    full_context_lens: &full_context_lens,
+                                    max_pages_per_sequence,
+                                    requires_prefix_attention,
+                                    is_causal: !has_noncausal_mm_context,
+                                    causality_known: true,
+                                    has_custom_mask: has_noncausal_mm_context,
+                                    has_noncausal_mm_context,
+                                    has_sliding_window,
+                                    fa3_num_sm_by_layer: &fa3_num_sm_by_layer,
+                                };
+                            // A hidden-state prompt on a hybrid model is split at its recurrent
+                            // checkpoint boundary inside the step; its tail attends to the head's KV.
+                            let hidden_tail_query_lens = (hybrid_cache
+                                && output
+                                    .scheduled
+                                    .iter()
+                                    .any(|seq| get_mut_arcmutex!(seq).return_hidden_states))
+                            .then(|| {
+                                output
+                                    .scheduled
+                                    .iter()
+                                    .zip(&query_lens)
+                                    .zip(&full_context_lens)
+                                    .map(|((seq, &query_len), &full_len)| {
+                                        let seq = get_mut_arcmutex!(seq);
+                                        let boundary =
+                                            full_len.saturating_sub(1) / block_size * block_size;
+                                        if seq.return_hidden_states
+                                            && seq.num_computed_tokens() == 0
+                                            && boundary > 0
+                                        {
+                                            full_len - boundary
+                                        } else {
+                                            query_len
+                                        }
+                                    })
+                                    .collect::<Vec<_>>()
+                            });
+                            let workspace = crate::paged_attention::plan::prompt_prefill_workspace(
+                                model_metadata.as_deref(),
+                                workspace_input,
+                            )
+                            .and_then(|head| {
+                                let Some(tail_query_lens) = hidden_tail_query_lens.as_deref()
+                                else {
+                                    return Ok(head);
+                                };
+                                let tail = crate::paged_attention::plan::prompt_prefill_workspace(
                                     model_metadata.as_deref(),
                                     crate::paged_attention::plan::PromptPrefillWorkspaceInput {
-                                        activation_dtype,
-                                        cache_dtype,
-                                        device_is_cuda,
-                                        block_size,
-                                        query_lens: &query_lens,
-                                        full_context_lens: &full_context_lens,
-                                        max_pages_per_sequence,
-                                        requires_prefix_attention,
-                                        is_causal: !has_noncausal_mm_context,
-                                        causality_known: true,
-                                        has_custom_mask: has_noncausal_mm_context,
-                                        has_noncausal_mm_context,
-                                        has_sliding_window,
-                                        fa3_num_sm_by_layer: &fa3_num_sm_by_layer,
+                                        query_lens: tail_query_lens,
+                                        requires_prefix_attention: true,
+                                        ..workspace_input
                                     },
-                                ) {
-                                    Ok(workspace) => workspace,
-                                    Err(err) => {
-                                        rejection = Some(CudaPromptRejection::Internal(format!(
-                                            "CUDA prompt memory preflight could not establish a safe attention plan: {err}"
-                                        )));
-                                        break;
-                                    }
-                                };
+                                )?;
+                                Ok(crate::paged_attention::plan::PromptPrefillWorkspace {
+                                    bytes: head.bytes.max(tail.bytes),
+                                    gather_workspace_bytes: head
+                                        .gather_workspace_bytes
+                                        .max(tail.gather_workspace_bytes),
+                                })
+                            });
+                            let workspace = match workspace {
+                                Ok(workspace) => workspace,
+                                Err(err) => {
+                                    rejection = Some(CudaPromptRejection::Internal(format!(
+                                        "CUDA prompt memory preflight could not establish a safe attention plan: {err}"
+                                    )));
+                                    break;
+                                }
+                            };
                             let workspace_bytes = workspace.bytes;
                             debug_assert!(cuda_decode_lease.is_none());
                             let memory_status = self.maintain_cuda_prompt_memory(

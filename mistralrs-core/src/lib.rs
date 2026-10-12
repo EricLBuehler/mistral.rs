@@ -1658,6 +1658,7 @@ impl MistralRs {
                     tools: None,
                     logits_processors: None,
                     return_raw_logits: false,
+                    max_prefix_reuse: None,
                     web_search_options: None,
                     enable_code_execution: false,
                     enable_shell: false,

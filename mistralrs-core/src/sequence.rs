@@ -768,6 +768,11 @@ pub struct Sequence {
     prompt: String,
     sequence_stepping_type: SeqStepType,
     pub(crate) return_raw_logits: bool,
+    /// Raw request served by a hidden-state pipeline: only the uncached tail is returned, so it
+    /// may hit the prefix cache and seeds it when finished.
+    pub(crate) return_hidden_states: bool,
+    /// Reuse at most this many leading prompt tokens from the prefix cache (`None`: no limit).
+    pub(crate) max_prefix_reuse: Option<usize>,
     token_offset: usize,
     eos_tokens: Vec<u32>,
     adapter: Option<AdapterLease>,
@@ -967,6 +972,8 @@ impl Sequence {
             tool_call_state,
             sequence_stepping_type,
             return_raw_logits,
+            return_hidden_states: false,
+            max_prefix_reuse: None,
             token_offset: 0,
             eos_tokens,
             adapter: None,
@@ -1446,6 +1453,19 @@ impl Sequence {
 
     fn bump_block_hash_revision(&mut self) {
         self.block_hash_revision = self.block_hash_revision.wrapping_add(1);
+    }
+
+    /// A raw-logits request that needs every prompt position, so it must bypass the prefix cache
+    /// and run alone. Hidden-state requests only need their uncached tail.
+    pub(crate) fn needs_full_raw_prompt(&self) -> bool {
+        self.return_raw_logits && !self.return_hidden_states
+    }
+
+    /// The longest prefix-cache hit this sequence may take: its prompt, capped by
+    /// `max_prefix_reuse`.
+    pub(crate) fn prefix_reuse_limit(&self) -> usize {
+        let len = self.get_toks().len();
+        self.max_prefix_reuse.map_or(len, |cap| cap.min(len))
     }
 
     pub fn is_xlora(&self) -> bool {

@@ -1076,6 +1076,7 @@ pub async fn parse_request(
             tools: normalized_tools.tools,
             logits_processors: None,
             return_raw_logits: false,
+            max_prefix_reuse: None,
             web_search_options: normalized_tools.web_search_options,
             enable_code_execution: normalized_tools.enable_code_execution,
             enable_shell: normalized_tools.enable_shell,

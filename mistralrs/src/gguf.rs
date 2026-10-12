@@ -56,6 +56,7 @@ pub struct GgufModelBuilder {
     pub(crate) lora_runtime_config: LoraRuntimeConfig,
     pub(crate) mtp_config: Option<MtpConfig>,
     pub(crate) encoder_cache_memory_bytes: Option<usize>,
+    pub(crate) output_hidden_states: bool,
 }
 
 impl GgufModelBuilder {
@@ -106,6 +107,7 @@ impl GgufModelBuilder {
             lora_runtime_config: LoraRuntimeConfig::default(),
             mtp_config: None,
             encoder_cache_memory_bytes: None,
+            output_hidden_states: false,
             organization: IsqOrganization::Default,
             isq: None,
         }
@@ -446,9 +448,26 @@ impl GgufModelBuilder {
         self
     }
 
+    /// Return final-norm hidden states instead of logits. Use
+    /// [`Model::send_raw_chat_request`] (or a raw `NormalRequest`): each chunk then holds
+    /// `[tokens, hidden_size]` f32 hidden states for the prompt tokens not served from the prefix
+    /// cache. Generation requests are not meaningful in this mode. Currently supported for Qwen3.5.
+    pub fn with_hidden_states_output(mut self) -> Self {
+        self.output_hidden_states = true;
+        self
+    }
+
     /// Load the GGUF model and return a ready-to-use [`Model`].
     pub async fn build(self) -> anyhow::Result<Model> {
+        let output_hidden_states = self.output_hidden_states;
         let (pipeline, scheduler_config, add_model_config) = build_gguf_pipeline(self).await?;
+        if output_hidden_states {
+            pipeline
+                .lock()
+                .await
+                .set_output_hidden_states(true)
+                .map_err(anyhow::Error::msg)?;
+        }
         Ok(build_model_from_pipeline(pipeline, scheduler_config, add_model_config).await)
     }
 }

@@ -411,6 +411,7 @@ impl WebSearchOptions {
 ///     3) Apply temperature and softmax
 ///     4) Sample the next token (topk, topp, minp, etc)
 /// - `return_raw_logits`: Return raw logits.
+/// - `max_prefix_reuse`: Reuse at most this many prompt tokens from the prefix cache.
 /// - `truncate_sequence`: Whether to truncate the prompt if it exceeds the model's maximum context length.
 pub struct NormalRequest {
     pub messages: RequestMessage,
@@ -434,6 +435,11 @@ pub struct NormalRequest {
     #[serde(skip)]
     pub logits_processors: Option<Vec<Arc<dyn CustomLogitsProcessor>>>,
     pub return_raw_logits: bool,
+    /// Reuse at most this many leading prompt tokens from the prefix cache; every later position is
+    /// recomputed. A hidden-state request sets it to the first position it reads, so a cached
+    /// sequence that covers those positions can never hide them. `None` means no limit.
+    #[serde(default)]
+    pub max_prefix_reuse: Option<usize>,
     pub web_search_options: Option<WebSearchOptions>,
     /// When true, registered code-execution tools are injected and the agentic loop runs.
     #[serde(default)]
@@ -516,6 +522,7 @@ impl NormalRequest {
             suffix: None,
             logits_processors: None,
             return_raw_logits: false,
+            max_prefix_reuse: None,
             web_search_options: None,
             enable_code_execution: false,
             enable_shell: false,

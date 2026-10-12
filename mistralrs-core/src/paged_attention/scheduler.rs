@@ -375,7 +375,7 @@ impl PagedAttentionScheduler {
             let require_uniform_length = self.requires_uniform_prompt_batch
                 || candidates.iter().any(|seq| {
                     let seq = get_mut_arcmutex!(seq);
-                    seq.return_raw_logits || seq.prefix_cache_len() > 0
+                    seq.needs_full_raw_prompt() || seq.prefix_cache_len() > 0
                 });
             let scheduled = self.bucket_and_preempt_sequences(
                 candidates,
@@ -805,6 +805,8 @@ impl PagedAttentionScheduler {
                 } else {
                     0
                 },
+                // Raw requests (hidden-state ones included) run alone here: the paged step does not
+                // trim padded rows per sequence.
                 seq_guard.return_raw_logits.then_some(*seq_guard.id()),
                 if self.requires_uniform_media_batch
                     || require_uniform_length && matches!(batch_kind, BatchKind::Prompt)
@@ -955,7 +957,7 @@ impl PagedAttentionScheduler {
             let seq_guard = get_mut_arcmutex!(seq);
             let seq_id = *seq_guard.id();
             let num_tokens = seq_guard.get_toks().len();
-            let return_raw_logits = seq_guard.return_raw_logits;
+            let needs_full_raw_prompt = seq_guard.needs_full_raw_prompt();
             let new_seq_modality = modality_signature(&seq_guard);
             let lazy_prompt_allocation = self.supports_scheduler_visible_prompt_chunks(&seq_guard);
             drop(seq_guard);
@@ -1002,7 +1004,7 @@ impl PagedAttentionScheduler {
 
             // Look up prefix cache hits
             let kv_mgr = get_mut_arcmutex!(self.kv_cache_manager);
-            let mut computed = if self.prefix_caching_enabled && !return_raw_logits {
+            let mut computed = if self.prefix_caching_enabled && !needs_full_raw_prompt {
                 kv_mgr.get_computed_blocks(block_hashes, num_tokens)
             } else {
                 super::kv_cache_manager::ComputedBlocks {
@@ -1024,6 +1026,12 @@ impl PagedAttentionScheduler {
             if clamped < computed.num_computed_tokens {
                 computed.block_ids.truncate(clamped / self.block_size);
                 computed.num_computed_tokens = clamped;
+            }
+            let reuse_limit = get_mut_arcmutex!(seq).prefix_reuse_limit();
+            if computed.num_computed_tokens > reuse_limit {
+                let allowed = reuse_limit / self.block_size;
+                computed.block_ids.truncate(allowed);
+                computed.num_computed_tokens = allowed * self.block_size;
             }
             let matched_prefix_tokens = computed.num_computed_tokens;
             let mut prefix_validation: Option<PagedPrefixCacheValidation> = None;
@@ -2936,6 +2944,65 @@ mod tests {
             kv_mgr
                 .get_computed_blocks(&hashes, tokens.len())
                 .num_computed_tokens,
+            scheduler.block_size
+        );
+    }
+
+    #[test]
+    fn hidden_state_prompt_reuses_prefix_blocks() {
+        let mut scheduler = test_scheduler();
+        let tokens = vec![1; 16];
+        let hashes = compute_block_hashes(&tokens, scheduler.block_size, &[], &[]);
+        {
+            let mut kv_mgr = get_mut_arcmutex!(scheduler.kv_cache_manager);
+            assert!(kv_mgr.allocate_slots(99, tokens.len(), &[]).is_some());
+            kv_mgr.cache_blocks(99, &hashes, scheduler.block_size);
+            kv_mgr.free(99);
+        }
+
+        // A hidden-state request only needs its uncached tail, so unlike plain raw logits it
+        // takes the prefix hit.
+        let hidden = test_sequence(0, tokens.len());
+        get_mut_arcmutex!(hidden).return_raw_logits = true;
+        get_mut_arcmutex!(hidden).return_hidden_states = true;
+        get_mut_arcmutex!(hidden).set_state(SequenceState::Waiting);
+        scheduler.waiting.push_back(hidden);
+
+        let logger = IntervalLogger::new(std::time::Duration::from_secs(3600), None);
+        let output = scheduler.schedule(&logger, None);
+
+        assert_eq!(output.num_cached_tokens, vec![scheduler.block_size]);
+        assert_eq!(
+            get_mut_arcmutex!(output.scheduled[0]).prefix_cache_len(),
+            scheduler.block_size
+        );
+    }
+
+    #[test]
+    fn prefix_reuse_limit_caps_paged_prefix_blocks() {
+        let mut scheduler = test_scheduler();
+        let tokens = vec![1; 4 * scheduler.block_size];
+        let hashes = compute_block_hashes(&tokens, scheduler.block_size, &[], &[]);
+        {
+            let mut kv_mgr = get_mut_arcmutex!(scheduler.kv_cache_manager);
+            assert!(kv_mgr.allocate_slots(99, tokens.len(), &[]).is_some());
+            kv_mgr.cache_blocks(99, &hashes, scheduler.block_size);
+            kv_mgr.free(99);
+        }
+
+        // Three blocks are cached and reusable, but the request reads from 1.5 blocks on: only the
+        // one whole block before that may come from the cache.
+        let capped = test_sequence(0, tokens.len());
+        get_mut_arcmutex!(capped).max_prefix_reuse = Some(scheduler.block_size * 3 / 2);
+        get_mut_arcmutex!(capped).set_state(SequenceState::Waiting);
+        scheduler.waiting.push_back(capped);
+
+        let logger = IntervalLogger::new(std::time::Duration::from_secs(3600), None);
+        let output = scheduler.schedule(&logger, None);
+
+        assert_eq!(output.num_cached_tokens, vec![scheduler.block_size]);
+        assert_eq!(
+            get_mut_arcmutex!(output.scheduled[0]).prefix_cache_len(),
             scheduler.block_size
         );
     }

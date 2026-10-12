@@ -29,6 +29,8 @@ async fn send_raw_chat_request<R: RequestLike>(&self, request: R) -> Result<(Vec
 ```
 Returns raw logits of the first generated token plus the prompt tokens. Example: [perplexity](/examples/rust/advanced/perplexity/).
 
+With `GgufModelBuilder::with_hidden_states_output()` (Qwen3.5 only), the returned tensors hold f32 final-norm hidden states `[tokens, hidden_size]` instead of logits, for the prompt tokens not served from the prefix cache. Example: [hidden_states](/examples/rust/advanced/hidden-states/).
+
 ## Reasoning
 
 `ReasoningEffort::{Off, Low, Medium, High, XHigh}` is accepted by `TextMessages::with_reasoning_effort`, `MultimodalMessages::with_reasoning_effort`, `RequestBuilder::with_reasoning_effort`, and `AgentBuilder::with_reasoning_effort`. The existing `enable_thinking(bool)` or `with_enable_thinking(bool)` methods remain available. Omission leaves effort unspecified with thinking enabled; contradictory explicit controls return a request-validation error.
