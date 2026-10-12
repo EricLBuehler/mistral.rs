@@ -52,6 +52,7 @@ The `Architecture` column is the `config.json` `architectures` value. Per-family
 | `Qwen3_5ForCausalLM` | Qwen3.5 | No published example |
 | `Lfm2ForCausalLM` | LFM2, LFM2.5 | <details><summary><code>LiquidAI/LFM2.5-1.2B-Instruct</code> (LFM2.5), <code>LiquidAI/LFM2-1.2B</code> (LFM2)</summary><code>mistralrs run -m LiquidAI/LFM2.5-1.2B-Instruct</code><br><code>mistralrs run -m LiquidAI/LFM2-1.2B</code></details> |
 | `Lfm2MoeForCausalLM` | LFM2 MoE, LFM2.5 MoE | <details><summary><code>LiquidAI/LFM2.5-8B-A1B</code> (LFM2.5), <code>LiquidAI/LFM2-8B-A1B</code> (LFM2)</summary><code>mistralrs run -m LiquidAI/LFM2.5-8B-A1B</code><br><code>mistralrs run -m LiquidAI/LFM2-8B-A1B</code></details> |
+| `Kolibri1ForCausalLM` | Kolibri-1 | <details><summary><code>Aleph-Alpha/Kolibri-1</code></summary><code>mistralrs run -m Aleph-Alpha/Kolibri-1</code></details> |
 
 ## Multimodal models
 
