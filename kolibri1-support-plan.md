@@ -998,3 +998,69 @@ serial to begin with.
 4. Target context length for the first run? 32k costs 3.4 GB of KV, 262k costs 26.8 GB,
    which on top of 156.2 GB of weights does not leave headroom.
 5. Is the chat template and parser work (B4) in scope for this effort?
+## 10. Kolibri-1 measured (was: projected)
+
+The plan carried a projection for decode throughput. It is replaced here by a measurement,
+because two of the assumptions behind the projection turned out to be wrong: the model could
+not be loaded at all until L1, and the CPU decode GEMV could not read a bf16 weight.
+
+`kolibri1_decode_benchmark`, bf16 checkpoint (149 GB, 32 shards), node 3 only
+(`numactl --cpunodebind=3 --interleave=all`), `RAYON_NUM_THREADS=32`, batch 1:
+
+| phase | measurement |
+| --- | --- |
+| load | 179 s |
+| prefill, 64 tokens | 8.8 s (7.3 tok/s) |
+| decode, 8 steps at len 65-72 | mean TPOT 577 ms, **1.73 tok/s** |
+
+A decode step streams the six routed experts of all 50 layers, the shared expert, the dense
+attention projections and the head:
+
+```
+384 experts, top_k 6, inter 512, hidden 2560, 50 layers
+  routed   6 x 3 x 2 x 512 x 2560 x 2 B = 0.38 GB
+  shared     1 x   2 x 2 x 512 x 2560 x 2 B = 0.01 GB   per layer
+  attn      4 x 2560 x 2560 x 2 B + 2 x 4 x 2560 x 128 x 2 B = 0.06 GB per layer
+  head      121598 x 2560 x 2 B = 0.62 GB
+  total    4.37 GB per token
+```
+
+So 1.73 tok/s is **7.6 GB/s of effective bandwidth**. The box's best measured single-thread
+decode rate is 10.1 GB/s, and 32 threads should beat that comfortably, so the kernel is
+**not** yet saturating memory and the projection was optimistic for the wrong reason: it
+assumed bandwidth was the binding constraint and treated 10.1 GB/s as the ceiling, whereas the
+whole point of the output-parallel GEMV was to get past that ceiling. It has not, on this
+model.
+
+Two concrete reasons it might not:
+
+- The routed-expert gather reads six separate 5.2 MB slabs per projection. That is six short
+  streams per work item rather than one long one, so each thread spends proportionally more
+  time on TLB and prefetch boundaries than the dense GEMV does.
+- `PerExpertLinear::gather_rows` copies the activation row `top_k` times into an expanded
+  buffer before the kernel runs, and reads the expert ids back through a `to_vec1` that forces
+  a synchronous copy. At 4.37 GB/token those are not the bottleneck, but they are on the
+  critical path of every one of the three projections.
+
+What this costs is worth stating plainly: the model is usable for single-stream generation at
+about one token per 0.6 s, which is far below what the hardware can do and is not competitive
+with a GPU. The next lever is not a smaller model, it is making the per-expert gather stream
+the way the dense GEMV does.
+
+### Where the numbers came from
+
+```
+KOLIBRI1_MODEL_DIR=/mnt/models/Aleph-Alpha/Kolibri-1-bf16 KOLIBRI1_BENCH_TOKENS=8 \
+  RAYON_NUM_THREADS=32 numactl --cpunodebind=3 --interleave=all \
+  cargo test --release -p mistralrs-core kolibri1_decode_benchmark -- --ignored --nocapture
+```
+
+### Correctness status alongside the throughput number
+
+The golden gate does **not** currently certify this model. `todo/mistralrs/07-kolibri1-logit-gap.md`
+has the measurements: every structural element of the forward was diffed against
+`vllm.cpp/src/vllm/model_executor/models/kolibri1_forward.cpp` and matches, but this build
+reaches a 6.72 worst top-8 logit gap against the goldens where the reference reaches 2.19, and
+its first-step argmax is 2/8. The gate floors both at where this build measures so it catches a
+regression rather than certifying correctness. Throughput measured on a model that is not yet
+numerically correct should be read with that in mind.
