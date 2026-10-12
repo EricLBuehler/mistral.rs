@@ -369,6 +369,9 @@ impl GenerationConfig {
     }
 }
 
+// Chained `|tojson` roughly doubles the output each time; cap it so a template can't exhaust memory.
+const MAX_TOJSON_OUTPUT_BYTES: usize = 8 * 1024 * 1024;
+
 fn tojson(value: Value, kwargs: Kwargs) -> Result<Value, Error> {
     if let Ok(indent) = kwargs.get::<usize>("indent") {
         // Cap the indent: it feeds `b" ".repeat(indent)`, so an attacker-controlled template could request a huge allocation or capacity-overflow panic.
@@ -402,6 +405,18 @@ fn tojson(value: Value, kwargs: Kwargs) -> Result<Value, Error> {
     }
     .map_err(|err| {
         Error::new(ErrorKind::InvalidOperation, "cannot serialize to JSON").with_source(err)
+    })
+    .and_then(|json| {
+        if json.len() > MAX_TOJSON_OUTPUT_BYTES {
+            return Err(Error::new(
+                ErrorKind::InvalidOperation,
+                format!(
+                    "tojson output of {} bytes exceeds the maximum of {MAX_TOJSON_OUTPUT_BYTES}",
+                    json.len()
+                ),
+            ));
+        }
+        Ok(json)
     })
     // HF's tojson does not HTML-escape, so neither can we without changing the prompt
     .map(Value::from_safe_string)
@@ -1444,5 +1459,45 @@ mod tests {
         assert_eq!(defaults.max_new_tokens, None);
         assert_eq!(defaults.max_length, None);
         assert_eq!(defaults.suppress_tokens, None);
+    }
+
+    #[test]
+    fn chained_tojson_is_rejected_instead_of_growing_unbounded() {
+        let template =
+            ChatTemplateValue(Either::Left(format!("{{{{ 3{} }}}}", "|tojson".repeat(30))));
+        let result = apply_chat_template_to(
+            vec![user_text_message("hello")],
+            false,
+            None,
+            None,
+            &template,
+            None,
+            None,
+            None,
+            Vec::new(),
+        );
+
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn tojson_output_is_unchanged_for_normal_values() {
+        let template = ChatTemplateValue(Either::Left(
+            "{{ messages[0].content | tojson }}".to_string(),
+        ));
+        let rendered = apply_chat_template_to(
+            vec![user_text_message("hello \"world\"")],
+            false,
+            None,
+            None,
+            &template,
+            None,
+            None,
+            None,
+            Vec::new(),
+        )
+        .unwrap();
+
+        assert_eq!(rendered, r#""hello \"world\"""#);
     }
 }
