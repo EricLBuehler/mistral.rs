@@ -2,7 +2,8 @@
 
 - **Repo:** mistral.rs
 - **Component:** `mistralrs-quant`, GGUF indexed MoE forward
-- **Status:** open, not started
+- **Status:** open for the dequant; the serial consumer is parallel on the
+  `cpu-decode-bandwidth` branch for the unquantized stacked path
 - **Impact:** every CPU MoE run from a GGUF checkpoint
 
 ## What

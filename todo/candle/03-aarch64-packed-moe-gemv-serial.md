@@ -2,7 +2,8 @@
 
 - **Repo:** huggingface/candle
 - **Pinned rev:** `66a8cf184a5a519671454066b1b9efd446ec9f5c` (v0.11.0)
-- **Status:** open, blocks CPU MoE decode
+- **Status:** open, blocks quantized MoE decode. The unquantized stacked path is now
+  parallel on the `cpu-decode-bandwidth` branch; this entry covers the quantized one.
 - **Impact:** CPU MoE inference on aarch64
 
 ## What
