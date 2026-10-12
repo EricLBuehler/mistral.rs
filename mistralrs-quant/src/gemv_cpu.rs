@@ -12,8 +12,15 @@
 use candle_core::{DType, Result, Storage, Tensor};
 use rayon::prelude::*;
 
+use crate::dot_cpu::{dot_bf16, dot_f32};
+
 /// Below this many outputs there is not enough work to pay for splitting.
 const MIN_PARALLEL_OUTPUTS: usize = 1024;
+
+/// Weight dtypes this kernel reads directly. Anything else falls back to candle's matmul.
+fn is_kernel_dtype(dtype: DType) -> bool {
+    matches!(dtype, DType::F32 | DType::BF16)
+}
 
 /// Whether the decode-shaped fast path applies to this input and weight pair.
 pub fn should_use_gemv(xs: &Tensor, w: &Tensor) -> bool {
@@ -22,6 +29,7 @@ pub fn should_use_gemv(xs: &Tensor, w: &Tensor) -> bool {
         && xs.dim(xs.rank() - 2).is_ok_and(|rows| rows == 1)
         && w.dim(0).is_ok_and(|n| n >= MIN_PARALLEL_OUTPUTS)
         && w.dim(1).is_ok_and(|k| k >= 1)
+        && is_kernel_dtype(w.dtype())
 }
 
 /// `xs @ w^T` for a single leading row, with the `N` outputs split across the rayon pool.
@@ -38,11 +46,30 @@ pub fn gemv(xs: &Tensor, w: &Tensor) -> Result<Tensor> {
     }
 
     let xs = xs.to_dtype(DType::F32)?.contiguous()?;
+    let out_dtype = w.dtype();
     let out = gemv_into_vec(&xs, w, n, k)?;
     // Preserve the input rank: the forward pipeline expects the trailing-dim layout back.
     let mut shape: Vec<usize> = xs.dims()[..xs.rank() - 1].to_vec();
     shape.push(n);
-    Tensor::from_vec(out, shape, xs.device())
+    Tensor::from_vec(out, shape, xs.device())?.to_dtype(out_dtype)
+}
+
+/// The weight, borrowed from a storage guard held for the call.
+///
+/// Borrowed rather than widened: at decode the weight is the largest thing that exists and
+/// materialising it as f32 would double the streaming this kernel exists to amortise.
+enum Weight<'a> {
+    F32(&'a [f32]),
+    Bf16(&'a [u16]),
+}
+
+impl Weight<'_> {
+    fn dot(&self, x: &[f32], row: usize, k: usize) -> f32 {
+        match self {
+            Self::F32(w) => dot_f32(x, &w[row * k..row * k + k]),
+            Self::Bf16(w) => dot_bf16(x, &w[row * k..row * k + k]),
+        }
+    }
 }
 
 fn gemv_into_vec(xs: &Tensor, w: &Tensor, n: usize, k: usize) -> Result<Vec<f32>> {
@@ -57,11 +84,18 @@ fn gemv_into_vec(xs: &Tensor, w: &Tensor, n: usize, k: usize) -> Result<Vec<f32>
     let Storage::Cpu(w_cpu) = &*w_guard else {
         candle_core::bail!("CPU gemv requires CPU storage")
     };
-    let w = w_cpu.as_slice::<f32>()?;
+    let weight = match w.dtype() {
+        DType::F32 => Weight::F32(w_cpu.as_slice::<f32>()?),
+        // bf16 is repr(transparent) over u16 and the dot kernel reads raw bits.
+        DType::BF16 => Weight::Bf16(unsafe {
+            core::mem::transmute::<&[half::bf16], &[u16]>(w_cpu.as_slice::<half::bf16>()?)
+        }),
+        other => candle_core::bail!("CPU gemv does not read {other:?} weights"),
+    };
 
     let threads = crate::cpu_threads::resolve();
     if n < MIN_PARALLEL_OUTPUTS || threads <= 1 {
-        return Ok(serial(x, w, n, k));
+        return Ok((0..n).map(|row| weight.dot(x, row, k)).collect());
     }
 
     let chunk = n.div_ceil(threads);
@@ -69,85 +103,12 @@ fn gemv_into_vec(xs: &Tensor, w: &Tensor, n: usize, k: usize) -> Result<Vec<f32>
     out.par_chunks_mut(chunk)
         .enumerate()
         .for_each(|(chunk_idx, slot)| {
-            let rows = &w[chunk_idx * chunk * k..];
             slot.iter_mut()
                 .enumerate()
-                .for_each(|(i, dst)| *dst = dot(x, &rows[i * k..i * k + k]));
+                .for_each(|(i, dst)| *dst = weight.dot(x, chunk_idx * chunk + i, k));
         });
 
     Ok(out)
-}
-
-#[cfg(target_arch = "aarch64")]
-fn dot(x: &[f32], w: &[f32]) -> f32 {
-    dot_neon(x, w)
-}
-
-#[cfg(not(target_arch = "aarch64"))]
-fn dot(x: &[f32], w: &[f32]) -> f32 {
-    let mut acc = 0f32;
-    for (xi, wi) in x.iter().zip(w) {
-        acc += xi * wi;
-    }
-    acc
-}
-
-/// Four independent accumulators over 16 lanes: matches the NEON dot the CPU attention
-/// backend already uses, and keeps a fixed reduction order per output element so results
-/// stay independent of how outputs are partitioned.
-#[cfg(target_arch = "aarch64")]
-fn dot_neon(a: &[f32], b: &[f32]) -> f32 {
-    use core::arch::aarch64::*;
-
-    unsafe {
-        let mut s0 = vdupq_n_f32(0.0);
-        let mut s1 = vdupq_n_f32(0.0);
-        let mut s2 = vdupq_n_f32(0.0);
-        let mut s3 = vdupq_n_f32(0.0);
-        let mut i = 0;
-        while i + 16 <= a.len() {
-            s0 = vfmaq_f32(
-                s0,
-                vld1q_f32(a.as_ptr().add(i)),
-                vld1q_f32(b.as_ptr().add(i)),
-            );
-            s1 = vfmaq_f32(
-                s1,
-                vld1q_f32(a.as_ptr().add(i + 4)),
-                vld1q_f32(b.as_ptr().add(i + 4)),
-            );
-            s2 = vfmaq_f32(
-                s2,
-                vld1q_f32(a.as_ptr().add(i + 8)),
-                vld1q_f32(b.as_ptr().add(i + 8)),
-            );
-            s3 = vfmaq_f32(
-                s3,
-                vld1q_f32(a.as_ptr().add(i + 12)),
-                vld1q_f32(b.as_ptr().add(i + 12)),
-            );
-            i += 16;
-        }
-        let mut sum = vaddq_f32(vaddq_f32(s0, s1), vaddq_f32(s2, s3));
-        while i + 4 <= a.len() {
-            sum = vfmaq_f32(
-                sum,
-                vld1q_f32(a.as_ptr().add(i)),
-                vld1q_f32(b.as_ptr().add(i)),
-            );
-            i += 4;
-        }
-        let mut out = vaddvq_f32(sum);
-        while i < a.len() {
-            out += *a.get_unchecked(i) * *b.get_unchecked(i);
-            i += 1;
-        }
-        out
-    }
-}
-
-fn serial(x: &[f32], w: &[f32], n: usize, k: usize) -> Vec<f32> {
-    (0..n).map(|row| dot(x, &w[row * k..row * k + k])).collect()
 }
 
 #[cfg(test)]
@@ -181,18 +142,69 @@ mod tests {
             let xs = Tensor::rand(0f32, 1f32, (1, k), &dev)?;
             let w = Tensor::rand(0f32, 1f32, (n, k), &dev)?;
             let par = gemv_into_vec(&xs.to_dtype(DType::F32)?.contiguous()?, &w, n, k)?;
-            let ser = serial(
-                &xs.to_dtype(DType::F32)?.contiguous()?.to_vec2::<f32>()?[0],
-                &w.to_vec2::<f32>()?
-                    .into_iter()
-                    .flatten()
-                    .collect::<Vec<_>>(),
-                n,
-                k,
-            );
+            let xs_row = xs.to_dtype(DType::F32)?.contiguous()?.to_vec2::<f32>()?[0].clone();
+            let w_flat = w
+                .to_vec2::<f32>()?
+                .into_iter()
+                .flatten()
+                .collect::<Vec<_>>();
+            let ser = (0..n)
+                .map(|row| dot_f32(&xs_row, &w_flat[row * k..row * k + k]))
+                .collect::<Vec<_>>();
             // The partitioning invariant: splitting N across threads must not perturb any
             // row's accumulation, so this is exact equality, not a tolerance.
             assert_eq!(par, ser, "{k}x{n}");
+        }
+        Ok(())
+    }
+
+    /// The regression: `should_use_gemv` claimed every CPU weight, but the kernel only read
+    /// f32, so a bf16 model failed inside the fast path instead of falling back. bf16 is the
+    /// default checkpoint dtype, so this was not a corner.
+    #[test]
+    fn bf16_weights_take_the_fast_path_and_match_matmul() -> Result<()> {
+        let dev = Device::Cpu;
+        let (k, n) = (2048usize, 4096usize);
+        let w = Tensor::rand(0f32, 1f32, (n, k), &dev)?.to_dtype(DType::BF16)?;
+        for shape in [vec![1, 1, k], vec![1, k]] {
+            let xs = Tensor::rand(0f32, 1f32, shape.as_slice(), &dev)?.to_dtype(DType::BF16)?;
+            assert!(should_use_gemv(&xs, &w), "{shape:?} should be fast-pathed");
+            let got = gemv(&xs, &w)?
+                .to_dtype(DType::F32)?
+                .flatten_all()?
+                .to_vec1::<f32>()?;
+            let want = xs
+                .to_dtype(DType::F32)?
+                .flatten_all()?
+                .reshape((1, k))?
+                .matmul(&w.to_dtype(DType::F32)?.t()?)?
+                .flatten_all()?
+                .to_vec1::<f32>()?;
+            assert_eq!(got.len(), want.len());
+            // The result is narrowed back to bf16, so it cannot beat bf16 precision: 8 mantissa
+            // bits put the relative resolution at 2^-8, about 0.4%.
+            let scale = want.iter().fold(0f32, |m, v| m.max(v.abs())).max(1e-6);
+            for (g, wv) in got.iter().zip(&want) {
+                assert!((g - wv).abs() <= 8e-3 * scale, "{g} vs {wv}");
+            }
+        }
+        Ok(())
+    }
+
+    /// A dtype the kernel does not read must fall back rather than be claimed and then fail.
+    #[test]
+    fn unsupported_weight_dtypes_are_not_claimed() -> Result<()> {
+        let dev = Device::Cpu;
+        let xs = Tensor::zeros((1, 1, 8), DType::F32, &dev)?;
+        for dtype in [DType::F16, DType::U8, DType::BF16] {
+            let w = Tensor::zeros((2048, 8), dtype, &dev)?;
+            let claimed = should_use_gemv(&xs, &w);
+            if claimed {
+                // Claimed means the kernel must actually read it.
+                gemv(&xs, &w)?;
+            } else {
+                assert!(matches!(dtype, DType::F16 | DType::U8), "{dtype:?}");
+            }
         }
         Ok(())
     }
