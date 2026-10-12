@@ -82,6 +82,37 @@ into registers inside a fused kernel. That is more work but has no memory ceilin
 deciding before implementing, since the two have very different memory profiles and only one
 of them suits a 78 GB model.
 
+### The sibling cache is already CPU-proven, and its first version shipped a corruption
+
+Worth reading before writing any of it. `../vllm.cpp`'s `kolibri1_dequant_cache.h` is
+**device-free** and is called from the CPU forward (`kolibri1_forward.cpp:184`), and the
+reland writeup (`docs/bench-evidence/kolibri1-dequant-cache-reland-20261007.md`) ran with
+`-DVLLM_CPP_TENSTORRONT=OFF`. So the design is validated on the same class of machine.
+
+It is also the **second** implementation. The first was reverted when the token gate went
+red with 7 hard flips, and the failure is worth carrying over rather than rediscovering:
+
+1. **Entries must own their bytes.** v1 stored each decoded block in a shared pool block held
+   through a lease; the pool had no idea the block was still in use, re-handed the same
+   address to a later tensor, and a live cache entry silently became another tensor's bytes
+   (`POOL DOUBLE-HAND-OUT` / `CACHE MISMATCH`). The fix is an independent `Vec` per entry, so
+   a cache hit cannot alias pool traffic by construction.
+2. **The key needs a model generation.** v2 keyed on the weight's data pointers plus shape
+   scalars. After an unload and reload the allocator hands back same-size buffers at the
+   *same* addresses, so a reloaded model of the same geometry was served the previous
+   incarnation's decoded bytes. Adding a generation counter bumped at every model load
+   closes it. In Rust the analogue is keying on something the loader owns rather than on a
+   pointer.
+3. **Return a lease, not a raw pointer.** Unlocking between lookup and consume let a
+   concurrent caller evict the entry and reuse its bytes before the matmul finished.
+   Serializing the whole lookup-and-consume was rejected because it holds the lock across the
+   expensive half.
+
+Budget semantics worth copying: the default is **0, meaning disabled**, so it is opt-in and
+the unquantized path stays the default; an entry larger than the whole budget is never
+cached; and the budget counts an evicted entry as evicted, so a live lease can transiently
+overshoot by at most one entry.
+
 ## Related
 
 - `../mistralrs/02-cpu-gguf-moe-dequant-every-call.md` is the same defect on the GGUF MoE path.

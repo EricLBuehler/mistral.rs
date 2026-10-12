@@ -134,6 +134,43 @@ GPU+RAM expert cache.
 On CPU with mmap already in place, L3 buys bounded memory that L1 largely gets for free from
 the page cache. Do L1 first and L3 only if the measurements say the page-fault cost hurts.
 
+## What `../vllm.cpp` already has, and how much of it transfers
+
+The sibling project has expert streaming for this exact model. It is worth knowing how much
+of it is reusable before writing any of this, and the answer is: the mechanism is not
+portable, the policy is small, and the CPU case should not need either.
+
+| Piece | Lines | Where it is used | Portable? |
+|---|---|---|---|
+| `Kolibri1DequantCache` | 331 | `kolibri1_forward.cpp:184`, the **CPU** forward | Already device-free and CPU-proven, but it solves `../mistralrs/01`, not this gap |
+| `Kolibri1TTExpertSlotPolicy` | ~120 | `kolibri1_tt.cpp` only | Host-side, device-free, portable as an LRU slot pool keyed by (layer, expert) |
+| `kolibri1_tt_stream.cpp/h` | 526 | Tenstorrent path | No |
+
+`kolibri1_tt_stream` is built around a **device** memory budget: FP8_E4M3 slot buffers on
+the card, router readback from the device, a host-side logical-expert to slot remap, a fetch
+executor that fills slots, a per-token stream bound asserted at runtime, and TT graph resets
+driven by a slot fingerprint. None of that has a CPU counterpart, and none of it is the
+problem here.
+
+The slot policy is the piece that would port, and it is genuinely small: `Touch(layer,
+expert)` returns a slot, evicting the layer's LRU when full; `SlotFor`, `ResidentCount`,
+`SuggestSlotFor`; plus a `Fingerprint()` over the slot tables to invalidate memoized work.
+Around 120 lines of logic with no device dependency.
+
+But the reason to skip it is in that file's own motivation. It exists because a Tenstorrent
+B2b has a small **device** budget and must keep only hot experts resident on the card. On
+CPU the page cache is already an LRU residency manager, sized by the kernel, evicting clean
+file-backed pages under pressure. Building a residency manager on top of that is what L1
+exists to avoid.
+
+So the honest read of "copy what is in vllm.cpp" is:
+
+- Do **not** copy the streaming machinery. It is not portable and L1 removes the need.
+- The slot policy is cheap to lift if L1 measures badly and a hard bound is still wanted.
+- The dequant cache is the piece actually worth porting, and it belongs to
+  `../mistralrs/01-cpu-fp8-dequant-every-forward.md`, where its CPU-proven status and its
+  v1 corruption post-mortem are now recorded.
+
 ## Where the numbers would come from
 
 Resident set and decode throughput on
