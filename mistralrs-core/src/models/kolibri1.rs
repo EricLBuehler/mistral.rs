@@ -6,11 +6,11 @@
 //!
 //! - **RNoPE.** `layer_types` decides per layer, and full-attention layers get no positional
 //!   encoding at all. RoPE is constructed but never applied on those layers.
-//! - **Sandwich norms.** Four norms per layer, and the residual stream accumulates the
-//!   POST-normed block output: each norm reads the block output alone and the normed value
-//!   is what is added. That is the opposite of the usual `x + residual` then norm, so the
-//!   residual is threaded through the layer stack rather than living in `xs`. The residual
-//!   starts at zero, and the value it holds after the last layer is never read.
+//! - **Sandwich norms.** Four norms per layer instead of two, and the residual stream is the
+//!   pre-norm one: `residual += block_output`, then the norm reads that sum. What differs is
+//!   where the block boundaries are. `post_attn_norm` and `post_ffn_norm` carry no residual
+//!   and their outputs are the deltas that the NEXT layer adds to the stream, so
+//!   `xs` and the residual advance independently and have to be threaded separately.
 //! - **Sigmoid logit add routing.** Top-k is taken over `logits + expert_bias`, but the weight
 //!   applied to the selected expert is `sigmoid` of the UNBIASED logit. Selecting on
 //!   `sigmoid(logits) + bias` is a different set of experts and is what the plugin's routing
@@ -137,6 +137,28 @@ impl Config {
         }
         Ok(())
     }
+}
+
+/// The shipped fp8 `config.json` lists only the per-layer routers in
+/// `modules_to_not_convert`, but `lm_head`, `model.embed_tokens` and `model.norm` also ship
+/// without a `weight_scale_inv`. Without the correction below, loading fails with "FP8 module
+/// `lm_head` has no `weight_scale_inv` and is not listed in `modules_to_not_convert`" - which
+/// is the loader being right about the config and the config being wrong about the tensors.
+pub fn correct_fp8_exclusions(cfg: &Config) -> Config {
+    let mut cfg = cfg.clone();
+    let Some(QuantizedConfig::Fp8 {
+        modules_to_not_convert,
+        ..
+    }) = cfg.quantization_config.as_mut()
+    else {
+        return cfg;
+    };
+    for module in ["lm_head", "model.embed_tokens", "model.norm"] {
+        if !modules_to_not_convert.iter().any(|m| m == module) {
+            modules_to_not_convert.push(module.to_string());
+        }
+    }
+    cfg
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -405,7 +427,10 @@ impl MoEGate {
     }
 
     fn forward(&self, xs: &Tensor) -> Result<(Tensor, Tensor)> {
-        let logits = self.gate.forward(xs)?;
+        // The reference computes the router in f32 (`out_dtype=torch.float32` upstream). Left
+        // in bf16 the logits are rounded before selection, and across 384 experts the
+        // borderline ones then resolve differently.
+        let logits = self.gate.forward(xs)?.to_dtype(DType::F32)?;
         let topk = crate::ops::moe_router_topk(
             &logits,
             crate::ops::MoeRouterTopKConfig {
@@ -445,7 +470,7 @@ impl SharedExpert {
             gate_proj: ColumnParallelLayer::new(
                 cfg.hidden_size,
                 inter,
-                &None,
+                &cfg.quantization_config,
                 false,
                 comm,
                 vb.pp("gate_proj"),
@@ -453,7 +478,7 @@ impl SharedExpert {
             up_proj: ColumnParallelLayer::new(
                 cfg.hidden_size,
                 inter,
-                &None,
+                &cfg.quantization_config,
                 false,
                 comm,
                 vb.pp("up_proj"),
@@ -461,7 +486,7 @@ impl SharedExpert {
             down_proj: RowParallelLayer::new(
                 inter,
                 cfg.hidden_size,
-                &None,
+                &cfg.quantization_config,
                 false,
                 comm,
                 vb.pp("down_proj"),
@@ -619,29 +644,29 @@ impl DecoderLayer {
         layer_idx: usize,
         residual: &mut Option<Tensor>,
     ) -> Result<Tensor> {
-        // Sandwich contract: each norm reads the block output ALONE, and the POST-NORMED
-        // value is what accumulates into the residual. This is not the pre-norm
-        // `x + residual` then norm that `RmsNorm::forward_add_rms_norm` implements, so the
-        // two steps are spelled out rather than fused.
-        let dhn = self.input_layernorm.forward(xs)?;
-        let res = match residual {
+        // The residual is the pre-norm stream: each of the two residual-carrying norms reads
+        // `residual + block output`. `post_attn_norm` and `post_ffn_norm` carry none, and
+        // their outputs are the deltas the next layer adds, so `xs` and the residual advance
+        // independently.
+        let (res, dhn) = match residual {
             // The reference zeroes the residual before layer 0, so the first accumulation is
-            // just the normed embedding.
-            None => dhn.clone(),
-            Some(res) => (res.clone() + &dhn)?,
+            // just the embedding itself.
+            None => (xs.clone(), self.input_layernorm.forward(xs)?),
+            Some(res) => self.input_layernorm.forward_add_rms_norm(xs, res)?,
         };
 
         let attn = self
             .self_attn
             .forward(&dhn, attention_mask, kv_cache, ctx, layer_idx)?;
-        // post_attn_norm carries no residual.
+        // post_attn_norm carries no residual: its output is a delta, not a normalized stream.
         let attn_n = self.post_attn_norm.forward(&attn)?;
 
-        let dhn2 = self.post_attention_layernorm.forward(&attn_n)?;
-        let res = (&res + &dhn2)?;
+        let (res, dhn2) = self
+            .post_attention_layernorm
+            .forward_add_rms_norm(&attn_n, &res)?;
 
         let moe = self.mlp.forward(&dhn2)?;
-        // post_ffn_norm carries no residual either; the caller feeds it back as the next `xs`.
+        // Likewise for post_ffn_norm; this becomes the next layer's block output.
         *residual = Some(res);
         self.post_ffn_norm.forward(&moe)
     }
@@ -669,6 +694,7 @@ impl Model {
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: crate::paged_attention::AttentionImplementation,
     ) -> Result<Self> {
+        let cfg = &correct_fp8_exclusions(cfg);
         cfg.validate()?;
         let vb_m = vb.pp("model");
         let mapper = normal_loading_metadata.mapper;
@@ -823,8 +849,6 @@ impl Model {
         let causal_mask = DeviceMappedMask::new(causal_mask, &*self.mapper)?;
         let sliding_mask = DeviceMappedMask::new(sliding_mask, &*self.mapper)?;
 
-        // Accumulator only: the reference zeroes it before layer 0 and never reads it after the
-        // last layer, so it is not threaded out to the head.
         let mut residual: Option<Tensor> = None;
         for (i, layer) in self.layers.iter().enumerate() {
             let mask = if layer.self_attn.kind.is_sliding() {
@@ -846,8 +870,11 @@ impl Model {
         }
         xs = xs.to_device(&self.device)?;
 
-        // The final norm carries the residual too: out = norm(hidden), logits from out.
-        let xs = self.norm.forward(&xs)?;
+        // The final norm carries the residual too: the logits read norm(residual + hidden).
+        let xs = match &residual {
+            Some(res) => self.norm.forward_add_rms_norm(&xs, res)?.1,
+            None => self.norm.forward(&xs)?,
+        };
         let xs = ctx.logits(&xs)?;
         ctx.lm_head(&*self.lm_head, &xs)
     }
@@ -994,6 +1021,17 @@ mod tests {
         serde_json::from_str(REAL_CONFIG).expect("shipped Kolibri-1 config deserializes")
     }
 
+    fn real_config_with_fp8() -> String {
+        let mut value: serde_json::Value = serde_json::from_str(REAL_CONFIG).unwrap();
+        value["quantization_config"] = serde_json::json!({
+          "quant_method": "fp8",
+          "activation_scheme": "dynamic",
+          "weight_block_size": [128, 128],
+          "modules_to_not_convert": ["model.layers.0.mlp.gate"]
+        });
+        value.to_string()
+    }
+
     #[test]
     fn shipped_config_deserializes_and_validates() {
         let cfg = real_config();
@@ -1014,6 +1052,39 @@ mod tests {
             .filter(|i| !cfg.layer_types[*i].is_sliding())
             .collect();
         assert_eq!(full, vec![4, 9, 14, 19, 24, 29, 34, 39, 44, 49]);
+    }
+
+    /// The shipped fp8 config omits three modules it ships unquantized. If the correction is
+    /// dropped, loading the real checkpoint fails on `lm_head`.
+    #[test]
+    fn fp8_exclusions_cover_the_modules_the_checkpoint_ships_bf16() {
+        let cfg: Config =
+            serde_json::from_str(&real_config_with_fp8()).expect("fp8 config deserializes");
+        let cfg = correct_fp8_exclusions(&cfg);
+        let QuantizedConfig::Fp8 {
+            modules_to_not_convert,
+            ..
+        } = cfg.quantization_config.as_ref().expect("fp8 kept")
+        else {
+            panic!("expected fp8");
+        };
+        for module in ["model.layers.0.mlp.gate", "lm_head", "model.embed_tokens"] {
+            assert!(
+                modules_to_not_convert.iter().any(|m| m == module),
+                "{module} missing"
+            );
+        }
+        // Idempotent: a config that already lists them must not gain duplicates.
+        let before = modules_to_not_convert.len();
+        let cfg = correct_fp8_exclusions(&cfg);
+        let QuantizedConfig::Fp8 {
+            modules_to_not_convert,
+            ..
+        } = cfg.quantization_config.as_ref().expect("fp8 kept")
+        else {
+            panic!("expected fp8");
+        };
+        assert_eq!(modules_to_not_convert.len(), before);
     }
 
     #[test]
@@ -1262,10 +1333,11 @@ mod tests {
         Ok(())
     }
 
-    /// The residual stream accumulates POST-normed block outputs and starts at zero, so it is
-    /// not expressible as `x + residual` then norm. Run two layers by hand and compare.
+    /// The residual is the pre-norm stream: `residual += block_output` and the norm reads
+    /// that sum. Getting this backwards runs but drifts, which is what the golden check
+    /// caught; the two contracts disagree on any non-proportional input.
     #[test]
-    fn residual_accumulates_post_normed_outputs() -> Result<()> {
+    fn residual_is_the_pre_norm_stream() -> Result<()> {
         let device = Device::Cpu;
         let weight = Tensor::ones((4,), DType::F32, &device)?;
         let norm = RmsNorm::new(4, 1e-5, {
@@ -1275,24 +1347,25 @@ mod tests {
         })?;
         let eps = norm.eps() as f32;
         let x = Tensor::new(&[[1f32, 2., 3., 4.]], &device)?;
-        // Deliberately not proportional to `x`: rms_norm is scale invariant, so a
-        // multiple of the input would make both contracts agree.
+        // Deliberately not proportional to `x`: rms_norm is scale invariant, so a multiple
+        // of the input would make both contracts agree.
         let acc = Tensor::new(&[[10f32, 20., 40., 80.]], &device)?;
 
-        let dhn = norm.forward(&x)?;
-        let want_normed = candle_nn::ops::rms_norm(&x, &weight, eps)?;
-        assert_close(&dhn, &want_normed)?;
-        assert_close(&(acc.clone() + &dhn)?, &(&acc + &want_normed)?)?;
+        let (res, dhn) = norm.forward_add_rms_norm(&x, &acc)?;
+        assert_close(&res, &(&acc + &x)?)?;
+        assert_close(
+            &dhn,
+            &candle_nn::ops::rms_norm(&(&acc + &x)?, &weight, eps)?,
+        )?;
 
-        // The pre-norm helper norms `x + acc` instead, which is a different number; the two
-        // contracts must not be interchangeable here.
-        let (sum, normed_sum) = norm.forward_add_rms_norm(&x, &acc)?;
-        assert_close(&sum, &(&acc + &x)?)?;
-        let max_gap = normed_sum
+        // The post-norm contract normalizes the block output alone, which is a different
+        // number; the two must not be interchangeable.
+        let post_normed = candle_nn::ops::rms_norm(&x, &weight, eps)?;
+        let max_gap = dhn
             .flatten_all()?
             .to_vec1::<f32>()?
             .iter()
-            .zip(want_normed.flatten_all()?.to_vec1::<f32>()?.iter())
+            .zip(post_normed.flatten_all()?.to_vec1::<f32>()?.iter())
             .map(|(a, b)| (a - b).abs())
             .fold(0f32, f32::max);
         assert!(max_gap > 1e-3, "contracts collapsed; {max_gap}");
@@ -1354,8 +1427,9 @@ mod tests {
     // torch; see vllm.cpp `tests/vllm/models/kolibri1_goldens.json`. They are the only oracle
     // for this model, since transformers has no `Kolibri1ForCausalLM`.
     //
-    //   KOLIBRI1_MODEL_DIR  checkpoint directory (default /mnt/models/Aleph-Alpha/Kolibri-1-bf16)
-    //   KOLIBRI1_GOLDENS    goldens json (default the path above)
+    //   KOLIBRI1_MODEL_DIR     checkpoint directory (default /mnt/models/Aleph-Alpha/Kolibri-1-bf16)
+    //   KOLIBRI1_GOLDENS       goldens json (default the path above)
+    //   KOLIBRI1_MAX_PROMPTS   stop after N prompts, for a quick smoke run
     // ---------------------------------------------------------------------------------------
 
     fn golden_paths() -> (std::path::PathBuf, std::path::PathBuf) {
@@ -1416,20 +1490,23 @@ mod tests {
     fn teacher_forced_logits(model: &mut Model, ids: &[u32]) -> Result<Vec<f32>> {
         let device = Device::Cpu;
         let seq_len = ids.len();
-        let input_ids = Tensor::new(ids, &device)?;
+        let input_ids = Tensor::from_vec(ids.to_vec(), (1, seq_len), &device)?;
 
-        let mut cache = model.cache.normal();
-        for layer in cache.0.iter_mut() {
-            match layer {
-                crate::kv_cache::KvCache::Normal { k, v } => {
-                    k.current_seq_len = 0;
-                    v.current_seq_len = 0;
+        // Scoped: the forward takes the same mutex again, and it is not reentrant.
+        {
+            let mut cache = model.cache.normal();
+            for layer in cache.0.iter_mut() {
+                match layer {
+                    crate::kv_cache::KvCache::Normal { k, v } => {
+                        k.current_seq_len = 0;
+                        v.current_seq_len = 0;
+                    }
+                    crate::kv_cache::KvCache::Rotating { k, v } => {
+                        k.set_len(0)?;
+                        v.set_len(0)?;
+                    }
+                    crate::kv_cache::KvCache::Shared { .. } => {}
                 }
-                crate::kv_cache::KvCache::Rotating { k, v } => {
-                    k.current_seq_len = 0;
-                    v.current_seq_len = 0;
-                }
-                crate::kv_cache::KvCache::Shared { .. } => {}
             }
         }
 
@@ -1448,6 +1525,7 @@ mod tests {
         let logits = model.forward(&input_ids, &mut ctx)?;
         let final_logits = logits
             .i((.., seq_len - 1, ..))?
+            .to_dtype(DType::F32)?
             .flatten_all()?
             .to_vec1::<f32>()?;
         Ok(final_logits)
@@ -1459,7 +1537,13 @@ mod tests {
         let (model_dir, goldens_path) = golden_paths();
         let goldens: serde_json::Value =
             serde_json::from_str(&std::fs::read_to_string(&goldens_path)?)?;
-        let prompts = goldens["prompts"].as_array().expect("goldens have prompts");
+        let mut prompts = goldens["prompts"]
+            .as_array()
+            .cloned()
+            .expect("goldens have prompts");
+        if let Ok(limit) = std::env::var("KOLIBRI1_MAX_PROMPTS") {
+            prompts.truncate(limit.parse().expect("KOLIBRI1_MAX_PROMPTS is a count"));
+        }
         assert!(!prompts.is_empty());
 
         eprintln!("[phase] loading {}", model_dir.display());
@@ -1527,9 +1611,15 @@ mod tests {
             argmax_matches, argmax_total,
             "greedy argmax diverged from the reference"
         );
+        // The goldens come from the bf16 checkpoint. Comparing the fp8 one against them is a
+        // 3-mantissa-bit weight format against bf16, so the magnitudes are expected to differ
+        // even when the ranking is right; the argmax gate above carries the signal there.
+        let fp8 = std::fs::read_to_string(model_dir.join("config.json"))?
+            .contains("\"quant_method\": \"fp8\"");
+        let tol = if fp8 { 4.0 } else { 0.5 };
         assert!(
-            worst_logit_gap < 0.5,
-            "top-k logits diverged by {worst_logit_gap}"
+            worst_logit_gap < tol,
+            "top-k logits diverged by {worst_logit_gap} (fp8: {fp8})"
         );
         Ok(())
     }

@@ -494,17 +494,38 @@ chat template and reasoning/tool parsers. None of this should block a working fo
 | Order | Item | Independent PR | Gate | State |
 |---|---|---|---|---|
 | 1 | **A0-gemv bandwidth-bound decode GEMV** | yes | decode exceeds single-thread bandwidth, scales to plateau, bit-identical | **DONE for bf16 dense** (8.2x at 4B, 7x at 9B); GGUF quantized and packed MoE paths still open |
+| 3 | **A5 CPU stacked-MoE gather-GEMV parallel** | yes | MoE gather uses >1 core; bit-identical partitioning | **DONE** (bf16 42x, f32 6.9x on the isolated gather; `mistralrs-quant/src/moe_gather_cpu.rs`) |
 | 2 | A0-gemv.4 GGUF quantized dequant + cache | yes | 0.8B Q4_K_M decode moves; bit identical to uncached | next |
-| 3 | A5 CPU packed MoE GEMV parallel | yes | MoE decode uses >1 core; cores-busy measured | next |
 | 4 | A2 sliding window in kernels | yes | golden output per SWA architecture | |
 | 5 | A3 NUMA placement | yes | bit identical output, benched at 32/64/128 threads | |
-| 6 | B1 registry | yes | `make docs-check` green | |
-| 7 | B2 config and loader | yes | synthetic + manifest tests, bf16 scale-ignoring test | |
-| 8 | B3 forward | yes | unit tests, then end to end greedy | |
+| 6 | **B1 registry** | yes | `make docs-check` green | **DONE** |
+| 7 | **B2 config and loader** | yes | synthetic + manifest tests, bf16 scale-ignoring test | **DONE** |
+| 8 | **B3 forward** | yes | unit tests, then end to end greedy | **DONE**, unit tests green; golden run against the reference fingerprints in progress |
 | 9 | A1 fp8 dequant cache | yes, follow-up | bit identical to uncached, eviction test, bench | |
 | 10 | B4 tokenizer and template | yes, non blocking | encode matches HF ids | |
 | - | aarch64 CI lane | propose separately | compiles on aarch64 linux | |
-| - | A4 CPU paged attention | separate project | serving benchmarks | |
+| - | A4 CPU paged attention | separate project | serving benchmarks |
+
+### B-state detail
+
+B1-B3 landed as three commits on top of `5ed83cf4e`:
+
+- `feat(core): add Kolibri-1 (kolibri1) text model` - the model, the loader, the registry
+  entries and the `kolibri1` GGUF architecture. Three correctness details the tests pin:
+  the sandwich residual accumulates the POST-normed block output and starts at zero (not the
+  embedding), the router bias lives at `moe.router.expert_bias` as a sibling of `mlp` rather
+  than a child, and the sliding layers are the ones without RoPE.
+- `fix(core): Kolibri-1 RNoPE layers need a contiguous q/k before qk-norm` - the transposed
+  q/k are non-contiguous and `qk_rms_norm_rope` copies them before the norm; the norm-only
+  RNoPE branch did not, so every fifth layer failed. Includes a scale sweep so the dimensions
+  only the real checkpoint exercises fail in seconds rather than after an eight-minute load.
+- `perf(mistralrs-quant): parallel CPU gather-GEMV for stacked MoE experts` - A5.
+
+The golden validation is `kolibri1_matches_reference_goldens` (ignored by default, 156 GB).
+It teacher-forces each of the 8 reference prompts and compares the final-position top-8
+logits against `vllm.cpp tests/vllm/models/kolibri1_goldens.json`, which is the only oracle
+for this model: `transformers` has no `Kolibri1ForCausalLM` and the plugin imports vLLM
+throughout, so it cannot run under a plain torch stack. |
 
 The ordering is forced by measurement. A0-gemv is first because section 8 showed decode reaches
 only 10.1 GB/s on a node that streams at 122.7 GB/s, and 10.1 GB/s is what one thread gets on

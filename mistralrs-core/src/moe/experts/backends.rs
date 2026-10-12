@@ -1379,7 +1379,18 @@ impl FastExpertsWeights {
                 &down_in.reshape((forward.shape.num_tokens, config.num_experts_per_tok, inter))?,
                 ids,
             )?;
-            let xs = self.fused_down_proj.gather_forward(&down_in, &indices)?;
+            // Per-slot inputs, matching the (batch, seq, 1, 1, hidden) shape the gate and up
+            // gathers were handed. The LoRA path reshapes this too; without it the down
+            // projection gets a rank-3 input against rank-3 indices.
+            let xs = self.fused_down_proj.gather_forward(
+                &down_in.reshape((
+                    forward.shape.batch_size,
+                    forward.shape.seq_len,
+                    config.num_experts_per_tok,
+                    inter,
+                ))?,
+                &indices,
+            )?;
             xs.squeeze(D::Minus2)?.reshape((
                 forward.shape.num_tokens,
                 config.num_experts_per_tok,
