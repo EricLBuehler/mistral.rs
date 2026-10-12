@@ -43,6 +43,7 @@ pub mod moe_gather_cpu;
 mod mxfp4;
 pub mod nvfp4;
 mod pending_layer;
+pub mod per_expert;
 mod pertensor_fp8;
 pub mod rotary;
 pub mod safetensors;

@@ -62,25 +62,149 @@ pub fn should_use_gather_gemv(
 /// what candle's own bf16 matmul does (widen, accumulate in f32, narrow back).
 pub fn gather_gemv(a: &[f32], w: &Tensor, ids: &[u32]) -> Result<Vec<f32>> {
     let (num_experts, out_features, in_features) = w.dims3()?;
-    let n_slots = ids.len();
-    if a.len() != n_slots * in_features {
-        candle_core::bail!(
-            "gather gemv: input has {} elements, expected {}",
-            a.len(),
-            n_slots * in_features
-        );
-    }
-
     let (guard, _) = w.storage_and_layout();
     let Storage::Cpu(w_cpu) = &*guard else {
         candle_core::bail!("gather gemv requires CPU storage")
     };
+    check_input(a.len(), ids.len(), in_features)?;
+    par_fill(
+        ids.len(),
+        out_features,
+        ids,
+        num_experts,
+        |slot, row, expert| dot_slot(a, slot, row, w_cpu, expert, out_features, in_features),
+    )
+}
 
+/// The same gather against one view per expert instead of a fused stack, so a per-expert
+/// checkpoint never has to be stacked to be used.
+///
+/// Each slab is a contiguous `[out_features, in_features]` tensor. For a memory-mapped
+/// safetensors checkpoint these are zero-copy views of the mapping, so the whole model stays
+/// in reclaimable page cache instead of being copied into anonymous memory.
+pub fn gather_gemv_per_expert(
+    a: &[f32],
+    experts: &[Tensor],
+    out_features: usize,
+    in_features: usize,
+    ids: &[u32],
+) -> Result<Vec<f32>> {
+    if experts.is_empty() {
+        candle_core::bail!("gather gemv: no expert slabs")
+    }
+    check_input(a.len(), ids.len(), in_features)?;
+
+    // dtype and residency are properties of how the checkpoint was loaded, not of the
+    // routing, so they are checked once here rather than per work item.
+    let dtype = experts[0].dtype();
+    if experts.iter().any(|t| t.dtype() != dtype) {
+        candle_core::bail!("gather gemv: expert slabs disagree on dtype")
+    }
+    if experts.iter().any(|t| !t.device().is_cpu()) {
+        candle_core::bail!("gather gemv: expert slabs must be on CPU")
+    }
+
+    match dtype {
+        DType::F32 => with_f32_rows(experts, |rows| {
+            par_fill(
+                ids.len(),
+                out_features,
+                ids,
+                experts.len(),
+                |slot, row, expert| {
+                    dot(
+                        a_row(a, slot, in_features),
+                        &rows[expert][row * in_features..][..in_features],
+                    )
+                },
+            )
+        }),
+        DType::BF16 => with_bf16_rows(experts, |rows| {
+            par_fill(
+                ids.len(),
+                out_features,
+                ids,
+                experts.len(),
+                |slot, row, expert| {
+                    dot_bf16(
+                        a_row(a, slot, in_features),
+                        &rows[expert][row * in_features..][..in_features],
+                    )
+                },
+            )
+        }),
+        other => candle_core::bail!("gather gemv: unsupported expert dtype {other:?}"),
+    }
+}
+
+/// Hands each slab's rows to `f` as one contiguous slice.
+///
+/// The storage guards are taken here rather than in the caller because the row slices borrow
+/// from the storage they lock; holding them in this frame is what keeps the slices alive for
+/// the duration of the parallel loop without a self-referential struct.
+fn with_f32_rows<T>(experts: &[Tensor], f: impl FnOnce(&[&[f32]]) -> Result<T>) -> Result<T> {
+    let guards: Vec<_> = experts.iter().map(Tensor::storage_and_layout).collect();
+    let rows = guards
+        .iter()
+        .zip(experts)
+        .map(|((guard, layout), t)| {
+            let Storage::Cpu(cpu) = &**guard else {
+                candle_core::bail!("expert slab must be CPU storage")
+            };
+            let flat = cpu.as_slice::<f32>()?;
+            let start = layout.start_offset();
+            Ok(&flat[start..start + t.elem_count()])
+        })
+        .collect::<Result<Vec<_>>>()?;
+    f(&rows)
+}
+
+fn with_bf16_rows<T>(experts: &[Tensor], f: impl FnOnce(&[&[u16]]) -> Result<T>) -> Result<T> {
+    let guards: Vec<_> = experts.iter().map(Tensor::storage_and_layout).collect();
+    let rows = guards
+        .iter()
+        .zip(experts)
+        .map(|((guard, layout), t)| {
+            let Storage::Cpu(cpu) = &**guard else {
+                candle_core::bail!("expert slab must be CPU storage")
+            };
+            let flat = cpu.as_slice::<half::bf16>()?;
+            // bf16 is repr(transparent) over u16, and the dot kernel reads raw bits.
+            let flat: &[u16] = unsafe { core::mem::transmute::<&[half::bf16], &[u16]>(flat) };
+            let start = layout.start_offset();
+            Ok(&flat[start..start + t.elem_count()])
+        })
+        .collect::<Result<Vec<_>>>()?;
+    f(&rows)
+}
+
+fn check_input(a_len: usize, n_slots: usize, in_features: usize) -> Result<()> {
+    if a_len != n_slots * in_features {
+        candle_core::bail!(
+            "gather gemv: input has {} elements, expected {}",
+            a_len,
+            n_slots * in_features
+        );
+    }
+    Ok(())
+}
+
+#[inline]
+fn a_row(a: &[f32], slot: usize, in_features: usize) -> &[f32] {
+    &a[slot * in_features..slot * in_features + in_features]
+}
+
+/// Partitions the `n_slots * out_features` outputs across the pool. `dot` receives the slot,
+/// the output row, and an expert id already bounds-checked against `num_experts`.
+fn par_fill(
+    n_slots: usize,
+    out_features: usize,
+    ids: &[u32],
+    num_experts: usize,
+    dot: impl Fn(usize, usize, usize) -> f32 + Sync,
+) -> Result<Vec<f32>> {
     let total = n_slots * out_features;
     let mut out = vec![0f32; total];
-
-    // Each work item is one output element of one slot. `slot` fixes both the activation row
-    // and which expert block of the stack to read, so items share nothing.
     let threads = crate::cpu_threads::resolve().max(1);
     let chunk = total.div_ceil(threads);
     out.par_chunks_mut(chunk)
@@ -93,19 +217,10 @@ pub fn gather_gemv(a: &[f32], w: &Tensor, ids: &[u32]) -> Result<Vec<f32>> {
                 *d = if expert >= num_experts {
                     f32::NAN
                 } else {
-                    dot_slot(
-                        a,
-                        slot,
-                        idx % out_features,
-                        w_cpu,
-                        expert,
-                        out_features,
-                        in_features,
-                    )
+                    dot(slot, idx % out_features, expert)
                 };
             }
         });
-
     Ok(out)
 }
 
@@ -375,6 +490,30 @@ mod tests {
 
     fn bf16_to_f32(bits: u16) -> f32 {
         f32::from_bits((bits as u32) << 16)
+    }
+
+    /// The per-expert form has to produce exactly what the fused stack produces, since it is
+    /// a drop-in replacement for it rather than a second opinion on the math.
+    #[test]
+    fn per_expert_matches_the_fused_stack_bit_exactly() -> Result<()> {
+        for dtype in [DType::F32, DType::BF16] {
+            let (experts, out, k, slots) = (8usize, 64usize, 32usize, 16usize);
+            let slabs: Vec<Tensor> = (0..experts)
+                .map(|_| Tensor::rand(-1f32, 1f32, (out, k), &Device::Cpu)?.to_dtype(dtype))
+                .collect::<Result<Vec<_>>>()?;
+            // Same bytes either way, so only the layout the gather reads differs.
+            let stack = Tensor::stack(&slabs, 0)?;
+            let a: Vec<f32> = (0..slots * k)
+                .map(|i| ((i % 17) as f32) * 0.125 - 1.0)
+                .collect();
+            let ids: Vec<u32> = (0..slots).map(|i| (i * 7 % experts) as u32).collect();
+
+            let fused = gather_gemv(&a, &stack, &ids)?;
+            let split = gather_gemv_per_expert(&a, &slabs, out, k, &ids)?;
+            assert_eq!(fused.len(), split.len());
+            assert_eq!(fused, split, "{dtype:?}");
+        }
+        Ok(())
     }
 
     #[test]

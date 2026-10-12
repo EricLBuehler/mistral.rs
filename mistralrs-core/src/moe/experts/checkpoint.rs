@@ -97,6 +97,42 @@ impl<'a> ExpertCheckpoint<'a> {
         }
     }
 
+    /// Whether this checkpoint stores experts individually rather than as a fused stack.
+    pub(super) fn has_per_expert_layout(&self) -> bool {
+        matches!(self.layout, ExpertSourceLayout::PerExpert { .. })
+    }
+
+    /// The per-expert slabs as loaded, without fusing them into one stack.
+    ///
+    /// Returns `None` for a `Fused` source, which has no per-expert slabs to hand back.
+    ///
+    /// `stacked_proj` ends in `Tensor::stack`, which puts the entire expert weight into
+    /// anonymous memory on top of whatever the checkpoint itself occupies. For a
+    /// memory-mapped safetensors checkpoint each slab is instead a zero-copy view of the
+    /// mapping, so keeping them un-fused leaves the model in reclaimable page cache. See
+    /// `todo/gaps/04-no-expert-streaming.md`.
+    pub(super) fn per_expert_views(&self, proj: ExpertProj) -> Result<Option<Vec<Tensor>>> {
+        let cfg = self.cfg;
+        let ExpertSourceLayout::PerExpert { names, .. } = &self.layout else {
+            return Ok(None);
+        };
+        let name = proj.name_in(names);
+        let (shape, shard_dim) = match proj {
+            ExpertProj::Gate | ExpertProj::Up => ((cfg.moe_intermediate_size, cfg.hidden_size), 0),
+            ExpertProj::Down => ((cfg.hidden_size, cfg.moe_intermediate_size), 1),
+        };
+        let slabs = (0..cfg.num_experts)
+            .map(|i| {
+                self.vb.pp(i.to_string()).pp(name).get_with_hints(
+                    shape,
+                    "weight",
+                    shard(shard_dim, self.rank, self.world_size),
+                )
+            })
+            .collect::<Result<Vec<_>>>()?;
+        Ok(Some(slabs))
+    }
+
     /// Canonical ENK: gate_up [E, 2*inter, hidden], down [E, hidden, inter].
     pub(super) fn stacked_enk(&self) -> Result<(Tensor, Tensor)> {
         let cfg = self.cfg;
