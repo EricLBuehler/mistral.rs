@@ -236,7 +236,7 @@ fn launch(
     };
     if !nvfp4_supported(dev) {
         candle_core::bail!(
-            "cuTile NVFP4 requires Blackwell or newer with CUDA 13.3 and a compatible tileiras"
+            "cuTile NVFP4 requires Blackwell or newer with CUDA 13.3 or newer and a compatible tileiras"
         )
     }
     if let Some(indices) = indices {

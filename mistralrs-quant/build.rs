@@ -8,27 +8,16 @@ const DEEPGEMM_CUTLASS_COMMIT: &str = "f3fde58372d33e9a5650ba7b80fc48b3b49d40c8"
 const CUTLASS_COMMIT_ENV: &str = "MISTRALRS_CUTLASS_COMMIT";
 #[cfg(feature = "cuda")]
 const CUDA_BUILD_ROOT_ENV: &str = "MISTRALRS_CUDA_BUILD_ROOT";
+
 #[cfg(feature = "cuda")]
-const SUPPORTED_CUDA_TOOLKIT_VERSIONS: &[(usize, usize)] = &[
-    (13, 3),
-    (13, 2),
-    (13, 1),
-    (13, 0),
-    (12, 9),
-    (12, 8),
-    (12, 6),
-    (12, 5),
-    (12, 4),
-    (12, 3),
-    (12, 2),
-    (12, 1),
-    (12, 0),
-    (11, 8),
-    (11, 7),
-    (11, 6),
-    (11, 5),
-    (11, 4),
-];
+#[path = "src/build_support/cuda_toolkit.rs"]
+mod cuda_toolkit;
+
+#[cfg(feature = "cuda")]
+use cuda_toolkit::{
+    nvfp4_cutlass_supported_for_build, parse_cuda_version_from_nvcc,
+    SUPPORTED_CUDA_TOOLKIT_VERSIONS,
+};
 
 #[cfg(feature = "cuda")]
 fn cuda_build_dir(out_dir: &std::path::Path, component: &str) -> std::path::PathBuf {
@@ -111,33 +100,11 @@ fn cuda_version_from_build_system() -> (usize, usize) {
 }
 
 #[cfg(feature = "cuda")]
-fn parse_cuda_version_from_nvcc(stdout: &str) -> Option<(usize, usize)> {
-    let release = stdout.split("release ").nth(1)?;
-    let version = release
-        .split(|c: char| c == ',' || c.is_whitespace())
-        .next()?;
-    let mut parts = version.split('.');
-    let major = parts.next()?.parse().ok()?;
-    let minor = parts.next().unwrap_or("0").parse().ok()?;
-    Some((major, minor))
-}
-
-#[cfg(feature = "cuda")]
 fn cutile_supported_for_build_cuda(major: usize, minor: usize, compute_cap: usize) -> bool {
     let cuda_code = major * 100 + minor;
     ((80..90).contains(&compute_cap) && cuda_code >= 1302)
         || (compute_cap == 90 && cuda_code >= 1303)
         || (compute_cap >= 100 && cuda_code >= 1302)
-}
-
-#[cfg(feature = "cuda")]
-fn nvfp4_cutlass_supported_for_build(
-    cuda_version: (usize, usize),
-    compute_cap: usize,
-    cutile: bool,
-    target: &str,
-) -> bool {
-    cuda_version == (13, 3) && compute_cap == 121 && cutile && target.contains("linux")
 }
 
 fn main() -> Result<(), String> {

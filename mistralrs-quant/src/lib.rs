@@ -21,6 +21,9 @@ pub mod cublaslt;
 #[cfg(test)]
 #[path = "build_support/cuda_headers.rs"]
 mod cuda_headers;
+#[cfg(test)]
+#[path = "build_support/cuda_toolkit.rs"]
+mod cuda_toolkit;
 #[cfg(all(feature = "cuda", feature = "cutile"))]
 pub mod cutile;
 pub mod distributed;
