@@ -807,7 +807,7 @@ pub struct Sequence {
     /// For hybrid models: index into the recurrent state pool
     recurrent_state_idx: Option<usize>,
 
-    // Preallocated KV cache templates, keyed by layer.
+    // Request admission attaches optional reset-path templates after prefix lookup, before scheduling.
     seq_preallocated_cache: Option<SeqPreallocatedCache>,
 
     // Mutables
@@ -1380,6 +1380,10 @@ impl Sequence {
 
     pub fn preallocated_cache(&self) -> Option<&SeqPreallocatedCache> {
         self.seq_preallocated_cache.as_ref()
+    }
+
+    pub(crate) fn set_preallocated_cache(&mut self, cache: Option<SeqPreallocatedCache>) {
+        self.seq_preallocated_cache = cache;
     }
 
     pub fn normal_cache(&mut self) -> &mut Vec<Option<KvCache>> {
