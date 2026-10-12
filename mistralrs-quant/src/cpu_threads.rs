@@ -1,25 +1,29 @@
 //! CPU worker-thread sizing for decode-shaped work.
 //!
-//! Decode is batch-1 and layer-serial, so a thread per core spends most of its time at
-//! barriers rather than streaming weights. Candle reports the core count via
-//! `get_num_threads`, which for this class of workload measured flat at one core's bandwidth
-//! from 1 thread to 32 (see `examples/cpu_decode_gemv.rs`). Sizing off an explicit override
-//! keeps the knob discoverable without fighting `RAYON_NUM_THREADS`, which candle already
-//! honours upstream of us.
+//! mistral.rs's decode GEMV and its flash-attention pool read their size from here so the two
+//! stay consistent, and so a caller can steer them with one variable. The default delegates
+//! to Candle's core count; it deliberately does NOT impose a ratio.
 //!
-//! With the output-parallel GEMV the kernel became bandwidth-bound rather than
-//! barrier-bound, and the measured optimum is half the available cores (16 of 32 on the test
-//! node, 4.9 tok/s against 4.1 at 32), so the default is that ratio rather than the full count.
+//! An earlier revision divided the core count by two. That was extrapolated from one 32-core
+//! node and it is wrong in two separate ways:
+//!
+//! - It was measured *worse*. Sizing these two pools to 16 while Candle's global Rayon pool
+//!   stayed at 32 is an inconsistent configuration, and the mismatch cost more than the ratio
+//!   ever won (2.2 tok/s against 4.2 for a consistent 32).
+//! - "Half the cores" is the wrong shape on a large host: it keeps shrinking as cores grow,
+//!   long past the point where a batch-1, layer-serial decode can use more parallelism.
+//!
+//! See `examples/cpu_decode_gemv.rs` for the isolated measurements. There is a separate,
+//! pre-existing effect where leaving `RAYON_NUM_THREADS` unset interacts with `numactl` CPU
+//! pinning and under-uses the allowed cores; that lives in Candle's pool sizing and is out
+//! of scope here, but `RAYON_NUM_THREADS` is the lever that resolves it.
 
-/// Fraction of available cores the decode GEMV uses when neither override is set.
-const DEFAULT_CORE_FRACTION: usize = 2;
-
-/// Threads for CPU decode-shaped work, honouring `MISTRALRS_CPU_THREADS` then
-/// `RAYON_NUM_THREADS`, else half the cores candle reports.
+/// Threads for mistral.rs's CPU decode pools, honouring `MISTRALRS_CPU_THREADS` then
+/// `RAYON_NUM_THREADS`, else the core count Candle reports.
 pub fn resolve() -> usize {
     read_env_usize("MISTRALRS_CPU_THREADS")
         .or_else(|| read_env_usize("RAYON_NUM_THREADS"))
-        .unwrap_or_else(|| (candle_core::utils::get_num_threads() / DEFAULT_CORE_FRACTION).max(1))
+        .unwrap_or_else(candle_core::utils::get_num_threads)
         .max(1)
 }
 
@@ -37,9 +41,13 @@ mod tests {
     }
 
     #[test]
-    fn default_is_half_the_cores() {
-        let cores = candle_core::utils::get_num_threads();
-        // Set neither override: the default must be the measured half-core ratio.
-        assert_eq!(resolve(), (cores / DEFAULT_CORE_FRACTION).max(1));
+    fn default_matches_candle_core_count() {
+        // Neither override set: defer to Candle rather than apply a ratio, so these pools
+        // agree with Candle's own.
+        if std::env::var("MISTRALRS_CPU_THREADS").is_err()
+            && std::env::var("RAYON_NUM_THREADS").is_err()
+        {
+            assert_eq!(resolve(), candle_core::utils::get_num_threads().max(1));
+        }
     }
 }
