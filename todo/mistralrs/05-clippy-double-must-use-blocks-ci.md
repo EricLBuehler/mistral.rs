@@ -1,4 +1,4 @@
-# 16 `double_must_use` clippy errors block the CI clippy gate
+# 17 clippy warnings block the CI clippy gate
 
 - **Repo:** mistral.rs
 - **Component:** lint debt on `master`
@@ -13,18 +13,21 @@
 cargo clippy --workspace --tests --examples -- -D warnings
 ```
 
-On pristine `master` at `3f2515e9b` this fails with 16 instances of
-`clippy::double_must_use`: a `#[must_use]` attribute with no message on a function that
-already returns a `#[must_use]` type.
+On pristine `master` at `3f2515e9b` this fails with 17 warnings across two lints:
 
-Four files, 16 sites:
+- 16 instances of `clippy::double_must_use`: a `#[must_use]` attribute with no message on a
+  function that already returns a `#[must_use]` type.
+- 1 instance of `clippy::redundant_field_names`.
 
-| File | Lines |
-|---|---|
-| `mistralrs-core/src/pipeline/mod.rs` | 1748 (and neighbours) |
-| `mistralrs-core/src/utils/varbuilder_utils.rs` | 299 |
-| `mistralrs-mcp/src/client.rs` | 17 |
-| `mistralrs-mcp/src/transport.rs` | 12 |
+| File | Lines | Lint |
+|---|---|---|
+| `mistralrs-core/src/pipeline/mod.rs` | 1748 (and neighbours) | `double_must_use` |
+| `mistralrs-mcp/src/client.rs` | 17 | `double_must_use` |
+| `mistralrs-mcp/src/transport.rs` | 12 | `double_must_use` |
+| `mistralrs-core/src/utils/varbuilder_utils.rs` | 299 | `redundant_field_names` |
+
+Note `mistralrs-mcp` does not compile clean on its own, so the `mistralrs-core` sites are only
+visible once it is built; a per-crate clippy run masks the other crate.
 
 ## Why it matters
 
@@ -42,9 +45,9 @@ Either drop the redundant attribute or give it a reason:
 #[must_use = "returns the built model"]  // accepted
 ```
 
-`cargo clippy --fix` handles the attribute removal mechanically, but the reason strings are
-worth writing by hand, since a `#[must_use]` on a builder is usually load-bearing and the
-message is what tells a caller why.
+`cargo clippy --fix` handles both mechanically, but the reason strings are worth writing by
+hand: a `#[must_use]` on a builder is usually load-bearing and the message is what tells a
+caller why.
 
 ## Verification
 
