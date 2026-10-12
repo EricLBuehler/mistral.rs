@@ -29,6 +29,9 @@ anyhow.workspace = true
 mistralrs-metal-compile = { workspace = true, optional = true }
 
 [features]
+cuda-legacy-bf16 = ["cuda", "candle-core/cuda-legacy-bf16"]
+cuda-legacy-fp8 = ["cuda", "candle-core/cuda-legacy-fp8"]
+cuda-legacy-fp4 = ["cuda", "candle-core/cuda-legacy-fp4"]
 cuda = ["dep:cudaforge", "candle-core/cuda"]
 metal = [
     "candle-core/metal",

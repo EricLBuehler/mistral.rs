@@ -99,6 +99,7 @@ fn main() -> Result<()> {
     println!("cargo::rustc-check-cfg=cfg(has_fa3_fp8_paged)");
 
     println!("cargo:rerun-if-changed=build.rs");
+    println!("cargo:rerun-if-env-changed=ALLOW_LEGACY");
     println!("cargo:rerun-if-env-changed=CUDA_NVCC_FLAGS");
     println!("cargo:rerun-if-changed=src/cuda/pagedattention.cuh");
     println!("cargo:rerun-if-changed=src/cuda/copy_blocks_kernel.cu");
@@ -158,9 +159,16 @@ fn main() -> Result<()> {
         .arg(&header_hash_arg);
 
     let compute_cap = builder.get_compute_cap().unwrap_or(80);
-    // Enable FP8 if compute capability >= 8.0 (Ampere and newer)
-    let using_fp8 = if compute_cap >= 80 {
+    let allow_legacy = std::env::var("ALLOW_LEGACY").unwrap_or_default();
+    let allow_legacy_fp8 =
+        allow_legacy == "all" || allow_legacy.split(',').map(str::trim).any(|x| x == "fp8");
+
+    // Native FP8 is SM80+. Pascal uses opt-in software conversion.
+    let using_fp8 = if compute_cap >= 80 || allow_legacy_fp8 {
         builder = builder.arg("-DENABLE_FP8");
+        if allow_legacy_fp8 {
+            builder = builder.arg("-DALLOW_LEGACY_FP8");
+        }
         true
     } else {
         false

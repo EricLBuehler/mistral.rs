@@ -111,12 +111,15 @@ fn main() -> Result<(), String> {
     // Declare expected cfg values for check-cfg lint
     println!("cargo::rustc-check-cfg=cfg(has_marlin_kernels)");
     println!("cargo::rustc-check-cfg=cfg(has_blockwise_fp8_kernels)");
+    println!("cargo::rustc-check-cfg=cfg(has_fp8_mma_kernels)");
     println!("cargo::rustc-check-cfg=cfg(has_cutlass_fp8_sm90_kernels)");
     println!("cargo::rustc-check-cfg=cfg(has_deepgemm_fp8_sm90_provider)");
     println!("cargo::rustc-check-cfg=cfg(has_scalar_fp8_kernels)");
     println!("cargo::rustc-check-cfg=cfg(has_vector_fp8_kernels)");
     println!("cargo::rustc-check-cfg=cfg(has_mxfp4_kernels)");
     println!("cargo::rustc-check-cfg=cfg(has_mxfp4_wmma_kernels)");
+    println!("cargo::rustc-check-cfg=cfg(allow_legacy_bf16)");
+    println!("cargo::rustc-check-cfg=cfg(allow_legacy_fp8)");
     println!("cargo::rustc-check-cfg=cfg(has_cutlass_moe_kernels)");
     println!("cargo::rustc-check-cfg=cfg(has_nvfp4_cutlass_sm121_kernels)");
     println!("cargo::rustc-check-cfg=cfg(cuda_ge_13000)");
@@ -127,6 +130,7 @@ fn main() -> Result<(), String> {
         const CUDA_NVCC_FLAGS: Option<&'static str> = option_env!("CUDA_NVCC_FLAGS");
 
         println!("cargo:rerun-if-changed=build.rs");
+        println!("cargo:rerun-if-env-changed=ALLOW_LEGACY");
         println!("cargo:rerun-if-env-changed=CUDA_NVCC_FLAGS");
         println!("cargo:rerun-if-env-changed={CUTLASS_COMMIT_ENV}");
         let out_dir = PathBuf::from(std::env::var("OUT_DIR").unwrap());
@@ -153,9 +157,30 @@ fn main() -> Result<(), String> {
             .watch(["kernels"])
             .arg(&header_hash_arg);
 
+        let allow_legacy = std::env::var("ALLOW_LEGACY").unwrap_or_default();
+        let allow_legacy_bf16 = allow_legacy == "all"
+            || allow_legacy
+                .split(',')
+                .map(str::trim)
+                .any(|feature| feature == "bf16");
+        let allow_legacy_fp8 = allow_legacy == "all"
+            || allow_legacy
+                .split(',')
+                .map(str::trim)
+                .any(|feature| feature == "fp8");
+        if allow_legacy_bf16 {
+            builder = builder.arg("-DALLOW_LEGACY_BF16");
+            println!("cargo:rustc-cfg=allow_legacy_bf16");
+        }
+        if allow_legacy_fp8 {
+            builder = builder.arg("-DALLOW_LEGACY_FP8");
+            println!("cargo:rustc-cfg=allow_legacy_fp8");
+        }
+
         let compute_cap = builder.get_compute_cap().unwrap_or(80);
         // ======== Handle optional kernel compilation via rustc-cfg flags
         let cc_over_80 = compute_cap >= 80;
+        let enable_legacy_fp8 = cc_over_80 || allow_legacy_fp8;
         let target = std::env::var("TARGET").unwrap();
 
         // The CUTLASS 2.x grouped-GEMM MoE kernels include gemm_universal.hpp, which textually pulls in
@@ -165,11 +190,16 @@ fn main() -> Result<(), String> {
 
         if cc_over_80 {
             println!("cargo:rustc-cfg=has_marlin_kernels");
+            // Never advertise native MMA when *_fp8_mma.cu is excluded (SM61).
+            // Keep the original SM80+ compilation capability unchanged.
+            println!("cargo:rustc-cfg=has_fp8_mma_kernels");
+            // WMMA tensor core MXFP4 kernel (FP16/BF16 WMMA requires SM >= 80)
+            println!("cargo:rustc-cfg=has_mxfp4_wmma_kernels");
+        }
+        if enable_legacy_fp8 {
             println!("cargo:rustc-cfg=has_blockwise_fp8_kernels");
             println!("cargo:rustc-cfg=has_scalar_fp8_kernels");
             println!("cargo:rustc-cfg=has_vector_fp8_kernels");
-            // WMMA tensor core MXFP4 kernel (FP16/BF16 WMMA requires SM >= 80)
-            println!("cargo:rustc-cfg=has_mxfp4_wmma_kernels");
         }
         let cutlass_fp8_sm90 = compute_cap == 90 && cuda_major >= 12 && !target.contains("msvc");
         if cutlass_fp8_sm90 {
@@ -207,14 +237,15 @@ fn main() -> Result<(), String> {
         } else {
             vec![
                 "marlin_*.cu",
-                "*_fp8.cu",
-                "*_fp8_gemm.cu",
                 "*_fp8_mma.cu",
                 "*_wmma.cu",
                 "moe_data.cu",
                 "grouped_mm_*.cu",
             ]
         };
+        if !cc_over_80 && !allow_legacy_fp8 {
+            excluded_files.extend(["*_fp8.cu", "*_fp8_gemm.cu"]);
+        }
         if cc_over_80 && !cutlass_moe {
             excluded_files.push("moe_data.cu");
             excluded_files.push("grouped_mm_*.cu");

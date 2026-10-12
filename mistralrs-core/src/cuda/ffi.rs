@@ -566,6 +566,25 @@ extern "C" {
         stream: i64,
     );
 
+    // Pascal grouped SIMT fallback; the implementation is in moe_gemm_hfma2.cu.
+    #[link_name = "mistralrs_moe_gemm_hfma2"]
+    pub fn moe_gemm_hfma2(
+        input: *const c_void,
+        weights: *const c_void,
+        sorted_token_ids: *const i32,
+        expert_ids: *const i32,
+        topk_weights: *const f32,
+        output: *mut c_void,
+        expert_offsets: *mut i32,
+        num_experts: i32,
+        topk: i32,
+        size_m: i32,
+        size_n: i32,
+        size_k: i32,
+        dtype: i32,
+        stream: i64,
+    );
+
     // MoE GEMV for decode phase (optimized for small batch sizes M <= 8)
     pub fn moe_gemv(
         input: *const c_void,   // input [size_m or size_m / topk, size_k]
