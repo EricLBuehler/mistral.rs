@@ -288,7 +288,8 @@ impl Attention {
         };
 
         // qk-norm precedes RoPE in the reference. On RNoPE layers the norm still runs and
-        // only the rope call is skipped.
+        // only the rope call is skipped; `qk_rms_norm_rope` makes the transposed q/k
+        // contiguous before the norm, so the norm-only branch has to do the same.
         let positions = ctx
             .text_positions(q.device(), q.dim(2)?)?
             .ok_or_else(|| candle_core::Error::msg("Kolibri-1 missing RoPE positions"))?;
@@ -303,10 +304,16 @@ impl Attention {
                 positions,
             )?,
             None => {
-                let q =
-                    candle_nn::ops::rms_norm(&q, self.q_norm.weight(), self.q_norm.eps() as f32)?;
-                let k =
-                    candle_nn::ops::rms_norm(&k, self.k_norm.weight(), self.k_norm.eps() as f32)?;
+                let q = candle_nn::ops::rms_norm(
+                    &q.contiguous()?,
+                    self.q_norm.weight(),
+                    self.q_norm.eps() as f32,
+                )?;
+                let k = candle_nn::ops::rms_norm(
+                    &k.contiguous()?,
+                    self.k_norm.weight(),
+                    self.k_norm.eps() as f32,
+                )?;
                 (q, k)
             }
         };
@@ -931,7 +938,11 @@ impl crate::amoe::AnyMoeBaseModelMixin for Model {}
 #[cfg(test)]
 mod tests {
     use super::*;
+    use candle_core::IndexOp;
+
     use crate::paged_attention::AttentionImplementation;
+    use crate::pipeline::text_models_inputs_processor::FlashParams;
+    use crate::utils::varbuilder_utils::DeviceForLoadTensor;
 
     /// The shipped `config.json`, verbatim. Keeps the deserializer honest about the field
     /// set the model actually ships, including `layer_types` and the `head_dtype` the plugin
@@ -1017,6 +1028,10 @@ mod tests {
     }
 
     fn tiny_config() -> Config {
+        small_config()
+    }
+
+    fn small_config() -> Config {
         Config {
             vocab_size: 8,
             hidden_size: 4,
@@ -1046,106 +1061,96 @@ mod tests {
         }
     }
 
-    /// Builds a model from a synthetic checkpoint. The key set mirrors the real one exactly,
+    fn tiny_model() -> Result<Model> {
+        model_for(&tiny_config())
+    }
+
+    /// Builds a model from a synthetic checkpoint whose key set mirrors the real one exactly,
     /// so a renamed or relocated tensor fails here rather than at load time on a 156 GB
     /// checkpoint.
-    fn tiny_model() -> Result<Model> {
-        let cfg = tiny_config();
+    fn model_for(cfg: &Config) -> Result<Model> {
+        let h = cfg.hidden_size;
+        let head_dim = cfg.head_dim();
+        let q = cfg.num_attention_heads * head_dim;
+        let kv = cfg.num_key_value_heads * head_dim;
+        let inter = cfg.moe_intermediate_size;
+        let shared = cfg.shared_expert_intermediate_size;
+
         let mut tensors: std::collections::HashMap<String, Tensor> =
             std::collections::HashMap::new();
-        let put = |tensors: &mut std::collections::HashMap<String, Tensor>,
-                   name: &str,
-                   shape: &[usize]|
-         -> Result<()> {
-            tensors.insert(name.to_string(), test_tensor(shape)?);
-            Ok(())
-        };
-
-        for (name, shape) in [
-            ("model.embed_tokens.weight", &[8usize, 4][..]),
-            ("model.norm.weight", &[4][..]),
-            ("lm_head.weight", &[8, 4][..]),
-            ("model.layers.0.input_layernorm.weight", &[4][..]),
-            ("model.layers.0.post_attn_norm.weight", &[4][..]),
-            ("model.layers.0.post_attention_layernorm.weight", &[4][..]),
-            ("model.layers.0.post_ffn_norm.weight", &[4][..]),
-            ("model.layers.0.self_attn.q_proj.weight", &[4, 4][..]),
-            ("model.layers.0.self_attn.k_proj.weight", &[2, 4][..]),
-            ("model.layers.0.self_attn.v_proj.weight", &[2, 4][..]),
-            ("model.layers.0.self_attn.o_proj.weight", &[4, 4][..]),
-            ("model.layers.0.self_attn.q_norm.weight", &[2][..]),
-            ("model.layers.0.self_attn.k_norm.weight", &[2][..]),
-            ("model.layers.0.mlp.gate.weight", &[4, 4][..]),
-            (
-                "model.layers.0.mlp.shared_experts.gate_proj.weight",
-                &[6, 4][..],
-            ),
-            (
-                "model.layers.0.mlp.shared_experts.up_proj.weight",
-                &[6, 4][..],
-            ),
-            (
-                "model.layers.0.mlp.shared_experts.down_proj.weight",
-                &[4, 6][..],
-            ),
-        ] {
-            put(&mut tensors, name, shape)?;
-        }
-
-        for layer in 0..2 {
-            for (name, shape) in [
-                ("input_layernorm", &[4][..]),
-                ("post_attn_norm", &[4][..]),
-                ("post_attention_layernorm", &[4][..]),
-                ("post_ffn_norm", &[4][..]),
-            ] {
-                put(
-                    &mut tensors,
-                    &format!("model.layers.{layer}.{name}.weight"),
-                    shape,
-                )?;
-            }
-            for (name, shape) in [
-                ("q_proj", &[4, 4][..]),
-                ("k_proj", &[2, 4][..]),
-                ("v_proj", &[2, 4][..]),
-                ("o_proj", &[4, 4][..]),
-                ("q_norm", &[2][..]),
-                ("k_norm", &[2][..]),
-            ] {
-                put(
-                    &mut tensors,
-                    &format!("model.layers.{layer}.self_attn.{name}.weight"),
-                    shape,
-                )?;
-            }
+        {
+            let put = |tensors: &mut std::collections::HashMap<String, Tensor>,
+                       name: String,
+                       shape: &[usize]|
+             -> Result<()> {
+                tensors.insert(name, test_tensor(shape)?);
+                Ok(())
+            };
             put(
                 &mut tensors,
-                &format!("model.layers.{layer}.mlp.gate.weight"),
-                &[4, 4][..],
+                "model.embed_tokens.weight".to_string(),
+                &[cfg.vocab_size, h],
             )?;
-            // Sibling of `mlp`, not a child: any other prefix would miss this tensor.
+            put(&mut tensors, "model.norm.weight".to_string(), &[h])?;
             put(
                 &mut tensors,
-                &format!("model.layers.{layer}.moe.router.expert_bias"),
-                &[4][..],
+                "lm_head.weight".to_string(),
+                &[cfg.vocab_size, h],
             )?;
-            for (name, shape) in [
-                ("gate_proj", &[6, 4][..]),
-                ("up_proj", &[6, 4][..]),
-                ("down_proj", &[4, 6][..]),
-            ] {
+
+            for layer in 0..cfg.num_hidden_layers {
+                let p = format!("model.layers.{layer}");
+                for name in [
+                    "input_layernorm",
+                    "post_attn_norm",
+                    "post_attention_layernorm",
+                    "post_ffn_norm",
+                ] {
+                    put(&mut tensors, format!("{p}.{name}.weight"), &[h])?;
+                }
+                for (name, shape) in [
+                    ("q_proj", &[q, h][..]),
+                    ("k_proj", &[kv, h][..]),
+                    ("v_proj", &[kv, h][..]),
+                    ("o_proj", &[h, q][..]),
+                    ("q_norm", &[head_dim][..]),
+                    ("k_norm", &[head_dim][..]),
+                ] {
+                    put(&mut tensors, format!("{p}.self_attn.{name}.weight"), shape)?;
+                }
                 put(
                     &mut tensors,
-                    &format!("model.layers.{layer}.mlp.shared_experts.{name}.weight"),
-                    shape,
+                    format!("{p}.mlp.gate.weight"),
+                    &[cfg.num_experts, h],
                 )?;
-                for expert in 0..4 {
-                    put(
-                        &mut tensors,
-                        &format!("model.layers.{layer}.mlp.experts.{expert}.{name}.weight"),
-                        shape,
-                    )?;
+                // Sibling of `mlp`, not a child: any other prefix would miss this tensor.
+                put(
+                    &mut tensors,
+                    format!("{p}.moe.router.expert_bias"),
+                    &[cfg.num_experts],
+                )?;
+                for (base, width, count) in [
+                    (format!("{p}.mlp.shared_experts"), shared, 1usize),
+                    (format!("{p}.mlp.experts"), inter, cfg.num_experts),
+                ] {
+                    for expert in 0..count {
+                        let base = if count == 1 {
+                            base.clone()
+                        } else {
+                            format!("{base}.{expert}")
+                        };
+                        put(
+                            &mut tensors,
+                            format!("{base}.gate_proj.weight"),
+                            &[width, h],
+                        )?;
+                        put(&mut tensors, format!("{base}.up_proj.weight"), &[width, h])?;
+                        put(
+                            &mut tensors,
+                            format!("{base}.down_proj.weight"),
+                            &[h, width],
+                        )?;
+                    }
                 }
             }
         }
@@ -1161,13 +1166,100 @@ mod tests {
             matformer_slicing_config: None,
             rope_pairing: None,
         };
-        Model::new(&cfg, vb, true, metadata, AttentionImplementation::Eager)
+        Model::new(cfg, vb, true, metadata, AttentionImplementation::Eager)
     }
 
     /// A missing or misnamed tensor surfaces here, on a 4 KB checkpoint rather than 156 GB.
     #[test]
     fn checkpoint_loads_with_the_shipped_tensor_names() {
         tiny_model().expect("every shipped tensor name resolves");
+    }
+
+    #[test]
+    fn tiny_model_runs_a_forward() -> Result<()> {
+        run_forward(&tiny_config(), 4)?;
+        Ok(())
+    }
+
+    /// The real model differs from `tiny_config` in a handful of dimensions at once. Each of
+    /// these is swept on its own so a scale-dependent stall is attributable rather than
+    /// guessed at; the whole sweep runs in seconds.
+    #[test]
+    fn scale_sweep_is_clean() -> Result<()> {
+        let base = tiny_config();
+
+        let many_experts = Config {
+            num_experts: 384,
+            num_experts_per_tok: 6,
+            moe_intermediate_size: 8,
+            shared_expert_intermediate_size: 8,
+            ..base.clone()
+        };
+        run_forward(&many_experts, 4)?;
+
+        let long_context = Config {
+            max_position_embeddings: 262_144,
+            sliding_window: 513,
+            ..base.clone()
+        };
+        run_forward(&long_context, 4)?;
+
+        let wide = Config {
+            hidden_size: 2560,
+            head_dim: Some(128),
+            num_attention_heads: 48,
+            num_key_value_heads: 4,
+            moe_intermediate_size: 512,
+            shared_expert_intermediate_size: 512,
+            num_experts: 8,
+            num_experts_per_tok: 6,
+            vocab_size: 512,
+            ..base.clone()
+        };
+        run_forward(&wide, 4)?;
+
+        let deep = Config {
+            num_hidden_layers: 50,
+            layer_types: (0..50)
+                .map(|i| {
+                    if i % 5 == 4 {
+                        LayerType::FullAttention
+                    } else {
+                        LayerType::SlidingAttention
+                    }
+                })
+                .collect(),
+            ..base.clone()
+        };
+        run_forward(&deep, 4)?;
+        Ok(())
+    }
+
+    fn run_forward(cfg: &Config, seq_len: usize) -> Result<()> {
+        let model = model_for(cfg)?;
+        let mut ids: Vec<Vec<u32>> = vec![vec![0u32; seq_len]];
+        let input_ids = Tensor::from_vec(ids.pop().unwrap(), (1, seq_len), &Device::Cpu)?;
+
+        let flash_params = FlashParams::empty(false);
+        // One entry per sequence: the position the sequence starts at.
+        let seqlen_offsets = [0usize];
+        let context_lens = [(0usize, seq_len)];
+        let position_ids: Vec<usize> = (0..seq_len).collect();
+        let mut ctx = ModelForwardContext::new(
+            &seqlen_offsets,
+            &context_lens,
+            &position_ids,
+            None,
+            &flash_params,
+        );
+        let logits = model.forward(&input_ids, &mut ctx)?;
+        assert_eq!(logits.dims(), &[1, seq_len, cfg.vocab_size]);
+        assert!(logits
+            .flatten_all()?
+            .to_vec1::<f32>()?
+            .iter()
+            .all(|v| v.is_finite()));
+        Ok(())
     }
 
     /// The residual stream accumulates POST-normed block outputs and starts at zero, so it is
@@ -1250,6 +1342,196 @@ mod tests {
 
     fn sigmoid(x: f32) -> f32 {
         1.0 / (1.0 + (-x).exp())
+    }
+
+    // ---------------------------------------------------------------------------------------
+    // Golden validation against the reference CPU forward. Ignored by default: it loads the
+    // 156 GB bf16 checkpoint.
+    //
+    //   cargo test --release -p mistralrs-core kolibri1_matches_reference_goldens -- --ignored
+    //
+    // The goldens are greedy-decode fingerprints produced by the vLLM plugin transcribed to
+    // torch; see vllm.cpp `tests/vllm/models/kolibri1_goldens.json`. They are the only oracle
+    // for this model, since transformers has no `Kolibri1ForCausalLM`.
+    //
+    //   KOLIBRI1_MODEL_DIR  checkpoint directory (default /mnt/models/Aleph-Alpha/Kolibri-1-bf16)
+    //   KOLIBRI1_GOLDENS    goldens json (default the path above)
+    // ---------------------------------------------------------------------------------------
+
+    fn golden_paths() -> (std::path::PathBuf, std::path::PathBuf) {
+        let model = std::env::var("KOLIBRI1_MODEL_DIR")
+            .unwrap_or_else(|_| "/mnt/models/Aleph-Alpha/Kolibri-1-bf16".to_string());
+        let goldens = std::env::var("KOLIBRI1_GOLDENS").unwrap_or_else(|_| {
+            "/home/lu_zero/Sources/vllm.cpp/tests/vllm/models/kolibri1_goldens.json".to_string()
+        });
+        (
+            std::path::PathBuf::from(model),
+            std::path::PathBuf::from(goldens),
+        )
+    }
+
+    fn load_real_model(dir: &std::path::Path) -> anyhow::Result<Model> {
+        let mut filenames: Vec<std::path::PathBuf> = std::fs::read_dir(dir)?
+            .filter_map(|e| e.ok().map(|e| e.path()))
+            .filter(|p| p.extension().is_some_and(|e| e == "safetensors"))
+            .collect();
+        filenames.sort();
+        assert!(!filenames.is_empty(), "no safetensors in {}", dir.display());
+
+        let config = std::fs::read_to_string(dir.join("config.json"))?;
+        let device = Device::Cpu;
+        let mapper = Box::new(crate::device_map::DummyDeviceMapper {
+            nm_device: device.clone(),
+        });
+        let vb = crate::utils::varbuilder_utils::from_mmaped_safetensors(
+            filenames,
+            Vec::new(),
+            Some(DType::BF16),
+            &device,
+            Vec::new(),
+            true,
+            None,
+            |_| true,
+            Arc::new(|_: String| DeviceForLoadTensor::Base),
+        )?;
+
+        let cfg: Config = serde_json::from_str(&config)?;
+        Ok(Model::new(
+            &cfg,
+            vb,
+            false,
+            NormalLoadingMetadata {
+                mapper,
+                loading_isq: false,
+                real_device: device,
+                multi_progress: Arc::new(indicatif::MultiProgress::new()),
+                matformer_slicing_config: None,
+                rope_pairing: None,
+            },
+            AttentionImplementation::Eager,
+        )?)
+    }
+
+    /// Runs one teacher-forced prefill and returns the final-position logits.
+    fn teacher_forced_logits(model: &mut Model, ids: &[u32]) -> Result<Vec<f32>> {
+        let device = Device::Cpu;
+        let seq_len = ids.len();
+        let input_ids = Tensor::new(ids, &device)?;
+
+        let mut cache = model.cache.normal();
+        for layer in cache.0.iter_mut() {
+            match layer {
+                crate::kv_cache::KvCache::Normal { k, v } => {
+                    k.current_seq_len = 0;
+                    v.current_seq_len = 0;
+                }
+                crate::kv_cache::KvCache::Rotating { k, v } => {
+                    k.current_seq_len = 0;
+                    v.current_seq_len = 0;
+                }
+                crate::kv_cache::KvCache::Shared { .. } => {}
+            }
+        }
+
+        let flash_params = FlashParams::empty(false);
+        // One entry per sequence: the position the sequence starts at.
+        let seqlen_offsets = [0usize];
+        let context_lens = [(0usize, seq_len)];
+        let position_ids: Vec<usize> = (0..seq_len).collect();
+        let mut ctx = ModelForwardContext::new(
+            &seqlen_offsets,
+            &context_lens,
+            &position_ids,
+            None,
+            &flash_params,
+        );
+        let logits = model.forward(&input_ids, &mut ctx)?;
+        let final_logits = logits
+            .i((.., seq_len - 1, ..))?
+            .flatten_all()?
+            .to_vec1::<f32>()?;
+        Ok(final_logits)
+    }
+
+    #[test]
+    #[ignore = "loads the 156 GB Kolibri-1 checkpoint"]
+    fn kolibri1_matches_reference_goldens() -> anyhow::Result<()> {
+        let (model_dir, goldens_path) = golden_paths();
+        let goldens: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&goldens_path)?)?;
+        let prompts = goldens["prompts"].as_array().expect("goldens have prompts");
+        assert!(!prompts.is_empty());
+
+        eprintln!("[phase] loading {}", model_dir.display());
+        let mut model = load_real_model(&model_dir)?;
+        eprintln!("[phase] loaded; {} prompts", prompts.len());
+        let mut worst_logit_gap: f32 = 0.0;
+        let mut argmax_matches = 0usize;
+        let mut argmax_total = 0usize;
+
+        for prompt in prompts {
+            let mut ids: Vec<u32> = prompt["input_ids"]
+                .as_array()
+                .expect("input_ids")
+                .iter()
+                .map(|v| v.as_u64().expect("token id") as u32)
+                .collect();
+            let generated: Vec<u32> = prompt["generated_ids"]
+                .as_array()
+                .expect("generated_ids")
+                .iter()
+                .map(|v| v.as_u64().expect("token id") as u32)
+                .collect();
+
+            // Fingerprint prefill: every generated token but the last, so the logits at the
+            // final position are the ones the reference recorded.
+            ids.extend_from_slice(&generated[..generated.len() - 1]);
+            eprintln!(
+                "[phase] prompt {:?}: teacher-forced {} tokens",
+                prompt["prompt"].as_str().unwrap_or("?"),
+                ids.len()
+            );
+            let logits = teacher_forced_logits(&mut model, &ids)?;
+            eprintln!("[phase] prompt done");
+
+            let got_top: Vec<(usize, f32)> =
+                logits.iter().enumerate().map(|(i, v)| (i, *v)).collect();
+            let mut ranked = got_top.clone();
+            ranked.sort_by(|a, b| b.1.total_cmp(&a.1));
+            let argmax = ranked[0].0;
+            argmax_total += 1;
+            if argmax as u64 == generated[generated.len() - 1] as u64 {
+                argmax_matches += 1;
+            }
+
+            if let Some(final_logits) = prompt["final_logits"].as_object() {
+                let want_ids = final_logits["topk_ids"].as_array().expect("topk_ids");
+                let want_vals = final_logits["topk_logits"].as_array().expect("topk_logits");
+                for (id, want) in want_ids.iter().zip(want_vals.iter()) {
+                    let id = id.as_u64().expect("token id") as usize;
+                    let want = want.as_f64().expect("logit") as f32;
+                    let got = logits[id];
+                    worst_logit_gap = worst_logit_gap.max((got - want).abs());
+                    println!(
+                        "{}: id {id} want {want:.4} got {got:.4}",
+                        prompt["prompt"].as_str().unwrap_or("?")
+                    );
+                }
+            }
+        }
+
+        println!(
+            "argmax {argmax_matches}/{argmax_total}, worst top-k logit gap {worst_logit_gap:.4}"
+        );
+        assert_eq!(
+            argmax_matches, argmax_total,
+            "greedy argmax diverged from the reference"
+        );
+        assert!(
+            worst_logit_gap < 0.5,
+            "top-k logits diverged by {worst_logit_gap}"
+        );
+        Ok(())
     }
 
     /// Per-layer cache geometry has to follow `layer_types`, or the sliding layers allocate
