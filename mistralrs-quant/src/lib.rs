@@ -42,6 +42,7 @@ mod isq_executor;
 mod lora;
 #[cfg(feature = "cuda")]
 pub mod moe;
+pub mod moe_gather_cpu;
 mod mxfp4;
 pub mod nvfp4;
 mod pending_layer;
