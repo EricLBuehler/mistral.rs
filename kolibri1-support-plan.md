@@ -320,8 +320,8 @@ the bottleneck for every model, dense or MoE, and it is why nothing else moves.
 
 The decode step is a batch-1 quantized or bf16 GEMV, `[1, K] x [K, N]`. It must stream the
 entire weight tensor once per token, so it is purely bandwidth-bound and the ceiling is
-`weight_bytes / bandwidth`. Current behaviour is neither bandwidth-saturating nor scaling
-with cores, and past half the cores it degrades.
+`weight_bytes / bandwidth`. Before this work it was neither bandwidth-saturating nor scaling
+with cores: it ran at one core's bandwidth whether given 1 thread or 32.
 
 What this item delivered, in order:
 
@@ -329,12 +329,12 @@ What this item delivered, in order:
    across the rayon pool, one output row per thread.
 2. **NEON inner loop.** DONE. Four-accumulator `vfmaq_f32` dot, matching the CPU attention
    backend.
-3. **Stop the oversubscription.** DONE, partially. `cpu_threads::resolve()` sizes the GEMV
-   pool from `MISTRALRS_CPU_THREADS`, then `RAYON_NUM_THREADS`, then half the cores. The two
-   other pools (`attention/backends/cpu/threading.rs:6` and `mistralrs-core/src/lib.rs:36`)
-   still use candle's core count and are not yet on the shared helper; they are sized for
-   attention and the engine runtime rather than for the GEMV, so they were left alone pending
-   their own measurement.
+3. **Pool sizing.** DONE. `cpu_threads::resolve()` sizes the decode GEMV pool and the
+   flash-attention pool together from `MISTRALRS_CPU_THREADS`, then `RAYON_NUM_THREADS`,
+   then candle's core count, so the pools mistral.rs owns cannot drift apart. No ratio is
+   applied: a half-core default was tried and measured worse (see section 8). The tokio
+   engine runtime (`mistralrs-core/src/lib.rs:36`) still uses candle's core count directly;
+   it is sized for the engine rather than for the decode inner loop, so it was left alone.
 4. **Fix the quantized dequant path.** NOT DONE. `mistralrs-quant/src/gguf/cpu.rs:74-75`
    still calls `qtensor.dequantize(device)` per call. This is why the 0.8B Q4_K_M number did
    not move. This is now the top remaining item inside A0-gemv and overlaps A1.
@@ -346,14 +346,15 @@ bit-identical to the serial loop (`parallel_matches_serial_bit_exactly`), the NE
 fixed per-row reduction order, and the only difference against candle's vectorized matmul is
 FMA-vs-scalar rounding (`gemv_tracks_candle_matmul`, tolerance 1e-3 relative).
 
-Result: Qwen3-4B bf16 decode 0.6 to 4.9 tok/s (8.2x), Qwen3.5-9B bf16 decode 0.3 to 2.1 tok/s
-(7x), both on one node with prefill unchanged.
+Result: Qwen3-4B bf16 decode 0.6 to 6.5 tok/s (10.8x) with `RAYON_NUM_THREADS=16`, or 2.6
+tok/s (4.3x) at the default; Qwen3.5-9B bf16 decode 0.3 to 2.1 tok/s (7x). All on one node,
+prefill unchanged.
 
 Gate: MET for the bf16 dense path. Open for the GGUF quantized path and the packed MoE path.
 
 Commits: `perf(quant): output-parallel CPU GEMV for decode`,
 `perf(quant): NEON dot for the output-parallel CPU GEMV`,
-`perf(quant): default cpu decode pool to half the cores`
+`perf(core): size the CPU attention pool from the shared resolver`
 
 ### A5. Parallelize the CPU quantized MoE path (new)
 
@@ -650,9 +651,13 @@ Decode thread scaling, node 3 only (32 cores available):
 | 24 | 9.8 +/- 1.3 | 103.4 ms |
 | 32 | 7.5 +/- 0.1 | 133.5 ms |
 
-Decode peaks at **16 threads on a 32-core node, exactly half the cores**, then falls off a
+Decode peaked at **16 threads on a 32-core node, exactly half the cores**, then fell off a
 cliff. The earlier contaminated whole-host sweep showed the same 16-thread peak and the same
 collapse past 32, so the shape is real and not contention noise.
+
+This table is the **pre-fix** baseline, recorded before the output-parallel GEMV existed, and
+it is what motivated the item. After the fix the same sweep is nearly flat (section 8), which
+is why the half-core conclusion drawn from it did not survive.
 
 Root cause is visible in the source: `candle_core::utils::get_num_threads()` returns
 `rayon_num_threads()`, which defaults to the core count. That number is used twice
@@ -798,25 +803,38 @@ Two things this does NOT yet cover, both measured not assumed:
 - The scalar `dot` inner loop, which caps the bf16 shape at ~9 GB/s. Vectorizing it is the
   next lever inside this item.
 
-#### Thread policy: half the cores, and where the remaining gap is
+#### Thread policy: what the measurements actually support
 
-Qwen3-4B bf16, node 3, depth 512, decode tok/s:
+Qwen3-4B bf16, node 3 (`numactl --cpunodebind=3`), depth 512, decode tok/s:
 
 | configuration | decode tok/s |
 |---|---|
 | master | 0.6 |
-| default after this branch (mistralrs pools at half, candle at core count) | 2.2-2.6 |
-| `RAYON_NUM_THREADS=16` (sizes every pool consistently) | **5.4** |
+| this branch, default (no env) | 2.6 |
+| this branch, `RAYON_NUM_THREADS=16` | **6.5** |
+| this branch, `RAYON_NUM_THREADS=32` | 4.2 |
+| this branch, `RAYON_NUM_THREADS=64` | 5.3 |
 
-The gap between the default and `RAYON_NUM_THREADS=16` is not the GEMV: it is that
-`RAYON_NUM_THREADS` also resizes candle's *global* rayon pool, which backs candle's own
-matmul and reduction kernels. mistralrs cannot set that pool, so its own pools (the decode
-GEMV and the flash-attention pool, both now on `cpu_threads::resolve`) can only follow it,
-not lead it. The honest default is therefore "half the cores for the pools we own, and set
-`RAYON_NUM_THREADS` to move the rest"; that is what the docs entry says.
+An earlier revision of this plan divided the core count by two, and that turned out to be
+wrong twice over. It was measured *worse*: sizing mistral.rs's own pools to 16 while candle's
+global Rayon pool stayed at 32 is an inconsistent configuration, and the mismatch cost more
+than the ratio won (2.2 against 4.2 for a consistent 32). And "half the cores" is the wrong
+shape on a large host regardless, because it keeps shrinking as cores grow, long past the
+point where a batch-1 layer-serial decode can absorb more parallelism. The default now simply
+delegates to candle's core count, and `MISTRALRS_CPU_THREADS` is a plain override.
 
-This is why the old advice to think of the thread count as one number is wrong: there are
-three pools, and only one of them is reachable from here.
+Separately, leaving `RAYON_NUM_THREADS` **unset** under `numactl` is a distinct slow path
+that predates this work: with every pool reporting 32, decode occupies 15.1 of 32 cores when
+the variable is unset against 21.8 when it is set. The cause is in candle's pool sizing
+(`default_num_threads` reads `/sys/.../cpu_capacity`, which ignores a `numactl` affinity
+mask), not in this branch. It is left as a documented operational note rather than patched,
+because fixing candle's global pool is outside this change; `RAYON_NUM_THREADS` is the lever
+that resolves it in practice.
+
+Worth noting that the end-to-end thread curve is now nearly flat across a wide range (6.5 at
+16 threads, 5.3 at 64), whereas before the GEMV fix it fell off a cliff past half the cores.
+That flatness is the actual deliverable; the specific default is a much smaller effect on top
+of it.
 
 #### Second lever inside A0-gemv: NEON dot
 
