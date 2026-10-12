@@ -35,12 +35,13 @@ macro_rules! fixup_sentencepiece {
 #[cfg(test)]
 fn parse_text_and_tool_calls(
     raw_text: &str,
+    stop_reason: Option<StopReason>,
     state: Option<&mut ToolCallState>,
 ) -> Result<(Option<String>, Vec<crate::tools::ToolCallResponse>)> {
     let Some(state) = state else {
         return Ok((Some(raw_text.to_string()), Vec::new()));
     };
-    let parsed = state.finalize_for_response(raw_text, None, None, None)?;
+    let parsed = state.finalize_for_response(raw_text, None, None, None, stop_reason)?;
     Ok((parsed.content, parsed.tool_calls))
 }
 
@@ -49,6 +50,7 @@ fn parse_streaming_text_and_tool_calls(
     content_delta: Option<String>,
     raw_delta: &str,
     has_reasoning_parser: bool,
+    stop_reason: Option<StopReason>,
     state: Option<&mut ToolCallState>,
 ) -> Result<(Option<String>, Vec<crate::tools::ToolCallResponse>)> {
     let Some(state) = state else {
@@ -57,8 +59,13 @@ fn parse_streaming_text_and_tool_calls(
             Vec::new(),
         ));
     };
-    let parsed =
-        state.parse_streaming(content_delta, raw_delta, None, has_reasoning_parser, false)?;
+    let parsed = state.parse_streaming(
+        content_delta,
+        raw_delta,
+        None,
+        has_reasoning_parser,
+        stop_reason,
+    )?;
     Ok((parsed.content, parsed.tool_calls))
 }
 
@@ -348,7 +355,7 @@ pub(crate) async fn finish_or_add_toks_to_seq(
                             delta.as_str(),
                             parser_text.as_deref(),
                             has_external_reasoning_parser,
-                            is_done.is_some(),
+                            is_done,
                         )?;
                         content_delta = parsed.content;
                         let parsed_tool_use_is_done = parsed.tool_use_is_done;
@@ -588,6 +595,7 @@ pub(crate) async fn finish_or_add_toks_to_seq(
                         parsed_content,
                         reasoning_content,
                         parser_text.as_deref(),
+                        Some(reason),
                     )?
                 } else {
                     crate::tools::state::ToolCallParse {
@@ -1552,7 +1560,7 @@ mod tests {
     use tokio::sync::{mpsc::channel, Mutex};
 
     use super::*;
-    use crate::tools::{ToolCallState, ToolChoice};
+    use crate::tools::{ToolCallFormat, ToolCallState, ToolChoice};
     use crate::{
         sampler::Sampler,
         sequence::{SeqStepType, SequenceGroup},
@@ -1763,7 +1771,8 @@ mod tests {
         let mut state = ToolCallState::new(ToolChoice::Auto, Some(&[tool]), None).unwrap();
         let raw = r#"<|tool_call>call:get_weather{city:<|"|>Paris<|"|>}"#;
 
-        let (content, tool_calls) = parse_text_and_tool_calls(raw, Some(&mut state)).unwrap();
+        let (content, tool_calls) =
+            parse_text_and_tool_calls(raw, Some(StopReason::Eos), Some(&mut state)).unwrap();
 
         assert_eq!(content, None);
         assert_eq!(tool_calls.len(), 1);
@@ -1777,7 +1786,8 @@ mod tests {
         let mut state = ToolCallState::new(ToolChoice::Auto, Some(&[tool]), None).unwrap();
         let raw = r#"I'll check that.<tool_call>{"name":"get_weather","arguments":{"city":"Paris"}}</tool_call>"#;
 
-        let (content, tool_calls) = parse_text_and_tool_calls(raw, Some(&mut state)).unwrap();
+        let (content, tool_calls) =
+            parse_text_and_tool_calls(raw, Some(StopReason::Eos), Some(&mut state)).unwrap();
 
         assert_eq!(content, Some("I'll check that.".to_string()));
         assert_eq!(tool_calls.len(), 1);
@@ -1792,7 +1802,7 @@ mod tests {
         let raw = r#"<|tool_call>call:get_weather{city:<|"|>Paris<|"|>}"#;
 
         let (content, tool_calls) =
-            parse_streaming_text_and_tool_calls(None, raw, true, Some(&mut state)).unwrap();
+            parse_streaming_text_and_tool_calls(None, raw, true, None, Some(&mut state)).unwrap();
 
         assert_eq!(content, None);
         assert!(tool_calls.is_empty());
@@ -1805,11 +1815,93 @@ mod tests {
         let raw = r#"<|tool_call>call:get_weather{city:<|"|>Paris<|"|>}"#;
 
         let (content, tool_calls) =
-            parse_streaming_text_and_tool_calls(None, raw, false, Some(&mut state)).unwrap();
+            parse_streaming_text_and_tool_calls(None, raw, false, None, Some(&mut state)).unwrap();
 
         assert_eq!(content, None);
         assert_eq!(tool_calls.len(), 1);
         assert_eq!(tool_calls[0].function.name, "get_weather");
+    }
+
+    #[test]
+    fn required_tool_call_truncated_by_length_returns_no_calls() {
+        let tool = weather_tool();
+        let mut state = ToolCallState::new(
+            ToolChoice::Required,
+            Some(&[tool]),
+            Some(ToolCallFormat::Hunyuan),
+        )
+        .unwrap();
+        let raw = r#"<tool_calls>[{"name":"get_weather","arguments":{"city":"Par"#;
+
+        let (_, tool_calls) =
+            parse_text_and_tool_calls(raw, Some(StopReason::Length(1)), Some(&mut state)).unwrap();
+
+        assert!(tool_calls.is_empty());
+    }
+
+    #[test]
+    fn required_tool_call_eos_without_call_is_an_error() {
+        let tool = weather_tool();
+        let mut state = ToolCallState::new(
+            ToolChoice::Required,
+            Some(&[tool]),
+            Some(ToolCallFormat::Hunyuan),
+        )
+        .unwrap();
+        let raw = r#"<tool_calls>[{"name":"get_weather","arguments":{"city":"Par"#;
+
+        let error = parse_text_and_tool_calls(raw, Some(StopReason::Eos), Some(&mut state))
+            .err()
+            .unwrap();
+
+        assert!(error.to_string().contains("no tools were called"));
+    }
+
+    #[test]
+    fn required_tool_call_streaming_truncation_returns_no_calls() {
+        let tool = weather_tool();
+        let mut state = ToolCallState::new(
+            ToolChoice::Required,
+            Some(&[tool]),
+            Some(ToolCallFormat::Hunyuan),
+        )
+        .unwrap();
+        let raw = r#"<tool_calls>[{"name":"get_weather","arguments":{"city":"Par"#;
+
+        let (_, tool_calls) = parse_streaming_text_and_tool_calls(
+            None,
+            raw,
+            false,
+            Some(StopReason::Length(1)),
+            Some(&mut state),
+        )
+        .unwrap();
+
+        assert!(tool_calls.is_empty());
+    }
+
+    #[test]
+    fn required_tool_call_streaming_eos_without_call_is_an_error() {
+        let tool = weather_tool();
+        let mut state = ToolCallState::new(
+            ToolChoice::Required,
+            Some(&[tool]),
+            Some(ToolCallFormat::Hunyuan),
+        )
+        .unwrap();
+        let raw = r#"<tool_calls>[{"name":"get_weather","arguments":{"city":"Par"#;
+
+        let error = parse_streaming_text_and_tool_calls(
+            None,
+            raw,
+            false,
+            Some(StopReason::Eos),
+            Some(&mut state),
+        )
+        .err()
+        .unwrap();
+
+        assert!(error.to_string().contains("no tools were called"));
     }
 
     #[test]

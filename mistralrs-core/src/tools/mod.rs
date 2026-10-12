@@ -233,6 +233,15 @@ impl ToolCallingMatcher {
         &self,
         message: &str,
     ) -> anyhow::Result<(Option<String>, Vec<ToolCallResponse>)> {
+        self.get_call_with_content_at_limit(message, false)
+    }
+
+    // A token limit permits an unfinished required call, but must not manufacture an executable one.
+    pub(crate) fn get_call_with_content_at_limit(
+        &self,
+        message: &str,
+        truncated: bool,
+    ) -> anyhow::Result<(Option<String>, Vec<ToolCallResponse>)> {
         if matches!(self.tool_choice, ToolChoice::None) {
             return Ok((Some(message.to_string()), Vec::new()));
         }
@@ -248,7 +257,11 @@ impl ToolCallingMatcher {
             } else {
                 (process_model_specific_message(message)?, None)
             };
-        let message = fix_broken_json(&message)?;
+        let message = if truncated {
+            message
+        } else {
+            fix_broken_json(&message)?
+        };
 
         let mut calls = if let Ok(deser) =
             serde_json::from_str::<CalledFunctionParameters>(&message)
@@ -281,7 +294,7 @@ impl ToolCallingMatcher {
                 })
                 .collect::<anyhow::Result<Vec<_>>>()?
         } else {
-            if self.tool_choice.requires_tool_call() {
+            if self.tool_choice.requires_tool_call() && !truncated {
                 anyhow::bail!("Tool choice was required but no tools were called.")
             }
             return Ok((Some(message), Vec::new()));
@@ -371,10 +384,13 @@ fn coerce_arguments_by_schema(
 }
 
 fn coerce_param_value(raw: &str, param_type: &str) -> Value {
-    if raw.eq_ignore_ascii_case("null") {
+    let param_type = param_type.trim().to_ascii_lowercase();
+    // A literal "null" is the value, not a JSON null, when the schema asks for a string.
+    let string_like =
+        param_type.is_empty() || param_type.starts_with("str") || param_type.starts_with("char");
+    if raw.eq_ignore_ascii_case("null") && !string_like {
         return Value::Null;
     }
-    let param_type = param_type.trim().to_ascii_lowercase();
     let integer_like = ["int", "uint", "long", "short", "unsigned"]
         .iter()
         .any(|prefix| param_type.starts_with(prefix));
@@ -588,5 +604,25 @@ mod tests {
             "{first}\n<tool_call>\n<function=get_time>\n<parameter=zone>\nUTC\n</parameter>\n</function>\n</tool_call>"
         );
         assert_eq!(matcher.get_call(&both).unwrap().len(), 2);
+    }
+
+    #[test]
+    fn string_null_argument_keeps_schema_type() {
+        let mut tool = test_tool("echo");
+        tool.function.parameters = Some(
+            serde_json::from_value(json!({
+                "type": "object",
+                "properties": { "note": { "type": "string" } }
+            }))
+            .unwrap(),
+        );
+        let matcher = ToolCallingMatcher::new(ToolChoice::Auto, Some(&[tool])).unwrap();
+
+        let calls = matcher
+            .get_call(r#"{"name":"echo","parameters":{"note":"null"}}"#)
+            .unwrap();
+        let args: Value = serde_json::from_str(&calls[0].function.arguments).unwrap();
+
+        assert_eq!(args["note"], json!("null"));
     }
 }
