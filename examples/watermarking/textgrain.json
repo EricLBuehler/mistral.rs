@@ -1,0 +1,11 @@
+{
+  "scheme": "textgrain",
+  "key": "0000000000000000000000000000000000000000000000000000000000000000",
+  "context_width": 4,
+  "block_count": 16,
+  "column_count": 32,
+  "entropy_loss": 0.1,
+  "max_iterations": 128,
+  "entropy_tolerance": 0.0001,
+  "generation_policy": "probability_updates"
+}

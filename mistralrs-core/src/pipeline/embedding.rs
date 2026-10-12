@@ -8,6 +8,10 @@ use super::{
     PreProcessingMixin, TokenSource,
 };
 use crate::attention::ATTENTION_CHUNK_SIZE;
+use crate::decision::{
+    ClmConfig, ClmHeads, ClmInference, DecisionRequest, DecisionResponse, DecisionValidationError,
+    CLM_MAX_TOKENS,
+};
 use crate::device_map::{self, DeviceMapper};
 use crate::distributed::{self, WorkerTransferData};
 use crate::embedding_models::inputs_processor::{EmbeddingProcessor, ModelInputs};
@@ -35,12 +39,12 @@ use crate::utils::{
 use crate::Modalities;
 use crate::SupportedModality;
 use crate::{
-    get_uqff_paths, DeviceMapSetting, PagedAttentionConfig, Pipeline, Topology, TryIntoDType,
-    GLOBAL_HF_CACHE,
+    get_uqff_paths, AutoDeviceMapParams, DeviceMapSetting, PagedAttentionConfig, Pipeline,
+    Topology, TryIntoDType, GLOBAL_HF_CACHE,
 };
 use anyhow::Context;
 use anyhow::Result;
-use candle_core::{Device, Tensor};
+use candle_core::{Device, IndexOp, Tensor};
 use candle_nn::{Linear, Module};
 use hf_hub::Cache;
 use hf_hub::{Repo, RepoType};
@@ -67,6 +71,13 @@ pub struct EmbeddingPipeline {
     mapper: Box<dyn DeviceMapper + Send + Sync>,
     modules: Vec<Box<dyn Module + Send + Sync>>,
     processor: Arc<dyn Processor + Send + Sync>,
+    clm: Option<ClmInference>,
+}
+
+struct ClmSource {
+    model_id: String,
+    config: ClmConfig,
+    checkpoint: RwLock<Option<PathBuf>>,
 }
 
 /// A loader for an embedding (non-quantized) model.
@@ -81,6 +92,7 @@ pub struct EmbeddingLoader {
     from_uqff: RwLock<Option<Vec<PathBuf>>>,
     hf_cache_path: Option<PathBuf>,
     load_context: EmbeddingLoadContext,
+    clm: Option<ClmSource>,
 }
 
 #[derive(Clone, Copy, Default)]
@@ -108,6 +120,7 @@ pub struct EmbeddingLoaderBuilder {
     tokenizer_json: Option<String>,
     hf_cache_path: Option<PathBuf>,
     load_context: EmbeddingLoadContext,
+    clm: Option<ClmSource>,
 }
 
 #[derive(Clone, Default)]
@@ -122,6 +135,27 @@ pub struct EmbeddingSpecificConfig {
 }
 
 impl EmbeddingLoaderBuilder {
+    pub(crate) fn with_clm(mut self, config: ClmConfig) -> Result<Self> {
+        config.validate()?;
+        let model_id = self.model_id.as_ref().context("missing CLM model ID")?;
+        let local_encoder = Path::new(model_id).join(&config.base_model);
+        let encoder_id = if Path::new(model_id).is_dir() && local_encoder.is_dir() {
+            local_encoder.canonicalize()?.to_string_lossy().into_owned()
+        } else {
+            config.base_model.clone()
+        };
+        anyhow::ensure!(self.config.from_uqff.is_none() && self.config.write_uqff.is_none(), "CLM currently loads its original encoder and projection checkpoint; UQFF import/export is not supported");
+        self.clm = Some(ClmSource {
+            model_id: self
+                .model_id
+                .replace(encoder_id)
+                .context("missing CLM model ID")?,
+            config,
+            checkpoint: RwLock::new(None),
+        });
+        Ok(self)
+    }
+
     pub fn new(
         config: EmbeddingSpecificConfig,
         tokenizer_json: Option<String>,
@@ -165,6 +199,7 @@ impl EmbeddingLoaderBuilder {
             from_uqff: RwLock::new(None),
             hf_cache_path: self.hf_cache_path,
             load_context: self.load_context,
+            clm: self.clm,
         })
     }
 }
@@ -189,6 +224,25 @@ impl Loader for EmbeddingLoader {
             .map(Cache::new)
             .unwrap_or_default();
         GLOBAL_HF_CACHE.get_or_init(|| cache);
+
+        let revision = if let Some(clm) = &self.clm {
+            let revision = revision.unwrap_or_else(|| "main".to_string());
+            let api = super::hf::build_api(&token_source, !silent)?.repo(Repo::with_revision(
+                clm.model_id.clone(),
+                RepoType::Model,
+                revision.clone(),
+            ));
+            let path = super::hf::get_file(
+                &api,
+                Path::new(&clm.model_id),
+                &clm.config.checkpoints[0],
+                &revision,
+            )?;
+            *clm.checkpoint.write().unwrap() = Some(path);
+            None
+        } else {
+            revision
+        };
 
         let paths: anyhow::Result<Box<dyn ModelPaths>> = get_embedding_paths!(
             EmbeddingModelPaths,
@@ -291,6 +345,14 @@ impl Loader for EmbeddingLoader {
                 nm_device: available_devices[0].clone(),
             };
         } else if let DeviceMapSetting::Auto(params) = mapper.clone() {
+            let params = if self.clm.is_some() {
+                AutoDeviceMapParams::Text {
+                    max_seq_len: CLM_MAX_TOKENS,
+                    max_batch_size: 1,
+                }
+            } else {
+                params
+            };
             // Initial dtype
             let dtype = dtype.try_into_dtype(&available_devices.iter().collect::<Vec<_>>())?;
 
@@ -401,17 +463,26 @@ impl Loader for EmbeddingLoader {
                     }
                 };
 
-            let new = auto_device_map::get_device_layers(
-                &*self.inner,
-                &config,
-                self.inner.num_layers(&config)?,
-                layer_sizes_in_bytes,
-                non_mapped_size_in_bytes,
-                total_model_size_in_bytes,
-                &available_devices,
-                dtype,
-                &params,
-                paged_attn_config.as_mut(),
+            let new = auto_device_map::get_device_layers_with_memory(
+                auto_device_map::DeviceMapInputs {
+                    loader: &*self.inner,
+                    config: &config,
+                    num_layers: self.inner.num_layers(&config)?,
+                    layer_sizes_in_bytes,
+                    non_mapped_size_in_bytes,
+                    total_model_size_in_bytes,
+                    devices: &available_devices,
+                    dtype,
+                    params: &params,
+                    paged_attn_config: paged_attn_config.as_mut(),
+                },
+                &|device| {
+                    Ok(if self.clm.is_some() {
+                        crate::embedding_models::memory::encoder_memory_usage(device)?
+                    } else {
+                        crate::MemoryUsage.query(device)?
+                    })
+                },
             )?;
             mapper = DeviceMapSetting::Map(new);
         }
@@ -492,10 +563,14 @@ impl Loader for EmbeddingLoader {
             .get_modules()
             .context("Embedding models require the `modules.json` file.")?
             .to_vec();
-        assert!(matches!(
-            modules_config.first(),
-            Some(EmbeddingModulePaths::Transformer { .. })
-        ));
+        anyhow::ensure!(
+            self.clm.is_some()
+                || matches!(
+                    modules_config.first(),
+                    Some(EmbeddingModulePaths::Transformer { .. })
+                ),
+            "Embedding models require a Transformer module"
+        );
 
         let mut modules: Vec<Box<dyn Module + Send + Sync>> = Vec::new();
         for module in &modules_config {
@@ -670,6 +745,42 @@ impl Loader for EmbeddingLoader {
 
         let has_causal_attention = self.inner.has_causal_attention(&config)?;
         let max_seq_len = self.inner.model_config(&config)?.max_seq_len();
+        let clm = self
+            .clm
+            .as_ref()
+            .map(|clm| -> Result<ClmInference> {
+                let encoder: serde_json::Value = serde_json::from_str(&config)?;
+                anyhow::ensure!(
+                    encoder["hidden_size"].as_u64() == Some(clm.config.embedding_dim as u64),
+                    "CLM encoder hidden_size does not match embedding_dim"
+                );
+                let checkpoint = clm.checkpoint.read().unwrap();
+                let heads = ClmHeads::load(
+                    checkpoint.as_deref().context(
+                        "Load CLM through load_model_from_hf (also accepts local directories)",
+                    )?,
+                    &clm.config,
+                    model.device(),
+                )?;
+                let encoder_config: crate::embedding_models::qwen3_embedding::Config =
+                    serde_json::from_str(&config)?;
+                let bytes_per_token = encoder_config.workspace_size_elems(1, CLM_MAX_TOKENS)
+                    / CLM_MAX_TOKENS
+                    * dtype.size_in_bytes();
+                let mut devices = pipeline_mapper.get_unique_devices();
+                if !devices
+                    .iter()
+                    .any(|device| device.same_device(model.device()))
+                {
+                    devices.push(model.device().clone());
+                }
+                ClmInference::new(
+                    heads,
+                    model.device(),
+                    crate::embedding_models::memory::EncoderMemory::new(devices, bytes_per_token)?,
+                )
+            })
+            .transpose()?;
         let tracked_modules = tracker.get().clone();
         // rank-sliced layers re-slice at source read; inexpressible slices fall back per layer
         let source_weight_files = if self.config.from_uqff.is_some() {
@@ -683,9 +794,17 @@ impl Loader for EmbeddingLoader {
             tracked_modules,
             source_weight_files,
             tokenizer: tokenizer.into(),
-            model_id: self.model_id.clone(),
+            model_id: self
+                .clm
+                .as_ref()
+                .map(|c| c.model_id.clone())
+                .unwrap_or_else(|| self.model_id.clone()),
             metadata: Arc::new(GeneralMetadata {
-                max_seq_len,
+                max_seq_len: if clm.is_some() {
+                    max_seq_len.min(CLM_MAX_TOKENS)
+                } else {
+                    max_seq_len
+                },
                 llg_factory: None,
                 is_xlora: false,
                 no_prefix_cache: false,
@@ -700,7 +819,11 @@ impl Loader for EmbeddingLoader {
                 model_metadata: None,
                 modalities: Modalities {
                     input: vec![SupportedModality::Text],
-                    output: vec![SupportedModality::Embedding],
+                    output: vec![if clm.is_some() {
+                        SupportedModality::Decision
+                    } else {
+                        SupportedModality::Embedding
+                    }],
                 },
                 loaded_for_uqff_write: self.config.write_uqff.is_some(),
             }),
@@ -709,11 +832,15 @@ impl Loader for EmbeddingLoader {
             processor: Arc::new(EmbeddingProcessor {
                 has_causal_attention,
             }),
+            clm,
         })))
     }
 
     fn get_id(&self) -> String {
-        self.model_id.to_string()
+        self.clm
+            .as_ref()
+            .map(|c| c.model_id.clone())
+            .unwrap_or_else(|| self.model_id.clone())
     }
 
     fn get_kind(&self) -> ModelKind {
@@ -738,6 +865,9 @@ impl IsqPipelineMixin for EmbeddingPipeline {
         if self.tracked_modules.is_empty() {
             anyhow::bail!("Runtime re-ISQ requires the model to have been loaded with ISQ.");
         }
+        if let Some(clm) = &self.clm {
+            clm.invalidate(false);
+        }
         tracing::info!(
             "Re-quantizing {} layers to {dtype}.",
             self.tracked_modules.len()
@@ -751,7 +881,11 @@ impl IsqPipelineMixin for EmbeddingPipeline {
     }
 
     fn begin_calibration(&mut self) -> Result<()> {
-        super::isq_flow::begin_calibration(&self.tracked_modules).map(|_| ())
+        super::isq_flow::begin_calibration(&self.tracked_modules)?;
+        if let Some(clm) = &self.clm {
+            clm.invalidate(true);
+        }
+        Ok(())
     }
 
     fn calibration_status(&self) -> Result<super::isq_flow::CalibrationStatus> {
@@ -762,12 +896,19 @@ impl IsqPipelineMixin for EmbeddingPipeline {
         &mut self,
         save_cimatrix: Option<std::path::PathBuf>,
     ) -> Result<super::isq_flow::CalibrationStatus> {
-        super::isq_flow::apply_calibration(
+        if let Some(clm) = &self.clm {
+            clm.invalidate(true);
+        }
+        let status = super::isq_flow::apply_calibration(
             &self.tracked_modules,
             &self.source_weight_files,
             None,
             save_cimatrix.as_deref(),
-        )
+        )?;
+        if let Some(clm) = &self.clm {
+            clm.invalidate(false);
+        }
+        Ok(status)
     }
 }
 
@@ -811,6 +952,38 @@ impl MetadataMixin for EmbeddingPipeline {
 
 #[async_trait::async_trait]
 impl Pipeline for EmbeddingPipeline {
+    fn decide(&self, request: &DecisionRequest) -> Result<DecisionResponse> {
+        let clm = self.clm.as_ref().ok_or_else(|| {
+            DecisionValidationError("This embedding model has no CLM projection heads".to_string())
+        })?;
+        clm.decide(
+            request,
+            &self.model_id,
+            &self.tokenizer,
+            self.metadata.max_seq_len.min(CLM_MAX_TOKENS),
+            |tokens| {
+                if let Some(pooled) = self.model.forward_shared_prefix(tokens)? {
+                    return Ok(pooled);
+                }
+                let input = crate::embedding_models::inputs_processor::make_prompt_chunk(
+                    0,
+                    tokens.to_vec(),
+                    self.model.device(),
+                    Some(&*self.mapper),
+                    true,
+                    None,
+                )?;
+                let xs = self.model.forward(&input.input, &input.flash_meta)?;
+                let pooled = tokens
+                    .iter()
+                    .enumerate()
+                    .map(|(row, ids)| xs.i((row, ids.len() - 1, ..))?.unsqueeze(0))
+                    .collect::<candle_core::Result<Vec<_>>>()?;
+                Ok(Tensor::cat(&pooled, 0)?.force_contiguous()?)
+            },
+        )
+    }
+
     fn forward_inputs(
         &mut self,
         inputs: Box<dyn Any>,
@@ -839,7 +1012,11 @@ impl Pipeline for EmbeddingPipeline {
         sample_and_add_toks(self, seqs, logits, prefix_cacher, disable_eos_stop, rng).await
     }
     fn category(&self) -> ModelCategory {
-        ModelCategory::Embedding
+        if self.clm.is_some() {
+            ModelCategory::Decision
+        } else {
+            ModelCategory::Embedding
+        }
     }
 }
 

@@ -260,7 +260,7 @@ macro_rules! get_embedding_paths {
 
         let mut parsed_modules = Vec::new();
         let is_local = std::path::Path::new(&$this.model_id).exists();
-        let modules_path = if is_local {
+        let modules_path = if is_local || !emb_dir_list.iter().any(|name| name == "modules.json") {
             model_id.join("modules.json")
         } else {
             $crate::api_get_file!(api, "modules.json", model_id, &revision)

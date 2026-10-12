@@ -349,6 +349,17 @@ where
     Fut: Future<Output = Result<(), String>>,
 {
     match req {
+        Request::Decision(mut request) => {
+            let (sender, mut receiver) = tokio::sync::mpsc::channel(1);
+            request.response = sender;
+            if let Err(error) = dispatch(Request::Decision(request)).await {
+                tracing::error!("Daemon dispatch failed for decision request: {error}");
+                return;
+            }
+            if let Some(Err(error)) = receiver.recv().await {
+                tracing::error!("Decision response error: {error}");
+            }
+        }
         Request::Detokenize(mut x) => {
             let (sender, mut receiver) = tokio::sync::mpsc::channel(1);
             x.response = sender;

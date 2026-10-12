@@ -1,0 +1,50 @@
+{
+  "version": "1.0",
+  "truncation": null,
+  "padding": null,
+  "added_tokens": [],
+  "normalizer": null,
+  "pre_tokenizer": {
+    "type": "Whitespace"
+  },
+  "post_processor": null,
+  "decoder": null,
+  "model": {
+    "type": "WordLevel",
+    "vocab": {
+      "[UNK]": 0,
+      "Customer": 1,
+      "invoice": 2,
+      "charged": 3,
+      "twice": 4,
+      "urgent": 5,
+      "billing": 6,
+      "technical": 7,
+      "Is": 8,
+      "this": 9,
+      "Which": 10,
+      "team": 11,
+      "How": 12,
+      "angry": 13,
+      "Calm": 14,
+      "Frustrated": 15,
+      "Very": 16,
+      "Yes": 17,
+      "No": 18,
+      "true": 19,
+      "false": 20,
+      "Charges": 21,
+      "invoices": 22,
+      "refunds": 23,
+      "Bugs": 24,
+      "outages": 25,
+      ":": 26,
+      "?": 27,
+      ".": 28,
+      "and": 29,
+      "customer": 30,
+      "phone": 31
+    },
+    "unk_token": "[UNK]"
+  }
+}

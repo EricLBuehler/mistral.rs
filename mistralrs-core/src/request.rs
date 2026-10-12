@@ -584,10 +584,18 @@ pub struct CalibrationRequest {
 }
 
 #[derive(Clone, Serialize, Deserialize)]
+pub struct DecisionInferenceRequest {
+    pub input: crate::decision::DecisionRequest,
+    #[serde(default = "default_responder", skip)]
+    pub response: Sender<anyhow::Result<crate::decision::DecisionResponse>>,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
 /// A request to the Engine, encapsulating the various parameters as well as
 /// the `mpsc` response `Sender` used to return the [`Response`].
 pub enum Request {
     Normal(Box<NormalRequest>),
+    Decision(Box<DecisionInferenceRequest>),
     ReIsq(IsqType),
     Calibration(CalibrationRequest),
     Tokenize(TokenizationRequest),
@@ -617,6 +625,7 @@ impl Debug for Request {
             Request::ReIsq(tp) => {
                 write!(f, "Re ISQ Request {tp:?}",)
             }
+            Request::Decision(req) => write!(f, "Decision request for {}", req.input.model),
             Request::Calibration(req) => {
                 write!(f, "Calibration Request {:?}", req.action)
             }

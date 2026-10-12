@@ -282,6 +282,47 @@ pub(crate) async fn finish_or_add_toks_to_seq(
 
     // Handle streaming requests
     if seq.get_mut_group().is_streaming {
+        if let Some(trace) = seq
+            .sampling_trace
+            .as_mut()
+            .and_then(|state| state.take(is_done.is_some()))
+        {
+            let index = seq.get_response_index();
+            if seq.get_mut_group().is_chat {
+                seq.add_streaming_chunk_choice_to_group(crate::ChunkChoice {
+                    sampling_trace: Some(trace),
+                    finish_reason: None,
+                    stop_sequence: None,
+                    index,
+                    delta: crate::Delta {
+                        content: None,
+                        role: "assistant".into(),
+                        tool_calls: None,
+                        reasoning_content: None,
+                    },
+                    logprobs: None,
+                });
+            } else {
+                seq.add_streaming_completion_chunk_choice_to_group(crate::CompletionChunkChoice {
+                    sampling_trace: Some(trace),
+                    text: String::new(),
+                    index,
+                    logprobs: None,
+                    finish_reason: None,
+                });
+            }
+            if seq
+                .get_mut_group()
+                .maybe_send_streaming_response(seq, this.name().clone(), None)
+                .await
+                .is_err()
+            {
+                seq.set_state(SequenceState::Done(StopReason::Canceled));
+                this.reset_non_granular_state();
+                return Ok(());
+            }
+        }
+
         let mut tool_use_still_possible = false;
         let mut tool_use_is_done = false;
         if let Some(d) = tool_detection_text(seq, hidden_stop.as_deref()) {
@@ -381,6 +422,7 @@ pub(crate) async fn finish_or_add_toks_to_seq(
                         let emission_count = streaming_emissions.len();
                         for (idx, emission) in streaming_emissions.iter().enumerate() {
                             seq.add_streaming_chunk_choice_to_group(crate::ChunkChoice {
+                                sampling_trace: None,
                                 delta: crate::Delta {
                                     content: Some(fixup_sentencepiece!(emission.text)),
                                     role: "assistant".to_string(),
@@ -405,6 +447,7 @@ pub(crate) async fn finish_or_add_toks_to_seq(
                         if seq.return_logprobs() {
                             for emission in &streaming_emissions {
                                 seq.add_streaming_chunk_choice_to_group(crate::ChunkChoice {
+                                    sampling_trace: None,
                                     delta: crate::Delta {
                                         content: None,
                                         role: "assistant".to_string(),
@@ -419,6 +462,7 @@ pub(crate) async fn finish_or_add_toks_to_seq(
                             }
                         }
                         seq.add_streaming_chunk_choice_to_group(crate::ChunkChoice {
+                            sampling_trace: None,
                             delta: crate::Delta {
                                 content: fixup_sentencepiece!(Option content_delta),
                                 role: "assistant".to_string(),
@@ -437,6 +481,7 @@ pub(crate) async fn finish_or_add_toks_to_seq(
                         for (idx, emission) in streaming_emissions.iter().enumerate() {
                             seq.add_streaming_completion_chunk_choice_to_group(
                                 crate::CompletionChunkChoice {
+                                    sampling_trace: None,
                                     text: fixup_sentencepiece!(emission.text),
                                     index: seq.get_response_index(),
                                     finish_reason: if idx + 1 == emission_count {
@@ -451,6 +496,7 @@ pub(crate) async fn finish_or_add_toks_to_seq(
                         if streaming_emissions.is_empty() && is_done.is_some() {
                             seq.add_streaming_completion_chunk_choice_to_group(
                                 crate::CompletionChunkChoice {
+                                    sampling_trace: None,
                                     text: String::new(),
                                     index: seq.get_response_index(),
                                     finish_reason: is_done.map(|reason| reason.to_string()),
@@ -461,6 +507,7 @@ pub(crate) async fn finish_or_add_toks_to_seq(
                     } else {
                         seq.add_streaming_completion_chunk_choice_to_group(
                             crate::CompletionChunkChoice {
+                                sampling_trace: None,
                                 text: fixup_sentencepiece!(delta),
                                 index: seq.get_response_index(),
                                 finish_reason: is_done.map(|x| x.to_string()),
@@ -606,7 +653,12 @@ pub(crate) async fn finish_or_add_toks_to_seq(
                     reason = StopReason::ToolCalls;
                 }
 
+                let sampling_trace = seq
+                    .sampling_trace
+                    .as_mut()
+                    .and_then(|trace| trace.take(true));
                 let choice = crate::Choice {
+                    sampling_trace,
                     finish_reason: fixup_sentencepiece!(reason),
                     stop_sequence: response_stop_sequence(Some(reason), hidden_stop.as_deref()),
                     index: seq.get_response_index(),
@@ -620,7 +672,12 @@ pub(crate) async fn finish_or_add_toks_to_seq(
                 };
                 seq.add_choice_to_group(choice);
             } else {
+                let sampling_trace = seq
+                    .sampling_trace
+                    .as_mut()
+                    .and_then(|trace| trace.take(true));
                 let choice = crate::CompletionChoice {
+                    sampling_trace,
                     finish_reason: fixup_sentencepiece!(reason),
                     index: seq.get_response_index(),
                     text,
@@ -1405,31 +1462,50 @@ pub async fn sample_sequence(
     let sampler = seq.sampler();
     let ctx_clone = seq.get_toks().to_vec();
     let prompt_len = seq.prompt_tokens();
+    let sampling_seed = seq.sampling_seed();
+    let trace_options = seq
+        .sampling_trace
+        .as_mut()
+        .and_then(|trace| trace.capture(ctx_clone.len() - prompt_len));
+    let sample = move |logits,
+                       context: Vec<u32>,
+                       rng,
+                       attempt|
+          -> Result<(Logprobs, Option<crate::sampling_trace::SamplingTraceStep>)> {
+        if let Some(options) = trace_options {
+            let (token, mut trace) = sampler.sample_traced(
+                logits,
+                crate::sampler::TraceStepContext {
+                    sampling_seed,
+                    context: &context,
+                    prompt_len,
+                    options,
+                },
+                rng,
+            )?;
+            trace.attempt = attempt;
+            Ok((token, Some(trace)))
+        } else {
+            sampler
+                .sample(
+                    logits,
+                    &context,
+                    prompt_len,
+                    return_logprobs,
+                    rng,
+                    sample_speculative,
+                    multiple_sequences,
+                )
+                .map(|token| (token, None))
+        }
+    };
+    let first_sample = sample.clone();
     let rng_clone = rng.clone();
     let logits_clone = logits.clone();
-    let first_lobprobs_response = if use_async_pool {
-        tokio_rayon::spawn(move || {
-            sampler.sample(
-                logits_clone,
-                &ctx_clone,
-                prompt_len,
-                return_logprobs,
-                rng_clone,
-                sample_speculative,
-                multiple_sequences,
-            )
-        })
-        .await?
+    let (first_lobprobs_response, first_trace) = if use_async_pool {
+        tokio_rayon::spawn(move || first_sample(logits_clone, ctx_clone, rng_clone, 0)).await?
     } else {
-        sampler.sample(
-            logits_clone,
-            &ctx_clone,
-            prompt_len,
-            return_logprobs,
-            rng_clone,
-            sample_speculative,
-            multiple_sequences,
-        )?
+        first_sample(logits_clone, ctx_clone, rng_clone, 0)?
     };
 
     let stop_token_requires_tool = seq.tool_call_state.as_ref().is_some_and(|state| {
@@ -1480,39 +1556,18 @@ pub async fn sample_sequence(
         }
         SequenceRecognizer::None => None,
     };
-    let second_logprobs_response = match bias_if_not_allowed {
+    let (second_logprobs_response, trace) = match bias_if_not_allowed {
         Some(acc) => {
             let new_logits = (&logits + Tensor::from_slice(&acc, acc.len(), logits.device())?)?;
-
             let ctx_clone = seq.get_toks().to_vec();
             let rng_clone = rng.clone();
-            let sampler = seq.sampler();
             if use_async_pool {
-                tokio_rayon::spawn(move || {
-                    sampler.sample(
-                        new_logits,
-                        &ctx_clone,
-                        prompt_len,
-                        return_logprobs,
-                        rng_clone,
-                        sample_speculative,
-                        multiple_sequences,
-                    )
-                })
-                .await?
+                tokio_rayon::spawn(move || sample(new_logits, ctx_clone, rng_clone, 1)).await?
             } else {
-                sampler.sample(
-                    new_logits,
-                    &ctx_clone,
-                    prompt_len,
-                    return_logprobs,
-                    rng_clone,
-                    sample_speculative,
-                    multiple_sequences,
-                )?
+                sample(new_logits, ctx_clone, rng_clone, 1)?
             }
         }
-        None => first_lobprobs_response,
+        None => (first_lobprobs_response, first_trace),
     };
 
     match seq.recognizer {
@@ -1539,6 +1594,9 @@ pub async fn sample_sequence(
         }
     }
 
+    if let (Some(state), Some(trace)) = (&mut seq.sampling_trace, trace) {
+        state.record(trace)?;
+    }
     Ok(second_logprobs_response)
 }
 
@@ -1557,6 +1615,196 @@ mod tests {
         sampler::Sampler,
         sequence::{SeqStepType, SequenceGroup},
     };
+
+    #[tokio::test]
+    async fn sampling_trace_watermark_schemes_record_only_the_accepted_grammar_attempt(
+    ) -> anyhow::Result<()> {
+        struct ByteEnv(toktrie::TokTrie);
+        impl toktrie::TokenizerEnv for ByteEnv {
+            fn tok_trie(&self) -> &toktrie::TokTrie {
+                &self.0
+            }
+            fn tokenize_bytes(&self, bytes: &[u8]) -> Vec<toktrie::TokenId> {
+                self.0.greedy_tokenize(bytes)
+            }
+            fn tokenize_is_canonical(&self) -> bool {
+                false
+            }
+        }
+        let mut tokens: Vec<_> = (0u8..=127).map(|b| vec![b]).collect();
+        tokens.push(b"\xff<eos>".to_vec());
+        let env: toktrie::TokEnv = Arc::new(ByteEnv(toktrie::TokTrie::from(
+            &toktrie::TokRxInfo::new(u32::try_from(tokens.len())?, 128),
+            &tokens,
+        )));
+        let factory = Arc::new(llguidance::ParserFactory::new_simple(&env)?);
+        for (pooled, teaching, production, textgrain) in [
+            (false, false, false, false),
+            (true, false, false, false),
+            (false, true, false, false),
+            (true, true, false, false),
+            (false, false, true, false),
+            (true, false, true, false),
+            (false, false, false, true),
+            (true, false, false, true),
+        ] {
+            let mut seq = terminal_test_sequence(vec![], None, false);
+            let options = crate::sampling_trace::TeachingTournamentConfig::default();
+            if teaching || production || textgrain {
+                let config = if textgrain {
+                    serde_json::from_value(serde_json::json!({
+                        "scheme": "textgrain", "key": "42".repeat(32), "context_width": 2,
+                        "block_count": 4, "column_count": 5, "max_iterations": 16,
+                        "generation_policy": "block_then_token"
+                    }))?
+                } else {
+                    crate::WatermarkConfig::Synthid {
+                        generation_policy: if production {
+                            crate::SynthIdGenerationPolicy::Tournament
+                        } else {
+                            Default::default()
+                        },
+                        key: "42".repeat(32),
+                        ngram_len: 2,
+                        depth: 4,
+                    }
+                };
+                let sampler = Sampler::new(
+                    Some(1.0),
+                    0,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    -1,
+                    1.0,
+                    0.0,
+                    HashMap::new(),
+                    vec![],
+                )?
+                .with_watermark(Some(&config))?;
+                seq = sampler_test_sequence(42, sampler);
+            }
+            let grammar = llguidance::api::TopLevelGrammar::from_regex("a");
+            seq.recognizer = SequenceRecognizer::Llguidance(Box::new(
+                crate::pipeline::llg::constraint_from_llg_grammar(&factory, grammar)?,
+            ));
+            let mut reference = sampler_test_sequence(42, (*seq.sampler()).clone());
+            reference.recognizer = SequenceRecognizer::Llguidance(Box::new(
+                crate::pipeline::llg::constraint_from_llg_grammar(
+                    &factory,
+                    llguidance::api::TopLevelGrammar::from_regex("a"),
+                )?,
+            ));
+            seq.sampling_trace = Some(crate::sampling_trace::TraceState::new(
+                crate::sampling_trace::SamplingTraceConfig {
+                    teaching_tournament: teaching.then_some(options),
+                    max_steps: 1,
+                    generation_tournament: production.then_some(
+                        crate::sampling_trace::GenerationTournamentConfig { max_matches: 15 },
+                    ),
+                    ..Default::default()
+                },
+            ));
+            let mut logits = vec![-10.0f32; tokens.len()];
+            logits[b'b' as usize] = if teaching || production || textgrain {
+                1000.0
+            } else {
+                10.0
+            };
+            logits[b'a' as usize] = 1.0;
+            let reference_logits = Tensor::from_vec(
+                logits.clone(),
+                (1, 1, tokens.len()),
+                &candle_core::Device::Cpu,
+            )?;
+            let selected = sample_sequence(
+                Tensor::from_vec(logits, (1, 1, tokens.len()), &candle_core::Device::Cpu)?,
+                &mut seq,
+                true,
+                Some(&[128]),
+                Some(factory.clone()),
+                256,
+                Arc::new(std::sync::Mutex::new(Isaac64Rng::seed_from_u64(42))),
+                pooled,
+                false,
+                false,
+            )
+            .await?;
+            assert_eq!(selected.token, u32::from(b'a'));
+            if production || textgrain {
+                use rand::RngCore;
+                let fallback = Arc::new(std::sync::Mutex::new(Isaac64Rng::seed_from_u64(99)));
+                let expected = sample_sequence(
+                    reference_logits,
+                    &mut reference,
+                    true,
+                    Some(&[128]),
+                    Some(factory.clone()),
+                    256,
+                    fallback.clone(),
+                    pooled,
+                    false,
+                    false,
+                )
+                .await?;
+                assert_eq!(
+                    serde_json::to_value(&selected)?,
+                    serde_json::to_value(expected)?
+                );
+                assert_eq!(
+                    seq.sampling_rng(&fallback).lock().unwrap().next_u64(),
+                    reference.sampling_rng(&fallback).lock().unwrap().next_u64()
+                );
+            }
+            seq.add_token(selected.clone(), b"a".to_vec(), None);
+            assert_eq!(seq.get_toks().last(), Some(&selected.token));
+
+            let trace = seq.sampling_trace.as_mut().unwrap().take(true).unwrap();
+            assert_eq!(trace.steps.len(), 1);
+            assert_eq!(trace.steps[0].attempt, 1);
+            assert_eq!(trace.steps[0].selected_token_id, selected.token);
+            assert_eq!(trace.steps[0].generated_index, 0);
+            assert_eq!(trace.steps[0].candidates[0].input_logit, Some(1.0));
+            if production {
+                let bracket = trace.steps[0].generation_tournament.as_ref().unwrap();
+                assert_eq!(bracket.status, "applied");
+                assert_eq!(bracket.effective_seed.as_deref(), Some("42"));
+                assert_eq!(bracket.winner.as_ref().unwrap().token_id, selected.token);
+                assert!(bracket
+                    .draws
+                    .iter()
+                    .all(|d| d.token_id == selected.token && d.probability == 1.0));
+                assert_eq!(bracket.total_matches, 15);
+            }
+            if textgrain {
+                let native = trace.steps[0].textgrain.as_ref().unwrap();
+                assert_eq!(native.status, "applied");
+                let draws = native.generation.as_ref().unwrap();
+                assert_eq!(draws.selected_token_id, selected.token);
+                assert_eq!(draws.effective_seed.as_deref(), Some("42"));
+                assert_eq!(draws.token_draw.cdf_upper - draws.token_draw.cdf_lower, 1.0);
+                assert_eq!(
+                    draws.selected_block,
+                    Some(native.blocks.as_ref().unwrap()[0])
+                );
+            }
+            if teaching {
+                let demo = trace.steps[0].teaching_tournament.as_ref().unwrap();
+                assert_eq!(demo.status, "demonstrated");
+                assert_eq!(demo.effective_seed, options.options(0).seed.to_string());
+                assert!(demo
+                    .draws
+                    .iter()
+                    .all(|d| d.token_id == u32::from(b'a') && d.probability == 1.0));
+                assert_eq!(demo.matches.len(), 3);
+            } else {
+                assert!(trace.steps[0].teaching_tournament.is_none());
+            }
+        }
+        Ok(())
+    }
 
     fn terminal_test_sequence(
         stop_tokens: Vec<u32>,
@@ -1617,7 +1865,6 @@ mod tests {
     }
 
     fn sampled_test_sequence(seed: u64, top_k: i64, top_p: f64) -> Sequence {
-        let (tx, _rx) = channel(1);
         let sampler = Sampler::new(
             Some(1.0),
             0,
@@ -1633,6 +1880,15 @@ mod tests {
             vec![],
         )
         .unwrap();
+        sampler_test_sequence(seed, sampler)
+    }
+
+    fn sampler_test_sequence(seed: u64, sampler: Sampler) -> Sequence {
+        sampler_test_sequence_optional(Some(seed), sampler)
+    }
+
+    fn sampler_test_sequence_optional(seed: Option<u64>, sampler: Sampler) -> Sequence {
+        let (tx, _rx) = channel(1);
         let group = Arc::new(Mutex::new(SequenceGroup::new(1, false, true, None)));
         Sequence::new_waiting(
             vec![1, 2, 3],
@@ -1666,8 +1922,64 @@ mod tests {
             false,
             false,
             vec![],
-            Some(seed),
+            seed,
         )
+    }
+
+    #[tokio::test]
+    async fn generation_tournament_reports_the_seed_resolved_for_unseeded_requests(
+    ) -> anyhow::Result<()> {
+        use rand::RngCore;
+        let config: crate::WatermarkConfig = serde_json::from_value(serde_json::json!({
+            "scheme":"synthid", "key":"42".repeat(32), "ngram_len":2, "depth":4, "generation_policy":"tournament"
+        }))?;
+        let sampler = Sampler::new(
+            Some(0.8),
+            0,
+            None,
+            None,
+            None,
+            None,
+            None,
+            3,
+            0.95,
+            0.01,
+            HashMap::new(),
+            vec![],
+        )?
+        .with_watermark(Some(&config))?;
+        let mut captured = sampler_test_sequence_optional(None, sampler.clone());
+        let resolved_seed = captured
+            .sampling_seed()
+            .expect("explicit policy resolves its seed before capture");
+        let mut replay = sampler_test_sequence(resolved_seed, sampler);
+        captured.sampling_trace = Some(crate::sampling_trace::TraceState::new(
+            crate::sampling_trace::SamplingTraceConfig {
+                max_steps: 1,
+                generation_tournament: Some(crate::sampling_trace::GenerationTournamentConfig {
+                    max_matches: 0,
+                }),
+                ..Default::default()
+            },
+        ));
+        let fallback = Arc::new(std::sync::Mutex::new(Isaac64Rng::seed_from_u64(999)));
+        let actual = sample_test_token(&mut captured, fallback.clone()).await;
+        let expected = sample_test_token(&mut replay, fallback.clone()).await;
+        assert_eq!(actual, expected);
+        assert_eq!(
+            captured.sampling_rng(&fallback).lock().unwrap().next_u64(),
+            replay.sampling_rng(&fallback).lock().unwrap().next_u64()
+        );
+        let trace = captured
+            .sampling_trace
+            .as_mut()
+            .unwrap()
+            .take(true)
+            .unwrap();
+        let report = trace.steps[0].generation_tournament.as_ref().unwrap();
+        assert_eq!(report.effective_seed, Some(resolved_seed.to_string()));
+        assert_eq!(report.winner.as_ref().unwrap().token_id, actual);
+        Ok(())
     }
 
     fn stochastic_test_sequence(seed: u64) -> Sequence {
@@ -1708,6 +2020,98 @@ mod tests {
         let a = sample_test_token(&mut second_a, fallback()).await;
 
         assert_eq!(a_then_b, (a, b));
+    }
+
+    #[tokio::test]
+    async fn generation_tournament_capture_expiry_preserves_independent_sequence_streams(
+    ) -> anyhow::Result<()> {
+        use rand::RngCore;
+        let config: crate::WatermarkConfig = serde_json::from_value(serde_json::json!({
+            "scheme":"synthid", "key":"42".repeat(32), "ngram_len":2, "depth":4, "generation_policy":"tournament"
+        }))?;
+        let sampler = Sampler::new(
+            Some(0.8),
+            0,
+            None,
+            None,
+            None,
+            None,
+            None,
+            3,
+            0.95,
+            0.01,
+            HashMap::new(),
+            vec![],
+        )?
+        .with_watermark(Some(&config))?;
+        let mut reference = None;
+        for (capture, reversed) in [(false, false), (true, false), (true, true)] {
+            let mut sequences = [
+                sampler_test_sequence(42, sampler.clone()),
+                sampler_test_sequence(43, sampler.clone()),
+            ];
+            if capture {
+                for seq in &mut sequences {
+                    seq.sampling_trace = Some(crate::sampling_trace::TraceState::new(
+                        crate::sampling_trace::SamplingTraceConfig {
+                            max_steps: 1,
+                            generation_tournament: Some(
+                                crate::sampling_trace::GenerationTournamentConfig {
+                                    max_matches: 0,
+                                },
+                            ),
+                            ..Default::default()
+                        },
+                    ));
+                }
+            }
+            let fallback = Arc::new(std::sync::Mutex::new(Isaac64Rng::seed_from_u64(999)));
+            let mut outputs = [Vec::new(), Vec::new()];
+            for _ in 0..3 {
+                for index in if reversed { [1, 0] } else { [0, 1] } {
+                    let seq = &mut sequences[index];
+                    let logits =
+                        Tensor::new(&[[[0.1f32, 0.2, 0.3, 0.4]]], &candle_core::Device::Cpu)?;
+                    let selected = sample_sequence(
+                        logits,
+                        seq,
+                        true,
+                        None,
+                        None,
+                        1024,
+                        fallback.clone(),
+                        false,
+                        false,
+                        false,
+                    )
+                    .await?;
+                    outputs[index].push(serde_json::to_value(&selected)?);
+                    seq.add_token(selected, Vec::new(), None);
+                }
+            }
+            let mut next_words = Vec::new();
+            for (index, seq) in sequences.iter_mut().enumerate() {
+                next_words.push(seq.sampling_rng(&fallback).lock().unwrap().next_u64());
+                if let Some(state) = &mut seq.sampling_trace {
+                    let trace = state.take(true).unwrap();
+                    assert_eq!(trace.steps.len(), 1);
+                    assert_eq!(trace.truncation_reason.as_deref(), Some("max_steps"));
+                    let bracket = trace.steps[0].generation_tournament.as_ref().unwrap();
+                    assert_eq!(
+                        u64::from(bracket.winner.as_ref().unwrap().token_id),
+                        outputs[index][0]["token"].as_u64().unwrap()
+                    );
+                    assert_eq!(bracket.effective_seed, Some((42 + index).to_string()));
+                }
+            }
+            let actual = (outputs, next_words);
+            if let Some(expected) = &reference {
+                assert_eq!(&actual, expected);
+            } else {
+                reference = Some(actual);
+            }
+        }
+        Ok(())
     }
 
     #[cfg(feature = "cuda")]

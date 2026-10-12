@@ -13,12 +13,14 @@ license.workspace = true
 homepage.workspace = true
 
 [dependencies]
+llm-watermarking = { workspace = true, features = ["candle"] }
 anyhow.workspace = true
 candle-core.workspace = true
 metrics.workspace = true
 candle-nn.workspace = true
 serde.workspace = true
-serde_json.workspace = true
+serde_json = { workspace = true, features = ["preserve_order"] }
+zip.workspace = true
 sha2.workspace = true
 tempfile.workspace = true
 mistralrs-flash-attn = { workspace = true, optional = true }
@@ -73,7 +75,7 @@ bytemuck_derive.workspace = true
 mistralrs-paged-attn = { workspace = true, optional = true }
 mistralrs-quant.workspace = true
 uuid = { workspace = true, features = ["v4"] }
-utoipa = { workspace = true, optional = true }
+utoipa = { workspace = true, optional = true, features = ["indexmap"] }
 schemars.workspace = true
 serde-saphyr.workspace = true
 regex.workspace = true
@@ -120,6 +122,7 @@ candle-metal-kernels = { workspace = true, optional = true }
 [features]
 pyo3_macros = ["pyo3", "mistralrs-mcp/pyo3_macros"]
 cuda = [
+    "llm-watermarking/cuda",
     "candle-core/cuda",
     "candle-nn/cuda",
     "dep:cudaforge",
@@ -130,6 +133,7 @@ cuda = [
 cudnn = ["candle-core/cudnn"]
 cutile = ["cuda", "mistralrs-quant/cutile"]
 metal = [
+    "llm-watermarking/metal",
     "candle-core/metal",
     "candle-nn/metal",
     "mistralrs-quant/metal",

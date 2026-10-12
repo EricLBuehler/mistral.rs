@@ -1125,6 +1125,14 @@ fn normalize_openai_tools(
 /// Chat completion request following OpenAI's specification
 #[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
 pub struct ChatCompletionRequest {
+    /// Opt-in token watermarking; the scheme selects the library algorithm.
+    #[serde(
+        default,
+        deserialize_with = "mistralrs_core::WatermarkConfig::deserialize_option"
+    )]
+    pub watermark: Option<mistralrs_core::WatermarkConfig>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sampling_trace: Option<mistralrs_core::sampling_trace::SamplingTraceConfig>,
     /// The conversation so far, or a single raw prompt string.
     #[schema(
         schema_with = messages_schema,
@@ -1318,6 +1326,8 @@ pub struct ModelObject {
 pub struct ModelObjects {
     pub object: &'static str,
     pub data: Vec<ModelObject>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub models: Vec<crate::system_one::DecisionModelInfo>,
 }
 
 #[derive(Debug, ToSchema)]
@@ -1350,6 +1360,7 @@ pub struct ChatCompletionResponseMessage {
 
 #[derive(Debug, ToSchema)]
 pub struct ChatCompletionResponseChoice {
+    pub sampling_trace: Option<mistralrs_core::sampling_trace::SamplingTrace>,
     pub finish_reason: String,
     pub index: usize,
     pub message: ChatCompletionResponseMessage,
@@ -1382,6 +1393,7 @@ pub struct ChatCompletionChunkDelta {
 
 #[derive(Debug, ToSchema)]
 pub struct ChatCompletionChunkChoice {
+    pub sampling_trace: Option<mistralrs_core::sampling_trace::SamplingTrace>,
     pub finish_reason: Option<String>,
     pub index: usize,
     pub delta: ChatCompletionChunkDelta,
@@ -1404,6 +1416,7 @@ pub struct ChatCompletionChunkResponseBody {
 
 #[derive(Debug, ToSchema)]
 pub struct CompletionResponseChoice {
+    pub sampling_trace: Option<mistralrs_core::sampling_trace::SamplingTrace>,
     pub finish_reason: String,
     pub index: usize,
     pub text: String,
@@ -1425,6 +1438,7 @@ pub struct CompletionResponseBody {
 
 #[derive(Debug, ToSchema)]
 pub struct CompletionChunkChoice {
+    pub sampling_trace: Option<mistralrs_core::sampling_trace::SamplingTrace>,
     pub text: String,
     pub index: usize,
     pub logprobs: Option<Value>,
@@ -1446,6 +1460,14 @@ pub struct CompletionChunkResponseBody {
 /// Legacy OpenAI compatible text completion request
 #[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
 pub struct CompletionRequest {
+    /// Opt-in token watermarking; the scheme selects the library algorithm.
+    #[serde(
+        default,
+        deserialize_with = "mistralrs_core::WatermarkConfig::deserialize_option"
+    )]
+    pub watermark: Option<mistralrs_core::WatermarkConfig>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sampling_trace: Option<mistralrs_core::sampling_trace::SamplingTraceConfig>,
     /// Model ID; "default" targets the only loaded model.
     #[schema(example = "mistral")]
     #[serde(default = "default_model")]
@@ -2111,6 +2133,258 @@ pub struct ResponsesDeltaContent {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn textgrain_watermark_requests_separate_capture_from_generation_policy() {
+        for policy in ["probability_updates", "block_then_token"] {
+            let body = json!({
+                "messages":"hello", "logprobs":true,
+                "watermark":{"scheme":"textgrain", "key":"42".repeat(32), "generation_policy":policy},
+                "sampling_trace":{"max_steps":4, "max_candidates":16, "textgrain":{"max_iterations":16, "transport":true}}
+            });
+            let chat: ChatCompletionRequest = serde_json::from_value(body.clone()).unwrap();
+            let completion: CompletionRequest = serde_json::from_value(json!({
+                "prompt":"hello", "logprobs":5, "watermark":body["watermark"], "sampling_trace":body["sampling_trace"]
+            })).unwrap();
+            for (config, watermark) in [
+                (chat.sampling_trace, chat.watermark),
+                (completion.sampling_trace, completion.watermark),
+            ] {
+                let watermark = watermark.unwrap();
+                watermark.validate_generation().unwrap();
+                assert_eq!(
+                    watermark.uses_explicit_sampling(),
+                    policy == "block_then_token"
+                );
+                assert!(!watermark.uses_tournament());
+                let config = config.unwrap();
+                config.validate(true, 1).unwrap();
+                config.validate_watermark(Some(&watermark)).unwrap();
+                assert!(config.textgrain.unwrap().transport);
+            }
+        }
+        for capture in [
+            json!({"max_iterations":-1}),
+            json!({"transport":"yes"}),
+            json!({"extra":true}),
+        ] {
+            assert!(serde_json::from_value::<ChatCompletionRequest>(json!({
+                "messages":"hello", "sampling_trace":{"textgrain":capture}
+            }))
+            .is_err());
+        }
+    }
+
+    #[test]
+    fn generation_tournament_api_separates_capture_from_generation_policy() {
+        let body = json!({
+            "model":"default", "prompt":"Write a story", "seed":42, "logprobs":5,
+            "watermark":{"scheme":"synthid", "key":"42".repeat(32), "depth":4, "generation_policy":"tournament"},
+            "sampling_trace":{"max_steps":1, "max_candidates":128, "max_layers":32, "generation_tournament":{"max_matches":4095}}
+        });
+        let request: CompletionRequest = serde_json::from_value(body.clone()).unwrap();
+        assert_eq!(request.seed, Some(42));
+        let config = request.sampling_trace.unwrap();
+        config
+            .validate(request.logprobs.is_some(), request.n_choices)
+            .unwrap();
+        config
+            .validate_watermark(request.watermark.as_ref())
+            .unwrap();
+        let watermark = request.watermark.unwrap();
+        watermark.validate_generation().unwrap();
+        assert!(watermark.uses_tournament());
+        assert_eq!(config.generation_tournament.unwrap().max_matches, 4095);
+        for (matches, layers) in [(0, 32), (4095, 0)] {
+            let mut body = body.clone();
+            body["sampling_trace"]["generation_tournament"]["max_matches"] = matches.into();
+            body["sampling_trace"]["max_layers"] = layers.into();
+            let request: CompletionRequest = serde_json::from_value(body).unwrap();
+            request.sampling_trace.unwrap().validate(true, 1).unwrap();
+        }
+        let mut default_policy = body.clone();
+        default_policy["watermark"]
+            .as_object_mut()
+            .unwrap()
+            .remove("generation_policy");
+        default_policy["watermark"]["depth"] = 30.into();
+        let request: CompletionRequest = serde_json::from_value(default_policy).unwrap();
+        assert!(!request.watermark.as_ref().unwrap().uses_tournament());
+        request.watermark.unwrap().validate_generation().unwrap();
+        let mut too_deep = body.clone();
+        too_deep["watermark"]["depth"] = 30.into();
+        let request: CompletionRequest = serde_json::from_value(too_deep).unwrap();
+        assert!(request.watermark.unwrap().validate_generation().is_err());
+        let mut no_capture = body;
+        no_capture.as_object_mut().unwrap().remove("sampling_trace");
+        let request: CompletionRequest = serde_json::from_value(no_capture).unwrap();
+        assert!(request.watermark.unwrap().uses_tournament());
+        assert!(request.sampling_trace.is_none());
+        assert!(config.validate(true, 2).is_err());
+        assert!(config.validate(false, 1).is_err());
+        for raw in [
+            json!({"max_matches":65536}),
+            json!({"max_matches":-1}),
+            json!({"seed":42}),
+        ] {
+            let parsed = serde_json::from_value::<
+                mistralrs_core::sampling_trace::SamplingTraceConfig,
+            >(json!({"max_steps":1, "generation_tournament":raw}));
+            assert!(parsed.is_err() || parsed.unwrap().validate(true, 1).is_err());
+        }
+    }
+
+    #[test]
+    fn sampling_trace_requests_are_opt_in_and_bounded() {
+        let chat: ChatCompletionRequest =
+            serde_json::from_value(json!({"messages": "hello"})).unwrap();
+        assert!(chat.sampling_trace.is_none());
+        assert!(serde_json::to_value(chat)
+            .unwrap()
+            .get("sampling_trace")
+            .is_none());
+        let chat: ChatCompletionRequest = serde_json::from_value(json!({
+            "messages": "hello", "logprobs": true, "sampling_trace": {}
+        }))
+        .unwrap();
+        assert!(chat
+            .sampling_trace
+            .unwrap()
+            .validate(chat.logprobs, chat.n_choices)
+            .is_ok());
+        let completion: CompletionRequest = serde_json::from_value(json!({
+            "prompt": "hello", "logprobs": 0, "sampling_trace": {"max_layers": 0}
+        }))
+        .unwrap();
+        assert!(completion
+            .sampling_trace
+            .unwrap()
+            .validate(completion.logprobs.is_some(), completion.n_choices)
+            .is_ok());
+        for extension in [
+            json!({"max_steps": 0}),
+            json!({"max_candidates": 129}),
+            json!({"max_layers": 33}),
+        ] {
+            let request: ChatCompletionRequest = serde_json::from_value(json!({
+                "messages": "hello", "logprobs": true, "sampling_trace": extension
+            }))
+            .unwrap();
+            assert!(request
+                .sampling_trace
+                .unwrap()
+                .validate(request.logprobs, request.n_choices)
+                .is_err());
+        }
+        for fields in [
+            json!({"logprobs": false}),
+            json!({"logprobs": true, "n": 2}),
+        ] {
+            let mut request = json!({"messages": "hello", "sampling_trace": {}});
+            request
+                .as_object_mut()
+                .unwrap()
+                .extend(fields.as_object().unwrap().clone());
+            let request: ChatCompletionRequest = serde_json::from_value(request).unwrap();
+            assert!(request
+                .sampling_trace
+                .unwrap()
+                .validate(request.logprobs, request.n_choices)
+                .is_err());
+        }
+    }
+
+    #[test]
+    fn teaching_tournament_requests_require_synthid_and_valid_rounds() {
+        let synthid = json!({"scheme": "synthid", "key": "42".repeat(32), "depth": 4});
+        let shallow = json!({"scheme": "synthid", "key": "42".repeat(32), "depth": 1});
+        let kgw = json!({"scheme": "kgw", "key": "42".repeat(32), "vocab_size": 32});
+        for (watermark, tournament, valid) in [
+            (synthid.clone(), json!({}), true),
+            (synthid.clone(), json!({"rounds":1,"seed":u64::MAX}), true),
+            (synthid.clone(), json!({"rounds":4}), true),
+            (synthid.clone(), json!({"rounds":0}), false),
+            (synthid, json!({"rounds":5}), false),
+            (shallow, json!({"rounds":2}), false),
+            (kgw, json!({}), false),
+            (json!(null), json!({}), false),
+        ] {
+            let trace = json!({"max_layers":0,"teaching_tournament":tournament});
+            let chat: ChatCompletionRequest = serde_json::from_value(json!({
+                "messages":"hello", "logprobs":true, "watermark":watermark, "sampling_trace":trace
+            }))
+            .unwrap();
+            let completion: CompletionRequest = serde_json::from_value(json!({
+                "prompt":"hello", "logprobs":0, "watermark":watermark, "sampling_trace":trace
+            }))
+            .unwrap();
+            for (trace, watermark, logprobs, choices) in [
+                (
+                    chat.sampling_trace.unwrap(),
+                    chat.watermark,
+                    chat.logprobs,
+                    chat.n_choices,
+                ),
+                (
+                    completion.sampling_trace.unwrap(),
+                    completion.watermark,
+                    completion.logprobs.is_some(),
+                    completion.n_choices,
+                ),
+            ] {
+                assert_eq!(
+                    trace
+                        .validate(logprobs, choices)
+                        .and_then(|()| trace.validate_watermark(watermark.as_ref()))
+                        .is_ok(),
+                    valid
+                );
+            }
+        }
+        for tournament in [
+            json!({"rounds":-1}),
+            json!({"seed":-1}),
+            json!({"extra":true}),
+            json!(true),
+        ] {
+            assert!(serde_json::from_value::<ChatCompletionRequest>(json!({
+                "messages":"hello", "logprobs":true, "sampling_trace":{"teaching_tournament":tournament}
+            })).is_err());
+        }
+    }
+
+    #[test]
+    fn generation_requests_accept_opt_in_watermark() {
+        let config = json!({"key": "01".repeat(32), "depth": 12});
+        let chat: ChatCompletionRequest = serde_json::from_value(json!({
+            "messages": "hello", "watermark": config.clone()
+        }))
+        .unwrap();
+        let completion: CompletionRequest = serde_json::from_value(json!({
+            "prompt": "hello", "watermark": config.clone()
+        }))
+        .unwrap();
+        let responses: crate::responses::OpenResponsesCreateRequest =
+            serde_json::from_value(json!({
+                "input": "hello", "watermark": config
+            }))
+            .unwrap();
+        for config in [chat.watermark, completion.watermark, responses.watermark] {
+            let config = config.unwrap();
+            config.validate().unwrap();
+            assert!(matches!(
+                config,
+                mistralrs_core::WatermarkConfig::Synthid {
+                    ngram_len: 5,
+                    depth: 12,
+                    ..
+                }
+            ));
+        }
+        let default: ChatCompletionRequest =
+            serde_json::from_value(json!({"messages": "hello"})).unwrap();
+        assert!(default.watermark.is_none());
+    }
 
     #[test]
     fn ignore_eos_defaults_false_and_accepts_true() {
