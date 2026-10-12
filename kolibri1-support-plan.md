@@ -511,21 +511,52 @@ chat template and reasoning/tool parsers. None of this should block a working fo
 B1-B3 landed as three commits on top of `5ed83cf4e`:
 
 - `feat(core): add Kolibri-1 (kolibri1) text model` - the model, the loader, the registry
-  entries and the `kolibri1` GGUF architecture. Three correctness details the tests pin:
-  the sandwich residual accumulates the POST-normed block output and starts at zero (not the
-  embedding), the router bias lives at `moe.router.expert_bias` as a sibling of `mlp` rather
-  than a child, and the sliding layers are the ones without RoPE.
+  entries and the `kolibri1` GGUF architecture.
 - `fix(core): Kolibri-1 RNoPE layers need a contiguous q/k before qk-norm` - the transposed
   q/k are non-contiguous and `qk_rms_norm_rope` copies them before the norm; the norm-only
   RNoPE branch did not, so every fifth layer failed. Includes a scale sweep so the dimensions
   only the real checkpoint exercises fail in seconds rather than after an eight-minute load.
 - `perf(mistralrs-quant): parallel CPU gather-GEMV for stacked MoE experts` - A5.
+- `fix(core): Kolibri-1 residual is the pre-norm stream, and CPU FP8 MoE now runs` - see below.
 
-The golden validation is `kolibri1_matches_reference_goldens` (ignored by default, 156 GB).
-It teacher-forces each of the 8 reference prompts and compares the final-position top-8
-logits against `vllm.cpp tests/vllm/models/kolibri1_goldens.json`, which is the only oracle
-for this model: `transformers` has no `Kolibri1ForCausalLM` and the plugin imports vLLM
-throughout, so it cannot run under a plain torch stack. |
+### The golden validation
+
+`kolibri1_matches_reference_goldens` (ignored by default) teacher-forces each of the 8
+reference prompts and compares the final-position top-8 logits against `vllm.cpp
+tests/vllm/models/kolibri1_goldens.json`. That file is the only oracle for this model:
+`transformers` has no `Kolibri1ForCausalLM`, and the plugin imports vLLM throughout so it
+cannot run under a plain torch stack.
+
+It earned its keep immediately. Two defects that unit tests and a synthetic 4 KB checkpoint
+both passed straight through:
+
+**The residual.** The reference's norm-with-residual is the pre-norm contract:
+`residual += block_output`, and the norm reads that sum. An earlier revision had it as the
+post-norm contract - the residual accumulating the *normalized* block output. That runs
+without error, which is what makes it dangerous: against the goldens it gave argmax 0/8 and a
+hidden-state RMS walking from 0.12 at layer 0 to 10.5 at layer 49 with outliers past 1296.
+With the pre-norm stream, 6 of the 8 prompts reproduce the reference's top-1 token as the
+global argmax, against a worst top-k logit gap of 6.8. The trace that
+localized it was one `eprintln!` of the per-layer hidden RMS, which is worth keeping in
+reserve for the next model.
+
+**CPU FP8 MoE.** Three independent hard failures, none of them Kolibri-1 specific; see
+`todo/mistralrs/06-cpu-fp8-stacked-moe-does-not-run.md`. The dequant kernel rejects the
+rank-3 expert stack, the FP8 gather implements only the flattened CUDA layout, and the
+non-LoRA stacked forward under-reshapes the down projection. A fourth issue is in the
+checkpoint rather than the code: the shipped fp8 `config.json` lists only the per-layer
+routers in `modules_to_not_convert`, though `lm_head`, `model.embed_tokens` and `model.norm`
+also ship without a scale.
+
+### What the goldens do not cover yet
+
+The goldens were produced from the bf16 checkpoint, and **bf16 does not fit on this host.** The
+checkpoint is 149 GB and `Tensor::stack` copies every expert slab, so the stacked weights add
+~151 GB of resident copies on top; the bf16 run peaks past 255 GB and is OOM-killed. The fp8
+checkpoint (74 GB) loads in 33 s and runs, so that is what the comparison above uses, at a
+tolerance that reflects 3-mantissa-bit weights rather than bf16. A bf16 run needs either a
+host with ~300 GB or an expert path that aliases the mmap instead of copying it, which is the
+same work as `todo/mistralrs/02`. |
 
 The ordering is forced by measurement. A0-gemv is first because section 8 showed decode reaches
 only 10.1 GB/s on a node that streams at 122.7 GB/s, and 10.1 GB/s is what one thread gets on

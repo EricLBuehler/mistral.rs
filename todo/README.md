@@ -24,7 +24,8 @@ is sent anywhere.
 | 02 | [CPU GGUF MoE dequantizes every expert on every forward](mistralrs/02-cpu-gguf-moe-dequant-every-call.md) | open, not started |
 | 03 | [CPU attention kernels ignore `sliding_window`](mistralrs/03-cpu-attention-ignores-sliding-window.md) | open, not started |
 | 04 | [PagedAttention is disabled whenever CPU is in the device map](mistralrs/04-cpu-disables-paged-attention.md) | open, design decision |
-| 05 | [16 `double_must_use` clippy errors block the CI clippy gate](mistralrs/05-clippy-double-must-use-blocks-ci.md) | open, trivial |
+| 05 | [17 clippy warnings block the CI clippy gate](mistralrs/05-clippy-double-must-use-blocks-ci.md) | open, trivial |
+| 06 | [CPU blockwise-FP8 stacked MoE does not run](mistralrs/06-cpu-fp8-stacked-moe-does-not-run.md) | open, fixed on the `cpu-decode-bandwidth` branch |
 
 ### candle
 
@@ -32,7 +33,7 @@ is sent anywhere.
 |---|---|---|
 | 01 | [CPU decode GEMV runs at one core's bandwidth](candle/01-cpu-decode-gemv-single-threaded.md) | open, worked around locally |
 | 02 | [`RAYON_NUM_THREADS` unset under `numactl` under-uses the pinned cores](candle/02-numa-affinity-ignored.md) | open, workaround known |
-| 03 | [aarch64 packed MoE GEMV is serial](candle/03-aarch64-packed-moe-gemv-serial.md) | open, blocks MoE decode |
+| 03 | [aarch64 packed MoE GEMV is serial](candle/03-aarch64-packed-moe-gemv-serial.md) | open, blocks quantized MoE decode |
 
 ### Gaps
 
@@ -45,6 +46,8 @@ is sent anywhere.
 ## Status vocabulary
 
 - `open, not started`: understood and evidenced, no code written.
+- `open, fixed on the `cpu-decode-bandwidth` branch`: the branch has a fix that has not been
+  upstreamed, so the report still stands and the diff is available if it is wanted.
 - `open, worked around`: understood, bypassed locally, upstream still unfixed.
 - `open, trivial`: understood, small fix.
 - `open, design decision`: needs a maintainer view before anyone works on it.
