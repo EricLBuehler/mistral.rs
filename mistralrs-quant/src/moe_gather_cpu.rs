@@ -68,7 +68,7 @@ pub fn gather_gemv(a: &[f32], w: &Tensor, ids: &[u32]) -> Result<Vec<f32>> {
     let Storage::Cpu(w_cpu) = &*guard else {
         candle_core::bail!("gather gemv requires CPU storage")
     };
-    check_input(a.len(), ids.len(), in_features)?;
+    check_input(a.len(), ids.len(), in_features, NO_REPEAT)?;
     par_fill(
         ids.len(),
         out_features,
@@ -90,11 +90,18 @@ pub fn gather_gemv_per_expert(
     out_features: usize,
     in_features: usize,
     ids: &[u32],
+    repeat: usize,
 ) -> Result<Vec<f32>> {
     if experts.is_empty() {
         candle_core::bail!("gather gemv: no expert slabs")
     }
-    check_input(a.len(), ids.len(), in_features)?;
+    if repeat == 0 || !ids.len().is_multiple_of(repeat) {
+        candle_core::bail!(
+            "gather gemv: {} slots do not divide into groups of {repeat}",
+            ids.len()
+        )
+    }
+    check_input(a.len(), ids.len(), in_features, repeat)?;
 
     // dtype and residency are properties of how the checkpoint was loaded, not of the
     // routing, so they are checked once here rather than per work item.
@@ -115,7 +122,7 @@ pub fn gather_gemv_per_expert(
                 experts.len(),
                 |slot, row, expert| {
                     dot(
-                        a_row(a, slot, in_features),
+                        a_row(a, slot, in_features, repeat),
                         &rows[expert][row * in_features..][..in_features],
                     )
                 },
@@ -129,7 +136,7 @@ pub fn gather_gemv_per_expert(
                 experts.len(),
                 |slot, row, expert| {
                     dot_bf16(
-                        a_row(a, slot, in_features),
+                        a_row(a, slot, in_features, repeat),
                         &rows[expert][row * in_features..][..in_features],
                     )
                 },
@@ -180,20 +187,29 @@ fn with_bf16_rows<T>(experts: &[Tensor], f: impl FnOnce(&[&[u16]]) -> Result<T>)
     f(&rows)
 }
 
-fn check_input(a_len: usize, n_slots: usize, in_features: usize) -> Result<()> {
-    if a_len != n_slots * in_features {
+/// How many consecutive slots read the same activation row.
+///
+/// The stacked and per-expert gathers both broadcast one token's activation across its `top_k`
+/// slots, which used to be done by materialising an expanded copy of every row. Addressing is
+/// the same arithmetic with no copy: slot `s` reads row `s / repeat`.
+pub const NO_REPEAT: usize = 1;
+
+fn check_input(a_len: usize, n_slots: usize, in_features: usize, repeat: usize) -> Result<()> {
+    let rows = n_slots / repeat.max(1);
+    if a_len != rows * in_features {
         candle_core::bail!(
             "gather gemv: input has {} elements, expected {}",
             a_len,
-            n_slots * in_features
+            rows * in_features
         );
     }
     Ok(())
 }
 
 #[inline]
-fn a_row(a: &[f32], slot: usize, in_features: usize) -> &[f32] {
-    &a[slot * in_features..slot * in_features + in_features]
+fn a_row(a: &[f32], slot: usize, in_features: usize, repeat: usize) -> &[f32] {
+    let row = slot / repeat;
+    &a[row * in_features..row * in_features + in_features]
 }
 
 /// Partitions the `n_slots * out_features` outputs across the pool. `dot` receives the slot,
@@ -435,9 +451,40 @@ mod tests {
             let ids: Vec<u32> = (0..slots).map(|i| (i * 7 % experts) as u32).collect();
 
             let fused = gather_gemv(&a, &stack, &ids)?;
-            let split = gather_gemv_per_expert(&a, &slabs, out, k, &ids)?;
+            let split = gather_gemv_per_expert(&a, &slabs, out, k, &ids, NO_REPEAT)?;
             assert_eq!(fused.len(), split.len());
             assert_eq!(fused, split, "{dtype:?}");
+        }
+        Ok(())
+    }
+
+    /// Broadcasting by addressing must be bit-identical to broadcasting by expansion, which is
+    /// what it replaced: a dropped copy here silently changes which activation a slot reads.
+    #[test]
+    fn broadcast_by_addressing_matches_the_expanded_form() -> Result<()> {
+        let (experts, out, k, tokens, top_k) = (8usize, 32usize, 48usize, 5usize, 3usize);
+        for dtype in [DType::F32, DType::BF16] {
+            let slabs: Vec<Tensor> = (0..experts)
+                .map(|_| Tensor::rand(-1f32, 1f32, (out, k), &Device::Cpu)?.to_dtype(dtype))
+                .collect::<Result<Vec<_>>>()?;
+            let a: Vec<f32> = (0..tokens * k)
+                .map(|i| ((i % 23) as f32) * 0.125 - 1.0)
+                .collect();
+            let ids: Vec<u32> = (0..tokens * top_k)
+                .map(|i| (i * 5 % experts) as u32)
+                .collect();
+
+            let addressed = gather_gemv_per_expert(&a, &slabs, out, k, &ids, top_k)?;
+
+            let mut expanded = Vec::with_capacity(ids.len() * k);
+            for row in a.chunks_exact(k) {
+                for _ in 0..top_k {
+                    expanded.extend_from_slice(row);
+                }
+            }
+            let copied = gather_gemv_per_expert(&expanded, &slabs, out, k, &ids, NO_REPEAT)?;
+
+            assert_eq!(addressed, copied, "{dtype:?}");
         }
         Ok(())
     }
