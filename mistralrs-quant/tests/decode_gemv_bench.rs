@@ -47,9 +47,12 @@ fn decode_gemv_isolated_throughput() {
     let threads = mistralrs_quant::cpu_threads::resolve();
     println!("threads = {threads}");
     let reps = 20;
-    // q_proj / o_proj / lm_head / a shared expert, at Kolibri-1's shapes.
-    let shapes: [(&str, usize, usize); 4] = [
+    // q_proj / k_proj / o_proj / lm_head / a shared expert, at Kolibri-1's shapes. `k_proj`
+    // is 512 outputs, below `MIN_PARALLEL_OUTPUTS`, so the model does *not* reach this kernel
+    // for it - the number here is what it would get if the floor allowed.
+    let shapes: [(&str, usize, usize); 5] = [
         ("q_proj", 6144, 2560),
+        ("k_proj", 512, 2560),
         ("o_proj", 2560, 6144),
         ("shared_exp", 2560, 512),
         ("lm_head", 128_000, 2560),

@@ -15,7 +15,13 @@ use rayon::prelude::*;
 use crate::dot_cpu::{dot_bf16, dot_f32};
 
 /// Below this many outputs there is not enough work to pay for splitting.
-const MIN_PARALLEL_OUTPUTS: usize = 1024;
+///
+/// 512 rather than 1024: a GQA key/value projection is exactly 512 outputs at head_dim 128 with
+/// 4 KV heads, and at 1024 it fell through to candle's generic GEMM. That path packs both
+/// operands into scratch and builds a `BarrierPool` per call, and a decode-only profile put
+/// k/v and up at 8.6% of runtime for 3.8% of the bytes - 5.8 GB/s where this kernel does the
+/// same shape at 16.3.
+const MIN_PARALLEL_OUTPUTS: usize = 512;
 
 /// Weight dtypes this kernel reads directly. Anything else falls back to candle's matmul.
 fn is_kernel_dtype(dtype: DType) -> bool {
