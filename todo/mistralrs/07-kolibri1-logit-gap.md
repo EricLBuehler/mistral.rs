@@ -27,7 +27,60 @@ early flip makes every later step differ by construction. That is why the refere
 gate is 141/145 rather than 145/145.
 
 **Step 0 is the only per-prompt sample that isolates correctness**: it predicts from the
-prompt alone with no self-reference. It scores 2/8 here.
+prompt alone with no self-reference. It scores 2/8 here, but see below - that number is
+dominated by prompts where the reference's own top-1/top-2 margin is a fraction of a logit,
+not by a wrong forward.
+
+## The forward is correct; this is a numerical-amplification gap
+
+The strongest evidence is behavioural, and it needs no goldens. On the bf16
+checkpoint the model answers:
+
+```
+"The capital of France is"     -> " Paris"    (10.38, margin 1.56)
+"The capital of Australia is"  -> " Canberra" (10.12, margin 0.06)
+"The capital of Japan is"      -> " Tokyo"    (11.25, margin 2.12)
+```
+
+That exercises embedding, both MoE paths, the sandwich residual threading, the
+per-head qk-norm, RNoPE on the sliding layers only, and the causal mask, in one
+prefill. It is pinned by `kolibri1_answers_ordinary_prompts`.
+
+"Canberra at a margin of 0.06" is also the point of the whole issue. This model
+is knife-edge on these prompts: the goldens' own bench notes four of the
+reference's 145 argmax positions flipping at margins of 0.009 to 0.38. A 0.06
+margin on a question the model has to get right means the fingerprint comparison
+is measuring rounding, not correctness, for any prompt whose margin is under a
+logit.
+
+The likely mechanism is amplification rather than a defect. A 384-expert router
+with top-6 selection turns a difference of order 1e-3 in the logits into a
+different expert for whichever token happens to sit near the 6th/7th boundary,
+and 50 layers of that compounds. The reference implementation and the torch
+goldens differ from each other by 2.19 for the same reason; there are three
+implementations in this comparison (torch goldens, the vLLM CPU forward, this
+one), not two.
+
+Confirming it needs per-layer hidden states from all three, which neither
+existing implementation emits.
+
+## A self-consistency metric that looked alarming and is not
+
+An earlier version of this file recorded first-step argmax 2/8 as the headline.
+Reading per-position predictions showed most of that is not model error at all:
+
+```
+row 1: top " capital"  rank(ids[1]) = 0    rank(ids[2]) = 7
+row 2: top " of"       rank(ids[2]) = 0    rank(ids[3]) = 115
+row 3: top " is"       rank(ids[4]) = 0
+row 4: top " Canberra"
+```
+
+Rows 1 and 2 predict their own index's token, which looks like a one-position
+shift until you notice " capital" is a perfectly good continuation of "The" and
+" of" a plausible one after "The capital". Rows 3 and 4, the ones the
+fingerprints use, are correct. A per-row rank dump distinguishes the two; a
+0/9 aggregate does not.
 
 ## Not a measurement error
 
@@ -72,18 +125,31 @@ Every one of these was diffed line by line against
 
 ## What is left
 
-Numerics that do not show up as a structural difference: reduction order in the attention,
-dtype of the RMSNorm variance, or the exact rounding of the bf16 residual adds. All of these
-are places where this build and the reference can both be "correct" and still diverge by a
-few logits over 50 layers, because the model amplifies small differences through the router.
+Ruled out by measurement, not by reading:
 
-The decisive next step is intermediate tensors. Neither implementation currently emits
-per-layer hidden states, so there is nothing to diff. Adding a layer-by-layer dump to
-`vllm.cpp` and to `teacher_forced_logits` would localize this in one run; the first layer
-whose hidden state diverges past bf16 noise names the culprit.
+- **The router's bf16 logits.** Widening the router weight so the gate matmul runs in f32
+  rather than upcasting afterwards scores *worse* (0/8 first step against 2/8), so the
+  rounding the upstream `out_dtype=torch.float32` warns about is not the cause here.
+- **The causal mask.** `binary_mask_range` derives the visible range from the mask including
+  the diagonal, and two new regression tests pin it at both the kernel and the dispatcher.
+  Previously nothing asserted "the CPU kernel includes self", which is why the `CausalFlash`
+  hole next to it went unnoticed; that hole is closed in `fa638120d`.
+- **The forward as a whole.** Paris, Berlin, Canberra, Tokyo, plus comma continuation and
+  code completion, all correct in one prefill.
 
-A cheaper partial experiment, not yet run: force `top_k = 1` on both sides. That removes
-the router's amplification entirely, so any remaining gap is pure attention plus MLP.
+That leaves amplification as the working hypothesis, and it is consistent with the
+reference's own behaviour: it disagrees with the torch goldens by up to 2.19 on the same
+prompts, and flips 4 of 145 argmax positions at margins of 0.009 to 0.38.
+
+The decisive next step is per-layer hidden states from all three implementations - the torch
+goldens, the vLLM CPU forward, and this one. None emits them today, so there is nothing to
+diff. The first layer whose hidden state diverges past bf16 noise names the culprit, and a
+gradual divergence from layer 0 versus a jump at one layer separates ordinary accumulation
+from a routing flip.
+
+A cheaper partial experiment, not yet run: force `top_k = 1` on two of the three sides. That
+removes the router's amplification and leaves pure attention plus MLP, which would put a
+bound on the non-MoE part of the gap.
 
 ## Gate impact
 
