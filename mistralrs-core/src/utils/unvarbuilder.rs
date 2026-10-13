@@ -33,6 +33,12 @@ impl ToTensors for RmsNorm {
     }
 }
 
+impl ToTensors for Tensor {
+    fn to_tensors(&self) -> HashMap<String, Tensor> {
+        HashMap::from_iter([("weight".to_string(), self.clone())])
+    }
+}
+
 impl ToTensors for GemmaRmsNorm {
     fn to_tensors(&self) -> HashMap<String, Tensor> {
         HashMap::from_iter([("weight".to_string(), self.original_weight().clone())])
