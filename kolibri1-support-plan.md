@@ -1022,17 +1022,32 @@ caps out at a third of the problem.
 
 ### Measured
 
-`kolibri1_decode_benchmark`, bf16 (149 GB, 32 shards), node 3, batch 1:
+`kolibri1_decode_benchmark`, bf16 (149 GB, 32 shards), node 3 with memory-local placement
+(`--cpunodebind=3 --interleave=3`), batch 1, 40 decode tokens:
 
-| phase | measurement |
-| --- | --- |
-| load | ~180 s |
-| prefill, 64 tokens | 7.3 tok/s |
-| decode | 1.92 tok/s, TPOT 519 ms (`--interleave=all`) |
+| | tok/s | TPOT |
+| --- | --- | --- |
+| when this section was first written | 1.73 | 577 ms |
+| after broadcasting activations by addressing | 1.92 | 519 ms |
+| after sending 512-output projections to the CPU GEMV | 4.32 | 231 ms |
+| after fusing q/k/v | **4.64** | **216 ms** |
 
-That is 6.82 GB / 0.519 s = **13.1 GB/s** effective, against a box that streams **72.8 GB/s**
-from one node at 32 threads (measured, `bw.rs`: a 6 GB buffer summed across stripes - 2.7 GB/s
-at one thread, scaling near-linearly to 72.8 at 32).
+**2.7x** in total, and the middle step is the large one: a GQA k or v projection is exactly
+512 outputs, which sat just under `MIN_PARALLEL_OUTPUTS` and therefore fell through to candle's
+generic GEMM. That path packs both operands into scratch and builds a `BarrierPool` per call,
+and it was 8.6% of decode for 3.8% of the bytes.
+
+At 4.64 tok/s a step moves 6.82 GB in 216 ms, which is **31.5 GB/s** against a measured ceiling
+of 98 GB/s. Roughly a third of the way to the memory system's limit, up from an eighth.
+
+Thread scaling at this baseline, 20 tokens:
+
+| threads | 4 | 8 | 16 | 32 |
+| --- | --- | --- | --- | --- |
+| tok/s | 2.60 | 3.02 | 3.74 | **4.59** |
+
+Still only 1.77x across 4 to 32 threads, and still short of the ceiling, so the scaling
+question is open rather than answered.
 
 ### Where the time actually goes
 
@@ -1079,21 +1094,39 @@ cold, rotating over a pool large enough to defeat the cache (`tests/routed_gathe
 So the gather runs at 90% of what the memory system can deliver. Prefetching it and tuning its
 tiling, which was the original plan, would buy almost nothing.
 
-### What is left
+### What was tried, and what is left
 
-In rough order of expected value:
+Tried, in the order the profile suggested:
 
-1. **Fuse the gate and up gathers.** They are two separate calls today over the same activation
-   and the same expert ids, so fusing halves the MoE's parallel regions - which is where the
-   11.5% of rayon overhead lives - and reads each activation row once instead of twice. This
-   is the classic SwiGLU fusion and the profile says it is the biggest single remaining item.
-2. **Find the 14% of `memcpy`.** The profile attributes it but the call frames did not resolve;
-   the candidates are the `to_vec1`/`contiguous` pairs on the way into each kernel.
-3. **Route k/v through `gemv_cpu`.** They are 512 outputs, below the 1024 floor, so they fall
-   through to candle's generic GEMM with its `pack_operands` - 8.7% for 3.8% of the bytes.
-   Small, but it is the one component not using the fast path.
-4. **Re-check thread count against the real optimum** once the above land, since 32 is not
-   obviously right and the 2-thread dip says the curve is not simple.
+1. **Broadcast activations by addressing.** Both gather layouts were copying every activation
+   row `top_k` times. Worth +11%.
+2. **The routed-expert gather kernel.** Measured cold at Kolibri-1's shapes over pools large
+   enough to defeat the cache: 88-98 GB/s, i.e. 90% of the machine's streaming ceiling.
+   **No work needed** - the original plan's premise, that this kernel needed prefetching or
+   retiling, was wrong.
+3. **`MIN_PARALLEL_OUTPUTS` 1024 to 512.** **2.35x.** The largest single win, from a constant.
+4. **Fused q/k/v into one GEMV region.** 1.3x on the operation cold, ~7% end-to-end.
+
+Still open:
+
+1. **Rayon synchronisation, 27% of decode.** Cutting two barriers per layer helped a little;
+   the rest needs either fewer regions (fusing gate and up, which is the last big one and means
+   a `QuantMethod` trait method on a shared path) or coarser regions generally.
+2. **Thread scaling.** 1.77x across 4 to 32 threads against a kernel that scales 8.3x in
+   isolation. Worth understanding before optimising anything else: if the cause is a fixed
+   per-region cost, fusing is the fix, and if it is something else, fusing will not help.
+3. **All four NUMA nodes.** Everything is on node 3 because nodes 0-2 are busy with other users.
+   For a problem that is fundamentally about memory bandwidth this is the largest multiplier
+   available, and it is an operational decision rather than a code change.
+4. **Batching.** At batch 8 the same 6.82 GB produces eight tokens. Irrelevant to interactive
+   batch-1 latency, which is what all of the above is measured against.
+
+A methodological note, because it cost real time three times over: every isolated benchmark
+here initially reported a cache-resident number. The first read-bandwidth test measured add
+latency rather than bandwidth (2.7 GB/s at one thread against a real 7.8). The first gather
+benchmark reused one set of weights (15.7 MB, L3-resident) and reported 52 GB/s where cold it
+is 88. The first fused-qkv benchmark did the same. Rotate enough independent weight sets that
+each pass reads what the last did not, or the number is fiction.
 
 Throughput measured on a model that is not yet bit-exact against the goldens
 (`todo/mistralrs/07`) should be read with that in mind.
