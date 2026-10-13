@@ -205,7 +205,7 @@ impl Weight<'_> {
     }
 }
 
-fn gemv_into_vec(xs: &Tensor, w: &Tensor, n: usize, k: usize) -> Result<Vec<f32>> {
+pub fn gemv_into_vec(xs: &Tensor, w: &Tensor, n: usize, k: usize) -> Result<Vec<f32>> {
     let (x_guard, x_layout) = xs.storage_and_layout();
     let Storage::Cpu(x_cpu) = &*x_guard else {
         candle_core::bail!("CPU gemv requires CPU storage")

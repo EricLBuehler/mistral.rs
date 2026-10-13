@@ -39,6 +39,40 @@ fn timed_gemv(name: &str, n: usize, k: usize, dtype: DType, reps: usize) -> f64 
     gbps
 }
 
+/// The same kernel with the tensor plumbing removed: no output Tensor, no narrowing to the
+/// weight's dtype, no input cast. The difference against `timed_gemv` is what the allocations
+/// and the bf16 round trip cost, which is what a decode-only profile attributes to
+/// crossbeam-epoch reclamation.
+fn timed_gemv_raw(name: &str, n: usize, k: usize, reps: usize) {
+    let dev = Device::Cpu;
+    let w = Tensor::rand(-1f32, 1f32, (n, k), &dev)
+        .expect("weight")
+        .to_dtype(DType::BF16)
+        .expect("cast");
+    let xs = Tensor::rand(-1f32, 1f32, (1, 1, k), &dev)
+        .expect("input")
+        .to_dtype(DType::BF16)
+        .expect("cast");
+    let xs = xs
+        .to_dtype(DType::F32)
+        .expect("f32")
+        .contiguous()
+        .expect("c");
+    let _ = gemv_cpu::gemv_into_vec(&xs, &w, n, k).expect("warm");
+
+    let t0 = Instant::now();
+    for _ in 0..reps {
+        let _ = gemv_cpu::gemv_into_vec(&xs, &w, n, k).expect("raw");
+    }
+    let secs = t0.elapsed().as_secs_f64() / reps as f64;
+    let bytes = (n * k) as f64 * 2.0;
+    println!(
+        "  {name:<12} RAW        {reps:>3} reps  {:>8.3} ms  {:>6.1} GB/s",
+        secs * 1e3,
+        bytes / 1e9 / secs
+    );
+}
+
 #[test]
 fn decode_gemv_isolated_throughput() {
     if std::env::var("KOLIBRI1_GEMV_BENCH").is_err() {
@@ -62,6 +96,16 @@ fn decode_gemv_isolated_throughput() {
     }
 
     timed_fused_qkv(reps);
+
+    // Where the parallel/serial crossover is. At one thread `gemv_into_vec` takes its serial
+    // branch, so a one-thread run *is* the serial time for the same shape; comparing the two
+    // says which output counts are actually worth splitting. A small region that costs more
+    // to join than to compute is the whole cost of splitting, and the threshold is the
+    // constant that decides it.
+    for n in [512usize, 2048, 4096] {
+        timed_gemv(&format!("n={n}"), n, 2560, DType::BF16, 20);
+        timed_gemv_raw(&format!("n={n}"), n, 2560, 20);
+    }
 
     // The routed experts, which are half the MoE bytes and do not go through `gemv` at all.
     // `in_f32` is what a batch-1 token broadcasts across its six slots.
