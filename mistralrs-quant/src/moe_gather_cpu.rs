@@ -62,19 +62,38 @@ pub fn should_use_gather_gemv(
 /// `a` must already be contiguous f32 of length `n_slots * in_features`; `ids` holds the
 /// expert index for each slot. The caller narrows the result to the weight dtype, which is
 /// what candle's own bf16 matmul does (widen, accumulate in f32, narrow back).
-pub fn gather_gemv(a: &[f32], w: &Tensor, ids: &[u32]) -> Result<Vec<f32>> {
+pub fn gather_gemv(a: &[f32], w: &Tensor, ids: &[u32], repeat: usize) -> Result<Vec<f32>> {
     let (num_experts, out_features, in_features) = w.dims3()?;
+    if repeat == 0 || !ids.len().is_multiple_of(repeat) {
+        candle_core::bail!(
+            "gather gemv: {} slots do not divide into groups of {repeat}",
+            ids.len()
+        )
+    }
     let (guard, _) = w.storage_and_layout();
     let Storage::Cpu(w_cpu) = &*guard else {
         candle_core::bail!("gather gemv requires CPU storage")
     };
-    check_input(a.len(), ids.len(), in_features, NO_REPEAT)?;
+    check_input(a.len(), ids.len(), in_features, repeat)?;
     par_fill(
         ids.len(),
         out_features,
         ids,
         num_experts,
-        |slot, row, expert| dot_slot(a, slot, row, w_cpu, expert, out_features, in_features),
+        |slot, row, expert| {
+            dot_slot(
+                &DotCtx {
+                    a,
+                    repeat,
+                    in_features,
+                },
+                slot,
+                row,
+                w_cpu,
+                expert,
+                out_features,
+            )
+        },
     )
 }
 
@@ -122,7 +141,7 @@ pub fn gather_gemv_per_expert(
                 experts.len(),
                 |slot, row, expert| {
                     dot(
-                        a_row(a, slot, in_features, repeat),
+                        a_row_ref(a, slot, in_features, repeat),
                         &rows[expert][row * in_features..][..in_features],
                     )
                 },
@@ -136,7 +155,7 @@ pub fn gather_gemv_per_expert(
                 experts.len(),
                 |slot, row, expert| {
                     dot_bf16(
-                        a_row(a, slot, in_features, repeat),
+                        a_row_ref(a, slot, in_features, repeat),
                         &rows[expert][row * in_features..][..in_features],
                     )
                 },
@@ -206,10 +225,29 @@ fn check_input(a_len: usize, n_slots: usize, in_features: usize, repeat: usize) 
     Ok(())
 }
 
+/// Activation row for one slot. [`DotCtx::row`] is the preferred spelling.
 #[inline]
-fn a_row(a: &[f32], slot: usize, in_features: usize, repeat: usize) -> &[f32] {
+fn a_row_ref(a: &[f32], slot: usize, in_features: usize, repeat: usize) -> &[f32] {
     let row = slot / repeat;
     &a[row * in_features..row * in_features + in_features]
+}
+
+/// How one work item locates its operands.
+///
+/// Slot `s` reads activation row `s / repeat`, which is what lets a token's row be shared by
+/// all of its slots without copying it `repeat` times.
+struct DotCtx<'a> {
+    a: &'a [f32],
+    repeat: usize,
+    in_features: usize,
+}
+
+impl DotCtx<'_> {
+    #[inline]
+    fn row(&self, slot: usize) -> &[f32] {
+        let row = slot / self.repeat;
+        &self.a[row * self.in_features..row * self.in_features + self.in_features]
+    }
 }
 
 /// Partitions the `n_slots * out_features` outputs across the pool. `dot` receives the slot,
@@ -256,7 +294,7 @@ pub fn gather_broadcast_rows(
     k: usize,
     out_dtype: DType,
 ) -> Result<Option<Tensor>> {
-    let (n_tokens, in_features) = a.dims2()?;
+    let (n_tokens, _) = a.dims2()?;
     if ids.elem_count() != n_tokens * k {
         return Ok(None);
     }
@@ -286,14 +324,8 @@ pub fn gather_broadcast_rows(
 
     let a = a.to_dtype(DType::F32)?.contiguous()?;
     let a_rows = a.flatten_all()?.to_vec1::<f32>()?;
-    let mut expanded = Vec::with_capacity(n_tokens * k * in_features);
-    for row in a_rows.chunks_exact(in_features) {
-        for _ in 0..k {
-            expanded.extend_from_slice(row);
-        }
-    }
 
-    let out = gather_gemv(&expanded, w, &ids)?;
+    let out = gather_gemv(&a_rows, w, &ids, k)?;
     Tensor::from_vec(out, (n_tokens, k, out_features), a.device())?
         .to_dtype(out_dtype)
         .map(Some)
@@ -301,23 +333,22 @@ pub fn gather_broadcast_rows(
 
 #[cfg(target_arch = "aarch64")]
 fn dot_slot(
-    a: &[f32],
+    ctx: &DotCtx<'_>,
     slot: usize,
     row: usize,
     w: &CpuStorage,
     expert: usize,
     out_features: usize,
-    in_features: usize,
 ) -> f32 {
-    let a_row = &a[slot * in_features..slot * in_features + in_features];
-    let start = (expert * out_features + row) * in_features;
+    let a_row = ctx.row(slot);
+    let start = (expert * out_features + row) * ctx.in_features;
     match w {
-        CpuStorage::F32(v) => dot(a_row, &v[start..start + in_features]),
+        CpuStorage::F32(v) => dot(a_row, &v[start..start + ctx.in_features]),
         CpuStorage::BF16(v) => {
             // bf16 is repr(transparent) over u16, so the rows are readable as raw bits and
             // widening is a shift rather than a scalar conversion.
             let bits: &[u16] = unsafe { core::mem::transmute::<&[half::bf16], &[u16]>(v) };
-            dot_bf16(a_row, &bits[start..start + in_features])
+            dot_bf16(a_row, &bits[start..start + ctx.in_features])
         }
         _ => f32::NAN,
     }
@@ -325,15 +356,14 @@ fn dot_slot(
 
 #[cfg(not(target_arch = "aarch64"))]
 fn dot_slot(
-    a: &[f32],
+    ctx: &DotCtx<'_>,
     slot: usize,
     row: usize,
     w: &CpuStorage,
     expert: usize,
     out_features: usize,
-    in_features: usize,
 ) -> f32 {
-    let _ = (a, slot, row, w, expert, out_features, in_features);
+    let _ = (ctx, slot, row, w, expert, out_features);
     f32::NAN
 }
 
@@ -398,7 +428,7 @@ mod tests {
                     .collect();
                 let ids: Vec<u32> = (0..slots).map(|i| (i * 7 % experts) as u32).collect();
 
-                let par = gather_gemv(&a, &w, &ids)?;
+                let par = gather_gemv(&a, &w, &ids, NO_REPEAT)?;
                 let ser = serial_reference(&a, &w, &ids)?;
                 assert_eq!(par.len(), ser.len());
                 // bf16 rounds the operands before the product, so only the f32 stack is exact.
@@ -450,7 +480,7 @@ mod tests {
                 .collect();
             let ids: Vec<u32> = (0..slots).map(|i| (i * 7 % experts) as u32).collect();
 
-            let fused = gather_gemv(&a, &stack, &ids)?;
+            let fused = gather_gemv(&a, &stack, &ids, NO_REPEAT)?;
             let split = gather_gemv_per_expert(&a, &slabs, out, k, &ids, NO_REPEAT)?;
             assert_eq!(fused.len(), split.len());
             assert_eq!(fused, split, "{dtype:?}");
@@ -489,12 +519,37 @@ mod tests {
         Ok(())
     }
 
+    /// The same contract for the fused stack, which is what every pre-fused checkpoint uses.
+    #[test]
+    fn stacked_broadcast_matches_the_expanded_form() -> Result<()> {
+        let (experts, out, k, tokens, top_k) = (8usize, 32usize, 48usize, 5usize, 3usize);
+        let stack = Tensor::rand(-1f32, 1f32, (experts, out, k), &Device::Cpu)?;
+        let a: Vec<f32> = (0..tokens * k)
+            .map(|i| ((i % 23) as f32) * 0.125 - 1.0)
+            .collect();
+        let ids: Vec<u32> = (0..tokens * top_k)
+            .map(|i| (i * 5 % experts) as u32)
+            .collect();
+
+        let addressed = gather_gemv(&a, &stack, &ids, top_k)?;
+
+        let mut expanded = Vec::with_capacity(ids.len() * k);
+        for row in a.chunks_exact(k) {
+            for _ in 0..top_k {
+                expanded.extend_from_slice(row);
+            }
+        }
+        let copied = gather_gemv(&expanded, &stack, &ids, NO_REPEAT)?;
+        assert_eq!(addressed, copied);
+        Ok(())
+    }
+
     #[test]
     fn out_of_range_expert_is_reported_not_read() -> Result<()> {
         let w = Tensor::zeros((4, 64, 32), DType::F32, &Device::Cpu)?;
         let a = vec![0f32; 8 * 32];
         let ids = vec![9u32, 0, 1, 2, 3, 0, 1, 2];
-        let out = gather_gemv(&a, &w, &ids)?;
+        let out = gather_gemv(&a, &w, &ids, NO_REPEAT)?;
         assert!(out[0].is_nan());
         assert_eq!(&out[64..], &[0f32; 7 * 64]);
         Ok(())
