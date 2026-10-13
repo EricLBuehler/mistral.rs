@@ -38,6 +38,126 @@ pub fn should_use_gemv(xs: &Tensor, w: &Tensor) -> bool {
         && is_kernel_dtype(w.dtype())
 }
 
+/// `xs @ w_i^T` for several weights that share `K`, in one parallel region.
+///
+/// q/k/v are three GEMVs over the same activation. Done separately that is three regions joined
+/// one at a time, and on a decode-only profile rayon synchronisation was 27% of runtime. Done
+/// together they are one region, one pass over the activation, and the small one (a GQA k or v
+/// at 512 outputs) rides along inside the large one's thread budget instead of paying a
+/// barrier to parallelise 82 KB.
+///
+/// Returns `None` when the shapes or dtypes do not suit, so the caller keeps its own path.
+pub fn try_gemv_fused(xs: &Tensor, ws: &[&Tensor]) -> Result<Option<Vec<Tensor>>> {
+    if ws.len() < 2 || !xs.device().is_cpu() || xs.rank() < 2 {
+        return Ok(None);
+    }
+    // Exactly one row of work: the leading dims all one. The single-weight path accepts a
+    // wider shape and reads only the first row, which is not something to copy here.
+    if !xs.dims()[..xs.rank() - 1].iter().all(|d| *d == 1) {
+        return Ok(None);
+    }
+    let k = match ws[0].dim(1) {
+        Ok(k) => k,
+        Err(_) => return Ok(None),
+    };
+    if !ws
+        .iter()
+        .all(|w| w.dim(1).is_ok_and(|wk| wk == k) && is_kernel_dtype(w.dtype()))
+    {
+        return Ok(None);
+    }
+    if !matches!(xs.dtype(), DType::F32 | DType::BF16) {
+        return Ok(None);
+    }
+    if !xs.dim(xs.rank() - 1).is_ok_and(|xk| xk == k) {
+        return Ok(None);
+    }
+    // A strided weight would need a gather per row; leave it to the per-weight path.
+    for w in ws {
+        let Ok(n) = w.dim(0) else { return Ok(None) };
+        let layout = w.layout();
+        if layout.dims() != [n, k] || layout.stride()[0] != k {
+            return Ok(None);
+        }
+    }
+
+    let total: usize = ws.iter().filter_map(|w| w.dim(0).ok()).sum();
+    if total == 0 {
+        return Ok(None);
+    }
+    let outs = fused_into_vec(xs, ws, total, k)?;
+    // Leading dims are carried through; the trailing one becomes this weight's output count.
+    let leading: Vec<usize> = xs.dims()[..xs.rank() - 1].to_vec();
+    let mut out = Vec::with_capacity(ws.len());
+    let mut cursor = 0;
+    for w in ws {
+        let n = w.dim(0)?;
+        let mut shape = leading.clone();
+        shape.push(n);
+        out.push(
+            Tensor::from_vec(outs[cursor..cursor + n].to_vec(), shape, xs.device())?
+                .to_dtype(w.dtype())?,
+        );
+        cursor += n;
+    }
+    Ok(Some(out))
+}
+
+fn fused_into_vec(xs: &Tensor, ws: &[&Tensor], total: usize, k: usize) -> Result<Vec<f32>> {
+    let xs = xs.to_dtype(DType::F32)?.contiguous()?;
+    let xs = &xs;
+    let (x_guard, x_layout) = xs.storage_and_layout();
+    let Storage::Cpu(x_cpu) = &*x_guard else {
+        candle_core::bail!("CPU gemv requires CPU storage")
+    };
+    let x_start = x_layout.start_offset();
+    let x = &x_cpu.as_slice::<f32>()?[x_start..x_start + k];
+
+    // Guards held here rather than in the caller: the row slices borrow from the storage they
+    // lock, so one frame has to own them for the whole parallel loop.
+    let guards: Vec<_> = ws.iter().map(|w| w.storage_and_layout()).collect();
+    let mut rows: Vec<Weight<'_>> = Vec::with_capacity(ws.len());
+    for ((guard, _), w) in guards.iter().zip(ws) {
+        let Storage::Cpu(cpu) = &**guard else {
+            candle_core::bail!("CPU gemv requires CPU storage")
+        };
+        let n = w.dim(0)?;
+        rows.push(match w.dtype() {
+            DType::F32 => Weight::F32(&cpu.as_slice::<f32>()?[..n * k]),
+            // bf16 is repr(transparent) over u16 and the dot kernel reads raw bits.
+            DType::BF16 => Weight::Bf16(unsafe {
+                core::mem::transmute::<&[half::bf16], &[u16]>(cpu.as_slice::<half::bf16>()?)
+            }),
+            other => candle_core::bail!("CPU gemv does not read {other:?} weights"),
+        });
+    }
+    // Where each weight's outputs start in the flat result.
+    let mut offsets = Vec::with_capacity(rows.len());
+    let mut acc = 0;
+    for r in &rows {
+        offsets.push(acc);
+        acc += r.len() / k;
+    }
+
+    let mut out = vec![0f32; total];
+    let threads = crate::cpu_threads::resolve().max(1);
+    let chunk = total.div_ceil(threads);
+    out.par_chunks_mut(chunk)
+        .enumerate()
+        .for_each(|(chunk_idx, dst)| {
+            for (i, d) in dst.iter_mut().enumerate() {
+                let idx = chunk_idx * chunk + i;
+                // Three weights at most, so a linear scan of the offsets beats a binary search.
+                let mut j = 0;
+                while j + 1 < offsets.len() && idx >= offsets[j + 1] {
+                    j += 1;
+                }
+                *d = rows[j].dot(x, idx - offsets[j], k);
+            }
+        });
+    Ok(out)
+}
+
 /// `xs @ w^T` for a single leading row, with the `N` outputs split across the rayon pool.
 pub fn gemv(xs: &Tensor, w: &Tensor) -> Result<Tensor> {
     let k = w.dim(1)?;
@@ -70,6 +190,13 @@ enum Weight<'a> {
 }
 
 impl Weight<'_> {
+    fn len(&self) -> usize {
+        match self {
+            Self::F32(w) => w.len(),
+            Self::Bf16(w) => w.len(),
+        }
+    }
+
     fn dot(&self, x: &[f32], row: usize, k: usize) -> f32 {
         match self {
             Self::F32(w) => dot_f32(x, &w[row * k..row * k + k]),
@@ -194,6 +321,54 @@ mod tests {
                 assert!((g - wv).abs() <= 8e-3 * scale, "{g} vs {wv}");
             }
         }
+        Ok(())
+    }
+
+    /// The fused form must produce exactly what three separate GEMVs produce, per weight: a
+    /// mixed-up offset here would hand q the rows of k and be invisible in the shape.
+    #[test]
+    fn fused_matches_three_separate_gemvs() -> Result<()> {
+        let dev = Device::Cpu;
+        for dtype in [DType::F32, DType::BF16] {
+            // Deliberately unequal, and with the small one last, which is the q/k/v shape.
+            let ws: Vec<Tensor> = [1024usize, 512, 512]
+                .iter()
+                .map(|n| Tensor::rand(-1f32, 1f32, (*n, 768), &dev)?.to_dtype(dtype))
+                .collect::<Result<Vec<_>>>()?;
+            let xs = Tensor::rand(-1f32, 1f32, (1, 1, 768), &dev)?.to_dtype(dtype)?;
+            let refs: Vec<&Tensor> = ws.iter().collect();
+
+            let fused = try_gemv_fused(&xs, &refs)?.expect("should fuse");
+            assert_eq!(fused.len(), 3);
+            for (got, w) in fused.iter().zip(&ws) {
+                let want = gemv(&xs, w)?;
+                assert_eq!(got.dims(), want.dims(), "{dtype:?}");
+                assert_eq!(got.dtype(), want.dtype(), "{dtype:?}");
+                let g = got.to_dtype(DType::F32)?.flatten_all()?.to_vec1::<f32>()?;
+                let x = want.to_dtype(DType::F32)?.flatten_all()?.to_vec1::<f32>()?;
+                assert_eq!(g, x, "{dtype:?} n={}", w.dim(0)?);
+            }
+        }
+        Ok(())
+    }
+
+    /// Anything the fused path does not recognise has to decline rather than guess.
+    #[test]
+    fn fused_declines_shapes_it_cannot_handle() -> Result<()> {
+        let dev = Device::Cpu;
+        let a = Tensor::rand(0f32, 1f32, (2048, 64), &dev)?;
+        let b = Tensor::rand(0f32, 1f32, (512, 64), &dev)?;
+        let xs = Tensor::rand(0f32, 1f32, (1, 1, 64), &dev)?;
+
+        // Different K.
+        let c = Tensor::rand(0f32, 1f32, (512, 32), &dev)?;
+        assert!(try_gemv_fused(&xs, &[&a, &c])?.is_none());
+        // More than one query row is not the decode shape this kernel handles.
+        let xs_batch = Tensor::rand(0f32, 1f32, (2, 1, 64), &dev)?;
+        assert!(try_gemv_fused(&xs_batch, &[&a, &b])?.is_none());
+        // A dtype the kernel cannot read.
+        let f16 = a.to_dtype(DType::F16)?;
+        assert!(try_gemv_fused(&xs.to_dtype(DType::BF16)?, &[&f16, &b])?.is_none());
         Ok(())
     }
 

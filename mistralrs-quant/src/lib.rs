@@ -2359,6 +2359,38 @@ pub fn try_fused_quantized_gate_up(
 
 /// CPU fused m==1 matmuls sharing one lhs: one input quantization + one parallel region
 /// (aarch64 repacked GEMV). Returns None when any weight is unsupported.
+/// Fused q/k/v for unquantized CPU weights, which `try_fused_gemv_shared_lhs_cpu` does not
+/// cover: that one needs f32 activations and quantized weights.
+///
+/// Returns `None` unless all three are unquantized, bias-free, CPU-resident and share `K`, so
+/// the caller falls through to its own path unchanged.
+pub fn try_fused_unquant_gemv_cpu(
+    xs: &Tensor,
+    ws: &[&dyn QuantMethod],
+) -> Result<Option<(Tensor, Tensor, Tensor)>> {
+    if ws.len() != 3 || ws.iter().any(|w| w.has_bias()) {
+        return Ok(None);
+    }
+    let mut weights = Vec::with_capacity(ws.len());
+    for w in ws {
+        let Some((weight, bias)) = w.unquant_weight_bias() else {
+            return Ok(None);
+        };
+        if bias.is_some() || !weight.device().is_cpu() {
+            return Ok(None);
+        }
+        weights.push(weight);
+    }
+    let refs: Vec<&Tensor> = weights.iter().collect();
+    let Some(mut out) = crate::gemv_cpu::try_gemv_fused(xs, &refs)? else {
+        return Ok(None);
+    };
+    let v = out.pop().expect("three outputs");
+    let k = out.pop().expect("three outputs");
+    let q = out.pop().expect("three outputs");
+    Ok(Some((q, k, v)))
+}
+
 pub fn try_fused_gemv_shared_lhs_cpu(
     xs: &Tensor,
     ws: &[&dyn QuantMethod],

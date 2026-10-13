@@ -61,10 +61,80 @@ fn decode_gemv_isolated_throughput() {
         timed_gemv(name, n, k, DType::BF16, reps);
     }
 
+    timed_fused_qkv(reps);
+
     // The routed experts, which are half the MoE bytes and do not go through `gemv` at all.
     // `in_f32` is what a batch-1 token broadcasts across its six slots.
     timed_gather("expert_gate", 6, 512, 2560, reps);
     timed_gather("expert_down", 6, 2560, 512, reps);
+}
+
+/// q/k/v as three GEMVs versus one fused region, at Kolibri-1's shapes.
+///
+/// End-to-end this difference sits inside run-to-run variance on this box, so it is compared
+/// here where a run is milliseconds rather than minutes and the ordering is not noise.
+fn timed_fused_qkv(reps: usize) {
+    const SETS: usize = 6;
+    let dev = Device::Cpu;
+    let k = 2560;
+    let shapes = [6144usize, 512, 512];
+    // Cold: one set of weights is 36.7 MB and fits in this node's L3, which is the mistake the
+    // first version of this benchmark made. `sets` independent sets are rotated so each pass
+    // reads weights the previous pass did not, which is what a real layer does.
+    let sets: Vec<Vec<Tensor>> = (0..SETS)
+        .map(|_| {
+            shapes
+                .iter()
+                .map(|n| {
+                    Tensor::rand(-1f32, 1f32, (*n, k), &dev)
+                        .expect("w")
+                        .to_dtype(DType::BF16)
+                        .expect("c")
+                })
+                .collect()
+        })
+        .collect();
+    let ws = sets[0].clone();
+    let xs = Tensor::rand(-1f32, 1f32, (1, 1, k), &dev)
+        .expect("xs")
+        .to_dtype(DType::BF16)
+        .expect("c");
+    let refs: Vec<&Tensor> = ws.iter().collect();
+    let bytes = shapes.iter().map(|n| n * k * 2).sum::<usize>() as f64;
+
+    for _ in 0..3 {
+        let _ = gemv_cpu::gemv(&xs, &ws[0]).expect("warm");
+    }
+    let t0 = Instant::now();
+    for r in 0..reps {
+        for w in &sets[r % SETS] {
+            let _ = gemv_cpu::gemv(&xs, w).expect("gemv");
+        }
+    }
+    let split = t0.elapsed().as_secs_f64() / reps as f64;
+
+    for _ in 0..3 {
+        let _ = gemv_cpu::try_gemv_fused(&xs, &refs).expect("warm");
+    }
+    let t0 = Instant::now();
+    for r in 0..reps {
+        let s = &sets[r % SETS];
+        let r: Vec<&Tensor> = s.iter().collect();
+        let _ = gemv_cpu::try_gemv_fused(&xs, &r).expect("fused");
+    }
+    let fused = t0.elapsed().as_secs_f64() / reps as f64;
+
+    println!(
+        "  qkv separate   {reps:>3} reps  {:>8.3} ms  {:>6.1} GB/s",
+        split * 1e3,
+        bytes / 1e9 / split
+    );
+    println!(
+        "  qkv fused      {reps:>3} reps  {:>8.3} ms  {:>6.1} GB/s  ({:.2}x)",
+        fused * 1e3,
+        bytes / 1e9 / fused,
+        split / fused
+    );
 }
 
 /// Routed-expert gather at Kolibri-1's shape: one activation row, `top_k` slots, `top_k`
