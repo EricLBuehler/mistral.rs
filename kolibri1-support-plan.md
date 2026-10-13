@@ -1146,6 +1146,30 @@ previously concluded the opposite from a dense-GEMV measurement.
 At 5.01 tok/s a step moves 6.82 GB in 200 ms, which is **34.1 GB/s** against the 86.9 GB/s this
 node streams at 32 threads - 39% of it, up from an eighth when this section was written.
 
+### Four hypotheses about the remaining 28%, none of them
+
+A decode-only profile at the current baseline, 80 tokens, is 56% kernel and 28% rayon
+synchronisation, with `crossbeam_epoch` (epoch guards, i.e. rayon's join machinery) and
+`Stealer::steal` as the two symbols making up the latter. Four explanations were tested:
+
+| hypothesis | test | result |
+| --- | --- | --- |
+| regions too small to be worth splitting | parallel vs serial time per output count | wrong: splitting at 512 outputs pays **2.8x**, at 4096 it pays 5.8x. The 512 threshold is well placed |
+| barrier spin from three pools on 32 cores | `CANDLE_BARRIER_POOL_SPIN_LIMIT` = default / 0 / 200 | no effect: 4.76 / 4.64 / 4.78 tok/s |
+| gate and up should be fused | implemented, bit-exact, measured | +5%, reverted - see above |
+| the `Vec<f32>` -> `Tensor` -> `to_dtype` plumbing | full `gemv` vs the bare kernel | 3.4% at n=512, 21% at n=4096. Real, but too small to be 28% |
+
+That is four failures in a row on the same number, which is worth recording as what it is: the
+28% is not explained, and the obvious candidates are all wrong. The thread accounting is
+genuinely odd - rayon 32, `FLASH_ATTN_POOL` 32, candle's `barrier_pool` `candle_num_threads()
+- 1` = 31, so up to 95 threads exist for 32 cores - but shrinking the spin behaviour did not
+change the result, so the pools are evidently not contending the way the thread count suggests.
+
+What that leaves: fewer *calls*, not better-tuned ones. Every kernel here is already at 90% of
+the streaming ceiling cold, so the remaining work is call count and the machinery around it, and
+nothing in the decode path presents an obvious way to cut that without a structural change to
+how a layer is executed.
+
 A methodological note, because it cost real time three times over: every isolated benchmark
 here initially reported a cache-resident number. The first read-bandwidth test measured add
 latency rather than bandwidth (2.7 GB/s at one thread against a real 7.8). The first gather
