@@ -1036,52 +1036,48 @@ at one thread, scaling near-linearly to 72.8 at 32).
 
 ### Where the time actually goes
 
-`perf record -F 499 -g` over the decode benchmark:
+Two corrections first, both from getting the measurement wrong before trusting it.
+
+**The streaming ceiling was wrong.** The first version of the read benchmark accumulated into a
+single `acc`, which is a serial dependency chain, so it measured add latency rather than memory:
+2.7 GB/s at one thread. With four independent accumulators (`bw2.rs`, which is what makes it a
+bandwidth test):
+
+| threads | 1 | 4 | 8 | 16 | 32 |
+| --- | --- | --- | --- | --- | --- |
+| GB/s | 7.8 | 30.4 | 58.0 | **98.0** | 86.9 |
+
+98 GB/s at 16 threads, and 32 is *worse* than 16. So the ceiling is ~98, not 72.8, and pure
+streaming does not want 32 threads on this node.
+
+**The first profile was 97% model load.** `perf record` over the whole benchmark captured a
+180 s load and about 6 s of decode, so every percentage in it described loading - the 14% of
+`memcpy` was tensor copies at load, and the single hottest symbol was hashbrown dropping a LoRA
+registry. Re-profiled with `--delay` to skip the load (`perf3.data`, 40 decode tokens):
 
 | % | symbol | |
 | --- | --- | --- |
-| 23.9 | `moe_gather_cpu::par_fill` | routed-expert gather |
-| 14.1 | `memcpy` | copies |
-| 9.3 | `gemv_cpu::Weight::dot` | dense GEMV |
-| 11.5 | `crossbeam_epoch` + `Stealer::steal` | rayon synchronisation |
-| 8.7 | candle `gemm` + `pack_operands` | k/v projections |
+| 24.9 | `moe_gather_cpu::par_fill` | routed-expert gather |
+| 18.0 | `gemv_cpu::Weight::dot` | dense GEMV |
+| **23.7** | `crossbeam_epoch` + `Stealer::steal` | **rayon synchronisation** |
+| 8.6 | candle gemm, `pack_operands`, `BarrierPool::new` | k/v |
+| 5.5 | misc | |
 
-11.5% in rayon's own bookkeeping is the part that should not be there. A decode step opens
-about 150 parallel regions - 3 projections x 2 per layer, plus the dense ones - and they are
-joined one at a time because layers are serial. The isolated kernels sum to about 87 ms/token;
-the model takes 519 ms.
+`memcpy` does not appear. Rayon overhead at 23.7% is the largest addressable block.
 
-### Thread scaling is poor, and the cause is not bandwidth
+### The gather kernel is not the problem
 
-| threads | 1 | 2 | 4 | 8 | 16 | 32 |
-| --- | --- | --- | --- | --- | --- | --- |
-| tok/s | 1.16 | 0.83 | 1.15 | 1.42 | 1.48 | 1.92 |
+Worth recording because the first round of this plan set out to fix it. At Kolibri-1's shapes,
+cold, rotating over a pool large enough to defeat the cache (`tests/routed_gather_bench.rs`):
 
-1.66x across 32 threads, and **two threads is slower than one**. That dip is synchronisation,
-not bandwidth: the kernels in isolation scale 8.3x (`gemv_cpu` goes 12.7 -> 102.3 GB/s on
-q_proj). Page faults are ruled out - a decode run shows `majflt: 0` and flat `read_bytes`, so
-the model is fully resident and this is not re-reading from disk.
+| expert pool | resident | GB/s |
+| --- | --- | --- |
+| 6 | 16 MB | 129.3 (cache-resident, above DRAM) |
+| 48 | 126 MB | 97.8 (at the ceiling) |
+| 192 | 503 MB | 88.0 (90% of the 98 GB/s ceiling) |
 
-### The NUMA configuration this plan recommended was wrong
-
-Every measurement up to this point used `numactl --cpunodebind=3 --interleave=all`, which
-strikes the page cache across all four nodes while the threads are pinned to one. Three
-quarters of the traffic then crosses the interconnect:
-
-| configuration | tok/s |
-| --- | --- |
-| `--interleave=3` (local) | 2.22 |
-| `--cpunodebind=3` alone | 2.04 |
-| `--interleave=all` | 1.80 |
-| no NUMA control | 1.69 |
-
-Local is ~23% ahead of `--interleave=all`, though run-to-run variance on this box is around
-20%, so the ordering is suggestive rather than established. The plan's earlier claim that
-"interleaving alone does nothing" was measured on a whole-host run and does not transfer to a
-single-node workload.
-
-Node 3 is also nearly full - 1.08 GB free of 67 GB, 58.7 GB of it file pages - so the
-page-cache residency the model depends on is competing with whatever else is on the box.
+So the gather runs at 90% of what the memory system can deliver. Prefetching it and tuning its
+tiling, which was the original plan, would buy almost nothing.
 
 ### What is left
 
