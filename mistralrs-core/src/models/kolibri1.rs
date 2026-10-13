@@ -429,7 +429,9 @@ impl MoEGate {
     fn forward(&self, xs: &Tensor) -> Result<(Tensor, Tensor)> {
         // The reference computes the router in f32 (`out_dtype=torch.float32` upstream). Left
         // in bf16 the logits are rounded before selection, and across 384 experts the
-        // borderline ones then resolve differently.
+        // borderline ones then resolve differently. Measured: widening the weight so the matmul
+        // itself runs in f32 scores the goldens no better (0/8 first step against 2/8), so the
+        // rounding is not what makes this model diverge.
         let logits = self.gate.forward(xs)?.to_dtype(DType::F32)?;
         let topk = crate::ops::moe_router_topk(
             &logits,
@@ -1734,6 +1736,60 @@ mod tests {
             cache.0[1],
             crate::kv_cache::KvCache::Normal { .. }
         ));
+    }
+
+    /// Behavioural probes for the forward pass, none of which need the reference fingerprints.
+    ///
+    /// The golden gate compares one position per prompt against a chain the reference produced
+    /// by greedy decoding, on prompts where this model loops degenerately. That is a weak
+    /// signal: it cannot distinguish a broken forward from a numerically close one, and it
+    /// needs the goldens to interpret. These probes need neither, and they separate the two
+    /// cases - a forward that cannot name a capital is broken regardless of its logit gap.
+    #[test]
+    #[ignore = "loads the 149 GB Kolibri-1 checkpoint"]
+    fn kolibri1_answers_ordinary_prompts() -> anyhow::Result<()> {
+        use tokenizers::Tokenizer;
+
+        let (model_dir, _) = golden_paths();
+        let tok = Tokenizer::from_file(model_dir.join("tokenizer.json"))
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
+
+        eprintln!("[probe] loading {}", model_dir.display());
+        let mut model = load_real_model(&model_dir)?;
+
+        for (text, want) in [
+            ("The capital of France is", "Paris"),
+            ("The capital of Australia is", "Canberra"),
+            ("The capital of Japan is", "Tokyo"),
+        ] {
+            let ids = tok
+                .encode(text, false)
+                .map_err(|e| anyhow::anyhow!("{e}"))?
+                .get_ids()
+                .to_vec();
+            let rows = teacher_forced_logits(&mut model, &ids)?;
+            let last = rows.last().expect("prefill returned no rows");
+            let (top, top_logit) =
+                last.iter()
+                    .enumerate()
+                    .fold((0usize, f32::NEG_INFINITY), |(bi, bv), (i, v)| {
+                        if *v > bv {
+                            (i, *v)
+                        } else {
+                            (bi, bv)
+                        }
+                    });
+            let got = tok.decode(&[top as u32], true).unwrap_or_default();
+            let margin = top_logit
+                - last
+                    .iter()
+                    .enumerate()
+                    .filter(|(i, _)| *i != top)
+                    .fold(f32::NEG_INFINITY, |m, (_, v)| m.max(*v));
+            println!("{text:?} -> {got:?} ({top_logit:.2}, margin {margin:.2})");
+            assert_eq!(got.trim(), want, "prompt {text:?}");
+        }
+        Ok(())
     }
 
     /// Decode throughput, so the CPU numbers in the plan are measured on the same build that
