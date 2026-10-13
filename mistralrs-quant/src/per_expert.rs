@@ -75,21 +75,20 @@ impl PerExpertLinear {
         }
         let ids: Vec<u32> = ids.flatten_all()?.to_vec1::<u32>()?.to_vec();
 
-        let a_f32 = a.to_dtype(DType::F32)?.contiguous()?;
-        let a_rows = a_f32.flatten_all()?.to_vec1::<f32>()?;
-        let mut expanded = Vec::with_capacity(ids.len() * in_features);
-        for row in a_rows.chunks_exact(in_features) {
-            for _ in 0..top_k {
-                expanded.extend_from_slice(row);
-            }
-        }
+        // The token's activation is read by all of its slots, so the rows are passed once and
+        // the kernel addresses them by `slot / top_k`. Expanding them instead would allocate
+        // and copy `top_k * in_features` floats on every projection of every layer, which at
+        // batch 1 is 150 short-lived allocations per decode step.
+        let a_rows = a.to_dtype(DType::F32)?.contiguous()?;
+        let a_rows = a_rows.flatten_all()?.to_vec1::<f32>()?;
 
         let out = moe_gather_cpu::gather_gemv_per_expert(
-            &expanded,
+            &a_rows,
             &self.experts,
             self.out_features,
             self.in_features,
             &ids,
+            top_k,
         )?;
         Tensor::from_vec(out, (n_tokens, top_k, self.out_features), &self.device)?
             .to_dtype(self.dtype)
