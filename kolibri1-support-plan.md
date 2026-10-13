@@ -1032,6 +1032,9 @@ caps out at a third of the problem.
 | after sending 512-output projections to the CPU GEMV | 4.32 | 231 ms |
 | after fusing q/k/v | **4.64** | **216 ms** |
 
+(at 32 threads; a 25-token run on a later build measured 5.01 tok/s, so these are +-10% apart
+run to run - see the note at the end.)
+
 **2.7x** in total, and the middle step is the large one: a GQA k or v projection is exactly
 512 outputs, which sat just under `MIN_PARALLEL_OUTPUTS` and therefore fell through to candle's
 generic GEMM. That path packs both operands into scratch and builds a `BarrierPool` per call,
@@ -1107,19 +1110,41 @@ Tried, in the order the profile suggested:
 3. **`MIN_PARALLEL_OUTPUTS` 1024 to 512.** **2.35x.** The largest single win, from a constant.
 4. **Fused q/k/v into one GEMV region.** 1.3x on the operation cold, ~7% end-to-end.
 
-Still open:
+**Fusing gate and up: tried, measured, reverted.** The obvious next cut, since it is the last
+big pair of regions the MoE opens. Implemented as one parallel region over both sets of slabs,
+held bit-exact against two separate gathers. End-to-end it read **+5%**, and it was reverted,
+because the mechanism does not support the number:
 
-1. **Rayon synchronisation, 27% of decode.** Cutting two barriers per layer helped a little;
-   the rest needs either fewer regions (fusing gate and up, which is the last big one and means
-   a `QuantMethod` trait method on a shared path) or coarser regions generally.
-2. **Thread scaling.** 1.77x across 4 to 32 threads against a kernel that scales 8.3x in
-   isolation. Worth understanding before optimising anything else: if the cause is a fixed
-   per-region cost, fusing is the fix, and if it is something else, fusing will not help.
-3. **All four NUMA nodes.** Everything is on node 3 because nodes 0-2 are busy with other users.
-   For a problem that is fundamentally about memory bandwidth this is the largest multiplier
-   available, and it is an operational decision rather than a code change.
-4. **Batching.** At batch 8 the same 6.82 GB produces eight tokens. Irrelevant to interactive
-   batch-1 latency, which is what all of the above is measured against.
+- a barrier costs ~10-20 us and a MoE gather covers ~178 us of work at 88 GB/s, so removing
+  half the MoE's barriers should be worth about **0.3%**
+- the fused form also saves one pass over a 10 KB activation row per projection, which is
+  nothing
+
+A 5% reading on a box with ~20% run-to-run variance is not evidence of a 5% effect. The
+implementation also had to be put in the branch CPU actually takes - `uses_flattened_gather` is
+CUDA/NVFP4 only, so the first attempt was measured having never fired at all. That is the
+second time this session that an unexercised path produced a confident number.
+
+What this says about the remaining 27% of rayon synchronisation: it is not concentrated in the
+large gathers, because those barriers are cheap against the work they cover. It has to be in the
+many small regions, which means reducing the *number* of calls rather than fusing the big ones -
+and nothing obvious presents itself there.
+
+**Thread count: 32, not 16.** Worth separating from the streaming benchmark, which says the
+opposite:
+
+| threads | 12 | 16 | 24 | 32 |
+| --- | --- | --- | --- | --- |
+| decode tok/s | 3.65 | 3.88 | 4.20 | **5.01** |
+
+Pure streaming on this node peaks at 16 threads (98.0 GB/s against 86.9 at 32), but that is one
+long region. Decode is a few hundred short ones, and there the extra threads hide latency rather
+than contend for bandwidth. **Do not take the streaming optimum as the decode optimum** - they
+are different regimes on the same machine, which is worth remembering given that this plan
+previously concluded the opposite from a dense-GEMV measurement.
+
+At 5.01 tok/s a step moves 6.82 GB in 200 ms, which is **34.1 GB/s** against the 86.9 GB/s this
+node streams at 32 threads - 39% of it, up from an eighth when this section was written.
 
 A methodological note, because it cost real time three times over: every isolated benchmark
 here initially reported a cache-resident number. The first read-bandwidth test measured add
