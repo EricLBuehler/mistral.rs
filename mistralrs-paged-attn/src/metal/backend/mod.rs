@@ -73,5 +73,8 @@ pub use paged_attention::{
     paged_attention, paged_attention_with_window, reshape_and_cache, MetalPagedAttentionWorkspace,
     METAL_PAGED_CACHE_VECTOR_BYTES,
 };
-pub use paged_prefill::{metal_paged_prefill, MetalPagedPrefillRequest, MetalPagedPrefillShape};
+pub use paged_prefill::{
+    metal_paged_prefill, prepare_metal_paged_attention, MetalPagedAttentionWarmup,
+    MetalPagedPrefillRequest, MetalPagedPrefillShape,
+};
 pub use scale_update::kv_scale_update;

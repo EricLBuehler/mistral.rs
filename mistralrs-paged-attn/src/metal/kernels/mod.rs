@@ -11,6 +11,8 @@ pub mod utils;
 use utils::{EncoderProvider, RawBytesEncoder};
 
 const CACHE_LAYOUT_CONSTANT: usize = 50;
+const PAGED_ATTENTION_THREADS: usize = 256;
+const PAGED_ATTENTION_SIMD_LANES: usize = 32;
 
 // Backward-compatible aliases to ease migration from the `metal` crate API.
 type ComputeCommandEncoderRef = ComputeCommandEncoder;
@@ -54,15 +56,26 @@ impl<T> From<std::sync::PoisonError<T>> for MetalKernelError {
     }
 }
 
-type Pipelines = HashMap<(String, Option<ConstantValues>), ComputePipelineState>;
+type Pipelines = HashMap<(u64, String, Option<ConstantValues>), ComputePipelineState>;
 
-static LIBRARY: OnceLock<Library> = OnceLock::new();
+static LIBRARIES: OnceLock<RwLock<HashMap<u64, Library>>> = OnceLock::new();
 
 // Process-wide: callers construct `Kernels` per dispatch, so a per-instance cache rebuilt pipelines every call.
 static PIPELINES: OnceLock<RwLock<Pipelines>> = OnceLock::new();
 
 fn pipelines() -> &'static RwLock<Pipelines> {
     PIPELINES.get_or_init(|| RwLock::new(Pipelines::new()))
+}
+
+#[cfg(test)]
+pub(crate) fn cached_pipeline_count(device: &Device) -> usize {
+    let device_id = device.registry_id();
+    pipelines()
+        .read()
+        .unwrap()
+        .keys()
+        .filter(|(id, _, _)| *id == device_id)
+        .count()
 }
 
 #[derive(Debug)]
@@ -82,33 +95,39 @@ impl Kernels {
     /// Load the library from precompiled metallib, falling back to runtime compilation if needed.
     /// If this has been previously loaded it will just fetch it from cache.
     pub fn load_library(&self, device: &Device) -> Result<Library, MetalKernelError> {
-        if let Some(lib) = LIBRARY.get() {
-            Ok(lib.clone())
-        } else {
-            // Try to load precompiled metallib first (faster startup)
-            let lib = if !KERNELS.is_empty() {
-                // Load precompiled metallib directly from embedded bytes via DispatchData.
-                // This avoids writing to a temp file, which can fail in sandboxed
-                // environments (e.g. macOS apps distributed via TestFlight).
-                // https://github.com/EricLBuehler/mistral.rs/issues/1897
-                let data = dispatch2::DispatchData::from_static_bytes(KERNELS);
-
-                let raw_lib = device
-                    .as_ref()
-                    .newLibraryWithData_error(&data)
-                    .map_err(|e| {
-                        MetalKernelError::CompilationError(format!(
-                            "Failed to load precompiled metallib: {e}"
-                        ))
-                    })?;
-                Library::new(raw_lib)
-            } else {
-                // Fall back to runtime compilation if precompiled lib is not available
-                // (e.g., when MISTRALRS_METAL_PRECOMPILE=0)
-                self.compile_kernels_at_runtime(device)?
-            };
-            Ok(LIBRARY.get_or_init(|| lib).clone())
+        let libraries = LIBRARIES.get_or_init(|| RwLock::new(HashMap::new()));
+        let device_id = device.registry_id();
+        if let Some(lib) = libraries.read()?.get(&device_id) {
+            return Ok(lib.clone());
         }
+        let mut libraries = libraries.write()?;
+        if let Some(lib) = libraries.get(&device_id) {
+            return Ok(lib.clone());
+        }
+        // Try to load precompiled metallib first (faster startup)
+        let lib = if !KERNELS.is_empty() {
+            // Load precompiled metallib directly from embedded bytes via DispatchData.
+            // This avoids writing to a temp file, which can fail in sandboxed
+            // environments (e.g. macOS apps distributed via TestFlight).
+            // https://github.com/EricLBuehler/mistral.rs/issues/1897
+            let data = dispatch2::DispatchData::from_static_bytes(KERNELS);
+
+            let raw_lib = device
+                .as_ref()
+                .newLibraryWithData_error(&data)
+                .map_err(|e| {
+                    MetalKernelError::CompilationError(format!(
+                        "Failed to load precompiled metallib: {e}"
+                    ))
+                })?;
+            Library::new(raw_lib)
+        } else {
+            // Fall back to runtime compilation if precompiled lib is not available
+            // (e.g., when MISTRALRS_METAL_PRECOMPILE=0)
+            self.compile_kernels_at_runtime(device)?
+        };
+        libraries.insert(device_id, lib.clone());
+        Ok(lib)
     }
 
     fn compile_kernels_at_runtime(&self, device: &Device) -> Result<Library, MetalKernelError> {
@@ -138,17 +157,20 @@ impl Kernels {
         name: String,
         constants: Option<ConstantValues>,
     ) -> Result<ComputePipelineState, MetalKernelError> {
+        let key = (device.registry_id(), name, constants);
+        if let Some(pipeline) = pipelines().read()?.get(&key) {
+            return Ok(pipeline.clone());
+        }
         let mut pipelines = pipelines().write()?;
-        let key = (name, constants);
         if let Some(pipeline) = pipelines.get(&key) {
             Ok(pipeline.clone())
         } else {
-            let (name, constants) = key;
+            let (device_id, name, constants) = key;
             let func = self.load_function(device, name.clone(), constants.as_ref())?;
             let pipeline = device
                 .new_compute_pipeline_state_with_function(&func)
                 .map_err(|e| MetalKernelError::FailedToCreatePipeline(e.to_string()))?;
-            pipelines.insert((name, constants), pipeline.clone());
+            pipelines.insert((device_id, name, constants), pipeline.clone());
 
             Ok(pipeline)
         }
@@ -182,19 +204,7 @@ pub fn call_copy_blocks(
     numel_per_block_key: u64,
     numel_per_block_value: u64,
 ) -> Result<(), MetalKernelError> {
-    let name = match ty {
-        DType::F32 => "copy_blocks_float",
-        DType::BF16 => "copy_blocks_bfloat16_t",
-        DType::F16 => "copy_blocks_half",
-        DType::F8E4M3 => "copy_blocks_uchar",
-        other => {
-            return Err(MetalKernelError::DTypeMismatch {
-                expected: vec![DType::F32, DType::F16, DType::BF16, DType::F8E4M3],
-                got: other,
-            })
-        }
-    };
-    let pipeline = kernels.load_pipeline(device, name.to_string())?;
+    let pipeline = copy_pipeline_key(ty.try_into()?).load(kernels, device)?;
     let encoder = ep.encoder();
     let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
     encoder.set_compute_pipeline_state(&pipeline);
@@ -243,6 +253,149 @@ impl PagedAttentionDType {
     }
 }
 
+impl TryFrom<DType> for PagedAttentionDType {
+    type Error = MetalKernelError;
+
+    fn try_from(dtype: DType) -> Result<Self, Self::Error> {
+        match dtype {
+            DType::F16 => Ok(Self::F16),
+            DType::BF16 => Ok(Self::BF16),
+            DType::F32 => Ok(Self::F32),
+            DType::F8E4M3 => Ok(Self::F8E4M3),
+            got => Err(MetalKernelError::DTypeMismatch {
+                expected: vec![DType::F16, DType::BF16, DType::F32, DType::F8E4M3],
+                got,
+            }),
+        }
+    }
+}
+
+pub(crate) struct PipelineKey {
+    name: String,
+    constants: Option<ConstantValues>,
+}
+
+impl PipelineKey {
+    pub(crate) fn load(
+        self,
+        kernels: &Kernels,
+        device: &Device,
+    ) -> Result<ComputePipeline, MetalKernelError> {
+        kernels.load_pipeline_with_constants(device, self.name, self.constants)
+    }
+}
+
+fn cache_pipeline_key(name: String, scales: bool, hnd: bool) -> PipelineKey {
+    PipelineKey {
+        name,
+        constants: Some(ConstantValues::new(vec![
+            (10, Value::Bool(scales)),
+            (CACHE_LAYOUT_CONSTANT, Value::Bool(hnd)),
+        ])),
+    }
+}
+
+pub(crate) fn reshape_pipeline_key(
+    ty: PagedAttentionDType,
+    cache_ty: PagedAttentionDType,
+    scales: bool,
+    hnd: bool,
+) -> PipelineKey {
+    cache_pipeline_key(
+        format!(
+            "reshape_and_cache_kv_{}_cache_{}",
+            ty.to_repr(),
+            cache_ty.to_repr()
+        ),
+        scales,
+        hnd,
+    )
+}
+
+pub(crate) fn gather_pipeline_key(
+    ty: PagedAttentionDType,
+    cache_ty: PagedAttentionDType,
+    scales: bool,
+    hnd: bool,
+) -> PipelineKey {
+    cache_pipeline_key(
+        format!(
+            "gather_kv_cache_cache_{}_out_{}",
+            cache_ty.to_repr(),
+            ty.to_repr()
+        ),
+        scales,
+        hnd,
+    )
+}
+
+pub(crate) fn copy_pipeline_key(ty: PagedAttentionDType) -> PipelineKey {
+    PipelineKey {
+        name: format!("copy_blocks_{}", ty.to_repr()),
+        constants: None,
+    }
+}
+
+pub(crate) fn scale_pipeline_key(ty: PagedAttentionDType) -> PipelineKey {
+    PipelineKey {
+        name: format!("kv_scale_update_{}", ty.to_repr()),
+        constants: None,
+    }
+}
+
+pub(crate) struct AttentionPipelineKey {
+    pub ty: PagedAttentionDType,
+    pub cache_ty: PagedAttentionDType,
+    pub head_size: usize,
+    pub block_size: usize,
+    pub partitioned: bool,
+    pub alibi: bool,
+    pub scales: bool,
+    pub sinks: bool,
+    pub hnd: bool,
+}
+
+impl AttentionPipelineKey {
+    pub(crate) fn key(self) -> PipelineKey {
+        let partition = if self.partitioned {
+            PAGED_DECODE_LONG_PARTITION
+        } else {
+            0
+        };
+        PipelineKey {
+            name: format!(
+                "paged_attention_{}_cache_{}_hs{}_bs{}_nt{PAGED_ATTENTION_THREADS}_nsl{PAGED_ATTENTION_SIMD_LANES}_ps{partition}",
+                self.ty.to_repr(),
+                self.cache_ty.to_repr(),
+                self.head_size,
+                self.block_size
+            ),
+            constants: Some(ConstantValues::new(vec![
+                (10, Value::Bool(self.partitioned)),
+                (20, Value::Bool(self.alibi)),
+                (30, Value::Bool(self.scales)),
+                (40, Value::Bool(self.sinks)),
+                (CACHE_LAYOUT_CONSTANT, Value::Bool(self.hnd)),
+            ])),
+        }
+    }
+}
+
+pub(crate) fn reduce_pipeline_key(
+    ty: PagedAttentionDType,
+    head_size: usize,
+    partition_size: usize,
+    sinks: bool,
+) -> PipelineKey {
+    PipelineKey {
+        name: format!(
+            "paged_attention_v2_reduce_{}_hs{head_size}_nt{PAGED_ATTENTION_THREADS}_nsl{PAGED_ATTENTION_SIMD_LANES}_ps{partition_size}",
+            ty.to_repr()
+        ),
+        constants: Some(ConstantValues::new(vec![(40, Value::Bool(sinks))])),
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn call_reshape_and_cache(
     device: &Device,
@@ -270,18 +423,8 @@ pub fn call_reshape_and_cache(
     value_stride: i32,
     hnd: bool,
 ) -> Result<(), MetalKernelError> {
-    let name = format!(
-        "reshape_and_cache_kv_{}_cache_{}",
-        kv_ty.to_repr(),
-        cache_ty.to_repr()
-    );
-
-    let constants = Some(ConstantValues::new(vec![
-        (10, Value::Bool(k_v_scale.is_some())),
-        (CACHE_LAYOUT_CONSTANT, Value::Bool(hnd)),
-    ]));
-
-    let pipeline = kernels.load_pipeline_with_constants(device, name, constants)?;
+    let pipeline =
+        reshape_pipeline_key(kv_ty, cache_ty, k_v_scale.is_some(), hnd).load(kernels, device)?;
     let encoder = ep.encoder();
     let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
     encoder.set_compute_pipeline_state(&pipeline);
@@ -376,27 +519,22 @@ pub fn call_paged_attention_v1(
     hnd: bool,
     sliding_window: i32,
 ) -> Result<(), MetalKernelError> {
-    const NUM_THREADS: usize = 256;
-    const NUM_SIMD_LANES: usize = 32;
+    const NUM_THREADS: usize = PAGED_ATTENTION_THREADS;
+    const NUM_SIMD_LANES: usize = PAGED_ATTENTION_SIMD_LANES;
 
-    // v1 has no partition
-    let name = format!(
-        "paged_attention_{}_cache_{}_hs{head_size}_bs{block_size}_nt{NUM_THREADS}_nsl{NUM_SIMD_LANES}_ps0",
-        ty.to_repr(), cache_ty.to_repr()
-    );
-
-    let constants = Some(ConstantValues::new(vec![
-        (10, Value::Bool(/* use_partitioning */ false)),
-        (
-            20,
-            Value::Bool(/* use_alibi */ alibi_storage_and_offset.is_some()),
-        ),
-        (30, Value::Bool(/* use_fp8_scales */ k_v_scale.is_some())),
-        (40, Value::Bool(/* use_sinks */ sinks.is_some())),
-        (CACHE_LAYOUT_CONSTANT, Value::Bool(hnd)),
-    ]));
-
-    let pipeline = kernels.load_pipeline_with_constants(device, name, constants)?;
+    let pipeline = AttentionPipelineKey {
+        ty,
+        cache_ty,
+        head_size: head_size as usize,
+        block_size: block_size as usize,
+        partitioned: false,
+        alibi: alibi_storage_and_offset.is_some(),
+        scales: k_v_scale.is_some(),
+        sinks: sinks.is_some(),
+        hnd,
+    }
+    .key()
+    .load(kernels, device)?;
     let encoder = ep.encoder();
     let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
     encoder.set_compute_pipeline_state(&pipeline);
@@ -518,32 +656,25 @@ pub fn call_paged_attention_v2(
     hnd: bool,
     sliding_window: i32,
 ) -> Result<(), MetalKernelError> {
-    const NUM_THREADS: usize = 256;
+    const NUM_THREADS: usize = PAGED_ATTENTION_THREADS;
     const PARTITION_SIZE: usize = 512;
-    const NUM_SIMD_LANES: usize = 32;
+    const NUM_SIMD_LANES: usize = PAGED_ATTENTION_SIMD_LANES;
 
     // Initial paged attention kernel
     {
-        // v2 has partition.
-        let name = format!(
-            "paged_attention_{}_cache_{}_hs{head_size}_bs{block_size}_nt{NUM_THREADS}_nsl{NUM_SIMD_LANES}_ps{PARTITION_SIZE}",
-            ty.to_repr(), cache_ty.to_repr()
-        );
-
-        // v2 has partition.
-        // Handle alibi
-        let constants = Some(ConstantValues::new(vec![
-            (10, Value::Bool(/* use_partitioning */ true)),
-            (
-                20,
-                Value::Bool(/* use_alibi */ alibi_storage_and_offset.is_some()),
-            ),
-            (30, Value::Bool(/* use_fp8_scales */ k_v_scale.is_some())),
-            (40, Value::Bool(/* use_sinks */ sinks.is_some())),
-            (CACHE_LAYOUT_CONSTANT, Value::Bool(hnd)),
-        ]));
-
-        let pipeline = kernels.load_pipeline_with_constants(device, name, constants)?;
+        let pipeline = AttentionPipelineKey {
+            ty,
+            cache_ty,
+            head_size: head_size as usize,
+            block_size: block_size as usize,
+            partitioned: true,
+            alibi: alibi_storage_and_offset.is_some(),
+            scales: k_v_scale.is_some(),
+            sinks: sinks.is_some(),
+            hnd,
+        }
+        .key()
+        .load(kernels, device)?;
 
         let encoder = ep.encoder();
         let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
@@ -681,18 +812,8 @@ pub fn call_gather_kv_cache(
     x: i32,
     hnd: bool,
 ) -> Result<(), MetalKernelError> {
-    let name = format!(
-        "gather_kv_cache_cache_{}_out_{}",
-        cache_ty.to_repr(),
-        out_ty.to_repr()
-    );
-
-    let constants = Some(ConstantValues::new(vec![
-        (10, Value::Bool(k_v_scale.is_some())),
-        (CACHE_LAYOUT_CONSTANT, Value::Bool(hnd)),
-    ]));
-
-    let pipeline = kernels.load_pipeline_with_constants(device, name, constants)?;
+    let pipeline =
+        gather_pipeline_key(out_ty, cache_ty, k_v_scale.is_some(), hnd).load(kernels, device)?;
     let encoder = ep.encoder();
     let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
     encoder.set_compute_pipeline_state(&pipeline);
@@ -771,19 +892,7 @@ pub fn call_kv_scale_update(
     v_scale: &Buffer,
     num_elements: i64,
 ) -> Result<(), MetalKernelError> {
-    let name = match ty {
-        PagedAttentionDType::F32 => "kv_scale_update_float",
-        PagedAttentionDType::BF16 => "kv_scale_update_bfloat16_t",
-        PagedAttentionDType::F16 => "kv_scale_update_half",
-        PagedAttentionDType::F8E4M3 => {
-            return Err(MetalKernelError::DTypeMismatch {
-                expected: vec![DType::F32, DType::F16, DType::BF16],
-                got: DType::F8E4M3,
-            })
-        }
-    };
-
-    let pipeline = kernels.load_pipeline(device, name.to_string())?;
+    let pipeline = scale_pipeline_key(ty).load(kernels, device)?;
     let encoder = ep.encoder();
     let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
     encoder.set_compute_pipeline_state(&pipeline);
@@ -845,8 +954,7 @@ fn encode_v2_reduce(
     ty: PagedAttentionDType,
     reduce: V2Reduce<'_>,
 ) -> Result<(), MetalKernelError> {
-    const NUM_THREADS: usize = 256;
-    const NUM_SIMD_LANES: usize = 32;
+    const NUM_THREADS: usize = PAGED_ATTENTION_THREADS;
     let V2Reduce {
         exp_sums,
         max_logits,
@@ -861,28 +969,8 @@ fn encode_v2_reduce(
         num_heads,
         head_size,
     } = reduce;
-    let name = match ty {
-        PagedAttentionDType::F32 => "paged_attention_v2_reduce_float",
-        PagedAttentionDType::BF16 => "paged_attention_v2_reduce_bfloat16_t",
-        PagedAttentionDType::F16 => "paged_attention_v2_reduce_half",
-        PagedAttentionDType::F8E4M3 => {
-            return Err(MetalKernelError::DTypeMismatch {
-                expected: vec![DType::F32, DType::F16, DType::BF16],
-                got: DType::F8E4M3,
-            })
-        }
-    };
-    let mut name = name.to_string();
-    name.push_str(&format!("_hs{head_size}"));
-    name.push_str(&format!("_nt{NUM_THREADS}"));
-    name.push_str(&format!("_nsl{NUM_SIMD_LANES}"));
-    name.push_str(&format!("_ps{partition_size}"));
-
-    let reduce_constants = Some(ConstantValues::new(vec![(
-        40,
-        Value::Bool(/* use_sinks */ sinks.is_some()),
-    )]));
-    let pipeline = kernels.load_pipeline_with_constants(device, name, reduce_constants)?;
+    let pipeline = reduce_pipeline_key(ty, head_size as usize, partition_size, sinks.is_some())
+        .load(kernels, device)?;
 
     let encoder = ep.encoder();
     let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
@@ -1031,12 +1119,44 @@ pub enum PagedDecodeVariant {
 }
 
 impl PagedDecodeVariant {
+    pub(crate) fn pipeline_key(
+        self,
+        ty: PagedAttentionDType,
+        head_size: usize,
+        gqa: usize,
+        hnd: bool,
+    ) -> PipelineKey {
+        let layout = if hnd { "hnd_" } else { "" };
+        let name = match self {
+            Self::Short => format!("paged_decode_{layout}short_{}_hs{head_size}", ty.to_repr()),
+            Self::Split => format!("paged_decode_hnd_split_{}_hs{head_size}", ty.to_repr()),
+            Self::Grouped { .. } => format!(
+                "paged_decode_{layout}gqa_{}_hs{head_size}_g{gqa}",
+                ty.to_repr()
+            ),
+        };
+        PipelineKey {
+            name,
+            constants: None,
+        }
+    }
+
     pub fn num_partitions(self, max_context_len: usize) -> usize {
         match self {
             Self::Short => 1,
             Self::Split => PAGED_DECODE_SPLIT_PARTITIONS,
             Self::Grouped { partition_size } => max_context_len.div_ceil(partition_size),
         }
+    }
+}
+
+pub(crate) fn split_reduce_pipeline_key(ty: PagedAttentionDType, head_size: usize) -> PipelineKey {
+    PipelineKey {
+        name: format!(
+            "paged_decode_hnd_split_reduce_{}_hs{head_size}",
+            ty.to_repr()
+        ),
+        constants: None,
     }
 }
 
@@ -1115,6 +1235,51 @@ pub(crate) fn paged_decode_grouped_variant(
     PagedDecodeVariant::Grouped { partition_size }
 }
 
+pub(crate) fn paged_decode_warmup_shapes(
+    max_batch: usize,
+    max_context: usize,
+) -> Vec<(usize, usize)> {
+    let mut contexts = vec![
+        1,
+        max_context,
+        PAGED_DECODE_HND_SHORT_CONTEXT,
+        PAGED_DECODE_SPLIT_MIN_CONTEXT,
+        PAGED_DECODE_SPLIT_MAX_CONTEXT,
+    ];
+    contexts.extend(
+        PAGED_DECODE_SHORT_CONTEXTS
+            .iter()
+            .map(|(_, _, limit)| *limit),
+    );
+    contexts.extend(
+        PAGED_DECODE_HND_SHORT_PROFILES
+            .iter()
+            .map(|profile| profile.max_context),
+    );
+    contexts.extend(
+        contexts
+            .clone()
+            .into_iter()
+            .map(|context| context.saturating_add(1)),
+    );
+    contexts.retain(|context| *context <= max_context);
+    contexts.sort_unstable();
+    contexts.dedup();
+    let mut batches = vec![1, max_batch];
+    batches.extend(
+        PAGED_DECODE_HND_SHORT_PROFILES
+            .iter()
+            .flat_map(|profile| [profile.max_batch, profile.max_batch + 1]),
+    );
+    batches.retain(|batch| *batch <= max_batch);
+    batches.sort_unstable();
+    batches.dedup();
+    batches
+        .into_iter()
+        .flat_map(|batch| contexts.iter().map(move |context| (batch, *context)))
+        .collect()
+}
+
 /// Short decode uses one threadgroup per query head; grouped decode shares KV reads within each partition.
 pub fn call_paged_decode_gqa(
     device: &Device,
@@ -1124,40 +1289,19 @@ pub fn call_paged_decode_gqa(
 ) -> Result<(), MetalKernelError> {
     let max_num_partitions = args.variant.num_partitions(args.max_context_len as usize);
     let gqa = args.num_heads / args.num_kv_heads;
-    let layout = if args.hnd { "hnd_" } else { "" };
-    let (name, grid_heads, threads, kernel_param) = match args.variant {
-        PagedDecodeVariant::Short => (
-            format!(
-                "paged_decode_{layout}short_{}_hs{}",
-                args.ty.to_repr(),
-                args.head_size
-            ),
-            args.num_heads,
-            PAGED_DECODE_SHORT_THREADS,
-            gqa,
-        ),
-        PagedDecodeVariant::Split => (
-            format!(
-                "paged_decode_hnd_split_{}_hs{}",
-                args.ty.to_repr(),
-                args.head_size
-            ),
-            args.num_heads,
-            PAGED_DECODE_SPLIT_THREADS,
-            gqa,
-        ),
+    let (grid_heads, threads, kernel_param) = match args.variant {
+        PagedDecodeVariant::Short => (args.num_heads, PAGED_DECODE_SHORT_THREADS, gqa),
+        PagedDecodeVariant::Split => (args.num_heads, PAGED_DECODE_SPLIT_THREADS, gqa),
         PagedDecodeVariant::Grouped { partition_size } => (
-            format!(
-                "paged_decode_{layout}gqa_{}_hs{}_g{gqa}",
-                args.ty.to_repr(),
-                args.head_size
-            ),
             args.num_kv_heads,
             PAGED_DECODE_THREADS,
             partition_size as i32,
         ),
     };
-    let pipeline = kernels.load_pipeline_with_constants(device, name, None)?;
+    let pipeline = args
+        .variant
+        .pipeline_key(args.ty, args.head_size as usize, gqa as usize, args.hnd)
+        .load(kernels, device)?;
 
     let (exp_sums, max_logits, tmp_out) = match &args.partials {
         Some(p) => (p.exp_sums, p.max_logits, p.tmp_out),
@@ -1220,15 +1364,8 @@ pub fn call_paged_decode_gqa(
 
     if let Some(partials) = &args.partials {
         if matches!(args.variant, PagedDecodeVariant::Split) {
-            let pipeline = kernels.load_pipeline_with_constants(
-                device,
-                format!(
-                    "paged_decode_hnd_split_reduce_{}_hs{}",
-                    args.ty.to_repr(),
-                    args.head_size
-                ),
-                None,
-            )?;
+            let pipeline = split_reduce_pipeline_key(args.ty, args.head_size as usize)
+                .load(kernels, device)?;
             let encoder = ep.encoder();
             let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
             encoder.set_compute_pipeline_state(&pipeline);
@@ -1280,6 +1417,33 @@ pub fn call_paged_decode_gqa(
 #[cfg(test)]
 mod decode_tests {
     use super::*;
+
+    #[test]
+    fn warmup_shapes_cover_decode_dispatch_families() {
+        for (head_size, heads, kv_heads) in [(256, 24, 4), (512, 8, 2), (128, 16, 8)] {
+            for window in [None, Some(1024)] {
+                let key = |context, batch| {
+                    paged_decode_hnd_variant(context, batch, heads, kv_heads, window, head_size)
+                        .pipeline_key(PagedAttentionDType::BF16, head_size, heads / kv_heads, true)
+                        .name
+                };
+                let prepared = paged_decode_warmup_shapes(32, 32768)
+                    .into_iter()
+                    .map(|(batch, context)| key(context, batch))
+                    .collect::<std::collections::HashSet<_>>();
+                for batch in 1..=32 {
+                    for context in [
+                        1, 128, 256, 257, 320, 512, 513, 768, 1024, 1025, 4096, 4097, 8192, 32768,
+                    ] {
+                        assert!(
+                            prepared.contains(&key(context, batch)),
+                            "missing head {head_size}, batch {batch}, context {context}"
+                        );
+                    }
+                }
+            }
+        }
+    }
 
     #[test]
     fn hnd_short_profiles_bound_context_and_batch() {

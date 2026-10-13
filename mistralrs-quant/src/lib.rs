@@ -161,8 +161,8 @@ pub fn gguf_affine_reserved_bytes(device: &Device, dtype: DType) -> usize {
 
 #[cfg(feature = "metal")]
 pub use afq::ops::{
-    afq_gather_qmm_rhs_sorted, afq_gather_qmm_rhs_sorted_gate_up, metal_arg_sort_u32_1d,
-    metal_moe_weighted_reduce_flat,
+    afq_gather_qmm_rhs_sorted, afq_gather_qmm_rhs_sorted_gate_up, afq_sorted_gather_supported,
+    metal_arg_sort_u32_1d, metal_moe_weighted_reduce_flat,
 };
 pub use afq::{AfqBits, AfqGroupSize, AfqInner, AfqLayer};
 pub use bitsandbytes::{BnbLinear, BnbQuantParams, BnbQuantType};
@@ -1818,6 +1818,11 @@ pub trait QuantMethod: Send + Sync + Debug + QuantizedSerde {
         Self: Sized;
 
     fn dequantize_w(&self) -> Result<Tensor>;
+
+    #[cfg(feature = "metal")]
+    fn prepare_metal_kernels(&self, _activation_dtype: DType) -> Result<()> {
+        Ok(())
+    }
 
     /// Compute matmul of `self` and `a`. `self` should contain the weights.
     /// Automatically casts to the required quantization activation type and back.

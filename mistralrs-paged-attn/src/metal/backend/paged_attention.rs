@@ -1,8 +1,8 @@
 use std::sync::OnceLock;
 
 use candle_core::{
-    backend::BackendStorage, CpuStorage, DType, Layout, MetalStorage, Result, Shape, Storage,
-    Tensor,
+    backend::BackendStorage, CpuStorage, DType, Layout, MetalDevice, MetalStorage, Result, Shape,
+    Storage, Tensor,
 };
 
 use crate::metal::{
@@ -15,6 +15,126 @@ const SPECIALIZED_PACKED_X: usize = METAL_PAGED_CACHE_VECTOR_BYTES / 2;
 const GENERIC_PARTITION_SIZE: usize = 512;
 const GENERIC_V1_HEAD_THRESHOLD: usize = 512;
 const METAL_PAGED_KERNEL_ENV: &str = "MISTRALRS_METAL_PAGED_KERNEL";
+
+pub(super) fn prepare_decode_kernels(
+    device: &MetalDevice,
+    spec: super::MetalPagedAttentionWarmup,
+) -> Result<()> {
+    let shape = spec.shape;
+    let ty = shape
+        .query_dtype
+        .try_into()
+        .map_err(candle_core::Error::wrap)?;
+    let cache_ty = shape
+        .cache_dtype
+        .try_into()
+        .map_err(candle_core::Error::wrap)?;
+    let has_scales = shape.cache_dtype == DType::F8E4M3;
+    let kernels = kernels::Kernels::new();
+    for key in [
+        kernels::reshape_pipeline_key(ty, cache_ty, has_scales, shape.hnd),
+        kernels::gather_pipeline_key(ty, cache_ty, has_scales, shape.hnd),
+        kernels::copy_pipeline_key(cache_ty),
+    ] {
+        key.load(&kernels, device.device())
+            .map_err(candle_core::Error::wrap)?;
+    }
+    if has_scales {
+        kernels::scale_pipeline_key(ty)
+            .load(&kernels, device.device())
+            .map_err(candle_core::Error::wrap)?;
+    }
+    if shape.key_head_dim != shape.value_head_dim
+        || ![64, 80, 96, 112, 128, 192, 256, 512].contains(&shape.key_head_dim)
+    {
+        return Ok(());
+    }
+    let base = MetalPagedAttentionWorkspace {
+        num_seqs: shape.num_seqs,
+        num_heads: shape.num_heads,
+        num_kv_heads: shape.num_kv_heads,
+        head_size: shape.key_head_dim,
+        block_size: shape.block_size,
+        max_context_len: shape.max_context_len,
+        sliding_window: spec.sliding_window,
+        dtype: shape.query_dtype,
+        cache_dtype: shape.cache_dtype,
+        hnd: shape.hnd,
+        packed_x: if shape.hnd {
+            1
+        } else {
+            METAL_PAGED_CACHE_VECTOR_BYTES / shape.cache_dtype.size_in_bytes()
+        },
+        has_alibi: spec.alibi_dtype.is_some(),
+        has_sinks: spec.sink_dtype.is_some(),
+        has_scales,
+        softcapping: if spec.softcap { 0.0 } else { 1.0 },
+    };
+    for (num_seqs, max_context_len) in
+        kernels::paged_decode_warmup_shapes(shape.num_seqs, shape.max_context_len)
+    {
+        let workload = MetalPagedAttentionWorkspace {
+            num_seqs,
+            max_context_len,
+            ..base
+        };
+        if let Some(variant) = workload.specialized_variant(metal_paged_kernel()) {
+            variant
+                .pipeline_key(
+                    ty,
+                    shape.key_head_dim,
+                    shape.num_heads / shape.num_kv_heads,
+                    shape.hnd,
+                )
+                .load(&kernels, device.device())
+                .map_err(candle_core::Error::wrap)?;
+            match variant {
+                kernels::PagedDecodeVariant::Short => {}
+                kernels::PagedDecodeVariant::Split => {
+                    kernels::split_reduce_pipeline_key(ty, shape.key_head_dim)
+                        .load(&kernels, device.device())
+                        .map_err(candle_core::Error::wrap)?;
+                }
+                kernels::PagedDecodeVariant::Grouped { .. } => {
+                    for partition in [
+                        kernels::PAGED_DECODE_SHORT_PARTITION,
+                        GENERIC_PARTITION_SIZE,
+                    ] {
+                        kernels::reduce_pipeline_key(ty, shape.key_head_dim, partition, false)
+                            .load(&kernels, device.device())
+                            .map_err(candle_core::Error::wrap)?;
+                    }
+                }
+            }
+        } else {
+            kernels::AttentionPipelineKey {
+                ty,
+                cache_ty,
+                head_size: shape.key_head_dim,
+                block_size: shape.block_size,
+                partitioned: !workload.use_v1(),
+                alibi: base.has_alibi,
+                scales: has_scales,
+                sinks: base.has_sinks,
+                hnd: shape.hnd,
+            }
+            .key()
+            .load(&kernels, device.device())
+            .map_err(candle_core::Error::wrap)?;
+            if !workload.use_v1() {
+                kernels::reduce_pipeline_key(
+                    ty,
+                    shape.key_head_dim,
+                    GENERIC_PARTITION_SIZE,
+                    base.has_sinks,
+                )
+                .load(&kernels, device.device())
+                .map_err(candle_core::Error::wrap)?;
+            }
+        }
+    }
+    Ok(())
+}
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum MetalPagedKernel {

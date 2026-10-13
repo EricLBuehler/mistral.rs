@@ -34,7 +34,9 @@ cargo install --path mistralrs-cli --locked --features "cuda nccl flash-attn cud
 
 The flags above target CUDA. On macOS use `--features metal`; on CPU omit `--features` entirely. See the [cargo features reference](/reference/cargo-features/) for the full list.
 
-Metal builds precompile macOS, iOS, and tvOS metallibs by default. For local macOS-only development, set `MISTRALRS_METAL_PLATFORMS=macos`; to skip Metal precompilation entirely, set `MISTRALRS_METAL_PRECOMPILE=0`.
+Metal builds precompile macOS, iOS, and tvOS metallibs by default, including the GDN and Mamba/SSM kernels. For local macOS-only development, set `MISTRALRS_METAL_PLATFORMS=macos`; to skip Metal precompilation entirely, set `MISTRALRS_METAL_PRECOMPILE=0`.
+
+Metal model loading prepares recurrent, supported quantized linear, and paged-attention pipelines for the model's shapes and dtypes before serving requests. Preparation compiles pipelines without running a synthetic prompt or populating the KV cache. Request-specific variants can still require additional setup on first use. Disabling build-time precompilation moves shader compilation into library loading, including this preparation step.
 
 The in-place build leaves the binary at `target/release/mistralrs`. The install variant copies it to `~/.cargo/bin/mistralrs`, which is on `PATH` after a rustup install.
 

@@ -419,6 +419,14 @@ impl GatedDeltaNet {
                 input_projection_kind,
             },
         )?;
+        #[cfg(feature = "metal")]
+        if let candle_core::Device::Metal(device) = weights.conv1d_weight.device() {
+            crate::metal::gdn::warmup_kernels(
+                device.device(),
+                weights.conv1d_weight.dtype(),
+                dims.head_k_dim,
+            )?;
+        }
         let out_proj_input_shard = (comm.world_size() > 1).then_some(Shard::Simple {
             dim: 2,
             rank: comm.rank(),

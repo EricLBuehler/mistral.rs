@@ -17,6 +17,8 @@ mod inputs_processor;
 mod isq;
 mod isq_flow;
 pub(crate) mod metal_phase;
+#[cfg(feature = "metal")]
+mod metal_warmup;
 pub use isq_flow::CalibrationStatus;
 #[cfg(any(feature = "cuda", test))]
 mod cuda_graph_budget;

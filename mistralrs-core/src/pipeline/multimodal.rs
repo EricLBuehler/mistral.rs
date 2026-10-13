@@ -1463,6 +1463,18 @@ impl Loader for MultimodalLoader {
         while layer_devices.len() < model_metadata.num_layers() {
             layer_devices.push(Some(device.clone()));
         }
+        #[cfg(feature = "metal")]
+        if self.config.write_uqff.is_none() {
+            super::metal_warmup::prepare_model(super::metal_warmup::MetalModelWarmup {
+                device: &device,
+                mapper: pipeline_mapper.as_ref(),
+                model: model_metadata.as_ref(),
+                paged: paged_attn_config.as_ref(),
+                dtype,
+                tracked_modules: &tracker.get(),
+                packed_prefill: model.supports_packed_prefill(),
+            })?;
+        }
         // Parallel weight loading leaves stream-ordered frees pending across loader streams;
         // drain the whole context so the KV sizing and allocation see the real free VRAM.
         #[cfg(feature = "cuda")]

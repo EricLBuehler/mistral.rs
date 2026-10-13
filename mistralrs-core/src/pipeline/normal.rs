@@ -190,6 +190,18 @@ pub(crate) fn build_normal_pipeline(
 
     let model_metadata =
         crate::paged_attention::with_attention_features(model.model_config(), attention_features);
+    #[cfg(feature = "metal")]
+    if !loaded_for_uqff_write {
+        super::metal_warmup::prepare_model(super::metal_warmup::MetalModelWarmup {
+            device: &device,
+            mapper: mapper.as_ref(),
+            model: model_metadata.as_ref(),
+            paged: paged_attn_config.as_ref(),
+            dtype,
+            tracked_modules: &tracked_modules,
+            packed_prefill: model.supports_packed_prefill(),
+        })?;
+    }
     let num_hidden_layers = match model.cache() {
         EitherCache::Full(full) => full.lock().len(),
         EitherCache::Normal(normal) => normal.lock().unwrap().0.len(),

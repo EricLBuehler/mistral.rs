@@ -1136,8 +1136,8 @@ impl FastExpertsWeights {
         config: MoEForwardConfig,
     ) -> Result<Option<Tensor>> {
         use mistralrs_quant::{
-            afq_gather_qmm_rhs_sorted, afq_gather_qmm_rhs_sorted_gate_up, metal_arg_sort_u32_1d,
-            AfqBits, AfqGroupSize,
+            afq_gather_qmm_rhs_sorted, afq_gather_qmm_rhs_sorted_gate_up,
+            afq_sorted_gather_supported, metal_arg_sort_u32_1d,
         };
 
         let top_k = config.num_experts_per_tok;
@@ -1152,12 +1152,9 @@ impl FastExpertsWeights {
         ) else {
             return Ok(None);
         };
-        let bits_ok = |b: AfqBits| matches!(b, AfqBits::Eight | AfqBits::Four);
-        if [gate.group_size, up.group_size, down.group_size]
+        if [&gate, &up, &down]
             .iter()
-            .any(|g| *g != AfqGroupSize::Med)
-            || !bits_ok(gate.bits)
-            || !bits_ok(down.bits)
+            .any(|layer| !afq_sorted_gather_supported(layer.group_size, layer.bits))
             || gate.bits != up.bits
         {
             return Ok(None);

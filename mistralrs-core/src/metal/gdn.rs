@@ -11,11 +11,11 @@ use candle_core::{DType, Device, Result, Storage, Tensor};
 
 #[cfg(feature = "metal")]
 use candle_metal_kernels::metal::{
-    Buffer, ComputeCommandEncoder, ComputePipeline, Device as MetalRawDevice, Library,
+    Buffer, ComputeCommandEncoder, ComputePipeline, Device as MetalRawDevice,
 };
 
 #[cfg(feature = "metal")]
-use objc2_metal::{MTLCompileOptions, MTLLanguageVersion, MTLMathMode, MTLSize};
+use objc2_metal::MTLSize;
 
 #[cfg(feature = "metal")]
 use std::collections::HashMap;
@@ -24,52 +24,39 @@ use std::collections::HashMap;
 use std::sync::{OnceLock, RwLock};
 
 #[cfg(feature = "metal")]
-static GDN_LIBRARY: OnceLock<Library> = OnceLock::new();
+use super::kernels::{device_key, RecurrentLibrary};
 
 #[cfg(feature = "metal")]
-type Pipelines = HashMap<String, ComputePipeline>;
+type Pipelines = HashMap<u64, HashMap<String, ComputePipeline>>;
 
 #[cfg(feature = "metal")]
 static GDN_PIPELINES: OnceLock<RwLock<Pipelines>> = OnceLock::new();
 
 #[cfg(feature = "metal")]
-const GDN_METAL_SOURCE: &str = include_str!("kernels/gdn.metal");
-
-#[cfg(feature = "metal")]
-fn load_gdn_library(device: &MetalRawDevice) -> Result<Library> {
-    if let Some(lib) = GDN_LIBRARY.get() {
-        return Ok(lib.clone());
-    }
-    let compile_options = {
-        let opts = MTLCompileOptions::new();
-        opts.setLanguageVersion(MTLLanguageVersion::Version3_1);
-        opts.setMathMode(MTLMathMode::Fast);
-        opts
-    };
-    let lib = device
-        .new_library_with_source(GDN_METAL_SOURCE, Some(&compile_options))
-        .map_err(|e| {
-            candle_core::Error::Msg(format!("Failed to compile GDN Metal kernels: {e}"))
-        })?;
-    Ok(GDN_LIBRARY.get_or_init(|| lib).clone())
-}
-
-#[cfg(feature = "metal")]
 fn load_pipeline(device: &MetalRawDevice, name: &str) -> Result<ComputePipeline> {
     let pipelines_lock = GDN_PIPELINES.get_or_init(|| RwLock::new(Pipelines::new()));
+    let key = device_key(device);
 
-    // Check read lock first
     {
         let pipelines = pipelines_lock
             .read()
             .map_err(|e| candle_core::Error::Msg(format!("Failed to lock pipeline cache: {e}")))?;
-        if let Some(pipeline) = pipelines.get(name) {
+        if let Some(pipeline) = pipelines
+            .get(&key)
+            .and_then(|pipelines| pipelines.get(name))
+        {
             return Ok(pipeline.clone());
         }
     }
 
-    // Not found, compile and insert
-    let lib = load_gdn_library(device)?;
+    let mut pipelines = pipelines_lock.write().map_err(|e| {
+        candle_core::Error::Msg(format!("Failed to lock pipeline cache for write: {e}"))
+    })?;
+    let pipelines = pipelines.entry(key).or_default();
+    if let Some(pipeline) = pipelines.get(name) {
+        return Ok(pipeline.clone());
+    }
+    let lib = RecurrentLibrary::Gdn.load(device)?;
     let func = lib.get_function(name, None).map_err(|e| {
         candle_core::Error::Msg(format!("Failed to load Metal function '{name}': {e}"))
     })?;
@@ -79,11 +66,59 @@ fn load_pipeline(device: &MetalRawDevice, name: &str) -> Result<ComputePipeline>
             candle_core::Error::Msg(format!("Failed to create pipeline for '{name}': {e}"))
         })?;
 
-    let mut pipelines = pipelines_lock.write().map_err(|e| {
-        candle_core::Error::Msg(format!("Failed to lock pipeline cache for write: {e}"))
-    })?;
-    pipelines.insert(name.to_string(), pipeline.clone());
+    pipelines.insert(name.to_owned(), pipeline.clone());
     Ok(pipeline)
+}
+
+#[cfg(feature = "metal")]
+pub(crate) fn warmup_kernels(
+    device: &MetalRawDevice,
+    dtype: DType,
+    head_k_dim: usize,
+) -> Result<()> {
+    let start = std::time::Instant::now();
+    let type_name = match dtype {
+        DType::F16 => "half",
+        DType::BF16 => "bfloat",
+        DType::F32 => "float",
+        dtype => candle_core::bail!("unsupported Metal GDN activation dtype {dtype:?}"),
+    };
+    if matches!(dtype, DType::F16 | DType::BF16) {
+        let suffix = if dtype == DType::BF16 {
+            "bfloat16_t"
+        } else {
+            "half"
+        };
+        for name in [
+            "causal_conv1d_full",
+            "save_conv_state",
+            "causal_conv1d_update",
+            "causal_conv1d_update_pooled",
+            "fused_gdn_gating",
+        ] {
+            load_pipeline(device, &format!("{name}_{suffix}"))?;
+        }
+    }
+    load_pipeline(device, &format!("gdn_rmsnorm_gated_{type_name}"))?;
+    if matches!(head_k_dim, 64 | 128) {
+        for name in [
+            format!("gdn_prefill_from_convolved_{type_name}_{head_k_dim}"),
+            format!("gated_delta_rule_{head_k_dim}_64"),
+            format!("gated_delta_rule_pooled_decode_{head_k_dim}_64"),
+            format!("chunked_gated_delta_rule_32_{head_k_dim}_64"),
+        ] {
+            load_pipeline(device, &name)?;
+        }
+    } else {
+        load_pipeline(device, "gated_delta_rule_fallback")?;
+    }
+    tracing::debug!(
+        ?dtype,
+        head_k_dim,
+        elapsed_ms = start.elapsed().as_millis(),
+        "Prepared Metal GDN kernels"
+    );
+    Ok(())
 }
 
 // Helper to extract Metal buffer and byte offset from a tensor
@@ -901,4 +936,25 @@ pub fn fused_gdn_gating_metal(
     _dt_bias: &candle_core::Tensor,
 ) -> candle_core::Result<(candle_core::Tensor, candle_core::Tensor)> {
     candle_core::bail!("fused_gdn_gating_metal requires the metal feature")
+}
+
+#[cfg(all(test, feature = "metal"))]
+mod tests {
+    use super::*;
+
+    #[test]
+    #[ignore = "requires a Metal device"]
+    fn warmup_covers_recurrence_variants_and_reuses_pipelines() -> Result<()> {
+        let device = Device::new_metal(0)?;
+        let raw = device.as_metal_device()?.device();
+        for dtype in [DType::F16, DType::BF16, DType::F32] {
+            for head_k_dim in [64, 128, 256] {
+                warmup_kernels(raw, dtype, head_k_dim)?;
+            }
+        }
+        let first = load_pipeline(raw, "gdn_prefill_from_convolved_bfloat_128")?;
+        let second = load_pipeline(raw, "gdn_prefill_from_convolved_bfloat_128")?;
+        assert!(std::ptr::eq(first.as_ref(), second.as_ref()));
+        Ok(())
+    }
 }

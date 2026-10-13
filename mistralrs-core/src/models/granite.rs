@@ -875,6 +875,11 @@ impl MambaLayer {
             d = d.to_device(target_dev)?;
         }
 
+        #[cfg(feature = "metal")]
+        if let Device::Metal(device) = conv1d_weight.device() {
+            crate::metal::ssm::warmup_kernels(device.device(), ssm_state_size)?;
+        }
+
         Ok(Self {
             in_proj,
             conv1d_weight,

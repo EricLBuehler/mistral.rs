@@ -120,6 +120,12 @@ fn gguf_dtype_label(dtype: u32) -> String {
 }
 
 impl GgufMatMul {
+    fn prepare(self) -> Result<Self> {
+        #[cfg(feature = "metal")]
+        self.prepare_metal_kernels(DType::F32)?;
+        Ok(self)
+    }
+
     fn from_parts(w: QMatMul, b: Option<Tensor>, stats: crate::ImatrixLayerStats) -> Self {
         #[cfg(all(feature = "cuda", has_marlin_kernels))]
         let reservation = packed_affine::Reservation::new(&w);
@@ -185,11 +191,12 @@ impl GgufMatMul {
         let dtype = ggml_dtype_from_uqff_code(dtype)?;
         let w = qtensor_from_ggml(dtype, &tensor_data, dims, device)?;
         // from_arc densifies float fallback entries, matching what ISQ produces at load
-        Ok(Self::from_parts(
+        Self::from_parts(
             QMatMul::from_arc(w.into())?,
             b,
             crate::ImatrixLayerStats::empty(),
-        ))
+        )
+        .prepare()
     }
 
     /// Construct without `QMatMul::from_arc`: densifying would bypass the gather kernels
@@ -406,16 +413,22 @@ impl GgufMatMul {
 }
 
 impl QuantMethod for GgufMatMul {
+    #[cfg(feature = "metal")]
+    fn prepare_metal_kernels(&self, _activation_dtype: DType) -> Result<()> {
+        crate::metal_kernels::prepare_gguf(&self.w)
+    }
+
     fn new(method: QuantMethodConfig) -> Result<Self>
     where
         Self: Sized,
     {
         match method {
-            QuantMethodConfig::Gguf { q_weight, b } => Ok(Self::from_parts(
+            QuantMethodConfig::Gguf { q_weight, b } => Self::from_parts(
                 QMatMul::from_arc(q_weight)?,
                 b,
                 crate::ImatrixLayerStats::empty(),
-            )),
+            )
+            .prepare(),
             QuantMethodConfig::GptqAwq { .. }
             | QuantMethodConfig::Unquantized(_)
             | QuantMethodConfig::Hqq { .. }
@@ -607,7 +620,9 @@ impl QuantMethod for GgufMatMul {
                 let w = QMatMul::QTensor(std::sync::Arc::new(
                     candle_core::quantized::QTensor::quantize(&(w + delta)?, dtype)?,
                 ));
-                Ok(Arc::new(Self::from_parts(w, b.clone(), stats.clone())))
+                Ok(Arc::new(
+                    Self::from_parts(w, b.clone(), stats.clone()).prepare()?,
+                ))
             }
         }
     }
@@ -653,7 +668,9 @@ impl QuantMethod for GgufMatMul {
                             .as_ref()
                             .map(|bias| bias.to_device(&device))
                             .transpose()?;
-                        return Ok(Arc::new(GgufMatMul::from_parts(w, b, self.stats.clone())));
+                        return Ok(Arc::new(
+                            GgufMatMul::from_parts(w, b, self.stats.clone()).prepare()?,
+                        ));
                     }
                 }
             }
@@ -708,7 +725,9 @@ impl QuantMethod for GgufMatMul {
             } else {
                 None
             };
-            Ok(Arc::new(GgufMatMul::from_parts(w, b, self.stats.clone())))
+            Ok(Arc::new(
+                GgufMatMul::from_parts(w, b, self.stats.clone()).prepare()?,
+            ))
         }
     }
 

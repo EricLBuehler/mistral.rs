@@ -79,6 +79,11 @@ impl QuantizedSerde for DynamicLoraLinear {
 }
 
 impl QuantMethod for DynamicLoraLinear {
+    #[cfg(feature = "metal")]
+    fn prepare_metal_kernels(&self, activation_dtype: DType) -> Result<()> {
+        self.base.prepare_metal_kernels(activation_dtype)
+    }
+
     fn new(_method: QuantMethodConfig) -> Result<Self>
     where
         Self: Sized,

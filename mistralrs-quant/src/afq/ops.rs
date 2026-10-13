@@ -770,6 +770,11 @@ pub fn metal_moe_weighted_reduce_flat(
     )))
 }
 
+#[cfg(feature = "metal")]
+pub fn afq_sorted_gather_supported(group_size: AfqGroupSize, bits: AfqBits) -> bool {
+    matches!(group_size, AfqGroupSize::Med) && matches!(bits, AfqBits::Four | AfqBits::Eight)
+}
+
 /// Sorted-MoE tiled grouped GEMM via the MLX-ported `affine_gather_qmm_rhs`
 /// kernel. `x_sorted` is `[M, K]` row-contiguous with rows pre-sorted so that
 /// rows mapped to the same expert are contiguous. `sorted_expert_ids` is `[M]`

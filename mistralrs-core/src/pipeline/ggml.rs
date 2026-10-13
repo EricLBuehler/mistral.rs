@@ -366,6 +366,8 @@ impl Loader for GGMLLoader {
             .as_ref()
             .and_then(GenerationConfig::generation_defaults);
         let eos = calculate_eos_tokens(&chat_template, gen_conf.as_ref(), &tokenizer);
+        #[cfg(feature = "metal")]
+        crate::metal::warmup_common_kernels(device)?;
         Ok(Arc::new(Mutex::new(GGMLPipeline {
             model,
             tokenizer: tokenizer.into(),

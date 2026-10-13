@@ -13,6 +13,9 @@ use std::os::raw::c_void;
 use std::sync::{Arc, RwLock};
 use std::{collections::HashMap, sync::OnceLock};
 
+mod prepare;
+pub(crate) use prepare::{prepare_afq, prepare_dense, prepare_gguf};
+
 pub mod utils;
 use utils::{
     get_2d_grid_dims, get_2d_grid_dims_divisor, get_block_dims, linear_split, EncoderParam,
@@ -54,9 +57,9 @@ impl<T> From<std::sync::PoisonError<T>> for MetalKernelError {
     }
 }
 
-type Pipelines = HashMap<(String, Option<ConstantValues>), ComputePipeline>;
+type Pipelines = HashMap<(u64, String, Option<ConstantValues>), ComputePipeline>;
 
-static LIBRARY: OnceLock<Library> = OnceLock::new();
+static LIBRARIES: OnceLock<RwLock<HashMap<u64, Library>>> = OnceLock::new();
 static GLOBAL_KERNELS: OnceLock<Kernels> = OnceLock::new();
 
 // Process-wide: callers construct `Kernels` per dispatch, so a per-instance cache rebuilt pipelines every call.
@@ -88,7 +91,13 @@ impl Kernels {
     /// If this has been previously loaded it will just fetch it from cache.
     #[allow(clippy::const_is_empty)] // KERNELS can be empty when MISTRALRS_METAL_PRECOMPILE=0
     pub fn load_library(&self, device: &Device) -> Result<Library, MetalKernelError> {
-        if let Some(lib) = LIBRARY.get() {
+        let key = device.registry_id();
+        let libraries = LIBRARIES.get_or_init(|| RwLock::new(HashMap::new()));
+        if let Some(lib) = libraries.read()?.get(&key) {
+            return Ok(lib.clone());
+        }
+        let mut libraries = libraries.write()?;
+        if let Some(lib) = libraries.get(&key) {
             Ok(lib.clone())
         } else {
             // Try to load precompiled metallib first (faster startup)
@@ -113,7 +122,8 @@ impl Kernels {
                 // (e.g., when MISTRALRS_METAL_PRECOMPILE=0)
                 self.compile_kernels_at_runtime(device)?
             };
-            Ok(LIBRARY.get_or_init(|| lib).clone())
+            libraries.insert(key, lib.clone());
+            Ok(lib)
         }
     }
 
@@ -145,7 +155,7 @@ impl Kernels {
     }
 
     /// Load a kernel pipeline, specializing it with the given Metal function
-    /// constants if any. Cached per (name, constants) so distinct
+    /// constants if any. Cached per (device, name, constants) so distinct
     /// specializations don't share a slot. Hot path (no constants): a
     /// read-lock lookup, no contention.
     pub fn load_pipeline_with_constants(
@@ -154,24 +164,25 @@ impl Kernels {
         name: impl ToString,
         constants: Option<ConstantValues>,
     ) -> Result<ComputePipelineState, MetalKernelError> {
+        let device_id = device.registry_id();
         let name_str = name.to_string();
         if constants.is_none() {
             let pipelines = pipelines().read()?;
-            if let Some(pipeline) = pipelines.get(&(name_str.clone(), None)) {
+            if let Some(pipeline) = pipelines.get(&(device_id, name_str.clone(), None)) {
                 return Ok(pipeline.clone());
             }
         }
         let mut pipelines = pipelines().write()?;
-        let key = (name_str, constants);
+        let key = (device_id, name_str, constants);
         if let Some(pipeline) = pipelines.get(&key) {
             return Ok(pipeline.clone());
         }
-        let (name, constants) = key;
+        let (device_id, name, constants) = key;
         let func = self.load_function(device, &name, constants.as_ref())?;
         let pipeline = device
             .new_compute_pipeline_state_with_function(&func)
             .map_err(|e| MetalKernelError::FailedToCreatePipeline(e.to_string()))?;
-        pipelines.insert((name, constants), pipeline.clone());
+        pipelines.insert((device_id, name, constants), pipeline.clone());
         Ok(pipeline)
     }
 }
@@ -852,17 +863,7 @@ pub fn call_afq_embedding(
     bits: usize,
     group_size: usize,
 ) -> Result<(), MetalKernelError> {
-    let type_string = match ty {
-        DType::F32 => "float",
-        DType::BF16 => "bfloat16_t",
-        DType::F16 => "float16_t",
-        other => {
-            return Err(MetalKernelError::DTypeMismatch {
-                expected: vec![DType::F32, DType::F16, DType::BF16],
-                got: other,
-            })
-        }
-    };
+    let type_string = afq_type_name(ty)?;
     let name = format!("affine_embedding_{type_string}_gs_{group_size}_b_{bits}");
     let pipeline = kernels.load_pipeline(device, &name)?;
 
@@ -911,51 +912,52 @@ pub fn call_afq_embedding(
     Ok(())
 }
 
-#[allow(clippy::too_many_arguments)]
-pub fn call_afq_qmm(
-    device: &Device,
-    ep: impl EncoderProvider,
-    kernels: &Kernels,
-    ty: DType,
-    x: &Buffer,
-    x_offset: usize,
-    x_shape: &[usize],
-    x_stride: &[usize],
-    w: &Buffer,
-    w_shape: &[usize],
-    w_stride: &[usize],
-    scales: &Buffer,
-    s_stride: &[usize],
-    biases: &Buffer,
-    b_stride: &[usize],
-    out: &Buffer,
-    out_shape: &[usize],
-    gather_lhs_rhs_indices: Option<(&Buffer, &Buffer)>,
-    gather_lhs_shape: Option<&[usize]>,
-    gather_lhs_rhs_strides: Option<(&[usize], &[usize])>,
+#[derive(Clone, Copy)]
+struct AfqQmmShape {
+    input: usize,
+    output: usize,
+    rows: usize,
+    batches: usize,
+    batched: bool,
+    gather: bool,
     transpose: bool,
+}
+
+struct AfqQmmDispatch {
+    name: String,
+    matrix: bool,
+    group_dims: MTLSize,
+    grid_dims: MTLSize,
+}
+
+fn afq_type_name(dtype: DType) -> Result<&'static str, MetalKernelError> {
+    match dtype {
+        DType::F32 => Ok("float"),
+        DType::BF16 => Ok("bfloat16_t"),
+        DType::F16 => Ok("float16_t"),
+        got => Err(MetalKernelError::DTypeMismatch {
+            expected: vec![DType::F32, DType::F16, DType::BF16],
+            got,
+        }),
+    }
+}
+
+fn afq_qmm_dispatch(
+    device: &Device,
+    shape: AfqQmmShape,
+    ty: DType,
     bits: usize,
     group_size: usize,
-) -> Result<(), MetalKernelError> {
-    let gather = gather_lhs_rhs_indices.is_some();
-
-    let batched = !gather && w_shape.len() > 2;
-
-    let d = x_shape[x_shape.len() - 1];
-    let o = out_shape[out_shape.len() - 1];
-    // For the unbatched W case, avoid `adjust_matrix_offsets`
-    // for a small performance gain.
-    let b = if batched || gather {
-        x_shape[x_shape.len() - 2]
-    } else {
-        x_shape.iter().product::<usize>() / d
-    };
-    let n = if batched || gather {
-        out_shape.iter().product::<usize>() / b / o
-    } else {
-        1
-    };
-
+) -> Result<AfqQmmDispatch, MetalKernelError> {
+    let AfqQmmShape {
+        input: d,
+        output: o,
+        rows: b,
+        batches: n,
+        batched,
+        gather,
+        transpose,
+    } = shape;
     let mut name = if gather {
         "bs_".to_string()
     } else {
@@ -992,41 +994,72 @@ pub fn call_afq_qmm(
         4
     };
 
-    // Decode batches: read each weight block once for every row instead of once per row.
     if transpose && !batched && !gather && (QMV_ROWS_MIN..=QMM_SMALL_MAX_ROWS).contains(&b) {
-        let args = QmvRows {
-            ty,
-            x: (x, x_offset),
-            w,
-            scales,
-            biases,
-            out,
-            in_vec_size: d,
-            out_vec_size: o,
-            num_rows: b,
-            bits,
-            group_size,
-        };
+        let type_string = afq_type_name(ty)?;
         let qmv_fast_shape = o.is_multiple_of(8) && d.is_multiple_of(512) && d >= 512;
         let qmv_quad_shape = (d == 128 || d == 64) && bits.is_power_of_two();
-        if b <= QMM_ROWS8_MAX_ROWS
+        let (name, group_dims, grid_dims) = if b <= QMM_ROWS8_MAX_ROWS
             && b > QMV_ROWS_MAX_FOR_ROWS_KERNEL
             && d.is_multiple_of(QMM_ROWS8_K_CHUNK)
             && o.is_multiple_of(QMM_ROWS8_OUTS_PER_SIMDGROUP)
             && QMV_ROWS_BITS.contains(&bits)
             && group_size.is_multiple_of(QMM_ROWS8_LANE_RUN)
         {
-            return encode_qmm_t_rows8(device, ep, kernels, args);
-        }
-        return if b <= QMV_ROWS_MAX_FOR_ROWS_KERNEL
+            (
+                format!("qmm_t_rows8_{type_string}_gs_{group_size}_b_{bits}"),
+                MTLSize {
+                    width: 32,
+                    height: QMM_ROWS8_SIMDGROUPS,
+                    depth: 1,
+                },
+                MTLSize {
+                    width: o.div_ceil(QMM_ROWS8_OUTS_PER_SIMDGROUP * QMM_ROWS8_SIMDGROUPS),
+                    height: 1,
+                    depth: 1,
+                },
+            )
+        } else if b <= QMV_ROWS_MAX_FOR_ROWS_KERNEL
             && qmv_fast_shape
             && !qmv_quad_shape
             && QMV_ROWS_BITS.contains(&bits)
         {
-            encode_qmv_fast_rows(device, ep, kernels, args)
+            let rows_per_group = if b <= 2 { 2 } else { QMV_ROWS_MAX };
+            (
+                format!("qmv_fast_rows_{type_string}_gs_{group_size}_b_{bits}_r_{rows_per_group}"),
+                MTLSize {
+                    width: 32,
+                    height: 2,
+                    depth: 1,
+                },
+                MTLSize {
+                    width: o / QMV_RESULTS_PER_THREADGROUP,
+                    height: b.div_ceil(rows_per_group),
+                    depth: 1,
+                },
+            )
         } else {
-            encode_qmm_t_small(device, ep, kernels, args)
+            let (bm, wm, wn) = if b <= 8 { (8, 1, 4) } else { (16, 2, 2) };
+            let aligned = o.is_multiple_of(QMM_SMALL_BN);
+            (
+                format!("qmm_t_small_{type_string}_gs_{group_size}_b_{bits}_alN_{aligned}_bm_{bm}"),
+                MTLSize {
+                    width: 32,
+                    height: wn,
+                    depth: wm,
+                },
+                MTLSize {
+                    width: o.div_ceil(QMM_SMALL_BN),
+                    height: b.div_ceil(bm),
+                    depth: 1,
+                },
+            )
         };
+        return Ok(AfqQmmDispatch {
+            name,
+            matrix: true,
+            group_dims,
+            grid_dims,
+        });
     }
 
     let (group_dims, grid_dims) = if transpose {
@@ -1160,17 +1193,7 @@ pub fn call_afq_qmm(
         "false"
     };
 
-    let type_string = match ty {
-        DType::F32 => "float",
-        DType::BF16 => "bfloat16_t",
-        DType::F16 => "float16_t",
-        other => {
-            return Err(MetalKernelError::DTypeMismatch {
-                expected: vec![DType::F32, DType::F16, DType::BF16],
-                got: other,
-            })
-        }
-    };
+    let type_string = afq_type_name(ty)?;
 
     name = format!("{name}_{type_string}_gs_{group_size}_b_{bits}");
     if quad {
@@ -1183,6 +1206,80 @@ pub fn call_afq_qmm(
         name.push_str(&format!("_batch_{}", batched as usize));
     }
     name.push_str(tile_suffix);
+
+    Ok(AfqQmmDispatch {
+        name,
+        matrix,
+        group_dims,
+        grid_dims,
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn call_afq_qmm(
+    device: &Device,
+    ep: impl EncoderProvider,
+    kernels: &Kernels,
+    ty: DType,
+    x: &Buffer,
+    x_offset: usize,
+    x_shape: &[usize],
+    x_stride: &[usize],
+    w: &Buffer,
+    w_shape: &[usize],
+    w_stride: &[usize],
+    scales: &Buffer,
+    s_stride: &[usize],
+    biases: &Buffer,
+    b_stride: &[usize],
+    out: &Buffer,
+    out_shape: &[usize],
+    gather_lhs_rhs_indices: Option<(&Buffer, &Buffer)>,
+    gather_lhs_shape: Option<&[usize]>,
+    gather_lhs_rhs_strides: Option<(&[usize], &[usize])>,
+    transpose: bool,
+    bits: usize,
+    group_size: usize,
+) -> Result<(), MetalKernelError> {
+    let gather = gather_lhs_rhs_indices.is_some();
+
+    let batched = !gather && w_shape.len() > 2;
+
+    let d = x_shape[x_shape.len() - 1];
+    let o = out_shape[out_shape.len() - 1];
+    // For the unbatched W case, avoid `adjust_matrix_offsets`
+    // for a small performance gain.
+    let b = if batched || gather {
+        x_shape[x_shape.len() - 2]
+    } else {
+        x_shape.iter().product::<usize>() / d
+    };
+    let n = if batched || gather {
+        out_shape.iter().product::<usize>() / b / o
+    } else {
+        1
+    };
+
+    let AfqQmmDispatch {
+        name,
+        matrix,
+        group_dims,
+        grid_dims,
+    } = afq_qmm_dispatch(
+        device,
+        AfqQmmShape {
+            input: d,
+            output: o,
+            rows: b,
+            batches: n,
+            batched,
+            gather,
+            transpose,
+        },
+        ty,
+        bits,
+        group_size,
+    )?;
 
     let pipeline = kernels.load_pipeline(device, &name)?;
 
@@ -1280,73 +1377,10 @@ const QMV_ROWS_MIN: usize = 2;
 const QMV_ROWS_BITS: [usize; 3] = [2, 4, 8];
 // Rows per threadgroup; more spill the per-row activation registers.
 const QMV_ROWS_MAX: usize = 4;
+const QMV_RESULTS_PER_THREADGROUP: usize = 8;
+const QMM_SMALL_BN: usize = 32;
 // From 5 rows qmm_t_small's MMA tiles beat qmv_fast_rows (flat cost up to its 8-row tile).
 const QMV_ROWS_MAX_FOR_ROWS_KERNEL: usize = 4;
-
-struct QmvRows<'a> {
-    ty: DType,
-    x: (&'a Buffer, usize),
-    w: &'a Buffer,
-    scales: &'a Buffer,
-    biases: &'a Buffer,
-    out: &'a Buffer,
-    in_vec_size: usize,
-    out_vec_size: usize,
-    num_rows: usize,
-    bits: usize,
-    group_size: usize,
-}
-
-/// Small-batch qmv that reads each weight block once for up to 8 input rows.
-fn encode_qmv_fast_rows(
-    device: &Device,
-    ep: impl EncoderProvider,
-    kernels: &Kernels,
-    args: QmvRows<'_>,
-) -> Result<(), MetalKernelError> {
-    const RESULTS_PER_THREADGROUP: usize = 8;
-    let rows_per_group = if args.num_rows <= 2 { 2 } else { QMV_ROWS_MAX };
-    let type_string = match args.ty {
-        DType::F32 => "float",
-        DType::BF16 => "bfloat16_t",
-        DType::F16 => "float16_t",
-        other => {
-            return Err(MetalKernelError::DTypeMismatch {
-                expected: vec![DType::F32, DType::F16, DType::BF16],
-                got: other,
-            })
-        }
-    };
-    let name = format!(
-        "qmv_fast_rows_{type_string}_gs_{}_b_{}_r_{rows_per_group}",
-        args.group_size, args.bits
-    );
-    let pipeline = kernels.load_pipeline(device, &name)?;
-    let encoder = ep.encoder();
-    let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
-    encoder.set_compute_pipeline_state(&pipeline);
-    encoder.set_input_buffer(0, Some(args.w), 0);
-    encoder.set_input_buffer(1, Some(args.scales), 0);
-    encoder.set_input_buffer(2, Some(args.biases), 0);
-    encoder.set_input_buffer(3, Some(args.x.0), args.x.1);
-    encoder.set_output_buffer(4, Some(args.out), 0);
-    <i32 as EncoderParam>::set_param(encoder, 5, args.in_vec_size as i32);
-    <i32 as EncoderParam>::set_param(encoder, 6, args.out_vec_size as i32);
-    <i32 as EncoderParam>::set_param(encoder, 7, args.num_rows as i32);
-    encoder.dispatch_thread_groups(
-        MTLSize {
-            width: args.out_vec_size / RESULTS_PER_THREADGROUP,
-            height: args.num_rows.div_ceil(rows_per_group),
-            depth: 1,
-        },
-        MTLSize {
-            width: 32,
-            height: 2,
-            depth: 1,
-        },
-    );
-    Ok(())
-}
 
 const QMM_SMALL_MAX_ROWS: usize = 16;
 // qmm_t_rows8 geometry: one 8x8 MMA tile of outputs x rows per simdgroup, 4 simdgroups per threadgroup, and each
@@ -1356,112 +1390,6 @@ const QMM_ROWS8_OUTS_PER_SIMDGROUP: usize = 8;
 const QMM_ROWS8_SIMDGROUPS: usize = 4;
 const QMM_ROWS8_K_CHUNK: usize = 128;
 const QMM_ROWS8_LANE_RUN: usize = 32;
-
-fn encode_qmm_t_rows8(
-    device: &Device,
-    ep: impl EncoderProvider,
-    kernels: &Kernels,
-    args: QmvRows<'_>,
-) -> Result<(), MetalKernelError> {
-    let type_string = match args.ty {
-        DType::F32 => "float",
-        DType::BF16 => "bfloat16_t",
-        DType::F16 => "float16_t",
-        other => {
-            return Err(MetalKernelError::DTypeMismatch {
-                expected: vec![DType::F32, DType::F16, DType::BF16],
-                got: other,
-            })
-        }
-    };
-    let name = format!(
-        "qmm_t_rows8_{type_string}_gs_{}_b_{}",
-        args.group_size, args.bits
-    );
-    let pipeline = kernels.load_pipeline(device, &name)?;
-    let encoder = ep.encoder();
-    let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
-    encoder.set_compute_pipeline_state(&pipeline);
-    encoder.set_input_buffer(0, Some(args.w), 0);
-    encoder.set_input_buffer(1, Some(args.scales), 0);
-    encoder.set_input_buffer(2, Some(args.biases), 0);
-    encoder.set_input_buffer(3, Some(args.x.0), args.x.1);
-    encoder.set_output_buffer(4, Some(args.out), 0);
-    <i32 as EncoderParam>::set_param(encoder, 5, args.in_vec_size as i32);
-    <i32 as EncoderParam>::set_param(encoder, 6, args.out_vec_size as i32);
-    <i32 as EncoderParam>::set_param(encoder, 7, args.num_rows as i32);
-    encoder.dispatch_thread_groups(
-        MTLSize {
-            width: args
-                .out_vec_size
-                .div_ceil(QMM_ROWS8_OUTS_PER_SIMDGROUP * QMM_ROWS8_SIMDGROUPS),
-            height: 1,
-            depth: 1,
-        },
-        MTLSize {
-            width: 32,
-            height: QMM_ROWS8_SIMDGROUPS,
-            depth: 1,
-        },
-    );
-    Ok(())
-}
-
-/// Tiled qmm_t with 8- or 16-row tiles for decode batches.
-fn encode_qmm_t_small(
-    device: &Device,
-    ep: impl EncoderProvider,
-    kernels: &Kernels,
-    args: QmvRows<'_>,
-) -> Result<(), MetalKernelError> {
-    const BN: usize = 32;
-    let (bm, wm, wn) = if args.num_rows <= 8 {
-        (8, 1, 4)
-    } else {
-        (16, 2, 2)
-    };
-    let type_string = match args.ty {
-        DType::F32 => "float",
-        DType::BF16 => "bfloat16_t",
-        DType::F16 => "float16_t",
-        other => {
-            return Err(MetalKernelError::DTypeMismatch {
-                expected: vec![DType::F32, DType::F16, DType::BF16],
-                got: other,
-            })
-        }
-    };
-    let aligned = args.out_vec_size.is_multiple_of(BN);
-    let name = format!(
-        "qmm_t_small_{type_string}_gs_{}_b_{}_alN_{aligned}_bm_{bm}",
-        args.group_size, args.bits
-    );
-    let pipeline = kernels.load_pipeline(device, &name)?;
-    let encoder = ep.encoder();
-    let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
-    encoder.set_compute_pipeline_state(&pipeline);
-    encoder.set_input_buffer(0, Some(args.w), 0);
-    encoder.set_input_buffer(1, Some(args.scales), 0);
-    encoder.set_input_buffer(2, Some(args.biases), 0);
-    encoder.set_input_buffer(3, Some(args.x.0), args.x.1);
-    encoder.set_output_buffer(4, Some(args.out), 0);
-    <i32 as EncoderParam>::set_param(encoder, 5, args.in_vec_size as i32);
-    <i32 as EncoderParam>::set_param(encoder, 6, args.out_vec_size as i32);
-    <i32 as EncoderParam>::set_param(encoder, 7, args.num_rows as i32);
-    encoder.dispatch_thread_groups(
-        MTLSize {
-            width: args.out_vec_size.div_ceil(BN),
-            height: args.num_rows.div_ceil(bm),
-            depth: 1,
-        },
-        MTLSize {
-            width: 32,
-            height: wn,
-            depth: wm,
-        },
-    );
-    Ok(())
-}
 
 /// Split-K AFQ qmm_t. Writes `[split_k, m, n]` to `out`; caller sums over
 /// the leading split_k dim to get the final `[m, n]`.
@@ -1494,17 +1422,7 @@ pub fn call_afq_qmm_splitk(
     let k_partition_size = k / split_k;
     let split_k_partition_stride = (m * n) as i32;
 
-    let type_string = match ty {
-        DType::F32 => "float",
-        DType::BF16 => "bfloat16_t",
-        DType::F16 => "float16_t",
-        other => {
-            return Err(MetalKernelError::DTypeMismatch {
-                expected: vec![DType::F32, DType::F16, DType::BF16],
-                got: other,
-            })
-        }
-    };
+    let type_string = afq_type_name(ty)?;
     let aligned = if n.is_multiple_of(32) {
         "true"
     } else {
@@ -1581,17 +1499,7 @@ pub fn call_afq_gather_qmm_rhs(
     bits: usize,
     group_size: usize,
 ) -> Result<(), MetalKernelError> {
-    let type_string = match ty {
-        DType::F32 => "float",
-        DType::BF16 => "bfloat16_t",
-        DType::F16 => "float16_t",
-        other => {
-            return Err(MetalKernelError::DTypeMismatch {
-                expected: vec![DType::F32, DType::F16, DType::BF16],
-                got: other,
-            })
-        }
-    };
+    let type_string = afq_type_name(ty)?;
 
     let (bm, bn, bk, wm, wn) = pick_afq_gather_rhs_tile(m);
     let align_m = m.is_multiple_of(bm);
@@ -1661,17 +1569,7 @@ pub fn call_afq_gather_qmm_rhs_gate_up(
     group_size: usize,
     act_idx: usize,
 ) -> Result<(), MetalKernelError> {
-    let type_string = match ty {
-        DType::F32 => "float",
-        DType::BF16 => "bfloat16_t",
-        DType::F16 => "float16_t",
-        other => {
-            return Err(MetalKernelError::DTypeMismatch {
-                expected: vec![DType::F32, DType::F16, DType::BF16],
-                got: other,
-            })
-        }
-    };
+    let type_string = afq_type_name(ty)?;
 
     // Reuse the same tile picker but only BM=16/32 are instantiated for the
     // fused kernel (BM=64 isn't a win and would double instantiations).
@@ -1723,6 +1621,21 @@ pub fn call_afq_gather_qmm_rhs_gate_up(
     Ok(())
 }
 
+fn moe_weighted_reduce_kernel_name(ty: DType) -> Result<String, MetalKernelError> {
+    let type_string = match ty {
+        DType::F32 => "float",
+        DType::BF16 => "bfloat",
+        DType::F16 => "half",
+        got => {
+            return Err(MetalKernelError::DTypeMismatch {
+                expected: vec![DType::F32, DType::F16, DType::BF16],
+                got,
+            })
+        }
+    };
+    Ok(format!("moe_weighted_reduce_flat_{type_string}"))
+}
+
 /// Fused topk-weighted reduce: collapses
 /// `[num_tokens * topk, hidden]` (per-assignment outputs in row-contiguous
 /// (token, slot) order) into `[num_tokens, hidden]`, with each slot scaled by
@@ -1743,18 +1656,7 @@ pub fn call_moe_weighted_reduce_flat(
     hidden: usize,
     topk: usize,
 ) -> Result<(), MetalKernelError> {
-    let type_string = match ty {
-        DType::F32 => "float",
-        DType::BF16 => "bfloat",
-        DType::F16 => "half",
-        other => {
-            return Err(MetalKernelError::DTypeMismatch {
-                expected: vec![DType::F32, DType::F16, DType::BF16],
-                got: other,
-            })
-        }
-    };
-    let name = format!("moe_weighted_reduce_flat_{type_string}");
+    let name = moe_weighted_reduce_kernel_name(ty)?;
     let pipeline = kernels.load_pipeline(device, &name)?;
 
     let encoder = ep.encoder();
@@ -4816,17 +4718,7 @@ pub fn call_afq_qmm_gate_up(
     group_size: usize,
     act_code: u32,
 ) -> Result<(), MetalKernelError> {
-    let type_string = match ty {
-        DType::F32 => "float",
-        DType::BF16 => "bfloat16_t",
-        DType::F16 => "float16_t",
-        other => {
-            return Err(MetalKernelError::DTypeMismatch {
-                expected: vec![DType::F32, DType::F16, DType::BF16],
-                got: other,
-            })
-        }
-    };
+    let type_string = afq_type_name(ty)?;
     let aligned = if n.is_multiple_of(32) {
         "true"
     } else {
@@ -4897,17 +4789,7 @@ pub fn call_afq_qmm_qkv(
     bits: usize,
     group_size: usize,
 ) -> Result<(), MetalKernelError> {
-    let type_string = match ty {
-        DType::F32 => "float",
-        DType::BF16 => "bfloat16_t",
-        DType::F16 => "float16_t",
-        other => {
-            return Err(MetalKernelError::DTypeMismatch {
-                expected: vec![DType::F32, DType::F16, DType::BF16],
-                got: other,
-            })
-        }
-    };
+    let type_string = afq_type_name(ty)?;
     let name = format!("qmm_t_qkv_{type_string}_gs_{group_size}_b_{bits}");
     let pipeline = kernels.load_pipeline(device, &name)?;
     let encoder = ep.encoder();

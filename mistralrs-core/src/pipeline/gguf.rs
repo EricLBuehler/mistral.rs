@@ -1478,6 +1478,16 @@ impl Loader for GGUFLoader {
             .as_ref()
             .and_then(GenerationConfig::generation_defaults);
         let eos = calculate_eos_tokens(&chat_template, gen_conf.as_ref(), &tokenizer);
+        #[cfg(feature = "metal")]
+        super::metal_warmup::prepare_model(super::metal_warmup::MetalModelWarmup {
+            device,
+            mapper: pipeline_mapper.as_ref(),
+            model: &model_config_metadata,
+            paged: None,
+            dtype: internal_dtype,
+            tracked_modules: &[],
+            packed_prefill: false,
+        })?;
         Ok(Arc::new(Mutex::new(GGUFPipeline {
             model,
             tokenizer: tokenizer.into(),

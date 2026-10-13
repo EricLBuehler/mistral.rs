@@ -1,4 +1,4 @@
-use candle_core::{DType, MetalStorage, Result, Shape, Storage, Tensor};
+use candle_core::{DType, MetalDevice, MetalStorage, Result, Shape, Storage, Tensor};
 use candle_metal_kernels::metal::{Buffer, ConstantValues, Value};
 use objc2_metal::MTLSize;
 
@@ -107,7 +107,7 @@ impl PrefillParams {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct MetalPagedPrefillShape {
     pub num_seqs: usize,
     pub num_heads: usize,
@@ -123,6 +123,153 @@ pub struct MetalPagedPrefillShape {
     pub cache_dtype: DType,
     pub packed_queries: bool,
     pub hnd: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct MetalPagedAttentionWarmup {
+    pub shape: MetalPagedPrefillShape,
+    pub causal: bool,
+    pub sliding_window: Option<usize>,
+    pub window_right: Option<usize>,
+    pub attention_chunk_size: Option<usize>,
+    pub alibi_dtype: Option<DType>,
+    pub sink_dtype: Option<DType>,
+    pub softcap: bool,
+}
+
+impl MetalPagedAttentionWarmup {
+    fn params(self) -> Result<PrefillParams> {
+        let s = self.shape;
+        Ok(PrefillParams {
+            heads: s.num_heads as u64,
+            kv_heads: s.num_kv_heads as u64,
+            key_dim: s.key_head_dim as u64,
+            value_dim: s.value_head_dim as u64,
+            block_size: s.block_size as u64,
+            packed_x: if s.hnd {
+                1
+            } else {
+                (super::METAL_PAGED_CACHE_VECTOR_BYTES / s.cache_dtype.size_in_bytes()) as u64
+            },
+            hnd: u64::from(s.hnd),
+            packed_queries: u64::from(s.packed_queries),
+            packed_mask: u64::from(s.packed_queries),
+            causal: u64::from(self.causal),
+            window_left: self.sliding_window.unwrap_or(0) as u64,
+            window_right: self.window_right.unwrap_or(0) as u64,
+            attention_chunk_size: self.attention_chunk_size.unwrap_or(0) as u64,
+            query_dtype: dtype_code(s.query_dtype)?,
+            cache_dtype: dtype_code(s.cache_dtype)?,
+            mask_dtype: ABSENT_DTYPE,
+            alibi_dtype: self
+                .alibi_dtype
+                .map(dtype_code)
+                .transpose()?
+                .unwrap_or(ABSENT_DTYPE),
+            sink_dtype: self
+                .sink_dtype
+                .map(dtype_code)
+                .transpose()?
+                .unwrap_or(ABSENT_DTYPE),
+            has_scales: u64::from(s.cache_dtype == DType::F8E4M3),
+            ..Default::default()
+        })
+    }
+}
+
+struct PrefillDispatch {
+    name: String,
+    query_tile: usize,
+    threads: usize,
+}
+
+impl MetalPagedPrefillShape {
+    fn dispatch(self) -> PrefillDispatch {
+        let matrix = self.value_head_dim <= MATRIX_VALUE_DIM;
+        let typed = matrix && self.key_head_dim <= MATRIX_VALUE_DIM;
+        let native_dtype = self.query_dtype == self.cache_dtype
+            && matches!(self.query_dtype, DType::F16 | DType::BF16);
+        let max_dim = self.key_head_dim.max(self.value_head_dim);
+        let wide = self.max_query_len > 1
+            && max_dim
+                <= if native_dtype {
+                    WIDE_NATIVE_HEAD_DIM
+                } else {
+                    WIDE_FLOAT_HEAD_DIM
+                };
+        let direct = native_dtype && max_dim > WIDE_NATIVE_HEAD_DIM && max_dim <= MATRIX_VALUE_DIM;
+        let operand_dtype = if native_dtype {
+            if self.query_dtype == DType::F16 {
+                "f16"
+            } else {
+                "bf16"
+            }
+        } else {
+            "f32"
+        };
+        let bucket = max_dim.next_power_of_two().max(MIN_TYPED_HEAD_DIM);
+        let name = if wide {
+            format!("paged_prefill_q32_{operand_dtype}_{bucket}")
+        } else if direct {
+            format!("paged_prefill_direct_{operand_dtype}_{bucket}")
+        } else if typed {
+            format!("paged_prefill_typed_{operand_dtype}_{bucket}")
+        } else if matrix {
+            "paged_prefill_matrix".into()
+        } else {
+            "paged_prefill_vector".into()
+        };
+        PrefillDispatch {
+            name,
+            query_tile: if wide {
+                WIDE_QUERY_TILE
+            } else if direct {
+                DIRECT_QUERY_TILE
+            } else if matrix {
+                MATRIX_QUERY_TILE
+            } else {
+                1
+            },
+            threads: if direct {
+                DIRECT_THREADS
+            } else if matrix {
+                MATRIX_THREADS
+            } else {
+                SIMD_WIDTH
+            },
+        }
+    }
+}
+
+pub fn prepare_metal_paged_attention(
+    device: &MetalDevice,
+    spec: MetalPagedAttentionWarmup,
+) -> Result<()> {
+    if !spec.shape.supports() {
+        candle_core::bail!(
+            "unsupported Metal paged attention warmup shape {:?}",
+            spec.shape
+        );
+    }
+    let kernels = Kernels::new();
+    let params = spec.params()?;
+    for max_query_len in [1, spec.shape.max_query_len] {
+        let shape = MetalPagedPrefillShape {
+            max_query_len,
+            ..spec.shape
+        };
+        kernels
+            .load_pipeline_with_constants(
+                device.device(),
+                shape.dispatch().name,
+                Some(params.constants(spec.softcap, shape.num_multimodal_ranges > 0)?),
+            )
+            .map_err(candle_core::Error::wrap)?;
+    }
+    kernels
+        .load_pipeline(device.device(), "paged_prefill_metadata_copy".into())
+        .map_err(candle_core::Error::wrap)?;
+    super::paged_attention::prepare_decode_kernels(device, spec)
 }
 
 impl MetalPagedPrefillShape {
@@ -426,7 +573,17 @@ pub fn metal_paged_prefill(request: MetalPagedPrefillRequest<'_>) -> Result<Tens
         q_offset += r.query_lens[row];
         k_offset += r.context_lens[row];
     }
-    let mut p = PrefillParams::default();
+    let mut p = MetalPagedAttentionWarmup {
+        shape,
+        causal: r.causal,
+        sliding_window: r.sliding_window,
+        window_right: r.window_right,
+        attention_chunk_size: r.attention_chunk_size,
+        alibi_dtype: r.alibi_slopes.map(Tensor::dtype),
+        sink_dtype: r.sinks.map(Tensor::dtype),
+        softcap: r.softcap.is_some(),
+    }
+    .params()?;
     for (target, stride) in p.query_strides.iter_mut().zip(r.query.stride()) {
         *target = *stride as u64;
     }
@@ -485,29 +642,15 @@ pub fn metal_paged_prefill(request: MetalPagedPrefillRequest<'_>) -> Result<Tens
     }
     let (alibi_dtype, alibi_stride) = feature_code(r.alibi_slopes, heads)?;
     let (sink_dtype, sink_stride) = feature_code(r.sinks, heads)?;
-    p.heads = heads as u64;
-    p.kv_heads = kv_heads as u64;
-    p.key_dim = key_dim as u64;
-    p.value_dim = value_dim as u64;
-    p.block_size = block_size as u64;
     p.packed_x = x as u64;
     p.query_axis = query_axis as u64;
-    p.hnd = u64::from(hnd);
-    p.packed_queries = u64::from(r.packed_queries);
-    p.causal = u64::from(r.causal);
-    p.window_left = r.sliding_window.unwrap_or(0) as u64;
-    p.query_dtype = dtype_code(r.query.dtype())?;
-    p.cache_dtype = dtype_code(r.key_cache.dtype())?;
     p.alibi_dtype = alibi_dtype;
     p.sink_dtype = sink_dtype;
     p.packed_mask = u64::from(r.packed_mask);
     p.batch = batch as u64;
     p.blocks = blocks as u64;
-    p.has_scales = u64::from(r.k_scale.is_some());
     p.alibi_stride = alibi_stride;
     p.sink_stride = sink_stride;
-    p.window_right = r.window_right.unwrap_or(0) as u64;
-    p.attention_chunk_size = r.attention_chunk_size.unwrap_or(0) as u64;
     let q = binding(r.query, r.query)?;
     let k = binding(r.key_cache, r.query)?;
     let v = binding(r.value_cache, r.query)?;
@@ -558,50 +701,11 @@ pub fn metal_paged_prefill(request: MetalPagedPrefillRequest<'_>) -> Result<Tens
     } else {
         None
     };
-    let matrix = value_dim <= MATRIX_VALUE_DIM;
-    let typed = matrix && key_dim <= MATRIX_VALUE_DIM;
-    let native_dtype = r.query.dtype() == r.key_cache.dtype()
-        && matches!(r.query.dtype(), DType::F16 | DType::BF16)
-        && r.k_scale.is_none();
-    let max_dim = key_dim.max(value_dim);
-    let wide = max_q > 1
-        && max_dim
-            <= if native_dtype {
-                WIDE_NATIVE_HEAD_DIM
-            } else {
-                WIDE_FLOAT_HEAD_DIM
-            };
-    let direct = native_dtype && max_dim > WIDE_NATIVE_HEAD_DIM && max_dim <= MATRIX_VALUE_DIM;
-    let operand_dtype = if native_dtype {
-        if r.query.dtype() == DType::F16 {
-            "f16"
-        } else {
-            "bf16"
-        }
-    } else {
-        "f32"
-    };
-    let bucket = max_dim.next_power_of_two().max(MIN_TYPED_HEAD_DIM);
-    let name = if wide {
-        format!("paged_prefill_q32_{operand_dtype}_{bucket}")
-    } else if direct {
-        format!("paged_prefill_direct_{operand_dtype}_{bucket}")
-    } else if typed {
-        format!("paged_prefill_typed_{operand_dtype}_{bucket}")
-    } else if matrix {
-        "paged_prefill_matrix".into()
-    } else {
-        "paged_prefill_vector".into()
-    };
-    let query_tile = if wide {
-        WIDE_QUERY_TILE
-    } else if direct {
-        DIRECT_QUERY_TILE
-    } else if matrix {
-        MATRIX_QUERY_TILE
-    } else {
-        1
-    };
+    let PrefillDispatch {
+        name,
+        query_tile,
+        threads,
+    } = shape.dispatch();
     let pipeline = kernels
         .load_pipeline_with_constants(
             device.device(),
@@ -638,13 +742,7 @@ pub fn metal_paged_prefill(request: MetalPagedPrefillRequest<'_>) -> Result<Tens
             depth: batch,
         },
         MTLSize {
-            width: if direct {
-                DIRECT_THREADS
-            } else if matrix {
-                MATRIX_THREADS
-            } else {
-                SIMD_WIDTH
-            },
+            width: threads,
             height: 1,
             depth: 1,
         },
@@ -659,4 +757,170 @@ pub fn metal_paged_prefill(request: MetalPagedPrefillRequest<'_>) -> Result<Tens
         )),
         out_shape,
     )))
+}
+
+#[cfg(test)]
+mod warmup_tests {
+    use super::*;
+
+    fn spec(head_dim: usize, heads: usize, kv_heads: usize) -> MetalPagedAttentionWarmup {
+        MetalPagedAttentionWarmup {
+            shape: MetalPagedPrefillShape {
+                num_seqs: 8,
+                num_heads: heads,
+                num_kv_heads: kv_heads,
+                max_query_len: 512,
+                total_query_tokens: 4096,
+                max_context_len: 32768,
+                key_head_dim: head_dim,
+                value_head_dim: head_dim,
+                block_size: 32,
+                num_multimodal_ranges: 0,
+                query_dtype: DType::BF16,
+                cache_dtype: DType::BF16,
+                packed_queries: false,
+                hnd: true,
+            },
+            causal: true,
+            sliding_window: None,
+            window_right: None,
+            attention_chunk_size: None,
+            alibi_dtype: None,
+            sink_dtype: None,
+            softcap: false,
+        }
+    }
+
+    #[test]
+    fn warmup_prefill_covers_wide_and_single_query_kernels() {
+        let mut qwen = spec(256, 24, 4);
+        assert_eq!(qwen.shape.dispatch().name, "paged_prefill_q32_bf16_256");
+        qwen.shape.max_query_len = 1;
+        assert_eq!(qwen.shape.dispatch().name, "paged_prefill_typed_bf16_256");
+        let mut gemma = spec(512, 8, 2);
+        assert_eq!(gemma.shape.dispatch().name, "paged_prefill_direct_bf16_512");
+        gemma.shape.max_query_len = 1;
+        assert_eq!(gemma.shape.dispatch().name, "paged_prefill_direct_bf16_512");
+    }
+
+    #[test]
+    fn warmup_prefill_constants_match_packed_and_legacy_cache_layouts() -> Result<()> {
+        let mut input = spec(256, 24, 4);
+        input.shape.packed_queries = true;
+        input.shape.hnd = false;
+        input.sliding_window = Some(1024);
+        input.alibi_dtype = Some(DType::F32);
+        let params = input.params()?;
+        assert_eq!(params.packed_x, 8);
+        assert_eq!(params.packed_mask, 1);
+        assert_eq!(params.packed_queries, 1);
+        assert_eq!(params.alibi_dtype, 2);
+        assert_eq!(params.window_left, 1024);
+        assert_eq!(params.mask_dtype, ABSENT_DTYPE);
+        assert_eq!(params.has_scales, 0);
+        input.shape.cache_dtype = DType::F8E4M3;
+        let params = input.params()?;
+        assert_eq!(params.packed_x, 16);
+        assert_eq!(params.has_scales, 1);
+        Ok(())
+    }
+
+    #[test]
+    #[ignore = "requires a Metal device"]
+    fn warmup_compiles_qwen_gemma_and_fp8_attention_variants() -> Result<()> {
+        let device = candle_core::Device::new_metal(0)?;
+        let device = device.as_metal_device()?;
+        for mut input in [spec(256, 24, 4), spec(512, 8, 2)] {
+            for packed in [false, true] {
+                input.shape.packed_queries = packed;
+                prepare_metal_paged_attention(device, input)?;
+            }
+        }
+        let mut input = spec(128, 8, 2);
+        input.shape.cache_dtype = DType::F8E4M3;
+        input.shape.hnd = false;
+        input.alibi_dtype = Some(DType::F32);
+        input.sink_dtype = Some(DType::F32);
+        input.softcap = true;
+        prepare_metal_paged_attention(device, input)
+    }
+
+    #[test]
+    #[ignore = "requires a Metal device and --test-threads=1"]
+    fn warmup_reuses_pipelines_for_real_prefill_and_decode() -> Result<()> {
+        const PROMPT_TOKENS: usize = 53;
+        let device = candle_core::Device::new_metal(0)?;
+        let metal = device.as_metal_device()?;
+        let cache = Tensor::zeros((2, 4, 32, 256), DType::BF16, &device)?;
+        let blocks = Tensor::new(&[[0u32, 1]], &device)?;
+        let query = Tensor::zeros((1, 24, PROMPT_TOKENS, 256), DType::BF16, &device)?;
+        let lengths = [PROMPT_TOKENS];
+        let positions = [0];
+        let mut input = spec(256, 24, 4);
+        for packed in [false, true] {
+            input.shape.packed_queries = packed;
+            prepare_metal_paged_attention(metal, input)?;
+        }
+        let prepared_count = crate::metal::kernels::cached_pipeline_count(metal.device());
+        for packed in [false, true] {
+            let output = metal_paged_prefill(MetalPagedPrefillRequest {
+                query: &query,
+                key_cache: &cache,
+                value_cache: &cache,
+                block_tables: &blocks,
+                query_lens: &lengths,
+                context_lens: &lengths,
+                query_start_positions: &positions,
+                key_start_positions: &positions,
+                packed_queries: packed,
+                causal: true,
+                sliding_window: None,
+                window_right: None,
+                attention_chunk_size: None,
+                multimodal_ranges: None,
+                additive_mask: None,
+                packed_mask: packed,
+                mask_key_offsets: None,
+                alibi_slopes: None,
+                sinks: None,
+                k_scale: None,
+                v_scale: None,
+                scale: 1.0 / 16.0,
+                softcap: None,
+            })?;
+            assert!(output
+                .to_dtype(DType::F32)?
+                .flatten_all()?
+                .to_vec1::<f32>()?
+                .into_iter()
+                .all(|value| value == 0.0));
+        }
+        let query = Tensor::zeros((1, 24, 256), DType::BF16, &device)?;
+        let lengths = Tensor::new(&[PROMPT_TOKENS as u32], &device)?;
+        let output = super::super::paged_attention::paged_attention(
+            &query,
+            None,
+            None,
+            &cache,
+            &cache,
+            &blocks,
+            &lengths,
+            None,
+            PROMPT_TOKENS,
+            1.0 / 16.0,
+            1.0,
+            None,
+        )?;
+        assert!(output
+            .to_dtype(DType::F32)?
+            .flatten_all()?
+            .to_vec1::<f32>()?
+            .into_iter()
+            .all(|value| value == 0.0));
+        assert_eq!(
+            prepared_count,
+            crate::metal::kernels::cached_pipeline_count(metal.device())
+        );
+        Ok(())
+    }
 }
