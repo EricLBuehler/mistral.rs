@@ -998,69 +998,106 @@ serial to begin with.
 4. Target context length for the first run? 32k costs 3.4 GB of KV, 262k costs 26.8 GB,
    which on top of 156.2 GB of weights does not leave headroom.
 5. Is the chat template and parser work (B4) in scope for this effort?
-## 10. Kolibri-1 measured (was: projected)
+## 10. Kolibri-1 measured
 
-The plan carried a projection for decode throughput. It is replaced here by a measurement,
-because two of the assumptions behind the projection turned out to be wrong: the model could
-not be loaded at all until L1, and the CPU decode GEMV could not read a bf16 weight.
+Replaces the projection this plan used to carry. Two of the projection's assumptions turned
+out to be wrong: the model could not be loaded until L1 landed, and the CPU decode GEMV could
+not read a bf16 weight at all.
 
-`kolibri1_decode_benchmark`, bf16 checkpoint (149 GB, 32 shards), node 3 only
-(`numactl --cpunodebind=3 --interleave=all`), `RAYON_NUM_THREADS=32`, batch 1:
+### What a decode step actually moves
+
+The first version of this arithmetic omitted the attention projections and came out at
+4.37 GB/token, which pointed at the routed-expert gather as the thing to fix. That was wrong:
+
+| component | bytes/token | share |
+| --- | --- | --- |
+| attention (q, k, v, o) | 3.41 GB | 50.0% |
+| routed experts (6 of 384, x 50 layers) | 2.36 GB | 34.6% |
+| lm_head | 0.66 GB | 9.6% |
+| shared expert | 0.39 GB | 5.8% |
+| **total** | **6.82 GB** | |
+
+Attention is half the traffic and the routed gather is a third. Optimising the gather alone
+caps out at a third of the problem.
+
+### Measured
+
+`kolibri1_decode_benchmark`, bf16 (149 GB, 32 shards), node 3, batch 1:
 
 | phase | measurement |
 | --- | --- |
-| load | 179 s |
-| prefill, 64 tokens | 8.8 s (7.3 tok/s) |
-| decode, 8 steps at len 65-72 | mean TPOT 577 ms, **1.73 tok/s** |
+| load | ~180 s |
+| prefill, 64 tokens | 7.3 tok/s |
+| decode | 1.92 tok/s, TPOT 519 ms (`--interleave=all`) |
 
-A decode step streams the six routed experts of all 50 layers, the shared expert, the dense
-attention projections and the head:
+That is 6.82 GB / 0.519 s = **13.1 GB/s** effective, against a box that streams **72.8 GB/s**
+from one node at 32 threads (measured, `bw.rs`: a 6 GB buffer summed across stripes - 2.7 GB/s
+at one thread, scaling near-linearly to 72.8 at 32).
 
-```
-384 experts, top_k 6, inter 512, hidden 2560, 50 layers
-  routed   6 x 3 x 2 x 512 x 2560 x 2 B = 0.38 GB
-  shared     1 x   2 x 2 x 512 x 2560 x 2 B = 0.01 GB   per layer
-  attn      4 x 2560 x 2560 x 2 B + 2 x 4 x 2560 x 128 x 2 B = 0.06 GB per layer
-  head      121598 x 2560 x 2 B = 0.62 GB
-  total    4.37 GB per token
-```
+### Where the time actually goes
 
-So 1.73 tok/s is **7.6 GB/s of effective bandwidth**. The box's best measured single-thread
-decode rate is 10.1 GB/s, and 32 threads should beat that comfortably, so the kernel is
-**not** yet saturating memory and the projection was optimistic for the wrong reason: it
-assumed bandwidth was the binding constraint and treated 10.1 GB/s as the ceiling, whereas the
-whole point of the output-parallel GEMV was to get past that ceiling. It has not, on this
-model.
+`perf record -F 499 -g` over the decode benchmark:
 
-Two concrete reasons it might not:
+| % | symbol | |
+| --- | --- | --- |
+| 23.9 | `moe_gather_cpu::par_fill` | routed-expert gather |
+| 14.1 | `memcpy` | copies |
+| 9.3 | `gemv_cpu::Weight::dot` | dense GEMV |
+| 11.5 | `crossbeam_epoch` + `Stealer::steal` | rayon synchronisation |
+| 8.7 | candle `gemm` + `pack_operands` | k/v projections |
 
-- The routed-expert gather reads six separate 5.2 MB slabs per projection. That is six short
-  streams per work item rather than one long one, so each thread spends proportionally more
-  time on TLB and prefetch boundaries than the dense GEMV does.
-- `PerExpertLinear::gather_rows` copies the activation row `top_k` times into an expanded
-  buffer before the kernel runs, and reads the expert ids back through a `to_vec1` that forces
-  a synchronous copy. At 4.37 GB/token those are not the bottleneck, but they are on the
-  critical path of every one of the three projections.
+11.5% in rayon's own bookkeeping is the part that should not be there. A decode step opens
+about 150 parallel regions - 3 projections x 2 per layer, plus the dense ones - and they are
+joined one at a time because layers are serial. The isolated kernels sum to about 87 ms/token;
+the model takes 519 ms.
 
-What this costs is worth stating plainly: the model is usable for single-stream generation at
-about one token per 0.6 s, which is far below what the hardware can do and is not competitive
-with a GPU. The next lever is not a smaller model, it is making the per-expert gather stream
-the way the dense GEMV does.
+### Thread scaling is poor, and the cause is not bandwidth
 
-### Where the numbers came from
+| threads | 1 | 2 | 4 | 8 | 16 | 32 |
+| --- | --- | --- | --- | --- | --- | --- |
+| tok/s | 1.16 | 0.83 | 1.15 | 1.42 | 1.48 | 1.92 |
 
-```
-KOLIBRI1_MODEL_DIR=/mnt/models/Aleph-Alpha/Kolibri-1-bf16 KOLIBRI1_BENCH_TOKENS=8 \
-  RAYON_NUM_THREADS=32 numactl --cpunodebind=3 --interleave=all \
-  cargo test --release -p mistralrs-core kolibri1_decode_benchmark -- --ignored --nocapture
-```
+1.66x across 32 threads, and **two threads is slower than one**. That dip is synchronisation,
+not bandwidth: the kernels in isolation scale 8.3x (`gemv_cpu` goes 12.7 -> 102.3 GB/s on
+q_proj). Page faults are ruled out - a decode run shows `majflt: 0` and flat `read_bytes`, so
+the model is fully resident and this is not re-reading from disk.
 
-### Correctness status alongside the throughput number
+### The NUMA configuration this plan recommended was wrong
 
-The golden gate does **not** currently certify this model. `todo/mistralrs/07-kolibri1-logit-gap.md`
-has the measurements: every structural element of the forward was diffed against
-`vllm.cpp/src/vllm/model_executor/models/kolibri1_forward.cpp` and matches, but this build
-reaches a 6.72 worst top-8 logit gap against the goldens where the reference reaches 2.19, and
-its first-step argmax is 2/8. The gate floors both at where this build measures so it catches a
-regression rather than certifying correctness. Throughput measured on a model that is not yet
-numerically correct should be read with that in mind.
+Every measurement up to this point used `numactl --cpunodebind=3 --interleave=all`, which
+strikes the page cache across all four nodes while the threads are pinned to one. Three
+quarters of the traffic then crosses the interconnect:
+
+| configuration | tok/s |
+| --- | --- |
+| `--interleave=3` (local) | 2.22 |
+| `--cpunodebind=3` alone | 2.04 |
+| `--interleave=all` | 1.80 |
+| no NUMA control | 1.69 |
+
+Local is ~23% ahead of `--interleave=all`, though run-to-run variance on this box is around
+20%, so the ordering is suggestive rather than established. The plan's earlier claim that
+"interleaving alone does nothing" was measured on a whole-host run and does not transfer to a
+single-node workload.
+
+Node 3 is also nearly full - 1.08 GB free of 67 GB, 58.7 GB of it file pages - so the
+page-cache residency the model depends on is competing with whatever else is on the box.
+
+### What is left
+
+In rough order of expected value:
+
+1. **Fuse the gate and up gathers.** They are two separate calls today over the same activation
+   and the same expert ids, so fusing halves the MoE's parallel regions - which is where the
+   11.5% of rayon overhead lives - and reads each activation row once instead of twice. This
+   is the classic SwiGLU fusion and the profile says it is the biggest single remaining item.
+2. **Find the 14% of `memcpy`.** The profile attributes it but the call frames did not resolve;
+   the candidates are the `to_vec1`/`contiguous` pairs on the way into each kernel.
+3. **Route k/v through `gemv_cpu`.** They are 512 outputs, below the 1024 floor, so they fall
+   through to candle's generic GEMM with its `pack_operands` - 8.7% for 3.8% of the bytes.
+   Small, but it is the one component not using the fast path.
+4. **Re-check thread count against the real optimum** once the above land, since 32 is not
+   obviously right and the 2-thread dip says the curve is not simple.
+
+Throughput measured on a model that is not yet bit-exact against the goldens
+(`todo/mistralrs/07`) should be read with that in mind.
