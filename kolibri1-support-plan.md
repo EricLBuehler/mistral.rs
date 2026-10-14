@@ -1022,8 +1022,9 @@ caps out at a third of the problem.
 
 ### Measured
 
-`kolibri1_decode_benchmark`, bf16 (149 GB, 32 shards), node 3 with memory-local placement
-(`--cpunodebind=3 --interleave=3`), batch 1, 40 decode tokens:
+`kolibri1_decode_benchmark`, bf16 (149 GB, 32 shards), node 3, batch 1, 40 decode tokens.
+Every row below the first was taken with memory-local placement
+(`--cpunodebind=3 --interleave=3`) at 32 threads, which the next subsection retracts:
 
 | | tok/s | TPOT |
 | --- | --- | --- |
@@ -1032,6 +1033,7 @@ caps out at a third of the problem.
 | after sending 512-output projections to the CPU GEMV | 4.32 | 231 ms |
 | after fusing q/k/v | 4.64 | 216 ms |
 | after moving the decode kernels onto the barrier pool | **5.80-5.94** | **168-172 ms** |
+| re-measured with headroom: `--interleave=all`, 16 threads | **7.04-7.18** | **137-141 ms** |
 
 (at 32 threads; a 25-token run on a later build measured 5.01 tok/s, so these are +-10% apart
 run to run - see the note at the end.)
@@ -1052,6 +1054,45 @@ Thread scaling at this baseline, 20 tokens:
 
 Still only 1.77x across 4 to 32 threads, and still short of the ceiling, so the scaling
 question is open rather than answered.
+
+### NUMA placement and thread count: both answers here were confounded
+
+Every measurement above was taken while node 3 had **1.08 GB free of 67 GB**, with 58.7 GB of
+that resident as file pages. This is a shared box. Re-measured with node 3 at 15.8 GB free and a
+load average of 1.46, two answers reversed:
+
+| configuration | tok/s |
+| --- | --- |
+| `--cpunodebind=3 --interleave=all`, 16 threads | **7.04 / 7.18** |
+| `--cpunodebind=3 --interleave=all`, 32 threads | 6.33 |
+| `--cpunodebind=3 --interleave=3`, 32 threads | 5.83 |
+
+The plan had recorded that memory-local placement beat interleaving by 23%, and that 32 threads
+beat 16 by 30%. **Both were wrong, and wrong the same way**: under page-cache thrashing the thing
+being measured was reclaim, not bandwidth.
+
+| threads | 8 | 12 | **16** | 24 | 32 |
+| --- | --- | --- | --- | --- | --- |
+| tok/s | 4.62 | 6.08 | **7.04 / 7.18** | 6.65 | 6.33 |
+
+`--interleave=all` beats `--interleave=3` by 12%, and the isolated gather explains it: the same
+benchmark reads **175.5 GB/s interleaved across all four nodes against 68.3 GB/s local**. The
+threads are pinned to one node, so local placement confines them to that one node's DRAM while
+interleaving lets all four serve them. The pure-streaming bench agrees that fewer threads are
+enough once bandwidth is available - 71.6 GB/s at 16 against 64.8 at 32 - so 16 threads cover it
+and the other 16 only add synchronisation.
+
+**Recommendation: `--cpunodebind=3 --interleave=all` with `RAYON_NUM_THREADS=16`.** That is
++23% over the configuration this plan had been recommending, with no code change at all.
+
+This cuts against the operational constraint the work was set under, which was to stay on node
+3. It does not need more *cores*; it needs those cores allowed to draw memory from the other
+three nodes, which is a placement decision rather than a capacity one.
+
+The general lesson is the one already recorded about micro-benchmarks, and it is worth restating
+because this time it was the headline configuration rather than a kernel: on a shared box,
+measure with the memory state you intend to run in, and re-measure anything load-bearing when
+that state changes.
 
 ### Where the time actually goes
 
