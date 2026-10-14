@@ -316,3 +316,78 @@ Two separable problems sit between here and there:
   approached, by guessing orders and testing against the oracle. The router is the cheap place to
   do that, since it is 384x2560 and costs 3.5 ms of a 130 ms step, so a deliberate reduction
   order there costs little and is directly testable.
+
+
+## Measured: the routing decision is decided by rounding, not by the math
+
+The oracle's generator is runnable here (torch 2.14.1 in a venv), so this is measured rather
+than inferred. `scripts/gen-kolibri1-goldens.py` was hooked to record the top-k expert ids, and
+`kolibri1_dump_expert_ids` records this build's, for golden prompt 0 at step 0 - the sample
+with no self-reference. 50 layers x 6 tokens x 6 experts = 1800 ids each side.
+
+**Expert selection does not match, and it diverges from the very first decision.**
+
+| | id agreement | rows with a different expert set |
+| --- | --- | --- |
+| this build | 68.8% | 88.7% (266/300) |
+| chance (6x6 of 384) | 9.4% | - |
+
+First divergence is layer 0, token 0. Nothing has accumulated there: it is embedding ->
+`input_layernorm` -> router. So this is not an accumulation problem.
+
+**The reason is visible in the scores.** Layer 0, token 0, `logit + bias`, descending:
+
+```
+reference  -3.484  -3.492  -3.500  -3.508  -3.508  -3.516  -3.516
+this build -3.498  -3.515  -3.519  -3.525  -3.527  -3.530  -3.532
+```
+
+The top **7** candidates span **0.032**, and the two implementations' logits differ by at most
+0.032. The bf16 ulp at this logit magnitude (~5.5) is 0.03125, so the boundary separating the
+6th expert from the 7th is **one bf16 ulp wide**. Every marginal decision on this model is
+therefore made by the last bit of a 2560-term f32 dot product.
+
+That is not a close call being lost to noise; it is a call with no margin in it. And it has a
+measurable consequence that is easy to miss: **f32 and bf16 routers pick different expert sets
+on 132 of 300 rows**, i.e. changing only the router's precision reroutes 44% of the model's
+decisions.
+
+### The oracle does not reproduce its own goldens
+
+Re-running the generator on the golden prompt, this host, torch 2.14.1:
+
+```
+logits_sum  -493322.8125      the goldens record  -484325.375
+argmax      121598  (matches the goldens)
+```
+
+A 1.86% difference in the fingerprint statistic from the generator that produced it, identical
+at 32 and 128 threads (so not a threading-order effect). The argmax survives; the sum does not.
+
+So the goldens are a property of one torch build on one machine. **No implementation can be
+bit-exact against them, including the implementation that made them.**
+
+### What this means for the goal
+
+Bit-exact logits are out of reach for the reasons already recorded, and this adds the decisive
+one: the oracle disagrees with itself across torch versions, so there is no stable target.
+
+Bit-exact *routing* is also out of reach, and that is the more surprising half. It would need
+the oracle's exact f32 accumulation order over 2560 terms, which is a torch BLAS detail that is
+not published and that this measurement shows is not even stable across torch builds.
+
+What is reachable, and what this file should be read as recommending:
+
+1. **Accept the divergence.** It is quantified: 68.8% id agreement, 88.7% of rows differing on
+   the marginal pick, argmax 121598 matching the goldens.
+2. **Gate on the things that are stable.** The reference's argmax, and the chain rate, both of
+   which this build passes. Both survive an oracle that does not reproduce its own sum.
+3. **Stop spending on router precision.** It has now been tested twice and both times it is not
+   the cause. The f32 router is kept because it is both faster (3.5 ms vs 12 ms, since a bf16
+   weight falls under the parallelism byte threshold) and marginally closer to the oracle
+   (68.8% vs 67.1% id agreement).
+
+One thing this does *not* explain: with 88.7% of routing rows differing, the output is still
+largely right - top-1 matches 6/8 and the chain 166/248. The model's predictions are far less
+sensitive to which 6 experts it uses than the id statistic suggests, which is itself worth
+knowing before anyone spends more effort chasing the ids.

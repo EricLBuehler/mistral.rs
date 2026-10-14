@@ -426,7 +426,12 @@ impl MoEGate {
     /// at `model.layers.N.moe.router.expert_bias`, while the router weight is `mlp.gate`.
     fn new(cfg: &Config, layer_vb: ShardedVarBuilder) -> Result<Self> {
         // The router is excluded from fp8 conversion upstream, so it stays bf16 on disk.
-        // bf16 -> f32 is exact, so widening costs nothing but the copy.
+        // Held widened to f32 because the gate is where selection is decided and the oracle's
+        // own logits are bf16-rounded; see `record_layer0_scores` and the id dump test for the
+        // measurement that settled it. Widening is a strict improvement over the bf16 form
+        // even so: f32 and bf16 routers pick different expert sets on 44% of rows, and the f32
+        // one is the closer of the two to the oracle (68.8% vs 67.1% id agreement) as well as
+        // 3.5x faster, because a bf16 weight falls under the parallelism byte threshold.
         let gate = layers::linear_no_bias(
             cfg.hidden_size,
             cfg.num_experts,
@@ -478,6 +483,8 @@ impl MoEGate {
             Some(&self.expert_bias),
             None,
         )?;
+        record_routed_ids(&topk.indices);
+        record_layer0_scores(&logits, &self.expert_bias);
         Ok((topk.values, topk.indices))
     }
 }
@@ -514,6 +521,51 @@ fn routing_trace() -> Option<&'static std::sync::Mutex<RoutingMargins>> {
                 })
             })
         })
+}
+
+/// Selected expert ids, one row per token, in call order.
+///
+/// Separate from the margin trace because the comparison this exists for is a *discrete* one:
+/// the goldens are 128,000 logits that no reimplementation reproduces to the last bit, but
+/// "which 6 of 384 experts" is 300 integers per prompt that can be compared exactly.
+static ROUTED_IDS: std::sync::OnceLock<std::sync::Mutex<Vec<Vec<Vec<u32>>>>> =
+    std::sync::OnceLock::new();
+/// `(logits, bias)` at layer 0, so the selection scores can be compared against the oracle's
+/// rather than inferred from which ids came out.
+static LAYER0_SCORES: std::sync::OnceLock<std::sync::Mutex<Vec<(Vec<f32>, Vec<f32>)>>> =
+    std::sync::OnceLock::new();
+static TRACE_IDS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+fn routed_ids() -> Option<&'static std::sync::Mutex<Vec<Vec<Vec<u32>>>>> {
+    TRACE_IDS
+        .load(std::sync::atomic::Ordering::Relaxed)
+        .then(|| ROUTED_IDS.get_or_init(|| std::sync::Mutex::new(Vec::new())))
+}
+
+fn record_routed_ids(ids: &Tensor) {
+    let Some(trace) = routed_ids() else { return };
+    let Ok(mut guard) = trace.lock() else { return };
+    if let Ok(rows) = ids.to_vec2::<u32>() {
+        guard.push(rows);
+    }
+}
+
+fn record_layer0_scores(logits: &Tensor, bias: &Tensor) {
+    if !TRACE_IDS.load(std::sync::atomic::Ordering::Relaxed) {
+        return;
+    }
+    let Ok(logits) = logits.to_vec2::<f32>() else {
+        return;
+    };
+    let Ok(bias) = bias.to_dtype(DType::F32).and_then(|b| b.to_vec1::<f32>()) else {
+        return;
+    };
+    if let Ok(mut guard) = LAYER0_SCORES
+        .get_or_init(|| std::sync::Mutex::new(Vec::new()))
+        .lock()
+    {
+        guard.push((logits.into_iter().flatten().collect(), bias));
+    }
 }
 
 /// Dropped unless tracing is on: this is on the hot path of every layer.
@@ -2073,6 +2125,68 @@ mod tests {
             q(0.75),
         );
         crate::utils::decode_prof::report(steps as u64, wall);
+        Ok(())
+    }
+
+    /// Dumps this build's per-layer expert selections for one golden prompt, step 0.
+    ///
+    /// Step 0 is the prompt alone with no self-reference, so it is the only sample that
+    /// isolates the routing from a chain. Written to `KOLIBRI1_IDS_OUT` next to whatever the
+    /// golden generator produces for the same prompt, so the two can be diffed.
+    #[test]
+    #[ignore = "loads the 149 GB Kolibri-1 checkpoint"]
+    fn kolibri1_dump_expert_ids() -> anyhow::Result<()> {
+        let (model_dir, goldens_path) = golden_paths();
+        let goldens: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&goldens_path)?)?;
+        let idx: usize = std::env::var("KOLIBRI1_IDS_PROMPT")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(0);
+        let prompt = &goldens["prompts"][idx];
+        let ids: Vec<u32> = prompt["input_ids"]
+            .as_array()
+            .expect("input_ids")
+            .iter()
+            .map(|v| v.as_u64().expect("id") as u32)
+            .collect();
+
+        let mut model = load_real_model(&model_dir)?;
+        TRACE_IDS.store(true, std::sync::atomic::Ordering::Relaxed);
+        let t = Tensor::from_vec(ids.clone(), (1, ids.len()), &Device::Cpu)?;
+        let next = prefill_and_decode(&mut model, &t, 0)?;
+
+        let recorded = ROUTED_IDS
+            .get()
+            .expect("trace was enabled")
+            .lock()
+            .expect("trace lock")
+            .clone();
+        let out = serde_json::json!({
+            "prompt": prompt["prompt"],
+            "input_ids": ids,
+            "n_layers": recorded.len(),
+            "topk_ids_per_layer": recorded,
+            "argmax": next,
+            "layer0_scores": LAYER0_SCORES
+                .get()
+                .and_then(|t| t.lock().ok())
+                .map(|g| g.clone())
+                .unwrap_or_default()
+                .into_iter()
+                .map(|(l, b)| serde_json::json!({"logits": l, "bias": b}))
+                .collect::<Vec<_>>(),
+        });
+        let path = std::env::var("KOLIBRI1_IDS_OUT")
+            .unwrap_or_else(|_| "/tmp/opencode/our_ids.json".to_string());
+        std::fs::write(&path, serde_json::to_string_pretty(&out)? + "\n")?;
+        println!(
+            "[ids] prompt {:?}: {} layers, {} tokens each, argmax {next}",
+            prompt["prompt"].as_str().unwrap_or("?"),
+            recorded.len(),
+            recorded.first().map_or(0, Vec::len)
+        );
+        println!("[ids] wrote {path}");
         Ok(())
     }
 
