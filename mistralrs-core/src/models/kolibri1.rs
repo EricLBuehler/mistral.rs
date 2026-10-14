@@ -2151,10 +2151,22 @@ mod tests {
             .map(|v| v.as_u64().expect("id") as u32)
             .collect();
 
+        // `KOLIBRI1_IDS_STEPS` chains decode steps instead of stopping at step 0. Chaining is
+        // what makes the expert reuse distance measurable: a cache's value depends on how far
+        // back an expert resurfaces, and that is only observable across consecutive steps.
+        let steps: usize = std::env::var("KOLIBRI1_IDS_STEPS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(0);
+
         let mut model = load_real_model(&model_dir)?;
         TRACE_IDS.store(true, std::sync::atomic::Ordering::Relaxed);
         let t = Tensor::from_vec(ids.clone(), (1, ids.len()), &Device::Cpu)?;
-        let next = prefill_and_decode(&mut model, &t, 0)?;
+        let mut next = prefill_and_decode(&mut model, &t, 0)?;
+        for step in 0..steps {
+            let one = Tensor::from_vec(vec![next], (1, 1), &Device::Cpu)?;
+            next = prefill_and_decode(&mut model, &one, ids.len() + step)?;
+        }
 
         let recorded = ROUTED_IDS
             .get()
@@ -2165,6 +2177,8 @@ mod tests {
         let out = serde_json::json!({
             "prompt": prompt["prompt"],
             "input_ids": ids,
+            "chained_steps": steps,
+            "forwards": recorded.len() / (steps + 1),
             "n_layers": recorded.len(),
             "topk_ids_per_layer": recorded,
             "argmax": next,

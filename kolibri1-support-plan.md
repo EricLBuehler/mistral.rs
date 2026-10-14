@@ -1358,3 +1358,57 @@ kernel - that one is worth 2.6x here.
 
 Throughput measured on a model that is not yet bit-exact against the goldens
 (`todo/mistralrs/07`) should be read with that in mind.
+
+
+## An explicit weight LRU: measured, and what it is actually worth
+
+Question: the model is 151 GB and the box has 255 GB, so a dedicated LRU of the hot weights was
+proposed. Measured on the real routing rather than on the `6 of 384` independence argument,
+which turns out to be wrong by a factor of 36.
+
+Per decode step, 50 layers x 6 experts, recording which experts are actually selected:
+
+| | degenerate golden chain | diverse 251-token prompt |
+| --- | --- | --- |
+| distinct experts touched per step | 212 / 384 (55%) | **211 / 384 (55%)** |
+| step-to-step overlap | 65.4% | **57.6%** |
+| chance, if draws were independent | 1.6% | 1.6% |
+| reuse within 1 step | 94.1% | 83.0% |
+| reuse within 5 steps | 98.9% | 96.8% |
+| reuse within 10 steps | 99.7% | 98.6% |
+
+**A step touches half the expert pool, not 6 experts.** The `K/E` estimate assumes independent
+draws; consecutive hidden states are far more similar than that, so routing barely moves
+between steps. The 55%-of-pool figure is the robust one - it is identical on a degenerate
+repetition chain and on varied prose - while the overlap drops from 65% to 58% when the text
+is real. Any number quoted from the golden chains alone is optimistic; the diverse column is
+the one to design against.
+
+An LRU therefore does not need to be large. At 2.36 GB of expert weight per step:
+
+| cache | steps of history | re-selections caught (diverse) |
+| --- | --- | --- |
+| 4.7 GB | 2 | 83.0% |
+| 11.8 GB | 5 | 96.8% |
+| 23.6 GB | 10 | 98.6% |
+
+The 4.46 GB/token of *fixed* weights - attention projections, the shared expert, `lm_head` - is
+the same memory every step and is held by anything above ~5 GB forever. So **the knee is near
+5-10 GB, and a 32 GB cache is roughly 3x over-provisioned**: it buys the last ~2% over 24 GB.
+
+### What it would buy, which is not speed
+
+The kernel's page cache is already an LRU, and on this host it is 67 GB - larger than anything
+proposed here. Measured during decode: **61 major faults in 20 s**, i.e. no disk I/O at all. So
+an explicit LRU would not make this build faster today; there is nothing un-cached to cache.
+
+What it would buy is independence from the box. At 1.08 GB free on node 3 earlier in this
+project - with 58.7 GB of that resident as file pages - the kernel's LRU was evicting our pages
+under other tenants, and every number in this plan moved for that reason rather than for any
+code change. A resident cache we control removes that variable. That is reproducibility, not
+throughput.
+
+There is also nothing to extend: `BoundedCache` is in `cutile/routed_lora.rs` and
+`ExpertCudaCache` in `lora/dynamic/`, both CUDA. mistral.rs has no CPU weight cache at all, so
+this is new machinery that copies the weights into anonymous memory - which is the L1 decision
+this plan already backed away from at 149 GB, at a scale that is now affordable at 10 GB.
