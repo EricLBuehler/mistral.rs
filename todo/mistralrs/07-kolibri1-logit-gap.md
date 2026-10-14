@@ -181,6 +181,35 @@ arithmetic, while every statistic over the 64 top-k entries improved. That pair 
 results is the clearest demonstration in this file of how little signal 8 samples
 carry on this model.
 
+## FALSIFIED: the router dtype does not affect the goldens at all
+
+This file previously claimed that moving the router from bf16-valued logits to true f32
+"improves every statistic over the 64 top-k golden entries" (mean 2.452 -> 2.324). **That is
+wrong, and the error came from treating two different measurements as one thing.**
+
+The oracle is `scripts/gen-kolibri1-goldens.py`, a pure-torch transcription, and its router
+line is:
+
+```python
+logits = self.linear(h, p + ".mlp.gate").to(torch.float32)   # bf16 matmul, THEN widen
+```
+
+So the goldens were produced with a **bf16** router, whatever the upstream plugin does. This
+build ran a true f32 GEMV against a weight held widened. Making it match the oracle - bf16
+weight, bf16 matmul, widen afterwards - produced output that is **bit-identical on all eight
+prompts**: every `logits_sum` and `abs_sum` to the printed precision, first-step 0/8, chain
+166/248, top-1 6/8, worst gap 6.5938. Not close. Identical.
+
+So the router's precision is not what separates this build from the goldens, and the 2.324 vs
+2.452 comparison was measuring something other than what it was read as. The f32 router is
+kept, because it is the faster of two things that agree: bf16 drops the weight to 1.97 MB,
+which falls under the 2 MiB parallelism threshold, and the router goes serial - **3.5 ms ->
+12.0 ms** for output that is bit-identical.
+
+What this does *not* do is explain the scale gap below. If the router can change freely without
+moving a single digit, then router noise cannot be the mechanism, and the first-step 0/8 is
+caused by something the router has no part in.
+
 ## Re-measured after the decode work (`12e0b9ad7`)
 
 Routing the MoE router through the decode GEMV changed its f32 accumulation order, so the
@@ -225,9 +254,21 @@ A few percent on the logits is the size of the top-1/top-2 margin on a typical p
 alone is enough to flip first-step argmax on prompts where the margin is a fraction of a logit,
 without any expert-selection flip at all.
 
-**So the first step is 0/8 probably not because of the 2.2% of noisy routings.** That was
-measured and real, but it is a second-order effect riding on a first-order magnitude error that
-nobody has localised yet.
+**So the first step is 0/8 not because of the 2.2% of noisy routings.** That was measured, it
+is real, and the experiment above shows it has no effect on any oracle statistic. It is at most
+a second-order effect riding on a first-order magnitude error.
+
+Also ruled out by reading rather than by experiment, since they are the cheap checks:
+
+- **The norms.** The oracle casts every RMSNorm result back to the input dtype, and so does
+  this build - candle's `RmsNorm::cpu_fwd` is generic over the storage element type, so a bf16
+  input yields bf16 output. Five norms per layer, all matching.
+- **The residual contract.** The oracle accumulates `residual += post_norm(block_output)` and
+  normalises the sum, with `post_attn_norm`/`post_ffn_norm` applied to the block outputs before
+  they are added. That is what `DecoderLayer::forward` does.
+
+That leaves the attention as the largest thing not yet compared line by line, and it is where
+step 2 should start.
 
 ### How to localise it
 
@@ -243,7 +284,10 @@ Layer-by-layer, against the same reference:
 3. A cheaper first pass: the ratio is close to uniform across the vocab row, which points at
    something multiplying the hidden state rather than at a rank-dependent term. A norm weight or
    an eps that is subtly different would do that; a wrong expert set would not, since it would
-   perturb the row rather than scale it.
+   perturb the row rather than scale it. This ruled out the norms and the expert set above, and
+   it points at the attention, which is the only remaining stage where a scale can be applied
+   to the hidden state - `scores = bmm(qf * head_dim**-0.5, kf.T)` then softmax then `bmm(probs,
+   vf)`, all in fp32, against whatever `Sdpa::run_attention` does with the same three steps.
 
 ### On bit-exactness
 
