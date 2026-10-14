@@ -223,71 +223,81 @@ reference top-1 6/8, worst top-k logit gap 6.5938   (recorded before as 6.59)
 Identical to four significant figures, so that commit is performance-only with no measured
 effect on the goldens.
 
-## Where the remaining gap probably is: a scale error, not rounding
+## Where the remaining gap probably is: not a scale error either
 
-The goldens carry `logits_sum` and `abs_sum` over the whole vocab row specifically because
-"a ranking flip leaves them alone, but a wrong logit gain or a missing bias term moves them
-directly". They are failing, and failing together:
+**This section previously argued the gap was a scale error. That was wrong, and it can be
+disproved without running anything.**
 
-| prompt | sum ratio (got/want) | abs_sum ratio |
-| --- | --- | --- |
-| alpha beta ... | 1.0333 | 1.0316 |
-| der Mond ... | 1.0321 | 1.0308 |
-| capital of Australia is | 1.0437 | 1.0401 |
-| Wissen ist Macht ... | 1.0976 | 1.0985 |
-| x1 = 3, x2 = 7 ... | 1.0366 | 1.0366 |
-| Translation to German ... | 1.1759 | 1.1717 |
-| Ein gutes Buch ... | 0.9992 | 1.0040 |
-| counting ... | 0.8702 | 0.8709 |
+The argument was that `logits_sum` and `abs_sum` agree to within 0.002 on every prompt, which
+looks like the logit row being close to a rescaling of the reference's. But the final stage is
 
-**The two ratios agree to within 0.002 on every prompt.** That is the signature of the logit
-vector being close to a rescaling of the reference's rather than of independent noise: two
-independent noisy quantities would not track each other that tightly.
+    logits = lm_head(rmsnorm(h + residual))
 
-The factor is not one constant - it runs 0.87 to 1.18 - so it is not a single global scale
-error either. A prompt-dependent factor is consistent with divergence that accumulates through
-the stack, but it is equally consistent with a systematic gain error whose effect depends on
-where each prompt's activations land.
+and `rmsnorm` is scale-invariant to high precision. With `x -> s*x`, RMSNorm returns
+`s * x * rsqrt(s^2 * var + eps)` against `x * rsqrt(var + eps)`; with `rms_norm_eps = 1e-6` and
+a normalised `var ~ 1` the eps term is negligible and the two are equal to within f32 rounding.
+**A uniform scale error in the residual stream cannot produce a 3% difference in the logits at
+all** - the final norm removes it. So the ratio agreement was a coincidence between two noisy
+statistics, and there is no scale error to find.
 
-This matters for the routing-noise story above, because it is much larger than it can explain.
-A few percent on the logits is the size of the top-1/top-2 margin on a typical prompt, so it
-alone is enough to flip first-step argmax on prompts where the margin is a fraction of a logit,
-without any expert-selection flip at all.
+What the numbers actually say is the opposite of a scale:
 
-**So the first step is 0/8 not because of the 2.2% of noisy routings.** That was measured, it
-is real, and the experiment above shows it has no effect on any oracle statistic. It is at most
-a second-order effect riding on a first-order magnitude error.
+| | value |
+| --- | --- |
+| top-1 logit (oracle, prompt 1) | 9.44 |
+| worst top-k logit gap | 6.59 |
+| top-1 / top-2 margin | 1.97 |
+| mean abs logit over the vocab row | 3.81 |
 
-Also ruled out by reading rather than by experiment, since they are the cheap checks:
+The top of the distribution is wrong by **70% of its own magnitude** while the bulk of 128,000
+logits is within 3%. A scale error cannot do that, and neither can ordinary accumulation noise:
+if the final hidden state differed by bf16 rounding (~2e-3 relative per element), the error it
+induces in a logit is `~2e-3 * ||W_i|| ~ 0.008`, two orders of magnitude below 6.59.
 
-- **The norms.** The oracle casts every RMSNorm result back to the input dtype, and so does
-  this build - candle's `RmsNorm::cpu_fwd` is generic over the storage element type, so a bf16
-  input yields bf16 output. Five norms per layer, all matching.
-- **The residual contract.** The oracle accumulates `residual += post_norm(block_output)` and
-  normalises the sum, with `post_attn_norm`/`post_ffn_norm` applied to the block outputs before
-  they are added. That is what `DecoderLayer::forward` does.
+That gap is the size of a **structured, discrete** difference - not a rounding, not a scale. The
+one discrete choice in a decode step is which 6 of 384 experts a token routes to, and a single
+different expert replaces a whole `2560 -> 512 -> 2560` block of the MLP with different weights.
+The signature fits that: the bulk stays close because most of the computation agrees, and the
+top moves because a few matmul blocks do not.
 
-That leaves the attention as the largest thing not yet compared line by line, and it is where
-step 2 should start.
+So the residual gap is most likely **expert selection differing on some routings**, which is the
+2.2%-of-routings knife-edge effect measured earlier - not as a second-order rider, as the
+previous revision of this file said, but as the actual mechanism. The router-dtype experiment
+above does not contradict this: it shows that *perturbing the router's precision* does not move
+the selection on these eight prompts, which is a statement about this particular perturbation,
+not about the knife-edge cases being unreachable.
 
 ### How to localise it
 
-Layer-by-layer, against the same reference:
+Not by ratio - there is no ratio, the final norm is scale-invariant. By **comparison of the
+selected expert ids**, which is the one discrete quantity in a decode step:
 
-1. Dump the hidden state after each of the 50 layers for one short prompt, ours and the
-   reference's, and find the first layer where the ratio departs from 1. The layer where it
-   breaks names the module; the layer where it starts names the bug.
-2. Expect it to be one of the four norms, since those are the only places this build applies a
-   non-obvious contract: the pre-norm residual stream (`residual += block_output`, then norm the
-   sum) and `post_attn_norm` / `post_ffn_norm` carrying no residual. Those were verified against
-   the card, not against the reference's intermediate tensors.
-3. A cheaper first pass: the ratio is close to uniform across the vocab row, which points at
-   something multiplying the hidden state rather than at a rank-dependent term. A norm weight or
-   an eps that is subtly different would do that; a wrong expert set would not, since it would
-   perturb the row rather than scale it. This ruled out the norms and the expert set above, and
-   it points at the attention, which is the only remaining stage where a scale can be applied
-   to the hidden state - `scores = bmm(qf * head_dim**-0.5, kf.T)` then softmax then `bmm(probs,
-   vf)`, all in fp32, against whatever `Sdpa::run_attention` does with the same three steps.
+1. For one short prompt, record the top-6 expert ids per layer from this build.
+2. Get the same from the reference. This needs `scripts/gen-kolibri1-goldens.py` run with a hook
+   on `Kolibri1Ref.mlp`, which needs torch. torch is not installed on this host, so this is the
+   blocking dependency.
+3. The first layer where an id differs is the whole investigation. Above it, expert ids should
+   match exactly and every difference below is a consequence, not a cause.
+
+This is the right target because it is discrete and small: 50 layers x 6 ids = 300 integers per
+prompt, against 128,000 floats of logits that will never agree to the last bit between a
+reimplementation and a torch GEMM. Matching the ids is achievable. Matching the logits is not.
+
+### What is already ruled out
+
+- **The router's precision.** Bit-identical oracle output between the f32 and bf16 routers.
+- **The norms.** candle's `RmsNorm::cpu_fwd` is generic over the storage element type, so a bf16
+  input yields a bf16 output, exactly as the oracle's explicit `.to(x.dtype)` does. Five norms
+  per layer plus the final one.
+- **The residual contract.** The oracle's `forward_last_logits` accumulates
+  `residual += post_norm(block_output)` and normalises the sum, with `post_attn_norm` and
+  `post_ffn_norm` applied to the block outputs *before* they are added. `DecoderLayer::forward`
+  does the same.
+
+One difference is known and unquantified: the oracle scales q *before* the score matmul
+(`bmm(qf * head_dim**-0.5, kf.T)`) where the CPU flash kernel scales *after* it
+(`dot(q, k) * ctx.scale`). Those differ only by f32 rounding, which the arithmetic above puts
+two orders of magnitude below the observed gap, so it is recorded rather than chased.
 
 ### On bit-exactness
 
