@@ -23,6 +23,33 @@ use crate::dot_cpu::{dot_bf16, dot_f32};
 /// same shape at 16.3.
 const MIN_PARALLEL_OUTPUTS: usize = 512;
 
+/// Below this many weight bytes there is not enough streaming to pay for splitting either.
+///
+/// A second way to qualify, for shapes with few outputs but wide rows. A MoE router is 384
+/// outputs and so missed the count threshold, but at f32 and k=2560 it is 3.9 MB of weight -
+/// more than the 2.6 MB bf16 k/v projection above that set the count threshold in the first
+/// place, and it was running at 10 GB/s against 46-71 for every other decode phase.
+///
+/// 2 MiB is where a barrier-pool round trip stops mattering: streaming that at the 70 GB/s this
+/// host sustains is about 30 us, which is a few percent of the work rather than a doubling of
+/// it.
+const MIN_PARALLEL_BYTES: usize = 2 * 1024 * 1024;
+
+/// Whether splitting this weight across the pool pays for the barrier it costs.
+///
+/// Two ways to qualify: enough outputs to fill the pool, or enough bytes that streaming them
+/// is still worth splitting. Both are necessary conditions for a shape to use this kernel, and
+/// adding the byte test only widens the set - it cannot take a shape away from the fast path.
+fn worth_parallelising(w: &Tensor) -> bool {
+    let (Ok(n), Ok(k)) = (w.dim(0), w.dim(1)) else {
+        return false;
+    };
+    n >= min_parallel_outputs()
+        || n.saturating_mul(k)
+            .saturating_mul(w.dtype().size_in_bytes())
+            >= MIN_PARALLEL_BYTES
+}
+
 /// Overrides [`MIN_PARALLEL_OUTPUTS`] for measurement.
 ///
 /// The thread sweep and the barrier-pool experiments both needed "run this shape serially"
@@ -83,9 +110,10 @@ pub fn should_use_gemv(xs: &Tensor, w: &Tensor) -> bool {
     xs.device().is_cpu()
         && xs.rank() >= 2
         && xs.dim(xs.rank() - 2).is_ok_and(|rows| rows == 1)
-        && w.dim(0).is_ok_and(|n| n >= min_parallel_outputs())
+        && w.dim(0).is_ok_and(|n| n >= 1)
         && w.dim(1).is_ok_and(|k| k >= 1)
         && is_kernel_dtype(w.dtype())
+        && worth_parallelising(w)
 }
 
 /// `xs @ w_i^T` for several weights that share `K`, in one parallel region.
@@ -277,7 +305,7 @@ pub fn gemv_into_vec(xs: &Tensor, w: &Tensor, n: usize, k: usize) -> Result<Vec<
     };
 
     let threads = crate::cpu_threads::resolve();
-    if n < min_parallel_outputs() || threads <= 1 {
+    if !worth_parallelising(w) || threads <= 1 {
         return Ok((0..n).map(|row| weight.dot(x, row, k)).collect());
     }
 
