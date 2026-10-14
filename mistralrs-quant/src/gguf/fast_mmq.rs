@@ -267,6 +267,37 @@ type WsMap = Mutex<HashMap<WorkspaceKey, &'static Mutex<WorkspaceSlot>>>;
 static MMQ_WORKSPACE: OnceLock<WsMap> = OnceLock::new();
 static FIXUP_WORKSPACE: OnceLock<WsMap> = OnceLock::new();
 
+/// Frees a thread's workspaces when it exits. Workspaces are keyed by thread, so
+/// without this every engine thread (one per loaded model) left its workspaces on
+/// the GPU for the life of the process, and a model reloaded in the same process
+/// allocated a new set. CUDA graphs captured with these addresses belong to the
+/// engine and are not replayed after its thread exits.
+struct ReleaseOnThreadExit(ThreadId);
+
+impl Drop for ReleaseOnThreadExit {
+    fn drop(&mut self) {
+        for ws in [&MMQ_WORKSPACE, &FIXUP_WORKSPACE] {
+            let Some(Ok(mut map)) = ws.get().map(Mutex::lock) else {
+                continue;
+            };
+            map.retain(|key, slot| {
+                if key.thread != self.0 {
+                    return true;
+                }
+                // SAFETY: workspace_ensure Box::leak'ed the slot, and only this thread
+                // uses the slots keyed by its id, so none is borrowed while it exits.
+                drop(unsafe { Box::from_raw(std::ptr::from_ref(*slot).cast_mut()) });
+                false
+            });
+        }
+    }
+}
+
+thread_local! {
+    static RELEASE_ON_THREAD_EXIT: ReleaseOnThreadExit =
+        ReleaseOnThreadExit(std::thread::current().id());
+}
+
 #[derive(Clone, Copy)]
 struct DeviceInfo {
     cc: i32,
@@ -359,6 +390,7 @@ fn workspace_ensure<'a>(
                 // CUDA graph replay requires process-stable workspace addresses.
                 let leaked = Box::leak(Box::new(Mutex::new(WorkspaceSlot { slice })));
                 guard.insert(key, leaked);
+                RELEASE_ON_THREAD_EXIT.with(|_| {});
                 leaked
             }
         }
