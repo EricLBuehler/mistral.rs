@@ -289,57 +289,65 @@ impl Attention {
     ) -> Result<Tensor> {
         let (b_sz, q_len, _) = xs.dims3()?;
 
-        let (q, k, v) =
-            crate::ops::qkv_projections(xs, &*self.q_proj, &*self.k_proj, &*self.v_proj)?;
-        let (q, k, v) = if q_len != 1 {
-            (
-                q.reshape((b_sz, q_len, self.num_heads, self.head_dim))?
-                    .transpose(1, 2)?,
-                k.reshape((b_sz, q_len, self.num_kv_heads, self.head_dim))?
-                    .transpose(1, 2)?,
-                v.reshape((b_sz, q_len, self.num_kv_heads, self.head_dim))?
-                    .transpose(1, 2)?,
-            )
-        } else {
-            (
-                q.reshape((b_sz, self.num_heads, q_len, self.head_dim))?,
-                k.reshape((b_sz, self.num_kv_heads, q_len, self.head_dim))?,
-                v.reshape((b_sz, self.num_kv_heads, q_len, self.head_dim))?,
-            )
-        };
+        let (q, k, v) = {
+            let _p = crate::utils::decode_prof::profile(crate::utils::decode_prof::Phase::AttnProj);
+            let (q, k, v) =
+                crate::ops::qkv_projections(xs, &*self.q_proj, &*self.k_proj, &*self.v_proj)?;
+            let (q, k, v) = if q_len != 1 {
+                (
+                    q.reshape((b_sz, q_len, self.num_heads, self.head_dim))?
+                        .transpose(1, 2)?,
+                    k.reshape((b_sz, q_len, self.num_kv_heads, self.head_dim))?
+                        .transpose(1, 2)?,
+                    v.reshape((b_sz, q_len, self.num_kv_heads, self.head_dim))?
+                        .transpose(1, 2)?,
+                )
+            } else {
+                (
+                    q.reshape((b_sz, self.num_heads, q_len, self.head_dim))?,
+                    k.reshape((b_sz, self.num_kv_heads, q_len, self.head_dim))?,
+                    v.reshape((b_sz, self.num_kv_heads, q_len, self.head_dim))?,
+                )
+            };
 
-        // qk-norm precedes RoPE in the reference. On RNoPE layers the norm still runs and
-        // only the rope call is skipped; `qk_rms_norm_rope` makes the transposed q/k
-        // contiguous before the norm, so the norm-only branch has to do the same.
-        let positions = ctx
-            .text_positions(q.device(), q.dim(2)?)?
-            .ok_or_else(|| candle_core::Error::msg("Kolibri-1 missing RoPE positions"))?;
-        let (q, k) = match &self.rotary_emb {
-            Some(rope) => rope.forward_qk_norm(
-                &q,
-                &k,
-                self.q_norm.weight(),
-                self.k_norm.weight(),
-                self.q_norm.eps(),
-                self.k_norm.eps(),
-                positions,
-            )?,
-            None => {
-                let q = candle_nn::ops::rms_norm(
-                    &q.contiguous()?,
+            // qk-norm precedes RoPE in the reference. On RNoPE layers the norm still runs and
+            // only the rope call is skipped; `qk_rms_norm_rope` makes the transposed q/k
+            // contiguous before the norm, so the norm-only branch has to do the same.
+            let positions = ctx
+                .text_positions(q.device(), q.dim(2)?)?
+                .ok_or_else(|| candle_core::Error::msg("Kolibri-1 missing RoPE positions"))?;
+            let (q, k) = match &self.rotary_emb {
+                Some(rope) => rope.forward_qk_norm(
+                    &q,
+                    &k,
                     self.q_norm.weight(),
-                    self.q_norm.eps() as f32,
-                )?;
-                let k = candle_nn::ops::rms_norm(
-                    &k.contiguous()?,
                     self.k_norm.weight(),
-                    self.k_norm.eps() as f32,
-                )?;
-                (q, k)
-            }
+                    self.q_norm.eps(),
+                    self.k_norm.eps(),
+                    positions,
+                )?,
+                None => {
+                    let q = candle_nn::ops::rms_norm(
+                        &q.contiguous()?,
+                        self.q_norm.weight(),
+                        self.q_norm.eps() as f32,
+                    )?;
+                    let k = candle_nn::ops::rms_norm(
+                        &k.contiguous()?,
+                        self.k_norm.weight(),
+                        self.k_norm.eps() as f32,
+                    )?;
+                    (q, k)
+                }
+            };
+            (q, k, v)
         };
 
         let metadata = ctx.paged_layer(layer_idx);
+        // The cache-bound half of attention, timed apart from the projections above. They are
+        // weight-bound like every other GEMV, so conflating the two makes a 2% phase look like
+        // the largest one in the step.
+        let _p = crate::utils::decode_prof::profile(crate::utils::decode_prof::Phase::Attention);
         let mut attn_output = match &self.paged_attn {
             Some(paged_attn) => match metadata {
                 Some(((key_cache, value_cache), input_metadata)) => paged_attn.forward(
@@ -381,11 +389,13 @@ impl Attention {
             }
         };
 
+        drop(_p);
         attn_output = if !matches!(attention_mask, AttentionMask::None) {
             attn_output.transpose(1, 2)?.reshape((b_sz, q_len, ()))?
         } else {
             attn_output.reshape((b_sz, q_len, ()))?
         };
+        let _p = crate::utils::decode_prof::profile(crate::utils::decode_prof::Phase::AttnProj);
         self.o_proj.forward(&attn_output)
     }
 }
@@ -438,9 +448,21 @@ impl MoEGate {
     }
 
     fn forward(&self, xs: &Tensor) -> Result<(Tensor, Tensor)> {
+        let _p = crate::utils::decode_prof::profile(crate::utils::decode_prof::Phase::Router);
         // `norm_topk_prob` is false here, so the weights are sigmoid values used as mixture
         // weights with no renormalisation.
-        let logits = xs.to_dtype(DType::F32)?.matmul(&self.gate.t()?)?;
+        //
+        // At batch 1 this is a single-row GEMV, and going through `matmul` made it the
+        // slowest phase in a decode step by a wide margin: 19.6 ms, 10 GB/s, against 46-71
+        // GB/s for every other phase. Candle runs a batch-1 matmul as a tiled GEMM with m=1 on
+        // the global pool, whose workers park between calls. The decode GEMV partitions over
+        // outputs on the barrier pool and reads the same f32 weight, so use it where there is
+        // a single row to read and leave the tiled path to prefill, which is shaped for it.
+        let logits = if xs.dim(xs.rank() - 2).is_ok_and(|rows| rows == 1) {
+            mistralrs_quant::gemv_cpu::gemv(xs, &self.gate)?
+        } else {
+            xs.to_dtype(DType::F32)?.matmul(&self.gate.t()?)?
+        };
         record_routing_margins(&logits, &self.expert_bias, self.top_k);
         let topk = crate::ops::moe_router_topk(
             &logits,
@@ -658,9 +680,17 @@ impl MoeMlp {
         let (b_size, seq_len, hidden_dim) = xs.dims3()?;
         let xs_flat = xs.reshape(((), hidden_dim))?;
         let (topk_weights, topk_ids) = self.gate.forward(&xs_flat)?;
-        let ys = self.experts.forward(xs, topk_weights, &topk_ids)?;
+        let ys = {
+            let _p = crate::utils::decode_prof::profile(crate::utils::decode_prof::Phase::Routed);
+            self.experts.forward(xs, topk_weights, &topk_ids)?
+        };
         // The shared expert is ungated and always added.
-        let ys = (ys + self.shared.forward(xs)?)?;
+        let shared = {
+            let _p = crate::utils::decode_prof::profile(crate::utils::decode_prof::Phase::Shared);
+            self.shared.forward(xs)?
+        };
+        let _p = crate::utils::decode_prof::profile(crate::utils::decode_prof::Phase::Combine);
+        let ys = (ys + shared)?;
         ys.reshape((b_size, seq_len, hidden_dim))
     }
 }
@@ -747,26 +777,31 @@ impl DecoderLayer {
         // `residual + block output`. `post_attn_norm` and `post_ffn_norm` carry none, and
         // their outputs are the deltas the next layer adds, so `xs` and the residual advance
         // independently.
-        let (res, dhn) = match residual {
-            // The reference zeroes the residual before layer 0, so the first accumulation is
-            // just the embedding itself.
-            None => (xs.clone(), self.input_layernorm.forward(xs)?),
-            Some(res) => self.input_layernorm.forward_add_rms_norm(xs, res)?,
+        let (res, dhn) = {
+            let _p = crate::utils::decode_prof::profile(crate::utils::decode_prof::Phase::Norms);
+            match residual {
+                // The reference zeroes the residual before layer 0, so the first accumulation is
+                // just the embedding itself.
+                None => (xs.clone(), self.input_layernorm.forward(xs)?),
+                Some(res) => self.input_layernorm.forward_add_rms_norm(xs, res)?,
+            }
         };
 
         let attn = self
             .self_attn
             .forward(&dhn, attention_mask, kv_cache, ctx, layer_idx)?;
-        // post_attn_norm carries no residual: its output is a delta, not a normalized stream.
-        let attn_n = self.post_attn_norm.forward(&attn)?;
-
-        let (res, dhn2) = self
-            .post_attention_layernorm
-            .forward_add_rms_norm(&attn_n, &res)?;
+        let (res, dhn2) = {
+            let _p = crate::utils::decode_prof::profile(crate::utils::decode_prof::Phase::Norms);
+            // post_attn_norm carries no residual: its output is a delta, not a normalized stream.
+            let attn_n = self.post_attn_norm.forward(&attn)?;
+            self.post_attention_layernorm
+                .forward_add_rms_norm(&attn_n, &res)?
+        };
 
         let moe = self.mlp.forward(&dhn2)?;
         // Likewise for post_ffn_norm; this becomes the next layer's block output.
         *residual = Some(res);
+        let _p = crate::utils::decode_prof::profile(crate::utils::decode_prof::Phase::Norms);
         self.post_ffn_norm.forward(&moe)
     }
 }
@@ -921,7 +956,10 @@ impl Model {
         input_ids: &Tensor,
         ctx: &mut ModelForwardContext<'_>,
     ) -> Result<Tensor> {
-        let mut xs = self.embed_tokens.embedding_forward(input_ids, self.dtype)?;
+        let mut xs = {
+            let _p = crate::utils::decode_prof::profile(crate::utils::decode_prof::Phase::Embed);
+            self.embed_tokens.embedding_forward(input_ids, self.dtype)?
+        };
         let cache = &mut self.cache.normal().0;
 
         // One mask of each shape, selected per layer by layer kind.
@@ -970,11 +1008,15 @@ impl Model {
         xs = xs.to_device(&self.device)?;
 
         // The final norm carries the residual too: the logits read norm(residual + hidden).
-        let xs = match &residual {
-            Some(res) => self.norm.forward_add_rms_norm(&xs, res)?.1,
-            None => self.norm.forward(&xs)?,
+        let xs = {
+            let _p = crate::utils::decode_prof::profile(crate::utils::decode_prof::Phase::Norms);
+            match &residual {
+                Some(res) => self.norm.forward_add_rms_norm(&xs, res)?.1,
+                None => self.norm.forward(&xs)?,
+            }
         };
         let xs = ctx.logits(&xs)?;
+        let _p = crate::utils::decode_prof::profile(crate::utils::decode_prof::Phase::LmHead);
         ctx.lm_head(&*self.lm_head, &xs)
     }
 
@@ -1981,6 +2023,7 @@ mod tests {
         let device = Device::Cpu;
         eprintln!("[bench] loading {}", model_dir.display());
         let mut model = load_real_model(&model_dir)?;
+        crate::utils::decode_prof::enable();
 
         let prompt: Vec<u32> = (0..64).map(|i| (i * 137 + 91) as u32).collect();
         let mut timed = Vec::with_capacity(steps);
@@ -1995,6 +2038,11 @@ mod tests {
             prompt.len() as f64 / prefill_start.elapsed().as_secs_f64()
         );
 
+        // Phases are accumulated across the timed steps only, so the prefill and the model
+        // load are excluded. Resetting here rather than at enable means a caller that profiles
+        // a warmup and a measured run separately still gets a clean split.
+        crate::utils::decode_prof::reset();
+        let wall = std::time::Instant::now();
         for step in 0..steps {
             // The cache already holds `prompt.len() + step` tokens.
             let ids = Tensor::from_vec(vec![next], (1, 1), &device)?;
@@ -2008,16 +2056,23 @@ mod tests {
                 elapsed
             );
         }
+        let wall = wall.elapsed();
 
         let mean = timed.iter().sum::<f64>() / timed.len() as f64;
         timed.sort_by(|a, b| a.total_cmp(b));
         let median = timed[timed.len() / 2];
+        // The quartiles are the point of reporting this at all: the spread between p25 and p75
+        // is the noise an A/B has to beat, and it is not knowable from the mean.
+        let q = |f: f64| timed[((timed.len() - 1) as f64 * f).round() as usize];
         println!(
             "[bench] decode over {steps} steps: mean TPOT {mean:.3} s ({:.2} tok/s), \
-             median {median:.3} s ({:.2} tok/s)",
+             median {median:.3} s ({:.2} tok/s), p25 {:.3} s, p75 {:.3} s",
             1.0 / mean,
-            1.0 / median
+            1.0 / median,
+            q(0.25),
+            q(0.75),
         );
+        crate::utils::decode_prof::report(steps as u64, wall);
         Ok(())
     }
 
