@@ -1095,8 +1095,18 @@ cold, rotating over a pool large enough to defeat the cache (`tests/routed_gathe
 | 48 | 126 MB | 97.8 (at the ceiling) |
 | 192 | 503 MB | 88.0 (90% of the 98 GB/s ceiling) |
 
-So the gather runs at 90% of what the memory system can deliver. Prefetching it and tuning its
-tiling, which was the original plan, would buy almost nothing.
+So at the time, the gather looked like it ran at 90% of what the memory system can deliver, and
+prefetching or re-tiling it - the original plan's proposal - would buy nothing.
+
+**That conclusion is unsafe and should not be relied on.** The same benchmark now reads 177.4
+GB/s under `--interleave=all` and 68.7 under `--interleave=3`, a 2.6x swing caused only by where
+the benchmark's own 500 MB of anonymous memory lands. Node 3 has been between 1 and 60 GB free
+across this session depending on what else is running. An isolated number from this box is a
+measurement of the box's memory state as much as of the kernel, and only the end-to-end tok/s is
+comparable between runs.
+
+What survives is the weaker claim: the gather is not obviously broken, and no change to it has
+been shown to help end to end. Whether prefetching it would help is still open.
 
 ### What was tried, and what is left
 
@@ -1196,12 +1206,14 @@ the streaming ceiling cold, so the remaining work is call count and the machiner
 nothing in the decode path presents an obvious way to cut that without a structural change to
 how a layer is executed.
 
-A methodological note, because it cost real time three times over: every isolated benchmark
+A methodological note, because it cost real time more than that: every isolated benchmark
 here initially reported a cache-resident number. The first read-bandwidth test measured add
 latency rather than bandwidth (2.7 GB/s at one thread against a real 7.8). The first gather
 benchmark reused one set of weights (15.7 MB, L3-resident) and reported 52 GB/s where cold it
 is 88. The first fused-qkv benchmark did the same. Rotate enough independent weight sets that
-each pass reads what the last did not, or the number is fiction.
+each pass reads what the last did not, or the number is fiction. And match the benchmark's NUMA
+placement to the model's, or the number is a measurement of page placement rather than of a
+kernel - that one is worth 2.6x here.
 
 Throughput measured on a model that is not yet bit-exact against the goldens
 (`todo/mistralrs/07`) should be read with that in mind.
