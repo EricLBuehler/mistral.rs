@@ -1030,7 +1030,8 @@ caps out at a third of the problem.
 | when this section was first written | 1.73 | 577 ms |
 | after broadcasting activations by addressing | 1.92 | 519 ms |
 | after sending 512-output projections to the CPU GEMV | 4.32 | 231 ms |
-| after fusing q/k/v | **4.64** | **216 ms** |
+| after fusing q/k/v | 4.64 | 216 ms |
+| after moving the decode kernels onto the barrier pool | **5.80-5.94** | **168-172 ms** |
 
 (at 32 threads; a 25-token run on a later build measured 5.01 tok/s, so these are +-10% apart
 run to run - see the note at the end.)
@@ -1145,6 +1146,31 @@ previously concluded the opposite from a dense-GEMV measurement.
 
 At 5.01 tok/s a step moves 6.82 GB in 200 ms, which is **34.1 GB/s** against the 86.9 GB/s this
 node streams at 32 threads - 39% of it, up from an eighth when this section was written.
+
+### What the 28% actually was: workers parking between regions
+
+It was never barrier cost. rayon-core 1.13 gives an idle worker
+`ROUNDS_UNTIL_SLEEPY = 32` `sched_yield` rounds before sleeping, and
+`spin_threads_before_yielding` was removed in that version so the knob cannot be
+raised. A batch-1 decode token opens around 400 parallel regions, so the workers
+park and get woken ~400 times per token - and the profile shows it as
+`crossbeam_epoch` and `cas4_acq` rather than under anything named "overhead".
+
+candle's `barrier_pool` already solves this and was already in the tree: it spins
+25,000 before sleeping, and the CPU attention runs on it every layer. Putting the
+decode GEMVs and the routed gathers there too keeps the workers warm across the
+attention/GEMV alternation:
+
+| | tok/s |
+| --- | --- |
+| Rayon's global pool | 4.88 |
+| barrier pool, GEMVs only | 5.05 |
+| barrier pool, GEMVs and gathers | **5.80 / 5.94** |
+
+**+20%.** This is what makes the four negatives below coherent: splitting at 512
+outputs pays 2.8x, serializing a seventh of the regions costs 45%, and the
+barrier pool's spin limit changes nothing - all true, and none of them were about
+the cost of joining. The cost was arriving.
 
 ### Four hypotheses about the remaining 28%, none of them
 
