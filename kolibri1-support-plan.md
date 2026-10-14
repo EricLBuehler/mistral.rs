@@ -1094,6 +1094,37 @@ because this time it was the headline configuration rather than a kernel: on a s
 measure with the memory state you intend to run in, and re-measure anything load-bearing when
 that state changes.
 
+### Profile at the corrected configuration
+
+Decode-only, `perf record -F 997 -g --delay 140000`, `--interleave=all`, 16 threads, 250
+tokens, at 7.0-7.2 tok/s:
+
+| % | symbol |
+| --- | --- |
+| 53.42 | barrier-pool trampoline, attention path |
+| 18.29 | `gemv_cpu::par_chunks::<moe_gather_cpu::par_fill>` |
+| 15.27 | barrier-pool trampoline, decode GEMV path |
+| 5.43 | `gemv_cpu::Weight::dot` |
+| 1.05 | `gemm_f32::microkernel::neon::f32::x4x4` |
+| 0.94 | `crossbeam_epoch` |
+| 0.74 | `BarrierPool::execute_chunked` |
+| 0.61 | `ReduceSum` |
+| 0.61 | `single_q::compute_group_range` |
+| 0.58 | `gemm_f32::gemm::gemm_basic` |
+| 0.53 | `Stealer::steal` |
+
+**Synchronisation is now ~1.5%**, down from 28% at the start of this line of work and 13% at
+the previous profile. `crossbeam_epoch` fell from 9.98% to 0.94% and `Stealer::steal` from
+3.39% to 0.53%, which is what halving the thread count against four nodes' worth of bandwidth
+does to the coordination cost. About 95% of a decode step is now kernel work.
+
+That closes the thread-synchronisation question and moves the remaining cost inside the
+kernels. At 139 ms/token the step moves 6.82 GB at **49 GB/s aggregate**, against 71.6 GB/s
+from the streaming bench at the same thread count and 175 GB/s from the isolated gather under
+the same interleaving. So the kernels are not saturating the memory system, and the gap is
+now per-thread streaming behaviour rather than anything structural - slab-to-slab transitions
+in the gather, and the attention kernels, which are half the bytes and untouched.
+
 ### Where the time actually goes
 
 Two corrections first, both from getting the measurement wrong before trusting it.
