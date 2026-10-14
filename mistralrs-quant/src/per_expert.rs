@@ -82,9 +82,28 @@ impl PerExpertLinear {
         let a_rows = a.to_dtype(DType::F32)?.contiguous()?;
         let a_rows = a_rows.flatten_all()?.to_vec1::<f32>()?;
 
+        // A decode step routes to a handful of experts out of the pool, so only those are
+        // resolved. With the residency cache on they come from anonymous memory; without it
+        // this is a plain view of the mapped checkpoint.
+        let slabs = match crate::moe_cache::cache() {
+            Some(cache) => {
+                let owner = Arc::as_ptr(&self.experts) as usize;
+                let mut slabs = (*self.experts).clone();
+                for &id in &ids {
+                    let idx = id as usize;
+                    if idx < slabs.len() {
+                        let resident = cache.slab(owner, idx, &self.experts[idx]);
+                        slabs[idx] = resident;
+                    }
+                }
+                slabs
+            }
+            None => (*self.experts).clone(),
+        };
+
         let out = moe_gather_cpu::gather_gemv_per_expert(
             &a_rows,
-            &self.experts,
+            &slabs,
             self.out_features,
             self.in_features,
             &ids,

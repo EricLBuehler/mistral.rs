@@ -1412,3 +1412,55 @@ There is also nothing to extend: `BoundedCache` is in `cutile/routed_lora.rs` an
 `ExpertCudaCache` in `lora/dynamic/`, both CUDA. mistral.rs has no CPU weight cache at all, so
 this is new machinery that copies the weights into anonymous memory - which is the L1 decision
 this plan already backed away from at 149 GB, at a scale that is now affordable at 10 GB.
+
+
+## The residency cache, and why 16 threads per node
+
+An LRU of the hot expert weights was built (`mistralrs-quant/src/moe_cache.rs`, byte-budgeted,
+default off, `MISTRALRS_MOE_CACHE_MB`). **Measured, it is a 13% loss and there is no disk I/O
+for it to prevent.**
+
+| | tok/s | `routed` |
+| --- | --- | --- |
+| cache off | 7.14 | 62.4 ms |
+| cache on, 16 GB | 6.42 | 73.1 ms |
+
+Steady state, not fill cost: 100 steps gives 6.26 and 400 steps gives 6.42, so it does not
+amortise. Meanwhile **11 major faults in 25 s of decode**, even with the box busier and the
+model's page cache evicted to 48 GB. The 6.82 GB working set is re-read every step and the
+kernel keeps it resident whatever else is running, so there is nothing for a private cache to
+save. Part of the penalty is placement: the model's file pages are ~97% node-3 local, while
+anonymous copies get striped, and `--preferred=3` recovers about 6%.
+
+Sizing was done on hit rate and should not have been presented as a performance result. The
+reuse measurements stand - 212 of 384 experts touched per step, 57.6% step-to-step overlap,
+99.1% within ten steps - but a high hit rate on a *slower* copy is not a win.
+
+## Thread count: half a node per instance, and why
+
+Every node has 32 cores, and the earlier sweeps used 16 per node throughout. Filling them:
+
+| nodes | threads/node | tok/s |
+| --- | --- | --- |
+| 1 | **16** | **7.14** |
+| 1 | 32 | 6.80 |
+| 2 | 16 | 7.33 |
+| 2 | 32 | 3.98 |
+| 4 | 16 | 5.35 |
+| 4 | 32 | 2.55 |
+
+**Doubling threads per node roughly halves throughput.** Same mechanism as the parking fix, one
+step further: the barrier pool spins 25,000 times before sleeping, so at 16 threads its 15
+workers leave half a node free to absorb the spin, while at 128 threads there are 127 spinners
+on 128 cores contending with the work they exist to accelerate. Half a node per instance is the
+right setting for that pool, not a coincidence.
+
+Spreading across nodes does not help this model: 2 nodes at 16 threads each is a wash against
+one (7.33 vs 7.14, inside noise, with visibly wider variance), and 4 nodes is clearly worse at
+either thread count. The earlier whole-host result in this plan that favoured all four nodes
+was measured on a 508 MB model that fitted in cache; a 151 GB model moves its *page cache*
+across nodes with it, and trades local DRAM for re-faulting.
+
+Re-verified with the box unbusied - all four nodes at 0.1-0.7% busy, which retires the
+constraint this work was scoped under (nodes 0-2 shared with other users). The
+single-node, 16-thread recommendation survives it.

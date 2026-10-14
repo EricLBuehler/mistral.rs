@@ -131,31 +131,45 @@ pub fn gather_gemv_per_expert(
         candle_core::bail!("gather gemv: expert slabs must be on CPU")
     }
 
+    // Only the experts this call names are locked; see `wanted_experts`.
+    let wanted = wanted_experts(ids, experts.len());
+    let dense = dense_index(&wanted, experts.len());
+    let remapped: Vec<u32> = ids
+        .iter()
+        .map(|&i| {
+            if (i as usize) < experts.len() {
+                dense[i as usize]
+            } else {
+                wanted.len() as u32
+            }
+        })
+        .collect();
+
     match dtype {
-        DType::F32 => with_f32_rows(experts, |rows| {
+        DType::F32 => with_f32_rows(experts, &wanted, |rows| {
             par_fill(
                 ids.len(),
                 out_features,
-                ids,
-                experts.len(),
-                |slot, row, expert| {
+                &remapped,
+                wanted.len(),
+                |slot, row, k| {
                     dot(
                         a_row_ref(a, slot, in_features, repeat),
-                        &rows[expert][row * in_features..][..in_features],
+                        &rows[k][row * in_features..][..in_features],
                     )
                 },
             )
         }),
-        DType::BF16 => with_bf16_rows(experts, |rows| {
+        DType::BF16 => with_bf16_rows(experts, &wanted, |rows| {
             par_fill(
                 ids.len(),
                 out_features,
-                ids,
-                experts.len(),
-                |slot, row, expert| {
+                &remapped,
+                wanted.len(),
+                |slot, row, k| {
                     dot_bf16(
                         a_row_ref(a, slot, in_features, repeat),
-                        &rows[expert][row * in_features..][..in_features],
+                        &rows[k][row * in_features..][..in_features],
                     )
                 },
             )
@@ -164,34 +178,75 @@ pub fn gather_gemv_per_expert(
     }
 }
 
+/// The experts `ids` names, ascending and deduplicated.
+///
+/// Only these are worth locking. A decode step routes to a handful out of the pool, and
+/// `Tensor::storage_and_layout` takes an `RwLock` read per slab - locking all 384 to read six
+/// costs 57,600 lock acquisitions per decode step on this model, three projections times fifty
+/// layers, for memory that is never touched.
+fn wanted_experts(ids: &[u32], num_experts: usize) -> Vec<usize> {
+    let mut wanted: Vec<usize> = ids
+        .iter()
+        .map(|&i| i as usize)
+        .filter(|&i| i < num_experts)
+        .collect();
+    wanted.sort_unstable();
+    wanted.dedup();
+    wanted
+}
+
+/// Maps an expert id to its row in a compacted slab list, or to `rows.len()` for an id that is
+/// out of range, which `par_fill` reports as `NaN` rather than reading.
+fn dense_index(wanted: &[usize], num_experts: usize) -> Vec<u32> {
+    let mut dense = vec![wanted.len() as u32; num_experts];
+    for (row, &expert) in wanted.iter().enumerate() {
+        dense[expert] = row as u32;
+    }
+    dense
+}
+
 /// Hands each slab's rows to `f` as one contiguous slice.
 ///
 /// The storage guards are taken here rather than in the caller because the row slices borrow
 /// from the storage they lock; holding them in this frame is what keeps the slices alive for
 /// the duration of the parallel loop without a self-referential struct.
-fn with_f32_rows<T>(experts: &[Tensor], f: impl FnOnce(&[&[f32]]) -> Result<T>) -> Result<T> {
-    let guards: Vec<_> = experts.iter().map(Tensor::storage_and_layout).collect();
+fn with_f32_rows<T>(
+    experts: &[Tensor],
+    wanted: &[usize],
+    f: impl FnOnce(&[&[f32]]) -> Result<T>,
+) -> Result<T> {
+    let guards: Vec<_> = wanted
+        .iter()
+        .map(|&i| experts[i].storage_and_layout())
+        .collect();
     let rows = guards
         .iter()
-        .zip(experts)
-        .map(|((guard, layout), t)| {
+        .zip(wanted)
+        .map(|((guard, layout), &i)| {
             let Storage::Cpu(cpu) = &**guard else {
                 candle_core::bail!("expert slab must be CPU storage")
             };
             let flat = cpu.as_slice::<f32>()?;
             let start = layout.start_offset();
-            Ok(&flat[start..start + t.elem_count()])
+            Ok(&flat[start..start + experts[i].elem_count()])
         })
         .collect::<Result<Vec<_>>>()?;
     f(&rows)
 }
 
-fn with_bf16_rows<T>(experts: &[Tensor], f: impl FnOnce(&[&[u16]]) -> Result<T>) -> Result<T> {
-    let guards: Vec<_> = experts.iter().map(Tensor::storage_and_layout).collect();
+fn with_bf16_rows<T>(
+    experts: &[Tensor],
+    wanted: &[usize],
+    f: impl FnOnce(&[&[u16]]) -> Result<T>,
+) -> Result<T> {
+    let guards: Vec<_> = wanted
+        .iter()
+        .map(|&i| experts[i].storage_and_layout())
+        .collect();
     let rows = guards
         .iter()
-        .zip(experts)
-        .map(|((guard, layout), t)| {
+        .zip(wanted)
+        .map(|((guard, layout), &i)| {
             let Storage::Cpu(cpu) = &**guard else {
                 candle_core::bail!("expert slab must be CPU storage")
             };
@@ -199,7 +254,7 @@ fn with_bf16_rows<T>(experts: &[Tensor], f: impl FnOnce(&[&[u16]]) -> Result<T>)
             // bf16 is repr(transparent) over u16, and the dot kernel reads raw bits.
             let flat: &[u16] = unsafe { core::mem::transmute::<&[half::bf16], &[u16]>(flat) };
             let start = layout.start_offset();
-            Ok(&flat[start..start + t.elem_count()])
+            Ok(&flat[start..start + experts[i].elem_count()])
         })
         .collect::<Result<Vec<_>>>()?;
     f(&rows)
