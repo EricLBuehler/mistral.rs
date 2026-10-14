@@ -23,6 +23,23 @@ use crate::dot_cpu::{dot_bf16, dot_f32};
 /// same shape at 16.3.
 const MIN_PARALLEL_OUTPUTS: usize = 512;
 
+/// Overrides [`MIN_PARALLEL_OUTPUTS`] for measurement.
+///
+/// The thread sweep and the barrier-pool experiments both needed "run this shape serially"
+/// without rebuilding, and the shape that matters is whatever a given model routes through a
+/// small projection. Exposed as an override rather than a constant so the crossover can be
+/// measured rather than argued.
+fn min_parallel_outputs() -> usize {
+    static OVERRIDE: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+    *OVERRIDE.get_or_init(|| {
+        std::env::var("MISTRALRS_GEMV_MIN_OUTPUTS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .filter(|v| *v > 0)
+            .unwrap_or(MIN_PARALLEL_OUTPUTS)
+    })
+}
+
 /// Weight dtypes this kernel reads directly. Anything else falls back to candle's matmul.
 fn is_kernel_dtype(dtype: DType) -> bool {
     matches!(dtype, DType::F32 | DType::BF16)
@@ -33,7 +50,7 @@ pub fn should_use_gemv(xs: &Tensor, w: &Tensor) -> bool {
     xs.device().is_cpu()
         && xs.rank() >= 2
         && xs.dim(xs.rank() - 2).is_ok_and(|rows| rows == 1)
-        && w.dim(0).is_ok_and(|n| n >= MIN_PARALLEL_OUTPUTS)
+        && w.dim(0).is_ok_and(|n| n >= min_parallel_outputs())
         && w.dim(1).is_ok_and(|k| k >= 1)
         && is_kernel_dtype(w.dtype())
 }
@@ -227,7 +244,7 @@ pub fn gemv_into_vec(xs: &Tensor, w: &Tensor, n: usize, k: usize) -> Result<Vec<
     };
 
     let threads = crate::cpu_threads::resolve();
-    if n < MIN_PARALLEL_OUTPUTS || threads <= 1 {
+    if n < min_parallel_outputs() || threads <= 1 {
         return Ok((0..n).map(|row| weight.dot(x, row, k)).collect());
     }
 
