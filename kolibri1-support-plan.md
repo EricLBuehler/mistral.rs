@@ -1125,6 +1125,75 @@ the same interleaving. So the kernels are not saturating the memory system, and 
 now per-thread streaming behaviour rather than anything structural - slab-to-slab transitions
 in the gather, and the attention kernels, which are half the bytes and untouched.
 
+### Per-phase decode timing, and the router
+
+`perf` cannot read a CPU decode step on this host. The kernels run inside the barrier pool and
+their frames inline into `call_trampoline`, so the interesting part of a step collapses into its
+caller. `mistralrs-core/src/utils/decode_prof.rs` splits a step into nine named phases instead.
+That is what makes an A/B readable - a change to one phase moves that phase's line rather than
+being lost in a 15% band around the total. Instrumentation overhead is 0.7 ms on a 136 ms step
+and is reported, not assumed.
+
+Its first output was wrong in the direction that flatters you: 19 ms *more* attributed time than
+wall clock, because two guards sat in one scope and the second shadowed the first without
+dropping it, so o_proj was counted twice. Only the unattributed column gave it away.
+
+At 7.34 tok/s, `--interleave=all`, 16 threads:
+
+| phase | ms/step | share | GB/s |
+| --- | --- | --- | --- |
+| routed | 50.75 | 37.5% | 46 |
+| attn_proj | 47.91 | 35.4% | 71 |
+| router | 19.59 | 14.5% | **10** |
+| shared | 6.25 | 4.6% | 62 |
+| lm_head | 4.61 | 3.4% | 143 |
+| attention | 3.21 | **2.4%** | 47 |
+| norms | 3.04 | 2.2% | - |
+
+**Two earlier conclusions died here.** The attention *op* is 2.4%, not the 50% of bytes that
+pointed at it - that 50% was always the attention *projections*, which are dense GEMV this plan
+had already optimised twice. Attacking the attention path would have been 2.4% of a step at
+best, and it was the largest thing left to attack.
+
+The router was the real find. 10 GB/s against 46-143 for everything else, 14.5% of a decode step
+to choose 6 experts out of 384. It is a raw `Tensor::matmul`, so it bypassed every decode fix in
+this plan: candle runs a batch-1 matmul as a tiled GEMM at m=1 on the global pool, whose workers
+park between calls.
+
+The cause was a threshold counting the wrong quantity. `MIN_PARALLEL_OUTPUTS = 512` counts
+outputs, but what the kernel streams is bytes. The router is 384 outputs and so missed it, while
+being 3.9 MB of f32 weight - more than the 2.6 MB bf16 k/v projection that set the 512 threshold
+in the first place. Added a byte criterion as a second way to qualify, as a strict `||` so it
+cannot take any shape away from the fast path. `router` 19.59 -> 3.52 ms, 5.6x.
+
+### The pool is a resource, not a default
+
+The router fix did not deliver its 15.8 ms. A same-session A/B, only the router changed:
+
+| phase | before | after |
+| --- | --- | --- |
+| router | 19.29 | 3.52 |
+| routed | 50.23 | **56.20** |
+| attn_proj | 48.29 | 49.58 |
+| total | 136.44 ms (7.33 tok/s) | 129.7 ms (7.71 tok/s) |
+
+The router moved from Rayon's pool to the barrier pool and the gather got 6 ms slower for it.
+Four combinations, all measured:
+
+| router | gather | tok/s |
+| --- | --- | --- |
+| candle matmul / rayon | barrier | 7.33 |
+| **gemv / barrier** | **barrier** | **7.71** |
+| gemv / rayon | barrier | 5.80 |
+| gemv / rayon | rayon | 4.71 |
+
+Two pools are worse than either pool alone: with the router on Rayon, `attn_proj` also degrades
+from 48.3 to 62.3 ms. One pool for all decode work wins, and the barrier pool is worth ~40% over
+Rayon - the same parking result as before, now confirmed a second way.
+
+So the honest total is **+4.5%** (7.33 -> 7.71), not the +13% the phase saving suggested, and the
+gap is a real and reproducible cost rather than measurement noise.
+
 ### Where the time actually goes
 
 Two corrections first, both from getting the measurement wrong before trusting it.
