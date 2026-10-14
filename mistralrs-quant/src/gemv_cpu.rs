@@ -45,6 +45,39 @@ fn is_kernel_dtype(dtype: DType) -> bool {
     matches!(dtype, DType::F32 | DType::BF16)
 }
 
+/// Splits `out` into chunks of `chunk` and fills them in parallel.
+///
+/// Uses candle's barrier pool rather than Rayon's global one. A decode token opens around 400
+/// such regions, and Rayon 1.13 parks an idle worker after only 32 `sched_yield` rounds, so
+/// consecutive regions pay a futex wake each - which is what a decode-only profile attributes
+/// to `crossbeam_epoch` and `cas4_acq`. The barrier pool spins 25,000 times before sleeping
+/// and the attention already runs on it every layer, so its workers stay warm across the
+/// attention/GEMV alternation instead of parking between them.
+pub(crate) fn par_chunks(out: &mut [f32], chunk: usize, fill: impl Fn(usize, &mut [f32]) + Sync) {
+    let n_chunks = out.len().div_ceil(chunk);
+    if n_chunks <= 1 {
+        fill(0, out);
+        return;
+    }
+    // The base is carried as a `usize` rather than a pointer because the closure handed to
+    // `execute_chunked` has to be `Sync`, and a raw pointer is not. The contract it relies on
+    // is the same one `par_chunks_mut` relies on: every index range it is given is disjoint.
+    let (base, len) = (out.as_mut_ptr() as usize, out.len());
+    candle_core::utils::barrier_pool().execute_chunked(n_chunks, |range| {
+        for chunk_idx in range {
+            let start = chunk_idx * chunk;
+            let end = (start + chunk).min(len);
+            // SAFETY: `base` is the start of a `len`-element `f32` allocation that outlives
+            // this call, `start..end` is inside it, and the ranges `execute_chunked` hands out
+            // are disjoint, so no two of these slices alias.
+            let dst = unsafe {
+                std::slice::from_raw_parts_mut((base as *mut f32).add(start), end - start)
+            };
+            fill(chunk_idx, dst);
+        }
+    });
+}
+
 /// Whether the decode-shaped fast path applies to this input and weight pair.
 pub fn should_use_gemv(xs: &Tensor, w: &Tensor) -> bool {
     xs.device().is_cpu()
@@ -250,13 +283,11 @@ pub fn gemv_into_vec(xs: &Tensor, w: &Tensor, n: usize, k: usize) -> Result<Vec<
 
     let chunk = n.div_ceil(threads);
     let mut out = vec![0f32; n];
-    out.par_chunks_mut(chunk)
-        .enumerate()
-        .for_each(|(chunk_idx, slot)| {
-            slot.iter_mut()
-                .enumerate()
-                .for_each(|(i, dst)| *dst = weight.dot(x, chunk_idx * chunk + i, k));
-        });
+    par_chunks(&mut out, chunk, |chunk_idx, dst| {
+        dst.iter_mut()
+            .enumerate()
+            .for_each(|(i, d)| *d = weight.dot(x, chunk_idx * chunk + i, k));
+    });
 
     Ok(out)
 }

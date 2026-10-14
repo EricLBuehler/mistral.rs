@@ -15,7 +15,6 @@
 //! across threads, so results do not depend on how many threads ran.
 
 use candle_core::{CpuStorage, DType, Result, Storage, Tensor};
-use rayon::prelude::*;
 
 use crate::dot_cpu::{dot_bf16, dot_f32 as dot};
 
@@ -263,20 +262,18 @@ fn par_fill(
     let mut out = vec![0f32; total];
     let threads = crate::cpu_threads::resolve().max(1);
     let chunk = total.div_ceil(threads);
-    out.par_chunks_mut(chunk)
-        .enumerate()
-        .for_each(|(chunk_idx, dst)| {
-            for (i, d) in dst.iter_mut().enumerate() {
-                let idx = chunk_idx * chunk + i;
-                let slot = idx / out_features;
-                let expert = ids[slot] as usize;
-                *d = if expert >= num_experts {
-                    f32::NAN
-                } else {
-                    dot(slot, idx % out_features, expert)
-                };
-            }
-        });
+    crate::gemv_cpu::par_chunks(&mut out, chunk, |chunk_idx, dst| {
+        for (i, d) in dst.iter_mut().enumerate() {
+            let idx = chunk_idx * chunk + i;
+            let slot = idx / out_features;
+            let expert = ids[slot] as usize;
+            *d = if expert >= num_experts {
+                f32::NAN
+            } else {
+                dot(slot, idx % out_features, expert)
+            };
+        }
+    });
     Ok(out)
 }
 
