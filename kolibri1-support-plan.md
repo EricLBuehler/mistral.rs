@@ -1515,3 +1515,56 @@ Two measurement notes, because both were my error rather than the machine's:
 - A first attempt at the pattern probe summed **one byte per slab** and reported 17,399 GB/s.
 - The corrected probe summed every byte and reported 7.3 GB/s, which is numpy's uint8 reduction,
   not memory. Neither was a bandwidth measurement; the real kernel was needed.
+
+
+## The governor: every number above this line was taken at 29% of peak
+
+`scaling_governor` was `schedutil` (cppc_cpufreq), and it never ramps on this host:
+
+```
+scaling_min_freq  1,000,000 kHz
+scaling_cur_freq  1,000,000 kHz   <- idle AND under load
+scaling_max_freq  3,400,000 kHz
+```
+
+Under a 16-thread decode: 1.0 GHz. Under a 64-thread load across all four nodes: 1.0 GHz in 11
+of 12 samples, 1.21 GHz once. So **every measurement earlier in this plan - every tok/s, every
+GB/s, every "we are bandwidth-bound" conclusion - was taken at 1.0 GHz on a 3.4 GHz part.**
+
+Switching the governor (needs sudo, which this account has passwordless):
+
+| | tok/s | `attn_proj` | `routed` |
+| --- | --- | --- | --- |
+| 1 node, 16 threads, `schedutil` @ 1.0 GHz | 7.14 | 49.6 ms | 62.4 ms |
+| 1 node, 16 threads, `performance` @ 3.4 GHz | **9.56** | **36.6 ms** | **46.8 ms** |
+
+**+34%.** Not 3.4x, which is the interesting part: the kernels were partly memory-bound after
+all, so the clock was not the whole story - but it was a third of it.
+
+### Thread scaling got *worse*, which confirms the spin theory
+
+| threads | 16 | 24 | 32 |
+| --- | --- | --- | --- |
+| tok/s @ 3.4 GHz | **9.56** | 7.29 | 7.16 |
+| tok/s @ 1.0 GHz | 7.14 | 6.80 | 6.33 |
+
+The optimum is still 16, but the penalty for oversubscribing is now sharper. That is exactly
+what the barrier-pool spin account predicts: the pool spins 25,000 iterations before parking,
+and at 3.4 GHz a spinner burns 3.4x more per iteration, so the cost of running 24 or 32
+workers on a 16-thread's worth of useful work goes up rather than down.
+
+### What this invalidates
+
+- **"We are memory-bound, so compute optimisation cannot help."** That was inferred from the
+  kernel sitting at 94% of single-thread streaming bandwidth - but both were measured at
+  1 GHz, where compute is cheap relative to memory and the two are indistinguishable. The BFMMLA
+  microbenchmark (1.167x) was also taken at 1 GHz; if anything a compute saving should have
+  looked *worse* there, so its value at full clock is likely higher, not lower.
+- **Every "measured" GB/s in this plan** should be read as "GB/s at 1.0 GHz".
+
+### Action item for whoever owns this host
+
+The 1 GHz cap is intentional, which is fine, but it is invisible unless you go looking: a
+128-core box that never leaves 29% of its clock will silently cap every benchmark taken on it by
+3.4x. Setting `performance` before benchmarking - and recording which governor produced a
+number - should be part of any perf methodology on this machine.
