@@ -1464,3 +1464,54 @@ across nodes with it, and trades local DRAM for re-faulting.
 Re-verified with the box unbusied - all four nodes at 0.1-0.7% busy, which retires the
 constraint this work was scoped under (nodes 0-2 shared with other users). The
 single-node, 16-thread recommendation survives it.
+
+
+## The routed phase, and the one hypothesis still standing
+
+`routed` is 44% of a step at ~39 GB/s against a 106 GB/s streaming ceiling. Everything below
+is what has been eliminated, and it is most of the list.
+
+- **Not disk.** 61 major faults in 20 s; 11 in 25 s with the box busier and the model's page
+  cache evicted to 48 GB. The 6.82 GB working set is re-read every step and the kernel keeps it
+  resident.
+- **Not the kernel.** Isolated, cold, 503 MB pool rotating: 106.5 GB/s, which *is* the ceiling.
+- **Not barrier-pool scheduling.** `execute_chunked` uses a shared atomic cursor with ~8 grabs
+  per thread - dynamic, and the pool is 16-way (15 workers plus the caller), so no wave
+  imbalance.
+- **Not redundant traffic.** The per-expert path reads selected slabs in place; nothing copies
+  the weight. It did take 57,600 `RwLock` reads per step to guard memory it never touched, now
+  fixed, worth ~2 ms.
+- **Not anonymous-versus-file-backed.** The residency cache answers this: it puts the routed
+  reads on anonymous copies and `routed` gets *slower*, 62.4 -> 73.1 ms. Both backings are
+  ~35-40 GB/s in-model; the isolated bench, which is anonymous, is 106.
+- **Not the expert count per step.** ~212 of 384 are touched, but the isolated bench also
+  rotates through scattered slabs and still reaches 106.
+
+So the variable is **in-model versus isolated**, not any property of the access pattern. The
+one hypothesis left that fits the numbers is page placement:
+
+| | GB/s |
+| --- | --- |
+| isolated gather, anonymous, `--interleave=all` | 175.5 |
+| isolated gather, anonymous, `--interleave=3` | 68.3 |
+| in-model, file-backed, pages ~97% on node 3 | 39-42 |
+
+The model's pages are effectively node-local, so the honest ceiling is the **one-node** number,
+68 GB/s, not 106. At 39-42 the routed phase is at **57-62% of its real ceiling**, and the gap
+is 1.6x rather than 2.7x. Threads are pinned to node 3, so a striped pool would draw from four
+nodes' DRAM.
+
+**This could not be tested.** Evicting the model's pages with `POSIX_FADV_DONTNEED` and letting
+them re-fault under `--interleave=all` did not stripe them: 20.9 GB on node 0, 0.5 on node 1,
+0.3 on node 2, 35.1 on node 3. btrfs file-cache faults do not honour the interleave policy the
+way anonymous allocation does, and throughput fell to 6.32 tok/s because only 56 GB of 145 GB
+was resident afterwards.
+
+Testing it properly needs the weights in anonymous memory under the interleave policy - which is
+the L1 stacking decision, at 151 GB, or a filesystem whose cache faults stripe.
+
+Two measurement notes, because both were my error rather than the machine's:
+
+- A first attempt at the pattern probe summed **one byte per slab** and reported 17,399 GB/s.
+- The corrected probe summed every byte and reported 7.3 GB/s, which is numpy's uint8 reduction,
+  not memory. Neither was a bandwidth measurement; the real kernel was needed.
