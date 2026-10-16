@@ -36,6 +36,7 @@ For Linux CUDA multi-GPU, add `nccl` when NCCL is installed. The Linux installer
 |---|---|---|
 | `code-execution` | `mistralrs-cli`, `mistralrs`, `mistralrs-core`, `mistralrs-server-core` | Python code execution tool. In `mistralrs-cli` defaults. |
 | `ring` | as above | Multi-machine ring distributed inference. |
+| `security` | `mistralrs-cli`, `mistralrs-server-core` | Opt-in access control, attack screening, bans and budgets for the HTTP server, with axum-guard-rs. Off by default. See [security layer](/guides/deploy/security/). |
 | `swagger-ui` | `mistralrs-server-core` | Mounts Swagger UI on the HTTP server. On by default in `mistralrs-server-core`. |
 
 ## Enabling features

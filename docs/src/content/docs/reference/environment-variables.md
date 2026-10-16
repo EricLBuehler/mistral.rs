@@ -58,6 +58,8 @@ See [CPU threads and affinity](/guides/perf/throughput-tuning/#cpu-threads-and-a
 | `MCP_CONFIG_PATH` | [MCP (Model Context Protocol)](/guides/agents/connect-mcp-server/) client configuration path used when `--mcp-config` is not passed. |
 | `KEEP_ALIVE_INTERVAL` | SSE (Server-Sent Events) keep-alive interval in milliseconds. Falls back to the default if missing or invalid. |
 | `MISTRALRS_ALLOW_RUNTIME_LORA_UPDATING` | Set to `1`, `true`, `yes`, or `on` to enable runtime LoRA load and unload endpoints. Disabled by default; the read-only route remains registered, but the target model must have a dynamic LoRA runtime. See [LoRA adapters](/guides/customize/lora-adapters/#enable-http-mutation). |
+| `MISTRALRS_SECURITY_API_KEYS` | Comma-separated API keys for the control routes when `--security` is set. See [security layer](/guides/deploy/security/). |
+| `MISTRALRS_SECURITY_IPINFO_TOKEN` | ipinfo.io token for the country rules of the security layer. |
 | `MISTRALRS_LORA_ADAPTER_ROOT` | Canonical directory root allowed for runtime LoRA adapter paths. Use this whenever runtime LoRA updating is enabled in production. |
 | `XDG_CACHE_HOME` | Base cache directory for web UI state. The UI uses `$XDG_CACHE_HOME/mistralrs`. |
 | `HOME` | Fallback for web UI cache path when `XDG_CACHE_HOME` is not set. |

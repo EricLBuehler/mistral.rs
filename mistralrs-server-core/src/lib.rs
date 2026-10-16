@@ -258,6 +258,8 @@ pub mod openapi_doc;
 pub mod responses;
 pub mod responses_types;
 pub mod route_registry;
+#[cfg(feature = "security")]
+pub mod security;
 pub mod skills;
 pub mod speech_generation;
 pub mod streaming;

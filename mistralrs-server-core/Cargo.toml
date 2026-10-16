@@ -44,6 +44,9 @@ utoipa-swagger-ui = { workspace = true, features = ["axum"], optional = true }
 uuid = { workspace = true, features = ["v4"] }
 zip.workspace = true
 
+axum-guard-rs = { workspace = true, optional = true }
+subtle = { workspace = true, optional = true }
+
 accelerate-src = { workspace = true, optional = true }
 intel-mkl-src = { workspace = true, optional = true }
 
@@ -60,3 +63,7 @@ mkl = ["mistralrs-core/mkl"]
 nccl = ["mistralrs-core/nccl"]
 ring = ["mistralrs-core/ring"]
 code-execution = ["mistralrs-core/code-execution"]
+security = ["dep:axum-guard-rs", "dep:subtle"]
+
+[dev-dependencies]
+tower = { version = "0.5.3", features = ["util"] }

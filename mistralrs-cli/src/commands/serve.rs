@@ -2,7 +2,7 @@
 
 use anyhow::{Context, Result};
 use axum::middleware;
-use std::path::Path;
+use std::{net::SocketAddr, path::Path};
 use tracing::{debug, info, warn};
 
 use mistralrs_core::{
@@ -30,6 +30,8 @@ use crate::args::{
 };
 use crate::ui::build_ui_router;
 
+use super::security::ServerSecurity;
+
 const MEBIBYTE_BYTES: usize = 1024 * 1024;
 
 /// Run the HTTP server with the specified model
@@ -43,6 +45,7 @@ pub async fn run_server(
     global: GlobalOptions,
 ) -> Result<()> {
     initialize_logging();
+    let security = ServerSecurity::new(&server.security)?;
     if server.observability_config().metrics {
         install_prometheus_recorder();
     }
@@ -148,7 +151,8 @@ pub async fn run_server(
     let mistralrs_for_mcp = mistralrs.clone();
 
     // Build and run the server
-    let mut app = MistralRsServerRouterBuilder::new()
+    let mut app = security
+        .attach(MistralRsServerRouterBuilder::new())
         .with_mistralrs(mistralrs)
         .with_max_tool_rounds_optional(server.max_tool_rounds)
         .with_tool_dispatch_url_optional(server.tool_dispatch_url.clone())
@@ -207,7 +211,7 @@ pub async fn run_server(
             ui_observability,
             observe_http,
         ));
-        app = app.nest("/ui", ui_router);
+        app = app.nest("/ui", security.protect_ui(ui_router));
         info!("UI available at http://{}:{}/ui", server.host, server.port);
     }
 
@@ -222,7 +226,11 @@ pub async fn run_server(
     info!("Server listening on http://{}:{}", server.host, server.port);
     log_api_surfaces(&server.host, server.port);
 
-    axum::serve(listener, app).await?;
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .await?;
 
     Ok(())
 }
@@ -256,14 +264,16 @@ pub(crate) async fn spawn_mcp_server(
 
 pub(crate) fn tcp_nodelay_listener(
     listener: tokio::net::TcpListener,
-) -> impl axum::serve::Listener<Io = tokio::net::TcpStream, Addr = std::net::SocketAddr> {
+) -> axum::serve::TapIo<tokio::net::TcpListener, fn(&mut tokio::net::TcpStream)> {
     use axum::serve::ListenerExt;
 
-    listener.tap_io(|stream| {
+    // A nameable type, so the router can be served with connect info.
+    let set_nodelay: fn(&mut tokio::net::TcpStream) = |stream| {
         if let Err(error) = stream.set_nodelay(true) {
             tracing::warn!("failed to set TCP_NODELAY on incoming connection: {error}");
         }
-    })
+    };
+    listener.tap_io(set_nodelay)
 }
 
 pub(crate) fn log_api_surfaces(host: &str, port: u16) {

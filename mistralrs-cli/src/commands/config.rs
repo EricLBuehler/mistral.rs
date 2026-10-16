@@ -2,6 +2,7 @@
 
 use anyhow::Result;
 use axum::middleware;
+use std::net::SocketAddr;
 use tracing::info;
 
 use mistralrs_core::initialize_logging;
@@ -13,6 +14,7 @@ use mistralrs_server_core::{
 
 use crate::args::{MatformerSelection, RuntimeOptions};
 use crate::commands::run::{interactive_mode, InteractiveConfig};
+use crate::commands::security::ServerSecurity;
 use crate::commands::serve::{
     apply_agent_mode, convert_to_model_selected, extract_sandbox_settings, load_mcp_config,
     log_agent_runtime, log_api_surfaces, spawn_mcp_server, tcp_nodelay_listener,
@@ -46,6 +48,7 @@ async fn run_serve_config(cfg: crate::config::ServeConfig) -> Result<()> {
         default_model_id,
     } = cfg;
 
+    let security = ServerSecurity::new(&server.security)?;
     if server.observability_config().metrics {
         install_prometheus_recorder();
     }
@@ -131,7 +134,8 @@ async fn run_serve_config(cfg: crate::config::ServeConfig) -> Result<()> {
     let mistralrs_for_ui = mistralrs.clone();
     let mistralrs_for_mcp = mistralrs.clone();
 
-    let mut app = MistralRsServerRouterBuilder::new()
+    let mut app = security
+        .attach(MistralRsServerRouterBuilder::new())
         .with_mistralrs(mistralrs)
         .with_max_tool_rounds_optional(server.max_tool_rounds)
         .with_tool_dispatch_url_optional(server.tool_dispatch_url.clone())
@@ -188,7 +192,7 @@ async fn run_serve_config(cfg: crate::config::ServeConfig) -> Result<()> {
             ui_observability,
             observe_http,
         ));
-        app = app.nest("/ui", ui_router);
+        app = app.nest("/ui", security.protect_ui(ui_router));
         info!("UI available at http://{}:{}/ui", server.host, server.port);
     }
 
@@ -203,7 +207,11 @@ async fn run_serve_config(cfg: crate::config::ServeConfig) -> Result<()> {
     info!("Server listening on http://{}:{}", server.host, server.port);
     log_api_surfaces(&server.host, server.port);
 
-    axum::serve(listener, app).await?;
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .await?;
 
     Ok(())
 }

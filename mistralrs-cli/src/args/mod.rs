@@ -7,12 +7,14 @@ mod model;
 mod paged_attn;
 mod quantize;
 mod sandbox;
+mod security;
 mod server;
 
 pub use model::*;
 pub use paged_attn::*;
 pub use quantize::*;
 pub use sandbox::*;
+pub use security::*;
 pub use server::*;
 
 use clap::{Parser, Subcommand, ValueEnum};
