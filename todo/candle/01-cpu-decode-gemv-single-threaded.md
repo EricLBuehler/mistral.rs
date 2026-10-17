@@ -1,77 +1,104 @@
-# CPU decode GEMV runs at one core's bandwidth regardless of thread count
+# CPU decode GEMV (m=1 matmul) does not scale with thread count
 
-- **Repo:** huggingface/candle
-- **Pinned rev:** `66a8cf184a5a519671454066b1b9efd446ec9f5c` (v0.11.0)
-- **Status:** open, worked around locally
-- **Impact:** every batch-1 CPU inference, most severely for MoE
+- **Repo:** `sarah-ek/gemm`, reached through `huggingface/candle`
+- **Crates:** `gemm-common` 0.19.0 (current, newest published 2025-11-14), `candle-core` 0.11.0
+- **candle rev checked:** `12bb5d1` (upstream master, 2026-10-14)
+- **Status:** already reported upstream. See "Existing reports" below; this file is the
+  measurement to add to them, not a new issue.
+- **Impact:** batch-1 CPU inference, most severely MoE
+
+## Already reported, do not refile
+
+| where | state | since |
+|---|---|---|
+| `huggingface/candle#1103` "Llama example uses ~10% of the CPU" | open | 2023 |
+| `sarah-ek/gemm#20` "Candle example uses 10% of CPU when fma is active for x86" | open | 2023-10-16 |
+
+Both describe the same symptom: a decode-shaped matmul occupying about one core out of many.
+#20 speculates that gemm bounds its threads "for some reason that might have to do with the
+stack". That guess can be ruled out, and the cause can be narrowed - see below.
 
 ## What
 
-A decode step is `[1, K] x [K, N]`: one token against a weight matrix that must be streamed
-in full. It is therefore purely bandwidth-bound, and the only thing that matters is how many
-cores stream the weight concurrently.
+`(1, K) x (K, N)`, the shape of a decode step, gets no benefit from extra threads at any size.
+Larger `m` scales normally, so this is specific to the GEMV shape.
 
-Measured on the CPU node (see `../evidence-host.md`), decode-shaped matmul, `[1,2048] x
-[2048,5632]` f32:
+## Measurement
 
-| threads | candle GB/s |
-|---|---|
-| 1 | 16.9 |
-| 2 | 17.4 |
-| 4 | 18.3 |
-| 8 | 18.4 |
-| 16 | 15.1 |
-| 32 | 16.6 |
+`Tensor::matmul`, f32, one NUMA node, governor `performance` (3.4 GHz), `RAYON_NUM_THREADS` set,
+eager `Tensor::from_vec` inputs, 50 iterations after warmup:
 
-Flat. The same probe reads the same weight tensor with a plain column sum:
+| shape | 1 thr | 8 thr | 32 thr | scaling |
+|---|---|---|---|---|
+| m=1, n=5632, k=2048 (46 MB) | 14.4 GB/s | 14.3 | 14.4 | **1.00x** |
+| m=1, n=512, k=256 (0.5 MB) | 25.6 GB/s | 26.0 | 25.9 | **1.01x** |
+| m=64, n=5632, k=2048 | 1.1 GB/s | 1.1 | 2.8 | 2.5x |
+| m=512, n=5632, k=2048 | 0.2 GB/s | 1.5 | 4.2 | 21x |
 
-| threads | read GB/s |
-|---|---|
-| 1 | 13.0 |
-| 32 | 13.2 |
+Reproduced across 3 runs (13.8-14.3 GB/s at both 1 and 32 threads).
 
-Also flat, and at the same rate as the matmul. So the matmul is not slower than reading the
-data, which means it is not doing avoidable arithmetic; it is simply not being spread across
-cores. The node can stream at 122.7 GB/s with 32 threads (lower bound, see
-`../evidence-host.md`), so this is roughly 13% of what the hardware offers.
+The 0.5 MB row is the load-bearing one: cache-resident, so this is not a bandwidth limit. One
+thread already extracts ~26 GB/s from L2 and 32 threads do no better. `m=512` scaling 21x
+shows gemm parallelises correctly once `m` is large enough.
 
-The bf16 shape is worse still: 2.8 GB/s at every thread count, about 5x below the f32 shape.
+## Two hypotheses ruled out
 
-## How it was found
+**Not the threading threshold.** `gemm_common::DEFAULT_THREADING_THRESHOLD` is
+`48 * 48 * 256 = 589824`, and `n_threads` is forced to 1 when `(m * n_chunk) * k_chunk` falls
+under it. Since `m=1` divides that product by `MR`, this looked like the cause. It is not -
+setting the threshold to 0 at runtime changes nothing:
 
-Isolating the op from the model. `mistralrs-quant/examples/cpu_decode_gemv.rs` times the
-matmul on its own and times a `sum` over the same tensor in the same process, which separates
-"the kernel is slow" from "the kernel is not parallel".
+| threads | default | threshold=0 |
+|---|---|---|
+| 1 | 14.2 | 14.3 |
+| 8 | 13.5 | 13.4 |
+| 32 | 14.3 | 14.1 |
+
+This also rules out the stack-management guess in gemm#20 for this shape.
+
+**Not idle threads.** `user / real` at 16 threads is 7.68s / 0.83s, about 9x, so rayon is
+spawning and running work. The work simply does not shorten the critical path.
+
+## Where it probably is
+
+On aarch64, `gemm-common/src/gemm.rs`:
+
+```rust
+let do_pack_rhs = _requires_row_major_rhs || m > get_rhs_packing_threshold() * MR;
+```
+
+With a row-major rhs the first term holds regardless of `m`, so every decode GEMV packs the
+whole weight matrix before any arithmetic. At `m=1` that pass dominates the runtime, and it
+does not appear to be split across threads. That would account for both observations at once:
+no scaling at any size, and 9x of busy threads that do not help.
+
+**Not confirmed.** What would settle it: timing `pack_rhs` separately, or re-running with an
+rhs already in the layout the kernel prefers.
 
 ## Impact
 
-End to end, on Qwen3-4B bf16 through mistral.rs, decode at depth 512 on one node:
+Measured in mistral.rs on Qwen3-4B bf16, decode at depth 512, one node:
 
 | build | decode tok/s |
 |---|---|
-| master | 0.6 |
-| with a local output-parallel GEMV | 4.9 |
+| candle as-is | 0.6 |
+| with an output-parallel GEMV | 4.9 |
 
-and on Qwen3.5-9B bf16, 0.3 to 2.1 tok/s. So this single kernel is most of the reason CPU
-decode in mistral.rs was unusable. The MoE case is worse and is filed separately as
-`03-aarch64-packed-moe-gemv-serial.md`.
-
-## Likely cause
-
-Not investigated inside candle beyond this measurement. The matmul reaches
-`candle_core::cpu_backend` for dense f32 and the gemm crate's `Parallelism::Rayon` path, which
-does take a thread count (`cpu_backend/mod.rs:1482-1487`). For a GEMV shape `m == 1` there is
-no `m` dimension to tile over, so the parallelism has to come from the `n` dimension, and that
-is the dimension the tiling most likely does not exploit at this shape. Reading the gemm crate
-did not settle it.
+Qwen3.5-9B bf16: 0.3 to 2.1 tok/s. This single kernel is most of the reason CPU decode in
+mistral.rs was unusable. The MoE case is filed separately as `03-aarch64-packed-moe-gemv-serial.md`.
 
 ## Suggested direction
 
-Partition `n` across threads for the `m == 1` case, one output row per thread, each thread
-walking `k` in the original order. That is what ggml does, and it is what the local workaround
-does.
+Partition `n` across threads for `m == 1`, one output row per thread, each walking `k` in the
+original order. That is what ggml does and what the local workaround does.
 
-The ordering constraint matters and is the reason this is not a one-liner: partitioning over
-output rows is bit-identical to the serial result, partitioning over a row's `k` reduction is
-not. ggml's row chunking is the reference for getting this right, and its correctness argument
-transfers directly.
+The ordering is the catch and the reason it is not a one-liner: partitioning over output rows is
+bit-identical to the serial result, partitioning over a row's `k` reduction is not. ggml's row
+chunking is the reference and its correctness argument transfers.
+
+## Correction to an earlier draft of this file
+
+An earlier version claimed the matmul "is simply not being spread across cores" and ran at "13%
+of what the hardware offers". Both are wrong. It *is* spread across cores (9x user/real), and
+14.4 GB/s against this node's ~68 GB/s ceiling is ~21%. The earlier 16.9 GB/s figure was also
+taken under `schedutil` at 1.0 GHz; see `../evidence-host.md`.
