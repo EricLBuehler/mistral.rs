@@ -16,7 +16,12 @@
 
 Both describe the same symptom: a decode-shaped matmul occupying about one core out of many.
 #20 speculates that gemm bounds its threads "for some reason that might have to do with the
-stack". That guess can be ruled out, and the cause can be narrowed - see below.
+stack". That guess is ruled out by the `user/real` measurement below - there is no thread
+pool activity at all at `m=1`.
+
+The fix is also already written: `sarah-ek/gemm` PR #41. This file is the aarch64
+confirmation to add to those threads, not a new issue.
+
 
 ## What
 
@@ -54,26 +59,38 @@ setting the threshold to 0 at runtime changes nothing:
 | 8 | 13.5 | 13.4 |
 | 32 | 14.3 | 14.1 |
 
-This also rules out the stack-management guess in gemm#20 for this shape.
+That is consistent with the real cause: the gemv path never reaches the parallel branch, so the
+gate governing it is irrelevant either way.
 
-**Not idle threads.** `user / real` at 16 threads is 7.68s / 0.83s, about 9x, so rayon is
-spawning and running work. The work simply does not shorten the critical path.
+## What is actually happening
 
-## Where it probably is
+The work is **entirely single-threaded**. `user / real` for `m=1` alone in one process, no
+other shape running:
 
-On aarch64, `gemm-common/src/gemm.rs`:
+| threads | real | user | user/real |
+|---|---|---|---|
+| 1 | 0.184 s | 0.167 s | 0.9x |
+| 8 | 0.187 s | 0.182 s | 1.0x |
+| 32 | 0.186 s | 0.182 s | 1.0x |
 
-```rust
-let do_pack_rhs = _requires_row_major_rhs || m > get_rhs_packing_threshold() * MR;
-```
+So the gemv kernels ignore the `parallelism` argument outright. That is what
+`sarah-ek/gemm` PR #41 states, and this measurement confirms it on aarch64.
 
-With a row-major rhs the first term holds regardless of `m`, so every decode GEMV packs the
-whole weight matrix before any arithmetic. At `m=1` that pass dominates the runtime, and it
-does not appear to be split across threads. That would account for both observations at once:
-no scaling at any size, and 9x of busy threads that do not help.
+A caveat on getting this number: an earlier measurement in this file reported ~9x user/real
+and concluded the threads were busy. That was wrong - the process also ran an `m=64` shape,
+which does parallelise, and it dominated the CPU time. Measuring `m=1` in isolation is what
+exposes it.
 
-**Not confirmed.** What would settle it: timing `pack_rhs` separately, or re-running with an
-rhs already in the layout the kernel prefers.
+## Already fixed, pending
+
+`sarah-ek/gemm` PR #41 "feat: parallelize gemv" (drbh, 2026-06-04) implements exactly the
+direction below, for both the colmajor (k-split) and rowmajor (m-split) gemv kernels. It is
+mergeable and open.
+
+It is worth pushing on rather than filing anything new: the repository has had **0 commits on
+master since 2025-11-14** while carrying 13 open PRs, so fixes appear to be queuing rather than
+landing.
+
 
 ## Impact
 
