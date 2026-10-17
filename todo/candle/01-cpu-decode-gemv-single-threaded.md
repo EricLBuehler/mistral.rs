@@ -92,6 +92,30 @@ master since 2025-11-14** while carrying 13 open PRs, so fixes appear to be queu
 landing.
 
 
+## Are there alternatives inside candle?
+
+No, and that is why this matters. `cpu_backend/mod.rs` dispatches over exactly three backends:
+
+```rust
+#[cfg(all(not(feature = "mkl"), not(feature = "accelerate")))]   // gemm  (the default)
+#[cfg(feature = "accelerate")]                                   // Apple's Accelerate
+#[cfg(feature = "mkl")]                                          // Intel MKL
+```
+
+`accelerate` is Apple frameworks, so macOS and iOS only. `mkl` comes from `intel-mkl-src`, an
+x86 binary redistribution last published 2022-09-13 whose features are all
+`mkl-{static,dynamic}-{lp64,ilp64}-{iomp,seq}` - Intel OpenMP, no ARM64 build. There is no
+ggml, oneDNN, OpenBLAS or cblas path in candle.
+
+So on aarch64 Linux, gemm is the only matmul candle can offer, and the m=1 serial path is
+forced. This is also the concrete reason mistral.rs needed its own decode GEMV rather than a
+feature flag.
+
+Worth contrasting: the reference oracle this work is measured against, vLLM, goes through
+PyTorch's CPU backend, which on aarch64 dispatches to oneDNN and parallelises GEMV properly.
+That is a large part of why it reaches usable decode throughput on CPU where candle-as-is does
+not.
+
 ## Impact
 
 Measured in mistral.rs on Qwen3-4B bf16, decode at depth 512, one node:
