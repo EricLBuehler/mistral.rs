@@ -3,7 +3,7 @@ use std::{
     sync::{atomic::AtomicUsize, Arc},
 };
 
-use candle_core::{quantized::GgmlDType, DType, Device, Result, Tensor};
+use candle_core::{quantized::GgmlDType, DType, Device, IndexOp, Result, Tensor};
 use candle_nn::Linear;
 
 #[cfg(all(feature = "cuda", has_deepgemm_fp8_sm90_provider))]
@@ -284,7 +284,22 @@ impl QuantMethod for BlockwiseFP8Linear {
             }
         }
     }
+    /// Stacked expert weights are `[num_experts, out, in]`, but the dequant kernel is
+    /// per-matrix and rejects anything that is not rank 2, so the expert axis is folded here.
     fn dequantize_w(&self) -> Result<candle_core::Tensor> {
+        if self.weight.rank() == 3 {
+            let experts = self.weight.dim(0)?;
+            let mut out = Vec::with_capacity(experts);
+            for expert in 0..experts {
+                out.push(ops::fp8_blockwise_dequantize(
+                    &self.weight.i(expert)?,
+                    &self.weight_scale_inv.i(expert)?,
+                    self.weight_block_size.to_vec(),
+                    self.dequant_dtype,
+                )?);
+            }
+            return Tensor::stack(&out, 0);
+        }
         ops::fp8_blockwise_dequantize(
             &self.weight,
             &self.weight_scale_inv,
@@ -483,6 +498,16 @@ impl QuantMethod for BlockwiseFP8Linear {
 
         // Fallback: dequantize weights and compute manually
         let weight = self.dequantize_w()?;
+
+        // The CUDA kernel path hands over the flattened layout, which is the only one this
+        // implements. The CPU path hands over the same shapes the dense layer sees -
+        // (batch, seq, 1, 1, hidden) with (batch, seq, top_k) indices - so everything else is
+        // delegated rather than duplicated here.
+        if indices.rank() != 2 || x.rank() != 3 {
+            let unquant =
+                UnquantLinear::new(QuantMethodConfig::Unquantized(Linear::new(weight, None)))?;
+            return unquant.gather_forward_raw(x, indices);
+        }
 
         // Expected shapes:
         // - x: (n_tokens, 1, hidden_dim) or (n_tokens, n_experts_per_tok, hidden_dim)

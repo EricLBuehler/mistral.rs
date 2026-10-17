@@ -381,6 +381,38 @@ impl FastExpertsWeights {
             experts_vb.clone()
         };
 
+        let checkpoint = ExpertCheckpoint::new(cfg, read_vb.clone(), comm)?;
+
+        // On CPU, keep per-expert weights as the un-fused views they already are. Stacking
+        // them costs the whole model in anonymous memory on top of the mapped checkpoint,
+        // and CPU decode only ever touches the experts a token routes to, so the fused layout
+        // buys nothing here that the gather does not already get. Accelerators keep the stack,
+        // and immediate ISQ keeps its path because it rewrites the slabs in place.
+        if experts_vb.device().is_cpu() && !isq && checkpoint.has_per_expert_layout() {
+            let per_expert = |proj: ExpertProj| -> Result<Arc<dyn QuantMethod>> {
+                let Some(slabs) = checkpoint.per_expert_views(proj)? else {
+                    candle_core::bail!("per-expert views requested for a fused source")
+                };
+                let (out_features, in_features) = match proj {
+                    ExpertProj::Gate | ExpertProj::Up => {
+                        (cfg.moe_intermediate_size, cfg.hidden_size)
+                    }
+                    ExpertProj::Down => (cfg.hidden_size, cfg.moe_intermediate_size),
+                };
+                Ok(Arc::new(mistralrs_quant::per_expert::PerExpertLinear::new(
+                    slabs,
+                    out_features,
+                    in_features,
+                )?))
+            };
+            return Ok(FastExpertsWeights {
+                fused_gate_proj: per_expert(ExpertProj::Gate)?,
+                fused_up_proj: per_expert(ExpertProj::Up)?,
+                fused_down_proj: per_expert(ExpertProj::Down)?,
+                sharded: comm.world_size() > 1,
+            });
+        }
+
         let wrap = |w: Tensor| -> Result<Arc<dyn QuantMethod>> {
             Ok(Arc::new(UnquantLinear::new(
                 QuantMethodConfig::Unquantized(Linear::new(w, None)),
@@ -388,7 +420,7 @@ impl FastExpertsWeights {
         };
         let keys = QuantizedExpertKeys::new(&experts_vb.prefix());
         let shard = (comm.world_size() == 1).then(mistralrs_quant::Shard::default);
-        let checkpoint = ExpertCheckpoint::new(cfg, read_vb, comm)?;
+        let checkpoint = ExpertCheckpoint::new(cfg, read_vb.clone(), comm)?;
         let load = |proj: ExpertProj,
                     vb: ShardedVarBuilder,
                     key: String|
@@ -1283,7 +1315,18 @@ impl FastExpertsWeights {
                 &down_in.reshape((forward.shape.num_tokens, config.num_experts_per_tok, inter))?,
                 ids,
             )?;
-            let xs = self.fused_down_proj.gather_forward(&down_in, &indices)?;
+            // Per-slot inputs, matching the (batch, seq, 1, 1, hidden) shape the gate and up
+            // gathers were handed. The LoRA path reshapes this too; without it the down
+            // projection gets a rank-3 input against rank-3 indices.
+            let xs = self.fused_down_proj.gather_forward(
+                &down_in.reshape((
+                    forward.shape.batch_size,
+                    forward.shape.seq_len,
+                    config.num_experts_per_tok,
+                    inter,
+                ))?,
+                &indices,
+            )?;
             xs.squeeze(D::Minus2)?.reshape((
                 forward.shape.num_tokens,
                 config.num_experts_per_tok,

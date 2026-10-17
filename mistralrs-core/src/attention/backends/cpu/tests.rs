@@ -1,4 +1,5 @@
 use super::*;
+use crate::attention::{AttentionMask, Sdpa};
 use candle_core::{DType, Device, Result as CandleResult, Tensor, D};
 use candle_nn::ops::softmax;
 
@@ -166,6 +167,103 @@ fn test_flash_attn_cpu_full_q() -> CandleResult<()> {
     let out = run_flash_attn_cpu::<f32>(&q, &k, &v, None, &sdpa(None))?;
     assert_eq!(out.shape().dims(), &[b, h, q_len, d]);
     assert_close(&out, &naive_attention(&q, &k, &v, None, None)?)
+}
+
+/// Causality is the whole contract of a decoder mask, and an off-by-one is silent: every
+/// query would see everything except itself, which still produces plausible activations.
+///
+/// q is all ones and k is all ones, so every visible key scores identically and the softmax is
+/// uniform over exactly the visible range. v is the iota, so the output at query `p` is the mean
+/// of `v[..=p]` under a correct causal mask and the mean of `v[..p]` if self is dropped.
+#[test]
+fn test_flash_attn_cpu_causal_mask_includes_self() -> CandleResult<()> {
+    let (b, q_len, h, d) = (1usize, 5usize, 1usize, 4usize);
+    let kv_len = q_len;
+    let ones = |n: usize| Tensor::from_vec(vec![1.0f32; b * n * h * d], (b, n, h, d), &Device::Cpu);
+    let q = ones(q_len)?;
+    let k = ones(kv_len)?;
+    let v = Tensor::from_vec(
+        (0..b * kv_len * h * d)
+            .map(|i| (i / (h * d)) as f32)
+            .collect::<Vec<_>>(),
+        (b, kv_len, h, d),
+        &Device::Cpu,
+    )?;
+
+    let mut mask_vals = Vec::with_capacity(q_len * kv_len);
+    for i in 0..q_len {
+        for j in 0..kv_len {
+            mask_vals.push(if j > i { f32::NEG_INFINITY } else { 0.0 });
+        }
+    }
+    let mask = Tensor::from_vec(mask_vals, (q_len, kv_len), &Device::Cpu)?;
+
+    let out = run_flash_attn_cpu::<f32>(&q, &k, &v, Some(&mask), &sdpa(None))?;
+    let got = out.flatten_all()?.to_vec1::<f32>()?;
+    for (p, row) in got.chunks(d).enumerate() {
+        let want: f32 = (0..=p).map(|i| i as f32).sum::<f32>() / (p + 1) as f32;
+        // Excluding self gives the mean of v[..p] instead; the gap is at least 0.4 here.
+        let without_self: f32 = if p == 0 {
+            0.0
+        } else {
+            (0..p).map(|i| i as f32).sum::<f32>() / p as f32
+        };
+        assert!(
+            (row[0] - want).abs() < 1e-3,
+            "query {p}: got {want} want, dropped-self would be {without_self}"
+        );
+    }
+    Ok(())
+}
+
+/// The same causality contract one layer up, through the dispatcher the models actually call:
+/// `AttentionMask::Custom` with q in `[b, h, q, d]` layout, which the dispatcher transposes
+/// before handing it to the kernel.
+#[test]
+fn test_sdpa_run_attention_custom_mask_includes_self() -> CandleResult<()> {
+    let (b, q_len, h, d) = (1usize, 5usize, 1usize, 4usize);
+    let ones = |n: usize| Tensor::from_vec(vec![1.0f32; b * n * h * d], (b, n, h, d), &Device::Cpu);
+    let q = ones(q_len)?.transpose(1, 2)?.contiguous()?;
+    let k = ones(q_len)?.transpose(1, 2)?.contiguous()?;
+    let v = Tensor::from_vec(
+        (0..b * q_len * h * d)
+            .map(|i| (i / (h * d)) as f32)
+            .collect::<Vec<_>>(),
+        (b, q_len, h, d),
+        &Device::Cpu,
+    )?
+    .transpose(1, 2)?
+    .contiguous()?;
+
+    let mut mask_vals = Vec::with_capacity(q_len * q_len);
+    for i in 0..q_len {
+        for j in 0..q_len {
+            mask_vals.push(if j > i { f32::NEG_INFINITY } else { 0.0 });
+        }
+    }
+    let mask = Tensor::from_vec(mask_vals, (q_len, q_len), &Device::Cpu)?;
+
+    let out = Sdpa.run_attention(&q, &k, &v, &AttentionMask::Custom(mask), None, &sdpa(None))?;
+    // Back in [b, q, h, d] for the o_proj, as the model expects.
+    let got = out
+        .transpose(1, 2)?
+        .contiguous()?
+        .flatten_all()?
+        .to_vec1::<f32>()?;
+    for (p, row) in got.chunks(d).enumerate() {
+        let want: f32 = (0..=p).map(|i| i as f32).sum::<f32>() / (p + 1) as f32;
+        let without_self: f32 = if p == 0 {
+            0.0
+        } else {
+            (0..p).map(|i| i as f32).sum::<f32>() / p as f32
+        };
+        assert!(
+            (row[0] - want).abs() < 1e-3,
+            "query {p}: got {} want {want}, dropped-self would be {without_self}",
+            row[0]
+        );
+    }
+    Ok(())
 }
 
 #[test]

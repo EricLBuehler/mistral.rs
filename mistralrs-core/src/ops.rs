@@ -6754,6 +6754,15 @@ pub(crate) fn qkv_projections(
             let q = out.pop().unwrap();
             return Ok((q, k, v));
         }
+
+        // The quantized fusion above needs f32 activations and a QTensor. Unquantized bf16 -
+        // which is what a bf16 checkpoint gives - took three separate GEMVs, three barriers,
+        // and three passes over the activation. One region over all three weights instead.
+        if let Some((q, k, v)) =
+            mistralrs_quant::try_fused_unquant_gemv_cpu(xs, &[q_proj, k_proj, v_proj])?
+        {
+            return Ok((q, k, v));
+        }
     }
 
     Ok((
