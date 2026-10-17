@@ -87,9 +87,13 @@ exposes it.
 direction below, for both the colmajor (k-split) and rowmajor (m-split) gemv kernels. It is
 mergeable and open.
 
-It is worth pushing on rather than filing anything new: the repository has had **0 commits on
-master since 2025-11-14** while carrying 13 open PRs, so fixes appear to be queuing rather than
-landing.
+We commented on it with the aarch64 confirmation and the two corrections:
+<https://github.com/sarah-quinones/gemm/pull/41#issuecomment-6233559624> (2026-10-17).
+
+The repository is worth watching rather than filing against: **0 commits on master since
+2025-11-14** while carrying 13 open PRs, so fixes appear to be queuing rather than landing. The
+project has since moved to `sarah-quinones/gemm`.
+
 
 
 ## Are there alternatives inside candle?
