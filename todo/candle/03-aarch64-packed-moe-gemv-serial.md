@@ -1,10 +1,31 @@
 # The aarch64 packed MoE GEMV is serial
 
-- **Repo:** huggingface/candle
+- **Repo:** `huggingface/candle`
 - **Pinned rev:** `66a8cf184a5a519671454066b1b9efd446ec9f5c` (v0.11.0)
-- **Status:** open, blocks quantized MoE decode. The unquantized stacked path is now
-  parallel on the `cpu-decode-bandwidth` branch; this entry covers the quantized one.
+- **Status:** open, not yet reported upstream. Verified still true at candle `12bb5d1`
+  (upstream master, 2026-10-14). We hold a fix for the unquantized path only; see "What we
+  can offer".
 - **Impact:** CPU MoE inference on aarch64
+
+## Verified against upstream master, 2026-10-14
+
+| claim | pinned `66a8cf1` | upstream `12bb5d1` |
+|---|---|---|
+| parallel constructs in `quantized/repack.rs` | 0 in 1062 lines | 0 in 1083 lines |
+| entry point `QTensor::indexed_gemv` | `quantized/mod.rs:1053` | same line |
+| `try_indexed_gemv` serial | yes | yes |
+
+No newer release of the `gemm` crate exists to have fixed a related path (0.19.0, published
+2025-11-14).
+
+## What we can offer
+
+A working parallel implementation of the *unquantized* stacked expert gather, in
+`mistralrs-quant/src/moe_gather_cpu.rs`, which partitions over independent (token, expert)
+pairs and so preserves bit-exactness. It is not a drop-in for this path because it operates on
+already-dequantised slabs rather than the repacked quantised layout `repack.rs` maintains. It
+is offered as a worked example of the partitioning, not as a patch.
+
 
 ## What
 

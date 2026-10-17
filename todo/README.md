@@ -34,9 +34,9 @@ the index so it is not mistaken for a bug report.
 
 | # | Issue | Status |
 |---|---|---|
-| 01 | [CPU decode GEMV runs at one core's bandwidth](candle/01-cpu-decode-gemv-single-threaded.md) | open, worked around locally |
-| 02 | [`RAYON_NUM_THREADS` unset under `numactl` under-uses the pinned cores](candle/02-numa-affinity-ignored.md) | open, workaround known |
-| 03 | [aarch64 packed MoE GEMV is serial](candle/03-aarch64-packed-moe-gemv-serial.md) | open, blocks quantized MoE decode |
+| 01 | [CPU decode GEMV does not scale with thread count](candle/01-cpu-decode-gemv-single-threaded.md) | already reported as [candle#1103](https://github.com/huggingface/candle/issues/1103) and [gemm#20](https://github.com/sarah-ek/gemm/issues/20), both open since 2023. Our measurement is the addition to comment on them with, not a new issue. |
+| 02 | ~~[`RAYON_NUM_THREADS` unset under `numactl` under-uses the pinned cores](candle/02-numa-affinity-ignored.md)~~ | **withdrawn.** The count is correct under pinning (32, matching `available_parallelism`); `linux_detect_preferred_cpus` returns `None` on a homogeneous host and the `num_cpus` fallback respects affinity. The observed symptom was a misattribution of 01. |
+| 03 | [aarch64 packed MoE GEMV is serial](candle/03-aarch64-packed-moe-gemv-serial.md) | open, not yet reported. Verified still true at candle `12bb5d1`. |
 
 ### Gaps
 

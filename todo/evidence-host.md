@@ -11,10 +11,35 @@ hosts without re-measuring, so each issue file says which host it used.
 | NUMA | 4 nodes, 32 cores each: node0 `0-31`, node1 `32-63`, node2 `64-95`, node3 `96-127` |
 | ISA | `asimd`, `asimddp`, `bf16`, `flagm`, `i8mm` |
 | Memory | 255 GiB, no swap |
+| Governor | `schedutil` by default - **see below, this caps the host at 1.0 of 3.4 GHz** |
 | Kernel | Linux 5.x, aarch64 |
 | Rust | 1.99.0, `RUSTFLAGS` from the repo `.cargo/config.toml` (`-C target-cpu=native`) |
 | mistral.rs | `3f2515e9b` (master at time of writing) |
 | candle | pinned rev `66a8cf184a5a519671454066b1b9efd446ec9f5c` (v0.11.0) |
+
+## Governor: read this before trusting any number here
+
+`scaling_governor` is `schedutil` (cppc_cpufreq) and on this host **it never ramps**:
+
+```
+scaling_min_freq  1,000,000 kHz
+scaling_cur_freq  1,000,000 kHz   <- idle, and under a 16-thread decode
+scaling_max_freq  3,400,000 kHz
+```
+
+A 64-thread load across all four nodes held 1.0 GHz in 11 of 12 samples, and 1.21 GHz once.
+So by default this host runs at **29% of its clock** and every throughput and bandwidth figure
+taken here is a 1.0 GHz figure unless it says otherwise.
+
+Set the governor before benchmarking:
+
+```
+sudo sh -c 'for c in /sys/devices/system/cpu/cpu[0-9]*/cpufreq/scaling_governor; do echo performance > "$c"'
+```
+
+This is a runtime change and does not survive a reboot. On `performance`, a Kolibri-1 decode at
+one node and 16 threads goes 7.14 to 9.56 tok/s, and `candle/01` measures 14.4 GB/s rather than
+the 16.9 GB/s recorded here earlier. Record which governor produced a number.
 
 ## Shared-host caveat
 
