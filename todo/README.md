@@ -17,6 +17,17 @@ is sent anywhere.
 One entry (`gaps/04`) is unrequested rather than found-in-the-wild; it is marked as such in
 the index so it is not mistaken for a bug report.
 
+## Open measurement tasks
+
+Things decided but not yet done. Kept here rather than in a plan file so they do not get lost.
+
+| task | why it is still open |
+|---|---|
+| Re-sweep `MIN_PARALLEL_OUTPUTS` at 3.4 GHz | The 1024 -> 512 change was the largest single win of the session (2.35x) and is a work-partitioning threshold. Its optimum was found at 1.0 GHz and has almost certainly moved. Self-contained. |
+| Re-test the MoE residency cache at 3.4 GHz | Measured -13% at 1.0 GHz. A memory-traffic optimisation is the kind of thing that can flip at full clock. One env var. |
+| Compare generated chains against the primary oracle | `07` measures against the transcription. The primary comparison is the one that would settle whether BFMMLA converges. Blocked on the gate-schema question (logprobs vs logits). |
+| Re-verify `mistralrs/06` end to end | The fix is reasoned from shapes, not run. The only FP8 checkpoint available is 74 GB on a shared host. |
+
 ## Index
 
 ### mistral.rs
@@ -27,8 +38,10 @@ the index so it is not mistaken for a bug report.
 | 02 | [CPU GGUF MoE dequantizes every expert on every forward](mistralrs/02-cpu-gguf-moe-dequant-every-call.md) | open, not started |
 | 03 | [CPU attention kernels ignore `sliding_window`](mistralrs/03-cpu-attention-ignores-sliding-window.md) | open, not started |
 | 04 | [PagedAttention is disabled whenever CPU is in the device map](mistralrs/04-cpu-disables-paged-attention.md) | open, design decision |
-| 05 | [17 clippy warnings block the CI clippy gate](mistralrs/05-clippy-double-must-use-blocks-ci.md) | open, trivial |
-| 06 | [CPU blockwise-FP8 stacked MoE does not run](mistralrs/06-cpu-fp8-stacked-moe-does-not-run.md) | open, fixed on the `cpu-decode-bandwidth` branch |
+| 05 | [17 clippy warnings block the CI clippy gate](mistralrs/05-clippy-double-must-use-blocks-ci.md) | open, trivial. Pre-existing on `master`; our own one (`kolibri1.rs` `type_complexity`) is fixed on this branch. |
+| 06 | [CPU blockwise-FP8 stacked MoE does not run](mistralrs/06-cpu-fp8-stacked-moe-does-not-run.md) | fixed on the `cpu-decode-bandwidth` branch by `56044c0e9`, all three |
+| 07 | [Kolibri-1 CPU forward does not reproduce the reference logits](mistralrs/07-kolibri1-logit-gap.md) | open, quantified. BFMMLA moves chain argmax 166/248 to 170/248; not measured against the primary oracle. |
+| 08 | [A default CPU build is not pure Rust](mistralrs/08-cpu-build-pulls-native-tls.md) | open. `aws-lc-sys` + `ring` + `cc` + `cmake` via `hf-hub`'s TLS, not the compute. |
 
 ### candle
 

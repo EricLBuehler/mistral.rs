@@ -2,8 +2,25 @@
 
 - **Repo:** mistral.rs
 - **Components:** `mistralrs-quant/src/blockwise_fp8/mod.rs`, `mistralrs-core/src/moe/experts/backends.rs`
-- **Status:** open, three independent hard failures
-- **Impact:** every CPU MoE model loaded from an FP8 checkpoint
+- **Status:** **fixed on `cpu-decode-bandwidth`** by `56044c0e9`, all three. Kept as the record
+  of what was wrong, since the fixes are part of the Kolibri-1 PR rather than a standalone one
+  and a reviewer will want to know why `blockwise_fp8` changed.
+- **Impact at time of writing:** every CPU MoE model loaded from an FP8 checkpoint
+
+## Correction
+
+An earlier revision of this file read "open, three independent hard failures". All three were
+closed by one commit, and the file was not updated at the time.
+
+| # | failure | fix |
+|---|---|---|
+| 1 | dequant kernel handed a rank-3 expert stack | expert axis folded before `fp8_blockwise_dequantize`, results stacked back (`blockwise_fp8/mod.rs`) |
+| 2 | gather implemented only the flattened CUDA layout | non-`(rank 2, rank 3)` shapes delegated to `UnquantLinear::gather_forward_raw` rather than duplicated |
+| 3 | non-LoRA stacked forward under-reshaped the down projection | `down_in` reshaped to `(batch, seq, top_k, inter)` before the gather (`backends.rs`) |
+
+**Not re-verified end to end.** The fix is reasoned from the shapes and the three code sites;
+the FP8 checkpoint has not been loaded since, because the only one available is 74 GB and the
+host is shared. If this is being used as evidence for anything, run the forward once first.
 
 ## What
 

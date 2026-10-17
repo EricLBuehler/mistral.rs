@@ -318,6 +318,31 @@ Two separable problems sit between here and there:
   order there costs little and is directly testable.
 
 
+## Measured: matching the oracle's reduction order moves every argmax metric
+
+`MISTRALRS_DOT_BFMMLA=1` (`0cee4ad00`) switches the bf16 dots to a BFMMLA reduction, which is
+the order the reference's CPU GEMM uses. Measured at 3.4 GHz against the transcription goldens:
+
+| metric | FMA order | BFMMLA order |
+|---|---|---|
+| chain argmax | 166/248 | **170/248** |
+| final-token argmax | 6/8 | **7/8** |
+| first-step argmax | 0/8 | **1/8** |
+| worst top-k logit gap | 6.59 | 6.94 |
+
+Every argmax metric moves the same way, and the gap gets slightly worse.
+
+**Weak evidence, stated plainly.** Eight prompts means 6/8 -> 7/8 is one prompt flipping. The
+chain figure is the only one with enough samples to lean on, and it is +4. Improvement and a
+worse gap are also what noise looks like.
+
+**It is measured against the transcription, not the primary oracle.** That comparison is still
+outstanding and is the one that would settle whether this is convergence or coincidence.
+Default stays off until then.
+
+It is also a small speedup, 9.36 -> 9.59 tok/s, all of it in the `attn_proj` phase; `routed` is
+streaming-bound and does not care.
+
 ## Measured: the routing decision is decided by rounding, not by the math
 
 The oracle's generator is runnable here (torch 2.14.1 in a venv), so this is measured rather

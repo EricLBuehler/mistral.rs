@@ -532,8 +532,8 @@ static ROUTED_IDS: std::sync::OnceLock<std::sync::Mutex<Vec<Vec<Vec<u32>>>>> =
     std::sync::OnceLock::new();
 /// `(logits, bias)` at layer 0, so the selection scores can be compared against the oracle's
 /// rather than inferred from which ids came out.
-static LAYER0_SCORES: std::sync::OnceLock<std::sync::Mutex<Vec<(Vec<f32>, Vec<f32>)>>> =
-    std::sync::OnceLock::new();
+type Layer0Scores = std::sync::Mutex<Vec<(Vec<f32>, Vec<f32>)>>;
+static LAYER0_SCORES: std::sync::OnceLock<Layer0Scores> = std::sync::OnceLock::new();
 static TRACE_IDS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 fn routed_ids() -> Option<&'static std::sync::Mutex<Vec<Vec<Vec<u32>>>>> {
