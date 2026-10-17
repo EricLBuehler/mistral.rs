@@ -4,6 +4,8 @@ use clap::{Args, ValueEnum};
 use mistralrs_server_core::metrics::{AccessLogFormat, ObservabilityConfig};
 use serde::Deserialize;
 
+use super::SecurityCliOptions;
+
 /// HTTP server configuration
 #[derive(Args, Clone, Deserialize)]
 pub struct ServerOptions {
@@ -63,6 +65,10 @@ pub struct ServerOptions {
     #[arg(long)]
     #[serde(default)]
     pub disable_metrics: bool,
+
+    #[command(flatten)]
+    #[serde(flatten)]
+    pub security: Box<SecurityCliOptions>,
 }
 
 impl Default for ServerOptions {
@@ -79,6 +85,7 @@ impl Default for ServerOptions {
             access_log_health: false,
             disable_request_id_header: false,
             disable_metrics: false,
+            security: Box::default(),
         }
     }
 }

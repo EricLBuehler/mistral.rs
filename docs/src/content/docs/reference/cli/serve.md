@@ -69,6 +69,20 @@ mistralrs serve [OPTIONS] [COMMAND]
 | `--access-log-health` | `false` | Include health, metrics, docs, and UI requests in HTTP access logs |
 | `--disable-request-id-header` | `false` | Disable the x-request-id response header |
 | `--disable-metrics` | `false` | Disable Prometheus HTTP metrics and the metrics recorder |
+| `--security` | `false` | Enable the security layer (needs a build with the `security` feature) |
+| `--security-control-allow-ips <SECURITY_CONTROL_ALLOW_IPS>` |  | IPs or CIDR ranges allowed to reach the control routes |
+| `--security-api-key-header <SECURITY_API_KEY_HEADER>` |  | Header carrying the API key. Default: x-api-key. For `authorization` the `Bearer ` prefix is accepted |
+| `--security-protect-all-routes` | `false` | Apply the IP allowlist and API key to every route, not only the control routes |
+| `--security-trusted-proxies <SECURITY_TRUSTED_PROXIES>` |  | Proxy IPs or CIDR ranges whose X-Forwarded-For is believed |
+| `--security-rate-limit <SECURITY_RATE_LIMIT>` |  | Requests per client per minute across all routes. Default: 1200 |
+| `--security-gpu-rate-limit <SECURITY_GPU_RATE_LIMIT>` |  | Requests per client per minute on each GPU route (inference, images, speech, embeddings). Default: 120 |
+| `--security-max-upload-mb <SECURITY_MAX_UPLOAD_MB>` |  | Largest accepted file or skill upload, in MB. The 50 MB body limit still applies |
+| `--security-blocked-countries <SECURITY_BLOCKED_COUNTRIES>` |  | Country codes to block (needs an ipinfo token) |
+| `--security-allowed-countries <SECURITY_ALLOWED_COUNTRIES>` |  | Country codes to allow exclusively (needs an ipinfo token) |
+| `--security-block-cloud-providers <SECURITY_BLOCK_CLOUD_PROVIDERS>` |  | Cloud providers to block (AWS, GCP, Azure) |
+| `--security-emergency-mode` | `false` | Answer 503 to everyone outside the emergency whitelist |
+| `--security-emergency-whitelist <SECURITY_EMERGENCY_WHITELIST>` |  | IPs or CIDR ranges still served in emergency mode |
+| `--security-passive-mode` | `false` | Log what would be blocked without blocking; the control allowlist and API key still apply |
 | `--max-seqs <MAX_SEQS>` | `32` | Maximum concurrent sequences |
 | `--max-num-batched-tokens <MAX_NUM_BATCHED_TOKENS>` | `4096` | Maximum tokens processed in one paged-attention scheduler step |
 | `--max-prefill-chunk-tokens <MAX_PREFILL_CHUNK_TOKENS>` | `512` | CUDA prompt-token quantum used while decode is resident and for recurrent prefill batching |

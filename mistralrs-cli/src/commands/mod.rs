@@ -9,6 +9,7 @@ mod manage;
 pub(crate) mod quant;
 mod quantize;
 mod run;
+mod security;
 pub(crate) mod serve;
 mod tune;
 mod uqff;

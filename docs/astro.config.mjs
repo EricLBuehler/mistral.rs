@@ -203,6 +203,7 @@ export default defineConfig({
               items: [
                 'guides/deploy/docker',
                 'guides/deploy/observability',
+                'guides/deploy/security',
                 'guides/deploy/production-checklist',
               ],
             },
