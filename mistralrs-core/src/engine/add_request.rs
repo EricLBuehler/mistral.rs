@@ -5,7 +5,7 @@ use crate::{
     },
     prefix_cacher::MatchingCache,
     request::{DetokenizationRequest, NormalRequest, TokenizationRequest},
-    sequence::SeqStepType,
+    sequence::{SeqPreallocatedCache, SeqStepType},
     tools::{ToolCallFormat, ToolCallState, ToolChoice},
     ModelCategory, RequestMessage, Response,
 };
@@ -52,6 +52,17 @@ fn first_unknown_token_id(tokenizer: &tokenizers::Tokenizer, token_ids: &[u32]) 
         .iter()
         .copied()
         .find(|token_id| tokenizer.id_to_token(*token_id).is_none())
+}
+
+fn preallocate_prompt_cache(
+    prefill_cache: Option<&MatchingCache>,
+    allocate: impl FnOnce() -> candle_core::Result<Option<SeqPreallocatedCache>>,
+) -> candle_core::Result<Option<SeqPreallocatedCache>> {
+    if matches!(prefill_cache, Some(MatchingCache::Normal { offset, .. }) if *offset != 0) {
+        Ok(None)
+    } else {
+        allocate()
+    }
 }
 
 impl Engine {
@@ -630,107 +641,6 @@ impl Engine {
                 .eos_tok
                 .clone();
 
-            let seq_preallocated_cache = if matches!(
-                get_mut_arcmutex!(self.pipeline).category(),
-                ModelCategory::Text | ModelCategory::Multimodal { .. }
-            ) {
-                let (metadata, device, needs_preallocated_cache) = {
-                    let pipeline = get_mut_arcmutex!(self.pipeline);
-                    let needs_preallocated_cache = match pipeline.cache() {
-                        crate::pipeline::EitherCache::Normal(normal) => normal
-                            .lock()
-                            .unwrap()
-                            .0
-                            .iter()
-                            .map(|cache| matches!(cache, KvCache::Normal { .. }))
-                            .collect(),
-                        _ => Vec::new(),
-                    };
-                    (
-                        pipeline.get_metadata(),
-                        pipeline.device(),
-                        needs_preallocated_cache,
-                    )
-                };
-                let model_metadata = metadata
-                    .model_metadata
-                    .as_ref()
-                    .expect("If a model has a NormalCache it must have a model metadata");
-                let n_tokens = prompt_tokens.len();
-                let required_blocks = n_tokens.div_ceil(NormalCache::CACHE_GROW_SIZE);
-                let max_seq_len = required_blocks * NormalCache::CACHE_GROW_SIZE;
-                let mut dtype = metadata.activation_dtype;
-                // matches the f16 conversion KvCache::append applies on CPU
-                if device.is_cpu()
-                    && dtype == candle_core::DType::F32
-                    && crate::kv_cache::cpu_kv_f16()
-                {
-                    dtype = candle_core::DType::F16;
-                }
-                let mut layer_caches = Vec::with_capacity(model_metadata.num_layers());
-                for layer_idx in 0..model_metadata.num_layers() {
-                    if !needs_preallocated_cache
-                        .get(layer_idx)
-                        .copied()
-                        .unwrap_or(false)
-                        || !model_metadata.uses_own_kv_cache_for_layer(layer_idx)
-                    {
-                        layer_caches.push(None);
-                        continue;
-                    }
-
-                    let k_shape = (
-                        1usize,
-                        model_metadata.num_kv_heads_for_layer(layer_idx),
-                        max_seq_len,
-                        model_metadata.k_head_dim_for_layer(layer_idx),
-                    );
-                    let v_shape = (
-                        1usize,
-                        model_metadata.num_kv_heads_for_layer(layer_idx),
-                        max_seq_len,
-                        model_metadata.v_head_dim_for_layer(layer_idx),
-                    );
-
-                    let k_seq_cache = match Tensor::zeros(k_shape, dtype, &device) {
-                        Ok(x) => x,
-                        Err(err) => {
-                            request
-                                .response
-                                .send(Response::InternalError(
-                                    err.context("Failed to allocate preallocated KV cache.")
-                                        .into(),
-                                ))
-                                .await
-                                .unwrap_or_else(|_| warn!("Receiver disconnected"));
-                            return;
-                        }
-                    };
-                    let v_seq_cache = if k_shape == v_shape {
-                        k_seq_cache.clone()
-                    } else {
-                        match Tensor::zeros(v_shape, dtype, &device) {
-                            Ok(x) => x,
-                            Err(err) => {
-                                request
-                                    .response
-                                    .send(Response::InternalError(
-                                        err.context("Failed to allocate preallocated KV cache.")
-                                            .into(),
-                                    ))
-                                    .await
-                                    .unwrap_or_else(|_| warn!("Receiver disconnected"));
-                                return;
-                            }
-                        }
-                    };
-                    layer_caches.push(Some((k_seq_cache, v_seq_cache)));
-                }
-                Some(layer_caches)
-            } else {
-                None
-            };
-
             let now = SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .expect("Time travel has occurred!");
@@ -785,7 +695,7 @@ impl Engine {
                 seq_step_type,
                 diffusion_params.clone(),
                 image_gen_save_file.clone(),
-                seq_preallocated_cache,
+                None,
                 request.return_raw_logits,
                 request.sampling_params.ignore_eos,
                 eos_toks,
@@ -888,6 +798,92 @@ impl Engine {
                     request.response
                 )
             };
+
+            let seq_preallocated_cache = handle_seq_error!(
+                preallocate_prompt_cache(prefill_cache.as_ref(), || {
+                    if matches!(
+                        get_mut_arcmutex!(self.pipeline).category(),
+                        ModelCategory::Text | ModelCategory::Multimodal { .. }
+                    ) {
+                        let (metadata, device, needs_preallocated_cache) = {
+                            let pipeline = get_mut_arcmutex!(self.pipeline);
+                            let needs_preallocated_cache = match pipeline.cache() {
+                                crate::pipeline::EitherCache::Normal(normal) => normal
+                                    .lock()
+                                    .unwrap()
+                                    .0
+                                    .iter()
+                                    .map(|cache| matches!(cache, KvCache::Normal { .. }))
+                                    .collect(),
+                                _ => Vec::new(),
+                            };
+                            (
+                                pipeline.get_metadata(),
+                                pipeline.device(),
+                                needs_preallocated_cache,
+                            )
+                        };
+                        let model_metadata = metadata
+                            .model_metadata
+                            .as_ref()
+                            .expect("If a model has a NormalCache it must have a model metadata");
+                        let n_tokens = prompt_tokens.len();
+                        let required_blocks = n_tokens.div_ceil(NormalCache::CACHE_GROW_SIZE);
+                        let max_seq_len = required_blocks * NormalCache::CACHE_GROW_SIZE;
+                        let mut dtype = metadata.activation_dtype;
+                        // matches the f16 conversion KvCache::append applies on CPU
+                        if device.is_cpu()
+                            && dtype == candle_core::DType::F32
+                            && crate::kv_cache::cpu_kv_f16()
+                        {
+                            dtype = candle_core::DType::F16;
+                        }
+                        let mut layer_caches = Vec::with_capacity(model_metadata.num_layers());
+                        for layer_idx in 0..model_metadata.num_layers() {
+                            if !needs_preallocated_cache
+                                .get(layer_idx)
+                                .copied()
+                                .unwrap_or(false)
+                                || !model_metadata.uses_own_kv_cache_for_layer(layer_idx)
+                            {
+                                layer_caches.push(None);
+                                continue;
+                            }
+
+                            let k_shape = (
+                                1usize,
+                                model_metadata.num_kv_heads_for_layer(layer_idx),
+                                max_seq_len,
+                                model_metadata.k_head_dim_for_layer(layer_idx),
+                            );
+                            let v_shape = (
+                                1usize,
+                                model_metadata.num_kv_heads_for_layer(layer_idx),
+                                max_seq_len,
+                                model_metadata.v_head_dim_for_layer(layer_idx),
+                            );
+
+                            let k_seq_cache =
+                                Tensor::zeros(k_shape, dtype, &device).map_err(|err| {
+                                    err.context("Failed to allocate preallocated KV cache.")
+                                })?;
+                            let v_seq_cache = if k_shape == v_shape {
+                                k_seq_cache.clone()
+                            } else {
+                                Tensor::zeros(v_shape, dtype, &device).map_err(|err| {
+                                    err.context("Failed to allocate preallocated KV cache.")
+                                })?
+                            };
+                            layer_caches.push(Some((k_seq_cache, v_seq_cache)));
+                        }
+                        Ok(Some(layer_caches))
+                    } else {
+                        Ok(None)
+                    }
+                }),
+                request.response
+            );
+            seq.set_preallocated_cache(seq_preallocated_cache);
 
             let recurrent_slot_allocation = {
                 let pipeline = get_mut_arcmutex!(self.pipeline);
@@ -1157,6 +1153,78 @@ mod tests {
 
         assert_eq!(first_unknown_token_id(&tokenizer, &[0, 1]), None);
         assert_eq!(first_unknown_token_id(&tokenizer, &[0, 2]), Some(2));
+    }
+
+    fn prefix_hit(offset: usize) -> MatchingCache {
+        MatchingCache::Normal {
+            normal: vec![],
+            recurrent_snapshots: None,
+            images_to_keep: 0,
+            audios_to_keep: 0,
+            video_frames_to_keep: 0,
+            toks: vec![1],
+            offset,
+        }
+    }
+
+    #[test]
+    fn restored_prefix_does_not_allocate_prompt_cache() -> candle_core::Result<()> {
+        for offset in [1, NormalCache::CACHE_GROW_SIZE] {
+            let cache = preallocate_prompt_cache(Some(&prefix_hit(offset)), || {
+                panic!("restored requests must not allocate unused prompt buffers")
+            })?;
+            assert!(cache.is_none());
+        }
+        Ok(())
+    }
+
+    fn fresh_prompt_cache_is_allocated(device: &candle_core::Device) -> candle_core::Result<()> {
+        for hit in [None, Some(prefix_hit(0))] {
+            let mut allocations = 0;
+            let cache = preallocate_prompt_cache(hit.as_ref(), || {
+                allocations += 1;
+                let k = Tensor::zeros(
+                    (1, 1, NormalCache::CACHE_GROW_SIZE, 1),
+                    candle_core::DType::F32,
+                    device,
+                )?;
+                Ok(Some(vec![Some((k.clone(), k))]))
+            })?
+            .expect("fresh prefill must retain its prompt buffers");
+            assert_eq!(allocations, 1);
+            let (k, v) = cache[0].as_ref().unwrap();
+            assert_eq!(k.dims(), &[1, 1, NormalCache::CACHE_GROW_SIZE, 1]);
+            assert_eq!(
+                k.flatten_all()?.to_vec1::<f32>()?,
+                vec![0.; NormalCache::CACHE_GROW_SIZE]
+            );
+            assert_eq!(
+                v.flatten_all()?.to_vec1::<f32>()?,
+                vec![0.; NormalCache::CACHE_GROW_SIZE]
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn fresh_and_zero_offset_prompts_allocate_on_cpu() -> candle_core::Result<()> {
+        fresh_prompt_cache_is_allocated(&candle_core::Device::Cpu)
+    }
+
+    #[cfg(feature = "metal")]
+    #[test]
+    fn fresh_and_zero_offset_prompts_allocate_on_metal() -> candle_core::Result<()> {
+        fresh_prompt_cache_is_allocated(&candle_core::Device::new_metal(0)?)
+    }
+
+    #[test]
+    fn required_prompt_cache_allocation_failure_is_returned() {
+        for hit in [None, Some(prefix_hit(0))] {
+            let result = preallocate_prompt_cache(hit.as_ref(), || {
+                Err(candle_core::Error::Msg("allocation failure".into()))
+            });
+            assert_eq!(result.unwrap_err().to_string(), "allocation failure");
+        }
     }
 
     fn tool() -> Tool {
