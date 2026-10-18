@@ -71,6 +71,25 @@ fn ggml_dtype_to_uqff_code(dtype: GgmlDType) -> u32 {
     }
 }
 
+/// Byte length a GGUF-serde UQFF `weight` must have for `dims` and the stored dtype code.
+pub(crate) fn uqff_gguf_weight_bytes(dtype: u32, dims: &[usize]) -> Result<usize> {
+    let dtype = ggml_dtype_from_uqff_code(dtype)?;
+    let overflow = || candle_core::Error::Msg(format!("UQFF GGUF weight shape {dims:?} overflows"));
+    let elems = dims
+        .iter()
+        .try_fold(1usize, |acc, &d| acc.checked_mul(d))
+        .ok_or_else(overflow)?;
+    let block = dtype.block_size();
+    if dims.last().is_none_or(|d| !d.is_multiple_of(block)) {
+        candle_core::bail!(
+            "UQFF GGUF weight shape {dims:?} is not a whole number of {dtype:?} blocks of {block}"
+        );
+    }
+    (elems / block)
+        .checked_mul(dtype.type_size())
+        .ok_or_else(overflow)
+}
+
 fn ggml_dtype_from_uqff_code(dtype: u32) -> Result<GgmlDType> {
     match dtype {
         0 => Ok(GgmlDType::F32),
@@ -177,6 +196,16 @@ impl GgufMatMul {
         b: Option<Tensor>,
         device: &Device,
     ) -> Result<Self> {
+        // `weight` and `weight.shape` are independent UQFF tensors. `qtensor_from_ggml`
+        // reinterprets `tensor_data` using the byte size implied by `dims` without
+        // checking the slice length, so a short `weight` would be read out of bounds.
+        let expected = uqff_gguf_weight_bytes(dtype, &dims)?;
+        if tensor_data.len() != expected {
+            candle_core::bail!(
+                "UQFF GGUF weight has {} bytes, but shape {dims:?} needs {expected}",
+                tensor_data.len()
+            );
+        }
         let dtype = ggml_dtype_from_uqff_code(dtype)?;
         let w = qtensor_from_ggml(dtype, &tensor_data, dims, device)?;
         // from_arc densifies float fallback entries, matching what ISQ produces at load
@@ -808,6 +837,36 @@ impl QuantizedSerde for GgufMatMul {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn from_raw_uqff_rejects_weight_shorter_than_shape() {
+        // 4x64 F32 needs 1024 bytes, so a 16-byte weight must be rejected.
+        let err = GgufMatMul::from_raw_uqff(0, vec![0u8; 16], vec![4, 64], None, &Device::Cpu)
+            .expect_err("short UQFF GGUF weight must be rejected")
+            .to_string();
+        assert!(
+            err.contains("has 16 bytes") && err.contains("needs 1024"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn from_raw_uqff_rejects_overflowing_shape() {
+        let err =
+            GgufMatMul::from_raw_uqff(0, vec![0u8; 16], vec![1 << 32, 1 << 32], None, &Device::Cpu)
+                .expect_err("overflowing shape must be rejected")
+                .to_string();
+        assert!(err.contains("overflows"), "{err}");
+    }
+
+    #[test]
+    fn from_raw_uqff_accepts_exact_weight() -> Result<()> {
+        let bytes: Vec<u8> = (0..256).flat_map(|_| 1.0f32.to_le_bytes()).collect();
+        let layer = GgufMatMul::from_raw_uqff(0, bytes, vec![4, 64], None, &Device::Cpu)?;
+        let w = layer.dequantize_w()?.flatten_all()?.to_vec1::<f32>()?;
+        assert!(w.len() == 256 && w.iter().all(|x| *x == 1.0));
+        Ok(())
+    }
 
     const TEST_EMBEDDING_DIM: usize = 256;
     const TEST_VOCAB_SIZE: usize = 8;
