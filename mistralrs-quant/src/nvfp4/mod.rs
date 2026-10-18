@@ -112,7 +112,7 @@ impl Nvfp4Layer {
         if let Device::Cuda(device) = parts.weight.device() {
             if !crate::cutile::nvfp4_supported(device) {
                 candle_core::bail!(
-                    "NVFP4 CUDA inference requires Blackwell or newer, CUDA 13.3, and a compatible tileiras"
+                    "NVFP4 CUDA inference requires Blackwell or newer, CUDA 13.3 or newer, and a compatible tileiras"
                 );
             }
         }
@@ -749,7 +749,7 @@ impl QuantMethod for Nvfp4Layer {
         }
         if !x.device().is_cpu() {
             candle_core::bail!(
-                "NVFP4 accelerator inference requires CUDA 13.3 and the cutile feature"
+                "NVFP4 accelerator inference requires CUDA 13.3 or newer and the cutile feature"
             );
         }
         self.reference_forward(x)
@@ -820,7 +820,7 @@ impl QuantMethod for Nvfp4Layer {
         }
         if !x.device().is_cpu() {
             candle_core::bail!(
-                "NVFP4 accelerator inference requires CUDA 13.3 and the cutile feature"
+                "NVFP4 accelerator inference requires CUDA 13.3 or newer and the cutile feature"
             );
         }
         let x = x.reshape((tokens * input_routes, k))?;

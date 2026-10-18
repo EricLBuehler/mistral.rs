@@ -63,7 +63,6 @@ derive_more = { workspace = true}
 akin.workspace = true
 variantly.workspace = true
 tracing-subscriber.workspace = true
-derive-new.workspace = true
 itertools.workspace = true
 sysinfo.workspace = true
 mistralrs-vision.workspace = true

@@ -2482,11 +2482,21 @@ impl CudaDecodeGraphState {
     }
 
     fn allocate_generation(&mut self) -> u64 {
-        NEXT_CUDA_DECODE_GRAPH_GENERATION
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |generation| {
-                generation.checked_add(1)
-            })
-            .expect("CUDA decode graph generation overflow")
+        let mut generation = NEXT_CUDA_DECODE_GRAPH_GENERATION.load(Ordering::Relaxed);
+        loop {
+            let next = generation
+                .checked_add(1)
+                .expect("CUDA decode graph generation overflow");
+            match NEXT_CUDA_DECODE_GRAPH_GENERATION.compare_exchange_weak(
+                generation,
+                next,
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+            ) {
+                Ok(_) => return generation,
+                Err(current) => generation = current,
+            }
+        }
     }
 }
 
