@@ -42,6 +42,10 @@ pub trait EmbeddingModel: IsqModel + AnyMoeBaseModelMixin {
         input_ids: &Tensor,
         flash_params: &FlashParams,
     ) -> candle_core::Result<Tensor>;
+    /// Optionally pool sequences while computing their common causal prefix once.
+    fn forward_shared_prefix(&self, _tokens: &[&[u32]]) -> candle_core::Result<Option<Tensor>> {
+        Ok(None)
+    }
     fn device(&self) -> &Device;
 }
 
@@ -583,6 +587,12 @@ impl EmbeddingModelLoader for Qwen3EmbeddingLoader {
     ) -> Result<Box<dyn EmbeddingModel + Send + Sync>> {
         let cfg: Qwen3EmbeddingConfig = serde_json::from_str(config)?;
 
+        let vb = if vb.contains_tensor("model.embed_tokens.weight") {
+            vb.pp("model")
+        } else {
+            vb
+        };
+
         Ok(Box::new(Qwen3EmbeddingModel::new(
             &cfg,
             vb,
@@ -606,7 +616,7 @@ impl EmbeddingModelLoader for Qwen3EmbeddingLoader {
 
 impl IsqModelLoader for Qwen3EmbeddingLoader {
     fn promoted_isq_predicates(&self, _config: &str) -> Result<Vec<Regex>> {
-        Ok(vec![Regex::new(r"^embed_tokens\.weight$")?])
+        Ok(vec![Regex::new(r"^(?:model\.)?embed_tokens\.weight$")?])
     }
 
     fn isq_layer_regexes(&self, _config: &str) -> Result<Vec<Regex>> {
@@ -644,11 +654,7 @@ impl DeviceMappedModelLoader for Qwen3EmbeddingLoader {
 
         let cfg: Qwen3EmbeddingConfig = serde_json::from_str(config)?;
 
-        Ok(
-            max_batch_size
-                * cfg.num_attention_heads
-                * max_seq_len.min(&ATTENTION_CHUNK_SIZE).pow(2),
-        )
+        Ok(cfg.workspace_size_elems(*max_batch_size, *max_seq_len))
     }
     fn non_mapped_max_act_size_elems(
         &self,
@@ -765,7 +771,6 @@ mod tests {
         for name in [
             "lm_head.weight",
             "lm_head.bias",
-            "model.embed_tokens.weight",
             "embed_tokens.bias",
             "embed_tokens.weight.extra",
             "other_embed_tokens.weight",
@@ -781,12 +786,14 @@ mod tests {
     fn embedding_gemma_promotes_only_exact_embedding_weight() {
         let predicates = EmbeddingGemmaLoader.promoted_isq_predicates("{}").unwrap();
         assert_promotes_only_embedding_weight(&predicates);
+        assert!(!predicates[0].is_match("model.embed_tokens.weight"));
     }
 
     #[test]
-    fn qwen3_embedding_promotes_only_exact_embedding_weight() {
+    fn qwen3_embedding_promotes_both_encoder_weight_prefixes() {
         let predicates = Qwen3EmbeddingLoader.promoted_isq_predicates("{}").unwrap();
         assert_promotes_only_embedding_weight(&predicates);
+        assert!(predicates[0].is_match("model.embed_tokens.weight"));
     }
 
     #[test]

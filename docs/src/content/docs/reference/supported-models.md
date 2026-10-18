@@ -102,6 +102,14 @@ The `Architecture` column is the `config.json` `architectures` value. Per-family
 | `Gemma3TextModel` | EmbeddingGemma | <details><summary><code>google/embeddinggemma-300m</code></summary><code>mistralrs run -m google/embeddinggemma-300m</code></details> |
 | `Qwen3ForCausalLM` | Qwen3 Embedding | <details><summary><code>Qwen/Qwen3-Embedding-0.6B</code></summary><code>mistralrs run -m Qwen/Qwen3-Embedding-0.6B</code></details> |
 
+## Decision models
+
+`Contrastive-LM/CLM-v0.1-8B` is auto-detected from `model_type: "clm"` and runs
+its frozen Qwen3-8B encoder plus state/action projection heads on CPU, Metal,
+or CUDA. It serves the Jev-compatible `POST /v1/systemone` contract, including
+Pydantic AI's `SystemOneModel`. See [Use decision models](/guides/models/use-decision-models/)
+for requests, limits, and examples.
+
 ## Format and quantization notes
 
 Text, multimodal, speech, and embedding models support ISQ at load time. Diffusion models (FLUX) do not; they load at native precision. See [GGUF support](/reference/gguf-support/) for GGUF compatibility; availability of [UQFF](/reference/uqff-format/), GPTQ, and AWQ artifacts varies by model on Hugging Face.

@@ -596,14 +596,16 @@ impl Engine {
         ) = {
             let pipeline = get_mut_arcmutex!(pipeline);
             let pipeline_metadata = pipeline.get_metadata();
+            let has_recurrent_cache =
+                !pipeline_metadata.no_kv_cache && pipeline.cache().is_hybrid();
             (
                 pipeline.requires_uniform_prompt_batch(),
                 pipeline.requires_uniform_completion_batch(),
                 pipeline.requires_uniform_media_batch(),
                 pipeline.supports_packed_prefill(),
-                pipeline.cache().is_hybrid(),
+                has_recurrent_cache,
                 pipeline.device().is_cuda() && !pipeline_metadata.is_xlora,
-                pipeline.cache().is_hybrid(),
+                has_recurrent_cache,
                 pipeline.speculative_prefix_checkpoint_policy(),
             )
         };
@@ -617,7 +619,7 @@ impl Engine {
         };
         if let Some(recurrent_capacity) = recurrent_capacity {
             let pipeline = get_mut_arcmutex!(pipeline);
-            if pipeline.cache().is_hybrid() {
+            if !pipeline.get_metadata().no_kv_cache && pipeline.cache().is_hybrid() {
                 pipeline
                     .cache()
                     .hybrid()
@@ -845,7 +847,11 @@ impl Engine {
     }
 
     fn request_is_abandoned(request: &Request) -> bool {
-        matches!(request, Request::Normal(request) if request.response_is_closed())
+        match request {
+            Request::Normal(request) => request.response_is_closed(),
+            Request::Decision(request) => request.response.is_closed(),
+            _ => false,
+        }
     }
 
     fn admission_class(request: &Request) -> admission::AdmissionClass {
@@ -853,6 +859,7 @@ impl Engine {
             Request::Normal(request) => admission::AdmissionClass::Workload {
                 sequences: request.sampling_params.n_choices.max(1),
             },
+            Request::Decision(_) => admission::AdmissionClass::Workload { sequences: 1 },
             Request::Tokenize(_) | Request::Detokenize(_) | Request::TerminateAllSeqsNextStep => {
                 admission::AdmissionClass::BypassControl
             }

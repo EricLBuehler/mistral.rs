@@ -232,6 +232,7 @@ struct ConfigArtifacts {
 }
 
 enum Detected {
+    Clm(crate::decision::ClmConfig),
     Normal(NormalLoaderType),
     Multimodal(MultimodalLoaderType),
     Embedding(Option<EmbeddingLoaderType>),
@@ -397,6 +398,14 @@ impl AutoLoader {
     }
 
     fn detect(&self, artifacts: &ConfigArtifacts) -> Result<Detected> {
+        if let Some(config) = &artifacts.contents {
+            let value: serde_json::Value = serde_json::from_str(config)?;
+            if value.get("model_type").and_then(|v| v.as_str()) == Some("clm") {
+                let config: crate::decision::ClmConfig = serde_json::from_value(value)?;
+                config.validate()?;
+                return Ok(Detected::Clm(config));
+            }
+        }
         if let Some(tp) = DiffusionLoaderType::auto_detect_from_files(&artifacts.repo_files) {
             return Ok(Detected::Diffusion(tp));
         }
@@ -470,7 +479,10 @@ impl AutoLoader {
         }
         if matches!(
             &detected,
-            Detected::Embedding(_) | Detected::Diffusion(_) | Detected::Speech(_)
+            Detected::Embedding(_)
+                | Detected::Clm(_)
+                | Detected::Diffusion(_)
+                | Detected::Speech(_)
         ) && (self.max_model_len.is_some() || self.hf_config_overrides.is_some())
         {
             anyhow::bail!(
@@ -478,6 +490,19 @@ impl AutoLoader {
             );
         }
         match detected {
+            Detected::Clm(config) => {
+                let builder = self
+                    .embedding_builder
+                    .lock()
+                    .unwrap()
+                    .take()
+                    .expect("builder taken");
+                *guard = Some(
+                    builder
+                        .with_clm(config)?
+                        .build(Some(EmbeddingLoaderType::Qwen3Embedding)),
+                );
+            }
             Detected::Normal(tp) => {
                 let builder = self
                     .normal_builder

@@ -47,6 +47,7 @@ impl From<TuneProfileRequest> for TuneProfile {
 )]
 pub async fn models(State(state): ExtractedMistralRsState) -> Response {
     let mut model_objects = Vec::new();
+    let mut decision_models = Vec::new();
 
     let models_with_status = match state.list_models_with_status() {
         Ok(models) => models,
@@ -70,6 +71,17 @@ pub async fn models(State(state): ExtractedMistralRsState) -> Response {
     }
 
     for (model_id, status) in models_with_status {
+        if matches!(
+            state.get_model_category(Some(&model_id)),
+            Ok(mistralrs_core::ModelCategory::Decision)
+        ) {
+            decision_models.push(crate::system_one::DecisionModelInfo {
+                name: model_id.clone(),
+                description: "CLM: Qwen3 encoder with contrastive state/action projection heads"
+                    .to_string(),
+                release_date: "2026-09-19".to_string(),
+            });
+        }
         let (tools_available, mcp_tools_count, mcp_servers_connected) =
             if status == CoreModelStatus::Loaded {
                 let tools_count = match state.get_tools_count(Some(&model_id)) {
@@ -128,6 +140,7 @@ pub async fn models(State(state): ExtractedMistralRsState) -> Response {
     Json(ModelObjects {
         object: "list",
         data: model_objects,
+        models: decision_models,
     })
     .into_response()
 }

@@ -1,0 +1,9 @@
+{
+  "model_type": "clm",
+  "base_model": "encoder",
+  "encoder_pooling": "last-token",
+  "embedding_dim": 8,
+  "checkpoints": [
+    "heads.pt"
+  ]
+}

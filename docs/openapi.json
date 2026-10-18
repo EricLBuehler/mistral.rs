@@ -1396,6 +1396,45 @@
         }
       }
     },
+    "/v1/systemone": {
+      "post": {
+        "tags": [
+          "System One"
+        ],
+        "operationId": "system_one",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DecisionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Typed decisions",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DecisionResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid question, input, or model capability"
+          },
+          "404": {
+            "description": "Model not found"
+          },
+          "500": {
+            "description": "Inference failed"
+          }
+        }
+      }
+    },
     "/v1/unload_lora_adapter": {
       "post": {
         "tags": [
@@ -1486,6 +1525,54 @@
                 }
               }
             }
+          }
+        }
+      }
+    },
+    "/v1/watermark/detect": {
+      "post": {
+        "tags": [
+          "Mistral.rs"
+        ],
+        "operationId": "detect_watermark",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WatermarkDetectionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Uncalibrated, scheme-specific watermark evidence",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WatermarkEvidence"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid watermark configuration or detection input"
+          },
+          "404": {
+            "description": "Text tokenization model was not found"
+          },
+          "413": {
+            "description": "Request body is too large"
+          },
+          "415": {
+            "description": "Request content type is not JSON"
+          },
+          "500": {
+            "description": "Detection or tokenization failed"
+          },
+          "503": {
+            "description": "Tokenization model is unavailable"
           }
         }
       }
@@ -2172,6 +2259,17 @@
               "null"
             ]
           },
+          "watermark": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/WatermarkConfig",
+                "description": "Opt-in token watermarking; the scheme selects the library algorithm."
+              }
+            ]
+          },
           "web_search_options": {
             "oneOf": [
               {
@@ -2741,7 +2839,17 @@
             "type": "integer",
             "minimum": 0
           },
-          "logprobs": {}
+          "logprobs": {},
+          "sampling_trace": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/SamplingTrace"
+              }
+            ]
+          }
         }
       },
       "ChatCompletionChunkDelta": {
@@ -3074,6 +3182,16 @@
               }
             ]
           },
+          "sampling_trace": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/SamplingTraceConfig"
+              }
+            ]
+          },
           "seed": {
             "type": [
               "integer",
@@ -3176,6 +3294,17 @@
             "description": "Truncate inputs that exceed the model's context length instead of erroring.",
             "example": null
           },
+          "watermark": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/WatermarkConfig",
+                "description": "Opt-in token watermarking; the scheme selects the library algorithm."
+              }
+            ]
+          },
           "web_search_options": {
             "oneOf": [
               {
@@ -3273,6 +3402,16 @@
           "logprobs": {},
           "message": {
             "$ref": "#/components/schemas/ChatCompletionResponseMessage"
+          },
+          "sampling_trace": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/SamplingTrace"
+              }
+            ]
           }
         }
       },
@@ -3306,6 +3445,49 @@
           }
         }
       },
+      "CollapsedSubtree": {
+        "type": "object",
+        "required": [
+          "root_match_id",
+          "round",
+          "first_draw_id",
+          "draw_count",
+          "match_count",
+          "winner_draw_id",
+          "token_id"
+        ],
+        "properties": {
+          "draw_count": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "first_draw_id": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "match_count": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "root_match_id": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "round": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "token_id": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "winner_draw_id": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      },
       "CompletionChunkChoice": {
         "type": "object",
         "required": [
@@ -3324,6 +3506,16 @@
             "minimum": 0
           },
           "logprobs": {},
+          "sampling_trace": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/SamplingTrace"
+              }
+            ]
+          },
           "text": {
             "type": "string"
           }
@@ -3541,6 +3733,16 @@
             "description": "Multiplicative repetition penalty; 1.0 disables it.",
             "example": null
           },
+          "sampling_trace": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/SamplingTraceConfig"
+              }
+            ]
+          },
           "seed": {
             "type": [
               "integer",
@@ -3639,6 +3841,17 @@
               "string",
               "null"
             ]
+          },
+          "watermark": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/WatermarkConfig",
+                "description": "Opt-in token watermarking; the scheme selects the library algorithm."
+              }
+            ]
           }
         }
       },
@@ -3704,6 +3917,16 @@
             "minimum": 0
           },
           "logprobs": {},
+          "sampling_trace": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/SamplingTrace"
+              }
+            ]
+          },
           "text": {
             "type": "string"
           }
@@ -3818,6 +4041,273 @@
           },
           "source": {
             "$ref": "#/components/schemas/SourceMeta"
+          }
+        }
+      },
+      "DecisionAnswer": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": [
+              "noul",
+              "type"
+            ],
+            "properties": {
+              "noul": {
+                "type": "number",
+                "format": "double"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "noul"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "choice",
+              "confidence",
+              "probabilities",
+              "type"
+            ],
+            "properties": {
+              "choice": {
+                "type": "string"
+              },
+              "confidence": {
+                "type": "number",
+                "format": "double"
+              },
+              "probabilities": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "number",
+                  "format": "double"
+                },
+                "propertyNames": {
+                  "type": "string"
+                }
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "choice"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "score",
+              "confidence",
+              "probabilities",
+              "legend",
+              "type"
+            ],
+            "properties": {
+              "confidence": {
+                "type": "number",
+                "format": "double"
+              },
+              "legend": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "propertyNames": {
+                  "type": "string"
+                }
+              },
+              "probabilities": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "number",
+                  "format": "double"
+                },
+                "propertyNames": {
+                  "type": "string"
+                }
+              },
+              "score": {
+                "type": "number",
+                "format": "double"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "score"
+                ]
+              }
+            }
+          }
+        ]
+      },
+      "DecisionModelInfo": {
+        "type": "object",
+        "required": [
+          "name",
+          "description",
+          "release_date"
+        ],
+        "properties": {
+          "description": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "release_date": {
+            "type": "string"
+          }
+        }
+      },
+      "DecisionQuestion": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": [
+              "type"
+            ],
+            "properties": {
+              "criteria": {
+                "type": [
+                  "object",
+                  "null"
+                ],
+                "additionalProperties": {},
+                "propertyNames": {
+                  "type": "string"
+                }
+              },
+              "instructions": {},
+              "type": {
+                "type": "string",
+                "enum": [
+                  "noul"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "criteria",
+              "type"
+            ],
+            "properties": {
+              "criteria": {
+                "type": "object",
+                "additionalProperties": {},
+                "propertyNames": {
+                  "type": "string"
+                }
+              },
+              "instructions": {},
+              "type": {
+                "type": "string",
+                "enum": [
+                  "choice"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "criteria",
+              "type"
+            ],
+            "properties": {
+              "criteria": {
+                "type": "array",
+                "items": {}
+              },
+              "instructions": {},
+              "type": {
+                "type": "string",
+                "enum": [
+                  "score"
+                ]
+              }
+            }
+          }
+        ]
+      },
+      "DecisionRequest": {
+        "type": "object",
+        "required": [
+          "model",
+          "state",
+          "questions"
+        ],
+        "properties": {
+          "model": {
+            "type": "string"
+          },
+          "questions": {
+            "type": "object",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/DecisionQuestion"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "state": {},
+          "temperature": {
+            "type": "number",
+            "format": "double"
+          }
+        }
+      },
+      "DecisionResponse": {
+        "type": "object",
+        "required": [
+          "model",
+          "answers",
+          "usage"
+        ],
+        "properties": {
+          "answers": {
+            "type": "object",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/DecisionAnswer"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "model": {
+            "type": "string"
+          },
+          "usage": {
+            "$ref": "#/components/schemas/DecisionUsage"
+          }
+        }
+      },
+      "DecisionUsage": {
+        "type": "object",
+        "required": [
+          "input_tokens",
+          "output_tokens",
+          "billing_units"
+        ],
+        "properties": {
+          "billing_units": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "input_tokens": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "output_tokens": {
+            "type": "integer",
+            "minimum": 0
           }
         }
       },
@@ -4130,6 +4620,235 @@
             "description": "The name of the function to call"
           }
         }
+      },
+      "GenerationDraw": {
+        "type": "object",
+        "required": [
+          "draw_id",
+          "token_id",
+          "text_status",
+          "probability"
+        ],
+        "properties": {
+          "draw_id": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "probability": {
+            "type": "number",
+            "format": "double"
+          },
+          "text": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "text_status": {
+            "type": "string"
+          },
+          "token_id": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          }
+        }
+      },
+      "GenerationEntrant": {
+        "type": "object",
+        "required": [
+          "source",
+          "draw_id",
+          "token_id",
+          "g_value"
+        ],
+        "properties": {
+          "draw_id": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "g_value": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "source": {
+            "$ref": "#/components/schemas/GenerationSource"
+          },
+          "token_id": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          }
+        }
+      },
+      "GenerationMatch": {
+        "type": "object",
+        "required": [
+          "match_id",
+          "round",
+          "left",
+          "right",
+          "winner",
+          "winner_draw_id",
+          "reason"
+        ],
+        "properties": {
+          "left": {
+            "$ref": "#/components/schemas/GenerationEntrant"
+          },
+          "match_id": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "reason": {
+            "type": "string"
+          },
+          "right": {
+            "$ref": "#/components/schemas/GenerationEntrant"
+          },
+          "round": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "winner": {
+            "type": "string"
+          },
+          "winner_draw_id": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      },
+      "GenerationSource": {
+        "type": "object",
+        "required": [
+          "kind",
+          "id"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "kind": {
+            "type": "string"
+          }
+        }
+      },
+      "GenerationTournament": {
+        "type": "object",
+        "required": [
+          "origin",
+          "used_for_generation",
+          "status",
+          "rounds",
+          "total_draws",
+          "total_matches",
+          "draws",
+          "matches",
+          "collapsed_subtrees",
+          "rng_version",
+          "rng_provenance",
+          "truncated"
+        ],
+        "properties": {
+          "collapsed_subtrees": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CollapsedSubtree"
+            }
+          },
+          "configured_depth": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0
+          },
+          "draws": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/GenerationDraw"
+            }
+          },
+          "effective_seed": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "matches": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/GenerationMatch"
+            }
+          },
+          "origin": {
+            "type": "string"
+          },
+          "rng_provenance": {
+            "type": "string"
+          },
+          "rng_version": {
+            "type": "string"
+          },
+          "rounds": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "sampling_version": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "status": {
+            "type": "string"
+          },
+          "total_draws": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "total_matches": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "truncated": {
+            "type": "boolean"
+          },
+          "truncation_reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "used_for_generation": {
+            "type": "boolean"
+          },
+          "winner": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/TeachingWinner"
+              }
+            ]
+          }
+        }
+      },
+      "GenerationTournamentConfig": {
+        "type": "object",
+        "properties": {
+          "max_matches": {
+            "type": "integer",
+            "default": 4095,
+            "maximum": 65535,
+            "minimum": 0
+          }
+        },
+        "additionalProperties": false
       },
       "Grammar": {
         "oneOf": [
@@ -4763,6 +5482,12 @@
             "type": "array",
             "items": {
               "$ref": "#/components/schemas/ModelObject"
+            }
+          },
+          "models": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DecisionModelInfo"
             }
           },
           "object": {
@@ -5585,6 +6310,17 @@
               {
                 "$ref": "#/components/schemas/TruncationStrategy",
                 "description": "Truncation strategy when input exceeds context window"
+              }
+            ]
+          },
+          "watermark": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/WatermarkConfig",
+                "description": "Opt-in token watermarking; the scheme selects the library algorithm."
               }
             ]
           }
@@ -8074,6 +8810,183 @@
           }
         }
       },
+      "SamplingTrace": {
+        "type": "object",
+        "required": [
+          "steps",
+          "truncated"
+        ],
+        "properties": {
+          "steps": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SamplingTraceStep"
+            }
+          },
+          "truncated": {
+            "type": "boolean"
+          },
+          "truncation_reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "SamplingTraceConfig": {
+        "type": "object",
+        "properties": {
+          "generation_tournament": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/GenerationTournamentConfig"
+              }
+            ],
+            "default": null
+          },
+          "max_candidates": {
+            "type": "integer",
+            "default": 32,
+            "minimum": 0
+          },
+          "max_layers": {
+            "type": "integer",
+            "default": 8,
+            "minimum": 0
+          },
+          "max_steps": {
+            "type": "integer",
+            "default": 32,
+            "minimum": 0
+          },
+          "teaching_tournament": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/TeachingTournamentConfig"
+              }
+            ],
+            "default": null
+          },
+          "textgrain": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/TextGrainTraceConfig"
+              }
+            ],
+            "default": null
+          }
+        },
+        "additionalProperties": false
+      },
+      "SamplingTraceStep": {
+        "type": "object",
+        "required": [
+          "generated_index",
+          "context_length",
+          "attempt",
+          "selected_token_id",
+          "selection_rule",
+          "candidate_count",
+          "candidates_truncated",
+          "candidates",
+          "layers",
+          "layers_truncated"
+        ],
+        "properties": {
+          "attempt": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "candidate_count": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "candidates": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TraceCandidate"
+            }
+          },
+          "candidates_truncated": {
+            "type": "boolean"
+          },
+          "context_length": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "generated_index": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "generation_tournament": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/GenerationTournament"
+              }
+            ]
+          },
+          "layers": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TraceLayer"
+            }
+          },
+          "layers_truncated": {
+            "type": "boolean"
+          },
+          "selected_token_id": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "selection_rule": {
+            "type": "string"
+          },
+          "teaching_tournament": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/TeachingTournament"
+              }
+            ]
+          },
+          "textgrain": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/TextGrainTrace"
+              }
+            ]
+          },
+          "watermark": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/TraceWatermark"
+              }
+            ]
+          }
+        }
+      },
       "SearchContextSize": {
         "type": "string",
         "enum": [
@@ -8334,6 +9247,233 @@
           }
         }
       },
+      "SynthIdGenerationPolicy": {
+        "type": "string",
+        "enum": [
+          "probability_updates",
+          "tournament"
+        ]
+      },
+      "TeachingDraw": {
+        "type": "object",
+        "required": [
+          "draw_id",
+          "token_id",
+          "probability"
+        ],
+        "properties": {
+          "draw_id": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "probability": {
+            "type": "number",
+            "format": "double"
+          },
+          "text": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "token_id": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          }
+        }
+      },
+      "TeachingEntrant": {
+        "type": "object",
+        "required": [
+          "source",
+          "draw_id",
+          "g_value"
+        ],
+        "properties": {
+          "draw_id": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "g_value": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "source": {
+            "$ref": "#/components/schemas/TeachingSource"
+          }
+        }
+      },
+      "TeachingMatch": {
+        "type": "object",
+        "required": [
+          "match_id",
+          "round",
+          "left",
+          "right",
+          "winner",
+          "winner_draw_id",
+          "reason"
+        ],
+        "properties": {
+          "left": {
+            "$ref": "#/components/schemas/TeachingEntrant"
+          },
+          "match_id": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "reason": {
+            "type": "string"
+          },
+          "right": {
+            "$ref": "#/components/schemas/TeachingEntrant"
+          },
+          "round": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "winner": {
+            "type": "string"
+          },
+          "winner_draw_id": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      },
+      "TeachingSource": {
+        "type": "object",
+        "required": [
+          "type",
+          "id"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "type": {
+            "type": "string"
+          }
+        }
+      },
+      "TeachingTournament": {
+        "type": "object",
+        "required": [
+          "origin",
+          "used_for_generation",
+          "rng_version",
+          "effective_seed",
+          "status",
+          "requested_rounds",
+          "configured_depth",
+          "rounds",
+          "layer_indices",
+          "draws",
+          "matches"
+        ],
+        "properties": {
+          "configured_depth": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "draws": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TeachingDraw"
+            }
+          },
+          "effective_seed": {
+            "type": "string"
+          },
+          "layer_indices": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          "matches": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TeachingMatch"
+            }
+          },
+          "origin": {
+            "type": "string"
+          },
+          "requested_rounds": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "rng_version": {
+            "type": "string"
+          },
+          "rounds": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "status": {
+            "type": "string"
+          },
+          "used_for_generation": {
+            "type": "boolean"
+          },
+          "winner": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/TeachingWinner"
+              }
+            ]
+          }
+        }
+      },
+      "TeachingTournamentConfig": {
+        "type": "object",
+        "properties": {
+          "rounds": {
+            "type": "integer",
+            "default": 2,
+            "maximum": 4,
+            "minimum": 1
+          },
+          "seed": {
+            "type": "integer",
+            "format": "int64",
+            "default": 0,
+            "minimum": 0
+          }
+        },
+        "additionalProperties": false
+      },
+      "TeachingWinner": {
+        "type": "object",
+        "required": [
+          "match_id",
+          "draw_id",
+          "token_id"
+        ],
+        "properties": {
+          "draw_id": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "match_id": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "token_id": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          }
+        }
+      },
       "TextConfig": {
         "type": "object",
         "description": "Text output configuration",
@@ -8415,6 +9555,390 @@
           }
         ],
         "description": "Text format configuration"
+      },
+      "TextGrainDraw": {
+        "type": "object",
+        "required": [
+          "uniform",
+          "cdf_lower",
+          "cdf_upper"
+        ],
+        "properties": {
+          "cdf_lower": {
+            "type": "number",
+            "format": "double"
+          },
+          "cdf_upper": {
+            "type": "number",
+            "format": "double"
+          },
+          "uniform": {
+            "type": "number",
+            "format": "double"
+          }
+        }
+      },
+      "TextGrainGeneration": {
+        "type": "object",
+        "required": [
+          "origin",
+          "used_for_generation",
+          "selected_token_id",
+          "token_draw",
+          "rng_draws",
+          "sampling_version",
+          "rng_version",
+          "rng_provenance"
+        ],
+        "properties": {
+          "block_draw": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/TextGrainDraw"
+              }
+            ]
+          },
+          "effective_seed": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "origin": {
+            "type": "string"
+          },
+          "rng_draws": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "rng_provenance": {
+            "type": "string"
+          },
+          "rng_version": {
+            "type": "string"
+          },
+          "sampling_version": {
+            "type": "string"
+          },
+          "selected_block": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0
+          },
+          "selected_token_id": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "token_draw": {
+            "$ref": "#/components/schemas/TextGrainDraw"
+          },
+          "used_for_generation": {
+            "type": "boolean"
+          }
+        }
+      },
+      "TextGrainGenerationPolicy": {
+        "type": "string",
+        "enum": [
+          "probability_updates",
+          "block_then_token"
+        ]
+      },
+      "TextGrainIteration": {
+        "type": "object",
+        "required": [
+          "iteration",
+          "regularization",
+          "achieved_fraction",
+          "row_residual",
+          "column_residual"
+        ],
+        "properties": {
+          "achieved_fraction": {
+            "type": "number",
+            "format": "double"
+          },
+          "column_residual": {
+            "type": "number",
+            "format": "double"
+          },
+          "iteration": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "regularization": {
+            "type": "number",
+            "format": "double"
+          },
+          "row_residual": {
+            "type": "number",
+            "format": "double"
+          }
+        }
+      },
+      "TextGrainSolver": {
+        "type": "object",
+        "required": [
+          "status",
+          "iterations",
+          "token_entropy",
+          "block_entropy",
+          "requested_fraction",
+          "target_fraction",
+          "achieved_fraction",
+          "entropy_loss",
+          "row_residual",
+          "column_residual",
+          "budget_satisfied"
+        ],
+        "properties": {
+          "achieved_fraction": {
+            "type": "number",
+            "format": "double"
+          },
+          "block_entropy": {
+            "type": "number",
+            "format": "double"
+          },
+          "budget_satisfied": {
+            "type": "boolean"
+          },
+          "column_residual": {
+            "type": "number",
+            "format": "double"
+          },
+          "entropy_loss": {
+            "type": "number",
+            "format": "double"
+          },
+          "iterations": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "regularization": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          },
+          "requested_fraction": {
+            "type": "number",
+            "format": "double"
+          },
+          "row_residual": {
+            "type": "number",
+            "format": "double"
+          },
+          "status": {
+            "type": "string"
+          },
+          "target_fraction": {
+            "type": "number",
+            "format": "double"
+          },
+          "token_entropy": {
+            "type": "number",
+            "format": "double"
+          }
+        }
+      },
+      "TextGrainTrace": {
+        "type": "object",
+        "required": [
+          "status",
+          "token_ids",
+          "input_probabilities",
+          "output_probabilities",
+          "output_log_probabilities",
+          "block_masses",
+          "conditional_block_probabilities",
+          "iterations",
+          "omitted_iterations"
+        ],
+        "properties": {
+          "block_masses": {
+            "type": "array",
+            "items": {
+              "type": "number",
+              "format": "double"
+            }
+          },
+          "blocks": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          "conditional_block_probabilities": {
+            "type": "array",
+            "items": {
+              "type": "number",
+              "format": "double"
+            }
+          },
+          "detection_scores": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "number",
+              "format": "double"
+            }
+          },
+          "generation": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/TextGrainGeneration"
+              }
+            ]
+          },
+          "input_probabilities": {
+            "type": "array",
+            "items": {
+              "type": "number",
+              "format": "double"
+            }
+          },
+          "iterations": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TextGrainIteration"
+            }
+          },
+          "omitted_iterations": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "output_log_probabilities": {
+            "type": "array",
+            "items": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "double"
+            }
+          },
+          "output_probabilities": {
+            "type": "array",
+            "items": {
+              "type": "number",
+              "format": "double"
+            }
+          },
+          "selected_column": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0
+          },
+          "selected_costs": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "number",
+              "format": "double"
+            }
+          },
+          "solver": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/TextGrainSolver"
+              }
+            ]
+          },
+          "status": {
+            "type": "string"
+          },
+          "token_ids": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          },
+          "transport": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/TextGrainTransport"
+              }
+            ]
+          }
+        }
+      },
+      "TextGrainTraceConfig": {
+        "type": "object",
+        "properties": {
+          "max_iterations": {
+            "type": "integer",
+            "default": 0,
+            "maximum": 10000,
+            "minimum": 0
+          },
+          "transport": {
+            "type": "boolean",
+            "default": false
+          }
+        },
+        "additionalProperties": false
+      },
+      "TextGrainTransport": {
+        "type": "object",
+        "required": [
+          "block_count",
+          "column_count",
+          "costs",
+          "coupling"
+        ],
+        "properties": {
+          "block_count": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "column_count": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "costs": {
+            "type": "array",
+            "items": {
+              "type": "number",
+              "format": "double"
+            }
+          },
+          "coupling": {
+            "type": "array",
+            "items": {
+              "type": "number",
+              "format": "double"
+            }
+          }
+        }
       },
       "Tool": {
         "type": "object",
@@ -8500,6 +10024,253 @@
         "enum": [
           "function"
         ]
+      },
+      "TraceCandidate": {
+        "type": "object",
+        "required": [
+          "token_id",
+          "reporting_probability",
+          "pre_watermark_probability"
+        ],
+        "properties": {
+          "cdf_lower": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          },
+          "cdf_upper": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          },
+          "input_logit": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "float"
+          },
+          "inverse_rank": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "minimum": 0
+          },
+          "membership": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/TraceMembership"
+              }
+            ]
+          },
+          "post_watermark_log_probability": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          },
+          "post_watermark_probability": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          },
+          "pre_watermark_probability": {
+            "type": "number",
+            "format": "double"
+          },
+          "processed_logit": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "float"
+          },
+          "reporting_probability": {
+            "type": "number",
+            "format": "float"
+          },
+          "selection_score": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          },
+          "selection_score_status": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "text": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "token_id": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          }
+        }
+      },
+      "TraceInverse": {
+        "type": "object",
+        "required": [
+          "uniform",
+          "threshold",
+          "total_weight"
+        ],
+        "properties": {
+          "threshold": {
+            "type": "number",
+            "format": "double"
+          },
+          "total_weight": {
+            "type": "number",
+            "format": "double"
+          },
+          "uniform": {
+            "type": "number",
+            "format": "double"
+          }
+        }
+      },
+      "TraceLayer": {
+        "type": "object",
+        "description": "Layer arrays follow the step's candidate order and retain full-support normalization.",
+        "required": [
+          "index",
+          "green_mass",
+          "input_normalizer",
+          "g_values",
+          "input_probabilities",
+          "probabilities"
+        ],
+        "properties": {
+          "g_values": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          },
+          "green_mass": {
+            "type": "number",
+            "format": "double"
+          },
+          "index": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "input_normalizer": {
+            "type": "number",
+            "format": "double"
+          },
+          "input_probabilities": {
+            "type": "array",
+            "items": {
+              "type": "number",
+              "format": "double"
+            }
+          },
+          "probabilities": {
+            "type": "array",
+            "items": {
+              "type": "number",
+              "format": "double"
+            }
+          }
+        }
+      },
+      "TraceMembership": {
+        "type": "object",
+        "required": [
+          "kind",
+          "favored"
+        ],
+        "properties": {
+          "favored": {
+            "type": "boolean"
+          },
+          "kind": {
+            "type": "string"
+          }
+        }
+      },
+      "TraceWatermark": {
+        "type": "object",
+        "required": [
+          "scheme",
+          "status"
+        ],
+        "properties": {
+          "bias_delta": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          },
+          "inverse": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/TraceInverse"
+              }
+            ]
+          },
+          "key_position": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0
+          },
+          "payload_position": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0
+          },
+          "payload_symbol": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "minimum": 0
+          },
+          "scheme": {
+            "type": "string"
+          },
+          "score_kind": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "status": {
+            "type": "string"
+          }
+        }
       },
       "TruncationStrategy": {
         "type": "string",
@@ -8661,6 +10432,664 @@
             "description": "The URL"
           }
         }
+      },
+      "WatermarkConfig": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": [
+              "key",
+              "scheme"
+            ],
+            "properties": {
+              "block_count": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "column_count": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "context_width": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "entropy_loss": {
+                "type": "number",
+                "format": "double"
+              },
+              "entropy_tolerance": {
+                "type": "number",
+                "format": "double"
+              },
+              "generation_policy": {
+                "$ref": "#/components/schemas/TextGrainGenerationPolicy"
+              },
+              "key": {
+                "type": "string"
+              },
+              "max_iterations": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "scheme": {
+                "type": "string",
+                "enum": [
+                  "textgrain"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "key",
+              "scheme"
+            ],
+            "properties": {
+              "depth": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "generation_policy": {
+                "$ref": "#/components/schemas/SynthIdGenerationPolicy"
+              },
+              "key": {
+                "type": "string"
+              },
+              "ngram_len": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "scheme": {
+                "type": "string",
+                "enum": [
+                  "synthid"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "key",
+              "vocab_size",
+              "scheme"
+            ],
+            "properties": {
+              "context_width": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "delta": {
+                "type": "number",
+                "format": "double"
+              },
+              "green_fraction": {
+                "type": "number",
+                "format": "double"
+              },
+              "ignore_repeated_ngrams": {
+                "type": "boolean"
+              },
+              "key": {
+                "type": "string"
+              },
+              "scheme": {
+                "type": "string",
+                "enum": [
+                  "kgw"
+                ]
+              },
+              "vocab_size": {
+                "type": "integer",
+                "minimum": 0
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "key",
+              "vocab_size",
+              "scheme"
+            ],
+            "properties": {
+              "delta": {
+                "type": "number",
+                "format": "double"
+              },
+              "green_fraction": {
+                "type": "number",
+                "format": "double"
+              },
+              "ignore_repeated_tokens": {
+                "type": "boolean"
+              },
+              "key": {
+                "type": "string"
+              },
+              "scheme": {
+                "type": "string",
+                "enum": [
+                  "unigram"
+                ]
+              },
+              "vocab_size": {
+                "type": "integer",
+                "minimum": 0
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "key",
+              "vocab_size",
+              "scheme"
+            ],
+            "properties": {
+              "key": {
+                "type": "string"
+              },
+              "scheme": {
+                "type": "string",
+                "enum": [
+                  "exponential"
+                ]
+              },
+              "sequence_len": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "start_position": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "vocab_size": {
+                "type": "integer",
+                "minimum": 0
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "key",
+              "vocab_size",
+              "scheme"
+            ],
+            "properties": {
+              "key": {
+                "type": "string"
+              },
+              "scheme": {
+                "type": "string",
+                "enum": [
+                  "inverse_transform"
+                ]
+              },
+              "sequence_len": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "start_position": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "vocab_size": {
+                "type": "integer",
+                "minimum": 0
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "key",
+              "vocab_size",
+              "payload",
+              "scheme"
+            ],
+            "properties": {
+              "context_width": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "delta": {
+                "type": "number",
+                "format": "double"
+              },
+              "ignore_repeated_ngrams": {
+                "type": "boolean"
+              },
+              "key": {
+                "type": "string"
+              },
+              "payload": {
+                "type": "array",
+                "items": {
+                  "type": "integer",
+                  "format": "int32",
+                  "minimum": 0
+                }
+              },
+              "radix": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "scheme": {
+                "type": "string",
+                "enum": [
+                  "mpac"
+                ]
+              },
+              "vocab_size": {
+                "type": "integer",
+                "minimum": 0
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "key",
+              "embedding_dim",
+              "scheme"
+            ],
+            "properties": {
+              "embedding_dim": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "green_fraction": {
+                "type": "number",
+                "format": "double"
+              },
+              "ignore_repeated_transitions": {
+                "type": "boolean"
+              },
+              "key": {
+                "type": "string"
+              },
+              "margin": {
+                "type": "number",
+                "format": "double"
+              },
+              "max_attempts": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "num_hyperplanes": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "scheme": {
+                "type": "string",
+                "enum": [
+                  "semstamp"
+                ]
+              }
+            }
+          }
+        ],
+        "description": "Selects a library watermark; vocabulary sizes refer to model output rows, including padding."
+      },
+      "WatermarkDetectionInput": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": [
+              "tokens",
+              "type"
+            ],
+            "properties": {
+              "tokens": {
+                "type": "array",
+                "items": {
+                  "type": "integer",
+                  "format": "int32",
+                  "minimum": 0
+                },
+                "description": "Original prompt-plus-generation vocabulary IDs."
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "tokens"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "text",
+              "model",
+              "type"
+            ],
+            "properties": {
+              "add_special_tokens": {
+                "type": "boolean"
+              },
+              "model": {
+                "type": "string",
+                "description": "Serving model or alias used for tokenization."
+              },
+              "text": {
+                "type": "string",
+                "description": "Complete text to tokenize; no chat template is applied."
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "text"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "embeddings",
+              "type"
+            ],
+            "properties": {
+              "embeddings": {
+                "type": "array",
+                "items": {
+                  "type": "array",
+                  "items": {
+                    "type": "number",
+                    "format": "float"
+                  }
+                },
+                "description": "Sentence embeddings from the same encoder used during SemStamp generation."
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "embeddings"
+                ]
+              }
+            }
+          }
+        ]
+      },
+      "WatermarkDetectionRequest": {
+        "type": "object",
+        "required": [
+          "watermark",
+          "input"
+        ],
+        "properties": {
+          "eos_token_ids": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            },
+            "description": "Stop token scoring at the first generated EOS; only valid for token or text input."
+          },
+          "input": {
+            "$ref": "#/components/schemas/WatermarkDetectionInput"
+          },
+          "prompt_len": {
+            "type": "integer",
+            "description": "Prefix length in tokens, or sentences for embedding input; excluded from evidence.",
+            "minimum": 0
+          },
+          "watermark": {
+            "$ref": "#/components/schemas/WatermarkConfig"
+          }
+        },
+        "additionalProperties": false
+      },
+      "WatermarkEvidence": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": [
+              "tokens_scored",
+              "score_sum",
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "textgrain"
+                ]
+              },
+              "log_p_value": {
+                "type": [
+                  "number",
+                  "null"
+                ],
+                "format": "double"
+              },
+              "mean_score": {
+                "type": [
+                  "number",
+                  "null"
+                ],
+                "format": "double"
+              },
+              "p_value": {
+                "type": [
+                  "number",
+                  "null"
+                ],
+                "format": "double"
+              },
+              "score_sum": {
+                "type": "number",
+                "format": "double"
+              },
+              "tokens_scored": {
+                "type": "integer",
+                "minimum": 0
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "tokens_scored",
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "synthid"
+                ]
+              },
+              "mean_g_value": {
+                "type": [
+                  "number",
+                  "null"
+                ],
+                "format": "double"
+              },
+              "tokens_scored": {
+                "type": "integer",
+                "minimum": 0
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "scheme",
+              "trials",
+              "successes",
+              "expected_rate",
+              "kind"
+            ],
+            "properties": {
+              "expected_rate": {
+                "type": "number",
+                "format": "double"
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "count"
+                ]
+              },
+              "observed_rate": {
+                "type": [
+                  "number",
+                  "null"
+                ],
+                "format": "double"
+              },
+              "scheme": {
+                "type": "string"
+              },
+              "successes": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "trials": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "z_score": {
+                "type": [
+                  "number",
+                  "null"
+                ],
+                "format": "double"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "scheme",
+              "tokens_scored",
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "sampling"
+                ]
+              },
+              "mean_cost": {
+                "type": [
+                  "number",
+                  "null"
+                ],
+                "format": "double"
+              },
+              "scheme": {
+                "type": "string"
+              },
+              "tokens_scored": {
+                "type": "integer",
+                "minimum": 0
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "tokens_scored",
+              "payload",
+              "votes",
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "mpac"
+                ]
+              },
+              "payload": {
+                "type": "array",
+                "items": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "format": "int32",
+                  "minimum": 0
+                }
+              },
+              "tokens_scored": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "votes": {
+                "type": "array",
+                "items": {
+                  "type": "array",
+                  "items": {
+                    "type": "integer",
+                    "minimum": 0
+                  }
+                }
+              },
+              "winning_fraction": {
+                "type": [
+                  "number",
+                  "null"
+                ],
+                "format": "double"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "sentences_scored",
+              "valid_sentences",
+              "expected_rate",
+              "kind"
+            ],
+            "properties": {
+              "expected_rate": {
+                "type": "number",
+                "format": "double"
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "semstamp"
+                ]
+              },
+              "sentences_scored": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "valid_fraction": {
+                "type": [
+                  "number",
+                  "null"
+                ],
+                "format": "double"
+              },
+              "valid_sentences": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "z_score": {
+                "type": [
+                  "number",
+                  "null"
+                ],
+                "format": "double"
+              }
+            }
+          }
+        ],
+        "description": "Uncalibrated, scheme-specific evidence; scores are not probabilities of authorship."
       },
       "WebSearchContentType": {
         "type": "string",
@@ -8829,6 +11258,10 @@
     {
       "name": "Mistral.rs",
       "description": "Mistral.rs API"
+    },
+    {
+      "name": "System One",
+      "description": "Typed decisions with contrastive models"
     },
     {
       "name": "LoRA adapters",

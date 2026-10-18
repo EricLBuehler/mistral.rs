@@ -199,7 +199,7 @@ pub fn get_device_layers(
     loader: &dyn DeviceMappedModelLoader,
     config: &str,
     num_layers: usize,
-    mut layer_sizes_in_bytes: Vec<usize>,
+    layer_sizes_in_bytes: Vec<usize>,
     non_mapped_size_in_bytes: usize,
     total_model_size_in_bytes: usize,
     devices: &[Device],
@@ -207,6 +207,53 @@ pub fn get_device_layers(
     params: &AutoDeviceMapParams,
     paged_attn_config: Option<&mut PagedAttentionConfig>,
 ) -> Result<DeviceMapMetadata> {
+    get_device_layers_with_memory(
+        DeviceMapInputs {
+            loader,
+            config,
+            num_layers,
+            layer_sizes_in_bytes,
+            non_mapped_size_in_bytes,
+            total_model_size_in_bytes,
+            devices,
+            dtype,
+            params,
+            paged_attn_config,
+        },
+        &|device| Ok(MemoryUsage.query(device)?),
+    )
+}
+
+pub(crate) struct DeviceMapInputs<'a> {
+    pub loader: &'a dyn DeviceMappedModelLoader,
+    pub config: &'a str,
+    pub num_layers: usize,
+    pub layer_sizes_in_bytes: Vec<usize>,
+    pub non_mapped_size_in_bytes: usize,
+    pub total_model_size_in_bytes: usize,
+    pub devices: &'a [Device],
+    pub dtype: DType,
+    pub params: &'a AutoDeviceMapParams,
+    pub paged_attn_config: Option<&'a mut PagedAttentionConfig>,
+}
+
+#[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+pub(crate) fn get_device_layers_with_memory(
+    inputs: DeviceMapInputs<'_>,
+    memory: &dyn Fn(&Device) -> Result<crate::utils::memory_usage::DeviceMemory>,
+) -> Result<DeviceMapMetadata> {
+    let DeviceMapInputs {
+        loader,
+        config,
+        num_layers,
+        mut layer_sizes_in_bytes,
+        non_mapped_size_in_bytes,
+        total_model_size_in_bytes,
+        devices,
+        dtype,
+        params,
+        paged_attn_config,
+    } = inputs;
     let mapped_max = loader.mapped_max_act_size_elems(config, params)? * dtype.size_in_bytes();
     let non_mapped_max =
         loader.non_mapped_max_act_size_elems(config, params)? * dtype.size_in_bytes();
@@ -259,7 +306,7 @@ pub fn get_device_layers(
                 MemoryGpuConfig::MbAmount(user_mb) => {
                     // Clamp user's KV budget to available memory.
                     let primary_dev = &devices[0];
-                    let avail_bytes = MemoryUsage.query(primary_dev)?.available();
+                    let avail_bytes = memory(primary_dev)?.available();
                     let cap = device_memory_cap(avail_bytes, primary_dev);
                     let act_overhead = non_mapped_max.max(mapped_max);
                     let budget_mb = cap
@@ -270,7 +317,7 @@ pub fn get_device_layers(
                 }
                 MemoryGpuConfig::BestEffortMbAmount { target_mb, min_mb } => {
                     let primary_dev = &devices[0];
-                    let avail_bytes = MemoryUsage.query(primary_dev)?.available();
+                    let avail_bytes = memory(primary_dev)?.available();
                     let cap = device_memory_cap(avail_bytes, primary_dev);
                     let act_overhead = non_mapped_max.max(mapped_max);
                     let budget_mb = cap
@@ -288,7 +335,7 @@ pub fn get_device_layers(
                     // Cap the KV budget so model + activations + KV fits within
                     // the device capacity derived from *available* memory.
                     let primary_dev = &devices[0];
-                    let avail_bytes = MemoryUsage.query(primary_dev)?.available();
+                    let avail_bytes = memory(primary_dev)?.available();
                     let cap = device_memory_cap(avail_bytes, primary_dev);
                     let act_overhead = non_mapped_max.max(mapped_max);
                     let occupied = saturating_memory_sum([
@@ -376,19 +423,16 @@ pub fn get_device_layers(
         .map(kv_bytes_for_layer)
         .sum::<usize>();
 
-    // prepare available memory per device, CPU fallback last (unless unified memory)
     let has_unified_memory = devices.iter().any(crate::utils::normal::is_integrated_gpu);
+    let mut shared_available = memory(&Device::Cpu)?.available();
 
     let mut avail = Vec::new();
     for dev in devices {
-        let a = MemoryUsage.query(dev)?.available();
+        let a = memory(dev)?.available();
         avail.push((a, dev.clone()));
     }
-    // On unified memory systems (iGPUs), GPU and CPU share the same physical RAM.
-    // Don't add CPU as a fallback device since it would double-count memory.
-    if !has_unified_memory {
-        let a = MemoryUsage.query(&Device::Cpu)?.available();
-        avail.push((a, Device::Cpu));
+    if !devices.iter().any(Device::is_cpu) {
+        avail.push((shared_available, Device::Cpu));
     }
 
     avail.reverse();
@@ -415,6 +459,13 @@ pub fn get_device_layers(
             .context("No more devices to map to. The model does not fit on this system.")?;
 
         // For GPU/accelerators: keep a small dynamic safety reserve to avoid OOMs
+        let avail_bytes = if has_unified_memory
+            && (dev.is_cpu() || crate::utils::normal::is_integrated_gpu(&dev))
+        {
+            avail_bytes.min(shared_available)
+        } else {
+            avail_bytes
+        };
         let cap = device_memory_cap(avail_bytes, &dev);
         if ordinal == 0
             && checked_memory_sum([
@@ -450,6 +501,7 @@ pub fn get_device_layers(
             checked_memory_sum([remaining, mapped_max, remaining_kv_bytes])
         };
 
+        let previous_remaining = remaining;
         let layers_on_dev = if required_whole_capacity.is_some_and(|required| cap >= required) {
             remaining = 0;
             num_layers - layer
@@ -494,6 +546,24 @@ pub fn get_device_layers(
             }
             count
         };
+        if crate::utils::normal::is_integrated_gpu(&dev) {
+            let kv_bytes = (layer..layer + layers_on_dev).map(kv_bytes_for_layer).sum();
+            let fixed_bytes = if ordinal == 0 {
+                saturating_memory_sum([
+                    non_mapped_max.max(mapped_max),
+                    extra_kv_bytes,
+                    base_device_memory_reservation_bytes,
+                ])
+            } else {
+                mapped_max
+            };
+            shared_available = shared_memory_after_mapping(
+                shared_available,
+                previous_remaining.saturating_sub(remaining),
+                kv_bytes,
+                fixed_bytes,
+            );
+        }
         if !dev.is_cpu() {
             mappings.push(DeviceLayerMapMetadata {
                 ordinal,
@@ -519,20 +589,32 @@ pub fn get_device_layers(
             .expect("layer sizes backup missing for paged attention fallback");
         // The original vector was in forward order, but `get_device_layers` handles
         // reversing internally, so we can pass it along unchanged.
-        return get_device_layers(
-            loader,
-            config,
-            num_layers,
-            original_layers,
-            non_mapped_size_in_bytes,
-            total_model_size_in_bytes,
-            devices,
-            dtype,
-            params,
-            None,
+        return get_device_layers_with_memory(
+            DeviceMapInputs {
+                loader,
+                config,
+                num_layers,
+                layer_sizes_in_bytes: original_layers,
+                non_mapped_size_in_bytes,
+                total_model_size_in_bytes,
+                devices,
+                dtype,
+                params,
+                paged_attn_config: None,
+            },
+            memory,
         );
     }
     Ok(DeviceMapMetadata::from_num_device_layers(mappings))
+}
+
+fn shared_memory_after_mapping(
+    available: usize,
+    weights: usize,
+    kv_cache: usize,
+    workspace: usize,
+) -> usize {
+    available.saturating_sub(saturating_memory_sum([weights, kv_cache, workspace]))
 }
 
 #[cfg(test)]
@@ -595,6 +677,86 @@ mod tests {
             paged_kv_bytes_per_layer(&base, &cache, DType::BF16),
             [kv; 3]
         );
+    }
+
+    #[cfg(feature = "metal")]
+    #[test]
+    fn metal_mapping_uses_cpu_only_when_needed_without_double_counting_ram() -> Result<()> {
+        use crate::utils::memory_usage::DeviceMemory;
+        use crate::{embedding_models::qwen3_embedding::Config, pipeline::Qwen3EmbeddingLoader};
+
+        const MIB: usize = 1024 * 1024;
+        const LAYERS: usize = 36;
+        const LAYER_BYTES: usize = 400 * MIB;
+        const NON_MAPPED_BYTES: usize = 1200 * MIB;
+        let config = serde_json::to_string(&Config {
+            hidden_size: 4096,
+            intermediate_size: 12288,
+            num_attention_heads: 32,
+            num_key_value_heads: 8,
+            head_dim: Some(128),
+            num_hidden_layers: LAYERS,
+            max_position_embeddings: 40960,
+            ..Default::default()
+        })?;
+        let device = Device::new_metal(0)?;
+        let params = AutoDeviceMapParams::Text {
+            max_seq_len: 2048,
+            max_batch_size: 1,
+        };
+        let map = |gpu_gib: usize, system_gib: usize| {
+            get_device_layers_with_memory(
+                DeviceMapInputs {
+                    loader: &Qwen3EmbeddingLoader,
+                    config: &config,
+                    num_layers: LAYERS,
+                    layer_sizes_in_bytes: vec![LAYER_BYTES; LAYERS],
+                    non_mapped_size_in_bytes: NON_MAPPED_BYTES,
+                    total_model_size_in_bytes: LAYER_BYTES * LAYERS + NON_MAPPED_BYTES,
+                    devices: std::slice::from_ref(&device),
+                    dtype: DType::BF16,
+                    params: &params,
+                    paged_attn_config: None,
+                },
+                &|dev| {
+                    if dev.is_cpu() {
+                        Ok(DeviceMemory::Discrete {
+                            total: system_gib * 1024 * MIB,
+                            free: system_gib * 1024 * MIB,
+                        })
+                    } else {
+                        Ok(DeviceMemory::Unified {
+                            budget: gpu_gib * 1024 * MIB,
+                            allocated: 0,
+                        })
+                    }
+                },
+            )
+        };
+        let small = map(16, 24)?;
+        let smaller = map(8, 24)?;
+        let large = map(48, 64)?;
+        let gpu_layers = |mapping: DeviceMapMetadata| {
+            mapping
+                .device_layers()
+                .unwrap()
+                .iter()
+                .map(|device| device.layers)
+                .sum::<usize>()
+        };
+        assert!(gpu_layers(smaller) < gpu_layers(small.clone()));
+        assert!(gpu_layers(small) < LAYERS);
+        assert_eq!(gpu_layers(large), LAYERS);
+        assert!(map(16, 16).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn unified_cpu_fallback_accounts_for_gpu_allocations() {
+        assert_eq!(shared_memory_after_mapping(24_000, 15_000, 0, 500), 8_500);
+        assert_eq!(shared_memory_after_mapping(8_500, 2_000, 1_000, 500), 5_000);
+        assert_eq!(shared_memory_after_mapping(1_000, 2_000, 0, 500), 0);
+        assert_eq!(shared_memory_after_mapping(usize::MAX, usize::MAX, 1, 1), 0);
     }
 
     #[test]

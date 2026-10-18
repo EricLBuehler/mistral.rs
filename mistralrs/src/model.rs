@@ -765,6 +765,28 @@ impl Model {
         self.generate_embeddings_with_model(request, None).await
     }
 
+    /// Answer typed System One questions using a loaded decision model.
+    pub async fn decide(
+        &self,
+        request: crate::DecisionRequest,
+    ) -> crate::error::Result<crate::DecisionResponse> {
+        request
+            .validate()
+            .map_err(|error| SdkError::Inference(error.into()))?;
+        let (response, mut receiver) = channel(1);
+        self.runner
+            .send_request_async(Request::Decision(Box::new(DecisionInferenceRequest {
+                input: request,
+                response,
+            })))
+            .await?;
+        receiver
+            .recv()
+            .await
+            .ok_or_else(|| SdkError::Channel("decision response channel closed".to_string()))?
+            .map_err(|error| SdkError::Inference(error.into()))
+    }
+
     /// Generate embeddings for one or more inputs using a specific model.
     /// If `model_id` is `None`, the request is sent to the default model.
     ///

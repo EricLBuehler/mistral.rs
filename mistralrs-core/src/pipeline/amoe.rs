@@ -333,6 +333,10 @@ impl Pipeline for AnyMoePipeline {
         get_mut_arcmutex!(self.target).flush_recurrent_speculative_transitions(seq_ids)
     }
 
+    fn supports_sampling_trace(&self) -> bool {
+        get_mut_arcmutex!(self.target).supports_sampling_trace()
+    }
+
     fn supports_speculative_prompt_bootstrap(&self) -> bool {
         get_mut_arcmutex!(self.target).supports_speculative_prompt_bootstrap()
     }

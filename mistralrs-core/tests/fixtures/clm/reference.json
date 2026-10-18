@@ -1,0 +1,135 @@
+{
+  "request": {
+    "model": "default",
+    "state": {
+      "Customer": "invoice charged twice",
+      "details": [
+        "phone",
+        true
+      ]
+    },
+    "questions": {
+      "urgent": {
+        "type": "noul",
+        "instructions": "Is this urgent?"
+      },
+      "team": {
+        "type": "choice",
+        "instructions": "Which team?",
+        "criteria": {
+          "billing": "Charges invoices refunds",
+          "technical": "Bugs and outages",
+          "other": null
+        }
+      },
+      "anger": {
+        "type": "score",
+        "instructions": "How angry?",
+        "criteria": [
+          "Calm",
+          "Frustrated",
+          {
+            "level": "Very angry"
+          }
+        ]
+      },
+      "custom": {
+        "type": "noul",
+        "instructions": {
+          "question": "Is this billing?"
+        },
+        "criteria": {
+          "true": "invoice",
+          "false": []
+        }
+      }
+    },
+    "temperature": 0.7
+  },
+  "pairs": {
+    "urgent": {
+      "state": "Customer: invoice charged twice\n\ndetails:\n  - phone\n  - true\n\nIs this urgent?",
+      "keys": [
+        "false",
+        "true"
+      ],
+      "candidates": [
+        "false: No. This is false: Is this urgent?",
+        "true: Yes. This is true: Is this urgent?"
+      ]
+    },
+    "team": {
+      "state": "Customer: invoice charged twice\n\ndetails:\n  - phone\n  - true\n\nWhich team?",
+      "keys": [
+        "billing",
+        "technical",
+        "other"
+      ],
+      "candidates": [
+        "Charges invoices refunds",
+        "Bugs and outages",
+        "other"
+      ]
+    },
+    "anger": {
+      "state": "Customer: invoice charged twice\n\ndetails:\n  - phone\n  - true\n\nHow angry?",
+      "keys": [
+        "0",
+        "1",
+        "2"
+      ],
+      "candidates": [
+        "Calm",
+        "Frustrated",
+        "level: Very angry"
+      ]
+    },
+    "custom": {
+      "state": "Customer: invoice charged twice\n\ndetails:\n  - phone\n  - true\n\nquestion: Is this billing?",
+      "keys": [
+        "false",
+        "true"
+      ],
+      "candidates": [
+        "false: ",
+        "true: invoice"
+      ]
+    }
+  },
+  "answers": {
+    "urgent": {
+      "type": "noul",
+      "noul": 0.4985542337656796
+    },
+    "team": {
+      "type": "choice",
+      "choice": "technical",
+      "confidence": 0.7165597651252962,
+      "probabilities": {
+        "billing": 0.16687958555190735,
+        "technical": 0.8110398434168641,
+        "other": 0.022080571031228523
+      }
+    },
+    "anger": {
+      "type": "score",
+      "score": 1.3159028365096463,
+      "confidence": 0.2807161975007521,
+      "legend": {
+        "0": "Calm",
+        "1": "Frustrated",
+        "2": "level: Very angry"
+      },
+      "probabilities": {
+        "0": 0.08180984924492615,
+        "1": 0.5204774650005014,
+        "2": 0.3977126857545724
+      }
+    },
+    "custom": {
+      "type": "noul",
+      "noul": 0.9110752248633902
+    }
+  },
+  "input_tokens": 102
+}

@@ -297,7 +297,13 @@ pub use mistralrs_core::{
 };
 
 // ========== Sampling ==========
+pub use mistralrs_core::sampling_trace;
 pub use mistralrs_core::{DrySamplingParams, ModelGenerationDefaults, SamplingParams, StopTokens};
+pub use mistralrs_core::{
+    SynthIdGenerationPolicy, SynthIdTextWatermark, SynthIdTextWatermarkConfig,
+    TextGrainGenerationPolicy, Watermark, WatermarkConfig, WatermarkDetection, WatermarkEvidence,
+    WatermarkTensor,
+};
 
 // ========== Tool Types ==========
 pub use mistralrs_core::{
@@ -350,6 +356,9 @@ pub use mistralrs_core::{LayerTopology, Topology};
 pub use mistralrs_core::{MultimodalLoaderType, NormalLoaderType};
 
 // ========== Token Source ==========
+pub use mistralrs_core::decision::{
+    DecisionAnswer, DecisionQuestion, DecisionRequest, DecisionResponse, DecisionUsage,
+};
 pub use mistralrs_core::TokenSource;
 
 // ========== Engine (Advanced) ==========

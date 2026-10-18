@@ -31,6 +31,7 @@ license = "MIT"
 rust-version = "1.94"
 
 [workspace.dependencies]
+llm-watermarking = { path = "../llm_watermarking", version = "0.1.0" }
 # candle-core = { version = "0.11.0" }
 # candle-nn = { version = "0.11.0" }
 # candle-flash-attn-v3 = { version = "0.11.0" }

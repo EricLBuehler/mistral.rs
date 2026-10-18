@@ -163,6 +163,7 @@ macro_rules! handle_pipeline_forward_error {
 
                     if seq.get_mut_group().is_chat {
                         let choice = Choice {
+                            sampling_trace: None,
                             finish_reason: "error".to_string(),
                             stop_sequence: None,
                             index: seq.get_response_index(),
@@ -177,6 +178,7 @@ macro_rules! handle_pipeline_forward_error {
                         seq.add_choice_to_group(choice);
                     } else {
                         let choice = CompletionChoice {
+                            sampling_trace: None,
                             finish_reason: "error".to_string(),
                             index: seq.get_response_index(),
                             text: res,

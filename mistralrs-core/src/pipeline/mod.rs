@@ -1272,6 +1272,7 @@ pub enum SupportedModality {
     Vision,
     Video,
     Embedding,
+    Decision,
 }
 
 impl Debug for SupportedModality {
@@ -1282,6 +1283,7 @@ impl Debug for SupportedModality {
             Self::Vision => write!(f, "🖼️ Vision"),
             Self::Video => write!(f, "🎬 Video"),
             Self::Embedding => write!(f, "🔢 Embedding"),
+            Self::Decision => write!(f, "Decision"),
         }
     }
 }
@@ -1482,6 +1484,7 @@ pub enum ModelCategory {
     Audio,
     Speech,
     Embedding,
+    Decision,
 }
 
 impl std::fmt::Debug for ModelCategory {
@@ -1495,6 +1498,7 @@ impl std::fmt::Debug for ModelCategory {
             ModelCategory::Audio => write!(f, "ModelCategory::Audio"),
             ModelCategory::Speech => write!(f, "ModelCategory::Speech"),
             ModelCategory::Embedding => write!(f, "ModelCategory::Embedding"),
+            ModelCategory::Decision => write!(f, "ModelCategory::Decision"),
         }
     }
 }
@@ -1508,13 +1512,15 @@ impl PartialEq for ModelCategory {
             (Self::Speech, Self::Speech) => true,
             (Self::Diffusion, Self::Diffusion) => true,
             (Self::Embedding, Self::Embedding) => true,
+            (Self::Decision, Self::Decision) => true,
             (
                 Self::Text
                 | Self::Multimodal { .. }
                 | Self::Diffusion
                 | Self::Audio
                 | Self::Speech
-                | Self::Embedding,
+                | Self::Embedding
+                | Self::Decision,
                 _,
             ) => false,
         }
@@ -1759,6 +1765,16 @@ pub trait Pipeline:
         true
     }
 
+    fn decide(
+        &self,
+        _request: &crate::decision::DecisionRequest,
+    ) -> anyhow::Result<crate::decision::DecisionResponse> {
+        Err(crate::decision::DecisionValidationError(
+            "This model does not support /v1/systemone".to_string(),
+        )
+        .into())
+    }
+
     fn requires_uniform_completion_batch(&self) -> bool {
         true
     }
@@ -1829,6 +1845,13 @@ pub trait Pipeline:
         _seq_ids: &[usize],
     ) -> candle_core::Result<()> {
         Ok(())
+    }
+
+    fn supports_sampling_trace(&self) -> bool {
+        matches!(
+            self.category(),
+            ModelCategory::Text | ModelCategory::Multimodal { .. }
+        )
     }
 
     fn supports_speculative_prompt_bootstrap(&self) -> bool {

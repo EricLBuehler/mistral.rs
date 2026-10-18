@@ -2658,6 +2658,10 @@ impl Pipeline for MultimodalPipeline {
         !self.model.has_speculative_proposer()
     }
 
+    fn supports_sampling_trace(&self) -> bool {
+        !self.model.has_speculative_proposer() && !self.model.is_block_diffusion()
+    }
+
     fn supports_speculative_prompt_bootstrap(&self) -> bool {
         self.model.supports_speculative_prompt_bootstrap()
     }

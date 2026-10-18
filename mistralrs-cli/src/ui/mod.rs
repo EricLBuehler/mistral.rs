@@ -107,6 +107,7 @@ fn modality_label(m: &SupportedModality) -> String {
         SupportedModality::Vision => "vision",
         SupportedModality::Video => "video",
         SupportedModality::Embedding => "embedding",
+        SupportedModality::Decision => "decision",
     }
     .to_string()
 }
@@ -122,6 +123,7 @@ fn build_model_list(mistralrs: &Arc<MistralRs>) -> IndexMap<String, UiModelInfo>
                     ModelCategory::Speech => "speech",
                     ModelCategory::Audio => "audio",
                     ModelCategory::Embedding => "embedding",
+                    ModelCategory::Decision => "decision",
                     ModelCategory::Diffusion => "diffusion",
                 };
                 if matches!(kind, "text" | "multimodal" | "speech") {

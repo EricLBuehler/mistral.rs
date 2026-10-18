@@ -9,7 +9,47 @@ use pyo3::{
     Bound, Py, PyAny, PyErr, PyRef, PyResult, Python,
 };
 
+use crate::watermark::WatermarkArg;
+
 use crate::code_execution::{parse_agent_permission, parse_permission, ShellSkillMount};
+
+#[pyclass]
+#[derive(Clone, Debug)]
+pub struct SynthIdTextWatermarkConfig {
+    pub(crate) inner: mistralrs_core::SynthIdTextWatermarkConfig,
+}
+
+#[pymethods]
+impl SynthIdTextWatermarkConfig {
+    #[new]
+    #[pyo3(signature = (key, *, ngram_len=5, depth=30))]
+    fn new(key: String, ngram_len: usize, depth: usize) -> PyResult<Self> {
+        let inner = mistralrs_core::SynthIdTextWatermarkConfig {
+            key,
+            ngram_len,
+            depth,
+        };
+        inner
+            .validate()
+            .map_err(|error| PyValueError::new_err(error.to_string()))?;
+        Ok(Self { inner })
+    }
+
+    #[pyo3(signature = (tokens, prompt_len=0, eos_token_ids=None))]
+    fn detect(
+        &self,
+        tokens: Vec<u32>,
+        prompt_len: usize,
+        eos_token_ids: Option<Vec<u32>>,
+    ) -> PyResult<(Option<f64>, usize)> {
+        let result = mistralrs_core::SynthIdTextWatermark::new(&self.inner)
+            .and_then(|watermark| {
+                watermark.detect(&tokens, prompt_len, &eos_token_ids.unwrap_or_default())
+            })
+            .map_err(|error| PyValueError::new_err(error.to_string()))?;
+        Ok((result.mean_g_value, result.tokens_scored))
+    }
+}
 
 #[pyclass(eq, eq_int)]
 #[derive(PartialEq, Debug, Clone)]
@@ -81,6 +121,7 @@ fn parse_reasoning_effort(
 #[derive(Debug)]
 /// An OpenAI API compatible completion request.
 pub struct CompletionRequest {
+    pub(crate) watermark: Option<WatermarkArg>,
     pub(crate) _model: String,
     pub(crate) adapter: Option<AdapterSelection>,
     pub(crate) prompt: String,
@@ -142,6 +183,7 @@ impl CompletionRequest {
         ignore_eos=false,
         *,
         adapter=None,
+        watermark=None,
     ))]
     fn new(
         prompt: String,
@@ -171,9 +213,11 @@ impl CompletionRequest {
         truncate_sequence: Option<bool>,
         ignore_eos: bool,
         adapter: Option<Py<PyAny>>,
+        watermark: Option<WatermarkArg>,
     ) -> PyResult<Self> {
         Ok(Self {
             prompt,
+            watermark,
             best_of,
             echo_prompt,
             suffix,
@@ -294,6 +338,7 @@ fn convert_token(value: i64) -> PyResult<u32> {
 #[derive(Debug)]
 /// An OpenAI API compatible chat completion request.
 pub struct ChatCompletionRequest {
+    pub(crate) watermark: Option<WatermarkArg>,
     #[allow(clippy::type_complexity)]
     pub(crate) messages: Either<
         Vec<
@@ -399,6 +444,7 @@ impl ChatCompletionRequest {
         ignore_eos=false,
         *,
         adapter=None,
+        watermark=None,
     ))]
     fn new(
         messages: Py<PyAny>,
@@ -442,6 +488,7 @@ impl ChatCompletionRequest {
         input_files: Option<Vec<crate::files::InputFile>>,
         ignore_eos: bool,
         adapter: Option<Py<PyAny>>,
+        watermark: Option<WatermarkArg>,
     ) -> PyResult<Self> {
         let messages = Python::with_gil(|py| {
             if let Ok(messages) = messages.bind(py).downcast_exact::<PyList>() {
@@ -501,6 +548,7 @@ impl ChatCompletionRequest {
 
         Ok(Self {
             messages,
+            watermark,
             _model: model,
             adapter: parse_adapter_selection(adapter)?,
             logit_bias,

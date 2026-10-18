@@ -1,0 +1,8 @@
+{
+  "scheme": "semstamp",
+  "key": "0000000000000000000000000000000000000000000000000000000000000000",
+  "embedding_dim": 3,
+  "num_hyperplanes": 2,
+  "green_fraction": 0.25,
+  "margin": 0.0
+}
