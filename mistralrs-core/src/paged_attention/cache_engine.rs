@@ -135,6 +135,27 @@ pub struct CacheEngine {
     gpu_cache: Arc<Mutex<Vec<KVCache>>>,
 }
 
+/// Hybrid models hand layers without a paged cache zero blocks; Metal rejects zero-length buffers, so the
+/// backing buffer is clamped to one element while the tensor keeps its empty shape.
+fn alloc_blocks(device: &Device, dims: &[usize], dtype: DType, label: &str) -> Result<Tensor> {
+    if let Device::Metal(dev) = device {
+        #[cfg(feature = "metal")]
+        {
+            use candle_core::{MetalStorage, Shape, Storage};
+            let elem_count = dims.iter().product::<usize>();
+            let buffer = dev.new_private_buffer(elem_count.max(1), dtype, label)?;
+            let storage = Storage::Metal(MetalStorage::new(buffer, dev.clone(), elem_count, dtype));
+            return Ok(Tensor::from((storage, Shape::from_dims(dims))));
+        }
+        #[cfg(not(feature = "metal"))]
+        {
+            let _ = (dev, label);
+            unreachable!()
+        }
+    }
+    unsafe { Tensor::empty(dims, dtype, device) }
+}
+
 impl CacheEngine {
     pub fn new(
         model_config: &dyn ModelConfigLike,
@@ -219,101 +240,29 @@ impl CacheEngine {
                         cache_config.block_size,
                         layer_idx,
                     );
-                    #[allow(unused)]
-                    let key_blocks = if let Device::Metal(dev) = &device {
-                        #[cfg(feature = "metal")]
-                        {
-                            use candle_core::{MetalStorage, Shape, Storage};
-
-                            let elem_count = num_gpu_blocks
-                                * key_block_shape.0
-                                * key_block_shape.1
-                                * key_block_shape.2
-                                * key_block_shape.3;
-                            let buffer = dev.new_private_buffer(elem_count, dtype, "k_cache")?;
-                            let storage = Storage::Metal(MetalStorage::new(
-                                buffer,
-                                dev.clone(),
-                                elem_count,
-                                dtype,
-                            ));
-                            Tensor::from((
-                                storage,
-                                Shape::from_dims(&[
-                                    num_gpu_blocks,
-                                    key_block_shape.0,
-                                    key_block_shape.1,
-                                    key_block_shape.2,
-                                    key_block_shape.3,
-                                ]),
-                            ))
-                        }
-
-                        #[cfg(not(feature = "metal"))]
-                        {
-                            unreachable!()
-                        }
-                    } else {
-                        unsafe {
-                            Tensor::empty(
-                                (
-                                    num_gpu_blocks,
-                                    key_block_shape.0,
-                                    key_block_shape.1,
-                                    key_block_shape.2,
-                                    key_block_shape.3,
-                                ),
-                                dtype,
-                                device,
-                            )?
-                        }
-                    };
-                    #[allow(unused)]
-                    let value_blocks = if let Device::Metal(dev) = &device {
-                        #[cfg(feature = "metal")]
-                        {
-                            use candle_core::{MetalStorage, Shape, Storage};
-
-                            let elem_count = num_gpu_blocks
-                                * value_block_shape.0
-                                * value_block_shape.1
-                                * value_block_shape.2;
-                            let buffer = dev.new_private_buffer(elem_count, dtype, "v_cache")?;
-                            let storage = Storage::Metal(MetalStorage::new(
-                                buffer,
-                                dev.clone(),
-                                elem_count,
-                                dtype,
-                            ));
-                            Tensor::from((
-                                storage,
-                                Shape::from_dims(&[
-                                    num_gpu_blocks,
-                                    value_block_shape.0,
-                                    value_block_shape.1,
-                                    value_block_shape.2,
-                                ]),
-                            ))
-                        }
-
-                        #[cfg(not(feature = "metal"))]
-                        {
-                            unreachable!()
-                        }
-                    } else {
-                        unsafe {
-                            Tensor::empty(
-                                (
-                                    num_gpu_blocks,
-                                    value_block_shape.0,
-                                    value_block_shape.1,
-                                    value_block_shape.2,
-                                ),
-                                dtype,
-                                device,
-                            )?
-                        }
-                    };
+                    let key_blocks = alloc_blocks(
+                        device,
+                        &[
+                            num_gpu_blocks,
+                            key_block_shape.0,
+                            key_block_shape.1,
+                            key_block_shape.2,
+                            key_block_shape.3,
+                        ],
+                        dtype,
+                        "k_cache",
+                    )?;
+                    let value_blocks = alloc_blocks(
+                        device,
+                        &[
+                            num_gpu_blocks,
+                            value_block_shape.0,
+                            value_block_shape.1,
+                            value_block_shape.2,
+                        ],
+                        dtype,
+                        "v_cache",
+                    )?;
                     (key_blocks, value_blocks)
                 }
                 KvCacheLayout::FlashInferHnd => {
@@ -322,52 +271,17 @@ impl CacheEngine {
                         cache_config.block_size,
                         layer_idx,
                     );
-                    #[allow(unused)]
-                    let key_blocks = if let Device::Metal(dev) = &device {
-                        #[cfg(feature = "metal")]
-                        {
-                            use candle_core::{MetalStorage, Shape, Storage};
-
-                            let elem_count = num_gpu_blocks
-                                * key_block_shape.0
-                                * key_block_shape.1
-                                * key_block_shape.2;
-                            let buffer = dev.new_private_buffer(elem_count, dtype, "k_cache")?;
-                            let storage = Storage::Metal(MetalStorage::new(
-                                buffer,
-                                dev.clone(),
-                                elem_count,
-                                dtype,
-                            ));
-                            Tensor::from((
-                                storage,
-                                Shape::from_dims(&[
-                                    num_gpu_blocks,
-                                    key_block_shape.0,
-                                    key_block_shape.1,
-                                    key_block_shape.2,
-                                ]),
-                            ))
-                        }
-
-                        #[cfg(not(feature = "metal"))]
-                        {
-                            unreachable!()
-                        }
-                    } else {
-                        unsafe {
-                            Tensor::empty(
-                                (
-                                    num_gpu_blocks,
-                                    key_block_shape.0,
-                                    key_block_shape.1,
-                                    key_block_shape.2,
-                                ),
-                                dtype,
-                                device,
-                            )?
-                        }
-                    };
+                    let key_blocks = alloc_blocks(
+                        device,
+                        &[
+                            num_gpu_blocks,
+                            key_block_shape.0,
+                            key_block_shape.1,
+                            key_block_shape.2,
+                        ],
+                        dtype,
+                        "k_cache",
+                    )?;
                     let value_blocks = unsafe {
                         Tensor::empty(
                             (
@@ -386,82 +300,18 @@ impl CacheEngine {
                     kv_lora_rank,
                     kpe_head_dim,
                 } => {
-                    #[allow(unused)]
-                    let key_blocks = if let Device::Metal(dev) = &device {
-                        #[cfg(feature = "metal")]
-                        {
-                            use candle_core::{MetalStorage, Shape, Storage};
-
-                            let elem_count =
-                                num_gpu_blocks * cache_config.block_size * kv_lora_rank;
-                            let buffer = dev.new_private_buffer(elem_count, dtype, "k_cache")?;
-                            let storage = Storage::Metal(MetalStorage::new(
-                                buffer,
-                                dev.clone(),
-                                elem_count,
-                                dtype,
-                            ));
-                            Tensor::from((
-                                storage,
-                                Shape::from_dims(&[
-                                    num_gpu_blocks,
-                                    cache_config.block_size,
-                                    kv_lora_rank,
-                                ]),
-                            ))
-                        }
-
-                        #[cfg(not(feature = "metal"))]
-                        {
-                            unreachable!()
-                        }
-                    } else {
-                        unsafe {
-                            Tensor::empty(
-                                (num_gpu_blocks, cache_config.block_size, kv_lora_rank),
-                                dtype,
-                                device,
-                            )?
-                        }
-                    };
-                    #[allow(unused)]
-                    let value_blocks = if let Device::Metal(dev) = &device {
-                        #[cfg(feature = "metal")]
-                        {
-                            use candle_core::{MetalStorage, Shape, Storage};
-
-                            let elem_count =
-                                num_gpu_blocks * cache_config.block_size * kpe_head_dim;
-                            let buffer = dev.new_private_buffer(elem_count, dtype, "v_cache")?;
-                            let storage = Storage::Metal(MetalStorage::new(
-                                buffer,
-                                dev.clone(),
-                                elem_count,
-                                dtype,
-                            ));
-                            Tensor::from((
-                                storage,
-                                Shape::from_dims(&[
-                                    num_gpu_blocks,
-                                    cache_config.block_size,
-                                    kpe_head_dim,
-                                ]),
-                            ))
-                        }
-
-                        #[cfg(not(feature = "metal"))]
-                        {
-                            unreachable!()
-                        }
-                    } else {
-                        unsafe {
-                            Tensor::empty(
-                                (num_gpu_blocks, cache_config.block_size, kpe_head_dim),
-                                dtype,
-                                device,
-                            )?
-                        }
-                    };
+                    let key_blocks = alloc_blocks(
+                        device,
+                        &[num_gpu_blocks, cache_config.block_size, kv_lora_rank],
+                        dtype,
+                        "k_cache",
+                    )?;
+                    let value_blocks = alloc_blocks(
+                        device,
+                        &[num_gpu_blocks, cache_config.block_size, kpe_head_dim],
+                        dtype,
+                        "v_cache",
+                    )?;
                     (key_blocks, value_blocks)
                 }
             };
