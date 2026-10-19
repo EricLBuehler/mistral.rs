@@ -219,7 +219,9 @@ impl<Backer: FcfsBacker> DefaultScheduler<Backer> {
             }
             (_, 0) => {
                 for seq in waiting.into_iter() {
-                    seq.set_state(SequenceState::RunningPrompt);
+                    if seq.is_waiting() {
+                        seq.set_state(SequenceState::RunningPrompt);
+                    }
                     self.running.push(seq);
                 }
                 self.waiting = Backer::new();
@@ -227,10 +229,7 @@ impl<Backer: FcfsBacker> DefaultScheduler<Backer> {
                 self.running = self.bucket_and_waitlist_seqs(running);
                 logger.set_num_running(self.running.len());
                 logger.set_num_waiting(self.waiting.len());
-                return DefaultSchedulerOutput {
-                    prompt: self.running.iter_mut().collect::<Vec<_>>().into(),
-                    completion: vec![].into(),
-                };
+                return self.scheduled_output();
             }
             (0, _) => {
                 self.running = self.bucket_and_waitlist_seqs(running);
@@ -242,10 +241,7 @@ impl<Backer: FcfsBacker> DefaultScheduler<Backer> {
                 }
                 logger.set_num_running(self.running.len());
                 logger.set_num_waiting(self.waiting.len());
-                return DefaultSchedulerOutput {
-                    prompt: vec![].into(),
-                    completion: self.running.iter_mut().collect::<Vec<_>>().into(),
-                };
+                return self.scheduled_output();
             }
             _ => {}
         }
@@ -282,6 +278,10 @@ impl<Backer: FcfsBacker> DefaultScheduler<Backer> {
         logger.set_num_running(self.running.len());
         logger.set_num_waiting(self.waiting.len());
 
+        self.scheduled_output()
+    }
+
+    fn scheduled_output(&mut self) -> DefaultSchedulerOutput<'_> {
         let mut completion = Vec::new();
         let mut prompt = Vec::new();
         for seq in &mut self.running {
@@ -516,6 +516,37 @@ mod tests {
 
         assert_eq!(bucketed.running.len(), 1);
         assert_eq!(bucketed.waiting.len(), 1);
+    }
+
+    #[test]
+    fn deferred_cached_decode_stays_in_completion_when_running_is_empty() {
+        let mut scheduler = DefaultScheduler::<VecDeque<Sequence>>::new(
+            DefaultSchedulerMethod::Fixed(NonZeroUsize::new(2).unwrap()),
+        );
+        let mut seq = test_sequence(0, None).prefill_v2_normal(vec![], vec![1, 1], 2);
+        seq.reset_prefill_toks();
+        seq.set_state(SequenceState::RunningCompletion);
+        scheduler.waiting.push_back(seq);
+        let logger = IntervalLogger::new(std::time::Duration::from_secs(3600), None);
+        let output = scheduler.schedule(&logger);
+        assert!(output.prompt.is_empty());
+        assert_eq!(output.completion.len(), 1);
+        assert!(output.completion[0].is_completion());
+        assert_eq!(output.completion[0].token_offset(), 2);
+    }
+
+    #[test]
+    fn running_prompt_is_not_sent_to_decode_when_waiting_is_empty() {
+        let mut scheduler = DefaultScheduler::<VecDeque<Sequence>>::new(
+            DefaultSchedulerMethod::Fixed(NonZeroUsize::new(2).unwrap()),
+        );
+        let seq = test_sequence(0, None);
+        seq.set_state(SequenceState::RunningPrompt);
+        scheduler.running.push(seq);
+        let logger = IntervalLogger::new(std::time::Duration::from_secs(3600), None);
+        let output = scheduler.schedule(&logger);
+        assert!(output.completion.is_empty());
+        assert_eq!(output.prompt.len(), 1);
     }
 
     #[test]
