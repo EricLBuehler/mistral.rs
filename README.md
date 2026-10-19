@@ -25,6 +25,7 @@
 
 ## Latest
 
+- **v0.9.5**: paged attention is now the default on supported Metal models, with automatic memory planning across the CLI and SDKs. Existing memory and device-mapping options have changed; see the [upgrade guide](https://docs.mistralrs.dev/guides/perf/paged-attention/#upgrading-from-094). This release also adds [Qwen3.8-Flash-Next](https://docs.mistralrs.dev/guides/models/model-family-notes/#qwen38-flash-next) and [CUDA 13.4 source builds](https://docs.mistralrs.dev/developer/from-source/).
 - **Muse Glimmer 30B**: native text, image, and video inference with ATEM tool calling, reasoning controls, LoRA, ISQ/UQFF, and companion-projector GGUF loading. [Model notes](https://docs.mistralrs.dev/guides/models/model-family-notes/#muse-glimmer)
 - **GGUF loading**: load a local file with `-f`, or select a published artifact with `--quant`. Tokenizer, configuration, and multimodal projector files are discovered when the available metadata identifies them unambiguously. [Guide](https://docs.mistralrs.dev/guides/models/run-gguf/)
 - **OpenAI-compatible Skills**: upload `/v1/skills` bundles and reference them from Responses requests for reusable procedures, helper scripts, and local data. [Guide](https://docs.mistralrs.dev/guides/agents/skills/)

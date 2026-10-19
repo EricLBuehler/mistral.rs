@@ -25,6 +25,8 @@ quant = "4"
 
 Memory sizing and device placement are automatic. For optional overrides, see [paged attention and KV caching](/guides/perf/paged-attention/#memory-budget).
 
+For configuration files written for 0.9.4, follow the [memory-option migration table](/guides/perf/paged-attention/#upgrading-from-094) before upgrading to 0.9.5.
+
 ## Top-level fields
 
 | Field | Type | Applies to | Purpose |

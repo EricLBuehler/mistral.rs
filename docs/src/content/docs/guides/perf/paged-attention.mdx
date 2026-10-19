@@ -57,6 +57,48 @@ To set a budget, import `mistralrs::MemoryGoal` and use `.with_memory_goal(Memor
 </TabItem>
 </Tabs>
 
+## Upgrading from 0.9.4
+
+Version 0.9.5 enables paging by default on supported Metal models and replaces the old memory and automatic-device-mapping hints with a shared memory planner. Omit memory overrides to use automatic sizing. To retain the standard cache on Metal, use `--paged-attn off`, Python's `no_paged_attn=True`, or Rust's `.without_paged_attn()`.
+
+### CLI and TOML
+
+The old flags are removed. Update scripts and the corresponding `[paged_attn]` settings:
+
+| 0.9.4 | 0.9.5 |
+|---|---|
+| `--pa-context-len 65536` / `context_len = 65536` | `--kv-cache 65536tokens` / `kv_cache = "65536tokens"` |
+| `--pa-memory-mb 4096` / `memory_mb = 4096` | `--kv-cache 4GiB` / `kv_cache = "4GiB"` for a single device; choose a total budget across devices for multi-device models |
+| `--pa-memory-fraction 0.9` / `memory_fraction = 0.9` | `--gpu-memory-utilization 0.9` / `gpu_memory_utilization = 0.9` |
+| `--max-seq-len` / device `max_seq_len` | Remove the placement hint; use `--max-model-len` / model `max_model_len` if you want a per-request context limit |
+| `--max-batch-size` / device `max_batch_size` | Remove the placement hint; use `--max-seqs` / runtime `max_seqs` to set serving concurrency |
+
+The old memory amount used MiB despite its name. The new byte budget covers the model's entire KV cache across devices. Utilization budgets cover weights, workspace, and KV cache; they are not a fraction reserved only for KV. Choose either a KV capacity or a utilization target. Explicit budgets require supported paging, including when loaded from TOML.
+
+`run` now defaults to one concurrent sequence; `serve` remains at 32. Explicit `max_seqs` settings take precedence. See [TOML configuration](/reference/cli-toml-config/) for section placement.
+
+### Python
+
+Replace `Runner(pa_ctxt_len=65536)` with `Runner(memory_goal="65536tokens")`, `pa_gpu_mem=4096` with `memory_goal="4GiB"` for a single-device cache, or `pa_gpu_mem_usage=0.9` with `memory_goal=0.9`. Supply the usual `which` argument in each case.
+
+Remove `TextAutoMapParams`, `MultimodalAutoMapParams`, and the `auto_map_params` / `multimodal_auto_map_params` arguments to `Which` variants. Placement now uses the memory goal and serving limits. `Runner.max_seqs` defaults to 32 instead of 16; set `max_seqs=16` explicitly to preserve the old concurrency limit.
+
+### Rust
+
+Replace `PagedAttentionMetaBuilder::with_gpu_memory` with `.with_memory_goal`, and replace `MemoryGpuConfig` values as follows:
+
+| 0.9.4 | 0.9.5 |
+|---|---|
+| `MemoryGpuConfig::ContextSize(n)` | `MemoryGoal::KvTokens(n)` |
+| `MemoryGpuConfig::MbAmount(n)` | `MemoryGoal::KvBytes(n * 1024 * 1024)` for a single device; choose a total byte budget for multi-device models |
+| `MemoryGpuConfig::Utilization(f)` | `MemoryGoal::Utilization(f)` |
+
+`MemoryGpuConfig::BestEffortMbAmount` has no direct replacement. Use `MemoryGoal::Auto` for automatic sizing or `MemoryGoal::KvBytes` for a required capacity; explicit capacities fail if they cannot fit instead of shrinking.
+
+`PagedAttentionMetaBuilder::default()` now uses `MemoryGoal::Auto` instead of a 4,096-token cache. Set `MemoryGoal::KvTokens(4096)` explicitly if that is the capacity you need. `ModelBuilder` also accepts `.with_memory_goal(...)` directly.
+
+Remove `DeviceMapSetting::Auto(...)` overrides to use automatic placement. For manual placement, `.with_device_mapping(...)` now accepts `DeviceMapMetadata` directly, without a `DeviceMapSetting::Map(...)` wrapper. See [layer mapping](/guides/perf/distributed-inference/#layer-mapping-cuda-p2p) for an example.
+
 ## Memory budget
 
 Leave memory settings unset to use `Auto`. The engine leaves headroom for the system, reserves space for model weights and temporary computation, and uses the remaining budget for the KV cache. CLI, Python, and Rust use the same policy.

@@ -56,7 +56,7 @@ In a consumer crate depending on `mistralrs`:
 
 ```toml
 [dependencies]
-mistralrs = { version = "0.8", features = ["cuda", "nccl", "flash-attn", "cudnn"] }
+mistralrs = { version = "0.9.5", features = ["cuda", "nccl", "flash-attn", "cudnn"] }
 ```
 
 ## Default features
