@@ -13,7 +13,7 @@ mistral.rs is a single binary: `mistralrs run` chats with a model in your termin
 <TabItem label="macOS / Linux">
 
 ```bash
-# 1. Install: downloads a prebuilt binary for your platform (or builds from source if none matches)
+# 1. Install: downloads a prebuilt binary or builds from source
 curl -fsSL https://mistralrs.dev/install.sh | sh
 
 # 2. Chat: downloads the weights on first run
@@ -27,7 +27,7 @@ mistralrs serve --quant 4 -m Qwen/Qwen3-4B
 <TabItem label="Windows">
 
 ```powershell
-# 1. Install from PowerShell (downloads a prebuilt binary, or builds from source)
+# 1. Install: downloads a prebuilt binary or builds from source
 irm https://mistralrs.dev/install.ps1 | iex
 
 # 2. Chat: downloads the weights on first run
@@ -92,24 +92,17 @@ At runtime, `HF_HOME` controls where models are cached (see [environment variabl
 </details>
 
 <Tabs>
-<TabItem label="macOS">
+<TabItem label="macOS / Linux">
 
 ```bash
-curl --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/EricLBuehler/mistral.rs/master/install.sh | sh
-```
-
-</TabItem>
-<TabItem label="Linux">
-
-```bash
-curl --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/EricLBuehler/mistral.rs/master/install.sh | sh
+curl -fsSL https://mistralrs.dev/install.sh | sh
 ```
 
 </TabItem>
 <TabItem label="Windows">
 
 ```powershell
-irm https://raw.githubusercontent.com/EricLBuehler/mistral.rs/master/install.ps1 | iex
+irm https://mistralrs.dev/install.ps1 | iex
 ```
 
 </TabItem>

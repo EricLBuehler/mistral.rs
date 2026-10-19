@@ -441,16 +441,16 @@ Generated with [mistral.rs](https://github.com/EricLBuehler/mistral.rs) {mistral
 
 ## Install
 
-Install [mistral.rs](https://github.com/EricLBuehler/mistral.rs) ([full guide](https://docs.mistralrs.dev/guides/install/)):
+Install [mistral.rs](https://github.com/EricLBuehler/mistral.rs) ([full guide](https://docs.mistralrs.dev/quickstart/)):
 
 **Linux/macOS:**
 ```
-curl --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/EricLBuehler/mistral.rs/master/install.sh | sh
+curl -fsSL https://mistralrs.dev/install.sh | sh
 ```
 
 **Windows (PowerShell):**
 ```
-irm https://raw.githubusercontent.com/EricLBuehler/mistral.rs/master/install.ps1 | iex
+irm https://mistralrs.dev/install.ps1 | iex
 ```
 
 ## Examples
