@@ -23,6 +23,8 @@ quant = "4"
 
 `mistralrs from-config -f this.toml` runs the server.
 
+Memory sizing and device placement are automatic. For optional overrides, see [paged attention and KV caching](/guides/perf/paged-attention/#memory-budget).
+
 ## Top-level fields
 
 | Field | Type | Applies to | Purpose |
@@ -47,6 +49,9 @@ quant = "4"
 | Field | CLI flag | Default | Purpose |
 |---|---|---|---|
 | `max_seqs` | `--max-seqs` | 1 for `run`, 32 for `serve` | Max concurrent sequences. An explicit value overrides the command default. |
+| `max_num_batched_tokens` | `--max-num-batched-tokens` | 4096 | Maximum tokens processed in one paged-attention scheduler step. Must be nonzero. |
+| `max_prefill_chunk_tokens` | `--max-prefill-chunk-tokens` | 512 | CUDA or Metal prompt-token quantum while decode is resident and for recurrent prefill batching. Must be nonzero. |
+| `max_decode_steps_before_prefill` | `--max-decode-steps-before-prefill` | 8 | Maximum decode steps before a waiting prefill batch is admitted. Must be nonzero. |
 | `no_kv_cache` | `--no-kv-cache` | false | Disable KV cache entirely. |
 | `prefix_cache_n` | `--prefix-cache-n` | 16 | Prefix caches retained (0 to disable). |
 | `chat_template` | `-c`, `--chat-template` | not set | Custom chat template file (`.json` or `.jinja`), applied to every model. Per-model `chat_template` in `[[models]]` overrides it. |
@@ -99,9 +104,20 @@ The MCP *client* configuration (`mcp_config`) lives under `[runtime]`, not `[ser
 |---|---|---|---|
 | `mode` | `--paged-attn` | `auto` | `auto` (on for CUDA and Metal, off for CPU), `on`, or `off`. |
 | `gpu_memory_utilization` | `--gpu-memory-utilization` | not set | Physical GPU memory fraction for weights, workspace, and KV. Conflicts with `kv_cache`. |
-| `kv_cache` | `--kv-cache` | not set | Explicit KV capacity string, such as `"4GiB"` or `"65536tokens"`. |
-| `block_size` | `--pa-block-size` | not set | Tokens per block. |
+| `kv_cache` | `--kv-cache` | not set | Explicit shared KV capacity, such as `"4GiB"` or `"65536tokens"`. Conflicts with `gpu_memory_utilization`. |
+| `block_size` | `--pa-block-size` | 32 on CUDA and Metal | Tokens per block. |
 | `cache_type` | `--pa-cache-type` | `auto` | KV cache quantization type. |
+
+Omit both `gpu_memory_utilization` and `kv_cache` for automatic sizing. Either explicit setting requires paging and conflicts with `mode = "off"`. `kv_cache = "auto"` is not valid.
+
+To give the model a fixed cache budget, add this to the minimal example:
+
+```toml
+[paged_attn]
+kv_cache = "4GiB"
+```
+
+This is shared across requests and totals the cache across the model's devices. Use `max_model_len` in `[[models]]` to limit each request's context. See [memory budgets](/guides/perf/paged-attention/#memory-budget) for help choosing a setting.
 
 ## `[sandbox]` section
 

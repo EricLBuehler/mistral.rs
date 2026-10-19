@@ -33,10 +33,6 @@ Run with `cargo run --release`. The first run downloads the weights into the Hug
 
 `with_auto_isq(IsqBits::Four)` enables [ISQ (in-situ quantization)](/reference/quantization-types/) to 4 bits; omit it to run the model unquantized.
 
-Memory sizing defaults to `MemoryGoal::Auto`, using the same policy as the CLI and Python. Set `.with_memory_goal(MemoryGoal::Utilization(0.9))` or `.with_memory_goal(MemoryGoal::KvTokens(65536))` to override it. Serving concurrency defaults to 32 and is set with `.with_max_num_seqs(...)`. See [memory budgets](/guides/perf/paged-attention/#memory-budget) for the default reserves and explicit-goal behavior.
-
-Automatic placement uses execution limits without separate per-sequence memory hints. To assign layer counts manually, pass `DeviceMapMetadata::from_num_device_layers(Vec<DeviceLayerMapMetadata>)` to `.with_device_mapping(...)`.
-
 Full example: [text-generation](/examples/rust/getting-started/text-generation/).
 
 ## Project setup
@@ -79,6 +75,12 @@ Feature names match the CLI build features. The [cargo features reference](/refe
 `TextMessages` assembles a basic chat conversation. For per-message sampling, tool schemas, or logprobs, use `RequestBuilder`.
 
 The [Rust SDK reference](/reference/rust-sdk/) lists the full `Model` surface; specialized builders (`GgufModelBuilder`, `EmbeddingModelBuilder`, `LoraModelBuilder`, ...) are on [docs.rs](https://docs.rs/mistralrs).
+
+## Memory and device placement
+
+The builder automatically chooses device placement and KV cache capacity. PagedAttention is enabled automatically on supported CUDA and Metal devices. Add `.with_max_num_seqs(4)` to allow up to four concurrent sequences; the default is 32.
+
+To choose a shared KV cache capacity, import `mistralrs::MemoryGoal` and add `.with_memory_goal(MemoryGoal::KvTokens(65536))` to the builder. This capacity is shared across requests; `.with_max_model_len(8192)` separately limits each request's prompt plus output. Explicit memory goals require paging. See [memory budgets](/guides/perf/paged-attention/#memory-budget) for sizing options and [layer mapping](/guides/perf/distributed-inference/#layer-mapping-cuda-p2p) for manual placement.
 
 ## Streaming
 

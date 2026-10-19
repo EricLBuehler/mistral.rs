@@ -5,14 +5,19 @@ description: Block-based KV caching and optimized attention on CUDA and Metal.
 
 import { Tabs, TabItem } from '@astrojs/starlight/components';
 
-Standard attention allocates one contiguous KV cache per sequence, sized for the maximum context length. Paged attention splits the cache into fixed-size blocks and allocates them on demand from a central pool, so many concurrent sequences share a predictable VRAM budget.
+Standard attention keeps a separate contiguous KV cache for each sequence. Paged attention splits the cache into fixed-size blocks and assigns them on demand from a central pool, so concurrent sequences share a predictable cache budget.
+
+Paged attention is enabled by default for supported CUDA and Metal models. Start with automatic memory sizing: the engine plans model placement, execution workspace, and the KV pool together.
 
 <Tabs>
 <TabItem label="CLI">
 
 ```bash
-# Force on with an explicit KV cache capacity
-mistralrs serve --paged-attn on --kv-cache 8GiB -m Qwen/Qwen3-4B
+# Automatic placement and memory sizing
+mistralrs serve -m Qwen/Qwen3-4B
+
+# Set an explicit shared KV cache capacity
+mistralrs serve --kv-cache 8GiB -m Qwen/Qwen3-4B
 
 # Force off
 mistralrs serve --paged-attn off -m Qwen/Qwen3-4B
@@ -28,78 +33,59 @@ from mistralrs import Runner, Which
 
 runner = Runner(
     which=Which.Plain(model_id="Qwen/Qwen3-4B"),
-    memory_goal="8GiB",
-    pa_blk_size=32,
 )
 ```
 
-`paged_attn=True` forces it on, `no_paged_attn=True` forces it off; `memory_goal` accepts a utilization fraction or a capacity string. [Full example](/examples/python/paged-attention/).
+Omit `memory_goal` for automatic sizing. Set `memory_goal="8GiB"` for an explicit shared KV capacity or `memory_goal=0.9` for a utilization target. `paged_attn=True` forces paging on; `no_paged_attn=True` forces it off. [Full example](/examples/python/paged-attention/).
 
 </TabItem>
 <TabItem label="Rust">
 
 ```rust
-use mistralrs::{IsqBits, MemoryGoal, ModelBuilder, PagedAttentionMetaBuilder};
+use mistralrs::{IsqBits, ModelBuilder};
 
 let model = ModelBuilder::new("Qwen/Qwen3-4B")
     .with_auto_isq(IsqBits::Eight)
-    .with_paged_attn(
-        PagedAttentionMetaBuilder::default()
-            .with_block_size(32)
-            .with_memory_goal(MemoryGoal::KvTokens(1024))
-            .build()?,
-    )
     .build()
     .await?;
 ```
 
-`ModelBuilder`, `TextModelBuilder`, `GgufModelBuilder`, and `MultimodalModelBuilder` enable paged attention by default on supported CUDA and Metal devices. CPU and unsupported model loaders use the standard cache. Call `.without_paged_attn()` to opt out; `.with_paged_attn(config)` overrides the default budget and re-enables paging after an opt-out. Disabling the KV cache also disables paging.
+Paging is automatic on supported CUDA and Metal models. Call `.without_paged_attn()` to use the standard cache. CPU and unsupported model loaders also use the standard cache.
 
-All frontends default to `MemoryGoal::Auto`. Use `.with_memory_goal(MemoryGoal::Utilization(0.9))` or `.with_memory_goal(MemoryGoal::KvTokens(65536))` directly on a model builder. `PagedAttentionMetaBuilder` also defaults to `Auto` and supports advanced block-size and cache-type settings. [Full example](/examples/rust/advanced/paged-attn/).
+To set a budget, import `mistralrs::MemoryGoal` and use `.with_memory_goal(MemoryGoal::Utilization(0.9))` or `.with_memory_goal(MemoryGoal::KvTokens(65536))`. `PagedAttentionMetaBuilder` also supports block-size and cache-type settings. [Full example](/examples/rust/advanced/paged-attn/).
 
 </TabItem>
 </Tabs>
 
-Use paged attention when:
-
-- Serving more than a handful of concurrent requests.
-- Predictable VRAM usage is required.
-- Running long-context models (32k+) where standard caches would be enormous.
-- Using CUDA decode graphs (see below).
-
-Compare `--paged-attn auto` with `--paged-attn off` using your workload's context lengths and concurrency.
-
 ## Memory budget
 
-CLI, Rust, and Python share one memory goal. The default, `Auto`, reserves operating-system and runtime headroom, accounts for model weights and execution workspace, and uses the remaining budget for the paged KV pool. Automatic sizing uses the actual serving concurrency and prefill limits; there are no separate sequence-length or batch-size mapping hints.
+Leave memory settings unset to use `Auto`. The engine leaves headroom for the system, reserves space for model weights and temporary computation, and uses the remaining budget for the KV cache. CLI, Python, and Rust use the same policy.
 
-On discrete GPUs, `Auto` leaves the larger of 5% of physical memory or 1 GiB as headroom. On unified-memory devices, it caps the engine at physical memory minus 25%, with that deduction capped at 16 GiB. This is a whole-engine limit covering weights, runtime workspace, and KV cache. Metal also respects the device's recommended working-set limit and currently available system memory. Existing system usage can lower the usable capacity below the engine limit.
+To set the engine's budget yourself, use `--gpu-memory-utilization 0.9`. This allows weights, temporary computation, and KV cache together to use up to 90% of physical GPU memory, subject to current availability and device limits.
 
-On macOS, available memory includes free pages, reclaimable file cache, and purgeable pages. Non-purgeable anonymous allocations, wired pages, and compressed memory are excluded.
+To set just the KV capacity, use `--kv-cache 4GiB` for a byte budget or `--kv-cache 65536tokens` for a token capacity. The cache is shared across requests, and byte budgets cover all of the model's devices. Choose either `--kv-cache` or `--gpu-memory-utilization`.
 
-On a 64 GiB Mac, `Auto` sets a 48 GiB engine ceiling. Memory already used by macOS and other applications reduces the available capacity; the planner does not require another 16 GiB to remain free after allocation. Runtime workspace is reserved before sizing KV, and each forward pass must still fit within the engine limit and currently available memory.
+Use `--max-model-len` to limit each request's prompt plus output, and `--max-seqs` to limit concurrent requests. A shared cache of 65,536 tokens does not give every request that capacity. See [throughput tuning](/guides/perf/throughput-tuning/) for these controls.
 
-Automatic sizing solves the KV capacity and execution workspace together. The workspace covers cold prefill, decode, and one prefix-cache request at the largest context allowed by the model and the usable pool. Larger prefix batches can be reduced to fit the reserved workspace; the pool size does not guarantee that every request can process its longest prefix concurrently.
+Explicit memory goals require supported paging and fail if the requested allocation cannot fit. Remove the override to return to automatic sizing.
 
-Paged memory planning uses the same activation estimator for every device-mapped model loader. Loaders supply architecture facts such as MLP width, vocabulary size, retained token state, and attention features; the shared estimator accounts for projections, logits, attention workspace, and encoder concurrency. Kernel capabilities and workspace requirements are shared between dispatch and planning. Unsupported paths retain conservative fallback reservations. These are planning bounds, not measurements of an exact runtime peak.
+### Automatic sizing
 
-Native Metal paged prefill reads KV pages directly and applies structured masks inside the kernel. Its attention workspace covers output and compact metadata, without a full KV gather or a query-by-context mask. Native prefill scratch therefore does not grow proportionally with the cached context. Shared-KV layers that reduce a prompt tail to one query also reserve the selected decode kernel's workspace. Runtime admission uses the current attention workload where accounting is complete, while preserving non-attention and encoder reservations. Explicit custom masks and other attention paths retain their own memory allowances.
+On discrete GPUs, `Auto` leaves the larger of 5% of physical memory or 1 GiB as headroom. On unified-memory devices, it leaves 25%, capped at 16 GiB. Metal also respects its recommended working-set limit and currently available system memory. For example, a 64 GiB Mac has a 48 GiB engine ceiling; other applications can reduce the usable capacity further.
 
-Choose one explicit override when needed:
+The planner accounts for serving concurrency and prompt-processing limits. Increasing them can require more temporary memory and leave less room for the cache. Long cached prefixes may also need smaller batches to fit. These estimates guide allocation; the engine checks available memory before running each batch.
 
-- `--gpu-memory-utilization 0.9`: a fraction of physical GPU memory for weights, workspace, and KV cache together.
-- `--kv-cache 4GiB`: a total KV allocation byte budget across all model devices.
-- `--kv-cache 65536tokens`: a usable KV token capacity shared across all requests.
+### Explicit capacity and utilization
 
 Byte budgets allocate whole cache blocks within the requested limit. Metal also includes hardware buffer rounding in this budget; CUDA uses logical buffer bytes. Alignment and the reserved cache block can make usable token capacity lower than a simple bytes-per-token estimate. Token budgets round up to whole usable blocks and check the additional reserved block and allocation overhead against the device budget.
 
-A utilization override uses physical memory as its denominator, replacing the automatic reserve policy. The fraction is applied once; it is not multiplied by the fraction of memory currently free. Existing allocations, runtime workspace, Metal's recommended working-set limit, and current available memory still constrain allocation.
+### Multiple models
 
-`--gpu-memory-utilization` and `--kv-cache` are mutually exclusive. Explicit goals fail when paging is disabled, the device or model does not support it, or the requested capacity cannot fit. A KV token budget is not a per-request context-length limit. Use `--max-model-len` for that limit.
-
-For multi-model serving, each model receives a fixed share of the initial per-device memory budget, weighted by its maximum serving concurrency. Its weights, workspace, and KV pool must fit within that share. A utilization override becomes the shared engine target, including models using `Auto`; conflicting utilization overrides are rejected. Models with paging disabled count toward the share calculation, but their placement and growing dense caches are not bounded by these paged-cache quotas. Explicit KV capacities are preserved in full; a capacity that exceeds the model's share fails instead of being silently reduced.
+For [multi-model serving](/guides/serve/multiple-models/), each model receives a fixed share of the initial per-device memory budget, weighted by its maximum serving concurrency. Its weights, workspace, and KV pool must fit within that share. A utilization override becomes the shared engine target, including models using `Auto`; conflicting utilization overrides are rejected. Models with paging disabled count toward the share calculation, but their placement and growing dense caches are not bounded by these paged-cache quotas. Explicit KV capacities are preserved in full; a capacity that exceeds the model's share fails instead of being silently reduced.
 
 In Rust, set memory goals before calling `plan_paged_kv`. Changing a goal on a planned configuration requires re-planning the group.
+
+### Cache and scheduler controls
 
 Two more flags tune the cache itself:
 

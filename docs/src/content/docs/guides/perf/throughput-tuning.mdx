@@ -5,21 +5,15 @@ description: Concurrency, prefix caching, and scheduling knobs for server worklo
 
 import { Tabs, TabItem } from '@astrojs/starlight/components';
 
-A handful of flags control how many requests run at once and how much repeated work the engine can skip. The defaults are reasonable for a single-user server; tune them when traffic is concurrent or shares long prompts.
+Start with the defaults, then change one setting at a time for your workload:
 
 ```bash
-mistralrs serve -m Qwen/Qwen3-4B \
-  --max-seqs 64 \
-  --max-num-batched-tokens 4096 \
-  --max-prefill-chunk-tokens 512 \
-  --gpu-memory-utilization 0.9
+mistralrs serve -m Qwen/Qwen3-4B
 ```
 
-`--gpu-memory-utilization` sets the total GPU budget, including the [paged attention](/guides/perf/paged-attention/) block pool; see [When paged attention matters](#when-paged-attention-matters) below.
-
-Use `mistralrs bench -m <model>` for single-request kernel measurements. For server tuning, replay
-the same prompt and output lengths through the HTTP API at the production concurrency; flags that
-help one workload can hurt another.
+For server tuning, replay the same prompt and output lengths through the HTTP API at your expected
+concurrency. Compare throughput and latency before changing another setting. Use
+`mistralrs bench -m <model>` for single-request measurements.
 
 ## Concurrency: max running sequences
 
@@ -54,16 +48,9 @@ let model = mistralrs::ModelBuilder::new("Qwen/Qwen3-4B")
 </TabItem>
 </Tabs>
 
-The default differs by surface:
+CLI `run` defaults to one concurrent sequence. CLI `serve`, Python, and Rust default to 32.
 
-| Surface | Flag / argument | Default |
-|---|---|---|
-| CLI `run` | `--max-seqs` | 1 |
-| CLI `serve` | `--max-seqs` | 32 |
-| Python | `Runner(max_seqs=...)` | 32 |
-| Rust | `.with_max_num_seqs(...)` | 32 |
-
-More running sequences need more KV cache. Automatic memory sizing accounts for serving limits; use `--gpu-memory-utilization 0.9` or `--kv-cache 4GiB` to override the shared budget. If the pool runs out of blocks mid-generation, the scheduler preempts a running sequence, frees its blocks, and requeues it, which costs recomputation.
+More running sequences need more KV cache. If the pool runs out of blocks mid-generation, the scheduler preempts a running sequence, frees its blocks, and requeues it, which costs recomputation. Lower concurrency or adjust the [memory budget](/guides/perf/paged-attention/#memory-budget) if this happens frequently.
 
 ## Mixed prefill and decode
 
@@ -83,64 +70,26 @@ chunk can improve prefill throughput while increasing decode latency, especially
 
 ## When paged attention matters
 
-Concurrency beyond a few sequences is the main reason to care about paged attention. It is the difference between per-sequence contiguous caches sized for the maximum context and a shared block pool with a fixed budget:
+Paged attention shares a fixed cache pool across requests and is enabled by default on supported CUDA and Metal models:
 
-- With paged attention (default on CUDA and Metal): continuous batching against the block pool, block-level prefix sharing, and on CUDA the decode-graph and FlashInfer (NVIDIA's attention-kernel library) fast paths.
+- With paged attention: continuous batching and block-level prefix sharing.
 - Without it (CPU or `--paged-attn off`): the default scheduler is first-come-first-served and batches running sequences by equal length; sequences at other lengths wait their turn and accumulate priority.
 
-Automatic KV budgeting uses the shared memory goal after reserving weights and execution workspace. Increase an explicit KV budget only when the device has enough headroom. See [paged attention memory budgets](/guides/perf/paged-attention/#memory-budget).
+See [paged attention and KV caching](/guides/perf/paged-attention/) for setup and cache controls.
 
 ## Prefix caching
 
-Prefix caching skips prefill for tokens the engine has already processed, which is most valuable for multi-turn chat and shared system prompts.
+Prefix caching is most useful for multi-turn chat and shared system prompts. When measuring it, include repeated prefixes in your test traffic and compare time to first token after the first request.
 
-`--prefix-cache-n` sets how many cached prefixes stay on device (default 16, `0` disables). `--no-kv-cache` disables the KV cache entirely and prefix caching with it.
+`--prefix-cache-n` controls how many prefixes are retained (default 16; `0` disables). Python uses `Runner(prefix_cache_n=...)`, and Rust uses `.with_prefix_cache_n(Some(...))`. Retaining more prefixes can help workloads that cycle through many conversations.
 
-<Tabs>
-<TabItem label="CLI">
-
-```bash
-mistralrs serve -m Qwen/Qwen3-4B --prefix-cache-n 32
-```
-
-</TabItem>
-<TabItem label="Python">
-
-```python
-from mistralrs import Runner, Which
-
-runner = Runner(
-    which=Which.Plain(model_id="Qwen/Qwen3-4B"),
-    prefix_cache_n=32,
-    no_kv_cache=False,
-)
-```
-
-</TabItem>
-<TabItem label="Rust">
-
-```rust
-let model = mistralrs::ModelBuilder::new("Qwen/Qwen3-4B")
-    .with_prefix_cache_n(Some(32))
-    .build()
-    .await?;
-```
-
-`.with_no_kv_cache()` disables the KV cache (and prefix caching with it).
-
-</TabItem>
-</Tabs>
-
-The mechanism depends on the attention mode:
-
-- Paged attention: sequences sharing a token prefix reuse the same reference-counted cache blocks; matching blocks of a new request are not recomputed.
-- Non-paged: completed sequences' caches are kept whole; a new request whose tokens extend a cached sequence resumes from it. Beyond `--prefix-cache-n` device entries, the oldest caches are evicted (dropped, not offloaded); a later matching request re-prefills.
+With paged attention, matching prefixes share cache blocks. Without paging, completed sequences' caches are retained whole. `--no-kv-cache` disables both the KV cache and prefix caching; `--paged-attn off` keeps the standard KV cache.
 
 Qwen3.5 hybrid models on Metal can report zero prefix-cache hits for repeated identical prompts. Reuse also requires a saved recurrent-state checkpoint, and Metal does not currently create the intermediate checkpoints needed for this case.
 
 ## Memory planning for automatic device mapping
 
-Automatic device mapping and KV allocation share the same memory goal and execution limits. `--max-seqs`, `--max-num-batched-tokens`, and `--max-prefill-chunk-tokens` describe actual scheduler bounds; `--max-model-len` bounds request context length. See [distributed inference](/guides/perf/distributed-inference/) for manual placement.
+With paged attention, automatic placement reserves room for weights, temporary computation, and the KV cache together. Raising concurrency or batch limits can leave less space for the cache. See [memory budgets](/guides/perf/paged-attention/#memory-budget) for sizing and [layer mapping](/guides/perf/distributed-inference/#layer-mapping-cuda-p2p) for placement.
 
 ## CPU threads and affinity
 
