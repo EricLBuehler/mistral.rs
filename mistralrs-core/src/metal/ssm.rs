@@ -86,13 +86,7 @@ fn scan_kernel_name(state_dim: usize) -> &'static str {
 
 #[cfg(feature = "metal")]
 pub(crate) fn warmup_kernels(device: &MetalRawDevice, state_dim: usize) -> Result<()> {
-    let start = std::time::Instant::now();
     load_pipeline(device, scan_kernel_name(state_dim))?;
-    tracing::debug!(
-        state_dim,
-        elapsed_ms = start.elapsed().as_millis(),
-        "Prepared Metal SSM kernels"
-    );
     Ok(())
 }
 

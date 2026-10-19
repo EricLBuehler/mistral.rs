@@ -2154,12 +2154,7 @@ impl Engine {
                                 if is_prompt {
                                     crate::speculative::autotuner::note_interruption();
                                 }
-                                crate::pipeline::metal_phase::begin(
-                                    &pipeline.device(),
-                                    is_prompt,
-                                    guards_mut.len(),
-                                );
-                                let submission = pipeline
+                                pipeline
                                     .submit_step(
                                         &mut guards_mut,
                                         is_prompt,
@@ -2171,9 +2166,7 @@ impl Engine {
                                         self.logger.as_ref(),
                                         step_lookahead,
                                     )
-                                    .await;
-                                crate::pipeline::metal_phase::finish();
-                                submission
+                                    .await
                             }
                         };
 

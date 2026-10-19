@@ -1,7 +1,4 @@
-use std::{
-    collections::HashMap,
-    sync::{Once, OnceLock},
-};
+use std::{collections::HashMap, sync::Once};
 
 use candle_core::{DType, Device, DeviceLocation, Result, Tensor};
 #[cfg(all(feature = "cuda", target_family = "unix"))]
@@ -41,46 +38,7 @@ use crate::{
 };
 
 static UNCALIBRATED_FP8_ATTENTION_WARNING: Once = Once::new();
-const METAL_DECODE_PATH_ENV: &str = "MISTRALRS_METAL_DECODE_PATH";
-const METAL_KV_PACK_ENV: &str = "MISTRALRS_METAL_KV_PACK";
 const METAL_DONOR_DECODE_HEAD_SIZES: [usize; 2] = [256, 512];
-
-struct MetalDecodeDiagnostics {
-    path: MetalDecodePath,
-    contiguous_pack: bool,
-    active: bool,
-}
-
-#[derive(Clone, Copy, Debug)]
-enum MetalDecodePath {
-    Auto,
-    Gather,
-    DirectShortWindow,
-    UnmaskedShortWindow,
-}
-
-fn metal_decode_diagnostics() -> &'static MetalDecodeDiagnostics {
-    static DIAGNOSTICS: OnceLock<MetalDecodeDiagnostics> = OnceLock::new();
-    DIAGNOSTICS.get_or_init(|| {
-        let path = std::env::var(METAL_DECODE_PATH_ENV).ok();
-        let pack = std::env::var(METAL_KV_PACK_ENV).ok();
-        MetalDecodeDiagnostics {
-            path: match path.as_deref() {
-                None | Some("auto") => MetalDecodePath::Auto,
-                Some("gather") => MetalDecodePath::Gather,
-                Some("direct-short-window") => MetalDecodePath::DirectShortWindow,
-                Some("unmasked-short-window") => MetalDecodePath::UnmaskedShortWindow,
-                Some(value) => panic!("invalid {METAL_DECODE_PATH_ENV}={value}"),
-            },
-            contiguous_pack: match pack.as_deref() {
-                Some("force") => false,
-                None | Some("contiguous") => true,
-                Some(value) => panic!("invalid {METAL_KV_PACK_ENV}={value}"),
-            },
-            active: path.is_some() || pack.is_some(),
-        }
-    })
-}
 
 #[cfg(all(feature = "cuda", target_family = "unix"))]
 #[derive(Clone, Copy)]
@@ -269,8 +227,8 @@ fn cache_input_can_write_directly(tensor: &Tensor) -> Result<bool> {
         && row_stride >= heads.saturating_mul(head_size))
 }
 
-fn pack_cache_input(tensor: &Tensor, contiguous_pack: bool) -> Result<Tensor> {
-    if contiguous_pack {
+fn pack_cache_input(tensor: &Tensor) -> Result<Tensor> {
+    if tensor.device().is_metal() {
         tensor.contiguous()?
     } else {
         tensor.force_contiguous()?
@@ -321,19 +279,18 @@ fn write_kv_cache(
             )?;
         }
     }
-    let contiguous_pack = key.device().is_metal() && metal_decode_diagnostics().contiguous_pack;
     let key_packed;
     let key = if cache_input_can_write_directly(key)? {
         key
     } else {
-        key_packed = pack_cache_input(key, contiguous_pack)?;
+        key_packed = pack_cache_input(key)?;
         &key_packed
     };
     let value_packed;
     let value = if cache_input_can_write_directly(value)? {
         value
     } else {
-        value_packed = pack_cache_input(value, contiguous_pack)?;
+        value_packed = pack_cache_input(value)?;
         &value_packed
     };
     match AttentionBackendKind::from_cache(key_cache, value_cache) {
@@ -925,17 +882,6 @@ impl PagedForwardCtx<'_> {
         } else {
             self.input_metadata.paged_context_lens_cpu.as_deref()
         }
-    }
-
-    fn single_decode_fits_window(&self) -> bool {
-        self.dims.batch_size == 1
-            && self.dims.seq_len == 1
-            && self.alibi_slopes.is_none()
-            && self.sdpa_params.sinks.is_none()
-            && self.sdpa_params.sliding_window.is_some_and(|window| {
-                self.context_lens_cpu()
-                    .is_some_and(|lens| lens.len() == 1 && lens[0] <= window)
-            })
     }
 
     fn mm_prefix_ranges(&self, dev: &DeviceLocation) -> Option<&Tensor> {
@@ -2166,27 +2112,6 @@ impl PagedAttention {
             (None, None)
         };
 
-        if query.device().is_metal() && metal_decode_diagnostics().active {
-            if let (Some(key), Some(value)) = (&key, &value) {
-                static LAYOUT_LOG: Once = Once::new();
-                LAYOUT_LOG.call_once(|| {
-                    tracing::info!(
-                        path = ?metal_decode_diagnostics().path,
-                        contiguous_pack = metal_decode_diagnostics().contiguous_pack,
-                        key_dims = ?key.dims(),
-                        key_strides = ?key.stride(),
-                        value_dims = ?value.dims(),
-                        value_strides = ?value.stride(),
-                        key_contiguous = key.is_contiguous(),
-                        value_contiguous = value.is_contiguous(),
-                        contiguous_inputs = usize::from(key.is_contiguous())
-                            + usize::from(value.is_contiguous()),
-                        "Metal decode KV layout"
-                    );
-                });
-            }
-        }
-
         if write_cache && key_cache.as_ref().is_some_and(|_| value_cache.is_some()) {
             let key_cache = key_cache.as_mut().unwrap();
             let value_cache = value_cache.as_mut().unwrap();
@@ -2230,29 +2155,6 @@ impl PagedAttention {
             && ctx.sdpa_params.sliding_window.is_some()
         {
             plan = DecodePlan::PagedAttention;
-        }
-        if query.device().is_metal()
-            && ctx.dims.batch_size == 1
-            && ctx.dims.seq_len == 1
-            && ctx.alibi_slopes.is_none()
-            && tensors.attention_mask.is_none()
-        {
-            // Candle's vector SDPA ignores masks, so the forced gather must stay mask-free.
-            match metal_decode_diagnostics().path {
-                MetalDecodePath::Gather
-                    if matches!(plan, DecodePlan::PagedAttention)
-                        && ctx.sdpa_params.sliding_window.is_none() =>
-                {
-                    plan = DecodePlan::GatherSdpa;
-                }
-                MetalDecodePath::DirectShortWindow
-                    if matches!(plan, DecodePlan::GatherSdpa)
-                        && ctx.single_decode_fits_window() =>
-                {
-                    plan = DecodePlan::PagedAttention;
-                }
-                _ => {}
-            }
         }
         match plan {
             DecodePlan::GatherSdpa => self.run_decode_gather_sdpa(
@@ -2450,16 +2352,6 @@ impl PagedAttention {
         let max_kv = kv_lens.iter().copied().max().unwrap_or(0);
         let decode_mask = match attention_mask {
             AttentionMask::Custom(mask) => AttentionMask::Custom(adjust_kv_mask(mask, max_kv)?),
-            AttentionMask::None
-                if query.device().is_metal()
-                    && matches!(
-                        metal_decode_diagnostics().path,
-                        MetalDecodePath::UnmaskedShortWindow
-                    )
-                    && ctx.single_decode_fits_window() =>
-            {
-                AttentionMask::None
-            }
             _ if ctx.sdpa_params.sliding_window.is_some()
                 || kv_lens.iter().any(|&kv_len| kv_len != max_kv) =>
             {
@@ -3213,61 +3105,60 @@ mod tests {
                 let mut padded_slots = vec![-1];
                 padded_slots.extend(SLOTS);
                 let slots = Tensor::new(padded_slots, &device)?.narrow(0, 1, tokens)?;
-                for contiguous_pack in [false, true] {
-                    let packed_key = pack_cache_input(&key, contiguous_pack)?;
-                    let packed_value = pack_cache_input(&value, contiguous_pack)?;
-                    assert_eq!(packed_key.dims(), &[tokens, HEADS, HEAD_DIM]);
-                    assert_eq!(packed_key.stride(), &[HEADS * HEAD_DIM, HEAD_DIM, 1]);
-                    let expected_offset = if contiguous_pack && key.is_contiguous() {
-                        key.layout().start_offset()
+                let packed_key = pack_cache_input(&key)?;
+                let packed_value = pack_cache_input(&value)?;
+                assert_eq!(packed_key.dims(), &[tokens, HEADS, HEAD_DIM]);
+                assert_eq!(packed_key.stride(), &[HEADS * HEAD_DIM, HEAD_DIM, 1]);
+                let expected_offset = if key.is_contiguous() {
+                    key.layout().start_offset()
+                } else {
+                    0
+                };
+                assert_eq!(packed_key.layout().start_offset(), expected_offset);
+                for hnd in [false, true] {
+                    let (key_shape, value_shape, expected_key, expected_value) = if hnd {
+                        (
+                            vec![BLOCKS, HEADS, BLOCK_SIZE, HEAD_DIM],
+                            vec![BLOCKS, HEADS, BLOCK_SIZE, HEAD_DIM],
+                            &expected_hnd_key,
+                            &expected_hnd_value,
+                        )
                     } else {
-                        0
+                        (
+                            vec![BLOCKS, HEADS, HEAD_DIM / PACK, BLOCK_SIZE, PACK],
+                            vec![BLOCKS, HEADS, HEAD_DIM, BLOCK_SIZE],
+                            &expected_key,
+                            &expected_value,
+                        )
                     };
-                    assert_eq!(packed_key.layout().start_offset(), expected_offset);
-                    for hnd in [false, true] {
-                        let (key_shape, value_shape, expected_key, expected_value) = if hnd {
-                            (
-                                vec![BLOCKS, HEADS, BLOCK_SIZE, HEAD_DIM],
-                                vec![BLOCKS, HEADS, BLOCK_SIZE, HEAD_DIM],
-                                &expected_hnd_key,
-                                &expected_hnd_value,
-                            )
-                        } else {
-                            (
-                                vec![BLOCKS, HEADS, HEAD_DIM / PACK, BLOCK_SIZE, PACK],
-                                vec![BLOCKS, HEADS, HEAD_DIM, BLOCK_SIZE],
-                                &expected_key,
-                                &expected_value,
-                            )
-                        };
-                        let key_cache =
-                            Tensor::full(SENTINEL, key_shape, &device)?.to_dtype(dtype)?;
-                        let value_cache =
-                            Tensor::full(SENTINEL, value_shape, &device)?.to_dtype(dtype)?;
-                        assert_eq!(
-                            AttentionBackendKind::from_cache(&key_cache, &value_cache),
-                            AttentionBackendKind::Standard,
-                        );
-                        assert_eq!(cache_block_size(&key_cache, &value_cache)?, BLOCK_SIZE);
-                        assert_eq!(cache_kv_shape(&key_cache, &value_cache)?, (HEADS, HEAD_DIM));
-                        reshape_and_cache(
-                            &packed_key,
-                            &packed_value,
-                            None,
-                            None,
-                            &key_cache,
-                            &value_cache,
-                            &slots,
-                        )?;
-                        assert_eq!(
-                            &read(&key_cache)?, expected_key,
-                            "{dtype:?} query_len={query_len} contiguous_pack={contiguous_pack} hnd={hnd}: key cache mismatch"
-                        );
-                        assert_eq!(
-                            &read(&value_cache)?, expected_value,
-                            "{dtype:?} query_len={query_len} contiguous_pack={contiguous_pack} hnd={hnd}: value cache mismatch"
-                        );
-                    }
+                    let key_cache = Tensor::full(SENTINEL, key_shape, &device)?.to_dtype(dtype)?;
+                    let value_cache =
+                        Tensor::full(SENTINEL, value_shape, &device)?.to_dtype(dtype)?;
+                    assert_eq!(
+                        AttentionBackendKind::from_cache(&key_cache, &value_cache),
+                        AttentionBackendKind::Standard,
+                    );
+                    assert_eq!(cache_block_size(&key_cache, &value_cache)?, BLOCK_SIZE);
+                    assert_eq!(cache_kv_shape(&key_cache, &value_cache)?, (HEADS, HEAD_DIM));
+                    reshape_and_cache(
+                        &packed_key,
+                        &packed_value,
+                        None,
+                        None,
+                        &key_cache,
+                        &value_cache,
+                        &slots,
+                    )?;
+                    assert_eq!(
+                        &read(&key_cache)?,
+                        expected_key,
+                        "{dtype:?} query_len={query_len} hnd={hnd}: key cache mismatch"
+                    );
+                    assert_eq!(
+                        &read(&value_cache)?,
+                        expected_value,
+                        "{dtype:?} query_len={query_len} hnd={hnd}: value cache mismatch"
+                    );
                 }
             }
         }

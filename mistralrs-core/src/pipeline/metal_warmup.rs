@@ -1,5 +1,3 @@
-use std::time::Instant;
-
 use anyhow::{Context, Result};
 use candle_core::{DType, Device};
 use mistralrs_paged_attn::{
@@ -35,7 +33,6 @@ pub(super) fn prepare_model(ctx: MetalModelWarmup<'_>) -> Result<()> {
         return Ok(());
     }
 
-    let start = Instant::now();
     tracing::info!("Preparing Metal kernels for the loaded model");
     for device in &devices {
         crate::metal::warmup_common_kernels(device)?;
@@ -119,9 +116,6 @@ pub(super) fn prepare_model(ctx: MetalModelWarmup<'_>) -> Result<()> {
             }
         }
     }
-    tracing::info!(
-        elapsed_ms = start.elapsed().as_millis(),
-        "Metal kernels prepared"
-    );
+    tracing::info!("Metal kernels prepared");
     Ok(())
 }

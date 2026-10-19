@@ -1078,25 +1078,23 @@ fn causal_conv1d_full(
         return Ok(output);
     }
 
-    let x_t = x.transpose(1, 2)?.contiguous()?;
-
     #[cfg(feature = "metal")]
-    if x_t.device().is_metal() {
+    if x.device().is_metal() {
         let weight = conv1d_weight
             .squeeze(1)?
-            .to_dtype(x_t.dtype())?
+            .to_dtype(x.dtype())?
             .contiguous()?;
-        let (output, new_conv_state) = crate::metal::gdn::causal_conv1d_metal(
-            &x_t,
+        let (output, new_conv_state) = crate::metal::gdn::causal_conv1d_prefill_metal(
+            x,
             &weight,
             &cache.conv_state,
-            false,
             dims.conv_kernel_size,
         )?;
         cache.conv_state = new_conv_state;
-        return output.transpose(1, 2);
+        return Ok(output);
     }
 
+    let x_t = x.transpose(1, 2)?.contiguous()?;
     let state_len = cache.conv_state.dim(2)?;
     if state_len != dims.conv_kernel_size {
         candle_core::bail!(
@@ -1239,6 +1237,110 @@ mod tests {
                 diff <= ASSERT_EPS,
                 "idx={idx} lhs={lhs} rhs={rhs} diff={diff}"
             );
+        }
+        Ok(())
+    }
+
+    #[cfg(feature = "metal")]
+    #[test]
+    fn metal_token_major_prefill_conv_matches_legacy_and_chunked_cpu() -> CandleResult<()> {
+        const BATCH: usize = 2;
+        const LENGTHS: [usize; 6] = [1, 3, 4, 7, 53, 512];
+        let metal = Device::new_metal(0)?;
+        for (dtype, tolerance) in [(DType::F16, 1e-3f32), (DType::BF16, 5e-3)] {
+            for kernel_size in [1, 4] {
+                let mut dims = dims(2, 4, 64, 65);
+                dims.conv_kernel_size = kernel_size;
+                for seq_len in LENGTHS {
+                    let input = Tensor::from_vec(
+                        patterned(BATCH * (seq_len + 2) * (dims.conv_dim + 2), 1, 0.5, 0.1),
+                        (BATCH, seq_len + 2, dims.conv_dim + 2),
+                        &Device::Cpu,
+                    )?
+                    .to_dtype(dtype)?;
+                    let slice_input =
+                        |input: &Tensor| input.narrow(1, 1, seq_len)?.narrow(2, 1, dims.conv_dim);
+                    let x_cpu = slice_input(&input)?.to_dtype(DType::F32)?;
+                    let x = slice_input(&input.to_device(&metal)?)?;
+                    let weight_cpu = Tensor::from_vec(
+                        patterned(dims.conv_dim * kernel_size, 2, 0.4, -0.1),
+                        (dims.conv_dim, 1, kernel_size),
+                        &Device::Cpu,
+                    )?
+                    .to_dtype(dtype)?
+                    .to_dtype(DType::F32)?;
+                    let initial_state = Tensor::from_vec(
+                        patterned(BATCH * dims.conv_dim * kernel_size, 3, 0.5, 0.2),
+                        (BATCH, dims.conv_dim, kernel_size),
+                        &Device::Cpu,
+                    )?
+                    .to_dtype(dtype)?
+                    .to_dtype(DType::F32)?;
+                    let cache = |device: &Device, dtype| -> CandleResult<GdnLayerCache> {
+                        Ok(GdnLayerCache::gathered(
+                            initial_state.to_dtype(dtype)?.to_device(device)?,
+                            Tensor::zeros(
+                                (BATCH, dims.num_v_heads, dims.head_k_dim, dims.head_v_dim),
+                                DType::F32,
+                                device,
+                            )?,
+                            RecurrentStateLayout::GdnKeyMajor,
+                        ))
+                    };
+                    let mut cpu_cache = cache(&Device::Cpu, DType::F32)?;
+                    let expected = causal_conv1d_full(&x_cpu, &weight_cpu, &dims, &mut cpu_cache)?;
+                    let weight = weight_cpu.to_dtype(dtype)?.to_device(&metal)?;
+                    let mut metal_cache = cache(&metal, dtype)?;
+                    let actual = causal_conv1d_full(&x, &weight, &dims, &mut metal_cache)?;
+                    assert!(actual.is_contiguous());
+
+                    let (legacy, legacy_state) = crate::metal::gdn::causal_conv1d_metal(
+                        &x.transpose(1, 2)?.contiguous()?,
+                        &weight.squeeze(1)?,
+                        &initial_state.to_dtype(dtype)?.to_device(&metal)?,
+                        false,
+                        kernel_size,
+                    )?;
+                    let values = |tensor: &Tensor| -> CandleResult<Vec<f32>> {
+                        tensor.to_dtype(DType::F32)?.flatten_all()?.to_vec1()
+                    };
+                    let actual_values = values(&actual)?;
+                    assert_eq!(actual_values, values(&legacy.transpose(1, 2)?)?);
+                    assert_eq!(values(&metal_cache.conv_state)?, values(&legacy_state)?);
+                    assert_eq!(
+                        values(&metal_cache.conv_state)?,
+                        values(&cpu_cache.conv_state)?
+                    );
+                    for (actual, expected) in actual_values.iter().zip(values(&expected)?) {
+                        assert!(
+                            (actual - expected).abs() <= tolerance,
+                            "{dtype:?} T={seq_len} W={kernel_size}: actual={actual}, expected={expected}"
+                        );
+                    }
+
+                    let mut chunked_cache = cache(&metal, dtype)?;
+                    let mut outputs = Vec::new();
+                    let mut offset = 0;
+                    for chunk_len in [1, 2, seq_len] {
+                        let chunk_len = chunk_len.min(seq_len - offset);
+                        if chunk_len == 0 {
+                            break;
+                        }
+                        outputs.push(causal_conv1d_full(
+                            &x.narrow(1, offset, chunk_len)?,
+                            &weight,
+                            &dims,
+                            &mut chunked_cache,
+                        )?);
+                        offset += chunk_len;
+                    }
+                    assert_eq!(actual_values, values(&Tensor::cat(&outputs, 1)?)?);
+                    assert_eq!(
+                        values(&metal_cache.conv_state)?,
+                        values(&chunked_cache.conv_state)?
+                    );
+                }
+            }
         }
         Ok(())
     }

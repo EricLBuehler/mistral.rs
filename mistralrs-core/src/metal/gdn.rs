@@ -33,6 +33,17 @@ type Pipelines = HashMap<u64, HashMap<String, ComputePipeline>>;
 static GDN_PIPELINES: OnceLock<RwLock<Pipelines>> = OnceLock::new();
 
 #[cfg(feature = "metal")]
+const SIMD_WIDTH: usize = 32;
+#[cfg(feature = "metal")]
+const SIMDGROUPS_PER_THREADGROUP: usize = 4;
+#[cfg(feature = "metal")]
+const PREFILL_VALUE_COLUMNS: usize = 4;
+#[cfg(feature = "metal")]
+const MIN_GROUPED_THREADGROUPS: usize = 256;
+#[cfg(feature = "metal")]
+const MIN_GROUPED_VALUE_DIM: usize = 64;
+
+#[cfg(feature = "metal")]
 fn load_pipeline(device: &MetalRawDevice, name: &str) -> Result<ComputePipeline> {
     let pipelines_lock = GDN_PIPELINES.get_or_init(|| RwLock::new(Pipelines::new()));
     let key = device_key(device);
@@ -76,7 +87,6 @@ pub(crate) fn warmup_kernels(
     dtype: DType,
     head_k_dim: usize,
 ) -> Result<()> {
-    let start = std::time::Instant::now();
     let type_name = match dtype {
         DType::F16 => "half",
         DType::BF16 => "bfloat",
@@ -92,6 +102,8 @@ pub(crate) fn warmup_kernels(
         for name in [
             "causal_conv1d_full",
             "save_conv_state",
+            "causal_conv1d_full_token_major",
+            "save_conv_state_token_major",
             "causal_conv1d_update",
             "causal_conv1d_update_pooled",
             "fused_gdn_gating",
@@ -103,6 +115,7 @@ pub(crate) fn warmup_kernels(
     if matches!(head_k_dim, 64 | 128) {
         for name in [
             format!("gdn_prefill_from_convolved_{type_name}_{head_k_dim}"),
+            format!("gdn_prefill_from_convolved_grouped_{type_name}_{head_k_dim}_{PREFILL_VALUE_COLUMNS}"),
             format!("gated_delta_rule_{head_k_dim}_64"),
             format!("gated_delta_rule_pooled_decode_{head_k_dim}_64"),
             format!("chunked_gated_delta_rule_32_{head_k_dim}_64"),
@@ -112,12 +125,6 @@ pub(crate) fn warmup_kernels(
     } else {
         load_pipeline(device, "gated_delta_rule_fallback")?;
     }
-    tracing::debug!(
-        ?dtype,
-        head_k_dim,
-        elapsed_ms = start.elapsed().as_millis(),
-        "Prepared Metal GDN kernels"
-    );
     Ok(())
 }
 
@@ -456,12 +463,32 @@ pub struct RecurrenceFromConvolved<'a> {
     pub tiled_v_heads: bool,
 }
 
-/// GDN recurrence over T >= 1 tokens from the convolved projection (norms, gates and state update in one
-/// kernel, one simdgroup per value column). Returns y: [B, T, Hv, V] in the projection dtype.
+/// Fused GDN recurrence returning [B, T, Hv, V] in the projection dtype.
 #[cfg(feature = "metal")]
 pub fn gdn_recurrence_from_convolved_metal(args: RecurrenceFromConvolved<'_>) -> Result<Tensor> {
-    const SIMD_WIDTH: usize = 32;
-    const COLUMNS_PER_THREADGROUP: usize = 4;
+    let (batch_size, seq_len, _) = args.mixed_qkv.dims3()?;
+    let (_, num_v_heads, _, head_v_dim) = args.state.dims4()?;
+    let columns = prefill_value_columns(batch_size, seq_len, num_v_heads, head_v_dim);
+    gdn_recurrence_from_convolved_metal_with_columns(args, columns)
+}
+
+#[cfg(feature = "metal")]
+fn prefill_value_columns(batch: usize, tokens: usize, heads: usize, value_dim: usize) -> usize {
+    let threadgroups =
+        batch * heads * value_dim.div_ceil(PREFILL_VALUE_COLUMNS * SIMDGROUPS_PER_THREADGROUP);
+    if tokens > 1 && value_dim >= MIN_GROUPED_VALUE_DIM && threadgroups >= MIN_GROUPED_THREADGROUPS
+    {
+        PREFILL_VALUE_COLUMNS
+    } else {
+        1
+    }
+}
+
+#[cfg(feature = "metal")]
+fn gdn_recurrence_from_convolved_metal_with_columns(
+    args: RecurrenceFromConvolved<'_>,
+    columns: usize,
+) -> Result<Tensor> {
     let mixed = args.mixed_qkv.contiguous()?;
     let (batch_size, seq_len, _) = mixed.dims3()?;
     let (_, num_v_heads, _, head_v_dim) = args.state.dims4()?;
@@ -481,10 +508,15 @@ pub fn gdn_recurrence_from_convolved_metal(args: RecurrenceFromConvolved<'_>) ->
     let Device::Metal(dev) = mixed.device() else {
         candle_core::bail!("gdn_recurrence_from_convolved_metal: expected Metal device");
     };
-    let pipeline = load_pipeline(
-        dev.device(),
-        &format!("gdn_prefill_from_convolved_{type_name}_{}", args.head_k_dim),
-    )?;
+    let name = match columns {
+        1 => format!("gdn_prefill_from_convolved_{type_name}_{}", args.head_k_dim),
+        PREFILL_VALUE_COLUMNS => format!(
+            "gdn_prefill_from_convolved_grouped_{type_name}_{}_{columns}",
+            args.head_k_dim
+        ),
+        _ => candle_core::bail!("unsupported Metal GDN value columns {columns}"),
+    };
+    let pipeline = load_pipeline(dev.device(), &name)?;
     // Every element is written by the kernel.
     let output = unsafe {
         Tensor::empty(
@@ -537,12 +569,12 @@ pub fn gdn_recurrence_from_convolved_metal(args: RecurrenceFromConvolved<'_>) ->
     encoder.dispatch_threads(
         MTLSize {
             width: SIMD_WIDTH,
-            height: head_v_dim,
+            height: head_v_dim.div_ceil(columns),
             depth: batch_size * num_v_heads,
         },
         MTLSize {
             width: SIMD_WIDTH,
-            height: COLUMNS_PER_THREADGROUP,
+            height: SIMDGROUPS_PER_THREADGROUP,
             depth: 1,
         },
     );
@@ -679,6 +711,46 @@ pub fn causal_conv1d_metal(
     is_update: bool,
     kernel_size: usize,
 ) -> Result<(Tensor, Tensor)> {
+    let mode = if is_update {
+        ConvMode::Update
+    } else {
+        ConvMode::PrefillChannelMajor
+    };
+    causal_conv1d_metal_impl(x, weight, conv_state, mode, kernel_size)
+}
+
+#[cfg(feature = "metal")]
+enum ConvMode {
+    Update,
+    PrefillChannelMajor,
+    PrefillTokenMajor,
+}
+
+/// Prefill with token-major activations and channel-major convolution state.
+#[cfg(feature = "metal")]
+pub fn causal_conv1d_prefill_metal(
+    x: &Tensor,
+    weight: &Tensor,
+    conv_state: &Tensor,
+    kernel_size: usize,
+) -> Result<(Tensor, Tensor)> {
+    causal_conv1d_metal_impl(
+        x,
+        weight,
+        conv_state,
+        ConvMode::PrefillTokenMajor,
+        kernel_size,
+    )
+}
+
+#[cfg(feature = "metal")]
+fn causal_conv1d_metal_impl(
+    x: &Tensor,
+    weight: &Tensor,
+    conv_state: &Tensor,
+    mode: ConvMode,
+    kernel_size: usize,
+) -> Result<(Tensor, Tensor)> {
     let x = x.contiguous()?;
     let weight = weight.contiguous()?;
     let conv_state = conv_state.contiguous()?;
@@ -696,7 +768,7 @@ pub fn causal_conv1d_metal(
         candle_core::bail!("causal_conv1d_metal: expected Metal device");
     };
 
-    if is_update {
+    if matches!(mode, ConvMode::Update) {
         let batch_size = x.dim(0)?;
         let conv_dim = x.dim(1)?;
 
@@ -743,14 +815,16 @@ pub fn causal_conv1d_metal(
         Ok((output, new_conv_state))
     } else {
         let batch_size = x.dim(0)?;
-        let conv_dim = x.dim(1)?;
-        let seq_len = x.dim(2)?;
+        let token_major = matches!(mode, ConvMode::PrefillTokenMajor);
+        let conv_dim = x.dim(if token_major { 2 } else { 1 })?;
+        let seq_len = x.dim(if token_major { 1 } else { 2 })?;
+        let layout_suffix = if token_major { "_token_major" } else { "" };
 
-        // Full convolution kernel
-        let conv_name = format!("causal_conv1d_full_{type_suffix}");
+        let conv_name = format!("causal_conv1d_full{layout_suffix}_{type_suffix}");
         let conv_pipeline = load_pipeline(dev.device(), &conv_name)?;
 
-        let output = Tensor::zeros((batch_size, conv_dim, seq_len), dtype, x.device())?;
+        // Both kernels write every element of their respective outputs.
+        let output = unsafe { Tensor::empty(x.shape(), dtype, x.device())? };
 
         let (x_buf, x_off) = metal_buffer_and_offset(&x)?;
         let (w_buf, w_off) = metal_buffer_and_offset(&weight)?;
@@ -790,11 +864,11 @@ pub fn causal_conv1d_metal(
             encoder.dispatch_thread_groups(thread_groups, threads_per_group);
         }
 
-        // Save conv state kernel
-        let save_name = format!("save_conv_state_{type_suffix}");
+        let save_name = format!("save_conv_state{layout_suffix}_{type_suffix}");
         let save_pipeline = load_pipeline(dev.device(), &save_name)?;
 
-        let new_conv_state = Tensor::zeros((batch_size, conv_dim, kernel_size), dtype, x.device())?;
+        let new_conv_state =
+            unsafe { Tensor::empty((batch_size, conv_dim, kernel_size), dtype, x.device())? };
         let (cs_buf, cs_off) = metal_buffer_and_offset(&new_conv_state)?;
 
         {
@@ -941,6 +1015,119 @@ pub fn fused_gdn_gating_metal(
 #[cfg(all(test, feature = "metal"))]
 mod tests {
     use super::*;
+
+    const TEST_BATCH: usize = 2;
+    const TEST_KEY_HEADS: usize = 2;
+    const TEST_VALUE_HEADS: usize = 4;
+    const TEST_POOL_ROWS: usize = 5;
+    const TEST_SLOTS: [u32; TEST_BATCH] = [3, 1];
+    const TEST_STATE_TOLERANCE: f32 = 2e-6;
+
+    fn patterned_tensor(shape: impl Into<candle_core::Shape>, seed: usize) -> Result<Tensor> {
+        let shape = shape.into();
+        let data = (0..shape.elem_count())
+            .map(|index| (((index * 13 + seed) % 53) as f32 - 26.0) * 0.013)
+            .collect::<Vec<_>>();
+        Tensor::from_vec(data, shape, &Device::Cpu)
+    }
+
+    fn assert_close(actual: &[f32], expected: &[f32], tolerance: f32, tag: &str) {
+        assert_eq!(actual.len(), expected.len(), "{tag}");
+        for (index, (&actual, &expected)) in actual.iter().zip(expected).enumerate() {
+            assert!(
+                actual.is_finite() && (actual - expected).abs() <= tolerance,
+                "{tag}: element {index}, actual={actual}, expected={expected}"
+            );
+        }
+    }
+
+    #[test]
+    #[ignore = "requires a Metal device"]
+    fn grouped_prefill_preserves_outputs_state_and_pool_rows() -> Result<()> {
+        let device = Device::new_metal(0)?;
+        for (seq_index, seq_len) in [1, 7, 53, 129].into_iter().enumerate() {
+            for head_k_dim in [64, 128] {
+                for (dtype, head_v_dim, pooled, tolerance) in [
+                    (DType::F32, 7, false, 2e-6),
+                    (DType::F16, 65, true, 1e-4),
+                    (DType::BF16, 128, true, 1e-3),
+                ] {
+                    let conv_dim = 2 * TEST_KEY_HEADS * head_k_dim + TEST_VALUE_HEADS * head_v_dim;
+                    let mixed = patterned_tensor((TEST_BATCH, seq_len, conv_dim), 1)?
+                        .to_dtype(dtype)?
+                        .to_device(&device)?;
+                    let gates = patterned_tensor((TEST_BATCH, seq_len, TEST_VALUE_HEADS * 2), 2)?
+                        .to_dtype(dtype)?
+                        .to_device(&device)?;
+                    let b = gates.narrow(2, 0, TEST_VALUE_HEADS)?;
+                    let a = gates.narrow(2, TEST_VALUE_HEADS, TEST_VALUE_HEADS)?;
+                    let a_log = patterned_tensor(TEST_VALUE_HEADS, 3)?.to_device(&device)?;
+                    let dt_bias = patterned_tensor(TEST_VALUE_HEADS, 4)?.to_device(&device)?;
+                    let rows = if pooled { TEST_POOL_ROWS } else { TEST_BATCH };
+                    let initial_state =
+                        patterned_tensor((rows, TEST_VALUE_HEADS, head_k_dim, head_v_dim), 5)?;
+                    let slots = pooled
+                        .then(|| Tensor::new(&TEST_SLOTS, &device))
+                        .transpose()?;
+                    let tiled_v_heads = seq_index % 2 == 0;
+                    let run = |columns| -> Result<(Vec<f32>, Vec<f32>)> {
+                        let state = initial_state.to_device(&device)?;
+                        let output = gdn_recurrence_from_convolved_metal_with_columns(
+                            RecurrenceFromConvolved {
+                                mixed_qkv: &mixed,
+                                b: &b,
+                                a: &a,
+                                a_log: &a_log,
+                                dt_bias: &dt_bias,
+                                state: &state,
+                                slots: slots.as_ref(),
+                                num_k_heads: TEST_KEY_HEADS,
+                                head_k_dim,
+                                tiled_v_heads,
+                            },
+                            columns,
+                        )?;
+                        Ok((
+                            output.to_dtype(DType::F32)?.flatten_all()?.to_vec1()?,
+                            state.flatten_all()?.to_vec1()?,
+                        ))
+                    };
+                    let (expected_output, expected_state) = run(1)?;
+                    let initial_state = initial_state.flatten_all()?.to_vec1::<f32>()?;
+                    let row_size = TEST_VALUE_HEADS * head_k_dim * head_v_dim;
+                    let (output, state) = run(PREFILL_VALUE_COLUMNS)?;
+                    let tag = format!(
+                        "{dtype:?} T={seq_len} K={head_k_dim} V={head_v_dim} \
+                         tiled={tiled_v_heads} pooled={pooled}"
+                    );
+                    assert_close(&output, &expected_output, tolerance, &tag);
+                    assert_close(&state, &expected_state, TEST_STATE_TOLERANCE, &tag);
+                    if pooled {
+                        for row in 0..TEST_POOL_ROWS {
+                            if TEST_SLOTS.contains(&(row as u32)) {
+                                continue;
+                            }
+                            let range = row * row_size..(row + 1) * row_size;
+                            assert_eq!(state[range.clone()], initial_state[range], "{tag}");
+                        }
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn grouped_prefill_requires_enough_parallel_work() {
+        assert_eq!(prefill_value_columns(1, 1, 48, 128), 1);
+        assert_eq!(prefill_value_columns(1, 53, 48, 128), PREFILL_VALUE_COLUMNS);
+        assert_eq!(
+            prefill_value_columns(8, 512, 48, 128),
+            PREFILL_VALUE_COLUMNS
+        );
+        assert_eq!(prefill_value_columns(1, 512, 8, 64), 1);
+        assert_eq!(prefill_value_columns(8, 512, 8, 64), PREFILL_VALUE_COLUMNS);
+    }
 
     #[test]
     #[ignore = "requires a Metal device"]

@@ -15,14 +15,6 @@ const BF16_LARGE_SCALE: f32 = 1_048_576.0;
 const BF16_LARGE_DOT_SCALE: f32 = 1024.0;
 const LONG_PREFIX_SCORE_SCALE: f32 = 4.0;
 const METADATA_BATCH_SIZES: [usize; 2] = [56, 57];
-const BENCH_WARMUP_ITERATIONS: usize = 3;
-const BENCH_DEFAULT_ITERATIONS: usize = 5;
-const BENCH_ITERATIONS_ENV: &str = "MISTRALRS_METAL_PREFILL_BENCH_ITERS";
-const BENCH_DTYPES_ENV: &str = "MISTRALRS_METAL_PREFILL_BENCH_DTYPES";
-const BENCH_DIMS_ENV: &str = "MISTRALRS_METAL_PREFILL_BENCH_DIMS";
-const BENCH_QUERIES_ENV: &str = "MISTRALRS_METAL_PREFILL_BENCH_QUERIES";
-const BENCH_CONTEXTS_ENV: &str = "MISTRALRS_METAL_PREFILL_BENCH_CONTEXTS";
-const BENCH_BATCHES_ENV: &str = "MISTRALRS_METAL_PREFILL_BENCH_BATCHES";
 
 #[derive(Clone, Copy, Debug, Default)]
 enum MaskLayout {
@@ -100,7 +92,6 @@ struct Case {
     multimodal: bool,
     historical_multimodal: bool,
     input_scales: [f32; 3],
-    benchmark_iterations: usize,
 }
 
 impl Default for Case {
@@ -127,7 +118,6 @@ impl Default for Case {
             multimodal: false,
             historical_multimodal: false,
             input_scales: [1.0; 3],
-            benchmark_iterations: 0,
         }
     }
 }
@@ -184,7 +174,6 @@ fn mask_value(case: Case, seq: usize, head: usize, query: usize, key: usize) -> 
 }
 
 fn check_case(device: &Device, case: Case, sequences: &[Sequence]) -> Result<()> {
-    let collect_reference = case.benchmark_iterations == 0;
     let batch = sequences.len();
     let max_q = sequences.iter().map(|s| s.query).max().unwrap();
     let max_k = sequences.iter().map(|s| s.context).max().unwrap();
@@ -226,9 +215,7 @@ fn check_case(device: &Device, case: Case, sequences: &[Sequence]) -> Result<()>
                         3,
                         case.dtype,
                     ) * case.input_scales[1];
-                    if collect_reference {
-                        k_reference.push(cache_value(value, KEY_SCALE, case));
-                    }
+                    k_reference.push(cache_value(value, KEY_SCALE, case));
                     let index = if case.hnd {
                         ((physical * cache_heads + head + head_offset) * case.block + slot)
                             * case.key_dim
@@ -249,9 +236,7 @@ fn check_case(device: &Device, case: Case, sequences: &[Sequence]) -> Result<()>
                         7,
                         case.dtype,
                     ) * case.input_scales[2];
-                    if collect_reference {
-                        v_reference.push(cache_value(value, VALUE_SCALE, case));
-                    }
+                    v_reference.push(cache_value(value, VALUE_SCALE, case));
                     let index = if case.hnd {
                         ((physical * cache_heads + head + head_offset) * case.block + slot)
                             * case.value_dim
@@ -294,9 +279,7 @@ fn check_case(device: &Device, case: Case, sequences: &[Sequence]) -> Result<()>
                         11,
                         case.dtype,
                     ) * case.input_scales[0];
-                    if collect_reference {
-                        q_reference.push(value);
-                    }
+                    q_reference.push(value);
                     let (b, row) = if case.packed {
                         (0, q_offset + q)
                     } else {
@@ -412,68 +395,31 @@ fn check_case(device: &Device, case: Case, sequences: &[Sequence]) -> Result<()>
     };
     let scale = 1.0 / (case.key_dim as f32).sqrt();
     let softcap = case.features.then_some(2.0);
-    let execute = || {
-        metal_paged_prefill(MetalPagedPrefillRequest {
-            query: &query,
-            key_cache: &key_cache,
-            value_cache: &value_cache,
-            block_tables: &block_tables,
-            query_lens: &query_lens,
-            context_lens: &context_lens,
-            query_start_positions: &query_starts,
-            key_start_positions: &key_starts,
-            packed_queries: case.packed,
-            causal: case.causal,
-            sliding_window: case.window,
-            window_right: case.window_right,
-            attention_chunk_size: case.attention_chunk_size,
-            multimodal_ranges: case.multimodal.then_some(ranges.as_slice()),
-            additive_mask: additive.as_ref(),
-            packed_mask: matches!(case.mask_layout, MaskLayout::Packed),
-            mask_key_offsets: None,
-            alibi_slopes: alibi.as_ref(),
-            sinks: sinks.as_ref(),
-            k_scale: case.fp8.then_some(&k_scale),
-            v_scale: case.fp8.then_some(&v_scale),
-            scale,
-            softcap,
-        })
-    };
-    if case.benchmark_iterations > 0 {
-        for _ in 0..BENCH_WARMUP_ITERATIONS {
-            let output = execute()?;
-            device.synchronize()?;
-            std::hint::black_box(output);
-        }
-        device.synchronize()?;
-        let start = std::time::Instant::now();
-        for _ in 0..case.benchmark_iterations {
-            let output = execute()?;
-            device.synchronize()?;
-            std::hint::black_box(output);
-        }
-        let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
-        println!(
-            "metal_prefill_bench,{:?},{},{},{},{},{},{},{},{},{},{},{},{},{},{:.6}",
-            case.dtype,
-            case.hnd,
-            case.packed,
-            batch,
-            case.heads,
-            case.kv_heads,
-            case.key_dim,
-            case.value_dim,
-            max_q,
-            max_k,
-            total_q,
-            sequences.iter().map(|s| s.context).sum::<usize>(),
-            BENCH_WARMUP_ITERATIONS,
-            case.benchmark_iterations,
-            elapsed_ms / case.benchmark_iterations as f64,
-        );
-        return Ok(());
-    }
-    let output = execute()?;
+    let output = metal_paged_prefill(MetalPagedPrefillRequest {
+        query: &query,
+        key_cache: &key_cache,
+        value_cache: &value_cache,
+        block_tables: &block_tables,
+        query_lens: &query_lens,
+        context_lens: &context_lens,
+        query_start_positions: &query_starts,
+        key_start_positions: &key_starts,
+        packed_queries: case.packed,
+        causal: case.causal,
+        sliding_window: case.window,
+        window_right: case.window_right,
+        attention_chunk_size: case.attention_chunk_size,
+        multimodal_ranges: case.multimodal.then_some(ranges.as_slice()),
+        additive_mask: additive.as_ref(),
+        packed_mask: matches!(case.mask_layout, MaskLayout::Packed),
+        mask_key_offsets: None,
+        alibi_slopes: alibi.as_ref(),
+        sinks: sinks.as_ref(),
+        k_scale: case.fp8.then_some(&k_scale),
+        v_scale: case.fp8.then_some(&v_scale),
+        scale,
+        softcap,
+    })?;
     assert_eq!(
         output.dims(),
         &[query_batch, case.heads, query_rows, case.value_dim]
@@ -1005,25 +951,6 @@ fn metal_prefill_reads_broadcast_packed_and_strided_masks_and_all_masked_rows() 
     Ok(())
 }
 
-fn benchmark_sizes(name: &str, defaults: &[usize]) -> Result<Vec<usize>> {
-    let Ok(value) = std::env::var(name) else {
-        return Ok(defaults.to_vec());
-    };
-    value
-        .split(',')
-        .map(|value| {
-            let parsed = value
-                .trim()
-                .parse::<usize>()
-                .map_err(candle_core::Error::wrap)?;
-            if parsed == 0 {
-                candle_core::bail!("{name} entries must be nonzero");
-            }
-            Ok(parsed)
-        })
-        .collect()
-}
-
 #[test]
 fn metal_prefill_handles_non_power_of_two_cache_blocks() -> Result<()> {
     let device = Device::new_metal(0)?;
@@ -1047,88 +974,6 @@ fn metal_prefill_handles_non_power_of_two_cache_blocks() -> Result<()> {
                     key_start: 0,
                 }],
             )?;
-        }
-    }
-    Ok(())
-}
-
-#[test]
-#[ignore = "exclusive Metal microbenchmark; includes host dispatch, allocation, and synchronization"]
-fn metal_prefill_kernel_microbenchmark() -> Result<()> {
-    let iterations = std::env::var(BENCH_ITERATIONS_ENV)
-        .ok()
-        .map(|value| value.parse::<usize>().map_err(candle_core::Error::wrap))
-        .transpose()?
-        .unwrap_or(BENCH_DEFAULT_ITERATIONS);
-    if iterations == 0 {
-        candle_core::bail!("{BENCH_ITERATIONS_ENV} must be nonzero");
-    }
-    let dtypes = std::env::var(BENCH_DTYPES_ENV)
-        .unwrap_or_else(|_| "bf16".into())
-        .split(',')
-        .map(|value| match value.trim().to_ascii_lowercase().as_str() {
-            "f16" => Ok(DType::F16),
-            "bf16" => Ok(DType::BF16),
-            "f32" => Ok(DType::F32),
-            _ => candle_core::bail!("{BENCH_DTYPES_ENV} entries must be f16, bf16, or f32"),
-        })
-        .collect::<Result<Vec<_>>>()?;
-    let dims = benchmark_sizes(BENCH_DIMS_ENV, &[64, 128, 256, 512])?;
-    let queries = benchmark_sizes(BENCH_QUERIES_ENV, &[1, 32, 512])?;
-    let contexts = benchmark_sizes(BENCH_CONTEXTS_ENV, &[512, 4096, 32768])?;
-    let batches = benchmark_sizes(BENCH_BATCHES_ENV, &[1, 4])?;
-    if batches.iter().any(|&batch| !matches!(batch, 1 | 4)) {
-        candle_core::bail!("{BENCH_BATCHES_ENV} entries must be 1 or 4");
-    }
-    let device = Device::new_metal(0)?;
-    println!("kind,dtype,hnd,packed,batch,heads,kv_heads,key_dim,value_dim,max_q,max_k,total_q,total_k,warmup,iterations,host_dispatch_alloc_sync_ms");
-    for dtype in dtypes {
-        for &dim in &dims {
-            for &query in &queries {
-                for &context in &contexts {
-                    if query > context {
-                        candle_core::bail!(
-                            "benchmark query length {query} exceeds context {context}"
-                        );
-                    }
-                    let case = Case {
-                        key_dim: dim,
-                        value_dim: dim,
-                        heads: 8,
-                        kv_heads: 2,
-                        dtype,
-                        benchmark_iterations: iterations,
-                        ..Case::default()
-                    };
-                    if batches.contains(&1) {
-                        check_case(
-                            &device,
-                            case,
-                            &[Sequence {
-                                query,
-                                context,
-                                query_start: context - query,
-                                key_start: 0,
-                            }],
-                        )?;
-                    }
-                    if batches.contains(&4) && context <= 4096 && query > 1 {
-                        let sequences: Vec<_> = (0..4)
-                            .map(|row| {
-                                let query = (query >> row).max(1);
-                                let context = context.saturating_sub(row * 32).max(query);
-                                Sequence {
-                                    query,
-                                    context,
-                                    query_start: context - query,
-                                    key_start: 0,
-                                }
-                            })
-                            .collect();
-                        check_case(&device, case, &sequences)?;
-                    }
-                }
-            }
         }
     }
     Ok(())

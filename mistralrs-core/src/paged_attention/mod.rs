@@ -16,8 +16,6 @@ pub mod kv_cache_manager;
 mod layers;
 pub(crate) mod mask_cache;
 #[cfg(all(test, feature = "metal"))]
-mod metal_decode_bench;
-#[cfg(all(test, feature = "metal"))]
 mod metal_hnd_tests;
 pub(crate) mod mm_prefix;
 pub(crate) mod plan;

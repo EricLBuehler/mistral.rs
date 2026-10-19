@@ -400,35 +400,163 @@ template <typename T, int DK>
       device type *, const device uint *, constant GdnPrefillParams &, uint3,  \
       uint);
 
-instantiate_gdn_prefill_from_convolved(float, 128)
-instantiate_gdn_prefill_from_convolved(float, 64)
-instantiate_gdn_prefill_from_convolved(half, 128)
-instantiate_gdn_prefill_from_convolved(half, 64)
-instantiate_gdn_prefill_from_convolved(bfloat, 128)
-instantiate_gdn_prefill_from_convolved(bfloat, 64)
+instantiate_gdn_prefill_from_convolved(
+    float, 128) instantiate_gdn_prefill_from_convolved(float, 64)
+    instantiate_gdn_prefill_from_convolved(half, 128)
+        instantiate_gdn_prefill_from_convolved(half, 64)
+            instantiate_gdn_prefill_from_convolved(bfloat, 128)
+                instantiate_gdn_prefill_from_convolved(bfloat, 64)
 
-// ============================================================================
-// Kernel 1b: chunked_gated_delta_rule_recurrence (prefill optimization)
-//
-// Processes prefill tokens in BT-token chunks instead of one at a time.
-// Same thread model as Kernel 1: one block per (v_tile, batch*head),
-// one thread per V-column. Each thread owns BK registers of state.
-//
-// Uses BT=32 on Metal to fit within 32KB threadgroup memory limit.
-//
-// q,k: [BH, S, K]  v: [BH, S, V]  g,beta: [BH, S]
-// state: [BH, K, V] (in/out)  output: [BH, S, V]
-// ============================================================================
+                    template <typename T, int DK, int VC>
+                    [[kernel]] void gdn_prefill_from_convolved_grouped_kernel(
+                        const device T *mixed [[buffer(0)]],
+                        const device T *b [[buffer(1)]],
+                        const device T *a [[buffer(2)]],
+                        const device float *a_log [[buffer(3)]],
+                        const device float *dt_bias [[buffer(4)]],
+                        device float *state [[buffer(5)]],
+                        device T *y [[buffer(6)]],
+                        const device uint *slots [[buffer(7)]],
+                        constant GdnPrefillParams &p [[buffer(8)]],
+                        uint3 gid [[thread_position_in_grid]],
+                        uint lane [[thread_index_in_simdgroup]]) {
+  constexpr int N = DK / 32;
+  const int dv = gid.y * VC;
+  const int n = gid.z;
+  if (dv >= p.head_v_dim)
+    return;
+  const int bidx = n / p.num_v_heads;
+  const int hv = n - bidx * p.num_v_heads;
+  const int hk = p.tiled_v_heads ? hv % p.num_k_heads
+                                 : hv / (p.num_v_heads / p.num_k_heads);
+  const int key_dim = p.num_k_heads * DK;
+  const int conv_dim = 2 * key_dim + p.num_v_heads * p.head_v_dim;
+  const long row = p.use_slots ? (long)slots[bidx] : (long)bidx;
+  device float *state_col =
+      state + (row * p.num_v_heads + hv) * DK * p.head_v_dim + dv;
+  const float neg_a = -exp(a_log[hv]);
+  const float bias = dt_bias[hv];
+  const float q_scale = rsqrt(float(DK));
 
-template <int BT, int BK, int BV>
-[[kernel]] void chunked_gated_delta_rule_kernel(
-    const device float *q [[buffer(0)]], const device float *k [[buffer(1)]],
-    const device float *v [[buffer(2)]], const device float *g [[buffer(3)]],
-    const device float *beta [[buffer(4)]], device float *state [[buffer(5)]],
-    device float *output [[buffer(6)]], constant int &seq_len [[buffer(7)]],
-    constant int &v_dim [[buffer(8)]],
-    uint2 tgpig [[threadgroup_position_in_grid]],
-    uint tid [[thread_index_in_threadgroup]]) {
+  float s[VC][N];
+#pragma unroll
+  for (int v = 0; v < VC; v++) {
+#pragma unroll
+    for (int i = 0; i < N; i++) {
+      s[v][i] = dv + v < p.head_v_dim
+                    ? state_col[(lane * N + i) * p.head_v_dim + v]
+                    : 0.0f;
+    }
+  }
+
+  for (int t = 0; t < p.seq_len; t++) {
+    const device T *tok = mixed + ((long)bidx * p.seq_len + t) * conv_dim;
+    float q[N];
+    float k[N];
+    float q_ss = 0.0f;
+    float k_ss = 0.0f;
+    for (int i = 0; i < N; i++) {
+      q[i] = float(tok[hk * DK + lane * N + i]);
+      k[i] = float(tok[key_dim + hk * DK + lane * N + i]);
+      q_ss = fma(q[i], q[i], q_ss);
+      k_ss = fma(k[i], k[i], k_ss);
+    }
+    const float q_mul = rsqrt(simd_sum(q_ss) + 1.0e-6f) * q_scale;
+    const float k_mul = rsqrt(simd_sum(k_ss) + 1.0e-6f);
+    const float b_val =
+        float(b[bidx * p.b_stride[0] + t * p.b_stride[1] + hv * p.b_stride[2]]);
+    const float a_val =
+        float(
+            a[bidx * p.a_stride[0] + t * p.a_stride[1] + hv * p.a_stride[2]]) +
+        bias;
+    const float softplus_val =
+        a_val > 20.0f ? a_val
+                      : (a_val > 0.0f ? a_val + log(1.0f + exp(-a_val))
+                                      : log(1.0f + exp(a_val)));
+    const float beta_t = 1.0f / (1.0f + exp(-b_val));
+    const float decay = exp(neg_a * softplus_val);
+
+#pragma unroll
+    for (int v = 0; v < VC; v++) {
+      if (dv + v >= p.head_v_dim)
+        continue;
+      float kv_mem = 0.0f;
+#pragma unroll
+      for (int i = 0; i < N; i++) {
+        s[v][i] *= decay;
+        kv_mem = fma(s[v][i], k[i] * k_mul, kv_mem);
+      }
+      kv_mem = simd_sum(kv_mem);
+      const float v_t = float(tok[2 * key_dim + hv * p.head_v_dim + dv + v]);
+      const float delta = (v_t - kv_mem) * beta_t;
+      float out = 0.0f;
+#pragma unroll
+      for (int i = 0; i < N; i++) {
+        s[v][i] = fma(k[i] * k_mul, delta, s[v][i]);
+        out = fma(s[v][i], q[i] * q_mul, out);
+      }
+      out = simd_sum(out);
+      if (lane == 0) {
+        y[(((long)bidx * p.seq_len + t) * p.num_v_heads + hv) * p.head_v_dim +
+          dv + v] = T(out);
+      }
+    }
+  }
+
+#pragma unroll
+  for (int v = 0; v < VC; v++) {
+    if (dv + v >= p.head_v_dim)
+      continue;
+#pragma unroll
+    for (int i = 0; i < N; i++) {
+      state_col[(lane * N + i) * p.head_v_dim + v] = s[v][i];
+    }
+  }
+}
+
+#define instantiate_gdn_prefill_grouped(type, dk, vc)                          \
+  template [[host_name("gdn_prefill_from_convolved_grouped_" #type "_" #dk     \
+                       "_" #vc)]] [[kernel]] void                              \
+  gdn_prefill_from_convolved_grouped_kernel<type, dk, vc>(                     \
+      const device type *, const device type *, const device type *,           \
+      const device float *, const device float *, device float *,              \
+      device type *, const device uint *, constant GdnPrefillParams &, uint3,  \
+      uint);
+
+#define instantiate_gdn_prefill_grouped_columns(type, dk)                      \
+  instantiate_gdn_prefill_grouped(type, dk, 4)
+
+instantiate_gdn_prefill_grouped_columns(float, 128)
+    instantiate_gdn_prefill_grouped_columns(float, 64)
+        instantiate_gdn_prefill_grouped_columns(half, 128)
+            instantiate_gdn_prefill_grouped_columns(half, 64)
+                instantiate_gdn_prefill_grouped_columns(bfloat, 128)
+                    instantiate_gdn_prefill_grouped_columns(bfloat, 64)
+
+    // ============================================================================
+    // Kernel 1b: chunked_gated_delta_rule_recurrence (prefill optimization)
+    //
+    // Processes prefill tokens in BT-token chunks instead of one at a time.
+    // Same thread model as Kernel 1: one block per (v_tile, batch*head),
+    // one thread per V-column. Each thread owns BK registers of state.
+    //
+    // Uses BT=32 on Metal to fit within 32KB threadgroup memory limit.
+    //
+    // q,k: [BH, S, K]  v: [BH, S, V]  g,beta: [BH, S]
+    // state: [BH, K, V] (in/out)  output: [BH, S, V]
+    // ============================================================================
+
+    template <int BT, int BK, int BV>
+    [[kernel]] void chunked_gated_delta_rule_kernel(
+        const device float *q [[buffer(0)]],
+        const device float *k [[buffer(1)]],
+        const device float *v [[buffer(2)]],
+        const device float *g [[buffer(3)]],
+        const device float *beta [[buffer(4)]],
+        device float *state [[buffer(5)]], device float *output [[buffer(6)]],
+        constant int &seq_len [[buffer(7)]], constant int &v_dim [[buffer(8)]],
+        uint2 tgpig [[threadgroup_position_in_grid]],
+        uint tid [[thread_index_in_threadgroup]]) {
   const int v_tile = tgpig.x;
   const int bh = tgpig.y;
   const int v_idx = v_tile * BV + (int)tid;
@@ -682,7 +810,7 @@ instantiate_conv1d_update_pooled(bfloat16_t);
 // Kernel 2b: causal_conv1d_full (prefill path)
 // ============================================================================
 
-template <typename T>
+template <typename T, bool TOKEN_MAJOR>
 [[kernel]] void causal_conv1d_full_kernel(
     const device T *x [[buffer(0)]], const device T *weight [[buffer(1)]],
     const device T *conv_state [[buffer(2)]], device T *output [[buffer(3)]],
@@ -697,15 +825,18 @@ template <typename T>
   if (ch >= conv_dim || pos >= seq_len || b >= batch_size)
     return;
 
-  const device T *x_bch = x + (b * conv_dim + ch) * seq_len;
+  const long x_base = TOKEN_MAJOR ? (long)b * seq_len * conv_dim + ch
+                                  : ((long)b * conv_dim + ch) * seq_len;
+  const int x_stride = TOKEN_MAJOR ? conv_dim : 1;
+  const device T *x_bch = x + x_base;
   const device T *w = weight + ch * kernel_size;
   const device T *cs = conv_state + (b * conv_dim + ch) * kernel_size;
 
   float acc = 0.0f;
   for (int i = 0; i < kernel_size; i++) {
     int src_pos = pos - (kernel_size - 1) + i;
-    float x_val =
-        src_pos >= 0 ? (float)x_bch[src_pos] : (float)cs[kernel_size + src_pos];
+    float x_val = src_pos >= 0 ? (float)x_bch[(long)src_pos * x_stride]
+                               : (float)cs[kernel_size + src_pos];
     acc += x_val * (float)w[i];
   }
 
@@ -713,10 +844,10 @@ template <typename T>
   float sig = 1.0f / (1.0f + exp(-acc));
   float result = acc * sig;
 
-  output[(b * conv_dim + ch) * seq_len + pos] = (T)result;
+  output[x_base + (long)pos * x_stride] = (T)result;
 }
 
-template <typename T>
+template <typename T, bool TOKEN_MAJOR>
 [[kernel]] void save_conv_state_kernel(const device T *x [[buffer(0)]],
                                        const device T *conv_state_in
                                        [[buffer(1)]],
@@ -732,7 +863,10 @@ template <typename T>
   if (ch >= conv_dim || b >= batch_size)
     return;
 
-  const device T *x_bch = x + (b * conv_dim + ch) * seq_len;
+  const long x_base = TOKEN_MAJOR ? (long)b * seq_len * conv_dim + ch
+                                  : ((long)b * conv_dim + ch) * seq_len;
+  const int x_stride = TOKEN_MAJOR ? conv_dim : 1;
+  const device T *x_bch = x + x_base;
   const device T *prior = conv_state_in + (b * conv_dim + ch) * kernel_size;
   device T *cs = conv_state_out + (b * conv_dim + ch) * kernel_size;
 
@@ -741,24 +875,26 @@ template <typename T>
     if (i < pad) {
       cs[i] = prior[i + seq_len];
     } else {
-      cs[i] = x_bch[seq_len - kernel_size + i];
+      cs[i] = x_bch[(long)(seq_len - kernel_size + i) * x_stride];
     }
   }
 }
 
-#define instantiate_conv1d_full(type)                                          \
-  template [[host_name("causal_conv1d_full_" #type)]] [[kernel]]               \
-  void causal_conv1d_full_kernel<type>(                                        \
+#define instantiate_conv1d_full(type, token_major, suffix)                     \
+  template [[host_name("causal_conv1d_full" suffix "_" #type)]] [[kernel]]     \
+  void causal_conv1d_full_kernel<type, token_major>(                           \
       const device type *, const device type *, const device type *,           \
       device type *, constant int &, constant int &, constant int &,           \
       constant int &, uint3);                                                  \
-  template [[host_name("save_conv_state_" #type)]] [[kernel]]                  \
-  void save_conv_state_kernel<type>(                                           \
+  template [[host_name("save_conv_state" suffix "_" #type)]] [[kernel]]        \
+  void save_conv_state_kernel<type, token_major>(                              \
       const device type *, const device type *, device type *, constant int &, \
       constant int &, constant int &, constant int &, uint2);
 
-instantiate_conv1d_full(half);
-instantiate_conv1d_full(bfloat16_t);
+instantiate_conv1d_full(half, false, "");
+instantiate_conv1d_full(bfloat16_t, false, "");
+instantiate_conv1d_full(half, true, "_token_major");
+instantiate_conv1d_full(bfloat16_t, true, "_token_major");
 
 // ============================================================================
 // Kernel 3: fused_gdn_gating

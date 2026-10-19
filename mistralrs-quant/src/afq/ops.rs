@@ -3576,17 +3576,10 @@ mod cuda_backend {
 mod qmv_rows_tests {
     #![allow(clippy::cast_precision_loss)]
 
-    use std::time::Instant;
-
     use candle_core::{Device, Result, Tensor};
 
     use super::{afq_mm_op, afq_quantize_op};
     use crate::{AfqBits, AfqGroupSize};
-
-    const WARMUP_ITERS: usize = 20;
-    const TIMED_ITERS: usize = 50;
-    // (in, out): Qwen3.8-27B GDN in_proj_qkv, full-attn q_proj, GDN out_proj, MLP down.
-    const SHAPES: [(usize, usize); 4] = [(5120, 10240), (5120, 12288), (6144, 5120), (17408, 5120)];
 
     fn quantized(device: &Device, k: usize, n: usize) -> Result<(Tensor, Tensor, Tensor)> {
         let w = Tensor::randn(0f32, 1., (n, k), device)?.to_dtype(candle_core::DType::BF16)?;
@@ -3630,38 +3623,8 @@ mod qmv_rows_tests {
                 .matmul(&w.t()?)?;
             let actual = mm(&x, &q)?.reshape((rows, 1024))?;
             let err = max_rel_err(&actual, &reference)?;
-            println!("rows={rows} max relative error {err:.2e}");
             // BF16 output rounding is ~4e-3 relative; anything larger is a real error.
             assert!(err < 1e-2, "rows={rows}: max relative error {err}");
-        }
-        Ok(())
-    }
-
-    #[test]
-    #[ignore = "benchmark; needs a Metal GPU"]
-    fn afq_small_batch_bench() -> Result<()> {
-        let device = Device::new_metal(0)?;
-        println!("in x out      rows | ms/call  per-row-ms");
-        for (k, n) in SHAPES {
-            let q = quantized(&device, k, n)?;
-            for rows in [1usize, 2, 4, 8, 12, 16] {
-                let x = Tensor::randn(0f32, 1., (rows, 1, k), &device)?
-                    .to_dtype(candle_core::DType::BF16)?;
-                for _ in 0..WARMUP_ITERS {
-                    mm(&x, &q)?;
-                }
-                device.synchronize()?;
-                let start = Instant::now();
-                for _ in 0..TIMED_ITERS {
-                    mm(&x, &q)?;
-                }
-                device.synchronize()?;
-                let ms = start.elapsed().as_secs_f64() * 1e3 / TIMED_ITERS as f64;
-                println!(
-                    "{k:>5} x {n:>5} {rows:>5} | {ms:7.3}  {:8.3}",
-                    ms / rows as f64
-                );
-            }
         }
         Ok(())
     }
