@@ -1,9 +1,9 @@
 ---
 title: Environment variables
-description: Environment variables read by mistralrs at build time or runtime.
+description: Environment variables read by mistralrs at build time, runtime, or during installer automation.
 ---
 
-User-facing environment variables read by `mistralrs` or its build scripts. Standard Cargo build variables such as `OUT_DIR` and `TARGET` are omitted.
+User-facing environment variables read by `mistralrs`, its build scripts, or its installers. Standard Cargo build variables such as `OUT_DIR` and `TARGET` are omitted.
 
 ## Hugging Face
 
@@ -111,14 +111,21 @@ These are read by build scripts, not at runtime.
 | `MISTRALRS_METAL_PRECOMPILE` | `MISTRALRS_METAL_PRECOMPILE=0` skips build-time precompilation for quantization, paged attention, GDN, and SSM Metal libraries. Shader compilation then happens when each library is loaded, including during model preparation. Also accepts `false`, `no`, and `off`. |
 | `MISTRALRS_METAL_PLATFORMS` | Limits which Metal platform metallibs are precompiled. Accepts comma-separated `macos`, `ios`, `tvos`, or `all`; defaults to all platforms. For local macOS development, use `MISTRALRS_METAL_PLATFORMS=macos`. |
 | `CUDA_NVCC_FLAGS` | Extra compiler options passed to CUDA builds. |
-| `MISTRALRS_INSTALL_TAG` | Pins the installers to a specific release tag (e.g. `v0.9.5`): the prebuilt is downloaded from that release, and a source build checks out that git tag. Default is the latest stable release (prebuilt) or latest `master` (source). |
-| `MISTRALRS_INSTALL_FROM_SOURCE` | `MISTRALRS_INSTALL_FROM_SOURCE=1` makes the shell and PowerShell installers skip the prebuilt download and build from the latest `master` (bleeding edge) instead of the latest stable release. |
-| `MISTRALRS_INSTALL_NCCL` | `MISTRALRS_INSTALL_NCCL=1` forces the shell and PowerShell installers to add the `nccl` feature for CUDA builds even if NCCL is not detected. |
+| `MISTRALRS_GIT_REVISION` | Git revision embedded in the binary by the build script. |
+
+## Installer automation
+
+For normal setup, use the [guided installer or command-line options](/reference/installer/). These variables remain available to existing automation and updater integration. New guided installations and source-build flags default to the latest stable release; the legacy `MISTRALRS_INSTALL_FROM_SOURCE` variable retains its development-build behavior.
+
+| Variable | Purpose |
+|---|---|
+| `MISTRALRS_INSTALL_TAG` | Selects a release tag (e.g. `v0.9.5`) for either a prebuilt or source install. Equivalent to `--release` on macOS/Linux or `-Release` on Windows. |
+| `MISTRALRS_INSTALL_FROM_SOURCE` | Set to `1` to build from source. For legacy automation, this selects `master` unless `MISTRALRS_INSTALL_TAG` is set. Use `--from-source` or `-FromSource` to build the selected stable release instead. |
+| `MISTRALRS_INSTALL_NCCL` | Set to `1` to force the `nccl` feature for CUDA source builds even if the library is not detected. NCCL must still be available to the linker; this does not install it. `--no-nccl` / `-NoNccl` takes precedence. |
 | `MISTRALRS_INSTALL_NO_NCCL` | `MISTRALRS_INSTALL_NO_NCCL=1` makes the shell and PowerShell installers skip the `nccl` feature. |
 | `MISTRALRS_INSTALL_ALLOW_CUDA_MISMATCH` | `MISTRALRS_INSTALL_ALLOW_CUDA_MISMATCH=1` lets a source build continue when local `nvcc` is newer than the CUDA version reported by the NVIDIA driver. |
 | `MISTRALRS_INSTALL_YES` | `MISTRALRS_INSTALL_YES=1` auto-confirms every installer prompt (non-interactive installs for CI/containers; used by `mistralrs update`). |
-| `MISTRALRS_INSTALL_IGNORE_FFMPEG` | `MISTRALRS_INSTALL_IGNORE_FFMPEG=1` skips the installer's FFmpeg step, leaving any existing FFmpeg untouched. |
-| `MISTRALRS_GIT_REVISION` | Git revision embedded in the binary by the build script. |
+| `MISTRALRS_INSTALL_IGNORE_FFMPEG` | `MISTRALRS_INSTALL_IGNORE_FFMPEG=1` leaves existing FFmpeg untouched. FFmpeg installation is already off by default; enable it through customization or `--with-ffmpeg` / `-WithFFmpeg`. |
 
 ## Internal
 

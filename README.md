@@ -105,66 +105,33 @@ Mean tokens per second across prompt lengths and decode depths from 128 to 16384
 
 ### Install
 
-**Linux/macOS:**
+Run the command for your platform in a terminal, then follow the installer.
+
+**macOS / Linux:**
+
 ```bash
 curl -fsSL https://mistralrs.dev/install.sh | sh
 ```
 
 **Windows (PowerShell):**
+
 ```powershell
 irm https://mistralrs.dev/install.ps1 | iex
 ```
 
-Downloads a self-contained prebuilt binary for your platform (Metal on Apple Silicon; per-GPU CUDA or CPU on Linux; CPU on Windows), falling back to a source build if none matches. Standard acceleration needs no Rust or CUDA toolkit. Optional cuTile acceleration requires NVIDIA's separately installed `tileiras` tool.
+When installation finishes, open a new terminal.
 
-[Manual installation, accelerator details & other platforms](https://docs.mistralrs.dev/quickstart/)
+### Chat in Your Browser
 
-### Run Your First Model
-
-```bash
-# Interactive chat
-mistralrs run -m Qwen/Qwen3-4B
-
-# One-shot prompt (no interactive session)
-mistralrs run -m Qwen/Qwen3-4B -i "What is the capital of France?"
-
-# One-shot with an image
-mistralrs run -m google/gemma-4-E4B-it --image photo.jpg -i "Describe this image"
-
-# Run a local GGUF or select a published 4-bit GGUF
-mistralrs run -f /path/to/model.gguf
-mistralrs run -m unsloth/Qwen3.5-4B-GGUF --quant 4
-
-# Agentic REPL: search + code execution + shell from the terminal
-mistralrs run --agent -m Qwen/Qwen3-4B
-
-# Start an API server with the built-in web UI
-mistralrs serve -m google/gemma-4-E4B-it
-```
-
-For the server command, visit `http://localhost:1234/ui` for the web chat interface. OpenAI-compatible clients use `http://localhost:1234/v1`; Anthropic-compatible clients use `http://localhost:1234`.
-
-### The `mistralrs` CLI
-
-The CLI uses the same `run`, `serve`, and `bench` commands for model repositories, local directories, and GGUF files.
-
-- **Auto-detection**: Automatically detects model architecture, quantization format, and chat template
-- **All-in-one**: Single binary for chat, server, benchmarks, and web UI (`run`, `serve`, `bench`)
-- **Hardware-aware tuning**: `mistralrs tune` recommends quantization and device mapping for your model and hardware
-- **Model formats**: Hugging Face checkpoints, [GGUF files](https://docs.mistralrs.dev/guides/models/run-gguf/), and [UQFF quantizations](https://docs.mistralrs.dev/reference/uqff-format/)
+Start a model:
 
 ```bash
-# Recommend settings for your hardware and emit a config file
-mistralrs tune -m Qwen/Qwen3-4B --emit-config config.toml
-
-# Run using the generated config
-mistralrs from-config -f config.toml
-
-# Diagnose system issues (CUDA, Metal, Hugging Face connectivity)
-mistralrs doctor
+mistralrs serve -m Qwen/Qwen3-4B --quant 4
 ```
 
-[Full CLI documentation](https://docs.mistralrs.dev/reference/cli/)
+When the server is ready, open [http://localhost:1234/ui](http://localhost:1234/ui) and send a message. Keep the terminal open while chatting; press Ctrl+C to stop.
+
+[Quickstart](https://docs.mistralrs.dev/quickstart/) | [Installer options](https://docs.mistralrs.dev/reference/installer/)
 
 <details open>
   <summary><b>UI Demo</b></summary>

@@ -57,7 +57,7 @@ pip install "mistralrs==0.9.5+cuda128.sm89" \
   --find-links https://github.com/EricLBuehler/mistral.rs/releases/expanded_assets/v0.9.5
 ```
 
-Look up your GPU's compute capability in [hardware support](/reference/hardware-support/). CUDA wheels bundle the CUDA runtime but do not include cuTile. For cuTile acceleration, use a [cuTile-capable CLI binary](/quickstart/) and follow [cuTile setup](/developer/moe-backends/).
+Look up your GPU's compute capability in [hardware support](/reference/hardware-support/). CUDA wheels bundle the CUDA runtime but do not include cuTile. For cuTile acceleration, use a [cuTile-capable CLI binary](/reference/installer/) and follow [cuTile setup](/developer/moe-backends/).
 
 All install paths expose the same `from mistralrs import ...` API.
 

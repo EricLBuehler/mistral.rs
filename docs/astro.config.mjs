@@ -13,7 +13,7 @@ export default defineConfig({
     '/start-here/': '/quickstart/',
     '/tutorials/': '/quickstart/',
     '/tutorials/01-install-and-run/': '/quickstart/',
-    '/tutorials/02-serve-an-api/': '/quickstart/',
+    '/tutorials/02-serve-an-api/': '/guides/serve/openai-compatible-apis/',
     '/tutorials/03-python-sdk/': '/guides/python/getting-started/',
     '/tutorials/04-rust-sdk/': '/guides/rust/getting-started/',
     '/tutorials/05-build-an-agent/': '/guides/agents/build-an-agent/',

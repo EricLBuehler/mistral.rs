@@ -13,8 +13,11 @@ Use this page to check whether a prebuilt binary exists for your accelerator. If
 | Linux aarch64 + NVIDIA GPU | CUDA (Grace: GH200/GB200/GB10) | yes, sm90/100/121, per driver CUDA support |
 | Apple Silicon (macOS arm64) | Metal | yes |
 | Linux x86_64 / aarch64, no GPU | CPU | yes |
-| Windows x86_64 | CPU | yes |
+| Windows x86_64, CPU selected or no NVIDIA GPU | CPU | yes |
+| Windows with an NVIDIA GPU | CUDA | no; the installer selects a source build |
 | Intel Mac, unlisted GPU | source build | no |
+
+The [guided installer](/reference/installer/) shows the selected backend and installation method before starting. Windows CUDA source builds require the development tools listed in [platform prerequisites](/developer/from-source/#platform-prerequisites); select CPU for the Windows x86_64 prebuilt.
 
 ## NVIDIA compute capabilities
 
@@ -38,7 +41,7 @@ CUDA artifact names encode both the toolkit lane and compute capability:
 mistralrs-cuda128-sm90-aarch64-unknown-linux-gnu.tar.gz
 ```
 
-The installer chooses the newest published lane that the installed NVIDIA driver can load.
+On Linux, the installer chooses the newest published lane that the installed NVIDIA driver can load.
 
 | Driver reports | Artifact lane | Notes |
 |---|---|---|

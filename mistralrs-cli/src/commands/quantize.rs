@@ -443,13 +443,16 @@ Generated with [mistral.rs](https://github.com/EricLBuehler/mistral.rs) {mistral
 
 Install [mistral.rs](https://github.com/EricLBuehler/mistral.rs) ([full guide](https://docs.mistralrs.dev/quickstart/)):
 
+Review the recommended settings, then choose **Install**. Use **Customize** to change the version or acceleration.
+
 **Linux/macOS:**
-```
+```bash
 curl -fsSL https://mistralrs.dev/install.sh | sh
+. "$HOME/.mistralrs/env"
 ```
 
 **Windows (PowerShell):**
-```
+```powershell
 irm https://mistralrs.dev/install.ps1 | iex
 ```
 

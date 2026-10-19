@@ -21,12 +21,14 @@ test("builds the focused landing page", async () => {
 
   assert.match(html, /mistral<span>\.rs<\/span>/);
   assert.ok(html.includes("Fast, flexible LLM inference"));
-  assert.ok(html.includes("Go from install to inference in one command."));
-  assert.ok(html.includes("mistralrs serve -m Qwen/Qwen3.8-27B --quant 4"));
-  assert.ok(html.includes("mistralrs run -m google/gemma-4-E4B-it --quant 4"));
+  assert.ok(html.includes("Once installed, start a chat."));
+  assert.ok(html.includes("mistralrs serve -m Qwen/Qwen3-4B --quant 4"));
+  assert.ok(html.includes("mistralrs run -m Qwen/Qwen3-4B --quant 4"));
   assert.ok(html.includes("50+ model architectures"));
-  assert.ok(html.includes("https://docs.mistralrs.dev/quickstart/"));
-  assert.ok(html.includes("install from source"));
+  assert.ok(html.includes('href="https://docs.mistralrs.dev/"'));
+  assert.ok(html.includes("Installer options"));
+  assert.ok(html.includes("https://docs.mistralrs.dev/reference/installer/"));
+  assert.ok(html.includes("http://localhost:1234/ui"));
   assert.doesNotMatch(html, /MIT licensed|not affiliated with Mistral AI/);
   assert.ok(scripts.includes("curl -fsSL https://mistralrs.dev/install.sh | sh"));
   assert.ok(scripts.includes("irm https://mistralrs.dev/install.ps1 | iex"));
