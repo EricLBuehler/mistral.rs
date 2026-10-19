@@ -1,8 +1,9 @@
 //! CUDA fast path for GGUF matmul with BF16/F32 activations.
 
 use std::collections::HashMap;
-use std::sync::{Mutex, MutexGuard, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::thread::ThreadId;
+use tokio::sync::{Mutex as WorkspaceMutex, OwnedMutexGuard};
 
 use candle_core::cuda::cudarc::driver::{CudaSlice, CudaStream, DevicePtrMut, SyncOnDrop};
 use candle_core::{
@@ -57,7 +58,7 @@ struct WorkspaceSlot {
 }
 
 struct WorkspaceGuard<'a> {
-    slot: MutexGuard<'static, WorkspaceSlot>,
+    slot: OwnedMutexGuard<WorkspaceSlot>,
     stream: &'a CudaStream,
 }
 
@@ -75,15 +76,11 @@ struct WorkspaceKey {
     capacity: usize,
 }
 
-type WsMap = Mutex<HashMap<WorkspaceKey, &'static Mutex<WorkspaceSlot>>>;
+type WsMap = Mutex<HashMap<WorkspaceKey, Arc<WorkspaceMutex<WorkspaceSlot>>>>;
 
 static WORKSPACE: OnceLock<WsMap> = OnceLock::new();
 
-/// Frees a thread's workspaces when it exits. Workspaces are keyed by thread, so
-/// without this every engine thread (one per loaded model) left its workspaces on
-/// the GPU for the life of the process, and a model reloaded in the same process
-/// allocated a new set. CUDA graphs captured with these addresses belong to the
-/// engine and are not replayed after its thread exits.
+// Engine teardown must destroy captured graphs before thread-local workspaces are released.
 struct ReleaseOnThreadExit(ThreadId);
 
 impl Drop for ReleaseOnThreadExit {
@@ -91,15 +88,7 @@ impl Drop for ReleaseOnThreadExit {
         let Some(Ok(mut map)) = WORKSPACE.get().map(Mutex::lock) else {
             return;
         };
-        map.retain(|key, slot| {
-            if key.thread != self.0 {
-                return true;
-            }
-            // SAFETY: workspace_ensure Box::leak'ed the slot, and only this thread
-            // uses the slots keyed by its id, so none is borrowed while it exits.
-            drop(unsafe { Box::from_raw(std::ptr::from_ref(*slot).cast_mut()) });
-            false
-        });
+        map.retain(|key, _| key.thread != self.0);
     }
 }
 
@@ -121,22 +110,23 @@ fn workspace_ensure<'a>(
         thread: std::thread::current().id(),
         capacity,
     };
-    let workspace_mtx: &'static Mutex<WorkspaceSlot> = {
+    let workspace_mtx = {
         let mut guard = map.lock().unwrap();
-        match guard.get(&key).copied() {
+        match guard.get(&key).cloned() {
             Some(mtx) => mtx,
             None => {
                 let slice = unsafe { dev.alloc::<u8>(capacity)? };
-                // CUDA graph replay requires process-stable workspace addresses.
-                let leaked = Box::leak(Box::new(Mutex::new(WorkspaceSlot { slice })));
-                guard.insert(key, leaked);
+                let slot = Arc::new(WorkspaceMutex::new(WorkspaceSlot { slice }));
+                guard.insert(key, slot.clone());
                 RELEASE_ON_THREAD_EXIT.with(|_| {});
-                leaked
+                slot
             }
         }
     };
     Ok(WorkspaceGuard {
-        slot: workspace_mtx.lock().unwrap(),
+        slot: workspace_mtx
+            .try_lock_owned()
+            .expect("workspace is thread-local"),
         stream,
     })
 }
@@ -966,5 +956,38 @@ pub fn fused_qkv(
             ))
         }
         _ => unreachable!(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const WORKSPACE_BYTES: usize = 256;
+
+    #[test]
+    fn workspaces_are_released_on_thread_exit() -> Result<()> {
+        let slots = std::thread::spawn(|| -> Result<_> {
+            let device = Device::new_cuda(0)?;
+            let dev = device.as_cuda_device()?;
+            let stream = dev.cuda_stream();
+            let mut first = workspace_ensure(dev, WORKSPACE_BYTES, &stream)?;
+            let ptr = first.ptr_mut().0;
+            drop(first);
+            let mut second = workspace_ensure(dev, WORKSPACE_BYTES, &stream)?;
+            assert_eq!(ptr, second.ptr_mut().0);
+            let map = WORKSPACE.get().unwrap().lock().unwrap();
+            let slots = map
+                .iter()
+                .filter(|(key, _)| key.thread == std::thread::current().id())
+                .map(|(_, slot)| Arc::downgrade(slot))
+                .collect::<Vec<_>>();
+            assert_eq!(slots.len(), 1);
+            Ok(slots)
+        })
+        .join()
+        .unwrap()?;
+        assert!(slots.iter().all(|slot| slot.upgrade().is_none()));
+        Ok(())
     }
 }

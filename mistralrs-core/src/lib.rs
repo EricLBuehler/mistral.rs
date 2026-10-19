@@ -392,12 +392,11 @@ struct EngineInstance {
     pub(crate) file_store: files::FileStore,
 }
 
-impl Drop for EngineInstance {
+struct EngineThreadCleanup(Arc<tokio::sync::Mutex<dyn Pipeline>>);
+
+impl Drop for EngineThreadCleanup {
     fn drop(&mut self) {
-        // Free decode graphs (they capture the engine thread's cuTile modules) before it exits when `sender` drops.
-        if let Ok(pipeline) = self.reboot_state.pipeline.try_lock() {
-            pipeline.cleanup_cuda_graphs();
-        }
+        get_mut_arcmutex!(self.0).cleanup_cuda_graphs();
     }
 }
 
@@ -1232,6 +1231,8 @@ impl MistralRs {
             objc::rc::autoreleasepool(move || {
                 let rt = build_engine_runtime();
                 rt.block_on(async move {
+                    // Drop graphs before the runtime and thread-local CUDA allocations, including on unwind.
+                    let _cleanup = EngineThreadCleanup(pipeline.clone());
                     file_store_for_engine.spawn_cleanup_task();
                     // cuTile warmup precedes graph capture.
                     #[cfg(feature = "cutile")]
@@ -1272,6 +1273,8 @@ impl MistralRs {
             {
                 let rt = build_engine_runtime();
                 rt.block_on(async move {
+                    // Drop graphs before the runtime and thread-local CUDA allocations, including on unwind.
+                    let _cleanup = EngineThreadCleanup(pipeline.clone());
                     file_store_for_engine.spawn_cleanup_task();
                     // cuTile warmup precedes graph capture.
                     #[cfg(feature = "cutile")]
@@ -2983,6 +2986,138 @@ mod tests {
             creation_time: 0,
             next_request_id: Mutex::new(RefCell::new(1)),
         }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    #[ignore = "requires --features cuda, a CUDA device, and downloads Qwen3-0.6B GGUF weights"]
+    async fn cuda_graphs_are_cleared_before_engine_reboot() -> anyhow::Result<()> {
+        use crate::pipeline::{GGUFLoaderBuilder, GGUFSpecificConfig};
+        use crate::request::{NormalRequest, RequestMessage};
+        use crate::response::Response;
+        use crate::sampler::SamplingParams;
+
+        const CONTEXT_LEN: usize = 128;
+        const NEW_TOKENS: usize = 16;
+        const RESPONSE_TIMEOUT: Duration = Duration::from_secs(60);
+
+        async fn complete(state: &MistralRs) -> anyhow::Result<String> {
+            let (tx, mut rx) = channel(1);
+            let mut sampling = SamplingParams::deterministic();
+            sampling.max_len = Some(NEW_TOKENS);
+            sampling.ignore_eos = true;
+            let request = NormalRequest::new_simple(
+                RequestMessage::Completion {
+                    text: "The first ten positive integers are".to_string(),
+                    echo_prompt: false,
+                    best_of: None,
+                },
+                sampling,
+                tx,
+                state.next_request_id(),
+                None,
+                None,
+            );
+            state
+                .get_sender(None)?
+                .send(Request::Normal(Box::new(request)))
+                .await?;
+            match tokio::time::timeout(RESPONSE_TIMEOUT, rx.recv()).await? {
+                Some(Response::CompletionDone(response)) => {
+                    assert_eq!(response.usage.completion_tokens, NEW_TOKENS);
+                    Ok(response.choices[0].text.clone())
+                }
+                Some(response) => {
+                    anyhow::bail!("unexpected engine response: {:?}", response.as_result())
+                }
+                None => anyhow::bail!("engine closed without a response"),
+            }
+        }
+
+        let device = Device::new_cuda(0)?;
+        let loader = GGUFLoaderBuilder::new(
+            None,
+            None,
+            "unsloth/Qwen3-0.6B-GGUF".to_string(),
+            vec!["Qwen3-0.6B-Q4_K_M.gguf".to_string()],
+            GGUFSpecificConfig {
+                max_model_len: Some(CONTEXT_LEN),
+                ..Default::default()
+            },
+            false,
+            None,
+        )
+        .build();
+        let pipeline = loader.load_model_from_hf(
+            None,
+            TokenSource::CacheToken,
+            &ModelDType::BF16,
+            &device,
+            true,
+            DeviceMapSetting::Auto(AutoDeviceMapParams::Text {
+                max_seq_len: CONTEXT_LEN,
+                max_batch_size: 1,
+            }),
+            None,
+            Some(PagedAttentionConfig::new(
+                None,
+                MemoryGpuConfig::ContextSize(CONTEXT_LEN),
+                PagedCacheType::Auto,
+            )?),
+        )?;
+        let cache_config = pipeline
+            .lock()
+            .await
+            .get_metadata()
+            .cache_config
+            .clone()
+            .expect("test requires paged attention");
+        let state = MistralRsBuilder::new(
+            pipeline.clone(),
+            SchedulerConfig::PagedAttentionMeta {
+                max_num_seqs: 1,
+                max_num_batched_tokens: CONTEXT_LEN,
+                max_prefill_chunk_tokens: CONTEXT_LEN,
+                max_decode_steps_before_prefill: 1,
+                config: cache_config,
+            },
+            false,
+            None,
+        )
+        .with_no_prefix_cache(true)
+        .with_disable_eos_stop(true)
+        .build()
+        .await;
+        assert!(
+            pipeline.lock().await.reclaim_cuda_graph_memory(usize::MAX) > 0,
+            "test requires successful CUDA graph precapture"
+        );
+        let expected = complete(&state).await?;
+
+        for _ in 0..2 {
+            {
+                let mut engines = state.engines.write().unwrap();
+                let engine = engines.values_mut().next().unwrap();
+                engine.terminate();
+                engine.join();
+            }
+            assert_eq!(
+                pipeline.lock().await.reclaim_cuda_graph_memory(usize::MAX),
+                0,
+                "graphs must be gone before the engine thread releases its workspaces"
+            );
+            assert_eq!(complete(&state).await?, expected);
+        }
+        {
+            let mut engines = state.engines.write().unwrap();
+            let engine = engines.values_mut().next().unwrap();
+            engine.terminate();
+            engine.join();
+        }
+        assert_eq!(
+            pipeline.lock().await.reclaim_cuda_graph_memory(usize::MAX),
+            0
+        );
+        Ok(())
     }
 
     #[test]

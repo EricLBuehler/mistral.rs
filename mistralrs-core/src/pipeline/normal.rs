@@ -1628,6 +1628,7 @@ impl MetadataMixin for NormalPipeline {
                 .lock()
                 .expect("CUDA graph mutex poisoned")
                 .clear();
+            self.model.evict_speculative_cuda_graphs(usize::MAX);
             if self.model.cache().is_hybrid() {
                 if let Err(err) = self.model.cache().hybrid().release_graph_pad_slot() {
                     tracing::error!("Failed to release CUDA graph recurrent pad slot: {err}");
