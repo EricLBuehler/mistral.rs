@@ -50,7 +50,9 @@ Use a driver that supports the selected toolkit's PTX, and keep these exports in
 environment when using [cuTile](/developer/moe-backends/). For cuTile, the installer continues
 to select compatible prebuilt CUDA 13.2 or 13.3 binaries on CUDA 13.4-capable drivers.
 
-Metal builds precompile macOS, iOS, and tvOS metallibs by default. For local macOS-only development, set `MISTRALRS_METAL_PLATFORMS=macos`; to skip Metal precompilation entirely, set `MISTRALRS_METAL_PRECOMPILE=0`.
+Metal builds precompile macOS, iOS, and tvOS metallibs by default, including the GDN and Mamba/SSM kernels. For local macOS-only development, set `MISTRALRS_METAL_PLATFORMS=macos`; to skip Metal precompilation entirely, set `MISTRALRS_METAL_PRECOMPILE=0`.
+
+Metal model loading prepares recurrent, supported quantized linear, and paged-attention pipelines for the model's shapes and dtypes before serving requests. Preparation compiles pipelines without running a synthetic prompt or populating the KV cache. Request-specific variants can still require additional setup on first use. Disabling build-time precompilation moves shader compilation into library loading, including this preparation step.
 
 The in-place build leaves the binary at `target/release/mistralrs`. The install variant copies it to `~/.cargo/bin/mistralrs`, which is on `PATH` after a rustup install.
 

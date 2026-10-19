@@ -54,6 +54,14 @@ fn first_unknown_token_id(tokenizer: &tokenizers::Tokenizer, token_ids: &[u32]) 
         .find(|token_id| tokenizer.id_to_token(*token_id).is_none())
 }
 
+fn needs_sequence_preallocated_cache(category: &ModelCategory, paged_cache: bool) -> bool {
+    !paged_cache
+        && matches!(
+            category,
+            ModelCategory::Text | ModelCategory::Multimodal { .. }
+        )
+}
+
 impl Engine {
     pub async fn handle_request(self: Arc<Self>, request: Request) {
         match request {
@@ -630,9 +638,9 @@ impl Engine {
                 .eos_tok
                 .clone();
 
-            let seq_preallocated_cache = if matches!(
-                get_mut_arcmutex!(self.pipeline).category(),
-                ModelCategory::Text | ModelCategory::Multimodal { .. }
+            let seq_preallocated_cache = if needs_sequence_preallocated_cache(
+                &get_mut_arcmutex!(self.pipeline).category(),
+                block_size.is_some(),
             ) {
                 let (metadata, device, needs_preallocated_cache) = {
                     let pipeline = get_mut_arcmutex!(self.pipeline);
@@ -1133,6 +1141,27 @@ mod tests {
     use ahash::AHashMap;
     use indexmap::IndexMap;
     use tokenizers::{models::wordlevel::WordLevel, Tokenizer};
+
+    #[test]
+    fn paged_requests_do_not_allocate_a_second_sequence_kv_cache() {
+        assert!(!needs_sequence_preallocated_cache(
+            &ModelCategory::Text,
+            true
+        ));
+        assert!(needs_sequence_preallocated_cache(
+            &ModelCategory::Text,
+            false
+        ));
+        for category in [
+            ModelCategory::Audio,
+            ModelCategory::Speech,
+            ModelCategory::Diffusion,
+            ModelCategory::Embedding,
+        ] {
+            assert!(!needs_sequence_preallocated_cache(&category, false));
+            assert!(!needs_sequence_preallocated_cache(&category, true));
+        }
+    }
 
     #[test]
     fn choice_seeds_are_stable_and_distinct() {

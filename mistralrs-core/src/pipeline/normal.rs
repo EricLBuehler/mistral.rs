@@ -47,16 +47,19 @@ struct CudaDecodeGraphForwardInput<'a> {
 }
 use crate::kv_cache::{FullCacheManager, HybridCacheManager, NormalCacheManager};
 use crate::lora::Ordering;
-use crate::paged_attention::{calculate_cache_config, AttentionImplementation, CacheEngine};
+use crate::paged_attention::{
+    calculate_cache_config, AttentionImplementation, CacheConfigRequest, CacheEngine,
+};
 use crate::pipeline::chat_template::{calculate_eos_tokens, BeginEndUnkPadTok, GenerationConfig};
 #[cfg(feature = "cuda")]
 use crate::pipeline::cuda_graph::{
     capture_cuda_decode_graph, cuda_decode_graph_batch_kind_supported,
     cuda_decode_graph_supported_for_model, cuda_decode_graphs_enabled, cuda_graph_batch_bucket,
-    cuda_graph_precapture_batches, cuda_graph_precapture_max_batch, hybrid_graph_slots,
-    install_hybrid_graph_state_indices, record_cuda_graph_dispatch, CudaDecodeGraphCaptureCtx,
-    CudaDecodeGraphKey, CudaDecodeGraphLaunch, CudaDecodeGraphReplay, CudaDecodeGraphReplayInput,
-    CudaDecodeGraphState, CudaGraphComponent, CudaGraphDecodeStep, CudaGraphDecodeStepInputs,
+    cuda_graph_precapture_batches, cuda_graph_precapture_max_batch, finish_cuda_capture_memory,
+    hybrid_graph_slots, install_hybrid_graph_state_indices, prepare_cuda_capture_memory,
+    record_cuda_graph_dispatch, CudaDecodeGraphCaptureCtx, CudaDecodeGraphKey,
+    CudaDecodeGraphLaunch, CudaDecodeGraphReplay, CudaDecodeGraphReplayInput, CudaDecodeGraphState,
+    CudaGraphCaptureMemory, CudaGraphComponent, CudaGraphDecodeStep, CudaGraphDecodeStepInputs,
     CudaGraphDispatchMode, CudaGraphDispatchReason, CudaGraphEvent, CudaGraphEventGuard,
     CudaGraphPrecaptureInputs,
 };
@@ -130,17 +133,22 @@ pub struct NormalPipeline {
     dynamic_lora: Option<Arc<DynamicLoraRuntime>>,
 }
 
-pub(crate) struct NormalPipelineBuildArgs {
+pub(crate) struct NormalPipelineBuildArgs<'a> {
     pub model: Box<dyn NormalModel + Send + Sync>,
     pub tokenizer: Tokenizer,
     pub chat_template: ChatTemplate,
     pub generation_config: Option<GenerationConfig>,
     pub paged_attn_config: Option<PagedAttentionConfig>,
+    pub attention_features: Option<crate::paged_attention::PrefixPrefillAttentionFeatures>,
+    pub capacity_activation_estimate:
+        &'a dyn Fn(
+            &PagedAttentionConfig,
+            usize,
+        ) -> Result<super::loaders::ActivationMemoryEstimate>,
     pub dtype: DType,
     pub device: Device,
     pub mapper: Box<dyn DeviceMapper + Send + Sync>,
     pub silent: bool,
-    pub max_kv_tokens: Option<usize>,
     pub no_kv_cache: bool,
     pub is_xlora: bool,
     pub kind: ModelKind,
@@ -154,19 +162,20 @@ pub(crate) struct NormalPipelineBuildArgs {
 }
 
 pub(crate) fn build_normal_pipeline(
-    args: NormalPipelineBuildArgs,
+    args: NormalPipelineBuildArgs<'_>,
 ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
     let NormalPipelineBuildArgs {
         model,
         tokenizer,
         chat_template,
         generation_config,
-        paged_attn_config,
+        mut paged_attn_config,
+        attention_features,
+        capacity_activation_estimate,
         dtype,
         device,
         mapper,
         silent,
-        max_kv_tokens,
         no_kv_cache,
         is_xlora,
         kind,
@@ -179,7 +188,20 @@ pub(crate) fn build_normal_pipeline(
         dynamic_lora,
     } = args;
 
-    let model_metadata = model.model_config();
+    let model_metadata =
+        crate::paged_attention::with_attention_features(model.model_config(), attention_features);
+    #[cfg(feature = "metal")]
+    if !loaded_for_uqff_write {
+        super::metal_warmup::prepare_model(super::metal_warmup::MetalModelWarmup {
+            device: &device,
+            mapper: mapper.as_ref(),
+            model: model_metadata.as_ref(),
+            paged: paged_attn_config.as_ref(),
+            dtype,
+            tracked_modules: &tracked_modules,
+            packed_prefill: model.supports_packed_prefill(),
+        })?;
+    }
     let num_hidden_layers = match model.cache() {
         EitherCache::Full(full) => full.lock().len(),
         EitherCache::Normal(normal) => normal.lock().unwrap().0.len(),
@@ -188,6 +210,7 @@ pub(crate) fn build_normal_pipeline(
     let recurrent_checkpoints_supported = model.supports_recurrent_speculative_checkpoints();
     let recurrent_transitions_supported = model.supports_recurrent_speculative_transitions();
     let recurrent_pool_grew = paged_attn_config
+        .as_ref()
         .map(|config| {
             let kv_bytes_per_token =
                 super::paged_kv_bytes_per_token(config, dtype, model_metadata.as_ref())?;
@@ -217,23 +240,25 @@ pub(crate) fn build_normal_pipeline(
     #[cfg(not(feature = "cuda"))]
     let _ = recurrent_pool_grew;
 
-    let (cache_config, cache_engine) = if let Some(paged_attn_config) = paged_attn_config {
+    let (cache_config, cache_engine) = if let Some(paged_attn_config) = paged_attn_config.as_mut() {
+        let paged_snapshot = paged_attn_config.clone();
+        let estimate_for_capacity =
+            |usable_tokens| capacity_activation_estimate(&paged_snapshot, usable_tokens);
+        let memory_reservations =
+            paged_attention_memory_reservations(model.cache(), paged_attn_config, &device)?;
         let cache_config = calculate_cache_config(
-            paged_attn_config.mem_gpu,
-            paged_attention_memory_reservations(model.cache(), paged_attn_config, &device)?,
-            paged_attn_config.block_size,
-            dtype,
-            paged_attn_config.cache_type,
-            model_metadata.as_ref(),
-            &device,
-            &mapper
-                .get_unique_devices()
-                .into_iter()
-                .map(Some)
-                .collect::<Vec<_>>(),
-            silent,
-            None,
-            max_kv_tokens,
+            paged_attn_config,
+            CacheConfigRequest {
+                memory_reservations,
+                dtype,
+                model: model_metadata.as_ref(),
+                device: &device,
+                layer_devices: &(0..model_metadata.num_layers())
+                    .map(|layer| mapper.device_for(layer, false).cloned())
+                    .collect::<Vec<_>>(),
+                capacity_activation_estimate: &estimate_for_capacity,
+                silent,
+            },
         )?;
         let layer_devices = (0..num_hidden_layers)
             .map(|layer| mapper.device_for(layer, false).cloned())
@@ -281,6 +306,13 @@ pub(crate) fn build_normal_pipeline(
             sliding_window,
             cache_config,
             cache_engine,
+            memory_plan: paged_attn_config
+                .as_ref()
+                .map(|config| config.runtime_memory_plan()),
+            #[cfg(feature = "cuda")]
+            runtime_memory_reservation: paged_attn_config.as_ref().and_then(|config| {
+                config.runtime_memory_reservation(&device, &mapper.get_unique_devices())
+            }),
             model_metadata: Some(model_metadata),
             modalities: Modalities {
                 input: vec![SupportedModality::Text],
@@ -675,7 +707,7 @@ impl Loader for NormalLoader {
         )?;
 
         if !self.inner.supports_paged_attention(&config)? {
-            paged_attn_config = None;
+            super::disable_unsupported_paged_attention(&mut paged_attn_config)?;
         }
 
         debug!("Prompt chunk size is {ATTENTION_CHUNK_SIZE}.");
@@ -699,6 +731,11 @@ impl Loader for NormalLoader {
         } else {
             device_map::get_all_similar_devices(&device)?
         };
+        if !write_uqff {
+            if let Some(paged) = paged_attn_config.as_ref() {
+                paged.initialize_memory_budget(&available_devices)?;
+            }
+        }
         #[cfg(feature = "cuda")]
         for device in &available_devices {
             if let Device::Cuda(dev) = device {
@@ -726,7 +763,6 @@ impl Loader for NormalLoader {
             .or(prepared_weight_source.clone());
 
         // If auto, convert to Map if not using nccl
-        let mut max_kv_tokens: Option<usize> = None;
         if write_uqff {
             mapper = DeviceMapSetting::dummy();
         } else if use_distributed {
@@ -734,7 +770,6 @@ impl Loader for NormalLoader {
                 nm_device: available_devices[0].clone(),
             };
         } else if let DeviceMapSetting::Auto(params) = mapper.clone() {
-            max_kv_tokens = Some(params.max_seq_len() * params.max_batch_size());
             // Initial dtype
             let dtype = dtype.try_into_dtype(&available_devices.iter().collect::<Vec<_>>())?;
 
@@ -958,12 +993,23 @@ impl Loader for NormalLoader {
             write_uqff,
         )?;
 
+        if let Some(paged) = paged_attn_config.as_mut() {
+            super::loaders::reserve_model_activation_memory(
+                self.inner.as_ref(),
+                &config,
+                paged,
+                dtype,
+                &device,
+                &super::AutoDeviceMapParams::default_text(),
+            )?;
+        }
+
         // TODO: PagedAttention is not supported with CPU for now.
         // This check is not really necessary because `get_device_layers` should prevent it.
         let mapping_uses_cpu = mapper.get_unique_devices().iter().any(Device::is_cpu);
         if mapping_uses_cpu && paged_attn_config.is_some() {
             warn!("Device mapping contains a mix of GPU and CPU. There is no CPU support for PagedAttention, disabling PagedAttention.");
-            paged_attn_config = None;
+            super::disable_unsupported_paged_attention(&mut paged_attn_config)?;
         }
 
         trace!("Model config: {:?}", self.inner.get_config_repr(&config)?);
@@ -1459,17 +1505,36 @@ impl Loader for NormalLoader {
             None => paths.get_weight_filenames().to_vec(),
         };
 
+        let activation_device = device.clone();
+        let capacity_activation_estimate = |paged: &PagedAttentionConfig, usable_tokens| {
+            super::loaders::estimate_model_activation_memory(
+                self.inner.as_ref(),
+                &config,
+                super::loaders::ActivationMemoryContext {
+                    params: &super::AutoDeviceMapParams::default_text(),
+                    limits: paged.execution_limits,
+                    dtype,
+                    device: &activation_device,
+                    paged,
+                    cache_capacity_tokens: Some(usable_tokens),
+                },
+            )
+        };
         build_normal_pipeline(NormalPipelineBuildArgs {
             model,
             tokenizer,
             chat_template,
             generation_config: gen_conf,
             paged_attn_config,
+            attention_features: self
+                .inner
+                .activation_model_config(&config)?
+                .attention_features,
+            capacity_activation_estimate: &capacity_activation_estimate,
             dtype,
             device,
             mapper: pipeline_mapper,
             silent,
-            max_kv_tokens,
             no_kv_cache: self.no_kv_cache,
             is_xlora,
             kind: self.kind.clone(),
@@ -1658,6 +1723,9 @@ impl MetadataMixin for NormalPipeline {
     fn precapture_cuda_decode_graphs(&self, ctx: &DecodeGraphPrecaptureCtx) {
         #[cfg(feature = "cuda")]
         {
+            if !self.metadata.cuda_capture_memory_ready() {
+                return;
+            }
             if let Err(err) = self.precapture_cuda_decode_graphs_impl(ctx) {
                 self.cuda_decode_graph
                     .lock()
@@ -1775,6 +1843,9 @@ impl NormalPipeline {
         &self,
         input: CudaDecodeGraphForwardInput<'_>,
     ) -> candle_core::Result<Option<CudaDecodeGraphReplay>> {
+        if !self.metadata.cuda_capture_memory_ready() {
+            return Ok(None);
+        }
         let CudaDecodeGraphForwardInput {
             input_ids,
             seqlen_offsets,
@@ -1935,7 +2006,7 @@ impl NormalPipeline {
             return Ok(None);
         }
         let replay_key = key.clone();
-        let _ = self.capture_cuda_decode_graph_step(
+        let captured = self.capture_cuda_decode_graph_step(
             &mut state,
             key,
             &step,
@@ -1947,6 +2018,9 @@ impl NormalPipeline {
             },
             true,
         )?;
+        if captured.is_none() {
+            return Ok(None);
+        }
         super::synchronize_cuda_contexts(step.input_ids.device(), self.mapper.as_ref()).map_err(
             |err| {
                 candle_core::Error::msg(format!(
@@ -2032,22 +2106,26 @@ impl NormalPipeline {
                 continue;
             }
             if !crate::pipeline::cuda_graph::cuda_graph_capture_headroom(step.input_ids.device())? {
-                info!("Deferred larger CUDA decode graph buckets to lazy capture for memory headroom; lower --pa-context-len to precapture more.");
+                info!("Deferred larger CUDA decode graph buckets to lazy capture for memory headroom; reduce --kv-cache to precapture more.");
                 break;
             }
-            self.capture_cuda_decode_graph_step(
-                &mut state,
-                key,
-                &step,
-                CudaDecodeGraphCaptureInputs {
-                    kv_cache: kv_cache.as_slice(),
-                    flash_meta: &inputs.flash_meta,
-                    block_size: cache_config.block_size,
-                    recurrent_batch_kind: RecurrentBatchKind::Decode,
-                },
-                false,
-            )?;
-            captured += 1;
+            if self
+                .capture_cuda_decode_graph_step(
+                    &mut state,
+                    key,
+                    &step,
+                    CudaDecodeGraphCaptureInputs {
+                        kv_cache: kv_cache.as_slice(),
+                        flash_meta: &inputs.flash_meta,
+                        block_size: cache_config.block_size,
+                        recurrent_batch_kind: RecurrentBatchKind::Decode,
+                    },
+                    false,
+                )?
+                .is_some()
+            {
+                captured += 1;
+            }
         }
         if captured > 0 {
             info!(
@@ -2067,7 +2145,7 @@ impl NormalPipeline {
         step: &CudaGraphDecodeStep,
         inputs: CudaDecodeGraphCaptureInputs<'_>,
         rollback_live_state: bool,
-    ) -> candle_core::Result<Tensor> {
+    ) -> candle_core::Result<Option<Tensor>> {
         let CudaDecodeGraphCaptureInputs {
             kv_cache,
             flash_meta,
@@ -2079,6 +2157,21 @@ impl NormalPipeline {
         let Device::Cuda(cuda_device) = step.input_ids.device() else {
             candle_core::bail!("CUDA graph decode expected CUDA input ids");
         };
+        let execution_devices = self.execution_devices();
+        let capture_memory = CudaGraphCaptureMemory {
+            plan: self.metadata.memory_plan,
+            reservation: self.metadata.runtime_memory_reservation.as_deref(),
+            devices: &execution_devices,
+            primary: step.input_ids.device(),
+            activation_dtype: self.metadata.activation_dtype,
+            block_size,
+            step,
+            kv_cache,
+            model: self.metadata.model_metadata.as_deref(),
+        };
+        if !prepare_cuda_capture_memory(state, &capture_memory)? {
+            return Ok(None);
+        }
         let _htod_cache_guard = cuda_device.enable_cuda_graph_htod_cache();
         let metadata = step
             .metadata
@@ -2127,6 +2220,9 @@ impl NormalPipeline {
             let warmup_logits = self.model.forward(&step.input_ids, &mut ctx)?;
             step.input_ids.device().synchronize()?;
             let live_logits = step.narrow_rows(&warmup_logits)?;
+            if !prepare_cuda_capture_memory(state, &capture_memory)? {
+                return Ok((live_logits, None));
+            }
 
             // CUDA stream capture records recurrent writes without executing them.
             let entry = capture_cuda_decode_graph(
@@ -2157,6 +2253,7 @@ impl NormalPipeline {
                     self.model.forward(graph_input_ids, &mut ctx)
                 },
             )?;
+            let entry = finish_cuda_capture_memory(state, &capture_memory, entry)?;
             Ok((live_logits, entry))
         })();
         let (logits, entry) = self.finish_cuda_graph_capture_attempt(
@@ -2166,9 +2263,18 @@ impl NormalPipeline {
             live_state_indices.as_ref(),
             rollback_live_state,
         )?;
-        state.insert(entry);
-        graph_event.success();
-        Ok(logits)
+        if let Some(entry) = entry {
+            state.insert(entry);
+            graph_event.success();
+            Ok(Some(logits))
+        } else {
+            drop(logits);
+            drop(metadata);
+            drop(recurrent_snapshots);
+            drop(live_state_indices);
+            super::cuda_graph::admit_cuda_eager_after_capture(state, &capture_memory)?;
+            Ok(None)
+        }
     }
 
     fn snapshot_hybrid_state_indices(&self) -> Option<HybridStateIndicesSnapshot> {

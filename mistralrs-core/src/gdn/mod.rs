@@ -21,4 +21,5 @@ pub use layer::{
     GdnTransitionStash,
 };
 pub(crate) use packed::{try_forward_grouped_packed_gdn, PackedGdnLayout};
+pub(crate) use weights::checkpoint_norm_storage;
 pub use weights::GdnInputProjectionKind;

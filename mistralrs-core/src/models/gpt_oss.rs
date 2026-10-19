@@ -684,10 +684,9 @@ impl DecoderLayer {
         let xs = self
             .self_attn
             .forward(&xs, attention_mask, kv_cache, ctx, layer_idx)?;
-        let xs = (residual + xs)?;
-
-        let residual = &xs;
-        let xs = self.post_attention_layernorm.forward(&xs)?;
+        let (residual, xs) = self
+            .post_attention_layernorm
+            .forward_add_rms_norm(&xs, residual)?;
         let xs = self.mlp.forward(&xs, layer_idx)?;
 
         residual + xs
@@ -884,7 +883,8 @@ impl Model {
 
         let sliding_window = self.cfg.sliding_window;
 
-        let force_custom_attention_mask = !ctx.flash_params().packed;
+        let force_custom_attention_mask =
+            !ctx.flash_params().packed && !(ctx.is_paged() && xs.device().is_metal());
         let mask_cache = ctx.mask_cache(cache);
         let causal_mask = CausalMasker.make_causal_mask(
             input_ids,

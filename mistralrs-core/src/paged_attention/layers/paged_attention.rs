@@ -7,6 +7,8 @@ use mistralrs_paged_attn::{
     Fa3DecodeParams, FlashInferDecodeScratch, KvCacheScales as FlashInferKvCacheScales,
     DEFAULT_FP8_KV_CACHE_SCALES,
 };
+#[cfg(feature = "metal")]
+use mistralrs_paged_attn::{metal_paged_prefill, MetalPagedPrefillRequest, MetalPagedPrefillShape};
 use mistralrs_paged_attn::{paged_attention, reshape_and_cache};
 
 #[cfg(all(feature = "cuda", target_family = "unix"))]
@@ -16,11 +18,14 @@ use crate::flashinfer::{
     fa3_device_num_sm, fa3_prefill_cache_num_sm, with_fa3_prefill_workspace, Fa3DecodeScheduleKey,
     Fa3DecodeView, Fa3PagedScheduleShape,
 };
+#[cfg(feature = "metal")]
+use crate::paged_attention::mask_cache::PrefixMaskKey;
 use crate::{
     attention::{AttentionMask, SdpaParams},
     layers::Sdpa,
     paged_attention::{
         block_aligned_sliding_window_start,
+        mask_cache::PrefixMaskCache,
         plan::{
             gather_prefill_workspace_for_lengths, DecodePlan, DecodePlanInput,
             GatherPrefillWorkspaceRequest, PrefixPrefillPlan, PrefixPrefillPlanInput,
@@ -28,11 +33,12 @@ use crate::{
         AttentionBackendKind, Fp8AttentionScales, _PAD_SLOT_ID,
     },
     pipeline::text_models_inputs_processor::{
-        FlashKMeta, FlashParams, PagedAttentionInputMetadata,
+        AttentionMemoryBudget, FlashKMeta, FlashParams, PagedAttentionInputMetadata,
     },
 };
 
 static UNCALIBRATED_FP8_ATTENTION_WARNING: Once = Once::new();
+const METAL_DONOR_DECODE_HEAD_SIZES: [usize; 2] = [256, 512];
 
 #[cfg(all(feature = "cuda", target_family = "unix"))]
 #[derive(Clone, Copy)]
@@ -150,7 +156,14 @@ fn block_aligned_window_len_for_query(
     full_len - block_aligned_sliding_window_start(full_len, query_len, window, block_size)
 }
 
+fn is_metal_hnd_cache(key_cache: &Tensor, value_cache: &Tensor) -> bool {
+    key_cache.device().is_metal() && key_cache.rank() == 4 && value_cache.rank() == 4
+}
+
 fn cache_block_size(key_cache: &Tensor, value_cache: &Tensor) -> Result<usize> {
+    if is_metal_hnd_cache(key_cache, value_cache) {
+        return Ok(key_cache.dims4()?.2);
+    }
     match AttentionBackendKind::from_cache(key_cache, value_cache) {
         AttentionBackendKind::FlashInfer => Ok(key_cache.dims4()?.2),
         AttentionBackendKind::Standard => Ok(key_cache.dims5()?.3),
@@ -158,6 +171,10 @@ fn cache_block_size(key_cache: &Tensor, value_cache: &Tensor) -> Result<usize> {
 }
 
 fn cache_kv_shape(key_cache: &Tensor, value_cache: &Tensor) -> Result<(usize, usize)> {
+    if is_metal_hnd_cache(key_cache, value_cache) {
+        let (_, num_kv_heads, _, head_size) = key_cache.dims4()?;
+        return Ok((num_kv_heads, head_size));
+    }
     match AttentionBackendKind::from_cache(key_cache, value_cache) {
         AttentionBackendKind::FlashInfer => {
             let (_, num_kv_heads, _, head_size) = key_cache.dims4()?;
@@ -194,7 +211,7 @@ fn cache_input_can_write_directly(tensor: &Tensor) -> Result<bool> {
     let row_stride = match *dims {
         [_, _, _] => stride[0],
         [batch, seq_len, _, _] => {
-            if !cfg!(all(feature = "cuda", target_family = "unix")) {
+            if tensor.device().is_metal() || !cfg!(all(feature = "cuda", target_family = "unix")) {
                 return Ok(false);
             }
             let row_stride = if seq_len == 1 { stride[0] } else { stride[1] };
@@ -210,28 +227,70 @@ fn cache_input_can_write_directly(tensor: &Tensor) -> Result<bool> {
         && row_stride >= heads.saturating_mul(head_size))
 }
 
+fn pack_cache_input(tensor: &Tensor) -> Result<Tensor> {
+    if tensor.device().is_metal() {
+        tensor.contiguous()?
+    } else {
+        tensor.force_contiguous()?
+    }
+    .reshape(cache_input_shape(tensor)?)
+}
+
+struct CacheWriteParams<'a> {
+    scales: CacheScales<'a>,
+    slot_mapping: &'a Tensor,
+    memory: Option<&'a AttentionMemoryBudget>,
+}
+
 fn write_kv_cache(
     key: &Tensor,
     value: &Tensor,
-    scales: CacheScales<'_>,
     key_cache: &mut Tensor,
     value_cache: &mut Tensor,
-    slot_mapping: &Tensor,
+    params: CacheWriteParams<'_>,
 ) -> Result<()> {
+    let CacheWriteParams {
+        scales,
+        slot_mapping,
+        memory,
+    } = params;
+    #[cfg(not(feature = "metal"))]
+    let _ = memory;
+    #[cfg(feature = "metal")]
+    if key.device().is_metal() {
+        let mut bytes = 0usize;
+        for tensor in [key, value] {
+            if !cache_input_can_write_directly(tensor)? {
+                let buffer = tensor
+                    .elem_count()
+                    .checked_mul(tensor.dtype().size_in_bytes())
+                    .and_then(usize::checked_next_power_of_two)
+                    .ok_or_else(|| candle_core::Error::msg("KV packing workspace overflow"))?;
+                bytes = bytes
+                    .checked_add(buffer)
+                    .ok_or_else(|| candle_core::Error::msg("KV packing workspace overflow"))?;
+            }
+        }
+        if bytes > 0 {
+            crate::paged_attention::plan::check_metal_attention_workspace(
+                key.device(),
+                bytes,
+                memory,
+            )?;
+        }
+    }
     let key_packed;
     let key = if cache_input_can_write_directly(key)? {
         key
     } else {
-        key_packed = key.force_contiguous()?.reshape(cache_input_shape(key)?)?;
+        key_packed = pack_cache_input(key)?;
         &key_packed
     };
     let value_packed;
     let value = if cache_input_can_write_directly(value)? {
         value
     } else {
-        value_packed = value
-            .force_contiguous()?
-            .reshape(cache_input_shape(value)?)?;
+        value_packed = pack_cache_input(value)?;
         &value_packed
     };
     match AttentionBackendKind::from_cache(key_cache, value_cache) {
@@ -502,6 +561,26 @@ fn adjust_kv_mask(mask: &Tensor, kv_seq_len: usize) -> Result<Tensor> {
     }
 }
 
+fn metal_gather_mask_is_compatible(
+    mask: &AttentionMask,
+    query: &Tensor,
+    batch: usize,
+    query_len: usize,
+    kv_len: usize,
+) -> Result<bool> {
+    match mask {
+        AttentionMask::Custom(mask) => {
+            let mask = adjust_kv_mask(mask, kv_len)?;
+            Ok(mask.dtype() == query.dtype()
+                && mask
+                    .layout()
+                    .broadcast_as((batch, 1, query_len, kv_len))
+                    .is_ok())
+        }
+        _ => Ok(true),
+    }
+}
+
 fn prefix_attention_output_layout(
     output: Tensor,
     attention_mask: &AttentionMask,
@@ -545,29 +624,110 @@ fn prefix_prefill_is_causal(
 
 type SeqMmPrefixRanges = Vec<Vec<(usize, usize)>>;
 
-#[allow(clippy::too_many_arguments)]
-fn prefix_gather_causal_mask(
-    query_lens: &[usize],
-    kv_lens: &[usize],
-    mm_prefix_ranges: Option<&[Vec<(usize, usize)>]>,
-    q_max: usize,
-    kv_max: usize,
+#[derive(Clone, Copy)]
+struct PrefixMaskRequest<'a> {
+    query_lens: &'a [usize],
+    kv_lens: &'a [usize],
+    mm_prefix_ranges: Option<&'a [Vec<(usize, usize)>]>,
     sliding_window: Option<usize>,
     dtype: DType,
-    device: &Device,
+    device: &'a Device,
+}
+
+#[cfg(feature = "metal")]
+impl PrefixMaskRequest<'_> {
+    fn key(self, q_max: usize, kv_max: usize, packed: bool) -> PrefixMaskKey {
+        PrefixMaskKey {
+            query_lens: self.query_lens.to_vec(),
+            kv_lens: self.kv_lens.to_vec(),
+            mm_prefix_ranges: self.mm_prefix_ranges.map(<[_]>::to_vec),
+            q_max,
+            kv_max,
+            sliding_window: self.sliding_window,
+            packed,
+            dtype: self.dtype,
+            device: self.device.location(),
+        }
+    }
+}
+
+fn prefix_gather_causal_mask(
+    request: PrefixMaskRequest<'_>,
+    q_max: usize,
+    kv_max: usize,
+    _cache: &PrefixMaskCache,
 ) -> Result<AttentionMask> {
-    let batch = query_lens.len();
-    let mut mask = Vec::with_capacity(batch * q_max * kv_max);
-    for (batch_idx, (&q_len, &kv_len)) in query_lens.iter().zip(kv_lens.iter()).enumerate() {
-        let prefix_len = kv_len.saturating_sub(q_len);
-        for q_idx in 0..q_max {
-            for kv_idx in 0..kv_max {
-                let masked = if q_idx >= q_len {
-                    kv_idx != 0
-                } else if kv_idx >= kv_len {
-                    true
-                } else {
-                    let q_pos = prefix_len + q_idx;
+    let PrefixMaskRequest {
+        query_lens,
+        kv_lens,
+        mm_prefix_ranges,
+        sliding_window,
+        dtype,
+        device,
+    } = request;
+    let make_mask = || {
+        let batch = query_lens.len();
+        let mut mask = Vec::with_capacity(batch * q_max * kv_max);
+        for (batch_idx, (&q_len, &kv_len)) in query_lens.iter().zip(kv_lens.iter()).enumerate() {
+            let prefix_len = kv_len.saturating_sub(q_len);
+            for q_idx in 0..q_max {
+                for kv_idx in 0..kv_max {
+                    let masked = if q_idx >= q_len {
+                        kv_idx != 0
+                    } else if kv_idx >= kv_len {
+                        true
+                    } else {
+                        let q_pos = prefix_len + q_idx;
+                        let future = kv_idx > q_pos;
+                        let too_old = sliding_window
+                            .is_some_and(|window| q_pos >= window && kv_idx <= q_pos - window);
+                        let mm_prefix = mm_prefix_ranges
+                            .and_then(|ranges| ranges.get(batch_idx))
+                            .is_some_and(|ranges| {
+                                ranges.iter().any(|&(start, end)| {
+                                    q_pos >= start && q_pos < end && kv_idx >= start && kv_idx < end
+                                })
+                            });
+                        (future || too_old) && !mm_prefix
+                    };
+                    mask.push(if masked { f32::NEG_INFINITY } else { 0.0 });
+                }
+            }
+        }
+        Tensor::from_vec(mask, (batch, 1, q_max, kv_max), device)?.to_dtype(dtype)
+    };
+    #[cfg(feature = "metal")]
+    if device.is_metal() {
+        return _cache
+            .get_or_try_insert(request.key(q_max, kv_max, false), make_mask)
+            .map(AttentionMask::Custom);
+    }
+    make_mask().map(AttentionMask::Custom)
+}
+
+fn packed_prefix_gather_causal_mask(
+    request: PrefixMaskRequest<'_>,
+    _cache: &PrefixMaskCache,
+) -> Result<Tensor> {
+    let PrefixMaskRequest {
+        query_lens,
+        kv_lens,
+        mm_prefix_ranges,
+        sliding_window,
+        dtype,
+        device,
+    } = request;
+    let make_mask = || {
+        let total_q = query_lens.iter().sum::<usize>();
+        let total_kv = kv_lens.iter().sum::<usize>();
+        let mut mask = vec![f32::NEG_INFINITY; total_q * total_kv];
+        let mut q_offset = 0usize;
+        let mut kv_offset = 0usize;
+        for (batch_idx, (&q_len, &kv_len)) in query_lens.iter().zip(kv_lens).enumerate() {
+            let prefix_len = kv_len.saturating_sub(q_len);
+            for q_idx in 0..q_len {
+                let q_pos = prefix_len + q_idx;
+                for kv_idx in 0..kv_len {
                     let future = kv_idx > q_pos;
                     let too_old = sliding_window
                         .is_some_and(|window| q_pos >= window && kv_idx <= q_pos - window);
@@ -578,54 +738,24 @@ fn prefix_gather_causal_mask(
                                 q_pos >= start && q_pos < end && kv_idx >= start && kv_idx < end
                             })
                         });
-                    (future || too_old) && !mm_prefix
-                };
-                mask.push(if masked { f32::NEG_INFINITY } else { 0.0 });
-            }
-        }
-    }
-    Ok(AttentionMask::Custom(
-        Tensor::from_vec(mask, (batch, 1, q_max, kv_max), device)?.to_dtype(dtype)?,
-    ))
-}
-
-fn packed_prefix_gather_causal_mask(
-    query_lens: &[usize],
-    kv_lens: &[usize],
-    mm_prefix_ranges: Option<&[Vec<(usize, usize)>]>,
-    sliding_window: Option<usize>,
-    dtype: DType,
-    device: &Device,
-) -> Result<Tensor> {
-    let total_q = query_lens.iter().sum::<usize>();
-    let total_kv = kv_lens.iter().sum::<usize>();
-    let mut mask = vec![f32::NEG_INFINITY; total_q * total_kv];
-    let mut q_offset = 0usize;
-    let mut kv_offset = 0usize;
-    for (batch_idx, (&q_len, &kv_len)) in query_lens.iter().zip(kv_lens).enumerate() {
-        let prefix_len = kv_len.saturating_sub(q_len);
-        for q_idx in 0..q_len {
-            let q_pos = prefix_len + q_idx;
-            for kv_idx in 0..kv_len {
-                let future = kv_idx > q_pos;
-                let too_old = sliding_window
-                    .is_some_and(|window| q_pos >= window && kv_idx <= q_pos - window);
-                let mm_prefix = mm_prefix_ranges
-                    .and_then(|ranges| ranges.get(batch_idx))
-                    .is_some_and(|ranges| {
-                        ranges.iter().any(|&(start, end)| {
-                            q_pos >= start && q_pos < end && kv_idx >= start && kv_idx < end
-                        })
-                    });
-                if !(future || too_old) || mm_prefix {
-                    mask[(q_offset + q_idx) * total_kv + kv_offset + kv_idx] = 0.0;
+                    if !(future || too_old) || mm_prefix {
+                        mask[(q_offset + q_idx) * total_kv + kv_offset + kv_idx] = 0.0;
+                    }
                 }
             }
+            q_offset += q_len;
+            kv_offset += kv_len;
         }
-        q_offset += q_len;
-        kv_offset += kv_len;
+        Tensor::from_vec(mask, (1usize, 1usize, total_q, total_kv), device)?.to_dtype(dtype)
+    };
+    #[cfg(feature = "metal")]
+    if device.is_metal() {
+        return _cache.get_or_try_insert(
+            request.key(query_lens.iter().sum(), kv_lens.iter().sum(), true),
+            make_mask,
+        );
     }
-    Tensor::from_vec(mask, (1usize, 1usize, total_q, total_kv), device)?.to_dtype(dtype)
+    make_mask()
 }
 
 fn mm_prefix_ranges_from_tensor(tensor: Option<&Tensor>) -> Result<Option<SeqMmPrefixRanges>> {
@@ -975,7 +1105,10 @@ impl PagedAttention {
             .flashinfer
             .as_ref()
             .is_some_and(|metadata| metadata.views.sliding.is_some());
-        let use_full = setup.sdpa_params.sliding_window.is_none()
+        let custom_metal_full_view = setup.tensors.query.device().is_metal()
+            && setup.tensors.attention_mask.is_custom()
+            && setup.input_metadata.full_block_tables.is_some();
+        let use_full = (setup.sdpa_params.sliding_window.is_none() || custom_metal_full_view)
             && (setup.input_metadata.full_block_tables.is_some() || has_flashinfer_sliding_view);
         let alibi_slopes = if let Some(alibi_slopes) = self.alibi_slopes.as_ref() {
             Some(alibi_slopes.to_device(setup.tensors.query.device())?)
@@ -999,6 +1132,276 @@ impl PagedAttention {
             use_full,
             alibi_slopes,
         })
+    }
+
+    #[cfg(feature = "metal")]
+    fn try_metal_prefill(
+        &self,
+        ctx: &PagedForwardCtx<'_>,
+        tensors: PagedForwardTensors<'_>,
+        key_cache: &mut Option<Tensor>,
+        value_cache: &mut Option<Tensor>,
+        write_cache: bool,
+    ) -> Result<Option<Tensor>> {
+        if !tensors.query.device().is_metal()
+            || key_cache.is_none()
+            || value_cache.is_none()
+            || (ctx.input_metadata.is_decode_step()
+                && ctx.dims.seq_len == 1
+                && tensors.attention_mask.is_none()
+                && !ctx.has_noncausal_mm_context())
+        {
+            return Ok(None);
+        }
+        let device = tensors.query.device();
+        let location = device.location();
+        if !matches!(key_cache.as_ref().unwrap().rank(), 4 | 5)
+            || value_cache.as_ref().unwrap().rank() != 4
+        {
+            return Ok(None);
+        }
+        if ctx.input_metadata.has_noncausal_mm_context
+            && ctx.input_metadata.mm_prefix_ranges.is_none()
+            && ctx.input_metadata.full_mm_prefix_ranges.is_none()
+        {
+            candle_core::bail!("Metal paged prefill is missing multimodal ranges");
+        }
+        let Some(block_tables) = ctx.block_tables(&location) else {
+            return Ok(None);
+        };
+        let Some(context_lens) = ctx.context_lens_cpu() else {
+            return Ok(None);
+        };
+        let expanded_decode = ctx.input_metadata.query_lens.is_none()
+            && ctx.dims.seq_len > 1
+            && context_lens.len() == ctx.dims.batch_size * ctx.dims.seq_len;
+        if expanded_decode && tensors.attention_mask.is_custom() {
+            return Ok(None);
+        }
+        let query_lens = ctx.input_metadata.query_lens.clone().unwrap_or_else(|| {
+            if expanded_decode {
+                vec![1; context_lens.len()]
+            } else {
+                vec![ctx.dims.seq_len; ctx.dims.batch_size]
+            }
+        });
+        if context_lens.len() != query_lens.len() {
+            candle_core::bail!("Metal paged prefill query and context counts differ");
+        }
+        let full_context_lens = ctx
+            .input_metadata
+            .full_paged_context_lens_cpu
+            .as_deref()
+            .filter(|lens| lens.len() == query_lens.len())
+            .map(<[usize]>::to_vec)
+            .unwrap_or_else(|| match &ctx.input_metadata.num_cached_tokens {
+                Some(cached) => cached.iter().zip(&query_lens).map(|(k, q)| k + q).collect(),
+                None => context_lens.to_vec(),
+            });
+        let query_starts = full_context_lens
+            .iter()
+            .zip(&query_lens)
+            .map(|(context, query)| context.saturating_sub(*query))
+            .collect::<Vec<_>>();
+        let key_starts = full_context_lens
+            .iter()
+            .zip(context_lens)
+            .map(|(full, visible)| full.saturating_sub(*visible))
+            .collect::<Vec<_>>();
+        let ranges_tensor = ctx
+            .mm_prefix_ranges(&DeviceLocation::Cpu)
+            .or_else(|| ctx.mm_prefix_ranges(&location));
+        let mut ranges = mm_prefix_ranges_from_tensor(ranges_tensor)?;
+        if let Some(ranges) = &mut ranges {
+            if ranges.len() != key_starts.len() {
+                candle_core::bail!("Metal paged prefill multimodal range count differs");
+            }
+            for (ranges, start) in ranges.iter_mut().zip(&key_starts) {
+                for (lo, hi) in ranges {
+                    *lo += start;
+                    *hi += start;
+                }
+            }
+        }
+        let k_cache = key_cache.as_ref().unwrap();
+        let v_cache = value_cache.as_ref().unwrap();
+        let hnd = is_metal_hnd_cache(k_cache, v_cache);
+        let value_dim = v_cache.dim(if hnd { 3 } else { 2 })?;
+        let packed = !expanded_decode && ctx.flash_params.is_some_and(|params| params.packed);
+        let shape = MetalPagedPrefillShape {
+            num_seqs: query_lens.len(),
+            num_heads: ctx.dims.attention_heads,
+            num_kv_heads: ctx.dims.key_value_heads,
+            max_query_len: query_lens.iter().copied().max().unwrap_or(0),
+            total_query_tokens: query_lens.iter().sum(),
+            max_context_len: context_lens.iter().copied().max().unwrap_or(0),
+            key_head_dim: ctx.dims.head_size,
+            value_head_dim: value_dim,
+            block_size: cache_block_size(k_cache, v_cache)?,
+            num_multimodal_ranges: ranges
+                .as_ref()
+                .map_or(0, |ranges| ranges.iter().map(Vec::len).sum()),
+            query_dtype: tensors.query.dtype(),
+            cache_dtype: k_cache.dtype(),
+            packed_queries: packed,
+            hnd,
+        };
+        if !shape.supports() {
+            return Ok(None);
+        }
+        let mut required = shape.workspace_bytes()?;
+        if expanded_decode {
+            required = required
+                .checked_add(shape.query_copy_workspace_bytes()?)
+                .ok_or_else(|| candle_core::Error::msg("Metal prefill workspace overflow"))?;
+        }
+        if tensors.attention_mask.is_none() {
+            required = required
+                .checked_add(shape.output_copy_workspace_bytes()?)
+                .ok_or_else(|| candle_core::Error::msg("Metal prefill workspace overflow"))?;
+        }
+        let mask = tensors.attention_mask.as_option_tensor().cloned();
+        let mask_key_offsets = if let Some(mask) = &mask {
+            let width = *mask
+                .dims()
+                .last()
+                .ok_or_else(|| candle_core::Error::msg("empty Metal prefill mask shape"))?;
+            let local_width = if packed {
+                context_lens.iter().sum()
+            } else {
+                shape.max_context_len
+            };
+            let full_width = if packed {
+                full_context_lens.iter().sum()
+            } else {
+                *full_context_lens.iter().max().unwrap()
+            };
+            if width == 1 {
+                None
+            } else if width >= full_width {
+                let mut base = 0;
+                Some(
+                    key_starts
+                        .iter()
+                        .zip(&full_context_lens)
+                        .map(|(&start, &length)| {
+                            let offset = base + start;
+                            if packed {
+                                base += length;
+                            }
+                            offset
+                        })
+                        .collect::<Vec<_>>(),
+                )
+            } else if width == local_width {
+                None
+            } else {
+                candle_core::bail!("Metal prefill mask width {width} matches neither its local KV view ({local_width}) nor full context ({full_width})");
+            }
+        } else {
+            None
+        };
+        if let Some(mask) = mask
+            .as_ref()
+            .filter(|mask| !mask.device().same_device(device))
+        {
+            let upload = mask
+                .elem_count()
+                .checked_mul(mask.dtype().size_in_bytes())
+                .ok_or_else(|| candle_core::Error::msg("Metal prefill mask size overflow"))?;
+            required = required
+                .checked_add(crate::paged_attention::plan::metal_gather_workspace_bytes(
+                    upload,
+                )?)
+                .ok_or_else(|| candle_core::Error::msg("Metal prefill workspace overflow"))?;
+        }
+        crate::paged_attention::plan::check_metal_attention_workspace(
+            device,
+            required,
+            ctx.input_metadata.attention_memory.as_ref(),
+        )?;
+        let query = if expanded_decode {
+            tensors.query.transpose(1, 2)?.contiguous()?.reshape((
+                query_lens.len(),
+                ctx.dims.attention_heads,
+                1,
+                ctx.dims.head_size,
+            ))?
+        } else {
+            tensors.query.clone()
+        };
+        let mask = mask.map(|mask| mask.to_device(device)).transpose()?;
+        if write_cache {
+            let scales = self.cache_scales(key_cache.as_ref().unwrap());
+            write_kv_cache(
+                &tensors.key.transpose(1, 2)?,
+                &tensors.value.transpose(1, 2)?,
+                key_cache.as_mut().unwrap(),
+                value_cache.as_mut().unwrap(),
+                CacheWriteParams {
+                    scales,
+                    slot_mapping: &ctx.slot_mapping,
+                    memory: ctx.input_metadata.attention_memory.as_ref(),
+                },
+            )?;
+        }
+        let scales = self.cache_scales(key_cache.as_ref().unwrap());
+        let bidirectional = matches!(tensors.attention_mask, AttentionMask::Bidirectional);
+        let causal = mask.is_none()
+            && !bidirectional
+            && (matches!(tensors.attention_mask, AttentionMask::ChunkedCausal { .. })
+                || ranges.is_some()
+                || ctx.flash_params.map_or(
+                    ctx.input_metadata.prompt_chunk_attention_policy
+                        == crate::paged_attention::block_hash::MultimodalAttentionPolicy::Causal,
+                    |params| params.causal,
+                ));
+        let output = metal_paged_prefill(MetalPagedPrefillRequest {
+            query: &query,
+            key_cache: key_cache.as_ref().unwrap(),
+            value_cache: value_cache.as_ref().unwrap(),
+            block_tables,
+            query_lens: &query_lens,
+            context_lens,
+            query_start_positions: &query_starts,
+            key_start_positions: &key_starts,
+            packed_queries: packed,
+            causal,
+            sliding_window: mask
+                .is_none()
+                .then_some(ctx.sdpa_params.sliding_window)
+                .flatten(),
+            window_right: bidirectional
+                .then_some(ctx.sdpa_params.sliding_window)
+                .flatten(),
+            attention_chunk_size: match tensors.attention_mask {
+                AttentionMask::ChunkedCausal { chunk_size } => Some(*chunk_size),
+                _ => None,
+            },
+            multimodal_ranges: if mask.is_none() {
+                ranges.as_deref()
+            } else {
+                None
+            },
+            additive_mask: mask.as_ref(),
+            mask_key_offsets: mask_key_offsets.as_deref(),
+            packed_mask: packed,
+            alibi_slopes: ctx.alibi_slopes.as_ref(),
+            sinks: ctx.sdpa_params.sinks.as_ref(),
+            k_scale: scales.k,
+            v_scale: scales.v,
+            scale: ctx.sdpa_params.softmax_scale,
+            softcap: ctx.sdpa_params.softcap,
+        })?;
+        if expanded_decode {
+            return Ok(Some(output.reshape((
+                ctx.dims.batch_size,
+                ctx.dims.seq_len,
+                ctx.dims.attention_heads,
+                value_dim,
+            ))?));
+        }
+        prefix_attention_output_layout(output, tensors.attention_mask).map(Some)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1041,10 +1444,13 @@ impl PagedAttention {
             write_kv_cache(
                 &k_flat,
                 &v_flat,
-                scales,
                 key_cache,
                 value_cache,
-                &ctx.slot_mapping,
+                CacheWriteParams {
+                    scales,
+                    slot_mapping: &ctx.slot_mapping,
+                    memory: ctx.input_metadata.attention_memory.as_ref(),
+                },
             )?;
         }
 
@@ -1163,28 +1569,54 @@ impl PagedAttention {
             attention_backend,
         };
         let prefill_plan = PrefixPrefillPlan::choose(prefill_plan_input);
-        if matches!(prefill_plan, PrefixPrefillPlan::GatherSdpa) {
+        let simple_full_causal = matches!(tensors.attention_mask, AttentionMask::CausalFlash)
+            && ctx.sdpa_params.sliding_window.is_none()
+            && mm_prefix_ranges.is_none()
+            && query_lens.len() == 1;
+        if matches!(prefill_plan, PrefixPrefillPlan::GatherSdpa)
+            && (ctx.input_metadata.prefix_gather_workspace_limit.is_some()
+                || tensors.query.device().is_metal())
+        {
+            let v_head_dim = tensors
+                .value
+                .dims()
+                .last()
+                .copied()
+                .ok_or_else(|| candle_core::Error::msg("value tensor has no head dimension"))?;
+            let required = gather_prefill_workspace_for_lengths(GatherPrefillWorkspaceRequest {
+                device_is_metal: tensors.query.device().is_metal(),
+                packed_queries: ctx.flash_params.is_some_and(|params| params.packed),
+                metal_mask_is_compatible: !simple_full_causal
+                    && metal_gather_mask_is_compatible(
+                        tensors.attention_mask,
+                        tensors.query,
+                        ctx.dims.batch_size,
+                        ctx.dims.seq_len,
+                        kv_lens.iter().copied().max().unwrap_or_default(),
+                    )?,
+                query_lens: &query_lens,
+                kv_lens: &kv_lens,
+                q_heads: ctx.dims.attention_heads,
+                kv_heads: ctx.dims.key_value_heads,
+                k_head_dim: ctx.dims.head_size,
+                v_head_dim,
+                dtype: tensors.query.dtype(),
+                plan_input: prefill_plan_input,
+            })?;
             if let Some(limit) = ctx.input_metadata.prefix_gather_workspace_limit {
-                let v_head_dim =
-                    tensors.value.dims().last().copied().ok_or_else(|| {
-                        candle_core::Error::msg("value tensor has no head dimension")
-                    })?;
-                let required =
-                    gather_prefill_workspace_for_lengths(GatherPrefillWorkspaceRequest {
-                        query_lens: &query_lens,
-                        kv_lens: &kv_lens,
-                        q_heads: ctx.dims.attention_heads,
-                        kv_heads: ctx.dims.key_value_heads,
-                        k_head_dim: ctx.dims.head_size,
-                        v_head_dim,
-                        dtype: tensors.query.dtype(),
-                        plan_input: prefill_plan_input,
-                    })?;
                 if required > limit {
                     candle_core::bail!(
-                        "prompt KV gather requires {required} bytes, exceeding its preflight workspace limit of {limit} bytes"
-                    );
+                            "prompt KV gather requires {required} bytes, exceeding its preflight workspace limit of {limit} bytes"
+                        );
                 }
+            }
+            #[cfg(feature = "metal")]
+            if tensors.query.device().is_metal() {
+                crate::paged_attention::plan::check_metal_attention_workspace(
+                    tensors.query.device(),
+                    crate::paged_attention::plan::metal_gather_workspace_bytes(required)?,
+                    ctx.input_metadata.attention_memory.as_ref(),
+                )?;
             }
         }
         match prefill_plan {
@@ -1218,11 +1650,6 @@ impl PagedAttention {
             }
             PrefixPrefillPlan::GatherSdpa => {}
         }
-        let simple_full_causal = matches!(tensors.attention_mask, AttentionMask::CausalFlash)
-            && ctx.sdpa_params.sliding_window.is_none()
-            && mm_prefix_ranges.is_none()
-            && query_lens.len() == 1;
-
         let key_cache_ref = key_cache.as_ref().unwrap();
         let scales = self.cache_scales(key_cache_ref);
         let (k_gathered, v_gathered) = gather_kv_cache_for_layout(
@@ -1303,12 +1730,15 @@ impl PagedAttention {
             dense_flash_causal,
         ) {
             let mask = packed_prefix_gather_causal_mask(
-                &query_lens,
-                &kv_lens,
-                mm_prefix_ranges_cpu.as_deref(),
-                ctx.sdpa_params.sliding_window,
-                tensors.query.dtype(),
-                device,
+                PrefixMaskRequest {
+                    query_lens: &query_lens,
+                    kv_lens: &kv_lens,
+                    mm_prefix_ranges: mm_prefix_ranges_cpu.as_deref(),
+                    sliding_window: ctx.sdpa_params.sliding_window,
+                    dtype: tensors.query.dtype(),
+                    device,
+                },
+                &ctx.input_metadata.prefix_masks,
             )?;
             let k_4d = k_gathered.unsqueeze(0)?.transpose(1, 2)?;
             let v_4d = v_gathered.unsqueeze(0)?.transpose(1, 2)?;
@@ -1327,14 +1757,17 @@ impl PagedAttention {
             AttentionMask::CausalFlash if simple_full_causal => AttentionMask::None,
             AttentionMask::CausalFlash if dense_flash_causal => AttentionMask::CausalFlash,
             AttentionMask::CausalFlash => prefix_gather_causal_mask(
-                &query_lens,
-                &kv_lens,
-                mm_prefix_ranges_cpu.as_deref(),
+                PrefixMaskRequest {
+                    query_lens: &query_lens,
+                    kv_lens: &kv_lens,
+                    mm_prefix_ranges: mm_prefix_ranges_cpu.as_deref(),
+                    sliding_window: ctx.sdpa_params.sliding_window,
+                    dtype: tensors.query.dtype(),
+                    device,
+                },
                 ctx.dims.seq_len,
                 max_kv,
-                ctx.sdpa_params.sliding_window,
-                tensors.query.dtype(),
-                device,
+                &ctx.input_metadata.prefix_masks,
             )?,
             AttentionMask::None
                 if should_reconstruct_prefix_mask(
@@ -1345,14 +1778,17 @@ impl PagedAttention {
                 ) =>
             {
                 prefix_gather_causal_mask(
-                    &query_lens,
-                    &kv_lens,
-                    mm_prefix_ranges_cpu.as_deref(),
+                    PrefixMaskRequest {
+                        query_lens: &query_lens,
+                        kv_lens: &kv_lens,
+                        mm_prefix_ranges: mm_prefix_ranges_cpu.as_deref(),
+                        sliding_window: ctx.sdpa_params.sliding_window,
+                        dtype: tensors.query.dtype(),
+                        device,
+                    },
                     ctx.dims.seq_len,
                     max_kv,
-                    ctx.sdpa_params.sliding_window,
-                    tensors.query.dtype(),
-                    device,
+                    &ctx.input_metadata.prefix_masks,
                 )?
             }
             other => other.clone(),
@@ -1636,10 +2072,13 @@ impl PagedAttention {
             write_kv_cache(
                 &key,
                 &value,
-                scales,
                 key_cache,
                 value_cache,
-                &ctx.slot_mapping,
+                CacheWriteParams {
+                    scales,
+                    slot_mapping: &ctx.slot_mapping,
+                    memory: ctx.input_metadata.attention_memory.as_ref(),
+                },
             )?;
         }
         Ok(Some(att))
@@ -1680,10 +2119,13 @@ impl PagedAttention {
             write_kv_cache(
                 key.as_ref().unwrap(),
                 value.as_ref().unwrap(),
-                scales,
                 key_cache,
                 value_cache,
-                &ctx.slot_mapping,
+                CacheWriteParams {
+                    scales,
+                    slot_mapping: &ctx.slot_mapping,
+                    memory: ctx.input_metadata.attention_memory.as_ref(),
+                },
             )?;
         }
 
@@ -1701,13 +2143,20 @@ impl PagedAttention {
             );
         }
         let attention_backend = AttentionBackendKind::from_cache(key_cache_ref, value_cache_ref);
-        match DecodePlan::choose(DecodePlanInput {
+        let mut plan = DecodePlan::choose(DecodePlanInput {
             attention_backend,
             head_size: ctx.dims.head_size,
             has_alibi: ctx.alibi_slopes.is_some(),
             has_sinks: ctx.sdpa_params.sinks.is_some(),
             has_sliding_window: ctx.sdpa_params.sliding_window.is_some(),
-        })? {
+        })?;
+        if is_metal_hnd_cache(key_cache_ref, value_cache_ref)
+            && ctx.dims.seq_len == 1
+            && ctx.sdpa_params.sliding_window.is_some()
+        {
+            plan = DecodePlan::PagedAttention;
+        }
+        match plan {
             DecodePlan::GatherSdpa => self.run_decode_gather_sdpa(
                 ctx,
                 &query,
@@ -1762,6 +2211,49 @@ impl PagedAttention {
             }
         };
         let query_rows = decode_query_rows(query, &kv_lens)?;
+        #[cfg(feature = "metal")]
+        if query.device().is_metal() {
+            let query_lens = vec![1; query_rows];
+            let required = gather_prefill_workspace_for_lengths(GatherPrefillWorkspaceRequest {
+                device_is_metal: true,
+                packed_queries: false,
+                metal_mask_is_compatible: false,
+                query_lens: &query_lens,
+                kv_lens: &kv_lens,
+                q_heads: ctx.dims.attention_heads,
+                kv_heads: ctx.dims.key_value_heads,
+                k_head_dim: ctx.dims.head_size,
+                v_head_dim: ctx.dims.head_size,
+                dtype: query.dtype(),
+                plan_input: PrefixPrefillPlanInput {
+                    device_is_cuda: false,
+                    dtype: query.dtype(),
+                    cache_dtype: key_cache.dtype(),
+                    has_alibi: ctx.alibi_slopes.is_some(),
+                    has_sinks: ctx.sdpa_params.sinks.is_some(),
+                    has_custom_mask: attention_mask.is_custom(),
+                    causality_known: true,
+                    head_size: ctx.dims.head_size,
+                    has_softcap: ctx.sdpa_params.softcap.is_some(),
+                    has_sliding_window: ctx.sdpa_params.sliding_window.is_some(),
+                    query_layout_is_dense: true,
+                    query_len: 1,
+                    q_heads: ctx.dims.attention_heads,
+                    kv_heads: ctx.dims.key_value_heads,
+                    writes_cache: false,
+                    is_causal: true,
+                    has_noncausal_mm_context: false,
+                    fa3_supported: false,
+                    block_size: ctx.input_metadata.block_size.unwrap(),
+                    attention_backend: AttentionBackendKind::Standard,
+                },
+            })?;
+            crate::paged_attention::plan::check_metal_attention_workspace(
+                query.device(),
+                crate::paged_attention::plan::metal_gather_workspace_bytes(required)?,
+                ctx.input_metadata.attention_memory.as_ref(),
+            )?;
+        }
         let num_kv_tokens = checked_sequence_token_count(&kv_lens)?;
         let cu_kv = cumulative_seqlens_from_lengths(&kv_lens, query.device())?;
         let scales = self.cache_scales(key_cache);
@@ -1775,6 +2267,35 @@ impl PagedAttention {
             query.dtype(),
         )?;
         let q_4d = query.reshape((query_rows, ctx.dims.attention_heads, 1, ctx.dims.head_size))?;
+
+        if query.device().is_metal()
+            && query_rows == 1
+            && ctx.dims.seq_len == 1
+            && attention_mask.is_none()
+            && ctx.alibi_slopes.is_none()
+            && ctx.sdpa_params.sinks.is_none()
+        {
+            if let Some(window) = ctx.sdpa_params.sliding_window {
+                let retained = kv_lens[0].min(window);
+                let start = kv_lens[0] - retained;
+                let k = k_gathered
+                    .narrow(0, start, retained)?
+                    .unsqueeze(0)?
+                    .transpose(1, 2)?;
+                let v = v_gathered
+                    .narrow(0, start, retained)?
+                    .unsqueeze(0)?
+                    .transpose(1, 2)?;
+                return Sdpa.run_attention(
+                    &q_4d,
+                    &k,
+                    &v,
+                    &AttentionMask::None,
+                    None,
+                    ctx.sdpa_params,
+                );
+            }
+        }
 
         if !attention_mask.is_custom()
             && should_use_decode_gather_varlen(
@@ -1835,14 +2356,17 @@ impl PagedAttention {
                 || kv_lens.iter().any(|&kv_len| kv_len != max_kv) =>
             {
                 prefix_gather_causal_mask(
-                    &vec![1; query_rows],
-                    &kv_lens,
-                    None,
+                    PrefixMaskRequest {
+                        query_lens: &vec![1; query_rows],
+                        kv_lens: &kv_lens,
+                        mm_prefix_ranges: None,
+                        sliding_window: ctx.sdpa_params.sliding_window,
+                        dtype: query.dtype(),
+                        device: query.device(),
+                    },
                     1,
                     max_kv,
-                    ctx.sdpa_params.sliding_window,
-                    query.dtype(),
-                    query.device(),
+                    &ctx.input_metadata.prefix_masks,
                 )?
             }
             _ => AttentionMask::None,
@@ -2007,6 +2531,68 @@ impl PagedAttention {
         dev: &DeviceLocation,
     ) -> Result<Tensor> {
         let scales = self.cache_scales(key_cache);
+        #[cfg(feature = "metal")]
+        if query.device().is_metal() {
+            let (num_seqs, num_heads, head_size) = query.dims3()?;
+            let hnd = is_metal_hnd_cache(key_cache, value_cache);
+            let required = mistralrs_paged_attn::MetalPagedAttentionWorkspace {
+                num_seqs,
+                num_heads,
+                num_kv_heads: key_cache.dim(1)?,
+                head_size,
+                block_size: if hnd {
+                    key_cache.dim(2)?
+                } else {
+                    key_cache.dim(3)?
+                },
+                max_context_len: if ctx.use_full {
+                    ctx.input_metadata.full_max_context_len.unwrap()
+                } else {
+                    ctx.input_metadata.max_context_len.unwrap()
+                },
+                sliding_window: if hnd {
+                    ctx.sdpa_params.sliding_window
+                } else {
+                    None
+                },
+                dtype: query.dtype(),
+                cache_dtype: key_cache.dtype(),
+                hnd,
+                packed_x: if hnd { 1 } else { key_cache.dim(4)? },
+                has_alibi: ctx.alibi_slopes.is_some(),
+                has_sinks: ctx.sdpa_params.sinks.is_some(),
+                has_scales: scales.k.is_some(),
+                softcapping: ctx.sdpa_params.softcap.unwrap_or(1.0),
+            }
+            .bytes()?;
+            crate::paged_attention::plan::check_metal_attention_workspace(
+                query.device(),
+                required,
+                ctx.input_metadata.attention_memory.as_ref(),
+            )?;
+        }
+        #[cfg(feature = "metal")]
+        if is_metal_hnd_cache(key_cache, value_cache) {
+            return mistralrs_paged_attn::paged_attention_with_window(
+                query,
+                scales.k,
+                scales.v,
+                key_cache,
+                value_cache,
+                ctx.block_tables(dev).unwrap(),
+                ctx.context_lens(dev).unwrap(),
+                ctx.alibi_slopes.as_ref(),
+                if ctx.use_full {
+                    ctx.input_metadata.full_max_context_len.unwrap()
+                } else {
+                    ctx.input_metadata.max_context_len.unwrap()
+                },
+                ctx.sdpa_params.softmax_scale,
+                ctx.sdpa_params.softcap.unwrap_or(1.0f32),
+                ctx.sdpa_params.sinks.as_ref(),
+                ctx.sdpa_params.sliding_window,
+            );
+        }
         paged_attention(
             query,
             scales.k,
@@ -2120,6 +2706,39 @@ impl PagedAttention {
             }
         }
 
+        // A donor-prefill tail with one query per sequence already has a complete decode view.
+        if !write_cache
+            && is_metal_hnd_cache(key_cache.as_ref().unwrap(), value_cache.as_ref().unwrap())
+            && METAL_DONOR_DECODE_HEAD_SIZES.contains(&ctx.dims.head_size)
+            && query.stride()[3] == 1
+            && query.stride()[1] == ctx.dims.head_size
+            && (key_cache.as_ref().unwrap().dtype() == query.dtype()
+                || key_cache.as_ref().unwrap().dtype() == DType::F8E4M3)
+            && ctx.dims.seq_len == 1
+            && attention_mask.is_none()
+            && !input_metadata.has_noncausal_mm_context
+            && !ctx.has_noncausal_mm_context()
+            && flash_params.is_none_or(|params| params.causal)
+            && input_metadata.query_lens.as_ref().is_some_and(|lengths| {
+                lengths.len() == ctx.dims.batch_size && lengths.iter().all(|&len| len == 1)
+            })
+        {
+            return self
+                .run_decode(&ctx, tensors, &mut key_cache, &mut value_cache, false)?
+                .reshape((
+                    ctx.dims.batch_size,
+                    1,
+                    ctx.dims.attention_heads,
+                    ctx.dims.head_size,
+                ));
+        }
+
+        #[cfg(feature = "metal")]
+        if let Some(out) =
+            self.try_metal_prefill(&ctx, tensors, &mut key_cache, &mut value_cache, write_cache)?
+        {
+            return Ok(out);
+        }
         if let Some(out) = self.try_prefix_gather_prefill(
             &ctx,
             tensors,
@@ -2138,16 +2757,30 @@ impl PagedAttention {
     }
 
     /// Write key/value into the paged cache without running attention.
+    #[cfg(feature = "cuda")]
     pub fn write_cache(
         &self,
         key: &Tensor,
         value: &Tensor,
         key_cache: &mut Tensor,
         value_cache: &mut Tensor,
-        slot_mapping: &Tensor,
+        input_metadata: &PagedAttentionInputMetadata,
     ) -> Result<()> {
         let scales = self.cache_scales(key_cache);
-        write_kv_cache(key, value, scales, key_cache, value_cache, slot_mapping)
+        write_kv_cache(
+            key,
+            value,
+            key_cache,
+            value_cache,
+            CacheWriteParams {
+                scales,
+                slot_mapping: input_metadata
+                    .slot_mappings
+                    .get(&key.device().location())
+                    .unwrap(),
+                memory: input_metadata.attention_memory.as_ref(),
+            },
+        )
     }
 
     /// Standard paged attention forward: writes key/value to cache, then
@@ -2398,6 +3031,140 @@ mod tests {
         Ok(())
     }
 
+    #[cfg(feature = "metal")]
+    #[test]
+    fn metal_cache_packing_preserves_offset_and_strided_inputs() -> Result<()> {
+        const HEADS: usize = 8;
+        const HEAD_DIM: usize = 128;
+        const BLOCK_SIZE: usize = 32;
+        const BLOCKS: usize = 2;
+        const PACK: usize = 8;
+        const SOURCE_BATCH: usize = 3;
+        const VALUE_PERIOD: usize = 97;
+        const VALUE_MIDPOINT: f32 = 48.;
+        const SENTINEL: f32 = -97.;
+        const SLOTS: [i64; 4] = [39, 2, 63, 32];
+
+        let device = Device::new_metal(0)?;
+        for dtype in [DType::BF16, DType::F16] {
+            for query_len in [1, 2] {
+                let source_shape = (SOURCE_BATCH, HEADS, query_len, HEAD_DIM);
+                let elements = SOURCE_BATCH * HEADS * query_len * HEAD_DIM;
+                let source = |factor: usize| -> Result<Tensor> {
+                    let data = (0..elements)
+                        .map(|index| {
+                            f32::from(u8::try_from((index * factor) % VALUE_PERIOD).unwrap())
+                                - VALUE_MIDPOINT
+                        })
+                        .collect::<Vec<_>>();
+                    Tensor::from_vec(data, source_shape, &device)?
+                        .to_dtype(dtype)?
+                        .narrow(0, 1, query_len)?
+                        .transpose(1, 2)
+                };
+                let key = source(7)?;
+                let value = source(11)?;
+                assert!(!cache_input_can_write_directly(&key)?);
+                assert!(!cache_input_can_write_directly(&value)?);
+                assert_eq!(key.is_contiguous(), query_len == 1);
+                assert_eq!(value.is_contiguous(), query_len == 1);
+                assert!(key.layout().start_offset() > 0);
+                assert!(value.layout().start_offset() > 0);
+                let (tokens, _, _) = cache_input_shape(&key)?;
+                let read =
+                    |tensor: &Tensor| tensor.to_dtype(DType::F32)?.flatten_all()?.to_vec1::<f32>();
+                let key_values = read(&key)?;
+                let value_values = read(&value)?;
+                let mut expected_key = vec![SENTINEL; BLOCKS * HEADS * HEAD_DIM * BLOCK_SIZE];
+                let mut expected_value = expected_key.clone();
+                let mut expected_hnd_key = expected_key.clone();
+                let mut expected_hnd_value = expected_key.clone();
+                for (token, &slot) in SLOTS.iter().take(tokens).enumerate() {
+                    let slot = usize::try_from(slot).unwrap();
+                    let (block, offset) = (slot / BLOCK_SIZE, slot % BLOCK_SIZE);
+                    for head in 0..HEADS {
+                        for dim in 0..HEAD_DIM {
+                            let source = (token * HEADS + head) * HEAD_DIM + dim;
+                            let key_index = (((block * HEADS + head) * (HEAD_DIM / PACK)
+                                + dim / PACK)
+                                * BLOCK_SIZE
+                                + offset)
+                                * PACK
+                                + dim % PACK;
+                            let value_index =
+                                ((block * HEADS + head) * HEAD_DIM + dim) * BLOCK_SIZE + offset;
+                            expected_key[key_index] = key_values[source];
+                            expected_value[value_index] = value_values[source];
+                            let hnd_index =
+                                ((block * HEADS + head) * BLOCK_SIZE + offset) * HEAD_DIM + dim;
+                            expected_hnd_key[hnd_index] = key_values[source];
+                            expected_hnd_value[hnd_index] = value_values[source];
+                        }
+                    }
+                }
+                let mut padded_slots = vec![-1];
+                padded_slots.extend(SLOTS);
+                let slots = Tensor::new(padded_slots, &device)?.narrow(0, 1, tokens)?;
+                let packed_key = pack_cache_input(&key)?;
+                let packed_value = pack_cache_input(&value)?;
+                assert_eq!(packed_key.dims(), &[tokens, HEADS, HEAD_DIM]);
+                assert_eq!(packed_key.stride(), &[HEADS * HEAD_DIM, HEAD_DIM, 1]);
+                let expected_offset = if key.is_contiguous() {
+                    key.layout().start_offset()
+                } else {
+                    0
+                };
+                assert_eq!(packed_key.layout().start_offset(), expected_offset);
+                for hnd in [false, true] {
+                    let (key_shape, value_shape, expected_key, expected_value) = if hnd {
+                        (
+                            vec![BLOCKS, HEADS, BLOCK_SIZE, HEAD_DIM],
+                            vec![BLOCKS, HEADS, BLOCK_SIZE, HEAD_DIM],
+                            &expected_hnd_key,
+                            &expected_hnd_value,
+                        )
+                    } else {
+                        (
+                            vec![BLOCKS, HEADS, HEAD_DIM / PACK, BLOCK_SIZE, PACK],
+                            vec![BLOCKS, HEADS, HEAD_DIM, BLOCK_SIZE],
+                            &expected_key,
+                            &expected_value,
+                        )
+                    };
+                    let key_cache = Tensor::full(SENTINEL, key_shape, &device)?.to_dtype(dtype)?;
+                    let value_cache =
+                        Tensor::full(SENTINEL, value_shape, &device)?.to_dtype(dtype)?;
+                    assert_eq!(
+                        AttentionBackendKind::from_cache(&key_cache, &value_cache),
+                        AttentionBackendKind::Standard,
+                    );
+                    assert_eq!(cache_block_size(&key_cache, &value_cache)?, BLOCK_SIZE);
+                    assert_eq!(cache_kv_shape(&key_cache, &value_cache)?, (HEADS, HEAD_DIM));
+                    reshape_and_cache(
+                        &packed_key,
+                        &packed_value,
+                        None,
+                        None,
+                        &key_cache,
+                        &value_cache,
+                        &slots,
+                    )?;
+                    assert_eq!(
+                        &read(&key_cache)?,
+                        expected_key,
+                        "{dtype:?} query_len={query_len} hnd={hnd}: key cache mismatch"
+                    );
+                    assert_eq!(
+                        &read(&value_cache)?,
+                        expected_value,
+                        "{dtype:?} query_len={query_len} hnd={hnd}: value cache mismatch"
+                    );
+                }
+            }
+        }
+        Ok(())
+    }
+
     #[test]
     fn varlen_segments_partition_each_logical_query() {
         assert_eq!(
@@ -2416,9 +3183,20 @@ mod tests {
 
     #[test]
     fn ragged_decode_mask_excludes_padding() {
-        let mask =
-            prefix_gather_causal_mask(&[1, 1], &[2, 4], None, 1, 4, None, DType::F32, &Device::Cpu)
-                .unwrap();
+        let mask = prefix_gather_causal_mask(
+            PrefixMaskRequest {
+                query_lens: &[1, 1],
+                kv_lens: &[2, 4],
+                mm_prefix_ranges: None,
+                sliding_window: None,
+                dtype: DType::F32,
+                device: &Device::Cpu,
+            },
+            1,
+            4,
+            &PrefixMaskCache::default(),
+        )
+        .unwrap();
         let AttentionMask::Custom(mask) = mask else {
             panic!("expected custom mask");
         };
@@ -2439,11 +3217,90 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "metal")]
+    #[test]
+    fn metal_prefix_masks_reuse_uploads_without_reusing_different_windows() -> Result<()> {
+        let device = Device::new_metal(0)?;
+        let cache = PrefixMaskCache::default();
+        let mm_prefix_ranges = [vec![(1, 3)], vec![]];
+        let mut previous = None;
+        for sliding_window in [None, Some(2)] {
+            let request = PrefixMaskRequest {
+                query_lens: &[2, 1],
+                kv_lens: &[4, 3],
+                mm_prefix_ranges: Some(&mm_prefix_ranges),
+                sliding_window,
+                dtype: DType::BF16,
+                device: &device,
+            };
+            let AttentionMask::Custom(mask) = prefix_gather_causal_mask(request, 2, 4, &cache)?
+            else {
+                unreachable!()
+            };
+            let AttentionMask::Custom(reused) =
+                prefix_gather_causal_mask(request, 2, 4, &cache.clone())?
+            else {
+                unreachable!()
+            };
+            assert_eq!(mask.id(), reused.id());
+            assert_ne!(previous, Some(mask.id()));
+            previous = Some(mask.id());
+            let AttentionMask::Custom(expected) = prefix_gather_causal_mask(
+                PrefixMaskRequest {
+                    device: &Device::Cpu,
+                    dtype: DType::F32,
+                    ..request
+                },
+                2,
+                4,
+                &PrefixMaskCache::default(),
+            )?
+            else {
+                unreachable!()
+            };
+            assert_eq!(
+                mask.to_dtype(DType::F32)?.flatten_all()?.to_vec1::<f32>()?,
+                expected.flatten_all()?.to_vec1::<f32>()?
+            );
+            let packed = packed_prefix_gather_causal_mask(request, &cache)?;
+            let reused = packed_prefix_gather_causal_mask(request, &cache)?;
+            assert_eq!(packed.id(), reused.id());
+            assert_ne!(packed.id(), mask.id());
+            let expected = packed_prefix_gather_causal_mask(
+                PrefixMaskRequest {
+                    device: &Device::Cpu,
+                    dtype: DType::F32,
+                    ..request
+                },
+                &PrefixMaskCache::default(),
+            )?;
+            assert_eq!(
+                packed
+                    .to_dtype(DType::F32)?
+                    .flatten_all()?
+                    .to_vec1::<f32>()?,
+                expected.flatten_all()?.to_vec1::<f32>()?
+            );
+        }
+        Ok(())
+    }
+
     #[test]
     fn ragged_prompt_mask_keeps_padding_rows_finite() {
-        let mask =
-            prefix_gather_causal_mask(&[2], &[2], None, 4, 2, None, DType::F32, &Device::Cpu)
-                .unwrap();
+        let mask = prefix_gather_causal_mask(
+            PrefixMaskRequest {
+                query_lens: &[2],
+                kv_lens: &[2],
+                mm_prefix_ranges: None,
+                sliding_window: None,
+                dtype: DType::F32,
+                device: &Device::Cpu,
+            },
+            4,
+            2,
+            &PrefixMaskCache::default(),
+        )
+        .unwrap();
         let AttentionMask::Custom(mask) = mask else {
             panic!("expected custom mask");
         };
@@ -2466,9 +3323,20 @@ mod tests {
 
     #[test]
     fn sliding_mask_uses_window_as_token_capacity() {
-        let mask =
-            prefix_gather_causal_mask(&[1], &[6], None, 1, 6, Some(4), DType::F32, &Device::Cpu)
-                .unwrap();
+        let mask = prefix_gather_causal_mask(
+            PrefixMaskRequest {
+                query_lens: &[1],
+                kv_lens: &[6],
+                mm_prefix_ranges: None,
+                sliding_window: Some(4),
+                dtype: DType::F32,
+                device: &Device::Cpu,
+            },
+            1,
+            6,
+            &PrefixMaskCache::default(),
+        )
+        .unwrap();
         let AttentionMask::Custom(mask) = mask else {
             panic!("expected custom mask");
         };
@@ -2481,9 +3349,20 @@ mod tests {
 
     #[test]
     fn sliding_mask_moves_with_each_chunked_query_row() {
-        let mask =
-            prefix_gather_causal_mask(&[3], &[8], None, 3, 8, Some(4), DType::F32, &Device::Cpu)
-                .unwrap();
+        let mask = prefix_gather_causal_mask(
+            PrefixMaskRequest {
+                query_lens: &[3],
+                kv_lens: &[8],
+                mm_prefix_ranges: None,
+                sliding_window: Some(4),
+                dtype: DType::F32,
+                device: &Device::Cpu,
+            },
+            3,
+            8,
+            &PrefixMaskCache::default(),
+        )
+        .unwrap();
         let AttentionMask::Custom(mask) = mask else {
             panic!("expected custom mask");
         };
@@ -2500,9 +3379,20 @@ mod tests {
 
     #[test]
     fn sliding_mask_handles_unit_window_and_query_longer_than_window() {
-        let unit =
-            prefix_gather_causal_mask(&[1], &[3], None, 1, 3, Some(1), DType::F32, &Device::Cpu)
-                .unwrap();
+        let unit = prefix_gather_causal_mask(
+            PrefixMaskRequest {
+                query_lens: &[1],
+                kv_lens: &[3],
+                mm_prefix_ranges: None,
+                sliding_window: Some(1),
+                dtype: DType::F32,
+                device: &Device::Cpu,
+            },
+            1,
+            3,
+            &PrefixMaskCache::default(),
+        )
+        .unwrap();
         let AttentionMask::Custom(unit) = unit else {
             panic!("expected custom mask");
         };
@@ -2511,9 +3401,20 @@ mod tests {
             vec![f32::NEG_INFINITY, f32::NEG_INFINITY, 0.0]
         );
 
-        let chunk =
-            prefix_gather_causal_mask(&[5], &[7], None, 5, 7, Some(2), DType::F32, &Device::Cpu)
-                .unwrap();
+        let chunk = prefix_gather_causal_mask(
+            PrefixMaskRequest {
+                query_lens: &[5],
+                kv_lens: &[7],
+                mm_prefix_ranges: None,
+                sliding_window: Some(2),
+                dtype: DType::F32,
+                device: &Device::Cpu,
+            },
+            5,
+            7,
+            &PrefixMaskCache::default(),
+        )
+        .unwrap();
         let AttentionMask::Custom(chunk) = chunk else {
             panic!("expected custom mask");
         };
@@ -2527,14 +3428,17 @@ mod tests {
     #[test]
     fn noncausal_media_range_overrides_both_sliding_window_edges() {
         let mask = prefix_gather_causal_mask(
-            &[2],
-            &[8],
-            Some(&[vec![(1, 8)]]),
+            PrefixMaskRequest {
+                query_lens: &[2],
+                kv_lens: &[8],
+                mm_prefix_ranges: Some(&[vec![(1, 8)]]),
+                sliding_window: Some(3),
+                dtype: DType::F32,
+                device: &Device::Cpu,
+            },
             2,
             8,
-            Some(3),
-            DType::F32,
-            &Device::Cpu,
+            &PrefixMaskCache::default(),
         )
         .unwrap();
         let AttentionMask::Custom(mask) = mask else {
@@ -2627,14 +3531,17 @@ mod tests {
     #[test]
     fn single_token_suffix_mask_excludes_padding_and_sliding_history() {
         let mask = prefix_gather_causal_mask(
-            &[1, 1],
-            &[3, 5],
-            None,
+            PrefixMaskRequest {
+                query_lens: &[1, 1],
+                kv_lens: &[3, 5],
+                mm_prefix_ranges: None,
+                sliding_window: Some(3),
+                dtype: DType::F32,
+                device: &Device::Cpu,
+            },
             1,
             5,
-            Some(3),
-            DType::F32,
-            &Device::Cpu,
+            &PrefixMaskCache::default(),
         )
         .unwrap();
         let AttentionMask::Custom(mask) = mask else {
@@ -2809,12 +3716,15 @@ mod tests {
     #[test]
     fn packed_custom_mask_preserves_boundaries_and_mm_prefixes() {
         let mask = packed_prefix_gather_causal_mask(
-            &[2, 3],
-            &[2, 3],
-            Some(&[vec![(0, 2)], vec![]]),
-            Some(2),
-            DType::F32,
-            &Device::Cpu,
+            PrefixMaskRequest {
+                query_lens: &[2, 3],
+                kv_lens: &[2, 3],
+                mm_prefix_ranges: Some(&[vec![(0, 2)], vec![]]),
+                sliding_window: Some(2),
+                dtype: DType::F32,
+                device: &Device::Cpu,
+            },
+            &PrefixMaskCache::default(),
         )
         .unwrap()
         .squeeze(0)
@@ -2859,12 +3769,15 @@ mod tests {
     #[test]
     fn overlapping_mm_ranges_do_not_merge_attention_groups() {
         let mask = packed_prefix_gather_causal_mask(
-            &[6],
-            &[6],
-            Some(&[vec![(0, 4), (2, 6)]]),
-            None,
-            DType::F32,
-            &Device::Cpu,
+            PrefixMaskRequest {
+                query_lens: &[6],
+                kv_lens: &[6],
+                mm_prefix_ranges: Some(&[vec![(0, 4), (2, 6)]]),
+                sliding_window: None,
+                dtype: DType::F32,
+                device: &Device::Cpu,
+            },
+            &PrefixMaskCache::default(),
         )
         .unwrap()
         .squeeze(0)

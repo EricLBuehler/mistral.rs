@@ -23,6 +23,8 @@ quant = "4"
 
 `mistralrs from-config -f this.toml` runs the server.
 
+Memory sizing and device placement are automatic. For optional overrides, see [paged attention and KV caching](/guides/perf/paged-attention/#memory-budget).
+
 ## Top-level fields
 
 | Field | Type | Applies to | Purpose |
@@ -46,7 +48,10 @@ quant = "4"
 
 | Field | CLI flag | Default | Purpose |
 |---|---|---|---|
-| `max_seqs` | `--max-seqs` | 32 | Max concurrent sequences. |
+| `max_seqs` | `--max-seqs` | 1 for `run`, 32 for `serve` | Max concurrent sequences. An explicit value overrides the command default. |
+| `max_num_batched_tokens` | `--max-num-batched-tokens` | 4096 | Maximum tokens processed in one paged-attention scheduler step. Must be nonzero. |
+| `max_prefill_chunk_tokens` | `--max-prefill-chunk-tokens` | 512 | CUDA or Metal prompt-token quantum while decode is resident and for recurrent prefill batching. Must be nonzero. |
+| `max_decode_steps_before_prefill` | `--max-decode-steps-before-prefill` | 8 | Maximum decode steps before a waiting prefill batch is admitted. Must be nonzero. |
 | `no_kv_cache` | `--no-kv-cache` | false | Disable KV cache entirely. |
 | `prefix_cache_n` | `--prefix-cache-n` | 16 | Prefix caches retained (0 to disable). |
 | `chat_template` | `-c`, `--chat-template` | not set | Custom chat template file (`.json` or `.jinja`), applied to every model. Per-model `chat_template` in `[[models]]` overrides it. |
@@ -97,12 +102,22 @@ The MCP *client* configuration (`mcp_config`) lives under `[runtime]`, not `[ser
 
 | Field | CLI flag | Default | Purpose |
 |---|---|---|---|
-| `mode` | `--paged-attn` | `auto` | `auto` (on for CUDA, off for Metal/CPU), `on`, or `off`. |
-| `context_len` | `--pa-context-len` | not set | Allocate KV cache for this context length. |
-| `memory_mb` | `--pa-memory-mb` | not set | KV cache budget in MB. Conflicts with `context_len`. |
-| `memory_fraction` | `--pa-memory-fraction` | not set | KV cache budget as fraction of VRAM (0.0 to 1.0). Conflicts with `context_len` and `memory_mb`. |
-| `block_size` | `--pa-block-size` | not set | Tokens per block. |
+| `mode` | `--paged-attn` | `auto` | `auto` (on for CUDA and Metal, off for CPU), `on`, or `off`. |
+| `gpu_memory_utilization` | `--gpu-memory-utilization` | not set | Physical GPU memory fraction for weights, workspace, and KV. Conflicts with `kv_cache`. |
+| `kv_cache` | `--kv-cache` | not set | Explicit shared KV capacity, such as `"4GiB"` or `"65536tokens"`. Conflicts with `gpu_memory_utilization`. |
+| `block_size` | `--pa-block-size` | 32 on CUDA and Metal | Tokens per block. |
 | `cache_type` | `--pa-cache-type` | `auto` | KV cache quantization type. |
+
+Omit both `gpu_memory_utilization` and `kv_cache` for automatic sizing. Either explicit setting requires paging and conflicts with `mode = "off"`. `kv_cache = "auto"` is not valid.
+
+To give the model a fixed cache budget, add this to the minimal example:
+
+```toml
+[paged_attn]
+kv_cache = "4GiB"
+```
+
+This is shared across requests and totals the cache across the model's devices. Use `max_model_len` in `[[models]]` to limit each request's context. See [memory budgets](/guides/perf/paged-attention/#memory-budget) for help choosing a setting.
 
 ## `[sandbox]` section
 
@@ -142,7 +157,7 @@ Each `[[models]]` entry can carry nested sections whose field shapes mirror the 
 | `[models.format]` | Weight format selection and overrides (`format`, `quantized_file`, `mmproj`, `tok_model_id`, and GGML `gqa`). |
 | `[models.adapter]` | LoRA/X-LoRA adapter configuration. |
 | `[models.quantization]` | Quantization and artifact selection: `quant` (same as `--quant`), `isq` (explicit ISQ, same as `--isq`), `from_uqff`, `isq_organization`, `imatrix`, `calibration_file`. |
-| `[models.device]` | Device placement: `cpu`, `device_layers`, `topology`, `hf_cache`, `max_seq_len`, `max_batch_size`. `cpu` must be consistent across every entry. |
+| `[models.device]` | Device placement: `cpu`, `device_layers`, `topology`, `hf_cache`. `cpu` must be consistent across every entry. |
 | `[models.multimodal]` | Multimodal load-time caps (image/video/audio limits). |
 
 Dynamic LoRA uses structured adapter entries and explicit per-request selection. For `command = "run"`, the top-level `adapter` key selects the initial alias; omit it to run the base model.

@@ -41,8 +41,8 @@ use mistralrs_core::{
     EmbeddingLoaderBuilder, EmbeddingSpecificConfig, GGMLLoaderBuilder, GGMLSpecificConfig,
     GGUFLoaderBuilder, GGUFSpecificConfig, ImageGenerationResponse, ImageGenerationResponseFormat,
     LlguidanceGrammar, Loader, LoraAdapterError as CoreLoraAdapterError, LoraAdapterLoadPolicy,
-    LoraAdapterSpec, LoraRuntimeConfig, MemoryGpuConfig, MistralRs, MistralRsBuilder,
-    MistralRsError, MtpConfig, MtpRuntimeConfig, MultimodalLoaderBuilder, MultimodalSpecificConfig,
+    LoraAdapterSpec, LoraRuntimeConfig, MemoryGoal, MistralRs, MistralRsBuilder, MistralRsError,
+    MtpConfig, MtpRuntimeConfig, MultimodalLoaderBuilder, MultimodalSpecificConfig,
     NormalLoaderBuilder, NormalRequest, NormalSpecificConfig, PagedAttentionConfig, PagedCacheType,
     Request as _Request, RequestMessage, Response, ResponseOk, SamplingParams, SchedulerConfig,
     SearchEmbeddingModel, SpeculativeConfig, SpeechLoader, StopTokens, TokenSource,
@@ -73,6 +73,43 @@ use which::{
 };
 
 static DEVICE: OnceLock<Result<Device>> = OnceLock::new();
+
+fn parse_memory_goal(value: Option<&Bound<'_, PyAny>>) -> PyApiResult<MemoryGoal> {
+    let goal = match value {
+        None => MemoryGoal::Auto,
+        Some(value) => {
+            if value.is_instance_of::<pyo3::types::PyBool>() {
+                return Err(PyApiErr::from("memory_goal must be a utilization fraction or a capacity string, not a boolean"));
+            }
+            if let Ok(value) = value.extract::<String>() {
+                value.parse::<MemoryGoal>().map_err(PyApiErr::from)?
+            } else {
+                MemoryGoal::Utilization(value.extract::<f32>().map_err(|_| {
+                    PyApiErr::from("memory_goal must be 'auto', a capacity such as '4GiB' or '65536tokens', or a utilization fraction")
+                })?)
+            }
+        }
+    };
+    goal.validate().map_err(PyApiErr::from)?;
+    Ok(goal)
+}
+
+fn runner_cache_config(
+    memory_goal: MemoryGoal,
+    block_size: Option<usize>,
+    cache_type: PagedCacheType,
+    enabled: bool,
+) -> anyhow::Result<Option<PagedAttentionConfig>> {
+    memory_goal.validate()?;
+    if !enabled {
+        anyhow::ensure!(
+            memory_goal == MemoryGoal::Auto,
+            "an explicit memory goal requires supported paged attention"
+        );
+        return Ok(None);
+    }
+    PagedAttentionConfig::new(block_size, memory_goal, cache_type).map(Some)
+}
 
 pyo3::create_exception!(
     mistralrs,
@@ -390,26 +427,6 @@ fn which_uses_dynamic_lora(which: &Which) -> bool {
     }
 }
 
-fn validate_gguf_runner_options(which: &Which) -> std::result::Result<(), &'static str> {
-    let Which::GGUF {
-        mmproj_filename,
-        auto_map_params,
-        multimodal_auto_map_params,
-        ..
-    } = which
-    else {
-        return Ok(());
-    };
-
-    if auto_map_params.is_some() && multimodal_auto_map_params.is_some() {
-        return Err("GGUF accepts only one of auto_map_params and multimodal_auto_map_params");
-    }
-    if mmproj_filename.is_none() && multimodal_auto_map_params.is_some() {
-        return Err("multimodal_auto_map_params requires mmproj_filename");
-    }
-    Ok(())
-}
-
 fn validate_encoder_cache_runner_options(which: &Which) -> std::result::Result<(), &'static str> {
     let max_bytes = match which {
         Which::GGUF {
@@ -447,7 +464,6 @@ fn parse_which(
             dtype: _,
             imatrix,
             calibration_file,
-            auto_map_params: _,
             hf_cache_path,
             matformer_config_path,
             matformer_slice_name,
@@ -517,7 +533,6 @@ fn parse_which(
             write_uqff,
             from_uqff,
             dtype: _,
-            auto_map_params: _,
             hf_cache_path,
         } => NormalLoaderBuilder::new(
             NormalSpecificConfig {
@@ -563,7 +578,6 @@ fn parse_which(
             write_uqff,
             from_uqff,
             dtype: _,
-            auto_map_params: _,
             hf_cache_path,
             max_adapters,
             max_rank,
@@ -625,8 +639,6 @@ fn parse_which(
             calibration_file,
             max_edge,
             dtype: _,
-            auto_map_params: _,
-            multimodal_auto_map_params: _,
             adapters,
             max_adapters,
             max_rank,
@@ -697,7 +709,6 @@ fn parse_which(
             tgt_non_granular_index,
             topology,
             dtype: _,
-            auto_map_params: _,
         } => GGUFLoaderBuilder::new(
             chat_template,
             tok_model_id,
@@ -728,7 +739,6 @@ fn parse_which(
             order,
             topology,
             dtype: _,
-            auto_map_params: _,
         } => GGUFLoaderBuilder::new(
             chat_template,
             tok_model_id,
@@ -757,7 +767,6 @@ fn parse_which(
             gqa,
             topology,
             dtype: _,
-            auto_map_params: _,
         } => GGMLLoaderBuilder::new(
             GGMLSpecificConfig {
                 gqa,
@@ -783,7 +792,6 @@ fn parse_which(
             gqa,
             topology,
             dtype: _,
-            auto_map_params: _,
         } => GGMLLoaderBuilder::new(
             GGMLSpecificConfig {
                 gqa,
@@ -817,7 +825,6 @@ fn parse_which(
             gqa,
             topology,
             dtype: _,
-            auto_map_params: _,
         } => GGMLLoaderBuilder::new(
             GGMLSpecificConfig {
                 gqa,
@@ -850,7 +857,6 @@ fn parse_which(
             max_edge,
             calibration_file,
             imatrix,
-            auto_map_params: _,
             hf_cache_path,
             matformer_config_path,
             matformer_slice_name,
@@ -942,7 +948,7 @@ impl Runner {
     #[new]
     #[pyo3(signature = (
         which,
-        max_seqs = 16,
+        max_seqs = mistralrs_core::memory_plan::DEFAULT_MAX_NUM_SEQS,
         no_kv_cache = false,
         prefix_cache_n = 16,
         token_source = "cache",
@@ -953,9 +959,7 @@ impl Runner {
         num_device_layers = None,
         in_situ_quant = None,
         anymoe_config = None,
-        pa_gpu_mem = None,
-        pa_gpu_mem_usage = None,
-        pa_ctxt_len = None,
+        memory_goal = None,
         pa_blk_size = None,
         pa_cache_type = None,
         no_paged_attn = false,
@@ -982,9 +986,7 @@ impl Runner {
         num_device_layers: Option<Vec<String>>,
         in_situ_quant: Option<String>,
         anymoe_config: Option<AnyMoeConfig>,
-        pa_gpu_mem: Option<usize>,
-        pa_gpu_mem_usage: Option<f32>,
-        pa_ctxt_len: Option<usize>,
+        memory_goal: Option<Bound<'_, PyAny>>,
         pa_blk_size: Option<usize>,
         pa_cache_type: Option<PagedCacheType>,
         no_paged_attn: bool,
@@ -1004,7 +1006,6 @@ impl Runner {
                 "dynamic LoRA cannot be combined with AnyMoE in one Python Runner",
             ));
         }
-        validate_gguf_runner_options(&which).map_err(PyApiErr::from)?;
         validate_encoder_cache_runner_options(&which).map_err(PyApiErr::from)?;
         let tgt_non_granular_index = match which {
             Which::Plain { .. }
@@ -1046,92 +1047,14 @@ impl Runner {
             | Which::XLoraGGML { dtype, .. } => dtype,
         };
         let auto_map_params = match &which {
-            Which::Plain {
-                auto_map_params, ..
-            }
-            | Which::Lora {
-                auto_map_params, ..
-            }
-            | Which::LoraGGUF {
-                auto_map_params, ..
-            }
-            | Which::GGML {
-                auto_map_params, ..
-            }
-            | Which::LoraGGML {
-                auto_map_params, ..
-            }
-            | Which::XLora {
-                auto_map_params, ..
-            }
-            | Which::XLoraGGUF {
-                auto_map_params, ..
-            }
-            | Which::XLoraGGML {
-                auto_map_params, ..
-            } => auto_map_params
-                .clone()
-                .map(|p| AutoDeviceMapParams::Text {
-                    max_seq_len: p.max_seq_len,
-                    max_batch_size: p.max_batch_size,
-                })
-                .unwrap_or(AutoDeviceMapParams::default_text()),
-            Which::GGUF {
-                mmproj_filename,
-                auto_map_params,
-                multimodal_auto_map_params,
+            Which::MultimodalPlain { .. }
+            | Which::GGUF {
+                mmproj_filename: Some(_),
                 ..
-            } => {
-                if mmproj_filename.is_some() {
-                    multimodal_auto_map_params
-                        .clone()
-                        .map(|p| AutoDeviceMapParams::Multimodal {
-                            max_seq_len: p.max_seq_len,
-                            max_batch_size: p.max_batch_size,
-                            max_image_shape: (p.max_image_length, p.max_image_length),
-                            max_num_images: p.max_num_images,
-                        })
-                        .or_else(|| {
-                            auto_map_params
-                                .clone()
-                                .map(|p| AutoDeviceMapParams::Multimodal {
-                                    max_seq_len: p.max_seq_len,
-                                    max_batch_size: p.max_batch_size,
-                                    max_image_shape: (
-                                        AutoDeviceMapParams::DEFAULT_MAX_IMAGE_LENGTH,
-                                        AutoDeviceMapParams::DEFAULT_MAX_IMAGE_LENGTH,
-                                    ),
-                                    max_num_images: AutoDeviceMapParams::DEFAULT_MAX_NUM_IMAGES,
-                                })
-                        })
-                        .unwrap_or(AutoDeviceMapParams::default_multimodal())
-                } else {
-                    auto_map_params
-                        .clone()
-                        .map(|p| AutoDeviceMapParams::Text {
-                            max_seq_len: p.max_seq_len,
-                            max_batch_size: p.max_batch_size,
-                        })
-                        .unwrap_or(AutoDeviceMapParams::default_text())
-                }
-            }
-            Which::MultimodalPlain {
-                auto_map_params, ..
-            } => auto_map_params
-                .clone()
-                .map(|p| AutoDeviceMapParams::Multimodal {
-                    max_seq_len: p.max_seq_len,
-                    max_batch_size: p.max_batch_size,
-                    max_image_shape: (p.max_image_length, p.max_image_length),
-                    max_num_images: p.max_num_images,
-                })
-                .unwrap_or(AutoDeviceMapParams::default_multimodal()),
-            Which::Embedding { .. } | Which::DiffusionPlain { .. } | Which::Speech { .. } => {
-                AutoDeviceMapParams::default_text()
-            }
+            } => AutoDeviceMapParams::default_multimodal(),
+            _ => AutoDeviceMapParams::default_text(),
         };
-
-        let max_seq_len = auto_map_params.max_seq_len();
+        let memory_goal = parse_memory_goal(memory_goal.as_ref())?;
 
         let max_seqs = if tgt_non_granular_index.is_some() {
             1
@@ -1211,63 +1134,25 @@ impl Runner {
             None => DeviceMapSetting::Auto(auto_map_params),
         };
 
-        let no_paged_attn = if device.is_cuda() || mistralrs_core::distributed::use_nccl() {
-            no_paged_attn
-        } else if device.is_metal() {
-            !paged_attn
-        } else {
-            true
-        };
-
-        let cache_config = match (
+        if no_paged_attn && paged_attn {
+            return Err(PyApiErr::from(
+                "paged_attn and no_paged_attn are mutually exclusive",
+            ));
+        }
+        let supported = paged_attn_supported()
+            && (device.is_cuda() || device.is_metal() || mistralrs_core::distributed::use_nccl());
+        if paged_attn && (!supported || no_kv_cache) {
+            return Err(PyApiErr::from(
+                "paged attention is unavailable on this device or with no_kv_cache",
+            ));
+        }
+        let cache_config = runner_cache_config(
+            memory_goal,
             pa_blk_size,
-            pa_gpu_mem,
-            pa_gpu_mem_usage,
-            pa_ctxt_len,
-            paged_attn_supported(),
-            no_paged_attn,
-        ) {
-            (block_size, None, None, None, true, false) => Some(PagedAttentionConfig::new(
-                block_size,
-                MemoryGpuConfig::ContextSize(max_seq_len),
-                pa_cache_type.unwrap_or_default(),
-            )?),
-            (block_size, None, None, Some(ctxt), true, false) => Some(PagedAttentionConfig::new(
-                block_size,
-                MemoryGpuConfig::ContextSize(ctxt),
-                pa_cache_type.unwrap_or_default(),
-            )?),
-            (block_size, None, Some(f), None, true, false) => Some(PagedAttentionConfig::new(
-                block_size,
-                MemoryGpuConfig::Utilization(f),
-                pa_cache_type.unwrap_or_default(),
-            )?),
-            (block_size, Some(m), None, None, true, false) => Some(PagedAttentionConfig::new(
-                block_size,
-                MemoryGpuConfig::MbAmount(m),
-                pa_cache_type.unwrap_or_default(),
-            )?),
-            (block_size, Some(_m), Some(f), None, true, false) => Some(PagedAttentionConfig::new(
-                block_size,
-                MemoryGpuConfig::Utilization(f),
-                pa_cache_type.unwrap_or_default(),
-            )?),
-            (block_size, Some(_m), None, Some(ctxt), true, false) => {
-                Some(PagedAttentionConfig::new(
-                    block_size,
-                    MemoryGpuConfig::ContextSize(ctxt),
-                    pa_cache_type.unwrap_or_default(),
-                )?)
-            }
-            (block_size, None, Some(f), Some(_ctxt), true, false) => {
-                Some(PagedAttentionConfig::new(
-                    block_size,
-                    MemoryGpuConfig::Utilization(f),
-                    pa_cache_type.unwrap_or_default(),
-                )?)
-            }
-            (_, _, _, _, _, _) => None,
-        };
+            pa_cache_type.unwrap_or_default(),
+            supported && !no_paged_attn && !no_kv_cache,
+        )
+        .map_err(PyApiErr::from)?;
         let cache_config = cache_config
             .map(|config| config.with_serving_capacity(max_seqs))
             .transpose()?
@@ -1292,7 +1177,7 @@ impl Runner {
                 true, // Silent for jupyter
                 mapper,
                 isq,
-                cache_config,
+                cache_config.clone(),
             )
             .map_err(PyApiErr::from)?;
 
@@ -3311,12 +3196,9 @@ mod mtp_reservation_tests {
             &path,
         )?;
         let mtp_config = MtpConfig::new(dir.path().to_string_lossy().into_owned(), None);
-        let cache_config = PagedAttentionConfig::new(
-            None,
-            MemoryGpuConfig::Utilization(0.9),
-            PagedCacheType::Auto,
-        )?
-        .with_base_device_memory_reservation(usize::MAX - data.len())?;
+        let cache_config =
+            PagedAttentionConfig::new(None, MemoryGoal::Utilization(0.9), PagedCacheType::Auto)?
+                .with_base_device_memory_reservation(usize::MAX - data.len())?;
 
         let cache_config = reserve_external_mtp_memory(
             Some(cache_config),
@@ -3341,6 +3223,31 @@ mod mtp_reservation_tests {
 }
 
 #[cfg(test)]
+mod paged_attention_policy_tests {
+    use super::{runner_cache_config, MemoryGoal, PagedCacheType};
+
+    const TEST_TOKENS: usize = 8192;
+
+    #[test]
+    fn auto_can_disable_paging_but_explicit_goals_cannot() -> anyhow::Result<()> {
+        assert!(
+            runner_cache_config(MemoryGoal::Auto, None, PagedCacheType::Auto, false)?.is_none()
+        );
+        assert!(runner_cache_config(
+            MemoryGoal::KvTokens(TEST_TOKENS),
+            None,
+            PagedCacheType::Auto,
+            false
+        )
+        .is_err());
+        let config =
+            runner_cache_config(MemoryGoal::Auto, None, PagedCacheType::Auto, true)?.unwrap();
+        assert_eq!(config.memory_goal(), MemoryGoal::Auto);
+        Ok(())
+    }
+}
+
+#[cfg(test)]
 mod lora_adapter_error_tests {
     use super::*;
 
@@ -3358,8 +3265,6 @@ mod lora_adapter_error_tests {
             calibration_file: None,
             max_edge: None,
             dtype: mistralrs_core::ModelDType::Auto,
-            auto_map_params: None,
-            multimodal_auto_map_params: None,
             adapters,
             max_adapters: mistralrs_core::DEFAULT_LORA_MAX_ADAPTERS,
             max_rank,
@@ -3421,23 +3326,6 @@ mod lora_adapter_error_tests {
             None,
             mistralrs_core::DEFAULT_LORA_MAX_RANK / 2,
         )));
-    }
-
-    #[test]
-    fn gguf_dynamic_lora_accepts_multimodal_device_mapping() {
-        let mut which = gguf_which(Some(Vec::new()), mistralrs_core::DEFAULT_LORA_MAX_RANK);
-        let Which::GGUF {
-            mmproj_filename,
-            multimodal_auto_map_params,
-            ..
-        } = &mut which
-        else {
-            unreachable!()
-        };
-        *mmproj_filename = Some(Either::Left("mmproj.gguf".to_string()));
-        *multimodal_auto_map_params = Some(which::MultimodalAutoMapParams::new(4096, 1, 1, 1024));
-
-        validate_gguf_runner_options(&which).unwrap();
     }
 
     #[test]

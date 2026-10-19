@@ -473,7 +473,7 @@ impl QsaAttention {
                 &v.contiguous()?,
                 &mut key_cache,
                 &mut value_cache,
-                slot_mapping,
+                metadata,
             )?;
             let index_q = index_q.reshape((n_tokens, self.qsa.n_heads, self.qsa.head_dim))?;
             let (selected, n_selected) = match kernels::qsa_select_cutile(

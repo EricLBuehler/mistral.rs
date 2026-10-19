@@ -379,21 +379,33 @@ impl RmsNorm {
     }
 }
 
+/// Whether a GPU backend's fused add + RMSNorm kernel covers these inputs.
+fn fused_add_rms_norm_applies(x: &Tensor, residual: &Tensor, weight: &Tensor) -> Result<bool> {
+    Ok((x.device().is_cuda() || x.device().is_metal())
+        && residual.device().same_device(x.device())
+        && weight.device().same_device(x.device())
+        && x.shape() == residual.shape()
+        && weight.dims1()? == x.dim(D::Minus1)?
+        && x.dtype() == residual.dtype()
+        && x.dtype() == weight.dtype()
+        && matches!(x.dtype(), DType::BF16 | DType::F16 | DType::F32))
+}
+
 fn rms_norm_forward_add(
     x: &Tensor,
     residual: &Tensor,
     weight: &Tensor,
     eps: f64,
 ) -> Result<(Tensor, Tensor)> {
-    #[cfg(feature = "cuda")]
-    if x.device().is_cuda()
-        && residual.device().same_device(x.device())
-        && weight.device().same_device(x.device())
-        && x.dtype() == residual.dtype()
-        && x.dtype() == weight.dtype()
-        && matches!(x.dtype(), DType::BF16 | DType::F16 | DType::F32)
-    {
-        return crate::ops::cuda_add_rms_norm(x, residual, weight, eps as f32);
+    if fused_add_rms_norm_applies(x, residual, weight)? {
+        #[cfg(feature = "cuda")]
+        if x.device().is_cuda() {
+            return crate::ops::cuda_add_rms_norm(x, residual, weight, eps as f32);
+        }
+        #[cfg(feature = "metal")]
+        if x.device().is_metal() {
+            return crate::ops::metal_add_rms_norm(x, residual, weight, eps as f32);
+        }
     }
 
     let sum = (x + residual)?;
@@ -510,6 +522,16 @@ pub struct GemmaRmsNorm {
     weight: Tensor,
 }
 
+/// How a checkpoint stores a `(1 + w)` norm weight.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum NormStorage {
+    /// HF layout: the stored tensor is `w`.
+    #[default]
+    Offset,
+    /// MLX conversions bake the offset in: the stored tensor is `1 + w`.
+    Scale,
+}
+
 impl GemmaRmsNorm {
     pub fn new(size: usize, eps: f64, vb: ShardedVarBuilder) -> Result<Self> {
         let original_weight = vb.get(size, "weight")?;
@@ -519,6 +541,17 @@ impl GemmaRmsNorm {
             original_weight,
             weight,
         })
+    }
+
+    pub fn with_storage(self, storage: NormStorage) -> Result<Self> {
+        match storage {
+            NormStorage::Offset => Ok(self),
+            NormStorage::Scale => Ok(Self {
+                eps: self.eps,
+                weight: self.original_weight.clone(),
+                original_weight: (&self.original_weight - 1.0)?,
+            }),
+        }
     }
 
     pub fn weight(&self) -> &Tensor {
@@ -2854,8 +2887,7 @@ pub fn qk_rms_norm_rope(
     is_gpt_neox: bool,
     positions: &Tensor,
 ) -> Result<(Tensor, Tensor)> {
-    #[cfg(feature = "cuda")]
-    if let Some((q, Some(k))) = crate::ops::try_cuda_qk_rms_norm_rope_positions(
+    if let Some((q, Some(k))) = crate::ops::try_fused_qk_rms_norm_rope_positions(
         q,
         Some(k),
         q_weight,
@@ -2891,8 +2923,7 @@ pub fn qkv_rms_norm_rope(
     is_gpt_neox: bool,
     positions: &Tensor,
 ) -> Result<(Tensor, Tensor, Tensor)> {
-    #[cfg(feature = "cuda")]
-    if let Some((q, k, v)) = crate::ops::try_cuda_qkv_rms_norm_rope_positions(
+    if let Some((q, k, v)) = crate::ops::try_fused_qkv_rms_norm_rope_positions(
         q,
         k,
         v,
@@ -2927,8 +2958,7 @@ pub fn q_rms_norm_rope(
     is_gpt_neox: bool,
     positions: &Tensor,
 ) -> Result<Tensor> {
-    #[cfg(feature = "cuda")]
-    if let Some((q, None)) = crate::ops::try_cuda_qk_rms_norm_rope_positions(
+    if let Some((q, None)) = crate::ops::try_fused_qk_rms_norm_rope_positions(
         q,
         None,
         q_weight,
@@ -4236,6 +4266,141 @@ mod tests {
         )?;
         let expected = 1.0 + 0.1 * 4.0f32.ln();
         assert!((attention_factor - expected).abs() < 1e-6);
+        Ok(())
+    }
+}
+
+#[cfg(all(test, feature = "metal"))]
+mod metal_add_rms_norm_tests {
+    use candle_core::{DType, Device, Result, Tensor};
+
+    use super::RmsNorm;
+
+    #[test]
+    fn metal_add_rms_norm_matches_separate_ops() -> Result<()> {
+        let device = Device::new_metal(0)?;
+        for (dtype, cols) in [
+            (DType::F32, 5120),
+            (DType::BF16, 5120),
+            (DType::F16, 2880),
+            (DType::BF16, 96),
+        ] {
+            let x = Tensor::randn(0f32, 1., (3, 2, cols), &device)?.to_dtype(dtype)?;
+            let residual = Tensor::randn(0f32, 4., (3, cols, 2), &device)?
+                .to_dtype(dtype)?
+                .transpose(1, 2)?;
+            let weight = Tensor::randn(1f32, 0.2, cols, &device)?.to_dtype(dtype)?;
+            let norm = RmsNorm::from_w(weight.clone(), 1e-6)?;
+            let (sum, normed) = norm.forward_add_rms_norm(&x, &residual)?;
+            let ref_sum = (&x + &residual)?;
+            let ref_norm = candle_nn::ops::rms_norm(&ref_sum.contiguous()?, &weight, 1e-6)?;
+            let max_diff = |a: &Tensor, b: &Tensor| -> Result<f32> {
+                (a.to_dtype(DType::F32)? - b.to_dtype(DType::F32)?)?
+                    .abs()?
+                    .flatten_all()?
+                    .max(0)?
+                    .to_scalar::<f32>()
+            };
+            assert_eq!(
+                max_diff(&sum, &ref_sum)?,
+                0.0,
+                "{dtype:?} {cols}: sum must match exactly"
+            );
+            // Sums match exactly; half-precision norms may round one ULP apart from candle's rms_norm.
+            let tol = if dtype == DType::F32 { 1e-5 } else { 1.6e-2 };
+            let ref_f32 = ref_norm.to_dtype(DType::F32)?;
+            let rel_diff = ((normed.to_dtype(DType::F32)? - &ref_f32)?.abs()?
+                / ref_f32.abs()?.maximum(1.0)?)?
+            .flatten_all()?
+            .max(0)?
+            .to_scalar::<f32>()?;
+            assert!(
+                rel_diff < tol,
+                "{dtype:?} {cols}: relative norm diff {rel_diff}"
+            );
+        }
+        Ok(())
+    }
+}
+
+#[cfg(all(test, feature = "metal"))]
+mod metal_qk_norm_rope_tests {
+    use candle_core::{DType, Device, Result, Tensor};
+
+    use super::{apply_rotary_qk, q_rms_norm_rope, qk_rms_norm_rope, qkv_rms_norm_rope};
+
+    const EPS: f64 = 1e-6;
+
+    fn max_rel_diff(a: &Tensor, b: &Tensor) -> Result<f32> {
+        let b = b.to_dtype(DType::F32)?;
+        ((a.to_dtype(DType::F32)? - &b)?.abs()? / b.abs()?.maximum(1.0)?)?
+            .flatten_all()?
+            .max(0)?
+            .to_scalar::<f32>()
+    }
+
+    fn norm(x: &Tensor, w: &Tensor) -> Result<Tensor> {
+        candle_nn::ops::rms_norm(&x.contiguous()?, w, EPS as f32)
+    }
+
+    #[test]
+    fn metal_fused_qk_norm_rope_matches_separate_ops() -> Result<()> {
+        let dev = Device::new_metal(0)?;
+        let (batch, seq, q_heads, kv_heads, head_dim) = (2, 3, 8, 2, 128);
+        let max_pos = 64;
+        for (dtype, tol) in [(DType::F32, 1e-4f32), (DType::BF16, 2e-2)] {
+            for (is_neox, rot_dim) in [(true, 64), (false, 64), (true, 32)] {
+                for token_major in [true, false] {
+                    let mk = |heads: usize| -> Result<Tensor> {
+                        if token_major {
+                            Tensor::randn(0f32, 1., (batch, seq, heads, head_dim), &dev)?
+                                .to_dtype(dtype)?
+                                .transpose(1, 2)
+                        } else {
+                            Tensor::randn(0f32, 1., (batch, heads, seq, head_dim), &dev)?
+                                .to_dtype(dtype)
+                        }
+                    };
+                    let (q, k, v) = (mk(q_heads)?, mk(kv_heads)?, mk(kv_heads)?);
+                    let w = |s: f32| -> Result<Tensor> {
+                        Tensor::randn(1f32, s, head_dim, &dev)?.to_dtype(dtype)
+                    };
+                    let (qw, kw, vw) = (w(0.1)?, w(0.2)?, w(0.3)?);
+                    let angles = Tensor::randn(0f32, 3., (max_pos, rot_dim), &dev)?;
+                    let cos = angles.cos()?.to_dtype(dtype)?;
+                    let sin = angles.sin()?.to_dtype(dtype)?;
+                    let positions = Tensor::new(&[5u32, 6, 7, 40, 41, 42], &dev)?;
+
+                    let (ref_q, ref_k) = apply_rotary_qk(
+                        &norm(&q, &qw)?,
+                        &norm(&k, &kw)?,
+                        &cos,
+                        &sin,
+                        &positions,
+                        is_neox,
+                    )?;
+                    let tag =
+                        format!("{dtype:?} neox={is_neox} rot={rot_dim} token_major={token_major}");
+
+                    let (fq, fk) = qk_rms_norm_rope(
+                        &q, &k, &qw, &kw, EPS, EPS, &cos, &sin, is_neox, &positions,
+                    )?;
+                    let d = max_rel_diff(&fq, &ref_q)?;
+                    assert!(d < tol, "qk q {tag}: {d}");
+                    assert!(max_rel_diff(&fk, &ref_k)? < tol, "qk k {tag}");
+
+                    let fq = q_rms_norm_rope(&q, &qw, EPS, &cos, &sin, is_neox, &positions)?;
+                    assert!(max_rel_diff(&fq, &ref_q)? < tol, "q-only {tag}");
+
+                    let (fq, fk, fv) = qkv_rms_norm_rope(
+                        &q, &k, &v, &qw, &kw, &vw, EPS, EPS, EPS, &cos, &sin, is_neox, &positions,
+                    )?;
+                    assert!(max_rel_diff(&fq, &ref_q)? < tol, "qkv q {tag}");
+                    assert!(max_rel_diff(&fk, &ref_k)? < tol, "qkv k {tag}");
+                    assert!(max_rel_diff(&fv, &norm(&v, &vw)?)? < tol, "qkv v {tag}");
+                }
+            }
+        }
         Ok(())
     }
 }

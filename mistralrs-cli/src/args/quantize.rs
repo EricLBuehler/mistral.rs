@@ -1,7 +1,7 @@
 //! Quantize command argument structs for UQFF generation
 
 use clap::{Args, Subcommand, ValueEnum};
-use mistralrs_core::{AutoDeviceMapParams, IsqOrganization, ModelDType, NormalLoaderType};
+use mistralrs_core::{IsqOrganization, ModelDType, NormalLoaderType};
 use std::path::PathBuf;
 
 use super::{FormatOptions, ModelFormat};
@@ -240,14 +240,6 @@ pub struct QuantizeDeviceOptions {
     /// Custom Hugging Face cache directory
     #[arg(long)]
     pub hf_cache: Option<PathBuf>,
-
-    /// Max sequence length for automatic device mapping
-    #[arg(long, default_value_t = AutoDeviceMapParams::DEFAULT_MAX_SEQ_LEN)]
-    pub max_seq_len: usize,
-
-    /// Max batch size for automatic device mapping
-    #[arg(long, default_value_t = AutoDeviceMapParams::DEFAULT_MAX_BATCH_SIZE)]
-    pub max_batch_size: usize,
 }
 
 /// Output options for UQFF generation
@@ -343,14 +335,6 @@ pub struct QuantizeDefaultOptions {
     #[arg(long)]
     pub hf_cache: Option<PathBuf>,
 
-    /// Max sequence length for automatic device mapping
-    #[arg(long, default_value_t = AutoDeviceMapParams::DEFAULT_MAX_SEQ_LEN)]
-    pub max_seq_len: usize,
-
-    /// Max batch size for automatic device mapping
-    #[arg(long, default_value_t = AutoDeviceMapParams::DEFAULT_MAX_BATCH_SIZE)]
-    pub max_batch_size: usize,
-
     /// Output path: a `.uqff` file path (single ISQ) or a directory (auto-names files per ISQ type).
     #[arg(short = 'o', long = "output")]
     pub output_path: Option<PathBuf>,
@@ -410,8 +394,6 @@ impl QuantizeDefaultOptions {
                 device_layers: self.device_layers,
                 topology: self.topology,
                 hf_cache: self.hf_cache,
-                max_seq_len: self.max_seq_len,
-                max_batch_size: self.max_batch_size,
             },
             output: QuantizeOutputOptions {
                 output_path,

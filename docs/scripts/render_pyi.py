@@ -145,12 +145,6 @@ GROUPS = [
         "MCP client configuration types.",
         ["McpServerSourcePy", "McpServerConfigPy", "McpClientConfigPy"],
     ),
-    (
-        "Auto-mapping",
-        "automap",
-        "Hints for automatic device mapping.",
-        ["TextAutoMapParams", "MultimodalAutoMapParams"],
-    ),
 ]
 
 SIG_WRAP_THRESHOLD = 70  # wrap arg list onto multiple lines beyond this width

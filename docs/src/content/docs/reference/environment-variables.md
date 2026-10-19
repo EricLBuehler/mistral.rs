@@ -102,19 +102,13 @@ See [CPU threads and affinity](/guides/perf/throughput-tuning/#cpu-threads-and-a
 
 See the [distributed inference guide](/guides/perf/distributed-inference/) for use.
 
-## GPU memory
-
-| Variable | Purpose |
-|---|---|
-| `MISTRALRS_IGPU_MEMORY_FRACTION` | Overrides the memory budget on CUDA integrated GPUs, such as DGX Spark, as a fraction of system memory. The default is available RAM minus 1 GiB, with the KV cache capped to the model context length. |
-
 ## Build-time
 
 These are read by build scripts, not at runtime.
 
 | Variable | Purpose |
 |---|---|
-| `MISTRALRS_METAL_PRECOMPILE` | `MISTRALRS_METAL_PRECOMPILE=0` skips Metal kernel precompilation at build time; kernels are compiled at runtime on first use. Also accepts `false`, `no`, and `off`. |
+| `MISTRALRS_METAL_PRECOMPILE` | `MISTRALRS_METAL_PRECOMPILE=0` skips build-time precompilation for quantization, paged attention, GDN, and SSM Metal libraries. Shader compilation then happens when each library is loaded, including during model preparation. Also accepts `false`, `no`, and `off`. |
 | `MISTRALRS_METAL_PLATFORMS` | Limits which Metal platform metallibs are precompiled. Accepts comma-separated `macos`, `ios`, `tvos`, or `all`; defaults to all platforms. For local macOS development, use `MISTRALRS_METAL_PLATFORMS=macos`. |
 | `CUDA_NVCC_FLAGS` | Extra compiler options passed to CUDA builds. |
 | `MISTRALRS_INSTALL_TAG` | Pins the installers to a specific release tag (e.g. `v0.9.2`): the prebuilt is downloaded from that release, and a source build checks out that git tag. Default is the latest stable release (prebuilt) or latest `master` (source). |

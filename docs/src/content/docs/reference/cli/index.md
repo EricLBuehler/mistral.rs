@@ -33,4 +33,3 @@ sidebar:
 | `-l, --log <LOG>` |  | Log all requests and responses to this file |
 | `--token-source <TOKEN_SOURCE>` | `cache` | Token source for Hugging Face authentication. Formats: `literal:<token>`, `env:<var>`, `path:<file>`, `cache`, `none` |
 | `-v, --verbose` | `0` | Increase logging verbosity. Use -v for debug and -vv for trace-level internals |
-

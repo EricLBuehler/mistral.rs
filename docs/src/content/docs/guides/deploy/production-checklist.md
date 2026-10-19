@@ -22,12 +22,7 @@ Work through this list before a `mistralrs serve` deployment receives traffic fr
 - [ ] Run `mistralrs doctor` on the target host to confirm the expected accelerator and compiled features.
 - [ ] Run `mistralrs tune -m <model>` for a starting quantization and memory plan (it estimates from configs; it does not load or benchmark the model).
 - [ ] Set `--max-seqs` deliberately (default 32).
-- [ ] Size the [paged-attention](/guides/perf/paged-attention/) KV pool explicitly instead of relying on the implicit 90% budget, with one of:
-  - `--pa-context-len`
-  - `--pa-memory-mb`
-  - `--pa-memory-fraction`
-
-  See [throughput tuning](/guides/perf/throughput-tuning/).
+- [ ] Check the automatically sized KV pool under expected load. Set an explicit [memory budget](/guides/perf/paged-attention/#memory-budget) only when needed, and measure throughput and latency with the chosen [serving limits](/guides/perf/throughput-tuning/).
 
 ## Health, readiness, and metrics
 

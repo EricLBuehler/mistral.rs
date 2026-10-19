@@ -1314,7 +1314,8 @@ impl Loader for GGUFLoader {
         {
             bail!("ISQ conversion is only supported by the native GGUF loading path");
         }
-        if paged_attn_config.is_some() {
+        if let Some(config) = paged_attn_config {
+            super::disable_unsupported_paged_attention(&mut Some(config))?;
             warn!("Adapter models do not currently support PagedAttention, running without");
         }
 
@@ -1477,6 +1478,16 @@ impl Loader for GGUFLoader {
             .as_ref()
             .and_then(GenerationConfig::generation_defaults);
         let eos = calculate_eos_tokens(&chat_template, gen_conf.as_ref(), &tokenizer);
+        #[cfg(feature = "metal")]
+        super::metal_warmup::prepare_model(super::metal_warmup::MetalModelWarmup {
+            device,
+            mapper: pipeline_mapper.as_ref(),
+            model: &model_config_metadata,
+            paged: None,
+            dtype: internal_dtype,
+            tracked_modules: &[],
+            packed_prefill: false,
+        })?;
         Ok(Arc::new(Mutex::new(GGUFPipeline {
             model,
             tokenizer: tokenizer.into(),
@@ -1502,6 +1513,9 @@ impl Loader for GGUFLoader {
                 sliding_window: None,
                 cache_config: None,
                 cache_engine: None,
+                memory_plan: None,
+                #[cfg(feature = "cuda")]
+                runtime_memory_reservation: None,
                 model_metadata: Some(Arc::new(model_config_metadata)),
                 modalities: Modalities {
                     input: vec![SupportedModality::Text],

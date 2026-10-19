@@ -975,7 +975,7 @@ impl Qwen4ExpTextModel {
                             pool.state_layout(),
                         )
                     } else {
-                        GdnLayerCache::checkout(pool, &indices)?
+                        GdnLayerCache::checkout(pool, &indices, batch_kind)?
                     };
                     let mut projected = None;
                     let out = match &packed_layout {

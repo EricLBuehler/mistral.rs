@@ -114,35 +114,52 @@ inline uchar fp32_to_fp8(float f) {
 }
 } // namespace detail
 
+constant constexpr uint E4M3_MAX_FINITE = 0x7e;
+constant constexpr uint E4M3_NAN = 0x7f;
+constant constexpr uint E4M3_MAX_FLOAT_BITS = 0x43e00000;
+constant constexpr uint E4M3_MIN_NORMAL_FLOAT_BITS = 0x3c800000;
+constant constexpr uint FP32_INFINITY_BITS = 0x7f800000;
+constant constexpr uint FP32_MANTISSA_MASK = 0x7fffff;
+constant constexpr int FP32_MANTISSA_BITS = 23;
+constant constexpr int FP32_EXPONENT_BIAS = 127;
+constant constexpr int E4M3_MANTISSA_BITS = 3;
+constant constexpr int E4M3_EXPONENT_BIAS = 7;
+
 inline uchar float_to_fp8_e4m3(float f) {
-  // E4M3 has no infinity - must handle specially
-  // Max value is 448 (exp=15, mantissa=6), mantissa=7 is NaN
-
-  if (isnan(f)) {
-    return 0x7F; // positive NaN (exp=15, mantissa=7)
-  }
-
   const uint bits = as_bits(f);
-  const uint s = bits >> 31;
-
-  // Clamp infinity and overflow to max value (448)
-  if (isinf(f) || fabs(f) > 448.0f) {
-    // E4M3 max: exp=15, mantissa=6 (value = 1.75 * 2^8 = 448)
-    return uchar((s << 7) | (0xF << 3) | 0x6);
+  const uint sign = (bits >> 24) & 0x80;
+  const uint magnitude = bits & 0x7fffffff;
+  if (magnitude > FP32_INFINITY_BITS) {
+    return uchar(E4M3_NAN);
+  }
+  if (magnitude >= E4M3_MAX_FLOAT_BITS) {
+    return uchar(sign | E4M3_MAX_FINITE);
   }
 
-  // Use the template for normal values, but check result
-  uchar result = detail::fp32_to_fp8<4, 3, 7>(f);
-
-  // Ensure we don't accidentally create NaN or invalid encoding
-  uint exp_bits = (result >> 3) & 0xF;
-  uint man_bits = result & 0x7;
-  if (exp_bits == 0xF && man_bits == 0x7) {
-    // Would be NaN, clamp to max value instead
-    return uchar((s << 7) | (0xF << 3) | 0x6);
+  const int exponent = int(magnitude >> FP32_MANTISSA_BITS) -
+                       FP32_EXPONENT_BIAS + E4M3_EXPONENT_BIAS;
+  const uint mantissa = magnitude & FP32_MANTISSA_MASK;
+  const int shift = FP32_MANTISSA_BITS - E4M3_MANTISSA_BITS;
+  uint encoded;
+  uint remainder;
+  uint halfway;
+  if (magnitude < E4M3_MIN_NORMAL_FLOAT_BITS) {
+    if (exponent < -E4M3_MANTISSA_BITS) {
+      return uchar(sign);
+    }
+    const int subnormal_shift = shift + 1 - exponent;
+    const uint significand = (1u << FP32_MANTISSA_BITS) | mantissa;
+    encoded = significand >> subnormal_shift;
+    remainder = significand & ((1u << subnormal_shift) - 1u);
+    halfway = 1u << (subnormal_shift - 1);
+  } else {
+    encoded = (uint(exponent) << E4M3_MANTISSA_BITS) | (mantissa >> shift);
+    remainder = mantissa & ((1u << shift) - 1u);
+    halfway = 1u << (shift - 1);
   }
-
-  return result;
+  // Keep the carry into the normal range and use the encoded LSB for ties.
+  encoded += remainder > halfway || (remainder == halfway && (encoded & 1u));
+  return uchar(sign | encoded);
 }
 inline uchar float_to_fp8_e5m2(float f) {
   return detail::fp32_to_fp8<5, 2, 15>(f);

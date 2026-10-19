@@ -71,6 +71,12 @@ All install paths expose the same `from mistralrs import ...` API.
 
 Full example: [plain](/examples/python/plain/).
 
+## Memory and device placement
+
+Leave `memory_goal` and `num_device_layers` unset for automatic device placement and KV cache sizing. PagedAttention is enabled automatically on supported CUDA and Metal devices. Set `max_seqs=4` on `Runner` to allow up to four concurrent sequences; the default is 32.
+
+To choose a shared KV cache capacity, add `memory_goal="4GiB"` or `memory_goal="65536tokens"` to `Runner`. These capacities are shared across requests; each request still has its own context and output limits. Explicit memory goals require paging. See [memory budgets](/guides/perf/paged-attention/#memory-budget) for sizing options and [layer mapping](/guides/perf/distributed-inference/#layer-mapping-cuda-p2p) for manual placement.
+
 ## Streaming tokens
 
 Set `stream=True` to receive an iterator of chunks instead of a single response:

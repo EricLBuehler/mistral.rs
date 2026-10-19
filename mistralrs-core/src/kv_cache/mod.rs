@@ -943,12 +943,12 @@ impl Cache {
         v: Tensor,
         attention_mask: &AttentionMask,
         sliding_window: Option<usize>,
-    ) -> Result<(Tensor, Tensor, Option<Tensor>)> {
+    ) -> Result<(Tensor, Tensor, AttentionMask)> {
         let mask_tensor = match attention_mask {
             AttentionMask::Custom(t) => Some(t.clone()),
             _ => None,
         };
-        let (k, v, attention_mask) = match cache.clone() {
+        let (k, v, mask) = match cache.clone() {
             None => (k, v, mask_tensor),
             Some((mut prev_k, mut prev_v)) => {
                 let mut mask = mask_tensor;
@@ -988,7 +988,11 @@ impl Cache {
             }
         };
         *cache = Some((k.clone(), v.clone()));
-        Ok((k.contiguous()?, v.contiguous()?, attention_mask))
+        Ok((
+            k.contiguous()?,
+            v.contiguous()?,
+            mask.map_or_else(|| attention_mask.clone(), AttentionMask::Custom),
+        ))
     }
 }
 
@@ -1590,4 +1594,48 @@ fn try_kv_append_rotating_metal(
     kc.last_append_result = Some(k_dst.clone());
     vc.last_append_result = Some(v_dst.clone());
     Ok(Some((k_dst, v_dst)))
+}
+
+#[cfg(test)]
+mod mask_intent_tests {
+    use super::*;
+    use candle_core::{DType, Device};
+
+    #[test]
+    fn sliding_cache_keeps_structured_mask_after_truncation() -> Result<()> {
+        let device = Device::Cpu;
+        for mask in [
+            AttentionMask::CausalFlash,
+            AttentionMask::Bidirectional,
+            AttentionMask::ChunkedCausal { chunk_size: 8 },
+        ] {
+            let mut cache = None;
+            let first = Tensor::ones((1, 1, 5, 4), DType::F32, &device)?;
+            let (_, _, first_mask) = Cache::update_kv_cache_sliding_window(
+                &mut cache,
+                first.clone(),
+                first,
+                &mask,
+                Some(3),
+            )?;
+            assert_eq!(
+                std::mem::discriminant(&first_mask),
+                std::mem::discriminant(&mask)
+            );
+            let next = Tensor::ones((1, 1, 1, 4), DType::F32, &device)?;
+            let (key, _, next_mask) = Cache::update_kv_cache_sliding_window(
+                &mut cache,
+                next.clone(),
+                next,
+                &mask,
+                Some(3),
+            )?;
+            assert_eq!(key.dim(2)?, 3);
+            assert_eq!(
+                std::mem::discriminant(&next_mask),
+                std::mem::discriminant(&mask)
+            );
+        }
+        Ok(())
+    }
 }

@@ -321,16 +321,16 @@ impl Block {
     ) -> Result<Tensor> {
         let residual = x;
         let mut x = self.rms_1.forward(x)?;
-        x = (self.attn.forward(
+        x = self.attn.forward(
             &x,
             attention_mask,
             ctx,
             block_idx,
             kv_cache,
             (&self.rope_parameter.0, &self.rope_parameter.1),
-        )? + residual)?;
-        let residual = &x;
-        x = (self.mlp.forward(&self.rms_2.forward(&x)?)? + residual)?;
+        )?;
+        let (residual, normed) = self.rms_2.forward_add_rms_norm(&x, residual)?;
+        x = (self.mlp.forward(&normed)? + residual)?;
         Ok(x)
     }
 

@@ -278,6 +278,8 @@ impl<'a> SpeculativeCacheAccess for PagedSpeculativeCacheAccess<'a> {
                     crate::paged_attention::block_hash::MultimodalAttentionPolicy::Causal,
                 has_noncausal_mm_context: false,
                 prefix_gather_workspace_limit: None,
+                attention_memory: None,
+                prefix_masks: Default::default(),
                 mm_prefix_ranges: None,
                 full_mm_prefix_ranges: None,
                 prefill_attention_heads: 1,

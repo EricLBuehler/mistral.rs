@@ -144,7 +144,7 @@ mistralrs serve -m Qwen/Qwen3.8-Flash-Next --isq q4k
 mistralrs run -m unsloth/Qwen3.8-Flash-Next-GGUF --quant 4
 ```
 
-On CUDA devices with unified memory, such as DGX Spark, the default memory budget is available system RAM minus 1 GiB. The KV cache is capped to the model context length. Use `--pa-context-len N` for a smaller cache to leave room for other applications or MTP; use `--max-model-len N` to limit prompt-plus-output length. `MISTRALRS_IGPU_MEMORY_FRACTION` overrides the memory budget.
+CUDA devices with unified memory, such as DGX Spark, use the shared [automatic memory planner](/guides/perf/paged-attention/#memory-budget) to budget weights, runtime workspace, and KV cache against available system memory. Use `--kv-cache 65536tokens` to set the shared cache capacity, or `--max-model-len N` to limit prompt-plus-output length per request.
 
 ## Granite 4.0 (GraniteMoeHybrid)
 

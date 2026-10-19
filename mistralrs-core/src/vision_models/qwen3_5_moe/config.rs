@@ -1,7 +1,7 @@
 use mistralrs_quant::QuantizedConfig;
 
 use crate::gdn::{GdnStateDType, GdnVHeadLayout};
-use crate::layers::{Activation, YarnRopeConfig};
+use crate::layers::{Activation, NormStorage, YarnRopeConfig};
 use crate::serde_default_fn;
 use crate::vision_models::qwen3_5::config::RopeParameters;
 
@@ -60,6 +60,9 @@ pub struct TextConfig {
     pub tie_word_embeddings: bool,
     #[serde(default)]
     pub quantization_config: Option<QuantizedConfig>,
+    // Detected from the checkpoint at load time, never read from config.json
+    #[serde(skip)]
+    pub(crate) norm_storage: NormStorage,
     #[serde(default, rename = "_mistralrs_gdn_v_head_layout")]
     pub(crate) gdn_v_head_layout: GdnVHeadLayout,
 }

@@ -336,6 +336,9 @@ where
             .as_ref()
             .map(|mask| slope * mask.value(b_i, h_i, 0, kv_pos))
             .unwrap_or(0.0);
+        if mask_delta == f32::NEG_INFINITY || s_val == f32::NEG_INFINITY {
+            continue;
+        }
         s_val += mask_delta;
 
         let m_old = m;

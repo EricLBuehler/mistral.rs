@@ -1,6 +1,6 @@
 //! Multi-model builder and pipeline construction utilities.
 
-use candle_core::Device;
+use candle_core::{Device, DeviceLocation};
 use mistralrs_core::{
     plan_paged_kv, AddModelConfig, DefaultSchedulerMethod, EngineConfig, IsqType,
     PagedAttentionConfig, PagedKvModelRequest, Pipeline, SchedulerConfig, SearchCallback,
@@ -58,12 +58,56 @@ impl AnyModelBuilder {
         }
     }
 
+    fn resolve_paged_attn(&mut self) -> anyhow::Result<()> {
+        let (force_cpu, device, config, memory_goal, disabled) = match self {
+            AnyModelBuilder::Text(b) => (
+                b.force_cpu,
+                &mut b.device,
+                &mut b.paged_attn_cfg,
+                &mut b.memory_goal,
+                b.no_paged_attn || b.no_kv_cache,
+            ),
+            AnyModelBuilder::Multimodal(b) => (
+                b.force_cpu,
+                &mut b.device,
+                &mut b.paged_attn_cfg,
+                &mut b.memory_goal,
+                b.no_paged_attn,
+            ),
+            AnyModelBuilder::Auto(b) => (
+                b.force_cpu,
+                &mut b.device,
+                &mut b.paged_attn_cfg,
+                &mut b.memory_goal,
+                b.no_paged_attn || b.no_kv_cache,
+            ),
+            AnyModelBuilder::Gguf(b) => (
+                b.force_cpu,
+                &mut b.device,
+                &mut b.paged_attn_cfg,
+                &mut b.memory_goal,
+                b.no_paged_attn || b.no_kv_cache,
+            ),
+            AnyModelBuilder::Diffusion(_)
+            | AnyModelBuilder::Speech(_)
+            | AnyModelBuilder::Embedding(_) => return Ok(()),
+        };
+        let resolved = resolve_device(force_cpu, device.clone())?;
+        *config = resolve_paged_attn(
+            config_with_memory_goal(config.take(), memory_goal.take())?,
+            disabled,
+            resolved.location(),
+        )?;
+        *device = Some(resolved);
+        Ok(())
+    }
+
     fn paged_attn_cfg(&self) -> Option<PagedAttentionConfig> {
         match self {
-            AnyModelBuilder::Text(b) => b.paged_attn_cfg,
-            AnyModelBuilder::Multimodal(b) => b.paged_attn_cfg,
-            AnyModelBuilder::Auto(b) => b.paged_attn_cfg,
-            AnyModelBuilder::Gguf(b) => b.paged_attn_cfg,
+            AnyModelBuilder::Text(b) => b.paged_attn_cfg.clone(),
+            AnyModelBuilder::Multimodal(b) => b.paged_attn_cfg.clone(),
+            AnyModelBuilder::Auto(b) => b.paged_attn_cfg.clone(),
+            AnyModelBuilder::Gguf(b) => b.paged_attn_cfg.clone(),
             AnyModelBuilder::Diffusion(_)
             | AnyModelBuilder::Speech(_)
             | AnyModelBuilder::Embedding(_) => None,
@@ -201,7 +245,14 @@ impl MultiModelBuilder {
 
         mistralrs_core::distributed::begin_tensor_parallel_session(self.builders.len())?;
 
-        let entries = self.builders;
+        let entries = self
+            .builders
+            .into_iter()
+            .map(|mut entry| {
+                entry.builder.resolve_paged_attn()?;
+                Ok(entry)
+            })
+            .collect::<anyhow::Result<Vec<_>>>()?;
         let paged_kv_plan = plan_paged_kv(
             &entries
                 .iter()
@@ -335,9 +386,12 @@ pub(crate) fn maybe_initialize_logging(with_logging: bool) {
 }
 
 pub(crate) fn resolve_device(force_cpu: bool, device: Option<Device>) -> anyhow::Result<Device> {
+    if force_cpu {
+        return Ok(Device::Cpu);
+    }
     Ok(device
         .map(Ok)
-        .unwrap_or_else(|| crate::best_device(force_cpu))?)
+        .unwrap_or_else(|| crate::best_device(false))?)
 }
 
 pub(crate) fn resolve_isq_type(
@@ -352,6 +406,45 @@ pub(crate) fn default_scheduler_config(max_num_seqs: usize) -> anyhow::Result<Sc
     Ok(SchedulerConfig::DefaultScheduler {
         method: DefaultSchedulerMethod::Fixed(max_num_seqs.try_into()?),
     })
+}
+
+fn config_with_memory_goal(
+    config: Option<PagedAttentionConfig>,
+    memory_goal: Option<crate::MemoryGoal>,
+) -> anyhow::Result<Option<PagedAttentionConfig>> {
+    match memory_goal {
+        Some(goal) => match config {
+            Some(config) => config.with_memory_goal(goal).map(Some),
+            None => PagedAttentionConfig::new(None, goal, mistralrs_core::PagedCacheType::Auto)
+                .map(Some),
+        },
+        None => Ok(config),
+    }
+}
+
+fn resolve_paged_attn(
+    config: Option<PagedAttentionConfig>,
+    disabled: bool,
+    device: DeviceLocation,
+) -> anyhow::Result<Option<PagedAttentionConfig>> {
+    if disabled || device == DeviceLocation::Cpu || !mistralrs_core::paged_attn_supported() {
+        anyhow::ensure!(
+            config.is_none_or(|config| config.memory_goal() == crate::MemoryGoal::Auto),
+            "an explicit memory goal requires supported paged attention"
+        );
+        return Ok(None);
+    }
+    config.map_or_else(
+        || {
+            PagedAttentionConfig::new(
+                None,
+                crate::MemoryGoal::Auto,
+                mistralrs_core::PagedCacheType::Auto,
+            )
+            .map(Some)
+        },
+        |config| Ok(Some(config)),
+    )
 }
 
 fn paged_attn_with_serving_capacity(
@@ -374,18 +467,13 @@ where
     P: ?Sized + Pipeline,
 {
     if paged_attn_requested {
-        if let Some(config) = pipeline
-            .lock()
-            .await
-            .get_metadata()
-            .cache_config
-            .as_ref()
-            .cloned()
-        {
+        let metadata = pipeline.lock().await.get_metadata();
+        if let Some(config) = metadata.cache_config.clone() {
+            let limits = scheduler_execution_limits(max_num_seqs, metadata.memory_plan);
             return Ok(SchedulerConfig::PagedAttentionMeta {
-                max_num_seqs,
-                max_num_batched_tokens: mistralrs_core::DEFAULT_MAX_NUM_BATCHED_TOKENS,
-                max_prefill_chunk_tokens: mistralrs_core::DEFAULT_MAX_PREFILL_CHUNK_TOKENS,
+                max_num_seqs: limits.max_num_seqs,
+                max_num_batched_tokens: limits.max_num_batched_tokens,
+                max_prefill_chunk_tokens: limits.max_prefill_chunk_tokens,
                 max_decode_steps_before_prefill:
                     mistralrs_core::DEFAULT_MAX_DECODE_STEPS_BEFORE_PREFILL,
                 config,
@@ -394,6 +482,16 @@ where
     }
 
     default_scheduler_config(max_num_seqs)
+}
+
+fn scheduler_execution_limits(
+    max_num_seqs: usize,
+    plan: Option<mistralrs_core::memory_plan::RuntimeMemoryPlan>,
+) -> mistralrs_core::ExecutionMemoryLimits {
+    mistralrs_core::ExecutionMemoryLimits {
+        max_num_seqs,
+        ..plan.map_or_else(Default::default, |plan| plan.limits)
+    }
 }
 
 pub(crate) fn build_engine_config(
@@ -434,12 +532,6 @@ pub(crate) async fn build_pipeline_from_text_loader(
 
     let mtp_runtime = MtpRuntimeConfig::new(builder.prefix_cache_n.unwrap_or(0));
 
-    builder.paged_attn_cfg = paged_attn_with_serving_capacity(
-        builder.paged_attn_cfg,
-        builder.max_num_seqs,
-        builder.prefix_cache_n.unwrap_or(0),
-    )?;
-
     let engine_config = build_engine_config(
         builder.throughput_logging,
         builder.search_embedding_model,
@@ -450,8 +542,19 @@ pub(crate) async fn build_pipeline_from_text_loader(
     );
     let mcp_client_config = builder.mcp_client_config.clone();
     let device = resolve_device(builder.force_cpu, builder.device.clone())?;
+    builder.paged_attn_cfg = resolve_paged_attn(
+        config_with_memory_goal(builder.paged_attn_cfg.take(), builder.memory_goal.take())?,
+        builder.no_paged_attn || builder.no_kv_cache,
+        device.location(),
+    )?;
+    builder.paged_attn_cfg = paged_attn_with_serving_capacity(
+        builder.paged_attn_cfg.clone(),
+        builder.max_num_seqs,
+        builder.prefix_cache_n.unwrap_or(0),
+    )?;
+
     builder.paged_attn_cfg = reserve_external_mtp_memory_with_runtime(
-        builder.paged_attn_cfg,
+        builder.paged_attn_cfg.clone(),
         builder.mtp_config.as_ref(),
         mtp_runtime,
         &builder.dtype,
@@ -475,7 +578,7 @@ pub(crate) async fn build_pipeline_from_text_loader(
         !builder.with_logging,
         device_map_setting,
         isq_type,
-        builder.paged_attn_cfg,
+        builder.paged_attn_cfg.clone(),
     )?;
     if let Some(mtp_config) = builder.mtp_config.clone() {
         pipeline
@@ -507,12 +610,6 @@ pub(crate) async fn build_pipeline_from_gguf_loader(
 
     let mtp_runtime = MtpRuntimeConfig::new(builder.prefix_cache_n.unwrap_or(0));
 
-    builder.paged_attn_cfg = paged_attn_with_serving_capacity(
-        builder.paged_attn_cfg,
-        builder.max_num_seqs,
-        builder.prefix_cache_n.unwrap_or(0),
-    )?;
-
     let engine_config = build_engine_config(
         builder.throughput_logging,
         builder.search_embedding_model,
@@ -522,8 +619,19 @@ pub(crate) async fn build_pipeline_from_gguf_loader(
         builder.prefix_cache_n,
     );
     let device = resolve_device(builder.force_cpu, builder.device.clone())?;
+    builder.paged_attn_cfg = resolve_paged_attn(
+        config_with_memory_goal(builder.paged_attn_cfg.take(), builder.memory_goal.take())?,
+        builder.no_paged_attn || builder.no_kv_cache,
+        device.location(),
+    )?;
+    builder.paged_attn_cfg = paged_attn_with_serving_capacity(
+        builder.paged_attn_cfg.clone(),
+        builder.max_num_seqs,
+        builder.prefix_cache_n.unwrap_or(0),
+    )?;
+
     builder.paged_attn_cfg = reserve_external_mtp_memory_with_runtime(
-        builder.paged_attn_cfg,
+        builder.paged_attn_cfg.clone(),
         builder.mtp_config.as_ref(),
         mtp_runtime,
         &builder.dtype,
@@ -549,7 +657,7 @@ pub(crate) async fn build_pipeline_from_gguf_loader(
         !builder.with_logging,
         device_map_setting,
         isq_type,
-        builder.paged_attn_cfg,
+        builder.paged_attn_cfg.clone(),
     )?;
     if let Some(mtp_config) = builder.mtp_config.clone() {
         pipeline
@@ -628,12 +736,6 @@ pub async fn build_text_pipeline(
 
     let mtp_runtime = MtpRuntimeConfig::new(builder.prefix_cache_n.unwrap_or(0));
 
-    builder.paged_attn_cfg = paged_attn_with_serving_capacity(
-        builder.paged_attn_cfg,
-        builder.max_num_seqs,
-        builder.prefix_cache_n.unwrap_or(0),
-    )?;
-
     let config = NormalSpecificConfig {
         topology: builder.topology.clone(),
         organization: builder.organization,
@@ -666,9 +768,20 @@ pub async fn build_text_pipeline(
     )
     .build(builder.loader_type.clone())?;
 
-    let device = resolve_device(builder.force_cpu, None)?;
+    let device = resolve_device(builder.force_cpu, builder.device.clone())?;
+    builder.paged_attn_cfg = resolve_paged_attn(
+        config_with_memory_goal(builder.paged_attn_cfg.take(), builder.memory_goal.take())?,
+        builder.no_paged_attn || builder.no_kv_cache,
+        device.location(),
+    )?;
+    builder.paged_attn_cfg = paged_attn_with_serving_capacity(
+        builder.paged_attn_cfg.clone(),
+        builder.max_num_seqs,
+        builder.prefix_cache_n.unwrap_or(0),
+    )?;
+
     builder.paged_attn_cfg = reserve_external_mtp_memory_with_runtime(
-        builder.paged_attn_cfg,
+        builder.paged_attn_cfg.clone(),
         builder.mtp_config.as_ref(),
         mtp_runtime,
         &builder.dtype,
@@ -687,7 +800,7 @@ pub async fn build_text_pipeline(
             .clone()
             .unwrap_or(DeviceMapSetting::Auto(AutoDeviceMapParams::default_text())),
         isq_type,
-        builder.paged_attn_cfg,
+        builder.paged_attn_cfg.clone(),
     )?;
     if let Some(mtp_config) = builder.mtp_config.clone() {
         pipeline
@@ -775,12 +888,6 @@ pub async fn build_multimodal_pipeline(
 
     let mtp_runtime = MtpRuntimeConfig::new(builder.prefix_cache_n.unwrap_or(0));
 
-    builder.paged_attn_cfg = paged_attn_with_serving_capacity(
-        builder.paged_attn_cfg,
-        builder.max_num_seqs,
-        builder.prefix_cache_n.unwrap_or(0),
-    )?;
-
     let config = MultimodalSpecificConfig {
         topology: builder.topology.clone(),
         write_uqff: builder.write_uqff.clone(),
@@ -814,9 +921,20 @@ pub async fn build_multimodal_pipeline(
     .with_encoder_cache_memory_bytes(builder.encoder_cache_memory_bytes)
     .build(builder.loader_type.clone());
 
-    let device = resolve_device(builder.force_cpu, None)?;
+    let device = resolve_device(builder.force_cpu, builder.device.clone())?;
+    builder.paged_attn_cfg = resolve_paged_attn(
+        config_with_memory_goal(builder.paged_attn_cfg.take(), builder.memory_goal.take())?,
+        builder.no_paged_attn,
+        device.location(),
+    )?;
+    builder.paged_attn_cfg = paged_attn_with_serving_capacity(
+        builder.paged_attn_cfg.clone(),
+        builder.max_num_seqs,
+        builder.prefix_cache_n.unwrap_or(0),
+    )?;
+
     builder.paged_attn_cfg = reserve_external_mtp_memory_with_runtime(
-        builder.paged_attn_cfg,
+        builder.paged_attn_cfg.clone(),
         builder.mtp_config.as_ref(),
         mtp_runtime,
         &builder.dtype,
@@ -837,7 +955,7 @@ pub async fn build_multimodal_pipeline(
                 AutoDeviceMapParams::default_multimodal(),
             )),
         isq_type,
-        builder.paged_attn_cfg,
+        builder.paged_attn_cfg.clone(),
     )?;
     if let Some(mtp_config) = builder.mtp_config.clone() {
         pipeline
@@ -937,12 +1055,6 @@ pub async fn build_gguf_pipeline(
     }
     let mtp_runtime = MtpRuntimeConfig::new(builder.prefix_cache_n.unwrap_or(0));
 
-    builder.paged_attn_cfg = paged_attn_with_serving_capacity(
-        builder.paged_attn_cfg,
-        builder.max_num_seqs,
-        builder.prefix_cache_n.unwrap_or(0),
-    )?;
-
     let config = GGUFSpecificConfig {
         topology: builder.topology.clone(),
         organization: builder.organization,
@@ -980,8 +1092,19 @@ pub async fn build_gguf_pipeline(
     let loader = loader_builder.build();
 
     let device = resolve_device(builder.force_cpu, builder.device.clone())?;
+    builder.paged_attn_cfg = resolve_paged_attn(
+        config_with_memory_goal(builder.paged_attn_cfg.take(), builder.memory_goal.take())?,
+        builder.no_paged_attn || builder.no_kv_cache,
+        device.location(),
+    )?;
+    builder.paged_attn_cfg = paged_attn_with_serving_capacity(
+        builder.paged_attn_cfg.clone(),
+        builder.max_num_seqs,
+        builder.prefix_cache_n.unwrap_or(0),
+    )?;
+
     builder.paged_attn_cfg = reserve_external_mtp_memory_with_runtime(
-        builder.paged_attn_cfg,
+        builder.paged_attn_cfg.clone(),
         builder.mtp_config.as_ref(),
         mtp_runtime,
         &builder.dtype,
@@ -1005,7 +1128,7 @@ pub async fn build_gguf_pipeline(
         !builder.with_logging,
         device_map_setting.clone(),
         isq_type,
-        builder.paged_attn_cfg,
+        builder.paged_attn_cfg.clone(),
     )?;
     if let Some(mtp_config) = builder.mtp_config.clone() {
         pipeline
@@ -1357,12 +1480,6 @@ pub async fn build_auto_pipeline(
 
     let mtp_runtime = MtpRuntimeConfig::new(builder.prefix_cache_n.unwrap_or(0));
 
-    builder.paged_attn_cfg = paged_attn_with_serving_capacity(
-        builder.paged_attn_cfg,
-        builder.max_num_seqs,
-        builder.prefix_cache_n.unwrap_or(0),
-    )?;
-
     let normal_config = NormalSpecificConfig {
         topology: builder.topology.clone(),
         organization: builder.organization,
@@ -1429,8 +1546,19 @@ pub async fn build_auto_pipeline(
         .build();
 
     let device = resolve_device(builder.force_cpu, builder.device.clone())?;
+    builder.paged_attn_cfg = resolve_paged_attn(
+        config_with_memory_goal(builder.paged_attn_cfg.take(), builder.memory_goal.take())?,
+        builder.no_paged_attn || builder.no_kv_cache,
+        device.location(),
+    )?;
+    builder.paged_attn_cfg = paged_attn_with_serving_capacity(
+        builder.paged_attn_cfg.clone(),
+        builder.max_num_seqs,
+        builder.prefix_cache_n.unwrap_or(0),
+    )?;
+
     builder.paged_attn_cfg = reserve_external_mtp_memory_with_runtime(
-        builder.paged_attn_cfg,
+        builder.paged_attn_cfg.clone(),
         builder.mtp_config.as_ref(),
         mtp_runtime,
         &builder.dtype,
@@ -1449,7 +1577,7 @@ pub async fn build_auto_pipeline(
             .clone()
             .unwrap_or(DeviceMapSetting::Auto(AutoDeviceMapParams::default_text())),
         isq_type,
-        builder.paged_attn_cfg,
+        builder.paged_attn_cfg.clone(),
     )?;
     if let Some(mtp_config) = builder.mtp_config.clone() {
         pipeline
@@ -1528,4 +1656,131 @@ pub async fn build_auto_pipeline(
     };
 
     Ok((pipeline, scheduler_config, add_model_config))
+}
+
+#[cfg(test)]
+mod paged_attention_policy_tests {
+    use super::*;
+    use mistralrs_core::{MemoryGoal, PagedCacheType};
+
+    const TEST_CONTEXT: usize = 8192;
+    const TEST_DEVICE_ID: usize = 0;
+    const TEST_BLOCK_SIZE: usize = 32;
+    const TEST_MAX_SEQUENCES: usize = 8;
+    const TEST_PREFILL_TOKENS: usize = 256;
+
+    fn explicit_config() -> anyhow::Result<PagedAttentionConfig> {
+        PagedAttentionConfig::new(
+            Some(TEST_BLOCK_SIZE),
+            MemoryGoal::KvTokens(TEST_CONTEXT),
+            PagedCacheType::Auto,
+        )
+    }
+
+    #[test]
+    fn scheduler_uses_the_token_limits_reserved_by_the_pipeline() {
+        let plan = mistralrs_core::memory_plan::RuntimeMemoryPlan {
+            memory_goal: MemoryGoal::Auto,
+            limits: mistralrs_core::ExecutionMemoryLimits {
+                max_num_seqs: 1,
+                max_num_batched_tokens: TEST_CONTEXT,
+                max_prefill_chunk_tokens: TEST_PREFILL_TOKENS,
+            },
+            primary_activation_bytes: 0,
+            mapped_activation_bytes: 0,
+            primary_non_attention_bytes: 0,
+            mapped_non_attention_bytes: 0,
+            custom_prefill_mask: false,
+            metal_prefill_mask_is_structured: false,
+            planned_query_tokens: TEST_CONTEXT,
+            logits_bytes_per_query_token: 0,
+        };
+        let limits = scheduler_execution_limits(TEST_MAX_SEQUENCES, Some(plan));
+        assert_eq!(limits.max_num_seqs, TEST_MAX_SEQUENCES);
+        assert_eq!(limits.max_num_batched_tokens, TEST_CONTEXT);
+        assert_eq!(limits.max_prefill_chunk_tokens, TEST_PREFILL_TOKENS);
+        let defaults = scheduler_execution_limits(TEST_MAX_SEQUENCES, None);
+        assert_eq!(defaults.max_num_seqs, TEST_MAX_SEQUENCES);
+        assert_eq!(
+            defaults.max_num_batched_tokens,
+            mistralrs_core::DEFAULT_MAX_NUM_BATCHED_TOKENS
+        );
+        assert_eq!(
+            defaults.max_prefill_chunk_tokens,
+            mistralrs_core::DEFAULT_MAX_PREFILL_CHUNK_TOKENS
+        );
+    }
+
+    #[test]
+    fn default_uses_actual_device_and_explicit_goals_require_paging() -> anyhow::Result<()> {
+        assert!(resolve_paged_attn(None, false, DeviceLocation::Cpu)?.is_none());
+        assert!(resolve_paged_attn(Some(explicit_config()?), false, DeviceLocation::Cpu).is_err());
+        for device in [
+            DeviceLocation::Cuda {
+                gpu_id: TEST_DEVICE_ID,
+            },
+            DeviceLocation::Metal {
+                gpu_id: TEST_DEVICE_ID,
+            },
+        ] {
+            let default = resolve_paged_attn(None, false, device)?;
+            if mistralrs_core::paged_attn_supported() {
+                assert_eq!(default.unwrap().memory_goal(), MemoryGoal::Auto);
+                assert_eq!(
+                    resolve_paged_attn(Some(explicit_config()?), false, device)?
+                        .unwrap()
+                        .memory_goal(),
+                    MemoryGoal::KvTokens(TEST_CONTEXT)
+                );
+            } else {
+                assert!(default.is_none());
+                assert!(resolve_paged_attn(Some(explicit_config()?), false, device).is_err());
+            }
+            assert!(resolve_paged_attn(Some(explicit_config()?), true, device).is_err());
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn memory_goal_setters_preserve_explicit_intent() -> anyhow::Result<()> {
+        macro_rules! check_builder {
+            ($builder:expr) => {{
+                let builder = $builder
+                    .with_memory_goal(MemoryGoal::KvTokens(TEST_CONTEXT))
+                    .without_paged_attn();
+                assert!(builder.no_paged_attn);
+                assert_eq!(
+                    builder.memory_goal,
+                    Some(MemoryGoal::KvTokens(TEST_CONTEXT))
+                );
+                let mut disabled: AnyModelBuilder = builder.with_device(Device::Cpu).into();
+                assert!(disabled.resolve_paged_attn().is_err());
+                let builder = $builder
+                    .with_memory_goal(MemoryGoal::Utilization(0.5))
+                    .with_paged_attn(explicit_config()?);
+                assert_eq!(builder.memory_goal, None);
+                assert_eq!(
+                    builder.paged_attn_cfg.unwrap().memory_goal(),
+                    MemoryGoal::KvTokens(TEST_CONTEXT)
+                );
+            }};
+        }
+        check_builder!(crate::TextModelBuilder::new("model"));
+        check_builder!(crate::ModelBuilder::new("model"));
+        check_builder!(crate::MultimodalModelBuilder::new("model"));
+        check_builder!(crate::GgufModelBuilder::new("model", vec!["model.gguf"]));
+        Ok(())
+    }
+
+    #[test]
+    fn memory_goal_override_validates_the_new_goal() -> anyhow::Result<()> {
+        let config = explicit_config()?;
+        let overridden =
+            config_with_memory_goal(Some(config.clone()), Some(MemoryGoal::Auto))?.unwrap();
+        assert_eq!(overridden.memory_goal(), MemoryGoal::Auto);
+        assert!(
+            config_with_memory_goal(Some(config), Some(MemoryGoal::Utilization(f32::NAN))).is_err()
+        );
+        Ok(())
+    }
 }

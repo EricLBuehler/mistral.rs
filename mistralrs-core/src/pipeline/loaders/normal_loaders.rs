@@ -13,7 +13,10 @@ use crate::{
     amoe::AnyMoeBaseModelMixin,
     device_map::DeviceMapper,
     lora::{LoraConfig, Ordering},
-    paged_attention::{AttentionImplementation, ModelConfigLike, ModelConfigMetadata},
+    paged_attention::{
+        AttentionImplementation, ModelConfigLike, ModelConfigMetadata,
+        PrefixPrefillAttentionFeatures,
+    },
     pipeline::{
         isq::IsqModelLoader, text_models_inputs_processor::FlashParams, EitherCache, IsqModel,
         ModelForwardContext,
@@ -21,7 +24,7 @@ use crate::{
     utils::varbuilder_utils::DeviceForLoadTensor,
     xlora_models::NonGranularState,
 };
-use anyhow::Result;
+use anyhow::{Context, Result};
 use candle_core::{DType, Device, Tensor};
 use mistralrs_quant::log::once_log_debug;
 
@@ -38,8 +41,44 @@ use crate::{
     xlora_models::{self, XLoraConfig},
 };
 
-use super::{AutoDeviceMapParams, DeviceMappedModelLoader};
+use super::{ActivationModelConfig, AutoDeviceMapParams, DeviceMappedModelLoader};
 use crate::gguf::normal_registry::RopePairing;
+
+const PHI35_MOE_EXPERTS_PER_TOKEN: usize = 2;
+
+fn activation_width(parts: &[(usize, usize)]) -> Result<usize> {
+    parts.iter().try_fold(0usize, |total, &(count, width)| {
+        count
+            .checked_mul(width)
+            .and_then(|part| total.checked_add(part))
+            .context("Model activation width overflow")
+    })
+}
+
+fn uniform_attention_features(
+    num_layers: usize,
+    sliding_layers: usize,
+    mut features: PrefixPrefillAttentionFeatures,
+) -> Option<PrefixPrefillAttentionFeatures> {
+    if sliding_layers > 0 && sliding_layers < num_layers {
+        return None;
+    }
+    features.has_sliding_window = sliding_layers > 0;
+    Some(features)
+}
+
+fn per_layer_activation_value(
+    value: &models::hunyuan_v1_moe::PerLayerValue,
+    layer: usize,
+) -> Result<usize> {
+    match value {
+        models::hunyuan_v1_moe::PerLayerValue::Scalar(value) => Ok(*value),
+        models::hunyuan_v1_moe::PerLayerValue::Array(values) => values
+            .get(layer)
+            .copied()
+            .context("Missing per-layer MoE activation configuration"),
+    }
+}
 
 pub trait NormalModel: IsqModel + AnyMoeBaseModelMixin + SpeculativeTargetMixin {
     fn forward(
@@ -528,6 +567,10 @@ impl IsqModelLoader for AutoNormalLoader {
 }
 
 impl DeviceMappedModelLoader for AutoNormalLoader {
+    fn activation_model_config(&self, config: &str) -> Result<ActivationModelConfig> {
+        Self::get_loader(config)?.activation_model_config(config)
+    }
+
     fn non_mapped_size_in_bytes(
         &self,
         config: &str,
@@ -660,6 +703,19 @@ impl IsqModelLoader for MistralLoader {
 }
 
 impl DeviceMappedModelLoader for MistralLoader {
+    fn activation_model_config(&self, config: &str) -> Result<ActivationModelConfig> {
+        let cfg: models::mistral::Config = serde_json::from_str(config)?;
+        Ok(ActivationModelConfig {
+            intermediate_size: cfg.intermediate_size,
+            vocab_size: cfg.vocab_size,
+            attention_features: Some(PrefixPrefillAttentionFeatures {
+                has_sliding_window: cfg.sliding_window.is_some(),
+                ..Default::default()
+            }),
+            ..Default::default()
+        })
+    }
+
     fn mapped_max_act_size_elems(
         &self,
         config: &str,
@@ -873,6 +929,16 @@ impl IsqModelLoader for GemmaLoader {
 }
 
 impl DeviceMappedModelLoader for GemmaLoader {
+    fn activation_model_config(&self, config: &str) -> Result<ActivationModelConfig> {
+        let cfg: models::gemma::Config = serde_json::from_str(config)?;
+        Ok(ActivationModelConfig {
+            intermediate_size: cfg.intermediate_size,
+            vocab_size: cfg.vocab_size,
+            attention_features: Some(PrefixPrefillAttentionFeatures::default()),
+            ..Default::default()
+        })
+    }
+
     fn mapped_max_act_size_elems(
         &self,
         config: &str,
@@ -1084,6 +1150,16 @@ impl IsqModelLoader for LlamaLoader {
 }
 
 impl DeviceMappedModelLoader for LlamaLoader {
+    fn activation_model_config(&self, config: &str) -> Result<ActivationModelConfig> {
+        let cfg: models::llama::Config = serde_json::from_str(config)?;
+        Ok(ActivationModelConfig {
+            intermediate_size: cfg.intermediate_size,
+            vocab_size: cfg.vocab_size,
+            attention_features: Some(PrefixPrefillAttentionFeatures::default()),
+            ..Default::default()
+        })
+    }
+
     fn mapped_max_act_size_elems(
         &self,
         config: &str,
@@ -1312,6 +1388,22 @@ impl IsqModelLoader for MixtralLoader {
 }
 
 impl DeviceMappedModelLoader for MixtralLoader {
+    fn activation_model_config(&self, config: &str) -> Result<ActivationModelConfig> {
+        let cfg: models::mixtral::Config = serde_json::from_str(config)?;
+        Ok(ActivationModelConfig {
+            intermediate_size: activation_width(&[(
+                cfg.num_experts_per_tok,
+                cfg.intermediate_size,
+            )])?,
+            vocab_size: cfg.vocab_size,
+            attention_features: Some(PrefixPrefillAttentionFeatures {
+                has_sliding_window: cfg.sliding_window.is_some(),
+                ..Default::default()
+            }),
+            ..Default::default()
+        })
+    }
+
     fn mapped_max_act_size_elems(
         &self,
         config: &str,
@@ -1529,6 +1621,16 @@ impl IsqModelLoader for Phi2Loader {
 }
 
 impl DeviceMappedModelLoader for Phi2Loader {
+    fn activation_model_config(&self, config: &str) -> Result<ActivationModelConfig> {
+        let cfg: models::phi2::Config = serde_json::from_str(config)?;
+        Ok(ActivationModelConfig {
+            intermediate_size: cfg.intermediate_size,
+            vocab_size: cfg.vocab_size,
+            attention_features: Some(PrefixPrefillAttentionFeatures::default()),
+            ..Default::default()
+        })
+    }
+
     fn mapped_max_act_size_elems(
         &self,
         config: &str,
@@ -1736,6 +1838,19 @@ impl IsqModelLoader for Phi3Loader {
 }
 
 impl DeviceMappedModelLoader for Phi3Loader {
+    fn activation_model_config(&self, config: &str) -> Result<ActivationModelConfig> {
+        let cfg: models::phi3::Config = serde_json::from_str(config)?;
+        Ok(ActivationModelConfig {
+            intermediate_size: cfg.intermediate_size,
+            vocab_size: cfg.vocab_size,
+            attention_features: Some(PrefixPrefillAttentionFeatures {
+                has_sliding_window: cfg.sliding_window.is_some(),
+                ..Default::default()
+            }),
+            ..Default::default()
+        })
+    }
+
     fn mapped_max_act_size_elems(
         &self,
         config: &str,
@@ -1940,6 +2055,38 @@ impl IsqModelLoader for Qwen2Loader {
 }
 
 impl DeviceMappedModelLoader for Qwen2Loader {
+    fn activation_model_config(&self, config: &str) -> Result<ActivationModelConfig> {
+        let cfg: models::qwen2::Config = serde_json::from_str(config)?;
+        Ok(ActivationModelConfig {
+            intermediate_size: cfg.intermediate_size,
+            vocab_size: cfg.vocab_size,
+            attention_features: uniform_attention_features(
+                cfg.num_hidden_layers,
+                if cfg.use_sliding_window && cfg.sliding_window.is_some() {
+                    cfg.layer_types.as_ref().map_or_else(
+                        || cfg.num_hidden_layers.saturating_sub(cfg.max_window_layers),
+                        |layers| {
+                            layers
+                                .iter()
+                                .take(cfg.num_hidden_layers)
+                                .filter(|layer| {
+                                    matches!(
+                                        layer,
+                                        models::qwen2::Qwen2AttentionType::SlidingAttention
+                                    )
+                                })
+                                .count()
+                        },
+                    )
+                } else {
+                    0
+                },
+                PrefixPrefillAttentionFeatures::default(),
+            ),
+            ..Default::default()
+        })
+    }
+
     fn mapped_max_act_size_elems(
         &self,
         config: &str,
@@ -2155,6 +2302,23 @@ impl IsqModelLoader for Gemma2Loader {
 }
 
 impl DeviceMappedModelLoader for Gemma2Loader {
+    fn activation_model_config(&self, config: &str) -> Result<ActivationModelConfig> {
+        let cfg: models::gemma2::Config = serde_json::from_str(config)?;
+        Ok(ActivationModelConfig {
+            intermediate_size: cfg.intermediate_size,
+            vocab_size: cfg.vocab_size,
+            attention_features: uniform_attention_features(
+                cfg.num_hidden_layers,
+                cfg.num_hidden_layers.div_ceil(2),
+                PrefixPrefillAttentionFeatures {
+                    has_softcap: cfg.attn_logit_softcapping.is_some(),
+                    ..Default::default()
+                },
+            ),
+            ..Default::default()
+        })
+    }
+
     fn mapped_max_act_size_elems(
         &self,
         config: &str,
@@ -2366,6 +2530,19 @@ impl IsqModelLoader for Starcoder2Loader {
 }
 
 impl DeviceMappedModelLoader for Starcoder2Loader {
+    fn activation_model_config(&self, config: &str) -> Result<ActivationModelConfig> {
+        let cfg: models::starcoder2::Config = serde_json::from_str(config)?;
+        Ok(ActivationModelConfig {
+            intermediate_size: cfg.intermediate_size,
+            vocab_size: cfg.vocab_size,
+            attention_features: Some(PrefixPrefillAttentionFeatures {
+                has_sliding_window: cfg.sliding_window.is_some(),
+                ..Default::default()
+            }),
+            ..Default::default()
+        })
+    }
+
     fn mapped_max_act_size_elems(
         &self,
         config: &str,
@@ -2591,6 +2768,22 @@ impl IsqModelLoader for Phi3_5MoELoader {
 }
 
 impl DeviceMappedModelLoader for Phi3_5MoELoader {
+    fn activation_model_config(&self, config: &str) -> Result<ActivationModelConfig> {
+        let cfg: models::phi3_5_moe::Config = serde_json::from_str(config)?;
+        Ok(ActivationModelConfig {
+            intermediate_size: activation_width(&[(
+                PHI35_MOE_EXPERTS_PER_TOKEN,
+                cfg.intermediate_size,
+            )])?,
+            vocab_size: cfg.vocab_size,
+            attention_features: Some(PrefixPrefillAttentionFeatures {
+                has_sliding_window: cfg.sliding_window.is_some(),
+                ..Default::default()
+            }),
+            ..Default::default()
+        })
+    }
+
     fn mapped_max_act_size_elems(
         &self,
         config: &str,
@@ -2861,6 +3054,33 @@ impl IsqModelLoader for DeepSeekV2Loader {
 }
 
 impl DeviceMappedModelLoader for DeepSeekV2Loader {
+    fn activation_model_config(&self, config: &str) -> Result<ActivationModelConfig> {
+        let cfg: models::deepseek2::DeepSeekV2Config = serde_json::from_str(config)?;
+        let routed_width = if cfg.n_routed_experts.is_some() {
+            activation_width(&[
+                (
+                    cfg.num_experts_per_tok
+                        .context("Missing MoE experts per token")?,
+                    cfg.moe_intermediate_size,
+                ),
+                (cfg.n_shared_experts.unwrap_or(0), cfg.moe_intermediate_size),
+            ])?
+        } else {
+            0
+        };
+        Ok(ActivationModelConfig {
+            intermediate_size: cfg.intermediate_size.max(routed_width),
+            vocab_size: cfg.vocab_size,
+            attention_features: Some(PrefixPrefillAttentionFeatures::default()),
+            extra_hidden_elements_per_token: activation_width(&[
+                (1, cfg.q_lora_rank.unwrap_or(0)),
+                (1, cfg.kv_lora_rank),
+                (1, cfg.qk_rope_head_dim),
+            ])?,
+            ..Default::default()
+        })
+    }
+
     fn mapped_max_act_size_elems(
         &self,
         config: &str,
@@ -3167,6 +3387,33 @@ impl IsqModelLoader for DeepSeekV3Loader {
 }
 
 impl DeviceMappedModelLoader for DeepSeekV3Loader {
+    fn activation_model_config(&self, config: &str) -> Result<ActivationModelConfig> {
+        let cfg: models::deepseek3::DeepSeekV3Config = serde_json::from_str(config)?;
+        let routed_width = if cfg.n_routed_experts.is_some() {
+            activation_width(&[
+                (
+                    cfg.num_experts_per_tok
+                        .context("Missing MoE experts per token")?,
+                    cfg.moe_intermediate_size,
+                ),
+                (cfg.n_shared_experts.unwrap_or(0), cfg.moe_intermediate_size),
+            ])?
+        } else {
+            0
+        };
+        Ok(ActivationModelConfig {
+            intermediate_size: cfg.intermediate_size.max(routed_width),
+            vocab_size: cfg.vocab_size,
+            attention_features: Some(PrefixPrefillAttentionFeatures::default()),
+            extra_hidden_elements_per_token: activation_width(&[
+                (1, cfg.q_lora_rank.unwrap_or(0)),
+                (1, cfg.kv_lora_rank),
+                (1, cfg.qk_rope_head_dim),
+            ])?,
+            ..Default::default()
+        })
+    }
+
     fn mapped_max_act_size_elems(
         &self,
         config: &str,
@@ -3413,6 +3660,24 @@ impl IsqModelLoader for Qwen3Loader {
 }
 
 impl DeviceMappedModelLoader for Qwen3Loader {
+    fn activation_model_config(&self, config: &str) -> Result<ActivationModelConfig> {
+        let cfg: models::qwen3::Config = serde_json::from_str(config)?;
+        Ok(ActivationModelConfig {
+            intermediate_size: cfg.intermediate_size,
+            vocab_size: cfg.vocab_size,
+            attention_features: uniform_attention_features(
+                cfg.num_hidden_layers,
+                if cfg.use_sliding_window && cfg.sliding_window.is_some() {
+                    cfg.num_hidden_layers.saturating_sub(cfg.max_window_layers)
+                } else {
+                    0
+                },
+                PrefixPrefillAttentionFeatures::default(),
+            ),
+            ..Default::default()
+        })
+    }
+
     fn mapped_max_act_size_elems(
         &self,
         config: &str,
@@ -3428,11 +3693,10 @@ impl DeviceMappedModelLoader for Qwen3Loader {
 
         let cfg: models::qwen3::Config = serde_json::from_str(config)?;
 
-        Ok(
-            max_batch_size
-                * cfg.num_attention_heads
-                * max_seq_len.min(&ATTENTION_CHUNK_SIZE).pow(2),
-        )
+        Ok(max_batch_size
+            * cfg.num_attention_heads
+            * max_seq_len.min(&ATTENTION_CHUNK_SIZE)
+            * max_seq_len)
     }
     fn non_mapped_max_act_size_elems(
         &self,
@@ -3535,8 +3799,8 @@ impl DeviceMappedModelLoader for Qwen3Loader {
             num_kv_heads: cfg.num_key_value_heads,
             num_attn_heads: cfg.num_attention_heads,
             sliding_window: cfg.sliding_window,
-            k_head_dim: cfg.hidden_size / cfg.num_attention_heads,
-            v_head_dim: cfg.hidden_size / cfg.num_attention_heads,
+            k_head_dim: cfg.head_dim(),
+            v_head_dim: cfg.head_dim(),
             kv_cache_layout: crate::paged_attention::KvCacheLayout::Standard,
         };
 
@@ -3615,6 +3879,16 @@ impl IsqModelLoader for HunYuanDenseV1Loader {
 }
 
 impl DeviceMappedModelLoader for HunYuanDenseV1Loader {
+    fn activation_model_config(&self, config: &str) -> Result<ActivationModelConfig> {
+        let cfg: models::hunyuan_v1_dense::Config = serde_json::from_str(config)?;
+        Ok(ActivationModelConfig {
+            intermediate_size: cfg.intermediate_size,
+            vocab_size: cfg.vocab_size,
+            attention_features: Some(PrefixPrefillAttentionFeatures::default()),
+            ..Default::default()
+        })
+    }
+
     fn mapped_max_act_size_elems(
         &self,
         config: &str,
@@ -3839,6 +4113,31 @@ impl IsqModelLoader for HunYuanMoEV1Loader {
 }
 
 impl DeviceMappedModelLoader for HunYuanMoEV1Loader {
+    fn activation_model_config(&self, config: &str) -> Result<ActivationModelConfig> {
+        let cfg: models::hunyuan_v1_moe::Config = serde_json::from_str(config)?;
+        let mut intermediate_size = cfg.intermediate_size;
+        if cfg.uses_moe() {
+            for layer in 0..cfg.num_hidden_layers {
+                let routed = per_layer_activation_value(&cfg.moe_topk, layer)?;
+                let shared = if cfg.use_mixed_mlp_moe {
+                    per_layer_activation_value(&cfg.num_shared_expert, layer)?
+                } else {
+                    0
+                };
+                intermediate_size = intermediate_size.max(activation_width(&[
+                    (routed, cfg.intermediate_size),
+                    (shared, cfg.intermediate_size),
+                ])?);
+            }
+        }
+        Ok(ActivationModelConfig {
+            intermediate_size,
+            vocab_size: cfg.vocab_size,
+            attention_features: Some(PrefixPrefillAttentionFeatures::default()),
+            ..Default::default()
+        })
+    }
+
     fn mapped_max_act_size_elems(
         &self,
         config: &str,
@@ -4057,6 +4356,19 @@ impl IsqModelLoader for GLM4Loader {
 }
 
 impl DeviceMappedModelLoader for GLM4Loader {
+    fn activation_model_config(&self, config: &str) -> Result<ActivationModelConfig> {
+        let cfg: models::glm4::Config = serde_json::from_str(config)?;
+        Ok(ActivationModelConfig {
+            intermediate_size: cfg.intermediate_size,
+            vocab_size: cfg.vocab_size,
+            attention_features: Some(PrefixPrefillAttentionFeatures {
+                has_sliding_window: cfg.sliding_window.is_some(),
+                ..Default::default()
+            }),
+            ..Default::default()
+        })
+    }
+
     fn mapped_max_act_size_elems(
         &self,
         config: &str,
@@ -4311,6 +4623,24 @@ impl IsqModelLoader for GLM4MoeLiteLoader {
 }
 
 impl DeviceMappedModelLoader for GLM4MoeLiteLoader {
+    fn activation_model_config(&self, config: &str) -> Result<ActivationModelConfig> {
+        let cfg: models::glm4_moe_lite::Glm4MoeLiteConfig = serde_json::from_str(config)?;
+        Ok(ActivationModelConfig {
+            intermediate_size: cfg.intermediate_size.max(activation_width(&[
+                (cfg.num_experts_per_tok, cfg.moe_intermediate_size),
+                (cfg.n_shared_experts, cfg.moe_intermediate_size),
+            ])?),
+            vocab_size: cfg.vocab_size,
+            attention_features: Some(PrefixPrefillAttentionFeatures::default()),
+            extra_hidden_elements_per_token: activation_width(&[
+                (1, cfg.q_lora_rank),
+                (1, cfg.kv_lora_rank),
+                (1, cfg.qk_rope_head_dim),
+            ])?,
+            ..Default::default()
+        })
+    }
+
     fn mapped_max_act_size_elems(
         &self,
         config: &str,
@@ -4610,6 +4940,19 @@ impl IsqModelLoader for GLM4MoeLoader {
 }
 
 impl DeviceMappedModelLoader for GLM4MoeLoader {
+    fn activation_model_config(&self, config: &str) -> Result<ActivationModelConfig> {
+        let cfg: models::glm4_moe::Glm4MoeConfig = serde_json::from_str(config)?;
+        Ok(ActivationModelConfig {
+            intermediate_size: cfg.intermediate_size.max(activation_width(&[
+                (cfg.num_experts_per_tok, cfg.moe_intermediate_size),
+                (cfg.n_shared_experts, cfg.moe_intermediate_size),
+            ])?),
+            vocab_size: cfg.vocab_size,
+            attention_features: Some(PrefixPrefillAttentionFeatures::default()),
+            ..Default::default()
+        })
+    }
+
     fn mapped_max_act_size_elems(
         &self,
         config: &str,
@@ -4872,6 +5215,27 @@ impl IsqModelLoader for Qwen3MoELoader {
 }
 
 impl DeviceMappedModelLoader for Qwen3MoELoader {
+    fn activation_model_config(&self, config: &str) -> Result<ActivationModelConfig> {
+        let cfg: models::qwen3_moe::Config = serde_json::from_str(config)?;
+        Ok(ActivationModelConfig {
+            intermediate_size: cfg.intermediate_size.max(activation_width(&[(
+                cfg.num_experts_per_tok,
+                cfg.moe_intermediate_size,
+            )])?),
+            vocab_size: cfg.vocab_size,
+            attention_features: uniform_attention_features(
+                cfg.num_hidden_layers,
+                if cfg.use_sliding_window && cfg.sliding_window.is_some() {
+                    cfg.num_hidden_layers.saturating_sub(cfg.max_window_layers)
+                } else {
+                    0
+                },
+                PrefixPrefillAttentionFeatures::default(),
+            ),
+            ..Default::default()
+        })
+    }
+
     fn mapped_max_act_size_elems(
         &self,
         config: &str,
@@ -5094,6 +5458,16 @@ impl IsqModelLoader for SmolLm3Loader {
 }
 
 impl DeviceMappedModelLoader for SmolLm3Loader {
+    fn activation_model_config(&self, config: &str) -> Result<ActivationModelConfig> {
+        let cfg: models::smollm3::Config = serde_json::from_str(config)?;
+        Ok(ActivationModelConfig {
+            intermediate_size: cfg.intermediate_size,
+            vocab_size: cfg.vocab_size,
+            attention_features: Some(PrefixPrefillAttentionFeatures::default()),
+            ..Default::default()
+        })
+    }
+
     fn mapped_max_act_size_elems(
         &self,
         config: &str,
@@ -5308,6 +5682,38 @@ impl IsqModelLoader for GraniteMoeHybridLoader {
 }
 
 impl DeviceMappedModelLoader for GraniteMoeHybridLoader {
+    fn activation_model_config(&self, config: &str) -> Result<ActivationModelConfig> {
+        let cfg: models::granite::Config = serde_json::from_str(config)?;
+        let extra_hidden_elements_per_token = if cfg
+            .layer_types()
+            .iter()
+            .any(|layer| matches!(layer, models::granite::GraniteLayerType::Mamba))
+        {
+            let intermediate = activation_width(&[(cfg.mamba_expand, cfg.hidden_size)])?;
+            let state = activation_width(&[(cfg.mamba_n_groups, cfg.mamba_d_state)])?;
+            activation_width(&[(2, intermediate), (2, state), (1, cfg.mamba_n_heads())])?
+        } else {
+            0
+        };
+        Ok(ActivationModelConfig {
+            intermediate_size: activation_width(&[
+                (1, cfg.shared_intermediate_size()),
+                (
+                    if cfg.num_local_experts > 0 {
+                        cfg.num_experts_per_tok
+                    } else {
+                        0
+                    },
+                    cfg.intermediate_size,
+                ),
+            ])?,
+            vocab_size: cfg.vocab_size,
+            attention_features: Some(PrefixPrefillAttentionFeatures::default()),
+            extra_hidden_elements_per_token,
+            ..Default::default()
+        })
+    }
+
     fn mapped_max_act_size_elems(
         &self,
         config: &str,
@@ -5541,6 +5947,36 @@ impl IsqModelLoader for GptOssLoader {
 }
 
 impl DeviceMappedModelLoader for GptOssLoader {
+    fn activation_model_config(&self, config: &str) -> Result<ActivationModelConfig> {
+        let cfg: models::gpt_oss::Config = serde_json::from_str(config)?;
+        Ok(ActivationModelConfig {
+            intermediate_size: activation_width(&[(
+                cfg.num_experts_per_tok,
+                cfg.intermediate_size,
+            )])?,
+            vocab_size: cfg.vocab_size,
+            attention_features: uniform_attention_features(
+                cfg.num_hidden_layers,
+                if cfg.sliding_window.is_some() {
+                    cfg.layer_types
+                        .iter()
+                        .take(cfg.num_hidden_layers)
+                        .filter(|layer| {
+                            matches!(layer, models::gpt_oss::LayerType::SlidingAttention)
+                        })
+                        .count()
+                } else {
+                    0
+                },
+                PrefixPrefillAttentionFeatures {
+                    has_sinks: true,
+                    ..Default::default()
+                },
+            ),
+            ..Default::default()
+        })
+    }
+
     fn mapped_max_act_size_elems(
         &self,
         config: &str,
@@ -5782,6 +6218,32 @@ impl IsqModelLoader for Qwen3NextLoader {
 }
 
 impl DeviceMappedModelLoader for Qwen3NextLoader {
+    fn activation_model_config(&self, config: &str) -> Result<ActivationModelConfig> {
+        let cfg: models::qwen3_next::Config = serde_json::from_str(config)?;
+        let extra_hidden_elements_per_token = if cfg
+            .layer_types()
+            .iter()
+            .any(|layer| matches!(layer, models::qwen3_next::LayerType::LinearAttention))
+        {
+            let keys = activation_width(&[(cfg.linear_num_key_heads, cfg.linear_key_head_dim)])?;
+            let values =
+                activation_width(&[(cfg.linear_num_value_heads, cfg.linear_value_head_dim)])?;
+            activation_width(&[(2, keys), (2, values), (2, cfg.linear_num_value_heads)])?
+        } else {
+            0
+        };
+        Ok(ActivationModelConfig {
+            intermediate_size: cfg.intermediate_size.max(activation_width(&[
+                (cfg.num_experts_per_tok, cfg.moe_intermediate_size),
+                (1, cfg.shared_expert_intermediate_size),
+            ])?),
+            vocab_size: cfg.vocab_size,
+            attention_features: Some(PrefixPrefillAttentionFeatures::default()),
+            extra_hidden_elements_per_token,
+            ..Default::default()
+        })
+    }
+
     fn mapped_max_act_size_elems(
         &self,
         config: &str,
@@ -6034,6 +6496,30 @@ impl IsqModelLoader for Qwen3_5TextLoader {
 }
 
 impl DeviceMappedModelLoader for Qwen3_5TextLoader {
+    fn activation_model_config(&self, config: &str) -> Result<ActivationModelConfig> {
+        let cfg = parse_qwen35_text_config(config)?;
+        let extra_hidden_elements_per_token = if cfg.layer_types().iter().any(|layer| {
+            matches!(
+                layer,
+                crate::vision_models::qwen3_5::config::LayerType::LinearAttention
+            )
+        }) {
+            let keys = activation_width(&[(cfg.linear_num_key_heads, cfg.linear_key_head_dim)])?;
+            let values =
+                activation_width(&[(cfg.linear_num_value_heads, cfg.linear_value_head_dim)])?;
+            activation_width(&[(2, keys), (2, values), (2, cfg.linear_num_value_heads)])?
+        } else {
+            0
+        };
+        Ok(ActivationModelConfig {
+            intermediate_size: cfg.intermediate_size,
+            vocab_size: cfg.vocab_size,
+            attention_features: Some(PrefixPrefillAttentionFeatures::default()),
+            extra_hidden_elements_per_token,
+            ..Default::default()
+        })
+    }
+
     fn mapped_max_act_size_elems(
         &self,
         config: &str,
@@ -6253,6 +6739,31 @@ impl IsqModelLoader for Lfm2Loader {
 }
 
 impl DeviceMappedModelLoader for Lfm2Loader {
+    fn activation_model_config(&self, config: &str) -> Result<ActivationModelConfig> {
+        let cfg: models::lfm2::Config = serde_json::from_str(config)?;
+        let intermediate_size = if cfg.is_moe() {
+            cfg.intermediate_size().max(activation_width(&[(
+                cfg.num_experts_per_tok,
+                cfg.moe_intermediate_size,
+            )])?)
+        } else {
+            cfg.intermediate_size()
+        };
+        let extra_hidden_elements_per_token =
+            if cfg.layer_types().contains(&models::lfm2::LayerType::Conv) {
+                activation_width(&[(3, cfg.hidden_size)])?
+            } else {
+                0
+            };
+        Ok(ActivationModelConfig {
+            intermediate_size,
+            vocab_size: cfg.vocab_size,
+            attention_features: Some(PrefixPrefillAttentionFeatures::default()),
+            extra_hidden_elements_per_token,
+            ..Default::default()
+        })
+    }
+
     fn mapped_max_act_size_elems(
         &self,
         config: &str,
@@ -6393,6 +6904,154 @@ impl DeviceMappedModelLoader for Lfm2Loader {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn dense_activation_metadata_and_auto_dispatch_agree() -> Result<()> {
+        let config = serde_json::json!({
+            "architectures": ["LlamaForCausalLM"],
+            "hidden_act": "silu", "hidden_size": 8, "intermediate_size": 24,
+            "vocab_size": 32, "num_hidden_layers": 2, "num_attention_heads": 2,
+            "num_key_value_heads": 1, "rms_norm_eps": 0.00001,
+            "rope_theta": 10000.0, "max_position_embeddings": 128
+        })
+        .to_string();
+        let metadata = LlamaLoader.activation_model_config(&config)?;
+        assert_eq!(
+            metadata,
+            ActivationModelConfig {
+                intermediate_size: 24,
+                vocab_size: 32,
+                attention_features: Some(PrefixPrefillAttentionFeatures::default()),
+                ..Default::default()
+            }
+        );
+        assert_eq!(AutoNormalLoader.activation_model_config(&config)?, metadata);
+        Ok(())
+    }
+
+    #[test]
+    fn attention_feature_metadata_distinguishes_softcap_window_and_plain_attention() -> Result<()> {
+        let mut gemma = serde_json::json!({
+            "attention_bias": false, "head_dim": 4, "hidden_size": 8,
+            "intermediate_size": 24, "num_attention_heads": 2, "num_hidden_layers": 1,
+            "num_key_value_heads": 1, "rms_norm_eps": 0.00001, "rope_theta": 10000.0,
+            "vocab_size": 32, "sliding_window": 16, "attn_logit_softcapping": 50.0,
+            "query_pre_attn_scalar": 4, "max_position_embeddings": 128
+        });
+        assert_eq!(
+            Gemma2Loader
+                .activation_model_config(&gemma.to_string())?
+                .attention_features,
+            Some(PrefixPrefillAttentionFeatures {
+                has_softcap: true,
+                has_sliding_window: true,
+                ..Default::default()
+            })
+        );
+        gemma["num_hidden_layers"] = serde_json::json!(2);
+        assert_eq!(
+            Gemma2Loader
+                .activation_model_config(&gemma.to_string())?
+                .attention_features,
+            None
+        );
+        let mut qwen = models::qwen3::Config {
+            hidden_size: 8,
+            intermediate_size: 24,
+            vocab_size: 32,
+            num_hidden_layers: 2,
+            sliding_window: Some(16),
+            max_window_layers: 1,
+            ..Default::default()
+        };
+        assert_eq!(
+            Qwen3Loader
+                .activation_model_config(&serde_json::to_string(&qwen)?)?
+                .attention_features,
+            Some(PrefixPrefillAttentionFeatures::default())
+        );
+        qwen.use_sliding_window = true;
+        assert_eq!(
+            Qwen3Loader
+                .activation_model_config(&serde_json::to_string(&qwen)?)?
+                .attention_features,
+            None
+        );
+        qwen.max_window_layers = 0;
+        assert_eq!(
+            Qwen3Loader
+                .activation_model_config(&serde_json::to_string(&qwen)?)?
+                .attention_features,
+            Some(PrefixPrefillAttentionFeatures {
+                has_sliding_window: true,
+                ..Default::default()
+            })
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn moe_activation_metadata_includes_routed_and_shared_branches() -> Result<()> {
+        let mut config: serde_json::Value = serde_json::from_str(&deepseek_moe_config())?;
+        config["moe_intermediate_size"] = serde_json::json!(7);
+        config["n_routed_experts"] = serde_json::json!(8);
+        config["num_experts_per_tok"] = serde_json::json!(4);
+        config["n_shared_experts"] = serde_json::json!(2);
+        for loader in [
+            &DeepSeekV2Loader as &dyn DeviceMappedModelLoader,
+            &DeepSeekV3Loader,
+        ] {
+            let metadata = loader.activation_model_config(&config.to_string())?;
+            assert_eq!(metadata.intermediate_size, 42);
+            assert_eq!(metadata.vocab_size, 32);
+            assert_eq!(metadata.extra_hidden_elements_per_token, 4);
+        }
+        config["moe_intermediate_size"] = serde_json::json!(usize::MAX);
+        assert!(DeepSeekV2Loader
+            .activation_model_config(&config.to_string())
+            .is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn per_layer_moe_activation_metadata_uses_largest_active_width() -> Result<()> {
+        let mut config = serde_json::json!({
+            "vocab_size": 32, "hidden_size": 8, "intermediate_size": 6,
+            "num_hidden_layers": 2, "num_attention_heads": 2, "num_key_value_heads": 1,
+            "max_position_embeddings": 128, "rms_norm_eps": 0.00001,
+            "rope_theta": 10000.0, "hidden_act": "silu", "num_experts": 8,
+            "moe_topk": [2, 3], "num_shared_expert": [1, 2], "use_mixed_mlp_moe": true
+        });
+        let metadata = HunYuanMoEV1Loader.activation_model_config(&config.to_string())?;
+        assert_eq!(metadata.intermediate_size, 30);
+        config["use_mixed_mlp_moe"] = serde_json::json!(false);
+        assert_eq!(
+            HunYuanMoEV1Loader
+                .activation_model_config(&config.to_string())?
+                .intermediate_size,
+            18
+        );
+        config["moe_topk"] = serde_json::json!([2]);
+        assert!(HunYuanMoEV1Loader
+            .activation_model_config(&config.to_string())
+            .is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn hybrid_activation_metadata_includes_convolution_projection() -> Result<()> {
+        let config = serde_json::json!({
+            "hidden_size": 8, "intermediate_size": 24, "vocab_size": 32,
+            "num_hidden_layers": 2, "layer_types": ["full_attention", "conv"],
+            "block_auto_adjust_ff_dim": false
+        })
+        .to_string();
+        let metadata = Lfm2Loader.activation_model_config(&config)?;
+        assert_eq!(metadata.intermediate_size, 24);
+        assert_eq!(metadata.vocab_size, 32);
+        assert_eq!(metadata.extra_hidden_elements_per_token, 24);
+        Ok(())
+    }
 
     fn loading_metadata(rope_pairing: Option<RopePairing>) -> NormalLoadingMetadata {
         NormalLoadingMetadata {
@@ -7279,6 +7938,13 @@ mod tests {
             "num_local_experts": 3
         });
 
+        let metadata = GraniteMoeHybridLoader
+            .activation_model_config(&config.to_string())
+            .unwrap();
+        assert_eq!(metadata.intermediate_size, 16);
+        assert_eq!(metadata.vocab_size, 32);
+        assert_eq!(metadata.extra_hidden_elements_per_token, 40);
+
         let sizes = GraniteMoeHybridLoader
             .layer_sizes_in_bytes(&config.to_string(), DType::F32, 2, None)
             .unwrap();
@@ -7320,6 +7986,17 @@ mod tests {
             "attention_bias": true,
             "rope_scaling": null
         });
+
+        assert_eq!(
+            GptOssLoader
+                .activation_model_config(&config.to_string())
+                .unwrap()
+                .attention_features,
+            Some(PrefixPrefillAttentionFeatures {
+                has_sinks: true,
+                ..Default::default()
+            })
+        );
 
         let split = GptOssLoader
             .layer_sizes_in_bytes(&config.to_string(), DType::F32, 2, None)

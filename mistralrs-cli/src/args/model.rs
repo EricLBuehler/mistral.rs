@@ -2,9 +2,9 @@
 
 use clap::{Args, ValueEnum};
 use mistralrs_core::{
-    AutoDeviceMapParams, HfConfigOverrides, IsqOrganization, LoraAdapterSpec, LoraRuntimeConfig,
-    ModelDType, NormalLoaderType, DEFAULT_LORA_MAX_ADAPTERS, DEFAULT_LORA_MAX_BYTES,
-    DEFAULT_LORA_MAX_RANK, MAX_LORA_ALIAS_BYTES,
+    HfConfigOverrides, IsqOrganization, LoraAdapterSpec, LoraRuntimeConfig, ModelDType,
+    NormalLoaderType, DEFAULT_LORA_MAX_ADAPTERS, DEFAULT_LORA_MAX_BYTES, DEFAULT_LORA_MAX_RANK,
+    MAX_LORA_ALIAS_BYTES,
 };
 use serde::Deserialize;
 use std::{
@@ -704,16 +704,6 @@ pub struct DeviceOptions {
     /// Custom Hugging Face cache directory
     #[arg(long)]
     pub hf_cache: Option<PathBuf>,
-
-    /// Max sequence length for automatic device mapping
-    #[arg(long, default_value_t = AutoDeviceMapParams::DEFAULT_MAX_SEQ_LEN)]
-    #[serde(default = "default_max_seq_len")]
-    pub max_seq_len: usize,
-
-    /// Max batch size for automatic device mapping
-    #[arg(long, default_value_t = AutoDeviceMapParams::DEFAULT_MAX_BATCH_SIZE)]
-    #[serde(default = "default_max_batch_size")]
-    pub max_batch_size: usize,
 }
 
 /// Multimodal model specific options
@@ -746,14 +736,6 @@ fn parse_dtype(s: &str) -> Result<ModelDType, String> {
 
 fn default_gqa() -> usize {
     1
-}
-
-fn default_max_seq_len() -> usize {
-    AutoDeviceMapParams::DEFAULT_MAX_SEQ_LEN
-}
-
-fn default_max_batch_size() -> usize {
-    AutoDeviceMapParams::DEFAULT_MAX_BATCH_SIZE
 }
 
 #[cfg(test)]
