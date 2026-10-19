@@ -2822,7 +2822,7 @@ template <typename T, int group_size, int bits, int ROWS>
 }
 
 // Decode batches of 5-8 rows as y^T = W x^T on 8x8 simdgroup MMA with no threadgroup staging. K is permuted
-// (logical column c of subtile t is k = c * S + t) so each lane's two A columns are one contiguous run of 2S weights.
+// (logical column c of tile t is k = c * S + t) so each lane's two A columns are one contiguous run of 2S weights.
 template <typename T, int group_size, int bits>
 [[kernel]] void qmm_t_rows8(const device uint32_t *w [[buffer(0)]],
                             const device T *scales [[buffer(1)]],

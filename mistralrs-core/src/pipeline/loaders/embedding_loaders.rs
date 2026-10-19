@@ -856,7 +856,10 @@ mod tests {
                 AdapterPaths::None,
                 modules.clone(),
             );
-            assert_eq!(paths.get_weight_filenames(), [transformer.clone()]);
+            assert_eq!(
+                paths.get_weight_filenames(),
+                std::slice::from_ref(&transformer)
+            );
             let sizes = super::super::checkpoint_device_map_sizes(
                 paths.get_weight_filenames(),
                 2,
