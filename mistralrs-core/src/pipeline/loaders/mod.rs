@@ -33,8 +33,8 @@ pub use normal_loaders::{
 
 pub use multimodal_loaders::{
     AutoMultimodalLoader, DiffusionGemmaLoader, Gemma3Loader, Gemma3nLoader, Gemma4Loader,
-    Idefics2Loader, Idefics3Loader, LLaVALoader, LLaVANextLoader, Lfm2VlLoader, MiniCpmOLoader,
-    Mistral3Loader, MultimodalLoaderType, MultimodalModel, MultimodalModelLoader,
+    HunyuanVLLoader, Idefics2Loader, Idefics3Loader, LLaVALoader, LLaVANextLoader, Lfm2VlLoader,
+    MiniCpmOLoader, Mistral3Loader, MultimodalLoaderType, MultimodalModel, MultimodalModelLoader,
     MuseGlimmerLoader, Phi3VLoader, Phi4MMLoader, Qwen2VLLoader, Qwen2_5VLLoader, Qwen3VLLoader,
     Qwen3VLMoELoader, Qwen3_5Loader, Qwen3_5MoeLoader, Qwen4ExpLoader, VLlama4Loader, VLlamaLoader,
     VoxtralLoader,

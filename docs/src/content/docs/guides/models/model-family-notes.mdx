@@ -97,6 +97,20 @@ A parallel fast path covers prefill with prefix caching (paged attention on, CUD
 
 `MISTRALRS_NO_MLA=1` forces the generic path; use it when debugging suspected MLA kernel issues, and try `--paged-attn off` as a sanity check for unexpected paged-attention behavior. Background: the [DeepSeek V2 paper](https://arxiv.org/abs/2405.04434).
 
+## HunyuanVL and HunyuanOCR 1.5
+
+HunyuanOCR 1.5 checkpoints load through `HunYuanVLForConditionalGeneration`. The image path supports the current `tencent/HunyuanOCR` checkpoint, including its vision tower, image row separators, four-dimensional rotary positions, and text decoder. It expects the nested `text_config` configuration; the archived 1.0 checkpoint is not supported.
+
+```bash
+mistralrs serve -m tencent/HunyuanOCR --dtype bf16
+```
+
+Use image messages through the OpenAI-compatible chat completions API. Paged prefill selects complete images for each prompt chunk; set `--max-num-batched-tokens` large enough to contain a complete image span. The scheduler can exceed the soft `--max-prefill-chunk-tokens` target to keep an image intact. Long text before or after an image can be split across chunks. Prefix caching and packed prefill are not enabled for this architecture.
+
+The checkpoint allows up to 4096x4096 image pixels and a 131072-token context. A square 4K image uses 16514 visual tokens including row separators; use a batch budget such as `--max-num-batched-tokens 32768` and allocate enough KV cache for the full prompt (for example, `--pa-memory-mb 4096` for one BF16 sequence). A small prefill chunk target does not split a single image. Video and the separate DFlash draft checkpoint are not supported by this image loader.
+
+HunyuanOCR is validated for single-image extraction. Multi-image prompts can omit an image even with eager attention; submit images separately when complete extraction is required.
+
 ## GPT-OSS
 
 GPT-OSS experts are stored pre-quantized in MXFP4 (4-bit microscaling float), and its attention uses per-head sinks. Load it without a quantization flag first:

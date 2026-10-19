@@ -12,9 +12,9 @@ use super::{
     Qwen3_5Loader, Qwen3_5MoeLoader, Qwen4ExpLoader, TokenSource, VLlama4Loader, VLlamaLoader,
 };
 use super::{
-    DiffusionGemmaLoader, Gemma3nLoader, Gemma4Loader, Idefics2Loader, Idefics3Loader, LLaVALoader,
-    LLaVANextLoader, Lfm2VlLoader, Mistral3Loader, MultimodalLoaderType, MuseGlimmerLoader,
-    Phi3VLoader, Qwen2_5VLLoader, VoxtralLoader,
+    DiffusionGemmaLoader, Gemma3nLoader, Gemma4Loader, HunyuanVLLoader, Idefics2Loader,
+    Idefics3Loader, LLaVALoader, LLaVANextLoader, Lfm2VlLoader, Mistral3Loader,
+    MultimodalLoaderType, MuseGlimmerLoader, Phi3VLoader, Qwen2_5VLLoader, VoxtralLoader,
 };
 use crate::attention::ATTENTION_CHUNK_SIZE;
 #[cfg(feature = "cuda")]
@@ -387,6 +387,7 @@ impl MultimodalLoaderBuilder {
             Some(MultimodalLoaderType::Mistral3) => Box::new(Mistral3Loader),
             Some(MultimodalLoaderType::Llama4) => Box::new(VLlama4Loader),
             Some(MultimodalLoaderType::Gemma3n) => Box::new(Gemma3nLoader),
+            Some(MultimodalLoaderType::HunyuanVL) => Box::new(HunyuanVLLoader),
             Some(MultimodalLoaderType::Qwen3VL) => Box::new(Qwen3VLLoader),
             Some(MultimodalLoaderType::Qwen3VLMoE) => Box::new(Qwen3VLMoELoader),
             Some(MultimodalLoaderType::Qwen3_5) => Box::new(Qwen3_5Loader),
