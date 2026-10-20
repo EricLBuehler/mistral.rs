@@ -2,7 +2,10 @@
 
 - **Repo:** mistral.rs
 - **Component:** `mistralrs-quant`, blockwise FP8 linear
-- **Status:** open, not started
+- **Status:** open, **measured**. The cost is 74 s per decode token on the Kolibri-1 fp8
+  checkpoint, which is about 650x slower than the same model in bf16. This is not a
+  second-order optimisation: it makes the fp8 path unusable for decode, and it is the
+  single largest gap between this implementation and the vllm.cpp CPU tier.
 - **Impact:** any fp8 checkpoint on CPU, every decode step
 
 ## What
@@ -118,3 +121,64 @@ overshoot by at most one entry.
 - `../mistralrs/02-cpu-gguf-moe-dequant-every-call.md` is the same defect on the GGUF MoE path.
 - `../candle/01-cpu-decode-gemv-single-threaded.md` is the other half of the problem: even a
   cached dequant is slow if the matmul that consumes it runs on one core.
+
+## Measured: 74 seconds per token
+
+Kolibri-1 fp8 checkpoint (74 GB, the original release), node 3, 32 threads, 3.4 GHz:
+
+```
+prefill 64 tokens in 120.13s   (0.53 tok/s)
+decode step 0 (len 65) token 79 in 72.346s
+decode step 1 (len 66) token 79 in 72.494s
+decode step 2 (len 67) token 79 in 68.917s
+decode step 3 (len 68) token 79 in 82.698s
+mean TPOT 74.114 s  (0.01 tok/s)
+```
+
+Against the same model in bf16 on the same box:
+
+| checkpoint | decode | per token |
+|---|---|---|
+| bf16, 149 GB | 9.11 tok/s | 0.110 s |
+| fp8, 74 GB | 0.014 tok/s | 74.1 s |
+
+**74 s per token is 74 GB of dequantisation at about 1 GB/s** - the whole checkpoint, every
+forward, which is exactly what `dequantize_w` does.
+
+### The MoE residency cache does not help
+
+`MISTRALRS_MOE_CACHE_MB=16384` was the obvious thing to try, because that cache already exists
+and is a byte-budgeted LRU over expert slabs. It makes no difference:
+
+```
+with    MISTRALRS_MOE_CACHE_MB=16384:  mean TPOT 74.114 s  (0.01 tok/s)
+without:                               mean TPOT 71.8 s
+```
+
+The cache holds the routed slabs of the *quantised* path. The fp8 path's cost is elsewhere: it
+re-dequantises the full checkpoint, which the cache does not cover.
+
+### What the reference does instead
+
+The vllm.cpp CPU tier, same fp8 checkpoint, same node, 32 threads:
+
+| configuration | tok/s | per token |
+|---|---|---|
+| dequant cache off | 4.019 | 0.25 s |
+| dequant cache on, 16 GiB budget | 9.066 | 0.110 s |
+
+Their cache-off figure implies they dequantise only the *selected* experts - 7 of 384 per
+layer, about 2.75 GB per token - and the 16 GiB cache removes even that. 0.25 s for 2.75 GB is
+about 11 GB/s of dequantisation, which is a plausible rate for a blockwise fp8 kernel. Ours is
+74 GB at 1 GB/s, so the gap is 27x in bytes and 11x in rate.
+
+Two separable things are wrong on our side: the *scope* of the dequantisation (the whole
+checkpoint rather than the selected experts) and its *rate*. The scope is the larger one and it
+is the one that matters.
+
+### Why this is the biggest remaining item
+
+This is not a throughput detail. It is the reason the fp8 checkpoint - a quarter the size of
+the bf16 one, and therefore the version most people would actually want on CPU - is
+unusable. It is also the one place where the gap to the vllm.cpp CPU tier is not a rounding
+difference but a factor of 290.
