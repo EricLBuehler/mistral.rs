@@ -1746,6 +1746,44 @@ branch became 71 commits in the first place.
 so it lives on its own branch. Commits that modify it conflict as modify/delete and are
 resolved as "deleted by us".
 
+## The spin question is not resolvable, and the number that says so
+
+Two single runs of one cell, same binary, same weights, same cell: **8.45** at 16 threads with
+spin 0 from the 1.0 GHz sweep, and **8.11** from the 3.4 GHz grid. **4 percent apart.**
+
+That is the noise floor of a single-run cell, measured directly, and it invalidates the shape
+that was read out of the 32-thread row. The three cells that looked like a plateau - 8.58,
+8.45, 8.50 - differ by 1.5 percent, and the two that looked like a step down - 7.85 and 7.27 -
+are the two a 31-process test suite landed in. So:
+
+- The 8.50 to 7.85 step is 8.5 percent, about twice the noise, in the two cells that were
+  contaminated. The shape is not established.
+- The 7 to 18 percent range reported earlier was the contended box, not the spin.
+- The peer agent's clean three-run data puts their 32-thread spin=0 against default at 4.3
+  percent, with spreads of 0.47 and 0.21 - the same order, and they said so themselves.
+
+**So neither runtime shows a resolvable spin effect at three runs.** The claim that the spin
+is the whole of the 32-thread regression was a story that fit the data I had, and the data was
+noisy. It is withdrawn in the same way the one-position finding was.
+
+What survives does not depend on the spin at all: our bf16 path is 1.67x llama.cpp at
+bit-identical weights, and our fp8 path is 74 s per token against their 0.25 s.
+
+### The retry path was self-amplifying, and box-wide
+
+The grid's failure handling dropped the whole page cache, on the theory that a failed run was
+the previous run's cache starving the load. That is backwards: dropping the cache evicts the
+149 GB of weights, so the next run re-reads all of it from disk, which makes it I/O-bound and
+slower and more likely to fail, which drops the cache again. Two of three repeats in the first
+cell failed.
+
+And a cache drop is a box-wide event. It would have evicted a concurrent measurement's model
+pages and turned it into a disk benchmark that nobody chose. The grid was stopped rather than
+patched for that reason, and the rewrite drops the cache from the retry path entirely: a cold
+149 GB re-read is exactly what makes a run fail, so depending on it was the wrong shape for a
+retry. Results are appended rather than truncated, the repeats are numbered, and whether a
+value followed a cache drop is recorded in the row.
+
 ## A correction worth keeping in the writeup
 
 The 32-thread spin row was described as a slope with a cliff at 4096. Reconstructing the clock
