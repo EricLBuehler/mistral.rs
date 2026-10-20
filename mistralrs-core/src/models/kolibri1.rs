@@ -2178,7 +2178,13 @@ mod tests {
         let mut model = load_real_model(&model_dir)?;
         crate::utils::decode_prof::enable();
 
-        let prompt: Vec<u32> = (0..64).map(|i| (i * 137 + 91) as u32).collect();
+        // The prompt length is configurable so the prefill can be matched against another
+        // implementation's, e.g. llama-bench's pp512.
+        let prompt_len: usize = std::env::var("KOLIBRI1_BENCH_PROMPT_TOKENS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(64);
+        let prompt: Vec<u32> = (0..prompt_len).map(|i| (i * 137 + 91) as u32).collect();
         let mut timed = Vec::with_capacity(steps);
 
         let prefill_start = std::time::Instant::now();

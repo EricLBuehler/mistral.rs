@@ -1578,3 +1578,45 @@ The cap is invisible unless you go looking: a 128-core box that never leaves 29%
 silently caps every benchmark taken on it by 3.4x. That is the reason this section exists, not
 a request to change the policy.
 
+
+
+## Head-to-head against llama.cpp on the same box
+
+llama.cpp is the only other implementation of this model on CPU, and it is a fair yardstick:
+stock upstream at `62318cd57` (the Kolibri-1 merge) plus 16 lines that only expose tensors
+and change no arithmetic. Both sides run the same bf16 weights of the same checkpoint on node 3
+at 3.4 GHz, on a quiet box (load 1.68).
+
+**Decode** (token generation):
+
+| threads | mistral.rs | llama.cpp | ratio |
+|---|---|---|---|
+| 8 | 6.97 tok/s | 1.54 tok/s | 4.53x |
+| 16 | **8.73 tok/s** | 2.97 tok/s | 2.94x |
+| 32 | 7.32 tok/s | **5.46 tok/s** | 1.34x |
+
+**Prefill** (512 tokens, both sides):
+
+| | mistral.rs | llama.cpp | ratio |
+|---|---|---|---|
+| p512 | **21.86 tok/s** | 7.04 tok/s | 3.10x |
+| p64 | 12.43 tok/s | - | - |
+
+**The shape of the curves is the interesting part.** llama.cpp scales almost linearly with
+threads - 1.54, 2.97, 5.46, about 1.9x per doubling - while mistral.rs peaks at 16 threads and
+*regresses* at 32. That regression is the barrier-pool spin problem, and it is now the whole of
+our remaining gap: at 32 threads we are handicapped by a cost llama.cpp does not have. Fix the
+spin and the ratio at 32 threads would be about 1.8x rather than 1.34x, with the same headroom
+to spare.
+
+That makes the spin the highest-value remaining perf work by a wide margin, ahead of the
+`MIN_PARALLEL_OUTPUTS` re-sweep.
+
+### Caveats
+
+- Different weight containers: llama.cpp reads a 145.57 GiB bf16 GGUF, mistral.rs reads 149 GB
+  of bf16 safetensors. Same model, same weights, not the same file.
+- llama-bench's `tg32` starts from an empty prompt; the mistral.rs benchmark prefills 38 tokens
+  and then times 120 decode steps. Both are decode-bound, but the KV contexts differ.
+- llama.cpp's numbers are from its stock CPU path. The primary oracle this work is measured
+  against is vLLM on GPU, so none of this is a statement about that.
