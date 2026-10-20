@@ -1760,3 +1760,41 @@ of a cell already measured, and the step is the part that transfers between runt
 This is the same failure mode as the feature that started the work: a bug that hid behind a
 plausible story until somebody read the raw data end to end. A table described before the
 clock was checked deserves a sentence about it.
+
+
+## The bf16 GGUF and the bf16 safetensors are the same weights
+
+Checked, because it decides whether the llama.cpp row can sit beside ours with a precise
+label rather than a caveat. Two tensors in two different layers, compared as raw bf16 bits:
+
+| tensor | identical bf16 bits |
+|---|---|
+| `model.layers.20.mlp.experts.100.gate_proj.weight` | 12800/12800 (100.00%) |
+| `model.layers.7.mlp.experts.3.up_proj.weight` | 12800/12800 (100.00%) |
+
+So the GGUF and the safetensors are the same fp8 dequantisation rounded to bf16, written
+twice. **llama.cpp and mistral.rs are therefore already weight-matched**, and the difference
+between them is the implementation rather than the weights. Only the vllm.cpp row is genuinely
+different, because it dequantises fp8 in process instead of reading a bf16 container.
+
+Two traps worth recording, because both produced a wrong answer first:
+
+- The GGUF stores its tensors as `(expert, f, h_bytes)` with the row padded to 5120 bytes, not
+  as ggml's `(n_embd, n_ff, n_expert)`. Indexing it as the latter compares the wrong elements.
+- Comparing bf16 as int16 on one side and uint16 on the other makes every negative value look
+  like a mismatch. The first comparison came out at 50 percent "identical" - which is the
+  signature of the sign bit, not of a real difference.
+
+## The matched comparison, and why the headline was not quotable
+
+The three-way table was not a comparison: three containers, single runs on our side, and a
+spin setting that moves each row's optimum. The agreed protocol, with peer-Ce:
+
+- Both sides on the fp8 directory (74 GB) so it fits alongside, sequential, never concurrent.
+- The same spin settings: 0, 1024, 2048 and the 25,000 default at 32 threads; 0 and the default
+  at 8 and 16.
+- Three repeats per cell on both sides, reported with the spread.
+- A 2048 cell on both sides, so the edge is bracketed in both.
+
+The point estimate is not quoted until that is done. The direction - that 32 threads wants less
+waiting - already survives on the clean cells alone.
