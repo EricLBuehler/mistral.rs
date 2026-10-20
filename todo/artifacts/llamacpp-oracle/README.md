@@ -39,3 +39,20 @@ disagreement.
 **`LD_LIBRARY_PATH` must point at the build.** There is a stale llama.cpp installed at
 `~/.local/lib64` and the loader prefers it, which makes every binary fail with
 `undefined symbol: mtmd_get_cap_from_file` regardless of how it was built.
+
+## Also handed to the vllm.cpp repo
+
+Copies live there so the two oracles can be compared side by side, next to the primary rows:
+
+```
+tests/vllm/models/kolibri1_goldens_llamacpp.json
+tests/vllm/models/kolibri1_llamacpp_topk_rows.json
+scripts/compare-kolibri1-oracles.py
+```
+
+`compare-kolibri1-oracles.py` auto-detects the primary's row offset instead of assuming it,
+so it works on the lagged file and on a repaired one unchanged.
+
+The llama.cpp rows are **not** lagged: row `k` is the distribution for step `k` and its `token`
+is the token that step generated, so `rows[k].token == rows[k].top[0]` holds for all 256 rows.
+That invariant is the cheapest way to tell a fixed file from a lagged one.
