@@ -176,6 +176,42 @@ Two separable things are wrong on our side: the *scope* of the dequantisation (t
 checkpoint rather than the selected experts) and its *rate*. The scope is the larger one and it
 is the one that matters.
 
+### The dequant body is fast enough. The scope is the problem.
+
+`mistralrs-quant/examples/fp8_dequant_rate.rs` times `fp8_blockwise_dequantize` on one
+expert slab in isolation, which separates the rate from the scope:
+
+```
+model.layers.20.mlp.experts.100.gate_proj.weight: [512, 2560] F8E4M3
+scale_inv: [4, 20] F32
+1310720 elements: 1310720 bytes in (fp8), 2621440 bytes out (bf16)
+best of 5: 0.0005 s
+  output rate : 5.72 GB/s of bf16
+  input  rate : 2.86 GB/s of fp8
+  at 2.75 GB of expert traffic per token that is 0.48 s per token
+```
+
+The reference implementation dequantises per expert at the gather and writes bf16 straight
+into the destination rows, at about 11 GB/s of output. So the dequant body is the same order
+as the reference's, about 2x slower, and **not** the 1 GB/s the end-to-end figure suggested.
+
+**So the two defects are not equal in size:**
+
+| | ours | reference | factor |
+|---|---|---|---|
+| bytes dequantised per token | 74 GB | 2.75 GB | 27x |
+| dequant rate, bf16 out | 5.72 GB/s | ~11 GB/s | 2x |
+
+The scope is 27x and the rate is 2x, and the scope is what turns a 0.5 s token into a 74 s
+one. Fixing the scope alone would land us around 0.5-1 s per token; fixing the rate as well
+would land us at the reference's 0.25 s.
+
+**This also says where the fix goes: not into the dequant arithmetic, which is a few flops per
+element and memory-bound, but into the call site.** The gather already knows which experts it
+wants and the weights are already in per-expert slabs, so dequantising the selected experts at
+the gather is a change of call site rather than of code shape. The vllm.cpp CPU tier does
+exactly this, and keeps a byte-budgeted LRU over (layer, expert) entries on top of it.
+
 ### Why this is the biggest remaining item
 
 This is not a throughput detail. It is the reason the fp8 checkpoint - a quarter the size of
