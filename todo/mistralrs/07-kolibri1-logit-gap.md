@@ -87,7 +87,23 @@ fitted to a comparison against a reference whose rows were misaligned:
   was small, and the reason the gap is hard to close is now visible: the top-2 is often
   within 0.3 nats, so any implementation difference of that size decides the token.
 
-## Where we actually stand
+## Where we actually stand, and a fourth finding that undercuts the measurement itself
+
+**The teacher-forced prefill is one position behind.** Our logits at step `k` are the
+reference's step `k-1` distribution. 34 of 52 steps have a reference margin above 3 nats, and
+in every one our value is the reference's *next* step, so this is not a numerical tie. Free
+generation is correct, so the fault is in the prefill path, not the model.
+
+Consequence: **the chain argmax 166/248 quoted below is not a measure of model quality.** It
+is a measure of a harness that compares our position `k` against the reference's position `k`.
+It also explains why the gap would not close: a one-position shift in the measurement is
+immune to the numerics that were being tuned. See `09-teacher-forced-prefill-is-one-position-behind.md`.
+
+Everything below this point was measured with that harness and should be re-measured once it
+is fixed. The *relative* comparisons - FMA versus BFMMLA, router dtype, scale invariance - are
+unaffected, because they were all made against the same shifted baseline.
+
+## Where we actually stood before that
 
 Against the transcription (which llama.cpp corroborates), this build scores chain argmax
 166/248, final-token 6/8, first-step 0/8, worst top-k logit gap 6.5938.
