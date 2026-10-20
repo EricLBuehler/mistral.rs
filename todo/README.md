@@ -6,6 +6,11 @@ self-contained enough to be filed upstream on its own, with the evidence that pr
 Nothing here is a proposal yet. Each entry has a status and needs a decision before any of it
 is sent anywhere.
 
+## Artifacts
+
+`artifacts/` holds data and scripts, not issue files. `artifacts/llamacpp-oracle/` is the
+llama.cpp third oracle and the scripts that compare it against the other two implementations.
+
 ## Layout
 
 | Directory | Upstream | Meaning |
@@ -23,6 +28,7 @@ Things decided but not yet done. Kept here rather than in a plan file so they do
 
 | task | why it is still open |
 |---|---|
+| Measure this build's chains against the llama.cpp goldens | The transcription and llama.cpp agree on 7 of 8 full sequences, so the transcription number should carry over - but that is an inference. The model needs ~150 GB resident and the box was occupied when it came up. |
 | Re-sweep `MIN_PARALLEL_OUTPUTS` at 3.4 GHz | The 1024 -> 512 change was the largest single win of the session (2.35x) and is a work-partitioning threshold. Its optimum was found at 1.0 GHz and has almost certainly moved. Self-contained. |
 | Re-test the MoE residency cache at 3.4 GHz | Measured -13% at 1.0 GHz. A memory-traffic optimisation is the kind of thing that can flip at full clock. One env var. |
 | Compare generated chains against the primary oracle | `07` measures against the transcription. The primary comparison is the one that would settle whether BFMMLA converges. Blocked on the gate-schema question (logprobs vs logits). |
@@ -40,7 +46,7 @@ Things decided but not yet done. Kept here rather than in a plan file so they do
 | 04 | [PagedAttention is disabled whenever CPU is in the device map](mistralrs/04-cpu-disables-paged-attention.md) | open, design decision |
 | 05 | [17 clippy warnings block the CI clippy gate](mistralrs/05-clippy-double-must-use-blocks-ci.md) | open, trivial. Pre-existing on `master`; our own one (`kolibri1.rs` `type_complexity`) is fixed on this branch. |
 | 06 | [CPU blockwise-FP8 stacked MoE does not run](mistralrs/06-cpu-fp8-stacked-moe-does-not-run.md) | fixed on the `cpu-decode-bandwidth` branch by `56044c0e9`, all three |
-| 07 | [Kolibri-1 CPU forward does not reproduce the reference logits](mistralrs/07-kolibri1-logit-gap.md) | open, quantified. BFMMLA moves chain argmax 166/248 to 170/248; not measured against the primary oracle. |
+| 07 | [Kolibri-1 CPU forward does not reproduce the reference logits](mistralrs/07-kolibri1-logit-gap.md) | open, but the question changed. The primary oracle's logprob rows were off by one position, and llama.cpp sides with the transcription. The remaining gap is now ours, against a reference two implementations agree on. |
 | 08 | [A default CPU build is not pure Rust](mistralrs/08-cpu-build-pulls-native-tls.md) | open. `aws-lc-sys` + `ring` + `cc` + `cmake` via `hf-hub`'s TLS, not the compute. |
 
 ### candle

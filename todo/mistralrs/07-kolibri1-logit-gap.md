@@ -1,11 +1,114 @@
 # Kolibri-1 CPU forward does not reproduce the reference logits
 
-**Status:** router-noise mechanism found and its attributable cause fixed (`09f6c7e56`). The
-*router* remainder is irreducible, but it does not account for the whole gap: the goldens' own
-scale oracle fails by a prompt-dependent few percent, and that is not rounding. See
-"Where the remaining gap probably is" below. Re-measured after `12e0b9ad7`.
+**Status:** **the reference was ambiguous, and the primary oracle's own logprob rows were
+off by one position.** A third implementation (llama.cpp, `ggml-org/llama.cpp#30673`) sides
+with the transcription, not with the primary. With the primary's row offset corrected, it
+agrees with llama.cpp at 91/91 positions of the common prefix, and every remaining chain
+divergence is a near-tie. See "Rewritten: the reference was ambiguous" below, which supersedes
+the hypotheses in the rest of this file - they were fitted to a comparison against misaligned
+rows. The forward itself is correct; the residual, RNoPE, and router-dtype fixes stand.
 
 **Where:** `mistralrs-core/src/models/kolibri1.rs`, `Model::forward` / `DecoderLayer::forward`.
+
+## Rewritten: the reference was ambiguous
+
+**Three findings, in order of how much they move the picture.**
+
+## 1. The primary oracle's per-position logprob rows are stored one position ahead
+
+`tests/vllm/models/kolibri1_primary_topk_rows.json` (in the vllm.cpp repo) stores, per
+position, the top-100 with logprobs. The chain and the rows disagree at 139 of 202 positions,
+with the generated token sitting up to 11 nats below its own top-1. That is not a sampling
+bug - the primary *is* greedy - it is an off-by-one in the recording:
+
+```
+generated[k] == rows[k+1].top1    195/195   (100.0%)
+generated[k] == rows[k].top1       63/202   ( 31.2%)
+```
+
+So the row stored at index `k+1` is the distribution for step `k`. Everything that compared
+those rows position-by-position was reading the wrong position, which is why prompt 0 position
+0 appeared to show the primary generating a token at logprob -7.4476 while its own top-1 sat
+at -0.325.
+
+This is the vllm.cpp harness's bug, not the model's. Raised with Maki.
+
+## 2. llama.cpp is a third implementation, and it sides with the transcription
+
+llama.cpp gained Kolibri-1 support in `#30673` (merged 2026-10-17). Run on CPU against a bf16
+GGUF converted from this checkpoint, greedy, feeding the goldens' own token ids:
+
+| | transcription | primary | llama.cpp |
+|---|---|---|---|
+| first token agrees with transcription | - | 6/8 | **8/8** |
+| identical 32-token sequence with transcription | - | 3/8 | **7/8** |
+| first token agrees with primary | 6/8 | - | 6/8 |
+| identical 32-token sequence with primary | 3/8 | - | 3/8 |
+
+llama.cpp and the transcription agree with each other. The primary is the outlier.
+
+The GGUF is a valid oracle: `Kolibri-1-bf16` is the *dequantisation* of the fp8 checkpoint,
+not an independent model. Verified on layer 0 expert 0 `gate_proj`: fp8 is `float8_e4m3fn`
+with a 128x128 block scale (shape 4x20 for a 512x2560 tensor), the dequant is
+`fp8 * scale_inv`, and the bf16 tensor is that value rounded to bf16 - mean absolute
+difference 5.1e-7 on values of magnitude ~0.011, i.e. 4.6e-5 relative.
+
+## 3. With the offset corrected, the primary and llama.cpp agree everywhere they can
+
+Comparing only along the common prefix of the two chains (91 positions), so that a divergence
+does not contaminate the positions after it:
+
+```
+same argmax: 91/91
+```
+
+Every remaining chain divergence is a near-tie. Prompt 0, step 0:
+
+```
+primary:   116026 (-0.944)  vs  121598 (-1.215)   margin 0.271  -> picked 116026
+llama.cpp:  121598 (-0.907)  vs  116026 (-1.254)   margin 0.347  -> picked 121598
+```
+
+Same top-2, ~0.3 nats apart, and a ~0.05-0.3 nat difference in absolute logprob between the
+two implementations flips the order.
+
+## What this means for the earlier conclusions in this file
+
+The hypotheses this file spent most of its length on are all **superseded**, because they were
+fitted to a comparison against a reference whose rows were misaligned:
+
+- The scale-error hypothesis is not just disproved by the final norm's scale invariance - the
+  "scale oracle" was reading the wrong position.
+- The router dtype was falsified as a cause, and that still holds.
+- The residual-contract and RNoPE bugs were real and are fixed; those were found by running
+  the forward, not by comparing logits.
+- The BFMMLA reduction-order result (chain argmax 166/248 -> 170/248) was measured against
+  the **transcription**, and the transcription is the trustworthy one, so it stands. But it
+  was small, and the reason the gap is hard to close is now visible: the top-2 is often
+  within 0.3 nats, so any implementation difference of that size decides the token.
+
+## Where we actually stand
+
+Against the transcription (which llama.cpp corroborates), this build scores chain argmax
+166/248, final-token 6/8, first-step 0/8, worst top-k logit gap 6.5938.
+
+**The reference is no longer ambiguous, so the remaining gap is ours.** Two thirds of the
+teacher-forced positions are wrong even though the semantics are now confirmed to match
+llama.cpp's, the config matches, and the routing matches (`select on logits+bias`, `weight by
+sigmoid(unbiased logits)`, no renorm, f32 router - all identical to llama.cpp's
+`src/models/kolibri1.cpp` and `conversion/kolibri1.py`).
+
+Not yet re-measured against the llama.cpp chains specifically: the model needs ~150 GB resident
+and the box was occupied. The transcription and llama.cpp agree on 7 of 8 full sequences, so
+the two numbers should be close, but that is an inference, not a measurement.
+
+## Artifacts
+
+- `kolibri1_goldens_llamacpp.json` - the llama.cpp chains with per-position top-20 logprobs,
+  in the goldens format the test already reads (`KOLIBRI1_GOLDENS`).
+- Regenerate with llama.cpp commit `62318cd57` against the bf16 GGUF, native `/completion`
+  endpoint (it returns token **ids**; `/v1/completions` returns text and splitting that text
+  gives words, not tokens).
 
 ## Measured
 
