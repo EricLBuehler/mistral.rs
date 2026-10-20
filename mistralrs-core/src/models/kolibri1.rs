@@ -2204,6 +2204,98 @@ mod tests {
         Ok(())
     }
 
+    /// Free generation and teacher-forcing are the same computation, so they must agree.
+    ///
+    /// No reference oracle is needed: the chain the incremental path produces is the
+    /// reference for the prefill path. If the two disagree, the prefill is the wrong one,
+    /// because the incremental path is what the model actually does at serving time.
+    ///
+    /// The offset scan reports the direction and size of any misalignment rather than just
+    /// failing, because a one-position offset is the specific failure this exists to catch.
+    #[test]
+    #[ignore = "loads a Kolibri-1 checkpoint"]
+    fn kolibri1_prefill_agrees_with_incremental() -> anyhow::Result<()> {
+        let (model_dir, goldens_path) = golden_paths();
+        let goldens: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&goldens_path)?)?;
+        // Prompt 2 of the goldens: "The capital of Australia is", whose continuation is varied
+        // rather than a repeated token. A degenerate chain cannot show a position shift,
+        // because every position looks the same.
+        let prompt: Vec<u32> = goldens["prompts"][2]["input_ids"]
+            .as_array()
+            .expect("input_ids")
+            .iter()
+            .map(|v| v.as_u64().expect("token id") as u32)
+            .collect();
+
+        let mut model = load_real_model(&model_dir)?;
+        let n_new = 24usize;
+
+        // Incremental: the KV cache carries the history, one token at a time.
+        let mut chain: Vec<u32> = Vec::new();
+        {
+            let prompt_ids = Tensor::from_vec(prompt.clone(), (1, prompt.len()), &Device::Cpu)?;
+            let mut next = prefill_and_decode(&mut model, &prompt_ids, 0)?;
+            for step in 0..n_new {
+                chain.push(next);
+                let ids = Tensor::from_vec(vec![next], (1, 1), &Device::Cpu)?;
+                next = prefill_and_decode(&mut model, &ids, prompt.len() + step)?;
+            }
+        }
+        println!("[align] chain: {chain:?}");
+
+        // Teacher-forced over the same chain.
+        let mut ids = prompt.clone();
+        ids.extend_from_slice(&chain[..chain.len() - 1]);
+        let rows = teacher_forced_logits(&mut model, &ids)?;
+
+        // Row `prompt.len() - 1 + k` predicts `ids[prompt.len() + k]`, which is `chain[k]`.
+        // A prefill that is one position behind would make it predict `chain[k - 1]`.
+        let mut best = (0i64, 0usize, 0usize);
+        for offset in -2i64..=2 {
+            let (mut hits, mut tot) = (0usize, 0usize);
+            for k in 0..(chain.len() - 1) {
+                let kk = k as i64 + offset;
+                if kk < 0 || kk as usize >= chain.len() {
+                    continue;
+                }
+                let row_idx = prompt.len() as i64 - 1 + k as i64;
+                if row_idx < 0 || row_idx as usize >= rows.len() {
+                    continue;
+                }
+                let row = &rows[row_idx as usize];
+                let (argmax, _) = row.iter().enumerate().fold(
+                    (0usize, f32::NEG_INFINITY),
+                    |(bi, bv), (i, v)| {
+                        if *v > bv {
+                            (i, *v)
+                        } else {
+                            (bi, bv)
+                        }
+                    },
+                );
+                tot += 1;
+                if argmax as u32 == chain[kk as usize] {
+                    hits += 1;
+                }
+            }
+            println!("  offset {offset:+}: {hits}/{tot}");
+            if hits > best.1 {
+                best = (offset, hits, tot);
+            }
+        }
+        println!(
+            "[align] best offset {}: {}/{}",
+            best.0, best.1, best.2
+        );
+        assert_eq!(
+            best.0, 0,
+            "the teacher-forced prefill is offset by {} position(s): row p predicts chain[p+{}] rather than chain[p+1]",
+            best.0, best.0
+        );
+        Ok(())
+    }
+
     /// One forward with the KV cache positioned so the next token appends at `cached`. Returns
     /// the argmax token so the caller can chain it.
     fn prefill_and_decode(model: &mut Model, ids: &Tensor, cached: usize) -> Result<u32> {

@@ -29,7 +29,7 @@ Things decided but not yet done. Kept here rather than in a plan file so they do
 | task | why it is still open |
 |---|---|
 | Measure this build's chains against the llama.cpp goldens | The transcription and llama.cpp agree on 7 of 8 full sequences, so the transcription number should carry over - but that is an inference. The model needs ~150 GB resident and the box was occupied when it came up. |
-| Find why the teacher-forced prefill is one position behind | `mistralrs/09`. Cheapest test: after a prefill, check that `argmax(logits[p])` is `ids[p+1]` and not `ids[p]`. Needs no reference and no 150 GB checkpoint. Until this is fixed, no chain-argmax number from the golden test means anything. |
+| Dump per-layer states from this build and diff against the reference's | `mistralrs/09`. A per-layer residual dump gives the first divergent layer in one pass instead of by bisection. The reference side is being produced by the peer agent; the mistral.rs side is ours to write. |
 | Re-sweep `MIN_PARALLEL_OUTPUTS` at 3.4 GHz | The 1024 -> 512 change was the largest single win of the session (2.35x) and is a work-partitioning threshold. Its optimum was found at 1.0 GHz and has almost certainly moved. Self-contained. Set the governor to `performance` for the run and put it back afterwards - `schedutil` is the normal state. |
 | Re-test the MoE residency cache at 3.4 GHz | Measured -13% at 1.0 GHz. A memory-traffic optimisation is the kind of thing that can flip at full clock. One env var. Same governor discipline. |
 | Compare generated chains against the primary oracle | `07` measures against the transcription. The primary comparison is the one that would settle whether BFMMLA converges. Blocked on the gate-schema question (logprobs vs logits). |
@@ -49,7 +49,7 @@ Things decided but not yet done. Kept here rather than in a plan file so they do
 | 06 | [CPU blockwise-FP8 stacked MoE does not run](mistralrs/06-cpu-fp8-stacked-moe-does-not-run.md) | fixed on the `cpu-decode-bandwidth` branch by `56044c0e9`, all three |
 | 07 | [Kolibri-1 CPU forward does not reproduce the reference logits](mistralrs/07-kolibri1-logit-gap.md) | open, but the question changed. The primary oracle's logprob rows were off by one position, and llama.cpp sides with the transcription. The remaining gap is now ours, against a reference two implementations agree on. |
 | 08 | [A default CPU build is not pure Rust](mistralrs/08-cpu-build-pulls-native-tls.md) | open. `aws-lc-sys` + `ring` + `cc` + `cmake` via `hf-hub`'s TLS, not the compute. |
-| 09 | [The teacher-forced prefill is one position behind](mistralrs/09-teacher-forced-prefill-is-one-position-behind.md) | open, cause not identified. **This invalidates the golden test's chain-argmax number and the logit-gap investigation built on it.** Free generation is correct; the fault is in the prefill path. |
+| 09 | [The forward disagrees with the reference semantically](mistralrs/09-forward-disagrees-with-the-reference-semantically.md) | open. Not a position shift - the self-consistency test is 23/23 at offset 0. Two of six prompts have the reference's top-1 ahead by more than 5 nats, so this is semantic. The previous revision of this entry claimed a one-position shift; that was wrong. |
 
 ### candle
 
