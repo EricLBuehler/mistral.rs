@@ -1620,3 +1620,44 @@ That makes the spin the highest-value remaining perf work by a wide margin, ahea
   and then times 120 decode steps. Both are decode-bound, but the KV contexts differ.
 - llama.cpp's numbers are from its stock CPU path. The primary oracle this work is measured
   against is vLLM on GPU, so none of this is a statement about that.
+
+
+## The thread-scaling regression is a spin limit, not a thread count
+
+llama.cpp scales about 1.9x per doubling of threads; we peaked at 16 and regressed at 32. The
+cause is candle's barrier pool: a worker spins `DEFAULT_BARRIER_POOL_SPIN_LIMIT = 25,000`
+times before parking (`candle-core/src/utils.rs:10`, spin/park branch at `:163-169`), and the
+pool is sized `candle_num_threads() - 1` workers. A decode token opens around 400 such regions,
+so the spin is paid 400 times a token.
+
+`CANDLE_BARRIER_POOL_SPIN_LIMIT` is an env var, so this is testable without a code change.
+Decode mean tok/s, schedutil, node 3:
+
+| spin limit | 16 threads | 32 threads |
+|---|---|---|
+| 0 | 6.28 | 7.33 |
+| 256 | 6.33 | 7.79 |
+| **1024** | 6.26 | **8.01** |
+| 4096 | - | 6.87 |
+| 25000 (default) | **7.66** | 6.88 |
+
+Two findings.
+
+**32 threads was the right thread count with the wrong spin limit.** The peak at 1024 is 8.01,
+which beats the best 16-thread configuration (7.66 at the default limit) by 4.4%. The curve at
+32 threads is sharp: 8.01 at 1024, 6.87 at 4096.
+
+**The right limit depends on the thread count, and candle's single default is right for neither
+of our operating points.** At 16 threads the default 25,000 is much better than 1024 (7.66
+against 6.26): few enough workers that the burn is cheap and the fast wake-up dominates. At 32
+threads the surplus workers' burn dominates and a short spin wins.
+
+**These are 1.0 GHz numbers and must not be acted on yet.** The burn is clock-dependent: at
+3.4 GHz the same spin costs 3.4x more, which moves the optimum down, while the wake-up latency
+becomes 3.4x more expensive relative to the work, which moves it up. The 3.4 GHz sweep is
+pending.
+
+A correction to an earlier explanation: the surplus workers are not idle. The chunk count is
+sized to the thread count (`chunk = n.div_ceil(threads)`), so every worker does work. The cost
+is the spin *between* the roughly 400 parallel regions per token, paid by every worker in the
+pool each time, and it grows with the number of workers.
