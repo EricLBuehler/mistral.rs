@@ -89,9 +89,6 @@ fitted to a comparison against a reference whose rows were misaligned:
 
 ## The mechanism: the router's top-k boundary is an exact tie
 
-This is what the gap actually is. Not a scale error, not a residual-contract bug, not a
-position shift, and not rounding in the forward.
-
 The router selects the top 6 of 384 experts by `logits + bias`. On the reference's own layer-0
 router logits, **the 6th and 7th experts are exactly tied** on 5 of the 6 token positions:
 
@@ -108,48 +105,89 @@ router logits, **the 6th and 7th experts are exactly tied** on 5 of the 6 token 
 Every row where the margin is zero is a row where our expert selection differs from the
 reference's. The one row with a non-zero margin is the one row where we agree, exactly.
 
-Across the 50 layers the two select the same expert set on 0 to 4 of the 6 token positions,
-most layers at 0 or 1.
+All 2304 of the reference's stored router logits and 384 bias values are exactly
+bf16-representable, and in bf16 values differing by under ~0.4% are the same value, so many
+adjacent experts land on the same score and the selection boundary falls inside a group of
+equal scores. Which expert makes the cut is then decided by the sort's tie-break.
 
-**Why the ties exist.** Every one of the reference's stored router logits and bias values is
-exactly bf16-representable - 2304 of 2304 logits and 384 of 384 bias values. In bf16, values
-differing by less than about 0.4% are the same value. The router's logits span only a few
-units across 384 experts, so many adjacent experts land on the *same* bf16 value, and the
-selection boundary falls inside a group of exactly-equal scores.
+**Confirmed on the reference side.** The peer agent's production build measures the 6th-to-7th
+router margin in f32, un-rounded, for "The capital of Australia is" at step 0: the smallest
+across 50 layers is **9.391e-05** (layer 22), the median about 3.3e-02, layer 0's is 0.0149.
+An order of magnitude below one bf16 ulp at that score magnitude, and far below the 0.05-0.3
+nat class of difference measured between two implementations on this model.
 
-**What that means.** The top-6 cut through a group of equal scores is decided by the sort's
-tie-break, which is implementation-defined. We compute the router in f32, which separates
-those scores and picks a deterministic winner; the reference, working in bf16, picks whichever
-of the tied experts its sort happens to put first. A different sixth expert is a different MoE
-output, and a different MoE output is a different token.
+**So the boundary is inside the tie group, and exact agreement between two implementations is
+not attainable without reproducing the other's sort tie-break.** The band gate is the honest
+standard rather than a compromise. This is also why the primary and llama.cpp disagreed with
+each other on 2 of 8 first tokens while agreeing at 91/91 on the common prefix: same
+distribution, different tie-break.
 
-**This is consistent with everything else measured.**
+## But that was not why we disagreed: our scores were not the same scores
 
-- The router comment in `models/kolibri1.rs` records 68.8% expert-id agreement with the oracle
-  for the f32 router and 67.1% for bf16. That 31% disagreement is the tie-break rate.
-- "The top-7 experts span 0.032, about one bf16 ulp" - the same fact from the logits side.
-- BFMMLA moving chain argmax 166/248 to 170/248 is not the reduction order being "more
-  correct". It perturbs which of several equal-scoring experts gets picked. The same mechanism
-  explains why the change was small and why the gap would not close: the quantity being
-  compared is a coin flip, and BFMMLA flips a slightly different set of coins.
-- "The capital of Australia is": our own test file says the answer is "Sydney" with the f32
-  router and "Canberra" with a bf16-valued one, and the references give "Canberra". A
-  different sixth expert is enough to move it.
+On "The capital of Australia is" all three references agreed with each other and we disagreed,
+so a tie-break difference could not be the whole story. The cause was **candle's fused
+RMSNorm, which rounds the scale to the storage dtype before dividing.**
 
-**Caveat, and it matters.** The dump's values are bf16, so this establishes the tie in the
-*stored* values. It does not establish that the primary's and llama.cpp's internal f32 router
-logits also tie - they may separate these experts and still disagree with us for a different
-reason. That is the one measurement that settles it, and it is the next step.
+```rust
+// candle-nn/src/ops.rs, the fused CPU kernel
+let m = (sum2 / n as f32 + eps).sqrt();
+let m = T::from_f32(m).unwrap_or_else(T::nan);   // scale -> bf16
+*d = *s / m * *alpha
+```
 
-**The measurement.** Dump the router logits in f32 from the primary and from llama.cpp, for
-"The capital of Australia is" at step 0, and read off the 6th-to-7th margin. If it is also a
-tie, the gap is irreducible: matching would require reproducing the reference's exact
-arithmetic *and* its sort's tie-break, which a different implementation cannot do. If it is
-not a tie, the disagreement is a real defect and the per-layer dump will find it.
+Hugging Face, ggml and llama.cpp all keep the scale in f32 and round the normalised *value*
+instead. Rounding the scale applies one relative error of up to a bf16 ulp - about 0.4% - to
+every element of a row, uniformly. Measured on a bf16 row: max relative difference 7.8e-3
+against the f32-scale form, and only 1480 of 2560 elements bit-exact.
 
-This build already records what is needed: `record_routing_margins` and `LAYER0_SCORES` in
-`models/kolibri1.rs` capture the router logits and the bias, and `kolibri1_dump_expert_ids`
-writes them out.
+A 0.4% error in the norm output that feeds the router is worth 0.05-0.3 nats in the router
+logits - three orders of magnitude more than the 9.4e-05 selection margin. So we were not
+tie-breaking the same ties; we were computing genuinely different scores and picking the
+genuinely-best expert.
+
+**Fixed** in `d9198c578`, across all thirteen RMSNorm call sites in `layers.rs`, behind
+`MISTRALRS_RMSNORM_CANDLE=1` to restore candle's kernel for A/B.
+
+| | before | after |
+|---|---|---|
+| "The capital of Australia is" | " Sydney" (logit 10.62, margin 1.06) | **" Canberra"** (logit 10.00, margin 0.38) |
+| chain argmax vs the llama.cpp goldens | 0/52 step matches | **185/248** |
+
+"Canberra" is what llama.cpp, the vLLM primary and the reference goldens all produce. That
+prompt had deliberately not been asserted, because the answer depended on the router's
+arithmetic; it is asserted now.
+
+## Which reference is the oracle
+
+Not the transcription. Against the transcription, chain argmax moved 166/248 -> 167/248 - the
+fix barely helped. Against llama.cpp it went from 0/52 step matches to 185/248.
+
+The reason is that the transcription computes its router in **bf16**, so its selection scores
+are exactly the bf16-rounded values whose ties are tabulated above, and it tie-breaks them
+differently. The primary and llama.cpp both compute the router in f32 and agree with each
+other at 91/91 on the common prefix. The f32 pair is the oracle; the transcription is a third
+implementation with a less accurate router, and its goldens are not a valid CPU oracle.
+
+## What the per-layer dump shows
+
+The peer agent's production build dumped per-layer states for the same raw ids and positions.
+Diffing ours against theirs, with the fix in place:
+
+| quantity | layer 0 max abs | layer 0 cosine |
+|---|---|---|
+| attn_out_pre_norm | 9.8e-04 | 0.999996 |
+| attn_post_norm | 3.1e-02 | 0.999991 |
+| ffn_post_norm | 1.2e-02 | 0.999986 |
+| l_out | 6.3e-02 | 0.999988 |
+
+The max differences are exactly bf16 ulp values at those magnitudes (3.125e-2 = 2^-5,
+6.25e-2 = 2^-4) and the cosine is 0.99999 at layer 0 on every quantity. There is **no
+structural divergence at any layer**: the difference accumulates smoothly and the cosine decays
+to 0.92-0.95 by layer 25, which is what a knife-edge router does to a growing arithmetic
+difference.
+
+The caveat: that comparison is our CPU against their tt-metal GPU, so it separates devices as
+much as implementations. A CPU-to-CPU dump from llama.cpp would be the isolating measurement.
 
 ## Where we actually stand, and a fourth finding that undercuts the measurement itself
 

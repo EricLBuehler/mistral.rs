@@ -20,7 +20,7 @@
 
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
-use candle_core::{DType, Device, Module, Result, Tensor};
+use candle_core::{DType, Device, IndexOp, Module, Result, Tensor};
 use mistralrs_quant::{
     ColumnParallelLayer, QuantMethod, QuantizedConfig, ReplicatedLayer, RowParallelLayer,
     ShardedVarBuilder,
@@ -581,7 +581,12 @@ fn tap_layer(t: &Tensor, layer: usize, quantity: &'static str) {
     if !layer_taps_enabled() {
         return;
     }
-    let Ok(rows) = t.to_dtype(DType::F32).and_then(|x| x.to_vec2::<f32>()) else {
+    // `t` is `[1, seq, hidden]`; drop the batch dim so the rows are positions.
+    let Ok(rows) = t
+        .to_dtype(DType::F32)
+        .and_then(|x| x.i(0))
+        .and_then(|x| x.to_vec2::<f32>())
+    else {
         return;
     };
     let mut taps = match LAYER_TAPS
