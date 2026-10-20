@@ -3,44 +3,443 @@ set -e
 
 REMOTE_SIZE_CONNECT_TIMEOUT=3
 REMOTE_SIZE_MAX_TIME=5
+RELEASE_LOOKUP_MAX_TIME=15
+DEFAULT_MODEL="Qwen/Qwen3-4B"
+DEFAULT_QUANTIZATION=4
+DEFAULT_UI_URL="http://localhost:1234/ui"
+KEY_ESCAPE_TIMEOUT=1
+MENU_FRAME_ROWS=4
+PLAN_BASE_ROWS=8
+INSTALL_STAGE_COUNT=4
+PROGRESS_INTERVAL=0.2
+PROGRESS_LOG_TAIL_BYTES=8192
+PROGRESS_DEFAULT_COLUMNS=80
+PROGRESS_LINE_PADDING=4
+KEY_ESCAPE=$(printf '\033')
+KEY_RETURN=$(printf '\r')
+KEY_NEWLINE='
+'
+KEY_EOF=$(printf '\004')
+KEY_INTERRUPT=$(printf '\003')
+KEY_TAB=$(printf '\t')
+INSTALL_TTY_STATE=""
+INSTALL_TTY_OPEN=0
+INSTALL_CURSOR_HIDDEN=0
+INSTALL_LOG=""
+INSTALL_STAGE=""
+INSTALL_STAGE_NUMBER=0
+PROGRESS_PID=""
+LOG_READER_PID=""
+PROGRESS_DOWNLOAD_PATH=""
+PROGRESS_DOWNLOAD_SIZE=""
+DOWNLOAD_STAGE=""
+SOURCE_STAGE=""
+ACTIVATION_PENDING=0
 
-# mistral.rs Installation Script
-# Cross-platform installer for Linux and macOS with automatic hardware detection
+INSTALL_BACKEND="auto"
+INSTALL_METHOD="auto"
+INSTALL_RELEASE="latest"
+INSTALL_VIDEO=0
+DRY_RUN=0
+INSTALL_VERBOSE=0
 
-# Check if we can prompt the user (stdin is a tty or we have /dev/tty)
 can_prompt() {
-    [ -t 0 ] || [ -e /dev/tty ]
+    [ -t 0 ] || ( : </dev/tty ) 2>/dev/null
 }
 
-# Read user input, using /dev/tty if stdin is not a terminal (e.g., piped from curl)
+read_answer() {
+    if [ -t 0 ]; then
+        IFS= read -r REPLY || error "Input closed. Installation cancelled."
+    elif can_prompt; then
+        IFS= read -r REPLY </dev/tty || error "Input closed. Installation cancelled."
+    else
+        error "No interactive terminal. Use --yes to accept the installation plan."
+    fi
+}
+
 read_input() {
-    # MISTRALRS_INSTALL_YES=1 auto-confirms every prompt (non-interactive installs, `mistralrs update`).
     if [ "${MISTRALRS_INSTALL_YES:-}" = "1" ]; then
         REPLY="y"
-        return
-    fi
-    if [ -t 0 ]; then
-        read -r REPLY
     else
-        read -r REPLY </dev/tty
+        select_menu "${1:-Continue?}" y 'y:Yes' 'n:No'
+        REPLY="$MENU_CHOICE"
     fi
 }
 
-# Colors for output
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-BOLD='\033[1m'
-NC='\033[0m' # No Color
+RED=''
+GREEN=''
+YELLOW=''
+BLUE=''
+CYAN=''
+DIM=''
+BOLD=''
+NC=''
+MENU_REDRAW=0
+if [ -t 1 ] && [ "${TERM:-dumb}" != "dumb" ]; then
+    MENU_REDRAW=1
+    if [ -z "${NO_COLOR+x}" ]; then
+        RED='\033[0;31m'
+        GREEN='\033[0;32m'
+        YELLOW='\033[0;33m'
+        BLUE='\033[0;34m'
+        CYAN='\033[0;36m'
+        DIM='\033[2m'
+        BOLD='\033[1m'
+        NC='\033[0m'
+    fi
+fi
+
+restore_terminal() {
+    if [ "$INSTALL_TTY_OPEN" = "1" ]; then
+        if [ -n "$INSTALL_TTY_STATE" ]; then
+            stty "$INSTALL_TTY_STATE" <&3 2>/dev/null || true
+            INSTALL_TTY_STATE=""
+        fi
+        exec 3<&-
+        INSTALL_TTY_OPEN=0
+    fi
+    if [ "$INSTALL_CURSOR_HIDDEN" = "1" ]; then
+        printf '\033[?25h'
+        INSTALL_CURSOR_HIDDEN=0
+    fi
+}
+
+start_key_input() {
+    if [ -t 0 ]; then
+        exec 3<&0
+    else
+        exec 3</dev/tty
+    fi
+    INSTALL_TTY_OPEN=1
+    INSTALL_TTY_STATE=$(stty -g <&3) || error "Could not read terminal settings."
+    trap cleanup_installer 0
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
+    trap 'exit 129' HUP
+    # Read Ctrl+C as a key so interrupts cannot land between successive key-reader processes.
+    stty -echo -icanon -isig min 1 time 0 <&3 || error "Could not configure terminal input."
+    printf '\033[?25l'
+    INSTALL_CURSOR_HIDDEN=1
+}
+
+read_key_byte() {
+    key_data=$(dd bs=1 count=1 <&3 2>/dev/null && printf '.') \
+        || error "Could not read terminal input."
+    KEY_BYTE=${key_data%.}
+}
+
+read_key() {
+    read_key_byte
+    case "$KEY_BYTE" in
+        '') error "Input closed. Installation cancelled." ;;
+        "$KEY_INTERRUPT") exit 130 ;;
+        "$KEY_NEWLINE"|"$KEY_RETURN"|' ') KEY="enter" ;;
+        "$KEY_EOF") KEY="escape" ;;
+        "$KEY_TAB") KEY="down" ;;
+        "$KEY_ESCAPE")
+            KEY="escape"
+            stty min 0 time "$KEY_ESCAPE_TIMEOUT" <&3
+            read_key_byte
+            case "$KEY_BYTE" in
+                '['|'O')
+                    KEY="ignore"
+                    while :; do
+                        read_key_byte
+                        case "$KEY_BYTE" in
+                            A) KEY="up"; break ;;
+                            B) KEY="down"; break ;;
+                            H) KEY="home"; break ;;
+                            F) KEY="end"; break ;;
+                            [0-9]|';'|'?') ;;
+                            *) break ;;
+                        esac
+                    done
+                    ;;
+                '') ;;
+                *) KEY="ignore" ;;
+            esac
+            stty min 1 time 0 <&3
+            ;;
+        *) KEY=$(printf '%s' "$KEY_BYTE" | LC_ALL=C tr '[:upper:]' '[:lower:]') ;;
+    esac
+}
+
+erase_rows() {
+    [ "$MENU_REDRAW" = "1" ] || return 0
+    printf '\033[%sA\r\033[J' "$1"
+}
+
+render_menu() {
+    printf "  ${BOLD}%s${NC}\n\n" "$menu_title"
+    menu_row=1
+    for menu_entry in "$@"; do
+        if [ "$menu_row" = "$menu_index" ]; then
+            printf "  ${CYAN}${BOLD}> [%s] %s${NC}\n" "${menu_entry%%:*}" "${menu_entry#*:}"
+        else
+            printf "    ${DIM}[%s]${NC} %s\n" "${menu_entry%%:*}" "${menu_entry#*:}"
+        fi
+        menu_row=$((menu_row + 1))
+    done
+    printf "\n  ${DIM}Up/Down to move, Enter to select, or press a shortcut.${NC}\n"
+}
+
+select_menu() {
+    menu_title="$1"
+    menu_default="$2"
+    shift 2
+    menu_count=$#
+    menu_index=1
+    menu_row=1
+    menu_back="q"
+    for menu_entry in "$@"; do
+        [ "${menu_entry%%:*}" != "$menu_default" ] || menu_index=$menu_row
+        [ "${menu_entry%%:*}" != "b" ] || menu_back="b"
+        [ "${menu_entry%%:*}" != "n" ] || menu_back="n"
+        menu_row=$((menu_row + 1))
+    done
+    MENU_CHOICE=""
+    if [ "$MENU_REDRAW" != "1" ]; then
+        printf '  %s\n\n' "$menu_title"
+        for menu_entry in "$@"; do
+            printf '  [%s] %s\n' "${menu_entry%%:*}" "${menu_entry#*:}"
+        done
+        while :; do
+            printf '\n  Choice [%s]: ' "$menu_default"
+            read_answer
+            REPLY=${REPLY:-$menu_default}
+            for menu_entry in "$@"; do
+                [ "$REPLY" != "${menu_entry%%:*}" ] || MENU_CHOICE="$REPLY"
+            done
+            [ -z "$MENU_CHOICE" ] || return
+            warn "Choose one of the listed shortcuts."
+        done
+    fi
+    start_key_input
+    render_menu "$@"
+    while [ -z "$MENU_CHOICE" ]; do
+        read_key
+        case "$KEY" in
+            up|k)
+                menu_index=$((menu_index - 1))
+                [ "$menu_index" -ge 1 ] || menu_index=$menu_count
+                ;;
+            down|j)
+                menu_index=$((menu_index + 1))
+                [ "$menu_index" -le "$menu_count" ] || menu_index=1
+                ;;
+            home) menu_index=1 ;;
+            end) menu_index=$menu_count ;;
+            enter)
+                menu_row=1
+                for menu_entry in "$@"; do
+                    [ "$menu_row" != "$menu_index" ] || MENU_CHOICE="${menu_entry%%:*}"
+                    menu_row=$((menu_row + 1))
+                done
+                ;;
+            escape|q) MENU_CHOICE="$menu_back" ;;
+            *)
+                for menu_entry in "$@"; do
+                    [ "$KEY" != "${menu_entry%%:*}" ] || MENU_CHOICE="$KEY"
+                done
+                ;;
+        esac
+        erase_rows "$((menu_count + MENU_FRAME_ROWS))"
+        [ -n "$MENU_CHOICE" ] || render_menu "$@"
+    done
+    restore_terminal
+}
 
 # Print functions (output to stderr so they don't get captured in command substitution)
 info() { printf "${BLUE}info:${NC} %s\n" "$1" >&2; }
 success() { printf "${GREEN}success:${NC} %s\n" "$1" >&2; }
 warn() { printf "${YELLOW}warning:${NC} %s\n" "$1" >&2; }
-error() { printf "${RED}error:${NC} %s\n" "$1" >&2; exit 1; }
+error() {
+    printf "${RED}error:${NC} %s\n" "$1" >&2
+    [ -z "$INSTALL_LOG" ] || printf 'error: %s\n' "$1" >>"$INSTALL_LOG"
+    exit 1
+}
 # Echo a dependency-install command (rustup, brew, apt, ...) so the user sees it before confirming.
 show_cmd() { printf "${BOLD}  \$ %s${NC}\n" "$1" >&2; }
+
+stop_progress() {
+    if [ -n "$PROGRESS_PID" ]; then
+        kill "$PROGRESS_PID" 2>/dev/null || true
+        wait "$PROGRESS_PID" 2>/dev/null || true
+        PROGRESS_PID=""
+        printf '\r\033[K'
+    fi
+    if [ "$INSTALL_CURSOR_HIDDEN" = "1" ]; then
+        printf '\033[?25h'
+        INSTALL_CURSOR_HIDDEN=0
+    fi
+}
+
+cleanup_installer() {
+    cleanup_status=$?
+    set +e
+    trap - 0
+    stop_progress
+    restore_terminal
+    if [ -n "$LOG_READER_PID" ]; then
+        kill "$LOG_READER_PID" 2>/dev/null || true
+        wait "$LOG_READER_PID" 2>/dev/null || true
+        LOG_READER_PID=""
+    fi
+    rollback_activation
+    if [ -n "$INSTALL_LOG" ]; then
+        rm -f "$INSTALL_LOG.pipe"
+        if [ -f "$INSTALL_LOG.part" ]; then
+            cat "$INSTALL_LOG.part" >>"$INSTALL_LOG"
+            rm -f "$INSTALL_LOG.part"
+        fi
+        if [ "$cleanup_status" -eq 0 ]; then
+            rm -f "$INSTALL_LOG"
+        else
+            printf '\n' >&2
+            if [ "$cleanup_status" -eq 130 ]; then
+                printf '  Installation cancelled.\n' >&2
+            elif [ -n "$INSTALL_STAGE" ]; then
+                printf "  ${RED}Installation stopped during: %s.${NC}\n" "$INSTALL_STAGE" >&2
+            fi
+            printf '  Installation log: %s\n' "$INSTALL_LOG" >&2
+        fi
+    fi
+    [ -z "$DOWNLOAD_STAGE" ] || rm -rf "$DOWNLOAD_STAGE"
+    [ -z "$SOURCE_STAGE" ] || rm -rf "$SOURCE_STAGE"
+    [ -z "$SOURCE_INSTALL_ROOT" ] || rm -rf "$SOURCE_INSTALL_ROOT"
+    exit "$cleanup_status"
+}
+
+begin_stage() {
+    INSTALL_STAGE_NUMBER="$1"
+    INSTALL_STAGE="$2"
+    printf "\n  ${BOLD}[%s/%s] %s${NC}\n" "$INSTALL_STAGE_NUMBER" "$INSTALL_STAGE_COUNT" "$INSTALL_STAGE"
+    printf '\n[%s/%s] %s\n' "$INSTALL_STAGE_NUMBER" "$INSTALL_STAGE_COUNT" "$INSTALL_STAGE" >>"$INSTALL_LOG"
+}
+
+stage_detail() {
+    printf "    ${DIM}%s${NC}\n" "$1"
+}
+
+stage_done() {
+    printf "    ${GREEN}[ok]${NC} %s\n" "$1"
+}
+
+elapsed_time() {
+    elapsed_seconds=$(( $(date +%s) - PROGRESS_STARTED ))
+    printf '%dm %02ds' "$((elapsed_seconds / 60))" "$((elapsed_seconds % 60))"
+}
+
+plain_log() {
+    # ANSI escape ranges describe bytes, not locale-dependent character ordering.
+    LC_ALL=C tr '\r' '\n' | LC_ALL=C sed "s/${KEY_ESCAPE}\[[0-?]*[ -/]*[@-~]//g"
+}
+
+show_failure_details() {
+    plain_log <"$INSTALL_LOG.part" | LC_ALL=C awk '
+        /^[[:space:]]*Building[[:space:]]+\[[^]]*\][[:space:]]+[0-9]+\/[0-9]+/ { next }
+        { printf "      %s\n", $0 }' >&2
+}
+
+progress_detail() {
+    if [ -n "$PROGRESS_DOWNLOAD_PATH" ]; then
+        downloaded_bytes=0
+        if [ -f "$PROGRESS_DOWNLOAD_PATH" ]; then
+            downloaded_bytes=$(wc -c <"$PROGRESS_DOWNLOAD_PATH" | tr -d '[:space:]')
+        fi
+        if [ -n "$PROGRESS_DOWNLOAD_SIZE" ]; then
+            downloaded_percent=$((downloaded_bytes * 100 / PROGRESS_DOWNLOAD_SIZE))
+            [ "$downloaded_percent" -le 100 ] || downloaded_percent=100
+            printf '%s%%  %s / %s' "$downloaded_percent" "$(human_size "$downloaded_bytes")" "$(human_size "$PROGRESS_DOWNLOAD_SIZE")"
+        else
+            printf '%s downloaded' "$(human_size "$downloaded_bytes")"
+        fi
+    else
+        tail -c "$PROGRESS_LOG_TAIL_BYTES" "$INSTALL_LOG.part" 2>/dev/null | plain_log | LC_ALL=C awk '
+            NF {
+                sub(/^[[:space:]]+/, "")
+                line = $0
+                if ($0 ~ /^Building[[:space:]]+\[[^]]*\][[:space:]]+[0-9]+\/[0-9]+/) {
+                    sub(/^Building[[:space:]]+\[[^]]*\][[:space:]]+/, "Building ")
+                    build = $0
+                }
+            }
+            END { print (build != "" ? build : line) }'
+    fi
+}
+
+animate_progress() {
+    trap - 0
+    trap 'exit 0' INT TERM HUP
+    progress_tick=0
+    while :; do
+        case "$((progress_tick % 4))" in
+            0) progress_frame='|' ;;
+            1) progress_frame='/' ;;
+            2) progress_frame='-' ;;
+            3) progress_frame='\' ;;
+        esac
+        current_activity=$(progress_detail)
+        progress_text="[$progress_frame] $(elapsed_time)  ${current_activity:-$task_label}"
+        printf "\r\033[K    ${CYAN}%.*s${NC}" "$PROGRESS_COLUMNS" "$progress_text"
+        progress_tick=$((progress_tick + 1))
+        sleep "$PROGRESS_INTERVAL"
+    done
+}
+
+run_logged() {
+    task_label="$1"
+    shift
+    : >"$INSTALL_LOG.part" || error "Could not create the command log. Check available disk space and permissions."
+    printf '\n%s\n' "$task_label" >>"$INSTALL_LOG"
+    PROGRESS_STARTED=$(date +%s)
+    task_output="$INSTALL_LOG.part"
+    if [ "$INSTALL_VERBOSE" = "1" ]; then
+        stage_detail "$task_label..."
+        task_output="$INSTALL_LOG.pipe"
+        mkfifo "$task_output" || error "Could not start live logging. Check available disk space and permissions."
+        tee "$INSTALL_LOG.part" <"$task_output" &
+        LOG_READER_PID=$!
+    elif [ "$MENU_REDRAW" = "1" ]; then
+        PROGRESS_COLUMNS=$(stty size <&1 2>/dev/null | awk '{ print $2 }')
+        PROGRESS_COLUMNS=${PROGRESS_COLUMNS:-$PROGRESS_DEFAULT_COLUMNS}
+        [ "$PROGRESS_COLUMNS" -gt "$PROGRESS_LINE_PADDING" ] || PROGRESS_COLUMNS=$PROGRESS_DEFAULT_COLUMNS
+        PROGRESS_COLUMNS=$((PROGRESS_COLUMNS - PROGRESS_LINE_PADDING - 1))
+        printf '\033[?25l'
+        INSTALL_CURSOR_HIDDEN=1
+        animate_progress &
+        PROGRESS_PID=$!
+    else
+        stage_detail "$task_label..."
+    fi
+    # Keep commands in the foreground so Ctrl+C also reaches their child processes.
+    if "$@" >"$task_output" 2>&1; then
+        task_status=0
+    else
+        task_status=$?
+    fi
+    stop_progress
+    if [ -n "$LOG_READER_PID" ]; then
+        if wait "$LOG_READER_PID"; then
+            :
+        else
+            warn "Could not stream the complete command log."
+            [ "$task_status" -ne 0 ] || task_status=1
+        fi
+        LOG_READER_PID=""
+        rm -f "$INSTALL_LOG.pipe"
+        printf '\n'
+    fi
+    cat "$INSTALL_LOG.part" >>"$INSTALL_LOG"
+    if [ "$task_status" -eq 0 ]; then
+        printf "    ${GREEN}[ok]${NC} %s ${DIM}(%s)${NC}\n" "$task_label" "$(elapsed_time)"
+    else
+        printf "    ${RED}[failed]${NC} %s ${DIM}(%s)${NC}\n" "$task_label" "$(elapsed_time)" >&2
+        [ "$INSTALL_VERBOSE" = "1" ] || show_failure_details
+    fi
+    rm -f "$INSTALL_LOG.part"
+    return "$task_status"
+}
 
 # Format a byte count for humans (e.g. 1234567 -> 1.2 MiB).
 human_size() {
@@ -60,17 +459,303 @@ remote_download_size() {
         | tr -d '\r' | awk 'tolower($1) == "content-length:" { len = $2 } END { if (len) print len }'
 }
 
-# Banner
 print_banner() {
-    printf "${BOLD}"
-    echo "  __  __ _     _             _              "
-    echo " |  \\/  (_)___| |_ _ __ __ _| |  _ __ ___   "
-    echo " | |\\/| | / __| __| '__/ _\` | | | '__/ __|  "
-    echo " | |  | | \\__ \\ |_| | | (_| | |_| |  \\__ \\  "
-    echo " |_|  |_|_|___/\\__|_|  \\__,_|_(_)_|  |___/  "
-    echo ""
-    printf "${NC}${BLUE}Fast, flexible LLM inference.${NC}\n"
-    echo ""
+    printf "\n${BOLD}"
+    cat <<'EOF'
+  __  __ _     _             _
+ |  \/  (_)___| |_ _ __ __ _| |  _ __ ___
+ | |\/| | / __| __| '__/ _` | | | '__/ __|
+ | |  | | \__ \ |_| | | (_| | |_| |  \__ \
+ |_|  |_|_|___/\__|_|  \__,_|_(_)_|  |___/
+EOF
+    printf "${NC}\n  ${BOLD}Install mistral.rs${NC}\n"
+    printf "  ${BLUE}Fast, flexible LLM inference.${NC}\n\n"
+}
+
+print_help() {
+    cat <<'EOF'
+Usage: sh install.sh [options]
+       curl -fsSL https://mistralrs.dev/install.sh | sh -s -- [options]
+
+Run without options for guided installation.
+
+  --release VERSION       latest (default), master, or a release tag such as v0.9.5
+  --backend BACKEND       auto (default), cpu, metal, or cuda
+  --from-source           Build the selected release from source
+  --with-ffmpeg           Install optional FFmpeg video support
+  --no-nccl               Omit NCCL from source builds
+  --allow-cuda-mismatch   Allow a toolkit newer than the NVIDIA driver supports
+  --yes, -y              Accept the plan and prerequisite installation prompts
+  --dry-run              Preview the plan without downloading or changing files
+  --verbose              Stream full command output while installing
+  --help, -h             Show this help
+EOF
+}
+
+load_options() {
+    if [ -f "$PREBUILT_DIR/install.conf" ]; then
+        while IFS='=' read -r option value; do
+            case "$option" in
+                release) INSTALL_RELEASE="$value" ;;
+                backend) INSTALL_BACKEND="$value" ;;
+                method) INSTALL_METHOD="$value" ;;
+                no_nccl) MISTRALRS_INSTALL_NO_NCCL="${MISTRALRS_INSTALL_NO_NCCL:-$value}" ;;
+                allow_cuda_mismatch)
+                    MISTRALRS_INSTALL_ALLOW_CUDA_MISMATCH="${MISTRALRS_INSTALL_ALLOW_CUDA_MISMATCH:-$value}"
+                    ;;
+            esac
+        done <"$PREBUILT_DIR/install.conf"
+    fi
+    if [ -n "${MISTRALRS_INSTALL_TAG:-}" ]; then
+        INSTALL_RELEASE="$MISTRALRS_INSTALL_TAG"
+    fi
+    if [ -n "${MISTRALRS_INSTALL_FROM_SOURCE:-}" ]; then
+        INSTALL_METHOD="source"
+        INSTALL_RELEASE="${MISTRALRS_INSTALL_TAG:-master}"
+    fi
+}
+
+save_options() {
+    printf 'release=%s\nbackend=%s\nmethod=%s\nno_nccl=%s\nallow_cuda_mismatch=%s\n' \
+        "$INSTALL_RELEASE" "$INSTALL_BACKEND" "$INSTALL_METHOD" \
+        "${MISTRALRS_INSTALL_NO_NCCL:-0}" "${MISTRALRS_INSTALL_ALLOW_CUDA_MISMATCH:-0}" \
+        >"$PREBUILT_DIR/install.conf"
+}
+
+validate_release() {
+    case "$INSTALL_RELEASE" in
+        ''|-*|*[!a-zA-Z0-9._-]*) return 1 ;;
+    esac
+    return 0
+}
+
+parse_args() {
+    while [ "$#" -gt 0 ]; do
+        case "$1" in
+            --help|-h) print_help; exit 0 ;;
+            --yes|-y) MISTRALRS_INSTALL_YES=1 ;;
+            --dry-run) DRY_RUN=1 ;;
+            --verbose) INSTALL_VERBOSE=1 ;;
+            --from-source) INSTALL_METHOD="source" ;;
+            --with-ffmpeg) INSTALL_VIDEO=1 ;;
+            --no-nccl) MISTRALRS_INSTALL_NO_NCCL=1 ;;
+            --allow-cuda-mismatch) MISTRALRS_INSTALL_ALLOW_CUDA_MISMATCH=1 ;;
+            --release|--backend)
+                [ "$#" -ge 2 ] || error "Missing value for $1. See --help."
+                case "$1" in
+                    --release) INSTALL_RELEASE="$2" ;;
+                    --backend) INSTALL_BACKEND="$2" ;;
+                esac
+                shift
+                ;;
+            *) error "Unknown option: $1. See --help." ;;
+        esac
+        shift
+    done
+    validate_release || error "Invalid release: $INSTALL_RELEASE"
+    case "$INSTALL_BACKEND" in
+        auto|cpu|metal|cuda) ;;
+        *) error "Unknown backend: $INSTALL_BACKEND. Choose auto, cpu, metal, or cuda." ;;
+    esac
+    case "$INSTALL_METHOD" in
+        auto|source) ;;
+        *) error "Unknown installation method: $INSTALL_METHOD." ;;
+    esac
+}
+
+resolve_plan() {
+    SELECTED_BACKEND="$INSTALL_BACKEND"
+    if [ "$SELECTED_BACKEND" = "auto" ]; then
+        if [ "$INSTALL_OS" = "macos" ] && [ "$INSTALL_ARCH" = "arm64" ]; then
+            SELECTED_BACKEND="metal"
+        elif [ "$INSTALL_OS" = "linux" ] && [ -n "$DETECTED_CUDA_CC" ]; then
+            SELECTED_BACKEND="cuda"
+        else
+            SELECTED_BACKEND="cpu"
+        fi
+    fi
+    case "$SELECTED_BACKEND" in
+        metal)
+            [ "$INSTALL_OS" = "macos" ] && [ "$INSTALL_ARCH" = "arm64" ] \
+                || error "Metal installation requires Apple Silicon macOS."
+            ;;
+        cuda)
+            [ "$INSTALL_OS" = "linux" ] && [ -n "$DETECTED_CUDA_CC" ] \
+                || error "CUDA installation requires Linux and a detected NVIDIA GPU."
+            ;;
+    esac
+    PLANNED_ASSET=""
+    PLANNED_METHOD="source"
+    if [ "$INSTALL_METHOD" != "source" ] && [ "$INSTALL_RELEASE" != "master" ]; then
+        PLANNED_ASSET=$(detect_prebuilt_asset "$INSTALL_OS")
+        [ -z "$PLANNED_ASSET" ] || PLANNED_METHOD="prebuilt"
+    fi
+    case "$INSTALL_RELEASE" in
+        latest) RELEASE_LABEL="Latest stable" ;;
+        master) RELEASE_LABEL="Development (master)" ;;
+        *) RELEASE_LABEL="$INSTALL_RELEASE" ;;
+    esac
+    case "$SELECTED_BACKEND" in
+        metal) BACKEND_LABEL="Metal" ;;
+        cuda) BACKEND_LABEL="NVIDIA CUDA" ;;
+        cpu) BACKEND_LABEL="CPU" ;;
+    esac
+}
+
+plan_row() {
+    printf "  ${DIM}%-18s${NC} %s\n" "$1" "$2"
+}
+
+print_plan() {
+    PLAN_ROWS="$PLAN_BASE_ROWS"
+    plan_row "Platform" "$INSTALL_OS ($INSTALL_ARCH)"
+    plan_row "Version" "$RELEASE_LABEL"
+    if [ "$INSTALL_BACKEND" = "auto" ]; then
+        printf "  ${DIM}%-18s${NC} ${GREEN}%s (recommended)${NC}\n" "Acceleration" "$BACKEND_LABEL"
+    else
+        plan_row "Acceleration" "$BACKEND_LABEL"
+    fi
+    if [ "$PLANNED_METHOD" = "prebuilt" ]; then
+        plan_row "Installation" "Prebuilt binary"
+    else
+        plan_row "Installation" "Build from source"
+    fi
+    plan_row "Command location" "$(tildify "$BIN_DIR")"
+    plan_row "Managed files" "$(tildify "$PREBUILT_DIR")"
+    if [ "$INSTALL_VIDEO" = "1" ]; then
+        plan_row "Video support" "Install FFmpeg if needed"
+    else
+        plan_row "Video support" "Leave FFmpeg unchanged"
+    fi
+    if [ "$PLANNED_METHOD" = "source" ]; then
+        printf "\n  ${YELLOW}A source build needs Rust and platform build tools.${NC}\n"
+        PLAN_ROWS=$((PLAN_ROWS + 2))
+    fi
+    printf '\n'
+}
+
+customize_plan() {
+    while :; do
+        select_menu 'Customize installation' 1 \
+            "1:Version: $INSTALL_RELEASE" "2:Acceleration: $INSTALL_BACKEND" \
+            "3:Installation method: $INSTALL_METHOD" "4:Video support" 'b:Back'
+        case "$MENU_CHOICE" in
+            b) return ;;
+            1)
+                case "$INSTALL_RELEASE" in
+                    latest) version_default=l ;;
+                    master) version_default=d ;;
+                    *) version_default=t ;;
+                esac
+                select_menu 'Version' "$version_default" \
+                    'l:Latest stable (recommended)' 'd:Development (master)' 't:Specific release tag' 'b:Back'
+                case "$MENU_CHOICE" in
+                    l) INSTALL_RELEASE="latest" ;;
+                    d) INSTALL_RELEASE="master" ;;
+                    t)
+                        printf '  Release tag (for example v0.9.5) [%s]: ' "$INSTALL_RELEASE"
+                        read_answer
+                        previous_release="$INSTALL_RELEASE"
+                        [ -z "$REPLY" ] || INSTALL_RELEASE="$REPLY"
+                        if ! validate_release; then
+                            warn "Use a release tag such as v0.9.5."
+                            INSTALL_RELEASE="$previous_release"
+                        fi
+                        printf '\n'
+                        ;;
+                esac
+                ;;
+            2)
+                case "$INSTALL_BACKEND" in
+                    auto) backend_default=a ;;
+                    cpu) backend_default=c ;;
+                    metal) backend_default=m ;;
+                    cuda) backend_default=g ;;
+                esac
+                set -- 'a:Automatic (recommended)' 'c:CPU only'
+                if [ "$INSTALL_OS" = "macos" ] && [ "$INSTALL_ARCH" = "arm64" ]; then
+                    set -- "$@" 'm:Metal'
+                elif [ "$INSTALL_OS" = "linux" ] && [ -n "$DETECTED_CUDA_CC" ]; then
+                    set -- "$@" 'g:NVIDIA CUDA'
+                fi
+                select_menu 'Acceleration' "$backend_default" "$@" 'b:Back'
+                case "$MENU_CHOICE" in
+                    a) INSTALL_BACKEND="auto" ;;
+                    c) INSTALL_BACKEND="cpu" ;;
+                    m) INSTALL_BACKEND="metal" ;;
+                    g) INSTALL_BACKEND="cuda" ;;
+                esac
+                ;;
+            3)
+                method_default=p
+                [ "$INSTALL_METHOD" != "source" ] || method_default=s
+                select_menu 'Installation method' "$method_default" \
+                    'p:Prebuilt when available (recommended)' 's:Build from source' 'b:Back'
+                case "$MENU_CHOICE" in
+                    p) INSTALL_METHOD="auto" ;;
+                    s) INSTALL_METHOD="source" ;;
+                esac
+                ;;
+            4)
+                video_default=n
+                [ "$INSTALL_VIDEO" != "1" ] || video_default=y
+                select_menu 'Video support' "$video_default" \
+                    'n:Leave FFmpeg unchanged' 'y:Install FFmpeg if needed' 'b:Back'
+                case "$MENU_CHOICE" in
+                    y) INSTALL_VIDEO=1 ;;
+                    n) INSTALL_VIDEO=0 ;;
+                esac
+                ;;
+        esac
+    done
+}
+
+guided_install() {
+    while :; do
+        resolve_plan
+        print_plan
+        if [ "${MISTRALRS_INSTALL_YES:-}" = "1" ]; then
+            return
+        fi
+        if ! can_prompt; then
+            [ "$DRY_RUN" = "1" ] && return
+            error "No interactive terminal. Use --yes to accept this plan."
+        fi
+        install_action='i:Install'
+        [ "$DRY_RUN" != "1" ] || install_action='i:Preview'
+        select_menu 'Installation' i "$install_action" 'c:Customize' 'q:Cancel'
+        case "$MENU_CHOICE" in
+            i) return ;;
+            c)
+                erase_rows "$PLAN_ROWS"
+                customize_plan
+                ;;
+            q) printf '  Installation cancelled.\n'; exit 0 ;;
+        esac
+    done
+}
+
+configure_release() {
+    MISTRALRS_INSTALL_TAG=""
+    if [ "$INSTALL_RELEASE" = "latest" ] && [ "$PLANNED_METHOD" = "source" ]; then
+        run_logged "Resolve latest stable release" curl --proto '=https' --tlsv1.2 -fsSLI \
+            --connect-timeout "$REMOTE_SIZE_CONNECT_TIMEOUT" --max-time "$RELEASE_LOOKUP_MAX_TIME" \
+            -o /dev/null -w '%{url_effective}' "$MISTRALRS_REPO_URL/releases/latest" \
+            || error "Could not resolve the latest stable release. Retry or choose --release vVERSION."
+        latest_url=$(tail -n 1 "$INSTALL_LOG")
+        MISTRALRS_INSTALL_TAG=${latest_url##*/}
+        case "$MISTRALRS_INSTALL_TAG" in
+            v[0-9]*) ;;
+            *) error "Could not resolve the latest stable release. Choose --release vVERSION." ;;
+        esac
+    elif [ "$INSTALL_RELEASE" != "latest" ] && [ "$INSTALL_RELEASE" != "master" ]; then
+        MISTRALRS_INSTALL_TAG="$INSTALL_RELEASE"
+    fi
+    if [ -n "$MISTRALRS_INSTALL_TAG" ]; then
+        RELEASE_BASE="$MISTRALRS_REPO_URL/releases/download/$MISTRALRS_INSTALL_TAG"
+    else
+        RELEASE_BASE="$MISTRALRS_REPO_URL/releases/latest/download"
+    fi
 }
 
 # Detect operating system
@@ -122,17 +807,15 @@ version_gte() {
 
 # Install Rust via rustup
 install_rust() {
-    info "Installing Rust via rustup..."
-    sh -c "$RUSTUP_INSTALL_CMD"
+    run_logged "Install Rust" sh -c "$RUSTUP_INSTALL_CMD" \
+        || error "Rust installation failed. Check the installation log, then retry."
     . "$HOME/.cargo/env"
-    success "Rust installed successfully"
 }
 
 # Update Rust to latest version
 update_rust() {
-    info "Updating Rust to latest version..."
-    rustup update stable
-    success "Rust updated successfully"
+    run_logged "Update Rust" rustup update stable \
+        || error "Rust update failed. Check the installation log, then retry."
 }
 
 # Detect CUDA compute capability
@@ -253,8 +936,7 @@ check_xcode_cli_tools() {
         warn "Xcode Command Line Tools are not installed"
         echo ""
         show_cmd "xcode-select --install"
-        printf "Would you like to install them now? [Y/n] "
-        read_input
+        read_input "Install Xcode Command Line Tools?"
         case "$REPLY" in
             [Nn]*)
                 error "Xcode Command Line Tools are required for Metal support"
@@ -262,8 +944,10 @@ check_xcode_cli_tools() {
         esac
         info "Installing Xcode Command Line Tools..."
         xcode-select --install
-        echo "Please complete the installation in the dialog, then press Enter to continue..."
-        read_input
+        read_input "Continue after completing the Xcode installation dialog?"
+        case "$REPLY" in
+            [Nn]*) error "Installation cancelled." ;;
+        esac
         show_cmd "sudo xcode-select --switch /Applications/Xcode.app/Contents/Developer"
         sudo xcode-select --switch /Applications/Xcode.app/Contents/Developer
     fi
@@ -275,8 +959,7 @@ check_metal_toolchain() {
         warn "Metal Toolchain is not installed"
         echo ""
         show_cmd "xcodebuild -downloadComponent MetalToolchain"
-        printf "Would you like to install it now? [Y/n] "
-        read_input
+        read_input "Install the Metal toolchain?"
         case "$REPLY" in
             [Nn]*)
                 error "Metal Toolchain is required for Metal support"
@@ -327,62 +1010,41 @@ build_features() {
     os="$1"
     features=""
 
-    if [ "$os" = "macos" ]; then
+    if [ "$SELECTED_BACKEND" = "metal" ]; then
         features="metal"
-        info "macOS detected - enabling metal"
-    else
-        # Check for CUDA
-        cuda_cc=$(detect_cuda_compute_cap)
-        if [ -n "$cuda_cc" ]; then
-            features="cuda"
-            # Extract major.minor from compute cap (e.g., 89 -> 8.9)
-            cc_major=$(echo "$cuda_cc" | cut -c1)
-            cc_minor=$(echo "$cuda_cc" | cut -c2-)
-            info "CUDA detected (compute capability: ${cc_major}.${cc_minor})"
-
-            if [ "${MISTRALRS_INSTALL_NO_NCCL:-}" = "1" ]; then
-                info "MISTRALRS_INSTALL_NO_NCCL=1 set - skipping nccl"
-            elif detect_nccl; then
+    elif [ "$SELECTED_BACKEND" = "cuda" ]; then
+        cuda_cc="$DETECTED_CUDA_CC"
+        features="cuda"
+        if [ "${MISTRALRS_INSTALL_NO_NCCL:-}" != "1" ]; then
+            if detect_nccl; then
                 features="$features nccl"
-                info "NCCL detected - enabling nccl for CUDA multi-GPU tensor parallelism"
             elif [ "${MISTRALRS_INSTALL_NCCL:-}" = "1" ]; then
                 features="$features nccl"
                 warn "MISTRALRS_INSTALL_NCCL=1 set but NCCL was not detected; the build may fail unless libnccl is on the linker path"
             else
                 warn "NCCL not found - skipping nccl. Install NCCL or set MISTRALRS_INSTALL_NCCL=1 to force it; NCCL is the preferred CUDA multi-GPU path."
             fi
+        fi
 
-            # Check for cuDNN
-            if detect_cudnn; then
-                features="$features cudnn"
-                info "cuDNN detected - enabling cudnn"
-            else
-                info "cuDNN not found - skipping cudnn feature"
-            fi
+        if detect_cudnn; then
+            features="$features cudnn"
+        fi
 
-            # Add flash attention based on compute capability
-            if [ "$cuda_cc" = "90" ]; then
-                features="$features flash-attn-v3 flash-attn"
-                info "Hopper GPU detected - enabling flash-attn-v3 and flash-attn"
-            elif [ "$cuda_cc" -ge 80 ] 2>/dev/null; then
-                features="$features flash-attn"
-                info "Ampere+ GPU detected - enabling flash-attn"
-            fi
-            
-            cuda_ver_code=$(detect_cuda_version_code)
-            if cutile_supported_for_cuda "$cuda_ver_code" "$cuda_cc"; then
-                features="$features cutile"
-                info "CUDA $(version_code_to_str "$cuda_ver_code") and supported arch - enabling cutile"
-            fi
-        else
-            info "No NVIDIA GPU detected"
+        if [ "$cuda_cc" = "90" ]; then
+            features="$features flash-attn-v3 flash-attn"
+        elif [ "$cuda_cc" -ge 80 ] 2>/dev/null; then
+            features="$features flash-attn"
+        fi
+
+        cuda_ver_code=$(detect_cuda_version_code)
+        if cutile_supported_for_cuda "$cuda_ver_code" "$cuda_cc"; then
+            features="$features cutile"
         fi
     fi
 
     # Check for MKL on Intel
     if is_intel_cpu && detect_mkl; then
         features="$features mkl"
-        info "Intel MKL detected - enabling mkl"
     fi
 
     # Trim leading/trailing whitespace
@@ -425,6 +1087,7 @@ install_ffmpeg() {
         return 1
     fi
     info "Installing FFmpeg..."
+    show_cmd "$cmd"
     sh -c "$cmd"
 }
 
@@ -434,22 +1097,28 @@ install_mistralrs() {
     SOURCE_INSTALL_ROOT=$(mktemp -d)
     SOURCE_MISTRALRS="$SOURCE_INSTALL_ROOT/bin/mistralrs"
 
-    # MISTRALRS_INSTALL_TAG pins a git tag; otherwise build the latest master.
     if [ -n "$MISTRALRS_INSTALL_TAG" ]; then
-        git_ref="--tag $MISTRALRS_INSTALL_TAG"
+        set -- --tag "$MISTRALRS_INSTALL_TAG"
         ref_desc="tag $MISTRALRS_INSTALL_TAG"
     else
-        git_ref="--branch $MISTRALRS_BRANCH"
+        set -- --branch "$MISTRALRS_BRANCH"
         ref_desc="branch $MISTRALRS_BRANCH"
     fi
 
-    if [ -n "$features" ]; then
-        info "Installing mistralrs-cli from GitHub $ref_desc with features: $features"
-        cargo install --root "$SOURCE_INSTALL_ROOT" --force --locked --git "$MISTRALRS_REPO_URL" $git_ref "$MISTRALRS_CLI_PACKAGE" --features "$features"
-    else
-        info "Installing mistralrs-cli from GitHub $ref_desc with default features"
-        cargo install --root "$SOURCE_INSTALL_ROOT" --force --locked --git "$MISTRALRS_REPO_URL" $git_ref "$MISTRALRS_CLI_PACKAGE"
+    stage_detail "Source: $ref_desc"
+    stage_detail "The first build can take several minutes."
+    [ -z "$features" ] || set -- "$@" --features "$features"
+    cargo_progress=never
+    if [ "$MENU_REDRAW" = "1" ] && [ "$INSTALL_VERBOSE" = "0" ]; then
+        cargo_progress=always
     fi
+    run_logged "Compile mistral.rs ($BACKEND_LABEL)" \
+        env CARGO_TERM_COLOR=never CARGO_TERM_PROGRESS_WHEN="$cargo_progress" \
+        CARGO_TERM_PROGRESS_WIDTH="$PROGRESS_DEFAULT_COLUMNS" CARGO_TERM_PROGRESS_TERM_INTEGRATION=false \
+        CARGO_TERM_UNICODE=false CARGO_TERM_HYPERLINKS=false \
+        cargo install --root "$SOURCE_INSTALL_ROOT" --force --locked \
+        --git "$MISTRALRS_REPO_URL" "$@" "$MISTRALRS_CLI_PACKAGE" \
+        || error "Source build failed. Check the compiler error and installation log, then retry. Existing installation kept."
 }
 
 remove_legacy_tileiras_link() {
@@ -460,20 +1129,50 @@ remove_legacy_tileiras_link() {
     fi
 }
 
-install_source_from_staging() {
+activate_install() {
+    activation_stage="$1"
+    activation_backup=""
+    mkdir -p "$BIN_DIR" || return 1
+    if [ -e "$PREBUILT_DIR" ]; then
+        activation_backup=$(mktemp -d "$HOME/.mistralrs-backup.XXXXXX") || return 1
+        rmdir "$activation_backup" || return 1
+        ACTIVATION_PENDING=1
+        mv "$PREBUILT_DIR" "$activation_backup" || return 1
+    fi
+    ACTIVATION_PENDING=1
+    if mv "$activation_stage" "$PREBUILT_DIR"; then
+        if "$PREBUILT_DIR/mistralrs" --version >/dev/null 2>&1 \
+            && ln -sf "$PREBUILT_DIR/mistralrs" "$BIN_DIR/mistralrs"; then
+            ACTIVATION_PENDING=0
+            remove_legacy_tileiras_link
+            [ -z "$activation_backup" ] || rm -rf "$activation_backup"
+            return 0
+        fi
+    fi
+    rollback_activation
+    return 1
+}
+
+rollback_activation() {
+    [ "$ACTIVATION_PENDING" = "1" ] || return 0
+    if [ -n "$activation_backup" ] && { [ -e "$activation_backup" ] || [ -L "$activation_backup" ]; }; then
+        if ! rm -rf "$PREBUILT_DIR" || ! mv "$activation_backup" "$PREBUILT_DIR"; then
+            warn "Could not restore the previous installation. Its files remain at $activation_backup."
+            return 1
+        fi
+    elif [ ! -e "$activation_stage" ]; then
+        rm -rf "$PREBUILT_DIR" || return 1
+    fi
+    ACTIVATION_PENDING=0
+}
+
+stage_source_binary() {
     if [ ! -f "$SOURCE_MISTRALRS" ]; then
         error "cargo install succeeded but $SOURCE_MISTRALRS was not found"
     fi
-    remove_legacy_tileiras_link
-    rm -rf "$PREBUILT_DIR"
-    mkdir -p "$PREBUILT_DIR" "$BIN_DIR"
-    cp "$SOURCE_MISTRALRS" "$PREBUILT_DIR/mistralrs"
-    chmod +x "$PREBUILT_DIR/mistralrs" 2>/dev/null || true
-    ln -sf "$PREBUILT_DIR/mistralrs" "$BIN_DIR/mistralrs"
-    rm -rf "$SOURCE_INSTALL_ROOT"
-    if ! "$PREBUILT_DIR/mistralrs" --version >/dev/null 2>&1; then
-        error "source-built binary did not run after installation"
-    fi
+    SOURCE_STAGE=$(mktemp -d "$HOME/.mistralrs-stage.XXXXXX")
+    cp "$SOURCE_MISTRALRS" "$SOURCE_STAGE/mistralrs"
+    INSTALL_CANDIDATE="$SOURCE_STAGE"
 }
 
 # Prebuilt binaries: SMs we publish a CUDA build for, per arch (see .github/workflows/release.yml).
@@ -482,12 +1181,7 @@ PREBUILT_CUDA_SMS_X86="80 86 89 90 100 120"
 PREBUILT_CUDA_SMS_AARCH64="90 100 121"
 # Newest first. Format is asset-token:minimum-driver-cuda-code.
 PREBUILT_CUDA_VARIANTS="133:1303 132:1302 131:1301 130:1300 129:1209 128:1208"
-# MISTRALRS_INSTALL_TAG pins a specific release (e.g. v0.9.5); default is the latest stable release.
-if [ -n "$MISTRALRS_INSTALL_TAG" ]; then
-    RELEASE_BASE="https://github.com/EricLBuehler/mistral.rs/releases/download/$MISTRALRS_INSTALL_TAG"
-else
-    RELEASE_BASE="https://github.com/EricLBuehler/mistral.rs/releases/latest/download"
-fi
+RELEASE_BASE=""
 PREBUILT_DIR="$HOME/.mistralrs"
 BIN_DIR="$HOME/.local/bin"
 CARGO_BIN_DIR="${CARGO_HOME:-$HOME/.cargo}/bin"
@@ -521,8 +1215,7 @@ detect_prebuilt_asset() {
     os="$1"
     arch=$(uname -m)
     if [ "$os" = "macos" ]; then
-        # Only Apple Silicon has a prebuilt; Intel Macs build from source.
-        [ "$arch" = "arm64" ] && echo "mistralrs-metal-aarch64-apple-darwin.tar.gz"
+        [ "$SELECTED_BACKEND" = "metal" ] && echo "mistralrs-metal-aarch64-apple-darwin.tar.gz"
         return 0
     fi
     # Linux x86_64 and aarch64 have prebuilts; other arches build from source.
@@ -532,7 +1225,7 @@ detect_prebuilt_asset() {
         *) return ;;
     esac
     cc=$(detect_cuda_compute_cap)
-    if [ -n "$cc" ]; then
+    if [ "$SELECTED_BACKEND" = "cuda" ]; then
         driver_cuda_code=$(detect_cuda_driver_version_code)
         if [ -z "$driver_cuda_code" ]; then
             warn "Could not detect the CUDA version supported by the NVIDIA driver; building from source."
@@ -574,7 +1267,7 @@ detect_prebuilt_asset() {
 detect_legacy_cuda_prebuilt_asset() {
     os="$1"
     arch=$(uname -m)
-    [ "$os" = "linux" ] || return 0
+    [ "$os" = "linux" ] && [ "$SELECTED_BACKEND" = "cuda" ] || return 0
     case "$arch" in
         x86_64) triple="x86_64-unknown-linux-gnu"; cuda_sms="$PREBUILT_CUDA_SMS_X86" ;;
         aarch64|arm64) triple="aarch64-unknown-linux-gnu"; cuda_sms="$PREBUILT_CUDA_SMS_AARCH64" ;;
@@ -593,63 +1286,39 @@ detect_legacy_cuda_prebuilt_asset() {
     return 0
 }
 
-# Download and install a prebuilt asset. Returns 0 on success, 1 on failure.
-install_prebuilt() {
+download_prebuilt() {
     asset="$1"
-    tmp=$(mktemp -d)
     asset_url="$RELEASE_BASE/$asset"
     download_size=$(remote_download_size "$asset_url")
-    if [ -n "$download_size" ]; then
-        info "Downloading $asset ($(human_size "$download_size"))"
-    else
-        info "Downloading $asset"
-    fi
-    if ! curl --proto '=https' --tlsv1.2 -fSL --progress-bar "$asset_url" -o "$tmp/$asset"; then
-        rm -rf "$tmp"
-        return 1
-    fi
-    remove_legacy_tileiras_link
-    rm -rf "$PREBUILT_DIR"
-    mkdir -p "$PREBUILT_DIR"
-    # CPU/Metal tarballs contain a bare `mistralrs`; CUDA tarballs add runtime libraries in lib/.
-    if ! tar xzf "$tmp/$asset" -C "$PREBUILT_DIR"; then
-        rm -rf "$tmp"
-        return 1
-    fi
-    rm -rf "$tmp"
-    chmod +x "$PREBUILT_DIR/mistralrs" 2>/dev/null || true
-    mkdir -p "$BIN_DIR"
-    # Symlink onto PATH; $ORIGIN/lib resolves through the symlink to the real lib dir.
-    ln -sf "$PREBUILT_DIR/mistralrs" "$BIN_DIR/mistralrs"
-    if ! "$PREBUILT_DIR/mistralrs" --version >/dev/null 2>&1; then
-        warn "Prebuilt binary did not run; falling back to source build."
-        return 1
-    fi
-    return 0
+    case "$download_size" in
+        ''|*[!0-9]*|0) download_size="" ;;
+    esac
+    PROGRESS_DOWNLOAD_PATH="$DOWNLOAD_STAGE/$asset"
+    PROGRESS_DOWNLOAD_SIZE="$download_size"
+    download_label="Download $BACKEND_LABEL binary"
+    [ -z "$download_size" ] || download_label="$download_label ($(human_size "$download_size"))"
+    run_logged "$download_label" curl --proto '=https' --tlsv1.2 -fsSL \
+        "$asset_url" -o "$PROGRESS_DOWNLOAD_PATH"
 }
 
-# Build and install from source via cargo. Used when no prebuilt matches or when forced.
-# Builds the latest `master` (bleeding edge), unlike the prebuilt path which is the stable release.
-build_from_source() {
+prepare_source_build() {
     os="$1"
-    if [ -n "$MISTRALRS_INSTALL_TAG" ]; then
-        info "Building from source: tag $MISTRALRS_INSTALL_TAG."
-    else
-        info "Building from source: latest $MISTRALRS_BRANCH (bleeding edge)."
+    if [ "$SELECTED_BACKEND" = "cuda" ]; then
+        command -v nvcc >/dev/null 2>&1 \
+            || error "CUDA source builds require nvcc. Install the CUDA toolkit or choose --backend cpu."
+        check_cuda_source_build_versions "$os"
     fi
-
     # Check for Rust
     if check_rust; then
         rust_version_full=$(rustc --version 2>/dev/null || echo "unknown")
         rust_version=$(get_rust_version)
-        info "Rust is installed: $rust_version_full"
+        stage_detail "$rust_version_full"
 
         if [ -n "$rust_version" ] && ! version_gte "$rust_version" "$REQUIRED_RUST_VERSION"; then
             warn "Rust $rust_version is below the required version $REQUIRED_RUST_VERSION"
             echo ""
             show_cmd "rustup update stable"
-            printf "Would you like to update Rust now? [Y/n] "
-            read_input
+            read_input "Update Rust?"
             case "$REPLY" in
                 [Nn]*)
                     error "Rust $REQUIRED_RUST_VERSION or newer is required to install mistral.rs"
@@ -665,8 +1334,7 @@ build_from_source() {
         warn "Rust is not installed"
         echo ""
         show_cmd "$RUSTUP_INSTALL_CMD"
-        printf "Would you like to install Rust now? [Y/n] "
-        read_input
+        read_input "Install Rust?"
         case "$REPLY" in
             [Nn]*)
                 error "Rust is required to build mistral.rs from source"
@@ -676,79 +1344,25 @@ build_from_source() {
     fi
 
     # Run prereq installers outside any $() so xcodebuild stdout (asset paths with slashes) can't leak into the captured feature string.
-    if [ "$os" = "macos" ]; then
+    if [ "$SELECTED_BACKEND" = "metal" ]; then
         check_xcode_cli_tools
         check_metal_toolchain
     fi
 
-    echo ""
-    info "Detecting hardware capabilities..."
-    check_cuda_source_build_versions "$os"
-    features=$(build_features "$os")
-
-    echo ""
-    printf "${BOLD}Installation Summary${NC}\n"
-    echo "===================="
-    if [ -n "$features" ]; then
-        printf "Features: ${GREEN}%s${NC}\n" "$features"
-    else
-        printf "Features: ${YELLOW}(none - CPU only)${NC}\n"
-    fi
-    echo ""
-    printf "Proceed with installation? [Y/n] "
-    read_input
-    case "$REPLY" in
-        [Nn]*)
-            info "Installation cancelled"
-            exit 0
-            ;;
-    esac
-
-    echo ""
-    install_mistralrs "$features"
-    if [ -f "$HOME/.cargo/env" ]; then
-        . "$HOME/.cargo/env"
-    fi
+    BUILD_FEATURES=$(build_features "$os")
 }
 
-# Offer FFmpeg (optional, video input). Sets FFMPEG_SKIPPED. Shared by both install paths.
 maybe_install_ffmpeg() {
-    os="$1"
-    FFMPEG_SKIPPED=""
-    # MISTRALRS_INSTALL_IGNORE_FFMPEG=1 leaves ffmpeg untouched (CI, `mistralrs update`).
-    if [ "${MISTRALRS_INSTALL_IGNORE_FFMPEG:-}" = "1" ]; then
-        if check_ffmpeg; then
-            info "FFmpeg is installed (enables video input support)"
-        else
-            FFMPEG_SKIPPED=1
-        fi
-        return
-    fi
+    [ "$INSTALL_VIDEO" = "1" ] || return 0
+    [ "${MISTRALRS_INSTALL_IGNORE_FFMPEG:-}" != "1" ] || return 0
     if check_ffmpeg; then
-        info "FFmpeg is installed (enables video input support)"
         return
     fi
-    echo ""
-    printf "${YELLOW}(Optional)${NC} FFmpeg is required for video input support.\n"
-    cmd=$(ffmpeg_install_cmd "$os")
-    [ -n "$cmd" ] && show_cmd "$cmd"
-    printf "Would you like to install FFmpeg? [y/N] "
-    read_input
-    case "$REPLY" in
-        [Yy]*)
-            install_ffmpeg "$os"
-            if check_ffmpeg; then
-                success "FFmpeg installed successfully"
-            else
-                warn "FFmpeg installation failed - you can install it manually later"
-                FFMPEG_SKIPPED=1
-            fi
-            ;;
-        *)
-            info "Skipping FFmpeg installation"
-            FFMPEG_SKIPPED=1
-            ;;
-    esac
+    if install_ffmpeg "$1" && check_ffmpeg; then
+        success "FFmpeg installed successfully"
+    else
+        warn "FFmpeg could not be installed. You can add video support later."
+    fi
 }
 
 # Render a path with $HOME collapsed to ~ for readability.
@@ -844,8 +1458,7 @@ confirm_duplicate_replacement() {
         printf "  %s\n" "$(tildify "$duplicate")"
     done
     echo ""
-    printf "Replace duplicate installs? [Y/n] "
-    read_input
+    read_input "Replace duplicate installs?"
     case "$REPLY" in
         [Nn]*)
             error "duplicate mistralrs installs must be resolved before installing"
@@ -870,110 +1483,88 @@ $DUPLICATE_INSTALLS
 EOF
 }
 
-# Shared success message + examples + PATH guidance, tailored to how the binary was installed.
 print_success() {
-    method="$1"
-    success_bin="$PREBUILT_DIR/mistralrs"
-    ver=$("$success_bin" --version 2>/dev/null | head -1)
-    [ -n "$ver" ] || ver="mistral.rs"
-    echo ""
-    if [ "$method" = "prebuilt" ]; then
-        success "$ver installed successfully (prebuilt binary)!"
-    else
-        success "$ver installed successfully (built from source)!"
-    fi
-    echo ""
-    printf "${BOLD}Installed${NC}\n"
-    echo "========="
-    if [ "$method" = "prebuilt" ]; then
-        printf "  binary      %s\n" "$(tildify "$PREBUILT_DIR/mistralrs")"
-    else
-        printf "  binary      %s\n" "$(tildify "$PREBUILT_DIR/mistralrs")"
-    fi
-    printf "  on PATH     %s -> %s\n" "$(tildify "$BIN_DIR/mistralrs")" "$(tildify "$PREBUILT_DIR/mistralrs")"
-    echo ""
-    printf "${BOLD}Quick Start${NC}\n"
-    echo "==========="
-    echo ""
-    echo "  # Chat in your terminal (downloads the model on first run)"
-    echo "  mistralrs run -m Qwen/Qwen3-4B"
-    echo ""
-    echo "  # Serve an OpenAI-compatible + Anthropic-compatible API on port 1234"
-    echo "  mistralrs serve -m Qwen/Qwen3-4B"
-    echo ""
-    echo "  # Run as a local agent (tools, web search, code execution)"
-    echo "  mistralrs serve --agent -m google/gemma-4-E4B-it"
-    echo ""
-    echo "Docs:     https://docs.mistralrs.dev/"
-    echo "Source:   https://github.com/EricLBuehler/mistral.rs"
-    echo ""
-    if [ -n "$FFMPEG_SKIPPED" ]; then
-        printf "${YELLOW}Note:${NC} FFmpeg was not installed; video input will be unavailable. Install it later to enable video.\n\n"
-    fi
-    path_rcs=$(setup_shell_path)
+    ver=$("$PREBUILT_DIR/mistralrs" --version)
+    printf "\n  ${GREEN}${BOLD}%s installed successfully.${NC}\n\n" "$ver"
+    printf "  Command: %s\n\n" "$(tildify "$BIN_DIR/mistralrs")"
     case ":$PATH:" in
-        *":$BIN_DIR:"*)
-            if [ -n "$path_rcs" ]; then
-                printf "${YELLOW}Note:${NC} configured future shells via %s.\n" "$(tildify "$MISTRALRS_ENV")"
-                printf "      Updated: %s\n\n" "$path_rcs"
-            fi
-            ;;
+        *":$BIN_DIR:"*) ;;
         *)
-            printf "${YELLOW}Note:${NC} added %s to your PATH via %s.\n" "$(tildify "$BIN_DIR")" "$(tildify "$MISTRALRS_ENV")"
-            if [ -n "$path_rcs" ]; then
-                printf "      Updated: %s\n" "$path_rcs"
-            fi
-            printf "      Restart your terminal or run: . \"%s\"\n\n" "$MISTRALRS_ENV"
+            printf '  To use it in this terminal, run:\n\n'
+            printf '    . "$HOME/.mistralrs/env"\n\n'
             ;;
     esac
     warn_if_shadowed
+    printf '  Try browser chat:\n\n'
+    printf '    mistralrs serve -m %s --quant %s\n\n' "$DEFAULT_MODEL" "$DEFAULT_QUANTIZATION"
+    printf '  Then open %s\n\n' "$DEFAULT_UI_URL"
 }
 
-# Main installation flow
 main() {
+    load_options
+    parse_args "$@"
+    trap cleanup_installer 0
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
+    trap 'exit 129' HUP
+    INSTALL_OS=$(detect_os)
+    INSTALL_ARCH=$(uname -m)
+    DETECTED_CUDA_CC=$(detect_cuda_compute_cap)
     print_banner
-
-    os=$(detect_os)
-    info "Detected OS: $os"
+    guided_install
+    if [ "$DRY_RUN" = "1" ]; then
+        printf '  Preview complete. No files were changed.\n'
+        return
+    fi
+    INSTALL_LOG=$(mktemp "${TMPDIR:-/tmp}/mistralrs-install.XXXXXX")
+    begin_stage 1 "Prepare installation"
+    configure_release
     confirm_duplicate_replacement
-
-    # Bifurcate only on where the binary comes from: a prebuilt download (no toolchain), or a
-    # source build. Everything after (FFmpeg, examples, PATH guidance) is shared.
-    # Set MISTRALRS_INSTALL_FROM_SOURCE=1 to force a source build.
-    method=""
-    if [ -z "$MISTRALRS_INSTALL_FROM_SOURCE" ]; then
-        info "Checking for a prebuilt binary for your platform..."
-        asset=$(detect_prebuilt_asset "$os")
-        if [ -n "$asset" ]; then
-            info "Prebuilt available: $asset"
-            if install_prebuilt "$asset"; then
-                method="prebuilt"
-            else
-                legacy_asset=$(detect_legacy_cuda_prebuilt_asset "$os")
-                if [ -n "$legacy_asset" ] && [ "$legacy_asset" != "$asset" ]; then
-                    warn "Versioned CUDA prebuilt was not found; trying legacy prebuilt name $legacy_asset."
-                    if install_prebuilt "$legacy_asset"; then
-                        method="prebuilt"
-                    fi
-                fi
-                if [ "$method" != "prebuilt" ]; then
-                    warn "Prebuilt install failed; building from source instead."
-                fi
+    if [ "$PLANNED_METHOD" = "prebuilt" ]; then
+        stage_done "Ready to download"
+        begin_stage 2 "Download binary"
+        DOWNLOAD_STAGE=$(mktemp -d "$HOME/.mistralrs-stage.XXXXXX")
+        if ! download_prebuilt "$PLANNED_ASSET"; then
+            legacy_asset=$(detect_legacy_cuda_prebuilt_asset "$INSTALL_OS")
+            if [ -z "$legacy_asset" ] || [ "$legacy_asset" = "$PLANNED_ASSET" ]; then
+                error "Binary download failed. Check your connection and retry, or choose --from-source to build explicitly."
             fi
-        else
-            info "No prebuilt for this platform; building from source."
+            stage_detail "Trying the older CUDA package name..."
+            download_prebuilt "$legacy_asset" \
+                || error "Binary download failed. Retry, or choose --from-source to build explicitly."
         fi
+        PROGRESS_DOWNLOAD_PATH=""
+        PROGRESS_DOWNLOAD_SIZE=""
+        begin_stage 3 "Verify binary"
+        INSTALL_CANDIDATE="$DOWNLOAD_STAGE/unpacked"
+        mkdir -p "$INSTALL_CANDIDATE"
+        run_logged "Unpack binary" tar xzf "$DOWNLOAD_STAGE/$asset" -C "$INSTALL_CANDIDATE" \
+            || error "Could not unpack the download. Retry the installation. Existing installation kept."
+        chmod +x "$INSTALL_CANDIDATE/mistralrs" 2>/dev/null || true
+    else
+        prepare_source_build "$INSTALL_OS"
+        stage_done "Build tools ready"
+        begin_stage 2 "Build from source"
+        install_mistralrs "$BUILD_FEATURES"
+        begin_stage 3 "Verify binary"
+        stage_source_binary
     fi
-
-    if [ "$method" != "prebuilt" ]; then
-        build_from_source "$os"
-        install_source_from_staging
-        method="source"
+    run_logged "Check that mistral.rs runs" "$INSTALL_CANDIDATE/mistralrs" --version \
+        || error "The new binary could not run. Review the error above. Existing installation kept."
+    begin_stage 4 "Finish setup"
+    if ! activate_install "$INSTALL_CANDIDATE"; then
+        error "Could not activate the new binary. Check the installation log before retrying."
     fi
-
+    save_options
     remove_duplicate_installs
-    maybe_install_ffmpeg "$os"
-    print_success "$method"
+    maybe_install_ffmpeg "$INSTALL_OS"
+    path_rcs=$(setup_shell_path)
+    stage_done "Command and shell environment ready"
+    print_success
 }
 
-main "$@"
+# Parse the exit with main so a running install cannot read a modified script tail.
+{
+    main "$@"
+    exit "$?"
+}

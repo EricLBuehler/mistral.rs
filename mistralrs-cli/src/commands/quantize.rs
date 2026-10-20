@@ -441,16 +441,19 @@ Generated with [mistral.rs](https://github.com/EricLBuehler/mistral.rs) {mistral
 
 ## Install
 
-Install [mistral.rs](https://github.com/EricLBuehler/mistral.rs) ([full guide](https://docs.mistralrs.dev/guides/install/)):
+Install [mistral.rs](https://github.com/EricLBuehler/mistral.rs) ([full guide](https://docs.mistralrs.dev/quickstart/)):
+
+Review the recommended settings, then choose **Install**. Use **Customize** to change the version or acceleration.
 
 **Linux/macOS:**
-```
-curl --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/EricLBuehler/mistral.rs/master/install.sh | sh
+```bash
+curl -fsSL https://mistralrs.dev/install.sh | sh
+. "$HOME/.mistralrs/env"
 ```
 
 **Windows (PowerShell):**
-```
-irm https://raw.githubusercontent.com/EricLBuehler/mistral.rs/master/install.ps1 | iex
+```powershell
+irm https://mistralrs.dev/install.ps1 | iex
 ```
 
 ## Examples

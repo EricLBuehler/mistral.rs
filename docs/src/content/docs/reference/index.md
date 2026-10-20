@@ -6,6 +6,7 @@ description: Exhaustive lookup pages for flags, endpoints, schemas, and APIs.
 Lookup-oriented pages. For task-oriented documentation, start at the [Quickstart](/quickstart/); for internals, the [Developer Guide](/developer/).
 
 - [CLI](/reference/cli/): every subcommand and flag, generated from the clap definitions.
+- [Installer](/reference/installer/): guided setup, platform options, progress, and updates.
 - [TOML configuration](/reference/cli-toml-config/): the `mistralrs from-config` schema, with CLI flag mapping.
 - [HTTP API](/reference/http-api/): endpoints, request/response schemas, SSE events.
 - [OpenAI compatibility](/reference/openai-compatibility/): what is implemented, ignored, and extended relative to OpenAI's surface.

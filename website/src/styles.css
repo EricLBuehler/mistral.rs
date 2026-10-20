@@ -209,31 +209,16 @@ button {
   white-space: nowrap;
 }
 
-.command-pair {
+.model-command {
   border-top: 1px solid var(--line);
   border-bottom: 1px solid var(--line);
-}
-
-.example-row {
   min-height: 62px;
-  display: grid;
-  grid-template-columns: 72px minmax(0, 1fr);
+  display: flex;
   align-items: center;
-  text-align: left;
+  justify-content: center;
 }
 
-.example-row + .example-row {
-  border-top: 1px solid var(--line);
-}
-
-.example-label {
-  color: var(--accent);
-  font-size: 12px;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-}
-
-.example-row code {
+.model-command code {
   min-width: 0;
   overflow-x: auto;
   padding: 20px 0;
@@ -301,19 +286,19 @@ button {
   }
 
   .command-row code,
-  .example-row code {
+  .model-command code {
     font-size: 12px;
     scrollbar-color: var(--line-strong) transparent;
     scrollbar-width: thin;
   }
 
   .command-row code::-webkit-scrollbar,
-  .example-row code::-webkit-scrollbar {
+  .model-command code::-webkit-scrollbar {
     height: 4px;
   }
 
   .command-row code::-webkit-scrollbar-thumb,
-  .example-row code::-webkit-scrollbar-thumb {
+  .model-command code::-webkit-scrollbar-thumb {
     border-radius: 999px;
     background: var(--line-strong);
   }
@@ -334,10 +319,6 @@ button {
   .examples-intro {
     line-height: 1.5;
     white-space: normal;
-  }
-
-  .example-row {
-    grid-template-columns: 58px minmax(0, 1fr);
   }
 
   .hero-meta {
@@ -377,7 +358,7 @@ button {
   }
 
   .command-row code,
-  .example-row code {
+  .model-command code {
     font-size: 11px;
   }
 
@@ -385,13 +366,6 @@ button {
     min-width: 58px;
   }
 
-  .example-row {
-    grid-template-columns: 52px minmax(0, 1fr);
-  }
-
-  .example-label {
-    font-size: 11px;
-  }
 }
 
 @media (max-height: 560px) and (min-width: 561px) {

@@ -42,7 +42,7 @@ Manual Linux CUDA build with NCCL:
 cargo install mistralrs-cli --features "cuda nccl flash-attn cudnn"
 ```
 
-If NCCL is not installed, omit `nccl`. To force the installer decision, use `MISTRALRS_INSTALL_NCCL=1` or `MISTRALRS_INSTALL_NO_NCCL=1`. To disable NCCL at runtime without rebuilding:
+If NCCL is not installed, omit `nccl`. For installer source builds, pass `--no-nccl` to skip it; see [installer options](/reference/installer/). To disable NCCL at runtime without rebuilding:
 
 ```bash
 MISTRALRS_NO_NCCL=1 mistralrs serve -m Qwen/Qwen3-32B --quant 4

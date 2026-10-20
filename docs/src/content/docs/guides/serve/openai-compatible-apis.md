@@ -6,7 +6,7 @@ description: Run mistralrs serve and use OpenAI SDKs and compatible clients agai
 `mistralrs serve` puts a local model behind OpenAI-compatible endpoints under `/v1`. OpenAI SDKs and compatible clients work unchanged with `http://localhost:1234/v1` as the base URL.
 
 ```bash
-mistralrs serve -m Qwen/Qwen3-4B
+mistralrs serve -m Qwen/Qwen3-4B --quant 4
 ```
 
 Then send a request:
@@ -27,7 +27,7 @@ With a single `-m` model, the request `model` is `"default"` (or omitted). In [m
 
 Loaded dynamic [LoRA adapters](/guides/customize/lora-adapters/) also appear in `GET /v1/models`, so vLLM-compatible clients can put the adapter alias in `model`. Chat Completions, Completions, and Responses additionally accept `adapter` as either an alias string or `{"generation":"<generation-id>"}`. Omit `adapter` and select the base model to run without LoRA. LoRA inference responses expose the exact resolved generation as `adapter_generation` for audit and retry routing.
 
-First time serving a model? The [Quickstart](/quickstart/) walks through installation, Hugging Face authentication for gated models, and the first run.
+The [quickstart](/quickstart/) walks through installation and browser chat using this same model and server.
 
 ## OpenAI Python client
 

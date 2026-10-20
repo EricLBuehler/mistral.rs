@@ -3,9 +3,7 @@ title: Build from source
 description: Compile mistral.rs from a repository checkout with exactly the feature flags you want.
 ---
 
-:::tip[Most users do not need this]
-The [quickstart install script](/quickstart/) is the recommended way to install. It downloads a prebuilt binary for your platform; `MISTRALRS_INSTALL_TAG=<tag>` installs a specific release, and `MISTRALRS_INSTALL_FROM_SOURCE=1` makes it build the latest `master` from source for you. Build from a checkout manually only to pin an arbitrary commit, apply a local patch, or use a feature combination the published binaries do not include.
-:::
+This guide is for working from a local checkout, such as making changes to mistral.rs or choosing custom build features. For installation, start with the [quickstart](/quickstart/).
 
 ## Platform prerequisites
 
