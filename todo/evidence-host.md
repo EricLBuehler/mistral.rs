@@ -17,7 +17,7 @@ hosts without re-measuring, so each issue file says which host it used.
 | mistral.rs | `3f2515e9b` (master at time of writing) |
 | candle | pinned rev `66a8cf184a5a519671454066b1b9efd446ec9f5c` (v0.11.0) |
 
-## Governor: read this before trusting any number here
+## Governor: the default is 1.0 of 3.4 GHz, and that is deliberate
 
 `scaling_governor` is `schedutil` (cppc_cpufreq) and on this host **it never ramps**:
 
@@ -28,18 +28,34 @@ scaling_max_freq  3,400,000 kHz
 ```
 
 A 64-thread load across all four nodes held 1.0 GHz in 11 of 12 samples, and 1.21 GHz once.
-So by default this host runs at **29% of its clock** and every throughput and bandwidth figure
-taken here is a 1.0 GHz figure unless it says otherwise.
+So under the default policy this host runs at **29% of its clock**.
 
-Set the governor before benchmarking:
+**The policy: `schedutil` is the normal operating state, and it stays that way.** The 1 GHz cap
+is intentional and is what the box is for. `performance` is for top-speed measurement only,
+and the switch is a deliberate, recorded act rather than a default.
 
 ```
 sudo sh -c 'for c in /sys/devices/system/cpu/cpu[0-9]*/cpufreq/scaling_governor; do echo performance > "$c"'
 ```
 
-This is a runtime change and does not survive a reboot. On `performance`, a Kolibri-1 decode at
-one node and 16 threads goes 7.14 to 9.56 tok/s, and `candle/01` measures 14.4 GB/s rather than
-the 16.9 GB/s recorded here earlier. Record which governor produced a number.
+It is a runtime change and does not survive a reboot. **Put it back afterwards**, and record
+which governor produced any number you publish.
+
+What the difference is worth, for a Kolibri-1 decode at one node and 16 threads:
+
+| governor | tok/s | `attn_proj` | `routed` |
+|---|---|---|---|
+| `schedutil` (1.0 GHz) | 7.14 | 49.6 ms | 62.4 ms |
+| `performance` (3.4 GHz) | 9.56 | 36.6 ms | 46.8 ms |
+
+Not 3.4x, so the kernels were partly memory-bound after all - the clock was a third of the
+story. `candle/01` measures 14.4 GB/s on `performance` against the 16.9 GB/s recorded on
+`schedutil`.
+
+**Every throughput and bandwidth figure in this directory was taken at 1.0 GHz unless it says
+otherwise.** Most were, because the default was in force and nobody had gone looking. That
+includes the numbers the thread-count and `MIN_PARALLEL_OUTPUTS` choices were based on, so
+those optima are all 1 GHz optima and should be re-measured before being relied on.
 
 ## Shared-host caveat
 

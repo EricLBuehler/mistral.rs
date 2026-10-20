@@ -29,8 +29,8 @@ Things decided but not yet done. Kept here rather than in a plan file so they do
 | task | why it is still open |
 |---|---|
 | Measure this build's chains against the llama.cpp goldens | The transcription and llama.cpp agree on 7 of 8 full sequences, so the transcription number should carry over - but that is an inference. The model needs ~150 GB resident and the box was occupied when it came up. |
-| Re-sweep `MIN_PARALLEL_OUTPUTS` at 3.4 GHz | The 1024 -> 512 change was the largest single win of the session (2.35x) and is a work-partitioning threshold. Its optimum was found at 1.0 GHz and has almost certainly moved. Self-contained. |
-| Re-test the MoE residency cache at 3.4 GHz | Measured -13% at 1.0 GHz. A memory-traffic optimisation is the kind of thing that can flip at full clock. One env var. |
+| Re-sweep `MIN_PARALLEL_OUTPUTS` at 3.4 GHz | The 1024 -> 512 change was the largest single win of the session (2.35x) and is a work-partitioning threshold. Its optimum was found at 1.0 GHz and has almost certainly moved. Self-contained. Set the governor to `performance` for the run and put it back afterwards - `schedutil` is the normal state. |
+| Re-test the MoE residency cache at 3.4 GHz | Measured -13% at 1.0 GHz. A memory-traffic optimisation is the kind of thing that can flip at full clock. One env var. Same governor discipline. |
 | Compare generated chains against the primary oracle | `07` measures against the transcription. The primary comparison is the one that would settle whether BFMMLA converges. Blocked on the gate-schema question (logprobs vs logits). |
 | Re-verify `mistralrs/06` end to end | The fix is reasoned from shapes, not run. The only FP8 checkpoint available is 74 GB on a shared host. |
 

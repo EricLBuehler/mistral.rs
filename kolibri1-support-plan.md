@@ -1562,9 +1562,19 @@ workers on a 16-thread's worth of useful work goes up rather than down.
   looked *worse* there, so its value at full clock is likely higher, not lower.
 - **Every "measured" GB/s in this plan** should be read as "GB/s at 1.0 GHz".
 
-### Action item for whoever owns this host
+### Policy for the governor
 
-The 1 GHz cap is intentional, which is fine, but it is invisible unless you go looking: a
-128-core box that never leaves 29% of its clock will silently cap every benchmark taken on it by
-3.4x. Setting `performance` before benchmarking - and recording which governor produced a
-number - should be part of any perf methodology on this machine.
+The 1 GHz cap is intentional and is the box's normal operating state - **`schedutil` stays on**.
+`performance` is for top-speed measurement only:
+
+```
+sudo sh -c 'for c in /sys/devices/system/cpu/cpu[0-9]*/cpufreq/scaling_governor; do echo performance > "$c"'
+```
+
+Runtime only, does not survive a reboot, and **put it back afterwards**. Record which
+governor produced any published number.
+
+The cap is invisible unless you go looking: a 128-core box that never leaves 29% of its clock
+silently caps every benchmark taken on it by 3.4x. That is the reason this section exists, not
+a request to change the policy.
+
