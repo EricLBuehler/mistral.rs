@@ -1661,3 +1661,57 @@ A correction to an earlier explanation: the surplus workers are not idle. The ch
 sized to the thread count (`chunk = n.div_ceil(threads)`), so every worker does work. The cost
 is the spin *between* the roughly 400 parallel regions per token, paid by every worker in the
 pool each time, and it grows with the number of workers.
+
+
+## The spin limit at 3.4 GHz, and a three-way comparison
+
+3.4 GHz, node 3, decode mean tok/s, `CANDLE_BARRIER_POOL_SPIN_LIMIT`:
+
+| threads | 0 | 256 | 1024 | 4096 | 25000 (default) |
+|---|---|---|---|---|---|
+| 16 | 8.45 | - | 8.91 | - | **9.11** |
+| 32 | **8.58** | 8.45 | 8.50 | 7.85 | 7.27 |
+
+At 16 threads more spinning is better; at 32 threads less is better, by 18.0% against the
+default. The shape is coherent: the surplus waiters cost more than the fast wake-up saves, but
+only once there are more of them than there is work for.
+
+**Confirmed in a second, independent codebase.** The vllm.cpp CPU tier, whose pool yields
+after a bounded spin rather than parking, shows the same preference at 32 threads: never-yield
+wins by 16.4%. Two implementations with different wait policies, same preference, same thread
+count.
+
+The 1.0 GHz result had the peak at 1024 for 32 threads; at 3.4 GHz the peak is at 0. The
+optimum is clock-dependent, as expected, and the 1.0 GHz table must not be used to pick a value
+for a 3.4 GHz deployment.
+
+### Three-way comparison, and why the headline is not yet quotable
+
+| threads | mistral.rs (bf16 safetensors) | llama.cpp (bf16 GGUF) | vllm.cpp (fp8, dequantised in process) |
+|---|---|---|---|
+| 8 | 6.97 | 1.54 | 1.36 |
+| 16 | 8.73-9.11 | 2.97 | 2.56 |
+| 32 | 7.27-8.58 | 5.46 | 3.49 (4.07 at spin 0, 4.97 with the dequant cache) |
+
+**This table is not a comparison.** Three different containers - bf16 safetensors, bf16 GGUF,
+fp8 dequantised in process - which is different arithmetic and different memory traffic, not just
+a different runtime. The spin setting moves each row's optimum, and the vllm.cpp rows are
+without its dequant cache, which their own shipping-equivalent number is 4.97 rather than 3.49.
+The mistral.rs cells are single runs with no error bars, while the vllm.cpp cells are three runs
+each.
+
+A ratio is only meaningful with the same directory, the same spin setting, and repeats on both
+sides. The agreed protocol is: both sides on the fp8 checkpoint, sequential rather than
+concurrent, three repeats per cell, spin 0 and default at 8/16/32.
+
+The prefill comparison is more surprising than the decode one: vllm.cpp's p512 is 43.6 tok/s at
+32 threads, llama.cpp's pp512 is 7.04, and mistral.rs's p512 is 21.86. mistral.rs's decode is
+the best of the three and its prefill is second, which is the opposite ordering and worth
+looking at.
+
+### Caveats on this section
+
+- The last two 32-thread points (4096 and 25000) were taken while a 31-process test suite ran
+  for 3.6 seconds on the box. They are flagged, not discarded, and the two cells are to be
+  re-run.
+- Every cell is a single run.
