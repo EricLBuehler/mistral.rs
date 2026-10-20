@@ -425,6 +425,7 @@ fn rms_norm_f32_scale(x: &Tensor, weight: &Tensor, eps: f32) -> Result<Tensor> {
     // Round the normalised value, not the scale: the order Hugging Face uses.
     let normed = normed.to_dtype(dtype)?;
     Ok(normed.broadcast_mul(weight)?)
+    normed.broadcast_mul(weight)
 /// Whether a GPU backend's fused add + RMSNorm kernel covers these inputs.
 fn fused_add_rms_norm_applies(x: &Tensor, residual: &Tensor, weight: &Tensor) -> Result<bool> {
     Ok((x.device().is_cuda() || x.device().is_metal())
