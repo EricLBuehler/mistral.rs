@@ -187,7 +187,42 @@ to 0.92-0.95 by layer 25, which is what a knife-edge router does to a growing ar
 difference.
 
 The caveat: that comparison is our CPU against their tt-metal GPU, so it separates devices as
-much as implementations. A CPU-to-CPU dump from llama.cpp would be the isolating measurement.
+much as implementations.
+
+### The CPU-to-CPU comparison, which is the isolating one
+
+llama.cpp can expose its layer input stream through the mechanism it already has -
+`llama_set_embeddings_layer_inp` / `llama_get_embeddings_layer_inp`, the same one deepseek4,
+mimo2 and nemotron-h use - with two lines added to `src/models/kolibri1.cpp`. That is on a
+`peer/llamacpp-layerdump` branch, 16 lines in one file, no change to `llama-context.cpp` or
+`llama.h`.
+
+Comparing our `l_out(L)` against llama.cpp's `residual_in(L+1)`, on the same CPU, the same
+weights and the same token ids:
+
+| layer | position | max abs diff | rms diff | cosine | beyond 2 ulp |
+|---|---|---|---|---|---|
+| 0 | 0 | 5.9e-02 | 3.4e-03 | **0.999992** | 7.0% |
+| 0 | 5 | 1.0e-01 | 1.1e-02 | 0.999891 | 17.2% |
+| 1 | 0 | 1.6e-01 | 6.5e-03 | 0.999991 | 48.2% |
+| 2 | 0 | 1.1e-01 | 8.3e-03 | 0.999980 | 73.2% |
+| 5 | 5 | 4.6e+00 | 1.5e-01 | 0.988067 | 93.7% |
+| 9 | 0 | 2.9e-01 | 3.9e-02 | 0.999496 | 86.3% |
+
+**Our block-0 output agrees with llama.cpp's to cosine 0.999992 and a relative RMS of 0.7%.**
+That is a handful of bf16 ulps, not a semantic difference. It then grows with depth, which is
+the knife-edge router amplifying ulp-level arithmetic across 50 layers.
+
+**So the chain closes.** The norm's scale rounding was a 0.4% error and it moved the router
+directly; fixing it removed a real defect. What remains after that is a few ulps per block,
+amplified by a selection margin of 9.4e-05 into the steps that still disagree. The forward is
+correct, exact agreement is not attainable, and the band gate is the honest standard.
+
+**One caveat about our own dump.** Our `residual_in` tap is not the layer's input stream: the
+implementation carries the residual in two parts, `xs` being the previous block's post-normed
+output and `res` the previous `ffn_inp`, and the layer's true input is `xs + res`. So our
+`residual_in` is the `ffn_inp` alone and has no counterpart in the llama.cpp dump. It is
+excluded from the comparison; the `l_out` comparison is the valid one.
 
 ## Where we actually stand, and a fourth finding that undercuts the measurement itself
 
