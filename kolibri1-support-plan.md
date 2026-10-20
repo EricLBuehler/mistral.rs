@@ -1798,3 +1798,40 @@ spin setting that moves each row's optimum. The agreed protocol, with peer-Ce:
 
 The point estimate is not quoted until that is done. The direction - that 32 threads wants less
 waiting - already survives on the clean cells alone.
+
+
+## The final PR stack
+
+Seven branches, one commit each, in order. The code stack tip reproduces
+`cpu-decode-bandwidth`'s source exactly - the `.rs` diff between them is empty - so the split
+loses nothing.
+
+| branch | what it is |
+|---|---|
+| `pr/01-rmsnorm-scale-f32` | the RMSNorm scale fix, standalone, and the candle issue it produced |
+| `pr/02-cpu-decode-engine` | the output-parallel CPU GEMV, the NEON dot, the pool sizing, the per-expert gather, the broadcast by addressing, the barrier pool, the q/k/v fusion, the phase profiler |
+| `pr/03-kolibri1-model` | the Kolibri-1 model and its three correctness fixes, and the "Canberra" assertion |
+| `pr/04-bfmmla-reduction-order` | the BFMMLA reduction order, default off |
+| `pr/05-moe-residency-cache` | the byte-budgeted MoE residency cache, default off |
+| `pr/06-layer-taps-and-bench` | the per-layer taps and the configurable benchmark prompt |
+| `docs/perf-record` | this working log and the todo/ issue reports |
+
+**The split is a tree-based one, not a replay of the history.** Cherry-picking commit by
+commit fought the interleaving: the model work and the gather work are entangled, because
+`f31fafb3a` adds the per-expert gather path the model's FP8 MoE fix needs and lands after
+the model commits. Each branch instead takes the main branch's final state for the paths it
+owns, on top of the previous branch's tree. Two files are owned by two PRs each and are split
+at the hunk level: `models/kolibri1.rs` (PR 3 and PR 6) and `dot_cpu.rs` (PR 2 and PR 4).
+
+**PR 2 is one commit and it is large.** That is a deliberate trade against a 20-commit PR with
+no reviewable increments, which is how this branch became 71 commits in the first place. It
+would be better split, but only along lines that do not re-introduce the entanglement.
+
+**The working log and the todo/ tree are excluded from every code PR.** 24 of the 71 commits
+touch the plan doc, and it is a local record rather than upstream documentation.
+
+### Not yet verified
+
+Each branch needs to build and pass its own tests. That needs cargo, and cargo breaks the
+quiet-box precondition the peer agent is waiting on, so verification is deferred until that
+window closes. The tree-level equivalence above is a structural check, not a build.
