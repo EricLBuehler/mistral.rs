@@ -1715,3 +1715,48 @@ looking at.
   for 3.6 seconds on the box. They are flagged, not discarded, and the two cells are to be
   re-run.
 - Every cell is a single run.
+
+
+## The branch split, and what the entanglement taught us
+
+71 commits on `cpu-decode-bandwidth` are being split into a stack of independently mergeable
+branches. Four are built and verified so far:
+
+| branch | commits | what it is |
+|---|---|---|
+| `pr/01-rmsnorm-scale-f32` | 1 | the RMSNorm scale fix, standalone, 1425 tests pass |
+| `pr/02-flash-attention-causality` | 1 | the causality fix, standalone, 1427 tests pass |
+| `pr/03-output-parallel-cpu-gemv` | 7 | the output-parallel GEMV, the NEON dot, the f32-weights fix, the pool sizing |
+| `pr/04-parallel-expert-gather` | 8 | the per-expert gather, the broadcast-by-addressing, the barrier pool, the q/k/v fusion |
+
+**The split is at the crate boundary, not the commit boundary, and it had to be.** The
+Kolibri-1 model work and the CPU gather work are entangled in the original history:
+`f31fafb3a` ("stop stacking MoE experts on CPU") adds the per-expert gather path that the
+model's FP8 MoE fix needs, and it lands *after* the model commits. Cherry-picking the model
+commits first fails on `moe_gather_cpu.rs` and `per_expert.rs` with modify/delete conflicts,
+because the files do not exist yet.
+
+So PR 4 takes the `mistralrs-quant` side of the gather work plus the one core commit that
+builds without the model, and the core-side wiring lands with the model PR. The alternative -
+one large PR - was rejected because a 20-commit PR with no reviewable increments is how this
+branch became 71 commits in the first place.
+
+**The plan doc is excluded from every PR branch.** 24 of the 71 commits touch
+`kolibri1-support-plan.md`, and it is a local working log rather than upstream documentation,
+so it lives on its own branch. Commits that modify it conflict as modify/delete and are
+resolved as "deleted by us".
+
+## A correction worth keeping in the writeup
+
+The 32-thread spin row was described as a slope with a cliff at 4096. Reconstructing the clock
+against the log showed the three clean cells were 8.58, 8.45 and 8.50 - a 1.5 percent spread,
+inside the noise for one run per cell - so the clean rows are a **plateau**, and the only two
+low points were the two cells a 31-process test suite happened to land in.
+
+The shape may be a plateau then a step rather than a slope, and the edge is bracketed in
+(1024, 4096]. One point at spin 2048 would locate it, which is worth more than another repeat
+of a cell already measured, and the step is the part that transfers between runtimes.
+
+This is the same failure mode as the feature that started the work: a bug that hid behind a
+plausible story until somebody read the raw data end to end. A table described before the
+clock was checked deserves a sentence about it.
