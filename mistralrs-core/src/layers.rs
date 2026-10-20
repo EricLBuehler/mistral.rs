@@ -379,6 +379,52 @@ impl RmsNorm {
     }
 }
 
+/// Whether the f32-scale RMSNorm is used.
+///
+/// `MISTRALRS_RMSNORM_CANDLE=1` restores candle's fused kernel, which rounds the scale to the
+/// storage dtype. Default is the f32-scale form; see `rms_norm_f32_scale`.
+fn rms_norm_f32_scale_enabled() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| {
+        !std::env::var("MISTRALRS_RMSNORM_CANDLE")
+            .is_ok_and(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+    })
+}
+
+/// RMSNorm with the scale kept in f32.
+///
+/// `candle_nn::ops::rms_norm` uses the fused kernel, which computes the scale in f32 and then
+/// rounds it to the storage dtype before dividing:
+///
+/// ```ignore
+/// let m = (sum2 / n as f32 + eps).sqrt();
+/// let m = T::from_f32(m).unwrap_or_else(T::nan);
+/// *d = *s / m * *alpha
+/// ```
+///
+/// Hugging Face, ggml and llama.cpp all keep the scale in f32 and round the normalised value
+/// instead. Rounding the scale applies one relative error of up to a bf16 ulp - about 0.4% - to
+/// every element of the row, uniformly.
+///
+/// That matters more than it looks. On Kolibri-1 the router's top-k boundary is decided on
+/// differences below a bf16 ulp, so a 0.4% error in the norm output that feeds the router is
+/// enough to change which experts are selected, and a different expert set is a different
+/// token. See `todo/mistralrs/07-kolibri1-logit-gap.md`.
+fn rms_norm_f32_scale(x: &Tensor, weight: &Tensor, eps: f32) -> Result<Tensor> {
+    if !rms_norm_f32_scale_enabled() {
+        return candle_nn::ops::rms_norm(x, weight, eps);
+    }
+    let dtype = x.dtype();
+    let x = x.to_dtype(DType::F32)?;
+    let hidden = x.dim(candle_core::D::Minus1)?;
+    let sum2 = x.sqr()?.sum_keepdim(candle_core::D::Minus1)?;
+    let mean = (sum2 / hidden as f64)?;
+    let inv_rms = (mean + eps as f64)?.sqrt()?.recip()?;
+    let inv_rms = inv_rms.broadcast_as(x.shape())?;
+    let normed = x.broadcast_mul(&inv_rms)?;
+    // Round the normalised value, not the scale: the order Hugging Face uses.
+    let normed = normed.to_dtype(dtype)?;
+    Ok(normed.broadcast_mul(weight)?)
 /// Whether a GPU backend's fused add + RMSNorm kernel covers these inputs.
 fn fused_add_rms_norm_applies(x: &Tensor, residual: &Tensor, weight: &Tensor) -> Result<bool> {
     Ok((x.device().is_cuda() || x.device().is_metal())
@@ -409,7 +455,7 @@ fn rms_norm_forward_add(
     }
 
     let sum = (x + residual)?;
-    let normed = candle_nn::ops::rms_norm(&sum.contiguous()?, weight, eps as f32)?;
+    let normed = rms_norm_f32_scale(&sum.contiguous()?, weight, eps as f32)?;
     Ok((sum, normed))
 }
 
@@ -422,7 +468,7 @@ impl Module for RmsNorm {
             return Ok(out);
         }
 
-        candle_nn::ops::rms_norm(&x.contiguous()?, &self.weight, self.eps as f32)
+        rms_norm_f32_scale(&x.contiguous()?, &self.weight, self.eps as f32)
     }
 }
 
@@ -463,7 +509,7 @@ fn rms_norm_forward_residual(
         }
     }
 
-    let normed = candle_nn::ops::rms_norm(&x.contiguous()?, weight, eps as f32)?;
+    let normed = rms_norm_f32_scale(&x.contiguous()?, weight, eps as f32)?;
     let out = (residual + normed)?;
     if let Some(scale) = scale {
         out.broadcast_mul(scale)
@@ -505,7 +551,7 @@ fn rms_norm_forward_residual_then_rms_norm(
     }
 
     let xs = rms_norm_forward_residual(x, residual, residual_weight, residual_eps, scale)?;
-    let normed = candle_nn::ops::rms_norm(&xs.contiguous()?, norm_weight, norm_eps as f32)?;
+    let normed = rms_norm_f32_scale(&xs.contiguous()?, norm_weight, norm_eps as f32)?;
     Ok((xs, normed))
 }
 
@@ -621,7 +667,7 @@ impl GemmaRmsNorm {
 
 impl Module for GemmaRmsNorm {
     fn forward(&self, x: &Tensor) -> Result<Tensor> {
-        candle_nn::ops::rms_norm(&x.contiguous()?, &self.weight, self.eps as f32)
+        rms_norm_f32_scale(&x.contiguous()?, &self.weight, self.eps as f32)
     }
 }
 
@@ -678,7 +724,7 @@ impl QRmsNorm {
     }
 
     pub fn forward(&self, x: &Tensor) -> Result<Tensor> {
-        candle_nn::ops::rms_norm(&x.contiguous()?, &self.weight, self.eps as f32)
+        rms_norm_f32_scale(&x.contiguous()?, &self.weight, self.eps as f32)
     }
 }
 
@@ -2902,8 +2948,8 @@ pub fn qk_rms_norm_rope(
         return Ok((q, k));
     }
 
-    let q = candle_nn::ops::rms_norm(&q.contiguous()?, q_weight, q_eps as f32)?;
-    let k = candle_nn::ops::rms_norm(&k.contiguous()?, k_weight, k_eps as f32)?;
+    let q = rms_norm_f32_scale(&q.contiguous()?, q_weight, q_eps as f32)?;
+    let k = rms_norm_f32_scale(&k.contiguous()?, k_weight, k_eps as f32)?;
     apply_rotary_qk(&q, &k, cos_cache, sin_cache, positions, is_gpt_neox)
 }
 
@@ -2941,9 +2987,9 @@ pub fn qkv_rms_norm_rope(
         return Ok((q, k, v));
     }
 
-    let q = candle_nn::ops::rms_norm(&q.contiguous()?, q_weight, q_eps as f32)?;
-    let k = candle_nn::ops::rms_norm(&k.contiguous()?, k_weight, k_eps as f32)?;
-    let v = candle_nn::ops::rms_norm(&v.contiguous()?, v_weight, v_eps as f32)?;
+    let q = rms_norm_f32_scale(&q.contiguous()?, q_weight, q_eps as f32)?;
+    let k = rms_norm_f32_scale(&k.contiguous()?, k_weight, k_eps as f32)?;
+    let v = rms_norm_f32_scale(&v.contiguous()?, v_weight, v_eps as f32)?;
     let (q, k) = apply_rotary_qk(&q, &k, cos_cache, sin_cache, positions, is_gpt_neox)?;
     Ok((q, k, v))
 }
@@ -2973,7 +3019,7 @@ pub fn q_rms_norm_rope(
         return Ok(q);
     }
 
-    let q = candle_nn::ops::rms_norm(&q.contiguous()?, q_weight, q_eps as f32)?;
+    let q = rms_norm_f32_scale(&q.contiguous()?, q_weight, q_eps as f32)?;
     apply_rotary_q(&q, cos_cache, sin_cache, positions, is_gpt_neox)
 }
 
@@ -3045,8 +3091,8 @@ pub fn qk_rms_norm_mrope_layout(
         };
     }
 
-    let q = candle_nn::ops::rms_norm(&q.contiguous()?, q_weight, q_eps as f32)?;
-    let k = candle_nn::ops::rms_norm(&k.contiguous()?, k_weight, k_eps as f32)?;
+    let q = rms_norm_f32_scale(&q.contiguous()?, q_weight, q_eps as f32)?;
+    let k = rms_norm_f32_scale(&k.contiguous()?, k_weight, k_eps as f32)?;
     apply_rotary_preselected_qk(&q, &k, &cos, &sin, is_gpt_neox)
 }
 

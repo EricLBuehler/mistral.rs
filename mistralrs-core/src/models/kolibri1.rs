@@ -545,7 +545,8 @@ static TRACE_IDS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool:
 /// hidden index is a fifth column because "value" alone does not identify a component of the
 /// hidden state, and a per-layer dump is only useful if it can be compared elementwise.
 type LayerTap = (usize, &'static str, usize, usize, f32);
-static LAYER_TAPS: std::sync::OnceLock<std::sync::Mutex<Vec<LayerTap>>> = std::sync::OnceLock::new();
+static LAYER_TAPS: std::sync::OnceLock<std::sync::Mutex<Vec<LayerTap>>> =
+    std::sync::OnceLock::new();
 
 /// Whether layer taps are being recorded. Resolved once.
 fn layer_taps_enabled() -> bool {
@@ -2111,13 +2112,14 @@ mod tests {
         eprintln!("[probe] loading {}", model_dir.display());
         let mut model = load_real_model(&model_dir)?;
 
-        // `Some` means "assert this". Australia is deliberately not asserted: it answers
-        // "Sydney" here and "Canberra" when the router logits are left bf16-valued, which is
-        // the amplification in todo/mistralrs/07 showing up in a semantic answer rather than in
-        // a fingerprint. Pinning either would be pinning a coin flip.
+        // `Some` means "assert this". Australia used to be left unasserted because the answer
+        // depended on the router's arithmetic: it came out "Sydney" with the fused RMSNorm and
+        // "Canberra" with an f32 scale, which is the amplification in todo/mistralrs/07 showing up
+        // as a semantic answer rather than as a fingerprint. The f32 scale is the one that
+        // matches the reference, so it is asserted now.
         for (text, want) in [
             ("The capital of France is", Some("Paris")),
-            ("The capital of Australia is", None),
+            ("The capital of Australia is", Some("Canberra")),
             ("The capital of Japan is", Some("Tokyo")),
         ] {
             let ids = tok
@@ -2378,16 +2380,16 @@ mod tests {
                     continue;
                 }
                 let row = &rows[row_idx as usize];
-                let (argmax, _) = row.iter().enumerate().fold(
-                    (0usize, f32::NEG_INFINITY),
-                    |(bi, bv), (i, v)| {
-                        if *v > bv {
-                            (i, *v)
-                        } else {
-                            (bi, bv)
-                        }
-                    },
-                );
+                let (argmax, _) =
+                    row.iter()
+                        .enumerate()
+                        .fold((0usize, f32::NEG_INFINITY), |(bi, bv), (i, v)| {
+                            if *v > bv {
+                                (i, *v)
+                            } else {
+                                (bi, bv)
+                            }
+                        });
                 tot += 1;
                 if argmax as u32 == chain[kk as usize] {
                     hits += 1;
@@ -2398,10 +2400,7 @@ mod tests {
                 best = (offset, hits, tot);
             }
         }
-        println!(
-            "[align] best offset {}: {}/{}",
-            best.0, best.1, best.2
-        );
+        println!("[align] best offset {}: {}/{}", best.0, best.1, best.2);
         assert_eq!(
             best.0, 0,
             "the teacher-forced prefill is offset by {} position(s): row p predicts chain[p+{}] rather than chain[p+1]",
