@@ -536,6 +536,86 @@ type Layer0Scores = std::sync::Mutex<Vec<(Vec<f32>, Vec<f32>)>>;
 static LAYER0_SCORES: std::sync::OnceLock<Layer0Scores> = std::sync::OnceLock::new();
 static TRACE_IDS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
+/// Per-layer taps, for diffing this forward against another implementation.
+///
+/// Enabled by `MISTRALRS_DUMP_LAYERS=1`, with the positions to tap in
+/// `MISTRALRS_DUMP_POSITIONS` (default `0,5`) and the output path in `MISTRALRS_DUMP_OUT`.
+///
+/// A tap is one scalar: the row is `(layer, quantity, position, hidden_index, value)`. The
+/// hidden index is a fifth column because "value" alone does not identify a component of the
+/// hidden state, and a per-layer dump is only useful if it can be compared elementwise.
+type LayerTap = (usize, &'static str, usize, usize, f32);
+static LAYER_TAPS: std::sync::OnceLock<std::sync::Mutex<Vec<LayerTap>>> = std::sync::OnceLock::new();
+
+/// Whether layer taps are being recorded. Resolved once.
+fn layer_taps_enabled() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| {
+        std::env::var("MISTRALRS_DUMP_LAYERS")
+            .is_ok_and(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+    })
+}
+
+/// The positions to tap. Resolved once.
+fn layer_tap_positions() -> &'static [usize] {
+    static POS: std::sync::OnceLock<Vec<usize>> = std::sync::OnceLock::new();
+    POS.get_or_init(|| {
+        std::env::var("MISTRALRS_DUMP_POSITIONS")
+            .ok()
+            .map(|v| {
+                v.split(',')
+                    .filter_map(|s| s.trim().parse::<usize>().ok())
+                    .collect::<Vec<_>>()
+            })
+            .filter(|v: &Vec<usize>| !v.is_empty())
+            .unwrap_or_else(|| vec![0, 5])
+    })
+}
+
+/// Record `t`'s values at the tapped positions.
+///
+/// `t` is `[1, seq, hidden]`. The copy to the host is the whole tensor, which is only
+/// expensive for long sequences; the dump path is a short teacher-forced prefill.
+fn tap_layer(t: &Tensor, layer: usize, quantity: &'static str) {
+    if !layer_taps_enabled() {
+        return;
+    }
+    let Ok(rows) = t.to_dtype(DType::F32).and_then(|x| x.to_vec2::<f32>()) else {
+        return;
+    };
+    let mut taps = match LAYER_TAPS
+        .get_or_init(|| std::sync::Mutex::new(Vec::new()))
+        .lock()
+    {
+        Ok(t) => t,
+        Err(_) => return,
+    };
+    for &p in layer_tap_positions() {
+        let Some(row) = rows.get(p) else { continue };
+        for (h, v) in row.iter().enumerate() {
+            taps.push((layer, quantity, p, h, *v));
+        }
+    }
+}
+
+/// Write the recorded taps as a TSV: `layer, quantity, position, hidden_index, value`.
+fn write_layer_taps(path: &str) -> std::io::Result<usize> {
+    let mut out = String::new();
+    let mut n = 0usize;
+    if let Some(taps) = LAYER_TAPS.get() {
+        if let Ok(taps) = taps.lock() {
+            for (layer, quantity, position, hidden, value) in taps.iter() {
+                out.push_str(&format!(
+                    "{layer}\t{quantity}\t{position}\t{hidden}\t{value}\n"
+                ));
+                n += 1;
+            }
+        }
+    }
+    std::fs::write(path, out)?;
+    Ok(n)
+}
+
 fn routed_ids() -> Option<&'static std::sync::Mutex<Vec<Vec<Vec<u32>>>>> {
     TRACE_IDS
         .load(std::sync::atomic::Ordering::Relaxed)
@@ -838,14 +918,18 @@ impl DecoderLayer {
                 Some(res) => self.input_layernorm.forward_add_rms_norm(xs, res)?,
             }
         };
+        // The incoming residual, before this layer adds to it. For layer 0 it is the embedding.
+        tap_layer(residual.as_ref().unwrap_or(xs), layer_idx, "residual_in");
 
         let attn = self
             .self_attn
             .forward(&dhn, attention_mask, kv_cache, ctx, layer_idx)?;
+        tap_layer(&attn, layer_idx, "attn_out_pre_norm");
         let (res, dhn2) = {
             let _p = crate::utils::decode_prof::profile(crate::utils::decode_prof::Phase::Norms);
             // post_attn_norm carries no residual: its output is a delta, not a normalized stream.
             let attn_n = self.post_attn_norm.forward(&attn)?;
+            tap_layer(&attn_n, layer_idx, "attn_post_norm");
             self.post_attention_layernorm
                 .forward_add_rms_norm(&attn_n, &res)?
         };
@@ -854,7 +938,17 @@ impl DecoderLayer {
         // Likewise for post_ffn_norm; this becomes the next layer's block output.
         *residual = Some(res);
         let _p = crate::utils::decode_prof::profile(crate::utils::decode_prof::Phase::Norms);
-        self.post_ffn_norm.forward(&moe)
+        let ff = self.post_ffn_norm.forward(&moe)?;
+        tap_layer(&ff, layer_idx, "ffn_post_norm");
+        // The reference's `l_out` is the post-normed block output plus the residual that was
+        // accumulated so far, added after the post-norm. Here the residual is carried
+        // separately and added by the next layer's norm, so `l_out` is reconstructed.
+        if let Some(res) = residual.as_ref() {
+            if let Ok(l_out) = (&ff + res) {
+                tap_layer(&l_out, layer_idx, "l_out");
+            }
+        }
+        Ok(ff)
     }
 }
 
@@ -2201,6 +2295,26 @@ mod tests {
             recorded.first().map_or(0, Vec::len)
         );
         println!("[ids] wrote {path}");
+        Ok(())
+    }
+
+    /// Dump per-layer taps, so this forward can be diffed against another implementation.
+    ///
+    /// Needs `MISTRALRS_DUMP_LAYERS=1`; the output path is `MISTRALRS_DUMP_OUT` and the
+    /// positions are `MISTRALRS_DUMP_POSITIONS` (default `0,5`).
+    #[test]
+    #[ignore = "loads a Kolibri-1 checkpoint"]
+    fn kolibri1_dump_layer_taps() -> anyhow::Result<()> {
+        let (model_dir, _) = golden_paths();
+        let mut model = load_real_model(&model_dir)?;
+        // The goldens' own ids for "alpha beta gamma delta epsilon zeta", prompt only, no
+        // continuation: position 0's context is a single token, so a fault there is isolated.
+        let ids: Vec<u32> = vec![5249, 25079, 74493, 15774, 121598, 116026];
+        let _ = teacher_forced_logits(&mut model, &ids)?;
+        let path = std::env::var("MISTRALRS_DUMP_OUT")
+            .unwrap_or_else(|_| "/tmp/opencode/kolibri1_layer_taps.tsv".to_string());
+        let n = write_layer_taps(&path)?;
+        println!("[taps] wrote {n} rows to {path}");
         Ok(())
     }
 
