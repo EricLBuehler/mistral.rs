@@ -59,8 +59,9 @@ those optima are all 1 GHz optima and should be re-measured before being relied 
 
 ## Shared-host caveat
 
-Nodes 0, 1 and 2 were shared with other users for most of this work (load average 50-80).
-**Every performance number here was taken pinned to NUMA node 3** with:
+Nodes 0, 2 and 3 are shared with other users and, since 2026-10-20, with other agents working
+the same model on the same box. **Every performance number here was taken pinned to NUMA node
+3** with:
 
 ```
 numactl --cpunodebind=3 --interleave=all
@@ -70,6 +71,24 @@ Numbers taken before that pinning are marked in the individual files as contamin
 used only for direction, never as a result. Two threads also had to be accounted for
 separately: node 3 is shared with another workload at times, and the raw thread sweep
 (/proc-based) is noted where it was used.
+
+### The box is shared with a peer agent, and that has its own hazards
+
+The other agent is working Kolibri-1 in the vllm.cpp repo. Three things collide, and all three
+have produced wrong numbers rather than just slow ones:
+
+- **The governor is global.** Changing it affects a 78B llama.cpp run that may be in flight. A
+  reference line measured across a governor change is neither number. Announce governor
+  changes; do not flip it silently.
+- **RAM is the binding constraint.** A Kolibri-1 forward needs ~150 GB resident, and a
+  146 GB GGUF is already in page cache. Loading one evicts the other, and the OOM killer
+  takes whoever is largest. Announce large reservations.
+- **Untracked files in a shared repo.** Artifacts written into the vllm.cpp working tree on
+  `main` can be swept into a commit by a `git add -A`. Keep additions on a branch.
+
+Also: `available_parallelism` and `get_num_threads` both report the *mask* size, not the
+schedulable cores, so `numactl --cpunodebind=3` plus `RAYON_NUM_THREADS=16` is the only
+configuration whose thread count is unambiguous.
 
 ## Memory bandwidth reference
 
