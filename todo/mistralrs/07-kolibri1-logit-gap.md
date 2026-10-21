@@ -296,91 +296,80 @@ deviation an order of magnitude larger than the margin the routing decision is m
 honest gate is a band, and any implementation that is not bit-reproducing another one's sort
 tie-break cannot be expected to agree with it on the expert selection at all.
 
-## The resolution: the logit distance is mediated by the expert selection, not by the hidden state
+## Retracted: "the logit distance is mediated by the expert selection"
 
-This is the measured account, and it replaces the speculation above.
+This section replaced a claim that turned out to rest on a mis-parse, so it is withdrawn and
+what survives is recorded here instead.
 
-### The seed is the attention
+**The error.** `ggml_argsort_top_k` returns `[n_tokens, k]`, so ne0 is the token axis. The
+llama.cpp dump loop iterated the wrong axis and wrote `layer, rank, position, id`, and the
+reader grouped by the wrong column. The tell was in the data: some of the "position 5" sets
+had a repeated expert id, which a top-k cannot have. With the columns transposed the way they
+actually were, llama.cpp's layer-0 position-5 selection is 359, 203, 11, 197, 273, 68, which
+is the peer's rows file for the same layer and position, in the same order.
 
-Relative rms divergence from the device's per-layer dump, at position 0:
+The published 33.45% was that error, and the conclusion built on it - that the logit distance
+is mediated by the expert selection - does not survive. The artifact is republished in the
+column order the peer's rows file uses, `layer, position, rank, expert_id`, with the raw dump
+kept alongside as `llamacpp-router-ids-raw.tsv`.
 
-| quantity | layer 0 | layer 10 | layer 49 |
-|---|---|---|---|
-| attn_out_pre_norm | 4.46e-04 | 1.78e-03 | 2.36e-02 |
-| attn_post_norm | 4.09e-04 | 3.60e-03 | 8.67e-03 |
-| ffn_post_norm | 3.34e-04 | 9.07e-04 | 5.00e-03 |
-| l_out | 6.90e-04 | 2.43e-03 | 6.41e-03 |
+Two other things said here were wrong and are withdrawn: the -0.028 nats was the peer's
+production against the primary, not "theirs and ours" - mistral.rs against the primary in nats
+was never measured, and the 248 figure is a chain-argmax count rather than a distance in nats.
+And "llama.cpp is 3-6x closer to the device" was computed with a broken scale; on the correct
+metric it is about 2x.
 
-The norm does not amplify: the relative divergence is roughly flat across the four quantities.
-An earlier reading of this as "the norm amplifies 32x" compared absolute magnitudes across
-quantities of different scale, and is withdrawn.
+**The corrected comparison.** Top-6 set agreement, all positions, with every parse checked
+(300 groups, no duplicate-id group, and the peer's own number reproduced to the digit):
 
-At layer 0 the input is the embedding, so the whole of `attn_out_pre_norm`'s 4.46e-04 is the
-attention's own arithmetic. And the divergence grows with the attention window: between two CPU
-implementations, position 5's attention output differs 4.7x more than position 0's
-(1.78e-03 against 3.79e-04). The MoE contributes less than the attention does at every layer.
+| | peer | llama.cpp | mistral.rs | reference |
+|---|---|---|---|---|
+| peer | 100% | 87.56% | 68.67% | 87.17% |
+| llama.cpp | 87.56% | 100% | 68.50% | **88.33%** |
+| mistral.rs | 68.67% | 68.50% | 100% | **68.78%** |
+| reference | 87.17% | 88.33% | 68.78% | 100% |
 
-So the seed is a ~4e-04 relative difference in the attention's arithmetic, and the network
-amplifies it to ~5e-03 by layer 49.
+**mistral.rs is the outlier, not llama.cpp.** llama.cpp agrees with the reference 88.33% of the
+time and with the peer's production 87.56%; mistral.rs agrees with the reference 68.78%. The
+opposite of what the bad parse said.
 
-### The router turns that into a nat
+**Why the selection still matters, though it does not explain the llama.cpp gap.** Every
+implementation is within about one bf16 ulp of the device at layer 0:
 
-The router's top-6 cut sits on a 9.4e-05-nat margin. By layer 12 the relative divergence is
-~2e-03, so the selection is decided far below the noise.
-
-Measured, against the reference's own recorded selections for the same golden ids:
-
-```
-llamacpp vs reference : 33.45% of the top-k matched, over 295 layer/positions
-mistral.rs vs reference: 68.78%, over 300 layer/positions
-llamacpp vs mistral.rs: 29.83%
-```
-
-29.83% is what independence predicts from 0.69 and 0.33, so llama.cpp's selections are
-essentially uncorrelated with the reference's while ours are correlated with it.
-
-**Caveat on our side of that comparison.** Our selections come from a dump taken on 2026-10-14,
-which predates the RMSNorm fix and the f32 router, so the 68.78% is our OLDER build's
-agreement and the current build's is likely higher, not lower. The comparison is against the
-reference's own selections from the same day, so it is apples to apples in that respect, and
-the direction of the caveat only strengthens the conclusion. Re-measuring our selections with
-the current build is on the list.
-
-The selection rule is the same on both sides, and that is checked rather than assumed: the
-reference's own recorded layer-0 logits and bias reproduce its own recorded ids 80.6% of the
-time under `logits + bias` and 0% of the time under `sigmoid(logits) + bias`. Both
-implementations select on `logits + bias`, so the difference is numerical.
-
-### The anomaly, and its resolution
-
-llama.cpp is 3-6x CLOSER to the device in the residual stream than mistral.rs is, at every
-layer from 0 to about 29, and comparable from 25 on:
-
-| layer | llama.cpp | mistral.rs |
+| quantity, layer 0 | mistral.rs vs device | llama.cpp vs device |
 |---|---|---|
-| 0 | 1.77e-04 | 6.90e-04 |
-| 10 | 4.28e-04 | 2.43e-03 |
-| 25 | 6.71e-03 | 7.89e-03 |
-| 49 | 5.54e-03 | 6.41e-03 |
+| attn_out_pre_norm | 3.54e-03 | 1.66e-03 |
+| attn_post_norm | 4.95e-03 | 2.32e-03 |
+| ffn_post_norm | 5.86e-03 | 3.00e-03 |
+| l_out | 7.80e-03 | 2.00e-03 |
 
-And llama.cpp is 34x FURTHER in logits: a median 1.03 nats from the primary against 0.03.
+(relative rms of the difference, over the reference's rms.) The router's margin - the peer's
+7.86e-04 minimum and 2.35e-02 median, recomputed from their score file and matching their
+arithmetic exactly - is comparable to those differences, so the selection is a coin flip per
+layer. With fifty layers, a 12% per-layer disagreement rate means about 99.8% of positions
+have at least one flipped layer somewhere, which is how a per-layer selection difference
+becomes a per-position logit difference.
 
-The two facts reconcile because the hidden-state metric cannot see a flipped expert. The
-logits are a discontinuous function of the residual stream: one flipped selection is worth
-about a nat, however small the residual-stream difference was. The residual stream's cosine
-and rms are therefore the wrong instrument for this question, and the selection agreement is
-the right one.
+But llama.cpp and the peer's production select alike at 87.56% and still sit 0.03 and 1.03 nats
+from the primary, so the selection does not explain that gap: the primary and the transcription
+are not the same oracle for the selection, and agreeing with the transcription does not imply
+agreeing with the primary.
 
-### What is still open
+**Where our 2x lives, which is the actionable part.** At layer 0 the input is the embedding,
+so the whole of attn_out_pre_norm's divergence is the attention's own arithmetic, and at
+position 5 - the only position with a real attention window - it is 4.7x larger than at
+position 0. We run candle's eager SDPA; llama.cpp's flash-attention CPU kernel is the one that
+sits closer to the device. Our residual stream is about 2x further from the device's than
+llama.cpp's is at layer 0, and our selections inherit that.
 
-Whether our own selection agreement with the primary's is as high as the 0.03-nat logit
-distance implies. That needs the primary's per-layer selections for the same ids, which the
-peer can produce; ours and llama.cpp's are in `todo/artifacts/llamacpp-oracle/`.
+**Still open.** Two measurements, both waiting on the box or on the peer:
 
-The CPU-vs-device difference is not a scale effect: fitting and removing a per-row constant
-leaves the residual as large as the raw difference, so it is a per-element scatter rather
-than the signature a scale error would leave. That is the same verdict the peer reached on
-their side, for the same reason.
+- mistral.rs's own selections with the CURRENT build. The 68.78% is from a 2026-10-14 dump,
+  before the RMSNorm fix and before the f32 router, so it describes that build and not this
+  one. It is an upper bound on how far we are from the reference, not a measurement of it.
+- The primary's per-layer selections, which are what would say whether llama.cpp's 1.03 nats is
+  selection-driven after all. The peer's rows file is their production CPU path, not the
+  primary.
 
 ## Where we actually stand, and a fourth finding that undercuts the measurement itself
 
