@@ -410,6 +410,31 @@ so the measurement does not contend with whatever else the host is doing.
 - The bf16 route is the one worth proving, because the Q2_K route has no streaming in it at
   all - it fits, so it demonstrates nothing about the thesis.
 
+### Which of the two can be fixed here, and which cannot
+
+The distinction is not the expert layout. It is **whether the bytes can be held borrowed**.
+
+`QStorage` holds a `Cow<'_, [u8]>` and `QStorage::from_data` takes one, so a quantised
+tensor can be a view of the mapping - which is exactly what the GGUF path does at
+`mistralrs-quant/src/gguf/archive.rs:603`. A plain `Tensor` cannot: `CpuStorage` owns its
+`Vec`s, and `Tensor::from_slice` copies. So:
+
+- **The GGUF route already streams.** Its quantised weights stay in the file's page cache
+  and the kernel reclaims the cold ones. Nothing to fix; it needs a measurement.
+- **The fp8 safetensors route can be fixed here**, in three pieces: read the file ourselves
+  over an mmap and keep the quantised bytes borrowed, give the dequant kernel a byte-slice
+  entry point so it can read those bytes without a `Tensor` owning them, and hold the experts
+  per-expert so the gather dequantises the routed ones. Every byte in that checkpoint is
+  quantised, so none of it needs a plain tensor to be borrowed.
+- **The bf16 safetensors route cannot be fixed here.** Its weights are plain bf16 tensors,
+  and a plain tensor can only own its storage, so the copy is unavoidable without a
+  `CpuStorage` variant that borrows. That is candle's #3708, and the comment on it has the
+  measurement: 119 GB of a 142 GB resident load is anonymous, and under a 32 GB cgroup with
+  no swap the load is OOM-killed.
+
+So the honest answer to "should we make bf16 and fp8 work like gguf" is: **fp8 yes, bf16 not
+without candle, and the GGUF route is already the streaming one.**
+
 ### Phase 2: the fp8 loader, the only code
 
 The fp8 route is the one that still materialises, and it is the same 70 GB copy in two
@@ -433,7 +458,9 @@ per-expert views instead:
 1. **`mistralrs-quant/src/per_expert_quantized.rs`**: let `PerExpertQuantizedLinear` hold
    per-expert fp8 weight and scale views as well as a stacked pair, and dequantise the routed
    experts from whichever form it has. The dequant and the remap are already written and
-   already bit-identical to the whole-stack path.
+   already bit-identical to the whole-stack path. For the zero-copy form the dequant needs a
+   byte-slice entry point - the dispatch already works on `&[F8E4M3]` and a `Layout`, so it is
+   the `Tensor` wrapper that has to go.
 2. **`mistralrs-core/src/moe/experts/backends.rs`**: in the per-expert branch, when the
    checkpoint is blockwise fp8, read the weight and scale views and build that instead of
    `PerExpertLinear`. The scale name is the quantised format's convention,
