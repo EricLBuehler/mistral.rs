@@ -325,18 +325,29 @@ The phase breakdown is where the change is:
 
 No swap was used: SwapFree went from 249,924,352 kB to 249,945,664 kB across the baseline run.
 
-**What is left, and it is the next item.** Two phases now dominate, and neither is the MoE
-gather any more:
+**Then the two things the measurement pointed at.**
 
-- `attn_proj`, 957 ms, 40% of the step. The attention and output projections are dense fp8
-  layers, and they are dequantised whole on every forward even though the weights do not
-  change. That is the same defect as the MoE one, on the layers that were not the point of
-  the model. A dequantised-weight cache would turn it into a read of 2.6 GB per forward.
-- `routed`, 1293 ms, 54% of the step. The experts are scoped now, but they are dequantised one
-  expert at a time, 300 calls per forward, and each call carries the fixed cost of a candle
-  custom op. The bytes are 393 MB of fp8 per forward, which is about 0.14 s of arithmetic
-  against the 1.29 s measured, so most of it is per-call overhead. Dequantising a layer's six
-  routed experts in one call instead of six would cut the calls per forward from 300 to 50.
+`attn_proj` was 957 ms, 40% of the step: the attention and output projections are dense fp8
+layers, and they were dequantised whole on every forward even though their weights do not
+change. It is dequantised once and kept now, and the phase went to 61 ms. The expert stack is
+not cached - only the routed experts are ever touched, and they change.
+
+`routed` was 1293 ms. The experts are scoped, but they were copied out of the stack one at a
+time to be dequantised, and `Tensor::i` copies per-element on a one-byte dtype. The dequant
+now takes a view of the stack instead. A new example, `fp8_expert_copy_vs_view`, times the two
+against each other on the real checkpoint: **1.047 ms per dequant with the copy against 0.648
+ms with the view, 1.62x**. The example is a relative comparison on purpose, so it is valid on
+a busy box in a way an absolute rate is not.
+
+The arithmetic behind the phase: a decode step dequantises **900** expert slabs - three
+projections times 50 layers times the 6 routed experts - so at 0.65 ms each the dequant is
+about 0.6 s of the step, and 0.46 ms of that is the dequant's own arithmetic. The remainder
+is the only part left to remove, and the way to remove it is to not dequantise at all: the
+routing repeats, with a measured 98.9% hit rate for a flat LRU, so caching the dequantised
+slabs would skip almost every dequantisation. The cache exists (`MISTRALRS_MOE_CACHE_MB`) but
+its API dequantises before it consults the cache, so using it here needs a peek-then-fill
+form. It is also opt-in for a reason: it trades anonymous memory for the dequantisation, and
+that trade is the user's to make.
 
 The fp8 path at 2.40 s per token is now 20x slower than the same model in bf16 at 0.116 s, and
 both of the phases above are the reason. That is the right shape for the comparison: fp8
