@@ -191,3 +191,66 @@ thing to watch for, and is the reason the change should be CPU-only and opt-out.
 Unrequested. The tracker has no expert-streaming ask, so this is written down as a gap and a
 design rather than a proposal, and L1 should be discussed with a maintainer before anyone
 spends time on it.
+
+## The 32 GB question, and the answer that is cheaper than streaming
+
+A 32 GB system cannot hold this model at any usable precision: the routed experts are 140.6 GB
+in bf16 and 70.3 GB in fp8, out of 19200 (layer, expert) slots.
+
+The resident set splits cleanly:
+
+```
+non-expert, bf16      4.85 GB   attention 3.17, shared expert 0.37, router 0.09,
+                                  embeddings + lm_head 1.22
+routed experts      140.62 GB bf16, 70.31 GB fp8
+one expert             7.50 MB bf16
+per token              2.56 GB   7 experts x 50 layers, 300 distinct (layer, expert) slots
+```
+
+So a 32 GB box with 26 GB usable has 21.15 GB for experts: 2887 bf16 slots of 19200 (15%),
+or 5775 fp8 slots (30%).
+
+**But the real answer is not to build a cache manager - it is that the page cache already is
+one.** The GGUF is mmap'd, so if the MoE arm gathered only the selected experts out of the
+mapping, the kernel would keep the hot ones resident and stream the cold ones from disk, for
+free. That is what "expert streaming" means here, and it is a change of *call site*, not a new
+subsystem.
+
+**Which is `todo/mistralrs/02`.** The GGUF MoE arm today calls
+`qtensor.dequantize(device)` and dequantises the whole expert stack on every forward. Scope
+that to the selected experts at the gather - the same shape the reference implementation uses,
+where the dequant is per expert at the gather and writes bf16 straight into the destination rows
+- and the 32 GB case follows, along with the fp8 case, because the fp8 path has the same
+shape of defect and the same fix.
+
+### What the 32 GB case would cost
+
+Compute is not the constraint: 3.46B active parameters is 6.9 GFLOP per token, about 5 ms at
+1.4 TFLOP/s. The traffic is 2.56 GB per token, so the box is I/O bound by two orders of
+magnitude.
+
+| hit rate | from disk | at 2 GB/s NVMe |
+|---|---|---|
+| 30% | 1.79 GB/token | 0.90 s/token, 1.11 tok/s |
+| 60% | 1.03 GB/token | 0.51 s/token, 1.95 tok/s |
+| 90% | 0.26 GB/token | 0.13 s/token, 7.80 tok/s |
+
+**The hit rate is the whole design, and it is not known.** It depends on how skewed the routing
+distribution is: if a small set of experts carries most of the traffic, a 15% cache gets most of
+the hits; if routing is uniform, it does not. This is measurable from the existing expert-id
+dumps, and it should be measured before designing anything - a uniform-routing model and a
+skewed-routing model want completely different caches.
+
+### Two quantisation routes to the same box
+
+- **No streaming, degraded quality.** llama.cpp has published `Kolibri-1-Q2_K.gguf` at 26.7 GiB,
+  which fits a 32 GB box entirely resident. Our GGUF arm already handles `GgmlDType::Q2K`
+  (`mistralrs-quant/src/gguf/archive.rs:1453`, and candle's `QTensor` covers `Q2K`), so this
+  path is available today. `IQ2_XXS` at 21.2 GiB is a better fit but uses the IQ types we do
+  not implement.
+- **Streaming, full quality.** The 4.85 GB non-expert set plus a streamed expert cache, as
+  above.
+
+The first is a quantisation question and the second is a systems question. They are not
+alternatives to each other so much as different products, and the first is much cheaper to
+deliver because the artefact already exists.
