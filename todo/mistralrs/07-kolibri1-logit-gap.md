@@ -381,6 +381,102 @@ softmax cannot be the cause and the difference is in the projections - the query
 value projections or the output projection - rather than in the attention's accumulation over
 the sequence.
 
+**Determinism, checked on every implementation that has a dump.** The peer's device work
+found that the device's chunked-prefill path is not deterministic run to run - the same
+configuration produced the same token with the top logprob 0.52 nats apart - so a flip
+attributed to precision may not reproduce. That is worth checking here rather than assuming.
+
+- **mistral.rs: byte-identical across two runs** of the same build, over all 1,024,000 dumped
+  values. The current build's dump is also identical to the 2026-10-20 one, so the norm fix
+  was already in that dump and the taps have not moved since.
+- **llama.cpp: byte-identical across two runs**, once the dump's index bug was fixed. Before
+  the fix the last layer's rows were uninitialised memory and differed between runs.
+- **the device's serial mode: deterministic in value.** Its two serial dumps have different
+  md5s but all 1,024,000 shared rows carry identical values; the difference is the order the
+  blocks are written in - one dump iterates position-major and the other layer-major. A naive
+  diff or md5 reads that as nondeterminism, and it is not.
+
+So the comparisons in this file have no uncertainty floor from run-to-run variation on the
+CPU side, and the residual-stream distances quoted are implementation differences rather than
+noise.
+
+**What the 0.91 bf16 ulp is: three roundings, and the references do not have them.** Our
+attention block's output differs from the peer's CPU path by 3.54e-03 relative, which is 0.91
+of a bf16 ulp. One extra rounding accounts for 0.29 of an ulp, so this is about three.
+
+The reference implementations compute activations in f32 and we do not. llama.cpp's default
+`ftype` is `LLAMA_FTYPE_ALL_F32` and none of its dumped values are bf16-representable. The
+peer's CPU path keeps the residual stream in f32 (its `l_out` is f32, 21% bf16-representable,
+against 100% for its attention and norm outputs). Ours is bf16 throughout.
+
+Three places where that shows, in the attention block alone:
+
+1. The Q, K and V projections' outputs are bf16 for us and f32 for them.
+2. The attention output is rounded to bf16 before the output projection for us and stays f32
+   for them.
+3. The output projection's output is bf16 for us and f32 for them.
+
+The attention kernel's internals are already f32 - `dot_f32`, `mad_f32` and
+`simd_softmax_row_f32` - so this is not the accumulation; it is the width of the tensors
+going into and out of it.
+
+**The cost of matching them is close to nothing, and that is the useful part.** The phases
+that dominate a bf16 decode step are bound by reading the *weights*: `attn_proj` 35.43 ms,
+`routed` 60.17 ms, `shared` 5.83 ms, and the weights stay bf16 either way. The activations
+are 2560 wide, so the residual stream and q/k/v are kilobytes per layer against megabytes of
+weights, and the KV cache is 105 MB in bf16 against 210 MB in f32. The attention phase is 1.1%
+of the step, so doubling it costs about half a percent.
+
+So the change is the activation dtype, not the kernels: keep the residual stream and the
+projections' outputs in f32 while the weights stay bf16. It is a plumbing change through the
+layers rather than a kernel change, and it is the single highest-value change for matching
+the reference implementations, because it is the whole 3.54e-03.
+
+**The device is a fourth implementation, and it is a separate cluster. The selection matrix,
+corrected.** The llama.cpp router dump had a real bug: the index was rank-major where ggml's
+is token-major, so the values were the transpose of the selection matrix, and at the last
+layer - whose router is reduced to the output positions, so the two axes differ - it read
+past the end of the buffer and returned uninitialised memory. That is why the first row
+looked right and the rest did not, and it is why the file's columns were the other way round
+from their labels. Fixed, re-dumped, and the dump is now byte-identical across two runs.
+
+With that fixed, the matrix at position 5, top-6 set agreement:
+
+| | device | peer CPU | llama.cpp | mistral.rs | reference |
+|---|---|---|---|---|---|
+| device | 100% | 58.67% | 58.84% | 54.00% | 57.67% |
+| peer CPU | 58.67% | 100% | **89.15%** | 68.67% | **87.17%** |
+| llama.cpp | 58.84% | **89.15%** | 100% | 69.77% | **89.94%** |
+| mistral.rs | 54.00% | 68.67% | 69.77% | 100% | **68.78%** |
+| reference | 57.67% | **87.17%** | **89.94%** | 68.78% | 100% |
+
+and exact-set, the six ids identical, order-independent:
+
+| | device | peer CPU | llama.cpp | mistral.rs | reference |
+|---|---|---|---|---|---|
+| device | 100% | 4.00% | 4.08% | **0.00%** | 4.00% |
+| peer CPU | 4.00% | 100% | **49.49%** | 12.00% | 44.33% |
+| llama.cpp | 4.08% | **49.49%** | 100% | 13.90% | **55.93%** |
+| mistral.rs | **0.00%** | 12.00% | 13.90% | 100% | 11.33% |
+| reference | 4.00% | 44.33% | **55.93%** | 11.33% | 100% |
+
+**Two clusters and one outlier, and the selection matrix agrees with the residual-stream
+geometry independently.** llama.cpp and the peer's CPU path agree with each other on the
+identical six ids 49.49% of the time and with the transcription 44-56%; the transcription is
+in that cluster. The device agrees with anyone on 0-4% of the rows, which is what a 1.2e-02
+residual-stream distance does to a top-6 cut on a 1e-2-nat margin. And mistral.rs agrees with
+the CPU cluster on 12-14% of the rows exactly, which is what a 3.5e-03 residual-stream
+distance does to the same cut.
+
+The two measurements were made independently - one from the hidden states, one from the
+discrete selections - and they agree on the ordering, which is the strongest thing that can be
+said about any of it.
+
+**The numbers quoted earlier in this file for llama.cpp were wrong** and are replaced by the
+table above: the transposed read put llama.cpp at 24.49% against the reference where it is
+89.94%, and at 28.57% against the peer's CPU path where it is 89.15%. The retraction of the
+33.45% was right; the corrected figure that replaced it was not, for the same reason.
+
 **What the 0.91 bf16 ulp is: three roundings, and the references do not have them.** Our
 attention block's output differs from the peer's CPU path by 3.54e-03 relative, which is 0.91
 of a bf16 ulp. One extra rounding accounts for 0.29 of an ulp, so this is about three.
