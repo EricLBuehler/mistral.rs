@@ -66,7 +66,7 @@ Things decided but not yet done. Kept here rather than in a plan file so they do
 | 01 | [No EXL3 quantization support](gaps/01-no-exl3-quantization.md) | open, unrequested |
 | 02 | [No OPT architecture](gaps/02-no-opt-architecture.md) | open, unrequested |
 | 03 | [`qwen3_5moe` has no text-only loader](gaps/03-qwen3-5moe-has-no-text-loader.md) | open, unrequested |
-| 04 | [No expert streaming, and the expert stack is materialized on CPU](gaps/04-no-expert-streaming.md) | open, unrequested; no tracker request exists |
+| 04 | [No expert streaming, and the expert stack is materialized on CPU](gaps/04-no-expert-streaming.md) | open, unrequested. Now costed: the non-expert set is 4.85 GB, the routed experts 140.6 GB bf16, and 2.56 GB per token of traffic. A 32 GB box is I/O bound by two orders of magnitude, and the hit rate - not the cache size - is the unknown. The fix is `todo/02`. |
 
 ## Status vocabulary
 
