@@ -381,6 +381,46 @@ softmax cannot be the cause and the difference is in the projections - the query
 value projections or the output projection - rather than in the attention's accumulation over
 the sequence.
 
+**The device is a fourth implementation, and it is a separate cluster.** The peer's TT device
+taps and selections, for the same raw ids and the same quantities, make the geometry
+complete. The relative rms of the difference at layer 0, `attn_out_pre_norm`:
+
+| pair | rel rms | |
+|---|---|---|
+| llama.cpp vs peer CPU path | **1.66e-03** | the closest pair |
+| ours vs llama.cpp | 3.01e-03 | |
+| ours vs peer CPU path | 3.54e-03 | |
+| ours vs device | **1.18e-02** | |
+| llama.cpp vs device | 1.23e-02 | |
+| peer CPU path vs device | 1.23e-02 | |
+
+and at `l_out`, layer 0: llama.cpp vs the peer CPU path 2.00e-03, ours vs llama.cpp 7.16e-03,
+ours vs the peer CPU path 7.80e-03, and the device 6.42e-03 from llama.cpp.
+
+So there are two clusters. **llama.cpp and the peer's CPU path are the same thing to within
+the storage dtype**, and the device is 6-7x further from both than they are from each other -
+which is the rms_norm compute-config deviation, and it is why the device produces a
+different first token for the golden prompt (74493 where every CPU reference gives 121598,
+with the top two 0.017 nats apart and the golden's token third).
+
+**And mistral.rs is the outlier within the CPU cluster, in the residual stream and not only
+in the selection.** llama.cpp and the peer's CPU path are 1.66e-03 apart at layer 0; we sit
+3.01e-03 and 3.54e-03 from them, and 7.16e-03 and 7.80e-03 away at `l_out` - three to four
+times further than they are from each other.
+
+Since llama.cpp's attention output agrees with the peer's CPU path to within 1.66e-03, and
+llama.cpp's is the one that keeps f32 while the CPU path's is bf16, **that 1.66e-03 is
+almost entirely the storage dtype and llama.cpp's arithmetic is essentially at the peer's.**
+Ours differs from the peer's by 3.54e-03 with the *same* bf16 storage, so the arithmetic
+difference is the larger term and it is ours.
+
+That is what the selection agreement was telling us all along: mistral.rs agrees with the
+transcription's selections 68.78% of the time where llama.cpp agrees 88.33% and the peer's
+CPU path 87.17%, and the transcription sits in the llama.cpp/peer-CPU cluster. The device
+agrees with the transcription 45.00%, with the peer's CPU path 47.00%, with ours 49.67% and
+with llama.cpp 20.07% - it agrees with nobody, which is what a 6-7x residual-stream gap
+does to a top-6 cut on a 1e-2-nat margin.
+
 **Where the attention differs, narrowed as far as the existing data allows.** Our CPU
 attention runs with the input dtype: `run_flash_attn_cpu_for_dtype` takes `out_dtype =
 q.dtype()` and dispatches to `run_flash_attn_cpu::<bf16>` for a bf16 model, so the attention's

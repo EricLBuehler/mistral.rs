@@ -2,9 +2,10 @@
 
 - **Repo:** mistral.rs
 - **Component:** `mistralrs-quant`, blockwise FP8 linear
-- **Status:** the scoped dequant is **implemented and bit-exact** (see below); the speed is
-  not yet measured, because it needs a model load and the box is under another agent's
-  measurement window. The cost as last measured is 74 s per decode token on the Kolibri-1 fp8
+- **Status:** **fixed and measured**. The scoped dequant is implemented and bit-exact, and it
+  takes the fp8 decode from 70.8 s per token to 2.40 s - 29.5x, measured as a same-session
+  A/B on the same build, the same weights, the same node and the same governor. The cost as
+  last measured before the fix was 74 s per decode token on the Kolibri-1 fp8
   checkpoint, which is about 650x slower than the same model in bf16. This is not a
   second-order optimisation: it makes the fp8 path unusable for decode, and it is the
   single largest gap between this implementation and the vllm.cpp CPU tier.
@@ -300,3 +301,52 @@ KOLIBRI1_MODEL_DIR=/mnt/models/Aleph-Alpha/Kolibri-1 \
 ```
 
 `decode_prof` is enabled in that test, so the per-phase breakdown comes with it.
+
+
+## Measured: 70.8 s per token becomes 2.40 s
+
+Same session, same build, same weights, node 3, 16 threads, 3.4 GHz, `vm.swappiness=0`:
+
+| path | mean TPOT | tok/s | steps |
+|---|---|---|---|
+| whole stack (the old path) | **70.810 s** | 0.014 | 4 |
+| scoped (the new path) | **2.402 s** | 0.42 | 8 |
+
+**29.5x.** The whole-stack number reproduces the 74.114 s recorded earlier, so the two are
+comparable; the difference between them is the whole-stack dequantisation and nothing else.
+
+The phase breakdown is where the change is:
+
+| phase | whole stack | scoped | ratio |
+|---|---|---|---|
+| `routed` (the MoE experts) | 69506.86 ms (98.2%) | 1293.32 ms (53.9%) | **53.8x** |
+| `attn_proj` | 1046.89 ms | 957.13 ms | 1.1x |
+| `shared` | - | 130.83 ms | - |
+
+No swap was used: SwapFree went from 249,924,352 kB to 249,945,664 kB across the baseline run.
+
+**What is left, and it is the next item.** Two phases now dominate, and neither is the MoE
+gather any more:
+
+- `attn_proj`, 957 ms, 40% of the step. The attention and output projections are dense fp8
+  layers, and they are dequantised whole on every forward even though the weights do not
+  change. That is the same defect as the MoE one, on the layers that were not the point of
+  the model. A dequantised-weight cache would turn it into a read of 2.6 GB per forward.
+- `routed`, 1293 ms, 54% of the step. The experts are scoped now, but they are dequantised one
+  expert at a time, 300 calls per forward, and each call carries the fixed cost of a candle
+  custom op. The bytes are 393 MB of fp8 per forward, which is about 0.14 s of arithmetic
+  against the 1.29 s measured, so most of it is per-call overhead. Dequantising a layer's six
+  routed experts in one call instead of six would cut the calls per forward from 300 to 50.
+
+The fp8 path at 2.40 s per token is now 20x slower than the same model in bf16 at 0.116 s, and
+both of the phases above are the reason. That is the right shape for the comparison: fp8
+buys the memory and costs the dequantisation, and the dequantisation is now confined to the
+weights that actually change.
+
+**A measurement trap that cost 2.7x and is worth recording.** With `RAYON_NUM_THREADS` unset
+under `numactl --cpunodebind=3`, candle's pool under-uses the allowed cores and the same
+bf16 benchmark reads 3.20 tok/s instead of 8.65. Every number on this box needs
+`RAYON_NUM_THREADS` and `MISTRALRS_CPU_THREADS` set to the thread count, or the pools
+disagree with each other. `mistralrs-quant/src/cpu_threads.rs` says so, and it is worth
+believing it: the first bf16 measurement taken here was 2.9x off the recorded 9.11 for exactly
+this reason, and the recorded numbers were right.

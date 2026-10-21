@@ -33,6 +33,18 @@ use crate::{
     QuantizedSerde, Shard, ShardedVarBuilder, UnquantLinear,
 };
 
+/// Whether the gather should dequantise only the routed experts.
+///
+/// On by default. `MISTRALRS_FP8_SCOPED_GATHER=0` turns it off, which is how the whole-stack
+/// path is measured against it on the same build and the same weights.
+fn scoped_gather_enabled() -> bool {
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(|| {
+        !std::env::var("MISTRALRS_FP8_SCOPED_GATHER")
+            .is_ok_and(|v| v == "0" || v.eq_ignore_ascii_case("false"))
+    })
+}
+
 /// The expert ids an index tensor names, as u32.
 fn read_expert_ids(indices: &Tensor) -> Result<Vec<u32>> {
     let flat = indices.flatten_all()?;
@@ -571,9 +583,13 @@ impl QuantMethod for BlockwiseFP8Linear {
         //
         // Only the routed experts are dequantised. The whole stack is one quantised block
         // per expert, and dequantising all of it costs the whole model on every forward.
-        let (weight, indices) = match self.scoped_expert_stack(indices)? {
-            Some(scoped) => scoped,
-            None => (self.dequantize_w()?, indices.clone()),
+        let (weight, indices) = if scoped_gather_enabled() {
+            match self.scoped_expert_stack(indices)? {
+                Some(scoped) => scoped,
+                None => (self.dequantize_w()?, indices.clone()),
+            }
+        } else {
+            (self.dequantize_w()?, indices.clone())
         };
 
         // The CUDA kernel path hands over the flattened layout, which is the only one this
