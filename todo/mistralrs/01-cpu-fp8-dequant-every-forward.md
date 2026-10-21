@@ -2,7 +2,9 @@
 
 - **Repo:** mistral.rs
 - **Component:** `mistralrs-quant`, blockwise FP8 linear
-- **Status:** open, **measured**. The cost is 74 s per decode token on the Kolibri-1 fp8
+- **Status:** the scoped dequant is **implemented and bit-exact** (see below); the speed is
+  not yet measured, because it needs a model load and the box is under another agent's
+  measurement window. The cost as last measured is 74 s per decode token on the Kolibri-1 fp8
   checkpoint, which is about 650x slower than the same model in bf16. This is not a
   second-order optimisation: it makes the fp8 path unusable for decode, and it is the
   single largest gap between this implementation and the vllm.cpp CPU tier.
@@ -262,3 +264,39 @@ falls from 148 GB to roughly 7 GB and the OOM stops being possible.
 If a safety net is wanted in the meantime, zram is the tool that works here, and it should be
 announced and sized with the peers' agreement - it consumes RAM that the page cache wants, on
 a box where two model-sized workloads are already close to the limit.
+
+
+## Fixed: dequantise only the routed experts
+
+`scoped_expert_stack` (`mistralrs-quant/src/blockwise_fp8/mod.rs`) resolves the experts a
+gather names, dequantises only those, and remaps the indices onto the compacted stack. The
+values are the ones the whole stack holds, so the gather computes the same thing.
+
+The bit-exactness is the acceptance criterion, and it is checked in both shape regimes:
+small enough that the gather falls back to a matmul, and large enough that the gather kernel
+serves it. The two take different arithmetic, and the scoped path has to agree with the
+whole-stack path in each. A second test checks that only the routed experts are dequantised.
+
+This is the mirror image of the GGUF fix in `c58f341a7`, which was the same defect on the
+other quantisation path.
+
+**Not yet measured.** The speed needs the fp8 checkpoint loaded and the box quiet, and the
+box is under peer-Ce's P150 decode bench, whose timings are the ones that would be
+contaminated by a 74 GB memory-faulting load. The claim file records the wait.
+
+**What the measurement should show.** The 74 s per token was 74 GB of dequantisation at
+about 1 GB/s, and the summary's arithmetic puts about 13 s of that in the dequant and about
+60 s in the allocation and faulting of the 148 GB dequantised stack per forward. The scoped
+path dequantises `top_k` experts per layer instead of all of them, which is 1.6% of the
+stack at decode, so both terms should collapse: the dequant to about 0.2 s and the
+allocation to about a second. What remains should be the gather itself, over the routed
+experts only.
+
+**The measurement command**, for when the box is free:
+
+```
+KOLIBRI1_MODEL_DIR=/mnt/models/Aleph-Alpha/Kolibri-1 \
+  cargo test --release -p mistralrs-core kolibri1_decode_benchmark -- --ignored --nocapture
+```
+
+`decode_prof` is enabled in that test, so the per-phase breakdown comes with it.

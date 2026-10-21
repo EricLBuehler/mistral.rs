@@ -355,6 +355,32 @@ from the primary, so the selection does not explain that gap: the primary and th
 are not the same oracle for the selection, and agreeing with the transcription does not imply
 agreeing with the primary.
 
+**The storage dtypes differ, and that reframes the 2x.** How many of the dumped values are
+exactly bf16-representable:
+
+| quantity, layer 0 | mistral.rs | llama.cpp | peer CPU path |
+|---|---|---|---|
+| attn_out_pre_norm | 100% | **0%** | 100% |
+| attn_post_norm | 100% | **0%** | 100% |
+| l_out | 100% | **0%** | 21% |
+
+llama.cpp keeps the hidden state in f32 throughout. We keep it in bf16. The peer's CPU path
+keeps the attention and norm outputs in bf16 and the residual stream in f32.
+
+So "llama.cpp is about 2x closer to the peer than we are" is not a measure of arithmetic
+quality - llama.cpp simply stores more precision, and the peer's bf16 rounding is the
+dominant term in every llama.cpp-vs-peer comparison. The comparison that is not a storage
+artefact is ours against the peer, because both are bf16 at attn_out_pre_norm: 3.54e-03
+relative, about 0.9 of a bf16 ulp, which for two roundings of the same value would be far
+smaller. **So our attention output really is about 0.6% away from the peer's, while
+llama.cpp's is essentially at it.**
+
+That is a real arithmetic difference and it is what the selection gap follows from. It also
+narrows where it is: at layer 0, position 0, the attention is over a single element, so the
+softmax cannot be the cause and the difference is in the projections - the query, key and
+value projections or the output projection - rather than in the attention's accumulation over
+the sequence.
+
 **Where our 2x lives, which is the actionable part.** At layer 0 the input is the embedding,
 so the whole of attn_out_pre_norm's divergence is the attention's own arithmetic, and at
 position 5 - the only position with a real attention window - it is 4.7x larger than at
