@@ -224,6 +224,40 @@ output and `res` the previous `ffn_inp`, and the layer's true input is `xs + res
 `residual_in` is the `ffn_inp` alone and has no counterpart in the llama.cpp dump. It is
 excluded from the comparison; the `l_out` comparison is the valid one.
 
+## The synthesis: both backends had a norm-scale precision defect, and the router margin is 20,000x smaller than either
+
+This closes the loop on why implementations disagree.
+
+**Our side.** Candle's fused CPU RMSNorm rounds the *scale* to bf16 before dividing, so every
+row of every norm output carries a relative error of up to one bf16 ulp - about 0.4% -
+uniformly. Fixed in `d9198c578`, by keeping the scale in f32 and rounding the normalised value
+the way Hugging Face, ggml and llama.cpp do.
+
+**Their side.** The Tenstorrent device's rms computation has a -1.9% regime against its own host
+arm, on bit-identical inputs, and the bisect attributes it to the compute config
+(`approx_mode`, `fp32_acc`) rather than to the compiler or the toolchain version. A 1.9% relative
+deviation in a norm output is the same class of defect as our 0.4% one, just larger.
+
+**The router's selection margin is 9.4e-05 nats** on the smallest layer, and 0.0149 at layer 0.
+So the routing decision - which decides the token - is being made at a precision 20,000x finer
+than the norm error in either backend.
+
+| deviation | magnitude | where |
+|---|---|---|
+| router selection margin | 9.4e-05 nats | what the decision is made at |
+| candle fused RMSNorm, CPU | ~0.4% per row | our side, **fixed** |
+| device rms, `approx_mode=true` | ~1.9% per row | the device's default config |
+
+**Which means the device is now the outlier on the norm, not us.** Our f32-scale norm agrees
+with ggml's, and the device's does not. So the cleanest CPU reference is llama.cpp rather than
+the primary, which is the opposite of where this started - the primary was the reference until
+the row-offset bug in its writer put it in doubt.
+
+**And the band gate is not a compromise.** Two independent backends each carry a per-row norm
+deviation an order of magnitude larger than the margin the routing decision is made at. The
+honest gate is a band, and any implementation that is not bit-reproducing another one's sort
+tie-break cannot be expected to agree with it on the expert selection at all.
+
 ## Where we actually stand, and a fourth finding that undercuts the measurement itself
 
 **The teacher-forced prefill is one position behind.** Our logits at step `k` are the
