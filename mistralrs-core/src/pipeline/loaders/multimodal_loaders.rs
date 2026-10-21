@@ -648,6 +648,15 @@ impl DeviceMappedModelLoader for AutoMultimodalLoader {
     ) -> Result<usize> {
         Self::get_loader(config)?.non_mapped_max_act_size_elems(config, params)
     }
+    fn non_mapped_activation_memory_bytes(
+        &self,
+        config: &str,
+        params: &AutoDeviceMapParams,
+        dtype: DType,
+        device: &Device,
+    ) -> Result<usize> {
+        Self::get_loader(config)?.non_mapped_activation_memory_bytes(config, params, dtype, device)
+    }
     fn non_mapped_size_in_bytes(
         &self,
         config: &str,
@@ -6553,6 +6562,22 @@ impl IsqModelLoader for Qwen3VLLoader {
 }
 
 impl DeviceMappedModelLoader for Qwen3VLLoader {
+    fn non_mapped_activation_memory_bytes(
+        &self,
+        config: &str,
+        params: &AutoDeviceMapParams,
+        dtype: DType,
+        device: &Device,
+    ) -> Result<usize> {
+        let cfg: Qwen3VLConfig = serde_json::from_str(config)?;
+        super::qwen_vision_memory::activation_memory_bytes(
+            &cfg.vision_config,
+            params,
+            dtype,
+            device,
+        )
+    }
+
     fn activation_model_config(&self, config: &str) -> Result<ActivationModelConfig> {
         let cfg: Qwen3VLConfig = serde_json::from_str(config)?;
         let tc = &cfg.text_config;
@@ -6975,6 +7000,22 @@ impl IsqModelLoader for Qwen3VLMoELoader {
 }
 
 impl DeviceMappedModelLoader for Qwen3VLMoELoader {
+    fn non_mapped_activation_memory_bytes(
+        &self,
+        config: &str,
+        params: &AutoDeviceMapParams,
+        dtype: DType,
+        device: &Device,
+    ) -> Result<usize> {
+        let cfg: Qwen3VLMoEConfig = serde_json::from_str(config)?;
+        super::qwen_vision_memory::activation_memory_bytes(
+            &cfg.vision_config,
+            params,
+            dtype,
+            device,
+        )
+    }
+
     fn activation_model_config(&self, config: &str) -> Result<ActivationModelConfig> {
         let cfg: Qwen3VLMoEConfig = serde_json::from_str(config)?;
         let tc = &cfg.text_config;
@@ -7419,6 +7460,22 @@ impl IsqModelLoader for Qwen3_5Loader {
 }
 
 impl DeviceMappedModelLoader for Qwen3_5Loader {
+    fn non_mapped_activation_memory_bytes(
+        &self,
+        config: &str,
+        params: &AutoDeviceMapParams,
+        dtype: DType,
+        device: &Device,
+    ) -> Result<usize> {
+        let cfg: Qwen3_5Config = serde_json::from_str(config)?;
+        super::qwen_vision_memory::activation_memory_bytes(
+            &cfg.vision_config,
+            params,
+            dtype,
+            device,
+        )
+    }
+
     fn activation_model_config(&self, config: &str) -> Result<ActivationModelConfig> {
         let cfg: Qwen3_5Config = serde_json::from_str(config)?;
         let tc = &cfg.text_config;
@@ -7919,6 +7976,22 @@ impl IsqModelLoader for Qwen3_5MoeLoader {
 }
 
 impl DeviceMappedModelLoader for Qwen3_5MoeLoader {
+    fn non_mapped_activation_memory_bytes(
+        &self,
+        config: &str,
+        params: &AutoDeviceMapParams,
+        dtype: DType,
+        device: &Device,
+    ) -> Result<usize> {
+        let cfg: Qwen3_5MoeConfig = serde_json::from_str(config)?;
+        super::qwen_vision_memory::activation_memory_bytes(
+            &cfg.vision_config,
+            params,
+            dtype,
+            device,
+        )
+    }
+
     fn activation_model_config(&self, config: &str) -> Result<ActivationModelConfig> {
         let cfg: Qwen3_5MoeConfig = serde_json::from_str(config)?;
         let tc = &cfg.text_config;
@@ -10735,6 +10808,59 @@ mod tests {
             "vision_end_token_id": 4,
             "tie_word_embeddings": false
         })
+    }
+
+    #[test]
+    fn qwen_vision_memory_matches_auto_loader_and_honors_image_limits() -> Result<()> {
+        for (architecture, loader) in [
+            (
+                "Qwen3VLForConditionalGeneration",
+                &Qwen3VLLoader as &dyn DeviceMappedModelLoader,
+            ),
+            ("Qwen3VLMoeForConditionalGeneration", &Qwen3VLMoELoader),
+            ("Qwen3_5ForConditionalGeneration", &Qwen3_5Loader),
+            ("Qwen3_5MoeForConditionalGeneration", &Qwen3_5MoeLoader),
+        ] {
+            let config = qwen_activation_config(architecture).to_string();
+            let params = AutoDeviceMapParams::Multimodal {
+                max_seq_len: 4096,
+                max_batch_size: 16,
+                max_image_shape: (512, 512),
+                max_num_images: 1,
+            };
+            let bytes = loader.non_mapped_activation_memory_bytes(
+                &config,
+                &params,
+                DType::BF16,
+                &Device::Cpu,
+            )?;
+            assert!(bytes > 0);
+            assert_eq!(
+                bytes,
+                AutoMultimodalLoader.non_mapped_activation_memory_bytes(
+                    &config,
+                    &params,
+                    DType::BF16,
+                    &Device::Cpu
+                )?
+            );
+            let no_images = AutoDeviceMapParams::Multimodal {
+                max_seq_len: 4096,
+                max_batch_size: 16,
+                max_image_shape: (512, 512),
+                max_num_images: 0,
+            };
+            assert_eq!(
+                AutoMultimodalLoader.non_mapped_activation_memory_bytes(
+                    &config,
+                    &no_images,
+                    DType::BF16,
+                    &Device::Cpu
+                )?,
+                0
+            );
+        }
+        Ok(())
     }
 
     #[test]

@@ -59,6 +59,7 @@ pub struct ActivationMemoryEstimate {
     pub non_mapped_bytes: usize,
     pub mapped_non_attention_bytes: usize,
     pub non_mapped_non_attention_bytes: usize,
+    pub encoder_bytes: usize,
     pub planned_query_tokens: usize,
     pub logits_bytes_per_query_token: usize,
     pub custom_prefill_mask: bool,
@@ -66,15 +67,23 @@ pub struct ActivationMemoryEstimate {
 }
 
 impl ActivationMemoryEstimate {
-    fn reserve_attention_inventory(mut self, cache_write_workspace: usize) -> Result<Self> {
+    fn reserve_attention_inventory(
+        mut self,
+        cache_write_workspace: usize,
+        max_num_seqs: usize,
+    ) -> Result<Self> {
         self.mapped_bytes = sum(&[self.mapped_bytes, cache_write_workspace])?;
         let attention = self
             .mapped_bytes
             .saturating_sub(self.mapped_non_attention_bytes);
-        // Primary admission combines its non-attention inventory with each layer's attention workspace.
-        self.non_mapped_bytes = self
-            .non_mapped_bytes
-            .max(sum(&[self.non_mapped_non_attention_bytes, attention])?);
+        let text = self
+            .non_mapped_non_attention_bytes
+            .max(self.mapped_non_attention_bytes);
+        let logits = product(&[max_num_seqs, self.logits_bytes_per_query_token])?;
+        self.non_mapped_bytes = self.non_mapped_bytes.max(sum(&[
+            text,
+            sum(&[attention, logits])?.max(self.encoder_bytes),
+        ])?);
         Ok(self)
     }
 }
@@ -83,6 +92,7 @@ impl ActivationMemoryEstimate {
 pub(crate) enum AttentionWorkspaceKind {
     Eager,
     Fused,
+    FusedExpandedKv,
     Paged,
 }
 
@@ -218,7 +228,7 @@ pub(crate) fn attention_workspace_bytes(shape: AttentionMemoryShape) -> Result<u
             ])?;
             sum(&[scores, repeated_kv, mask, output])
         }
-        AttentionWorkspaceKind::Fused => {
+        AttentionWorkspaceKind::Fused | AttentionWorkspaceKind::FusedExpandedKv => {
             let packed_qkv = product(&[
                 batch,
                 dtype_bytes,
@@ -228,7 +238,18 @@ pub(crate) fn attention_workspace_bytes(shape: AttentionMemoryShape) -> Result<u
                 ])?,
             ])?;
             let logsumexp = product(&[batch, query_len, query_heads, DType::F32.size_in_bytes()])?;
-            sum(&[packed_qkv, output, mask, logsumexp])
+            let expanded_kv = if backend == AttentionWorkspaceKind::FusedExpandedKv {
+                product(&[
+                    batch,
+                    kv_len,
+                    query_heads,
+                    sum(&[k_head_dim, v_head_dim])?,
+                    dtype_bytes,
+                ])?
+            } else {
+                0
+            };
+            sum(&[packed_qkv, expanded_kv, output, mask, logsumexp])
         }
         AttentionWorkspaceKind::Paged => {
             let partitions = kv_len.div_ceil(PAGED_PARTITION_TOKENS);
@@ -273,20 +294,19 @@ fn prefill_backend(
         return AttentionWorkspaceKind::Eager;
     };
     let same_heads = shape.k_head_dim == shape.v_head_dim;
-    if same_heads
-        && ctx.device.is_cuda()
-        && !custom_mask
-        && !features.has_alibi
-        && !features.has_sinks
-        && shape.query_heads / shape.kv_heads <= MAX_NATIVE_FLASH_GQA_GROUPS
-        && matches!(ctx.dtype, DType::F16 | DType::BF16)
-        && flash_backend_supports_sdpa(
-            shape.k_head_dim,
-            features.has_softcap,
-            features.has_sliding_window,
-        )
-    {
-        return AttentionWorkspaceKind::Fused;
+    if ctx.device.is_cuda() {
+        if let Some(backend) = cuda_prefill_backend(
+            shape,
+            features,
+            custom_mask,
+            flash_backend_supports_sdpa(
+                shape.k_head_dim,
+                features.has_softcap,
+                features.has_sliding_window,
+            ),
+        ) {
+            return backend;
+        }
     }
     if same_heads
         && ctx.device.is_metal()
@@ -300,6 +320,27 @@ fn prefill_backend(
         return AttentionWorkspaceKind::Fused;
     }
     AttentionWorkspaceKind::Eager
+}
+
+fn cuda_prefill_backend(
+    shape: &AttentionMemoryShape,
+    features: PrefixPrefillAttentionFeatures,
+    custom_mask: bool,
+    flash_supported: bool,
+) -> Option<AttentionWorkspaceKind> {
+    (shape.k_head_dim == shape.v_head_dim
+        && !custom_mask
+        && !features.has_alibi
+        && !features.has_sinks
+        && matches!(shape.dtype, DType::F16 | DType::BF16)
+        && flash_supported)
+        .then_some(
+            if shape.query_heads / shape.kv_heads > MAX_NATIVE_FLASH_GQA_GROUPS {
+                AttentionWorkspaceKind::FusedExpandedKv
+            } else {
+                AttentionWorkspaceKind::Fused
+            },
+        )
 }
 
 fn prefix_query_lengths(max_query: usize, capacity: usize) -> Vec<usize> {
@@ -357,75 +398,133 @@ fn native_metal_prefill_workspace(
     Ok(None)
 }
 
+#[derive(Default)]
+struct PrefixAttentionWorkspace {
+    transient_bytes: usize,
+    #[cfg(all(feature = "cuda", target_family = "unix"))]
+    fa3_pool: crate::flashinfer::Fa3PrefillPoolBytes,
+}
+
 fn prefix_prefill_workspace(
     ctx: &ActivationMemoryContext<'_>,
     cfg: &ModelActivationConfig<'_>,
     layer_idx: usize,
     capacity: usize,
     max_query: usize,
-) -> Result<usize> {
+) -> Result<PrefixAttentionWorkspace> {
     use crate::paged_attention::plan::{
-        gather_prefill_workspace_for_lengths, GatherPrefillWorkspaceRequest, PrefixPrefillPlanInput,
+        gather_prefill_workspace_for_lengths, GatherPrefillWorkspaceRequest, PrefixPrefillPlan,
+        PrefixPrefillPlanInput,
     };
 
     let features = cfg.attention_features(layer_idx);
     let known = features.is_some();
     let features = features.unwrap_or_default();
-    prefix_query_lengths(max_query, capacity)
-        .into_iter()
-        .try_fold(0, |peak, query_len| {
-            let kv_len = cfg.prefix_kv_len(capacity, query_len);
-            if let Some(bytes) =
-                native_metal_prefill_workspace(ctx, cfg, layer_idx, &[query_len], &[kv_len])?
-            {
-                return Ok(peak.max(bytes));
-            }
-            let bytes = gather_prefill_workspace_for_lengths(GatherPrefillWorkspaceRequest {
-                query_lens: &[query_len],
-                kv_lens: &[kv_len],
-                q_heads: cfg.model.num_attn_heads_for_layer(layer_idx),
-                kv_heads: cfg.model.num_kv_heads_for_layer(layer_idx),
-                k_head_dim: cfg.model.k_head_dim_for_layer(layer_idx),
-                v_head_dim: cfg.model.v_head_dim_for_layer(layer_idx),
-                dtype: ctx.dtype,
-                device_is_metal: ctx.device.is_metal(),
-                packed_queries: false,
-                metal_mask_is_compatible: known,
-                plan_input: PrefixPrefillPlanInput {
-                    device_is_cuda: ctx.device.is_cuda(),
-                    dtype: ctx.dtype,
-                    cache_dtype: ctx.paged.cache_type.to_dtype(ctx.dtype),
-                    has_alibi: features.has_alibi,
-                    has_sinks: features.has_sinks,
-                    has_custom_mask: !known || cfg.architecture.custom_prefill_mask,
-                    causality_known: known,
-                    head_size: cfg.model.k_head_dim_for_layer(layer_idx),
-                    has_softcap: features.has_softcap,
-                    has_sliding_window: !known || features.has_sliding_window,
-                    query_layout_is_dense: true,
+    let block_size = ctx
+        .paged
+        .block_size
+        .unwrap_or(DEFAULT_PAGED_ATTENTION_BLOCK_SIZE);
+    #[cfg(all(feature = "cuda", target_family = "unix"))]
+    let fa3_num_sm = crate::flashinfer::fa3_device_num_sm(ctx.device);
+    #[cfg(not(all(feature = "cuda", target_family = "unix")))]
+    let fa3_num_sm: Option<usize> = None;
+    let lengths = prefix_query_lengths(max_query, capacity);
+    #[cfg(all(feature = "cuda", target_family = "unix"))]
+    let lengths = if fa3_num_sm.is_some() && mistralrs_paged_attn::USE_FA3_FP8_PAGED {
+        let mut lengths = lengths;
+        lengths.extend(
+            1..=max_query
+                .min(capacity)
+                .min(crate::flashinfer::FA3_DECODE_MAX_QUERY_LEN),
+        );
+        lengths.sort_unstable();
+        lengths.dedup();
+        lengths
+    } else {
+        lengths
+    };
+    let mut workspace = PrefixAttentionWorkspace::default();
+    for query_len in lengths {
+        let kv_len = cfg.prefix_kv_len(capacity, query_len);
+        if let Some(bytes) =
+            native_metal_prefill_workspace(ctx, cfg, layer_idx, &[query_len], &[kv_len])?
+        {
+            workspace.transient_bytes = workspace.transient_bytes.max(bytes);
+            continue;
+        }
+        let plan_input = PrefixPrefillPlanInput {
+            device_is_cuda: ctx.device.is_cuda(),
+            dtype: ctx.dtype,
+            cache_dtype: ctx.paged.cache_type.to_dtype(ctx.dtype),
+            has_alibi: features.has_alibi,
+            has_sinks: features.has_sinks,
+            has_custom_mask: !known || cfg.architecture.custom_prefill_mask,
+            causality_known: known,
+            head_size: cfg.model.k_head_dim_for_layer(layer_idx),
+            has_softcap: features.has_softcap,
+            has_sliding_window: !known || features.has_sliding_window,
+            query_layout_is_dense: true,
+            query_len,
+            q_heads: cfg.model.num_attn_heads_for_layer(layer_idx),
+            kv_heads: cfg.model.num_kv_heads_for_layer(layer_idx),
+            writes_cache: cfg.model.uses_own_kv_cache_for_layer(layer_idx),
+            is_causal: known && !cfg.architecture.custom_prefill_mask,
+            has_noncausal_mm_context: !known || cfg.architecture.custom_prefill_mask,
+            fa3_supported: fa3_num_sm.is_some()
+                && cfg.model.k_head_dim_for_layer(layer_idx)
+                    == cfg.model.v_head_dim_for_layer(layer_idx),
+            block_size,
+            attention_backend: cfg.model.attention_backend_kind_for_layer(layer_idx),
+        };
+        let bytes = match PrefixPrefillPlan::choose(plan_input) {
+            #[cfg(all(feature = "cuda", target_family = "unix"))]
+            PrefixPrefillPlan::Fa3Fp8Paged => {
+                let native = crate::flashinfer::fa3_prefill_workspace_components(
+                    1,
                     query_len,
-                    q_heads: cfg.model.num_attn_heads_for_layer(layer_idx),
-                    kv_heads: cfg.model.num_kv_heads_for_layer(layer_idx),
-                    writes_cache: cfg.model.uses_own_kv_cache_for_layer(layer_idx),
-                    is_causal: known && !cfg.architecture.custom_prefill_mask,
-                    has_noncausal_mm_context: !known || cfg.architecture.custom_prefill_mask,
-                    fa3_supported: false,
-                    block_size: ctx
-                        .paged
-                        .block_size
-                        .unwrap_or(DEFAULT_PAGED_ATTENTION_BLOCK_SIZE),
-                    attention_backend: cfg.model.attention_backend_kind_for_layer(layer_idx),
-                },
-            })?;
-            let bytes = bytes
+                    plan_input.q_heads,
+                    plan_input.kv_heads,
+                    plan_input.head_size,
+                    kv_len.div_ceil(block_size),
+                    fa3_num_sm.unwrap(),
+                )?;
+                workspace.fa3_pool = workspace.fa3_pool.component_max(native.pool());
+                native.transient_bytes()
+            }
+            #[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
+            PrefixPrefillPlan::FlashAttentionPaged => {
+                crate::paged_attention::plan::paged_flash_prefill_workspace(
+                    query_len,
+                    plan_input.q_heads,
+                    plan_input.head_size,
+                    ctx.dtype,
+                )?
+            }
+            PrefixPrefillPlan::GatherSdpa => {
+                gather_prefill_workspace_for_lengths(GatherPrefillWorkspaceRequest {
+                    query_lens: &[query_len],
+                    kv_lens: &[kv_len],
+                    q_heads: plan_input.q_heads,
+                    kv_heads: plan_input.kv_heads,
+                    k_head_dim: plan_input.head_size,
+                    v_head_dim: cfg.model.v_head_dim_for_layer(layer_idx),
+                    dtype: ctx.dtype,
+                    device_is_metal: ctx.device.is_metal(),
+                    packed_queries: false,
+                    metal_mask_is_compatible: known,
+                    plan_input,
+                })?
                 .checked_mul(if ctx.device.is_metal() {
                     METAL_BUFFER_ROUNDING_BOUND
                 } else {
                     1
                 })
-                .context("prefix attention buffer rounding overflow")?;
-            Ok(peak.max(bytes))
-        })
+                .context("prefix attention buffer rounding overflow")?
+            }
+        };
+        workspace.transient_bytes = workspace.transient_bytes.max(bytes);
+    }
+    Ok(workspace)
 }
 
 fn model_activation_memory(
@@ -457,6 +556,8 @@ fn model_activation_memory(
     let mut mapped_non_attention_bytes = sum(&[hidden, extra_hidden, mlp])?;
     let mut prefill_attention_bytes = 0;
     let mut prefix_attention_bytes = 0;
+    #[cfg(all(feature = "cuda", target_family = "unix"))]
+    let mut fa3_pool = crate::flashinfer::Fa3PrefillPoolBytes::default();
     let mut decode_attention_bytes = 0;
     let mut cold_mask_variants = std::collections::HashSet::new();
     let mut prefix_mask_variants = std::collections::HashSet::new();
@@ -546,8 +647,12 @@ fn model_activation_memory(
         prefill_attention_bytes = prefill_attention_bytes.max(prefill_bytes);
         // Reserve one full-prefix row; runtime admission reduces larger cohorts when their gathers cannot fit.
         if let Some(capacity) = prefix_context_capacity {
-            let bytes = prefix_prefill_workspace(ctx, &cfg, layer_idx, capacity, max_query)?;
-            prefix_attention_bytes = prefix_attention_bytes.max(bytes);
+            let workspace = prefix_prefill_workspace(ctx, &cfg, layer_idx, capacity, max_query)?;
+            prefix_attention_bytes = prefix_attention_bytes.max(workspace.transient_bytes);
+            #[cfg(all(feature = "cuda", target_family = "unix"))]
+            {
+                fa3_pool = fa3_pool.component_max(workspace.fa3_pool);
+            }
             let query_len = max_query.min(capacity);
             let kv_len = cfg.prefix_kv_len(capacity, query_len);
             if has_native_custom_mask
@@ -629,12 +734,14 @@ fn model_activation_memory(
     let attention_bytes = prefill_attention_bytes
         .max(prefix_attention_bytes)
         .max(decode_attention_bytes);
+    #[cfg(all(feature = "cuda", target_family = "unix"))]
+    let attention_bytes = sum(&[attention_bytes, fa3_pool.bytes()?])?;
     let logits = product(&[
         ctx.limits.max_num_seqs,
         cfg.architecture.vocab_size,
         dtype_bytes + DType::F32.size_in_bytes(),
     ])?;
-    let non_mapped_non_attention_bytes = sum(&[hidden, extra_hidden, logits])?;
+    let non_mapped_non_attention_bytes = sum(&[hidden, extra_hidden])?;
     let rounding = if ctx.device.is_metal() {
         METAL_BUFFER_ROUNDING_BOUND
     } else {
@@ -648,9 +755,15 @@ fn model_activation_memory(
         .context("non-mapped activation buffer rounding overflow")?;
     Ok(ActivationMemoryEstimate {
         mapped_bytes: sum(&[mapped_non_attention_bytes, attention_bytes])?,
-        non_mapped_bytes: non_mapped_non_attention_bytes,
+        non_mapped_bytes: sum(&[
+            non_mapped_non_attention_bytes,
+            logits
+                .checked_mul(rounding)
+                .context("logits buffer rounding overflow")?,
+        ])?,
         mapped_non_attention_bytes,
         non_mapped_non_attention_bytes,
+        encoder_bytes: 0,
         planned_query_tokens: tokens,
         logits_bytes_per_query_token: product(&[
             cfg.architecture.vocab_size,
@@ -718,14 +831,27 @@ pub(crate) fn estimate_model_activation_memory(
         model: &*model,
         architecture,
     };
-    let mut native_prefill = ctx.device.is_metal()
-        && (!architecture.custom_prefill_mask || architecture.metal_prefill_mask_is_structured);
+    let mut complete_attention = ctx.device.is_metal()
+        && (!architecture.custom_prefill_mask || architecture.metal_prefill_mask_is_structured)
+        || ctx.device.is_cuda() && !architecture.custom_prefill_mask;
     let mut paged_layers = 0;
     for layer in (0..model.num_layers()).filter(|&layer| model.layer_has_paged_kv_cache(layer)) {
         paged_layers += 1;
-        native_prefill &=
-            native_metal_prefill_workspace(&ctx, &cfg, layer, &[max_query], &[max_query])?
-                .is_some();
+        complete_attention &= if ctx.device.is_cuda() {
+            cfg.attention_features(layer).is_some_and(|features| {
+                !features.has_alibi
+                    && !features.has_sinks
+                    && model.k_head_dim_for_layer(layer) == model.v_head_dim_for_layer(layer)
+                    && matches!(ctx.dtype, DType::F16 | DType::BF16)
+                    && flash_backend_supports_sdpa(
+                        model.k_head_dim_for_layer(layer),
+                        features.has_softcap,
+                        features.has_sliding_window,
+                    )
+            })
+        } else {
+            native_metal_prefill_workspace(&ctx, &cfg, layer, &[max_query], &[max_query])?.is_some()
+        };
     }
     let mut estimate = model_activation_memory(&ctx, cfg)?;
     let encoder_params = match &params {
@@ -745,14 +871,13 @@ pub(crate) fn estimate_model_activation_memory(
             max_num_images: *max_num_images,
         },
     };
-    let encoder = product(&[
-        loader.non_mapped_max_act_size_elems(config, &encoder_params)?,
-        DType::F32.size_in_bytes(),
-    ])?;
-    estimate.non_mapped_non_attention_bytes =
-        sum(&[estimate.non_mapped_non_attention_bytes, encoder])?;
-    estimate.non_mapped_bytes = estimate.non_mapped_non_attention_bytes;
-    if !native_prefill || paged_layers == 0 {
+    estimate.encoder_bytes = loader.non_mapped_activation_memory_bytes(
+        config,
+        &encoder_params,
+        ctx.dtype,
+        ctx.device,
+    )?;
+    if !complete_attention || paged_layers == 0 {
         let legacy = product(&[
             loader.mapped_max_act_size_elems(config, &params)?,
             DType::F32.size_in_bytes(),
@@ -771,7 +896,7 @@ pub(crate) fn estimate_model_activation_memory(
     };
     #[cfg(not(feature = "metal"))]
     let cache_write_workspace = 0;
-    estimate.reserve_attention_inventory(cache_write_workspace)
+    estimate.reserve_attention_inventory(cache_write_workspace, ctx.limits.max_num_seqs)
 }
 
 pub(crate) fn apply_model_activation_memory(
@@ -793,6 +918,9 @@ pub(crate) fn apply_model_activation_memory(
     paged.mapped_non_attention_memory_reservation_bytes = paged
         .mapped_non_attention_memory_reservation_bytes
         .max(estimate.mapped_non_attention_bytes);
+    paged.encoder_activation_memory_reservation_bytes = paged
+        .encoder_activation_memory_reservation_bytes
+        .max(estimate.encoder_bytes);
     paged.planned_query_tokens = paged
         .planned_query_tokens
         .max(estimate.planned_query_tokens);
@@ -806,12 +934,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn primary_encoder_reservation_includes_planned_attention() -> Result<()> {
+    fn primary_text_reservation_includes_planned_attention_and_logits() -> Result<()> {
         let baseline = ActivationMemoryEstimate {
             mapped_bytes: 30,
             non_mapped_bytes: 100,
             mapped_non_attention_bytes: 20,
             non_mapped_non_attention_bytes: 100,
+            encoder_bytes: 0,
             planned_query_tokens: 512,
             logits_bytes_per_query_token: 7,
             custom_prefill_mask: false,
@@ -822,8 +951,8 @@ mod tests {
                 mapped_bytes: baseline.mapped_non_attention_bytes + attention,
                 ..baseline
             }
-            .reserve_attention_inventory(0)?;
-            assert_eq!(estimate.non_mapped_bytes, 100 + attention);
+            .reserve_attention_inventory(0, 1)?;
+            assert_eq!(estimate.non_mapped_bytes, 107 + attention);
             assert_eq!(estimate.mapped_bytes, 20 + attention);
             let mut paged = PagedAttentionConfig::new(
                 Some(32),
@@ -834,7 +963,7 @@ mod tests {
             let plan = paged.runtime_memory_plan();
             assert_eq!(
                 plan.activation_bytes(true, baseline.planned_query_tokens)?,
-                plan.non_attention_bytes(true, baseline.planned_query_tokens)? + attention
+                plan.non_attention_bytes(true, baseline.planned_query_tokens, 1)? + attention
             );
             assert_eq!(plan.mapped_activation_bytes, 20 + attention);
             assert_eq!(plan.primary_non_attention_bytes, 100);
@@ -851,18 +980,45 @@ mod tests {
             non_mapped_bytes: 200,
             mapped_non_attention_bytes: 80,
             non_mapped_non_attention_bytes: 50,
+            encoder_bytes: 0,
             planned_query_tokens: 512,
             logits_bytes_per_query_token: 0,
             custom_prefill_mask: false,
             metal_prefill_mask_is_structured: false,
         };
-        assert_eq!(estimate.reserve_attention_inventory(0)?, estimate);
+        assert_eq!(estimate.reserve_attention_inventory(0, 1)?, estimate);
         assert!(ActivationMemoryEstimate {
             non_mapped_non_attention_bytes: usize::MAX,
             ..estimate
         }
-        .reserve_attention_inventory(0)
+        .reserve_attention_inventory(0, 1)
         .is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn encoder_and_text_attention_use_separate_startup_peaks() -> Result<()> {
+        let estimate = ActivationMemoryEstimate {
+            mapped_bytes: 80,
+            mapped_non_attention_bytes: 20,
+            non_mapped_non_attention_bytes: 40,
+            encoder_bytes: 100,
+            planned_query_tokens: 512,
+            logits_bytes_per_query_token: 5,
+            ..Default::default()
+        }
+        .reserve_attention_inventory(0, 2)?;
+        assert_eq!(estimate.non_mapped_bytes, 140);
+        assert_eq!(estimate.non_mapped_non_attention_bytes, 40);
+        let mut paged = PagedAttentionConfig::new(
+            Some(32),
+            MemoryGoal::Auto,
+            crate::paged_attention::PagedCacheType::Auto,
+        )?;
+        apply_model_activation_memory(&mut paged, estimate);
+        let plan = paged.runtime_memory_plan();
+        assert_eq!(plan.encoder_activation_bytes, 100);
+        assert_eq!(plan.non_attention_bytes(true, 512, 2)?, 50);
         Ok(())
     }
 
@@ -876,12 +1032,13 @@ mod tests {
             non_mapped_bytes: 100,
             mapped_non_attention_bytes: 20,
             non_mapped_non_attention_bytes: 100,
+            encoder_bytes: 0,
             planned_query_tokens: QUERY_TOKENS,
             logits_bytes_per_query_token: 0,
             custom_prefill_mask: false,
             metal_prefill_mask_is_structured: false,
         }
-        .reserve_attention_inventory(CACHE_WRITE)?;
+        .reserve_attention_inventory(CACHE_WRITE, 1)?;
         let mut paged = PagedAttentionConfig::new(
             Some(32),
             MemoryGoal::Auto,
@@ -892,14 +1049,16 @@ mod tests {
         for primary in [false, true] {
             assert_eq!(
                 plan.activation_bytes(primary, QUERY_TOKENS)?,
-                plan.non_attention_bytes(primary, QUERY_TOKENS)? + PREFIX_ATTENTION + CACHE_WRITE
+                plan.non_attention_bytes(primary, QUERY_TOKENS, 1)?
+                    + PREFIX_ATTENTION
+                    + CACHE_WRITE
             );
         }
         assert!(ActivationMemoryEstimate {
             mapped_bytes: usize::MAX,
             ..estimate
         }
-        .reserve_attention_inventory(CACHE_WRITE)
+        .reserve_attention_inventory(CACHE_WRITE, 1)
         .is_err());
         Ok(())
     }
@@ -927,8 +1086,8 @@ mod tests {
         let plan = paged.runtime_memory_plan();
         assert!(plan.custom_prefill_mask);
         assert!(plan.metal_prefill_mask_is_structured);
-        assert_eq!(plan.non_attention_bytes(true, 1)?, 200);
-        assert_eq!(plan.non_attention_bytes(false, 1)?, 100);
+        assert_eq!(plan.non_attention_bytes(true, 512, 1)?, 200);
+        assert_eq!(plan.non_attention_bytes(false, 512, 1)?, 100);
         Ok(())
     }
 
@@ -1287,6 +1446,34 @@ mod tests {
             ..eager
         };
         assert!(attention_workspace_bytes(fused)? < attention_workspace_bytes(eager)? / 8);
+        Ok(())
+    }
+
+    #[test]
+    fn large_gqa_prefill_reserves_expanded_kv_instead_of_eager_scores() -> Result<()> {
+        let shape = AttentionMemoryShape {
+            batch: 1,
+            query_len: 4096,
+            kv_len: 4096,
+            query_heads: 32,
+            kv_heads: 2,
+            k_head_dim: 256,
+            v_head_dim: 256,
+            dtype: DType::BF16,
+            backend: AttentionWorkspaceKind::Eager,
+            materialized_mask: false,
+        };
+        let features = PrefixPrefillAttentionFeatures::default();
+        let backend = cuda_prefill_backend(&shape, features, false, true).unwrap();
+        assert_eq!(backend, AttentionWorkspaceKind::FusedExpandedKv);
+        let fused = attention_workspace_bytes(AttentionMemoryShape { backend, ..shape })?;
+        assert_eq!(
+            fused,
+            4096 * 2 * (32 * 256 + 2 * 512 + 32 * 512 + 32 * 256) + 4096 * 32 * 4
+        );
+        assert!(fused < attention_workspace_bytes(shape)? / 4);
+        assert!(cuda_prefill_backend(&shape, features, true, true).is_none());
+        assert!(cuda_prefill_backend(&shape, features, false, false).is_none());
         Ok(())
     }
 

@@ -13,7 +13,6 @@ use candle_core::cuda_backend::cudarc::driver::{
 };
 use candle_core::{DType, Device, DeviceLocation, Storage, Tensor, Var};
 
-#[cfg(target_family = "unix")]
 use crate::paged_attention::plan::DecodePlan;
 use crate::{
     flashinfer::{
@@ -42,6 +41,7 @@ const CUDA_GRAPH_INSTANTIATE_FLAGS: u64 =
     sys::CUgraphInstantiate_flags_enum::CUDA_GRAPH_INSTANTIATE_FLAG_AUTO_FREE_ON_LAUNCH.0 as u64;
 // Matches the standard CUDA paged-attention V2 partition size.
 const PAGED_ATTENTION_PARTITION_SIZE: usize = 512;
+const CAPTURE_ATTENTION_OUTPUT_BUFFERS: usize = 2;
 const TARGET_CUDA_DECODE_GRAPH_CACHE_DEFAULT_CAPACITY: usize = 64;
 const TARGET_CUDA_DECODE_GRAPH_CACHE_MAX_CAPACITY: usize = 96;
 const TARGET_CUDA_DECODE_GRAPH_CACHE_CAPACITY_QUANTUM: usize = 16;
@@ -117,8 +117,13 @@ impl CudaGraphCaptureMemory<'_> {
                 .ok_or_else(|| candle_core::Error::msg("CUDA capture input size overflow"))?;
         }
         let mut attention_bytes = 0;
+        let mut attention_is_complete = cfg!(target_family = "unix")
+            && self.model.is_some()
+            && self.plan.is_none_or(|plan| !plan.custom_prefill_mask);
         if let Some(model) = self.model {
+            #[cfg(target_family = "unix")]
             let mut fa3_specs = std::collections::HashSet::new();
+            #[allow(unused_mut)]
             let mut fa3_bytes = 0usize;
             let mut transient_attention_bytes = 0usize;
             let mut flashinfer_heads = 0usize;
@@ -135,7 +140,8 @@ impl CudaGraphCaptureMemory<'_> {
                 context
             };
             let partitions = context.div_ceil(PAGED_ATTENTION_PARTITION_SIZE).max(1);
-            for (layer, (key_cache, _)) in self.kv_cache.iter().enumerate().take(model.num_layers())
+            for (layer, (key_cache, _value_cache)) in
+                self.kv_cache.iter().enumerate().take(model.num_layers())
             {
                 if !key_cache.device().same_device(device) || !model.layer_has_paged_kv_cache(layer)
                 {
@@ -143,43 +149,93 @@ impl CudaGraphCaptureMemory<'_> {
                 }
                 let flashinfer = model.attention_backend_kind_for_layer(layer)
                     == AttentionBackendKind::FlashInfer;
+                let features = model.prefix_prefill_attention_features(layer);
+                attention_is_complete &= features.is_some_and(|features| {
+                    !DecodePlan::requires_host_context_lengths(
+                        model.attention_backend_kind_for_layer(layer),
+                        model.k_head_dim_for_layer(layer),
+                    ) && (flashinfer || !features.has_sliding_window)
+                });
                 if flashinfer {
                     flashinfer_heads = flashinfer_heads.max(model.num_attn_heads_for_layer(layer));
                     flashinfer_dim = flashinfer_dim.max(model.v_head_dim_for_layer(layer));
                 }
-                #[allow(unused_mut)]
-                let mut layer_partitions = partitions;
                 #[cfg(target_family = "unix")]
-                if key_cache.dtype() == DType::F8E4M3
-                    && model.attention_backend_kind_for_layer(layer)
-                        == AttentionBackendKind::FlashInfer
+                if mistralrs_paged_attn::USE_FA3_FP8_PAGED
+                    && self.activation_dtype == DType::BF16
+                    && flashinfer
+                    && key_cache.dtype() == DType::F8E4M3
+                    && _value_cache.dtype() == DType::F8E4M3
+                    && crate::flashinfer::fa3_device_num_sm(device).is_some()
                 {
-                    layer_partitions =
-                        layer_partitions.max(crate::flashinfer::FA3_DECODE_NUM_SPLITS);
+                    let (num_pages, kv_heads, page_size, head_dim) = key_cache.dims4()?;
+                    let batch = self.step.input_ids.dim(0)?;
+                    let query_len = self.step.input_ids.dim(1)?;
+                    let key = (crate::flashinfer::Fa3PagedScheduleShape {
+                        device: device.location(),
+                        view: crate::flashinfer::Fa3DecodeView::Logical,
+                        batch,
+                        query_len,
+                        causal: query_len > 1,
+                        q_heads: model.num_attn_heads_for_layer(layer),
+                        kv_heads,
+                        head_dim,
+                        page_size,
+                    })
+                    .decode_schedule_key();
+                    if let Some(key) = key.filter(|_| {
+                        num_pages > 0
+                            && _value_cache.dims() == key_cache.dims()
+                            && _value_cache.device().same_device(device)
+                    }) {
+                        if let Some(indices) =
+                            self.step.metadata.flashinfer.as_ref().and_then(|metadata| {
+                                metadata
+                                    .views
+                                    .logical
+                                    .paged_kv
+                                    .indices
+                                    .get(&device.location())
+                            })
+                        {
+                            if fa3_specs.insert(key) {
+                                let bytes = super::cuda_graph_budget::fa3_capture_pool_bytes(
+                                    super::cuda_graph_budget::Fa3CaptureMemoryShape {
+                                        batch,
+                                        query_len,
+                                        heads: key.q_heads,
+                                        head_dim,
+                                        splits: key.num_splits,
+                                        pages_per_sequence: indices
+                                            .elem_count()
+                                            .div_ceil(query_tokens),
+                                    },
+                                )
+                                .map_err(candle_core::Error::wrap)?;
+                                fa3_bytes = fa3_bytes.checked_add(bytes).ok_or_else(|| {
+                                    candle_core::Error::msg("FA3 capture workspace size overflow")
+                                })?;
+                            }
+                        }
+                    }
                 }
                 let bytes = super::cuda_graph_budget::partitioned_attention_bytes(
                     query_tokens,
                     model.num_attn_heads_for_layer(layer),
                     model.v_head_dim_for_layer(layer),
-                    layer_partitions.checked_add(1).ok_or_else(|| {
-                        candle_core::Error::msg("CUDA capture partition size overflow")
-                    })?,
-                    DType::F32.size_in_bytes(),
+                    if flashinfer {
+                        CAPTURE_ATTENTION_OUTPUT_BUFFERS
+                    } else {
+                        partitions
+                            .checked_add(CAPTURE_ATTENTION_OUTPUT_BUFFERS)
+                            .ok_or_else(|| {
+                                candle_core::Error::msg("CUDA capture partition size overflow")
+                            })?
+                    },
+                    self.activation_dtype.size_in_bytes(),
                 )
                 .map_err(candle_core::Error::wrap)?;
-                if key_cache.dtype() == DType::F8E4M3 && flashinfer {
-                    if fa3_specs.insert((
-                        model.num_attn_heads_for_layer(layer),
-                        model.num_kv_heads_for_layer(layer),
-                        model.k_head_dim_for_layer(layer),
-                    )) {
-                        fa3_bytes = fa3_bytes.checked_add(bytes).ok_or_else(|| {
-                            candle_core::Error::msg("FA3 capture workspace size overflow")
-                        })?;
-                    }
-                } else {
-                    transient_attention_bytes = transient_attention_bytes.max(bytes);
-                }
+                transient_attention_bytes = transient_attention_bytes.max(bytes);
             }
             let split_rows =
                 flashinfer_split_rows(&self.step.metadata, self.step.input_ids.dim(0)?)?;
@@ -215,6 +271,7 @@ impl CudaGraphCaptureMemory<'_> {
             query_tokens,
             input_bytes,
             attention_bytes,
+            attention_is_complete,
         })
     }
 

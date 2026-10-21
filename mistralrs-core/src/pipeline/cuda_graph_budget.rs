@@ -1,11 +1,17 @@
 use anyhow::{Context, Result};
+#[cfg(any(target_family = "unix", test))]
+use std::mem::size_of;
 
 use crate::{memory_plan::RuntimeMemoryPlan, utils::memory_usage::DeviceMemory};
+
+#[cfg(any(target_family = "unix", test))]
+const FA3_SCHEDULER_BATCH_ALIGNMENT: usize = 4;
 
 pub(super) struct CaptureMemoryShape {
     pub query_tokens: usize,
     pub input_bytes: usize,
     pub attention_bytes: usize,
+    pub attention_is_complete: bool,
 }
 
 pub(super) fn capture_workspace_bytes(
@@ -24,25 +30,74 @@ pub(super) fn capture_workspace_bytes(
             plan.mapped_non_attention_bytes,
         )
     };
-    let scaled_non_attention = non_attention
-        .checked_mul(shape.query_tokens)
-        .context("CUDA capture activation size overflow")?
-        .div_ceil(plan.planned_query_tokens.max(1));
-    let logits = if primary {
-        plan.logits_bytes_per_query_token
-            .checked_mul(shape.query_tokens)
-            .context("CUDA capture logits size overflow")?
+    let attention = if shape.attention_is_complete {
+        shape.attention_bytes
     } else {
-        0
+        baseline
+            .saturating_sub(non_attention)
+            .max(shape.attention_bytes)
     };
-    let attention = baseline
-        .saturating_sub(non_attention)
-        .max(shape.attention_bytes);
-    scaled_non_attention
-        .max(logits)
+    plan.non_attention_bytes(primary, shape.query_tokens, shape.query_tokens)?
         .checked_add(attention)
         .and_then(|bytes| bytes.checked_add(shape.input_bytes))
         .context("CUDA capture workspace size overflow")
+}
+
+#[derive(Clone, Copy)]
+#[cfg(any(target_family = "unix", test))]
+pub(super) struct Fa3CaptureMemoryShape {
+    pub batch: usize,
+    pub query_len: usize,
+    pub heads: usize,
+    pub head_dim: usize,
+    pub splits: usize,
+    pub pages_per_sequence: usize,
+}
+
+#[cfg(any(target_family = "unix", test))]
+pub(super) fn fa3_capture_pool_bytes(shape: Fa3CaptureMemoryShape) -> Result<usize> {
+    let product = |parts: &[usize]| {
+        parts.iter().try_fold(1usize, |total, part| {
+            total
+                .checked_mul(*part)
+                .context("FA3 capture size overflow")
+        })
+    };
+    let rows = product(&[shape.batch, shape.query_len])?;
+    let rounded_batch = shape
+        .batch
+        .div_ceil(FA3_SCHEDULER_BATCH_ALIGNMENT)
+        .checked_mul(FA3_SCHEDULER_BATCH_ALIGNMENT)
+        .context("FA3 capture batch size overflow")?;
+    let scheduler_rows = product(&[2 + usize::from(shape.query_len > 1), rounded_batch])?
+        .checked_add(1)
+        .context("FA3 capture scheduler size overflow")?;
+    let cumulative_rows = shape
+        .batch
+        .checked_add(1)
+        .context("FA3 capture rows overflow")?;
+    [
+        product(&[rows, shape.heads, shape.head_dim])?,
+        product(&[
+            shape.splits,
+            rows,
+            shape.heads,
+            shape.head_dim,
+            size_of::<f32>(),
+        ])?,
+        product(&[shape.splits, rows, shape.heads, size_of::<f32>()])?,
+        product(&[rows, shape.heads, size_of::<f32>()])?,
+        product(&[shape.batch, shape.pages_per_sequence, size_of::<i32>()])?,
+        product(&[scheduler_rows, size_of::<i32>()])?,
+        product(&[cumulative_rows, size_of::<i32>()])?,
+        product(&[shape.batch, size_of::<i32>()])?,
+    ]
+    .into_iter()
+    .try_fold(0usize, |total, bytes| {
+        total
+            .checked_add(bytes)
+            .context("FA3 capture pool size overflow")
+    })
 }
 
 pub(super) fn capture_memory_available(
@@ -104,6 +159,7 @@ mod tests {
             mapped_activation_bytes: 8 * GIB,
             primary_non_attention_bytes: 8 * GIB,
             mapped_non_attention_bytes: 6 * GIB,
+            encoder_activation_bytes: 16 * GIB,
             planned_query_tokens: 4096,
             logits_bytes_per_query_token: 1024 * 1024,
             custom_prefill_mask: false,
@@ -112,29 +168,37 @@ mod tests {
     }
 
     #[test]
-    fn capture_preserves_attention_scratch_but_scales_decode_activations() -> Result<()> {
+    fn complete_capture_uses_decode_workspace_and_excludes_encoder_reservations() -> Result<()> {
         let shape = CaptureMemoryShape {
             query_tokens: 8,
             input_bytes: 32,
             attention_bytes: GIB,
+            attention_is_complete: true,
         };
         assert_eq!(
             capture_workspace_bytes(plan(), true, &shape)?,
-            2 * GIB + 16 * 1024 * 1024 + 32
+            GIB + 24 * 1024 * 1024 + 32
+        );
+        let mut larger_prefill = plan();
+        larger_prefill.primary_activation_bytes = 100 * GIB;
+        larger_prefill.encoder_activation_bytes = 64 * GIB;
+        assert_eq!(
+            capture_workspace_bytes(larger_prefill, true, &shape)?,
+            capture_workspace_bytes(plan(), true, &shape)?
         );
         let shape = CaptureMemoryShape {
-            attention_bytes: 3 * GIB,
+            attention_is_complete: false,
             ..shape
         };
         assert_eq!(
             capture_workspace_bytes(plan(), true, &shape)?,
-            3 * GIB + 16 * 1024 * 1024 + 32
+            2 * GIB + 24 * 1024 * 1024 + 32
         );
         Ok(())
     }
 
     #[test]
-    fn capture_reserves_full_logits_rows_when_prefill_scaling_is_smaller() -> Result<()> {
+    fn capture_adds_all_query_logits_to_text_activations() -> Result<()> {
         let mut plan = plan();
         plan.primary_non_attention_bytes = GIB;
         plan.primary_activation_bytes = GIB;
@@ -142,10 +206,11 @@ mod tests {
             query_tokens: 8,
             input_bytes: 0,
             attention_bytes: 0,
+            attention_is_complete: true,
         };
         assert_eq!(
             capture_workspace_bytes(plan, true, &shape)?,
-            8 * 1024 * 1024
+            10 * 1024 * 1024
         );
         Ok(())
     }
@@ -161,10 +226,11 @@ mod tests {
             query_tokens: 8,
             input_bytes: 32,
             attention_bytes: 1024,
+            attention_is_complete: true,
         };
         assert_eq!(
             capture_workspace_bytes(plan, true, &shape)?,
-            8 * 1024 * 1024 + shape.input_bytes + shape.attention_bytes
+            10 * 1024 * 1024 + shape.input_bytes + shape.attention_bytes
         );
         assert_eq!(
             capture_workspace_bytes(plan, false, &shape)?,
@@ -262,6 +328,7 @@ mod tests {
             query_tokens: usize::MAX,
             input_bytes: 0,
             attention_bytes: 0,
+            attention_is_complete: true,
         };
         assert!(capture_workspace_bytes(plan(), true, &shape).is_err());
         assert!(partitioned_attention_bytes(usize::MAX, 8, 128, 2, 2).is_err());
@@ -281,6 +348,45 @@ mod tests {
         );
         assert!(capture_attention_bytes(usize::MAX, 1, 0).is_err());
         assert!(capture_attention_bytes(usize::MAX, 0, 1).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn fa3_capture_scratch_uses_schedule_splits_and_only_page_tables_grow_with_context(
+    ) -> Result<()> {
+        const SPLITS: usize = 32;
+        const SHORT_PAGES: usize = 128;
+        const LONG_PAGES: usize = 31_563;
+        let shape = Fa3CaptureMemoryShape {
+            batch: 16,
+            query_len: 8,
+            heads: 24,
+            head_dim: 256,
+            splits: SPLITS,
+            pages_per_sequence: SHORT_PAGES,
+        };
+        let short = fa3_capture_pool_bytes(shape)?;
+        let long = fa3_capture_pool_bytes(Fa3CaptureMemoryShape {
+            pages_per_sequence: LONG_PAGES,
+            ..shape
+        })?;
+        assert_eq!(
+            long - short,
+            shape.batch * (LONG_PAGES - SHORT_PAGES) * size_of::<i32>()
+        );
+        let accumulator = shape.batch
+            * shape.query_len
+            * shape.heads
+            * shape.head_dim
+            * SPLITS
+            * size_of::<f32>();
+        assert!(long > accumulator);
+        assert!(long < accumulator + 4 * 1024 * 1024);
+        assert!(fa3_capture_pool_bytes(Fa3CaptureMemoryShape {
+            batch: usize::MAX,
+            ..shape
+        })
+        .is_err());
         Ok(())
     }
 }

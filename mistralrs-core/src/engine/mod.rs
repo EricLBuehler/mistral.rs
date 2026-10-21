@@ -1654,6 +1654,7 @@ impl Engine {
                             primary_device,
                             memory_plan,
                             _metal_hnd_by_layer,
+                            supports_packed_prefill,
                         ) = {
                             let pipeline = get_mut_arcmutex!(self.pipeline);
                             let metadata = pipeline.get_metadata();
@@ -1690,6 +1691,7 @@ impl Engine {
                                             .collect::<Vec<_>>()
                                     })
                                     .unwrap_or_default(),
+                                pipeline.supports_packed_prefill(),
                             )
                         };
                         let mut rejection = None;
@@ -1854,15 +1856,40 @@ impl Engine {
                                 }
                             };
                             let reserve = (|| -> candle_core::Result<_> {
-                                let query_tokens = query_lens
-                                    .iter()
-                                    .copied()
-                                    .max()
-                                    .unwrap_or_default()
-                                    .checked_mul(query_lens.len())
-                                    .ok_or_else(|| {
-                                        candle_core::Error::msg("padded query token count overflow")
-                                    })?;
+                                let mut has_encoder_input = false;
+                                let mut return_raw_logits = false;
+                                let mut cold = true;
+                                let mut final_chunk = true;
+                                for (index, seq) in output.scheduled.iter().enumerate() {
+                                    let seq = get_mut_arcmutex!(seq);
+                                    has_encoder_input |= is_prompt
+                                        && (seq.has_images()
+                                            || seq.has_audios()
+                                            || seq.has_videos()
+                                            || !seq.mm_features().is_empty());
+                                    return_raw_logits |= seq.return_raw_logits;
+                                    cold &=
+                                        seq.num_computed_tokens() == 0 && seq.token_offset() == 0;
+                                    if let Some(chunk) = output
+                                        .scheduled_prompt_chunks
+                                        .as_ref()
+                                        .and_then(|chunks| chunks.get(index))
+                                    {
+                                        cold &= chunk.start == 0;
+                                        final_chunk &= chunk.end == seq.get_toks().len();
+                                    }
+                                }
+                                let packed = crate::pipeline::text_models_inputs_processor::uses_packed_prefill(
+                                    &query_lens,
+                                    is_prompt && supports_packed_prefill && device_is_cuda
+                                        && crate::using_flash_attn() && !return_raw_logits
+                                        && !has_encoder_input,
+                                    cold,
+                                    final_chunk,
+                                    !has_noncausal_mm_context,
+                                );
+                                let query_tokens =
+                                    memory::forward_query_tokens(&query_lens, packed)?;
                                 #[cfg(feature = "metal")]
                                 let attention_bytes = if is_prompt
                                     && execution_devices.iter().any(candle_core::Device::is_metal)
@@ -1886,20 +1913,21 @@ impl Engine {
                                 };
                                 #[cfg(not(feature = "metal"))]
                                 let attention_bytes = workspace.bytes;
-                                let extra_raw_logit_tokens = if output
-                                    .scheduled
-                                    .iter()
-                                    .any(|seq| get_mut_arcmutex!(seq).return_raw_logits)
-                                {
-                                    query_tokens.saturating_sub(query_lens.len())
-                                } else {
-                                    0
-                                };
+                                let extra_logit_tokens = memory::extra_logit_tokens(
+                                    query_tokens,
+                                    query_lens.len(),
+                                    is_prompt,
+                                    return_raw_logits,
+                                );
                                 let bytes = memory::forward_workspace_bytes(
                                     memory_plan,
-                                    query_tokens,
+                                    memory::ForwardMemoryShape {
+                                        query_tokens,
+                                        sequences: query_lens.len(),
+                                        has_encoder_input,
+                                        extra_logit_tokens,
+                                    },
                                     attention_bytes,
-                                    extra_raw_logit_tokens,
                                     workspace.attention_is_complete,
                                 )?;
                                 Ok((bytes, attention_bytes))

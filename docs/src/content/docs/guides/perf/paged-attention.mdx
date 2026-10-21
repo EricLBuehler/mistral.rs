@@ -117,6 +117,8 @@ On discrete GPUs, `Auto` leaves the larger of 5% of physical memory or 1 GiB as 
 
 The planner accounts for serving concurrency and prompt-processing limits. Increasing them can require more temporary memory and leave less room for the cache. Long cached prefixes may also need smaller batches to fit. These estimates guide allocation; the engine checks available memory before running each batch.
 
+For supported fused attention paths, forward admission estimates workspace from the scheduled tokens and selected attention kernel. Encoder work is reserved for batches with multimodal inputs, and CUDA decode graph capture uses its own query shape. Startup sizing still reserves room for the configured workload. Unknown attention paths retain conservative estimates.
+
 ### Explicit capacity and utilization
 
 Byte budgets allocate whole cache blocks within the requested limit. Metal also includes hardware buffer rounding in this budget; CUDA uses logical buffer bytes. Alignment and the reserved cache block can make usable token capacity lower than a simple bytes-per-token estimate. Token budgets round up to whole usable blocks and check the additional reserved block and allocation overhead against the device budget.
