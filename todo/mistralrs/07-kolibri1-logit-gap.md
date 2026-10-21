@@ -381,6 +381,38 @@ softmax cannot be the cause and the difference is in the projections - the query
 value projections or the output projection - rather than in the attention's accumulation over
 the sequence.
 
+**What the 0.91 bf16 ulp is: three roundings, and the references do not have them.** Our
+attention block's output differs from the peer's CPU path by 3.54e-03 relative, which is 0.91
+of a bf16 ulp. One extra rounding accounts for 0.29 of an ulp, so this is about three.
+
+The reference implementations compute activations in f32 and we do not. llama.cpp's default
+`ftype` is `LLAMA_FTYPE_ALL_F32` and none of its dumped values are bf16-representable. The
+peer's CPU path keeps the residual stream in f32 (its `l_out` is f32, 21% bf16-representable,
+against 100% for its attention and norm outputs). Ours is bf16 throughout.
+
+Three places where that shows, in the attention block alone:
+
+1. The Q, K and V projections' outputs are bf16 for us and f32 for them.
+2. The attention output is rounded to bf16 before the output projection for us and stays f32
+   for them.
+3. The output projection's output is bf16 for us and f32 for them.
+
+The attention kernel's internals are already f32 - `dot_f32`, `mad_f32` and
+`simd_softmax_row_f32` - so this is not the accumulation; it is the width of the tensors
+going into and out of it.
+
+**The cost of matching them is close to nothing, and that is the useful part.** The phases
+that dominate a bf16 decode step are bound by reading the *weights*: `attn_proj` 35.43 ms,
+`routed` 60.17 ms, `shared` 5.83 ms, and the weights stay bf16 either way. The activations
+are 2560 wide, so the residual stream and q/k/v are kilobytes per layer against megabytes of
+weights, and the KV cache is 105 MB in bf16 against 210 MB in f32. The attention phase is 1.1%
+of the step, so doubling it costs about half a percent.
+
+So the change is the activation dtype, not the kernels: keep the residual stream and the
+projections' outputs in f32 while the weights stay bf16. It is a plumbing change through the
+layers rather than a kernel change, and it is the single highest-value change for matching
+the reference implementations, because it is the whole 3.54e-03.
+
 **The device is a fourth implementation, and it is a separate cluster.** The peer's TT device
 taps and selections, for the same raw ids and the same quantities, make the geometry
 complete. The relative rms of the difference at layer 0, `attn_out_pre_norm`:
