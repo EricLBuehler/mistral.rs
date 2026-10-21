@@ -28,6 +28,10 @@ type BpeMerges = Vec<(String, String)>;
 
 const GPT2_REGEX: &str =
     "'s|'t|'re|'ve|'m|'ll|'d| ?\\p{L}+| ?\\p{N}+| ?[^\\s\\p{L}\\p{N}]+|\\s+(?!\\S)";
+/// Kolibri-1 splits single digits where llama3 groups up to three, and it does not ignore
+/// merges. Taken from the checkpoint's own `tokenizer.json`, which is the authority for the
+/// profile the GGUF names.
+const KOLIBRI1_REGEX: &str = r"(?i:'s|'t|'re|'ve|'m|'ll|'d)|[^\r\n\p{L}\p{N}]?\p{L}+|\p{N}{1}| ?[^\s\p{L}\p{N}]+[\r\n]*|\s*[\r\n]+|\s+(?!\S)|\s+";
 const LLAMA3_REGEX: &str = "(?:'[sS]|'[tT]|'[rR][eE]|'[vV][eE]|'[mM]|'[lL][lL]|'[dD])|[^\\r\\n\\p{L}\\p{N}]?\\p{L}+|\\p{N}{1,3}| ?[^\\s\\p{L}\\p{N}]+[\\r\\n]*|\\s*[\\r\\n]+|\\s+(?!\\S)|\\s+";
 const QWEN2_REGEX: &str = "(?:'[sS]|'[tT]|'[rR][eE]|'[vV][eE]|'[mM]|'[lL][lL]|'[dD])|[^\\r\\n\\p{L}\\p{N}]?\\p{L}+|\\p{N}| ?[^\\s\\p{L}\\p{N}]+[\\r\\n]*|\\s*[\\r\\n]+|\\s+(?!\\S)|\\s+";
 const QWEN35_REGEX: &str = "(?i:'s|'t|'re|'ve|'m|'ll|'d)|[^\\r\\n\\p{L}\\p{N}]?[\\p{L}\\p{M}]+|\\p{N}| ?[^\\s\\p{L}\\p{M}\\p{N}]+[\\r\\n]*|\\s*[\\r\\n]+|\\s+(?!\\S)|\\s+";
@@ -285,6 +289,7 @@ enum TokenizerKind {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum BpePreTokenizerKind {
     Llama3,
+    Kolibri1,
     Dbrx,
     Qwen2,
     Gpt2,
@@ -316,6 +321,12 @@ fn bpe_pre_tokenizer_spec(pre: Option<&str>) -> Result<BpePreTokenizerSpec> {
             kind: BpePreTokenizerKind::Llama3,
             regexes: &[LLAMA3_REGEX],
             ignore_merges: true,
+            normalize_nfc: false,
+        },
+        "kolibri1" => BpePreTokenizerSpec {
+            kind: BpePreTokenizerKind::Kolibri1,
+            regexes: &[KOLIBRI1_REGEX],
+            ignore_merges: false,
             normalize_nfc: false,
         },
         "dbrx" => BpePreTokenizerSpec {
@@ -1138,6 +1149,7 @@ mod tests {
             ("llama3", BpePreTokenizerKind::Llama3, true, false, 1),
             ("llama-bpe", BpePreTokenizerKind::Llama3, true, false, 1),
             ("lfm2", BpePreTokenizerKind::Llama3, true, false, 1),
+            ("kolibri1", BpePreTokenizerKind::Kolibri1, false, false, 1),
             ("dbrx", BpePreTokenizerKind::Dbrx, false, false, 1),
             ("qwen2", BpePreTokenizerKind::Qwen2, false, false, 1),
             ("qwen35", BpePreTokenizerKind::Qwen2, false, true, 1),

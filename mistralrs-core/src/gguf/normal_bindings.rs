@@ -144,8 +144,15 @@ fn bind_block_tensor(
             NormalLoaderType::Lfm2 | NormalLoaderType::Lfm2Moe => {
                 format!("{p}.ffn_norm.{suffix}")
             }
+            // Kolibri-1's four norms are the pre-attention, post-attention, pre-FFN and
+            // post-FFN ones, and the GGUF names them in a different order.
+            NormalLoaderType::Kolibri1 => format!("{p}.post_attn_norm.{suffix}"),
             _ => format!("{p}.post_attention_layernorm.{suffix}"),
         }),
+        // Kolibri-1's sandwich norms: the post-attention and post-FFN norms have no
+        // DeepSeek-style equivalent, so they are named for what they are.
+        "attn_post_norm" => Some(format!("{p}.post_attn_norm.{suffix}")),
+        "ffn_post_norm" => Some(format!("{p}.post_ffn_norm.{suffix}")),
         "post_attention_norm" => Some(match loader {
             NormalLoaderType::GLM4 => format!("{p}.post_self_attn_layernorm.{suffix}"),
             _ => format!("{p}.post_attention_layernorm.{suffix}"),
@@ -153,6 +160,7 @@ fn bind_block_tensor(
         "post_ffw_norm" => Some(match loader {
             NormalLoaderType::Gemma2 => format!("{p}.post_feedforward_layernorm.{suffix}"),
             NormalLoaderType::GLM4 => format!("{p}.post_mlp_layernorm.{suffix}"),
+            NormalLoaderType::Kolibri1 => format!("{p}.post_ffn_norm.{suffix}"),
             _ => return Ok(()),
         }),
         "attn_q" if !matches!(loader, NormalLoaderType::Phi3) => {
@@ -219,6 +227,8 @@ fn bind_block_tensor(
             NormalLoaderType::Lfm2 | NormalLoaderType::Lfm2Moe => {
                 format!("{p}.feed_forward.expert_bias")
             }
+            // Kolibri-1 keeps the bias beside the router rather than on the gate.
+            NormalLoaderType::Kolibri1 => format!("{p}.moe.router.expert_bias"),
             _ => format!("{p}.mlp.gate.e_score_correction_bias"),
         }),
         "attn_q_a" => Some(format!("{p}.self_attn.q_a_proj.{suffix}")),
