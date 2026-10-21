@@ -354,6 +354,27 @@ both of the phases above are the reason. That is the right shape for the compari
 buys the memory and costs the dequantisation, and the dequantisation is now confined to the
 weights that actually change.
 
+**The final state: 1.424 s per token.**
+
+| path | mean TPOT | tok/s | vs. the baseline |
+|---|---|---|---|
+| whole stack | 70.810 s | 0.014 | 1.0x |
+| scoped gather | 2.402 s | 0.42 | 29.5x |
+| + dense-weight cache | 1.605 s | 0.62 | 44.1x |
+| + view-based expert dequant | **1.424 s** | **0.70** | **49.7x** |
+
+The last run started at a load average of 4.41 and the step spread was tight (p25 1.401 s, p75
+1.441 s), with no sign of a stall in it. Every run in this series produced token 79 on every
+step, so the output is unchanged throughout.
+
+**And the probe's 1.62x did not reproduce in the model.** The copy of an expert out of the
+stack measured 1.62x more expensive than the view in isolation, but in the model the routed
+phase went from 1293 ms with the copy to 1327 ms with the view - a wash, and slightly the
+other way. The isolated copy pays for a cold destination buffer; in the model the buffer is
+warm and reused. The view is kept because it does not allocate 900 expert-sized copies per
+forward, but it is not the 1.6x the example suggests, and the example should not be read as a
+model-level claim.
+
 **A measurement trap that cost 2.7x and is worth recording.** With `RAYON_NUM_THREADS` unset
 under `numactl --cpunodebind=3`, candle's pool under-uses the allowed cores and the same
 bf16 benchmark reads 3.20 tok/s instead of 8.65. Every number on this box needs
