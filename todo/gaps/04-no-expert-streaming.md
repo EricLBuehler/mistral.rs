@@ -370,6 +370,47 @@ so the measurement does not contend with whatever else the host is doing.
 
 ### Phase 2: the fp8 loader, the only code
 
+The fp8 route is the one that still materialises, and it is the same 70 GB copy in two
+places. The per-expert fp8 weights and their scales are already loaded as views - the
+distributed loader does exactly that, at `mistralrs-quant/src/distributed/layers.rs:2820`,
+reading `gate_proj.weight` and `gate_proj.weight_scale_inv` per expert - and then it stacks
+them:
+
+```rust
+let gate_fp8 = Tensor::stack(&gate_fp8_vec, 0)?;
+let gate_scale = Tensor::stack(&gate_scale_vec, 0)?;
+```
+
+which is the 70 GB of anonymous memory the streaming design is about. The single-process
+loader stacks them the same way, through `ExpertCheckpoint::stacked_proj`.
+
+The fix is to keep the views and dequantise the routed experts at the gather, which is what
+`PerExpertQuantizedLinear` already does for a stacked tensor - it needs to work over
+per-expert views instead:
+
+1. **`mistralrs-quant/src/per_expert_quantized.rs`**: let `PerExpertQuantizedLinear` hold
+   per-expert fp8 weight and scale views as well as a stacked pair, and dequantise the routed
+   experts from whichever form it has. The dequant and the remap are already written and
+   already bit-identical to the whole-stack path.
+2. **`mistralrs-core/src/moe/experts/backends.rs`**: in the per-expert branch, when the
+   checkpoint is blockwise fp8, read the weight and scale views and build that instead of
+   `PerExpertLinear`. The scale name is the quantised format's convention,
+   `<projection>.weight_scale_inv`, and the per-expert scale shape is
+   `ceil(out / block_rows) x ceil(in / block_cols)`.
+3. **`mistralrs-quant/src/distributed/layers.rs`**: the same change for the distributed path,
+   which stacks for the same reason.
+4. **The test**: the per-expert fp8 gather must be bit-identical to the stacked fp8 gather, in
+   the same way the GGUF one is.
+5. **The measurement**: the fp8 route under a 16 GB cgroup.
+
+The resident set afterwards is the file's pages, which are reclaimable, plus the hot experts
+in dequantised form - 3.7 GB of anonymous memory for a thousand slots - plus the dense
+layers' dequantised copies, which the dense-weight cache keeps at 4.85 GB. That is about
+9 GB, which is what makes 16 GB plausible; the dense cache is the largest single item and it
+is the one that can be turned off.
+
+
+
 A per-expert fp8 linear: the fp8 weight per expert as views into the mapping, and the
 scoped dequant that is already written (`scoped_expert_stack`, bit-identical to the
 whole-stack path). The forward is done; this is the loader, and it is the mirror image of
