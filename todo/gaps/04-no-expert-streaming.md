@@ -441,6 +441,45 @@ anonymous pages keeps it there.
   cannot be paged out: a 32 GB limit OOM-kills the load with the swapfile idle and
   `memory.swap.current` at zero. The default of 60 is the right one here.
 
+### Measured: the Q2_K GGUF in a 16 GB budget, and why it is slow
+
+The Q2_K GGUF is the only route whose weights are file-backed rather than copied, so it is the
+one that can be streamed without swap at all. It took three fixes to make the GGUF path load a
+Kolibri-1 checkpoint at all: the `kolibri1` BPE pre-tokenizer profile was missing from the
+conversion table, the router's expert bias was bound to the DeepSeek-style path, and the four
+sandwich norms were mis-mapped - the GGUF names them `attn_norm`, `ffn_norm`,
+`post_attention_norm` and `post_ffw_norm` where the model calls them `input_layernorm`,
+`post_attn_norm`, `post_attention_layernorm` and `post_ffn_norm`, the same four in a
+different order. `ffn_norm` was going to the model's pre-FFN norm, so the post-attention and
+pre-FFN norms were swapped, and `post_ffw_norm` was not bound at all.
+
+Under a 16 GB RAM limit with the swapfile available:
+
+```
+TTFT (64 input tokens)    1.0 tok/s     62.6 s
+Decode (8 tokens @ d64)    0.03 tok/s    31.5 s per token
+
+cgroup: memory.peak 16 GiB, memory.swap.current 0
+```
+
+**It fits, and it needs no swap at all** - the file's pages are reclaimable and the kernel
+reclaimed them, so the swapfile was never touched. That is the streaming thesis working: the
+working set is the hot experts and the rest of the checkpoint is page cache the kernel can
+drop.
+
+**And the rate is bad for a specific reason: the dequantisation.** 31.5 s per token against the
+fp8 route's 0.876 s at the same budget is 36x. The routed phase dequantises 900 expert slabs
+per token, so that is 35 ms per slab - and a Q2_K slab is a third the size of an fp8 one, so
+per byte the GGUF path's dequant is roughly two orders of magnitude slower than the fp8
+path's. The reason is that the fp8 path's dequant is our own parallel kernel, while the GGUF
+path's is candle's k-quant dequant, which is scalar and single-threaded.
+
+**So the two fixes are the same fix.** The GGUF path needs the same treatment the fp8 path
+just got: a dequantisation that is scoped to the routed experts *and* parallel, rather than
+candle's serial k-quant dequant over the whole stack. The scoping is already written and
+bit-identical (`scoped_expert_stack`); what is missing on the GGUF side is the parallel
+dequant body, and the same body serves the fp8 path's per-expert form.
+
 ### Which of the two can be fixed here, and which cannot
 
 The distinction is not the expert layout. It is **whether the bytes can be held borrowed**.
