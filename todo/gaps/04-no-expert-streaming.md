@@ -410,6 +410,37 @@ so the measurement does not contend with whatever else the host is doing.
 - The bf16 route is the one worth proving, because the Q2_K route has no streaming in it at
   all - it fits, so it demonstrates nothing about the thesis.
 
+### Measured: the RAM budget, with the swapfile
+
+The box has 256 GB of swap on the same NVMe as the model files, and it is the backing store
+for the copied model. The limits below are `memory.max` with `memory.swap.max` generous; the
+runs are on node 2 with 16 threads at 3.4 GHz.
+
+| route | RAM budget | decode | swap delta |
+|---|---|---|---|
+| bf16 safetensors, 149 GB | unmetered | 8.65 tok/s | - |
+| | 32 GB | **4.90 tok/s** (median 5.13) | 18.2 GB out |
+| | 16 GB | **2.49 tok/s** (median 3.34) | +0.9 GB (the 32 GB run had already paged the cold part out) |
+| fp8 safetensors, 74 GB + a 70 GB stack | 32 GB | **0.86 tok/s** (median 1.02) | - |
+| | 16 GB | **0.77 tok/s** (median 0.88) | - |
+
+The working set is what makes this work: about 5.6 GB of the model is touched every step -
+the non-expert weights and the routed experts - and the rest is cold and sits in swap. The
+hot part stays resident because it is touched constantly, and the kernel's LRU over the
+anonymous pages keeps it there.
+
+**Two things this changes.**
+
+- The quantisation does not buy throughput on this path, only footprint. The fp8 route is
+  three times *slower* than bf16 at the same RAM budget, because the per-forward dequantisation
+  dominates and the quantisation only makes the weights smaller. Its case is a box that cannot
+  hold the bf16 model at all.
+- **`vm.swappiness=0` must not be used for this codebase.** The box's guidance to set it for a
+  bf16 run is right for a genuinely mmap'd model, whose pages should be reclaimed as page
+  cache. Ours is copied out of the mapping, so it is anonymous, and with swappiness 0 it
+  cannot be paged out: a 32 GB limit OOM-kills the load with the swapfile idle and
+  `memory.swap.current` at zero. The default of 60 is the right one here.
+
 ### Which of the two can be fixed here, and which cannot
 
 The distinction is not the expert layout. It is **whether the bytes can be held borrowed**.
