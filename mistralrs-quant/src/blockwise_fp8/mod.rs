@@ -1,9 +1,9 @@
 use std::{
     borrow::Cow,
-    sync::{atomic::AtomicUsize, Arc},
+    sync::{atomic::AtomicUsize, Arc, OnceLock},
 };
 
-use candle_core::{quantized::GgmlDType, DType, Device, IndexOp, Result, Tensor};
+use candle_core::{quantized::GgmlDType, DType, Device, Result, Tensor};
 use candle_nn::Linear;
 
 #[cfg(all(feature = "cuda", has_deepgemm_fp8_sm90_provider))]
@@ -65,6 +65,14 @@ pub struct BlockwiseFP8Linear {
     weight_block_size: Vec<usize>,
     activation_scheme: Option<Fp8ActivationScheme>,
     provider: BlockwiseFp8Provider,
+    /// The dequantised weight of a dense layer, kept after the first use.
+    ///
+    /// A dense layer's weight does not change between forwards, so dequantising it on every
+    /// forward is pure repetition: on the Kolibri-1 fp8 checkpoint the attention and output
+    /// projections were 40% of a decode step for exactly this reason. The copy is anonymous
+    /// memory, so it is resident rather than reclaimable, but it is 2x the fp8 weight it
+    /// replaces and the fp8 checkpoint is far larger than that.
+    dequantized: OnceLock<Tensor>,
 }
 
 #[derive(Clone, Debug)]
@@ -270,11 +278,32 @@ impl BlockwiseFP8Linear {
 }
 
 impl BlockwiseFP8Linear {
+    /// The named experts' weights, dequantised, one slab each.
+    ///
+    /// The experts are dequantised in a single call where the layout allows it, because the
+    /// per-call cost is what dominates: one expert-sized dequant is about 0.46 ms of
+    /// arithmetic and the measured cost per call was about 4 ms. Concatenating the experts
+    /// into one matrix and dequantising that is the same arithmetic, because the blockwise
+    /// scales are per block and the blocks do not cross an expert boundary - provided the
+    /// block size divides the expert's row count, which is checked.
+    fn dequantize_experts(&self, wanted: &[usize]) -> Result<Vec<Tensor>> {
+        let mut slabs = Vec::with_capacity(wanted.len());
+        for &expert in wanted {
+            slabs.push(self.dequantize_expert(expert)?);
+        }
+        Ok(slabs)
+    }
+
     /// One expert's weights, dequantised.
+    ///
+    /// The expert is a view into the stack rather than a copy of it: `Tensor::i` copies, and
+    /// on a one-byte dtype the copy is per-element, which measured about 3.8 ms for an
+    /// expert-sized slab. Narrowing the stack's expert axis and squeezing it gives a
+    /// contiguous view of the same bytes with no copy at all.
     fn dequantize_expert(&self, expert: usize) -> Result<Tensor> {
         ops::fp8_blockwise_dequantize(
-            &self.weight.i(expert)?,
-            &self.weight_scale_inv.i(expert)?,
+            &self.weight.narrow(0, expert, 1)?.squeeze(0)?,
+            &self.weight_scale_inv.narrow(0, expert, 1)?.squeeze(0)?,
             self.weight_block_size.to_vec(),
             self.dequant_dtype,
         )
@@ -309,10 +338,7 @@ impl BlockwiseFP8Linear {
             return Ok(None);
         }
 
-        let mut slabs = Vec::with_capacity(wanted.len());
-        for &expert in &wanted {
-            slabs.push(self.dequantize_expert(expert)?);
-        }
+        let slabs = self.dequantize_experts(&wanted)?;
 
         let mut dense = vec![u32::MAX; n_experts];
         for (row, &expert) in wanted.iter().enumerate() {
@@ -365,6 +391,7 @@ impl QuantMethod for BlockwiseFP8Linear {
                     dequant_dtype,
                     weight_block_size,
                     activation_scheme,
+                    dequantized: OnceLock::new(),
                     provider: BlockwiseFp8Provider::Legacy,
                 };
                 layer.prepare_provider()?;
@@ -542,8 +569,24 @@ impl QuantMethod for BlockwiseFP8Linear {
             }
         }
 
-        // Fallback: dequantize and use unquantized matmul
-        let weight = self.dequantize_w()?;
+        // Fallback: dequantize and use unquantized matmul.
+        //
+        // A dense layer's weight is the same on every forward, so it is dequantised once and
+        // kept. A stacked expert weight is not: it is dequantised per selected expert by
+        // `scoped_expert_stack`, and only the routed experts are ever touched.
+        let weight = if self.weight.rank() == 2 {
+            match self.dequantized.get() {
+                Some(cached) => cached.clone(),
+                None => {
+                    let dequantized = self.dequantize_w()?;
+                    // A lost race just means the other copy is used.
+                    let _ = self.dequantized.set(dequantized.clone());
+                    dequantized
+                }
+            }
+        } else {
+            self.dequantize_w()?
+        };
         // Dispatch to unquant. This uses some cublaslt for bias & on cuda always, so it is better
         let unquant = UnquantLinear::new(QuantMethodConfig::Unquantized(Linear::new(
             weight,
@@ -1220,6 +1263,7 @@ pub fn blockwise_fp8_moe(
         weight,
         weight_scale_inv,
         bias: None,
+        dequantized: OnceLock::new(),
         dequant_dtype,
         weight_block_size,
         activation_scheme,
@@ -2443,6 +2487,7 @@ mod scoped_gather_tests {
             weight_block_size: vec![block, block],
             activation_scheme: None,
             provider: BlockwiseFp8Provider::Legacy,
+            dequantized: OnceLock::new(),
         };
         Ok((linear, weight_scale_inv, weight))
     }
