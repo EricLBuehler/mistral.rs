@@ -381,6 +381,35 @@ softmax cannot be the cause and the difference is in the projections - the query
 value projections or the output projection - rather than in the attention's accumulation over
 the sequence.
 
+**Where the attention differs, narrowed as far as the existing data allows.** Our CPU
+attention runs with the input dtype: `run_flash_attn_cpu_for_dtype` takes `out_dtype =
+q.dtype()` and dispatches to `run_flash_attn_cpu::<bf16>` for a bf16 model, so the attention's
+internals and its output are bf16, and the output projection consumes bf16. llama.cpp's flash
+attention and the peer's accumulate in f32, and llama.cpp's attention output stays f32 through
+its output projection.
+
+At layer 0, position 0, the attention is over a single element, so the softmax cannot be the
+cause and the difference is in the projections or in the attention's internal precision. And
+the size is wrong for a reduction-order difference: if both sides computed the same f32 value
+and rounded it the same way, the rounded values would differ on a fraction of a percent of
+the elements, not on most of them. The measured 0.9 of a bf16 ulp means the f32 values
+themselves differ by about 1.5 ulp, which is about 0.6% relative.
+
+0.6% relative in a projection is the size of a bf16 rounding, not of a different summation
+order. The candidates, in the order they are worth testing:
+
+1. **The attention output is rounded to bf16 before the output projection.** llama.cpp keeps it
+   in f32 there. This is a one-place change and it is the most likely single cause.
+2. **The attention's softmax probabilities or its P-V product are kept in bf16.** llama.cpp and
+   ggml keep them in f32.
+3. **The value projection itself.** Our decode path uses `gemv_cpu::gemv` on a prefill-shaped
+   batch; the accumulation is f32 there, so this is the least likely of the three.
+
+The cost of fixing it is not zero, and that is worth knowing before doing it: bf16 attention
+is half the memory traffic of f32 attention over the KV cache. So the fidelity fix and the
+throughput fix pull in opposite directions here, and the right answer may be f32 accumulation
+with a bf16 cache, which is what ggml does.
+
 **Where our 2x lives, which is the actionable part.** At layer 0 the input is the embedding,
 so the whole of attn_out_pre_norm's divergence is the attention's own arithmetic, and at
 position 5 - the only position with a real attention window - it is 4.7x larger than at
