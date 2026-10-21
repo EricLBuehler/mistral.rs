@@ -2,7 +2,9 @@
 
 - **Repo:** mistral.rs
 - **Components:** `mistralrs-core/src/moe/experts/checkpoint.rs`, `mistralrs-core/src/moe/experts/backends.rs`
-- **Status:** open, unrequested
+- **Status:** the strategy is settled and the *loader* is the last piece of it; the
+  validation (a real 32 GB box) has not been done. What is stale in this file is marked
+  stale below
 - **Impact:** any MoE model whose weights do not fit in RAM
 
 ## What
@@ -318,3 +320,73 @@ manager to write, no eviction policy, no prefetch logic.
 - The measurement is of *our* router, which is now known to be f32-faithful, so the pool
   should match the reference's. It should be re-checked against the reference's own routing
   before the cache is sized from it.
+
+
+## The plan, 2026-10-21
+
+### The thesis, which the measurements already support
+
+**The cache manager is the page cache.** The working set is about 1000 (layer, expert)
+slots - 7.3 GB in bf16, 3.7 GB in fp8 - and a flat LRU of that size scores 98.9% over the
+real access order. At that hit rate the per-token disk traffic is 2.56 GB x 1.1% = 28 MB, so
+the box is compute bound rather than I/O bound. The kernel's own LRU over the file's
+reclaimable pages is already a flat LRU of exactly that kind, so "expert streaming" here is
+a property of the *call site* - gather the routed experts out of the mapping and let the
+kernel keep the hot ones - and not a subsystem to build.
+
+### Three routes, and where each one stands
+
+| route | artefact | resident set | state |
+|---|---|---|---|
+| Q2_K GGUF | 26.67 GiB, `Hob-forge/Kolibri-1-GGUF` | all of it | **works today** - the GGUF arm handles `Q2K` and the scoped gather is in - so this needs a measurement and nothing else |
+| bf16 safetensors | 149 GB | 4.85 GB + 7.3 GB of hot experts | **works today** - `moe/experts/backends.rs:391` takes the per-expert view path on CPU for a per-expert checkpoint, so nothing is materialised and the file's pages are reclaimable |
+| fp8 safetensors | 74 GB | 4.85 GB + 3.7 GB of hot experts | **the loader still fuses** - `BlockwiseFP8Linear` holds a rank-3 fp8 weight, and the per-expert branch hands it *views*, so the fp8 checkpoint is the one route that still materialises |
+
+The OOM quoted at the top of this file - "149 GB mapped + 151 GB of `Tensor::stack` copies" -
+predates the per-expert path and is no longer what the bf16 route does. It should be
+re-measured rather than quoted.
+
+### Phase 1: validate, with no new code
+
+The validation is a memory limit, and this host can make one exactly. cgroup v2 here has the
+`memory` and `cpuset` controllers, so a child cgroup with `memory.max=32G`,
+`memory.swap.max=0` and `cpuset.cpus=96-127` is a 32 GB box with no swap - which is the
+target, since the box's own 256 GB swapfile would otherwise hide the behaviour being
+measured.
+
+- Download `Kolibri-1-Q2_K.gguf` (26.67 GiB) and decode it under the limit. It should fit
+  entirely, and the question is the rate.
+- Then the interesting one: the 149 GB bf16 checkpoint under the same limit. 12 GB of it
+  should be resident and the rest should stream. A decode that works there is the proof that
+  the page cache is the cache.
+- The bf16 route is the one worth proving, because the Q2_K route has no streaming in it at
+  all - it fits, so it demonstrates nothing about the thesis.
+
+### Phase 2: the fp8 loader, the only code
+
+A per-expert fp8 linear: the fp8 weight per expert as views into the mapping, and the
+scoped dequant that is already written (`scoped_expert_stack`, bit-identical to the
+whole-stack path). The forward is done; this is the loader, and it is the mirror image of
+the GGUF fix. It is the last piece for the 74 GB fp8 route, which is the route that would
+otherwise be the most attractive one on a 32 GB box: 3.7 GB of hot experts and 28 MB per
+token of disk traffic.
+
+### Phase 3: re-validate the working set against the reference's routing
+
+The 98.9% was measured over a 1000-step trace of *our* router on *one* prompt, and the
+caveat at the end of this file says both. The routing data to check it against now exists
+on all three sides - the device's per-layer selections, the transcription's and ours - for the
+golden ids, so the hot sets can be compared directly. A 1000-step trace of the reference's
+own routing would be better and is the one thing worth asking for.
+
+### The risks, named
+
+- **The page cache's LRU is not ours.** A long prefill touches every expert and evicts the
+  hot set; it recovers, because the hot set is only about 1000 slots, but a prefill on a
+  memory-starved box is the worst case and the thing to watch.
+- **The cold reads are random, so it is latency and not bandwidth.** Seven experts per layer
+  per token, seven concurrent reads at a time, the layers sequential.
+- **A shared box is not a 32 GB box.** The file's pages compete with everything else on the
+  host, so the 32 GB case assumes a dedicated machine.
+- **The Q2_K route is a quality trade, not the same model.** It is the cheapest way to get a
+  number, not a way to get Kolibri-1.
