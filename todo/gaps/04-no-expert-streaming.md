@@ -30,7 +30,47 @@ Tensor::stack(&gate_up_experts, 0)?, Tensor::stack(&down_experts, 0)?
 `Tensor::cat` and `Tensor::stack` allocate, so ~3.02 GB per layer of Kolibri-1 lands in
 **anonymous** memory that the kernel cannot reclaim, on top of the mapped checkpoint.
 
-### The mapped checkpoint is not the problem
+### The mapped checkpoint IS the problem, and the reason is in candle
+
+**This section was wrong and is corrected here.** It claimed that a correctly aligned tensor
+load is "already a zero-copy view into the page cache, which is file-backed and reclaimable",
+and that the stack is therefore the only thing converting reclaimable page cache into
+unreclaimable anonymous memory.
+
+The alignment check in candle's `convert_slice` is a red herring. It takes a slice of the
+mmap'd bytes and then calls `Tensor::from_slice`, which goes to
+`device.storage_from_slice` and then to `CpuStorage::from_slice` - and that is
+`v.to_vec()`. **The tensor is copied.** The alignment check only chooses between two copies,
+the aligned one and the unaligned one, and either way the mmap's pages are released and the
+model ends up in anonymous memory.
+
+Measured, loading the 149 GB bf16 checkpoint and sampling the process:
+
+```
+rss=142202688KB  anon=118888704KB  file_clean=23376256KB
+```
+
+119 GB of the 142 GB resident is anonymous. The whole model is copied into RAM at load, so
+none of it is in reclaimable page cache, and the per-expert view path cannot help: the views
+are views of copies.
+
+**Which moves the blocker to the bottom of the stack.** The expert stacking is a real and
+separate problem - it is another 70 GB on top of the copy - but it is second order. The first
+order is that no safetensors model in this repository is ever in reclaimable page cache,
+because candle's CPU storage has no zero-copy path.
+
+**And the GGUF path is the one that does.** `mistralrs-quant/src/gguf/archive.rs:603` hands
+candle a `Cow::Borrowed` slice of the mmap'd bytes, and `QStorage` holds it borrowed, so the
+GGUF's quantised weights stay in the file's page cache and the kernel can reclaim them under
+pressure. That is the difference between the two routes, and it is why the Q2_K GGUF is not
+merely a cheaper artefact: it is the only one of the three whose weights can be streamed at
+all.
+
+**What the safetensors route would need** is a zero-copy CPU storage in candle - a
+`CpuStorage` variant that borrows the mapping instead of copying it. That is an upstream
+change, and it is worth an issue against candle rather than a workaround here.
+
+### (the old claim, which was wrong) The mapped checkpoint is not the problem
 
 `SafetensorBackend::load_name` delegates to `MmapedSafetensors::load`, which calls
 `convert_slice` (`candle-core/src/safetensors.rs:115`):
@@ -338,8 +378,9 @@ kernel keep the hot ones - and not a subsystem to build.
 
 | route | artefact | resident set | state |
 |---|---|---|---|
-| Q2_K GGUF | 26.67 GiB, `Hob-forge/Kolibri-1-GGUF` | all of it | **works today** - the GGUF arm handles `Q2K` and the scoped gather is in - so this needs a measurement and nothing else |
-| bf16 safetensors | 149 GB | 4.85 GB + 7.3 GB of hot experts | **works today** - `moe/experts/backends.rs:391` takes the per-expert view path on CPU for a per-expert checkpoint, so nothing is materialised and the file's pages are reclaimable |
+| Q2_K GGUF | 26.67 GiB, already at `/tmp/opencode/kolibri1-q2k.gguf` | all of it | **works today** - the GGUF arm handles `Q2K`, the scoped gather is in, and the loader is zero-copy - so this needs a measurement and nothing else |
+| bf16 safetensors | 149 GB | 4.85 GB + 7.3 GB of hot experts | **does not work** - the per-expert path avoids the stack, but candle copies the whole model out of the mapping at load, so the 149 GB is anonymous RAM whatever the expert layout is |
+| Q2_K or a larger GGUF quant | 26.67 GiB and up | the file's reclaimable pages plus the hot experts | **the only route that can stream** - the GGUF loader hands candle a borrowed slice, so the quantised weights stay in page cache |
 | fp8 safetensors | 74 GB | 4.85 GB + 3.7 GB of hot experts | **the loader still fuses** - `BlockwiseFP8Linear` holds a rank-3 fp8 weight, and the per-expert branch hands it *views*, so the fp8 checkpoint is the one route that still materialises |
 
 The OOM quoted at the top of this file - "149 GB mapped + 151 GB of `Tensor::stack` copies" -
@@ -362,9 +403,10 @@ so the measurement does not contend with whatever else the host is doing.
   download is not needed, and this host's outbound network is throttled to about 0.4 MB/s
   anyway, which would have made it a nineteen-hour job. It should fit entirely, and the
   question is the rate.
-- Then the interesting one: the 149 GB bf16 checkpoint under the same limit. 12 GB of it
-  should be resident and the rest should stream. A decode that works there is the proof that
-  the page cache is the cache.
+- Then the interesting one, and it has to be a **GGUF** and not the safetensors checkpoint:
+  the 149 GB bf16 checkpoint cannot be streamed at all, because candle copies it out of the
+  mapping at load. A GGUF of 27 GB and up under a 16 GB limit is the real test - the file's
+  pages are reclaimable and the hot experts stay resident.
 - The bf16 route is the one worth proving, because the Q2_K route has no streaming in it at
   all - it fits, so it demonstrates nothing about the thesis.
 
