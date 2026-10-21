@@ -218,3 +218,47 @@ This is not a throughput detail. It is the reason the fp8 checkpoint - a quarter
 the bf16 one, and therefore the version most people would actually want on CPU - is
 unusable. It is also the one place where the gap to the vllm.cpp CPU tier is not a rounding
 difference but a factor of 290.
+
+
+## Swap would not fix this, and on this box it cannot even be enabled
+
+Considered, because the fp8 path's 148 GB of per-forward allocation looks like a job for
+swap. Three things rule it out.
+
+**Swapfiles do not work on btrfs here.** Both filesystems that could hold one are btrfs
+(`/mnt` and `/` are the same NVMe, `/home` is the other), and the kernel rejects a swapfile on
+both:
+
+```
+$ swapon /tmp/.swaptest
+swapon: /tmp/.swaptest: swapon failed: Invalid argument
+```
+
+including with `chattr +C`, which is btrfs's documented requirement for swapfile support.
+Enabling swap here would mean partitioning the NVMe, which is not a change to make on a shared
+device.
+
+**zram is available** (`/sys/block/zram0`, with `zstd` among the algorithms, currently
+unconfigured) and would work where a file cannot - it is RAM-backed and compressed, so it
+costs CPU rather than the NVMe bandwidth the model reads need. It buys less than it looks:
+bf16 does not compress, so 64 GB of zram holds perhaps 50-58 GB of the allocation, and it
+consumes RAM that the page cache wants for the mmap'd weights.
+
+**And it treats the wrong problem.** Swap only ever holds *anonymous* memory; file-backed
+pages are dropped and re-read from the file, never swapped. So:
+
+- For the **bf16 path**, which is mmap'd, the page cache already pages the model and swap
+  adds nothing. This is why the bf16 path has never OOM-killed.
+- For the **fp8 path**, the 148 GB is anonymous, so swap would work - and would turn the OOM
+  kill into roughly a doubling of the 74 s step, at the cost of 148 GB of writes to the same
+  NVMe that the model reads come from. On a shared box that trades our failure mode for
+  everyone else's bandwidth.
+
+**The fix that removes the need for swap is the same fix that unlocks the 32 GB case**: scope
+the dequantisation to the selected experts at the gather, which is what `todo/02` says. The
+measured expert working set is about 1000 slots, so the scoped path's peak anonymous memory
+falls from 148 GB to roughly 7 GB and the OOM stops being possible.
+
+If a safety net is wanted in the meantime, zram is the tool that works here, and it should be
+announced and sized with the peers' agreement - it consumes RAM that the page cache wants, on
+a box where two model-sized workloads are already close to the limit.
