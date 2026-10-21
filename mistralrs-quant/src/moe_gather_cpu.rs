@@ -56,6 +56,28 @@ pub fn should_use_gather_gemv(
     layout.start_offset() == 0 && layout.stride() == [out * k, k, 1]
 }
 
+/// Whether the gather kernel would serve a stack of this shape and size.
+///
+/// `should_use_gather_gemv` answers the same question for a stack that is already
+/// dequantised. This is the same predicate without needing one, so a caller holding only the
+/// quantised stack can ask before committing to dequantising it.
+///
+/// A caller that replaces the whole-stack path with a per-expert one has to agree with it
+/// here, because the whole-stack path falls back to a matmul when this says no, and a matmul
+/// and the gather are not the same arithmetic.
+pub fn should_use_gather_gemv_shape(
+    num_experts: usize,
+    out: usize,
+    k: usize,
+    out_features: usize,
+    n_slots: usize,
+) -> bool {
+    if num_experts == 0 || out != out_features || k == 0 || n_slots == 0 || out_features == 0 {
+        return false;
+    }
+    n_slots * out_features >= MIN_PARALLEL_OUTPUTS
+}
+
 /// `(n_slots, in_features) @ gather(w, ids).T` as `(n_slots, out_features)` f32.
 ///
 /// `a` must already be contiguous f32 of length `n_slots * in_features`; `ids` holds the
@@ -536,6 +558,32 @@ mod tests {
             let split = gather_gemv_per_expert(&a, &slabs, out, k, &ids, NO_REPEAT)?;
             assert_eq!(fused.len(), split.len());
             assert_eq!(fused, split, "{dtype:?}");
+        }
+        Ok(())
+    }
+
+    /// The per-expert broadcast form must produce exactly what the fused broadcast form
+    /// produces. The fused form is what the whole-stack path uses, so if the two disagree at
+    /// repeat > 1 then a per-expert gather cannot stand in for it.
+    #[test]
+    fn per_expert_broadcast_matches_the_fused_broadcast_bit_exactly() -> Result<()> {
+        for dtype in [DType::F32, DType::BF16] {
+            let (experts, out, k, tokens, top_k) = (8usize, 32usize, 48usize, 5usize, 3usize);
+            let slabs: Vec<Tensor> = (0..experts)
+                .map(|_| Tensor::rand(-1f32, 1f32, (out, k), &Device::Cpu)?.to_dtype(dtype))
+                .collect::<Result<Vec<_>>>()?;
+            let stack = Tensor::stack(&slabs, 0)?;
+            let a: Vec<f32> = (0..tokens * k)
+                .map(|i| ((i % 23) as f32) * 0.125 - 1.0)
+                .collect();
+            let ids: Vec<u32> = (0..tokens * top_k)
+                .map(|i| (i * 5 % experts) as u32)
+                .collect();
+
+            let fused = gather_gemv(&a, &stack, &ids, top_k)?;
+            let split = gather_gemv_per_expert(&a, &slabs, out, k, &ids, top_k)?;
+            assert_eq!(fused.len(), split.len());
+            assert_eq!(fused, split, "{dtype:?}: fused and per-expert broadcast differ");
         }
         Ok(())
     }

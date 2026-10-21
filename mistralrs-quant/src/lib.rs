@@ -49,6 +49,7 @@ mod mxfp4;
 pub mod nvfp4;
 mod pending_layer;
 pub mod per_expert;
+pub mod per_expert_quantized;
 mod pertensor_fp8;
 pub mod rotary;
 pub mod safetensors;
