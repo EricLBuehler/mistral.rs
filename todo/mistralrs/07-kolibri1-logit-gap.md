@@ -339,6 +339,13 @@ llamacpp vs mistral.rs: 29.83%
 29.83% is what independence predicts from 0.69 and 0.33, so llama.cpp's selections are
 essentially uncorrelated with the reference's while ours are correlated with it.
 
+**Caveat on our side of that comparison.** Our selections come from a dump taken on 2026-10-14,
+which predates the RMSNorm fix and the f32 router, so the 68.78% is our OLDER build's
+agreement and the current build's is likely higher, not lower. The comparison is against the
+reference's own selections from the same day, so it is apples to apples in that respect, and
+the direction of the caveat only strengthens the conclusion. Re-measuring our selections with
+the current build is on the list.
+
 The selection rule is the same on both sides, and that is checked rather than assumed: the
 reference's own recorded layer-0 logits and bias reproduce its own recorded ids 80.6% of the
 time under `logits + bias` and 0% of the time under `sigmoid(logits) + bias`. Both
