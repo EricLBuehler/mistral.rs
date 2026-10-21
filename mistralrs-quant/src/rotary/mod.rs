@@ -889,7 +889,7 @@ mod cuda {
         CpuStorage, DType, InplaceOp3, Layout, MetalStorage, Result, Storage, Tensor,
     };
     use half::{bf16, f16};
-    use std::ffi::{c_int, c_long};
+    use std::ffi::c_int;
 
     use crate::utils::{slice_ptr_mut_on_stream, slice_ptr_on_stream};
 
@@ -1003,7 +1003,7 @@ mod cuda {
         };
 
         let neox = if is_neox { 1 } else { 0 };
-        let stream = stream.cu_stream() as c_long;
+        let stream = stream.cu_stream() as i64;
         let internal_type = rotary_dtype(query_dtype)?;
         match positions {
             None => unsafe {
@@ -1014,11 +1014,11 @@ mod cuda {
                     sin_cache as *const core::ffi::c_void,
                     neox,
                     head_size as c_int,
-                    num_tokens as c_long,
+                    num_tokens as i64,
                     rot_dim as c_int,
                     num_heads as c_int,
                     0,
-                    query_l.stride()[0] as c_long,
+                    query_l.stride()[0] as i64,
                     0,
                     internal_type,
                     stream,
@@ -1033,12 +1033,12 @@ mod cuda {
                     positions as *const core::ffi::c_void,
                     neox,
                     head_size as c_int,
-                    num_tokens as c_long,
+                    num_tokens as i64,
                     rot_dim as c_int,
                     seq_len as c_int,
                     num_heads as c_int,
                     0,
-                    query_l.stride()[0] as c_long,
+                    query_l.stride()[0] as i64,
                     0,
                     internal_type,
                     stream,
