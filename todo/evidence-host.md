@@ -52,6 +52,21 @@ Not 3.4x, so the kernels were partly memory-bound after all - the clock was a th
 story. `candle/01` measures 14.4 GB/s on `performance` against the 16.9 GB/s recorded on
 `schedutil`.
 
+**A correction to the swappiness note, from this codebase specifically.** The advice above is
+"for a bf16 benchmark run, set `sysctl vm.swappiness=0` first: the model is mmap'd, so its
+pages are file-backed and the kernel should reclaim clean page cache rather than swap". That
+reasoning assumes the model stays in the file's page cache. In this repository it does not:
+candle's `Tensor::from_slice` copies the model out of the mapping at load, so the model is
+anonymous memory, and with swappiness 0 it cannot be paged out at all. A 32 GB RAM limit then
+OOM-kills the load (`oom_kill 2`) with the swapfile sitting idle and `memory.swap.current` at
+zero.
+
+With the box's default swappiness of 60 the anonymous pages swap and it runs: the 149 GB bf16
+Kolibri-1 decodes at **4.90 tok/s in a 32 GB RAM budget** and **2.49 tok/s (median 3.34) in a
+16 GB budget**, against 8.65 tok/s unmetered. So the swapfile is not a workaround for a broken
+loader here, it is the backing store the copied model needs - and the guidance should be
+"swappiness 0 for a genuinely mmap'd model, 60 for this one".
+
 **Every throughput and bandwidth figure in this directory was taken at 1.0 GHz unless it says
 otherwise.** Most were, because the default was in force and nobody had gone looking. That
 includes the numbers the thread-count and `MIN_PARALLEL_OUTPUTS` choices were based on, so
