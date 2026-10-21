@@ -296,6 +296,85 @@ deviation an order of magnitude larger than the margin the routing decision is m
 honest gate is a band, and any implementation that is not bit-reproducing another one's sort
 tie-break cannot be expected to agree with it on the expert selection at all.
 
+## The resolution: the logit distance is mediated by the expert selection, not by the hidden state
+
+This is the measured account, and it replaces the speculation above.
+
+### The seed is the attention
+
+Relative rms divergence from the device's per-layer dump, at position 0:
+
+| quantity | layer 0 | layer 10 | layer 49 |
+|---|---|---|---|
+| attn_out_pre_norm | 4.46e-04 | 1.78e-03 | 2.36e-02 |
+| attn_post_norm | 4.09e-04 | 3.60e-03 | 8.67e-03 |
+| ffn_post_norm | 3.34e-04 | 9.07e-04 | 5.00e-03 |
+| l_out | 6.90e-04 | 2.43e-03 | 6.41e-03 |
+
+The norm does not amplify: the relative divergence is roughly flat across the four quantities.
+An earlier reading of this as "the norm amplifies 32x" compared absolute magnitudes across
+quantities of different scale, and is withdrawn.
+
+At layer 0 the input is the embedding, so the whole of `attn_out_pre_norm`'s 4.46e-04 is the
+attention's own arithmetic. And the divergence grows with the attention window: between two CPU
+implementations, position 5's attention output differs 4.7x more than position 0's
+(1.78e-03 against 3.79e-04). The MoE contributes less than the attention does at every layer.
+
+So the seed is a ~4e-04 relative difference in the attention's arithmetic, and the network
+amplifies it to ~5e-03 by layer 49.
+
+### The router turns that into a nat
+
+The router's top-6 cut sits on a 9.4e-05-nat margin. By layer 12 the relative divergence is
+~2e-03, so the selection is decided far below the noise.
+
+Measured, against the reference's own recorded selections for the same golden ids:
+
+```
+llamacpp vs reference : 33.45% of the top-k matched, over 295 layer/positions
+mistral.rs vs reference: 68.78%, over 300 layer/positions
+llamacpp vs mistral.rs: 29.83%
+```
+
+29.83% is what independence predicts from 0.69 and 0.33, so llama.cpp's selections are
+essentially uncorrelated with the reference's while ours are correlated with it.
+
+The selection rule is the same on both sides, and that is checked rather than assumed: the
+reference's own recorded layer-0 logits and bias reproduce its own recorded ids 80.6% of the
+time under `logits + bias` and 0% of the time under `sigmoid(logits) + bias`. Both
+implementations select on `logits + bias`, so the difference is numerical.
+
+### The anomaly, and its resolution
+
+llama.cpp is 3-6x CLOSER to the device in the residual stream than mistral.rs is, at every
+layer from 0 to about 29, and comparable from 25 on:
+
+| layer | llama.cpp | mistral.rs |
+|---|---|---|
+| 0 | 1.77e-04 | 6.90e-04 |
+| 10 | 4.28e-04 | 2.43e-03 |
+| 25 | 6.71e-03 | 7.89e-03 |
+| 49 | 5.54e-03 | 6.41e-03 |
+
+And llama.cpp is 34x FURTHER in logits: a median 1.03 nats from the primary against 0.03.
+
+The two facts reconcile because the hidden-state metric cannot see a flipped expert. The
+logits are a discontinuous function of the residual stream: one flipped selection is worth
+about a nat, however small the residual-stream difference was. The residual stream's cosine
+and rms are therefore the wrong instrument for this question, and the selection agreement is
+the right one.
+
+### What is still open
+
+Whether our own selection agreement with the primary's is as high as the 0.03-nat logit
+distance implies. That needs the primary's per-layer selections for the same ids, which the
+peer can produce; ours and llama.cpp's are in `todo/artifacts/llamacpp-oracle/`.
+
+The CPU-vs-device difference is not a scale effect: fitting and removing a per-row constant
+leaves the residual as large as the raw difference, so it is a per-element scatter rather
+than the signature a scale error would leave. That is the same verdict the peer reached on
+their side, for the same reason.
+
 ## Where we actually stand, and a fourth finding that undercuts the measurement itself
 
 **The teacher-forced prefill is one position behind.** Our logits at step `k` are the
