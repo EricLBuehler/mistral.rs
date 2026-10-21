@@ -724,6 +724,7 @@ pub(crate) fn cuda_graph_startup_capture_allowed(q_len: usize) -> bool {
     q_len > 0
 }
 
+#[cfg(target_family = "unix")]
 pub(crate) fn prepare_fa3_decode_schedules(
     metadata: &PagedAttentionInputMetadata,
 ) -> candle_core::Result<()> {
@@ -744,6 +745,13 @@ pub(crate) fn prepare_fa3_decode_schedules(
             prepare.buffers.schedule(prepare.key)?,
         )
     })
+}
+
+#[cfg(not(target_family = "unix"))]
+pub(crate) fn prepare_fa3_decode_schedules(
+    _metadata: &PagedAttentionInputMetadata,
+) -> candle_core::Result<()> {
+    Ok(())
 }
 
 /// One decode step, padded up to its graph batch bucket. Pad rows alias row 0 for reads and skip

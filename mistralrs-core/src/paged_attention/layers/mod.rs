@@ -68,6 +68,18 @@ pub mod paged_attention {
         }
 
         #[allow(unused_variables)]
+        pub fn write_cache(
+            &self,
+            _key: &Tensor,
+            _value: &Tensor,
+            _key_cache: &mut Tensor,
+            _value_cache: &mut Tensor,
+            _input_metadata: &PagedAttentionInputMetadata,
+        ) -> Result<()> {
+            candle_core::bail!("Paged attention requires the CUDA or Metal feature flags.");
+        }
+
+        #[allow(unused_variables)]
         pub fn gather_canvas_kv(
             &self,
             _key_cache: &Tensor,
