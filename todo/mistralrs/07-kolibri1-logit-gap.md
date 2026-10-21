@@ -433,6 +433,23 @@ implementations is not the norm's scale: our norm is already the f32-scale form 
 are bit-identical. The residual is the width of the activations around the attention - the
 projections' outputs and the residual stream - which is a separate change.
 
+**And the CPU half of that fix is complete, because there is no other CPU path to miss.**
+`candle-nn/src` has no `cfg(target_arch)`, no `cfg(feature = "accelerate")` and no simd or neon
+path anywhere: the `RmsNorm` CustomOp2's `cpu_fwd` is the only CPU implementation ✓ and the
+patch changes it ✓. So the paths that could still round the scale are the CUDA and Metal
+kernels and not any CPU variant ✓.
+
+**Which is also the answer to why the defect was hard to see.** candle-nn's norms are generic
+scalar Rust, auto-vectorised by LLVM for the sum of squares and not for the per-element
+conversion ✓. That does not read like "a fused kernel with a rounding bug" ✓ - it reads like
+an implementation detail ✓, and the slow path beside it is right by construction ✓.
+
+**The arch-specific work in this stack is ours, then**: the bf16 dot with its four
+accumulators and the BFMMLA variant, the output-parallel GEMV, the NEON attention ✓. The one
+place where ours is not vectorised is the fp8 dequant, which is a scalar loop at 6.60 GB/s of
+bf16 output against the reference's 11 GB/s ✓ - and it is the whole of the fp8 path's
+remaining cost ✓.
+
 **One open question on the PR's scope.** It changes only the CPU kernel. The CUDA and Metal
 paths have their own kernels, and if they round the scale the same way then #4052 is not fixed
 for those, and closing it on the CPU change alone would be premature. The CUDA crate is not
