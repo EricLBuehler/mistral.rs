@@ -72,6 +72,38 @@ used only for direction, never as a result. Two threads also had to be accounted
 separately: node 3 is shared with another workload at times, and the raw thread sweep
 (/proc-based) is noted where it was used.
 
+### Box claims: announce before you start
+
+The box is shared with other agents, and the peer channel is not enough on its own - the other
+agents poll the machine rather than read chat. So the claim state lives in a file:
+**`/tmp/box-claims.txt`**, one line per active claim:
+
+```
+<agent>  <what>  <node>  <mem GB>  <governor>  <until local time>  <pid(s)>
+```
+
+Read it before starting anything long, and write a line before you start, with an ETA. A claim
+that begins without a line is indistinguishable from a stuck process.
+
+The rules, in the order they were learned:
+
+1. **Announce before starting, with an ETA.** A 30-minute grid started without a line here
+   held node 3 while a peer polled for 2h15m for a quiet window.
+2. **Memory is the binding constraint, not the load.** 255 GB with no swap, and two
+   model-sized workloads do not fit: 149 GB for a bf16 Kolibri-1 plus 74 GB for the fp8 one
+   is 223 of 255, and a third allocation tips it into the OOM killer. Check `free -g` and the
+   process table - the `oom_score` tells you who the kernel will take, and the load average
+   does not.
+3. **A cache drop is a machine-wide event.** `drop_caches` evicts every other agent's resident
+   model pages and turns their measurement into a disk benchmark that nobody chose. It is also
+   self-amplifying as a retry mechanism: dropping the cache makes the next run re-read the
+   model from disk, so it is slower and more likely to fail, which drops the cache again.
+4. **The governor is global.** `schedutil` is the normal operating state at 1.0 GHz;
+   `performance` at 3.4 GHz is a deliberate, announced exception, and the last user restores
+   `schedutil` and says so on the line.
+5. **A cell that needed retries is not the same cell as one that passed first time.** Record
+   it in the row.
+
 ### The box is shared with a peer agent, and that has its own hazards
 
 The other agent is working Kolibri-1 in the vllm.cpp repo. Three things collide, and all three
