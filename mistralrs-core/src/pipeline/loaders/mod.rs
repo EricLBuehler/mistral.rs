@@ -5,6 +5,7 @@ mod diffusion_loaders;
 mod embedding_loaders;
 mod multimodal_loaders;
 mod normal_loaders;
+mod qwen_vision_memory;
 pub(crate) use activation_memory::{
     apply_model_activation_memory, estimate_model_activation_memory,
     reserve_model_activation_memory,
@@ -813,6 +814,18 @@ pub trait DeviceMappedModelLoader {
         config: &str,
         params: &AutoDeviceMapParams,
     ) -> Result<usize>;
+
+    fn non_mapped_activation_memory_bytes(
+        &self,
+        config: &str,
+        params: &AutoDeviceMapParams,
+        _dtype: DType,
+        _device: &Device,
+    ) -> Result<usize> {
+        self.non_mapped_max_act_size_elems(config, params)?
+            .checked_mul(DType::F32.size_in_bytes())
+            .ok_or_else(|| anyhow::anyhow!("non-mapped activation memory size overflow"))
+    }
     /// Maximum activation size of mapped parts of the model
     fn mapped_max_act_size_elems(
         &self,

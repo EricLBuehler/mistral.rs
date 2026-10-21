@@ -27,8 +27,9 @@ use crate::{
         block_aligned_sliding_window_start,
         mask_cache::PrefixMaskCache,
         plan::{
-            gather_prefill_workspace_for_lengths, DecodePlan, DecodePlanInput,
-            GatherPrefillWorkspaceRequest, PrefixPrefillPlan, PrefixPrefillPlanInput,
+            gather_prefill_uses_packed_varlen, gather_prefill_workspace_for_lengths, DecodePlan,
+            DecodePlanInput, GatherPrefillWorkspaceRequest, PrefixPrefillPlan,
+            PrefixPrefillPlanInput,
         },
         AttentionBackendKind, Fp8AttentionScales, _PAD_SLOT_ID,
     },
@@ -1664,14 +1665,7 @@ impl PagedAttention {
         let max_kv = kv_lens.iter().copied().max().unwrap_or(0);
         // Pure-causal prefix prefills run flash varlen over the gathered KV: fa2 aligns causal
         // bottom-right when kv_len > q_len, so no O(q*kv) mask or score materialization is needed.
-        let pure_causal_varlen = prefix_causal
-            && causality_known
-            && mm_prefix_ranges.is_none()
-            && ctx.sdpa_params.sliding_window.is_none()
-            && !tensors.attention_mask.is_custom()
-            && query_layout_is_dense
-            && supports_packed_varlen_sdpa(tensors.query, ctx.dims.head_size, ctx.sdpa_params);
-        if pure_causal_varlen {
+        if gather_prefill_uses_packed_varlen(prefill_plan_input) {
             let cu_q = if let Some(fp) = ctx.flash_params {
                 if !fp.cumulative_seqlens_q.is_empty() {
                     resolve_tensor_for_device(

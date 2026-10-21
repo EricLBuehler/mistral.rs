@@ -846,6 +846,21 @@ pub mod text_models_inputs_processor {
         })
     }
 
+    pub(crate) fn uses_packed_prefill(
+        query_lens: &[usize],
+        permitted: bool,
+        cold: bool,
+        final_chunk: bool,
+        causal: bool,
+    ) -> bool {
+        permitted
+            && cold
+            && final_chunk
+            && causal
+            && query_lens.len() > 1
+            && query_lens.iter().any(|len| *len != query_lens[0])
+    }
+
     // chunk_offset_toks is the number of tokens by which the tokens are offset,
     // chunk_offset_toks / prompt_chunksize = number of batches
     //
@@ -888,21 +903,24 @@ pub mod text_models_inputs_processor {
                 .iter()
                 .all(|device| device.is_cuda())
         });
-        let packed_prefill = allow_packed_prefill
-            && effective_lens.len() > 1
-            && effective_lens.iter().any(|len| *len != max_len)
+        let packing_permitted = allow_packed_prefill
             && device.is_cuda()
             && all_model_devices_cuda
             && crate::using_flash_attn()
             && !return_raw_logits
             && last_n_context_len.is_none()
-            && chunk_offset_toks == 0
-            && !has_any_cache_hit
-            && paged_attn_metadata.as_ref().is_some_and(|metadata| {
-                metadata.enable_packed_prefill
-                    && metadata.is_final_prompt_chunk
-                    && metadata.prompt_chunk_attention_policy == MultimodalAttentionPolicy::Causal
-            });
+            && paged_attn_metadata
+                .as_ref()
+                .is_some_and(|metadata| metadata.enable_packed_prefill);
+        let packed_prefill = uses_packed_prefill(
+            &effective_lens,
+            packing_permitted,
+            chunk_offset_toks == 0 && !has_any_cache_hit,
+            paged_attn_metadata
+                .as_ref()
+                .is_some_and(|metadata| metadata.is_final_prompt_chunk),
+            prompt_chunk_causal,
+        );
         if packed_prefill {
             tracing::debug!(
                 sequences = effective_lens.len(),
@@ -2861,6 +2879,18 @@ pub mod text_models_inputs_processor {
 
         const FIRST_METAL_LIMIT: usize = 1024;
         const SECOND_METAL_LIMIT: usize = 4096;
+
+        #[test]
+        fn packed_prefill_requires_cold_final_causal_ragged_inputs() {
+            let lengths = [512, 1, 1];
+            assert!(uses_packed_prefill(&lengths, true, true, true, true));
+            assert!(!uses_packed_prefill(&lengths, false, true, true, true));
+            assert!(!uses_packed_prefill(&lengths, true, false, true, true));
+            assert!(!uses_packed_prefill(&lengths, true, true, false, true));
+            assert!(!uses_packed_prefill(&lengths, true, true, true, false));
+            assert!(!uses_packed_prefill(&[512, 512], true, true, true, true));
+            assert!(!uses_packed_prefill(&[], true, true, true, true));
+        }
 
         #[test]
         fn attention_memory_limits_follow_each_device() {

@@ -129,6 +129,7 @@ pub struct RuntimeMemoryPlan {
     pub mapped_activation_bytes: usize,
     pub primary_non_attention_bytes: usize,
     pub mapped_non_attention_bytes: usize,
+    pub encoder_activation_bytes: usize,
     pub planned_query_tokens: usize,
     pub logits_bytes_per_query_token: usize,
     pub custom_prefill_mask: bool,
@@ -147,15 +148,30 @@ impl RuntimeMemoryPlan {
         )
     }
 
-    pub fn non_attention_bytes(self, primary: bool, query_tokens: usize) -> Result<usize> {
-        self.scale(
-            if primary {
-                self.primary_non_attention_bytes
-            } else {
-                self.mapped_non_attention_bytes
-            },
-            query_tokens,
-        )
+    pub fn non_attention_bytes(
+        self,
+        primary: bool,
+        query_tokens: usize,
+        sequences: usize,
+    ) -> Result<usize> {
+        let bytes = if primary {
+            self.primary_non_attention_bytes
+        } else {
+            self.mapped_non_attention_bytes
+        };
+        let text = bytes
+            .checked_mul(query_tokens)
+            .context("Runtime text activation memory size overflow")?
+            .div_ceil(self.planned_query_tokens.max(1));
+        let logits = if primary {
+            self.logits_bytes_per_query_token
+                .checked_mul(sequences)
+                .context("Runtime logits memory size overflow")?
+        } else {
+            0
+        };
+        text.checked_add(logits)
+            .context("Runtime non-attention memory size overflow")
     }
 
     fn scale(self, bytes: usize, query_tokens: usize) -> Result<usize> {
