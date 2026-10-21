@@ -350,12 +350,18 @@ re-measured rather than quoted.
 
 The validation is a memory limit, and this host can make one exactly. cgroup v2 here has the
 `memory` and `cpuset` controllers, so a child cgroup with `memory.max=32G`,
-`memory.swap.max=0` and `cpuset.cpus=96-127` is a 32 GB box with no swap - which is the
+`memory.swap.max=0` and `cpuset.cpus=64-95` is a 32 GB box with no swap - which is the
 target, since the box's own 256 GB swapfile would otherwise hide the behaviour being
-measured.
+measured. The limit is cgroup-local, so the reclaim it causes is charged to the cgroup and
+not to whatever else is on the host, and excluding swap is what makes it a faithful
+emulation rather than a slow one. The cpuset is there for a second reason: node 2 is a zone,
+so the measurement does not contend with whatever else the host is doing.
 
-- Download `Kolibri-1-Q2_K.gguf` (26.67 GiB) and decode it under the limit. It should fit
-  entirely, and the question is the rate.
+- Decode `Kolibri-1-Q2_K.gguf` (26.67 GiB, `general.file_type = 10` = MOSTLY_Q2_K) under
+  the limit. **It is already on the box, at `/tmp/opencode/kolibri1-q2k.gguf`** - the
+  download is not needed, and this host's outbound network is throttled to about 0.4 MB/s
+  anyway, which would have made it a nineteen-hour job. It should fit entirely, and the
+  question is the rate.
 - Then the interesting one: the 149 GB bf16 checkpoint under the same limit. 12 GB of it
   should be resident and the rest should stream. A decode that works there is the proof that
   the page cache is the cache.
