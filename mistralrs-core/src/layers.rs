@@ -4094,7 +4094,7 @@ impl Module for ScaledEmbedding {
 #[cfg(test)]
 mod tests {
     use super::{
-        contains_tensor_or_weight_source_with, use_legacy_tied_uqff_head,
+        contains_tensor_or_weight_source_with, rms_norm_f32_scale, use_legacy_tied_uqff_head,
         yarn_inv_freq_and_attention_factor, Qwen3VLRotaryEmbedding, YarnRopeConfig,
     };
     use candle_core::{DType, Device, Tensor};
@@ -4313,6 +4313,98 @@ mod tests {
         )?;
         let expected = 1.0 + 0.1 * 4.0f32.ln();
         assert!((attention_factor - expected).abs() < 1e-6);
+        Ok(())
+    }
+
+    /// How far apart are the three ways of computing an RMSNorm with an f32 scale?
+    ///
+    /// The upstream fix (huggingface/candle#4057) divides by the f32 scale; this file's
+    /// `rms_norm_f32_scale` multiplies by an f64 reciprocal; candle's own slow path divides
+    /// in f64. All three round the normalised value to the storage dtype before the weight
+    /// multiply, so they agree on the rounding *order* and differ only in the last f32 bit of
+    /// the scale. This measures how often that difference survives the bf16 rounding, because
+    /// "about one f32 ulp apart" is not a useful thing to say about a router whose margin is
+    /// 9.4e-05 nats.
+    #[test]
+    fn the_three_rmsnorm_scale_forms_agree_in_bf16() -> anyhow::Result<()> {
+        let dev = Device::Cpu;
+        let (rows, hidden) = (512usize, 2560usize);
+        let eps = 1e-6f32;
+
+        // A spread of magnitudes, so the rounding lands on both sides of a boundary.
+        let data: Vec<f32> = (0..rows * hidden)
+            .map(|i| {
+                let x = (i % hidden) as f32;
+                ((x * 0.031).sin() * (1.0 + (i / hidden) as f32 * 0.5)).exp()
+            })
+            .collect();
+        let x = Tensor::from_vec(data, (rows, hidden), &dev)?.to_dtype(DType::BF16)?;
+        let weight = Tensor::ones((hidden,), DType::BF16, &dev)?;
+
+        // This file's form: f32 sum, f64 reciprocal, round the normalised value, weight.
+        let ours = rms_norm_f32_scale(&x, &weight, eps)?;
+
+        // The upstream fix's form: f32 scale, f32 divide, round the normalised value, weight.
+        let xf = x.to_dtype(DType::F32)?;
+        let sum2 = xf.sqr()?.sum_keepdim(candle_core::D::Minus1)?;
+        let mean = (sum2.clone() / hidden as f64)?;
+        let scale = (mean.clone() + eps as f64)?.sqrt()?.to_dtype(DType::F32)?;
+        let divided = xf.broadcast_div(&scale)?;
+        let upstream = divided.to_dtype(DType::BF16)?.broadcast_mul(&weight)?;
+
+        // Candle's slow path: f32 sum, f64 divide, round, weight.
+        let slow_scale = (mean.clone() + eps as f64)?.sqrt()?;
+        let slow = xf
+            .broadcast_div(&slow_scale)?
+            .to_dtype(DType::BF16)?
+            .broadcast_mul(&weight)?;
+
+        // The old fused form, for scale: the scale is computed in f32 and then rounded to
+        // the storage dtype before the division.
+        let rounded_scale = (mean.clone() + eps as f64)?
+            .sqrt()?
+            .to_dtype(DType::BF16)?
+            .to_dtype(DType::F32)?;
+        let old = xf
+            .broadcast_div(&rounded_scale)?
+            .to_dtype(DType::BF16)?
+            .broadcast_mul(&weight)?;
+
+        let bits = |t: &Tensor| -> candle_core::Result<Vec<u16>> {
+            Ok(t.flatten_all()?
+                .to_vec1::<half::bf16>()?
+                .iter()
+                .map(|v| v.to_bits())
+                .collect())
+        };
+        let (a, b, c) = (bits(&ours)?, bits(&upstream)?, bits(&slow)?);
+        let n = a.len();
+        let diff_ours_upstream = a.iter().zip(&b).filter(|(x, y)| x != y).count();
+        let diff_ours_slow = a.iter().zip(&c).filter(|(x, y)| x != y).count();
+        let diff_upstream_slow = b.iter().zip(&c).filter(|(x, y)| x != y).count();
+
+        println!("rows {rows} hidden {hidden}");
+        println!("  ours vs upstream #4057: {diff_ours_upstream}/{n} differ");
+        println!("  ours vs the slow path:  {diff_ours_slow}/{n} differ");
+        println!("  upstream vs slow path:  {diff_upstream_slow}/{n} differ");
+
+        // And the old fused form, for scale: this is the defect the upstream fix removes.
+        let d = bits(&old)?;
+        let diff_old = a.iter().zip(&d).filter(|(x, y)| x != y).count();
+        let rel = a
+            .iter()
+            .zip(&d)
+            .map(|(x, y)| {
+                let xv = half::bf16::from_bits(*x).to_f32();
+                let yv = half::bf16::from_bits(*y).to_f32();
+                if xv.abs() > 1e-6 {
+                    (xv - yv).abs() / xv.abs()
+                } else {
+                    0.0
+                }
+            })
+            .fold(0.0f32, f32::max);
+        println!("  ours vs the old fused form: {diff_old}/{n} differ, max relative {rel:.3e}");
         Ok(())
     }
 }
