@@ -100,10 +100,45 @@ impl MoECache {
     /// slab once and then evicts the coldest entries until the cache is back inside its budget,
     /// so the footprint is bounded no matter how large the model or how long the run.
     pub fn slab(&self, owner: usize, idx: usize, src: &Tensor) -> Tensor {
+        if let Some(resident) = self.get(owner, idx) {
+            return resident;
+        }
+
+        // Copied outside the lock: this is a memcpy of a few MB and there is no reason to hold
+        // the cache still for it.
+        let Some(copy) = copy_slab(src) else {
+            return src.clone();
+        };
+        self.insert(owner, idx, copy)
+    }
+
+    /// The resident slab for `(owner, idx)`, if the cache holds one.
+    ///
+    /// This is the peek half of a peek-then-fill: a caller that has to *compute* the slab
+    /// wants to know whether it already has one before it spends the arithmetic, and the
+    /// whole-stack callers cannot use `slab` for that because they are handed a source
+    /// tensor they have already paid for.
+    pub fn get(&self, owner: usize, idx: usize) -> Option<Tensor> {
+        let Ok(mut state) = self.state.lock() else {
+            return None;
+        };
+        let tick = state.tick;
+        state.tick += 1;
+        let entry = state.entries.get_mut(&(owner, idx))?;
+        entry.last = tick;
+        Some(entry.tensor.clone())
+    }
+
+    /// Inserts a slab the caller already owns, and returns it.
+    ///
+    /// The tensor is stored as it is, not copied: the caller is handing over something it
+    /// computed and nobody else holds, so a copy would be pure waste. It is the fill half of
+    /// a peek-then-fill.
+    pub fn insert(&self, owner: usize, idx: usize, tensor: Tensor) -> Tensor {
         let key = (owner, idx);
         {
             let Ok(mut state) = self.state.lock() else {
-                return src.clone();
+                return tensor;
             };
             let tick = state.tick;
             state.tick += 1;
@@ -113,23 +148,17 @@ impl MoECache {
             }
         }
 
-        // Copied outside the lock: this is a memcpy of a few MB and there is no reason to hold
-        // the cache still for it.
-        let Some(copy) = copy_slab(src) else {
-            return src.clone();
-        };
-
+        let bytes = slab_bytes(&tensor);
         let Ok(mut state) = self.state.lock() else {
-            return copy;
+            return tensor;
         };
         let tick = state.tick;
         state.tick += 1;
-        let bytes = slab_bytes(&copy);
         state.bytes += bytes;
         state.entries.insert(
             key,
             Entry {
-                tensor: copy.clone(),
+                tensor: tensor.clone(),
                 bytes,
                 last: tick,
             },
@@ -146,7 +175,7 @@ impl MoECache {
                 state.bytes = state.bytes.saturating_sub(evicted.bytes);
             }
         }
-        copy
+        tensor
     }
 
     /// Resident bytes and entry count, for a test or a progress line.
@@ -184,6 +213,45 @@ mod tests {
             // about dtype, so reusing one key would hand back the previous slab.
             assert_eq!(widen(&src)?, widen(&cache.slab(1, idx, &src))?, "{dtype:?}");
         }
+        Ok(())
+    }
+
+    /// The peek-then-fill pair has to agree with the copy-and-fill path it sits beside: a
+    /// caller that asks first and inserts on a miss must end up with the same values, and a
+    /// miss must report a miss rather than an empty slab.
+    #[test]
+    fn peek_then_fill_agrees_with_copy_and_fill() -> Result<()> {
+        let cache = MoECache {
+            budget: 1 << 20,
+            state: Mutex::new(State::default()),
+        };
+        let src = Tensor::rand(-1f32, 1f32, (8, 16), &Device::Cpu)?;
+        let widen = |t: &Tensor| t.to_dtype(DType::F32)?.flatten_all()?.to_vec1::<f32>();
+
+        assert!(
+            cache.get(1, 0).is_none(),
+            "an empty cache must report a miss"
+        );
+        let filled = cache.insert(1, 0, src.clone());
+        assert_eq!(
+            widen(&src)?,
+            widen(&filled)?,
+            "the inserted slab must read back"
+        );
+        let peeked = cache.get(1, 0).expect("the inserted slab must be found");
+        assert_eq!(
+            widen(&src)?,
+            widen(&peeked)?,
+            "the peeked slab must read back"
+        );
+        assert!(
+            cache.get(1, 1).is_none(),
+            "a different index must still miss"
+        );
+        assert!(
+            cache.get(2, 0).is_none(),
+            "a different owner must still miss"
+        );
         Ok(())
     }
 

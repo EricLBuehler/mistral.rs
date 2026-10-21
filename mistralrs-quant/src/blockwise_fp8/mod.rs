@@ -45,6 +45,13 @@ fn scoped_gather_enabled() -> bool {
     })
 }
 
+/// The next cache identity. The high bit keeps it clear of the addresses the unquantised
+/// path files its entries under.
+fn next_cache_id() -> usize {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+    (NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed) | (1 << 48)) as usize
+}
+
 /// The expert ids an index tensor names, as u32.
 fn read_expert_ids(indices: &Tensor) -> Result<Vec<u32>> {
     let flat = indices.flatten_all()?;
@@ -65,6 +72,15 @@ pub struct BlockwiseFP8Linear {
     weight_block_size: Vec<usize>,
     activation_scheme: Option<Fp8ActivationScheme>,
     provider: BlockwiseFp8Provider,
+    /// The identity this layer's cache entries are filed under.
+    ///
+    /// A per-instance number, not an address. An address is reused when a model is unloaded
+    /// and another is loaded in the same process, and a cache entry left over from the old
+    /// model would then be served for the new one's expert - the same key, the wrong weights.
+    /// The counter only ever increases, so an entry can never be attributed to a layer that
+    /// did not create it. The high bit keeps it clear of the address-based owners the
+    /// unquantised path uses.
+    cache_id: usize,
     /// The dequantised weight of a dense layer, kept after the first use.
     ///
     /// A dense layer's weight does not change between forwards, so dequantising it on every
@@ -287,9 +303,22 @@ impl BlockwiseFP8Linear {
     /// scales are per block and the blocks do not cross an expert boundary - provided the
     /// block size divides the expert's row count, which is checked.
     fn dequantize_experts(&self, wanted: &[usize]) -> Result<Vec<Tensor>> {
+        let cache = crate::moe_cache::cache();
         let mut slabs = Vec::with_capacity(wanted.len());
         for &expert in wanted {
-            slabs.push(self.dequantize_expert(expert)?);
+            // The cache holds the dequantised slab, so a repeat of the same expert costs
+            // nothing. The routing repeats, so this is most of the work most of the time.
+            let slab = match cache {
+                Some(cache) => match cache.get(self.cache_id, expert) {
+                    Some(resident) => resident,
+                    None => {
+                        let dequantized = self.dequantize_expert(expert)?;
+                        cache.insert(self.cache_id, expert, dequantized)
+                    }
+                },
+                None => self.dequantize_expert(expert)?,
+            };
+            slabs.push(slab);
         }
         Ok(slabs)
     }
@@ -391,6 +420,7 @@ impl QuantMethod for BlockwiseFP8Linear {
                     dequant_dtype,
                     weight_block_size,
                     activation_scheme,
+                    cache_id: next_cache_id(),
                     dequantized: OnceLock::new(),
                     provider: BlockwiseFp8Provider::Legacy,
                 };
@@ -1263,6 +1293,7 @@ pub fn blockwise_fp8_moe(
         weight,
         weight_scale_inv,
         bias: None,
+        cache_id: next_cache_id(),
         dequantized: OnceLock::new(),
         dequant_dtype,
         weight_block_size,
@@ -2487,6 +2518,7 @@ mod scoped_gather_tests {
             weight_block_size: vec![block, block],
             activation_scheme: None,
             provider: BlockwiseFp8Provider::Legacy,
+            cache_id: next_cache_id(),
             dequantized: OnceLock::new(),
         };
         Ok((linear, weight_scale_inv, weight))
