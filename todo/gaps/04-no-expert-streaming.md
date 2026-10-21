@@ -254,3 +254,67 @@ skewed-routing model want completely different caches.
 The first is a quantisation question and the second is a systems question. They are not
 alternatives to each other so much as different products, and the first is much cheaper to
 deliver because the artefact already exists.
+
+
+## Measured: the expert working set is small enough that the page cache is the cache
+
+From a 1000-step chained decode (300,000 selections, in the order the model touches them):
+
+```
+per layer, over the whole trace:
+  layer   distinct used   top-6 share   top-20 share   for 90%
+      0             26         54.9%          99.8%         14
+      1             21         81.7%         100.0%          8
+     25             56         68.1%          97.8%         12
+     49             65         72.1%          94.7%         13
+
+  experts per layer needed for 90% of that layer's selections:
+    min 8, median 14, max 21   (of 384)
+```
+
+**Each layer only ever uses 21 to 71 of its 384 experts**, and the median layer needs 14 of
+them to cover 90% of its selections. That is the whole design question, answered.
+
+Simulated over the real access order:
+
+| cache | slots | GB bf16 | GB fp8 | hit rate |
+|---|---|---|---|---|
+| flat LRU | 300 | 2.2 | 1.1 | 58.3% |
+| **flat LRU** | **1000** | **7.3** | **3.7** | **98.9%** |
+| flat LRU | 2887 | 21.1 | 10.6 | 99.2% |
+| per-layer LRU | 16/layer | 5.9 | 2.9 | 98.3% |
+| per-layer LRU | 24/layer | 8.8 | 4.4 | 98.9% |
+| static top-24/layer, no eviction | 1200 | 8.8 | 4.4 | 97.6% |
+
+**A flat LRU of 1000 slots - 7.3 GB in bf16, 3.7 GB in fp8 - gets 98.9%.** The working set is
+that small because the hot set per layer is small, and the page cache is already a flat LRU.
+
+### So the resident set on a 32 GB box
+
+```
+non-expert, bf16                    4.85 GB
+hot experts (1000 slots, bf16)       7.30 GB
+                                 ----------
+                                  12.15 GB resident, on a 26 GB budget
+```
+
+and at a 98.9% hit rate the per-token disk traffic is 2.56 GB x 1.1% = **28 MB per token**,
+not 2.56 GB. At 2 GB/s that is 0.014 s per token, so the box becomes **compute bound rather
+than I/O bound** - 6.9 GFLOP per token is 4-17 ms on a laptop-class CPU.
+
+**This makes the 32 GB case a call-site change rather than a subsystem.** mmap the GGUF, gather
+only the selected experts out of the mapping, and let the kernel's own LRU do the caching,
+because the working set is ~1000 slots and a 32 GB box's page cache holds it. There is no cache
+manager to write, no eviction policy, no prefetch logic.
+
+### Caveats on the measurement
+
+- **One prompt, 1000 steps.** The pool sizes are per-layer and prompt-specific; a different
+  domain may route differently. The per-layer LRU at 16-24 adapts, and the static top-24 does
+  not, so the dynamic form is the safer design even though the static form scores well here.
+- The prefill and the decode were traced with the same prompt, so the decode positions are
+  the prompt's tokens at 1000 different context lengths. That is a fair sample of routing
+  variety but not of distinct text.
+- The measurement is of *our* router, which is now known to be f32-faithful, so the pool
+  should match the reference's. It should be re-checked against the reference's own routing
+  before the cache is sized from it.
