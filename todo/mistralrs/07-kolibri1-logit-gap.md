@@ -253,6 +253,44 @@ with ggml's, and the device's does not. So the cleanest CPU reference is llama.c
 the primary, which is the opposite of where this started - the primary was the reference until
 the row-offset bug in its writer put it in doubt.
 
+**That last claim does not survive the peer's measurement, and the correction matters.** Their
+production keeps the rms scale in f32 exactly as ggml does, so the norm cannot be what
+separates the implementations. And the measured ordering is the opposite of what the norm story
+predicts: their production and ours agree to a mean gap of -0.028 nats (cosine 0.9991), while
+llama.cpp sits a **median 1.03 nats** from the primary (p90 1.99, max 5.88). So llama.cpp is the
+outlier, and the norm is not the discriminator.
+
+**The container is ruled out by measurement, not argument.** The hypothesis was that the GGUF
+is `round_bf16(fp8 * scale_inv)` and therefore differs from the bf16 safetensors by about
+4.6e-5 relative. It does not: the two hold the same bytes.
+
+```
+compared 78,643,200 bf16 elements across 60 tensors
+  (5 layers x 4 experts x gate/up/down projections)
+  bit-identical: 78,643,200/78,643,200 (100.0000%)
+```
+
+The GGUF was converted from the fp8 checkpoint as `round_bf16(fp8 * scale_inv)`, and the bf16
+safetensors are that same dequantisation rounded to bf16 - the same computation done once, not
+twice. So the 1.03 nats is the implementation, with identical weights on both sides.
+
+**What is left, and what is not.** The router's reduction order is the obvious candidate: a
+2560-element f32 dot product with the top-6 cut on a 9.4e-05-nat margin. But it does not
+explain the ordering either - our f32 router and the peer's f32 router agree on the logits to
+0.03 nats while selecting the same expert set on only about two rows in three, so the selection
+is not what is driving the 0.03 nats. There is no mechanism here yet that explains the
+ordering, and it is recorded as unexplained rather than fitted.
+
+The measurement that would localise it is a per-layer dump from llama.cpp, which is the outlier:
+the same quantities the peer's production dump carries, at the same positions and the same raw
+ids, plus llama.cpp's router top-6 per layer. If the selections agree and the hidden states
+diverge, the router is exonerated and the arithmetic downstream of it is at fault. If the
+selections differ, it is the router and the fix is matching the reduction order.
+
+The attention is a candidate that has not been eliminated either: llama.cpp runs a flash-attention
+CPU kernel and this build runs candle's eager SDPA, over a 513-window, accumulating the sequence
+in different orders.
+
 **And the band gate is not a compromise.** Two independent backends each carry a per-row norm
 deviation an order of magnitude larger than the margin the routing decision is made at. The
 honest gate is a band, and any implementation that is not bit-reproducing another one's sort
