@@ -400,6 +400,45 @@ So the comparisons in this file have no uncertainty floor from run-to-run variat
 CPU side, and the residual-stream distances quoted are implementation differences rather than
 noise.
 
+**The upstream fix exists: huggingface/candle#4057.** It keeps the CPU RMSNorm scale in f32
+and rounds the normalised value instead, which is the order candle's own slow path and
+Hugging Face both use, so the two implementations in `ops.rs` agree with each other. The
+change is two lines in the fused CPU kernel plus two regressions that compare exact bit
+patterns in both half dtypes, over one row and 33 rows so the serial and the parallel paths
+are both covered, with nonzero storage offsets and a case on the rounding boundary. It fails
+against the original production code, which is what makes it worth having.
+
+**It is bit-identical to the fix written here, and it removes the defect the issue reported.**
+Measured on 512 rows of 2560 elements, 1,310,720 bf16 values:
+
+```
+  ours vs the fused path: 0/1310720 differ
+  ours vs the slow path:  0/1310720 differ
+  fused path vs slow path: 0/1310720 differ
+  ours vs the old fused form: 58637/1310720 differ, max relative 7.812e-3
+```
+
+The three f32-scale forms are bit-identical, so the f32-versus-f64 difference in the scale
+does not survive the rounding, and the old fused form is 7.812e-3 off - the same magnitude
+the issue reported.
+
+**So adopting it is a no-op numerically and buys one implementation instead of two.** When it
+merges, the local `rms_norm_f32_scale` and its 13 call sites can go, and the
+`MISTRALRS_RMSNORM_CANDLE` toggle with them. The norm is 1.90 ms of a 318 ms decode step, so
+there is no throughput argument either way - the argument is that a fix we carry is a fix we
+have to keep in step with upstream.
+
+**And it does not close what is left.** The 3.54e-03 between our forward and the reference
+implementations is not the norm's scale: our norm is already the f32-scale form and the two
+are bit-identical. The residual is the width of the activations around the attention - the
+projections' outputs and the residual stream - which is a separate change.
+
+**One open question on the PR's scope.** It changes only the CPU kernel. The CUDA and Metal
+paths have their own kernels, and if they round the scale the same way then #4052 is not fixed
+for those, and closing it on the CPU change alone would be premature. The CUDA crate is not
+vendored in the tree here, so it is a question rather than a finding, and it is asked on the
+PR.
+
 **What the 0.91 bf16 ulp is: three roundings, and the references do not have them.** Our
 attention block's output differs from the peer's CPU path by 3.54e-03 relative, which is 0.91
 of a bf16 ulp. One extra rounding accounts for 0.29 of an ulp, so this is about three.
