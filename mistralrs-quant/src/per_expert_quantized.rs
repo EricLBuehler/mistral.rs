@@ -94,10 +94,7 @@ impl PerExpertQuantizedLinear {
                 candle_core::bail!("PerExpertQuantizedLinear: expert {e} is out of range");
             };
             let storage = QStorage::from_data(Cow::Borrowed(slab), &self.device, dtype)?;
-            let q = QTensor::new(
-                storage,
-                (self.out_features, self.in_features),
-            )?;
+            let q = QTensor::new(storage, (self.out_features, self.in_features))?;
             slabs.push(q.dequantize(&self.device)?);
         }
 
@@ -124,12 +121,7 @@ impl PerExpertQuantizedLinear {
     /// `repeat` is how many slots share one activation row: the top-k of a token share the
     /// token's row, so the rows are passed once and the kernel addresses them by
     /// `slot / repeat`.
-    pub fn gather_slots(
-        &self,
-        a: &[f32],
-        ids: &[u32],
-        repeat: usize,
-    ) -> Result<Vec<f32>> {
+    pub fn gather_slots(&self, a: &[f32], ids: &[u32], repeat: usize) -> Result<Vec<f32>> {
         let (slabs, dense) = self.resolve(ids)?;
         moe_gather_cpu::gather_gemv_per_expert(
             a,
@@ -181,11 +173,7 @@ impl PerExpertQuantizedLinear {
             .to_vec1::<f32>()?;
 
         let out = self.gather_slots(&a, &ids_flat, repeat)?;
-        Tensor::from_vec(
-            out,
-            (n_tokens, top_k, self.out_features),
-            &self.device,
-        )
+        Tensor::from_vec(out, (n_tokens, top_k, self.out_features), &self.device)
     }
 }
 

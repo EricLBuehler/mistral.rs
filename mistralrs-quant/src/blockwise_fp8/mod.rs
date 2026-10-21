@@ -33,6 +33,17 @@ use crate::{
     QuantizedSerde, Shard, ShardedVarBuilder, UnquantLinear,
 };
 
+/// The expert ids an index tensor names, as u32.
+fn read_expert_ids(indices: &Tensor) -> Result<Vec<u32>> {
+    let flat = indices.flatten_all()?;
+    match indices.dtype() {
+        DType::U8 => Ok(flat.to_vec1::<u8>()?.iter().map(|&v| v as u32).collect()),
+        DType::U32 => Ok(flat.to_vec1::<u32>()?),
+        DType::I64 => Ok(flat.to_vec1::<i64>()?.iter().map(|&v| v as u32).collect()),
+        dtype => candle_core::bail!("expert indices must be u8, u32 or i64, got {dtype:?}"),
+    }
+}
+
 #[derive(Debug)]
 pub struct BlockwiseFP8Linear {
     weight: Tensor,
@@ -246,6 +257,71 @@ impl BlockwiseFP8Linear {
     }
 }
 
+impl BlockwiseFP8Linear {
+    /// One expert's weights, dequantised.
+    fn dequantize_expert(&self, expert: usize) -> Result<Tensor> {
+        ops::fp8_blockwise_dequantize(
+            &self.weight.i(expert)?,
+            &self.weight_scale_inv.i(expert)?,
+            self.weight_block_size.to_vec(),
+            self.dequant_dtype,
+        )
+    }
+
+    /// The experts the gather names, dequantised, and the indices remapped onto them.
+    ///
+    /// The whole stack is one quantised block per expert, so dequantising all of it costs the
+    /// whole model on every forward, in memory as well as in arithmetic. Only the routed
+    /// experts are needed, and at decode that is `top_k` of them out of the whole layer.
+    ///
+    /// The remap is what lets the gather read a compacted stack: it addresses the experts by
+    /// their new positions. The values are the same ones the whole stack holds, so the gather
+    /// computes the same thing.
+    ///
+    /// `None` means there is nothing to gain, and the caller dequantises the whole stack.
+    pub(crate) fn scoped_expert_stack(&self, indices: &Tensor) -> Result<Option<(Tensor, Tensor)>> {
+        if self.weight.rank() != 3 {
+            return Ok(None);
+        }
+        let n_experts = self.weight.dim(0)?;
+        let ids = read_expert_ids(indices)?;
+        let mut wanted: Vec<usize> = ids
+            .iter()
+            .map(|&i| i as usize)
+            .filter(|&i| i < n_experts)
+            .collect();
+        wanted.sort_unstable();
+        wanted.dedup();
+        // The whole stack is routed to, so a compacted stack would be the same size.
+        if wanted.is_empty() || wanted.len() == n_experts {
+            return Ok(None);
+        }
+
+        let mut slabs = Vec::with_capacity(wanted.len());
+        for &expert in &wanted {
+            slabs.push(self.dequantize_expert(expert)?);
+        }
+
+        let mut dense = vec![u32::MAX; n_experts];
+        for (row, &expert) in wanted.iter().enumerate() {
+            dense[expert] = row as u32;
+        }
+        let remapped: Vec<u32> = ids
+            .iter()
+            .map(|&i| {
+                if (i as usize) < n_experts {
+                    dense[i as usize]
+                } else {
+                    u32::MAX
+                }
+            })
+            .collect();
+        let remapped = Tensor::from_vec(remapped, indices.dims(), indices.device())?
+            .to_dtype(indices.dtype())?;
+        Ok(Some((Tensor::stack(&slabs, 0)?, remapped)))
+    }
+}
+
 impl QuantMethod for BlockwiseFP8Linear {
     fn new(method: QuantMethodConfig) -> candle_core::Result<Self>
     where
@@ -291,12 +367,7 @@ impl QuantMethod for BlockwiseFP8Linear {
             let experts = self.weight.dim(0)?;
             let mut out = Vec::with_capacity(experts);
             for expert in 0..experts {
-                out.push(ops::fp8_blockwise_dequantize(
-                    &self.weight.i(expert)?,
-                    &self.weight_scale_inv.i(expert)?,
-                    self.weight_block_size.to_vec(),
-                    self.dequant_dtype,
-                )?);
+                out.push(self.dequantize_expert(expert)?);
             }
             return Tensor::stack(&out, 0);
         }
@@ -496,8 +567,14 @@ impl QuantMethod for BlockwiseFP8Linear {
             }
         }
 
-        // Fallback: dequantize weights and compute manually
-        let weight = self.dequantize_w()?;
+        // Fallback: dequantize weights and compute manually.
+        //
+        // Only the routed experts are dequantised. The whole stack is one quantised block
+        // per expert, and dequantising all of it costs the whole model on every forward.
+        let (weight, indices) = match self.scoped_expert_stack(indices)? {
+            Some(scoped) => scoped,
+            None => (self.dequantize_w()?, indices.clone()),
+        };
 
         // The CUDA kernel path hands over the flattened layout, which is the only one this
         // implements. The CPU path hands over the same shapes the dense layer sees -
@@ -506,7 +583,7 @@ impl QuantMethod for BlockwiseFP8Linear {
         if indices.rank() != 2 || x.rank() != 3 {
             let unquant =
                 UnquantLinear::new(QuantMethodConfig::Unquantized(Linear::new(weight, None)))?;
-            return unquant.gather_forward_raw(x, indices);
+            return unquant.gather_forward_raw(x, &indices);
         }
 
         // Expected shapes:
@@ -2302,6 +2379,122 @@ mod tests {
         )
         .unwrap_err();
         assert!(err.to_string().contains("missing FP8 weight scale"));
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod scoped_gather_tests {
+    use super::*;
+    use float8::F8E4M3;
+
+    /// A quantised expert stack with per-block scales, and the shapes the CPU path is called
+    /// with.
+    fn fixture(
+        experts: usize,
+        out: usize,
+        in_features: usize,
+        block: usize,
+    ) -> Result<(BlockwiseFP8Linear, Tensor, Tensor)> {
+        let dev = Device::Cpu;
+
+        // Distinctive values, so a wrong slab is obvious rather than merely different.
+        let mut raw = Vec::with_capacity(experts * out * in_features);
+        for e in 0..experts {
+            for i in 0..out * in_features {
+                raw.push(F8E4M3::from_f64(
+                    ((e as f64) * 0.25 + (i as f64) * 0.001).sin(),
+                ));
+            }
+        }
+        let weight = Tensor::from_slice(&raw, (experts, out, in_features), &dev)?;
+
+        let grid_y = out.div_ceil(block);
+        let grid_x = in_features.div_ceil(block);
+        let mut scales = Vec::with_capacity(experts * grid_y * grid_x);
+        for e in 0..experts {
+            for _ in 0..grid_y * grid_x {
+                scales.push(0.25 + (e as f32) * 0.5);
+            }
+        }
+        let weight_scale_inv = Tensor::from_slice(&scales, (experts, grid_y, grid_x), &dev)?;
+
+        let linear = BlockwiseFP8Linear {
+            weight: weight.clone(),
+            weight_scale_inv: weight_scale_inv.clone(),
+            bias: None,
+            dequant_dtype: DType::F32,
+            weight_block_size: vec![block, block],
+            activation_scheme: None,
+            provider: BlockwiseFp8Provider::Legacy,
+        };
+        Ok((linear, weight_scale_inv, weight))
+    }
+
+    /// The scoped path has to produce exactly what the whole-stack path produces. It changes
+    /// what is dequantised, not what is computed, so any difference here is a bug in the
+    /// selection of experts or in the remap.
+    ///
+    /// Both shapes are covered: small enough that the gather falls back to a matmul, and
+    /// large enough that the gather kernel serves it. The two take different arithmetic, and
+    /// the scoped path has to agree with the whole-stack path in each.
+    #[test]
+    fn scoped_gather_matches_the_whole_stack_bit_exactly() -> Result<()> {
+        let dev = Device::Cpu;
+        let (experts, out, in_features, block) = (8usize, 64usize, 32usize, 16usize);
+
+        for (batch, seq, top_k) in [(1usize, 2usize, 3usize), (1usize, 8usize, 4usize)] {
+            let (linear, _, _) = fixture(experts, out, in_features, block)?;
+
+            // The CPU path's shapes: (batch, seq, 1, 1, hidden) with (batch, seq, top_k).
+            let x = Tensor::rand(-1f32, 1f32, (batch, seq, 1, 1, in_features), &dev)?;
+            let ids: Vec<u32> = (0..batch * seq * top_k)
+                .map(|i| (i * 5 % experts) as u32)
+                .collect();
+            let indices = Tensor::from_vec(ids, (batch, seq, top_k), &dev)?;
+
+            // The whole stack, gathered the way the path did before.
+            let whole = {
+                let w = linear.dequantize_w()?;
+                let unquant =
+                    UnquantLinear::new(QuantMethodConfig::Unquantized(Linear::new(w, None)))?;
+                unquant.gather_forward_raw(&x, &indices)?
+            };
+
+            // The scoped stack, gathered the way the path does now.
+            let scoped = linear.gather_forward_raw(&x, &indices)?;
+
+            assert_eq!(whole.dims(), scoped.dims(), "shape");
+            let a = whole
+                .to_dtype(DType::F32)?
+                .flatten_all()?
+                .to_vec1::<f32>()?;
+            let b = scoped
+                .to_dtype(DType::F32)?
+                .flatten_all()?
+                .to_vec1::<f32>()?;
+            assert_eq!(a, b, "values differ");
+        }
+        Ok(())
+    }
+
+    /// The point of the scoped path is that it does not dequantise the whole stack, so it has
+    /// to name only the experts the gather routes to.
+    #[test]
+    fn scoped_stack_dequantises_only_the_routed_experts() -> Result<()> {
+        let (experts, out, in_features, block) = (16usize, 64usize, 32usize, 16usize);
+        let (linear, _, _) = fixture(experts, out, in_features, block)?;
+
+        let ids: Vec<u32> = vec![3, 3, 7, 11];
+        let indices = Tensor::from_vec(ids.clone(), (1, 1, 4), &Device::Cpu)?;
+
+        let (stack, remapped) = linear
+            .scoped_expert_stack(&indices)?
+            .expect("a stacked weight has a scoped stack");
+        assert_eq!(stack.dim(0)?, 3, "three distinct experts were routed to");
+        // The dense ids point at the compacted slabs in ascending expert order.
+        let remapped: Vec<u32> = remapped.flatten_all()?.to_vec1::<u32>()?;
+        assert_eq!(remapped, vec![0, 0, 1, 2]);
         Ok(())
     }
 }

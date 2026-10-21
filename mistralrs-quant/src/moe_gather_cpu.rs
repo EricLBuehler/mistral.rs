@@ -583,7 +583,10 @@ mod tests {
             let fused = gather_gemv(&a, &stack, &ids, top_k)?;
             let split = gather_gemv_per_expert(&a, &slabs, out, k, &ids, top_k)?;
             assert_eq!(fused.len(), split.len());
-            assert_eq!(fused, split, "{dtype:?}: fused and per-expert broadcast differ");
+            assert_eq!(
+                fused, split,
+                "{dtype:?}: fused and per-expert broadcast differ"
+            );
         }
         Ok(())
     }

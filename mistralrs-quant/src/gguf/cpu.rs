@@ -92,11 +92,7 @@ pub fn qtensor_indexed_moe_forward(
 /// Returns `None` when the shapes are not ones this handles, so the caller falls back to
 /// dequantising the whole stack. The per-expert gather is bit-identical to the fused path by
 /// construction, so this changes what is dequantised and not what is computed.
-fn scoped_gather(
-    qtensor: &Arc<QTensor>,
-    x: &Tensor,
-    ids: &Tensor,
-) -> Result<Option<Tensor>> {
+fn scoped_gather(qtensor: &Arc<QTensor>, x: &Tensor, ids: &Tensor) -> Result<Option<Tensor>> {
     use crate::per_expert_quantized::PerExpertQuantizedLinear;
 
     // The shapes the MoE is called with, per the QuantMethod contract: x is
@@ -140,12 +136,8 @@ fn scoped_gather(
         return Ok(None);
     }
 
-    let linear = PerExpertQuantizedLinear::new(
-        qtensor.clone(),
-        n_expert,
-        out_features,
-        in_features,
-    )?;
+    let linear =
+        PerExpertQuantizedLinear::new(qtensor.clone(), n_expert, out_features, in_features)?;
 
     // One activation row per token; the token's t slots read it in turn.
     let rows = x.reshape((n_tokens, in_features))?;
@@ -222,13 +214,17 @@ mod tests {
             };
             let ids = if five_d {
                 Tensor::from_vec(
-                    (0..b * s * t).map(|i| (i * 5 % experts) as u32).collect::<Vec<_>>(),
+                    (0..b * s * t)
+                        .map(|i| (i * 5 % experts) as u32)
+                        .collect::<Vec<_>>(),
                     (b, s, t),
                     &dev,
                 )?
             } else {
                 Tensor::from_vec(
-                    (0..b * s * t).map(|i| (i * 5 % experts) as u32).collect::<Vec<_>>(),
+                    (0..b * s * t)
+                        .map(|i| (i * 5 % experts) as u32)
+                        .collect::<Vec<_>>(),
                     (b * s, t),
                     &dev,
                 )?
@@ -240,11 +236,18 @@ mod tests {
                     UnquantLinear::new(QuantMethodConfig::Unquantized(Linear::new(weights, None)))?;
                 unquant.gather_forward(&x, &ids)?
             };
-            let scoped = scoped_gather(&q, &x, &ids)?.expect("scoped path should handle these shapes");
+            let scoped =
+                scoped_gather(&q, &x, &ids)?.expect("scoped path should handle these shapes");
 
             assert_eq!(whole.dims(), scoped.dims(), "{label}: shape");
-            let a = whole.to_dtype(DType::F32)?.flatten_all()?.to_vec1::<f32>()?;
-            let b = scoped.to_dtype(DType::F32)?.flatten_all()?.to_vec1::<f32>()?;
+            let a = whole
+                .to_dtype(DType::F32)?
+                .flatten_all()?
+                .to_vec1::<f32>()?;
+            let b = scoped
+                .to_dtype(DType::F32)?
+                .flatten_all()?
+                .to_vec1::<f32>()?;
             assert_eq!(a, b, "{label}: values differ");
         }
         Ok(())

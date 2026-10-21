@@ -34,8 +34,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .unwrap_or(128) as usize;
 
     let name = format!("model.layers.{layer}.mlp.experts.{expert}.gate_proj.weight");
-    let index: serde_json::Value =
-        serde_json::from_str(&std::fs::read_to_string(format!("{dir}/model.safetensors.index.json"))?)?;
+    let index: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(format!(
+        "{dir}/model.safetensors.index.json"
+    ))?)?;
     let shard = index["weight_map"][&name]
         .as_str()
         .ok_or_else(|| format!("{name} not in the index"))?
