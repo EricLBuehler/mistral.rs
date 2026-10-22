@@ -39,7 +39,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let shard = index["weight_map"][&name]
         .as_str()
         .ok_or("weight not in the index")?;
-    let tensors = safetensors::load(&format!("{dir}/{shard}"), &Device::Cpu)?;
+    let tensors = safetensors::load(format!("{dir}/{shard}"), &Device::Cpu)?;
     let tensor = tensors.get(&name).ok_or("weight not in the shard")?;
     let (shape, dtype) = (tensor.dims().to_vec(), tensor.dtype());
     println!("weight {name}: {shape:?} {dtype:?} block {block}");
