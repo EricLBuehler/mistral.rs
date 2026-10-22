@@ -487,7 +487,7 @@ impl QuantMethod for GgufMatMul {
         } else {
             a.to_dtype(DType::F32)?
         };
-        let x = self.w.forward(&a_f32)?;
+        let x = self.forward_cpu_mixed(&a_f32)?;
         let x = if original_dtype == DType::F32 {
             x
         } else {
@@ -760,6 +760,58 @@ impl QuantMethod for GgufMatMul {
         } else {
             candle_core::bail!("`{}` is not tracking stats.", self.name())
         }
+    }
+}
+
+impl GgufMatMul {
+    /// Candle's packed CPU kernels only engage for m == 1 (GEMV) or m % 4 == 0
+    /// (tiles) on aarch64; any other row count falls back to the generic
+    /// per-row matmul. Split the batch so the bulk takes the packed tile path
+    /// and the 1-3 tail rows take the packed GEMV, mirroring llama.cpp's
+    /// mixed dispatch. x86_64 candle repack already accepts arbitrary m, so
+    /// this is aarch64-only.
+    #[cfg(target_arch = "aarch64")]
+    fn forward_cpu_mixed(&self, a: &Tensor) -> Result<Tensor> {
+        let QMatMul::QTensor(q) = &self.w else {
+            return self.w.forward(a);
+        };
+        if !q.device().is_cpu() || !std::arch::is_aarch64_feature_detected!("dotprod") {
+            return self.w.forward(a);
+        }
+        let n = q.shape().dims()[0];
+        let n_aligned = match q.dtype() {
+            GgmlDType::Q4K | GgmlDType::Q5K | GgmlDType::Q6K => n.is_multiple_of(8),
+            GgmlDType::Q4_0 => n.is_multiple_of(4),
+            _ => false,
+        };
+        if !n_aligned {
+            return self.w.forward(a);
+        }
+        let shape = a.dims();
+        if shape.len() < 2 {
+            return self.w.forward(a);
+        }
+        let m: usize = shape[..shape.len() - 1].iter().product();
+        if m <= 1 || m.is_multiple_of(4) {
+            return self.w.forward(a);
+        }
+        let flat = a.flatten(0, shape.len() - 2)?;
+        let m_gemm = m & !3;
+        let mut outs = Vec::new();
+        if m_gemm > 0 {
+            outs.push(self.w.forward(&flat.narrow(0, 0, m_gemm)?)?);
+        }
+        for r in m_gemm..m {
+            outs.push(self.w.forward(&flat.narrow(0, r, 1)?)?);
+        }
+        let mut out_shape = shape[..shape.len() - 1].to_vec();
+        out_shape.push(n);
+        Tensor::cat(&outs.iter().collect::<Vec<_>>(), 0)?.reshape(out_shape)
+    }
+
+    #[cfg(not(target_arch = "aarch64"))]
+    fn forward_cpu_mixed(&self, a: &Tensor) -> Result<Tensor> {
+        self.w.forward(a)
     }
 }
 
@@ -1172,6 +1224,211 @@ mod tests {
         for dtype in [GgmlDType::Q6K, GgmlDType::Q8_0] {
             assert_embedding_matches_dequantized_gather(&device, dtype)?;
         }
+        Ok(())
+    }
+
+    fn assert_mixed_dispatch_matches_monolithic(dtype: GgmlDType, m: usize) -> Result<()> {
+        let (n, k) = (64usize, 256usize);
+        let values = (0..n * k)
+            .map(|index| ((index % 53) as f32 - 26.0) / 11.0)
+            .collect::<Vec<_>>();
+        let weight = Tensor::from_vec(values, (n, k), &Device::Cpu)?;
+        let layer = GgufMatMul::from_qtensor(QTensor::quantize(&weight, dtype)?, None);
+        let acts = (0..m * k)
+            .map(|index| ((index % 29) as f32 - 14.0) / 9.0)
+            .collect::<Vec<_>>();
+        let a = Tensor::from_vec(acts, (m, k), &Device::Cpu)?;
+
+        let split = layer.forward_raw(&a)?;
+        assert_eq!(split.dims(), &[m, n]);
+        let monolithic = layer.w.forward(&a)?;
+        let scale = monolithic.abs()?.max_all()?.to_scalar::<f32>()?;
+        let max_diff = (split - monolithic)?.abs()?.max_all()?.to_scalar::<f32>()?;
+        assert!(
+            max_diff <= 1e-3 * scale,
+            "{dtype:?} m={m}: max_diff={max_diff}, scale={scale}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn mixed_dispatch_matches_monolithic_for_ungated_row_counts() -> Result<()> {
+        for dtype in [
+            GgmlDType::Q4K,
+            GgmlDType::Q5K,
+            GgmlDType::Q6K,
+            GgmlDType::Q4_0,
+        ] {
+            for m in [2, 3, 5, 6, 7, 9, 130] {
+                assert_mixed_dispatch_matches_monolithic(dtype, m)?;
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn mixed_dispatch_matches_monolithic_rank4_and_bias_and_f16() -> Result<()> {
+        let (n, k) = (64usize, 256usize);
+        let values = (0..n * k)
+            .map(|index| ((index % 53) as f32 - 26.0) / 11.0)
+            .collect::<Vec<_>>();
+        let weight = Tensor::from_vec(values, (n, k), &Device::Cpu)?;
+        let bias = Tensor::from_vec(
+            (0..n).map(|i| (i % 7) as f32 / 3.0).collect::<Vec<_>>(),
+            n,
+            &Device::Cpu,
+        )?;
+        let layer =
+            GgufMatMul::from_qtensor(QTensor::quantize(&weight, GgmlDType::Q4K)?, Some(bias));
+
+        let rank4_m = 2 * 3 * 5;
+        let acts = (0..rank4_m * k)
+            .map(|index| ((index % 29) as f32 - 14.0) / 9.0)
+            .collect::<Vec<_>>();
+        let a4 = Tensor::from_vec(acts, (2, 3, 5, k), &Device::Cpu)?;
+        let split4 = layer.forward_raw(&a4)?;
+        assert_eq!(split4.dims(), &[2, 3, 5, n]);
+        let mono4 = layer.w.forward(&a4)?;
+        let mono4 = layer.add_bias(mono4)?;
+        let scale4 = mono4.abs()?.max_all()?.to_scalar::<f32>()?;
+        let diff4 = (split4.clone() - mono4)?
+            .abs()?
+            .max_all()?
+            .to_scalar::<f32>()?;
+        assert!(
+            diff4 <= 1e-3 * scale4,
+            "rank4: diff={diff4}, scale={scale4}"
+        );
+
+        let a_f16 = a4.to_dtype(DType::F16)?;
+        let no_bias = GgufMatMul::from_qtensor(QTensor::quantize(&weight, GgmlDType::Q4K)?, None);
+        let out_f16 = no_bias.forward_raw(&a_f16)?;
+        assert_eq!(out_f16.dtype(), DType::F16);
+        let back = out_f16.to_dtype(DType::F32)?;
+        let split4_nb = no_bias.forward_raw(&a4)?;
+        let scale_f16 = split4_nb.abs()?.max_all()?.to_scalar::<f32>()?;
+        let diff16 = (back - split4_nb.clone())?
+            .abs()?
+            .max_all()?
+            .to_scalar::<f32>()?;
+        assert!(
+            diff16 <= 1e-2 * scale_f16,
+            "f16 roundtrip diff={diff16}, scale={scale_f16}"
+        );
+        let mono4_nb = no_bias.w.forward(&a4)?;
+        let scale_nb = mono4_nb.abs()?.max_all()?.to_scalar::<f32>()?;
+        let diff_nb = (split4_nb - mono4_nb)?
+            .abs()?
+            .max_all()?
+            .to_scalar::<f32>()?;
+        assert!(
+            diff_nb <= 1e-3 * scale_nb,
+            "f16-input f32 ref diff={diff_nb}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn mixed_dispatch_preserves_batched_input_shape() -> Result<()> {
+        let (n, k) = (32usize, 256usize);
+        let values = (0..n * k)
+            .map(|i| (i % 17) as f32 / 8.0 - 1.0)
+            .collect::<Vec<_>>();
+        let weight = Tensor::from_vec(values, (n, k), &Device::Cpu)?;
+        let layer = GgufMatMul::from_qtensor(QTensor::quantize(&weight, GgmlDType::Q4K)?, None);
+        let acts = (0..2 * 5 * k)
+            .map(|i| (i % 11) as f32 / 5.0 - 1.0)
+            .collect::<Vec<_>>();
+        let a = Tensor::from_vec(acts, (2, 5, k), &Device::Cpu)?;
+
+        let out = layer.forward_raw(&a)?;
+        assert_eq!(out.dims(), &[2, 5, n]);
+        let flat_ref = layer.forward_raw(&a.flatten(0, 1)?)?;
+        let max_diff = (out.flatten(0, 1)? - flat_ref)?
+            .abs()?
+            .max_all()?
+            .to_scalar::<f32>()?;
+        assert!(max_diff <= 1e-6, "batched vs flat max_diff={max_diff}");
+        Ok(())
+    }
+
+    #[test]
+    fn mixed_dispatch_noop_for_gated_row_counts() -> Result<()> {
+        let (n, k) = (32usize, 256usize);
+        let values = (0..n * k)
+            .map(|i| (i % 17) as f32 / 8.0 - 1.0)
+            .collect::<Vec<_>>();
+        let weight = Tensor::from_vec(values, (n, k), &Device::Cpu)?;
+        let layer = GgufMatMul::from_qtensor(QTensor::quantize(&weight, GgmlDType::Q4K)?, None);
+        for m in [1usize, 4, 8] {
+            let acts = (0..m * k)
+                .map(|i| (i % 11) as f32 / 5.0 - 1.0)
+                .collect::<Vec<_>>();
+            let a = Tensor::from_vec(acts, (m, k), &Device::Cpu)?;
+            let out = layer.forward_raw(&a)?;
+            assert_eq!(out.dims(), &[m, n]);
+            let mono = layer.w.forward(&a)?;
+            let max_diff = (out - mono)?.abs()?.max_all()?.to_scalar::<f32>()?;
+            assert!(
+                max_diff <= 1e-6,
+                "m={m}: gated path changed values, diff={max_diff}"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    #[ignore]
+    fn mixed_dispatch_timing_before_after() -> Result<()> {
+        let (n, k, m) = (5120usize, 2560usize, 130usize);
+        let mut lcg = 12345u64;
+        let mut next = || {
+            lcg = lcg
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            ((lcg >> 32) as u32) as f32 / (u32::MAX as f32) * 2.0 - 1.0
+        };
+        let weight = Tensor::from_vec(
+            (0..n * k).map(|_| next()).collect::<Vec<_>>(),
+            (n, k),
+            &Device::Cpu,
+        )?;
+        let layer = GgufMatMul::from_qtensor(QTensor::quantize(&weight, GgmlDType::Q4K)?, None);
+        let a = Tensor::from_vec(
+            (0..m * k).map(|_| next()).collect::<Vec<_>>(),
+            (m, k),
+            &Device::Cpu,
+        )?;
+
+        for _ in 0..3 {
+            layer.w.forward(&a)?;
+            layer.forward_raw(&a)?;
+        }
+        let median = |runs: Vec<f64>| {
+            let mut r = runs;
+            r.sort_by(|x, y| x.partial_cmp(y).unwrap());
+            r[r.len() / 2]
+        };
+        let mut before = Vec::new();
+        let mut after = Vec::new();
+        for _ in 0..7 {
+            let t = std::time::Instant::now();
+            layer.w.forward(&a).unwrap();
+            before.push(t.elapsed().as_secs_f64() * 1e3);
+            let t = std::time::Instant::now();
+            layer.forward_raw(&a).unwrap();
+            after.push(t.elapsed().as_secs_f64() * 1e3);
+        }
+        let (b, s) = (median(before), median(after));
+        let flops = 2.0 * (m * n * k) as f64;
+        println!(
+            "m={m} k={k} n={n}: before(monolithic generic) {:.2} ms ({:.0} GFLOP/s) | after(mixed split) {:.2} ms ({:.0} GFLOP/s) | speedup {:.2}x",
+            b,
+            flops / (b * 1e-3) / 1e9,
+            s,
+            flops / (s * 1e-3) / 1e9,
+            b / s
+        );
         Ok(())
     }
 }
