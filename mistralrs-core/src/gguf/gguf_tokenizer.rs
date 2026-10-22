@@ -33,6 +33,13 @@ const GPT2_REGEX: &str =
 /// profile the GGUF names.
 const KOLIBRI1_REGEX: &str = r"(?i:'s|'t|'re|'ve|'m|'ll|'d)|[^\r\n\p{L}\p{N}]?\p{L}+|\p{N}{1}| ?[^\s\p{L}\p{N}]+[\r\n]*|\s*[\r\n]+|\s+(?!\S)|\s+";
 const LLAMA3_REGEX: &str = "(?:'[sS]|'[tT]|'[rR][eE]|'[vV][eE]|'[mM]|'[lL][lL]|'[dD])|[^\\r\\n\\p{L}\\p{N}]?\\p{L}+|\\p{N}{1,3}| ?[^\\s\\p{L}\\p{N}]+[\\r\\n]*|\\s*[\\r\\n]+|\\s+(?!\\S)|\\s+";
+/// Flint's pre-tokenizer, as upstream llama.cpp splits it: digits in groups of up to three,
+/// a CJK range of its own, and a letter rule that keeps the case of the first letter.
+const FLINT_REGEXES: &[&str] = &[
+    r"\p{N}{1,3}",
+    r"[\x{4e00}-\x{9fa5}\x{3040}-\x{309f}\x{30a0}-\x{30ff}]+",
+    r"[^\r\n\p{L}\p{N}]?[\p{Lu}\p{Lt}\p{Lm}\p{Lo}\p{M}]*[\p{Ll}\p{Lm}\p{Lo}\p{M}]+(?:'[sS]|'[tT]|'[rR][eE]|'[vV][eE]|'[mM]|'[lL][lL]|'[dD])?|[^\r\n\p{L}\p{N}]?[\p{Lu}\p{Lt}\p{Lm}\p{Lo}\p{M}]+[\p{Ll}\p{Lm}\p{Lo}\p{M}]*(?:'[sS]|'[tT]|'[rR][eE]|'[vV][eE]|'[mM]|'[lL][lL]|'[dD])?| ?[\p{P}\p{S}]+[\r\n]*|\s*[\r\n]+|\s+(?!\S)|\s+",
+];
 const QWEN2_REGEX: &str = "(?:'[sS]|'[tT]|'[rR][eE]|'[vV][eE]|'[mM]|'[lL][lL]|'[dD])|[^\\r\\n\\p{L}\\p{N}]?\\p{L}+|\\p{N}| ?[^\\s\\p{L}\\p{N}]+[\\r\\n]*|\\s*[\\r\\n]+|\\s+(?!\\S)|\\s+";
 const QWEN35_REGEX: &str = "(?i:'s|'t|'re|'ve|'m|'ll|'d)|[^\\r\\n\\p{L}\\p{N}]?[\\p{L}\\p{M}]+|\\p{N}| ?[^\\s\\p{L}\\p{M}\\p{N}]+[\\r\\n]*|\\s*[\\r\\n]+|\\s+(?!\\S)|\\s+";
 const DEEPSEEK_LLM_REGEXES: &[&str] = &[
@@ -290,6 +297,7 @@ enum TokenizerKind {
 enum BpePreTokenizerKind {
     Llama3,
     Kolibri1,
+    Flint,
     Dbrx,
     Qwen2,
     Gpt2,
@@ -326,6 +334,12 @@ fn bpe_pre_tokenizer_spec(pre: Option<&str>) -> Result<BpePreTokenizerSpec> {
         "kolibri1" => BpePreTokenizerSpec {
             kind: BpePreTokenizerKind::Kolibri1,
             regexes: &[KOLIBRI1_REGEX],
+            ignore_merges: false,
+            normalize_nfc: false,
+        },
+        "flint" => BpePreTokenizerSpec {
+            kind: BpePreTokenizerKind::Flint,
+            regexes: FLINT_REGEXES,
             ignore_merges: false,
             normalize_nfc: false,
         },
@@ -1150,6 +1164,7 @@ mod tests {
             ("llama-bpe", BpePreTokenizerKind::Llama3, true, false, 1),
             ("lfm2", BpePreTokenizerKind::Llama3, true, false, 1),
             ("kolibri1", BpePreTokenizerKind::Kolibri1, false, false, 1),
+            ("flint", BpePreTokenizerKind::Flint, false, false, 3),
             ("dbrx", BpePreTokenizerKind::Dbrx, false, false, 1),
             ("qwen2", BpePreTokenizerKind::Qwen2, false, false, 1),
             ("qwen35", BpePreTokenizerKind::Qwen2, false, true, 1),

@@ -197,6 +197,11 @@ impl NormalLoaderType {
                 modalities: m,
                 examples: &[ex!("Aleph-Alpha/Kolibri-1")],
             },
+            Self::Flint => ArchMetadata {
+                families: &["Flint"],
+                modalities: m,
+                examples: &[ex!("RecursiveSI/flint")],
+            },
         }
     }
 }
@@ -420,6 +425,7 @@ impl NormalLoaderType {
             Self::Lfm2 => "Lfm2ForCausalLM",
             Self::Lfm2Moe => "Lfm2MoeForCausalLM",
             Self::Kolibri1 => "Kolibri1ForCausalLM",
+            Self::Flint => "FlintForCausalLM",
         }
     }
 }

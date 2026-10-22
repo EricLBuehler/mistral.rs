@@ -187,7 +187,11 @@ fn bind_block_tensor(
         )),
         "attn_q_norm" => Some(format!("{p}.self_attn.{}.{suffix}", q_norm_name(loader))),
         "attn_k_norm" => Some(format!("{p}.self_attn.{}.{suffix}", k_norm_name(loader))),
-        "attn_sinks" => Some(format!("{p}.self_attn.sinks")),
+        "attn_sinks" => Some(match loader {
+            // Flint names the per-head sink `softmax_offset`.
+            NormalLoaderType::Flint => format!("{p}.self_attn.softmax_offset"),
+            _ => format!("{p}.self_attn.sinks"),
+        }),
         "ffn_gate" if !matches!(loader, NormalLoaderType::GraniteMoeHybrid) => {
             dense_mlp_target(loader, &p, "gate", suffix)
         }
@@ -805,6 +809,7 @@ fn shared_expert_target(
         NormalLoaderType::GLM4Moe | NormalLoaderType::GLM4MoeLite => "shared_experts",
         NormalLoaderType::HunYuanMoEV1 => "shared_mlp",
         NormalLoaderType::Qwen3Next => "shared_expert",
+        NormalLoaderType::Flint => "shared_expert",
         _ => "shared_experts",
     };
     format!("{p}.mlp.{module}.{projection}_proj.{suffix}")
