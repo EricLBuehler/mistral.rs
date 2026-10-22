@@ -7,7 +7,10 @@
 use candle_core::{DType, Device, Result, Tensor};
 use std::{
     ops::Range,
-    sync::{Arc, OnceLock},
+    sync::{
+        atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
+        Arc, OnceLock,
+    },
 };
 
 use super::archive::{GgufArchive, GgufDType};
@@ -370,6 +373,40 @@ pub(crate) const fn is_iq(raw: u32) -> bool {
 /// projection is, so the decode fills a node rather than one thread.
 const PAR_BLOCK_CHUNK: usize = 128;
 
+/// Rows per chunk in the fused gather: a 512-row expert splits into 64 chunks, and the chunk
+/// is small enough that its scratch row stays in L1.
+const FUSED_ROWS_PER_CHUNK: usize = 8;
+
+/// `MISTRALRS_IQ_FUSED_GEMV=1` decodes each block straight into the dot product instead of
+/// materialising the f32 slab. It is off by default because the accumulation order differs
+/// from the two-step path's last bit; both are f32 sums of the same products.
+static FUSED_IQ_GEMV: AtomicBool = AtomicBool::new(false);
+static FUSED_IQ_GEMV_SEEDED: OnceLock<()> = OnceLock::new();
+
+/// Three projections over 49 layers: the gathers one token of Flint makes, so the stat below
+/// can report a per-token figure.
+const GATHERS_PER_TOKEN: usize = 147;
+
+static IQ_GATHER_STATS: OnceLock<bool> = OnceLock::new();
+static GATHER_CALLS: AtomicUsize = AtomicUsize::new(0);
+static GATHER_NANOS: AtomicU64 = AtomicU64::new(0);
+
+/// `MISTRALRS_IQ_GATHER_STATS=1` prints the gather's time per call, which is how the model's
+/// share was established: 3.44 ms a call against a 714 ms token is 71% of it.
+fn iq_gather_stats() -> bool {
+    *IQ_GATHER_STATS.get_or_init(|| std::env::var_os("MISTRALRS_IQ_GATHER_STATS").is_some())
+}
+
+fn fused_iq_gemv_enabled() -> bool {
+    FUSED_IQ_GEMV_SEEDED.get_or_init(|| {
+        let on = std::env::var("MISTRALRS_IQ_FUSED_GEMV")
+            .map(|v| matches!(v.trim(), "1" | "true" | "yes" | "on"))
+            .unwrap_or(false);
+        FUSED_IQ_GEMV.store(on, Ordering::Relaxed);
+    });
+    FUSED_IQ_GEMV.load(Ordering::Relaxed)
+}
+
 /// The same decode, split over block ranges. A block reads only its own bytes and writes only
 /// its own outputs, so how the range is cut cannot change a value - it changes where it is
 /// computed, not what.
@@ -570,6 +607,31 @@ impl IqTensor {
                 candle_core::bail!("IqTensor: expected an [experts, out, in] stack, got {other:?}")
             }
         }
+    }
+
+    pub(crate) fn dtype(&self) -> GgufDType {
+        self.dtype
+    }
+
+    pub(crate) fn block_geometry(&self) -> (usize, usize) {
+        (
+            self.dtype.block_size().expect("iq block size"),
+            self.dtype.type_size().expect("iq type size"),
+        )
+    }
+
+    /// One expert's slice of the stack: its rows are whole rows of blocks, so a row is a
+    /// contiguous byte range and the fused gather can read it without the whole slab.
+    pub(crate) fn expert_bytes(&self, expert: usize) -> Result<&[u8]> {
+        let n_experts = self.expert_geometry()?.0;
+        let bytes = self.storage.bytes();
+        let stride = bytes.len() / n_experts;
+        let start = expert * stride;
+        bytes.get(start..start + stride).ok_or_else(|| {
+            candle_core::Error::Msg(format!(
+                "IqTensor: expert {expert} is out of range for {n_experts} experts"
+            ))
+        })
     }
 }
 
@@ -776,6 +838,25 @@ impl IqGgufMatMul {
     /// token's row, so the rows are passed once and the kernel addresses them by
     /// `slot / repeat`.
     fn gather_flat(&self, rows: &Tensor, ids: &Tensor, repeat: usize) -> Result<Tensor> {
+        if !iq_gather_stats() {
+            return self.gather_flat_inner(rows, ids, repeat);
+        }
+        let started = std::time::Instant::now();
+        let out = self.gather_flat_inner(rows, ids, repeat);
+        let n = GATHER_CALLS.fetch_add(1, Ordering::Relaxed) + 1;
+        GATHER_NANOS.fetch_add(started.elapsed().as_nanos() as u64, Ordering::Relaxed);
+        if n.is_multiple_of(GATHERS_PER_TOKEN) {
+            let total = GATHER_NANOS.load(Ordering::Relaxed) as f64 / 1e6;
+            eprintln!(
+                "iq gather: {n} calls, {:.2} ms each, {:.1} ms per token",
+                total / n as f64,
+                total / (n / GATHERS_PER_TOKEN) as f64
+            );
+        }
+        out
+    }
+
+    fn gather_flat_inner(&self, rows: &Tensor, ids: &Tensor, repeat: usize) -> Result<Tensor> {
         let (n_rows, in_features) = rows.dims2()?;
         let n_slots = ids.elem_count();
         if n_rows * repeat != n_slots {
@@ -795,43 +876,95 @@ impl IqGgufMatMul {
             .to_vec();
 
         let (n_experts, out_features, _) = self.w.expert_geometry()?;
-        let (slabs, dense) = self.w.dequantize_experts(&ids_flat, &Device::Cpu)?;
-        let out = if crate::moe_gather_cpu::should_use_gather_gemv_shape(
+        let gather_shape = crate::moe_gather_cpu::should_use_gather_gemv_shape(
             n_experts,
             out_features,
             in_features,
             out_features,
             n_slots,
-        ) {
-            crate::moe_gather_cpu::gather_gemv_per_expert(
-                &a,
-                &slabs,
-                out_features,
-                in_features,
-                &dense,
-                repeat,
-            )?
+        );
+        let out = if gather_shape && fused_iq_gemv_enabled() {
+            self.fused_gather(&a, &ids_flat, repeat)?
         } else {
-            // The gather kernel refuses tiny shapes; the whole-stack path these replace would
-            // fall back to a matmul, so dequantise the named slabs and matmul over those.
-            let stack = Tensor::stack(&slabs, 0)?;
-            let unquant = <crate::UnquantLinear as crate::QuantMethod>::new(
-                crate::QuantMethodConfig::Unquantized(candle_nn::Linear::new(stack, None)),
-            )?;
-            // The whole-stack gather takes the per-slot form, so every activation row is
-            // expanded to the slots that read it.
-            let slot_a: Vec<f32> = a
-                .chunks(in_features)
-                .flat_map(|row| std::iter::repeat_n(row, repeat).flatten().copied())
-                .collect();
-            let x = Tensor::from_vec(slot_a, (1, n_slots, 1, in_features), &Device::Cpu)?;
-            let slot_ids = Tensor::from_vec(dense.clone(), (1, n_slots, 1), &Device::Cpu)?;
-            crate::QuantMethod::gather_forward(&unquant, &x, &slot_ids)?
-                .reshape((n_slots, out_features))?
-                .flatten_all()?
-                .to_vec1::<f32>()?
+            let (slabs, dense) = self.w.dequantize_experts(&ids_flat, &Device::Cpu)?;
+            if gather_shape {
+                crate::moe_gather_cpu::gather_gemv_per_expert(
+                    &a,
+                    &slabs,
+                    out_features,
+                    in_features,
+                    &dense,
+                    repeat,
+                )?
+            } else {
+                // The gather kernel refuses tiny shapes; the whole-stack path these replace would
+                // fall back to a matmul, so dequantise the named slabs and matmul over those.
+                let stack = Tensor::stack(&slabs, 0)?;
+                let unquant = <crate::UnquantLinear as crate::QuantMethod>::new(
+                    crate::QuantMethodConfig::Unquantized(candle_nn::Linear::new(stack, None)),
+                )?;
+                // The whole-stack gather takes the per-slot form, so every activation row is
+                // expanded to the slots that read it.
+                let slot_a: Vec<f32> = a
+                    .chunks(in_features)
+                    .flat_map(|row| std::iter::repeat_n(row, repeat).flatten().copied())
+                    .collect();
+                let x = Tensor::from_vec(slot_a, (1, n_slots, 1, in_features), &Device::Cpu)?;
+                let slot_ids = Tensor::from_vec(dense.clone(), (1, n_slots, 1), &Device::Cpu)?;
+                crate::QuantMethod::gather_forward(&unquant, &x, &slot_ids)?
+                    .reshape((n_slots, out_features))?
+                    .flatten_all()?
+                    .to_vec1::<f32>()?
+            }
         };
         Tensor::from_vec(out, (n_slots, out_features), &Device::Cpu)
+    }
+
+    /// The same gather, one row at a time and without the f32 slab: a row's bytes are decoded
+    /// into a scratch row, dotted with the activation, and dropped. The traffic is the block
+    /// bytes instead of the slab plus its read-back.
+    fn fused_gather(&self, a: &[f32], ids: &[u32], repeat: usize) -> Result<Vec<f32>> {
+        let (_, out_features, in_features) = self.w.expert_geometry()?;
+        let (block_size, type_size) = self.w.block_geometry();
+        if in_features % block_size != 0 {
+            candle_core::bail!(
+                "IqGgufMatMul: {in_features} features are not a whole number of {block_size}-value blocks"
+            );
+        }
+        let n_blocks = in_features / block_size;
+        let row_bytes = n_blocks * type_size;
+        if !a.len().is_multiple_of(in_features) {
+            candle_core::bail!(
+                "IqGgufMatMul: {} activations are not a whole number of {in_features}-wide rows",
+                a.len()
+            );
+        }
+        let n_rows = a.len() / in_features;
+        if n_rows * repeat != ids.len() {
+            candle_core::bail!(
+                "IqGgufMatMul: {} activations at repeat {repeat} for {} slots",
+                a.len(),
+                ids.len()
+            );
+        }
+
+        let mut out = vec![0f32; ids.len() * out_features];
+        for (slot, &expert) in ids.iter().enumerate() {
+            let slab = self.w.expert_bytes(expert as usize)?;
+            let x = &a[(slot / repeat) * in_features..][..in_features];
+            let dst = &mut out[slot * out_features..][..out_features];
+            crate::gemv_cpu::par_chunks(dst, FUSED_ROWS_PER_CHUNK, |chunk, rows| {
+                let mut scratch = vec![0f32; in_features];
+                for (i, o) in rows.iter_mut().enumerate() {
+                    let row = chunk * FUSED_ROWS_PER_CHUNK + i;
+                    let bytes = &slab[row * row_bytes..][..row_bytes];
+                    dequantize_blocks(self.w.dtype(), bytes, n_blocks, &mut scratch)
+                        .expect("a row is a whole number of blocks of its own dtype");
+                    *o = scratch.iter().zip(x).map(|(w, a)| w * a).sum();
+                }
+            });
+        }
+        Ok(out)
     }
 }
 

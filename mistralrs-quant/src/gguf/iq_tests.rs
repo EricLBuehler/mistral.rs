@@ -342,11 +342,20 @@ fn decode_and_gather_cost_of_one_token() {
     };
 
     let iters = 20;
+    let six_rows = vec![0.5f32; 6 * k];
     let gather = time(
         iters,
         Box::new(|| {
             for _ in 0..3 {
                 matmul.gather_forward(&x, &idx).expect("gather");
+            }
+        }),
+    );
+    let fused = time(
+        iters,
+        Box::new(|| {
+            for _ in 0..3 {
+                matmul.fused_gather(&six_rows, &ids, 1).expect("fused");
             }
         }),
     );
@@ -384,4 +393,192 @@ fn decode_and_gather_cost_of_one_token() {
         49.0 * per_layer_bytes / 1e9,
         1.0 / per_token
     );
+    // The fused path reads the blocks and never writes the slab, so its traffic is bpw-sized.
+    let fused_per_layer = 49.0 * fused;
+    let block_bytes = 3.0 * 6.0 * out as f64 * (k as f64 / block_size as f64) * type_size as f64;
+    println!(
+        "fused one layer: {:.2} ms ({:.1} GB/s of block bytes), 49 layers {:.0} ms, ceiling {:.2} tok/s",
+        fused * 1e3,
+        block_bytes / fused / 1e9,
+        fused_per_layer * 1e3,
+        1.0 / fused_per_layer
+    );
+    println!(
+        "fused against the two-step: {:.2}x",
+        gather / fused
+    );
+}
+
+/// Random block bytes can carry a non-finite f16 scale, which says nothing about the
+/// arithmetic. Both types here keep their scale in the block's first two bytes, so setting it
+/// to 0.5 leaves the layout random and the decode finite.
+fn finite_blocks(dtype: GgufDType, len: usize, seed: u32) -> Vec<u8> {
+    let type_size = dtype.type_size().expect("type size");
+    assert!(
+        matches!(dtype.raw(), 16 | 22),
+        "the scale offset is pinned for these two types only"
+    );
+    assert_eq!(len % type_size, 0);
+    let mut bytes = pseudo_bytes(len, seed);
+    for block in bytes.chunks_mut(type_size) {
+        block[..2].copy_from_slice(&half::f16::from_f32(0.5).to_bits().to_le_bytes());
+    }
+    bytes
+}
+
+/// The fused gather is the same products summed in one pass instead of two, so it agrees with
+/// the two-step path to f32 rounding and not to the last bit. That is why it is opt-in.
+#[test]
+fn fused_gather_agrees_with_the_two_step_path() {
+    let (experts, out, k) = (8usize, 512usize, 256usize);
+    let dtype = GgufDType::new(16);
+    let (block_size, type_size) = (
+        dtype.block_size().expect("block size"),
+        dtype.type_size().expect("type size"),
+    );
+    assert_eq!(k % block_size, 0);
+
+    let bytes = finite_blocks(dtype, experts * out * (k / block_size) * type_size, 5);
+    let stack = std::sync::Arc::new(
+        IqTensor::new(bytes.into_boxed_slice(), vec![experts, out, k], dtype)
+            .expect("iq stack"),
+    );
+    let matmul = IqGgufMatMul::new(stack, None).expect("iq matmul");
+
+    let ids: Vec<u32> = vec![0, 3, 5, 7, 1, 2];
+    let a: Vec<f32> = (0..ids.len() * k)
+        .map(|i| ((i % 17) as f32) * 0.125 - 0.9)
+        .collect();
+    let rows = Tensor::from_vec(a.clone(), (ids.len(), k), &Device::Cpu).expect("rows");
+    let idx = Tensor::from_vec(ids.clone(), (1, ids.len()), &Device::Cpu).expect("idx");
+
+    let two_step: Vec<f32> = matmul
+        .gather_flat(&rows, &idx, 1)
+        .expect("two-step gather")
+        .flatten_all()
+        .expect("flatten")
+        .to_vec1()
+        .expect("values");
+    let fused = matmul.fused_gather(&a, &ids, 1).expect("fused gather");
+
+    assert_eq!(two_step.len(), fused.len());
+    // Random block bytes can carry a non-finite f16 scale; both paths must at least agree on
+    // where, and the finite rows are the ones that say anything about the arithmetic.
+    // A 256-term f32 sum in two orders: the difference is rounding, so it is bounded by the
+    // sum's own scale and not by the last bit.
+    let mut worst = 0f32;
+    for (i, (x, y)) in two_step.iter().zip(&fused).enumerate() {
+        let rel = (x - y).abs() / (1.0 + y.abs());
+        worst = worst.max(rel);
+        assert!(
+            rel <= 1e-3,
+            "row {i}: two-step {x} against fused {y} is {rel:e} of the value"
+        );
+    }
+    assert!(
+        worst < 2e-3,
+        "the two orders should differ by rounding, worst was {worst:e}"
+    );
+}
+
+/// And against a reference that shares no code with either: the slabs dequantised the ordinary
+/// way, dotted in f64. This catches an indexing bug that two f32 paths could share.
+#[test]
+fn fused_gather_matches_a_reference_in_f64() {
+    let (experts, out, k) = (4usize, 128usize, 512usize);
+    let dtype = GgufDType::new(22);
+    let (block_size, type_size) = (
+        dtype.block_size().expect("block size"),
+        dtype.type_size().expect("type size"),
+    );
+
+    let bytes = finite_blocks(dtype, experts * out * (k / block_size) * type_size, 77);
+    let stack = std::sync::Arc::new(
+        IqTensor::new(bytes.into_boxed_slice(), vec![experts, out, k], dtype)
+            .expect("iq stack"),
+    );
+    let matmul = IqGgufMatMul::new(stack.clone(), None).expect("iq matmul");
+
+    // Two rows, two slots each, so the slot-to-row mapping is exercised.
+    let ids: Vec<u32> = vec![2, 0, 3, 1];
+    let a: Vec<f32> = (0..2 * k)
+        .map(|i| ((i % 23) as f32) * 0.0625 - 0.7)
+        .collect();
+
+    let fused = matmul.fused_gather(&a, &ids, 2).expect("fused gather");
+
+    // The slabs come back sorted and deduped, so `dense` is the mapping from slot to slab;
+    // reading them in slot order would silently pair each slot with the wrong expert.
+    let (slabs, dense) = stack.dequantize_experts(&ids, &Device::Cpu).expect("slabs");
+    assert_eq!(dense.len(), ids.len());
+    let mut worst = 0f64;
+    for (slot, &slab_index) in dense.iter().enumerate() {
+        let w: Vec<f32> = slabs[slab_index as usize]
+            .flatten_all()
+            .expect("flat")
+            .to_vec1()
+            .expect("values");
+        let x = &a[(slot / 2) * k..][..k];
+        for r in 0..out {
+            let reference: f64 = (0..k)
+                .map(|c| w[r * k + c] as f64 * x[c] as f64)
+                .sum();
+            let got = fused[slot * out + r] as f64;
+            let rel = (got - reference).abs() / (1.0 + reference.abs());
+            worst = worst.max(rel);
+            assert!(
+                rel <= 1e-4,
+                "slot {slot} row {r}: fused {got} against reference {reference} is {rel:e} of the value"
+            );
+        }
+    }
+    println!("fused against the f64 reference: worst {worst:e} of the value");
+}
+
+/// The shape the model actually calls: one activation row, six slots, repeat six. The guard
+/// that counts rows rather than slots is what this pins - it was wrong once.
+#[test]
+fn fused_gather_handles_the_token_shape() {
+    let (experts, out, k) = (8usize, 512usize, 2048usize);
+    let dtype = GgufDType::new(16);
+    let (block_size, type_size) = (
+        dtype.block_size().expect("block size"),
+        dtype.type_size().expect("type size"),
+    );
+    let n_blocks = k / block_size;
+    let bytes = pseudo_bytes(experts * out * n_blocks * type_size, 3);
+
+    let stack = std::sync::Arc::new(
+        IqTensor::new(bytes.into_boxed_slice(), vec![experts, out, k], dtype)
+            .expect("iq stack"),
+    );
+    let matmul = IqGgufMatMul::new(stack, None).expect("iq matmul");
+
+    let ids: Vec<u32> = vec![0, 2, 4, 6, 1, 3];
+    let a: Vec<f32> = (0..k).map(|i| ((i % 19) as f32) * 0.25 - 2.0).collect();
+    let rows = Tensor::from_vec(a.clone(), (1, k), &Device::Cpu).expect("row");
+    let idx = Tensor::from_vec(ids.clone(), (1, 1, ids.len()), &Device::Cpu).expect("idx");
+
+    let two_step: Vec<f32> = matmul
+        .gather_flat(&rows, &idx, ids.len())
+        .expect("two-step gather")
+        .flatten_all()
+        .expect("flatten")
+        .to_vec1()
+        .expect("values");
+    let fused = matmul
+        .fused_gather(&a, &ids, ids.len())
+        .expect("fused gather");
+
+    assert_eq!(two_step.len(), ids.len() * out);
+    for (i, (x, y)) in two_step.iter().zip(&fused).enumerate() {
+        // The same guard as above: random blocks can carry a non-finite scale.
+        assert_eq!(x.is_finite(), y.is_finite(), "row {i}: {x} against {y}");
+        if x.is_finite() {
+            assert!(
+                (x - y).abs() <= 1e-3 * (1.0 + y.abs()),
+                "row {i}: two-step {x} against fused {y}"
+            );
+        }
+    }
 }
