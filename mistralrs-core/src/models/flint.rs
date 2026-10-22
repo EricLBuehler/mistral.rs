@@ -869,6 +869,9 @@ impl Model {
         input_ids: &Tensor,
         ctx: &mut ModelForwardContext<'_>,
     ) -> Result<Tensor> {
+        if input_ids.dims().get(1) == Some(&1) {
+            crate::utils::decode_prof::step();
+        }
         let mut xs = {
             let _p = crate::utils::decode_prof::profile(crate::utils::decode_prof::Phase::Embed);
             self.embed_tokens.embedding_forward(input_ids, self.dtype)?

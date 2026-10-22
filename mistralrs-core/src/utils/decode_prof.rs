@@ -46,6 +46,7 @@ const PHASE_NAMES: [&str; PHASE_COUNT] = [
 ];
 
 static ENABLED: AtomicBool = AtomicBool::new(false);
+static STEPS: AtomicU64 = AtomicU64::new(0);
 static NANOS: [AtomicU64; PHASE_COUNT] = [const { AtomicU64::new(0) }; PHASE_COUNT];
 
 pub struct PhaseGuard(Option<(Phase, Instant)>);
@@ -72,6 +73,69 @@ pub fn profile(phase: Phase) -> PhaseGuard {
 
 pub fn enable() {
     ENABLED.store(true, Ordering::Relaxed);
+}
+
+/// Marks one decode step, so a periodic report can divide by it.
+#[inline]
+pub fn step() {
+    if ENABLED.load(Ordering::Relaxed) {
+        STEPS.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
+/// `MISTRALRS_DECODE_PROF=<seconds>` turns the profiler on and prints a phase table that often,
+/// as a delta over the interval in ms a decode step. That is what makes a live server
+/// profileable without the benchmark harness, which needs a checkpoint its fixture knows.
+// Same lossless-in-practice conversion as `report`: counters over a few hundred steps.
+#[allow(clippy::cast_precision_loss)]
+pub fn enable_from_env() {
+    let Some(interval) = std::env::var("MISTRALRS_DECODE_PROF")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .filter(|s| *s > 0)
+    else {
+        return;
+    };
+    enable();
+    std::thread::spawn(move || {
+        let mut previous = [0u64; PHASE_COUNT];
+        let mut previous_steps = 0u64;
+        let mut previous_at = Instant::now();
+        loop {
+            std::thread::sleep(std::time::Duration::from_secs(interval));
+            let steps = STEPS.load(Ordering::Relaxed);
+            let done = steps.saturating_sub(previous_steps);
+            if done == 0 {
+                continue;
+            }
+            let at = Instant::now();
+            let wall = (at - previous_at).as_secs_f64();
+            let nanos: Vec<u64> = NANOS.iter().map(|c| c.load(Ordering::Relaxed)).collect();
+            let deltas: Vec<u64> = nanos
+                .iter()
+                .zip(&previous)
+                .map(|(now, before)| now.saturating_sub(*before))
+                .collect();
+            let total: u64 = deltas.iter().sum();
+            println!(
+                "[decode-prof] {done} steps in {wall:.1} s ({:.2} tok/s), {:.1} ms of work a step",
+                done as f64 / wall,
+                total as f64 / done as f64 / 1e6
+            );
+            for (name, ns) in PHASE_NAMES.iter().zip(&deltas) {
+                let ms = *ns as f64 / done as f64 / 1e6;
+                let share = if total == 0 {
+                    0.0
+                } else {
+                    100.0 * *ns as f64 / total as f64
+                };
+                println!("[decode-prof]   {name:<10} {ms:7.2} ms  {share:5.1}%");
+            }
+            previous.copy_from_slice(&nanos);
+            previous_steps = steps;
+            previous_at = at;
+        }
+    });
 }
 
 pub fn reset() {
