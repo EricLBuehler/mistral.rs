@@ -611,5 +611,18 @@ were read through and the process never went above 9.2 GiB, so the routed pages 
 reclaimed as they were consumed rather than accumulated. A stack of 9.38 GiB of blocks
 decoded to f32 would be 32 GiB on its own.
 
-No rate is claimed: 0.32 tok/s under a 6x-contended node is a correctness cell, not a
-measurement.
+Rate, against the K-quant build in the same minute on the same node (16 threads, schedutil,
+load average ~519 from another agent's tests, CPUs 86-94% idle):
+
+| checkpoint | decode | peak RSS |
+|---|---|---|
+| Flint IQ1_M | 0.46 tok/s | 9.8 GiB |
+| Flint Q4_K_M | 9.39 tok/s | 66.8 GiB |
+
+Two things follow. The IQ route keeps the checkpoint in the mapping and pays 20x on decode,
+because it decodes 882M values per token serially; the K-quant route is fast but resident
+about twice over (the file mapped *and* copied by candle's `QTensor`) plus its f32 dense
+caches, so 66.8 GiB for the same weights. On a small-RAM box the IQ route is the one that
+runs; on a big one the K-quant is 20x faster. The fix for the IQ side is the parallel
+per-expert decode and then a fused dequant-and-GEMV, both of which the streaming thesis
+wants anyway.
