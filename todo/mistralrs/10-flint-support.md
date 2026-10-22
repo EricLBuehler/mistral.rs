@@ -5,7 +5,9 @@
   `mistralrs-core/src/gguf/normal_bindings.rs`, `mistralrs-core/src/gguf/normal_config.rs`,
   `mistralrs-core/src/gguf/gguf_tokenizer.rs`, `mistralrs-core/src/pipeline/{normal,gguf,chat_template}.rs`
 - **Status:** implemented on the `flint_by_flint` worktree branch (`/home/lu_zero/Sources/flint`,
-  4 commits on `36db2a0ea`). The GGUF route runs end to end. Nothing pushed, nothing PRed.
+  8 commits on `36db2a0ea`). The GGUF route runs end to end on K-quants, and the IQ route
+  now does too: the published `flint-preview-UD-IQ1_M.gguf` reasons and answers. Nothing
+  pushed, nothing PRed.
 - **Impact:** `flint` was rejected with `Unknown normal-model GGUF architecture`; it now loads,
   reasons and answers.
 
@@ -85,6 +87,37 @@ Decode throughput 4-11 tok/s depending on how loaded the box was, which brackets
 bf16 8.65 tok/s and beats the Tenstorrent P150's 1.82 tok/s. Not a clean cell: the box was
 busy throughout.
 
+### The IQ run
+
+`flint-preview-UD-IQ1_M.gguf` (11.35 GiB), node 2, 16 threads, box at load average ~544
+(so this is a correctness cell, not a rate), same probe:
+
+```
+finish: stop
+reasoning: The user is asking a simple factual question: "What is the capital of France?"
+           and wants the answer in one word. The capital of France is Paris. ...
+content: 'Paris'
+usage: 89 completion tokens at 0.32 tok/s
+```
+
+Two things follow from it. The answer is right and the turn ends on the checkpoint's own
+`eog_token_ids`, so the whole path works: loader, IQ decode, per-expert gather, stop set.
+And 9.38 GiB of that file is expert blocks, yet the process peaked at 9.2 GiB RSS (7.5 GiB
+after the load, 1.7 GiB more on the first forward) on a box with 10 GiB available: the
+routed experts are read and evicted as it goes, which is the streaming property the IQ loader
+was built for and not something a materialised stack could have done.
+
+The 0.32 tok/s is not the model's rate. Under that load the box gives a process roughly a
+sixth of a node, and the per-token work is 18 expert slabs of decode; the K-quant run on a
+quieter box measured 10.08. A clean IQ cell is a thing to measure on a quiet box, not to
+infer from this one.
+
+One usability note: with `MemAvailable` under the model's estimated size, auto device
+mapping refuses the load ("does not fit on the devices ... exceeds total capacity by
+20974MB") because the estimate is computed against host-wide free memory. `-n 0:49` (all 49
+layers on CPU) bypasses it. That is the generic GGUF path, not the IQ one, but it is what a
+box under another agent's pressure looks like.
+
 The architecture rejection is gone:
 
 ```
@@ -92,14 +125,32 @@ $ mistralrs run -f flint-preview-UD-Q4_K_XL.gguf -i "hello"
 Error: ... uses dtype IQ2_S (22) for native binding `model.layers.10.mlp.experts.down_proj.weight`
 ```
 
-which is the *quantisation* failing, not the architecture: config synthesis, the tokenizer and
+which was the *quantisation* failing, not the architecture: config synthesis, the tokenizer and
 every tensor binding resolve first.
+
+## IQ quantisation
+
+`mistralrs-quant/src/gguf/iq.rs` now carries the whole IQ family (`IQ1_S`, `IQ1_M`, `IQ2_XXS`,
+`IQ2_XS`, `IQ2_S`, `IQ3_XXS`, `IQ3_S`, `IQ4_NL`, `IQ4_XS`), with the grids and sign tables
+extracted mechanically from `ggml-common.h`. Candle has no IQ block type, so the bytes stay
+bytes: `IqTensor` holds them, a dense weight decodes once into the forward's f32 cache, and a
+stacked expert weight decodes only the experts a token routes to, through the same per-expert
+gather the K-quants use.
+
+The port is pinned bit for bit twice: `every_iq_type_dequantises_the_golden_blocks_exactly`
+compares against gguf-py's decode of real blocks from the on-box files, and
+`expert_gather_matches_the_fused_stack_bit_exactly` pins the scoped gather to the whole-stack
+path over all the shapes the MoE hands it, including the tiny-shape matmul fallback.
+
+Nothing IQ-specific leaks into the core: `load_direct_linear` branches to `load_iq_linear` on
+an IQ dtype, and everything above it keeps using `QuantMethod`.
 
 ## What is still open
 
-1. **The published IQ GGUFs are still unreadable.** `flint-preview-UD-IQ1_M.gguf` and
-   `flint-preview-UD-Q4_K_XL.gguf` need an IQ dequantiser (`todo/gaps/04`). The K-quant
-   `flint-Q4_K_M.gguf` is the only runnable one today.
+1. **The IQ rate.** It runs and it is right, but 0.32 tok/s under a 6x-contended node says
+   nothing about the decode rate. On a quiet box the number to beat is the K-quant's 10.08.
+   The per-expert gather decodes each routed expert per token; whether that or the box sets
+   the rate is a measurement, not an argument.
 2. **The fp8 route.** `HawkBearPig/flint-FP8-BF16` uses the same blockwise fp8 recipe and the
    same per-expert tensor names as Kolibri-1, but its `config.json` declares
    `quant_method: "dgpp_mixed"`, which `QuantizedConfig` does not parse. That is the next
@@ -107,5 +158,8 @@ every tensor binding resolve first.
 3. **The legacy lmstudio GGUF carries no `eog_token_ids`**, so it needs the `stop` parameter
    (or a caller-supplied stop list) to end a turn cleanly. Newer converters emit the key; the
    shim for files without it is not worth carrying.
-4. **The upstream PR.** Four commits, ready to stack on `origin/master`. Nothing leaves the
+4. **IQ4_NL is implemented but unexercised by a real file**: every other IQ family member is
+   present in the on-box checkpoints (IQ1_M, IQ1_S, IQ2_S, IQ2_XXS, IQ2_XS, IQ3_XXS, IQ3_S,
+   IQ4_XS). Its golden vectors come from gguf-py's own reference, not from a checkpoint.
+5. **The upstream PR.** Eight commits, ready to stack on `origin/master`. Nothing leaves the
    machine without an explicit go-ahead.

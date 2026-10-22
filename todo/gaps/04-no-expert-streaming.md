@@ -4,7 +4,9 @@
 - **Components:** `mistralrs-core/src/moe/experts/checkpoint.rs`, `mistralrs-core/src/moe/experts/backends.rs`
 - **Status:** the strategy is settled and the *loader* is the last piece of it; the
   validation (a real 32 GB box) has not been done. What is stale in this file is marked
-  stale below
+  stale below. As of 2026-10-22 the GGUF side is done - K-quants and the IQ family both keep
+  the borrowed bytes and dequantise only the routed experts - so the fp8 loader is the one
+  still materialising.
 - **Impact:** any MoE model whose weights do not fit in RAM
 
 ## What
@@ -576,3 +578,38 @@ own routing would be better and is the one thing worth asking for.
   host, so the 32 GB case assumes a dedicated machine.
 - **The Q2_K route is a quality trade, not the same model.** It is the cheapest way to get a
   number, not a way to get Kolibri-1.
+
+## The IQ route streams by construction, 2026-10-22
+
+Candle has no IQ block type, so the IQ loader (`todo/mistralrs/10`) does what the thesis
+asks for by necessity: `IqTensor` holds the GGUF's block bytes, a dense weight decodes once
+into the forward's f32 cache, and a stacked expert weight decodes only the experts the
+gather names. Nothing stacks, nothing copies the file out of the mapping, and the gather is
+the same kernel the K-quants use, pinned bit for bit to the whole-stack path.
+
+The per-token traffic is therefore the routed experts' blocks: 6 of 256 experts per layer,
+three projections each, read out of the file's pages. At Flint's geometry that is 18 slabs
+of 2048 x 512 per layer, 72 MiB of f32 transiently per layer and nothing retained.
+
+Measured on Flint `IQ1_M` (11.35 GiB, of which 9.38 GiB is expert blocks: IQ2_XXS 6.19,
+IQ2_S 1.84, IQ1_S 0.78, IQ3_XXS 0.57), node 2, 16 threads, box at load ~544 and 10 GiB of
+`MemAvailable`:
+
+| phase | RSS |
+|---|---|
+| pipeline ready (no forward) | 7.5 GiB |
+| peak over a 89-token greedy completion | 9.2 GiB |
+
+The dense cache is the *small* item here, and not because the estimate above was wrong so
+much as because it assumed the wrong checkpoint: this file's attention projections are
+Q5_K/Q8_0 with only 0.2 GiB of IQ among them, so they stay quantised. The footprint is the
+non-expert materialisation - the f32 embedding and output head are 1.2 GB each - which is
+the same cost the K-quant route pays.
+
+The streaming claim itself holds, and the run is what proves it: 9.38 GiB of expert blocks
+were read through and the process never went above 9.2 GiB, so the routed pages were
+reclaimed as they were consumed rather than accumulated. A stack of 9.38 GiB of blocks
+decoded to f32 would be 32 GiB on its own.
+
+No rate is claimed: 0.32 tok/s under a 6x-contended node is a correctness cell, not a
+measurement.
