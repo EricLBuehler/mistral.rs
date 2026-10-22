@@ -55,6 +55,9 @@ fn sign_bit(signs: u8, j: usize) -> bool {
 
 /// 2.0625 bpw. `d`, then 32 u16s: 4 grid indices and one packed scale-and-signs word per 32
 /// values, with the signs unpacked through `ksigns_iq2xs`.
+///
+/// aarch64 runs the vector decoder; this is its oracle, and the fallback elsewhere.
+#[cfg_attr(target_arch = "aarch64", allow(dead_code))]
 fn dequantize_iq2_xxs(blocks: &[u8], n_blocks: usize, y: &mut [f32]) {
     let mut y = y.iter_mut();
     for block in blocks.as_chunks::<66>().0.iter().take(n_blocks) {
@@ -342,6 +345,143 @@ fn dequantize_iq4_xs(blocks: &[u8], n_blocks: usize, y: &mut [f32]) {
     }
 }
 
+/// Eight values at a time: a grid row is eight i8s, so each 32-value group is four vectors of
+/// eight, and the sign code becomes an xor mask. `db * g` and `g * db` are the same f32
+/// product and a sign flip is the same negation as multiplying by -1.0, so this decodes bit
+/// for bit what the scalar loop does. NEON is baseline on aarch64, so there is no feature
+/// check to make.
+#[cfg(target_arch = "aarch64")]
+mod neon {
+    use super::*;
+    use std::{arch::aarch64::*, sync::OnceLock};
+
+    /// For each 7-bit sign code, the lanes whose bit is set get 0x80000000 and the rest 0 -
+    /// exactly the negation the scalar loop applies with `-1.0`.
+    static SIGN_MASKS: OnceLock<Vec<[u32; 8]>> = OnceLock::new();
+
+    fn sign_masks() -> &'static Vec<[u32; 8]> {
+        SIGN_MASKS.get_or_init(|| {
+            KSIGNS_IQ2XS
+                .iter()
+                .map(|&code| {
+                    let mut mask = [0u32; 8];
+                    for (j, lane) in mask.iter_mut().enumerate() {
+                        if sign_bit(code, j) {
+                            *lane = 0x8000_0000;
+                        }
+                    }
+                    mask
+                })
+                .collect()
+        })
+    }
+
+    /// `a . b`, four lanes of four sums: the fallback for types that do not have a fused
+    /// decoder yet, where the row is decoded into a scratch row first.
+    pub(super) fn dot_f32(a: &[f32], b: &[f32]) -> f32 {
+        let mut acc = [unsafe { vdupq_n_f32(0.0) }; 4];
+        let chunks = a.len() / 4;
+        for c in 0..chunks {
+            unsafe {
+                let x = vld1q_f32(a.as_ptr().add(c * 4));
+                let y = vld1q_f32(b.as_ptr().add(c * 4));
+                acc[c % 4] = vfmaq_f32(acc[c % 4], x, y);
+            }
+        }
+        let mut tail = 0.0f32;
+        for c in chunks * 4..a.len() {
+            tail += a[c] * b[c];
+        }
+        unsafe {
+            let pairs = vaddq_f32(vaddq_f32(acc[0], acc[1]), vaddq_f32(acc[2], acc[3]));
+            vaddvq_f32(pairs) + tail
+        }
+    }
+
+    /// `row . x` for one IQ2_XXS row: the same decode, multiplied into four running sums
+    /// instead of being stored. Because it never materialises the row, the fused gather reads
+    /// the block bytes and nothing else.
+    pub(super) fn iq2_xxs_row_dot(block: &[u8], n_blocks: usize, x: &[f32]) -> f32 {
+        let masks = sign_masks();
+        let mut acc = [unsafe { vdupq_n_f32(0.0) }; 4];
+        let mut turn = 0usize;
+        for b in 0..n_blocks {
+            let blk = &block[b * 66..][..66];
+            let d = f16_scale(blk);
+            let qs = &blk[2..];
+            for ib32 in 0..8 {
+                let aux32 = le_u32_pair(&qs[8 * ib32..8 * ib32 + 8]);
+                let db = d * (0.5f32 + (aux32[1] >> 28) as f32) * 0.25;
+                let dbv = unsafe { vdupq_n_f32(db) };
+                for l in 0..4 {
+                    let grid = (aux32[0] >> (8 * l)) as usize & 0xff;
+                    let code = ((aux32[1] >> (7 * l)) & 127) as usize;
+                    let at = b * 256 + (ib32 * 4 + l) * 8;
+                    unsafe {
+                        let g = vld1_s8(IQ2XXS_GRID.as_ptr().add(grid) as *const i8);
+                        let g16 = vmovl_s8(g);
+                        let lo = vcvtq_f32_s32(vmovl_s16(vget_low_s16(g16)));
+                        let hi = vcvtq_f32_s32(vmovl_s16(vget_high_s16(g16)));
+                        let m = masks[code].as_ptr();
+                        let flo =
+                            veorq_u32(vreinterpretq_u32_f32(vmulq_f32(lo, dbv)), vld1q_u32(m));
+                        let fhi = veorq_u32(
+                            vreinterpretq_u32_f32(vmulq_f32(hi, dbv)),
+                            vld1q_u32(m.add(4)),
+                        );
+                        let xp = x.as_ptr().add(at);
+                        acc[turn] = vfmaq_f32(acc[turn], vreinterpretq_f32_u32(flo), vld1q_f32(xp));
+                        acc[(turn + 1) % 4] = vfmaq_f32(
+                            acc[(turn + 1) % 4],
+                            vreinterpretq_f32_u32(fhi),
+                            vld1q_f32(xp.add(4)),
+                        );
+                    }
+                    turn = (turn + 2) % 4;
+                }
+            }
+        }
+        unsafe {
+            let pairs = vaddq_f32(vaddq_f32(acc[0], acc[1]), vaddq_f32(acc[2], acc[3]));
+            vaddvq_f32(pairs)
+        }
+    }
+
+    pub(super) fn dequantize_iq2_xxs(blocks: &[u8], n_blocks: usize, y: &mut [f32]) {
+        let masks = sign_masks();
+        for (i, block) in blocks.as_chunks::<66>().0.iter().take(n_blocks).enumerate() {
+            let d = f16_scale(block);
+            let qs = &block[2..];
+            let out = unsafe { y.as_mut_ptr().add(i * 256) };
+            for ib32 in 0..8 {
+                let aux32 = le_u32_pair(&qs[8 * ib32..8 * ib32 + 8]);
+                let db = d * (0.5f32 + (aux32[1] >> 28) as f32) * 0.25;
+                let dbv = unsafe { vdupq_n_f32(db) };
+                for l in 0..4 {
+                    let grid = (aux32[0] >> (8 * l)) as usize & 0xff;
+                    let code = ((aux32[1] >> (7 * l)) & 127) as usize;
+                    unsafe {
+                        let g = vld1_s8(IQ2XXS_GRID.as_ptr().add(grid) as *const i8);
+                        let g16 = vmovl_s8(g);
+                        let lo = vcvtq_f32_s32(vmovl_s16(vget_low_s16(g16)));
+                        let hi = vcvtq_f32_s32(vmovl_s16(vget_high_s16(g16)));
+                        let m = masks[code].as_ptr();
+                        let flo =
+                            veorq_u32(vreinterpretq_u32_f32(vmulq_f32(lo, dbv)), vld1q_u32(m));
+                        let fhi = veorq_u32(
+                            vreinterpretq_u32_f32(vmulq_f32(hi, dbv)),
+                            vld1q_u32(m.add(4)),
+                        );
+                        let dst = out.add((ib32 * 4 + l) * 8);
+                        vst1q_f32(dst, vreinterpretq_f32_u32(flo));
+                        vst1q_f32(dst.add(4), vreinterpretq_f32_u32(fhi));
+                    }
+                }
+            }
+        }
+    }
+}
+
 /// Dequantise `n_blocks` IQ blocks of `dtype` into the first `n_blocks * block_size` slots.
 pub(crate) fn dequantize_blocks(
     dtype: GgufDType,
@@ -350,7 +490,15 @@ pub(crate) fn dequantize_blocks(
     y: &mut [f32],
 ) -> Result<()> {
     match dtype.raw() {
-        16 => dequantize_iq2_xxs(blocks, n_blocks, y),
+        16 => {
+            #[cfg(target_arch = "aarch64")]
+            {
+                neon::dequantize_iq2_xxs(blocks, n_blocks, y);
+                return Ok(());
+            }
+            #[cfg(not(target_arch = "aarch64"))]
+            dequantize_iq2_xxs(blocks, n_blocks, y)
+        }
         17 => dequantize_iq2_xs(blocks, n_blocks, y),
         18 => dequantize_iq3_xxs(blocks, n_blocks, y),
         19 => dequantize_iq1_s(blocks, n_blocks, y),
@@ -367,6 +515,23 @@ pub(crate) fn dequantize_blocks(
 /// Whether `raw` is one of the IQ types this module decodes.
 pub(crate) const fn is_iq(raw: u32) -> bool {
     matches!(raw, 16..=23 | 29)
+}
+
+/// `row . x` where the row is `n_blocks` IQ blocks: the vector path where one exists, else
+/// the row decoded into `scratch` and dotted. The two do not share a summation order, which is
+/// why this serves the opt-in fused gather and not the default path.
+fn row_dot(dtype: GgufDType, row_bytes: &[u8], x: &[f32], scratch: &mut [f32]) -> f32 {
+    #[cfg(target_arch = "aarch64")]
+    if dtype.raw() == 16 {
+        return neon::iq2_xxs_row_dot(row_bytes, x.len() / 256, x);
+    }
+    let block_size = dtype.block_size().expect("iq block size");
+    dequantize_blocks(dtype, row_bytes, x.len() / block_size, scratch)
+        .expect("a row is a whole number of blocks of its own dtype");
+    #[cfg(target_arch = "aarch64")]
+    return neon::dot_f32(scratch, x);
+    #[cfg(not(target_arch = "aarch64"))]
+    scratch.iter().zip(x).map(|(w, a)| w * a).sum()
 }
 
 /// Blocks per parallel chunk: 32 chunks for a 1M-value expert slab, which is what an expert
@@ -388,6 +553,9 @@ static FUSED_IQ_GEMV_SEEDED: OnceLock<()> = OnceLock::new();
 const GATHERS_PER_TOKEN: usize = 147;
 
 static IQ_GATHER_STATS: OnceLock<bool> = OnceLock::new();
+static GATHER_THREADS: OnceLock<
+    std::sync::Mutex<std::collections::HashSet<std::thread::ThreadId>>,
+> = OnceLock::new();
 static GATHER_CALLS: AtomicUsize = AtomicUsize::new(0);
 static GATHER_NANOS: AtomicU64 = AtomicU64::new(0);
 
@@ -848,9 +1016,13 @@ impl IqGgufMatMul {
         if n.is_multiple_of(GATHERS_PER_TOKEN) {
             let total = GATHER_NANOS.load(Ordering::Relaxed) as f64 / 1e6;
             eprintln!(
-                "iq gather: {n} calls, {:.2} ms each, {:.1} ms per token",
+                "iq gather: {n} calls, {:.2} ms each, {:.1} ms per token, {} threads",
                 total / n as f64,
-                total / (n / GATHERS_PER_TOKEN) as f64
+                total / (n / GATHERS_PER_TOKEN) as f64,
+                GATHER_THREADS
+                    .get()
+                    .map(|m| m.lock().expect("thread set").len())
+                    .unwrap_or(0)
             );
         }
         out
@@ -948,19 +1120,72 @@ impl IqGgufMatMul {
             );
         }
 
+        let slabs: Vec<&[u8]> = ids
+            .iter()
+            .map(|&expert| self.w.expert_bytes(expert as usize))
+            .collect::<Result<_>>()?;
         let mut out = vec![0f32; ids.len() * out_features];
-        for (slot, &expert) in ids.iter().enumerate() {
-            let slab = self.w.expert_bytes(expert as usize)?;
+
+        // One pass over every slot's rows rather than one pass a slot: the barrier is paid
+        // once a gather instead of once an expert, and 147 of these run per token.
+        let rows = FUSED_ROWS_PER_CHUNK;
+        if !out_features.is_multiple_of(rows) {
+            return self.fused_gather_per_slot(&slabs, a, repeat, out);
+        }
+        let chunks_per_slot = out_features / rows;
+        let dtype = self.w.dtype();
+        crate::gemv_cpu::par_chunks(&mut out, rows, |chunk, dst| {
+            if iq_gather_stats() {
+                GATHER_THREADS
+                    .get_or_init(Default::default)
+                    .lock()
+                    .expect("thread set")
+                    .insert(std::thread::current().id());
+            }
+            let slot = chunk / chunks_per_slot;
+            let first = (chunk % chunks_per_slot) * rows;
+            let slab = slabs[slot];
+            let x = &a[(slot / repeat) * in_features..][..in_features];
+            let mut scratch = vec![0f32; in_features];
+            for (i, o) in dst.iter_mut().enumerate() {
+                let row = first + i;
+                *o = row_dot(
+                    dtype,
+                    &slab[row * row_bytes..][..row_bytes],
+                    x,
+                    &mut scratch,
+                );
+            }
+        });
+        Ok(out)
+    }
+
+    /// The same gather for a row count that does not fill whole chunks, where the chunk
+    /// boundaries a barrier pool hands out would cross experts.
+    fn fused_gather_per_slot(
+        &self,
+        slabs: &[&[u8]],
+        a: &[f32],
+        repeat: usize,
+        mut out: Vec<f32>,
+    ) -> Result<Vec<f32>> {
+        let (_, out_features, in_features) = self.w.expert_geometry()?;
+        let (block_size, type_size) = self.w.block_geometry();
+        let row_bytes = (in_features / block_size) * type_size;
+        let dtype = self.w.dtype();
+        for (slot, slab) in slabs.iter().enumerate() {
             let x = &a[(slot / repeat) * in_features..][..in_features];
             let dst = &mut out[slot * out_features..][..out_features];
             crate::gemv_cpu::par_chunks(dst, FUSED_ROWS_PER_CHUNK, |chunk, rows| {
                 let mut scratch = vec![0f32; in_features];
                 for (i, o) in rows.iter_mut().enumerate() {
                     let row = chunk * FUSED_ROWS_PER_CHUNK + i;
-                    let bytes = &slab[row * row_bytes..][..row_bytes];
-                    dequantize_blocks(self.w.dtype(), bytes, n_blocks, &mut scratch)
-                        .expect("a row is a whole number of blocks of its own dtype");
-                    *o = scratch.iter().zip(x).map(|(w, a)| w * a).sum();
+                    *o = row_dot(
+                        dtype,
+                        &slab[row * row_bytes..][..row_bytes],
+                        x,
+                        &mut scratch,
+                    );
                 }
             });
         }
