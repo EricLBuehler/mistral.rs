@@ -841,9 +841,7 @@ impl<'a> MetadataView<'a> {
         };
         let key = self.key("attention.sliding_window_pattern");
         match value {
-            GgufValue::Array(_) => {
-                pattern_flags(value, &key, layer_count).map(Some)
-            }
+            GgufValue::Array(_) => pattern_flags(value, &key, layer_count).map(Some),
             _ => {
                 let period = value_usize(value).ok_or_else(|| {
                     NormalConfigSynthesisError::new(format!(
@@ -2953,12 +2951,7 @@ mod tests {
         }
 
         if matches!(loader, NormalLoaderType::Flint) {
-            insert_u32(
-                &mut metadata,
-                architecture,
-                "attention.sliding_window",
-                513,
-            );
+            insert_u32(&mut metadata, architecture, "attention.sliding_window", 513);
             // The sliding-window and rope patterns are the same array for this model.
             let pattern = vec![0u32; LAYER_COUNT];
             insert_u32_array(
@@ -3067,9 +3060,7 @@ mod tests {
             NormalLoaderType::Kolibri1 => {
                 assert_deserializes::<models::kolibri1::Config>(loader, config)
             }
-            NormalLoaderType::Flint => {
-                assert_deserializes::<models::flint::Config>(loader, config)
-            }
+            NormalLoaderType::Flint => assert_deserializes::<models::flint::Config>(loader, config),
         }
     }
 

@@ -234,7 +234,7 @@ impl Attention {
 
         // The per-head sink is a softmax logit that attends to nothing.
         let sinks = mapper
-            .set_device(layer_idx, vb.pp("self_attn").clone(), false)
+            .set_device(layer_idx, vb.clone(), false)
             .get((num_heads,), "softmax_offset")?;
 
         Ok(Self {
@@ -388,14 +388,10 @@ struct MoEGate {
 
 impl MoEGate {
     fn new(cfg: &Config, layer_vb: ShardedVarBuilder) -> Result<Self> {
-        let gate = layers::linear_no_bias(
-            cfg.hidden_size,
-            cfg.num_experts,
-            layer_vb.pp("gate"),
-        )?
-        .weight()
-        .to_dtype(DType::F32)?
-        .contiguous()?;
+        let gate = layers::linear_no_bias(cfg.hidden_size, cfg.num_experts, layer_vb.pp("gate"))?
+            .weight()
+            .to_dtype(DType::F32)?
+            .contiguous()?;
         Ok(Self {
             gate,
             top_k: cfg.num_experts_per_tok,
@@ -929,10 +925,18 @@ impl Model {
             uvb_l
                 .pp("post_attention_layernorm")
                 .add(&layer.post_attention_layernorm);
-            uvb_l.pp("self_attn").pp("q_norm").add(&layer.self_attn.q_norm);
-            uvb_l.pp("self_attn").pp("k_norm").add(&layer.self_attn.k_norm);
+            uvb_l
+                .pp("self_attn")
+                .pp("q_norm")
+                .add(&layer.self_attn.q_norm);
+            uvb_l
+                .pp("self_attn")
+                .pp("k_norm")
+                .add(&layer.self_attn.k_norm);
             if let Some(sinks) = &layer.self_attn.sdpa_params.sinks {
-                uvb_l.pp("self_attn").add_tensor("softmax_offset", sinks.clone());
+                uvb_l
+                    .pp("self_attn")
+                    .add_tensor("softmax_offset", sinks.clone());
             }
             if let LayerMlp::MoE(moe) = &layer.mlp {
                 uvb_l.pp("mlp").pp("gate").add(&moe.gate.gate);
@@ -1001,6 +1005,7 @@ impl crate::speculative::SpeculativeTargetMixin for Model {}
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::paged_attention::AttentionImplementation;
 
     /// The shipped `config.json`, verbatim.
     const REAL_CONFIG: &str = r#"{
@@ -1105,7 +1110,10 @@ mod tests {
             .filter(|i| !cfg.layer_types[*i].is_sliding())
             .collect();
         assert_eq!(full, cfg.no_rope_layer_indices);
-        assert_eq!(full, vec![0, 1, 5, 9, 13, 17, 21, 25, 29, 33, 37, 41, 45, 48]);
+        assert_eq!(
+            full,
+            vec![0, 1, 5, 9, 13, 17, 21, 25, 29, 33, 37, 41, 45, 48]
+        );
         for layer in 0..cfg.num_hidden_layers {
             assert_eq!(
                 cfg.layer_has_rope(layer),
@@ -1175,11 +1183,7 @@ mod tests {
             .map(|logit| 1.0 / (1.0 + (-logit).exp()))
             .collect();
         // The top three by sigmoid are experts 1, 3 and 4.
-        let mut expected: Vec<(usize, f32)> = scores
-            .iter()
-            .copied()
-            .enumerate()
-            .collect();
+        let mut expected: Vec<(usize, f32)> = scores.iter().copied().enumerate().collect();
         expected.sort_by(|a, b| b.1.total_cmp(&a.1));
         let expected = &expected[..top_k];
         let sum: f32 = expected.iter().map(|(_, score)| score).sum();
@@ -1196,5 +1200,185 @@ mod tests {
         let total: f32 = got_weights.iter().sum();
         assert!((total - 1.0).abs() < 1e-6, "weights sum to {total}");
     }
-}
 
+    fn small_config() -> Config {
+        Config {
+            vocab_size: 8,
+            hidden_size: 4,
+            num_hidden_layers: 3,
+            num_attention_heads: 2,
+            num_key_value_heads: 1,
+            head_dim: Some(2),
+            max_position_embeddings: 8,
+            rms_norm_eps: 1e-5,
+            rope_theta: 10_000.,
+            hidden_act: Activation::Silu,
+            intermediate_size: 6,
+            num_experts: 4,
+            num_experts_per_tok: 2,
+            moe_intermediate_size: 6,
+            shared_expert_intermediate_size: 6,
+            norm_topk_prob: true,
+            attention_bias: false,
+            tie_word_embeddings: false,
+            use_sliding_window: true,
+            sliding_window: 4,
+            // A sliding layer, a full one, then another sliding one.
+            layer_types: vec![
+                LayerType::SlidingAttention,
+                LayerType::FullAttention,
+                LayerType::SlidingAttention,
+            ],
+            // The first two layers keep a dense MLP, so both kinds are built.
+            mlp_only_layers: vec![0, 1],
+            no_rope_layer_indices: vec![1],
+            quantization_config: None,
+        }
+    }
+
+    /// Builds a model from a synthetic checkpoint whose key set mirrors the real one exactly,
+    /// so a renamed or relocated tensor fails here rather than at load time on a 79 GB
+    /// checkpoint.
+    fn model_for(cfg: &Config) -> Result<Model> {
+        let h = cfg.hidden_size;
+        let head_dim = cfg.head_dim();
+        let q = cfg.num_attention_heads * head_dim;
+        let kv = cfg.num_key_value_heads * head_dim;
+        let inter = cfg.moe_intermediate_size;
+        let shared = cfg.shared_expert_intermediate_size;
+
+        let mut tensors: std::collections::HashMap<String, Tensor> =
+            std::collections::HashMap::new();
+        {
+            let put = |tensors: &mut std::collections::HashMap<String, Tensor>,
+                       name: String,
+                       shape: &[usize]|
+             -> Result<()> {
+                tensors.insert(name, Tensor::ones(shape, DType::F32, &Device::Cpu)?);
+                Ok(())
+            };
+            put(
+                &mut tensors,
+                "model.embed_tokens.weight".to_string(),
+                &[cfg.vocab_size, h],
+            )?;
+            put(&mut tensors, "model.norm.weight".to_string(), &[h])?;
+            put(
+                &mut tensors,
+                "lm_head.weight".to_string(),
+                &[cfg.vocab_size, h],
+            )?;
+
+            for layer in 0..cfg.num_hidden_layers {
+                let p = format!("model.layers.{layer}");
+                for name in ["input_layernorm", "post_attention_layernorm"] {
+                    put(&mut tensors, format!("{p}.{name}.weight"), &[h])?;
+                }
+                for (name, shape) in [
+                    ("q_proj", &[q, h][..]),
+                    ("k_proj", &[kv, h][..]),
+                    ("v_proj", &[kv, h][..]),
+                    ("o_proj", &[h, q][..]),
+                    ("q_norm", &[head_dim][..]),
+                    ("k_norm", &[head_dim][..]),
+                ] {
+                    put(&mut tensors, format!("{p}.self_attn.{name}.weight"), shape)?;
+                }
+                // The per-head sink, and it carries no `.weight` suffix.
+                put(
+                    &mut tensors,
+                    format!("{p}.self_attn.softmax_offset"),
+                    &[cfg.num_attention_heads],
+                )?;
+                if cfg.layer_is_dense(layer) {
+                    for (name, shape) in [
+                        ("gate_proj", &[cfg.intermediate_size, h][..]),
+                        ("up_proj", &[cfg.intermediate_size, h][..]),
+                        ("down_proj", &[h, cfg.intermediate_size][..]),
+                    ] {
+                        put(&mut tensors, format!("{p}.mlp.{name}.weight"), shape)?;
+                    }
+                } else {
+                    put(
+                        &mut tensors,
+                        format!("{p}.mlp.gate.weight"),
+                        &[cfg.num_experts, h],
+                    )?;
+                    for (base, width, count) in [
+                        (format!("{p}.mlp.shared_expert"), shared, 1usize),
+                        (format!("{p}.mlp.experts"), inter, cfg.num_experts),
+                    ] {
+                        for expert in 0..count {
+                            let base = if count == 1 {
+                                base.clone()
+                            } else {
+                                format!("{base}.{expert}")
+                            };
+                            put(
+                                &mut tensors,
+                                format!("{base}.gate_proj.weight"),
+                                &[width, h],
+                            )?;
+                            put(&mut tensors, format!("{base}.up_proj.weight"), &[width, h])?;
+                            put(
+                                &mut tensors,
+                                format!("{base}.down_proj.weight"),
+                                &[h, width],
+                            )?;
+                        }
+                    }
+                }
+            }
+        }
+
+        let vb = mistralrs_quant::ShardedSafeTensors::wrap(tensors, DType::F32, Device::Cpu);
+        let metadata = NormalLoadingMetadata {
+            mapper: Box::new(crate::device_map::DummyDeviceMapper {
+                nm_device: Device::Cpu,
+            }),
+            loading_isq: false,
+            real_device: Device::Cpu,
+            multi_progress: Arc::new(indicatif::MultiProgress::new()),
+            matformer_slicing_config: None,
+            rope_pairing: None,
+        };
+        Model::new(cfg, vb, true, metadata, AttentionImplementation::Eager)
+    }
+
+    /// A missing or misnamed tensor surfaces here, on a 4 KB checkpoint rather than 79 GB.
+    #[test]
+    fn checkpoint_loads_with_the_shipped_tensor_names() {
+        model_for(&small_config()).expect("every shipped tensor name resolves");
+    }
+
+    #[test]
+    fn tiny_model_runs_a_forward() -> Result<()> {
+        use crate::pipeline::text_models_inputs_processor::FlashParams;
+
+        let cfg = small_config();
+        let model = model_for(&cfg)?;
+        let seq_len = 4;
+        let input_ids = Tensor::ones((1, seq_len), DType::U32, &Device::Cpu)?;
+
+        let flash_params = FlashParams::empty(false);
+        // One entry per sequence: the position the sequence starts at.
+        let seqlen_offsets = [0usize];
+        let context_lens = [(0usize, seq_len)];
+        let position_ids: Vec<usize> = (0..seq_len).collect();
+        let mut ctx = ModelForwardContext::new(
+            &seqlen_offsets,
+            &context_lens,
+            &position_ids,
+            None,
+            &flash_params,
+        );
+        let logits = model.forward(&input_ids, &mut ctx)?;
+        assert_eq!(logits.dims(), &[1, seq_len, cfg.vocab_size]);
+        assert!(logits
+            .flatten_all()?
+            .to_vec1::<f32>()?
+            .iter()
+            .all(|v| v.is_finite()));
+        Ok(())
+    }
+}
