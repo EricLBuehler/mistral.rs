@@ -83,6 +83,7 @@ mistralrs serve -p 1234 -m RecursiveSI/flint
 For 4-bit in-situ quantization, add `--isq 4`. Flint also supports MoQE and UQFF through the standard quantization workflows.
 
 CUDA supports fused attention sinks for chunked prefill and packed batches, including sliding-window attention.
+Sliding-window decode reads the required KV pages directly and supports CUDA graph replay.
 
 The checkpoint supplies the chat template, stop tokens, and sampling defaults: temperature `1.0`, top-p `0.95`, and top-k `20`. Flint decides whether to emit reasoning on each turn; `enable_thinking` and `reasoning_effort` do not change its template. Reasoning is returned in `reasoning_content`. Preserve that field on assistant messages when sending conversation history back, including messages containing tool calls.
 

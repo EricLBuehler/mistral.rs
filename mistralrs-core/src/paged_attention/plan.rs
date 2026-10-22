@@ -9,6 +9,9 @@ use crate::attention::flash_backend_supports_sdpa;
 #[cfg(all(feature = "cuda", target_family = "unix"))]
 use crate::flashinfer::{self, FlashInferDecodePlan, FlashInferDecodePlanInput};
 
+#[cfg(all(feature = "cuda", target_family = "unix"))]
+// Matches the instantiated head sizes in pagedattention.cuh.
+const CUDA_PAGED_ATTENTION_HEAD_DIMS: [usize; 8] = [64, 80, 96, 112, 128, 192, 256, 512];
 const METAL_SDPA_HEAD_DIMS: [usize; 7] = [32, 64, 72, 80, 96, 128, 256];
 const METAL_D512_HEAD_DIM: usize = 512;
 const METAL_SDPA_SMALL_QUERY_LIMIT: usize = 8;
@@ -1439,17 +1442,22 @@ impl DecodePlan {
         head_size: usize,
         has_sliding_window: bool,
     ) -> bool {
-        if attention_backend == AttentionBackendKind::Standard && has_sliding_window {
-            return true;
-        }
         #[cfg(all(feature = "cuda", target_family = "unix"))]
         {
-            head_size > FlashInferDecodePlan::head_size_limit(attention_backend)
+            let _ = has_sliding_window;
+            match attention_backend {
+                AttentionBackendKind::Standard => {
+                    !CUDA_PAGED_ATTENTION_HEAD_DIMS.contains(&head_size)
+                }
+                AttentionBackendKind::FlashInfer => {
+                    head_size > FlashInferDecodePlan::head_size_limit(attention_backend)
+                }
+            }
         }
         #[cfg(not(all(feature = "cuda", target_family = "unix")))]
         {
             let _ = head_size;
-            matches!(attention_backend, AttentionBackendKind::FlashInfer)
+            matches!(attention_backend, AttentionBackendKind::FlashInfer) || has_sliding_window
         }
     }
 
@@ -2427,6 +2435,7 @@ mod tests {
         assert_eq!(workspace.gather_workspace_bytes, gather_bytes);
     }
 
+    #[cfg(not(all(feature = "cuda", target_family = "unix")))]
     #[test]
     fn standard_sliding_decode_uses_exact_gather_path() {
         assert!(DecodePlan::requires_host_context_lengths(
@@ -2444,6 +2453,50 @@ mod tests {
         .unwrap();
 
         assert!(matches!(plan, DecodePlan::GatherSdpa));
+    }
+
+    #[cfg(all(feature = "cuda", target_family = "unix"))]
+    #[test]
+    fn standard_sliding_decode_keeps_device_context_lengths() {
+        for head_size in [64, 80, 96, 112, 128, 192, 256, 512] {
+            assert!(!DecodePlan::requires_host_context_lengths(
+                AttentionBackendKind::Standard,
+                head_size,
+                true,
+            ));
+            for has_sinks in [false, true] {
+                let plan = DecodePlan::choose(DecodePlanInput {
+                    attention_backend: AttentionBackendKind::Standard,
+                    head_size,
+                    has_alibi: false,
+                    has_sinks,
+                    has_sliding_window: true,
+                })
+                .unwrap();
+                assert!(matches!(plan, DecodePlan::PagedAttention));
+            }
+        }
+    }
+
+    #[cfg(all(feature = "cuda", target_family = "unix"))]
+    #[test]
+    fn standard_sliding_decode_gathers_unsupported_paged_head_sizes() {
+        for head_size in [160, 384] {
+            assert!(DecodePlan::requires_host_context_lengths(
+                AttentionBackendKind::Standard,
+                head_size,
+                true,
+            ));
+            let plan = DecodePlan::choose(DecodePlanInput {
+                attention_backend: AttentionBackendKind::Standard,
+                head_size,
+                has_alibi: false,
+                has_sinks: true,
+                has_sliding_window: true,
+            })
+            .unwrap();
+            assert!(matches!(plan, DecodePlan::GatherSdpa));
+        }
     }
 
     #[test]

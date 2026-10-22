@@ -2630,8 +2630,7 @@ impl PagedAttention {
                 ctx.input_metadata.attention_memory.as_ref(),
             )?;
         }
-        #[cfg(feature = "metal")]
-        if is_metal_hnd_cache(key_cache, value_cache) {
+        if query.device().is_cuda() || is_metal_hnd_cache(key_cache, value_cache) {
             return mistralrs_paged_attn::paged_attention_with_window(
                 query,
                 scales.k,
@@ -4057,6 +4056,219 @@ mod sinks_cached_prefix_tests {
                             }
                         }
                     }
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+#[cfg(all(test, feature = "cuda", target_family = "unix"))]
+mod sinks_decode_graph_tests {
+    use super::*;
+    use crate::pipeline::cuda_graph::{
+        disable_event_tracking_for_capture, prepare_cuda_graph_memory_pool,
+        restore_event_tracking_after_capture, CudaGraphHandle,
+    };
+    use candle_core::{cuda::cudarc::driver::sys, Var};
+
+    const HEADS: usize = 4;
+    const KV_HEADS: usize = 2;
+    const HEAD_DIM: usize = 128;
+    const BLOCK_SIZE: usize = 32;
+    const MAX_CONTEXT: usize = 4096;
+    const WINDOW: usize = 513;
+    const CACHE_VECTOR_BYTES: usize = 16;
+    const CONTEXT_CASES: [usize; 10] = [31, 32, 33, 511, 512, 513, 514, 545, 1024, MAX_CONTEXT];
+    const ROW_VALUE_OFFSET: usize = 8;
+    const NEW_VALUE: usize = 512;
+    const BF16_TOLERANCE: f32 = 0.6;
+    const F32_TOLERANCE: f32 = 1e-3;
+
+    fn check_decode_graph(
+        device: &Device,
+        dtype: DType,
+        rows: usize,
+        window: Option<usize>,
+    ) -> Result<()> {
+        let blocks_per_row = MAX_CONTEXT / BLOCK_SIZE;
+        let blocks = rows * blocks_per_row;
+        let pack = CACHE_VECTOR_BYTES / dtype.size_in_bytes();
+        let key_cache = Tensor::zeros(
+            (blocks, KV_HEADS, HEAD_DIM / pack, BLOCK_SIZE, pack),
+            dtype,
+            device,
+        )?;
+        let mut reference = (0..rows)
+            .map(|row| {
+                (0..MAX_CONTEXT)
+                    .map(|token| (token / BLOCK_SIZE + row * ROW_VALUE_OFFSET) as f32)
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        let mut values = Vec::with_capacity(blocks * KV_HEADS * HEAD_DIM * BLOCK_SIZE);
+        for block in 0..blocks {
+            let row = block / blocks_per_row;
+            let logical_block = block % blocks_per_row;
+            for _head in 0..KV_HEADS {
+                for _dim in 0..HEAD_DIM {
+                    values.extend_from_slice(
+                        &reference[row]
+                            [logical_block * BLOCK_SIZE..(logical_block + 1) * BLOCK_SIZE],
+                    );
+                }
+            }
+        }
+        let value_cache =
+            Tensor::from_vec(values, (blocks, KV_HEADS, HEAD_DIM, BLOCK_SIZE), device)?
+                .to_dtype(dtype)?;
+        let query = Tensor::zeros((rows, HEADS, 1, HEAD_DIM), dtype, device)?;
+        let key = Tensor::zeros((rows, KV_HEADS, 1, HEAD_DIM), dtype, device)?;
+        let value = Tensor::from_vec(
+            (0..rows)
+                .flat_map(|row| {
+                    std::iter::repeat_n(
+                        (NEW_VALUE + row * ROW_VALUE_OFFSET) as f32,
+                        KV_HEADS * HEAD_DIM,
+                    )
+                })
+                .collect::<Vec<_>>(),
+            (rows, KV_HEADS, 1, HEAD_DIM),
+            device,
+        )?
+        .to_dtype(dtype)?;
+        let context_lens = Var::from_tensor(&Tensor::ones(rows, DType::U32, device)?)?;
+        let slots = Var::from_tensor(&Tensor::full(_PAD_SLOT_ID, rows, device)?)?;
+        let tables = Tensor::from_vec(
+            (0..blocks as u32).collect::<Vec<_>>(),
+            (rows, blocks_per_row),
+            device,
+        )?;
+        let location = device.location();
+        let mut metadata = PagedAttentionInputMetadata::dummy(device)?;
+        metadata.slot_mappings = HashMap::from([(location, slots.as_detached_tensor())]);
+        metadata.block_tables = Some(HashMap::from([(location, tables)]));
+        metadata.full_block_tables = metadata.block_tables.clone();
+        metadata.context_lens = Some(HashMap::from([(
+            location,
+            context_lens.as_detached_tensor(),
+        )]));
+        metadata.full_context_lens = metadata.context_lens.clone();
+        metadata.block_size = Some(BLOCK_SIZE);
+        metadata.max_context_len = Some(MAX_CONTEXT);
+        metadata.full_max_context_len = Some(MAX_CONTEXT);
+        metadata.is_first_prompt_chunk = false;
+        let sinks = Tensor::full(std::f32::consts::LN_2, HEADS, device)?.to_dtype(dtype)?;
+        let sink_mass = sinks.to_dtype(DType::F32)?.to_vec1::<f32>()?[0].exp();
+        let params = SdpaParams {
+            n_kv_groups: HEADS / KV_HEADS,
+            softmax_scale: 1. / (HEAD_DIM as f32).sqrt(),
+            softcap: None,
+            sliding_window: window,
+            sinks: Some(sinks),
+        };
+        let attention = PagedAttention::new(HEAD_DIM, device, None)?;
+        let forward = || {
+            attention.forward(
+                &query,
+                &key,
+                &value,
+                &AttentionMask::None,
+                Some(key_cache.clone()),
+                Some(value_cache.clone()),
+                &metadata,
+                &params,
+                None,
+            )
+        };
+        drop(forward()?);
+        device.synchronize()?;
+        let cuda = device.as_cuda_device()?;
+        let stream = cuda.cuda_stream();
+        let _pool_guard = prepare_cuda_graph_memory_pool(&stream)?;
+        let _htod_guard = cuda.enable_cuda_graph_htod_cache();
+        let restore = disable_event_tracking_for_capture(&stream);
+        if let Err(error) =
+            stream.begin_capture(sys::CUstreamCaptureMode::CU_STREAM_CAPTURE_MODE_RELAXED)
+        {
+            restore_event_tracking_after_capture(&stream, restore);
+            return Err(candle_core::Error::msg(error.to_string()));
+        }
+        let captured = forward();
+        let graph = CudaGraphHandle::end_capture(&stream);
+        restore_event_tracking_after_capture(&stream, restore);
+        let output = captured?;
+        let graph = graph?.ok_or_else(|| candle_core::Error::msg("missing paged decode graph"))?;
+        graph.upload()?;
+        for (case, context) in CONTEXT_CASES.into_iter().enumerate() {
+            let lengths = (0..rows)
+                .map(|row| {
+                    if row > 0 && case % 2 == 0 {
+                        0
+                    } else {
+                        context - row
+                    }
+                })
+                .collect::<Vec<_>>();
+            let slot_values = lengths
+                .iter()
+                .enumerate()
+                .map(|(row, &len)| {
+                    if len == 0 {
+                        _PAD_SLOT_ID
+                    } else {
+                        (row * MAX_CONTEXT + len - 1) as i64
+                    }
+                })
+                .collect::<Vec<_>>();
+            slots.set(&Tensor::from_vec(slot_values, rows, device)?)?;
+            context_lens.set(&Tensor::from_vec(
+                lengths.iter().map(|&len| len as u32).collect::<Vec<_>>(),
+                rows,
+                device,
+            )?)?;
+            graph.launch()?;
+            device.synchronize()?;
+            let actual = output
+                .to_dtype(DType::F32)?
+                .flatten_all()?
+                .to_vec1::<f32>()?;
+            for (row, &len) in lengths.iter().enumerate() {
+                let expected = if len == 0 {
+                    0.
+                } else {
+                    reference[row][len - 1] = (NEW_VALUE + row * ROW_VALUE_OFFSET) as f32;
+                    let first = window.map_or(0, |window| len.saturating_sub(window));
+                    reference[row][first..len].iter().sum::<f32>()
+                        / ((len - first) as f32 + sink_mass)
+                };
+                let tolerance = if dtype == DType::BF16 {
+                    BF16_TOLERANCE
+                } else {
+                    F32_TOLERANCE
+                };
+                for &value in &actual[row * HEADS * HEAD_DIM..(row + 1) * HEADS * HEAD_DIM] {
+                    assert!(
+                        (value - expected).abs() <= tolerance,
+                        "{dtype:?} rows={rows} row={row} context={len} window={window:?}: {value} vs {expected}"
+                    );
+                }
+            }
+        }
+        drop(graph);
+        drop(output);
+        device.synchronize()?;
+        Ok(())
+    }
+
+    #[test]
+    fn cuda_paged_sinks_decode_graph_updates_context_and_cache_without_host_lengths() -> Result<()>
+    {
+        let device = Device::new_cuda(0)?;
+        for dtype in [DType::BF16, DType::F32] {
+            for rows in [1, 2] {
+                for window in [None, Some(WINDOW)] {
+                    check_decode_graph(&device, dtype, rows, window)?;
                 }
             }
         }

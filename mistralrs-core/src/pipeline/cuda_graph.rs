@@ -1427,29 +1427,36 @@ impl CudaDecodeGraphKey {
             })
         });
 
+        // Row keys bucket table capacity more coarsely than the captured V2 partition count.
+        let (max_context_len, full_max_context_len) = match metadata.decode_rows.as_ref() {
+            Some(rows) if rows.use_standard_metadata => (
+                metadata
+                    .max_context_len
+                    .map(paged_attention_partition_context_len),
+                metadata
+                    .full_max_context_len
+                    .map(paged_attention_partition_context_len),
+            ),
+            Some(_) => (None, None),
+            None => (
+                graph_context_len(
+                    metadata.max_context_len,
+                    bucket_context_len(metadata.block_tables.as_ref(), block_size),
+                ),
+                graph_context_len(
+                    metadata.full_max_context_len,
+                    bucket_context_len(metadata.full_block_tables.as_ref(), block_size),
+                ),
+            ),
+        };
+
         Ok(Self {
             device: input_ids.device().location(),
             input_shape: input_ids.dims().to_vec(),
             input_dtype: input_ids.dtype(),
             recurrent_batch_kind,
-            max_context_len: decode_rows
-                .is_none()
-                .then(|| {
-                    graph_context_len(
-                        metadata.max_context_len,
-                        bucket_context_len(metadata.block_tables.as_ref(), block_size),
-                    )
-                })
-                .flatten(),
-            full_max_context_len: decode_rows
-                .is_none()
-                .then(|| {
-                    graph_context_len(
-                        metadata.full_max_context_len,
-                        bucket_context_len(metadata.full_block_tables.as_ref(), block_size),
-                    )
-                })
-                .flatten(),
+            max_context_len,
+            full_max_context_len,
             tensors,
             decode_rows,
         })
@@ -3385,15 +3392,18 @@ fn bucket_context_len(
         .map(|blocks| blocks * block_size)
 }
 
+fn paged_attention_partition_context_len(actual: usize) -> usize {
+    actual
+        .div_ceil(PAGED_ATTENTION_PARTITION_SIZE)
+        .max(1)
+        .saturating_mul(PAGED_ATTENTION_PARTITION_SIZE)
+}
+
 fn graph_context_len(actual: Option<usize>, capacity: Option<usize>) -> Option<usize> {
     match (actual, capacity) {
-        (Some(actual), Some(capacity)) => Some(
-            actual
-                .div_ceil(PAGED_ATTENTION_PARTITION_SIZE)
-                .max(1)
-                .saturating_mul(PAGED_ATTENTION_PARTITION_SIZE)
-                .min(capacity),
-        ),
+        (Some(actual), Some(capacity)) => {
+            Some(paged_attention_partition_context_len(actual).min(capacity))
+        }
         (Some(actual), None) => Some(actual),
         (None, capacity) => capacity,
     }
@@ -4024,7 +4034,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn decode_graphs_reject_standard_sliding_attention_host_lengths() {
+    fn decode_graphs_support_standard_sliding_attention_and_sinks() {
         use crate::paged_attention::{
             HybridPagedKvCacheConfig, KvCacheLayout, ModelConfigMetadata,
             PrefixPrefillAttentionFeatures,
@@ -4043,7 +4053,7 @@ mod tests {
         };
         assert!(cuda_decode_graph_supported_for_model(Some(&config)));
         config.sliding_window = Some(513);
-        assert!(!cuda_decode_graph_supported_for_model(Some(&config)));
+        assert!(cuda_decode_graph_supported_for_model(Some(&config)));
 
         config.sliding_window = None;
         let mixed = HybridPagedKvCacheConfig::new(config, vec![true, true])
@@ -4058,7 +4068,7 @@ mod tests {
                     ..Default::default()
                 },
             ]);
-        assert!(!cuda_decode_graph_supported_for_model(Some(&mixed)));
+        assert!(cuda_decode_graph_supported_for_model(Some(&mixed)));
     }
 
     fn spec_usage(bytes: &[(usize, usize)]) -> CudaGraphSpecStateUsage {
@@ -4492,6 +4502,71 @@ mod tests {
             RecurrentBatchKind::Decode,
         )
         .unwrap()
+    }
+
+    #[test]
+    fn standard_decode_row_graph_keys_track_partition_launch_bounds() {
+        let standard_key = |context| {
+            let mut rows = decode_context_rows(1, context);
+            rows.use_standard_metadata = true;
+            decode_context_key(rows)
+        };
+        let captured = standard_key(4097);
+        assert_eq!(captured.max_context_len, Some(4608));
+        assert_eq!(captured.full_max_context_len, Some(4608));
+        for context in [4098, 4200, 4608] {
+            assert_eq!(captured, standard_key(context));
+        }
+
+        let next_partition = standard_key(4609);
+        assert_eq!(captured.decode_rows, next_partition.decode_rows);
+        assert_ne!(captured, next_partition);
+        assert_eq!(next_partition.max_context_len, Some(5120));
+        for context in [4610, 5025, 5120] {
+            assert_eq!(next_partition, standard_key(context));
+        }
+
+        assert_eq!(
+            decode_context_key(decode_context_rows(1, 4097)),
+            decode_context_key(decode_context_rows(1, 5025)),
+        );
+    }
+
+    #[test]
+    fn standard_decode_row_graph_keys_preserve_materialization_and_full_context_bounds() {
+        let input_ids = Tensor::zeros((1, 1), DType::U32, &Device::Cpu).unwrap();
+        let key = |metadata: &PagedAttentionInputMetadata| {
+            CudaDecodeGraphKey::new(
+                &input_ids,
+                metadata,
+                DECODE_CONTEXT_TEST_PAGE_SIZE,
+                RecurrentBatchKind::Decode,
+            )
+            .unwrap()
+        };
+        for context in [31, 512, 513, 4097, 5025] {
+            let mut rows = decode_context_rows(1, context);
+            rows.use_standard_metadata = true;
+            let rows = Arc::new(rows);
+            assert_eq!(
+                key(&rows.build_graph_staged().unwrap()),
+                key(&rows.build_materialized().unwrap()),
+            );
+        }
+
+        let sliding_key = |context| {
+            let mut rows = decode_context_rows(1, context);
+            rows.use_standard_metadata = true;
+            rows.context_lens = vec![513];
+            rows.sliding_window = Some(513);
+            decode_context_key(rows)
+        };
+        let captured = sliding_key(4097);
+        let replay = sliding_key(5025);
+        assert_eq!(captured.decode_rows, replay.decode_rows);
+        assert_eq!(captured.max_context_len, replay.max_context_len);
+        assert_ne!(captured.full_max_context_len, replay.full_max_context_len);
+        assert_ne!(captured, replay);
     }
 
     #[test]
