@@ -550,6 +550,11 @@ impl GgufArchive {
         })
     }
 
+    /// The mapped bytes of one shard, for views that outlive a `tensor_data` borrow.
+    pub fn shard_bytes(&self, shard: usize) -> Option<&[u8]> {
+        self.mappings.get(shard).map(|mmap| &mmap[..])
+    }
+
     pub fn tensor_storage_data(&self, name: &str) -> Result<GgufTensorData<'_>> {
         let info = self.tensor_info(name)?;
         Ok(GgufTensorData {

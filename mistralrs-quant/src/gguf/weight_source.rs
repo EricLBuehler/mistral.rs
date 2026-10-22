@@ -4,8 +4,8 @@ use candle_core::{quantized::GgmlDType, DType, Device, Error, Result, Shape, Ten
 use candle_nn::{var_builder::SimpleBackend, Linear};
 
 use super::{
-    archive::{qtensor_from_gguf_data, GgufArchive, GgufEndian},
-    GgufMatMul,
+    archive::{qtensor_from_gguf_data, GgufArchive, GgufDType, GgufEndian},
+    iq, GgufMatMul,
 };
 use crate::{
     bias_shard, block_pack_factor, shard_range, slice_blocked_data, BiasShard, QuantMethod,
@@ -14,7 +14,7 @@ use crate::{
 };
 
 const DIRECT_GGUF_DTYPES: &str =
-    "F32, F16, BF16, Q4_0, Q4_1, Q5_0, Q5_1, Q8_0, Q8_1, and Q2_K through Q8_K";
+    "F32, F16, BF16, Q4_0, Q4_1, Q5_0, Q5_1, Q8_0, Q8_1, Q2_K through Q8_K, and the IQ types";
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum GgufTensorBinding {
@@ -531,6 +531,9 @@ impl GgufWeightSource {
         shard: Shard,
     ) -> Result<Arc<dyn QuantMethod>> {
         let info = self.archive.tensor_info(source_name)?;
+        if iq::is_iq(info.dtype().raw()) {
+            return self.load_iq_linear(key, source_name, info.dtype(), device, shard);
+        }
         let mut dims = info.shape().to_vec();
         if dims.len() < 2 {
             candle_core::bail!(
@@ -562,6 +565,54 @@ impl GgufWeightSource {
         };
         let bias = self.load_bias(key, device, range, dims.len())?;
         Ok(Arc::new(GgufMatMul::from_qtensor(weight, bias)))
+    }
+
+    /// The IQ branch of `load_direct_linear`: the same byte handling, but the blocks are kept
+    /// as `IqTensor` because candle has no IQ representation to hand them to.
+    fn load_iq_linear(
+        &self,
+        key: &str,
+        source_name: &str,
+        dtype: GgufDType,
+        device: &Device,
+        shard: Shard,
+    ) -> Result<Arc<dyn QuantMethod>> {
+        if !device.is_cpu() {
+            candle_core::bail!("IQ GGUF weights are CPU-only; `{key}` was mapped to {device:?}");
+        }
+        let info = self.archive.tensor_info(source_name)?;
+        let mut dims = info.shape().to_vec();
+        if dims.len() < 2 {
+            candle_core::bail!(
+                "native linear `{key}` resolves to rank-{} GGUF tensor `{source_name}`",
+                dims.len()
+            );
+        }
+        let range = shard_range(shard, &dims)?;
+        let shard_info = &self.archive.shards()[info.shard_index()];
+        if shard_info.endian() != GgufEndian::Little {
+            candle_core::bail!("big-endian GGUF tensor loading is not supported");
+        }
+        // The bytes stay in the mapping unless sharding makes a copy unavoidable.
+        let tensor = if let Some((dim, start, len)) = range {
+            let (Some(block_size), Some(type_size)) = (dtype.block_size(), dtype.type_size())
+            else {
+                candle_core::bail!("GGUF {} has no block geometry", dtype.name());
+            };
+            let data = self.archive.tensor_data(source_name)?;
+            let bytes =
+                slice_blocked_data(data.bytes(), &dims, block_size, type_size, dim, start, len)?;
+            dims[dim] = len;
+            iq::IqTensor::new(bytes.into_boxed_slice(), dims, dtype)?
+        } else {
+            let data = self.archive.tensor_data(source_name)?;
+            let range = data.info().data_range().ok_or_else(|| {
+                candle_core::Error::msg(format!("GGUF tensor `{source_name}` has no data range"))
+            })?;
+            iq::IqTensor::from_mapped(self.archive.clone(), info.shard_index(), range, dims, dtype)?
+        };
+        let bias = self.load_bias(key, device, range, tensor.dims().len())?;
+        Ok(Arc::new(iq::IqGgufMatMul::new(Arc::new(tensor), bias)?))
     }
 
     fn load_structural_linear(
@@ -1082,7 +1133,7 @@ fn validate_binding_storage(
     match binding {
         GgufTensorBinding::Tensor(name) => {
             let dtype = archive.tensor_info(name)?.dtype();
-            if dtype.candle_dtype().is_err() {
+            if dtype.candle_dtype().is_err() && !iq::is_iq(dtype.raw()) {
                 candle_core::bail!(
                     "GGUF tensor `{name}` uses dtype {} ({}) for native binding `{native_name}`; \
                      direct GGUF loading currently supports {DIRECT_GGUF_DTYPES}, while \
@@ -1429,10 +1480,10 @@ mod tests {
         bytes.extend_from_slice(&2u32.to_le_bytes());
         bytes.extend_from_slice(&256u64.to_le_bytes());
         bytes.extend_from_slice(&1u64.to_le_bytes());
-        bytes.extend_from_slice(&16u32.to_le_bytes());
+        bytes.extend_from_slice(&34u32.to_le_bytes());
         bytes.extend_from_slice(&0u64.to_le_bytes());
         bytes.resize(align(bytes.len(), 32), 0);
-        bytes.extend_from_slice(&[0; 66]);
+        bytes.extend_from_slice(&[0; 54]);
         bytes.resize(align(bytes.len(), 32), 0);
 
         let mut file = NamedTempFile::new().map_err(Error::wrap)?;
@@ -1440,6 +1491,43 @@ mod tests {
         file.as_file_mut().flush().map_err(Error::wrap)?;
         let archive = Arc::new(GgufArchive::open_file(file.path())?);
         Ok((file, archive))
+    }
+
+    /// A one-tensor GGUF holding four IQ4_XS rows of 256 values. candle cannot write IQ, so
+    /// the file is assembled by hand.
+    fn iq_archive() -> Result<(NamedTempFile, Arc<GgufArchive>, Vec<u8>)> {
+        let name = "iq.weight";
+        let type_size = 136usize;
+        let mut blocks: Vec<u8> = (0..4 * type_size)
+            .map(|index| ((index * 37 + 5) % 251) as u8)
+            .collect();
+        // A benign f16 scale per block, so the decoded values are finite and comparable.
+        for block in 0..4 {
+            blocks[block * type_size] = 0x00;
+            blocks[block * type_size + 1] = 0x24;
+        }
+
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(b"GGUF");
+        bytes.extend_from_slice(&3u32.to_le_bytes());
+        bytes.extend_from_slice(&1u64.to_le_bytes());
+        bytes.extend_from_slice(&0u64.to_le_bytes());
+        bytes.extend_from_slice(&(name.len() as u64).to_le_bytes());
+        bytes.extend_from_slice(name.as_bytes());
+        bytes.extend_from_slice(&2u32.to_le_bytes());
+        bytes.extend_from_slice(&256u64.to_le_bytes());
+        bytes.extend_from_slice(&4u64.to_le_bytes());
+        bytes.extend_from_slice(&23u32.to_le_bytes());
+        bytes.extend_from_slice(&0u64.to_le_bytes());
+        bytes.resize(align(bytes.len(), 32), 0);
+        bytes.extend_from_slice(&blocks);
+        bytes.resize(align(bytes.len(), 32), 0);
+
+        let mut file = NamedTempFile::new().map_err(Error::wrap)?;
+        file.as_file_mut().write_all(&bytes).map_err(Error::wrap)?;
+        file.as_file_mut().flush().map_err(Error::wrap)?;
+        let archive = Arc::new(GgufArchive::open_file(file.path())?);
+        Ok((file, archive, blocks))
     }
 
     fn big_endian_archive() -> Result<(NamedTempFile, Arc<GgufArchive>)> {
@@ -2040,6 +2128,48 @@ mod tests {
         Ok(())
     }
 
+    /// The loader has to hand out a view of the mapping, not a copy: the checkpoint's bytes
+    /// are the weights, and a copy would move the expert stack into anonymous memory.
+    #[test]
+    fn iq_weights_are_a_view_of_the_mapping() -> Result<()> {
+        let (_file, archive, blocks) = iq_archive()?;
+        let bindings = GgufBindingMap::new().with_binding(
+            "model.linear.weight",
+            GgufTensorBinding::tensor("iq.weight"),
+        );
+        let source = GgufWeightSource::new(archive.clone(), &bindings, DType::F32)?;
+        let layer = source
+            .load_linear("model.linear.weight", &Device::Cpu, Shard::default())?
+            .expect("the IQ tensor loads as a native linear");
+
+        let owned = crate::gguf::iq::IqTensor::new(
+            blocks.into_boxed_slice(),
+            vec![4, 256],
+            GgufDType::new(23),
+        )?;
+        let want = owned
+            .dequantize(&Device::Cpu)?
+            .flatten_all()?
+            .to_vec1::<f32>()?;
+        let got = layer.dequantize_w()?.flatten_all()?.to_vec1::<f32>()?;
+        assert_eq!(got, want);
+
+        let (shard, range) = {
+            let info = archive.tensor_info("iq.weight")?;
+            (info.shard_index(), info.data_range().expect("data range"))
+        };
+        let view = crate::gguf::iq::IqTensor::from_mapped(
+            archive.clone(),
+            shard,
+            range.clone(),
+            vec![4, 256],
+            GgufDType::new(23),
+        )?;
+        let mapped = archive.shard_bytes(shard).expect("mapped shard").as_ptr();
+        assert_eq!(view.byte_ptr(), unsafe { mapped.add(range.start) });
+        Ok(())
+    }
+
     #[test]
     fn unsupported_dtypes_are_rejected_at_construction() -> Result<()> {
         let (_file, archive) = unsupported_dtype_archive()?;
@@ -2048,10 +2178,10 @@ mod tests {
             GgufTensorBinding::tensor("unsupported.weight"),
         );
         let error = GgufWeightSource::new(archive, &bindings, DType::F32)
-            .expect_err("IQ2_XXS must be rejected before model construction")
+            .expect_err("TQ1_0 has no decoder and must be rejected before model construction")
             .to_string();
         assert!(error.contains("unsupported.weight"));
-        assert!(error.contains("IQ2_XXS (16)"));
+        assert!(error.contains("TQ1_0 (34)"));
         assert!(error.contains("Q2_K through Q8_K"));
         Ok(())
     }
