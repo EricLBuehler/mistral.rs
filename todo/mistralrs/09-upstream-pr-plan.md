@@ -20,6 +20,36 @@ The upstreamable set is about twenty files, and the rest is the tracker and the 
 dumps, which stay here. The llama.cpp side of the work - the per-layer taps, the router dump -
 is in the other tree and is not in scope for these PRs.
 
+## The existing stack, and how it reconciles
+
+There is already a six-PR stack, built earlier in the session:
+
+| branch | delta vs master | what it is |
+|---|---|---|
+| `pr/01-rmsnorm-scale-f32` | 1 file, 62 lines | the RMSNorm f32-scale fix |
+| `pr/02-cpu-decode-engine` | 19 files, 2,568 | the decode GEMV, the bf16 dot, the NEON attention |
+| `pr/03-kolibri1-model` | 31 files, 5,233 | the Kolibri-1 model |
+| `pr/04-bfmmla-reduction-order` | 31 files, 5,393 | the BFMMLA dot variant |
+| `pr/05-moe-residency-cache` | 32 files, 5,634 | the expert residency cache |
+| `pr/06-layer-taps-and-bench` | 32 files, 5,860 | the per-layer taps and the bench harness |
+
+The stack is cumulative: each PR takes the previous ones' paths, so the diff against master
+grows and the *delta* is what gets reviewed. That is the convention to keep, and it means
+"small" is a property of the delta rather than of the branch.
+
+**`pr/01` should be dropped, not opened.** It is the RMSNorm f32-scale fix, and
+huggingface/candle#4057 fixes the same defect upstream. Once that lands the local
+reimplementation is redundant and slower than candle's, so opening it would be asking a
+maintainer to take a change that the next candle release makes unnecessary.
+
+**The work since the stack was built needs new PRs on top of it**, and they are the ones this
+session added: the per-expert gather, the scoped dequants on both paths, the fp8 dense-weight
+cache, the expert cache wiring, the `kolibri1` GGUF path, and the fp8 dequant's f32 form.
+
+**One PR does not belong in the stack at all**: the fp8 dequant's f32 form touches only
+`blockwise_fp8/ops.rs` and depends on nothing, so it is standalone and off master. It is
+pushed as `pr/01-fp8-dequant-f32` and is the first thing that can be opened.
+
 ## The decomposition
 
 Each PR takes master's final state for the paths it owns, so they are independent of each other
