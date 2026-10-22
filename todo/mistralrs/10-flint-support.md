@@ -139,10 +139,18 @@ the gathers; three projections over 49 layers is 147 of them a token):
 
 | | gather, ms a call | gather, ms a token | token | decode |
 |---|---|---|---|---|
-| two-step, default | 3.44 | 505 | 714 ms | 1.40 tok/s |
-| fused, opt-in | 2.64 | 388 | 570 ms | 1.75 tok/s |
+| two-step, default | 2.51 | 370 | 568 ms | 1.76 tok/s |
+| fused, opt-in | 1.08 | 158 | 418 ms | 2.39 tok/s |
 
-So the gather is 71% of a token and the fused path is 1.30x on it. Two things this corrected:
+Before the vector decoder the same table read 3.44 / 505 / 714 ms / 1.40 for the two-step and
+2.64 / 388 / 570 / 1.75 for the fused, so the gather is now 3.2x faster than where it started
+and the model went 1.35 -> 2.39 tok/s on the fused path, 1.76 on the default one. The decode
+fast path is NEON for IQ2_XXS only (`iq2_xxs_decode_rate`: 0.46 -> 2.19 G values/s a thread,
+4.7x); IQ2_S, IQ1_S and IQ3_XXS are still scalar, which is 30% of the expert bytes. The
+default path cannot follow much further because its cost is now writing the 3.7 GB of f32 a
+token, which is exactly what the fused path exists to skip.
+
+Two things this corrected:
 the ignored test's isolated numbers (7.29 ms against 3.48) flatter the fused path because a
 test binary never installs candle's barrier pool, so its parallel sections run short; and a
 320-token A/B on the same binary read 1.08 against 1.11 tok/s, which is the box moving under
