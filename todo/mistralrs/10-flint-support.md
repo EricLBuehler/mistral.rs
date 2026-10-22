@@ -304,17 +304,21 @@ more term in the softmax denominator per head. It now seeds the running max and 
 with it, or folds it into the chunk merge when the barrier path splits the cache.
 `sinks_attn` keeps the tensor path for CUDA and Metal, where it is the right tool.
 
-Same recipe (node2, 16 threads, schedutil, IQ1_M, fused gather), attention phase a step:
+Same recipe (node2, 16 threads, schedutil, IQ1_M, fused gather), attention phase a step.
+The box drifts on a minutes scale, so `attn_proj` is given as the load proxy: the same
+build measured 7.67 tok/s and then 3.00 tok/s with `attn_proj` at 42 and 81 ms.
 
-| context | before | after |
-| --- | --- | --- |
-| ~45 tokens | 78 ms | 3.2 ms |
-| ~90 tokens | 235 ms | 3.6 ms |
-| ~200 tokens | ~350 ms (extrapolated, 1.7 ms a token) | 4.5 ms |
+| context | before | after | `attn_proj` before / after |
+| --- | --- | --- | --- |
+| ~45 tokens | 39-79 ms | 3.2 ms | 45-50 / 42 |
+| ~90 tokens | 235 ms | 3.6 ms | 100 / 42 |
+| ~200 tokens | not run (1.7 ms a token predicts ~350) | 4.5 ms | - / 42 |
 
-The step went from 235 ms at 40 tokens to 126 ms at 200, 7.67 tok/s, and the 200-token
-request finished in 28 s. What is left of a step at that point: `attn_proj` 41.6 ms,
-`routed` 53.2, `shared` 14.8, `router` 5.9, `lm_head` 5.8, `attention` 4.5.
+The after numbers are at equal or longer context and still an order of magnitude below the
+shortest before number, so the direction does not depend on the load. The 200-token
+request finished in 28 s end to end, 7.67 tok/s in the quiet cell. What is left of a step
+there: `attn_proj` 41.6 ms, `routed` 53.2, `shared` 14.8, `router` 5.9, `lm_head` 5.8,
+`attention` 4.5.
 
 Bit-exactness for models without sinks is pinned by
 `test_flash_attn_cpu_single_q_sinks_off_is_bit_identical`: a -inf sink is filtered and
