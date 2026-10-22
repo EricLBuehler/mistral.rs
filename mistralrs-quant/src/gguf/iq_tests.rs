@@ -582,3 +582,61 @@ fn fused_gather_handles_the_token_shape() {
         }
     }
 }
+
+/// The vector decoder has to be the scalar loop's values and not an approximation of them:
+/// the grid product and the negation are the same operations, so nothing may move in the
+/// last bits. On a machine without AVX2 this compares the scalar decoder with itself, which
+/// is why the golden test stays the real check for the arithmetic.
+#[test]
+fn iq2_xxs_vector_decode_matches_the_scalar_decode_bit_exactly() {
+    let dtype = GgufDType::new(16);
+    let (block_size, type_size) = (256usize, 66usize);
+    for n_blocks in [1usize, 3, 17, 64] {
+        let bytes = pseudo_bytes(n_blocks * type_size, 11 + n_blocks as u32);
+
+        let mut scalar = vec![0f32; n_blocks * block_size];
+        dequantize_iq2_xxs(&bytes, n_blocks, &mut scalar);
+
+        let mut decoded = vec![0f32; n_blocks * block_size];
+        dequantize_blocks(dtype, &bytes, n_blocks, &mut decoded).expect("dispatch");
+
+        for (i, (a, b)) in scalar.iter().zip(&decoded).enumerate() {
+            assert_eq!(a.to_bits(), b.to_bits(), "value {i}: scalar {a} against {b}");
+        }
+    }
+}
+
+/// The vector decoder's rate, against the scalar loop on the same blocks: the gather is
+/// compute-bound, so this is the number the model's expert time follows. `--ignored`.
+#[test]
+#[ignore = "measurement"]
+fn iq2_xxs_decode_rate() {
+    let dtype = GgufDType::new(16);
+    let n_blocks = 4096usize;
+    let bytes = pseudo_bytes(n_blocks * 66, 9);
+    let mut out = vec![0f32; n_blocks * 256];
+
+    let scalar = {
+        let started = std::time::Instant::now();
+        for _ in 0..5 {
+            dequantize_iq2_xxs(&bytes, n_blocks, &mut out);
+        }
+        started.elapsed().as_secs_f64() / 5.0
+    };
+    let dispatched = {
+        let started = std::time::Instant::now();
+        for _ in 0..5 {
+            dequantize_blocks(dtype, &bytes, n_blocks, &mut out).expect("dispatch");
+        }
+        started.elapsed().as_secs_f64() / 5.0
+    };
+    let values = (n_blocks * 256) as f64;
+    println!(
+        "scalar {:.2} ms ({:.2} G values/s), dispatched {:.2} ms ({:.2} G values/s), neon {}",
+        scalar * 1e3,
+        values / scalar / 1e9,
+        dispatched * 1e3,
+        values / dispatched / 1e9,
+        cfg!(target_arch = "aarch64"),
+    );
+}
