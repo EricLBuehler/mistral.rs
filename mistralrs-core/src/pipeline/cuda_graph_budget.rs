@@ -2,7 +2,10 @@ use anyhow::{Context, Result};
 #[cfg(any(target_family = "unix", test))]
 use std::mem::size_of;
 
-use crate::{memory_plan::RuntimeMemoryPlan, utils::memory_usage::DeviceMemory};
+use crate::{
+    memory_plan::{DeviceMemoryBudget, RuntimeMemoryPlan},
+    utils::memory_usage::DeviceMemory,
+};
 
 #[cfg(any(target_family = "unix", test))]
 const FA3_SCHEDULER_BATCH_ALIGNMENT: usize = 4;
@@ -107,11 +110,39 @@ pub(super) fn capture_memory_available(
     pending_weights: usize,
     other_workspace: usize,
 ) -> Result<bool> {
+    memory_available(
+        crate::memory_plan::resolve_device_budget(plan.memory_goal, memory)?,
+        workspace,
+        pending_weights,
+        other_workspace,
+    )
+}
+
+pub(super) fn eager_memory_available(
+    plan: RuntimeMemoryPlan,
+    memory: DeviceMemory,
+    workspace: usize,
+    pending_weights: usize,
+    other_workspace: usize,
+) -> Result<bool> {
+    memory_available(
+        crate::memory_plan::resolve_forward_budget(plan.memory_goal, memory)?,
+        workspace,
+        pending_weights,
+        other_workspace,
+    )
+}
+
+fn memory_available(
+    budget: DeviceMemoryBudget,
+    workspace: usize,
+    pending_weights: usize,
+    other_workspace: usize,
+) -> Result<bool> {
     let required = workspace
         .checked_add(pending_weights)
         .and_then(|bytes| bytes.checked_add(other_workspace))
         .context("CUDA capture pending memory size overflow")?;
-    let budget = crate::memory_plan::resolve_device_budget(plan.memory_goal, memory)?;
     Ok(budget.occupied_bytes <= budget.engine_limit_bytes && required <= budget.allocatable_bytes)
 }
 
@@ -149,7 +180,8 @@ mod tests {
     use super::*;
     use crate::MemoryGoal;
 
-    const GIB: usize = 1024 * 1024 * 1024;
+    const MIB: usize = 1024 * 1024;
+    const GIB: usize = 1024 * MIB;
 
     fn plan() -> RuntimeMemoryPlan {
         RuntimeMemoryPlan {
@@ -380,6 +412,104 @@ mod tests {
             };
             assert_eq!(
                 capture_memory_available(plan, memory, workspace, 0, 0)?,
+                expected,
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn eager_retry_can_use_auto_headroom_without_retaining_a_graph() -> Result<()> {
+        for memory in [
+            DeviceMemory::Unified {
+                total: 128 * GIB,
+                available: 15 * GIB,
+                allocated: 113 * GIB,
+                working_set_limit: 128 * GIB,
+            },
+            DeviceMemory::Discrete {
+                total: 24 * GIB,
+                free: GIB,
+            },
+        ] {
+            for memory_goal in [
+                MemoryGoal::Auto,
+                MemoryGoal::KvBytes(4 * GIB),
+                MemoryGoal::KvTokens(1024),
+            ] {
+                let plan = RuntimeMemoryPlan {
+                    memory_goal,
+                    ..plan()
+                };
+                assert!(!capture_memory_available(plan, memory, 0, 0, 0)?);
+                assert!(!capture_memory_available(plan, memory, 12 * MIB, 0, 0)?);
+                assert!(eager_memory_available(plan, memory, 12 * MIB, 0, 0)?);
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn eager_retry_respects_pending_allocations_and_physical_limits() -> Result<()> {
+        let plan = RuntimeMemoryPlan {
+            memory_goal: MemoryGoal::Auto,
+            ..plan()
+        };
+        let memory = DeviceMemory::Unified {
+            total: 128 * GIB,
+            available: GIB,
+            allocated: 113 * GIB,
+            working_set_limit: 113 * GIB + 96 * MIB,
+        };
+        for (workspace, pending_weights, other_workspace, expected) in [
+            (64 * MIB, 32 * MIB, 0, true),
+            (64 * MIB + 1, 32 * MIB, 0, false),
+            (32 * MIB, 32 * MIB, 32 * MIB, true),
+            (32 * MIB + 1, 32 * MIB, 32 * MIB, false),
+        ] {
+            assert_eq!(
+                eager_memory_available(plan, memory, workspace, pending_weights, other_workspace)?,
+                expected,
+            );
+        }
+        let memory = DeviceMemory::Unified {
+            total: 128 * GIB,
+            available: 64 * MIB,
+            allocated: 113 * GIB,
+            working_set_limit: 128 * GIB,
+        };
+        assert!(eager_memory_available(plan, memory, 32 * MIB, 32 * MIB, 0)?);
+        assert!(!eager_memory_available(
+            plan,
+            memory,
+            32 * MIB + 1,
+            32 * MIB,
+            0,
+        )?);
+        assert!(eager_memory_available(plan, memory, 1, usize::MAX, 0).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn eager_retry_preserves_explicit_utilization_limits() -> Result<()> {
+        let plan = RuntimeMemoryPlan {
+            memory_goal: MemoryGoal::Utilization(0.875),
+            ..plan()
+        };
+        for (available, allocated, workspace, expected) in [
+            (17 * GIB, 111 * GIB, GIB, true),
+            (17 * GIB, 111 * GIB, GIB + 1, false),
+            (16 * GIB, 112 * GIB, 1, false),
+            (15 * GIB, 113 * GIB, 0, false),
+        ] {
+            let memory = DeviceMemory::Unified {
+                total: 128 * GIB,
+                available,
+                allocated,
+                working_set_limit: 128 * GIB,
+            };
+            assert_eq!(
+                eager_memory_available(plan, memory, workspace, 0, 0)?,
                 expected,
             );
         }

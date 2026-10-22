@@ -228,6 +228,23 @@ pub fn device_memory_budget(goal: MemoryGoal, memory: DeviceMemory) -> Result<us
     Ok(resolve_device_budget(goal, memory)?.allocatable_bytes)
 }
 
+#[cfg(any(feature = "cuda", feature = "metal", test))]
+pub(crate) fn resolve_forward_budget(
+    goal: MemoryGoal,
+    memory: DeviceMemory,
+) -> Result<DeviceMemoryBudget> {
+    let mut budget = resolve_device_budget(goal, memory)?;
+    if !matches!(goal, MemoryGoal::Utilization(_)) {
+        // Automatic headroom cushions transient work; only explicit utilization is a runtime cap.
+        budget.engine_limit_bytes = memory.working_set_limit();
+        budget.allocatable_bytes = budget
+            .engine_limit_bytes
+            .saturating_sub(budget.occupied_bytes)
+            .min(budget.available_bytes);
+    }
+    Ok(budget)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -353,6 +370,82 @@ mod tests {
             assert_eq!(auto.allocatable_bytes, utilization.allocatable_bytes);
             assert!(auto.allocatable_bytes <= available);
             assert!(auto.allocatable_bytes <= working_set_limit.saturating_sub(allocated));
+        }
+    }
+
+    #[test]
+    fn automatic_and_capacity_goals_leave_planning_headroom_available_to_forward() {
+        let memory = DeviceMemory::Unified {
+            total: 128 * GIB,
+            available: 15 * GIB,
+            allocated: 113 * GIB,
+            working_set_limit: 128 * GIB,
+        };
+        for goal in [
+            MemoryGoal::Auto,
+            MemoryGoal::KvBytes(GIB),
+            MemoryGoal::KvTokens(65536),
+        ] {
+            assert_eq!(
+                resolve_device_budget(goal, memory)
+                    .unwrap()
+                    .allocatable_bytes,
+                0
+            );
+            let forward = resolve_forward_budget(goal, memory).unwrap();
+            assert_eq!(forward.engine_limit_bytes, 128 * GIB);
+            assert_eq!(forward.allocatable_bytes, 15 * GIB);
+        }
+    }
+
+    #[test]
+    fn explicit_utilization_remains_a_forward_limit() {
+        for memory in [
+            DeviceMemory::Discrete {
+                total: 128 * GIB,
+                free: 15 * GIB,
+            },
+            DeviceMemory::Unified {
+                total: 128 * GIB,
+                available: 15 * GIB,
+                allocated: 113 * GIB,
+                working_set_limit: 128 * GIB,
+            },
+        ] {
+            let forward = resolve_forward_budget(MemoryGoal::Utilization(0.875), memory).unwrap();
+            assert_eq!(forward.engine_limit_bytes, 112 * GIB);
+            assert_eq!(forward.allocatable_bytes, 0);
+            let forward = resolve_forward_budget(MemoryGoal::Utilization(1.0), memory).unwrap();
+            assert_eq!(forward.allocatable_bytes, 15 * GIB);
+        }
+        assert!(resolve_forward_budget(
+            MemoryGoal::Utilization(f32::NAN),
+            DeviceMemory::Discrete {
+                total: GIB,
+                free: GIB
+            },
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn forward_budget_keeps_physical_and_metal_working_set_limits() {
+        for (available, allocated, expected) in [
+            (40 * GIB, 80 * GIB, 16 * GIB),
+            (8 * GIB, 80 * GIB, 8 * GIB),
+            (40 * GIB, 96 * GIB, 0),
+            (40 * GIB, 97 * GIB, 0),
+            (0, 80 * GIB, 0),
+        ] {
+            let memory = DeviceMemory::Unified {
+                total: 128 * GIB,
+                available,
+                allocated,
+                working_set_limit: 96 * GIB,
+            };
+            let forward = resolve_forward_budget(MemoryGoal::Auto, memory).unwrap();
+            assert_eq!(forward.engine_limit_bytes, 96 * GIB);
+            assert_eq!(forward.allocatable_bytes, expected);
         }
     }
 }

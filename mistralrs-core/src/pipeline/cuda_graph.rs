@@ -66,6 +66,13 @@ static CUDA_GRAPH_MEMORY_POOL_SCOPES: OnceLock<Mutex<HashMap<usize, MemoryPoolSc
 static CUDA_PHASE_TIMINGS_ENABLED: OnceLock<bool> = OnceLock::new();
 const CAPTURE_RECLAIM_BATCH_SIZE: usize = 1;
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum CudaGraphMemoryUse {
+    Capture,
+    Retain,
+    Eager,
+}
+
 pub(crate) struct CudaGraphCaptureMemory<'a> {
     pub plan: Option<crate::memory_plan::RuntimeMemoryPlan>,
     pub reservation: Option<&'a crate::resource_plan::RuntimeMemoryReservation>,
@@ -277,12 +284,16 @@ impl CudaGraphCaptureMemory<'_> {
         })
     }
 
-    fn fits(&self, retaining: bool, protect_other_models: bool) -> candle_core::Result<bool> {
+    fn fits(
+        &self,
+        usage: CudaGraphMemoryUse,
+        protect_other_models: bool,
+    ) -> candle_core::Result<bool> {
         let Some(plan) = self.plan else {
             return Ok(true);
         };
         for device in self.devices.iter().filter(|device| device.is_cuda()) {
-            let workspace = if retaining {
+            let workspace = if usage == CudaGraphMemoryUse::Retain {
                 0
             } else {
                 super::cuda_graph_budget::capture_workspace_bytes(
@@ -302,14 +313,13 @@ impl CudaGraphCaptureMemory<'_> {
                 .map_err(candle_core::Error::wrap)?
                 .unwrap_or_default();
             let snapshot = crate::MemoryUsage.query(device)?;
-            if !super::cuda_graph_budget::capture_memory_available(
-                plan,
-                snapshot,
-                workspace,
-                pending,
-                other_workspace,
-            )
-            .map_err(candle_core::Error::wrap)?
+            let memory_available = if usage == CudaGraphMemoryUse::Eager {
+                super::cuda_graph_budget::eager_memory_available
+            } else {
+                super::cuda_graph_budget::capture_memory_available
+            };
+            if !memory_available(plan, snapshot, workspace, pending, other_workspace)
+                .map_err(candle_core::Error::wrap)?
             {
                 return Ok(false);
             }
@@ -322,27 +332,27 @@ pub(crate) fn prepare_cuda_capture_memory(
     state: &mut CudaDecodeGraphState,
     memory: &CudaGraphCaptureMemory<'_>,
 ) -> candle_core::Result<bool> {
-    admit_cuda_capture_memory(state, memory, false, true)
+    admit_cuda_graph_memory(state, memory, CudaGraphMemoryUse::Capture)
 }
 
 pub(crate) fn admit_cuda_eager_after_capture(
     state: &mut CudaDecodeGraphState,
     memory: &CudaGraphCaptureMemory<'_>,
 ) -> candle_core::Result<()> {
-    admit_cuda_capture_memory(state, memory, false, false).map(|_| ())
+    admit_cuda_graph_memory(state, memory, CudaGraphMemoryUse::Eager).map(|_| ())
 }
 
-fn admit_cuda_capture_memory(
+fn admit_cuda_graph_memory(
     state: &mut CudaDecodeGraphState,
     memory: &CudaGraphCaptureMemory<'_>,
-    retaining: bool,
-    protect_other_models: bool,
+    usage: CudaGraphMemoryUse,
 ) -> candle_core::Result<bool> {
+    let protect_other_models = usage != CudaGraphMemoryUse::Eager;
     let result = (|| {
-        if memory.fits(retaining, protect_other_models)? {
+        if memory.fits(usage, protect_other_models)? {
             return Ok(true);
         }
-        if protect_other_models && memory.fits(retaining, false)? {
+        if protect_other_models && memory.fits(usage, false)? {
             return Ok(false);
         }
         for device in memory.devices.iter().filter(|device| device.is_cuda()) {
@@ -351,14 +361,20 @@ fn admit_cuda_capture_memory(
             trim_cuda_graph_memory(&device.as_cuda_device()?.cuda_stream())?;
         }
         loop {
-            if memory.fits(retaining, protect_other_models)? {
+            if memory.fits(usage, protect_other_models)? {
                 return Ok(true);
             }
-            if protect_other_models && memory.fits(retaining, false)? {
+            if protect_other_models && memory.fits(usage, false)? {
                 return Ok(false);
             }
             if state.evict_lru_for_memory_pressure(CAPTURE_RECLAIM_BATCH_SIZE) == 0 {
-                candle_core::bail!("CUDA graph capture cannot fit within the memory goal after reclaiming cached graphs");
+                if usage == CudaGraphMemoryUse::Retain
+                    || (usage == CudaGraphMemoryUse::Capture
+                        && memory.fits(CudaGraphMemoryUse::Eager, false)?)
+                {
+                    return Ok(false);
+                }
+                candle_core::bail!("CUDA decode workspace cannot fit within the runtime memory budget after reclaiming cached graphs");
             }
         }
     })();
@@ -373,7 +389,7 @@ pub(crate) fn finish_cuda_capture_memory(
     memory: &CudaGraphCaptureMemory<'_>,
     entry: CudaDecodeGraphEntry,
 ) -> candle_core::Result<Option<CudaDecodeGraphEntry>> {
-    match admit_cuda_capture_memory(state, memory, true, true) {
+    match admit_cuda_graph_memory(state, memory, CudaGraphMemoryUse::Retain) {
         Ok(true) => Ok(Some(entry)),
         Ok(false) => {
             release_cuda_graph_entries(vec![entry]);
