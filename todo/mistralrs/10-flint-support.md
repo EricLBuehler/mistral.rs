@@ -212,7 +212,7 @@ an IQ dtype, and everything above it keeps using `QuantMethod`.
    trade is decided. In the model it is worth 1.30x on the gather (3.44 ms a call against
    2.64) and 714 ms a token against 570, so 1.40 against 1.75 tok/s on the same prompt, back
    to back. Until a decision the IQ route is a capability - the published files load at all,
-   in 9.8 GiB - not a speed.
+   in 9.8 GiB - not a speed. (Superseded by "Where a token goes": the route is now 5.60.)
 2. **The fp8 route.** `HawkBearPig/flint-FP8-BF16` uses the same blockwise fp8 recipe and the
    same per-expert tensor names as Kolibri-1, but its `config.json` declares
    `quant_method: "dgpp_mixed"`, which `QuantizedConfig` does not parse. That is the next
@@ -225,3 +225,41 @@ an IQ dtype, and everything above it keeps using `QuantMethod`.
    IQ4_XS). Its golden vectors come from gguf-py's own reference, not from a checkpoint.
 5. **The upstream PR.** Eight commits, ready to stack on `origin/master`. Nothing leaves the
    machine without an explicit go-ahead.
+
+## Where a token goes
+
+`perf` cannot separate a decode step on this host: the kernels run inside the barrier pool and
+inline into `call_trampoline`, and an attach is refused, so a record that wraps the server
+covers the load as well. The phase counters were already in place; `MISTRALRS_DECODE_PROF=5`
+now enables them for a served model and prints a delta table every five seconds.
+
+IQ1_M, 40-token greedy prompt, node2, 16 threads, `schedutil`, same minute, ms a step:
+
+| phase      | before the GEMV fix | fused gather | two-step |
+| ---------- | ------------------: | -----------: | -------: |
+| attn_proj  |               170   |        45.3  |   47.2   |
+| attention  |                55   |        39.3  |   50.7   |
+| routed     |               116   |        61.9  |  254.5   |
+| shared     |                43   |        15.1  |   16.7   |
+| router     |                 8.5 |         5.8  |    4.7   |
+| lm_head    |                15.2 |         6.2  |    6.0   |
+| norms      |                 0.7 |         0.7  |    0.8   |
+| step       |               409   |       175    |  381     |
+| tok/s      |              2.40   |      5.60    |   2.60   |
+
+The 409 ms was not scattered across small ops. `attn_proj` was 170 ms because an IQ linear
+caches its weight as f32 and a decode row then went through a dense matmul, which is one
+thread: 80 projections of 16.8 MB a token at about 2 ms each. The shared expert paid the same
+for the 13 layers whose `ffn_*_shexp` is IQ4_XS or IQ3_XXS. A single row is a GEMV, and the CPU
+GEMV splits outputs across the pool, so those go to 45 ms and 15 ms with the cached bytes
+unchanged. The gather also halved on its own: 1.3 GB a token of f32 attention weights no longer
+pushes the expert mmap pages out.
+
+Two-step against fused is now 2.2x on the whole step, not 1.3x on the gather. The old 1.30x
+was measured while the f32 streaming crowded the same memory.
+
+What is left, in order: the routed gather 62 ms (IQ2_S, IQ1_S and IQ3_XXS still decode scalar,
+30% of expert bytes and worth about 10% of the step once they have a NEON path), `attn_proj`
+45 ms (f32 streaming, so a bf16 cache would halve it at the cost of rounding the dequantised
+weights), and `attention` 39 ms for a 40-token context, which is 0.8 ms a layer and out of
+line with the 5 MB of KV that is actually read.
