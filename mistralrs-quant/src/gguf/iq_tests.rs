@@ -97,6 +97,32 @@ fn assert_same_bits(got: &[f32], want: &[f32], what: &str) {
     }
 }
 
+/// Same values up to the order the terms are summed in. Two f32 dots over the same row differ
+/// in the last bits once one of them runs in lanes; anything larger is a wrong weight.
+/// Synthetic blocks can carry a non-finite scale, which makes the whole row non-finite in both
+/// arms, so only the finiteness has to agree there.
+fn assert_close(got: &[f32], want: &[f32], what: &str) {
+    assert_eq!(got.len(), want.len(), "{what}: length");
+    let scale = want
+        .iter()
+        .filter(|w| w.is_finite())
+        .fold(0f32, |acc, w| acc.max(w.abs()))
+        .max(1.0);
+    for (i, (g, w)) in got.iter().zip(want.iter()).enumerate() {
+        if !g.is_finite() || !w.is_finite() {
+            assert!(
+                g.is_finite() == w.is_finite(),
+                "{what}: value {i}: {g} vs {w} (finiteness)"
+            );
+            continue;
+        }
+        assert!(
+            (g - w).abs() <= 1e-4 * scale,
+            "{what}: value {i}: {g} vs {w} (scale {scale})"
+        );
+    }
+}
+
 const IQ_TYPES: [(u32, &str); 9] = [
     (16, "IQ2_XXS"),
     (17, "IQ2_XS"),
@@ -121,14 +147,38 @@ fn iq_tensor(dtype_raw: u32, dims: &[usize], seed: u32) -> Result<IqTensor> {
     IqTensor::new(bytes.into_boxed_slice(), dims.to_vec(), dtype)
 }
 
-/// The dense path has to be exactly a matmul over the dequantised weight: the cache changes
-/// when the decode happens, not what it decodes to.
+/// The cache changes when the decode happens, not what it decodes to: the bytes the parallel
+/// GEMV reads have to be the bytes the block decoder produced.
+#[test]
+fn dense_forward_dequantizes_the_same_weights() -> Result<()> {
+    use crate::QuantMethod;
+
+    for raw in [16u32, 21, 23, 29] {
+        let (out_features, in_features) = (8usize, 256usize);
+        let tensor = iq_tensor(raw, &[out_features, in_features], raw)?;
+        let want = tensor.dequantize(&Device::Cpu)?;
+        let quant = super::IqGgufMatMul::new(std::sync::Arc::new(tensor), None)?;
+        let got = quant.dequantize_w()?;
+        assert_eq!(got.dims(), want.dims(), "dense, dtype {raw}: shape");
+        assert_same_bits(
+            &got.flatten_all()?.to_vec1::<f32>()?,
+            &want.flatten_all()?.to_vec1::<f32>()?,
+            &format!("dense, dtype {raw}"),
+        );
+    }
+    Ok(())
+}
+
+/// A one-row forward is a GEMV over the dequantised weight: the row split must not change the
+/// values, and the dot kernel sums a row in its own lane order, so the check is against the
+/// reference matmul up to f32 summation error rather than bit for bit.
 #[test]
 fn dense_forward_matches_a_matmul_over_the_dequantized_weight() -> Result<()> {
     use crate::QuantMethod;
 
     for raw in [16u32, 21, 23, 29] {
-        let (out_features, in_features) = (8usize, 256usize);
+        // At the GEMV output threshold, so the decode path is the one under test.
+        let (out_features, in_features) = (512usize, 256usize);
         let tensor = iq_tensor(raw, &[out_features, in_features], raw)?;
         let w = tensor.dequantize(&Device::Cpu)?;
         let quant = super::IqGgufMatMul::new(std::sync::Arc::new(tensor), None)?;
@@ -139,11 +189,8 @@ fn dense_forward_matches_a_matmul_over_the_dequantized_weight() -> Result<()> {
         let xs = Tensor::from_vec(x, (1, in_features), &Device::Cpu)?;
 
         let got = quant.forward_raw(&xs)?.flatten_all()?.to_vec1::<f32>()?;
-        let want = xs
-            .matmul(&w.t()?)?
-            .flatten_all()?
-            .to_vec1::<f32>()?;
-        assert_same_bits(&got, &want, &format!("dense, dtype {raw}"));
+        let want = xs.matmul(&w.t()?)?.flatten_all()?.to_vec1::<f32>()?;
+        assert_close(&got, &want, &format!("dense, dtype {raw}"));
     }
     Ok(())
 }
