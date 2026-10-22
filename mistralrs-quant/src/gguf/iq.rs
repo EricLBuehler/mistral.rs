@@ -366,6 +366,40 @@ pub(crate) const fn is_iq(raw: u32) -> bool {
     matches!(raw, 16..=23 | 29)
 }
 
+/// Blocks per parallel chunk: 32 chunks for a 1M-value expert slab, which is what an expert
+/// projection is, so the decode fills a node rather than one thread.
+const PAR_BLOCK_CHUNK: usize = 128;
+
+/// The same decode, split over block ranges. A block reads only its own bytes and writes only
+/// its own outputs, so how the range is cut cannot change a value - it changes where it is
+/// computed, not what.
+pub(crate) fn dequantize_blocks_par(
+    dtype: GgufDType,
+    bytes: &[u8],
+    n_blocks: usize,
+    y: &mut [f32],
+) {
+    let (block_size, type_size) = (
+        dtype.block_size().expect("iq block size"),
+        dtype.type_size().expect("iq type size"),
+    );
+    assert!(is_iq(dtype.raw()), "not an IQ dtype: {}", dtype.name());
+    if n_blocks == 0 {
+        return;
+    }
+    let bytes = &bytes[..n_blocks * type_size];
+    crate::gemv_cpu::par_chunks(
+        &mut y[..n_blocks * block_size],
+        PAR_BLOCK_CHUNK * block_size,
+        |chunk, out| {
+            let n = out.len() / block_size;
+            let start = chunk * PAR_BLOCK_CHUNK * type_size;
+            dequantize_blocks(dtype, &bytes[start..start + n * type_size], n, out)
+                .expect("the dtype was checked when the tensor was built");
+        },
+    );
+}
+
 /// Where a tensor's block bytes live: either a buffer this crate owns, or a slice of a mapped
 /// GGUF shard. The mapped form holds the archive, so the mapping outlives the view and the
 /// tensor never leaves the page cache.
@@ -473,7 +507,7 @@ impl IqTensor {
         let bytes = self.storage.bytes();
         let n_blocks = bytes.len() / type_size;
         let mut out = vec![0f32; n_blocks * block_size];
-        dequantize_blocks(self.dtype, bytes, n_blocks, &mut out)?;
+        dequantize_blocks_par(self.dtype, bytes, n_blocks, &mut out);
         Tensor::from_vec(out, self.dims.clone(), device)
     }
 
@@ -516,7 +550,7 @@ impl IqTensor {
             };
             let n_blocks = slab.len() / type_size;
             let mut out = vec![0f32; n_blocks * block_size];
-            dequantize_blocks(self.dtype, slab, n_blocks, &mut out)?;
+            dequantize_blocks_par(self.dtype, slab, n_blocks, &mut out);
             slabs.push(Tensor::from_vec(out, (out_features, in_features), device)?);
         }
 

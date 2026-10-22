@@ -269,3 +269,119 @@ fn tiny_gather_falls_back_to_the_whole_stack_gather() -> Result<()> {
     assert_same_bits(&got, &want, "tiny fallback");
     Ok(())
 }
+
+/// The split over block ranges decodes the same values: a block is self-contained, so which
+/// thread gets it is a scheduling detail and nothing else. The sizes walk the chunk boundary
+/// so the tail chunk is covered too.
+#[test]
+fn parallel_decode_matches_the_serial_decode_bit_exactly() {
+    for (raw, name) in IQ_TYPES {
+        let dtype = GgufDType::new(raw);
+        let (block_size, type_size) = (
+            dtype.block_size().expect("block size"),
+            dtype.type_size().expect("type size"),
+        );
+        for n_blocks in [
+            1usize,
+            7,
+            PAR_BLOCK_CHUNK - 1,
+            PAR_BLOCK_CHUNK,
+            PAR_BLOCK_CHUNK + 1,
+            1024,
+        ] {
+            let bytes = pseudo_bytes(n_blocks * type_size, raw * 11 + n_blocks as u32);
+
+            let mut serial = vec![0f32; n_blocks * block_size];
+            dequantize_blocks(dtype, &bytes, n_blocks, &mut serial).expect("serial decode");
+            let mut parallel = vec![0f32; n_blocks * block_size];
+            dequantize_blocks_par(dtype, &bytes, n_blocks, &mut parallel);
+
+            assert_same_bits(
+                &parallel,
+                &serial,
+                &format!("{name} at {n_blocks} blocks"),
+            );
+        }
+    }
+}
+
+/// Where a token's expert time goes, away from the model: one layer is three IQ projections
+/// (gate, up, down) over six routed experts, so this times 49 such layers against a stack
+/// shaped like Flint's experts. A measurement, not a check: `--ignored --nocapture`.
+#[test]
+#[ignore = "measurement"]
+fn decode_and_gather_cost_of_one_token() {
+    use crate::QuantMethod;
+
+    let (experts, out, k) = (256usize, 512usize, 2048usize);
+    let dtype = GgufDType::new(16);
+    let (block_size, type_size) = (
+        dtype.block_size().expect("block size"),
+        dtype.type_size().expect("type size"),
+    );
+    assert_eq!(k % block_size, 0);
+
+    let bytes = pseudo_bytes(experts * out * (k / block_size) * type_size, 16);
+    let stack = std::sync::Arc::new(
+        IqTensor::new(bytes.into_boxed_slice(), vec![experts, out, k], dtype)
+            .expect("iq stack"),
+    );
+    let matmul = IqGgufMatMul::new(stack.clone(), None).expect("iq matmul");
+
+    let ids: Vec<u32> = (0..6u32).map(|i| i * 7 % experts as u32).collect();
+    let x = Tensor::from_vec(vec![0.5f32; k], (1, 1, 1, 1, k), &Device::Cpu).expect("x");
+    let idx = Tensor::from_vec(ids.clone(), (1, 1, 6), &Device::Cpu).expect("idx");
+
+    let time = |iters: usize, mut f: Box<dyn FnMut()>| {
+        f();
+        let started = std::time::Instant::now();
+        for _ in 0..iters {
+            f();
+        }
+        started.elapsed().as_secs_f64() / iters as f64
+    };
+
+    let iters = 20;
+    let gather = time(
+        iters,
+        Box::new(|| {
+            for _ in 0..3 {
+                matmul.gather_forward(&x, &idx).expect("gather");
+            }
+        }),
+    );
+    let decode = time(
+        iters,
+        Box::new(|| {
+            for _ in 0..3 {
+                stack
+                    .dequantize_experts(&ids, &Device::Cpu)
+                    .expect("decode");
+            }
+        }),
+    );
+
+    let layer_slabs = 3 * 6 * out * k;
+    let per_layer_bytes = (layer_slabs * 4) as f64;
+    let per_token = 49.0 * gather;
+    println!(
+        "{} experts {experts} out {out} k {k}, 3 projections x 6 experts per layer",
+        dtype.name()
+    );
+    println!(
+        "decode one layer: {:.2} ms ({:.1} GB/s of f32 written)",
+        decode * 1e3,
+        per_layer_bytes / decode / 1e9
+    );
+    println!(
+        "gather one layer: {:.2} ms, so {:.2} ms of gemv on top",
+        gather * 1e3,
+        (gather - decode) * 1e3
+    );
+    println!(
+        "49 layers: {:.0} ms of gather, {:.1} GB of f32 a token, ceiling {:.2} tok/s",
+        per_token * 1e3,
+        49.0 * per_layer_bytes / 1e9,
+        1.0 / per_token
+    );
+}
