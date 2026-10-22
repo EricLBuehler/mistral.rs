@@ -4,8 +4,8 @@ use candle_core::{quantized::GgmlDType, DType, Device, Error, Result, Shape, Ten
 use candle_nn::{var_builder::SimpleBackend, Linear};
 
 use super::{
-    archive::{qtensor_from_gguf_data, GgufArchive, GgufEndian},
-    GgufMatMul,
+    archive::{qtensor_from_gguf_data, GgufArchive, GgufDType, GgufEndian},
+    iq, GgufMatMul,
 };
 use crate::{
     bias_shard, block_pack_factor, shard_range, slice_blocked_data, BiasShard, QuantMethod,
@@ -14,7 +14,7 @@ use crate::{
 };
 
 const DIRECT_GGUF_DTYPES: &str =
-    "F32, F16, BF16, Q4_0, Q4_1, Q5_0, Q5_1, Q8_0, Q8_1, and Q2_K through Q8_K";
+    "F32, F16, BF16, Q4_0, Q4_1, Q5_0, Q5_1, Q8_0, Q8_1, Q2_K through Q8_K, and the IQ types";
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum GgufTensorBinding {
@@ -560,6 +560,9 @@ impl GgufWeightSource {
         shard: Shard,
     ) -> Result<Arc<dyn QuantMethod>> {
         let info = self.archive.tensor_info(source_name)?;
+        if iq::is_iq(info.dtype().raw()) {
+            return self.load_iq_linear(key, source_name, info.dtype(), device, shard);
+        }
         let mut dims = info.shape().to_vec();
         if dims.len() < 2 {
             candle_core::bail!(
@@ -591,6 +594,54 @@ impl GgufWeightSource {
         };
         let bias = self.load_bias(key, device, range, dims.len())?;
         Ok(Arc::new(GgufMatMul::from_qtensor(weight, bias)))
+    }
+
+    /// The IQ branch of `load_direct_linear`: the same byte handling, but the blocks are kept
+    /// as `IqTensor` because candle has no IQ representation to hand them to.
+    fn load_iq_linear(
+        &self,
+        key: &str,
+        source_name: &str,
+        dtype: GgufDType,
+        device: &Device,
+        shard: Shard,
+    ) -> Result<Arc<dyn QuantMethod>> {
+        if !device.is_cpu() {
+            candle_core::bail!("IQ GGUF weights are CPU-only; `{key}` was mapped to {device:?}");
+        }
+        let info = self.archive.tensor_info(source_name)?;
+        let mut dims = info.shape().to_vec();
+        if dims.len() < 2 {
+            candle_core::bail!(
+                "native linear `{key}` resolves to rank-{} GGUF tensor `{source_name}`",
+                dims.len()
+            );
+        }
+        let range = shard_range(shard, &dims)?;
+        let shard_info = &self.archive.shards()[info.shard_index()];
+        if shard_info.endian() != GgufEndian::Little {
+            candle_core::bail!("big-endian GGUF tensor loading is not supported");
+        }
+        // The bytes stay in the mapping unless sharding makes a copy unavoidable.
+        let tensor = if let Some((dim, start, len)) = range {
+            let (Some(block_size), Some(type_size)) = (dtype.block_size(), dtype.type_size())
+            else {
+                candle_core::bail!("GGUF {} has no block geometry", dtype.name());
+            };
+            let data = self.archive.tensor_data(source_name)?;
+            let bytes =
+                slice_blocked_data(data.bytes(), &dims, block_size, type_size, dim, start, len)?;
+            dims[dim] = len;
+            iq::IqTensor::new(bytes.into_boxed_slice(), dims, dtype)?
+        } else {
+            let data = self.archive.tensor_data(source_name)?;
+            let range = data.info().data_range().ok_or_else(|| {
+                candle_core::Error::msg(format!("GGUF tensor `{source_name}` has no data range"))
+            })?;
+            iq::IqTensor::from_mapped(self.archive.clone(), info.shard_index(), range, dims, dtype)?
+        };
+        let bias = self.load_bias(key, device, range, tensor.dims().len())?;
+        Ok(Arc::new(iq::IqGgufMatMul::new(Arc::new(tensor), bias)?))
     }
 
     fn load_structural_linear(
@@ -1155,7 +1206,7 @@ fn validate_binding_storage(
     match binding {
         GgufTensorBinding::Tensor(name) => {
             let dtype = archive.tensor_info(name)?.dtype();
-            if dtype.candle_dtype().is_err() {
+            if dtype.candle_dtype().is_err() && !iq::is_iq(dtype.raw()) {
                 candle_core::bail!(
                     "GGUF tensor `{name}` uses dtype {} ({}) for native binding `{native_name}`; \
                      direct GGUF loading currently supports {DIRECT_GGUF_DTYPES}, while \

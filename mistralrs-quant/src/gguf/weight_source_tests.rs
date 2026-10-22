@@ -66,10 +66,10 @@ fn unsupported_dtype_archive() -> Result<(NamedTempFile, Arc<GgufArchive>)> {
     bytes.extend_from_slice(&2u32.to_le_bytes());
     bytes.extend_from_slice(&256u64.to_le_bytes());
     bytes.extend_from_slice(&1u64.to_le_bytes());
-    bytes.extend_from_slice(&16u32.to_le_bytes());
+    bytes.extend_from_slice(&34u32.to_le_bytes());
     bytes.extend_from_slice(&0u64.to_le_bytes());
     bytes.resize(align(bytes.len(), 32), 0);
-    bytes.extend_from_slice(&[0; 66]);
+    bytes.extend_from_slice(&[0; 54]);
     bytes.resize(align(bytes.len(), 32), 0);
 
     let mut file = NamedTempFile::new().map_err(Error::wrap)?;
@@ -806,5 +806,81 @@ fn big_endian_archives_are_rejected_at_construction() -> Result<()> {
         .to_string();
     assert!(error.contains("big-endian"));
     assert!(error.contains(&file.path().display().to_string()));
+    Ok(())
+}
+/// A one-tensor GGUF holding four IQ4_XS rows of 256 values. candle cannot write IQ, so
+/// the file is assembled by hand.
+fn iq_archive() -> Result<(NamedTempFile, Arc<GgufArchive>, Vec<u8>)> {
+    let name = "iq.weight";
+    let type_size = 136usize;
+    let mut blocks: Vec<u8> = (0..4 * type_size)
+        .map(|index| ((index * 37 + 5) % 251) as u8)
+        .collect();
+    for block in 0..4 {
+        blocks[block * type_size] = 0x00;
+        blocks[block * type_size + 1] = 0x24;
+    }
+
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(b"GGUF");
+    bytes.extend_from_slice(&3u32.to_le_bytes());
+    bytes.extend_from_slice(&1u64.to_le_bytes());
+    bytes.extend_from_slice(&0u64.to_le_bytes());
+    bytes.extend_from_slice(&(name.len() as u64).to_le_bytes());
+    bytes.extend_from_slice(name.as_bytes());
+    bytes.extend_from_slice(&2u32.to_le_bytes());
+    bytes.extend_from_slice(&256u64.to_le_bytes());
+    bytes.extend_from_slice(&4u64.to_le_bytes());
+    bytes.extend_from_slice(&23u32.to_le_bytes());
+    bytes.extend_from_slice(&0u64.to_le_bytes());
+    bytes.resize(align(bytes.len(), 32), 0);
+    bytes.extend_from_slice(&blocks);
+    bytes.resize(align(bytes.len(), 32), 0);
+
+    let mut file = NamedTempFile::new().map_err(Error::wrap)?;
+    file.as_file_mut().write_all(&bytes).map_err(Error::wrap)?;
+    file.as_file_mut().flush().map_err(Error::wrap)?;
+    let archive = Arc::new(GgufArchive::open_file(file.path())?);
+    Ok((file, archive, blocks))
+}
+
+/// The loader has to hand out a view of the mapping, not a copy.
+#[test]
+fn iq_weights_are_a_view_of_the_mapping() -> Result<()> {
+    let (_file, archive, blocks) = iq_archive()?;
+    let bindings = GgufBindingMap::new().with_binding(
+        "model.linear.weight",
+        GgufTensorBinding::tensor("iq.weight"),
+    );
+    let source = GgufWeightSource::new(archive.clone(), &bindings, DType::F32)?;
+    let layer = source
+        .load_linear("model.linear.weight", &Device::Cpu, Shard::default())?
+        .expect("the IQ tensor loads as a native linear");
+
+    let owned = crate::gguf::iq::IqTensor::new(
+        blocks.into_boxed_slice(),
+        vec![4, 256],
+        GgufDType::new(23),
+    )?;
+    let want = owned
+        .dequantize(&Device::Cpu)?
+        .flatten_all()?
+        .to_vec1::<f32>()?;
+    let got = layer.dequantize_w()?.flatten_all()?.to_vec1::<f32>()?;
+    assert_eq!(got, want);
+
+    let (shard, range) = {
+        let info = archive.tensor_info("iq.weight")?;
+        (info.shard_index(), info.data_range().expect("data range"))
+    };
+    let view = crate::gguf::iq::IqTensor::from_mapped(
+        archive.clone(),
+        shard,
+        range.clone(),
+        vec![4, 256],
+        GgufDType::new(23),
+    )?;
+    let mapped = archive.shard_bytes(shard).expect("mapped shard").as_ptr();
+    assert_eq!(view.byte_ptr(), unsafe { mapped.add(range.start) });
     Ok(())
 }
