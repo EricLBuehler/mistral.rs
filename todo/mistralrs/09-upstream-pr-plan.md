@@ -2,7 +2,8 @@
 
 - **Repo:** mistral.rs
 - **Status:** the chain is rebased onto `origin/master` and every branch compiles; the work
-  since the chain was built is not in any of them yet
+  since the chain was built is not in any of them yet, and the IQ and Flint stacks (below) are
+  separate branches on `flint_by_flint` with nothing pushed
 - **Impact:** the whole of `cpu-decode-bandwidth` that is worth upstreaming
 
 ## What is upstreamable and what is not
@@ -72,6 +73,27 @@ so it should not be upstreamed at all.
 These are the next PRs. The scoped fp8 gather is the one that carries the 29.5x, and it
 depends on the per-expert gather that `pr/02` already carries, so it is the natural first
 addition to the chain.
+
+## The IQ and Flint stacks, 2026-10-22
+
+Two stacks that are not part of the chain above. The IQ one is generic - it is what makes any
+IQ GGUF load - so it can land ahead of the model work and does not touch the chain's paths.
+
+| branch | commits | what | needs |
+|---|---|---|---|
+| `pr/iq-block-formats` | `af82d4bf6` | the nine IQ block layouts, the grids/sign tables extracted from `ggml-common.h`, and golden vectors from real files decoded by gguf-py | - |
+| `pr/iq-linear` | `37a9e461d` | `IqTensor` (blocks stay in the mapping, or in a buffer for the sharded case) and `IqGgufMatMul` (`QuantMethod`: dense f32 cache, expert-scoped gather), wired through `load_iq_linear` | the first |
+| `pr/gguf-eog-stop` | `2a2a12b9c` | `tokenizer.ggml.eog_token_ids` joins the stop set | - |
+| `pr/flint-model` | `86a985579`, `dce303a5c` | the Flint model, registry/config/bindings, its tests | the stop-token PR, `pr/iq-linear` for the published files |
+| `fix/flint-window` | `831fea537` | the sliding window reaches `SdpaParams` on the fused sinks path | `pr/flint-model` |
+
+The IQ pair rests on the same property as the rest of the set: the expert gather is bit-identical
+to the whole-stack path, and the tests say so over every shape the MoE hands it, including the
+small-shape matmul fallback. The pointer test in `pr/iq-linear` pins the other invariant that
+matters there, which is that a loaded tensor is a view of the mapping and not a copy.
+
+The `pr/iq-linear` branch name is a placeholder: if the reviewer prefers, the two IQ commits can
+land as one PR, since the block formats have no consumer on their own.
 
 ## The order to open them in
 
