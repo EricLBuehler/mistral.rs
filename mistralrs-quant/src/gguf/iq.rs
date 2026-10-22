@@ -4,18 +4,17 @@
 //! block bytes, and this module turns them into f32. The arithmetic follows the C exactly -
 //! same operation order, f32 throughout - so a block dequantises bit for bit the same.
 
-use candle_core::{Device, Result, Tensor};
+use candle_core::{DType, Device, Result, Tensor};
+use std::{
+    ops::Range,
+    sync::{Arc, OnceLock},
+};
 
-use super::archive::GgufDType;
+use super::archive::{GgufArchive, GgufDType};
 use super::iq_tables::{
     IQ1S_GRID, IQ2S_GRID, IQ2XS_GRID, IQ2XXS_GRID, IQ3S_GRID, IQ3XXS_GRID, KMASK_IQ2XS,
     KSIGNS_IQ2XS, KVALUES_IQ4NL,
 };
-
-/// Blocks per super-block. Every IQ type except IQ4_NL quantises 256 values as one block.
-pub(crate) const QK_K: usize = 256;
-/// IQ4_NL's block is 32 values.
-pub(crate) const QK4_NL: usize = 32;
 
 const IQ1S_DELTA: f32 = 0.125;
 
@@ -55,7 +54,7 @@ fn sign_bit(signs: u8, j: usize) -> bool {
 /// values, with the signs unpacked through `ksigns_iq2xs`.
 fn dequantize_iq2_xxs(blocks: &[u8], n_blocks: usize, y: &mut [f32]) {
     let mut y = y.iter_mut();
-    for block in blocks.chunks_exact(66).take(n_blocks) {
+    for block in blocks.as_chunks::<66>().0.iter().take(n_blocks) {
         let d = f16_scale(block);
         let qs = &block[2..];
         for ib32 in 0..8 {
@@ -64,9 +63,9 @@ fn dequantize_iq2_xxs(blocks: &[u8], n_blocks: usize, y: &mut [f32]) {
             for l in 0..4 {
                 let grid = grid_bytes64(&IQ2XXS_GRID, (aux32[0] >> (8 * l)) as usize & 0xff);
                 let signs = KSIGNS_IQ2XS[((aux32[1] >> (7 * l)) & 127) as usize];
-                for j in 0..8 {
+                for (j, &g) in grid.iter().enumerate() {
                     *y.next().expect("iq2_xxs output length") =
-                        db * grid[j] as f32 * if sign_bit(signs, j) { -1.0 } else { 1.0 };
+                        db * g as f32 * if sign_bit(signs, j) { -1.0 } else { 1.0 };
                 }
             }
         }
@@ -76,7 +75,7 @@ fn dequantize_iq2_xxs(blocks: &[u8], n_blocks: usize, y: &mut [f32]) {
 /// 2.3125 bpw. `d`, 32 u16s of 9-bit grid index plus 7-bit sign code, then 8 scale bytes.
 fn dequantize_iq2_xs(blocks: &[u8], n_blocks: usize, y: &mut [f32]) {
     let mut y = y.iter_mut();
-    for block in blocks.chunks_exact(74).take(n_blocks) {
+    for block in blocks.as_chunks::<74>().0.iter().take(n_blocks) {
         let d = f16_scale(block);
         let qs = &block[2..66];
         let scales = &block[66..74];
@@ -90,9 +89,9 @@ fn dequantize_iq2_xs(blocks: &[u8], n_blocks: usize, y: &mut [f32]) {
                     u16::from_le_bytes([qs[2 * (4 * ib32 + l)], qs[2 * (4 * ib32 + l) + 1]]);
                 let grid = grid_bytes64(&IQ2XS_GRID, (index & 511) as usize);
                 let signs = KSIGNS_IQ2XS[(index >> 9) as usize];
-                for j in 0..8 {
+                for (j, &g) in grid.iter().enumerate() {
                     *y.next().expect("iq2_xs output length") =
-                        db[l / 2] * grid[j] as f32 * if sign_bit(signs, j) { -1.0 } else { 1.0 };
+                        db[l / 2] * g as f32 * if sign_bit(signs, j) { -1.0 } else { 1.0 };
                 }
             }
         }
@@ -102,7 +101,7 @@ fn dequantize_iq2_xs(blocks: &[u8], n_blocks: usize, y: &mut [f32]) {
 /// 2.5625 bpw. `d`, 64 bytes: 32 of grid indices then 32 of sign bytes, then `qh` and scales.
 fn dequantize_iq2_s(blocks: &[u8], n_blocks: usize, y: &mut [f32]) {
     let mut y = y.iter_mut();
-    for block in blocks.chunks_exact(82).take(n_blocks) {
+    for block in blocks.as_chunks::<82>().0.iter().take(n_blocks) {
         let d = f16_scale(block);
         let qs = &block[2..34];
         // ggml's `signs` pointer is `qs + QK_K/8`: the signs live in the back half of the
@@ -120,9 +119,9 @@ fn dequantize_iq2_s(blocks: &[u8], n_blocks: usize, y: &mut [f32]) {
                     qs[4 * ib32 + l] as usize | (((qh[ib32] as usize) << (8 - 2 * l)) & 0x300);
                 let grid = grid_bytes64(&IQ2S_GRID, index);
                 let sign = signs[4 * ib32 + l];
-                for j in 0..8 {
+                for (j, &g) in grid.iter().enumerate() {
                     *y.next().expect("iq2_s output length") =
-                        db[l / 2] * grid[j] as f32 * if sign_bit(sign, j) { -1.0 } else { 1.0 };
+                        db[l / 2] * g as f32 * if sign_bit(sign, j) { -1.0 } else { 1.0 };
                 }
             }
         }
@@ -132,7 +131,7 @@ fn dequantize_iq2_s(blocks: &[u8], n_blocks: usize, y: &mut [f32]) {
 /// 3.0625 bpw. `d`, then 96 bytes: 64 of grid indices followed by 32 of packed scale-and-signs.
 fn dequantize_iq3_xxs(blocks: &[u8], n_blocks: usize, y: &mut [f32]) {
     let mut y = y.iter_mut();
-    for block in blocks.chunks_exact(98).take(n_blocks) {
+    for block in blocks.as_chunks::<98>().0.iter().take(n_blocks) {
         let d = f16_scale(block);
         let qs = &block[2..98];
         let scales_and_signs = 64usize;
@@ -149,13 +148,13 @@ fn dequantize_iq3_xxs(blocks: &[u8], n_blocks: usize, y: &mut [f32]) {
                 let grid1 = grid_bytes32(&IQ3XXS_GRID, qs[8 * ib32 + 2 * l] as usize);
                 let grid2 = grid_bytes32(&IQ3XXS_GRID, qs[8 * ib32 + 2 * l + 1] as usize);
                 // y[j] comes from grid1 and y[j+4] from grid2: the block is two halves.
-                for j in 0..4 {
+                for (j, &g) in grid1.iter().enumerate() {
                     *y.next().expect("iq3_xxs output length") =
-                        db * grid1[j] as f32 * if sign_bit(signs, j) { -1.0 } else { 1.0 };
+                        db * g as f32 * if sign_bit(signs, j) { -1.0 } else { 1.0 };
                 }
-                for j in 0..4 {
+                for (j, &g) in grid2.iter().enumerate() {
                     *y.next().expect("iq3_xxs output length") =
-                        db * grid2[j] as f32 * if sign_bit(signs, j + 4) { -1.0 } else { 1.0 };
+                        db * g as f32 * if sign_bit(signs, j + 4) { -1.0 } else { 1.0 };
                 }
             }
         }
@@ -165,7 +164,7 @@ fn dequantize_iq3_xxs(blocks: &[u8], n_blocks: usize, y: &mut [f32]) {
 /// 3.4375 bpw. `d`, 64 bytes of grid indices, 8 of high bits, 32 of signs, 4 of scales.
 fn dequantize_iq3_s(blocks: &[u8], n_blocks: usize, y: &mut [f32]) {
     let mut y = y.iter_mut();
-    for block in blocks.chunks_exact(110).take(n_blocks) {
+    for block in blocks.as_chunks::<110>().0.iter().take(n_blocks) {
         let d = f16_scale(block);
         let qs = &block[2..66];
         let qh = &block[66..74];
@@ -188,13 +187,13 @@ fn dequantize_iq3_s(blocks: &[u8], n_blocks: usize, y: &mut [f32]) {
                     let grid2 = grid_bytes32(&IQ3S_GRID, index2);
                     let sign = signs[signs_off + l];
                     // y[j] from grid1, y[j+4] from grid2: the block is two halves.
-                    for j in 0..4 {
+                    for (j, &g) in grid1.iter().enumerate() {
                         *y.next().expect("iq3_s output length") =
-                            *db * grid1[j] as f32 * if sign_bit(sign, j) { -1.0 } else { 1.0 };
+                            *db * g as f32 * if sign_bit(sign, j) { -1.0 } else { 1.0 };
                     }
-                    for j in 0..4 {
+                    for (j, &g) in grid2.iter().enumerate() {
                         *y.next().expect("iq3_s output length") =
-                            *db * grid2[j] as f32 * if sign_bit(sign, j + 4) { -1.0 } else { 1.0 };
+                            *db * g as f32 * if sign_bit(sign, j + 4) { -1.0 } else { 1.0 };
                     }
                 }
                 qs_off += 8;
@@ -207,7 +206,7 @@ fn dequantize_iq3_s(blocks: &[u8], n_blocks: usize, y: &mut [f32]) {
 /// 1.5625 bpw. `d`, 32 bytes of grid indices, then 8 u16s of per-32-value high bits and scale.
 fn dequantize_iq1_s(blocks: &[u8], n_blocks: usize, y: &mut [f32]) {
     let mut y = y.iter_mut();
-    for block in blocks.chunks_exact(50).take(n_blocks) {
+    for block in blocks.as_chunks::<50>().0.iter().take(n_blocks) {
         let d = f16_scale(block);
         let qs = &block[2..34];
         let qh = &block[34..50];
@@ -222,8 +221,8 @@ fn dequantize_iq1_s(blocks: &[u8], n_blocks: usize, y: &mut [f32]) {
             for l in 0..4 {
                 let index = qs[4 * ib + l] as usize | ((((qh_ib >> (3 * l)) & 7) as usize) << 8);
                 let grid = IQ1S_GRID[index].to_le_bytes();
-                for j in 0..8 {
-                    *y.next().expect("iq1_s output length") = dl * (grid[j] as i8 as f32 + delta);
+                for &g in grid.iter() {
+                    *y.next().expect("iq1_s output length") = dl * (g as i8 as f32 + delta);
                 }
             }
         }
@@ -233,7 +232,7 @@ fn dequantize_iq1_s(blocks: &[u8], n_blocks: usize, y: &mut [f32]) {
 /// 1.75 bpw. No `d`: the scale is assembled from the top nibbles of the four scale words.
 fn dequantize_iq1_m(blocks: &[u8], n_blocks: usize, y: &mut [f32]) {
     let mut y = y.iter_mut();
-    for block in blocks.chunks_exact(56).take(n_blocks) {
+    for block in blocks.as_chunks::<56>().0.iter().take(n_blocks) {
         let qs = &block[0..32];
         let qh = &block[32..48];
         let scales = &block[48..56];
@@ -282,16 +281,14 @@ fn dequantize_iq1_m(blocks: &[u8], n_blocks: usize, y: &mut [f32]) {
             ];
             for l in 0..2 {
                 let grid = IQ1S_GRID[idx[l]].to_le_bytes();
-                for j in 0..8 {
-                    *y.next().expect("iq1_m output length") =
-                        dl1 * (grid[j] as i8 as f32 + deltas[l]);
+                for &g in grid.iter() {
+                    *y.next().expect("iq1_m output length") = dl1 * (g as i8 as f32 + deltas[l]);
                 }
             }
             for l in 2..4 {
                 let grid = IQ1S_GRID[idx[l]].to_le_bytes();
-                for j in 0..8 {
-                    *y.next().expect("iq1_m output length") =
-                        dl2 * (grid[j] as i8 as f32 + deltas[l]);
+                for &g in grid.iter() {
+                    *y.next().expect("iq1_m output length") = dl2 * (g as i8 as f32 + deltas[l]);
                 }
             }
         }
@@ -301,7 +298,7 @@ fn dequantize_iq1_m(blocks: &[u8], n_blocks: usize, y: &mut [f32]) {
 /// 4.5 bpw. `d`, then 16 bytes of nibbles into `kvalues_iq4nl`.
 fn dequantize_iq4_nl(blocks: &[u8], n_blocks: usize, y: &mut [f32]) {
     let mut y = y.iter_mut();
-    for block in blocks.chunks_exact(18).take(n_blocks) {
+    for block in blocks.as_chunks::<18>().0.iter().take(n_blocks) {
         let d = f16_scale(block);
         let qs = &block[2..18];
         // y[j] takes the low nibble and y[j+16] the high one: two halves, not interleaved.
@@ -319,7 +316,7 @@ fn dequantize_iq4_nl(blocks: &[u8], n_blocks: usize, y: &mut [f32]) {
 /// 4.25 bpw. `d`, a 16-bit high-scale word, 4 low-scale bytes, then 128 bytes of nibbles.
 fn dequantize_iq4_xs(blocks: &[u8], n_blocks: usize, y: &mut [f32]) {
     let mut y = y.iter_mut();
-    for block in blocks.chunks_exact(136).take(n_blocks) {
+    for block in blocks.as_chunks::<136>().0.iter().take(n_blocks) {
         let d = f16_scale(block);
         let scales_h = u16::from_le_bytes([block[2], block[3]]);
         let scales_l = &block[4..8];
@@ -369,16 +366,78 @@ pub(crate) const fn is_iq(raw: u32) -> bool {
     matches!(raw, 16..=23 | 29)
 }
 
+/// Where a tensor's block bytes live: either a buffer this crate owns, or a slice of a mapped
+/// GGUF shard. The mapped form holds the archive, so the mapping outlives the view and the
+/// tensor never leaves the page cache.
+#[derive(Debug)]
+enum IqStorage {
+    Owned(Box<[u8]>),
+    Mapped {
+        archive: Arc<GgufArchive>,
+        shard: usize,
+        range: Range<usize>,
+    },
+}
+
+impl IqStorage {
+    fn bytes(&self) -> &[u8] {
+        match self {
+            Self::Owned(bytes) => bytes,
+            Self::Mapped {
+                archive,
+                shard,
+                range,
+            } => &archive.shard_bytes(*shard).expect("mapped GGUF shard")[range.clone()],
+        }
+    }
+}
+
 /// An IQ-quantised tensor: raw block bytes plus the shape they decode to.
 #[derive(Debug)]
 pub struct IqTensor {
-    bytes: Box<[u8]>,
+    storage: IqStorage,
     dims: Vec<usize>,
     dtype: GgufDType,
 }
-
 impl IqTensor {
     pub fn new(bytes: Box<[u8]>, dims: Vec<usize>, dtype: GgufDType) -> Result<Self> {
+        Self::check_bytes(bytes.len(), &dims, dtype)?;
+        Ok(Self {
+            storage: IqStorage::Owned(bytes),
+            dims,
+            dtype,
+        })
+    }
+
+    /// A tensor whose blocks stay in the GGUF mapping, which is what the loader uses: the
+    /// checkpoint's bytes are the weights, and copying them would turn page cache into
+    /// anonymous memory.
+    pub fn from_mapped(
+        archive: Arc<GgufArchive>,
+        shard: usize,
+        range: Range<usize>,
+        dims: Vec<usize>,
+        dtype: GgufDType,
+    ) -> Result<Self> {
+        let mapped = archive
+            .shard_bytes(shard)
+            .ok_or_else(|| candle_core::Error::msg(format!("GGUF shard {shard} is not mapped")))?;
+        let bytes = mapped.get(range.clone()).ok_or_else(|| {
+            candle_core::Error::msg(format!("GGUF tensor range {range:?} is outside the shard"))
+        })?;
+        Self::check_bytes(bytes.len(), &dims, dtype)?;
+        Ok(Self {
+            storage: IqStorage::Mapped {
+                archive,
+                shard,
+                range,
+            },
+            dims,
+            dtype,
+        })
+    }
+
+    fn check_bytes(len: usize, dims: &[usize], dtype: GgufDType) -> Result<()> {
         let (Some(block_size), Some(type_size)) = (dtype.block_size(), dtype.type_size()) else {
             candle_core::bail!("GGUF dtype {} has no block geometry", dtype.name());
         };
@@ -387,37 +446,358 @@ impl IqTensor {
         }
         let elem_count: usize = dims.iter().product();
         let n_blocks = elem_count / block_size;
-        if bytes.len() != n_blocks * type_size {
+        if len != n_blocks * type_size {
             candle_core::bail!(
-                "GGUF {} tensor needs {} bytes for {elem_count} elements, got {}",
+                "GGUF {} tensor needs {} bytes for {elem_count} elements, got {len}",
                 dtype.name(),
                 n_blocks * type_size,
-                bytes.len()
             );
         }
-        Ok(Self { bytes, dims, dtype })
+        Ok(())
     }
 
     pub fn dims(&self) -> &[usize] {
         &self.dims
     }
 
-    pub fn dtype(&self) -> GgufDType {
-        self.dtype
-    }
-
-    pub fn bytes(&self) -> &[u8] {
-        &self.bytes
+    /// Where the bytes sit, so a test can assert a mapped tensor really is a view.
+    #[cfg(test)]
+    pub(crate) fn byte_ptr(&self) -> *const u8 {
+        self.storage.bytes().as_ptr()
     }
 
     /// The whole tensor as f32.
     pub fn dequantize(&self, device: &Device) -> Result<Tensor> {
         let type_size = self.dtype.type_size().expect("iq type size");
         let block_size = self.dtype.block_size().expect("iq block size");
-        let n_blocks = self.bytes.len() / type_size;
+        let bytes = self.storage.bytes();
+        let n_blocks = bytes.len() / type_size;
         let mut out = vec![0f32; n_blocks * block_size];
-        dequantize_blocks(self.dtype, &self.bytes, n_blocks, &mut out)?;
+        dequantize_blocks(self.dtype, bytes, n_blocks, &mut out)?;
         Tensor::from_vec(out, self.dims.clone(), device)
+    }
+
+    /// The f32 slabs of the named experts of a `[n_experts, out, in]` stack, in ascending
+    /// expert order, plus the same ids remapped onto that order.
+    ///
+    /// This is the IQ counterpart of dequantising a candle `QTensor` per named expert: the
+    /// stack stays blocks, and only the experts a token routes to are decoded.
+    pub fn dequantize_experts(
+        &self,
+        ids: &[u32],
+        device: &Device,
+    ) -> Result<(Vec<Tensor>, Vec<u32>)> {
+        let n_experts = self.expert_geometry()?.0;
+        if let Some(&bad) = ids.iter().find(|&&i| i as usize >= n_experts) {
+            candle_core::bail!("IqTensor: expert id {bad} is out of range for {n_experts} experts");
+        }
+        let mut wanted: Vec<usize> = ids.iter().map(|&i| i as usize).collect();
+        wanted.sort_unstable();
+        wanted.dedup();
+        if wanted.is_empty() {
+            candle_core::bail!("IqTensor: no expert was routed to");
+        }
+
+        let bytes = self.storage.bytes();
+        let total = bytes.len();
+        if !total.is_multiple_of(n_experts) {
+            candle_core::bail!("IqTensor: {total} bytes do not divide across {n_experts} experts");
+        }
+        let stride = total / n_experts;
+        let type_size = self.dtype.type_size().expect("iq type size");
+        let block_size = self.dtype.block_size().expect("iq block size");
+        let (_, out_features, in_features) = self.expert_geometry()?;
+
+        let mut slabs = Vec::with_capacity(wanted.len());
+        for &e in &wanted {
+            let lo = e * stride;
+            let Some(slab) = bytes.get(lo..lo + stride) else {
+                candle_core::bail!("IqTensor: expert {e} is out of range");
+            };
+            let n_blocks = slab.len() / type_size;
+            let mut out = vec![0f32; n_blocks * block_size];
+            dequantize_blocks(self.dtype, slab, n_blocks, &mut out)?;
+            slabs.push(Tensor::from_vec(out, (out_features, in_features), device)?);
+        }
+
+        let mut dense = vec![u32::MAX; n_experts];
+        for (row, &e) in wanted.iter().enumerate() {
+            dense[e] = row as u32;
+        }
+        let remapped = ids.iter().map(|&i| dense[i as usize]).collect();
+        Ok((slabs, remapped))
+    }
+
+    /// The `[n_experts, out_features, in_features]` stack geometry.
+    pub fn expert_geometry(&self) -> Result<(usize, usize, usize)> {
+        match self.dims.as_slice() {
+            [n, out, k] => Ok((*n, *out, *k)),
+            other => {
+                candle_core::bail!("IqTensor: expected an [experts, out, in] stack, got {other:?}")
+            }
+        }
+    }
+}
+
+/// A GGUF linear whose weights are IQ blocks.
+///
+/// A dense weight dequantises once, on the first forward, and stays cached: every token reads
+/// it, so the block decode is paid once. A stacked expert `[n_experts, out, in]` tensor is
+/// never materialised whole - the gather decodes only the experts a token routes to, which is
+/// what keeps a 10 GB IQ checkpoint from becoming 79 GB of f32.
+#[derive(Debug)]
+pub struct IqGgufMatMul {
+    w: Arc<IqTensor>,
+    b: Option<Tensor>,
+    dense: OnceLock<Tensor>,
+}
+
+impl IqGgufMatMul {
+    pub fn new(w: Arc<IqTensor>, b: Option<Tensor>) -> Result<Self> {
+        Ok(Self {
+            w,
+            b,
+            dense: OnceLock::new(),
+        })
+    }
+
+    fn matmul_f32(&self, a: &Tensor) -> Result<Tensor> {
+        let device = a.device();
+        // The same cache the fp8 dense path keeps: dequantise once, then read f32 forever.
+        // A stacked expert weight is handled by the gather instead and is never cached.
+        let cached = if self.w.dims().len() == 2 {
+            match self.dense.get() {
+                Some(cached) => cached.clone(),
+                None => {
+                    let dequantized = self.w.dequantize(device)?;
+                    // A lost race just means the other copy is used.
+                    let _ = self.dense.set(dequantized.clone());
+                    dequantized
+                }
+            }
+        } else {
+            self.w.dequantize(device)?
+        };
+        let w = match *a.dims() {
+            [b1, b2, _, _] => cached.broadcast_left((b1, b2))?.t()?,
+            [bsize, _, _] => cached.broadcast_left(bsize)?.t()?,
+            _ => cached.t()?,
+        };
+        a.matmul(&w)
+    }
+
+    fn add_bias(&self, x: Tensor) -> Result<Tensor> {
+        match &self.b {
+            Some(b) => x.broadcast_add(b),
+            None => Ok(x),
+        }
+    }
+}
+
+impl crate::QuantizedSerde for IqGgufMatMul {
+    fn isq_serde_supported(&self) -> bool {
+        false
+    }
+
+    fn name(&self) -> &'static str {
+        "gguf-iq"
+    }
+}
+
+impl crate::QuantMethod for IqGgufMatMul {
+    fn new(_method: crate::QuantMethodConfig) -> Result<Self> {
+        candle_core::bail!("IqGgufMatMul is constructed directly, not from a QuantMethodConfig")
+    }
+
+    fn dequantize_w(&self) -> Result<Tensor> {
+        self.w.dequantize(&Device::Cpu)
+    }
+
+    /// The dense path: f32 matmul over the dequantised weight, which the first forward
+    /// materialises and caches.
+    fn forward_raw(&self, a: &Tensor) -> Result<Tensor> {
+        let original = a.dtype();
+        let a_f32 = if original == DType::F32 {
+            a.clone()
+        } else {
+            a.to_dtype(DType::F32)?
+        };
+        let x = self.matmul_f32(&a_f32)?;
+        let x = if original == DType::F32 {
+            x
+        } else {
+            x.to_dtype(original)?
+        };
+        self.add_bias(x)
+    }
+
+    /// The expert path. Shapes are the ones the stacked CPU path hands a quantised expert
+    /// projection: `(batch, seq, 1, 1, hidden)` with `(batch, seq, top_k)` indices for the
+    /// gate and up projections, `(batch, seq, top_k, hidden)` for the down projection, and
+    /// the flat `(tokens, 1|top_k, hidden)` / `(tokens, top_k)` pair.
+    fn gather_forward_raw(&self, a: &Tensor, indices: &Tensor) -> Result<Tensor> {
+        let (_, out_features, in_features) = self.w.expert_geometry()?;
+        let gathered = match a.dims() {
+            &[b, s, 1, 1, h] => {
+                let (_ib, _is, k) = indices.dims3()?;
+                let out =
+                    self.gather_flat(&a.reshape((b * s, h))?, &indices.reshape((b * s, k))?, k)?;
+                out.reshape((b, s, k, out_features))
+            }
+            &[b, s, k, h] => {
+                let (_ib, _is, ik) = indices.dims3()?;
+                if ik != k {
+                    candle_core::bail!("IqGgufMatMul: input has {k} slots but indices have {ik}");
+                }
+                if h != in_features {
+                    candle_core::bail!(
+                        "IqGgufMatMul: input has {h} features, weights expect {in_features}"
+                    );
+                }
+                let out = self.gather_flat(
+                    &a.reshape((b * s * k, h))?,
+                    &indices.reshape((b * s * k, 1))?,
+                    crate::moe_gather_cpu::NO_REPEAT,
+                )?;
+                out.reshape((b, s, k, out_features))
+            }
+            &[t, xt, h] => {
+                let (ib, ik) = indices.dims2()?;
+                if ib != t {
+                    candle_core::bail!(
+                        "IqGgufMatMul: input is ({t}, {xt}, {h}) but indices are ({ib}, {ik})"
+                    );
+                }
+                if h != in_features {
+                    candle_core::bail!(
+                        "IqGgufMatMul: input has {h} features, weights expect {in_features}"
+                    );
+                }
+                // One row per token broadcasts over its top-k slots; anything else is already
+                // per-slot.
+                let (rows, repeat) = if xt == 1 {
+                    (a.reshape((t, h))?, ik)
+                } else {
+                    if ik != xt {
+                        candle_core::bail!(
+                            "IqGgufMatMul: input has {xt} slots but indices have {ik}"
+                        );
+                    }
+                    (a.reshape((t * ik, h))?, crate::moe_gather_cpu::NO_REPEAT)
+                };
+                let out = self.gather_flat(&rows, indices, repeat)?;
+                out.reshape((t, ik, out_features))
+            }
+            dims => candle_core::bail!("IqGgufMatMul: unsupported input shape {dims:?}"),
+        };
+
+        if let Some(b) = &self.b {
+            if b.rank() == 2 {
+                let mut shape = indices.dims().to_vec();
+                shape.push(b.dim(1)?);
+                let bias = b
+                    .index_select(&indices.flatten_all()?, 0)?
+                    .reshape(candle_core::Shape::from(shape))?;
+                gathered?.broadcast_add(&bias)
+            } else {
+                gathered?.broadcast_add(b)
+            }
+        } else {
+            gathered
+        }
+    }
+
+    fn quantized_act_type(&self) -> Option<DType> {
+        None
+    }
+
+    fn dtype_and_device(&self) -> (DType, Device) {
+        (DType::F32, Device::Cpu)
+    }
+
+    fn plan_isq(&self, _request: &crate::IsqRequest) -> Result<crate::IsqPlanParams> {
+        candle_core::bail!("IqGgufMatMul does not support ISQ")
+    }
+
+    fn add_delta_w(&self, _delta: &Tensor) -> Result<std::sync::Arc<dyn crate::QuantMethod>> {
+        candle_core::bail!("IqGgufMatMul does not support add_delta_w")
+    }
+
+    fn apply_isq(
+        self: std::sync::Arc<Self>,
+        _dtype: Option<crate::IsqType>,
+        _device: Device,
+        _n_quantized: &std::sync::atomic::AtomicUsize,
+        _imatrix_weight: Option<Vec<f32>>,
+        _guard: crate::QuantizeOntoGuard,
+    ) -> Result<std::sync::Arc<dyn crate::QuantMethod>> {
+        candle_core::bail!("IqGgufMatMul does not support ISQ")
+    }
+}
+
+impl IqGgufMatMul {
+    /// `(rows, hidden) @ gather(experts, ids).T`, one output row per slot.
+    ///
+    /// `repeat` is how many slots share one activation row: a token's top-k slots read the
+    /// token's row, so the rows are passed once and the kernel addresses them by
+    /// `slot / repeat`.
+    fn gather_flat(&self, rows: &Tensor, ids: &Tensor, repeat: usize) -> Result<Tensor> {
+        let (n_rows, in_features) = rows.dims2()?;
+        let n_slots = ids.elem_count();
+        if n_rows * repeat != n_slots {
+            candle_core::bail!(
+                "IqGgufMatMul: {n_slots} slots for {n_rows} rows at repeat {repeat}"
+            );
+        }
+        let a: Vec<f32> = rows
+            .to_dtype(DType::F32)?
+            .contiguous()?
+            .flatten_all()?
+            .to_vec1::<f32>()?;
+        let ids_flat: Vec<u32> = ids
+            .to_dtype(DType::U32)?
+            .flatten_all()?
+            .to_vec1::<u32>()?
+            .to_vec();
+
+        let (n_experts, out_features, _) = self.w.expert_geometry()?;
+        let (slabs, dense) = self.w.dequantize_experts(&ids_flat, &Device::Cpu)?;
+        let out = if crate::moe_gather_cpu::should_use_gather_gemv_shape(
+            n_experts,
+            out_features,
+            in_features,
+            out_features,
+            n_slots,
+        ) {
+            crate::moe_gather_cpu::gather_gemv_per_expert(
+                &a,
+                &slabs,
+                out_features,
+                in_features,
+                &dense,
+                repeat,
+            )?
+        } else {
+            // The gather kernel refuses tiny shapes; the whole-stack path these replace would
+            // fall back to a matmul, so dequantise the named slabs and matmul over those.
+            let stack = Tensor::stack(&slabs, 0)?;
+            let unquant = <crate::UnquantLinear as crate::QuantMethod>::new(
+                crate::QuantMethodConfig::Unquantized(candle_nn::Linear::new(stack, None)),
+            )?;
+            // The whole-stack gather takes the per-slot form, so every activation row is
+            // expanded to the slots that read it.
+            let slot_a: Vec<f32> = a
+                .chunks(in_features)
+                .flat_map(|row| std::iter::repeat_n(row, repeat).flatten().copied())
+                .collect();
+            let x = Tensor::from_vec(slot_a, (1, n_slots, 1, in_features), &Device::Cpu)?;
+            let slot_ids = Tensor::from_vec(dense.clone(), (1, n_slots, 1), &Device::Cpu)?;
+            crate::QuantMethod::gather_forward(&unquant, &x, &slot_ids)?
+                .reshape((n_slots, out_features))?
+                .flatten_all()?
+                .to_vec1::<f32>()?
+        };
+        Tensor::from_vec(out, (n_slots, out_features), &Device::Cpu)
     }
 }
 
