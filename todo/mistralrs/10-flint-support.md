@@ -297,13 +297,29 @@ than in the softmax they feed: (1, 16, 1, 128) by (1, 16, 128, 90) is 184k MACs 
 in 2.9 ms, 63 MMAC/s. `&k.t()?` materialises a transpose of the whole cache for every
 layer every token, and candle's batched matmul with m=1 pays its setup per batch.
 
-So the fix is the one the CPU backend already has for decode without sinks:
-`backends/cpu/single_q.rs` streams K and V once, without a transpose, and takes
-`MaskInfo` for windows. What is missing is the sink itself, which is one more term in
-the softmax denominator per head. `sinks_attn` keeps the tensor-op path for every
-device because sinks exist on CUDA and Metal too; the CPU decode case is the one that
-can hand off.
+Fixed in `07c3ca848 perf(core): decode attention sinks on the CPU kernel`. The
+single-query kernel in `backends/cpu/single_q.rs` already streams K and V once, without
+a transpose, and takes `MaskInfo` for windows; it only lacked the sink, which is one
+more term in the softmax denominator per head. It now seeds the running max and sum
+with it, or folds it into the chunk merge when the barrier path splits the cache.
+`sinks_attn` keeps the tensor path for CUDA and Metal, where it is the right tool.
 
-This is not a Flint-only bug. Any model with attention sinks - Kolibri-1 among them -
-pays it on CPU, and it grows with the cache, so it is the cost that decides whether a
-long context is usable at all.
+Same recipe (node2, 16 threads, schedutil, IQ1_M, fused gather), attention phase a step:
+
+| context | before | after |
+| --- | --- | --- |
+| ~45 tokens | 78 ms | 3.2 ms |
+| ~90 tokens | 235 ms | 3.6 ms |
+| ~200 tokens | ~350 ms (extrapolated, 1.7 ms a token) | 4.5 ms |
+
+The step went from 235 ms at 40 tokens to 126 ms at 200, 7.67 tok/s, and the 200-token
+request finished in 28 s. What is left of a step at that point: `attn_proj` 41.6 ms,
+`routed` 53.2, `shared` 14.8, `router` 5.9, `lm_head` 5.8, `attention` 4.5.
+
+Bit-exactness for models without sinks is pinned by
+`test_flash_attn_cpu_single_q_sinks_off_is_bit_identical`: a -inf sink is filtered and
+the no-sink arithmetic is unchanged, with the chunk scale exactly 1.0. Half dtypes take
+the barrier merge path and are covered at one and four chunks.
+
+This was not a Flint-only bug: any model with attention sinks pays it on CPU, and it
+grew with the cache, so it decided whether a long context was usable at all.
