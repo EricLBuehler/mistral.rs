@@ -254,7 +254,11 @@ impl Attention {
                 n_kv_groups: num_heads / num_kv_heads,
                 softmax_scale: (head_dim as f32).powf(-0.5),
                 softcap: None,
-                sliding_window: None,
+                // The full-attention layers have no window at all, and the window has to
+                // reach the backend: the mask carries it on CPU, but the fused sinks path
+                // takes it from here.
+                sliding_window: (kind.is_sliding() && cfg.use_sliding_window)
+                    .then_some(cfg.sliding_window),
                 sinks: Some(sinks),
             },
         })

@@ -187,11 +187,7 @@ fn bind_block_tensor(
         )),
         "attn_q_norm" => Some(format!("{p}.self_attn.{}.{suffix}", q_norm_name(loader))),
         "attn_k_norm" => Some(format!("{p}.self_attn.{}.{suffix}", k_norm_name(loader))),
-        "attn_sinks" => Some(match loader {
-            // Flint names the per-head sink `softmax_offset`.
-            NormalLoaderType::Flint => format!("{p}.self_attn.softmax_offset"),
-            _ => format!("{p}.self_attn.sinks"),
-        }),
+        "attn_sinks" => Some(attn_sinks_target(loader, &p)),
         "ffn_gate" if !matches!(loader, NormalLoaderType::GraniteMoeHybrid) => {
             dense_mlp_target(loader, &p, "gate", suffix)
         }
@@ -815,6 +811,14 @@ fn shared_expert_target(
     format!("{p}.mlp.{module}.{projection}_proj.{suffix}")
 }
 
+/// The per-head attention sink. Flint names it `softmax_offset` in the checkpoint.
+fn attn_sinks_target(loader: &NormalLoaderType, p: &str) -> String {
+    match loader {
+        NormalLoaderType::Flint => format!("{p}.self_attn.softmax_offset"),
+        _ => format!("{p}.self_attn.sinks"),
+    }
+}
+
 fn q_norm_name(loader: &NormalLoaderType) -> &'static str {
     match loader {
         NormalLoaderType::HunYuanDenseV1 | NormalLoaderType::HunYuanMoEV1 => "query_layernorm",
@@ -985,6 +989,34 @@ mod tests {
             router_target(&NormalLoaderType::GraniteMoeHybrid, prefix, "weight"),
             "model.layers.3.block_sparse_moe.router.layer.weight"
         );
+    }
+
+    #[test]
+    fn flint_targets_match_the_checkpoint_names() {
+        let loader = &NormalLoaderType::Flint;
+        let p = "model.layers.2";
+        assert_eq!(
+            router_target(loader, p, "weight"),
+            "model.layers.2.mlp.gate.weight"
+        );
+        assert_eq!(
+            expert_target(loader, p, "gate", "weight"),
+            "model.layers.2.mlp.experts.gate_proj.weight"
+        );
+        assert_eq!(
+            shared_expert_target(loader, p, "up", "weight"),
+            "model.layers.2.mlp.shared_expert.up_proj.weight"
+        );
+        assert_eq!(
+            dense_mlp_target(loader, "model.layers.0", "down", "weight").unwrap(),
+            "model.layers.0.mlp.down_proj.weight"
+        );
+        assert_eq!(
+            attn_sinks_target(loader, p),
+            "model.layers.2.self_attn.softmax_offset"
+        );
+        assert_eq!(q_norm_name(loader), "q_norm");
+        assert_eq!(k_norm_name(loader), "k_norm");
     }
 
     #[test]
