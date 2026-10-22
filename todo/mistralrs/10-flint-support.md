@@ -120,8 +120,12 @@ tests running; CPUs 86-94% idle, so the load average is mostly blocked threads):
 
 | checkpoint | decode | tokens | wall | peak RSS |
 |---|---|---|---|---|
-| `flint-preview-UD-IQ1_M.gguf` | **0.46 tok/s** | 89 | 210 s | **9.8 GiB** |
+| `flint-preview-UD-IQ1_M.gguf` | 0.46 tok/s | 89 | 210 s | **9.8 GiB** |
 | `flint-Q4_K_M.gguf` | **9.39 tok/s** | 40 | 5.5 s | 66.8 GiB |
+| the IQ cell again, parallel decode | **1.35 tok/s** | 89 | 69 s | 9.8 GiB |
+
+The third row is the same file, prompt and node 45 minutes later (load 519.6 -> 522.6), after
+`dequantize_experts` was split over block ranges; the prompt fell from 14.7 s to 3.1 s.
 
 The memory side of that table is the more interesting half: the IQ route reads the checkpoint
 through the mapping and peaks at 9.8 GiB, while the K-quant route is resident about twice
@@ -163,14 +167,21 @@ an IQ dtype, and everything above it keeps using `QuantMethod`.
 
 ## What is still open
 
-1. **The IQ rate is 0.46 tok/s against the K-quant's 9.39, same box and same minute.** The
+1. **The IQ rate is 1.35 tok/s against the K-quant's 9.39, same box and same minute.** The
+   first cell, before the per-expert decode was parallelised, was 0.46 tok/s; splitting the
+   decode over block ranges took it to 1.35 (and the prompt from 14.7 s to 3.1 s) with the
+   same answer and the same 9.8 GiB. The
    two cells are below; the gap is the decode path and not the box, which is what the cells
    were for. The arithmetic says where it goes: 6 experts x 3 projections x 49 layers is 882
    slabs of 1M values, so a token decodes 882M IQ values into 3.5 GB of f32 before the GEMV
-   reads them, and that decode is serial per expert today. The two fixes are a parallel
-   per-expert decode (bit-exact, since the experts are independent) and then a fused
-   dequant-and-GEMV that never materialises the slab. Until then the IQ route is a
-   capability - the published files load at all, in 9.8 GiB - not a speed.
+   reads them. The parallel decode is done and worth 2.9x; the measurement
+   (`decode_and_gather_cost_of_one_token`, an ignored test) says what is left is traffic:
+   5.20 ms to decode a layer's 18 slabs at 14.5 GB/s of f32 written, 2.17 ms of gemv reading
+   it back, so a token moves 7.4 GB through memory and the gather alone caps the model at
+   2.77 tok/s. The next fix is a fused dequant-and-GEMV that decodes a block into a register
+   buffer and dots it with the activation, taking the token's traffic from 7.4 GB to the
+   0.9 GB of block bytes. Until then the IQ route is a capability - the published files load
+   at all, in 9.8 GiB - not a speed.
 2. **The fp8 route.** `HawkBearPig/flint-FP8-BF16` uses the same blockwise fp8 recipe and the
    same per-expert tensor names as Kolibri-1, but its `config.json` declares
    `quant_method: "dgpp_mixed"`, which `QuantizedConfig` does not parse. That is the next
