@@ -283,3 +283,27 @@ from run to run, so it reads as blocking on the pool rather than as work. Splitt
 at `kv_cache.append` against `Sdpa.run_attention` is the next measurement, and it wants a quiet
 box: the same build measured 2.33 tok/s with `attn_proj` at 100 ms an hour later, when the box
 was loaded, so only adjacent cells are comparable.
+
+### The sinks attention path
+
+`attention` is not 39 ms of overhead, it is the largest single item once the context
+grows, and it is CPU. Thread CPU time inside `Sdpa.run_attention`, 49 layers:
+10 ms a token at the start of a generation, 78 ms at about 40 tokens, 235 ms at about
+90. That is 1.7 ms for every further token in the cache.
+
+The split, per layer, at that last point (ms): `repeat_kv` 0.3, qk matmul 2.9,
+`softmax_with_sinks` 0.13, av matmul 1.6. Sixty-three times more time in the matmuls
+than in the softmax they feed: (1, 16, 1, 128) by (1, 16, 128, 90) is 184k MACs done
+in 2.9 ms, 63 MMAC/s. `&k.t()?` materialises a transpose of the whole cache for every
+layer every token, and candle's batched matmul with m=1 pays its setup per batch.
+
+So the fix is the one the CPU backend already has for decode without sinks:
+`backends/cpu/single_q.rs` streams K and V once, without a transpose, and takes
+`MaskInfo` for windows. What is missing is the sink itself, which is one more term in
+the softmax denominator per head. `sinks_attn` keeps the tensor-op path for every
+device because sinks exist on CUDA and Metal too; the CPU decode case is the one that
+can hand off.
+
+This is not a Flint-only bug. Any model with attention sinks - Kolibri-1 among them -
+pays it on CPU, and it grows with the cache, so it is the cost that decides whether a
+long context is usable at all.
