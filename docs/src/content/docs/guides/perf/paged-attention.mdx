@@ -117,6 +117,8 @@ On discrete GPUs, `Auto` leaves the larger of 5% of physical memory or 1 GiB as 
 
 The planner accounts for serving concurrency and prompt-processing limits. Increasing them can require more temporary memory and leave less room for the cache. Long cached prefixes may also need smaller batches to fit. These estimates guide allocation; the engine checks available memory before running each batch.
 
+After allocation, the engine checks that the actual cache footprint still leaves room for runtime reservations. Automatic and utilization-based sizing can reduce the cache before serving requests; explicit capacities fail if they cannot fit. On integrated CUDA devices, planning, graph capture, and inference all count reclaimable system memory as available.
+
 For supported fused attention paths, forward admission estimates workspace from the scheduled tokens and selected attention kernel. Encoder work is reserved for batches with multimodal inputs, and CUDA decode graph capture uses its own query shape. Startup sizing still reserves room for the configured workload. Unknown attention paths retain conservative estimates.
 
 ### Explicit capacity and utilization

@@ -205,6 +205,29 @@ pub(crate) fn synchronize_cuda_contexts(primary: &Device, mapper: &dyn DeviceMap
     Ok(())
 }
 
+#[cfg(feature = "cuda")]
+pub(crate) fn prepare_cuda_runtime(primary: &Device, mapper: &dyn DeviceMapper) -> Result<()> {
+    mistralrs_quant::cublaslt::maybe_init_cublas_lt_wrapper(primary.clone());
+    let mut devices = mapper.get_unique_devices();
+    if !devices.iter().any(|device| device.same_device(primary)) {
+        devices.push(primary.clone());
+    }
+    for device in devices.iter().filter(|device| device.is_cuda()) {
+        match crate::cuda::preload::preload_candle_ptx(device) {
+            Ok(count) if count > 0 => {
+                tracing::info!("Preloaded {count} Candle CUDA PTX functions.")
+            }
+            Ok(_) => {}
+            Err(err) => tracing::warn!("Failed to preload Candle CUDA PTX functions: {err}"),
+        }
+    }
+    #[cfg(feature = "cutile")]
+    if let Err(err) = mistralrs_quant::cutile::warmup_moe_kernels(primary) {
+        tracing::warn!("Failed to warm up cuTile MoE kernels: {err}");
+    }
+    synchronize_cuda_contexts(primary, mapper)
+}
+
 pub(crate) fn resolve_lora_execution(
     runtime: Option<&crate::DynamicLoraRuntime>,
     input_ids: &Tensor,

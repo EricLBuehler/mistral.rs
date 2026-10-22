@@ -323,6 +323,70 @@ mod tests {
     }
 
     #[test]
+    fn unified_auto_capture_preserves_system_reserve_and_pending_allocations() -> Result<()> {
+        let plan = RuntimeMemoryPlan {
+            memory_goal: MemoryGoal::Auto,
+            ..plan()
+        };
+        let memory = DeviceMemory::Unified {
+            total: 128 * GIB,
+            available: 18 * GIB,
+            allocated: 110 * GIB,
+            working_set_limit: 128 * GIB,
+        };
+        for (workspace, pending_weights, other_workspace, expected) in [
+            (GIB, 0, 0, true),
+            (2 * GIB, 0, 0, true),
+            (2 * GIB + 1, 0, 0, false),
+            (GIB, GIB, 0, true),
+            (GIB + 1, GIB, 0, false),
+            (GIB, 0, GIB, true),
+            (GIB + 1, 0, GIB, false),
+        ] {
+            assert_eq!(
+                capture_memory_available(
+                    plan,
+                    memory,
+                    workspace,
+                    pending_weights,
+                    other_workspace,
+                )?,
+                expected,
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn unified_auto_capture_and_retention_track_available_memory_and_occupancy() -> Result<()> {
+        let plan = RuntimeMemoryPlan {
+            memory_goal: MemoryGoal::Auto,
+            ..plan()
+        };
+        for (available, allocated, workspace, expected) in [
+            (17 * GIB, 111 * GIB, GIB, true),
+            (17 * GIB, 111 * GIB, GIB + 1, false),
+            (16 * GIB, 112 * GIB, 0, true),
+            (16 * GIB, 112 * GIB, 1, false),
+            (15 * GIB, 113 * GIB, 0, false),
+            (GIB, 100 * GIB, GIB, true),
+            (GIB, 100 * GIB, GIB + 1, false),
+        ] {
+            let memory = DeviceMemory::Unified {
+                total: 128 * GIB,
+                available,
+                allocated,
+                working_set_limit: 128 * GIB,
+            };
+            assert_eq!(
+                capture_memory_available(plan, memory, workspace, 0, 0)?,
+                expected,
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
     fn capture_workspace_rejects_arithmetic_overflow() {
         let shape = CaptureMemoryShape {
             query_tokens: usize::MAX,

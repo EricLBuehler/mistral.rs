@@ -2993,8 +2993,8 @@ pub(crate) fn trim_cuda_graph_memory(stream: &Arc<CudaStream>) -> candle_core::R
 }
 
 static CUDA_GRAPH_CAPTURES: AtomicU64 = AtomicU64::new(0);
-// A graph captured on a unified-memory device keeps its memory; below this much free memory new shapes run eagerly
-const UNIFIED_CAPTURE_MIN_FREE_BYTES: usize = 2 << 30;
+// Unified-memory graphs retain allocations, so new shapes run eagerly below this memory floor.
+const UNIFIED_CAPTURE_MIN_AVAILABLE_BYTES: usize = 2 << 30;
 static CAPTURE_SKIP_LOGGED: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 
@@ -3003,14 +3003,12 @@ pub(crate) fn cuda_graph_capture_headroom(device: &Device) -> candle_core::Resul
     if !crate::utils::normal::is_integrated_gpu(device) {
         return Ok(true);
     }
-    let Some(snapshot) = crate::MemoryUsage.query_cuda_allocator(device)? else {
-        return Ok(true);
-    };
-    let ok = snapshot.available >= UNIFIED_CAPTURE_MIN_FREE_BYTES;
+    let available = crate::MemoryUsage.query(device)?.available();
+    let ok = available >= UNIFIED_CAPTURE_MIN_AVAILABLE_BYTES;
     if !ok && !CAPTURE_SKIP_LOGGED.swap(true, Ordering::Relaxed) {
         tracing::info!(
-            "Unified memory is low ({} MiB free); new CUDA graph shapes will run eagerly.",
-            snapshot.available >> 20
+            "Unified memory is low ({} MiB available); new CUDA graph shapes will run eagerly.",
+            available >> 20
         );
     }
     Ok(ok)
@@ -3025,13 +3023,11 @@ pub(crate) fn log_cuda_graph_memory(device: &Device) -> candle_core::Result<()> 
         &cuda.cuda_stream(),
         sys::CUgraphMem_attribute::CU_GRAPH_MEM_ATTR_RESERVED_MEM_CURRENT,
     )?;
-    let free = crate::MemoryUsage
-        .query_cuda_allocator(device)?
-        .map_or(0, |snapshot| snapshot.available);
+    let available = crate::MemoryUsage.query(device)?.available();
     tracing::info!(
-        "CUDA graphs reserve {} MiB; {} MiB of device memory free after startup.",
+        "CUDA graphs reserve {} MiB; {} MiB of memory available after startup.",
         reserved >> 20,
-        free >> 20
+        available >> 20
     );
     Ok(())
 }

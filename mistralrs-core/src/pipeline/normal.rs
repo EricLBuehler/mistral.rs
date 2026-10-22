@@ -47,9 +47,7 @@ struct CudaDecodeGraphForwardInput<'a> {
 }
 use crate::kv_cache::{FullCacheManager, HybridCacheManager, NormalCacheManager};
 use crate::lora::Ordering;
-use crate::paged_attention::{
-    calculate_cache_config, AttentionImplementation, CacheConfigRequest, CacheEngine,
-};
+use crate::paged_attention::{allocate_cache, AttentionImplementation, CacheConfigRequest};
 use crate::pipeline::chat_template::{calculate_eos_tokens, BeginEndUnkPadTok, GenerationConfig};
 #[cfg(feature = "cuda")]
 use crate::pipeline::cuda_graph::{
@@ -240,18 +238,10 @@ pub(crate) fn build_normal_pipeline(
     #[cfg(not(feature = "cuda"))]
     let _ = recurrent_pool_grew;
 
+    let llg_factory = build_llg_factory(tokenizer.clone())?;
     #[cfg(feature = "cuda")]
     if !loaded_for_uqff_write {
-        // Load persistent CUDA runtime allocations before selecting the KV cache capacity.
-        match crate::cuda::preload::preload_candle_ptx(&device) {
-            Ok(count) if count > 0 => info!("Preloaded {count} Candle CUDA PTX functions."),
-            Ok(_) => {}
-            Err(err) => warn!("Failed to preload Candle CUDA PTX functions: {err}"),
-        }
-        #[cfg(feature = "cutile")]
-        if let Err(err) = mistralrs_quant::cutile::warmup_moe_kernels(&device) {
-            warn!("Failed to warm up cuTile MoE kernels: {err}");
-        }
+        super::prepare_cuda_runtime(&device, mapper.as_ref())?;
     }
 
     let (cache_config, cache_engine) = if let Some(paged_attn_config) = paged_attn_config.as_mut() {
@@ -260,7 +250,7 @@ pub(crate) fn build_normal_pipeline(
             |usable_tokens| capacity_activation_estimate(&paged_snapshot, usable_tokens);
         let memory_reservations =
             paged_attention_memory_reservations(model.cache(), paged_attn_config, &device)?;
-        let cache_config = calculate_cache_config(
+        let (cache_config, cache_engine) = allocate_cache(
             paged_attn_config,
             CacheConfigRequest {
                 memory_reservations,
@@ -274,23 +264,12 @@ pub(crate) fn build_normal_pipeline(
                 silent,
             },
         )?;
-        let layer_devices = (0..num_hidden_layers)
-            .map(|layer| mapper.device_for(layer, false).cloned())
-            .collect();
-        let cache_engine = CacheEngine::new(
-            model_metadata.as_ref(),
-            &cache_config,
-            dtype,
-            model.device(),
-            layer_devices,
-        )?;
         (Some(cache_config), Some(cache_engine))
     } else {
         (None, None)
     };
 
     let max_seq_len = model.max_seq_len();
-    let llg_factory = build_llg_factory(tokenizer.clone())?;
     let generation_defaults = generation_config
         .as_ref()
         .and_then(GenerationConfig::generation_defaults);
