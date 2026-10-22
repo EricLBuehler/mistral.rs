@@ -11,6 +11,8 @@ const GEMMA2_27B_LAYER_COUNT: usize = 46;
 const GPT_OSS_ALPHA: f64 = 1.702;
 const GPT_OSS_SWIGLU_LIMIT: f64 = 7.0;
 const GPT_OSS_SWA_PERIOD: usize = 2;
+/// Kolibri-1 runs four sliding layers then one full, so the full layer is every 5th.
+const KOLIBRI1_SWA_PERIOD: usize = 5;
 const SMOLLM3_NO_ROPE_INTERVAL: usize = 4;
 
 type BuilderFn = fn(&MetadataView<'_>) -> SynthesisResult<JsonValue>;
@@ -43,7 +45,7 @@ pub(crate) struct NormalConfigBuilder {
     build: BuilderFn,
 }
 
-pub(crate) const NORMAL_CONFIG_BUILDERS: &[NormalConfigBuilder; 26] = &[
+pub(crate) const NORMAL_CONFIG_BUILDERS: &[NormalConfigBuilder; 27] = &[
     NormalConfigBuilder {
         loader: NormalLoaderType::Mistral,
         build: build_mistral,
@@ -123,6 +125,10 @@ pub(crate) const NORMAL_CONFIG_BUILDERS: &[NormalConfigBuilder; 26] = &[
     NormalConfigBuilder {
         loader: NormalLoaderType::GptOss,
         build: build_gpt_oss,
+    },
+    NormalConfigBuilder {
+        loader: NormalLoaderType::Kolibri1,
+        build: build_kolibri1,
     },
     NormalConfigBuilder {
         loader: NormalLoaderType::HunYuanDenseV1,
@@ -1619,6 +1625,58 @@ fn build_gpt_oss(metadata: &MetadataView<'_>) -> SynthesisResult<JsonValue> {
     Ok(JsonValue::Object(config))
 }
 
+fn build_kolibri1(metadata: &MetadataView<'_>) -> SynthesisResult<JsonValue> {
+    // Quants of this MoE model may omit the dense width entirely; the placeholder read here is
+    // removed below, so any expert width satisfies it.
+    let intermediate_size = match metadata.optional_usize("feed_forward_length")? {
+        Some(intermediate_size) => intermediate_size,
+        None => metadata.required_usize("expert_shared_feed_forward_length")?,
+    };
+    let fields =
+        StandardFields::read_with_intermediate_size(metadata, None, intermediate_size)?;
+    let sliding_window = fields.sliding_window.ok_or_else(|| {
+        NormalConfigSynthesisError::new(format!(
+            "Standalone Kolibri-1 config requires `{}`",
+            metadata.key("attention.sliding_window")
+        ))
+    })?;
+    let mut config = fields.rms_json();
+    // The routed experts and the shared expert have distinct widths, and neither is the
+    // dense `feed_forward_length`, so the default is meaningless here.
+    config.remove("intermediate_size");
+    config.insert("sliding_window".into(), json!(sliding_window));
+    config.insert("use_sliding_window".into(), json!(true));
+    config.insert("head_dim".into(), json!(fields.head_dim));
+    config.insert("hidden_act".into(), json!("silu"));
+    config.insert(
+        "num_experts".into(),
+        json!(metadata.required_usize("expert_count")?),
+    );
+    config.insert(
+        "num_experts_per_tok".into(),
+        json!(metadata.required_usize("expert_used_count")?),
+    );
+    config.insert(
+        "moe_intermediate_size".into(),
+        json!(metadata.required_usize("expert_feed_forward_length")?),
+    );
+    config.insert(
+        "shared_expert_intermediate_size".into(),
+        json!(metadata.required_usize("expert_shared_feed_forward_length")?),
+    );
+    // Kolibri-1 applies the raw top-k logit weights unscaled.
+    config.insert("norm_topk_prob".into(), json!(false));
+    config.insert(
+        "attention_bias".into(),
+        json!(metadata.has_tensor_marker(".attn_q.bias")),
+    );
+    config.insert(
+        "layer_types".into(),
+        json!(kolibri1_layer_types(metadata, fields.num_hidden_layers)?),
+    );
+    Ok(JsonValue::Object(config))
+}
+
 fn build_hunyuan_dense(metadata: &MetadataView<'_>) -> SynthesisResult<JsonValue> {
     let fields = StandardFields::read(metadata, None)?;
     let mut config = fields.rms_json();
@@ -2409,6 +2467,27 @@ fn gpt_oss_layer_types(
         .collect())
 }
 
+fn kolibri1_layer_types(
+    metadata: &MetadataView<'_>,
+    layer_count: usize,
+) -> SynthesisResult<Vec<&'static str>> {
+    let pattern = metadata.sliding_pattern(layer_count)?.unwrap_or_else(|| {
+        (0..layer_count)
+            .map(|layer| (layer + 1) % KOLIBRI1_SWA_PERIOD != 0)
+            .collect()
+    });
+    Ok(pattern
+        .into_iter()
+        .map(|is_sliding| {
+            if is_sliding {
+                "sliding_attention"
+            } else {
+                "full_attention"
+            }
+        })
+        .collect())
+}
+
 fn dense_layer_indices(metadata: &MetadataView<'_>, layer_count: usize) -> Vec<usize> {
     (0..layer_count)
         .filter(|layer| {
@@ -2574,6 +2653,7 @@ mod tests {
                 | NormalLoaderType::HunYuanMoEV1
                 | NormalLoaderType::Qwen3Next
                 | NormalLoaderType::Lfm2Moe
+                | NormalLoaderType::Kolibri1
         )
     }
 
@@ -2745,7 +2825,10 @@ mod tests {
             );
         }
 
-        if matches!(loader, NormalLoaderType::Gemma2 | NormalLoaderType::GptOss) {
+        if matches!(
+            loader,
+            NormalLoaderType::Gemma2 | NormalLoaderType::GptOss | NormalLoaderType::Kolibri1
+        ) {
             insert_u32(
                 &mut metadata,
                 architecture,
@@ -2842,6 +2925,9 @@ mod tests {
             NormalLoaderType::Lfm2 | NormalLoaderType::Lfm2Moe => {
                 assert_deserializes::<models::lfm2::Config>(loader, config)
             }
+            NormalLoaderType::Kolibri1 => {
+                assert_deserializes::<models::kolibri1::Config>(loader, config)
+            }
         }
     }
 
@@ -2882,6 +2968,19 @@ mod tests {
             );
             assert_native_config_deserializes(&loader, config);
         }
+    }
+
+    #[test]
+    fn kolibri1_standalone_metadata_omitting_dense_ffn_synthesizes_config() {
+        let loader = NormalLoaderType::Kolibri1;
+        let architecture = CanonicalGgufArchitecture::Kolibri1;
+        let (mut metadata, tensors) = fixture(&loader, architecture);
+        metadata.remove(&format!("{}.feed_forward_length", architecture.as_str()));
+
+        let config = synthesize_normal_config_value(&loader, &metadata, &tensors).unwrap();
+        assert_eq!(config["moe_intermediate_size"], 1_024);
+        assert_eq!(config["shared_expert_intermediate_size"], 512);
+        assert_native_config_deserializes(&loader, config);
     }
 
     #[test]

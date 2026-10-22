@@ -50,7 +50,7 @@ struct Fp8BlockwiseDequantize {
 }
 
 impl Fp8BlockwiseDequantize {
-    fn dispatch_dequant_blockwise<T: WithDType>(
+    fn dispatch_dequant_blockwise<T: WithDType + num_traits::FromPrimitive + num_traits::Float>(
         &self,
         weight: &[F8E4M3],
         scale: &[f32],
@@ -90,9 +90,15 @@ impl Fp8BlockwiseDequantize {
                         let output_pos = weight_y * output_width + weight_x;
 
                         // SAFETY: We know each thread will only update indepedant values!
+                        //
+                        // The scale is f32 and the value is f32, so the product is f32. The
+                        // widening to f64 that used to be here was exact and so changed no
+                        // result, but it put a scalar f64 conversion in the inner loop, and
+                        // that is enough to stop the loop vectorising.
                         unsafe {
                             *res_ptr.wrapping_add(output_pos) =
-                                T::from_f64((weight[weight_pos].to_f32() * scale) as f64);
+                                T::from_f32(weight[weight_pos].to_f32() * scale)
+                                    .unwrap_or_else(T::nan);
                         }
                     }
                 }
@@ -3808,6 +3814,53 @@ mod tests {
         stream
             .synchronize()
             .map_err(|error| candle_core::Error::msg(error.to_string()))?;
+        Ok(())
+    }
+
+    /// The dequant's inner loop used to widen the f32 product to f64 and narrow it back. The
+    /// widening is exact, so the result cannot change - but it did put a scalar f64
+    /// conversion in the loop, which is enough to stop it vectorising. This checks the two
+    /// forms agree exactly, so the faster one can be the one that ships.
+    #[test]
+    fn the_f32_and_f64_dequant_forms_agree_exactly() -> Result<()> {
+        let dev = Device::Cpu;
+        let (rows, cols, block) = (64usize, 128usize, 32usize);
+        let grid_y = rows.div_ceil(block);
+        let grid_x = cols.div_ceil(block);
+
+        // A spread of magnitudes, including values that round differently either way.
+        let raw: Vec<F8E4M3> = (0..rows * cols)
+            .map(|i| F8E4M3::from_f32(((i % cols) as f32 * 0.017).sin() * 3.0))
+            .collect();
+        let weight = Tensor::from_slice(&raw, (rows, cols), &dev)?;
+        let scales: Vec<f32> = (0..grid_y * grid_x)
+            .map(|i| 0.25 + (i % 7) as f32 * 0.5)
+            .collect();
+        let scale = Tensor::from_vec(scales, (grid_y, grid_x), &dev)?;
+
+        let dequantized =
+            ops::fp8_blockwise_dequantize(&weight, &scale, vec![block, block], DType::BF16)?;
+
+        // The old form, computed here: the same product, widened to f64 and narrowed back.
+        let w = weight.flatten_all()?.to_vec1::<F8E4M3>()?;
+        let s = scale.flatten_all()?.to_vec1::<f32>()?;
+        let mut expected = Vec::with_capacity(rows * cols);
+        for y in 0..rows {
+            for x in 0..cols {
+                let block_y = y / block;
+                let block_x = x / block;
+                let sc = s[block_y * grid_x + block_x];
+                expected
+                    .push(half::bf16::from_f64((w[y * cols + x].to_f32() * sc) as f64).to_bits());
+            }
+        }
+        let got = dequantized
+            .flatten_all()?
+            .to_vec1::<half::bf16>()?
+            .iter()
+            .map(|v| v.to_bits())
+            .collect::<Vec<_>>();
+        assert_eq!(got, expected, "the f32 and f64 forms must agree exactly");
         Ok(())
     }
 }

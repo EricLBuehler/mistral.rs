@@ -144,6 +144,16 @@ impl QuantMethod for UnquantLinear {
         // Batch matrix multiplication
         maybe_init_cublas_lt_wrapper(a.device().clone());
 
+        // Decode is a single row against a large weight and is bandwidth-bound; candle runs it
+        // at one core's bandwidth, so split the outputs across the pool.
+        if a.device().is_cpu() && crate::gemv_cpu::should_use_gemv(a, &self.w) {
+            let out = crate::gemv_cpu::gemv(a, &self.w)?;
+            return match self.b.as_ref() {
+                Some(b) => out.broadcast_add(b),
+                None => Ok(out),
+            };
+        }
+
         // Try custom GEMV for single-token decode (batch_size=1)
         #[cfg(feature = "cuda")]
         if crate::gemv::should_use_gemv(a, &self.w) {
@@ -274,30 +284,38 @@ impl QuantMethod for UnquantLinear {
             // Metal path: 5D input (b_size, seq_len, 1, 1, hidden_dim)
             &[b_size, seq_len, 1, 1, hidden_dim] => {
                 let (_b, _s, num_experts_per_tok) = indices.dims3()?;
-                // Flatten indices to select experts
                 let flat_indices = indices.reshape((b_size * seq_len * num_experts_per_tok,))?;
-
-                // Select expert weights: [b*s*k, out_features, in_features]
-                let selected_w = w.index_select(&flat_indices, 0)?;
 
                 // Reshape input: [b*s, hidden_dim]
                 let a_flat = a.reshape((b_size * seq_len, hidden_dim))?;
 
-                // For each token, we need to compute with each selected expert
-                // Broadcast a to match: [b*s, 1, hidden_dim] -> [b*s, k, hidden_dim]
-                let a_expanded = a_flat
-                    .unsqueeze(1)?
-                    .broadcast_as((b_size * seq_len, num_experts_per_tok, hidden_dim))?
-                    .reshape((b_size * seq_len * num_experts_per_tok, hidden_dim))?;
+                if let Some(result) = crate::moe_gather_cpu::gather_broadcast_rows(
+                    &a_flat,
+                    w,
+                    &flat_indices,
+                    out_features,
+                    num_experts_per_tok,
+                    self.w.dtype(),
+                )? {
+                    result.reshape((b_size, seq_len, num_experts_per_tok, out_features))
+                } else {
+                    // Select expert weights: [b*s*k, out_features, in_features]
+                    let selected_w = w.index_select(&flat_indices, 0)?;
 
-                // Matmul: [b*s*k, hidden_dim] @ [b*s*k, hidden_dim, out_features] -> [b*s*k, out_features]
-                let result = a_expanded
-                    .unsqueeze(1)?
-                    .matmul(&selected_w.transpose(1, 2)?)?
-                    .squeeze(1)?;
+                    // For each token, we need to compute with each selected expert
+                    // Broadcast a to match: [b*s, 1, hidden_dim] -> [b*s, k, hidden_dim]
+                    let a_expanded = a_flat
+                        .unsqueeze(1)?
+                        .broadcast_as((b_size * seq_len, num_experts_per_tok, hidden_dim))?
+                        .reshape((b_size * seq_len * num_experts_per_tok, hidden_dim))?;
 
-                // Reshape back to [b, s, k, out_features]
-                result.reshape((b_size, seq_len, num_experts_per_tok, out_features))
+                    // Matmul: [b*s*k, hidden_dim] @ [b*s*k, hidden_dim, out_features] -> [b*s*k, out_features]
+                    a_expanded
+                        .unsqueeze(1)?
+                        .matmul(&selected_w.transpose(1, 2)?)?
+                        .squeeze(1)?
+                        .reshape((b_size, seq_len, num_experts_per_tok, out_features))
+                }
             }
             // CUDA path: 3D input (num_tokens, 1, hidden_dim)
             &[num_tokens, 1, hidden_dim] => {

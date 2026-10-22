@@ -456,7 +456,21 @@ impl Sdpa {
             let v = v.transpose(1, 2)?;
 
             if q.device().is_cpu() {
-                return run_flash_attn_cpu_for_dtype(&q, &k, &v, None, sdpa_params);
+                // The CPU kernel takes no causal flag: with no mask it scores every query
+                // against every key (`row_end` defaults to `kv_len`), so a causal mask has to
+                // be materialised here or prefill silently becomes bidirectional. It collapses
+                // to a per-row range inside the kernel, so the cost is one O(n^2) f32 mask
+                // rather than an O(n^2) read on the hot path.
+                let causal = matches!(mask, AttentionMask::CausalFlash) || do_causal;
+                let cpu_mask = eager_attention_mask(
+                    q.dim(2)?,
+                    k.dim(2)?,
+                    causal,
+                    sdpa_params.sliding_window,
+                    q.dtype(),
+                    q.device(),
+                )?;
+                return run_flash_attn_cpu_for_dtype(&q, &k, &v, cpu_mask.as_ref(), sdpa_params);
             } else {
                 return flash_attn(&q, &k, &v, flash_params, sdpa_params)?.transpose(1, 2);
             }
