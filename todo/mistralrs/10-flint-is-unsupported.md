@@ -57,7 +57,9 @@ shared experts instead of one, and a renormalised router without the expert bias
 3. **The tokenizer.** The GGUF carries `tokenizer.ggml.pre = "flint"`. Upstream llama.cpp
    has a `LLAMA_VOCAB_PRE_TYPE_FLINT` with its own regex (it splits `\p{N}{1,3}` and adds a
    CJK range, and sets `clean_spaces = false`). We have a `BpePreTokenizerKind` per family
-   already, so this is one more variant of the Kolibri-1 one.
+   already, so this is one more variant of the Kolibri-1 one. The K-quant build's tokenizer
+   is a `gpt2` BPE with 150,144 tokens and merges present, `add_bos_token = 0`,
+   `add_eos_token = 0`, `bos_token_id = 150000`, `eos_token_id = 150001`.
 
 4. **The dense lead.** `leading_dense_block_count = 2` and `mlp_only_layers = [0, 1]`.
    Kolibri-1 has none, so the layer loop has to branch on it.
@@ -99,6 +101,27 @@ So the fp8 Flint checkpoint is a **drop-in for the fast path we already built**:
 gather, the dense-weight cache, and the expert residency cache all apply unchanged. That is
 the interesting part: Flint is the first model that exercises them on a checkpoint we did
 not build them for.
+
+## Evidence
+
+Both GGUFs on the box verify against their `.sha256`:
+
+```
+OK   flint-preview-UD-IQ1_M.gguf
+OK   flint-preview-UD-Q4_K_XL.gguf
+```
+
+The registry rejects the architecture by name, not by accident of a missing tensor:
+
+```
+$ ./target/release/mistralrs run -f flint-preview-UD-Q4_K_XL.gguf -i "hello"
+Error: Unknown normal-model GGUF architecture `flint`
+```
+
+The K-quant build's tensor mix, read from the GGUF header without downloading the weights:
+`Q4_K` 412, `Q6_K` 74, `F32` 293. The Q4_K_XL on the box is `IQ3_S` for
+`ffn_gate_exps` and `ffn_up_exps`, `Q5_K` for `ffn_down_exps`, `Q8_0` for the attention
+projections and the dense FFNs, `BF16` for `ffn_gate_inp`, `F32` for the norms.
 
 ## Why this is worth doing
 
