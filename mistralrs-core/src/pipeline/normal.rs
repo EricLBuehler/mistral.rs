@@ -159,6 +159,7 @@ pub(crate) struct NormalPipelineBuildArgs<'a> {
     pub source_weight_files: Vec<PathBuf>,
     pub source_weight_source: Option<Arc<dyn mistralrs_quant::QuantizedWeightSource>>,
     pub dynamic_lora: Option<Arc<DynamicLoraRuntime>>,
+    pub eog_tokens: Vec<String>,
 }
 
 pub(crate) fn build_normal_pipeline(
@@ -186,6 +187,7 @@ pub(crate) fn build_normal_pipeline(
         source_weight_files,
         source_weight_source,
         dynamic_lora,
+        eog_tokens,
     } = args;
 
     let model_metadata =
@@ -280,7 +282,12 @@ pub(crate) fn build_normal_pipeline(
     let generation_defaults = generation_config
         .as_ref()
         .and_then(GenerationConfig::generation_defaults);
-    let eos = calculate_eos_tokens(&chat_template, generation_config.as_ref(), &tokenizer);
+    let eos = calculate_eos_tokens(
+        &chat_template,
+        generation_config.as_ref(),
+        &tokenizer,
+        &eog_tokens,
+    );
     let sliding_window = model.config().sliding_window;
 
     Ok(Arc::new(Mutex::new(NormalPipeline {
@@ -378,6 +385,7 @@ pub(crate) struct PreparedNormalSource {
     pub bos_token: Option<String>,
     pub eos_token: Option<String>,
     pub unk_token: Option<String>,
+    pub eog_tokens: Vec<String>,
     pub source_weight_files: Vec<PathBuf>,
     pub rope_pairing: crate::gguf::normal_registry::RopePairing,
 }
@@ -1547,6 +1555,11 @@ impl Loader for NormalLoader {
             source_weight_files,
             source_weight_source: weight_source,
             dynamic_lora,
+            eog_tokens: self
+                .prepared_source
+                .as_ref()
+                .map(|source| source.eog_tokens.clone())
+                .unwrap_or_default(),
         })
     }
 

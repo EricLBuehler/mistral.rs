@@ -73,6 +73,9 @@ pub(crate) struct GgufTokenizerConversion {
     pub bos: Option<String>,
     pub eos: Option<String>,
     pub unk: Option<String>,
+    /// Every `tokenizer.ggml.eog_token_ids` entry, decoded. A GGUF names more than one token
+    /// that ends a turn, and the single `eos_token_id` is not the whole set.
+    pub eog_tokens: Vec<String>,
 }
 
 struct GgufTokenizerMetadata {
@@ -121,6 +124,31 @@ impl GgufTokenizerMetadata {
     }
 }
 
+fn gguf_value_u32(value: &Value) -> Option<u32> {
+    match value {
+        Value::U8(v) => Some(u32::from(*v)),
+        Value::U16(v) => Some(u32::from(*v)),
+        Value::U32(v) => Some(*v),
+        Value::I8(v) => u32::try_from(*v).ok(),
+        Value::I16(v) => u32::try_from(*v).ok(),
+        Value::I32(v) => u32::try_from(*v).ok(),
+        Value::U64(v) => u32::try_from(*v).ok(),
+        Value::I64(v) => u32::try_from(*v).ok(),
+        _ => None,
+    }
+}
+
+/// Every `tokenizer.ggml.eog_token_ids` entry, decoded. A GGUF names more than one token
+/// that ends a turn, and the single `eos_token_id` is not the whole set.
+fn eog_tokens_from(values: &HashMap<String, Value>, tokens: &[String]) -> Vec<String> {
+    let Some(Value::Array(ids)) = values.get("tokenizer.ggml.eog_token_ids") else {
+        return Vec::new();
+    };
+    ids.iter()
+        .filter_map(|id| gguf_value_u32(id).and_then(|id| tokens.get(id as usize).cloned()))
+        .collect()
+}
+
 pub(crate) fn validate_external_gguf_tokenizer(
     tokenizer: Tokenizer,
     values: &HashMap<String, Value>,
@@ -145,6 +173,7 @@ pub(crate) fn validate_external_gguf_tokenizer(
         bos: metadata.token(metadata.bos),
         eos: metadata.token(metadata.eos),
         unk: metadata.token(metadata.unk),
+        eog_tokens: eog_tokens_from(values, &metadata.tokens),
     })
 }
 
@@ -282,6 +311,7 @@ pub(crate) fn convert_gguf_metadata_to_hf_tokenizer(
         bos,
         eos: Some(props.tokens[props.eos as usize].clone()),
         unk,
+        eog_tokens: eog_tokens_from(values, &props.tokens),
     })
 }
 
