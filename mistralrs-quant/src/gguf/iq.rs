@@ -842,6 +842,11 @@ impl IqGgufMatMul {
         } else {
             self.w.dequantize(device)?
         };
+        // One row is a GEMV, and the dense f32 matmul behind it runs on one thread. Dequantised
+        // once a tensor, these weights are read every token, so the row split is what pays.
+        if crate::gemv_cpu::should_use_gemv(a, &cached) {
+            return crate::gemv_cpu::gemv(a, &cached);
+        }
         let w = match *a.dims() {
             [b1, b2, _, _] => cached.broadcast_left((b1, b2))?.t()?,
             [bsize, _, _] => cached.broadcast_left(bsize)?.t()?,
