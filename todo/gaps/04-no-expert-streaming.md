@@ -619,6 +619,10 @@ load average ~519 from another agent's tests, CPUs 86-94% idle):
 | Flint IQ1_M | 0.46 tok/s | 9.8 GiB |
 | Flint Q4_K_M | 9.39 tok/s | 66.8 GiB |
 
+The IQ gather is 71% of a token (505 ms of 714), and the fused dequant-and-GEMV that reads the
+blocks straight into the dot takes it to 388 ms, so the token to 570 (1.75 tok/s). It stays
+opt-in because its summation order is not the two-step path's last bit.
+
 Two things follow. The IQ route keeps the checkpoint in the mapping and pays 20x on decode,
 because it decodes 882M values per token serially; the K-quant route is fast but resident
 about twice over (the file mapped *and* copied by candle's `QTensor`) plus its f32 dense

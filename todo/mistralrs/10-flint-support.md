@@ -132,6 +132,27 @@ through the mapping and peaks at 9.8 GiB, while the K-quant route is resident ab
 over - the 24.17 GB file mapped and copied by candle's `QTensor` - plus its f32 dense caches,
 which is 66.8 GiB for the same 49 layers. Both cells answered `Paris` and both stopped.
 
+### Where the token goes, and the fused gather
+
+Two numbers, both in-model, same prompt and same minute (`MISTRALRS_IQ_GATHER_STATS=1` counts
+the gathers; three projections over 49 layers is 147 of them a token):
+
+| | gather, ms a call | gather, ms a token | token | decode |
+|---|---|---|---|---|
+| two-step, default | 3.44 | 505 | 714 ms | 1.40 tok/s |
+| fused, opt-in | 2.64 | 388 | 570 ms | 1.75 tok/s |
+
+So the gather is 71% of a token and the fused path is 1.30x on it. Two things this corrected:
+the ignored test's isolated numbers (7.29 ms against 3.48) flatter the fused path because a
+test binary never installs candle's barrier pool, so its parallel sections run short; and a
+320-token A/B on the same binary read 1.08 against 1.11 tok/s, which is the box moving under
+the arms, not the change. The instrumented pair is the one to trust because the two arms were
+measured seconds apart with the same request.
+
+What is left is decode compute, not bandwidth: 2.64 ms for 6.3M values is 2.4 G values/s over
+16 threads, about 150M a thread. Vectorising the IQ block decoders is the next lever, and it
+does not disturb any of this.
+
 One usability note: with `MemAvailable` under the model's estimated size, auto device
 mapping refuses the load ("does not fit on the devices ... exceeds total capacity by
 20974MB") because the estimate is computed against host-wide free memory. `-n 0:49` (all 49
@@ -177,11 +198,13 @@ an IQ dtype, and everything above it keeps using `QuantMethod`.
    reads them. The parallel decode is done and worth 2.9x; the measurement
    (`decode_and_gather_cost_of_one_token`, an ignored test) says what is left is traffic:
    5.20 ms to decode a layer's 18 slabs at 14.5 GB/s of f32 written, 2.17 ms of gemv reading
-   it back, so a token moves 7.4 GB through memory and the gather alone caps the model at
-   2.77 tok/s. The next fix is a fused dequant-and-GEMV that decodes a block into a register
-   buffer and dots it with the activation, taking the token's traffic from 7.4 GB to the
-   0.9 GB of block bytes. Until then the IQ route is a capability - the published files load
-   at all, in 9.8 GiB - not a speed.
+   it back, so a token moves 7.4 GB through memory. The fused dequant-and-GEMV is written and
+   takes that out; it is opt-in (`MISTRALRS_IQ_FUSED_GEMV=1`) because its accumulation order
+   differs from the two-step path in the last bits, and the default stays two-step until that
+   trade is decided. In the model it is worth 1.30x on the gather (3.44 ms a call against
+   2.64) and 714 ms a token against 570, so 1.40 against 1.75 tok/s on the same prompt, back
+   to back. Until a decision the IQ route is a capability - the published files load at all,
+   in 9.8 GiB - not a speed.
 2. **The fp8 route.** `HawkBearPig/flint-FP8-BF16` uses the same blockwise fp8 recipe and the
    same per-expert tensor names as Kolibri-1, but its `config.json` declares
    `quant_method: "dgpp_mixed"`, which `QuantizedConfig` does not parse. That is the next
