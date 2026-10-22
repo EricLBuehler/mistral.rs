@@ -263,3 +263,23 @@ What is left, in order: the routed gather 62 ms (IQ2_S, IQ1_S and IQ3_XXS still 
 45 ms (f32 streaming, so a bf16 cache would halve it at the cost of rounding the dequantised
 weights), and `attention` 39 ms for a 40-token context, which is 0.8 ms a layer and out of
 line with the 5 MB of KV that is actually read.
+
+### What perf adds, and what it cannot say
+
+`perf record -p <pid>` fails on the server with "Failure to open any events" and a hint about
+the fd limit: without `--per-thread` it wants an event per thread per CPU, and 83 threads times
+128 CPUs is over the 4096 soft limit. `perf record --per-thread -p <pid>` works, and callchains
+come out of DWARF unwinding without debug info. Sched tracepoints are not available here
+("can't access trace events"), so off-CPU time cannot be attributed from perf at all.
+
+Of the on-CPU samples in a decode window: `dequantize_blocks` 16.7%, the dense IQ GEMV's
+`par_chunks` 17.3%, `vec_dot_8_q5kx8_q8k` 10.4%, `iq2_xxs_row_dot` 9.5%, the fused gather's
+`par_chunks` 4.4%, q6k 3.4%, `sdot_acc` 3.1%, q8_0 1.8%, and 24.9% in the barrier pool's idle
+spin. Nothing in the attention code reaches 0.1%.
+
+That last line is the loose end: `attention` is 30-55 ms of wall a step and almost no CPU. It
+also moved from 55 to 39 ms across a change that touched no attention code, and varies by half
+from run to run, so it reads as blocking on the pool rather than as work. Splitting the phase
+at `kv_cache.append` against `Sdpa.run_attention` is the next measurement, and it wants a quiet
+box: the same build measured 2.33 tok/s with `attn_proj` at 100 ms an hour later, when the box
+was loaded, so only adjacent cells are comparable.

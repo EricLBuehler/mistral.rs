@@ -1,10 +1,10 @@
 //! Per-phase decode timing.
 //!
-//! `perf` cannot attribute a CPU decode step on this host: the decode kernels run inside the
-//! barrier pool, and their frames inline into `call_trampoline`, so the interesting part of a
-//! step collapses into its caller. This splits a step into named phases instead, which is what
-//! makes an A/B readable - a change to one phase moves that phase's line rather than being
-//! lost in a 15% band around the total.
+//! `perf record --per-thread` does attribute these kernels, but its samples are CPU time: a
+//! step that blocks - a barrier wait, a page fault, a cache append - shows up nowhere, and a
+//! phase that spends 30 ms waiting looks free. This splits the wall clock of a step into named
+//! phases instead, which is what makes an A/B readable: a change to one phase moves that
+//! phase's line rather than being lost in a 15% band around the total.
 //!
 //! Off, entering a phase is one relaxed atomic load. On, it is that plus two clock reads.
 
