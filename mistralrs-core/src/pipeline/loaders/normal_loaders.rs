@@ -6734,6 +6734,21 @@ impl IsqModelLoader for Kolibri1Loader {
 }
 
 impl DeviceMappedModelLoader for Kolibri1Loader {
+    fn activation_model_config(&self, config: &str) -> Result<ActivationModelConfig> {
+        let cfg: crate::models::kolibri1::Config = serde_json::from_str(config)?;
+        Ok(ActivationModelConfig {
+            intermediate_size: cfg
+                .moe_intermediate_size
+                .max(cfg.shared_expert_intermediate_size),
+            vocab_size: cfg.vocab_size,
+            attention_features: Some(PrefixPrefillAttentionFeatures {
+                has_sliding_window: cfg.use_sliding_window,
+                ..Default::default()
+            }),
+            ..Default::default()
+        })
+    }
+
     fn mapped_max_act_size_elems(
         &self,
         config: &str,
