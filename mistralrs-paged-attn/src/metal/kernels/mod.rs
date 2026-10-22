@@ -33,6 +33,11 @@ const KERNELS: &[u8] = include_bytes!(concat!(
     env!("OUT_DIR"),
     "/mistralrs_paged_attention_tvos.metallib"
 ));
+#[cfg(target_os = "visionos")]
+const KERNELS: &[u8] = include_bytes!(concat!(
+    env!("OUT_DIR"),
+    "/mistralrs_paged_attention_visionos.metallib"
+));
 
 include!("source_set.rs");
 
