@@ -149,8 +149,12 @@ an IQ dtype, and everything above it keeps using `QuantMethod`.
 
 1. **The IQ rate.** It runs and it is right, but 0.32 tok/s under a 6x-contended node says
    nothing about the decode rate. On a quiet box the number to beat is the K-quant's 10.08.
-   The per-expert gather decodes each routed expert per token; whether that or the box sets
-   the rate is a measurement, not an argument.
+   The arithmetic says the gap is structural: 6 experts x 3 projections x 49 layers is 882
+   slabs of 1M values, so a token decodes 882M IQ values into 3.5 GB of f32 before the GEMV
+   reads them. That is a memory-bandwidth floor well under 1 tok/s on this box whatever the
+   threads do, and the fix is not a faster dequantiser but a fused dequant-and-GEMV that
+   never materialises the slab. Until then the IQ route is a capability (the published files
+   load at all), not a speed.
 2. **The fp8 route.** `HawkBearPig/flint-FP8-BF16` uses the same blockwise fp8 recipe and the
    same per-expert tensor names as Kolibri-1, but its `config.json` declares
    `quant_method: "dgpp_mixed"`, which `QuantizedConfig` does not parse. That is the next
