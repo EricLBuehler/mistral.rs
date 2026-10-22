@@ -16,7 +16,7 @@ curl http://localhost:1234/v1/chat/completions -H "Content-Type: application/jso
 }'
 ```
 
-Fields a request leaves unset fall back to the model's `generation_config.json` (temperature, top-k, top-p, min-p, repetition penalty). Without such defaults the engine samples at temperature 1.0 with no filters. Send `temperature: 0` (or `top_k: 1`) for greedy decoding.
+Fields a request leaves unset fall back to the model's `generation_config.json` (temperature, top-k, top-p, min-p, repetition penalty). A GGUF model with no `generation_config.json` instead falls back to the sampling keys in its own metadata: `general.sampling.temp`, `general.sampling.top_k`, `general.sampling.top_p`, `general.sampling.min_p`, and `general.sampling.penalty_repeat` (the repetition penalty). A `generation_config.json` takes precedence when both exist. Without such defaults the engine samples at temperature 1.0 with no filters. Send `temperature: 0` (or `top_k: 1`) for greedy decoding.
 
 ## Application order
 
@@ -78,7 +78,7 @@ Interactive mode (`mistralrs run`) exposes slash commands that persist for the r
 /topp 0.9           set top-p, in (0.0, 1.0]
 ```
 
-Until overridden, interactive mode seeds its sampling from the model's `generation_config.json` when present, else temperature 0.8, top-k 40, top-p 0.95, min-p 0.05.
+Until overridden, interactive mode seeds its sampling from the model's `generation_config.json` or GGUF sampling metadata when present, else temperature 0.8, top-k 40, top-p 0.95, min-p 0.05.
 
 </TabItem>
 <TabItem label="HTTP">

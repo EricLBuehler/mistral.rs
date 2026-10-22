@@ -101,7 +101,8 @@ let model = GgufModelBuilder::new(
 ## Model assets and projectors
 
 For text models, mistral.rs reads the tokenizer and chat template from the GGUF when they are
-available. It also uses the selected repository or the file's base-model information to find
+available. Model sampling defaults declared under `general.sampling.*` are used when the repository
+has no `generation_config.json`; see [Sampling](/guides/customize/sampling/). It also uses the selected repository or the file's base-model information to find
 configuration and processor files when the model needs them.
 
 For supported multimodal GGUF repositories, mistral.rs selects a compatible companion projector,
