@@ -83,7 +83,7 @@ struct block_q8_1_mmq {
     // The exact data stored depends on the x data type.
     union {
         float d4[4];    // 1 32 bit scale per 32 values, stored as d0,d1,d2,d3
-        half2 ds4[4];   // 1 16 bit scale + 1 16 bit partial sum per 32 values, stored as d0,s0,d1,s1,d2,s2,d3,s3
+        half2 ds4[4];   // A negative scale marks a normalized partial sum; see mmq_encode_ds4.
         half  d2s6[8];  // 1 16 bit scale per 64 values + 1 16 bit partial sum per 16 values for the first 96 values,
                         //     stored as d0,d1,s1,s2,s3,s4,s5
     };
@@ -1010,7 +1010,7 @@ static __device__ __forceinline__ void vec_dot_q8_0_q8_1_mma(
             if (ds_layout == MMQ_Q8_1_DS_LAYOUT_D4) {
                 dB = y_df[j*MMQ_TILE_Y_K + k01/QI8_1];
             } else {
-                dB = __low2float(y_ds[j*MMQ_TILE_Y_K + k01/QI8_1]);
+                dB = fabsf(__low2float(y_ds[j*MMQ_TILE_Y_K + k01/QI8_1]));
             }
 
 #pragma unroll
@@ -1087,7 +1087,7 @@ static __device__ __forceinline__ void vec_dot_q8_0_q8_1_mma(
                 if (ds_layout == MMQ_Q8_1_DS_LAYOUT_D4) {
                     dB[l] =             y_df[j*MMQ_TILE_Y_K + k01/QI8_1];
                 } else {
-                    dB[l] = __low2float(y_ds[j*MMQ_TILE_Y_K + k01/QI8_1]);
+                    dB[l] = fabsf(__low2float(y_ds[j*MMQ_TILE_Y_K + k01/QI8_1]));
                 }
             }
 
@@ -1247,7 +1247,7 @@ static __device__ __forceinline__ void vec_dot_q8_1_q8_1_mma(
             load_generic(B, y_qs + j0*MMQ_TILE_Y_K + k01, MMQ_TILE_Y_K);
 
             const int j = j0 + tile_C::get_j(0);
-            const float2 dsB = __half22float2(y_dm[j*MMQ_TILE_Y_K + k01/QI8_1]);
+            const float2 dsB = mmq_decode_ds4(y_dm[j*MMQ_TILE_Y_K + k01/QI8_1]);
 
 #pragma unroll
             for (int n = 0; n < ntx; ++n) {
@@ -1320,7 +1320,7 @@ static __device__ __forceinline__ void vec_dot_q8_1_q8_1_mma(
             for (int l = 0; l < tile_C::ne/2; ++l) {
                 const int j = j0 + tile_C::get_j(l);
 
-                dsB[l] = __half22float2(y_dm[j*MMQ_TILE_Y_K + k01/QI8_1]);
+                dsB[l] = mmq_decode_ds4(y_dm[j*MMQ_TILE_Y_K + k01/QI8_1]);
             }
 
 #pragma unroll

@@ -5,6 +5,7 @@
 
 pub(crate) mod atem;
 mod deepseek;
+pub(crate) mod flint;
 mod gemma4;
 mod gemma4_strict;
 pub(crate) mod harmony;
@@ -22,6 +23,10 @@ use crate::Tool;
 const REQUIRED_TOOL_CALL_CONTROL_TOKENS: &[&str] = &[
     "<tool_call>",
     "</tool_call>",
+    "<arg_key>",
+    "</arg_key>",
+    "<arg_value>",
+    "</arg_value>",
     "<|python_tag|>",
     "[TOOL_CALLS]",
     "<tool_calls>",
@@ -35,6 +40,8 @@ const REQUIRED_TOOL_CALL_CONTROL_TOKENS: &[&str] = &[
 /// can be constructed for mid-stream constrained decoding.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ToolCallFormat {
+    /// `<tool_call>NAME<arg_key>KEY</arg_key><arg_value>VALUE</arg_value></tool_call>`
+    Flint,
     /// Muse Glimmer ATEM recipient message with XML-like function markup.
     Atem,
     /// `<tool_call>{"name":"...","arguments":{...}}</tool_call>`
@@ -102,6 +109,7 @@ static PARSERS: std::sync::LazyLock<Vec<Box<dyn ToolFormatParser>>> =
             Box::new(gemma4::Gemma4Parser),
             Box::new(liquid::LiquidParser),
             Box::new(llama::LlamaParser),
+            Box::new(flint::FlintParser),
             Box::new(qwen::QwenParser),
             Box::new(hunyuan::HunyuanParser),
             Box::new(mistral_nemo::MistralNemoParser),
@@ -130,6 +138,19 @@ pub fn build_tool_call_grammar(text: &str, tools: &[Tool]) -> Option<TopLevelGra
         }
     }
     None
+}
+
+pub fn build_tool_call_grammar_with_format(
+    text: &str,
+    tools: &[Tool],
+    format: Option<ToolCallFormat>,
+) -> Option<TopLevelGrammar> {
+    if format == Some(ToolCallFormat::Flint) {
+        return text
+            .ends_with(flint::TOOL_CALL_OPEN)
+            .then(|| flint::FlintParser.tool_call_grammar(tools, text));
+    }
+    build_tool_call_grammar(text, tools)
 }
 
 pub fn build_required_tool_call_grammar(
@@ -193,7 +214,9 @@ pub fn extract_model_specific_message(message: &str) -> Result<Option<(String, S
 
 fn strip_tool_call_segments(message: &str, format: ToolCallFormat) -> String {
     match format {
-        ToolCallFormat::Qwen => strip_delimited_segments(message, "<tool_call>", "</tool_call>"),
+        ToolCallFormat::Qwen | ToolCallFormat::Flint => {
+            strip_delimited_segments(message, "<tool_call>", "</tool_call>")
+        }
         ToolCallFormat::Gemma4 => strip_delimited_segments(message, "<|tool_call>", "<tool_call|>"),
         ToolCallFormat::DeepSeek => {
             strip_delimited_segments(message, "<｜tool▁call▁begin｜>", "<｜tool▁call▁end｜>")

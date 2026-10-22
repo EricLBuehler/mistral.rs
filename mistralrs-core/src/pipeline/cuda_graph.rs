@@ -154,7 +154,9 @@ impl CudaGraphCaptureMemory<'_> {
                     !DecodePlan::requires_host_context_lengths(
                         model.attention_backend_kind_for_layer(layer),
                         model.k_head_dim_for_layer(layer),
-                    ) && (flashinfer || !features.has_sliding_window)
+                        model.sliding_window_for_layer(layer).is_some()
+                            || features.has_sliding_window,
+                    )
                 });
                 if flashinfer {
                     flashinfer_heads = flashinfer_heads.max(model.num_attn_heads_for_layer(layer));
@@ -2722,24 +2724,16 @@ pub(crate) fn cuda_decode_graph_supported_for_model(
     let Some(metadata) = model_metadata else {
         return false;
     };
-    #[cfg(target_family = "unix")]
-    {
-        (0..metadata.num_layers()).all(|layer_idx| {
-            !DecodePlan::requires_host_context_lengths(
-                metadata.attention_backend_kind_for_layer(layer_idx),
-                metadata.k_head_dim_for_layer(layer_idx),
-            )
-        })
-    }
-    #[cfg(not(target_family = "unix"))]
-    {
-        (0..metadata.num_layers()).all(|layer_idx| {
-            !matches!(
-                metadata.attention_backend_kind_for_layer(layer_idx),
-                AttentionBackendKind::FlashInfer
-            )
-        })
-    }
+    (0..metadata.num_layers()).all(|layer_idx| {
+        !DecodePlan::requires_host_context_lengths(
+            metadata.attention_backend_kind_for_layer(layer_idx),
+            metadata.k_head_dim_for_layer(layer_idx),
+            metadata.sliding_window_for_layer(layer_idx).is_some()
+                || metadata
+                    .prefix_prefill_attention_features(layer_idx)
+                    .is_some_and(|features| features.has_sliding_window),
+        )
+    })
 }
 
 #[must_use]
@@ -4028,6 +4022,44 @@ fn copy_rope_positions(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn decode_graphs_reject_standard_sliding_attention_host_lengths() {
+        use crate::paged_attention::{
+            HybridPagedKvCacheConfig, KvCacheLayout, ModelConfigMetadata,
+            PrefixPrefillAttentionFeatures,
+        };
+
+        let mut config = ModelConfigMetadata {
+            max_seq_len: 4096,
+            num_layers: 2,
+            hidden_size: 2048,
+            num_kv_heads: 4,
+            num_attn_heads: 32,
+            sliding_window: None,
+            k_head_dim: 128,
+            v_head_dim: 128,
+            kv_cache_layout: KvCacheLayout::StandardNoFlashInfer,
+        };
+        assert!(cuda_decode_graph_supported_for_model(Some(&config)));
+        config.sliding_window = Some(513);
+        assert!(!cuda_decode_graph_supported_for_model(Some(&config)));
+
+        config.sliding_window = None;
+        let mixed = HybridPagedKvCacheConfig::new(config, vec![true, true])
+            .with_prefix_prefill_attention_features(vec![
+                PrefixPrefillAttentionFeatures {
+                    has_sinks: true,
+                    ..Default::default()
+                },
+                PrefixPrefillAttentionFeatures {
+                    has_sinks: true,
+                    has_sliding_window: true,
+                    ..Default::default()
+                },
+            ]);
+        assert!(!cuda_decode_graph_supported_for_model(Some(&mixed)));
+    }
 
     fn spec_usage(bytes: &[(usize, usize)]) -> CudaGraphSpecStateUsage {
         CudaGraphSpecStateUsage {

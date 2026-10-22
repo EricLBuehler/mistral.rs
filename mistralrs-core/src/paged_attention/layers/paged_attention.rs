@@ -12,6 +12,9 @@ use mistralrs_paged_attn::{metal_paged_prefill, MetalPagedPrefillRequest, MetalP
 use mistralrs_paged_attn::{paged_attention, reshape_and_cache};
 
 #[cfg(all(feature = "cuda", target_family = "unix"))]
+use crate::paged_attention::plan::gather_prefill_uses_sinks;
+
+#[cfg(all(feature = "cuda", target_family = "unix"))]
 use crate::attention::sliding_window_left;
 #[cfg(all(feature = "cuda", target_family = "unix"))]
 use crate::flashinfer::{
@@ -1563,7 +1566,8 @@ impl PagedAttention {
             q_heads: ctx.dims.attention_heads,
             kv_heads: ctx.dims.key_value_heads,
             writes_cache: write_cache,
-            is_causal: prefix_causal,
+            is_causal: prefix_causal
+                || ctx.sdpa_params.sinks.is_some() && query_lens.iter().all(|&len| len == 1),
             has_noncausal_mm_context: mm_prefix_ranges.is_some(),
             fa3_supported,
             block_size,
@@ -1662,6 +1666,43 @@ impl PagedAttention {
             num_kv_tokens,
             tensors.query.dtype(),
         )?;
+        #[cfg(all(feature = "cuda", target_family = "unix"))]
+        if gather_prefill_uses_sinks(prefill_plan_input) && v_gathered.dim(2)? == ctx.dims.head_size
+        {
+            let cu_q = match ctx.input_metadata.cu_seqlens_q.as_ref() {
+                Some(offsets) => resolve_tensor_for_device(offsets, device, "cu_seqlens_q")?,
+                None => cumulative_seqlens_from_lengths(&query_lens, device)?,
+            };
+            let sinks = ctx.sdpa_params.sinks.as_ref();
+            let window = ctx.sdpa_params.sliding_window.unwrap_or(0);
+            let output = if ctx.dims.batch_size == 1 && query_lens.len() > 1 {
+                mistralrs_paged_attn::flash_attn_sinks_varlen_packed(
+                    &tensors.query.squeeze(0)?.transpose(0, 1)?,
+                    &k_gathered,
+                    &v_gathered,
+                    sinks,
+                    &cu_q,
+                    &cu_kv,
+                    query_lens.iter().copied().max().unwrap(),
+                    ctx.sdpa_params.softmax_scale,
+                    window,
+                )?
+                .transpose(0, 1)?
+                .unsqueeze(0)?
+            } else {
+                mistralrs_paged_attn::flash_attn_sinks_varlen(
+                    tensors.query,
+                    &k_gathered,
+                    &v_gathered,
+                    sinks,
+                    &cu_q,
+                    &cu_kv,
+                    ctx.sdpa_params.softmax_scale,
+                    window,
+                )?
+            };
+            return prefix_attention_output_layout(output, tensors.attention_mask).map(Some);
+        }
         let max_kv = kv_lens.iter().copied().max().unwrap_or(0);
         // Pure-causal prefix prefills run flash varlen over the gathered KV: fa2 aligns causal
         // bottom-right when kv_len > q_len, so no O(q*kv) mask or score materialization is needed.
@@ -1716,6 +1757,7 @@ impl PagedAttention {
         let dense_flash_causal = query_layout_is_dense
             && mm_prefix_ranges.is_none()
             && tensors.query.device().is_cuda()
+            && (ctx.sdpa_params.sinks.is_none() || ctx.dims.batch_size > 1)
             && supports_packed_varlen_sdpa(tensors.query, ctx.dims.head_size, ctx.sdpa_params);
         if should_use_packed_prefix_mask(
             ctx.flash_params.is_some_and(|params| params.packed),
@@ -1736,14 +1778,25 @@ impl PagedAttention {
             )?;
             let k_4d = k_gathered.unsqueeze(0)?.transpose(1, 2)?;
             let v_4d = v_gathered.unsqueeze(0)?.transpose(1, 2)?;
-            let output = Sdpa.run_attention_noflash(
-                tensors.query,
-                &k_4d,
-                &v_4d,
-                Some(&mask),
-                ctx.sdpa_params,
-                false,
-            )?;
+            let output = if ctx.sdpa_params.sinks.is_some() {
+                Sdpa.run_attention(
+                    tensors.query,
+                    &k_4d,
+                    &v_4d,
+                    &AttentionMask::Custom(mask),
+                    None,
+                    ctx.sdpa_params,
+                )?
+            } else {
+                Sdpa.run_attention_noflash(
+                    tensors.query,
+                    &k_4d,
+                    &v_4d,
+                    Some(&mask),
+                    ctx.sdpa_params,
+                    false,
+                )?
+            };
             return prefix_attention_output_layout(output, tensors.attention_mask).map(Some);
         }
         let adjusted_mask = match tensors.attention_mask {
@@ -1826,14 +1879,25 @@ impl PagedAttention {
                 varlen_segment_lens: None,
             };
             if simple_full_causal {
-                let output = Sdpa.run_attention_noflash(
-                    tensors.query,
-                    &k_4d,
-                    &v_4d,
-                    None,
-                    ctx.sdpa_params,
-                    prefix_flash_params.causal,
-                )?;
+                let output = if ctx.sdpa_params.sinks.is_some() {
+                    Sdpa.run_attention(
+                        tensors.query,
+                        &k_4d,
+                        &v_4d,
+                        &AttentionMask::None,
+                        None,
+                        ctx.sdpa_params,
+                    )?
+                } else {
+                    Sdpa.run_attention_noflash(
+                        tensors.query,
+                        &k_4d,
+                        &v_4d,
+                        None,
+                        ctx.sdpa_params,
+                        prefix_flash_params.causal,
+                    )?
+                };
                 return prefix_attention_output_layout(output, tensors.attention_mask).map(Some);
             }
             let output = Sdpa.run_attention(
@@ -2032,6 +2096,7 @@ impl PagedAttention {
 
         let att = if ctx.flash_params.is_some_and(|params| params.packed)
             && ctx.sdpa_params.sinks.is_some()
+            && !tensors.query.device().is_cuda()
         {
             let query_lens = ctx.input_metadata.query_lens.as_deref().ok_or_else(|| {
                 candle_core::Error::msg("packed sinks prefill is missing logical query lengths")
@@ -3786,6 +3851,216 @@ mod tests {
             vec![0.0, 0.0, 0.0, 0.0, f32::NEG_INFINITY, f32::NEG_INFINITY]
         );
         assert_eq!(mask[3], vec![0.0; 6]);
+    }
+}
+
+#[cfg(all(test, feature = "cuda", target_family = "unix"))]
+mod sinks_cached_prefix_tests {
+    use super::*;
+
+    const QUERY_HEADS: usize = 4;
+    const KV_HEADS: usize = 2;
+    const HEAD_DIM: usize = 128;
+    const BLOCK_SIZE: usize = 32;
+    const SLIDING_WINDOW: usize = 3;
+    const BF16_TOLERANCE: f32 = 0.01;
+    const F32_TOLERANCE: f32 = 1e-5;
+    const QUERY_WORKSPACE_BUFFERS: usize = 4;
+
+    #[test]
+    fn cuda_fused_sinks_handles_cold_and_cached_packed_and_padded_chunks() -> Result<()> {
+        let device = Device::new_cuda(0)?;
+        let location = device.location();
+        let attention = PagedAttention::new(HEAD_DIM, &device, None)?;
+        for dtype in [DType::BF16, DType::F32] {
+            for (query_lens, kv_lens) in [
+                (vec![2usize], vec![5usize]),
+                (vec![2, 3], vec![5, 7]),
+                (vec![1, 1], vec![5, 7]),
+                (vec![2, 3], vec![2, 3]),
+            ] {
+                let cold = query_lens == kv_lens;
+                for packed in [false, true] {
+                    if cold && !packed {
+                        continue;
+                    }
+                    for sliding_window in [None, Some(SLIDING_WINDOW)] {
+                        let total_q = query_lens.iter().sum::<usize>();
+                        let sequences = query_lens.len();
+                        let max_q = *query_lens.iter().max().unwrap();
+                        let batch = if packed { 1 } else { sequences };
+                        let query_len = if packed { total_q } else { max_q };
+                        let query_rows = batch * query_len;
+                        let query = Tensor::zeros(
+                            (batch, QUERY_HEADS, query_len, HEAD_DIM),
+                            dtype,
+                            &device,
+                        )?;
+                        let key =
+                            Tensor::zeros((batch, KV_HEADS, query_len, HEAD_DIM), dtype, &device)?;
+                        let values = query_lens
+                            .iter()
+                            .enumerate()
+                            .flat_map(|(sequence, &len)| {
+                                let rows = if packed { len } else { max_q };
+                                std::iter::repeat_n(
+                                    (sequence + 1) as f32,
+                                    rows * KV_HEADS * HEAD_DIM,
+                                )
+                            })
+                            .collect::<Vec<_>>();
+                        let value = Tensor::from_vec(
+                            values,
+                            (batch, query_len, KV_HEADS, HEAD_DIM),
+                            &device,
+                        )?
+                        .to_dtype(dtype)?
+                        .transpose(1, 2)?;
+                        let cache_shape = (sequences, KV_HEADS, BLOCK_SIZE, HEAD_DIM);
+                        let key_cache = Tensor::zeros(cache_shape, dtype, &device)?;
+                        let values = (0..sequences)
+                            .flat_map(|sequence| {
+                                std::iter::repeat_n(
+                                    (sequence + 1) as f32,
+                                    KV_HEADS * BLOCK_SIZE * HEAD_DIM,
+                                )
+                            })
+                            .collect::<Vec<_>>();
+                        let value_cache =
+                            Tensor::from_vec(values, cache_shape, &device)?.to_dtype(dtype)?;
+                        let slots = query_lens
+                            .iter()
+                            .zip(&kv_lens)
+                            .enumerate()
+                            .flat_map(|(sequence, (&q, &kv))| {
+                                let rows = if packed { q } else { max_q };
+                                (0..rows).map(move |row| {
+                                    if row < q {
+                                        (sequence * BLOCK_SIZE + kv - q + row) as i64
+                                    } else {
+                                        _PAD_SLOT_ID
+                                    }
+                                })
+                            })
+                            .collect::<Vec<_>>();
+                        let cu_q = cumulative_seqlens_from_lengths(&query_lens, &device)?;
+                        let cu_kv = cumulative_seqlens_from_lengths(&kv_lens, &device)?;
+                        let mut metadata = PagedAttentionInputMetadata::dummy(&device)?;
+                        metadata.block_tables = Some(HashMap::from([(
+                            location,
+                            Tensor::from_vec(
+                                (0..sequences as u32).collect::<Vec<_>>(),
+                                (sequences, 1),
+                                &device,
+                            )?,
+                        )]));
+                        metadata.block_size = Some(BLOCK_SIZE);
+                        metadata.paged_context_lens_cpu = Some(kv_lens.clone());
+                        metadata.max_context_len = kv_lens.iter().copied().max();
+                        metadata.slot_mappings = HashMap::from([(
+                            location,
+                            Tensor::from_vec(slots, query_rows, &device)?,
+                        )]);
+                        let max_kv = *kv_lens.iter().max().unwrap();
+                        let kv_rows = kv_lens.iter().sum::<usize>().max(sequences * max_kv);
+                        let output_rows = total_q.max(sequences * max_q);
+                        metadata.prefix_gather_workspace_limit = Some(
+                            (2 * kv_rows * KV_HEADS * HEAD_DIM
+                                + QUERY_WORKSPACE_BUFFERS * output_rows * QUERY_HEADS * HEAD_DIM)
+                                * dtype.size_in_bytes()
+                                + QUERY_HEADS * DType::F32.size_in_bytes()
+                                + 2 * (sequences + 1) * DType::U32.size_in_bytes(),
+                        );
+                        metadata.is_first_prompt_chunk = cold;
+                        metadata.num_cached_tokens = (!cold).then(|| {
+                            kv_lens
+                                .iter()
+                                .zip(&query_lens)
+                                .map(|(kv, q)| kv - q)
+                                .collect()
+                        });
+                        metadata.query_lens = Some(query_lens.clone());
+                        metadata.cu_seqlens_q = Some(HashMap::from([(location, cu_q.clone())]));
+                        metadata.cu_seqlens_kv = Some(HashMap::from([(location, cu_kv)]));
+                        let mut flash = FlashParams::empty(true);
+                        flash.packed = packed;
+                        flash.max_q = *query_lens.iter().max().unwrap() as u32;
+                        flash.cumulative_seqlens_q = HashMap::from([(location, cu_q.clone())]);
+                        flash.logical_k = FlashKMeta {
+                            max: flash.max_q,
+                            cumulative_seqlens: HashMap::from([(location, cu_q)]),
+                        };
+                        let sinks = Tensor::full(std::f32::consts::LN_2, QUERY_HEADS, &device)?
+                            .to_dtype(dtype)?;
+                        let sink_mass = sinks.to_dtype(DType::F32)?.to_vec1::<f32>()?[0].exp();
+                        let params = SdpaParams {
+                            n_kv_groups: QUERY_HEADS / KV_HEADS,
+                            softmax_scale: 1. / (HEAD_DIM as f32).sqrt(),
+                            softcap: None,
+                            sliding_window,
+                            sinks: Some(sinks),
+                        };
+                        let output = attention.forward(
+                            &query,
+                            &key,
+                            &value,
+                            &AttentionMask::CausalFlash,
+                            Some(key_cache),
+                            Some(value_cache),
+                            &metadata,
+                            &params,
+                            Some(&flash),
+                        )?;
+                        let output = output
+                            .to_dtype(DType::F32)?
+                            .flatten_all()?
+                            .to_vec1::<f32>()?;
+                        let tolerance = if dtype == DType::BF16 {
+                            BF16_TOLERANCE
+                        } else {
+                            F32_TOLERANCE
+                        };
+                        for head in 0..QUERY_HEADS {
+                            let mut offset = 0;
+                            for (sequence, (&q, &kv)) in query_lens.iter().zip(&kv_lens).enumerate()
+                            {
+                                for token in 0..q {
+                                    let visible = kv - q + token + 1;
+                                    let visible = sliding_window
+                                        .map_or(visible, |window| visible.min(window));
+                                    let expected = (sequence + 1) as f32 * visible as f32
+                                        / (visible as f32 + sink_mass);
+                                    for dim in 0..HEAD_DIM {
+                                        let row = if packed {
+                                            head * total_q + offset + token
+                                        } else {
+                                            (sequence * QUERY_HEADS + head) * max_q + token
+                                        };
+                                        let actual = output[row * HEAD_DIM + dim];
+                                        assert!(
+                                        (actual - expected).abs() <= tolerance,
+                                        "{dtype:?} queries={query_lens:?} packed={packed} window={sliding_window:?} head={head} token={token}: {actual} vs {expected}"
+                                    );
+                                    }
+                                }
+                                if !packed {
+                                    for token in q..max_q {
+                                        let start = ((sequence * QUERY_HEADS + head) * max_q
+                                            + token)
+                                            * HEAD_DIM;
+                                        assert!(output[start..start + HEAD_DIM]
+                                            .iter()
+                                            .all(|&value| value == 0.));
+                                    }
+                                }
+                                offset += q;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        Ok(())
     }
 }
 

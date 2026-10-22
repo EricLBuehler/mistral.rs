@@ -192,7 +192,7 @@ quantize_mmq_q8_1(const input_t *__restrict__ x,
   const float d = 1.0f / d_inv;
 
   if (ds_layout == MMQ_Q8_1_DS_LAYOUT_DS4) {
-    y[ib].ds4[iqs / 32] = make_half2(d, sum);
+    y[ib].ds4[iqs / 32] = mmq_encode_ds4(d, sum);
   } else {
     y[ib].d4[iqs / 32] = d;
   }
@@ -318,7 +318,7 @@ static __global__ void quantize_mmq_q8_1_glu(
 
   const float d = 1.0f / d_inv;
   if (ds_layout == MMQ_Q8_1_DS_LAYOUT_DS4) {
-    y[ib].ds4[iqs / 32] = make_half2(d, sum);
+    y[ib].ds4[iqs / 32] = mmq_encode_ds4(d, sum);
   } else {
     y[ib].d4[iqs / 32] = d;
   }

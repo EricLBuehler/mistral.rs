@@ -552,6 +552,97 @@ mod tests {
         assert!(forward_workspace_bytes(Some(plan), text_shape(1, 0), usize::MAX, true).is_err());
     }
 
+    #[cfg(feature = "cuda")]
+    #[test]
+    fn flint_prompt_admission_uses_requested_context_instead_of_cache_capacity() -> Result<()> {
+        use crate::paged_attention::{
+            plan::{prompt_prefill_workspace, PromptPrefillWorkspaceInput},
+            KvCacheLayout, ModelConfigMetadata,
+        };
+
+        const MIB: usize = 1024 * 1024;
+        const GIB: usize = 1024 * MIB;
+        const FULL_ATTENTION_LAYERS: [usize; 14] =
+            [0, 1, 5, 9, 13, 17, 21, 25, 29, 33, 37, 41, 45, 48];
+        let model = crate::models::flint::ModelConfig::new(
+            ModelConfigMetadata {
+                max_seq_len: 262_144,
+                num_layers: 49,
+                hidden_size: 2048,
+                num_kv_heads: 4,
+                num_attn_heads: 32,
+                sliding_window: None,
+                k_head_dim: 128,
+                v_head_dim: 128,
+                kv_cache_layout: KvCacheLayout::Standard,
+            },
+            (0..49)
+                .map(|layer| (!FULL_ATTENTION_LAYERS.contains(&layer)).then_some(513))
+                .collect(),
+            true,
+        );
+        let plan = crate::memory_plan::RuntimeMemoryPlan {
+            primary_activation_bytes: 20 * GIB,
+            mapped_activation_bytes: 20 * GIB,
+            primary_non_attention_bytes: 256 * MIB,
+            mapped_non_attention_bytes: 256 * MIB,
+            planned_query_tokens: 4096,
+            logits_bytes_per_query_token: 150_144 * 6,
+            ..asymmetric_plan()
+        };
+        for (query_len, context_len, available, expected_action) in [
+            (1, 1, GIB, PromptBatchMemoryAction::Proceed),
+            (16, 16, GIB, PromptBatchMemoryAction::Proceed),
+            (512, 1024, GIB, PromptBatchMemoryAction::Proceed),
+            (512, 32_768, GIB, PromptBatchMemoryAction::Proceed),
+            (512, 32_768, 32 * MIB, PromptBatchMemoryAction::Reject),
+        ] {
+            let attention = prompt_prefill_workspace(
+                Some(&model),
+                PromptPrefillWorkspaceInput {
+                    activation_dtype: DType::BF16,
+                    cache_dtype: DType::BF16,
+                    device_is_cuda: true,
+                    device_is_metal: false,
+                    block_size: 32,
+                    query_lens: &[query_len],
+                    full_context_lens: &[context_len],
+                    max_pages_per_sequence: context_len.div_ceil(32),
+                    requires_prefix_attention: context_len > query_len,
+                    is_causal: true,
+                    causality_known: true,
+                    has_custom_mask: false,
+                    has_noncausal_mm_context: false,
+                    has_sliding_window: false,
+                    fa3_num_sm_by_layer: &[],
+                    hnd_by_layer: &[],
+                },
+            )?;
+            assert!(attention.attention_is_complete);
+            let shape = text_shape(query_len, 0);
+            let workspace = forward_workspace_bytes(
+                Some(plan),
+                shape,
+                attention.bytes,
+                attention.attention_is_complete,
+            )?;
+            assert_eq!(
+                prompt_batch_memory_action(1, workspace.primary > available),
+                expected_action,
+                "query {query_len}, context {context_len}, workspace {workspace}"
+            );
+            assert_eq!(
+                prompt_batch_memory_action(
+                    1,
+                    forward_workspace_bytes(Some(plan), shape, attention.bytes, false)?.primary
+                        > available,
+                ),
+                PromptBatchMemoryAction::Reject,
+            );
+        }
+        Ok(())
+    }
+
     #[test]
     fn arbitrary_custom_attention_preserves_additional_model_workspace() {
         let mut plan = asymmetric_plan();

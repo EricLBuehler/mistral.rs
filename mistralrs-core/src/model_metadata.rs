@@ -138,6 +138,11 @@ impl NormalLoaderType {
                 modalities: m,
                 examples: &[ex!("Qwen/Qwen3-30B-A3B")],
             },
+            Self::Flint => ArchMetadata {
+                families: &["Flint"],
+                modalities: m,
+                examples: &[ex!("RecursiveSI/flint")],
+            },
             Self::SmolLm3 => ArchMetadata {
                 families: &["SmolLM3"],
                 modalities: m,
@@ -405,6 +410,7 @@ impl NormalLoaderType {
             Self::GLM4MoeLite => "Glm4MoeLiteForCausalLM",
             Self::GLM4Moe => "Glm4MoeForCausalLM",
             Self::Qwen3Moe => "Qwen3MoeForCausalLM",
+            Self::Flint => "FlintForCausalLM",
             Self::SmolLm3 => "SmolLM3ForCausalLM",
             Self::GraniteMoeHybrid => "GraniteMoeHybridForCausalLM",
             Self::GptOss => "GptOssForCausalLM",

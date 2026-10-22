@@ -249,6 +249,8 @@ pub enum NormalLoaderType {
     GLM4Moe,
     #[serde(rename = "qwen3moe")]
     Qwen3Moe,
+    #[serde(rename = "flint")]
+    Flint,
     #[serde(rename = "smollm3")]
     SmolLm3,
     #[serde(rename = "granitemoehybrid")]
@@ -290,6 +292,7 @@ impl NormalLoaderType {
             Self::GLM4MoeLite => "Glm4MoeLiteForCausalLM",
             Self::GLM4Moe => "Glm4MoeForCausalLM",
             Self::Qwen3Moe => "Qwen3MoeForCausalLM",
+            Self::Flint => "FlintForCausalLM",
             Self::SmolLm3 => "SmolLM3ForCausalLM",
             Self::GraniteMoeHybrid => "GraniteMoeHybridForCausalLM",
             Self::GptOss => "GptOssForCausalLM",
@@ -321,6 +324,7 @@ impl NormalLoaderType {
             Self::GLM4MoeLite => "glm4_moe_lite",
             Self::GLM4Moe => "glm4_moe",
             Self::Qwen3Moe => "qwen3_moe",
+            Self::Flint => "flint",
             Self::SmolLm3 => "smollm3",
             Self::GraniteMoeHybrid => "granitemoehybrid",
             Self::GptOss => "gpt_oss",
@@ -352,6 +356,7 @@ impl NormalLoaderType {
             "Glm4MoeLiteForCausalLM" => Ok(Self::GLM4MoeLite),
             "Glm4MoeForCausalLM" => Ok(Self::GLM4Moe),
             "Qwen3MoeForCausalLM" => Ok(Self::Qwen3Moe),
+            "FlintForCausalLM" => Ok(Self::Flint),
             "SmolLM3ForCausalLM" => Ok(Self::SmolLm3),
             "GraniteMoeHybridForCausalLM" => Ok(Self::GraniteMoeHybrid),
             "GptOssForCausalLM" => Ok(Self::GptOss),
@@ -389,6 +394,7 @@ impl FromStr for NormalLoaderType {
             "glm4moelite" => Ok(Self::GLM4MoeLite),
             "glm4moe" => Ok(Self::GLM4Moe),
             "qwen3moe" => Ok(Self::Qwen3Moe),
+            "flint" => Ok(Self::Flint),
             "smollm3" => Ok(Self::SmolLm3),
             "granitemoehybrid" => Ok(Self::GraniteMoeHybrid),
             "gpt_oss" => Ok(Self::GptOss),
@@ -398,7 +404,7 @@ impl FromStr for NormalLoaderType {
             "qwen3_5" => Ok(Self::Qwen3_5),
             "lfm2" => Ok(Self::Lfm2),
             "lfm2_moe" => Ok(Self::Lfm2Moe),
-            a => Err(format!("Unknown architecture `{a}`. Possible architectures: `mistral`, `gemma`, `mixtral`, `llama`, `phi2`, `phi3`, `qwen2`, `gemma2`, `starcoder2`, `phi3.5moe`, `deepseekv2`, `deepseekv3`, `qwen3`, `glm4`, `glm4moelite`, `glm4moe`, `qwen3moe`, `smollm3`, `granitemoehybrid`, `gpt_oss`, `hunyuanv1dense`, `hunyuanv1moe`, `qwen3next`, `qwen3_5`, `lfm2`, `lfm2_moe`.")),
+            a => Err(format!("Unknown architecture `{a}`. Possible architectures: `mistral`, `gemma`, `mixtral`, `llama`, `phi2`, `phi3`, `qwen2`, `gemma2`, `starcoder2`, `phi3.5moe`, `deepseekv2`, `deepseekv3`, `qwen3`, `glm4`, `glm4moelite`, `glm4moe`, `qwen3moe`, `flint`, `smollm3`, `granitemoehybrid`, `gpt_oss`, `hunyuanv1dense`, `hunyuanv1moe`, `qwen3next`, `qwen3_5`, `lfm2`, `lfm2_moe`.")),
         }
     }
 }
@@ -423,6 +429,7 @@ impl Display for NormalLoaderType {
             Self::GLM4MoeLite => write!(f, "glm4moelite"),
             Self::GLM4Moe => write!(f, "glm4moe"),
             Self::Qwen3Moe => write!(f, "qwen3moe"),
+            Self::Flint => write!(f, "flint"),
             Self::SmolLm3 => write!(f, "smollm3"),
             Self::GraniteMoeHybrid => write!(f, "granitemoehybrid"),
             Self::GptOss => write!(f, "gpt_oss"),
@@ -485,6 +492,7 @@ impl AutoNormalLoader {
             NormalLoaderType::GLM4MoeLite => Ok(Box::new(GLM4MoeLiteLoader)),
             NormalLoaderType::GLM4Moe => Ok(Box::new(GLM4MoeLoader)),
             NormalLoaderType::Qwen3Moe => Ok(Box::new(Qwen3MoELoader)),
+            NormalLoaderType::Flint => Ok(Box::new(FlintLoader)),
             NormalLoaderType::SmolLm3 => Ok(Box::new(SmolLm3Loader)),
             NormalLoaderType::GraniteMoeHybrid => Ok(Box::new(GraniteMoeHybridLoader)),
             NormalLoaderType::GptOss => Ok(Box::new(GptOssLoader)),
@@ -5384,6 +5392,235 @@ impl DeviceMappedModelLoader for Qwen3MoELoader {
     }
 }
 
+pub struct FlintLoader;
+
+impl NormalModelLoader for FlintLoader {
+    fn runtime_config<'a>(
+        &self,
+        config: &'a str,
+        max_model_len: Option<usize>,
+    ) -> Result<Cow<'a, str>> {
+        let Some(max_model_len) = max_model_len else {
+            return Ok(Cow::Borrowed(config));
+        };
+        let cfg: models::flint::Config = serde_json::from_str(config)?;
+        anyhow::ensure!(
+            max_model_len > 0 && max_model_len <= cfg.max_position_embeddings,
+            "Flint max_model_len must be between 1 and {}",
+            cfg.max_position_embeddings
+        );
+        let mut config: serde_json::Value = serde_json::from_str(config)?;
+        config["max_position_embeddings"] = max_model_len.into();
+        Ok(Cow::Owned(serde_json::to_string(&config)?))
+    }
+
+    fn load(
+        &self,
+        config: &str,
+        vb: ShardedVarBuilder,
+        normal_loading_metadata: NormalLoadingMetadata,
+        attention_mechanism: AttentionImplementation,
+    ) -> Result<Box<dyn NormalModel + Send + Sync>> {
+        let cfg: models::flint::Config = serde_json::from_str(config)?;
+        Ok(Box::new(models::flint::Model::new(
+            &cfg,
+            vb,
+            self.is_gptx_for(config, &normal_loading_metadata)?,
+            normal_loading_metadata,
+            attention_mechanism,
+        )?))
+    }
+
+    fn load_xlora(
+        &self,
+        _config: &str,
+        _vb: ShardedVarBuilder,
+        _lora_config: &[((String, String), LoraConfig)],
+        _xlora_config: Option<XLoraConfig>,
+        _xlora_ordering: Ordering,
+        _normal_loading_metadata: NormalLoadingMetadata,
+        _preload_adapters: &Option<HashMap<String, (ShardedVarBuilder, LoraConfig)>>,
+    ) -> Result<Box<dyn NormalModel + Send + Sync>> {
+        anyhow::bail!("Flint does not support X-LoRA")
+    }
+
+    fn is_gptx(&self, _: &str) -> Result<bool> {
+        Ok(true)
+    }
+
+    fn get_config_repr(&self, config: &str) -> Result<Box<dyn Debug>> {
+        let cfg: models::flint::Config = serde_json::from_str(config)?;
+        Ok(Box::new(cfg))
+    }
+}
+
+impl IsqModelLoader for FlintLoader {
+    fn promoted_isq_predicates(&self, _config: &str) -> Result<Vec<Regex>> {
+        Ok(vec![
+            Regex::new(r"^model\.embed_tokens\.weight$")?,
+            Regex::new(r"^lm_head\.(weight|bias)$")?,
+        ])
+    }
+
+    fn isq_layer_regexes(&self, config: &str) -> Result<Vec<Regex>> {
+        let mut regexes = self.isq_layer_regexes_moqe(config)?;
+        regexes.extend([
+            Regex::new(r"^lm_head\.weight$")?,
+            Regex::new(r"^model\.layers\.(\d+)\.self_attn\.(q_proj|k_proj|v_proj|o_proj)\.(weight|bias)$")?,
+            Regex::new(r"^model\.layers\.(\d+)\.mlp\.(gate_proj|up_proj|down_proj)\.weight$")?,
+            Regex::new(r"^model\.layers\.(\d+)\.mlp\.shared_expert\.(gate_proj|up_proj|down_proj)\.weight$")?,
+        ]);
+        Ok(regexes)
+    }
+
+    fn immediate_isq_predicates(&self, config: &str) -> Result<Vec<Regex>> {
+        self.isq_layer_regexes(config)
+    }
+
+    fn isq_layer_regexes_moqe(&self, _config: &str) -> Result<Vec<Regex>> {
+        Ok(vec![Regex::new(
+            r"^model\.layers\.(\d+)\.mlp\.experts\.(?:(\d+)\.)?(gate_proj|up_proj|down_proj)\.weight$",
+        )?])
+    }
+}
+
+impl DeviceMappedModelLoader for FlintLoader {
+    fn activation_model_config(&self, config: &str) -> Result<ActivationModelConfig> {
+        let cfg: models::flint::Config = serde_json::from_str(config)?;
+        let sliding_layers = (0..cfg.num_hidden_layers)
+            .filter(|&layer| cfg.sliding_window(layer).is_some())
+            .count();
+        Ok(ActivationModelConfig {
+            intermediate_size: cfg.intermediate_size.max(activation_width(&[
+                (cfg.num_experts_per_tok, cfg.moe_intermediate_size),
+                (1, cfg.shared_expert_intermediate_size),
+            ])?),
+            vocab_size: cfg.vocab_size,
+            attention_features: uniform_attention_features(
+                cfg.num_hidden_layers,
+                sliding_layers,
+                PrefixPrefillAttentionFeatures {
+                    has_sinks: cfg.has_attention_sinks(),
+                    ..Default::default()
+                },
+            ),
+            ..Default::default()
+        })
+    }
+
+    fn mapped_max_act_size_elems(
+        &self,
+        config: &str,
+        params: &AutoDeviceMapParams,
+    ) -> Result<usize> {
+        let AutoDeviceMapParams::Text {
+            max_seq_len,
+            max_batch_size,
+        } = params
+        else {
+            anyhow::bail!("Expected text AutoDeviceMapParams for Flint")
+        };
+        let cfg: models::flint::Config = serde_json::from_str(config)?;
+        Ok(
+            max_batch_size
+                * cfg.num_attention_heads
+                * max_seq_len.min(&ATTENTION_CHUNK_SIZE).pow(2),
+        )
+    }
+
+    fn non_mapped_max_act_size_elems(
+        &self,
+        _config: &str,
+        _params: &AutoDeviceMapParams,
+    ) -> Result<usize> {
+        Ok(0)
+    }
+
+    fn non_mapped_size_in_bytes(
+        &self,
+        config: &str,
+        dtype: DType,
+        weight_pack_factor: usize,
+        quantization: Option<&super::AutoDeviceMapQuantization<'_>>,
+        _matformer_config: Option<&MatformerSliceConfig>,
+    ) -> Result<usize> {
+        let cfg: models::flint::Config = serde_json::from_str(config)?;
+        let (embedding_pack_factor, lm_head_pack_factor) = super::language_model_pack_factors(
+            quantization,
+            "model.embed_tokens.weight",
+            "lm_head.weight",
+            cfg.tie_word_embeddings,
+            dtype,
+            weight_pack_factor,
+        )?;
+        let embedding = cfg.hidden_size * cfg.vocab_size / embedding_pack_factor;
+        let lm_head = if cfg.tie_word_embeddings {
+            0
+        } else {
+            cfg.hidden_size * cfg.vocab_size / lm_head_pack_factor
+        };
+        Ok((embedding + lm_head + cfg.hidden_size) * dtype.size_in_bytes())
+    }
+
+    fn layer_sizes_in_bytes(
+        &self,
+        config: &str,
+        dtype: DType,
+        weight_pack_factor: usize,
+        _matformer_config: Option<&MatformerSliceConfig>,
+    ) -> Result<Vec<usize>> {
+        let cfg: models::flint::Config = serde_json::from_str(config)?;
+        let hidden = cfg.hidden_size;
+        let query = cfg.num_attention_heads * cfg.head_dim();
+        let kv = cfg.num_key_value_heads * cfg.head_dim();
+        let attention = 2 * hidden * (query + kv) / weight_pack_factor
+            + bias_if!(cfg.attention_bias, query + 2 * kv + hidden);
+        let norms = 2 * hidden + 2 * cfg.head_dim();
+        let sinks = bias_if!(cfg.has_attention_sinks(), cfg.num_attention_heads);
+        Ok((0..cfg.num_hidden_layers)
+            .map(|layer| {
+                let mlp = if cfg.is_moe_layer(layer) {
+                    let routed = cfg.num_experts * 3 * hidden * cfg.moe_intermediate_size
+                        / weight_pack_factor;
+                    let shared =
+                        3 * hidden * cfg.shared_expert_intermediate_size / weight_pack_factor;
+                    let router = hidden * cfg.num_experts;
+                    routed + shared + router
+                } else {
+                    3 * hidden * cfg.intermediate_size / weight_pack_factor
+                };
+                (attention + norms + sinks + mlp) * dtype.size_in_bytes()
+            })
+            .collect())
+    }
+
+    fn num_layers(&self, config: &str) -> Result<usize> {
+        let cfg: models::flint::Config = serde_json::from_str(config)?;
+        Ok(cfg.num_hidden_layers)
+    }
+
+    fn model_config(&self, config: &str) -> Result<Box<dyn ModelConfigLike>> {
+        let cfg: models::flint::Config = serde_json::from_str(config)?;
+        Ok(Box::new(models::flint::ModelConfig::new(
+            ModelConfigMetadata {
+                max_seq_len: cfg.max_position_embeddings,
+                num_layers: cfg.num_hidden_layers,
+                hidden_size: cfg.hidden_size,
+                num_kv_heads: cfg.num_key_value_heads,
+                num_attn_heads: cfg.num_attention_heads,
+                sliding_window: None,
+                k_head_dim: cfg.head_dim(),
+                v_head_dim: cfg.head_dim(),
+                kv_cache_layout: crate::paged_attention::KvCacheLayout::StandardNoFlashInfer,
+            },
+            (0..cfg.num_hidden_layers)
+                .map(|layer| cfg.sliding_window(layer))
+                .collect(),
+            cfg.has_attention_sinks(),
+        )))
+    }
+}
+
 // ======================== SmolLm3 loader
 
 /// [`NormalLoader`] for a SmolLm3 model.
@@ -6904,6 +7141,178 @@ impl DeviceMappedModelLoader for Lfm2Loader {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn flint_config() -> serde_json::Value {
+        let no_rope_layers = [0, 1, 5, 9, 13, 17, 21, 25, 29, 33, 37, 41, 45, 48];
+        let layer_types = (0..49)
+            .map(|layer| {
+                if no_rope_layers.contains(&layer) {
+                    "full_attention"
+                } else {
+                    "sliding_attention"
+                }
+            })
+            .collect::<Vec<_>>();
+        serde_json::json!({
+            "architectures": ["FlintForCausalLM"],
+            "model_type": "flint",
+            "vocab_size": 150144,
+            "hidden_size": 2048,
+            "intermediate_size": 6144,
+            "num_hidden_layers": 49,
+            "num_attention_heads": 32,
+            "num_key_value_heads": 4,
+            "head_dim": 128,
+            "hidden_act": "silu",
+            "max_position_embeddings": 262144,
+            "rms_norm_eps": 0.000001,
+            "rope_theta": 10000.0,
+            "sliding_window": 513,
+            "moe_intermediate_size": 512,
+            "num_experts": 256,
+            "num_experts_per_tok": 6,
+            "shared_expert_intermediate_size": 1024,
+            "mlp_only_layers": [0, 1],
+            "layer_types": layer_types,
+            "no_rope_layer_indices": no_rope_layers,
+        })
+    }
+
+    #[test]
+    fn flint_checkpoint_storage_and_auto_dispatch() -> Result<()> {
+        let config = flint_config().to_string();
+        let layers = FlintLoader.layer_sizes_in_bytes(&config, DType::BF16, 1, None)?;
+        let non_mapped =
+            FlintLoader.non_mapped_size_in_bytes(&config, DType::BF16, 1, None, None)?;
+        assert_eq!(&layers[..2], &[113_254_976; 2]);
+        assert_eq!(&layers[2..], &[1_662_001_728; 47]);
+        assert_eq!(non_mapped, 1_229_983_744);
+        assert_eq!(layers.iter().sum::<usize>() + non_mapped, 79_570_574_912);
+
+        let model = AutoNormalLoader.model_config(&config)?;
+        assert_eq!(model.k_head_dim(), 128);
+        assert_eq!(model.v_head_dim(), 128);
+        assert_eq!(model.total_kv_cache_elements_per_token(), 49 * 4 * 256);
+        assert_eq!(
+            model.kv_cache_layout(),
+            crate::paged_attention::KvCacheLayout::Standard
+        );
+        assert_eq!(
+            model.attention_backend_kind(),
+            crate::paged_attention::AttentionBackendKind::Standard
+        );
+        assert_eq!(model.sliding_window_for_layer(0), None);
+        assert_eq!(model.sliding_window_for_layer(2), Some(513));
+        assert_eq!(
+            model.prefix_prefill_attention_features(2),
+            Some(PrefixPrefillAttentionFeatures {
+                has_sinks: true,
+                has_sliding_window: true,
+                ..Default::default()
+            })
+        );
+        let activation = AutoNormalLoader.activation_model_config(&config)?;
+        assert_eq!(activation.intermediate_size, 6144);
+        assert_eq!(activation.attention_features, None);
+        Ok(())
+    }
+
+    #[test]
+    fn flint_quantized_storage_keeps_routers_norms_and_sinks_dense() -> Result<()> {
+        let mut config = flint_config();
+        config["intermediate_size"] = 1024.into();
+        let activation = FlintLoader.activation_model_config(&config.to_string())?;
+        assert_eq!(activation.intermediate_size, 4096);
+
+        let plain = FlintLoader.layer_sizes_in_bytes(&config.to_string(), DType::BF16, 1, None)?;
+        let packed = FlintLoader.layer_sizes_in_bytes(&config.to_string(), DType::BF16, 2, None)?;
+        let norms_and_sinks = (2 * 2048 + 2 * 128 + 32) * 2;
+        assert_eq!(packed[0] * 2 - plain[0], norms_and_sinks);
+        assert_eq!(packed[2] * 2 - plain[2], norms_and_sinks + 2048 * 256 * 2);
+
+        config["layer_types"] = serde_json::json!(vec!["full_attention"; 49]);
+        assert_eq!(
+            FlintLoader
+                .activation_model_config(&config.to_string())?
+                .attention_features,
+            Some(PrefixPrefillAttentionFeatures {
+                has_sinks: true,
+                ..Default::default()
+            })
+        );
+        config["softmax_type"] = "standard".into();
+        assert_eq!(
+            FlintLoader
+                .activation_model_config(&config.to_string())?
+                .attention_features,
+            Some(PrefixPrefillAttentionFeatures::default())
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn flint_isq_and_moqe_select_checkpoint_projections() -> Result<()> {
+        assert_default_isq_paths(
+            "FlintLoader",
+            &FlintLoader,
+            "",
+            &[
+                "lm_head.weight",
+                "model.layers.0.self_attn.q_proj.weight",
+                "model.layers.0.mlp.gate_proj.weight",
+                "model.layers.2.mlp.experts.0.down_proj.weight",
+                "model.layers.2.mlp.experts.gate_proj.weight",
+                "model.layers.2.mlp.shared_expert.up_proj.weight",
+            ],
+            &[
+                "model.embed_tokens.weight",
+                "model.layers.2.mlp.gate.weight",
+                "model.layers.2.self_attn.softmax_offset",
+                "model.layers.2.self_attn.q_norm.weight",
+            ],
+        )?;
+        assert_moqe_isq_paths(
+            "FlintLoader",
+            &FlintLoader,
+            &[
+                "model.layers.2.mlp.experts.255.down_proj.weight",
+                "model.layers.2.mlp.experts.gate_proj.weight",
+            ],
+            &[
+                "lm_head.weight",
+                "model.layers.0.self_attn.q_proj.weight",
+                "model.layers.0.mlp.gate_proj.weight",
+                "model.layers.2.mlp.gate.weight",
+                "model.layers.2.mlp.shared_expert.up_proj.weight",
+            ],
+        )?;
+        assert_promoted_isq_predicates("FlintLoader", &FlintLoader, "");
+        Ok(())
+    }
+
+    #[test]
+    fn flint_runtime_context_limit_preserves_native_config() -> Result<()> {
+        let config = flint_config().to_string();
+        let limited = AutoNormalLoader.runtime_config(&config, Some(4096))?;
+        assert_eq!(AutoNormalLoader.model_config(&limited)?.max_seq_len(), 4096);
+        assert_eq!(
+            AutoNormalLoader.model_config(&config)?.max_seq_len(),
+            262144
+        );
+        assert!(AutoNormalLoader.runtime_config(&config, Some(0)).is_err());
+        assert!(AutoNormalLoader
+            .runtime_config(&config, Some(262145))
+            .is_err());
+        assert_eq!(
+            "flint".parse::<NormalLoaderType>().unwrap(),
+            NormalLoaderType::Flint
+        );
+        assert_eq!(
+            serde_json::to_string(&NormalLoaderType::Flint)?,
+            "\"flint\""
+        );
+        Ok(())
+    }
 
     #[test]
     fn dense_activation_metadata_and_auto_dispatch_agree() -> Result<()> {

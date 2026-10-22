@@ -9,11 +9,11 @@ use super::{
     IsqOrganization, IsqPipelineMixin, MetadataMixin, ModelCategory, PreProcessingMixin,
 };
 use super::{
-    AutoNormalLoader, DeepSeekV2Loader, DeepSeekV3Loader, GLM4Loader, GLM4MoeLiteLoader,
-    GLM4MoeLoader, Gemma2Loader, GemmaLoader, GptOssLoader, GraniteMoeHybridLoader,
-    HunYuanDenseV1Loader, HunYuanMoEV1Loader, Lfm2Loader, LlamaLoader, MistralLoader,
-    MixtralLoader, NormalLoaderType, Phi2Loader, Phi3Loader, Phi3_5MoELoader, Qwen2Loader,
-    Qwen3Loader, Qwen3MoELoader, Qwen3NextLoader, Qwen3_5TextLoader, SmolLm3Loader,
+    AutoNormalLoader, DeepSeekV2Loader, DeepSeekV3Loader, FlintLoader, GLM4Loader,
+    GLM4MoeLiteLoader, GLM4MoeLoader, Gemma2Loader, GemmaLoader, GptOssLoader,
+    GraniteMoeHybridLoader, HunYuanDenseV1Loader, HunYuanMoEV1Loader, Lfm2Loader, LlamaLoader,
+    MistralLoader, MixtralLoader, NormalLoaderType, Phi2Loader, Phi3Loader, Phi3_5MoELoader,
+    Qwen2Loader, Qwen3Loader, Qwen3MoELoader, Qwen3NextLoader, Qwen3_5TextLoader, SmolLm3Loader,
     Starcoder2Loader,
 };
 use crate::amoe::AnyMoeExpertType;
@@ -239,6 +239,20 @@ pub(crate) fn build_normal_pipeline(
     }
     #[cfg(not(feature = "cuda"))]
     let _ = recurrent_pool_grew;
+
+    #[cfg(feature = "cuda")]
+    if !loaded_for_uqff_write {
+        // Load persistent CUDA runtime allocations before selecting the KV cache capacity.
+        match crate::cuda::preload::preload_candle_ptx(&device) {
+            Ok(count) if count > 0 => info!("Preloaded {count} Candle CUDA PTX functions."),
+            Ok(_) => {}
+            Err(err) => warn!("Failed to preload Candle CUDA PTX functions: {err}"),
+        }
+        #[cfg(feature = "cutile")]
+        if let Err(err) = mistralrs_quant::cutile::warmup_moe_kernels(&device) {
+            warn!("Failed to warm up cuTile MoE kernels: {err}");
+        }
+    }
 
     let (cache_config, cache_engine) = if let Some(paged_attn_config) = paged_attn_config.as_mut() {
         let paged_snapshot = paged_attn_config.clone();
@@ -559,6 +573,7 @@ impl NormalLoaderBuilder {
             Some(NormalLoaderType::GLM4MoeLite) => Box::new(GLM4MoeLiteLoader),
             Some(NormalLoaderType::GLM4Moe) => Box::new(GLM4MoeLoader),
             Some(NormalLoaderType::Qwen3Moe) => Box::new(Qwen3MoELoader),
+            Some(NormalLoaderType::Flint) => Box::new(FlintLoader),
             Some(NormalLoaderType::SmolLm3) => Box::new(SmolLm3Loader),
             Some(NormalLoaderType::GraniteMoeHybrid) => Box::new(GraniteMoeHybridLoader),
             Some(NormalLoaderType::GptOss) => Box::new(GptOssLoader),

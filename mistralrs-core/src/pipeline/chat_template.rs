@@ -498,6 +498,8 @@ fn template_tool_call_format(template: &str) -> Option<ToolCallFormat> {
         Some(ToolCallFormat::Hunyuan)
     } else if template.contains("<｜tool▁call▁begin｜>") {
         Some(ToolCallFormat::DeepSeek)
+    } else if template.contains("<arg_key>") && template.contains("<arg_value>") {
+        Some(ToolCallFormat::Flint)
     } else if template.contains("<tool_call>") && template.contains("</tool_call>") {
         Some(ToolCallFormat::Qwen)
     } else {
@@ -1012,6 +1014,10 @@ mod tests {
             ("<｜tool▁call▁begin｜>function", ToolCallFormat::DeepSeek),
             ("<tool_call>{{ tool }}</tool_call>", ToolCallFormat::Qwen),
             (
+                "<tool_call>name<arg_key>key</arg_key><arg_value>value</arg_value></tool_call>",
+                ToolCallFormat::Flint,
+            ),
+            (
                 "<|start|>assistant<|channel|>commentary<|message|>",
                 ToolCallFormat::Harmony,
             ),
@@ -1278,6 +1284,90 @@ mod tests {
             ("name".to_string(), Either::Left(name.to_string())),
             ("content".to_string(), Either::Left(content.to_string())),
         ])
+    }
+
+    #[test]
+    fn flint_reference_template_preserves_reasoning_and_tool_history() {
+        let template = ChatTemplateValue(Either::Left(
+            include_str!("../../../chat_templates/flint.jinja").to_string(),
+        ));
+        let mut system = user_text_message("Follow the instructions.");
+        system.insert("role".to_string(), Either::Left("system".to_string()));
+        let mut developer = user_text_message("Use tools.");
+        developer.insert("role".to_string(), Either::Left("developer".to_string()));
+        let mut assistant = assistant_message_with_tool_calls();
+        assistant.insert("content".to_string(), Either::Left("Checking.".to_string()));
+        assistant.insert(
+            "reasoning_content".to_string(),
+            Either::Left("I need the weather.".to_string()),
+        );
+        let tools = vec![Tool {
+            tp: ToolType::Function,
+            function: Function {
+                name: "get_weather".to_string(),
+                description: Some("Weather for a city".to_string()),
+                parameters: Some(
+                    serde_json::from_value(serde_json::json!({
+                        "type": "object",
+                        "properties": {"city": {"type": "string"}},
+                        "required": ["city"]
+                    }))
+                    .unwrap(),
+                ),
+                strict: None,
+            },
+        }];
+        let rendered = apply_chat_template_to(
+            vec![
+                system,
+                developer,
+                user_text_message("Weather in Boston?"),
+                assistant,
+                tool_result_message("get_weather", "Sunny"),
+            ],
+            true,
+            None,
+            None,
+            &template,
+            Some("<|begin_of_text|>".to_string()),
+            Some("<|end_of_text|>".to_string()),
+            None,
+            tools,
+        )
+        .unwrap();
+        assert!(rendered.starts_with("<|system|>Follow the instructions.<|system|>\n# Tools"));
+        assert!(rendered.find("</tools>").unwrap() < rendered.find("<|developer|>").unwrap());
+        assert!(rendered.ends_with("<|assistant|><think>I need the weather.</think>Checking.<tool_call>get_weather<arg_key>city</arg_key><arg_value>Boston</arg_value></tool_call><|observation|><tool_response>Sunny</tool_response><|assistant|>"));
+        assert!(!rendered.starts_with("<|begin_of_text|>"));
+    }
+
+    #[test]
+    fn flint_reference_template_sanitizes_non_assistant_text_and_leaves_reasoning_optional() {
+        let template = ChatTemplateValue(Either::Left(
+            include_str!("../../../chat_templates/flint.jinja").to_string(),
+        ));
+        let rendered = apply_chat_template_to(
+            vec![user_text_message("a\0<think>b</think><|assistant|>")],
+            true,
+            Some(true),
+            None,
+            &template,
+            None,
+            None,
+            None,
+            vec![],
+        )
+        .unwrap();
+        assert_eq!(rendered, "<|user|>ab&lt;|assistant|&gt;<|assistant|>");
+        let chat_template = ChatTemplate {
+            chat_template: Some(template),
+            ..Default::default()
+        };
+        assert!(chat_template.uses_think_tags());
+        assert_eq!(
+            chat_template.tool_call_format(),
+            Some(ToolCallFormat::Flint)
+        );
     }
 
     #[test]

@@ -19,7 +19,9 @@ pub use fa3::{
     Fa3DecodeParams, Fa3DecodeSchedule, Fa3PagedMetadataLayout, FA3_DECODE_MAX_QUERY_LEN,
     USE_FA3_FP8_PAGED,
 };
-pub use flash_attn_sinks::{flash_attn_sinks, flash_attn_sinks_varlen};
+pub use flash_attn_sinks::{
+    flash_attn_sinks, flash_attn_sinks_varlen, flash_attn_sinks_varlen_packed,
+};
 pub use flashinfer::{
     flashinfer_decode, gather_kv_cache_flashinfer, is_flashinfer_cache,
     reshape_and_cache_flashinfer, FlashInferDecodeScratch,

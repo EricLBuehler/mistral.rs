@@ -2818,6 +2818,9 @@ mod tests {
             NormalLoaderType::Qwen3Moe => {
                 assert_deserializes::<models::qwen3_moe::Config>(loader, config)
             }
+            NormalLoaderType::Flint => {
+                panic!("Flint does not have a GGUF config builder")
+            }
             NormalLoaderType::SmolLm3 => {
                 assert_deserializes::<models::smollm3::Config>(loader, config)
             }
@@ -2847,10 +2850,6 @@ mod tests {
 
     #[test]
     fn config_builder_registry_is_exhaustive() {
-        assert_eq!(
-            NormalLoaderType::iter().count(),
-            NORMAL_CONFIG_BUILDERS.len()
-        );
         assert_eq!(NORMAL_MODEL_ADAPTERS.len(), NORMAL_CONFIG_BUILDERS.len());
 
         let mut builders = HashSet::new();
@@ -2859,14 +2858,22 @@ mod tests {
             assert!(registry_adapter(&builder.loader).is_some());
         }
         for loader in NormalLoaderType::iter() {
-            assert!(builder_for(&loader).is_some(), "{loader}");
-            assert!(builders.contains(&loader.to_string()), "{loader}");
+            let supported = loader != NormalLoaderType::Flint;
+            assert_eq!(builder_for(&loader).is_some(), supported, "{loader}");
+            assert_eq!(
+                builders.contains(&loader.to_string()),
+                supported,
+                "{loader}"
+            );
         }
     }
 
     #[test]
     fn every_loader_synthesizes_a_native_config() {
-        for loader in NormalLoaderType::iter() {
+        for loader in NORMAL_CONFIG_BUILDERS
+            .iter()
+            .map(|builder| builder.loader.clone())
+        {
             let (_, metadata, tensors) = default_fixture(&loader);
             let config = synthesize_normal_config_value(&loader, &metadata, &tensors)
                 .unwrap_or_else(|error| panic!("failed to synthesize `{loader}` fixture: {error}"));
@@ -3163,7 +3170,11 @@ mod tests {
                 normal_loader_hint_from_external_config(&raw).unwrap(),
                 Some(loader.clone())
             );
-            let gguf_architecture = registry_adapter(&loader).unwrap().architectures[0];
+            let Some(adapter) = registry_adapter(&loader) else {
+                assert_eq!(loader, NormalLoaderType::Flint);
+                continue;
+            };
+            let gguf_architecture = adapter.architectures[0];
             let normalized: JsonValue = serde_json::from_str(
                 &normalize_external_normal_config(&loader, gguf_architecture, &raw).unwrap(),
             )

@@ -1,7 +1,7 @@
 use crate::NormalLoaderType;
 use std::{error::Error, fmt, str::FromStr};
 
-pub(crate) const NORMAL_LOADER_TYPE_COUNT: usize = 26;
+pub(crate) const GGUF_NORMAL_LOADER_COUNT: usize = 26;
 pub(crate) const CANONICAL_GGUF_ARCHITECTURE_COUNT: usize = 26;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -249,6 +249,7 @@ pub(crate) enum NormalGgufRegistryError {
         architecture: CanonicalGgufArchitecture,
     },
     NoAdapter(CanonicalGgufArchitecture),
+    LoaderHasNoGgufSupport(NormalLoaderType),
 }
 
 impl fmt::Display for NormalGgufRegistryError {
@@ -324,6 +325,10 @@ impl fmt::Display for NormalGgufRegistryError {
                     "GGUF architecture `{architecture}` has no normal-model adapter"
                 )
             }
+            Self::LoaderHasNoGgufSupport(loader) => write!(
+                f,
+                "Normal loader `{loader}` does not support GGUF checkpoints; use its Hugging Face safetensors checkpoint or UQFF"
+            ),
         }
     }
 }
@@ -654,7 +659,7 @@ pub(crate) const GGUF_SCHEMAS: &[GgufSchema; CANONICAL_GGUF_ARCHITECTURE_COUNT] 
     },
 ];
 
-pub(crate) const NORMAL_MODEL_ADAPTERS: &[NativeModelAdapter; NORMAL_LOADER_TYPE_COUNT] = &[
+pub(crate) const NORMAL_MODEL_ADAPTERS: &[NativeModelAdapter; GGUF_NORMAL_LOADER_COUNT] = &[
     NativeModelAdapter {
         loader: NormalLoaderType::Mistral,
         architectures: &[
@@ -941,7 +946,7 @@ pub(crate) fn resolve_native_adapter(
 
     if let Some(loader) = explicit_override {
         let Some(adapter) = adapter_for(&loader) else {
-            return Err(NormalGgufRegistryError::NoAdapter(descriptor.architecture));
+            return Err(NormalGgufRegistryError::LoaderHasNoGgufSupport(loader));
         };
         if !adapter.architectures.contains(&descriptor.architecture) {
             return Err(NormalGgufRegistryError::ExplicitOverrideIncompatible {
@@ -1114,15 +1119,18 @@ mod tests {
 
     #[test]
     fn normal_loader_registry_is_exhaustive() {
-        assert_eq!(NormalLoaderType::iter().count(), NORMAL_LOADER_TYPE_COUNT);
-        assert_eq!(NORMAL_MODEL_ADAPTERS.len(), NORMAL_LOADER_TYPE_COUNT);
+        assert_eq!(NORMAL_MODEL_ADAPTERS.len(), GGUF_NORMAL_LOADER_COUNT);
 
         let mut loaders = HashSet::new();
         for adapter in NORMAL_MODEL_ADAPTERS {
             assert!(loaders.insert(adapter.loader.to_string()));
         }
         for loader in NormalLoaderType::iter() {
-            assert!(loaders.contains(&loader.to_string()), "{loader}");
+            assert_eq!(
+                loaders.contains(&loader.to_string()),
+                loader != NormalLoaderType::Flint,
+                "{loader}"
+            );
         }
     }
 
@@ -1233,6 +1241,19 @@ mod tests {
         for (loader, layout) in cases {
             assert!(adapter_for(&loader).unwrap().layouts.contains(&layout));
         }
+    }
+
+    #[test]
+    fn flint_gguf_override_reports_unsupported_format() {
+        let schema = schema_for(CanonicalGgufArchitecture::Llama);
+        let (metadata, tensors) = valid_fixture(schema, &[], &[]);
+        let descriptor = descriptor_from_fixture(schema, &metadata, &tensors);
+        let error = resolve_native_adapter(&descriptor, Some(NormalLoaderType::Flint)).unwrap_err();
+        assert!(matches!(
+            error,
+            NormalGgufRegistryError::LoaderHasNoGgufSupport(NormalLoaderType::Flint)
+        ));
+        assert!(error.to_string().contains("safetensors"));
     }
 
     #[test]

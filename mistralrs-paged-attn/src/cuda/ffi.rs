@@ -580,6 +580,7 @@ extern "C" {
         num_kv_heads: c_int,
         head_dim: c_int,
         window_size: c_int,
+        packed_q: bool,
         stream: CUstream,
     );
 
@@ -598,6 +599,7 @@ extern "C" {
         num_kv_heads: c_int,
         head_dim: c_int,
         window_size: c_int,
+        packed_q: bool,
         stream: CUstream,
     );
 
@@ -616,6 +618,7 @@ extern "C" {
         num_kv_heads: c_int,
         head_dim: c_int,
         window_size: c_int,
+        packed_q: bool,
         stream: CUstream,
     );
 }
