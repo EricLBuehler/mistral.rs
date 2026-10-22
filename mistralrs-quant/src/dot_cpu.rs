@@ -175,10 +175,16 @@ pub(crate) unsafe fn dot_bf16_bfmmla(a: &[f32], b: &[u16]) -> f32 {
 fn bfmmla_selected() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *ON.get_or_init(|| {
-        std::env::var("MISTRALRS_DOT_BFMMLA")
-            .is_ok_and(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-            && cfg!(target_arch = "aarch64")
-            && std::arch::is_aarch64_feature_detected!("bf16")
+        #[cfg(target_arch = "aarch64")]
+        {
+            std::env::var("MISTRALRS_DOT_BFMMLA")
+                .is_ok_and(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+                && std::arch::is_aarch64_feature_detected!("bf16")
+        }
+        #[cfg(not(target_arch = "aarch64"))]
+        {
+            false
+        }
     })
 }
 

@@ -1626,7 +1626,14 @@ fn build_gpt_oss(metadata: &MetadataView<'_>) -> SynthesisResult<JsonValue> {
 }
 
 fn build_kolibri1(metadata: &MetadataView<'_>) -> SynthesisResult<JsonValue> {
-    let fields = StandardFields::read(metadata, None)?;
+    // Quants of this MoE model may omit the dense width entirely; the placeholder read here is
+    // removed below, so any expert width satisfies it.
+    let intermediate_size = match metadata.optional_usize("feed_forward_length")? {
+        Some(intermediate_size) => intermediate_size,
+        None => metadata.required_usize("expert_shared_feed_forward_length")?,
+    };
+    let fields =
+        StandardFields::read_with_intermediate_size(metadata, None, intermediate_size)?;
     let sliding_window = fields.sliding_window.ok_or_else(|| {
         NormalConfigSynthesisError::new(format!(
             "Standalone Kolibri-1 config requires `{}`",
@@ -2961,6 +2968,19 @@ mod tests {
             );
             assert_native_config_deserializes(&loader, config);
         }
+    }
+
+    #[test]
+    fn kolibri1_standalone_metadata_omitting_dense_ffn_synthesizes_config() {
+        let loader = NormalLoaderType::Kolibri1;
+        let architecture = CanonicalGgufArchitecture::Kolibri1;
+        let (mut metadata, tensors) = fixture(&loader, architecture);
+        metadata.remove(&format!("{}.feed_forward_length", architecture.as_str()));
+
+        let config = synthesize_normal_config_value(&loader, &metadata, &tensors).unwrap();
+        assert_eq!(config["moe_intermediate_size"], 1_024);
+        assert_eq!(config["shared_expert_intermediate_size"], 512);
+        assert_native_config_deserializes(&loader, config);
     }
 
     #[test]
