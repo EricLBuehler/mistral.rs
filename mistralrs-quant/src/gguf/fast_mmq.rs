@@ -2,8 +2,9 @@
 //! Handles batch > 8 (complement to fast_mmvq which handles batch 1-8).
 
 use std::collections::HashMap;
-use std::sync::{Mutex, MutexGuard, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::thread::ThreadId;
+use tokio::sync::{Mutex as WorkspaceMutex, OwnedMutexGuard};
 
 use candle_core::cuda::cudarc::driver::{
     CudaSlice, CudaStream, DevicePtrMut, DeviceRepr, SyncOnDrop,
@@ -252,7 +253,7 @@ struct WorkspaceKey {
 }
 
 struct WorkspaceGuard<'a> {
-    slot: MutexGuard<'static, WorkspaceSlot>,
+    slot: OwnedMutexGuard<WorkspaceSlot>,
     stream: &'a CudaStream,
 }
 
@@ -262,10 +263,29 @@ impl WorkspaceGuard<'_> {
     }
 }
 
-type WsMap = Mutex<HashMap<WorkspaceKey, &'static Mutex<WorkspaceSlot>>>;
+type WsMap = Mutex<HashMap<WorkspaceKey, Arc<WorkspaceMutex<WorkspaceSlot>>>>;
 
 static MMQ_WORKSPACE: OnceLock<WsMap> = OnceLock::new();
 static FIXUP_WORKSPACE: OnceLock<WsMap> = OnceLock::new();
+
+// Engine teardown must destroy captured graphs before thread-local workspaces are released.
+struct ReleaseOnThreadExit(ThreadId);
+
+impl Drop for ReleaseOnThreadExit {
+    fn drop(&mut self) {
+        for ws in [&MMQ_WORKSPACE, &FIXUP_WORKSPACE] {
+            let Some(Ok(mut map)) = ws.get().map(Mutex::lock) else {
+                continue;
+            };
+            map.retain(|key, _| key.thread != self.0);
+        }
+    }
+}
+
+thread_local! {
+    static RELEASE_ON_THREAD_EXIT: ReleaseOnThreadExit =
+        ReleaseOnThreadExit(std::thread::current().id());
+}
 
 #[derive(Clone, Copy)]
 struct DeviceInfo {
@@ -350,20 +370,22 @@ fn workspace_ensure<'a>(
         thread: std::thread::current().id(),
         capacity,
     };
-    let device_mtx: &'static Mutex<WorkspaceSlot> = {
+    let device_mtx = {
         let mut guard = map.lock().unwrap();
-        match guard.get(&key).copied() {
+        match guard.get(&key).cloned() {
             Some(mtx) => mtx,
             None => {
                 let slice = unsafe { dev.alloc::<u8>(capacity)? };
-                // CUDA graph replay requires process-stable workspace addresses.
-                let leaked = Box::leak(Box::new(Mutex::new(WorkspaceSlot { slice })));
-                guard.insert(key, leaked);
-                leaked
+                let slot = Arc::new(WorkspaceMutex::new(WorkspaceSlot { slice }));
+                guard.insert(key, slot.clone());
+                RELEASE_ON_THREAD_EXIT.with(|_| {});
+                slot
             }
         }
     };
-    let slot = device_mtx.lock().unwrap();
+    let slot = device_mtx
+        .try_lock_owned()
+        .expect("workspace is thread-local");
     Ok(WorkspaceGuard { slot, stream })
 }
 
@@ -1577,6 +1599,35 @@ mod tests {
             max_error <= TOLERANCE,
             "relative error {max_error} exceeds {TOLERANCE}"
         );
+        Ok(())
+    }
+
+    #[test]
+    fn workspaces_are_released_on_thread_exit() -> Result<()> {
+        let slots = std::thread::spawn(|| -> Result<_> {
+            let device = Device::new_cuda(0)?;
+            let dev = device.as_cuda_device()?;
+            let stream = dev.cuda_stream();
+            let mut slots = Vec::new();
+            for ws in [&MMQ_WORKSPACE, &FIXUP_WORKSPACE] {
+                let mut first = workspace_ensure(ws, dev, HIDDEN, &stream)?;
+                let ptr = first.ptr_mut().0;
+                drop(first);
+                let mut second = workspace_ensure(ws, dev, HIDDEN, &stream)?;
+                assert_eq!(ptr, second.ptr_mut().0);
+                let map = ws.get().unwrap().lock().unwrap();
+                slots.extend(
+                    map.iter()
+                        .filter(|(key, _)| key.thread == std::thread::current().id())
+                        .map(|(_, slot)| Arc::downgrade(slot)),
+                );
+            }
+            assert_eq!(slots.len(), 2);
+            Ok(slots)
+        })
+        .join()
+        .unwrap()?;
+        assert!(slots.iter().all(|slot| slot.upgrade().is_none()));
         Ok(())
     }
 
