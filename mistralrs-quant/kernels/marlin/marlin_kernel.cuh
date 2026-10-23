@@ -21,6 +21,7 @@
 #include <cuda.h>
 #include <cuda_fp16.h>
 #include <iostream>
+#include <string>
 using namespace marlin;
 
 // m16n8k16 tensor core mma instruction with fp16/bf16 inputs and fp32
