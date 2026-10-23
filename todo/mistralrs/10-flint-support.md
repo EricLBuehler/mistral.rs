@@ -207,9 +207,10 @@ an IQ dtype, and everything above it keeps using `QuantMethod`.
    (`decode_and_gather_cost_of_one_token`, an ignored test) says what is left is traffic:
    5.20 ms to decode a layer's 18 slabs at 14.5 GB/s of f32 written, 2.17 ms of gemv reading
    it back, so a token moves 7.4 GB through memory. The fused dequant-and-GEMV is written and
-   takes that out; it is opt-in (`MISTRALRS_IQ_FUSED_GEMV=1`) because its accumulation order
-   differs from the two-step path in the last bits, and the default stays two-step until that
-   trade is decided. In the model it is worth 1.30x on the gather (3.44 ms a call against
+   takes that out; it is the default (`MISTRALRS_IQ_FUSED_GEMV=0` restores the two-step path).
+   Its accumulation order differs from the two-step path in the last bits; the A/B below then
+   measured 2.2x and not one changed token. In the model it was worth 1.30x on the gather
+   (3.44 ms a call against
    2.64) and 714 ms a token against 570, so 1.40 against 1.75 tok/s on the same prompt, back
    to back. Until a decision the IQ route is a capability - the published files load at all,
    in 9.8 GiB - not a speed. (Superseded by "Where a token goes": the route is now 5.60.)
@@ -346,9 +347,9 @@ accumulation order has not moved a token at temperature 0 over 400 of them. The 
 step at 400 tokens: `attn_proj` 40.8 ms, `routed` 65.7, `shared` 13.5, `lm_head` 5.8,
 `attention` 4.7, `router` 2.4.
 
-The default is still two-step; flipping it is a one-line change (`MISTRALRS_IQ_FUSED_GEMV`
-would then turn it off). The evidence for flipping: 2.2x, identical tokens, and the per-block
-decode stays bit-exact by its own tests.
+Flipped to fused, which is now the default; `MISTRALRS_IQ_FUSED_GEMV=0` restores the
+two-step path. The evidence: 2.2x, identical tokens, and the per-block decode stays bit-exact
+by its own tests.
 
 ### The K-quant comparator, quietly measured
 
@@ -362,26 +363,38 @@ routed experts 66 ms against 18, the dense projections 41 against 15.5, the shar
 against 5.8. `lm_head` is 5.8 in both, so it is the same f32 dense matmul and it is now the
 largest single fixed cost in the IQ step.
 
-### Open: UD-Q4_K_XL is 0.10 tok/s, and the reason is its expert dtypes
+### UD-Q4_K_XL: 0.10 -> 8.0 tok/s
 
-`flint-preview-UD-Q4_K_XL.gguf` is 0.10 tok/s on the same node and prompt: `routed` 3.5-8.1 s a
-step. Not I/O (`fincore` shows 23.9 of 25.0 GiB resident, load takes 6 s). The census over the
-tensor table explains it:
+`flint-preview-UD-Q4_K_XL.gguf` was 0.10 tok/s with `routed` at 7.8 s a step. Not I/O:
+`fincore` showed 23.9 of 25.0 GiB resident and load took 6 s. The census over the tensor table:
 
 | file | expert tensors |
 | --- | --- |
 | `flint-Q4_K_M.gguf` | Q4_K 16.59 GiB, Q6_K 4.72 GiB |
 | `flint-preview-UD-Q4_K_XL.gguf` | Q5_K 11.17 GiB, IQ4_XS 9.28 GiB, Q4_K, IQ3_S, Q8_0, Q6_K |
 
-Candle's fused gather (`QTensor::indexed_gemv` -> `repack::try_indexed_gemv` ->
-`PackedKind::select`) serves Q4_K, Q6_K and Q8_0 only. A Q5_K expert tensor therefore misses
-`indexed_gemv` and falls to `scoped_gather`, which materialises f32: 6 of 128 experts out of
-11.17 GiB is 0.52 GiB packed, about 3 GiB of f32 a token, which is the 3.5 s. The IQ4_XS half
-takes this crate's IQ gather and is fine. So the mixed "dynamic" quant is slow for a reason
-that has nothing to do with the IQ route, and it is a gap in the fused path rather than a
-regression: Q2_K, Q3_K and Q5_K expert stacks all take the same fallback.
+Two gaps, not one. Candle's fused gather (`QTensor::indexed_gemv` -> `PackedKind::select`)
+serves Q4_K, Q6_K and Q8_0 only, so a Q5_K tensor missed it. But the bigger half was shape:
+the gate and up projections arrive as `(b, s, 1, 1, h)` and took the scoped path, while the
+down projection arrives as `(b, s, k, h)`, which `scoped_gather` did not accept, so every
+token dequantised the whole 128-expert stack - about 30 GiB of f32 a step, which is the 7.8 s.
 
-The fix is a fused per-expert dot for those block types, the same shape as the IQ gather: keep
-the block bytes, quantise the row to q8, dot per block across the expert's rows in parallel,
-never write f32. That is candle-side (`PackedKind`) or a mistralrs gather of its own; the
-scoped gather's bit-exact test is the reference it must match.
+- `PerExpertQuantizedLinear::gather_slots_fused` covers Q2_K, Q3_K and Q5_K: dequantise one
+  weight row into a scratch row, dot it there, keep only the result. It is the same `to_float`
+  and the same `dot_f32` as the eager path, so it matches it bit for bit, tested for repeat 1
+  and for the broadcast form.
+- the per-slot form now takes the gather kernel in both the scoped and the whole-stack path
+  (`moe_gather_cpu::gather_rows`). The two agree bit for bit, and the scoped test covers both
+  shapes. `MISTRALRS_MOE_DOWN_MATMUL=1` keeps the old batched matmul: 1.46 tok/s against 7.96
+  on the 40-token cell, with the same 151 characters out.
+
+Measured at 16 threads, schedutil, load 4.3: 7.96-8.40 tok/s, 121.6 ms a step, `routed` 78 ms,
+`attn_proj` 22.8, `shared` 9.5. That is 80x on the file and within 2.4x of Q4_K_M, at 9.8 GiB
+resident against 66.8. Three consecutive runs of the fast path and the matmul arm all
+reproduced the pre-fix output exactly.
+
+One earlier run under load 13.6 diverged at character 144 of 151 and never repeated; the
+pre-fix binary, the fused path and the matmul path have agreed on every quiet run since. So
+something in the decode is not bit-stable under load, and it is not this path. Worth pinning
+down separately: a decode that depends on how much of the node it gets would undermine every
+A/B in this file.
