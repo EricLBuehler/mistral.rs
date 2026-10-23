@@ -119,7 +119,22 @@ pub(crate) fn spawn_pending_isq(
 /// Holds the pool so spawned jobs outlive the call.
 pub struct RequantizeHandles {
     _executor: crate::IsqExecutor,
-    pub receivers: Vec<pending_layer::IsqReceiver>,
+    pub receivers: RequantizeReceivers,
+}
+
+/// Receivers for the jobs of [`requantize_tracked`], yielded in module order as a submitter thread
+/// enqueues them. The executor blocks `submit` while its host budget is full and only the consumer
+/// frees budget, so submitting every job from the consumer thread deadlocks on large outputs.
+pub struct RequantizeReceivers {
+    rx: std::sync::mpsc::Receiver<pending_layer::IsqReceiver>,
+    _submitter: std::thread::JoinHandle<()>,
+}
+
+impl Iterator for RequantizeReceivers {
+    type Item = pending_layer::IsqReceiver;
+    fn next(&mut self) -> Option<Self::Item> {
+        self.rx.recv().ok()
+    }
 }
 
 /// Quantize a rebuilt `[E, out, in]` expert stack to `ty`: GGML types go slab-by-slab so each
@@ -200,9 +215,8 @@ pub fn requantize_tracked(
         .with_external_reserved_host_bytes(extra_host_reserve_bytes);
     let (executor, _) = crate::create_isq_executor(config);
     let guard = crate::QuantizeOntoGuard::new();
-    let mut receivers = Vec::with_capacity(modules.len());
+    let mut jobs = Vec::with_capacity(modules.len());
     for module in modules {
-        let layer = module.ct.resolve()?;
         let ty = ty_for(module);
         let imatrix = if ty.supports_imatrix() {
             imatrix_for(&module.key)
@@ -214,35 +228,88 @@ pub fn requantize_tracked(
             }
             None
         };
-        let device = layer.dtype_and_device().1;
-        let mut guard = guard
-            .clone()
-            .with_module_key(module.key.clone())
-            .with_requested(ty.to_string())
-            .with_consumer(consumer);
-        if let Some(report) = &report {
-            guard = guard.with_report(report.clone());
-        }
-        let request = IsqRequest {
-            ty: Some(ty),
-            device: device.clone(),
-            has_imatrix: imatrix.is_some(),
-            capture: crate::IsqCaptureMode::Immediate,
-            consumer,
-            module_key: module.key.clone(),
-        };
-        let plan = layer.plan_isq(&request)?;
-        let rx = executor.submit(plan, consumer, move || {
-            layer
-                .clone()
-                .apply_isq(Some(ty), device, &AtomicUsize::new(0), imatrix, guard)
-        });
-        receivers.push(rx);
+        jobs.push((module.clone(), ty, imatrix));
     }
+    let (tx, rx) = std::sync::mpsc::channel();
+    let ctx = SubmitCtx {
+        executor: executor.clone(),
+        guard,
+        consumer,
+        report,
+    };
+    let submitter = std::thread::Builder::new()
+        .name("isq-submit".into())
+        .spawn(move || {
+            for (module, ty, imatrix) in jobs {
+                if tx.send(ctx.submit_one(module, ty, imatrix)).is_err() {
+                    return; // consumer dropped
+                }
+            }
+        })
+        .map_err(|e| candle_core::Error::msg(format!("spawning ISQ submitter thread: {e}")))?;
     Ok(RequantizeHandles {
         _executor: executor,
-        receivers,
+        receivers: RequantizeReceivers {
+            rx,
+            _submitter: submitter,
+        },
     })
+}
+
+struct SubmitCtx {
+    executor: crate::IsqExecutor,
+    guard: crate::QuantizeOntoGuard,
+    consumer: IsqConsumer,
+    report: Option<crate::QuantizationReport>,
+}
+
+impl SubmitCtx {
+    /// Errors raised before the job runs (resolve, plan) come back through the receiver so the
+    /// consumer still sees them in module order.
+    fn submit_one(
+        &self,
+        module: TrackedModule,
+        ty: IsqType,
+        imatrix: Option<Vec<f32>>,
+    ) -> pending_layer::IsqReceiver {
+        let prepared: Result<_> = (|| {
+            let layer = module.ct.resolve()?;
+            let device = layer.dtype_and_device().1;
+            let mut guard = self
+                .guard
+                .clone()
+                .with_module_key(module.key.clone())
+                .with_requested(ty.to_string())
+                .with_consumer(self.consumer);
+            if let Some(report) = &self.report {
+                guard = guard.with_report(report.clone());
+            }
+            let request = IsqRequest {
+                ty: Some(ty),
+                device: device.clone(),
+                has_imatrix: imatrix.is_some(),
+                capture: crate::IsqCaptureMode::Immediate,
+                consumer: self.consumer,
+                module_key: module.key.clone(),
+            };
+            let plan = layer.plan_isq(&request)?;
+            Ok((layer, device, guard, plan))
+        })();
+        match prepared {
+            Ok((layer, device, guard, plan)) => {
+                self.executor.submit(plan, self.consumer, move || {
+                    layer
+                        .clone()
+                        .apply_isq(Some(ty), device, &AtomicUsize::new(0), imatrix, guard)
+                })
+            }
+            Err(e) => {
+                let (tx, rx) = pending_layer::pending_isq_channel();
+                let _ = tx.send(Err(e));
+                rx
+            }
+        }
+    }
 }
 
 /// Return the fallback dtype for the given dtype.
