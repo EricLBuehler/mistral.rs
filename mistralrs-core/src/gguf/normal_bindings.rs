@@ -144,8 +144,15 @@ fn bind_block_tensor(
             NormalLoaderType::Lfm2 | NormalLoaderType::Lfm2Moe => {
                 format!("{p}.ffn_norm.{suffix}")
             }
+            // Kolibri-1's four norms are the pre-attention, post-attention, pre-FFN and
+            // post-FFN ones, and the GGUF names them in a different order.
+            NormalLoaderType::Kolibri1 => format!("{p}.post_attn_norm.{suffix}"),
             _ => format!("{p}.post_attention_layernorm.{suffix}"),
         }),
+        // Kolibri-1's sandwich norms: the post-attention and post-FFN norms have no
+        // DeepSeek-style equivalent, so they are named for what they are.
+        "attn_post_norm" => Some(format!("{p}.post_attn_norm.{suffix}")),
+        "ffn_post_norm" => Some(format!("{p}.post_ffn_norm.{suffix}")),
         "post_attention_norm" => Some(match loader {
             NormalLoaderType::GLM4 => format!("{p}.post_self_attn_layernorm.{suffix}"),
             _ => format!("{p}.post_attention_layernorm.{suffix}"),
@@ -153,6 +160,7 @@ fn bind_block_tensor(
         "post_ffw_norm" => Some(match loader {
             NormalLoaderType::Gemma2 => format!("{p}.post_feedforward_layernorm.{suffix}"),
             NormalLoaderType::GLM4 => format!("{p}.post_mlp_layernorm.{suffix}"),
+            NormalLoaderType::Kolibri1 => format!("{p}.post_ffn_norm.{suffix}"),
             _ => return Ok(()),
         }),
         "attn_q" if !matches!(loader, NormalLoaderType::Phi3) => {
@@ -179,7 +187,7 @@ fn bind_block_tensor(
         )),
         "attn_q_norm" => Some(format!("{p}.self_attn.{}.{suffix}", q_norm_name(loader))),
         "attn_k_norm" => Some(format!("{p}.self_attn.{}.{suffix}", k_norm_name(loader))),
-        "attn_sinks" => Some(format!("{p}.self_attn.sinks")),
+        "attn_sinks" => Some(attn_sinks_target(loader, &p)),
         "ffn_gate" if !matches!(loader, NormalLoaderType::GraniteMoeHybrid) => {
             dense_mlp_target(loader, &p, "gate", suffix)
         }
@@ -219,6 +227,8 @@ fn bind_block_tensor(
             NormalLoaderType::Lfm2 | NormalLoaderType::Lfm2Moe => {
                 format!("{p}.feed_forward.expert_bias")
             }
+            // Kolibri-1 keeps the bias beside the router rather than on the gate.
+            NormalLoaderType::Kolibri1 => format!("{p}.moe.router.expert_bias"),
             _ => format!("{p}.mlp.gate.e_score_correction_bias"),
         }),
         "attn_q_a" => Some(format!("{p}.self_attn.q_a_proj.{suffix}")),
@@ -795,9 +805,18 @@ fn shared_expert_target(
         NormalLoaderType::GLM4Moe | NormalLoaderType::GLM4MoeLite => "shared_experts",
         NormalLoaderType::HunYuanMoEV1 => "shared_mlp",
         NormalLoaderType::Qwen3Next => "shared_expert",
+        NormalLoaderType::Flint => "shared_expert",
         _ => "shared_experts",
     };
     format!("{p}.mlp.{module}.{projection}_proj.{suffix}")
+}
+
+/// The per-head attention sink. Flint names it `softmax_offset` in the checkpoint.
+fn attn_sinks_target(loader: &NormalLoaderType, p: &str) -> String {
+    match loader {
+        NormalLoaderType::Flint => format!("{p}.self_attn.softmax_offset"),
+        _ => format!("{p}.self_attn.sinks"),
+    }
 }
 
 fn q_norm_name(loader: &NormalLoaderType) -> &'static str {
@@ -970,6 +989,34 @@ mod tests {
             router_target(&NormalLoaderType::GraniteMoeHybrid, prefix, "weight"),
             "model.layers.3.block_sparse_moe.router.layer.weight"
         );
+    }
+
+    #[test]
+    fn flint_targets_match_the_checkpoint_names() {
+        let loader = &NormalLoaderType::Flint;
+        let p = "model.layers.2";
+        assert_eq!(
+            router_target(loader, p, "weight"),
+            "model.layers.2.mlp.gate.weight"
+        );
+        assert_eq!(
+            expert_target(loader, p, "gate", "weight"),
+            "model.layers.2.mlp.experts.gate_proj.weight"
+        );
+        assert_eq!(
+            shared_expert_target(loader, p, "up", "weight"),
+            "model.layers.2.mlp.shared_expert.up_proj.weight"
+        );
+        assert_eq!(
+            dense_mlp_target(loader, "model.layers.0", "down", "weight").unwrap(),
+            "model.layers.0.mlp.down_proj.weight"
+        );
+        assert_eq!(
+            attn_sinks_target(loader, p),
+            "model.layers.2.self_attn.softmax_offset"
+        );
+        assert_eq!(q_norm_name(loader), "q_norm");
+        assert_eq!(k_norm_name(loader), "k_norm");
     }
 
     #[test]

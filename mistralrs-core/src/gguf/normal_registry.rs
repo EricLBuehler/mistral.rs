@@ -1,8 +1,8 @@
 use crate::NormalLoaderType;
 use std::{error::Error, fmt, str::FromStr};
 
-pub(crate) const NORMAL_LOADER_TYPE_COUNT: usize = 26;
-pub(crate) const CANONICAL_GGUF_ARCHITECTURE_COUNT: usize = 26;
+pub(crate) const NORMAL_LOADER_TYPE_COUNT: usize = 28;
+pub(crate) const CANONICAL_GGUF_ARCHITECTURE_COUNT: usize = 28;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum CanonicalGgufArchitecture {
@@ -32,6 +32,8 @@ pub(crate) enum CanonicalGgufArchitecture {
     HunYuanMoe,
     Lfm2,
     Lfm2Moe,
+    Kolibri1,
+    Flint,
 }
 
 impl CanonicalGgufArchitecture {
@@ -63,6 +65,8 @@ impl CanonicalGgufArchitecture {
             Self::HunYuanMoe => "hunyuan-moe",
             Self::Lfm2 => "lfm2",
             Self::Lfm2Moe => "lfm2moe",
+            Self::Kolibri1 => "kolibri1",
+            Self::Flint => "flint",
         }
     }
 }
@@ -104,6 +108,8 @@ impl FromStr for CanonicalGgufArchitecture {
             "hunyuan-moe" => Ok(Self::HunYuanMoe),
             "lfm2" => Ok(Self::Lfm2),
             "lfm2moe" => Ok(Self::Lfm2Moe),
+            "kolibri1" => Ok(Self::Kolibri1),
+            "flint" => Ok(Self::Flint),
             _ => Err(NormalGgufRegistryError::UnknownArchitecture(
                 value.to_string(),
             )),
@@ -387,12 +393,27 @@ const LFM2_MOE_METADATA: &[&str] = &[
     "{arch}.expert_count",
     "{arch}.expert_used_count",
 ];
+/// Flint splits its layers with an explicit dense lead, so the count is what the model
+/// needs to know which layers are MoE.
+const FLINT_METADATA: &[&str] = &[
+    "{arch}.expert_count",
+    "{arch}.expert_used_count",
+    "{arch}.leading_dense_block_count",
+];
 
 const MOE_TENSORS: &[&str] = &[
     ".ffn_gate_inp.",
     ".ffn_gate_exps.",
     ".ffn_up_exps.",
     ".ffn_down_exps.",
+];
+/// Flint's per-head attention sink is part of the architecture, not an optional extra.
+const FLINT_TENSORS: &[&str] = &[
+    ".ffn_gate_inp.",
+    ".ffn_gate_exps.",
+    ".ffn_up_exps.",
+    ".ffn_down_exps.",
+    ".attn_sinks.",
 ];
 const MLA_TENSORS: &[&str] = &[".attn_k_b.", ".attn_v_b."];
 const SSM_TENSORS: &[&str] = &[".ssm_a", ".ssm_conv1d."];
@@ -442,6 +463,8 @@ const HUNYUAN_DENSE_LOADERS: &[NormalLoaderType] = &[NormalLoaderType::HunYuanDe
 const HUNYUAN_MOE_LOADERS: &[NormalLoaderType] = &[NormalLoaderType::HunYuanMoEV1];
 const LFM2_LOADERS: &[NormalLoaderType] = &[NormalLoaderType::Lfm2];
 const LFM2_MOE_LOADERS: &[NormalLoaderType] = &[NormalLoaderType::Lfm2Moe];
+const KOLIBRI1_LOADERS: &[NormalLoaderType] = &[NormalLoaderType::Kolibri1];
+const FLINT_LOADERS: &[NormalLoaderType] = &[NormalLoaderType::Flint];
 
 pub(crate) const GGUF_SCHEMAS: &[GgufSchema; CANONICAL_GGUF_ARCHITECTURE_COUNT] = &[
     GgufSchema {
@@ -652,6 +675,22 @@ pub(crate) const GGUF_SCHEMAS: &[GgufSchema; CANONICAL_GGUF_ARCHITECTURE_COUNT] 
         required_tensors: SHORTCONV_TENSORS,
         unsupported_metadata: NO_REQUIREMENTS,
     },
+    GgufSchema {
+        architecture: CanonicalGgufArchitecture::Kolibri1,
+        compatible_loaders: KOLIBRI1_LOADERS,
+        rope_pairing: RopePairing::HalfSplit,
+        required_metadata: MOE_METADATA,
+        required_tensors: MOE_TENSORS,
+        unsupported_metadata: NO_REQUIREMENTS,
+    },
+    GgufSchema {
+        architecture: CanonicalGgufArchitecture::Flint,
+        compatible_loaders: FLINT_LOADERS,
+        rope_pairing: RopePairing::HalfSplit,
+        required_metadata: FLINT_METADATA,
+        required_tensors: FLINT_TENSORS,
+        unsupported_metadata: NO_REQUIREMENTS,
+    },
 ];
 
 pub(crate) const NORMAL_MODEL_ADAPTERS: &[NativeModelAdapter; NORMAL_LOADER_TYPE_COUNT] = &[
@@ -855,6 +894,16 @@ pub(crate) const NORMAL_MODEL_ADAPTERS: &[NativeModelAdapter; NORMAL_LOADER_TYPE
             GgufLayout::PerLayerInventory,
             GgufLayout::SqueezedShortConv,
         ],
+    },
+    NativeModelAdapter {
+        loader: NormalLoaderType::Kolibri1,
+        architectures: &[CanonicalGgufArchitecture::Kolibri1],
+        layouts: &[GgufLayout::Direct, GgufLayout::StackedExperts],
+    },
+    NativeModelAdapter {
+        loader: NormalLoaderType::Flint,
+        architectures: &[CanonicalGgufArchitecture::Flint],
+        layouts: &[GgufLayout::Direct, GgufLayout::StackedExperts],
     },
 ];
 

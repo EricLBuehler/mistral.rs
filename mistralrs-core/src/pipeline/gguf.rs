@@ -708,6 +708,7 @@ impl GGUFLoader {
             bos_token: tokenizer.conversion.bos,
             eos_token: tokenizer.conversion.eos,
             unk_token: tokenizer.conversion.unk,
+            eog_tokens: tokenizer.conversion.eog_tokens.clone(),
             source_weight_files: paths.get_weight_filenames().to_vec(),
             rope_pairing,
         };
@@ -1403,6 +1404,7 @@ impl Loader for GGUFLoader {
             bos,
             eos,
             unk,
+            eog_tokens,
         } = tokenizer.conversion;
 
         // Only load gguf chat template if there is nothing else
@@ -1477,7 +1479,7 @@ impl Loader for GGUFLoader {
         let generation_defaults = gen_conf
             .as_ref()
             .and_then(GenerationConfig::generation_defaults);
-        let eos = calculate_eos_tokens(&chat_template, gen_conf.as_ref(), &tokenizer);
+        let eos = calculate_eos_tokens(&chat_template, gen_conf.as_ref(), &tokenizer, &eog_tokens);
         #[cfg(feature = "metal")]
         super::metal_warmup::prepare_model(super::metal_warmup::MetalModelWarmup {
             device,
@@ -1728,6 +1730,7 @@ mod tests {
             bos: None,
             eos: Some(marker.to_string()),
             unk: None,
+            eog_tokens: Vec::new(),
         }
     }
 

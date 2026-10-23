@@ -551,6 +551,7 @@ impl Engine {
         session_store: Arc<std::sync::Mutex<agentic_session::AgenticSessionStore>>,
         file_store: crate::files::FileStore,
     ) -> anyhow::Result<Self> {
+        crate::utils::decode_prof::enable_from_env();
         no_kv_cache |= get_mut_arcmutex!(pipeline).get_metadata().no_kv_cache;
 
         no_prefix_cache = no_prefix_cache

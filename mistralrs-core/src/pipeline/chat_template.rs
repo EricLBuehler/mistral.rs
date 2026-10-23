@@ -176,11 +176,20 @@ pub fn calculate_eos_tokens(
     chat_template: &ChatTemplate,
     gen_conf: Option<&GenerationConfig>,
     tokenizer: &Tokenizer,
+    eog_tokens: &[String],
 ) -> Vec<u32> {
     let mut eos_tok_ids = chat_template.eos_tok().map(|x| vec![x]).unwrap_or_default();
     let mut bos_tok_ids = chat_template.bos_tok().map(|b| vec![b]).unwrap_or_default();
 
     let templates = chat_template.get_template_contents();
+
+    // The GGUF's own end-of-generation list: the machine-readable statement of which tokens
+    // close a turn, which the single `eos_token_id` does not cover.
+    for token in eog_tokens {
+        if !eos_tok_ids.contains(token) {
+            eos_tok_ids.push(token.clone());
+        }
+    }
 
     for alternate in SUPPORTED_ALTERNATE_EOS {
         if tokenizer.get_vocab(true).contains_key(*alternate)
@@ -1052,7 +1061,53 @@ mod tests {
         }))
         .unwrap();
 
-        assert_eq!(calculate_eos_tokens(&template, None, &tokenizer), vec![1]);
+        assert_eq!(
+            calculate_eos_tokens(&template, None, &tokenizer, &[]),
+            vec![1]
+        );
+    }
+
+    /// A GGUF that names more than one end-of-generation token stops on all of them, even
+    /// when the template's own `eos_token` names only one.
+    #[test]
+    fn eog_tokens_join_the_stop_set() {
+        use ahash::AHashMap;
+        use tokenizers::models::wordlevel::WordLevel;
+
+        let vocab = [
+            ("<unk>".to_string(), 0),
+            ("<|end_of_text|>".to_string(), 1),
+            ("<|user|>".to_string(), 2),
+            ("<|observation|>".to_string(), 3),
+        ]
+        .into_iter()
+        .collect::<AHashMap<_, _>>();
+        let tokenizer = Tokenizer::new(
+            WordLevel::builder()
+                .vocab(vocab)
+                .unk_token("<unk>".to_string())
+                .build()
+                .unwrap(),
+        );
+        let template: ChatTemplate = serde_json::from_value(serde_json::json!({
+            "eos_token": "<|end_of_text|>",
+            "chat_template": "<|user|>"
+        }))
+        .unwrap();
+
+        assert_eq!(
+            calculate_eos_tokens(
+                &template,
+                None,
+                &tokenizer,
+                &[
+                    "<|end_of_text|>".to_string(),
+                    "<|user|>".to_string(),
+                    "<|observation|>".to_string()
+                ]
+            ),
+            vec![1, 2, 3]
+        );
     }
 
     #[test]

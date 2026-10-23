@@ -28,7 +28,18 @@ type BpeMerges = Vec<(String, String)>;
 
 const GPT2_REGEX: &str =
     "'s|'t|'re|'ve|'m|'ll|'d| ?\\p{L}+| ?\\p{N}+| ?[^\\s\\p{L}\\p{N}]+|\\s+(?!\\S)";
+/// Kolibri-1 splits single digits where llama3 groups up to three, and it does not ignore
+/// merges. Taken from the checkpoint's own `tokenizer.json`, which is the authority for the
+/// profile the GGUF names.
+const KOLIBRI1_REGEX: &str = r"(?i:'s|'t|'re|'ve|'m|'ll|'d)|[^\r\n\p{L}\p{N}]?\p{L}+|\p{N}{1}| ?[^\s\p{L}\p{N}]+[\r\n]*|\s*[\r\n]+|\s+(?!\S)|\s+";
 const LLAMA3_REGEX: &str = "(?:'[sS]|'[tT]|'[rR][eE]|'[vV][eE]|'[mM]|'[lL][lL]|'[dD])|[^\\r\\n\\p{L}\\p{N}]?\\p{L}+|\\p{N}{1,3}| ?[^\\s\\p{L}\\p{N}]+[\\r\\n]*|\\s*[\\r\\n]+|\\s+(?!\\S)|\\s+";
+/// Flint's pre-tokenizer, as upstream llama.cpp splits it: digits in groups of up to three,
+/// a CJK range of its own, and a letter rule that keeps the case of the first letter.
+const FLINT_REGEXES: &[&str] = &[
+    r"\p{N}{1,3}",
+    r"[\x{4e00}-\x{9fa5}\x{3040}-\x{309f}\x{30a0}-\x{30ff}]+",
+    r"[^\r\n\p{L}\p{N}]?[\p{Lu}\p{Lt}\p{Lm}\p{Lo}\p{M}]*[\p{Ll}\p{Lm}\p{Lo}\p{M}]+(?:'[sS]|'[tT]|'[rR][eE]|'[vV][eE]|'[mM]|'[lL][lL]|'[dD])?|[^\r\n\p{L}\p{N}]?[\p{Lu}\p{Lt}\p{Lm}\p{Lo}\p{M}]+[\p{Ll}\p{Lm}\p{Lo}\p{M}]*(?:'[sS]|'[tT]|'[rR][eE]|'[vV][eE]|'[mM]|'[lL][lL]|'[dD])?| ?[\p{P}\p{S}]+[\r\n]*|\s*[\r\n]+|\s+(?!\S)|\s+",
+];
 const QWEN2_REGEX: &str = "(?:'[sS]|'[tT]|'[rR][eE]|'[vV][eE]|'[mM]|'[lL][lL]|'[dD])|[^\\r\\n\\p{L}\\p{N}]?\\p{L}+|\\p{N}| ?[^\\s\\p{L}\\p{N}]+[\\r\\n]*|\\s*[\\r\\n]+|\\s+(?!\\S)|\\s+";
 const QWEN35_REGEX: &str = "(?i:'s|'t|'re|'ve|'m|'ll|'d)|[^\\r\\n\\p{L}\\p{N}]?[\\p{L}\\p{M}]+|\\p{N}| ?[^\\s\\p{L}\\p{M}\\p{N}]+[\\r\\n]*|\\s*[\\r\\n]+|\\s+(?!\\S)|\\s+";
 const DEEPSEEK_LLM_REGEXES: &[&str] = &[
@@ -62,6 +73,9 @@ pub(crate) struct GgufTokenizerConversion {
     pub bos: Option<String>,
     pub eos: Option<String>,
     pub unk: Option<String>,
+    /// Every `tokenizer.ggml.eog_token_ids` entry, decoded. A GGUF names more than one token
+    /// that ends a turn, and the single `eos_token_id` is not the whole set.
+    pub eog_tokens: Vec<String>,
 }
 
 struct GgufTokenizerMetadata {
@@ -110,6 +124,31 @@ impl GgufTokenizerMetadata {
     }
 }
 
+fn gguf_value_u32(value: &Value) -> Option<u32> {
+    match value {
+        Value::U8(v) => Some(u32::from(*v)),
+        Value::U16(v) => Some(u32::from(*v)),
+        Value::U32(v) => Some(*v),
+        Value::I8(v) => u32::try_from(*v).ok(),
+        Value::I16(v) => u32::try_from(*v).ok(),
+        Value::I32(v) => u32::try_from(*v).ok(),
+        Value::U64(v) => u32::try_from(*v).ok(),
+        Value::I64(v) => u32::try_from(*v).ok(),
+        _ => None,
+    }
+}
+
+/// Every `tokenizer.ggml.eog_token_ids` entry, decoded. A GGUF names more than one token
+/// that ends a turn, and the single `eos_token_id` is not the whole set.
+fn eog_tokens_from(values: &HashMap<String, Value>, tokens: &[String]) -> Vec<String> {
+    let Some(Value::Array(ids)) = values.get("tokenizer.ggml.eog_token_ids") else {
+        return Vec::new();
+    };
+    ids.iter()
+        .filter_map(|id| gguf_value_u32(id).and_then(|id| tokens.get(id as usize).cloned()))
+        .collect()
+}
+
 pub(crate) fn validate_external_gguf_tokenizer(
     tokenizer: Tokenizer,
     values: &HashMap<String, Value>,
@@ -134,6 +173,7 @@ pub(crate) fn validate_external_gguf_tokenizer(
         bos: metadata.token(metadata.bos),
         eos: metadata.token(metadata.eos),
         unk: metadata.token(metadata.unk),
+        eog_tokens: eog_tokens_from(values, &metadata.tokens),
     })
 }
 
@@ -271,6 +311,7 @@ pub(crate) fn convert_gguf_metadata_to_hf_tokenizer(
         bos,
         eos: Some(props.tokens[props.eos as usize].clone()),
         unk,
+        eog_tokens: eog_tokens_from(values, &props.tokens),
     })
 }
 
@@ -285,6 +326,8 @@ enum TokenizerKind {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum BpePreTokenizerKind {
     Llama3,
+    Kolibri1,
+    Flint,
     Dbrx,
     Qwen2,
     Gpt2,
@@ -316,6 +359,18 @@ fn bpe_pre_tokenizer_spec(pre: Option<&str>) -> Result<BpePreTokenizerSpec> {
             kind: BpePreTokenizerKind::Llama3,
             regexes: &[LLAMA3_REGEX],
             ignore_merges: true,
+            normalize_nfc: false,
+        },
+        "kolibri1" => BpePreTokenizerSpec {
+            kind: BpePreTokenizerKind::Kolibri1,
+            regexes: &[KOLIBRI1_REGEX],
+            ignore_merges: false,
+            normalize_nfc: false,
+        },
+        "flint" => BpePreTokenizerSpec {
+            kind: BpePreTokenizerKind::Flint,
+            regexes: FLINT_REGEXES,
+            ignore_merges: false,
             normalize_nfc: false,
         },
         "dbrx" => BpePreTokenizerSpec {
@@ -1138,6 +1193,8 @@ mod tests {
             ("llama3", BpePreTokenizerKind::Llama3, true, false, 1),
             ("llama-bpe", BpePreTokenizerKind::Llama3, true, false, 1),
             ("lfm2", BpePreTokenizerKind::Llama3, true, false, 1),
+            ("kolibri1", BpePreTokenizerKind::Kolibri1, false, false, 1),
+            ("flint", BpePreTokenizerKind::Flint, false, false, 3),
             ("dbrx", BpePreTokenizerKind::Dbrx, false, false, 1),
             ("qwen2", BpePreTokenizerKind::Qwen2, false, false, 1),
             ("qwen35", BpePreTokenizerKind::Qwen2, false, true, 1),

@@ -11,6 +11,8 @@ const GEMMA2_27B_LAYER_COUNT: usize = 46;
 const GPT_OSS_ALPHA: f64 = 1.702;
 const GPT_OSS_SWIGLU_LIMIT: f64 = 7.0;
 const GPT_OSS_SWA_PERIOD: usize = 2;
+/// Kolibri-1 runs four sliding layers then one full, so the full layer is every 5th.
+const KOLIBRI1_SWA_PERIOD: usize = 5;
 const SMOLLM3_NO_ROPE_INTERVAL: usize = 4;
 
 type BuilderFn = fn(&MetadataView<'_>) -> SynthesisResult<JsonValue>;
@@ -43,7 +45,7 @@ pub(crate) struct NormalConfigBuilder {
     build: BuilderFn,
 }
 
-pub(crate) const NORMAL_CONFIG_BUILDERS: &[NormalConfigBuilder; 26] = &[
+pub(crate) const NORMAL_CONFIG_BUILDERS: &[NormalConfigBuilder; 28] = &[
     NormalConfigBuilder {
         loader: NormalLoaderType::Mistral,
         build: build_mistral,
@@ -123,6 +125,14 @@ pub(crate) const NORMAL_CONFIG_BUILDERS: &[NormalConfigBuilder; 26] = &[
     NormalConfigBuilder {
         loader: NormalLoaderType::GptOss,
         build: build_gpt_oss,
+    },
+    NormalConfigBuilder {
+        loader: NormalLoaderType::Kolibri1,
+        build: build_kolibri1,
+    },
+    NormalConfigBuilder {
+        loader: NormalLoaderType::Flint,
+        build: build_flint,
     },
     NormalConfigBuilder {
         loader: NormalLoaderType::HunYuanDenseV1,
@@ -831,25 +841,7 @@ impl<'a> MetadataView<'a> {
         };
         let key = self.key("attention.sliding_window_pattern");
         match value {
-            GgufValue::Array(values) => {
-                if values.len() != layer_count {
-                    return Err(NormalConfigSynthesisError::new(format!(
-                        "GGUF metadata `{key}` has {} entries for {layer_count} layers",
-                        values.len()
-                    )));
-                }
-                values
-                    .iter()
-                    .map(|value| {
-                        value_bool(value).ok_or_else(|| {
-                            NormalConfigSynthesisError::new(format!(
-                                "GGUF metadata `{key}` must contain only booleans"
-                            ))
-                        })
-                    })
-                    .collect::<SynthesisResult<Vec<_>>>()
-                    .map(Some)
-            }
+            GgufValue::Array(_) => pattern_flags(value, &key, layer_count).map(Some),
             _ => {
                 let period = value_usize(value).ok_or_else(|| {
                     NormalConfigSynthesisError::new(format!(
@@ -869,6 +861,48 @@ impl<'a> MetadataView<'a> {
             }
         }
     }
+
+    /// Per-layer RoPE pattern: `true` where the layer carries positional encoding.
+    fn rope_pattern(&self, layer_count: usize) -> SynthesisResult<Option<Vec<bool>>> {
+        let Some(value) = self.value("attention.rope_pattern") else {
+            return Ok(None);
+        };
+        let key = self.key("attention.rope_pattern");
+        let GgufValue::Array(_) = value else {
+            return Err(NormalConfigSynthesisError::new(format!(
+                "GGUF metadata `{key}` must be an array"
+            )));
+        };
+        pattern_flags(value, &key, layer_count).map(Some)
+    }
+}
+
+/// Per-layer flags from an array of booleans or integers. The GGUF stores these patterns as
+/// int8 arrays, and a boolean array is accepted as well.
+fn pattern_flags(value: &GgufValue, key: &str, layer_count: usize) -> SynthesisResult<Vec<bool>> {
+    let GgufValue::Array(values) = value else {
+        return Err(NormalConfigSynthesisError::new(format!(
+            "GGUF metadata `{key}` must be an array"
+        )));
+    };
+    if values.len() != layer_count {
+        return Err(NormalConfigSynthesisError::new(format!(
+            "GGUF metadata `{key}` has {} entries for {layer_count} layers",
+            values.len()
+        )));
+    }
+    values
+        .iter()
+        .map(|value| {
+            value_bool(value)
+                .or_else(|| value_usize(value).map(|value| value != 0))
+                .ok_or_else(|| {
+                    NormalConfigSynthesisError::new(format!(
+                        "GGUF metadata `{key}` must contain only booleans or integers"
+                    ))
+                })
+        })
+        .collect()
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -1617,6 +1651,142 @@ fn build_gpt_oss(metadata: &MetadataView<'_>) -> SynthesisResult<JsonValue> {
     );
     config.insert("rope_scaling".into(), gpt_oss_rope_scaling(metadata)?);
     Ok(JsonValue::Object(config))
+}
+
+fn build_kolibri1(metadata: &MetadataView<'_>) -> SynthesisResult<JsonValue> {
+    let fields = StandardFields::read(metadata, None)?;
+    let sliding_window = fields.sliding_window.ok_or_else(|| {
+        NormalConfigSynthesisError::new(format!(
+            "Standalone Kolibri-1 config requires `{}`",
+            metadata.key("attention.sliding_window")
+        ))
+    })?;
+    let mut config = fields.rms_json();
+    // The routed experts and the shared expert have distinct widths, and neither is the
+    // dense `feed_forward_length`, so the default is meaningless here.
+    config.remove("intermediate_size");
+    config.insert("sliding_window".into(), json!(sliding_window));
+    config.insert("use_sliding_window".into(), json!(true));
+    config.insert("head_dim".into(), json!(fields.head_dim));
+    config.insert("hidden_act".into(), json!("silu"));
+    config.insert(
+        "num_experts".into(),
+        json!(metadata.required_usize("expert_count")?),
+    );
+    config.insert(
+        "num_experts_per_tok".into(),
+        json!(metadata.required_usize("expert_used_count")?),
+    );
+    config.insert(
+        "moe_intermediate_size".into(),
+        json!(metadata.required_usize("expert_feed_forward_length")?),
+    );
+    config.insert(
+        "shared_expert_intermediate_size".into(),
+        json!(metadata.required_usize("expert_shared_feed_forward_length")?),
+    );
+    // Kolibri-1 applies the raw top-k logit weights unscaled.
+    config.insert("norm_topk_prob".into(), json!(false));
+    config.insert(
+        "attention_bias".into(),
+        json!(metadata.has_tensor_marker(".attn_q.bias")),
+    );
+    config.insert(
+        "layer_types".into(),
+        json!(kolibri1_layer_types(metadata, fields.num_hidden_layers)?),
+    );
+    Ok(JsonValue::Object(config))
+}
+
+fn build_flint(metadata: &MetadataView<'_>) -> SynthesisResult<JsonValue> {
+    let fields = StandardFields::read(metadata, None)?;
+    let sliding_window = fields.sliding_window.ok_or_else(|| {
+        NormalConfigSynthesisError::new(format!(
+            "Standalone Flint config requires `{}`",
+            metadata.key("attention.sliding_window")
+        ))
+    })?;
+    let layer_count = fields.num_hidden_layers;
+    let mut config = fields.rms_json();
+    config.insert("sliding_window".into(), json!(sliding_window));
+    config.insert("use_sliding_window".into(), json!(true));
+    config.insert("head_dim".into(), json!(fields.head_dim));
+    config.insert("hidden_act".into(), json!("silu"));
+    config.insert(
+        "num_experts".into(),
+        json!(metadata.required_usize("expert_count")?),
+    );
+    config.insert(
+        "num_experts_per_tok".into(),
+        json!(metadata.required_usize("expert_used_count")?),
+    );
+    config.insert(
+        "moe_intermediate_size".into(),
+        json!(metadata.required_usize("expert_feed_forward_length")?),
+    );
+    config.insert(
+        "shared_expert_intermediate_size".into(),
+        json!(metadata.required_usize("expert_shared_feed_forward_length")?),
+    );
+    // The sigmoid router renormalises the selected weights when the GGUF says so.
+    config.insert(
+        "norm_topk_prob".into(),
+        json!(metadata
+            .optional_bool("expert_weights_norm")?
+            .unwrap_or(true)),
+    );
+    config.insert(
+        "attention_bias".into(),
+        json!(metadata.has_tensor_marker(".attn_q.bias")),
+    );
+    config.insert(
+        "layer_types".into(),
+        json!(flint_layer_types(metadata, layer_count)?),
+    );
+    // The leading layers keep a dense MLP instead of the routed stack.
+    let dense_lead = metadata.required_usize("leading_dense_block_count")?;
+    config.insert(
+        "mlp_only_layers".into(),
+        json!((0..dense_lead.min(layer_count)).collect::<Vec<usize>>()),
+    );
+    // The RoPE pattern is its own array; the layers it leaves out are the ones with no
+    // positional encoding.
+    let rope_pattern = metadata.rope_pattern(layer_count)?;
+    config.insert(
+        "no_rope_layer_indices".into(),
+        json!(match &rope_pattern {
+            Some(pattern) => pattern
+                .iter()
+                .enumerate()
+                .filter(|(_, has_rope)| !**has_rope)
+                .map(|(layer, _)| layer)
+                .collect::<Vec<usize>>(),
+            None => Vec::new(),
+        }),
+    );
+    Ok(JsonValue::Object(config))
+}
+
+fn flint_layer_types(
+    metadata: &MetadataView<'_>,
+    layer_count: usize,
+) -> SynthesisResult<Vec<&'static str>> {
+    let pattern = metadata.sliding_pattern(layer_count)?.ok_or_else(|| {
+        NormalConfigSynthesisError::new(format!(
+            "Standalone Flint config requires `{}`",
+            metadata.key("attention.sliding_window_pattern")
+        ))
+    })?;
+    Ok(pattern
+        .into_iter()
+        .map(|is_sliding| {
+            if is_sliding {
+                "sliding_attention"
+            } else {
+                "full_attention"
+            }
+        })
+        .collect())
 }
 
 fn build_hunyuan_dense(metadata: &MetadataView<'_>) -> SynthesisResult<JsonValue> {
@@ -2409,6 +2579,27 @@ fn gpt_oss_layer_types(
         .collect())
 }
 
+fn kolibri1_layer_types(
+    metadata: &MetadataView<'_>,
+    layer_count: usize,
+) -> SynthesisResult<Vec<&'static str>> {
+    let pattern = metadata.sliding_pattern(layer_count)?.unwrap_or_else(|| {
+        (0..layer_count)
+            .map(|layer| (layer + 1) % KOLIBRI1_SWA_PERIOD != 0)
+            .collect()
+    });
+    Ok(pattern
+        .into_iter()
+        .map(|is_sliding| {
+            if is_sliding {
+                "sliding_attention"
+            } else {
+                "full_attention"
+            }
+        })
+        .collect())
+}
+
 fn dense_layer_indices(metadata: &MetadataView<'_>, layer_count: usize) -> Vec<usize> {
     (0..layer_count)
         .filter(|layer| {
@@ -2574,6 +2765,8 @@ mod tests {
                 | NormalLoaderType::HunYuanMoEV1
                 | NormalLoaderType::Qwen3Next
                 | NormalLoaderType::Lfm2Moe
+                | NormalLoaderType::Kolibri1
+                | NormalLoaderType::Flint
         )
     }
 
@@ -2745,13 +2938,35 @@ mod tests {
             );
         }
 
-        if matches!(loader, NormalLoaderType::Gemma2 | NormalLoaderType::GptOss) {
+        if matches!(
+            loader,
+            NormalLoaderType::Gemma2 | NormalLoaderType::GptOss | NormalLoaderType::Kolibri1
+        ) {
             insert_u32(
                 &mut metadata,
                 architecture,
                 "attention.sliding_window",
                 1_024,
             );
+        }
+
+        if matches!(loader, NormalLoaderType::Flint) {
+            insert_u32(&mut metadata, architecture, "attention.sliding_window", 513);
+            // The sliding-window and rope patterns are the same array for this model.
+            let pattern = vec![0u32; LAYER_COUNT];
+            insert_u32_array(
+                &mut metadata,
+                architecture,
+                "attention.sliding_window_pattern",
+                &pattern,
+            );
+            insert_u32_array(
+                &mut metadata,
+                architecture,
+                "attention.rope_pattern",
+                &pattern,
+            );
+            tensors.push("blk.1.attn_sinks.weight".to_string());
         }
 
         if matches!(loader, NormalLoaderType::HunYuanMoEV1) {
@@ -2842,6 +3057,10 @@ mod tests {
             NormalLoaderType::Lfm2 | NormalLoaderType::Lfm2Moe => {
                 assert_deserializes::<models::lfm2::Config>(loader, config)
             }
+            NormalLoaderType::Kolibri1 => {
+                assert_deserializes::<models::kolibri1::Config>(loader, config)
+            }
+            NormalLoaderType::Flint => assert_deserializes::<models::flint::Config>(loader, config),
         }
     }
 

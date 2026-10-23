@@ -42,6 +42,7 @@ For the offline workflow (pre-downloading models, local paths), see [run models]
 | `CANDLE_CPU_MASK` | Linux only. Pins CPU worker threads to a cpulist such as `15-19` or `5-9,15-19`. If no explicit thread-count variable is set, the mask size also becomes the default worker count. |
 | `CANDLE_CPU_AFFINITY` | Linux only. Set to `1` to try Candle's automatic high-capacity CPU affinity mask on heterogeneous CPUs. Default is off. |
 | `CANDLE_BARRIER_POOL_SPIN_LIMIT` | Advanced CPU tuning. Overrides the spin count used by Candle's persistent barrier pool before worker threads park. |
+| `MISTRALRS_CPU_THREADS` | Worker count for mistral.rs's own CPU decode pools (the output-parallel GEMV and the flash-attention pool). Overrides `RAYON_NUM_THREADS` for those two pools; it does not resize Candle's global Rayon pool, so prefer `RAYON_NUM_THREADS` when you want every pool sized together. Set it when running under CPU pinning (`numactl`, `taskset`) with `RAYON_NUM_THREADS` unset. |
 
 See [CPU threads and affinity](/guides/perf/throughput-tuning/#cpu-threads-and-affinity) for examples.
 

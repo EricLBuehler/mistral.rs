@@ -379,6 +379,54 @@ impl RmsNorm {
     }
 }
 
+/// Whether the f32-scale RMSNorm is used.
+///
+/// `MISTRALRS_RMSNORM_CANDLE=1` restores candle's fused kernel, which rounds the scale to the
+/// storage dtype. Default is the f32-scale form; see `rms_norm_f32_scale`.
+fn rms_norm_f32_scale_enabled() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| {
+        !std::env::var("MISTRALRS_RMSNORM_CANDLE")
+            .is_ok_and(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+    })
+}
+
+/// RMSNorm with the scale kept in f32.
+///
+/// `candle_nn::ops::rms_norm` uses the fused kernel, which computes the scale in f32 and then
+/// rounds it to the storage dtype before dividing:
+///
+/// ```ignore
+/// let m = (sum2 / n as f32 + eps).sqrt();
+/// let m = T::from_f32(m).unwrap_or_else(T::nan);
+/// *d = *s / m * *alpha
+/// ```
+///
+/// Hugging Face, ggml and llama.cpp all keep the scale in f32 and round the normalised value
+/// instead. Rounding the scale applies one relative error of up to a bf16 ulp - about 0.4% - to
+/// every element of the row, uniformly.
+///
+/// That matters more than it looks. On Kolibri-1 the router's top-k boundary is decided on
+/// differences below a bf16 ulp, so a 0.4% error in the norm output that feeds the router is
+/// enough to change which experts are selected, and a different expert set is a different
+/// token. See `todo/mistralrs/07-kolibri1-logit-gap.md`.
+fn rms_norm_f32_scale(x: &Tensor, weight: &Tensor, eps: f32) -> Result<Tensor> {
+    if !rms_norm_f32_scale_enabled() {
+        return candle_nn::ops::rms_norm(x, weight, eps);
+    }
+    let dtype = x.dtype();
+    let x = x.to_dtype(DType::F32)?;
+    let hidden = x.dim(candle_core::D::Minus1)?;
+    let sum2 = x.sqr()?.sum_keepdim(candle_core::D::Minus1)?;
+    let mean = (sum2 / hidden as f64)?;
+    let inv_rms = (mean + eps as f64)?.sqrt()?.recip()?;
+    let inv_rms = inv_rms.broadcast_as(x.shape())?;
+    let normed = x.broadcast_mul(&inv_rms)?;
+    // Round the normalised value, not the scale: the order Hugging Face uses.
+    let normed = normed.to_dtype(dtype)?;
+    normed.broadcast_mul(weight)
+}
+
 /// Whether a GPU backend's fused add + RMSNorm kernel covers these inputs.
 fn fused_add_rms_norm_applies(x: &Tensor, residual: &Tensor, weight: &Tensor) -> Result<bool> {
     Ok((x.device().is_cuda() || x.device().is_metal())
@@ -409,7 +457,7 @@ fn rms_norm_forward_add(
     }
 
     let sum = (x + residual)?;
-    let normed = candle_nn::ops::rms_norm(&sum.contiguous()?, weight, eps as f32)?;
+    let normed = rms_norm_f32_scale(&sum.contiguous()?, weight, eps as f32)?;
     Ok((sum, normed))
 }
 
@@ -422,7 +470,7 @@ impl Module for RmsNorm {
             return Ok(out);
         }
 
-        candle_nn::ops::rms_norm(&x.contiguous()?, &self.weight, self.eps as f32)
+        rms_norm_f32_scale(&x.contiguous()?, &self.weight, self.eps as f32)
     }
 }
 
@@ -463,7 +511,7 @@ fn rms_norm_forward_residual(
         }
     }
 
-    let normed = candle_nn::ops::rms_norm(&x.contiguous()?, weight, eps as f32)?;
+    let normed = rms_norm_f32_scale(&x.contiguous()?, weight, eps as f32)?;
     let out = (residual + normed)?;
     if let Some(scale) = scale {
         out.broadcast_mul(scale)
@@ -505,7 +553,7 @@ fn rms_norm_forward_residual_then_rms_norm(
     }
 
     let xs = rms_norm_forward_residual(x, residual, residual_weight, residual_eps, scale)?;
-    let normed = candle_nn::ops::rms_norm(&xs.contiguous()?, norm_weight, norm_eps as f32)?;
+    let normed = rms_norm_f32_scale(&xs.contiguous()?, norm_weight, norm_eps as f32)?;
     Ok((xs, normed))
 }
 
@@ -621,7 +669,7 @@ impl GemmaRmsNorm {
 
 impl Module for GemmaRmsNorm {
     fn forward(&self, x: &Tensor) -> Result<Tensor> {
-        candle_nn::ops::rms_norm(&x.contiguous()?, &self.weight, self.eps as f32)
+        rms_norm_f32_scale(&x.contiguous()?, &self.weight, self.eps as f32)
     }
 }
 
@@ -678,7 +726,7 @@ impl QRmsNorm {
     }
 
     pub fn forward(&self, x: &Tensor) -> Result<Tensor> {
-        candle_nn::ops::rms_norm(&x.contiguous()?, &self.weight, self.eps as f32)
+        rms_norm_f32_scale(&x.contiguous()?, &self.weight, self.eps as f32)
     }
 }
 
@@ -2902,8 +2950,8 @@ pub fn qk_rms_norm_rope(
         return Ok((q, k));
     }
 
-    let q = candle_nn::ops::rms_norm(&q.contiguous()?, q_weight, q_eps as f32)?;
-    let k = candle_nn::ops::rms_norm(&k.contiguous()?, k_weight, k_eps as f32)?;
+    let q = rms_norm_f32_scale(&q.contiguous()?, q_weight, q_eps as f32)?;
+    let k = rms_norm_f32_scale(&k.contiguous()?, k_weight, k_eps as f32)?;
     apply_rotary_qk(&q, &k, cos_cache, sin_cache, positions, is_gpt_neox)
 }
 
@@ -2941,9 +2989,9 @@ pub fn qkv_rms_norm_rope(
         return Ok((q, k, v));
     }
 
-    let q = candle_nn::ops::rms_norm(&q.contiguous()?, q_weight, q_eps as f32)?;
-    let k = candle_nn::ops::rms_norm(&k.contiguous()?, k_weight, k_eps as f32)?;
-    let v = candle_nn::ops::rms_norm(&v.contiguous()?, v_weight, v_eps as f32)?;
+    let q = rms_norm_f32_scale(&q.contiguous()?, q_weight, q_eps as f32)?;
+    let k = rms_norm_f32_scale(&k.contiguous()?, k_weight, k_eps as f32)?;
+    let v = rms_norm_f32_scale(&v.contiguous()?, v_weight, v_eps as f32)?;
     let (q, k) = apply_rotary_qk(&q, &k, cos_cache, sin_cache, positions, is_gpt_neox)?;
     Ok((q, k, v))
 }
@@ -2973,7 +3021,7 @@ pub fn q_rms_norm_rope(
         return Ok(q);
     }
 
-    let q = candle_nn::ops::rms_norm(&q.contiguous()?, q_weight, q_eps as f32)?;
+    let q = rms_norm_f32_scale(&q.contiguous()?, q_weight, q_eps as f32)?;
     apply_rotary_q(&q, cos_cache, sin_cache, positions, is_gpt_neox)
 }
 
@@ -3045,8 +3093,8 @@ pub fn qk_rms_norm_mrope_layout(
         };
     }
 
-    let q = candle_nn::ops::rms_norm(&q.contiguous()?, q_weight, q_eps as f32)?;
-    let k = candle_nn::ops::rms_norm(&k.contiguous()?, k_weight, k_eps as f32)?;
+    let q = rms_norm_f32_scale(&q.contiguous()?, q_weight, q_eps as f32)?;
+    let k = rms_norm_f32_scale(&k.contiguous()?, k_weight, k_eps as f32)?;
     apply_rotary_preselected_qk(&q, &k, &cos, &sin, is_gpt_neox)
 }
 
@@ -4047,7 +4095,7 @@ impl Module for ScaledEmbedding {
 #[cfg(test)]
 mod tests {
     use super::{
-        contains_tensor_or_weight_source_with, use_legacy_tied_uqff_head,
+        contains_tensor_or_weight_source_with, rms_norm_f32_scale, use_legacy_tied_uqff_head,
         yarn_inv_freq_and_attention_factor, Qwen3VLRotaryEmbedding, YarnRopeConfig,
     };
     use candle_core::{DType, Device, Tensor};
@@ -4266,6 +4314,98 @@ mod tests {
         )?;
         let expected = 1.0 + 0.1 * 4.0f32.ln();
         assert!((attention_factor - expected).abs() < 1e-6);
+        Ok(())
+    }
+
+    /// How far apart are the three ways of computing an RMSNorm with an f32 scale?
+    ///
+    /// The upstream fix (huggingface/candle#4057) divides by the f32 scale; this file's
+    /// `rms_norm_f32_scale` multiplies by an f64 reciprocal; candle's own slow path divides
+    /// in f64. All three round the normalised value to the storage dtype before the weight
+    /// multiply, so they agree on the rounding *order* and differ only in the last f32 bit of
+    /// the scale. This measures how often that difference survives the bf16 rounding, because
+    /// "about one f32 ulp apart" is not a useful thing to say about a router whose margin is
+    /// 9.4e-05 nats.
+    #[test]
+    fn the_three_rmsnorm_scale_forms_agree_in_bf16() -> anyhow::Result<()> {
+        let dev = Device::Cpu;
+        let (rows, hidden) = (512usize, 2560usize);
+        let eps = 1e-6f32;
+
+        // A spread of magnitudes, so the rounding lands on both sides of a boundary.
+        let data: Vec<f32> = (0..rows * hidden)
+            .map(|i| {
+                let x = (i % hidden) as f32;
+                ((x * 0.031).sin() * (1.0 + (i / hidden) as f32 * 0.5)).exp()
+            })
+            .collect();
+        let x = Tensor::from_vec(data, (rows, hidden), &dev)?.to_dtype(DType::BF16)?;
+        let weight = Tensor::ones((hidden,), DType::BF16, &dev)?;
+
+        // This file's form: f32 sum, f64 reciprocal, round the normalised value, weight.
+        let ours = rms_norm_f32_scale(&x, &weight, eps)?;
+
+        // The upstream fix's form: f32 scale, f32 divide, round the normalised value, weight.
+        let xf = x.to_dtype(DType::F32)?;
+        let sum2 = xf.sqr()?.sum_keepdim(candle_core::D::Minus1)?;
+        let mean = (sum2.clone() / hidden as f64)?;
+        let scale = (mean.clone() + eps as f64)?.sqrt()?.to_dtype(DType::F32)?;
+        let divided = xf.broadcast_div(&scale)?;
+        let upstream = divided.to_dtype(DType::BF16)?.broadcast_mul(&weight)?;
+
+        // Candle's slow path: f32 sum, f64 divide, round, weight.
+        let slow_scale = (mean.clone() + eps as f64)?.sqrt()?;
+        let slow = xf
+            .broadcast_div(&slow_scale)?
+            .to_dtype(DType::BF16)?
+            .broadcast_mul(&weight)?;
+
+        // The old fused form, for scale: the scale is computed in f32 and then rounded to
+        // the storage dtype before the division.
+        let rounded_scale = (mean.clone() + eps as f64)?
+            .sqrt()?
+            .to_dtype(DType::BF16)?
+            .to_dtype(DType::F32)?;
+        let old = xf
+            .broadcast_div(&rounded_scale)?
+            .to_dtype(DType::BF16)?
+            .broadcast_mul(&weight)?;
+
+        let bits = |t: &Tensor| -> candle_core::Result<Vec<u16>> {
+            Ok(t.flatten_all()?
+                .to_vec1::<half::bf16>()?
+                .iter()
+                .map(|v| v.to_bits())
+                .collect())
+        };
+        let (a, b, c) = (bits(&ours)?, bits(&upstream)?, bits(&slow)?);
+        let n = a.len();
+        let diff_ours_upstream = a.iter().zip(&b).filter(|(x, y)| x != y).count();
+        let diff_ours_slow = a.iter().zip(&c).filter(|(x, y)| x != y).count();
+        let diff_upstream_slow = b.iter().zip(&c).filter(|(x, y)| x != y).count();
+
+        println!("rows {rows} hidden {hidden}");
+        println!("  ours vs upstream #4057: {diff_ours_upstream}/{n} differ");
+        println!("  ours vs the slow path:  {diff_ours_slow}/{n} differ");
+        println!("  upstream vs slow path:  {diff_upstream_slow}/{n} differ");
+
+        // And the old fused form, for scale: this is the defect the upstream fix removes.
+        let d = bits(&old)?;
+        let diff_old = a.iter().zip(&d).filter(|(x, y)| x != y).count();
+        let rel = a
+            .iter()
+            .zip(&d)
+            .map(|(x, y)| {
+                let xv = half::bf16::from_bits(*x).to_f32();
+                let yv = half::bf16::from_bits(*y).to_f32();
+                if xv.abs() > 1e-6 {
+                    (xv - yv).abs() / xv.abs()
+                } else {
+                    0.0
+                }
+            })
+            .fold(0.0f32, f32::max);
+        println!("  ours vs the old fused form: {diff_old}/{n} differ, max relative {rel:.3e}");
         Ok(())
     }
 }

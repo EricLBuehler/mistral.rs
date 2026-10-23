@@ -9,12 +9,12 @@ use super::{
     IsqOrganization, IsqPipelineMixin, MetadataMixin, ModelCategory, PreProcessingMixin,
 };
 use super::{
-    AutoNormalLoader, DeepSeekV2Loader, DeepSeekV3Loader, GLM4Loader, GLM4MoeLiteLoader,
-    GLM4MoeLoader, Gemma2Loader, GemmaLoader, GptOssLoader, GraniteMoeHybridLoader,
-    HunYuanDenseV1Loader, HunYuanMoEV1Loader, Lfm2Loader, LlamaLoader, MistralLoader,
-    MixtralLoader, NormalLoaderType, Phi2Loader, Phi3Loader, Phi3_5MoELoader, Qwen2Loader,
-    Qwen3Loader, Qwen3MoELoader, Qwen3NextLoader, Qwen3_5TextLoader, SmolLm3Loader,
-    Starcoder2Loader,
+    AutoNormalLoader, DeepSeekV2Loader, DeepSeekV3Loader, FlintLoader, GLM4Loader,
+    GLM4MoeLiteLoader, GLM4MoeLoader, Gemma2Loader, GemmaLoader, GptOssLoader,
+    GraniteMoeHybridLoader, HunYuanDenseV1Loader, HunYuanMoEV1Loader, Kolibri1Loader, Lfm2Loader,
+    LlamaLoader, MistralLoader, MixtralLoader, NormalLoaderType, Phi2Loader, Phi3Loader,
+    Phi3_5MoELoader, Qwen2Loader, Qwen3Loader, Qwen3MoELoader, Qwen3NextLoader, Qwen3_5TextLoader,
+    SmolLm3Loader, Starcoder2Loader,
 };
 use crate::amoe::AnyMoeExpertType;
 use crate::attention::ATTENTION_CHUNK_SIZE;
@@ -159,6 +159,7 @@ pub(crate) struct NormalPipelineBuildArgs<'a> {
     pub source_weight_files: Vec<PathBuf>,
     pub source_weight_source: Option<Arc<dyn mistralrs_quant::QuantizedWeightSource>>,
     pub dynamic_lora: Option<Arc<DynamicLoraRuntime>>,
+    pub eog_tokens: Vec<String>,
 }
 
 pub(crate) fn build_normal_pipeline(
@@ -186,6 +187,7 @@ pub(crate) fn build_normal_pipeline(
         source_weight_files,
         source_weight_source,
         dynamic_lora,
+        eog_tokens,
     } = args;
 
     let model_metadata =
@@ -280,7 +282,12 @@ pub(crate) fn build_normal_pipeline(
     let generation_defaults = generation_config
         .as_ref()
         .and_then(GenerationConfig::generation_defaults);
-    let eos = calculate_eos_tokens(&chat_template, generation_config.as_ref(), &tokenizer);
+    let eos = calculate_eos_tokens(
+        &chat_template,
+        generation_config.as_ref(),
+        &tokenizer,
+        &eog_tokens,
+    );
     let sliding_window = model.config().sliding_window;
 
     Ok(Arc::new(Mutex::new(NormalPipeline {
@@ -378,6 +385,7 @@ pub(crate) struct PreparedNormalSource {
     pub bos_token: Option<String>,
     pub eos_token: Option<String>,
     pub unk_token: Option<String>,
+    pub eog_tokens: Vec<String>,
     pub source_weight_files: Vec<PathBuf>,
     pub rope_pairing: crate::gguf::normal_registry::RopePairing,
 }
@@ -568,6 +576,8 @@ impl NormalLoaderBuilder {
             Some(NormalLoaderType::Qwen3_5) => Box::new(Qwen3_5TextLoader),
             Some(NormalLoaderType::Lfm2) => Box::new(Lfm2Loader),
             Some(NormalLoaderType::Lfm2Moe) => Box::new(Lfm2Loader),
+            Some(NormalLoaderType::Kolibri1) => Box::new(Kolibri1Loader),
+            Some(NormalLoaderType::Flint) => Box::new(FlintLoader),
             None => Box::new(AutoNormalLoader),
         };
         Ok(NormalLoader {
@@ -1545,6 +1555,11 @@ impl Loader for NormalLoader {
             source_weight_files,
             source_weight_source: weight_source,
             dynamic_lora,
+            eog_tokens: self
+                .prepared_source
+                .as_ref()
+                .map(|source| source.eog_tokens.clone())
+                .unwrap_or_default(),
         })
     }
 

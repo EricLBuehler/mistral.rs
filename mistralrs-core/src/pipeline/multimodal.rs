@@ -1579,7 +1579,7 @@ impl Loader for MultimodalLoader {
                 defaults.max_length = None;
             }
         }
-        let eos = calculate_eos_tokens(&chat_template, gen_conf.as_ref(), &tokenizer);
+        let eos = calculate_eos_tokens(&chat_template, gen_conf.as_ref(), &tokenizer, &[]);
         let sliding_window = model.config().sliding_window;
         let tracked_modules = tracker.get().clone();
         // rank-sliced layers re-slice at source read; inexpressible slices fall back per layer
