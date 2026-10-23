@@ -780,36 +780,54 @@ impl Loader for NormalLoader {
                         let source = weight_source
                             .as_ref()
                             .expect("selected weight-source sizing requires a weight source");
-                        let quantization =
-                            if matches!(sizing, super::isq_flow::AutoDeviceMapSizing::Uqff) {
-                                AutoDeviceMapQuantization::weight_source(source.as_ref())
-                            } else {
-                                AutoDeviceMapQuantization::weight_source_with_topology(
-                                    source.as_ref(),
-                                    self.config.topology.as_ref(),
-                                )
-                            };
-                        let weight_pack_factor = quantization
-                            .conservative_pack_factor(dtype, source.pack_factor(dtype)?);
-                        let layer_sizes_in_bytes = self.inner.layer_sizes_in_bytes(
-                            &config,
-                            dtype,
-                            weight_pack_factor,
-                            None,
-                        )?;
-                        let non_mapped_size_in_bytes = self.inner.non_mapped_size_in_bytes(
-                            &config,
-                            dtype,
-                            weight_pack_factor,
-                            Some(&quantization),
-                            None,
-                        )?;
-                        let layer_sizes_sum = layer_sizes_in_bytes.iter().sum::<usize>();
-                        (
-                            layer_sizes_in_bytes,
-                            non_mapped_size_in_bytes,
-                            layer_sizes_sum + non_mapped_size_in_bytes,
-                        )
+                        let exact = if self.config.topology.is_none() {
+                            exact_weight_source_sizes(
+                                source.as_ref(),
+                                dtype,
+                                self.inner.num_layers(&config)?,
+                                &self.inner.unbound_layer_bytes(&config)?,
+                            )?
+                        } else {
+                            None
+                        };
+                        if let Some(sizes) = exact {
+                            info!(
+                                model_mib = sizes.2 / (1024 * 1024),
+                                "Using quantized weight-source inventory for automatic device mapping"
+                            );
+                            sizes
+                        } else {
+                            let quantization =
+                                if matches!(sizing, super::isq_flow::AutoDeviceMapSizing::Uqff) {
+                                    AutoDeviceMapQuantization::weight_source(source.as_ref())
+                                } else {
+                                    AutoDeviceMapQuantization::weight_source_with_topology(
+                                        source.as_ref(),
+                                        self.config.topology.as_ref(),
+                                    )
+                                };
+                            let weight_pack_factor = quantization
+                                .conservative_pack_factor(dtype, source.pack_factor(dtype)?);
+                            let layer_sizes_in_bytes = self.inner.layer_sizes_in_bytes(
+                                &config,
+                                dtype,
+                                weight_pack_factor,
+                                None,
+                            )?;
+                            let non_mapped_size_in_bytes = self.inner.non_mapped_size_in_bytes(
+                                &config,
+                                dtype,
+                                weight_pack_factor,
+                                Some(&quantization),
+                                None,
+                            )?;
+                            let layer_sizes_sum = layer_sizes_in_bytes.iter().sum::<usize>();
+                            (
+                                layer_sizes_in_bytes,
+                                non_mapped_size_in_bytes,
+                                layer_sizes_sum + non_mapped_size_in_bytes,
+                            )
+                        }
                     }
                     super::isq_flow::AutoDeviceMapSizing::Isq(isq) => {
                         let moqe =
@@ -2920,15 +2938,117 @@ impl AnyMoePipelineMixin for NormalPipeline {
     }
 }
 
+fn exact_weight_source_sizes(
+    source: &dyn mistralrs_quant::QuantizedWeightSource,
+    dtype: DType,
+    num_layers: usize,
+    unbound_layer_bytes: &[(usize, usize)],
+) -> Result<Option<(Vec<usize>, usize, usize)>> {
+    let Some(exact) = source.resident_layer_bytes(dtype)? else {
+        return Ok(None);
+    };
+    let mut layers = (0..num_layers)
+        .map(|layer| exact.layers.get(&layer).copied().unwrap_or(0))
+        .collect::<Vec<_>>();
+    for &(layer, bytes) in unbound_layer_bytes {
+        if let Some(size) = layers.get_mut(layer) {
+            *size += bytes;
+        }
+    }
+    let total = layers.iter().sum::<usize>() + exact.outside;
+    Ok(Some((layers, exact.outside, total)))
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{new_dynamic_lora_registry, normal_model_requires_uniform_prompt_batch};
+    use super::{
+        exact_weight_source_sizes, new_dynamic_lora_registry,
+        normal_model_requires_uniform_prompt_batch,
+    };
     use crate::pipeline::finish_dynamic_lora_runtime;
     use crate::pipeline::{AdapterPaths, LocalModelPaths};
     use crate::LoraRuntimeConfig;
     use candle_core::{DType, Device};
     use mistralrs_quant::{LoraLayerRegistry, LoraLinearSpec, LoraSiteKey};
     use std::{path::PathBuf, sync::Arc};
+
+    const WIDTH: usize = 256;
+    const UNBOUND_BYTES: usize = 1_024;
+    const Q8_BLOCK_BYTES: usize = 34;
+    const Q8_BLOCK_ELEMS: usize = 32;
+    const Q3_BLOCK_BYTES: usize = 110;
+
+    #[test]
+    fn gguf_mapping_uses_mixed_precision_resident_sizes() -> anyhow::Result<()> {
+        use candle_core::{
+            quantized::{gguf_file, GgmlDType, QTensor},
+            Tensor,
+        };
+        use mistralrs_quant::{
+            GgufArchive, GgufBindingMap, GgufTensorBinding, GgufWeightSource, QuantizedWeightSource,
+        };
+
+        let mut bindings = GgufBindingMap::new();
+        let mut tensors = Vec::new();
+        for (native, stored, shape, dtype) in [
+            (
+                "model.embed_tokens.weight",
+                "token_embd.weight",
+                vec![2, WIDTH],
+                GgmlDType::F32,
+            ),
+            (
+                "model.layers.0.self_attn.q_proj.weight",
+                "blk.0.attn_q.weight",
+                vec![WIDTH, WIDTH],
+                GgmlDType::Q8_0,
+            ),
+            (
+                "model.layers.1.mlp.experts.gate_proj.weight",
+                "blk.1.ffn_gate_exps.weight",
+                vec![2, WIDTH, WIDTH],
+                GgmlDType::Q3K,
+            ),
+            (
+                "model.layers.1.mlp.gate.weight",
+                "blk.1.ffn_gate_inp.weight",
+                vec![2, WIDTH],
+                GgmlDType::F32,
+            ),
+            (
+                "model.layers.1.input_layernorm.weight",
+                "blk.1.attn_norm.weight",
+                vec![WIDTH],
+                GgmlDType::F32,
+            ),
+        ] {
+            let tensor = Tensor::ones(shape, DType::F32, &Device::Cpu)?;
+            tensors.push((stored, QTensor::quantize(&tensor, dtype)?));
+            bindings.insert(native, GgufTensorBinding::tensor(stored));
+        }
+        let mut file = tempfile::NamedTempFile::new()?;
+        gguf_file::write(
+            file.as_file_mut(),
+            &[],
+            &tensors
+                .iter()
+                .map(|(name, tensor)| (*name, tensor))
+                .collect::<Vec<_>>(),
+        )?;
+        let archive = Arc::new(GgufArchive::open_file(file.path())?);
+        let source = GgufWeightSource::new(archive, &bindings, DType::BF16)?;
+        assert_eq!(source.pack_factor(DType::BF16)?, 1);
+        let (layers, outside, total) =
+            exact_weight_source_sizes(&source, DType::BF16, 2, &[(1, UNBOUND_BYTES)])?.unwrap();
+        let attention = WIDTH * WIDTH / Q8_BLOCK_ELEMS * Q8_BLOCK_BYTES;
+        let experts = 2 * WIDTH * Q3_BLOCK_BYTES;
+        let dense = 3 * WIDTH * DType::BF16.size_in_bytes();
+        assert_eq!(layers, vec![attention, experts + dense + UNBOUND_BYTES]);
+        assert_eq!(outside, 2 * WIDTH * DType::BF16.size_in_bytes());
+        assert_eq!(total, attention + experts + dense + UNBOUND_BYTES + outside);
+        assert!(total < 3 * WIDTH * WIDTH * DType::BF16.size_in_bytes());
+        Ok(())
+    }
 
     fn empty_lora_paths() -> LocalModelPaths<PathBuf> {
         LocalModelPaths {
