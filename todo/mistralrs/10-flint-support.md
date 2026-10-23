@@ -350,21 +350,38 @@ The default is still two-step; flipping it is a one-line change (`MISTRALRS_IQ_F
 would then turn it off). The evidence for flipping: 2.2x, identical tokens, and the per-block
 decode stays bit-exact by its own tests.
 
-### Open: the K-quant comparator is 90x off its recorded cell
+### The K-quant comparator, quietly measured
 
-`flint-Q4_K_M.gguf` measured 9.39 tok/s in the earlier session. On the quiet box now it is
-0.10 tok/s: `routed` 3.51 s a step (92% of the step), `attn_proj` 143 ms, `shared` 100 ms.
-Both K-quant files behave the same (UD-Q4_K_XL 0.10 tok/s, and it is not I/O: `fincore`
-shows 23.9 of 25.0 GiB resident, and the model loads in 6 s).
+The 9.39 tok/s cell was taken at load average 519. On a quiet box the same file is 18.7 tok/s
+(200 generated) and 19.6 (40 generated), 52.3 ms a step: `attn_proj` 15.5, `routed` 18.1,
+`shared` 5.8, `attention` 3.6, `lm_head` 5.9. So the IQ route's 7.6-7.8 tok/s is 2.4x slower
+than Q4_K_M on the same node, which is the honest number: 9.8 GiB against 66.8 GiB peak.
 
-3.5 s a step is the shape of dequantise-then-matmul for the routed experts: 6 experts x 3
-projections x 49 layers of 1M values is 3.5 GB of f32 a token, which is 1 GB/s. That is the
-third path in `qtensor_indexed_moe_forward` (`mistralrs-quant/src/gguf/cpu.rs`): the fused
-`qtensor.indexed_gemv` is tried first, then the scoped gather, then the whole stack. So the
-question is why `indexed_gemv` is not serving K-quant blocks on this build.
+The two routes lose to Q4_K_M in different places, which is what the phase tables say: the
+routed experts 66 ms against 18, the dense projections 41 against 15.5, the shared expert 13.5
+against 5.8. `lm_head` is 5.8 in both, so it is the same f32 dense matmul and it is now the
+largest single fixed cost in the IQ step.
 
-This branch does not explain it from its diff: there are no commits under
-`mistralrs-core/src/moe` since the Flint commits, and the K-quant load path
-(`load_direct_linear`, `GgufMatMul`) is untouched - `mod.rs` gained four module declarations
-and `weight_source.rs` only branches for `iq::is_iq`. Worth checking against `origin/master`
-before assuming it is ours.
+### Open: UD-Q4_K_XL is 0.10 tok/s, and the reason is its expert dtypes
+
+`flint-preview-UD-Q4_K_XL.gguf` is 0.10 tok/s on the same node and prompt: `routed` 3.5-8.1 s a
+step. Not I/O (`fincore` shows 23.9 of 25.0 GiB resident, load takes 6 s). The census over the
+tensor table explains it:
+
+| file | expert tensors |
+| --- | --- |
+| `flint-Q4_K_M.gguf` | Q4_K 16.59 GiB, Q6_K 4.72 GiB |
+| `flint-preview-UD-Q4_K_XL.gguf` | Q5_K 11.17 GiB, IQ4_XS 9.28 GiB, Q4_K, IQ3_S, Q8_0, Q6_K |
+
+Candle's fused gather (`QTensor::indexed_gemv` -> `repack::try_indexed_gemv` ->
+`PackedKind::select`) serves Q4_K, Q6_K and Q8_0 only. A Q5_K expert tensor therefore misses
+`indexed_gemv` and falls to `scoped_gather`, which materialises f32: 6 of 128 experts out of
+11.17 GiB is 0.52 GiB packed, about 3 GiB of f32 a token, which is the 3.5 s. The IQ4_XS half
+takes this crate's IQ gather and is fine. So the mixed "dynamic" quant is slow for a reason
+that has nothing to do with the IQ route, and it is a gap in the fused path rather than a
+regression: Q2_K, Q3_K and Q5_K expert stacks all take the same fallback.
+
+The fix is a fused per-expert dot for those block types, the same shape as the IQ gather: keep
+the block bytes, quantise the row to q8, dot per block across the expert's rows in parallel,
+never write f32. That is candle-side (`PackedKind`) or a mistralrs gather of its own; the
+scoped gather's bit-exact test is the reference it must match.
