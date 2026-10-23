@@ -1,0 +1,7 @@
+{
+  "scheme": "inverse_transform",
+  "key": "0000000000000000000000000000000000000000000000000000000000000000",
+  "vocab_size": 151936,
+  "sequence_len": 1024,
+  "start_position": 0
+}

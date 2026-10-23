@@ -3234,6 +3234,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "llm-watermarking"
+version = "0.1.0"
+dependencies = [
+ "candle-core",
+ "candle-metal-kernels",
+ "objc2-metal",
+ "sha2",
+]
+
+[[package]]
 name = "lock_api"
 version = "0.4.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3678,6 +3688,7 @@ dependencies = [
  "itertools 0.14.0",
  "libc",
  "llguidance",
+ "llm-watermarking",
  "lrtable",
  "metrics",
  "mime_guess",

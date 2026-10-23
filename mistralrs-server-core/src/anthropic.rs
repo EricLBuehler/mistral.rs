@@ -82,6 +82,12 @@ fn default_error_type() -> String {
 
 #[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
 pub struct AnthropicMessagesRequest {
+    /// Opt-in token watermarking; the scheme selects the library algorithm.
+    #[serde(
+        default,
+        deserialize_with = "mistralrs_core::WatermarkConfig::deserialize_option"
+    )]
+    pub watermark: Option<mistralrs_core::WatermarkConfig>,
     #[serde(default = "default_model")]
     pub model: String,
     pub max_tokens: Option<usize>,
@@ -601,6 +607,8 @@ impl AnthropicMessagesRequest {
         }
 
         Ok(ChatCompletionRequest {
+            sampling_trace: None,
+            watermark: self.watermark,
             messages: Either::Left(messages),
             model: self.model,
             adapter: None,
@@ -2072,6 +2080,7 @@ mod tests {
         ChatCompletionChunkResponse {
             id: "msg_test".to_string(),
             choices: vec![ChunkChoice {
+                sampling_trace: None,
                 finish_reason: finish_reason.map(str::to_string),
                 stop_sequence: stop_sequence.map(str::to_string),
                 index: 0,
@@ -2090,6 +2099,50 @@ mod tests {
             usage,
             adapter_generation: None,
             session_id: None,
+        }
+    }
+
+    #[test]
+    fn watermark_schemes_round_trip_all_generation_endpoints() {
+        let fixtures = [
+            include_str!("../../examples/watermarking/synthid.json"),
+            include_str!("../../examples/watermarking/kgw.json"),
+            include_str!("../../examples/watermarking/unigram.json"),
+            include_str!("../../examples/watermarking/exponential.json"),
+            include_str!("../../examples/watermarking/inverse_transform.json"),
+            include_str!("../../examples/watermarking/mpac.json"),
+            include_str!("../../examples/watermarking/semstamp.json"),
+        ];
+        for fixture in fixtures {
+            let config: serde_json::Value = serde_json::from_str(fixture).unwrap();
+            let chat: crate::openai::ChatCompletionRequest =
+                serde_json::from_value(json!({"messages":"hello", "watermark":config})).unwrap();
+            let completion: crate::openai::CompletionRequest =
+                serde_json::from_value(json!({"prompt":"hello", "watermark":config})).unwrap();
+            let responses: crate::responses::OpenResponsesCreateRequest =
+                serde_json::from_value(json!({"input":"hello", "watermark":config})).unwrap();
+            let anthropic: crate::anthropic::AnthropicMessagesRequest = serde_json::from_value(json!({"messages":[{"role":"user", "content":"hello"}], "max_tokens":16, "watermark":config})).unwrap();
+            let converted = anthropic.into_chat_completion_request().unwrap();
+            let mut expected = None;
+            for watermark in [
+                chat.watermark,
+                completion.watermark,
+                responses.watermark,
+                converted.watermark,
+            ] {
+                let watermark = watermark.unwrap();
+                watermark.validate().unwrap();
+                assert_eq!(
+                    watermark.validate_generation().is_ok(),
+                    watermark.scheme() != "semstamp"
+                );
+                let serialized = serde_json::to_value(&watermark).unwrap();
+                if let Some(expected) = &expected {
+                    assert_eq!(&serialized, expected);
+                }
+                expected = Some(serialized);
+                assert_eq!(watermark.scheme(), config["scheme"].as_str().unwrap());
+            }
         }
     }
 
@@ -2599,6 +2652,7 @@ mod tests {
             "repetition_penalty": 1.05,
             "min_p": 0.05,
             "dry_multiplier": 0.8,
+            "watermark": {"key": "01".repeat(32), "ngram_len": 5, "depth": 12},
             "dry_base": 1.75,
             "dry_allowed_length": 4,
             "dry_sequence_breakers": ["\\n"],
@@ -2622,6 +2676,10 @@ mod tests {
         assert_eq!(chat.repetition_penalty, Some(1.05));
         assert_eq!(chat.min_p, Some(0.05));
         assert_eq!(chat.dry_multiplier, Some(0.8));
+        let watermark = chat.watermark.as_ref().unwrap();
+        assert!(
+            matches!(watermark, mistralrs_core::WatermarkConfig::Synthid { key, depth: 12, .. } if key == &"01".repeat(32))
+        );
         assert_eq!(chat.dry_base, Some(1.75));
         assert_eq!(chat.dry_allowed_length, Some(4));
         assert_eq!(chat.dry_sequence_breakers, Some(vec!["\\n".to_string()]));
@@ -2652,6 +2710,7 @@ mod tests {
         let response = ChatCompletionResponse {
             id: "msg_test".to_string(),
             choices: vec![Choice {
+                sampling_trace: None,
                 finish_reason: "stop".to_string(),
                 stop_sequence: Some("END".to_string()),
                 index: 0,

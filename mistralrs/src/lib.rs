@@ -300,6 +300,10 @@ pub use mistralrs_core::{
 
 // ========== Sampling ==========
 pub use mistralrs_core::{DrySamplingParams, ModelGenerationDefaults, SamplingParams, StopTokens};
+pub use mistralrs_core::{
+    SynthIdGenerationPolicy, SynthIdTextWatermark, SynthIdTextWatermarkConfig, Watermark,
+    WatermarkConfig, WatermarkDetection, WatermarkEvidence, WatermarkTensor,
+};
 
 // ========== Tool Types ==========
 pub use mistralrs_core::{

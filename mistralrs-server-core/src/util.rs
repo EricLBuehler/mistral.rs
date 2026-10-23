@@ -7,6 +7,49 @@ use std::sync::Arc;
 
 use crate::media_source::{load_media_source, MediaSourcePolicy};
 
+pub(crate) fn validate_watermark_model(
+    state: &MistralRs,
+    model: &str,
+    watermark: Option<&mistralrs_core::WatermarkConfig>,
+) -> anyhow::Result<()> {
+    if let Some(watermark) = watermark {
+        watermark.validate_generation()?;
+        if watermark.uses_tournament() {
+            let config = state
+                .config((model != "default").then_some(model))
+                .map_err(anyhow::Error::msg)?;
+            anyhow::ensure!(config.supports_sampling_trace,
+                "explicit tournament sampling requires ordinary token sampling; speculative and block decoding are unsupported");
+        }
+    }
+    Ok(())
+}
+
+pub(crate) fn validate_sampling_trace_model(
+    state: &MistralRs,
+    model: &str,
+    is_chat: bool,
+) -> anyhow::Result<()> {
+    let model = (model != "default").then_some(model);
+    state.get_sender(model)?;
+    let config = state.config(model).map_err(anyhow::Error::msg)?;
+    anyhow::ensure!(config.supports_sampling_trace, "sampling_trace requires ordinary token sampling; speculative and block decoding are unsupported");
+    anyhow::ensure!(
+        matches!(
+            config.category,
+            mistralrs_core::ModelCategory::Text | mistralrs_core::ModelCategory::Multimodal { .. }
+        ),
+        "sampling_trace requires a text generation model"
+    );
+    if is_chat {
+        anyhow::ensure!(
+            state.get_tools_count(model).map_err(anyhow::Error::msg)? == 0,
+            "sampling_trace requires a model without registered server tool callbacks"
+        );
+    }
+    Ok(())
+}
+
 /// Parses and loads an image from a URL, file path, or data URL.
 ///
 /// This function accepts various input formats and attempts to parse them in order:

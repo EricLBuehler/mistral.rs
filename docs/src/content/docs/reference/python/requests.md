@@ -13,6 +13,92 @@ Select one exact immutable LoRA adapter generation by its 64-character ID.
 | `generation` | `str` |
 
 
+## `SynthIdTextWatermarkConfig`
+
+SynthID-Text configuration; key is 64 hexadecimal characters and has no default.
+
+### `SynthIdTextWatermarkConfig.__init__`
+
+```text
+__init__(key: str, *, ngram_len: int = 5, depth: int = 30) -> None
+```
+
+### `SynthIdTextWatermarkConfig.detect`
+
+```text
+detect(
+    tokens: list[int],
+    prompt_len: int = 0,
+    eos_token_ids: list[int] | None = None,
+) -> tuple[float | None, int]
+```
+
+Return (mean g-value, tokens scored), without a calibrated detection threshold.
+
+
+## `WatermarkConfig`
+
+Select a watermark scheme; key is 64 hexadecimal characters and has no default.
+
+### `WatermarkConfig.__init__`
+
+```text
+__init__(
+    key: str,
+    *,
+    scheme: str = 'synthid',
+    **parameters: Any,
+) -> None
+```
+
+Schemes: synthid, kgw, unigram, exponential, inverse_transform, mpac, semstamp.
+
+Parameters match the [watermark configuration](/guides/customize/watermarking/).
+SemStamp requires sentence embeddings and cannot be used for token generation.
+
+### `WatermarkConfig.scheme`
+
+```text
+scheme() -> str
+```
+
+### `WatermarkConfig.detect`
+
+```text
+detect(
+    tokens: list[int],
+    prompt_len: int = 0,
+    eos_token_ids: list[int] | None = None,
+) -> dict[str, Any]
+```
+
+Return scheme-specific evidence without a calibrated detection threshold.
+
+### `WatermarkConfig.detect_embeddings`
+
+```text
+detect_embeddings(
+    embeddings: list[list[float]],
+    prompt_len: int = 0,
+    *,
+    device_name: Literal['cpu', 'cuda', 'metal'] = 'cpu',
+) -> dict[str, Any]
+```
+
+Return SemStamp evidence using a fixed sentence encoder and the chosen backend.
+
+### `WatermarkConfig.accepts_embedding`
+
+```text
+accepts_embedding(
+    previous: list[float],
+    candidate: list[float],
+) -> bool
+```
+
+Check a SemStamp sentence transition on the CPU.
+
+
 ## `ChatCompletionRequest`
 
 A ChatCompletionRequest represents a request sent to the mistral.rs engine. It encodes information
@@ -80,6 +166,7 @@ are omitted, thinking is enabled with no selected effort. Contradictory
 | `input_files` | `list[InputFile] \| None` | `None` |
 | `ignore_eos` | `bool` | `False` |
 | `adapter` | `str \| LoraAdapterGeneration \| None` | `None (keyword-only)` |
+| `watermark` | `WatermarkConfig \| SynthIdTextWatermarkConfig \| None` | `None (keyword-only)` |
 
 
 ## `CompletionRequest`
@@ -116,6 +203,7 @@ about input data, sampling, and how to return the response.
 | `truncate_sequence` | `bool` | `False` |
 | `ignore_eos` | `bool` | `False` |
 | `adapter` | `str \| LoraAdapterGeneration \| None` | `None (keyword-only)` |
+| `watermark` | `WatermarkConfig \| SynthIdTextWatermarkConfig \| None` | `None (keyword-only)` |
 
 
 ## `EmbeddingRequest`
