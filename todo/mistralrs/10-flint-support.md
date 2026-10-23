@@ -327,3 +327,44 @@ the barrier merge path and are covered at one and four chunks.
 
 This was not a Flint-only bug: any model with attention sinks pays it on CPU, and it
 grew with the cache, so it decided whether a long context was usable at all.
+
+### The gather arms on a quiet box
+
+Load average 1.2, 223 GiB available, and `attn_proj` stayed at 40-45 ms in every cell, so the
+two arms were measured under the same conditions. Same recipe, IQ1_M, 16 threads, schedutil,
+greedy; decode rate is the server's own completion rate, step is the profiler's.
+
+| generated | fused | two-step | fused step | two-step step |
+| --- | --- | --- | --- | --- |
+| 40 tokens | 7.78 tok/s | 3.53 tok/s | 163 ms | 281 ms |
+| 200 tokens | 7.67 tok/s | 3.48 tok/s | 130 ms | 282 ms |
+| 400 tokens | 7.59 tok/s | 3.49 tok/s | 134 ms | 282 ms |
+
+The fused gather is 2.2x and flat out to 400 tokens. Both arms produced byte-identical
+output for all three cells (the same 134, 1073 and 1008 characters), so the different
+accumulation order has not moved a token at temperature 0 over 400 of them. The fused arm's
+step at 400 tokens: `attn_proj` 40.8 ms, `routed` 65.7, `shared` 13.5, `lm_head` 5.8,
+`attention` 4.7, `router` 2.4.
+
+The default is still two-step; flipping it is a one-line change (`MISTRALRS_IQ_FUSED_GEMV`
+would then turn it off). The evidence for flipping: 2.2x, identical tokens, and the per-block
+decode stays bit-exact by its own tests.
+
+### Open: the K-quant comparator is 90x off its recorded cell
+
+`flint-Q4_K_M.gguf` measured 9.39 tok/s in the earlier session. On the quiet box now it is
+0.10 tok/s: `routed` 3.51 s a step (92% of the step), `attn_proj` 143 ms, `shared` 100 ms.
+Both K-quant files behave the same (UD-Q4_K_XL 0.10 tok/s, and it is not I/O: `fincore`
+shows 23.9 of 25.0 GiB resident, and the model loads in 6 s).
+
+3.5 s a step is the shape of dequantise-then-matmul for the routed experts: 6 experts x 3
+projections x 49 layers of 1M values is 3.5 GB of f32 a token, which is 1 GB/s. That is the
+third path in `qtensor_indexed_moe_forward` (`mistralrs-quant/src/gguf/cpu.rs`): the fused
+`qtensor.indexed_gemv` is tried first, then the scoped gather, then the whole stack. So the
+question is why `indexed_gemv` is not serving K-quant blocks on this build.
+
+This branch does not explain it from its diff: there are no commits under
+`mistralrs-core/src/moe` since the Flint commits, and the K-quant load path
+(`load_direct_linear`, `GgufMatMul`) is untouched - `mod.rs` gained four module declarations
+and `weight_source.rs` only branches for `iq::is_iq`. Worth checking against `origin/master`
+before assuming it is ours.
