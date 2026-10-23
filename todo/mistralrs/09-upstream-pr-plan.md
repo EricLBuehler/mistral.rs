@@ -1,9 +1,12 @@
 # Upstream PR plan
 
 - **Repo:** mistral.rs
-- **Status:** the chain is rebased onto `origin/master` and every branch compiles; the work
-  since the chain was built is not in any of them yet, and the IQ and Flint stacks (below) are
-  separate branches on `flint_by_flint` with nothing pushed
+- **Status:** one line. `cpu-decode-bandwidth` is fast-forwarded to `flint_by_flint`,
+  which already contained `origin/master` (`f512686b3`). That tip has the chain's code,
+  the work since, and the IQ and Flint stacks, including the later decode commits. The
+  `pr/*` branches are a parallel rebase onto that same master and are not this line: they
+  do not contain Flint or anything after `36db2a0ea`. The fork still has
+  `cpu-decode-bandwidth` at `36db2a0ea`. Nothing further has been pushed.
 - **Impact:** the whole of `cpu-decode-bandwidth` that is worth upstreaming
 
 ## What is upstreamable and what is not

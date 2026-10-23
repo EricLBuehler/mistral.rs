@@ -1,13 +1,12 @@
-# Flint is supported (RecursiveSI), on the `flint_by_flint` branch
+# Flint is supported (RecursiveSI)
 
 - **Repo:** mistral.rs
 - **Components:** `mistralrs-core/src/models/flint.rs`, `mistralrs-core/src/gguf/normal_registry.rs`,
   `mistralrs-core/src/gguf/normal_bindings.rs`, `mistralrs-core/src/gguf/normal_config.rs`,
   `mistralrs-core/src/gguf/gguf_tokenizer.rs`, `mistralrs-core/src/pipeline/{normal,gguf,chat_template}.rs`
-- **Status:** implemented on the `flint_by_flint` worktree branch (`/home/lu_zero/Sources/flint`,
-  8 commits on `36db2a0ea`). The GGUF route runs end to end on K-quants, and the IQ route
-  now does too: the published `flint-preview-UD-IQ1_M.gguf` reasons and answers. Nothing
-  pushed, nothing PRed.
+- **Status:** implemented, on the same tip as `cpu-decode-bandwidth`. The GGUF route runs
+  end to end on K-quants, and the IQ route does too: the published
+  `flint-preview-UD-IQ1_M.gguf` reasons and answers. Nothing pushed, nothing PRed.
 - **Impact:** `flint` was rejected with `Unknown normal-model GGUF architecture`; it now loads,
   reasons and answers.
 
