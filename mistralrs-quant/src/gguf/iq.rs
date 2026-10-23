@@ -542,10 +542,11 @@ const PAR_BLOCK_CHUNK: usize = 128;
 /// is small enough that its scratch row stays in L1.
 const FUSED_ROWS_PER_CHUNK: usize = 8;
 
-/// `MISTRALRS_IQ_FUSED_GEMV=1` decodes each block straight into the dot product instead of
-/// materialising the f32 slab. It is off by default because the accumulation order differs
-/// from the two-step path's last bit; both are f32 sums of the same products.
-static FUSED_IQ_GEMV: AtomicBool = AtomicBool::new(false);
+/// The fused gather decodes each block straight into the dot product instead of materialising
+/// the f32 slab. It is on by default: the accumulation order differs from the two-step path's
+/// last bit, both are f32 sums of the same products, and 400 greedy tokens of Flint came out
+/// identical whichever arm ran. `MISTRALRS_IQ_FUSED_GEMV=0` turns it off.
+static FUSED_IQ_GEMV: AtomicBool = AtomicBool::new(true);
 static FUSED_IQ_GEMV_SEEDED: OnceLock<()> = OnceLock::new();
 
 /// Three projections over 49 layers: the gathers one token of Flint makes, so the stat below
@@ -568,8 +569,8 @@ fn iq_gather_stats() -> bool {
 fn fused_iq_gemv_enabled() -> bool {
     FUSED_IQ_GEMV_SEEDED.get_or_init(|| {
         let on = std::env::var("MISTRALRS_IQ_FUSED_GEMV")
-            .map(|v| matches!(v.trim(), "1" | "true" | "yes" | "on"))
-            .unwrap_or(false);
+            .map(|v| !matches!(v.trim(), "0" | "false" | "no" | "off"))
+            .unwrap_or(true);
         FUSED_IQ_GEMV.store(on, Ordering::Relaxed);
     });
     FUSED_IQ_GEMV.load(Ordering::Relaxed)
