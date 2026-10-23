@@ -370,6 +370,16 @@ impl Sdpa {
                 AttentionMask::Custom(t) => Some(t),
                 _ => None,
             };
+            // Decode on CPU has a kernel that streams K/V once. The tensor path transposes the
+            // whole cache and runs a batched matmul with a single row, which costs more than the
+            // rest of the layer as the cache grows. The sink is one more term in the
+            // denominator, so it rides along rather than forcing the tensor path.
+            if q.device().is_cpu() && q.dim(2)? == 1 {
+                let q = q.transpose(1, 2)?;
+                let k = k.transpose(1, 2)?;
+                let v = v.transpose(1, 2)?;
+                return run_flash_attn_cpu_for_dtype(&q, &k, &v, mask_tensor, sdpa_params);
+            }
             return sinks_attn(q, k, v, sinks, mask_tensor, flash_params, sdpa_params);
         }
 
