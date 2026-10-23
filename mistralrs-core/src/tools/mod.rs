@@ -40,6 +40,7 @@ pub struct ToolCallingMatcher {
     tool_choice: ToolChoice,
     known_tool_names: Option<std::collections::HashSet<String>>,
     tools: Option<Arc<Vec<crate::Tool>>>,
+    preferred_tool_call_format: Option<ToolCallFormat>,
 }
 
 // Same as CalledFunction, but has different cases for variations on the names
@@ -114,7 +115,7 @@ impl ToolCallingMatcher {
     pub fn new_with_format(
         tool_choice: ToolChoice,
         tools: Option<&[crate::Tool]>,
-        _preferred_tool_call_format: Option<ToolCallFormat>,
+        preferred_tool_call_format: Option<ToolCallFormat>,
     ) -> anyhow::Result<Self> {
         let selected_tools = match &tool_choice {
             ToolChoice::Builtin(choice) => {
@@ -174,6 +175,7 @@ impl ToolCallingMatcher {
             tool_choice,
             known_tool_names,
             tools: tools_arc,
+            preferred_tool_call_format,
         })
     }
 
@@ -287,7 +289,9 @@ impl ToolCallingMatcher {
             return Ok((Some(message), Vec::new()));
         };
 
-        if let Some(tools) = self.tools.as_deref() {
+        if self.preferred_tool_call_format == Some(ToolCallFormat::Flint) {
+            parsers::flint::coerce_arguments(self.tools.as_deref().map(Vec::as_slice), &mut calls)?;
+        } else if let Some(tools) = self.tools.as_deref() {
             coerce_arguments_by_schema(tools, &mut calls)?;
         }
 

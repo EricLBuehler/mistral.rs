@@ -2016,6 +2016,15 @@ impl Engine {
                                     memory::record_prompt_batch_reduction(previous, retained);
                                 }
                                 memory::PromptBatchMemoryAction::Reject => {
+                                    memory::log_forward_memory_pressure(
+                                        &execution_devices,
+                                        &primary_device,
+                                        memory_plan.map_or(crate::MemoryGoal::Auto, |plan| {
+                                            plan.memory_goal
+                                        }),
+                                        workspace_bytes,
+                                        activation_dtype,
+                                    );
                                     #[cfg(feature = "cuda")]
                                     if is_prompt && !memory_status.insufficient_total_capacity {
                                         cuda_prompt_preemption_workspace = Some(

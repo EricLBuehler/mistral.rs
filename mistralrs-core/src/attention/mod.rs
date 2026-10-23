@@ -279,7 +279,9 @@ fn run_flash_attn_cpu_for_dtype(
 fn packed_attention_backend_is_available(q: &Tensor, sdpa_params: &SdpaParams) -> Result<bool> {
     let head_dim = q.dim(3)?;
     if sdpa_params.sinks.is_some() {
-        return Ok(q.dim(0)? > 1 && sinks_backend_is_available(q, head_dim));
+        return Ok(
+            (q.device().is_cuda() || q.dim(0)? > 1) && sinks_backend_is_available(q, head_dim)
+        );
     }
     Ok(q.device().is_cuda()
         && crate::using_flash_attn()

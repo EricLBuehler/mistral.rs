@@ -15,9 +15,12 @@ use std::collections::HashMap;
 use std::ffi::c_int;
 use std::sync::{Mutex, OnceLock};
 
+const FULL_ATTENTION_WINDOW: usize = 0;
+
 struct WorkspaceSlot {
     slice: CudaSlice<u8>,
     cap: usize,
+    retired: Vec<CudaSlice<u8>>,
 }
 
 type WsMap = Mutex<HashMap<candle::cuda_backend::DeviceId, &'static Mutex<WorkspaceSlot>>>;
@@ -57,6 +60,7 @@ fn workspace_ensure(
     dev: &candle::cuda_backend::CudaDevice,
     bytes: usize,
 ) -> Result<(u64, std::sync::MutexGuard<'static, WorkspaceSlot>)> {
+    let capacity = bytes.max(1).next_power_of_two();
     let map = PAGED_ATTN_V2_WORKSPACE.get_or_init(|| Mutex::new(HashMap::new()));
     let device_key = dev.id();
     let device_mtx: &'static Mutex<WorkspaceSlot> = {
@@ -64,10 +68,11 @@ fn workspace_ensure(
         match guard.get(&device_key).copied() {
             Some(mtx) => mtx,
             None => {
-                let slice = unsafe { dev.alloc::<u8>(bytes.max(1))? };
+                let slice = unsafe { dev.alloc::<u8>(capacity)? };
                 let leaked = Box::leak(Box::new(Mutex::new(WorkspaceSlot {
                     slice,
-                    cap: bytes.max(1),
+                    cap: capacity,
+                    retired: Vec::new(),
                 })));
                 guard.insert(device_key, leaked);
                 leaked
@@ -77,8 +82,11 @@ fn workspace_ensure(
 
     let mut slot = device_mtx.lock().unwrap();
     if slot.cap < bytes {
-        slot.slice = unsafe { dev.alloc::<u8>(bytes)? };
-        slot.cap = bytes;
+        let next = unsafe { dev.alloc::<u8>(capacity)? };
+        let previous = std::mem::replace(&mut slot.slice, next);
+        // Captured graphs keep using earlier scratch allocations after growth.
+        slot.retired.push(previous);
+        slot.cap = capacity;
     }
     let ptr = slot.slice.device_ptr(slot.slice.stream()).0;
     Ok((ptr, slot))
@@ -97,6 +105,7 @@ struct PagedAttention {
     k_scale: Option<Tensor>,
     v_scale: Option<Tensor>,
     sinks: Option<Tensor>,
+    sliding_window: Option<usize>,
 }
 
 impl PagedAttention {
@@ -300,8 +309,12 @@ impl PagedAttention {
         let kv_head_stride = kc_l.stride()[1];
 
         let partition_size = 512;
-        let effective_max_context_len =
+        let mut effective_max_context_len =
             (max_num_blocks_per_seq * block_size).min(self.max_context_len);
+        if let Some(window) = self.sliding_window {
+            effective_max_context_len =
+                effective_max_context_len.min(window.saturating_add(block_size - 1));
+        }
         let max_num_partitions = effective_max_context_len.div_ceil(partition_size);
         let use_v1 = (max_num_partitions == 1 || num_seqs * num_heads > 512)
             && partition_size % block_size == 0;
@@ -347,6 +360,7 @@ impl PagedAttention {
                     k_scale_ptr,
                     v_scale_ptr,
                     sinks_ptr,
+                    self.sliding_window.unwrap_or(FULL_ATTENTION_WINDOW) as c_int,
                 )
             }
         } else {
@@ -399,6 +413,7 @@ impl PagedAttention {
                     k_scale_ptr,
                     v_scale_ptr,
                     sinks_ptr,
+                    self.sliding_window.unwrap_or(FULL_ATTENTION_WINDOW) as c_int,
                 )
             }
         }
@@ -464,6 +479,43 @@ pub fn paged_attention(
     softcapping: f32,
     sinks: Option<&Tensor>,
 ) -> Result<Tensor> {
+    paged_attention_with_window(
+        q,
+        k_scale,
+        v_scale,
+        key_cache,
+        value_cache,
+        block_tables,
+        context_lens,
+        alibi_slopes,
+        max_context_len,
+        softmax_scale,
+        softcapping,
+        sinks,
+        None,
+    )
+}
+
+/// Decode from a paged cache with an optional exact trailing token window.
+#[allow(clippy::too_many_arguments)]
+pub fn paged_attention_with_window(
+    q: &Tensor,
+    k_scale: Option<&Tensor>,
+    v_scale: Option<&Tensor>,
+    key_cache: &Tensor,
+    value_cache: &Tensor,
+    block_tables: &Tensor,
+    context_lens: &Tensor,
+    alibi_slopes: Option<&Tensor>,
+    max_context_len: usize,
+    softmax_scale: f32,
+    softcapping: f32,
+    sinks: Option<&Tensor>,
+    sliding_window: Option<usize>,
+) -> Result<Tensor> {
+    if sliding_window == Some(0) {
+        candle::bail!("sliding_window must be positive");
+    }
     let op = PagedAttention {
         softmax_scale,
         key_cache: key_cache.clone(),
@@ -478,6 +530,7 @@ pub fn paged_attention(
         sinks: sinks
             .map(|s| s.to_dtype(candle_core::DType::F32))
             .transpose()?,
+        sliding_window,
     };
     q.apply_op1(op)
 }

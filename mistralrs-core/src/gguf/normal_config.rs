@@ -43,7 +43,7 @@ pub(crate) struct NormalConfigBuilder {
     build: BuilderFn,
 }
 
-pub(crate) const NORMAL_CONFIG_BUILDERS: &[NormalConfigBuilder; 26] = &[
+pub(crate) const NORMAL_CONFIG_BUILDERS: &[NormalConfigBuilder; 27] = &[
     NormalConfigBuilder {
         loader: NormalLoaderType::Mistral,
         build: build_mistral,
@@ -111,6 +111,10 @@ pub(crate) const NORMAL_CONFIG_BUILDERS: &[NormalConfigBuilder; 26] = &[
     NormalConfigBuilder {
         loader: NormalLoaderType::Qwen3Moe,
         build: build_qwen3_moe,
+    },
+    NormalConfigBuilder {
+        loader: NormalLoaderType::Flint,
+        build: build_flint,
     },
     NormalConfigBuilder {
         loader: NormalLoaderType::SmolLm3,
@@ -659,6 +663,31 @@ impl<'a> MetadataView<'a> {
             )));
         }
         Ok(Some(values))
+    }
+
+    fn required_layer_bools(&self, suffix: &str, layer_count: usize) -> SynthesisResult<Vec<bool>> {
+        let key = self.key(suffix);
+        let GgufValue::Array(values) = self.required_value(suffix)? else {
+            return Err(NormalConfigSynthesisError::new(format!(
+                "GGUF metadata `{key}` must be a boolean array"
+            )));
+        };
+        if values.len() != layer_count {
+            return Err(NormalConfigSynthesisError::new(format!(
+                "GGUF metadata `{key}` has {} entries for {layer_count} layers",
+                values.len()
+            )));
+        }
+        values
+            .iter()
+            .map(|value| {
+                value_bool(value).ok_or_else(|| {
+                    NormalConfigSynthesisError::new(format!(
+                        "GGUF metadata `{key}` must contain only booleans"
+                    ))
+                })
+            })
+            .collect()
     }
 
     fn required_f64(&self, suffix: &str) -> SynthesisResult<f64> {
@@ -1427,6 +1456,112 @@ fn build_qwen3_moe(metadata: &MetadataView<'_>) -> SynthesisResult<JsonValue> {
         json!(metadata
             .optional_bool("expert_weights_norm")?
             .unwrap_or(true)),
+    );
+    config.insert("decoder_sparse_step".into(), json!(1));
+    config.insert(
+        "mlp_only_layers".into(),
+        json!(dense_layer_indices(metadata, fields.num_hidden_layers)),
+    );
+    Ok(JsonValue::Object(config))
+}
+
+fn build_flint(metadata: &MetadataView<'_>) -> SynthesisResult<JsonValue> {
+    reject_unsupported_rope_scaling(metadata, "Flint")?;
+    let fields = StandardFields::read(metadata, None)?;
+    let sliding_pattern = metadata
+        .required_layer_bools("attention.sliding_window_pattern", fields.num_hidden_layers)?;
+    let rope_pattern =
+        metadata.required_layer_bools("attention.rope_pattern", fields.num_hidden_layers)?;
+    if sliding_pattern.iter().any(|sliding| *sliding) && fields.sliding_window.is_none() {
+        return Err(NormalConfigSynthesisError::new(format!(
+            "Flint sliding-attention layers require positive `{}`",
+            metadata.key("attention.sliding_window")
+        )));
+    }
+    if metadata
+        .optional_f64("expert_weights_scale")?
+        .unwrap_or(1.0)
+        != 1.0
+    {
+        return Err(NormalConfigSynthesisError::new(format!(
+            "Native Flint routing requires `{}` to be 1",
+            metadata.key("expert_weights_scale")
+        )));
+    }
+    for suffix in ["attention.value_length", "rope.dimension_count"] {
+        if let Some(length) = metadata.optional_usize(suffix)? {
+            if length != fields.head_dim {
+                return Err(NormalConfigSynthesisError::new(format!(
+                    "Native Flint requires `{}` to equal its attention key length ({})",
+                    metadata.key(suffix),
+                    fields.head_dim
+                )));
+            }
+        }
+    }
+    let mut config = fields.rms_json();
+    config.insert("hidden_act".into(), json!("silu"));
+    config.insert("head_dim".into(), json!(fields.head_dim));
+    config.insert(
+        "use_sliding_window".into(),
+        json!(fields.sliding_window.is_some()),
+    );
+    config.insert(
+        "layer_types".into(),
+        json!(sliding_pattern
+            .into_iter()
+            .map(|sliding| {
+                if sliding {
+                    "sliding_attention"
+                } else {
+                    "full_attention"
+                }
+            })
+            .collect::<Vec<_>>()),
+    );
+    config.insert(
+        "no_rope_layer_indices".into(),
+        json!(rope_pattern
+            .into_iter()
+            .enumerate()
+            .filter_map(|(layer, rope)| (!rope).then_some(layer))
+            .collect::<Vec<_>>()),
+    );
+    config.insert("softmax_type".into(), json!("learnable"));
+    config.insert(
+        "attention_bias".into(),
+        json!(metadata.has_tensor_marker(".attn_q.bias")),
+    );
+    config.insert(
+        "moe_intermediate_size".into(),
+        json!(metadata.required_uniform_usize("expert_feed_forward_length")?),
+    );
+    config.insert(
+        "shared_expert_intermediate_size".into(),
+        json!(metadata.required_usize("expert_shared_feed_forward_length")?),
+    );
+    config.insert(
+        "num_experts".into(),
+        json!(metadata.required_usize("expert_count")?),
+    );
+    config.insert(
+        "num_experts_per_tok".into(),
+        json!(metadata.required_usize("expert_used_count")?),
+    );
+    config.insert(
+        "norm_topk_prob".into(),
+        json!(metadata
+            .optional_bool("expert_weights_norm")?
+            .unwrap_or(true)),
+    );
+    config.insert(
+        "router_score_function".into(),
+        json!(
+            match metadata.expert_gating()?.unwrap_or(ExpertGating::Sigmoid) {
+                ExpertGating::Softmax => "softmax",
+                ExpertGating::Sigmoid => "sigmoid",
+            }
+        ),
     );
     config.insert("decoder_sparse_step".into(), json!(1));
     config.insert(
@@ -2570,6 +2705,7 @@ mod tests {
                 | NormalLoaderType::GLM4MoeLite
                 | NormalLoaderType::GLM4Moe
                 | NormalLoaderType::Qwen3Moe
+                | NormalLoaderType::Flint
                 | NormalLoaderType::GptOss
                 | NormalLoaderType::HunYuanMoEV1
                 | NormalLoaderType::Qwen3Next
@@ -2640,7 +2776,7 @@ mod tests {
                 &mut metadata,
                 architecture,
                 "expert_gating_func",
-                if matches!(loader, NormalLoaderType::Lfm2Moe) {
+                if matches!(loader, NormalLoaderType::Lfm2Moe | NormalLoaderType::Flint) {
                     2
                 } else {
                     1
@@ -2754,6 +2890,33 @@ mod tests {
             );
         }
 
+        if matches!(loader, NormalLoaderType::Flint) {
+            insert_u32(&mut metadata, architecture, "attention.sliding_window", 513);
+            for suffix in ["attention.sliding_window_pattern", "attention.rope_pattern"] {
+                metadata.insert(
+                    format!("{}.{suffix}", architecture.as_str()),
+                    GgufValue::Array(
+                        [false, true, true, false]
+                            .into_iter()
+                            .map(GgufValue::Bool)
+                            .collect(),
+                    ),
+                );
+            }
+            tensors.extend(
+                [
+                    "blk.0.attn_q_norm.weight",
+                    "blk.0.attn_k_norm.weight",
+                    "blk.0.attn_sinks.weight",
+                    "blk.1.ffn_gate_shexp.weight",
+                    "blk.1.ffn_up_shexp.weight",
+                    "blk.1.ffn_down_shexp.weight",
+                ]
+                .into_iter()
+                .map(str::to_string),
+            );
+        }
+
         if matches!(loader, NormalLoaderType::HunYuanMoEV1) {
             tensors.push("blk.1.ffn_gate_shexp.weight".to_string());
         }
@@ -2818,6 +2981,7 @@ mod tests {
             NormalLoaderType::Qwen3Moe => {
                 assert_deserializes::<models::qwen3_moe::Config>(loader, config)
             }
+            NormalLoaderType::Flint => assert_deserializes::<models::flint::Config>(loader, config),
             NormalLoaderType::SmolLm3 => {
                 assert_deserializes::<models::smollm3::Config>(loader, config)
             }
@@ -2847,10 +3011,6 @@ mod tests {
 
     #[test]
     fn config_builder_registry_is_exhaustive() {
-        assert_eq!(
-            NormalLoaderType::iter().count(),
-            NORMAL_CONFIG_BUILDERS.len()
-        );
         assert_eq!(NORMAL_MODEL_ADAPTERS.len(), NORMAL_CONFIG_BUILDERS.len());
 
         let mut builders = HashSet::new();
@@ -2866,7 +3026,10 @@ mod tests {
 
     #[test]
     fn every_loader_synthesizes_a_native_config() {
-        for loader in NormalLoaderType::iter() {
+        for loader in NORMAL_CONFIG_BUILDERS
+            .iter()
+            .map(|builder| builder.loader.clone())
+        {
             let (_, metadata, tensors) = default_fixture(&loader);
             let config = synthesize_normal_config_value(&loader, &metadata, &tensors)
                 .unwrap_or_else(|error| panic!("failed to synthesize `{loader}` fixture: {error}"));
@@ -2881,6 +3044,156 @@ mod tests {
                 Some(loader.clone())
             );
             assert_native_config_deserializes(&loader, config);
+        }
+    }
+
+    #[test]
+    fn flint_published_metadata_preserves_native_architecture() {
+        let loader = NormalLoaderType::Flint;
+        let (architecture, mut metadata, mut tensors) = default_fixture(&loader);
+        for (key, value) in [
+            ("vocab_size", 150_144),
+            ("context_length", 262_144),
+            ("embedding_length", 2_048),
+            ("block_count", 49),
+            ("feed_forward_length", 6_144),
+            ("attention.head_count", 32),
+            ("attention.head_count_kv", 4),
+            ("attention.key_length", 128),
+            ("attention.value_length", 128),
+            ("expert_count", 256),
+            ("expert_used_count", 6),
+            ("expert_feed_forward_length", 512),
+            ("expert_shared_feed_forward_length", 1_024),
+            ("leading_dense_block_count", 2),
+            ("expert_shared_count", 2),
+        ] {
+            insert_u32(&mut metadata, architecture, key, value);
+        }
+        insert_f32(
+            &mut metadata,
+            architecture,
+            "attention.layer_norm_rms_epsilon",
+            1e-6,
+        );
+        metadata.remove("flint.rope.dimension_count");
+        let full_attention = [0, 1, 5, 9, 13, 17, 21, 25, 29, 33, 37, 41, 45, 48];
+        for key in ["attention.sliding_window_pattern", "attention.rope_pattern"] {
+            metadata.insert(
+                format!("flint.{key}"),
+                GgufValue::Array(
+                    (0..49)
+                        .map(|layer| GgufValue::Bool(!full_attention.contains(&layer)))
+                        .collect(),
+                ),
+            );
+        }
+        for name in &mut tensors {
+            *name = name.replace("blk.1.", "blk.2.");
+        }
+        tensors.extend(
+            ["output.weight", "blk.1.ffn_gate.weight"]
+                .into_iter()
+                .map(str::to_string),
+        );
+        let config = synthesize_normal_config_value(&loader, &metadata, &tensors).unwrap();
+        let native: models::flint::Config = serde_json::from_value(config.clone()).unwrap();
+        native.validate().unwrap();
+        assert_eq!(native.vocab_size, 150_144);
+        assert_eq!(native.hidden_size, 2_048);
+        assert_eq!(native.intermediate_size, 6_144);
+        assert_eq!(native.num_hidden_layers, 49);
+        assert_eq!(native.num_attention_heads, 32);
+        assert_eq!(native.num_key_value_heads, 4);
+        assert_eq!(native.head_dim(), 128);
+        assert_eq!(native.max_position_embeddings, 262_144);
+        assert!((native.rms_norm_eps - 1e-6).abs() < 1e-12);
+        assert_eq!(native.rope_theta, 10_000.);
+        assert_eq!(native.moe_intermediate_size, 512);
+        assert_eq!(native.shared_expert_intermediate_size, 1_024);
+        assert_eq!(native.num_experts, 256);
+        assert_eq!(native.num_experts_per_tok, 6);
+        assert_eq!(native.mlp_only_layers, vec![0, 1]);
+        assert_eq!(native.no_rope_layer_indices, full_attention);
+        assert!(native.has_attention_sinks());
+        assert!(native.norm_topk_prob);
+        assert!(!native.tie_word_embeddings);
+        assert!(!native.attention_bias);
+        assert_eq!(config["router_score_function"], "sigmoid");
+        for layer in 0..49 {
+            assert_eq!(
+                native.sliding_window(layer),
+                (!full_attention.contains(&layer)).then_some(513)
+            );
+            assert_eq!(native.is_moe_layer(layer), layer >= 2);
+        }
+    }
+
+    #[test]
+    fn flint_schedules_and_routing_are_independent() {
+        let loader = NormalLoaderType::Flint;
+        let (architecture, mut metadata, mut tensors) = default_fixture(&loader);
+        metadata.insert(
+            "flint.attention.rope_pattern".to_string(),
+            GgufValue::Array(
+                [true, false, true, false]
+                    .into_iter()
+                    .map(GgufValue::Bool)
+                    .collect(),
+            ),
+        );
+        insert_u32(&mut metadata, architecture, "expert_gating_func", 1);
+        insert_bool(&mut metadata, architecture, "expert_weights_norm", false);
+        tensors.push("blk.2.ffn_gate.weight".to_string());
+        let config = synthesize_normal_config_value(&loader, &metadata, &tensors).unwrap();
+        assert_eq!(
+            config["layer_types"],
+            json!([
+                "full_attention",
+                "sliding_attention",
+                "sliding_attention",
+                "full_attention"
+            ])
+        );
+        assert_eq!(config["no_rope_layer_indices"], json!([1, 3]));
+        assert_eq!(config["mlp_only_layers"], json!([0, 2]));
+        assert_eq!(config["router_score_function"], "softmax");
+        assert_eq!(config["norm_topk_prob"], false);
+    }
+
+    #[test]
+    fn flint_rejects_missing_or_incompatible_metadata() {
+        let loader = NormalLoaderType::Flint;
+        let (_, metadata, tensors) = default_fixture(&loader);
+        for key in [
+            "flint.attention.sliding_window_pattern",
+            "flint.attention.rope_pattern",
+        ] {
+            let mut incomplete = metadata.clone();
+            incomplete.remove(key);
+            let error = synthesize_normal_config_value(&loader, &incomplete, &tensors).unwrap_err();
+            assert!(error.to_string().contains(key));
+            assert!(error.to_string().contains("original Hugging Face config"));
+        }
+        for (key, value) in [
+            (
+                "flint.attention.rope_pattern",
+                GgufValue::Array(vec![GgufValue::Bool(true)]),
+            ),
+            (
+                "flint.attention.rope_pattern",
+                GgufValue::Array(vec![GgufValue::U32(1); LAYER_COUNT]),
+            ),
+            ("flint.attention.sliding_window", GgufValue::U32(0)),
+            ("flint.expert_weights_scale", GgufValue::F32(1.25)),
+            ("flint.attention.value_length", GgufValue::U32(32)),
+            ("flint.rope.dimension_count", GgufValue::U32(32)),
+        ] {
+            let mut incompatible = metadata.clone();
+            incompatible.insert(key.to_string(), value);
+            let error =
+                synthesize_normal_config_value(&loader, &incompatible, &tensors).unwrap_err();
+            assert!(error.to_string().contains(key), "{error}");
         }
     }
 
@@ -3163,7 +3476,8 @@ mod tests {
                 normal_loader_hint_from_external_config(&raw).unwrap(),
                 Some(loader.clone())
             );
-            let gguf_architecture = registry_adapter(&loader).unwrap().architectures[0];
+            let adapter = registry_adapter(&loader).unwrap();
+            let gguf_architecture = adapter.architectures[0];
             let normalized: JsonValue = serde_json::from_str(
                 &normalize_external_normal_config(&loader, gguf_architecture, &raw).unwrap(),
             )

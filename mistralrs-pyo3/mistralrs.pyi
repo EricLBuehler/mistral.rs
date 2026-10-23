@@ -262,6 +262,7 @@ class Architecture(Enum):
     GLM4Moe = "glm4moe"
     GLM4MoeLite = "glm4moelite"
     Qwen3Moe = "qwen3moe"
+    Flint = "flint"
     SmolLm3 = "smollm3"
     GraniteMoeHybrid = "granitemoehybrid"
     GptOss = "gptoss"

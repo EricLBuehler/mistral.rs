@@ -71,9 +71,41 @@ mistralrs serve -m Qwen/Qwen3.8-27B-FP8 --pa-cache-type f8e4m3 --max-seqs 16
 The checkpoint's dynamic activation scaling and `modules_to_not_convert` declarations are applied
 automatically; `--quant` is not needed for a pre-quantized FP8 repository.
 
+## Flint
+
+[RecursiveSI/flint](https://huggingface.co/RecursiveSI/flint) is a text-only MoE model with optional reasoning and native tool calling. Its 49 layers combine sliding-window and full attention, per-head QK normalization, and learned attention sinks. The checkpoint configures a 262,144-token context window.
+
+```bash
+mistralrs run -m RecursiveSI/flint
+mistralrs run -m RecursiveSI/flint --quant 4
+mistralrs serve -p 1234 -m RecursiveSI/flint
+```
+
+`--quant 4` selects compatible prebuilt UQFF weights when available and otherwise applies in-situ quantization. Use `--isq 4` to force in-situ quantization. Flint also supports MoQE and UQFF through the standard quantization workflows. X-LoRA loading is not supported.
+
+Flint GGUF files can load directly from their embedded configuration, tokenizer, chat template, stop tokens, and sampling defaults:
+
+```bash
+mistralrs run -m RecursiveSI/flint-int4-gguf -f flint-int4-q4_1.gguf
+mistralrs run -f /path/to/flint-Q3_K_S.gguf
+```
+
+Choose a [supported GGUF storage type](/reference/gguf-support/#storage-formats), such as Q4_1 or a K-quant. The separate NVFP4 GGUF format is not supported.
+
+CUDA uses paged attention by default, with prefix caching and fused attention sinks for chunked prefill and packed batches, including sliding-window attention.
+Sliding-window decode reads the required KV pages directly and supports CUDA graph replay.
+
+Leave `--kv-cache` unset to use [automatic memory sizing](/guides/perf/paged-attention/#automatic-sizing). The shared KV pool is sized from the available memory budget and can hold more tokens than the model's per-request context window. Use `--max-model-len` to lower the per-request prompt-plus-output limit; it does not cap the shared pool's token capacity.
+
+The checkpoint supplies the chat template, stop tokens, and sampling defaults: temperature `1.0`, top-p `0.95`, and top-k `20`. Flint decides whether to emit reasoning on each turn; `enable_thinking` and `reasoning_effort` do not change its template. Reasoning is returned in `reasoning_content`. Preserve that field on assistant messages when sending conversation history back, including messages containing tool calls.
+
+Tool calls use Flint's native `<tool_call>`, `<arg_key>`, and `<arg_value>` format internally and are returned as OpenAI-compatible `tool_calls`. Send tool definitions on each request. Both streaming and non-streaming requests support multiple calls, nested JSON arguments, and returning tool results on the next turn. See the [Flint tool calling example](/examples/server/flint-tools/).
+
+For hard problems, the model authors recommend an output budget of at least 32,768 tokens, including reasoning. A `length` finish reason can mean the model reached that budget before producing an answer.
+
 ## MoE models and MoQE
 
-MoE (Mixture of Experts) families (DeepSeek V2/V3, GLM-4.7, GLM-4.7-Flash, Phi 3.5 MoE, Qwen3 MoE, Qwen3-VL MoE, Qwen3.5/Qwen3.6 MoE, LFM2/LFM2.5 MoE) support MoQE (Mixture of Quantized Experts): quantizing only the routed experts, which dominate memory, while leaving the rest of the model alone. Enable it when applying ISQ with `--isq-organization moqe`:
+MoE (Mixture of Experts) families (DeepSeek V2/V3, GLM-4.7, GLM-4.7-Flash, Phi 3.5 MoE, Qwen3 MoE, Qwen3-VL MoE, Qwen3.5/Qwen3.6 MoE, LFM2/LFM2.5 MoE, Flint) support MoQE (Mixture of Quantized Experts): quantizing only the routed experts, which dominate memory, while leaving the rest of the model alone. Enable it when applying ISQ with `--isq-organization moqe`:
 
 ```bash
 mistralrs run --isq 4 --isq-organization moqe -m Qwen/Qwen3-30B-A3B

@@ -71,18 +71,19 @@ pub use loaders::{
     AutoNormalLoader, DeepSeekV2Loader, DeepSeekV3Loader, DeviceMappedModelLoader,
     DiffusionGemmaLoader, DiffusionLoaderType, DiffusionModel, DiffusionModelLoader,
     EmbeddingGemmaLoader, EmbeddingLoaderType, EmbeddingModel, EmbeddingModelLoader,
-    EmbeddingModelPaths, EmbeddingModule, EmbeddingModulePaths, EmbeddingModuleType, FluxLoader,
-    GLM4Loader, GLM4MoeLiteLoader, GLM4MoeLoader, Gemma2Loader, Gemma3Loader, Gemma3nLoader,
-    Gemma4Loader, GemmaLoader, GptOssLoader, GraniteMoeHybridLoader, HunYuanDenseV1Loader,
-    HunYuanMoEV1Loader, Idefics2Loader, Idefics3Loader, LLaVALoader, LLaVANextLoader, Lfm2Loader,
-    Lfm2VlLoader, LlamaLoader, Loader, LocalModelPaths, MiniCpmOLoader, Mistral3Loader,
-    MistralLoader, MixtralLoader, ModelKind, ModelPaths, MultimodalLoaderType, MultimodalModel,
-    MultimodalModelLoader, MuseGlimmerLoader, NormalLoaderType, NormalLoadingMetadata, NormalModel,
-    NormalModelLoader, Phi2Loader, Phi3Loader, Phi3VLoader, Phi3_5MoELoader, Phi4MMLoader,
-    PrettyName, QuantizationKind, Qwen2Loader, Qwen2VLLoader, Qwen2_5VLLoader,
-    Qwen3EmbeddingLoader, Qwen3Loader, Qwen3MoELoader, Qwen3NextLoader, Qwen3VLLoader,
-    Qwen3VLMoELoader, Qwen3_5Loader, Qwen3_5MoeLoader, Qwen3_5TextLoader, Qwen4ExpLoader,
-    SmolLm3Loader, Starcoder2Loader, TokenSource, VLlama4Loader, VLlamaLoader, VoxtralLoader,
+    EmbeddingModelPaths, EmbeddingModule, EmbeddingModulePaths, EmbeddingModuleType, FlintLoader,
+    FluxLoader, GLM4Loader, GLM4MoeLiteLoader, GLM4MoeLoader, Gemma2Loader, Gemma3Loader,
+    Gemma3nLoader, Gemma4Loader, GemmaLoader, GptOssLoader, GraniteMoeHybridLoader,
+    HunYuanDenseV1Loader, HunYuanMoEV1Loader, Idefics2Loader, Idefics3Loader, LLaVALoader,
+    LLaVANextLoader, Lfm2Loader, Lfm2VlLoader, LlamaLoader, Loader, LocalModelPaths,
+    MiniCpmOLoader, Mistral3Loader, MistralLoader, MixtralLoader, ModelKind, ModelPaths,
+    MultimodalLoaderType, MultimodalModel, MultimodalModelLoader, MuseGlimmerLoader,
+    NormalLoaderType, NormalLoadingMetadata, NormalModel, NormalModelLoader, Phi2Loader,
+    Phi3Loader, Phi3VLoader, Phi3_5MoELoader, Phi4MMLoader, PrettyName, QuantizationKind,
+    Qwen2Loader, Qwen2VLLoader, Qwen2_5VLLoader, Qwen3EmbeddingLoader, Qwen3Loader, Qwen3MoELoader,
+    Qwen3NextLoader, Qwen3VLLoader, Qwen3VLMoELoader, Qwen3_5Loader, Qwen3_5MoeLoader,
+    Qwen3_5TextLoader, Qwen4ExpLoader, SmolLm3Loader, Starcoder2Loader, TokenSource, VLlama4Loader,
+    VLlamaLoader, VoxtralLoader,
 };
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn get_device_layers_for_loader(
@@ -202,6 +203,29 @@ pub(crate) fn synchronize_cuda_contexts(primary: &Device, mapper: &dyn DeviceMap
         }
     }
     Ok(())
+}
+
+#[cfg(feature = "cuda")]
+pub(crate) fn prepare_cuda_runtime(primary: &Device, mapper: &dyn DeviceMapper) -> Result<()> {
+    mistralrs_quant::cublaslt::maybe_init_cublas_lt_wrapper(primary.clone());
+    let mut devices = mapper.get_unique_devices();
+    if !devices.iter().any(|device| device.same_device(primary)) {
+        devices.push(primary.clone());
+    }
+    for device in devices.iter().filter(|device| device.is_cuda()) {
+        match crate::cuda::preload::preload_candle_ptx(device) {
+            Ok(count) if count > 0 => {
+                tracing::info!("Preloaded {count} Candle CUDA PTX functions.")
+            }
+            Ok(_) => {}
+            Err(err) => tracing::warn!("Failed to preload Candle CUDA PTX functions: {err}"),
+        }
+    }
+    #[cfg(feature = "cutile")]
+    if let Err(err) = mistralrs_quant::cutile::warmup_moe_kernels(primary) {
+        tracing::warn!("Failed to warm up cuTile MoE kernels: {err}");
+    }
+    synchronize_cuda_contexts(primary, mapper)
 }
 
 pub(crate) fn resolve_lora_execution(

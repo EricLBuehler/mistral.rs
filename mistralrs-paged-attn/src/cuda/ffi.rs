@@ -297,6 +297,7 @@ extern "C" {
         k_scale: *const f32,
         v_scale: *const f32,
         sinks: *const f32,
+        sliding_window: c_int,
     );
 
     pub fn paged_attention_v1_bf16(
@@ -324,6 +325,7 @@ extern "C" {
         k_scale: *const f32,
         v_scale: *const f32,
         sinks: *const f32,
+        sliding_window: c_int,
     );
 
     pub fn paged_attention_v1_f32(
@@ -351,6 +353,7 @@ extern "C" {
         k_scale: *const f32,
         v_scale: *const f32,
         sinks: *const f32,
+        sliding_window: c_int,
     );
 
     pub fn paged_attention_v2_f16(
@@ -381,6 +384,7 @@ extern "C" {
         k_scale: *const f32,
         v_scale: *const f32,
         sinks: *const f32,
+        sliding_window: c_int,
     );
 
     pub fn paged_attention_v2_bf16(
@@ -411,6 +415,7 @@ extern "C" {
         k_scale: *const f32,
         v_scale: *const f32,
         sinks: *const f32,
+        sliding_window: c_int,
     );
 
     pub fn paged_attention_v2_f32(
@@ -441,6 +446,7 @@ extern "C" {
         k_scale: *const f32,
         v_scale: *const f32,
         sinks: *const f32,
+        sliding_window: c_int,
     );
 
     pub fn copy_blocks_bf16(
@@ -580,6 +586,7 @@ extern "C" {
         num_kv_heads: c_int,
         head_dim: c_int,
         window_size: c_int,
+        packed_q: bool,
         stream: CUstream,
     );
 
@@ -598,6 +605,7 @@ extern "C" {
         num_kv_heads: c_int,
         head_dim: c_int,
         window_size: c_int,
+        packed_q: bool,
         stream: CUstream,
     );
 
@@ -616,6 +624,7 @@ extern "C" {
         num_kv_heads: c_int,
         head_dim: c_int,
         window_size: c_int,
+        packed_q: bool,
         stream: CUstream,
     );
 }

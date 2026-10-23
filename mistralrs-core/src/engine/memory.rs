@@ -164,14 +164,6 @@ pub(super) fn forward_workspace_bytes(
     })
 }
 
-#[cfg(any(feature = "cuda", feature = "metal", test))]
-fn forward_available_bytes(budget: crate::memory_plan::DeviceMemoryBudget) -> usize {
-    budget
-        .engine_limit_bytes
-        .saturating_sub(budget.occupied_bytes)
-        .min(budget.available_bytes)
-}
-
 #[cfg(any(feature = "cuda", feature = "metal"))]
 pub(super) fn enforce_memory_goal(
     devices: &[Device],
@@ -187,9 +179,9 @@ pub(super) fn enforce_memory_goal(
             let snapshot = crate::MemoryUsage
                 .query(device)
                 .map_err(candle_core::Error::wrap)?;
-            let budget = crate::memory_plan::resolve_device_budget(goal, snapshot)
+            let budget = crate::memory_plan::resolve_forward_budget(goal, snapshot)
                 .map_err(candle_core::Error::wrap)?;
-            let available = forward_available_bytes(budget);
+            let available = budget.allocatable_bytes;
             Ok((available, budget.engine_limit_bytes, snapshot.allocated()))
         };
         let result = (|| -> Result<_> {
@@ -247,9 +239,59 @@ pub(super) fn enforce_memory_goal(
     (status, metal_allocation_limits)
 }
 
+#[cfg(any(feature = "cuda", feature = "metal"))]
+pub(super) fn log_forward_memory_pressure(
+    devices: &[Device],
+    primary: &Device,
+    goal: crate::MemoryGoal,
+    workspace: ForwardWorkspaceBytes,
+    activation_dtype: DType,
+) {
+    for device in devices.iter().filter(|device| !device.is_cpu()) {
+        let result = (|| -> Result<_> {
+            let memory = crate::MemoryUsage.query(device)?;
+            let planning = crate::memory_plan::resolve_device_budget(goal, memory)
+                .map_err(candle_core::Error::wrap)?;
+            let forward = crate::memory_plan::resolve_forward_budget(goal, memory)
+                .map_err(candle_core::Error::wrap)?;
+            let pending = if device.is_cuda() {
+                mistralrs_quant::gguf_affine_reserved_bytes(device, activation_dtype)
+            } else {
+                0
+            };
+            let required = workspace.with_pending(device.same_device(primary), pending)?;
+            Ok((memory, planning, forward, pending, required))
+        })();
+        match result {
+            Ok((memory, planning, forward, pending, required)) => {
+                tracing::warn!(
+                    device = ?device.location(),
+                    memory_goal = %goal,
+                    workspace_bytes = workspace.for_role(device.same_device(primary)),
+                    pending_weight_bytes = pending,
+                    required_bytes = required,
+                    physical_available_bytes = memory.physical_available(),
+                    allocated_bytes = memory.allocated(),
+                    forward_budget_bytes = forward.allocatable_bytes,
+                    planning_budget_bytes = planning.allocatable_bytes,
+                    "Rejected forward memory budget"
+                );
+            }
+            Err(err) => tracing::warn!(
+                device = ?device.location(),
+                error = %err,
+                "Could not inspect rejected forward memory budget"
+            ),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const MIB: usize = 1024 * 1024;
+    const GIB: usize = 1024 * MIB;
 
     #[test]
     fn reduce_prompt_batches_until_single_request() {
@@ -273,7 +315,6 @@ mod tests {
 
     #[test]
     fn allocated_kv_leaves_the_full_reserved_forward_budget_admissible() {
-        const GIB: usize = 1024 * 1024 * 1024;
         let empty = crate::utils::memory_usage::DeviceMemory::Unified {
             total: 64 * GIB,
             available: 64 * GIB,
@@ -290,9 +331,9 @@ mod tests {
             allocated: target - activation,
             working_set_limit: 48 * GIB,
         };
-        let available = forward_available_bytes(
-            crate::memory_plan::resolve_device_budget(crate::MemoryGoal::Auto, loaded).unwrap(),
-        );
+        let available = crate::memory_plan::resolve_forward_budget(crate::MemoryGoal::Auto, loaded)
+            .unwrap()
+            .allocatable_bytes;
         assert_eq!(available, activation);
         assert_eq!(
             prompt_batch_memory_action(1, activation > available),
@@ -302,58 +343,77 @@ mod tests {
 
     #[test]
     fn auto_forward_uses_planning_headroom_after_external_memory_growth() {
-        const GIB: usize = 1024 * 1024 * 1024;
-        const ACTIVATION: usize = 2 * GIB;
+        const TOTAL: usize = 128 * GIB;
+        const WORKSPACE: usize = 12 * MIB;
         let snapshot = |available| crate::utils::memory_usage::DeviceMemory::Unified {
-            total: 64 * GIB,
+            total: TOTAL,
             available,
-            allocated: 46 * GIB,
-            working_set_limit: 48 * GIB,
+            allocated: TOTAL - available,
+            working_set_limit: TOTAL,
         };
         let before =
-            crate::memory_plan::resolve_device_budget(crate::MemoryGoal::Auto, snapshot(18 * GIB))
-                .unwrap();
-        let after =
             crate::memory_plan::resolve_device_budget(crate::MemoryGoal::Auto, snapshot(17 * GIB))
                 .unwrap();
-        assert_eq!(before.allocatable_bytes, ACTIVATION);
-        assert_eq!(after.allocatable_bytes, ACTIVATION);
-        assert_eq!(forward_available_bytes(after), ACTIVATION);
+        let after =
+            crate::memory_plan::resolve_device_budget(crate::MemoryGoal::Auto, snapshot(15 * GIB))
+                .unwrap();
+        assert_eq!(before.allocatable_bytes, GIB);
+        assert_eq!(after.allocatable_bytes, 0);
+        let forward =
+            crate::memory_plan::resolve_forward_budget(crate::MemoryGoal::Auto, snapshot(15 * GIB))
+                .unwrap();
+        assert_eq!(forward.allocatable_bytes, 15 * GIB);
         assert_eq!(
-            prompt_batch_memory_action(1, ACTIVATION > forward_available_bytes(after)),
+            prompt_batch_memory_action(1, WORKSPACE > forward.allocatable_bytes),
             PromptBatchMemoryAction::Proceed
         );
-        let exhausted =
-            crate::memory_plan::resolve_device_budget(crate::MemoryGoal::Auto, snapshot(GIB))
-                .unwrap();
-        assert_eq!(forward_available_bytes(exhausted), GIB);
-        assert_eq!(
-            prompt_batch_memory_action(1, ACTIVATION > forward_available_bytes(exhausted)),
-            PromptBatchMemoryAction::Reject
-        );
-        let capped = crate::memory_plan::resolve_device_budget(
-            crate::MemoryGoal::Utilization(0.5),
-            snapshot(18 * GIB),
+        let exhausted = crate::memory_plan::resolve_forward_budget(
+            crate::MemoryGoal::Auto,
+            snapshot(WORKSPACE - 1),
         )
         .unwrap();
-        assert_eq!(forward_available_bytes(capped), 0);
+        assert_eq!(exhausted.allocatable_bytes, WORKSPACE - 1);
+        assert_eq!(
+            prompt_batch_memory_action(1, WORKSPACE > exhausted.allocatable_bytes),
+            PromptBatchMemoryAction::Reject
+        );
+        let capped = crate::memory_plan::resolve_forward_budget(
+            crate::MemoryGoal::Utilization(0.875),
+            snapshot(15 * GIB),
+        )
+        .unwrap();
+        assert_eq!(capped.allocatable_bytes, 0);
+        assert_eq!(
+            prompt_batch_memory_action(1, WORKSPACE > capped.allocatable_bytes),
+            PromptBatchMemoryAction::Reject
+        );
     }
 
     #[test]
-    fn discrete_forward_admission_keeps_the_planning_headroom() {
-        const GIB: usize = 1024 * 1024 * 1024;
-        for goal in [crate::MemoryGoal::Auto, crate::MemoryGoal::Utilization(0.9)] {
-            for free in [2 * GIB, 8 * GIB, 64 * GIB] {
-                let budget = crate::memory_plan::resolve_device_budget(
-                    goal,
-                    crate::utils::memory_usage::DeviceMemory::Discrete {
-                        total: 64 * GIB,
-                        free,
-                    },
-                )
+    fn discrete_auto_forward_can_use_headroom_without_relaxing_utilization() {
+        for free in [GIB, 8 * GIB, 64 * GIB] {
+            let memory = crate::utils::memory_usage::DeviceMemory::Discrete {
+                total: 64 * GIB,
+                free,
+            };
+            let auto = crate::memory_plan::resolve_forward_budget(crate::MemoryGoal::Auto, memory)
                 .unwrap();
-                assert_eq!(forward_available_bytes(budget), budget.allocatable_bytes);
-            }
+            assert_eq!(auto.allocatable_bytes, free);
+            assert!(
+                crate::memory_plan::resolve_device_budget(crate::MemoryGoal::Auto, memory)
+                    .unwrap()
+                    .allocatable_bytes
+                    < free
+            );
+            let goal = crate::MemoryGoal::Utilization(0.9);
+            assert_eq!(
+                crate::memory_plan::resolve_forward_budget(goal, memory)
+                    .unwrap()
+                    .allocatable_bytes,
+                crate::memory_plan::resolve_device_budget(goal, memory)
+                    .unwrap()
+                    .allocatable_bytes,
+            );
         }
     }
 
@@ -552,6 +612,97 @@ mod tests {
         assert!(forward_workspace_bytes(Some(plan), text_shape(1, 0), usize::MAX, true).is_err());
     }
 
+    #[cfg(feature = "cuda")]
+    #[test]
+    fn flint_prompt_admission_uses_requested_context_instead_of_cache_capacity() -> Result<()> {
+        use crate::paged_attention::{
+            plan::{prompt_prefill_workspace, PromptPrefillWorkspaceInput},
+            KvCacheLayout, ModelConfigMetadata,
+        };
+
+        const MIB: usize = 1024 * 1024;
+        const GIB: usize = 1024 * MIB;
+        const FULL_ATTENTION_LAYERS: [usize; 14] =
+            [0, 1, 5, 9, 13, 17, 21, 25, 29, 33, 37, 41, 45, 48];
+        let model = crate::models::flint::ModelConfig::new(
+            ModelConfigMetadata {
+                max_seq_len: 262_144,
+                num_layers: 49,
+                hidden_size: 2048,
+                num_kv_heads: 4,
+                num_attn_heads: 32,
+                sliding_window: None,
+                k_head_dim: 128,
+                v_head_dim: 128,
+                kv_cache_layout: KvCacheLayout::Standard,
+            },
+            (0..49)
+                .map(|layer| (!FULL_ATTENTION_LAYERS.contains(&layer)).then_some(513))
+                .collect(),
+            true,
+        );
+        let plan = crate::memory_plan::RuntimeMemoryPlan {
+            primary_activation_bytes: 20 * GIB,
+            mapped_activation_bytes: 20 * GIB,
+            primary_non_attention_bytes: 256 * MIB,
+            mapped_non_attention_bytes: 256 * MIB,
+            planned_query_tokens: 4096,
+            logits_bytes_per_query_token: 150_144 * 6,
+            ..asymmetric_plan()
+        };
+        for (query_len, context_len, available, expected_action) in [
+            (1, 1, GIB, PromptBatchMemoryAction::Proceed),
+            (16, 16, GIB, PromptBatchMemoryAction::Proceed),
+            (512, 1024, GIB, PromptBatchMemoryAction::Proceed),
+            (512, 32_768, GIB, PromptBatchMemoryAction::Proceed),
+            (512, 32_768, 32 * MIB, PromptBatchMemoryAction::Reject),
+        ] {
+            let attention = prompt_prefill_workspace(
+                Some(&model),
+                PromptPrefillWorkspaceInput {
+                    activation_dtype: DType::BF16,
+                    cache_dtype: DType::BF16,
+                    device_is_cuda: true,
+                    device_is_metal: false,
+                    block_size: 32,
+                    query_lens: &[query_len],
+                    full_context_lens: &[context_len],
+                    max_pages_per_sequence: context_len.div_ceil(32),
+                    requires_prefix_attention: context_len > query_len,
+                    is_causal: true,
+                    causality_known: true,
+                    has_custom_mask: false,
+                    has_noncausal_mm_context: false,
+                    has_sliding_window: false,
+                    fa3_num_sm_by_layer: &[],
+                    hnd_by_layer: &[],
+                },
+            )?;
+            assert!(attention.attention_is_complete);
+            let shape = text_shape(query_len, 0);
+            let workspace = forward_workspace_bytes(
+                Some(plan),
+                shape,
+                attention.bytes,
+                attention.attention_is_complete,
+            )?;
+            assert_eq!(
+                prompt_batch_memory_action(1, workspace.primary > available),
+                expected_action,
+                "query {query_len}, context {context_len}, workspace {workspace}"
+            );
+            assert_eq!(
+                prompt_batch_memory_action(
+                    1,
+                    forward_workspace_bytes(Some(plan), shape, attention.bytes, false)?.primary
+                        > available,
+                ),
+                PromptBatchMemoryAction::Reject,
+            );
+        }
+        Ok(())
+    }
+
     #[test]
     fn arbitrary_custom_attention_preserves_additional_model_workspace() {
         let mut plan = asymmetric_plan();
@@ -590,12 +741,12 @@ mod tests {
             let pressure = devices.iter().any(|&(primary, free)| {
                 let snapshot =
                     crate::utils::memory_usage::DeviceMemory::Discrete { total: 1000, free };
-                let budget = crate::memory_plan::resolve_device_budget(
+                let budget = crate::memory_plan::resolve_forward_budget(
                     crate::MemoryGoal::Utilization(1.0),
                     snapshot,
                 )
                 .unwrap();
-                workspace.for_role(primary) > forward_available_bytes(budget)
+                workspace.for_role(primary) > budget.allocatable_bytes
             });
             prompt_batch_memory_action(1, pressure)
         };

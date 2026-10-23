@@ -9,6 +9,9 @@ use crate::attention::flash_backend_supports_sdpa;
 #[cfg(all(feature = "cuda", target_family = "unix"))]
 use crate::flashinfer::{self, FlashInferDecodePlan, FlashInferDecodePlanInput};
 
+#[cfg(all(feature = "cuda", target_family = "unix"))]
+// Matches the instantiated head sizes in pagedattention.cuh.
+const CUDA_PAGED_ATTENTION_HEAD_DIMS: [usize; 8] = [64, 80, 96, 112, 128, 192, 256, 512];
 const METAL_SDPA_HEAD_DIMS: [usize; 7] = [32, 64, 72, 80, 96, 128, 256];
 const METAL_D512_HEAD_DIM: usize = 512;
 const METAL_SDPA_SMALL_QUERY_LIMIT: usize = 8;
@@ -477,6 +480,8 @@ pub(crate) fn metal_decode_workspace(
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum GatherAttentionBackend {
     Conservative,
+    Sinks,
+    FusedSinks,
     PackedVarlen,
     MetalFused,
     #[cfg(feature = "metal")]
@@ -536,6 +541,53 @@ fn gather_prefill_workspace_bytes(input: GatherPrefillWorkspaceInput) -> Result<
         "padded attention output",
     )?;
     let output = packed_output.max(padded_output);
+
+    if input.backend == GatherAttentionBackend::FusedSinks {
+        let padded_kv = checked_tensor_bytes(
+            &[
+                input.batch,
+                input.kv_heads,
+                input.max_kv,
+                checked_sum(
+                    &[input.k_head_dim, input.v_head_dim],
+                    "fused sinks KV width",
+                )?,
+            ],
+            dtype_bytes,
+            "padded fused sinks KV",
+        )?;
+        let query = checked_tensor_bytes(
+            &[input.batch, input.q_heads, input.max_q, input.k_head_dim],
+            dtype_bytes,
+            "fused sinks query",
+        )?
+        .max(checked_tensor_bytes(
+            &[input.total_q, input.q_heads, input.k_head_dim],
+            dtype_bytes,
+            "packed fused sinks query",
+        )?);
+        let sinks = checked_tensor_bytes(
+            &[input.q_heads],
+            DType::F32.size_in_bytes(),
+            "fused attention sinks",
+        )?;
+        let offsets = checked_tensor_bytes(
+            &[2, input.batch + 1],
+            DType::U32.size_in_bytes(),
+            "fused sinks sequence offsets",
+        )?;
+        return checked_sum(
+            &[
+                packed_kv.max(padded_kv),
+                query,
+                output,
+                output,
+                sinks,
+                offsets,
+            ],
+            "fused sinks gather peak",
+        );
+    }
 
     if input.backend == GatherAttentionBackend::PackedVarlen {
         let group_size = input.q_heads / input.kv_heads;
@@ -624,40 +676,48 @@ fn gather_prefill_workspace_bytes(input: GatherPrefillWorkspaceInput) -> Result<
         .ok_or_else(|| candle_core::Error::msg("attention mask workspace overflow"))?;
     let mask_peak = checked_sum(&[packed_kv, mask_f32, mask_dtype], "attention mask peak")?;
 
-    let repeated_k = if input.q_heads > input.kv_heads {
-        checked_tensor_bytes(
-            &[input.batch, input.q_heads, input.max_kv, input.k_head_dim],
-            dtype_bytes,
-            "padded repeated key",
-        )?
-        .max(checked_tensor_bytes(
-            &[input.total_kv, input.q_heads, input.k_head_dim],
-            dtype_bytes,
-            "packed repeated key",
-        )?)
-    } else {
-        0
-    };
-    let repeated_v = if input.q_heads > input.kv_heads {
-        checked_tensor_bytes(
-            &[input.batch, input.q_heads, input.max_kv, input.v_head_dim],
-            dtype_bytes,
-            "padded repeated value",
-        )?
-        .max(checked_tensor_bytes(
-            &[input.total_kv, input.q_heads, input.v_head_dim],
-            dtype_bytes,
-            "packed repeated value",
-        )?)
-    } else {
-        0
-    };
+    let repeated_k =
+        if input.q_heads > input.kv_heads || input.backend == GatherAttentionBackend::Sinks {
+            checked_tensor_bytes(
+                &[input.batch, input.q_heads, input.max_kv, input.k_head_dim],
+                dtype_bytes,
+                "padded repeated key",
+            )?
+            .max(checked_tensor_bytes(
+                &[input.total_kv, input.q_heads, input.k_head_dim],
+                dtype_bytes,
+                "packed repeated key",
+            )?)
+        } else {
+            0
+        };
+    let repeated_v =
+        if input.q_heads > input.kv_heads || input.backend == GatherAttentionBackend::Sinks {
+            checked_tensor_bytes(
+                &[input.batch, input.q_heads, input.max_kv, input.v_head_dim],
+                dtype_bytes,
+                "padded repeated value",
+            )?
+            .max(checked_tensor_bytes(
+                &[input.total_kv, input.q_heads, input.v_head_dim],
+                dtype_bytes,
+                "packed repeated value",
+            )?)
+        } else {
+            0
+        };
 
+    // The sinks fallback materializes every query row instead of chunking the score matrix.
+    let query_limit = if input.backend == GatherAttentionBackend::Sinks {
+        usize::MAX
+    } else {
+        crate::attention::ATTENTION_CHUNK_SIZE
+    };
     let padded_score_elements = checked_product(
         &[
             input.batch,
             input.q_heads,
-            input.max_q.min(crate::attention::ATTENTION_CHUNK_SIZE),
+            input.max_q.min(query_limit),
             input.max_kv,
         ],
         "padded attention scores",
@@ -665,7 +725,7 @@ fn gather_prefill_workspace_bytes(input: GatherPrefillWorkspaceInput) -> Result<
     let packed_score_elements = checked_product(
         &[
             input.q_heads,
-            input.total_q.min(crate::attention::ATTENTION_CHUNK_SIZE),
+            input.total_q.min(query_limit),
             input.total_kv,
         ],
         "packed attention scores",
@@ -705,6 +765,20 @@ fn gather_prefill_workspace_bytes(input: GatherPrefillWorkspaceInput) -> Result<
         .checked_mul(2)
         .ok_or_else(|| candle_core::Error::msg("retained attention output overflow"))?;
     let unpack_peak = checked_sum(&[packed_kv, mask_dtype, unpack_peak], "gather unpack peak")?;
+    let contiguous_query = if input.backend == GatherAttentionBackend::Sinks {
+        checked_tensor_bytes(
+            &[input.batch, input.q_heads, input.max_q, input.k_head_dim],
+            dtype_bytes,
+            "contiguous sinks query",
+        )?
+        .max(checked_tensor_bytes(
+            &[input.total_q, input.q_heads, input.k_head_dim],
+            dtype_bytes,
+            "packed contiguous sinks query",
+        )?)
+    } else {
+        0
+    };
     let attention_peak = checked_sum(
         &[
             packed_kv,
@@ -713,6 +787,7 @@ fn gather_prefill_workspace_bytes(input: GatherPrefillWorkspaceInput) -> Result<
             padded_v,
             repeated_k,
             repeated_v,
+            contiguous_query,
             score_and_output_peak
                 .max(context_matmul_peak)
                 .max(retained_output_peak),
@@ -805,6 +880,12 @@ pub(crate) struct GatherPrefillWorkspaceRequest<'a> {
 }
 
 fn gather_attention_backend(input: GatherPrefillWorkspaceRequest<'_>) -> GatherAttentionBackend {
+    if gather_prefill_uses_sinks(input.plan_input) && input.k_head_dim == input.v_head_dim {
+        return GatherAttentionBackend::FusedSinks;
+    }
+    if input.plan_input.has_sinks {
+        return GatherAttentionBackend::Sinks;
+    }
     if !input.device_is_metal && gather_prefill_uses_packed_varlen(input.plan_input) {
         return GatherAttentionBackend::PackedVarlen;
     }
@@ -889,6 +970,25 @@ pub(crate) fn gather_prefill_uses_packed_varlen(input: PrefixPrefillPlanInput) -
     )
 }
 
+pub(crate) fn gather_prefill_uses_sinks(input: PrefixPrefillPlanInput) -> bool {
+    input.device_is_cuda
+        && input.has_sinks
+        && !input.has_alibi
+        && !input.has_softcap
+        && !input.has_custom_mask
+        && !input.has_noncausal_mm_context
+        && input.causality_known
+        && (input.query_len == 1 || input.is_causal)
+        && input.query_len > 0
+        && input.kv_heads > 0
+        && input.q_heads.is_multiple_of(input.kv_heads)
+        && crate::attention::sinks_backend_supports(
+            input.dtype,
+            candle_core::DeviceLocation::Cuda { gpu_id: 0 },
+            input.head_size,
+        )
+}
+
 fn gather_prefill_uses_packed_varlen_with_backend(
     input: PrefixPrefillPlanInput,
     flash_enabled: bool,
@@ -909,6 +1009,29 @@ fn gather_prefill_uses_packed_varlen_with_backend(
         && input.kv_heads > 0
         && input.q_heads.is_multiple_of(input.kv_heads)
         && shape_supported
+}
+
+fn cuda_gather_workspace_is_complete(plan: PrefixPrefillPlanInput, value_head_dim: usize) -> bool {
+    if !plan.device_is_cuda
+        || plan.has_custom_mask
+        || plan.has_noncausal_mm_context
+        || plan.has_alibi
+        || !plan.causality_known
+        || plan.head_size != value_head_dim
+    {
+        return false;
+    }
+    if plan.has_sinks {
+        return !plan.has_softcap && matches!(plan.dtype, DType::F16 | DType::BF16 | DType::F32);
+    }
+    !plan.has_sliding_window
+        && crate::using_flash_attn()
+        && crate::attention::flash_backend_supports_sdpa(
+            plan.head_size,
+            plan.has_softcap,
+            plan.has_sliding_window,
+        )
+        && matches!(plan.dtype, DType::F16 | DType::BF16)
 }
 
 pub(crate) fn paged_flash_prefill_workspace(
@@ -1113,21 +1236,7 @@ pub(crate) fn prompt_prefill_workspace(
             retained_mask_keys.insert(metal_mask_key(model, layer_idx, features));
         }
         attention_is_complete &= plan_input.is_some_and(|plan| {
-            plan.device_is_cuda
-                && !plan.has_custom_mask
-                && !plan.has_noncausal_mm_context
-                && !plan.has_alibi
-                && !plan.has_sinks
-                && !plan.has_sliding_window
-                && plan.causality_known
-                && model.k_head_dim_for_layer(layer_idx) == model.v_head_dim_for_layer(layer_idx)
-                && crate::using_flash_attn()
-                && crate::attention::flash_backend_supports_sdpa(
-                    plan.head_size,
-                    plan.has_softcap,
-                    plan.has_sliding_window,
-                )
-                && matches!(input.activation_dtype, DType::F16 | DType::BF16)
+            cuda_gather_workspace_is_complete(plan, model.v_head_dim_for_layer(layer_idx))
         });
         let layer_workspace =
             gather_prefill_workspace_for_lengths(GatherPrefillWorkspaceRequest {
@@ -1331,20 +1440,33 @@ impl DecodePlan {
     pub(crate) fn requires_host_context_lengths(
         attention_backend: AttentionBackendKind,
         head_size: usize,
+        has_sliding_window: bool,
     ) -> bool {
         #[cfg(all(feature = "cuda", target_family = "unix"))]
         {
-            head_size > FlashInferDecodePlan::head_size_limit(attention_backend)
+            let _ = has_sliding_window;
+            match attention_backend {
+                AttentionBackendKind::Standard => {
+                    !CUDA_PAGED_ATTENTION_HEAD_DIMS.contains(&head_size)
+                }
+                AttentionBackendKind::FlashInfer => {
+                    head_size > FlashInferDecodePlan::head_size_limit(attention_backend)
+                }
+            }
         }
         #[cfg(not(all(feature = "cuda", target_family = "unix")))]
         {
             let _ = head_size;
-            matches!(attention_backend, AttentionBackendKind::FlashInfer)
+            matches!(attention_backend, AttentionBackendKind::FlashInfer) || has_sliding_window
         }
     }
 
     pub fn choose(input: DecodePlanInput) -> Result<Self> {
-        if Self::requires_host_context_lengths(input.attention_backend, input.head_size) {
+        if Self::requires_host_context_lengths(
+            input.attention_backend,
+            input.head_size,
+            input.has_sliding_window,
+        ) {
             return Ok(Self::GatherSdpa);
         }
         match input.attention_backend {
@@ -1359,7 +1481,6 @@ impl DecodePlan {
             }
             #[cfg(not(all(feature = "cuda", target_family = "unix")))]
             AttentionBackendKind::FlashInfer => Ok(Self::GatherSdpa),
-            AttentionBackendKind::Standard if input.has_sliding_window => Ok(Self::GatherSdpa),
             AttentionBackendKind::Standard => Ok(Self::PagedAttention),
         }
     }
@@ -1814,19 +1935,22 @@ mod tests {
                 device_is_metal: false,
                 ..request
             },
-            GatherPrefillWorkspaceRequest {
-                plan_input: PrefixPrefillPlanInput {
-                    has_sinks: true,
-                    ..request.plan_input
-                },
-                ..request
-            },
         ] {
             assert_eq!(
                 gather_attention_backend(rejected),
                 GatherAttentionBackend::Conservative
             );
         }
+        assert_eq!(
+            gather_attention_backend(GatherPrefillWorkspaceRequest {
+                plan_input: PrefixPrefillPlanInput {
+                    has_sinks: true,
+                    ..request.plan_input
+                },
+                ..request
+            }),
+            GatherAttentionBackend::Sinks
+        );
         Ok(())
     }
 
@@ -1914,6 +2038,73 @@ mod tests {
             .unwrap(),
             41_327_331_072
         );
+    }
+
+    #[test]
+    fn sinks_gather_reserves_unchunked_scores_and_contiguous_qkv() -> Result<()> {
+        const QUERY_LEN: usize = 2 * crate::attention::ATTENTION_CHUNK_SIZE;
+        const HEADS: usize = 4;
+        const HEAD_DIM: usize = 128;
+        let shape = GatherPrefillWorkspaceInput {
+            batch: 1,
+            total_q: QUERY_LEN,
+            max_q: QUERY_LEN,
+            total_kv: QUERY_LEN,
+            max_kv: QUERY_LEN,
+            q_heads: HEADS,
+            kv_heads: HEADS,
+            k_head_dim: HEAD_DIM,
+            v_head_dim: HEAD_DIM,
+            dtype: DType::BF16,
+            backend: GatherAttentionBackend::Sinks,
+        };
+        let score_growth = HEADS
+            * QUERY_LEN
+            * (QUERY_LEN / 2)
+            * (2 * DType::F32.size_in_bytes() + DType::BF16.size_in_bytes());
+        let contiguous_qkv = 3 * QUERY_LEN * HEADS * HEAD_DIM * DType::BF16.size_in_bytes();
+        assert_eq!(
+            gather_prefill_workspace_bytes(shape)?
+                - gather_prefill_workspace_bytes(GatherPrefillWorkspaceInput {
+                    backend: GatherAttentionBackend::Conservative,
+                    ..shape
+                })?,
+            score_growth + contiguous_qkv
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn cuda_sinks_workspace_is_complete_for_cold_and_cached_prompts() -> Result<()> {
+        let model = workspace_model_with_window(
+            Some(PrefixPrefillAttentionFeatures {
+                has_sinks: true,
+                has_sliding_window: true,
+                ..Default::default()
+            }),
+            Some(513),
+        );
+        for (query, context) in [(16, 16), (512, 1024), (4096, 32_768)] {
+            let query_lens = [query];
+            let context_lens = [context];
+            let input = PromptPrefillWorkspaceInput {
+                requires_prefix_attention: context > query,
+                cache_dtype: DType::BF16,
+                ..workspace_input(&query_lens, &context_lens)
+            };
+            let workspace = prompt_prefill_workspace(Some(&model), input)?;
+            assert!(workspace.attention_is_complete);
+            assert!(workspace.bytes > 0);
+            let masked = prompt_prefill_workspace(
+                Some(&model),
+                PromptPrefillWorkspaceInput {
+                    has_custom_mask: true,
+                    ..input
+                },
+            )?;
+            assert!(!masked.attention_is_complete);
+        }
+        Ok(())
     }
 
     #[test]
@@ -2182,11 +2373,13 @@ mod tests {
             ..Default::default()
         }));
         let query_lens = [128, 128];
-        assert_eq!(
+        let sinks =
             prompt_prefill_workspace(Some(&model), workspace_input(&query_lens, &context_lens))
-                .unwrap()
-                .bytes,
-            739_889_152
+                .unwrap();
+        assert!(sinks.attention_is_complete);
+        assert_eq!(
+            sinks.bytes,
+            2 * 8000 * 4 * 256 * 2 * 2 + 3 * 256 * 16 * 256 * 2 + 16 * 4 + 2 * 3 * 4
         );
     }
 
@@ -2242,8 +2435,14 @@ mod tests {
         assert_eq!(workspace.gather_workspace_bytes, gather_bytes);
     }
 
+    #[cfg(not(all(feature = "cuda", target_family = "unix")))]
     #[test]
     fn standard_sliding_decode_uses_exact_gather_path() {
+        assert!(DecodePlan::requires_host_context_lengths(
+            AttentionBackendKind::Standard,
+            128,
+            true,
+        ));
         let plan = DecodePlan::choose(DecodePlanInput {
             attention_backend: AttentionBackendKind::Standard,
             head_size: 128,
@@ -2256,8 +2455,57 @@ mod tests {
         assert!(matches!(plan, DecodePlan::GatherSdpa));
     }
 
+    #[cfg(all(feature = "cuda", target_family = "unix"))]
+    #[test]
+    fn standard_sliding_decode_keeps_device_context_lengths() {
+        for head_size in [64, 80, 96, 112, 128, 192, 256, 512] {
+            assert!(!DecodePlan::requires_host_context_lengths(
+                AttentionBackendKind::Standard,
+                head_size,
+                true,
+            ));
+            for has_sinks in [false, true] {
+                let plan = DecodePlan::choose(DecodePlanInput {
+                    attention_backend: AttentionBackendKind::Standard,
+                    head_size,
+                    has_alibi: false,
+                    has_sinks,
+                    has_sliding_window: true,
+                })
+                .unwrap();
+                assert!(matches!(plan, DecodePlan::PagedAttention));
+            }
+        }
+    }
+
+    #[cfg(all(feature = "cuda", target_family = "unix"))]
+    #[test]
+    fn standard_sliding_decode_gathers_unsupported_paged_head_sizes() {
+        for head_size in [160, 384] {
+            assert!(DecodePlan::requires_host_context_lengths(
+                AttentionBackendKind::Standard,
+                head_size,
+                true,
+            ));
+            let plan = DecodePlan::choose(DecodePlanInput {
+                attention_backend: AttentionBackendKind::Standard,
+                head_size,
+                has_alibi: false,
+                has_sinks: true,
+                has_sliding_window: true,
+            })
+            .unwrap();
+            assert!(matches!(plan, DecodePlan::GatherSdpa));
+        }
+    }
+
     #[test]
     fn standard_full_decode_keeps_paged_kernel() {
+        assert!(!DecodePlan::requires_host_context_lengths(
+            AttentionBackendKind::Standard,
+            128,
+            false,
+        ));
         let plan = DecodePlan::choose(DecodePlanInput {
             attention_backend: AttentionBackendKind::Standard,
             head_size: 128,
@@ -2268,6 +2516,25 @@ mod tests {
         .unwrap();
 
         assert!(matches!(plan, DecodePlan::PagedAttention));
+    }
+
+    #[cfg(all(feature = "cuda", target_family = "unix"))]
+    #[test]
+    fn flashinfer_sliding_decode_keeps_device_context_lengths() {
+        assert!(!DecodePlan::requires_host_context_lengths(
+            AttentionBackendKind::FlashInfer,
+            128,
+            true,
+        ));
+        let plan = DecodePlan::choose(DecodePlanInput {
+            attention_backend: AttentionBackendKind::FlashInfer,
+            head_size: 128,
+            has_alibi: false,
+            has_sinks: false,
+            has_sliding_window: true,
+        })
+        .unwrap();
+        assert!(matches!(plan, DecodePlan::FlashInfer(_)));
     }
 }
 

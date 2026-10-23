@@ -66,6 +66,13 @@ static CUDA_GRAPH_MEMORY_POOL_SCOPES: OnceLock<Mutex<HashMap<usize, MemoryPoolSc
 static CUDA_PHASE_TIMINGS_ENABLED: OnceLock<bool> = OnceLock::new();
 const CAPTURE_RECLAIM_BATCH_SIZE: usize = 1;
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum CudaGraphMemoryUse {
+    Capture,
+    Retain,
+    Eager,
+}
+
 pub(crate) struct CudaGraphCaptureMemory<'a> {
     pub plan: Option<crate::memory_plan::RuntimeMemoryPlan>,
     pub reservation: Option<&'a crate::resource_plan::RuntimeMemoryReservation>,
@@ -154,7 +161,9 @@ impl CudaGraphCaptureMemory<'_> {
                     !DecodePlan::requires_host_context_lengths(
                         model.attention_backend_kind_for_layer(layer),
                         model.k_head_dim_for_layer(layer),
-                    ) && (flashinfer || !features.has_sliding_window)
+                        model.sliding_window_for_layer(layer).is_some()
+                            || features.has_sliding_window,
+                    )
                 });
                 if flashinfer {
                     flashinfer_heads = flashinfer_heads.max(model.num_attn_heads_for_layer(layer));
@@ -275,12 +284,16 @@ impl CudaGraphCaptureMemory<'_> {
         })
     }
 
-    fn fits(&self, retaining: bool, protect_other_models: bool) -> candle_core::Result<bool> {
+    fn fits(
+        &self,
+        usage: CudaGraphMemoryUse,
+        protect_other_models: bool,
+    ) -> candle_core::Result<bool> {
         let Some(plan) = self.plan else {
             return Ok(true);
         };
         for device in self.devices.iter().filter(|device| device.is_cuda()) {
-            let workspace = if retaining {
+            let workspace = if usage == CudaGraphMemoryUse::Retain {
                 0
             } else {
                 super::cuda_graph_budget::capture_workspace_bytes(
@@ -300,14 +313,13 @@ impl CudaGraphCaptureMemory<'_> {
                 .map_err(candle_core::Error::wrap)?
                 .unwrap_or_default();
             let snapshot = crate::MemoryUsage.query(device)?;
-            if !super::cuda_graph_budget::capture_memory_available(
-                plan,
-                snapshot,
-                workspace,
-                pending,
-                other_workspace,
-            )
-            .map_err(candle_core::Error::wrap)?
+            let memory_available = if usage == CudaGraphMemoryUse::Eager {
+                super::cuda_graph_budget::eager_memory_available
+            } else {
+                super::cuda_graph_budget::capture_memory_available
+            };
+            if !memory_available(plan, snapshot, workspace, pending, other_workspace)
+                .map_err(candle_core::Error::wrap)?
             {
                 return Ok(false);
             }
@@ -320,27 +332,27 @@ pub(crate) fn prepare_cuda_capture_memory(
     state: &mut CudaDecodeGraphState,
     memory: &CudaGraphCaptureMemory<'_>,
 ) -> candle_core::Result<bool> {
-    admit_cuda_capture_memory(state, memory, false, true)
+    admit_cuda_graph_memory(state, memory, CudaGraphMemoryUse::Capture)
 }
 
 pub(crate) fn admit_cuda_eager_after_capture(
     state: &mut CudaDecodeGraphState,
     memory: &CudaGraphCaptureMemory<'_>,
 ) -> candle_core::Result<()> {
-    admit_cuda_capture_memory(state, memory, false, false).map(|_| ())
+    admit_cuda_graph_memory(state, memory, CudaGraphMemoryUse::Eager).map(|_| ())
 }
 
-fn admit_cuda_capture_memory(
+fn admit_cuda_graph_memory(
     state: &mut CudaDecodeGraphState,
     memory: &CudaGraphCaptureMemory<'_>,
-    retaining: bool,
-    protect_other_models: bool,
+    usage: CudaGraphMemoryUse,
 ) -> candle_core::Result<bool> {
+    let protect_other_models = usage != CudaGraphMemoryUse::Eager;
     let result = (|| {
-        if memory.fits(retaining, protect_other_models)? {
+        if memory.fits(usage, protect_other_models)? {
             return Ok(true);
         }
-        if protect_other_models && memory.fits(retaining, false)? {
+        if protect_other_models && memory.fits(usage, false)? {
             return Ok(false);
         }
         for device in memory.devices.iter().filter(|device| device.is_cuda()) {
@@ -349,14 +361,20 @@ fn admit_cuda_capture_memory(
             trim_cuda_graph_memory(&device.as_cuda_device()?.cuda_stream())?;
         }
         loop {
-            if memory.fits(retaining, protect_other_models)? {
+            if memory.fits(usage, protect_other_models)? {
                 return Ok(true);
             }
-            if protect_other_models && memory.fits(retaining, false)? {
+            if protect_other_models && memory.fits(usage, false)? {
                 return Ok(false);
             }
             if state.evict_lru_for_memory_pressure(CAPTURE_RECLAIM_BATCH_SIZE) == 0 {
-                candle_core::bail!("CUDA graph capture cannot fit within the memory goal after reclaiming cached graphs");
+                if usage == CudaGraphMemoryUse::Retain
+                    || (usage == CudaGraphMemoryUse::Capture
+                        && memory.fits(CudaGraphMemoryUse::Eager, false)?)
+                {
+                    return Ok(false);
+                }
+                candle_core::bail!("CUDA decode workspace cannot fit within the runtime memory budget after reclaiming cached graphs");
             }
         }
     })();
@@ -371,7 +389,7 @@ pub(crate) fn finish_cuda_capture_memory(
     memory: &CudaGraphCaptureMemory<'_>,
     entry: CudaDecodeGraphEntry,
 ) -> candle_core::Result<Option<CudaDecodeGraphEntry>> {
-    match admit_cuda_capture_memory(state, memory, true, true) {
+    match admit_cuda_graph_memory(state, memory, CudaGraphMemoryUse::Retain) {
         Ok(true) => Ok(Some(entry)),
         Ok(false) => {
             release_cuda_graph_entries(vec![entry]);
@@ -1425,29 +1443,36 @@ impl CudaDecodeGraphKey {
             })
         });
 
+        // Row keys bucket table capacity more coarsely than the captured V2 partition count.
+        let (max_context_len, full_max_context_len) = match metadata.decode_rows.as_ref() {
+            Some(rows) if rows.use_standard_metadata => (
+                metadata
+                    .max_context_len
+                    .map(paged_attention_partition_context_len),
+                metadata
+                    .full_max_context_len
+                    .map(paged_attention_partition_context_len),
+            ),
+            Some(_) => (None, None),
+            None => (
+                graph_context_len(
+                    metadata.max_context_len,
+                    bucket_context_len(metadata.block_tables.as_ref(), block_size),
+                ),
+                graph_context_len(
+                    metadata.full_max_context_len,
+                    bucket_context_len(metadata.full_block_tables.as_ref(), block_size),
+                ),
+            ),
+        };
+
         Ok(Self {
             device: input_ids.device().location(),
             input_shape: input_ids.dims().to_vec(),
             input_dtype: input_ids.dtype(),
             recurrent_batch_kind,
-            max_context_len: decode_rows
-                .is_none()
-                .then(|| {
-                    graph_context_len(
-                        metadata.max_context_len,
-                        bucket_context_len(metadata.block_tables.as_ref(), block_size),
-                    )
-                })
-                .flatten(),
-            full_max_context_len: decode_rows
-                .is_none()
-                .then(|| {
-                    graph_context_len(
-                        metadata.full_max_context_len,
-                        bucket_context_len(metadata.full_block_tables.as_ref(), block_size),
-                    )
-                })
-                .flatten(),
+            max_context_len,
+            full_max_context_len,
             tensors,
             decode_rows,
         })
@@ -2722,24 +2747,16 @@ pub(crate) fn cuda_decode_graph_supported_for_model(
     let Some(metadata) = model_metadata else {
         return false;
     };
-    #[cfg(target_family = "unix")]
-    {
-        (0..metadata.num_layers()).all(|layer_idx| {
-            !DecodePlan::requires_host_context_lengths(
-                metadata.attention_backend_kind_for_layer(layer_idx),
-                metadata.k_head_dim_for_layer(layer_idx),
-            )
-        })
-    }
-    #[cfg(not(target_family = "unix"))]
-    {
-        (0..metadata.num_layers()).all(|layer_idx| {
-            !matches!(
-                metadata.attention_backend_kind_for_layer(layer_idx),
-                AttentionBackendKind::FlashInfer
-            )
-        })
-    }
+    (0..metadata.num_layers()).all(|layer_idx| {
+        !DecodePlan::requires_host_context_lengths(
+            metadata.attention_backend_kind_for_layer(layer_idx),
+            metadata.k_head_dim_for_layer(layer_idx),
+            metadata.sliding_window_for_layer(layer_idx).is_some()
+                || metadata
+                    .prefix_prefill_attention_features(layer_idx)
+                    .is_some_and(|features| features.has_sliding_window),
+        )
+    })
 }
 
 #[must_use]
@@ -2992,8 +3009,8 @@ pub(crate) fn trim_cuda_graph_memory(stream: &Arc<CudaStream>) -> candle_core::R
 }
 
 static CUDA_GRAPH_CAPTURES: AtomicU64 = AtomicU64::new(0);
-// A graph captured on a unified-memory device keeps its memory; below this much free memory new shapes run eagerly
-const UNIFIED_CAPTURE_MIN_FREE_BYTES: usize = 2 << 30;
+// Unified-memory graphs retain allocations, so new shapes run eagerly below this memory floor.
+const UNIFIED_CAPTURE_MIN_AVAILABLE_BYTES: usize = 2 << 30;
 static CAPTURE_SKIP_LOGGED: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 
@@ -3002,14 +3019,12 @@ pub(crate) fn cuda_graph_capture_headroom(device: &Device) -> candle_core::Resul
     if !crate::utils::normal::is_integrated_gpu(device) {
         return Ok(true);
     }
-    let Some(snapshot) = crate::MemoryUsage.query_cuda_allocator(device)? else {
-        return Ok(true);
-    };
-    let ok = snapshot.available >= UNIFIED_CAPTURE_MIN_FREE_BYTES;
+    let available = crate::MemoryUsage.query(device)?.available();
+    let ok = available >= UNIFIED_CAPTURE_MIN_AVAILABLE_BYTES;
     if !ok && !CAPTURE_SKIP_LOGGED.swap(true, Ordering::Relaxed) {
         tracing::info!(
-            "Unified memory is low ({} MiB free); new CUDA graph shapes will run eagerly.",
-            snapshot.available >> 20
+            "Unified memory is low ({} MiB available); new CUDA graph shapes will run eagerly.",
+            available >> 20
         );
     }
     Ok(ok)
@@ -3024,13 +3039,11 @@ pub(crate) fn log_cuda_graph_memory(device: &Device) -> candle_core::Result<()> 
         &cuda.cuda_stream(),
         sys::CUgraphMem_attribute::CU_GRAPH_MEM_ATTR_RESERVED_MEM_CURRENT,
     )?;
-    let free = crate::MemoryUsage
-        .query_cuda_allocator(device)?
-        .map_or(0, |snapshot| snapshot.available);
+    let available = crate::MemoryUsage.query(device)?.available();
     tracing::info!(
-        "CUDA graphs reserve {} MiB; {} MiB of device memory free after startup.",
+        "CUDA graphs reserve {} MiB; {} MiB of memory available after startup.",
         reserved >> 20,
-        free >> 20
+        available >> 20
     );
     Ok(())
 }
@@ -3391,15 +3404,18 @@ fn bucket_context_len(
         .map(|blocks| blocks * block_size)
 }
 
+fn paged_attention_partition_context_len(actual: usize) -> usize {
+    actual
+        .div_ceil(PAGED_ATTENTION_PARTITION_SIZE)
+        .max(1)
+        .saturating_mul(PAGED_ATTENTION_PARTITION_SIZE)
+}
+
 fn graph_context_len(actual: Option<usize>, capacity: Option<usize>) -> Option<usize> {
     match (actual, capacity) {
-        (Some(actual), Some(capacity)) => Some(
-            actual
-                .div_ceil(PAGED_ATTENTION_PARTITION_SIZE)
-                .max(1)
-                .saturating_mul(PAGED_ATTENTION_PARTITION_SIZE)
-                .min(capacity),
-        ),
+        (Some(actual), Some(capacity)) => {
+            Some(paged_attention_partition_context_len(actual).min(capacity))
+        }
         (Some(actual), None) => Some(actual),
         (None, capacity) => capacity,
     }
@@ -4029,6 +4045,44 @@ fn copy_rope_positions(
 mod tests {
     use super::*;
 
+    #[test]
+    fn decode_graphs_support_standard_sliding_attention_and_sinks() {
+        use crate::paged_attention::{
+            HybridPagedKvCacheConfig, KvCacheLayout, ModelConfigMetadata,
+            PrefixPrefillAttentionFeatures,
+        };
+
+        let mut config = ModelConfigMetadata {
+            max_seq_len: 4096,
+            num_layers: 2,
+            hidden_size: 2048,
+            num_kv_heads: 4,
+            num_attn_heads: 32,
+            sliding_window: None,
+            k_head_dim: 128,
+            v_head_dim: 128,
+            kv_cache_layout: KvCacheLayout::StandardNoFlashInfer,
+        };
+        assert!(cuda_decode_graph_supported_for_model(Some(&config)));
+        config.sliding_window = Some(513);
+        assert!(cuda_decode_graph_supported_for_model(Some(&config)));
+
+        config.sliding_window = None;
+        let mixed = HybridPagedKvCacheConfig::new(config, vec![true, true])
+            .with_prefix_prefill_attention_features(vec![
+                PrefixPrefillAttentionFeatures {
+                    has_sinks: true,
+                    ..Default::default()
+                },
+                PrefixPrefillAttentionFeatures {
+                    has_sinks: true,
+                    has_sliding_window: true,
+                    ..Default::default()
+                },
+            ]);
+        assert!(cuda_decode_graph_supported_for_model(Some(&mixed)));
+    }
+
     fn spec_usage(bytes: &[(usize, usize)]) -> CudaGraphSpecStateUsage {
         CudaGraphSpecStateUsage {
             bytes: bytes
@@ -4460,6 +4514,71 @@ mod tests {
             RecurrentBatchKind::Decode,
         )
         .unwrap()
+    }
+
+    #[test]
+    fn standard_decode_row_graph_keys_track_partition_launch_bounds() {
+        let standard_key = |context| {
+            let mut rows = decode_context_rows(1, context);
+            rows.use_standard_metadata = true;
+            decode_context_key(rows)
+        };
+        let captured = standard_key(4097);
+        assert_eq!(captured.max_context_len, Some(4608));
+        assert_eq!(captured.full_max_context_len, Some(4608));
+        for context in [4098, 4200, 4608] {
+            assert_eq!(captured, standard_key(context));
+        }
+
+        let next_partition = standard_key(4609);
+        assert_eq!(captured.decode_rows, next_partition.decode_rows);
+        assert_ne!(captured, next_partition);
+        assert_eq!(next_partition.max_context_len, Some(5120));
+        for context in [4610, 5025, 5120] {
+            assert_eq!(next_partition, standard_key(context));
+        }
+
+        assert_eq!(
+            decode_context_key(decode_context_rows(1, 4097)),
+            decode_context_key(decode_context_rows(1, 5025)),
+        );
+    }
+
+    #[test]
+    fn standard_decode_row_graph_keys_preserve_materialization_and_full_context_bounds() {
+        let input_ids = Tensor::zeros((1, 1), DType::U32, &Device::Cpu).unwrap();
+        let key = |metadata: &PagedAttentionInputMetadata| {
+            CudaDecodeGraphKey::new(
+                &input_ids,
+                metadata,
+                DECODE_CONTEXT_TEST_PAGE_SIZE,
+                RecurrentBatchKind::Decode,
+            )
+            .unwrap()
+        };
+        for context in [31, 512, 513, 4097, 5025] {
+            let mut rows = decode_context_rows(1, context);
+            rows.use_standard_metadata = true;
+            let rows = Arc::new(rows);
+            assert_eq!(
+                key(&rows.build_graph_staged().unwrap()),
+                key(&rows.build_materialized().unwrap()),
+            );
+        }
+
+        let sliding_key = |context| {
+            let mut rows = decode_context_rows(1, context);
+            rows.use_standard_metadata = true;
+            rows.context_lens = vec![513];
+            rows.sliding_window = Some(513);
+            decode_context_key(rows)
+        };
+        let captured = sliding_key(4097);
+        let replay = sliding_key(5025);
+        assert_eq!(captured.decode_rows, replay.decode_rows);
+        assert_eq!(captured.max_context_len, replay.max_context_len);
+        assert_ne!(captured.full_max_context_len, replay.full_max_context_len);
+        assert_ne!(captured, replay);
     }
 
     #[test]

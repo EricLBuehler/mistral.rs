@@ -1432,6 +1432,15 @@ pub async fn sample_sequence(
         )?
     };
 
+    if let (Some(state), SequenceRecognizer::Llguidance(llg)) =
+        (&mut seq.tool_call_state, &mut seq.recognizer)
+    {
+        if state.required_tool_call_unsatisfied()
+            && (llg.is_stopped() || llg.is_accepting().map_err(candle_core::Error::msg)?)
+        {
+            state.mark_grammar_accepting();
+        }
+    }
     let stop_token_requires_tool = seq.tool_call_state.as_ref().is_some_and(|state| {
         state.is_stop_token_blocked(first_lobprobs_response.token, eos_tok, seq.stop_tokens())
     });
@@ -1754,6 +1763,107 @@ mod tests {
                 parameters: None,
                 strict: None,
             },
+        }
+    }
+
+    #[tokio::test]
+    async fn flint_completed_tool_grammar_allows_all_model_stop_tokens() {
+        struct TokenizerEnv(toktrie::TokTrie);
+        impl toktrie::TokenizerEnv for TokenizerEnv {
+            fn tok_trie(&self) -> &toktrie::TokTrie {
+                &self.0
+            }
+            fn tokenize_bytes(&self, bytes: &[u8]) -> Vec<u32> {
+                self.0.greedy_tokenize(bytes)
+            }
+            fn tokenize_is_canonical(&self) -> bool {
+                false
+            }
+        }
+        let mut tokens = (0_u8..=127).map(|byte| vec![byte]).collect::<Vec<_>>();
+        let eos = u32::try_from(tokens.len()).unwrap();
+        for marker in [
+            "<|end_of_text|>",
+            "<|user|>",
+            "<|observation|>",
+            "<|developer|>",
+            "<tool_call>",
+            "</tool_call>",
+            "<arg_key>",
+            "</arg_key>",
+            "<arg_value>",
+            "</arg_value>",
+        ] {
+            let mut bytes = vec![toktrie::TokTrie::SPECIAL_TOKEN_MARKER];
+            bytes.extend_from_slice(marker.as_bytes());
+            tokens.push(bytes);
+        }
+        let trie = toktrie::TokTrie::from(
+            &toktrie::TokRxInfo::new(u32::try_from(tokens.len()).unwrap(), eos),
+            &tokens,
+        );
+        let eos = [
+            "<|end_of_text|>",
+            "<|user|>",
+            "<|observation|>",
+            "<|developer|>",
+        ]
+        .map(|marker| trie.get_special_token(marker).unwrap());
+        let env: toktrie::TokEnv = Arc::new(TokenizerEnv(trie.clone()));
+        let factory = Arc::new(llguidance::ParserFactory::new_simple(&env).unwrap());
+        let tools = [weather_tool()];
+        for choice in [ToolChoice::Auto, ToolChoice::Required] {
+            for stop in eos {
+                let mut grammar = crate::tools::parsers::build_required_tool_call_grammar(
+                    Some(crate::tools::ToolCallFormat::Flint),
+                    &tools,
+                );
+                crate::tools::specialize_required_tool_call_grammar(&mut grammar, &trie);
+                let mut matcher =
+                    crate::pipeline::llg::constraint_from_llg_grammar(&factory, grammar).unwrap();
+                let mut call = vec![trie.get_special_token("<tool_call>").unwrap()];
+                call.extend(trie.greedy_tokenize(b"get_weather"));
+                call.push(trie.get_special_token("</tool_call>").unwrap());
+                for token in call {
+                    matcher.consume_token(token).unwrap();
+                }
+                assert!(matcher.is_accepting().unwrap());
+                let mut seq = terminal_test_sequence(vec![], Some(256), false);
+                let mut state = ToolCallState::new(
+                    choice.clone(),
+                    Some(&tools),
+                    Some(crate::tools::ToolCallFormat::Flint),
+                )
+                .unwrap();
+                state.mark_grammar_active(choice.requires_tool_call());
+                seq.tool_call_state = Some(state);
+                seq.recognizer = SequenceRecognizer::Llguidance(Box::new(matcher));
+                let mut logits = vec![f32::NEG_INFINITY; trie.vocab_size()];
+                logits[stop as usize] = 10.0;
+                logits[trie.get_special_token("<tool_call>").unwrap() as usize] = 9.0;
+                let logits =
+                    Tensor::from_vec(logits, (1, 1, trie.vocab_size()), &candle_core::Device::Cpu)
+                        .unwrap();
+                let sampled = sample_sequence(
+                    logits,
+                    &mut seq,
+                    false,
+                    Some(&eos),
+                    Some(factory.clone()),
+                    1024,
+                    Arc::new(std::sync::Mutex::new(Isaac64Rng::seed_from_u64(0))),
+                    false,
+                    false,
+                    false,
+                )
+                .await
+                .unwrap();
+                assert_eq!(sampled.token, stop);
+                assert_eq!(
+                    seq.is_done(sampled.token, Some(&eos), 1024),
+                    Some(StopReason::Eos)
+                );
+            }
         }
     }
 

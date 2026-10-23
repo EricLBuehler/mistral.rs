@@ -7,6 +7,7 @@ pub mod block_hash;
 /// Flat block pool with LRU free list for KV cache block management (vLLM v1 approach).
 pub mod block_pool;
 pub(crate) mod block_table_rows;
+mod cache_allocation;
 mod cache_engine;
 mod config;
 /// Encoder output cache for multimodal models (vision/audio encoder outputs).
@@ -29,6 +30,7 @@ pub(crate) mod windowed_pool;
 pub const _PAD_SLOT_ID: i64 = -1;
 
 pub use attention_backend::AttentionBackendKind;
+pub use cache_allocation::allocate_cache;
 #[cfg(feature = "metal")]
 pub(crate) use cache_engine::configured_metal_cache_layout;
 pub use cache_engine::{CacheConfig, CacheEngine, PagedCacheType};
@@ -657,43 +659,13 @@ impl CacheDeviceAllocation<'_> {
     }
 }
 
-pub struct CacheConfigRequest<'a> {
-    pub memory_reservations: CacheMemoryReservations,
-    pub dtype: DType,
-    pub model: &'a dyn ModelConfigLike,
-    pub device: &'a Device,
-    pub layer_devices: &'a [Option<Device>],
-    pub capacity_activation_estimate:
-        &'a dyn Fn(usize) -> anyhow::Result<crate::pipeline::ActivationMemoryEstimate>,
-    pub silent: bool,
-}
-
-pub fn calculate_cache_config(
-    paged_config: &mut PagedAttentionConfig,
-    request: CacheConfigRequest<'_>,
-) -> anyhow::Result<CacheConfig> {
-    let CacheConfigRequest {
-        memory_reservations,
-        dtype,
-        model: config,
-        device,
-        layer_devices,
-        capacity_activation_estimate,
-        silent,
-    } = request;
-    let goal = paged_config.memory_goal;
-    goal.validate()?;
-    let cache_type = paged_config.cache_type;
-    let block_size = paged_config
-        .block_size
-        .unwrap_or(DEFAULT_PAGED_ATTENTION_BLOCK_SIZE);
-    if !SUPPORTED_BLOCK_SIZE.contains(&block_size) {
-        anyhow::bail!("Block size must be in {SUPPORTED_BLOCK_SIZE:?}, got {block_size}");
-    }
-    cache_type
-        .validate(dtype, config, device, layer_devices)
-        .map_err(anyhow::Error::msg)?;
-    let cache_dtype = cache_type.to_dtype(dtype);
+fn cache_device_allocations<'a>(
+    config: &dyn ModelConfigLike,
+    cache_dtype: DType,
+    block_size: usize,
+    device: &'a Device,
+    layer_devices: &'a [Option<Device>],
+) -> anyhow::Result<Vec<CacheDeviceAllocation<'a>>> {
     let mut devices: Vec<CacheDeviceAllocation<'_>> = Vec::new();
     for layer in 0..config.num_layers() {
         let elements = config.layer_kv_cache_elements_per_token(layer);
@@ -706,9 +678,6 @@ pub fn calculate_cache_config(
             .get(layer)
             .and_then(Option::as_ref)
             .unwrap_or(device);
-        if elements.is_none() && !layer_device.is_metal() {
-            continue;
-        }
         let existing = devices
             .iter()
             .position(|allocation| allocation.device.same_device(layer_device));
@@ -756,6 +725,48 @@ pub fn calculate_cache_config(
             minimum_buffer_bytes: cache_dtype.size_in_bytes(),
         });
     }
+    Ok(devices)
+}
+
+#[derive(Clone, Copy)]
+pub struct CacheConfigRequest<'a> {
+    pub memory_reservations: CacheMemoryReservations,
+    pub dtype: DType,
+    pub model: &'a dyn ModelConfigLike,
+    pub device: &'a Device,
+    pub layer_devices: &'a [Option<Device>],
+    pub capacity_activation_estimate:
+        &'a dyn Fn(usize) -> anyhow::Result<crate::pipeline::ActivationMemoryEstimate>,
+    pub silent: bool,
+}
+
+pub fn calculate_cache_config(
+    paged_config: &mut PagedAttentionConfig,
+    request: CacheConfigRequest<'_>,
+) -> anyhow::Result<CacheConfig> {
+    let CacheConfigRequest {
+        memory_reservations,
+        dtype,
+        model: config,
+        device,
+        layer_devices,
+        capacity_activation_estimate,
+        silent,
+    } = request;
+    let goal = paged_config.memory_goal;
+    goal.validate()?;
+    let cache_type = paged_config.cache_type;
+    let block_size = paged_config
+        .block_size
+        .unwrap_or(DEFAULT_PAGED_ATTENTION_BLOCK_SIZE);
+    if !SUPPORTED_BLOCK_SIZE.contains(&block_size) {
+        anyhow::bail!("Block size must be in {SUPPORTED_BLOCK_SIZE:?}, got {block_size}");
+    }
+    cache_type
+        .validate(dtype, config, device, layer_devices)
+        .map_err(anyhow::Error::msg)?;
+    let cache_dtype = cache_type.to_dtype(dtype);
+    let devices = cache_device_allocations(config, cache_dtype, block_size, device, layer_devices)?;
     let total_bytes_per_block = devices
         .iter()
         .try_fold(0usize, |sum, allocation| {

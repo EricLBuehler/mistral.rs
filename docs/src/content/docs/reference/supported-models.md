@@ -43,6 +43,7 @@ The `Architecture` column is the `config.json` `architectures` value. Per-family
 | `Glm4MoeLiteForCausalLM` | GLM-4.7-Flash | <details><summary><code>zai-org/GLM-4.7-Flash</code></summary><code>mistralrs run -m zai-org/GLM-4.7-Flash</code></details> |
 | `Glm4MoeForCausalLM` | GLM-4.7 | <details><summary><code>zai-org/GLM-4.7</code></summary><code>mistralrs run -m zai-org/GLM-4.7</code></details> |
 | `Qwen3MoeForCausalLM` | Qwen3 MoE | <details><summary><code>Qwen/Qwen3-30B-A3B</code></summary><code>mistralrs run -m Qwen/Qwen3-30B-A3B</code></details> |
+| `FlintForCausalLM` | Flint | <details><summary><code>RecursiveSI/flint</code></summary><code>mistralrs run -m RecursiveSI/flint</code></details> |
 | `SmolLM3ForCausalLM` | SmolLM3 | <details><summary><code>HuggingFaceTB/SmolLM3-3B</code></summary><code>mistralrs run -m HuggingFaceTB/SmolLM3-3B</code></details> |
 | `GraniteMoeHybridForCausalLM` | Granite 4.0 | <details><summary><code>ibm-granite/granite-4.0-micro</code></summary><code>mistralrs run -m ibm-granite/granite-4.0-micro</code></details> |
 | `GptOssForCausalLM` | GPT-OSS | <details><summary><code>openai/gpt-oss-20b</code> (20b), <code>openai/gpt-oss-120b</code> (120b)</summary><code>mistralrs run -m openai/gpt-oss-20b</code><br><code>mistralrs run -m openai/gpt-oss-120b</code></details> |

@@ -149,9 +149,7 @@ mod speculative_graph_tensor_metadata_tests {
         .is_err());
     }
 }
-use crate::paged_attention::{
-    calculate_cache_config, AttentionImplementation, CacheConfigRequest, CacheEngine,
-};
+use crate::paged_attention::{allocate_cache, AttentionImplementation, CacheConfigRequest};
 use crate::pipeline::chat_template::{
     calculate_eos_tokens, BeginEndUnkPadTok, ChatTemplateValue, GenerationConfig,
 };
@@ -1519,6 +1517,11 @@ impl Loader for MultimodalLoader {
         #[cfg(not(feature = "cuda"))]
         let _ = recurrent_pool_grew;
 
+        #[cfg(feature = "cuda")]
+        if self.config.write_uqff.is_none() {
+            super::prepare_cuda_runtime(&device, pipeline_mapper.as_ref())?;
+        }
+
         let (cache_config, cache_engine) =
             if let Some(paged_attn_config) = paged_attn_config.as_mut() {
                 let paged_snapshot = paged_attn_config.clone();
@@ -1538,7 +1541,7 @@ impl Loader for MultimodalLoader {
                 };
                 let memory_reservations =
                     paged_attention_memory_reservations(model.cache(), paged_attn_config, &device)?;
-                let cache_config = calculate_cache_config(
+                let (cache_config, cache_engine) = allocate_cache(
                     paged_attn_config,
                     CacheConfigRequest {
                         memory_reservations,
@@ -1549,13 +1552,6 @@ impl Loader for MultimodalLoader {
                         capacity_activation_estimate: &capacity_activation_estimate,
                         silent,
                     },
-                )?;
-                let cache_engine = CacheEngine::new(
-                    model_metadata.as_ref(),
-                    &cache_config,
-                    dtype,
-                    &device,
-                    layer_devices,
                 )?;
                 (Some(cache_config), Some(cache_engine))
             } else {

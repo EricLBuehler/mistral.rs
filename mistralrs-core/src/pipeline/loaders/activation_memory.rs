@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use candle_core::{DType, Device};
 
 use crate::{
-    attention::{flash_backend_supports_sdpa, ATTENTION_CHUNK_SIZE},
+    attention::{flash_backend_supports_sdpa, sinks_backend_supports, ATTENTION_CHUNK_SIZE},
     memory_plan::ExecutionMemoryLimits,
     paged_attention::{
         requested_cache_blocks, ModelConfigLike, PrefixPrefillAttentionFeatures,
@@ -91,6 +91,7 @@ impl ActivationMemoryEstimate {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum AttentionWorkspaceKind {
     Eager,
+    EagerSinks,
     Fused,
     FusedExpandedKv,
     Paged,
@@ -206,11 +207,16 @@ pub(crate) fn attention_workspace_bytes(shape: AttentionMemoryShape) -> Result<u
         0
     };
     match backend {
-        AttentionWorkspaceKind::Eager => {
+        AttentionWorkspaceKind::Eager | AttentionWorkspaceKind::EagerSinks => {
+            let score_query_len = if backend == AttentionWorkspaceKind::EagerSinks {
+                query_len
+            } else {
+                query_len.min(ATTENTION_CHUNK_SIZE)
+            };
             let scores = product(&[
                 batch,
                 query_heads,
-                query_len.min(ATTENTION_CHUNK_SIZE),
+                score_query_len,
                 kv_len,
                 EAGER_F32_SCORE_BUFFERS * DType::F32.size_in_bytes() + dtype_bytes,
             ])?;
@@ -304,6 +310,7 @@ fn prefill_backend(
                 features.has_softcap,
                 features.has_sliding_window,
             ),
+            sinks_backend_supports(shape.dtype, ctx.device.location(), shape.k_head_dim),
         ) {
             return backend;
         }
@@ -319,7 +326,11 @@ fn prefill_backend(
     {
         return AttentionWorkspaceKind::Fused;
     }
-    AttentionWorkspaceKind::Eager
+    if features.has_sinks {
+        AttentionWorkspaceKind::EagerSinks
+    } else {
+        AttentionWorkspaceKind::Eager
+    }
 }
 
 fn cuda_prefill_backend(
@@ -327,11 +338,19 @@ fn cuda_prefill_backend(
     features: PrefixPrefillAttentionFeatures,
     custom_mask: bool,
     flash_supported: bool,
+    sinks_supported: bool,
 ) -> Option<AttentionWorkspaceKind> {
+    if features.has_sinks {
+        return (shape.k_head_dim == shape.v_head_dim
+            && !custom_mask
+            && !features.has_alibi
+            && !features.has_softcap
+            && sinks_supported)
+            .then_some(AttentionWorkspaceKind::Fused);
+    }
     (shape.k_head_dim == shape.v_head_dim
         && !custom_mask
         && !features.has_alibi
-        && !features.has_sinks
         && matches!(shape.dtype, DType::F16 | DType::BF16)
         && flash_supported)
         .then_some(
@@ -613,7 +632,10 @@ fn model_activation_memory(
             features,
             cfg.architecture.custom_prefill_mask,
         );
-        prefill.materialized_mask |= prefill.backend == AttentionWorkspaceKind::Eager;
+        prefill.materialized_mask |= matches!(
+            prefill.backend,
+            AttentionWorkspaceKind::Eager | AttentionWorkspaceKind::EagerSinks
+        );
         let decode = AttentionMemoryShape {
             batch: ctx.limits.max_num_seqs,
             query_len: 1,
@@ -840,14 +862,22 @@ pub(crate) fn estimate_model_activation_memory(
         complete_attention &= if ctx.device.is_cuda() {
             cfg.attention_features(layer).is_some_and(|features| {
                 !features.has_alibi
-                    && !features.has_sinks
                     && model.k_head_dim_for_layer(layer) == model.v_head_dim_for_layer(layer)
-                    && matches!(ctx.dtype, DType::F16 | DType::BF16)
-                    && flash_backend_supports_sdpa(
-                        model.k_head_dim_for_layer(layer),
-                        features.has_softcap,
-                        features.has_sliding_window,
-                    )
+                    && if features.has_sinks {
+                        !features.has_softcap
+                            && sinks_backend_supports(
+                                ctx.dtype,
+                                ctx.device.location(),
+                                model.k_head_dim_for_layer(layer),
+                            )
+                    } else {
+                        matches!(ctx.dtype, DType::F16 | DType::BF16)
+                            && flash_backend_supports_sdpa(
+                                model.k_head_dim_for_layer(layer),
+                                features.has_softcap,
+                                features.has_sliding_window,
+                            )
+                    }
             })
         } else {
             native_metal_prefill_workspace(&ctx, &cfg, layer, &[max_query], &[max_query])?.is_some()
@@ -1438,6 +1468,28 @@ mod tests {
     }
 
     #[test]
+    fn eager_sinks_retains_all_query_scores() -> Result<()> {
+        let shape = AttentionMemoryShape {
+            query_len: 2 * ATTENTION_CHUNK_SIZE,
+            ..attention_shape()
+        };
+        let sinks = AttentionMemoryShape {
+            backend: AttentionWorkspaceKind::EagerSinks,
+            ..shape
+        };
+        assert_eq!(
+            attention_workspace_bytes(sinks)? - attention_workspace_bytes(shape)?,
+            shape.batch
+                * shape.query_heads
+                * ATTENTION_CHUNK_SIZE
+                * shape.kv_len
+                * (EAGER_F32_SCORE_BUFFERS * DType::F32.size_in_bytes()
+                    + shape.dtype.size_in_bytes())
+        );
+        Ok(())
+    }
+
+    #[test]
     fn fused_workspace_does_not_reserve_attention_scores() -> Result<()> {
         let eager = attention_shape();
         let fused = AttentionMemoryShape {
@@ -1464,7 +1516,7 @@ mod tests {
             materialized_mask: false,
         };
         let features = PrefixPrefillAttentionFeatures::default();
-        let backend = cuda_prefill_backend(&shape, features, false, true).unwrap();
+        let backend = cuda_prefill_backend(&shape, features, false, true, false).unwrap();
         assert_eq!(backend, AttentionWorkspaceKind::FusedExpandedKv);
         let fused = attention_workspace_bytes(AttentionMemoryShape { backend, ..shape })?;
         assert_eq!(
@@ -1472,8 +1524,56 @@ mod tests {
             4096 * 2 * (32 * 256 + 2 * 512 + 32 * 512 + 32 * 256) + 4096 * 32 * 4
         );
         assert!(fused < attention_workspace_bytes(shape)? / 4);
-        assert!(cuda_prefill_backend(&shape, features, true, true).is_none());
-        assert!(cuda_prefill_backend(&shape, features, false, false).is_none());
+        assert!(cuda_prefill_backend(&shape, features, true, true, false).is_none());
+        assert!(cuda_prefill_backend(&shape, features, false, false, false).is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn cuda_sinks_prefill_uses_fused_workspace_without_flash_attention() -> Result<()> {
+        let features = PrefixPrefillAttentionFeatures {
+            has_sinks: true,
+            has_sliding_window: true,
+            ..Default::default()
+        };
+        for dtype in [DType::BF16, DType::F16, DType::F32] {
+            let shape = AttentionMemoryShape {
+                dtype,
+                materialized_mask: false,
+                ..attention_shape()
+            };
+            let backend = cuda_prefill_backend(&shape, features, false, false, true).unwrap();
+            assert_eq!(backend, AttentionWorkspaceKind::Fused);
+            assert!(
+                attention_workspace_bytes(AttentionMemoryShape { backend, ..shape })?
+                    < attention_workspace_bytes(shape)? / 8
+            );
+            assert!(cuda_prefill_backend(&shape, features, true, true, true).is_none());
+            assert!(cuda_prefill_backend(&shape, features, false, true, false).is_none());
+            for unsupported in [
+                PrefixPrefillAttentionFeatures {
+                    has_alibi: true,
+                    ..features
+                },
+                PrefixPrefillAttentionFeatures {
+                    has_softcap: true,
+                    ..features
+                },
+            ] {
+                assert!(cuda_prefill_backend(&shape, unsupported, false, true, true).is_none());
+            }
+            assert!(cuda_prefill_backend(
+                &AttentionMemoryShape {
+                    v_head_dim: 256,
+                    ..shape
+                },
+                features,
+                false,
+                true,
+                true,
+            )
+            .is_none());
+        }
         Ok(())
     }
 
