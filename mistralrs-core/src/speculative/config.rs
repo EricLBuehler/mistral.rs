@@ -161,6 +161,21 @@ pub fn reserve_external_mtp_memory_with_runtime(
         return Ok(Some(cache_config));
     };
     if mtp_config.is_builtin() {
+        let drafts = mtp_config
+            .n_predict
+            .unwrap_or(super::autotuner::AUTO_MAX_DEPTH);
+        if drafts == 0 {
+            anyhow::bail!("MTP n_predict must be at least 1.");
+        }
+        let lanes = drafts
+            .checked_add(1)
+            .ok_or_else(|| anyhow::anyhow!("MTP n_predict is too large"))?;
+        // Verify then logs GDN transitions in a pool sized before the KV cache instead of stashing states
+        if lanes > crate::cuda::gdn::GDN_SPEC_FUSED_MAX_TOKENS {
+            return Ok(Some(cache_config));
+        }
+        let mut cache_config = cache_config.with_recurrent_checkpoint_lanes(lanes)?;
+        cache_config.recurrent_checkpoint_lanes_auto = mtp_config.n_predict.is_none();
         return Ok(Some(cache_config));
     }
     let dtype = dtype.try_into_dtype(&[device])?;
@@ -275,7 +290,7 @@ mod tests {
         assert_eq!(config.external_weight_size_in_bytes(DType::F32)?, 16);
         let cache_config = crate::PagedAttentionConfig::new(
             None,
-            crate::MemoryGpuConfig::Utilization(0.9),
+            crate::MemoryGoal::Utilization(0.9),
             crate::PagedCacheType::Auto,
         )?
         .with_base_device_memory_reservation(usize::MAX - 16)?;
@@ -320,13 +335,18 @@ mod tests {
         )?;
         let base = crate::PagedAttentionConfig::new(
             None,
-            crate::MemoryGpuConfig::Utilization(0.9),
+            crate::MemoryGoal::Utilization(0.9),
             crate::PagedCacheType::Auto,
         )?;
 
         let auto = MtpConfig::new(dir.path().to_string_lossy().into_owned(), None);
-        let auto = reserve_external_mtp_memory(Some(base), Some(&auto), &DType::F32, &Device::Cpu)?
-            .expect("cache config missing");
+        let auto = reserve_external_mtp_memory(
+            Some(base.clone()),
+            Some(&auto),
+            &DType::F32,
+            &Device::Cpu,
+        )?
+        .expect("cache config missing");
         assert_eq!(auto.recurrent_checkpoint_lanes, 8);
         assert!(auto.recurrent_checkpoint_lanes_auto);
 
@@ -336,6 +356,41 @@ mod tests {
                 .expect("cache config missing");
         assert_eq!(explicit.recurrent_checkpoint_lanes, 4);
         assert!(!explicit.recurrent_checkpoint_lanes_auto);
+        Ok(())
+    }
+
+    #[test]
+    fn builtin_mtp_reserves_depth_and_rejects_invalid_counts() -> anyhow::Result<()> {
+        let base = crate::PagedAttentionConfig::new(
+            None,
+            crate::MemoryGoal::Utilization(0.9),
+            crate::PagedCacheType::Auto,
+        )?;
+        let reserve = |count| {
+            reserve_external_mtp_memory(
+                Some(base.clone()),
+                Some(&MtpConfig::builtin(count)),
+                &DType::F32,
+                &Device::Cpu,
+            )
+        };
+        let auto = reserve(None)?.expect("cache config missing");
+        assert_eq!(
+            auto.recurrent_checkpoint_lanes,
+            super::super::autotuner::AUTO_MAX_DEPTH + 1
+        );
+        assert!(auto.recurrent_checkpoint_lanes_auto);
+        let explicit = reserve(Some(3))?.expect("cache config missing");
+        assert_eq!(explicit.recurrent_checkpoint_lanes, 4);
+        assert!(!explicit.recurrent_checkpoint_lanes_auto);
+        assert!(reserve(Some(0))
+            .unwrap_err()
+            .to_string()
+            .contains("at least 1"));
+        assert!(reserve(Some(usize::MAX))
+            .unwrap_err()
+            .to_string()
+            .contains("too large"));
         Ok(())
     }
 }

@@ -14,8 +14,8 @@ The `mistralrs` Python package exposes the same engine that powers the `mistralr
 ```bash
 pip install mistralrs                                   # CPU / Metal (PyPI)
 # NVIDIA (replace version, CUDA level, and SM)
-pip install "mistralrs==0.9.2+cuda128.sm89" \
-  --find-links https://github.com/EricLBuehler/mistral.rs/releases/expanded_assets/v0.9.2
+pip install "mistralrs==0.9.5+cuda128.sm89" \
+  --find-links https://github.com/EricLBuehler/mistral.rs/releases/expanded_assets/v0.9.5
 ```
 
 ## Pages
@@ -33,7 +33,6 @@ pip install "mistralrs==0.9.2+cuda128.sm89" \
 | [Agent approvals](/reference/python/agent-approvals/) | Request and decision types for agent action approval callbacks. |
 | [Files](/reference/python/files/) | Input files and first-class output files surfaced from agentic runs. |
 | [MCP](/reference/python/mcp/) | MCP client configuration types. |
-| [Auto-mapping](/reference/python/automap/) | Hints for automatic device mapping. |
 
 See [Python getting started](/guides/python/getting-started/) for a walkthrough and the [Python guides](/guides/python/) for task-oriented recipes.
 

@@ -135,10 +135,6 @@ pub struct DeviceOptionsToml {
     pub topology: Option<PathBuf>,
     #[serde(default)]
     pub hf_cache: Option<PathBuf>,
-    #[serde(default)]
-    pub max_seq_len: Option<usize>,
-    #[serde(default)]
-    pub max_batch_size: Option<usize>,
 }
 
 pub fn load_cli_config(path: &Path) -> Result<CliConfig> {
@@ -247,14 +243,11 @@ impl GlobalOptionsToml {
 
 impl DeviceOptionsToml {
     pub fn to_device_options(&self, cpu: bool) -> DeviceOptions {
-        let defaults = DeviceOptions::default();
         DeviceOptions {
             cpu,
             device_layers: self.device_layers.clone(),
             topology: self.topology.clone(),
             hf_cache: self.hf_cache.clone(),
-            max_seq_len: self.max_seq_len.unwrap_or(defaults.max_seq_len),
-            max_batch_size: self.max_batch_size.unwrap_or(defaults.max_batch_size),
         }
     }
 }

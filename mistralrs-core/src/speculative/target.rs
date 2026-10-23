@@ -121,6 +121,11 @@ pub trait SpeculativeTargetMixin {
         false
     }
 
+    // PLE-style state that verify advances in place, so graph captures must snapshot and restore it
+    fn speculative_verify_mutates_recurrent_state(&self) -> bool {
+        false
+    }
+
     fn reserve_recurrent_speculative_transition_storage(&self) -> Result<bool> {
         Ok(false)
     }
@@ -180,6 +185,11 @@ pub trait SpeculativeTargetMixin {
 
     fn speculative_plan(&self, _batch_size: usize) -> Option<SpeculativeBatchPlan> {
         None
+    }
+
+    /// Depths the autotuner may pick each step, at most the plan's depth; fewer than two pins the plan's depth.
+    fn speculative_depth_candidates(&self) -> Vec<usize> {
+        Vec::new()
     }
 
     fn speculative_graph_plans(&self) -> Vec<SpeculativeGraphPlan> {

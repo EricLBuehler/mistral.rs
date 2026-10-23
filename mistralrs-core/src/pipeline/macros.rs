@@ -313,13 +313,13 @@ macro_rules! get_embedding_paths {
             }
         }
 
-        Ok(Box::new($path_name {
+        Ok(Box::new($path_name::new(
             tokenizer_filename,
             config_filename,
             filenames,
             adapter_paths,
-            modules: parsed_modules,
-        }))
+            parsed_modules,
+        )))
     }};
 }
 

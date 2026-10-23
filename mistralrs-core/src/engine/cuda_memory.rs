@@ -1,9 +1,12 @@
 use std::time::{Duration, Instant};
 
-use candle_core::Device;
+use candle_core::{DType, Device};
 
 use crate::{
-    utils::{debug::DeviceRepr, memory_usage::CudaAllocatorSnapshot},
+    utils::{
+        debug::DeviceRepr,
+        memory_usage::{CudaAllocatorSnapshot, DeviceMemory},
+    },
     MemoryUsage,
 };
 
@@ -16,39 +19,20 @@ const WARM_CACHE_MIN_BYTES: usize = 256 * BYTES_PER_MIB;
 const WARM_CACHE_MAX_BYTES: usize = 1024 * BYTES_PER_MIB;
 const IDLE_RECLAIM_MULTIPLIER: usize = 2;
 const TRIM_COOLDOWN: Duration = Duration::from_secs(1);
+// Decode bursts never reach a prompt boundary, so the pool is also checked this often between decode steps
+const DECODE_MAINTENANCE_INTERVAL: Duration = Duration::from_millis(250);
 pub(super) const GRAPH_RECLAIM_BATCH_SIZE: usize = 16;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum PromptBatchMemoryAction {
-    Proceed,
-    Retain(usize),
-    Reject,
-}
-
-pub(super) fn prompt_batch_memory_action(
-    current: usize,
-    transient_pressure: bool,
-) -> PromptBatchMemoryAction {
-    if !transient_pressure {
-        PromptBatchMemoryAction::Proceed
-    } else if current > 1 {
-        PromptBatchMemoryAction::Retain(current.div_ceil(2))
-    } else {
-        PromptBatchMemoryAction::Reject
-    }
-}
-
-pub(super) fn record_prompt_batch_reduction(previous: usize, retained: usize) {
-    metrics::counter!("mistralrs_cuda_prompt_batch_reductions_total").increment(1);
-    metrics::counter!("mistralrs_cuda_prompt_sequences_deferred_total")
-        .increment(u64::try_from(previous.saturating_sub(retained)).unwrap_or(u64::MAX));
-}
+#[cfg(test)]
+use super::memory::{prompt_batch_memory_action, PromptBatchMemoryAction};
+use super::memory::{ForwardWorkspaceBytes, PromptMemoryStatus};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum MaintenancePoint {
     Idle,
     PromptPreflight,
     PromptBoundary,
+    DecodeBoundary,
     GraphReclaimed,
 }
 
@@ -58,6 +42,7 @@ impl MaintenancePoint {
             Self::Idle => "idle",
             Self::PromptPreflight => "prompt_preflight",
             Self::PromptBoundary => "prompt_boundary",
+            Self::DecodeBoundary => "decode_boundary",
             Self::GraphReclaimed => "graph_reclaimed",
         }
     }
@@ -73,16 +58,9 @@ struct MaintenanceOutcome {
     reclaim_deferred: bool,
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(super) struct PromptMemoryStatus {
-    pub(super) graph_pressure: bool,
-    pub(super) transient_pressure: bool,
-    pub(super) insufficient_total_capacity: bool,
-    pub(super) maintenance_failed: bool,
-}
-
 struct MaintainedDevice {
     device: Device,
+    primary: bool,
     _retention: Option<crate::pipeline::cuda_graph::CudaMemoryPoolRetention>,
     last_trim: Option<Instant>,
     capture_deferred: bool,
@@ -90,10 +68,12 @@ struct MaintainedDevice {
 
 pub(super) struct CudaMemoryPoolMaintenance {
     devices: Vec<MaintainedDevice>,
+    activation_dtype: DType,
+    last_decode_check: Option<Instant>,
 }
 
 impl CudaMemoryPoolMaintenance {
-    pub(super) fn new(devices: Vec<Device>) -> Self {
+    pub(super) fn new(devices: Vec<Device>, primary: &Device, activation_dtype: DType) -> Self {
         let devices = devices
             .into_iter()
             .map(|device| {
@@ -116,6 +96,7 @@ impl CudaMemoryPoolMaintenance {
                     _ => None,
                 };
                 MaintainedDevice {
+                    primary: device.same_device(primary),
                     device,
                     _retention: retention,
                     last_trim: None,
@@ -123,31 +104,74 @@ impl CudaMemoryPoolMaintenance {
                 }
             })
             .collect();
-        Self { devices }
+        Self {
+            devices,
+            activation_dtype,
+            last_decode_check: None,
+        }
     }
 
     pub(super) fn after_prompt_step(&mut self) -> bool {
-        self.maintain(MaintenancePoint::PromptBoundary, 0)
-            .graph_pressure
+        self.maintain(
+            MaintenancePoint::PromptBoundary,
+            ForwardWorkspaceBytes::default(),
+        )
+        .graph_pressure
     }
 
-    pub(super) fn before_prompt_step(&mut self, transient_bytes: usize) -> PromptMemoryStatus {
+    /// Rate-limited pool check between decode steps; true means graphs should be reclaimed.
+    pub(super) fn after_decode_step(&mut self) -> bool {
+        if self
+            .last_decode_check
+            .is_some_and(|last| last.elapsed() < DECODE_MAINTENANCE_INTERVAL)
+        {
+            return false;
+        }
+        self.last_decode_check = Some(Instant::now());
+        self.maintain(
+            MaintenancePoint::DecodeBoundary,
+            ForwardWorkspaceBytes::default(),
+        )
+        .graph_pressure
+    }
+
+    pub(super) fn before_prompt_step(
+        &mut self,
+        transient_bytes: ForwardWorkspaceBytes,
+    ) -> PromptMemoryStatus {
         self.maintain(MaintenancePoint::PromptPreflight, transient_bytes)
             .into()
     }
 
-    pub(super) fn after_graph_reclaim(&mut self, transient_bytes: usize) -> PromptMemoryStatus {
+    pub(super) fn after_graph_reclaim(
+        &mut self,
+        transient_bytes: ForwardWorkspaceBytes,
+    ) -> PromptMemoryStatus {
         self.maintain(MaintenancePoint::GraphReclaimed, transient_bytes)
             .into()
     }
 
     pub(super) fn when_idle(&mut self) -> bool {
-        self.maintain(MaintenancePoint::Idle, 0).graph_pressure
+        self.maintain(MaintenancePoint::Idle, ForwardWorkspaceBytes::default())
+            .graph_pressure
     }
 
-    fn maintain(&mut self, point: MaintenancePoint, transient_bytes: usize) -> MaintenanceOutcome {
+    fn maintain(
+        &mut self,
+        point: MaintenancePoint,
+        transient_bytes: ForwardWorkspaceBytes,
+    ) -> MaintenanceOutcome {
+        let activation_dtype = self.activation_dtype;
         let outcomes = self.devices.iter_mut().map(|maintained| {
-            match maintain_device(maintained, point, transient_bytes) {
+            let pending = if point == MaintenancePoint::PromptPreflight
+                || transient_bytes != ForwardWorkspaceBytes::default()
+            {
+                mistralrs_quant::gguf_affine_reserved_bytes(&maintained.device, activation_dtype)
+            } else {
+                0
+            };
+            let required = transient_bytes.with_pending(maintained.primary, pending);
+            match required.and_then(|required| maintain_device(maintained, point, required)) {
                 Ok(outcome) => outcome,
                 Err(err) => {
                     let device = maintained.device.device_pretty_repr();
@@ -216,17 +240,32 @@ fn maintain_device(
     let Some(mut snapshot) = MemoryUsage.query_cuda_allocator(&maintained.device)? else {
         return Ok(maintenance_failure_outcome());
     };
+    // Unified CUDA can reclaim file-cache pages excluded by cuMemGetInfo.
+    let mut memory = MemoryUsage.query(&maintained.device)?;
     record_allocator_metrics(&maintained.device, snapshot);
+    tracing::debug!(
+        point = point.label(),
+        available_mib = memory.available() >> 20,
+        allocator_free_mib = snapshot.available >> 20,
+        pool_reserved_mib = snapshot
+            .async_pool
+            .map_or(0, |pool| pool.current.reserved >> 20),
+        pool_used_mib = snapshot
+            .async_pool
+            .map_or(0, |pool| pool.current.used >> 20),
+        graph_reserved_mib = snapshot.graph_pool.map_or(0, |pool| pool.reserved >> 20),
+        graph_used_mib = snapshot.graph_pool.map_or(0, |pool| pool.used >> 20),
+        "CUDA memory"
+    );
 
     let thresholds = PressureThresholds::from_snapshot(snapshot);
-    let exceeds_physical_capacity = transient_bytes > snapshot.total;
+    let exceeds_physical_capacity = transient_bytes > memory.total();
     let cached = snapshot
         .async_pool
         .map(|pool| pool.current.cached())
         .unwrap_or(0);
-    let hard_pressure = snapshot.available < thresholds.hard_free;
+    let hard_pressure = memory.available() < thresholds.hard_free;
     let required_free = thresholds.required_available(transient_bytes, cached);
-    let transient_required = thresholds.transient_required_available(transient_bytes, cached);
     metrics::gauge!(
         "mistralrs_cuda_memory_required_available_bytes",
         "device" => maintained.device.device_pretty_repr(),
@@ -234,8 +273,7 @@ fn maintain_device(
     )
     .set(required_free as f64);
     let preflight_pressure = point == MaintenancePoint::PromptPreflight
-        && transient_required > 0
-        && snapshot.available < transient_required;
+        && thresholds.transient_pressure(memory, transient_bytes, cached);
     let capture_active =
         crate::pipeline::cuda_graph::cuda_graph_memory_pool_scope_active(&maintained.device)?;
     if capture_active {
@@ -270,6 +308,7 @@ fn maintain_device(
         snapshot = MemoryUsage
             .query_cuda_allocator(&maintained.device)?
             .expect("CUDA device disappeared during memory maintenance");
+        memory = MemoryUsage.query(&maintained.device)?;
         record_allocator_metrics(&maintained.device, snapshot);
     }
 
@@ -291,13 +330,13 @@ fn maintain_device(
                         .warm_cache
                         .saturating_mul(IDLE_RECLAIM_MULTIPLIER)
             }
-            MaintenancePoint::PromptBoundary => {
-                snapshot.available < thresholds.base_free
+            MaintenancePoint::PromptBoundary | MaintenancePoint::DecodeBoundary => {
+                memory.available() < thresholds.base_free
                     && cached > thresholds.warm_cache
                     && cooldown_elapsed
             }
             MaintenancePoint::PromptPreflight => {
-                snapshot.available < thresholds.required_available(transient_bytes, cached)
+                memory.available() < thresholds.required_available(transient_bytes, cached)
                     && cached > thresholds.warm_cache
             }
             MaintenancePoint::GraphReclaimed => unreachable!(),
@@ -314,6 +353,7 @@ fn maintain_device(
         let after = MemoryUsage
             .query_cuda_allocator(&maintained.device)?
             .expect("CUDA device disappeared during memory maintenance");
+        memory = MemoryUsage.query(&maintained.device)?;
         record_allocator_metrics(&maintained.device, after);
         record_reclaimed(&maintained.device, point, before, after);
         maintained.last_trim = Some(Instant::now());
@@ -328,14 +368,13 @@ fn maintain_device(
         .map(|pool| pool.current.cached())
         .unwrap_or(0);
     let required_free = thresholds.required_available(transient_bytes, cached);
-    let graph_pressure = snapshot.available < required_free;
-    let transient_required = thresholds.transient_required_available(transient_bytes, cached);
-    let transient_pressure = transient_required > 0 && snapshot.available < transient_required;
+    let graph_pressure = memory.available() < required_free;
+    let transient_pressure = thresholds.transient_pressure(memory, transient_bytes, cached);
     let insufficient_total_capacity = exceeds_physical_capacity;
     if graph_pressure && !hard_pressure && !preflight_pressure {
         record_pressure(
             &maintained.device,
-            if snapshot.available < thresholds.hard_free {
+            if memory.available() < thresholds.hard_free {
                 "hard"
             } else if transient_pressure {
                 "transient"
@@ -376,6 +415,16 @@ impl PressureThresholds {
     fn required_available(self, transient_bytes: usize, cached_bytes: usize) -> usize {
         self.base_free
             .max(self.transient_required_available(transient_bytes, cached_bytes))
+    }
+
+    fn transient_pressure(
+        self,
+        memory: DeviceMemory,
+        transient_bytes: usize,
+        cached_bytes: usize,
+    ) -> bool {
+        let required = self.transient_required_available(transient_bytes, cached_bytes);
+        required > 0 && memory.available() < required
     }
 
     fn transient_required_available(self, transient_bytes: usize, cached_bytes: usize) -> usize {
@@ -552,8 +601,10 @@ mod tests {
         };
         let original = threshold(&device)?;
         for reverse_drop in [false, true] {
-            let mut first = CudaMemoryPoolMaintenance::new(vec![device.clone()]);
-            let mut second = CudaMemoryPoolMaintenance::new(vec![alias.clone()]);
+            let mut first =
+                CudaMemoryPoolMaintenance::new(vec![device.clone()], &device, DType::BF16);
+            let mut second =
+                CudaMemoryPoolMaintenance::new(vec![alias.clone()], &alias, DType::BF16);
             assert!(first.devices[0]._retention.is_some());
             assert!(second.devices[0]._retention.is_some());
             assert_eq!(threshold(&device)?, u64::MAX);
@@ -564,7 +615,7 @@ mod tests {
                     MaintenancePoint::PromptBoundary,
                     MaintenancePoint::Idle,
                 ] {
-                    let outcome = maintenance.maintain(point, 0);
+                    let outcome = maintenance.maintain(point, ForwardWorkspaceBytes::default());
                     assert!(!outcome.capture_active);
                     assert!(!outcome.reclaim_deferred);
                     assert!(!outcome.maintenance_failed);
@@ -646,6 +697,52 @@ mod tests {
             thresholds.transient_required_available(8 * GIB, cached),
             8 * GIB + thresholds.warm_cache - cached
         );
+    }
+
+    #[test]
+    fn unified_prompt_pressure_counts_reclaimable_memory_and_preserves_goals() {
+        let allocator = snapshot(256 * BYTES_PER_MIB, 78 * GIB, 78 * GIB);
+        let thresholds = PressureThresholds::from_snapshot(allocator);
+        let unified = DeviceMemory::Unified {
+            total: allocator.total,
+            available: 18 * GIB,
+            allocated: 78 * GIB,
+            working_set_limit: allocator.total,
+        };
+        let transient = GIB;
+        assert!(!thresholds.transient_pressure(unified, transient, 0));
+        assert!(unified.available() >= thresholds.required_available(transient, 0));
+        assert_eq!(allocator.available, 256 * BYTES_PER_MIB);
+        let automatic =
+            crate::memory_plan::resolve_device_budget(crate::MemoryGoal::Auto, unified).unwrap();
+        assert!(transient <= automatic.allocatable_bytes);
+        let capped = crate::memory_plan::resolve_device_budget(
+            crate::MemoryGoal::Utilization(0.75),
+            unified,
+        )
+        .unwrap();
+        assert!(transient > capped.allocatable_bytes);
+    }
+
+    #[test]
+    fn prompt_pressure_preserves_discrete_free_memory_and_unified_exhaustion() {
+        let allocator = snapshot(256 * BYTES_PER_MIB, 78 * GIB, 78 * GIB);
+        let thresholds = PressureThresholds::from_snapshot(allocator);
+        let discrete = DeviceMemory::Discrete {
+            total: allocator.total,
+            free: allocator.available,
+        };
+        assert!(thresholds.transient_pressure(discrete, GIB, 0));
+        assert!(discrete.available() < thresholds.hard_free);
+        assert!(!thresholds.transient_pressure(discrete, GIB, 2 * GIB));
+        let unified = DeviceMemory::Unified {
+            total: allocator.total,
+            available: 512 * BYTES_PER_MIB,
+            allocated: allocator.total - 512 * BYTES_PER_MIB,
+            working_set_limit: allocator.total,
+        };
+        assert!(thresholds.transient_pressure(unified, GIB, 0));
+        assert!(!thresholds.transient_pressure(unified, 0, 0));
     }
 
     #[test]

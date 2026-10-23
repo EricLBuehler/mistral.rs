@@ -145,12 +145,6 @@ GROUPS = [
         "MCP client configuration types.",
         ["McpServerSourcePy", "McpServerConfigPy", "McpClientConfigPy"],
     ),
-    (
-        "Auto-mapping",
-        "automap",
-        "Hints for automatic device mapping.",
-        ["TextAutoMapParams", "MultimodalAutoMapParams"],
-    ),
 ]
 
 SIG_WRAP_THRESHOLD = 70  # wrap arg list onto multiple lines beyond this width
@@ -550,8 +544,8 @@ def _render_index() -> str:
         "```bash",
         "pip install mistralrs                                   # CPU / Metal (PyPI)",
         "# NVIDIA (replace version, CUDA level, and SM)",
-        'pip install "mistralrs==0.9.2+cuda128.sm89" \\',
-        "  --find-links https://github.com/EricLBuehler/mistral.rs/releases/expanded_assets/v0.9.2",
+        'pip install "mistralrs==0.9.5+cuda128.sm89" \\',
+        "  --find-links https://github.com/EricLBuehler/mistral.rs/releases/expanded_assets/v0.9.5",
         "```",
         "",
         "## Pages",

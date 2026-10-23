@@ -9,7 +9,7 @@
     "license": {
       "name": "MIT"
     },
-    "version": "0.9.4"
+    "version": "0.9.5"
   },
   "paths": {
     "/calibration/apply": {
@@ -8536,14 +8536,6 @@
             ],
             "description": "Optional HF revision"
           },
-          "max_batch_size": {
-            "type": [
-              "integer",
-              "null"
-            ],
-            "description": "Optional max batch size for tuning",
-            "minimum": 0
-          },
           "max_image_length": {
             "type": [
               "integer",
@@ -8558,14 +8550,6 @@
               "null"
             ],
             "description": "Optional max num images (multimodal)",
-            "minimum": 0
-          },
-          "max_seq_len": {
-            "type": [
-              "integer",
-              "null"
-            ],
-            "description": "Optional max sequence length for tuning",
             "minimum": 0
           },
           "model_id": {

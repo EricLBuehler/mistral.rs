@@ -11,7 +11,7 @@ sidebar:
 ```text
 __init__(
     which: Which,
-    max_seqs: int = 16,
+    max_seqs: int = 32,
     no_kv_cache: bool = False,
     prefix_cache_n: int = 16,
     token_source: str = 'cache',
@@ -22,9 +22,7 @@ __init__(
     num_device_layers: list[str] | None = None,
     in_situ_quant: str | None = None,
     anymoe_config: AnyMoeConfig | None = None,
-    pa_gpu_mem: int | None = None,
-    pa_gpu_mem_usage: float | None = None,
-    pa_ctxt_len: int | None = None,
+    memory_goal: str | float | None = None,
     pa_blk_size: int | None = None,
     pa_cache_type: PagedCacheType | None = None,
     no_paged_attn: bool = False,
@@ -59,22 +57,13 @@ Load a model.
     the corresponding number of layers. Note: this is deprecated in favor of automatic device mapping.
 - `in_situ_quant` sets the optional in-situ quantization for a model.
 - `anymoe_config` specifies the AnyMoE config. If this is set, then the model will be loaded as an AnyMoE model.
-- `pa_gpu_mem`: GPU memory to allocate for KV cache with PagedAttention in MBs.
-    PagedAttention is supported on CUDA and Metal. It is automatically activated on CUDA but not on Metal.
-    The priority is as follows: `pa-ctxt-len` > `pa-gpu-mem-usage` > `pa-gpu-mem`.
-- `pa_gpu_mem_usage`: Percentage of GPU memory to utilize after allocation of KV cache with PagedAttention, from 0 to 1.
-    If this is not set and the device is CUDA, it will default to `0.9`.
-    PagedAttention is supported on CUDA and Metal. It is automatically activated on CUDA but not on Metal.
-    The priority is as follows: `pa-ctxt-len` > `pa-gpu-mem-usage` > `pa-gpu-mem`.
-- `pa_ctxt_len`: Total context length to allocate the KV cache for (total number of tokens which the KV cache can hold).
-    PagedAttention is supported on CUDA and Metal. It is automatically activated on CUDA but not on Metal.
-    The priority is as follows: `pa-ctxt-len` > `pa-gpu-mem-usage` > `pa-gpu-mem`.
-    This is the default setting, and it defaults to the `max-seq-len` specified in after the model type.
-- `pa_blk_size` sets the block size (number of tokens per block) for PagedAttention. If this is not set and the device is CUDA,
-    it will default to 32. PagedAttention is supported on CUDA and Metal. It is automatically activated on CUDA but not on Metal.
+- `memory_goal`: Shared model and KV memory goal. Defaults to automatic sizing.
+    Use a fraction such as `0.9` for physical GPU memory utilization, or
+    a KV capacity such as `"4GiB"` or `"65536tokens"`. Explicit goals require paging.
+- `pa_blk_size`: Tokens per block, defaulting to 32 on CUDA and Metal. PagedAttention is enabled by default on both.
 - `pa_cache_type` sets the PagedAttention KV cache type (auto or f8e4m3). Defaults to `auto`.
-- `no_paged_attn` disables PagedAttention on CUDA. Because PagedAttention is already disabled on Metal, this is only applicable on CUDA.
-- `paged_attn` enables PagedAttention on Metal. Because PagedAttention is already enabled on CUDA, this is only applicable on Metal.
+- `no_paged_attn` disables PagedAttention on CUDA and Metal.
+- `paged_attn` forces PagedAttention on; mutually exclusive with `no_paged_attn`.
 - `seed`, used to ensure reproducible random number generation.
 - `enable_search`: Enable searching compatible with the OpenAI `web_search_options` setting. This loads the selected search embedding reranker (EmbeddingGemma by default).
 - `search_embedding_model`: select which built-in search embedding model to load (currently `"embedding_gemma"`).

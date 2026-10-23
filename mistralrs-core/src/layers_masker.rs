@@ -188,8 +188,7 @@ impl CausalMasker {
     /// Build a causal attention mask.
     ///
     /// - Returns `AttentionMask::None` for single-token decode.
-    /// - Returns `AttentionMask::CausalFlash` on CUDA+flash when
-    ///   `force_custom` is false (flash handles causality internally).
+    /// - Returns `AttentionMask::CausalFlash` for implicit CUDA/Metal causality when allowed.
     /// - Returns `AttentionMask::Custom` with a real mask tensor otherwise.
     pub fn make_causal_mask(
         &self,
@@ -204,7 +203,10 @@ impl CausalMasker {
             return Ok(crate::attention::AttentionMask::None);
         }
 
-        if !cfg.force_custom && crate::using_flash_attn() && input_ids.device().is_cuda() {
+        if !cfg.force_custom
+            && (input_ids.device().is_metal()
+                || crate::using_flash_attn() && input_ids.device().is_cuda())
+        {
             return Ok(crate::attention::AttentionMask::CausalFlash);
         }
 

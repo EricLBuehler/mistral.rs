@@ -85,6 +85,12 @@ pub struct AfqLayer {
 }
 
 impl AfqLayer {
+    fn prepare(self) -> Result<Self> {
+        #[cfg(feature = "metal")]
+        self.prepare_metal_kernels(self.scales.dtype())?;
+        Ok(self)
+    }
+
     pub(crate) fn inspect_uqff_header(layer: &UqffLayerHeaderView<'_>) -> Option<UqffHeaderMatch> {
         const WEIGHT_SUFFIXES: &[&str] = &[
             "weight",
@@ -140,6 +146,11 @@ pub struct AfqInner {
 }
 
 impl QuantMethod for AfqLayer {
+    #[cfg(feature = "metal")]
+    fn prepare_metal_kernels(&self, _activation_dtype: DType) -> Result<()> {
+        crate::metal_kernels::prepare_afq(&self.w_q, &self.scales, self.bits, self.group_size)
+    }
+
     fn new(method: QuantMethodConfig) -> candle_core::Result<Self>
     where
         Self: Sized,
@@ -163,7 +174,7 @@ impl QuantMethod for AfqLayer {
             } => {
                 let (w_q, scales, biases) = ops::afq_quantize_op(&weight, group_size, bits)?;
 
-                Ok(Self {
+                Self {
                     w_q,
                     scales,
                     biases,
@@ -171,7 +182,8 @@ impl QuantMethod for AfqLayer {
                     bits,
                     group_size,
                     stats: crate::ImatrixLayerStats::empty(),
-                })
+                }
+                .prepare()
             }
         }
     }
@@ -336,19 +348,22 @@ impl QuantMethod for AfqLayer {
             if self.w_q.device().same_device(&device) {
                 return Ok(self);
             }
-            return Ok(Arc::new(Self {
-                w_q: self.w_q.to_device(&device)?,
-                scales: self.scales.to_device(&device)?,
-                biases: self.biases.to_device(&device)?,
-                bias: self
-                    .bias
-                    .as_ref()
-                    .map(|bias| bias.to_device(&device))
-                    .transpose()?,
-                bits: self.bits,
-                group_size: self.group_size,
-                stats: self.stats.clone(),
-            }));
+            return Ok(Arc::new(
+                Self {
+                    w_q: self.w_q.to_device(&device)?,
+                    scales: self.scales.to_device(&device)?,
+                    biases: self.biases.to_device(&device)?,
+                    bias: self
+                        .bias
+                        .as_ref()
+                        .map(|bias| bias.to_device(&device))
+                        .transpose()?,
+                    bits: self.bits,
+                    group_size: self.group_size,
+                    stats: self.stats.clone(),
+                }
+                .prepare()?,
+            ));
         }
 
         match dtype {
@@ -426,9 +441,7 @@ impl AfqLayer {
         let biases =
             reader.load_tensor_sharded(&format!("{key}.weight.biases"), device, group_range)?;
         let bias = reader.load_bias(key, device, range, dims.len())?;
-        Ok(Self::from_parts(
-            w_q, scales, biases, bias, bits, group_size,
-        ))
+        Self::from_parts(w_q, scales, biases, bias, bits, group_size).prepare()
     }
 
     pub fn afq_linear_b(
@@ -459,15 +472,18 @@ impl AfqLayer {
             None
         };
 
-        Ok(Arc::new(Self {
-            w_q,
-            scales,
-            bias,
-            biases,
-            bits: AfqBits::try_from(*bits)?,
-            group_size: AfqGroupSize::try_from(*group_size)?,
-            stats: crate::ImatrixLayerStats::empty(),
-        }))
+        Ok(Arc::new(
+            Self {
+                w_q,
+                scales,
+                bias,
+                biases,
+                bits: AfqBits::try_from(*bits)?,
+                group_size: AfqGroupSize::try_from(*group_size)?,
+                stats: crate::ImatrixLayerStats::empty(),
+            }
+            .prepare()?,
+        ))
     }
 
     pub fn afq_packed_linear_b(
@@ -505,15 +521,18 @@ impl AfqLayer {
             None
         };
 
-        Ok(Arc::new(Self {
-            w_q,
-            scales,
-            bias,
-            biases,
-            bits: AfqBits::try_from(*bits)?,
-            group_size: AfqGroupSize::try_from(*group_size)?,
-            stats: crate::ImatrixLayerStats::empty(),
-        }))
+        Ok(Arc::new(
+            Self {
+                w_q,
+                scales,
+                bias,
+                biases,
+                bits: AfqBits::try_from(*bits)?,
+                group_size: AfqGroupSize::try_from(*group_size)?,
+                stats: crate::ImatrixLayerStats::empty(),
+            }
+            .prepare()?,
+        ))
     }
 }
 

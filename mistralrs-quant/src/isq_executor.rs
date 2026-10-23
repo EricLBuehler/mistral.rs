@@ -365,7 +365,10 @@ fn can_enqueue(state: &ExecutorState, config: &IsqExecutorConfig, job: &QueuedJo
         .saturating_add(resources.input_bytes);
     let no_host_work =
         state.held_input_bytes == 0 && state.active_host_scratch == 0 && state.retained_output == 0;
-    host_next <= config.host_budget_bytes || no_host_work
+    // Batch consumers return their receivers after all jobs are submitted; output permits still
+    // gate when those jobs start, so retained outputs must not block their submission.
+    let no_queued_input = resources.input_bytes == 0 && job.consumer.retains_output();
+    host_next <= config.host_budget_bytes || no_host_work || no_queued_input
 }
 
 fn can_start(state: &ExecutorState, config: &IsqExecutorConfig, job: &QueuedJob) -> bool {
@@ -757,6 +760,44 @@ mod tests {
         assert_eq!(
             rx2.recv_timeout(TEST_RECV_TIMEOUT).unwrap().unwrap().value,
             2
+        );
+    }
+
+    #[test]
+    fn retained_output_does_not_block_batch_submission() {
+        let executor = IsqExecutor::new(IsqExecutorConfig::for_tests(1, 100));
+        let mut output_plan = plan(120);
+        output_plan.resources.host_scratch_bytes = 0;
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        let rx1 = executor.submit(output_plan.clone(), IsqConsumer::UqffWrite, move || {
+            done_tx.send(()).unwrap();
+            Ok(1usize)
+        });
+        done_rx.recv_timeout(TEST_RECV_TIMEOUT).unwrap();
+        let first = rx1.recv_timeout(TEST_RECV_TIMEOUT).unwrap().unwrap();
+
+        let (submitted_tx, submitted_rx) = std::sync::mpsc::channel();
+        let submitter = executor.clone();
+        let submitter_handle = std::thread::spawn(move || {
+            let rx2 = submitter.submit(output_plan, IsqConsumer::UqffWrite, || Ok(2usize));
+            submitted_tx.send(rx2).unwrap();
+        });
+
+        let submitted = submitted_rx.recv_timeout(TEST_RECV_TIMEOUT);
+        let submitted_without_release = submitted.is_ok();
+        drop(first);
+        let rx2 = match submitted {
+            Ok(rx) => rx,
+            Err(_) => submitted_rx.recv_timeout(TEST_RECV_TIMEOUT).unwrap(),
+        };
+        assert_eq!(
+            rx2.recv_timeout(TEST_RECV_TIMEOUT).unwrap().unwrap().value,
+            2
+        );
+        submitter_handle.join().unwrap();
+        assert!(
+            submitted_without_release,
+            "batch submission waited for a retained output to be released"
         );
     }
 

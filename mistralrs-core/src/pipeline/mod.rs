@@ -16,7 +16,11 @@ mod hf_config;
 mod inputs_processor;
 mod isq;
 mod isq_flow;
+#[cfg(feature = "metal")]
+mod metal_warmup;
 pub use isq_flow::CalibrationStatus;
+#[cfg(any(feature = "cuda", test))]
+mod cuda_graph_budget;
 pub(crate) mod llg;
 mod loaders;
 mod macros;
@@ -34,7 +38,7 @@ use crate::amoe::{AnyMoeConfig, AnyMoeExpertType, AnyMoeTrainingInputs, AnyMoeTr
 use crate::device_map::DeviceMapper;
 use crate::layers_masker::PastKvLenCache;
 use crate::paged_attention::{
-    AttentionBackendKind, CacheConfig, CacheEngine, CacheMemoryReservations, MemoryGpuConfig,
+    AttentionBackendKind, CacheConfig, CacheEngine, CacheMemoryReservations, MemoryGoal,
     ModelConfigLike,
 };
 use crate::prefix_cacher::{PagedAuxiliaryPrefixState, PrefixCacheManagerV2};
@@ -60,15 +64,16 @@ pub use isq::{
     UQFF_MULTI_FILE_DELIMITER,
 };
 use llguidance::toktrie::TokEnv;
-pub(crate) use loaders::checkpoint_runtime_size;
+pub(crate) use loaders::{apply_model_activation_memory, checkpoint_runtime_size};
 pub use loaders::{
-    AdapterKind, AutoDeviceMapParams, AutoDeviceMapQuantization, AutoEmbeddingLoader,
-    AutoMultimodalLoader, AutoNormalLoader, DeepSeekV2Loader, DeepSeekV3Loader,
-    DeviceMappedModelLoader, DiffusionGemmaLoader, DiffusionLoaderType, DiffusionModel,
-    DiffusionModelLoader, EmbeddingGemmaLoader, EmbeddingLoaderType, EmbeddingModel,
-    EmbeddingModelLoader, EmbeddingModelPaths, EmbeddingModule, EmbeddingModulePaths,
-    EmbeddingModuleType, FluxLoader, GLM4Loader, GLM4MoeLiteLoader, GLM4MoeLoader, Gemma2Loader,
-    Gemma3Loader, Gemma3nLoader, Gemma4Loader, GemmaLoader, GptOssLoader, GraniteMoeHybridLoader,
+    ActivationMemoryContext, ActivationMemoryEstimate, ActivationModelConfig, AdapterKind,
+    AutoDeviceMapParams, AutoDeviceMapQuantization, AutoEmbeddingLoader, AutoMultimodalLoader,
+    AutoNormalLoader, DeepSeekV2Loader, DeepSeekV3Loader, DeviceMappedModelLoader,
+    DiffusionGemmaLoader, DiffusionLoaderType, DiffusionModel, DiffusionModelLoader,
+    EmbeddingGemmaLoader, EmbeddingLoaderType, EmbeddingModel, EmbeddingModelLoader,
+    EmbeddingModelPaths, EmbeddingModule, EmbeddingModulePaths, EmbeddingModuleType, FlintLoader,
+    FluxLoader, GLM4Loader, GLM4MoeLiteLoader, GLM4MoeLoader, Gemma2Loader, Gemma3Loader,
+    Gemma3nLoader, Gemma4Loader, GemmaLoader, GptOssLoader, GraniteMoeHybridLoader,
     HunYuanDenseV1Loader, HunYuanMoEV1Loader, Idefics2Loader, Idefics3Loader, LLaVALoader,
     LLaVANextLoader, Lfm2Loader, Lfm2VlLoader, LlamaLoader, Loader, LocalModelPaths,
     MiniCpmOLoader, Mistral3Loader, MistralLoader, MixtralLoader, ModelKind, ModelPaths,
@@ -77,8 +82,8 @@ pub use loaders::{
     Phi3Loader, Phi3VLoader, Phi3_5MoELoader, Phi4MMLoader, PrettyName, QuantizationKind,
     Qwen2Loader, Qwen2VLLoader, Qwen2_5VLLoader, Qwen3EmbeddingLoader, Qwen3Loader, Qwen3MoELoader,
     Qwen3NextLoader, Qwen3VLLoader, Qwen3VLMoELoader, Qwen3_5Loader, Qwen3_5MoeLoader,
-    Qwen3_5TextLoader, SmolLm3Loader, Starcoder2Loader, TokenSource, VLlama4Loader, VLlamaLoader,
-    VoxtralLoader,
+    Qwen3_5TextLoader, Qwen4ExpLoader, SmolLm3Loader, Starcoder2Loader, TokenSource, VLlama4Loader,
+    VLlamaLoader, VoxtralLoader,
 };
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn get_device_layers_for_loader(
@@ -198,6 +203,29 @@ pub(crate) fn synchronize_cuda_contexts(primary: &Device, mapper: &dyn DeviceMap
         }
     }
     Ok(())
+}
+
+#[cfg(feature = "cuda")]
+pub(crate) fn prepare_cuda_runtime(primary: &Device, mapper: &dyn DeviceMapper) -> Result<()> {
+    mistralrs_quant::cublaslt::maybe_init_cublas_lt_wrapper(primary.clone());
+    let mut devices = mapper.get_unique_devices();
+    if !devices.iter().any(|device| device.same_device(primary)) {
+        devices.push(primary.clone());
+    }
+    for device in devices.iter().filter(|device| device.is_cuda()) {
+        match crate::cuda::preload::preload_candle_ptx(device) {
+            Ok(count) if count > 0 => {
+                tracing::info!("Preloaded {count} Candle CUDA PTX functions.")
+            }
+            Ok(_) => {}
+            Err(err) => tracing::warn!("Failed to preload Candle CUDA PTX functions: {err}"),
+        }
+    }
+    #[cfg(feature = "cutile")]
+    if let Err(err) = mistralrs_quant::cutile::warmup_moe_kernels(primary) {
+        tracing::warn!("Failed to warm up cuTile MoE kernels: {err}");
+    }
+    synchronize_cuda_contexts(primary, mapper)
 }
 
 pub(crate) fn resolve_lora_execution(
@@ -330,12 +358,22 @@ struct RecurrentCheckpointBudget {
     snapshot_bytes: usize,
     current_capacity: usize,
     current_lanes: usize,
-    memory_total: usize,
-    memory_available: usize,
     allocation_available: usize,
     future_reserved_bytes: usize,
     kv_floor_bytes: usize,
-    memory_utilization: Option<f32>,
+}
+
+pub(crate) fn disable_unsupported_paged_attention(
+    config: &mut Option<PagedAttentionConfig>,
+) -> Result<()> {
+    if config
+        .as_ref()
+        .is_some_and(|config| config.memory_goal != MemoryGoal::Auto)
+    {
+        anyhow::bail!("The requested memory goal requires paged attention, which this model or device placement does not support");
+    }
+    *config = None;
+    Ok(())
 }
 
 fn effective_recurrent_checkpoint_lanes(requested: usize, supported: bool) -> usize {
@@ -361,24 +399,11 @@ fn automatic_recurrent_checkpoint_lane_budget(budget: RecurrentCheckpointBudget)
     if bytes_per_lane == 0 {
         anyhow::bail!("recurrent checkpoint lane size must be nonzero");
     }
-    let steady_layout_budget = match budget.memory_utilization {
-        Some(fraction) => {
-            let target_used = (budget.memory_total as f64 * f64::from(fraction)) as usize;
-            let current_used_without_layout = budget
-                .memory_total
-                .saturating_sub(budget.memory_available)
-                .saturating_sub(current_layout_bytes);
-            target_used
-                .saturating_sub(current_used_without_layout)
-                .saturating_sub(budget.future_reserved_bytes)
-                .saturating_sub(budget.kv_floor_bytes)
-        }
-        None => budget
-            .allocation_available
-            .saturating_add(current_layout_bytes)
-            .saturating_sub(budget.future_reserved_bytes)
-            .saturating_sub(budget.kv_floor_bytes),
-    };
+    let steady_layout_budget = budget
+        .allocation_available
+        .saturating_add(current_layout_bytes)
+        .saturating_sub(budget.future_reserved_bytes)
+        .saturating_sub(budget.kv_floor_bytes);
     let steady_lanes = steady_layout_budget / bytes_per_lane;
     let allocation_lanes = budget.allocation_available / bytes_per_lane;
     let checkpoint_lanes = budget
@@ -394,27 +419,18 @@ fn automatic_recurrent_checkpoint_lane_budget(budget: RecurrentCheckpointBudget)
 
 #[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 fn recurrent_kv_floor_bytes(
-    memory_config: MemoryGpuConfig,
+    memory_config: MemoryGoal,
     memory_total: usize,
     kv_bytes_per_token: usize,
 ) -> Result<usize> {
     let bytes = match memory_config {
-        MemoryGpuConfig::MbAmount(mb) => mb
-            .checked_mul(BYTES_PER_MIB)
-            .ok_or_else(|| anyhow::anyhow!("PagedAttention memory size overflow"))?,
-        MemoryGpuConfig::BestEffortMbAmount { target_mb, min_mb } => {
-            let mb = min_mb.unwrap_or_else(|| {
-                ((memory_total as f64 * AUTO_RECURRENT_KV_FLOOR_FRACTION) as usize / BYTES_PER_MIB)
-                    .min(target_mb)
-            });
-            mb.checked_mul(BYTES_PER_MIB)
-                .ok_or_else(|| anyhow::anyhow!("PagedAttention memory size overflow"))?
-        }
-        MemoryGpuConfig::Utilization(fraction) => {
+        MemoryGoal::KvBytes(bytes) => bytes,
+        MemoryGoal::Auto => (memory_total as f64 * AUTO_RECURRENT_KV_FLOOR_FRACTION) as usize,
+        MemoryGoal::Utilization(fraction) => {
             let floor_fraction = f64::from(fraction).min(AUTO_RECURRENT_KV_FLOOR_FRACTION);
             (memory_total as f64 * floor_fraction) as usize
         }
-        MemoryGpuConfig::ContextSize(tokens) => {
+        MemoryGoal::KvTokens(tokens) => {
             let bytes = tokens
                 .checked_mul(kv_bytes_per_token)
                 .ok_or_else(|| anyhow::anyhow!("PagedAttention context memory size overflow"))?;
@@ -428,7 +444,7 @@ fn recurrent_kv_floor_bytes(
 }
 
 fn paged_kv_bytes_per_token(
-    paged_attn_config: PagedAttentionConfig,
+    paged_attn_config: &PagedAttentionConfig,
     dtype: DType,
     model_config: &dyn ModelConfigLike,
 ) -> Result<usize> {
@@ -442,7 +458,7 @@ fn paged_kv_bytes_per_token(
 
 fn automatic_recurrent_checkpoint_lanes(
     cache: &EitherCache,
-    paged_attn_config: PagedAttentionConfig,
+    paged_attn_config: &PagedAttentionConfig,
     primary_device: &Device,
     capacity: usize,
     kv_bytes_per_token: usize,
@@ -476,7 +492,7 @@ fn automatic_recurrent_checkpoint_lanes(
             reservations.secondary_device_bytes
         };
         let kv_floor_bytes = recurrent_kv_floor_bytes(
-            paged_attn_config.mem_gpu,
+            paged_attn_config.memory_goal,
             memory.total(),
             kv_bytes_per_token,
         )?;
@@ -487,18 +503,9 @@ fn automatic_recurrent_checkpoint_lanes(
                 snapshot_bytes,
                 current_capacity,
                 current_lanes,
-                memory_total: memory.total(),
-                memory_available: memory.available(),
-                allocation_available: crate::paged_attention::device_memory_cap(
-                    memory.available(),
-                    &device,
-                ),
+                allocation_available: paged_attn_config.allocation_budget(&device, memory)?,
                 future_reserved_bytes,
                 kv_floor_bytes,
-                memory_utilization: match paged_attn_config.mem_gpu {
-                    MemoryGpuConfig::Utilization(fraction) => Some(fraction),
-                    _ => None,
-                },
             },
         )?);
     }
@@ -507,7 +514,7 @@ fn automatic_recurrent_checkpoint_lanes(
 
 fn reserve_recurrent_serving_capacity(
     cache: &EitherCache,
-    paged_attn_config: PagedAttentionConfig,
+    paged_attn_config: &PagedAttentionConfig,
     recurrent_checkpoints_supported: bool,
     recurrent_transitions_supported: bool,
     primary_device: &Device,
@@ -605,7 +612,7 @@ fn add_recurrent_prefix_memory_reservations(
 
 fn paged_attention_memory_reservations(
     cache: &EitherCache,
-    paged_attn_config: PagedAttentionConfig,
+    paged_attn_config: &PagedAttentionConfig,
     primary_device: &Device,
 ) -> Result<CacheMemoryReservations> {
     let reservations = paged_attn_config
@@ -1308,6 +1315,9 @@ pub struct GeneralMetadata {
     // PagedAttention stuff
     pub cache_config: Option<CacheConfig>,
     pub cache_engine: Option<CacheEngine>,
+    pub memory_plan: Option<crate::memory_plan::RuntimeMemoryPlan>,
+    #[cfg(feature = "cuda")]
+    pub runtime_memory_reservation: Option<Arc<crate::resource_plan::RuntimeMemoryReservation>>,
     pub model_metadata: Option<Arc<dyn ModelConfigLike + Send + Sync>>,
     pub modalities: Modalities,
     // UQFF writes force the whole model onto CPU, so the pipeline is not servable afterwards.
@@ -1315,6 +1325,13 @@ pub struct GeneralMetadata {
 }
 
 impl GeneralMetadata {
+    #[cfg(feature = "cuda")]
+    pub(crate) fn cuda_capture_memory_ready(&self) -> bool {
+        self.runtime_memory_reservation
+            .as_ref()
+            .is_none_or(|reservation| reservation.capture_ready())
+    }
+
     pub fn tok_env(&self) -> Option<TokEnv> {
         self.llg_factory.as_ref().map(|f| f.tok_env().clone())
     }
@@ -2299,7 +2316,7 @@ pub trait Pipeline:
                     && is_prompt
                     && !return_raw_logits
                     && !self.get_metadata().is_xlora
-                    && self.device().is_cuda()
+                    && (self.device().is_cuda() || self.device().is_metal())
                 {
                     metadata.prompt_chunk_size
                 } else {
@@ -2668,6 +2685,27 @@ pub trait Pipeline:
                                 logits[seq_idx] = Some(raw_logits.index_bs(logit_idx)?);
                             }
                         }
+                        drop(raw_logits);
+                        #[cfg(feature = "metal")]
+                        if prompt_chunk
+                            .as_ref()
+                            .is_some_and(|chunk| !chunk.is_final_prompt_chunk)
+                        {
+                            let start = Instant::now();
+                            let primary = self.device();
+                            let mut devices = self
+                                .device_mapper()
+                                .map(|mapper| mapper.get_unique_devices())
+                                .unwrap_or_default();
+                            if !devices.iter().any(|device| device.same_device(&primary)) {
+                                devices.push(primary);
+                            }
+                            // Partial chunks skip sampling readback, which otherwise releases pooled uploads.
+                            for device in devices.into_iter().filter(Device::is_metal) {
+                                device.synchronize()?;
+                            }
+                            exec_duration += start.elapsed();
+                        }
                     }
                     (
                         logits,
@@ -3006,7 +3044,7 @@ mod tests {
         paged_attention::block_hash::MultimodalAttentionPolicy,
         pipeline::prompt_chunks::PromptChunkPlan,
         pipeline::text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
-        MemoryGpuConfig, MessageContent, PagedAttentionConfig, PagedCacheType,
+        MemoryGoal, MessageContent, PagedAttentionConfig, PagedCacheType,
     };
     use candle_core::{Device, DeviceLocation, Tensor};
     use either::Either;
@@ -3127,12 +3165,9 @@ mod tests {
             snapshot_bytes: SNAPSHOT_BYTES,
             current_capacity: 9,
             current_lanes: 1,
-            memory_total: 100 * GIB,
-            memory_available: 68 * GIB,
-            allocation_available: 66 * GIB,
+            allocation_available: 53 * GIB,
             future_reserved_bytes: 7 * GIB,
             kv_floor_bytes: 5 * GIB,
-            memory_utilization: Some(0.85),
         })
         .unwrap();
 
@@ -3150,12 +3185,9 @@ mod tests {
             snapshot_bytes: SNAPSHOT_BYTES,
             current_capacity: 9,
             current_lanes: 1,
-            memory_total: 100 * GIB,
-            memory_available: 68 * GIB,
-            allocation_available: 66 * GIB,
+            allocation_available: 53 * GIB,
             future_reserved_bytes: 7 * GIB,
             kv_floor_bytes: 5 * GIB,
-            memory_utilization: Some(0.85),
         })
         .unwrap();
 
@@ -3173,12 +3205,9 @@ mod tests {
             snapshot_bytes: SNAPSHOT_BYTES,
             current_capacity: 9,
             current_lanes: 1,
-            memory_total: 100 * GIB,
-            memory_available: 68 * GIB,
-            allocation_available: 66 * GIB,
+            allocation_available: 53 * GIB,
             future_reserved_bytes: 7 * GIB,
             kv_floor_bytes: 5 * GIB,
-            memory_utilization: Some(0.85),
         })
         .unwrap();
 
@@ -3195,12 +3224,9 @@ mod tests {
             snapshot_bytes: GIB,
             current_capacity: 9,
             current_lanes: 1,
-            memory_total: 100 * GIB,
-            memory_available: 15 * GIB,
             allocation_available: 15 * GIB,
             future_reserved_bytes: 0,
             kv_floor_bytes: 0,
-            memory_utilization: None,
         })
         .unwrap();
 
@@ -3211,12 +3237,9 @@ mod tests {
     fn recurrent_context_floor_preserves_requested_kv_bytes() {
         const MIB: usize = 1024 * 1024;
 
-        let bytes = recurrent_kv_floor_bytes(
-            MemoryGpuConfig::ContextSize(1_000_000),
-            100 * 1024 * MIB,
-            1024,
-        )
-        .unwrap();
+        let bytes =
+            recurrent_kv_floor_bytes(MemoryGoal::KvTokens(1_000_000), 100 * 1024 * MIB, 1024)
+                .unwrap();
 
         assert_eq!(bytes, 977 * MIB);
     }
@@ -3244,14 +3267,14 @@ mod tests {
         .unwrap();
         let cache = EitherCache::Hybrid(Arc::new(Mutex::new(hybrid)));
         let config =
-            PagedAttentionConfig::new(None, MemoryGpuConfig::MbAmount(1), PagedCacheType::Auto)
+            PagedAttentionConfig::new(None, MemoryGoal::KvBytes(1024 * 1024), PagedCacheType::Auto)
                 .unwrap()
                 .with_serving_capacity(16)
                 .unwrap()
                 .with_recurrent_checkpoint_lanes(8)
                 .unwrap();
 
-        reserve_recurrent_serving_capacity(&cache, config, false, false, &Device::Cpu, 1).unwrap();
+        reserve_recurrent_serving_capacity(&cache, &config, false, false, &Device::Cpu, 1).unwrap();
 
         let cache = cache.hybrid();
         assert_eq!(cache.checkpoint_lanes(), 1);
@@ -3283,14 +3306,14 @@ mod tests {
         .unwrap();
         let cache = EitherCache::Hybrid(Arc::new(Mutex::new(hybrid)));
         let config =
-            PagedAttentionConfig::new(None, MemoryGpuConfig::MbAmount(1), PagedCacheType::Auto)
+            PagedAttentionConfig::new(None, MemoryGoal::KvBytes(1024 * 1024), PagedCacheType::Auto)
                 .unwrap()
                 .with_serving_capacity(64)
                 .unwrap()
                 .with_recurrent_checkpoint_lanes(8)
                 .unwrap();
 
-        reserve_recurrent_serving_capacity(&cache, config, true, true, &Device::Cpu, 1).unwrap();
+        reserve_recurrent_serving_capacity(&cache, &config, true, true, &Device::Cpu, 1).unwrap();
 
         let cache = cache.hybrid();
         assert_eq!(cache.recurrent_capacity(), 65);
@@ -3325,14 +3348,14 @@ mod tests {
         .unwrap();
         let cache = EitherCache::Hybrid(Arc::new(Mutex::new(hybrid)));
         let config =
-            PagedAttentionConfig::new(None, MemoryGpuConfig::MbAmount(1), PagedCacheType::Auto)
+            PagedAttentionConfig::new(None, MemoryGoal::KvBytes(1024 * 1024), PagedCacheType::Auto)
                 .unwrap()
                 .with_serving_capacity(64)
                 .unwrap()
                 .with_recurrent_checkpoint_lanes(1)
                 .unwrap();
 
-        reserve_recurrent_serving_capacity(&cache, config, true, true, &Device::Cpu, 1).unwrap();
+        reserve_recurrent_serving_capacity(&cache, &config, true, true, &Device::Cpu, 1).unwrap();
 
         let cache = cache.hybrid();
         assert_eq!(cache.recurrent_capacity(), 65);
@@ -3387,14 +3410,14 @@ mod tests {
         .unwrap();
         let cache = EitherCache::Hybrid(Arc::new(Mutex::new(hybrid)));
         let config =
-            PagedAttentionConfig::new(None, MemoryGpuConfig::MbAmount(1), PagedCacheType::Auto)
+            PagedAttentionConfig::new(None, MemoryGoal::KvBytes(1024 * 1024), PagedCacheType::Auto)
                 .unwrap()
                 .with_base_device_memory_reservation(100)
                 .unwrap()
                 .with_recurrent_prefix_capacity(2);
 
         let reservations =
-            paged_attention_memory_reservations(&cache, config, &Device::Cpu).unwrap();
+            paged_attention_memory_reservations(&cache, &config, &Device::Cpu).unwrap();
 
         assert_eq!(reservations.primary_device_bytes, 676);
         assert_eq!(reservations.secondary_device_bytes, 0);

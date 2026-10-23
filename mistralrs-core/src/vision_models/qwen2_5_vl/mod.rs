@@ -37,7 +37,7 @@ mod inputs_processor;
 mod text;
 mod vision;
 
-pub(crate) use config::Config;
+pub(crate) use config::{AttentionType, Config};
 pub(crate) use inputs_processor::Qwen2_5VLProcessor;
 
 pub struct Qwen2_5VLModel {

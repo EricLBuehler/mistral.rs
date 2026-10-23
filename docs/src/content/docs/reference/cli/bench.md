@@ -46,13 +46,10 @@ mistralrs bench [OPTIONS] [COMMAND]
 | `-n, --device-layers <DEVICE_LAYERS>` |  | Device layer mapping (format: ORD:NUM;... e.g., "0:10;1:20") Omit for automatic device mapping |
 | `--topology <TOPOLOGY>` |  | Topology YAML file for device mapping |
 | `--hf-cache <HF_CACHE>` |  | Custom Hugging Face cache directory |
-| `--max-seq-len <MAX_SEQ_LEN>` | `4096` | Max sequence length for automatic device mapping |
-| `--max-batch-size <MAX_BATCH_SIZE>` | `1` | Max batch size for automatic device mapping |
-| `--paged-attn <MODE>` | `auto` | PagedAttention mode - auto: enabled on CUDA, disabled on Metal/CPU (default) - on: force enable (fails if unsupported) - off: force disable. Possible values: `auto`, `on`, `off`. |
-| `--pa-context-len <CONTEXT_LEN>` |  | Allocate KV cache for this context length. If not specified, defaults to using 90% of available VRAM |
-| `--pa-memory-mb <MEMORY_MB>` |  | GPU memory to allocate in MBs (alternative to context-len) |
-| `--pa-memory-fraction <MEMORY_FRACTION>` |  | GPU memory utilization fraction 0.0-1.0 (alternative to context-len/memory-mb) |
-| `--pa-block-size <BLOCK_SIZE>` |  | Tokens per block (default: 32 on CUDA) |
+| `--paged-attn <MODE>` | `auto` | PagedAttention mode - auto: enabled on CUDA and Metal, disabled on CPU (default) - on: force enable (fails if unsupported) - off: force disable. Possible values: `auto`, `on`, `off`. |
+| `--gpu-memory-utilization <GPU_MEMORY_UTILIZATION>` |  | Fraction of physical GPU memory available to model weights, workspace, and KV cache |
+| `--kv-cache <KV_CACHE>` |  | Explicit KV cache capacity, such as 4GiB or 65536tokens |
+| `--pa-block-size <BLOCK_SIZE>` |  | Tokens per block (default: 32 on CUDA and Metal) |
 | `--pa-cache-type <CACHE_TYPE>` | `auto` | KV cache quantization type |
 | `--encoder-cache-memory-mb <ENCODER_CACHE_MEMORY_MB>` |  | Maximum logical tensor memory retained by the multimodal encoder cache, in MiB |
 | `--max-edge <MAX_EDGE>` |  | Maximum edge length for image resizing (aspect ratio preserved) |
@@ -63,7 +60,7 @@ mistralrs bench [OPTIONS] [COMMAND]
 | `--matformer-slice-name <MATFORMER_SLICE_NAME>` |  | MatFormer slice to load (must match a slice name in the config file) |
 | `--mtp` | `false` | Enable MTP speculative decoding with the head built into the model checkpoint |
 | `--mtp-model <MTP_MODEL>` |  | MTP assistant model id or path |
-| `--mtp-n-predict <MTP_N_PREDICT>` |  | Number of MTP draft tokens to propose per target step |
+| `--mtp-n-predict <MTP_N_PREDICT>` |  | Fixed MTP draft tokens per step; omit to adapt the depth automatically |
 | `--mtp-draft-sampling <MTP_DRAFT_SAMPLING>` | `auto` | MTP draft sampling policy. Auto uses probabilistic DFlash2 drafting when supported. Possible values: `auto`, `greedy`, `probabilistic`. |
 | `--adapter <ADAPTER>` |  | LoRA adapter alias to benchmark. Omit to benchmark the base model |
 | `--prompt-len <PROMPT_LEN>` | `512` | Input lengths used to measure time to first token. Zero skips TTFT. Accepts comma-separated values for sweeps |
@@ -113,13 +110,10 @@ mistralrs bench auto [OPTIONS] --model-id <MODEL_ID>
 | `-n, --device-layers <DEVICE_LAYERS>` |  | Device layer mapping (format: ORD:NUM;... e.g., "0:10;1:20") Omit for automatic device mapping |
 | `--topology <TOPOLOGY>` |  | Topology YAML file for device mapping |
 | `--hf-cache <HF_CACHE>` |  | Custom Hugging Face cache directory |
-| `--max-seq-len <MAX_SEQ_LEN>` | `4096` | Max sequence length for automatic device mapping |
-| `--max-batch-size <MAX_BATCH_SIZE>` | `1` | Max batch size for automatic device mapping |
-| `--paged-attn <MODE>` | `auto` | PagedAttention mode - auto: enabled on CUDA, disabled on Metal/CPU (default) - on: force enable (fails if unsupported) - off: force disable. Possible values: `auto`, `on`, `off`. |
-| `--pa-context-len <CONTEXT_LEN>` |  | Allocate KV cache for this context length. If not specified, defaults to using 90% of available VRAM |
-| `--pa-memory-mb <MEMORY_MB>` |  | GPU memory to allocate in MBs (alternative to context-len) |
-| `--pa-memory-fraction <MEMORY_FRACTION>` |  | GPU memory utilization fraction 0.0-1.0 (alternative to context-len/memory-mb) |
-| `--pa-block-size <BLOCK_SIZE>` |  | Tokens per block (default: 32 on CUDA) |
+| `--paged-attn <MODE>` | `auto` | PagedAttention mode - auto: enabled on CUDA and Metal, disabled on CPU (default) - on: force enable (fails if unsupported) - off: force disable. Possible values: `auto`, `on`, `off`. |
+| `--gpu-memory-utilization <GPU_MEMORY_UTILIZATION>` |  | Fraction of physical GPU memory available to model weights, workspace, and KV cache |
+| `--kv-cache <KV_CACHE>` |  | Explicit KV cache capacity, such as 4GiB or 65536tokens |
+| `--pa-block-size <BLOCK_SIZE>` |  | Tokens per block (default: 32 on CUDA and Metal) |
 | `--pa-cache-type <CACHE_TYPE>` | `auto` | KV cache quantization type |
 | `--encoder-cache-memory-mb <ENCODER_CACHE_MEMORY_MB>` |  | Maximum logical tensor memory retained by the multimodal encoder cache, in MiB |
 | `--max-edge <MAX_EDGE>` |  | Maximum edge length for image resizing (aspect ratio preserved) |
@@ -167,13 +161,10 @@ mistralrs bench text [OPTIONS] --model-id <MODEL_ID>
 | `-n, --device-layers <DEVICE_LAYERS>` |  | Device layer mapping (format: ORD:NUM;... e.g., "0:10;1:20") Omit for automatic device mapping |
 | `--topology <TOPOLOGY>` |  | Topology YAML file for device mapping |
 | `--hf-cache <HF_CACHE>` |  | Custom Hugging Face cache directory |
-| `--max-seq-len <MAX_SEQ_LEN>` | `4096` | Max sequence length for automatic device mapping |
-| `--max-batch-size <MAX_BATCH_SIZE>` | `1` | Max batch size for automatic device mapping |
-| `--paged-attn <MODE>` | `auto` | PagedAttention mode - auto: enabled on CUDA, disabled on Metal/CPU (default) - on: force enable (fails if unsupported) - off: force disable. Possible values: `auto`, `on`, `off`. |
-| `--pa-context-len <CONTEXT_LEN>` |  | Allocate KV cache for this context length. If not specified, defaults to using 90% of available VRAM |
-| `--pa-memory-mb <MEMORY_MB>` |  | GPU memory to allocate in MBs (alternative to context-len) |
-| `--pa-memory-fraction <MEMORY_FRACTION>` |  | GPU memory utilization fraction 0.0-1.0 (alternative to context-len/memory-mb) |
-| `--pa-block-size <BLOCK_SIZE>` |  | Tokens per block (default: 32 on CUDA) |
+| `--paged-attn <MODE>` | `auto` | PagedAttention mode - auto: enabled on CUDA and Metal, disabled on CPU (default) - on: force enable (fails if unsupported) - off: force disable. Possible values: `auto`, `on`, `off`. |
+| `--gpu-memory-utilization <GPU_MEMORY_UTILIZATION>` |  | Fraction of physical GPU memory available to model weights, workspace, and KV cache |
+| `--kv-cache <KV_CACHE>` |  | Explicit KV cache capacity, such as 4GiB or 65536tokens |
+| `--pa-block-size <BLOCK_SIZE>` |  | Tokens per block (default: 32 on CUDA and Metal) |
 | `--pa-cache-type <CACHE_TYPE>` | `auto` | KV cache quantization type |
 
 ## mistralrs bench multimodal
@@ -212,13 +203,10 @@ mistralrs bench multimodal [OPTIONS] --model-id <MODEL_ID>
 | `-n, --device-layers <DEVICE_LAYERS>` |  | Device layer mapping (format: ORD:NUM;... e.g., "0:10;1:20") Omit for automatic device mapping |
 | `--topology <TOPOLOGY>` |  | Topology YAML file for device mapping |
 | `--hf-cache <HF_CACHE>` |  | Custom Hugging Face cache directory |
-| `--max-seq-len <MAX_SEQ_LEN>` | `4096` | Max sequence length for automatic device mapping |
-| `--max-batch-size <MAX_BATCH_SIZE>` | `1` | Max batch size for automatic device mapping |
-| `--paged-attn <MODE>` | `auto` | PagedAttention mode - auto: enabled on CUDA, disabled on Metal/CPU (default) - on: force enable (fails if unsupported) - off: force disable. Possible values: `auto`, `on`, `off`. |
-| `--pa-context-len <CONTEXT_LEN>` |  | Allocate KV cache for this context length. If not specified, defaults to using 90% of available VRAM |
-| `--pa-memory-mb <MEMORY_MB>` |  | GPU memory to allocate in MBs (alternative to context-len) |
-| `--pa-memory-fraction <MEMORY_FRACTION>` |  | GPU memory utilization fraction 0.0-1.0 (alternative to context-len/memory-mb) |
-| `--pa-block-size <BLOCK_SIZE>` |  | Tokens per block (default: 32 on CUDA) |
+| `--paged-attn <MODE>` | `auto` | PagedAttention mode - auto: enabled on CUDA and Metal, disabled on CPU (default) - on: force enable (fails if unsupported) - off: force disable. Possible values: `auto`, `on`, `off`. |
+| `--gpu-memory-utilization <GPU_MEMORY_UTILIZATION>` |  | Fraction of physical GPU memory available to model weights, workspace, and KV cache |
+| `--kv-cache <KV_CACHE>` |  | Explicit KV cache capacity, such as 4GiB or 65536tokens |
+| `--pa-block-size <BLOCK_SIZE>` |  | Tokens per block (default: 32 on CUDA and Metal) |
 | `--pa-cache-type <CACHE_TYPE>` | `auto` | KV cache quantization type |
 | `--encoder-cache-memory-mb <ENCODER_CACHE_MEMORY_MB>` |  | Maximum logical tensor memory retained by the multimodal encoder cache, in MiB |
 | `--max-edge <MAX_EDGE>` |  | Maximum edge length for image resizing (aspect ratio preserved) |
@@ -245,8 +233,6 @@ mistralrs bench diffusion [OPTIONS] --model-id <MODEL_ID>
 | `-n, --device-layers <DEVICE_LAYERS>` |  | Device layer mapping (format: ORD:NUM;... e.g., "0:10;1:20") Omit for automatic device mapping |
 | `--topology <TOPOLOGY>` |  | Topology YAML file for device mapping |
 | `--hf-cache <HF_CACHE>` |  | Custom Hugging Face cache directory |
-| `--max-seq-len <MAX_SEQ_LEN>` | `4096` | Max sequence length for automatic device mapping |
-| `--max-batch-size <MAX_BATCH_SIZE>` | `1` | Max batch size for automatic device mapping |
 
 ## mistralrs bench speech
 
@@ -268,8 +254,6 @@ mistralrs bench speech [OPTIONS] --model-id <MODEL_ID>
 | `-n, --device-layers <DEVICE_LAYERS>` |  | Device layer mapping (format: ORD:NUM;... e.g., "0:10;1:20") Omit for automatic device mapping |
 | `--topology <TOPOLOGY>` |  | Topology YAML file for device mapping |
 | `--hf-cache <HF_CACHE>` |  | Custom Hugging Face cache directory |
-| `--max-seq-len <MAX_SEQ_LEN>` | `4096` | Max sequence length for automatic device mapping |
-| `--max-batch-size <MAX_BATCH_SIZE>` | `1` | Max batch size for automatic device mapping |
 
 ## mistralrs bench embedding
 
@@ -302,12 +286,8 @@ mistralrs bench embedding [OPTIONS] --model-id <MODEL_ID>
 | `-n, --device-layers <DEVICE_LAYERS>` |  | Device layer mapping (format: ORD:NUM;... e.g., "0:10;1:20") Omit for automatic device mapping |
 | `--topology <TOPOLOGY>` |  | Topology YAML file for device mapping |
 | `--hf-cache <HF_CACHE>` |  | Custom Hugging Face cache directory |
-| `--max-seq-len <MAX_SEQ_LEN>` | `4096` | Max sequence length for automatic device mapping |
-| `--max-batch-size <MAX_BATCH_SIZE>` | `1` | Max batch size for automatic device mapping |
-| `--paged-attn <MODE>` | `auto` | PagedAttention mode - auto: enabled on CUDA, disabled on Metal/CPU (default) - on: force enable (fails if unsupported) - off: force disable. Possible values: `auto`, `on`, `off`. |
-| `--pa-context-len <CONTEXT_LEN>` |  | Allocate KV cache for this context length. If not specified, defaults to using 90% of available VRAM |
-| `--pa-memory-mb <MEMORY_MB>` |  | GPU memory to allocate in MBs (alternative to context-len) |
-| `--pa-memory-fraction <MEMORY_FRACTION>` |  | GPU memory utilization fraction 0.0-1.0 (alternative to context-len/memory-mb) |
-| `--pa-block-size <BLOCK_SIZE>` |  | Tokens per block (default: 32 on CUDA) |
+| `--paged-attn <MODE>` | `auto` | PagedAttention mode - auto: enabled on CUDA and Metal, disabled on CPU (default) - on: force enable (fails if unsupported) - off: force disable. Possible values: `auto`, `on`, `off`. |
+| `--gpu-memory-utilization <GPU_MEMORY_UTILIZATION>` |  | Fraction of physical GPU memory available to model weights, workspace, and KV cache |
+| `--kv-cache <KV_CACHE>` |  | Explicit KV cache capacity, such as 4GiB or 65536tokens |
+| `--pa-block-size <BLOCK_SIZE>` |  | Tokens per block (default: 32 on CUDA and Metal) |
 | `--pa-cache-type <CACHE_TYPE>` | `auto` | KV cache quantization type |
-

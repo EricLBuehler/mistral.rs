@@ -9,7 +9,7 @@ use super::{
     GeneralMetadata, IsqPipelineMixin, Loader, MetadataMixin, MiniCpmOLoader, ModelCategory,
     ModelKind, ModelPaths, MultimodalModel, MultimodalModelLoader, MultimodalPromptPrefixer,
     Phi4MMLoader, PreProcessingMixin, Processor, Qwen2VLLoader, Qwen3VLLoader, Qwen3VLMoELoader,
-    Qwen3_5Loader, Qwen3_5MoeLoader, TokenSource, VLlama4Loader, VLlamaLoader,
+    Qwen3_5Loader, Qwen3_5MoeLoader, Qwen4ExpLoader, TokenSource, VLlama4Loader, VLlamaLoader,
 };
 use super::{
     DiffusionGemmaLoader, Gemma3nLoader, Gemma4Loader, Idefics2Loader, Idefics3Loader, LLaVALoader,
@@ -149,7 +149,7 @@ mod speculative_graph_tensor_metadata_tests {
         .is_err());
     }
 }
-use crate::paged_attention::{calculate_cache_config, AttentionImplementation, CacheEngine};
+use crate::paged_attention::{allocate_cache, AttentionImplementation, CacheConfigRequest};
 use crate::pipeline::chat_template::{
     calculate_eos_tokens, BeginEndUnkPadTok, ChatTemplateValue, GenerationConfig,
 };
@@ -158,10 +158,11 @@ use crate::pipeline::cuda_graph::{
     capture_cuda_decode_graph, cuda_decode_graph_batch_kind_supported,
     cuda_decode_graph_supported_for_model, cuda_decode_graphs_enabled, cuda_graph_batch_bucket,
     cuda_graph_precapture_batches, cuda_graph_precapture_max_batch,
-    cuda_graph_startup_capture_allowed, hybrid_graph_slots, install_hybrid_graph_state_indices,
-    record_cuda_graph_dispatch, target_cuda_graph_cache_capacity, CudaDecodeGraphCaptureCtx,
-    CudaDecodeGraphKey, CudaDecodeGraphLaunch, CudaDecodeGraphReplay, CudaDecodeGraphReplayInput,
-    CudaDecodeGraphState, CudaGraphComponent, CudaGraphDecodeStep, CudaGraphDecodeStepInputs,
+    cuda_graph_startup_capture_allowed, finish_cuda_capture_memory, hybrid_graph_slots,
+    install_hybrid_graph_state_indices, prepare_cuda_capture_memory, record_cuda_graph_dispatch,
+    target_cuda_graph_cache_capacity, CudaDecodeGraphCaptureCtx, CudaDecodeGraphKey,
+    CudaDecodeGraphLaunch, CudaDecodeGraphReplay, CudaDecodeGraphReplayInput, CudaDecodeGraphState,
+    CudaGraphCaptureMemory, CudaGraphComponent, CudaGraphDecodeStep, CudaGraphDecodeStepInputs,
     CudaGraphDispatchMode, CudaGraphDispatchReason, CudaGraphEvent, CudaGraphEventGuard,
     CudaGraphPrecaptureInputs,
 };
@@ -228,6 +229,7 @@ pub struct MultimodalPipeline {
     cuda_decode_graph: StdMutex<CudaDecodeGraphState>,
     #[cfg(feature = "cuda")]
     cuda_sparse_rejection: StdMutex<Option<crate::speculative::CudaSparseRejectionWorkspace>>,
+    speculative_autotuner: StdMutex<crate::speculative::autotuner::SpeculativeAutotuner>,
     // Attention inputs of the last prompt-chunk forward, so a built-in drafter can prefill with them
     last_prompt_attention: StdMutex<Option<(PagedAttentionInputMetadata, FlashParams)>>,
 
@@ -390,6 +392,7 @@ impl MultimodalLoaderBuilder {
             Some(MultimodalLoaderType::Qwen3VLMoE) => Box::new(Qwen3VLMoELoader),
             Some(MultimodalLoaderType::Qwen3_5) => Box::new(Qwen3_5Loader),
             Some(MultimodalLoaderType::Qwen3_5Moe) => Box::new(Qwen3_5MoeLoader),
+            Some(MultimodalLoaderType::Qwen4Exp) => Box::new(Qwen4ExpLoader),
             Some(MultimodalLoaderType::Voxtral) => Box::new(VoxtralLoader),
             Some(MultimodalLoaderType::Gemma4) => Box::new(Gemma4Loader),
             Some(MultimodalLoaderType::MuseGlimmer) => Box::new(MuseGlimmerLoader),
@@ -568,7 +571,7 @@ impl Loader for MultimodalLoader {
             .runtime_config(&config, self.config.max_model_len)?;
 
         if !self.inner.supports_paged_attention(&config) {
-            paged_attn_config = None;
+            super::disable_unsupported_paged_attention(&mut paged_attn_config)?;
         }
         let supports_encoder_cache = self.inner.supports_encoder_cache(&config);
         if self.encoder_cache_memory_bytes.is_some() && !supports_encoder_cache {
@@ -581,7 +584,9 @@ impl Loader for MultimodalLoader {
                 .filter(|_| supports_encoder_cache),
             paged_attn_config.as_mut(),
         ) {
-            *cache_config = (*cache_config).with_base_device_memory_reservation(bytes)?;
+            *cache_config = cache_config
+                .clone()
+                .with_base_device_memory_reservation(bytes)?;
         }
 
         debug!("Prompt chunk size is {ATTENTION_CHUNK_SIZE}.");
@@ -684,6 +689,11 @@ impl Loader for MultimodalLoader {
         } else {
             device_map::get_all_similar_devices(&device)?
         };
+        if !write_uqff {
+            if let Some(paged) = paged_attn_config.as_ref() {
+                paged.initialize_memory_budget(&available_devices)?;
+            }
+        }
         #[cfg(feature = "cuda")]
         for device in &available_devices {
             if let Device::Cuda(dev) = device {
@@ -731,17 +741,20 @@ impl Loader for MultimodalLoader {
             None
         };
 
+        let activation_params = match &mapper {
+            DeviceMapSetting::Auto(params) => self.inner.auto_device_map_params(&config, params)?,
+            _ => super::AutoDeviceMapParams::default_multimodal(),
+        };
+
         // If auto, convert to Map if not using nccl
-        let mut max_kv_tokens: Option<usize> = None;
         if write_uqff {
             mapper = DeviceMapSetting::dummy();
         } else if use_distributed {
             mapper = DeviceMapSetting::DummyNccl {
                 nm_device: available_devices[0].clone(),
             };
-        } else if let DeviceMapSetting::Auto(mut params) = mapper.clone() {
-            params = self.inner.auto_device_map_params(&config, &params)?;
-            max_kv_tokens = Some(params.max_seq_len() * params.max_batch_size());
+        } else if matches!(mapper, DeviceMapSetting::Auto(_)) {
+            let params = activation_params.clone();
 
             // Initial dtype
             let dtype = dtype.try_into_dtype(&available_devices.iter().collect::<Vec<_>>())?;
@@ -759,42 +772,62 @@ impl Loader for MultimodalLoader {
                         let source = weight_source
                             .as_ref()
                             .expect("selected weight-source sizing requires a weight source");
-                        let quantization =
-                            if matches!(sizing, super::isq_flow::AutoDeviceMapSizing::Uqff) {
-                                AutoDeviceMapQuantization::weight_source(source.as_ref())
-                            } else {
-                                AutoDeviceMapQuantization::weight_source_with_topology(
-                                    source.as_ref(),
-                                    self.config.topology.as_ref(),
-                                )
-                            };
-                        let weight_pack_factor = quantization
-                            .conservative_pack_factor(dtype, source.pack_factor(dtype)?);
-                        let non_mapped_pack_factor =
-                            if matches!(sizing, super::isq_flow::AutoDeviceMapSizing::Uqff) {
-                                weight_pack_factor
-                            } else {
-                                1
-                            };
-                        let layer_sizes_in_bytes = self.inner.layer_sizes_in_bytes(
-                            &config,
-                            dtype,
-                            weight_pack_factor,
-                            matformer_slicing_config.as_ref(),
-                        )?;
-                        let non_mapped_size_in_bytes = self.inner.non_mapped_size_in_bytes(
-                            &config,
-                            dtype,
-                            non_mapped_pack_factor,
-                            Some(&quantization),
-                            matformer_slicing_config.as_ref(),
-                        )?;
-                        let layer_sizes_sum = layer_sizes_in_bytes.iter().sum::<usize>();
-                        (
-                            layer_sizes_in_bytes,
-                            non_mapped_size_in_bytes,
-                            layer_sizes_sum + non_mapped_size_in_bytes,
-                        )
+                        let exact = if self.config.topology.is_none()
+                            && matformer_slicing_config.is_none()
+                        {
+                            source.resident_layer_bytes(dtype)?
+                        } else {
+                            None
+                        };
+                        if let Some(exact) = exact {
+                            let mut layer_sizes = (0..self.inner.num_layers(&config)?)
+                                .map(|layer| exact.layers.get(&layer).copied().unwrap_or(0))
+                                .collect::<Vec<_>>();
+                            for (layer, bytes) in self.inner.unbound_layer_bytes(&config)? {
+                                if let Some(size) = layer_sizes.get_mut(layer) {
+                                    *size += bytes;
+                                }
+                            }
+                            let total = layer_sizes.iter().sum::<usize>() + exact.outside;
+                            (layer_sizes, exact.outside, total)
+                        } else {
+                            let quantization =
+                                if matches!(sizing, super::isq_flow::AutoDeviceMapSizing::Uqff) {
+                                    AutoDeviceMapQuantization::weight_source(source.as_ref())
+                                } else {
+                                    AutoDeviceMapQuantization::weight_source_with_topology(
+                                        source.as_ref(),
+                                        self.config.topology.as_ref(),
+                                    )
+                                };
+                            let weight_pack_factor = quantization
+                                .conservative_pack_factor(dtype, source.pack_factor(dtype)?);
+                            let non_mapped_pack_factor =
+                                if matches!(sizing, super::isq_flow::AutoDeviceMapSizing::Uqff) {
+                                    weight_pack_factor
+                                } else {
+                                    1
+                                };
+                            let layer_sizes_in_bytes = self.inner.layer_sizes_in_bytes(
+                                &config,
+                                dtype,
+                                weight_pack_factor,
+                                matformer_slicing_config.as_ref(),
+                            )?;
+                            let non_mapped_size_in_bytes = self.inner.non_mapped_size_in_bytes(
+                                &config,
+                                dtype,
+                                non_mapped_pack_factor,
+                                Some(&quantization),
+                                matformer_slicing_config.as_ref(),
+                            )?;
+                            let layer_sizes_sum = layer_sizes_in_bytes.iter().sum::<usize>();
+                            (
+                                layer_sizes_in_bytes,
+                                non_mapped_size_in_bytes,
+                                layer_sizes_sum + non_mapped_size_in_bytes,
+                            )
+                        }
                     }
                     super::isq_flow::AutoDeviceMapSizing::Isq(isq) => {
                         let moqe =
@@ -864,6 +897,7 @@ impl Loader for MultimodalLoader {
                         let inventory = if self.config.topology.is_none()
                             && self.lora_adapters.is_none()
                             && matformer_slicing_config.is_none()
+                            && self.inner.supports_checkpoint_weight_inventory(&config)?
                         {
                             let num_layers = self.inner.num_layers(&config)?;
                             crate::pipeline::loaders::checkpoint_device_map_sizes(
@@ -974,12 +1008,23 @@ impl Loader for MultimodalLoader {
             write_uqff,
         )?;
 
+        if let Some(paged) = paged_attn_config.as_mut() {
+            super::loaders::reserve_model_activation_memory(
+                self.inner.as_ref(),
+                &runtime_config,
+                paged,
+                dtype,
+                &device,
+                &activation_params,
+            )?;
+        }
+
         // TODO: PagedAttention is not supported with CPU for now.
         // This check is not really necessary because `get_device_layers` should prevent it.
         let mapping_uses_cpu = mapper.get_unique_devices().iter().any(Device::is_cpu);
         if mapping_uses_cpu && paged_attn_config.is_some() {
             warn!("Device mapping contains a mix of GPU and CPU. There is no CPU support for PagedAttention, disabling PagedAttention.");
-            paged_attn_config = None;
+            super::disable_unsupported_paged_attention(&mut paged_attn_config)?;
         }
 
         trace!("Model config: {:?}", self.inner.get_config_repr(&config)?);
@@ -1411,10 +1456,27 @@ impl Loader for MultimodalLoader {
                 module.ct.resolve()?;
             }
         }
-        let model_metadata = model.model_config();
+        let model_metadata = crate::paged_attention::with_attention_features(
+            model.model_config(),
+            self.inner
+                .activation_model_config(&runtime_config)?
+                .attention_features,
+        );
         // Layers past the mapped stack (e.g. an MTP head) live on the non-mapped device.
         while layer_devices.len() < model_metadata.num_layers() {
             layer_devices.push(Some(device.clone()));
+        }
+        #[cfg(feature = "metal")]
+        if self.config.write_uqff.is_none() {
+            super::metal_warmup::prepare_model(super::metal_warmup::MetalModelWarmup {
+                device: &device,
+                mapper: pipeline_mapper.as_ref(),
+                model: model_metadata.as_ref(),
+                paged: paged_attn_config.as_ref(),
+                dtype,
+                tracked_modules: &tracker.get(),
+                packed_prefill: model.supports_packed_prefill(),
+            })?;
         }
         // Parallel weight loading leaves stream-ordered frees pending across loader streams;
         // drain the whole context so the KV sizing and allocation see the real free VRAM.
@@ -1424,6 +1486,7 @@ impl Loader for MultimodalLoader {
         let recurrent_checkpoints_supported = model.supports_recurrent_speculative_checkpoints();
         let recurrent_transitions_supported = model.supports_recurrent_speculative_transitions();
         let recurrent_pool_grew = paged_attn_config
+            .as_ref()
             .map(|config| {
                 let kv_bytes_per_token =
                     super::paged_kv_bytes_per_token(config, dtype, model_metadata.as_ref())?;
@@ -1454,31 +1517,46 @@ impl Loader for MultimodalLoader {
         #[cfg(not(feature = "cuda"))]
         let _ = recurrent_pool_grew;
 
-        let (cache_config, cache_engine) = if let Some(paged_attn_config) = paged_attn_config {
-            let cache_config = calculate_cache_config(
-                paged_attn_config.mem_gpu,
-                paged_attention_memory_reservations(model.cache(), paged_attn_config, &device)?,
-                paged_attn_config.block_size,
-                dtype,
-                paged_attn_config.cache_type,
-                model_metadata.as_ref(),
-                &device,
-                &layer_devices,
-                silent,
-                None,
-                max_kv_tokens,
-            )?;
-            let cache_engine = CacheEngine::new(
-                model_metadata.as_ref(),
-                &cache_config,
-                dtype,
-                &device,
-                layer_devices,
-            )?;
-            (Some(cache_config), Some(cache_engine))
-        } else {
-            (None, None)
-        };
+        #[cfg(feature = "cuda")]
+        if self.config.write_uqff.is_none() {
+            super::prepare_cuda_runtime(&device, pipeline_mapper.as_ref())?;
+        }
+
+        let (cache_config, cache_engine) =
+            if let Some(paged_attn_config) = paged_attn_config.as_mut() {
+                let paged_snapshot = paged_attn_config.clone();
+                let capacity_activation_estimate = |usable_tokens| {
+                    super::loaders::estimate_model_activation_memory(
+                        self.inner.as_ref(),
+                        &runtime_config,
+                        super::loaders::ActivationMemoryContext {
+                            params: &activation_params,
+                            limits: paged_snapshot.execution_limits,
+                            dtype,
+                            device: &device,
+                            paged: &paged_snapshot,
+                            cache_capacity_tokens: Some(usable_tokens),
+                        },
+                    )
+                };
+                let memory_reservations =
+                    paged_attention_memory_reservations(model.cache(), paged_attn_config, &device)?;
+                let (cache_config, cache_engine) = allocate_cache(
+                    paged_attn_config,
+                    CacheConfigRequest {
+                        memory_reservations,
+                        dtype,
+                        model: model_metadata.as_ref(),
+                        device: &device,
+                        layer_devices: &layer_devices,
+                        capacity_activation_estimate: &capacity_activation_estimate,
+                        silent,
+                    },
+                )?;
+                (Some(cache_config), Some(cache_engine))
+            } else {
+                (None, None)
+            };
 
         let max_seq_len = model.max_seq_len();
         let num_hidden_layers = match model.cache() {
@@ -1525,6 +1603,14 @@ impl Loader for MultimodalLoader {
                 sliding_window,
                 cache_config,
                 cache_engine,
+                memory_plan: paged_attn_config
+                    .as_ref()
+                    .map(|config| config.runtime_memory_plan()),
+                #[cfg(feature = "cuda")]
+                runtime_memory_reservation: paged_attn_config.as_ref().and_then(|config| {
+                    config
+                        .runtime_memory_reservation(&device, &pipeline_mapper.get_unique_devices())
+                }),
                 model_metadata: Some(model_metadata),
                 modalities,
                 loaded_for_uqff_write: self.config.write_uqff.is_some(),
@@ -1537,6 +1623,7 @@ impl Loader for MultimodalLoader {
             cuda_decode_graph: StdMutex::new(CudaDecodeGraphState::default()),
             #[cfg(feature = "cuda")]
             cuda_sparse_rejection: StdMutex::new(None),
+            speculative_autotuner: StdMutex::new(Default::default()),
             last_prompt_attention: StdMutex::new(None),
             generation_defaults,
             tracked_modules,
@@ -1727,6 +1814,9 @@ impl MetadataMixin for MultimodalPipeline {
     fn precapture_cuda_decode_graphs(&self, ctx: &DecodeGraphPrecaptureCtx) {
         #[cfg(feature = "cuda")]
         {
+            if !self.metadata.cuda_capture_memory_ready() {
+                return;
+            }
             if let Err(err) = self.precapture_cuda_decode_graphs_impl(ctx) {
                 self.cuda_decode_graph
                     .lock()
@@ -1762,6 +1852,16 @@ impl crate::speculative::driver::SpeculativePipelineExt for MultimodalPipeline {
         batch_size: usize,
     ) -> Option<crate::speculative::SpeculativeBatchPlan> {
         self.model.speculative_plan(batch_size)
+    }
+
+    fn speculative_depth_candidates(&self) -> Vec<usize> {
+        self.model.speculative_depth_candidates()
+    }
+
+    fn speculative_autotuner(
+        &self,
+    ) -> &StdMutex<crate::speculative::autotuner::SpeculativeAutotuner> {
+        &self.speculative_autotuner
     }
 
     fn speculative_observe(&self, observation: crate::speculative::SpeculativeBatchObservation) {
@@ -1872,6 +1972,7 @@ impl MultimodalPipeline {
     fn uses_nonmutating_recurrent_transition_log(&self, batch_kind: RecurrentBatchKind) -> bool {
         if batch_kind != RecurrentBatchKind::SpeculativeDecode
             || !self.model.supports_recurrent_speculative_transitions()
+            || self.model.speculative_verify_mutates_recurrent_state()
             || !self.model.cache().is_hybrid()
         {
             return false;
@@ -1926,6 +2027,9 @@ impl MultimodalPipeline {
         &self,
         input: CudaDecodeGraphForwardInput<'_>,
     ) -> candle_core::Result<Option<CudaDecodeGraphReplay>> {
+        if !self.metadata.cuda_capture_memory_ready() {
+            return Ok(None);
+        }
         let CudaDecodeGraphForwardInput {
             input_ids,
             seqlen_offsets,
@@ -2013,7 +2117,16 @@ impl MultimodalPipeline {
             );
             return Ok(None);
         }
-        let Some(bucket) = cuda_graph_batch_bucket(CudaGraphComponent::Target, q_len, batch) else {
+        let Some(bucket) = cuda_graph_batch_bucket(CudaGraphComponent::Target, q_len, batch)
+            .filter(|bucket| {
+                q_len == 1
+                    || crate::speculative::SpeculativeGraphPlan::allows(
+                        &self.model.speculative_graph_plans(),
+                        q_len,
+                        *bucket,
+                    )
+            })
+        else {
             record_cuda_graph_dispatch(
                 CudaGraphComponent::Target,
                 CudaGraphDispatchMode::Eager,
@@ -2090,8 +2203,16 @@ impl MultimodalPipeline {
             return Ok(Some(replay));
         }
 
+        if !crate::pipeline::cuda_graph::cuda_graph_capture_headroom(step.input_ids.device())? {
+            record_cuda_graph_dispatch(
+                CudaGraphComponent::Target,
+                CudaGraphDispatchMode::Eager,
+                CudaGraphDispatchReason::MemoryPressure,
+            );
+            return Ok(None);
+        }
         let replay_key = key.clone();
-        let _ = self.capture_cuda_decode_graph_step(
+        let captured = self.capture_cuda_decode_graph_step(
             &mut state,
             key,
             &step,
@@ -2104,6 +2225,9 @@ impl MultimodalPipeline {
             },
             true,
         )?;
+        if captured.is_none() {
+            return Ok(None);
+        }
         super::synchronize_cuda_contexts(step.input_ids.device(), self.mapper.as_ref()).map_err(
             |err| {
                 candle_core::Error::msg(format!(
@@ -2223,9 +2347,9 @@ impl MultimodalPipeline {
             startup_shapes,
             runtime_batch_shapes,
         ));
+        let mut plans = Vec::with_capacity(widths.len());
         for (q_len, max_bucket) in widths {
             let inputs = CudaGraphPrecaptureInputs::new(ctx, q_len, &device, self.device_mapper())?;
-            let live = hybrid_slots.map(|pad_slot| vec![pad_slot]);
             let recurrent_batch_kind = if q_len == 1 {
                 RecurrentBatchKind::Decode
             } else if speculative {
@@ -2233,34 +2357,56 @@ impl MultimodalPipeline {
             } else {
                 RecurrentBatchKind::Prefill
             };
-            let graph_pad_slot = hybrid_slots.map(|_| GDN_PAD_SLOT);
             let width_max_bucket = cuda_graph_precapture_max_batch(
                 CudaGraphComponent::Target,
                 q_len,
                 ctx.max_batch_size,
             );
-            for bucket in cuda_graph_precapture_batches(CudaGraphComponent::Target, q_len)
+            let buckets = cuda_graph_precapture_batches(CudaGraphComponent::Target, q_len)
                 .filter(|bucket| *bucket <= max_bucket.min(width_max_bucket))
-            {
-                let Some(step) = CudaGraphDecodeStep::padded(
-                    inputs.step_inputs(live.as_deref(), graph_pad_slot),
-                    bucket,
-                )?
-                else {
-                    continue;
-                };
-                let key = CudaDecodeGraphKey::new(
-                    &step.input_ids,
-                    &step.metadata,
-                    cache_config.block_size,
-                    recurrent_batch_kind,
-                )?;
-                if state.contains(&key) {
-                    continue;
-                }
-                // The live step's slot table is whatever the pad slot is; the model only sees it
-                // through the installed graph buffers
-                self.capture_cuda_decode_graph_step(
+                .collect::<Vec<_>>();
+            plans.push((inputs, recurrent_batch_kind, buckets));
+        }
+        // Every graph pins host and device memory, so small batches of every width go first and capture
+        // stops once unified memory runs short; the rest are captured lazily under the same guard
+        let mut order = plans
+            .iter()
+            .enumerate()
+            .flat_map(|(plan_idx, (_, _, buckets))| {
+                buckets.iter().map(move |bucket| (*bucket, plan_idx))
+            })
+            .collect::<Vec<_>>();
+        order.sort_unstable();
+        let live = hybrid_slots.map(|pad_slot| vec![pad_slot]);
+        let graph_pad_slot = hybrid_slots.map(|_| GDN_PAD_SLOT);
+        let mut deferred = 0usize;
+        for (bucket, plan_idx) in order {
+            let (inputs, recurrent_batch_kind, _) = &plans[plan_idx];
+            let recurrent_batch_kind = *recurrent_batch_kind;
+            let Some(step) = CudaGraphDecodeStep::padded(
+                inputs.step_inputs(live.as_deref(), graph_pad_slot),
+                bucket,
+            )?
+            else {
+                continue;
+            };
+            let key = CudaDecodeGraphKey::new(
+                &step.input_ids,
+                &step.metadata,
+                cache_config.block_size,
+                recurrent_batch_kind,
+            )?;
+            if state.contains(&key) {
+                continue;
+            }
+            if deferred > 0 || !crate::pipeline::cuda_graph::cuda_graph_capture_headroom(&device)? {
+                deferred += 1;
+                continue;
+            }
+            // The live step's slot table is whatever the pad slot is; the model only sees it
+            // through the installed graph buffers
+            if self
+                .capture_cuda_decode_graph_step(
                     &mut state,
                     key,
                     &step,
@@ -2272,9 +2418,16 @@ impl MultimodalPipeline {
                         speculative,
                     },
                     false,
-                )?;
+                )?
+                .is_some()
+            {
                 captured += 1;
             }
+        }
+        if deferred > 0 {
+            info!(
+                "Deferred {deferred} CUDA decode graph shapes to lazy capture for memory headroom; reduce --kv-cache to precapture more."
+            );
         }
         if speculative {
             let _ = self.model.take_speculative_graph_state();
@@ -2297,7 +2450,7 @@ impl MultimodalPipeline {
         step: &CudaGraphDecodeStep,
         inputs: CudaDecodeGraphCaptureInputs<'_>,
         rollback_live_state: bool,
-    ) -> candle_core::Result<Tensor> {
+    ) -> candle_core::Result<Option<Tensor>> {
         let graph_event =
             CudaGraphEventGuard::new(CudaGraphComponent::Target, CudaGraphEvent::Capture);
         let CudaDecodeGraphCaptureInputs {
@@ -2313,6 +2466,21 @@ impl MultimodalPipeline {
         let Device::Cuda(cuda_device) = step.input_ids.device() else {
             candle_core::bail!("CUDA graph decode expected CUDA input ids");
         };
+        let execution_devices = self.execution_devices();
+        let capture_memory = CudaGraphCaptureMemory {
+            plan: self.metadata.memory_plan,
+            reservation: self.metadata.runtime_memory_reservation.as_deref(),
+            devices: &execution_devices,
+            primary: step.input_ids.device(),
+            activation_dtype: self.metadata.activation_dtype,
+            block_size,
+            step,
+            kv_cache,
+            model: self.metadata.model_metadata.as_deref(),
+        };
+        if !prepare_cuda_capture_memory(state, &capture_memory)? {
+            return Ok(None);
+        }
         let _htod_cache_guard = cuda_device.enable_cuda_graph_htod_cache();
         let metadata = step
             .metadata
@@ -2336,8 +2504,12 @@ impl MultimodalPipeline {
 
         let nonmutating_transition_capture =
             self.uses_nonmutating_recurrent_transition_log(recurrent_batch_kind);
-        let recurrent_snapshots =
-            self.snapshot_hybrid_recurrent_checkpoints(recurrent_batch_kind)?;
+        // Precapture runs before any sequence owns a slot, so there is no live state to restore
+        let recurrent_snapshots = if rollback_live_state {
+            self.snapshot_hybrid_recurrent_checkpoints(recurrent_batch_kind)?
+        } else {
+            None
+        };
         let live_state_indices = self.snapshot_hybrid_state_indices();
         let mut warm_spec_state = None;
         let mut warm_spec_metadata = None;
@@ -2380,6 +2552,9 @@ impl MultimodalPipeline {
             }
             step.input_ids.device().synchronize()?;
             let live_logits = step.narrow_rows(&warmup_logits)?;
+            if !prepare_cuda_capture_memory(state, &capture_memory)? {
+                return Ok((live_logits, None));
+            }
 
             let spec_state_usage = warm_spec_state
                 .as_deref()
@@ -2434,10 +2609,9 @@ impl MultimodalPipeline {
                     Ok(logits)
                 },
             )?;
-            Ok((
-                live_logits,
-                entry.with_spec_state(graph_spec_state.take(), spec_state_usage),
-            ))
+            let entry = entry.with_spec_state(graph_spec_state.take(), spec_state_usage);
+            let entry = finish_cuda_capture_memory(state, &capture_memory, entry)?;
+            Ok((live_logits, entry))
         })();
         self.restore_hybrid_state_indices(live_state_indices.as_ref());
         let capture_attempt = if let Some(warm) = warm_live_spec_state.as_deref() {
@@ -2463,9 +2637,21 @@ impl MultimodalPipeline {
             live_state_indices.as_ref(),
             rollback_live_state,
         )?;
-        state.insert(entry);
-        graph_event.success();
-        Ok(logits)
+        if let Some(entry) = entry {
+            state.insert(entry);
+            graph_event.success();
+            Ok(Some(logits))
+        } else {
+            drop(logits);
+            drop(metadata);
+            drop(recurrent_snapshots);
+            drop(live_state_indices);
+            drop(warm_spec_state);
+            drop(warm_live_spec_state);
+            drop(graph_spec_state);
+            super::cuda_graph::admit_cuda_eager_after_capture(state, &capture_memory)?;
+            Ok(None)
+        }
     }
 
     fn snapshot_hybrid_state_indices(&self) -> Option<HybridStateIndicesSnapshot> {

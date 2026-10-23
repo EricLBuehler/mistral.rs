@@ -11,7 +11,17 @@ For unlisted issues, file an issue on [GitHub](https://github.com/EricLBuehler/m
 
 ### `mistralrs: command not found` after install
 
-Installer-managed binaries are exposed at `~/.local/bin/mistralrs`, backed by `~/.mistralrs/mistralrs`. Open a new shell or run `source "$HOME/.mistralrs/env"`. Manual Cargo installs use `~/.cargo/bin/mistralrs` and may require `source "$HOME/.cargo/env"`.
+On macOS and Linux, installer-managed binaries are exposed at `~/.local/bin/mistralrs`, backed by `~/.mistralrs/mistralrs`. Open a new terminal or run the PATH setup command printed by the installer. For POSIX shells, use `. "$HOME/.mistralrs/env"`. Manual Cargo installs use `~/.cargo/bin/mistralrs` and may require `. "$HOME/.cargo/env"`.
+
+On Windows, the installer adds `%USERPROFILE%\.local\bin` to PATH for the current PowerShell session and future terminals. Open a new terminal if another application has an older PATH. If another copy takes precedence, use `command -v mistralrs` on macOS/Linux or `Get-Command mistralrs` in PowerShell to check which one runs.
+
+### Installer download or build fails
+
+The installer prints the failed command's complete diagnostics and the path to its saved log. Retry a failed download; it does not automatically switch to a source build. For live command output, rerun with `--verbose` on macOS/Linux or `-Verbose` in PowerShell. See [installer options](/reference/installer/#command-line-options) for the invocation syntax and [build prerequisites](/developer/from-source/#platform-prerequisites) for required development tools.
+
+### Updating on Windows
+
+Stop running `mistralrs` processes, then rerun the [PowerShell installer](/reference/installer/#guided-installation). Windows cannot replace an executable while it is running.
 
 ### Build fails with `flash-attn` feature enabled
 
@@ -28,7 +38,7 @@ The token must start with `hf_`. The validation happens in `mistralrs login` bef
 
 ### Gated repository (Gemma, LLaMA, FLUX.1-dev, etc.)
 
-Accept the license on the model's Hugging Face page, then save a token with `mistralrs login`. The token is stored at `~/.cache/huggingface/token` (or `$HF_HOME/token`).
+Accept the license on the model's Hugging Face page, create a [read-only token](https://huggingface.co/settings/tokens), and save it with `mistralrs login`. The token is stored at `~/.cache/huggingface/token` (or `$HF_HOME/token`).
 
 ### `Out of memory` on load
 

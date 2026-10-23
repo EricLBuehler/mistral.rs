@@ -153,7 +153,7 @@ and reads older ModelOpt metadata from `hf_quant_config.json`. ModelOpt uses `we
 These conventions are normalized during loading.
 
 Accelerated inference requires an NVIDIA Blackwell GPU, CUDA 13.3 or newer, a compatible `tileiras`,
-and a binary built with `cuda,cutile`. Use BF16 or F16 model dtype. With CUDA 13.3 selected in the
+and a binary built with `cuda,cutile`. Use BF16 or F16 model dtype. With CUDA 13.3 or newer selected in the
 build and runtime environment, load [NVIDIA's Qwen3-14B-NVFP4 checkpoint](https://huggingface.co/nvidia/Qwen3-14B-NVFP4):
 
 ```bash
@@ -182,7 +182,7 @@ batches use tiled matrix multiplication; W4A4 activations are quantized once and
 output tiles. Packed checkpoint tensors are made contiguous during loading. Kernel compilation is
 warmed before CUDA graph capture.
 
-On SM 12.1 with CUDA 13.3, eligible large dense W4A4 projections use CUTLASS with BF16 or F16
+On SM 12.1 with CUDA 13.3 or newer, eligible large dense W4A4 projections use CUTLASS with BF16 or F16
 outputs. Weight scales are prepared during loading, and activation scales are converted for each
 native matrix multiplication. Eligible decode batches use a weight-first tile when packed weights
 and block scales fill at least the GPU L2 cache. Selection depends on hardware and matrix

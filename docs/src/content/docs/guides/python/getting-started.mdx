@@ -50,14 +50,14 @@ CUDA wheels are GitHub release assets because PyPI cannot select by GPU. Pick a 
 | CUDA 12.9+ on GB10 / `sm121` | `+cuda129.sm121` |
 | CUDA 12.8+ | `+cuda128.sm{cc}` |
 
-Install with `--find-links` pointed at the release. Replace `0.9.2` / `v0.9.2` with the release you want:
+Install with `--find-links` pointed at the release. Replace `0.9.5` / `v0.9.5` with the release you want:
 
 ```bash
-pip install "mistralrs==0.9.2+cuda128.sm89" \
-  --find-links https://github.com/EricLBuehler/mistral.rs/releases/expanded_assets/v0.9.2
+pip install "mistralrs==0.9.5+cuda128.sm89" \
+  --find-links https://github.com/EricLBuehler/mistral.rs/releases/expanded_assets/v0.9.5
 ```
 
-Look up your GPU's compute capability in [hardware support](/reference/hardware-support/). CUDA wheels bundle the CUDA runtime but do not include cuTile. For cuTile acceleration, use a [cuTile-capable CLI binary](/quickstart/) and follow [cuTile setup](/developer/moe-backends/).
+Look up your GPU's compute capability in [hardware support](/reference/hardware-support/). CUDA wheels bundle the CUDA runtime but do not include cuTile. For cuTile acceleration, use a [cuTile-capable CLI binary](/reference/installer/) and follow [cuTile setup](/developer/moe-backends/).
 
 All install paths expose the same `from mistralrs import ...` API.
 
@@ -70,6 +70,14 @@ All install paths expose the same `from mistralrs import ...` API.
 `in_situ_quant="4"` is the equivalent of the CLI's `--isq 4`: it applies [ISQ (in-situ quantization)](/reference/quantization-types/), quantizing the weights to 4 bits at load time. Omit it for full precision.
 
 Full example: [plain](/examples/python/plain/).
+
+## Memory and device placement
+
+For upgrades from 0.9.4, see the [memory and device-mapping migration guide](/guides/perf/paged-attention/#upgrading-from-094) for removed `Runner` and `Which` arguments.
+
+Leave `memory_goal` and `num_device_layers` unset for automatic device placement and KV cache sizing. PagedAttention is enabled automatically on supported CUDA and Metal devices. Set `max_seqs=4` on `Runner` to allow up to four concurrent sequences; the default is 32.
+
+To choose a shared KV cache capacity, add `memory_goal="4GiB"` or `memory_goal="65536tokens"` to `Runner`. These capacities are shared across requests; each request still has its own context and output limits. Explicit memory goals require paging. See [memory budgets](/guides/perf/paged-attention/#memory-budget) for sizing options and [layer mapping](/guides/perf/distributed-inference/#layer-mapping-cuda-p2p) for manual placement.
 
 ## Streaming tokens
 

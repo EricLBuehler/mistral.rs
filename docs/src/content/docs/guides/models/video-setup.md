@@ -20,6 +20,8 @@ If that command fails in the same shell, service, or container that starts `mist
 
 ## Install FFmpeg
 
+The [mistral.rs installer](/reference/installer/) can install FFmpeg through Customize, `--with-ffmpeg` on macOS/Linux, or `-WithFFmpeg` on Windows. FFmpeg is optional and is left untouched by default. To install it separately, use the commands below.
+
 Debian or Ubuntu:
 
 ```bash

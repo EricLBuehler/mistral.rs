@@ -128,26 +128,31 @@ __device__ void paged_attention_kernel(
     const int max_num_blocks_per_seq,
     const float *__restrict__ alibi_slopes, // [num_heads]
     const int q_stride, const int kv_block_stride, const int kv_head_stride,
-    const float *k_scale, const float *v_scale,
-    const float *__restrict__ sinks // [num_heads] or nullptr
-    ) {
+    const float *k_scale, const float *v_scale, const float *__restrict__ sinks,
+    const int sliding_window) {
   const int seq_idx = blockIdx.y;
   const int partition_idx = blockIdx.z;
   const int max_num_partitions = gridDim.z;
   constexpr bool USE_PARTITIONING = PARTITION_SIZE > 0;
   const uint32_t context_len = context_lens[seq_idx];
-  if (USE_PARTITIONING && partition_idx * PARTITION_SIZE >= context_len) {
+  const int window_start =
+      sliding_window > 0 ? MAX(0, (int)context_len - sliding_window) : 0;
+  const int first_block_idx = window_start / BLOCK_SIZE;
+  const int attended_tokens = context_len - first_block_idx * BLOCK_SIZE;
+  if (USE_PARTITIONING && partition_idx * PARTITION_SIZE >= attended_tokens) {
     // No work to do. Terminate the thread block.
     return;
   }
 
   const int num_context_blocks = DIVIDE_ROUND_UP(context_len, BLOCK_SIZE);
   const int num_blocks_per_partition =
-      USE_PARTITIONING ? PARTITION_SIZE / BLOCK_SIZE : num_context_blocks;
+      USE_PARTITIONING ? PARTITION_SIZE / BLOCK_SIZE
+                       : num_context_blocks - first_block_idx;
 
   // [start_block_idx, end_block_idx) is the range of blocks to process.
   const int start_block_idx =
-      USE_PARTITIONING ? partition_idx * num_blocks_per_partition : 0;
+      first_block_idx +
+      (USE_PARTITIONING ? partition_idx * num_blocks_per_partition : 0);
   const int end_block_idx =
       MIN(start_block_idx + num_blocks_per_partition, num_context_blocks);
   const int num_blocks = end_block_idx - start_block_idx;
@@ -285,7 +290,7 @@ __device__ void paged_attention_kernel(
       if (thread_group_offset == 0) {
         // Store the partial reductions to shared memory.
         // NOTE(woosuk): It is required to zero out the masked logits.
-        const bool mask = token_idx >= context_len;
+        const bool mask = token_idx >= context_len || token_idx < window_start;
         logits[token_idx - start_token_idx] = mask ? 0.f : qk;
         // Update the max value.
         qk_max = mask ? qk_max : fmaxf(qk_max, qk);
@@ -324,7 +329,8 @@ __device__ void paged_attention_kernel(
   // Get the sum of the exp values.
   float exp_sum = 0.f;
   for (int i = thread_idx; i < num_tokens; i += NUM_THREADS) {
-    float val = __expf(logits[i] - qk_max);
+    float val =
+        start_token_idx + i < window_start ? 0.f : __expf(logits[i] - qk_max);
     logits[i] = val;
     exp_sum += val;
   }
@@ -405,7 +411,8 @@ __device__ void paged_attention_kernel(
           v_vec = vllm::fp8::scaled_convert<V_vec, Cache_V_vec, kv_dt>(
               fp8_v_vec, *v_scale);
         }
-        if (block_idx == num_context_blocks - 1) {
+        if (block_idx == num_context_blocks - 1 ||
+            (window_start > 0 && block_idx == first_block_idx)) {
           // NOTE(woosuk): When v_vec contains the tokens that are out of the
           // context, we should explicitly zero out the values since they may
           // contain NaNs. See
@@ -414,7 +421,9 @@ __device__ void paged_attention_kernel(
 #pragma unroll
           for (int j = 0; j < V_VEC_SIZE; j++) {
             v_vec_ptr[j] =
-                token_idx + j < context_len ? v_vec_ptr[j] : zero_value;
+                token_idx + j < context_len && token_idx + j >= window_start
+                    ? v_vec_ptr[j]
+                    : zero_value;
           }
         }
         accs[i] += dot(logits_vec, v_vec);
@@ -502,14 +511,14 @@ __global__ void paged_attention_v1_kernel(
     const int max_num_blocks_per_seq,
     const float *__restrict__ alibi_slopes, // [num_heads]
     const int q_stride, const int kv_block_stride, const int kv_head_stride,
-    const float *k_scale, const float *v_scale,
-    const float *__restrict__ sinks) {
+    const float *k_scale, const float *v_scale, const float *__restrict__ sinks,
+    const int sliding_window) {
   paged_attention_kernel<scalar_t, cache_t, kv_dt, HEAD_SIZE, BLOCK_SIZE,
                          NUM_THREADS>(
       /* exp_sums */ nullptr, /* max_logits */ nullptr, out, q, k_cache,
       v_cache, num_kv_heads, scale, softcapping, block_tables, context_lens,
       max_num_blocks_per_seq, alibi_slopes, q_stride, kv_block_stride,
-      kv_head_stride, k_scale, v_scale, sinks);
+      kv_head_stride, k_scale, v_scale, sinks, sliding_window);
 }
 
 // Grid: (num_heads, num_seqs, max_num_partitions).
@@ -533,19 +542,19 @@ __global__ void paged_attention_v2_kernel(
     const int max_num_blocks_per_seq,
     const float *__restrict__ alibi_slopes, // [num_heads]
     const int q_stride, const int kv_block_stride, const int kv_head_stride,
-    const float *k_scale, const float *v_scale,
-    const float *__restrict__ sinks) {
+    const float *k_scale, const float *v_scale, const float *__restrict__ sinks,
+    const int sliding_window) {
   paged_attention_kernel<scalar_t, cache_t, kv_dt, HEAD_SIZE, BLOCK_SIZE,
                          NUM_THREADS, PARTITION_SIZE>(
       exp_sums, max_logits, tmp_out, q, k_cache, v_cache, num_kv_heads, scale,
       softcapping, block_tables, context_lens, max_num_blocks_per_seq,
-      alibi_slopes, q_stride, kv_block_stride, kv_head_stride, k_scale,
-      v_scale, sinks);
+      alibi_slopes, q_stride, kv_block_stride, kv_head_stride, k_scale, v_scale,
+      sinks, sliding_window);
 }
 
 // Grid: (num_heads, num_seqs).
-template <typename scalar_t, int HEAD_SIZE, int NUM_THREADS,
-          int PARTITION_SIZE>
+template <typename scalar_t, int HEAD_SIZE, int NUM_THREADS, int PARTITION_SIZE,
+          int BLOCK_SIZE>
 __global__ void paged_attention_v2_reduce_kernel(
     scalar_t *__restrict__ out, // [num_seqs, num_heads, head_size]
     const float
@@ -555,14 +564,17 @@ __global__ void paged_attention_v2_reduce_kernel(
     const scalar_t *__restrict__ tmp_out,      // [num_seqs, num_heads,
                                                // max_num_partitions, head_size]
     const uint32_t *__restrict__ context_lens, // [num_seqs]
-    const int max_num_partitions,
-    const float *__restrict__ sinks // [num_heads] or nullptr
-    ) {
+    const int max_num_partitions, const float *__restrict__ sinks,
+    const int sliding_window) {
   const int num_heads = gridDim.x;
   const int head_idx = blockIdx.x;
   const int seq_idx = blockIdx.y;
   const uint32_t context_len = context_lens[seq_idx];
-  const int num_partitions = DIVIDE_ROUND_UP(context_len, PARTITION_SIZE);
+  const int window_start =
+      sliding_window > 0 ? MAX(0, (int)context_len - sliding_window) : 0;
+  const int attended_tokens =
+      context_len - window_start / BLOCK_SIZE * BLOCK_SIZE;
+  const int num_partitions = DIVIDE_ROUND_UP(attended_tokens, PARTITION_SIZE);
   if (num_partitions == 1 && sinks == nullptr) {
     // No need to reduce. Only copy tmp_out to out.
     // (When sinks are present, we must still rescale the single partition.)
@@ -679,7 +691,7 @@ __global__ void paged_attention_v2_reduce_kernel(
           reinterpret_cast<CACHE_T *>(value_cache), num_kv_heads, scale,       \
           softcapping, block_tables, context_lens, max_num_blocks_per_seq,     \
           reinterpret_cast<float *>(alibi_slopes), q_stride, kv_block_stride,  \
-          kv_head_stride, k_scale, v_scale, sinks);
+          kv_head_stride, k_scale, v_scale, sinks, sliding_window);
 
 // TODO(woosuk): Tune NUM_THREADS.
 template <typename T, typename CACHE_T, vllm::Fp8KVCacheDataType KV_DT,
@@ -692,8 +704,8 @@ inline void paged_attention_v1_launcher(
 
     int num_seqs, int num_heads, int head_size, int max_num_blocks_per_seq,
     int q_stride, int kv_block_stride, int kv_head_stride, cudaStream_t stream,
-    const float *k_scale, const float *v_scale,
-    const float *sinks) {
+    const float *k_scale, const float *v_scale, const float *sinks,
+    const int sliding_window) {
 
   // int thread_group_size = MAX(WARP_SIZE / BLOCK_SIZE, 1);
   // assert(head_size % thread_group_size == 0);
@@ -749,7 +761,7 @@ inline void paged_attention_v1_launcher(
       out, query, key_cache, value_cache, alibi_slopes, num_kv_heads, scale,   \
       softcapping, block_tables, context_lens, max_context_len, num_seqs,      \
       num_heads, head_size, max_num_blocks_per_seq, q_stride, kv_block_stride, \
-      kv_head_stride, stream, k_scale, v_scale, sinks);
+      kv_head_stride, stream, k_scale, v_scale, sinks, sliding_window);
 
 // NOTE(woosuk): To reduce the compilation time, we omitted block sizes
 // 1, 2, 4, 64, 128, 256.
@@ -768,7 +780,6 @@ inline void paged_attention_v1_launcher(
     break;                                                                     \
   }
 
-
 #define LAUNCH_PAGED_ATTENTION_V2(HEAD_SIZE)                                   \
   vllm::paged_attention_v2_kernel<T, CACHE_T, KV_DT, HEAD_SIZE, BLOCK_SIZE,    \
                                   NUM_THREADS, PARTITION_SIZE>                 \
@@ -778,12 +789,12 @@ inline void paged_attention_v1_launcher(
           reinterpret_cast<CACHE_T *>(value_cache), num_kv_heads, scale,       \
           softcapping, block_tables, context_lens, max_num_blocks_per_seq,     \
           reinterpret_cast<float *>(alibi_slopes), q_stride, kv_block_stride,  \
-          kv_head_stride, k_scale, v_scale, sinks);                            \
+          kv_head_stride, k_scale, v_scale, sinks, sliding_window);            \
   vllm::paged_attention_v2_reduce_kernel<T, HEAD_SIZE, NUM_THREADS,            \
-                                         PARTITION_SIZE>                       \
+                                         PARTITION_SIZE, BLOCK_SIZE>           \
       <<<reduce_grid, block, reduce_shared_mem_size, stream>>>(                \
           reinterpret_cast<T *>(out), exp_sums, max_logits, tmp_out_ptr,       \
-          context_lens, max_num_partitions, sinks);
+          context_lens, max_num_partitions, sinks, sliding_window);
 
 template <typename T, typename CACHE_T, vllm::Fp8KVCacheDataType KV_DT,
           int BLOCK_SIZE, int NUM_THREADS = 128, int PARTITION_SIZE = 512>
@@ -795,9 +806,8 @@ inline void paged_attention_v2_launcher(
 
     int num_seqs, int num_heads, int head_size, int max_num_blocks_per_seq,
     int q_stride, int kv_block_stride, int kv_head_stride, cudaStream_t stream,
-    const float *k_scale, const float *v_scale,
-    const float *sinks
-) {
+    const float *k_scale, const float *v_scale, const float *sinks,
+    const int sliding_window) {
   // int thread_group_size = MAX(WARP_SIZE / BLOCK_SIZE, 1);
 
   // NOTE: alibi_slopes is optional. It may be nullptr.
@@ -856,7 +866,7 @@ inline void paged_attention_v2_launcher(
       alibi_slopes, num_kv_heads, scale, softcapping, block_tables,            \
       context_lens, max_context_len, num_seqs, num_heads, head_size,           \
       max_num_blocks_per_seq, q_stride, kv_block_stride, kv_head_stride,       \
-      stream, k_scale, v_scale, sinks);
+      stream, k_scale, v_scale, sinks, sliding_window);
 
 // NOTE(woosuk): To reduce the compilation time, we omitted block sizes
 // 1, 2, 4, 64, 128, 256.

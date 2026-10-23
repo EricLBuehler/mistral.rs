@@ -933,9 +933,9 @@ impl DecoderLayer {
             ctx,
             layer_idx,
         )?;
-        let x = (attn_out + residual)?;
+        let (x, normed) = self.ffn_norm.forward_add_rms_norm(&attn_out, residual)?;
         let residual = &x;
-        let ffn_out = self.feed_forward.forward(&self.ffn_norm.forward(&x)?)?;
+        let ffn_out = self.feed_forward.forward(&normed)?;
         ffn_out + residual
     }
 
@@ -960,9 +960,9 @@ impl DecoderLayer {
         } else {
             conv.forward(&normalized, conv_state, batch_kind, use_existing_state)?
         };
-        let x = (conv_out + residual)?;
+        let (x, normed) = self.ffn_norm.forward_add_rms_norm(&conv_out, residual)?;
         let residual = &x;
-        let ffn_out = self.feed_forward.forward(&self.ffn_norm.forward(&x)?)?;
+        let ffn_out = self.feed_forward.forward(&normed)?;
         ffn_out + residual
     }
 }

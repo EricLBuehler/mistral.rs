@@ -372,7 +372,9 @@ impl GgufWeightSource {
 
     pub fn sharded_var_builder(self: &Arc<Self>, device: Device) -> ShardedVarBuilder {
         let backend = GgufTensorBackend::new(self.clone());
-        ShardedSafeTensors::wrap(backend, self.dtype, device).with_weight_source(self.clone())
+        ShardedSafeTensors::wrap(backend, self.dtype, device)
+            .with_weight_source(self.clone())
+            .with_raw_gguf(self.archive.clone())
     }
 
     fn binding(&self, native_name: &str) -> Result<&GgufTensorBinding> {
@@ -877,6 +879,18 @@ impl QuantizedWeightSource for GgufWeightSource {
             global_factor = Some(global_factor.map_or(factor, |global| global.min(factor)));
         }
         Ok(global_factor.unwrap_or(1))
+    }
+
+    fn resident_layer_bytes(&self, dtype: DType) -> Result<Option<crate::ResidentLayerBytes>> {
+        let mut sizes = crate::ResidentLayerBytes::default();
+        for (native_name, binding) in &self.bindings {
+            let (_, bytes) = self.binding_storage(native_name, binding, dtype)?;
+            match binding.text_layer_index() {
+                Some(layer) => *sizes.layers.entry(layer).or_default() += bytes,
+                None => sizes.outside += bytes,
+            }
+        }
+        Ok(Some(sizes))
     }
 
     fn pack_factor_for(&self, key: &str, dtype: DType) -> Result<Option<usize>> {

@@ -3,9 +3,7 @@ title: Build from source
 description: Compile mistral.rs from a repository checkout with exactly the feature flags you want.
 ---
 
-:::tip[Most users do not need this]
-The [quickstart install script](/quickstart/) is the recommended way to install. It downloads a prebuilt binary for your platform; `MISTRALRS_INSTALL_TAG=<tag>` installs a specific release, and `MISTRALRS_INSTALL_FROM_SOURCE=1` makes it build the latest `master` from source for you. Build from a checkout manually only to pin an arbitrary commit, apply a local patch, or use a feature combination the published binaries do not include.
-:::
+This guide is for working from a local checkout, such as making changes to mistral.rs or choosing custom build features. For installation, start with the [quickstart](/quickstart/).
 
 ## Platform prerequisites
 
@@ -34,7 +32,25 @@ cargo install --path mistralrs-cli --locked --features "cuda nccl flash-attn cud
 
 The flags above target CUDA. On macOS use `--features metal`; on CPU omit `--features` entirely. See the [cargo features reference](/reference/cargo-features/) for the full list.
 
-Metal builds precompile macOS, iOS, and tvOS metallibs by default. For local macOS-only development, set `MISTRALRS_METAL_PLATFORMS=macos`; to skip Metal precompilation entirely, set `MISTRALRS_METAL_PRECOMPILE=0`.
+CUDA 13.4 is supported. When multiple toolkits are installed, select the same toolkit for CUDA
+headers, libraries, `nvcc`, and cuTile before building:
+
+```bash
+export CUDA_HOME=/usr/local/cuda-13.4
+export CUDA_ROOT="$CUDA_HOME"
+export CUDA_PATH="$CUDA_HOME"
+export CUDA_TOOLKIT_PATH="$CUDA_HOME"
+export PATH="$CUDA_HOME/bin:$PATH"
+export LD_LIBRARY_PATH="$CUDA_HOME/lib64${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+```
+
+Use a driver that supports the selected toolkit's PTX, and keep these exports in the runtime
+environment when using [cuTile](/developer/moe-backends/). For cuTile, the installer continues
+to select compatible prebuilt CUDA 13.2 or 13.3 binaries on CUDA 13.4-capable drivers.
+
+Metal builds precompile macOS, iOS, and tvOS metallibs by default, including the GDN and Mamba/SSM kernels. For local macOS-only development, set `MISTRALRS_METAL_PLATFORMS=macos`; to skip Metal precompilation entirely, set `MISTRALRS_METAL_PRECOMPILE=0`.
+
+Metal model loading prepares recurrent, supported quantized linear, and paged-attention pipelines for the model's shapes and dtypes before serving requests. Preparation compiles pipelines without running a synthetic prompt or populating the KV cache. Request-specific variants can still require additional setup on first use. Disabling build-time precompilation moves shader compilation into library loading, including this preparation step.
 
 The in-place build leaves the binary at `target/release/mistralrs`. The install variant copies it to `~/.cargo/bin/mistralrs`, which is on `PATH` after a rustup install.
 

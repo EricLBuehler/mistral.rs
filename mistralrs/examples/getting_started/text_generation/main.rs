@@ -3,16 +3,13 @@
 //! Run with: `cargo run --release --example text_generation -p mistralrs`
 
 use anyhow::Result;
-use mistralrs::{
-    IsqBits, ModelBuilder, PagedAttentionMetaBuilder, RequestBuilder, TextMessageRole, TextMessages,
-};
+use mistralrs::{IsqBits, ModelBuilder, RequestBuilder, TextMessageRole, TextMessages};
 
 #[tokio::main]
 async fn main() -> Result<()> {
     let model = ModelBuilder::new("Qwen/Qwen3-4B")
         .with_auto_isq(IsqBits::Eight)
         .with_logging()
-        .with_paged_attn(PagedAttentionMetaBuilder::default().build()?)
         .build()
         .await?;
 

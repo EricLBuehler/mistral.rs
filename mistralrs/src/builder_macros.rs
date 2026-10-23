@@ -114,7 +114,7 @@ macro_rules! common_builder_methods {
             self
         }
 
-        /// Force usage of the CPU device. Do not use PagedAttention with this.
+        /// Force usage of the CPU device, which disables PagedAttention.
         pub fn with_force_cpu(mut self) -> Self {
             self.force_cpu = true;
             self
@@ -162,8 +162,7 @@ macro_rules! common_builder_methods {
             self
         }
 
-        /// Enable PagedAttention. If PagedAttention is not supported on this platform,
-        /// the configuration is silently ignored.
+        /// Override the default PagedAttention configuration.
         ///
         /// Configure with a [`PagedAttentionConfig`] object, which can be created with
         /// sensible defaults via [`crate::PagedAttentionMetaBuilder`]:
@@ -177,9 +176,21 @@ macro_rules! common_builder_methods {
         /// # }
         /// ```
         pub fn with_paged_attn(mut self, paged_attn_cfg: PagedAttentionConfig) -> Self {
-            if paged_attn_supported() {
-                self.paged_attn_cfg = Some(paged_attn_cfg);
-            }
+            self.paged_attn_cfg = Some(paged_attn_cfg);
+            self.memory_goal = None;
+            self.no_paged_attn = false;
+            self
+        }
+
+        /// Set the memory goal for model placement and KV cache allocation.
+        pub fn with_memory_goal(mut self, memory_goal: crate::MemoryGoal) -> Self {
+            self.memory_goal = Some(memory_goal);
+            self
+        }
+
+        /// Disable PagedAttention, which is enabled by default on supported CUDA and Metal devices.
+        pub fn without_paged_attn(mut self) -> Self {
+            self.no_paged_attn = true;
             self
         }
 
@@ -217,9 +228,9 @@ macro_rules! common_builder_methods {
             self
         }
 
-        /// Provide metadata to initialize the device mapper.
-        pub fn with_device_mapping(mut self, device_mapping: DeviceMapSetting) -> Self {
-            self.device_mapping = Some(device_mapping);
+        /// Override automatic placement with explicit device layer counts.
+        pub fn with_device_mapping(mut self, device_mapping: DeviceMapMetadata) -> Self {
+            self.device_mapping = Some(DeviceMapSetting::Map(device_mapping));
             self
         }
 

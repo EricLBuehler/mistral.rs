@@ -260,7 +260,7 @@ impl Loader for GGMLLoader {
         if paged_attn_config.is_some() {
             warn!("PagedAttention is not supported for GGML models, disabling it.");
 
-            paged_attn_config = None;
+            super::disable_unsupported_paged_attention(&mut paged_attn_config)?;
         }
 
         debug!("Prompt chunk size is {ATTENTION_CHUNK_SIZE}.");
@@ -366,6 +366,8 @@ impl Loader for GGMLLoader {
             .as_ref()
             .and_then(GenerationConfig::generation_defaults);
         let eos = calculate_eos_tokens(&chat_template, gen_conf.as_ref(), &tokenizer);
+        #[cfg(feature = "metal")]
+        crate::metal::warmup_common_kernels(device)?;
         Ok(Arc::new(Mutex::new(GGMLPipeline {
             model,
             tokenizer: tokenizer.into(),
@@ -391,6 +393,9 @@ impl Loader for GGMLLoader {
                 sliding_window: None,
                 cache_config: None,
                 cache_engine: None,
+                memory_plan: None,
+                #[cfg(feature = "cuda")]
+                runtime_memory_reservation: None,
                 model_metadata: None,
                 modalities: Modalities {
                     input: vec![SupportedModality::Text],

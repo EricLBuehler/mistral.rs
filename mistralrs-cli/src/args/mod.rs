@@ -24,6 +24,8 @@ use mistralrs_core::{
 use serde::Deserialize;
 use std::{num::NonZeroUsize, path::PathBuf};
 
+const DEFAULT_RUN_MAX_SEQS: usize = 1;
+
 /// Fast LLM inference engine
 #[derive(Parser)]
 #[command(name = "mistralrs")]
@@ -231,7 +233,7 @@ pub enum Command {
 
     /// Update or migrate an install using the installer
     Update {
-        /// Install a specific release tag instead of the latest (e.g. v0.9.2)
+        /// Install a specific release tag instead of the latest (e.g. v0.9.5)
         #[arg(long)]
         tag: Option<String>,
     },
@@ -592,17 +594,17 @@ pub struct GlobalOptions {
 /// Runtime options for inference
 #[derive(clap::Args, Clone, Deserialize)]
 pub struct RuntimeOptions {
-    /// Maximum concurrent sequences
-    #[arg(long, default_value_t = 32)]
-    #[serde(default = "default_max_seqs")]
-    pub max_seqs: usize,
+    /// Maximum concurrent sequences (defaults to 1 for run and 32 for serve)
+    #[arg(long)]
+    #[serde(default)]
+    pub max_seqs: Option<usize>,
 
     /// Maximum tokens processed in one paged-attention scheduler step
     #[arg(long, default_value_t = default_max_num_batched_tokens())]
     #[serde(default = "default_max_num_batched_tokens")]
     pub max_num_batched_tokens: NonZeroUsize,
 
-    /// CUDA prompt-token quantum used while decode is resident and for recurrent prefill batching
+    /// CUDA or Metal prompt-token quantum used while decode is resident and for recurrent prefill batching
     #[arg(long, default_value_t = default_max_prefill_chunk_tokens())]
     #[serde(default = "default_max_prefill_chunk_tokens")]
     pub max_prefill_chunk_tokens: NonZeroUsize,
@@ -652,8 +654,8 @@ pub struct RuntimeOptions {
     #[serde(default)]
     pub mtp_model: Option<String>,
 
-    /// Number of MTP draft tokens to propose per target step.
-    #[arg(long)]
+    /// Fixed MTP draft tokens per step; omit to adapt the depth automatically.
+    #[arg(long, value_parser = model::parse_positive_usize)]
     #[serde(default)]
     pub mtp_n_predict: Option<usize>,
 
@@ -840,8 +842,8 @@ pub struct BenchRuntimeOptions {
     #[arg(long)]
     pub mtp_model: Option<String>,
 
-    /// Number of MTP draft tokens to propose per target step.
-    #[arg(long)]
+    /// Fixed MTP draft tokens per step; omit to adapt the depth automatically.
+    #[arg(long, value_parser = model::parse_positive_usize)]
     pub mtp_n_predict: Option<usize>,
 
     /// MTP draft sampling policy. Auto uses probabilistic DFlash2 drafting when supported.
@@ -923,6 +925,15 @@ pub struct MatformerSelection {
 }
 
 impl RuntimeOptions {
+    pub fn max_seqs_for_run(&self) -> usize {
+        self.max_seqs.unwrap_or(DEFAULT_RUN_MAX_SEQS)
+    }
+
+    pub fn max_seqs_for_serve(&self) -> usize {
+        self.max_seqs
+            .unwrap_or(mistralrs_core::memory_plan::DEFAULT_MAX_NUM_SEQS)
+    }
+
     pub fn matformer_selection(&self) -> MatformerSelection {
         MatformerSelection {
             config_path: self.matformer_config_path.clone(),
@@ -998,7 +1009,7 @@ impl Default for GlobalOptions {
 impl Default for RuntimeOptions {
     fn default() -> Self {
         Self {
-            max_seqs: 32,
+            max_seqs: None,
             max_num_batched_tokens: default_max_num_batched_tokens(),
             max_prefill_chunk_tokens: default_max_prefill_chunk_tokens(),
             max_decode_steps_before_prefill: default_max_decode_steps_before_prefill(),
@@ -1047,10 +1058,6 @@ fn default_token_source() -> TokenSource {
     TokenSource::CacheToken
 }
 
-fn default_max_seqs() -> usize {
-    32
-}
-
 fn default_max_num_batched_tokens() -> NonZeroUsize {
     NonZeroUsize::new(DEFAULT_MAX_NUM_BATCHED_TOKENS).unwrap()
 }
@@ -1072,6 +1079,41 @@ mod tests {
     use std::{fs, path::Path};
 
     use super::*;
+
+    #[test]
+    fn sequence_defaults_follow_command_and_preserve_explicit_limits() {
+        for (command, default) in [
+            ("run", DEFAULT_RUN_MAX_SEQS),
+            ("serve", mistralrs_core::memory_plan::DEFAULT_MAX_NUM_SEQS),
+        ] {
+            for explicit in [None, Some(1), Some(8), Some(32)] {
+                let mut args = vec!["mistralrs".to_owned(), command.to_owned()];
+                if let Some(limit) = explicit {
+                    args.extend(["--max-seqs".to_owned(), limit.to_string()]);
+                }
+                let cli = Cli::try_parse_from(args).unwrap();
+                let (runtime, resolved) = match cli.command {
+                    Command::Run { runtime, .. } => {
+                        let resolved = runtime.max_seqs_for_run();
+                        (runtime, resolved)
+                    }
+                    Command::Serve { runtime, .. } => {
+                        let resolved = runtime.max_seqs_for_serve();
+                        (runtime, resolved)
+                    }
+                    _ => unreachable!(),
+                };
+                assert_eq!(runtime.max_seqs, explicit);
+                assert_eq!(resolved, explicit.unwrap_or(default));
+            }
+        }
+        let runtime = RuntimeOptions::default();
+        assert_eq!(runtime.max_seqs_for_run(), DEFAULT_RUN_MAX_SEQS);
+        assert_eq!(
+            runtime.max_seqs_for_serve(),
+            mistralrs_core::memory_plan::DEFAULT_MAX_NUM_SEQS
+        );
+    }
 
     fn resolve_default_command(command: &str, args: &[&str]) -> anyhow::Result<ModelType> {
         let cli = Cli::try_parse_from(
@@ -1547,6 +1589,22 @@ mod tests {
         assert!(help.contains("--enable-lora"));
         assert!(!help.contains("--legacy-lora"));
         assert!(!help.contains("--xlora"));
+    }
+
+    #[test]
+    fn mtp_draft_count_must_be_positive() {
+        for command in ["serve", "run", "bench"] {
+            assert!(Cli::try_parse_from([
+                "mistralrs",
+                command,
+                "-m",
+                "org/target",
+                "--mtp",
+                "--mtp-n-predict",
+                "0",
+            ])
+            .is_err());
+        }
     }
 
     #[test]

@@ -1180,6 +1180,7 @@ extern "C" {
         gate_stride_2: i64,
         gate_stride_3: i64,
         eps: f32,
+        sigmoid_gate: i32,
         dtype: i32,
         stream: i64,
     );
@@ -1204,6 +1205,7 @@ extern "C" {
         gate_stride_2: i64,
         gate_stride_3: i64,
         eps: f32,
+        sigmoid_gate: i32,
         stream: i64,
     );
     pub(crate) fn fused_gdn_gating(
@@ -1365,6 +1367,7 @@ extern "C" {
         tiled_v_heads: i32,
         value_major: i32,
         norm_eps: f32,
+        sigmoid_gate: i32,
         dtype: i32,
         state_dtype: i32,
         stream: i64,

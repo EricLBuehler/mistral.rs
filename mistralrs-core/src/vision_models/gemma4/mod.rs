@@ -1176,6 +1176,28 @@ impl crate::speculative::SpeculativeTargetMixin for Gemma4Model {
             .map(SpeculativeBatchPlan::new)
     }
 
+    fn speculative_depth_candidates(&self) -> Vec<usize> {
+        self.mtp
+            .lock()
+            .ok()
+            .and_then(|mtp| mtp.as_ref().map(mtp::Gemma4MtpRuntime::depth_candidates))
+            .unwrap_or_default()
+    }
+
+    fn speculative_graph_plans(&self) -> Vec<crate::speculative::SpeculativeGraphPlan> {
+        let Some(max_depth) = self.speculative_plan(1).map(|plan| plan.proposal_len) else {
+            return Vec::new();
+        };
+        match self.speculative_depth_candidates() {
+            depths if depths.is_empty() => {
+                vec![crate::speculative::SpeculativeGraphPlan::new(
+                    max_depth, None,
+                )]
+            }
+            depths => crate::speculative::autotuner::auto_depth_graph_plans(&depths, max_depth),
+        }
+    }
+
     fn speculative_propose(
         &mut self,
         ctx: SpeculativeProposeBatchCtx<'_>,

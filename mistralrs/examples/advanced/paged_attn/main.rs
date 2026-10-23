@@ -1,11 +1,10 @@
-//! Enable PagedAttention for efficient KV-cache memory management.
+//! Override the default PagedAttention cache budget.
 //!
 //! Run with: `cargo run --release --example paged_attn -p mistralrs`
 
 use anyhow::Result;
 use mistralrs::{
-    IsqBits, MemoryGpuConfig, ModelBuilder, PagedAttentionMetaBuilder, TextMessageRole,
-    TextMessages,
+    IsqBits, MemoryGoal, ModelBuilder, PagedAttentionMetaBuilder, TextMessageRole, TextMessages,
 };
 
 #[tokio::main]
@@ -16,7 +15,7 @@ async fn main() -> Result<()> {
         .with_paged_attn(
             PagedAttentionMetaBuilder::default()
                 .with_block_size(32)
-                .with_gpu_memory(MemoryGpuConfig::ContextSize(1024))
+                .with_memory_goal(MemoryGoal::KvTokens(1024))
                 .build()?,
         )
         .build()

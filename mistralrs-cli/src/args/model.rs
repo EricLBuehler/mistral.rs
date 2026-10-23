@@ -2,9 +2,9 @@
 
 use clap::{Args, ValueEnum};
 use mistralrs_core::{
-    AutoDeviceMapParams, HfConfigOverrides, IsqOrganization, LoraAdapterSpec, LoraRuntimeConfig,
-    ModelDType, NormalLoaderType, DEFAULT_LORA_MAX_ADAPTERS, DEFAULT_LORA_MAX_BYTES,
-    DEFAULT_LORA_MAX_RANK, MAX_LORA_ALIAS_BYTES,
+    HfConfigOverrides, IsqOrganization, LoraAdapterSpec, LoraRuntimeConfig, ModelDType,
+    NormalLoaderType, DEFAULT_LORA_MAX_ADAPTERS, DEFAULT_LORA_MAX_BYTES, DEFAULT_LORA_MAX_RANK,
+    MAX_LORA_ALIAS_BYTES,
 };
 use serde::Deserialize;
 use std::{
@@ -13,6 +13,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
+const HOME_PREFIX: &str = "~/";
 const KILOBYTE: u64 = 1_000;
 const MEGABYTE: u64 = 1_000_000;
 const GIGABYTE: u64 = 1_000_000_000;
@@ -92,6 +93,8 @@ pub struct FormatOptions {
 
 impl FormatOptions {
     pub(crate) fn normalize(&mut self) -> anyhow::Result<()> {
+        self.quantized_file = self.quantized_file.as_deref().map(expand_home_in_list);
+        self.mmproj = self.mmproj.as_deref().map(expand_home_in_list);
         let mut format = self.format;
         if self.mmproj.is_some() {
             match format {
@@ -268,6 +271,22 @@ impl ModelFormat {
             Self::Ggml => "ggml",
         }
     }
+}
+
+// Quoting a `;`-joined shard list stops the shell from expanding `~`
+fn expand_home_in_list(value: &str) -> String {
+    let home = dirs::home_dir();
+    value
+        .split(';')
+        .map(|entry| {
+            let entry = entry.trim();
+            match (entry.strip_prefix(HOME_PREFIX), &home) {
+                (Some(rest), Some(home)) => home.join(rest).to_string_lossy().into_owned(),
+                _ => entry.to_string(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(";")
 }
 
 fn split_quantized_filenames(value: &str) -> anyhow::Result<Vec<&str>> {
@@ -685,16 +704,6 @@ pub struct DeviceOptions {
     /// Custom Hugging Face cache directory
     #[arg(long)]
     pub hf_cache: Option<PathBuf>,
-
-    /// Max sequence length for automatic device mapping
-    #[arg(long, default_value_t = AutoDeviceMapParams::DEFAULT_MAX_SEQ_LEN)]
-    #[serde(default = "default_max_seq_len")]
-    pub max_seq_len: usize,
-
-    /// Max batch size for automatic device mapping
-    #[arg(long, default_value_t = AutoDeviceMapParams::DEFAULT_MAX_BATCH_SIZE)]
-    #[serde(default = "default_max_batch_size")]
-    pub max_batch_size: usize,
 }
 
 /// Multimodal model specific options
@@ -729,19 +738,24 @@ fn default_gqa() -> usize {
     1
 }
 
-fn default_max_seq_len() -> usize {
-    AutoDeviceMapParams::DEFAULT_MAX_SEQ_LEN
-}
-
-fn default_max_batch_size() -> usize {
-    AutoDeviceMapParams::DEFAULT_MAX_BATCH_SIZE
-}
-
 #[cfg(test)]
 mod tests {
     use clap::{CommandFactory, Parser};
 
     use super::*;
+
+    #[test]
+    fn quoted_shard_lists_expand_home() {
+        let home = dirs::home_dir().unwrap();
+        assert_eq!(
+            expand_home_in_list("~/a/m-1.gguf; ~/a/m-2.gguf;rel.gguf;/abs/x.gguf"),
+            format!(
+                "{};{};rel.gguf;/abs/x.gguf",
+                home.join("a/m-1.gguf").display(),
+                home.join("a/m-2.gguf").display()
+            )
+        );
+    }
 
     #[derive(Parser)]
     struct AdapterCli {

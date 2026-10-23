@@ -1,10 +1,11 @@
 use candle_core::{DType, Result, Storage, Tensor};
 
 use crate::metal::{
-    backend::validate_kv_cache_scales,
+    backend::{validate_kv_cache_scales, CacheShape},
     kernels::{self, PagedAttentionDType},
 };
 
+#[allow(clippy::too_many_arguments)]
 pub fn gather_kv_cache(
     key_cache: &Tensor,   // [num_blocks, kv_heads, head_size/x, block_size, x]
     value_cache: &Tensor, // [num_blocks, kv_heads, head_size, block_size]
@@ -55,13 +56,10 @@ pub fn gather_kv_cache(
         other => candle_core::bail!("unsupported output dtype {other:?}"),
     };
 
-    // Extract dimensions
-    let k_dims = key_cache.dims5()?;
-    let num_kv_heads = k_dims.1;
-    let head_size_over_x = k_dims.2;
-    let block_size = k_dims.3;
-    let x = k_dims.4;
-    let head_size = head_size_over_x * x;
+    let cache = CacheShape::new(key_cache, value_cache)?;
+    let num_kv_heads = cache.num_heads;
+    let head_size = cache.head_size;
+    let block_size = cache.block_size;
 
     let cu_seq_lens_len = cu_seq_lens.dims1()?;
     let num_seqs = cu_seq_lens_len
@@ -173,7 +171,8 @@ pub fn gather_kv_cache(
             block_table_stride as i32,
             num_kv_heads as i32,
             head_size as i32,
-            x as i32,
+            cache.x as i32,
+            cache.hnd,
         )
         .map_err(candle_core::Error::wrap)?;
     }

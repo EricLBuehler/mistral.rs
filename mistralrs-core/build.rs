@@ -1,3 +1,6 @@
+#[cfg(feature = "metal")]
+include!("src/metal/kernels/source_set.rs");
+
 #[cfg(feature = "cuda")]
 const CUDA_NVCC_FLAGS: Option<&'static str> = option_env!("CUDA_NVCC_FLAGS");
 #[cfg(feature = "cuda")]
@@ -75,6 +78,12 @@ fn cuda_header_hash(dir: &std::path::Path) -> std::io::Result<u64> {
 
 fn main() {
     set_git_revision();
+
+    #[cfg(feature = "metal")]
+    for source_set in [&GDN_METAL_SOURCE_SET, &SSM_METAL_SOURCE_SET] {
+        mistralrs_metal_compile::compile_metallibs(source_set)
+            .expect("failed to precompile recurrent Metal kernels");
+    }
 
     println!("cargo::rustc-check-cfg=cfg(has_flashinfer_gdn_sm90_kernel)");
     println!("cargo::rustc-check-cfg=cfg(has_gdn_fp8_producer)");

@@ -615,9 +615,10 @@ impl DecoderLayer {
         let residual = x;
         let x = self.input_layernorm.forward(x)?;
         let attn_out = attn.forward(&x, attention_mask, kv_cache, ctx, layer_idx)?;
-        let x = (attn_out + residual)?;
+        let (x, normed) = self
+            .post_attention_layernorm
+            .forward_add_rms_norm(&attn_out, residual)?;
         let residual = &x;
-        let normed = self.post_attention_layernorm.forward(&x)?;
         let ffn_out = self.moe.forward(&normed)?;
         ffn_out + residual
     }
@@ -695,9 +696,10 @@ impl DecoderLayer {
         } else {
             gdn.forward(&x, cache, batch_kind)?
         };
-        let x = (gdn_out + residual)?;
+        let (x, normed) = self
+            .post_attention_layernorm
+            .forward_add_rms_norm(&gdn_out, residual)?;
         let residual = &x;
-        let normed = self.post_attention_layernorm.forward(&x)?;
         let ffn_out = self.moe.forward(&normed)?;
         ffn_out + residual
     }
@@ -1090,7 +1092,11 @@ impl Model {
                                 pool.state_layout(),
                             )
                         } else {
-                            GdnLayerCache::checkout(pool, &indices)?
+                            GdnLayerCache::checkout(
+                                pool,
+                                &indices,
+                                recurrent_metadata.batch_kind(),
+                            )?
                         };
 
                         x = layer.forward_linear(

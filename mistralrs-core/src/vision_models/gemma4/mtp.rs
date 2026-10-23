@@ -63,6 +63,7 @@ struct AssistantGenerationConfig {
 pub struct Gemma4MtpRuntime {
     model: Gemma4MtpModel,
     n_predict: usize,
+    auto_depth: bool,
 }
 
 impl Gemma4MtpRuntime {
@@ -151,7 +152,23 @@ impl Gemma4MtpRuntime {
             None => read_generation_n_predict(&path)?.unwrap_or(6),
         };
         let model = Gemma4MtpModel::new(&assistant_cfg, target_cfg, vb, device, mapper)?;
-        Ok(Self { model, n_predict })
+        Ok(Self {
+            model,
+            n_predict,
+            auto_depth: config.n_predict.is_none(),
+        })
+    }
+
+    /// Depths the speculative autotuner may pick; empty when the depth was pinned.
+    pub fn depth_candidates(&self) -> Vec<usize> {
+        if self.auto_depth {
+            crate::speculative::autotuner::depths_up_to(
+                &crate::speculative::autotuner::AUTO_DEPTHS,
+                self.n_predict,
+            )
+        } else {
+            Vec::new()
+        }
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -166,6 +183,7 @@ impl Gemma4MtpRuntime {
         sequences: &[&Sequence],
         rng: Arc<Mutex<Isaac64Rng>>,
         cache: SpeculativeKvCache<'_>,
+        depth: usize,
     ) -> Result<Vec<SpeculativeProposal>> {
         let batch = sampled_tokens.len();
         if batch == 0 {
@@ -209,6 +227,7 @@ impl Gemma4MtpRuntime {
                     sequences,
                     rng,
                     &cache,
+                    depth,
                 )
             }
         }
@@ -225,6 +244,7 @@ impl Gemma4MtpRuntime {
         sequences: &[&Sequence],
         rng: Arc<Mutex<Isaac64Rng>>,
         cache: &Gemma4MtpStepCache<'_>,
+        depth: usize,
     ) -> Result<Vec<SpeculativeProposal>> {
         let batch = sampled_tokens.len();
         let mut contexts = sequences
@@ -241,9 +261,9 @@ impl Gemma4MtpRuntime {
         let mut last_token =
             Tensor::from_vec(sampled_tokens.to_vec(), (batch, 1), self.model.device())?;
         let mut hidden = target_hiddens;
-        let mut tokens = Vec::with_capacity(self.n_predict);
-        let mut logits = Vec::with_capacity(self.n_predict);
-        for _ in 0..self.n_predict {
+        let mut tokens = Vec::with_capacity(depth);
+        let mut logits = Vec::with_capacity(depth);
+        for _ in 0..depth {
             let input_embed = target_embedder(&last_token)?;
             let (_argmax_token, draft_logits, next_hidden) =
                 self.model.step(input_embed, hidden, base_lens, cache)?;
@@ -333,6 +353,7 @@ impl SpeculativeProposer for Gemma4MtpRuntime {
             ctx.sequences,
             ctx.rng,
             ctx.cache,
+            ctx.proposal_len.min(self.n_predict),
         )?;
         Ok(SpeculativeProposalBatch::new(proposals))
     }

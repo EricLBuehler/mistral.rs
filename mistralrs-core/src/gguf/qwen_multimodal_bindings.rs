@@ -9,7 +9,7 @@ use crate::{gdn::GDN_V_HEAD_LAYOUT_CONFIG_KEY, pipeline::MultimodalLoaderType};
 const GENERAL_ARCHITECTURE: &str = "general.architecture";
 const PROJECTOR_TYPE: &str = "clip.projector_type";
 const VISION_PROJECTOR_TYPE: &str = "clip.vision.projector_type";
-const DEEPSTACK_LAYERS: &str = "clip.vision.is_deepstack_layers";
+pub(super) const DEEPSTACK_LAYERS: &str = "clip.vision.is_deepstack_layers";
 
 const QWEN2VL_PROJECTOR: &str = "qwen2vl_merger";
 const QWEN25VL_PROJECTOR: &str = "qwen2.5vl_merger";
@@ -53,12 +53,12 @@ impl QwenMultimodalFamily {
     }
 }
 
-struct TensorInventory {
+pub(super) struct TensorInventory {
     shapes: HashMap<String, Vec<usize>>,
 }
 
 impl TensorInventory {
-    fn from_archive(archive: &GgufArchive) -> Self {
+    pub(super) fn from_archive(archive: &GgufArchive) -> Self {
         Self {
             shapes: archive
                 .tensors()
@@ -75,11 +75,11 @@ impl TensorInventory {
         }
     }
 
-    fn contains(&self, name: &str) -> bool {
+    pub(super) fn contains(&self, name: &str) -> bool {
         self.shapes.contains_key(name)
     }
 
-    fn shape(&self, name: &str) -> Result<&[usize]> {
+    pub(super) fn shape(&self, name: &str) -> Result<&[usize]> {
         self.shapes
             .get(name)
             .map(Vec::as_slice)
@@ -95,7 +95,7 @@ impl TensorInventory {
 }
 
 #[derive(Clone, Copy, Debug)]
-struct GdnMetadata {
+pub(super) struct GdnMetadata {
     key_heads: usize,
     value_heads: usize,
     key_head_dim: usize,
@@ -267,7 +267,10 @@ fn metadata_string<'a>(archive: &'a GgufArchive, key: &str) -> Result<Option<&'a
     }
 }
 
-fn metadata_bool_indices(archive: &GgufArchive, key: &str) -> Result<Option<Vec<usize>>> {
+pub(super) fn metadata_bool_indices(
+    archive: &GgufArchive,
+    key: &str,
+) -> Result<Option<Vec<usize>>> {
     let Some(value) = archive.metadata_value(key) else {
         return Ok(None);
     };
@@ -288,7 +291,7 @@ fn metadata_bool_indices(archive: &GgufArchive, key: &str) -> Result<Option<Vec<
         .map(Some)
 }
 
-fn metadata_usize(archive: &GgufArchive, key: &str) -> Result<usize> {
+pub(super) fn metadata_usize(archive: &GgufArchive, key: &str) -> Result<usize> {
     let value = archive
         .metadata_value(key)
         .with_context(|| format!("GGUF metadata is missing `{key}`"))?;
@@ -306,7 +309,7 @@ fn metadata_usize(archive: &GgufArchive, key: &str) -> Result<usize> {
     usize::try_from(value).with_context(|| format!("GGUF metadata `{key}` does not fit usize"))
 }
 
-fn read_gdn_metadata(archive: &GgufArchive) -> Result<GdnMetadata> {
+pub(super) fn read_gdn_metadata(archive: &GgufArchive) -> Result<GdnMetadata> {
     let architecture = metadata_string(archive, GENERAL_ARCHITECTURE)?
         .context("GGUF metadata is missing `general.architecture`")?;
     let prefix = architecture;
@@ -421,7 +424,7 @@ fn bind_text(
     Ok(())
 }
 
-fn bind_experts(
+pub(super) fn bind_experts(
     inventory: &TensorInventory,
     native: &str,
     source: &str,
@@ -441,7 +444,7 @@ fn bind_experts(
     }
 }
 
-fn bind_shared_expert(
+pub(super) fn bind_shared_expert(
     inventory: &TensorInventory,
     native: &str,
     source: &str,
@@ -474,7 +477,7 @@ fn bind_shared_expert(
     Ok(())
 }
 
-fn bind_gdn(
+pub(super) fn bind_gdn(
     inventory: &TensorInventory,
     native: &str,
     source: &str,
@@ -621,7 +624,7 @@ fn bind_qwen2_vision(
     Ok(())
 }
 
-fn bind_qwen3_vision(
+pub(super) fn bind_qwen3_vision(
     inventory: &TensorInventory,
     deepstack_layers: Option<&[usize]>,
     bindings: &mut GgufBindingMap,
@@ -806,7 +809,7 @@ fn bind_text_norm(
     }
 }
 
-fn bind(
+pub(super) fn bind(
     inventory: &TensorInventory,
     bindings: &mut GgufBindingMap,
     native: impl Into<String>,

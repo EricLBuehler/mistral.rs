@@ -19,6 +19,10 @@ jobs:
 
     runs-on: [self-hosted, Linux, ARM64, gpu, cuda]
 
+    env:
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_PROFILE_TEST_DEBUG: "0"
+
     strategy:
       fail-fast: false
       matrix:
@@ -31,6 +35,10 @@ jobs:
           - name: cuda+cutile
             features: cuda,cutile
             cuda: "13.2"
+            test_args: "--workspace --exclude mistralrs-flash-attn"
+          - name: cuda13.4+cutile
+            features: cuda,cutile
+            cuda: "13.4"
             test_args: "--workspace --exclude mistralrs-flash-attn"
           # - name: cuda+nccl
           #   features: cuda,nccl
@@ -51,13 +59,15 @@ jobs:
         run: |
           CUDA_DIR=/usr/local/cuda-${{ matrix.cuda }}
           if [ ! -d "$CUDA_DIR" ]; then
-            echo "::error::$CUDA_DIR not found on runner"
-            exit 1
+            sudo apt-get install -y cuda-toolkit-$(echo "${{ matrix.cuda }}" | tr . -)
           fi
           echo "$CUDA_DIR/bin" >> $GITHUB_PATH
           echo "CUDA_HOME=$CUDA_DIR" >> $GITHUB_ENV
           echo "CUDA_PATH=$CUDA_DIR" >> $GITHUB_ENV
           echo "CUDA_TOOLKIT_PATH=$CUDA_DIR" >> $GITHUB_ENV
+          if [[ ",${{ matrix.features }}," == *,cutile,* ]]; then
+            echo "CUTILE_TILEIRAS_PATH=$CUDA_DIR/bin/tileiras" >> $GITHUB_ENV
+          fi
           # The driver JITs PTX only up to its native CUDA level; newer toolkits need the forward-compat libcuda.
           LIB_DIRS="$CUDA_DIR/lib64"
           NATIVE=$(nvidia-smi --query | grep -m1 "CUDA Version" | grep -oE "[0-9]+\.[0-9]+")

@@ -1,9 +1,9 @@
 ---
 title: Environment variables
-description: Environment variables read by mistralrs at build time or runtime.
+description: Environment variables read by mistralrs at build time, runtime, or during installer automation.
 ---
 
-User-facing environment variables read by `mistralrs` or its build scripts. Standard Cargo build variables such as `OUT_DIR` and `TARGET` are omitted.
+User-facing environment variables read by `mistralrs`, its build scripts, or its installers. Standard Cargo build variables such as `OUT_DIR` and `TARGET` are omitted.
 
 ## Hugging Face
 
@@ -67,7 +67,7 @@ See [CPU threads and affinity](/guides/perf/throughput-tuning/#cpu-threads-and-a
 | Variable | Purpose |
 |---|---|
 | `MISTRALRS_CUDA_GRAPHS` | CUDA graph acceleration is enabled by default when supported. Set to `0`, `false`, `no`, or `off` to disable. See [CUDA graphs](/guides/perf/paged-attention/#cuda-graphs). |
-| `MISTRALRS_DFLASH_ADAPTIVE` | Set to `1` or `true` to use full DFlash draft depth for batches up to 2 and depth 1 above that. Only applies when `--mtp-n-predict` is not set. |
+| `MISTRALRS_DFLASH_ADAPTIVE` | Enabled by default for automatic CUDA DFlash serving: use the full reserved depth for up to 8 live contexts and at most 3 drafts above that. Set to `0` or `false` to tune depth from measured throughput instead. Applies only when `--mtp-n-predict` is unset. |
 | `MISTRALRS_DFLASH_ISQ` | ISQ type for DFlash drafter weights (`q4k`, `q6k`, ... or `none` for bf16); defaults to the target's in-situ quantization type. |
 | `MISTRALRS_FLASHINFER_DECODE` | Disables FlashInfer decode acceleration when set to `0`, `false`, `no`, or `off`. Use only for compatibility troubleshooting. |
 | `MISTRALRS_GDN_DECODE_KERNEL` | Overrides the CUDA GDN decode kernel for benchmarking or troubleshooting. Accepted values are `auto` (default), `baseline`, `cooperative`, `pipelined`, `vmajor4`, and `vmajor32`; an incompatible forced kernel returns an error. The value-major kernels need compute capability 8.0 or newer. |
@@ -102,29 +102,30 @@ See [CPU threads and affinity](/guides/perf/throughput-tuning/#cpu-threads-and-a
 
 See the [distributed inference guide](/guides/perf/distributed-inference/) for use.
 
-## GPU memory
-
-| Variable | Purpose |
-|---|---|
-| `MISTRALRS_IGPU_MEMORY_FRACTION` | Fraction of integrated GPU memory usable on CUDA systems with iGPUs. Default 0.75. |
-
 ## Build-time
 
 These are read by build scripts, not at runtime.
 
 | Variable | Purpose |
 |---|---|
-| `MISTRALRS_METAL_PRECOMPILE` | `MISTRALRS_METAL_PRECOMPILE=0` skips Metal kernel precompilation at build time; kernels are compiled at runtime on first use. Also accepts `false`, `no`, and `off`. |
+| `MISTRALRS_METAL_PRECOMPILE` | `MISTRALRS_METAL_PRECOMPILE=0` skips build-time precompilation for quantization, paged attention, GDN, and SSM Metal libraries. Shader compilation then happens when each library is loaded, including during model preparation. Also accepts `false`, `no`, and `off`. |
 | `MISTRALRS_METAL_PLATFORMS` | Limits which Metal platform metallibs are precompiled. Accepts comma-separated `macos`, `ios`, `tvos`, or `all`; defaults to all platforms. For local macOS development, use `MISTRALRS_METAL_PLATFORMS=macos`. |
 | `CUDA_NVCC_FLAGS` | Extra compiler options passed to CUDA builds. |
-| `MISTRALRS_INSTALL_TAG` | Pins the installers to a specific release tag (e.g. `v0.9.2`): the prebuilt is downloaded from that release, and a source build checks out that git tag. Default is the latest stable release (prebuilt) or latest `master` (source). |
-| `MISTRALRS_INSTALL_FROM_SOURCE` | `MISTRALRS_INSTALL_FROM_SOURCE=1` makes the shell and PowerShell installers skip the prebuilt download and build from the latest `master` (bleeding edge) instead of the latest stable release. |
-| `MISTRALRS_INSTALL_NCCL` | `MISTRALRS_INSTALL_NCCL=1` forces the shell and PowerShell installers to add the `nccl` feature for CUDA builds even if NCCL is not detected. |
+| `MISTRALRS_GIT_REVISION` | Git revision embedded in the binary by the build script. |
+
+## Installer automation
+
+For normal setup, use the [guided installer or command-line options](/reference/installer/). These variables remain available to existing automation and updater integration. New guided installations and source-build flags default to the latest stable release; the legacy `MISTRALRS_INSTALL_FROM_SOURCE` variable retains its development-build behavior.
+
+| Variable | Purpose |
+|---|---|
+| `MISTRALRS_INSTALL_TAG` | Selects a release tag (e.g. `v0.9.5`) for either a prebuilt or source install. Equivalent to `--release` on macOS/Linux or `-Release` on Windows. |
+| `MISTRALRS_INSTALL_FROM_SOURCE` | Set to `1` to build from source. For legacy automation, this selects `master` unless `MISTRALRS_INSTALL_TAG` is set. Use `--from-source` or `-FromSource` to build the selected stable release instead. |
+| `MISTRALRS_INSTALL_NCCL` | Set to `1` to force the `nccl` feature for CUDA source builds even if the library is not detected. NCCL must still be available to the linker; this does not install it. `--no-nccl` / `-NoNccl` takes precedence. |
 | `MISTRALRS_INSTALL_NO_NCCL` | `MISTRALRS_INSTALL_NO_NCCL=1` makes the shell and PowerShell installers skip the `nccl` feature. |
 | `MISTRALRS_INSTALL_ALLOW_CUDA_MISMATCH` | `MISTRALRS_INSTALL_ALLOW_CUDA_MISMATCH=1` lets a source build continue when local `nvcc` is newer than the CUDA version reported by the NVIDIA driver. |
 | `MISTRALRS_INSTALL_YES` | `MISTRALRS_INSTALL_YES=1` auto-confirms every installer prompt (non-interactive installs for CI/containers; used by `mistralrs update`). |
-| `MISTRALRS_INSTALL_IGNORE_FFMPEG` | `MISTRALRS_INSTALL_IGNORE_FFMPEG=1` skips the installer's FFmpeg step, leaving any existing FFmpeg untouched. |
-| `MISTRALRS_GIT_REVISION` | Git revision embedded in the binary by the build script. |
+| `MISTRALRS_INSTALL_IGNORE_FFMPEG` | `MISTRALRS_INSTALL_IGNORE_FFMPEG=1` leaves existing FFmpeg untouched. FFmpeg installation is already off by default; enable it through customization or `--with-ffmpeg` / `-WithFFmpeg`. |
 
 ## Internal
 

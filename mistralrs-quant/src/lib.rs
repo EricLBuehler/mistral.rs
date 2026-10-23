@@ -21,6 +21,9 @@ pub mod cublaslt;
 #[cfg(test)]
 #[path = "build_support/cuda_headers.rs"]
 mod cuda_headers;
+#[cfg(test)]
+#[path = "build_support/cuda_toolkit.rs"]
+mod cuda_toolkit;
 #[cfg(all(feature = "cuda", feature = "cutile"))]
 pub mod cutile;
 pub mod distributed;
@@ -81,6 +84,19 @@ pub trait QuantizedWeightSource: Send + Sync {
     fn pack_factor(&self, dtype: DType) -> Result<usize>;
 
     fn pack_factor_for(&self, key: &str, dtype: DType) -> Result<Option<usize>>;
+
+    /// Exact resident bytes of the bound weights, when the source knows them; device mapping
+    /// falls back to the pack-factor estimate otherwise.
+    fn resident_layer_bytes(&self, _dtype: DType) -> Result<Option<ResidentLayerBytes>> {
+        Ok(None)
+    }
+}
+
+/// Resident weight bytes per text layer, plus everything outside the repeating layers.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ResidentLayerBytes {
+    pub layers: std::collections::BTreeMap<usize, usize>,
+    pub outside: usize,
 }
 
 impl<T: QuantizedWeightSource + ?Sized> QuantizedWeightSource for Arc<T> {
@@ -112,6 +128,10 @@ impl<T: QuantizedWeightSource + ?Sized> QuantizedWeightSource for Arc<T> {
     fn pack_factor_for(&self, key: &str, dtype: DType) -> Result<Option<usize>> {
         (**self).pack_factor_for(key, dtype)
     }
+
+    fn resident_layer_bytes(&self, dtype: DType) -> Result<Option<ResidentLayerBytes>> {
+        (**self).resident_layer_bytes(dtype)
+    }
 }
 
 /// Bytes the packed-affine (Marlin layout) GGUF weights will occupy on this device.
@@ -130,10 +150,22 @@ pub fn gguf_affine_budget_bytes(device: &Device, dtype: DType) -> usize {
     }
 }
 
+pub fn gguf_affine_reserved_bytes(device: &Device, dtype: DType) -> usize {
+    #[cfg(all(feature = "cuda", has_marlin_kernels))]
+    {
+        gguf::gguf_affine_reserved_bytes(device, dtype)
+    }
+    #[cfg(not(all(feature = "cuda", has_marlin_kernels)))]
+    {
+        let _ = (device, dtype);
+        0
+    }
+}
+
 #[cfg(feature = "metal")]
 pub use afq::ops::{
-    afq_gather_qmm_rhs_sorted, afq_gather_qmm_rhs_sorted_gate_up, metal_arg_sort_u32_1d,
-    metal_moe_weighted_reduce_flat,
+    afq_gather_qmm_rhs_sorted, afq_gather_qmm_rhs_sorted_gate_up, afq_sorted_gather_supported,
+    metal_arg_sort_u32_1d, metal_moe_weighted_reduce_flat,
 };
 pub use afq::{AfqBits, AfqGroupSize, AfqInner, AfqLayer};
 pub use bitsandbytes::{BnbLinear, BnbQuantParams, BnbQuantType};
@@ -1790,6 +1822,11 @@ pub trait QuantMethod: Send + Sync + Debug + QuantizedSerde {
 
     fn dequantize_w(&self) -> Result<Tensor>;
 
+    #[cfg(feature = "metal")]
+    fn prepare_metal_kernels(&self, _activation_dtype: DType) -> Result<()> {
+        Ok(())
+    }
+
     /// Compute matmul of `self` and `a`. `self` should contain the weights.
     /// Automatically casts to the required quantization activation type and back.
     fn forward(&self, a: &Tensor) -> Result<Tensor> {
@@ -2449,8 +2486,82 @@ pub fn try_fused_quantized_qkv(
     }
 }
 
+/// Shared preconditions for every fused multi-projection kernel, on every backend: bias-free projections
+/// that are not collecting imatrix stats (fused kernels skip `forward`) or running dynamic LoRA, and a float
+/// activation. Per-backend functions then add their format and shape rules.
+fn fused_projections_allowed(xs: &Tensor, projections: &[&dyn QuantMethod]) -> bool {
+    matches!(xs.dtype(), DType::BF16 | DType::F16 | DType::F32)
+        && projections
+            .iter()
+            .all(|p| !p.has_bias() && p.stats_snapshot().is_none() && !p.is_dynamic_lora_active())
+}
+
+/// Fused gate + up + GLU + down, where a backend has a kernel for these weights.
+#[allow(unused_variables)]
+pub fn try_fused_ffn(
+    xs: &Tensor,
+    gate: &dyn QuantMethod,
+    up: &dyn QuantMethod,
+    down: &dyn QuantMethod,
+    activation: GluActivationType,
+) -> Result<Option<Tensor>> {
+    if !fused_projections_allowed(xs, &[gate, up, down]) {
+        return Ok(None);
+    }
+    #[cfg(feature = "cuda")]
+    if xs.device().is_cuda() {
+        return try_fused_quantized_ffn(xs, gate, up, down, activation);
+    }
+    Ok(None)
+}
+
+/// Fused gate + up + GLU, where a backend has a kernel for these weights.
+#[allow(unused_variables)]
+pub fn try_fused_gate_up(
+    xs: &Tensor,
+    gate: &dyn QuantMethod,
+    up: &dyn QuantMethod,
+    activation: GluActivationType,
+) -> Result<Option<Tensor>> {
+    if !fused_projections_allowed(xs, &[gate, up]) {
+        return Ok(None);
+    }
+    #[cfg(feature = "cuda")]
+    if xs.device().is_cuda() {
+        return try_fused_quantized_gate_up(xs, gate, up, activation);
+    }
+    #[cfg(feature = "metal")]
+    if xs.device().is_metal() {
+        return try_fused_gate_up_metal(xs, gate, up, activation);
+    }
+    Ok(None)
+}
+
+/// Fused Q/K/V projections, where a backend has a kernel for these weights.
+#[allow(unused_variables)]
+pub fn try_fused_qkv(
+    xs: &Tensor,
+    q: &dyn QuantMethod,
+    k: &dyn QuantMethod,
+    v: &dyn QuantMethod,
+) -> Result<Option<(Tensor, Tensor, Tensor)>> {
+    if !fused_projections_allowed(xs, &[q, k, v]) {
+        return Ok(None);
+    }
+    #[cfg(feature = "cuda")]
+    if xs.device().is_cuda() {
+        return try_fused_quantized_qkv(xs, q, k, v);
+    }
+    #[cfg(feature = "metal")]
+    if xs.device().is_metal() {
+        return try_fused_qkv_metal(xs, q, k, v);
+    }
+    Ok(None)
+}
+
 /// Metal fused gate+up: single Metal kernel that does both matmuls with shared
 /// x reads and applies the GLU activation in-register before writing one output.
+/// Callers go through [`try_fused_gate_up`], which applies the shared preconditions.
 #[cfg(feature = "metal")]
 pub fn try_fused_gate_up_metal(
     xs: &Tensor,
@@ -2460,12 +2571,6 @@ pub fn try_fused_gate_up_metal(
 ) -> Result<Option<Tensor>> {
     use candle_core::{backend::BackendStorage, MetalStorage, Shape, Storage};
 
-    if gate.has_bias() || up.has_bias() {
-        return Ok(None);
-    }
-    if !matches!(xs.dtype(), DType::BF16 | DType::F16 | DType::F32) {
-        return Ok(None);
-    }
     if !xs.device().is_metal() {
         return Ok(None);
     }
@@ -2594,6 +2699,7 @@ pub fn try_fused_gate_up_metal(
 
 /// Metal fused QKV: single Metal kernel that handles all three projections,
 /// routing per-tile to the right weight matrix.
+/// Callers go through [`try_fused_qkv`], which applies the shared preconditions.
 #[cfg(feature = "metal")]
 pub fn try_fused_qkv_metal(
     xs: &Tensor,
@@ -2603,12 +2709,6 @@ pub fn try_fused_qkv_metal(
 ) -> Result<Option<(Tensor, Tensor, Tensor)>> {
     use candle_core::{backend::BackendStorage, MetalStorage, Shape, Storage};
 
-    if q.has_bias() || k.has_bias() || v.has_bias() {
-        return Ok(None);
-    }
-    if !matches!(xs.dtype(), DType::BF16 | DType::F16 | DType::F32) {
-        return Ok(None);
-    }
     if !xs.device().is_metal() {
         return Ok(None);
     }
@@ -3876,6 +3976,53 @@ mod tests {
 
         linear_no_bias(2, 3, &None, vb)?;
         assert_eq!(&*load_devices.lock().unwrap(), &[true, false]);
+        Ok(())
+    }
+}
+
+#[cfg(all(test, feature = "metal"))]
+mod fused_projection_metal_tests {
+    use candle_core::{DType, Device, Result, Tensor};
+
+    use crate::{
+        try_fused_gate_up, AfqBits, AfqGroupSize, AfqLayer, GluActivationType, QuantMethod,
+        QuantMethodConfig,
+    };
+
+    fn afq(device: &Device, out: usize, inp: usize, seed: f64) -> Result<AfqLayer> {
+        let weight =
+            (Tensor::randn(0f32, 1., (out, inp), device)? * seed)?.to_dtype(DType::BF16)?;
+        AfqLayer::new(QuantMethodConfig::Afq {
+            weight,
+            bias: None,
+            bits: AfqBits::Four,
+            group_size: AfqGroupSize::Med,
+        })
+    }
+
+    #[test]
+    fn fused_gate_up_matches_separate_and_steps_aside_while_collecting_stats() -> Result<()> {
+        let device = Device::new_metal(0)?;
+        let (rows, hidden, inter) = (32, 512, 1024);
+        let gate = afq(&device, inter, hidden, 0.05)?;
+        let up = afq(&device, inter, hidden, 0.07)?;
+        let xs = Tensor::randn(0f32, 1., (1, rows, hidden), &device)?.to_dtype(DType::BF16)?;
+
+        let fused = try_fused_gate_up(&xs, &gate, &up, GluActivationType::Silu)?
+            .expect("AFQ gate/up at 32 rows fuses on Metal");
+        let reference = (candle_nn::ops::silu(&gate.forward(&xs)?)? * up.forward(&xs)?)?;
+        let reference = reference.to_dtype(DType::F32)?;
+        let rel = ((fused.to_dtype(DType::F32)? - &reference)?.abs()?
+            / reference.abs()?.maximum(0.05)?)?
+        .max_all()?
+        .to_scalar::<f32>()?;
+        assert!(rel < 3e-2, "fused gate/up relative error {rel}");
+
+        gate.begin_track_stats()?;
+        assert!(
+            try_fused_gate_up(&xs, &gate, &up, GluActivationType::Silu)?.is_none(),
+            "fusion must step aside so imatrix stats see every input"
+        );
         Ok(())
     }
 }

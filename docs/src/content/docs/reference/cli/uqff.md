@@ -61,4 +61,3 @@ mistralrs uqff inspect [OPTIONS] --model-id <MODEL_ID>
 | `-m, --model-id <MODEL_ID>` | required | Hugging Face model ID or local path containing UQFF files |
 | `--quant <QUANT>` |  | Quant group to inspect, such as 3, q3k, afq3, or all |
 | `--revision <REVISION>` |  | Hugging Face revision to use |
-

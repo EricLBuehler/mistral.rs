@@ -42,6 +42,8 @@ use crate::pipeline::cuda_graph::{
 
 const DEFAULT_BLOCK_SIZE: usize = 16;
 pub const DEFAULT_MAX_DRAFTS: usize = 7;
+/// Depths the speculative autotuner chooses between for a block drafter; block drafts accept longer runs.
+pub const AUTO_DEPTHS: [usize; 3] = [3, 5, 7];
 // Eager forwards use this cache; CUDA graphs derive RoPE from their replayed position inputs.
 const ROPE_CACHE_LEN: usize = 65536;
 const MASK_CACHE_CAP: usize = 64;

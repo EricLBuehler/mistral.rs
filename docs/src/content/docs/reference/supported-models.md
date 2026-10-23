@@ -43,6 +43,7 @@ The `Architecture` column is the `config.json` `architectures` value. Per-family
 | `Glm4MoeLiteForCausalLM` | GLM-4.7-Flash | <details><summary><code>zai-org/GLM-4.7-Flash</code></summary><code>mistralrs run -m zai-org/GLM-4.7-Flash</code></details> |
 | `Glm4MoeForCausalLM` | GLM-4.7 | <details><summary><code>zai-org/GLM-4.7</code></summary><code>mistralrs run -m zai-org/GLM-4.7</code></details> |
 | `Qwen3MoeForCausalLM` | Qwen3 MoE | <details><summary><code>Qwen/Qwen3-30B-A3B</code></summary><code>mistralrs run -m Qwen/Qwen3-30B-A3B</code></details> |
+| `FlintForCausalLM` | Flint | <details><summary><code>RecursiveSI/flint</code></summary><code>mistralrs run -m RecursiveSI/flint</code></details> |
 | `SmolLM3ForCausalLM` | SmolLM3 | <details><summary><code>HuggingFaceTB/SmolLM3-3B</code></summary><code>mistralrs run -m HuggingFaceTB/SmolLM3-3B</code></details> |
 | `GraniteMoeHybridForCausalLM` | Granite 4.0 | <details><summary><code>ibm-granite/granite-4.0-micro</code></summary><code>mistralrs run -m ibm-granite/granite-4.0-micro</code></details> |
 | `GptOssForCausalLM` | GPT-OSS | <details><summary><code>openai/gpt-oss-20b</code> (20b), <code>openai/gpt-oss-120b</code> (120b)</summary><code>mistralrs run -m openai/gpt-oss-20b</code><br><code>mistralrs run -m openai/gpt-oss-120b</code></details> |
@@ -76,6 +77,7 @@ The `Architecture` column is the `config.json` `architectures` value. Per-family
 | `Qwen3VLMoeForConditionalGeneration` | Qwen3-VL MoE | <details><summary><code>Qwen/Qwen3-VL-235B-A22B-Instruct</code></summary><code>mistralrs run -m Qwen/Qwen3-VL-235B-A22B-Instruct</code></details> |
 | `Qwen3_5ForConditionalGeneration` | Qwen 3.5, Qwen 3.6 | <details><summary><code>Qwen/Qwen3.5-27B</code> (3.5), <code>Qwen/Qwen3.6-27B</code> (3.6)</summary><code>mistralrs run -m Qwen/Qwen3.5-27B</code><br><code>mistralrs run -m Qwen/Qwen3.6-27B</code></details> |
 | `Qwen3_5MoeForConditionalGeneration` | Qwen 3.5 MoE, Qwen 3.6 MoE | <details><summary><code>Qwen/Qwen3.5-35B-A3B</code> (3.5), <code>Qwen/Qwen3.6-35B-A3B</code> (3.6)</summary><code>mistralrs run -m Qwen/Qwen3.5-35B-A3B</code><br><code>mistralrs run -m Qwen/Qwen3.6-35B-A3B</code></details> |
+| `Qwen4ExpForConditionalGeneration` | Qwen3.8-Flash-Next | <details><summary><code>Qwen/Qwen3.8-Flash-Next</code></summary><code>mistralrs run -m Qwen/Qwen3.8-Flash-Next</code></details> |
 | `VoxtralRealtimeForConditionalGeneration` | Voxtral | <details><summary><code>mistralai/Voxtral-Mini-4B-Realtime-2602</code></summary><code>mistralrs run -m mistralai/Voxtral-Mini-4B-Realtime-2602</code></details> |
 | `Gemma4ForConditionalGeneration` | Gemma 4 | <details><summary><code>google/gemma-4-E4B-it</code> (E4B), <code>google/gemma-4-26B-A4B-it</code> (26B-A4B MoE), <code>google/gemma-4-31B-it</code> (31B dense)</summary><code>mistralrs run -m google/gemma-4-E4B-it</code><br><code>mistralrs run -m google/gemma-4-26B-A4B-it</code><br><code>mistralrs run -m google/gemma-4-31B-it</code></details> |
 | `MuseGlimmerForConditionalGeneration` | Muse Glimmer | <details><summary><code>meta-models/Muse-Glimmer-30B</code></summary><code>mistralrs run -m meta-models/Muse-Glimmer-30B</code></details> |
@@ -111,4 +113,4 @@ Text, multimodal, speech, and embedding models support ISQ at load time. Diffusi
 | Mode | Target architecture | Assistant checkpoint family | Guide |
 |---|---|---|---|
 | MTP | `Gemma4` | Gemma 4 assistant checkpoints, PagedAttention required | [Speculative decoding (MTP)](/guides/perf/speculative-decoding/) |
-| MTP | `Qwen3_5`, `Qwen3.8` | Built-in `mtp.*` head (`--mtp`), PagedAttention required | [Speculative decoding (MTP)](/guides/perf/speculative-decoding/) |
+| MTP | `Qwen3_5`, `Qwen3.8`, `Qwen3.8-Flash-Next` | Built-in `mtp.*` head (`--mtp`) from safetensors/UQFF, PagedAttention required | [Speculative decoding (MTP)](/guides/perf/speculative-decoding/) |

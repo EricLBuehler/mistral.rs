@@ -19,7 +19,10 @@ use crate::{
         embedding_with_legacy_tied_uqff, Activation, CausalMasker, MatMul, Mlp, RmsNorm,
         RotaryEmbedding, Sdpa,
     },
-    paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttention},
+    paged_attention::{
+        AttentionImplementation, HybridPagedKvCacheConfig, ModelConfigLike, ModelConfigMetadata,
+        PagedAttention, PrefixPrefillAttentionFeatures,
+    },
     pipeline::{
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
         EitherCache, IsqModel, KvCache, ModelForwardContext, NormalCache, NormalCacheType,
@@ -347,11 +350,10 @@ impl DecoderLayer {
         let xs = self
             .self_attn
             .forward(&xs, attention_mask, kv_cache, ctx, layer_idx)?;
-        let xs = (xs + residual)?;
-        let residual = &xs;
-        let xs = self
-            .mlp
-            .forward(&xs.apply(&self.post_attention_layernorm)?)?;
+        let (residual, xs) = self
+            .post_attention_layernorm
+            .forward_add_rms_norm(&xs, residual)?;
+        let xs = self.mlp.forward(&xs)?;
         residual + xs
     }
 }
@@ -635,6 +637,22 @@ impl NormalModel for Model {
     }
     fn config(&self) -> &ModelConfigMetadata {
         &self.cfg
+    }
+    fn model_config(&self) -> Arc<dyn ModelConfigLike + Send + Sync> {
+        let features = self
+            .layers
+            .iter()
+            .map(|layer| PrefixPrefillAttentionFeatures {
+                has_alibi: false,
+                has_sinks: layer.self_attn.sdpa_params.sinks.is_some(),
+                has_softcap: layer.self_attn.sdpa_params.softcap.is_some(),
+                has_sliding_window: layer.self_attn.sdpa_params.sliding_window.is_some(),
+            })
+            .collect();
+        Arc::new(
+            HybridPagedKvCacheConfig::new(self.cfg.clone(), vec![true; self.layers.len()])
+                .with_prefix_prefill_attention_features(features),
+        )
     }
     fn supports_packed_prefill(&self) -> bool {
         true

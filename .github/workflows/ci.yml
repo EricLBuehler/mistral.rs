@@ -70,6 +70,31 @@ jobs:
           command: test
           args: -p mistralrs-core -p mistralrs-quant -p mistralrs-vision
 
+  installer:
+    name: Installer
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macOS-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: python3 -m unittest scripts.tests.test_install
+
+  installer-windows:
+    name: Installer (Windows, ${{ matrix.shell }})
+    runs-on: windows-latest
+    strategy:
+      matrix:
+        shell: [powershell, pwsh]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Test PowerShell installer
+        shell: ${{ matrix.shell }}
+        run: ./scripts/tests/test_install_windows.ps1
+
   fmt:
     name: Rustfmt
     runs-on: ubuntu-latest

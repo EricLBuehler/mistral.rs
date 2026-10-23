@@ -322,11 +322,10 @@ impl MLlamaSelfAttentionDecoderLayer {
         hidden_states =
             self.attn
                 .forward(&hidden_states, attention_mask, ctx, kv_cache, layer_idx)?;
-        hidden_states = (residual + hidden_states)?;
-
-        let residual = &hidden_states;
-        let mut hidden_states = self.post_attention_layernorm.forward(&hidden_states)?;
-        hidden_states = self.mlp.forward(&hidden_states)?;
+        let (residual, hidden_states) = self
+            .post_attention_layernorm
+            .forward_add_rms_norm(&hidden_states, residual)?;
+        let hidden_states = self.mlp.forward(&hidden_states)?;
 
         residual + hidden_states
     }

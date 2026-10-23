@@ -71,9 +71,41 @@ mistralrs serve -m Qwen/Qwen3.8-27B-FP8 --pa-cache-type f8e4m3 --max-seqs 16
 The checkpoint's dynamic activation scaling and `modules_to_not_convert` declarations are applied
 automatically; `--quant` is not needed for a pre-quantized FP8 repository.
 
+## Flint
+
+[RecursiveSI/flint](https://huggingface.co/RecursiveSI/flint) is a text-only MoE model with optional reasoning and native tool calling. Its 49 layers combine sliding-window and full attention, per-head QK normalization, and learned attention sinks. The checkpoint configures a 262,144-token context window.
+
+```bash
+mistralrs run -m RecursiveSI/flint
+mistralrs run -m RecursiveSI/flint --quant 4
+mistralrs serve -p 1234 -m RecursiveSI/flint
+```
+
+`--quant 4` selects compatible prebuilt UQFF weights when available and otherwise applies in-situ quantization. Use `--isq 4` to force in-situ quantization. Flint also supports MoQE and UQFF through the standard quantization workflows. X-LoRA loading is not supported.
+
+Flint GGUF files can load directly from their embedded configuration, tokenizer, chat template, stop tokens, and sampling defaults:
+
+```bash
+mistralrs run -m RecursiveSI/flint-int4-gguf -f flint-int4-q4_1.gguf
+mistralrs run -f /path/to/flint-Q3_K_S.gguf
+```
+
+Choose a [supported GGUF storage type](/reference/gguf-support/#storage-formats), such as Q4_1 or a K-quant. The separate NVFP4 GGUF format is not supported.
+
+CUDA uses paged attention by default, with prefix caching and fused attention sinks for chunked prefill and packed batches, including sliding-window attention.
+Sliding-window decode reads the required KV pages directly and supports CUDA graph replay.
+
+Leave `--kv-cache` unset to use [automatic memory sizing](/guides/perf/paged-attention/#automatic-sizing). The shared KV pool is sized from the available memory budget and can hold more tokens than the model's per-request context window. Use `--max-model-len` to lower the per-request prompt-plus-output limit; it does not cap the shared pool's token capacity.
+
+The checkpoint supplies the chat template, stop tokens, and sampling defaults: temperature `1.0`, top-p `0.95`, and top-k `20`. Flint decides whether to emit reasoning on each turn; `enable_thinking` and `reasoning_effort` do not change its template. Reasoning is returned in `reasoning_content`. Preserve that field on assistant messages when sending conversation history back, including messages containing tool calls.
+
+Tool calls use Flint's native `<tool_call>`, `<arg_key>`, and `<arg_value>` format internally and are returned as OpenAI-compatible `tool_calls`. Send tool definitions on each request. Both streaming and non-streaming requests support multiple calls, nested JSON arguments, and returning tool results on the next turn. See the [Flint tool calling example](/examples/server/flint-tools/).
+
+For hard problems, the model authors recommend an output budget of at least 32,768 tokens, including reasoning. A `length` finish reason can mean the model reached that budget before producing an answer.
+
 ## MoE models and MoQE
 
-MoE (Mixture of Experts) families (DeepSeek V2/V3, GLM-4.7, GLM-4.7-Flash, Phi 3.5 MoE, Qwen3 MoE, Qwen3-VL MoE, Qwen3.5/Qwen3.6 MoE, LFM2/LFM2.5 MoE) support MoQE (Mixture of Quantized Experts): quantizing only the routed experts, which dominate memory, while leaving the rest of the model alone. Enable it when applying ISQ with `--isq-organization moqe`:
+MoE (Mixture of Experts) families (DeepSeek V2/V3, GLM-4.7, GLM-4.7-Flash, Phi 3.5 MoE, Qwen3 MoE, Qwen3-VL MoE, Qwen3.5/Qwen3.6 MoE, LFM2/LFM2.5 MoE, Flint) support MoQE (Mixture of Quantized Experts): quantizing only the routed experts, which dominate memory, while leaving the rest of the model alone. Enable it when applying ISQ with `--isq-organization moqe`:
 
 ```bash
 mistralrs run --isq 4 --isq-organization moqe -m Qwen/Qwen3-30B-A3B
@@ -124,6 +156,27 @@ mistralrs serve -m Qwen/Qwen3.5-27B \
 ```
 
 Overrides merge recursively, so the checkpoint's `rope_theta`, `partial_rotary_factor`, and MRoPE sections remain intact. `--max-model-len` only sets the prompt-plus-output limit; it does not enable RoPE scaling and cannot exceed the context length supported by the final config. Static YaRN can reduce quality on shorter inputs, so enable it only when the extended context is needed.
+
+## Qwen3.8-Flash-Next
+
+Qwen3.8-Flash-Next (HF `qwen4_exp`) adds block-sparse attention (QSA), hyper-connections, and a hashed n-gram embedding (PLE) to the Qwen3.5 MoE hybrid. The checkpoint is roughly 330 GB, including a 100 GB bf16 PLE table. Use ISQ to reduce memory use:
+
+```bash
+mistralrs serve -m Qwen/Qwen3.8-Flash-Next --isq q4k
+```
+
+- On CUDA, the safetensors PLE table is quantized separately at startup: 8-bit if it fits in device memory, otherwise 4-bit (about 29 GB). This reads the whole table once and adds to startup time. If neither fits, rows are read from the memory-mapped checkpoint; CUDA decode graphs then require pageable memory access (ATS/HMM). CPU and Metal gather mapped rows on the host.
+- QSA preserves full causal attention through 2,051 tokens. Longer contexts use QSA over the paged KV cache: each query selects 512 four-token blocks plus the incomplete tail, for at most 2,051 tokens. QSA also needs a small per-token indexer cache.
+- Paged attention is CUDA-only for this model. On other devices, use `--paged-attn off`. FP8 KV caches and tensor parallelism are not supported.
+- Add `--mtp` for built-in [speculative decoding](/guides/perf/speculative-decoding/) with safetensors or UQFF checkpoints containing `mtp.*` weights. Draft depth adapts among 2, 3, 4, and 6 tokens; `--mtp-n-predict N` fixes it. MTP needs extra weights, one attention layer's KV cache, and recurrent verification state.
+- Built-in MTP recomputes cached prompt prefixes, so repeated prompts can take longer to prefill. GGUF loading does not support MTP. External MTP and DFlash drafters are also unsupported for this model.
+- `qwen4exp` GGUF files load without `config.json`. `--quant` selects a variant and its vision projector for image and video input. On CUDA, the IQ4_NL PLE table is copied into device memory without requantization if it fits. Otherwise, rows are gathered on the host and CUDA decode graphs are disabled.
+
+```bash
+mistralrs run -m unsloth/Qwen3.8-Flash-Next-GGUF --quant 4
+```
+
+CUDA devices with unified memory, such as DGX Spark, use the shared [automatic memory planner](/guides/perf/paged-attention/#memory-budget) to budget weights, runtime workspace, and KV cache against available system memory. Use `--kv-cache 65536tokens` to set the shared cache capacity, or `--max-model-len N` to limit prompt-plus-output length per request.
 
 ## Granite 4.0 (GraniteMoeHybrid)
 

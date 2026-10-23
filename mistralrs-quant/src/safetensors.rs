@@ -389,7 +389,7 @@ impl SimpleBackend for MmapedSafetensors {
 
 pub enum ShardedSafeTensors {
     Sharded {
-        b: MmapedSafetensors,
+        b: Arc<MmapedSafetensors>,
         make_dummy_regexes: Option<Arc<Vec<Regex>>>,
         predicate: Arc<dyn Fn(String) -> bool + Send + Sync + 'static>,
     },
@@ -431,7 +431,7 @@ impl ShardedSafeTensors {
         make_dummy_regexes: Option<Arc<Vec<Regex>>>,
         predicate: Arc<dyn Fn(String) -> bool + Send + Sync + 'static>,
     ) -> Result<ShardedVarBuilder> {
-        let tensors = MmapedSafetensors::multi(paths)?;
+        let tensors = Arc::new(MmapedSafetensors::multi(paths)?);
         // mirror get()'s gating so tensor_shape never reports a tensor get() would refuse
         let shapes = tensors
             .tensors()
@@ -442,13 +442,14 @@ impl ShardedSafeTensors {
             .map(|(name, view)| (name, view.shape().to_vec()))
             .collect();
         let backend = ShardedSafeTensors::Sharded {
-            b: tensors,
+            b: tensors.clone(),
             make_dummy_regexes,
             predicate,
         };
         Ok(
             ShardedVarBuilder::from_varbuilder(VarBuilderArgs::new_with_args(backend, dtype, dev))
-                .with_shapes(shapes),
+                .with_shapes(shapes)
+                .with_raw_safetensors(tensors),
         )
     }
 }
@@ -625,7 +626,7 @@ impl Backend for ShardedSafeTensors {
                     }
 
                     return SimpleBackend::get(
-                        b,
+                        b.as_ref(),
                         target_shape,
                         path,
                         Default::default(),
@@ -819,7 +820,7 @@ impl Backend for ShardedSafeTensors {
                         path: name.to_string(),
                     });
                 }
-                <MmapedSafetensors as SimpleBackend>::get_unchecked(b, name, dtype, dev)
+                <MmapedSafetensors as SimpleBackend>::get_unchecked(b.as_ref(), name, dtype, dev)
             }
             Self::SimpleBackend { b, .. } => b.as_ref().get_unchecked(name, dtype, dev),
         }

@@ -110,6 +110,11 @@ impl QuantizedSerde for PendingIsqLayer {
 }
 
 impl QuantMethod for PendingIsqLayer {
+    #[cfg(feature = "metal")]
+    fn prepare_metal_kernels(&self, activation_dtype: DType) -> Result<()> {
+        self.resolve()?.prepare_metal_kernels(activation_dtype)
+    }
+
     fn new(_method: QuantMethodConfig) -> Result<Self>
     where
         Self: Sized,

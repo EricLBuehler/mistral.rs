@@ -42,7 +42,7 @@ Manual Linux CUDA build with NCCL:
 cargo install mistralrs-cli --features "cuda nccl flash-attn cudnn"
 ```
 
-If NCCL is not installed, omit `nccl`. To force the installer decision, use `MISTRALRS_INSTALL_NCCL=1` or `MISTRALRS_INSTALL_NO_NCCL=1`. To disable NCCL at runtime without rebuilding:
+If NCCL is not installed, omit `nccl`. For installer source builds, pass `--no-nccl` to skip it; see [installer options](/reference/installer/). To disable NCCL at runtime without rebuilding:
 
 ```bash
 MISTRALRS_NO_NCCL=1 mistralrs serve -m Qwen/Qwen3-32B --quant 4
@@ -67,7 +67,9 @@ If the visible GPU count is incompatible, mistral.rs errors instead of selecting
 
 ### Layer mapping (CUDA P2P)
 
-Assign explicit layer counts to devices. For uneven GPUs, put fewer layers on the smaller or busier GPU.
+Without explicit layer counts, automatic layer mapping assigns contiguous layer ranges in visible-device order using each device's available memory. With paged attention enabled, it budgets weights, execution workspace, and KV storage together using the shared [memory goal](/guides/perf/paged-attention/#memory-budget) and [serving limits](/guides/perf/throughput-tuning/#memory-planning-for-automatic-device-mapping).
+
+To override placement, assign explicit layer counts to devices. For uneven GPUs, put fewer layers on the smaller or busier GPU.
 
 <Tabs>
 <TabItem label="CLI">
@@ -106,11 +108,11 @@ Use NCCL when possible for single-machine CUDA tensor parallelism. It keeps coll
 
 Layer mapping moves activations only at layer-boundary device changes, so contiguous ranges matter. On CUDA, peer access is enabled for supported GPU pairs. If the driver reports that peer access is unavailable or cannot be enabled, those transfers stage through CPU and startup logs include a warning.
 
-For mixed GPU memory sizes, manually set `--device-layers`; the automatic split does not optimize for heterogeneous memory or PCIe/NVLink topology. Multi-socket servers with GPUs on different sockets pay a cross-socket transfer penalty. Auto-detection does not account for this and will use any visible GPU regardless of socket or interconnect topology.
+Automatic layer mapping accounts for different per-device memory budgets, but does not optimize for PCIe/NVLink topology or balance compute across different GPU speeds. Use `--device-layers` when you need to control that tradeoff. Multi-socket servers with GPUs on different sockets can pay a cross-socket transfer penalty; restrict the visible devices or set placement explicitly when topology matters.
 
-If the model does not fit even across GPUs, CPU offload places some layers on CPU. Device mapping and dtype are orthogonal, but CPU lacks bf16/fp16 hardware support, so CPU-offloaded layers run at f32 internally even with bf16 on-disk weights.
+On discrete-memory systems, automatic layer mapping can fall back to CPU placement when the model does not fit across GPUs. Mixed GPU/CPU placement disables paged attention; an explicit memory goal fails instead of being silently discarded.
 
-On Apple Silicon there is no multi-GPU concept: CPU and GPU share unified memory and device mapping is a no-op. `mistralrs doctor` reports a single device on Apple hardware.
+On Apple Silicon, CPU and GPU share unified memory. Automatic placement still checks whether the weights, execution workspace, and cache fit the Metal budget, including the recommended working-set limit and available system memory. It does not add CPU RAM as a separate fallback pool, because that would count the same memory twice.
 
 ## Multi-node NCCL
 

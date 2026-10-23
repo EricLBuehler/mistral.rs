@@ -736,7 +736,7 @@ impl Block {
         } else {
             None
         };
-        let x = (self.attn.forward(
+        let x = self.attn.forward(
             &x,
             position_ids,
             &mask,
@@ -744,9 +744,9 @@ impl Block {
             kv_cache,
             ctx,
             layer_idx,
-        )? + residual)?;
-        let residual = &x;
-        let x = (self.ff.forward(&self.rms_2.forward(&x)?)? + residual)?;
+        )?;
+        let (residual, x) = self.rms_2.forward_add_rms_norm(&x, residual)?;
+        let x = (self.ff.forward(&x)? + residual)?;
         Ok(x)
     }
 }
@@ -977,7 +977,11 @@ impl TextModel {
         } else {
             None
         };
-        let chunked_mask = if chunked_flash_params.is_none() {
+        let chunked_mask = if ctx.is_paged() && x.device().is_metal() {
+            AttentionMask::ChunkedCausal {
+                chunk_size: self.attention_chunk_size,
+            }
+        } else if chunked_flash_params.is_none() {
             fixed_chunk_attention_mask(
                 input_ids,
                 ctx.seqlen_offsets(),

@@ -128,17 +128,17 @@ fn test_flash_attn_cpu_single_q_half_masks() -> CandleResult<()> {
         (b, kv_len, h, d),
         &Device::Cpu,
     )?;
-    let mask_f32 = Tensor::from_vec(
+    for values in [
         vec![0.0f32, f32::NEG_INFINITY, 0.0],
-        (1, kv_len),
-        &Device::Cpu,
-    )?;
-    let expected = naive_attention(&q, &k, &v, Some(&mask_f32), None)?;
-
-    for dtype in [DType::F16, DType::BF16] {
-        let mask = mask_f32.to_dtype(dtype)?;
-        let out = run_flash_attn_cpu::<f32>(&q, &k, &v, Some(&mask), &sdpa(None))?;
-        assert_close(&out, &expected)?;
+        vec![f32::NEG_INFINITY, f32::NEG_INFINITY, 0.0],
+    ] {
+        let mask_f32 = Tensor::from_vec(values, (1, kv_len), &Device::Cpu)?;
+        let expected = naive_attention(&q, &k, &v, Some(&mask_f32), None)?;
+        for dtype in [DType::F32, DType::F16, DType::BF16] {
+            let mask = mask_f32.to_dtype(dtype)?;
+            let out = run_flash_attn_cpu::<f32>(&q, &k, &v, Some(&mask), &sdpa(None))?;
+            assert_close(&out, &expected)?;
+        }
     }
 
     Ok(())

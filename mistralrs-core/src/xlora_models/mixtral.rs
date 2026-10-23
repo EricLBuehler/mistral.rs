@@ -187,10 +187,6 @@ impl Attention {
             attention_mask,
             self.sliding_window,
         )?;
-        let attn_mask = match attn_mask {
-            Some(t) => AttentionMask::Custom(t),
-            None => AttentionMask::None,
-        };
 
         let attn_output = Sdpa.run_attention(
             &q,

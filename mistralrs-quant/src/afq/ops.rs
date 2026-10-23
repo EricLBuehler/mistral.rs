@@ -517,27 +517,30 @@ pub(crate) fn afq_mm_op(
                         scales.dtype(),
                         "afq-qmm-splitk-intermediate",
                     )?;
-                    let encoder = device.command_encoder()?;
-                    encoder.set_label("afq-qmm-splitk");
-                    crate::metal_kernels::call_afq_qmm_splitk(
-                        device.device(),
-                        &encoder,
-                        crate::metal_kernels::Kernels::global(),
-                        scales.dtype(),
-                        x_s.buffer(),
-                        x.layout().start_offset() * x.dtype().size_in_bytes(),
-                        w_s.buffer(),
-                        s_s.buffer(),
-                        b_s.buffer(),
-                        &intermediate,
-                        m_outer,
-                        n_out,
-                        k_in,
-                        split_k,
-                        bits,
-                        group_size,
-                    )
-                    .map_err(candle_core::Error::wrap)?;
+                    // The guard holds candle's command mutex; `sum` below needs it again.
+                    {
+                        let encoder = device.command_encoder()?;
+                        encoder.set_label("afq-qmm-splitk");
+                        crate::metal_kernels::call_afq_qmm_splitk(
+                            device.device(),
+                            &encoder,
+                            crate::metal_kernels::Kernels::global(),
+                            scales.dtype(),
+                            x_s.buffer(),
+                            x.layout().start_offset() * x.dtype().size_in_bytes(),
+                            w_s.buffer(),
+                            s_s.buffer(),
+                            b_s.buffer(),
+                            &intermediate,
+                            m_outer,
+                            n_out,
+                            k_in,
+                            split_k,
+                            bits,
+                            group_size,
+                        )
+                        .map_err(candle_core::Error::wrap)?;
+                    }
 
                     let intermediate_tensor = Tensor::from((
                         Storage::Metal(MetalStorage::new(
@@ -765,6 +768,11 @@ pub fn metal_moe_weighted_reduce_flat(
         Storage::Metal(MetalStorage::new(output, device.clone(), out_elems, dtype)),
         Shape::from(vec![num_tokens, hidden]),
     )))
+}
+
+#[cfg(feature = "metal")]
+pub fn afq_sorted_gather_supported(group_size: AfqGroupSize, bits: AfqBits) -> bool {
+    matches!(group_size, AfqGroupSize::Med) && matches!(bits, AfqBits::Four | AfqBits::Eight)
 }
 
 /// Sorted-MoE tiled grouped GEMM via the MLX-ported `affine_gather_qmm_rhs`
@@ -3561,5 +3569,63 @@ mod cuda_backend {
             }
             other => candle_core::bail!("Unsupported dtype for AFQ CUDA matmul: {other:?}"),
         }
+    }
+}
+
+#[cfg(all(test, feature = "metal"))]
+mod qmv_rows_tests {
+    #![allow(clippy::cast_precision_loss)]
+
+    use candle_core::{Device, Result, Tensor};
+
+    use super::{afq_mm_op, afq_quantize_op};
+    use crate::{AfqBits, AfqGroupSize};
+
+    fn quantized(device: &Device, k: usize, n: usize) -> Result<(Tensor, Tensor, Tensor)> {
+        let w = Tensor::randn(0f32, 1., (n, k), device)?.to_dtype(candle_core::DType::BF16)?;
+        afq_quantize_op(&w, AfqGroupSize::Med, AfqBits::Four)
+    }
+
+    fn mm(x: &Tensor, q: &(Tensor, Tensor, Tensor)) -> Result<Tensor> {
+        afq_mm_op(
+            x,
+            &q.0,
+            &q.1,
+            &q.2,
+            None,
+            None,
+            AfqGroupSize::Med,
+            AfqBits::Four,
+            true,
+        )
+    }
+
+    fn max_rel_err(actual: &Tensor, reference: &Tensor) -> Result<f32> {
+        let actual = actual.to_dtype(candle_core::DType::F32)?.flatten_all()?;
+        let reference = reference.to_dtype(candle_core::DType::F32)?.flatten_all()?;
+        let err = (actual - &reference)?.abs()?.max(0)?.to_scalar::<f32>()?;
+        let scale = reference.abs()?.max(0)?.to_scalar::<f32>()?;
+        Ok(err / scale)
+    }
+
+    #[test]
+    fn small_batch_rows_match_dequantized_reference() -> Result<()> {
+        let device = Device::new_metal(0)?;
+        let q = quantized(&device, 5120, 1024)?;
+        let w = super::afq_dequantize_op(&q.0, &q.1, &q.2, AfqGroupSize::Med, AfqBits::Four)?
+            .to_dtype(candle_core::DType::F32)?;
+        for rows in [1usize, 2, 3, 4, 5, 8, 9] {
+            let x = Tensor::randn(0f32, 1., (rows, 1, 5120), &device)?
+                .to_dtype(candle_core::DType::BF16)?;
+            let reference = x
+                .to_dtype(candle_core::DType::F32)?
+                .reshape((rows, 5120))?
+                .matmul(&w.t()?)?;
+            let actual = mm(&x, &q)?.reshape((rows, 1024))?;
+            let err = max_rel_err(&actual, &reference)?;
+            // BF16 output rounding is ~4e-3 relative; anything larger is a real error.
+            assert!(err < 1e-2, "rows={rows}: max relative error {err}");
+        }
+        Ok(())
     }
 }

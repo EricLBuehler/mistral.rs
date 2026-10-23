@@ -371,10 +371,10 @@ impl DecoderLayer {
         let xs = self
             .self_attn
             .forward(&xs, attention_mask, kv_cache, ctx, layer_idx)?;
-        let xs = (xs + residual)?;
-        let residual = &xs;
+        let (residual, xs) = self
+            .post_attention_layernorm
+            .forward_add_rms_norm(&xs, residual)?;
         let xs = xs
-            .apply(&self.post_attention_layernorm)?
             .apply(&self.block_sparse_moe)?
             .to_dtype(residual.dtype())?;
         residual + xs

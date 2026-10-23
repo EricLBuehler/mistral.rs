@@ -1082,6 +1082,17 @@ impl HybridCache {
         dtype: candle_core::DType,
         layer_devices: &[Device],
     ) -> Result<Self> {
+        Self::new_with_recurrent_overrides(config, dtype, layer_devices, &HashMap::new())
+    }
+
+    /// Like `new`, but recurrent layers listed in `overrides` get their own state shapes instead of
+    /// `config.recurrent`. Their pools still share slot allocation, snapshots and resets.
+    pub fn new_with_recurrent_overrides(
+        config: HybridCacheConfig,
+        dtype: candle_core::DType,
+        layer_devices: &[Device],
+        overrides: &HashMap<usize, RecurrentLayerConfig>,
+    ) -> Result<Self> {
         if layer_devices.len() != config.layer_types.len() {
             candle_core::bail!(
                 "Hybrid cache has {} layers but {} layer devices",
@@ -1091,7 +1102,10 @@ impl HybridCache {
         }
         let mut caches = Vec::with_capacity(config.layer_types.len());
 
-        for (layer_type, device) in config.layer_types.iter().zip(layer_devices) {
+        for (layer_idx, (layer_type, device)) in
+            config.layer_types.iter().zip(layer_devices).enumerate()
+        {
+            let recurrent = overrides.get(&layer_idx).unwrap_or(&config.recurrent);
             let cache = match layer_type {
                 HybridLayerType::Attention => HybridLayerCache::Attention(KvCache::new_normal(
                     2,
@@ -1100,15 +1114,15 @@ impl HybridCache {
                 )),
                 HybridLayerType::Recurrent => {
                     let (state_dims, state_layout) =
-                        config.recurrent.state.physical_layout(dtype, device)?;
+                        recurrent.state.physical_layout(dtype, device)?;
                     HybridLayerCache::Recurrent(RecurrentStatePool::new(
                         RecurrentStatePoolConfig {
-                            conv_dim: config.recurrent.conv_dim,
-                            conv_width: config.recurrent.conv_width,
+                            conv_dim: recurrent.conv_dim,
+                            conv_width: recurrent.conv_width,
                             state_dims,
                             state_layout,
                             conv_dtype: dtype,
-                            recurrent_dtype: config.recurrent.recurrent_dtype.unwrap_or(dtype),
+                            recurrent_dtype: recurrent.recurrent_dtype.unwrap_or(dtype),
                             device,
                         },
                     )?)
@@ -1627,9 +1641,10 @@ impl HybridCache {
             .caches
             .iter()
             .filter_map(HybridLayerCache::as_recurrent_pool)
+            .filter(|pool| pool.state_layout() != RecurrentStateLayout::Opaque)
             .collect::<Vec<_>>();
         if recurrent_pools.is_empty() {
-            candle_core::bail!("hybrid cache has no recurrent state pool");
+            candle_core::bail!("hybrid cache has no GDN recurrent state pool");
         }
         let existing = recurrent_pools
             .iter()
@@ -1656,10 +1671,13 @@ impl HybridCache {
         let mut storage = storage.into_iter();
         for cache in &mut self.caches {
             if let HybridLayerCache::Recurrent(pool) = cache {
+                if pool.state_layout() == RecurrentStateLayout::Opaque {
+                    continue;
+                }
                 pool.install_pending_transition_storage(
                     storage
                         .next()
-                        .expect("one pending allocation per recurrent pool"),
+                        .expect("one pending allocation per GDN recurrent pool"),
                 );
             }
         }
@@ -4025,13 +4043,10 @@ impl HybridCache {
         for cache in &self.caches {
             if let HybridLayerCache::Recurrent(pool) = cache {
                 let idx_tensor = Tensor::from_vec(vec![physical_slot], (1,), pool.device())?;
+                // Device-resident so the copy returns to the allocator pool instead of fragmenting the host heap
                 states.push(RecurrentStateSnapshot {
-                    conv_state: pool
-                        .gather_conv_state(&idx_tensor)?
-                        .to_device(&Device::Cpu)?,
-                    recurrent_state: pool
-                        .gather_recurrent_state(&idx_tensor)?
-                        .to_device(&Device::Cpu)?,
+                    conv_state: pool.gather_conv_state(&idx_tensor)?,
+                    recurrent_state: pool.gather_recurrent_state(&idx_tensor)?,
                     state_layout: pool.state_layout(),
                 });
             }

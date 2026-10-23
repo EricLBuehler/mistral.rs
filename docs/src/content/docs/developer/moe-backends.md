@@ -37,6 +37,11 @@ a reproducible source build, or set `CUTILE_TILEIRAS_PATH` to the executable dir
 searches standard CUDA 13.3 and 13.2 installations before falling back to `PATH`. Release archives
 do not redistribute `tileiras`.
 
+For CUDA 13.4, explicitly select the toolkit with `CUDA_TOOLKIT_PATH` and add its `bin` directory
+to `PATH`; see the [source build instructions](/developer/from-source/#clone-and-build). This
+keeps cuTile from selecting an older standard installation on a machine with multiple toolkits.
+If `CUTILE_TILEIRAS_PATH` is already set, update it to `/usr/local/cuda-13.4/bin/tileiras` as well.
+
 Run `mistralrs doctor` to check cuTile availability for every detected GPU. See NVIDIA's
 [cuTile installation guide](https://docs.nvidia.com/cuda/cutile-python/quickstart.html).
 

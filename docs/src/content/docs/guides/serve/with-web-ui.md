@@ -4,10 +4,12 @@ description: What you get from the built-in web UI mounted at /ui, and how to cu
 ---
 
 ```bash
-mistralrs serve -m Qwen/Qwen3-4B
+mistralrs serve -m Qwen/Qwen3-4B --quant 4
 ```
 
-Open `http://localhost:1234/ui`. The built-in web UI is mounted at `/ui` by default whenever you run `mistralrs serve`. It is a single-page app bundled into the binary; nothing is fetched from the network at runtime.
+When the server is ready, open [http://localhost:1234/ui](http://localhost:1234/ui). Keep the terminal open while chatting; press Ctrl+C to stop. For installation, follow the [quickstart](/quickstart/).
+
+The built-in web UI is mounted at `/ui` by default whenever you run `mistralrs serve`. It is a single-page app bundled into the binary; nothing is fetched from the network at runtime.
 
 The UI provides:
 

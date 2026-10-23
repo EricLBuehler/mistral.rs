@@ -466,6 +466,29 @@ pub fn sample_draft_rows(
             contexts.len()
         );
     }
+    #[cfg(feature = "cuda")]
+    if batch > 1 && logits.device().is_cuda() {
+        let samplers = sequences
+            .iter()
+            .map(|seq| seq.sampler())
+            .collect::<Vec<_>>();
+        if samplers.iter().all(|sampler| {
+            sampler.cuda_batch_sampling_plan(false).is_some_and(|plan| {
+                matches!(plan.kind, crate::sampler::CudaBatchSamplingKind::Greedy)
+            })
+        }) {
+            let packed = samplers[0].sample_cuda_top1_batch(&logits.contiguous()?)?;
+            let tokens = packed
+                .iter()
+                .zip(&samplers)
+                .map(|(row, sampler)| Ok(sampler.sample_cuda_top1_row(row)?.token))
+                .collect::<Result<Vec<_>>>()?;
+            for (context, token) in contexts.iter_mut().zip(&tokens) {
+                context.push(*token);
+            }
+            return Ok(tokens);
+        }
+    }
     let mut tokens = Vec::with_capacity(batch);
     for (row, seq) in sequences.iter().enumerate() {
         let row_logits = logits.get(row)?.to_dtype(candle_core::DType::F32)?;
@@ -483,6 +506,219 @@ pub fn sample_draft_rows(
         tokens.push(sampled.token);
     }
     Ok(tokens)
+}
+
+#[cfg(all(test, feature = "cuda"))]
+mod cuda_draft_sampling_tests {
+    use std::{collections::HashMap, sync::Arc};
+
+    use candle_core::{DType, Device, Result, Tensor};
+    use rand::{RngCore, SeedableRng};
+    use rand_isaac::Isaac64Rng;
+
+    use crate::{
+        sampler::{CustomLogitsProcessor, Sampler, SamplingParams},
+        sequence::{SeqStepType, Sequence, SequenceGroup, SequenceRecognizer},
+    };
+
+    use super::sample_draft_rows;
+
+    const VOCAB: usize = 4097;
+    const RNG_SEED: u64 = 42;
+
+    fn sequence(
+        params: SamplingParams,
+        processors: Vec<Arc<dyn CustomLogitsProcessor>>,
+    ) -> Sequence {
+        let sampler = Sampler::new(
+            params.temperature,
+            params.top_n_logprobs,
+            None,
+            params.frequency_penalty,
+            params.presence_penalty,
+            params.repetition_penalty,
+            params.dry_params,
+            params.top_k.map_or(-1, |k| i64::try_from(k).unwrap()),
+            params.top_p.unwrap_or(1.0),
+            params.min_p.unwrap_or(0.0),
+            params.logits_bias.unwrap_or_default(),
+            processors,
+        )
+        .unwrap();
+        let (tx, _rx) = tokio::sync::mpsc::channel(1);
+        Sequence::new_waiting(
+            vec![0, 0],
+            "prompt".to_string(),
+            0,
+            0,
+            0,
+            tx,
+            sampler,
+            vec![],
+            vec![],
+            None,
+            false,
+            false,
+            Arc::new(tokio::sync::Mutex::new(SequenceGroup::new(
+                1, false, true, None,
+            ))),
+            0,
+            0,
+            SequenceRecognizer::None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            SeqStepType::PromptAndDecode,
+            None,
+            None,
+            None,
+            false,
+            false,
+            vec![],
+            None,
+        )
+    }
+
+    #[test]
+    fn draft_rows_cuda_greedy_matches_cpu_with_masks_padding_and_context_updates() -> Result<()> {
+        let device = Device::new_cuda(0)?;
+        let rng = Arc::new(std::sync::Mutex::new(Isaac64Rng::seed_from_u64(RNG_SEED)));
+        for batch in [1, 6, 8] {
+            let sequences = (0..batch)
+                .map(|_| sequence(SamplingParams::deterministic(), vec![]))
+                .collect::<Vec<_>>();
+            let sequences = sequences.iter().collect::<Vec<_>>();
+            for dtype in [DType::F32, DType::BF16, DType::F16] {
+                let mut cpu_contexts = vec![vec![0, 0]; batch];
+                let mut cuda_contexts = cpu_contexts.clone();
+                for phase in [0, 1] {
+                    let stride = VOCAB + 2;
+                    let mut values = vec![1000.0f32; (batch + 2) * stride];
+                    let mut expected = Vec::with_capacity(batch);
+                    for row in 0..batch {
+                        let begin = (row + 1) * stride + 1;
+                        values[begin..begin + VOCAB].fill(f32::NEG_INFINITY);
+                        let winner = 17 + row * 37 + phase;
+                        values[begin + winner] = 8.0;
+                        values[begin + VOCAB - 1] = 8.0;
+                        expected.push(u32::try_from(winner).unwrap());
+                    }
+                    let backing = Tensor::from_vec(values, (batch + 2, stride), &Device::Cpu)?;
+                    let cpu = backing.narrow(0, 1, batch)?.narrow(1, 1, VOCAB)?;
+                    let cuda = backing
+                        .to_device(&device)?
+                        .to_dtype(dtype)?
+                        .narrow(0, 1, batch)?
+                        .narrow(1, 1, VOCAB)?;
+                    if batch > 1 {
+                        assert!(!cuda.is_contiguous());
+                    }
+                    let reference = sample_draft_rows(&cpu, &sequences, &mut cpu_contexts, &rng)?;
+                    let actual = sample_draft_rows(&cuda, &sequences, &mut cuda_contexts, &rng)?;
+                    assert_eq!(reference, expected);
+                    assert_eq!(actual, expected);
+                    assert_eq!(cuda_contexts, cpu_contexts);
+                    assert!(cuda_contexts
+                        .iter()
+                        .all(|context| context.len() == phase + 3));
+                }
+            }
+        }
+        assert_eq!(
+            rng.lock().unwrap().next_u64(),
+            Isaac64Rng::seed_from_u64(RNG_SEED).next_u64()
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn draft_rows_cuda_preserves_mixed_sampler_penalties_bias_and_processors() -> Result<()> {
+        let device = Device::new_cuda(0)?;
+        let rng = Arc::new(std::sync::Mutex::new(Isaac64Rng::seed_from_u64(RNG_SEED)));
+        let logits = Tensor::new(&[[5.0f32, 4.0], [5.0, 4.0]], &Device::Cpu)?;
+        let cuda = logits.to_device(&device)?;
+        let mut variants = Vec::new();
+        for field in ["frequency", "presence", "repetition", "bias", "processor"] {
+            let mut params = SamplingParams::deterministic();
+            let mut processors: Vec<Arc<dyn CustomLogitsProcessor>> = Vec::new();
+            match field {
+                "frequency" => params.frequency_penalty = Some(2.0),
+                "presence" => params.presence_penalty = Some(2.0),
+                "repetition" => params.repetition_penalty = Some(2.0),
+                "bias" => params.logits_bias = Some(HashMap::from([(1, 2.0)])),
+                "processor" => processors.push(Arc::new(|logits: &Tensor, _context: &[u32]| {
+                    Tensor::new(&[0.0f32, 9.0], logits.device())
+                })),
+                _ => unreachable!(),
+            }
+            variants.push(sequence(params, processors));
+        }
+        let greedy = sequence(SamplingParams::deterministic(), vec![]);
+        for modified in &variants {
+            let sequences = [&greedy, modified];
+            let mut cpu_contexts = vec![vec![0, 0, 0]; 2];
+            let mut cuda_contexts = cpu_contexts.clone();
+            let reference = sample_draft_rows(&logits, &sequences, &mut cpu_contexts, &rng)?;
+            let actual = sample_draft_rows(&cuda, &sequences, &mut cuda_contexts, &rng)?;
+            assert_eq!(reference, vec![0, 1]);
+            assert_eq!(actual, reference);
+            assert_eq!(cuda_contexts, cpu_contexts);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn draft_rows_cuda_preserves_stochastic_rng_consumption() -> Result<()> {
+        let device = Device::new_cuda(0)?;
+        let cpu_rng = Arc::new(std::sync::Mutex::new(Isaac64Rng::seed_from_u64(RNG_SEED)));
+        let cuda_rng = Arc::new(std::sync::Mutex::new(Isaac64Rng::seed_from_u64(RNG_SEED)));
+        let mut stochastic = SamplingParams::deterministic();
+        stochastic.temperature = Some(1.0);
+        let sequences = [
+            sequence(SamplingParams::deterministic(), vec![]),
+            sequence(stochastic, vec![]),
+        ];
+        let sequences = sequences.iter().collect::<Vec<_>>();
+        let logits = Tensor::new(&[[5.0f32, 4.0], [5.0, 4.0]], &Device::Cpu)?;
+        let cuda = logits.to_device(&device)?;
+        let mut cpu_contexts = vec![vec![0, 0]; 2];
+        let mut cuda_contexts = cpu_contexts.clone();
+        let reference = sample_draft_rows(&logits, &sequences, &mut cpu_contexts, &cpu_rng)?;
+        let actual = sample_draft_rows(&cuda, &sequences, &mut cuda_contexts, &cuda_rng)?;
+        assert_eq!(actual, reference);
+        assert_eq!(cuda_contexts, cpu_contexts);
+        let next = cpu_rng.lock().unwrap().next_u64();
+        assert_eq!(cuda_rng.lock().unwrap().next_u64(), next);
+        assert_ne!(Isaac64Rng::seed_from_u64(RNG_SEED).next_u64(), next);
+        Ok(())
+    }
+
+    #[test]
+    fn draft_rows_cuda_rejects_invalid_logits_before_updating_contexts() -> Result<()> {
+        let device = Device::new_cuda(0)?;
+        let rng = Arc::new(std::sync::Mutex::new(Isaac64Rng::seed_from_u64(RNG_SEED)));
+        let sequences = [
+            sequence(SamplingParams::deterministic(), vec![]),
+            sequence(SamplingParams::deterministic(), vec![]),
+        ];
+        let sequences = sequences.iter().collect::<Vec<_>>();
+        for invalid in [
+            [0.0f32, f32::NAN],
+            [0.0, f32::INFINITY],
+            [f32::NEG_INFINITY, f32::NEG_INFINITY],
+        ] {
+            let logits = Tensor::new(&[[0.0, 1.0], invalid], &device)?;
+            let mut contexts = vec![vec![0, 0]; 2];
+            assert!(sample_draft_rows(&logits, &sequences, &mut contexts, &rng).is_err());
+            assert_eq!(contexts, vec![vec![0, 0]; 2]);
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]

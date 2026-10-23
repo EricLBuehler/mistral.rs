@@ -250,6 +250,11 @@ impl RuntimeOutputLinear {
 }
 
 impl QuantMethod for RuntimeOutputLinear {
+    #[cfg(feature = "metal")]
+    fn prepare_metal_kernels(&self, activation_dtype: DType) -> Result<()> {
+        self.inner.prepare_metal_kernels(activation_dtype)
+    }
+
     fn new(_method: QuantMethodConfig) -> Result<Self>
     where
         Self: Sized,
@@ -1022,6 +1027,11 @@ impl RowParallelLayer {
 }
 
 impl QuantMethod for RowParallelLayer {
+    #[cfg(feature = "metal")]
+    fn prepare_metal_kernels(&self, activation_dtype: DType) -> Result<()> {
+        self.weight.prepare_metal_kernels(activation_dtype)
+    }
+
     fn new(_method: QuantMethodConfig) -> Result<Self>
     where
         Self: Sized,
@@ -1696,6 +1706,11 @@ pub struct PackedLinear {
 pub type PackedColumnParallel = PackedLinear;
 
 impl QuantMethod for ColumnParallelLayer {
+    #[cfg(feature = "metal")]
+    fn prepare_metal_kernels(&self, activation_dtype: DType) -> Result<()> {
+        self.weight.prepare_metal_kernels(activation_dtype)
+    }
+
     fn new(_method: QuantMethodConfig) -> Result<Self>
     where
         Self: Sized,
@@ -2266,6 +2281,11 @@ impl ReplicatedLayer {
 }
 
 impl QuantMethod for ReplicatedLayer {
+    #[cfg(feature = "metal")]
+    fn prepare_metal_kernels(&self, activation_dtype: DType) -> Result<()> {
+        self.0.prepare_metal_kernels(activation_dtype)
+    }
+
     fn new(_method: QuantMethodConfig) -> Result<Self>
     where
         Self: Sized,

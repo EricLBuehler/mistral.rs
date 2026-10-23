@@ -16,4 +16,3 @@ mistralrs login [OPTIONS]
 | Option | Default | Description |
 |---|---|---|
 | `--token <TOKEN>` |  | Provide token directly (non-interactive) |
-
