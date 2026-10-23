@@ -1781,7 +1781,7 @@ mod tests {
             }
         }
         let mut tokens = (0_u8..=127).map(|byte| vec![byte]).collect::<Vec<_>>();
-        let eos = tokens.len() as u32;
+        let eos = u32::try_from(tokens.len()).unwrap();
         for marker in [
             "<|end_of_text|>",
             "<|user|>",
@@ -1798,8 +1798,10 @@ mod tests {
             bytes.extend_from_slice(marker.as_bytes());
             tokens.push(bytes);
         }
-        let trie =
-            toktrie::TokTrie::from(&toktrie::TokRxInfo::new(tokens.len() as u32, eos), &tokens);
+        let trie = toktrie::TokTrie::from(
+            &toktrie::TokRxInfo::new(u32::try_from(tokens.len()).unwrap(), eos),
+            &tokens,
+        );
         let eos = [
             "<|end_of_text|>",
             "<|user|>",

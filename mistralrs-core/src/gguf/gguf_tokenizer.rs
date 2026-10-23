@@ -31,6 +31,11 @@ const GPT2_REGEX: &str =
 const LLAMA3_REGEX: &str = "(?:'[sS]|'[tT]|'[rR][eE]|'[vV][eE]|'[mM]|'[lL][lL]|'[dD])|[^\\r\\n\\p{L}\\p{N}]?\\p{L}+|\\p{N}{1,3}| ?[^\\s\\p{L}\\p{N}]+[\\r\\n]*|\\s*[\\r\\n]+|\\s+(?!\\S)|\\s+";
 const QWEN2_REGEX: &str = "(?:'[sS]|'[tT]|'[rR][eE]|'[vV][eE]|'[mM]|'[lL][lL]|'[dD])|[^\\r\\n\\p{L}\\p{N}]?\\p{L}+|\\p{N}| ?[^\\s\\p{L}\\p{N}]+[\\r\\n]*|\\s*[\\r\\n]+|\\s+(?!\\S)|\\s+";
 const QWEN35_REGEX: &str = "(?i:'s|'t|'re|'ve|'m|'ll|'d)|[^\\r\\n\\p{L}\\p{N}]?[\\p{L}\\p{M}]+|\\p{N}| ?[^\\s\\p{L}\\p{M}\\p{N}]+[\\r\\n]*|\\s*[\\r\\n]+|\\s+(?!\\S)|\\s+";
+const FLINT_REGEXES: &[&str] = &[
+    r"\p{N}{1,3}",
+    r"[\x{4e00}-\x{9fa5}\x{3040}-\x{309f}\x{30a0}-\x{30ff}]+",
+    r"[^\r\n\p{L}\p{N}]?[\p{Lu}\p{Lt}\p{Lm}\p{Lo}\p{M}]*[\p{Ll}\p{Lm}\p{Lo}\p{M}]+(?i:'s|'t|'re|'ve|'m|'ll|'d)?|[^\r\n\p{L}\p{N}]?[\p{Lu}\p{Lt}\p{Lm}\p{Lo}\p{M}]+[\p{Ll}\p{Lm}\p{Lo}\p{M}]*(?i:'s|'t|'re|'ve|'m|'ll|'d)?| ?[\p{P}\p{S}]+[\r\n]*|\s*[\r\n]+|\s+(?!\S)|\s+",
+];
 const DEEPSEEK_LLM_REGEXES: &[&str] = &[
     r"[\r\n]",
     r"\s?[A-Za-z\x{b5}\x{c0}-\x{d6}\x{d8}-\x{f6}\x{f8}-\x{1ba}\x{1bc}-\x{1bf}\x{1c4}-\x{293}\x{295}-\x{2af}\x{370}-\x{373}\x{376}\x{377}\x{37b}-\x{37d}\x{37f}\x{386}\x{388}-\x{38a}\x{38c}\x{38e}-\x{3a1}\x{3a3}-\x{3f5}\x{3f7}-\x{481}\x{48a}-\x{52f}\x{531}-\x{556}\x{10a0}-\x{10c5}\x{13a0}-\x{13f5}\x{13f8}-\x{13fd}\x{1c90}-\x{1cba}\x{1cbd}-\x{1cbf}\x{1d00}-\x{1d2b}\x{1d6b}-\x{1d77}\x{1d79}-\x{1d9a}\x{1e00}-\x{1f15}\x{1f18}-\x{1f1d}\x{1f20}-\x{1f45}\x{1f48}-\x{1f4d}\x{1f50}-\x{1f57}\x{1f59}\x{1f5b}\x{1f5d}\x{1f5f}-\x{1f7d}\x{1f80}-\x{1fb4}\x{1fb6}-\x{1fbc}\x{1fbe}\x{1fc2}-\x{1fc4}\x{1fc6}-\x{1fcc}\x{1fd0}-\x{1fd3}\x{1fd6}-\x{1fdb}\x{1fe0}-\x{1fec}\x{1ff2}-\x{1ff4}\x{1ff6}-\x{1ffc}\x{2102}\x{2107}\x{210a}-\x{2113}\x{2115}\x{2119}-\x{211d}\x{2124}\x{2126}\x{2128}\x{212a}-\x{212d}\x{212f}-\x{2134}\x{2139}\x{213c}-\x{213f}\x{2145}-\x{2149}\x{214e}\x{2183}\x{2184}\x{2c00}-\x{2c7b}\x{2c7e}-\x{2ce4}\x{2ceb}-\x{2cee}\x{2cf2}\x{2cf3}\x{a640}-\x{a66d}\x{a680}-\x{a69b}\x{a722}-\x{a76f}\x{a771}-\x{a787}\x{a78b}-\x{a78e}\x{ab70}-\x{abbf}\x{fb00}-\x{fb06}\x{fb13}-\x{fb17}\x{ff21}-\x{ff3a}\x{ff41}-\x{ff5a}\x{10400}-\x{1044f}\x{104b0}-\x{104d3}\x{104d8}-\x{104fb}\x{10c80}-\x{10cb2}\x{10cc0}-\x{10cf2}\x{118a0}-\x{118df}\x{1e900}-\x{1e943}]+",
@@ -54,6 +59,7 @@ const DEEPSEEK_V3_REGEXES: &[&str] = &[
 const GPT4O_REGEX: &str = "[^\\r\\n\\p{L}\\p{N}]?((?=[\\p{L}])([^a-z]))*((?=[\\p{L}])([^A-Z]))+(?:'[sS]|'[tT]|'[rR][eE]|'[vV][eE]|'[mM]|'[lL][lL]|'[dD])?|[^\\r\\n\\p{L}\\p{N}]?((?=[\\p{L}])([^a-z]))+((?=[\\p{L}])([^A-Z]))*(?:'[sS]|'[tT]|'[rR][eE]|'[vV][eE]|'[mM]|'[lL][lL]|'[dD])?|\\p{N}{1,3}| ?[^\\s\\p{L}\\p{N}]+[\\r\\n/]*|\\s*[\\r\\n]+|\\s+(?!\\S)|\\s+";
 const TEKKEN_REGEX: &str = "[^\\r\\n\\p{L}\\p{N}]?((?=[\\p{L}])([^a-z]))*((?=[\\p{L}])([^A-Z]))+|[^\\r\\n\\p{L}\\p{N}]?((?=[\\p{L}])([^a-z]))+((?=[\\p{L}])([^A-Z]))*|\\p{N}| ?[^\\s\\p{L}\\p{N}]+[\\r\\n/]*|\\s*[\\r\\n]+|\\s+(?!\\S)|\\s+";
 const GGML_TOKEN_TYPE_NORMAL: i32 = 1;
+const GGML_TOKEN_TYPE_USER_DEFINED: i32 = 4;
 const GGML_TOKEN_TYPE_BYTE: i32 = 6;
 const SENTENCEPIECE_UNDERLINE: &str = "\u{2581}";
 
@@ -231,12 +237,19 @@ pub(crate) fn convert_gguf_metadata_to_hf_tokenizer(
     // Byte fallback entries are model tokens, not AddedToken specials.
     // Batch them so `AddedVocabulary` refreshes its matchers once.
     let mut special = Vec::new();
+    let mut added = Vec::new();
     if token_types.len() == props.tokens.len() {
         for (i, ty) in token_types.iter().enumerate() {
-            if *ty != GGML_TOKEN_TYPE_NORMAL && *ty != GGML_TOKEN_TYPE_BYTE {
+            if props.pre.as_deref() == Some("flint") && *ty == GGML_TOKEN_TYPE_USER_DEFINED {
+                // Flint's reasoning and tool delimiters are ordinary HF added tokens.
+                added.push(AddedToken::from(props.tokens[i].clone(), false).normalized(false));
+            } else if *ty != GGML_TOKEN_TYPE_NORMAL && *ty != GGML_TOKEN_TYPE_BYTE {
                 special.push(AddedToken::from(props.tokens[i].clone(), true));
             }
         }
+    }
+    if !added.is_empty() {
+        tokenizer.add_tokens(&added);
     }
     let num_special_tokens = special.len();
     if !special.is_empty() {
@@ -287,6 +300,7 @@ enum BpePreTokenizerKind {
     Llama3,
     Dbrx,
     Qwen2,
+    Flint,
     Gpt2,
     Starcoder,
     Glm4,
@@ -335,6 +349,12 @@ fn bpe_pre_tokenizer_spec(pre: Option<&str>) -> Result<BpePreTokenizerSpec> {
             regexes: &[QWEN35_REGEX],
             ignore_merges: false,
             normalize_nfc: true,
+        },
+        "flint" => BpePreTokenizerSpec {
+            kind: BpePreTokenizerKind::Flint,
+            regexes: FLINT_REGEXES,
+            ignore_merges: false,
+            normalize_nfc: false,
         },
         "gpt-2" | "phi-2" => BpePreTokenizerSpec {
             kind: BpePreTokenizerKind::Gpt2,
@@ -732,7 +752,7 @@ mod tests {
     use candle_core::quantized::gguf_file::Value;
     use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
     use std::collections::HashMap;
-    use tokenizers::Tokenizer;
+    use tokenizers::{OffsetReferential, OffsetType, PreTokenizedString, PreTokenizer, Tokenizer};
 
     #[allow(dead_code)]
     #[derive(Debug)]
@@ -1141,6 +1161,7 @@ mod tests {
             ("dbrx", BpePreTokenizerKind::Dbrx, false, false, 1),
             ("qwen2", BpePreTokenizerKind::Qwen2, false, false, 1),
             ("qwen35", BpePreTokenizerKind::Qwen2, false, true, 1),
+            ("flint", BpePreTokenizerKind::Flint, false, false, 3),
             ("gpt-2", BpePreTokenizerKind::Gpt2, false, false, 1),
             ("phi-2", BpePreTokenizerKind::Gpt2, false, false, 1),
             ("starcoder", BpePreTokenizerKind::Starcoder, false, false, 2),
@@ -1226,6 +1247,118 @@ mod tests {
             .encode_fast("1234", false)
             .map_err(anyhow::Error::msg)?;
         assert_eq!(encoding.get_ids(), &[6, 4]);
+        Ok(())
+    }
+
+    #[test]
+    fn flint_pre_tokenizer_preserves_hf_split_boundaries() -> Result<()> {
+        let (tokenizer, _) = bpe_tokenizer(&test_bpe_props(Some("flint")))?;
+        assert!(tokenizer.get_normalizer().is_none());
+        let cases: &[(&str, &[&str])] = &[
+            ("abc12345XYZ", &["abc", "123", "45", "XYZ"]),
+            (
+                " hello\u{4e16}\u{754c}\u{30ab}\u{30bf}\u{30ab}\u{30ca}world",
+                &[
+                    " hello",
+                    "\u{4e16}\u{754c}\u{30ab}\u{30bf}\u{30ab}\u{30ca}",
+                    "world",
+                ],
+            ),
+            (
+                "Hello WORLD we're I'LL cafe\u{301}\n\n",
+                &["Hello", " WORLD", " we're", " I'LL", " cafe\u{301}", "\n\n"],
+            ),
+            (
+                "foo_bar::Foo1234 +99\r\n\t",
+                &[
+                    "foo", "_bar", "::", "Foo", "123", "4", " +", "99", "\r\n", "\t",
+                ],
+            ),
+        ];
+        for (text, expected) in cases {
+            let mut pretokenized = PreTokenizedString::from(*text);
+            tokenizer
+                .get_pre_tokenizer()
+                .unwrap()
+                .pre_tokenize(&mut pretokenized)
+                .map_err(anyhow::Error::msg)?;
+            let actual = pretokenized
+                .get_splits(OffsetReferential::Original, OffsetType::Byte)
+                .into_iter()
+                .map(|(_, (start, end), _)| &text[start..end])
+                .collect::<Vec<_>>();
+            assert_eq!(actual, *expected, "{text:?}");
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn flint_gguf_preserves_hf_added_tokens_without_inserting_bos() -> Result<()> {
+        let tokens = [
+            "<|end_of_text|>",
+            "<|begin_of_text|>",
+            "a",
+            "<|user|>",
+            "<|assistant|>",
+            "<think>",
+            "</think>",
+            "<tool_call>",
+            "</tool_call>",
+            "<|observation|>",
+        ];
+        let mut metadata = tokenizer_metadata(&tokens);
+        metadata.remove("tokenizer.ggml.unknown_token_id");
+        metadata.extend([
+            (
+                "tokenizer.ggml.model".to_string(),
+                Value::String("gpt2".to_string()),
+            ),
+            (
+                "tokenizer.ggml.pre".to_string(),
+                Value::String("flint".to_string()),
+            ),
+            (
+                "tokenizer.ggml.merges".to_string(),
+                Value::Array(Vec::new()),
+            ),
+            (
+                "tokenizer.ggml.add_bos_token".to_string(),
+                Value::Bool(false),
+            ),
+            (
+                "tokenizer.ggml.token_type".to_string(),
+                Value::Array(
+                    [3, 3, 1, 3, 3, 4, 4, 4, 4, 3]
+                        .into_iter()
+                        .map(Value::I32)
+                        .collect(),
+                ),
+            ),
+        ]);
+        let conversion = convert_gguf_metadata_to_hf_tokenizer(&metadata)?;
+        let text = "<|user|>a<|assistant|><think>a</think><tool_call>a</tool_call><|observation|>a<|end_of_text|>";
+        let expected = [3, 2, 4, 5, 2, 6, 7, 2, 8, 9, 2, 0];
+        for add_special in [false, true] {
+            let encoded = conversion
+                .tokenizer
+                .encode(text, add_special)
+                .map_err(anyhow::Error::msg)?;
+            assert_eq!(encoded.get_ids(), &expected);
+        }
+        assert_eq!(conversion.bos.as_deref(), Some(tokens[1]));
+        assert_eq!(conversion.eos.as_deref(), Some(tokens[0]));
+        let added = conversion.tokenizer.get_added_tokens_decoder();
+        for id in [5, 6, 7, 8] {
+            assert_eq!(
+                added[&id],
+                tokenizers::AddedToken::from(tokens[id as usize], false).normalized(false)
+            );
+        }
+        assert_eq!(decode(&conversion.tokenizer, &expected, false)?, text);
+        assert_eq!(
+            decode(&conversion.tokenizer, &expected, true)?,
+            "a<think>a</think><tool_call>a</tool_call>a"
+        );
         Ok(())
     }
 

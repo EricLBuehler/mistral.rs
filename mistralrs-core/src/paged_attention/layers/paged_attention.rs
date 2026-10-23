@@ -3903,7 +3903,7 @@ mod sinks_cached_prefix_tests {
                             .flat_map(|(sequence, &len)| {
                                 let rows = if packed { len } else { max_q };
                                 std::iter::repeat_n(
-                                    (sequence + 1) as f32,
+                                    f32::from(u16::try_from(sequence + 1).unwrap()),
                                     rows * KV_HEADS * HEAD_DIM,
                                 )
                             })
@@ -3920,7 +3920,7 @@ mod sinks_cached_prefix_tests {
                         let values = (0..sequences)
                             .flat_map(|sequence| {
                                 std::iter::repeat_n(
-                                    (sequence + 1) as f32,
+                                    f32::from(u16::try_from(sequence + 1).unwrap()),
                                     KV_HEADS * BLOCK_SIZE * HEAD_DIM,
                                 )
                             })
@@ -3948,7 +3948,7 @@ mod sinks_cached_prefix_tests {
                         metadata.block_tables = Some(HashMap::from([(
                             location,
                             Tensor::from_vec(
-                                (0..sequences as u32).collect::<Vec<_>>(),
+                                (0..u32::try_from(sequences).unwrap()).collect::<Vec<_>>(),
                                 (sequences, 1),
                                 &device,
                             )?,
@@ -3983,7 +3983,7 @@ mod sinks_cached_prefix_tests {
                         metadata.cu_seqlens_kv = Some(HashMap::from([(location, cu_kv)]));
                         let mut flash = FlashParams::empty(true);
                         flash.packed = packed;
-                        flash.max_q = *query_lens.iter().max().unwrap() as u32;
+                        flash.max_q = u32::try_from(*query_lens.iter().max().unwrap()).unwrap();
                         flash.cumulative_seqlens_q = HashMap::from([(location, cu_q.clone())]);
                         flash.logical_k = FlashKMeta {
                             max: flash.max_q,
@@ -3994,7 +3994,7 @@ mod sinks_cached_prefix_tests {
                         let sink_mass = sinks.to_dtype(DType::F32)?.to_vec1::<f32>()?[0].exp();
                         let params = SdpaParams {
                             n_kv_groups: QUERY_HEADS / KV_HEADS,
-                            softmax_scale: 1. / (HEAD_DIM as f32).sqrt(),
+                            softmax_scale: 1. / f32::from(u16::try_from(HEAD_DIM).unwrap()).sqrt(),
                             softcap: None,
                             sliding_window,
                             sinks: Some(sinks),
@@ -4027,8 +4027,10 @@ mod sinks_cached_prefix_tests {
                                     let visible = kv - q + token + 1;
                                     let visible = sliding_window
                                         .map_or(visible, |window| visible.min(window));
-                                    let expected = (sequence + 1) as f32 * visible as f32
-                                        / (visible as f32 + sink_mass);
+                                    let visible = f32::from(u16::try_from(visible).unwrap());
+                                    let expected = f32::from(u16::try_from(sequence + 1).unwrap())
+                                        * visible
+                                        / (visible + sink_mass);
                                     for dim in 0..HEAD_DIM {
                                         let row = if packed {
                                             head * total_q + offset + token
@@ -4102,7 +4104,11 @@ mod sinks_decode_graph_tests {
         let mut reference = (0..rows)
             .map(|row| {
                 (0..MAX_CONTEXT)
-                    .map(|token| (token / BLOCK_SIZE + row * ROW_VALUE_OFFSET) as f32)
+                    .map(|token| {
+                        f32::from(
+                            u16::try_from(token / BLOCK_SIZE + row * ROW_VALUE_OFFSET).unwrap(),
+                        )
+                    })
                     .collect::<Vec<_>>()
             })
             .collect::<Vec<_>>();
@@ -4128,7 +4134,7 @@ mod sinks_decode_graph_tests {
             (0..rows)
                 .flat_map(|row| {
                     std::iter::repeat_n(
-                        (NEW_VALUE + row * ROW_VALUE_OFFSET) as f32,
+                        f32::from(u16::try_from(NEW_VALUE + row * ROW_VALUE_OFFSET).unwrap()),
                         KV_HEADS * HEAD_DIM,
                     )
                 })
@@ -4140,7 +4146,7 @@ mod sinks_decode_graph_tests {
         let context_lens = Var::from_tensor(&Tensor::ones(rows, DType::U32, device)?)?;
         let slots = Var::from_tensor(&Tensor::full(_PAD_SLOT_ID, rows, device)?)?;
         let tables = Tensor::from_vec(
-            (0..blocks as u32).collect::<Vec<_>>(),
+            (0..u32::try_from(blocks).unwrap()).collect::<Vec<_>>(),
             (rows, blocks_per_row),
             device,
         )?;
@@ -4162,7 +4168,7 @@ mod sinks_decode_graph_tests {
         let sink_mass = sinks.to_dtype(DType::F32)?.to_vec1::<f32>()?[0].exp();
         let params = SdpaParams {
             n_kv_groups: HEADS / KV_HEADS,
-            softmax_scale: 1. / (HEAD_DIM as f32).sqrt(),
+            softmax_scale: 1. / f32::from(u16::try_from(HEAD_DIM).unwrap()).sqrt(),
             softcap: None,
             sliding_window: window,
             sinks: Some(sinks),
@@ -4223,7 +4229,10 @@ mod sinks_decode_graph_tests {
                 .collect::<Vec<_>>();
             slots.set(&Tensor::from_vec(slot_values, rows, device)?)?;
             context_lens.set(&Tensor::from_vec(
-                lengths.iter().map(|&len| len as u32).collect::<Vec<_>>(),
+                lengths
+                    .iter()
+                    .map(|&len| u32::try_from(len).unwrap())
+                    .collect::<Vec<_>>(),
                 rows,
                 device,
             )?)?;
@@ -4237,10 +4246,11 @@ mod sinks_decode_graph_tests {
                 let expected = if len == 0 {
                     0.
                 } else {
-                    reference[row][len - 1] = (NEW_VALUE + row * ROW_VALUE_OFFSET) as f32;
+                    reference[row][len - 1] =
+                        f32::from(u16::try_from(NEW_VALUE + row * ROW_VALUE_OFFSET).unwrap());
                     let first = window.map_or(0, |window| len.saturating_sub(window));
                     reference[row][first..len].iter().sum::<f32>()
-                        / ((len - first) as f32 + sink_mass)
+                        / (f32::from(u16::try_from(len - first).unwrap()) + sink_mass)
                 };
                 let tolerance = if dtype == DType::BF16 {
                     BF16_TOLERANCE

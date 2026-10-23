@@ -1,8 +1,8 @@
 use crate::NormalLoaderType;
 use std::{error::Error, fmt, str::FromStr};
 
-pub(crate) const GGUF_NORMAL_LOADER_COUNT: usize = 26;
-pub(crate) const CANONICAL_GGUF_ARCHITECTURE_COUNT: usize = 26;
+pub(crate) const GGUF_NORMAL_LOADER_COUNT: usize = 27;
+pub(crate) const CANONICAL_GGUF_ARCHITECTURE_COUNT: usize = 27;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum CanonicalGgufArchitecture {
@@ -16,6 +16,7 @@ pub(crate) enum CanonicalGgufArchitecture {
     Qwen2,
     Qwen3,
     Qwen3Moe,
+    Flint,
     Qwen3Next,
     Qwen35,
     Qwen35Moe,
@@ -47,6 +48,7 @@ impl CanonicalGgufArchitecture {
             Self::Qwen2 => "qwen2",
             Self::Qwen3 => "qwen3",
             Self::Qwen3Moe => "qwen3moe",
+            Self::Flint => "flint",
             Self::Qwen3Next => "qwen3next",
             Self::Qwen35 => "qwen35",
             Self::Qwen35Moe => "qwen35moe",
@@ -88,6 +90,7 @@ impl FromStr for CanonicalGgufArchitecture {
             "qwen2" => Ok(Self::Qwen2),
             "qwen3" => Ok(Self::Qwen3),
             "qwen3moe" => Ok(Self::Qwen3Moe),
+            "flint" => Ok(Self::Flint),
             "qwen3next" => Ok(Self::Qwen3Next),
             "qwen35" => Ok(Self::Qwen35),
             "qwen35moe" => Ok(Self::Qwen35Moe),
@@ -399,6 +402,18 @@ const MOE_TENSORS: &[&str] = &[
     ".ffn_up_exps.",
     ".ffn_down_exps.",
 ];
+const FLINT_TENSORS: &[&str] = &[
+    ".attn_q_norm.",
+    ".attn_k_norm.",
+    ".attn_sinks.",
+    ".ffn_gate_inp.",
+    ".ffn_gate_exps.",
+    ".ffn_up_exps.",
+    ".ffn_down_exps.",
+    ".ffn_gate_shexp.",
+    ".ffn_up_shexp.",
+    ".ffn_down_shexp.",
+];
 const MLA_TENSORS: &[&str] = &[".attn_k_b.", ".attn_v_b."];
 const SSM_TENSORS: &[&str] = &[".ssm_a", ".ssm_conv1d."];
 const QWEN35_MOE_TENSORS: &[&str] = &[
@@ -430,6 +445,7 @@ const PHIMOE_LOADERS: &[NormalLoaderType] = &[NormalLoaderType::Phi3_5MoE];
 const QWEN2_LOADERS: &[NormalLoaderType] = &[NormalLoaderType::Qwen2];
 const QWEN3_LOADERS: &[NormalLoaderType] = &[NormalLoaderType::Qwen3];
 const QWEN3_MOE_LOADERS: &[NormalLoaderType] = &[NormalLoaderType::Qwen3Moe];
+const FLINT_LOADERS: &[NormalLoaderType] = &[NormalLoaderType::Flint];
 const QWEN3_NEXT_LOADERS: &[NormalLoaderType] = &[NormalLoaderType::Qwen3Next];
 const QWEN35_LOADERS: &[NormalLoaderType] = &[NormalLoaderType::Qwen3_5];
 const STARCODER2_LOADERS: &[NormalLoaderType] = &[NormalLoaderType::Starcoder2];
@@ -527,6 +543,14 @@ pub(crate) const GGUF_SCHEMAS: &[GgufSchema; CANONICAL_GGUF_ARCHITECTURE_COUNT] 
         rope_pairing: RopePairing::HalfSplit,
         required_metadata: MOE_METADATA,
         required_tensors: MOE_TENSORS,
+        unsupported_metadata: NO_REQUIREMENTS,
+    },
+    GgufSchema {
+        architecture: CanonicalGgufArchitecture::Flint,
+        compatible_loaders: FLINT_LOADERS,
+        rope_pairing: RopePairing::HalfSplit,
+        required_metadata: MOE_METADATA,
+        required_tensors: FLINT_TENSORS,
         unsupported_metadata: NO_REQUIREMENTS,
     },
     GgufSchema {
@@ -770,6 +794,15 @@ pub(crate) const NORMAL_MODEL_ADAPTERS: &[NativeModelAdapter; GGUF_NORMAL_LOADER
     NativeModelAdapter {
         loader: NormalLoaderType::Qwen3Moe,
         architectures: &[CanonicalGgufArchitecture::Qwen3Moe],
+        layouts: &[
+            GgufLayout::Direct,
+            GgufLayout::StackedExperts,
+            GgufLayout::PerLayerInventory,
+        ],
+    },
+    NativeModelAdapter {
+        loader: NormalLoaderType::Flint,
+        architectures: &[CanonicalGgufArchitecture::Flint],
         layouts: &[
             GgufLayout::Direct,
             GgufLayout::StackedExperts,
@@ -1126,11 +1159,7 @@ mod tests {
             assert!(loaders.insert(adapter.loader.to_string()));
         }
         for loader in NormalLoaderType::iter() {
-            assert_eq!(
-                loaders.contains(&loader.to_string()),
-                loader != NormalLoaderType::Flint,
-                "{loader}"
-            );
+            assert!(loaders.contains(&loader.to_string()), "{loader}");
         }
     }
 
@@ -1244,16 +1273,24 @@ mod tests {
     }
 
     #[test]
-    fn flint_gguf_override_reports_unsupported_format() {
+    fn flint_gguf_resolves_only_its_native_architecture() {
+        let schema = schema_for(CanonicalGgufArchitecture::Flint);
+        let (metadata, tensors) = valid_fixture(schema, &[], &[]);
+        let descriptor = descriptor_from_fixture(schema, &metadata, &tensors);
+        let resolved = resolve_native_adapter(&descriptor, None).unwrap();
+        assert_eq!(resolved.adapter.loader, NormalLoaderType::Flint);
+        assert_eq!(resolved.reason, ResolutionReason::SingleCandidate);
+
         let schema = schema_for(CanonicalGgufArchitecture::Llama);
         let (metadata, tensors) = valid_fixture(schema, &[], &[]);
         let descriptor = descriptor_from_fixture(schema, &metadata, &tensors);
-        let error = resolve_native_adapter(&descriptor, Some(NormalLoaderType::Flint)).unwrap_err();
         assert!(matches!(
-            error,
-            NormalGgufRegistryError::LoaderHasNoGgufSupport(NormalLoaderType::Flint)
+            resolve_native_adapter(&descriptor, Some(NormalLoaderType::Flint)).unwrap_err(),
+            NormalGgufRegistryError::ExplicitOverrideIncompatible {
+                architecture: CanonicalGgufArchitecture::Llama,
+                loader: NormalLoaderType::Flint,
+            }
         ));
-        assert!(error.to_string().contains("safetensors"));
     }
 
     #[test]

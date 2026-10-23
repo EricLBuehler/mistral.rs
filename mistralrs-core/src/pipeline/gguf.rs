@@ -17,7 +17,7 @@ use crate::gguf::{
         ensure_gemma3_vision_config, gemma3_text_uses_language_model_prefix,
         prepare_gemma3_text_config,
     },
-    get_gguf_chat_template, get_gguf_chat_template_from_metadata,
+    generation_config_from_metadata, get_gguf_chat_template, get_gguf_chat_template_from_metadata,
     multimodal_bindings::build_gemma4_bindings,
     multimodal_vision_registry::resolve_native_multimodal_gguf,
     muse_glimmer_bindings::normalize_muse_glimmer_config,
@@ -532,6 +532,24 @@ impl GGUFLoader {
         &self,
         paths: &dyn ModelPaths,
         tokenizer: &ResolvedGgufTokenizer,
+        metadata: &HashMap<String, candle_core::quantized::gguf_file::Value>,
+    ) -> Result<Option<GenerationConfig>> {
+        if let Some(config) = self.resolve_external_generation_config(paths, tokenizer) {
+            return Ok(Some(config));
+        }
+        let config = generation_config_from_metadata(metadata)?;
+        if let Some(config) = &config {
+            config
+                .validate_token_ids(tokenizer.conversion.tokenizer.get_vocab_size(true))
+                .context("Invalid generation token IDs in GGUF metadata")?;
+        }
+        Ok(config)
+    }
+
+    fn resolve_external_generation_config(
+        &self,
+        paths: &dyn ModelPaths,
+        tokenizer: &ResolvedGgufTokenizer,
     ) -> Option<GenerationConfig> {
         let filename = paths.get_gen_conf_filename()?;
         if !tokenizer.generation_config_compatible {
@@ -692,7 +710,8 @@ impl GGUFLoader {
         let weights = source.sharded_var_builder(Device::Cpu);
 
         let tokenizer = self.resolve_tokenizer(paths, archive.metadata())?;
-        let generation_config = self.resolve_generation_config(paths, &tokenizer);
+        let generation_config =
+            self.resolve_generation_config(paths, &tokenizer, archive.metadata())?;
         let gguf_chat_template =
             if paths.get_template_filename().is_none() && self.chat_template.is_none() {
                 get_gguf_chat_template_from_metadata(archive.metadata())?
@@ -831,7 +850,8 @@ impl GGUFLoader {
         )?);
         let weights = source.sharded_var_builder(Device::Cpu);
         let tokenizer = self.resolve_tokenizer(paths, archive.metadata())?;
-        let generation_config = self.resolve_generation_config(paths, &tokenizer);
+        let generation_config =
+            self.resolve_generation_config(paths, &tokenizer, archive.metadata())?;
         let gguf_chat_template =
             if paths.get_template_filename().is_none() && self.chat_template.is_none() {
                 get_gguf_chat_template_from_metadata(archive.metadata())?
@@ -975,7 +995,8 @@ impl GGUFLoader {
         )?);
         let weights = source.sharded_var_builder(Device::Cpu);
         let tokenizer = self.resolve_tokenizer(paths, archive.metadata())?;
-        let generation_config = self.resolve_generation_config(paths, &tokenizer);
+        let generation_config =
+            self.resolve_generation_config(paths, &tokenizer, archive.metadata())?;
         let gguf_chat_template =
             if paths.get_template_filename().is_none() && self.chat_template.is_none() {
                 get_gguf_chat_template_from_metadata(archive.metadata())?
@@ -1397,7 +1418,7 @@ impl Loader for GGUFLoader {
         )?;
 
         let tokenizer = self.resolve_tokenizer(paths, model.get_metadata())?;
-        let gen_conf = self.resolve_generation_config(paths, &tokenizer);
+        let gen_conf = self.resolve_generation_config(paths, &tokenizer, model.get_metadata())?;
         let GgufTokenizerConversion {
             tokenizer,
             bos,

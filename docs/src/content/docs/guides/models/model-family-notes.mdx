@@ -81,7 +81,16 @@ mistralrs run -m RecursiveSI/flint --quant 4
 mistralrs serve -p 1234 -m RecursiveSI/flint
 ```
 
-`--quant 4` selects compatible prebuilt UQFF weights when available and otherwise applies in-situ quantization. Use `--isq 4` to force in-situ quantization. Flint also supports MoQE and UQFF through the standard quantization workflows. Flint GGUF and X-LoRA loading are not supported.
+`--quant 4` selects compatible prebuilt UQFF weights when available and otherwise applies in-situ quantization. Use `--isq 4` to force in-situ quantization. Flint also supports MoQE and UQFF through the standard quantization workflows. X-LoRA loading is not supported.
+
+Flint GGUF files can load directly from their embedded configuration, tokenizer, chat template, stop tokens, and sampling defaults:
+
+```bash
+mistralrs run -m RecursiveSI/flint-int4-gguf -f flint-int4-q4_1.gguf
+mistralrs run -f /path/to/flint-Q3_K_S.gguf
+```
+
+Choose a [supported GGUF storage type](/reference/gguf-support/#storage-formats), such as Q4_1 or a K-quant. The separate NVFP4 GGUF format is not supported.
 
 CUDA uses paged attention by default, with prefix caching and fused attention sinks for chunked prefill and packed batches, including sliding-window attention.
 Sliding-window decode reads the required KV pages directly and supports CUDA graph replay.

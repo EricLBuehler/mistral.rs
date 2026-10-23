@@ -24,6 +24,7 @@ Fine-tunes and model sizes within a family use the same entry.
 | Qwen2 and Qwen2.5 | `qwen2` |
 | Qwen3 | `qwen3` |
 | Qwen3 MoE | `qwen3moe` |
+| Flint | `flint` |
 | Qwen3-Next and Qwen3-Coder-Next | `qwen3next` |
 | Qwen3.5 and Qwen3.6 dense | `qwen35` |
 | Qwen3.5 and Qwen3.6 MoE | `qwen35moe` |

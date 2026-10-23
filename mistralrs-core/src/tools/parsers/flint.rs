@@ -457,7 +457,7 @@ mod tests {
 
     fn matcher_for_tool(tool: Tool, required: bool) -> (llguidance::Matcher, toktrie::TokTrie) {
         let mut tokens = (0_u8..=127).map(|byte| vec![byte]).collect::<Vec<_>>();
-        let eos = tokens.len() as u32;
+        let eos = u32::try_from(tokens.len()).unwrap();
         for token in [
             "<eos>",
             TOOL_CALL_OPEN,
@@ -471,8 +471,10 @@ mod tests {
             bytes.extend_from_slice(token.as_bytes());
             tokens.push(bytes);
         }
-        let trie =
-            toktrie::TokTrie::from(&toktrie::TokRxInfo::new(tokens.len() as u32, eos), &tokens);
+        let trie = toktrie::TokTrie::from(
+            &toktrie::TokRxInfo::new(u32::try_from(tokens.len()).unwrap(), eos),
+            &tokens,
+        );
         let env: toktrie::TokEnv = Arc::new(TokenizerEnv(trie.clone()));
         let factory = llguidance::ParserFactory::new_simple(&env).unwrap();
         let mut grammar = tool_grammar(&[tool], required);

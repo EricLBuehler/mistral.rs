@@ -1092,9 +1092,16 @@ impl AnyMoeBaseModelMixin for Model {}
 #[cfg(test)]
 mod tests {
     use super::*;
+    use candle_core::quantized::{gguf_file, GgmlDType, QTensor};
+    use mistralrs_quant::{
+        GgufArchive, GgufMatMul, GgufWeightSource, QuantMethodConfig, QuantizedWeightSource,
+    };
+    use tempfile::NamedTempFile;
 
     const TOKENS: [u32; 7] = [1, 4, 2, 7, 0, 5, 3];
     const LOGIT_TOLERANCE: f32 = 1e-4;
+    // CPU Q4_1 dot products require pairs of 32-value blocks.
+    const GGUF_HIDDEN_SIZE: usize = 64;
 
     fn tiny_config() -> Config {
         Config {
@@ -1231,6 +1238,10 @@ mod tests {
         let cfg = tiny_config();
         let weights = tiny_weights(&cfg)?;
         let vb = mistralrs_quant::ShardedSafeTensors::wrap(weights, DType::F32, Device::Cpu);
+        tiny_model_from_builder(&cfg, vb)
+    }
+
+    fn tiny_model_from_builder(cfg: &Config, vb: ShardedVarBuilder) -> Result<Model> {
         let metadata = NormalLoadingMetadata {
             mapper: Box::new(crate::device_map::DummyDeviceMapper {
                 nm_device: Device::Cpu,
@@ -1241,7 +1252,190 @@ mod tests {
             matformer_slicing_config: None,
             rope_pairing: None,
         };
-        Model::new(&cfg, vb, true, metadata, AttentionImplementation::Eager)
+        Model::new(cfg, vb, true, metadata, AttentionImplementation::Eager)
+    }
+
+    struct TinyGgufFixture {
+        _file: NamedTempFile,
+        source: Arc<GgufWeightSource>,
+        reference_weights: HashMap<String, Tensor>,
+        reference_layers: Arc<PackedNativeWeights>,
+    }
+
+    struct PackedNativeWeights(HashMap<String, Arc<dyn QuantMethod>>);
+
+    impl QuantizedWeightSource for PackedNativeWeights {
+        fn contains(&self, name: &str) -> bool {
+            self.0.contains_key(name)
+        }
+
+        fn load_linear(
+            &self,
+            key: &str,
+            device: &Device,
+            _shard: Shard,
+        ) -> Result<Option<Arc<dyn QuantMethod>>> {
+            assert!(device.is_cpu());
+            Ok(self.0.get(&format!("{key}.weight")).cloned())
+        }
+
+        fn load_optional_tensor(&self, _name: &str, _device: &Device) -> Result<Option<Tensor>> {
+            Ok(None)
+        }
+
+        fn shard_alignment(&self, _key: &str) -> Result<usize> {
+            Ok(GgmlDType::Q4_1.block_size())
+        }
+
+        fn pack_factor(&self, _dtype: DType) -> Result<usize> {
+            Ok(1)
+        }
+
+        fn pack_factor_for(&self, _key: &str, _dtype: DType) -> Result<Option<usize>> {
+            Ok(None)
+        }
+    }
+
+    fn tiny_gguf_weights(cfg: &Config, dtype: GgmlDType) -> anyhow::Result<TinyGgufFixture> {
+        let weights = tiny_weights(cfg)?;
+        let mut names = vec![
+            (
+                "token_embd.weight".into(),
+                vec!["model.embed_tokens.weight".into()],
+            ),
+            (
+                "output_norm.weight".into(),
+                vec!["model.norm.weight".into()],
+            ),
+            ("output.weight".into(), vec!["lm_head.weight".into()]),
+        ];
+        for layer in 0..cfg.num_hidden_layers {
+            let native = format!("model.layers.{layer}");
+            let gguf = format!("blk.{layer}");
+            for (canonical, target) in [
+                ("attn_norm.weight", "input_layernorm.weight"),
+                ("ffn_norm.weight", "post_attention_layernorm.weight"),
+                ("attn_q.weight", "self_attn.q_proj.weight"),
+                ("attn_k.weight", "self_attn.k_proj.weight"),
+                ("attn_v.weight", "self_attn.v_proj.weight"),
+                ("attn_output.weight", "self_attn.o_proj.weight"),
+                ("attn_q_norm.weight", "self_attn.q_norm.weight"),
+                ("attn_k_norm.weight", "self_attn.k_norm.weight"),
+                ("attn_sinks.weight", "self_attn.softmax_offset"),
+            ] {
+                names.push((
+                    format!("{gguf}.{canonical}"),
+                    vec![format!("{native}.{target}")],
+                ));
+            }
+            if cfg.is_moe_layer(layer) {
+                names.push((
+                    format!("{gguf}.ffn_gate_inp.weight"),
+                    vec![format!("{native}.mlp.gate.weight")],
+                ));
+                let bias = format!("{native}.mlp.gate.expert_bias");
+                if weights.contains_key(&bias) {
+                    names.push((format!("{gguf}.exp_probs_b.bias"), vec![bias]));
+                }
+            }
+            for projection in ["gate", "up", "down"] {
+                if cfg.is_moe_layer(layer) {
+                    names.push((
+                        format!("{gguf}.ffn_{projection}_exps.weight"),
+                        (0..cfg.num_experts)
+                            .map(|expert| {
+                                format!("{native}.mlp.experts.{expert}.{projection}_proj.weight")
+                            })
+                            .collect(),
+                    ));
+                    names.push((
+                        format!("{gguf}.ffn_{projection}_shexp.weight"),
+                        vec![format!(
+                            "{native}.mlp.shared_expert.{projection}_proj.weight"
+                        )],
+                    ));
+                } else {
+                    names.push((
+                        format!("{gguf}.ffn_{projection}.weight"),
+                        vec![format!("{native}.mlp.{projection}_proj.weight")],
+                    ));
+                }
+            }
+        }
+
+        let mut tensors = Vec::new();
+        let mut reference_weights = HashMap::new();
+        let mut reference_layers = HashMap::<String, Arc<dyn QuantMethod>>::new();
+        for (canonical, native_names) in names {
+            let native = native_names
+                .iter()
+                .map(|name| &weights[name])
+                .collect::<Vec<_>>();
+            let tensor = if native.len() == 1 {
+                native[0].clone()
+            } else {
+                Tensor::stack(&native, 0)?
+            };
+            let tensor_dtype = if tensor.rank() > 1 && !canonical.contains("ffn_gate_inp") {
+                dtype
+            } else {
+                GgmlDType::F32
+            };
+            let tensor = Arc::new(QTensor::quantize(&tensor, tensor_dtype)?);
+            let dequantized = tensor.dequantize(&Device::Cpu)?;
+            if tensor_dtype == GgmlDType::Q4_1 {
+                let name = if native_names.len() == 1 {
+                    native_names[0].clone()
+                } else {
+                    native_names[0].replace(".experts.0.", ".experts.")
+                };
+                reference_layers.insert(
+                    name,
+                    Arc::new(GgufMatMul::new(QuantMethodConfig::Gguf {
+                        q_weight: tensor.clone(),
+                        b: None,
+                    })?),
+                );
+            }
+            for (expert, name) in native_names.iter().enumerate() {
+                let reference = if native_names.len() == 1 {
+                    dequantized.clone()
+                } else {
+                    dequantized.get(expert)?
+                };
+                reference_weights.insert(name.clone(), reference);
+            }
+            tensors.push((canonical, tensor));
+        }
+        assert_eq!(reference_weights.len(), weights.len());
+
+        let mut file = NamedTempFile::new()?;
+        let architecture = gguf_file::Value::String("flint".into());
+        let block_count = gguf_file::Value::U32(cfg.num_hidden_layers as u32);
+        gguf_file::write(
+            file.as_file_mut(),
+            &[
+                ("general.architecture", &architecture),
+                ("flint.block_count", &block_count),
+            ],
+            &tensors
+                .iter()
+                .map(|(name, tensor)| (name.as_str(), tensor.as_ref()))
+                .collect::<Vec<_>>(),
+        )?;
+        let archive = Arc::new(GgufArchive::open_file(file.path())?);
+        let bindings = crate::gguf::normal_bindings::build_normal_bindings(
+            &archive,
+            &crate::NormalLoaderType::Flint,
+            crate::gguf::normal_registry::CanonicalGgufArchitecture::Flint,
+        )?;
+        let source = Arc::new(GgufWeightSource::new(archive, &bindings, DType::F32)?);
+        Ok(TinyGgufFixture {
+            _file: file,
+            source,
+            reference_weights,
+            reference_layers: Arc::new(PackedNativeWeights(reference_layers)),
+        })
     }
 
     fn forward_tokens(model: &Model, tokens: &[u32], offset: usize) -> Result<Tensor> {
@@ -1258,6 +1452,91 @@ mod tests {
     fn assert_close(actual: &Tensor, expected: &Tensor) -> Result<()> {
         let error = (actual - expected)?.abs()?.max_all()?.to_scalar::<f32>()?;
         assert!(error < LOGIT_TOLERANCE, "max logit difference: {error}");
+        Ok(())
+    }
+
+    #[test]
+    fn gguf_float_and_q4_1_match_native_prefill_and_cached_logits() -> anyhow::Result<()> {
+        let cfg = Config {
+            hidden_size: GGUF_HIDDEN_SIZE,
+            intermediate_size: GGUF_HIDDEN_SIZE * 2,
+            moe_intermediate_size: GGUF_HIDDEN_SIZE,
+            shared_expert_intermediate_size: GGUF_HIDDEN_SIZE * 2,
+            num_attention_heads: 4,
+            num_key_value_heads: 2,
+            head_dim: Some(GGUF_HIDDEN_SIZE / 4),
+            ..tiny_config()
+        };
+        let mut failures = Vec::new();
+        for dtype in [GgmlDType::F32, GgmlDType::Q4_1] {
+            let fixture = tiny_gguf_weights(&cfg, dtype)?;
+            for (name, expected) in &fixture.reference_weights {
+                if name.contains("norm.weight")
+                    || name.ends_with("softmax_offset")
+                    || name.ends_with("expert_bias")
+                {
+                    assert_close(
+                        &fixture.source.materialize_tensor(name, &Device::Cpu)?,
+                        expected,
+                    )?;
+                }
+            }
+            if dtype == GgmlDType::Q4_1 {
+                for prefix in [
+                    "model.embed_tokens",
+                    "lm_head",
+                    "model.layers.1.self_attn.q_proj",
+                    "model.layers.1.mlp.experts.down_proj",
+                    "model.layers.1.mlp.shared_expert.up_proj",
+                ] {
+                    let layer = fixture
+                        .source
+                        .load_linear(prefix, &Device::Cpu, Shard::default())?
+                        .unwrap();
+                    assert_eq!(layer.get_qtensor().unwrap().dtype(), dtype, "{prefix}");
+                }
+            }
+            for chunks in [vec![TOKENS.len()], vec![1; TOKENS.len()], vec![2, 3, 2]] {
+                let model =
+                    tiny_model_from_builder(&cfg, fixture.source.sharded_var_builder(Device::Cpu))?;
+                let mut reference_vb = mistralrs_quant::ShardedSafeTensors::wrap(
+                    fixture.reference_weights.clone(),
+                    DType::F32,
+                    Device::Cpu,
+                );
+                if dtype == GgmlDType::Q4_1 {
+                    // Both sides use Q8 activation rounding, independently of the GGUF bindings.
+                    reference_vb =
+                        reference_vb.with_weight_source(fixture.reference_layers.clone());
+                }
+                let reference = tiny_model_from_builder(&cfg, reference_vb)?;
+                let mut offset = 0;
+                let mut logits = Vec::new();
+                let mut reference_logits = Vec::new();
+                for &chunk in &chunks {
+                    logits.push(forward_tokens(
+                        &model,
+                        &TOKENS[offset..offset + chunk],
+                        offset,
+                    )?);
+                    reference_logits.push(forward_tokens(
+                        &reference,
+                        &TOKENS[offset..offset + chunk],
+                        offset,
+                    )?);
+                    offset += chunk;
+                }
+                let actual = Tensor::cat(&logits, 1)?;
+                let reference = Tensor::cat(&reference_logits, 1)?;
+                let error = (actual - reference)?.abs()?.max_all()?.to_scalar::<f32>()?;
+                if error >= LOGIT_TOLERANCE {
+                    failures.push(format!(
+                        "{dtype:?} chunks={chunks:?} max logit difference: {error}"
+                    ));
+                }
+            }
+        }
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
         Ok(())
     }
 
@@ -1286,7 +1565,7 @@ mod tests {
         let logits = forward_tokens(&tiny_model()?, &TOKENS, 0)?;
         let expected = Tensor::new(
             &[
-                -0.23434460f32,
+                -0.234_344_6_f32,
                 -0.25956914,
                 0.044062793,
                 0.018838255,
